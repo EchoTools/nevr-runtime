@@ -1,4 +1,4 @@
-# nevr_example -- Reference Plugin (BAC for nEVR Plugin API v5)
+# nevr_example -- Reference Plugin (BAC for nEVR Plugin API v6)
 
 This is THE reference plugin for the nEVR runtime plugin API. Community plugin
 authors copy from it. Every plugin feature the host supports is demonstrated in
@@ -13,7 +13,7 @@ do I...", the answer is in `plugins/example/src/plugin.cpp`.
 | Concept                             | Implementation                                                                   |
 | ----------------------------------- | -------------------------------------------------------------------------------- |
 | Plugin metadata (REQUIRED)          | `NvrPluginGetInfo()` -- name, description, semver                                |
-| API versioning (optional, v1+)      | `NvrPluginGetApiVersion()` -- returns `NEVR_PLUGIN_API_VERSION` (currently 5)   |
+| API versioning (optional, v1+)      | `NvrPluginGetApiVersion()` -- returns `NEVR_PLUGIN_API_VERSION` (currently 6)   |
 | Capability declaration (optional, v3+) | `NvrPluginGetCapabilities()` -- bitmask of what this plugin DOES               |
 | v4 args-aware init (optional)       | `NvrPluginInitEx(ctx, args_json)` -- with ctx_size check and args parsing       |
 | v3 legacy init (optional)           | `NvrPluginInit(ctx)` -- fallback when InitEx absent                             |
@@ -22,7 +22,7 @@ do I...", the answer is in `plugins/example/src/plugin.cpp`.
 | Cleanup (optional)                  | `NvrPluginShutdown()` -- reverse-order hook removal                             |
 | ctx_size runtime discovery (v5+)    | Compares `ctx->ctx_size` against `sizeof(NvrGameContext)` to discover query API |
 | Plugin query API (v5+)              | `ctx->get_plugin_count()` and `ctx->get_plugin_info(n)` for neighbour discovery |
-| Leveled logging                     | `NEVR_DEFINE_PLUGIN_LOG` macro from `plugin_logger.h`: `PluginLog` / `PluginLogWarning` / `PluginLogError` |
+| Logging through the host (v6+)      | `NEVR_DEFINE_PLUGIN_LOG` macro from `plugin_logger.h`: `PluginLogBind(ctx)` in init, then `PluginLog` / `PluginLogWarning` / `PluginLogError` / `PluginLogDebug` / `PluginLogFields`; lines land in the host log as `[NEVR.PLUGIN] plugin=<name> ...` |
 | Config args from config.yaml (v4+)  | Parses `args_json` with `nlohmann::json` -- logs known-safe keys only          |
 | Local config loading                | `LoadConfigFile("_local/config.json")` with graceful absence handling           |
 | Safe hooking                        | ResolveVA_Checked + ValidatePrologue + HookManager::CreateAndEnable             |
@@ -43,7 +43,7 @@ DLL load
      (string literals or global buffers -- not stack variables).
 
 2. NvrPluginGetApiVersion()         OPTIONAL (v1+)
-     Returns NEVR_PLUGIN_API_VERSION (currently 5). Absent = v1
+     Returns NEVR_PLUGIN_API_VERSION (currently 6). Absent = v1
      (pre-versioning). The host uses this to decide whether the
      plugin understands newer context fields.
 
@@ -57,6 +57,9 @@ DLL load
      Called ONCE, after game modules load, before the first tick.
      The host prefers InitEx when both are exported; it does NOT
      call both. Return 0 for success, non-zero to abort load.
+     On non-zero, the host immediately calls NvrPluginShutdown if exported,
+     then releases the DLL. Without that export, the host keeps the failed
+     DLL mapped until process exit because init may have installed hooks.
      A `required: true` plugin returning non-zero is FATAL on a
      server -- the process aborts.
 
@@ -112,6 +115,8 @@ Passed to init, on-frame, and on-state-change callbacks.
 | `ctx_size`     | `uint32_t`   | v5+     | sizeof(NvrGameContext) as the host sees it. Compare against your own sizeof to discover trailing fields. |
 | `get_plugin_count` | `int (*)(void)` | v5+ | Number of plugins loaded so far. The count never decreases. |
 | `get_plugin_info`  | `const NvrLoadedPluginInfo* (*)(int)` | v5+ | Plugin at index n. Process-lifetime stable pointer. nullptr if out of range. |
+| `plugin_id`    | `const char*` | v6+ | The host's name for this plugin: the `name` of its config.yaml entry. Process-lifetime stable. |
+| `log`          | `NevrLogFn`  | v6+     | The host's structured log: `log(plugin_id, level, message, fields, field_count)`. Use it through `plugin_logger.h`. |
 
 ### Host capability flags (NvrHostFlags)
 
@@ -155,7 +160,7 @@ All plugins link against `nevr_plugin_common`, an INTERFACE library providing:
 | Header                    | Provides                                                                    |
 | ------------------------- | --------------------------------------------------------------------------- |
 | `plugin_interface.h`      | Types, enums, `NEVR_PLUGIN_API` export macro                               |
-| `plugin_logger.h`         | `NEVR_DEFINE_PLUGIN_LOG(prefix)` -- leveled printf-style logging to stderr (`PluginLog`, `PluginLogWarning`, `PluginLogError`) |
+| `plugin_logger.h`         | `NEVR_DEFINE_PLUGIN_LOG(prefix)` -- leveled logging through the host's `Log()` once bound with `PluginLogBind(ctx)` (`PluginLog`, `PluginLogWarning`, `PluginLogError`, `PluginLogDebug`, `PluginLogFields`); stderr with `prefix` before that or on a pre-v6 host |
 | `hook_manager.h`          | `nevr::HookManager` -- scoped MinHook lifecycle (CreateAndEnable, RemoveAll) |
 | `nevr_common.h`           | `ResolveVA_Checked`, `ResolveVA_Unchecked`, `ValidatePrologue`, `LoadConfigFile` |
 | `address_registry.h`      | Verified VA constants for game functions                                   |
@@ -194,8 +199,9 @@ perspective. A plugin compares this against its own compile-time `sizeof` to
 discover whether the trailing query API fields are present:
 
 ```cpp
-if (ctx->ctx_size >= sizeof(NvrGameContext)) {
-    // Safe: host's struct is at least as large as ours.
+if (ctx->ctx_size >= offsetof(NvrGameContext, get_plugin_info) +
+                     sizeof(ctx->get_plugin_info)) {
+    // Safe: host's struct reaches the end of the query API.
     // get_plugin_count and get_plugin_info pointers are valid.
     int count = ctx->get_plugin_count();
     for (int i = 0; i < count; i++) {
@@ -209,11 +215,28 @@ if (ctx->ctx_size >= sizeof(NvrGameContext)) {
 ```
 
 This is a RUNTIME check, not a compile-time `#ifdef`. The same binary works on
-v4 and v5 hosts, degrading gracefully when the query API is absent.
+v4, v5 and v6 hosts, degrading gracefully when the query API is absent. The same check
+against `offsetof(NvrGameContext, log) + sizeof(NevrLogFn)` tells a plugin whether the host log
+is present; `PluginLogBind(ctx)` in `plugin_logger.h` does it for you.
+
+## Logging through the host (v6+)
+
+Call `PluginLogBind(ctx)` first thing in `NvrPluginInit` or `NvrPluginInitEx`. From then on every
+`PluginLog*` call lands in the host's log, tagged with the host's name for the plugin:
+
+```
+[NEVR.PLUGIN] plugin=example initex: host log bound host_log=true ctx_size=64
+```
+
+`PluginLogFields(level, message, {{key, value}, ...})` adds fields. The host log exists from the init
+callback on, from any thread, including `NvrPluginShutdown`; it does not exist before init or in
+`DllMain`. Before `PluginLogBind`, and on a host older than v6, lines go to stderr as
+`<prefix> <LEVEL> <message>`, which the host does not collect. The host provides no per-plugin log
+file and no rate limiting: a plugin that logs per frame keeps its own cap.
 
 ## API version compatibility
 
-NEVR_PLUGIN_API_VERSION is currently **5** (N134 S8).
+NEVR_PLUGIN_API_VERSION is currently **6** (#598).
 
 | Version | Added                                                          | Breaking? |
 | ------- | -------------------------------------------------------------- | --------- |
@@ -222,6 +245,7 @@ NEVR_PLUGIN_API_VERSION is currently **5** (N134 S8).
 | v3      | `NvrPluginGetCapabilities` (N114)                             | No        |
 | v4      | `NvrPluginInitEx(ctx, args_json)` + config-driven loading (N134 S6) | No       |
 | v5      | `ctx_size` + `get_plugin_count` / `get_plugin_info` query API (N134 S8) | No       |
+| v6      | `plugin_id` + `log`: the host's structured log (N135)          | No        |
 
 All additions are tail-extensions -- a plugin compiled against an older version
 loads unchanged on a newer host, and a plugin compiled against a newer version

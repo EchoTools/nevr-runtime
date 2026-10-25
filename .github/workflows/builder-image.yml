@@ -22,7 +22,7 @@ jobs:
     env:
       IMAGE: ghcr.io/echotools/nevr-runtime-builder
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Tag from the Dockerfile
       id: tag
@@ -48,4 +48,4 @@ jobs:
         fi
         docker build --pull -t "$ref" .github/builder
         docker push "$ref"
-        docker run --rm "$ref" bash -c 'x86_64-w64-mingw32-g++ --version | head -n 1; cmake --version | head -n 1; osslsigncode --version; buf --version; ls -l /usr/x86_64-w64-mingw32/lib/libCrypt32.a'
+        docker run --rm "$ref" bash -c 'x86_64-w64-mingw32-g++ --version | head -n 1; cmake --version | head -n 1; osslsigncode --version; buf --version; keytool -help >/dev/null && echo keytool ok; ls -l /usr/x86_64-w64-mingw32/lib/libCrypt32.a'

@@ -18,12 +18,12 @@ jobs:
       packages: read
     # The builder image build.yml uses (.github/builder/Dockerfile).
     container:
-      image: ghcr.io/echotools/nevr-runtime-builder:42010dd4ba8e
+      image: ghcr.io/echotools/nevr-runtime-builder:256b66be91d7
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         submodules: recursive
         fetch-depth: 0
@@ -46,7 +46,12 @@ jobs:
         # local ~/.vcpkg to, so CI builds the dependency versions that are tested locally.
         git -C "$HOME/.vcpkg" checkout --detach "$(cat "$GITHUB_WORKSPACE/.vcpkg-commit")"
         "$HOME/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
-        "$HOME/.vcpkg/vcpkg" install --triplet=x64-mingw-static --host-triplet=x64-linux \
+        # The x64-mingw-static triplet lists PATH in VCPKG_ENV_PASSTHROUGH, so the value of PATH is part of
+        # every mingw package ABI hash. A PATH that differs between jobs gives every archive a different name and the restore
+        # finds none. This value is the justfile's pin (_vcpkg-mingw), the one `just verify` installs under; test_vcpkg_pin.py compares them.
+        # The key does not encode this pin: change the pin and bump the vcpkg-binN prefix in the same commit.
+        env PATH=/usr/local/bin:/usr/bin \
+          "$HOME/.vcpkg/vcpkg" install --triplet=x64-mingw-static --host-triplet=x64-linux \
           --x-manifest-root="$GITHUB_WORKSPACE" \
           --x-install-root="$GITHUB_WORKSPACE/build/mingw-release/vcpkg_installed"
 
@@ -66,10 +71,10 @@ jobs:
     - name: Create the distribution zip (unsigned)
       run: |
         set -euo pipefail
-        cmake --build --preset mingw-release --target dist dist-lite
+        cmake --build --preset mingw-release --target dist
         ls -l dist/*.zip
 
-    - uses: actions/upload-artifact@v7
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         name: release-zips
         path: dist/*.zip
@@ -80,7 +85,7 @@ jobs:
     needs: build-zip
     runs-on: windows-latest
     steps:
-    - uses: actions/download-artifact@v8
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
       with:
         name: release-zips
         path: zips

@@ -42,11 +42,6 @@ std::optional<std::string> BuildTokenRouteUri(std::string_view tokenUri, std::st
 std::optional<std::string> BuildBridgeCredentialUri(std::string_view remoteUri, std::string_view discordId,
                                                     std::string_view password);
 
-// The login connection's debug flag (self-checks, compat/self_check.h): `uri` with debug=true appended. The
-// game service reads it from the upgrade query (server/session_ws.go "debug") and turns on every remote log
-// category for the session. Appended after the credentials, never replacing them; an existing debug= is kept.
-std::optional<std::string> AppendRemoteDebugParam(std::string_view uri);
-
 // Removes one literal "key=value" query parameter from `uri`, wherever it sits
 // in the query string, and reinserts a correct separator (issue #116). Always
 // treating the character before a match as removable would delete the URI's own '?' whenever the parameter

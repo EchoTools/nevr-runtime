@@ -11,6 +11,8 @@
         "websockets"
       ]
     },
-    "zstd"
+    "yaml-cpp",
+    "zstd",
+    "zlib"
   ]
 }

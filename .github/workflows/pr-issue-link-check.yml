@@ -1,0 +1,33 @@
+name: PR issue link check
+
+# Every PR is opened for an existing issue, and its body names it: at least one line `Closes #N` (the PR
+# resolves the issue) or `Refs #N` (it advances it; the body says what is still open). There is no "no
+# issue" form (docs/standards/planning.md, "PRs"). tools/check_pr_issue_link.py decides.
+#
+# Trust boundary: `pull_request`, never `pull_request_target`. The token is read-only, no secret is named, the
+# clone keeps no credential, and the PR body reaches the script through env only, never inside a script body.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-issue-link-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  issue-link:
+    name: the PR body names an issue
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Check the PR body
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: python3 tools/check_pr_issue_link.py

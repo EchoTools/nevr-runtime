@@ -23,9 +23,16 @@ namespace nevr_hook_guard {
 /// Snapshot the first bytes at `target` under `name`. Called automatically by
 /// PatchDetour (gamepatches_internal.h) after a successful install, so every
 /// PatchDetour call site is covered without touching the site.
-/// Silently ignored once the fixed table is full — this is a diagnostic, and it
-/// must never be the reason a boot fails.
+/// Once the fixed table is full the call is counted (DroppedCount) and reported at ERROR by the
+/// next VerifyAll — never silent — but it never fails the boot: this is a diagnostic. It does
+/// not log itself, because it runs in the boot phase, before the game's log exists.
 void Record(const void* target, const char* name);
+
+/// Record `target` under `name` with the first bytes the owner of the hook read there after enabling it
+/// (16 bytes), instead of reading them now. The wrapper hook belongs to the host (runtime/host), which
+/// hands the runtime what it wrote; a hook that changed the bytes since is then a mismatch at the first
+/// VerifyAll. Same table, same never-fails contract as Record.
+void RecordBytes(const void* target, const char* name, const unsigned char (&bytes)[16]);
 
 /// Re-read every recorded address and compare. Logs one ERROR per mismatch with
 /// the address, the name, expected vs actual bytes, and `context` (what just
@@ -42,7 +49,16 @@ bool IsOurDetour(const void* target);
 /// How many addresses are currently recorded.
 int RecordedCount();
 
+/// How many Record() calls found the table full: detours nothing is guarding.
+int DroppedCount();
+
+/// The fixed number of addresses the table holds.
+int Capacity();
+
 #ifdef NEVR_TEST_HOOKS
+/// Pause a writer after it fills a reserved slot but before readers may see it.
+void SetBeforePublishForTest(void (*callback)());
+
 /// Test-only: drop every recorded site. The guard is deliberately process-global
 /// (hooked addresses live in loaded modules and are never freed in production),
 /// which makes tests order-dependent without this — a freed-and-reallocated

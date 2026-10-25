@@ -1,5 +1,6 @@
 #include "runtime/hook/hook_guard.h"
 
+#include <winsock2.h>
 #include <windows.h>
 
 #include <cstring>
@@ -15,21 +16,43 @@ constexpr int kSnapshotBytes = 16;
 
 /// Fixed capacity — no heap. Recording happens during boot, some of it under the
 /// loader lock, and this is a diagnostic that must never be the reason a boot fails.
-constexpr int kMaxGuarded = 64;
+///
+/// The bound is found, not set. Counting the install sites in src/ that reach Record() (every
+/// PatchDetour/InstallBootDetour call, each row of the binary_bug_fixes hook table, and the raw
+/// MinHook installs that call Record directly) gives 62 for a build with every optional hook
+/// present: crash_recovery 9, mode_patches 8, binary_bug_fixes 7, party_invite_gate 7,
+/// initialize 8 (6 InstallBootDetour + CSysDLL_GetSymbol + CSysDLL_Load), headless_graphics 4,
+/// social_facade 4, dll_load_hook 4, coop_ai_trace 3, pnsrad_enabler 2, early_quit_lockout 2,
+/// and one each in xpid_patch, return_to_lobby, resource_override, builtin_filter. The
+/// capacity is twice that counted 62 sites, so a new hook has room. If the table fills,
+/// Record() counts the drop (never silent): VerifyAll() reports it at ERROR and
+/// DroppedCount() exposes it.
+constexpr int kMaxGuarded = 128;
 
 struct GuardedSite {
   const void* target;
   const char* name;  // string literal from the call site; not owned
   unsigned char bytes[kSnapshotBytes];
-  bool reported;  // true once this site's overwrite ERROR has been logged —
+  volatile LONG published;  // release-published only after all fields are filled
+  volatile LONG reported;  // true once this site's overwrite ERROR has been logged —
                   // a collision that stays overwritten (nothing un-overwrites
                   // one) must not re-log the identical ERROR every ~30s
                   // periodic check for the rest of the process lifetime.
 };
 
 GuardedSite g_sites[kMaxGuarded];
-volatile LONG g_count = 0;
-bool g_overflowed = false;
+volatile LONG g_reserved = 0;
+volatile LONG g_recorded = 0;
+volatile LONG g_dropped = 0;           // Record() calls that found the table full
+volatile LONG g_dropReported = 0;       // g_dropped value VerifyAll() last reported
+volatile LONG g_firstDropClaimed = 0;   // one writer fills the two fields below
+volatile LONG g_firstDropPublished = 0;
+const void* g_firstDropTarget = nullptr;
+const char* g_firstDropName = nullptr;
+
+#ifdef NEVR_TEST_HOOKS
+void (*g_beforePublishForTest)() = nullptr;
+#endif
 
 /// Committed+readable check that does not use IsBadReadPtr (deprecated, and
 /// unreliable under Wine).
@@ -57,44 +80,67 @@ void FormatBytes(const unsigned char* src, int n, char* out, size_t out_cap) {
 
 namespace nevr_hook_guard {
 
-void Record(const void* target, const char* name) {
+namespace {
+
+// `bytes` is the owner's record of what it wrote, or null to snapshot what is at `target` now.
+void RecordImpl(const void* target, const char* name, const unsigned char* bytes) {
   if (target == nullptr) return;
   if (!Readable(target, kSnapshotBytes)) return;
 
-  const LONG idx = InterlockedIncrement(&g_count) - 1;
-  if (idx >= kMaxGuarded) {
-    InterlockedDecrement(&g_count);
-    if (!g_overflowed) {
-      g_overflowed = true;
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] hook guard table full cap=%d — further detours unguarded",
-          kMaxGuarded);
+  LONG idx = 0;
+  for (;;) {
+    idx = InterlockedCompareExchange(&g_reserved, 0, 0);
+    if (idx >= kMaxGuarded) {
+      // No Log() here, one line per dropped hook would repeat itself: the drop is counted
+      // and VerifyAll() (tick, plugin loader: never under the lock) reports it.
+      if (InterlockedCompareExchange(&g_firstDropClaimed, 1, 0) == 0) {
+        g_firstDropTarget = target;
+        g_firstDropName = name != nullptr ? name : "(unnamed)";
+        InterlockedExchange(&g_firstDropPublished, 1);
+      }
+      InterlockedIncrement(&g_dropped);
+      return;
     }
-    return;
+    if (InterlockedCompareExchange(&g_reserved, idx + 1, idx) == idx) break;
   }
 
   g_sites[idx].target = target;
   g_sites[idx].name = name != nullptr ? name : "(unnamed)";
-  g_sites[idx].reported = false;
-  memcpy(g_sites[idx].bytes, target, kSnapshotBytes);
+  memcpy(g_sites[idx].bytes, bytes != nullptr ? bytes : static_cast<const unsigned char*>(target), kSnapshotBytes);
+#ifdef NEVR_TEST_HOOKS
+  if (g_beforePublishForTest != nullptr) g_beforePublishForTest();
+#endif
+  InterlockedExchange(&g_sites[idx].published, 1);
+  InterlockedIncrement(&g_recorded);
+}
+
+}  // namespace
+
+void Record(const void* target, const char* name) { RecordImpl(target, name, nullptr); }
+
+void RecordBytes(const void* target, const char* name, const unsigned char (&bytes)[16]) {
+  static_assert(sizeof(bytes) == kSnapshotBytes, "the host's hook record is the guard's snapshot size");
+  RecordImpl(target, name, bytes);
 }
 
 bool IsOurDetour(const void* target) {
   if (target == nullptr || !Readable(target, kSnapshotBytes)) return false;
-  const LONG n = g_count;
+  const LONG n = InterlockedCompareExchange(&g_reserved, 0, 0);
   for (LONG i = 0; i < n && i < kMaxGuarded; i++) {
+    if (InterlockedCompareExchange(&g_sites[i].published, 0, 0) == 0) continue;
     if (g_sites[i].target == target) return memcmp(target, g_sites[i].bytes, kSnapshotBytes) == 0;
   }
   return false;
 }
 
 int VerifyAll(const char* context) {
-  const LONG n = g_count;
+  const LONG n = InterlockedCompareExchange(&g_reserved, 0, 0);
   int mismatches = 0;
   int newlyReported = 0;
 
   for (LONG i = 0; i < n && i < kMaxGuarded; i++) {
     GuardedSite& s = g_sites[i];
+    if (InterlockedCompareExchange(&s.published, 0, 0) == 0) continue;
     if (s.target == nullptr) continue;
     if (!Readable(s.target, kSnapshotBytes)) continue;
 
@@ -106,8 +152,7 @@ int VerifyAll(const char* context) {
     // Edge-triggered: log this site's ERROR once, the first check that finds
     // it overwritten. Nothing un-overwrites a clobbered hook, so without this
     // gate the identical line repeats every ~30s periodic check forever.
-    if (s.reported) continue;
-    s.reported = true;
+    if (InterlockedCompareExchange(&s.reported, 1, 0) != 0) continue;
     newlyReported++;
 
     char expected[kSnapshotBytes * 2 + 1];
@@ -126,6 +171,20 @@ int VerifyAll(const char* context) {
         context != nullptr ? context : "(unknown)", expected, actual);
   }
 
+  // A full table means detours that nothing is watching. Reported at ERROR each time the
+  // dropped count has grown since the last report, so it cannot pass as quiet.
+  const LONG dropped = InterlockedCompareExchange(&g_dropped, 0, 0);
+  const LONG lastReported = InterlockedExchange(&g_dropReported, dropped);
+  if (dropped > lastReported) {
+    const bool haveFirst = InterlockedCompareExchange(&g_firstDropPublished, 0, 0) != 0;
+    Log(EchoVR::LogLevel::Error,
+        "[NEVR.PATCH] hook guard table full cap=%d dropped=%ld first=%s va=0x%llX after=%s — "
+        "those detours are NOT guarded against overwrite",
+        kMaxGuarded, static_cast<long>(dropped), haveFirst ? g_firstDropName : "(unknown)",
+        static_cast<unsigned long long>(haveFirst ? reinterpret_cast<uintptr_t>(g_firstDropTarget) : 0),
+        context != nullptr ? context : "(unknown)");
+  }
+
   // Aggregate line is edge-triggered too: only fires when THIS check found a
   // new collision, not on every periodic tick for as long as an old one
   // remains overwritten. `mismatches` (the return value) still reports the
@@ -140,13 +199,26 @@ int VerifyAll(const char* context) {
   return mismatches;
 }
 
-int RecordedCount() { return static_cast<int>(g_count); }
+int RecordedCount() { return static_cast<int>(InterlockedCompareExchange(&g_recorded, 0, 0)); }
+
+int DroppedCount() { return static_cast<int>(InterlockedCompareExchange(&g_dropped, 0, 0)); }
+
+int Capacity() { return kMaxGuarded; }
 
 #ifdef NEVR_TEST_HOOKS
+void SetBeforePublishForTest(void (*callback)()) { g_beforePublishForTest = callback; }
+
 void ResetForTest() {
-  InterlockedExchange(&g_count, 0);
+  InterlockedExchange(&g_reserved, 0);
+  InterlockedExchange(&g_recorded, 0);
   memset(g_sites, 0, sizeof(g_sites));
-  g_overflowed = false;
+  InterlockedExchange(&g_dropped, 0);
+  InterlockedExchange(&g_dropReported, 0);
+  InterlockedExchange(&g_firstDropClaimed, 0);
+  InterlockedExchange(&g_firstDropPublished, 0);
+  g_firstDropTarget = nullptr;
+  g_firstDropName = nullptr;
+  g_beforePublishForTest = nullptr;
 }
 #endif
 

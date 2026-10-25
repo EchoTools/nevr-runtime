@@ -122,6 +122,15 @@ def extract_braced_function(source: str, signature: str) -> str:
 
 
 class RuntimeLifecycleInvariantTest(unittest.TestCase):
+    def test_normal_exit_reports_resource_buffers_before_process_termination(self):
+        source = (ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text()
+        client_exit = extract_braced_function(source, "VOID WINAPI ExitProcessHook(")
+        server_exit = extract_braced_function(source, "void PerformGracefulShutdown(")
+        self.assertRegex(client_exit,
+                         r"ShutdownResourceOverride\s*\(\s*\)\s*;\s*OriginalExitProcess\s*\(\s*uExitCode\s*\)")
+        self.assertRegex(server_exit,
+                         r"ShutdownResourceOverride\s*\(\s*\)\s*;\s*ForceFatalExit\s*\(\s*exitCode\s*\)")
+
     def test_dllmain_does_not_run_plugin_shutdown_or_unload(self):
         source = (ROOT / "src/runtime/lifecycle/dllmain.cpp").read_text()
         body = extract_braced_function(source, "BOOL APIENTRY DllMain(")
@@ -157,17 +166,14 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertTrue(guard.end() < free < end,
                         "FreeLibrary(g_realDbgCore) is outside the lpReserved == NULL block")
 
-    def test_the_posix_handler_success_line_is_conditional_on_both_registrations(self):
-        # Issue #25: "POSIX signal handlers installed" was logged after the two signal() calls
-        # whether or not either returned SIG_ERR.
+    def test_server_shutdown_uses_console_handler_without_crt_signals(self):
         source = (ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text()
         stripped = strip_comments(source)
-        self.assertEqual(stripped.count("POSIX signal handlers installed"), 1)
-        self.assertRegex(stripped, r"if\s*\(\s*sigintOk\s*&&\s*sigtermOk\s*\)\s*\{\s*Log\([^;]*POSIX signal handlers installed")
-        self.assertRegex(stripped, r"const\s+bool\s+sigintOk\s*=\s*signal\(\s*SIGINT\s*,\s*PosixSignalHandler\s*\)\s*!=\s*SIG_ERR\s*;")
-        self.assertRegex(stripped, r"const\s+bool\s+sigtermOk\s*=\s*signal\(\s*SIGTERM\s*,\s*PosixSignalHandler\s*\)\s*!=\s*SIG_ERR\s*;")
-        # The failure branch must exist and name which handler failed.
-        self.assertRegex(stripped, r"else\s*\{\s*Log\(EchoVR::LogLevel::Warning,\s*\"\[NEVR\.PATCH\] POSIX signal handlers NOT fully installed")
+        self.assertNotIn("PosixSignalHandler", stripped)
+        self.assertNotRegex(stripped, r"\bsignal\s*\(")
+        self.assertIn("SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE)", stripped)
+        handler = extract_braced_function(stripped, "static BOOL WINAPI ConsoleCtrlHandler(")
+        self.assertIn("PerformGracefulShutdown(0)", handler)
 
     def test_early_boot_never_reads_config(self):
         # service_config.cpp NevrCfg() loads config.yaml on first access and documents that first
@@ -179,6 +185,46 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
 
         self.assertNotRegex(body, r"\bNevrCfg\w*\s*\(")
         self.assertNotRegex(body, r"\bNevrGame\w*\s*\(")
+
+    def test_a_value_option_never_takes_an_option_as_its_value(self):
+        # #587: `-timestep -no-console` lost -no-console because boot.cpp took argv[i + 1] unchecked.
+        # Every value option reads its value through nevr_cli::OptionValue (core/cli_option_value.h).
+        boot = strip_comments((ROOT / "src/runtime/lifecycle/boot.cpp").read_text())
+
+        self.assertNotRegex(boot, r"i\s*\+\s*1\s*<\s*argc", "a raw lookahead past the option is back")
+        self.assertNotRegex(boot, r"argv\[\s*(\+\+i|i\s*\+\s*1)\s*\]", "argv[i + 1] is read unchecked")
+        # -config (twice: the early pass and the main parse), -telemetry-rate, -region, -trace-exports, -timestep.
+        self.assertGreaterEqual(len(re.findall(r"nevr_cli::OptionValue\(", boot)), 6)
+
+    def test_the_boot_log_names_the_host_environment_in_the_boot_phase(self):
+        # #673: a crash report names the Wine version from the log. The line is written through the boot
+        # tee (loader lock held), after the tee opens and before it first closes.
+        source = strip_comments((ROOT / "src/runtime/lifecycle/initialize.cpp").read_text())
+        body = extract_braced_function(source, "static VOID InitializeAfterGameImageGuard(")
+        line = body.index("nevr_host_environment::BootLine(nevr_system_info::Get())")
+        self.assertLess(body.index("nevr_boot_log_tee::Init()"), line,
+                        "the host environment line must come after Init(), but it is written before the tee opens")
+        self.assertLess(line, body.index("nevr_boot_log_tee::Close()"),
+                        "the host environment line must come before Close(), but it is written after the tee closes")
+        self.assertRegex(body[max(0, line - 40):line], r"TeeFprintf\(", "the line must go through the boot tee")
+
+    def test_the_dll_load_hook_reports_through_the_log_never_raw_stderr(self):
+        # #654: four [NEVR.DLLHOOK] lines went to fprintf(stderr) and never reached the JSONL log. The
+        # hook's own lines go through ReportLine (Log() in the boot phase and outside the loader lock, held
+        # until released under it) or, for the install report, the boot tee.
+        source = strip_comments((ROOT / "src/runtime/hook/dll_load_hook.cpp").read_text())
+
+        self.assertNotRegex(source, r"fprintf\s*\(\s*stderr", "a hook line is written to raw stderr again")
+        self.assertGreaterEqual(len(re.findall(r"\bReportLine\s*\(\s*EchoVR::LogLevel::", source)), 4)
+
+    def test_graceful_shutdown_writes_the_dll_hook_lines_held_under_the_loader_lock(self):
+        # #688: a line made by a load under the loader lock waits in dll_load_hook.cpp's buffer. The graceful
+        # shutdown writes it, outside the lock, before the process is ended.
+        source = strip_comments((ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text())
+        body = extract_braced_function(source, "void PerformGracefulShutdown(")
+        flush = body.index("nevr_dll_load_hook::FlushPendingLines()")
+        self.assertLess(flush, body.index("ForceFatalExit(exitCode)"),
+                        "the held lines must be written before ForceFatalExit ends the process")
 
     def test_every_boot_detour_result_is_consumed(self):
         # Issue #42: seven PatchDetour calls in the boot sequence discarded their result, so a
@@ -206,10 +252,6 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # every required hook succeeds in the logs this classification is based on, so
         # `just verify` would still go green while every server refused to start.
         self.assertIn("if (installed) return;", note)
-        # TeeFprintf, not Log(): this runs under the DllMain loader lock (N36). The N36 census
-        # only scans InitializeAfterGameImageGuard's own body and would not catch a Log() call
-        # added inside this helper.
-        self.assertNotRegex(note, r"\bLog\s*\(")
         # The two Hooking::Attach results (r1, r2) must be captured in a variable, not dropped —
         # a new bare `Hooking::Attach(...)` statement would silently discard its result the same
         # way the original seven PatchDetour calls did.
@@ -219,13 +261,43 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
                          "a Hooking::Attach call's result is not captured in a variable")
 
     def test_veh_boot_line_comes_from_the_result_of_install_veh(self):
-        # #339: InstallVEH skips installing on a Wine client, so the boot line is derived from its
-        # return value, never written as a literal that is true on only one platform.
+        # The boot line must distinguish an early Wine deferral from an installation failure.
         source = strip_comments((ROOT / "src/runtime/lifecycle/initialize.cpp").read_text())
-        self.assertRegex(source, r"\bconst\s+bool\s+vehInstalled\s*=\s*InstallVEH\s*\(\s*\)\s*;")
-        self.assertRegex(source, r"nevr_veh_policy::BootLine\(\s*vehInstalled\s*\)")
+        self.assertRegex(source, r"\bconst\s+nevr_veh_policy::InstallResult\s+vehResult\s*=\s*InstallVEH\s*\(\s*\)\s*;")
+        self.assertRegex(source, r"nevr_veh_policy::BootLine\(\s*vehResult\s*\)")
         self.assertNotIn("veh installed", source,
                          "initialize.cpp hard-codes the veh boot line; take it from nevr_veh_policy::BootLine")
+
+    def test_dll_load_hooks_installed_line_is_gated_on_the_install_outcome(self):
+        # #632 (N127's shape): Install() returns how many LoadLibrary variants it hooked. The boot line
+        # says "installed" only for all of them; a partial install prints a line that names the count, and
+        # (Spritz's ruling: the hooks are required) fails the boot with the count as its cause.
+        # InitializeAfterGameImageGuard cannot run in a GTest, so this pins the source; the verdict itself
+        # is tested in test_dll_load_hook.cpp (DllLoadHookBootVerdict).
+        source = strip_comments((ROOT / "src/runtime/lifecycle/initialize.cpp").read_text())
+        begin = source.index("installing DLL load hooks")
+        flat = re.sub(r"\s+", " ", source[begin : source.index("InstallHeadlessGraphicsHooks()", begin)])
+
+        def need(pattern, message):
+            # assertRegex would dump the whole block on a failure; a short message names the broken rule.
+            found = re.search(pattern, flat)
+            self.assertIsNotNone(found, message)
+            return found
+
+        count = need(r"const int (\w+) = nevr_dll_load_hook::Install\(\);", "Install() result not kept").group(1)
+        v = need(r"const nevr_boot_hook_policy::LoadLibraryVerdict (\w+) = "
+                 r"nevr_boot_hook_policy::JudgeLoadLibraryHooks\(\s*" + count +
+                 r", nevr_dll_load_hook::kLoadLibraryVariantCount\);",
+                 "verdict must be JudgeLoadLibraryHooks(count, kLoadLibraryVariantCount)").group(1)
+        need(r"if \(" + v + r"\.complete\) \{ nevr_boot_log_tee::TeeFprintf\(\"\[NEVR\.PATCH\] info; "
+             r"dll load hooks installed\\n\"\); \} else \{",
+             "'dll load hooks installed' must be the complete branch only")
+        self.assertEqual(source.count("dll load hooks installed"), 1)
+        need(r"\[NEVR\.PATCH\] warn; dll load hooks PARTIAL", "the PARTIAL line must carry warn; after its tag (logging.md Rule 12)")
+        need(r"dll load hooks PARTIAL \(%d/%d\).*?\\n\", " + count + r", nevr_dll_load_hook::kLoadLibraryVariantCount\);",
+             "PARTIAL arguments must be the installed count, then kLoadLibraryVariantCount")
+        need(r"if \(" + v + r"\.failsBoot\) \{ g_bootHookFailed = true; NoteBootHookFailureCause\(" + v +
+             r"\.cause\); \}", "a failing verdict must set g_bootHookFailed and its cause")
 
     def test_mic_provider_drops_stale_audio_at_the_first_game_read_and_caps_latency(self):
         # #95: the ring fills before the game's first read of a stream. The first MicRead drops that
@@ -238,8 +310,17 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         avail = extract_braced_function(source, "uint64_t nevr_mic_provider::MicAvailable(")
         self.assertNotRegex(avail, r"\bNoteGameReader\s*\(", "MicAvailable must not drop the backlog")
         # #95: the capture side is in the periodic line and the overflow warning is counted, not one-shot.
-        self.assertRegex(source, r"!g_ring\.ReaderActive\(\)[\s\S]{0,200}result\.ringOverflow")
+        # The gate is polled on every packet while the game reads, so its window slides while nothing waits.
+        self.assertRegex(source, r"!g_ring\.ReaderActive\(\)[\s\S]{0,200}g_overflowGate\.Poll\(")
+        self.assertNotRegex(source, r"result\.ringOverflow", "the gate is polled only on overflow packets")
         self.assertNotIn("g_ringOverflowLogged", source)
+        # The overflow line reports what the game did in the window (stalled or slow), not that it "is not
+        # draining"; the window's read counters reach the gate from the live counters.
+        self.assertIn("ring overflow reader=%s", source)
+        self.assertNotIn("is not draining", source)
+        self.assertRegex(source, r"flow\.readCalls\s*=\s*g_readCalls\.load\(\)")
+        self.assertRegex(source, r"flow\.samplesRead\s*=\s*g_samplesRead\.load\(\)")
+        self.assertRegex(source, r"g_overflowGate\.Poll\(\s*flow\s*,")
         for field in ("packets=", "silent=", "discontinuities=", "samples_pushed=", "samples_dropped=",
                       "max_poll_gap_ms="):
             self.assertIn(field, source, field)
@@ -247,6 +328,14 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         cap = re.search(r"kRingCapacitySamples\s*=\s*(\d+)\s*;", source)
         self.assertIsNotNone(cap)
         self.assertLessEqual(int(cap.group(1)), 9600)
+
+    def test_the_recently_met_line_is_logged_after_the_list_is_stored(self):
+        # #676: the scenario harness waits for `recently met list count=` and then reads the list, so the
+        # line must not come before RecentlyMet().SetList (a wait that fires early reads the old list).
+        source = strip_comments((ROOT / "src/runtime/compat/ws_bridge.cpp").read_text())
+        store = source.index("nevr_social_roster::RecentlyMet().SetList(")
+        line = source.index("[NEVR.SOCIAL] recently met list count=")
+        self.assertLess(store, line, "the recently-met log line is written before the list is stored")
 
     def test_radpluginshutdown_guard_lives_in_the_one_detour_on_the_symbol_resolver(self):
         # #93/#94: 0x1400EAEF0 takes one detour (CSysDLL_GetSymbol). The server-only
@@ -321,6 +410,24 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         for level in ("INFO", "WARNING", "ERROR"):
             self.assertIn(f'"{level}"', header)
 
+    def test_plugins_log_through_the_host_log(self):
+        # Issue #598: a plugin had no way into the host's structured Log(). The context carries the
+        # plugin's id and the host's log function, the loader fills both into every context it passes a
+        # plugin (init, per-frame, state change), and the shared plugin logger binds to them at init.
+        iface = strip_comments((ROOT / "src/extension/plugin_interface.h").read_text())
+        self.assertRegex(iface, r"const char\*\s+plugin_id;")
+        self.assertRegex(iface, r"NevrLogFn\s+log;")
+        loader = strip_comments((ROOT / "src/runtime/ext/plugin_loader.cpp").read_text())
+        self.assertRegex(loader, r"ctx\.log\s*=\s*HostPluginLog\s*;")
+        self.assertRegex(loader, r"ctx\.plugin_id\s*=")
+        self.assertEqual(len(re.findall(r"\bContextFor\(\s*\*?\w+\s*,", loader)), 3,
+                         "init, TickPlugins and NotifyPluginsStateChange each pass the plugin its own context")
+        logger = strip_comments((ROOT / "plugins/common/include/plugin_logger.h").read_text())
+        self.assertRegex(logger, r"binding\.log\s*\(\s*binding\.id\s*,")
+        for rel in ("plugins/example/src/plugin.cpp", "plugins/debug-lockout/src/plugin.cpp"):
+            text = strip_comments((ROOT / rel).read_text())
+            self.assertRegex(text, r"\bPluginLogBind\s*\(\s*ctx\s*\)", f"{rel} never binds to the host log")
+
     def test_broadcaster_hook_entries_are_counted_only_by_hook_liveness(self):
         # Issue #33: mode_patches.cpp kept its own entry counters and a periodic log line that
         # duplicated nevr_hook_liveness::Report for the same two hooks. HookLiveness is the one instrument.
@@ -329,12 +436,31 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
             self.assertNotIn(gone, patches)
         for hook, marker in (("static INT16 EngineEntityLookupHook(", "kBroadcasterListen"),
                              ("static VOID EngineEntityPropDispatchHook(", "kBroadcasterReceiveLocal")):
-            self.assertIn(f"nevr_hook_liveness::Mark(nevr_hook_liveness::{marker})", extract_braced_function(patches, hook))
+            body = extract_braced_function(patches, hook)
+            self.assertIn(f"nevr_hook_liveness::Mark(nevr_hook_liveness::{marker})", body)
+            self.assertRegex(body, r"chainReadable\s*=\s*nevr_broadcaster_guard::TryReadListenerTable\(")
+            self.assertRegex(body, r"if\s*\(\s*!chainReadable\b")
         tick = strip_comments((ROOT / "src/runtime/frame/tick.cpp").read_text())
         self.assertNotIn("LogBroadcasterHookStats", tick)
         for gone in ("broadcaster_hook_stats.cpp", "broadcaster_hook_stats.h"):
             self.assertFalse((ROOT / "src/runtime/patch" / gone).exists(), f"{gone} has no caller and was deleted")
         self.assertIn('nevr_hook_liveness::Report("periodic")', tick)
+
+    def test_broadcaster_hooks_report_rejected_chains_before_original_call(self):
+        patches = strip_comments((ROOT / "src/runtime/patch/mode_patches.cpp").read_text())
+        for hook, original in (("static INT16 EngineEntityLookupHook(", "OriginalEngineEntityLookup("),
+                               ("static VOID EngineEntityPropDispatchHook(", "OriginalEngineEntityPropDispatch(")):
+            body = extract_braced_function(patches, hook)
+            guard = body.find("nevr_broadcaster_guard::TryReadListenerTable(")
+            self.assertGreaterEqual(guard, 0, hook)
+            self.assertLess(guard, body.find(original), hook)
+            self.assertNotRegex(body, r"\*\s*arg1\b")
+            self.assertRegex(body, re.compile(r"if\s*\(\s*!chainReadable\s*\|\|.*?kMaximumUserAddress", re.S))
+            self.assertIn('"pointer_chain"', body)
+            warning = body.find("Log(EchoVR::LogLevel::Warning,", guard)
+            self.assertGreater(warning, guard, hook)
+            self.assertLess(warning, body.find(original), hook)
+            self.assertNotRegex(body[guard:warning], r"\breturn\b", hook)
 
     def test_getsymbol_hook_validates_its_prologue(self):
         # Issue #254: the CSysDLL_GetSymbol detour (echovr.exe 0x1400eaef0) was written blind. Binary
@@ -416,21 +542,13 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
     def test_game_main_hook_has_no_c_style_casts(self):
         # Issue #254 (CPP-MINGW addendum: no C-style casts).
         source = strip_comments((ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text())
-        body = extract_braced_function(source, "void InstallGameMainHook(")
+        body = extract_braced_function(source, "void ArmGameMain(")
         self.assertNotRegex(body, r"=\s*\(\s*\w+\s*\*\s*\)\s*\(")
 
-    def test_matchmaking_host_patch_runs_on_every_load_without_a_guard(self):
-        # Issue #18 / #286 F5: pnsradmatchmaking.dll is unloaded and reloaded mid-session, so the host
-        # rewrite must run for every load notification. The pure Apply() is unit-tested; the property
-        # that OnDllLoaded does not guard it lives here.
-        source = strip_comments((ROOT / "src/runtime/patch/pnsrad_enabler.cpp").read_text())
-        body = extract_braced_function(source, "static void CALLBACK OnDllLoaded(")
-        start = body.index("IsMatchmakingModule(")
-        branch = body[start:body.index("OnModuleNotification(", start)]
-        self.assertNotRegex(branch, r"\bstatic\b|Patched|\bonce\b|\bdone\b",
-                            "a guard around the matchmaking host patch leaves a reloaded image unpatched")
-        # The decision itself (which notification, which module) is the header's OnModuleNotification: it
-        # holds no state either, so every load notification reaches Apply().
+    def test_matchmaking_host_patch_decision_is_stateless(self):
+        # Issue #18 / #286 F5: pnsradmatchmaking.dll is unloaded and reloaded mid-session, so every load is
+        # patched. That the apply step holds no guard is pinned in test_pnsrad_load_boundary.py (#504); the
+        # header's per-image decision holds no state either, so a reloaded image reaches Apply().
         header = strip_comments((ROOT / "src/runtime/patch/matchmaker_host_patch.h").read_text())
         decision = extract_braced_function(header, "std::optional<Result> OnModuleNotification(")
         self.assertNotRegex(decision, r"\bstatic\b|\bonce\b|\bdone\b|\bPatched\b",
@@ -500,6 +618,8 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
             self.assertNotIn(forbidden, replay, "the boot file is the crash spool and is never deleted")
         tee = strip_comments((ROOT / "src/runtime/log/boot_log_tee.cpp").read_text())
         self.assertIn("nevr_boot_lines::Build(", tee)
+        # #664: the replay carries each record's own level into the main log, not a literal.
+        self.assertRegex(replay, r"WriteFileRecord\(\s*line\.ts\.c_str\(\)\s*,\s*line\.level\.c_str\(\)")
         self.assertIn("GetSystemTime(", tee)
         close = extract_braced_function(tee, "void nevr_boot_log_tee::Close(")
         self.assertNotIn("g_boot_path", close, "Path() must stay valid after Close()")

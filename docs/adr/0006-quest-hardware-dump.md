@@ -20,7 +20,7 @@ libr15 renders through Vulkan via VrApi, not GLES:
 
 ## Decision
 
-**The feature flag.** `features.hwdump` in `nevr-quest.json`, row `hwdump` of `kFeatures` in `sentinel/quest_config.cpp`. It defaults off and needs no other feature.
+**The feature flag.** `diagnostics.hardware_dump` in `config.yaml`, row `hwdump` of `kFeatures` in `sentinel/quest_config.cpp`. It defaults off, needs no other feature, and only the Quest reads it.
 
 **The ctor step.** The constructor step `install_hwdump` (`integration/ctor_sequence.cpp`) runs last. When the flag is off it is skipped with `hwdump_off`. It calls `hwdump::StartHwDump`, which:
 1. installs 18 GOT hooks on libr15's own system queries (part B);
@@ -171,7 +171,7 @@ Every failure path has its own line:
 
 | Test | What it covers |
 |---|---|
-| `quest_config_test` | the flag defaults off; only a JSON `true` turns it on |
+| `quest_config_test` | the flag defaults off; only `diagnostics.hardware_dump` set to a true spelling (`true`, `yes`, `on` or `1` in any case, or `y`/`Y`) turns it on; `false`, `no`, `off`, `0`, `n`, an unknown word and an unset `${VAR}` leave it off |
 | `integration_sequence_test` | skipped by default with `hwdump_off`; runs alone; a failing or throwing dump step leaves the other steps unchanged |
 | `hwdump_core_test`, also under ThreadSanitizer | the field schema; readers against a fake root; the os section's fixed fields against an empty and a populated root; record dedupe, overflow and concurrency; trigger timing; a log line without values; the queries section |
 | `hwdump_handlers_test`, `-fno-exceptions` | every handler passes its arguments bit-exactly (including `s0` floats), returns the original's result, and stays inside the game's buffers |

@@ -143,7 +143,7 @@ class SelfCheck : public ::testing::Test {
     nevr_self_check::SetEnabled(true);
     nevr_self_check::SetSender(&Sender);
     nevr_self_check::SetLogSink(&Logger);
-    nevr_self_check::SetBuild("4.0.0-rc.1+abc");
+    nevr_self_check::SetBuild("5.0.0");
   }
   static std::vector<nlohmann::json> AllSent() {
     std::vector<nlohmann::json> out;
@@ -184,19 +184,43 @@ TEST_F(SelfCheck, ReportBeforeLoginIsLoggedNowAndSentAfterLogin) {
   EXPECT_EQ(results[0]["pass"], false);
   EXPECT_EQ(results[0]["expected"], "PartyUpdateSuccess");
   EXPECT_EQ(results[0]["observed"], "PartyUpdateFailure");
-  EXPECT_EQ(results[0]["build"], "4.0.0-rc.1+abc");
+  EXPECT_EQ(results[0]["build"], "5.0.0");
   EXPECT_EQ(results[0]["userid"], "OVR-ORG-42");
   EXPECT_EQ(results[0]["seq"], 1);
   EXPECT_EQ(DecodeNakamaStyle(g_sent.frames[0]).account, 42u);
 }
 
-TEST_F(SelfCheck, OnlyTheLoginConnectionOfAClientBuildWithTheUnitOnAsksForDebug) {
-  EXPECT_TRUE(nevr_self_check::WantsRemoteDebug(1, /*isServer=*/false));
-  EXPECT_FALSE(nevr_self_check::WantsRemoteDebug(0, false)) << "the config connection";
-  EXPECT_FALSE(nevr_self_check::WantsRemoteDebug(2, false)) << "the matchmaker connection";
-  EXPECT_FALSE(nevr_self_check::WantsRemoteDebug(1, /*isServer=*/true)) << "a dedicated game server";
-  nevr_self_check::SetEnabled(false);
-  EXPECT_FALSE(nevr_self_check::WantsRemoteDebug(1, false)) << "the unit is off";
+TEST_F(SelfCheck, RegisteringANameAgainReturnsTheSameCheck) {
+  const auto first = nevr_self_check::Register({"same", "ok", nullptr});
+  const auto second = nevr_self_check::Register({"same", "something else", nullptr});
+  const auto other = nevr_self_check::Register({"other", "ok", nullptr});
+  EXPECT_GE(first, 0);
+  EXPECT_EQ(first, second);
+  EXPECT_NE(first, other);
+}
+
+namespace {
+int g_sessionResets = 0;
+void CountSessionReset() { ++g_sessionResets; }
+}  // namespace
+
+TEST_F(SelfCheck, ASessionChangeRunsTheRegisteredResetsAndRestartsTheCaps) {
+  g_sessionResets = 0;
+  nevr_self_check::RegisterSessionReset(&CountSessionReset);
+  nevr_self_check::RegisterSessionReset(&CountSessionReset);  // the same function is registered once
+  const auto id = nevr_self_check::Register({"capped_check", "ok", nullptr});
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId{4, 1});
+  EXPECT_EQ(g_sessionResets, 1);
+  for (std::size_t i = 0; i < nevr_self_check::kMaxResultsPerCheck + 3; ++i) nevr_self_check::Report(id, "ok", true);
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId{4, 2});  // the next LoginSuccess
+  EXPECT_EQ(g_sessionResets, 2);
+  nevr_self_check::Report(id, "again", true);  // the cap started over: this one is a result, not "capped"
+  nevr_self_check::Flush();
+  const auto results = AllSent();
+  ASSERT_FALSE(results.empty());
+  EXPECT_EQ(results.back()["observed"], "again");
+  nevr_self_check::SetLoggedIn(false);
+  EXPECT_EQ(g_sessionResets, 3);
 }
 
 TEST_F(SelfCheck, DisabledUnitRecordsNothing) {
@@ -262,6 +286,58 @@ TEST_F(SelfCheck, PreLoginQueueIsBoundedAndReportsWhatItDropped) {
   bool sawDropped = false;
   for (const auto& r : results) sawDropped = sawDropped || (r.contains("dropped") && r["dropped"].get<int>() > 0);
   EXPECT_TRUE(sawDropped);
+}
+
+TEST_F(SelfCheck, ResultsUnsentWhenASessionEndsAreDroppedAndCounted) {
+  const auto id = nevr_self_check::Register({"drop_probe", "ok", nullptr});
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId{4, 1});
+  g_sent.accept = false;  // the connection is gone: nothing can be delivered
+  for (int i = 0; i < 3; ++i) nevr_self_check::Report(id, "r" + std::to_string(i), true);
+  nevr_self_check::Flush();
+  nevr_self_check::SetLoggedIn(false);  // the session ends with 3 results unsent
+  g_sent.accept = true;
+  nevr_self_check::Flush();
+  EXPECT_TRUE(g_sent.frames.empty()) << "nothing is sent while no session is logged in";
+
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId{4, 2});
+  nevr_self_check::Flush();
+  const auto results = AllSent();
+  ASSERT_EQ(results.size(), 1u) << "only the count of the loss arrives, none of the old results";
+  EXPECT_EQ(results[0]["check"], "self_check");
+  ASSERT_TRUE(results[0].contains("dropped_at_session_end"));
+  EXPECT_EQ(results[0]["dropped_at_session_end"].get<int>(), 3);
+  EXPECT_EQ(results[0]["userid"], "OVR-ORG-2");  // attributed to the session that reports it
+}
+
+TEST_F(SelfCheck, TheDropCountIsReportedOnceAndNothingIsStored) {
+  const auto id = nevr_self_check::Register({"drop_probe", "ok", nullptr});
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId{4, 1});
+  g_sent.accept = false;
+  nevr_self_check::Report(id, "a", true);
+  nevr_self_check::Report(id, "b", true);
+  nevr_self_check::SetLoggedIn(false);
+  g_sent.accept = true;
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId{4, 1});
+  nevr_self_check::Flush();
+  nevr_self_check::Flush();
+  ASSERT_EQ(g_sent.frames.size(), 1u);
+  const auto first = AllSent();
+  ASSERT_EQ(first.size(), 1u);
+  EXPECT_EQ(first[0]["dropped_at_session_end"].get<int>(), 2);
+  nevr_self_check::SetLoggedIn(false);
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId{4, 1});
+  nevr_self_check::Flush();
+  EXPECT_EQ(g_sent.frames.size(), 1u) << "a later session carries neither the results nor the count again";
+}
+
+TEST_F(SelfCheck, ResultsQueuedBeforeTheFirstLoginSurviveIt) {
+  const auto id = nevr_self_check::Register({"drop_probe", "ok", nullptr});
+  nevr_self_check::Report(id, "early", true);
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId{4, 1});
+  nevr_self_check::Flush();
+  const auto results = AllSent();
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results[0]["observed"], "early");
 }
 
 namespace {

@@ -1,5 +1,10 @@
 # nEVR Naming Standard
 
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED",
+"NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in BCP 14
+([RFC 2119](https://www.rfc-editor.org/rfc/rfc2119), [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174)) when, and only
+when, they appear in all capitals, as shown here.
+
 **Required reading** for anyone adding a name to this repository. It covers how the project name is
 spelled inside a name, and which spellings already in the tree are not models. It does not set case
 rules for locals, members, enumerators or macros other than the project prefix: the tree has no single

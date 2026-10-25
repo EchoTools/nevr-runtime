@@ -465,6 +465,7 @@ Session::DeviceResult Session::RunDeviceCode(CachedAuthToken& out) {
   ops.cancelled = [this] { return StopRequested(); };
   ops.log = [this](LogLevel l, const std::string& m) { Log(l, m); };
   ops.renews_expired_codes = true;  // RunDeviceLogin answers a code that runs out with a new one
+  ops.shows_code_only = true;       // Quest never opens a browser: the sign-in screen shows the code (#621)
 
   const nevr::auth::DeviceFlowResult flow = nevr::auth::RunDeviceCodeFlow(ops, config_.login_url);
   if (!flow.verified) return device_result_;

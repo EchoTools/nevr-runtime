@@ -57,18 +57,18 @@ class VersionReconfigureTest(unittest.TestCase):
         git(self.src, "commit", "-q", "--allow-empty", "-m", "three")
         after = self.built_version()
         self.assertNotEqual(after, before)
-        self.assertEqual(after, f"1.2.3-dev+2.{self.head()}")  # a commit past the tag is a development version
+        self.assertEqual(after, f"1.2.4-dev.2+{self.head()}")  # a commit past the tag is a development version
 
     def test_a_branch_switch_then_build_embeds_the_other_commit(self):
         git(self.src, "switch", "-q", "-c", "other", "HEAD~1")
-        self.assertEqual(self.built_version(), f"1.2.3+0.{self.head()}")
+        self.assertEqual(self.built_version(), f"1.2.4-dev.0+{self.head()}")
 
-    def test_an_rc_tag_in_history_parses_and_a_commit_after_it_rebuilds_as_dev(self):
-        # `git describe --long` prints v4.0.0-rc.1-0-g<sha> on the tag and -1-g<sha> after it; the parser
-        # used to accept only vX.Y.Z and the configure died with a list index error once such a tag existed.
-        git(self.src, "tag", "-a", "-m", "rc", "v4.0.0-rc.1")
-        git(self.src, "commit", "-q", "--allow-empty", "-m", "after the rc tag")
-        self.assertEqual(self.built_version(), f"4.0.0-dev+1.{self.head()}")
+    def test_a_pre_release_history_tag_is_ignored_and_the_commit_after_it_rebuilds_as_dev(self):
+        # `git describe --long` prints v4.0.0-rc.1-1-g<sha> after a pre-release tag; --exclude "v*-*" keeps
+        # such history tags from ever being the base, so the nearest release tag (v1.2.3) still is.
+        git(self.src, "tag", "-a", "-m", "history", "v4.0.0-rc.1")
+        git(self.src, "commit", "-q", "--allow-empty", "-m", "after the history tag")
+        self.assertEqual(self.built_version(), f"1.2.4-dev.2+{self.head()}")
 
     def test_an_unchanged_commit_does_not_reconfigure(self):
         self.built_version()

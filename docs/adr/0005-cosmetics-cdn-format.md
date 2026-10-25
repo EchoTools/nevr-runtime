@@ -1,7 +1,8 @@
 # ADR 0005: Cosmetics arrive as `.evrp` packages listed in a JSON manifest on a CDN
 
 Status: accepted, implemented (`src/runtime/patch/asset_cdn.cpp`, `src/runtime/patch/evrp_package.cpp`).
-Game version: 34.4.631399.1.
+Game version: 34.4.631547.1, the PC build: the shipped `echovr.exe` (md5 `c2d5261e20eb193a8f08589d1bacaad5`) contains the strings
+`Build: goldmaster 631547` and `RAD_Version: goldmaster631547` (it has no PE version resource). The Quest build version is not recorded.
 
 ## Context
 
@@ -105,7 +106,7 @@ The manifest is a JSON file listing all available packages on the CDN.
 ```json
 {
   "version": 1,
-  "game_version": "34.4.631399.1",
+  "game_version": "34.4.631547.1",
   "packages": {
     "74d228d09dc5dc86": {
       "url": "packages/74d228d09dc5dc86.evrp",

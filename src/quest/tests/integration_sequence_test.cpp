@@ -22,6 +22,7 @@
 #include "quest/integration/self_check_wiring.h"
 #include "quest/integration/stage_log.h"
 #include "quest/net/frame_tap.h"
+#include "quest/sentinel/hook_log.h"
 #include "quest/tests/test_check.h"
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/self_check.h"
@@ -84,6 +85,9 @@ struct FakeSteps final : Steps {
   bool StartReporter() override { return Step("reporter"); }
   bool InstallClockHook() override { return Step("clock"); }
   bool InstallObbSkip(bool counted) override { return Step(counted ? "obb" : "obb_uncounted"); }
+  bool InstallProcessEnd() override { return Step("process_end"); }
+  bool InstallPermissionWait() override { return Step("permission_wait"); }
+  bool InstallVkExtWindow() override { return Step("vk_ext_window"); }
   bool StartTokenAuth() override { return Step("token"); }
   bool InstallLoginPrompt(bool counted) override { return Step(counted ? "prompt" : "prompt_uncounted"); }
   bool StartBridge() override { return Step("bridge"); }
@@ -113,10 +117,10 @@ struct FakeSteps final : Steps {
   bool Ran(const char* name) const { return Index(name) >= 0; }
 };
 
-void TestEverythingOffInstallsOnlyTheProofHook() {
+void TestEverythingOffInstallsOnlyTheProofHookAndTheObbSkip() {
   FakeSteps s = FakeSteps::With(false, false, false, false);
   const ConstructorReport r = RunConstructorSequence(s);
-  const std::vector<std::string> want = {"arm", "config", "reg_clock", "reporter", "clock"};
+  const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window"};
   QCHECK(s.calls == want);
   QCHECK(r.at(StepId::kStartTokenAuth).state == StepState::kSkipped);
   QCHECK(r.at(StepId::kInstallRedirect).state == StepState::kSkipped);
@@ -124,20 +128,18 @@ void TestEverythingOffInstallsOnlyTheProofHook() {
   // The hardware dump (#335) is off by default and its step says so.
   QCHECK(r.at(StepId::kInstallHwDump).state == StepState::kSkipped);
   QCHECK(std::strcmp(r.at(StepId::kInstallHwDump).reason, "hwdump_off") == 0);
-  // So is the OBB-mount skip (#319).
-  QCHECK(r.at(StepId::kRegisterObbSkipCounters).state == StepState::kSkipped);
-  QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kSkipped);
-  QCHECK(std::strcmp(r.at(StepId::kInstallObbSkip).reason, "obb_skip_off") == 0);
+  // The OBB-mount skip (#319) is not a feature: it is installed with every feature off (#572).
+  QCHECK(r.at(StepId::kRegisterObbSkipCounters).state == StepState::kOk);
+  QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
 }
 
 void TestFullStackOrder() {
   FakeSteps s = FakeSteps::With(true, true, true, true);
   s.config.effective.hwdump = true;
-  s.config.effective.obbSkip = true;
   const ConstructorReport r = RunConstructorSequence(s);
   const std::vector<std::string> want = {"arm",       "config",     "reg_clock",  "reg_redirect", "reg_dlopen",
                                          "reg_login", "reg_social", "reg_prompt", "reg_obb",      "reporter",
-                                         "clock",     "obb",        "token",      "prompt",       "bridge",
+                                         "clock",     "obb", "process_end", "permission_wait", "vk_ext_window",        "token",      "prompt",       "bridge",
                                          "redirect",  "social",     "dlopen",     "hwdump"};
   QCHECK(s.calls == want);
   QCHECK(s.loginArg && s.mmArg);
@@ -151,14 +153,13 @@ void TestHwDumpIsIndependentAndContained() {
     FakeSteps s = FakeSteps::With(false, false, false, false);
     s.config.effective.hwdump = true;
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reporter", "clock", "hwdump"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "hwdump"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kInstallHwDump).state == StepState::kOk);
   }
   for (const char* mode : {"fail", "throw"}) {
     FakeSteps s = FakeSteps::With(true, true, true, true);
     s.config.effective.hwdump = true;
-    s.config.effective.obbSkip = true;
     if (std::strcmp(mode, "fail") == 0) s.failing = {"hwdump"}; else s.throwing = {"hwdump"};
     const ConstructorReport r = RunConstructorSequence(s);
     for (int i = 0; i < static_cast<int>(StepId::kInstallHwDump); ++i) QCHECK(r.steps[i].state == StepState::kOk);
@@ -167,23 +168,121 @@ void TestHwDumpIsIndependentAndContained() {
   }
 }
 
-// The OBB-mount skip (#319) needs no other feature, its counters are registered before the single reporter
-// start, it installs right after the clock hook, and a refused counter, a failing or a throwing step leaves
-// every other step as it was.
-void TestObbSkipIsIndependentAndContained() {
+// The permission-wait hook (#640) runs on every launch like the process-end hook: no feature and no configuration
+// turns it off, it needs no counters, it installs right after the process-end hook and before token auth, and a
+// failing or a throwing step leaves every other step as it was.
+void TestPermissionWaitIsUnconditionalIndependentAndContained() {
   {
     FakeSteps s = FakeSteps::With(false, false, false, false);
-    s.config.effective.obbSkip = true;
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb"};
+    QCHECK(r.at(StepId::kInstallPermissionWait).state == StepState::kOk);
+    QCHECK(std::strcmp(StepName(StepId::kInstallPermissionWait), "install_permission_wait") == 0);
+    QCHECK(s.Index("permission_wait") == s.Index("process_end") + 1);
+  }
+  {  // before token auth, which a configuration with the network features does run
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    RunConstructorSequence(s);
+    QCHECK(s.Index("permission_wait") >= 0 && s.Index("permission_wait") < s.Index("token"));
+  }
+  {  // the configuration cannot be resolved and the process-end hook fails: still installed
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.failing = {"config", "process_end"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallPermissionWait).state == StepState::kOk);
+    QCHECK(s.Ran("permission_wait"));
+  }
+  for (const char* mode : {"fail", "throw"}) {
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    if (std::strcmp(mode, "fail") == 0) s.failing = {"permission_wait"}; else s.throwing = {"permission_wait"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallPermissionWait).state != StepState::kOk);
+    QCHECK(s.Ran("token") && s.Ran("bridge") && s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen"));
+  }
+}
+
+// The Vulkan extension window (#868) runs on every launch like the permission-wait hook: no feature and no configuration
+// turns it off (it is in release builds too), it needs no counters, it installs right after the permission-wait hook and
+// before token auth, and a failing or a throwing step leaves every other step as it was.
+void TestVkExtWindowIsUnconditionalIndependentAndContained() {
+  {
+    FakeSteps s = FakeSteps::With(false, false, false, false);
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallVkExtWindow).state == StepState::kOk);
+    QCHECK(std::strcmp(StepName(StepId::kInstallVkExtWindow), "install_vk_ext_window") == 0);
+    QCHECK(s.Index("vk_ext_window") == s.Index("permission_wait") + 1);
+  }
+  {  // before token auth, which a configuration with the network features does run
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    RunConstructorSequence(s);
+    QCHECK(s.Index("vk_ext_window") >= 0 && s.Index("vk_ext_window") < s.Index("token"));
+  }
+  {  // the configuration cannot be resolved and the permission-wait hook fails: still installed
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.failing = {"config", "permission_wait"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallVkExtWindow).state == StepState::kOk);
+    QCHECK(s.Ran("vk_ext_window"));
+  }
+  for (const char* mode : {"fail", "throw"}) {
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    if (std::strcmp(mode, "fail") == 0) s.failing = {"vk_ext_window"}; else s.throwing = {"vk_ext_window"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallVkExtWindow).state != StepState::kOk);
+    QCHECK(s.Ran("token") && s.Ran("bridge") && s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen"));
+  }
+}
+
+// The process-end hook (#621) runs on every launch like the OBB skip: no feature and no configuration turns it
+// off, it needs no counters, it installs right after the OBB skip and before token auth, and a failing or a
+// throwing step leaves every other step as it was.
+void TestProcessEndIsUnconditionalIndependentAndContained() {
+  {
+    FakeSteps s = FakeSteps::With(false, false, false, false);
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallProcessEnd).state == StepState::kOk);
+    QCHECK(std::strcmp(StepName(StepId::kInstallProcessEnd), "install_process_end") == 0);
+    QCHECK(s.Index("process_end") == s.Index("obb") + 1);
+  }
+  {  // the configuration cannot be resolved, and the OBB skip's counters are refused: still installed
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.failing = {"config", "reg_obb"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallProcessEnd).state == StepState::kOk);
+    QCHECK(s.Ran("process_end"));
+  }
+  for (const char* mode : {"fail", "throw"}) {
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    if (std::strcmp(mode, "fail") == 0) s.failing = {"process_end"}; else s.throwing = {"process_end"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallProcessEnd).state != StepState::kOk);
+    QCHECK(s.Ran("token") && s.Ran("bridge") && s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen"));
+  }
+}
+
+// The OBB-mount skip (#319) runs on every launch (#572): it needs no feature, a configuration that cannot be
+// resolved does not stop it, its counters are registered before the single reporter start, it installs right
+// after the clock hook, and a refused counter, a failing or a throwing step leaves every other step as it was.
+void TestObbSkipIsUnconditionalIndependentAndContained() {
+  {
+    FakeSteps s = FakeSteps::With(false, false, false, false);
+    const ConstructorReport r = RunConstructorSequence(s);
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kRegisterObbSkipCounters).state == StepState::kOk);
     QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
     QCHECK(!s.Ran("token") && !s.Ran("bridge") && !s.Ran("redirect"));
   }
+  {  // the configuration cannot be resolved: every feature is off, and the skip is still installed
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.failing = {"config"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kResolveConfig).state == StepState::kThrew);
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window"};
+    QCHECK(s.calls == want);
+    QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
+  }
   {  // counters refused: the hook installs nothing (its own rule is called to log the skip) and says why
     FakeSteps s = FakeSteps::With(true, true, true, true);
-    s.config.effective.obbSkip = true;
     s.failing = {"reg_obb"};
     const ConstructorReport r = RunConstructorSequence(s);
     QCHECK(r.at(StepId::kRegisterObbSkipCounters).state == StepState::kFailed);
@@ -194,15 +293,24 @@ void TestObbSkipIsIndependentAndContained() {
   }
   for (const char* mode : {"fail", "throw"}) {
     FakeSteps s = FakeSteps::With(true, true, true, true);
-    s.config.effective.obbSkip = true;
     if (std::strcmp(mode, "fail") == 0) s.failing = {"obb"}; else s.throwing = {"obb"};
     const ConstructorReport r = RunConstructorSequence(s);
     QCHECK(r.at(StepId::kInstallObbSkip).state != StepState::kOk);
     QCHECK(s.Ran("token") && s.Ran("bridge") && s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen"));
   }
+  // The clock counters, the reporter start and the clock hook are steps beside the skip, not its prerequisites: any
+  // of them failing or throwing still leaves the skip installed with its counters.
+  for (const char* other : {"reg_clock", "reporter", "clock"}) {
+    for (const char* mode : {"fail", "throw"}) {
+      FakeSteps s = FakeSteps::With(false, false, false, false);
+      if (std::strcmp(mode, "fail") == 0) s.failing = {other}; else s.throwing = {other};
+      const ConstructorReport r = RunConstructorSequence(s);
+      QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
+      QCHECK(s.Ran("obb") && !s.Ran("obb_uncounted"));
+    }
+  }
   {  // before the reporter is up nothing installs, and the skip is in before token auth starts
     FakeSteps s = FakeSteps::With(true, true, true, true);
-    s.config.effective.obbSkip = true;
     RunConstructorSequence(s);
     QCHECK(s.Index("reg_obb") < s.Index("reporter"));
     QCHECK(s.Index("obb") > s.Index("reporter") && s.Index("obb") < s.Index("token"));
@@ -269,7 +377,7 @@ void TestClockHookFailureLeavesTheRest() {
   s.failing = {"clock"};
   const ConstructorReport r = RunConstructorSequence(s);
   QCHECK(r.at(StepId::kInstallClockHook).state == StepState::kFailed);
-  for (const char* ran : {"token", "bridge", "redirect", "social", "dlopen"}) QCHECK(s.Ran(ran));
+  for (const char* ran : {"obb", "process_end", "permission_wait", "vk_ext_window", "token", "bridge", "redirect", "social", "dlopen"}) QCHECK(s.Ran(ran));
 }
 
 void TestTokenAuthFailureTurnsOffTheBridgeAndWhatNeedsIt() {
@@ -359,7 +467,8 @@ void TestCounterRefusalDisablesOnlyThatPiece() {
 
 void TestEveryStepThrowingIsContained() {
   for (const char* name : {"arm", "config", "reg_clock", "reg_redirect", "reg_dlopen", "reg_social", "reg_prompt",
-                           "reporter", "clock", "token", "prompt", "bridge", "redirect", "social", "dlopen"}) {
+                           "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "token", "prompt", "bridge", "redirect", "social",
+                           "dlopen"}) {
     FakeSteps s = FakeSteps::With(true, true, true, true);
     s.throwing = {name};
     const ConstructorReport r = RunConstructorSequence(s);  // must return, not terminate
@@ -499,7 +608,7 @@ void TestMatchmakingReloadProbeFailsWhenTheActionGaveUp() {
   QCHECK(seen.observed == "images=1 installs=0" && !seen.pass);
 }
 
-// The self_check feature's wiring: the debug query, the user the service names, the sender.
+// The self-check wiring: on in every build, the user the service names, the sender; no debug query anywhere.
 void TestApplySelfCheckWiresTheDebugQueryTheUserAndTheSender() {
   static std::vector<std::string> sent;
   sent.clear();
@@ -507,13 +616,12 @@ void TestApplySelfCheckWiresTheDebugQueryTheUserAndTheSender() {
   quest_net::FrameTapSinks sinks;
   int previousCalls = 0;
   sinks.onLoginUser = [&](std::uint64_t, std::uint64_t) { ++previousCalls; };
-  bool debugQuery = false;
   nevr_quest::integration::SelfCheckHooks hooks;
   hooks.sender = [](const std::string& frame) { sent.push_back(frame); return true; };
   hooks.log = [](const nevr_self_check::LogRecord&) {};
-  hooks.build = "4.0.0-rc.1+abc";
-  nevr_quest::integration::ApplySelfCheck(&sinks, &debugQuery, hooks);
-  QCHECK(debugQuery);
+  hooks.build = "5.0.0";
+  QCHECK(!nevr_self_check::Enabled());  // off until the bridge is configured
+  nevr_quest::integration::ApplySelfCheck(&sinks, hooks);
   QCHECK(nevr_self_check::Enabled());
   QCHECK(static_cast<bool>(sinks.onLoginUser));
 
@@ -532,6 +640,40 @@ void TestApplySelfCheckWiresTheDebugQueryTheUserAndTheSender() {
     QCHECK(nevr_evr_codec::ReadMessage(sent[0], 0, &message) == nevr_evr_codec::ReadStatus::Ok);
     QCHECK(message.symbol == nevr_evr_codec::kSymRemoteLogSet);
     QCHECK(nevr_evr_codec::ReadLE64(message.payload) == 5 && nevr_evr_codec::ReadLE64(message.payload + 8) == 0x2222ULL);
+  }
+  nevr_self_check::ResetForTest();
+}
+
+// Self-check "android_main_returned" (#621): called by the process-end hook just before the process goes, it must
+// put its result on the login connection by itself (it is the last chance), and log it whatever the connection does.
+void TestAndroidMainReturnedIsSentAtOnceAndLogged() {
+  static std::vector<std::string> sent;
+  static std::vector<std::string> logged;
+  sent.clear();
+  logged.clear();
+  nevr_self_check::ResetForTest();
+  quest_net::FrameTapSinks sinks;
+  nevr_quest::integration::SelfCheckHooks hooks;
+  hooks.sender = [](const std::string& frame) { sent.push_back(frame); return true; };
+  hooks.log = [](const nevr_self_check::LogRecord& r) { logged.push_back(r.name + " " + r.observed); };
+  hooks.build = "5.0.0";
+  nevr_quest::integration::ApplySelfCheck(&sinks, hooks);
+
+  // Before the login: logged, nothing sent (the unit never sends without a user).
+  nevr_quest::integration::ReportAndroidMainReturned();
+  QCHECK(sent.empty());
+  QCHECK(logged.size() == 1 && logged[0] == "android_main_returned ending_process exit_code=0");
+
+  quest_net::FrameTap tap(sinks);
+  tap.ServerToGame(nevr_evr_codec::BuildLoginSuccess(5, 0x2222ULL));
+  sent.clear();
+  logged.clear();
+  nevr_quest::integration::ReportAndroidMainReturned();  // no Flush by the caller
+  QCHECK(logged.size() == 1);
+  QCHECK(sent.size() == 1);  // it left by itself
+  if (sent.size() == 1) {
+    QCHECK(sent[0].find("android_main_returned") != std::string::npos);
+    QCHECK(sent[0].find("ending_process exit_code=0") != std::string::npos);
   }
   nevr_self_check::ResetForTest();
 }
@@ -639,6 +781,7 @@ void TestIdentitySourcePublishesTheSharedAttemptGate() {
   namespace gate = nevr_quest_login::attempt_gate;
   TokenIdentitySource source(nullptr);
   QCHECK(!source.Ready() && !gate::IsReady());
+  QCHECK(source.HoldsAnswers() && gate::HoldsAnswers());  // a new source is Starting: token auth is working, hold
   source.Observe(Snap(Readiness::Ready, "tok", 4242, "p"));
   QCHECK(source.Ready() && gate::IsReady() && gate::LoginMayProceed());
   gate::Poison();  // an attempt's logging-in page was skipped
@@ -654,6 +797,129 @@ void TestIdentitySourcePublishesTheSharedAttemptGate() {
   QCHECK(!source.Ready() && !gate::IsReady());  // one flip, both readers
   TokenIdentitySource next(nullptr);            // a new source starts clean
   QCHECK(!next.Ready());
+  QCHECK(next.HoldsAnswers());
+}
+
+// #581: every observed state maps to one (ready, hold) pair, published together. Hold: a token is coming without
+// the player (starting, refreshing, expired, a failure the session retries, a ready snapshot whose token ran
+// out). Deliver (not ready, no hold): the player is awaited, or no token will come (a final failure, stopped, a
+// token without an account). Ready never holds.
+void TestIdentitySourcePublishesTheHoldWithTheReady() {
+  using nevr::quest_auth::Readiness;
+  namespace gate = nevr_quest_login::attempt_gate;
+  struct Row {
+    const char* what;
+    nevr::quest_auth::Snapshot snap;
+    bool ready;
+    bool hold;
+  };
+  nevr::quest_auth::Snapshot failedRetry = Snap(Readiness::Failed, "", 0, "p");
+  failedRetry.will_retry = true;
+  const Row rows[] = {
+      {"starting", Snap(Readiness::Starting, "", 0, "p"), false, true},
+      {"refreshing", Snap(Readiness::Refreshing, "", 0, "p"), false, true},
+      {"awaiting the player", Snap(Readiness::AwaitingUser, "", 0, "p"), false, false},
+      {"expired", Snap(Readiness::Expired, "", 0, "p"), false, true},
+      {"failed, will retry", failedRetry, false, true},
+      {"failed, final", Snap(Readiness::Failed, "", 0, "p"), false, false},
+      {"stopped", Snap(Readiness::Stopped, "", 0, "p"), false, false},
+      {"ready", Snap(Readiness::Ready, "tok", 4242, "p"), true, false},
+      {"ready, token ran out", Snap(Readiness::Ready, "", 4242, "p"), false, true},
+      {"ready, no account", Snap(Readiness::Ready, "tok", 0, "p"), false, false},
+  };
+  for (const Row& row : rows) {
+    TokenIdentitySource viaObserve(nullptr);
+    viaObserve.Observe(row.snap);
+    const nevr_quest_login::IdentitySource& base = viaObserve;
+    if (base.Ready() != row.ready || base.HoldsAnswers() != row.hold || gate::LoginMayProceed() != row.ready) {
+      std::fprintf(stderr, "Observe(%s): ready %d hold %d, want %d %d\n", row.what, base.Ready(), base.HoldsAnswers(),
+                   row.ready, row.hold);
+    }
+    QCHECK(base.Ready() == row.ready && base.HoldsAnswers() == row.hold && gate::LoginMayProceed() == row.ready);
+    QCHECK(TokenIdentitySource::HoldsFor(row.snap) == row.hold);
+    // Fetch publishes the same pair from the snapshot it read.
+    const nevr::quest_auth::Snapshot snap = row.snap;
+    TokenIdentitySource viaFetch([snap] { return snap; });
+    nevr_quest_login::Identity id;
+    static_cast<void>(viaFetch.Fetch(id));
+    if (viaFetch.Ready() != row.ready || viaFetch.HoldsAnswers() != row.hold) {
+      std::fprintf(stderr, "Fetch(%s): ready %d hold %d, want %d %d\n", row.what, viaFetch.Ready(),
+                   viaFetch.HoldsAnswers(), row.ready, row.hold);
+    }
+    QCHECK(viaFetch.Ready() == row.ready && viaFetch.HoldsAnswers() == row.hold);
+  }
+  // A Fetch with no snapshot function answers NotReady and does not hold.
+  TokenIdentitySource noSnapshot(nullptr);
+  nevr_quest_login::Identity id;
+  QCHECK(noSnapshot.Fetch(id) == nevr_quest_login::IdentityStatus::NotReady);
+  QCHECK(!noSnapshot.Ready() && !noSnapshot.HoldsAnswers());
+  // The default IdentitySource never holds.
+  struct Plain final : nevr_quest_login::IdentitySource {
+    nevr_quest_login::IdentityStatus Fetch(nevr_quest_login::Identity&) override {
+      return nevr_quest_login::IdentityStatus::NotReady;
+    }
+  } plain;
+  QCHECK(!plain.HoldsAnswers());
+  static_assert(noexcept(std::declval<const TokenIdentitySource&>().HoldsAnswers()), "HoldsAnswers must be noexcept");
+  static_assert(noexcept(TokenIdentitySource::HoldsFor(std::declval<const nevr::quest_auth::Snapshot&>())),
+                "HoldsFor must be noexcept");
+}
+
+// If token auth never exists, a final startup failure must survive a later Fetch of the missing
+// session. Otherwise Fetch republishes Starting and holds the game's local login answers again.
+void TestMissingAuthStaysFailedAfterFetch() {
+  using nevr::quest_auth::Readiness;
+  using nevr_session_router::LoginGate;
+  TokenIdentitySource source([] { return nevr::quest_auth::Snapshot{}; });  // no QuestTokenAuth
+  QCHECK(source.HoldsAnswers());
+  nevr::quest_auth::Snapshot failed;
+  failed.readiness = Readiness::Failed;
+  source.Observe(failed);
+  QCHECK(!source.HoldsAnswers());
+  QCHECK(TokenIdentitySource::GateFor(failed) == LoginGate::Refused);
+  nevr_quest_login::Identity identity;
+  QCHECK(source.Fetch(identity) == nevr_quest_login::IdentityStatus::NoToken);
+  QCHECK(!source.HoldsAnswers());
+  source.Observe(nevr::quest_auth::Snapshot{});  // a stale Starting observation cannot reopen the hold
+  QCHECK(!source.HoldsAnswers());
+  QCHECK(source.Fetch(identity) == nevr_quest_login::IdentityStatus::NoToken);
+}
+
+std::vector<std::string> g_holdLines;
+void CaptureHoldLine(sentinel::LogLevel, const char* line) { g_holdLines.emplace_back(line); }
+
+// #581: one Info record each time the hold decision changes, and on the first poll. The poll calls it with
+// HoldsFor of each snapshot; a state change that leaves the decision alone logs nothing.
+void TestTheHoldDecisionIsLoggedOnEachChange() {
+  using nevr::quest_auth::Readiness;
+  g_holdLines.clear();
+  const sentinel::LogSink previous = sentinel::SetLogSink(&CaptureHoldLine);
+  int last = -1;
+  const auto poll = [&last](const nevr::quest_auth::Snapshot& snap, const char* name) {
+    TokenIdentitySource::ReportHold(TokenIdentitySource::HoldsFor(snap), name, &last);
+  };
+  poll(Snap(Readiness::Starting, "", 0, "player-name-secret"), "starting");  // first poll: logs
+  QCHECK(g_holdLines.size() == 1);
+  poll(Snap(Readiness::Starting, "", 0, "player-name-secret"), "starting");  // same decision: nothing
+  poll(Snap(Readiness::Refreshing, "", 0, "player-name-secret"), "refreshing");
+  QCHECK(g_holdLines.size() == 1);
+  poll(Snap(Readiness::AwaitingUser, "", 0, "player-name-secret"), "awaiting_user");  // held -> answered
+  QCHECK(g_holdLines.size() == 2);
+  poll(Snap(Readiness::Ready, "access-token-secret", 4242, "player-name-secret"), "ready");  // answered -> answered
+  QCHECK(g_holdLines.size() == 2);
+  poll(Snap(Readiness::Ready, "", 4242, "player-name-secret"), "ready");  // the token ran out: held again
+  QCHECK(g_holdLines.size() == 3);
+  sentinel::SetLogSink(previous);
+  if (g_holdLines.size() == 3) {
+    const auto has = [](const std::string& line, const char* part) { return line.find(part) != std::string::npos; };
+    QCHECK(has(g_holdLines[0], "\"event\":\"quest_login_answers\"") && has(g_holdLines[0], "\"mode\":\"held\"") &&
+           has(g_holdLines[0], "\"status\":\"starting\"") && has(g_holdLines[0], "\"level\":\"info\""));
+    QCHECK(has(g_holdLines[1], "\"mode\":\"answered\"") && has(g_holdLines[1], "\"status\":\"awaiting_user\""));
+    QCHECK(has(g_holdLines[2], "\"mode\":\"held\""));
+  }
+  for (const std::string& line : g_holdLines) {  // no token, nonce, user name or id
+    QCHECK(line.find("secret") == std::string::npos && line.find("4242") == std::string::npos);
+  }
 }
 
 // Dropped Unrequires are reported once per change, with the increase since the last report.
@@ -887,10 +1153,13 @@ int main() {
   TestStageNamesAreStable();
   TestRouterLinesClassify();
   TestStepLogLevels();
-  TestEverythingOffInstallsOnlyTheProofHook();
+  TestEverythingOffInstallsOnlyTheProofHookAndTheObbSkip();
   TestFullStackOrder();
   TestHwDumpIsIndependentAndContained();
-  TestObbSkipIsIndependentAndContained();
+  TestObbSkipIsUnconditionalIndependentAndContained();
+  TestProcessEndIsUnconditionalIndependentAndContained();
+  TestPermissionWaitIsUnconditionalIndependentAndContained();
+  TestVkExtWindowIsUnconditionalIndependentAndContained();
   TestCountersBeforeTheSingleReporterStart();
   TestCrashReporterAndConfigComeFirst();
   TestFeatureGating();
@@ -909,12 +1178,16 @@ int main() {
   TestMatchmakingReloadProbeWaitsForTheActionAndThenSpeaksOnce();
   TestMatchmakingReloadProbeFailsWhenTheActionGaveUp();
   TestApplySelfCheckWiresTheDebugQueryTheUserAndTheSender();
+  TestAndroidMainReturnedIsSentAtOnceAndLogged();
   TestPostLoadGiveUpEndsOnlyThatAction();
   TestPostLoadWithNoActionsIsInert();
   TestPostLoadAcceptsANullName();
   TestIdentitySourceAnswers();
   TestLoginGateFollowsTheIdentityAnswer();
   TestIdentitySourcePublishesTheSharedAttemptGate();
+  TestIdentitySourcePublishesTheHoldWithTheReady();
+  TestMissingAuthStaysFailedAfterFetch();
+  TestTheHoldDecisionIsLoggedOnEachChange();
   TestDropReportsOnlyChanges();
   TestIdentitySourceReadyFollowsObservedState();
   TestIdentitySourceReadyDoesNotAllocate();

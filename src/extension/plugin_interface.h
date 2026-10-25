@@ -46,11 +46,35 @@ struct NvrLoadedPluginInfo {
     uint32_t    capabilities;    /* NvrPluginCapabilities bitmask (0 = UNDECLARED) */
 };
 
+/* Log levels a plugin passes to ctx->log (API v6). */
+enum NevrLogLevel : uint32_t {
+    NEVR_LOG_DEBUG   = 0, /* narrative detail; off in production */
+    NEVR_LOG_INFO    = 1, /* one summary line per event */
+    NEVR_LOG_WARNING = 2, /* degraded but running */
+    NEVR_LOG_ERROR   = 3, /* broken; the operator must act */
+};
+
+/* One key/value pair on a plugin log line (API v6). Both strings are copied
+ * before ctx->log returns; a null key drops the pair, a null value reads as "". */
+struct NevrLogField {
+    const char* key;
+    const char* value;
+};
+
+/* The host's structured log, as a plugin sees it (API v6). `plugin_id` is the
+ * ctx->plugin_id the host handed this plugin. The host writes the line through
+ * its own Log(), tagged [NEVR.PLUGIN] and plugin=<plugin_id>, at the level given
+ * (an out-of-range level is logged as a warning that names it). `message` is
+ * plain text, never a printf format. Thread-safe. */
+typedef void (*NevrLogFn)(const char* plugin_id, uint32_t level, const char* message,
+                          const NevrLogField* fields, uint32_t field_count);
+
 /* Game context passed to the plugin by the host.
  *
  * The host fills every field; a pre-v5 plugin compiled without the trailing
  * fields still reads the first four at their original offsets. A v5+ plugin can
- * check ctx_size to decide whether ctx->get_plugin_count and friends are valid. */
+ * check ctx_size to decide whether ctx->get_plugin_count and friends are valid;
+ * a v6+ plugin checks it covers ctx->log before calling it. */
 struct NvrGameContext {
     uintptr_t   base_addr;      /* echovr.exe base address (ImageBase) */
     void*       net_game;       /* CR15NetGame* if available, else nullptr */
@@ -64,6 +88,12 @@ struct NvrGameContext {
                                  *   fields are present. */
     int         (*get_plugin_count)(void);
     const NvrLoadedPluginInfo* (*get_plugin_info)(int index);
+
+    /* --- v6 additions (#598) --- */
+    const char* plugin_id;      /* the host's name for this plugin: the `name` of its config.yaml
+                                 *   entry. Process-lifetime stable, so a plugin may keep it and
+                                 *   log with it from any thread, including from Shutdown. */
+    NevrLogFn   log;            /* the host's structured log; see NevrLogFn */
 };
 
 /* Host capability flags */
@@ -90,6 +120,10 @@ enum NvrHostFlags : uint32_t {
  *      NvrPluginShutdown() in REVERSE load order before releasing its module
  *      references (last loaded shuts down first, so hooks installed on top of
  *      earlier plugins' hooks are torn down before what they depend on).
+ *      If init returns non-zero and this export exists, the host calls it
+ *      immediately before releasing the failed plugin. Without the export,
+ *      the host retains that module until process exit because init may have
+ *      installed hooks or acquired resources that cannot safely be undone.
  *      Shutdown is not guaranteed on process exit. Runtime dynamic unloading
  *      is not a supported lifecycle path.
  *
@@ -148,6 +182,16 @@ typedef void (*NvrPluginShutdown_fn)(void);
  * cross-DLL export signature changes in a backward-incompatible way.
  * Adding new optional exports or new NvrHostFlags values does NOT require a bump.
  *
+ * v6 (N135, #598): adds plugin_id + log to the TAIL of NvrGameContext. A plugin
+ * checks ctx->ctx_size covers ctx->log before calling it, exactly as for the v5
+ * query API; a pre-v6 plugin never reads the new fields. The host fills them in
+ * every context it passes (init, per-frame, state change), per plugin, and the
+ * first context a plugin ever sees is the one passed to its init: there is no
+ * host log before that, and none from DllMain (the loader lock is held there;
+ * log from init onward, and keep ctx->plugin_id and ctx->log for Shutdown).
+ * Lines land in the host's own log, so they reach the same file, filter and
+ * level control as the host's lines.
+ *
  * v5 (N134 S8): adds ctx_size + get_plugin_count / get_plugin_info to the TAIL
  * of NvrGameContext. This is backward-compatible — a pre-v5 plugin still reads
  * base_addr / net_game / game_state / flags at their original offsets — so the
@@ -168,7 +212,7 @@ typedef void (*NvrPluginShutdown_fn)(void);
  * the plugin is v1 (pre-versioning). Fully backward-compatible — existing
  * plugins don't need recompilation.
  */
-#define NEVR_PLUGIN_API_VERSION 5
+#define NEVR_PLUGIN_API_VERSION 6
 
 /* Optional: return the API version the plugin was compiled against */
 typedef uint32_t (*NvrPluginGetApiVersion_fn)(void);

@@ -15,7 +15,7 @@ void Emit(const nevr::auth::LogSink& log, LogLevel level, const std::string& mes
   if (log) log(level, message);
 }
 
-// "https://echovrce.com/login/device" -> "echovrce.com/login/device": what a player types.
+// "https://echovrce.com/device" -> "echovrce.com/device": what a player types.
 std::string DisplayUrl(const std::string& url) {
   for (const char* scheme : {"https://", "http://"}) {
     const std::string s(scheme);

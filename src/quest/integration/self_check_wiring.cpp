@@ -1,6 +1,7 @@
 #include "quest/integration/self_check_wiring.h"
 
 #include <atomic>
+#include <exception>
 #include <functional>
 #include <string>
 #include <utility>
@@ -9,8 +10,7 @@
 
 namespace nevr_quest::integration {
 
-void ApplySelfCheck(quest_net::FrameTapSinks* tap, bool* remoteDebugQuery, const SelfCheckHooks& hooks) {
-  *remoteDebugQuery = true;
+void ApplySelfCheck(quest_net::FrameTapSinks* tap, const SelfCheckHooks& hooks) {
   std::function<void(std::uint64_t, std::uint64_t)> previous = std::move(tap->onLoginUser);
   tap->onLoginUser = [previous](std::uint64_t platform, std::uint64_t account) {
     if (previous) previous(platform, account);
@@ -23,6 +23,17 @@ void ApplySelfCheck(quest_net::FrameTapSinks* tap, bool* remoteDebugQuery, const
   nevr_self_check::SetSender(hooks.sender);
   nevr_self_check::SetLogSink(hooks.log);
   nevr_self_check::SetBuild(hooks.build != nullptr ? hooks.build : "");
+}
+
+void ReportAndroidMainReturned() noexcept {
+  try {
+    const nevr_self_check::CheckId id = nevr_self_check::Register(
+        {"android_main_returned", "the process ends when the game's android_main returns", nullptr});
+    nevr_self_check::Report(id, "ending_process exit_code=0", true);
+    nevr_self_check::Flush();
+  } catch (const std::exception&) {
+    // The unit builds strings; a failure to allocate one loses the result, never the process end.
+  }
 }
 
 namespace {

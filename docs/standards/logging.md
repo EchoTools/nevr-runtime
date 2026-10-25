@@ -1,5 +1,10 @@
 # nEVR Runtime Logging Standards
 
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED",
+"NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in BCP 14
+([RFC 2119](https://www.rfc-editor.org/rfc/rfc2119), [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174)) when, and only
+when, they appear in all capitals, as shown here.
+
 **Required reading** for ANY agent writing, reviewing, or modifying code
 that produces log output in the nevr-runtime repository. Read this BEFORE
 adding a `Log()` call, BEFORE reviewing a PR that touches logging, and
@@ -42,44 +47,46 @@ how an agent triangulates a correct log line.
 
 ### You SHALL
 
-- You **shall** use `Log(EchoVR::LogLevel::level, "format", ...)` as the single entry
+- You **SHALL** use `Log(EchoVR::LogLevel::level, "format", ...)` as the single entry
   point. No `printf`, no `fprintf`, no `cerr`, no `OutputDebugString`,
   no `std::cout`. See `src/core/logging.h` and the C++ Mingw Addendum in `AGENTS.md`.
-- You **shall** include a subsystem tag on EVERY log line. The tag identifies which
+  A plugin is a separate DLL and cannot call `Log()`; its single entry point is the host's
+  log function in its context, reached through `plugin_logger.h` (Rule 15).
+- You **SHALL** include a subsystem tag on EVERY log line. The tag identifies which
   nEVR component produced the line. See the Subsystem Tags table below.
-- You **shall** log the outcome. A log line that says "connecting" without a
+- You **SHALL** log the outcome. A log line that says "connecting" without a
   corresponding "connected" or "connection failed" is incomplete.
-- You **shall** log the relevant identifier. Connection index, session ID, XPID
+- You **SHALL** log the relevant identifier. Connection index, session ID, XPID
   string, server ID, or request ID — there is always one identifier
   that the operator needs to trace the event through the system.
-- You **shall** use the correct log level per the Level Guidelines below. When in
+- You **SHALL** use the correct log level per the Level Guidelines below. When in
   doubt, go one level higher (DEBUG -> INFO, INFO -> WARNING) — a
   too-verbose log can be filtered; a missing log cannot be recovered.
-- You **shall** log identity at login. Every login/acquisition path SHALL include the
+- You **SHALL** log identity at login. Every login/acquisition path SHALL include the
   full platform-identity string (XPID) as a structured field (see Rule 2).
 
 ### You SHALL NOT
 
-- You **shall not** log a bare free-text message with no subsystem tag and no identifier.
+- You **SHALL NOT** log a bare free-text message with no subsystem tag and no identifier.
   `Log(Info, "Connected")` is not a log line — it is a riddle.
-- You **shall not** log at INFO level inside a hot path (per-frame, per-tick,
+- You **SHALL NOT** log at INFO level inside a hot path (per-frame, per-tick,
   per-connection). Use DEBUG for the narrative detail; emit one INFO
   summary line instead (Rule 12).
-- You **shall not** log a state transition without also logging the state it transitioned
+- You **SHALL NOT** log a state transition without also logging the state it transitioned
   FROM and TO. "State changed" without the old and new states is
   useless.
-- You **shall not** log an error without the error code. `"Failed to connect"` without
+- You **SHALL NOT** log an error without the error code. `"Failed to connect"` without
   the `WSAGetLastError` or HRESULT is not actionable.
-- You **shall not** suppress a hook installation failure silently. Hook failures are
+- You **SHALL NOT** suppress a hook installation failure silently. Hook failures are
   WARNING-level events with the target address, expected prologue, and
   actual bytes (see Rule 5).
-- You **shall not** log raw binary data, hex dumps, or pointer values at INFO level.
+- You **SHALL NOT** log raw binary data, hex dumps, or pointer values at INFO level.
   These are DEBUG-level diagnostics and SHALL be gated by a verbosity
   flag or compile-time guard.
-- You **shall not** use `Log(Debug, ...)` for anything you expect an operator to need
+- You **SHALL NOT** use `Log(Debug, ...)` for anything you expect an operator to need
   during a production incident. DEBUG is off by default in production
   builds. If an operator needs it, it is INFO.
-- You **shall not** leave a `// TODO: add logging` comment without a N-ledger
+- You **SHALL NOT** leave a `// TODO: add logging` comment without a N-ledger
   entry. A TODO without a ticket is a wish.
 
 ---
@@ -98,7 +105,7 @@ subsystems that nEVR annotates.
 | `[NEVR.PATCH]`        | gamepatches (boot hooks, config, CLI, mode)   |
 | `[NEVR.HEADLESS]`     | Headless graphics stub, render-skip patches   |
 | `[NEVR.MODULE]`       | Module registry and static modules            |
-| `[NEVR.PLUGIN]`       | Plugin loader (discovery, lifecycle)          |
+| `[NEVR.PLUGIN]`       | Plugin loader (discovery, lifecycle) and the lines plugins log through the host (`plugin=<id>`, Rule 15) |
 | `[NEVR.TELEMETRY]`    | Telemetry streamer (WebSocket, snapshots)     |
 | `[NEVR.XPID]`         | Platform-identity patches (DSC provider)      |
 | `[NEVR.CONFIG]`       | Config loading, service redirects             |
@@ -112,7 +119,8 @@ subsystems that nEVR annotates.
 | `[NEVR.PROFILE]`      | Server profile / memory snapshot             |
 | `[NEVR.FATAL]`        | Fatal-error path (ServerFatal)               |
 | `[NEVR.SCENARIO]`     | Scenario-test control endpoint (test builds only; never in a release DLL) |
-| `[NEVR.SELFCHECK]`    | Self-checks: one result per run-card check (release candidate builds, `compat/self_check.h`) |
+| `[NEVR.SELFCHECK]`    | Self-checks: one result per run-card check (every build, `compat/self_check.h`) |
+| `[NEVR.HOST]`         | The `BugSplat64.dll` host's own JSONL records (`nevr-bootstrap.jsonl`): attach decisions, runtime load, crash dump. The value of the record's `tag` field; the host writes no `Log()` line |
 | `[server_timing]`     | Server tick-rate / timing patches             |
 
 **Rule:** If you add a new component, add its tag to this table. If you
@@ -184,7 +192,7 @@ Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] websocket connected uri=%s conn_i
 
 **Where:** This rule applies to every `Log()` call site.
 
-### Rule 2: XPID shall be logged at login
+### Rule 2: XPID SHALL be logged at login
 
 The login/acquisition path SHALL log the full platform-identity string
 being used. The XPID is the external identifier that ties a log session
@@ -356,8 +364,9 @@ std::cerr << "failed" << std::endl;
 `FormatJsonLogEntry` is declared in `src/core/logging.h` and defined in
 `src/core/logging.cpp`. It is called from
 nowhere in production (the only other reference is a test stub). `Log()` routes
-to the game's own `EchoVR::WriteLog`, falling back to `vfprintf(stderr)` only
-before the game logger exists.
+by boot phase: during the boot phase (Rule 12) it reports through the boot tee;
+after it, to the game's own `EchoVR::WriteLog`, falling back to
+`vfprintf(stderr)` only before the game logger exists.
 
 So nEVR lines go through the game's logger and appear in its stream, rather than
 being emitted as a second, parallel JSON format. Do not wire `FormatJsonLogEntry`
@@ -398,9 +407,12 @@ This applies to:
 
 Every log line that relates to a specific WebSocket connection SHALL
 include the connection index (`conn=%d`). Connections are identified by
-index in the ws-bridge (0 = config connection, 1+ = game login
-connections). Without the index, an operator cannot correlate the
-connect, message, and disconnect events for a single connection.
+index in the ws-bridge (0 = a config socket, 1 = the login socket, 2 and up =
+the sockets that share the login session). The index is the slot the socket
+took, decided by the request target it asked for (`/config`, `/login`), not by
+the order it connected in; the `game socket admitted` line records the target,
+the role and the basis for each socket. Without the index, an operator cannot
+correlate the connect, message, and disconnect events for a single connection.
 
 ```cpp
 // BEFORE (no conn index — which connection?)
@@ -445,9 +457,19 @@ it was applied.
 
 ### Rule 12: Bootstrap log lines carry a level prefix
 
-Before the game logger is available, `nevr_boot_log_tee::TeeFprintf` is the
-only output mechanism. These lines SHALL embed their level in the format
-string so they are distinguishable from timestamped `Log()` output:
+The runtime boots under the DllMain loader lock, where the game's CLog is not
+usable. The boot phase runs from `nevr_boot_log_tee::Init()` to
+`nevr_boot_log_tee::Close()`, and in it `Log()` itself reports through the boot
+tee (stderr and `nevr-boot.jsonl`): `Init()` sets `Log()`'s boot sink
+(`SetBootLogSink` in `src/core/logging.h`) and `Close()` clears it. Code that
+runs both during boot and after it calls `Log()` and never branches on the
+phase.
+
+`Log()` in the boot phase puts the level after the subsystem tag
+(`[NEVR.PATCH] warn; hook FAILED ...`). A direct
+`nevr_boot_log_tee::TeeFprintf` call, for code that runs only in the boot
+phase, SHALL embed its level in the format string the same way, so boot lines
+are distinguishable from timestamped `Log()` output:
 
 ```cpp
 // BEFORE (no level — indistinguishable from any other bootstrap line)
@@ -457,10 +479,9 @@ nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing crash recovery hooks...\n"
 nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] info; installing crash recovery hooks...\n");
 ```
 
-The level prefix (`info;`, `warn;`, `error;`) bridges the gap until
-`Log()` becomes available. Once the game logger is initialized, all
-subsequent output SHALL use `Log()` — `TeeFprintf` is a bootstrap
-mechanism only.
+The level prefix (`debug;`, `info;`, `warn;`, `error;`) bridges the gap
+until the game logger is usable. After the boot phase, all output SHALL use
+`Log()`: `TeeFprintf` is a bootstrap mechanism only.
 
 ### Rule 13: INFO is summary, DEBUG is narrative
 
@@ -500,6 +521,37 @@ If you change a log level and a sensor blocks it, update the sensor in
 the same commit. The sensor exists to prevent *drift*, not to prevent
 *deliberate revision*.
 
+### Rule 15: Plugins log through the host
+
+A plugin's lines go to the host's `Log()` through `ctx->log` (`NevrLogFn` in
+`src/extension/plugin_interface.h`, API v6), so they reach the same file, the same filter and the
+same level control as the host's own lines. A plugin does not write to stderr, which the host does not
+collect, and does not open its own log file. `plugins/common/include/plugin_logger.h` is the way to
+call it (`PluginLogBind(ctx)` in init, then `PluginLog`, `PluginLogWarning`, `PluginLogError`,
+`PluginLogDebug` or `PluginLogFields`).
+
+- **Tag and identity.** The host writes `[NEVR.PLUGIN] plugin=<id> <message> <key>=<value> ...`. `<id>`
+  is the host's name for the plugin (the `name` of its `config.yaml` entry), not text the plugin
+  chooses, so one plugin cannot write as another and an operator can filter on `plugin=`.
+- **Level.** The plugin names one of `NEVR_LOG_DEBUG`, `NEVR_LOG_INFO`, `NEVR_LOG_WARNING`,
+  `NEVR_LOG_ERROR`; the Level Guidelines apply to a plugin as they do to the host. A level outside the
+  range is logged as a warning that says so (`level_invalid=<n>`).
+- **Fields.** Identifiers and outcomes go in key/value fields (Rule 1), not in the message text. A
+  value with a space, `=` or a quote is quoted; a key is `[A-Za-z0-9_.-]`.
+- **Message is text.** It is never a format string on the host side. Control characters become
+  spaces, so a plugin cannot start a second line, and message, keys and values are capped so a line
+  fits the 2048-byte buffer `Log()` uses before the game logger exists; fields past the cap are counted
+  in `fields_dropped=<n>`.
+- **When.** A plugin has a host log from its init callback (`NvrPluginInit` or `NvrPluginInitEx`)
+  on, from any thread, including from `NvrPluginShutdown` with the id and function it kept. There is
+  none before init (no context exists) and none from `DllMain`, which runs under the loader lock. A
+  host older than v6 passes a context that does not cover `ctx->log`; the plugin logger then falls back
+  to stderr (`<prefix> <LEVEL> <message>`), which that host does not collect.
+- **Not provided.** A per-plugin log file, and rate limiting or log-once helpers. A plugin that logs
+  per frame keeps its own cap (Rule 5, Rule 13).
+
+**Where:** `src/runtime/ext/plugin_loader.cpp` (`HostPluginLog`), `src/runtime/ext/plugin_log.h`.
+
 ---
 
 ## BEFORE / AFTER Reference
@@ -519,6 +571,7 @@ form.
 | Config redirect | `"[NEVR.PATCH] Service redirect [%s]: %s -> %s"` | `"[NEVR.PATCH] service redirect key=%s from=%s to=%s"` (URLs redacted) |
 | Module loaded | `"[NEVR.MODULE] Loaded: %s"` | `"[NEVR.MODULE] loaded name=%s path=%s"` |
 | Plugin loaded | `"[NEVR.PLUGIN] Loaded: %s v%u.%u.%u (API v%u)"` | Already compliant — carries name, version, API version |
+| Plugin line | `fprintf(stderr, "[my_plugin] hook failed %d", rc)` | `PluginLogFields(NEVR_LOG_WARNING, "hook failed", {{"error", "5"}})` -> `"[NEVR.PLUGIN] plugin=my_plugin hook failed error=5"` |
 | Registration | `"[NEVR.GAMESERVER] Received registration success via protobuf: server_id=%llu, ip=%s"` | Already compliant — carries server_id, ip |
 | State transition | `"[NETGAME] Logging in..."` | `"[NEVR.PATCH] netgame state from=%s to=%s"` |
 | Crash dump | `"=== CRASH DUMP ==="` | `"[NEVR.CRASH] exception code=0x%08lX name=%s rip=0x%llX"` |

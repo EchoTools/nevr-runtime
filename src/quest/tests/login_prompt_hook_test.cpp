@@ -912,6 +912,57 @@ void ALoggingInPageIsNotSkippedWhenTheGateTurnsReadyBeforeThePoison() {
   lp::ResetLatchForTest();
 }
 
+// #581: the hold bit says token auth will produce a token without the player, so the login answers wait for it.
+// It is published with the ready bit in one store, a poison is never touched by it, and only an attempt that is
+// not ready and not poisoned holds.
+void TheHoldBitIsPublishedWithReadyAndReadsBackOnlyWhenNothingElseDecides() {
+  gate::Reset();
+  QCHECK(!gate::HoldsAnswers() && !gate::LoginMayProceed());
+  gate::Publish(false, true);  // token auth is working on its own: wait for it
+  QCHECK(gate::HoldsAnswers() && !gate::IsReady() && !gate::LoginMayProceed());
+  gate::Publish(true, true);  // ready never holds, even with the hold bit set
+  QCHECK(!gate::HoldsAnswers() && gate::IsReady());
+  QCHECK(gate::LoginMayProceed());  // ready with the hold bit set may proceed
+  gate::Publish(false, false);  // awaiting the player, or refused: deliver
+  QCHECK(!gate::HoldsAnswers() && !gate::IsReady() && !gate::LoginMayProceed());
+
+  // Publish keeps a poison, in both directions.
+  gate::Reset();
+  gate::Poison();
+  gate::Publish(true, false);
+  QCHECK(!gate::LoginMayProceed());  // the poisoned attempt still fails
+  gate::Publish(false, true);
+  QCHECK(!gate::HoldsAnswers());  // a poisoned attempt never holds
+  gate::ClearPoison();
+  QCHECK(gate::HoldsAnswers());  // the hold bit was published under the poison and is back in force
+  gate::Publish(true, true);
+  gate::Poison();
+  QCHECK(!gate::LoginMayProceed() && !gate::HoldsAnswers());
+  gate::ClearPoison();
+  QCHECK(gate::LoginMayProceed());
+
+  // PoisonIfNotReady keeps the hold bit; a ready gate is not poisoned.
+  gate::Reset();
+  gate::Publish(false, true);
+  QCHECK(gate::PoisonIfNotReady());
+  QCHECK(!gate::HoldsAnswers());  // poisoned: never holds
+  gate::ClearPoison();
+  QCHECK(gate::HoldsAnswers());  // the hold bit survived the poison
+  gate::Publish(true, true);
+  QCHECK(!gate::PoisonIfNotReady() && gate::LoginMayProceed());
+
+  // SetReady touches only the ready bit.
+  gate::Reset();
+  gate::Publish(false, true);
+  gate::SetReady(true);
+  QCHECK(!gate::HoldsAnswers() && gate::LoginMayProceed());
+  gate::SetReady(false);
+  QCHECK(gate::HoldsAnswers());
+  gate::Reset();
+  QCHECK(!gate::HoldsAnswers() && !gate::IsReady());
+  gate::SetReady(true);  // the default for the cases that follow
+}
+
 // #391: every page enable is logged with its symbol, once per symbol per second, and the game's Enter still
 // runs for all of them. (The page-enter log writes only atomics and one stack-built line, so it is safe on
 // the worker thread the hook can run on.)
@@ -1135,6 +1186,7 @@ int main() {
   ANoticeWaitsForTheLoginToBeAbleToProceed();
   ASkippedLoggingInPagePoisonsTheAttemptUntilItEnds();
   ALoggingInPageIsNotSkippedWhenTheGateTurnsReadyBeforeThePoison();
+  TheHoldBitIsPublishedWithReadyAndReadsBackOnlyWhenNothingElseDecides();
   EnablesOnAnotherThreadDuringRewritesAreAllSkipped();
   EveryPageEnableIsLoggedOncePerSymbolPerSecond();
   PageEnterLinesNameTheSmokePagesFromTheEvidenceRows();

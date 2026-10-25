@@ -120,11 +120,14 @@ constexpr size_t HEADLESS_EFFECTS_SIZE = 2;
 /// HEADLESS_DELTATIME (0xCF46D) is deliberately NOT patched. Two independent
 /// reasons, and the SECOND is the decisive one.
 ///
-/// (1) It only matters under fixed timestep, and `-timestep`/`-fixedtimestep` are
-///     deprecated-and-ignored in this build (boot.cpp logs "is deprecated and
-///     ignored" and discards the value). v1 applies it inside
-///     `if (isHeadless && headlessTimeStep != 0)` — a condition that can no
-///     longer be true.
+/// (1) It only matters under fixed timestep. A server is always fixed-timestep:
+///     boot.cpp sets the game's flag and config.cpp writes the step from
+///     network.tick_rate_hz. `-timestep`/`-fixedtimestep` are removed from a
+///     server's command line before the game parses it (cmdline_strip.h); the
+///     rate comes from the config key, not from v1's `headlessTimeStep`. Whether
+///     a server's clock holds the step is read back once and logged
+///     (config.cpp LogServerStepReadBack), not assumed here. This reason
+///     therefore does not rule the patch out by itself; (2) does.
 ///
 /// (2) THE PATCH IS ALREADY IN THE SHIPPED BINARY, AND THE v1 BYTES NO LONGER
 ///     MATCH IT. Measured on echovr/bin/win10/echovr.exe:
@@ -282,8 +285,10 @@ constexpr uintptr_t CENGINE_CONFIG_COPY = 0x1547360;
 /// Called from fcn.140157fb0 (multiplayer init orchestrator) to verify
 /// internet connectivity before loading server support and setting service hosts.
 /// Uses CoCreateInstance(INetworkListManager) + InternetGetConnectedState.
-/// In headless/server mode under Wine, this fails → NoNetwork transition →
-/// BeginMultiplayer never completes. Hook to always return TRUE.
+/// In headless/server mode under Wine, this reports no internet and the net game switches to
+/// NoNetwork. The server hooks it to always return TRUE so that switch does not happen. It does
+/// not begin multiplayer: on a server nothing did until the state machine queued
+/// BeginMultiplayerLobby after the login (lifecycle/server_bringup.h).
 /// Return type: int64_t (1 = connected, 0 = not connected)
 /// Prologue: 48 89 5c 24 08 57 48 83 ec 20 (MinHook-safe: 10 bytes)
 constexpr uintptr_t SYSNET_CHECK = 0x1F6FA0;
@@ -531,6 +536,26 @@ constexpr uintptr_t GAME_WINDOWED_FLAGS_OFFSET = 31456;
 constexpr uintptr_t GAME_LOCAL_CONFIG_OFFSET = 0x63240;
 
 // ============================================================================
+// Net game and game object layout (server bring-up, lifecycle/server_bringup.h)
+// ============================================================================
+
+/// Offset within the game context (the runtime's g_pGame: the argument of PreprocessCommandLine) of the
+/// net game pointer: GetNetGameFromContext (echovr.exe 0x140113a90) is `mov rax,[rcx+0x8518]; ret`. A
+/// game function that takes "the net game" (NetGameScheduleReturnToLobby, NetGameSwitchState) is given
+/// that pointer, never the context itself.
+constexpr uintptr_t CONTEXT_NETGAME_OFFSET = 0x8518;
+
+/// Offset within the net game of its state (an EchoVR::NetGameState, 32 bits): its first field.
+constexpr uintptr_t NETGAME_STATE_OFFSET = 0;
+
+/// Offset within the net game of the game object: its second field.
+constexpr uintptr_t NETGAME_GAME_OFFSET = 8;
+
+/// Offset within the game object of the game thread's call queue, what QueueGameThreadCall takes as
+/// its first argument (NetGameScheduleReturnToLobby queues its callback on the same one).
+constexpr uintptr_t GAME_CALL_QUEUE_OFFSET = 8;
+
+// ============================================================================
 // Arena Rules Override (CJson_GetFloat hook)
 // ============================================================================
 
@@ -659,7 +684,15 @@ constexpr uintptr_t LOADOUT_RESOLVE_DATA_FROM_ID = 0x004F37A0;
 // Global Data Addresses
 // ============================================================================
 
-/// Pointer to fixed timestep value (in microseconds)
+/// The clock global: a pointer to the CClock the game runs on, at echovr.exe 0x1420a00e8 (ReVault).
+/// Its step is the 64-bit field at +0x90 (microseconds) and its mode word is at +0x50 (bits 0x8 fixed,
+/// 0x10 paced). CClock::CClock stores the default 33333 at 0x1400cd964; SetUseFixedTimeStep (0x1405114d0)
+/// stores 33333 again at 0x140511506 when called with 1. TWO writers of the global exist:
+/// NRadPhysics::InitGlobals (0x141549074) and CR15Game::InitRenderWindowFromEngineFlags (0x1404f5aef,
+/// which replaces it with a new CClock when 0x1400cd8f0 returns one, then calls SetUseFixedTimeStep(1) at
+/// 0x1404f5b2b when [pGame+0x828] has 0x2000000). Whether the step ApplyServerTimestep writes survives
+/// the later one is what the read-back line answers, at ONE moment (per-frame tick 125, about 1.2 s in):
+/// it says the step was live then, not that it stays live.
 constexpr uintptr_t FIXED_TIMESTEP_PTR = 0x020A00E8;
 constexpr uintptr_t FIXED_TIMESTEP_OFFSET = 0x90;
 

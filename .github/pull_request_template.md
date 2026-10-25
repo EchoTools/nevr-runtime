@@ -4,24 +4,36 @@
 
 ## Linked issue
 
-Closes #
+Closes #<issue>
 
-<!-- If there is no issue, delete the line above and say here why there is none. -->
+<!--
+A PR is opened only for an existing issue: the issue states the problem and its bar, and the PR names it. Replace the
+line above with one `Closes #N` line for each issue this PR resolves. A PR that leaves part of an issue open (a live run
+still owed) uses `Refs #N` and says here what is still open. A fix with no issue gets an issue first. The check fails a
+body that names none (docs/standards/planning.md, "PRs").
+-->
 
 ## How it was verified
 
 <!--
-`just verify` is the gate (see AGENTS.md). Paste the relevant output, and say what it does not cover:
-it does not catch wire-format bugs, login failures or rendering regressions.
-For runtime changes, say how it was run against a live server and quote the program's own log.
+The quick check is the gate for a PR (see AGENTS.md, "Builds"): the build, the test recipe(s) that cover the changed code,
+and the PC login test when the change touches runtime or auth. `just verify` runs only on main, when prepping a release.
+Paste the relevant output, and say what it does not cover: it does not catch wire-format bugs, login failures or
+rendering regressions. For runtime changes, quote the program's own log from the login test.
 See docs/standards/verification.md.
 -->
 
-- [ ] `just verify` passes (output pasted above)
+- [ ] The quick check passes on this tip (output pasted above)
 
 ## Checklist
 
-- [ ] The PR is linked to its issue (`Closes #N`), or says above why there is none
+- [ ] The PR names the issue it resolves (`Closes #N`) or advances (`Refs #N`, with what is still open)
 - [ ] The PR has the same milestone as the issue it resolves
 - [ ] One logical change, with a conventional-prefix commit message (`feat`, `fix`, `docs`, `ci`, ...)
 - [ ] `src/legacy/` is untouched, and no generated protobuf (`gen/cpp/*.pb.*`) was edited by hand
+
+<!-- The last non-empty line of the PR body must be this one, with <sha> replaced by the merge-base of
+your branch and the PR's target: `git fetch origin main && git merge-base HEAD origin/main`
+(7 to 40 hex characters; see AGENTS.md, "Review, verification and merge"). -->
+
+Read AGENTS.md at <sha>

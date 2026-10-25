@@ -269,6 +269,11 @@ TEST(the_signed_in_notice_tells_the_player_to_select_retry_not_to_restart) {
   CHECK(sizeof(kSignedInText) - 1 <= prompt_board::kCapacity);
 }
 
+// The page the player is sent to is the short one, the same address the game's screen shows them to type.
+TEST(the_default_sign_in_page_is_the_short_device_url) {
+  CHECK_EQ(std::string(kDefaultLoginUrl), std::string("https://echovrce.com/device"));
+}
+
 TEST(credentials_roundtrip_never_persists_the_access_token) {
   CachedAuthToken a = CachedWithRefresh();
   a.token = "access-token-should-not-be-written";
@@ -410,6 +415,7 @@ struct FlowRig {
   int sleeps = 0;
   bool cancel = false;
   bool renews = false;
+  bool code_only = false;
   uint64_t poll_takes_s = 0;  // how long each poll request takes on the fake clock
   intptr_t browser = 33;
   int ui = 1;
@@ -439,6 +445,7 @@ struct FlowRig {
     o.cancelled = [this] { return cancel; };
     o.log = log.Sink();
     o.renews_expired_codes = renews;
+    o.shows_code_only = code_only;
     return o;
   }
 };
@@ -451,6 +458,58 @@ nevr_token_auth::DevicePollResponse Poll(nevr_token_auth::DevicePollStatus s) {
     r.refresh_token = "refresh";
   }
   return r;
+}
+
+TEST(flow_says_code_shown_when_the_platform_never_opens_a_browser) {
+  FlowRig rig;
+  rig.code_only = true;
+  rig.polls = {Poll(nevr_token_auth::DevicePollStatus::Verified)};
+  const DeviceFlowResult r = RunDeviceCodeFlow(rig.Ops(), "https://x/device");
+  CHECK(r.verified);
+  const std::string log = rig.log.All();
+  CHECK(log.find("Device authorization started; code shown") != std::string::npos);
+  CHECK(log.find("code shown url=https://x/device?code=<13 chars masked> open_result=33 (shown)") != std::string::npos);
+  CHECK(log.find("browser") == std::string::npos);
+  CHECK(log.find("SECRETCODE123") == std::string::npos);
+}
+
+TEST(flow_says_the_code_was_not_shown_when_the_platform_could_not_show_it) {
+  FlowRig rig;
+  rig.code_only = true;
+  rig.browser = 0;  // the sign-in screen could not show the code
+  rig.ui = 0;       // and the player dismissed the notice
+  const DeviceFlowResult r = RunDeviceCodeFlow(rig.Ops(), "https://x/device");
+  CHECK(!r.verified);
+  const std::string log = rig.log.All();
+  CHECK(log.find("code shown url=https://x/device?code=<13 chars masked> open_result=0 (not shown)") != std::string::npos);
+  CHECK(log.find("device authorization stopped because the code could not be shown") != std::string::npos);
+  CHECK(log.find("browser") == std::string::npos);
+  CHECK(log.find("(failed)") == std::string::npos);
+}
+
+TEST(flow_keeps_the_browser_failure_wording_where_a_browser_is_opened) {
+  FlowRig rig;
+  rig.browser = 0;
+  rig.ui = 0;
+  const DeviceFlowResult r = RunDeviceCodeFlow(rig.Ops(), "https://x/device");
+  CHECK(!r.verified);
+  const std::string log = rig.log.All();
+  CHECK(log.find("browser open requested url=https://x/device?code=<13 chars masked> open_result=0 (failed)") !=
+        std::string::npos);
+  CHECK(log.find("device authorization stopped because the browser could not be opened") != std::string::npos);
+  CHECK(log.find("code shown") == std::string::npos);
+}
+
+TEST(flow_keeps_the_browser_wording_where_a_browser_is_opened) {
+  FlowRig rig;
+  rig.polls = {Poll(nevr_token_auth::DevicePollStatus::Verified)};
+  const DeviceFlowResult r = RunDeviceCodeFlow(rig.Ops(), "https://x/device");
+  CHECK(r.verified);
+  const std::string log = rig.log.All();
+  CHECK(log.find("Device authorization started; browser opening requested") != std::string::npos);
+  CHECK(log.find("browser open requested url=https://x/device?code=<13 chars masked> open_result=33 (accepted)") !=
+        std::string::npos);
+  CHECK(log.find("code shown") == std::string::npos);
 }
 
 TEST(flow_returns_the_verified_response_after_pending_polls_and_masks_the_code) {
@@ -983,7 +1042,7 @@ std::string BoardText(prompt_board::Mode* mode = nullptr) {
 
 TEST(the_game_prompt_is_four_lines_the_game_can_hold_with_the_url_and_the_code) {
   LoginPrompt p = SamplePrompt();
-  p.url = "https://echovrce.com/login/device";
+  p.url = "https://echovrce.com/device";
   p.code = "ABCDEFGHI";
   std::string text, why;
   CHECK(FormatGamePromptText(p, text, why));
@@ -991,7 +1050,7 @@ TEST(the_game_prompt_is_four_lines_the_game_can_hold_with_the_url_and_the_code) 
   const std::vector<std::string> lines = SplitLines(text);
   CHECK_EQ(lines.size(), prompt_board::kMaxLines);
   for (const std::string& l : lines) CHECK(l.size() <= prompt_board::kMaxLineChars);
-  CHECK_EQ(lines[1], std::string("echovrce.com/login/device"));  // what the player types, no scheme
+  CHECK_EQ(lines[1], std::string("echovrce.com/device"));  // what the player types, no scheme
   CHECK_EQ(lines[2], std::string("and enter the code ABCDEFGHI"));
   CHECK(text.size() <= prompt_board::kCapacity);
 }
@@ -1000,14 +1059,14 @@ TEST(the_game_prompt_is_four_lines_the_game_can_hold_with_the_url_and_the_code) 
 // the client assumes the old XXXX-XXXX shape: the prompt is the page and "and enter the code " + the code.
 TEST(a_four_character_dashless_code_is_shown_whole) {
   LoginPrompt p = SamplePrompt();
-  p.url = "https://echovrce.com/login/device";
+  p.url = "https://echovrce.com/device";
   p.code = "K7RX";
   std::string text, why;
   CHECK(FormatGamePromptText(p, text, why));
   CHECK(why.empty());
   const std::vector<std::string> lines = SplitLines(text);
   CHECK_EQ(lines.size(), prompt_board::kMaxLines);
-  CHECK_EQ(lines[1], std::string("echovrce.com/login/device"));
+  CHECK_EQ(lines[1], std::string("echovrce.com/device"));
   CHECK_EQ(lines[2], std::string("and enter the code K7RX"));
   CHECK(text.find("K7RX-") == std::string::npos);  // no dash appended
 }
@@ -1974,6 +2033,23 @@ TEST(session_a_log_sink_that_calls_stop_does_not_deadlock_or_join_itself) {
   CHECK(capture.All().find("auth worker stopped on an exception") == std::string::npos);
   s.Stop();  // the joining Stop: must return although the sink already asked for a stop
   CHECK(s.Get().readiness == Readiness::Stopped);
+}
+
+TEST(session_the_quest_login_says_code_shown_never_browser) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  LogCapture log;
+  DeviceHandler(http, 1000000, kT0 + 3600);
+  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+  s.Start();
+  CHECK(WaitUntil([&] { return presenter.presented.load() >= 1; }));
+  s.Stop();
+  const std::string text = log.All();
+  CHECK(text.find("Device authorization started; code shown") != std::string::npos);
+  CHECK(text.find("code shown url=") != std::string::npos);
+  CHECK(text.find("browser") == std::string::npos);
 }
 
 TEST(session_the_login_link_is_removed_even_when_the_flow_throws) {

@@ -27,8 +27,10 @@ When `params.enableAllRemoteLogs` is true, the login reply's `GameSettings` turn
 (`server/evr_pipeline_login.go:205-209`); it is the `SNSLoginSettings` message (`0xed5be2c3632155f1`,
 `server/evr/structs.go:69`), a zlib-compressed JSON document (`login_settings.go` `Stream`).
 
-So the runtime-only way to get "all remote logs" is to add `debug=true` to the websocket URL it connects
-with. Nakama needs no change. Section 4 lists the two places the runtime builds that URL.
+Whether a player's game sends every category is therefore the game service's decision: the account's
+`EnableAllRemoteLogs` or the service's `EnableSessionDebug` (a tester is switched on there, with no special
+build). The `debug=true` query is a third input the service honours; the runtime never adds it to a
+connection, in any build.
 
 ## 2. The game client
 
@@ -191,8 +193,8 @@ Where the websocket URL is built, and what it carries:
 
 | Platform | Where | Query |
 | --- | --- | --- |
-| PC | `src/runtime/compat/ws_bridge.cpp`: `remoteUrl = g_remoteUri`, then `nevr_serverdb_uri::BuildBridgeCredentialUri` appends `discordid`/`password`; the login connection (index 1) of a self-check build then gets `debug=true` (`AppendRemoteDebugParam`); for connections >= 2 (matchmaker) `format=evr` is removed | the configured `socket_uri` (may already carry `format=evr`, `token`), plus the credentials when configured, plus `debug=true` on the login connection of a self-check build |
-| Quest | `src/quest/net/session_bridge.cpp` `SessionBridge::BuildRequest`: the configured `remoteUri`, the same `BuildBridgeCredentialUri`, then `AppendRemoteDebugParam` on a login-role request when `Config::remoteDebugQuery` is set (the `self_check` feature) | same |
+| PC | `src/runtime/compat/ws_bridge.cpp`: `remoteUrl = g_remoteUri`, then `nevr_serverdb_uri::BuildBridgeCredentialUri` appends `discordid`/`password`; for connections >= 2 (matchmaker) `format=evr` is removed | the configured `socket_uri` (may already carry `format=evr`, `token`), plus the credentials when configured |
+| Quest | `src/quest/net/session_bridge.cpp` `SessionBridge::BuildRequest`: the configured `remoteUri`, then the same `BuildBridgeCredentialUri` | same |
 
 `AppendQuery` (`src/runtime/server/serverdb_uri.cpp`) is the percent-encoding query builder both use.
 
@@ -225,19 +227,15 @@ binary.
 
 ## 6. Self-checks
 
-A release candidate reports its own run-card checks through this path (`src/runtime/compat/self_check.h`, one
-source for the PC runtime and the Quest sentinel).
+Every build reports its own run-card checks through this path (`src/runtime/compat/self_check.h`, one source
+for the PC runtime and the Quest sentinel). Self-checks are compact and capped, and nothing in a build behaves
+differently because of how it was stamped.
 
-- **On:** PC when the build's STAMPED version is a release candidate (`<x.y.z>-rc.<N>`, set only by a CI build of
-  the matching tag, `cmake/nevr_rc_label.cmake`), or with `-DNEVR_SELF_CHECKS=ON`. A local `just package-dev` build
-  is stamped `-dev` and leaves it off (`cmake/nevr_self_checks.cmake`, `tools/tests/test_self_checks_flag.py`).
-  Quest when the `self_check` feature is on: `features.self_check` in `nevr-quest.json`, or the build's default
-  features (`NEVR_QUEST_DEFAULT_FEATURES`); `just package-dev` does not name it, so the tester APK it builds does
-  not self-report unless `features="...,self_check"` is passed or the file turns it on. It needs `login`.
-  Off: no `debug=true`, nothing sent, nothing in the log; the unit's idle cost is one registration at boot, two
-  atomic increments per matchmaking load and a lock-free flag read per flush. Never on a dedicated game server.
-- **Connection:** the login connection's upgrade query carries `debug=true` (PC `ws_bridge.cpp`, Quest
-  `SessionBridge::BuildRequest`), which section 1 turns into every `remote_log_*` category.
+- **On:** in every build. PC turns the unit on when the bridge is installed (`WireSelfChecks`, first and
+  unconditional); Quest when the bridge starts (`ApplySelfCheck`). There is no switch by build type or feature
+  (`tools/verify_self_check_wiring.py` fails the gate if one appears). Never sent from a dedicated game server.
+- **No debug query:** the runtime adds nothing to any connection for the self-checks, and never `debug=true`.
+  The full remote logs of a player come from the game service's switches (section 1).
 - **Sender:** PC `SendFrameToServer` (the login pair), Quest `SessionBridge::SendToLogin`. Nothing is sent
   before `LoginSuccess` (the service drops remote logs from a session with no user); results wait in a queue
   of 64 and the frame carries the user the service named. On Quest the flush runs on the token-auth poll, so a
@@ -248,6 +246,11 @@ source for the PC runtime and the Quest sentinel).
   one with `"observed":"capped"`; at most 16 strings per frame.
   The same result is written to the build's own log at Info: PC `[NEVR.SELFCHECK] check=... pass=...`, Quest
   `self_check {check, pass, expected, observed}`.
+- **A session that ends with results unsent drops them and counts them; nothing is stored.** When a logged-in
+  session ends (`SetLoggedIn`), one delivery attempt runs, the rest of the queue is discarded, and the next
+  session's first frame carries one `self_check` note with `"dropped_at_session_end":N`. The drop is also
+  logged at Info as `check=self_check ... observed="N dropped"`. Results queued before the first login are not
+  a session's and stay queued.
 - **Adding a check** is one registration and one call at the event:
 
   ```cpp
@@ -262,7 +265,14 @@ source for the PC runtime and the Quest sentinel).
 
 | Check | PC | Quest |
 | --- | --- | --- |
-| `matchmaking_reload_patch` / `matchmaking_reload_redirect` (#18) | `pnsrad_enabler.cpp` `OnDllLoaded` feeds `nevr_matchmaker_host_patch::ReloadLedger`; passes when every load of `pnsradmatchmaking.dll` was patched | `post_load.cpp` `MatchmakingImages` (distinct handles the game's `dlopen` returned) against the redirect installs in `production_steps.cpp`; passes when installs >= images. A reload mapped at the same address returns the same handle and is not seen |
+| `party_data_share` (#398) | `ws_bridge.cpp` `ObserveSocialFrames` hands every symbol of both directions to `nevr_party_share_check` (`OnServerMessage` / `OnClientMessage`; the runtime's own requests come back through it from `SendFrameToServer`) | `production_steps.cpp` `ObserveForSelfChecks`: the tap's observer (both directions) and `SendSocialFrame` (the facade's own requests, which the tap does not show) | `PartyUpdateSuccess`/`Failure` also answer a set-join-policy request and a party metadata update, so an answer is read together with the request behind it: the service answers a session's requests in order, so each family (party scope, member scope) keeps a FIFO of what was sent and only an answer to a share counts. The first success of a session is reported once, every failure is reported, and `party_data_share_totals` carries `answers/ok/failed/other/unmatched` at 1, 2, 4, 8 ... answers and when a session ends. An answer with no request behind it counts as `unmatched` and reports nothing; no answer produces no result (no timeout) |
+| `party_member_leave` (#403) | `ws_bridge.cpp` `ObserveSocialFrames` hands each server message to `nevr_party_leave_check::OnServerMessage` | `production_steps.cpp` `ObserveForSelfChecks` does the same on the tap's server-to-game frames | every `SNSPartyLeaveNotify` the game client receives is one result, `leave_notify party=<id> member=<id> notifies=<n>` (`notifies` counts per session); it passes when both ids are non-zero and fails (`malformed`) on a notify shorter than 16 bytes, with PartyID 0 (the `LeaveNotify{PartyID:0}` nakama#681 stopped sending to a party-group peer) or with MemberID 0. A leave and a dead headset send the same frame, so the check shows the notify arrived, not why the member left; it does not see the game client's roster; no notify produces no result |
+| `friend_request` (#405) | `ws_bridge.cpp` `ObserveSocialFrames` hands each server message to `nevr_friend_request_check::OnServerMessage` | `production_steps.cpp` `ObserveForSelfChecks` does the same on the tap's server-to-game frames | the check keeps its own `RecentList` and feeds every server message through `nevr_social_roster::ApplyFriendMessage` (the facade's own classifier), clearing it on LoginSuccess. One result per change: `request received account=<id> pending=<n> received=<R> cleared=<C> duplicate=<D>`, `request duplicate ...` (an invite for a request already pending), `request cleared account=<id> reason=<message> pending=<n> ...` (the accept, a remove, a withdrawal or a rejection); an end for a request it never saw reports nothing. An invite shorter than 16 bytes or naming account 0 fails (`malformed`). It does not see whether the game's recently-met list shows the row or Add Friend works on the device (the #405 live check, two game clients); counts are per session |
+| `pc_quit` (#392, PC only) | `lifecycle/crash_recovery.cpp` `GameMainWrapperHook` calls `nevr_quit_check::OnGameLoopReturned(gameResult)` on a client when `GameMain` returns, then the self-check unit flushes at once | none yet: Quest has no quit entry (named gap) | one result `game_loop_returned exit_code=<n>` and an Info line; passes for 0 and fails for any other exit code (the value `WinMain`'s CRT start-up passes to `ExitProcess`, `hook/addresses.h` `GAME_MAIN_WRAPPER`). It cannot tell the main-menu QUIT from a closed window (the loop returns for both); the send is best effort because the process is exiting, the Info line is not |
+| `android_main_returned` (#621, Quest only) | none on PC | `quest/integration/production_steps.cpp` registers `ReportAndroidMainReturned` (`self_check_wiring.cpp`) with the process-end hook (`sentinel/process_end_hook.h`); the hook runs it on a helper thread, waits at most 500 ms, then ends the process | one result `ending_process exit_code=0` and its Info line (the record, in the sentinel's log). **The remote string is best effort and not expected to arrive**: the flush only queues the frame on the connection's worker, the game has usually closed the login connection while it shut down, and the process ends without waiting for the worker. It cannot fail: it records that the game's `android_main` returned and the process was ended (docs/adr/0008-quest-process-end.md) |
+| `credential_cache`, `credential_cache_refused` (#562, PC only) | `core/auth_token.h` `SaveAuthToken` notes each save (`nevr_credential_stats::NoteSaved` / `NoteRefused`) and logs `[NEVR.AUTH] Credentials written to <path> protection=<host_mode_600|dacl>` at Info (path and protection, never a token byte, a length or a digest); `modules/token-auth` `Init` notes `NoteCacheReused` / `NoteSignInRequired(reason)`; `ws_bridge.cpp` `WireSelfChecks` registers both probes (`credential_cache_check.h`, read on the flush) | none: Quest has its own store (`auth/file_store.cpp`, `AtomicWrite`) | `credential_cache`: `save ok protection=<...> saves=<S> refused=<R>` (the first save, then only when the protection changes: a refresh saves about six times in a long session), `cache reused no_sign_in_needed`, `cache not reused sign_in_required reason=no_cache`, `cache not reused sign_in_required reason=cache_present_unusable` (a cache was there but its refresh failed or both tokens had expired). `credential_cache_refused` (its own check, so the unit's per-check cap of 8 is never used up by saves or reuse): `save refused why=<reason> saves=<S> refused=<R>` (fails; under Wine/Proton the host mode was not read back as 600, nothing was written, the next launch signs in again). This is the readable form of #562's live check: a Proton launch signs in once and saves (`save ok protection=host_mode_600`), the next launch says `cache reused`. **Read `observed`, not `pass`**: a sign-in that was needed passes. It cannot see the sign-in itself |
+| `status_redirect` (#408) | `lifecycle/config.cpp` `HttpConnectHook` calls `nevr_status_redirect_check::NoteConnect(gameUri, uri)` for every connect (atomics only); `ws_bridge.cpp` `WireSelfChecks` registers the probe | `redirect/service_redirector.cpp` `ApplyUrl` counts every `CreateConnection` URL, the left-alone ones included; `production_steps.cpp` registers the probe | every game connect is counted by class: `api` (the API base, redirected or `passthrough`), `graph`, `uncovered` (a host of the game's own service domain, `readyatdawn.com`, that is not an API or graph base and was left alone, named by host only) and `external`. Pass when a redirect has been seen and there is no passthrough and no uncovered host; failures are said at 1, 2, 4, 8 ... with the running counts. The check cannot see the HTTP response: whether the status request succeeded, and the game's own `Service status request failed`, are invisible to the runtime |
+| `matchmaking_reload_patch` / `matchmaking_reload_redirect` (#18) | `pnsrad_enabler.cpp` `ApplyMatchmakingLoad` (run when the module's `LoadLibrary` returns) feeds `nevr_matchmaker_host_patch::ReloadLedger`; passes when every load of `pnsradmatchmaking.dll` was patched | `post_load.cpp` `MatchmakingImages` (distinct handles the game's `dlopen` returned) against the redirect installs in `production_steps.cpp`; passes when installs >= images. A reload mapped at the same address returns the same handle and is not seen |
 
 Run-card checks not registered yet are listed in issue #451.
 
@@ -273,7 +283,7 @@ Run-card checks not registered yet are listed in issue #451.
   `server_id` from config in `0x1401c4170`).
 - The libr15 flush interval constant; the libr15 server-variant flush callers.
 - The `+0x181b0` buffer's size cap, if any.
-- That the game client honours `debug=true` end to end in a real session: the chain above is static, no
-  run has been read for it. The check that settles it is in the nevr log: the `[NSUSER] Login settings
-  received: {...}` line must show `remote_log_errors":true` and `remote_log_warnings":true` for a session
-  that connected with `debug=true`.
+- That the game client applies the service's switches end to end in a real session: the chain in sections 1 and
+  2 is static, no run has been read for it. The line that settles it is in the nevr log: `[NSUSER] Login
+  settings received: {...}` must show `remote_log_errors":true` and `remote_log_warnings":true` for an account
+  the service switched to full logs.

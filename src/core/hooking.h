@@ -17,10 +17,21 @@
 
 namespace Hooking {
 
+#ifdef NEVR_USE_MINHOOK
+// MinHook is one library state per process. The stable host (runtime/host) initializes it at the
+// wrapper rendezvous before the runtime's initialization runs, so an already-initialized library is
+// ready, not a failure; any other status is.
+template <typename Init>
+inline BOOL InitializeMinHookWith(Init&& init) {
+  const MH_STATUS status = init();
+  return status == MH_OK || status == MH_ERROR_ALREADY_INITIALIZED;
+}
+#endif
+
 // Initialize the hooking library (call once at startup)
 inline BOOL Initialize() {
 #ifdef NEVR_USE_MINHOOK
-  return MH_Initialize() == MH_OK;
+  return InitializeMinHookWith(MH_Initialize);
 #else
   return TRUE;  // Detours doesn't need global initialization
 #endif
@@ -36,11 +47,10 @@ inline VOID Shutdown() {
 // N127: the reason the most recent Attach() failed — which MinHook stage and its
 // MH_STATUS — so the caller (PatchDetour) can name it in one Warning line instead
 // of leaving "undetermined". MH_StatusToString returns a static string literal, so
-// storing the pointer is safe. Written only on the init thread, where hooks
-// install one at a time and PatchDetour reads this immediately after each; not for
-// cross-thread use.
+// storing the pointer is safe. Hooks can install from DLL-load callbacks and the
+// runtime tick as well as boot, so each caller keeps its own failure status.
 inline const char*& LastAttachErrorRef() {
-  static const char* s = "";
+  static thread_local const char* s = "";
   return s;
 }
 inline const char* LastAttachError() { return LastAttachErrorRef(); }

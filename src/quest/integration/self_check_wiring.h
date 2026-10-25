@@ -1,6 +1,6 @@
 #pragma once
 // The Quest side of the self-checks (runtime/compat/self_check.h), kept apart from production_steps.cpp so a host
-// test can drive it: the `self_check` feature's effect on the bridge's config and on the unit.
+// test can drive it: what the bridge's config and the unit get when the bridge starts, and the matchmaking check's probe.
 
 #include "quest/net/frame_tap.h"
 #include "runtime/compat/self_check.h"
@@ -13,11 +13,19 @@ struct SelfCheckHooks {
   const char* build = "";                    // the build string every result carries
 };
 
-// Turns the unit on for this process and wires it into the bridge being configured: the login connection's
-// upgrade asks for every remote log category (`*remoteDebugQuery`), the user the service names at LoginSuccess
-// reaches the unit through `tap->onLoginUser` (an existing consumer is kept and called first), and the sender
-// and log sink are set.
-void ApplySelfCheck(quest_net::FrameTapSinks* tap, bool* remoteDebugQuery, const SelfCheckHooks& hooks);
+// Turns the unit on for this process (self-checks are on in every build) and wires it into the bridge being
+// configured: the user the service names at LoginSuccess reaches the unit through `tap->onLoginUser` (an
+// existing consumer is kept and called first), and the sender and log sink are set. Adds nothing to any
+// connection: whether the game sends its full remote logs is the game service's decision.
+void ApplySelfCheck(quest_net::FrameTapSinks* tap, const SelfCheckHooks& hooks);
+
+// Self-check "android_main_returned" (#621): the game's android_main returned and the process is about to end
+// (sentinel/process_end_hook.h). Reports `ending_process exit_code=0` and flushes the unit once. The Info line (the
+// log sink) is the record. The remote string is best effort: the flush only queues the frame on the login
+// connection's worker, the game has usually closed that connection while it shut down, and the process ends without
+// waiting for the worker, so do not expect it at the game service. Runs on the hook's helper thread, which waits for
+// it at most 500 ms. Never throws.
+void ReportAndroidMainReturned() noexcept;
 
 // Self-check "matchmaking_reload_redirect" (#451, docs/engine/remote-log.md). The matchmaking redirect is a GOT
 // hook installed once per process (post_load settles on the first install). A second mapping of

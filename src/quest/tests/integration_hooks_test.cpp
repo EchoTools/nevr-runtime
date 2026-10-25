@@ -151,6 +151,9 @@ struct RealCounterSteps final : Steps {
   bool StartReporter() override { return true; }
   bool InstallClockHook() override { return true; }
   bool InstallObbSkip(bool counted) override { return counted; }
+  bool InstallProcessEnd() override { return true; }
+  bool InstallPermissionWait() override { return true; }
+  bool InstallVkExtWindow() override { return true; }
   bool StartTokenAuth() override { return true; }
   bool InstallLoginPrompt(bool counted) override { return counted; }
   bool StartBridge() override { return true; }
@@ -166,7 +169,6 @@ void TestCounterBudget() {
   RealCounterSteps steps;
   steps.config.effective.redirect = steps.config.effective.bridge = true;
   steps.config.effective.login = steps.config.effective.social = true;
-  steps.config.effective.obbSkip = true;
   const ConstructorReport r = RunConstructorSequence(steps);
   for (StepId id : {StepId::kRegisterClockCounters, StepId::kRegisterRedirectCounters, StepId::kRegisterDlopenCounters,
                     StepId::kRegisterLoginCounters, StepId::kRegisterSocialCounters,

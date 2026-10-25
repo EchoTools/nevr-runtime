@@ -57,8 +57,8 @@ class SessionBridge::TappedRemotes final : public nevr_session_router::RemoteTra
   TappedRemotes(nevr_session_router::RemoteTransport* inner, FrameTap* tap) : inner_(inner), tap_(tap) {}
 
   bool Open(const nevr_session_router::RemoteOpenRequest& request) override {
-    if (request.role == nevr_session_router::Role::Login && !request.standaloneMatchmaker) {
-      // A new login session: nothing may be sent on it until the service accepts the login.
+    if (request.session) {
+      // A new session (config or login opened it): nothing may be sent on it until the service accepts the login.
       loginAccepted_.store(false, std::memory_order_release);
       loginRemote_.store(request.remote, std::memory_order_release);
     }
@@ -153,10 +153,6 @@ std::optional<ConnectRequest> SessionBridge::BuildRequest(const nevr_session_rou
     } else if (config_.log) {
       config_.log(LogLevel::Error, "[bridge] could not percent-encode URL credentials; not using them");
     }
-  }
-  if (config_.remoteDebugQuery && request.role == nevr_session_router::Role::Login && !request.standaloneMatchmaker) {
-    std::optional<std::string> withDebug = nevr_serverdb_uri::AppendRemoteDebugParam(out.url);
-    if (withDebug.has_value()) out.url = std::move(*withDebug);
   }
   const std::string bearer = nevr_evr_codec::SelectRemoteBearer(hasUrlCredentials, id.jwt, id.serverKey);
   if (bearer.empty()) {

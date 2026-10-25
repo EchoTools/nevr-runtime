@@ -275,28 +275,3 @@ TEST(ServerDbUri, RemoveQueryParamDoesNotMatchSubstring) {
   EXPECT_EQ(nevr_serverdb_uri::RemoveQueryParam("wss://g.example/ws?xformat=evrx=1", "format=evr"),
             "wss://g.example/ws?xformat=evrx=1");
 }
-
-// Self-checks: the login connection asks the game service for every remote log category with debug=true.
-TEST(ServerDbUri, RemoteDebugParamIsAppendedAfterTheCredentials) {
-  const auto withCredentials = nevr_serverdb_uri::BuildBridgeCredentialUri("wss://h/nevr?format=evr", "123", "p&ss");
-  ASSERT_TRUE(withCredentials.has_value());
-  const auto withDebug = nevr_serverdb_uri::AppendRemoteDebugParam(*withCredentials);
-  ASSERT_TRUE(withDebug.has_value());
-  EXPECT_EQ(*withDebug, "wss://h/nevr?format=evr&discordid=123&password=p%26ss&debug=true");
-  const QueryMap query = ParseQuery(*withDebug);
-  ASSERT_EQ(query.count("debug"), 1u);
-  EXPECT_EQ(query.find("debug")->second, "true");
-  EXPECT_EQ(query.find("password")->second, "p&ss");
-}
-
-TEST(ServerDbUri, RemoteDebugParamStartsTheQueryWhenThereIsNone) {
-  const auto uri = nevr_serverdb_uri::AppendRemoteDebugParam("wss://h/nevr");
-  ASSERT_TRUE(uri.has_value());
-  EXPECT_EQ(*uri, "wss://h/nevr?debug=true");
-}
-
-TEST(ServerDbUri, RemoteDebugParamKeepsAnExistingDebugParameter) {
-  EXPECT_EQ(*nevr_serverdb_uri::AppendRemoteDebugParam("wss://h/nevr?debug=false&a=1"), "wss://h/nevr?debug=false&a=1");
-  // a key that merely starts with "debug" is a different key
-  EXPECT_EQ(*nevr_serverdb_uri::AppendRemoteDebugParam("wss://h/nevr?debugx=1"), "wss://h/nevr?debugx=1&debug=true");
-}

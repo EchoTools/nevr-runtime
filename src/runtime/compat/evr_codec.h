@@ -80,7 +80,8 @@ inline constexpr uint64_t kSymTelemetryEvent = 0xf9bc2a364e230214ULL;           
 inline constexpr uint64_t kSymRemoteLogSet = 0x244b47685187eae1ULL;                 // SNSRemoteLogSetv3 (no require flag)
 // The service's answer to SNSChannelInfoRequest; the service follows it with an Unrequire.
 inline constexpr uint64_t kSymChannelInfoResponse = 0x6c8f16cd9f8964c5ULL;          // SNSChannelInfoResponse
-// A config reply on the config connection's own remote.
+// The service's answers to SNSConfigRequestv2, on the session remote; each is followed by an Unrequire.
+inline constexpr uint64_t kSymConfigSuccess = 0xb9cdaf586f7bd012ULL;                // SNSConfigSuccessv2
 inline constexpr uint64_t kSymConfigFailure = 0x9e687a63dddd3870ULL;                // SNSConfigFailurev2
 // A message the service starts itself, followed by its own Unrequire (nakama's ping discovery).
 inline constexpr uint64_t kSymLobbyPingRequest = 0xfabf5f8719bfebf3ULL;             // SNSLobbyPingRequestv3
@@ -206,5 +207,38 @@ std::string SelectRemoteBearer(bool hasUrlCredentials, const std::string& jwt, c
 // True when the URL's path is the /ws catch-all, whose front replaces the client's Bearer with the server
 // key: a token-auth login sent there arrives unauthenticated.
 bool IsBearerReplacingPath(const std::string& url);
+
+// ---- config request and reply keys --------------------------------------------------------------
+//
+// A config request names a resource by two strings and the service echoes them in its reply, so the pair
+// identifies the reply's request:
+//   SNSConfigRequestv2  payload: [pad byte][JSON {"type": "...", "id": "..."}][NUL]
+//   SNSConfigSuccessv2  payload: [type symbol(8)][id symbol(8)][zstd JSON resource]
+//   SNSConfigFailurev2  payload: [0(8)][0(8)][JSON {"type": "...", "identifier": "...", ...}]
+// The success carries the strings as symbols (ToSymbol of the request's strings), the failure as the
+// strings themselves, so a key is the pair of symbols. The service's ToSymbol is not always a hash.
+
+struct ConfigKey {
+  uint64_t type = 0;
+  uint64_t id = 0;
+  bool operator==(const ConfigKey& other) const { return type == other.type && id == other.id; }
+};
+
+// The service's string to symbol conversion for a resource name (nakama server/evr ToSymbol), byte for byte: an
+// empty string is 0, an 18-character "0x" + 16 hex digits string is that number, and anything else is the
+// CSymbol64 hash over the bytes as given, upper-case A-Z folded to lower case and every byte taken unsigned (zero
+// extended). It reproduces the service because the service computes the reply symbols; it is not
+// EchoVR::CSymbol64Hash, which differs for "", "0x" + hex and bytes >= 0x80 (issue #657). If the service's hash
+// changes to match the game, this changes in the same release.
+uint64_t ConfigSymbol(std::string_view text);
+
+// The key of a config request payload; nullopt when the payload is not a pad byte (any value, '{' included) and a JSON object whose
+// "type" and "id" (matched without regard to ASCII case, the last one winning, null leaving the value empty)
+// are strings.
+std::optional<ConfigKey> ParseConfigRequestKey(std::string_view payload);
+
+// The key of a config reply message payload: SNSConfigSuccessv2 (the two symbols) or SNSConfigFailurev2 (the
+// "type" and "identifier" strings through ConfigSymbol). nullopt for any other symbol or a malformed payload.
+std::optional<ConfigKey> ParseConfigReplyKey(uint64_t symbol, std::string_view payload);
 
 }  // namespace nevr_evr_codec

@@ -5,8 +5,9 @@
 # JoinInternal on the invite's party (0x1800821f0 -> 0x18008d1e0): the invite is dropped and the join
 # is in flight. The current party is kept until the server admits the player (owner, 2026-10-01: a
 # player whose join fails stays where they are), so a refusal leaves the game in the party it was in. The accept goes out as PartyInviteResponse(param 1) to the inviter. The inviter is synthetic
-# and the server has no record of this invite, so the server's answer is injected: PartyJoinFailure
-# code 1 (unknown party), which the game gets as its JoinFailed callback (index 2) with code 1 (not
+# and the server has no record of this invite: production Nakama answers PartyJoinFailure itself
+# (unknown party), and the scenario also injects code 1 (unknown party) so the path is exercised on a
+# server that does not answer. The game gets its JoinFailed callback (index 2) with code 1 (not
 # found). Pass = the whole round trip, ending in the same party the game started in.
 name: party_invite_accept
 description: deliver a party invite, accept it through the respond-to-invite node's handler, see the join go out and a join failure come back
@@ -35,12 +36,19 @@ steps:
     expect_log: {pattern: 'game->server conn=1 PartyInviteResponse payload_bytes=\d+ param=1', timeout: 10}
   - name: the invite left the list
     state_until: {invite_count: 0, timeout: 15}
-  - name: the join is in flight, still in the party it was in
-    state_until: {party_joining: true, timeout: 15}
+  # The join's outbound proof. The state check this replaces (`party_joining: true`) cannot be
+  # observed on production: Nakama answers the unknown party itself with PartyJoinFailure about
+  # 33 ms after the accept (20261018T080225-party_invite_accept: `server->game conn=3
+  # PartyJoinFailure` at +33 ms, `Party join failed: not found` 1.8 s later), and the state is polled
+  # once a second (#674).
+  - name: the join went out, and the game kept its party
+    expect_log: {pattern: '\[NEVR\.SOCIAL\] party join: 1 request\(s\) sent', timeout: 10}
   - name: the server refuses (PartyJoinFailure, unknown party)
     inject: {msg: PartyJoinFailure, party: '${party_id}', code: 1}
+  # wait_log, not expect_log: production's own refusal is logged ~2 s after the accept, before this
+  # step, while a server that does not answer produces the line from the injection above.
   - name: the game got JoinFailed with not found
-    expect_log: {pattern: 'party callback index=2 arg=1 bound=1', timeout: 10}
+    wait_log: {pattern: 'party callback index=2 arg=1 bound=1', timeout: 10}
   - name: the join ended
     state_until: {party_joining: false, timeout: 15}
   - name: still in the same party

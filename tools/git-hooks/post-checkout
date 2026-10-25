@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# post-checkout: give a new LINKED worktree the gitignored files `.worktreeinclude` lists (#667).
+#
+# A worktree does not carry gitignored files, so an agent started in one would run without
+# `.mcp.json` (no ReVault) and without `.claude/settings.local.json`. Claude Code's own worktrees are
+# covered by the tracked `.worktreeinclude` itself; this hook is the plain `git worktree add` path.
+#
+# It acts only in a linked worktree (git dir differs from the common dir) on a branch checkout
+# (argument 3 is 1). It takes plain relative paths from `.worktreeinclude` (blank lines and `#` comments
+# skipped; an absolute path, a `..` or a glob character is rejected) and copies each from the main
+# worktree only when the new one lacks it: mode 600, never overwritten. File contents are never read,
+# printed or logged, and the hook always exits 0: a failed copy never fails the checkout.
+#
+# Logging: one line on stderr naming each path by outcome, and one JSON line per run appended to
+# `<common git dir>/nevr-logs/post-checkout.jsonl` (not `logs/`: git keeps its reflogs there) with `ts`, `worktree` and per path
+# `copied|present|absent_in_main|failed|rejected`.
+#
+# Install once per clone with `just install-hooks`.
+
+set -u
+
+[ "${3:-0}" = 1 ] || exit 0
+
+git_dir="$(git rev-parse --absolute-git-dir 2>/dev/null)" || exit 0
+common_raw="$(git rev-parse --git-common-dir 2>/dev/null)" || exit 0
+common_dir="$(cd "$common_raw" 2>/dev/null && pwd -P)" || exit 0
+git_dir="$(cd "$git_dir" 2>/dev/null && pwd -P)" || exit 0
+[ "$git_dir" != "$common_dir" ] || exit 0
+
+top="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+# The first entry of `git worktree list` is the main worktree.
+main_top="$(git worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')"
+[ -n "$main_top" ] || exit 0
+
+list="$top/.worktreeinclude"
+[ -f "$list" ] || exit 0
+
+paths=()
+outcomes=()
+
+record() { paths+=("$1"); outcomes+=("$2"); }
+
+while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    case "$line" in
+        '' | '#'*) continue ;;
+    esac
+    case "$line" in
+        /* | *..* | *'*'* | *'?'* | *'['* | *'\'*) record "$line" rejected; continue ;;
+    esac
+    dest="$top/$line"
+    src="$main_top/$line"
+    if [ -e "$dest" ] || [ -L "$dest" ]; then
+        record "$line" present
+        continue
+    fi
+    if [ ! -f "$src" ] || [ ! -r "$src" ]; then
+        record "$line" absent_in_main
+        continue
+    fi
+    if (umask 077 && mkdir -p -- "$(dirname -- "$dest")" && cp -n -- "$src" "$dest") 2>/dev/null \
+        && chmod 600 -- "$dest" 2>/dev/null; then
+        record "$line" copied
+    else
+        rm -f -- "$dest" 2>/dev/null
+        record "$line" failed
+    fi
+done < "$list"
+
+summary=""
+for i in "${!paths[@]}"; do
+    summary+=" ${outcomes[$i]}=${paths[$i]}"
+done
+echo "nevr-post-checkout: worktree=$top${summary:- (nothing listed)}" >&2
+
+log_dir="$common_dir/nevr-logs"
+args=()
+for i in "${!paths[@]}"; do
+    args+=("${paths[$i]}" "${outcomes[$i]}")
+done
+if ! (mkdir -p -- "$log_dir" && python3 -I -c '
+import datetime, json, sys
+log, worktree, rest = sys.argv[1], sys.argv[2], sys.argv[3:]
+entry = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+         "worktree": worktree,
+         "paths": [{"path": rest[i], "outcome": rest[i + 1]} for i in range(0, len(rest), 2)]}
+with open(log, "a", encoding="utf-8") as f:
+    f.write(json.dumps(entry) + "\n")
+' "$log_dir/post-checkout.jsonl" "$top" "${args[@]+"${args[@]}"}") 2>/dev/null; then
+    echo "nevr-post-checkout: could not write $log_dir/post-checkout.jsonl" >&2
+fi
+exit 0

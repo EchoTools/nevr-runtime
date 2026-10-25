@@ -19,11 +19,11 @@ means each. Every feature below is on `main`; [`docs/testing/smoke-checklist.md`
 says how to check each one and which log line proves it.
 
 ### Get in
-- **Nothing to configure.** The service endpoints and the public client keys are built in, so a game client with a build-embedded configuration signs in with no `config.yaml` and no `nevr-quest.json`. `config.yaml` (PC) and `nevr-quest.json` (Quest) override them. (both)
+- **Nothing to configure.** The service endpoints and the public client keys are built in, so a game client with a build-embedded configuration signs in with no `config.yaml`. A `config.yaml` overrides them, on the PC next to the game and on the Quest in the app's files folder ([`docs/reference/example-config.yaml`](docs/reference/example-config.yaml) lists every key and which builds read it). (both)
 - **Sign in with Discord.** A device-code sign-in in your browser; the saved sign-in is reused on the next start and refreshed in the background. (PC)
 - **Saved sign-in on the headset.** The Quest build reuses its saved sign-in, and shows a sign-in code on the game's own login-error screen when it has none. (Quest)
 - **Windowed, no headset.** `-windowed` runs the game in a window with the headset checks patched out. (PC)
-- **Works on Wine and Proton.** Wine is detected; the `_temp` directory fix and `-noconsole` default apply. (PC)
+- **Works on Wine and Proton.** Wine is detected; the `_temp` directory fix and `-no-console` default apply. (PC) Tested clean: Proton Experimental 11.0 and Wine 11. Proton 8.0 (8.0-103) crashes in its own `dxgi.dll` right after the graphics device is created, with the stock `BugSplat64.dll` too, so use Proton Experimental or a recent Wine (#673). The boot log's `[NEVR.BOOT] host environment:` line records the Wine version.
 - **A wrong `echovr.exe` is refused.** A wrong or damaged game image is refused instead of patched. (PC)
 
 ### Friends, party and the social lobby
@@ -55,11 +55,11 @@ says how to check each one and which log line proves it.
 - **Structured logs.** One JSON line per event: `nevr-boot.jsonl` and a timestamped `nevr-<timestamp>.jsonl` under `%LOCALAPPDATA%\EchoVR\logs` on PC; logcat tag `NEVR-Sentinel` and `nevr-sentinel.log` on Quest.
 - **The game's own log, filtered.** The built-in filter captures the game's log lines, folds repeats and reports its own health. (PC)
 - **Hook accounting.** Each hook reports whether it was ever entered; overwritten hooks are detected; counters are reported once the game runs. (both)
-- **Export tracing.** `-traceexports` records the platform DLL calls. (PC)
+- **Export tracing.** `-trace-exports` records the platform DLL calls. (PC)
 - **Hardware dump.** A one-time hardware and environment dump file on request. (Quest)
 
 ### Game server mode
-The dedicated game server does not complete bring-up today ([#45](https://github.com/EchoTools/nevr-runtime/issues/45)): `echovr.exe -server -headless -noconsole` boots, logs in and joins the social lobby group, then never reaches dedicated-server bring-up. The bullets below are what the code implements; none of it is shown working end to end.
+`echovr.exe -server -headless -no-console` boots, logs in, begins multiplayer, loads the in-process server library and registers with the game service. [`docs/testing/smoke-checklist.md`](docs/testing/smoke-checklist.md) (rows SV01 on) says how to check each item below.
 
 - **Dedicated game server.** `-server` implies headless and no OVR; headless graphics need no GPU; `echovr_server.exe` starts one. (PC)
 - **Registers with the game service.** Authenticates, registers (with guild and region filters), takes sessions and returns to the lobby after a round. (PC)
@@ -67,7 +67,7 @@ The dedicated game server does not complete bring-up today ([#45](https://github
 - **Network.** UPnP port mapping, internal and external address overrides, match telemetry streaming. (PC)
 
 ### Quest
-- **A sentinel loaded with the game.** Four switchable features in `nevr-quest.json`: `redirect`, `bridge`, `login`, `social`; `obb_skip` and `hwdump` are separate and off by default. (Quest)
+- **A sentinel loaded with the game.** The redirect, the bridge, the login and the social façade follow from the embedded service endpoints and keys, with no switch of their own; `social.facade`, `social.send_presence_to_meta` and `diagnostics.hardware_dump` in `config.yaml` change the façade, the rich presence and the hardware dump (off by default). On every launch the sentinel answers the game's encrypted-OBB mount itself ([`docs/adr/0007-quest-obb-mount-skip.md`](docs/adr/0007-quest-obb-mount-skip.md)); that the game then starts without the ~30 s wait is predicted and not yet shown on a headset ([#572](https://github.com/EchoTools/nevr-runtime/issues/572)). (Quest)
 - **Login and social on the headset.** The game's login is rewritten into the NEVR login, and the social facade decodes friends, presence, recently-met and party frames from the game service. (Quest)
 
 ### Known gaps
@@ -78,8 +78,6 @@ name ([#393](https://github.com/EchoTools/nevr-runtime/issues/393)) and the part
 Invite Members ([#318](https://github.com/EchoTools/nevr-runtime/issues/318)) do not work
 yet. On PC:
 
-- the dedicated game server does not complete bring-up
-  ([#45](https://github.com/EchoTools/nevr-runtime/issues/45));
 - the main menu shows no game service status, because the status request fails
   ([#408](https://github.com/EchoTools/nevr-runtime/issues/408));
 - the matchmaking screen's time remaining is always 0
@@ -100,19 +98,19 @@ yet. On PC:
 
 1. **Sync the device clock first** (PC: Windows time sync; Quest: automatic time on), so
    PC and Quest logs line up afterwards.
-2. **Windows:** take `nevr-runtime-v4.0.0-rc.<N>-windows.zip` (the release candidate the CI builds from the tag `v4.0.0-rc.<N>`),
+2. **Windows:** take `nevr-runtime-v<X.Y.Z>-windows.zip` from the release (CI builds it from the tag `vX.Y.Z`),
    close the game, unzip it, and run `install.ps1` from PowerShell
    (`powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1`). It checks the package
    against `SHA256SUMS`, copies your original `BugSplat64.dll` to
    `BugSplat64.dll.original-<timestamp>`, renames a legacy `dbgcore.dll` to
    `dbgcore.dll.legacy-<date>` and installs the new file. It deletes nothing.
 3. **Uninstall:** `uninstall.ps1 -Dir <bin\win10>` restores both and keeps the backups.
-4. **Quest:** the release candidate is the Windows zip only: the Quest APK repacks the store game and is
-   not part of the public set. Testers receive a development build
-   (`nevr-runtime-v4.0.0-dev-<sha>-quest.apk`, from `just package-dev`) privately; install it with
-   `adb install -r`. It is signed with the same key as earlier test builds, so it installs over them and
-   keeps your data.
-5. The Windows DLL is **unsigned**; Windows Defender or SmartScreen may warn about it.
+4. **Quest:** a release is the Windows zip only: the APK repacks the store game, so it is not on GitHub. The
+   development build (`nevr-runtime-v<X.Y.Z-dev.N>-<sha7>-quest.apk`, built by `just package-dev`) is published
+   outside GitHub; download it and install it with `adb install -r`. It is signed with the same key as
+   earlier test builds, so it installs over them and keeps your data.
+5. Windows Defender or SmartScreen may warn about a file that carries no signature. `Get-AuthenticodeSignature .\BugSplat64.dll`
+   (PowerShell) says whether a file is signed.
 
 The community beta guide for a manual install is [`docs/beta/INSTALL.md`](docs/beta/INSTALL.md).
 The Quest sign-in flow is in [`docs/quest/SIGN-IN.md`](docs/quest/SIGN-IN.md).
@@ -170,7 +168,7 @@ already built into the runtime.
   hooking, auth-token model, `pch.h` (links `nevr_abi`)
 - `src/extension/` — header-only published C ABI for third-party plugins/modules
 - `src/launcher/` → `echovr_server.exe`, a `CreateProcess` wrapper spawning
-  `echovr.exe -server -headless -noconsole` (a dedicated game server)
+  `echovr.exe -server -headless -no-console` (a dedicated game server)
 - `src/libovr-stub/` → `LibOVRPlatform64_1.dll` — Oculus platform stub, built
   separately from the community beta package
 - `src/quest/` — separate Android/Quest arm64 target
@@ -184,18 +182,17 @@ cross-compile from Linux. Dependencies come from the vcpkg manifest.
 ```sh
 just                # list recipes
 just build          # build desktop targets
-just verify         # THE GATE — build + tests under Wine + invariant sensors
+just verify         # the full gate (main, release prep): build + tests under Wine + invariant sensors
 just test-system-short        # quick Go system tests (needs the game binary)
 just test-plugins-groundtruth # plugin tests without the game binary
 just test-android              # Quest binary-shape checks
-just dist           # distribution packages
-just dist-lite      # stripped, no debug symbols
+just dist           # the stripped release package (symbols split to dist/symbols/); a build with symbols is build/<preset>/bin/
 ```
 
 Presets: `mingw-debug`, `mingw-release` (Linux default), `debug`, `release`
 (Windows). Output lands in `build/<preset>/bin/`.
 
-`just verify` is the closed-loop gate: it runs the build, C++ tests under Wine,
+`just verify` is the closed-loop gate for main when prepping a release (a PR runs the quick check, see `AGENTS.md`): it runs the build, C++ tests under Wine,
 Python harness tests, and source-invariant sensors.
 
 ## Deployment
@@ -208,10 +205,11 @@ From `build/mingw-release/bin/`:
 | `echovr_server.exe` | game directory, alongside `echovr.exe` |
 | Optional plugin DLLs | `plugins/` next to the game binary |
 
-The distribution package includes an empty `plugins/` directory for optional
-operator plugins; plugin DLLs are built separately and are not bundled. The
-community beta install guide covers installing the game client and uses only
-`BugSplat64.dll`.
+The staged server package and its `.tar.zst` carry an empty `plugins/` directory
+for optional operator plugins; the Windows zip (`nevr-runtime-v<ver>-windows.zip`)
+has no entry for it, so create `plugins/` next to the game binary. Plugin DLLs are
+built separately and are not bundled. The community beta install guide covers installing the game client and
+uses only `BugSplat64.dll`.
 
 For the community beta on Windows, follow [`docs/beta/INSTALL.md`](docs/beta/INSTALL.md).
 

@@ -1,0 +1,257 @@
+#include "runtime/host/runtime_rendezvous.h"
+
+#include <MinHook.h>
+
+#include "runtime/host/host_json.h"
+
+#include <cstring>
+
+namespace nevr_host {
+
+#if defined(NEVR_HOST_TESTING)
+RuntimeRendezvous::TestSeams& RuntimeRendezvous::Seams() {
+  static TestSeams seams;
+  return seams;
+}
+#endif
+
+namespace {
+
+// Production behaviour is the constants; the test targets can change them through the seams.
+bool FailEventCreate() {
+#if defined(NEVR_HOST_TESTING)
+  return RuntimeRendezvous::Seams().fail_event_create;
+#else
+  return false;
+#endif
+}
+bool FailHookBytesRead() {
+#if defined(NEVR_HOST_TESTING)
+  return RuntimeRendezvous::Seams().fail_hook_bytes_read;
+#else
+  return false;
+#endif
+}
+bool FailHookCreate() {
+#if defined(NEVR_HOST_TESTING)
+  return RuntimeRendezvous::Seams().fail_hook_create;
+#else
+  return false;
+#endif
+}
+DWORD InstallWaitMs() {
+#if defined(NEVR_HOST_TESTING)
+  return RuntimeRendezvous::Seams().install_wait_ms;
+#else
+  return RuntimeRendezvous::kInstallWaitMs;
+#endif
+}
+
+}  // namespace
+
+RuntimeRendezvous::InstallWait RuntimeRendezvous::AwaitInstall() {
+  const HANDLE install_done = install_done_.load(std::memory_order_acquire);
+  if (install_done == nullptr) {
+    Journal(AttachStep::kInstallWait, AttachOutcome::kFailed, 0, nullptr, HookStage::kNone,
+            AttachNote::kInstallWaitUnavailable);
+    return InstallWait::kUnavailable;
+  }
+  if (WaitForSingleObject(install_done, InstallWaitMs()) != WAIT_OBJECT_0) {
+    Journal(AttachStep::kInstallWait, AttachOutcome::kFailed, 0, nullptr, HookStage::kNone,
+            AttachNote::kInstallWaitTimeout);
+    return InstallWait::kTimeout;
+  }
+  Journal(AttachStep::kInstallWait, AttachOutcome::kAccepted, 0, nullptr, HookStage::kNone,
+          AttachNote::kInstallWaitSignalled);
+  return InstallWait::kSignalled;
+}
+
+void RuntimeRendezvous::Journal(AttachStep step, AttachOutcome outcome, std::uint32_t detail,
+                                const unsigned char* actual, HookStage stage, AttachNote note) {
+  if (diagnostics_ != nullptr) diagnostics_->RecordAttach(step, outcome, detail, actual, stage, note);
+}
+
+namespace {
+
+// The one rendezvous the detour body dispatches through. MinHook carries no
+// context, so the static detour reaches the active instance here. It is published
+// in Prepare(), before any detour can fire.
+RuntimeRendezvous* g_active_rendezvous = nullptr;
+
+}  // namespace
+
+#if defined(NEVR_HOST_TESTING)
+void RuntimeRendezvous::ResetActiveForTest() { g_active_rendezvous = nullptr; }
+const NevrHostContext& RuntimeRendezvous::Context() const { return context_; }
+void RuntimeRendezvous::SetInstallEventForTest(HANDLE event) {
+  install_done_.store(event, std::memory_order_release);
+}
+#endif
+
+void RuntimeRendezvous::Prepare(HMODULE host_module, HMODULE game_module,
+                                BootstrapDiagnostics& diagnostics,
+                                NevrGetRuntimeApiFn in_process_runtime) {
+  host_module_ = host_module;
+  game_module_ = game_module;
+  diagnostics_ = &diagnostics;
+  if (in_process_runtime != nullptr) {
+    loader_.PrepareInProcess(host_module, in_process_runtime);
+  } else {
+    loader_.Prepare(host_module);
+  }
+  g_active_rendezvous = this;
+}
+
+bool RuntimeRendezvous::ReadPrologue(const void* target,
+                                     unsigned char (&out)[kGameMainWrapperPrologueSize]) {
+  std::memset(out, 0, sizeof(out));
+  SIZE_T read = 0;
+  return target != nullptr &&
+         ReadProcessMemory(GetCurrentProcess(), target, out, sizeof(out), &read) != FALSE &&
+         read == sizeof(out);
+}
+
+bool RuntimeRendezvous::PrologueMatches(const void* target) {
+  unsigned char bytes[kGameMainWrapperPrologueSize];
+  return ReadPrologue(target, bytes) &&
+         std::memcmp(bytes, kGameMainWrapperPrologue, sizeof(bytes)) == 0;
+}
+
+NevrGameMainFn RuntimeRendezvous::Install(void* target) {
+  if (original_ != nullptr) return original_;  // idempotent
+
+  // Prologue-validate before writing the detour: never blind-write into the game
+  // image. ReadProcessMemory reports an unreadable target rather than faulting.
+  unsigned char actual[kGameMainWrapperPrologueSize];
+  const bool readable = ReadPrologue(target, actual);
+  if (!readable || std::memcmp(actual, kGameMainWrapperPrologue, sizeof(actual)) != 0) {
+    Journal(AttachStep::kPrologueCheck, AttachOutcome::kRejected, 0, readable ? actual : nullptr);
+    return nullptr;
+  }
+  Journal(AttachStep::kPrologueCheck, AttachOutcome::kAccepted, 0, actual);
+
+  // Created before the jump can go live; signalled by every way out of here.
+  HANDLE install_done = FailEventCreate() ? nullptr : CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  install_done_.store(install_done, std::memory_order_release);
+  struct SignalOnExit {
+    HANDLE event;
+    ~SignalOnExit() {
+      if (event != nullptr) SetEvent(event);
+    }
+  } signal_on_exit{install_done};
+
+  MH_STATUS status = MH_Initialize();
+  if (status != MH_OK) {
+    Journal(AttachStep::kHookInstall, AttachOutcome::kFailed, static_cast<std::uint32_t>(status),
+            actual, HookStage::kInitialize);
+    return nullptr;
+  }
+
+  void* trampoline = nullptr;
+  status = MH_CreateHook(target, reinterpret_cast<void*>(&GameMainWrapperDetour), &trampoline);
+  if (FailHookCreate()) {  // the seam: a create that came back refused
+    if (status == MH_OK) MH_RemoveHook(target);
+    status = MH_ERROR_UNSUPPORTED_FUNCTION;
+  }
+  if (status != MH_OK || trampoline == nullptr) {
+    Journal(AttachStep::kHookInstall, AttachOutcome::kFailed, static_cast<std::uint32_t>(status),
+            actual, HookStage::kCreate);
+    MH_Uninitialize();
+    return nullptr;
+  }
+
+  // Publish the trampoline and the host context BEFORE the jump goes live, so a
+  // racing thread that enters the detour during MH_EnableHook can never read a
+  // null original (the attach proof gate in tests/bootstrap_attach observed it).
+  original_ = reinterpret_cast<NevrGameMainFn>(trampoline);
+  context_.header.struct_size = sizeof(NevrHostContext);
+  context_.header.abi_major = nevr_runtime_abi::kMajor;
+  context_.header.abi_minor = nevr_runtime_abi::kMinor;
+  context_.host_module = host_module_;
+  context_.game_module = game_module_;
+  context_.original_game_main_wrapper = original_;
+  context_.wrapper_hook_target = target;
+
+  status = MH_EnableHook(target);
+  if (status != MH_OK) {
+    Journal(AttachStep::kHookInstall, AttachOutcome::kFailed, static_cast<std::uint32_t>(status),
+            actual, HookStage::kEnable);
+    MH_RemoveHook(target);
+    MH_Uninitialize();
+    original_ = nullptr;
+    return nullptr;
+  }
+  // The first bytes at the target now that the hook is live: the jump the host wrote. Read here,
+  // before the install event is signalled, so a detour thread (which waits for the event before
+  // it touches the context) sees them. The flag is written last; 0 says the bytes mean nothing.
+  SIZE_T got = 0;
+  const bool read_call = ReadProcessMemory(GetCurrentProcess(), target, context_.wrapper_hook_bytes,
+                                           sizeof(context_.wrapper_hook_bytes), &got) != FALSE &&
+                         got == sizeof(context_.wrapper_hook_bytes);
+  const bool read_ok = read_call && !FailHookBytesRead();  // the seam: a read that came back unusable
+  if (!read_ok) std::memset(context_.wrapper_hook_bytes, 0, sizeof(context_.wrapper_hook_bytes));
+  MemoryBarrier();
+  context_.wrapper_hook_bytes_valid = read_ok ? 1u : 0u;
+  Journal(AttachStep::kHookInstall, AttachOutcome::kAccepted, static_cast<std::uint32_t>(MH_OK),
+          actual, HookStage::kEnable, read_ok ? AttachNote::kNone : AttachNote::kHookBytesUnread);
+  return original_;
+}
+
+BOOL CALLBACK RuntimeRendezvous::LoadRuntimeOnce(PINIT_ONCE, PVOID parameter, PVOID*) {
+  auto* self = static_cast<RuntimeRendezvous*>(parameter);
+  if (self == nullptr) return TRUE;
+  self->loading_thread_.store(GetCurrentThreadId(), std::memory_order_release);
+  // A thread can be here before the thread that installed the hook has journalled it.
+  const InstallWait waited = self->AwaitInstall();
+  // The attach decisions are reported first, now that attach has returned, so the
+  // load record that follows reads in order.
+  self->diagnostics_->FlushAttachJournal();
+  const RuntimeLoadResult result = self->loader_.Load(self->context_, *self->diagnostics_);
+  if (result.Loaded()) self->api_.store(result.api, std::memory_order_release);
+  // A load that did not wait for the install may have run ahead of its last journal entry.
+  if (waited != InstallWait::kSignalled) self->diagnostics_->FlushAttachJournal();
+  self->loading_thread_.store(0, std::memory_order_release);
+  return TRUE;
+}
+
+std::int64_t RuntimeRendezvous::GameMainWrapperDetour(std::int64_t command_line) {
+  RuntimeRendezvous* self = g_active_rendezvous;
+  // Defensive, unreachable in practice: Install publishes the trampoline before
+  // MH_EnableHook, so the detour is never live with a null original_. If a defect
+  // ever trips these guards there is no original to fall back to, so returning 0
+  // is the only non-dereferencing option. This is NOT the degrade-to-original
+  // path — that is the api == nullptr branch below, which still calls original_.
+  if (self == nullptr) {
+    // No rendezvous, so no journal: a fixed-buffer line on stderr (no allocation, no lock).
+    HANDLE err = GetStdHandle(STD_ERROR_HANDLE);
+    if (err != nullptr && err != INVALID_HANDLE_VALUE) {
+      char buffer[256];
+      JsonLine line(buffer, sizeof(buffer), "detour_entry");
+      line.Str("outcome", "defect").Str("reason", "no_rendezvous").Str("next", "returned_0_without_calling_the_original");
+      const std::size_t length = line.Finish();
+      DWORD written = 0;
+      if (length != 0) WriteFile(err, buffer, static_cast<DWORD>(length), &written, nullptr);
+    }
+    return 0;
+  }
+  if (self->original_ == nullptr) {
+    self->Journal(AttachStep::kDetourEntry, AttachOutcome::kFailed, 0, nullptr, HookStage::kNone,
+                  AttachNote::kDetourWithoutHook);
+    // Nothing else will report it: this thread returns 0 into the game and no load follows.
+    if (self->diagnostics_ != nullptr) self->diagnostics_->FlushAttachJournal();
+    return 0;
+  }
+
+  // Same-thread re-entry while the runtime is still loading: call the original
+  // directly. InitOnceExecuteOnce recursion on the loading thread deadlocks.
+  if (self->loading_thread_.load(std::memory_order_acquire) == GetCurrentThreadId()) {
+    return self->original_(command_line);
+  }
+
+  InitOnceExecuteOnce(&self->load_once_, &LoadRuntimeOnce, self, nullptr);
+  const NevrRuntimeApi* api = self->api_.load(std::memory_order_acquire);
+  if (api != nullptr) return api->game_main(command_line);
+  return self->original_(command_line);
+}
+
+}  // namespace nevr_host

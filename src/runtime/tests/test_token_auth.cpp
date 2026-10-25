@@ -15,10 +15,13 @@
 #include <vector>
 
 #include "core/auth_token.h"
+#include "core/credential_cache_stats.h"
+#include "runtime/tests/digest_for_test.h"
 #include "core/auth_refresh.h"
 #include "core/bounded_retry.h"
 #include "core/signin_dialog_lifecycle.h"
 #include "core/signin_dialog_text.h"
+#include "core/system_info.h"
 #include "auth_snapshot.h"
 #include "device_poll_response.h"
 #include "extension/module_interface.h"
@@ -647,16 +650,16 @@ bool LogHas(const FakeDeviceAuthFlow& fake, EchoVR::LogLevel level, const std::s
 }  // namespace
 
 TEST(SignInDialogText, WaitingTextNamesThePageTheCodeAndTheBrowser) {
-  const auto c = nevr::auth::SignInWaitingContent("https://echovrce.com/login/device", "ABCD-1234");
+  const auto c = nevr::auth::SignInWaitingContent("https://echovrce.com/device", "ABCD-1234");
   EXPECT_EQ(c.title, "Echo VR - sign in");
   EXPECT_EQ(c.code, "ABCD-1234");
   EXPECT_FALSE(c.closes_by_itself);
   EXPECT_EQ(c.instruction,
-            "Sign in to play: on a phone or computer, open\nechovrce.com/login/device\nand enter the code below.\n"
+            "Sign in to play: on a phone or computer, open\nechovrce.com/device\nand enter the code below.\n"
             "Your browser was also opened to that page. The code lasts 5 minutes.");
   // What the player types has no scheme and no query: the code is never part of the address line.
   EXPECT_EQ(nevr::auth::SignInDisplayUrl("http://localhost:7350/login/device"), "localhost:7350/login/device");
-  EXPECT_EQ(nevr::auth::SignInDisplayUrl("echovrce.com/login/device"), "echovrce.com/login/device");
+  EXPECT_EQ(nevr::auth::SignInDisplayUrl("echovrce.com/device"), "echovrce.com/device");
 }
 
 TEST(SignInDialogText, EveryEndingSaysWhichOneAndDropsTheCode) {
@@ -711,7 +714,7 @@ TEST(DeviceAuthFlow, TheCodeAndPageAreHandedToTheUiBeforeTheBrowserAndTheEndIsRe
     (void)nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
     ASSERT_EQ(fake.issued.size(), 1U) << c.name;
     EXPECT_EQ(fake.issued[0].first, fake.code) << c.name;
-    EXPECT_EQ(fake.issued[0].second, "https://echovrce.com/login/device") << c.name;
+    EXPECT_EQ(fake.issued[0].second, "https://echovrce.com/device") << c.name;
     ASSERT_EQ(fake.ends.size(), 1U) << c.name;
     EXPECT_EQ(fake.ends[0], c.expected) << c.name;
   }
@@ -726,7 +729,7 @@ TEST(DeviceAuthFlow, AFourCharacterDashlessCodeIsUsedAsIssued) {
   fake.poll_response = VerifiedPollResponse();
   const auto flow = nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
   EXPECT_TRUE(flow.success);
-  EXPECT_EQ(fake.browser_url, "https://echovrce.com/login/device?code=K7RX");
+  EXPECT_EQ(fake.browser_url, "https://echovrce.com/device?code=K7RX");
   ASSERT_EQ(fake.issued.size(), 1U);
   EXPECT_EQ(fake.issued[0].first, "K7RX");
   EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Info, "<4 chars masked>"));
@@ -734,9 +737,9 @@ TEST(DeviceAuthFlow, AFourCharacterDashlessCodeIsUsedAsIssued) {
     (void)level;
     EXPECT_EQ(message.find("K7RX"), std::string::npos) << message;
   }
-  const auto shown = nevr::auth::SignInWaitingContent("https://echovrce.com/login/device", "K7RX");
+  const auto shown = nevr::auth::SignInWaitingContent("https://echovrce.com/device", "K7RX");
   EXPECT_EQ(shown.code, "K7RX");
-  EXPECT_NE(shown.instruction.find("echovrce.com/login/device"), std::string::npos);
+  EXPECT_NE(shown.instruction.find("echovrce.com/device"), std::string::npos);
 }
 
 TEST(DeviceAuthFlow, NoCodeIsReportedAndAServerShowsNothing) {
@@ -862,7 +865,7 @@ TEST(DeviceAuthFlow, BrowserResultBoundaryUsesTransientUiOnlyForZeroAndThirtyTwo
     EXPECT_EQ(fake.ui_calls, resultCode > 32 ? 0 : 1) << resultCode;
     if (resultCode <= 32) {
       EXPECT_EQ(fake.ui_code, fake.code);
-      EXPECT_EQ(fake.ui_url, "https://echovrce.com/login/device");
+      EXPECT_EQ(fake.ui_url, "https://echovrce.com/device");
       EXPECT_EQ(fake.ui_browser_result, resultCode);
       EXPECT_EQ(fake.poll_calls, 0);
       EXPECT_TRUE(std::any_of(fake.logs.begin(), fake.logs.end(), [](const auto& entry) {
@@ -1022,9 +1025,9 @@ TEST(DeviceAuthFlow, DeviceCodeIsNeverLoggedAtAnyLevelButReachesBrowserAndUi) {
   polling.poll_sequence.push_back(error);
   (void)nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), polling.Ops());
 
-  EXPECT_EQ(polling.browser_url, "https://echovrce.com/login/device?code=device-code-secret-sentinel");
+  EXPECT_EQ(polling.browser_url, "https://echovrce.com/device?code=device-code-secret-sentinel");
   EXPECT_EQ(uiFailure.ui_code, uiFailure.code);
-  EXPECT_EQ(uiFailure.ui_url, "https://echovrce.com/login/device");
+  EXPECT_EQ(uiFailure.ui_url, "https://echovrce.com/device");
   bool sawInfo = false;
   bool sawDebug = false;
   bool sawWarning = false;
@@ -1366,14 +1369,19 @@ TEST_F(CredentialsDirFixture, YamlOnlySaveRotatesAndReloadsRefreshTokenWithoutCh
   auth.user_id = "account-17";
   auth.username = "cached-player";
   ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
+  EXPECT_FALSE(std::filesystem::exists(location.credentialsPath + ".tmp")) << "the temp file is renamed away";
 
   nlohmann::json expected = {{"refresh_token", "refresh-token-v1"},
                              {"refresh_token_expiry", 2100000000U},
                              {"user_id", "account-17"},
                              {"username", "cached-player"}};
-  std::ifstream saved(location.credentialsPath, std::ios::binary);
-  ASSERT_TRUE(saved.is_open());
-  const nlohmann::json actual = nlohmann::json::parse(saved);
+  nlohmann::json actual;
+  {
+    // Closed before the next save: a handle without delete sharing blocks the rename, as it would on Windows.
+    std::ifstream saved(location.credentialsPath, std::ios::binary);
+    ASSERT_TRUE(saved.is_open());
+    actual = nlohmann::json::parse(saved);
+  }
   EXPECT_EQ(actual, expected);
   EXPECT_FALSE(actual.contains("token"));
   EXPECT_FALSE(actual.contains("token_expiry"));
@@ -1391,6 +1399,213 @@ TEST_F(CredentialsDirFixture, YamlOnlySaveRotatesAndReloadsRefreshTokenWithoutCh
   EXPECT_EQ(loaded.refresh_token, "refresh-token-v2");
   EXPECT_EQ(loaded.refresh_token_expiry, 2200000000U);
   EXPECT_EQ(Read(yamlPath), yamlContents);
+}
+
+namespace {
+CachedAuthToken* g_midWriteObserved = nullptr;
+const std::string* g_midWriteExeDir = nullptr;
+void ObserveCacheDuringWrite() {
+  if (g_midWriteObserved != nullptr && g_midWriteExeDir != nullptr) {
+    *g_midWriteObserved = LoadCachedAuthToken(*g_midWriteExeDir);
+  }
+}
+
+CachedAuthToken TokenWith(const std::string& refresh) {
+  CachedAuthToken auth;
+  auth.refresh_token = refresh;
+  auth.refresh_token_expiry = 2100000000U;
+  auth.user_id = "account-17";
+  return auth;
+}
+}  // namespace
+
+// #562: under Wine the Windows DACL calls do not set the host mode (measured), so the file is protected with
+// the host's chmod and the mode is read back; the token is written only after that.
+TEST_F(CredentialsDirFixture, WineCacheWriteSetsAndVerifiesHostMode600) {
+  if (!nevr_system_info::Get().IsWine()) GTEST_SKIP() << "Wine host permission behavior";
+  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  std::filesystem::create_directories(path.parent_path());
+  ASSERT_TRUE(SaveAuthToken(TokenWith("wine-refresh"), exe_dir_));
+  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "wine-refresh");
+  EXPECT_EQ(nevr_credential_write::WineHostMode(path.string()), "600");
+  EXPECT_FALSE(std::filesystem::exists(path.string() + ".tmp"));
+}
+
+// A crash can leave a temp file with a wrong mode and stale bytes: it is re-protected before being reused.
+TEST_F(CredentialsDirFixture, AStaleTempFileDoesNotWeakenTheProtection) {
+  if (!nevr_system_info::Get().IsWine()) GTEST_SKIP() << "Wine host permission behavior";
+  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  Write(path.string() + ".tmp", "stale-bytes-from-a-crashed-write");
+  ASSERT_TRUE(SaveAuthToken(TokenWith("after-crash"), exe_dir_));
+  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "after-crash");
+  EXPECT_EQ(nevr_credential_write::WineHostMode(path.string()), "600");
+  EXPECT_FALSE(std::filesystem::exists(path.string() + ".tmp"));
+}
+
+// A leftover, read-only result file holding "600" must never be read as this call's answer: the helper's
+// result path must not exist beforehand, and nothing is written when it does.
+TEST_F(CredentialsDirFixture, AStaleReadOnlyResultFileWritesNothing) {
+  if (!nevr_system_info::Get().IsWine()) GTEST_SKIP() << "Wine host permission behavior";
+  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  std::filesystem::create_directories(path.parent_path());
+  const std::string stale = path.string() + ".stale.mode";
+  Write(stale, "600\n");
+  ASSERT_NE(SetFileAttributesA(stale.c_str(), FILE_ATTRIBUTE_READONLY), 0);
+
+  nevr_credential_write::g_forceResultPath = stale;
+  const bool saved = SaveAuthToken(TokenWith("must-not-land"), exe_dir_);
+  nevr_credential_write::g_forceResultPath.clear();
+  SetFileAttributesA(stale.c_str(), FILE_ATTRIBUTE_NORMAL);
+
+  EXPECT_FALSE(saved);
+  EXPECT_FALSE(std::filesystem::exists(path)) << "a token landed behind a stale 600";
+  EXPECT_FALSE(std::filesystem::exists(path.string() + ".tmp"));
+  EXPECT_EQ(Read(stale), "600\n") << "the stale file was left as found";
+}
+
+// A host chmod that "succeeds" but leaves a mode that is not 600 must stop the write before a byte lands.
+TEST_F(CredentialsDirFixture, AHostModeThatIsNot600WritesNothing) {
+  if (!nevr_system_info::Get().IsWine()) GTEST_SKIP() << "Wine host permission behavior";
+  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  std::filesystem::create_directories(path.parent_path());
+
+  nevr_credential_write::g_forcedHostMode = "644";
+  const bool saved = SaveAuthToken(TokenWith("must-not-land"), exe_dir_);
+  nevr_credential_write::g_forcedHostMode.clear();
+
+  EXPECT_FALSE(saved);
+  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_FALSE(std::filesystem::exists(path.string() + ".tmp"));
+}
+
+namespace {
+std::vector<std::string> g_cacheLog;
+void CaptureCacheLog(EchoVR::LogLevel, const CHAR* message) { g_cacheLog.push_back(message); }
+}  // namespace
+
+// The digests used below are checked against the published test vectors, so the secrets test cannot pass on a wrong hash.
+TEST(DigestForTest, MatchesThePublishedVectors) {
+  EXPECT_EQ(nevr_test_digest::Sha256Hex("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  EXPECT_EQ(nevr_test_digest::Sha1Hex("abc"), "a9993e364706816aba3e25717850c26c9cd0d89d");
+  EXPECT_EQ(nevr_test_digest::Sha256Hex(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  EXPECT_EQ(nevr_test_digest::Sha1Hex(""), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+}
+
+namespace {
+// What a log line must never carry about a secret: its bytes, its length as a number, or a digest of it (L3 of the
+// #562 review). `allowed` is text the line is meant to contain (the path), removed before the digits are scanned.
+void ExpectNothingOfTheSecret(const std::string& line, const std::string& secret, const std::string& allowed) {
+  EXPECT_EQ(line.find(secret), std::string::npos) << "the secret reached the log: " << line;
+  for (std::size_t n = 6; n <= 8 && n <= secret.size(); ++n) {  // every piece of 6 to 8 bytes: longer ones contain them
+    for (std::size_t at = 0; at + n <= secret.size(); ++at) {
+      EXPECT_EQ(line.find(secret.substr(at, n)), std::string::npos) << "a piece of the secret reached the log: " << line;
+    }
+  }
+  std::string scanned = line;
+  for (std::size_t at = scanned.find(allowed); !allowed.empty() && at != std::string::npos; at = scanned.find(allowed))
+    scanned.erase(at, allowed.size());
+  const std::string length = std::to_string(secret.size());
+  for (std::size_t i = 0; i < scanned.size();) {
+    if (scanned[i] < '0' || scanned[i] > '9') { ++i; continue; }
+    std::size_t j = i;
+    while (j < scanned.size() && scanned[j] >= '0' && scanned[j] <= '9') ++j;
+    EXPECT_NE(scanned.substr(i, j - i), length) << "the secret's length reached the log: " << line;
+    i = j;
+  }
+  for (const std::string& digest : {nevr_test_digest::Sha256Hex(secret), nevr_test_digest::Sha1Hex(secret)}) {
+    std::string upper = digest;
+    for (char& c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    for (const std::string& d : {digest, upper}) {
+      EXPECT_EQ(line.find(d.substr(0, 16)), std::string::npos) << "a digest of the secret reached the log: " << line;
+    }
+  }
+}
+}  // namespace
+
+// #562: a save that wrote the cache is counted and logged at Info with the path and how the file is protected,
+// and never with a token byte, its length or a digest of it. (Wine: the host mode was read back as 600.)
+TEST_F(CredentialsDirFixture, ASavedCacheIsCountedAndLoggedWithPathAndProtectionButNothingOfTheToken) {
+  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  std::filesystem::create_directories(path.parent_path());
+  nevr_credential_stats::ResetForTest();
+  g_cacheLog.clear();
+  const std::string token = "sekret-refresh-value-for-the-test-31";  // 36 characters: a length no path digit run equals
+  SetBootLogSink(&CaptureCacheLog);
+  const bool saved = SaveAuthToken(TokenWith(token), exe_dir_);
+  SetBootLogSink(nullptr);
+  ASSERT_TRUE(saved);
+
+  const nevr_credential_stats::Snapshot snap = nevr_credential_stats::Get();
+  EXPECT_EQ(snap.saved, 1u);
+  EXPECT_EQ(snap.refused, 0u);
+  EXPECT_FALSE(snap.lastProtection.empty());
+  const bool wine = nevr_system_info::Get().IsWine();
+  EXPECT_EQ(snap.lastProtection, wine ? "host_mode_600" : "dacl");
+
+  bool found = false;
+  for (const std::string& line : g_cacheLog) {
+    if (line.find("[NEVR.AUTH] Credentials written to ") != std::string::npos) {
+      found = true;
+      EXPECT_NE(line.find(path.string()), std::string::npos) << line;
+      EXPECT_NE(line.find(std::string("protection=") + snap.lastProtection), std::string::npos) << line;
+    }
+    ExpectNothingOfTheSecret(line, token, path.string());
+  }
+  EXPECT_TRUE(found) << "no Info line says the cache was written";
+}
+
+// #562: a save that wrote nothing is counted with its reason.
+TEST_F(CredentialsDirFixture, ARefusedSaveIsCountedWithItsReason) {
+  if (!nevr_system_info::Get().IsWine()) GTEST_SKIP() << "Wine host permission behavior";
+  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  std::filesystem::create_directories(path.parent_path());
+  nevr_credential_stats::ResetForTest();
+  nevr_credential_write::g_forcedHostMode = "644";
+  const bool saved = SaveAuthToken(TokenWith("must-not-land"), exe_dir_);
+  nevr_credential_write::g_forcedHostMode.clear();
+  EXPECT_FALSE(saved);
+  const nevr_credential_stats::Snapshot snap = nevr_credential_stats::Get();
+  EXPECT_EQ(snap.saved, 0u);
+  EXPECT_EQ(snap.refused, 1u);
+  EXPECT_NE(snap.lastRefusal.find("host mode is 644, not 600"), std::string::npos) << snap.lastRefusal;
+}
+
+// #563: a write that fails part-way must leave the previous token exactly as it was.
+TEST_F(CredentialsDirFixture, AFailedWriteLeavesTheOldTokenIntact) {
+  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  std::filesystem::create_directories(path.parent_path());
+  ASSERT_TRUE(SaveAuthToken(TokenWith("old-refresh-token"), exe_dir_));
+  const std::string before = Read(path);
+  ASSERT_FALSE(before.empty());
+
+  nevr_credential_write::g_failAfterBytes = 20;  // inside the JSON, after the first chunks are on disk
+  const bool saved = SaveAuthToken(TokenWith("new-refresh-token-that-must-not-land"), exe_dir_);
+  nevr_credential_write::g_failAfterBytes = SIZE_MAX;
+
+  EXPECT_FALSE(saved);
+  EXPECT_EQ(Read(path), before) << "the failed write changed the cache";
+  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "old-refresh-token");
+  EXPECT_FALSE(std::filesystem::exists(path.string() + ".tmp")) << "the temp file is removed on failure";
+}
+
+// #563: a reader opening the cache while a write is in flight is never blocked and never sees a partial file.
+TEST_F(CredentialsDirFixture, AReaderDuringAWriteSeesTheOldTokenNotABlockedOrPartialFile) {
+  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  std::filesystem::create_directories(path.parent_path());
+  ASSERT_TRUE(SaveAuthToken(TokenWith("old-refresh"), exe_dir_));
+
+  CachedAuthToken observed;
+  g_midWriteObserved = &observed;
+  g_midWriteExeDir = &exe_dir_;
+  nevr_credential_write::g_midWriteHook = &ObserveCacheDuringWrite;
+  const bool saved = SaveAuthToken(TokenWith("new-refresh"), exe_dir_);
+  nevr_credential_write::g_midWriteHook = nullptr;
+  g_midWriteObserved = nullptr;
+  g_midWriteExeDir = nullptr;
+
+  ASSERT_TRUE(saved);
+  EXPECT_EQ(observed.refresh_token, "old-refresh") << "the reader met a locked or half-written cache";
+  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "new-refresh");
 }
 
 TEST_F(CredentialsDirFixture, NearExistingCredentialsBeatFartherYaml) {

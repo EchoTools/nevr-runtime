@@ -21,6 +21,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/nevr_config.h"
+#include "runtime/compat/session_router_mode.h"
 #include "runtime/lifecycle/service_map.h"
 #include "quest/tests/service_redirect_vectors.h"
 
@@ -59,6 +60,7 @@ network:
   internal_ip: "10.0.0.5"
   upnp: true
   upnp_port: 6789
+  tick_rate_hz: 60
 assets:
   cdn_url: "https://cdn.example/assets"
 arena:
@@ -96,6 +98,8 @@ TEST(ServiceMap, FlatKeyToYamlPath_EveryMigratedKey) {
   EXPECT_EQ(FlatKeyToYamlPath("upnp"), "network.upnp");
   EXPECT_EQ(FlatKeyToYamlPath("upnp_port"), "network.upnp_port");
   EXPECT_EQ(FlatKeyToYamlPath("nevr_regions"), "network.regions");  // S4b schema-gap home
+  EXPECT_EQ(FlatKeyToYamlPath("nevr_tick_rate_hz"), "network.tick_rate_hz");  // #595
+  EXPECT_EQ(FlatKeyToYamlPath("nevr_session_router"), "network.session_router");  // #708
   // assets / arena / misc
   EXPECT_EQ(FlatKeyToYamlPath("asset_cdn_url"), "assets.cdn_url");
   EXPECT_EQ(FlatKeyToYamlPath("arena_round_time"), "arena.round_time");
@@ -135,6 +139,7 @@ TEST(ServiceMap, LookupFlat_PresentKeysResolve) {
   EXPECT_EQ(LookupFlat(cfg, "external_ip").value_or(""), "154.36.247.148");
   EXPECT_EQ(LookupFlat(cfg, "upnp").value_or(""), "true");
   EXPECT_EQ(LookupFlat(cfg, "upnp_port").value_or(""), "6789");
+  EXPECT_EQ(LookupFlat(cfg, "nevr_tick_rate_hz").value_or(""), "60");  // #595
   EXPECT_EQ(LookupFlat(cfg, "arena_round_time").value_or(""), "240");
   EXPECT_EQ(LookupFlat(cfg, "exitonerror").value_or(""), "true");
   // nevr_server_key is mapped (S5) but kFullYaml has no auth block, so it resolves
@@ -732,4 +737,45 @@ TEST(SelectBuiltinDefaults, ANullValueCountsAsNotEmbedded) {
   std::string embedded, missing;
   EXPECT_TRUE(nevr_cfg::SelectBuiltinDefaults(false, entries, 1, &embedded, &missing).empty());
   EXPECT_EQ(missing, "nevr_socket_uri");
+}
+
+// #708: network.session_router values. An absent key is legacy with no complaint; a misspelling is legacy with a
+// sentence for the log, which the bridge makes fatal.
+TEST(SessionRouterMode, ParsesEachValueAndNeverGuesses) {
+  using nevr_session_router_mode::Mode;
+  using nevr_session_router_mode::ParseMode;
+  std::string problem = "stale";
+  EXPECT_EQ(ParseMode(nullptr, &problem), Mode::Legacy);
+  EXPECT_TRUE(problem.empty());
+  EXPECT_EQ(ParseMode("", &problem), Mode::Legacy);
+  EXPECT_TRUE(problem.empty());
+  EXPECT_EQ(ParseMode("legacy", &problem), Mode::Legacy);
+  EXPECT_TRUE(problem.empty());
+  EXPECT_EQ(ParseMode("config", &problem), Mode::Config);
+  EXPECT_TRUE(problem.empty());
+  EXPECT_EQ(ParseMode("all", &problem), Mode::All);
+  EXPECT_TRUE(problem.empty());
+  EXPECT_EQ(ParseMode("Config", &problem), Mode::Legacy);
+  EXPECT_NE(problem.find("Config"), std::string::npos);
+  EXPECT_EQ(ParseMode("config", nullptr), Mode::Config);
+}
+
+TEST(SessionRouterMode, OnlyConfigSocketsAreRoutedInConfigMode) {
+  using nevr_session_router_mode::Mode;
+  using nevr_session_router_mode::RoutesRole;
+  using nevr_socket_role::Role;
+  EXPECT_TRUE(RoutesRole(Mode::Config, Role::Config));
+  EXPECT_FALSE(RoutesRole(Mode::Config, Role::Login));
+  EXPECT_FALSE(RoutesRole(Mode::Config, Role::Matchmaker));
+  EXPECT_FALSE(RoutesRole(Mode::Legacy, Role::Config));
+}
+
+TEST(SessionRouterMode, EverySocketIsRoutedInAllModeAndNoneInLegacy) {
+  using nevr_session_router_mode::Mode;
+  using nevr_session_router_mode::RoutesRole;
+  using nevr_socket_role::Role;
+  for (const Role role : {Role::Config, Role::Login, Role::Matchmaker}) {
+    EXPECT_TRUE(RoutesRole(Mode::All, role));
+    EXPECT_FALSE(RoutesRole(Mode::Legacy, role));
+  }
 }

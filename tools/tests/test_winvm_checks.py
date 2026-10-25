@@ -33,7 +33,9 @@ def by_name(results, name):
 class FixtureProvenanceTest(unittest.TestCase):
     """tools/winvm/README.md asks for a fixture taken from a real run: a captured log, not a
     hand-edited one. The healthy-boot capture is CRLF throughout (it came off the Windows VM) and its
-    bridge warning is the wording that build printed."""
+    bridge warning is the wording that build printed. One edit is known: the capture's first line was
+    `boot log opened run=...` run onto the next line (the tee wrote no newline, #653); the fixture splits
+    it, so it does not teach the fixed bug."""
 
     def test_healthy_boot_is_an_unedited_windows_capture(self):
         raw = (FIX / "healthy_boot.txt").read_bytes()
@@ -46,6 +48,11 @@ class FixtureProvenanceTest(unittest.TestCase):
         bridge = [line for line in lines if b"[NEVR.WS] no services.socket_uri" in line]
         self.assertEqual(len(bridge), 1)
         self.assertIn(b"login injection cannot fire", bridge[0])
+
+    def test_the_boot_log_opening_line_stands_alone(self):
+        raw = (FIX / "healthy_boot.txt").read_bytes()
+        first = raw.split(b"\r\n", 1)[0]
+        self.assertRegex(first, rb"^\[NEVR\.PATCH\] boot log opened run=[0-9a-z-]+$")
 
 
 class ModalDialogTest(unittest.TestCase):
@@ -236,6 +243,18 @@ class HooksTest(unittest.TestCase):
                     by_name(results, "no_unexpected_hook_failure")[0].status,
                     checks.FAIL,
                 )
+
+    def test_a_levelled_dllhook_failure_line_is_still_classified(self):
+        # #632: the DLLHOOK lines carry their level after the tag (logging.md Rule 12); the classifier must
+        # still see the failure, and a partial install ends in ok=false.
+        line = ("[NEVR.DLLHOOK] warn; hook FAILED name=LoadLibraryExA reason=MH_ERROR_MEMORY_PROTECT "
+                "\u2014 loads through this variant run no load filter, observer or callback\n")
+        results = checks.check_hooks("[NEVR.PATCH] boot hooks installed ok=true\n" + line)
+        self.assertEqual(by_name(results, "no_unexpected_hook_failure")[0].status, checks.FAIL)
+        partial = checks.check_hooks(line + "[NEVR.DLLHOOK] warn; LoadLibrary hooks PARTIAL (3/4)\n"
+                                     "[NEVR.PATCH] boot hooks installed ok=false\n")
+        self.assertEqual(by_name(partial, "hooks_installed")[0].status, checks.FAIL)
+        self.assertFalse(checks.overall(partial))
 
     def test_boot_success_does_not_mask_unexpected_hook_failure(self):
         log = ("[NEVR.PATCH] boot hooks installed ok=true\n"
