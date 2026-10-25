@@ -2,22 +2,24 @@
 """Print the next release's tag, computed from the Conventional Commits since the last release tag.
 
 The rule (docs/standards/planning.md, "Release versions"): the base is the newest `vX.Y.Z` tag reachable from REV
-(a pre-release tag such as `v5.7.0-rc.1` is not a release tag; a scratch dry-run tag `v0.0.<issue>` sorts below every
-release, so it is never the newest). Over the
-commits after it, a breaking change (a `!` before the colon, or a body line starting `BREAKING CHANGE:` or
-`BREAKING-CHANGE:`) bumps the major; otherwise a `feat` bumps the minor; otherwise a `fix` or `perf` bumps the patch.
-Only a commit's first line gives its type, matched case-insensitively (Conventional Commits 1.0.0, item 15). Any
-other type bumps nothing. Standard library only.
+(a pre-release tag such as `v5.7.0-rc.1` is not a release tag; the highest version wins, so a scratch dry-run tag
+`v0.0.<issue>` is never the base). Every commit reachable from REV and not from the base is counted, the commits of a
+merged branch included. A breaking change (a `!` before the colon on the first line, or a line after it starting
+`BREAKING CHANGE:` or `BREAKING-CHANGE:`) bumps the major; otherwise a `feat` bumps the minor; otherwise a `fix` or
+`perf` bumps the patch. Only a commit's first line gives its type and its `!`, matched case-insensitively (Conventional
+Commits 1.0.0, item 15): the sub-commit subjects GitHub lists in a squash commit's body count for nothing, its
+breaking-change footers count. Any other type bumps nothing. Standard library only.
 
     next_release_version.py [--repo DIR] [--rev REV]
 
-Exit 0 and the tag (`v5.6.0`) on stdout; one `next_release_version:` line per counted commit on stderr.
-Exit 1 when no commit since the base bumps anything ("nothing to release"). Exit 2 when git cannot be read or there
-is no release tag.
+Exit 0 and the tag (`v5.6.0`) on stdout. On stderr, one JSON object per line: the base, every commit with its bump,
+then the result. Exit 1 when no commit since the base bumps anything ("nothing to release"). Exit 2 when git cannot
+be read, there is no release tag, or the computed tag already exists.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -31,6 +33,10 @@ NAMES = {MAJOR: "major", MINOR: "minor", PATCH: "patch", NONE: "none"}
 
 class Failure(Exception):
     pass
+
+
+def report(event: str, **fields: object) -> None:
+    print(json.dumps({"tool": "next_release_version", "event": event, **fields}), file=sys.stderr)
 
 
 def git(repo: str, *args: str) -> str:
@@ -86,10 +92,11 @@ def main(argv: list[str]) -> int:
     try:
         tag, version = base_tag(args.repo, args.rev)
         log = git(args.repo, "log", "--format=%H%x1f%B%x1e", f"{tag}..{args.rev}")
+        existing = set(git(args.repo, "tag", "--list", "v*").split())
     except Failure as failure:
-        print(f"next_release_version: FAIL {failure}", file=sys.stderr)
+        report("fail", reason=str(failure))
         return 2
-    print(f"next_release_version: base={tag} rev={args.rev}", file=sys.stderr)
+    report("base", base=tag, rev=args.rev)
     highest = NONE
     for record in log.split("\x1e"):
         record = record.strip("\n")
@@ -99,16 +106,17 @@ def main(argv: list[str]) -> int:
         bump = bump_of(message)
         highest = max(highest, bump)
         subject = message.splitlines()[0] if message else ""
-        print(f"next_release_version: commit={sha[:12]} bump={NAMES[bump]} subject={subject}", file=sys.stderr)
+        report("commit", commit=sha[:12], bump=NAMES[bump], subject=subject)
     if highest == NONE:
-        print(f"next_release_version: nothing to release since {tag} (no feat, fix, perf or breaking change)",
-              file=sys.stderr)
+        report("nothing_to_release", base=tag, reason="no feat, fix, perf or breaking change")
         return 1
     result = "v%d.%d.%d" % next_version(version, highest)
-    print(f"next_release_version: bump={NAMES[highest]} next={result}", file=sys.stderr)
+    if result in existing:
+        report("fail", reason=f"tag {result} already exists but is not reachable from {args.rev}")
+        return 2
+    report("next", bump=NAMES[highest], next=result)
     print(result)
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))

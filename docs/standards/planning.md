@@ -30,16 +30,23 @@ Milestones are ordered by when they ship, not by version number. There are three
 A release's version is not chosen ahead of time. It is computed when the release is tagged, from the
 [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) on `main` since the last release tag:
 
-- a breaking change (`!` before the colon, or a `BREAKING CHANGE:` footer) bumps the major: `v5.5.1` to `v6.0.0`;
+- a breaking change (`!` before the colon, or a `BREAKING CHANGE:` or `BREAKING-CHANGE:` footer) bumps the major: `v5.5.1` to `v6.0.0`;
 - otherwise any `feat` bumps the minor: `v5.5.1` to `v5.6.0`;
 - otherwise any `fix` or `perf` bumps the patch: `v5.5.1` to `v5.5.2`;
 - any other type bumps nothing, and with nothing bumped there is nothing to release.
 
-`python3 tools/next_release_version.py` computes it and prints the tag. On stderr it prints one line per commit with the bump
-that commit gives. A pre-release tag is not a release tag, and a scratch dry-run tag (`v0.0.<issue>`) sorts below every
-release, so neither is ever the base. The PR title becomes the squash commit's first line, so the PR title check (`tools/check_pr_title.py`) is what
-keeps the type honest. A PR whose title understates its change (a `fix` that breaks an interface) gives the release the
-wrong version, and the review is where that is caught.
+`python3 tools/next_release_version.py` computes it and prints the tag; on stderr it prints one JSON line per commit
+with the bump that commit gives. It counts every commit reachable from the release commit and not from the base, the
+commits of a merged branch included. The base is the highest `vX.Y.Z` tag reachable from the release commit: a
+pre-release tag is not a release tag, and a scratch dry-run tag (`v0.0.<issue>`) is never the highest. It refuses a
+version whose tag already exists.
+
+Only a commit's first line gives its type and its `!`. In a squash commit GitHub's first line is the PR title when the
+PR has several commits and the one commit's subject when it has one, and the body lists the sub-commits' messages:
+their subjects count for nothing, their `BREAKING CHANGE:` footers count. `tools/check_pr_title.py` checks the PR
+title only, so a one-commit PR's subject MUST follow Conventional Commits as well. A commit whose type understates its
+change (a `fix` that breaks an interface) gives the release the wrong version, and the review is where that is caught.
+
 
 ## Points
 
@@ -115,8 +122,8 @@ mechanical and reversible) or listed for a decision. Branches and issues are nev
   "Branch lifecycle"); nothing is left to age across sprints.
 
 **Milestones**
-- An open milestone's title is `Next release`, `Release after` or `Future`. A closed milestone's title is the version it
-  shipped as, `vX.Y.Z`.
+- An open milestone's title is `Next release`, `Release after` or `Future`. A milestone closed when its release is tagged is
+  titled with the version it shipped as, `vX.Y.Z`; the closed `v4.x` milestones keep their titles.
 - The description starts with `Outcome:`.
 - No due date.
 - A closed milestone has no open items.

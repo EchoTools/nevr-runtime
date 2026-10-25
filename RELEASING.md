@@ -5,10 +5,10 @@ publish. Nothing about a published release is edited afterwards: a wrong release
 
 ## Names
 
-- **Version:** plain semver, `X.Y.Z` (no leading zeros, `tools/release_asset_names.sh` `release_tag_regex`). It is computed, not chosen: `python3
-  tools/next_release_version.py` prints it from the commits since the last release tag (`docs/standards/planning.md`,
-  "Release versions"). Every
-  other build stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from; it is never released.
+- **Version:** plain semver, `X.Y.Z` (no leading zeros, `tools/release_asset_names.sh` `release_tag_regex`). It is
+  computed, not chosen: `python3 tools/next_release_version.py` prints it from the commits since the last release tag
+  (`docs/standards/planning.md`, "Release versions"). Every other build stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts
+  after the tag it descends from; it is never released.
 - **Tag:** `vX.Y.Z`, annotated (`git tag -a vX.Y.Z -m "X.Y.Z"`), cut from `origin/main`.
 - **GitHub release title:** the tag, `vX.Y.Z`, and nothing else (`gh release create vX.Y.Z --title vX.Y.Z`).
 - **Pre-release or release:** the flag is the only difference. A release is created as a pre-release; promoting it
@@ -63,7 +63,7 @@ its files to the draft, and the draft stays a draft until the checks below pass.
 
 ```sh
 just release-preflight                                    # 1. refuses unless this clone is exactly origin/main
-git tag -a vX.Y.Z -m "X.Y.Z" && git push origin vX.Y.Z   # 2. tag origin's tip, push the tag
+git tag -a vX.Y.Z -m "X.Y.Z" && git push origin vX.Y.Z   # 2. tag origin's tip with the version `python3 tools/next_release_version.py` prints, push the tag
 just release-preflight && gh release create vX.Y.Z --title vX.Y.Z --draft --prerelease --verify-tag   # 3. the draft
 gh workflow run build.yml --ref vX.Y.Z                    # 4. build, attest, attach the two files; it stays a draft
 ```

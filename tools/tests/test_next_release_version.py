@@ -2,6 +2,7 @@
 
 Run for real, as a subprocess, against a throwaway git repo built per test. The rule: docs/standards/planning.md,
 "Release versions"."""
+import json
 import os
 import subprocess
 import sys
@@ -78,7 +79,7 @@ class ReleaseVersionTest(unittest.TestCase):
         result = self.run_tool()
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertEqual(result.stdout, "")
-        self.assertIn("nothing to release", result.stderr)
+        self.assertIn('"event": "nothing_to_release"', result.stderr)
 
     def test_the_base_is_the_newest_release_tag_not_a_scratch_or_prerelease_tag(self):
         self.commit("feat: shipped in 5.6.0 (#8)")
@@ -88,17 +89,63 @@ class ReleaseVersionTest(unittest.TestCase):
         self.git("tag", "-a", "v0.0.901", "-m", "scratch dry run")
         self.assertVersion("v5.6.1")
 
-    def test_every_counted_commit_is_logged_with_its_bump(self):
+    def test_every_commit_is_logged_with_its_bump_as_json(self):
         self.commit("fix(boot): accept --server (#1)")
         self.commit("docs: a typo (#6)")
         result = self.assertVersion("v5.5.2")
-        lines = result.stderr.strip().splitlines()
-        self.assertTrue(any("base=v5.5.1" in line for line in lines), result.stderr)
+        records = [json.loads(line) for line in result.stderr.strip().splitlines()]
+        self.assertTrue(all(r["tool"] == "next_release_version" for r in records), result.stderr)
+        self.assertEqual(records[0], {"tool": "next_release_version", "event": "base", "base": "v5.5.1", "rev": "HEAD"})
         sha = subprocess.run(["git", "-C", str(self.repo), "rev-parse", "--short=12", "HEAD~1"], capture_output=True,
                              text=True, check=True, env=self.env).stdout.strip()
-        self.assertTrue(any(f"commit={sha} bump=patch subject=fix(boot): accept --server (#1)" in line for line in lines),
+        self.assertIn({"tool": "next_release_version", "event": "commit", "commit": sha, "bump": "patch",
+                       "subject": "fix(boot): accept --server (#1)"}, records)
+        self.assertTrue(any(r.get("bump") == "none" and r.get("subject") == "docs: a typo (#6)" for r in records),
                         result.stderr)
-        self.assertTrue(any("bump=none" in line and "docs: a typo (#6)" in line for line in lines), result.stderr)
+        self.assertEqual(records[-1], {"tool": "next_release_version", "event": "next", "bump": "patch",
+                                       "next": "v5.5.2"})
+
+    def test_a_hyphenated_breaking_change_footer_bumps_the_major(self):
+        self.commit("refactor(host): split the host\n\nBREAKING-CHANGE: the runtime is nevr-runtime.dll")
+        self.assertVersion("v6.0.0")
+
+    def test_sub_commit_subjects_in_a_squash_body_give_no_type(self):
+        self.commit("docs(planning): the squash title (#7)\n\n* feat!: a sub-commit\n\n* fix: another sub-commit")
+        result = self.run_tool()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('"event": "nothing_to_release"', result.stderr)
+
+    def test_a_first_line_with_no_type_gives_none_whatever_the_body_says(self):
+        self.commit("Merge pull request #7 from a/branch\n\nfeat!: the branch's subject")
+        result = self.run_tool()
+        self.assertEqual(result.returncode, 1, result.stderr)
+
+    def test_a_breaking_change_footer_in_a_squash_body_bumps_the_major(self):
+        self.commit("fix(host): the squash title (#7)\n\n* refactor: a sub-commit\n\nBREAKING CHANGE: the export moved")
+        self.assertVersion("v6.0.0")
+
+    def test_a_merged_branch_counts_and_an_unmerged_tag_is_not_the_base(self):
+        self.git("checkout", "-q", "-b", "side")
+        self.commit("feat: on the side branch (#3)")
+        self.git("checkout", "-q", "main")
+        self.git("checkout", "-q", "-b", "other")
+        self.commit("fix: on an unmerged branch (#4)")
+        self.git("tag", "-a", "v9.0.0", "-m", "unreachable")
+        self.git("checkout", "-q", "main")
+        self.commit("docs: on main (#5)")
+        self.git("merge", "-q", "--no-ff", "-m", "Merge branch side", "side")
+        self.assertVersion("v5.6.0")
+
+    def test_a_computed_tag_that_already_exists_is_an_error(self):
+        self.git("checkout", "-q", "-b", "other")
+        self.commit("fix: released from another line (#4)")
+        self.git("tag", "-a", "v5.5.2", "-m", "5.5.2")
+        self.git("checkout", "-q", "main")
+        self.commit("fix: on main (#5)")
+        result = self.run_tool()
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("v5.5.2 already exists", result.stderr)
+        self.assertEqual(result.stdout, "")
 
     def test_no_release_tag_is_an_error(self):
         self.git("tag", "-d", "v5.5.1")
