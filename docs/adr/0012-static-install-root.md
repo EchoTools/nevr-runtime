@@ -24,9 +24,8 @@ The game's install folder holds things that change and things that are secret, n
   (`src/runtime/log/builtin_filter.cpp`, `src/runtime/lifecycle/crash_recovery.cpp`).
 
 Three consequences follow. A shared zip of an install carries the owner's secrets with it (#574). Two roles on one install collide:
-a dedicated server picked up a player's token (#512). #516 gave servers a cache beside their own `config.yaml`; #597 reverted it,
-because servers and clients sign in one way, by token (`SelectCredentialCacheLocation` in `src/core/auth_token.h` takes only the
-executable's directory). And updating the runtime or a plugin needs write access to the install folder, which is `Program Files` or a Steam
+a dedicated server picked up a player's token (#512). Servers and clients sign in one way, by token, from one cache
+(`SelectCredentialCacheLocation` in `src/core/auth_token.h` takes only the executable's directory). And updating the runtime or a plugin needs write access to the install folder, which is `Program Files` or a Steam
 library for many players.
 
 The host side already exists in the tree and is not part of the shipped DLL yet: `src/runtime/host/` holds the diagnostics, the
@@ -103,8 +102,8 @@ build refuses it.
 - `config.yaml` is the one in the folder of the `-config` or `-config-path` file when one is given, and otherwise the root's.
 - **Clients and servers:** one `.credentials.json` at the root (#574's decision), the sign-in cache of the account on that machine;
   a client or a server launched with a `-config` elsewhere keeps its login at the root as well. A dedicated server signs in the way a
-  client does, by token: #597 reverted #516's server-only cache beside the server's own `config.yaml`, and this record follows the
-  code, not the reverted rule. A server and a player on one machine therefore share the cache; where the file sits does not prevent
+  client does, by token, from the same cache (`SelectCredentialCacheLocation` takes only the executable's directory); there is no server-only cache
+  beside the server's own `config.yaml`. A server and a player on one machine therefore share the cache; where the file sits does not prevent
   the collision of #512, and whether something else must is not decided here.
 - #574 is folded into this record: the root's `.credentials.json` is its decided path.
 - caches, logs and the crash record resolve under the root; the host's own paths are already there.
@@ -118,7 +117,7 @@ for harnesses and native test machines. A signed-only build ignores it and logs 
 On the first run that finds the old layout, the runtime moves, and logs every file it moves or leaves:
 
 - from the install's `_local` directories: `config.yaml`, `.credentials.json` and the caches. A `-config` folder's own
-  `config.yaml` and credentials are not moved: they stay where they are, and the rule of "Where state resolves" finds them there;
+  `config.yaml` is not moved: it stays where it is, and the rule of "Where state resolves" finds it there;
 - from `%LOCALAPPDATA%\EchoVR\logs`: nEVR's own files, which are the run logs the built-in filter writes (`BuildLogFilePath` in
   `builtin_filter.cpp`, whose prefix is configurable) and `nevr-crash-<run id>.txt` (`PrepareCrashRecordPath`), never the game's own.
   The move recognises them by the names those writers use; step 5 of the order of work fixes the list from the code of that day.
