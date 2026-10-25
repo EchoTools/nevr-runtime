@@ -10,7 +10,7 @@ A reference is a line that starts with a keyword and then an issue number:
     Refs #N | Part of #N | Completes #N    the PR advances it; the body says what is still open
 
 `owner/repo#N` names an issue in another repository. A reference inside an HTML comment or a fenced
-code block does not count, and neither does one that does not start its line, so the PR template's placeholder and its instructions never satisfy
+code block (one that is never closed runs to the end of the body, as GitHub renders it) does not count, and neither does one that does not start its line, so the PR template's placeholder and its instructions never satisfy
 the check. The check cannot tell whether the diff really resolves the issue; the review does.
 
 Standard library only.
@@ -35,8 +35,8 @@ REFERENCE = re.compile(
     r"[ \t]*:?[ \t]+(?P<repo>[\w.-]+/[\w.-]+)?#(?P<number>[1-9][0-9]*)\b",
     re.IGNORECASE | re.MULTILINE,
 )
-HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
-FENCE = re.compile(r"^[ \t]*(```|~~~).*?^[ \t]*\1[ \t]*$", re.DOTALL | re.MULTILINE)
+HTML_COMMENT = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
+FENCE = re.compile(r"^[ \t]*(```|~~~).*?(?:^[ \t]*\1[ \t]*$|\Z)", re.DOTALL | re.MULTILINE)
 
 
 class Failure(Exception):

@@ -40,6 +40,10 @@ class AcceptedFormsTest(unittest.TestCase):
         for word in ("Closes", "Fixes", "Resolves", "Close", "Fix", "Resolve", "Closed", "Fixed", "Resolved"):
             self.assertAccepts(f"## Linked issue\n\n{word} #12\n", "#12")
 
+    def test_a_reference_before_a_fence_that_is_never_closed_counts(self):
+        self.assertAccepts("Closes #12\n\n```\nunterminated code\n", "#12")
+        self.assertAccepts("Closes #12\n\n<!-- unterminated comment\n", "#12")
+
     def test_each_partial_form(self):
         for word in ("Refs", "Ref", "Part of", "Completes"):
             self.assertAccepts(f"{word} #34\n\nStill open: the live run.\n", "#34")
@@ -99,6 +103,12 @@ class RefusedFormsTest(unittest.TestCase):
         self.assertRefuses("<!--\nOne line per issue: Closes #12\n-->\n")
         self.assertRefuses("<!--\nCloses #12\n-->\n")
         self.assertRefuses("What and why\n\n<!--\nRefs #12\nCloses #13\n-->\n")
+
+    def test_a_comment_or_fence_that_is_never_closed_runs_to_the_end(self):
+        self.assertRefuses("<!-- Closes #12\n")
+        self.assertRefuses("What and why\n\n<!--\nCloses #12\n")
+        self.assertRefuses("```\nCloses #12\n")
+        self.assertRefuses("~~~\nRefs #12\n")
 
     def test_a_reference_inside_code(self):
         self.assertRefuses("`Closes #12`\n")
