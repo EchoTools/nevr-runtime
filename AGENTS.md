@@ -628,6 +628,13 @@ your seat name, for example `claude-main` or `codex`.
   commits beyond upstream, delete `$(git rev-parse --git-common-dir)/worktrees/<name>/modules`
   (`<name>` is the directory under `worktrees/`), then remove the worktree. Afterwards delete
   the branch locally (and on origin once merged) and update the ledger row.
+  **Join the steps of any cleanup (copy, deinit, check, delete) with `&&`, or run them under
+  `set -e`; never `;`.** A failed copy, deinit or check stops every delete after it, and a delete is
+  never the step after an unchecked one. For a worktree with initialised submodules:
+
+  ```sh
+  git worktree unlock <path> && git -C <path> submodule deinit --all && <the submodule check, exiting non-zero on a commit beyond upstream> && rm -rf "$(git rev-parse --git-common-dir)/worktrees/<name>/modules" && git worktree remove <path> && git branch -D <branch>
+  ```
 - **Disk.** Check `df -h /` before starting a worktree build, keep one build tree per agent, and
   remove it when its PR merges.
 
