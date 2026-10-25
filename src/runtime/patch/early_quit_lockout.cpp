@@ -19,8 +19,8 @@ namespace nevr_early_quit_lockout {
 namespace {
 
 // CR15NetGame fields (Quest CR15NetGame::LoadEarlyQuitPenalty 0x126c958 has the setter inlined).
-constexpr std::uintptr_t kPenaltyTsOffset = 0x64820;  // penaltyts: the game service's lockout expiry
-constexpr std::uintptr_t kExpiryOffset = 0x64828;     // lockoutexpiretimestamp, read by the expression
+constexpr std::uintptr_t kPenaltyTsOffset = 0x64820;  // penaltyts: the update's stamp, the setter's "newer" gate
+constexpr std::uintptr_t kExpiryOffset = 0x64828;     // lockoutexpiretimestamp, read by the expression; we write it
 constexpr std::uintptr_t kFlagsOffset = 0x2DA0;       // pointer to the u64 flags qword
 constexpr std::uint64_t kCountdownBit = 1ULL << 45;   // cleared by CR15NetGame::Update (0x1401bbdb0) at expiry
 constexpr std::uint64_t kPenaltyUpdateEvent = 0xA2E48B35C7CD078FULL;  // delegate_onearlyquitpenaltyupdate
@@ -29,7 +29,7 @@ constexpr std::uint64_t kPenaltyUpdateEvent = 0xA2E48B35C7CD078FULL;  // delegat
 constexpr std::uint64_t kSetPenaltyVA = 0x1401AE2E0;
 constexpr std::array<std::uint8_t, 13> kSetPenaltyPrologue = {0x40, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48,
                                                               0x8B, 0x81, 0x20, 0x48, 0x06, 0x00};
-using SetPenaltyFn = void (*)(void* netGame, std::int64_t penaltyTs, std::int64_t unused, std::int32_t numEarlyQuits,
+using SetPenaltyFn = void (*)(void* netGame, std::int64_t stamp, std::int64_t expiry, std::int32_t numEarlyQuits,
                               std::int32_t numSteadyMatches, std::int32_t numSteadyEarlyQuits, std::uint8_t penaltyLevel,
                               std::uint8_t steadyPlayerLevel);
 
@@ -68,32 +68,36 @@ void Dispatch(void* netGame, std::uint64_t event) {
   reinterpret_cast<DispatchEventFn>(target)(netGame, event);
 }
 
-void SetPenaltyHook(void* netGame, std::int64_t penaltyTs, std::int64_t unused, std::int32_t numEarlyQuits,
+void SetPenaltyHook(void* netGame, std::int64_t stamp, std::int64_t expiry, std::int32_t numEarlyQuits,
                     std::int32_t numSteadyMatches, std::int32_t numSteadyEarlyQuits, std::uint8_t penaltyLevel,
                     std::uint8_t steadyPlayerLevel) {
-  g_originalSetPenalty(netGame, penaltyTs, unused, numEarlyQuits, numSteadyMatches, numSteadyEarlyQuits, penaltyLevel,
-                       steadyPlayerLevel);
-  if (netGame == nullptr) return;
-  auto* bytes = static_cast<std::uint8_t*>(netGame);
-  std::int64_t storedTs = 0;
-  std::memcpy(&storedTs, bytes + kPenaltyTsOffset, sizeof(storedTs));
-  const std::int64_t now = static_cast<std::int64_t>(std::time(nullptr));  // the clock fcn 0x1400de820 returns
-  const Countdown countdown = AfterSetPenalty(penaltyTs, storedTs, now);
-  std::memcpy(bytes + kExpiryOffset, &countdown.expiry, sizeof(countdown.expiry));
-  if (countdown.resetStoredTs) {
-    const std::int64_t none = -1;
-    std::memcpy(bytes + kPenaltyTsOffset, &none, sizeof(none));
+  if (netGame == nullptr) {
+    g_originalSetPenalty(netGame, stamp, expiry, numEarlyQuits, numSteadyMatches, numSteadyEarlyQuits, penaltyLevel,
+                         steadyPlayerLevel);
+    return;
   }
-  std::uint64_t* flags = nullptr;
-  std::memcpy(&flags, bytes + kFlagsOffset, sizeof(flags));
-  if (flags != nullptr) *flags = countdown.active ? (*flags | kCountdownBit) : (*flags & ~kCountdownBit);
+  auto* bytes = static_cast<std::uint8_t*>(netGame);
+  std::int64_t storedBefore = 0;
+  std::memcpy(&storedBefore, bytes + kPenaltyTsOffset, sizeof(storedBefore));
+  g_originalSetPenalty(netGame, stamp, expiry, numEarlyQuits, numSteadyMatches, numSteadyEarlyQuits, penaltyLevel,
+                       steadyPlayerLevel);
+  std::int64_t storedAfter = 0;
+  std::memcpy(&storedAfter, bytes + kPenaltyTsOffset, sizeof(storedAfter));
+  const std::int64_t now = static_cast<std::int64_t>(std::time(nullptr));  // the clock fcn 0x1400de820 returns
+  const Countdown countdown = AfterSetPenalty(storedBefore, storedAfter, stamp, expiry, now);
+  if (countdown.applied) {
+    std::memcpy(bytes + kExpiryOffset, &countdown.expiry, sizeof(countdown.expiry));
+    std::uint64_t* flags = nullptr;
+    std::memcpy(&flags, bytes + kFlagsOffset, sizeof(flags));
+    if (flags != nullptr) *flags = countdown.active ? (*flags | kCountdownBit) : (*flags & ~kCountdownBit);
+  }
   Log(EchoVR::LogLevel::Info,
-      "[NEVR.EARLYQUIT] penalty set: incoming penaltyts=%lld stored=%lld now=%lld level=%u early_quits=%d -> lockout "
-      "expiry=%lld active=%d%s",
-      static_cast<long long>(penaltyTs), static_cast<long long>(storedTs), static_cast<long long>(now),
-      static_cast<unsigned>(penaltyLevel), numEarlyQuits, static_cast<long long>(countdown.expiry),
-      countdown.active ? 1 : 0, countdown.resetStoredTs ? " (cleared by the game service)" : "");
-  Dispatch(netGame, kPenaltyUpdateEvent);
+      "[NEVR.EARLYQUIT] penalty set: stamp=%lld stored_before=%lld stored_after=%lld expiry=%lld now=%lld level=%u "
+      "early_quits=%d applied=%d -> lockout expiry=%lld active=%d",
+      static_cast<long long>(stamp), static_cast<long long>(storedBefore), static_cast<long long>(storedAfter),
+      static_cast<long long>(expiry), static_cast<long long>(now), static_cast<unsigned>(penaltyLevel), numEarlyQuits,
+      countdown.applied ? 1 : 0, static_cast<long long>(countdown.expiry), countdown.active ? 1 : 0);
+  if (countdown.applied) Dispatch(netGame, kPenaltyUpdateEvent);
 }
 
 void PenaltyExpressionHook(void* expression, void* output, void* thread, void* context) {
