@@ -1040,6 +1040,25 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertEqual(record["rc"], 2)
         self.assertIn("BlockingIOError", record["start_error"])
 
+    def test_a_failure_line_still_queued_at_exit_is_written_before_the_run_ends(self):
+        # The stderr writer takes a second per write, so the failure line is still on its way when
+        # main() returns; the run waits for it rather than exiting with it unwritten.
+        prelude = ("real = subprocess.Popen\n"
+                   "def Popen(*a, **k):\n"
+                   "    if '-m' in a[0] and 'pytest' in a[0]:\n"
+                   "        raise BlockingIOError(11, 'Resource temporarily unavailable')\n"
+                   "    return real(*a, **k)\n"
+                   "m.subprocess.Popen = Popen\n"
+                   "real_write = m.os.write\n"
+                   "def write(fd, data):\n"
+                   "    if fd == 2:\n"
+                   "        m.time.sleep(1)\n"
+                   "    return real_write(fd, data)\n"
+                   "m.os.write = write")
+        result = self.run_driver(prelude, NEVR_TEST_DRAIN_S="10")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("test-tools: FAIL pytest could not be started", result.stderr)
+
     def test_a_run_whose_threads_cannot_start_is_refused_and_leaves_nothing(self):
         prelude = ("def start(self):\n"
                    "    raise RuntimeError(\"can't start new thread\")\n"
