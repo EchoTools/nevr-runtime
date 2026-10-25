@@ -26,10 +26,12 @@
 // Headless graphics-gate skip helper
 // ============================================================================
 
-/// The CEngine init function (FUN_14154a950) enables graphics subsystems one by
-/// one, each gated by a bit in the graphics-enable word at CEngine+0x2cfec. Each
-/// gate is a `je <skip>` taken when the bit is clear (the game's own device-free
-/// branch). In server mode the bits are set, so the game runs the GPU init and
+/// CEngine enables graphics subsystems one by one, each gated, directly or through
+/// a flag derived from it, by a bit in the graphics-enable word at CEngine+0x2cfec.
+/// The gates are in FUN_14154a950 (three), FUN_14154b670 and FUN_14154d6c0;
+/// HEADLESS_GATE_TABLE in hook/addresses.h names each one's function. Each gate
+/// is a conditional jump to the skip taken when the bit is clear (the game's own
+/// device-free branch). In server mode the bits are set, so the game runs the GPU init and
 /// asserts. Forcing `je`(0x74)->`jmp`(0xEB) — same rel8 displacement — makes the
 /// game take its native graphics-disabled branch. Prologue-VALIDATED: patches
 /// only when the current byte is the expected conditional-jump opcode (never
@@ -387,7 +389,7 @@ static VOID InitializeGlobalGameSpaceHook(PVOID pGame, PVOID pGameSpace) {
 }
 
 // ============================================================================
-// Engine entity lookup null-check hook — prevent AV in server mode
+// CBroadcaster::Listen null-check hook — prevent AV in server mode
 // ============================================================================
 
 /// CBroadcaster::Listen @ 0x140f80ed0 reads the listener table through arg1.
@@ -446,7 +448,7 @@ static INT16 CBroadcasterListenHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 ar
 }
 
 // ============================================================================
-// Engine entity property dispatch null-check hook — prevent AV in server mode
+// CBroadcaster::ReceiveLocalEvent null-check hook — prevent AV in server mode
 // ============================================================================
 
 /// CBroadcaster::ReceiveLocalEvent @ 0x140f87aa0 reads its broadcaster through
@@ -842,13 +844,13 @@ VOID PatchLogServerProfile() {
 // ============================================================================
 
 VOID InstallEntityHooks() {
-  // Hook engine entity lookup to prevent null-pointer AV in server mode.
-  // The function dereferences a hash table pointer at +0x5e0 that's uninitialized
-  // in dedicated server mode (no player actor / client-side state).
+  // Hook CBroadcaster::Listen to prevent a null-pointer AV in server mode.
+  // It dereferences the listener table pointer at +0x5e0, which can be
+  // uninitialized in dedicated server mode.
   OriginalCBroadcasterListen =
       (CBroadcasterListenFunc*)(EchoVR::g_GameBaseAddress + nevr_patch_addresses::BROADCASTER_LISTEN);
   PatchDetour(&OriginalCBroadcasterListen, reinterpret_cast<PVOID>(CBroadcasterListenHook), "CBroadcaster::Listen");
-  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Engine entity lookup hook installed (null-pointer guard)");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] hooked name=CBroadcaster::Listen va=0x140F80ED0 mode=null_guard");
 
   // N83: re-installed 2026-07-26 with a real null-guard body (see above). The
   // hook now preserves the AV protection 7beccee intended while allowing the

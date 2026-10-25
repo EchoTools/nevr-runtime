@@ -102,10 +102,13 @@ static void __fastcall Detour_SetEarlyQuitPenaltyLevel(void* netGame, int64_t st
         PluginLogWarning("  *** BUG CONFIRMED: +0x64828 is -1, lockout will never activate ***");
     }
 
-    // Force bit 46: the setter clears bits 45 and 46 when it applies an update
-    // that changes a counter or a level (0x1401ae3e4, 0x1401ae3f8), and the
-    // lockoutcountdownactive expression reads only bit 46. Set it after the
-    // original runs.
+    // Force bit 46: the setter clears bits 45 and 46 (0x1401ae3e4, 0x1401ae3f8)
+    // when an incoming counter or level differs from the stored one, and skips
+    // the clear when all five match (0x1401ae3d1). This detour stores
+    // penalty_level 3 and num_early_quits 16 first, so the setter clears the bits
+    // whenever the server's values differ from those or from the stored steady
+    // fields. The lockoutcountdownactive expression reads only bit 46. Set it
+    // after the original runs.
     uint64_t* flags = *(uint64_t**)((uint8_t*)netGame + 0x2da0);
     if (flags) {
         *flags |= (1ULL << 46);
