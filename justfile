@@ -157,6 +157,10 @@ android-repack-libovr src="/mnt/games/evr/-src-evr-reconstruction/cache/quest_tr
 # Full sideload repack: hijack an APK's libovrplatformloader.so with our shim,
 # forwarding to the renamed original. Produces a zipaligned, DEBUG-signed APK and
 # verifies both libs' ELF shape from the SIGNED output (no headset needed).
+# It also sets the manifest's versionCode (tools/quest_apk_version.py): the store APK's 4987566 is below the
+# 4987570 build the community installer puts on a headset, which Android refuses to update (a downgrade). The
+# code comes from the build's own version (kVersion in <shim dir>/../generated/nevr_build_info.h), and the signed
+# APK's code is read back with aapt2 before the recipe says it is ready.
 # All work under build/android-arm64/repack — never mutates the source APK or shim.
 # `apk` is required (the store APK path). The signing key is the one persistent Quest key stored in
 # pass (tools/quest_keystore.sh): it is read into a private tmpfs file for the signing command only
@@ -167,12 +171,18 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     root="$(pwd)"
     apk="{{ apk }}"; shim="{{ shim }}"
     work="$root/{{ workdir }}"
-    for t in unzip patchelf zip zipalign apksigner readelf nm keytool pass; do
+    # An APK from an earlier run never outlives a run that stops: package-dev takes whatever is at this path.
+    rm -f "$work/r15-repacked.apk" "$work/r15-repacked-aligned.apk" "$work/r15_nevr-sentinel_signed.apk"
+    for t in unzip patchelf zip zipalign apksigner aapt2 readelf nm keytool pass python3; do
         command -v "$t" >/dev/null || { echo "MISSING required tool: $t" >&2; exit 1; }
     done
     [ -f "$apk" ]  || { echo "APK not found: $apk" >&2; exit 1; }
     [ -f "$shim" ] || { echo "shim not found (build it: just build-android): $shim" >&2; exit 1; }
-    mkdir -p "$work/stage/lib/arm64-v8a" "$work/orig"
+    # The build's version header sits beside the shim's build tree (build/<tree>/sentinel/ -> build/<tree>/generated/).
+    build_info="$(dirname "$(dirname "$shim")")/generated/nevr_build_info.h"
+    [ -f "$build_info" ] || { echo "build info not found (build it: just build-android): $build_info" >&2; exit 1; }
+    rm -rf "$work/stage" "$work/orig" "$work/manifest"
+    mkdir -p "$work/stage/lib/arm64-v8a" "$work/orig" "$work/manifest"
     # 1. extract the real original loader from the store APK
     unzip -o -q "$apk" lib/arm64-v8a/libovrplatformloader.so -d "$work/orig"
     # 2. rename original + patch soname so the NEEDED string matches the file on disk
@@ -189,12 +199,23 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     zip -q -d "$unsigned" 'META-INF/*.RSA' 'META-INF/*.SF' 'META-INF/*.MF' || true
     ( cd "$work/stage" && zip -q -0 -X "$unsigned" \
         lib/arm64-v8a/libovrplatformloader.so lib/arm64-v8a/libovrplatformloader_orig.so )
+    # 4b. versionCode: extract the compiled manifest, set the code the build's version gives (the tool refuses
+    # unless the field is exactly where Android reads it, and unless the shim carries the header's version),
+    # and put the manifest back. A 4-byte write: the entry keeps every other byte.
+    unzip -o -q "$unsigned" AndroidManifest.xml -d "$work/manifest"
+    version_code=$(python3 -I tools/quest_apk_version.py patch-manifest "$work/manifest/AndroidManifest.xml" --build-info "$build_info" --shim "$shim")
+    ( cd "$work/manifest" && zip -q -X "$unsigned" AndroidManifest.xml )
     # 5. page-align uncompressed .so, then sign (v2/v3) — align BEFORE sign.
     # The key is a private tmpfs copy for this one command, shredded when it returns; the passphrase
     # reaches apksigner through the environment (`env:`), never through its command line.
     zipalign -p -f 4 "$unsigned" "$aligned"
     tools/quest_keystore.sh with bash -c 'exec apksigner sign --ks "$NEVR_QUEST_KS" --ks-key-alias "$NEVR_QUEST_KS_ALIAS" --ks-pass env:NEVR_QUEST_KS_PASS --key-pass env:NEVR_QUEST_KS_PASS --out "$1" "$2"' _ "$signed" "$aligned"
-    apksigner verify --print-certs "$signed" | head -1
+    verified=$(apksigner verify --print-certs "$signed")
+    printf '%s\n' "$verified" | sed -n 1p
+    # The code Android will compare is read back from the SIGNED APK by aapt2, not taken from what was written.
+    signed_code=$(aapt2 dump badging "$signed" | sed -n "s/^package: .* versionCode='\([0-9]*\)'.*/\1/p")
+    [ "$signed_code" = "$version_code" ] || { rm -f "$signed"; echo "signed APK versionCode is '$signed_code', expected $version_code" >&2; exit 1; }
+    echo "versionCode $signed_code (the community installer's build is 4987570)"
     # 6. VERIFY from the SIGNED apk — the headless packaging proof
     rm -rf "$work/verify"; mkdir -p "$work/verify"
     unzip -o -q "$signed" 'lib/arm64-v8a/libovrplatformloader*.so' -d "$work/verify"
