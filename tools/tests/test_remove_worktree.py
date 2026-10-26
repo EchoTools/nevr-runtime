@@ -66,8 +66,9 @@ class FixtureCase(unittest.TestCase):
     def admin(self, name):
         return self.main / ".git/worktrees" / name
 
-    def run_tool(self, *args, cwd=None, path_prefix=None):
+    def run_tool(self, *args, cwd=None, path_prefix=None, **extra_env):
         env = clean_env(REMOVE_WORKTREE_LOG=str(self.log))
+        env.update(extra_env)
         if path_prefix:
             env["PATH"] = f"{path_prefix}{os.pathsep}{env['PATH']}"
         with real_repo_unchanged(self):
@@ -174,6 +175,43 @@ class RemoveWorktreeTest(FixtureCase):
         self.assertEqual(git(sub, "log", "--format=%s", "side", "-1").stdout.strip(), "unpushed work")
         self.assertTrue((sub / ".git").is_file())
 
+    def test_a_commit_on_a_detached_head_in_the_submodule_is_counted(self):
+        wb = self.add_worktree("wb")
+        sub = wb / "extern/luau"
+        (sub / "work.txt").write_text("unpushed\n")
+        git(sub, "add", "work.txt")
+        git(sub, "commit", "-q", "-m", "detached work", "--no-gpg-sign")
+        result = self.run_tool(str(wb))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("extern/luau: 1 commit(s) in its repository are on no remote", result.stderr)
+        self.assertTrue(wb.exists())
+
+    def test_a_stray_git_dir_in_the_environment_does_not_redirect_the_tool(self):
+        wb = self.add_worktree("wb")
+        result = self.run_tool(str(wb), GIT_DIR=str(self.main / ".git"), GIT_WORK_TREE=str(self.main))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(wb.exists())
+
+    def test_a_removal_git_refuses_puts_the_lock_the_modules_and_the_gitfile_back(self):
+        wb = self.add_worktree("wb", lock="fixture lock")
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir()
+        wrapper = bin_dir / "git"
+        wrapper.write_text('#!/bin/sh\ncase "$*" in *"worktree remove"*) echo "fatal: refused by the test" >&2; exit 1;; esac\n'
+                           'exec %s "$@"\n' % shutil.which("git"))
+        wrapper.chmod(0o755)
+        before = self.shared_config()
+        result = self.run_tool(str(wb), path_prefix=str(bin_dir))
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("put back: the modules directory, .git file of extern/luau, the lock", result.stderr)
+        self.assertTrue((self.admin("wb") / "modules/extern/luau").is_dir())
+        self.assertTrue((wb / "extern/luau/.git").is_file())
+        self.assertIn("locked fixture lock", git(self.main, "worktree", "list", "--porcelain").stdout)
+        self.assertRegex(git(wb, "submodule", "status", "extern/luau").stdout, r"^ [0-9a-f]{40} extern/luau")
+        self.assertEqual(self.shared_config(), before)
+        # and the tool still removes it afterwards
+        self.assertEqual(self.run_tool(str(wb)).returncode, 0)
+
     def test_uncommitted_work_inside_the_submodule_is_refused(self):
         wb = self.add_worktree("wb")
         (wb / "extern/luau/scratch.txt").write_text("untracked\n")
@@ -262,7 +300,7 @@ class RemoveWorktreeTest(FixtureCase):
         self.assertEqual(self.run_tool(str(wb)).returncode, 0)
         self.assertEqual(self.run_tool(str(wc)).returncode, 1)
         actions = [r["action"] for r in self.records()]
-        for a in ("start", "plan", "submodule-gitfile-removed", "modules-moved-aside", "worktree-remove", "end", "refused"):
+        for a in ("start", "plan", "submodule-gitfile-removed", "modules-moved-aside", "git-worktree-remove", "end", "refused"):
             self.assertIn(a, actions)
         refused = [r for r in self.records() if r["action"] == "refused"][0]
         self.assertTrue(any("notes.txt" in reason for reason in refused["reasons"]))

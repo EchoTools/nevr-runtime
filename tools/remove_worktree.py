@@ -156,8 +156,8 @@ def diff_trees(a, b, limit=5):
 
 
 def unpushed(gitdir):
-    """Commits in this repository that no remote-tracking ref holds, counted from HEAD and every ref."""
-    r = git(f"--git-dir={gitdir}", "rev-list", "--count", "HEAD", "--all", "--not", "--remotes", check=False)
+    """Commits in this repository that no remote-tracking ref holds, counted from every ref (--all includes HEAD)."""
+    r = git(f"--git-dir={gitdir}", "rev-list", "--count", "--all", "--not", "--remotes", check=False)
     if r.returncode != 0:
         return None, r.stderr.strip()
     return int(r.stdout.strip() or "0"), None
@@ -326,7 +326,7 @@ def remove(path, log=None, dry_run=False):
                 f"by hand: every proof held, so nothing in it is unsaved") if gone else ""
         raise RemoveFailed(f"{detail}; done before it: {', '.join(done) or 'nothing'}; "
                            f"put back: {', '.join(put_back) or 'nothing'}{note}")
-    say(action="worktree-remove", worktree=p["path"])
+    say(action="git-worktree-remove", worktree=p["path"])
     done.append("git worktree remove")
     if submodule_config(p["common"]) != config_before:
         say(action="shared-config-changed", worktree=p["path"])

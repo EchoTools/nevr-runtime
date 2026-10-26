@@ -12,6 +12,8 @@ import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools/reap_merged.py"
+sys.path.insert(0, str(REPO / "tools/tests"))
+import git_fixture  # noqa: E402
 
 
 def git(cwd, *args, check=True):
@@ -29,6 +31,7 @@ class ReapMergedTest(unittest.TestCase):
         git(self.tmp, "clone", "-q", str(self.origin), str(self.main))
         (self.main / "tools").mkdir()
         shutil.copy(SCRIPT, self.main / "tools/reap_merged.py")
+        shutil.copy(REPO / "tools/remove_worktree.py", self.main / "tools/remove_worktree.py")
         git(self.main, "checkout", "-q", "-b", "main")
         (self.main / ".gitignore").write_text("build/\n")
         git(self.main, "add", "tools", ".gitignore")
@@ -84,6 +87,59 @@ class ReapMergedTest(unittest.TestCase):
 
     def records(self):
         return [json.loads(line) for line in (self.tmp / "log/reap.jsonl").read_text().splitlines()]
+
+    def add_submodule(self):
+        """A submodule in the main checkout, pushed to origin, that worktrees initialise (the stand-in for extern/luau)."""
+        up = self.tmp / "up-luau"
+        git_fixture.git(self.tmp, "init", "-q", "-b", "master", str(up))
+        (up / "file.txt").write_text("luau 1\n")
+        git_fixture.git(up, "add", "file.txt")
+        git_fixture.git(up, "commit", "-q", "-m", "luau 1", "--no-gpg-sign")
+        git_fixture.git(self.main, "submodule", "add", "-q", str(up), "extern/luau")
+        git_fixture.git(self.main, "commit", "-q", "-m", "add luau", "--no-gpg-sign")
+        git_fixture.git(self.main, "push", "-q", "origin", "main")
+
+    def shared_submodule_config(self):
+        return git_fixture.git(self.main, "config", "--get-regexp", r"^submodule\.", check=False).stdout
+
+    def test_a_worktree_with_an_initialised_submodule_is_reaped_and_the_shared_config_keeps_its_entry(self):
+        self.add_submodule()
+        gone = self.add_worktree("gone", push=True)
+        stays = self.add_worktree("stays", push=True)
+        for wt in (gone, stays):
+            git_fixture.git(wt, "submodule", "update", "--init", "extern/luau")
+        self.land("gone")
+        before = self.shared_submodule_config()
+        self.assertIn("submodule.extern/luau.active true", before)
+        with git_fixture.real_repo_unchanged(self):
+            result = self.run_tool("--apply", "--owner", "seat-a")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(gone.exists())
+        self.assertIn("done: worktree removed", result.stdout)
+        self.assertEqual(self.shared_submodule_config(), before)
+        self.assertRegex(git_fixture.git(stays, "submodule", "status", "extern/luau").stdout, r"^ [0-9a-f]{40} extern/luau")
+        actions = [r["action"] for r in self.records()]
+        for a in ("submodule-gitfile-removed", "modules-moved-aside", "git-worktree-remove", "worktree-remove"):
+            self.assertIn(a, actions)
+
+    def test_a_submodule_commit_on_no_remote_keeps_the_worktree(self):
+        self.add_submodule()
+        wt = self.add_worktree("held", push=True)
+        git_fixture.git(wt, "submodule", "update", "--init", "extern/luau")
+        sub = wt / "extern/luau"
+        pinned = git_fixture.git(sub, "rev-parse", "HEAD").stdout.strip()
+        git_fixture.git(sub, "checkout", "-q", "-b", "side")
+        (sub / "work.txt").write_text("unpushed\n")
+        git_fixture.git(sub, "add", "work.txt")
+        git_fixture.git(sub, "commit", "-q", "-m", "unpushed work", "--no-gpg-sign")
+        git_fixture.git(sub, "checkout", "-q", "--detach", pinned)
+        self.land("held")
+        with git_fixture.real_repo_unchanged(self):
+            result = self.run_tool("--apply")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, r"KEEP  \.claude/worktrees/held[^\n]*\n\s+- extern/luau: 1 commit\(s\) in its repository are on no remote")
+        self.assertTrue(wt.exists())
+        self.assertEqual(git_fixture.git(sub, "log", "--format=%s", "side", "-1").stdout.strip(), "unpushed work")
 
     def test_dry_run_changes_nothing_and_applies_every_proof(self):
         merged = self.add_worktree("merged", push=True)
