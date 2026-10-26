@@ -68,6 +68,10 @@ extern "C" void nevr_host_test_SetFailWrites() {
 extern "C" void nevr_host_test_Prepare(HMODULE host_module) {
   // Launcher mode prepares the diagnostics and the capture and installs nothing.
   nevr_host::OnProcessAttach(host_module, nullptr, true);
+  // The host loads dbghelp.dll on a thread started at attach; the child crashes only after it has run.
+  if (!nevr_host::WaitForDbgHelpPreload(30000)) {
+    std::fprintf(stderr, "host crash shim: the dbghelp preload thread did not finish\n");
+  }
   g_loader.Prepare(host_module);
 }
 
