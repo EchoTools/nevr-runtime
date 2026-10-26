@@ -704,3 +704,21 @@ TEST(ServerContextLobbySettings, TheHandlerRunsWithNoContextLockHeld) {
   EXPECT_EQ(seenSession, "s");
   EXPECT_TRUE(fixture.context.GetLobbySettings().present);  // the handler's own write survives
 }
+
+TEST(ServerContextLobbySettings, TheEndSessionHandlerRunsWithNoContextLockHeld) {
+  // Same property as above for the other boundary: a lock held across the handler would deadlock this test.
+  RegisteredContext fixture;
+  fixture.SetSessionId("s-end");
+  ASSERT_TRUE(fixture.context.StartSession());
+  nevr_game_server::ServerState seen = nevr_game_server::ServerState::Uninitialized;
+  fixture.context.SetLobbySettingsClearedHandler(
+      [&](const nevr_game_server::LobbySettingsRecord&, const char*, const std::string&) {
+        seen = fixture.context.GetState();
+        fixture.context.RecordLobbySettings(MakeSettingsRecord("from-end-handler"));
+      });
+
+  ASSERT_TRUE(fixture.context.EndSession());
+
+  EXPECT_NE(seen, nevr_game_server::ServerState::Uninitialized);
+  EXPECT_TRUE(fixture.context.GetLobbySettings().present);  // the handler's own write survives
+}

@@ -66,7 +66,9 @@ struct LobbySettingsDecoded {
   std::string json;    // the inflated document, byte for byte, when drop == kNone
 };
 
-/// Decodes one frame payload. Never throws for malformed input.
+/// Decodes one frame payload. Never throws for malformed input. Trailing NUL bytes of the inflated document are
+/// dropped (a sender may NUL-terminate its JSON); a NUL anywhere else makes it kNotJson, because the JSON parser
+/// stops reading at a NUL and the game would otherwise receive bytes the parser never checked.
 LobbySettingsDecoded DecodeLobbySettings(const void* data, uint64_t size);
 
 /// The local-event message: kLobbySettingsItemBytes zero bytes, then `json` with no terminator (the game parses by

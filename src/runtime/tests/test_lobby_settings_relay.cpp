@@ -154,6 +154,24 @@ TEST(LobbySettingsDecode, NonJsonAndNonObjectAreRefused) {
   EXPECT_EQ(DecodeLobbySettings(b.data(), b.size()).drop, LobbySettingsDrop::kNotObject);
 }
 
+TEST(LobbySettingsDecode, TrailingNulBytesAreDroppedFromTheDocument) {
+  // A sender that writes its JSON NUL-terminated (nakama's StreamJson does by default) is accepted, and the
+  // document handed on is the plain JSON, which is the shape the local event carries.
+  const std::string json = kDocument;
+  const auto oneNul = MakeFrame(json + std::string(1, '\0'));
+  const auto a = DecodeLobbySettings(oneNul.data(), oneNul.size());
+  EXPECT_EQ(a.drop, LobbySettingsDrop::kNone);
+  EXPECT_EQ(a.json, json);
+
+  const auto twoNul = MakeFrame(json + std::string(2, '\0'));
+  const auto b = DecodeLobbySettings(twoNul.data(), twoNul.size());
+  EXPECT_EQ(b.drop, LobbySettingsDrop::kNone);
+  EXPECT_EQ(b.json, json);
+
+  const auto embedded = MakeFrame(std::string("{\"a\":1}") + std::string(1, '\0') + "{\"b\":2}");
+  EXPECT_EQ(DecodeLobbySettings(embedded.data(), embedded.size()).drop, LobbySettingsDrop::kNotJson);
+}
+
 TEST(LobbySettingsLocalEvent, IsEightZeroBytesThenThePlainJsonWithNoTerminator) {
   const std::string json = kDocument;
   const auto message = BuildLobbySettingsLocalEvent(json);

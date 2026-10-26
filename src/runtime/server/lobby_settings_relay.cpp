@@ -89,6 +89,14 @@ LobbySettingsDecoded DecodeLobbySettings(const void* data, uint64_t size) {
   }
   // The retail handler hands the declared length to Decompress and parses what came out (0x14017dee0).
   json.resize(static_cast<size_t>(inflatedBytes));
+  // A NUL-terminated document (nakama's StreamJson default) is accepted; the local event carries plain JSON.
+  while (!json.empty() && json.back() == '\0') json.pop_back();
+  // nlohmann stops reading at a NUL, so a document with one inside would pass the parse below and reach the game
+  // whole; an embedded NUL is refused here instead.
+  if (json.find('\0') != std::string::npos) {
+    decoded.drop = LobbySettingsDrop::kNotJson;
+    return decoded;
+  }
 
   const nlohmann::json document = nlohmann::json::parse(json, nullptr, /*allow_exceptions=*/false);
   if (document.is_discarded()) {
