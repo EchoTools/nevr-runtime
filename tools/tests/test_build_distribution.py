@@ -7,6 +7,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -14,6 +15,8 @@ from unittest import mock
 from tools import build_distribution
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "tools"))
+import work_root  # noqa: E402
 
 
 def valid_pe() -> bytes:
@@ -54,8 +57,7 @@ else:
 
 class BuildDistributionTest(unittest.TestCase):
     def setUp(self):
-        scratch = pathlib.Path("/var/tmp/work-nevr-runtime")
-        scratch.mkdir(parents=True, exist_ok=True)
+        scratch = work_root.test_scratch()
         self.temp = tempfile.TemporaryDirectory(dir=scratch)
         self.root = pathlib.Path(self.temp.name)
         self.stage = self.root / "stage"

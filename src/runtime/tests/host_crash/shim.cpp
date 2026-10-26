@@ -1,10 +1,10 @@
 // BugSplat64.dll shim for the crash harness: the production host objects
 // (runtime/host/) behind the real mangled MiniDmpSender::createReport export, plus
 // test seams that run the host's runtime load/validate state machine against the
-// sibling nevr.dll fixture and arm the capture's fault-injection hooks.
+// sibling nevr-runtime.dll fixture and arm the capture's fault-injection hooks.
 //
 // The crash capture never depends on the runtime load: a valid dump is written
-// whether nevr.dll is absent, ABI-incompatible, missing its entry point, or failing
+// whether nevr-runtime.dll is absent, ABI-incompatible, missing its entry point, or failing
 // to initialize.
 
 #include "core/runtime_abi.h"
