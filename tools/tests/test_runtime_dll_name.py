@@ -14,8 +14,15 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 # The old file name, in any case (Windows file names are case-insensitive), as a whole name: not part of a
 # longer one such as `pnsnevr.dll`, and not the log tag `[NEVR.DLLHOOK]`.
 OLD_NAME = re.compile(r"(?<![A-Za-z0-9_-])nevr\.dll(?![A-Za-z0-9_])", re.IGNORECASE)
-# A target given the output name `nevr` builds `nevr.dll`, whatever its sources say.
-OLD_OUTPUT_NAME = re.compile(r"OUTPUT_NAME\s+[\"']nevr[\"']")
+# CMake builds `nevr.dll` from a target whose OUTPUT_NAME is `nevr` (quoted or not, on any line of a property list,
+# in set_target_properties or set_property), and from a target that is itself called `nevr` (its file is
+# `nevr.dll` once PREFIX is "", and a target of that name breaks naming.md in any case). CMake text is read whole:
+# a property list spans lines. A longer name such as `nevr-runtime` or `nevr_core` is not matched.
+_NOT_MORE_NAME = r"(?![A-Za-z0-9_.${}-])"
+OLD_OUTPUT_NAME = re.compile(r"OUTPUT_NAME\s+[\"']?nevr[\"']?" + _NOT_MORE_NAME, re.IGNORECASE)
+OLD_TARGET_NAME = re.compile(
+    r"(?:add_library|set_target_properties)\(\s*nevr(?=[\s)])|set_property\(\s*TARGET\s+nevr(?=[\s)])",
+    re.IGNORECASE)
 # Where the old name may appear: this test, and the audits, which are the dated record of the tree as it was
 # (AGENTS.md "Documentation, plans and findings").
 ALLOWED_FILES = frozenset({"tools/tests/test_runtime_dll_name.py"})
@@ -24,7 +31,13 @@ ALLOWED_PREFIXES = ("docs/audits/",)
 
 def old_cmake_spelling(text):
     """Whether CMake text builds a file named nevr.dll."""
-    return bool(OLD_OUTPUT_NAME.search(text))
+    return bool(OLD_OUTPUT_NAME.search(text) or OLD_TARGET_NAME.search(text))
+
+
+def old_cmake_spelling_lines(text):
+    """The line numbers where CMake text builds a file named nevr.dll."""
+    return sorted({text.count("\n", 0, m.start()) + 1
+                   for pattern in (OLD_OUTPUT_NAME, OLD_TARGET_NAME) for m in pattern.finditer(text)})
 
 
 def project_files():
@@ -61,10 +74,10 @@ class RuntimeDllNameTest(unittest.TestCase):
     def test_no_target_is_built_as_the_old_name(self):
         found = {}
         for path, text in checked_files():
-            lines = [n for n, line in enumerate(text.splitlines(), 1) if OLD_OUTPUT_NAME.search(line)]
+            lines = old_cmake_spelling_lines(text)
             if lines:
                 found[path] = lines
-        self.assertEqual(found, {}, 'OUTPUT_NAME "nevr" builds nevr.dll; the runtime DLL is nevr-runtime.dll')
+        self.assertEqual(found, {}, "a target built as nevr.dll; the runtime DLL is nevr-runtime.dll")
 
     def test_the_loader_and_the_contract_name_the_new_file(self):
         loader = (REPO / "src/runtime/host/runtime_load.cpp").read_text(encoding="utf-8")
@@ -116,9 +129,7 @@ class RuntimeDllNameTest(unittest.TestCase):
             self.assertTrue(OLD_NAME.search(text), text)
         for text in ("nevr-runtime.dll", "pnsnevr.dll", "[NEVR.DLLHOOK] x", "nevr.dllx", "nevr_dll", "nevr.example"):
             self.assertFalse(OLD_NAME.search(text), text)
-        self.assertTrue(OLD_OUTPUT_NAME.search('PREFIX "" OUTPUT_NAME "nevr")'))
-        self.assertFalse(OLD_OUTPUT_NAME.search('OUTPUT_NAME "nevr-runtime"'))
-        self.assertFalse(OLD_OUTPUT_NAME.search('OUTPUT_NAME "nevr_example"'))
+        self.assertEqual(old_cmake_spelling_lines('a\nset_target_properties(t PROPERTIES\n  OUTPUT_NAME nevr)\nb'), [3])
 
 
 if __name__ == "__main__":
