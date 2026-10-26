@@ -1141,6 +1141,8 @@ These are in the script and in the programs; the rules, so you can port them:
   Take `<now>` from the system clock in your own code. Past `expires` you stop updating and say so. You may still launch
   what is installed.
 - **Step 6.** Store only after steps 2 to 5 pass. A key in `revoked_keys` stays refused, whatever later manifests say.
+  A `revoked_keys` that is present and is not a list of strings is a failure here, never skipped: a revocation that
+  cannot be read must not be ignored.
 - **Step 7.** `channels` maps a channel name (`stable`, `beta`) to a version of the form `X.Y.Z`. A channel that is
   absent has no release. If the version is lower than the one installed and the player did not change channel or ask to
   go back, do nothing. Install a release's artifacts as a set or not at all, and never take artifacts from two
@@ -1440,6 +1442,8 @@ four put a `state.json` there):
 | A manifest nobody verified | `check-artifact.sh` on a state directory whose `manifest.json` was edited after step 6 | step 8, the stored manifest is not the one that passed step 2 |
 | An extra entry in the zip | `zip -j windows.zip extra.txt`, then `python3 -I check-zip.py <state> 5.5.1 windows.zip` | step 8, the zip holds extra.txt, which the manifest does not list |
 | A directory entry or a symbolic link in the zip | `zip -r` of a directory, or `zip -y` of a link | step 8, the zip holds it, or it is not a regular file |
+| A revocation list that is not a list of strings | a signed manifest whose `revoked_keys` is `"abc"` or `[1]` | step 6, `revoked_keys in the manifest is not a list of strings` |
+| A member of the wrong type | a signed manifest whose `product` is `5`, `manifest_version` is `"1"`, `channels` is `[]` or `releases` is `"x"` | a `FAIL step N` line and exit 1 in all three implementations, never a stack trace |
 | Key compromise | a manifest signed by a pinned key B that lists key A in `revoked_keys` with a higher `manifest_version`, then one more signed by A | the first passes steps 2 to 5; the second fails at step 2, signing key is revoked |
 
 The real v5.5.1 files named in the example (the Windows zip and the Quest library) are on the project's GitHub release
