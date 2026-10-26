@@ -12,6 +12,33 @@ Part of the **NEVR** project, keeping Echo VR alive.
 
 > Working in this repo as an agent? Start at [`AGENTS.md`](AGENTS.md).
 
+## Built on, and thanks
+
+nEVR is a community project, built on other people's work and tested by the people who reported what broke. These are the projects and people it builds on, and what each did.
+
+<!-- credits:begin (generated from config/credits.json by tools/render_credits.py; edit the JSON, then run it with --write) -->
+
+### Projects
+
+- **[Xenomega](https://github.com/Xenomega)**: [EchoRelay](https://github.com/Xenomega/EchoRelay), a reimplementation of Echo VR's web services and dedicated game servers. The frozen v1 game server code in `src/legacy/` was written for its ServerDB, and the legacy message translation in `docs/reference/legacy-translator.md` is read from its documentation.
+- **[Dualgame](https://github.com/Dualgame)**: [echo-symbols](https://github.com/Dualgame/echo-symbols), the recovered symbol names this repo pulls at a pinned commit for its log symbol cache, and [echovr-modkit](https://github.com/Dualgame/echovr-modkit) with its [EchoRelay fork](https://github.com/Dualgame/EchoRelay), which back invite codes and the early-quit lockout and which `docs/engine/early-quit.md` and the invite-code design (#906) draw on.
+- **[marshmallow-mia](https://github.com/marshmallow-mia)**: The [Echo VR installer](https://github.com/marshmallow-mia/Echo-VR-Installer) (PC and Quest) and [EchoVR_Launcher](https://github.com/marshmallow-mia/EchoVR_Launcher) (Windows and Linux). Reported #133 to #137, #495, #496, #511 to #513 and #719, and wrote the merged fixes #138 to #141, #500, #502, #514 to #516 and #721.
+- **[Crafter](https://github.com/Crafter-1)**: [Quest-EchoVR-Installer](https://github.com/Crafter-1/Quest-EchoVR-Installer), a 3D Quest installer for Echo VR built in Unity. Reported #621, the game sending a Quest 3 player back to Home at launch, with a full logcat.
+
+### People
+
+- **Trodd**: Found the XInput fix that lets the spectator free cam see Xbox One and Series controllers, and brought it to the project (#877).
+- **DinkyBoi**: Reported a party of three queuing for arena with one member left out (#888), and the arm tablet's repeated "server full" message when joining a full social lobby (#889).
+- **berg**: One of the party of three in #888: left out of the arena match once, and rejoined through a link.
+- **zebra**: One of the party of three in #888, left out of the arena match.
+- **Nebula**: Reported install.ps1 failing on a PC with no D: drive (#679) and the idea that it asks for the game folder (#680), the Quest game closing at start (#758), uninstall.ps1 refusing after an update (#759) and the tablet's missing Add friend button (#775).
+- **[chinmayee5599](https://github.com/chinmayee5599)**: Opened #510, which renamed three TCP game message symbols in `src/abi/symbols.h`.
+- **[brysonak](https://github.com/brysonak)**: Opened #12, which changed the server log file names and added a flag to keep the old names.
+
+Everyone else who tested in #nevr-runtime-testing and is not named here: thank you.
+
+<!-- credits:end -->
+
 ## What it does
 
 PC means the Windows or Wine game client, Quest means the Android sentinel, both
