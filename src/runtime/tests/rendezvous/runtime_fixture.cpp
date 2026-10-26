@@ -1,4 +1,4 @@
-// nevr.dll stand-in for the rendezvous harness. Implements the v1 descriptor from
+// nevr-runtime.dll stand-in for the rendezvous harness. Implements the v1 descriptor from
 // core/runtime_abi.h and records everything it is called with
 // (docs/adr/0008-bugsplat-host-and-nevr-runtime.md).
 //

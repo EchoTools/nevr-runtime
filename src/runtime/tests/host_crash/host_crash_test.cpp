@@ -4,7 +4,7 @@
 // Each scenario runs a child process that: loads dbghelp.dll (as the game's
 // HandleCrashDump already has), loads the BugSplat64.dll shim (the production host
 // objects) from a per-scenario directory, runs the host runtime-load state machine
-// against the sibling nevr.dll fixture, installs the unhandled-exception filter that
+// against the sibling nevr-runtime.dll fixture, installs the unhandled-exception filter that
 // calls MiniDmpSender::createReport, and then deliberately faults with an access
 // violation. The parent validates that a structurally valid minidump was written to the
 // expected destination, names the faulting thread and process, and carries the
@@ -220,11 +220,11 @@ int RunChild(int argc, wchar_t** argv) {
   Fail("the deliberate fault did not terminate the child");
 }
 
-// A scenario: which nevr.dll fixture to stage, which destinations to block, and
+// A scenario: which nevr-runtime.dll fixture to stage, which destinations to block, and
 // where the dump must (or must not) land.
 struct Scenario {
   const wchar_t* name;
-  const wchar_t* fixture;  // nullptr = no nevr.dll
+  const wchar_t* fixture;  // nullptr = no nevr-runtime.dll
   const char* load_outcome;  // the runtime_load record's outcome
   bool block_local;
   bool block_temp;
@@ -374,12 +374,12 @@ void RunScenario(const Scenario& scenario, const std::wstring& base,
   MakeDir(temp);
   MakeDir(shim_dir);
 
-  // Stage the shim (and, for runtime scenarios, the sibling nevr.dll fixture).
+  // Stage the shim (and, for runtime scenarios, the sibling nevr-runtime.dll fixture).
   const std::wstring shim_path = shim_dir + L"\\BugSplat64.dll";
   CopyFileTo(shim_source, shim_path);
   if (scenario.fixture != nullptr) {
-    const std::wstring fixture = exe_dir + L"fixtures\\" + scenario.fixture + L"\\nevr.dll";
-    CopyFileTo(fixture, shim_dir + L"\\nevr.dll");
+    const std::wstring fixture = exe_dir + L"fixtures\\" + scenario.fixture + L"\\nevr-runtime.dll";
+    CopyFileTo(fixture, shim_dir + L"\\nevr-runtime.dll");
   }
 
   if (scenario.block_local) BlockEnvDir(local);

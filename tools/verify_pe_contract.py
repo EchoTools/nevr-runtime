@@ -15,7 +15,7 @@ Checks (all fail-closed; an unreadable or empty table is a failure, never a pass
                  change of the ordinal table nobody asked for.
   2. ORDINAL 1 - DetoursExportPlaceholder is ordinal 1 (exports.def `@1`); a
                  suspended-process loader needs it.
-  3. NO EAGER RUNTIME IMPORT - the host does not statically import nevr.dll. An
+  3. NO EAGER RUNTIME IMPORT - the host does not statically import nevr-runtime.dll. An
                  eager import would stop the host loading when the runtime is
                  absent.
   4. GAME IMPORTS (only with --game-exe) - every symbol echovr.exe imports from
@@ -73,7 +73,7 @@ EXPECTED_EXPORTS = {
 }
 
 ORDINAL_ONE = "DetoursExportPlaceholder"
-RUNTIME_DLL = "nevr.dll"
+RUNTIME_DLL = "nevr-runtime.dll"
 HOST_DLL = "BugSplat64.dll"
 
 # echovr.exe sha256 b6d08277e5846900c81004b64b298df6acba834b69700a640b758bda94a52043
