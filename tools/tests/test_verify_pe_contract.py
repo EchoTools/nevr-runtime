@@ -47,19 +47,19 @@ class HostContractTest(unittest.TestCase):
         self.assertEqual(exports[contract.ORDINAL_ONE], 1)
         self.assertEqual(exports, contract.EXPECTED_EXPORTS)
 
-    def test_every_name_in_exports_def_is_pinned(self):
-        # A name added to exports.def without a pin is surface nobody reviewed (#884 added two and the pin stayed
-        # at 26). exports.def holds 18 of the 28 pinned names; the TokenAuth_*, platform_compat_* and token_auth_*
-        # ones come from NEVR_MODULE_API and are caught only by the pe-contract check on the built DLL.
-        text = (REPO / "src" / "runtime" / "exports.def").read_text(encoding="utf-8")
+    def test_every_name_in_the_hosts_exports_def_is_pinned_and_every_pin_is_declared(self):
+        # The host's exports.def names all 28 exports: a name added without a pin is surface nobody reviewed (#884
+        # added two and the pin stayed at 26), and a pin without a declaration is a name the DLL would not export.
+        text = (REPO / "src" / "runtime" / "host" / "exports.def").read_text(encoding="utf-8")
         lines = [line.split(";", 1)[0].strip() for line in text.splitlines()]
         self.assertIn("EXPORTS", lines, "exports.def has no EXPORTS line")
         declared = set()
         for line in lines[lines.index("EXPORTS") + 1:]:
             if line:
                 declared.add(line.split("=", 1)[0].split()[0])
-        self.assertGreater(len(declared), 10, "exports.def parsed to almost nothing")
+        self.assertEqual(len(declared), 28, "exports.def parsed to other than 28 names")
         self.assertEqual(sorted(declared - set(contract.EXPECTED_EXPORTS)), [])
+        self.assertEqual(sorted(set(contract.EXPECTED_EXPORTS) - declared), [])
 
     def test_pinned_ordinals_follow_the_linker_name_order(self):
         # Every ordinal but the placeholder's is the linker's: 2.. in byte order of the name.
@@ -146,6 +146,157 @@ class GameContractTest(unittest.TestCase):
             contract.check_game("\tDLL Name: KERNEL32.dll\n\t1f5e000  <none>  0001  ExitProcess\n",
                                 self.exports)
 
+
+
+HOST_BASE = 0x180000000
+RUNTIME_BASE = 0x181000000
+COMMIT = "a" * 40
+
+
+def identity(version="5.5.0-dev.4+abc1234", commit=COMMIT):
+    return b"\x00NEVR-BUILD " + version.encode() + b" " + commit.encode() + b"\x00"
+
+
+def pe_dump(exports, base, size, import_dlls=("KERNEL32.dll",)):
+    """objdump -p text for a DLL with the given {name: ordinal} exports, ImageBase and SizeOfImage."""
+    text = host_dump(exports=exports, import_dlls=import_dlls)
+    header = f"ImageBase\t\t{base:016x}\nSizeOfImage\t\t{size:08x}\n"
+    return header + text
+
+
+def runtime_dump(exports=None, base=RUNTIME_BASE, size=0x1800000, import_dlls=("KERNEL32.dll", "WS2_32.dll")):
+    return pe_dump({contract.RUNTIME_ENTRY: 1} if exports is None else exports, base, size, import_dlls)
+
+
+def thin_host_dump(**kwargs):
+    kwargs.setdefault("size", 0x400000)
+    return pe_dump(contract.EXPECTED_EXPORTS, HOST_BASE, kwargs.pop("size"), **kwargs)
+
+
+class RuntimeContractTest(unittest.TestCase):
+    """ADR 0012 step 2: nevr-runtime.dll carries the rendezvous entry and the identity, apart from the host."""
+
+    def test_current_surface_passes(self):
+        info = contract.check_runtime(runtime_dump(), b"MZ" + identity())
+        self.assertEqual(info["base"], RUNTIME_BASE)
+
+    def test_the_rendezvous_entry_is_required(self):
+        with self.assertRaisesRegex(contract.ContractError, "does not export NEVR_GetRuntimeApi"):
+            contract.check_runtime(runtime_dump(exports={"SomethingElse": 1}), b"MZ" + identity())
+
+    def test_the_runtime_does_not_export_what_the_game_imports(self):
+        surface = {contract.RUNTIME_ENTRY: 1, "?createReport@MiniDmpSender@@QEAAXPEAU_EXCEPTION_POINTERS@@@Z": 2}
+        with self.assertRaisesRegex(contract.ContractError, "exports names the game imports from the host"):
+            contract.check_runtime(runtime_dump(exports=surface), b"MZ" + identity())
+
+    def test_the_runtime_exports_nothing_the_host_owns(self):
+        for name in ("NEVR_ScheduleReturnToLobby", "NEVR_RegisterAsset", "NEVR_SetGameModule", "DllMain"):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(contract.ContractError, "exports names it may not"):
+                    contract.check_runtime(runtime_dump(exports={contract.RUNTIME_ENTRY: 1, name: 2}),
+                                           b"MZ" + identity())
+
+    def test_the_runtime_may_export_the_static_modules_entry_points(self):
+        names = {contract.RUNTIME_ENTRY: 1, "token_auth_Init": 2, "platform_compat_Init": 3, "TokenAuth_GetToken": 4}
+        contract.check_runtime(runtime_dump(exports=names), b"MZ" + identity())
+
+    def test_exactly_one_identity_literal_is_required(self):
+        with self.assertRaisesRegex(contract.ContractError, "expected exactly one NEVR-BUILD literal, found 0"):
+            contract.check_runtime(runtime_dump(), b"MZ")
+        with self.assertRaisesRegex(contract.ContractError, "expected exactly one NEVR-BUILD literal, found 2"):
+            contract.check_runtime(runtime_dump(), b"MZ" + identity() + identity())
+
+    def test_the_runtime_does_not_sit_on_the_hosts_base(self):
+        with self.assertRaisesRegex(contract.ContractError, "image base"):
+            contract.check_runtime(runtime_dump(base=HOST_BASE), b"MZ" + identity())
+
+    def test_the_runtime_is_not_linked_at_the_unpinned_default(self):
+        with self.assertRaisesRegex(contract.ContractError, "image base"):
+            contract.check_runtime(runtime_dump(base=0x180400000), b"MZ" + identity())
+
+    def test_the_host_must_import_nothing_from_the_runtime_by_name(self):
+        # the runtime is not a dependency of the host in either direction
+        with self.assertRaisesRegex(contract.ContractError, "imports BugSplat64.dll"):
+            contract.check_runtime(runtime_dump(import_dlls=("KERNEL32.dll", "BugSplat64.dll")), b"MZ" + identity())
+
+
+class ThinHostTest(unittest.TestCase):
+    """The host has the exports and no runtime code."""
+
+    def test_a_thin_host_passes(self):
+        contract.check_host_is_thin(thin_host_dump(), b"MZ" + identity())
+
+    def test_a_network_import_is_runtime_code(self):
+        with self.assertRaisesRegex(contract.ContractError, "imports ws2_32.dll"):
+            contract.check_host_is_thin(thin_host_dump(import_dlls=("KERNEL32.dll", "WS2_32.dll")), b"MZ" + identity())
+
+    def test_a_runtime_string_is_runtime_code(self):
+        for marker in contract.RUNTIME_ONLY_MARKERS:
+            with self.subTest(marker=marker):
+                with self.assertRaisesRegex(contract.ContractError, "carries runtime-only text"):
+                    contract.check_host_is_thin(thin_host_dump(), b"MZ" + identity() + b"\x00" + marker + b"\x00")
+
+    def test_a_host_the_size_of_the_runtime_is_not_thin(self):
+        with self.assertRaisesRegex(contract.ContractError, "SizeOfImage"):
+            contract.check_host_is_thin(thin_host_dump(size=0x1730000), b"MZ" + identity())
+
+    def test_the_host_carries_its_own_identity_literal(self):
+        with self.assertRaisesRegex(contract.ContractError, "expected exactly one NEVR-BUILD literal, found 0"):
+            contract.check_host_is_thin(thin_host_dump(), b"MZ")
+
+
+class PairContractTest(unittest.TestCase):
+    """The two files of one build state one version and one commit."""
+
+    def test_a_matching_pair_passes(self):
+        contract.check_pair(b"MZ" + identity(), b"MZ" + identity())
+
+    def test_a_different_version_fails(self):
+        with self.assertRaisesRegex(contract.ContractError, "different version"):
+            contract.check_pair(b"MZ" + identity(version="5.5.0"), b"MZ" + identity(version="5.5.1"))
+
+    def test_a_different_commit_fails(self):
+        with self.assertRaisesRegex(contract.ContractError, "different commit"):
+            contract.check_pair(b"MZ" + identity(), b"MZ" + identity(commit="b" * 40))
+
+    def test_the_ranges_must_not_overlap(self):
+        with self.assertRaisesRegex(contract.ContractError, "overlap"):
+            contract.check_ranges({"base": HOST_BASE, "size": 0x2000000}, {"base": RUNTIME_BASE, "size": 0x100000})
+
+
+class MainTest(unittest.TestCase):
+    def run_main(self, host, runtime):
+        import tempfile
+        outputs = {"host": host, "runtime": runtime}
+        calls = []
+
+        def fake_objdump(path):
+            calls.append(path.name)
+            return outputs[path.stem]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            (tmp / "host.dll").write_bytes(b"MZ" + identity())
+            (tmp / "runtime.dll").write_bytes(b"MZ" + identity())
+            real = contract.run_objdump
+            contract.run_objdump = fake_objdump
+            try:
+                return contract.main(["--dll", str(tmp / "host.dll"), "--runtime-dll", str(tmp / "runtime.dll")]), calls
+            finally:
+                contract.run_objdump = real
+
+    def test_a_good_pair_exits_zero_and_reads_both_files(self):
+        code, calls = self.run_main(thin_host_dump(), runtime_dump())
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, ["host.dll", "runtime.dll"])
+
+    def test_a_bad_runtime_exits_one(self):
+        code, _ = self.run_main(thin_host_dump(), runtime_dump(exports={"x": 1}))
+        self.assertEqual(code, 1)
+
+    def test_a_runtime_dll_is_required(self):
+        with self.assertRaises(SystemExit):
+            contract.main(["--dll", "x.dll"])
 
 if __name__ == "__main__":
     unittest.main()
