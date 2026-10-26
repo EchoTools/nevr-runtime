@@ -32,14 +32,31 @@ void SetEnv(const char* name, const char* value) { _putenv_s(name, value); }
 // nevr_config treats an empty env value as unset, so "" is the unset case.
 void UnsetEnv(const char* name) { _putenv_s(name, ""); }
 
-// This Wine path maps only to the agent scratch hierarchy on the Linux host.
-// Never use the game directory for config-load unit-test fixtures.
-constexpr const char* kScratchConfigDirectory = R"(Z:\var\tmp\work-nevr-runtime\nevr-config-tests\)";
+// Where the fixture files go, as a Windows path ending in a backslash. $NEVR_CONFIG_TEST_DIR names it
+// (`just test-auth-unit` sets it to a directory it removes afterwards); a Linux path is reached through
+// Wine's Z: drive. Without it the process's own temporary directory is used. Never the game directory.
+std::string ScratchConfigDirectory() {
+  const char* configured = std::getenv("NEVR_CONFIG_TEST_DIR");
+  if (configured == nullptr || configured[0] == '\0') {
+    char temp[MAX_PATH + 1] = {};
+    const DWORD length = GetTempPathA(static_cast<DWORD>(sizeof(temp)), temp);
+    return std::string(temp, length) + "nevr-config-tests\\";
+  }
+  std::string directory(configured);
+  if (directory[0] == '/') {
+    directory = "Z:" + directory;
+    for (char& c : directory) {
+      if (c == '/') c = '\\';
+    }
+  }
+  if (directory.back() != '\\') directory += '\\';
+  return directory;
+}
 
-// Creates each missing level ("Z:\var", "Z:\var\tmp", ...): on a fresh machine (the CI container,
-// run 37151801289) only Z:\var\tmp exists, and CreateDirectoryA makes one level at a time.
+// Creates each missing level ("Z:\var", "Z:\var\tmp", ...): CreateDirectoryA makes one level at a time,
+// and a fresh machine (the CI container, run 37151801289) has only some of them.
 bool EnsureScratchConfigDirectory() {
-  const std::string full(kScratchConfigDirectory);
+  const std::string full = ScratchConfigDirectory();
   for (size_t sep = full.find('\\', 3); sep != std::string::npos; sep = full.find('\\', sep + 1)) {
     const std::string level = full.substr(0, sep);
     if (CreateDirectoryA(level.c_str(), nullptr) == FALSE && GetLastError() != ERROR_ALREADY_EXISTS) return false;
@@ -48,7 +65,7 @@ bool EnsureScratchConfigDirectory() {
 }
 
 std::string ScratchConfigPath(const char* name) {
-  return std::string(kScratchConfigDirectory) + name + "-" + std::to_string(GetCurrentProcessId()) +
+  return ScratchConfigDirectory() + name + "-" + std::to_string(GetCurrentProcessId()) +
          ".yaml";
 }
 
@@ -500,6 +517,26 @@ std::chrono::milliseconds RejectionTime(const std::string& yaml) {
   const auto start = std::chrono::steady_clock::now();
   ReasonOf(yaml);
   return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+}
+
+// The fixture directory follows the environment and names no machine: a Linux path becomes a Z: path,
+// and without the variable the process's temporary directory is used.
+TEST(NevrConfig, ScratchConfigDirectoryFollowsTheEnvironment) {
+  const char* saved = std::getenv("NEVR_CONFIG_TEST_DIR");
+  const std::string restore = saved == nullptr ? "" : saved;
+
+  SetEnv("NEVR_CONFIG_TEST_DIR", "/some/scratch/dir");
+  EXPECT_EQ(ScratchConfigDirectory(), "Z:\\some\\scratch\\dir\\");
+  EXPECT_EQ(ScratchConfigPath("x").rfind("Z:\\some\\scratch\\dir\\x-", 0), 0u);
+
+  UnsetEnv("NEVR_CONFIG_TEST_DIR");
+  const std::string fallback = ScratchConfigDirectory();
+  const std::string suffix = "\\nevr-config-tests\\";
+  EXPECT_TRUE(fallback.size() > suffix.size() &&
+              fallback.compare(fallback.size() - suffix.size(), suffix.size(), suffix) == 0)
+      << fallback;
+
+  SetEnv("NEVR_CONFIG_TEST_DIR", restore.c_str());
 }
 
 }  // namespace

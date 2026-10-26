@@ -6,7 +6,7 @@ would send (docs/design/2026-10-01-social-features-test-plan.md, "In-game: party
 The game (a mingw-scenario build only) logs its port at start:
     [NEVR.SCENARIO] control listening on 127.0.0.1:<port> (test build only)
 Pass that port, or a game log to read it from. Every command and reply is printed and appended, with a
-UTC timestamp, to /var/tmp/work-nevr-runtime/control-log.jsonl.
+UTC timestamp, to control-log.jsonl in the work root ($NEVR_WORK_ROOT, else src/nevr-runtime-work in the home directory).
 
     tools/scenario/control.py --port 38015 '{"op":"inject","msg":"PartyJoinFailure","party":0,"code":5}'
     tools/scenario/control.py --log path/to/console.log '{"op":"fire","action":"party_join_failed_callback","code":2}'
@@ -23,7 +23,10 @@ import re
 import socket
 import sys
 
-LOG = pathlib.Path("/var/tmp/work-nevr-runtime/control-log.jsonl")
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import work_root  # noqa: E402
+
+LOG = work_root.work_root() / "control-log.jsonl"
 PORT_LINE = re.compile(r"\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:(\d+)")
 
 
@@ -63,7 +66,7 @@ def main(argv: list[str]) -> int:
     reply = call(port, command)
     record = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds"),
               "port": port, "command": command, "reply": reply}
-    LOG.parent.mkdir(parents=True, exist_ok=True)
+    work_root.ensure_dir(LOG.parent, work_root.ROOT_PURPOSE, work_root.ROOT_REMOVED)
     with LOG.open("a") as f:
         f.write(json.dumps(record) + "\n")
     print(json.dumps(reply, indent=2))
