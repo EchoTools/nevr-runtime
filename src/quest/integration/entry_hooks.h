@@ -15,8 +15,8 @@ bool RegisterLoginPromptCounters() noexcept;  // 14 counters
 bool InstallLoginPromptHook(bool countersRegistered) noexcept;  // true when all three slots hold their thunks
 
 // The #319 OBB-mount skip (sentinel/obb_skip_hook.h), through this seam for the same reason.
-bool RegisterObbSkipCounters() noexcept;  // 4 counters
-// obb_skip::InstallIfCounted(countersRegistered): true when both slots hold their thunks.
+bool RegisterObbSkipCounters() noexcept;  // 6 counters
+// obb_skip::InstallIfCounted(countersRegistered): true when all three slots hold their thunks.
 bool InstallObbSkipHook(bool countersRegistered) noexcept;
 
 // The #621 process-end hook (sentinel/process_end_hook.h), through this seam for the same reason: the process ends

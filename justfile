@@ -1173,8 +1173,8 @@ test-quest-hooks:
     [ -f "$jni" ] || { echo "test-quest-hooks: FAIL: $jni not found (the toast test needs the NDK's jni.h)" >&2; exit 1; }
     mkdir -p "$out/jni"
     cp "$jni" "$out/jni/jni.h"
-    "${cxx[@]}" -isystem "$out/jni" -fno-exceptions src/quest/tests/toast_presenter_test.cpp \
-        src/quest/sentinel/toast_presenter.cpp -o "$out/toast_presenter_test"
+    "${cxx[@]}" -isystem "$out/jni" -fno-exceptions -pthread src/quest/tests/toast_presenter_test.cpp \
+        src/quest/sentinel/toast_presenter.cpp src/quest/sentinel/hook_log.cpp -o "$out/toast_presenter_test" -ldl
     timeout 60 "$out/toast_presenter_test"
 
 # Quest config-string redirect on the host. Builds two fixture shared objects that import
@@ -3270,7 +3270,7 @@ verify:
     # and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 1711
+    python3 tools/verify_gtest_floor.py --floor 1739
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py
