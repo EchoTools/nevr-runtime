@@ -15,7 +15,7 @@
 # builds read it ("both", "PC only", "Quest only"), its default, and the file that reads it.
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
-# social.facade, social.send_presence_to_meta, diagnostics.hardware_dump and diagnostics.ui_event_probe. Every other key below is PC only: the
+# social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe and graphics.texture_quality. Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -85,6 +85,24 @@ diagnostics:
   # ask the tablet to switch to its Friends list, to measure whether that opens an invite path. Needs social.facade.
   # Default (absent): false.
   # ui_event_probe: true
+
+# ---------------------------------------------------------------------------
+# graphics — render quality
+#
+# Reader: src/quest/sentinel/quest_config.cpp (Quest). The PC accepts the section and reads nothing from it.
+# ---------------------------------------------------------------------------
+
+graphics:
+  # Quest only. The size of the eye buffer the game renders into (per eye, the swap chain the game creates once, at
+  # start-up). One of: stock, low, medium, high, very_high, ultra (lower case, exactly). The sizes are the ones the
+  # community installer's Graphics Patch setting uses for the same names (reported for a Quest 3; this build has not
+  # measured any headset's native size): low 1680x1760, medium 2376x2568, high 3072x3380, very_high 3584x3944,
+  # ultra 4096x4506, with 2 samples. A bigger size looks sharper and costs frame time; on a Quest 2 `high` is well above
+  # the headset's native size. `stock` installs nothing: the game gets the size the headset runtime suggests.
+  # Read once at launch and fixed for the run: a change takes effect at the next launch. A value that is not one of the
+  # six words is ignored with a warning in the sentinel log that names it, and the default applies.
+  # Default (absent): high. The log line `texture_quality` in the sentinel log names the level, its source and the size.
+  # texture_quality: high
 
 # ---------------------------------------------------------------------------
 # services — URL overrides for game service endpoints
