@@ -21,8 +21,8 @@
 //  10  InstallSocial                 the NEVR social facade on libr15's CNSProvider::Social slot
 //  11  InstallDlopenHook             the post-load installs: login hook (and with it the login
 //                                    prerequisites), matchmaking redirect
-//      InstallObbSkip                the OBB-mount skip (#319): two libr15 slots (AStorageManager_mountObb,
-//                                    AStorageManager_getMountedObbPath); on every launch, whatever the
+//      InstallObbSkip                the OBB-mount skip (#319, #866): three libr15 slots (AStorageManager_mountObb,
+//                                    AStorageManager_getMountedObbPath, CSysInfo::GetDataRootDir); on every launch, whatever the
 //                                    configuration says, right after the clock hook so it is in place before
 //                                    libr15 runs CSysFile::Init. Its counters are registered with the others
 //                                    (step 3).
@@ -139,7 +139,7 @@ class Steps {
 
   virtual bool InstallClockHook() = 0;
   // `countersRegistered`: the result of RegisterObbSkipCounters (the hook's own rule: without its counters it
-  // logs the skip and installs nothing). True when both slots hold their thunks.
+  // logs the skip and installs nothing). True when all three slots hold their thunks.
   virtual bool InstallObbSkip(bool countersRegistered) = 0;
   // The process ends when the game's android_main returns (#621): one libr15 slot, on every launch.
   virtual bool InstallProcessEnd() = 0;

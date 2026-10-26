@@ -13,6 +13,7 @@ set(PATCHES_SOURCES
     "host/bootstrap_diagnostics.cpp"
     "host/crash_capture.cpp"
     "host/host_entry.cpp"
+    "host/minidmp_sender_exports.cpp"
     "host/runtime_load.cpp"
     "host/runtime_rendezvous.cpp"
     "lifecycle/system_module_loader.cpp"
@@ -44,6 +45,8 @@ set(PATCHES_SOURCES
     "ext/module_loader.cpp"
     "patch/resource_override.cpp"
     "patch/asset_cache.cpp"
+    # #938: the nEVR section of the in-game CREDITS page (pure logic in credits_text.h).
+    "patch/credits_text.cpp"
     "patch/asset_registry.cpp"
     "patch/plugin_assets.cpp"
     "compat/ws_bridge.cpp"
@@ -144,6 +147,7 @@ set(PATCHES_HEADERS
     "hook/addresses.h"
     "compat/ws_bridge.h"
     "compat/socket_role.h"
+    "patch/invite_wizard.h"
     "compat/evr_codec.h"
     "compat/lobby_frame.h"
     "patch/xpid_patch.h"
@@ -206,6 +210,21 @@ target_include_directories(nevr_runtime PRIVATE
   ${CMAKE_BINARY_DIR}
 )
 
+# #938: the project section of the in-game CREDITS page is rendered from config/credits.json at build time and
+# compiled in (patch/credits_block.h declares it). A name the page cannot show, or a file that does not
+# validate, fails this step and so the build; nothing is cut or dropped at run time.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(NEVR_CREDITS_BLOCK_CPP "${CMAKE_CURRENT_BINARY_DIR}/generated/credits_block.cpp")
+add_custom_command(
+  OUTPUT "${NEVR_CREDITS_BLOCK_CPP}"
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/render_credits.py"
+          --ingame-source "${NEVR_CREDITS_BLOCK_CPP}" --json "${CMAKE_SOURCE_DIR}/config/credits.json"
+  DEPENDS "${CMAKE_SOURCE_DIR}/config/credits.json" "${CMAKE_SOURCE_DIR}/tools/render_credits.py"
+  COMMENT "Rendering the in-game credits block from config/credits.json"
+  VERBATIM)
+target_sources(nevr_runtime PRIVATE "${NEVR_CREDITS_BLOCK_CPP}")
+set_source_files_properties("${NEVR_CREDITS_BLOCK_CPP}" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+
 find_package(CURL REQUIRED)
 
 find_package(ixwebsocket CONFIG REQUIRED)
@@ -221,8 +240,13 @@ target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzs
 # so yaml-cpp does not reach them.
 target_link_libraries(nevr_runtime PRIVATE yaml-cpp::yaml-cpp)
 
+# The two files here that read the version (cmake/nevr_build_identity.cmake); a property of this directory, so every
+# target below that compiles them (test_behavioral compiles ws_bridge.cpp) gets it too.
+nevr_build_identity_define(TARGET nevr_runtime READS VERSION
+  SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/lifecycle/initialize.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/compat/ws_bridge.cpp")
+
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
-set_source_files_properties(host/bootstrap_diagnostics.cpp host/crash_capture.cpp host/host_entry.cpp host/runtime_load.cpp host/runtime_rendezvous.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(host/bootstrap_diagnostics.cpp host/crash_capture.cpp host/host_entry.cpp host/minidmp_sender_exports.cpp host/runtime_load.cpp host/runtime_rendezvous.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(compat/ws_bridge.cpp compat/session_router.cpp compat/ws_session_transport.cpp compat/social_names.cpp compat/evr_codec.cpp compat/self_check.cpp patch/asset_cache.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # #20: the export tracer's thunk layer is windows.h plus a global assembly block; the tracer logs through core.
 set_source_files_properties(hook/export_trace_thunk.cpp hook/export_tracer.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -377,6 +401,7 @@ if(BUILD_TESTING)
       host/bootstrap_diagnostics.cpp
       host/crash_capture.cpp
       host/host_entry.cpp
+      host/minidmp_sender_exports.cpp
       host/runtime_load.cpp
       host/runtime_rendezvous.cpp
       lifecycle/game_image_guard.cpp)
@@ -528,6 +553,9 @@ if(BUILD_TESTING)
       tests/host_crash/shim.cpp
       "tests/host_crash/shim.def")
     target_link_libraries(test_host_crash_shim PRIVATE nevr_host_core)
+    # BugSplat_createReport is defined in nevr_host_core (host/minidmp_sender_exports.cpp, the shipped file) and
+    # only named by shim.def, which does not make the linker take an archive member: ask for it.
+    target_link_options(test_host_crash_shim PRIVATE -Wl,--undefined=BugSplat_createReport)
     set_target_properties(test_host_crash_shim PROPERTIES PREFIX "" OUTPUT_NAME "BugSplat64")
     host_crash_output(test_host_crash_shim "${HOST_CRASH_DIR}")
 
@@ -1054,6 +1082,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_socket_role PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_socket_role DISCOVERY_MODE PRE_TEST)
 
+    # #906, docs/adr/0017: the client half of the invite codes (patch/invite_wizard.h): header only, pure.
+    add_executable(test_invite_wizard tests/test_invite_wizard.cpp)
+    set_source_files_properties(tests/test_invite_wizard.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_invite_wizard PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_invite_wizard PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_invite_wizard DISCOVERY_MODE PRE_TEST)
+
     # The #408 self-check (compat/status_redirect_check.h): the game's API connections counted as redirected or
     # passed through. Header only on top of the self-check unit.
     add_executable(test_status_redirect_check
@@ -1306,11 +1341,10 @@ if(BUILD_TESTING)
       hook/dll_load_hook.cpp
     )
     target_compile_definitions(test_behavioral PRIVATE NEVR_TEST_HOOKS NEVR_USE_MINHOOK
-      NEVR_PROJECT_VERSION="${PROJECT_VERSION}"
-      NEVR_GIT_COMMIT_HASH="${GIT_COMMIT_HASH}"
-      NEVR_GIT_COMMIT_FULL="${GIT_COMMIT_HASH_FULL}"
-      NEVR_GIT_DESCRIBE="${GIT_DESCRIBE}"
       CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
+    # build_identity.cpp is compiled again here, from src/core (nevr_core's definitions are another directory's).
+    nevr_build_identity_define(TARGET test_behavioral READS VERSION COMMIT_HASH COMMIT_FULL DESCRIBE
+      SOURCES "${CMAKE_SOURCE_DIR}/src/core/build_identity.cpp")
     # Disable PCH — the test has its own stub headers and must not depend on
     # the nevr_runtime precompiled header (which pulls in MinHook, etc.).
     set_source_files_properties(
@@ -1460,8 +1494,8 @@ if(BUILD_TESTING)
     # test_plugin_log.cpp (#598, header-only ext/plugin_log.h) ride in this
     # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp lifecycle/crash_dump_format.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp lifecycle/crash_dump_format.cpp
+      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp lifecycle/crash_dump_format.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp lifecycle/crash_dump_format.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src
       ${CMAKE_SOURCE_DIR}/plugins/common/include)

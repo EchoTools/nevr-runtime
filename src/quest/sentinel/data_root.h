@@ -3,7 +3,8 @@
  * The game asks CSysInfo::GetDataRootDir (libr15 0xf87250), which returns gOBBPath when it is set and
  * otherwise the literal /storage/emulated/0/readyatdawn (pinned_targets.h). The OBB skip (obb_skip_hook.h)
  * decides what gOBBPath holds, so the root it serves is chosen here: the first candidate that holds the game's
- * `_data` directory.
+ * `_data` directory. With no OBB file nothing is mounted and gOBBPath stays empty; the same module's hook on
+ * GetDataRootDir then answers the media root when it is the winner (#866), and the legacy literal is answered otherwise.
  *
  *   1. /sdcard/Android/media/com.readyatdawn.r15/files   the data root: Android's app-specific media directory, where
  *                                                        the echo.taxi installer puts the data

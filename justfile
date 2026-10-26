@@ -58,6 +58,10 @@ install-hooks:
 reap-merged *args:
     python3 -I tools/reap_merged.py {{ args }}
 
+# Remove one linked worktree: every proof first, then `git worktree remove` without --force and without `git submodule deinit` (tools/remove_worktree.py; --dry-run proves and changes nothing)
+remove-worktree *args:
+    python3 -I tools/remove_worktree.py {{ args }}
+
 # Build all components
 build: configure
     @cmake --build --preset {{ preset }}
@@ -159,6 +163,10 @@ android-repack-libovr src="/mnt/games/evr/-src-evr-reconstruction/cache/quest_tr
 # Full sideload repack: hijack an APK's libovrplatformloader.so with our shim,
 # forwarding to the renamed original. Produces a zipaligned, DEBUG-signed APK and
 # verifies both libs' ELF shape from the SIGNED output (no headset needed).
+# It also sets the manifest's versionCode (tools/quest_apk_version.py): the store APK's 4987566 is below the
+# 4987570 build the community installer puts on a headset, which Android refuses to update (a downgrade). The
+# code comes from the build's own version (kVersion in <shim dir>/../generated/nevr_build_info.h), and the signed
+# APK's code is read back with aapt2 before the recipe says it is ready.
 # All work under build/android-arm64/repack — never mutates the source APK or shim.
 # `apk` is required (the store APK path). The signing key is the one persistent Quest key stored in
 # pass (tools/quest_keystore.sh): it is read into a private tmpfs file for the signing command only
@@ -169,12 +177,18 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     root="$(pwd)"
     apk="{{ apk }}"; shim="{{ shim }}"
     work="$root/{{ workdir }}"
-    for t in unzip patchelf zip zipalign apksigner readelf nm keytool pass; do
+    # An APK from an earlier run never outlives a run that stops: package-dev takes whatever is at this path.
+    rm -f "$work/r15-repacked.apk" "$work/r15-repacked-aligned.apk" "$work/r15_nevr-sentinel_signed.apk"
+    for t in unzip patchelf zip zipalign apksigner aapt2 readelf nm keytool pass python3; do
         command -v "$t" >/dev/null || { echo "MISSING required tool: $t" >&2; exit 1; }
     done
     [ -f "$apk" ]  || { echo "APK not found: $apk" >&2; exit 1; }
     [ -f "$shim" ] || { echo "shim not found (build it: just build-android): $shim" >&2; exit 1; }
-    mkdir -p "$work/stage/lib/arm64-v8a" "$work/orig"
+    # The build's version header sits beside the shim's build tree (build/<tree>/sentinel/ -> build/<tree>/generated/).
+    build_info="$(dirname "$(dirname "$shim")")/generated/nevr_build_info.h"
+    [ -f "$build_info" ] || { echo "build info not found (build it: just build-android): $build_info" >&2; exit 1; }
+    rm -rf "$work/stage" "$work/orig" "$work/manifest"
+    mkdir -p "$work/stage/lib/arm64-v8a" "$work/orig" "$work/manifest"
     # 1. extract the real original loader from the store APK
     unzip -o -q "$apk" lib/arm64-v8a/libovrplatformloader.so -d "$work/orig"
     # 2. rename original + patch soname so the NEEDED string matches the file on disk
@@ -187,16 +201,31 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     unsigned="$work/r15-repacked.apk"
     aligned="$work/r15-repacked-aligned.apk"
     signed="$work/r15_nevr-sentinel_signed.apk"
+    # Any stop after this point, a failed check included (set -e quits at a failing command), removes the signed APK:
+    # quest-install and the pinned tests take whatever sits at this path.
+    done_ok=0
+    trap '[ "$done_ok" = 1 ] || rm -f "$signed"' EXIT
     cp -f "$apk" "$unsigned"
     zip -q -d "$unsigned" 'META-INF/*.RSA' 'META-INF/*.SF' 'META-INF/*.MF' || true
     ( cd "$work/stage" && zip -q -0 -X "$unsigned" \
         lib/arm64-v8a/libovrplatformloader.so lib/arm64-v8a/libovrplatformloader_orig.so )
+    # 4b. versionCode: extract the compiled manifest, set the code the build's version gives (the tool refuses
+    # unless the field is exactly where Android reads it, and unless the shim carries the header's version),
+    # and put the manifest back. A 4-byte write: the entry keeps every other byte.
+    unzip -o -q "$unsigned" AndroidManifest.xml -d "$work/manifest"
+    version_code=$(python3 -I tools/quest_apk_version.py patch-manifest "$work/manifest/AndroidManifest.xml" --build-info "$build_info" --shim "$shim")
+    ( cd "$work/manifest" && zip -q -X "$unsigned" AndroidManifest.xml )
     # 5. page-align uncompressed .so, then sign (v2/v3) — align BEFORE sign.
     # The key is a private tmpfs copy for this one command, shredded when it returns; the passphrase
     # reaches apksigner through the environment (`env:`), never through its command line.
     zipalign -p -f 4 "$unsigned" "$aligned"
     tools/quest_keystore.sh with bash -c 'exec apksigner sign --ks "$NEVR_QUEST_KS" --ks-key-alias "$NEVR_QUEST_KS_ALIAS" --ks-pass env:NEVR_QUEST_KS_PASS --key-pass env:NEVR_QUEST_KS_PASS --out "$1" "$2"' _ "$signed" "$aligned"
-    apksigner verify --print-certs "$signed" | head -1
+    verified=$(apksigner verify --print-certs "$signed")
+    printf '%s\n' "$verified" | sed -n 1p
+    # The code Android will compare is read back from the SIGNED APK by aapt2, not taken from what was written.
+    signed_code=$(aapt2 dump badging "$signed" | sed -n "s/^package: .* versionCode='\([0-9]*\)'.*/\1/p")
+    [ "$signed_code" = "$version_code" ] || { echo "signed APK versionCode is '$signed_code', expected $version_code" >&2; exit 1; }
+    echo "versionCode $signed_code (the community installer's build is 4987570)"
     # 6. VERIFY from the SIGNED apk — the headless packaging proof
     rm -rf "$work/verify"; mkdir -p "$work/verify"
     unzip -o -q "$signed" 'lib/arm64-v8a/libovrplatformloader*.so' -d "$work/verify"
@@ -206,6 +235,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     echo "== renamed original  lib/arm64-v8a/libovrplatformloader_orig.so =="
     readelf -d "$work/verify/lib/arm64-v8a/libovrplatformloader_orig.so" | grep -i soname
     echo ""
+    done_ok=1
     echo "Signed sideload APK ready -> $signed"
     echo "Install with: just quest-install"
 
@@ -226,6 +256,8 @@ quest-keystore-fingerprint:
 
 # Refuse (exit 1, one line per problem) unless this clone is exactly origin's release branch: every local
 # tag is on origin and at the same commit, no uncommitted or untracked change, HEAD is origin/<base>'s tip.
+# It also refuses a version part outside the Quest versionCode rule and warns near its limits (development distance N above 900,
+# minor or patch above 90; tools/quest_apk_version.py).
 # Read-only (git ls-remote is the only network call; there is no fetch). Run it before `just package-dev`,
 # before pushing a v<x.y.z> release tag and before `gh release create` (tools/release_preflight.py).
 release-preflight base="main":
@@ -413,7 +445,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_invite_wizard --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_runtime_abi
@@ -609,7 +641,7 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
-    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_asset_cache test_session_router test_asset_registry; do
+    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_invite_wizard test_asset_cache test_session_router test_asset_registry; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -1156,8 +1188,8 @@ test-quest-hooks:
     [ -f "$jni" ] || { echo "test-quest-hooks: FAIL: $jni not found (the toast test needs the NDK's jni.h)" >&2; exit 1; }
     mkdir -p "$out/jni"
     cp "$jni" "$out/jni/jni.h"
-    "${cxx[@]}" -isystem "$out/jni" -fno-exceptions src/quest/tests/toast_presenter_test.cpp \
-        src/quest/sentinel/toast_presenter.cpp -o "$out/toast_presenter_test"
+    "${cxx[@]}" -isystem "$out/jni" -fno-exceptions -pthread src/quest/tests/toast_presenter_test.cpp \
+        src/quest/sentinel/toast_presenter.cpp src/quest/sentinel/hook_log.cpp -o "$out/toast_presenter_test" -ldl
     timeout 60 "$out/toast_presenter_test"
 
 # Quest config-string redirect on the host. Builds two fixture shared objects that import
@@ -3254,7 +3286,7 @@ verify:
     # and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 1631
+    python3 tools/verify_gtest_floor.py --floor 1710
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py

@@ -115,6 +115,18 @@ using LibR15MountObbThunk = CallbackThunk<LibR15MountObbTag, MountObbSig>;
 using GetMountedObbPathSig = const char*(AStorageManagerOpaque* manager, const char* filename);
 struct LibR15GetMountedObbPathTag {};
 using LibR15GetMountedObbPathThunk = CallbackThunk<LibR15GetMountedObbPathTag, GetMountedObbPathSig>;
+// NRadEngine::CSysInfo::GetDataRootDir() (libr15 0xf87250, 32 bytes, exported): returns gOBBPath when its first byte is
+// non-zero, else the literal above; no argument, the result is a borrowed char const* in x0 that the callers only read.
+// By code reading of the pinned image (a disassembly scan; NOT observed on a headset): libr15 calls it through its own
+// PLT (stub 0xf34e20, JUMP_SLOT 0x36f1df8) from exactly two sites, the only `bl`/`b` to that stub in the pinned .text: CFileTypes::InitializeDirectories (bl at 0x11eb144, when the root it was
+// given is empty) and CEngine::Initialize (bl at 0x2abfe7c, when the engine config carries no data root, the result
+// stored at config +0x178). Both take the pointer and copy the string; neither writes through it. No relocation other
+// than that JUMP_SLOT names the function (no R_AARCH64_RELATIVE or ABS64 to 0xf87250), so, by that reading, no call
+// bypasses the slot. The headset run (#866 Work 4) is what observes it.
+inline constexpr const char* kGetDataRootDirSymbol = "_ZN10NRadEngine8CSysInfo14GetDataRootDirEv";
+using GetDataRootDirSig = const char*();
+struct LibR15GetDataRootDirTag {};
+using LibR15GetDataRootDirThunk = CallbackThunk<LibR15GetDataRootDirTag, GetDataRootDirSig>;
 // AOBB_STATE_MOUNTED, the success state the game's callback treats as "mounted".
 inline constexpr std::int32_t kObbStateMounted = 1;
 // The data root the game already falls back to when no OBB path was recorded (GetDataRootDir, above).
@@ -388,6 +400,12 @@ inline GotTarget LibR15MountObb() {
 }
 inline GotTarget LibR15GetMountedObbPath() {
   return {kLibR15, kGetMountedObbPathSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36f5b48ULL};
+}
+
+// libr15.so's slot for CSysInfo::GetDataRootDir, defined in libr15 itself (JUMP_SLOT 0x36f1df8, `readelf -rW` on the
+// pinned image: `R_AARCH64_JUMP_SLOT 0xf87250 _ZN10NRadEngine8CSysInfo14GetDataRootDirEv`).
+inline GotTarget LibR15GetDataRootDir() {
+  return {kLibR15, kGetDataRootDirSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36f1df8ULL};
 }
 
 // libr15.so's slot for CSysModule::FindMethod, defined in libr15 itself (JUMP_SLOT 0x36db9f8, `readelf -rW` on the

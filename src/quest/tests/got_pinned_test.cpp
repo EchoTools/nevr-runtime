@@ -173,6 +173,7 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15CheckPermission(), "libr15 CSysInfo::CheckPermission JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15MountObb(), "libr15 AStorageManager_mountObb JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetMountedObbPath(), "libr15 AStorageManager_getMountedObbPath JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15GetDataRootDir(), "libr15 CSysInfo::GetDataRootDir JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15FindMethod(), "libr15 CSysModule::FindMethod JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetDeviceExtensionsVulkan(), "libr15 vrapi_GetDeviceExtensionsVulkan JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetSystemPropertyInt(), "libr15 vrapi_GetSystemPropertyInt JUMP_SLOT");

@@ -242,11 +242,12 @@ finding (a GitHub issue) with its measurement and a Decision-line; do NOT fake g
 - **Commit identity:** governed by AGENTS.md "Commit and verification conventions" —
   **that is the authority; read it rather than this summary if they disagree.**
   Author `Andrew Bates <a@sprock.io>` (`--author=`), `--no-gpg-sign`, and a
-  **single** trailer `Co-Authored-By: <agent name> <agents@sprock.io>` (sisters author
+  **single** house trailer `Co-Authored-By: <agent name> <agents@sprock.io>` (sisters author
   their own work with Andrew as co-author; maintainers only); conventional prefix (`feat:`/`fix:`/`docs:`/
   `test:`/`build:`); one logical change per commit. **Verify after each commit:**
   `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
-  No second `Co-authored-by` trailer.
+  No second house `Co-authored-by` trailer; a person whose work the commit draws on gets a credit trailer
+  (AGENTS.md "Commits, versions and requirement words").
 - **Scratch** lives under `~/src/nevr-runtime-work/<agent>/` (maintainers only), never `/tmp`, never the
   repo (AGENTS.md "Working practices for every agent"). Delete the scripts, copies and
   build output you created, outright; keep run logs and evidence.
