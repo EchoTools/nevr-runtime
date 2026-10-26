@@ -393,6 +393,14 @@ TEST(CliFlags, OneOrTwoLeadingDashesNameTheFlagThreeAreRejected) {
   }
 }
 
+TEST(CliFlags, RequireSignedPluginsIsAFlagWithNoOldSpelling) {
+  EXPECT_TRUE(nevr_cli::IsFlag(L"-require-signed-plugins", L"-require-signed-plugins"));
+  EXPECT_TRUE(nevr_cli::IsFlag(L"--require-signed-plugins", L"-require-signed-plugins"));
+  EXPECT_FALSE(nevr_cli::IsFlag(L"---require-signed-plugins", L"-require-signed-plugins"));
+  EXPECT_FALSE(nevr_cli::IsFlag(L"-requiresignedplugins", L"-require-signed-plugins"));
+  EXPECT_EQ(nevr_cli::Resolve(L"-require-signed-plugins").alias, nullptr);
+}
+
 TEST(CliFlags, TokensThatNameNoFlagResolveToNothing) {
   for (const wchar_t* token : {L"server", L"+server", L"-Server", L"-servers", L"-serve", L"-", L"--", L"", L"-5",
                                L"--unknown-flag", L"---unknown-flag", L"-no-consol"}) {

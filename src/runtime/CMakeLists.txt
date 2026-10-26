@@ -271,14 +271,15 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   set_source_files_properties(compat/ws_bridge.cpp PROPERTIES COMPILE_OPTIONS "-Werror=old-style-cast")
 endif()
 
-# Signed plugins only (ADR 0010, #741). Every build enforces the signature gate unless this is ON; only the
-# mingw-plugin-dev preset turns it on. The mode is compiled in and embedded as a NUL-bounded
-# "NEVR-PLUGIN-TRUST <mode>" literal that tools/package_release.py reads from the packaged DLL and refuses
-# unless it says signed-only. No config key and no environment variable changes it.
-option(NEVR_ALLOW_UNSIGNED_PLUGINS "Load plugins the signature gate refuses, with a Warning (plugin developers' builds only, never ship)" OFF)
+# The signature gate (ADR 0010, #741, #924). Every build checks plugin signatures the same way: a run loads unsigned
+# plugins unless it is started with -require-signed-plugins (src/runtime/ext/plugin_trust.cpp). This option marks the
+# build as the plugin developers' build: the DLL embeds the NUL-bounded literal "NEVR-PLUGIN-TRUST dev" instead of
+# "NEVR-PLUGIN-TRUST release", and tools/package_release.py refuses to package any DLL that does not say release.
+# It does not change how a run checks plugins. No config key and no environment variable changes the mode of a run.
+option(NEVR_ALLOW_UNSIGNED_PLUGINS "Mark the build as the plugin developers' build (never ship)" OFF)
 if(NEVR_ALLOW_UNSIGNED_PLUGINS)
   set_source_files_properties(ext/plugin_trust.cpp PROPERTIES COMPILE_DEFINITIONS NEVR_ALLOW_UNSIGNED_PLUGINS=1)
-  message(STATUS "NEVR_ALLOW_UNSIGNED_PLUGINS=ON: BugSplat64.dll loads unsigned plugins (plugin developer build, never ship)")
+  message(STATUS "NEVR_ALLOW_UNSIGNED_PLUGINS=ON: BugSplat64.dll is marked as a plugin developer build (never ship)")
 endif()
 set_source_files_properties(ext/plugin_signature.cpp ext/plugin_tree.cpp ext/plugin_trust.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
