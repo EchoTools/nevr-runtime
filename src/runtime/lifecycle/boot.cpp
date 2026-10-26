@@ -15,6 +15,8 @@
 #include "runtime/patch/xpid_patch.h"
 #include "runtime/patch/resource_override.h"
 #include "runtime/patch/asset_cdn.h"
+#include "runtime/patch/credits_block.h"
+#include "runtime/patch/credits_text_install.h"
 #include "runtime/patch/coop_ai_trace.h"
 #include "runtime/ext/plugin_loader.h"
 #include "extension/module_interface.h"
@@ -586,6 +588,16 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // so gating it off on a server does not affect loadout handling.
   if (!g_isServer) {
     nevr_asset_cdn::Initialize();
+  }
+
+  // N148 (#938): the project section of the in-game CREDITS page. Client only: a server has no page, and the
+  // decision is logged either way (N122/N124). Post-CLI-parse for the same reason as the CDN above. The
+  // runtime owns two byte-patch sites here (a data-blob load, not a function, so there is nothing to hook);
+  // Install validates both and the blob before writing and leaves the game's credits alone on any mismatch.
+  if (!g_isServer) {
+    nevr_credits_text::Install(nevr_credits_block::kText, nevr_credits_block::kSize);
+  } else {
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] credits_text skipped reason=server_mode (no credits page on a server)");
   }
 
   // N92: start the WebSocket bridge in-process, as part of this DLL rather than

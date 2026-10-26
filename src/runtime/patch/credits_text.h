@@ -1,6 +1,6 @@
 #pragma once
 
-// #938: the project section of the in-game CREDITS page.
+// #938 / N148: the project section of the in-game CREDITS page.
 //
 // The page's text is one NUL-terminated byte blob in echovr.exe's .rdata (RVA kBlobRva), read by
 // CR15CreditsUICS::Update through a cursor at component instance +0x10. Two instructions put that
