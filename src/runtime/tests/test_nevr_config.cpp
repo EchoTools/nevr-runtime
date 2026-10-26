@@ -465,11 +465,11 @@ TEST(NevrConfig, KindSeesEveryKindOfNodeTheGettersCannotRead) {
   using nevr::NodeKind;
   const auto cfg = nevr::NevrConfig::LoadFromString(
       "graphics:\n  scalar: ultra\n  empty_string: \"\"\n  novalue:\n  tilde: ~\n  mapping:\n    a: 1\n  empty_mapping: {}\n"
-      "  list:\n    - a\n    - b\n  list_of_maps:\n    - k: v\n  empty_list: []\nflat: 5\n");
+      "  list:\n    - a\n    - b\n  list_of_maps:\n    - k: v\n  empty_list: []\nx-flat: 5\n");
   EXPECT_EQ(cfg.Kind("graphics"), NodeKind::kMapping);
   EXPECT_EQ(cfg.Kind("graphics.scalar"), NodeKind::kScalar);
   EXPECT_EQ(cfg.Kind("graphics.empty_string"), NodeKind::kScalar);
-  EXPECT_EQ(cfg.Kind("flat"), NodeKind::kScalar);
+  EXPECT_EQ(cfg.Kind("x-flat"), NodeKind::kScalar);
   EXPECT_EQ(cfg.Kind("graphics.novalue"), NodeKind::kNull);
   EXPECT_EQ(cfg.Kind("graphics.tilde"), NodeKind::kNull);
   EXPECT_EQ(cfg.Kind("graphics.mapping"), NodeKind::kMapping);
@@ -477,7 +477,7 @@ TEST(NevrConfig, KindSeesEveryKindOfNodeTheGettersCannotRead) {
   EXPECT_EQ(cfg.Kind("graphics.list"), NodeKind::kSequence);
   EXPECT_EQ(cfg.Kind("graphics.list_of_maps"), NodeKind::kSequence);
   EXPECT_EQ(cfg.Kind("graphics.empty_list"), NodeKind::kSequence);
-  for (const char* absent : {"graphic", "graphics.other", "graphics.scalar.deeper", "flat.deeper", "novalue", "", "graphics."}) {
+  for (const char* absent : {"graphic", "graphics.other", "graphics.scalar.deeper", "x-flat.deeper", "novalue", "", "graphics."}) {
     EXPECT_EQ(cfg.Kind(absent), NodeKind::kAbsent) << absent;
   }
   // The getters read none of the non-scalar nodes: that is the gap Kind closes.
