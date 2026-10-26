@@ -47,6 +47,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_embedded_defaults as defaults_check  # noqa: E402
 import pe_version_info  # noqa: E402
+import quest_apk_version  # noqa: E402
 
 PACKAGE_DIR = REPO / "tools" / "package-release"
 SENTINEL_IN_APK = "lib/arm64-v8a/libovrplatformloader.so"
@@ -185,6 +186,21 @@ def windows_problems(args, dll: Path) -> list:
     return problems
 
 
+def apk_version_code_problems(apk: Path, version: str) -> list:
+    """The tester APK's versionCode, read from its own compiled manifest, must be the one the package's version
+    gives (tools/quest_apk_version.py). The store APK's 4987566 is below the community installer's 4987570, so an
+    APK that skipped the repack's stamp would be refused by a headset as a downgrade."""
+    try:
+        want = quest_apk_version.version_code_for(version)
+        got = quest_apk_version.version_code_of_apk(apk)
+    except (quest_apk_version.VersionError, quest_apk_version.ManifestError, zipfile.BadZipFile, OSError) as error:
+        return [f"{apk.name}: cannot establish the APK's versionCode (AndroidManifest.xml): {error}"]
+    if got != want:
+        return [f"{apk.name}: AndroidManifest.xml has versionCode {got}, not {want} (the code for version {version}): "
+                f"the repack did not stamp this build"]
+    return []
+
+
 def gate(args, work: Path) -> dict:
     """The full local gate (`just package-dev`): Windows and Quest, development version only."""
     problems = windows_problems(args, Path(args.dll))
@@ -195,6 +211,7 @@ def gate(args, work: Path) -> dict:
         except KeyError:
             raise GateFailure(f"the APK has no {SENTINEL_IN_APK}")
     problems += [f"quest: {p}" for p in defaults_check.check(Path(args.defaults), Path(args.quest_header), [sentinel])]
+    problems += [f"quest: {p}" for p in apk_version_code_problems(Path(args.apk), read_build_info(Path(args.quest_build_info))["kVersion"])]
     info = read_build_info(Path(args.quest_build_info))
     # No config.yaml key turns the redirect, the bridge or the login on: they follow from the embedded socket URI
     # and server key. An APK that embeds neither would need a config.yaml to log in.
@@ -254,6 +271,9 @@ def check_apk_version(apk: Path, version: str, commit: str) -> None:
         raise GateFailure(f"{apk.name}: its sentinel library does not carry version '{version}'")
     if commit.encode()[:7] not in blob:
         raise GateFailure(f"{apk.name}: commit {commit[:7]} is not in its sentinel library")
+    problems = apk_version_code_problems(apk, version)
+    if problems:
+        raise GateFailure("\n".join(problems))
 
 
 def write_tree(args, out: Path, version: str) -> Path:
