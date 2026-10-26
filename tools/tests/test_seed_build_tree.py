@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 TOOL = REPO / "tools/seed_build_tree.py"
@@ -157,6 +158,37 @@ class SeededTree(SeedFixture):
         self.assertEqual(marker.read_text(), "mine\n")
 
 
+    def test_files_that_are_not_text_are_copied_as_they_are(self):
+        blob = self.build / "blob.dat"
+        blob.write_bytes(b"\0\1" + str(self.main).encode() + b"/x\0")
+        self.assertEqual(self.seed().status, "seeded")
+        self.assertEqual((self.wt_build() / "blob.dat").read_bytes(), blob.read_bytes())
+
+    def test_a_rewritten_text_file_keeps_its_mtime(self):
+        before = (self.build / "CMakeCache.txt").stat().st_mtime_ns
+        self.assertEqual(self.seed().status, "seeded")
+        self.assertEqual((self.wt_build() / "CMakeCache.txt").stat().st_mtime_ns, before)
+        self.assertEqual((self.wt_build() / "build.ninja").stat().st_mtime_ns, (self.build / "build.ninja").stat().st_mtime_ns)
+
+    def test_a_link_into_the_main_checkout_points_into_the_worktree(self):
+        (self.build / "app-link").symlink_to(self.build / "app")
+        (self.build / "dir-link").symlink_to(self.build / "CMakeFiles", target_is_directory=True)
+        (self.build / "relative-link").symlink_to("app")
+        self.assertEqual(self.seed().status, "seeded")
+        self.assertEqual(os.readlink(self.wt_build() / "app-link"), str(self.wt_build() / "app"))
+        self.assertEqual(os.readlink(self.wt_build() / "dir-link"), str(self.wt_build() / "CMakeFiles"))
+        self.assertEqual(os.readlink(self.wt_build() / "relative-link"), "app")
+
+    def test_a_log_entry_of_an_edge_no_longer_in_the_manifest_is_dropped(self):
+        with open(self.build / ".ninja_log", "a") as f:
+            f.write("1\t2\t3\tstale.o\tdeadbeef\n")
+        result = self.seed()
+        self.assertEqual(result.status, "seeded", result)
+        self.assertEqual(result.counts["log_entries_dropped"], 1)
+        self.assertNotIn("stale.o", (self.wt_build() / ".ninja_log").read_text())
+        self.assertEqual(pending_steps(self.wt_build())[0], [])
+
+
 class SeededTreeWithAnotherPathLength(SeededTree):
     """The deps log pads each path to four bytes: a worktree path of another length than main's must work too."""
     WORKTREE_NAME = "worktree-with-a-longer-name-x"
@@ -241,6 +273,23 @@ class NotSeeded(SeedFixture):
         result = self.tool.seed(self.main, inside, self.PRESET)
         self.assertEqual(result.status, "not-seeded", result)
         self.assertIn("inside", result.reason)
+
+    def test_a_main_tree_that_changes_while_it_is_copied_is_not_used(self):
+        real_run = self.tool.subprocess.run
+
+        def run_then_touch(cmd, *args, **kwargs):
+            done = real_run(cmd, *args, **kwargs)
+            if cmd[0] == "cp":  # a build in the main checkout appends to its log while the copy is made
+                with open(self.build / ".ninja_log", "a") as f:
+                    f.write("\n")
+            return done
+
+        with mock.patch.object(self.tool.subprocess, "run", run_then_touch):
+            result = self.seed()
+        self.assertEqual(result.status, "not-seeded", result)
+        self.assertIn("changed while", result.reason)
+        self.assertFalse(self.wt_build().exists())
+        self.assertEqual(list((self.wt / "build").glob(".seed-*")), [])
 
     def test_the_worktree_must_not_be_the_main_checkout(self):
         result = self.tool.seed(self.main, self.main, self.PRESET)
