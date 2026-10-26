@@ -6,7 +6,7 @@
 //
 // The policy is pure (no I/O) and follows the one #741 set for the plugin refusal dialog (ext/plugin_refusal_notice.h):
 //   * never on a dedicated server or any headless run: nobody is at the screen and a modal box would hold the
-//     process; those get the game_stop record only. The host runs before the runtime, so it reads the game's
+//     process; those get the game_stop record only, and so does a run whose command line cannot be read. The host runs before the runtime, so it reads the game's
 //     command line itself: a token that names -server or -headless, with any leading dashes, and by the game's own
 //     tokenizer (cmdline_strip.h) plus the quoted spelling boot.cpp's CommandLineToArgvW reading also takes;
 //   * never under the loader lock (the dialog pumps messages);
@@ -62,10 +62,11 @@ inline bool IsDashedName(std::string_view token, std::string_view lowerName) {
 
 }  // namespace stop_notice_detail
 
-/// The decision for one stop. `commandLine` is the process's command line (ANSI); null reads as empty.
+/// The decision for one stop. `commandLine` is the process's command line (ANSI). A null one is a command line that
+/// could not be read, and a dialog that might hold a server is worse than none, so it is suppressed.
 inline StopNotice DecideStopNotice(const char* commandLine, bool loaderLockHeld) {
   if (loaderLockHeld) return StopNotice::kSuppressedLoaderLock;
-  if (commandLine == nullptr) return StopNotice::kShow;
+  if (commandLine == nullptr) return StopNotice::kSuppressedServerOrHeadless;
   for (const nevr_cmdline::Token& token : nevr_cmdline::Tokenize(commandLine)) {
     if (stop_notice_detail::IsDashedName(token.text, "server") ||
         stop_notice_detail::IsDashedName(token.text, "headless")) {

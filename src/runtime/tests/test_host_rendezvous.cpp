@@ -513,6 +513,11 @@ TEST(HostStopNotice, ACommandLineThatCannotBeReadMeansNoDialogBecauseItMightHold
   RuntimeRendezvous::ResetActiveForTest();
 }
 
+TEST(HostStopNotice, ANullCommandLineFromTheSystemMeansNoDialogAndTheRecordSaysSo) {
+  EXPECT_EQ(RunStopWith(nullptr), "suppressed_server_or_headless");
+  EXPECT_TRUE(g_notice_texts.empty());
+}
+
 TEST(HostStopNotice, ThePolicyReadsTokensNotSubstrings) {
   using nevr_host::DecideStopNotice;
   using nevr_host::StopNotice;
@@ -527,7 +532,8 @@ TEST(HostStopNotice, ThePolicyReadsTokensNotSubstrings) {
   EXPECT_EQ(DecideStopNotice("\"-server\"", false), StopNotice::kSuppressedServerOrHeadless)
       << "boot.cpp reads a quoted -server as a server, so the dialog stays away";
   EXPECT_EQ(DecideStopNotice("", false), StopNotice::kShow);
-  EXPECT_EQ(DecideStopNotice(nullptr, false), StopNotice::kShow);
+  EXPECT_EQ(DecideStopNotice(nullptr, false), StopNotice::kSuppressedServerOrHeadless)
+      << "a command line that cannot be read might belong to a server: no dialog";
 }
 
 TEST(HostStopNotice, NothingIsShownUnderTheLoaderLock) {
