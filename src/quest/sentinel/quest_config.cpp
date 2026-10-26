@@ -38,6 +38,8 @@ constexpr const char* kHardwareDumpKey = "diagnostics.hardware_dump";          /
 constexpr const char* kUiEventProbeKey = "diagnostics.ui_event_probe";          // Quest only (default false)
 constexpr const char* kTextureQualityKey = "graphics.texture_quality";          // Quest only (default stock)
 constexpr const char* kTextureQualitySection = "graphics";
+constexpr const char* kTextureQualityName = "texture_quality";  // the one key `graphics` has
+constexpr std::size_t kMaxUnknownKeyWarnings = 8;  // a file full of unknown keys must not flood the log
 
 struct FeatureSpec {
   const char* name;
@@ -164,11 +166,34 @@ void FallBackToStock(LoadResult& r, const std::string& why) {
           texture_quality::LevelName(texture_quality::kFallbackLevel) + "; allowed: stock, low, medium, high, very_high, ultra)");
 }
 
+// Any key under `graphics` other than texture_quality is a mistake the file's author wants to hear about: a misspelling
+// (`texture_qualty`) or a different case (`Texture_Quality`) would otherwise give the default without a word, and when the
+// default is raised that is a silent change of level. The level itself is not touched (the key is absent, so it is the
+// default). The name is the file's own word, so it is named only when it is short printable ASCII (DescribeRejectedWord).
+void WarnUnknownGraphicsKeys(const nevr::NevrConfig& cfg, LoadResult& r) {
+  if (cfg.Kind(kTextureQualitySection) != nevr::NodeKind::kMapping) return;
+  std::size_t unknown = 0;
+  for (const std::string& key : cfg.MappingKeys(kTextureQualitySection)) {
+    if (key == kTextureQualityName) continue;
+    if (++unknown > kMaxUnknownKeyWarnings) continue;
+    Add(r, LogLevel::kWarn,
+        std::string("config file key=") + kTextureQualitySection + " rejected reason=unknown_key name=" +
+            DescribeRejectedWord(key) + " (ignored; the only key under " + kTextureQualitySection + " is " +
+            kTextureQualityName + ")");
+  }
+  if (unknown > kMaxUnknownKeyWarnings) {
+    Add(r, LogLevel::kWarn,
+        std::string("config file key=") + kTextureQualitySection + " rejected reason=unknown_key more=" +
+            std::to_string(unknown - kMaxUnknownKeyWarnings) + " (ignored)");
+  }
+}
+
 // graphics.texture_quality (#943). Absent: the default (texture_quality.h kDefaultLevel). One of the six words: that level.
 // Anything else is a mistake and falls back to `stock`, never to the default, with a warning naming the key: a word that is
 // not a level (wrong case, a number, empty), a value that is not a word (a mapping, a list, a key with no value), a bare
 // ${VAR} that is not set, or a `graphics` section that is not a mapping.
 void ReadTextureQuality(const nevr::NevrConfig& cfg, LoadResult& r) {
+  WarnUnknownGraphicsKeys(cfg, r);
   bool unsetBare = false;
   const std::optional<std::string> text = cfg.GetString(kTextureQualityKey, &unsetBare);
   if (!text) {

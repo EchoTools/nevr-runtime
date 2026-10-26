@@ -101,7 +101,8 @@ graphics:
   # the headset's native size. `stock` installs nothing: the game gets the size the headset runtime suggests.
   # Read once at launch and fixed for the run: a change takes effect at the next launch. Any mistake (a value that is not
   # one of the six words, a mapping or a list, a key with no value, a `graphics` that is not a mapping, an unset ${VAR}, a
-  # file rejected as a whole) gives `stock`, with a warning in the sentinel log that names the key.
+  # file rejected as a whole) gives `stock`, with a warning in the sentinel log that names the key. Any other key under
+  # `graphics` (a misspelling such as `texture_qualty`, or `Texture_Quality`) is ignored with a warning that names it.
   # Default (absent): stock. The log line `texture_quality` in the sentinel log names the level, its source and the size.
   # texture_quality: high
 

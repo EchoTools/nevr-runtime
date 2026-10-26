@@ -381,6 +381,17 @@ NodeKind NevrConfig::Kind(const std::string& path) const {
   return NodeKind::kAbsent;
 }
 
+std::vector<std::string> NevrConfig::MappingKeys(const std::string& path) const {
+  std::vector<std::string> keys;
+  if (!impl_) return keys;
+  const YAML::Node n = ResolvePath(impl_->root, path);
+  if (!n.IsDefined() || !n.IsMap()) return keys;
+  for (const auto& entry : n) {
+    if (entry.first.IsScalar()) keys.push_back(entry.first.Scalar());
+  }
+  return keys;
+}
+
 std::optional<bool> NevrConfig::GetBool(const std::string& path) const {
   const std::optional<std::string> s = GetString(path);
   if (!s) return std::nullopt;

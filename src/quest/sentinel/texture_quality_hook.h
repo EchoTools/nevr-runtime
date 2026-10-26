@@ -16,8 +16,8 @@
  * effect at the next launch. `stock` installs nothing.
  *
  * One path the hook does not cover: CVR::RefreshRTSize skips the query when the stored size override (ELF 0x37a33e8, set
- * only by CVR::SetRTSizeOverride, whose one caller found is the desktop 1920x1080 case in ConfigureEngine) is non-zero,
- * so no level applies there. A Quest run does not set it (static reading, not observed on a headset).
+ * only by CVR::SetRTSizeOverride) is non-zero, so no level applies there. Whether a Quest run sets it is not known: static
+ * reading finds one caller, ConfigureEngine (bl at 0x11f3db8), behind a flag test, passing 1920x1080.
  *
  * It never logs on the game's call path. Install logs one line, whatever the level and the outcome:
  *   {"level":"info","event":"texture_quality","result":"installed|not_installed|refused|skipped",

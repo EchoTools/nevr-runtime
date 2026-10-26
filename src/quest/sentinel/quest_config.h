@@ -23,7 +23,8 @@
 // texture_quality::kDefaultLevel (`stock` for now). It is not a feature and has no prerequisite. Any mistake in it gives
 // `stock`, never the default: a word that is not a level (wrong case, a number, empty), a value that is not a word (a
 // mapping, a list, a key with no value), an unset ${VAR}, a `graphics` section that is not a mapping, or a file that is
-// rejected as a whole. Each is one Warning that names the key (and the word, when it is short printable ASCII).
+// rejected as a whole. Each is one Warning that names the key (and the word, when it is short printable ASCII). A key under
+// `graphics` other than `texture_quality` (a misspelling, another case) is one Warning that names it, and changes nothing else.
 // `stock` leaves the headset runtime's own eye-buffer size.
 #pragma once
 

@@ -12,6 +12,7 @@
 #include <fstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
@@ -485,6 +486,22 @@ TEST(NevrConfig, KindSeesEveryKindOfNodeTheGettersCannotRead) {
     EXPECT_FALSE(cfg.GetString(notAValue).has_value()) << notAValue;
   }
   EXPECT_EQ(nevr::NevrConfig().Kind("graphics"), NodeKind::kAbsent);
+}
+
+// MappingKeys lists the scalar keys of a mapping in file order, and nothing for anything that is not a mapping.
+TEST(NevrConfig, MappingKeysListsTheKeysOfAMappingInFileOrder) {
+  const auto cfg = nevr::NevrConfig::LoadFromString(
+      "graphics:\n  zeta: 1\n  alpha:\n    nested: 1\n  Mixed_Case: x\n  list:\n    - a\n  scalar_section_below: 1\n"
+      "diagnostics: on\nsocial:\n  - a\n");
+  const std::vector<std::string> want = {"zeta", "alpha", "Mixed_Case", "list", "scalar_section_below"};
+  EXPECT_EQ(cfg.MappingKeys("graphics"), want);
+  EXPECT_EQ(cfg.MappingKeys("graphics.alpha"), std::vector<std::string>{"nested"});
+  EXPECT_TRUE(cfg.MappingKeys("graphics.zeta").empty());   // a scalar
+  EXPECT_TRUE(cfg.MappingKeys("graphics.list").empty());   // a sequence
+  EXPECT_TRUE(cfg.MappingKeys("diagnostics").empty());     // a scalar section
+  EXPECT_TRUE(cfg.MappingKeys("social").empty());          // a sequence section
+  EXPECT_TRUE(cfg.MappingKeys("services").empty());        // absent
+  EXPECT_TRUE(nevr::NevrConfig().MappingKeys("graphics").empty());
 }
 
 // A rejection carries a stable reason token, never the parser's text: that text echoes the file's own words
