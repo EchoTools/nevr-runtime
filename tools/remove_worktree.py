@@ -42,10 +42,12 @@ import sys
 
 # Ignored paths that are build output or per-worktree setup, not work. Anything else ignored (a run
 # log, a scratch file) blocks removal: move it out first. A plain copy under extern/ is covered by the
-# comparison with the main checkout, not by this list.
+# comparison with the main checkout, not by this list. The second line is what the post-checkout hook
+# (.worktreeinclude) and `just worktree-setup` copy in from the main checkout, and the pytest cache.
 IGNORED_OK = (
     "build/", "dist/", "gen/", ".env", ".nevr-worktree-setup/", ".cache/", "compile_commands.json",
     "extern/",
+    ".mcp.json", ".claude/settings.local.json", "config/public-defaults.env", ".pytest_cache/",
 )
 IGNORED_OK_PARTS = ("__pycache__/",)
 

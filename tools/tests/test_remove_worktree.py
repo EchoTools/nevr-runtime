@@ -51,9 +51,12 @@ class FixtureCase(unittest.TestCase):
         git(self.tmp, "init", "-q", "-b", "main", str(self.main))
         git(self.main, "submodule", "add", "-q", str(self.tmp / "up-luau"), "extern/luau")
         git(self.main, "submodule", "add", "-q", str(self.tmp / "up-breakpad"), "extern/breakpad")
-        (self.main / ".gitignore").write_text("build/\n")
+        (self.main / ".gitignore").write_text("build/\n.mcp.json\n.claude/settings.local.json\nconfig/public-defaults.env\n.pytest_cache/\n")
         (self.main / "README").write_text("main\n")
-        git(self.main, "add", "README", ".gitignore")
+        for rel in (".claude/skills.md", "config/public-defaults.env.example"):  # tracked, beside the ignored copies
+            (self.main / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.main / rel).write_text("tracked\n")
+        git(self.main, "add", "README", ".gitignore", ".claude", "config")
         git(self.main, "commit", "-q", "-m", "super", "--no-gpg-sign")
         self.log = self.tmp / "remove-worktree.jsonl"
 
@@ -270,6 +273,16 @@ class RemoveWorktreeTest(FixtureCase):
         wb = self.add_worktree("wb")
         (wb / "build").mkdir()
         (wb / "build/obj.o").write_text("x")
+        result = self.run_tool(str(wb))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(wb.exists())
+
+    def test_the_files_a_new_worktree_is_given_go_with_it(self):
+        # What the post-checkout hook and `just worktree-setup` copy in, and the pytest cache.
+        wb = self.add_worktree("wb")
+        for rel in (".mcp.json", ".claude/settings.local.json", "config/public-defaults.env", ".pytest_cache/v/cache/x"):
+            (wb / rel).parent.mkdir(parents=True, exist_ok=True)
+            (wb / rel).write_text("copied\n")
         result = self.run_tool(str(wb))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(wb.exists())
