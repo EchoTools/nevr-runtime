@@ -41,8 +41,10 @@ configure: generate-symcache _vcpkg-mingw _build-inputs
 _build-inputs:
     @tools/worktree-setup.sh --check
 
-# Make a fresh git worktree buildable: copy extern/{minhook,breakpad,lss} and gen/ from the main checkout,
-# and give it its own vcpkg root (build/vcpkg-root) so its builds never wait on another worktree's vcpkg lock
+# extern/{minhook,breakpad,lss} and gen/ are copied from the main checkout; the worktree gets its own vcpkg root
+# (build/vcpkg-root), so its builds never wait on another worktree's vcpkg lock; build/<preset> is seeded from the
+# main checkout's when that was built at this commit (tools/seed_build_tree.py)
+# Make a fresh git worktree buildable: its inputs, its vcpkg root and, at the same commit, a seeded build tree
 worktree-setup:
     tools/worktree-setup.sh
     tools/vcpkg_root.sh
@@ -3236,7 +3238,7 @@ verify:
     # and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 1657
+    python3 tools/verify_gtest_floor.py --floor 1681
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py
