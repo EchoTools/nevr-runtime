@@ -313,7 +313,7 @@ just verbose-build      # Build with full compiler output
 just clean              # Remove build/ and dist/
 just preset=mingw-debug build  # Use a specific preset
 just proto                     # Regenerate protobuf from BSR (requires buf CLI)
-just worktree-setup            # Make a fresh git worktree buildable (copies extern/ and gen/ from the main checkout)
+just worktree-setup            # Make a fresh git worktree buildable (copies extern/ and gen/ from the main checkout, seeds build/<preset> from the main checkout's when it was built at this commit)
 just install-hooks             # Once per clone: link the tracked post-checkout hook so a new linked worktree gets the files .worktreeinclude lists (.mcp.json, .claude/settings.local.json)
 just release-preflight           # Refuse unless this clone is exactly origin/main: no local-only tag, no uncommitted or untracked change, nothing unpushed, not behind (read-only; run before any release step)
 just package-dev                 # LOCAL dev package from a clean tree: Windows zip + Quest APK in build/package-dev/<sha>/, stamped -dev (a release is only a CI build of a v<x.y.z> tag; never tags or publishes); the Quest APK is signed with the key stored in pass by `just import-quest-keystore`
@@ -852,6 +852,17 @@ your seat name, for example `claude-main` or `codex`.
   `git submodule update --init extern/luau` in the worktree (network), and a failure is an error. It keeps anything already there (delete `gen/`
   to refresh it), never touches the main checkout, and copies the main checkout's submodule content (it warns when this branch pins other commits: then remove
   that `extern/<d>` and run `git submodule update --init extern/<d>`).
+  It then seeds `build/$PRESET` (`PRESET`, default `mingw-release`, as the justfile reads it) from the main
+  checkout's, with `tools/seed_build_tree.py`: the configured tree is copied with the checkout path rewritten in its
+  text files, ninja's deps log and ninja's build log (paths and command hashes), and the mtimes of source files
+  identical to the main checkout's are aligned, so a build that follows compiles only what differs. It seeds only an
+  absent or empty `build/$PRESET`, only a tree whose `build.ninja` names the commit it was built at (a tree that does not is refused) and that commit is this
+  worktree's HEAD, with no uncommitted changes (every compile command carries the commit and the `git describe --dirty` version, so otherwise ninja
+  rebuilds every object whatever was copied, and the shared compiler cache answers them), only when the copy no longer names the main checkout's path
+  (a tree configured through a link to the checkout is refused), and never when a `ninja`, `cmake` or `ctest` is running in the main checkout's tree. It
+  never writes the main checkout, prints what it did or why it did not (a
+  worktree that is not seeded still builds, from scratch), and appends one record to
+  `$XDG_STATE_HOME/nevr-runtime/seed-build-tree.jsonl`.
   The build embeds the public client defaults from `config/public-defaults.env` (git-ignored: CI
   writes it from the repository's Actions variables, and `just worktree-setup` copies it from the main
   checkout; copy `config/public-defaults.env.example` to make one) and reads nothing else: not `.env`,
