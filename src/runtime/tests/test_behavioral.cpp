@@ -414,13 +414,14 @@ TEST_F(PluginSignatureGateTest, PluginSignedByAnotherProfileIsRefused) {
   EXPECT_TRUE(TestLogContains("file=gate_other.dll refused: EKU"));
 }
 
-TEST_F(PluginSignatureGateTest, DevBuildLoadsAnUnsignedPluginWithAWarning) {
+TEST_F(PluginSignatureGateTest, UnsignedAllowedRunLoadsAnUnsignedPluginWithAWarning) {
   nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
   Plan("gate_dev.dll", "unsigned");
   LoadPlugins();
   EXPECT_EQ(GetLoadedPluginCount(), 1);
   EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
-                                     "file=gate_dev.dll UNSIGNED, loaded because this is a dev build"));
+                                     "file=gate_dev.dll UNSIGNED, loaded because plugin signatures are not required in this run "
+                                     "(plugin trust mode unsigned-allowed; start with -require-signed-plugins to refuse it)"));
 }
 
 TEST_F(PluginSignatureGateTest, RefusalIsPerPluginAndTheSignedOneStillLoads) {
@@ -526,7 +527,7 @@ TEST_F(PluginDependencyGateTest, SignedDependenciesAreNotARefusal) {
   EXPECT_TRUE(g_refusalDialogs.empty());
 }
 
-TEST_F(PluginDependencyGateTest, DevBuildDoesNotWalkTheDependencies) {
+TEST_F(PluginDependencyGateTest, UnsignedAllowedRunDoesNotWalkTheDependencies) {
   nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
   PlanTree("import_unsigned");
   LoadPlugins();
@@ -888,14 +889,266 @@ TEST_F(PluginDependencyGateTest, LateLoadOfASignedFileWithAnUnsignedDependencyIs
   EXPECT_TRUE(TestLogContains("refused a later load of importer.dll: dependency dep.dll (import): unsigned"));
 }
 
-TEST_F(PluginDependencyGateTest, DevBuildAllowsALateLoadWithAWarning) {
+TEST_F(PluginDependencyGateTest, UnsignedAllowedRunAllowsALateLoadWithAWarning) {
   nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
   Plan("late_dev.dll", "unsigned");
   g_testPluginLoadPlan.clear();
   TestHook_InstallPluginLoadFilter(pluginsDir_);
   EXPECT_FALSE(Blocked("late_dev.dll"));
   EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "a plugin loads late_dev.dll after its init"));
+  EXPECT_TRUE(TestLogContains("allowed because plugin signatures are not required in this run (plugin trust mode "
+                              "unsigned-allowed)"));
 }
+
+// ---- the run's mode: unsigned plugins load by default, -require-signed-plugins refuses them (#924) ----------------
+//
+// These tests do not install a mode with TestHook_SetTrust: the mode is the one a run gets, from the command line
+// through nevr_plugin_trust::ApplyCommandLine, the function PreflightRuntimeBootstrap calls before the first
+// LoadPlugins. The policy is the production policy; the plugin is the unsigned test plugin the build puts in
+// plugins/. This test executable is built without NEVR_ALLOW_UNSIGNED_PLUGINS, which the first test asserts.
+
+namespace {
+int TestLogCount(const std::string& needle) {
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  return static_cast<int>(std::count_if(g_testLogMessages.begin(), g_testLogMessages.end(),
+                                        [&needle](const std::string& m) { return m.find(needle) != std::string::npos; }));
+}
+
+std::vector<std::string> g_runModeDialogs;
+void CaptureRunModeDialog(const std::string& text) { g_runModeDialogs.push_back(text); }
+
+PluginLoadItem RunModeEarlyItem(const char* name, const char* file) {
+  PluginLoadItem item{name, file, false, "", "{}"};
+  item.early = true;
+  return item;
+}
+
+// ApplyCommandLine over a command line given as text.
+void ApplyArgs(std::initializer_list<const wchar_t*> args) {
+  std::vector<const wchar_t*> argv(args);
+  nevr_plugin_trust::ApplyCommandLine(static_cast<int>(argv.size()), argv.data());
+}
+}  // namespace
+
+class PluginRunModeTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    UnloadPlugins();
+    g_testPluginLoadPlan.clear();
+    ClearTestLogs();
+    EchoVR::g_GameBaseAddress = reinterpret_cast<CHAR*>(GetModuleHandleA(nullptr));
+    ASSERT_NE(EchoVR::g_GameBaseAddress, nullptr);
+    nevr_plugin_trust::TestHook_ResetTrust();  // the mode a run gets, not one a test installs
+    wasServer_ = g_isServer;
+    wasHeadless_ = g_isHeadless;
+    g_isServer = FALSE;  // a client with graphics: the one run that shows the dialog
+    g_isHeadless = FALSE;
+    g_runModeDialogs.clear();
+    TestHook_ResetRefusals();
+    TestHook_SetRefusalDialogSink(&CaptureRunModeDialog);
+    g_serverFatalCalls = 0;
+    char exePath[MAX_PATH] = {};
+    ASSERT_NE(GetModuleFileNameA(nullptr, exePath, MAX_PATH), 0U);
+    pluginsDir_ = std::string(exePath);
+    pluginsDir_.resize(pluginsDir_.find_last_of("\\/") + 1);
+    pluginsDir_ += "plugins\\";
+  }
+
+  void TearDown() override {
+    UnloadPlugins();
+    for (const std::string& file : copies_) DeleteFileA(file.c_str());
+    g_testPluginLoadPlan.clear();
+    ClearTestLogs();
+    TestHook_ResetPluginLoadFilter();
+    TestHook_SetRefusalDialogSink(nullptr);
+    TestHook_ResetRefusals();
+    nevr_plugin_trust::TestHook_ResetTrust();
+    g_isServer = wasServer_;
+    g_isHeadless = wasHeadless_;
+  }
+
+  // The unsigned test plugin, as `name` in plugins/ (a copy, so a late load has a file of its own to ask about).
+  void CopyUnsignedPlugin(const std::string& name) {
+    const std::string target = pluginsDir_ + name;
+    ASSERT_TRUE(CopyFileA((pluginsDir_ + "test_plugin_onframe.dll").c_str(), target.c_str(), FALSE))
+        << target << " error " << GetLastError();
+    copies_.push_back(target);
+  }
+
+  bool Blocked(const std::string& file) {
+    std::wstring wide;
+    for (char c : pluginsDir_ + file) wide.push_back(static_cast<wchar_t>(std::tolower(static_cast<unsigned char>(c))));
+    return nevr_dll_load_hook::IsLoadBlocked(wide.c_str(), nullptr);
+  }
+
+  std::string pluginsDir_;
+  std::vector<std::string> copies_;
+  BOOL wasServer_ = FALSE;
+  BOOL wasHeadless_ = FALSE;
+};
+
+TEST_F(PluginRunModeTest, ThisIsAReleaseConfiguredBuild) {
+  EXPECT_FALSE(nevr_plugin_trust::IsDevBuild());
+  EXPECT_STREQ(nevr_plugin_trust::BuildWord(), "release");
+  EXPECT_STREQ(nevr_plugin_trust::ModeLiteral(), "NEVR-PLUGIN-TRUST release");
+}
+
+TEST_F(PluginRunModeTest, AnUnsignedPluginLoadsWhenTheCommandLineHasNoArgument) {
+  ApplyArgs({L"echovr.exe", L"-windowed"});
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_NE(GetModuleHandleA("test_plugin_onframe.dll"), nullptr);
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 1u);
+  EXPECT_TRUE(manifest[0]["loaded"].get<bool>());
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "[NEVR.PLUGIN] plugin trust: mode=unsigned-allowed source=default build=release "
+                                     "literal=\"NEVR-PLUGIN-TRUST release\""));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "plugin=onframe file=test_plugin_onframe.dll UNSIGNED, loaded because plugin "
+                                     "signatures are not required in this run (plugin trust mode unsigned-allowed; "
+                                     "start with -require-signed-plugins to refuse it)"));
+  EXPECT_FALSE(TestLogContains("refused"));
+  EXPECT_TRUE(g_runModeDialogs.empty());
+}
+
+TEST_F(PluginRunModeTest, TheSamePluginIsRefusedWithRequireSignedPlugins) {
+  ApplyArgs({L"echovr.exe", L"-windowed", L"-require-signed-plugins"});
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(GetModuleHandleA("test_plugin_onframe.dll"), nullptr) << "a refused file was mapped";
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "[NEVR.PLUGIN] plugin trust: mode=signed-only source=-require-signed-plugins "
+                                     "build=release literal=\"NEVR-PLUGIN-TRUST release\""));
+  EXPECT_TRUE(TestLogContains("plugin=onframe file=test_plugin_onframe.dll refused: unsigned"));
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 1u);
+  EXPECT_FALSE(manifest[0]["loaded"].get<bool>());
+  EXPECT_EQ(manifest[0]["error"].get<std::string>(), "refused: unsigned");
+  ASSERT_EQ(g_runModeDialogs.size(), 1u) << "a client with graphics gets the refusal dialog, as before";
+  EXPECT_NE(g_runModeDialogs[0].find("test_plugin_onframe.dll wasn't loaded because it isn't signed by nEVR."),
+            std::string::npos)
+      << g_runModeDialogs[0];
+}
+
+TEST_F(PluginRunModeTest, ARefusedRequiredPluginIsFatalOnAServerAndShowsNoDialog) {
+  ApplyArgs({L"echovr.exe", L"-server", L"-require-signed-plugins"});
+  g_isServer = TRUE;
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", true, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(g_serverFatalCalls, 1) << g_lastServerFatal;
+  EXPECT_NE(g_lastServerFatal.find("refused: unsigned"), std::string::npos) << g_lastServerFatal;
+  EXPECT_TRUE(g_runModeDialogs.empty());
+}
+
+TEST_F(PluginRunModeTest, ARequiredPluginThatIsUnsignedIsNotFatalWhenSignaturesAreNotRequired) {
+  ApplyArgs({L"echovr.exe", L"-server"});
+  g_isServer = TRUE;
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", true, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_EQ(g_serverFatalCalls, 0) << g_lastServerFatal;
+}
+
+TEST_F(PluginRunModeTest, TheEarlyPassAndTheNormalPassReadTheSameMode) {
+  ApplyArgs({L"echovr.exe", L"-require-signed-plugins"});
+  g_testPluginLoadPlan.push_back(RunModeEarlyItem("early-one", "test_plugin_onframe.dll"));
+
+  LoadPlugins(PluginPhase::Early);
+  EXPECT_EQ(GetLoadedPluginCount(), 0) << "the early pass loaded an unsigned plugin in a signed-only run";
+  EXPECT_TRUE(TestLogContains("plugin=early-one file=test_plugin_onframe.dll refused: unsigned"));
+
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(TestLogCount("plugin trust: mode=signed-only"), 1) << "the mode is stated once per run, not once per pass";
+}
+
+TEST_F(PluginRunModeTest, TheEarlyPassLoadsAnUnsignedPluginWhenSignaturesAreNotRequired) {
+  ApplyArgs({L"echovr.exe"});
+  g_testPluginLoadPlan.push_back(RunModeEarlyItem("early-one", "test_plugin_onframe.dll"));
+
+  LoadPlugins(PluginPhase::Early);
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("plugin trust: mode=unsigned-allowed source=default"));
+}
+
+TEST_F(PluginRunModeTest, TheModeIsLoggedEvenWhenNoPluginIsConfigured) {
+  ApplyArgs({L"echovr.exe", L"-require-signed-plugins"});
+
+  LoadPlugins();
+
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] plugin trust: mode=signed-only"));
+  EXPECT_TRUE(TestLogContains("no plugins configured in config.yaml"));
+}
+
+TEST_F(PluginRunModeTest, ALaterLoadFollowsTheRunMode) {
+  CopyUnsignedPlugin("late_runmode.dll");
+  ApplyArgs({L"echovr.exe"});
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_FALSE(Blocked("late_runmode.dll"));
+  EXPECT_TRUE(TestLogContains("a plugin loads late_runmode.dll after its init"));
+  EXPECT_FALSE(TestLogContains("refused a later load"));
+
+  ClearTestLogs();
+  TestHook_ResetPluginLoadFilter();
+  ApplyArgs({L"echovr.exe", L"-require-signed-plugins"});
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_TRUE(Blocked("late_runmode.dll"));
+  EXPECT_TRUE(TestLogContains("refused a later load of late_runmode.dll: unsigned"));
+}
+
+TEST_F(PluginRunModeTest, OnlyTheArgumentSpelledRightSwitchesTheRun) {
+  using nevr_plugin_trust::ModeSource;
+  ApplyArgs({L"echovr.exe", L"-server", L"-windowed"});
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::UnsignedAllowed);
+  EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), ModeSource::Default);
+
+  ApplyArgs({L"echovr.exe", L"-require-signed-plugins"});
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+  EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), ModeSource::CommandLine);
+
+  ApplyArgs({L"echovr.exe", L"--require-signed-plugins"});  // the game's parser reads either dash count
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+
+  for (const wchar_t* spelling : {L"-require-signed-plugin", L"-require-signed-pluginsx", L"-require-signed",
+                              L"require-signed-plugins", L"-Require-Signed-Plugins"}) {
+    ApplyArgs({L"echovr.exe", spelling});
+    EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::UnsignedAllowed) << spelling;
+  }
+
+  ApplyArgs({L"echovr.exe", L"-require-signed-plugins"});
+  ApplyArgs({L"echovr.exe"});  // a later reading replaces the earlier one
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::UnsignedAllowed);
+}
+
+TEST_F(PluginRunModeTest, AnUnreadableCommandLineFailsClosed) {
+  nevr_plugin_trust::ApplyUnreadableCommandLine();
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+  EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::CommandLineUnreadable);
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_TRUE(TestLogContains("plugin trust: mode=signed-only source=command line unreadable"));
+}
+
+TEST_F(PluginRunModeTest, WithNoCommandLineReadTheRunIsTheDefault) {
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::UnsignedAllowed);
+  EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::Default);
+}
+
 
 TEST(PluginRefusalNotice, TrackerKeepsEachNameOnceAndNeverShowsATwiceDialog) {
   nevr_plugin_refusal::Tracker t;
@@ -910,7 +1163,7 @@ TEST(PluginRefusalNotice, TrackerKeepsEachNameOnceAndNeverShowsATwiceDialog) {
   EXPECT_TRUE(t.TakeDialog(false, false).empty());
 }
 
-TEST(PluginSignatureGate, NoFallbackToTheDefaultSearchInASignedOnlyBuild) {
+TEST(PluginSignatureGate, NoFallbackToTheDefaultSearchInASignedOnlyRun) {
   EXPECT_FALSE(TestHook_RestrictedSearchFallbackAllowed(true, ERROR_INVALID_PARAMETER));
   EXPECT_TRUE(TestHook_RestrictedSearchFallbackAllowed(false, ERROR_INVALID_PARAMETER));
   EXPECT_FALSE(TestHook_RestrictedSearchFallbackAllowed(false, ERROR_FILE_NOT_FOUND));

@@ -130,6 +130,30 @@ built-in log filter, and the in-process game server
 
 Hooking is [MinHook](https://github.com/TsudaKageyu/minhook)-based.
 
+### Command-line arguments
+
+Arguments the runtime reads from the game's command line (`--name` works as well as `-name`). `--help` lists them.
+
+| Argument | Effect |
+| -------- | ------ |
+| `-server` | Run as a dedicated game server (implies headless) |
+| `-offline` | Run the game in offline mode |
+| `-windowed` | Run the game with no headset, in a window |
+| `-no-console` | Disable console window creation |
+| `-config`, `-config-path` | Path to a JSON file the game loads instead of `_local/config.json`; `config.yaml` is looked for in the same directory |
+| `-region` | Set the matchmaking region |
+| `-serverregion` | Set the server fleet region |
+| `-no-exit-on-error` | Keep a server running after a game service disconnect (default: exit) |
+| `-exit-on-error` | No effect: exiting on error is the default |
+| `-trace-exports` | Trace the export calls of platform DLLs (`pnsrad`, `pnsovr`, `pnsdemo` or `all`); off by default |
+| `-no-telemetry` | Disable telemetry streaming |
+| `-telemetry-rate` | Set the telemetry rate in Hz |
+| `-telemetry-diag` | Log telemetry diagnostics every second |
+| `-timestamps` | Prefix log lines with timestamps |
+| `-upnp` | Enable UPnP port forwarding |
+| `-skip-dbgcore-check` | Skip the check that refuses a `dbgcore.dll` in the game directory (legacy injection) |
+| `-require-signed-plugins` | Load only plugins signed through the release pipeline and refuse the rest. Without it, plugins load whether or not they are signed. The `plugin trust:` line in the log states which applied |
+
 ### Runtime-loaded modules
 
 The `platform_compat` and `token_auth` modules are statically linked into

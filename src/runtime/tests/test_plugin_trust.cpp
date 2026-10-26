@@ -96,9 +96,20 @@ TEST(PluginTrust, EveryDenylistEntryParses) {
   for (const std::string& eku : policy.deniedProfileEkus) EXPECT_TRUE(IsOid(eku)) << eku;
 }
 
-TEST(PluginTrust, ModeLiteralNamesTheModeTheBuildEnforces) {
+TEST(PluginTrust, ModeLiteralNamesTheKindOfBuild) {
   const std::string literal = trust::ModeLiteral();
-  EXPECT_EQ(literal, std::string("NEVR-PLUGIN-TRUST ") + trust::ModeWord(trust::BuildMode()));
+  EXPECT_EQ(literal, std::string("NEVR-PLUGIN-TRUST ") + trust::BuildWord());
+  // This executable is built the way the release preset builds the runtime: without NEVR_ALLOW_UNSIGNED_PLUGINS.
+  EXPECT_FALSE(trust::IsDevBuild());
+  EXPECT_EQ(literal, "NEVR-PLUGIN-TRUST release");
+}
+
+TEST(PluginTrust, TheRunModeWordsAreTheOnesTheLogLineAndTheDocumentsUse) {
+  EXPECT_STREQ(trust::ModeWord(trust::Mode::SignedOnly), "signed-only");
+  EXPECT_STREQ(trust::ModeWord(trust::Mode::UnsignedAllowed), "unsigned-allowed");
+  EXPECT_STREQ(trust::ModeSourceWord(trust::ModeSource::Default), "default");
+  EXPECT_STREQ(trust::ModeSourceWord(trust::ModeSource::CommandLine), "-require-signed-plugins");
+  EXPECT_STREQ(trust::ModeSourceWord(trust::ModeSource::CommandLineUnreadable), "command line unreadable");
 }
 
 // The real signed file (#745): the v5.4.3 BugSplat64.dll the release-signer pipeline produced

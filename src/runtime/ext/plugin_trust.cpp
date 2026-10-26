@@ -2,6 +2,10 @@
 
 #include "runtime/ext/plugin_trust.h"
 
+#include <atomic>
+
+#include "core/cli_flags.h"
+
 namespace nevr_plugin_trust {
 namespace {
 
@@ -151,13 +155,19 @@ constexpr bool kPinsConfirmed = true;
 constexpr const char kSubject[] = "";
 
 #ifdef NEVR_ALLOW_UNSIGNED_PLUGINS
-constexpr Mode kBuildMode = Mode::UnsignedAllowed;
+constexpr bool kDevBuild = true;
 // A leading NUL so the literal is NUL-bounded in the file whatever the linker places before it.
-const char kModeArray[] = "\0NEVR-PLUGIN-TRUST unsigned-allowed";
+const char kModeArray[] = "\0NEVR-PLUGIN-TRUST dev";
 #else
-constexpr Mode kBuildMode = Mode::SignedOnly;
-const char kModeArray[] = "\0NEVR-PLUGIN-TRUST signed-only";
+constexpr bool kDevBuild = false;
+const char kModeArray[] = "\0NEVR-PLUGIN-TRUST release";
 #endif
+
+// The run's mode (#924). Unsigned plugins load until the command line says otherwise: release-signer does not sign
+// plugins yet, so a player's plugins are unsigned. Written by ApplyCommandLine before the first plugin pass and read
+// by every pass and by the late-load filter (any thread), so it is atomic.
+std::atomic<Mode> g_runMode{Mode::UnsignedAllowed};
+std::atomic<ModeSource> g_runModeSource{ModeSource::Default};
 
 nevr_plugin_signature::Policy MakeProductionPolicy() {
   nevr_plugin_signature::Policy policy;
@@ -172,17 +182,45 @@ nevr_plugin_signature::Policy MakeProductionPolicy() {
 
 #ifdef NEVR_TEST_HOOKS
 bool g_overridden = false;
-Mode g_overrideMode = kBuildMode;
+Mode g_overrideMode = Mode::UnsignedAllowed;
 const nevr_plugin_signature::Policy* g_overridePolicy = nullptr;
 #endif
 
 }  // namespace
 
-Mode BuildMode() { return kBuildMode; }
+bool IsDevBuild() { return kDevBuild; }
+
+const char* BuildWord() { return kDevBuild ? "dev" : "release"; }
 
 const char* ModeWord(Mode mode) { return mode == Mode::SignedOnly ? "signed-only" : "unsigned-allowed"; }
 
+const char* ModeSourceWord(ModeSource source) {
+  switch (source) {
+    case ModeSource::CommandLine:
+      return "-require-signed-plugins";
+    case ModeSource::CommandLineUnreadable:
+      return "command line unreadable";
+    case ModeSource::Default:
+      break;
+  }
+  return "default";
+}
+
 const char* ModeLiteral() { return kModeArray + 1; }
+
+void ApplyCommandLine(int argc, const wchar_t* const* argv) {
+  bool required = false;
+  for (int i = 0; argv != nullptr && i < argc; ++i) {
+    if (nevr_cli::IsFlag(argv[i], L"-require-signed-plugins")) required = true;
+  }
+  g_runMode.store(required ? Mode::SignedOnly : Mode::UnsignedAllowed);
+  g_runModeSource.store(required ? ModeSource::CommandLine : ModeSource::Default);
+}
+
+void ApplyUnreadableCommandLine() {
+  g_runMode.store(Mode::SignedOnly);
+  g_runModeSource.store(ModeSource::CommandLineUnreadable);
+}
 
 bool PinsConfirmed() { return kPinsConfirmed; }
 
@@ -199,8 +237,10 @@ Mode ActiveMode() {
 #ifdef NEVR_TEST_HOOKS
   if (g_overridden) return g_overrideMode;
 #endif
-  return kBuildMode;
+  return g_runMode.load();
 }
+
+ModeSource ActiveModeSource() { return g_runModeSource.load(); }
 
 const nevr_plugin_signature::Policy& ActivePolicy() {
 #ifdef NEVR_TEST_HOOKS
@@ -218,8 +258,10 @@ void TestHook_SetTrust(Mode mode, const nevr_plugin_signature::Policy* policy) {
 
 void TestHook_ResetTrust() {
   g_overridden = false;
-  g_overrideMode = kBuildMode;
+  g_overrideMode = Mode::UnsignedAllowed;
   g_overridePolicy = nullptr;
+  g_runMode.store(Mode::UnsignedAllowed);
+  g_runModeSource.store(ModeSource::Default);
 }
 #endif
 

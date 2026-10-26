@@ -157,8 +157,8 @@ std::string_view PluginFilename(const std::string& file) {
   return name;
 }
 
-// ADR 0010 section 1: when the OS rejects the restricted search flags, a build that allows unsigned plugins
-// retries with the default search order (N75's old behaviour, logged); a signed-only build does not, because a
+// ADR 0010 section 1: when the OS rejects the restricted search flags, a run that allows unsigned plugins
+// retries with the default search order (N75's old behaviour, logged); a signed-only run does not, because a
 // load the check did not shape is a load it did not cover.
 bool RestrictedSearchFallbackAllowed(bool enforcing, DWORD error) {
   return !enforcing && error == ERROR_INVALID_PARAMETER;
@@ -383,7 +383,7 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
   } else {
     // The loader appends a relative path to every directory it searches (System32, the Windows directory, PATH, the
     // directories set with SetDllDirectory, and each of those through links), so no list of candidates is complete:
-    // a "..", an ancestor of plugins\\ or a junction in one of them each reach it. In a signed-only build a relative
+    // a "..", an ancestor of plugins\\ or a junction in one of them each reach it. In a signed-only run a relative
     // path with a directory part is refused whatever it leads to; a plugin that needs such a load passes a full path.
     if (enforcing) {
       const std::string name = NarrowName(p);
@@ -472,7 +472,8 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
   if (!enforcing) {
     if (!nevr_dll_load_hook::LoaderLockHeldByThisThread()) {
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PLUGIN] a plugin loads %s after its init: %s, allowed because this is a dev build (plugin trust mode %s)",
+          "[NEVR.PLUGIN] a plugin loads %s after its init: %s, allowed because plugin signatures are not required in "
+          "this run (plugin trust mode %s)",
           file.c_str(), refusal.c_str(), nevr_plugin_trust::ModeWord(nevr_plugin_trust::ActiveMode()));
     }
     return false;
@@ -659,7 +660,7 @@ class PluginLoadRun {
       const DWORD error = GetLastError();
       if (enforcing && error == ERROR_INVALID_PARAMETER) {
         // ADR 0010 section 1: a load the check did not shape is a load the check did not cover.
-        FailPluginLoad(item, "refused: restricted search unsupported, no fallback load in a signed-only build",
+        FailPluginLoad(item, "refused: restricted search unsupported, no fallback load in a signed-only run",
                        itemReport);
         return;
       }
@@ -702,7 +703,8 @@ class PluginLoadRun {
                                    ? std::string("UNSIGNED")
                                    : "NOT ACCEPTED: " + verdict.Describe();
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PLUGIN] plugin=%s file=%s %s, loaded because this is a dev build (plugin trust mode %s)",
+          "[NEVR.PLUGIN] plugin=%s file=%s %s, loaded because plugin signatures are not required in this run "
+          "(plugin trust mode %s; start with -require-signed-plugins to refuse it)",
           item.name.c_str(), filename, what.c_str(), nevr_plugin_trust::ModeWord(nevr_plugin_trust::ActiveMode()));
       return true;
     }
@@ -822,7 +824,7 @@ class PluginLoadRun {
   HMODULE hPlugin = LoadLibraryExA(path.c_str(), nullptr,
                                    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
                                    LOAD_LIBRARY_SEARCH_SYSTEM32);
-  // A signed-only build has no fallback (ADR 0010 section 1): the caller refuses on ERROR_INVALID_PARAMETER.
+  // A signed-only run has no fallback (ADR 0010 section 1): the caller refuses on ERROR_INVALID_PARAMETER.
   if (!hPlugin && RestrictedSearchFallbackAllowed(enforcing, GetLastError())) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PLUGIN] %s: restricted search flags unsupported — falling back to "
@@ -1070,8 +1072,26 @@ class PluginLoadRun {
 // #496: the run an early pass did, kept for the normal pass.
 static std::unique_ptr<PluginLoadRun> g_earlyRun;
 
+// #924: states the plugin trust mode of this run, once: whichever pass comes first says it, and a run with no plugin
+// configured says it too, so a player's log always shows whether signatures were enforced. The mode is the one
+// PreflightRuntimeBootstrap set from the command line before the first pass; the literal is the build's.
+static bool g_trustModeStated = false;
+
+static void StatePluginTrustMode() {
+  if (g_trustModeStated) return;
+  g_trustModeStated = true;
+  const nevr_plugin_trust::Mode mode = nevr_plugin_trust::ActiveMode();
+  Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] plugin trust: mode=%s source=%s build=%s literal=\"%s\" (%s)",
+      nevr_plugin_trust::ModeWord(mode), nevr_plugin_trust::ModeSourceWord(nevr_plugin_trust::ActiveModeSource()),
+      nevr_plugin_trust::BuildWord(), nevr_plugin_trust::ModeLiteral(),
+      mode == nevr_plugin_trust::Mode::SignedOnly
+          ? "a plugin not signed through the release pipeline does not load"
+          : "plugins load whether or not they are signed; -require-signed-plugins makes a run signed-only");
+}
+
 void LoadPlugins(PluginPhase phase) {
   const bool early = phase == PluginPhase::Early;
+  StatePluginTrustMode();
 
   // Resolve plugins/ directory relative to echovr.exe (same dir as pnsradgameserver.dll)
   CHAR moduleDir[MAX_PATH] = {0};
@@ -1111,11 +1131,6 @@ void LoadPlugins(PluginPhase phase) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.PLUGIN] %zu plugin(s) configured, %zu enabled; loading in list order from %s",
         run->PlanSize(), run->EnabledCount(), pluginDir.c_str());
-  }
-  if (!early) {
-    // #741: which trust mode this binary enforces, from the same literal the packaging check reads.
-    Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] plugin trust: %s (%s)",
-        nevr_plugin_trust::ModeWord(nevr_plugin_trust::ActiveMode()), nevr_plugin_trust::ModeLiteral());
   }
   const size_t loadedBefore = g_plugins.size();
 
@@ -1185,6 +1200,7 @@ void UnloadPlugins() {
   }
   g_plugins.clear();
   g_earlyRun.reset();
+  g_trustModeStated = false;
   PublishPluginReport({});  // nothing is loaded any more; do not report stale state
 }
 

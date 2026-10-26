@@ -72,6 +72,11 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgHelpString(pArgSyntax, "-skip-dbgcore-check",
       "[NEVR] Skip the check that refuses a dbgcore.dll in the game directory (legacy injection)");
 
+  EchoVR::AddArgSyntax(pArgSyntax, "-require-signed-plugins", 0, 0, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-require-signed-plugins",
+      "[NEVR] Load only plugins signed through the release pipeline; refuse the rest (default: unsigned plugins load). "
+      "Read before the first plugin loads (runtime/lifecycle/boot.cpp, runtime/ext/plugin_trust.cpp)");
+
   // -config-path is NOT ignored: boot.cpp handles it exactly like -config.
   EchoVR::AddArgSyntax(pArgSyntax, "-config-path", 1, 1, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-config-path", "[NEVR] Same as -config");
