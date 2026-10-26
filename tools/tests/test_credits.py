@@ -16,6 +16,8 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+import work_root  # noqa: E402
 README = ROOT / "README.md"
 CREDITS = ROOT / "config" / "credits.json"
 TOOL = ROOT / "tools" / "render_credits.py"
@@ -230,6 +232,195 @@ class CheckerCatchesDrift(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(self.tool.check(self.json, self.readme), [])
         self.assertNotEqual(self.readme.read_text(encoding="utf-8"), text)
+
+
+def c_literal_bytes(source: str, symbol: str) -> bytes:
+    """Decode the C string literal assigned to `symbol` in generated source: adjacent quoted pieces, with
+    \\ooo octal, \\\\ and \\" escapes only (all the generator emits)."""
+    match = re.search(re.escape(symbol) + r"\[\]\s*=\s*((?:\s*\"(?:[^\"\\\n]|\\.)*\")+)\s*;", source)
+    assert match, f"no literal for {symbol}"
+    out = bytearray()
+    for piece in re.findall(r'"((?:[^"\\\n]|\\.)*)"', match.group(1)):
+        i = 0
+        while i < len(piece):
+            if piece[i] != "\\":
+                out.append(ord(piece[i]))
+                i += 1
+            elif piece[i + 1] in '"\\':
+                out.append(ord(piece[i + 1]))
+                i += 2
+            else:
+                out.append(int(piece[i + 1:i + 4], 8))
+                i += 4
+    return bytes(out)
+
+
+class IngameText(unittest.TestCase):
+    """#938: the block the runtime puts above Ready At Dawn's credits, rendered here at build time."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tool = load_tool()
+        cls.data = json.loads(CREDITS.read_text(encoding="utf-8"))
+
+    def data_with(self, groups):
+        """A file whose in-game groups are exactly `groups` ({heading text: [names]})."""
+        headings = [{"id": f"h{i}", "ingame": text} for i, text in enumerate(groups)]
+        entries = []
+        for i, names in enumerate(groups.values()):
+            for name in names:
+                entries.append({"name": name, "section": None, "headings": [f"h{i}"], "link": "", "what": "",
+                                "sources": ["#938"]})
+        return {"schema": 1, "headings": headings, "sections": [], "entries": entries, "closing": ""}
+
+    def test_the_real_file_renders_the_heading_a_blank_the_names_and_three_blanks(self):
+        names = [n for g in self.tool.ingame_groups(self.data) for n in g["names"]]
+        self.assertEqual(
+            self.tool.ingame_text(self.data),
+            ("CODE CONTRIBUTIONS\n\n" + "".join(n + "\n" for n in names) + "\n\n\n").encode("cp1252"),
+        )
+
+    def test_groups_are_separated_by_three_blank_lines(self):
+        data = self.data_with({"ONE": ["a", "b"], "TWO": ["c"]})
+        self.assertEqual(self.tool.ingame_text(data), b"ONE\n\na\nb\n\n\n\nTWO\n\nc\n\n\n\n")
+
+    def test_an_empty_heading_emits_nothing_not_even_its_blank_lines(self):
+        data = self.data_with({"ONE": ["a"], "EMPTY": [], "TWO": ["c"]})
+        self.assertEqual(self.tool.ingame_text(data), b"ONE\n\na\n\n\n\nTWO\n\nc\n\n\n\n")
+        self.assertNotIn(b"EMPTY", self.tool.ingame_text(data))
+
+    def test_no_names_at_all_is_an_empty_block(self):
+        self.assertEqual(self.tool.ingame_text(self.data_with({"ONE": [], "TWO": []})), b"")
+
+    def test_names_are_encoded_as_the_games_single_byte_text(self):
+        data = self.data_with({"ONE": ["\u00a9 Name", "plain"]})
+        text = self.tool.ingame_text(data)
+        self.assertIn(b"\xa9 Name\n", text)
+        self.assertIn(b"plain\n", text)
+        self.assertNotIn(b"\xc3", text)  # no UTF-8 lead byte
+
+    def problems(self, groups):
+        return self.tool.validate(self.data_with(groups), ROOT)
+
+    def test_a_character_the_font_cannot_draw_is_refused_naming_the_entry_and_the_field(self):
+        # Measured on the running game: the font draws printable ASCII and the copyright sign; U+00EB draws as '?'.
+        for char in ("\u00eb", "\u00fc", "\u0141", "\U0001F600", "\u00e9", "\u00a0", "\u2019", "\x7f", "\u0080"):
+            problems = self.problems({"ONE": [f"Zo{char}"]})
+            self.assertEqual(len(problems), 1, (char, problems))
+            self.assertIn(repr(f"Zo{char}"), problems[0])
+            self.assertIn("field name", problems[0])
+            self.assertIn(f"U+{ord(char):04X}", problems[0])
+        heading = self.problems({"H\u00ebad": ["a"]})
+        self.assertEqual(len(heading), 1, heading)
+        self.assertIn("field ingame", heading[0])
+        self.assertIn("U+00EB", heading[0])
+
+    def test_every_undrawn_character_is_listed_once_in_code_point_order(self):
+        problems = self.problems({"ONE": ["a\u00fc\u00eb\u00e9\u00e8\u00e0\u00ef\u00eb\u00fc"]})
+        self.assertEqual(len(problems), 1, problems)
+        listed = ", ".join(f"{chr(c)!r} (U+{c:04X})" for c in (0xE0, 0xE8, 0xE9, 0xEB, 0xEF, 0xFC))
+        self.assertIn(listed, problems[0])  # six characters: a set's own order passes this once in 720 runs
+
+    def test_an_undrawn_name_is_one_problem_even_when_it_is_also_too_long(self):
+        self.assertEqual(len(self.problems({"ONE": ["\u00eb" * 70]})), 1)
+
+    def test_printable_ascii_and_the_copyright_sign_are_drawn(self):
+        ascii_printable = "".join(chr(c) for c in range(0x21, 0x7F) if chr(c) != "|")
+        self.assertEqual(self.problems({"ONE": [ascii_printable[:64], ascii_printable[64:], "a b", "\u00a9 9", "\u00a9"]}), [])
+
+    def test_ingame_text_itself_refuses_a_character_the_font_cannot_draw(self):
+        # Not only validate(): a caller that skips it must not get bytes for a name the page would show as '?'.
+        with self.assertRaises(ValueError):
+            self.tool.ingame_text(self.data_with({"ONE": ["Zo\u00eb"]}))
+
+    def test_a_name_that_would_change_the_games_parse_is_refused(self):
+        for bad in ("a|b", "a\nb", "a\rb", "a\x00b", "a\tb", " lead", "trail ", ""):
+            self.assertTrue(self.problems({"ONE": [bad]}), repr(bad))
+
+    def test_the_games_sixty_four_byte_line_is_the_limit_for_names_and_headings(self):
+        self.assertEqual(self.problems({"ONE": ["W" * 64]}), [])
+        self.assertTrue(self.problems({"ONE": ["W" * 65]}))
+        self.assertEqual(self.problems({"H" * 64: ["a"]}), [])
+        self.assertTrue(self.problems({"H" * 65: ["a"]}))
+
+    def test_a_drawn_non_ascii_character_counts_one_byte(self):
+        # The copyright sign is one byte in the game's text (two in UTF-8), so 64 of them fit and 65 do not.
+        self.assertEqual(self.problems({"ONE": ["\u00a9" * 64]}), [])
+        self.assertTrue(self.problems({"ONE": ["\u00a9" * 65]}))
+
+    def test_two_hundred_lines_is_the_cap(self):
+        # one group is N + 5 lines: heading, blank, N names, three blanks
+        self.assertEqual(self.problems({"ONE": [f"n{i}" for i in range(195)]}), [])
+        self.assertTrue(self.problems({"ONE": [f"n{i}" for i in range(196)]}))
+        self.assertEqual(self.tool.ingame_text(self.data_with({"ONE": [f"n{i}" for i in range(195)]})).count(b"\n"), 200)
+
+    def test_a_name_over_the_review_length_is_a_warning_not_a_problem(self):
+        data = self.data_with({"ONE": ["W" * 41, "ok"]})
+        self.assertEqual(self.tool.validate(data, ROOT), [])
+        self.assertEqual(len(self.tool.ingame_warnings(data)), 1)
+        self.assertEqual(self.tool.ingame_warnings(self.data_with({"ONE": ["W" * 40]})), [])
+
+    def test_the_shipped_file_has_no_in_game_warning(self):
+        self.assertEqual(self.tool.ingame_warnings(self.data), [])
+
+    def test_the_c_source_round_trips_every_byte(self):
+        for groups in ({"ONE": ["Zoe", '"quoted"', "back\\slash", "\u00a9 9"]}, {"ONE": []}, {"A": ["x"], "B": ["y"]}):
+            data = self.data_with(groups)
+            source = self.tool.ingame_source(data)
+            block = self.tool.ingame_text(data)
+            self.assertEqual(c_literal_bytes(source, "kText"), block)
+            self.assertIn(f"kSize = {len(block)};", source)
+
+    def test_the_c_source_uses_octal_escapes_so_a_digit_cannot_extend_one(self):
+        # "\xa9" followed by the digit 9 would read as one hex escape; octal is fixed at three digits.
+        source = self.tool.ingame_source(self.data_with({"ONE": ["\u00a9 9", "\u00a99"]}))
+        self.assertNotIn("\\x", source)
+        self.assertEqual(c_literal_bytes(source, "kText").count(b"\xa99"), 1)
+
+    def test_a_question_mark_is_escaped_so_no_trigraph_can_form(self):
+        source = self.tool.ingame_source(self.data_with({"ONE": ["a??/b", "what?"]}))
+        self.assertNotIn("??", source)
+        self.assertEqual(c_literal_bytes(source, "kText").count(b"a??/b\n"), 1)
+
+    def test_validate_includes_the_in_game_rules_so_check_and_the_build_agree(self):
+        data = copy.deepcopy(self.data)
+        data["entries"][0]["name"] = "Xeno|mega"
+        self.assertTrue(self.tool.validate(data, ROOT))
+
+    def test_the_command_writes_the_text_and_the_source(self):
+        with tempfile.TemporaryDirectory(prefix="credits-ingame-", dir=work_root.test_scratch()) as tmp:
+            text, source = Path(tmp) / "block.txt", Path(tmp) / "block.cpp"
+            for flag, out in (("--ingame-text", text), ("--ingame-source", source)):
+                proc = subprocess.run([sys.executable, str(TOOL), flag, str(out)], cwd=ROOT, capture_output=True, text=True)
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(text.read_bytes(), self.tool.ingame_text(self.data))
+            self.assertEqual(c_literal_bytes(source.read_text(encoding="ascii"), "kText"), text.read_bytes())
+
+    def test_the_command_refuses_a_bad_file_and_writes_nothing(self):
+        with tempfile.TemporaryDirectory(prefix="credits-ingame-", dir=work_root.test_scratch()) as tmp:
+            bad = copy.deepcopy(self.data)
+            bad["entries"][0]["name"] = "bad|name"  # encodes fine: only validation refuses it
+            bad_json, out = Path(tmp) / "credits.json", Path(tmp) / "block.cpp"
+            bad_json.write_text(json.dumps(bad), encoding="utf-8")
+            proc = subprocess.run([sys.executable, str(TOOL), "--ingame-source", str(out), "--json", str(bad_json)],
+                                  cwd=ROOT, capture_output=True, text=True)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertFalse(out.exists())
+
+    def test_the_command_refuses_a_name_the_font_cannot_draw_and_names_it(self):
+        for flag in ("--ingame-source", "--ingame-text"):
+            with tempfile.TemporaryDirectory(prefix="credits-ingame-", dir=work_root.test_scratch()) as tmp:
+                bad = copy.deepcopy(self.data)
+                bad["entries"][0]["name"] = "Zo\u00eb"  # in Windows-1252, so only the font rule refuses it
+                bad_json, out = Path(tmp) / "credits.json", Path(tmp) / "block.out"
+                bad_json.write_text(json.dumps(bad), encoding="utf-8")
+                proc = subprocess.run([sys.executable, str(TOOL), flag, str(out), "--json", str(bad_json)],
+                                      cwd=ROOT, capture_output=True, text=True)
+                self.assertNotEqual(proc.returncode, 0, flag)
+                self.assertFalse(out.exists(), flag)
+                self.assertIn("Zo\u00eb", proc.stderr)
+                self.assertIn("field name", proc.stderr)
+                self.assertIn("U+00EB", proc.stderr)
 
 
 if __name__ == "__main__":

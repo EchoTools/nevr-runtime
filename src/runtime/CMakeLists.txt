@@ -45,6 +45,8 @@ set(PATCHES_SOURCES
     "ext/module_loader.cpp"
     "patch/resource_override.cpp"
     "patch/asset_cache.cpp"
+    # #938: the nEVR section of the in-game CREDITS page (pure logic in credits_text.h).
+    "patch/credits_text.cpp"
     "patch/asset_registry.cpp"
     "patch/plugin_assets.cpp"
     "compat/ws_bridge.cpp"
@@ -207,6 +209,21 @@ target_include_directories(nevr_runtime PRIVATE
   ${CMAKE_SOURCE_DIR}/plugins/common/include
   ${CMAKE_BINARY_DIR}
 )
+
+# #938: the project section of the in-game CREDITS page is rendered from config/credits.json at build time and
+# compiled in (patch/credits_block.h declares it). A name the page cannot show, or a file that does not
+# validate, fails this step and so the build; nothing is cut or dropped at run time.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(NEVR_CREDITS_BLOCK_CPP "${CMAKE_CURRENT_BINARY_DIR}/generated/credits_block.cpp")
+add_custom_command(
+  OUTPUT "${NEVR_CREDITS_BLOCK_CPP}"
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/render_credits.py"
+          --ingame-source "${NEVR_CREDITS_BLOCK_CPP}" --json "${CMAKE_SOURCE_DIR}/config/credits.json"
+  DEPENDS "${CMAKE_SOURCE_DIR}/config/credits.json" "${CMAKE_SOURCE_DIR}/tools/render_credits.py"
+  COMMENT "Rendering the in-game credits block from config/credits.json"
+  VERBATIM)
+target_sources(nevr_runtime PRIVATE "${NEVR_CREDITS_BLOCK_CPP}")
+set_source_files_properties("${NEVR_CREDITS_BLOCK_CPP}" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 find_package(CURL REQUIRED)
 
@@ -1477,8 +1494,8 @@ if(BUILD_TESTING)
     # test_plugin_log.cpp (#598, header-only ext/plugin_log.h) ride in this
     # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp lifecycle/crash_dump_format.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp lifecycle/crash_dump_format.cpp
+      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp lifecycle/crash_dump_format.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp lifecycle/crash_dump_format.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src
       ${CMAKE_SOURCE_DIR}/plugins/common/include)
