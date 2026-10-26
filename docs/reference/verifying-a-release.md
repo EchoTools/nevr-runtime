@@ -1439,7 +1439,7 @@ four put a `state.json` there):
 | A state file that cannot be read | a `state.json` that is not JSON, or a directory named `state.json` | step 6, not a state file or cannot read |
 | A byte of an artifact flipped after download | `printf X \| dd of=windows.zip bs=1 seek=200000 conv=notrunc` | step 8, sha256 differs |
 | A server that sends more than `size` | a local server for the artifact path that ignores the length | step 8, the server sent more than N bytes, and the file is gone |
-| A manifest nobody verified | `check-artifact.sh` on a state directory whose `manifest.json` was edited after step 6 | step 8, the stored manifest is not the one that passed step 2 |
+| A manifest nobody verified | the check-artifact.sh script on a state directory whose `manifest.json` was edited after step 6 | step 8, the stored manifest is not the one that passed step 2 |
 | An extra entry in the zip | `zip -j windows.zip extra.txt`, then `python3 -I check-zip.py <state> 5.5.1 windows.zip` | step 8, the zip holds extra.txt, which the manifest does not list |
 | A directory entry or a symbolic link in the zip | `zip -r` of a directory, or `zip -y` of a link | step 8, the zip holds it, or it is not a regular file |
 | A revocation list that is not a list of strings | a signed manifest whose `revoked_keys` is `"abc"` or `[1]` | step 6, `revoked_keys in the manifest is not a list of strings` |
