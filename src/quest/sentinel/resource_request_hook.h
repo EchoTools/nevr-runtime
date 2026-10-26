@@ -13,7 +13,7 @@
  * offsets and sizes, offset in the chunk, size and alignment. A call that returned nonzero (the manifest has no such
  * resource) is a `resource_request_miss` line with the key, the return value and the call site; the request is not read.
  * What the first run is for: the corpus of what the Quest requests, the mip key and the index-to-level rule, and the
- * threads that ask (docs/adr/0015-quest-resource-request-log.md).
+ * threads that ask (docs/adr/0018-quest-resource-request-log.md).
  *
  * Bounds. The key table holds kKeySlots keys and looks at most kProbeLimit slots for one; a key that finds no slot is
  * counted and logged as one `resource_request_table_full` warning, once. At most kMaxLines request lines are written;
