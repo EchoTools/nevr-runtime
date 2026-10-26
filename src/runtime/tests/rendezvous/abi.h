@@ -11,9 +11,9 @@
 //   - the host shim (host_shim.cpp, built as BugSplat64.dll) — calls the production
 //     host entry points (runtime/host/host_entry.h): validate the image, install ONE
 //     detour from DLL_PROCESS_ATTACH, load nothing there; on the wrapper's first call
-//     the host loads the sibling nevr.dll through RuntimeLoader::Load, then calls the
+//     the host loads the sibling nevr-runtime.dll through RuntimeLoader::Load, then calls the
 //     runtime's initialize and game_main;
-//   - runtime fixtures (runtime_fixture.cpp, built as nevr.dll) — implement
+//   - runtime fixtures (runtime_fixture.cpp, built as nevr-runtime.dll) — implement
 //     core/runtime_abi.h and record what they are called with. Their game_main runs
 //     the original wrapper through the host's trampoline, standing in for GameMain.
 //
@@ -44,7 +44,7 @@ enum Event : LONG {
   kHostAttachEnter = 1,
   kHostHookEnabled = 2,   // payload: first byte at the target after enable
   kHostHookFailed = 3,
-  kHostAttachExit = 4,    // payload: 1 if nevr.dll was loaded at attach exit
+  kHostAttachExit = 4,    // payload: 1 if nevr-runtime.dll was loaded at attach exit
   kRuntimeDllAttach = 5,
   kRuntimeInitialized = 6,      // payload: host-supplied original wrapper trampoline
   kRuntimeGameMainEnter = 7,    // payload: command_line
