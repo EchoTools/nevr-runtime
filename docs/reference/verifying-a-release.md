@@ -8,6 +8,11 @@ when a check fails. Every step has a command or a small snippet, and the fixture
 The release is described by one signed file, `manifest.json`, with its signature `manifest.json.sig` beside it. An
 installer installs only what that file describes. Tracking issue for the manifest and its publication: #898.
 
+> **The fixtures are test fixtures.** Everything under `docs/reference/release-verification/` is signed with a test key
+> (id `B1DC2FE8001CB6C7`) that is **not one of the pinned keys**. The fixtures exist only to show each check pass and
+> fail. They are not a release, no installer may accept them, and the pinned keys never sign anything but real
+> releases.
+
 ## Status of this document
 
 - The manifest is specified by #898 and no live manifest is published. Until one is, run every step against the
@@ -582,8 +587,9 @@ dotnet run --project Harness -- manifest <dir> pinned-keys.txt state.json "$(dat
 ### Fixtures and test key
 
 The fixtures in `docs/reference/release-verification/` are signed by a test key, id `B1DC2FE8001CB6C7` (file order
-`c7b61c00e82fdcb1`), which is not one of the pinned keys. `test-key.pub` is its minisign public key file. To see the
-good path pass, pin the test key in place of the real ones:
+`c7b61c00e82fdcb1`), which is not one of the pinned keys and signs nothing but these fixtures. The pinned keys never
+sign a fixture, an example or anything else that is not a real release. `test-key.pub` is the test key's minisign public
+key file. To see the good path pass, pin the test key in place of the real ones:
 
 ```text test-pinned-keys.txt
 TEST RWTHthwA6C/csRKFPrZPxjAVZFImiwbgTWoK+P0qiEHQ4mnKdzhbzOqA

@@ -288,6 +288,19 @@ class PageContent(unittest.TestCase):
         for forbidden in ("release-signer", "/home/", "/var/tmp", "/mnt/", "/tmp/", "C:\\Users", "~/"):
             self.assertFalse(names(text, forbidden), f"the page names {forbidden!r}")
 
+    def test_the_fixtures_are_said_to_be_test_fixtures_near_the_top_and_beside_them(self):
+        def flat(text):
+            return re.sub(r"\s+", " ", text.replace(">", " "))
+
+        top = flat("\n".join(doc_text().splitlines()[:14]))
+        readme = flat((VECTORS / "README.md").read_text())
+        comment = (VECTORS / "test-key.pub").read_text().split("\n")[0]
+        for where, text in (("the top of the page", top), ("the fixtures' README", readme)):
+            for needle in ("not one of the pinned keys", "never sign anything but real releases"):
+                self.assertIn(needle, text, f"{where} lacks {needle!r}")
+        self.assertIn("TEST key", comment)
+        self.assertIn("not a release key", comment)
+
     def test_the_status_of_the_host_names_what_is_not_built(self):
         text = doc_text()
         for needle in ("**Built**", "**Not built", "docs/adr/0012-static-install-root.md", "docs/adr/0010-signed-plugins-only.md"):
