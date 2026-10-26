@@ -23,6 +23,12 @@ build/ and moved into place when it is complete:
      worktree's files carry the time of the checkout, newer than every object in the copy, and ninja decides by
      mtime alone. A file that differs keeps its own mtime, so it rebuilds.
 
+The commit is a guard. The root CMakeLists.txt puts the commit (NEVR_GIT_COMMIT_FULL) and the version on every
+compile command, so at any other commit ninja sees every compile command changed and rebuilds every object
+whatever was copied. A copy whose build.ninja names a commit other than the worktree's HEAD is therefore not made
+(the first build is the ordinary one, answered object by object from the shared compiler cache). A tree whose
+commands carry no such definition is not checked.
+
 What is not carried: objects built in the main checkout keep the main checkout's path in anything they embed
 (`__FILE__`, debug info); the rebuilt ones carry the worktree's.
 
@@ -262,6 +268,14 @@ def align_source_mtimes(main: pathlib.Path, worktree: pathlib.Path) -> int:
     return aligned
 
 
+_COMMIT_DEFINE = re.compile(rb'NEVR_GIT_COMMIT_FULL=\\*"([0-9a-f]{40})')
+
+
+def built_commits(build_ninja: pathlib.Path) -> set[str]:
+    """The commits the compile commands of a build tree carry (one commit per configure)."""
+    return {m.group(1).decode() for m in _COMMIT_DEFINE.finditer(build_ninja.read_bytes())}
+
+
 def _cache_value(cache: pathlib.Path, key: str) -> str | None:
     for line in cache.read_text(errors="replace").splitlines():
         if line.startswith(key + ":"):
@@ -323,6 +337,15 @@ def seed(main: pathlib.Path, worktree: pathlib.Path, preset: str, *, ninja: str 
         have = _cache_value(src / "CMakeCache.txt", key)
         if have is None or pathlib.Path(have).resolve() != want:
             return Result("not-seeded", f"{src}/CMakeCache.txt has {key}={have}, not {want}: that tree was configured for another checkout")
+    commits = built_commits(src / "build.ninja")
+    if commits:
+        head = subprocess.run(["git", "-C", str(worktree), "rev-parse", "HEAD"], capture_output=True, text=True)
+        if head.returncode != 0:
+            return Result("not-seeded", f"cannot read the HEAD of {worktree}: {head.stderr.strip()}")
+        if commits != {head.stdout.strip()}:
+            built = ", ".join(sorted(c[:8] for c in commits))
+            return Result("not-seeded", f"{src} was built at {built} and this worktree is at {head.stdout.strip()[:8]}: every compile "
+                          "command carries the commit, so ninja would rebuild every object either way")
     busy = _running_in(src)
     if busy:
         return Result("not-seeded", f"a process is running in {src} (a build or a test): {busy[0]}")

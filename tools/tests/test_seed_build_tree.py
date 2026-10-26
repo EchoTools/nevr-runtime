@@ -52,6 +52,7 @@ def pending_steps(build_dir):
 class SeedFixture(unittest.TestCase):
     PRESET = "p"
     WORKTREE_NAME = "wt"
+    COMMIT_DEFINE = False  # the compile commands carry -DNEVR_GIT_COMMIT_FULL="<HEAD>", as the root CMakeLists.txt does
 
     def setUp(self):
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="seed-build-tree-test-"))
@@ -69,9 +70,12 @@ class SeedFixture(unittest.TestCase):
         git(self.main, "commit", "-q", "--no-gpg-sign", "-m", "init")
         self.build = self.main / "build" / self.PRESET
         self.build.mkdir(parents=True)
+        define = ""
+        if self.COMMIT_DEFINE:
+            define = f' -DNEVR_GIT_COMMIT_FULL=\\"{git(self.main, "rev-parse", "HEAD").stdout.strip()}\\"'
         # An output spelled as an absolute path, as CMake does for some custom commands.
         (self.build / "build.ninja").write_text(
-            f"rule cc\n  command = cc -MD -MF $out.d -I{self.main}/inc -c $in -o $out\n"
+            f"rule cc\n  command = cc -MD -MF $out.d -I{self.main}/inc{define} -c $in -o $out\n"
             "  depfile = $out.d\n  deps = gcc\n"
             "rule link\n  command = cc $in -o $out\n"
             f"build a.o: cc {self.main}/src/a.c\n"
@@ -156,6 +160,26 @@ class SeededTree(SeedFixture):
 class SeededTreeWithAnotherPathLength(SeededTree):
     """The deps log pads each path to four bytes: a worktree path of another length than main's must work too."""
     WORKTREE_NAME = "worktree-with-a-longer-name-x"
+
+
+class CommitGuard(SeedFixture):
+    COMMIT_DEFINE = True
+
+    def test_a_worktree_at_the_commit_the_tree_was_built_at_is_seeded(self):
+        self.assertEqual(self.seed().status, "seeded")
+        self.assertEqual(pending_steps(self.wt_build())[0], [])
+
+    def test_a_worktree_at_another_commit_is_not_seeded_and_the_reason_names_both(self):
+        (self.wt / "src/a.c").write_text('#include "h.h"\nint a(void) { return VAL + 40; }\n')
+        git(self.wt, "commit", "-q", "-a", "--no-gpg-sign", "-m", "branch change")
+        built = git(self.main, "rev-parse", "HEAD").stdout.strip()
+        here = git(self.wt, "rev-parse", "HEAD").stdout.strip()
+        result = self.seed()
+        self.assertEqual(result.status, "not-seeded", result)
+        self.assertIn(built[:8], result.reason)
+        self.assertIn(here[:8], result.reason)
+        self.assertFalse(self.wt_build().exists())
+        self.assertEqual([p.name for p in (self.wt / "build").glob(".seed-*")] if (self.wt / "build").exists() else [], [])
 
 
 class NotSeeded(SeedFixture):
