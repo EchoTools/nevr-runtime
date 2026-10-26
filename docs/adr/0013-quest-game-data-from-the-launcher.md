@@ -131,3 +131,15 @@ thread, whose Looper is prepared and never run; a `Toast` posted to the main loo
 untried); whether the toast is drawn and for how long it is readable; whether `/sdcard/readyatdawn` and `/storage/emulated/0/readyatdawn`
 are the same folder for every player; where `gOBBPath` is assigned; whether `-dataroot` or `-datadir` exists; whether
 `Android/media/<package>` survives an uninstall.
+
+The presenters a development build can probe (`nevr-data-probe`, `data_wiring.h`), and what each needs. `ui-toast`:
+`Toast.makeText(activity, Looper.getMainLooper(), text, LENGTH_LONG).show()` through the overload that takes a looper, which
+is `@hide` in AOSP (`android-12.0.0_r1`, `core/java/android/widget/Toast.java`: "Make a standard toast to display using the
+specified looper ... @hide"), so a lookup from native code may be refused by the hidden-API policy; the probe's
+`looper_overload_unavailable` token says the lookup failed, not why. The target SDK is 29, so the toast takes the legacy view
+path whose handler needs a running looper (`CHANGE_TEXT_TOASTS_IN_THE_SYSTEM` is enabled for target SDK above 29), which is why a
+main-looper handler is the candidate. `dialog`: has no presenter, because showing a dialog or posting any call to the UI thread
+through JNI alone takes a `Runnable` or `Handler.Callback` object (`Activity.runOnUiThread`, `Handler.post`; by reading, no
+exception was found), and the sentinel ships no dex to define one; the probe logs `no_presenter`. A UI-thread post that
+needs no Java class (`ALooper_forThread()` taken on the UI thread plus a pipe callback) is not built; it is the next candidate
+if `ui-toast` reports `looper_overload_unavailable`.

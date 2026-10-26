@@ -345,6 +345,8 @@ void TheProbeLineParsesIntoItsKindAndArgument() {
   const Case cases[] = {
       {"toast hello", dwp::ProbeKind::kToast, "hello"},
       {"ui-toast hello world", dwp::ProbeKind::kUiToast, "hello world"},
+      {"ui-post hello world", dwp::ProbeKind::kUiPost, "hello world"},
+      {"ui-pos hello", dwp::ProbeKind::kUnknown, ""},
       {"dialog a dialog", dwp::ProbeKind::kDialog, "a dialog"},
       {"block 3", dwp::ProbeKind::kBlock, "3"},
       {"ui-toast  two spaces", dwp::ProbeKind::kUiToast, " two spaces"},  // one space ends the kind; the rest is the text
@@ -375,6 +377,13 @@ const char* FakeShowUi(void*, const char* text, bool* prepared) noexcept {
   *prepared = g_ui_prepared;
   return g_ui_result;
 }
+std::vector<std::string> g_post_shown;
+const char* g_post_result = "posted";
+const char* FakeShowPost(void*, const char* text, bool* prepared) noexcept {
+  g_post_shown.push_back(text);
+  *prepared = false;
+  return g_post_result;
+}
 const char* FakeShowDialog(void*, const char* text, bool* prepared) noexcept {
   g_dialog_shown.push_back(text);
   *prepared = false;
@@ -383,6 +392,8 @@ const char* FakeShowDialog(void*, const char* text, bool* prepared) noexcept {
 void ResetProbeSeams() {
   g_ui_shown.clear();
   g_dialog_shown.clear();
+  g_post_shown.clear();
+  g_post_result = "posted";
   g_ui_prepared = false;
   g_ui_result = "requested";
 }
@@ -436,9 +447,50 @@ void TheProbeSaysWhenItRanOffTheMainThreadAndWhenALooperWasPrepared() {
   }
 }
 
+void AUiPostProbeGoesToThePostPresenterAndIsInfoWhenPosted() {
+  ResetProbeSeams();
+  Rig rig;
+  DataIn(Legacy());
+  rig.options.probe_enabled = true;
+  rig.options.show_ui = &FakeShowUi;
+  rig.options.show_post = &FakeShowPost;
+  WriteFile(rig.options.probe_path, "ui-post posted text\n");
+  rig.BootRequest();
+  QCHECK(g_post_shown.size() == 1 && g_post_shown[0] == "posted text");
+  QCHECK(g_ui_shown.empty() && g_shown.empty() && g_dialog_shown.empty());
+  const std::vector<std::string> lines = ProbeLines();
+  QCHECK(lines.size() == 1);
+  if (lines.size() == 1) {
+    QCHECK(Has(lines[0], "\"kind\":\"ui-post\"") && Has(lines[0], "\"result\":\"posted\""));
+    QCHECK(Has(lines[0], "\"level\":\"info\""));
+  }
+  // The same probe with no looper captured: a warning with the token.
+  ResetProbeSeams();
+  g_post_result = "no_ui_looper";
+  Rig again;
+  DataIn(Legacy());
+  again.options.probe_enabled = true;
+  again.options.show_post = &FakeShowPost;
+  WriteFile(again.options.probe_path, "ui-post x\n");
+  g_lines.clear();
+  again.BootRequest();
+  const std::vector<std::string> warned = ProbeLines();
+  QCHECK(warned.size() == 1 && Has(warned[0], "\"result\":\"no_ui_looper\"") && Has(warned[0], "\"level\":\"warn\""));
+  // And with no presenter at all.
+  ResetProbeSeams();
+  Rig none;
+  DataIn(Legacy());
+  none.options.probe_enabled = true;
+  WriteFile(none.options.probe_path, "ui-post x\n");
+  g_lines.clear();
+  none.BootRequest();
+  const std::vector<std::string> bare = ProbeLines();
+  QCHECK(bare.size() == 1 && Has(bare[0], "\"result\":\"no_presenter\""));
+}
+
 void AFailedUiToastIsAWarningWithItsToken() {
   ResetProbeSeams();
-  g_ui_result = "looper_api_missing";
+  g_ui_result = "looper_overload_unavailable";
   Rig rig;
   DataIn(Legacy());
   rig.options.probe_enabled = true;
@@ -448,7 +500,7 @@ void AFailedUiToastIsAWarningWithItsToken() {
   const std::vector<std::string> lines = ProbeLines();
   QCHECK(lines.size() == 1);
   if (lines.size() == 1) {
-    QCHECK(Has(lines[0], "\"result\":\"looper_api_missing\"") && Has(lines[0], "\"level\":\"warn\""));
+    QCHECK(Has(lines[0], "\"result\":\"looper_overload_unavailable\"") && Has(lines[0], "\"level\":\"warn\""));
   }
 }
 
@@ -832,6 +884,7 @@ int main() {
   TheProbeLineParsesIntoItsKindAndArgument();
   AUiToastProbeGoesToTheUiPresenterOnceAndSaysWhichThreadAndLooper();
   TheProbeSaysWhenItRanOffTheMainThreadAndWhenALooperWasPrepared();
+  AUiPostProbeGoesToThePostPresenterAndIsInfoWhenPosted();
   AFailedUiToastIsAWarningWithItsToken();
   ADialogProbeGoesToTheDialogPresenterAndWithoutOneSaysNoPresenter();
   AUiToastProbeWithoutAPresenterOrWithoutTextShowsNothing();

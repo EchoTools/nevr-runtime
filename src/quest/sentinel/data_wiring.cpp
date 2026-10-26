@@ -98,7 +98,7 @@ std::unique_ptr<data::CurlTransport> MakeProductionTransport() {
                                                kMinBytesPerSecond);
 }
 
-// One probe line for a presenter that is not the floor's (`ui-toast`, `dialog`, #829): what the presenter answered, on which
+// One probe line for a presenter that is not the floor's (`ui-toast`, `ui-post`, `dialog`, #829): what the presenter answered, on which
 // thread it was asked, and whether a looper was made for it. Only the tester can say whether anything was drawn.
 void ProbeShow(const char* kind, ShowFn presenter, const char* text) noexcept {
   const long long tid = static_cast<long long>(::syscall(SYS_gettid));
@@ -112,7 +112,8 @@ void ProbeShow(const char* kind, ShowFn presenter, const char* text) noexcept {
   } else {
     result = presenter(CurrentApp(), text, &prepared);
   }
-  sentinel::LogFields(std::strcmp(result, "requested") == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn,
+  const bool asked = std::strcmp(result, "requested") == 0 || std::strcmp(result, "posted") == 0;
+  sentinel::LogFields(asked ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn,
                       "data_probe",
                       {{"kind", kind},
                        {"state", "end"},
@@ -122,7 +123,7 @@ void ProbeShow(const char* kind, ShowFn presenter, const char* text) noexcept {
                        {"looper_prepared", prepared ? "true" : "false"}});
 }
 
-// The measurement probe: `toast <text>`, `ui-toast <text>`, `dialog <text>` or `block <seconds>` (probe_command.h), once.
+// The measurement probe: `toast <text>`, `ui-toast <text>`, `ui-post <text>`, `dialog <text>` or `block <seconds>` (probe_command.h), once.
 void RunProbe() noexcept {
   const std::string path = !Opts().probe_path.empty()
                                ? Opts().probe_path
@@ -147,6 +148,8 @@ void RunProbe() noexcept {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "data_probe", {{"kind", "toast"}, {"state", "end"}});
   } else if (command.kind == ProbeKind::kUiToast) {
     ProbeShow("ui-toast", Opts().show_ui, command.arg);
+  } else if (command.kind == ProbeKind::kUiPost) {
+    ProbeShow("ui-post", Opts().show_post, command.arg);
   } else if (command.kind == ProbeKind::kDialog) {
     ProbeShow("dialog", Opts().show_dialog, command.arg);
   } else if (command.kind == ProbeKind::kBlock) {
