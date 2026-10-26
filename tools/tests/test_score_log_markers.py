@@ -4,14 +4,16 @@
 import os
 import pathlib
 import subprocess
+import sys
 import tempfile
 import unittest
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "tools"))
+import work_root  # noqa: E402
 SCORE_LOG = REPO / "tests" / "smoke" / "score-log.sh"
-SCRATCH_ROOT = pathlib.Path("/var/tmp/work-nevr-runtime")
-SCRATCH_ROOT.mkdir(parents=True, exist_ok=True)
+SCRATCH_ROOT = work_root.test_scratch()
 
 
 def score(log: str, group: str = "server") -> subprocess.CompletedProcess[str]:

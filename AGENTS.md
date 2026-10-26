@@ -59,7 +59,7 @@ each one gives; do the step this way on yours:
 | "Commit identity" (author, trailer, signing) | Commit as yourself: the author is the person responsible, under the name and email they use on GitHub. When an agent wrote the change, add one `Co-Authored-By: <agent name> <email>` trailer. Conventional prefix, one logical change per commit, and the same post-commit check. |
 | "Ownership and cleanup": the ledger file | Keep the same ledger in a file of your own: a markdown table (artifact, owner, purpose, remove-when), one row per thing you create, the worktree directory or branch in the first cell and your handle, one word, in the second. Read it before deleting anything. Create worktrees under `.claude/worktrees/` in your clone, and run `REAP_LEDGER=<your ledger file> just reap-merged`: `tools/reap_merged.py` scans only `.claude/worktrees/`, exits when it cannot read the ledger (default `~/.local/share/repo-hygiene/nevr-runtime-ledger.md`), and keeps any worktree the ledger does not credit to an owner. |
 | "Builds": the shared `nevr-builds.slice` | Same reason: parallel lanes, each under its own cap, still starve a machine. If you run one lane, `VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 systemd-run --user --scope -p MemoryMax=8G <cmd>` is enough. If you run several, create one user slice that caps them all together, as the maintainers do. Wait while two or more `ninja` processes run (`pgrep -x ninja` lists them). |
-| Scratch under `/var/tmp/work-nevr-runtime/<agent>/` | The same path works on any Linux machine, and several tools write there by default (`tools/scenario/run_scenario.py`, `tools/lib/game_install.sh`, `tools/winvm/systest.py`). Use `/var/tmp/work-nevr-runtime/<your handle>/`, never `/tmp` and never the repo. |
+| Scratch under `~/src/nevr-runtime-work/<agent>/` | The work root is `$NEVR_WORK_ROOT`, else `~/src/nevr-runtime-work` (`~` is your home directory), so the default works on any machine, and several tools write there by default (`tools/scenario/run_scenario.py`, `tools/lib/game_install.sh`, `tools/winvm/systest.py`). Use `<work root>/<your handle>/`, never `/tmp` and never the repo, and keep the work-root rule under "Working practices for every agent". |
 | "The game install": `/mnt/games` and the owner's link | See "Your game install" below. |
 | "ReVault" | ReVault is private. Keep its rules (search the whole project, every binary; report `searched N of N`; never guess an address) with your own disassembler on your own copy of the game files. When you need a fact you cannot derive, ask in the PR with the address and the binary. |
 | "Check production Nakama logs" and "ask sprockee" | The production server's logs are maintainer-only. On a server you run, read its log yourself. For production, ask in the PR, giving the run's time window (UTC), the account and the client log lines around the failure. Where the file says ask sprockee, ask in the PR or issue. |
@@ -313,7 +313,7 @@ just verbose-build      # Build with full compiler output
 just clean              # Remove build/ and dist/
 just preset=mingw-debug build  # Use a specific preset
 just proto                     # Regenerate protobuf from BSR (requires buf CLI)
-just worktree-setup            # Make a fresh git worktree buildable (copies extern/ and gen/ from the main checkout)
+just worktree-setup            # Make a fresh git worktree buildable (copies extern/ and gen/ from the main checkout, seeds build/<preset> from the main checkout's when it was built at this commit)
 just install-hooks             # Once per clone: link the tracked post-checkout hook so a new linked worktree gets the files .worktreeinclude lists (.mcp.json, .claude/settings.local.json)
 just release-preflight           # Refuse unless this clone is exactly origin/main: no local-only tag, no uncommitted or untracked change, nothing unpushed, not behind (read-only; run before any release step)
 just package-dev                 # LOCAL dev package from a clean tree: Windows zip + Quest APK in build/package-dev/<sha>/, stamped -dev (a release is only a CI build of a v<x.y.z> tag; never tags or publishes); the Quest APK is signed with the key stored in pass by `just import-quest-keystore`
@@ -610,10 +610,17 @@ your seat name, for example `claude-main` or `codex`.
 - **Worktrees say whose they are.** Create with `git worktree add --no-track -b <agent>-<purpose>
   .claude/worktrees/<agent>-<purpose> <base>`, then `git worktree lock --reason "<agent> <purpose>,
   remove when <condition>"` and `git config branch.<branch>.description "<same>"`.
-- **Scratch is per agent.** Files you create by hand go under `/var/tmp/work-nevr-runtime/<agent>/`;
-  files the repo's own tools write at the scratch root stay where they are. When you are done,
+- **Scratch is per agent.** Files you create by hand go under `~/src/nevr-runtime-work/<agent>/`;
+  files the repo's own tools write at the work root stay where they are. When you are done,
   delete the scripts, copies and build output you created, outright, not into the user's trash.
-  Run logs and evidence are kept. Never delete by pattern across the shared directory.
+  A run's logs and evidence are kept until their end (next bullet). Never delete by pattern across the shared directory.
+- **Everything in the work root has a named end.** The work root is `~/src/nevr-runtime-work`
+  (`$NEVR_WORK_ROOT`): the default scratch location of every seat and every tool. Every file or directory a seat
+  creates there has a named end when it is made: a game copy ends when its test ends; a run's output ends when the PR
+  citing it merges, unless the PR keeps it as evidence. The creator removes it, by exact path, the turn that end
+  comes. A seat's summary lists what it has live there, each item with its end condition. Each directory directly
+  under the root carries a `README.md` saying what it is for, whose it is and when it is removed; a tool that makes
+  one writes it (`tools/lib/work_root.sh`, `tools/work_root.py`).
 - **Ownership is proven, never inferred.** Remove a worktree, branch or scratch path only when your ledger row
   (`~/.local/share/repo-hygiene/nevr-runtime-ledger.md`, the ledger above) names it, or `~/.local/bin/whence <path>` (call it by that path: zsh's builtin `whence` shadows the bare name and prints nothing; it prints the sessions that mention the path, the oldest first, which is its
   birth) shows your own session made it. A name that looks like yours, or a location under your scratch
@@ -665,7 +672,7 @@ your seat name, for example `claude-main` or `codex`.
   `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` (run `just worktree-setup`
   first in a fresh worktree: the doc-path check reads `extern/`). `just test-tools` keeps every run: its full output,
   JUnit XML, the pytest-randomly seed, and a start and an end record in `runs.jsonl`, under `$NEVR_TEST_LOG_DIR` (default
-  `/var/tmp/work-nevr-runtime/test-runs/tools-tests`). A failure is reported by the test ids that run's record
+  `test-runs/tools-tests` in the work root, `~/src/nevr-runtime-work`). A failure is reported by the test ids that run's record
   names, never by a count alone. Run the quick check on the PR's tip, in the build slice, and report each item with its result; an item
   not run is named as not run.
   CI runs only when started by hand.
@@ -734,7 +741,7 @@ your seat name, for example `claude-main` or `codex`.
   `--output-dir <copy>/echovr/bin/win10/_overrides/combat` (run
   `python tools/echomod/generate_resources.py` directly). A writer that cannot be pointed at the
   copy waits for a human.
-- **The copy** lives under `/var/tmp/work-nevr-runtime/<agent>/` (named per agent, never another
+- **The copy** lives under `~/src/nevr-runtime-work/<agent>/` (named per agent, never another
   agent's). `<copy>` below is `<that directory>/game-copy`, the pristine copy.
   - **Make it.** Dereference only the top-level link, and keep every link inside as a link (no `-L`):
     ```sh
@@ -789,7 +796,7 @@ your seat name, for example `claude-main` or `codex`.
     DLL, or delete `BugSplat64.dll`; `launch-server.sh` also leaves plugins, which make
     `launch-client.sh` abort). `verify-server.sh` keeps its
     backup at one fixed place, `$NEVR_RUN_SCRATCH_ROOT/verify-server-deploy-backup` (default
-    `/var/tmp/work-nevr-runtime/`), and restores it into the current copy. It also deletes, by the absolute paths it recorded, the
+    the work root, `~/src/nevr-runtime-work/`), and restores it into the current copy. It also deletes, by the absolute paths it recorded, the
     files the earlier run added (`BugSplat64.dll`, `plugins/*`, `_local/config.yaml`). Clear or
     inspect that directory before a run against a different copy than the last. When no copy exists, the run
     waits for a human; a runtime change is not verified until then.
@@ -845,6 +852,17 @@ your seat name, for example `claude-main` or `codex`.
   `git submodule update --init extern/luau` in the worktree (network), and a failure is an error. It keeps anything already there (delete `gen/`
   to refresh it), never touches the main checkout, and copies the main checkout's submodule content (it warns when this branch pins other commits: then remove
   that `extern/<d>` and run `git submodule update --init extern/<d>`).
+  It then seeds `build/$PRESET` (`PRESET`, default `mingw-release`, as the justfile reads it) from the main
+  checkout's, with `tools/seed_build_tree.py`: the configured tree is copied with the checkout path rewritten in its
+  text files, ninja's deps log and ninja's build log (paths and command hashes), and the mtimes of source files
+  identical to the main checkout's are aligned, so a build that follows compiles only what differs. It seeds only an
+  absent or empty `build/$PRESET`, only a tree whose `build.ninja` names the commit it was built at (a tree that does not is refused) and that commit is this
+  worktree's HEAD, with no uncommitted changes (every compile command carries the commit and the `git describe --dirty` version, so otherwise ninja
+  rebuilds every object whatever was copied, and the shared compiler cache answers them), only when the copy no longer names the main checkout's path
+  (a tree configured through a link to the checkout is refused), and never when a `ninja`, `cmake` or `ctest` is running in the main checkout's tree. It
+  never writes the main checkout, prints what it did or why it did not (a
+  worktree that is not seeded still builds, from scratch), and appends one record to
+  `$XDG_STATE_HOME/nevr-runtime/seed-build-tree.jsonl`.
   The build embeds the public client defaults from `config/public-defaults.env` (git-ignored: CI
   writes it from the repository's Actions variables, and `just worktree-setup` copies it from the main
   checkout; copy `config/public-defaults.env.example` to make one) and reads nothing else: not `.env`,
@@ -872,7 +890,9 @@ your seat name, for example `claude-main` or `codex`.
   drafts every public post (issue, PR body or edit, comment, review, release note) and sends the text to Spritz; it
   posts only after her approval. The reason: seats post on the owner's account, so their words are public in his name,
   and a seat's job is the code, not communication. A PR body, issue body, comment, review and commit message is public.
-  It MUST NOT contain a URL or host name that hands out builds or data (a download host, a CDN, a storage bucket), the
+  It MUST NOT contain a URL or host name that hands out builds or data (a download host, a CDN, a storage bucket),
+  except that a public download or CDN endpoint that installers must fetch from MAY be named (for example the manifest
+  location in the installer verification doc); internal hosts, buckets and machines stay out. It MUST NOT contain the
   words of a person from chat or a message (quoted, or paraphrased as the reason for a change), or a local path (e.g.
   `/home/...`, `/var/tmp/...`, `/mnt/...`, `/tmp/...`, `~/...`, `C:\...`). In findings and PR bodies, use repo-relative
   paths, or `<scratch>` for scratch output. Name a design decision by its reasoning, an issue or an ADR, never by "the
@@ -975,7 +995,7 @@ When something fails, the first act is reading the failing program's **own** log
 - **C++ pre-read.** Before C++ or build work, read the C++ Mingw Addendum below;
   its hard stops bind every build and configuration change.
 - **Scratch dir.** All agent scratch/staging/evidence files live under
-  `/var/tmp/work-nevr-runtime/` (see "Working practices"), never `/tmp` and never in the
+  `~/src/nevr-runtime-work/` (see "Working practices"), never `/tmp` and never in the
   repo.
 - **Verify entry point.** `just verify` is the single closed-loop gate, run on main when prepping a release (a PR
   runs the quick check, see "Builds"):

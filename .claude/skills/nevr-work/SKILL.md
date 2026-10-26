@@ -54,7 +54,7 @@ below.
 5. **CANDIDATE lines.** Any ad-hoc integrity check is reported as one line — the predicate it tests, and yes/no on graduation into a persistent checker. A lesson that does not become a sensor dies with its transcript.
 6. **USAGE lines.** Any unit touching a CLI/interface surface notes usage-doc/man gaps as one line. `--help`/`-h` output IS the behavioral acceptance contract for the interface.
 7. **Same failure twice = stop and report.** Do not grind.
-8. **Scratch in `/var/tmp/work-nevr-runtime/<agent>/`** (maintainers only; a contributor uses `/var/tmp/work-nevr-runtime/<handle>/`, AGENTS.md "For contributors"). Never `/tmp` (RAM-backed on this host), never the repo. Game runs use a throwaway copy of the install, never the owner's.
+8. **Scratch in `~/src/nevr-runtime-work/<agent>/`** (maintainers only; a contributor uses `~/src/nevr-runtime-work/<handle>/`, AGENTS.md "For contributors"). Never `/tmp` (RAM-backed on this host), never the repo. Game runs use a throwaway copy of the install, never the owner's.
 9. **Commit identity.** Author `Andrew Bates <a@sprock.io>` (`--author=`), `--no-gpg-sign`, single `Co-Authored-By: <agent name> <agents@sprock.io>` trailer (sisters: the sister as author, Andrew as co-author; maintainers only); see AGENTS.md "Commit and verification conventions". Verify after each commit: `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
 10. **CPP pre-read gate.** Before any C++/build work, read `{EXPERTISE_PREREADS}` in full; its Hard-Stops bind the change.
 11. **Heartbeat expectation.** A standing unit emits a heartbeat; a silent unit is treated as stuck, not assumed working.
@@ -194,7 +194,7 @@ what you are building. Return to Gate 3.
 report each item with its result.
 1. **The build:** `just build`, then a raw `cmake --build --preset <preset>` whose exit
    code you read (`just build` always exits 0). Quote the tail and exit code, read from a
-   file under `/var/tmp/work-nevr-runtime/<agent>/` (maintainers only), never `$?` after a pipe.
+   file under `~/src/nevr-runtime-work/<agent>/` (maintainers only), never `$?` after a pipe.
 2. **The covering test recipes** (`just --list`; `test-auth-unit`, `test-quest-shared`,
    `test-quest-*`, `test-android` for a change under `src/quest`, ...). If the change
    adds or removes `TEST(`/`TEST_F(` declarations in `src/runtime/tests/*.cpp`, run
@@ -247,7 +247,7 @@ finding (a GitHub issue) with its measurement and a Decision-line; do NOT fake g
   `test:`/`build:`); one logical change per commit. **Verify after each commit:**
   `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
   No second `Co-authored-by` trailer.
-- **Scratch** lives under `/var/tmp/work-nevr-runtime/<agent>/` (maintainers only), never `/tmp`, never the
+- **Scratch** lives under `~/src/nevr-runtime-work/<agent>/` (maintainers only), never `/tmp`, never the
   repo (AGENTS.md "Working practices for every agent"). Delete the scripts, copies and
   build output you created, outright; keep run logs and evidence.
 - **Branch and worktree:** cut with `git worktree add --no-track -b <seat>/<issue>-<slug>
