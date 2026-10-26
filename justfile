@@ -450,6 +450,7 @@ test-auth-unit:
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_runtime_abi
+    cmake --build --preset {{ preset }} --target test_runtime_export_guard
     cmake --build --preset {{ preset }} --target test_bootstrap_attach
     cmake --build --preset {{ preset }} --target test_host_json --target test_bootstrap_diagnostics --target test_host_crash_capture --target test_host_runtime_load --target test_host_minidump --target test_host_rendezvous --target test_host_exports --target test_host_crash --target test_rendezvous
     # The host units carry no test seam when NEVR_HOST_TESTING is not defined: each is compiled again
@@ -500,6 +501,12 @@ test-auth-unit:
     fi
     run_test "$bin"
     bin="build/{{ preset }}/bin/test_runtime_abi.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
+    bin="build/{{ preset }}/bin/test_runtime_export_guard.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1

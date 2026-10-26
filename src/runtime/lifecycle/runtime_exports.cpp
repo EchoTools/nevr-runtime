@@ -3,10 +3,10 @@
 #include "core/logging.h"
 #include "extension/module_interface.h"
 #include "runtime/hook/patching.h"
+#include "runtime/lifecycle/export_guard.h"
 #include "runtime/patch/plugin_assets.h"
 
 #include <cstdint>
-#include <exception>
 
 // The functions behind the host's exports, defined where they always were (the modules, initialize.cpp,
 // resource_override.cpp, plugin_assets.cpp). Declared here as the host's table needs them.
@@ -37,146 +37,80 @@ namespace nevr_runtime_exports {
 namespace {
 
 // Log what threw, once per call, at Warning: the caller gets the failure value and the log says why.
-void Threw(const char* entry, const std::exception& error) noexcept {
-  Log(EchoVR::LogLevel::Warning, "[NEVR.BOOT] host export entry=%s threw: %s", entry, error.what());
+void Threw(const char* entry, const char* what) noexcept {
+  Log(EchoVR::LogLevel::Warning, "[NEVR.BOOT] host export entry=%s threw: %s", entry,
+      what != nullptr ? what : "(not a std::exception)");
 }
 
 void ScheduleReturnToLobby() {
-  try {
-    NEVR_ScheduleReturnToLobby();
-  } catch (const std::exception& error) {
-    Threw("schedule_return_to_lobby", error);
-  }
+  GuardedVoid("schedule_return_to_lobby", &Threw, [] { NEVR_ScheduleReturnToLobby(); });
 }
 
 void GetUPnPConfig(void* out) {
-  try {
-    NEVR_GetUPnPConfig(static_cast<NevrUPnPConfig*>(out));
-  } catch (const std::exception& error) {
-    Threw("get_upnp_config", error);
-  }
+  GuardedVoid("get_upnp_config", &Threw, [out] { NEVR_GetUPnPConfig(static_cast<NevrUPnPConfig*>(out)); });
 }
 
 void RegisterResourceOverride(std::uint64_t type_hash, std::uint64_t name_hash, const void* data,
                               std::uint64_t size, const char* label) {
-  try {
-    NEVR_RegisterResourceOverride(type_hash, name_hash, data, size, label);
-  } catch (const std::exception& error) {
-    Threw("register_resource_override", error);
-  }
+  GuardedVoid("register_resource_override", &Threw,
+              [=] { NEVR_RegisterResourceOverride(type_hash, name_hash, data, size, label); });
 }
 
 void ResetResourceOverrides() {
-  try {
-    NEVR_ResetResourceOverrides();
-  } catch (const std::exception& error) {
-    Threw("reset_resource_overrides", error);
-  }
+  GuardedVoid("reset_resource_overrides", &Threw, [] { NEVR_ResetResourceOverrides(); });
 }
 
 void DeregisterResourceOverrides(const void* data_start, const void* data_end) {
-  try {
-    NEVR_DeregisterResourceOverrides(data_start, data_end);
-  } catch (const std::exception& error) {
-    Threw("deregister_resource_overrides", error);
-  }
+  GuardedVoid("deregister_resource_overrides", &Threw,
+              [=] { NEVR_DeregisterResourceOverrides(data_start, data_end); });
 }
 
 int RegisterAsset(std::uint64_t type_hash, std::uint64_t name_hash, const void* data, std::uint64_t size,
                   const char* label) {
-  try {
-    return NEVR_RegisterAsset(type_hash, name_hash, data, size, label);
-  } catch (const std::exception& error) {
-    Threw("register_asset", error);
-    return kAssetUnavailable;
-  }
+  return Guarded("register_asset", &Threw, kAssetUnavailable,
+                 [=] { return NEVR_RegisterAsset(type_hash, name_hash, data, size, label); });
 }
 
 void DeregisterAssets(const void* data_start, const void* data_end) {
-  try {
-    NEVR_DeregisterAssets(data_start, data_end);
-  } catch (const std::exception& error) {
-    Threw("deregister_assets", error);
-  }
+  GuardedVoid("deregister_assets", &Threw, [=] { NEVR_DeregisterAssets(data_start, data_end); });
 }
 
 const char* TokenAuthGetToken() {
-  try {
-    return TokenAuth_GetToken();
-  } catch (const std::exception& error) {
-    Threw("token_auth_get_token", error);
-    return "";
-  }
+  return Guarded("token_auth_get_token", &Threw, "", [] { return TokenAuth_GetToken(); });
 }
 
 std::uint64_t TokenAuthGetDiscordId() {
-  try {
-    return TokenAuth_GetDiscordId();
-  } catch (const std::exception& error) {
-    Threw("token_auth_get_discord_id", error);
-    return 0;
-  }
+  return Guarded("token_auth_get_discord_id", &Threw, std::uint64_t{0}, [] { return TokenAuth_GetDiscordId(); });
 }
 
 const char* TokenAuthGetUsername() {
-  try {
-    return TokenAuth_GetUsername();
-  } catch (const std::exception& error) {
-    Threw("token_auth_get_username", error);
-    return "";
-  }
+  return Guarded("token_auth_get_username", &Threw, "", [] { return TokenAuth_GetUsername(); });
 }
 
 std::uint32_t PlatformCompatApiVersion() {
-  try {
-    return platform_compat_ApiVersion();
-  } catch (const std::exception& error) {
-    Threw("platform_compat_api_version", error);
-    return 0;
-  }
+  return Guarded("platform_compat_api_version", &Threw, std::uint32_t{0}, [] { return platform_compat_ApiVersion(); });
 }
 
 int PlatformCompatInit(const void* ctx) {
-  try {
-    return platform_compat_Init(static_cast<const NvrModuleContext*>(ctx));
-  } catch (const std::exception& error) {
-    Threw("platform_compat_init", error);
-    return kInitFailed;
-  }
+  return Guarded("platform_compat_init", &Threw, kInitFailed,
+                 [ctx] { return platform_compat_Init(static_cast<const NvrModuleContext*>(ctx)); });
 }
 
 void PlatformCompatShutdown() {
-  try {
-    platform_compat_Shutdown();
-  } catch (const std::exception& error) {
-    Threw("platform_compat_shutdown", error);
-  }
+  GuardedVoid("platform_compat_shutdown", &Threw, [] { platform_compat_Shutdown(); });
 }
 
 std::uint32_t TokenAuthApiVersion() {
-  try {
-    return token_auth_ApiVersion();
-  } catch (const std::exception& error) {
-    Threw("token_auth_api_version", error);
-    return 0;
-  }
+  return Guarded("token_auth_api_version", &Threw, std::uint32_t{0}, [] { return token_auth_ApiVersion(); });
 }
 
 int TokenAuthInit(const void* ctx) {
-  try {
-    return token_auth_Init(static_cast<const NvrModuleContext*>(ctx));
-  } catch (const std::exception& error) {
-    Threw("token_auth_init", error);
-    return kInitFailed;
-  }
+  return Guarded("token_auth_init", &Threw, kInitFailed,
+                 [ctx] { return token_auth_Init(static_cast<const NvrModuleContext*>(ctx)); });
 }
 
 void TokenAuthShutdown() {
-  try {
-    token_auth_Shutdown();
-  } catch (const std::exception& error) {
-    Threw("token_auth_shutdown", error);
-  }
+  GuardedVoid("token_auth_shutdown", &Threw, [] { token_auth_Shutdown(); });
 }
 
 const NevrRuntimeExports g_table = [] {

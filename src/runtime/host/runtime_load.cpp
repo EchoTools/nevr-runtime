@@ -250,6 +250,9 @@ std::int32_t RuntimeLoader::CallInitialize(const NevrRuntimeApi* api, const Nevr
   } catch (const std::exception&) {
     *threw = true;
     return kInitThrewCode;
+  } catch (...) {  // exceptions must not cross the DLL boundary: a throw of any other type is a load failure too
+    *threw = true;
+    return kInitThrewCode;
   }
 }
 

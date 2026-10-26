@@ -102,9 +102,8 @@ class RuntimeLoader {
   // patched something); it is never FreeLibrary'd.
   RuntimeLoadResult Load(const NevrHostContext& host, BootstrapDiagnostics& diagnostics);
 
-  /// Call api->initialize(&host). Returns its result; a std::exception that escapes it is caught here, sets
-  /// *threw and returns kInitThrewCode. (Another kind of exception is not caught: it is a crash, and the crash
-  /// capture records it.)
+  /// Call api->initialize(&host). Returns its result; an exception of any type that escapes it is caught here
+  /// (exceptions must not cross the DLL boundary), sets *threw and returns kInitThrewCode.
   static std::int32_t CallInitialize(const NevrRuntimeApi* api, const NevrHostContext& host, bool* threw) noexcept;
 
   const RuntimeLoadResult& Result() const { return result_; }

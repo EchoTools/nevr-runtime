@@ -574,6 +574,10 @@ TEST(HostRuntimeLoad, AStopRecordThatCannotBeBuiltBecomesAMarkerLineNotAnExcepti
 namespace {
 std::int32_t ThrowingInitialize(const NevrHostContext*) { throw std::runtime_error("initialize threw"); }
 std::int32_t FailingInitialize(const NevrHostContext*) { return 7; }
+// Not derived from std::exception: a runtime built with another library, or a throw of a plain value.
+struct ForeignError {};
+std::int32_t ThrowingForeignInitialize(const NevrHostContext*) { throw ForeignError{}; }
+std::int32_t ThrowingIntInitialize(const NevrHostContext*) { throw 42; }
 }  // namespace
 
 TEST(HostRuntimeLoad, AnExceptionFromInitializeIsCaughtAndReportedAsAFailure) {
@@ -589,6 +593,20 @@ TEST(HostRuntimeLoad, AnExceptionFromInitializeIsCaughtAndReportedAsAFailure) {
   const RuntimeLoadResult classified = ClassifyLoad(true, L"x", 0, GetModuleHandleW(nullptr), true, &api,
                                                     nevr_runtime_abi::Status::kOk, code);
   EXPECT_EQ(classified.outcome, RuntimeLoadOutcome::kInitFailed);
+}
+
+// Nothing crosses the DLL boundary as an exception, whatever type it is (the ellipsis catch in CallInitialize).
+TEST(HostRuntimeLoad, AnExceptionOfAnyTypeFromInitializeIsCaughtAndReportedAsAFailure) {
+  NevrHostContext host{};
+  for (auto initialize : {&ThrowingForeignInitialize, &ThrowingIntInitialize}) {
+    NevrRuntimeApi api = ValidApi();
+    api.initialize = initialize;
+    bool threw = false;
+    std::int32_t code = 0;
+    EXPECT_NO_THROW(code = nevr_host::RuntimeLoader::CallInitialize(&api, host, &threw));
+    EXPECT_TRUE(threw);
+    EXPECT_EQ(code, nevr_host::kInitThrewCode);
+  }
 }
 
 TEST(HostRuntimeLoad, AnInitializeThatReturnsNormallyIsNotReportedAsThrowing) {

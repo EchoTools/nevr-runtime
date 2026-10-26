@@ -2,7 +2,7 @@
 
 // The runtime's side of the exports BugSplat64.dll publishes for it (core/runtime_abi.h, NevrRuntimeExports;
 // the host's thunks are runtime/host/runtime_exports.cpp). One entry per export, each with the export's
-// signature, and each catching every std::exception: nothing crosses the DLL boundary as an exception.
+// signature, and each run through the guard in export_guard.h: nothing crosses the DLL boundary as an exception.
 
 #include "core/runtime_abi.h"
 

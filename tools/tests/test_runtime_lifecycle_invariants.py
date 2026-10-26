@@ -145,6 +145,27 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertEqual(sorted(re.findall(r'"([^"]+\.dll)"', names)), ["BugSplat64.dll", "nevr-runtime.dll"])
         self.assertIn("_stricmp", names, "module names are matched without case")
 
+    # Exceptions do not cross the DLL boundary (#853, decision 9). The ellipsis catch is the one the C++ addendum
+    # allows only at such a boundary, so each one carries its reason on the line, and there are no others here.
+    def test_every_ellipsis_catch_at_the_two_dll_boundaries_says_why(self):
+        for name in ("src/runtime/host/runtime_load.cpp", "src/runtime/lifecycle/export_guard.h"):
+            with self.subTest(file=name):
+                lines = (ROOT / name).read_text().splitlines()
+                hits = [i for i, line in enumerate(lines) if re.search(r"catch\s*\(\s*\.\.\.\s*\)", line)]
+                self.assertTrue(hits, f"{name} has no ellipsis catch at its boundary")
+                for i in hits:
+                    text = lines[i] + (lines[i - 1] if i else "")
+                    self.assertRegex(text, r"//.*must not cross the DLL boundary",
+                                     f"{name}:{i + 1}: an ellipsis catch needs its justification on the line")
+
+    def test_the_runtime_export_entries_all_go_through_the_one_guard(self):
+        source = strip_comments((ROOT / "src/runtime/lifecycle/runtime_exports.cpp").read_text())
+        self.assertNotRegex(source, r"\btry\b|\bcatch\b", "the entries stop exceptions in export_guard.h only")
+        entries = re.findall(r"\bGuarded(?:Void)?\s*\(", source)
+        table = re.findall(r"table\.\w+\s*=\s*&", source)
+        self.assertEqual(len(table), 16)
+        self.assertEqual(len(entries), len(table), "every table entry calls Guarded or GuardedVoid once")
+
     def test_dllmain_does_not_run_plugin_shutdown_or_unload(self):
         source = (ROOT / "src/runtime/lifecycle/dllmain.cpp").read_text()
         body = extract_braced_function(source, "BOOL APIENTRY DllMain(")

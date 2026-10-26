@@ -115,6 +115,7 @@ set(PATCHES_HEADERS
     "lifecycle/initialize.h"
     "lifecycle/game_image_guard.h"
     "lifecycle/runtime_exports.h"
+    "lifecycle/export_guard.h"
     "log/boot_lines.h"
     "log/boot_log_tee.h"
     "log/boot_replay.h"
@@ -441,6 +442,14 @@ if(BUILD_TESTING)
     target_include_directories(test_runtime_abi PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_runtime_abi PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_runtime_abi DISCOVERY_MODE PRE_TEST)
+
+    # The guard behind every export entry of nevr-runtime.dll (lifecycle/export_guard.h): header-only.
+    add_executable(test_runtime_export_guard tests/test_runtime_export_guard.cpp)
+    set_source_files_properties(tests/test_runtime_export_guard.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_runtime_export_guard PRIVATE -Werror)
+    target_include_directories(test_runtime_export_guard PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_runtime_export_guard PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_runtime_export_guard DISCOVERY_MODE PRE_TEST)
 
     # The code the stable BugSplat64.dll host runs behind its DllMain and its exports
     # (runtime/host/, docs/adr/0008-bugsplat-host-and-nevr-runtime.md): the diagnostic
