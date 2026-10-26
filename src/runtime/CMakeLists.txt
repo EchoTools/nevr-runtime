@@ -357,7 +357,7 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_game_image_guard DISCOVERY_MODE PRE_TEST)
 
     # The host <-> runtime descriptor (core/runtime_abi.h): header-only validators that BugSplat64.dll
-    # runs on nevr.dll's descriptor, and nevr.dll on the host's context.
+    # runs on nevr-runtime.dll's descriptor, and nevr-runtime.dll on the host's context.
     add_executable(test_runtime_abi tests/test_runtime_abi.cpp)
     set_source_files_properties(tests/test_runtime_abi.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_runtime_abi PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -387,7 +387,7 @@ if(BUILD_TESTING)
     target_compile_definitions(nevr_host_core PUBLIC NEVR_HOST_TESTING)
     target_link_libraries(nevr_host_core PUBLIC minhook nlohmann_json::nlohmann_json)
 
-    # Attach-time MinHook proof gate for the BugSplat64.dll / nevr.dll split
+    # Attach-time MinHook proof gate for the BugSplat64.dll / nevr-runtime.dll split
     # (docs/adr/0008-bugsplat-host-and-nevr-runtime.md, "Proof gate").
     # The host (the production host units behind a shim, built as BugSplat64.dll) validates the game image and the
     # real GameMainWrapper prologue and installs ONE MinHook detour from
@@ -414,11 +414,11 @@ if(BUILD_TESTING)
       PREFIX "" OUTPUT_NAME "BugSplat64")
     bootstrap_attach_output(test_bootstrap_attach_host "${BOOTSTRAP_ATTACH_DIR}")
 
-    # One nevr.dll per fixture directory; the variant is a compile definition.
+    # One nevr-runtime.dll per fixture directory; the variant is a compile definition.
     function(add_bootstrap_attach_fixture target fixture_dir)
       add_library(${target} SHARED tests/bootstrap_attach/runtime_probe.cpp)
       target_link_libraries(${target} PRIVATE minhook)
-      set_target_properties(${target} PROPERTIES PREFIX "" OUTPUT_NAME "nevr")
+      set_target_properties(${target} PROPERTIES PREFIX "" OUTPUT_NAME "nevr-runtime")
       bootstrap_attach_output(${target} "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/${fixture_dir}")
       if(ARGN)
         target_compile_definitions(${target} PRIVATE ${ARGN})
@@ -438,12 +438,12 @@ if(BUILD_TESTING)
     add_library(test_bootstrap_attach_runtime_missing_entry SHARED
       tests/bootstrap_attach/runtime_missing_entry.cpp)
     set_target_properties(test_bootstrap_attach_runtime_missing_entry PROPERTIES
-      PREFIX "" OUTPUT_NAME "nevr")
+      PREFIX "" OUTPUT_NAME "nevr-runtime")
     bootstrap_attach_output(test_bootstrap_attach_runtime_missing_entry
       "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/missing-entry")
 
     set(BOOTSTRAP_BAD_IMAGE
-      "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/bad-image/nevr.dll")
+      "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/bad-image/nevr-runtime.dll")
     add_custom_command(OUTPUT "${BOOTSTRAP_BAD_IMAGE}"
       COMMAND ${CMAKE_COMMAND} -E make_directory
         "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/bad-image"
@@ -531,7 +531,7 @@ if(BUILD_TESTING)
 
     function(add_host_crash_fixture target fixture_dir)
       add_library(${target} SHARED tests/host_crash/runtime_fixture.cpp)
-      set_target_properties(${target} PROPERTIES PREFIX "" OUTPUT_NAME "nevr")
+      set_target_properties(${target} PROPERTIES PREFIX "" OUTPUT_NAME "nevr-runtime")
       host_crash_output(${target} "${HOST_CRASH_FIXTURE_DIR}/${fixture_dir}")
       if(ARGN)
         target_compile_definitions(${target} PRIVATE ${ARGN})
@@ -547,7 +547,7 @@ if(BUILD_TESTING)
     add_library(test_host_crash_runtime_missing_entry SHARED
       tests/host_crash/runtime_missing_entry.cpp)
     set_target_properties(test_host_crash_runtime_missing_entry PROPERTIES
-      PREFIX "" OUTPUT_NAME "nevr")
+      PREFIX "" OUTPUT_NAME "nevr-runtime")
     host_crash_output(test_host_crash_runtime_missing_entry
       "${HOST_CRASH_FIXTURE_DIR}/missing-entry")
 
@@ -561,10 +561,10 @@ if(BUILD_TESTING)
       test_host_crash_runtime_init_failure
       test_host_crash_runtime_missing_entry)
 
-    # Early GameMainWrapper rendezvous harness for the BugSplat64.dll / nevr.dll
+    # Early GameMainWrapper rendezvous harness for the BugSplat64.dll / nevr-runtime.dll
     # split (docs/adr/0008-bugsplat-host-and-nevr-runtime.md, "Decision: the rendezvous is
     # the game's main wrapper"). The host shim (BugSplat64.dll) calls the production host
-    # entry points: one detour from DLL_PROCESS_ATTACH, then the sibling nevr.dll loads on
+    # entry points: one detour from DLL_PROCESS_ATTACH, then the sibling nevr-runtime.dll loads on
     # the first call. test_rendezvous.exe drives valid / missing / reenter / bad-prologue
     # child scenarios plus the NEVR_SetGameModule external contract.
     set(RENDEZVOUS_DIR "${CMAKE_BINARY_DIR}/bin/rendezvous")
@@ -584,10 +584,10 @@ if(BUILD_TESTING)
     set_target_properties(test_rendezvous_host PROPERTIES PREFIX "" OUTPUT_NAME "BugSplat64")
     rendezvous_output(test_rendezvous_host "${RENDEZVOUS_DIR}")
 
-    # One nevr.dll per fixture directory; the variant is a compile definition.
+    # One nevr-runtime.dll per fixture directory; the variant is a compile definition.
     function(add_rendezvous_fixture target fixture_dir)
       add_library(${target} SHARED tests/rendezvous/runtime_fixture.cpp)
-      set_target_properties(${target} PROPERTIES PREFIX "" OUTPUT_NAME "nevr")
+      set_target_properties(${target} PROPERTIES PREFIX "" OUTPUT_NAME "nevr-runtime")
       rendezvous_output(${target} "${RENDEZVOUS_FIXTURE_DIR}/${fixture_dir}")
       if(ARGN)
         target_compile_definitions(${target} PRIVATE ${ARGN})
