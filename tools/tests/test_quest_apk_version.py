@@ -15,7 +15,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import warnings
 import zipfile
+from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
@@ -79,6 +81,13 @@ class NumberingTest(unittest.TestCase):
             with self.subTest(version=low):
                 with self.assertRaisesRegex(qv.VersionError, "4987570"):
                     qv.version_code_for(low)
+
+    def test_the_limits_keep_every_code_under_the_ceiling(self):
+        top = qv.version_code_for("20.99.99")
+        self.assertEqual(top, 2_099_999_999)
+        self.assertLess(top, qv.MAX_VERSION_CODE)
+        self.assertEqual(qv.MAX_VERSION_CODE, 2_100_000_000)
+        self.assertEqual(qv.version_code_for("20.99.98-dev.9998+abcdef0"), 2_099_989_998)
 
     def test_the_boundary_is_one_above_the_installer(self):
         # 0.4.98-dev.7571 = 4*10^6 + 98*10^4 + 7571 = 4,987,571
@@ -172,6 +181,20 @@ class PatchTest(unittest.TestCase):
         with self.assertRaises(qv.ManifestError):
             qv.patch_manifest(fx.build_manifest(version_code_count=2), 506_010_037)
 
+    def test_the_after_write_comparison_catches_a_write_that_lands_elsewhere_too(self):
+        # A write that sets the right code but also changes another byte (here the next attribute's data, which the
+        # reader does not validate) must be refused: the comparison, not the reader, is what notices.
+        data = fx.build_manifest(4987566)
+        real = struct.pack_into
+
+        def stray(fmt, buffer, offset, *values):
+            real(fmt, buffer, offset, *values)
+            buffer[offset + 20] ^= 0xFF
+
+        with mock.patch.object(qv.struct, "pack_into", stray):
+            with self.assertRaisesRegex(qv.ManifestError, "exactly the versionCode bytes"):
+                qv.patch_manifest(data, 506_010_037)
+
     def test_aapt2_reads_the_patched_manifest(self):
         if shutil.which("aapt2") is None or shutil.which("zip") is None:
             self.skipTest("aapt2 or zip is missing")
@@ -257,6 +280,16 @@ class CommandLineTest(unittest.TestCase):
             self.assertEqual(done.returncode, 1)
             self.assertIn("different builds", json.loads(done.stderr)["reason"])
             self.assertEqual(manifest.read_bytes(), original)
+
+    def test_an_apk_with_two_manifests_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            apk = pathlib.Path(tmp) / "dup.apk"
+            with warnings.catch_warnings(), zipfile.ZipFile(apk, "w") as z:
+                warnings.simplefilter("ignore")  # zipfile warns about a duplicate name, which is the point
+                z.writestr("AndroidManifest.xml", fx.build_manifest(4987566))
+                z.writestr("AndroidManifest.xml", fx.build_manifest(999_999_999))
+            with self.assertRaisesRegex(qv.ManifestError, "2 AndroidManifest.xml entries"):
+                qv.version_code_of_apk(apk)
 
     def test_read_prints_the_code_of_an_apk(self):
         with tempfile.TemporaryDirectory() as tmp:

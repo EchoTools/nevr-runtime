@@ -117,9 +117,7 @@ def version_code_for(version: str) -> int:
     if code <= INSTALLER_VERSION_CODE:
         raise VersionError(f"version '{version}' gives versionCode {code}, which does not beat the community installer's "
                            f"{INSTALLER_VERSION_CODE}: a headset on that build would refuse the APK as a downgrade")
-    if code >= MAX_VERSION_CODE:
-        raise VersionError(f"version '{version}' gives versionCode {code}, over {MAX_VERSION_CODE}")
-    return code
+    return code  # at most 20*10^8 + 99*10^6 + 99*10^4 + 9999 = 2,099,999,999 < MAX_VERSION_CODE, by the limits above
 
 
 # ---------------------------------------------------------------------------------------------------------------

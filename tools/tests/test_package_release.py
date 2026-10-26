@@ -193,9 +193,19 @@ class LocalDevPackageTest(PackageFixture):
                 self.write_apk(self.version, version_code=code)
                 result = self.run_tool()
                 self.assertEqual(result.returncode, 1)
-                self.assertIn(f"versionCode {code}", result.stderr)
-                self.assertIn(f"{DEV_VERSION_CODE}", result.stderr)
+                # "quest: " is the gate's prefix; the seal's own check (a second defence) has none
+                self.assertIn(f"quest: signed.apk: AndroidManifest.xml has versionCode {code}, not {DEV_VERSION_CODE}", result.stderr)
                 self.assertFalse(self.out.exists())
+
+    def test_the_seal_refuses_a_foreign_versionCode_on_its_own(self):
+        # seal() is the second defence, for an APK that reaches it without the gate
+        for code in (4_987_566, 500_010_004):
+            with self.subTest(code=code):
+                self.write_apk(self.version, version_code=code)
+                with self.assertRaisesRegex(package_release.GateFailure, f"has versionCode {code}, not {DEV_VERSION_CODE}"):
+                    package_release.check_apk_version(self.apk, self.version, COMMIT)
+        self.write_apk(self.version)
+        package_release.check_apk_version(self.apk, self.version, COMMIT)
 
     def test_an_apk_whose_manifest_cannot_be_read_is_refused(self):
         self.write_apk(self.version, manifest=b"<m/>")
