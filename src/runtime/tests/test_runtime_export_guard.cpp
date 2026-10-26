@@ -12,7 +12,9 @@
 namespace {
 
 using nevr_runtime_exports::Guarded;
+using nevr_runtime_exports::GuardedInitialize;
 using nevr_runtime_exports::GuardedVoid;
+using nevr_runtime_exports::kInitializeThrew;
 
 struct Report {
   int count = 0;
@@ -72,6 +74,25 @@ TEST_F(ExportGuard, ThePointerReturningEntriesGiveTheirFailureValueUnchanged) {
   static const char kEmpty[] = "";
   const char* got = Guarded("token", &Record, static_cast<const char*>(kEmpty), []() -> const char* { throw 1; });
   EXPECT_EQ(got, kEmpty);
+}
+
+// The runtime's initialize (lifecycle/runtime_entry.cpp) is called by the host from its detour; a throw out of it
+// must reach the host as the nonzero code that stops the game, with one report, never as an unwinding exception.
+TEST_F(ExportGuard, AnInitializeThatThrowsAnyTypeGivesTheHostANonzeroCodeAndOneReport) {
+  EXPECT_NE(kInitializeThrew, 0);
+  EXPECT_EQ(GuardedInitialize(&Record, []() -> std::int32_t { throw std::runtime_error("no init"); }), kInitializeThrew);
+  EXPECT_EQ(g_report.count, 1);
+  EXPECT_EQ(g_report.entry, "initialize");
+  EXPECT_EQ(g_report.text, "no init");
+  EXPECT_EQ(GuardedInitialize(&Record, []() -> std::int32_t { throw ForeignError{}; }), kInitializeThrew);
+  EXPECT_EQ(g_report.count, 2);
+  EXPECT_FALSE(g_report.had_text);
+}
+
+TEST_F(ExportGuard, AnInitializeThatReturnsKeepsItsOwnCode) {
+  EXPECT_EQ(GuardedInitialize(&Record, [] { return std::int32_t{0}; }), 0);
+  EXPECT_EQ(GuardedInitialize(&Record, [] { return std::int32_t{3}; }), 3);
+  EXPECT_EQ(g_report.count, 0);
 }
 
 }  // namespace

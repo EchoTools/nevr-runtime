@@ -3,6 +3,7 @@
 #include "abi/echovr.h"
 #include "core/logging.h"
 #include "runtime/lifecycle/crash_recovery.h"
+#include "runtime/lifecycle/export_guard.h"
 #include "runtime/lifecycle/initialize.h"
 #include "runtime/lifecycle/runtime_exports.h"
 
@@ -10,16 +11,19 @@ namespace nevr_runtime_entry {
 namespace {
 
 // Called once by the host's wrapper detour, on the game's main thread after the CRT is up and
-// outside the loader lock. A nonzero return makes the host run the original wrapper only.
+// outside the loader lock. A nonzero return is a failed load: the host stops the game (RuntimeRendezvous::StopGame).
 std::int32_t Initialize(const NevrHostContext* host) {
-  const nevr_runtime_abi::Status status = nevr_runtime_abi::ValidateHostContext(host);
-  if (status != nevr_runtime_abi::Status::kOk) {
-    return static_cast<std::int32_t>(status) + 1;  // never 0
-  }
-  InitializeGameModule(host->game_module);
-  ArmGameMain(host);
-  Log(EchoVR::LogLevel::Info, "[NEVR.BOOT] runtime initialized from the host's wrapper detour");
-  return 0;
+  // Behind the guard: an exception must not unwind into the host's detour (export_guard.h).
+  return nevr_runtime_exports::GuardedInitialize(&nevr_runtime_exports::ReportThrew, [host]() -> std::int32_t {
+    const nevr_runtime_abi::Status status = nevr_runtime_abi::ValidateHostContext(host);
+    if (status != nevr_runtime_abi::Status::kOk) {
+      return static_cast<std::int32_t>(status) + 1;  // never 0
+    }
+    InitializeGameModule(host->game_module);
+    ArmGameMain(host);
+    Log(EchoVR::LogLevel::Info, "[NEVR.BOOT] runtime initialized from the host's wrapper detour");
+    return 0;
+  });
 }
 
 const NevrRuntimeApi g_api = [] {

@@ -11,6 +11,9 @@ namespace nevr_runtime_exports {
 /// The table the runtime's descriptor carries. Static storage, never freed.
 const NevrRuntimeExports& Table();
 
+/// Logs what threw out of a guarded entry or the runtime's initialize, once, at Warning. The reporter every guard here uses.
+void ReportThrew(const char* entry, const char* what) noexcept;
+
 /// What an entry returns when the function behind it threw a std::exception. The values the host's thunks use
 /// before the runtime is up, so a caller sees the same answer for "not up" and "failed".
 inline constexpr int kInitFailed = -1;

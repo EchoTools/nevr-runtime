@@ -1,11 +1,13 @@
 #pragma once
 
-// The one place the runtime's export entries (runtime_exports.cpp) stop an exception. The host calls these
+// The one place the runtime's export entries (runtime_exports.cpp) and its initialize (runtime_entry.cpp) stop an
+// exception. The host calls these
 // entries from plugin and game code across the DLL boundary, and an exception must not cross it: a C++ exception
 // unwinding into a caller built with another toolchain, or into a frame with no handler, ends the process.
 // Guarded runs the function behind an entry, reports once what escaped it, and gives the caller the entry's
 // failure value, the same value the host's thunks return before the runtime is up.
 
+#include <cstdint>
 #include <exception>
 #include <type_traits>
 #include <utility>
@@ -40,6 +42,17 @@ void GuardedVoid(const char* entry, ThrewReporter report, Fn&& fn) noexcept {
   } catch (...) {  // exceptions must not cross the DLL boundary, so a throw of any other type ends here too
     report(entry, nullptr);
   }
+}
+
+/// What the runtime's initialize returns when it threw. The host reads any nonzero code as a failed initialize and
+/// stops the game; the runtime's own status codes are positive, so this one cannot be mistaken for them.
+inline constexpr std::int32_t kInitializeThrew = -2;
+
+/// The runtime's initialize, behind the same guard: the host calls it from its detour on the game's main thread,
+/// and an exception must not unwind into the host.
+template <class Fn>
+std::int32_t GuardedInitialize(ThrewReporter report, Fn&& fn) noexcept {
+  return Guarded("initialize", report, kInitializeThrew, std::forward<Fn>(fn));
 }
 
 }  // namespace nevr_runtime_exports

@@ -166,6 +166,16 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertEqual(len(table), 16)
         self.assertEqual(len(entries), len(table), "every table entry calls Guarded or GuardedVoid once")
 
+    def test_the_runtimes_initialize_runs_behind_the_guard(self):
+        # The host calls initialize from its detour: no exception may unwind into it.
+        source = strip_comments((ROOT / "src/runtime/lifecycle/runtime_entry.cpp").read_text())
+        self.assertNotRegex(source, r"\btry\b|\bcatch\b", "the guard in export_guard.h is the one place that catches")
+        body = extract_braced_function(source, "std::int32_t Initialize(")
+        self.assertRegex(body, r"\bGuardedInitialize\s*\(\s*&nevr_runtime_exports::ReportThrew\b")
+        for call in ("ValidateHostContext(", "InitializeGameModule(", "ArmGameMain("):
+            self.assertIn(call, body)
+            self.assertGreater(body.index(call), body.index("GuardedInitialize("), f"{call} runs outside the guard")
+
     def test_dllmain_does_not_run_plugin_shutdown_or_unload(self):
         source = (ROOT / "src/runtime/lifecycle/dllmain.cpp").read_text()
         body = extract_braced_function(source, "BOOL APIENTRY DllMain(")

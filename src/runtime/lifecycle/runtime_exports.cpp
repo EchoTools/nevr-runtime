@@ -34,83 +34,84 @@ const char* TokenAuth_GetUsername(void);
 }
 
 namespace nevr_runtime_exports {
-namespace {
 
 // Log what threw, once per call, at Warning: the caller gets the failure value and the log says why.
-void Threw(const char* entry, const char* what) noexcept {
+void ReportThrew(const char* entry, const char* what) noexcept {
   Log(EchoVR::LogLevel::Warning, "[NEVR.BOOT] host export entry=%s threw: %s", entry,
       what != nullptr ? what : "(not a std::exception)");
 }
 
+namespace {
+
 void ScheduleReturnToLobby() {
-  GuardedVoid("schedule_return_to_lobby", &Threw, [] { NEVR_ScheduleReturnToLobby(); });
+  GuardedVoid("schedule_return_to_lobby", &ReportThrew, [] { NEVR_ScheduleReturnToLobby(); });
 }
 
 void GetUPnPConfig(void* out) {
-  GuardedVoid("get_upnp_config", &Threw, [out] { NEVR_GetUPnPConfig(static_cast<NevrUPnPConfig*>(out)); });
+  GuardedVoid("get_upnp_config", &ReportThrew, [out] { NEVR_GetUPnPConfig(static_cast<NevrUPnPConfig*>(out)); });
 }
 
 void RegisterResourceOverride(std::uint64_t type_hash, std::uint64_t name_hash, const void* data,
                               std::uint64_t size, const char* label) {
-  GuardedVoid("register_resource_override", &Threw,
+  GuardedVoid("register_resource_override", &ReportThrew,
               [=] { NEVR_RegisterResourceOverride(type_hash, name_hash, data, size, label); });
 }
 
 void ResetResourceOverrides() {
-  GuardedVoid("reset_resource_overrides", &Threw, [] { NEVR_ResetResourceOverrides(); });
+  GuardedVoid("reset_resource_overrides", &ReportThrew, [] { NEVR_ResetResourceOverrides(); });
 }
 
 void DeregisterResourceOverrides(const void* data_start, const void* data_end) {
-  GuardedVoid("deregister_resource_overrides", &Threw,
+  GuardedVoid("deregister_resource_overrides", &ReportThrew,
               [=] { NEVR_DeregisterResourceOverrides(data_start, data_end); });
 }
 
 int RegisterAsset(std::uint64_t type_hash, std::uint64_t name_hash, const void* data, std::uint64_t size,
                   const char* label) {
-  return Guarded("register_asset", &Threw, kAssetUnavailable,
+  return Guarded("register_asset", &ReportThrew, kAssetUnavailable,
                  [=] { return NEVR_RegisterAsset(type_hash, name_hash, data, size, label); });
 }
 
 void DeregisterAssets(const void* data_start, const void* data_end) {
-  GuardedVoid("deregister_assets", &Threw, [=] { NEVR_DeregisterAssets(data_start, data_end); });
+  GuardedVoid("deregister_assets", &ReportThrew, [=] { NEVR_DeregisterAssets(data_start, data_end); });
 }
 
 const char* TokenAuthGetToken() {
-  return Guarded("token_auth_get_token", &Threw, "", [] { return TokenAuth_GetToken(); });
+  return Guarded("token_auth_get_token", &ReportThrew, "", [] { return TokenAuth_GetToken(); });
 }
 
 std::uint64_t TokenAuthGetDiscordId() {
-  return Guarded("token_auth_get_discord_id", &Threw, std::uint64_t{0}, [] { return TokenAuth_GetDiscordId(); });
+  return Guarded("token_auth_get_discord_id", &ReportThrew, std::uint64_t{0}, [] { return TokenAuth_GetDiscordId(); });
 }
 
 const char* TokenAuthGetUsername() {
-  return Guarded("token_auth_get_username", &Threw, "", [] { return TokenAuth_GetUsername(); });
+  return Guarded("token_auth_get_username", &ReportThrew, "", [] { return TokenAuth_GetUsername(); });
 }
 
 std::uint32_t PlatformCompatApiVersion() {
-  return Guarded("platform_compat_api_version", &Threw, std::uint32_t{0}, [] { return platform_compat_ApiVersion(); });
+  return Guarded("platform_compat_api_version", &ReportThrew, std::uint32_t{0}, [] { return platform_compat_ApiVersion(); });
 }
 
 int PlatformCompatInit(const void* ctx) {
-  return Guarded("platform_compat_init", &Threw, kInitFailed,
+  return Guarded("platform_compat_init", &ReportThrew, kInitFailed,
                  [ctx] { return platform_compat_Init(static_cast<const NvrModuleContext*>(ctx)); });
 }
 
 void PlatformCompatShutdown() {
-  GuardedVoid("platform_compat_shutdown", &Threw, [] { platform_compat_Shutdown(); });
+  GuardedVoid("platform_compat_shutdown", &ReportThrew, [] { platform_compat_Shutdown(); });
 }
 
 std::uint32_t TokenAuthApiVersion() {
-  return Guarded("token_auth_api_version", &Threw, std::uint32_t{0}, [] { return token_auth_ApiVersion(); });
+  return Guarded("token_auth_api_version", &ReportThrew, std::uint32_t{0}, [] { return token_auth_ApiVersion(); });
 }
 
 int TokenAuthInit(const void* ctx) {
-  return Guarded("token_auth_init", &Threw, kInitFailed,
+  return Guarded("token_auth_init", &ReportThrew, kInitFailed,
                  [ctx] { return token_auth_Init(static_cast<const NvrModuleContext*>(ctx)); });
 }
 
 void TokenAuthShutdown() {
-  GuardedVoid("token_auth_shutdown", &Threw, [] { token_auth_Shutdown(); });
+  GuardedVoid("token_auth_shutdown", &ReportThrew, [] { token_auth_Shutdown(); });
 }
 
 const NevrRuntimeExports g_table = [] {
