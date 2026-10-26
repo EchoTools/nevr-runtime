@@ -1,5 +1,6 @@
 #include "runtime/host/runtime_load.h"
 
+#include "runtime/host/host_identity.h"
 #include "runtime/host/host_json.h"
 #include "runtime/host/loader_lock.h"
 #include "runtime/host/path_buffer.h"
@@ -91,7 +92,7 @@ const char* RuntimeLoadResult::OutcomeName() const {
 }
 
 const char* RuntimeLoadResult::DegradedAction() const {
-  return Loaded() ? "dispatch" : "run_original_only";
+  return Loaded() ? "dispatch" : "stop_game";
 }
 
 RuntimeLoadResult ClassifyLoad(bool path_ok, const wchar_t* path, DWORD load_error,
@@ -168,7 +169,6 @@ void EmitLoadDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResu
     record["degraded_action"] = result.DegradedAction();
     record["path_ok"] = result.path_ok;
     record["loader_lock_held"] = result.loader_lock_held;
-    record["source"] = result.in_process ? "in_process" : "file";
     if (result.path_ok) record["path"] = ToUtf8(result.path);
     record["expected_abi"] = AbiVersion(result.expected_major, result.expected_minor);
     const bool descriptor_read = DescriptorRead(result.outcome);
@@ -180,6 +180,7 @@ void EmitLoadDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResu
     if (result.outcome == RuntimeLoadOutcome::kInitFailed || result.Loaded()) {
       record["init_code"] = result.init_code;
     }
+    if (result.init_threw) record["init_threw"] = true;
     diagnostics.Emit(record);
   } catch (const std::exception& error) {
     // Fixed buffer, no allocation: the record the load would have written, reduced to what
@@ -191,6 +192,32 @@ void EmitLoadDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResu
         .Str("what", error.what())
         .Str("outcome", result.OutcomeName())
         .Bool("loader_lock_held", result.loader_lock_held);
+    const std::size_t length = line.Finish();
+    if (length != 0) diagnostics.AppendLine(buffer, length);
+  }
+}
+
+void EmitStopDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result) noexcept {
+  try {
+#if defined(NEVR_HOST_TESTING)
+    if (g_fail_emit_for_test.load()) throw std::runtime_error("record builder failed (test seam)");
+#endif
+    nlohmann::json record;
+    record["event"] = "game_stop";
+    record["reason"] = result.OutcomeName();
+    record["exit_code"] = kRuntimeStopExitCode;
+    record["host_identity"] = IdentityLiteral();
+    // The path searched: the one thing a player or support needs for a missing file.
+    if (result.path_ok) record["runtime_path"] = ToUtf8(result.path);
+    if (result.win32_error != 0) record["win32_error"] = result.win32_error;
+    diagnostics.Emit(record);
+  } catch (const std::exception& error) {
+    char buffer[kMarkerBytes];
+    JsonLine line(buffer, sizeof(buffer), "game_stop");
+    line.Str("error", "record_build_failed")
+        .Str("what", error.what())
+        .Str("reason", result.OutcomeName())
+        .UInt("exit_code", kRuntimeStopExitCode);
     const std::size_t length = line.Finish();
     if (length != 0) diagnostics.AppendLine(buffer, length);
   }
@@ -215,15 +242,14 @@ void RuntimeLoader::Prepare(HMODULE host_module) {
   if (!path_ok_) path_[0] = L'\0';
 }
 
-void RuntimeLoader::PrepareInProcess(HMODULE host_module, NevrGetRuntimeApiFn get_api) {
-  in_process_module_ = host_module;
-  in_process_get_api_ = get_api;
-  path_ok_ = false;
-  path_[0] = L'\0';
-  if (host_module != nullptr) {
-    const DWORD length = GetModuleFileNameW(host_module, path_, MAX_PATH);
-    path_ok_ = length != 0 && length < MAX_PATH;
-    if (!path_ok_) path_[0] = L'\0';
+std::int32_t RuntimeLoader::CallInitialize(const NevrRuntimeApi* api, const NevrHostContext& host,
+                                           bool* threw) noexcept {
+  *threw = false;
+  try {
+    return api->initialize(&host);
+  } catch (const std::exception&) {
+    *threw = true;
+    return kInitThrewCode;
   }
 }
 
@@ -240,11 +266,9 @@ RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host,
   const NevrRuntimeApi* api = nullptr;
   nevr_runtime_abi::Status abi_status = nevr_runtime_abi::Status::kNullDescriptor;
   std::int32_t init_code = 0;
+  bool init_threw = false;
 
-  const bool in_process = in_process_get_api_ != nullptr;
-  if (in_process) {
-    module = in_process_module_;
-  } else if (path_ok_) {
+  if (path_ok_) {
     // Distinguish "runtime absent" (the file itself is missing) from a load
     // failure with the file present (e.g. a missing dependency). LoadLibraryExW
     // returns ERROR_MOD_NOT_FOUND for both, so the file must be probed first.
@@ -259,16 +283,14 @@ RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host,
     }
   }
   if (module != nullptr) {
-    const NevrGetRuntimeApiFn get_api =
-        in_process ? in_process_get_api_
-                   : reinterpret_cast<NevrGetRuntimeApiFn>(
-                         GetProcAddress(module, nevr_runtime_abi::kGetRuntimeApiExport));
+    const auto get_api = reinterpret_cast<NevrGetRuntimeApiFn>(
+        GetProcAddress(module, nevr_runtime_abi::kGetRuntimeApiExport));
     has_entry = get_api != nullptr;
     if (has_entry) {
       api = get_api();
       abi_status = nevr_runtime_abi::ValidateRuntimeApi(api);
       if (abi_status == nevr_runtime_abi::Status::kOk) {
-        init_code = api->initialize(&host);
+        init_code = CallInitialize(api, host, &init_threw);
       }
     }
   }
@@ -276,7 +298,7 @@ RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host,
   result_ = ClassifyLoad(path_ok_, path_, load_error, module, has_entry, api, abi_status,
                          init_code);
   result_.loader_lock_held = loader_lock_held;
-  result_.in_process = in_process;
+  result_.init_threw = init_threw;
   EmitLoadDiagnostic(diagnostics, result_);
   return result_;
 }

@@ -1,4 +1,4 @@
-# VERSIONINFO resource for the two Windows files this project ships, BugSplat64.dll and echovr_server.exe, so
+# VERSIONINFO resource for the Windows files this project ships, BugSplat64.dll, nevr-runtime.dll and echovr_server.exe, so
 # Explorer's Details tab names them (#850).
 #
 #   nevr_version_numeric(<out> <major> <minor> <patch> <distance>)

@@ -14,6 +14,8 @@
 
 #include <windows.h>
 
+#include <atomic>
+#include <cstdint>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -331,4 +333,75 @@ TEST(HostRendezvousInstall, ADetourEnteredWithNoRendezvousAtAllReturnsZero) {
   RendezvousSandbox sandbox;
   RuntimeRendezvous::ResetActiveForTest();
   EXPECT_EQ(RuntimeRendezvous::GameMainWrapperDetour(0x1234), 0);
+}
+
+// --- the stop: a runtime that did not load ends the game (docs/adr/0012-static-install-root.md) ----
+
+namespace {
+
+std::atomic<int> g_stops{0};
+std::atomic<std::uint32_t> g_stop_code{0};
+void CountStop(std::uint32_t exit_code) {
+  g_stop_code.store(exit_code);
+  g_stops.fetch_add(1);
+}
+
+// Executable memory that starts with the pinned prologue and then returns 0x12345678 as a function that
+// leaves its frame, so the trampoline MinHook builds can really be called.
+class ReturningTarget {
+ public:
+  ReturningTarget() {
+    code_ = static_cast<unsigned char*>(
+        VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (code_ == nullptr) return;
+    std::memcpy(code_, nevr_host::kGameMainWrapperPrologue, nevr_host::kGameMainWrapperPrologueSize);
+    const unsigned char tail[] = {0xB8, 0x78, 0x56, 0x34, 0x12,  // mov eax, 0x12345678
+                                  0x48, 0x83, 0xC4, 0x38,        // add rsp, 0x38
+                                  0xC3};                         // ret
+    std::memcpy(code_ + nevr_host::kGameMainWrapperPrologueSize, tail, sizeof(tail));
+    std::memset(code_ + nevr_host::kGameMainWrapperPrologueSize + sizeof(tail), 0xCC, 32);
+  }
+  ~ReturningTarget() {
+    MH_Uninitialize();
+    if (code_ != nullptr) VirtualFree(code_, 0, MEM_RELEASE);
+  }
+  unsigned char* code() const { return code_; }
+
+ private:
+  unsigned char* code_ = nullptr;
+};
+
+}  // namespace
+
+TEST(HostRendezvousStop, ARuntimeThatDidNotLoadStopsTheGameWithCode78AndOneRecordHoweverOftenTheDetourRuns) {
+  RendezvousSandbox sandbox;
+  g_stops.store(0);
+  g_stop_code.store(0);
+  RuntimeRendezvous::Seams().stop_game = &CountStop;
+  const std::wstring local = MakeTempDir();
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  ReturningTarget target;
+  ASSERT_NE(target.code(), nullptr);
+  RuntimeRendezvous rendezvous;
+  // kernel32's directory has no nevr-runtime.dll: the load ends at runtime_absent.
+  rendezvous.Prepare(GetModuleHandleW(L"kernel32.dll"), GetModuleHandleW(nullptr), diagnostics);
+  ASSERT_NE(rendezvous.Install(target.code()), nullptr);
+
+  // The seam lets the original run after the stop, so a harness can look on; production ends the process.
+  EXPECT_EQ(RuntimeRendezvous::GameMainWrapperDetour(0x1234), 0x12345678);
+  EXPECT_EQ(RuntimeRendezvous::GameMainWrapperDetour(0x1234), 0x12345678);
+  EXPECT_EQ(g_stops.load(), 2);
+  EXPECT_EQ(g_stop_code.load(), 78u);
+  EXPECT_EQ(rendezvous.RuntimeApi(), nullptr);
+
+  int stop_records = 0;
+  for (const nlohmann::json& record : Records(diagnostics, local)) {
+    if (record.value("event", "") != "game_stop") continue;
+    ++stop_records;
+    EXPECT_EQ(record.at("reason"), "runtime_absent");
+    EXPECT_EQ(record.at("exit_code"), 78);
+  }
+  EXPECT_EQ(stop_records, 1);
+  RuntimeRendezvous::ResetActiveForTest();
 }

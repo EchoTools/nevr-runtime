@@ -1,22 +1,34 @@
-# Game Patches — deployed as BugSplat64.dll (replaces the original crash reporter).
-# The game statically imports BugSplat64.dll, so it loads at process startup
-# before WinMain — giving us the earliest possible hook point.
+# Two DLLs (docs/adr/0008-bugsplat-host-and-nevr-runtime.md, docs/adr/0012-static-install-root.md):
+#
+#   nevr_host     BugSplat64.dll   the thin host that replaces the original crash reporter. The game statically
+#                                  imports it, so it loads at process startup before WinMain. It installs the one
+#                                  detour on the game's main wrapper, loads nevr-runtime.dll there, and keeps the
+#                                  crash capture. Sources: host/, plus the two lifecycle units it needs.
+#   nevr_runtime  nevr-runtime.dll everything else: the hooks, the plugin loader, the bridge, the game server.
+#
 # Uses MinHook for function hooking (built from extern/minhook)
+
+# The units both DLLs and the host's test library compile. They carry the host's behaviour; none reads the
+# runtime's globals or calls the NEVR logger. NEVR_HOST_TESTING is defined by nevr_host_core alone
+# (tools/verify_host_seams.py).
+set(NEVR_HOST_UNITS
+    "host/bootstrap_diagnostics.cpp"
+    "host/crash_capture.cpp"
+    "host/host_entry.cpp"
+    "host/host_identity.cpp"
+    "host/minidmp_sender_exports.cpp"
+    "host/runtime_load.cpp"
+    "host/runtime_rendezvous.cpp"
+    "lifecycle/game_image_guard.cpp"
+)
 
 set(PATCHES_SOURCES
     "lifecycle/dllmain.cpp"
     "lifecycle/initialize.cpp"
+    # Compiled into both DLLs (the host checks the game image at attach, the runtime again before it initializes).
     "lifecycle/game_image_guard.cpp"
     "lifecycle/runtime_entry.cpp"
-    # The host units (runtime/host/) are compiled in without NEVR_HOST_TESTING: the DLL's
-    # DllMain and exports call them, and the runtime is handed to the host as an in-process provider.
-    "host/bootstrap_diagnostics.cpp"
-    "host/crash_capture.cpp"
-    "host/host_entry.cpp"
-    "host/minidmp_sender_exports.cpp"
-    "host/runtime_load.cpp"
-    "host/runtime_rendezvous.cpp"
-    "lifecycle/system_module_loader.cpp"
+    "lifecycle/runtime_exports.cpp"
     "log/boot_log_tee.cpp"
     "lifecycle/cli.cpp"
     "lifecycle/boot.cpp"
@@ -99,7 +111,7 @@ set(PATCHES_HEADERS
     "hook/patching.h"
     "lifecycle/initialize.h"
     "lifecycle/game_image_guard.h"
-    "lifecycle/system_module_loader.h"
+    "lifecycle/runtime_exports.h"
     "log/boot_lines.h"
     "log/boot_log_tee.h"
     "log/boot_replay.h"
@@ -190,8 +202,7 @@ set(PATCHES_HEADERS
     "server/telemetry_snapshot.h"
 )
 
-add_library(nevr_runtime SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
-                               "exports.def")
+add_library(nevr_runtime SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS})
 
 target_compile_definitions(nevr_runtime PRIVATE NEVR_USE_MINHOOK PROTOBUF_STATIC_LIB)
 
@@ -227,9 +238,15 @@ target_link_libraries(nevr_runtime PRIVATE yaml-cpp::yaml-cpp)
 # target below that compiles them (test_behavioral compiles ws_bridge.cpp) gets it too.
 nevr_build_identity_define(TARGET nevr_runtime READS VERSION
   SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/lifecycle/initialize.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/compat/ws_bridge.cpp")
+# The host states the same version and commit as the runtime in a literal of its own (host/host_identity.cpp):
+# tools/package_release.py refuses a pair that disagrees.
+nevr_build_identity_define(TARGET nevr_runtime READS VERSION COMMIT_FULL
+  SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/host/host_identity.cpp")
 
+# The host units use no precompiled header: the host links no nevr_core, and nevr_host_core and nevr_host build them alike.
+set_source_files_properties(${NEVR_HOST_UNITS} host/host_dllmain.cpp host/runtime_exports.cpp lifecycle/system_module_loader.cpp
+                            PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
-set_source_files_properties(host/bootstrap_diagnostics.cpp host/crash_capture.cpp host/host_entry.cpp host/minidmp_sender_exports.cpp host/runtime_load.cpp host/runtime_rendezvous.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(compat/ws_bridge.cpp compat/session_router.cpp compat/ws_session_transport.cpp compat/social_names.cpp compat/evr_codec.cpp compat/self_check.cpp patch/asset_cache.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # #20: the export tracer's thunk layer is windows.h plus a global assembly block; the tracer logs through core.
 set_source_files_properties(hook/export_trace_thunk.cpp hook/export_tracer.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -285,14 +302,15 @@ if(NEVR_SCENARIO_CONTROL)
 endif()
 
 set_target_properties(nevr_runtime PROPERTIES
-  OUTPUT_NAME "BugSplat64"
+  OUTPUT_NAME "nevr-runtime"
   PREFIX ""
 )
 
-# The Details tab of BugSplat64.dll (cmake/nevr_version_info.cmake; tools/pe_version_info.py reads it back).
+# The Details tab of nevr-runtime.dll and BugSplat64.dll (cmake/nevr_version_info.cmake; tools/pe_version_info.py
+# reads it back).
 nevr_add_version_info(nevr_runtime
   FILE_DESCRIPTION "nEVR runtime for Echo VR"
-  ORIGINAL_FILENAME "BugSplat64.dll"
+  ORIGINAL_FILENAME "nevr-runtime.dll"
   TYPE DLL)
 
 # Disable specific warnings (MSVC only)
@@ -341,15 +359,49 @@ if(MINGW)
 endif()
 
 if(MINGW)
+  # N146 applies to the host (below), which keeps the stock BugSplat64.dll's image base. The runtime has a base of
+  # its own, inside the range the one-file DLL occupied, so the loader never has to choose between the two
+  # (tools/verify_pe_contract.py RUNTIME_IMAGE_BASE).
+  target_link_options(nevr_runtime PRIVATE
+    -Wl,--image-base=0x181000000
+    -Wl,--allow-multiple-definition
+  )
+endif()
+
+# ---------------------------------------------------------------------------------------------------------------
+# The host: BugSplat64.dll (docs/adr/0008-bugsplat-host-and-nevr-runtime.md, docs/adr/0012-static-install-root.md).
+#
+# Only what must keep working when nevr-runtime.dll does not, and that rarely changes: the game-facing exports, the
+# one detour on the game's main wrapper, the runtime loader, and the crash capture. It links MinHook and
+# nlohmann_json and nothing else of the project: no nevr_core, no sockets, no TLS, no plugin loader
+# (tools/verify_pe_contract.py pins its imports). It is built WITHOUT NEVR_HOST_TESTING.
+# ---------------------------------------------------------------------------------------------------------------
+add_library(nevr_host SHARED
+  ${NEVR_HOST_UNITS}
+  host/host_dllmain.cpp
+  host/runtime_exports.cpp
+  lifecycle/system_module_loader.cpp
+  host/exports.def)
+target_include_directories(nevr_host PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(nevr_host PRIVATE minhook nlohmann_json::nlohmann_json)
+set_target_properties(nevr_host PROPERTIES
+  OUTPUT_NAME "BugSplat64"
+  PREFIX ""
+)
+nevr_add_version_info(nevr_host
+  FILE_DESCRIPTION "nEVR host for Echo VR"
+  ORIGINAL_FILENAME "BugSplat64.dll"
+  TYPE DLL)
+if(MINGW)
   # N146: the stock BugSplat64.dll is linked with /BASE:0x180000000.
   # The game's D3D11/DXVK graphics DLLs fail to load when BugSplat64.dll
   # occupies a different address range.  Setting the same ImageBase fixes
   # the client-mode window-not-rendering bug.
-  target_link_options(nevr_runtime PRIVATE
-    -Wl,--image-base=0x180000000
-    -Wl,--allow-multiple-definition
-  )
+  target_link_options(nevr_host PRIVATE -Wl,--image-base=0x180000000)
 endif()
+# The runtime is loaded from the host's directory at the rendezvous, never linked: build it with the host so a
+# build tree always holds the matched pair.
+add_dependencies(nevr_host nevr_runtime)
 
 # XPID patch unit tests — validates byte constants and address sanity.
 if(BUILD_TESTING)
@@ -377,22 +429,15 @@ if(BUILD_TESTING)
     # (runtime/host/, docs/adr/0008-bugsplat-host-and-nevr-runtime.md): the diagnostic
     # recorder, the minidump capture, the runtime load/validate state machine and the
     # GameMainWrapper rendezvous. It is a static library of its own so the tests
-    # drive the objects the host links and not a copy. Built only for the tests until the
-    # target split links it into BugSplat64.dll.
+    # drive the same units nevr_host links into BugSplat64.dll, not a copy of them (the same source files, built
+    # here with the test seams).
     find_package(nlohmann_json CONFIG REQUIRED)
-    add_library(nevr_host_core STATIC
-      host/bootstrap_diagnostics.cpp
-      host/crash_capture.cpp
-      host/host_entry.cpp
-      host/minidmp_sender_exports.cpp
-      host/runtime_load.cpp
-      host/runtime_rendezvous.cpp
-      lifecycle/game_image_guard.cpp)
+    add_library(nevr_host_core STATIC ${NEVR_HOST_UNITS})
     target_compile_options(nevr_host_core PRIVATE -Werror)
     target_include_directories(nevr_host_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
     # The host units carry test seams (RuntimeRendezvous::Seams, SetEmitLoadFailureForTest, the emit
     # sink) that exist only under NEVR_HOST_TESTING. This library is built for the tests alone; the
-    # target that builds the host into BugSplat64.dll must not define it
+    # target that builds the host into BugSplat64.dll (nevr_host) must not define it
     # (tools/tests/test_host_test_seams.py).
     target_compile_definitions(nevr_host_core PUBLIC NEVR_HOST_TESTING)
     target_link_libraries(nevr_host_core PUBLIC minhook nlohmann_json::nlohmann_json)
@@ -510,6 +555,14 @@ if(BUILD_TESTING)
     target_compile_options(test_host_rendezvous PRIVATE -Werror)
     target_link_libraries(test_host_rendezvous PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_host_rendezvous DISCOVERY_MODE PRE_TEST)
+
+    # The host's sixteen export thunks, built from the shipped file (host/runtime_exports.cpp) against the
+    # same host units BugSplat64.dll links.
+    add_executable(test_host_exports tests/test_host_exports.cpp host/runtime_exports.cpp)
+    set_source_files_properties(tests/test_host_exports.cpp host/runtime_exports.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_host_exports PRIVATE -Werror)
+    target_link_libraries(test_host_exports PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_exports DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_host_minidump tests/test_host_minidump.cpp)
     target_compile_options(test_host_minidump PRIVATE -Werror)

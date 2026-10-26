@@ -306,7 +306,7 @@ void ValidateRecords(const Scenario& scenario, const std::vector<nlohmann::json>
   Require(loads.size() == 1, "expected exactly one runtime_load record");
   Require(loads[0].at("outcome") == scenario.load_outcome, "runtime_load record has the wrong outcome");
   Require(loads[0].at("degraded_action") ==
-              (std::strcmp(scenario.load_outcome, "loaded") == 0 ? "dispatch" : "run_original_only"),
+              (std::strcmp(scenario.load_outcome, "loaded") == 0 ? "dispatch" : "stop_game"),
           "runtime_load record names the wrong degraded action");
   // The load runs on the harness's own thread, outside the loader lock, and the record says so.
   Require(loads[0].contains("loader_lock_held") && loads[0].at("loader_lock_held") == false,

@@ -89,16 +89,11 @@ void RuntimeRendezvous::SetInstallEventForTest(HANDLE event) {
 #endif
 
 void RuntimeRendezvous::Prepare(HMODULE host_module, HMODULE game_module,
-                                BootstrapDiagnostics& diagnostics,
-                                NevrGetRuntimeApiFn in_process_runtime) {
+                                BootstrapDiagnostics& diagnostics) {
   host_module_ = host_module;
   game_module_ = game_module;
   diagnostics_ = &diagnostics;
-  if (in_process_runtime != nullptr) {
-    loader_.PrepareInProcess(host_module, in_process_runtime);
-  } else {
-    loader_.Prepare(host_module);
-  }
+  loader_.Prepare(host_module);
   g_active_rendezvous = this;
 }
 
@@ -214,13 +209,32 @@ BOOL CALLBACK RuntimeRendezvous::LoadRuntimeOnce(PINIT_ONCE, PVOID parameter, PV
   return TRUE;
 }
 
+std::int64_t RuntimeRendezvous::StopGame(std::int64_t command_line) {
+  // Once: every thread that was waiting on the load arrives here when it fails, and one record says why.
+  if (!stop_recorded_.exchange(true, std::memory_order_acq_rel)) {
+    EmitStopDiagnostic(*diagnostics_, loader_.Result());
+  }
+#if defined(NEVR_HOST_TESTING)
+  if (Seams().stop_game != nullptr) {
+    Seams().stop_game(kRuntimeStopExitCode);
+    return original_(command_line);
+  }
+#else
+  static_cast<void>(command_line);
+#endif
+  TerminateProcess(GetCurrentProcess(), kRuntimeStopExitCode);
+  // TerminateProcess on the current process does not return; if it ever did, nothing may run the game.
+  RaiseFailFastException(nullptr, nullptr, 0);
+  __builtin_unreachable();
+}
+
 std::int64_t RuntimeRendezvous::GameMainWrapperDetour(std::int64_t command_line) {
   RuntimeRendezvous* self = g_active_rendezvous;
   // Defensive, unreachable in practice: Install publishes the trampoline before
   // MH_EnableHook, so the detour is never live with a null original_. If a defect
   // ever trips these guards there is no original to fall back to, so returning 0
-  // is the only non-dereferencing option. This is NOT the degrade-to-original
-  // path — that is the api == nullptr branch below, which still calls original_.
+  // is the only non-dereferencing option. This is NOT the stop path — that is the
+  // api == nullptr branch below.
   if (self == nullptr) {
     // No rendezvous, so no journal: a fixed-buffer line on stderr (no allocation, no lock).
     HANDLE err = GetStdHandle(STD_ERROR_HANDLE);
@@ -251,7 +265,7 @@ std::int64_t RuntimeRendezvous::GameMainWrapperDetour(std::int64_t command_line)
   InitOnceExecuteOnce(&self->load_once_, &LoadRuntimeOnce, self, nullptr);
   const NevrRuntimeApi* api = self->api_.load(std::memory_order_acquire);
   if (api != nullptr) return api->game_main(command_line);
-  return self->original_(command_line);
+  return self->StopGame(command_line);
 }
 
 }  // namespace nevr_host

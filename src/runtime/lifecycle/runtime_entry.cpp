@@ -4,6 +4,7 @@
 #include "core/logging.h"
 #include "runtime/lifecycle/crash_recovery.h"
 #include "runtime/lifecycle/initialize.h"
+#include "runtime/lifecycle/runtime_exports.h"
 
 namespace nevr_runtime_entry {
 namespace {
@@ -28,6 +29,7 @@ const NevrRuntimeApi g_api = [] {
   api.header.abi_minor = nevr_runtime_abi::kMinor;
   api.initialize = &Initialize;
   api.game_main = &RuntimeGameMain;
+  api.exports = nevr_runtime_exports::Table();
   return api;
 }();
 
@@ -36,3 +38,5 @@ const NevrRuntimeApi g_api = [] {
 const NevrRuntimeApi* GetRuntimeApi() { return &g_api; }
 
 }  // namespace nevr_runtime_entry
+
+extern "C" const NevrRuntimeApi* NEVR_GetRuntimeApi() { return nevr_runtime_entry::GetRuntimeApi(); }

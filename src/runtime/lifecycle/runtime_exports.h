@@ -1,0 +1,19 @@
+#pragma once
+
+// The runtime's side of the exports BugSplat64.dll publishes for it (core/runtime_abi.h, NevrRuntimeExports;
+// the host's thunks are runtime/host/runtime_exports.cpp). One entry per export, each with the export's
+// signature, and each catching every std::exception: nothing crosses the DLL boundary as an exception.
+
+#include "core/runtime_abi.h"
+
+namespace nevr_runtime_exports {
+
+/// The table the runtime's descriptor carries. Static storage, never freed.
+const NevrRuntimeExports& Table();
+
+/// What an entry returns when the function behind it threw a std::exception. The values the host's thunks use
+/// before the runtime is up, so a caller sees the same answer for "not up" and "failed".
+inline constexpr int kInitFailed = -1;
+inline constexpr int kAssetUnavailable = -1;
+
+}  // namespace nevr_runtime_exports

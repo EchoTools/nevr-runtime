@@ -244,16 +244,19 @@ static void* CSysDLL_LoadHook(void* name_buf, void* plugin_ctx) {
 // ============================================================================
 
 // ============================================================================
-// Cross-DLL exports (called by gameserver.dll via GetProcAddress)
+// Cross-DLL entry points (called by plugins and the launcher by name from BugSplat64.dll)
+//
+// The names are exported by the host, as thunks that call these through the table the runtime's descriptor
+// carries (runtime/lifecycle/runtime_exports.cpp). These definitions are not exported from nevr-runtime.dll.
 // ============================================================================
 
-extern "C" __declspec(dllexport) void NEVR_ScheduleReturnToLobby() {
+extern "C" void NEVR_ScheduleReturnToLobby() {
   if (g_pGame) {
     nevr_return_to_lobby::ScheduleNow(nevr_return_to_lobby_queue::NetGameFromContext(g_pGame), "export");
   }
 }
 
-extern "C" __declspec(dllexport) void NEVR_GetUPnPConfig(NevrUPnPConfig* out) {
+extern "C" void NEVR_GetUPnPConfig(NevrUPnPConfig* out) {
   if (!out) return;
   out->enabled = g_upnpEnabled;
   out->port    = g_upnpPort;

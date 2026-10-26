@@ -9,14 +9,14 @@
 // does nothing else there. On the first call after attach returns, the detour loads the
 // runtime through RuntimeLoader::Load (the load/validate state machine, which calls the
 // runtime's initialize), then returns the runtime's game_main(command_line). When no
-// runtime is published it returns the original wrapper's result. The original trampoline
+// runtime is published it stops the game (StopGame). The original trampoline
 // is published through NevrHostContext BEFORE MH_EnableHook, so the runtime never
 // installs a second hook on the wrapper and a racing thread can never read a null
 // trampoline; the first bytes found at the target after the hook was enabled are added to
 // the context just before the load. A same-thread re-entry during runtime load bypasses to
 // the original (InitOnce recursion on the loading thread deadlocks; the attach proof gate
-// in tests/bootstrap_attach measures it). Any failure degrades to the original wrapper and
-// never falls back to loading the runtime from DllMain.
+// in tests/bootstrap_attach measures it). A failed load is a stopped game, not a degraded one
+// (docs/adr/0012-static-install-root.md), and never falls back to loading the runtime from DllMain.
 
 #include "core/runtime_abi.h"
 #include "runtime/host/game_targets.h"
@@ -36,10 +36,7 @@ class RuntimeRendezvous {
   // no I/O, no allocation: safe under the loader lock. `diagnostics` must outlive
   // this object; the attach steps are recorded in it, and the load diagnostic is
   // written through it on the first call, after attach returns.
-  // `in_process_runtime`, when set, is the descriptor entry point of a runtime compiled into the
-  // host's own image: nothing is loaded from disk and the record's source is `in_process`.
-  void Prepare(HMODULE host_module, HMODULE game_module, BootstrapDiagnostics& diagnostics,
-               NevrGetRuntimeApiFn in_process_runtime = nullptr);
+  void Prepare(HMODULE host_module, HMODULE game_module, BootstrapDiagnostics& diagnostics);
 
   // Validate the pinned prologue at `target` and install the GameMainWrapper
   // detour, recording each decision in the diagnostics journal (prologue accepted
@@ -58,9 +55,15 @@ class RuntimeRendezvous {
   static bool PrologueMatches(const void* target);
 
   // The detour body (MinHook calls it). Loads nevr-runtime.dll once under InitOnce and
-  // returns the runtime's game_main(command_line), or the original wrapper's result when no
-  // runtime is published; a same-thread re-entry during load bypasses to the original.
+  // returns the runtime's game_main(command_line); when no runtime is published the game is
+  // stopped (StopGame) and this does not return. A same-thread re-entry during load bypasses
+  // to the original.
   static std::int64_t GameMainWrapperDetour(std::int64_t command_line);
+
+  // The loaded runtime's descriptor: set once the load succeeded, which includes the runtime's
+  // initialize(). Null before the rendezvous completed and after a failed load. The host's export
+  // thunks call into the runtime only through this.
+  const NevrRuntimeApi* RuntimeApi() const { return api_.load(std::memory_order_acquire); }
 
   // How the wait for the install ended.
   enum class InstallWait { kSignalled, kUnavailable, kTimeout };
@@ -83,10 +86,14 @@ class RuntimeRendezvous {
     bool fail_hook_bytes_read = false;  // the read of the hook's first bytes "fails"
     bool fail_hook_create = false;      // MH_CreateHook "fails" (the hook it made is removed)
     DWORD install_wait_ms = 5000;       // how long AwaitInstall waits (kInstallWaitMs in production)
+    // StopGame calls this instead of ending the process, then the detour runs the original wrapper so a harness
+    // can go on observing. Null in production: the process ends and nothing runs after.
+    void (*stop_game)(std::uint32_t exit_code) = nullptr;
   };
   static TestSeams& Seams();
   const NevrHostContext& Context() const;
   void SetInstallEventForTest(HANDLE event);
+  void SetRuntimeApiForTest(const NevrRuntimeApi* api) { api_.store(api, std::memory_order_release); }
   static void ResetActiveForTest();
 #endif
 
@@ -99,6 +106,12 @@ class RuntimeRendezvous {
   // loading thread id is published for the duration so a same-thread re-entry from
   // the runtime's initialize() bypasses to the original instead of deadlocking.
   static BOOL CALLBACK LoadRuntimeOnce(PINIT_ONCE init_once, PVOID parameter, PVOID* context);
+
+  // The runtime did not load: write the game_stop record (once, however many threads arrive), then end the
+  // process with kRuntimeStopExitCode by TerminateProcess. The host's own call, never the runtime's
+  // ForceFatalExit, which belongs to a runtime that is not there. Does not return in production.
+  // With the test seam set it returns the original wrapper's result instead.
+  std::int64_t StopGame(std::int64_t command_line);
 
   void Journal(AttachStep step, AttachOutcome outcome, std::uint32_t detail = 0,
                const unsigned char* actual = nullptr, HookStage stage = HookStage::kNone,
@@ -113,6 +126,7 @@ class RuntimeRendezvous {
   INIT_ONCE load_once_ = INIT_ONCE_STATIC_INIT;
   std::atomic<const NevrRuntimeApi*> api_{nullptr};
   std::atomic<DWORD> loading_thread_{0};
+  std::atomic<bool> stop_recorded_{false};
   // Set when Install has journalled its last decision. A thread can enter the detour while
   // MH_EnableHook is still returning, so the load waits for this before it reports the
   // journal; otherwise the install record could be recorded after the report and never written.
