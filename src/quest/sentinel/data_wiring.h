@@ -7,12 +7,16 @@
  *
  * The one root that counts is the root the engine reads this launch. With an OBB file the OBB skip ran before this
  * (CSysFile::Init mounts in android_main, ahead of the game's Initialize) and the game recorded the root it served
- * (obb_skip::CurrentRoot); without one CSysFile::Init returned at "OBB not found", the skip never ran, and
- * CSysInfo::GetDataRootDir answers the legacy root. So:
+ * (obb_skip::CurrentRoot); without one CSysFile::Init returned at "OBB not found" and the skip never ran. Then
+ * CSysInfo::GetDataRootDir decides: our hook on it answers the media root when ResolveRoot found the game's manifest
+ * (data::kManifestPath) there and the hook took (obb_skip::DataRootRedirect, #866), and the function answers the legacy root otherwise.
+ * `data_step_start` logs the root and where it came from (`engine_root_source`: obb_skip, data_root_hook or
+ * engine_default). So:
  *   - Storage not granted and the engine reads the legacy root (shared storage): nothing is looked at, fetched or
  *     written; the player is shown data::kNeedsStoragePermission, it is held ten seconds (a release build holds
  *     nothing: Options::hold_ms 0), and the process ends nonzero
- *     (`data_step outcome=no_storage_grant`). The media root needs no permission and is used as it is.
+ *     (`data_step outcome=no_storage_grant`). The media root needs no permission and is used as it is, whether the engine
+ *     reads it through a skipped mount or through the data-root hook.
  *   - data::RunDataStep looks at that root only (StepConfig::engine_root), after (development builds only) putting the
  *     leftovers of an interrupted install right (RecoverReplaced, CleanLeftovers):
  *   - data already there: nothing is fetched and one `data_check action=use` line says so;

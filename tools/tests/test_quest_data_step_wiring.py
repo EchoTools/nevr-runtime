@@ -56,13 +56,15 @@ class TheStepOrder(unittest.TestCase):
 
     def test_the_step_looks_at_the_root_the_engine_reads_and_never_resolves_it_again(self):
         body = self.body()
-        self.assertIn("const std::string engineRoot = EngineRoot();", body)
+        self.assertIn("const EngineRootChoice choice = EngineRoot();", body)
+        self.assertIn("const std::string& engineRoot = choice.root;", body)
         self.assertIn("config.engine_root = engineRoot;", body)
         self.assertNotIn("ResolveRoot", body)
-        root = extract_braced_function(read("data_wiring.cpp"), "std::string EngineRoot() {")
+        root = extract_braced_function(read("data_wiring.cpp"), "EngineRootChoice EngineRoot() {")
         self.assertIn("obb_skip::CurrentCounts().mountSkipped > 0", root)
-        self.assertIn("std::string(obb_skip::CurrentRoot())", root)
-        self.assertIn("std::string(data_root::kLegacyRoot)", root)
+        self.assertIn("obb_skip::CurrentRoot()", root)
+        self.assertIn("obb_skip::DataRootRedirect()", root)
+        self.assertIn("data_root::kLegacyRoot", root)
 
     def test_a_release_build_never_fetches_and_a_missing_install_ends_the_process_with_its_reason(self):
         body = self.body()

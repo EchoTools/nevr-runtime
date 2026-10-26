@@ -1,7 +1,8 @@
 // Host test for the first-run data step as the game reaches it (src/quest/sentinel/data_wiring.cpp): through the real
 // permission-wait handlers and their thunk entries (RequestPermissions and CheckPermission), with stand-ins for the
 // game's functions, the toast, the process end and the network. Covers: data already there is not fetched; a
-// development build fetches into the root the engine reads (the legacy root without an OBB file); a release build
+// development build fetches into the root the engine reads (the legacy root without an OBB file, unless the data is under
+// the media root and the data-root hook is installed: then the media root, with or without the storage grant); a release build
 // never fetches and shows the missing-data message; Storage not granted writes nothing and shows the Storage message,
 // on both the request path and the microphone-granted path; the step runs once across both paths; a failed fetch shows
 // the floor message and ends the process after holding it; the probe file acts once.
@@ -241,6 +242,8 @@ std::string Media(const char* rel = "") {
   return std::string(nevr_quest::data_root::kMediaRoot) + (*rel != '\0' ? std::string("/") + rel : std::string());
 }
 void DataIn(const std::string& root) { g_present.insert({root, root + "/_data", root + "/" + kManifestRel}); }
+// A `_data` directory with no manifest: a partial copy, or the data of another build.
+void StaleDataIn(const std::string& root) { g_present.insert({root, root + "/_data"}); }
 
 void DataAlreadyThereIsNotFetchedAndTheProcessContinues() {
   Rig rig;
@@ -434,6 +437,119 @@ void AGrantedUnwritableRootEndsWithTheStepsOwnReason() {
   rig.BootRequest();  // granted
   QCHECK(g_ends == 1 && g_exit_reason == "data_step_failed");
   for (const std::string& m : g_shown) QCHECK(m != nevr_quest::data::kNeedsStoragePermission);
+}
+
+// ---- no OBB file, the data under the media root (#866) ----
+
+// The launch the tester's headset had: no OBB file (the skip's mount hook never runs), the resolver finds the game's
+// `_data` under Android/media, and the data-root hook is installed, so the engine's GetDataRootDir question is answered
+// with the media root. Call it after the Rig is made and before the boot request.
+void NoObbFileAndTheMediaRootHoldsTheData() {
+  DataIn(Media());
+  obb::ResolveRoot(&FakeExists);
+  obb::ArmForTest();  // arms the handlers and marks the data-root hook installed; no mount is skipped
+}
+
+void DataOnlyInTheMediaRootIsUsedWithNoObbFileAndNoStorageGrant() {
+  Rig rig;
+  NoObbFileAndTheMediaRootHoldsTheData();
+  rig.BootRequest(&DeniedCheck);
+  QCHECK(g_requests == 1);  // the game's own call still ran
+  QCHECK(rig.net.calls == 0 && g_ends == 0 && g_shown.empty());
+  QCHECK(g_exit_reason.empty());
+  const std::string check = LineOf("data_check");
+  QCHECK(Has(check, "\"action\":\"use\"") && Has(check, "\"root\":\"" + Media() + "\""));
+  QCHECK(LineOf("data_step").find("no_storage_grant") == std::string::npos);
+  // The line says which root the engine reads and why, so a headset log can be read against it.
+  const std::string start = LineOf("data_step_start");
+  QCHECK(Has(start, "\"engine_root\":\"" + Media() + "\"") && Has(start, "\"engine_root_source\":\"data_root_hook\""));
+}
+
+void DataOnlyInTheMediaRootIsUsedWithNoObbFileWhenStorageIsGranted() {
+  Rig rig;  // a development build: allow_fetch is true, so a wrong root would download 937 MB
+  NoObbFileAndTheMediaRootHoldsTheData();
+  rig.BootRequest();
+  QCHECK(rig.net.calls == 0 && g_ends == 0 && g_shown.empty());
+  QCHECK(Has(LineOf("data_check"), "\"action\":\"use\"") && Has(LineOf("data_check"), "\"root\":\"" + Media() + "\""));
+}
+
+void AReleaseBuildFindsTheDataInTheMediaRootWithNoObbFileAndSaysNothing() {
+  for (bool granted : {true, false}) {
+    Rig rig;
+    rig.options.allow_fetch = false;
+    rig.options.hold_ms = 0;
+    NoObbFileAndTheMediaRootHoldsTheData();
+    rig.BootRequest(granted ? &GrantedCheck : &DeniedCheck);
+    QCHECK(rig.net.calls == 0 && g_ends == 0 && g_shown.empty());
+    QCHECK(g_exit_reason.empty());
+    QCHECK(Has(LineOf("data_check"), "\"action\":\"use\""));
+  }
+}
+
+void DataOnlyInTheLegacyRootStillNeedsTheGrantWithNoObbFile() {
+  Rig rig;
+  DataIn(Legacy());
+  obb::ResolveRoot(&FakeExists);  // legacy wins: the engine's own answer is already that root
+  obb::ArmForTest();
+  rig.BootRequest(&DeniedCheck);
+  QCHECK(g_ends == 1 && g_exit_reason == "no_storage_grant");
+  QCHECK(g_shown.size() == 2 && g_shown[0] == nevr_quest::data::kNeedsStoragePermission);
+  QCHECK(Has(LineOf("data_step_start"), "\"engine_root_source\":\"engine_default\""));
+}
+
+// A `_data` under the media root that is not this version's (no manifest) is not what the engine is sent to read: with
+// complete data in the legacy root it keeps reading that (#932).
+void StaleMediaDataAndCompleteLegacyDataKeepsTheEngineOnTheLegacyRoot() {
+  for (const bool granted : {true, false}) {
+    Rig rig;  // a development build: a wrong root would download 937 MB
+    StaleDataIn(Media());
+    DataIn(Legacy());
+    obb::ResolveRoot(&FakeExists);
+    obb::ArmForTest();
+    rig.BootRequest(granted ? &GrantedCheck : &DeniedCheck);
+    const std::string start = LineOf("data_step_start");
+    QCHECK(Has(start, "\"engine_root\":\"" + Legacy() + "\"") && Has(start, "\"engine_root_source\":\"engine_default\""));
+    if (granted) {
+      QCHECK(rig.net.calls == 0 && g_ends == 0 && g_shown.empty());
+      QCHECK(Has(LineOf("data_check"), "\"action\":\"use\"") && Has(LineOf("data_check"), "\"root\":\"" + Legacy() + "\""));
+    } else {
+      QCHECK(g_ends == 1 && g_exit_reason == "no_storage_grant");  // the engine reads shared storage, so the grant is needed
+    }
+  }
+}
+
+void CompleteMediaDataIsTheEnginesRootEvenWhenLegacyDataIsCompleteToo() {
+  Rig rig;
+  DataIn(Media());
+  DataIn(Legacy());
+  obb::ResolveRoot(&FakeExists);
+  obb::ArmForTest();
+  rig.BootRequest(&DeniedCheck);
+  QCHECK(g_ends == 0 && g_shown.empty() && rig.net.calls == 0);
+  const std::string start = LineOf("data_step_start");
+  QCHECK(Has(start, "\"engine_root\":\"" + Media() + "\"") && Has(start, "\"engine_root_source\":\"data_root_hook\""));
+}
+
+void NeitherRootCompleteLeavesTheEngineOnTheLegacyRoot() {
+  Rig rig;
+  StaleDataIn(Media());
+  StaleDataIn(Legacy());
+  obb::ResolveRoot(&FakeExists);
+  obb::ArmForTest();
+  rig.BootRequest(&DeniedCheck);
+  QCHECK(Has(LineOf("data_step_start"), "\"engine_root_source\":\"engine_default\""));
+  QCHECK(g_ends == 1 && g_exit_reason == "no_storage_grant");
+}
+
+// The hook is what makes the engine read the media root. When it did not install (a refused GOT slot), the engine still
+// reads the legacy root, so the data under the media root does not count and the grant is asked for.
+void WithoutTheDataRootHookTheMediaRootIsNotTheEngineRoot() {
+  Rig rig;
+  DataIn(Media());
+  obb::ResolveRoot(&FakeExists);  // resolved, but the hook was never armed (Install did not take it)
+  rig.BootRequest(&DeniedCheck);
+  QCHECK(g_ends == 1 && g_exit_reason == "no_storage_grant");
+  QCHECK(Has(LineOf("data_step_start"), "\"engine_root\":\"" + Legacy() + "\""));
 }
 
 // ---- the step runs once across both paths ----
@@ -635,6 +751,14 @@ int main() {
   StorageNotGrantedWithAnObbServingTheMediaRootStillUsesItsData();
   StorageNotGrantedWithAnObbServingTheMediaRootFetchesIntoItAndSucceeds();
   StorageNotGrantedWithAnUnwritableMediaRootSaysHowToAllowStorageAndEndsNonzero();
+  DataOnlyInTheMediaRootIsUsedWithNoObbFileAndNoStorageGrant();
+  DataOnlyInTheMediaRootIsUsedWithNoObbFileWhenStorageIsGranted();
+  AReleaseBuildFindsTheDataInTheMediaRootWithNoObbFileAndSaysNothing();
+  DataOnlyInTheLegacyRootStillNeedsTheGrantWithNoObbFile();
+  WithoutTheDataRootHookTheMediaRootIsNotTheEngineRoot();
+  StaleMediaDataAndCompleteLegacyDataKeepsTheEngineOnTheLegacyRoot();
+  CompleteMediaDataIsTheEnginesRootEvenWhenLegacyDataIsCompleteToo();
+  NeitherRootCompleteLeavesTheEngineOnTheLegacyRoot();
   AGrantedUnwritableRootEndsWithTheStepsOwnReason();
   TheStepRunsOnceWhenTheMicrophoneIsDeniedAndAnotherCheckFollows();
   TheStepRunsOnceWhenTheMicrophoneIsGrantedAndARequestFollows();

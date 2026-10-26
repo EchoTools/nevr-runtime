@@ -150,21 +150,30 @@ void HoldMessage(const std::string& message) noexcept {
 
 }  // namespace
 
-// The one root the engine reads this launch. With an OBB file the game's OBB callback records what the OBB skip served
-// (obb_skip::CurrentRoot, after a skipped mount); without one CSysFile::Init returns before the mount, the skip never
-// runs, and GetDataRootDir answers the legacy root (docs/adr/0007, 0013).
-std::string EngineRoot() {
-  return obb_skip::CurrentCounts().mountSkipped > 0 ? std::string(obb_skip::CurrentRoot())
-                                                    : std::string(data_root::kLegacyRoot);
+// The one root the engine reads this launch, and why. With an OBB file the game's OBB callback records what the OBB skip
+// served (obb_skip::CurrentRoot, after a skipped mount); without one CSysFile::Init returns before the mount and the
+// engine asks GetDataRootDir, which our hook answers with the media root when that holds the data and the hook took
+// (obb_skip::DataRootRedirect, #866) and which otherwise answers the legacy root (docs/adr/0007, 0013).
+struct EngineRootChoice {
+  std::string root;
+  const char* source;
+};
+EngineRootChoice EngineRoot() {
+  if (obb_skip::CurrentCounts().mountSkipped > 0) return {obb_skip::CurrentRoot(), "obb_skip"};
+  if (const char* redirect = obb_skip::DataRootRedirect()) return {redirect, "data_root_hook"};
+  return {data_root::kLegacyRoot, "engine_default"};
 }
 
 void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
+  const EngineRootChoice choice = EngineRoot();
+  const std::string& engineRoot = choice.root;
   sentinel::LogFields(sentinel::LogLevel::kInfo, "data_step_start",
-                      {{"storage", permission_wait::StorageOutcomeName(outcome)}});
+                      {{"storage", permission_wait::StorageOutcomeName(outcome)},
+                       {"engine_root", engineRoot.c_str()},
+                       {"engine_root_source", choice.source}});
   // The legacy root is shared storage: reading it needs the grant. Without it nothing is looked at, fetched or
   // written, the player is told how to allow Storage, and the process ends.
   const bool granted = permission_wait::StorageGranted(outcome);
-  const std::string engineRoot = EngineRoot();
   if (!granted && engineRoot == data_root::kLegacyRoot) {
     sentinel::LogFields(sentinel::LogLevel::kError, "data_step",
                         {{"outcome", "no_storage_grant"}, {"storage", permission_wait::StorageOutcomeName(outcome)},
