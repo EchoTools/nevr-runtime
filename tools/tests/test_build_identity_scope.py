@@ -115,6 +115,31 @@ class IdentityScope(unittest.TestCase):
         self.assertEqual(set(carried), {"build_identity.cpp", "ws_bridge.cpp", "initialize.cpp", "patches.cpp", "gameserver.cpp"},
                          "another file now reads the identity: give it its definition in its CMakeLists.txt")
 
+    def test_every_edge_that_defines_a_macro_gives_it_the_same_value_and_the_values_belong_together(self):
+        values: dict[str, set[str]] = {}
+        for _, first, block in compile_edges():
+            for name in IDENTITY_MACROS:
+                for m in re.finditer(rf'-D{name}=\\"([^"\\]+)\\"', block):
+                    values.setdefault(name, set()).add(m.group(1))
+        one = {name: next(iter(v)) for name, v in values.items() if len(v) == 1}
+        self.assertEqual({n: sorted(v) for n, v in values.items() if len(v) != 1}, {}, "one macro, two values")
+        full, short = one["NEVR_GIT_COMMIT_FULL"], one["NEVR_GIT_COMMIT_HASH"]
+        self.assertRegex(full, r"^[0-9a-f]{40}$")
+        self.assertRegex(short, r"^[0-9a-f]{7,39}$", "NEVR_GIT_COMMIT_HASH is the abbreviated commit")
+        self.assertTrue(full.startswith(short), f"the short commit {short} is not the start of {full}")
+        # the legacy spellings are the same values as the NEVR_ ones
+        self.assertEqual(one["GIT_COMMIT_HASH"], short)
+        self.assertEqual(one["PROJECT_VERSION"], one["NEVR_PROJECT_VERSION"])
+        self.assertRegex(one["NEVR_PROJECT_VERSION"], r"^\d+\.\d+\.\d+(-dev\.\d+\+[0-9a-f]{7,40})?$")
+        # `git describe --tags --always --dirty`: a tag, or <tag>-<N>-g<abbreviated commit>, or the abbreviated commit
+        # alone; "-dirty" may follow. Never the full commit and never a version.
+        described = one["NEVR_GIT_DESCRIBE"].removesuffix("-dirty")
+        at = re.search(r"-g([0-9a-f]+)$", described)
+        self.assertTrue(
+            (at and full.startswith(at.group(1))) or re.fullmatch(r"v\d+\.\d+\.\d+", described)
+            or (re.fullmatch(r"[0-9a-f]{7,12}", described) and full.startswith(described)),
+            f"{described!r} is not what git describe --tags --always gives for {full}")
+
     def test_the_commit_and_the_describe_string_are_on_no_edge_but_those_compile_edges(self):
         values = set()
         for _, first, block in compile_edges():
