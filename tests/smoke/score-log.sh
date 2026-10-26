@@ -16,8 +16,8 @@
 #
 # EVERY pass-regex below was verified against real captured output or a
 # synthetic test for a newly renamed current-format marker, not copied out of a
-# source format string. Those two drift: the logs in
-# /var/tmp/work-nevr-runtime/server-runs/ still say "wave0 installing bug fix
+# source format string. Those two drift: the logs of verify-server.sh runs made
+# before the rename still say "wave0 installing bug fix
 # hooks" while current source says "installing binary bug fix hooks" (renamed in
 # N113). Signals taken from source alone score ABSENT against a real run and
 # look like missing features. When a string changes, fix it HERE and re-score a

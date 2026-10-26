@@ -117,7 +117,7 @@ owner wants all of them, so the order is build order, not a cut line.
 `just scenario-all` builds the scenario preset and runs every scenario in `tools/scenario/scenarios/`
 unattended, one client at a time, and prints one PASS/FAIL table (`tools/scenario/run_all.py`;
 suite.md and suite.json in the suite folder). It waits for 4096 MiB of free GPU memory and for the
-previous wineserver to exit before each launch. Every scenario passes on a clean run (16/16); each suite folder is under `/var/tmp/work-nevr-runtime/scenario-runs/`.
+previous wineserver to exit before each launch. Every scenario passes on a clean run (16/16); each suite folder is under `scenario-runs/` in the work root (`NEVR_WORK_ROOT`, else `~/src/nevr-runtime-work`).
 The scenarios cover rows 1-9, 11-13, 17-20 and 26-28 (`invite`, `add_friend`, `friend_changes`,
 `party_invite_accept`, `party_invite_dismiss`, `party_invite_join`, `party_join_errors`,
 `party_members`, `party_join_by_id`, `party_lock`, `party_ui_buttons`, `party_data`, `social_groups`,
@@ -202,7 +202,7 @@ Use N = 0, 1, 2, 3, 4, 5, 6, 7.
 - the game log lines `[NETGAME] Party join failed: <text>` and
   `[NEVR.SOCIAL] party callback index=2 arg=<N> bound=1`.
 
-Every command and reply is also appended to `/var/tmp/work-nevr-runtime/control-log.jsonl`.
+Every command and reply is also appended to `control-log.jsonl` in the work root.
 
 **Already measured.** The log text for path B matches the table above for codes 0–7: scenario
 `party_join_failed_codes` (19/19). The bridge mapping in path A is covered by
@@ -215,7 +215,7 @@ screen anyway.
 **Results.** The owner watched while the harness sent the codes. The game was a
 mingw-scenario build on the nested display, logged in to production, in a
 social lobby, with the tablet's party page open. Screenshots are in
-`/var/tmp/work-nevr-runtime/ingame-shots/`. Every failure opens the same popup, titled
+`ingame-shots/` in the work root. Every failure opens the same popup, titled
 **PARTY JOIN ERROR**, with one line of text and an OK button. A new failure replaces an open popup.
 
 | Path | Code sent | Code the game saw | Log text | Popup text |
