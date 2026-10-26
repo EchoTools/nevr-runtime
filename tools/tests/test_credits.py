@@ -16,6 +16,8 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+import work_root  # noqa: E402
 README = ROOT / "README.md"
 CREDITS = ROOT / "config" / "credits.json"
 TOOL = ROOT / "tools" / "render_credits.py"
@@ -230,6 +232,155 @@ class CheckerCatchesDrift(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(self.tool.check(self.json, self.readme), [])
         self.assertNotEqual(self.readme.read_text(encoding="utf-8"), text)
+
+
+def c_literal_bytes(source: str, symbol: str) -> bytes:
+    """Decode the C string literal assigned to `symbol` in generated source: adjacent quoted pieces, with
+    \\ooo octal, \\\\ and \\" escapes only (all the generator emits)."""
+    match = re.search(re.escape(symbol) + r"\[\]\s*=\s*((?:\s*\"(?:[^\"\\\n]|\\.)*\")+)\s*;", source)
+    assert match, f"no literal for {symbol}"
+    out = bytearray()
+    for piece in re.findall(r'"((?:[^"\\\n]|\\.)*)"', match.group(1)):
+        i = 0
+        while i < len(piece):
+            if piece[i] != "\\":
+                out.append(ord(piece[i]))
+                i += 1
+            elif piece[i + 1] in '"\\':
+                out.append(ord(piece[i + 1]))
+                i += 2
+            else:
+                out.append(int(piece[i + 1:i + 4], 8))
+                i += 4
+    return bytes(out)
+
+
+class IngameText(unittest.TestCase):
+    """#938: the block the runtime puts above Ready At Dawn's credits, rendered here at build time."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tool = load_tool()
+        cls.data = json.loads(CREDITS.read_text(encoding="utf-8"))
+
+    def data_with(self, groups):
+        """A file whose in-game groups are exactly `groups` ({heading text: [names]})."""
+        headings = [{"id": f"h{i}", "ingame": text} for i, text in enumerate(groups)]
+        entries = []
+        for i, names in enumerate(groups.values()):
+            for name in names:
+                entries.append({"name": name, "section": None, "headings": [f"h{i}"], "link": "", "what": "",
+                                "sources": ["#938"]})
+        return {"schema": 1, "headings": headings, "sections": [], "entries": entries, "closing": ""}
+
+    def test_the_real_file_renders_the_heading_a_blank_the_names_and_three_blanks(self):
+        names = [n for g in self.tool.ingame_groups(self.data) for n in g["names"]]
+        self.assertEqual(
+            self.tool.ingame_text(self.data),
+            ("CODE CONTRIBUTIONS\n\n" + "".join(n + "\n" for n in names) + "\n\n\n").encode("cp1252"),
+        )
+
+    def test_groups_are_separated_by_three_blank_lines(self):
+        data = self.data_with({"ONE": ["a", "b"], "TWO": ["c"]})
+        self.assertEqual(self.tool.ingame_text(data), b"ONE\n\na\nb\n\n\n\nTWO\n\nc\n\n\n\n")
+
+    def test_an_empty_heading_emits_nothing_not_even_its_blank_lines(self):
+        data = self.data_with({"ONE": ["a"], "EMPTY": [], "TWO": ["c"]})
+        self.assertEqual(self.tool.ingame_text(data), b"ONE\n\na\n\n\n\nTWO\n\nc\n\n\n\n")
+        self.assertNotIn(b"EMPTY", self.tool.ingame_text(data))
+
+    def test_no_names_at_all_is_an_empty_block(self):
+        self.assertEqual(self.tool.ingame_text(self.data_with({"ONE": [], "TWO": []})), b"")
+
+    def test_names_are_encoded_as_the_games_single_byte_text(self):
+        data = self.data_with({"ONE": ["Zo\u00eb", "\u00a9 Name", "M\u00fcller"]})
+        text = self.tool.ingame_text(data)
+        self.assertIn(b"Zo\xeb\n", text)
+        self.assertIn(b"\xa9 Name\n", text)
+        self.assertIn(b"M\xfcller\n", text)
+        self.assertNotIn(b"\xc3", text)  # no UTF-8 lead byte
+
+    def problems(self, groups):
+        return self.tool.validate(self.data_with(groups), ROOT)
+
+    def test_a_name_the_game_cannot_show_is_refused_not_dropped(self):
+        self.assertEqual(self.problems({"ONE": ["Zo\u00eb"]}), [])
+        self.assertTrue(self.problems({"ONE": ["\u0141ukasz"]}), "U+0141 is not in CP1252")
+        self.assertTrue(self.problems({"ONE": ["name \U0001F600"]}), "an emoji is not in CP1252")
+
+    def test_a_name_that_would_change_the_games_parse_is_refused(self):
+        for bad in ("a|b", "a\nb", "a\rb", "a\x00b", "a\tb", " lead", "trail ", ""):
+            self.assertTrue(self.problems({"ONE": [bad]}), repr(bad))
+
+    def test_the_games_sixty_four_byte_line_is_the_limit_for_names_and_headings(self):
+        self.assertEqual(self.problems({"ONE": ["W" * 64]}), [])
+        self.assertTrue(self.problems({"ONE": ["W" * 65]}))
+        self.assertEqual(self.problems({"H" * 64: ["a"]}), [])
+        self.assertTrue(self.problems({"H" * 65: ["a"]}))
+
+    def test_length_is_counted_in_game_bytes_not_characters(self):
+        # 33 two-byte characters are 33 bytes in CP1252 (one byte each) but 66 bytes in UTF-8.
+        self.assertEqual(self.problems({"ONE": ["\u00eb" * 64]}), [])
+        self.assertTrue(self.problems({"ONE": ["\u00eb" * 65]}))
+
+    def test_two_hundred_lines_is_the_cap(self):
+        # one group is N + 5 lines: heading, blank, N names, three blanks
+        self.assertEqual(self.problems({"ONE": [f"n{i}" for i in range(195)]}), [])
+        self.assertTrue(self.problems({"ONE": [f"n{i}" for i in range(196)]}))
+        self.assertEqual(self.tool.ingame_text(self.data_with({"ONE": [f"n{i}" for i in range(195)]})).count(b"\n"), 200)
+
+    def test_a_name_over_the_review_length_is_a_warning_not_a_problem(self):
+        data = self.data_with({"ONE": ["W" * 41, "ok"]})
+        self.assertEqual(self.tool.validate(data, ROOT), [])
+        self.assertEqual(len(self.tool.ingame_warnings(data)), 1)
+        self.assertEqual(self.tool.ingame_warnings(self.data_with({"ONE": ["W" * 40]})), [])
+
+    def test_the_shipped_file_has_no_in_game_warning(self):
+        self.assertEqual(self.tool.ingame_warnings(self.data), [])
+
+    def test_the_c_source_round_trips_every_byte(self):
+        for groups in ({"ONE": ["Zo\u00eb", '"quoted"', "back\\slash", "\u00a9 9"]}, {"ONE": []}, {"A": ["x"], "B": ["y"]}):
+            data = self.data_with(groups)
+            source = self.tool.ingame_source(data)
+            block = self.tool.ingame_text(data)
+            self.assertEqual(c_literal_bytes(source, "kText"), block)
+            self.assertIn(f"kSize = {len(block)};", source)
+
+    def test_the_c_source_uses_octal_escapes_so_a_digit_cannot_extend_one(self):
+        # "\xa9" followed by the digit 9 would read as one hex escape; octal is fixed at three digits.
+        source = self.tool.ingame_source(self.data_with({"ONE": ["\u00a9 9", "\u00a99"]}))
+        self.assertNotIn("\\x", source)
+        self.assertEqual(c_literal_bytes(source, "kText").count(b"\xa99"), 1)
+
+    def test_a_question_mark_is_escaped_so_no_trigraph_can_form(self):
+        source = self.tool.ingame_source(self.data_with({"ONE": ["a??/b", "what?"]}))
+        self.assertNotIn("??", source)
+        self.assertEqual(c_literal_bytes(source, "kText").count(b"a??/b\n"), 1)
+
+    def test_validate_includes_the_in_game_rules_so_check_and_the_build_agree(self):
+        data = copy.deepcopy(self.data)
+        data["entries"][0]["name"] = "Xeno|mega"
+        self.assertTrue(self.tool.validate(data, ROOT))
+
+    def test_the_command_writes_the_text_and_the_source(self):
+        with tempfile.TemporaryDirectory(prefix="credits-ingame-", dir=work_root.test_scratch()) as tmp:
+            text, source = Path(tmp) / "block.txt", Path(tmp) / "block.cpp"
+            for flag, out in (("--ingame-text", text), ("--ingame-source", source)):
+                proc = subprocess.run([sys.executable, str(TOOL), flag, str(out)], cwd=ROOT, capture_output=True, text=True)
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(text.read_bytes(), self.tool.ingame_text(self.data))
+            self.assertEqual(c_literal_bytes(source.read_text(encoding="ascii"), "kText"), text.read_bytes())
+
+    def test_the_command_refuses_a_bad_file_and_writes_nothing(self):
+        with tempfile.TemporaryDirectory(prefix="credits-ingame-", dir=work_root.test_scratch()) as tmp:
+            bad = copy.deepcopy(self.data)
+            bad["entries"][0]["name"] = "bad|name"  # encodes fine: only validation refuses it
+            bad_json, out = Path(tmp) / "credits.json", Path(tmp) / "block.cpp"
+            bad_json.write_text(json.dumps(bad), encoding="utf-8")
+            proc = subprocess.run([sys.executable, str(TOOL), "--ingame-source", str(out), "--json", str(bad_json)],
+                                  cwd=ROOT, capture_output=True, text=True)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertFalse(out.exists())
 
 
 if __name__ == "__main__":
