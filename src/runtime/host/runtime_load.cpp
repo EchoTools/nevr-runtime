@@ -197,7 +197,8 @@ void EmitLoadDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResu
   }
 }
 
-void EmitStopDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result) noexcept {
+void EmitStopDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result,
+                        const char* notice) noexcept {
   try {
 #if defined(NEVR_HOST_TESTING)
     if (g_fail_emit_for_test.load()) throw std::runtime_error("record builder failed (test seam)");
@@ -207,6 +208,7 @@ void EmitStopDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResu
     record["reason"] = result.OutcomeName();
     record["exit_code"] = kRuntimeStopExitCode;
     record["host_identity"] = IdentityLiteral();
+    if (notice != nullptr) record["notice"] = notice;
     // The path searched: the one thing a player or support needs for a missing file.
     if (result.path_ok) record["runtime_path"] = ToUtf8(result.path);
     if (result.win32_error != 0) record["win32_error"] = result.win32_error;
@@ -217,6 +219,7 @@ void EmitStopDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResu
     line.Str("error", "record_build_failed")
         .Str("what", error.what())
         .Str("reason", result.OutcomeName())
+        .Str("notice", notice != nullptr ? notice : "")
         .UInt("exit_code", kRuntimeStopExitCode);
     const std::size_t length = line.Finish();
     if (length != 0) diagnostics.AppendLine(buffer, length);

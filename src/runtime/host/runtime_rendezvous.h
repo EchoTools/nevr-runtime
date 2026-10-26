@@ -89,6 +89,11 @@ class RuntimeRendezvous {
     // StopGame calls this instead of ending the process, then the detour runs the original wrapper so a harness
     // can go on observing. Null in production: the process ends and nothing runs after.
     void (*stop_game)(std::uint32_t exit_code) = nullptr;
+    // StopGame shows the player's notice through this instead of a message box; null: no dialog is ever opened
+    // in a test. The text is kStopNoticeText.
+    void (*show_stop_notice)(const wchar_t* text) = nullptr;
+    // The command line StopGame reads to tell a client from a server; null: the process's own.
+    const char* (*command_line)() = nullptr;
   };
   static TestSeams& Seams();
   const NevrHostContext& Context() const;
@@ -127,6 +132,9 @@ class RuntimeRendezvous {
   std::atomic<const NevrRuntimeApi*> api_{nullptr};
   std::atomic<DWORD> loading_thread_{0};
   std::atomic<bool> stop_recorded_{false};
+  // StopGame runs one thread at a time: the first records the stop and tells the player, the others wait behind it,
+  // so the process is not ended under the dialog. SRWLOCK is kernel32; the host takes no thread library.
+  SRWLOCK stop_lock_ = SRWLOCK_INIT;
   // Set when Install has journalled its last decision. A thread can enter the detour while
   // MH_EnableHook is still returning, so the load waits for this before it reports the
   // journal; otherwise the install record could be recorded after the report and never written.

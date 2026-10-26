@@ -85,7 +85,9 @@ void EmitLoadDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResu
 /// Emit the record that says the game is being stopped, with the cause and the exit code, before the host ends the
 /// process. Same guarantee as EmitLoadDiagnostic: never throws, and a record that cannot be built is replaced by a
 /// fixed-buffer marker line.
-void EmitStopDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result) noexcept;
+/// `notice`, when not null, names what the player is told (stop_notice.h, StopNoticeName) and goes in the record.
+void EmitStopDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result,
+                        const char* notice = nullptr) noexcept;
 
 #if defined(NEVR_HOST_TESTING)
 // Test seam (compiled only into the test targets): make the record builder throw, to reach the marker line.
