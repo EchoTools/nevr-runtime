@@ -2299,6 +2299,10 @@ int TestHook_LogFrameMessages(const char* direction, int connIdx, const std::str
   return LogFrameMessages(direction, connIdx, frame);
 }
 
+void TestHook_ObserveSocialFrames(const char* direction, int connIdx, const std::string& frame) {
+  ObserveSocialFrames(direction, connIdx, frame);
+}
+
 bool TestHook_ReadLoginFailureDiagnostic(const std::string& frame, uint64_t* statusCode, size_t* messageBytes) {
   if (statusCode == nullptr || messageBytes == nullptr) return false;
   const std::optional<nevr_evr_codec::LoginFailure> diagnostic = nevr_evr_codec::ParseLoginFailure(frame);

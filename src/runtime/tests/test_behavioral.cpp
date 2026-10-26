@@ -3390,6 +3390,222 @@ TEST(WsBridgeFrameLog, StopsAtATruncatedMessageAndSaysSo) {
   EXPECT_TRUE(TestLogContains("declares 10 bytes but 6 remain"));
 }
 
+// ---- #929: a client's Info records for the lobby find, join, session success and session failure frames ----
+//
+// Every test drives ObserveSocialFrames, the function the bridge calls for each frame in both directions
+// (TestHook_ObserveSocialFrames), so the records are asserted where the bridge writes them. Payloads are
+// built here byte by byte from the layouts in compat/legacy_codec.cpp (FindToLegacy, JoinToLegacy,
+// SuccessV5ToLegacy, FailureToLegacy), not by calling the code under test.
+namespace lobby_frame_test {
+
+constexpr uint64_t kFindSym = 0x312c2a01819aa3f5ULL;     // SNSLobbyFindSessionRequestv11
+constexpr uint64_t kJoinSym = 0x2f03468f77ffb211ULL;     // SNSLobbyJoinSessionRequestv7
+constexpr uint64_t kSuccessSym = 0x6d4de3650ee3110fULL;  // SNSLobbySessionSuccessv5
+constexpr uint64_t kFailureSym = 0x4ae8365ebc45f96cULL;  // SNSLobbySessionFailurev4
+constexpr uint64_t kOvrOrg = 4;
+
+void PutLe(std::string& out, uint64_t value, size_t bytes) {
+  for (size_t i = 0; i < bytes; ++i) out.push_back(static_cast<char>((value >> (8 * i)) & 0xff));
+}
+
+// A GUID as the wire stores it (Windows layout) for the text 44332211-6655-8877-99AA-BBCCDDEEFF<tail>.
+std::string Guid(uint8_t tail) {
+  const uint8_t bytes[16] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+                             0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, tail};
+  return std::string(reinterpret_cast<const char*>(bytes), sizeof(bytes));
+}
+
+std::string Entrants(const std::vector<uint64_t>& accounts) {
+  std::string out;
+  for (const uint64_t account : accounts) {
+    PutLe(out, kOvrOrg, 8);
+    PutLe(out, account, 8);
+  }
+  return out;
+}
+
+constexpr uint64_t kMode = 0x1234567890abcdefULL;  // in no symbol table: logged as hex
+const char kSettingsSentinel[] = "{\"sentinel_settings_text\":true}";
+
+std::string FindPayload(const std::vector<uint64_t>& accounts, const std::string& currentLobby) {
+  std::string out;
+  PutLe(out, 1, 8);                                 // version lock
+  PutLe(out, kMode, 8);                             // mode
+  PutLe(out, 0x2222222222222222ULL, 8);             // level
+  PutLe(out, kOvrOrg, 8);                           // platform
+  out += Guid(0xa0);                                // login session
+  PutLe(out, accounts.size(), 1);                   // entrant count
+  PutLe(out, 0, 4);                                 // flags
+  PutLe(out, 0, 3);                                 // pad
+  out += currentLobby;                              // lobby being left
+  out += Guid(0xb0);                                // group
+  out += kSettingsSentinel;
+  out.push_back('\0');
+  out += Entrants(accounts);
+  return out;
+}
+
+std::string JoinPayload(const std::vector<uint64_t>& accounts) {
+  std::string out;
+  out += Guid(0xc0);                                // lobby to join
+  PutLe(out, 1, 8);                                 // version lock
+  PutLe(out, kOvrOrg, 8);                           // platform
+  out += Guid(0xa0);                                // login session
+  PutLe(out, accounts.size(), 4);                   // entrant count in the low byte
+  PutLe(out, 0, 4);
+  PutLe(out, 0, 8);
+  out += kSettingsSentinel;
+  out.push_back('\0');
+  out += Entrants(accounts);
+  PutLe(out, 0xffff, 2);                            // team tail
+  return out;
+}
+
+std::string SuccessPayload() {
+  std::string out;
+  PutLe(out, kMode, 8);
+  out += Guid(0xc0);                                // lobby
+  out += Guid(0xb0);                                // group
+  out.append(64, '\0');                             // endpoint, flags, keys: not read
+  return out;
+}
+
+std::string FailurePayload(uint32_t code) {
+  std::string out;
+  PutLe(out, kMode, 8);
+  out += Guid(0xb0);                                // group
+  PutLe(out, code, 4);
+  PutLe(out, 0, 4);
+  out += "sentinel-remote-message";
+  out.resize(8 + 16 + 4 + 4 + 64 + 8, '\0');        // message(64) and expiry(8)
+  return out;
+}
+
+// A client run: g_isServer false for the test's length.
+class ClientRun {
+ public:
+  ClientRun() : wasServer_(g_isServer) {
+    g_isServer = FALSE;
+    ClearTestLogs();
+  }
+  ~ClientRun() { g_isServer = wasServer_; }
+
+ private:
+  BOOL wasServer_;
+};
+
+}  // namespace lobby_frame_test
+
+TEST(WsBridgeLobbyFrameLog, ClientLogsAFindRequestAtInfoWithItsEntrantsAndLobbies) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("game->server", 2,
+                               BuildMarkedMessage(kFindSym, FindPayload({1001, 1002, 1003}, Guid(0xd0))));
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "[NEVR.WS] lobby find requested conn=2 mode=0x1234567890abcdef entrants=3 "
+      "accounts=OVR-ORG-1001,OVR-ORG-1002,OVR-ORG-1003 current_lobby=44332211-6655-8877-99AA-BBCCDDEEFFD0 "
+      "group=44332211-6655-8877-99AA-BBCCDDEEFFB0"));
+}
+
+TEST(WsBridgeLobbyFrameLog, ClientLogsAFindRequestFromNoLobbyAsNone) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kFindSym, FindPayload({7}, std::string(16, '\0'))));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info, "entrants=1 accounts=OVR-ORG-7 current_lobby=none "));
+}
+
+TEST(WsBridgeLobbyFrameLog, ClientLogsAJoinRequestAtInfoWithTheLobbyItNames) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1001})));
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "[NEVR.WS] lobby join requested conn=3 lobby=44332211-6655-8877-99AA-BBCCDDEEFFC0 entrants=1 "
+      "accounts=OVR-ORG-1001"));
+}
+
+TEST(WsBridgeLobbyFrameLog, ClientLogsASessionSuccessAtInfoWithTheLobbyItGot) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "[NEVR.WS] lobby session success conn=3 lobby=44332211-6655-8877-99AA-BBCCDDEEFFC0 "
+      "group=44332211-6655-8877-99AA-BBCCDDEEFFB0"));
+}
+
+TEST(WsBridgeLobbyFrameLog, ClientLogsASessionFailureAtInfoWithItsCodeAndReason) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kFailureSym, FailurePayload(8)));
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "[NEVR.WS] lobby session failure conn=3 code=8 reason=lobby_full group=44332211-6655-8877-99AA-BBCCDDEEFFB0"));
+  ClearTestLogs();
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kFailureSym, FailurePayload(99)));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info, "lobby session failure conn=3 code=99 reason=unknown "));
+}
+
+TEST(WsBridgeLobbyFrameLog, EveryMessageOfABatchedFrameGetsItsOwnRecord) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("server->game", 3,
+                               BuildMarkedMessage(kFailureSym, FailurePayload(8)) +
+                                   BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_TRUE(TestLogContains("lobby session failure conn=3 code=8"));
+  EXPECT_TRUE(TestLogContains("lobby session success conn=3 lobby="));
+}
+
+TEST(WsBridgeLobbyFrameLog, NoRecordCarriesSettingsTextOrTheServersMessage) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kFindSym, FindPayload({1}, Guid(0xd0))));
+  TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kJoinSym, JoinPayload({1})));
+  TestHook_ObserveSocialFrames("server->game", 2, BuildMarkedMessage(kFailureSym, FailurePayload(8)));
+  EXPECT_TRUE(TestLogContains("lobby find requested"));
+  EXPECT_FALSE(TestLogContains("sentinel_settings_text"));
+  EXPECT_FALSE(TestLogContains("sentinel-remote-message"));
+}
+
+TEST(WsBridgeLobbyFrameLog, AFrameTooShortForItsLayoutIsReportedNotReadPastItsEnd) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kJoinSym, std::string(10, '\x01')));
+  TestHook_ObserveSocialFrames("server->game", 2, BuildMarkedMessage(kFailureSym, std::string(12, '\x01')));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "[NEVR.WS] lobby join request could not be read conn=2 payload_bytes=10"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "[NEVR.WS] lobby session failure could not be read conn=2 payload_bytes=12"));
+  EXPECT_FALSE(TestLogContains("lobby join requested"));
+  EXPECT_FALSE(TestLogContains("lobby session failure conn="));
+}
+
+TEST(WsBridgeLobbyFrameLog, ARequestHeardFromTheServerAndAReplyHeardFromTheGameAreNotLobbyRecords) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("server->game", 2, BuildMarkedMessage(kJoinSym, JoinPayload({1})));
+  TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kFailureSym, FailurePayload(8)));
+  TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_FALSE(TestLogContains("lobby "));
+}
+
+// A dedicated server already logs every message of every frame at Info (LogFrameMessages); the client
+// records must not double that, so on a server ObserveSocialFrames stays as silent as it was.
+TEST(WsBridgeLobbyFrameLog, AServerGetsNoLobbyRecordFromTheSocialObserver) {
+  using namespace lobby_frame_test;
+  const BOOL wasServer = g_isServer;
+  g_isServer = TRUE;
+  ClearTestLogs();
+  TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kFindSym, FindPayload({1, 2}, Guid(0xd0))));
+  TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1})));
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kFailureSym, FailurePayload(8)));
+  g_isServer = wasServer;
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  EXPECT_TRUE(g_testLogMessages.empty()) << "first line: " << (g_testLogMessages.empty() ? "" : g_testLogMessages[0]);
+}
+
 // The game->server diagnostic walk decodes payloads (hex dump, invite targets). A message whose declared
 // payload runs past the frame must stop the walk before any decoder reads it.
 static void PutU64(std::string& bytes, size_t offset, uint64_t value) {
