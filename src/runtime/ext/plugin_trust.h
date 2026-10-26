@@ -41,10 +41,15 @@ const char* ModeSourceWord(ModeSource source);
 // start-up line does). Referenced by that line so the linker keeps it.
 const char* ModeLiteral();
 
-// Sets the mode of this run from its command line: -require-signed-plugins makes it SignedOnly, anything else leaves
-// UnsignedAllowed. Called once, before the first LoadPlugins (PreflightRuntimeBootstrap), so the early pass, the
-// normal pass and the late-load filter read the same mode; later calls replace the earlier one.
-void ApplyCommandLine(int argc, const wchar_t* const* argv);
+// Sets the mode of this run from its command line: SignedOnly when any token the game would read as
+// -require-signed-plugins is there, UnsignedAllowed otherwise. `ansiLine` is GetCommandLineA() and `wideLine` is
+// GetCommandLineW(). The line is read two ways and either finding the flag makes the run SignedOnly: the game's own
+// way (its tokenizer and name rule, runtime/lifecycle/cmdline_strip.h: '-', '+' and 0x96 prefixes, any case, quoted
+// tokens are parameters) and CommandLineToArgvW's (what NEVR's own arguments come from), converted to the ANSI code
+// page. A null line is an unreadable one (SignedOnly). Called once, before the first LoadPlugins
+// (PreflightRuntimeBootstrap), so the early pass, the normal pass and the late-load filter read the same mode; later
+// calls replace the earlier one.
+void ApplyCommandLine(const wchar_t* wideLine, const char* ansiLine);
 
 // The command line could not be read, so whether -require-signed-plugins was given is unknown: the run is SignedOnly.
 void ApplyUnreadableCommandLine();

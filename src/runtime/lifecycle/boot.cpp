@@ -78,15 +78,14 @@ void PreflightRuntimeBootstrap() {
   if (s_done) return;
   s_done = true;
 
+  // The game reads its arguments from GetCommandLineA() with its own tokenizer, which differs from
+  // CommandLineToArgvW; ApplyCommandLine reads the line both ways and a line it cannot read is signed-only.
+  nevr_plugin_trust::ApplyCommandLine(GetCommandLineW(), GetCommandLineA());
+
   int argc = 0;
   LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-  if (argv == nullptr) {
-    // Whether -require-signed-plugins was given cannot be known, so the run requires signatures (fail closed).
-    nevr_plugin_trust::ApplyUnreadableCommandLine();
-    return;
-  }
+  if (argv == nullptr) return;
 
-  nevr_plugin_trust::ApplyCommandLine(argc, argv);
   for (int i = 0; i < argc; ++i) {
     const LPWSTR arg = argv[i];
     if (nevr_cli::IsFlag(arg, L"-server")) {

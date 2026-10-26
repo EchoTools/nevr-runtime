@@ -41,13 +41,24 @@ class ModeIsReadBeforeTheFirstPluginPass(unittest.TestCase):
     def setUp(self):
         self.boot = read("src/runtime/lifecycle/boot.cpp")
 
-    def test_the_preflight_applies_the_command_line_and_fails_closed_when_it_cannot_read_it(self):
+    def test_the_preflight_gives_the_mode_both_command_line_readings(self):
+        # The game tokenizes GetCommandLineA() its own way, CommandLineToArgvW differs on quotes; the mode takes both.
         body = code(function_body(self.boot, "void PreflightRuntimeBootstrap()"))
-        self.assertIn("nevr_plugin_trust::ApplyCommandLine(argc, argv)", body)
-        unreadable = body[body.index("if (argv == nullptr)"):]
-        unreadable = unreadable[:unreadable.index("return;")]
-        self.assertIn("nevr_plugin_trust::ApplyUnreadableCommandLine()", unreadable,
-                      "a command line that cannot be read must not leave the run on the unsigned default")
+        self.assertIn("nevr_plugin_trust::ApplyCommandLine(GetCommandLineW(), GetCommandLineA())", body)
+
+    def test_the_mode_reads_the_line_with_the_games_own_tokenizer_and_name_rule(self):
+        trust = code(read("src/runtime/ext/plugin_trust.cpp"))
+        self.assertIn('#include "runtime/lifecycle/cmdline_strip.h"', read("src/runtime/ext/plugin_trust.cpp"))
+        self.assertIn("nevr_cmdline::Tokenize(", trust)
+        self.assertIn("nevr_cmdline::detail::NameIs(", trust)
+        self.assertIn("CommandLineToArgvW(", trust)
+        for own in ("tolower", "towlower", "_stricmp", "lstrcmpiW", "wcsicmp"):
+            self.assertNotIn(own, trust, "the name rule is cmdline_strip.h's; do not write a second one")
+
+    def test_either_reading_finding_the_flag_makes_the_run_signed_only(self):
+        trust = code(read("src/runtime/ext/plugin_trust.cpp"))
+        self.assertRegex(trust, r"GameReadsTheFlag\(ansiLine\)\s*\|\|\s*ArgvReadsTheFlag\(wideLine\)")
+        self.assertIn("ApplyUnreadableCommandLine();", trust[trust.index("void ApplyCommandLine("):])
 
     def test_the_preflight_runs_before_the_early_plugin_pass(self):
         body = code(function_body(self.boot, "UINT64 PreprocessCommandLineHook(PVOID pGame)"))

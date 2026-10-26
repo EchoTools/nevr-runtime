@@ -13,6 +13,7 @@
 #endif
 #include <winsock2.h>
 #include <windows.h>
+#include <shellapi.h>
 
 #include <gtest/gtest.h>
 #include <ixwebsocket/IXNetSystem.h>
@@ -923,10 +924,28 @@ PluginLoadItem RunModeEarlyItem(const char* name, const char* file) {
   return item;
 }
 
-// ApplyCommandLine over a command line given as text.
+// ApplyCommandLine over a command line given as text: `wide` is GetCommandLineW()'s string and `ansi` is
+// GetCommandLineA()'s, the line the game tokenizes. Given separately so a byte the wide line cannot spell the same
+// way in every code page (0x96) is tested as the game would see it.
+void ApplyLine(const std::wstring& wide, const std::string& ansi) {
+  nevr_plugin_trust::ApplyCommandLine(wide.c_str(), ansi.c_str());
+}
+
+// The same text for both readings; the text must be ASCII.
+void ApplyLine(const std::wstring& wide) {
+  std::string ansi;
+  for (wchar_t c : wide) ansi.push_back(static_cast<char>(c));
+  ApplyLine(wide, ansi);
+}
+
+// ApplyLine over arguments joined with a space (none of them holds a space or a quote).
 void ApplyArgs(std::initializer_list<const wchar_t*> args) {
-  std::vector<const wchar_t*> argv(args);
-  nevr_plugin_trust::ApplyCommandLine(static_cast<int>(argv.size()), argv.data());
+  std::wstring line;
+  for (const wchar_t* arg : args) {
+    if (!line.empty()) line += L' ';
+    line += arg;
+  }
+  ApplyLine(line);
 }
 }  // namespace
 
@@ -1108,7 +1127,7 @@ TEST_F(PluginRunModeTest, ALaterLoadFollowsTheRunMode) {
   EXPECT_TRUE(TestLogContains("refused a later load of late_runmode.dll: unsigned"));
 }
 
-TEST_F(PluginRunModeTest, OnlyTheArgumentSpelledRightSwitchesTheRun) {
+TEST_F(PluginRunModeTest, WithNoArgumentTheRunIsUnsignedAllowed) {
   using nevr_plugin_trust::ModeSource;
   ApplyArgs({L"echovr.exe", L"-server", L"-windowed"});
   EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::UnsignedAllowed);
@@ -1118,18 +1137,91 @@ TEST_F(PluginRunModeTest, OnlyTheArgumentSpelledRightSwitchesTheRun) {
   EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
   EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), ModeSource::CommandLine);
 
-  ApplyArgs({L"echovr.exe", L"--require-signed-plugins"});  // the game's parser reads either dash count
-  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
-
-  for (const wchar_t* spelling : {L"-require-signed-plugin", L"-require-signed-pluginsx", L"-require-signed",
-                              L"require-signed-plugins", L"-Require-Signed-Plugins"}) {
-    ApplyArgs({L"echovr.exe", spelling});
-    EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::UnsignedAllowed) << spelling;
-  }
-
-  ApplyArgs({L"echovr.exe", L"-require-signed-plugins"});
   ApplyArgs({L"echovr.exe"});  // a later reading replaces the earlier one
   EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::UnsignedAllowed);
+  EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), ModeSource::Default);
+}
+
+// The game looks an argument up with every leading '-', '+' and 0x96 skipped and A-Z lower-cased (CSymbol64::Lookup,
+// cmdline_strip.h), so each of these spellings is the flag to the game and must be signed-only here.
+TEST_F(PluginRunModeTest, EverySpellingTheGameReadsAsTheFlagMakesTheRunSignedOnly) {
+  for (const wchar_t* spelling :
+       {L"-require-signed-plugins", L"--require-signed-plugins", L"---require-signed-plugins", L"----require-signed-plugins",
+        L"+require-signed-plugins", L"++require-signed-plugins", L"-+-require-signed-plugins", L"+-require-signed-plugins",
+        L"-REQUIRE-SIGNED-PLUGINS", L"-Require-Signed-Plugins", L"--Require-signed-PLUGINS", L"+REQUIRE-SIGNED-PLUGINS",
+        L"---REQUIRE-SIGNED-PLUGINS"}) {
+    nevr_plugin_trust::TestHook_ResetTrust();
+    ApplyArgs({L"echovr.exe", spelling});
+    EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly) << "spelling " << spelling;
+    EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::CommandLine) << spelling;
+  }
+}
+
+TEST_F(PluginRunModeTest, ThePrefixByte0x96IsADashToTheGame) {
+  // 0x96 is the ANSI en dash. The game's tokenizer treats it as a dash, so the byte spelling is the flag to the game
+  // whatever the wide line holds; the wide line here is the plain flag spelled without it, as a different reading.
+  ApplyLine(L"echovr.exe require-signed-plugins", "echovr.exe \x96require-signed-plugins");
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+  ApplyLine(L"echovr.exe require-signed-plugins", "echovr.exe \x96\x96REQUIRE-signed-plugins");
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+  // The same bytes without the prefix are no option to the game.
+  ApplyLine(L"echovr.exe require-signed-plugins", "echovr.exe require-signed-plugins");
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::UnsignedAllowed);
+}
+
+// The game splits its ANSI line on ' ' and a '"' opens a token that runs to the next '"' with no escape (Tokenize);
+// CommandLineToArgvW reads \" as a literal quote. After `-config "C:\dir\"` the game has closed the quote and
+// reads the flag as an option; CommandLineToArgvW is still inside the quote and sees one argument.
+TEST_F(PluginRunModeTest, ABackslashBeforeAQuoteDoesNotHideTheFlagFromTheGameReading) {
+  const std::wstring line = L"echovr.exe -config \"C:\\dir\\\" -require-signed-plugins";
+  int argc = 0;
+  wchar_t** const argv = CommandLineToArgvW(line.c_str(), &argc);
+  ASSERT_NE(argv, nullptr);
+  bool argvHasTheFlag = false;
+  for (int i = 0; i < argc; ++i) argvHasTheFlag = argvHasTheFlag || std::wstring(argv[i]) == L"-require-signed-plugins";
+  LocalFree(argv);
+  EXPECT_FALSE(argvHasTheFlag) << "the premise: CommandLineToArgvW does not see the flag on this line";
+
+  ApplyLine(line);
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+  EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::CommandLine);
+}
+
+// The other direction: CommandLineToArgvW removes the quotes, so a quoted flag is an argument for it while the game
+// reads the quoted token as a parameter, not an option. Either reading finding the flag is enough.
+TEST_F(PluginRunModeTest, AFlagEitherReadingFindsMakesTheRunSignedOnly) {
+  ApplyArgs({L"echovr.exe", L"\"-require-signed-plugins\""});  // CommandLineToArgvW: the flag; the game: a parameter
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+  ApplyLine(L"echovr.exe -server \"-REQUIRE-SIGNED-PLUGINS\"");
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+}
+
+// Text the game does not read as the flag leaves the run unsigned-allowed. A token inside a quoted value is one token
+// of the game's tokenizer (Tokenize: a '"' opens a token that runs to the closing '"'), and one argument of
+// CommandLineToArgvW, in neither of which is it an option named -require-signed-plugins; a '[' token is the game's
+// other quoting form (cmdline_strip.h) and a parameter. A name that differs by one letter is another option.
+TEST_F(PluginRunModeTest, TextTheGameDoesNotReadAsTheFlagLeavesTheRunUnsignedAllowed) {
+  for (const wchar_t* line :
+       {L"echovr.exe", L"echovr.exe -windowed", L"echovr.exe -require-signed-plugin", L"echovr.exe -require-signed-pluginsx",
+        L"echovr.exe -require-signed", L"echovr.exe require-signed-plugins", L"echovr.exe -requiresignedplugins",
+        L"echovr.exe -require_signed_plugins", L"echovr.exe -config \"x -require-signed-plugins\"",
+        L"echovr.exe -config \"-x --require-signed-plugins y\" -windowed", L"echovr.exe [-require-signed-plugins]",
+        L"echovr.exe -config C:\\dir\\require-signed-plugins", L"echovr.exe -server=-require-signed-plugins"}) {
+    nevr_plugin_trust::TestHook_ResetTrust();
+    ApplyLine(line);
+    EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::UnsignedAllowed) << "line " << line;
+    EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::Default) << line;
+  }
+}
+
+TEST_F(PluginRunModeTest, ALineThatIsNotThereIsAnUnreadableOne) {
+  nevr_plugin_trust::ApplyCommandLine(nullptr, "echovr.exe");
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+  EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::CommandLineUnreadable);
+  nevr_plugin_trust::TestHook_ResetTrust();
+  nevr_plugin_trust::ApplyCommandLine(L"echovr.exe", nullptr);
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+  EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::CommandLineUnreadable);
 }
 
 TEST_F(PluginRunModeTest, AnUnreadableCommandLineFailsClosed) {

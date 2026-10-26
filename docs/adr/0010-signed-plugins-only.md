@@ -208,10 +208,17 @@ https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/nf-wincrypt-certget
 The mode is set by the command line and by nothing else:
 
 - **`-require-signed-plugins`** makes the run `signed-only`. Without it the run is `unsigned-allowed`. `PreflightRuntimeBootstrap`
-  (`src/runtime/lifecycle/boot.cpp`) reads the argument from the raw command line before the first original `PreprocessCommandLine`
-  call, which is before the early plugin pass (N146), and calls `nevr_plugin_trust::ApplyCommandLine` once. The early pass, the normal pass
-  and the late-load filter all read `nevr_plugin_trust::ActiveMode()`, so they share one mode. If the command line cannot be read (the
-  allocation in `CommandLineToArgvW` fails), whether the argument was given is unknown and the run is `signed-only`
+  (`src/runtime/lifecycle/boot.cpp`) calls `nevr_plugin_trust::ApplyCommandLine(GetCommandLineW(), GetCommandLineA())` once, before the
+  first original `PreprocessCommandLine` call, which is before the early plugin pass (N146). The early pass, the normal pass and the
+  late-load filter all read `nevr_plugin_trust::ActiveMode()`, so they share one mode.
+- **Any token the game would read as the argument counts.** echovr.exe tokenizes the ANSI line with its own tokenizer and looks a name
+  up with every leading `-`, `+` and 0x96 skipped and A-Z lower-cased (`src/runtime/lifecycle/cmdline_strip.h`: `Tokenize`,
+  `detail::NameIs`, which `plugin_trust.cpp` reuses). So `-REQUIRE-SIGNED-PLUGINS`, `+require-signed-plugins` and `---require-signed-plugins`
+  are the argument, and so is one after `-config "C:\dir\"`, where the game's quote ends at the second `"` and `CommandLineToArgvW`'s does
+  not. The line is read two ways, the game's over `GetCommandLineA()` and `CommandLineToArgvW`'s over `GetCommandLineW()` (each argument
+  converted to the ANSI code page), and `signed-only` wins if either finds the argument. A token inside a quoted value is not an option
+  to the game and not the argument; a quoted `"-require-signed-plugins"` is the argument to `CommandLineToArgvW` and so counts. If a
+  line cannot be read or converted, whether the argument was given is unknown and the run is `signed-only`
   (`ApplyUnreadableCommandLine`). The argument is registered with the game's parser (`cli.cpp`), because the game rejects a token
   with no syntax entry, and listed in the README.
 - **No config key and no environment variable sets the mode.** `config.yaml` is data a plugin or an installer can write, and the
