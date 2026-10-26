@@ -117,6 +117,7 @@ subsystems that nEVR annotates.
 | `[NEVR.LOGFILTER]`    | The log filter's own health and rate summary |
 | `[NEVR.DLLHOOK]`      | LoadLibrary interception                     |
 | `[NEVR.PROFILE]`      | Server profile / memory snapshot             |
+| `[NEVR.PERF]`         | Frame-time probe (`diagnostics.frame_stats`): the start line and one summary line per 10 s window |
 | `[NEVR.FATAL]`        | Fatal-error path (ServerFatal)               |
 | `[NEVR.SCENARIO]`     | Scenario-test control endpoint (test builds only; never in a release DLL) |
 | `[NEVR.SELFCHECK]`    | Self-checks: one result per run-card check (every build, `compat/self_check.h`) |
