@@ -1,12 +1,12 @@
 #pragma once
 
-// #938: the nEVR section of the in-game CREDITS page.
+// #938: the project section of the in-game CREDITS page.
 //
 // The page's text is one NUL-terminated byte blob in echovr.exe's .rdata (RVA kBlobRva), read by
 // CR15CreditsUICS::Update through a cursor at component instance +0x10. Two instructions put that
 // blob's address in the cursor: a 7-byte `LEA RAX,[rip+disp32]` in InitCreditsUICI and one in
 // OnComponentDisabled. This header holds the pure logic for pointing both at a runtime-built buffer
-// (the nEVR block, then the game's own bytes copied from memory, then the NUL), so Ready At Dawn's
+// (the project block, then the game's own bytes copied from memory, then the NUL), so Ready At Dawn's
 // credits stay byte-for-byte complete and none of their text is stored in this repository.
 //
 // Pure byte logic with an injected writer, so it is unit-tested without a game image
@@ -41,7 +41,7 @@ inline constexpr size_t kSiteSize = 7;
 inline constexpr uint8_t kInitSiteExpected[kSiteSize] = {0x48, 0x8d, 0x05, 0xb9, 0x10, 0x30, 0x01};
 inline constexpr uint8_t kDisabledSiteExpected[kSiteSize] = {0x48, 0x8d, 0x05, 0x2a, 0x0b, 0x30, 0x01};
 
-// ---- Limits on the nEVR block ----
+// ---- Limits on the project block ----
 
 /// The game shows 64 characters of a line and truncates the rest silently (65-byte buffer), so a
 /// longer line is refused here instead of being cut by the game.
@@ -53,7 +53,7 @@ inline constexpr size_t kMaxBlockLines = 200;
 
 enum class BlockStatus {
   Ok,
-  Empty,          // no bytes: there is no nEVR section to show
+  Empty,          // no bytes: there is no project section to show
   NotTerminated,  // does not end in LF: the game stops at NUL, a last line without LF is lost
   ForbiddenByte,  // NUL, CR or '|' (the game splits a line at '|' into two columns)
   LineTooLong,    // a line over kMaxLineBytes

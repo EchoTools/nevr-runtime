@@ -1,4 +1,4 @@
-// #938: the nEVR section of the in-game CREDITS page. Pure byte logic (runtime/patch/credits_text.h)
+// #938: the project section of the in-game CREDITS page. Pure byte logic (runtime/patch/credits_text.h)
 // plus the near-allocation helper (runtime/hook/near_alloc.h). The fake game blob below is not
 // Ready At Dawn's text; the real one is never copied into a test.
 
@@ -162,7 +162,7 @@ TEST(CreditsTextIdentity, OnlyTheKnownLengthAndHashMatch) {
   EXPECT_EQ(nevr_credits_text::IdentifyBlob(nevr_credits_text::kBlobLength, nullptr), BlobIdentity::HashUnavailable);
 }
 
-// ---- the buffer: nEVR above, the game's bytes after, unchanged and complete ----
+// ---- the buffer: the project block above, the game's bytes after, unchanged and complete ----
 
 TEST(CreditsTextBuffer, TheTailIsTheGamesBytesUnchangedAndCompleteWithItsNul) {
   const std::string block = "CODE CONTRIBUTIONS\n\nZo\xEB\n\n\n\n";
