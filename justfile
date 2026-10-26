@@ -253,7 +253,8 @@ quest-keystore-fingerprint:
 # Refuse (exit 1, one line per problem) unless this clone is exactly origin's release branch: every local
 # tag is on origin and at the same commit, no uncommitted or untracked change, HEAD is origin/<base>'s tip.
 # It also refuses a version part outside the Quest versionCode rule and warns near its limits (development distance N above 900,
-# minor or patch above 90; tools/quest_apk_version.py). # Read-only (git ls-remote is the only network call; there is no fetch). Run it before `just package-dev`,
+# minor or patch above 90; tools/quest_apk_version.py).
+# Read-only (git ls-remote is the only network call; there is no fetch). Run it before `just package-dev`,
 # before pushing a v<x.y.z> release tag and before `gh release create` (tools/release_preflight.py).
 release-preflight base="main":
     tools/release_preflight.py --base {{ quote(base) }}
