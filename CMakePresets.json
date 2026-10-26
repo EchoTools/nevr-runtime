@@ -107,7 +107,7 @@
         },
         {
             "name": "mingw-plugin-dev",
-            "displayName": "MinGW Release that loads unsigned plugins (plugin developers only, never ship)",
+            "displayName": "MinGW Release marked as the plugin developers' build (never ship)",
             "inherits": "mingw-release",
             "cacheVariables": {
                 "NEVR_ALLOW_UNSIGNED_PLUGINS": "ON"
