@@ -132,6 +132,15 @@ class SeededTree(SeedFixture):
         steps, out = pending_steps(self.wt_build())
         self.assertEqual(steps, ["a.o", "app"], out)
 
+    def test_a_file_of_the_same_size_but_other_content_is_rebuilt(self):
+        original = (self.main / "src/a.c").read_text()
+        changed = original.replace("return VAL;", "return 777;")
+        self.assertEqual(len(changed), len(original))
+        (self.wt / "src/a.c").write_text(changed)
+        git(self.wt, "commit", "-q", "-a", "--no-gpg-sign", "-m", "same size, other content")
+        self.assertEqual(self.seed().status, "seeded")
+        self.assertEqual(pending_steps(self.wt_build())[0], ["a.o", "app"])
+
     def test_the_cache_points_at_the_worktree_and_leaves_other_directories_alone(self):
         self.assertEqual(self.seed().status, "seeded")
         cache = (self.wt_build() / "CMakeCache.txt").read_text()
@@ -267,6 +276,21 @@ class NotSeeded(SeedFixture):
         self.assertFalse(self.wt_build().exists())
         self.assertEqual(list((self.wt / "build").glob(".seed-*")), [])
 
+    def test_a_failed_copy_is_an_error_that_leaves_nothing_behind(self):
+        real_run = self.tool.subprocess.run
+
+        def failing_cp(cmd, *args, **kwargs):
+            if cmd[0] == "cp":
+                return subprocess.CompletedProcess(cmd, 1, "", "cp: no space left on device")
+            return real_run(cmd, *args, **kwargs)
+
+        with mock.patch.object(self.tool.subprocess, "run", failing_cp):
+            result = self.seed()
+        self.assertEqual(result.status, "error", result)
+        self.assertIn("no space left", result.reason)
+        self.assertFalse(self.wt_build().exists())
+        self.assertEqual(list((self.wt / "build").glob(".seed-*")), [])
+
     def test_a_worktree_inside_the_tree_it_would_be_copied_from_is_refused(self):
         inside = self.build / "sub"
         inside.mkdir()
@@ -294,6 +318,25 @@ class NotSeeded(SeedFixture):
     def test_the_worktree_must_not_be_the_main_checkout(self):
         result = self.tool.seed(self.main, self.main, self.PRESET)
         self.assertEqual(result.status, "not-seeded", result)
+
+
+class DepsLog(SeedFixture):
+    def records(self, data):
+        import struct
+        off = len(b"# ninjadeps\n") + 4
+        while off < len(data):
+            (word,) = struct.unpack_from("<I", data, off)
+            yield bool(word & 0x80000000), word & 0x7FFFFFFF
+            off += 4 + (word & 0x7FFFFFFF)
+
+    def test_every_rewritten_record_keeps_ninjas_four_byte_alignment(self):
+        data = (self.build / ".ninja_deps").read_bytes()
+        rewrite = self.tool.path_rewriter(str(self.main), str(self.tmp / "a-new-root-of-another-length"))
+        new, changed = self.tool.rewrite_deps_log(data, rewrite)
+        self.assertGreater(changed, 0)
+        sizes = list(self.records(new))
+        self.assertEqual(len(sizes), len(list(self.records(data))))
+        self.assertTrue(all(size % 4 == 0 for _is_deps, size in sizes), sizes)
 
 
 class CommandHash(SeedFixture):
