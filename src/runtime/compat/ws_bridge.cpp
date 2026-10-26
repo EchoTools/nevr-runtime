@@ -1,6 +1,7 @@
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/hmd_serial.h"
+#include "runtime/compat/lobby_frame.h"
 #include "runtime/compat/login_profile.h"
 #include "runtime/compat/social_names.h"
 #include "runtime/compat/social_party.h"
@@ -547,6 +548,53 @@ static int LogGameToServerFrame(const std::string& frame, const std::string& wsC
   return msgIdx;
 }
 
+// #929: a client's Info record of each lobby find and join request the game sends and each session success and
+// failure the service answers with. A dedicated server already logs every message of every frame at Info
+// (LogFrameMessages), so this runs on a client only. The fields are the operation, the lobby ids (GUIDs, never
+// names), the entrants as XPIDs and the failure code; the settings JSON of a request and the message of a
+// failure are remote text and are not read out (logging.md Rule 4). A failure frame carries no lobby id: pair it
+// with the request before it on the same conn.
+static void LogClientLobbyMessage(int connIdx, bool fromServer, uint64_t symbol, const uint8_t* payload, uint64_t len) {
+  const std::optional<nevr_lobby_frame::Kind> kind = nevr_lobby_frame::KindOf(symbol, fromServer);
+  if (!kind) return;
+  nevr_lobby_frame::Decoded d;
+  if (!nevr_lobby_frame::Decode(*kind, payload, static_cast<size_t>(len), &d)) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.WS] lobby %s could not be read conn=%d payload_bytes=%llu",
+        nevr_lobby_frame::KindName(*kind), connIdx, static_cast<unsigned long long>(len));
+    return;
+  }
+  switch (d.kind) {
+    case nevr_lobby_frame::Kind::Find: {
+      std::string mode;
+      if (const char* modeName = EchoVR::LookupSymbolName(d.mode); modeName != nullptr) {
+        mode = modeName;
+      } else {
+        char hex[24];
+        std::snprintf(hex, sizeof(hex), "0x%016llx", static_cast<unsigned long long>(d.mode));
+        mode = hex;
+      }
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.WS] lobby find requested conn=%d mode=%s entrants=%zu accounts=%s current_lobby=%s group=%s", connIdx,
+          mode.c_str(), d.entrants.size(), nevr_lobby_frame::FormatAccounts(d.entrants).c_str(),
+          nevr_lobby_frame::FormatGuidOrNone(d.currentLobby).c_str(), nevr_lobby_frame::FormatGuid(d.group).c_str());
+      break;
+    }
+    case nevr_lobby_frame::Kind::Join:
+      Log(EchoVR::LogLevel::Info, "[NEVR.WS] lobby join requested conn=%d lobby=%s entrants=%zu accounts=%s", connIdx,
+          nevr_lobby_frame::FormatGuid(d.lobby).c_str(), d.entrants.size(),
+          nevr_lobby_frame::FormatAccounts(d.entrants).c_str());
+      break;
+    case nevr_lobby_frame::Kind::Success:
+      Log(EchoVR::LogLevel::Info, "[NEVR.WS] lobby session success conn=%d lobby=%s group=%s", connIdx,
+          nevr_lobby_frame::FormatGuid(d.lobby).c_str(), nevr_lobby_frame::FormatGuid(d.group).c_str());
+      break;
+    case nevr_lobby_frame::Kind::Failure:
+      Log(EchoVR::LogLevel::Info, "[NEVR.WS] lobby session failure conn=%d code=%u reason=%s group=%s", connIdx, d.code,
+          nevr_lobby_frame::FailureReason(d.code), nevr_lobby_frame::FormatGuid(d.group).c_str());
+      break;
+  }
+}
+
 // Info-level trace of the social message families (friends, party, social) crossing the bridge,
 // walking EVERY message in a frame ([marker(8)][symbol(8)][length(8)][payload]...), not just the
 // first. The per-message Debug lines are dropped at the default level, so without this a missing
@@ -565,6 +613,7 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
     const uint64_t len = message.length;
     const bool fromServer = strcmp(direction, "server->game") == 0;
     const uint8_t* payload = message.payload;
+    if (!g_isServer) LogClientLobbyMessage(connIdx, fromServer, sym, payload, len);
     // A display name arrives in a profile reply, whichever side asked for it (the game asks when a
     // friend is opened; the runtime asks for each friend, below).
     if (fromServer && sym == nevr_social_names::kProfileSuccess) {
