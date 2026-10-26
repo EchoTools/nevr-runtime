@@ -24,8 +24,16 @@ File shape (schema 1; every key is required):
               link      "" or https://github.com/<owner>[/<repo>]
               what      one line for the README; required when section is not null
               sources   evidence for `what`: a github.com URL, "#<number>" of this repo, a
-                        repo-relative path, or "named by the project owner[, MM-DD]" (no chat quoted)
+                        repo-relative path, "named by the project owner[, MM-DD]" (no chat quoted), or one of the
+                        two exact texts "echoApkPatch credit strings" (the community installer's patcher thanks
+                        the name; the patcher's repository is private) and "tested in #nevr-runtime-testing
+                        (Discord)" (the name tested in that channel)
+  notes     ordered [text], each non-empty: rules for whoever edits this file (placement of a name, where a
+            source lives). Never rendered anywhere; this file is where they are kept so they travel with the data
   closing   one README line after the lists, or ""
+
+Every top-level and entry key is required and an unknown one is refused, so a mistyped key cannot silently
+drop data.
 """
 from __future__ import annotations
 
@@ -50,6 +58,9 @@ SOURCE_URL = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.#/-]
 SOURCE_ISSUE = re.compile(r"^#[0-9]+$")
 # The project owner named the person or the work; the record of it is not public, so it is stated as that and nothing more.
 SOURCE_OWNER = re.compile(r"^named by the project owner(, [0-9]{2}-[0-9]{2})?$")
+# Two records that are not public by URL: the patcher's repository is private, and the testing channel is a chat.
+# Each is one exact text, so a free-form "source" cannot come in through them.
+SOURCE_TEXTS = frozenset({"echoApkPatch credit strings", "tested in #nevr-runtime-testing (Discord)"})
 # The in-game page (#938). The game shows a line of at most 64 bytes of single-byte (Windows-1252) text, one
 # actor per LF-terminated line, and splits a line at '|' into two columns, so a name carries none of those.
 INGAME_ENCODING = "cp1252"
@@ -62,7 +73,7 @@ INGAME_FORBIDDEN = set("\n\r\x00|")
 # which the game's own credits use). U+00EB (0xEB) draws as '?', so a character outside this set is refused at
 # build time, never replaced; a further character is added only after it has been seen drawn.
 INGAME_DRAWN = frozenset(chr(c) for c in range(0x20, 0x7F)) | {"\u00a9"}
-KEYS = {"schema", "headings", "sections", "entries", "closing"}
+KEYS = {"schema", "headings", "sections", "entries", "notes", "closing"}
 ENTRY_KEYS = {"name", "section", "headings", "link", "what", "sources"}
 
 
@@ -72,6 +83,9 @@ def validate(data: dict, root: Path = ROOT) -> list[str]:
         return [f"top-level keys must be exactly {sorted(KEYS)}"]
     if data["schema"] != 1:
         problems.append("schema must be 1")
+    notes = data["notes"]
+    if not isinstance(notes, list) or not all(isinstance(n, str) and n.strip() for n in notes):
+        problems.append("notes must be a list of non-empty texts")
     heading_ids = [h.get("id") for h in data["headings"]]
     section_ids = [s.get("id") for s in data["sections"]]
     for kind, ids in (("heading", heading_ids), ("section", section_ids)):
@@ -112,10 +126,10 @@ def validate(data: dict, root: Path = ROOT) -> list[str]:
         if not entry["sources"]:
             problems.append(f"{name}: no source")
         for source in entry["sources"]:
-            ok = bool(SOURCE_URL.match(source) or SOURCE_ISSUE.match(source) or SOURCE_OWNER.match(source) or (
+            ok = bool(SOURCE_URL.match(source) or SOURCE_ISSUE.match(source) or SOURCE_OWNER.match(source) or source in SOURCE_TEXTS or (
                 not source.startswith(("http", "/")) and ".." not in source and (root / source).exists()))
             if not ok:
-                problems.append(f"{name}: source {source!r} is not a github.com URL, an issue number, 'named by the project owner[, MM-DD]' or a repo path that exists")
+                problems.append(f"{name}: source {source!r} is not a github.com URL, an issue number, 'named by the project owner[, MM-DD]', one of {sorted(SOURCE_TEXTS)} or a repo path that exists")
     for url in URL.findall(data["closing"]):
         problems.append(f"closing: link {url!r} not allowed")
     if not problems:

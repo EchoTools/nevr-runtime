@@ -2,12 +2,15 @@
   "schema": 1,
   "headings": [
     {"id": "code-contributions", "ingame": "CODE CONTRIBUTIONS"},
+    {"id": "thanks", "ingame": "THANKS"},
+    {"id": "testers", "ingame": "TESTERS"},
     {"id": "lounge-staff", "ingame": "ECHO VR LOUNGE STAFF"},
     {"id": "supporters", "ingame": "SUPPORTERS"}
   ],
   "sections": [
     {"id": "projects", "title": "Projects"},
-    {"id": "people", "title": "People"}
+    {"id": "people", "title": "People"},
+    {"id": "thanks", "title": "Thanks"}
   ],
   "entries": [
     {
@@ -52,13 +55,15 @@
     {
       "name": "marshmallow-mia",
       "section": "projects",
-      "headings": ["code-contributions"],
+      "headings": ["code-contributions", "testers"],
       "link": "https://github.com/marshmallow-mia",
-      "what": "The Echo VR Linux port, the [Echo VR installer](https://github.com/marshmallow-mia/Echo-VR-Installer) (PC and Quest) and [EchoVR_Launcher](https://github.com/marshmallow-mia/EchoVR_Launcher) (Windows and Linux). Reported #133 to #137, #495, #496, #511 to #513 and #719, and wrote the merged fixes #138 to #141, #500, #502, #514 to #516 and #721.",
+      "what": "The Echo VR Linux port, the [Echo VR installer](https://github.com/marshmallow-mia/Echo-VR-Installer) (PC and Quest) and [EchoVR_Launcher](https://github.com/marshmallow-mia/EchoVR_Launcher) (Windows and Linux). Reported #133 to #137, #495, #496, #511 to #513 and #719, and wrote the merged fixes #138 to #141, #500, #502, #514 to #516 and #721. Tested nevr-runtime in #nevr-runtime-testing.",
       "sources": [
         "https://github.com/marshmallow-mia/Echo-VR-Installer",
         "https://github.com/marshmallow-mia/EchoVR_Launcher",
         "named by the project owner",
+        "echoApkPatch credit strings",
+        "tested in #nevr-runtime-testing (Discord)",
         "https://github.com/EchoTools/nevr-runtime/issues/133",
         "https://github.com/EchoTools/nevr-runtime/issues/495",
         "https://github.com/EchoTools/nevr-runtime/issues/511",
@@ -72,15 +77,16 @@
     {
       "name": "Crafter",
       "section": "projects",
-      "headings": [],
+      "headings": ["testers"],
       "link": "https://github.com/Crafter-1",
-      "what": "[Quest-EchoVR-Installer](https://github.com/Crafter-1/Quest-EchoVR-Installer), a 3D Quest installer for Echo VR built in Unity. Reported #621, the game sending a Quest 3 player back to Home at launch, with a full logcat.",
+      "what": "[Quest-EchoVR-Installer](https://github.com/Crafter-1/Quest-EchoVR-Installer), a 3D Quest installer for Echo VR built in Unity. Reported #621, the game sending a Quest 3 player back to Home at launch, with a full logcat. Tested nevr-runtime in #nevr-runtime-testing.",
       "sources": [
         "https://github.com/Crafter-1/Quest-EchoVR-Installer",
         "docs/adr/0011-quest-game-data-first-run.md",
         "https://github.com/EchoTools/nevr-runtime/issues/925",
         "https://github.com/EchoTools/nevr-runtime/issues/621",
-        "named by the project owner"
+        "named by the project owner",
+        "tested in #nevr-runtime-testing (Discord)"
       ]
     },
     {
@@ -94,60 +100,106 @@
       ]
     },
     {
-      "name": "Trodd",
+      "name": "Trodd-",
       "section": "people",
-      "headings": [],
+      "headings": ["testers"],
       "link": "",
-      "what": "Found the XInput fix that lets the spectator free cam see Xbox One and Series controllers, and brought it to the project (#877).",
+      "what": "Found the XInput fix that lets the spectator free cam see Xbox One and Series controllers, and brought it to the project (#877). Tested nevr-runtime in #nevr-runtime-testing.",
       "sources": [
-        "https://github.com/EchoTools/nevr-runtime/issues/877"
+        "https://github.com/EchoTools/nevr-runtime/issues/877",
+        "tested in #nevr-runtime-testing (Discord)"
       ]
     },
     {
       "name": "DinkyBoi",
       "section": "people",
-      "headings": [],
+      "headings": ["testers"],
       "link": "",
-      "what": "Reported a party of three queuing for arena with one member left out (#888), and the arm tablet's repeated \"server full\" message when joining a full social lobby (#889).",
+      "what": "Reported a party of three queuing for arena with one member left out (#888), and the arm tablet's repeated \"server full\" message when joining a full social lobby (#889). Tested nevr-runtime in #nevr-runtime-testing.",
       "sources": [
         "https://github.com/EchoTools/nevr-runtime/issues/888",
-        "https://github.com/EchoTools/nevr-runtime/issues/889"
+        "https://github.com/EchoTools/nevr-runtime/issues/889",
+        "tested in #nevr-runtime-testing (Discord)"
       ]
     },
     {
       "name": "berg",
       "section": "people",
-      "headings": [],
+      "headings": ["testers"],
       "link": "",
-      "what": "One of the party of three in #888: left out of the arena match once, and rejoined through a link.",
+      "what": "One of the party of three in #888: left out of the arena match once, and rejoined through a link. Tested nevr-runtime in #nevr-runtime-testing.",
       "sources": [
-        "https://github.com/EchoTools/nevr-runtime/issues/888"
+        "https://github.com/EchoTools/nevr-runtime/issues/888",
+        "tested in #nevr-runtime-testing (Discord)"
       ]
     },
     {
       "name": "zebra",
       "section": "people",
-      "headings": [],
+      "headings": ["testers"],
       "link": "",
-      "what": "One of the party of three in #888, left out of the arena match.",
+      "what": "One of the party of three in #888, left out of the arena match. Tested nevr-runtime in #nevr-runtime-testing.",
       "sources": [
-        "https://github.com/EchoTools/nevr-runtime/issues/888"
+        "https://github.com/EchoTools/nevr-runtime/issues/888",
+        "tested in #nevr-runtime-testing (Discord)"
       ]
     },
     {
       "name": "Nebula",
       "section": "people",
-      "headings": [],
+      "headings": ["testers"],
       "link": "",
-      "what": "Reported install.ps1 failing on a PC with no D: drive (#679) and the idea that it asks for the game folder (#680), the Quest game closing at start (#758), uninstall.ps1 refusing after an update (#759) and the tablet's missing Add friend button (#775).",
+      "what": "Reported install.ps1 failing on a PC with no D: drive (#679) and the idea that it asks for the game folder (#680), the Quest game closing at start (#758), uninstall.ps1 refusing after an update (#759) and the tablet's missing Add friend button (#775). Tested nevr-runtime in #nevr-runtime-testing.",
       "sources": [
         "https://github.com/EchoTools/nevr-runtime/issues/679",
         "https://github.com/EchoTools/nevr-runtime/pull/680",
         "https://github.com/EchoTools/nevr-runtime/issues/758",
         "https://github.com/EchoTools/nevr-runtime/issues/759",
-        "https://github.com/EchoTools/nevr-runtime/issues/775"
+        "https://github.com/EchoTools/nevr-runtime/issues/775",
+        "tested in #nevr-runtime-testing (Discord)"
       ]
     },
+    {
+      "name": "CyanoTex",
+      "section": "people",
+      "headings": ["testers"],
+      "link": "",
+      "what": "Tested nevr-runtime in #nevr-runtime-testing.",
+      "sources": [
+        "tested in #nevr-runtime-testing (Discord)"
+      ]
+    },
+    {
+      "name": "spike4887",
+      "section": "people",
+      "headings": ["testers"],
+      "link": "",
+      "what": "Tested nevr-runtime in #nevr-runtime-testing.",
+      "sources": [
+        "tested in #nevr-runtime-testing (Discord)"
+      ]
+    },
+    {
+      "name": "TekEmperor",
+      "section": "people",
+      "headings": ["testers"],
+      "link": "",
+      "what": "Tested nevr-runtime in #nevr-runtime-testing.",
+      "sources": [
+        "tested in #nevr-runtime-testing (Discord)"
+      ]
+    },
+    {
+      "name": "arii",
+      "section": "people",
+      "headings": ["testers"],
+      "link": "",
+      "what": "Tested nevr-runtime in #nevr-runtime-testing.",
+      "sources": [
+        "tested in #nevr-runtime-testing (Discord)"
+      ]
+    },
+
     {
       "name": "chinmayee5599",
       "section": "people",
@@ -167,7 +219,74 @@
       "sources": [
         "https://github.com/EchoTools/nevr-runtime/pull/12"
       ]
+    },
+    {
+      "name": "marshmallow_mia",
+      "section": null,
+      "headings": ["thanks"],
+      "link": "",
+      "what": "The patcher's spelling of marshmallow-mia's own thank-you string; the README shows the person once, as marshmallow-mia.",
+      "sources": [
+        "echoApkPatch credit strings"
+      ]
+    },
+    {
+      "name": "AvaGoosa",
+      "section": "thanks",
+      "headings": ["thanks"],
+      "link": "",
+      "what": "Named in the thank-you strings of the Echo VR installer's patcher.",
+      "sources": [
+        "echoApkPatch credit strings"
+      ]
+    },
+    {
+      "name": "h4ck3r210",
+      "section": "thanks",
+      "headings": ["thanks"],
+      "link": "",
+      "what": "Named in the thank-you strings of the Echo VR installer's patcher.",
+      "sources": [
+        "echoApkPatch credit strings"
+      ]
+    },
+    {
+      "name": "Elominator",
+      "section": "thanks",
+      "headings": ["thanks"],
+      "link": "",
+      "what": "Named in the thank-you strings of the Echo VR installer's patcher.",
+      "sources": [
+        "echoApkPatch credit strings"
+      ]
+    },
+    {
+      "name": "sprockee",
+      "section": "thanks",
+      "headings": ["thanks"],
+      "link": "",
+      "what": "Named in the thank-you strings of the Echo VR installer's patcher.",
+      "sources": [
+        "echoApkPatch credit strings"
+      ]
+    },
+    {
+      "name": "he_is_the_cat",
+      "section": "thanks",
+      "headings": ["thanks", "testers"],
+      "link": "",
+      "what": "Named in the thank-you strings of the Echo VR installer's patcher. Tested nevr-runtime in #nevr-runtime-testing.",
+      "sources": [
+        "echoApkPatch credit strings",
+        "tested in #nevr-runtime-testing (Discord)"
+      ]
     }
   ],
-  "closing": "Everyone else who tested in #nevr-runtime-testing and is not named here: thank you."
+  "notes": [
+    "sprockee is listed exactly once in each rendered list: in the thanks group, in the group's ordinary order, never first. No heading, README line or project-owner text is given to the name. tools/tests/test_credits.py enforces this.",
+    "The thanks group is the six credit strings of the community installer's patcher, spelled exactly as the patcher spells them: configs/libr15.so.yaml lines 306 to 348 at 93a2a055 in the echoApkPatch repository, which is not public. The facts are recorded here and no text is copied from it.",
+    "Everyone named as having tested in #nevr-runtime-testing is also under the testers heading, whatever other heading they have. One person is one entry: Trodd- is shown with the dash under People and under Testers.",
+    "marshmallow_mia is the patcher's spelling and belongs to the thanks group only; the README shows the person once, as marshmallow-mia."
+  ],
+  "closing": "Thank you to everyone in #nevr-runtime-testing, named or not."
 }
