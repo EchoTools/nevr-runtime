@@ -379,6 +379,13 @@ bool NevrCfgSocialFacadeEnabled() {
   return nevr_cfg::SocialFacadeEnabled(NevrCfg());
 }
 
+int NevrCfgFrameStatsMode(int* recognised) {
+  bool known = true;
+  const nevr_frame_stats::Mode mode = nevr_cfg::FrameStatsMode(NevrCfg(), &known);
+  if (recognised != nullptr) *recognised = known ? 1 : 0;
+  return static_cast<int>(mode);
+}
+
 const char* NevrCfgGameNativeConfigJson() {
   return AccessorBoundary("NevrCfgGameNativeConfigJson", [&]() -> const char* {
     if (IsServerMode()) return nullptr;  // a dedicated server has no social layer to configure

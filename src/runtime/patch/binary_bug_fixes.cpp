@@ -38,6 +38,7 @@
 
 #include "runtime/patch/binary_bug_fixes.h"
 
+#include "runtime/frame/frame_stats.h"
 #include "runtime/frame/tick.h"
 #include "runtime/patch/mode_patches.h"
 #include "runtime/hook/hook_liveness.h"
@@ -181,6 +182,14 @@ static inline uint64_t QpcMicroseconds() {
 
 static uint64_t __fastcall GetTimeMicrosecondsHook() {
     nevr_hook_liveness::Mark(nevr_hook_liveness::kGetTimeMicroseconds);
+    // #954: the frame-time probe. The game's main loop calls this once per iteration, and the call site is
+    // the one return address below, so its callers cost one compare. The reading is taken before the
+    // time-override return that follows (a paused clock must not hide a slow frame), and
+    // __builtin_return_address has to be read in this body: a helper would see its own caller instead.
+    // The ring push is wait-free and logs nothing (frame_stats.h).
+    if (nevr_frame_stats::IsLoopHeadReturn(reinterpret_cast<uintptr_t>(__builtin_return_address(0)), g_base)) {
+        nevr_frame_stats::OnLoopHead(QpcMicroseconds());
+    }
     // Replicate the original's global override check.
     // When the engine pauses or fixes time, it sets a flag and cached value.
     volatile int64_t* override_flag = reinterpret_cast<volatile int64_t*>(

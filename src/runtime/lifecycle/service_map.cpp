@@ -191,6 +191,10 @@ bool SocialFacadeEnabled(const nevr::NevrConfig& cfg) {
   return cfg.GetBool("social.facade").value_or(true);
 }
 
+nevr_frame_stats::Mode FrameStatsMode(const nevr::NevrConfig& cfg, bool* recognised) {
+  return nevr_frame_stats::ParseMode(cfg.GetString("diagnostics.frame_stats"), recognised);
+}
+
 std::optional<std::string> BuildGameNativeConfigJson(const std::string& httpUri,
                                                      const std::string& serverKey) {
   if (httpUri.empty() || serverKey.empty()) return std::nullopt;

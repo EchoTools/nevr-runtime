@@ -694,6 +694,31 @@ const nevr_cfg::EmbeddedDefault kEmbeddedFixture[] = {
 };
 constexpr std::size_t kEmbeddedFixtureCount = sizeof(kEmbeddedFixture) / sizeof(kEmbeddedFixture[0]);
 
+TEST(ServiceMap, FrameStatsModeIsOffUnlessDiagnosticsFrameStatsSaysOtherwise) {
+  bool recognised = false;
+  EXPECT_EQ(nevr_frame_stats::Mode::Off,
+            nevr_cfg::FrameStatsMode(nevr::NevrConfig::LoadFromString("version: 1\n"), &recognised));
+  EXPECT_TRUE(recognised);
+  EXPECT_EQ(nevr_frame_stats::Mode::Off,
+            nevr_cfg::FrameStatsMode(nevr::NevrConfig::LoadFromString("diagnostics:\n  other: true\n"), nullptr));
+  EXPECT_EQ(nevr_frame_stats::Mode::Full,
+            nevr_cfg::FrameStatsMode(nevr::NevrConfig::LoadFromString("diagnostics:\n  frame_stats: true\n"),
+                                     &recognised));
+  EXPECT_TRUE(recognised);
+  EXPECT_EQ(nevr_frame_stats::Mode::Off,
+            nevr_cfg::FrameStatsMode(nevr::NevrConfig::LoadFromString("diagnostics:\n  frame_stats: false\n"),
+                                     &recognised));
+  EXPECT_TRUE(recognised);
+  EXPECT_EQ(nevr_frame_stats::Mode::PerfOnly,
+            nevr_cfg::FrameStatsMode(nevr::NevrConfig::LoadFromString("diagnostics:\n  frame_stats: perf\n"),
+                                     &recognised));
+  EXPECT_TRUE(recognised);
+  EXPECT_EQ(nevr_frame_stats::Mode::Off,
+            nevr_cfg::FrameStatsMode(nevr::NevrConfig::LoadFromString("diagnostics:\n  frame_stats: sometimes\n"),
+                                     &recognised));
+  EXPECT_FALSE(recognised);
+}
+
 }  // namespace
 
 TEST(SelectBuiltinDefaults, ClientModeKeepsEveryNonEmptyEntry) {

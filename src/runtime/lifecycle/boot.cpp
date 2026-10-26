@@ -16,6 +16,7 @@
 #include "runtime/patch/resource_override.h"
 #include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/coop_ai_trace.h"
+#include "runtime/frame/frame_stats.h"
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/ext/plugin_trust.h"
 #include "extension/module_interface.h"
@@ -660,6 +661,16 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     if (!nevr_return_to_lobby::Configure(ttlSeconds)) {
       Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] empty-server TTL requested but not armed; the server keeps today's behaviour");
     }
+  }
+
+  // #954: the PC frame-time probe. diagnostics.frame_stats (default off) switches the loop-interval ring and
+  // the 10 s [NEVR.PERF] line; Configure logs the resolved value at Info whether it is on or off (N122/N124).
+  {
+    int recognised = 1;
+    const nevr_frame_stats::Mode frameStats =
+        static_cast<nevr_frame_stats::Mode>(NevrCfgFrameStatsMode(&recognised));
+    nevr_frame_stats::Configure(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress), g_isServer != FALSE,
+                                frameStats, recognised != 0);
   }
 
   // Load external plugins from plugins/ subdirectory

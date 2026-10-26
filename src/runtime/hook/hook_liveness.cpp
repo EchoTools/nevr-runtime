@@ -28,6 +28,10 @@ const Entry kEntries[] = {
     {"HTTPListenerBringup", "server bringup", false},
     {"CBroadcaster::Listen", "registration + gameplay", false},
     {"CBroadcaster::ReceiveLocalEvent", "message dispatch", false},
+    // #954: installed on a client only. A desktop client has no VR session and a server never installs it,
+    // so entries=0 there is the expected reading, not dead wiring. Not guaranteedAbsentOnServer: that
+    // row's notice is one shared bool (see g_serverAbsenceNoticeLogged), and a second row would be swallowed.
+    {"ovr_GetPerfStats", "PCVR session only", false},
 };
 
 // kEntries is sized by its INITIALIZER, not by kCount. That is load-bearing: if

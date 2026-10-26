@@ -55,6 +55,7 @@ set(PATCHES_SOURCES
     "compat/self_check.cpp"
     "compat/social_names.cpp"
     "patch/xpid_patch.cpp"
+    "frame/frame_stats.cpp"
     "frame/tick.cpp"
     "frame/window_watch.cpp"
     "patch/binary_bug_fixes.cpp"
@@ -147,6 +148,7 @@ set(PATCHES_HEADERS
     "compat/evr_codec.h"
     "compat/lobby_frame.h"
     "patch/xpid_patch.h"
+    "frame/frame_stats.h"
     "frame/tick.h"
     "patch/binary_bug_fixes.h"
     "patch/pnsrad_enabler.h"
@@ -779,6 +781,13 @@ if(BUILD_TESTING)
     target_include_directories(test_coop_ai_trace PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_coop_ai_trace PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_coop_ai_trace DISCOVERY_MODE PRE_TEST)
+
+    # #954 frame-time probe: the PURE half (frame/frame_stats.h: ring, window math, return-address predicate,
+    # ovrPerfStats extraction, log lines). The hook and the log call (frame_stats.cpp) are not linked here.
+    add_executable(test_frame_stats tests/test_frame_stats.cpp)
+    target_include_directories(test_frame_stats PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_frame_stats PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_frame_stats DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_xpid_patch tests/test_xpid_patch.cpp)
     target_include_directories(test_xpid_patch PRIVATE

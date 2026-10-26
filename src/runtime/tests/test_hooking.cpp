@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <cstdint>
+#include <cstring>
 #include <thread>
 #include <vector>
 
@@ -387,4 +389,68 @@ TEST(HookLifecycle, KeepPublishedIsNotAskedWhenCreateFails) {
   EXPECT_EQ(stage, nevr::hook::AttachStage::kCreateFailed);
   EXPECT_EQ(original, &target);
   EXPECT_FALSE(asked);
+}
+
+// ---- #954: MinHook relocates a RIP-relative load at the start of a function ----
+//
+// The game's ovr_GetPerfStats wrapper (echovr.exe 0x1413662e0) starts with a seven-byte
+// MOV RAX,[RIP+disp32]; MinHook has to copy that instruction into its trampoline and rewrite the
+// displacement. This is the same 21 bytes in a page of its own, with the pointer the MOV loads in the same
+// page: if the displacement were copied unchanged, the trampoline would read the wrong address.
+namespace {
+
+using PerfThunk = int32_t(__fastcall*)(void* session, void* out);
+PerfThunk g_perfTrampoline = nullptr;
+int g_perfDetourCalls = 0;
+
+int32_t __fastcall RealPerfStats(void*, void* out) {
+  *static_cast<int32_t*>(out) = 42;
+  return 7;
+}
+
+int32_t __fastcall PerfStatsDetour(void* session, void* out) {
+  ++g_perfDetourCalls;
+  return g_perfTrampoline(session, out) + 100;
+}
+
+}  // namespace
+
+TEST(Hooking, ARipRelativeLoadAtTheStartOfAFunctionRunsThroughTheTrampoline) {
+  ASSERT_TRUE(Hooking::Initialize());
+  auto* page = static_cast<uint8_t*>(VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+  ASSERT_NE(nullptr, page);
+  constexpr uint32_t kPointerOffset = 0x100;
+  const uint8_t thunk[21] = {0x48, 0x8B, 0x05, 0xF9, 0x00, 0x00, 0x00,  // MOV RAX,[RIP+0xf9] -> page+0x100
+                             0x48, 0x85, 0xC0,                          // TEST RAX,RAX
+                             0x75, 0x06,                                // JNZ +6
+                             0xB8, 0x14, 0xFC, 0xFF, 0xFF,              // MOV EAX,0xfffffc14
+                             0xC3,                                      // RET
+                             0x48, 0xFF, 0xE0};                         // JMP RAX
+  ASSERT_EQ(kPointerOffset, 7u + 0xF9u);
+  std::memcpy(page, thunk, sizeof(thunk));
+  auto* pointer = reinterpret_cast<uintptr_t*>(page + kPointerOffset);
+  *pointer = reinterpret_cast<uintptr_t>(&RealPerfStats);
+
+  PerfThunk call = reinterpret_cast<PerfThunk>(page);
+  int32_t out = 0;
+  ASSERT_EQ(7, call(nullptr, &out));  // unhooked: the thunk jumps to the real function
+  ASSERT_EQ(42, out);
+
+  PVOID original = page;
+  ASSERT_TRUE(Hooking::Attach(&original, reinterpret_cast<PVOID>(&PerfStatsDetour))) << Hooking::LastAttachError();
+  g_perfTrampoline = reinterpret_cast<PerfThunk>(original);
+  EXPECT_NE(static_cast<PVOID>(page), original);
+
+  out = 0;
+  g_perfDetourCalls = 0;
+  EXPECT_EQ(107, call(nullptr, &out));  // detour -> trampoline -> the relocated MOV loads the pointer -> real
+  EXPECT_EQ(42, out);
+  EXPECT_EQ(1, g_perfDetourCalls);
+
+  *pointer = 0;  // no LibOVR export: the thunk's own error path, still through the relocated MOV
+  EXPECT_EQ(-1004 + 100, call(nullptr, &out));
+  EXPECT_EQ(2, g_perfDetourCalls);
+
+  EXPECT_TRUE(Hooking::Detach(&original, reinterpret_cast<PVOID>(&PerfStatsDetour)));
+  VirtualFree(page, 0, MEM_RELEASE);
 }
