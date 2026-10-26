@@ -298,9 +298,7 @@ Every branch an agent creates has a documented deletion point from the moment it
 - **"Merged" means** the PR state is MERGED (GitHub squash-merges, so `git branch -d` refuses those branches) or the tip is in `origin/main`. Use `gh pr view <branch> --json state`.
 - **A branch that lands with no PR** (a fast-forward or a hand merge) counts as merged when `git merge-base --is-ancestor <branch> origin/main` succeeds, and its creator deletes it then.
 - **Before deleting an unmerged branch,** print its tip SHA, and check `git -C <worktree> status --porcelain` is empty. Uncommitted work is work.
-- **Remove a worktree only behind the cwd check** (the "no process has its cwd inside" proof of "Ownership and cleanup"; `tools/reap_merged.py` runs the same check), in one command that removes nothing and fails when any process has its cwd inside, a shell of your own session included:
-  `W=$(realpath .claude/worktrees/<branch>); hits=$(for p in /proc/[0-9]*; do c=$(readlink "$p/cwd" 2>/dev/null) && case "$c" in "$W"|"$W"/*) echo "${p#/proc/} $c";; esac; done); if [ -n "$hits" ]; then echo "$hits"; false; else git worktree unlock "$W" 2>/dev/null; git worktree remove "$W"; fi`.
-  A check that only prints, followed by a removal, is not the check.
+- **Remove a worktree with `just remove-worktree <absolute path>`** (`tools/remove_worktree.py`; `--dry-run` proves and changes nothing; run it from the main checkout or another worktree, never from inside the one it removes). Before it changes anything it refuses when a process has its cwd inside (a shell of your own session included), when anything is uncommitted or ignored beyond build output, when an initialised submodule has uncommitted work or a commit that is on no remote, or when a plain copy under `extern/` (what `just worktree-setup` makes) differs from the main checkout's. It runs no `git submodule deinit` and no `--force`, and leaves the shared submodule config as it found it. `tools/reap_merged.py` removes through it. A check that only prints, followed by a removal, is not the check.
 
 ## Build Commands
 
@@ -627,20 +625,17 @@ your seat name, for example `claude-main` or `codex`.
   directory, is not proof: another seat's live worktree can sit there. Anything you cannot prove is another
   seat's; leave it and ask its owner.
 - **Remove a worktree only after proving it is redundant.** Its branch tip is merged into
-  `origin/main` by ancestry or `git cherry`, or is on a remote; `git status --short` is empty
-  and `git status --short --ignored` lists only build output (move any run log you need out
-  first); no process has its cwd inside. Run
-  `git worktree unlock <path>` first. Never `--force`. For a worktree with initialised submodules,
-  run `git submodule deinit --all`, check that each submodule's HEAD and local branches have no
-  commits beyond upstream, delete `$(git rev-parse --git-common-dir)/worktrees/<name>/modules`
-  (`<name>` is the directory under `worktrees/`), then remove the worktree. Afterwards delete
-  the branch locally (and on origin once merged) and update the ledger row.
-  **Join the steps of any cleanup (copy, deinit, check, delete) with `&&`, or run them under
-  `set -e`; never `;`.** A failed copy, deinit or check stops every delete after it, and a delete is
-  never the step after an unchecked one. For a worktree with initialised submodules:
+  `origin/main` by ancestry or `git cherry`, or is on a remote; any run log you need is moved out
+  of it first. Then `just remove-worktree <absolute path>` (see "Branch lifecycle"), which unlocks the
+  worktree and makes the remaining proofs. Never `--force`, never `git submodule deinit`, never
+  `rm -rf` of a worktree's `modules` directory by hand. Afterwards delete the branch locally (and on
+  origin once merged) and update the ledger row.
+  **Join the steps of any cleanup (copy, check, delete) with `&&`, or run them under
+  `set -e`; never `;`.** A failed copy or check stops every delete after it, and a delete is
+  never the step after an unchecked one:
 
   ```sh
-  git worktree unlock <path> && git -C <path> submodule deinit --all && <the submodule check, exiting non-zero on a commit beyond upstream> && rm -rf "$(git rev-parse --git-common-dir)/worktrees/<name>/modules" && git worktree remove <path> && git branch -D <branch>
+  just remove-worktree <absolute path> && git branch -D <branch>
   ```
 - **Disk.** Check `df -h /` before starting a worktree build, keep one build tree per agent, and
   remove it when its PR merges.
