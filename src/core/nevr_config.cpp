@@ -196,7 +196,7 @@ const std::set<std::string>& AllowedTopLevelKeys() {
   static const std::set<std::string> kKeys = {
       "version", "identity", "auth",    "services", "network", "assets",
       "arena",   "guilds",   "telemetry", "plugins", "profiles", "social",
-      "diagnostics"};
+      "diagnostics", "graphics"};
   return kKeys;
 }
 
@@ -207,7 +207,7 @@ void ValidateTopLevel(const YAML::Node& root) {
       throw NevrConfigError(
           "config: unknown top-level key '" + key +
           "' (allowed: version, identity, auth, services, network, assets, arena, "
-          "guilds, telemetry, plugins, profiles, social, diagnostics; use x-* for extensions)",
+          "guilds, telemetry, plugins, profiles, social, diagnostics, graphics; use x-* for extensions)",
           NevrConfigErrorKind::kUnknownTopLevelKey, SourceLine(kv.first.Mark()), SourceColumn(kv.first.Mark()));
     }
   }

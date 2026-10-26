@@ -356,6 +356,7 @@ class ProductionSteps final : public Steps {
   bool RegisterSocialCounters() override { return nevr_quest::integration::RegisterSocialCounters(); }
   bool RegisterLoginPromptCounters() override { return nevr_quest::integration::RegisterLoginPromptCounters(); }
   bool RegisterObbSkipCounters() override { return nevr_quest::integration::RegisterObbSkipCounters(); }
+  bool RegisterTextureQualityCounters() override { return nevr_quest::integration::RegisterTextureQualityCounters(); }
   bool StartReporter() override { return sentinel::StartReporter(/*firstMs=*/1000, /*graceMs=*/10000, /*steadyMs=*/60000); }
 
   bool InstallClockHook() override {
@@ -432,6 +433,13 @@ class ProductionSteps final : public Steps {
 
   bool InstallVkExtWindow() override {
     const bool ok = nevr_quest::integration::InstallVkExtWindowHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
+  bool InstallTextureQuality(const nevr_quest::TextureChoice& choice, bool countersRegistered) override {
+    const bool ok = nevr_quest::integration::InstallTextureQualityHook(
+        choice.level, choice.source == nevr_quest::Source::kFile, countersRegistered);
     detail_ = ok ? "ok" : "got_hook_refused";
     return ok;
   }

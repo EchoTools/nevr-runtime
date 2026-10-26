@@ -622,6 +622,99 @@ void UiEventProbeIsOnlyEverOnByTheDiagnosticsKeyAndNeedsSocial() {
   CHECK(std::string(nevr_quest::FeatureName(Feature::kUiEventProbe)) == "ui_event_probe");
 }
 
+// The texture quality (#943): `graphics.texture_quality`, one of six words, `high` unless the file names another. A word that
+// is not a level keeps the default and is reported by key and by the (short, printable) word it was.
+void TextureQualityIsHighUnlessTheFileNamesAnotherLevel() {
+  namespace tq = nevr_quest::texture_quality;
+  const auto isDefault = [](const LoadResult& r) {
+    return r.config.textureQuality.level == tq::Level::kHigh && r.config.textureQuality.source != Source::kFile;
+  };
+  {  // no file, an empty file, a file without the section, an empty section: the default, from the default
+    const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
+    CHECK(isDefault(none));
+    CHECK(EventsContain(none, "config key=graphics.texture_quality quality=high source=default"));
+    CHECK(!HasLevel(none, LogLevel::kWarn) && !HasLevel(none, LogLevel::kError));
+    for (const char* text : {"", "version: 1\n", "graphics: {}\n", "graphics:\n  other: 1\n"}) {
+      const LoadResult r = Load(Full(), text);
+      CHECK(isDefault(r));
+      CHECK(EventsContain(r, "config key=graphics.texture_quality quality=high source=default"));
+      CHECK(!HasLevel(r, LogLevel::kWarn));
+    }
+  }
+  const struct {
+    const char* word;
+    tq::Level level;
+  } kWords[] = {{"stock", tq::Level::kStock},       {"low", tq::Level::kLow},   {"medium", tq::Level::kMedium},
+                {"high", tq::Level::kHigh},         {"very_high", tq::Level::kVeryHigh},
+                {"ultra", tq::Level::kUltra}};
+  for (const auto& w : kWords) {  // each word, plain and quoted
+    for (const char* quote : {"", "\""}) {
+      const LoadResult r = Load(Full(), std::string("graphics:\n  texture_quality: ") + quote + w.word + quote + "\n");
+      CHECK(r.config.textureQuality.level == w.level && r.config.textureQuality.source == Source::kFile);
+      CHECK(EventsContain(r, std::string("config key=graphics.texture_quality quality=") + w.word + " source=config"));
+      CHECK(!HasLevel(r, LogLevel::kWarn) && !HasLevel(r, LogLevel::kError));
+      CHECK(std::string(nevr_quest::TextureSourceName(r.config.textureQuality)) == "config");
+      CHECK(DefaultsOnly(r.config.requested) && DefaultsOnly(r.config.effective));  // no feature moves
+    }
+  }
+  {  // a file that is rejected as a whole contributes nothing, this key included
+    const LoadResult r = Load(Full(), "graphics:\n  texture_quality: ultra\nnot_a_section: 1\n");
+    CHECK(r.fileRejected);
+    CHECK(isDefault(r));
+    CHECK(EventsContain(r, "config key=graphics.texture_quality quality=high source=default"));
+  }
+  // Only this key in this section: the same word anywhere else is nothing.
+  for (const char* text : {"texture_quality: ultra\n", "graphics:\n  quality: ultra\n", "diagnostics:\n  texture_quality: ultra\n",
+                           "x-graphics:\n  texture_quality: ultra\n", "graphics:\n  Texture_Quality: ultra\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(isDefault(r));
+  }
+}
+
+void ATextureQualityThatIsNotALevelKeepsTheDefaultAndNamesTheWord() {
+  namespace tq = nevr_quest::texture_quality;
+  for (const char* bad : {"ultra-high", "High", "HIGH", "very high", "veryhigh", "none", "0", "true", "default", "native"}) {
+    const std::string yaml = std::string("graphics:\n  texture_quality: \"") + bad + "\"\n";
+    const LoadResult r = Load(Full(), yaml);
+    CHECK(!r.fileRejected);
+    CHECK(r.config.textureQuality.level == tq::Level::kHigh && r.config.textureQuality.source != Source::kFile);
+    // A word with a space in it is named by what is wrong with it; the rest by themselves.
+    const std::string named = std::string(bad) == "very high" ? "(not printable ASCII without spaces)" : bad;
+    CHECK(EventsWithAreAtLevel(r, "config file key=graphics.texture_quality rejected reason=unknown_level value=" + named + " (",
+                               LogLevel::kWarn));
+    CHECK(EventsContain(r, "default stays: high"));
+    CHECK(EventsContain(r, "config key=graphics.texture_quality quality=high source=default"));
+    CHECK(!HasLevel(r, LogLevel::kError));
+  }
+  {  // the word is named only when it is short printable ASCII; otherwise what is wrong with it
+    const std::string longWord(33, 'x');
+    const LoadResult r = Load(Full(), "graphics:\n  texture_quality: " + longWord + "\n");
+    CHECK(EventsContain(r, "reason=unknown_level value=(longer than 32 bytes)"));
+    CHECK(!EventsContain(r, longWord));
+    const std::string edge(32, 'y');
+    const LoadResult atLimit = Load(Full(), "graphics:\n  texture_quality: " + edge + "\n");
+    CHECK(EventsContain(atLimit, "reason=unknown_level value=" + edge + " ("));
+    const LoadResult empty = Load(Full(), "graphics:\n  texture_quality: \"\"\n");
+    CHECK(EventsContain(empty, "reason=unknown_level value=(empty)"));
+    const LoadResult control = Load(Full(), "graphics:\n  texture_quality: \"hi\\tgh\"\n");
+    CHECK(EventsContain(control, "reason=unknown_level value=(not printable ASCII without spaces)"));
+    const LoadResult accent = Load(Full(), "graphics:\n  texture_quality: \"h\\u00efgh\"\n");
+    CHECK(EventsContain(accent, "reason=unknown_level value=(not printable ASCII without spaces)"));
+    CHECK(!EventsContain(accent, "\xc3"));
+  }
+  {  // an unset ${VAR} is rejected by key, never by name
+    const LoadResult r = Load(Full(), "graphics:\n  texture_quality: \"${NEVR_QUEST_TEST_UNSET_VAR_ZXQ}\"\n");
+    CHECK(r.config.textureQuality.level == tq::Level::kHigh && r.config.textureQuality.source != Source::kFile);
+    CHECK(EventsContain(r, "config file key=graphics.texture_quality rejected reason=unset_variable (default stays: high)"));
+    CHECK(!EventsContain(r, "value=${") && !EventsContain(r, "ZXQ=") && !EventsContain(r, "unknown_level"));
+  }
+  {  // a bad word does not disturb the other keys of the file
+    const LoadResult r = Load(Full(), "graphics:\n  texture_quality: bogus\ndiagnostics:\n  hardware_dump: true\n");
+    CHECK(r.config.requested.hwdump);
+    CHECK(r.config.textureQuality.level == tq::Level::kHigh);
+  }
+}
+
 int main() {
   DefaultsWithoutFile();
   NothingEmbeddedAndNoFileTurnsTheNetworkFeaturesOff();
@@ -636,6 +729,8 @@ int main() {
   SendPresenceToMetaFalseIsTheLocalPresencePath();
   HardwareDumpIsOnlyEverOnByTheDiagnosticsKey();
   UiEventProbeIsOnlyEverOnByTheDiagnosticsKeyAndNeedsSocial();
+  TextureQualityIsHighUnlessTheFileNamesAnotherLevel();
+  ATextureQualityThatIsNotALevelKeepsTheDefaultAndNamesTheWord();
   MalformedFileFallsBackToDefaults();
   ARejectedFileNeverEchoesWhatItHeld();
   AnUnknownKeyInsideAKnownSectionIsNotAnError();

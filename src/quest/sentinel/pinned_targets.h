@@ -43,6 +43,7 @@ inline constexpr const char* kGetMountedObbPathSymbol = "AStorageManager_getMoun
 inline constexpr const char* kAndroidMainSymbol = "android_main";
 inline constexpr const char* kFindMethodSymbol = "_ZN10NRadEngine10CSysModule10FindMethodEmPKc";
 inline constexpr const char* kGetDeviceExtensionsVulkanSymbol = "vrapi_GetDeviceExtensionsVulkan";
+inline constexpr const char* kGetSystemPropertyIntSymbol = "vrapi_GetSystemPropertyInt";
 inline constexpr const char* kEnablePageNodeEnterSymbol =
     "_ZN10NRadEngine8NRadGame25CR15UIPage2EnablePageNode5EnterERKNS0_29SR15UIPage2EnablePageNodeDataE";
 
@@ -134,6 +135,16 @@ using LibR15FindMethodThunk = CallbackThunk<LibR15FindMethodTag, FindMethodSig>;
 using VrapiExtensionsSig = std::int32_t(char* extension_names, std::uint32_t* extension_names_size);
 struct LibR15GetDeviceExtensionsVulkanTag {};
 using LibR15GetDeviceExtensionsVulkanThunk = CallbackThunk<LibR15GetDeviceExtensionsVulkanTag, VrapiExtensionsSig>;
+
+// VrApi.h: int vrapi_GetSystemPropertyInt(const ovrJava* java, ovrSystemProperty propType). Imported (value 0): JUMP_SLOT
+// 0x36fa728 (`readelf -rW` on the pinned image), the slot the hardware dump hooks too (docs/adr/0006-quest-hardware-dump.md).
+// CVR::RefreshRTSize (0x1a709b0) calls it with ids 5 and 6, the suggested eye texture width and height
+// (`bl` at 0x1a709f4 and 0x1a70a04), multiplies the results by CustomViewportScale and stores the pair; CVR::Resize
+// (0x1a70d0c) creates the swap chain from it once per process. `java` is never dereferenced here (an incomplete type).
+struct OvrJavaOpaque;
+using GetSystemPropertyIntSig = int(const OvrJavaOpaque* java, int property);
+struct LibR15GetSystemPropertyIntTag {};
+using LibR15GetSystemPropertyIntThunk = CallbackThunk<LibR15GetSystemPropertyIntTag, GetSystemPropertyIntSig>;
 
 // android_main(android_app*), defined in libr15 at 0xf784c4 and called by the native-activity glue's thread entry
 // through libr15's own PLT (`mov x0, x19; bl 0xf27bc0` at 0xf79a4c; the stub loads JUMP_SLOT 0x36eb4c8). The glue
@@ -389,6 +400,12 @@ inline GotTarget LibR15FindMethod() {
 // imported, value 0).
 inline GotTarget LibR15GetDeviceExtensionsVulkan() {
   return {kLibR15, kGetDeviceExtensionsVulkanSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36dd440ULL};
+}
+
+// libr15.so's slot for vrapi_GetSystemPropertyInt (JUMP_SLOT 0x36fa728, `readelf -rW` on the pinned image; imported,
+// value 0).
+inline GotTarget LibR15GetSystemPropertyInt() {
+  return {kLibR15, kGetSystemPropertyIntSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36fa728ULL};
 }
 
 // libpnsradmatchmaking.so's slot for the same function, defined in

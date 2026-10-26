@@ -20,6 +20,7 @@
 #include "obb_skip_hook.h"
 #include "permission_wait_hook.h"
 #include "process_end_hook.h"
+#include "texture_quality_hook.h"
 #include "toast_presenter.h"
 #include "vk_ext_window.h"
 #include "pinned_targets.h"
@@ -108,6 +109,14 @@ bool InstallPermissionWaitHook() noexcept {
 // The Vulkan extension window (#868): the device extensions libr15 requires stay inside the 128 entries it reads. A
 // refused install is logged by GotHook and leaves the game's calls intact.
 bool InstallVkExtWindowHook() noexcept { return nevr_quest::vk_window::Install(); }
+
+// The eye-buffer size libr15 creates its swap chain with (#943). A refused install is logged by GotHook and by the hook's
+// own line, and leaves the game's calls intact.
+bool RegisterTextureQualityCounters() noexcept { return nevr_quest::texture_quality::RegisterCounters(); }
+bool InstallTextureQualityHook(nevr_quest::texture_quality::Level level, bool fromConfig,
+                               bool countersRegistered) noexcept {
+    return nevr_quest::texture_quality::InstallIfCounted(level, fromConfig, countersRegistered);
+}
 
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
 // token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.

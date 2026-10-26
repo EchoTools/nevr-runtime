@@ -36,6 +36,7 @@ constexpr const char* kSocialFacadeKey = "social.facade";                      /
 constexpr const char* kSendPresenceToMetaKey = "social.send_presence_to_meta";  // Quest only (default true)
 constexpr const char* kHardwareDumpKey = "diagnostics.hardware_dump";          // Quest only (default false)
 constexpr const char* kUiEventProbeKey = "diagnostics.ui_event_probe";          // Quest only (default false)
+constexpr const char* kTextureQualityKey = "graphics.texture_quality";          // Quest only (default high)
 
 struct FeatureSpec {
   const char* name;
@@ -140,6 +141,42 @@ bool ReadBool(const nevr::NevrConfig& cfg, const char* key, bool fallback, LoadR
   return *value;
 }
 
+// How a rejected texture-quality value is named in the log: the word itself when it is short printable ASCII (a level is
+// a word, not a secret), else what is wrong with it.
+std::string DescribeRejectedWord(const std::string& text) {
+  constexpr std::size_t kMaxNamedBytes = 32;
+  if (text.empty()) return "(empty)";
+  if (text.size() > kMaxNamedBytes) return "(longer than 32 bytes)";
+  for (const char ch : text) {
+    const auto u = static_cast<unsigned char>(ch);
+    if (u <= 0x20 || u >= 0x7f) return "(not printable ASCII without spaces)";
+  }
+  return text;
+}
+
+// graphics.texture_quality: absent keeps the default (high); a word that is not a level keeps it too, with a warning
+// naming the key and the word (#943).
+void ReadTextureQuality(const nevr::NevrConfig& cfg, LoadResult& r) {
+  const std::string fallback = std::string("default stays: ") + texture_quality::LevelName(texture_quality::kDefaultLevel);
+  bool unsetBare = false;
+  const std::optional<std::string> text = cfg.GetString(kTextureQualityKey, &unsetBare);
+  if (!text) return;
+  if (unsetBare) {
+    Add(r, LogLevel::kWarn,
+        std::string("config file key=") + kTextureQualityKey + " rejected reason=unset_variable (" + fallback + ")");
+    return;
+  }
+  texture_quality::Level level = texture_quality::kDefaultLevel;
+  if (!texture_quality::ParseLevel(*text, &level)) {
+    Add(r, LogLevel::kWarn,
+        std::string("config file key=") + kTextureQualityKey + " rejected reason=unknown_level value=" +
+            DescribeRejectedWord(*text) + " (" + fallback +
+            "; allowed: stock, low, medium, high, very_high, ultra)");
+    return;
+  }
+  r.config.textureQuality = {level, Source::kFile};
+}
+
 // Reads every key from a loaded config. A throw (nevr_config's, or yaml-cpp's through it) propagates to ApplyFile.
 void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& path) {
   if (!cfg.UnsetBareVars().empty()) {
@@ -169,6 +206,7 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   want.hwdump = ReadBool(cfg, kHardwareDumpKey, false, r);
   want.uiEventProbe = ReadBool(cfg, kUiEventProbeKey, false, r);
   want.presenceLocal = !ReadBool(cfg, kSendPresenceToMetaKey, true, r);
+  ReadTextureQuality(cfg, r);
 }
 
 void Reject(LoadResult& r, const std::string& path, const std::string& reason) {
@@ -250,6 +288,10 @@ void ReportState(LoadResult& r) {
     Add(r, LogLevel::kInfo,
         std::string("config key=") + k.name + " source=" + SourceName((r.config.*k.slot).source));
   }
+  Add(r, LogLevel::kInfo,
+      std::string("config key=") + kTextureQualityKey + " quality=" +
+          texture_quality::LevelName(r.config.textureQuality.level) +
+          " source=" + TextureSourceName(r.config.textureQuality));
   for (const FeatureSpec& f : kFeatures) {
     Add(r, LogLevel::kInfo,
         std::string("feature=") + f.name + " requested=" + (r.config.requested.*f.flag ? "on" : "off") +
@@ -312,6 +354,8 @@ const char* SourceName(Source source) {
   }
   return "absent";
 }
+
+const char* TextureSourceName(const TextureChoice& choice) { return choice.source == Source::kFile ? "config" : "default"; }
 
 std::optional<std::string> ResolveQuestRedirect(const ResolvedConfig& config, const std::string& url,
                                            bool bridgeReady, unsigned bridgePort) {

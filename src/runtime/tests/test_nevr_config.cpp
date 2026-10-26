@@ -450,6 +450,16 @@ TEST(NevrConfig, AcceptsDiagnosticsSection) {
   EXPECT_FALSE(cfg.Empty());
 }
 
+// `graphics` is a top-level section (the Quest's texture quality is `graphics.texture_quality`, #943). The PC accepts it and
+// reads nothing from it, so one config.yaml can serve both builds; an unknown section is still refused.
+TEST(NevrConfig, AcceptsGraphicsSection) {
+  const auto cfg = nevr::NevrConfig::LoadFromString("graphics:\n  texture_quality: very_high\n");
+  ASSERT_TRUE(cfg.GetString("graphics.texture_quality").has_value());
+  EXPECT_EQ(*cfg.GetString("graphics.texture_quality"), "very_high");
+  EXPECT_FALSE(cfg.Empty());
+  EXPECT_THROW(nevr::NevrConfig::LoadFromString("graphic:\n  texture_quality: high\n"), nevr::NevrConfigError);
+}
+
 // A rejection carries a stable reason token, never the parser's text: that text echoes the file's own words
 // (a key, a value), which the Quest's sentinel log must not repeat.
 TEST(NevrConfig, ErrorsCarryAStableReasonToken) {

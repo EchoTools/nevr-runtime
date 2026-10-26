@@ -34,6 +34,11 @@
 //      InstallVkExtWindow            the device extensions libr15 requires stay inside the 128 entries it reads
 //                                    (#868): two libr15 slots (CSysModule::FindMethod, vrapi_GetDeviceExtensionsVulkan),
 //                                    on every launch, right after the permission-wait hook; no counters
+//      InstallTextureQuality         the eye-buffer size libr15 creates its swap chain with (#943): one libr15 slot
+//                                    (vrapi_GetSystemPropertyInt), on every launch, right after the Vulkan window hook and
+//                                    before the hardware dump (which then shares the slot); the level is the config's
+//                                    graphics.texture_quality, `high` when the configuration cannot be resolved; `stock`
+//                                    installs nothing. Its counters are registered with the others (step 3), unless `stock`.
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):
 //   token auth fails        -> the login prompt (token auth is what publishes it), bridge, login, social
@@ -45,6 +50,7 @@
 //   social counters fail    -> social is not installed
 //   prompt counters fail    -> the login-prompt hook is not installed
 //   obb counters fail       -> the OBB-mount skip is not installed
+//   texture counters fail   -> the texture-quality hook is not installed (not asked of `stock`)
 // "redirect-through-the-bridge" is the redirect when the bridge feature is effective: a redirect that
 // points the game at a loopback port nobody listens on, or straight at a TLS endpoint the game cannot
 // speak, is worse than leaving the game's own hosts.
@@ -78,12 +84,14 @@ enum class StepId : std::uint8_t {
   kRegisterSocialCounters,
   kRegisterLoginPromptCounters,
   kRegisterObbSkipCounters,
+  kRegisterTextureQualityCounters,
   kStartReporter,
   kInstallClockHook,
   kInstallObbSkip,
   kInstallProcessEnd,
   kInstallPermissionWait,
   kInstallVkExtWindow,
+  kInstallTextureQuality,
   kStartTokenAuth,
   kInstallLoginPrompt,
   kStartBridge,
@@ -125,6 +133,8 @@ class Steps {
   virtual bool RegisterLoginPromptCounters() = 0;
   // The OBB-mount skip's counters (#319), registered on every launch.
   virtual bool RegisterObbSkipCounters() = 0;
+  // The texture-quality hook's counters (#943), registered when the level is not `stock`.
+  virtual bool RegisterTextureQualityCounters() = 0;
   virtual bool StartReporter() = 0;
 
   virtual bool InstallClockHook() = 0;
@@ -138,6 +148,10 @@ class Steps {
   // The device extensions libr15 requires stay inside the 128 entries it reads (#868): two libr15 slots
   // (CSysModule::FindMethod, vrapi_GetDeviceExtensionsVulkan), on every launch.
   virtual bool InstallVkExtWindow() = 0;
+  // The eye-buffer size (#943): one libr15 slot, on every launch. `choice` is the level and where it came from;
+  // `countersRegistered` is the result of RegisterTextureQualityCounters (a `stock` level needs none). The step applies the
+  // hook's own rule (texture_quality::InstallIfCounted): without its counters it logs the skip and installs nothing.
+  virtual bool InstallTextureQuality(const nevr_quest::TextureChoice& choice, bool countersRegistered) = 0;
   virtual bool StartTokenAuth() = 0;
   // `countersRegistered`: the result of RegisterLoginPromptCounters. The step applies the hook's own rule
   // (login_prompt::InstallIfCounted): without its counters it logs the skip and installs nothing.

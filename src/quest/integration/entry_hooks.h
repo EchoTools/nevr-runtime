@@ -3,6 +3,8 @@
 // functions; production_steps.cpp defines RunSentinelConstructor and calls the clock functions as steps.
 #pragma once
 
+#include "quest/sentinel/texture_quality.h"
+
 namespace nevr_quest::integration {
 
 // Defined in entry.cpp.
@@ -18,6 +20,14 @@ bool InstallLoginPromptHook(bool countersRegistered) noexcept;  // true when all
 bool RegisterObbSkipCounters() noexcept;  // 4 counters
 // obb_skip::InstallIfCounted(countersRegistered): true when both slots hold their thunks.
 bool InstallObbSkipHook(bool countersRegistered) noexcept;
+
+// The #943 texture-quality hook (sentinel/texture_quality_hook.h), through this seam for the same reason: the eye-buffer
+// size libr15 creates its swap chain with. Its counters are registered when the level is not `stock`.
+bool RegisterTextureQualityCounters() noexcept;  // 4 counters
+// texture_quality::InstallIfCounted(level, fromConfig, countersRegistered): true when the slot holds the thunk, or `stock`
+// asked for none.
+bool InstallTextureQualityHook(nevr_quest::texture_quality::Level level, bool fromConfig,
+                               bool countersRegistered) noexcept;
 
 // The #621 process-end hook (sentinel/process_end_hook.h), through this seam for the same reason: the process ends
 // when the game's android_main returns. No counters. `SetProcessEndCallback` registers what runs on the hook's
