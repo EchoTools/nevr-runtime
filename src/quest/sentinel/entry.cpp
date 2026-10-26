@@ -21,6 +21,7 @@
 #include "permission_wait_hook.h"
 #include "process_end_hook.h"
 #include "texture_quality_hook.h"
+#include "resource_request_hook.h"
 #include "toast_presenter.h"
 #include "vk_ext_window.h"
 #include "pinned_targets.h"
@@ -118,6 +119,14 @@ bool RegisterTextureQualityCounters() noexcept { return nevr_quest::texture_qual
 bool InstallTextureQualityHook(nevr_quest::texture_quality::Level level, bool fromConfig,
                                bool countersRegistered) noexcept {
     return nevr_quest::texture_quality::InstallIfCounted(level, fromConfig, countersRegistered);
+}
+
+// The log-only resource request hook (#871): development builds only. A refused install is logged by GotHook and leaves the
+// game's call intact.
+bool ResourceRequestLogEnabled() noexcept { return nevr_build::kIsDev; }
+bool RegisterResourceRequestCounters() noexcept { return nevr_quest::resource_request::RegisterCounters(); }
+bool InstallResourceRequestLogHook(bool countersRegistered) noexcept {
+    return nevr_quest::resource_request::InstallIfCounted(countersRegistered);
 }
 
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until

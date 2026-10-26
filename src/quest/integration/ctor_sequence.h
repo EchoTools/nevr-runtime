@@ -34,8 +34,13 @@
 //      InstallVkExtWindow            the device extensions libr15 requires stay inside the 128 entries it reads
 //                                    (#868): two libr15 slots (CSysModule::FindMethod, vrapi_GetDeviceExtensionsVulkan),
 //                                    on every launch, right after the permission-wait hook; no counters
+//      InstallResourceRequestLog     the log-only resource request hook (#871): one libr15 slot
+//                                    (CResourceManager::FillResourceFileRequest), in a development build only
+//                                    (Steps::ResourceRequestLogWanted; a release build skips it and registers no
+//                                    counters), right after the Vulkan extension window. Its counters are registered
+//                                    with the others (step 3).
 //      InstallTextureQuality         the eye-buffer size libr15 creates its swap chain with (#943): one libr15 slot
-//                                    (vrapi_GetSystemPropertyInt), on every launch, right after the Vulkan window hook and
+//                                    (vrapi_GetSystemPropertyInt), on every launch, right after the Vulkan window hook (and the resource request log, when wanted) and
 //                                    before the hardware dump (which then shares the slot); the level is the config's
 //                                    graphics.texture_quality, `stock` when the configuration cannot be resolved; `stock`
 //                                    installs nothing. Its counters are registered with the others (step 3), unless `stock`.
@@ -50,6 +55,7 @@
 //   social counters fail    -> social is not installed
 //   prompt counters fail    -> the login-prompt hook is not installed
 //   obb counters fail       -> the OBB-mount skip is not installed
+//   resource request counters fail -> the resource request log is not installed
 //   texture counters fail   -> the texture-quality hook is not installed (not asked of `stock`)
 // "redirect-through-the-bridge" is the redirect when the bridge feature is effective: a redirect that
 // points the game at a loopback port nobody listens on, or straight at a TLS endpoint the game cannot
@@ -84,6 +90,7 @@ enum class StepId : std::uint8_t {
   kRegisterSocialCounters,
   kRegisterLoginPromptCounters,
   kRegisterObbSkipCounters,
+  kRegisterResourceRequestCounters,
   kRegisterTextureQualityCounters,
   kStartReporter,
   kInstallClockHook,
@@ -91,6 +98,7 @@ enum class StepId : std::uint8_t {
   kInstallProcessEnd,
   kInstallPermissionWait,
   kInstallVkExtWindow,
+  kInstallResourceRequestLog,
   kInstallTextureQuality,
   kStartTokenAuth,
   kInstallLoginPrompt,
@@ -133,6 +141,11 @@ class Steps {
   virtual bool RegisterLoginPromptCounters() = 0;
   // The OBB-mount skip's counters (#319), registered on every launch.
   virtual bool RegisterObbSkipCounters() = 0;
+  // Whether the log-only resource request hook (#871) is wanted: a development build (nevr_build::kIsDev). A release build
+  // registers no counters for it and installs nothing.
+  virtual bool ResourceRequestLogWanted() = 0;
+  // The resource request log's counters (#871), registered when ResourceRequestLogWanted.
+  virtual bool RegisterResourceRequestCounters() = 0;
   // The texture-quality hook's counters (#943), registered when the level is not `stock`.
   virtual bool RegisterTextureQualityCounters() = 0;
   virtual bool StartReporter() = 0;
@@ -148,6 +161,9 @@ class Steps {
   // The device extensions libr15 requires stay inside the 128 entries it reads (#868): two libr15 slots
   // (CSysModule::FindMethod, vrapi_GetDeviceExtensionsVulkan), on every launch.
   virtual bool InstallVkExtWindow() = 0;
+  // `countersRegistered`: the result of RegisterResourceRequestCounters (the hook's own rule: without its counters it logs the
+  // skip and installs nothing). True when the FillResourceFileRequest slot holds the thunk.
+  virtual bool InstallResourceRequestLog(bool countersRegistered) = 0;
   // The eye-buffer size (#943): one libr15 slot, on every launch. `choice` is the level and where it came from;
   // `countersRegistered` is the result of RegisterTextureQualityCounters (a `stock` level needs none). The step applies the
   // hook's own rule (texture_quality::InstallIfCounted): without its counters it logs the skip and installs nothing.
