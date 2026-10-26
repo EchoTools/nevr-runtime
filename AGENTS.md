@@ -14,6 +14,11 @@ when, they appear in all capitals, as shown here.
   `perf`, `test`, `build`, `ci`, `chore`, `revert`. A breaking change is marked with `!` before the colon or a
   `BREAKING CHANGE:` footer. Per spec item 15, types are case-insensitive. `.github/workflows/pr-title-check.yml`
   (`tools/check_pr_title.py`) checks the PR title.
+- **Credit the people whose work we integrate, every time.** A commit that draws on a person's code, patch, research
+  or findings carries a `Co-Authored-By` trailer for that person, alongside the house trailers: their GitHub noreply
+  address, `<id>+<login>@users.noreply.github.com` (`gh api users/<login>` gives the id). Someone with no GitHub
+  account is credited by name in the commit body and in the README thanks. A squash merge keeps those trailers in the
+  merge commit message.
 - **Versions** follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html). Tags stay `vX.Y.Z`.
 - **Requirement words** (MUST, SHALL, SHOULD, MAY and their negations) follow
   [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) as clarified by
@@ -956,6 +961,8 @@ When something fails, the first act is reading the failing program's **own** log
 - **Never modify `src/legacy/`** — frozen v1 code, self-contained by design.
 - **Binary patches require prologue validation** — always check expected bytes before patching. Never blind-write.
 - **Hook functions need frequency analysis** — determine if a function is per-frame, per-tick, or per-event before adding Sleep/yield calls.
+- **Nothing from another project's patch is taken verbatim.** Before building an equivalent, reconstruct and analyze the patched code in ReVault: every function the patch touches, its callers, and what each byte change does; write the reconstructions back into ReVault with grades; design our implementation from that understanding, to this repo's standard (GOT hooks or checked patches, logs, failing-first tests, a prediction). Their address list says where to look; it is not the design.
+- **Prefer a hook to a byte patch.** Reconstruct the function in ReVault, then replace or wrap it with a hook whose code says, in readable C++, what the original did and what we change. A byte patch or NOP is the exception, used where a hook would cost something measurable (a per-frame hot path, a call too frequent to detour); the PR names the case, the reason and, where possible, a number. A checked patch (`nevr_checked_patch`) stays the form for those exceptions.
 
 ## Dependencies
 
@@ -971,8 +978,8 @@ When something fails, the first act is reading the failing program's **own** log
 - **Defects.** Track defects in GitHub issues.
 - **Commit identity.** Author `Andrew Bates <a@sprock.io>`
   (`--author="Andrew Bates <a@sprock.io>"`), unsigned (`--no-gpg-sign`), with a
-  single `Co-Authored-By: <agent name> <agents@sprock.io>` trailer, a
-  conventional prefix, and one logical change per commit. Exception: work by
+  single house `Co-Authored-By: <agent name> <agents@sprock.io>` trailer (plus the credit
+  trailers above), a conventional prefix, and one logical change per commit. Exception: work by
   Teth, Spritz or Glow Sprock is authored by that sister, with
   `Co-Authored-By: Andrew Bates <a@sprock.io>`. You **SHALL** verify after each
   commit: `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
