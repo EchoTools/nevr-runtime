@@ -889,4 +889,13 @@ TEST(FrameStatsDecisions, CapturingAPerfResultPushesTheEntriesOldestFirstAndCoun
   fs::CapturePerf(outOfRange.data(), ring, rejected);
   EXPECT_EQ(2u, rejected.load());
   EXPECT_FALSE(ring.Pop(s));
+
+  auto twoBad = MakeStats(3);
+  std::memcpy(twoBad.data() + 0x14, &nan, sizeof(nan));         // entry 0's cpu time
+  std::memcpy(twoBad.data() + 2 * 0x48 + 0x18, &nan, sizeof(nan));  // entry 2's gpu time
+  fs::CapturePerf(twoBad.data(), ring, rejected);
+  EXPECT_EQ(4u, rejected.load());  // two more, counted by how many, not once per call
+  ASSERT_TRUE(ring.Pop(s));
+  EXPECT_EQ(101, s.appDropped);  // only entry 1 survived
+  EXPECT_FALSE(ring.Pop(s));
 }
