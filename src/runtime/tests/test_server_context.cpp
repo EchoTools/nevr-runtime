@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace {
@@ -564,4 +565,142 @@ TEST(ServerContextEntrants, TryGetEntrantSessionGuidRefusesAnAcceptedSlotWithAZe
   out.Data1 = 0xAA;
   EXPECT_FALSE(context.TryGetEntrantSessionGuid(0, &out));
   EXPECT_EQ(out.Data1, 0xAAU);
+}
+
+// Lobby settings record (#905): StartSession and EndSession drop the record of the last relayed document and
+// report what they dropped, so a session that never receives one is visible at its end.
+namespace {
+
+struct ClearedCall {
+  nevr_game_server::LobbySettingsRecord cleared;
+  std::string reason;
+  std::string sessionId;
+};
+
+nevr_game_server::LobbySettingsRecord MakeSettingsRecord(const std::string& session) {
+  nevr_game_server::LobbySettingsRecord record;
+  record.present = true;
+  record.wireBytes = 321;
+  record.jsonBytes = 654;
+  record.sessionId = session;
+  return record;
+}
+
+// A registered context with a session id set the way OnTcpMsgProtobuf sets it before StartSession.
+struct RegisteredContext {
+  EchoVR::Lobby lobby{};
+  nevr_game_server::ServerContext context;
+  std::vector<ClearedCall> calls;
+
+  RegisteredContext() {
+    context.Initialize(&lobby, nullptr);
+    context.FinalizeInitialization();
+    EXPECT_TRUE(context.SetRegistered(true));
+    context.SetLobbySettingsClearedHandler(
+        [this](const nevr_game_server::LobbySettingsRecord& cleared, const char* reason, const std::string& session) {
+          calls.push_back({cleared, reason, session});
+        });
+  }
+
+  void SetSessionId(const std::string& id) {
+    nevr_game_server::SessionState state = context.GetSessionState();
+    state.lobbySessionId = id;
+    context.UpdateSessionState(state);
+  }
+};
+
+}  // namespace
+
+TEST(ServerContextLobbySettings, RecordIsReadableUntilASessionBoundary) {
+  RegisteredContext fixture;
+  EXPECT_FALSE(fixture.context.GetLobbySettings().present);
+
+  fixture.context.RecordLobbySettings(MakeSettingsRecord("s1"));
+
+  const auto record = fixture.context.GetLobbySettings();
+  EXPECT_TRUE(record.present);
+  EXPECT_EQ(record.wireBytes, 321U);
+  EXPECT_EQ(record.jsonBytes, 654U);
+  EXPECT_EQ(record.sessionId, "s1");
+}
+
+TEST(ServerContextLobbySettings, StartSessionClearsTheRecordAndReportsIt) {
+  RegisteredContext fixture;
+  fixture.context.RecordLobbySettings(MakeSettingsRecord("old"));
+  fixture.SetSessionId("new");
+
+  ASSERT_TRUE(fixture.context.StartSession());
+
+  EXPECT_FALSE(fixture.context.GetLobbySettings().present);
+  ASSERT_EQ(fixture.calls.size(), 1U);
+  EXPECT_EQ(fixture.calls[0].reason, "session_start");
+  EXPECT_EQ(fixture.calls[0].sessionId, "new");
+  EXPECT_TRUE(fixture.calls[0].cleared.present);
+  EXPECT_EQ(fixture.calls[0].cleared.sessionId, "old");
+}
+
+TEST(ServerContextLobbySettings, EndSessionClearsTheRecordAndReportsItWithTheEndingSessionId) {
+  RegisteredContext fixture;
+  fixture.SetSessionId("sess-end");
+  ASSERT_TRUE(fixture.context.StartSession());
+  fixture.calls.clear();
+  fixture.context.RecordLobbySettings(MakeSettingsRecord("sess-end"));
+
+  ASSERT_TRUE(fixture.context.EndSession());
+
+  EXPECT_FALSE(fixture.context.GetLobbySettings().present);
+  ASSERT_EQ(fixture.calls.size(), 1U);
+  EXPECT_EQ(fixture.calls[0].reason, "session_end");
+  EXPECT_EQ(fixture.calls[0].sessionId, "sess-end");  // EndSession clears lobbySessionId; the report keeps it
+  EXPECT_TRUE(fixture.calls[0].cleared.present);
+}
+
+TEST(ServerContextLobbySettings, ASessionThatNeverReceivedSettingsReportsAnEmptyRecord) {
+  RegisteredContext fixture;
+  fixture.SetSessionId("quiet");
+  ASSERT_TRUE(fixture.context.StartSession());
+  fixture.calls.clear();
+
+  ASSERT_TRUE(fixture.context.EndSession());
+
+  ASSERT_EQ(fixture.calls.size(), 1U);
+  EXPECT_FALSE(fixture.calls[0].cleared.present);
+  EXPECT_EQ(fixture.calls[0].sessionId, "quiet");
+}
+
+TEST(ServerContextLobbySettings, ATransitionThatDoesNotHappenLeavesTheRecordAlone) {
+  EchoVR::Lobby lobby{};
+  nevr_game_server::ServerContext context;
+  context.Initialize(&lobby, nullptr);
+  context.FinalizeInitialization();  // Initialized, not Registered
+  int calls = 0;
+  context.SetLobbySettingsClearedHandler(
+      [&calls](const nevr_game_server::LobbySettingsRecord&, const char*, const std::string&) { ++calls; });
+  context.RecordLobbySettings(MakeSettingsRecord("s"));
+
+  EXPECT_FALSE(context.StartSession());
+  EXPECT_FALSE(context.EndSession());
+
+  EXPECT_TRUE(context.GetLobbySettings().present);
+  EXPECT_EQ(calls, 0);
+}
+
+TEST(ServerContextLobbySettings, TheHandlerRunsWithNoContextLockHeld) {
+  // The handler logs and may read the context; a lock held across the call would deadlock this test.
+  RegisteredContext fixture;
+  fixture.SetSessionId("s");
+  nevr_game_server::ServerState seen = nevr_game_server::ServerState::Uninitialized;
+  std::string seenSession;
+  fixture.context.SetLobbySettingsClearedHandler(
+      [&](const nevr_game_server::LobbySettingsRecord&, const char*, const std::string&) {
+        seen = fixture.context.GetState();
+        seenSession = fixture.context.GetSessionState().lobbySessionId;
+        fixture.context.RecordLobbySettings(MakeSettingsRecord("from-handler"));
+      });
+
+  ASSERT_TRUE(fixture.context.StartSession());
+
+  EXPECT_EQ(seen, nevr_game_server::ServerState::InSession);
+  EXPECT_EQ(seenSession, "s");
+  EXPECT_TRUE(fixture.context.GetLobbySettings().present);  // the handler's own write survives
 }

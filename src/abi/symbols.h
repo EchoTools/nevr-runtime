@@ -268,8 +268,10 @@ constexpr SymbolId LobbyRegistrationSuccess = -5369924845641990433;
 constexpr SymbolId LobbyRegistrationFailure = -5373034290044534839;
 constexpr SymbolId LobbySessionSuccessV5 = 0x6d4de3650ee3110f;
 
-// Game client messages (received from game in client mode)
-constexpr SymbolId GameClientMsg1 = 0x5b71b22a4483bda5;
+// Settings documents the game service sends over the TCP broadcaster (received from game in client mode).
+// CSymbol64("SNSLobbySettingsResponse"); the local-event form of the same message is Symbols::LobbySettingsResponse.
+// The dedicated server reads its ServerDB socket itself and relays this one (server/lobby_settings_relay.h, #905).
+constexpr SymbolId LobbySettingsResponse = 0x5b71b22a4483bda5;
 constexpr SymbolId GameClientMsg2 = 0xa88cb5d166cc2ca;
 constexpr SymbolId GameClientMsg3 = 0xa7a9e5a70b2429db;
 

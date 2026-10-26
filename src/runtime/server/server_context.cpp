@@ -1,6 +1,7 @@
 #include "runtime/server/server_context.h"
 
 #include <cstring>
+#include <utility>
 
 namespace nevr_game_server {
 
@@ -99,11 +100,20 @@ bool ServerContext::StartSession() {
 
   m_state = ServerState::InSession;
 
+  LobbySettingsRecord cleared;
+  std::string sessionId;
+  LobbySettingsClearedHandler handler;
   {
     std::lock_guard sessionLock(m_sessionMutex);
     m_sessionState.active = true;
+    cleared = std::exchange(m_lobbySettings, LobbySettingsRecord{});
+    sessionId = m_sessionState.lobbySessionId;
+    handler = m_lobbySettingsCleared;
   }
 
+  // The handler logs and may call back into the context: run it with no lock held (#905).
+  lock.unlock();
+  if (handler) handler(cleared, "session_start", sessionId);
   return true;
 }
 
@@ -116,12 +126,20 @@ bool ServerContext::EndSession() {
 
   m_state = ServerState::Registered;
 
+  LobbySettingsRecord cleared;
+  std::string sessionId;
+  LobbySettingsClearedHandler handler;
   {
     std::lock_guard sessionLock(m_sessionMutex);
     m_sessionState.active = false;
+    sessionId = std::move(m_sessionState.lobbySessionId);
     m_sessionState.lobbySessionId.clear();
+    cleared = std::exchange(m_lobbySettings, LobbySettingsRecord{});
+    handler = m_lobbySettingsCleared;
   }
 
+  lock.unlock();
+  if (handler) handler(cleared, "session_end", sessionId);
   return true;
 }
 
@@ -307,6 +325,21 @@ SessionState ServerContext::GetSessionState() const {
 void ServerContext::UpdateSessionState(const SessionState& state) {
   std::lock_guard lock(m_sessionMutex);
   m_sessionState = state;
+}
+
+void ServerContext::SetLobbySettingsClearedHandler(LobbySettingsClearedHandler handler) {
+  std::lock_guard lock(m_sessionMutex);
+  m_lobbySettingsCleared = std::move(handler);
+}
+
+void ServerContext::RecordLobbySettings(const LobbySettingsRecord& record) {
+  std::lock_guard lock(m_sessionMutex);
+  m_lobbySettings = record;
+}
+
+LobbySettingsRecord ServerContext::GetLobbySettings() const {
+  std::lock_guard lock(m_sessionMutex);
+  return m_lobbySettings;
 }
 
 CallbackRegistry& ServerContext::GetCallbackRegistry() {

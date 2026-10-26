@@ -80,6 +80,7 @@ set(PATCHES_SOURCES
     "server/gameserver_serverdb.cpp"
     "server/registration_envelope.cpp"
     "server/messages.cpp"
+    "server/lobby_settings_relay.cpp"
     "server/server_context.cpp"
     "server/websocket_client.cpp"
     "server/websocket_frame.cpp"
@@ -181,6 +182,7 @@ set(PATCHES_HEADERS
     "server/bearer_reconnect_auth.h"
     "server/serialized_mint.h"
     "server/messages.h"
+    "server/lobby_settings_relay.h"
     "server/upnp.h"
     "server/constants.h"
     "server/event_ring_buffer.h"
@@ -212,7 +214,8 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(miniupnpc CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)  # the friend-name lookup decodes the profile reply (compat/social_names.cpp)
 
-target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzstd CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 nevr_platform_compat nevr_token_auth ole32 crypt32 advapi32)
+find_package(ZLIB REQUIRED)  # server/lobby_settings_relay.cpp inflates the game service's lobby settings frame (#905)
+target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzstd ZLIB::ZLIB CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 nevr_platform_compat nevr_token_auth ole32 crypt32 advapi32)
 
 # yaml-cpp backs src/core/nevr_config (compiled into nevr_core as an archive with
 # unresolved yaml symbols). The DLL is where those symbols get resolved — this is
@@ -245,7 +248,7 @@ set_source_files_properties(ext/plugin_load_plan.cpp PROPERTIES SKIP_PRECOMPILE_
 set_source_files_properties(ext/plugin_manifest.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # #432: asset_registry.cpp builds the login's nevr_assets array with nlohmann-json; same arrangement.
 set_source_files_properties(patch/asset_registry.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-set_source_files_properties(log/url_diagnostics.cpp server/bearer_reconnect_auth.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/main_thread_handoff.cpp server/serverdb_uri.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/gameserver_callbacks.cpp server/gameserver_telemetry.cpp server/gameserver_serverdb.cpp server/registration_envelope.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(log/url_diagnostics.cpp server/bearer_reconnect_auth.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/main_thread_handoff.cpp server/serverdb_uri.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/gameserver_callbacks.cpp server/gameserver_telemetry.cpp server/gameserver_serverdb.cpp server/registration_envelope.cpp server/messages.cpp server/lobby_settings_relay.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # ws_bridge.cpp has no C-style casts (CPP-MINGW-ADDENDUM hard stop); keep it that way at compile time.
 # The property is directory-scoped, so the test target that compiles the same file gets it too.
@@ -1444,12 +1447,16 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json nevr_token_auth_test_hooks)
     gtest_discover_tests(test_token_auth DISCOVERY_MODE PRE_TEST)
 
-    add_executable(test_messages tests/test_messages.cpp server/messages.cpp server/session_success_dispatch.cpp)
-    set_source_files_properties(tests/test_messages.cpp server/messages.cpp server/session_success_dispatch.cpp
+    # test_lobby_settings_relay.cpp (#905, server/lobby_settings_relay.cpp) rides in this executable so the existing
+    # `just test-auth-unit` loop runs it with no recipe change.
+    add_executable(test_messages tests/test_messages.cpp tests/test_lobby_settings_relay.cpp server/messages.cpp
+      server/session_success_dispatch.cpp server/lobby_settings_relay.cpp)
+    set_source_files_properties(tests/test_messages.cpp tests/test_lobby_settings_relay.cpp server/messages.cpp
+      server/session_success_dispatch.cpp server/lobby_settings_relay.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_messages PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_messages PRIVATE
-      GTest::gtest GTest::gtest_main nevr_abi nevr_api ws2_32)
+      GTest::gtest GTest::gtest_main nevr_abi nevr_api nlohmann_json::nlohmann_json ZLIB::ZLIB ws2_32)
     gtest_discover_tests(test_messages DISCOVERY_MODE PRE_TEST)
 
     # test_plugin_logger.cpp (#34, header-only plugins/common/include/plugin_logger.h) and
