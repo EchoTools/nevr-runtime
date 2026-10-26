@@ -55,6 +55,9 @@ struct FakeSteps final : Steps {
   std::vector<std::string> throwing;
   bool loginArg = false, mmArg = false;
   bool dlopenArgsSeen = false;
+  bool devBuild = false;  // nevr_build::kIsDev: the log-only resource request hook (#871) is for development builds
+  bool devQueryThrows = false;
+  int devAsked = 0;
 
   bool Fails(const char* name) const {
     for (const std::string& f : failing) if (f == name) return true;
@@ -82,12 +85,19 @@ struct FakeSteps final : Steps {
   bool RegisterSocialCounters() override { return Step("reg_social"); }
   bool RegisterLoginPromptCounters() override { return Step("reg_prompt"); }
   bool RegisterObbSkipCounters() override { return Step("reg_obb"); }
+  bool ResourceRequestLogWanted() override {
+    ++devAsked;
+    if (devQueryThrows) throw std::runtime_error("injected");
+    return devBuild;
+  }
+  bool RegisterResourceRequestCounters() override { return Step("reg_resource"); }
   bool StartReporter() override { return Step("reporter"); }
   bool InstallClockHook() override { return Step("clock"); }
   bool InstallObbSkip(bool counted) override { return Step(counted ? "obb" : "obb_uncounted"); }
   bool InstallProcessEnd() override { return Step("process_end"); }
   bool InstallPermissionWait() override { return Step("permission_wait"); }
   bool InstallVkExtWindow() override { return Step("vk_ext_window"); }
+  bool InstallResourceRequestLog(bool counted) override { return Step(counted ? "resource" : "resource_uncounted"); }
   bool StartTokenAuth() override { return Step("token"); }
   bool InstallLoginPrompt(bool counted) override { return Step(counted ? "prompt" : "prompt_uncounted"); }
   bool StartBridge() override { return Step("bridge"); }
@@ -136,10 +146,11 @@ void TestEverythingOffInstallsOnlyTheProofHookAndTheObbSkip() {
 void TestFullStackOrder() {
   FakeSteps s = FakeSteps::With(true, true, true, true);
   s.config.effective.hwdump = true;
+  s.devBuild = true;
   const ConstructorReport r = RunConstructorSequence(s);
   const std::vector<std::string> want = {"arm",       "config",     "reg_clock",  "reg_redirect", "reg_dlopen",
-                                         "reg_login", "reg_social", "reg_prompt", "reg_obb",      "reporter",
-                                         "clock",     "obb", "process_end", "permission_wait", "vk_ext_window",        "token",      "prompt",       "bridge",
+                                         "reg_login", "reg_social", "reg_prompt", "reg_obb",      "reg_resource", "reporter",
+                                         "clock",     "obb", "process_end", "permission_wait", "vk_ext_window", "resource",       "token",      "prompt",       "bridge",
                                          "redirect",  "social",     "dlopen",     "hwdump"};
   QCHECK(s.calls == want);
   QCHECK(s.loginArg && s.mmArg);
@@ -160,6 +171,7 @@ void TestHwDumpIsIndependentAndContained() {
   for (const char* mode : {"fail", "throw"}) {
     FakeSteps s = FakeSteps::With(true, true, true, true);
     s.config.effective.hwdump = true;
+    s.devBuild = true;  // a release build skips the resource request log (#871), and a skip is not kOk
     if (std::strcmp(mode, "fail") == 0) s.failing = {"hwdump"}; else s.throwing = {"hwdump"};
     const ConstructorReport r = RunConstructorSequence(s);
     for (int i = 0; i < static_cast<int>(StepId::kInstallHwDump); ++i) QCHECK(r.steps[i].state == StepState::kOk);
@@ -229,6 +241,79 @@ void TestVkExtWindowIsUnconditionalIndependentAndContained() {
     const ConstructorReport r = RunConstructorSequence(s);
     QCHECK(r.at(StepId::kInstallVkExtWindow).state != StepState::kOk);
     QCHECK(s.Ran("token") && s.Ran("bridge") && s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen"));
+  }
+}
+
+// The log-only resource request hook (#871) is for development builds: a release build skips both its counter step and its
+// install step with the same reason and the sequence is the one it was; a development build registers its counters before the
+// single StartReporter and installs it right after the Vulkan extension window, before token auth; and the hook is independent
+// of every feature, of the other hooks, and contained when it fails, throws or has its counters refused.
+void TestResourceRequestLogIsDevelopmentOnlyOrderedAndContained() {
+  {  // release: nothing runs, both steps say why, and the other steps are exactly as before
+    FakeSteps s = FakeSteps::With(false, false, false, false);
+    const ConstructorReport r = RunConstructorSequence(s);
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window"};
+    QCHECK(s.calls == want);
+    QCHECK(s.devAsked == 1);
+    QCHECK(r.at(StepId::kRegisterResourceRequestCounters).state == StepState::kSkipped);
+    QCHECK(std::strcmp(r.at(StepId::kRegisterResourceRequestCounters).reason, "release_build") == 0);
+    QCHECK(r.at(StepId::kInstallResourceRequestLog).state == StepState::kSkipped);
+    QCHECK(std::strcmp(r.at(StepId::kInstallResourceRequestLog).reason, "release_build") == 0);
+    QCHECK(std::strcmp(StepName(StepId::kRegisterResourceRequestCounters), "register_resource_request_counters") == 0);
+    QCHECK(std::strcmp(StepName(StepId::kInstallResourceRequestLog), "install_resource_request_log") == 0);
+  }
+  {  // development, every feature off: counters before the reporter, install right after the Vulkan window
+    FakeSteps s = FakeSteps::With(false, false, false, false);
+    s.devBuild = true;
+    const ConstructorReport r = RunConstructorSequence(s);
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "resource"};
+    QCHECK(s.calls == want);
+    QCHECK(r.at(StepId::kRegisterResourceRequestCounters).state == StepState::kOk);
+    QCHECK(r.at(StepId::kInstallResourceRequestLog).state == StepState::kOk);
+    QCHECK(s.Index("reg_resource") < s.Index("reporter"));
+    QCHECK(s.Index("resource") == s.Index("vk_ext_window") + 1);
+  }
+  {  // before token auth, which a configuration with the network features does run
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.devBuild = true;
+    RunConstructorSequence(s);
+    QCHECK(s.Index("resource") >= 0 && s.Index("resource") < s.Index("token"));
+  }
+  {  // the configuration cannot be resolved and other hooks fail: still installed
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.devBuild = true;
+    s.failing = {"config", "vk_ext_window", "obb"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallResourceRequestLog).state == StepState::kOk);
+    QCHECK(s.Ran("resource"));
+  }
+  {  // its counters are refused: the hook is told so (and logs that it installs nothing), the step is skipped, nothing else changes
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.devBuild = true;
+    s.failing = {"reg_resource"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kRegisterResourceRequestCounters).state == StepState::kFailed);
+    QCHECK(r.at(StepId::kInstallResourceRequestLog).state == StepState::kSkipped);
+    QCHECK(std::strcmp(r.at(StepId::kInstallResourceRequestLog).reason, "counters_refused") == 0);
+    QCHECK(s.Ran("resource_uncounted") && !s.Ran("resource"));
+    QCHECK(s.Ran("reporter") && s.Ran("token") && s.Ran("bridge") && s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen"));
+  }
+  for (const char* mode : {"fail", "throw"}) {  // the install fails or throws: every other step runs
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.devBuild = true;
+    if (std::strcmp(mode, "fail") == 0) s.failing = {"resource"}; else s.throwing = {"resource"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallResourceRequestLog).state != StepState::kOk);
+    QCHECK(s.Ran("token") && s.Ran("bridge") && s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen"));
+  }
+  {  // the development question cannot be answered: the hook is not wanted, and the rest runs
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.devBuild = true;
+    s.devQueryThrows = true;
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(!s.Ran("reg_resource") && !s.Ran("resource"));
+    QCHECK(r.at(StepId::kInstallResourceRequestLog).state == StepState::kSkipped);
+    QCHECK(s.Ran("reporter") && s.Ran("dlopen"));
   }
 }
 
@@ -1160,6 +1245,7 @@ int main() {
   TestProcessEndIsUnconditionalIndependentAndContained();
   TestPermissionWaitIsUnconditionalIndependentAndContained();
   TestVkExtWindowIsUnconditionalIndependentAndContained();
+  TestResourceRequestLogIsDevelopmentOnlyOrderedAndContained();
   TestCountersBeforeTheSingleReporterStart();
   TestCrashReporterAndConfigComeFirst();
   TestFeatureGating();
