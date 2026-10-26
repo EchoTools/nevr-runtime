@@ -69,7 +69,7 @@ from pathlib import Path
 INSTALLER_VERSION_CODE = 4987570
 # The last published release's version, pinned here because a build with no git cannot ask (tools/tests pins it to the
 # repository's newest release tag). A version below its major is refused: with no git the build reports 1.0.0
-# (cmake/set_project_version_from_git.cmake), which is a well-formed release version whose code, 100009999, is far
+# (cmake/set_project_version_from_git.cmake), which is a well-formed release version whose code, 10,000,999, is far
 # below every published build's. Every code from major 5 up is at least 50,000,000, above INSTALLER_VERSION_CODE.
 LAST_RELEASE = "5.6.0"
 MIN_MAJOR = int(LAST_RELEASE.split(".")[0])

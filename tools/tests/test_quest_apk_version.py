@@ -1,7 +1,7 @@
 """tools/quest_apk_version.py: the versionCode numbering rule and the strict manifest reader and writer (#923).
 
-The expected numbers are written out here by hand from the rule (major*10^8 + minor*10^6 + patch*10^4 + slot,
-slot = dev distance or 9999 for a release), not computed by the tool. The manifests are built by
+The expected numbers are written out here by hand from the rule (major*10^7 + minor*10^5 + patch*10^3 + slot,
+slot = dev distance 0..998, or 999 for a release), not computed by the tool. The manifests are built by
 axml_fixtures.py; the real store APK's manifest (when the file is present) is parsed too, so a builder that
 mirrors a misreading of the format is caught, and aapt2, a reader that is not ours, confirms every write.
 """
