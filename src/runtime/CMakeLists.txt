@@ -17,6 +17,7 @@ set(NEVR_HOST_UNITS
     "host/host_entry.cpp"
     "host/host_identity.cpp"
     "host/minidmp_sender_exports.cpp"
+    "host/runtime_exports.cpp"
     "host/runtime_load.cpp"
     "host/runtime_rendezvous.cpp"
     "lifecycle/game_image_guard.cpp"
@@ -379,7 +380,6 @@ endif()
 add_library(nevr_host SHARED
   ${NEVR_HOST_UNITS}
   host/host_dllmain.cpp
-  host/runtime_exports.cpp
   lifecycle/system_module_loader.cpp
   host/exports.def)
 target_include_directories(nevr_host PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -556,10 +556,10 @@ if(BUILD_TESTING)
     target_link_libraries(test_host_rendezvous PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_host_rendezvous DISCOVERY_MODE PRE_TEST)
 
-    # The host's sixteen export thunks, built from the shipped file (host/runtime_exports.cpp) against the
-    # same host units BugSplat64.dll links.
-    add_executable(test_host_exports tests/test_host_exports.cpp host/runtime_exports.cpp)
-    set_source_files_properties(tests/test_host_exports.cpp host/runtime_exports.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    # The host's sixteen export thunks: the shipped file (host/runtime_exports.cpp) is one of the host units the
+    # library holds, and the test pulls it from there.
+    add_executable(test_host_exports tests/test_host_exports.cpp)
+    set_source_files_properties(tests/test_host_exports.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_compile_options(test_host_exports PRIVATE -Werror)
     target_link_libraries(test_host_exports PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_host_exports DISCOVERY_MODE PRE_TEST)

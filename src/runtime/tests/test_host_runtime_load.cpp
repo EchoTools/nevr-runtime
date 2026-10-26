@@ -269,7 +269,7 @@ TEST(HostRuntimeLoad, ALoadedRuntimeIsRecordedToo) {
   EXPECT_EQ(record.at("degraded_action"), "dispatch");
   EXPECT_EQ(record.at("path"), "C:\\games\\nevr-runtime.dll");
   EXPECT_EQ(record.at("expected_abi"), "1.1");
-  EXPECT_EQ(record.at("actual_abi"), "1.0");
+  EXPECT_EQ(record.at("actual_abi"), "1.1");
   EXPECT_EQ(record.at("abi_status"), "ok");
   EXPECT_EQ(record.at("init_code"), 0);
   EXPECT_FALSE(record.contains("win32_error"));
