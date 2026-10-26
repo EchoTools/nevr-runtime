@@ -203,7 +203,10 @@ def rewrite_ninja_log(text: str, rewrite, hashes: dict[int, int]) -> tuple[str, 
         if len(fields) != 5:
             dropped += 1
             continue
-        new_hash = hashes.get(int(fields[4], 16))
+        try:
+            new_hash = hashes.get(int(fields[4], 16))
+        except ValueError:
+            new_hash = None
         if new_hash is None:
             dropped += 1
             continue
@@ -223,7 +226,9 @@ def _is_text(path: pathlib.Path) -> bool:
 
 def rewrite_text_files(copy: pathlib.Path, rewrite) -> int:
     rewritten = 0
-    for dirpath, _dirs, files in os.walk(copy):
+    for dirpath, dirs, files in os.walk(copy):
+        # A link to a directory is listed with the directories; retarget it like a link to a file.
+        files = files + [d for d in dirs if pathlib.Path(dirpath, d).is_symlink()]
         for name in files:
             path = pathlib.Path(dirpath, name)
             st = path.lstat()
@@ -326,6 +331,8 @@ def seed(main: pathlib.Path, worktree: pathlib.Path, preset: str, *, ninja: str 
     if main == worktree:
         return Result("not-seeded", "the worktree is the main checkout; there is nothing to seed it from")
     src = main / "build" / preset
+    if worktree == src or src in worktree.parents:
+        return Result("not-seeded", f"the worktree {worktree} is inside {src}, the tree it would be copied from")
     dst = worktree / "build" / preset
     if dst.exists() or dst.is_symlink():
         if not _is_empty_dir(dst):
@@ -377,12 +384,14 @@ def seed(main: pathlib.Path, worktree: pathlib.Path, preset: str, *, ninja: str 
             st = (staging / name).stat()
             (staging / name).write_bytes(content)
             os.utime(staging / name, ns=(st.st_atime_ns, st.st_mtime_ns))
+        aligned = align_source_mtimes(main, worktree)
         if dst.exists():
             dst.rmdir()
         os.rename(staging, dst)
-        aligned = align_source_mtimes(main, worktree)
     except SeedError as e:
         return Result("error", str(e))
+    except (OSError, subprocess.CalledProcessError) as e:
+        return Result("error", f"{type(e).__name__}: {e}")
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     return Result("seeded", counts={

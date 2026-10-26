@@ -227,6 +227,21 @@ class NotSeeded(SeedFixture):
         self.assertIn("running", result.reason)
         self.assertFalse(self.wt_build().exists())
 
+    def test_a_corrupt_deps_log_is_an_error_that_leaves_nothing_behind(self):
+        (self.build / ".ninja_deps").write_bytes(b"not a ninja deps log")
+        result = self.seed()
+        self.assertEqual(result.status, "error", result)
+        self.assertIn(".ninja_deps", result.reason)
+        self.assertFalse(self.wt_build().exists())
+        self.assertEqual(list((self.wt / "build").glob(".seed-*")), [])
+
+    def test_a_worktree_inside_the_tree_it_would_be_copied_from_is_refused(self):
+        inside = self.build / "sub"
+        inside.mkdir()
+        result = self.tool.seed(self.main, inside, self.PRESET)
+        self.assertEqual(result.status, "not-seeded", result)
+        self.assertIn("inside", result.reason)
+
     def test_the_worktree_must_not_be_the_main_checkout(self):
         result = self.tool.seed(self.main, self.main, self.PRESET)
         self.assertEqual(result.status, "not-seeded", result)
