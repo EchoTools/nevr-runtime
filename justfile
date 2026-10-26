@@ -41,8 +41,10 @@ configure: generate-symcache _vcpkg-mingw _build-inputs
 _build-inputs:
     @tools/worktree-setup.sh --check
 
-# Make a fresh git worktree buildable: copy extern/{minhook,breakpad,lss} and gen/ from the main checkout,
-# and give it its own vcpkg root (build/vcpkg-root) so its builds never wait on another worktree's vcpkg lock
+# extern/{minhook,breakpad,lss} and gen/ are copied from the main checkout; the worktree gets its own vcpkg root
+# (build/vcpkg-root), so its builds never wait on another worktree's vcpkg lock; build/<preset> is seeded from the
+# main checkout's when that was built at this commit (tools/seed_build_tree.py)
+# Make a fresh git worktree buildable: its inputs, its vcpkg root and, at the same commit, a seeded build tree
 worktree-setup:
     tools/worktree-setup.sh
     tools/vcpkg_root.sh
@@ -301,7 +303,7 @@ quest-install yes="" apk="build/android-arm64/repack/r15_nevr-sentinel_signed.ap
 # --- Tests ---
 
 # The Python tool suite, kept: full output, JUnit XML, the pytest-randomly seed, and a start and an end
-# record in runs.jsonl per run, under $NEVR_TEST_LOG_DIR (default /var/tmp/work-nevr-runtime/test-runs/tools-tests).
+# record in runs.jsonl per run, under $NEVR_TEST_LOG_DIR (default test-runs/tools-tests in the work root, tools/work_root.py).
 # The end record names the failing tests. Exit code is pytest's, except 2 for a record that cannot be kept
 # and 128 + the signal for an interrupt, 130 for CTRL+C (tools/run_tool_tests.py). Args replace the
 # default `-q tools/tests` (#913).
@@ -424,9 +426,13 @@ test-auth-unit:
     # Signed fixtures for the plugin signature gate (ADR 0010, #741), made once for test_plugin_signature and the
     # gate tests in test_behavioral: a throwaway PKI and osslsigncode, offline, over the real test plugin. A
     # missing tool or a failed generation fails the recipe; the tests fail, never skip, without the directory.
-    mkdir -p /var/tmp/work-nevr-runtime
-    sigfix="$(mktemp -d /var/tmp/work-nevr-runtime/test-plugin-signature.XXXXXX)"
+    source tools/lib/work_root.sh
+    work_dir "$NEVR_WORK_ROOT/test-scratch" "Temporary directories of the tests; each test removes its own when it ends." \
+        "a directory in here left behind by an interrupted test run can be removed at any time; this directory when no test run is live."
+    sigfix="$(mktemp -d "$NEVR_WORK_ROOT/test-scratch/test-plugin-signature.XXXXXX")"
     trap 'rm -rf "$sigfix"' EXIT
+    # test_nevr_config writes its fixture files here (a Linux path; Wine reaches it as Z:); removed with sigfix.
+    export NEVR_CONFIG_TEST_DIR="$sigfix/nevr-config-tests"
     python3 tools/gen_plugin_signature_fixtures.py "$sigfix" --plugin-dll "build/{{ preset }}/bin/plugins/test_plugin_onframe.dll"
     export NEVR_SIGFIX_DIR="$sigfix"
     # The real signed v5.4.3 BugSplat64.dll (#745), fetched by digest once and kept under build/: test_plugin_trust
@@ -3232,7 +3238,7 @@ verify:
     # and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 1571
+    python3 tools/verify_gtest_floor.py --floor 1631
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py

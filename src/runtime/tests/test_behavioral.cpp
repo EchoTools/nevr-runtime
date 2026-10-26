@@ -13,6 +13,7 @@
 #endif
 #include <winsock2.h>
 #include <windows.h>
+#include <shellapi.h>
 
 #include <gtest/gtest.h>
 #include <ixwebsocket/IXNetSystem.h>
@@ -37,6 +38,8 @@
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <signal.h>
+#include <new>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -414,13 +417,14 @@ TEST_F(PluginSignatureGateTest, PluginSignedByAnotherProfileIsRefused) {
   EXPECT_TRUE(TestLogContains("file=gate_other.dll refused: EKU"));
 }
 
-TEST_F(PluginSignatureGateTest, DevBuildLoadsAnUnsignedPluginWithAWarning) {
+TEST_F(PluginSignatureGateTest, UnsignedAllowedRunLoadsAnUnsignedPluginWithAWarning) {
   nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
   Plan("gate_dev.dll", "unsigned");
   LoadPlugins();
   EXPECT_EQ(GetLoadedPluginCount(), 1);
   EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
-                                     "file=gate_dev.dll UNSIGNED, loaded because this is a dev build"));
+                                     "file=gate_dev.dll UNSIGNED, loaded because plugin signatures are not required in this run "
+                                     "(plugin trust mode unsigned-allowed; start with -require-signed-plugins to refuse it)"));
 }
 
 TEST_F(PluginSignatureGateTest, RefusalIsPerPluginAndTheSignedOneStillLoads) {
@@ -526,7 +530,7 @@ TEST_F(PluginDependencyGateTest, SignedDependenciesAreNotARefusal) {
   EXPECT_TRUE(g_refusalDialogs.empty());
 }
 
-TEST_F(PluginDependencyGateTest, DevBuildDoesNotWalkTheDependencies) {
+TEST_F(PluginDependencyGateTest, UnsignedAllowedRunDoesNotWalkTheDependencies) {
   nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
   PlanTree("import_unsigned");
   LoadPlugins();
@@ -888,14 +892,440 @@ TEST_F(PluginDependencyGateTest, LateLoadOfASignedFileWithAnUnsignedDependencyIs
   EXPECT_TRUE(TestLogContains("refused a later load of importer.dll: dependency dep.dll (import): unsigned"));
 }
 
-TEST_F(PluginDependencyGateTest, DevBuildAllowsALateLoadWithAWarning) {
+TEST_F(PluginDependencyGateTest, UnsignedAllowedRunAllowsALateLoadWithAWarning) {
   nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
   Plan("late_dev.dll", "unsigned");
   g_testPluginLoadPlan.clear();
   TestHook_InstallPluginLoadFilter(pluginsDir_);
   EXPECT_FALSE(Blocked("late_dev.dll"));
   EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "a plugin loads late_dev.dll after its init"));
+  EXPECT_TRUE(TestLogContains("allowed because plugin signatures are not required in this run (plugin trust mode "
+                              "unsigned-allowed)"));
 }
+
+// ---- the run's mode: unsigned plugins load by default, -require-signed-plugins refuses them (#924) ----------------
+//
+// These tests do not install a mode with TestHook_SetTrust: the mode is the one a run gets, from the command line
+// through nevr_plugin_trust::ApplyCommandLine, the function PreflightRuntimeBootstrap calls before the first
+// LoadPlugins. The policy is the production policy; the plugin is the unsigned test plugin the build puts in
+// plugins/. This test executable is built without NEVR_ALLOW_UNSIGNED_PLUGINS, which the first test asserts.
+
+namespace {
+int TestLogCount(const std::string& needle) {
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  return static_cast<int>(std::count_if(g_testLogMessages.begin(), g_testLogMessages.end(),
+                                        [&needle](const std::string& m) { return m.find(needle) != std::string::npos; }));
+}
+
+std::vector<std::string> g_runModeDialogs;
+void CaptureRunModeDialog(const std::string& text) { g_runModeDialogs.push_back(text); }
+
+PluginLoadItem RunModeEarlyItem(const char* name, const char* file) {
+  PluginLoadItem item{name, file, false, "", "{}"};
+  item.early = true;
+  return item;
+}
+
+// ApplyCommandLine over a command line given as text: `wide` is GetCommandLineW()'s string and `ansi` is
+// GetCommandLineA()'s, the line the game tokenizes. Given separately so a byte the wide line cannot spell the same
+// way in every code page (0x96) is tested as the game would see it.
+void ApplyLine(const std::wstring& wide, const std::string& ansi) {
+  nevr_plugin_trust::ApplyCommandLine(wide.c_str(), ansi.c_str());
+}
+
+// The same text for both readings; the text must be ASCII.
+void ApplyLine(const std::wstring& wide) {
+  std::string ansi;
+  for (wchar_t c : wide) ansi.push_back(static_cast<char>(c));
+  ApplyLine(wide, ansi);
+}
+
+// ApplyLine over arguments joined with a space (none of them holds a space or a quote).
+void ApplyArgs(std::initializer_list<const wchar_t*> args) {
+  std::wstring line;
+  for (const wchar_t* arg : args) {
+    if (!line.empty()) line += L' ';
+    line += arg;
+  }
+  ApplyLine(line);
+}
+
+// The read-fault seam of nevr_plugin_trust::ApplyCommandLine: at one stage the hook throws a std::exception or reports
+// that the call there failed.
+enum class InjectedFault { None, ThrowBadAlloc, ThrowLengthError, CallFails };
+nevr_plugin_trust::ReadStage g_faultStage = nevr_plugin_trust::ReadStage::GameTokens;
+InjectedFault g_fault = InjectedFault::None;
+
+bool InjectAtStage(nevr_plugin_trust::ReadStage stage) {
+  if (stage != g_faultStage) return false;
+  switch (g_fault) {
+    case InjectedFault::ThrowBadAlloc:
+      throw std::bad_alloc();
+    case InjectedFault::ThrowLengthError:
+      throw std::length_error("injected");
+    case InjectedFault::CallFails:
+      return true;
+    case InjectedFault::None:
+      break;
+  }
+  return false;
+}
+
+void ArmReadFault(nevr_plugin_trust::ReadStage stage, InjectedFault fault) {
+  g_faultStage = stage;
+  g_fault = fault;
+  nevr_plugin_trust::TestHook_SetReadFault(&InjectAtStage);
+}
+}  // namespace
+
+class PluginRunModeTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    UnloadPlugins();
+    g_testPluginLoadPlan.clear();
+    ClearTestLogs();
+    EchoVR::g_GameBaseAddress = reinterpret_cast<CHAR*>(GetModuleHandleA(nullptr));
+    ASSERT_NE(EchoVR::g_GameBaseAddress, nullptr);
+    nevr_plugin_trust::TestHook_ResetTrust();  // the mode a run gets, not one a test installs
+    wasServer_ = g_isServer;
+    wasHeadless_ = g_isHeadless;
+    g_isServer = FALSE;  // a client with graphics: the one run that shows the dialog
+    g_isHeadless = FALSE;
+    g_runModeDialogs.clear();
+    TestHook_ResetRefusals();
+    TestHook_SetRefusalDialogSink(&CaptureRunModeDialog);
+    g_serverFatalCalls = 0;
+    char exePath[MAX_PATH] = {};
+    ASSERT_NE(GetModuleFileNameA(nullptr, exePath, MAX_PATH), 0U);
+    pluginsDir_ = std::string(exePath);
+    pluginsDir_.resize(pluginsDir_.find_last_of("\\/") + 1);
+    pluginsDir_ += "plugins\\";
+  }
+
+  void TearDown() override {
+    UnloadPlugins();
+    for (const std::string& file : copies_) DeleteFileA(file.c_str());
+    g_testPluginLoadPlan.clear();
+    ClearTestLogs();
+    TestHook_ResetPluginLoadFilter();
+    TestHook_SetRefusalDialogSink(nullptr);
+    TestHook_ResetRefusals();
+    nevr_plugin_trust::TestHook_ResetTrust();
+    g_isServer = wasServer_;
+    g_isHeadless = wasHeadless_;
+  }
+
+  // The unsigned test plugin, as `name` in plugins/ (a copy, so a late load has a file of its own to ask about).
+  void CopyUnsignedPlugin(const std::string& name) {
+    const std::string target = pluginsDir_ + name;
+    ASSERT_TRUE(CopyFileA((pluginsDir_ + "test_plugin_onframe.dll").c_str(), target.c_str(), FALSE))
+        << target << " error " << GetLastError();
+    copies_.push_back(target);
+  }
+
+  bool Blocked(const std::string& file) {
+    std::wstring wide;
+    for (char c : pluginsDir_ + file) wide.push_back(static_cast<wchar_t>(std::tolower(static_cast<unsigned char>(c))));
+    return nevr_dll_load_hook::IsLoadBlocked(wide.c_str(), nullptr);
+  }
+
+  std::string pluginsDir_;
+  std::vector<std::string> copies_;
+  BOOL wasServer_ = FALSE;
+  BOOL wasHeadless_ = FALSE;
+};
+
+TEST_F(PluginRunModeTest, ThisIsAReleaseConfiguredBuild) {
+  EXPECT_FALSE(nevr_plugin_trust::IsDevBuild());
+  EXPECT_STREQ(nevr_plugin_trust::BuildWord(), "release");
+  EXPECT_STREQ(nevr_plugin_trust::ModeLiteral(), "NEVR-PLUGIN-TRUST release");
+}
+
+TEST_F(PluginRunModeTest, AnUnsignedPluginLoadsWhenTheCommandLineHasNoArgument) {
+  ApplyArgs({L"echovr.exe", L"-windowed"});
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_NE(GetModuleHandleA("test_plugin_onframe.dll"), nullptr);
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 1u);
+  EXPECT_TRUE(manifest[0]["loaded"].get<bool>());
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "[NEVR.PLUGIN] plugin trust: mode=unsigned-allowed source=default build=release "
+                                     "literal=\"NEVR-PLUGIN-TRUST release\""));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "plugin=onframe file=test_plugin_onframe.dll UNSIGNED, loaded because plugin "
+                                     "signatures are not required in this run (plugin trust mode unsigned-allowed; "
+                                     "start with -require-signed-plugins to refuse it)"));
+  EXPECT_FALSE(TestLogContains("refused"));
+  EXPECT_TRUE(g_runModeDialogs.empty());
+}
+
+TEST_F(PluginRunModeTest, TheSamePluginIsRefusedWithRequireSignedPlugins) {
+  ApplyArgs({L"echovr.exe", L"-windowed", L"-require-signed-plugins"});
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(GetModuleHandleA("test_plugin_onframe.dll"), nullptr) << "a refused file was mapped";
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "[NEVR.PLUGIN] plugin trust: mode=signed-only source=-require-signed-plugins "
+                                     "build=release literal=\"NEVR-PLUGIN-TRUST release\""));
+  EXPECT_TRUE(TestLogContains("plugin=onframe file=test_plugin_onframe.dll refused: unsigned"));
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 1u);
+  EXPECT_FALSE(manifest[0]["loaded"].get<bool>());
+  EXPECT_EQ(manifest[0]["error"].get<std::string>(), "refused: unsigned");
+  ASSERT_EQ(g_runModeDialogs.size(), 1u) << "a client with graphics gets the refusal dialog, as before";
+  EXPECT_NE(g_runModeDialogs[0].find("test_plugin_onframe.dll wasn't loaded because it isn't signed by nEVR."),
+            std::string::npos)
+      << g_runModeDialogs[0];
+}
+
+TEST_F(PluginRunModeTest, ARefusedRequiredPluginIsFatalOnAServerAndShowsNoDialog) {
+  ApplyArgs({L"echovr.exe", L"-server", L"-require-signed-plugins"});
+  g_isServer = TRUE;
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", true, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(g_serverFatalCalls, 1) << g_lastServerFatal;
+  EXPECT_NE(g_lastServerFatal.find("refused: unsigned"), std::string::npos) << g_lastServerFatal;
+  EXPECT_TRUE(g_runModeDialogs.empty());
+}
+
+TEST_F(PluginRunModeTest, ARequiredPluginThatIsUnsignedIsNotFatalWhenSignaturesAreNotRequired) {
+  ApplyArgs({L"echovr.exe", L"-server"});
+  g_isServer = TRUE;
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", true, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_EQ(g_serverFatalCalls, 0) << g_lastServerFatal;
+}
+
+TEST_F(PluginRunModeTest, TheEarlyPassAndTheNormalPassReadTheSameMode) {
+  ApplyArgs({L"echovr.exe", L"-require-signed-plugins"});
+  g_testPluginLoadPlan.push_back(RunModeEarlyItem("early-one", "test_plugin_onframe.dll"));
+
+  LoadPlugins(PluginPhase::Early);
+  EXPECT_EQ(GetLoadedPluginCount(), 0) << "the early pass loaded an unsigned plugin in a signed-only run";
+  EXPECT_TRUE(TestLogContains("plugin=early-one file=test_plugin_onframe.dll refused: unsigned"));
+
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(TestLogCount("plugin trust: mode=signed-only"), 1) << "the mode is stated once per run, not once per pass";
+}
+
+TEST_F(PluginRunModeTest, TheEarlyPassLoadsAnUnsignedPluginWhenSignaturesAreNotRequired) {
+  ApplyArgs({L"echovr.exe"});
+  g_testPluginLoadPlan.push_back(RunModeEarlyItem("early-one", "test_plugin_onframe.dll"));
+
+  LoadPlugins(PluginPhase::Early);
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("plugin trust: mode=unsigned-allowed source=default"));
+}
+
+TEST_F(PluginRunModeTest, TheModeIsLoggedEvenWhenNoPluginIsConfigured) {
+  ApplyArgs({L"echovr.exe", L"-require-signed-plugins"});
+
+  LoadPlugins();
+
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] plugin trust: mode=signed-only"));
+  EXPECT_TRUE(TestLogContains("no plugins configured in config.yaml"));
+}
+
+TEST_F(PluginRunModeTest, ALaterLoadFollowsTheRunMode) {
+  CopyUnsignedPlugin("late_runmode.dll");
+  ApplyArgs({L"echovr.exe"});
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_FALSE(Blocked("late_runmode.dll"));
+  EXPECT_TRUE(TestLogContains("a plugin loads late_runmode.dll after its init"));
+  EXPECT_FALSE(TestLogContains("refused a later load"));
+
+  ClearTestLogs();
+  TestHook_ResetPluginLoadFilter();
+  ApplyArgs({L"echovr.exe", L"-require-signed-plugins"});
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_TRUE(Blocked("late_runmode.dll"));
+  EXPECT_TRUE(TestLogContains("refused a later load of late_runmode.dll: unsigned"));
+}
+
+TEST_F(PluginRunModeTest, WithNoArgumentTheRunIsUnsignedAllowed) {
+  using nevr_plugin_trust::ModeSource;
+  ApplyArgs({L"echovr.exe", L"-server", L"-windowed"});
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::UnsignedAllowed);
+  EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), ModeSource::Default);
+
+  ApplyArgs({L"echovr.exe", L"-require-signed-plugins"});
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+  EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), ModeSource::CommandLine);
+
+  ApplyArgs({L"echovr.exe"});  // a later reading replaces the earlier one
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::UnsignedAllowed);
+  EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), ModeSource::Default);
+}
+
+// The game looks an argument up with every leading '-', '+' and 0x96 skipped and A-Z lower-cased (CSymbol64::Lookup,
+// cmdline_strip.h), so each of these spellings is the flag to the game and must be signed-only here.
+TEST_F(PluginRunModeTest, EverySpellingTheGameReadsAsTheFlagMakesTheRunSignedOnly) {
+  for (const wchar_t* spelling :
+       {L"-require-signed-plugins", L"--require-signed-plugins", L"---require-signed-plugins", L"----require-signed-plugins",
+        L"+require-signed-plugins", L"++require-signed-plugins", L"-+-require-signed-plugins", L"+-require-signed-plugins",
+        L"-REQUIRE-SIGNED-PLUGINS", L"-Require-Signed-Plugins", L"--Require-signed-PLUGINS", L"+REQUIRE-SIGNED-PLUGINS",
+        L"---REQUIRE-SIGNED-PLUGINS"}) {
+    nevr_plugin_trust::TestHook_ResetTrust();
+    ApplyArgs({L"echovr.exe", spelling});
+    EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly) << "spelling " << spelling;
+    EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::CommandLine) << spelling;
+  }
+}
+
+TEST_F(PluginRunModeTest, ThePrefixByte0x96IsADashToTheGame) {
+  // 0x96 is the ANSI en dash. The game's tokenizer treats it as a dash, so the byte spelling is the flag to the game
+  // whatever the wide line holds; the wide line here is the plain flag spelled without it, as a different reading.
+  ApplyLine(L"echovr.exe require-signed-plugins", "echovr.exe \x96require-signed-plugins");
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+  ApplyLine(L"echovr.exe require-signed-plugins", "echovr.exe \x96\x96REQUIRE-signed-plugins");
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+  // The same bytes without the prefix are no option to the game.
+  ApplyLine(L"echovr.exe require-signed-plugins", "echovr.exe require-signed-plugins");
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::UnsignedAllowed);
+}
+
+// The game splits its ANSI line on ' ' and a '"' opens a token that runs to the next '"' with no escape (Tokenize);
+// CommandLineToArgvW reads \" as a literal quote. After `-config "C:\dir\"` the game has closed the quote and
+// reads the flag as an option; CommandLineToArgvW is still inside the quote and sees one argument.
+TEST_F(PluginRunModeTest, ABackslashBeforeAQuoteDoesNotHideTheFlagFromTheGameReading) {
+  const std::wstring line = L"echovr.exe -config \"C:\\dir\\\" -require-signed-plugins";
+  int argc = 0;
+  wchar_t** const argv = CommandLineToArgvW(line.c_str(), &argc);
+  ASSERT_NE(argv, nullptr);
+  bool argvHasTheFlag = false;
+  for (int i = 0; i < argc; ++i) argvHasTheFlag = argvHasTheFlag || std::wstring(argv[i]) == L"-require-signed-plugins";
+  LocalFree(argv);
+  EXPECT_FALSE(argvHasTheFlag) << "the premise: CommandLineToArgvW does not see the flag on this line";
+
+  ApplyLine(line);
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+  EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::CommandLine);
+}
+
+// The other direction: CommandLineToArgvW removes the quotes, so a quoted flag is an argument for it while the game
+// reads the quoted token as a parameter, not an option. Either reading finding the flag is enough.
+TEST_F(PluginRunModeTest, AFlagEitherReadingFindsMakesTheRunSignedOnly) {
+  ApplyArgs({L"echovr.exe", L"\"-require-signed-plugins\""});  // CommandLineToArgvW: the flag; the game: a parameter
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+  ApplyLine(L"echovr.exe -server \"-REQUIRE-SIGNED-PLUGINS\"");
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+}
+
+// Text the game does not read as the flag leaves the run unsigned-allowed. A token inside a quoted value is one token
+// of the game's tokenizer (Tokenize: a '"' opens a token that runs to the closing '"'), and one argument of
+// CommandLineToArgvW, in neither of which is it an option named -require-signed-plugins; a '[' token is the game's
+// other quoting form (cmdline_strip.h) and a parameter. A name that differs by one letter is another option.
+TEST_F(PluginRunModeTest, TextTheGameDoesNotReadAsTheFlagLeavesTheRunUnsignedAllowed) {
+  for (const wchar_t* line :
+       {L"echovr.exe", L"echovr.exe -windowed", L"echovr.exe -require-signed-plugin", L"echovr.exe -require-signed-pluginsx",
+        L"echovr.exe -require-signed", L"echovr.exe require-signed-plugins", L"echovr.exe -requiresignedplugins",
+        L"echovr.exe -require_signed_plugins", L"echovr.exe -config \"x -require-signed-plugins\"",
+        L"echovr.exe -config \"-x --require-signed-plugins y\" -windowed", L"echovr.exe [-require-signed-plugins]",
+        L"echovr.exe -config C:\\dir\\require-signed-plugins", L"echovr.exe -server=-require-signed-plugins"}) {
+    nevr_plugin_trust::TestHook_ResetTrust();
+    ApplyLine(line);
+    EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::UnsignedAllowed) << "line " << line;
+    EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::Default) << line;
+  }
+}
+
+// A std::bad_alloc (or any std::exception) while the line is read must not leave the run unsigned-allowed: the flag is
+// then unknown. The line has no flag, so the run is unsigned-allowed unless the fault is what decides.
+TEST_F(PluginRunModeTest, AnExceptionWhileReadingTheLineMakesTheRunSignedOnly) {
+  using nevr_plugin_trust::ReadStage;
+  ApplyArgs({L"echovr.exe", L"-windowed"});
+  ASSERT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::UnsignedAllowed) << "the premise: no fault, no flag";
+
+  for (ReadStage stage : {ReadStage::GameTokens, ReadStage::ArgvParsed, ReadStage::ArgvText}) {
+    for (InjectedFault fault : {InjectedFault::ThrowBadAlloc, InjectedFault::ThrowLengthError}) {
+      nevr_plugin_trust::TestHook_ResetTrust();
+      ArmReadFault(stage, fault);
+      ApplyArgs({L"echovr.exe", L"-windowed"});
+      EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly)
+          << "stage " << static_cast<int>(stage) << " fault " << static_cast<int>(fault);
+      EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::CommandLineReadFailed);
+      EXPECT_EQ(nevr_plugin_trust::TestHook_ArgvBuffersLive(), 0)
+          << "the CommandLineToArgvW buffer is freed on the path that threw";
+    }
+  }
+}
+
+// A call that fails (not an exception) is an unreadable line too, with the buffer freed on every path.
+TEST_F(PluginRunModeTest, AReadThatFailsMakesTheRunSignedOnlyAndFreesTheArgvBuffer) {
+  using nevr_plugin_trust::ReadStage;
+  for (ReadStage stage : {ReadStage::ArgvParse, ReadStage::ArgvSizeQuery, ReadStage::ArgvConversion}) {
+    nevr_plugin_trust::TestHook_ResetTrust();
+    ArmReadFault(stage, InjectedFault::CallFails);
+    ApplyArgs({L"echovr.exe", L"-windowed"});
+    EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly) << "stage " << static_cast<int>(stage);
+    EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::CommandLineUnreadable)
+        << "stage " << static_cast<int>(stage);
+    EXPECT_EQ(nevr_plugin_trust::TestHook_ArgvBuffersLive(), 0) << "stage " << static_cast<int>(stage);
+  }
+}
+
+// Both readings always run: a flag the game reading finds is the flag even when the other reading cannot read the line.
+TEST_F(PluginRunModeTest, AReadingThatCannotReadDoesNotHideAFlagTheOtherFound) {
+  ArmReadFault(nevr_plugin_trust::ReadStage::ArgvParse, InjectedFault::CallFails);
+  ApplyArgs({L"echovr.exe", L"-REQUIRE-SIGNED-PLUGINS"});
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+  EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::CommandLine);
+}
+
+TEST_F(PluginRunModeTest, ARunWhoseLineCouldNotBeReadSaysSoAtWarningAndRefusesTheUnsignedPlugin) {
+  ArmReadFault(nevr_plugin_trust::ReadStage::GameTokens, InjectedFault::ThrowBadAlloc);
+  ApplyArgs({L"echovr.exe"});
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "[NEVR.PLUGIN] plugin trust: mode=signed-only source=command line read failed"));
+  EXPECT_TRUE(TestLogContains("the command line could not be read"));
+}
+
+TEST_F(PluginRunModeTest, ALineThatIsNotThereIsAnUnreadableOne) {
+  nevr_plugin_trust::ApplyCommandLine(nullptr, "echovr.exe");
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+  EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::CommandLineUnreadable);
+  nevr_plugin_trust::TestHook_ResetTrust();
+  nevr_plugin_trust::ApplyCommandLine(L"echovr.exe", nullptr);
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+  EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::CommandLineUnreadable);
+}
+
+TEST_F(PluginRunModeTest, AnUnreadableCommandLineFailsClosed) {
+  nevr_plugin_trust::ApplyUnreadableCommandLine();
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+  EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::CommandLineUnreadable);
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_TRUE(TestLogContains("plugin trust: mode=signed-only source=command line unreadable"));
+}
+
+TEST_F(PluginRunModeTest, WithNoCommandLineReadTheRunIsTheDefault) {
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::UnsignedAllowed);
+  EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::Default);
+}
+
 
 TEST(PluginRefusalNotice, TrackerKeepsEachNameOnceAndNeverShowsATwiceDialog) {
   nevr_plugin_refusal::Tracker t;
@@ -910,7 +1340,7 @@ TEST(PluginRefusalNotice, TrackerKeepsEachNameOnceAndNeverShowsATwiceDialog) {
   EXPECT_TRUE(t.TakeDialog(false, false).empty());
 }
 
-TEST(PluginSignatureGate, NoFallbackToTheDefaultSearchInASignedOnlyBuild) {
+TEST(PluginSignatureGate, NoFallbackToTheDefaultSearchInASignedOnlyRun) {
   EXPECT_FALSE(TestHook_RestrictedSearchFallbackAllowed(true, ERROR_INVALID_PARAMETER));
   EXPECT_TRUE(TestHook_RestrictedSearchFallbackAllowed(false, ERROR_INVALID_PARAMETER));
   EXPECT_FALSE(TestHook_RestrictedSearchFallbackAllowed(false, ERROR_FILE_NOT_FOUND));
@@ -3388,6 +3818,305 @@ TEST(WsBridgeFrameLog, StopsAtATruncatedMessageAndSaysSo) {
   truncated.resize(truncated.size() - 4);
   EXPECT_EQ(TestHook_LogFrameMessages("game->server", 0, truncated), 1);
   EXPECT_TRUE(TestLogContains("declares 10 bytes but 6 remain"));
+}
+
+// ---- #929: a client's Info records for the lobby find, join, session success and session failure frames ----
+//
+// Every test drives ObserveSocialFrames, the function the bridge calls for each frame in both directions
+// (TestHook_ObserveSocialFrames), so the records are asserted where the bridge writes them. Payloads are
+// built here byte by byte from the layouts in compat/legacy_codec.cpp (FindToLegacy, JoinToLegacy,
+// SuccessV5ToLegacy, FailureToLegacy), not by calling the code under test.
+namespace lobby_frame_test {
+
+constexpr uint64_t kFindSym = 0x312c2a01819aa3f5ULL;     // SNSLobbyFindSessionRequestv11
+constexpr uint64_t kJoinSym = 0x2f03468f77ffb211ULL;     // SNSLobbyJoinSessionRequestv7
+constexpr uint64_t kSuccessSym = 0x6d4de3650ee3110fULL;  // SNSLobbySessionSuccessv5
+constexpr uint64_t kFailureSym = 0x4ae8365ebc45f96cULL;  // SNSLobbySessionFailurev4
+constexpr uint64_t kOvrOrg = 4;
+
+void PutLe(std::string& out, uint64_t value, size_t bytes) {
+  for (size_t i = 0; i < bytes; ++i) out.push_back(static_cast<char>((value >> (8 * i)) & 0xff));
+}
+
+// A GUID as the wire stores it (Windows layout) for the text 44332211-6655-8877-99AA-BBCCDDEEFF<tail>.
+std::string Guid(uint8_t tail) {
+  const uint8_t bytes[16] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+                             0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, tail};
+  return std::string(reinterpret_cast<const char*>(bytes), sizeof(bytes));
+}
+
+std::string Entrants(const std::vector<uint64_t>& accounts) {
+  std::string out;
+  for (const uint64_t account : accounts) {
+    PutLe(out, kOvrOrg, 8);
+    PutLe(out, account, 8);
+  }
+  return out;
+}
+
+constexpr uint64_t kMode = 0x1234567890abcdefULL;  // in no symbol table: logged as hex
+const char kSettingsSentinel[] = "{\"sentinel_settings_text\":true}";
+
+std::string FindPayload(const std::vector<uint64_t>& accounts, const std::string& currentLobby) {
+  std::string out;
+  PutLe(out, 1, 8);                                 // version lock
+  PutLe(out, kMode, 8);                             // mode
+  PutLe(out, 0x2222222222222222ULL, 8);             // level
+  PutLe(out, kOvrOrg, 8);                           // platform
+  out += Guid(0xa0);                                // login session
+  PutLe(out, accounts.size(), 1);                   // entrant count
+  PutLe(out, 0, 4);                                 // flags
+  PutLe(out, 0, 3);                                 // pad
+  out += currentLobby;                              // lobby being left
+  out += Guid(0xb0);                                // group
+  out += kSettingsSentinel;
+  out.push_back('\0');
+  out += Entrants(accounts);
+  return out;
+}
+
+std::string JoinPayload(const std::vector<uint64_t>& accounts) {
+  std::string out;
+  out += Guid(0xc0);                                // lobby to join
+  PutLe(out, 1, 8);                                 // version lock
+  PutLe(out, kOvrOrg, 8);                           // platform
+  out += Guid(0xa0);                                // login session
+  PutLe(out, accounts.size(), 4);                   // entrant count in the low byte
+  PutLe(out, 0, 4);
+  PutLe(out, 0, 8);
+  out += kSettingsSentinel;
+  out.push_back('\0');
+  out += Entrants(accounts);
+  PutLe(out, 0xffff, 2);                            // team tail
+  return out;
+}
+
+std::string SuccessPayload() {
+  std::string out;
+  PutLe(out, kMode, 8);
+  out += Guid(0xc0);                                // lobby
+  out += Guid(0xb0);                                // group
+  out.append(64, '\0');                             // endpoint, flags, keys: not read
+  return out;
+}
+
+std::string FailurePayload(uint32_t code) {
+  std::string out;
+  PutLe(out, kMode, 8);
+  out += Guid(0xb0);                                // group
+  PutLe(out, code, 4);
+  PutLe(out, 0, 4);
+  out += "sentinel-remote-message";
+  out.resize(8 + 16 + 4 + 4 + 64 + 8, '\0');        // message(64) and expiry(8)
+  return out;
+}
+
+uint64_t g_fakeNowMs = 0;
+uint64_t FakeNowMs() { return g_fakeNowMs; }
+
+size_t CountLogLines(const std::string& needle) {
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  return static_cast<size_t>(std::count_if(g_testLogMessages.begin(), g_testLogMessages.end(),
+                                           [&needle](const std::string& line) { return line.find(needle) != std::string::npos; }));
+}
+
+// A client run: g_isServer false, a fresh lobby-record limiter and a clock the test moves by hand.
+class ClientRun {
+ public:
+  ClientRun() : wasServer_(g_isServer) {
+    g_isServer = FALSE;
+    g_fakeNowMs = 1000;
+    TestHook_ResetLobbyFrameLimiter();
+    TestHook_SetLobbyFrameClock(&FakeNowMs);
+    ClearTestLogs();
+  }
+  ~ClientRun() {
+    g_isServer = wasServer_;
+    TestHook_SetLobbyFrameClock(nullptr);
+    TestHook_ResetLobbyFrameLimiter();
+  }
+
+ private:
+  BOOL wasServer_;
+};
+
+}  // namespace lobby_frame_test
+
+// The bridge cannot bound how often the game sends a join (its party-follow loop runs from the game's own
+// update), so a kind writes a burst of records per window and counts the rest.
+TEST(WsBridgeLobbyFrameLog, AJoinStormWritesItsBurstAndCountsTheRest) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  for (int i = 0; i < 50; ++i) {
+    TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1001})));
+  }
+  EXPECT_EQ(CountLogLines("lobby join requested"), 10U);
+  EXPECT_EQ(CountLogLines("suppressed"), 0U) << "the count is written when the window ends, not before";
+  // A different kind has its own burst: the answer to the storm is still recorded.
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kFailureSym, FailurePayload(8)));
+  EXPECT_TRUE(TestLogContains("lobby session failure conn=3 code=8 reason=lobby_full"));
+}
+
+TEST(WsBridgeLobbyFrameLog, TheSuppressedCountIsWrittenBeforeTheFirstRecordOfTheNextWindow) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  for (int i = 0; i < 50; ++i) {
+    TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1001})));
+  }
+  g_fakeNowMs += 10000;
+  ClearTestLogs();
+  TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1001})));
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  ASSERT_EQ(g_testLogLeveled.size(), 2U);
+  EXPECT_EQ(g_testLogLeveled[0].first, EchoVR::LogLevel::Info);
+  EXPECT_NE(g_testLogLeveled[0].second.find("[NEVR.WS] lobby frame records suppressed kind=join count=40 window_ms=10000"),
+            std::string::npos)
+      << g_testLogLeveled[0].second;
+  EXPECT_NE(g_testLogLeveled[1].second.find("lobby join requested"), std::string::npos) << g_testLogLeveled[1].second;
+}
+
+TEST(WsBridgeLobbyFrameLog, AnotherKindsFrameReportsTheEndedWindowToo) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  for (int i = 0; i < 13; ++i) {
+    TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1001})));
+  }
+  g_fakeNowMs += 10000;
+  ClearTestLogs();
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kFailureSym, FailurePayload(8)));
+  EXPECT_TRUE(TestLogContains("lobby frame records suppressed kind=join count=3 window_ms=10000"));
+  EXPECT_TRUE(TestLogContains("lobby session failure conn=3 code=8"));
+}
+
+TEST(WsBridgeLobbyFrameLog, AWindowThatSuppressedNothingWritesNoSummary) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  for (int i = 0; i < 5; ++i) {
+    TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1001})));
+  }
+  g_fakeNowMs += 10000;
+  TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1001})));
+  EXPECT_EQ(CountLogLines("lobby join requested"), 6U);
+  EXPECT_EQ(CountLogLines("suppressed"), 0U);
+}
+
+TEST(WsBridgeLobbyFrameLog, FramesTheDecodeCannotReadAreLimitedLikeTheRest) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  for (int i = 0; i < 50; ++i) {
+    TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kJoinSym, std::string(10, '\x01')));
+  }
+  EXPECT_EQ(CountLogLines("lobby join request could not be read"), 10U);
+}
+
+TEST(WsBridgeLobbyFrameLog, ClientLogsAFindRequestAtInfoWithItsEntrantsAndLobbies) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("game->server", 2,
+                               BuildMarkedMessage(kFindSym, FindPayload({1001, 1002, 1003}, Guid(0xd0))));
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "[NEVR.WS] lobby find requested conn=2 mode=0x1234567890abcdef entrants=3 "
+      "accounts=OVR-ORG-1001,OVR-ORG-1002,OVR-ORG-1003 current_lobby=44332211-6655-8877-99AA-BBCCDDEEFFD0 "
+      "group=44332211-6655-8877-99AA-BBCCDDEEFFB0"));
+}
+
+TEST(WsBridgeLobbyFrameLog, ClientLogsAFindRequestFromNoLobbyAsNone) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kFindSym, FindPayload({7}, std::string(16, '\0'))));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info, "entrants=1 accounts=OVR-ORG-7 current_lobby=none "));
+}
+
+TEST(WsBridgeLobbyFrameLog, ClientLogsAJoinRequestAtInfoWithTheLobbyItNames) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1001})));
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "[NEVR.WS] lobby join requested conn=3 lobby=44332211-6655-8877-99AA-BBCCDDEEFFC0 entrants=1 "
+      "accounts=OVR-ORG-1001"));
+}
+
+TEST(WsBridgeLobbyFrameLog, ClientLogsASessionSuccessAtInfoWithTheLobbyItGot) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "[NEVR.WS] lobby session success conn=3 lobby=44332211-6655-8877-99AA-BBCCDDEEFFC0 "
+      "group=44332211-6655-8877-99AA-BBCCDDEEFFB0"));
+}
+
+TEST(WsBridgeLobbyFrameLog, ClientLogsASessionFailureAtInfoWithItsCodeAndReason) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kFailureSym, FailurePayload(8)));
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "[NEVR.WS] lobby session failure conn=3 code=8 reason=lobby_full group=44332211-6655-8877-99AA-BBCCDDEEFFB0"));
+  ClearTestLogs();
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kFailureSym, FailurePayload(99)));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info, "lobby session failure conn=3 code=99 reason=unknown "));
+}
+
+TEST(WsBridgeLobbyFrameLog, EveryMessageOfABatchedFrameGetsItsOwnRecord) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("server->game", 3,
+                               BuildMarkedMessage(kFailureSym, FailurePayload(8)) +
+                                   BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_TRUE(TestLogContains("lobby session failure conn=3 code=8"));
+  EXPECT_TRUE(TestLogContains("lobby session success conn=3 lobby="));
+}
+
+TEST(WsBridgeLobbyFrameLog, NoRecordCarriesSettingsTextOrTheServersMessage) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kFindSym, FindPayload({1}, Guid(0xd0))));
+  TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kJoinSym, JoinPayload({1})));
+  TestHook_ObserveSocialFrames("server->game", 2, BuildMarkedMessage(kFailureSym, FailurePayload(8)));
+  EXPECT_TRUE(TestLogContains("lobby find requested"));
+  EXPECT_FALSE(TestLogContains("sentinel_settings_text"));
+  EXPECT_FALSE(TestLogContains("sentinel-remote-message"));
+}
+
+TEST(WsBridgeLobbyFrameLog, AFrameTooShortForItsLayoutIsReportedNotReadPastItsEnd) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kJoinSym, std::string(10, '\x01')));
+  TestHook_ObserveSocialFrames("server->game", 2, BuildMarkedMessage(kFailureSym, std::string(12, '\x01')));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "[NEVR.WS] lobby join request could not be read conn=2 payload_bytes=10"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "[NEVR.WS] lobby session failure could not be read conn=2 payload_bytes=12"));
+  EXPECT_FALSE(TestLogContains("lobby join requested"));
+  EXPECT_FALSE(TestLogContains("lobby session failure conn="));
+}
+
+TEST(WsBridgeLobbyFrameLog, ARequestHeardFromTheServerAndAReplyHeardFromTheGameAreNotLobbyRecords) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("server->game", 2, BuildMarkedMessage(kJoinSym, JoinPayload({1})));
+  TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kFailureSym, FailurePayload(8)));
+  TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_FALSE(TestLogContains("lobby "));
+}
+
+// A dedicated server already logs every message of every frame at Info (LogFrameMessages); the client
+// records must not double that, so on a server ObserveSocialFrames stays as silent as it was.
+TEST(WsBridgeLobbyFrameLog, AServerGetsNoLobbyRecordFromTheSocialObserver) {
+  using namespace lobby_frame_test;
+  const BOOL wasServer = g_isServer;
+  g_isServer = TRUE;
+  ClearTestLogs();
+  TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kFindSym, FindPayload({1, 2}, Guid(0xd0))));
+  TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1})));
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kFailureSym, FailurePayload(8)));
+  g_isServer = wasServer;
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  EXPECT_TRUE(g_testLogMessages.empty()) << "first line: " << (g_testLogMessages.empty() ? "" : g_testLogMessages[0]);
 }
 
 // The game->server diagnostic walk decodes payloads (hex dump, invite targets). A message whose declared
