@@ -1,10 +1,11 @@
 // Child-process crash harness for the host-owned BugSplat_createReport minidump
 // capture (docs/adr/0008-bugsplat-host-and-nevr-runtime.md).
 //
-// Each scenario runs a child process that: loads dbghelp.dll (as the game's
-// HandleCrashDump already has), loads the BugSplat64.dll shim (the production host
-// objects) from a per-scenario directory, runs the host runtime-load state machine
-// against the sibling nevr-runtime.dll fixture, installs the unhandled-exception filter that
+// Each scenario runs a child process that: loads the BugSplat64.dll shim (the production host
+// objects) from a per-scenario directory, never loading dbghelp.dll itself (the game does not
+// either: echovr.exe imports none and HandleCrashDump loads none, so the host has to), runs the
+// host runtime-load state machine against the sibling nevr-runtime.dll fixture, installs the
+// unhandled-exception filter that
 // calls MiniDmpSender::createReport, and then deliberately faults with an access
 // violation. The parent validates that a structurally valid minidump was written to the
 // expected destination, names the faulting thread and process, and carries the
@@ -166,8 +167,10 @@ int RunChild(int argc, wchar_t** argv) {
   Require(!ready_path.empty(), "child missing --ready");
   if (reenter) Require(!probe_path.empty(), "child missing --reenter probe path");
 
-  // The game's HandleCrashDump loads dbghelp before reaching createReport.
-  Require(LoadLibraryW(L"dbghelp.dll") != nullptr, "child could not load dbghelp.dll");
+  // Nothing here loads dbghelp.dll, as in the game: echovr.exe imports none and HandleCrashDump
+  // calls no loader function (measured on a forced crash in a game copy: GetModuleHandleW failed with
+  // ERROR_MOD_NOT_FOUND). The dump below exists only if the host loaded dbghelp itself.
+  Require(GetModuleHandleW(L"dbghelp.dll") == nullptr, "the child process already has dbghelp.dll loaded");
 
   HMODULE shim = LoadLibraryW(shim_path.c_str());
   Require(shim != nullptr, "child could not load the BugSplat64.dll shim");
