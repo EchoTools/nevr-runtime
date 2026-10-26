@@ -26,6 +26,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/binary_bug_fixes.cpp",
     "patch/broadcaster_guard.cpp",
     "patch/coop_ai_trace.cpp",
+    "patch/credits_text.cpp",
     "patch/early_quit_lockout.cpp",
     "patch/evrp_package.cpp",
     "patch/headless_graphics.cpp",
@@ -39,7 +40,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/social_facade_object.cpp",
     "patch/xpid_patch.cpp",
 )
-EXPECTED_PATCH_SOURCE_COUNT = 18
+EXPECTED_PATCH_SOURCE_COUNT = 19
 
 
 class InventoryError(Exception):
