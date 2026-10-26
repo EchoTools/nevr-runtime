@@ -88,7 +88,8 @@ struct TextureChoice {
 
 struct LogEvent {
   LogLevel level;
-  std::string message;  // never contains a configured value, only key and feature names
+  std::string message;  // never contains a configured value, only key and feature names; the one exception is a rejected
+                        // graphics.texture_quality word, named when it is at most 32 printable ASCII characters
 };
 
 struct ResolvedConfig {
