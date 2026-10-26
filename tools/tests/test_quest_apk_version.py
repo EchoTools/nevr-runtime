@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import shutil
 import struct
 import subprocess
@@ -154,8 +155,9 @@ class NumberingTest(unittest.TestCase):
         self.assertGreater(50_000_000, INSTALLER)
 
     def test_the_pinned_last_release_is_not_above_the_newest_release_tag_the_repo_knows(self):
-        tags = subprocess.run(["git", "-C", str(REPO), "tag", "--list", "v[0-9]*", "--sort=-v:refname", "--exclude", "v*-*"],
-                              capture_output=True, text=True).stdout.split()
+        listed = subprocess.run(["git", "-C", str(REPO), "tag", "--list", "v[0-9]*", "--sort=-v:refname"],
+                                capture_output=True, text=True, check=True).stdout.split()
+        tags = [t for t in listed if re.fullmatch(r"v\d+\.\d+\.\d+", t)]  # `git tag` has no --exclude: drop the pre-releases here
         if not tags:
             self.skipTest("no release tags in this clone (a shallow checkout)")
         newest = tuple(int(n) for n in tags[0][1:].split("."))
