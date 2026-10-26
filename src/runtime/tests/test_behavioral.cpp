@@ -3481,20 +3481,103 @@ std::string FailurePayload(uint32_t code) {
   return out;
 }
 
-// A client run: g_isServer false for the test's length.
+uint64_t g_fakeNowMs = 0;
+uint64_t FakeNowMs() { return g_fakeNowMs; }
+
+size_t CountLogLines(const std::string& needle) {
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  return static_cast<size_t>(std::count_if(g_testLogMessages.begin(), g_testLogMessages.end(),
+                                           [&needle](const std::string& line) { return line.find(needle) != std::string::npos; }));
+}
+
+// A client run: g_isServer false, a fresh lobby-record limiter and a clock the test moves by hand.
 class ClientRun {
  public:
   ClientRun() : wasServer_(g_isServer) {
     g_isServer = FALSE;
+    g_fakeNowMs = 1000;
+    TestHook_ResetLobbyFrameLimiter();
+    TestHook_SetLobbyFrameClock(&FakeNowMs);
     ClearTestLogs();
   }
-  ~ClientRun() { g_isServer = wasServer_; }
+  ~ClientRun() {
+    g_isServer = wasServer_;
+    TestHook_SetLobbyFrameClock(nullptr);
+    TestHook_ResetLobbyFrameLimiter();
+  }
 
  private:
   BOOL wasServer_;
 };
 
 }  // namespace lobby_frame_test
+
+// The bridge cannot bound how often the game sends a join (its party-follow loop runs from the game's own
+// update), so a kind writes a burst of records per window and counts the rest.
+TEST(WsBridgeLobbyFrameLog, AJoinStormWritesItsBurstAndCountsTheRest) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  for (int i = 0; i < 50; ++i) {
+    TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1001})));
+  }
+  EXPECT_EQ(CountLogLines("lobby join requested"), 10U);
+  EXPECT_EQ(CountLogLines("suppressed"), 0U) << "the count is written when the window ends, not before";
+  // A different kind has its own burst: the answer to the storm is still recorded.
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kFailureSym, FailurePayload(8)));
+  EXPECT_TRUE(TestLogContains("lobby session failure conn=3 code=8 reason=lobby_full"));
+}
+
+TEST(WsBridgeLobbyFrameLog, TheSuppressedCountIsWrittenBeforeTheFirstRecordOfTheNextWindow) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  for (int i = 0; i < 50; ++i) {
+    TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1001})));
+  }
+  g_fakeNowMs += 10000;
+  ClearTestLogs();
+  TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1001})));
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  ASSERT_EQ(g_testLogLeveled.size(), 2U);
+  EXPECT_EQ(g_testLogLeveled[0].first, EchoVR::LogLevel::Info);
+  EXPECT_NE(g_testLogLeveled[0].second.find("[NEVR.WS] lobby frame records suppressed kind=join count=40 window_ms=10000"),
+            std::string::npos)
+      << g_testLogLeveled[0].second;
+  EXPECT_NE(g_testLogLeveled[1].second.find("lobby join requested"), std::string::npos) << g_testLogLeveled[1].second;
+}
+
+TEST(WsBridgeLobbyFrameLog, AnotherKindsFrameReportsTheEndedWindowToo) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  for (int i = 0; i < 13; ++i) {
+    TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1001})));
+  }
+  g_fakeNowMs += 10000;
+  ClearTestLogs();
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kFailureSym, FailurePayload(8)));
+  EXPECT_TRUE(TestLogContains("lobby frame records suppressed kind=join count=3 window_ms=10000"));
+  EXPECT_TRUE(TestLogContains("lobby session failure conn=3 code=8"));
+}
+
+TEST(WsBridgeLobbyFrameLog, AWindowThatSuppressedNothingWritesNoSummary) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  for (int i = 0; i < 5; ++i) {
+    TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1001})));
+  }
+  g_fakeNowMs += 10000;
+  TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1001})));
+  EXPECT_EQ(CountLogLines("lobby join requested"), 6U);
+  EXPECT_EQ(CountLogLines("suppressed"), 0U);
+}
+
+TEST(WsBridgeLobbyFrameLog, FramesTheDecodeCannotReadAreLimitedLikeTheRest) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  for (int i = 0; i < 50; ++i) {
+    TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kJoinSym, std::string(10, '\x01')));
+  }
+  EXPECT_EQ(CountLogLines("lobby join request could not be read"), 10U);
+}
 
 TEST(WsBridgeLobbyFrameLog, ClientLogsAFindRequestAtInfoWithItsEntrantsAndLobbies) {
   using namespace lobby_frame_test;

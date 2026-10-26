@@ -60,6 +60,10 @@ bool TestHook_GuardWsCallbackPropagatesNonStdException();
 int TestHook_LogFrameMessages(const char* direction, int connIdx, const std::string& frame);
 int TestHook_LogGameToServerFrame(const std::string& frame);
 void TestHook_ObserveSocialFrames(const char* direction, int connIdx, const std::string& frame);
+/// Forgets every lobby-record window (compat/lobby_frame.h RecordLimiter), so a test starts with a full burst.
+void TestHook_ResetLobbyFrameLimiter();
+/// The clock (milliseconds) the lobby-record limiter reads; nullptr restores GetTickCount64.
+void TestHook_SetLobbyFrameClock(uint64_t (*clockMs)());
 bool TestHook_ReadLoginFailureDiagnostic(const std::string& frame, uint64_t* statusCode, size_t* messageBytes);
 bool TestHook_LogLoginFailureDiagnostic(const std::string& frame, bool serverMode);
 bool TestHook_MoveCodeLineFirst(const std::string& frame, std::string* out);

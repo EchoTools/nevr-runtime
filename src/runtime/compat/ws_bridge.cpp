@@ -554,6 +554,11 @@ static int LogGameToServerFrame(const std::string& frame, const std::string& wsC
 // names), the entrants as XPIDs and the failure code; the settings JSON of a request and the message of a
 // failure are remote text and are not read out (logging.md Rule 4). A failure frame carries no lobby id: pair it
 // with the request before it on the same conn.
+static uint64_t RealLobbyClockMs() { return GetTickCount64(); }
+static std::mutex g_lobbyLimiterMutex;
+static nevr_lobby_frame::RecordLimiter g_lobbyLimiter;
+static uint64_t (*g_lobbyClockMs)() = &RealLobbyClockMs;
+
 static void LogClientLobbyMessage(int connIdx, bool fromServer, uint64_t symbol, const uint8_t* payload, uint64_t len) {
   const std::optional<nevr_lobby_frame::Kind> kind = nevr_lobby_frame::KindOf(symbol, fromServer);
   if (!kind) return;
@@ -2350,6 +2355,16 @@ int TestHook_LogFrameMessages(const char* direction, int connIdx, const std::str
 
 void TestHook_ObserveSocialFrames(const char* direction, int connIdx, const std::string& frame) {
   ObserveSocialFrames(direction, connIdx, frame);
+}
+
+void TestHook_ResetLobbyFrameLimiter() {
+  std::lock_guard<std::mutex> lock(g_lobbyLimiterMutex);
+  g_lobbyLimiter.Reset();
+}
+
+void TestHook_SetLobbyFrameClock(uint64_t (*clockMs)()) {
+  std::lock_guard<std::mutex> lock(g_lobbyLimiterMutex);
+  g_lobbyClockMs = clockMs != nullptr ? clockMs : &RealLobbyClockMs;
 }
 
 bool TestHook_ReadLoginFailureDiagnostic(const std::string& frame, uint64_t* statusCode, size_t* messageBytes) {
