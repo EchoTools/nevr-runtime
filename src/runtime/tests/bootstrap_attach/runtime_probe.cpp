@@ -138,6 +138,7 @@ const NevrRuntimeApi kApi = {
     },
     &Initialize,
     &GameMain,
+    {},  // the export table: this probe publishes none, and the host's thunks then return their failure values
 };
 
 }  // namespace

@@ -112,7 +112,10 @@ class IdentityScope(unittest.TestCase):
         self.assertEqual(carried.get("initialize.cpp"), {"NEVR_PROJECT_VERSION"})
         self.assertEqual(carried.get("patches.cpp"), {"PROJECT_VERSION", "GIT_COMMIT_HASH"})
         self.assertEqual(carried.get("gameserver.cpp"), {"PROJECT_VERSION", "GIT_COMMIT_HASH"})
-        self.assertEqual(set(carried), {"build_identity.cpp", "ws_bridge.cpp", "initialize.cpp", "patches.cpp", "gameserver.cpp"},
+        # The host states the build identity in a literal of its own, equal to the runtime's (#853).
+        self.assertEqual(carried.get("host_identity.cpp"), {"NEVR_PROJECT_VERSION", "NEVR_GIT_COMMIT_FULL"})
+        self.assertEqual(set(carried), {"build_identity.cpp", "ws_bridge.cpp", "initialize.cpp", "patches.cpp", "gameserver.cpp",
+                                        "host_identity.cpp"},
                          "another file now reads the identity: give it its definition in its CMakeLists.txt")
 
     def test_every_edge_that_defines_a_macro_gives_it_the_same_value_and_the_values_belong_together(self):

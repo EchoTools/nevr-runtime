@@ -52,6 +52,7 @@ class SmokeSyncTest(unittest.TestCase):
         (self.seed / "tools/scenario/smoke.yaml").write_text("name: smoke\n")
         (self.seed / "build/mingw-scenario/bin").mkdir(parents=True)
         (self.seed / "build/mingw-scenario/bin/BugSplat64.dll").write_text("dll")
+        (self.seed / "build/mingw-scenario/bin/nevr-runtime.dll").write_text("dll")
         git(self.seed, "add", "-A")
         git(self.seed, "commit", "-q", "-m", "one")
         git(self.seed, "push", "-q", "origin", "main")

@@ -1,8 +1,9 @@
 nEVR runtime @VERSION@  (commit @COMMIT@)
 
 What this is
-  The nEVR runtime for Echo VR on Windows: one file, BugSplat64.dll, that replaces the game's
-  BugSplat64.dll. A player's game needs no config file of any kind: the service endpoints and the public keys
+  The nEVR runtime for Echo VR on Windows: two files that go in the game's folder together. BugSplat64.dll
+  replaces the game's BugSplat64.dll and is the small host the game loads; it loads nevr-runtime.dll,
+  which holds the runtime, from the same folder. A player's game needs no config file of any kind: the service endpoints and the public keys
   are built in. A dedicated server does need one (see Running a dedicated server), and echovr_server.exe,
   the server's launcher, is in this package too.
 
@@ -17,12 +18,12 @@ Install
        -Dir "C:\...\ready-at-dawn-echo-arena\bin\win10"
   The script checks the package against SHA256SUMS, copies your original BugSplat64.dll to
   BugSplat64.dll.original-<timestamp> next to it, renames a legacy dbgcore.dll to
-  dbgcore.dll.legacy-<date> (the runtime refuses to start beside one), and installs the new file.
-  It deletes nothing.
+  dbgcore.dll.legacy-<date> (the runtime refuses to start beside one), and installs the two new files. An
+  nevr-runtime.dll already in the folder is renamed to nevr-runtime.dll.original-<timestamp>. It deletes nothing.
 
 Running a dedicated server
   echovr_server.exe in this package starts a dedicated server. install.ps1 does not copy it. Install
-  BugSplat64.dll as above, then copy echovr_server.exe into the same folder as echovr.exe
+  both DLLs as above, then copy echovr_server.exe into the same folder as echovr.exe
   (...\ready-at-dawn-echo-arena\bin\win10) and run it from a console there:
        .\echovr_server.exe
   It starts echovr.exe -server -headless -no-console from its own folder and passes any arguments on. A server
@@ -49,8 +50,9 @@ Running a dedicated server
 
 Update
   Unzip the newer package and run its install.ps1 the same way. When the BugSplat64.dll in the folder is
-  one this folder's install put there, the script replaces it with the new one and keeps your original
-  BugSplat64.dll backup as it was; uninstall.ps1 then still puts your original back. It stops and leaves
+  one this folder's install put there, the script replaces it and nevr-runtime.dll with the new ones and keeps
+  your original BugSplat64.dll backup as it was; uninstall.ps1 then still puts your original back. If
+  the update fails, both files are put back as they were. It stops and leaves
   the file alone when it is one the script did not put there. If the BugSplat64.dll in the folder is already
   this package's (copied in by hand), install.ps1 records it so uninstall.ps1 can undo it. uninstall.ps1 also
   accepts any NEVR runtime DLL (one carrying the NEVR-BUILD identity text) in the folder.
@@ -58,7 +60,8 @@ Update
 Uninstall
   Close Echo VR, then:
        powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 -Dir "<the same bin\win10 folder>"
-  This puts your original BugSplat64.dll and a legacy dbgcore.dll back. The backup files stay.
+  This puts your original BugSplat64.dll and a legacy dbgcore.dll back and sets nevr-runtime.dll aside as
+  nevr-runtime.dll.uninstalled-<timestamp>. The backup files stay.
 
 If the Quest build will not start
   Connect the headset by USB (USB debugging on), then:
@@ -73,7 +76,7 @@ If the Quest build will not start
 
 Signing
   SIGNING.txt in this package says how to check whether each file is signed. A file that is not signed may be
-  flagged by Windows Defender or SmartScreen. The SHA-256 of BugSplat64.dll is in SHA256SUMS; compare it with
+  flagged by Windows Defender or SmartScreen. The SHA-256 of both DLLs is in SHA256SUMS; compare it with
   the value you were given.
 
 Logs

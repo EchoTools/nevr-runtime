@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 PE_SUFFIXES = {".dll", ".exe"}
-REQUIRED_FILES = {"BugSplat64.dll", "echovr_server.exe"}
+REQUIRED_FILES = {"BugSplat64.dll", "nevr-runtime.dll", "echovr_server.exe"}
 
 
 def sha256(path: Path) -> str:

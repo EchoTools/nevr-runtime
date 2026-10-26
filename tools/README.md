@@ -12,7 +12,7 @@ unit tests in `tests/`; the rest are run by hand or by a `just` recipe.
 | `verify_log_rules.py` | The mechanically checkable rules of `docs/standards/logging.md` (for example, no INFO line in a per-frame path). |
 | `verify_mode_patch_ground_truth.py` | Every plain byte rewrite in `mode_patches.cpp` has binary ground truth in `tests/system/mode_patches_test.go`. |
 | `verify_patch_source_inventory.py` | The `patch/*.cpp` entries of `PATCHES_SOURCES` match the expected inventory (update it deliberately when a patch is added or removed). |
-| `verify_scenario_control_absent.py` | A release `BugSplat64.dll` carries no scenario-test control endpoint. |
+| `verify_scenario_control_absent.py` | A release `BugSplat64.dll` and `nevr-runtime.dll` carry no scenario-test control endpoint. |
 
 `tests/` holds the Python unit tests for these scripts and for the shell and Python tools below, plus
 source-invariant tests over the C++ tree and the release contract

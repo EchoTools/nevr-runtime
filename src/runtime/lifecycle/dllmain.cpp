@@ -1,89 +1,34 @@
-// dllmain.cpp : Defines the entry point for the DLL application.
+// dllmain.cpp : the entry point of nevr-runtime.dll.
 //
-// Supports two loading modes:
-//   1. Launcher mode: loaded by echovr.exe (our launcher) via LoadLibrary.
-//      NEVR_SetGameModule(hGame) is called after loading to set the game base
-//      and trigger initialization.
-//   2. Legacy mode: deployed as dbgcore.dll (DLL hijacking for early load).
-//      DllMain detects this and initializes immediately.
+// The host, BugSplat64.dll (runtime/host/host_dllmain.cpp), is the DLL the game imports and the one that
+// installs the rendezvous detour. It loads this DLL on the game's first call into the main wrapper and
+// calls the descriptor it exports (NEVR_GetRuntimeApi, runtime/lifecycle/runtime_entry.cpp); the runtime
+// initializes from there, on the game's main thread, outside the loader lock. DllMain therefore does nothing at
+// attach: no initialization, no file I/O, no thread.
 #include "core/pch.h"
-#include "abi/echovr_functions.h"
 #include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/broadcaster_guard.h"
 #include "runtime/ext/module_loader.h"
 #include "runtime/compat/ws_bridge.h"
-#include "runtime/host/host_entry.h"
-#include "runtime/lifecycle/initialize.h"
-#include "runtime/lifecycle/runtime_entry.h"
-#include "runtime/lifecycle/system_module_loader.h"
-#include "runtime/ext/plugin_loader.h"
 #include "runtime/patch/binary_bug_fixes.h"
 #include "runtime/log/builtin_filter.h"
 #include "runtime/patch/resource_override.h"
 #include "runtime/patch/plugin_assets.h"
 
-#include <dbghelp.h>
-
-// --- Legacy dbgcore.dll proxy (kept for backwards compatibility) ---
-
-static HMODULE g_realDbgCore = nullptr;
-
-using MiniDumpWriteDump_t = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE,
-                                          PMINIDUMP_EXCEPTION_INFORMATION,
-                                          PMINIDUMP_USER_STREAM_INFORMATION,
-                                          PMINIDUMP_CALLBACK_INFORMATION);
-static MiniDumpWriteDump_t g_realMiniDumpWriteDump = nullptr;
-
-static void LoadRealDbgCore() {
-  if (g_realDbgCore) return;
-
-  g_realDbgCore = nevr::lifecycle::LoadSystemDbgCore(GetSystemDirectoryW, LoadLibraryW);
-  if (g_realDbgCore) {
-    g_realMiniDumpWriteDump =
-        (MiniDumpWriteDump_t)::GetProcAddress(g_realDbgCore, "MiniDumpWriteDump");
-  }
-}
-
-extern "C" __declspec(dllexport) BOOL WINAPI MiniDumpWriteDump(
-    HANDLE hProcess, DWORD ProcessId, HANDLE hFile, MINIDUMP_TYPE DumpType,
-    PMINIDUMP_EXCEPTION_INFORMATION ExceptionParam,
-    PMINIDUMP_USER_STREAM_INFORMATION UserStreamParam,
-    PMINIDUMP_CALLBACK_INFORMATION CallbackParam) {
-  LoadRealDbgCore();
-  if (g_realMiniDumpWriteDump) {
-    return g_realMiniDumpWriteDump(hProcess, ProcessId, hFile, DumpType,
-                                  ExceptionParam, UserStreamParam,
-                                  CallbackParam);
-  }
-  SetLastError(ERROR_PROC_NOT_FOUND);
-  return FALSE;
-}
-
-// --- BugSplat MiniDmpSender methods ---
-// The nine exports the game imports are in runtime/host/minidmp_sender_exports.cpp; exports.def maps them.
-
-// --- Launcher entry point ---
-
-extern "C" __declspec(dllexport) void NEVR_SetGameModule(HMODULE hGame) {
-  nevr_host::SetGameModule(hGame);
-}
-
 // --- DLL entry point ---
 
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
+BOOL APIENTRY DllMain(HMODULE, DWORD ul_reason_for_call, LPVOID lpReserved) {
   switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH:
-      // The host's attach: validate the image and install the one detour on the game's main
-      // wrapper. Nothing initializes here; the runtime's initialize runs from that detour.
-      nevr_host::OnProcessAttach(hModule, GetModuleHandleW(nullptr),
-                                 GetModuleHandleA("echovr_game.dll") != NULL,
-                                 &nevr_runtime_entry::GetRuntimeApi);
       break;
     case DLL_PROCESS_DETACH:
-      nevr_host::OnProcessDetach(lpReserved != NULL);  // the last chance to report a failed attach
       // Only do clean shutdown on dynamic unload (lpReserved == NULL).
       // During process termination (lpReserved != NULL), threads are already
       // dead and joining would deadlock under the loader lock.
+      //
+      // Nothing frees this DLL in production: the host loads it once and keeps it mapped for the life of the
+      // process (a failed runtime stays mapped too), so this list does not run there. It stays, in its order,
+      // for a host that unloads the runtime and for the test hosts that do.
       if (lpReserved == NULL) {
         UnloadModules();
         nevr_asset_cdn::Shutdown();
@@ -93,18 +38,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         nevr::assets::ShutdownPluginAssets();
         ShutdownResourceOverride();
         ShutdownWebSocketBridge();
-        // Dynamic unload only: FreeLibrary during process termination can leave a module in use
-        // after the system has run its termination code; the OS reclaims it with the process.
-        if (g_realDbgCore) {
-          FreeLibrary(g_realDbgCore);
-          g_realDbgCore = nullptr;
-        }
       }
       break;
   }
   return TRUE;
-}
-
-extern "C" __declspec(dllexport) void DetoursExportPlaceholder() {
-  // An export with ordinal number 1 is needed for this library to be loaded as a suspended process.
 }

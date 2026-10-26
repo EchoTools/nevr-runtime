@@ -2,6 +2,8 @@ LIBRARY BugSplat64
 EXPORTS
    DetoursExportPlaceholder			@1
    MiniDumpWriteDump
+   NEVR_SetGameModule
+   ; Thunks to nevr-runtime.dll (runtime/host/runtime_exports.cpp)
    NEVR_ScheduleReturnToLobby
    NEVR_GetUPnPConfig
    NEVR_RegisterResourceOverride
@@ -9,6 +11,15 @@ EXPORTS
    NEVR_DeregisterResourceOverrides
    NEVR_RegisterAsset
    NEVR_DeregisterAssets
+   TokenAuth_GetToken
+   TokenAuth_GetDiscordId
+   TokenAuth_GetUsername
+   platform_compat_ApiVersion
+   platform_compat_Init
+   platform_compat_Shutdown
+   token_auth_ApiVersion
+   token_auth_Init
+   token_auth_Shutdown
    ; BugSplat MiniDmpSender stubs — MSVC mangled names the game expects
    ??0MiniDmpSender@@QEAA@PEB_W000K@Z = BugSplat_MiniDmpSender_Ctor
    ??1MiniDmpSender@@UEAA@XZ = BugSplat_MiniDmpSender_Dtor

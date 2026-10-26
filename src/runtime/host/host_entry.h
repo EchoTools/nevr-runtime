@@ -27,10 +27,7 @@ namespace nevr_host {
 
 /// `game_module` is the process image in direct-import mode. In launcher mode the
 /// image arrives later through SetGameModule, so the host only prepares here.
-/// `in_process_runtime`, when set, is the entry point of a runtime compiled into this image
-/// (the rendezvous then loads nothing from disk); it is kept for SetGameModule.
-void OnProcessAttach(HMODULE host_module, HMODULE game_module, bool launcher_mode,
-                     NevrGetRuntimeApiFn in_process_runtime = nullptr) noexcept;
+void OnProcessAttach(HMODULE host_module, HMODULE game_module, bool launcher_mode) noexcept;
 
 /// DllMain, DLL_PROCESS_DETACH. `process_terminating` is `lpReserved != NULL`. On termination, writes whatever the
 /// attach journal still holds (see BootstrapDiagnostics::FlushAttachJournalAtExit); a dynamic unload does nothing.

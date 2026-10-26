@@ -25,7 +25,7 @@ from the build.
 
 | file | audience | holds |
 |---|---|---|
-| `nevr-runtime-vX.Y.Z-windows.zip` | players on Windows and people running a dedicated server | `BugSplat64.dll`, `echovr_server.exe` (both stripped, debug info split off), `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt` (the install steps and the dedicated-server steps), `SIGNING.txt`, `SHA256SUMS` (the files inside the zip: `install.ps1` and `uninstall.ps1` check `BugSplat64.dll` against it). The zip has no `plugins/` entry: a zip holds no empty directory |
+| `nevr-runtime-vX.Y.Z-windows.zip` | players on Windows and people running a dedicated server | `BugSplat64.dll` (the host), `nevr-runtime.dll` (the runtime), `echovr_server.exe` (all stripped, debug info split off), `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt` (the install steps and the dedicated-server steps), `SIGNING.txt`, `SHA256SUMS` (the files inside the zip: `install.ps1` and `uninstall.ps1` check both DLLs against it). The zip has no `plugins/` entry: a zip holds no empty directory |
 | `nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so` | Quest packagers | the Quest sentinel library, a loose ELF (attested; not Authenticode) |
 
 There is no top-level `SHA256SUMS` and no `RELEASE-NOTES.md` asset. The **release body** carries the notes and a table
@@ -57,7 +57,7 @@ installed: the CDN caches the 200 HTML answer for that exact address. A changed 
    Read its output to the end: it fails on a Windows or Quest build that does not package. It needs the Quest signing
    keystore in `pass`, the store APK and the NDK, as its recipe says. What it cannot show is the signer, the attestation
    and the draft upload; those are checked on the draft ("Check the draft").
-4. The PC login test passes with this tip's `BugSplat64.dll` on a throwaway copy of the install, against production
+4. The PC login test passes with this tip's `BugSplat64.dll` and `nevr-runtime.dll` on a throwaway copy of the install, against production
    (`AGENTS.md`, "Client login test mechanics"): the run's log shows the four keys on the `built-in defaults embedded in
    this build:` line, then `LOGIN SUCCESS` and `to logged in`.
 
@@ -100,12 +100,12 @@ mkdir -p "$S" && gh release download vX.Y.Z -D "$S"                  # a new, em
 for f in "$S"/*; do gh attestation verify "$f" -R EchoTools/nevr-runtime; done   # each exits 0
 mkdir -p "$S.unzipped" && unzip -q "$S"/nevr-runtime-vX.Y.Z-windows.zip -d "$S.unzipped"   # a new, empty directory
 (cd "$S.unzipped" && sha256sum -c SHA256SUMS)                         # every file but SHA256SUMS: OK
-(cd "$S.unzipped" && strings -a BugSplat64.dll | grep -a '^NEVR-BUILD')
-python3 tools/pe_version_info.py check --dll "$S.unzipped/BugSplat64.dll" --exe "$S.unzipped/echovr_server.exe"   # exits 0
+(cd "$S.unzipped" && strings -a BugSplat64.dll nevr-runtime.dll | grep -a '^NEVR-BUILD')   # two identical lines
+python3 tools/pe_version_info.py check --dll "$S.unzipped/BugSplat64.dll" --runtime-dll "$S.unzipped/nevr-runtime.dll" --exe "$S.unzipped/echovr_server.exe"   # exits 0
 ```
 
-The `NEVR-BUILD` line must be exactly `NEVR-BUILD X.Y.Z <the tag's commit, 40 hex>` (one literal; `git rev-parse vX.Y.Z^{commit}`).
-The last line reads the VERSIONINFO of both files (the Details tab: description, product name, copyright, company, original
+Each `NEVR-BUILD` line (one per DLL) must be exactly `NEVR-BUILD X.Y.Z <the tag's commit, 40 hex>` (one literal; `git rev-parse vX.Y.Z^{commit}`).
+The last line reads the VERSIONINFO of the three files (the Details tab: description, product name, copyright, company, original
 file name and the file and product version `X.Y.Z`, numeric `X.Y.Z.0`) and compares every field with the pinned values and
 with the version in the DLL's `NEVR-BUILD` literal; `python3 tools/pe_version_info.py show <file>` prints them.
 
@@ -158,7 +158,7 @@ gh release view vX.Y.Z --json body --jq .body                         # the tabl
 (cd "$S" && sha256sum nevr-runtime-vX.Y.Z-*)                          # the same two values
 ```
 
-`notes` takes the version and the commit from the `BugSplat64.dll` inside the zip, so the body cannot describe another
+`notes` takes the version and the commit from the `BugSplat64.dll` and `nevr-runtime.dll` inside the zip (they must agree), so the body cannot describe another
 build. The table must be written after the last signing pass: each pass signs with a fresh timestamp and changes the
 zip's bytes. `notes` renders the table and the install notes only. Before the body goes on the draft, append a section
 that says, for each audience the release is for (players, server hosts, plugin developers), what changed for them in plain

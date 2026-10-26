@@ -5,6 +5,7 @@
 // tests/rendezvous.
 
 #include "runtime/host/runtime_rendezvous.h"
+#include "runtime/host/stop_notice.h"
 
 #include <gtest/gtest.h>
 
@@ -14,7 +15,10 @@
 
 #include <windows.h>
 
+#include <atomic>
+#include <cstdint>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -331,4 +335,273 @@ TEST(HostRendezvousInstall, ADetourEnteredWithNoRendezvousAtAllReturnsZero) {
   RendezvousSandbox sandbox;
   RuntimeRendezvous::ResetActiveForTest();
   EXPECT_EQ(RuntimeRendezvous::GameMainWrapperDetour(0x1234), 0);
+}
+
+// --- the stop: a runtime that did not load ends the game (docs/adr/0012-static-install-root.md) ----
+
+namespace {
+
+std::atomic<int> g_stops{0};
+std::atomic<std::uint32_t> g_stop_code{0};
+void CountStop(std::uint32_t exit_code) {
+  g_stop_code.store(exit_code);
+  g_stops.fetch_add(1);
+}
+
+// Executable memory that starts with the pinned prologue and then returns 0x12345678 as a function that
+// leaves its frame, so the trampoline MinHook builds can really be called.
+class ReturningTarget {
+ public:
+  ReturningTarget() {
+    code_ = static_cast<unsigned char*>(
+        VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (code_ == nullptr) return;
+    std::memcpy(code_, nevr_host::kGameMainWrapperPrologue, nevr_host::kGameMainWrapperPrologueSize);
+    const unsigned char tail[] = {0xB8, 0x78, 0x56, 0x34, 0x12,  // mov eax, 0x12345678
+                                  0x48, 0x83, 0xC4, 0x38,        // add rsp, 0x38
+                                  0xC3};                         // ret
+    std::memcpy(code_ + nevr_host::kGameMainWrapperPrologueSize, tail, sizeof(tail));
+    std::memset(code_ + nevr_host::kGameMainWrapperPrologueSize + sizeof(tail), 0xCC, 32);
+  }
+  ~ReturningTarget() {
+    MH_Uninitialize();
+    if (code_ != nullptr) VirtualFree(code_, 0, MEM_RELEASE);
+  }
+  unsigned char* code() const { return code_; }
+
+ private:
+  unsigned char* code_ = nullptr;
+};
+
+}  // namespace
+
+TEST(HostRendezvousStop, ARuntimeThatDidNotLoadStopsTheGameWithCode78AndOneRecordHoweverOftenTheDetourRuns) {
+  RendezvousSandbox sandbox;
+  g_stops.store(0);
+  g_stop_code.store(0);
+  RuntimeRendezvous::Seams().stop_game = &CountStop;
+  const std::wstring local = MakeTempDir();
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  ReturningTarget target;
+  ASSERT_NE(target.code(), nullptr);
+  RuntimeRendezvous rendezvous;
+  // kernel32's directory has no nevr-runtime.dll: the load ends at runtime_absent.
+  rendezvous.Prepare(GetModuleHandleW(L"kernel32.dll"), GetModuleHandleW(nullptr), diagnostics);
+  ASSERT_NE(rendezvous.Install(target.code()), nullptr);
+
+  // The seam lets the original run after the stop, so a harness can look on; production ends the process.
+  EXPECT_EQ(RuntimeRendezvous::GameMainWrapperDetour(0x1234), 0x12345678);
+  EXPECT_EQ(RuntimeRendezvous::GameMainWrapperDetour(0x1234), 0x12345678);
+  EXPECT_EQ(g_stops.load(), 2);
+  EXPECT_EQ(g_stop_code.load(), 78u);
+  EXPECT_EQ(rendezvous.RuntimeApi(), nullptr);
+
+  int stop_records = 0;
+  for (const nlohmann::json& record : Records(diagnostics, local)) {
+    if (record.value("event", "") != "game_stop") continue;
+    ++stop_records;
+    EXPECT_EQ(record.at("reason"), "runtime_absent");
+    EXPECT_EQ(record.at("exit_code"), 78);
+  }
+  EXPECT_EQ(stop_records, 1);
+  RuntimeRendezvous::ResetActiveForTest();
+}
+
+// The player is told once, plainly, when the runtime did not load (decision 3 of ADR 0012 step 2; #854 owns the
+// final wording and the verification). Nobody is at the screen of a server or any headless run, and a modal box
+// there would hold the process, so those get the record only.
+namespace {
+
+std::vector<std::string> g_events;
+std::vector<std::wstring> g_notice_texts;
+const char* g_command_line = "";
+
+void RecordNotice(const wchar_t* text) {
+  g_events.push_back("notice");
+  g_notice_texts.emplace_back(text);
+}
+void RecordStop(std::uint32_t) { g_events.push_back("stop"); }
+const char* CommandLine() { return g_command_line; }
+
+// Runs the detour three times against a runtime that is absent, with the given command line, and returns the
+// notice decision the game_stop record carries.
+std::string RunStopWith(const char* command_line, std::vector<nlohmann::json>* records_out = nullptr) {
+  RendezvousSandbox sandbox;
+  g_events.clear();
+  g_notice_texts.clear();
+  g_command_line = command_line;
+  RuntimeRendezvous::Seams().stop_game = &RecordStop;
+  RuntimeRendezvous::Seams().show_stop_notice = &RecordNotice;
+  RuntimeRendezvous::Seams().command_line = &CommandLine;
+  const std::wstring local = MakeTempDir();
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  ReturningTarget target;
+  EXPECT_NE(target.code(), nullptr);
+  RuntimeRendezvous rendezvous;
+  rendezvous.Prepare(GetModuleHandleW(L"kernel32.dll"), GetModuleHandleW(nullptr), diagnostics);
+  EXPECT_NE(rendezvous.Install(target.code()), nullptr);
+  for (int i = 0; i < 3; ++i) RuntimeRendezvous::GameMainWrapperDetour(0x1234);
+  std::string notice;
+  const std::vector<nlohmann::json> records = Records(diagnostics, local);
+  for (const nlohmann::json& record : records) {
+    if (record.value("event", "") == "game_stop") notice = record.value("notice", "(none)");
+  }
+  if (records_out != nullptr) *records_out = records;
+  RuntimeRendezvous::ResetActiveForTest();
+  return notice;
+}
+
+}  // namespace
+
+TEST(HostStopNotice, AClientWithGraphicsIsToldOnceBeforeTheProcessEndsHoweverOftenTheDetourRuns) {
+  EXPECT_EQ(RunStopWith("\"C:\\Games\\echovr.exe\" -windowed"), "shown");
+  EXPECT_EQ(g_notice_texts.size(), 1u);
+  ASSERT_FALSE(g_notice_texts.empty());
+  EXPECT_EQ(g_notice_texts[0],
+            L"nEVR couldn't start: nevr-runtime.dll is missing or damaged. Please reinstall with the installer.");
+  ASSERT_GE(g_events.size(), 2u);
+  EXPECT_EQ(g_events[0], "notice") << "the player is told before the process is ended";
+  EXPECT_EQ(g_events[1], "stop");
+}
+
+TEST(HostStopNotice, AServerIsNeverShownADialogThatWouldHoldTheProcess) {
+  for (const char* line : {"echovr.exe -server -noovr", "echovr.exe -SERVER", "echovr.exe --server", "echovr.exe -windowed -server"}) {
+    SCOPED_TRACE(line);
+    EXPECT_EQ(RunStopWith(line), "suppressed_server_or_headless");
+    EXPECT_TRUE(g_notice_texts.empty());
+    EXPECT_FALSE(g_events.empty());
+    EXPECT_EQ(g_events[0], "stop");
+  }
+}
+
+TEST(HostStopNotice, AnyHeadlessRunIsSpokenToByTheLogOnly) {
+  for (const char* line : {"echovr.exe -headless", "echovr.exe -windowed -HEADLESS", "echovr.exe +headless"}) {
+    SCOPED_TRACE(line);
+    EXPECT_EQ(RunStopWith(line), "suppressed_server_or_headless");
+    EXPECT_TRUE(g_notice_texts.empty());
+  }
+}
+
+namespace {
+const char* UnreadableCommandLine() { throw std::runtime_error("the command line cannot be read"); }
+}  // namespace
+
+TEST(HostStopNotice, ACommandLineThatCannotBeReadMeansNoDialogBecauseItMightHoldAServer) {
+  RendezvousSandbox sandbox;
+  g_events.clear();
+  g_notice_texts.clear();
+  RuntimeRendezvous::Seams().stop_game = &RecordStop;
+  RuntimeRendezvous::Seams().show_stop_notice = &RecordNotice;
+  RuntimeRendezvous::Seams().command_line = &UnreadableCommandLine;
+  const std::wstring local = MakeTempDir();
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  ReturningTarget target;
+  ASSERT_NE(target.code(), nullptr);
+  RuntimeRendezvous rendezvous;
+  rendezvous.Prepare(GetModuleHandleW(L"kernel32.dll"), GetModuleHandleW(nullptr), diagnostics);
+  ASSERT_NE(rendezvous.Install(target.code()), nullptr);
+  RuntimeRendezvous::GameMainWrapperDetour(0x1234);
+  EXPECT_TRUE(g_notice_texts.empty());
+  std::string notice = "(none)";
+  for (const nlohmann::json& record : Records(diagnostics, local)) {
+    if (record.value("event", "") == "game_stop") notice = record.value("notice", "(none)");
+  }
+  EXPECT_EQ(notice, "suppressed_server_or_headless");
+  RuntimeRendezvous::ResetActiveForTest();
+}
+
+TEST(HostStopNotice, ANullCommandLineFromTheSystemMeansNoDialogAndTheRecordSaysSo) {
+  EXPECT_EQ(RunStopWith(nullptr), "suppressed_server_or_headless");
+  EXPECT_TRUE(g_notice_texts.empty());
+}
+
+TEST(HostStopNotice, ThePolicyReadsTokensNotSubstrings) {
+  using nevr_host::DecideStopNotice;
+  using nevr_host::StopNotice;
+  EXPECT_EQ(DecideStopNotice("echovr.exe -windowed", false), StopNotice::kShow);
+  EXPECT_EQ(DecideStopNotice("echovr.exe -servers", false), StopNotice::kShow);
+  EXPECT_EQ(DecideStopNotice("echovr.exe -serverx -headlessly", false), StopNotice::kShow);
+  EXPECT_EQ(DecideStopNotice("echovr.exe -config server", false), StopNotice::kShow) << "a value, not an option";
+  EXPECT_EQ(DecideStopNotice("\"C:\\a -server\\echovr.exe\" -windowed", false), StopNotice::kShow)
+      << "a path that contains the text is not the option";
+  EXPECT_EQ(DecideStopNotice("echovr.exe -server", false), StopNotice::kSuppressedServerOrHeadless);
+  EXPECT_EQ(DecideStopNotice("echovr.exe -noovr -headless", false), StopNotice::kSuppressedServerOrHeadless);
+  EXPECT_EQ(DecideStopNotice("\"-server\"", false), StopNotice::kSuppressedServerOrHeadless)
+      << "boot.cpp reads a quoted -server as a server, so the dialog stays away";
+  EXPECT_EQ(DecideStopNotice("", false), StopNotice::kShow);
+  EXPECT_EQ(DecideStopNotice(nullptr, false), StopNotice::kSuppressedServerOrHeadless)
+      << "a command line that cannot be read might belong to a server: no dialog";
+}
+
+TEST(HostStopNotice, NothingIsShownUnderTheLoaderLock) {
+  using nevr_host::DecideStopNotice;
+  using nevr_host::StopNotice;
+  EXPECT_EQ(DecideStopNotice("echovr.exe -windowed", true), StopNotice::kSuppressedLoaderLock);
+  EXPECT_STREQ(nevr_host::StopNoticeName(StopNotice::kShow), "shown");
+  EXPECT_STREQ(nevr_host::StopNoticeName(StopNotice::kSuppressedLoaderLock), "suppressed_loader_lock");
+}
+
+// The process must not end under the dialog: a second thread that reaches the stop while the first is telling the
+// player waits behind it (StopGame holds one lock through the record, the notice and the stop).
+namespace {
+
+CRITICAL_SECTION g_events_lock;
+std::vector<std::string> g_ordered_events;
+HANDLE g_second_thread = nullptr;
+
+void Note(const char* what) {
+  EnterCriticalSection(&g_events_lock);
+  g_ordered_events.emplace_back(what);
+  LeaveCriticalSection(&g_events_lock);
+}
+
+DWORD WINAPI SecondArrival(LPVOID) {
+  RuntimeRendezvous::GameMainWrapperDetour(0x1234);
+  return 0;
+}
+
+void NoticeWithASecondThreadArriving(const wchar_t*) {
+  Note("notice_open");
+  g_second_thread = CreateThread(nullptr, 0, &SecondArrival, nullptr, 0, nullptr);
+  Sleep(300);  // long enough for the second thread to be inside the detour and waiting on the lock
+  Note("notice_closed");
+}
+void NoteStop(std::uint32_t) { Note("stop"); }
+
+}  // namespace
+
+TEST(HostStopNotice, ASecondThreadWaitsBehindTheDialogInsteadOfEndingTheProcessUnderIt) {
+  RendezvousSandbox sandbox;
+  InitializeCriticalSection(&g_events_lock);
+  g_ordered_events.clear();
+  g_second_thread = nullptr;
+  g_command_line = "echovr.exe -windowed";
+  RuntimeRendezvous::Seams().stop_game = &NoteStop;
+  RuntimeRendezvous::Seams().show_stop_notice = &NoticeWithASecondThreadArriving;
+  RuntimeRendezvous::Seams().command_line = &CommandLine;
+  const std::wstring local = MakeTempDir();
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  ReturningTarget target;
+  ASSERT_NE(target.code(), nullptr);
+  RuntimeRendezvous rendezvous;
+  rendezvous.Prepare(GetModuleHandleW(L"kernel32.dll"), GetModuleHandleW(nullptr), diagnostics);
+  ASSERT_NE(rendezvous.Install(target.code()), nullptr);
+  RuntimeRendezvous::GameMainWrapperDetour(0x1234);
+  ASSERT_NE(g_second_thread, nullptr);
+  ASSERT_EQ(WaitForSingleObject(g_second_thread, 10000), WAIT_OBJECT_0);
+  CloseHandle(g_second_thread);
+  EnterCriticalSection(&g_events_lock);
+  const std::vector<std::string> events = g_ordered_events;
+  LeaveCriticalSection(&g_events_lock);
+  ASSERT_EQ(events.size(), 4u);
+  EXPECT_EQ(events[0], "notice_open");
+  EXPECT_EQ(events[1], "notice_closed") << "the second thread ended the process while the dialog was open";
+  EXPECT_EQ(events[2], "stop");
+  EXPECT_EQ(events[3], "stop");
+  RuntimeRendezvous::ResetActiveForTest();
+  DeleteCriticalSection(&g_events_lock);
 }

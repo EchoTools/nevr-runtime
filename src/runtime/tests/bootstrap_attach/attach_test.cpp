@@ -33,7 +33,8 @@
 //   - the runtime never hooks the wrapper: the host's record of its hook (target and
 //     the first 16 bytes after MH_EnableHook) still equals the bytes at the wrapper
 //     after the runtime's initialize and in game_main;
-//   - load/API/init failures degrade to original-only calls and never dispatch.
+//   - load/API/init failures stop the game (the host's test seam records the stop with exit code 78 and the
+//     original runs after it) and never dispatch.
 
 #include "runtime/tests/bootstrap_attach/abi.h"
 
@@ -194,7 +195,7 @@ const char* EventName(LONG event) {
       "original", "runtime.game_main_exit", "call.issued", "call.bad_result", "main.entered",
       "host.loadlibrary_returned", "runtime.second_hook_enabled", "second.detour",
       "second.original", "host.attach_held", "runtime.hook_target", "runtime.hook_bytes",
-      "runtime.hook_mismatch"};
+      "runtime.hook_mismatch", "host.stop_game"};
   return event > 0 && event < kEventLimit ? kNames[event] : "?";
 }
 
@@ -449,7 +450,10 @@ void ValidateHostRecords(const Expectation& expect) {
     }
     return;
   }
-  Require(records.size() == 5, "a hooked run recorded something other than its five decisions");
+  // A hooked run whose runtime did not load stops the game: one more record, the game_stop, however many calls arrived.
+  const bool stops = !expect.dispatched;
+  Require(records.size() == (stops ? 6u : 5u),
+          "a hooked run recorded something other than its five decisions (and the stop, when it stopped)");
   if (expect.no_install_event) {
     // The load did not wait for the install, so the install record can land after the load's: all five
     // must still be there (the load flushes the journal again), in whatever order the race gave.
@@ -489,6 +493,13 @@ void ValidateHostRecords(const Expectation& expect) {
           "the runtime_load record has an unexpected outcome");
   Require(records[4].contains("loader_lock_held") && records[4].at("loader_lock_held") == false,
           "the runtime_load record does not say the loader lock was not held");
+  Require(records[4].value("degraded_action", "") == (stops ? "stop_game" : "dispatch"),
+          "the runtime_load record names the wrong action");
+  if (stops) {
+    Require(records[5].value("event", "") == "game_stop" && records[5].value("reason", "") == expect.load_record &&
+                records[5].value("exit_code", 0) == 78,
+            "the game_stop record does not follow the load and name its cause and exit code 78");
+  }
 }
 
 void ValidateDispatch(const std::vector<EventRecord>& events, const Expectation& expect) {
@@ -519,6 +530,8 @@ void ValidateDispatch(const std::vector<EventRecord>& events, const Expectation&
   Require(Count(events, kRuntimeHookMismatch) == 0,
           "the host's hook record differs from the bytes at the wrapper: something else hooked it");
 
+  Require(expect.hooked || Count(events, kHostStopGame) == 0, "the host stopped a game it never hooked");
+  Require(!expect.dispatched || Count(events, kHostStopGame) == 0, "the host stopped a game whose runtime loaded");
   if (!expect.hooked) {
     Require(Count(events, kRuntimeDllAttach) == 0 && GetModuleHandleW(L"nevr-runtime.dll") == nullptr,
             "runtime was loaded although the host rejected the image");
@@ -528,6 +541,9 @@ void ValidateDispatch(const std::vector<EventRecord>& events, const Expectation&
   if (!expect.dispatched) {
     Require(Count(events, kRuntimeGameMainEnter) == 0 && Count(events, kRuntimeGameMainExit) == 0,
             "a failed runtime was dispatched");
+    // Every call into the wrapper met the stop, with the stable exit code; none was run as the game.
+    Require(Count(events, kHostStopGame) == calls, "a call into the wrapper did not meet the host's stop");
+    Require(events[First(events, kHostStopGame)].payload == 78, "the host stopped the game with the wrong exit code");
     return;
   }
   Require(Count(events, kRuntimeDllAttach) == 1 && Count(events, kRuntimeGetApi) == 1 &&

@@ -9,7 +9,8 @@
 //     the REAL echovr.exe prologue bytes at the REAL RVA;
 //   - the host shim (host_shim.cpp, built as BugSplat64.dll) — the PRODUCTION host
 //     units (runtime/host/) behind a DllMain: validate the image, validate the
-//     wrapper's prologue, MinHook the rendezvous, load nothing. The harness measures
+//     wrapper's prologue, MinHook the rendezvous, load nothing (its stop seam records the stop and lets the
+//     original run, where production ends the process with exit code 78). The harness measures
 //     the code the game runs, not a copy of it;
 //   - runtime fixtures (runtime_probe.cpp, built as nevr-runtime.dll) — implement
 //     core/runtime_abi.h and record what they are called with.
@@ -71,7 +72,8 @@ enum Event : LONG {
   kRuntimeHookTarget = 19,    // payload: the host context's wrapper_hook_target
   kRuntimeHookBytes = 20,     // payload: the first 8 bytes of wrapper_hook_bytes
   kRuntimeHookMismatch = 21,  // the host's record differs from the live bytes at the target
-  kEventLimit = 22,
+  kHostStopGame = 22,         // payload: the exit code the host stops the game with (the test seam)
+  kEventLimit = 23,
 };
 
 // Exports of the test executable, resolved with GetProcAddress(GetModuleHandleW(nullptr)).

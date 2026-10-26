@@ -148,6 +148,22 @@ TEST(VehPolicy, WineClientBootLineNeverClaimsInstalled) {
                 .find("veh installed"), std::string::npos);
 }
 
+// N70: the crash handler attributes a fault to NEVR by the name of the module the faulting address is in. The
+// runtime is two images since the host/runtime split, so both names count, whatever their case, and nothing else.
+TEST(VehPolicy, AttributesFaultsToTheHostAndToTheRuntimeImageAndToNothingElse) {
+  using nevr_veh_policy::IsNevrImageName;
+  EXPECT_TRUE(IsNevrImageName("BugSplat64.dll"));
+  EXPECT_TRUE(IsNevrImageName("nevr-runtime.dll"));
+  EXPECT_TRUE(IsNevrImageName("NEVR-RUNTIME.DLL"));
+  EXPECT_TRUE(IsNevrImageName("bugsplat64.dll"));
+  EXPECT_FALSE(IsNevrImageName(nullptr));
+  EXPECT_FALSE(IsNevrImageName(""));
+  EXPECT_FALSE(IsNevrImageName("echovr.exe"));
+  EXPECT_FALSE(IsNevrImageName("dxgi.dll"));          // Wine and DXVK are in the module cache
+  EXPECT_FALSE(IsNevrImageName("nevr-runtime.dll.bak"));
+  EXPECT_FALSE(IsNevrImageName("nevr_example.dll"));  // a plugin is not NEVR's own image
+}
+
 TEST(VehPolicy, RecoversLowAddressAvOnlyOnTheGameLoopThread) {
   using nevr_veh_policy::ShouldRecoverNullPointerAv;
   EXPECT_TRUE(ShouldRecoverNullPointerAv(true, 0x10, true, 42, 42));
