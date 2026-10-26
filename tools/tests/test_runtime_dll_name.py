@@ -69,6 +69,12 @@ class RuntimeDllNameTest(unittest.TestCase):
         self.assertTrue('RUNTIME_DLL = "nevr-runtime.dll"' in contract,
                         'tools/verify_pe_contract.py: RUNTIME_DLL is not "nevr-runtime.dll"')
 
+    def test_the_naming_standard_names_the_runtime_dll(self):
+        naming = (REPO / "docs/standards/naming.md").read_text(encoding="utf-8")
+        rows = [line for line in naming.splitlines() if line.startswith("| Runtime DLL file |")]
+        self.assertEqual(len(rows), 1, "docs/standards/naming.md has no single 'Runtime DLL file' row")
+        self.assertTrue("`nevr-runtime.dll`" in rows[0], "the 'Runtime DLL file' row does not name nevr-runtime.dll")
+
     def test_the_old_name_pattern_matches_what_it_must_and_nothing_else(self):
         for text in ("nevr.dll", "L\"nevr.dll\"", "NEVR.DLL", "C:\\g\\nevr.dll", "built as nevr.dll."):
             self.assertTrue(OLD_NAME.search(text), text)
