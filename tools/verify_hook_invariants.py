@@ -222,8 +222,10 @@ def gamepatches_detour_targets() -> dict:
         text = path.read_text(errors="replace")
         if "PatchDetour" not in text and "MH_CreateHook" not in text:
             continue
+        # `v = (T)(base + nevr_patch_addresses::X);` and `v = reinterpret_cast<T>(base + nevr_patch_addresses::X);`
         for m in re.finditer(
-            r"(\w+)\s*=\s*\([^;]*?nevr_patch_addresses::(\w+)\s*\)\s*;", text, re.S
+            r"(\w+)\s*=\s*(?:reinterpret_cast\s*<[^<>;]*>\s*)?\([^;]*?nevr_patch_addresses::(\w+)\s*\)\s*;",
+            text, re.S,
         ):
             var, const = m.group(1), m.group(2)
             if const not in consts:
