@@ -146,8 +146,46 @@ Rejected:
 - **Delivery of the code out of band (a Discord message).** Works without a text accessor but moves the experience out
   of the game. It stays available as a fallback and is not in the first release.
 
-**Decision needed (D4).** Whether the runtime package ships the main-menu cards that make the wizard reachable. In modkit they are
-language-package data; the stock menu may not show them. This is a game-data authoring and packaging question.
+#### Decision (client): the package ships the main-menu cards (D4)
+
+**D4. The runtime package ships the CREATE GAME and JOIN VIA CODE cards on the main menu.** Without them the stock
+menu has no way into the wizard, so a code feature that is not reachable is not shipped. The choice is reversible: it
+is data, it can be turned off or changed once players have used it ("accommodating first, adjust later").
+
+How echovr-modkit (MIT, by Dualgame) ships them, from its `mods/menu-cards/README.md` and `mods/menu-cards/menu_cards.py`
+(facts only; no code is copied here):
+
+- The cards are data, not code. The main-menu page resource (`CR15UIPage2CR`, `0x4a3fe67c1ff9ccc4`, name `mnu_master`,
+  `0xac360e41e4ede056`, PC; page 24 inside it) is read from the player's own install, two card elements are inserted
+  (CREATE GAME, owner `0xff5375e5a4dee29d`; JOIN VIA CODE, owner `0x097b785350a61c5f`, each with a sprite of the stock card
+  canvas), and the result is appended as one row to a copy of the language package (`2b47aab238f60515`) in
+  `_data/5932408047/rad15/win10`. The engine loads that package after the base package (`48037dc70b0ecab2`) and the
+  later row wins.
+- Every stock input is checked against a sha256 pin first (base manifest, language manifest and package, the page, the
+  element records and the card canvas); another game version, or a package already modified, is refused. The PC pins
+  are for build `6323983201049540`; the Quest pins are for build `6528386917200980`. Cards exist for en_us only.
+- `apply` writes the copy into the install and `revert` puts the stock pair back from a kept copy. A loose-file form of
+  the same page is also written (`--loose`) for a loader that serves single resources.
+
+What in this tree could carry the same page: `RegisterResourceOverrideFromFile` and `RegisterResourceOverride` in
+`src/runtime/patch/resource_override.cpp` replace a resource by its type and name symbols in the game's resource-load
+callback, so the patched page can be served for (`0x4a3fe67c1ff9ccc4`, `0xac360e41e4ede056`) without writing into
+the install. Whether to serve a prebuilt page from disk or to patch the original bytes in memory when the callback sees
+them is open and is chosen when this is built; neither is measured here (UNVERIFIED: that the callback offers the
+original bytes at that point, and that an override of this page is applied on the build we ship against).
+
+Consequences for the package, to be settled with the change that builds the cards:
+
+- The stock page is Ready At Dawn's data. Whether a package may carry it, or a page derived from it, is open (a
+  redistribution question for the owner); the two ways that avoid it are a patched page built on the player's machine
+  from the player's own install (a build step with pins and a revert, as modkit does), and a runtime that patches the
+  bytes in memory.
+- The pins make the cards build-specific: on any other game build the cards are off and the log says why.
+- The cards are English only until another language is built.
+- A change to the package contents (a tool, a pin table, or both) is a change to what a release carries and goes
+  through the release checks.
+- Quest takes the same data through its own path (the data folder on the headset, outside the APK, in modkit); that
+  waits for the Quest hook.
 
 ### 3. Platforms
 
@@ -164,7 +202,7 @@ credential: a line carries `code_len` and a short fingerprint of the code (`code
 | Event | Level | Fields |
 | --- | --- | --- |
 | wizard click seen | Info | `event=create_invite\|join_via_code panel=deep_linking` |
-| request not sent | Info | `reason=empty\|malformed\|not_configured\|no_token` and `code_len=<n>` (nothing is sent) |
+| request not sent | Info | `reason=empty\|malformed\|too_long\|incomplete\|not_configured\|no_token` and `code_len=<n>` (nothing is sent) |
 | request sent | Info | `op=create\|resolve\|revoke expires_s=<n> code_len=<n> code_fp=<8 hex>` |
 | answer | Info / Warning | `op status=<http status> latency_ms=<n> result=<ok\|invalid\|expired\|closed\|denied\|limit\|rate>` |
 | text written | Info | `page=<n> field=<name>`; a failed write at Warning with the cause |
