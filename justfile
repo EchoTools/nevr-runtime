@@ -41,8 +41,10 @@ configure: generate-symcache _vcpkg-mingw _build-inputs
 _build-inputs:
     @tools/worktree-setup.sh --check
 
-# Make a fresh git worktree buildable: copy extern/{minhook,breakpad,lss} and gen/ from the main checkout,
-# and give it its own vcpkg root (build/vcpkg-root) so its builds never wait on another worktree's vcpkg lock
+# extern/{minhook,breakpad,lss} and gen/ are copied from the main checkout; the worktree gets its own vcpkg root
+# (build/vcpkg-root), so its builds never wait on another worktree's vcpkg lock; build/<preset> is seeded from the
+# main checkout's when that was built at this commit (tools/seed_build_tree.py)
+# Make a fresh git worktree buildable: its inputs, its vcpkg root and, at the same commit, a seeded build tree
 worktree-setup:
     tools/worktree-setup.sh
     tools/vcpkg_root.sh
