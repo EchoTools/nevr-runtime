@@ -167,25 +167,37 @@ How echovr-modkit (MIT, by Dualgame) ships them, from its `mods/menu-cards/READM
 - `apply` writes the copy into the install and `revert` puts the stock pair back from a kept copy. A loose-file form of
   the same page is also written (`--loose`) for a loader that serves single resources.
 
-What in this tree could carry the same page: `RegisterResourceOverrideFromFile` and `RegisterResourceOverride` in
+What in this tree carries the page: `RegisterResourceOverrideFromFile` and `RegisterResourceOverride` in
 `src/runtime/patch/resource_override.cpp` replace a resource by its type and name symbols in the game's resource-load
-callback, so the patched page can be served for (`0x4a3fe67c1ff9ccc4`, `0xac360e41e4ede056`) without writing into
-the install. Whether to serve a prebuilt page from disk or to patch the original bytes in memory when the callback sees
-them is open and is chosen when this is built; neither is measured here (UNVERIFIED: that the callback offers the
-original bytes at that point, and that an override of this page is applied on the build we ship against).
+callback, so a patched page can be served for (`0x4a3fe67c1ff9ccc4`, `0xac360e41e4ede056`) without writing into the
+install.
 
-Consequences for the package, to be settled with the change that builds the cards:
+**The package never carries Ready At Dawn's data.** The package carries only our work; Ready At Dawn's data stays
+theirs. The main-menu page is therefore built on the player's machine from the player's own install:
 
-- The stock page is Ready At Dawn's data. Whether a package may carry it, or a page derived from it, is open (a
-  redistribution question for the owner); the two ways that avoid it are a patched page built on the player's machine
-  from the player's own install (a build step with pins and a revert, as modkit does), and a runtime that patches the
-  bytes in memory.
+- **In memory, at runtime.** When the resource-load callback delivers the stock page, the runtime checks its sha256
+  against the pin, inserts the two card elements into a copy of those bytes and serves the copy. Nothing is written to
+  the install and nothing derived from the data is stored or shipped. This is the way.
+- **A file derived from the install, only if in-memory cannot work.** The fallback is a build step that reads the
+  player's install, writes the patched page outside the install, and serves it from there. It is taken only when the
+  in-memory path is shown not to work on the build we ship, and the change that takes it records why in this record. It
+  still ships no stock bytes.
+
+Unverified, and measured before the cards are built: that the callback offers the whole original page at that point
+(the size, and whether the bytes are final), that a served replacement of this page is applied on the build we ship
+against, and that the card elements fit when inserted into a buffer the callback owns. A failure of any of these is the
+reason the fallback records.
+
+Consequences for the package:
+
+- The package carries the card elements as our own data (the element records and the pins), never the stock page or
+  a page derived from it.
 - The pins make the cards build-specific: on any other game build the cards are off and the log says why.
 - The cards are English only until another language is built.
-- A change to the package contents (a tool, a pin table, or both) is a change to what a release carries and goes
-  through the release checks.
-- Quest takes the same data through its own path (the data folder on the headset, outside the APK, in modkit); that
-  waits for the Quest hook.
+- A change to the package contents (a pin table) is a change to what a release carries and goes through the
+  release checks.
+- Quest takes the same data through its own path (modkit writes to the data folder on the headset, outside the APK);
+  that waits for the Quest hook and keeps the same rule: no Ready At Dawn data in the package.
 
 ### 3. Platforms
 
