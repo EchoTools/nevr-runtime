@@ -42,7 +42,7 @@ func TestDLLLoading_BugSplat(t *testing.T) {
 	t.Logf("BugSplat64.dll deployed successfully to %s (%d bytes)", targetPath, info.Size())
 }
 
-// TestDLLLoading_AllDLLs verifies the monolithic BugSplat64.dll can be deployed
+// TestDLLLoading_AllDLLs verifies the host and the runtime can be deployed
 func TestDLLLoading_AllDLLs(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -51,7 +51,7 @@ func TestDLLLoading_AllDLLs(t *testing.T) {
 	gameDir := getGameDir()
 
 	// Verify source DLL exists
-	dllNames := []string{"BugSplat64.dll"}
+	dllNames := []string{"nevr-runtime.dll", "BugSplat64.dll"}
 	missingDLLs := []string{}
 
 	for _, dllName := range dllNames {
@@ -80,7 +80,7 @@ func TestDLLLoading_AllDLLs(t *testing.T) {
 		t.Logf("%s deployed successfully (%d bytes)", dllName, info.Size())
 	}
 
-	t.Log("Monolithic BugSplat64.dll deployed successfully")
+	t.Log("BugSplat64.dll and nevr-runtime.dll deployed successfully")
 }
 
 // TestDLLLoading_CleanupRemovesAllDLLs verifies cleanup removes the deployed DLL
@@ -90,7 +90,7 @@ func TestDLLLoading_CleanupRemovesAllDLLs(t *testing.T) {
 	}
 
 	gameDir := getGameDir()
-	dllNames := []string{"BugSplat64.dll"}
+	dllNames := []string{"nevr-runtime.dll", "BugSplat64.dll"}
 
 	// Skip if DLL doesn't exist
 	missingDLLs := []string{}
@@ -125,5 +125,5 @@ func TestDLLLoading_CleanupRemovesAllDLLs(t *testing.T) {
 		assert.True(t, os.IsNotExist(err), "DLL %s should not exist after cleanup", dllName)
 	}
 
-	t.Log("BugSplat64.dll cleaned up successfully")
+	t.Log("BugSplat64.dll and nevr-runtime.dll cleaned up successfully")
 }

@@ -1,5 +1,5 @@
 // The nine MiniDmpSender methods echovr.exe imports from BugSplat64.dll. The game imports them by their
-// MSVC-mangled names; src/runtime/exports.def maps each mangled name to the C function here. They are in
+// MSVC-mangled names; src/runtime/host/exports.def maps each mangled name to the C function here. They are in
 // their own translation unit so the crash harness (src/runtime/tests/host_crash) links the same bodies the
 // shipped DLL exports and not a copy of them.
 #include "runtime/host/host_entry.h"

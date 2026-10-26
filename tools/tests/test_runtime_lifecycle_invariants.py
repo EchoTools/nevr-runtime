@@ -131,6 +131,20 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertRegex(server_exit,
                          r"ShutdownResourceOverride\s*\(\s*\)\s*;\s*ForceFatalExit\s*\(\s*exitCode\s*\)")
 
+    def test_the_crash_attribution_names_both_nevr_images_through_the_policy_not_a_literal(self):
+        # N70 after the host/runtime split (#853): the handler runs in nevr-runtime.dll, the game imports
+        # BugSplat64.dll, and a fault in either is NEVR's. The module cache holds every loaded DLL (Wine and DXVK
+        # too), so the name decides, through one function the GTest drives.
+        source = (ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text()
+        vectored = extract_braced_function(source, "LONG WINAPI BreakpointVEH(")
+        self.assertRegex(vectored, r"nevr_veh_policy::IsNevrImageName\s*\(\s*g_moduleCache\[m\]\.name\s*\)")
+        self.assertNotIn("BugSplat64", strip_comments(source), "the attribution compares names through IsNevrImageName only")
+        self.assertNotIn("nevr-runtime", strip_comments(source))
+        policy = strip_comments((ROOT / "src/runtime/lifecycle/veh_policy.h").read_text())
+        names = extract_braced_function(policy, "inline bool IsNevrImageName(")
+        self.assertEqual(sorted(re.findall(r'"([^"]+\.dll)"', names)), ["BugSplat64.dll", "nevr-runtime.dll"])
+        self.assertIn("_stricmp", names, "module names are matched without case")
+
     def test_dllmain_does_not_run_plugin_shutdown_or_unload(self):
         source = (ROOT / "src/runtime/lifecycle/dllmain.cpp").read_text()
         body = extract_braced_function(source, "BOOL APIENTRY DllMain(")
@@ -142,7 +156,8 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # Issue #40: FreeLibrary(g_realDbgCore) ran on process termination too (lpReserved != NULL).
         # Calling FreeLibrary from DllMain during termination can leave a module in use after the
         # system ran its termination code; only a dynamic unload (lpReserved == NULL) frees it.
-        source = (ROOT / "src/runtime/lifecycle/dllmain.cpp").read_text()
+        # The dbgcore proxy is the host's (#853): BugSplat64.dll's DllMain owns it.
+        source = (ROOT / "src/runtime/host/host_dllmain.cpp").read_text()
         body = extract_braced_function(source, "BOOL APIENTRY DllMain(")
 
         detach = body.index("case DLL_PROCESS_DETACH")
@@ -151,7 +166,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertEqual(len(frees), 1, "subject vanished: expected exactly one FreeLibrary(g_realDbgCore)")
         free = frees[0] - detach
         self.assertGreater(free, 0, "FreeLibrary(g_realDbgCore) is not in the DLL_PROCESS_DETACH case")
-        guard = re.search(r"if\s*\(\s*lpReserved\s*==\s*NULL\s*\)\s*\{", section)
+        guard = re.search(r"if\s*\(\s*lpReserved\s*==\s*NULL\s*&&\s*g_realDbgCore\s*\)\s*\{", section)
         self.assertIsNotNone(guard, "subject vanished: no lpReserved == NULL guard in DLL_PROCESS_DETACH")
         depth, end = 0, None
         for index in range(guard.end() - 1, len(section)):

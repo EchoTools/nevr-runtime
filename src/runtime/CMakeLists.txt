@@ -8,7 +8,7 @@
 #
 # Uses MinHook for function hooking (built from extern/minhook)
 
-# The units both DLLs and the host's test library compile. They carry the host's behaviour; none reads the
+# The units the host DLL and the host's test library compile. They carry the host's behaviour; none reads the
 # runtime's globals or calls the NEVR logger. NEVR_HOST_TESTING is defined by nevr_host_core alone
 # (tools/verify_host_seams.py).
 set(NEVR_HOST_UNITS
@@ -293,12 +293,12 @@ set_source_files_properties(ext/plugin_signature.cpp ext/plugin_tree.cpp ext/plu
 # Scenario-test control endpoint (docs/design/2026-10-01-social-scenario-harness.md). It can inject
 # messages into a live session, so it is OFF by default and only the mingw-scenario preset turns it
 # on; `just verify` checks the release DLL carries none of its strings.
-option(NEVR_SCENARIO_CONTROL "Compile the scenario-test control endpoint into BugSplat64.dll (test builds only)" OFF)
+option(NEVR_SCENARIO_CONTROL "Compile the scenario-test control endpoint into nevr-runtime.dll (test builds only)" OFF)
 if(NEVR_SCENARIO_CONTROL)
   target_sources(nevr_runtime PRIVATE scenario/scenario_control.cpp)
   target_compile_definitions(nevr_runtime PRIVATE NEVR_SCENARIO_CONTROL=1)
   set_source_files_properties(scenario/scenario_control.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-  message(STATUS "NEVR_SCENARIO_CONTROL=ON: BugSplat64.dll carries the scenario control endpoint (test build)")
+  message(STATUS "NEVR_SCENARIO_CONTROL=ON: nevr-runtime.dll carries the scenario control endpoint (test build)")
 endif()
 
 set_target_properties(nevr_runtime PROPERTIES

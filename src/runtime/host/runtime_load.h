@@ -6,7 +6,7 @@
 // System32 search flags), validates the descriptor from core/runtime_abi.h
 // (major version, minimum struct size, required entries), and initializes it.
 // Every outcome, loaded or not, emits a bootstrap diagnostic; a failure stops the
-// game (docs/adr/0012-static-install-root.md: the game does not run without nEVR),
+// game (docs/adr/0012-static-install-root.md: the game does not run without NEVR),
 // without ever calling a null pointer. The descriptor is valid only when it carries
 // every required entry (initialize and game_main).
 

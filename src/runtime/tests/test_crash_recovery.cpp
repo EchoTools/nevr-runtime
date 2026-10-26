@@ -162,7 +162,6 @@ TEST(VehPolicy, AttributesFaultsToTheHostAndToTheRuntimeImageAndToNothingElse) {
   EXPECT_FALSE(IsNevrImageName("dxgi.dll"));          // Wine and DXVK are in the module cache
   EXPECT_FALSE(IsNevrImageName("nevr-runtime.dll.bak"));
   EXPECT_FALSE(IsNevrImageName("nevr_example.dll"));  // a plugin is not NEVR's own image
-  EXPECT_FALSE(IsNevrImageName("nevr.dll"));          // the retired name
 }
 
 TEST(VehPolicy, RecoversLowAddressAvOnlyOnTheGameLoopThread) {

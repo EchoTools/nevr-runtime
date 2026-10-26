@@ -24,7 +24,7 @@
 # run on the embedded defaults. The Quest also rejects a file over 64 KiB. Top-level keys are the sections below
 # plus x-* extensions.
 #
-# Config keys are read by the nEVR runtime (`BugSplat64.dll` on PC, the sentinel `libovrplatformloader.so` on Quest),
+# Config keys are read by the nEVR runtime (`nevr-runtime.dll` on PC, the sentinel `libovrplatformloader.so` on Quest),
 # which runs in-process with the game.
 #
 # Secrets (keys, tokens, passwords) MUST use ${VAR:?error} environment-variable

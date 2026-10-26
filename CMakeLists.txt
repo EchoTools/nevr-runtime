@@ -34,7 +34,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/set_project_version_from_git.cmake")
 # Set PROJECT_VERSION and GIT_COMMIT_HASH based on the current git state.
 set_project_version_from_git()
 
-# BugSplat64.dll and echovr_server.exe carry a VERSIONINFO resource (cmake/nevr_version_info.cmake, #850): the
+# BugSplat64.dll, nevr-runtime.dll and echovr_server.exe carry a VERSIONINFO resource (cmake/nevr_version_info.cmake, #850): the
 # resource compiler is a language, and enable_language cannot be called from a function.
 if(WIN32)
   enable_language(RC)
@@ -310,8 +310,8 @@ endif()
 # =============================================================================
 # Distribution Package Target (stripped, no debug symbols)
 # =============================================================================
-# Creates the stripped distribution package, nevr-runtime-v<ver>-windows-server: the BugSplat64.dll and
-# echovr_server.exe that tools/package_release.py puts in the one Windows release zip (nevr-runtime-v<ver>-windows.zip),
+# Creates the stripped distribution package, nevr-runtime-v<ver>-windows-server: BugSplat64.dll (the host),
+# nevr-runtime.dll (the runtime) and echovr_server.exe that tools/package_release.py puts in the one Windows release zip (nevr-runtime-v<ver>-windows.zip),
 # and the source of the .tar.zst workflow artifact: binaries run through strip --strip-all.
 # Before stripping, the debug info of each shipped PE is split into dist/symbols/<name>/<file>.dbg and
 # the stripped file gets a .gnu_debuglink to it (name and CRC32), so a crash from the field maps to
@@ -341,6 +341,10 @@ add_custom_target(dist-prepare
   COMMAND ${MINGW_OBJCOPY_TOOL} --only-keep-debug "${DIST_STAGE_DIR}/BugSplat64.dll" "${DIST_SYMBOLS_DIR}/BugSplat64.dll.dbg"
   COMMAND ${MINGW_STRIP_TOOL} --strip-all "${DIST_STAGE_DIR}/BugSplat64.dll"
   COMMAND ${MINGW_OBJCOPY_TOOL} "--add-gnu-debuglink=${DIST_SYMBOLS_DIR}/BugSplat64.dll.dbg" "${DIST_STAGE_DIR}/BugSplat64.dll"
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/nevr-runtime.dll" "${DIST_STAGE_DIR}/nevr-runtime.dll"
+  COMMAND ${MINGW_OBJCOPY_TOOL} --only-keep-debug "${DIST_STAGE_DIR}/nevr-runtime.dll" "${DIST_SYMBOLS_DIR}/nevr-runtime.dll.dbg"
+  COMMAND ${MINGW_STRIP_TOOL} --strip-all "${DIST_STAGE_DIR}/nevr-runtime.dll"
+  COMMAND ${MINGW_OBJCOPY_TOOL} "--add-gnu-debuglink=${DIST_SYMBOLS_DIR}/nevr-runtime.dll.dbg" "${DIST_STAGE_DIR}/nevr-runtime.dll"
   COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:echovr_server>" "${DIST_STAGE_DIR}/echovr_server.exe"
   COMMAND ${MINGW_OBJCOPY_TOOL} --only-keep-debug "${DIST_STAGE_DIR}/echovr_server.exe" "${DIST_SYMBOLS_DIR}/echovr_server.exe.dbg"
   COMMAND ${MINGW_STRIP_TOOL} --strip-all "${DIST_STAGE_DIR}/echovr_server.exe"
@@ -357,6 +361,7 @@ add_custom_target(dist-prepare
   COMMENT "Preparing distribution directory (stripped): ${DIST_DIR}"
   VERBATIM
 )
+add_dependencies(dist-prepare nevr_host)
 add_dependencies(dist-prepare nevr_runtime)
 add_dependencies(dist-prepare echovr_server)
 

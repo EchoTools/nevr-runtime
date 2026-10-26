@@ -1,8 +1,8 @@
 #!/bin/bash
 # Client system test on the NESTED display only (AGENTS.md "System test after every
-# commit"). Verifies the game directory is pristine, deploys the current BugSplat64.dll,
+# commit"). Verifies the game directory is pristine, deploys the current BugSplat64.dll (the host) and nevr-runtime.dll (the runtime),
 # runs the client on display :101 (headless Xvfb; Xephyr when the owner watches), judges the run from the game's own JSONL log, and
-# restores the original DLL.
+# restores the original DLL and removes the runtime it put there.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -11,7 +11,8 @@ source tools/lib/game_install.sh
 GAME_ROOT=$(resolve_game_root) || exit $?
 
 # --dll PATH deploys that BugSplat64.dll instead of the release build (the scenario runner passes
-# the mingw-scenario build; see tools/scenario/run_scenario.py). --config PATH starts the game with
+# the mingw-scenario build; see tools/scenario/run_scenario.py). The runtime is the nevr-runtime.dll beside it,
+# or --runtime-dll PATH: the host loads it from the game's own directory, so a run deploys both. --config PATH starts the game with
 # `-config PATH` (a JSON file; the runtime reads config.yaml from the same directory), so a run can
 # use its own config without touching the game directory. --require-in-game fails the run unless the
 # client also reaches "in game" (multiplayer entry), not just "logged in" -- the scenario runner
@@ -20,16 +21,18 @@ GAME_ROOT=$(resolve_game_root) || exit $?
 # unavailable or --login-timeout seconds pass (FAIL), kills the game, restores the DLL and returns the
 # verdict. Without it the script returns only after the game exits (the scenario runner relies on that).
 DLL=build/mingw-release/bin/BugSplat64.dll
+RUNTIME_DLL=""
 CONFIG=""
 TRACE_EXPORTS=""
 EXTRA_GAME_ARGS=()
 REQUIRE_IN_GAME=0
 EXIT_AFTER_LOGIN=0
 LOGIN_TIMEOUT=120
-USAGE="launch-client.sh [--dll PATH] [--config PATH] [--trace-exports LIST] [--game-arg ARG]... [--require-in-game] [--exit-after-login [--login-timeout SECONDS]] [--print-game-root]"
+USAGE="launch-client.sh [--dll PATH] [--runtime-dll PATH] [--config PATH] [--trace-exports LIST] [--game-arg ARG]... [--require-in-game] [--exit-after-login [--login-timeout SECONDS]] [--print-game-root]"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dll) DLL="${2:?--dll needs a path}"; shift 2 ;;
+    --runtime-dll) RUNTIME_DLL="${2:?--runtime-dll needs a path}"; shift 2 ;;
     --config) CONFIG="${2:?--config needs a path}"; shift 2 ;;
     --trace-exports) TRACE_EXPORTS="${2:?--trace-exports needs a list (pnsrad, pnsovr, pnsdemo, all; comma separated)}"; shift 2 ;;
     --game-arg) EXTRA_GAME_ARGS+=("${2:?--game-arg needs one game argument}"); shift 2 ;;
@@ -42,6 +45,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -f "$DLL" ]] || { echo "ERROR: $DLL does not exist; build it first" >&2; exit 2; }
+[[ -n "$RUNTIME_DLL" ]] || RUNTIME_DLL="$(dirname "$DLL")/nevr-runtime.dll"
+[[ -f "$RUNTIME_DLL" ]] || { echo "ERROR: $RUNTIME_DLL does not exist; the host loads it from the game directory, build it first" >&2; exit 2; }
 # 45 s is the minimum patience from process start (AGENTS.md "Startup Timing"): the splash alone is 15-20 s.
 # NEVR_LOGIN_MIN_SECONDS lowers it for the script's own tests only.
 LOGIN_MIN_SECONDS="${NEVR_LOGIN_MIN_SECONDS:-45}"
@@ -79,6 +84,11 @@ shopt -u nullglob
 if [[ ${#plugin_files[@]} -ne 0 ]]; then
   echo "DRIFT: $GAME_DIR/plugins is not empty: ${plugin_files[*]}" >&2; drift=1
 fi
+# A game install has no nevr-runtime.dll: one there is a leftover of another run, which the restore step below
+# would delete as its own.
+if [[ -e "$GAME_DIR/nevr-runtime.dll" || -L "$GAME_DIR/nevr-runtime.dll" ]]; then
+  echo "DRIFT: $GAME_DIR/nevr-runtime.dll exists (expected absent)" >&2; drift=1
+fi
 if [[ $drift -ne 0 ]]; then echo "ABORT: game directory is not pristine" >&2; exit 3; fi
 # The runtime takes the first cache in exe-relative order: _local, ../_local, ../../_local
 # (src/core/auth_token.h SelectCredentialCacheLocation); a device-code login with none saves to
@@ -101,10 +111,11 @@ cp -p "$GAME_DIR/BugSplat64.dll" "$SCRATCH/BugSplat64.dll.orig"
 restore() {
   trap - EXIT
   cp -p "$SCRATCH/BugSplat64.dll.orig" "$GAME_DIR/BugSplat64.dll"
-  if cmp -s "$SCRATCH/BugSplat64.dll.orig" "$GAME_DIR/BugSplat64.dll"; then
-    echo "=== original BugSplat64.dll restored and verified ==="
+  rm -f "$GAME_DIR/nevr-runtime.dll"
+  if cmp -s "$SCRATCH/BugSplat64.dll.orig" "$GAME_DIR/BugSplat64.dll" && [[ ! -e "$GAME_DIR/nevr-runtime.dll" ]]; then
+    echo "=== original BugSplat64.dll restored and verified, nevr-runtime.dll removed ==="
   else
-    echo "ERROR: BugSplat64.dll restore failed; original is $SCRATCH/BugSplat64.dll.orig" >&2
+    echo "ERROR: BugSplat64.dll restore failed (or nevr-runtime.dll is still there); original is $SCRATCH/BugSplat64.dll.orig" >&2
   fi
   # A cleanup step, not a gate: wineserver exits 1 when no server is left to kill, and as the last command
   # of an EXIT trap under `set -e` that would replace the script's own exit status.
@@ -115,9 +126,12 @@ trap 'exit 143' INT TERM
 trap restore EXIT
 
 echo "=== Deploying $DLL ==="
+# The runtime first: until the host is replaced nothing loads it.
+cp -v "$RUNTIME_DLL" "$GAME_DIR/nevr-runtime.dll"
+cmp -s "$RUNTIME_DLL" "$GAME_DIR/nevr-runtime.dll"
 cp -v "$DLL" "$GAME_DIR/BugSplat64.dll"
 cmp -s "$DLL" "$GAME_DIR/BugSplat64.dll"
-sha256sum "$GAME_DIR/BugSplat64.dll"
+sha256sum "$GAME_DIR/BugSplat64.dll" "$GAME_DIR/nevr-runtime.dll"
 
 echo "=== Starting echovr.exe -windowed (DISPLAY=$DISPLAY, WAYLAND_DISPLAY unset) ==="
 echo "=== Console log: $CONSOLE_LOG ==="
@@ -189,7 +203,7 @@ if [[ $EXIT_AFTER_LOGIN -eq 1 ]]; then
     sleep "$poll" 9>&-
   done
   # Verdict reached (or the game died or the deadline passed): stop the game, and make sure the Wine
-  # server is gone too, so nothing still has BugSplat64.dll mapped when the restore trap copies the
+  # server is gone too, so nothing still has BugSplat64.dll or nevr-runtime.dll mapped when the restore trap copies the
   # original back over it.
   kill "$game_pid" 2>/dev/null
   for pid in $(pgrep -u "$(id -u)" -f "$ECHOVR_CMDLINE"); do kill "$pid" 2>/dev/null; done

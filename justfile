@@ -275,6 +275,7 @@ package-dev store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
     just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so build/android-dev/repack
     python3 tools/package_release.py --commit "$commit" --out "$out" \
         --dll build/mingw-dev/bin/BugSplat64.dll \
+        --runtime-dll build/mingw-dev/bin/nevr-runtime.dll \
         --server-exe build/mingw-dev/bin/echovr_server.exe \
         --apk build/android-dev/repack/r15_nevr-sentinel_signed.apk \
         --pc-header build/mingw-dev/generated/nevr_builtin_defaults.h \
@@ -1527,7 +1528,7 @@ verify:
     # from the compiler/linker itself — a no-op when green, nonzero when truly broken.
     cmake --build --preset {{ preset }}
     # The DLL embeds exactly the public defaults file (the build reads no other source).
-    python3 tools/check_embedded_defaults.py --header build/{{ preset }}/generated/nevr_builtin_defaults.h --binary build/{{ preset }}/bin/BugSplat64.dll
+    python3 tools/check_embedded_defaults.py --header build/{{ preset }}/generated/nevr_builtin_defaults.h --binary build/{{ preset }}/bin/nevr-runtime.dll
     # --- Parallel test block --------------------------------------------------
     # Ten independent suites run concurrently (capped at nproc) instead of one after
     # another: each test-quest-* compiles its own host binary in its own out dir and runs
@@ -2502,16 +2503,17 @@ verify:
     python3 tools/verify_hook_invariants.py
     # The scenario-test control endpoint can inject messages into a live session; it exists only in
     # the mingw-scenario preset. The DLL this gate just built must not carry it.
-    python3 tools/verify_scenario_control_absent.py "build/{{ preset }}/bin/BugSplat64.dll"
-    # #575 step 1: the game-facing PE surface of BugSplat64.dll is pinned before any change of which
-    # target owns the code: the exact 28-name export set with its ordinals, DetoursExportPlaceholder at
-    # ordinal 1, no eager nevr-runtime.dll import. The game's own BugSplat64.dll imports are cross-checked when
+    python3 tools/verify_scenario_control_absent.py "build/{{ preset }}/bin/BugSplat64.dll" "build/{{ preset }}/bin/nevr-runtime.dll"
+    # #575, #853: the game-facing PE surface of BugSplat64.dll (the host) is pinned: the exact 28-name export
+    # set with its ordinals, DetoursExportPlaceholder at ordinal 1, no eager nevr-runtime.dll import, no runtime
+    # code in it; nevr-runtime.dll exports the rendezvous entry and the module entry points and carries the
+    # build-identity literal, and the two literals agree. The game's own BugSplat64.dll imports are cross-checked when
     # the game binary is present (it is not in CI or a fresh worktree). Fail-closed: no `|| true`.
     if [ -f echovr/bin/win10/echovr.exe ]; then
-        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll" --game-exe echovr/bin/win10/echovr.exe
+        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll" --runtime-dll "build/{{ preset }}/bin/nevr-runtime.dll" --game-exe echovr/bin/win10/echovr.exe
     else
         echo "pe-contract: NOTE game binary absent (echovr/bin/win10/echovr.exe) - game-import cross-check skipped; host export checks still run"
-        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll"
+        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll" --runtime-dll "build/{{ preset }}/bin/nevr-runtime.dll"
     fi
     # #850: both shipped Windows files carry the pinned VERSIONINFO (Details tab), at the version the DLL's
     # own NEVR-BUILD literal states. Fail-closed: a file without the resource, a changed field or a
