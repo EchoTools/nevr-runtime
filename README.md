@@ -112,6 +112,35 @@ yet. On PC:
 5. Windows Defender or SmartScreen may warn about a file that carries no signature. `Get-AuthenticodeSignature .\BugSplat64.dll`
    (PowerShell) says whether a file is signed.
 
+### Moving a Quest from the community installer to this APK
+
+A headset whose Echo VR was installed by the community Quest installer cannot take this APK as an update. The
+installer's game is signed with the installer's key, and Android installs an update only from the key that signed
+the installed app, so `adb install -r` of this APK over it is refused with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`.
+There is one way over:
+
+1. Uninstall Echo VR from the headset once (`adb uninstall com.readyatdawn.r15`, or from the headset's app library).
+2. Install this APK with `adb install`.
+
+This APK's `versionCode` is set when it is built, from its version (`tools/quest_apk_version.py`), and is always above
+4987570, the game build the installer pins. So the installer's own build never replaces this one, and a later build of
+this APK installs over an earlier one.
+
+What the code shows about the game data and the sign-in, and what it does not:
+
+- With no OBB file, the game reads its data from `/storage/emulated/0/readyatdawn` and from no other folder
+  ([ADR 0013](docs/adr/0013-quest-game-data-from-the-launcher.md)). A release build downloads nothing: when the data is
+  not in that folder it shows "Echo VR game data is missing. Install Echo VR with Echo Launcher first, then start the
+  game again." and ends. Data that sits only under `Android/media/com.readyatdawn.r15/files` is not read by a launch
+  with no OBB file.
+- The refresh token is kept in the app's private storage ([ADR 0003](docs/adr/0003-quest-networking-port.md)), which the
+  uninstall removes, so the first launch of this APK starts the sign-in ([`docs/quest/SIGN-IN.md`](docs/quest/SIGN-IN.md))
+  (to be confirmed on the headset, below).
+- To be confirmed on a real installer-installed headset: which folder the installer puts the game data in, whether
+  that folder is still there after the uninstall, whether the game starts after the move without a second data
+  install, and what the first launch of this APK shows. The steps and predicted outcomes for that run are written
+  down before it, in the headset check for the move.
+
 The community beta guide for a manual install is [`docs/beta/INSTALL.md`](docs/beta/INSTALL.md).
 The Quest sign-in flow is in [`docs/quest/SIGN-IN.md`](docs/quest/SIGN-IN.md).
 
