@@ -36,5 +36,6 @@ source-invariant tests over the C++ tree and the release contract
 | `build_distribution.py` | Sign a staged runtime package and atomically publish verified archives. |
 | `gen_symbol_corpus.py`, `symbol_candidates.txt` | Hash candidate symbol names and emit the reverse-lookup tables (CSymbol64 and SNS message hashes). |
 | `symcache/` | Go tool that fetches the pinned `Dualgame/echo-symbols` `echo_vr-pc` and `echo_vr-quest` subsets (`tools/symbols.pin`), merges them (PC name wins a case-only collision), validates, and regenerates `src/runtime/log/symcache_data.cpp` deterministically (`just generate-symcache`). |
+| `render_credits.py` | Render the README's "Built on, and thanks" block from `config/credits.json`, the one list the in-game CREDITS page also reads. `--check` fails when the block is not the rendering, `--write` regenerates it; `ingame_groups` is how a heading is chosen for the in-game half. |
 | `hook_identity_manifest.json` | The pinned prologues `verify_hook_invariants.py` checks. |
 | `echomod/` | Standalone Echo VR modding scripts; see `echomod/README.md`. |
