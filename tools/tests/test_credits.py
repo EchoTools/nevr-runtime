@@ -316,10 +316,10 @@ class IngameText(unittest.TestCase):
         self.assertIn("U+00EB", heading[0])
 
     def test_every_undrawn_character_is_listed_once_in_code_point_order(self):
-        problems = self.problems({"ONE": ["a\u00fc\u00eb\u00eb"]})
+        problems = self.problems({"ONE": ["a\u00fc\u00eb\u00e9\u00e8\u00e0\u00ef\u00eb\u00fc"]})
         self.assertEqual(len(problems), 1, problems)
-        self.assertIn("'\u00eb' (U+00EB), '\u00fc' (U+00FC)", problems[0])
-        self.assertEqual(problems[0].count("U+00EB"), 1)
+        listed = ", ".join(f"{chr(c)!r} (U+{c:04X})" for c in (0xE0, 0xE8, 0xE9, 0xEB, 0xEF, 0xFC))
+        self.assertIn(listed, problems[0])  # six characters: a set's own order passes this once in 720 runs
 
     def test_an_undrawn_name_is_one_problem_even_when_it_is_also_too_long(self):
         self.assertEqual(len(self.problems({"ONE": ["\u00eb" * 70]})), 1)
