@@ -12,10 +12,13 @@ the in-game half (`ingame_groups`), so the two cannot drift.
     python3 tools/render_credits.py --ingame-text OUT.txt     the same bytes as a file, for tests and review
 
 File shape (schema 1; every key is required):
-  headings  ordered [{id, ingame}]       in-game group titles; a heading with no entry shows nowhere
+  headings  ordered [{id, ingame}]       in-game group titles (the same character rule as a name); a heading
+                                         with no entry shows nowhere
   sections  ordered [{id, title}]        README groups
   entries   ordered [{name, section, headings, link, what, sources}]
-              name      the display name, spelled as the person or project writes it; each name once
+              name      the display name, spelled as the person or project writes it; each name once. It is
+                        drawn in-game too (when a heading lists it), so it is printable ASCII or "\u00a9"
+                        (the game's font draws nothing else), at most 64 bytes; any other character is refused
               section   a sections id, or null for a name the README does not show
               headings  heading ids the in-game page lists this name under (may be empty)
               link      "" or https://github.com/<owner>[/<repo>]
@@ -55,6 +58,10 @@ INGAME_REVIEW_LINE_BYTES = 40
 INGAME_MAX_LINES = 200
 INGAME_BLANKS_AFTER_GROUP = 3
 INGAME_FORBIDDEN = set("\n\r\x00|")
+# What the game's font draws, measured on the running game (#938): printable ASCII and the copyright sign (0xA9,
+# which the game's own credits use). U+00EB (0xEB) draws as '?', so a character outside this set is refused at
+# build time, never replaced; a further character is added only after it has been seen drawn.
+INGAME_DRAWN = frozenset(chr(c) for c in range(0x20, 0x7F)) | {"\u00a9"}
 KEYS = {"schema", "headings", "sections", "entries", "closing"}
 ENTRY_KEYS = {"name", "section", "headings", "link", "what", "sources"}
 
@@ -155,16 +162,26 @@ def _ingame_lines(data: dict) -> list[str]:
 
 def _ingame_texts(data: dict) -> list[tuple[str, str]]:
     """(what it is, the text) for every heading and every name shown in-game."""
-    texts = [(f"heading {h['id']!r}", h["ingame"]) for h in data["headings"]]
+    texts = [(f"heading {h['id']!r}, field ingame", h["ingame"]) for h in data["headings"]]
     for group in ingame_groups(data):
-        texts += [(f"name {name!r}", name) for name in group["names"]]
+        texts += [(f"entry {name!r}, field name", name) for name in group["names"]]
     return texts
 
 
 def ingame_text(data: dict) -> bytes:
     """The bytes the runtime puts above the game's own credits: LF-terminated lines in the game's encoding.
-    Empty when no heading has a name. Call after validate(): a text the game cannot show raises here."""
+    Empty when no heading has a name. A character the game's font cannot draw raises ValueError here, so a
+    caller that skipped validate() still gets no bytes for it."""
+    for what, text in _ingame_texts(data):
+        undrawn = _undrawn(text)
+        if undrawn:
+            raise ValueError(f"{what}: {undrawn} is not drawn by the game's font")
     return "".join(line + "\n" for line in _ingame_lines(data)).encode(INGAME_ENCODING)
+
+
+def _undrawn(text: str) -> str:
+    """The characters of text the game's font cannot draw, each as repr and code point, empty when there are none."""
+    return ", ".join(f"{c!r} (U+{ord(c):04X})" for c in sorted({c for c in text if c not in INGAME_DRAWN}))
 
 
 def ingame_problems(data: dict) -> list[str]:
@@ -172,18 +189,19 @@ def ingame_problems(data: dict) -> list[str]:
     cut or dropped by the game or the runtime."""
     problems: list[str] = []
     for what, text in _ingame_texts(data):
-        if not text or text != text.strip():
+        if not text or text != text.strip(" "):
             problems.append(f"{what}: empty, or starts or ends with a space")
             continue
         bad = sorted({c for c in text if c in INGAME_FORBIDDEN or ord(c) < 0x20})
         if bad:
             problems.append(f"{what}: has a character the in-game page parses ({', '.join(repr(c) for c in bad)})")
             continue
-        try:
-            size = len(text.encode(INGAME_ENCODING))
-        except UnicodeEncodeError as err:
-            problems.append(f"{what}: {text[err.start]!r} is not in the game's {INGAME_ENCODING} text")
+        undrawn = _undrawn(text)
+        if undrawn:
+            problems.append(f"{what}: {undrawn} is not drawn by the game's font (printable ASCII and the copyright sign "
+                            "are); refused, not replaced")
             continue
+        size = len(text.encode(INGAME_ENCODING))
         if size > INGAME_MAX_LINE_BYTES:
             problems.append(f"{what}: {size} bytes, the game shows at most {INGAME_MAX_LINE_BYTES}")
     lines = len(_ingame_lines(data))

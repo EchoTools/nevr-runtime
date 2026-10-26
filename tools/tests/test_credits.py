@@ -293,20 +293,45 @@ class IngameText(unittest.TestCase):
         self.assertEqual(self.tool.ingame_text(self.data_with({"ONE": [], "TWO": []})), b"")
 
     def test_names_are_encoded_as_the_games_single_byte_text(self):
-        data = self.data_with({"ONE": ["Zo\u00eb", "\u00a9 Name", "M\u00fcller"]})
+        data = self.data_with({"ONE": ["\u00a9 Name", "plain"]})
         text = self.tool.ingame_text(data)
-        self.assertIn(b"Zo\xeb\n", text)
         self.assertIn(b"\xa9 Name\n", text)
-        self.assertIn(b"M\xfcller\n", text)
+        self.assertIn(b"plain\n", text)
         self.assertNotIn(b"\xc3", text)  # no UTF-8 lead byte
 
     def problems(self, groups):
         return self.tool.validate(self.data_with(groups), ROOT)
 
-    def test_a_name_the_game_cannot_show_is_refused_not_dropped(self):
-        self.assertEqual(self.problems({"ONE": ["Zo\u00eb"]}), [])
-        self.assertTrue(self.problems({"ONE": ["\u0141ukasz"]}), "U+0141 is not in CP1252")
-        self.assertTrue(self.problems({"ONE": ["name \U0001F600"]}), "an emoji is not in CP1252")
+    def test_a_character_the_font_cannot_draw_is_refused_naming_the_entry_and_the_field(self):
+        # Measured on the running game: the font draws printable ASCII and the copyright sign; U+00EB draws as '?'.
+        for char in ("\u00eb", "\u00fc", "\u0141", "\U0001F600", "\u00e9", "\u00a0", "\u2019", "\x7f", "\u0080"):
+            problems = self.problems({"ONE": [f"Zo{char}"]})
+            self.assertEqual(len(problems), 1, (char, problems))
+            self.assertIn(repr(f"Zo{char}"), problems[0])
+            self.assertIn("field name", problems[0])
+            self.assertIn(f"U+{ord(char):04X}", problems[0])
+        heading = self.problems({"H\u00ebad": ["a"]})
+        self.assertEqual(len(heading), 1, heading)
+        self.assertIn("field ingame", heading[0])
+        self.assertIn("U+00EB", heading[0])
+
+    def test_every_undrawn_character_is_listed_once_in_code_point_order(self):
+        problems = self.problems({"ONE": ["a\u00fc\u00eb\u00eb"]})
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("'\u00eb' (U+00EB), '\u00fc' (U+00FC)", problems[0])
+        self.assertEqual(problems[0].count("U+00EB"), 1)
+
+    def test_an_undrawn_name_is_one_problem_even_when_it_is_also_too_long(self):
+        self.assertEqual(len(self.problems({"ONE": ["\u00eb" * 70]})), 1)
+
+    def test_printable_ascii_and_the_copyright_sign_are_drawn(self):
+        ascii_printable = "".join(chr(c) for c in range(0x21, 0x7F) if chr(c) != "|")
+        self.assertEqual(self.problems({"ONE": [ascii_printable[:64], ascii_printable[64:], "a b", "\u00a9 9", "\u00a9"]}), [])
+
+    def test_ingame_text_itself_refuses_a_character_the_font_cannot_draw(self):
+        # Not only validate(): a caller that skips it must not get bytes for a name the page would show as '?'.
+        with self.assertRaises(ValueError):
+            self.tool.ingame_text(self.data_with({"ONE": ["Zo\u00eb"]}))
 
     def test_a_name_that_would_change_the_games_parse_is_refused(self):
         for bad in ("a|b", "a\nb", "a\rb", "a\x00b", "a\tb", " lead", "trail ", ""):
@@ -318,10 +343,10 @@ class IngameText(unittest.TestCase):
         self.assertEqual(self.problems({"H" * 64: ["a"]}), [])
         self.assertTrue(self.problems({"H" * 65: ["a"]}))
 
-    def test_length_is_counted_in_game_bytes_not_characters(self):
-        # 33 two-byte characters are 33 bytes in CP1252 (one byte each) but 66 bytes in UTF-8.
-        self.assertEqual(self.problems({"ONE": ["\u00eb" * 64]}), [])
-        self.assertTrue(self.problems({"ONE": ["\u00eb" * 65]}))
+    def test_a_drawn_non_ascii_character_counts_one_byte(self):
+        # The copyright sign is one byte in the game's text (two in UTF-8), so 64 of them fit and 65 do not.
+        self.assertEqual(self.problems({"ONE": ["\u00a9" * 64]}), [])
+        self.assertTrue(self.problems({"ONE": ["\u00a9" * 65]}))
 
     def test_two_hundred_lines_is_the_cap(self):
         # one group is N + 5 lines: heading, blank, N names, three blanks
@@ -339,7 +364,7 @@ class IngameText(unittest.TestCase):
         self.assertEqual(self.tool.ingame_warnings(self.data), [])
 
     def test_the_c_source_round_trips_every_byte(self):
-        for groups in ({"ONE": ["Zo\u00eb", '"quoted"', "back\\slash", "\u00a9 9"]}, {"ONE": []}, {"A": ["x"], "B": ["y"]}):
+        for groups in ({"ONE": ["Zoe", '"quoted"', "back\\slash", "\u00a9 9"]}, {"ONE": []}, {"A": ["x"], "B": ["y"]}):
             data = self.data_with(groups)
             source = self.tool.ingame_source(data)
             block = self.tool.ingame_text(data)
@@ -381,6 +406,21 @@ class IngameText(unittest.TestCase):
                                   cwd=ROOT, capture_output=True, text=True)
             self.assertNotEqual(proc.returncode, 0)
             self.assertFalse(out.exists())
+
+    def test_the_command_refuses_a_name_the_font_cannot_draw_and_names_it(self):
+        for flag in ("--ingame-source", "--ingame-text"):
+            with tempfile.TemporaryDirectory(prefix="credits-ingame-", dir=work_root.test_scratch()) as tmp:
+                bad = copy.deepcopy(self.data)
+                bad["entries"][0]["name"] = "Zo\u00eb"  # in Windows-1252, so only the font rule refuses it
+                bad_json, out = Path(tmp) / "credits.json", Path(tmp) / "block.out"
+                bad_json.write_text(json.dumps(bad), encoding="utf-8")
+                proc = subprocess.run([sys.executable, str(TOOL), flag, str(out), "--json", str(bad_json)],
+                                      cwd=ROOT, capture_output=True, text=True)
+                self.assertNotEqual(proc.returncode, 0, flag)
+                self.assertFalse(out.exists(), flag)
+                self.assertIn("Zo\u00eb", proc.stderr)
+                self.assertIn("field name", proc.stderr)
+                self.assertIn("U+00EB", proc.stderr)
 
 
 if __name__ == "__main__":
