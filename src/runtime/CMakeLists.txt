@@ -146,6 +146,7 @@ set(PATCHES_HEADERS
     "hook/addresses.h"
     "compat/ws_bridge.h"
     "compat/socket_role.h"
+    "patch/invite_wizard.h"
     "compat/evr_codec.h"
     "compat/lobby_frame.h"
     "patch/xpid_patch.h"
@@ -237,6 +238,11 @@ target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzs
 # the ONLY production link of yaml-cpp. The module DLLs never reference nevr_config,
 # so yaml-cpp does not reach them.
 target_link_libraries(nevr_runtime PRIVATE yaml-cpp::yaml-cpp)
+
+# The two files here that read the version (cmake/nevr_build_identity.cmake); a property of this directory, so every
+# target below that compiles them (test_behavioral compiles ws_bridge.cpp) gets it too.
+nevr_build_identity_define(TARGET nevr_runtime READS VERSION
+  SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/lifecycle/initialize.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/compat/ws_bridge.cpp")
 
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
 set_source_files_properties(host/bootstrap_diagnostics.cpp host/crash_capture.cpp host/host_entry.cpp host/runtime_load.cpp host/runtime_rendezvous.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -1071,6 +1077,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_socket_role PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_socket_role DISCOVERY_MODE PRE_TEST)
 
+    # #906, docs/adr/0017: the client half of the invite codes (patch/invite_wizard.h): header only, pure.
+    add_executable(test_invite_wizard tests/test_invite_wizard.cpp)
+    set_source_files_properties(tests/test_invite_wizard.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_invite_wizard PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_invite_wizard PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_invite_wizard DISCOVERY_MODE PRE_TEST)
+
     # The #408 self-check (compat/status_redirect_check.h): the game's API connections counted as redirected or
     # passed through. Header only on top of the self-check unit.
     add_executable(test_status_redirect_check
@@ -1323,11 +1336,10 @@ if(BUILD_TESTING)
       hook/dll_load_hook.cpp
     )
     target_compile_definitions(test_behavioral PRIVATE NEVR_TEST_HOOKS NEVR_USE_MINHOOK
-      NEVR_PROJECT_VERSION="${PROJECT_VERSION}"
-      NEVR_GIT_COMMIT_HASH="${GIT_COMMIT_HASH}"
-      NEVR_GIT_COMMIT_FULL="${GIT_COMMIT_HASH_FULL}"
-      NEVR_GIT_DESCRIBE="${GIT_DESCRIBE}"
       CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
+    # build_identity.cpp is compiled again here, from src/core (nevr_core's definitions are another directory's).
+    nevr_build_identity_define(TARGET test_behavioral READS VERSION COMMIT_HASH COMMIT_FULL DESCRIBE
+      SOURCES "${CMAKE_SOURCE_DIR}/src/core/build_identity.cpp")
     # Disable PCH — the test has its own stub headers and must not depend on
     # the nevr_runtime precompiled header (which pulls in MinHook, etc.).
     set_source_files_properties(

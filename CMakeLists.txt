@@ -44,16 +44,10 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/nevr_version_info.cmake")
 # The version is plain semver from the tags: exactly X.Y.Z for a CI build on the tag vX.Y.Z, otherwise
 # X.Y.(Z+1)-dev.<N>+<sha> (set_project_version_from_git.cmake).
 
-# Define the version and git hash as compile definitions
-add_compile_definitions(
-  NEVR_PROJECT_VERSION_MAJOR="${PROJECT_VERSION_MAJOR}"
-  NEVR_PROJECT_VERSION_MINOR="${PROJECT_VERSION_MINOR}"
-  NEVR_PROJECT_VERSION_PATCH="${PROJECT_VERSION_PATCH}"
-  NEVR_PROJECT_VERSION_TWEAK="${PROJECT_VERSION_TWEAK}"
-  NEVR_PROJECT_VERSION="${PROJECT_VERSION}"
-  NEVR_GIT_COMMIT_HASH="${GIT_COMMIT_HASH}"
-  NEVR_GIT_COMMIT_FULL="${GIT_COMMIT_HASH_FULL}"
-  NEVR_GIT_DESCRIBE="${GIT_DESCRIBE}")
+# The version and the commit are NOT defined for the tree: a definition on every compile command rebuilds every
+# translation unit, and every precompiled header, for each new commit or uncommitted edit. The few files that read
+# them get them (cmake/nevr_build_identity.cmake), where those files are built.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/nevr_build_identity.cmake")
 
 # Print out the version that was set by set_project_version_from_git()
 message(STATUS "Project version: ${PROJECT_VERSION} (${GIT_COMMIT_HASH})")
@@ -248,13 +242,12 @@ endif()
 # echovr-reconstruction; nothing here may symlink into a private repo, which
 # breaks every clean clone.
 add_subdirectory(src/legacy/gameserver)
-# The frozen legacy sources read the unprefixed macro names (PROJECT_VERSION, GIT_COMMIT_HASH, USE_MINHOOK);
-# the shared definitions above carry the NEVR_ spelling, so the two legacy targets get the old names here.
-foreach(_legacy_target gamepatcheslegacy gameserverlegacy)
-  target_compile_definitions(${_legacy_target} PRIVATE
-    PROJECT_VERSION="${PROJECT_VERSION}"
-    GIT_COMMIT_HASH="${GIT_COMMIT_HASH}")
-endforeach()
+# The frozen legacy sources read the unprefixed macro names (PROJECT_VERSION, GIT_COMMIT_HASH, USE_MINHOOK); only these
+# two files do (git grep -nE '\b(PROJECT_VERSION|GIT_COMMIT_HASH)\b' -- src/legacy).
+nevr_build_identity_define(TARGET gamepatcheslegacy LEGACY READS VERSION COMMIT_HASH
+  SOURCES "${CMAKE_SOURCE_DIR}/src/legacy/gamepatches/patches.cpp")
+nevr_build_identity_define(TARGET gameserverlegacy LEGACY READS VERSION COMMIT_HASH
+  SOURCES "${CMAKE_SOURCE_DIR}/src/legacy/gameserver/gameserver.cpp")
 # src/core/hooking.h (shared with the legacy build through src/legacy-compat) selects MinHook on NEVR_USE_MINHOOK.
 target_compile_definitions(gamepatcheslegacy PRIVATE NEVR_USE_MINHOOK)
 # telemetryagent lives in nevr-runtime-plugins (extras/) — it needs a protobuf-lite
