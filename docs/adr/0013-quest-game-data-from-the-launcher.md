@@ -26,17 +26,28 @@ OBB file exists:
   mount with the first root that holds the game's `_data`: the installer app's `Android/media` directory, then the legacy
   root (`/storage/emulated/0/readyatdawn`) (`obb_skip::ResolveRoot` in `src/quest/sentinel/obb_skip_hook.h`; the candidate order is in `src/quest/sentinel/data_root.h`).
 - Without one, `CSysFile::Init` returns at `OBB not found` (the `access()` call at `0xf853b8`, ADR 0007, Context, step 1),
-  before `AStorageManager_mountObb`. The OBB skip hooks are on `mountObb` and `getMountedObbPath`, so they never run, `gOBBPath`
-  stays empty, and `CSysInfo::GetDataRootDir` (`0xf87250`) answers its literal fallback, `/storage/emulated/0/readyatdawn`
-  (ADR 0007, Context).
+  before `AStorageManager_mountObb`. The OBB skip hooks on `mountObb` and `getMountedObbPath` never run, `gOBBPath` stays
+  empty, and `CSysInfo::GetDataRootDir` (`0xf87250`) answers its literal fallback, `/storage/emulated/0/readyatdawn` (ADR 0007,
+  Context). A third hook of the OBB-skip module is on `GetDataRootDir` itself: when `ResolveRoot` found the game's `_data` under
+  the `Android/media` directory it answers the media root, and otherwise it passes the call to the original
+  (`DataRootHandler` in `src/quest/sentinel/obb_skip_hook.cpp`).
 
-So on a sideloaded headset with no OBB the engine reads the legacy root, and only the legacy root. Reading that root needs the
-storage permission (ADR 0009).
+So on a headset with no OBB the engine reads the media root when that holds `_data` and the data-root hook is installed, and the
+legacy root in every other case. Reading the legacy root needs the storage permission (ADR 0009); reading the media root needs
+none.
 
-**Premise B (the engine never reads `Android/media` with no OBB): established by code reading, plus one headset observation.**
-The code reading is ADR 0007's Context (the `OBB not found` return at `0xf853b8` and the `GetDataRootDir` fallback at
-`0xf87250`). The observation is the Quest 2 run on #758 with `_data` hidden: the game's failure line named the manifest path
-under `/storage/emulated/0/readyatdawn`. Not observed: a launch with the data present only under `Android/media`.
+**Premise B (with no OBB and no data-root hook the engine never reads `Android/media`): established by code reading, plus one
+headset observation.** The code reading is ADR 0007's Context (the `OBB not found` return at `0xf853b8` and the `GetDataRootDir`
+fallback at `0xf87250`). The observation is the Quest 2 run on #758 with `_data` hidden: the game's failure line named the
+manifest path under `/storage/emulated/0/readyatdawn`.
+
+**Premise C (the data-root hook makes the engine read the media root): established by code reading; not observed on a headset.**
+`GetDataRootDir` is reached from exactly two call sites, both through libr15's PLT stub `0xf34e20` and its one `JUMP_SLOT`
+`0x36f1df8` (`CFileTypes::InitializeDirectories`, `bl` at `0x11eb144`; `CEngine::Initialize`, `bl` at `0x2abfe7c`), and no
+`R_AARCH64_RELATIVE` or `R_AARCH64_ABS64` relocation names the function, so no call bypasses the slot (a scan of the pinned
+`.text` and relocation table; `tools/tests/test_quest_data_root_wiring.py` and `got_pinned_test` pin the slot). Both callers
+copy the string. Not observed: a launch with the data present only under `Android/media`, which is what
+"What the first headset run must show" decides.
 
 ## Design
 
@@ -48,10 +59,13 @@ The chain, each step following from the one before it:
 2. **So the runtime does not need to fetch data for players.** Keeping the download out of the runtime keeps the release small
    and avoids a second installer inside the first. This is also the position recorded on #538 before ADR 0011 changed it: no
    player-facing data downloader.
-3. **The root the engine reads with no OBB is the legacy root, so development and test tools write there.** A development
-   build's data step looks at, and fetches into, the one root the engine reads this launch (`EngineRoot()` in
-   `src/quest/sentinel/data_wiring.cpp`: the root the OBB skip served when an OBB exists, the legacy root otherwise). Data
-   placed anywhere else is never read, so it is never a success.
+3. **The root the engine reads with no OBB is the media root when it holds `_data` and the data-root hook took, else the legacy
+   root.** The data step looks at, and a development build fetches into, the one root the engine reads this launch
+   (`EngineRoot()` in `src/quest/sentinel/data_wiring.cpp`: the root the OBB skip served when a mount was skipped;
+   `obb_skip::DataRootRedirect()` otherwise, which is non-null only when `ResolveRoot` found `_data` under the media root and
+   the data-root slot holds our thunk; the legacy root in every other case). `data_step_start` logs `engine_root` and
+   `engine_root_source` (`obb_skip`, `data_root_hook` or `engine_default`). A media directory that exists without `_data`
+   directly under it is not redirected to. Data placed anywhere else is never read, so it is never a success.
 4. **The one thing the runtime still owes a player is a visible message when data is missing, instead of a silent exit.**
    A release build, when the data is not there, fetches nothing, writes nothing, recovers nothing, cleans nothing, shows
    `kGameDataMissing` ("Echo VR game data is missing. Install Echo VR with Echo Launcher first, then start the game again."),
@@ -74,25 +88,23 @@ The chain, each step following from the one before it:
    does not set it cannot fetch. `tools/tests/test_quest_build_is_dev.py` runs the generator on a tag and on a non-tag and pins
    both results.
 8. **Parked, not built:**
-   - *A redirect of the engine root* (making a no-OBB launch read another root, by a hook on `GetDataRootDir` or on whatever
-     assigns `gOBBPath`, or by an engine flag such as `-dataroot` or `-datadir`). Parked because nothing needs it: the launcher
-     puts the data in the legacy root, so the engine already reads it. Where `gOBBPath` is assigned, and whether the engine
-     accepts either flag, were not read or measured; a flag, if it exists, might replace an OBB-based redirect entirely.
-   - *The media root* (`/sdcard/Android/media/com.readyatdawn.r15/files`). It needs no permission, but the engine never reads
-     it in a no-OBB launch, so data fetched there is not data the game can use. Data an older installer left there is not read
-     either; its owner sees the missing-data message and installs through the launcher. Whether the folder survives uninstalling
-     the store package was not measured.
+   - *A redirect by assigning `gOBBPath`, or by an engine flag such as `-dataroot` or `-datadir`.* Not built: the redirect is the
+     hook on `GetDataRootDir` (Design 3), which needs neither. Where `gOBBPath` is assigned, and whether the engine accepts either
+     flag, were not read or measured.
+   - *A fetch into the media root.* A development build fetches into the engine's root (Design 3), which is the media root only
+     when `_data` is already there; a launch with no data anywhere fetches into the legacy root. Whether the media folder
+     survives uninstalling the store package was not measured.
 
 ## What changes in ADR 0011, and what it got wrong
 
 ADR 0011 assumed the OBB path runs on a sideloaded headset. It does not: with no OBB file `CSysFile::Init` returns before the
-mount, so the OBB skip never serves a root and the engine reads the legacy root. From that assumption it drew a media-root-first
-data root (`data_root::Resolve`) and a fetch into the media root, which the engine would not have read.
+mount, so the OBB skip never serves a root; the engine's question is answered by the data-root hook (Design 3). From that
+assumption it drew a media-root-first data root (`data_root::Resolve`) and a fetch into the media root.
 
 | ADR 0011 | This record |
 | --- | --- |
 | Option A, fetch on first launch, for every player, with no switch ("Decisions" 1 and 3) | Development builds only; a release build never fetches (Design 4, 7) |
-| Fetch target: the media root, or whichever root `Resolve` returns | The one root the engine reads this launch (Design 3) |
+| Fetch target: the media root, or whichever root `Resolve` returns | The one root the engine reads this launch (Design 3); the media root only when it holds `_data` |
 | The sha256 pin is the trust for a player-facing download (Decision 2) | Unchanged for the development fetch; a release build has no download to trust |
 | "Fetch design", "Toast fallback plan", "Measurements to run first" | Still describe the development step and the open measurements; measurements 4 and 5 (media root) are parked with the media root |
 | The data step is reached only through `RequestPermissions` | Also through `CheckPermission` when the microphone is already granted (Design 6) |
@@ -108,7 +120,8 @@ data root (`data_root::Resolve`) and a fetch into the media root, which the engi
 - **ADR 0007, Hooks (the `getMountedObbPath` bullet: "after the skip, return `/storage/emulated/0/readyatdawn`"):** stale. The
   hook returns the root `ResolveRoot` chose, the `Android/media` directory first when it holds `_data`, the legacy root
   otherwise (`src/quest/sentinel/obb_skip_hook.h`). The legacy root is the answer only on a launch where the skip finds no
-  `_data` in the media directory, and the engine's own fallback on a launch with no OBB file.
+  `_data` in the media directory, and, with no OBB file, the engine's own fallback unless the data-root hook answers the media
+  root (Design 3).
 - **ADR 0009, "Not established": the case where RECORD_AUDIO is granted and storage is not (no request is made at all; not
   handled).** Contradicted: that case is now handled, by the `CheckPermission` hook (Design 6). Its decision (one hook on the
   `RequestPermissions` slot, first call only, 500 ms poll, 30 s cap) is unchanged and the new hook is added beside it.
@@ -120,7 +133,11 @@ data root (`data_root::Resolve`) and a fetch into the media root, which the engi
 Written before the run. A release build, sideloaded, no `_data` in the legacy root, Storage granted: a `data_step_start` line, a
 `data_check` line with `action=fetch` or `replace`, a `data_step` Error line with `outcome=missing` and no `data_fetch` line,
 one `data_present` line for the message, then `android_main_returned` and a nonzero exit at once; no file written under
-either data root. The same build with `_data` in place: `data_check action=use` and the game starts. A development build with `_data`
+either data root. The same build with `_data` in place in the legacy root: `data_check action=use` and the game starts.
+With `_data` only under the media root, no OBB file and Storage not granted (#866): an `obb_skip_install` line with
+`data_root=ok`, a `data_root` line with `source=android_media`, a `data_step_start` line with
+`engine_root=/sdcard/Android/media/com.readyatdawn.r15/files` and `engine_root_source=data_root_hook`, `data_check action=use`
+with that root, no `no_storage_grant` line, and the game reaches its menu. A development build with `_data`
 missing: the `data_fetch` lines of ADR 0011. Whether Horizon OS draws the toast this early (ADR 0011, measurement 1) is not
 known; a `data_present` line with `result=requested` says `Toast.show()` returned, not that anything drew.
 
@@ -129,5 +146,5 @@ known; a `data_present` line with `result=requested` says `Toast.show()` returne
 Which presenter a player sees at the microphone check (the one headset run showed no `Toast` from the `android_main`
 thread, whose Looper is prepared and never run; a `Toast` posted to the main looper, a dialog and an own-frames display are
 untried); whether the toast is drawn and for how long it is readable; whether `/sdcard/readyatdawn` and `/storage/emulated/0/readyatdawn`
-are the same folder for every player; where `gOBBPath` is assigned; whether `-dataroot` or `-datadir` exists; whether
+are the same folder for every player; that a launch with the data only under `Android/media` reaches the menu (Premise C); where `gOBBPath` is assigned; whether `-dataroot` or `-datadir` exists; whether
 `Android/media/<package>` survives an uninstall.

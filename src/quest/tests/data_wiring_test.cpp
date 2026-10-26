@@ -1,7 +1,8 @@
 // Host test for the first-run data step as the game reaches it (src/quest/sentinel/data_wiring.cpp): through the real
 // permission-wait handlers and their thunk entries (RequestPermissions and CheckPermission), with stand-ins for the
 // game's functions, the toast, the process end and the network. Covers: data already there is not fetched; a
-// development build fetches into the root the engine reads (the legacy root without an OBB file); a release build
+// development build fetches into the root the engine reads (the legacy root without an OBB file, unless the data is under
+// the media root and the data-root hook is installed: then the media root, with or without the storage grant); a release build
 // never fetches and shows the missing-data message; Storage not granted writes nothing and shows the Storage message,
 // on both the request path and the microphone-granted path; the step runs once across both paths; a failed fetch shows
 // the floor message and ends the process after holding it; the probe file acts once.
