@@ -7,6 +7,7 @@ import base64
 import hashlib
 import os
 import pathlib
+import re
 import shutil
 import signal
 import subprocess
@@ -45,8 +46,9 @@ exec /usr/bin/shred "$@"
 
 
 FAKE_KEYTOOL = r'''#!/bin/bash
-# A fake `keytool`: record the full argument list where the test can see it, then do the real work.
-printf '%s\n' "$*" >> "$FAKE_KEYTOOL_LOG"
+# A fake `keytool`: record its pid, its parent's pid and the full argument list where the test can see them, then do
+# the real work.
+printf '%s %s keytool %s\n' "$$" "$PPID" "$*" >> "$FAKE_KEYTOOL_LOG"
 exec "$FAKE_KEYTOOL_REAL" "$@"
 '''
 
@@ -174,10 +176,11 @@ class QuestKeystoreTest(unittest.TestCase):
         self.assertEqual(self.left_behind(), [])
 
     def passphrase_holders(self, script=SCRIPT):
-        """Command lines that carry the passphrase and belong to the tool under test: the tool itself, everything it
-        starts while the wrapped command runs, and every `keytool` call it makes (the fake `keytool` records those,
-        because they are over before the wrapped command starts). Processes that are not the tool's are not looked at:
-        other runs of this file, on the same host, put the passphrase on the command line of their own `keytool`."""
+        """Lines `<pid> <ppid> <command line>` of the processes that carry the passphrase and belong to the tool under
+        test: the tool itself, everything it starts while the wrapped command runs, and every `keytool` call it makes
+        (the fake `keytool` records those, because they are over before the wrapped command starts). A failure
+        therefore names its holder. Processes that are not the tool's are not looked at: other runs of this file, on
+        the same host, put the passphrase on the command line of their own `keytool`."""
         proc = subprocess.Popen([str(script), "with", "sleep", "30"], env=self.env,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: proc.poll() is None and proc.kill())
@@ -191,7 +194,9 @@ class QuestKeystoreTest(unittest.TestCase):
             self.assertTrue(any(argv[:1] == ["sleep"] for _, argv in tree),
                             f"the wrapped command never started; tree {tree}")
             self.assertGreaterEqual(len(tree), 2, f"the scan saw {tree}")
-            found += [" ".join(argv) for _, argv in tree if PASSPHRASE in " ".join(argv)]
+            table = process_table()
+            found += [f"{pid} {table[pid][0] if pid in table else '?'} {' '.join(argv)}"
+                      for pid, argv in tree if PASSPHRASE in " ".join(argv)]
         finally:
             # The tool first, so its trap shreds the key; then whatever it left running, which would hold the pipes
             # open for `communicate`.
@@ -207,7 +212,7 @@ class QuestKeystoreTest(unittest.TestCase):
                 proc.communicate(timeout=20)
         calls = self.keytool_log.read_text().splitlines() if self.keytool_log.exists() else []
         self.assertTrue(calls, "the tool never called keytool, so there was nothing to check")
-        found += [f"keytool {line}" for line in calls if PASSPHRASE in line]
+        found += [line for line in calls if PASSPHRASE in line]
         return found
 
     def test_neither_the_passphrase_nor_the_key_is_printed_or_on_a_command_line(self):
@@ -244,14 +249,14 @@ class QuestKeystoreTest(unittest.TestCase):
         leaky = self.leaking_copy('-alias "$ALIAS" -storepass:env NEVR_QUEST_KS_PASS >/dev/null 2>&1; then\n        err "the stored keystore',
                                   '-alias "$ALIAS" -storepass "$passphrase" >/dev/null 2>&1; then\n        err "the stored keystore')
         found = self.passphrase_holders(leaky)
-        self.assertTrue(any(line.startswith("keytool ") for line in found), found)
+        self.assertTrue(any(re.match(r"^[0-9]+ [0-9]+ keytool ", line) for line in found), found)
 
     def test_the_check_fails_when_a_process_the_tool_starts_holds_the_passphrase(self):
         self.seed()
         leaky = self.leaking_copy('    log "keystore ready entry=$KS_ENTRY alias=$ALIAS"',
                                   '    bash -c "sleep 30; :" "$passphrase" &\n    log "keystore ready entry=$KS_ENTRY alias=$ALIAS"')
         found = self.passphrase_holders(leaky)
-        self.assertTrue(any(line.startswith("bash -c sleep 30; :") for line in found), found)
+        self.assertTrue(any(re.match(r"^[0-9]+ [0-9]+ bash -c sleep 30; : ", line) for line in found), found)
 
     def test_a_missing_key_is_an_error_that_names_the_import_and_the_command_never_runs(self):
         marker = self.tmp / "ran"
