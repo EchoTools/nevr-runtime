@@ -186,8 +186,16 @@ class NotSeeded(SeedFixture):
         self.assertIn("CMAKE_HOME_DIRECTORY", result.reason)
         self.assertFalse(self.wt_build().exists())
 
-    def test_a_build_running_in_main_is_not_copied(self):
+    def test_a_shell_sitting_in_main_s_build_directory_does_not_stop_it(self):
         proc = subprocess.Popen(["sleep", "60"], cwd=self.build)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.terminate)
+        self.assertEqual(self.seed().status, "seeded")
+
+    def test_a_build_running_in_main_is_not_copied(self):
+        fake_ninja = self.tmp / "ninja"
+        shutil.copy(shutil.which("sleep"), fake_ninja)
+        proc = subprocess.Popen([str(fake_ninja), "60"], cwd=self.build)
         self.addCleanup(proc.wait)
         self.addCleanup(proc.terminate)
         result = self.seed()
@@ -213,14 +221,14 @@ class CommandHash(SeedFixture):
     def test_every_input_length_class_hashes_like_ninja(self):
         """rapidhash branches on the input length (0-3, 4-16, 17-48, 49 and over, and per 48-byte block): make ninja
         record commands of each class and compare."""
-        lengths = (1, 2, 3, 5, 8, 9, 12, 16, 17, 24, 32, 33, 48, 49, 50, 96, 97, 98, 145, 500)
+        lengths = (1, 2, 3, 4, 5, 8, 9, 12, 15, 16, 17, 24, 32, 33, 48, 49, 50, 96, 97, 98, 145, 500)
         d = self.tmp / "lengths"
         d.mkdir()
         manifest = []
         commands = {}
         for n in lengths:
-            if n <= 3:
-                command = {1: ":", 2: ":;", 3: ":;:"}[n]
+            if n < 16:
+                command = (":;" * n)[:n]  # a shell no-op of exactly n bytes
             else:
                 out = f"o{n}"
                 command = f"touch {out} #"
