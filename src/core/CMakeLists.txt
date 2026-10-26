@@ -20,6 +20,10 @@ add_library(nevr_core STATIC ${CORE_SOURCES} ${CORE_HEADERS})
 
 target_precompile_headers(nevr_core PRIVATE "pch.h")
 
+# build_identity.cpp is the one place the version and the commit are read in this library (cmake/nevr_build_identity.cmake).
+nevr_build_identity_define(TARGET nevr_core READS VERSION COMMIT_HASH COMMIT_FULL DESCRIBE
+  SOURCES "${CMAKE_SOURCE_DIR}/src/core/build_identity.cpp")
+
 target_include_directories(nevr_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
 
 find_package(nlohmann_json CONFIG REQUIRED)

@@ -6,8 +6,10 @@
 // The stable host's createReport must write a structurally valid minidump even
 // when nevr-runtime.dll is absent or failed to load. It therefore:
 //   - resolves MiniDumpWriteDump from the ALREADY-LOADED dbghelp.dll
-//     (GetModuleHandleW + GetProcAddress; never LoadLibrary: the game's
-//     HandleCrashDump has loaded dbghelp before this callback runs);
+//     (GetModuleHandleW + GetProcAddress; never LoadLibrary in the callback: it runs in a
+//     faulting process and may be on a thread that holds the loader lock). Nothing else loads
+//     dbghelp (echovr.exe imports none and HandleCrashDump calls no loader function), so the host
+//     loads it ahead of time with PreloadDbgHelp, from the thread OnProcessAttach starts;
 //   - writes to the first writable of three precomputed destinations:
 //       %LOCALAPPDATA%\nevr\echovr\crashes, %TEMP%\nevr\echovr\crashes, the host directory;
 //   - guards against re-entry with an atomic flag cleared on return;
@@ -47,6 +49,12 @@ class CrashCapture {
   /// %LOCALAPPDATA%, %TEMP% and the host module path. No file I/O.
   /// `diagnostics` (optional, must outlive this object) receives the JSON records.
   void Prepare(HMODULE host_module, BootstrapDiagnostics* diagnostics);
+
+  /// Load the system dbghelp.dll (System32 only) so Capture finds it mapped. Never called from Capture. Runs on
+  /// the thread host_entry starts at attach, after the loader lock is released; a failure is recorded
+  /// (event dbghelp_preload) and Capture then reports dbghelp_unavailable. Returns true when dbghelp.dll is
+  /// loaded on return, including when it already was.
+  bool PreloadDbgHelp() noexcept;
 
   /// The BugSplat_createReport body. Returns true when a minidump was written,
   /// false after every destination failed (a text diagnostic is attempted).
