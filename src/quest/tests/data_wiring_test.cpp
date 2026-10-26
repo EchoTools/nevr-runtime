@@ -1,7 +1,8 @@
 // Host test for the first-run data step as the game reaches it (src/quest/sentinel/data_wiring.cpp): through the real
 // permission-wait handlers and their thunk entries (RequestPermissions and CheckPermission), with stand-ins for the
 // game's functions, the toast, the process end and the network. Covers: data already there is not fetched; a
-// development build fetches into the root the engine reads (the legacy root without an OBB file); a release build
+// development build fetches into the root the engine reads (the legacy root without an OBB file, unless the data is under
+// the media root and the data-root hook is installed: then the media root, with or without the storage grant); a release build
 // never fetches and shows the missing-data message; Storage not granted writes nothing and shows the Storage message,
 // on both the request path and the microphone-granted path; the step runs once across both paths; a failed fetch shows
 // the floor message and ends the process after holding it; the probe file acts once.
@@ -14,6 +15,7 @@
 #include <cstring>
 #include <set>
 #include <string>
+#include <thread>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <vector>
@@ -22,6 +24,7 @@
 #include "hook_log.h"
 #include "obb_skip_hook.h"
 #include "permission_wait_hook.h"
+#include "probe_command.h"
 #include "process_end_hook.h"
 #include "quest/data/data_step.h"
 #include "quest/data/sha256.h"
@@ -241,6 +244,8 @@ std::string Media(const char* rel = "") {
   return std::string(nevr_quest::data_root::kMediaRoot) + (*rel != '\0' ? std::string("/") + rel : std::string());
 }
 void DataIn(const std::string& root) { g_present.insert({root, root + "/_data", root + "/" + kManifestRel}); }
+// A `_data` directory with no manifest: a partial copy, or the data of another build.
+void StaleDataIn(const std::string& root) { g_present.insert({root, root + "/_data"}); }
 
 void DataAlreadyThereIsNotFetchedAndTheProcessContinues() {
   Rig rig;
@@ -329,6 +334,242 @@ void AToastProbeShowsItsTextOnceAndIsConsumed() {
   QCHECK(Exists(rig.options.probe_path + ".done"));
   rig.BootRequest();  // the next launch: no probe
   QCHECK(g_shown.size() == 1);
+}
+
+// ---- the probe's kinds (#829) ----
+
+void TheProbeLineParsesIntoItsKindAndArgument() {
+  namespace dwp = nevr_quest::data_wiring;
+  struct Case {
+    const char* line;
+    dwp::ProbeKind kind;
+    const char* arg;
+  };
+  const Case cases[] = {
+      {"toast hello", dwp::ProbeKind::kToast, "hello"},
+      {"ui-toast hello world", dwp::ProbeKind::kUiToast, "hello world"},
+      {"ui-post hello world", dwp::ProbeKind::kUiPost, "hello world"},
+      {"ui-pos hello", dwp::ProbeKind::kUnknown, ""},
+      {"dialog a dialog", dwp::ProbeKind::kDialog, "a dialog"},
+      {"block 3", dwp::ProbeKind::kBlock, "3"},
+      {"ui-toast  two spaces", dwp::ProbeKind::kUiToast, " two spaces"},  // one space ends the kind; the rest is the text
+      {"ui-toast ", dwp::ProbeKind::kUiToast, ""},
+      {"toasty hello", dwp::ProbeKind::kUnknown, ""},   // a kind is matched whole
+      {"ui-toast", dwp::ProbeKind::kUnknown, ""},       // and needs its space
+      {"UI-TOAST hello", dwp::ProbeKind::kUnknown, ""}, // and is case-sensitive
+      {"xui-toast hello", dwp::ProbeKind::kUnknown, ""},
+      {"dialogs hello", dwp::ProbeKind::kUnknown, ""},
+      {"", dwp::ProbeKind::kUnknown, ""},
+  };
+  for (const Case& c : cases) {
+    const dwp::ProbeCommand parsed = dwp::ParseProbeCommand(c.line);
+    QCHECK(parsed.kind == c.kind);
+    QCHECK(parsed.arg != nullptr && std::strcmp(parsed.arg, c.arg) == 0);
+  }
+  // The argument points into the parsed line, after the kind's word and one space.
+  const char* line = "ui-toast abc";
+  QCHECK(dwp::ParseProbeCommand(line).arg == line + 9);
+}
+
+std::vector<std::string> g_ui_shown;
+std::vector<std::string> g_dialog_shown;
+bool g_ui_prepared = false;
+const char* g_ui_result = "requested";
+const char* FakeShowUi(void*, const char* text, bool* prepared) noexcept {
+  g_ui_shown.push_back(text);
+  *prepared = g_ui_prepared;
+  return g_ui_result;
+}
+std::vector<std::string> g_post_shown;
+const char* g_post_result = "posted";
+const char* FakeShowPost(void*, const char* text, bool* prepared) noexcept {
+  g_post_shown.push_back(text);
+  *prepared = false;
+  return g_post_result;
+}
+const char* FakeShowDialog(void*, const char* text, bool* prepared) noexcept {
+  g_dialog_shown.push_back(text);
+  *prepared = false;
+  return "requested";
+}
+void ResetProbeSeams() {
+  g_ui_shown.clear();
+  g_dialog_shown.clear();
+  g_post_shown.clear();
+  g_post_result = "posted";
+  g_ui_prepared = false;
+  g_ui_result = "requested";
+}
+
+std::vector<std::string> ProbeLines() {
+  std::vector<std::string> out;
+  for (const std::string& l : g_lines) {
+    if (Has(l, "\"event\":\"data_probe\"")) out.push_back(l);
+  }
+  return out;
+}
+
+void AUiToastProbeGoesToTheUiPresenterOnceAndSaysWhichThreadAndLooper() {
+  ResetProbeSeams();
+  Rig rig;
+  DataIn(Legacy());
+  rig.options.probe_enabled = true;
+  rig.options.show_ui = &FakeShowUi;
+  rig.options.show_dialog = &FakeShowDialog;
+  WriteFile(rig.options.probe_path, "ui-toast can you read this\n");
+  rig.BootRequest();
+  QCHECK(g_ui_shown.size() == 1 && g_ui_shown[0] == "can you read this");
+  QCHECK(g_shown.empty() && g_dialog_shown.empty());  // not the floor presenter, not the dialog
+  QCHECK(!Exists(rig.options.probe_path) && Exists(rig.options.probe_path + ".done"));
+  const std::vector<std::string> lines = ProbeLines();
+  QCHECK(lines.size() == 1);
+  if (lines.size() == 1) {
+    QCHECK(Has(lines[0], "\"kind\":\"ui-toast\"") && Has(lines[0], "\"result\":\"requested\""));
+    QCHECK(Has(lines[0], "\"looper_prepared\":\"false\"") && Has(lines[0], "\"tid\":"));
+    QCHECK(Has(lines[0], "\"main_thread\":\"true\""));  // the host test runs the step on the process's main thread
+    QCHECK(Has(lines[0], "\"level\":\"info\""));
+  }
+  rig.BootRequest();  // the next launch: no probe
+  QCHECK(g_ui_shown.size() == 1);
+}
+
+void TheProbeSaysWhenItRanOffTheMainThreadAndWhenALooperWasPrepared() {
+  ResetProbeSeams();
+  g_ui_prepared = true;
+  Rig rig;
+  DataIn(Legacy());
+  rig.options.probe_enabled = true;
+  rig.options.show_ui = &FakeShowUi;
+  WriteFile(rig.options.probe_path, "ui-toast x\n");
+  std::thread worker([&rig] { rig.BootRequest(); });  // the game's android_main is not the process's main thread
+  worker.join();
+  const std::vector<std::string> lines = ProbeLines();
+  QCHECK(lines.size() == 1);
+  if (lines.size() == 1) {
+    QCHECK(Has(lines[0], "\"main_thread\":\"false\"") && Has(lines[0], "\"looper_prepared\":\"true\""));
+  }
+}
+
+void AUiPostProbeGoesToThePostPresenterAndIsInfoWhenPosted() {
+  ResetProbeSeams();
+  Rig rig;
+  DataIn(Legacy());
+  rig.options.probe_enabled = true;
+  rig.options.show_ui = &FakeShowUi;
+  rig.options.show_post = &FakeShowPost;
+  WriteFile(rig.options.probe_path, "ui-post posted text\n");
+  rig.BootRequest();
+  QCHECK(g_post_shown.size() == 1 && g_post_shown[0] == "posted text");
+  QCHECK(g_ui_shown.empty() && g_shown.empty() && g_dialog_shown.empty());
+  const std::vector<std::string> lines = ProbeLines();
+  QCHECK(lines.size() == 1);
+  if (lines.size() == 1) {
+    QCHECK(Has(lines[0], "\"kind\":\"ui-post\"") && Has(lines[0], "\"result\":\"posted\""));
+    QCHECK(Has(lines[0], "\"level\":\"info\""));
+  }
+  // The same probe with no looper captured: a warning with the token.
+  ResetProbeSeams();
+  g_post_result = "no_ui_looper";
+  Rig again;
+  DataIn(Legacy());
+  again.options.probe_enabled = true;
+  again.options.show_post = &FakeShowPost;
+  WriteFile(again.options.probe_path, "ui-post x\n");
+  g_lines.clear();
+  again.BootRequest();
+  const std::vector<std::string> warned = ProbeLines();
+  QCHECK(warned.size() == 1 && Has(warned[0], "\"result\":\"no_ui_looper\"") && Has(warned[0], "\"level\":\"warn\""));
+  // And with no presenter at all.
+  ResetProbeSeams();
+  Rig none;
+  DataIn(Legacy());
+  none.options.probe_enabled = true;
+  WriteFile(none.options.probe_path, "ui-post x\n");
+  g_lines.clear();
+  none.BootRequest();
+  const std::vector<std::string> bare = ProbeLines();
+  QCHECK(bare.size() == 1 && Has(bare[0], "\"result\":\"no_presenter\""));
+}
+
+void AFailedUiToastIsAWarningWithItsToken() {
+  ResetProbeSeams();
+  g_ui_result = "looper_overload_unavailable";
+  Rig rig;
+  DataIn(Legacy());
+  rig.options.probe_enabled = true;
+  rig.options.show_ui = &FakeShowUi;
+  WriteFile(rig.options.probe_path, "ui-toast x\n");
+  rig.BootRequest();
+  const std::vector<std::string> lines = ProbeLines();
+  QCHECK(lines.size() == 1);
+  if (lines.size() == 1) {
+    QCHECK(Has(lines[0], "\"result\":\"looper_overload_unavailable\"") && Has(lines[0], "\"level\":\"warn\""));
+  }
+}
+
+void ADialogProbeGoesToTheDialogPresenterAndWithoutOneSaysNoPresenter() {
+  ResetProbeSeams();
+  {
+    Rig rig;
+    DataIn(Legacy());
+    rig.options.probe_enabled = true;
+    rig.options.show_ui = &FakeShowUi;
+    rig.options.show_dialog = &FakeShowDialog;
+    WriteFile(rig.options.probe_path, "dialog read me\n");
+    rig.BootRequest();
+    QCHECK(g_dialog_shown.size() == 1 && g_dialog_shown[0] == "read me" && g_ui_shown.empty() && g_shown.empty());
+    const std::vector<std::string> lines = ProbeLines();
+    QCHECK(lines.size() == 1 && Has(lines[0], "\"kind\":\"dialog\"") && Has(lines[0], "\"result\":\"requested\""));
+  }
+  ResetProbeSeams();
+  {
+    Rig rig;
+    DataIn(Legacy());
+    rig.options.probe_enabled = true;
+    WriteFile(rig.options.probe_path, "dialog read me\n");
+    rig.BootRequest();
+    const std::vector<std::string> lines = ProbeLines();
+    QCHECK(lines.size() == 1 && Has(lines[0], "\"kind\":\"dialog\"") && Has(lines[0], "\"result\":\"no_presenter\""));
+    QCHECK(Has(lines[0], "\"level\":\"warn\""));
+    QCHECK(g_shown.empty());  // nothing fell back to the floor presenter
+    QCHECK(Exists(rig.options.probe_path + ".done"));
+  }
+}
+
+void AUiToastProbeWithoutAPresenterOrWithoutTextShowsNothing() {
+  ResetProbeSeams();
+  {
+    Rig rig;
+    DataIn(Legacy());
+    rig.options.probe_enabled = true;
+    WriteFile(rig.options.probe_path, "ui-toast x\n");
+    rig.BootRequest();
+    const std::vector<std::string> lines = ProbeLines();
+    QCHECK(lines.size() == 1 && Has(lines[0], "\"result\":\"no_presenter\"") && g_shown.empty());
+  }
+  ResetProbeSeams();
+  {
+    Rig rig;
+    DataIn(Legacy());
+    rig.options.probe_enabled = true;
+    rig.options.show_ui = &FakeShowUi;
+    WriteFile(rig.options.probe_path, "ui-toast \n");
+    rig.BootRequest();
+    const std::vector<std::string> lines = ProbeLines();
+    QCHECK(g_ui_shown.empty());
+    QCHECK(lines.size() == 1 && Has(lines[0], "\"result\":\"empty_text\""));
+  }
+}
+
+void TheToastProbeStillUsesTheFloorPresenterAndNotTheUiOne() {
+  ResetProbeSeams();
+  Rig rig;
+  DataIn(Legacy());
+  rig.options.probe_enabled = true;
+  rig.options.show_ui = &FakeShowUi;
+  WriteFile(rig.options.probe_path, "toast plain\n");
+  rig.BootRequest();
+  QCHECK(g_shown.size() == 1 && g_shown[0] == "plain" && g_ui_shown.empty());
 }
 
 void ABlockProbeHoldsTheThreadForItsSeconds() {
@@ -434,6 +675,119 @@ void AGrantedUnwritableRootEndsWithTheStepsOwnReason() {
   rig.BootRequest();  // granted
   QCHECK(g_ends == 1 && g_exit_reason == "data_step_failed");
   for (const std::string& m : g_shown) QCHECK(m != nevr_quest::data::kNeedsStoragePermission);
+}
+
+// ---- no OBB file, the data under the media root (#866) ----
+
+// The launch the tester's headset had: no OBB file (the skip's mount hook never runs), the resolver finds the game's
+// `_data` under Android/media, and the data-root hook is installed, so the engine's GetDataRootDir question is answered
+// with the media root. Call it after the Rig is made and before the boot request.
+void NoObbFileAndTheMediaRootHoldsTheData() {
+  DataIn(Media());
+  obb::ResolveRoot(&FakeExists);
+  obb::ArmForTest();  // arms the handlers and marks the data-root hook installed; no mount is skipped
+}
+
+void DataOnlyInTheMediaRootIsUsedWithNoObbFileAndNoStorageGrant() {
+  Rig rig;
+  NoObbFileAndTheMediaRootHoldsTheData();
+  rig.BootRequest(&DeniedCheck);
+  QCHECK(g_requests == 1);  // the game's own call still ran
+  QCHECK(rig.net.calls == 0 && g_ends == 0 && g_shown.empty());
+  QCHECK(g_exit_reason.empty());
+  const std::string check = LineOf("data_check");
+  QCHECK(Has(check, "\"action\":\"use\"") && Has(check, "\"root\":\"" + Media() + "\""));
+  QCHECK(LineOf("data_step").find("no_storage_grant") == std::string::npos);
+  // The line says which root the engine reads and why, so a headset log can be read against it.
+  const std::string start = LineOf("data_step_start");
+  QCHECK(Has(start, "\"engine_root\":\"" + Media() + "\"") && Has(start, "\"engine_root_source\":\"data_root_hook\""));
+}
+
+void DataOnlyInTheMediaRootIsUsedWithNoObbFileWhenStorageIsGranted() {
+  Rig rig;  // a development build: allow_fetch is true, so a wrong root would download 937 MB
+  NoObbFileAndTheMediaRootHoldsTheData();
+  rig.BootRequest();
+  QCHECK(rig.net.calls == 0 && g_ends == 0 && g_shown.empty());
+  QCHECK(Has(LineOf("data_check"), "\"action\":\"use\"") && Has(LineOf("data_check"), "\"root\":\"" + Media() + "\""));
+}
+
+void AReleaseBuildFindsTheDataInTheMediaRootWithNoObbFileAndSaysNothing() {
+  for (bool granted : {true, false}) {
+    Rig rig;
+    rig.options.allow_fetch = false;
+    rig.options.hold_ms = 0;
+    NoObbFileAndTheMediaRootHoldsTheData();
+    rig.BootRequest(granted ? &GrantedCheck : &DeniedCheck);
+    QCHECK(rig.net.calls == 0 && g_ends == 0 && g_shown.empty());
+    QCHECK(g_exit_reason.empty());
+    QCHECK(Has(LineOf("data_check"), "\"action\":\"use\""));
+  }
+}
+
+void DataOnlyInTheLegacyRootStillNeedsTheGrantWithNoObbFile() {
+  Rig rig;
+  DataIn(Legacy());
+  obb::ResolveRoot(&FakeExists);  // legacy wins: the engine's own answer is already that root
+  obb::ArmForTest();
+  rig.BootRequest(&DeniedCheck);
+  QCHECK(g_ends == 1 && g_exit_reason == "no_storage_grant");
+  QCHECK(g_shown.size() == 2 && g_shown[0] == nevr_quest::data::kNeedsStoragePermission);
+  QCHECK(Has(LineOf("data_step_start"), "\"engine_root_source\":\"engine_default\""));
+}
+
+// A `_data` under the media root that is not this version's (no manifest) is not what the engine is sent to read: with
+// complete data in the legacy root it keeps reading that (#932).
+void StaleMediaDataAndCompleteLegacyDataKeepsTheEngineOnTheLegacyRoot() {
+  for (const bool granted : {true, false}) {
+    Rig rig;  // a development build: a wrong root would download 937 MB
+    StaleDataIn(Media());
+    DataIn(Legacy());
+    obb::ResolveRoot(&FakeExists);
+    obb::ArmForTest();
+    rig.BootRequest(granted ? &GrantedCheck : &DeniedCheck);
+    const std::string start = LineOf("data_step_start");
+    QCHECK(Has(start, "\"engine_root\":\"" + Legacy() + "\"") && Has(start, "\"engine_root_source\":\"engine_default\""));
+    if (granted) {
+      QCHECK(rig.net.calls == 0 && g_ends == 0 && g_shown.empty());
+      QCHECK(Has(LineOf("data_check"), "\"action\":\"use\"") && Has(LineOf("data_check"), "\"root\":\"" + Legacy() + "\""));
+    } else {
+      QCHECK(g_ends == 1 && g_exit_reason == "no_storage_grant");  // the engine reads shared storage, so the grant is needed
+    }
+  }
+}
+
+void CompleteMediaDataIsTheEnginesRootEvenWhenLegacyDataIsCompleteToo() {
+  Rig rig;
+  DataIn(Media());
+  DataIn(Legacy());
+  obb::ResolveRoot(&FakeExists);
+  obb::ArmForTest();
+  rig.BootRequest(&DeniedCheck);
+  QCHECK(g_ends == 0 && g_shown.empty() && rig.net.calls == 0);
+  const std::string start = LineOf("data_step_start");
+  QCHECK(Has(start, "\"engine_root\":\"" + Media() + "\"") && Has(start, "\"engine_root_source\":\"data_root_hook\""));
+}
+
+void NeitherRootCompleteLeavesTheEngineOnTheLegacyRoot() {
+  Rig rig;
+  StaleDataIn(Media());
+  StaleDataIn(Legacy());
+  obb::ResolveRoot(&FakeExists);
+  obb::ArmForTest();
+  rig.BootRequest(&DeniedCheck);
+  QCHECK(Has(LineOf("data_step_start"), "\"engine_root_source\":\"engine_default\""));
+  QCHECK(g_ends == 1 && g_exit_reason == "no_storage_grant");
+}
+
+// The hook is what makes the engine read the media root. When it did not install (a refused GOT slot), the engine still
+// reads the legacy root, so the data under the media root does not count and the grant is asked for.
+void WithoutTheDataRootHookTheMediaRootIsNotTheEngineRoot() {
+  Rig rig;
+  DataIn(Media());
+  obb::ResolveRoot(&FakeExists);  // resolved, but the hook was never armed (Install did not take it)
+  rig.BootRequest(&DeniedCheck);
+  QCHECK(g_ends == 1 && g_exit_reason == "no_storage_grant");
+  QCHECK(Has(LineOf("data_step_start"), "\"engine_root\":\"" + Legacy() + "\""));
 }
 
 // ---- the step runs once across both paths ----
@@ -583,6 +937,21 @@ void ADefaultExistsSeesTheFetchedDataOnTheNextLaunchAndFetchesNothingAgain() {
   QCHECK(aside == 0);
 }
 
+void TheNewProbeKindsAreNotReadInAShippedBuildOrWithoutTheGrant() {
+  ResetProbeSeams();
+  for (const bool devBuild : {false, true}) {
+    Rig rig;
+    DataIn(Legacy());
+    rig.options.probe_enabled = devBuild;
+    rig.options.show_ui = &FakeShowUi;
+    rig.options.show_dialog = &FakeShowDialog;
+    WriteFile(rig.options.probe_path, "ui-toast x\n");
+    rig.BootRequest(devBuild ? &DeniedCheck : &GrantedCheck);  // shipped with the grant, or a development build without it
+    QCHECK(g_ui_shown.empty() && g_dialog_shown.empty());
+    QCHECK(Exists(rig.options.probe_path) && !Exists(rig.options.probe_path + ".done"));
+  }
+}
+
 void TheProbeIsNotReadInAShippedBuild() {
   Rig rig;
   DataIn(Legacy());
@@ -628,6 +997,15 @@ int main() {
   AFailedFetchShowsTheMessageHoldsItAndEndsTheProcess();
   ARequestThatIsNotTheBootRequestRunsNothing();
   AToastProbeShowsItsTextOnceAndIsConsumed();
+  TheProbeLineParsesIntoItsKindAndArgument();
+  AUiToastProbeGoesToTheUiPresenterOnceAndSaysWhichThreadAndLooper();
+  TheProbeSaysWhenItRanOffTheMainThreadAndWhenALooperWasPrepared();
+  AUiPostProbeGoesToThePostPresenterAndIsInfoWhenPosted();
+  AFailedUiToastIsAWarningWithItsToken();
+  ADialogProbeGoesToTheDialogPresenterAndWithoutOneSaysNoPresenter();
+  AUiToastProbeWithoutAPresenterOrWithoutTextShowsNothing();
+  TheToastProbeStillUsesTheFloorPresenterAndNotTheUiOne();
+  TheNewProbeKindsAreNotReadInAShippedBuildOrWithoutTheGrant();
   ABlockProbeHoldsTheThreadForItsSeconds();
   ABlockProbeIsCapped();
   StorageNotGrantedWithoutAnObbShowsTheStorageMessageAndWritesNothing();
@@ -635,6 +1013,14 @@ int main() {
   StorageNotGrantedWithAnObbServingTheMediaRootStillUsesItsData();
   StorageNotGrantedWithAnObbServingTheMediaRootFetchesIntoItAndSucceeds();
   StorageNotGrantedWithAnUnwritableMediaRootSaysHowToAllowStorageAndEndsNonzero();
+  DataOnlyInTheMediaRootIsUsedWithNoObbFileAndNoStorageGrant();
+  DataOnlyInTheMediaRootIsUsedWithNoObbFileWhenStorageIsGranted();
+  AReleaseBuildFindsTheDataInTheMediaRootWithNoObbFileAndSaysNothing();
+  DataOnlyInTheLegacyRootStillNeedsTheGrantWithNoObbFile();
+  WithoutTheDataRootHookTheMediaRootIsNotTheEngineRoot();
+  StaleMediaDataAndCompleteLegacyDataKeepsTheEngineOnTheLegacyRoot();
+  CompleteMediaDataIsTheEnginesRootEvenWhenLegacyDataIsCompleteToo();
+  NeitherRootCompleteLeavesTheEngineOnTheLegacyRoot();
   AGrantedUnwritableRootEndsWithTheStepsOwnReason();
   TheStepRunsOnceWhenTheMicrophoneIsDeniedAndAnotherCheckFollows();
   TheStepRunsOnceWhenTheMicrophoneIsGrantedAndARequestFollows();
