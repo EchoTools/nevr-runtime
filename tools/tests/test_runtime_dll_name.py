@@ -22,6 +22,11 @@ ALLOWED_FILES = frozenset({"tools/tests/test_runtime_dll_name.py"})
 ALLOWED_PREFIXES = ("docs/audits/",)
 
 
+def old_cmake_spelling(text):
+    """Whether CMake text builds a file named nevr.dll."""
+    return bool(OLD_OUTPUT_NAME.search(text))
+
+
 def project_files():
     """Tracked and untracked-but-not-ignored text files, so a new file is checked before it is added."""
     out = subprocess.run(["git", "-C", str(REPO), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
@@ -74,6 +79,37 @@ class RuntimeDllNameTest(unittest.TestCase):
         rows = [line for line in naming.splitlines() if line.startswith("| Runtime DLL file |")]
         self.assertEqual(len(rows), 1, "docs/standards/naming.md has no single 'Runtime DLL file' row")
         self.assertTrue("`nevr-runtime.dll`" in rows[0], "the 'Runtime DLL file' row does not name nevr-runtime.dll")
+
+    def test_the_cmake_scan_sees_every_way_to_build_the_old_file(self):
+        builds_old_file = [
+            'set_target_properties(t PROPERTIES PREFIX "" OUTPUT_NAME "nevr")',
+            "set_target_properties(t PROPERTIES PREFIX '' OUTPUT_NAME 'nevr')",
+            "set_target_properties(t PROPERTIES PREFIX \"\" OUTPUT_NAME nevr)",
+            'set_target_properties(t PROPERTIES\n  PREFIX ""\n  OUTPUT_NAME nevr\n  RUNTIME_OUTPUT_DIRECTORY "x")',
+            'set_target_properties(t PROPERTIES OUTPUT_NAME\n    "nevr")',
+            'set_property(TARGET t PROPERTY OUTPUT_NAME nevr)',
+            'set_target_properties(t PROPERTIES OUTPUT_NAME "NEVR")',
+            'add_library(nevr SHARED a.cpp)',
+            'add_library( nevr SHARED a.cpp)',
+            'add_library(nevr\n  SHARED a.cpp)',
+            'set_target_properties(nevr PROPERTIES PREFIX "")',
+            'set_property(TARGET nevr PROPERTY PREFIX "")',
+        ]
+        self.assertEqual([text for text in builds_old_file if not old_cmake_spelling(text)], [],
+                         "CMake text that builds nevr.dll and the scan does not see")
+        builds_something_else = [
+            'set_target_properties(t PROPERTIES PREFIX "" OUTPUT_NAME "nevr-runtime")',
+            'set_target_properties(t PROPERTIES PREFIX "" OUTPUT_NAME nevr-runtime)',
+            'set_target_properties(t PROPERTIES OUTPUT_NAME "nevr_example")',
+            'set_target_properties(t PROPERTIES OUTPUT_NAME "BugSplat64")',
+            'add_library(nevr_runtime SHARED a.cpp)',
+            'add_library(nevr_core STATIC a.cpp)',
+            'set_target_properties(nevr_runtime PROPERTIES PREFIX "")',
+            'set_property(TARGET nevr_core PROPERTY PREFIX "")',
+            'add_library(${target} SHARED a.cpp)',
+        ]
+        self.assertEqual([text for text in builds_something_else if old_cmake_spelling(text)], [],
+                         "CMake text that does not build nevr.dll and the scan flags")
 
     def test_the_old_name_pattern_matches_what_it_must_and_nothing_else(self):
         for text in ("nevr.dll", "L\"nevr.dll\"", "NEVR.DLL", "C:\\g\\nevr.dll", "built as nevr.dll."):
