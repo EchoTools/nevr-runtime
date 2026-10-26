@@ -23,13 +23,14 @@ build/ and moved into place when it is complete:
      worktree's files carry the time of the checkout, newer than every object in the copy, and ninja decides by
      mtime alone. A file that differs keeps its own mtime, so it rebuilds.
 
-The commit is a guard. The root CMakeLists.txt puts the commit (NEVR_GIT_COMMIT_FULL) and the version on every
-compile command, so at any other commit ninja sees every compile command changed and rebuilds every object
-whatever was copied. A copy whose build.ninja names a commit other than the worktree's HEAD is therefore not made
-(the first build is the ordinary one, answered object by object from the shared compiler cache). A build.ninja
-from which the commit cannot be read (no such definition, or one that is not 40 hex digits) is refused too: the
-tool cannot show the tree is at this HEAD. The version carries `-dirty` when the tree was configured with
-uncommitted changes; such a tree is refused for the same reason.
+The commit is a guard: the copy is made only when the main checkout's tree was built at the worktree's own commit.
+The commit (NEVR_GIT_COMMIT_FULL) and the version are defined on the few files that read them
+(cmake/nevr_build_identity.cmake), so a tree at another commit rebuilds those files and what links them, and the
+sources that differ; the guard is stricter than that needs. A copy whose build.ninja names a commit other than
+the worktree's HEAD is not made (the first build is the ordinary one, answered object by object from the shared
+compiler cache). A build.ninja from which the commit cannot be read (no such definition, or one that is not 40 hex
+digits) is refused too: the tool cannot show the tree is at this HEAD. The version carries `-dirty` when the tree
+was configured with uncommitted changes; such a tree is refused for the same reason.
 
 The copy is scanned before it is moved into place. The checkout path is rewritten only as the tool knows it (the
 resolved path); a tree configured through another spelling of it (a link to the checkout) would keep that
@@ -409,11 +410,11 @@ def seed(main: pathlib.Path, worktree: pathlib.Path, preset: str, *, ninja: str 
         return Result("not-seeded", f"cannot read the HEAD of {worktree}: {head.stderr.strip()}")
     if commits != {head.stdout.strip()}:
         built = ", ".join(sorted(c[:8] for c in commits))
-        return Result("not-seeded", f"{src} was built at {built} and this worktree is at {head.stdout.strip()[:8]}: every compile "
-                      "command carries the commit, so ninja would rebuild every object either way")
+        return Result("not-seeded", f"{src} was built at {built} and this worktree is at {head.stdout.strip()[:8]}: "
+                      "a tree is seeded only when it was built at the worktree's own commit")
     if built_modified(src / "build.ninja"):
-        return Result("not-seeded", f"{src} was configured with uncommitted changes (its version ends in -dirty), and every compile "
-                      "command carries the version, so ninja would rebuild every object at a clean checkout")
+        return Result("not-seeded", f"{src} was configured with uncommitted changes (its version ends in -dirty): "
+                      "a tree is seeded only when it was built from a clean checkout")
     busy = _running_in(src)
     if busy:
         return Result("not-seeded", f"a process is running in {src} (a build or a test): {busy[0]}")
