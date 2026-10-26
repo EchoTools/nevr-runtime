@@ -2,7 +2,7 @@
 submodule (the stand-in for extern/luau) and one submodule that worktrees hold as a plain copy (the stand-in for
 extern/breakpad, which `just worktree-setup` copies without a `.git`).
 
-Every git call goes through tools/tests/git_fixture.py (the GIT_* variables removed), and each run of the tool is
+Every git call goes through tools/tests/gitenv.py (the GIT_* variables removed), and each run of the tool is
 wrapped in real_repo_unchanged: the checkout these tests run from must keep byte-identical submodule config and
 worktree list.
 """
@@ -22,10 +22,17 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "tools/tests"))
 import work_root  # noqa: E402
-import git_fixture  # noqa: E402
-from git_fixture import clean_env, git, real_repo_unchanged  # noqa: E402
+import gitenv  # noqa: E402
+import real_repo_guard  # noqa: E402
+from real_repo_guard import SUBMODULE_ENV, real_repo_unchanged  # noqa: E402
 
 SCRIPT = REPO / "tools/remove_worktree.py"
+
+
+def git(cwd, *args, check=True):
+    return gitenv.git(cwd, *args, check=check, env=SUBMODULE_ENV)
+
+
 SHARED = ["config", "--get-regexp", r"^submodule\."]
 
 
@@ -69,8 +76,8 @@ class FixtureCase(unittest.TestCase):
         return self.main / ".git/worktrees" / name
 
     def run_tool(self, *args, cwd=None, path_prefix=None, **extra_env):
-        env = clean_env(REMOVE_WORKTREE_LOG=str(self.log))
-        env.update(extra_env)
+        env = gitenv.clean_env()
+        env.update(REMOVE_WORKTREE_LOG=str(self.log), **extra_env)
         if path_prefix:
             env["PATH"] = f"{path_prefix}{os.pathsep}{env['PATH']}"
         with real_repo_unchanged(self):
@@ -348,16 +355,16 @@ class RemoveWorktreeTest(FixtureCase):
 
 class RealRepoGuardTest(unittest.TestCase):
     def test_the_guard_fails_when_the_state_it_watches_changes_and_passes_when_it_does_not(self):
-        with unittest.mock.patch.object(git_fixture, "real_repo_state", side_effect=[b"a", b"a"]):
+        with unittest.mock.patch.object(real_repo_guard, "real_repo_state", side_effect=[b"a", b"a"]):
             with real_repo_unchanged(self):
                 pass
-        with unittest.mock.patch.object(git_fixture, "real_repo_state", side_effect=[b"a", b"b"]):
+        with unittest.mock.patch.object(real_repo_guard, "real_repo_state", side_effect=[b"a", b"b"]):
             with self.assertRaises(AssertionError):
                 with real_repo_unchanged(self):
                     pass
 
     def test_the_state_it_watches_names_the_submodule_config_and_the_worktree_paths_not_their_heads(self):
-        state = git_fixture.real_repo_state().decode()
+        state = real_repo_guard.real_repo_state().decode()
         config, _, worktrees = state.partition("\0")
         self.assertRegex(worktrees, r"(?m)^worktree /")
         self.assertNotIn("HEAD ", worktrees)
