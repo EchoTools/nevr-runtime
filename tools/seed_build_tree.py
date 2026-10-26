@@ -295,7 +295,10 @@ def _running_in(directory: pathlib.Path) -> list[str]:
 def _fingerprint(build: pathlib.Path) -> list:
     out = []
     for name in ("CMakeCache.txt", "build.ninja", ".ninja_log", ".ninja_deps"):
-        st = (build / name).stat()
+        try:
+            st = (build / name).stat()
+        except FileNotFoundError:  # a tree that never recorded a dependency has no deps log
+            continue
         out.append((name, st.st_size, st.st_mtime_ns))
     return out
 
@@ -313,7 +316,7 @@ def seed(main: pathlib.Path, worktree: pathlib.Path, preset: str, *, ninja: str 
     if dst.exists() or dst.is_symlink():
         if not _is_empty_dir(dst):
             return Result("kept", f"build/{preset} already has content; left as it is")
-    for name in ("CMakeCache.txt", "build.ninja", ".ninja_log", ".ninja_deps"):
+    for name in ("CMakeCache.txt", "build.ninja", ".ninja_log"):
         if not (src / name).is_file():
             return Result("not-seeded", f"{main}/build/{preset} has no {name}: the main checkout has not built {preset}")
     for key, want in (("CMAKE_HOME_DIRECTORY", main), ("CMAKE_CACHEFILE_DIR", src)):
@@ -341,9 +344,13 @@ def seed(main: pathlib.Path, worktree: pathlib.Path, preset: str, *, ninja: str 
         outputs = {f.split("\t")[3] for f in log_text.splitlines()[1:] if f.count("\t") == 4}
         hashes = command_hash_map(ninja, staging, outputs, rewrite)
         new_log, kept, dropped = rewrite_ninja_log(log_text, rewrite, hashes)
-        new_deps, deps_paths = rewrite_deps_log((staging / ".ninja_deps").read_bytes(), rewrite)
+        deps_paths = 0
+        rewritten_logs = [(".ninja_log", new_log.encode())]
+        if (staging / ".ninja_deps").exists():
+            new_deps, deps_paths = rewrite_deps_log((staging / ".ninja_deps").read_bytes(), rewrite)
+            rewritten_logs.append((".ninja_deps", new_deps))
         files = rewrite_text_files(staging, rewrite)
-        for name, content in ((".ninja_log", new_log.encode()), (".ninja_deps", new_deps)):
+        for name, content in rewritten_logs:
             st = (staging / name).stat()
             (staging / name).write_bytes(content)
             os.utime(staging / name, ns=(st.st_atime_ns, st.st_mtime_ns))

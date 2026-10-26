@@ -6,10 +6,13 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
+from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools/worktree-setup.sh"
+SEEDER = REPO / "tools/seed_build_tree.py"
 SECRET = "NEVR_API_KEY=do-not-print-me"
 DEFAULTS = "NEVR_SOCKET_URI=wss://example.invalid/nevr\n"
 
@@ -26,8 +29,15 @@ class WorktreeSetupTest(unittest.TestCase):
         self.main = self.tmp / "main"
         (self.main / "tools").mkdir(parents=True)
         shutil.copy(SCRIPT, self.main / "tools/worktree-setup.sh")
+        shutil.copy(SEEDER, self.main / "tools/seed_build_tree.py")
+        (self.main / "src").mkdir()
+        (self.main / "src/in.txt").write_text("input\n")
         git(self.main, "init", "-q")
-        git(self.main, "add", "tools/worktree-setup.sh")
+        git(self.main, "add", "tools/worktree-setup.sh", "tools/seed_build_tree.py", "src/in.txt")
+        # The seeder appends to a log under XDG_STATE_HOME: keep a test run out of the real one.
+        patcher = mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(self.tmp / "state")})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         git(self.main, "commit", "-q", "-m", "init", "--no-gpg-sign")
         # The inputs a build needs, untracked like the real submodules/gen in a worktree (and a .env the build ignores).
         for name in ("minhook", "breakpad", "lss"):
@@ -61,6 +71,49 @@ class WorktreeSetupTest(unittest.TestCase):
         self.assertFalse((self.wt / ".env").exists(), ".env is runtime-only and is never copied into a worktree")
         after = sorted(str(p.relative_to(self.main)) for p in self.main.rglob("*") if ".git/" not in str(p))
         self.assertEqual(before, after, "the main checkout changed")
+
+    def build_main_tree(self, preset):
+        build = self.main / "build" / preset
+        build.mkdir(parents=True)
+        (build / "CMakeCache.txt").write_text(
+            f"CMAKE_HOME_DIRECTORY:INTERNAL={self.main}\nCMAKE_CACHEFILE_DIR:INTERNAL={build}\n")
+        (build / "build.ninja").write_text(f"rule cp\n  command = cp $in $out\nbuild out.txt: cp {self.main}/src/in.txt\n")
+        subprocess.run(["ninja", "-C", str(build)], check=True, capture_output=True)
+        time.sleep(0.05)
+        return build
+
+    def test_a_main_checkout_without_a_build_tree_is_not_seeded_and_says_why(self):
+        result = self.run_script(self.wt)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("not seeded", result.stderr)
+        self.assertIn("build/mingw-release", result.stderr)
+        self.assertFalse((self.wt / "build/mingw-release").exists())
+
+    def test_a_built_main_checkout_seeds_the_worktree_build_tree(self):
+        self.build_main_tree("mingw-release")
+        result = self.run_script(self.wt)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("seeded build/mingw-release", result.stdout)
+        out = subprocess.run(["ninja", "-C", str(self.wt / "build/mingw-release"), "-n"], check=True,
+                             capture_output=True, text=True).stdout
+        self.assertIn("no work to do", out)
+        again = self.run_script(self.wt)
+        self.assertIn("kept: build/mingw-release already has content", again.stdout)
+
+    def test_the_preset_to_seed_is_the_PRESET_the_justfile_uses(self):
+        self.build_main_tree("mingw-debug")
+        env = dict(os.environ, PRESET="mingw-debug")
+        result = subprocess.run([str(self.wt / "tools/worktree-setup.sh")], cwd=self.wt, capture_output=True, text=True,
+                                env=env, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("seeded build/mingw-debug", result.stdout)
+        self.assertFalse((self.wt / "build/mingw-release").exists())
+
+    def test_the_public_defaults_keep_the_main_checkouts_mtime(self):
+        old = 1_700_000_000
+        os.utime(self.main / "config/public-defaults.env", (old, old))
+        self.assertEqual(self.run_script(self.wt).returncode, 0)
+        self.assertEqual(int((self.wt / "config/public-defaults.env").stat().st_mtime), old)
 
     def test_the_secret_is_never_printed(self):
         result = self.run_script(self.wt)
@@ -490,8 +543,9 @@ class WorktreeSetupLuauTest(unittest.TestCase):
         self.main = self.tmp / "main"
         (self.main / "tools").mkdir(parents=True)
         shutil.copy(SCRIPT, self.main / "tools/worktree-setup.sh")
+        shutil.copy(SEEDER, self.main / "tools/seed_build_tree.py")
         git(self.main, "init", "-q")
-        git(self.main, "add", "tools/worktree-setup.sh")
+        git(self.main, "add", "tools/worktree-setup.sh", "tools/seed_build_tree.py")
         git(self.main, "commit", "-q", "-m", "init", "--no-gpg-sign")
         subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(self.main),
                         "submodule", "add", "-q", str(self.upstream), "extern/luau"],
@@ -512,7 +566,7 @@ class WorktreeSetupLuauTest(unittest.TestCase):
 
     def run_script(self):
         return subprocess.run([str(self.wt / "tools/worktree-setup.sh")], cwd=self.wt, capture_output=True, text=True,
-                              timeout=120, env=self.ENV)
+                              timeout=120, env=dict(self.ENV, XDG_STATE_HOME=str(self.tmp / "state")))
 
     def test_luau_is_copied_from_a_main_checkout_that_has_it(self):
         self.assertTrue((self.main / "extern/luau/VM/src/lapi.cpp").exists(), "the fixture's main has luau")
