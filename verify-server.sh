@@ -40,7 +40,7 @@ source tools/lib/game_install.sh
 GAME_ROOT=$(resolve_game_root) || exit $?
 GAME_DIR="$GAME_ROOT/echovr/bin/win10"
 [ -d "$GAME_DIR" ] || { echo "ERROR: no game install at $GAME_DIR (set NEVR_GAME_ROOT to the checkout that has echovr/)" >&2; exit 2; }
-SCRATCH_ROOT="${NEVR_RUN_SCRATCH_ROOT:-/var/tmp/work-nevr-runtime}"
+SCRATCH_ROOT="${NEVR_RUN_SCRATCH_ROOT:-$NEVR_WORK_ROOT}"
 OUT="$SCRATCH_ROOT/server-runs/${RUN_NAME}"
 
 case "$FLAGSET" in
@@ -71,7 +71,8 @@ fi
 # The lock comes before this run's output files are touched: a run that is refused must not empty
 # the log of the run that holds the lock.
 acquire_game_run_lock
-mkdir -p "$OUT"
+work_dir "$OUT" "Server runs of verify-server.sh: one directory per run name, with the run's log, context and summary." \
+  "when the PR that cites a run merges, unless the PR keeps it as evidence."
 LOG="$OUT/server.log"
 : > "$LOG"
 
@@ -116,7 +117,8 @@ if [ -d "$BACKUP" ]; then
   echo "=== restoring files an earlier verify-server.sh run left deployed ===" | tee -a "$LOG"
   restore_deployed || { echo "ERROR: could not restore the earlier run's files; fix $BACKUP by hand" >&2; exit 3; }
 fi
-mkdir -p "$BACKUP"
+work_dir "$BACKUP" "The files verify-server.sh saved from the game install before it deployed over them." \
+  "by the script itself when it restores them at the end of the run."
 : > "$ADDED"
 deploy() {
   local src=$1 dst=$2 rel

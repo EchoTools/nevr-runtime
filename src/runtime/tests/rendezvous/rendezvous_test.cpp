@@ -7,11 +7,11 @@
 // 13-byte GameMainWrapper prologue and then calls a C body that records the
 // call and returns ExpectedResult(command_line). The host shim (BugSplat64.dll)
 // validates and MinHooks it from DLL_PROCESS_ATTACH, then on the first call loads
-// the sibling nevr.dll, calls its initialize and returns its game_main.
+// the sibling nevr-runtime.dll, calls its initialize and returns its game_main.
 //
 // Each child validates, from the recorded events:
 //   - host attach installs the hook (or, on a bad prologue, leaves the game
-//     unhooked) and never loads nevr.dll before attach returns;
+//     unhooked) and never loads nevr-runtime.dll before attach returns;
 //   - valid: the runtime's initialize ran once, then game_main ran once with the
 //     exact argument, and the caller got game_main's exact result;
 //   - missing: the original wrapper ran once and the caller got its exact result;
@@ -264,7 +264,7 @@ void ValidateAttach(const std::vector<EventRecord>& events, bool expect_hooked) 
   const std::size_t enter = First(events, kHostAttachEnter);
   const std::size_t exit = First(events, kHostAttachExit);
   Require(enter < exit, "host attach exit before enter");
-  Require(events[exit].payload == 0, "nevr.dll was loaded before host DllMain returned");
+  Require(events[exit].payload == 0, "nevr-runtime.dll was loaded before host DllMain returned");
   if (expect_hooked) {
     Require(Count(events, kHostHookEnabled) == 1, "host did not enable the hook");
     Require(events[First(events, kHostHookEnabled)].payload == 0xE9,
@@ -379,13 +379,13 @@ std::wstring Utf8ToWide(const char* text) {
 }
 
 void StageRuntimeFixture(const std::wstring& root, const wchar_t* fixture) {
-  const std::wstring runtime = root + L"nevr.dll";
+  const std::wstring runtime = root + L"nevr-runtime.dll";
   if (fixture == nullptr) {
     DeleteFileW(runtime.c_str());
-    Require(GetFileAttributesW(runtime.c_str()) == INVALID_FILE_ATTRIBUTES, "could not remove nevr.dll");
+    Require(GetFileAttributesW(runtime.c_str()) == INVALID_FILE_ATTRIBUTES, "could not remove nevr-runtime.dll");
     return;
   }
-  const std::wstring source = root + L"fixtures\\" + fixture + L"\\nevr.dll";
+  const std::wstring source = root + L"fixtures\\" + fixture + L"\\nevr-runtime.dll";
   Require(CopyFileW(source.c_str(), runtime.c_str(), FALSE) != FALSE, "could not stage runtime fixture");
 }
 

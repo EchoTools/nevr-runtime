@@ -1,9 +1,9 @@
 #pragma once
 
-// Host <-> runtime C ABI between BugSplat64.dll and nevr.dll
+// Host <-> runtime C ABI between BugSplat64.dll and nevr-runtime.dll
 // (docs/adr/0008-bugsplat-host-and-nevr-runtime.md).
 //
-// BugSplat64.dll (the stable host the game statically imports) loads nevr.dll at
+// BugSplat64.dll (the stable host the game statically imports) loads nevr-runtime.dll at
 // the entry of the game's main wrapper (the one rendezvous), resolves
 // NEVR_GetRuntimeApi, and validates the descriptor it returns BEFORE calling
 // anything through it. The runtime validates the host context it
@@ -64,7 +64,7 @@ struct NevrHostContext {
   std::uint32_t reserved;
 };
 
-/// Returned by nevr.dll's NEVR_GetRuntimeApi export. All entries are required in v1.
+/// Returned by nevr-runtime.dll's NEVR_GetRuntimeApi export. All entries are required in v1.
 struct NevrRuntimeApi {
   NevrAbiHeader header;
   /// Returns 0 on success. Called once, after the descriptor validated, at the
@@ -76,7 +76,7 @@ struct NevrRuntimeApi {
   std::int64_t (*game_main)(std::int64_t command_line);
 };
 
-/// Signature of nevr.dll's single versioned entry point.
+/// Signature of nevr-runtime.dll's single versioned entry point.
 typedef const NevrRuntimeApi* (*NevrGetRuntimeApiFn)();
 
 }  // extern "C"
@@ -153,7 +153,7 @@ inline bool DescriptorCovers(const NevrAbiHeader* header, std::size_t field_end)
   return header != nullptr && header->struct_size >= field_end;
 }
 
-/// Host side: validate nevr.dll's descriptor before calling through it.
+/// Host side: validate nevr-runtime.dll's descriptor before calling through it.
 inline Status ValidateRuntimeApi(const NevrRuntimeApi* api) noexcept {
   const Status header = CheckHeader(api == nullptr ? nullptr : &api->header, kRuntimeApiV1Size);
   if (header != Status::kOk) return header;
