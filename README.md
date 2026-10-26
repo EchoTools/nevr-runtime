@@ -242,6 +242,7 @@ docs/              see docs/README.md
 | [`NOTICE`](NOTICE) | Bundled third-party software notices |
 | [`SECURITY.md`](SECURITY.md) | Private vulnerability reporting |
 | [`docs/`](docs/) | Standards, guides, reference, design, audits |
+| [`docs/reference/verifying-a-release.md`](docs/reference/verifying-a-release.md) | How an installer verifies a release: signed manifest, pinned keys, artifacts |
 
 ## Dependencies
 
