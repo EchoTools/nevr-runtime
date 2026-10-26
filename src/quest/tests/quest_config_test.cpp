@@ -622,6 +622,214 @@ void UiEventProbeIsOnlyEverOnByTheDiagnosticsKeyAndNeedsSocial() {
   CHECK(std::string(nevr_quest::FeatureName(Feature::kUiEventProbe)) == "ui_event_probe");
 }
 
+// The texture quality (#943): `graphics.texture_quality`, one of six words, texture_quality::kDefaultLevel unless the file names
+// another. Every test of the absent key is written against kDefaultLevel (so the flip to `high` changes the pin test only);
+// every test of a mistake is written against the literal `stock`, which must hold whatever the default is.
+const char* DefaultWord() { return nevr_quest::texture_quality::LevelName(nevr_quest::texture_quality::kDefaultLevel); }
+
+bool IsDefault(const LoadResult& r) {
+  return r.config.textureQuality.level == nevr_quest::texture_quality::kDefaultLevel &&
+         r.config.textureQuality.source != Source::kFile;
+}
+
+// A mistake: `stock` (the literal level, not the default), not from the file, one Warning that names the key and the fall back,
+// and no Error (a rejected file logs its own Error line, so `rejectedFile` allows it).
+bool IsStockFallback(const LoadResult& r, const std::string& reason, bool rejectedFile = false) {
+  return r.config.textureQuality.level == nevr_quest::texture_quality::Level::kStock &&
+         r.config.textureQuality.source != Source::kFile &&
+         EventsWithAreAtLevel(r, "config file key=graphics.texture_quality rejected reason=" + reason, LogLevel::kWarn) &&
+         EventsContain(r, "(falls back to stock;") && EventsContain(r, "config key=graphics.texture_quality quality=stock source=default") &&
+         (rejectedFile || !HasLevel(r, LogLevel::kError));
+}
+
+void TextureQualityIsTheDefaultUnlessTheFileNamesAnotherLevel() {
+  namespace tq = nevr_quest::texture_quality;
+  {  // no file, an empty file, a file without the section, an empty section, a section with no value: the default, from the default
+    const LoadResult none = nevr_quest::ResolveConfig(Full(), nullptr);
+    CHECK(IsDefault(none));
+    CHECK(EventsContain(none, std::string("config key=graphics.texture_quality quality=") + DefaultWord() + " source=default"));
+    CHECK(!HasLevel(none, LogLevel::kWarn) && !HasLevel(none, LogLevel::kError));
+    for (const char* text : {"", "version: 1\n", "graphics: {}\n", "graphics:\n", "graphics: ~\n"}) {
+      const LoadResult r = Load(Full(), text);
+      CHECK(IsDefault(r));
+      CHECK(EventsContain(r, std::string("config key=graphics.texture_quality quality=") + DefaultWord() + " source=default"));
+      CHECK(!HasLevel(r, LogLevel::kWarn));
+    }
+  }
+  const struct {
+    const char* word;
+    tq::Level level;
+  } kWords[] = {{"stock", tq::Level::kStock},       {"low", tq::Level::kLow},   {"medium", tq::Level::kMedium},
+                {"high", tq::Level::kHigh},         {"very_high", tq::Level::kVeryHigh},
+                {"ultra", tq::Level::kUltra}};
+  for (const auto& w : kWords) {  // each word, plain and quoted
+    for (const char* quote : {"", "\""}) {
+      const LoadResult r = Load(Full(), std::string("graphics:\n  texture_quality: ") + quote + w.word + quote + "\n");
+      CHECK(r.config.textureQuality.level == w.level && r.config.textureQuality.source == Source::kFile);
+      CHECK(EventsContain(r, std::string("config key=graphics.texture_quality quality=") + w.word + " source=config"));
+      CHECK(!HasLevel(r, LogLevel::kWarn) && !HasLevel(r, LogLevel::kError));
+      CHECK(std::string(nevr_quest::TextureSourceName(r.config.textureQuality)) == "config");
+      CHECK(DefaultsOnly(r.config.requested) && DefaultsOnly(r.config.effective));  // no feature moves
+    }
+  }
+  {  // a file that is rejected as a whole contributes nothing, this key included, and the answer is a mistake's: `stock`
+    const LoadResult r = Load(Full(), "graphics:\n  texture_quality: ultra\nnot_a_section: 1\n");
+    CHECK(r.fileRejected);
+    CHECK(IsStockFallback(r, "file_rejected", true));
+    CHECK(EventsContain(r, "config key=graphics.texture_quality quality=stock source=default"));
+  }
+  for (const char* text : {"graphics: [unclosed\n", "graphics:\n  texture_quality: ultra\n\tbad: tab\n", "{{{\n", "- a\n- b\n"}) {
+    const LoadResult r = Load(Full(), text);  // unparseable, or a top level that is not a mapping
+    CHECK(r.fileRejected);
+    CHECK(IsStockFallback(r, "file_rejected", true));
+  }
+  // Only this key in this section: the same word anywhere else is nothing (the default, no warning) unless it makes the file
+  // unknown to the loader as a whole, which is a mistake like any other. (An unknown key inside `graphics` is the next test.)
+  for (const char* text : {"texture_quality: ultra\n", "diagnostics:\n  texture_quality: ultra\n",
+                           "x-graphics:\n  texture_quality: ultra\n"}) {
+    const LoadResult r = Load(Full(), text);
+    if (r.fileRejected) {  // an unknown top-level key rejects the file as a whole: the mistake above
+      CHECK(IsStockFallback(r, "file_rejected", true));
+    } else {
+      CHECK(IsDefault(r));
+      CHECK(!HasLevel(r, LogLevel::kWarn));
+    }
+  }
+}
+
+// Any key under `graphics` other than texture_quality is named in a Warning, so a misspelling or another case is heard
+// instead of silently giving the default (which a later change of the default would turn into a silent change of level).
+// The level is not touched by it: the key is absent, so it is the default.
+void AnUnknownKeyUnderGraphicsWarnsAndNamesTheKey() {
+  for (const char* spelling : {"texture_qualty", "Texture_Quality", "texture-quality", "quality", "texturequality", "texture_quality "}) {
+    const LoadResult r = Load(Full(), std::string("graphics:\n  \"") + spelling + "\": ultra\n");
+    CHECK(!r.fileRejected);
+    CHECK(IsDefault(r));  // never applied, never stock by force: the default, as for an absent key
+    CHECK(EventsWithAreAtLevel(r, std::string("config file key=graphics rejected reason=unknown_key name=") +
+                                      (std::string(spelling) == "texture_quality " ? "(not printable ASCII without spaces)" : spelling) + " (",
+                               LogLevel::kWarn));
+    CHECK(EventsContain(r, "the only key under graphics is texture_quality"));
+    CHECK(!HasLevel(r, LogLevel::kError));
+  }
+  {  // the real key beside a misspelt one: the real one applies, the other is named
+    const LoadResult r = Load(Full(), "graphics:\n  texture_quality: low\n  texture_qualty: ultra\n");
+    CHECK(r.config.textureQuality.level == nevr_quest::texture_quality::Level::kLow && r.config.textureQuality.source == Source::kFile);
+    CHECK(EventsWithAreAtLevel(r, "reason=unknown_key name=texture_qualty (", LogLevel::kWarn));
+    CHECK(!EventsContain(r, "name=texture_quality ("));
+  }
+  {  // the real key alone, an empty section, other sections' keys: no such warning
+    for (const char* text : {"graphics:\n  texture_quality: low\n", "graphics: {}\n", "diagnostics:\n  quality: 1\n"}) {
+      CHECK(!EventsContain(Load(Full(), text), "unknown_key"));
+    }
+  }
+  {  // a long or odd name is described, never echoed
+    const LoadResult r = Load(Full(), "graphics:\n  " + std::string(40, 'k') + ": 1\n");
+    CHECK(EventsContain(r, "reason=unknown_key name=(longer than 32 bytes) ("));
+    CHECK(!EventsContain(r, std::string(40, 'k')));
+  }
+  {  // a file full of them cannot flood the log: 8 are named, one line counts the rest
+    std::string yaml = "graphics:\n";
+    for (int i = 0; i < 20; ++i) yaml += "  k" + std::to_string(i) + ": 1\n";
+    const LoadResult r = Load(Full(), yaml);
+    int named = 0;
+    for (const auto& e : r.events) {
+      if (e.message.find("reason=unknown_key name=") != std::string::npos) ++named;
+    }
+    CHECK(named == 8);
+    CHECK(EventsWithAreAtLevel(r, "reason=unknown_key more=12 (ignored)", LogLevel::kWarn));
+    const LoadResult atCap = Load(Full(), "graphics:\n  a: 1\n  b: 1\n  c: 1\n  d: 1\n  e: 1\n  f: 1\n  g: 1\n  h: 1\n");
+    CHECK(!EventsContain(atCap, "more="));
+  }
+}
+
+void ATextureQualityThatIsNotALevelFallsBackToStockAndNamesTheWord() {
+  namespace tq = nevr_quest::texture_quality;
+  for (const char* bad : {"ultra-high", "High", "HIGH", "Stock", "ULTRA", "very high", "veryhigh", "none", "0", "3", "true", "default", "native"}) {
+    const std::string yaml = std::string("graphics:\n  texture_quality: \"") + bad + "\"\n";
+    const LoadResult r = Load(Full(), yaml);
+    CHECK(!r.fileRejected);
+    // A word with a space in it is named by what is wrong with it; the rest by themselves.
+    const std::string named = std::string(bad) == "very high" ? "(not printable ASCII without spaces)" : bad;
+    CHECK(IsStockFallback(r, "unknown_level value=" + named + " ("));
+  }
+  for (const char* number : {"0", "3", "5", "1.5", "-1", "true", "null"}) {  // a bare scalar of another YAML type
+    const LoadResult r = Load(Full(), std::string("graphics:\n  texture_quality: ") + number + "\n");
+    CHECK(!r.fileRejected);
+    CHECK(r.config.textureQuality.level == tq::Level::kStock && r.config.textureQuality.source != Source::kFile);
+    CHECK(EventsWithAreAtLevel(r, "config file key=graphics.texture_quality rejected reason=", LogLevel::kWarn));
+    CHECK(EventsContain(r, "(falls back to stock;"));
+  }
+  {  // the word is named only when it is short printable ASCII; otherwise what is wrong with it
+    const std::string longWord(33, 'x');
+    const LoadResult r = Load(Full(), "graphics:\n  texture_quality: " + longWord + "\n");
+    CHECK(EventsContain(r, "reason=unknown_level value=(longer than 32 bytes)"));
+    CHECK(!EventsContain(r, longWord));
+    const std::string edge(32, 'y');
+    const LoadResult atLimit = Load(Full(), "graphics:\n  texture_quality: " + edge + "\n");
+    CHECK(EventsContain(atLimit, "reason=unknown_level value=" + edge + " ("));
+    const LoadResult control = Load(Full(), "graphics:\n  texture_quality: \"hi\\tgh\"\n");
+    CHECK(EventsContain(control, "reason=unknown_level value=(not printable ASCII without spaces)"));
+    const LoadResult accent = Load(Full(), "graphics:\n  texture_quality: \"h\\u00efgh\"\n");
+    CHECK(EventsContain(accent, "reason=unknown_level value=(not printable ASCII without spaces)"));
+    CHECK(!EventsContain(accent, "\xc3"));
+  }
+  {  // empty: double-quoted and single-quoted
+    for (const char* text : {"graphics:\n  texture_quality: \"\"\n", "graphics:\n  texture_quality: ''\n"}) {
+      const LoadResult r = Load(Full(), text);
+      CHECK(!r.fileRejected);
+      CHECK(IsStockFallback(r, "unknown_level value=(empty) ("));
+    }
+  }
+  ::unsetenv("NEVR_QUEST_TEST_UNSET_VAR_ZXQ");
+  for (const char* text : {"graphics:\n  texture_quality: \"${NEVR_QUEST_TEST_UNSET_VAR_ZXQ}\"\n",
+                           "graphics:\n  texture_quality: ${NEVR_QUEST_TEST_UNSET_VAR_ZXQ}\n"}) {
+    // an unset ${VAR}, quoted and unquoted, is rejected by key, never by name
+    const LoadResult r = Load(Full(), text);
+    CHECK(IsStockFallback(r, "unset_variable"));
+    CHECK(!EventsContain(r, "value=${") && !EventsContain(r, "ZXQ") && !EventsContain(r, "unknown_level"));
+  }
+  {  // a bad word does not disturb the other keys of the file
+    const LoadResult r = Load(Full(), "graphics:\n  texture_quality: bogus\ndiagnostics:\n  hardware_dump: true\n");
+    CHECK(r.config.requested.hwdump);
+    CHECK(r.config.textureQuality.level == tq::Level::kStock);
+  }
+}
+
+// A value that is not a word at all: the typed getters read none of these as a string, the same as an absent key, so the
+// reader asks the config what kind of node it is (NevrConfig::Kind).
+void ATextureQualityThatIsNotAWordFallsBackToStock() {
+  for (const char* text : {"graphics:\n  texture_quality:\n    nested: high\n",   // a mapping
+                           "graphics:\n  texture_quality: {}\n",                    // an empty mapping
+                           "graphics:\n  texture_quality: [high]\n",                // a list
+                           "graphics:\n  texture_quality:\n    - high\n    - ultra\n",
+                           "graphics:\n  texture_quality: []\n",                    // an empty list
+                           "graphics:\n  texture_quality:\n",                       // a key with no value
+                           "graphics:\n  texture_quality: ~\n",
+                           "graphics:\n  texture_quality: null\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.fileRejected);
+    CHECK(IsStockFallback(r, "not_a_word"));
+  }
+}
+
+// `graphics` itself is not a mapping, so the key under it cannot be read: a mistake, since the file meant to say something.
+void AGraphicsSectionThatIsNotAMappingFallsBackToStock() {
+  for (const char* text : {"graphics: ultra\n", "graphics: \"\"\n", "graphics: 3\n", "graphics: [ultra]\n",
+                           "graphics:\n  - texture_quality: ultra\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.fileRejected);
+    CHECK(IsStockFallback(r, "graphics_not_a_mapping"));
+  }
+}
+
+// The default is for an absent key only. Every mistake above gives `stock`, so with the default flipped to `high` a typo still
+// does not turn on the level that costs the most: the two constants are separate and this pins that they stay so.
+void AMistakeNeverUsesTheDefault() {
+  namespace tq = nevr_quest::texture_quality;
+  CHECK(tq::kFallbackLevel == tq::Level::kStock);
+  CHECK(tq::SizeFor(tq::kFallbackLevel).width == 0);  // no hook, so no eye size
+}
+
 int main() {
   DefaultsWithoutFile();
   NothingEmbeddedAndNoFileTurnsTheNetworkFeaturesOff();
@@ -636,6 +844,12 @@ int main() {
   SendPresenceToMetaFalseIsTheLocalPresencePath();
   HardwareDumpIsOnlyEverOnByTheDiagnosticsKey();
   UiEventProbeIsOnlyEverOnByTheDiagnosticsKeyAndNeedsSocial();
+  TextureQualityIsTheDefaultUnlessTheFileNamesAnotherLevel();
+  ATextureQualityThatIsNotALevelFallsBackToStockAndNamesTheWord();
+  ATextureQualityThatIsNotAWordFallsBackToStock();
+  AGraphicsSectionThatIsNotAMappingFallsBackToStock();
+  AnUnknownKeyUnderGraphicsWarnsAndNamesTheKey();
+  AMistakeNeverUsesTheDefault();
   MalformedFileFallsBackToDefaults();
   ARejectedFileNeverEchoesWhatItHeld();
   AnUnknownKeyInsideAKnownSectionIsNotAnError();

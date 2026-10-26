@@ -1175,6 +1175,21 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/vk_ext_window_test" -ldl
     timeout 120 "$out/vk_ext_window_test"
+    # The texture-quality hook (#943): the real handler through the thunk entry against a stand-in for vrapi_GetSystemPropertyInt,
+    # every level's eye size, the pass-through of every other id, the latch, `stock`, and the shared slot's observer.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/texture_quality_hook_test.cpp \
+        src/quest/sentinel/texture_quality_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/texture_quality_hook_test" -ldl
+    timeout 120 "$out/texture_quality_hook_test"
+    # The hardware dump on the shared vrapi_GetSystemPropertyInt slot (#943): owned by the texture-quality hook, the dump
+    # installs nothing there and records the runtime's own answers through the observer.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/hwdump_share_test.cpp \
+        src/quest/sentinel/texture_quality_hook.cpp src/quest/diag/hwdump_install.cpp \
+        src/quest/diag/hwdump_handlers.cpp src/quest/diag/hwdump_records.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/hwdump_share_test" -ldl
+    timeout 120 "$out/hwdump_share_test"
     # The log-only resource request hook (#871): the real handler through the thunk entry against a stand-in for
     # FillResourceFileRequest that fills a request the way the pinned function does.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/resource_request_hook_test.cpp \
@@ -1403,6 +1418,7 @@ test-quest-integration: _vcpkg-quest-host
     "${off[@]}" -c src/quest/integration/social_shim.cpp -o "$out/social_shim.o"
     "${off[@]}" -c src/quest/sentinel/login_prompt_hook.cpp -o "$out/login_prompt_hook.o"
     "${off[@]}" -c src/quest/sentinel/obb_skip_hook.cpp -o "$out/obb_skip_hook.o"
+    "${off[@]}" -c src/quest/sentinel/texture_quality_hook.cpp -o "$out/texture_quality_hook.o"
     "${off[@]}" -c src/quest/sentinel/resource_request_hook.cpp -o "$out/resource_request_hook.o"
     "${off[@]}" -c src/quest/login/login_counters.cpp -o "$out/login_counters.o"
     # login_counters.cpp reads the local-answer counters of login_prerequisites.cpp (#411).
@@ -1429,7 +1445,7 @@ test-quest-integration: _vcpkg-quest-host
         src/runtime/lifecycle/stable_string_pool.cpp \
         "$out/got_hook.o" "$out/hook_report.o" "$out/tstring_thunks.o" "$out/dlopen_hook.o" "$out/social_shim.o" \
         "$out/social_game_calls.o" "$out/social_install.o" "$out/social_invite_gate.o" "$out/social_facade.o" "$out/hook_log.o" "$out/social_names.o" \
-        "$out/login_prompt_hook.o" "$out/obb_skip_hook.o" "$out/resource_request_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
+        "$out/login_prompt_hook.o" "$out/obb_skip_hook.o" "$out/resource_request_hook.o" "$out/texture_quality_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
         "$out/login_prerequisites.o" "$out/login_standin.o" \
         "$yaml_lib" -o "$out/integration_hooks_test" -ldl -pthread -lzstd
     timeout 300 "$out/integration_hooks_test"

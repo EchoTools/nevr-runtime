@@ -12,6 +12,7 @@
 #include <fstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
@@ -448,6 +449,59 @@ TEST(NevrConfig, AcceptsDiagnosticsSection) {
   ASSERT_TRUE(cfg.GetBool("diagnostics.hardware_dump").has_value());
   EXPECT_TRUE(*cfg.GetBool("diagnostics.hardware_dump"));
   EXPECT_FALSE(cfg.Empty());
+}
+
+// `graphics` is a top-level section (the Quest's texture quality is `graphics.texture_quality`, #943). The PC accepts it and
+// reads nothing from it, so one config.yaml can serve both builds; an unknown section is still refused.
+TEST(NevrConfig, AcceptsGraphicsSection) {
+  const auto cfg = nevr::NevrConfig::LoadFromString("graphics:\n  texture_quality: very_high\n");
+  ASSERT_TRUE(cfg.GetString("graphics.texture_quality").has_value());
+  EXPECT_EQ(*cfg.GetString("graphics.texture_quality"), "very_high");
+  EXPECT_FALSE(cfg.Empty());
+  EXPECT_THROW(nevr::NevrConfig::LoadFromString("graphic:\n  texture_quality: high\n"), nevr::NevrConfigError);
+}
+
+// Kind tells "set to something that is not a value" from "not set": the typed getters give nullopt for both.
+TEST(NevrConfig, KindSeesEveryKindOfNodeTheGettersCannotRead) {
+  using nevr::NodeKind;
+  const auto cfg = nevr::NevrConfig::LoadFromString(
+      "graphics:\n  scalar: ultra\n  empty_string: \"\"\n  novalue:\n  tilde: ~\n  mapping:\n    a: 1\n  empty_mapping: {}\n"
+      "  list:\n    - a\n    - b\n  list_of_maps:\n    - k: v\n  empty_list: []\nx-flat: 5\n");
+  EXPECT_EQ(cfg.Kind("graphics"), NodeKind::kMapping);
+  EXPECT_EQ(cfg.Kind("graphics.scalar"), NodeKind::kScalar);
+  EXPECT_EQ(cfg.Kind("graphics.empty_string"), NodeKind::kScalar);
+  EXPECT_EQ(cfg.Kind("x-flat"), NodeKind::kScalar);
+  EXPECT_EQ(cfg.Kind("graphics.novalue"), NodeKind::kNull);
+  EXPECT_EQ(cfg.Kind("graphics.tilde"), NodeKind::kNull);
+  EXPECT_EQ(cfg.Kind("graphics.mapping"), NodeKind::kMapping);
+  EXPECT_EQ(cfg.Kind("graphics.empty_mapping"), NodeKind::kMapping);
+  EXPECT_EQ(cfg.Kind("graphics.list"), NodeKind::kSequence);
+  EXPECT_EQ(cfg.Kind("graphics.list_of_maps"), NodeKind::kSequence);
+  EXPECT_EQ(cfg.Kind("graphics.empty_list"), NodeKind::kSequence);
+  for (const char* absent : {"graphic", "graphics.other", "graphics.scalar.deeper", "x-flat.deeper", "novalue", "", "graphics."}) {
+    EXPECT_EQ(cfg.Kind(absent), NodeKind::kAbsent) << absent;
+  }
+  // The getters read none of the non-scalar nodes: that is the gap Kind closes.
+  for (const char* notAValue : {"graphics.novalue", "graphics.tilde", "graphics.mapping", "graphics.list", "graphics.empty_list"}) {
+    EXPECT_FALSE(cfg.GetString(notAValue).has_value()) << notAValue;
+  }
+  EXPECT_EQ(nevr::NevrConfig().Kind("graphics"), NodeKind::kAbsent);
+}
+
+// MappingKeys lists the scalar keys of a mapping in file order, and nothing for anything that is not a mapping.
+TEST(NevrConfig, MappingKeysListsTheKeysOfAMappingInFileOrder) {
+  const auto cfg = nevr::NevrConfig::LoadFromString(
+      "graphics:\n  zeta: 1\n  alpha:\n    nested: 1\n  Mixed_Case: x\n  list:\n    - a\n  scalar_section_below: 1\n"
+      "diagnostics: on\nsocial:\n  - a\n");
+  const std::vector<std::string> want = {"zeta", "alpha", "Mixed_Case", "list", "scalar_section_below"};
+  EXPECT_EQ(cfg.MappingKeys("graphics"), want);
+  EXPECT_EQ(cfg.MappingKeys("graphics.alpha"), std::vector<std::string>{"nested"});
+  EXPECT_TRUE(cfg.MappingKeys("graphics.zeta").empty());   // a scalar
+  EXPECT_TRUE(cfg.MappingKeys("graphics.list").empty());   // a sequence
+  EXPECT_TRUE(cfg.MappingKeys("diagnostics").empty());     // a scalar section
+  EXPECT_TRUE(cfg.MappingKeys("social").empty());          // a sequence section
+  EXPECT_TRUE(cfg.MappingKeys("services").empty());        // absent
+  EXPECT_TRUE(nevr::NevrConfig().MappingKeys("graphics").empty());
 }
 
 // A rejection carries a stable reason token, never the parser's text: that text echoes the file's own words

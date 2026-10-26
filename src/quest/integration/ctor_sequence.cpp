@@ -26,6 +26,7 @@ const char* StepName(StepId id) {
     case StepId::kRegisterLoginPromptCounters: return "register_login_prompt_counters";
     case StepId::kRegisterObbSkipCounters: return "register_obb_skip_counters";
     case StepId::kRegisterResourceRequestCounters: return "register_resource_request_counters";
+    case StepId::kRegisterTextureQualityCounters: return "register_texture_quality_counters";
     case StepId::kStartReporter: return "start_reporter";
     case StepId::kInstallClockHook: return "install_clock_hook";
     case StepId::kInstallObbSkip: return "install_obb_skip";
@@ -33,6 +34,7 @@ const char* StepName(StepId id) {
     case StepId::kInstallPermissionWait: return "install_permission_wait";
     case StepId::kInstallVkExtWindow: return "install_vk_ext_window";
     case StepId::kInstallResourceRequestLog: return "install_resource_request_log";
+    case StepId::kInstallTextureQuality: return "install_texture_quality";
     case StepId::kStartTokenAuth: return "start_token_auth";
     case StepId::kInstallLoginPrompt: return "install_login_prompt";
     case StepId::kStartBridge: return "start_bridge";
@@ -93,9 +95,12 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     r.Run(StepId::kArmCrashReporter, [&] { steps.ArmCrashReporter(); return true; });
 
     nevr_quest::Features want;  // all off if the configuration cannot be resolved
+    nevr_quest::TextureChoice texture;  // `stock` if the configuration cannot be resolved: that is a mistake, not an absent key
+    texture.level = nevr_quest::texture_quality::kFallbackLevel;
     r.Run(StepId::kResolveConfig, [&] {
       const nevr_quest::ResolvedConfig& cfg = steps.ResolveConfig();
       want = cfg.effective;
+      texture = cfg.textureQuality;
       return true;
     });
 
@@ -155,6 +160,15 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     } else {
       r.Skip(StepId::kRegisterResourceRequestCounters, "release_build");
     }
+    // The texture-quality hook (#943) runs on every launch with whatever level the configuration gave (the default, `stock`
+    // for now, when it gave none), so its counters are registered on every launch, except for `stock`, which installs nothing.
+    bool textureCounters = false;
+    if (texture.level != nevr_quest::texture_quality::Level::kStock) {
+      textureCounters =
+          r.Run(StepId::kRegisterTextureQualityCounters, [&] { return steps.RegisterTextureQualityCounters(); });
+    } else {
+      r.Skip(StepId::kRegisterTextureQualityCounters, "stock");
+    }
     r.Run(StepId::kStartReporter, [&] { return steps.StartReporter(); });
 
     r.Run(StepId::kInstallClockHook, [&] { return steps.InstallClockHook(); });
@@ -195,6 +209,19 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
       r.Skip(StepId::kInstallResourceRequestLog, "counters_refused");
     } else {
       r.Run(StepId::kInstallResourceRequestLog, [&] { return steps.InstallResourceRequestLog(true); });
+    }
+
+    // The eye-buffer size libr15 creates its swap chain with (#943): every launch, no feature. libr15 asks for the size when
+    // it starts the game, after the constructor. Before the hardware dump, which shares this slot when this hook owns it.
+    if (texture.level != nevr_quest::texture_quality::Level::kStock && !textureCounters) {
+      try {
+        steps.InstallTextureQuality(texture, false);  // the hook's own rule logs that it installs nothing
+      } catch (const std::exception&) {
+        // Contained like every step; the outcome is the skip below either way.
+      }
+      r.Skip(StepId::kInstallTextureQuality, "counters_refused");
+    } else {
+      r.Run(StepId::kInstallTextureQuality, [&] { return steps.InstallTextureQuality(texture, textureCounters); });
     }
 
     bool tokenOk = false;

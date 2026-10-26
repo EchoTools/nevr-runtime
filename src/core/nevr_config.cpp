@@ -196,7 +196,7 @@ const std::set<std::string>& AllowedTopLevelKeys() {
   static const std::set<std::string> kKeys = {
       "version", "identity", "auth",    "services", "network", "assets",
       "arena",   "guilds",   "telemetry", "plugins", "profiles", "social",
-      "diagnostics"};
+      "diagnostics", "graphics"};
   return kKeys;
 }
 
@@ -207,7 +207,7 @@ void ValidateTopLevel(const YAML::Node& root) {
       throw NevrConfigError(
           "config: unknown top-level key '" + key +
           "' (allowed: version, identity, auth, services, network, assets, arena, "
-          "guilds, telemetry, plugins, profiles, social, diagnostics; use x-* for extensions)",
+          "guilds, telemetry, plugins, profiles, social, diagnostics, graphics; use x-* for extensions)",
           NevrConfigErrorKind::kUnknownTopLevelKey, SourceLine(kv.first.Mark()), SourceColumn(kv.first.Mark()));
     }
   }
@@ -365,6 +365,31 @@ std::optional<std::string> NevrConfig::GetString(const std::string& path, bool* 
   std::optional<std::string> value = InterpolateScalar(ResolvePath(impl_->root, path), &unset);
   *hadUnsetBare = !unset.empty();
   return value;
+}
+
+NodeKind NevrConfig::Kind(const std::string& path) const {
+  if (!impl_) return NodeKind::kAbsent;
+  const YAML::Node n = ResolvePath(impl_->root, path);
+  if (!n.IsDefined()) return NodeKind::kAbsent;
+  switch (n.Type()) {
+    case YAML::NodeType::Scalar: return NodeKind::kScalar;
+    case YAML::NodeType::Sequence: return NodeKind::kSequence;
+    case YAML::NodeType::Map: return NodeKind::kMapping;
+    case YAML::NodeType::Null: return NodeKind::kNull;
+    case YAML::NodeType::Undefined: return NodeKind::kAbsent;
+  }
+  return NodeKind::kAbsent;
+}
+
+std::vector<std::string> NevrConfig::MappingKeys(const std::string& path) const {
+  std::vector<std::string> keys;
+  if (!impl_) return keys;
+  const YAML::Node n = ResolvePath(impl_->root, path);
+  if (!n.IsDefined() || !n.IsMap()) return keys;
+  for (const auto& entry : n) {
+    if (entry.first.IsScalar()) keys.push_back(entry.first.Scalar());
+  }
+  return keys;
 }
 
 std::optional<bool> NevrConfig::GetBool(const std::string& path) const {

@@ -43,6 +43,7 @@ inline constexpr const char* kGetMountedObbPathSymbol = "AStorageManager_getMoun
 inline constexpr const char* kAndroidMainSymbol = "android_main";
 inline constexpr const char* kFindMethodSymbol = "_ZN10NRadEngine10CSysModule10FindMethodEmPKc";
 inline constexpr const char* kGetDeviceExtensionsVulkanSymbol = "vrapi_GetDeviceExtensionsVulkan";
+inline constexpr const char* kGetSystemPropertyIntSymbol = "vrapi_GetSystemPropertyInt";
 inline constexpr const char* kEnablePageNodeEnterSymbol =
     "_ZN10NRadEngine8NRadGame25CR15UIPage2EnablePageNode5EnterERKNS0_29SR15UIPage2EnablePageNodeDataE";
 
@@ -147,6 +148,15 @@ using VrapiExtensionsSig = std::int32_t(char* extension_names, std::uint32_t* ex
 struct LibR15GetDeviceExtensionsVulkanTag {};
 using LibR15GetDeviceExtensionsVulkanThunk = CallbackThunk<LibR15GetDeviceExtensionsVulkanTag, VrapiExtensionsSig>;
 
+// VrApi.h: int vrapi_GetSystemPropertyInt(const ovrJava* java, ovrSystemProperty propType). Imported (value 0): JUMP_SLOT
+// 0x36fa728 (`readelf -rW` on the pinned image), the slot the hardware dump hooks too (docs/adr/0006-quest-hardware-dump.md).
+// CVR::RefreshRTSize (0x1a709a0) calls it with ids 5 and 6, the suggested eye texture width and height
+// (`bl` at 0x1a709f4 and 0x1a70a04), multiplies the results by CustomViewportScale and stores the pair; CVR::Resize
+// (0x1a70d0c) creates the swap chain from it once per process. `java` is never dereferenced here (an incomplete type).
+struct OvrJavaOpaque;
+using GetSystemPropertyIntSig = int(const OvrJavaOpaque* java, int property);
+struct LibR15GetSystemPropertyIntTag {};
+using LibR15GetSystemPropertyIntThunk = CallbackThunk<LibR15GetSystemPropertyIntTag, GetSystemPropertyIntSig>;
 // NRadEngine::CResourceManager::FillResourceFileRequest(CSymbol64 type, CSymbol64 name, unsigned long long,
 // CAllocator*, void*, unsigned long long, SFileRequestData&), defined in libr15 at 0x25439f0 (524 bytes; ReVault lists it
 // at 0x26439f0): the single manifest resolver (#871). It clears the request (ClearFileRequestData, 0x2a9759c), binary-searches
@@ -461,6 +471,12 @@ inline GotTarget LibR15FindMethod() {
 // imported, value 0).
 inline GotTarget LibR15GetDeviceExtensionsVulkan() {
   return {kLibR15, kGetDeviceExtensionsVulkanSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36dd440ULL};
+}
+
+// libr15.so's slot for vrapi_GetSystemPropertyInt (JUMP_SLOT 0x36fa728, `readelf -rW` on the pinned image; imported,
+// value 0).
+inline GotTarget LibR15GetSystemPropertyInt() {
+  return {kLibR15, kGetSystemPropertyIntSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36fa728ULL};
 }
 
 // libr15.so's slot for CResourceManager::FillResourceFileRequest, defined in libr15 itself (JUMP_SLOT 0x36efa80,

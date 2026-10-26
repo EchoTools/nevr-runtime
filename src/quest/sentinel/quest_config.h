@@ -18,12 +18,22 @@
 // `social.facade` is false (PC's key and default) and still needs login here; its status names ride with it.
 // `social.send_presence_to_meta: false` answers the rich presence locally; `diagnostics.hardware_dump: true`
 // turns the hardware dump on, `diagnostics.ui_event_probe: true` the invite/party UI probe. A feature whose prerequisite is off or missing is forced off with a logged reason.
+//
+// `graphics.texture_quality` (#943) is one of stock, low, medium, high, very_high, ultra (texture_quality.h); absent, it is
+// texture_quality::kDefaultLevel (`stock` for now). It is not a feature and has no prerequisite. Any mistake in it gives
+// `stock`, never the default: a word that is not a level (wrong case, a number, empty), a value that is not a word (a
+// mapping, a list, a key with no value), an unset ${VAR}, a `graphics` section that is not a mapping, or a file that is
+// rejected as a whole. Each is one Warning that names the key (and the word, when it is short printable ASCII). A key under
+// `graphics` other than `texture_quality` (a misspelling, another case) is one Warning that names it, and changes nothing else.
+// `stock` leaves the headset runtime's own eye-buffer size.
 #pragma once
 
 #include <cstddef>
 #include <optional>
 #include <string>
 #include <vector>
+
+#include "quest/sentinel/texture_quality.h"
 
 namespace nevr_quest {
 
@@ -74,9 +84,16 @@ struct Features {
   bool uiEventProbe = false;
 };
 
+// The texture-quality setting (#943), after the file and the default have spoken.
+struct TextureChoice {
+  texture_quality::Level level = texture_quality::kDefaultLevel;
+  Source source = Source::kAbsent;  // kFile: the file gave the level; anything else: the default did, or a mistake fell back
+};
+
 struct LogEvent {
   LogLevel level;
-  std::string message;  // never contains a configured value, only key and feature names
+  std::string message;  // never contains a configured value, only key and feature names; the one exception is a rejected
+                        // graphics.texture_quality word, named when it is at most 32 printable ASCII characters
 };
 
 struct ResolvedConfig {
@@ -86,6 +103,7 @@ struct ResolvedConfig {
   Value serverKey;
   Features requested;  // what the file and the defaults ask for
   Features effective;  // requested, after prerequisite checks
+  TextureChoice textureQuality;
 };
 
 struct LoadResult {
@@ -106,6 +124,8 @@ std::string LegacyConfigFilePath(const std::string& filesDir);
 bool FeatureEnabled(const ResolvedConfig& config, Feature feature);
 const char* FeatureName(Feature feature);
 const char* SourceName(Source source);
+// "config" when the file gave the texture level, else "default": the words the install log line and the config report use.
+const char* TextureSourceName(const TextureChoice& choice);
 
 // The shared redirect policy (runtime/lifecycle/service_redirect) gated by the redirect and bridge
 // features. nullopt leaves the game's original value untouched.

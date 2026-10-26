@@ -21,6 +21,10 @@ inline constexpr std::size_t kHookCount = 18;
 // installed. Logs nothing itself: GotHook logs each install with its status.
 std::size_t InstallHooks() noexcept;
 
+// True when vrapi_GetSystemPropertyInt is shared with the texture-quality hook (#943): that hook owns the slot, and the
+// dump records through it ("shared" in that hook's HookState) instead of installing its own.
+bool SysPropIntShared() noexcept;
+
 // The state of every hook, in a fixed order, with the live counters.
 void HookStates(HookState (&out)[kHookCount]) noexcept;
 
