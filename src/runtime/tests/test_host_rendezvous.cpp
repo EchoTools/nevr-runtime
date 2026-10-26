@@ -507,3 +507,65 @@ TEST(HostStopNotice, NothingIsShownUnderTheLoaderLock) {
   EXPECT_STREQ(nevr_host::StopNoticeName(StopNotice::kShow), "shown");
   EXPECT_STREQ(nevr_host::StopNoticeName(StopNotice::kSuppressedLoaderLock), "suppressed_loader_lock");
 }
+
+// The process must not end under the dialog: a second thread that reaches the stop while the first is telling the
+// player waits behind it (StopGame holds one lock through the record, the notice and the stop).
+namespace {
+
+CRITICAL_SECTION g_events_lock;
+std::vector<std::string> g_ordered_events;
+HANDLE g_second_thread = nullptr;
+
+void Note(const char* what) {
+  EnterCriticalSection(&g_events_lock);
+  g_ordered_events.emplace_back(what);
+  LeaveCriticalSection(&g_events_lock);
+}
+
+DWORD WINAPI SecondArrival(LPVOID) {
+  RuntimeRendezvous::GameMainWrapperDetour(0x1234);
+  return 0;
+}
+
+void NoticeWithASecondThreadArriving(const wchar_t*) {
+  Note("notice_open");
+  g_second_thread = CreateThread(nullptr, 0, &SecondArrival, nullptr, 0, nullptr);
+  Sleep(300);  // long enough for the second thread to be inside the detour and waiting on the lock
+  Note("notice_closed");
+}
+void NoteStop(std::uint32_t) { Note("stop"); }
+
+}  // namespace
+
+TEST(HostStopNotice, ASecondThreadWaitsBehindTheDialogInsteadOfEndingTheProcessUnderIt) {
+  RendezvousSandbox sandbox;
+  InitializeCriticalSection(&g_events_lock);
+  g_ordered_events.clear();
+  g_second_thread = nullptr;
+  g_command_line = "echovr.exe -windowed";
+  RuntimeRendezvous::Seams().stop_game = &NoteStop;
+  RuntimeRendezvous::Seams().show_stop_notice = &NoticeWithASecondThreadArriving;
+  RuntimeRendezvous::Seams().command_line = &CommandLine;
+  const std::wstring local = MakeTempDir();
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  ReturningTarget target;
+  ASSERT_NE(target.code(), nullptr);
+  RuntimeRendezvous rendezvous;
+  rendezvous.Prepare(GetModuleHandleW(L"kernel32.dll"), GetModuleHandleW(nullptr), diagnostics);
+  ASSERT_NE(rendezvous.Install(target.code()), nullptr);
+  RuntimeRendezvous::GameMainWrapperDetour(0x1234);
+  ASSERT_NE(g_second_thread, nullptr);
+  ASSERT_EQ(WaitForSingleObject(g_second_thread, 10000), WAIT_OBJECT_0);
+  CloseHandle(g_second_thread);
+  EnterCriticalSection(&g_events_lock);
+  const std::vector<std::string> events = g_ordered_events;
+  LeaveCriticalSection(&g_events_lock);
+  ASSERT_EQ(events.size(), 4u);
+  EXPECT_EQ(events[0], "notice_open");
+  EXPECT_EQ(events[1], "notice_closed") << "the second thread ended the process while the dialog was open";
+  EXPECT_EQ(events[2], "stop");
+  EXPECT_EQ(events[3], "stop");
+  RuntimeRendezvous::ResetActiveForTest();
+  DeleteCriticalSection(&g_events_lock);
+}
