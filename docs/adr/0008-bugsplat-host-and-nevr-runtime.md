@@ -3,7 +3,8 @@
 Status: accepted. The contract, the descriptor, the host units and their harnesses are
 in the tree, and the rendezvous is decided ("Decision: the rendezvous is the game's main
 wrapper"). `BugSplat64.dll` is still built from the whole of `src/runtime/` as one DLL:
-the host units are compiled only into the test harnesses until the target split.
+the host units are compiled into it and its `DllMain` calls them, and `nevr-runtime.dll`
+exists only as the test harnesses' fixtures until the target split.
 
 ## Context
 
@@ -247,8 +248,9 @@ Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
 - The export table is part of the contract: a change to it is a change to
   `tools/verify_pe_contract.py` in the same commit.
 - Until the target split, `src/runtime/host/` (the entry points, the rendezvous, the
-  diagnostics, the crash capture and the loader) is compiled only into the test
-  harnesses. The shipped `BugSplat64.dll` does not use it.
+  diagnostics, the crash capture and the loader) is compiled into `BugSplat64.dll`
+  (`src/runtime/CMakeLists.txt`), whose `DllMain` calls it (`nevr_host::OnProcessAttach`),
+  and into the test harnesses.
 - After the flip the runtime does not hook the main wrapper; the host's detour is the only
   hook on it. The host context carries that hook's target and the first bytes found there
   after the host enabled it, with a flag (`wrapper_hook_bytes_valid`) that says whether those
@@ -259,6 +261,6 @@ Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
   cannot verify that hook, and the log says so) and keeps running; it does not register
   zeros. `HookRecordUsable` does not re-check the header, the target or the flag's range, so
   it is called only on a context `ValidateHostContext` accepted. The host module is required.
-  The shipped DLL does none of this yet ("The tree today").
+  The shipped DLL does this in-process ("The tree today").
 - The host's `DllMain` validates the image and the wrapper's prologue, installs the one
   detour and journals each decision. It loads nothing and does no file I/O.
