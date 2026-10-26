@@ -6,11 +6,14 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "tools"))
+import work_root  # noqa: E402
 
 
 class ReleaseContractTest(unittest.TestCase):
@@ -365,8 +368,7 @@ class ReleaseContractTest(unittest.TestCase):
 
 class DistributionArchiveTest(unittest.TestCase):
     def setUp(self):
-        scratch = pathlib.Path("/var/tmp/work-nevr-runtime")
-        scratch.mkdir(parents=True, exist_ok=True)
+        scratch = work_root.test_scratch()
         self.temp = tempfile.TemporaryDirectory(dir=scratch)
         self.root = pathlib.Path(self.temp.name)
         self.validator = REPO / "cmake/VerifyDistribution.cmake"

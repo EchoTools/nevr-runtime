@@ -9,6 +9,8 @@ import unittest
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "tools"))
+import work_root  # noqa: E402
 VERIFIER = REPO / "tools" / "verify_patch_source_inventory.py"
 EXPECTED_PATCH_SOURCES = (
     "patch/asset_cache.cpp",
@@ -67,7 +69,7 @@ class VerifyPatchSourceInventoryTest(unittest.TestCase):
 
     def test_accepts_complete_authoritative_fixture(self):
         with tempfile.TemporaryDirectory(
-            prefix="patch-source-inventory-", dir="/var/tmp/work-nevr-runtime"
+            prefix="patch-source-inventory-", dir=work_root.test_scratch()
         ) as temp_dir:
             result = self.run_verifier(
                 self.make_fixture(pathlib.Path(temp_dir), EXPECTED_PATCH_SOURCES)
@@ -106,7 +108,7 @@ class VerifyPatchSourceInventoryTest(unittest.TestCase):
 
         for name, sources, absent_files, expected_error in scenarios:
             with self.subTest(name=name), tempfile.TemporaryDirectory(
-                prefix="patch-source-inventory-", dir="/var/tmp/work-nevr-runtime"
+                prefix="patch-source-inventory-", dir=work_root.test_scratch()
             ) as temp_dir:
                 result = self.run_verifier(
                     self.make_fixture(pathlib.Path(temp_dir), sources, absent_files)
@@ -117,7 +119,7 @@ class VerifyPatchSourceInventoryTest(unittest.TestCase):
 
     def test_rejects_missing_authoritative_list(self):
         with tempfile.TemporaryDirectory(
-            prefix="patch-source-inventory-", dir="/var/tmp/work-nevr-runtime"
+            prefix="patch-source-inventory-", dir=work_root.test_scratch()
         ) as temp_dir:
             cmake = pathlib.Path(temp_dir) / "src" / "runtime" / "CMakeLists.txt"
             cmake.parent.mkdir(parents=True)
@@ -129,7 +131,7 @@ class VerifyPatchSourceInventoryTest(unittest.TestCase):
 
     def test_rejects_unreadable_authoritative_file(self):
         with tempfile.TemporaryDirectory(
-            prefix="patch-source-inventory-", dir="/var/tmp/work-nevr-runtime"
+            prefix="patch-source-inventory-", dir=work_root.test_scratch()
         ) as temp_dir:
             result = self.run_verifier(pathlib.Path(temp_dir) / "missing-CMakeLists.txt")
 
