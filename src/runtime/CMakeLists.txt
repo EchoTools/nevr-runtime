@@ -145,6 +145,7 @@ set(PATCHES_HEADERS
     "compat/ws_bridge.h"
     "compat/socket_role.h"
     "compat/evr_codec.h"
+    "compat/lobby_frame.h"
     "patch/xpid_patch.h"
     "frame/tick.h"
     "patch/binary_bug_fixes.h"
@@ -943,12 +944,14 @@ if(BUILD_TESTING)
 
     # EVR codec (compat/evr_codec.cpp): platform-neutral frame parse/build and login layout, the same
     # source the Quest target compiles. login_profile.cpp supplies the real profile JSON the tests parse.
+    # test_lobby_frame.cpp (#929, header-only compat/lobby_frame.h on top of the codec) rides in this executable.
     add_executable(test_evr_codec
       tests/test_evr_codec.cpp
+      tests/test_lobby_frame.cpp
       compat/evr_codec.cpp
       compat/login_profile.cpp)
-    set_source_files_properties(tests/test_evr_codec.cpp compat/evr_codec.cpp compat/login_profile.cpp
-      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    set_source_files_properties(tests/test_evr_codec.cpp tests/test_lobby_frame.cpp compat/evr_codec.cpp
+      compat/login_profile.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_evr_codec PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_evr_codec PRIVATE
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
