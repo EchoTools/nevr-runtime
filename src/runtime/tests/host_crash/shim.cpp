@@ -1,7 +1,8 @@
-// BugSplat64.dll shim for the crash harness: the production host objects
-// (runtime/host/) behind the real mangled MiniDmpSender::createReport export, plus
-// test seams that run the host's runtime load/validate state machine against the
-// sibling nevr-runtime.dll fixture and arm the capture's fault-injection hooks.
+// BugSplat64.dll shim for the crash harness: the production host objects (runtime/host/) behind the real
+// mangled MiniDmpSender::createReport export, plus test seams that run the host's runtime load/validate
+// state machine against the sibling nevr-runtime.dll fixture and arm the capture's fault-injection hooks.
+// The export bodies are the shipped ones: runtime/host/minidmp_sender_exports.cpp is linked into this
+// shim and defines BugSplat_createReport, which the shim must not define itself.
 //
 // The crash capture never depends on the runtime load: a valid dump is written
 // whether nevr-runtime.dll is absent, ABI-incompatible, missing its entry point, or failing
@@ -51,10 +52,6 @@ __declspec(noinline) void ReentrancyProbe() {
 }
 
 }  // namespace
-
-extern "C" void BugSplat_createReport(void*, PEXCEPTION_POINTERS exception_pointers) {
-  nevr_host::CreateReport(exception_pointers);
-}
 
 extern "C" void nevr_host_test_SetCaptureProbe(const wchar_t* probe_path) {
   if (probe_path != nullptr && probe_path[0] != L'\0') {

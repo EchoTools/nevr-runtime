@@ -59,24 +59,8 @@ extern "C" __declspec(dllexport) BOOL WINAPI MiniDumpWriteDump(
   return FALSE;
 }
 
-// --- BugSplat MiniDmpSender stubs ---
-// The game imports MiniDmpSender methods using MSVC name mangling.
-// exports.def maps the MSVC names to these C functions.
-
-extern "C" {
-  void BugSplat_MiniDmpSender_Ctor(void*, const wchar_t*, const wchar_t*,
-                                    const wchar_t*, const wchar_t*, unsigned long) {
-    nevr_host::OnCrashReporterConstructed();  // reports the attach decisions recorded so far
-  }
-  void BugSplat_MiniDmpSender_Dtor(void*) {}
-  void BugSplat_createReport(void*, PEXCEPTION_POINTERS) {}
-  unsigned long BugSplat_getFlags(void*) { return 0; }
-  void BugSplat_resetAppIdentifier(void*, const wchar_t*) {}
-  void BugSplat_sendAdditionalFile(void*, const wchar_t*) {}
-  void BugSplat_setDefaultUserDescription(void*, const wchar_t*) {}
-  void BugSplat_setDefaultUserName(void*, const wchar_t*) {}
-  int BugSplat_setFlags(void*, unsigned long) { return 1; }
-}
+// --- BugSplat MiniDmpSender methods ---
+// The nine exports the game imports are in runtime/host/minidmp_sender_exports.cpp; exports.def maps them.
 
 // --- Launcher entry point ---
 
