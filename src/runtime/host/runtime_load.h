@@ -1,7 +1,7 @@
 #pragma once
 
 // Host-side versioned C ABI: the runtime load/validate state machine
-// (docs/adr/0008-bugsplat-host-and-nevr-runtime.md). It loads nevr.dll from the
+// (docs/adr/0008-bugsplat-host-and-nevr-runtime.md). It loads nevr-runtime.dll from the
 // path ResolveRuntimePath returns with LoadLibraryExW (DLL-load-directory +
 // System32 search flags), validates the descriptor from core/runtime_abi.h
 // (major version, minimum struct size, required entries), and initializes it.
@@ -23,7 +23,7 @@ enum class RuntimeLoadOutcome : std::uint32_t {
   kLoaded = 0,
   kNoPath = 1,               // sibling path uncomputable
   kRuntimeAbsent = 2,        // LoadLibraryExW: file/path not found
-  kDependencyLoadFailed = 3,  // LoadLibraryExW: a dependency of nevr.dll is missing
+  kDependencyLoadFailed = 3,  // LoadLibraryExW: a dependency of nevr-runtime.dll is missing
   kLoadFailed = 4,           // LoadLibraryExW: other failure
   kMissingEntry = 5,         // NEVR_GetRuntimeApi absent
   kNullDescriptor = 6,       // get_api() returned null
@@ -56,7 +56,7 @@ struct RuntimeLoadResult {
   const char* DegradedAction() const;
 };
 
-/// The one place that decides which file is the runtime: `nevr.dll` in the
+/// The one place that decides which file is the runtime: `nevr-runtime.dll` in the
 /// directory of `host_module`. Fixed buffer, no heap, no I/O, so it is safe under
 /// the loader lock. Returns false when the host path cannot be formed or does not
 /// fit `out_size` wide characters.

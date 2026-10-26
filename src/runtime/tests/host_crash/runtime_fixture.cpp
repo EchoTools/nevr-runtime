@@ -1,4 +1,4 @@
-// nevr.dll fixture for the crash harness: implements the v1 descriptor from
+// nevr-runtime.dll fixture for the crash harness: implements the v1 descriptor from
 // core/runtime_abi.h. Compile-definition variants:
 //   HOST_CRASH_BAD_VERSION   descriptor reports abi_major + 1 (ABI-incompatible)
 //   HOST_CRASH_INIT_FAILURE  initialize() returns nonzero (init failure)
