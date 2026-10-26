@@ -562,6 +562,24 @@ static uint64_t (*g_lobbyClockMs)() = &RealLobbyClockMs;
 static void LogClientLobbyMessage(int connIdx, bool fromServer, uint64_t symbol, const uint8_t* payload, uint64_t len) {
   const std::optional<nevr_lobby_frame::Kind> kind = nevr_lobby_frame::KindOf(symbol, fromServer);
   if (!kind) return;
+  // The game's party-follow loop can send a request every update, so a kind writes a burst per window and the
+  // rest are counted; an ended window's count is written by the next lobby frame of any kind, before its record.
+  nevr_lobby_frame::RecordLimiter::Verdict verdict;
+  {
+    std::lock_guard<std::mutex> lock(g_lobbyLimiterMutex);
+    verdict = g_lobbyLimiter.Admit(*kind, g_lobbyClockMs());
+  }
+  for (size_t i = 0; i < nevr_lobby_frame::kKindCount; ++i) {
+    if (verdict.flushed[i] == 0) continue;
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.WS] lobby frame records suppressed kind=%s count=%llu window_ms=%llu limit=%u (these frames were "
+        "handled, only their records were not written)",
+        nevr_lobby_frame::KindToken(static_cast<nevr_lobby_frame::Kind>(i)),
+        static_cast<unsigned long long>(verdict.flushed[i]),
+        static_cast<unsigned long long>(nevr_lobby_frame::RecordLimiter::kWindowMs),
+        nevr_lobby_frame::RecordLimiter::kBurst);
+  }
+  if (!verdict.log) return;
   nevr_lobby_frame::Decoded d;
   if (!nevr_lobby_frame::Decode(*kind, payload, static_cast<size_t>(len), &d)) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.WS] lobby %s could not be read conn=%d payload_bytes=%llu",
