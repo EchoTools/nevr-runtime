@@ -15,10 +15,18 @@ pushing a v<x.y.z> release tag and before `gh release create`. It exits 0 and pr
   5. origin is reachable, and is the project's repository (github.com EchoTools/nevr-runtime, the ssh and
      https forms; `--expect-origin REGEX` overrides): a clone whose `origin` points elsewhere, or a check
      that cannot run, is a refusal, not a pass. Every git command is checked: a non-zero exit, or git
-     missing from PATH, is a problem line and a log record, never "clean".
+     missing from PATH, is a problem line and a log record, never "clean";
+  6. no part of the version the next build would stamp is outside what the Quest versionCode rule encodes
+     (tools/quest_apk_version.py: major 209, minor 99, patch 99, development distance N 998).
+
+It also WARNS (a `release-preflight: WARNING:` line, exit status unchanged, recorded in the log) when a part of that
+version is close to its limit: development distance N above 900, minor or patch above 90. The version is the one
+cmake/set_project_version_from_git.cmake would write: the nearest release tag when HEAD is on it, else its next
+patch with `-dev.<commits since the tag>`.
 
 It is READ-ONLY. The git commands it runs, and nothing else:
   git rev-parse --show-toplevel          git config --get remote.origin.url   git rev-parse HEAD
+  git describe --tags --long --match "v[0-9]*" --exclude "v*-*"   (the nearest release tag and the distance to it)
   git status --porcelain=v1 --untracked-files=all
   git for-each-ref refs/tags --format=...  (local tags and their peeled commits)
   git ls-remote origin                   (origin's refs: the only network call; it reads, it writes nothing here)
@@ -42,6 +50,9 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import quest_apk_version  # noqa: E402
 
 MAX_PATHS = 20
 # origin must be this repository, in either URL form; the project is public, so this is not a secret.
@@ -121,9 +132,23 @@ def plural(n: int, word: str) -> str:
     return f"{n} {word}" + ("" if n == 1 else "s")
 
 
+def next_build_version(root: str) -> tuple:
+    """(version, None) the next build would stamp (cmake/set_project_version_from_git.cmake), or (None, why not)."""
+    out = git("describe", "--tags", "--long", "--match", "v[0-9]*", "--exclude", "v*-*", cwd=root)
+    if out.returncode != 0:
+        return None, failure(out, "git describe")
+    match = re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-([0-9]+)-g([0-9a-f]+)", out.stdout.strip())
+    if not match:
+        return None, f"git describe printed '{out.stdout.strip()[:60]}', not v<X>.<Y>.<Z>-<distance>-g<sha>"
+    major, minor, patch, distance, sha = match.groups()
+    if int(distance) == 0:
+        return f"{major}.{minor}.{patch}", None
+    return f"{major}.{minor}.{int(patch) + 1}-dev.{distance}+{sha}", None
+
+
 def check(root: str, base: str, expect_origin: str = EXPECT_ORIGIN) -> tuple:
     """Returns (problems, facts). Never raises for a git failure: that is itself a problem."""
-    problems, facts = [], {"base": base}
+    problems, facts = [], {"base": base, "warnings": []}
     head_result = git("rev-parse", "HEAD", cwd=root)
     head = head_result.stdout.strip()
     facts["head"] = head
@@ -141,6 +166,17 @@ def check(root: str, base: str, expect_origin: str = EXPECT_ORIGIN) -> tuple:
             problems.append(f"{label}: {path}")
         if len(paths) > MAX_PATHS:
             problems.append(f"{len(paths) - MAX_PATHS} more {label}s not listed")
+
+    # The versionCode rule's limits, on the version the next build would stamp: a part out of range refuses, a part
+    # near its limit warns (and never blocks).
+    version, why_not = next_build_version(root)
+    facts["build_version"] = version
+    if version is None:
+        facts["warnings"].append(f"cannot work out the version the next build would stamp, so the versionCode limits "
+                                 f"are not checked: {why_not}")
+    else:
+        problems += quest_apk_version.field_problems(version)
+        facts["warnings"] += quest_apk_version.field_warnings(version)
 
     # The URL as configured (not expanded by url.<base>.insteadOf): what the clone says origin is.
     remote = git("config", "--get", "remote.origin.url", cwd=root)
@@ -224,8 +260,11 @@ def main(argv=None) -> int:
               "user": getpass.getuser(), "cwd": root, "head": facts.get("head"), "base": args.base,
               "origin_tip": facts.get("origin_tip"), "origin_url": facts.get("origin_url"),
               "expect_origin": args.expect_origin,
+              "build_version": facts.get("build_version"), "warnings": facts.get("warnings", []),
               "result": "refused" if problems else "ok", "problems": problems}
     write_log(record)
+    for warning in facts.get("warnings", []):
+        print(f"release-preflight: WARNING: {warning}")
     for problem in problems:
         print(f"release-preflight: PROBLEM: {problem}")
     if problems:

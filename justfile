@@ -197,6 +197,10 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     unsigned="$work/r15-repacked.apk"
     aligned="$work/r15-repacked-aligned.apk"
     signed="$work/r15_nevr-sentinel_signed.apk"
+    # Any stop after this point, a failed check included (set -e quits at a failing command), removes the signed APK:
+    # quest-install and the pinned tests take whatever sits at this path.
+    done_ok=0
+    trap '[ "$done_ok" = 1 ] || rm -f "$signed"' EXIT
     cp -f "$apk" "$unsigned"
     zip -q -d "$unsigned" 'META-INF/*.RSA' 'META-INF/*.SF' 'META-INF/*.MF' || true
     ( cd "$work/stage" && zip -q -0 -X "$unsigned" \
@@ -216,7 +220,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     printf '%s\n' "$verified" | sed -n 1p
     # The code Android will compare is read back from the SIGNED APK by aapt2, not taken from what was written.
     signed_code=$(aapt2 dump badging "$signed" | sed -n "s/^package: .* versionCode='\([0-9]*\)'.*/\1/p")
-    [ "$signed_code" = "$version_code" ] || { rm -f "$signed"; echo "signed APK versionCode is '$signed_code', expected $version_code" >&2; exit 1; }
+    [ "$signed_code" = "$version_code" ] || { echo "signed APK versionCode is '$signed_code', expected $version_code" >&2; exit 1; }
     echo "versionCode $signed_code (the community installer's build is 4987570)"
     # 6. VERIFY from the SIGNED apk — the headless packaging proof
     rm -rf "$work/verify"; mkdir -p "$work/verify"
@@ -227,6 +231,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     echo "== renamed original  lib/arm64-v8a/libovrplatformloader_orig.so =="
     readelf -d "$work/verify/lib/arm64-v8a/libovrplatformloader_orig.so" | grep -i soname
     echo ""
+    done_ok=1
     echo "Signed sideload APK ready -> $signed"
     echo "Install with: just quest-install"
 
@@ -247,7 +252,8 @@ quest-keystore-fingerprint:
 
 # Refuse (exit 1, one line per problem) unless this clone is exactly origin's release branch: every local
 # tag is on origin and at the same commit, no uncommitted or untracked change, HEAD is origin/<base>'s tip.
-# Read-only (git ls-remote is the only network call; there is no fetch). Run it before `just package-dev`,
+# It also refuses a version part outside the Quest versionCode rule and warns near its limits (development distance N above 900,
+# minor or patch above 90; tools/quest_apk_version.py). # Read-only (git ls-remote is the only network call; there is no fetch). Run it before `just package-dev`,
 # before pushing a v<x.y.z> release tag and before `gh release create` (tools/release_preflight.py).
 release-preflight base="main":
     tools/release_preflight.py --base {{ quote(base) }}

@@ -25,7 +25,7 @@ import axml_fixtures  # noqa: E402
 
 COMMIT = "3a35e0b945456dba8a9b56e8110df330178e7259"
 DEV = "5.0.1-dev.3+3a35e0b"
-DEV_VERSION_CODE = 500_010_003  # 5*10^8 + 0*10^6 + 1*10^4 + 3 (tools/quest_apk_version.py)
+DEV_VERSION_CODE = 50_001_003  # 5*10^7 + 0*10^5 + 1*10^3 + 3 (tools/quest_apk_version.py)
 RELEASE = "5.0.0"
 VALUES = {
     "NEVR_SOCKET_URI": "wss://host.example/nevr",
@@ -188,7 +188,7 @@ class LocalDevPackageTest(PackageFixture):
 
     def test_the_apk_must_carry_the_versionCode_of_this_build(self):
         # the store APK's own code (the repack was skipped or failed to stamp), and the code of another build
-        for code, label in ((4_987_566, "the store APK's"), (500_010_004, "another build's"), (500_009_999, "the release before's")):
+        for code, label in ((4_987_566, "the store APK's"), (50_001_004, "another build's"), (50_000_999, "the release before's")):
             with self.subTest(label):
                 self.write_apk(self.version, version_code=code)
                 result = self.run_tool()
@@ -199,7 +199,7 @@ class LocalDevPackageTest(PackageFixture):
 
     def test_the_seal_refuses_a_foreign_versionCode_on_its_own(self):
         # seal() is the second defence, for an APK that reaches it without the gate
-        for code in (4_987_566, 500_010_004):
+        for code in (4_987_566, 50_001_004):
             with self.subTest(code=code):
                 self.write_apk(self.version, version_code=code)
                 with self.assertRaisesRegex(package_release.GateFailure, f"has versionCode {code}, not {DEV_VERSION_CODE}"):

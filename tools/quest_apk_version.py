@@ -9,21 +9,26 @@ time, to a number derived from the build's own version, above 4987570 and growin
 
 NUMBERING RULE (the same on every machine, derived from the version string alone):
 
-    versionCode = major * 10^8 + minor * 10^6 + patch * 10^4 + slot
+    versionCode = major * 10^7 + minor * 10^5 + patch * 10^3 + slot
 
-    a release       X.Y.Z                  slot 9999
-    a development   X.Y.Z-dev.N+<sha>      slot N      (N = commits since the nearest release tag)
+    a release       X.Y.Z                  slot 999
+    a development   X.Y.Z-dev.N+<sha>      slot N      (N = commits since the nearest release tag, 0..998)
 
   The version is the one cmake/set_project_version_from_git.cmake writes into the build (kVersion in
   nevr_build_info.h). That makes the codes follow semantic-version precedence: a development build of X.Y.Z sits
   between the release before it and the release X.Y.Z (semver item 11), so a tester moving from a development
   build to its release, or to the next development build, is always an upgrade.
 
-  Limits, each refused loudly rather than clamped: major 0..20, minor 0..99, patch 0..99, development slot
-  0..9998. The largest code, 20.99.99, is 2,099,999,999, inside Android's int32 and under the 2,100,000,000
-  that the Play Store documents as its ceiling. The smallest accepted code is above 4987570 (major 5 gives at
-  least 500,000,000, a hundred times the installer's), and a version whose code would not beat 4987570 is
-  refused whatever the rule says.
+  Limits, each refused loudly NAMING THE FIELD, never clamped: major 0..209, minor 0..99, patch 0..99, development
+  distance N 0..998. The largest code, 209.99.99, is 2,090,000,000 + 9,900,000 + 99,000 + 999 = 2,099,999,999,
+  inside Android's int32 (2,147,483,647) and under the 2,100,000,000 that the Play Store documents as its ceiling.
+  `field_warnings` (used by tools/release_preflight.py) warns early: development distance N above 900, minor or
+  patch above 90. A version below the last published release's major (LAST_RELEASE, 5.6.0) is refused: a build
+  with no git reports 1.0.0, and building it would be a downgrade. From major 5 up every code is at least
+  50,000,000, ten times the installer's 4987570 (5.0.0-dev.0 is the smallest accepted).
+
+  Two development builds from different branches at the same distance N have the same versionCode (the code
+  carries no commit); the commit is in the package's file name.
 
   versionName is left as the store APK has it (the game's own build, "4987566"): it names the game, the
   versionCode names our packaging of it.
@@ -62,12 +67,21 @@ from pathlib import Path
 
 # The game build the community installer pins (Quest-EchoVR-Installer, Download.cs EvrVersion).
 INSTALLER_VERSION_CODE = 4987570
+# The last published release's version, pinned here because a build with no git cannot ask (tools/tests pins it to the
+# repository's newest release tag). A version below its major is refused: with no git the build reports 1.0.0
+# (cmake/set_project_version_from_git.cmake), which is a well-formed release version whose code, 100009999, is far
+# below every published build's. Every code from major 5 up is at least 50,000,000, above INSTALLER_VERSION_CODE.
+LAST_RELEASE = "5.6.0"
+MIN_MAJOR = int(LAST_RELEASE.split(".")[0])
 # Android's manifest versionCode is an int32; the Play Store documents 2,100,000,000 as the ceiling.
 MAX_VERSION_CODE = 2_100_000_000
 
-MAX_MAJOR, MAX_MINOR, MAX_PATCH = 20, 99, 99
-RELEASE_SLOT = 9999
-MAX_DEV_SLOT = RELEASE_SLOT - 1
+MAX_MAJOR, MAX_MINOR, MAX_PATCH = 209, 99, 99
+RELEASE_SLOT = 999
+MAX_DEV_N = RELEASE_SLOT - 1  # so that slot 999 is only ever a release
+# The early warning of field_warnings: development distance N above this, minor or patch above the other.
+WARN_DEV_N = 900
+WARN_MINOR_PATCH = 90
 
 _NUM = r"(0|[1-9][0-9]*)"
 VERSION = re.compile(rf"{_NUM}\.{_NUM}\.{_NUM}(?:-dev\.{_NUM}\+[0-9a-f]{{7,40}})?")
@@ -103,21 +117,62 @@ class ManifestError(Exception):
 # The numbering rule
 # ---------------------------------------------------------------------------------------------------------------
 
-def version_code_for(version: str) -> int:
+def _parts(version: str):
+    """(major, minor, patch, N or None for a release), or None when the string is neither X.Y.Z nor X.Y.Z-dev.N+sha."""
     match = VERSION.fullmatch(version)
     if not match:
-        raise VersionError(f"version '{version}' is neither X.Y.Z nor X.Y.Z-dev.N+<sha> (a release tag, or a development build)")
+        return None
     major, minor, patch = (int(match.group(i)) for i in (1, 2, 3))
-    slot = RELEASE_SLOT if match.group(4) is None else int(match.group(4))
-    for name, value, limit in (("major", major, MAX_MAJOR), ("minor", minor, MAX_MINOR), ("patch", patch, MAX_PATCH),
-                               ("development slot", slot, MAX_DEV_SLOT if match.group(4) is not None else RELEASE_SLOT)):
-        if value > limit:
-            raise VersionError(f"version '{version}': {name} {value} is above {limit}, the largest the versionCode rule encodes")
-    code = major * 10**8 + minor * 10**6 + patch * 10**4 + slot
-    if code <= INSTALLER_VERSION_CODE:
-        raise VersionError(f"version '{version}' gives versionCode {code}, which does not beat the community installer's "
-                           f"{INSTALLER_VERSION_CODE}: a headset on that build would refuse the APK as a downgrade")
-    return code  # at most 20*10^8 + 99*10^6 + 99*10^4 + 9999 = 2,099,999,999 < MAX_VERSION_CODE, by the limits above
+    return major, minor, patch, (None if match.group(4) is None else int(match.group(4)))
+
+
+def field_problems(version: str) -> list:
+    """One message per part of `version` outside the rule's limits, each naming the field. Empty for a version that
+    does not parse (version_code_for is what refuses that)."""
+    parts = _parts(version)
+    if parts is None:
+        return []
+    major, minor, patch, n = parts
+    fields = [("major", major, MAX_MAJOR), ("minor", minor, MAX_MINOR), ("patch", patch, MAX_PATCH)]
+    if n is not None:
+        fields.append(("development distance N", n, MAX_DEV_N))
+    return [f"version '{version}': {name} {value} is above {limit}, the largest the versionCode rule encodes"
+            for name, value, limit in fields if value > limit]
+
+
+def field_warnings(version: str) -> list:
+    """One message per part within the limits but close to them (development distance N above 900, minor or patch
+    above 90), each naming the field and the limit it is approaching. Never raises."""
+    parts = _parts(version)
+    if parts is None:
+        return []
+    major, minor, patch, n = parts
+    out = []
+    if n is not None and WARN_DEV_N < n <= MAX_DEV_N:
+        out.append(f"version '{version}': development distance N {n} is above {WARN_DEV_N}; the versionCode rule "
+                   f"refuses above {MAX_DEV_N}")
+    for name, value, limit in (("minor", minor, MAX_MINOR), ("patch", patch, MAX_PATCH)):
+        if WARN_MINOR_PATCH < value <= limit:
+            out.append(f"version '{version}': {name} {value} is above {WARN_MINOR_PATCH}; the versionCode rule "
+                       f"refuses above {limit}")
+    return out
+
+
+def version_code_for(version: str) -> int:
+    parts = _parts(version)
+    if parts is None:
+        raise VersionError(f"version '{version}' is neither X.Y.Z nor X.Y.Z-dev.N+<sha> (a release tag, or a development build)")
+    major, minor, patch, n = parts
+    if major < MIN_MAJOR:
+        raise VersionError(f"version '{version}' is below major {MIN_MAJOR}, the major of the last published release "
+                           f"(v{LAST_RELEASE}): a version that low is not a release line of this project (a build with no git "
+                           f"reports 1.0.0, cmake/set_project_version_from_git.cmake) and its code would be a downgrade")
+    problems = field_problems(version)
+    if problems:
+        raise VersionError("; ".join(problems))
+    slot = RELEASE_SLOT if n is None else n
+    # at most 209*10^7 + 99*10^5 + 99*10^3 + 999 = 2,099,999,999 < MAX_VERSION_CODE, by the limits above
+    return major * 10**7 + minor * 10**5 + patch * 10**3 + slot
 
 
 # ---------------------------------------------------------------------------------------------------------------

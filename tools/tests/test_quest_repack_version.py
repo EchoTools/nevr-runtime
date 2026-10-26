@@ -37,9 +37,9 @@ TOOLS = ("just", "cc", "patchelf", "zip", "unzip", "zipalign", "apksigner", "aap
 MISSING = [t for t in TOOLS if t != "pass" and shutil.which(t) is None]
 
 DEV_VERSION = "5.6.1-dev.37+3a35e0b"
-DEV_CODE = 506_010_037  # 5*10^8 + 6*10^6 + 1*10^4 + 37
+DEV_CODE = 50_601_037  # 5*10^7 + 6*10^5 + 1*10^3 + 37
 RELEASE_VERSION = "5.6.0"
-RELEASE_CODE = 506_009_999  # 5*10^8 + 6*10^6 + 0*10^4 + 9999
+RELEASE_CODE = 50_600_999  # 5*10^7 + 6*10^5 + 0*10^3 + 999
 
 SHIM_C = r'''
 /* The shim's stand-in: exports the marker the recipe greps for and carries its build version NUL-bounded. */
@@ -153,7 +153,7 @@ class RepackedVersionCodeTest(RepackFixture):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         code = badging_code(self.signed)
         self.assertEqual(code, RELEASE_CODE)
-        self.assertGreater(code, 506_000_000 + 9998)  # above 5.6.0-dev.9998
+        self.assertGreater(code, 50_600_000 + 998)  # above 5.6.0-dev.998
         self.assertLess(code, DEV_CODE)  # below 5.6.1-dev.*
 
     def test_the_signed_apk_verifies_and_carries_the_signer_of_the_key_in_pass(self):
@@ -222,21 +222,49 @@ class RepackRefusalTest(RepackFixture):
         self.make_inputs(DEV_VERSION, manifest=fx.build_manifest(version_code_count=0))
         self.assert_refused(self.repack(), "versionCode")
 
-    def test_a_version_that_would_not_beat_the_installer_is_refused(self):
+    def test_a_version_below_the_last_release_is_refused(self):
         self.make_inputs("0.1.0")
-        self.assert_refused(self.repack(), "4987570")
+        self.assert_refused(self.repack(), "major 5")
+
+    def test_the_version_a_build_without_git_reports_is_refused(self):
+        # cmake/set_project_version_from_git.cmake leaves "1.0.0" when git is absent: a release-looking version
+        # that would give a code far below every published build's
+        self.make_inputs("1.0.0")
+        self.assert_refused(self.repack(), "1.0.0", "major 5")
+
+    def fake_tool(self, name, body):
+        """A `name` earlier on PATH than the real one; `body` is bash and may call $REAL (the real tool's path)."""
+        real = shutil.which(name)
+        fake = self.tmp / "fakebin" / name
+        fake.parent.mkdir(exist_ok=True)
+        fake.write_text(f"#!/usr/bin/env bash\nREAL={real}\n{body}\n")
+        fake.chmod(0o755)
+        self.env["PATH"] = f"{fake.parent}:{self.env['PATH']}"
 
     def test_a_signed_apk_that_reads_back_with_another_code_is_removed_and_the_recipe_fails(self):
         # The recipe compares what aapt2 reads from the SIGNED APK with what it stamped. Put an aapt2 on PATH
         # that reports a different code, and the recipe must refuse and leave no signed APK for package-dev.
         self.make_inputs(DEV_VERSION)
-        real = shutil.which("aapt2")
-        fake = self.tmp / "fakebin" / "aapt2"
-        fake.parent.mkdir()
-        fake.write_text(f"#!/usr/bin/env bash\n{real} \"$@\" | sed \"s/versionCode='[0-9]*'/versionCode='1'/\"\n")
-        fake.chmod(0o755)
-        self.env["PATH"] = f"{fake.parent}:{self.env['PATH']}"
+        self.fake_tool("aapt2", "\"$REAL\" \"$@\" | sed \"s/versionCode='[0-9]*'/versionCode='1'/\"")
         self.assert_refused(self.repack(), "signed APK versionCode is '1'", str(DEV_CODE))
+
+    def test_an_aapt2_that_fails_leaves_no_signed_apk(self):
+        # set -e quits at a failing command substitution: the APK must not survive for quest-install and the pinned tests
+        self.make_inputs(DEV_VERSION)
+        self.fake_tool("aapt2", "echo 'aapt2: cannot read the apk' >&2; exit 3")
+        self.assert_refused(self.repack(), "aapt2: cannot read the apk")
+
+    def test_an_apksigner_verify_that_fails_leaves_no_signed_apk(self):
+        # `sign` is real (so a signed APK exists to be left behind); only `verify` fails
+        self.make_inputs(DEV_VERSION)
+        self.fake_tool("apksigner", "if [ \"$1\" = verify ]; then echo 'apksigner: DOES NOT VERIFY' >&2; exit 1; fi\n\"$REAL\" \"$@\"")
+        self.assert_refused(self.repack(), "apksigner: DOES NOT VERIFY")
+
+    def test_a_failure_after_the_checks_leaves_no_signed_apk_either(self):
+        # the ELF checks that follow (here `nm`) run on the signed APK; any stop after signing removes it
+        self.make_inputs(DEV_VERSION)
+        self.fake_tool("nm", "echo 'nm: no symbols' >&2; exit 1")
+        self.assert_refused(self.repack(), "nm: no symbols")
 
     def test_a_signed_apk_from_an_earlier_run_does_not_survive_a_refused_one(self):
         self.make_inputs(DEV_VERSION)
