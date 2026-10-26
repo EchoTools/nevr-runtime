@@ -382,6 +382,52 @@ class Collector {
 };
 
 // ---------------------------------------------------------------------------------------------------------
+// The drain and the window clock (what Poll does each tick)
+// ---------------------------------------------------------------------------------------------------------
+
+/// What Drain has already counted from the perf ring's loss counters, so each loss is counted once.
+struct DrainState {
+  uint64_t perfDroppedSeen = 0;
+  uint64_t perfRejectedSeen = 0;
+};
+
+/// Moves everything both rings hold into the collector, in order, and counts what the compositor-stat path
+/// lost since the last drain: entries the ring dropped plus entries ExtractPerfSamples rejected. (A lost loop-head
+/// reading is counted by Collector::AddFrame from the next reading's drop count.)
+template <std::size_t FrameN, std::size_t PerfN>
+inline void Drain(SpscRing<FrameSlot, FrameN>& frames, SpscRing<PerfSample, PerfN>& perf,
+                  const std::atomic<uint64_t>& perfRejected, DrainState& state, Collector& collector) {
+  FrameSlot frame;
+  while (frames.Pop(frame)) collector.AddFrame(frame.us, frame.dropped);
+  PerfSample sample;
+  while (perf.Pop(sample)) collector.AddPerf(sample);
+  const uint64_t dropped = perf.Dropped();
+  const uint64_t rejected = perfRejected.load(std::memory_order_relaxed);
+  collector.AddPerfLost((dropped - state.perfDroppedSeen) + (rejected - state.perfRejectedSeen));
+  state.perfDroppedSeen = dropped;
+  state.perfRejectedSeen = rejected;
+}
+
+/// Decides when a window is over. The first tick only starts the window; a window ends on the first tick that is
+/// kWindowUs or more after the previous end, and its real length is reported in milliseconds.
+class WindowClock {
+ public:
+  bool Tick(uint64_t nowUs, uint64_t* elapsedMs) {
+    if (startUs_ == 0) {
+      startUs_ = nowUs;
+      return false;
+    }
+    if (nowUs < startUs_ || nowUs - startUs_ < kWindowUs) return false;
+    if (elapsedMs != nullptr) *elapsedMs = (nowUs - startUs_) / 1000;
+    startUs_ = nowUs;
+    return true;
+  }
+
+ private:
+  uint64_t startUs_ = 0;
+};
+
+// ---------------------------------------------------------------------------------------------------------
 // The lines
 // ---------------------------------------------------------------------------------------------------------
 

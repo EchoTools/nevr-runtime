@@ -35,9 +35,8 @@ std::atomic<uint64_t> g_perfRejected{0};
 // Poll's state. The dispatcher's re-entrancy gate (tick.cpp, g_tickReentry) makes Poll single-threaded, and the
 // gate's interlocked release publishes it to whichever thread polls next.
 Collector g_collector;
-uint64_t g_windowStartUs = 0;
-uint64_t g_perfDroppedSeen = 0;
-uint64_t g_perfRejectedSeen = 0;
+DrainState g_drain;
+WindowClock g_clock;
 
 // Runs on the game's thread inside ovr_GetPerfStats. Calls the original once, never a second time (a second
 // call would race the session and split FrameStats), copies only on success, and logs nothing.
@@ -111,23 +110,10 @@ void OnLoopHead(uint64_t nowUs) {
 void Poll(uint64_t nowUs) {
   if (g_mode.load(std::memory_order_acquire) == Mode::Off) return;
 
-  FrameSlot frame;
-  while (g_frameRing.Pop(frame)) g_collector.AddFrame(frame.us, frame.dropped);
-  PerfSample sample;
-  while (g_perfRing.Pop(sample)) g_collector.AddPerf(sample);
-  const uint64_t perfDropped = g_perfRing.Dropped();
-  const uint64_t perfRejected = g_perfRejected.load(std::memory_order_relaxed);
-  g_collector.AddPerfLost((perfDropped - g_perfDroppedSeen) + (perfRejected - g_perfRejectedSeen));
-  g_perfDroppedSeen = perfDropped;
-  g_perfRejectedSeen = perfRejected;
-
-  if (g_windowStartUs == 0) {
-    g_windowStartUs = nowUs;
-    return;
-  }
-  if (nowUs - g_windowStartUs < kWindowUs) return;
-  const WindowStats window = g_collector.Finish((nowUs - g_windowStartUs) / 1000);
-  g_windowStartUs = nowUs;
+  Drain(g_frameRing, g_perfRing, g_perfRejected, g_drain, g_collector);
+  uint64_t elapsedMs = 0;
+  if (!g_clock.Tick(nowUs, &elapsedMs)) return;
+  const WindowStats window = g_collector.Finish(elapsedMs);
   char line[512];
   FormatWindowLine(line, sizeof(line), window);
   Log(EchoVR::LogLevel::Info, "%s", line);

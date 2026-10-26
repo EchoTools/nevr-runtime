@@ -537,3 +537,101 @@ TEST(FrameStatsLine, TheStartLineNamesTheModeTheHostTheBuildAndTheInstallResults
       "perf_hook=skipped_server",
       line);
 }
+
+// ---- Poll's drain and window clock (the logic Poll runs each tick, without the game) ----
+
+TEST(FrameStatsDrain, EverythingBothRingsHoldReachesTheCollectorInOrder) {
+  fs::SpscRing<fs::FrameSlot, 8> frames;
+  fs::SpscRing<fs::PerfSample, 8> perf;
+  std::atomic<uint64_t> rejected{0};
+  fs::DrainState state;
+  fs::Collector collector;
+
+  for (uint64_t t = 1000000; t <= 1000000 + 4 * 11000; t += 11000) frames.Push(fs::FrameSlot{t, frames.Dropped()});
+  fs::PerfSample sample;
+  sample.appCpuS = 0.005f;
+  sample.appGpuS = 0.006f;
+  perf.Push(sample);
+  perf.Push(sample);
+
+  fs::Drain(frames, perf, rejected, state, collector);
+  const fs::WindowStats w = collector.Finish(10000);
+  EXPECT_EQ(4u, w.frames);  // 5 readings = 4 intervals
+  EXPECT_EQ(11000u, w.medianUs);
+  EXPECT_TRUE(w.hasPerf);
+  EXPECT_EQ(2u, w.perfSamples);
+  EXPECT_EQ(0u, w.overruns);
+}
+
+TEST(FrameStatsDrain, ALossOnThePerfPathIsCountedOnceNotOnEveryDrain) {
+  fs::SpscRing<fs::FrameSlot, 8> frames;
+  fs::SpscRing<fs::PerfSample, 2> perf;  // holds 2
+  std::atomic<uint64_t> rejected{0};
+  fs::DrainState state;
+  fs::Collector collector;
+
+  fs::PerfSample sample;
+  for (int i = 0; i < 5; ++i) perf.Push(sample);  // 2 kept, 3 dropped
+  rejected.store(4);                              // 4 entries the extractor refused
+  fs::Drain(frames, perf, rejected, state, collector);
+  EXPECT_EQ(7u, collector.Finish(1).overruns);
+
+  fs::Drain(frames, perf, rejected, state, collector);  // nothing new lost
+  EXPECT_EQ(0u, collector.Finish(1).overruns);
+
+  rejected.store(5);
+  fs::Drain(frames, perf, rejected, state, collector);  // one more
+  EXPECT_EQ(1u, collector.Finish(1).overruns);
+}
+
+TEST(FrameStatsDrain, ALostLoopHeadReadingBreaksTheIntervalAcrossTheGap) {
+  fs::SpscRing<fs::FrameSlot, 2> frames;  // holds 2
+  fs::SpscRing<fs::PerfSample, 4> perf;
+  std::atomic<uint64_t> rejected{0};
+  fs::DrainState state;
+  fs::Collector collector;
+
+  frames.Push(fs::FrameSlot{1000000, frames.Dropped()});
+  frames.Push(fs::FrameSlot{1011000, frames.Dropped()});
+  frames.Push(fs::FrameSlot{1022000, frames.Dropped()});  // ring full: dropped
+  fs::Drain(frames, perf, rejected, state, collector);
+  frames.Push(fs::FrameSlot{1033000, frames.Dropped()});  // carries dropped=1
+  fs::Drain(frames, perf, rejected, state, collector);
+  const fs::WindowStats w = collector.Finish(10000);
+  EXPECT_EQ(1u, w.frames);  // only 1000000 -> 1011000; nothing spans the gap
+  EXPECT_EQ(1u, w.overruns);
+}
+
+TEST(FrameStatsClock, TheFirstTickOnlyStartsTheWindow) {
+  fs::WindowClock clock;
+  uint64_t ms = 99;
+  EXPECT_FALSE(clock.Tick(5000000, &ms));
+  EXPECT_EQ(99u, ms);
+}
+
+TEST(FrameStatsClock, AWindowEndsAtTenSecondsExactlyAndNotBefore) {
+  fs::WindowClock clock;
+  uint64_t ms = 0;
+  ASSERT_FALSE(clock.Tick(5000000, &ms));
+  EXPECT_FALSE(clock.Tick(5000000 + fs::kWindowUs - 1, &ms));
+  EXPECT_TRUE(clock.Tick(5000000 + fs::kWindowUs, &ms));
+  EXPECT_EQ(10000u, ms);
+}
+
+TEST(FrameStatsClock, ALateTickReportsItsRealLengthAndStartsTheNextWindowThere) {
+  fs::WindowClock clock;
+  uint64_t ms = 0;
+  ASSERT_FALSE(clock.Tick(1000000, &ms));
+  ASSERT_TRUE(clock.Tick(1000000 + 10500000, &ms));
+  EXPECT_EQ(10500u, ms);
+  EXPECT_FALSE(clock.Tick(1000000 + 10500000 + fs::kWindowUs - 1, &ms));
+  EXPECT_TRUE(clock.Tick(1000000 + 10500000 + fs::kWindowUs, &ms));
+  EXPECT_EQ(10000u, ms);
+}
+
+TEST(FrameStatsClock, ATimeThatStepsBackwardNeitherEndsTheWindowNorWrapsIt) {
+  fs::WindowClock clock;
+  uint64_t ms = 0;
+  ASSERT_FALSE(clock.Tick(50000000, &ms));
+  EXPECT_FALSE(clock.Tick(40000000, &ms));
+}

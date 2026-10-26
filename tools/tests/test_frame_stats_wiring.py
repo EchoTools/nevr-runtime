@@ -144,11 +144,12 @@ class RuntimeSideTest(unittest.TestCase):
 
     def test_poll_returns_while_off_and_writes_one_info_line_per_window(self):
         body = extract_braced_function(self.source(), "void Poll(")
-        self.assertLess(body.index("== Mode::Off) return;"), body.index("g_frameRing.Pop("))
-        self.assertRegex(body, r"if \(nowUs - g_windowStartUs < kWindowUs\) return;")
+        self.assertLess(body.index("== Mode::Off) return;"), body.index("Drain("))
+        self.assertRegex(body, r"Drain\(g_frameRing, g_perfRing, g_perfRejected, g_drain, g_collector\);")
+        self.assertRegex(body, r"if \(!g_clock\.Tick\(nowUs, &elapsedMs\)\) return;")
         self.assertEqual(len(re.findall(r"Log\(", body)), 1)
         self.assertRegex(body, r"Log\(EchoVR::LogLevel::Info, \"%s\", line\);")
-        self.assertRegex(body, r"g_collector\.Finish\(\(nowUs - g_windowStartUs\) / 1000\)")
+        self.assertRegex(body, r"g_collector\.Finish\(elapsedMs\)")
 
 
 class LivenessRowTest(unittest.TestCase):
