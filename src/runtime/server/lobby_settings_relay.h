@@ -9,7 +9,7 @@
 // (0x14152a910), CJson_LoadFromBuffer (0x1405f0bd0), then CR15NetGame::OnLobbySettings (0x1401c2a20), which stores
 // the document at NetGame+0x63260, and a broadcast of it to all peers (0x1401a93e0).
 //
-// Why nEVR must do it. PatchEnableServer forces the dedicated server onto the game's local handler set
+// Why the runtime must do it. PatchEnableServer forces the dedicated server onto the game's local handler set
 // (0x140157fb0), so the TCP handler is never registered, and the server reads ServerDB frames through its own
 // WebSocketClient, never through the game's TCP broadcaster. Without this relay the frame reaches the "Unhandled
 // WebSocket msgId" branch and the document never reaches the game or any client.
