@@ -101,16 +101,17 @@ class RuntimeSideTest(unittest.TestCase):
         self.assertTrue(body.lstrip("{ \n").startswith("nevr_hook_liveness::Mark(nevr_hook_liveness::kOvrGetPerfStats);"))
         self.assertEqual(len(re.findall(r"g_originalPerfStats\(", body)), 1, "a second call would race the session")
         self.assertRegex(body, r"const int32_t result = g_originalPerfStats\(session, outStats\);")
-        self.assertRegex(body, r"if \(result >= 0 && outStats != nullptr && g_perfOn\.load\(")
-        self.assertLess(body.index("g_originalPerfStats("), body.index("ExtractPerfSamples("))
+        self.assertRegex(body, r"if \(ShouldCopyPerf\(result, outStats, g_perfOn\.load\(std::memory_order_relaxed\)\)\)")
+        self.assertRegex(body, r"CapturePerf\(outStats, g_perfRing, g_perfRejected\);")
+        self.assertLess(body.index("g_originalPerfStats("), body.index("CapturePerf("))
         self.assertRegex(body, r"return result;\s*\}$")
         self.assertNotIn("Log(", body)
 
     def test_the_loop_head_push_logs_nothing_and_is_gated_on_the_flag(self):
         body = extract_braced_function(self.source(), "void OnLoopHead(")
         self.assertNotIn("Log(", body)
-        self.assertRegex(body, r"nowUs == 0 \|\| !g_frameRingOn\.load\(")
-        self.assertRegex(body, r"g_frameRing\.Push\(FrameSlot\{nowUs, g_frameRing\.Dropped\(\)\}\)")
+        self.assertRegex(body, r"if \(!ShouldRecordLoopHead\(nowUs, g_frameRingOn\.load\(std::memory_order_relaxed\)\)\) return;")
+        self.assertRegex(body, r"RecordLoopHead\(g_frameRing, nowUs\);")
 
     def test_the_perf_hook_is_validated_then_installed_and_never_on_a_server(self):
         body = extract_braced_function(self.source(), "const char* InstallPerfStatsHook(")
@@ -136,11 +137,13 @@ class RuntimeSideTest(unittest.TestCase):
         self.assertLess(body.index("if (mode == Mode::Full) {"), install)
         self.assertEqual(body[body.index("if (mode == Mode::Full) {"):install].count("{"),
                          body[body.index("if (mode == Mode::Full) {"):install].count("}"))
-        self.assertRegex(body, r"g_perfOn\.store\(mode != Mode::Off, ")
+        self.assertRegex(body, r"g_perfOn\.store\(KeepsPerfStats\(mode\), ")
         self.assertRegex(body, r"g_mode\.store\(mode, ")
         self.assertRegex(body, r"FormatStartLine\(line, sizeof\(line\), mode, recognised,")
         self.assertRegex(body, r"Log\(EchoVR::LogLevel::Info, \"%s\", line\);")
-        self.assertRegex(body, r"LoopHeadCallMatches\(site\)")
+        self.assertRegex(body, r"callSiteMatches = LoopHeadCallMatches\(site\);")
+        self.assertRegex(body, r"const char\* frameRing = FrameRingState\(mode, callSiteMatches\);")
+        self.assertRegex(body, r"g_frameRingOn\.store\(ArmsFrameRing\(mode, callSiteMatches\), ")
 
     def test_poll_returns_while_off_and_writes_one_info_line_per_window(self):
         body = extract_braced_function(self.source(), "void Poll(")

@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -28,21 +29,27 @@ void FeedIntervals(fs::Collector& c, const std::vector<uint32_t>& intervals, uin
 
 std::unique_ptr<fs::Collector> NewCollector() { return std::make_unique<fs::Collector>(); }
 
-// A zeroed ovrPerfStats with `count` entries; entry i gets appDropped=100+i, compositorDropped=200+i,
+// An ovrPerfStats with `count` entries and a sentinel in every word; entry i gets appDropped=100+i, compositorDropped=200+i,
 // appCpu=(i+1) ms, appGpu=(i+1)*2 ms.
 std::vector<uint8_t> MakeStats(int32_t count) {
-  std::vector<uint8_t> buf(fs::kPerfStatsSize, 0);
-  std::memcpy(buf.data() + fs::kPerfCountOffset, &count, sizeof(count));
+  std::vector<uint8_t> buf(0x17C, 0);
+  std::memcpy(buf.data() + 0x168, &count, sizeof(count));  // FrameStatsCount, literal: the SDK layout, not our constant
   for (int32_t i = 0; i < 5; ++i) {
-    uint8_t* entry = buf.data() + static_cast<std::size_t>(i) * fs::kPerfEntryStride;
+    uint8_t* entry = buf.data() + static_cast<std::size_t>(i) * 0x48;  // literal stride
+    // Every word of the entry holds a sentinel first, so a field read from the wrong offset returns a value
+    // that is not the expected one (a zeroed neighbour would let an off-by-one-word offset pass).
+    for (uint32_t w = 0; w < 0x48 / 4; ++w) {
+      const uint32_t sentinel = 0x01000000u + static_cast<uint32_t>(i) * 0x100u + w;
+      std::memcpy(entry + w * 4, &sentinel, sizeof(sentinel));
+    }
     const int32_t appDropped = 100 + i;
     const int32_t compDropped = 200 + i;
     const float cpu = static_cast<float>(i + 1) * 0.001f;
     const float gpu = static_cast<float>(i + 1) * 0.002f;
-    std::memcpy(entry + fs::kPerfAppDroppedOffset, &appDropped, sizeof(appDropped));
-    std::memcpy(entry + fs::kPerfCompositorDroppedOffset, &compDropped, sizeof(compDropped));
-    std::memcpy(entry + fs::kPerfAppCpuOffset, &cpu, sizeof(cpu));
-    std::memcpy(entry + fs::kPerfAppGpuOffset, &gpu, sizeof(gpu));
+    std::memcpy(entry + 0x08, &appDropped, sizeof(appDropped));
+    std::memcpy(entry + 0x20, &compDropped, sizeof(compDropped));
+    std::memcpy(entry + 0x14, &cpu, sizeof(cpu));
+    std::memcpy(entry + 0x18, &gpu, sizeof(gpu));
   }
   return buf;
 }
@@ -634,4 +641,252 @@ TEST(FrameStatsClock, ATimeThatStepsBackwardNeitherEndsTheWindowNorWrapsIt) {
   uint64_t ms = 0;
   ASSERT_FALSE(clock.Tick(50000000, &ms));
   EXPECT_FALSE(clock.Tick(40000000, &ms));
+}
+
+// ---- the gaps the first mutation round found ----------------------------------------------------------------
+
+TEST(FrameStatsMode, UppercaseSpellingsWithAnAreRecognised) {
+  bool recognised = false;
+  EXPECT_EQ(fs::Mode::Off, fs::ParseMode(std::string("FALSE"), &recognised));
+  EXPECT_TRUE(recognised);
+  recognised = false;
+  EXPECT_EQ(fs::Mode::PerfOnly, fs::ParseMode(std::string("Perf"), &recognised));
+  EXPECT_TRUE(recognised);
+}
+
+namespace {
+// A value whose copy-assignment pushes into the ring it is being stored in: a second writer arriving while the
+// first is inside Push, forced deterministically.
+struct Reentrant {
+  static inline fs::SpscRing<Reentrant, 4>* ring = nullptr;
+  static inline bool secondPushed = true;
+  int v = 0;
+  Reentrant() = default;
+  Reentrant(const Reentrant&) = default;
+  Reentrant& operator=(const Reentrant& other) {
+    v = other.v;
+    if (ring != nullptr && other.v == 1) {
+      Reentrant inner;
+      inner.v = 2;
+      secondPushed = ring->Push(inner);
+    }
+    return *this;
+  }
+};
+}  // namespace
+
+TEST(FrameStatsRing, ASecondWriterInsideAPushIsDroppedAndCountedNotStored) {
+  fs::SpscRing<Reentrant, 4> ring;
+  Reentrant::ring = &ring;
+  Reentrant::secondPushed = true;
+  Reentrant first;
+  first.v = 1;
+  EXPECT_TRUE(ring.Push(first));
+  Reentrant::ring = nullptr;
+  EXPECT_FALSE(Reentrant::secondPushed);
+  EXPECT_EQ(1u, ring.Dropped());
+  Reentrant out;
+  ASSERT_TRUE(ring.Pop(out));
+  EXPECT_EQ(1, out.v);
+  EXPECT_FALSE(ring.Pop(out));  // the second writer's entry is not in the ring
+}
+
+TEST(FrameStatsPercentile, NearestRankIsTheCeilingOfPctTimesNOver100) {
+  uint32_t v[101];
+  for (uint32_t i = 0; i < 101; ++i) v[i] = i * 10;
+  EXPECT_EQ(0u, fs::Percentile(v, 0, 50));      // no values: zero
+  EXPECT_EQ(10u, fs::Percentile(v, 101, 1));    // ceil(1.01) = 2 -> the second value
+  EXPECT_EQ(0u, fs::Percentile(v, 101, 0));     // rank 0 is clamped up to the first value
+  EXPECT_EQ(1000u, fs::Percentile(v, 101, 150));  // beyond 100 % is clamped to the last value
+  EXPECT_EQ(500u, fs::Percentile(v, 101, 50));
+}
+
+TEST(FrameStatsPerfExtract, ACpuTimeThatIsNotFiniteOrNegativeIsRejectedLikeAGpuOne) {
+  for (float bad : {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), -0.001f}) {
+    auto cpuBad = MakeStats(1);
+    std::memcpy(cpuBad.data() + fs::kPerfAppCpuOffset, &bad, sizeof(bad));
+    fs::PerfSample out[5];
+    std::size_t rejected = 0;
+    EXPECT_EQ(0u, fs::ExtractPerfSamples(cpuBad.data(), out, &rejected)) << "cpu " << bad;
+    EXPECT_EQ(1u, rejected) << "cpu " << bad;
+
+    auto gpuBad = MakeStats(1);
+    std::memcpy(gpuBad.data() + fs::kPerfAppGpuOffset, &bad, sizeof(bad));
+    rejected = 0;
+    EXPECT_EQ(0u, fs::ExtractPerfSamples(gpuBad.data(), out, &rejected)) << "gpu " << bad;
+    EXPECT_EQ(1u, rejected) << "gpu " << bad;
+  }
+}
+
+TEST(FrameStatsWindow, ANewWindowWithoutCompositorSamplesReportsNoneEvenAfterOneWithSome) {
+  fs::Collector c;
+  fs::PerfSample s;
+  s.appCpuS = 0.005f;
+  s.appGpuS = 0.006f;
+  c.AddPerf(s);
+  EXPECT_TRUE(c.Finish(1).hasPerf);
+  const fs::WindowStats second = c.Finish(1);
+  EXPECT_FALSE(second.hasPerf);
+  EXPECT_EQ(0u, second.perfSamples);
+}
+
+TEST(FrameStatsWindow, CpuAndGpuSumsAndMaximaStartOverInEachWindow) {
+  fs::Collector c;
+  fs::PerfSample big;
+  big.appCpuS = 0.008f;
+  big.appGpuS = 0.009f;
+  c.AddPerf(big);
+  c.Finish(1);
+  fs::PerfSample small;
+  small.appCpuS = 0.001f;
+  small.appGpuS = 0.002f;
+  c.AddPerf(small);
+  const fs::WindowStats w = c.Finish(1);
+  EXPECT_EQ(1000u, w.appCpuMeanUs);
+  EXPECT_EQ(1000u, w.appCpuMaxUs);
+  EXPECT_EQ(2000u, w.appGpuMeanUs);
+  EXPECT_EQ(2000u, w.appGpuMaxUs);
+}
+
+TEST(FrameStatsWindow, TimesAtTheEdgesOfTheRangeRoundAndClamp) {
+  fs::Collector c;
+  fs::PerfSample zero;  // 0 s: zero microseconds, not one
+  c.AddPerf(zero);
+  fs::WindowStats w = c.Finish(1);
+  EXPECT_EQ(0u, w.appCpuMeanUs);
+  EXPECT_EQ(0u, w.appCpuMaxUs);
+  EXPECT_EQ(0u, w.appGpuMaxUs);
+
+  fs::PerfSample sub;  // 0.8 us rounds to 1
+  sub.appCpuS = 8e-7f;
+  c.AddPerf(sub);
+  w = c.Finish(1);
+  EXPECT_EQ(1u, w.appCpuMaxUs);
+
+  fs::PerfSample huge;  // 5000 s is beyond uint32 microseconds: clamped, not wrapped to zero
+  huge.appCpuS = 5000.0f;
+  c.AddPerf(huge);
+  w = c.Finish(1);
+  EXPECT_EQ(UINT32_MAX, w.appCpuMaxUs);
+}
+
+TEST(FrameStatsLine, ATruncatedWindowLineNeverWritesPastTheCapacityAndReturnsWhatItCutOff) {
+  fs::WindowStats w;
+  w.hasPerf = true;
+  char full[512];
+  const int fullLen = fs::FormatWindowLine(full, sizeof(full), w);
+  ASSERT_GT(fullLen, 0);
+  const std::string whole(full);
+  const std::size_t firstPart = whole.find(" app_dropped=");
+  const std::size_t withPerf = whole.find(" elapsed_ms=");
+  ASSERT_NE(std::string::npos, firstPart);
+  ASSERT_NE(std::string::npos, withPerf);
+
+  // cap 40: cut inside the first part; cap 120: the first part fits and the compositor part is cut.
+  for (std::size_t cap : {std::size_t{40}, std::size_t{120}}) {
+    std::vector<char> buf(cap + 64, 'x');
+    const int n = fs::FormatWindowLine(buf.data(), cap, w);
+    for (std::size_t i = cap; i < buf.size(); ++i) ASSERT_EQ('x', buf[i]) << "cap " << cap << " byte " << i;
+    EXPECT_LT(std::strlen(buf.data()), cap);
+    EXPECT_EQ(whole.substr(0, std::strlen(buf.data())), std::string(buf.data())) << "a prefix of the full line";
+    // The result is the length of the part that did not fit: no later part is formatted after the cut.
+    EXPECT_EQ(static_cast<int>(cap == 40 ? firstPart : withPerf), n) << "cap " << cap;
+  }
+}
+
+TEST(FrameStatsPerfExtract, TheOffsetConstantsAreTheSdkLayout) {
+  EXPECT_EQ(0x48u, fs::kPerfEntryStride);
+  EXPECT_EQ(5u, fs::kPerfMaxEntries);
+  EXPECT_EQ(0x168u, fs::kPerfCountOffset);
+  EXPECT_EQ(0x08u, fs::kPerfAppDroppedOffset);
+  EXPECT_EQ(0x14u, fs::kPerfAppCpuOffset);
+  EXPECT_EQ(0x18u, fs::kPerfAppGpuOffset);
+  EXPECT_EQ(0x20u, fs::kPerfCompositorDroppedOffset);
+  EXPECT_EQ(0x17Cu, fs::kPerfStatsSize);
+  EXPECT_EQ(fs::kPerfStatsSize, fs::kPerfMaxEntries * fs::kPerfEntryStride + 0x14u);  // + the five trailing words
+}
+
+// ---- what the hooks and Configure decide ------------------------------------------------------------------
+
+TEST(FrameStatsDecisions, TheRingIsArmedOnlyInFullModeWithTheCallSiteConfirmed) {
+  EXPECT_TRUE(fs::ArmsFrameRing(fs::Mode::Full, true));
+  EXPECT_FALSE(fs::ArmsFrameRing(fs::Mode::Full, false));
+  EXPECT_FALSE(fs::ArmsFrameRing(fs::Mode::PerfOnly, true));
+  EXPECT_FALSE(fs::ArmsFrameRing(fs::Mode::Off, true));
+  EXPECT_STREQ("armed", fs::FrameRingState(fs::Mode::Full, true));
+  EXPECT_STREQ("site_mismatch", fs::FrameRingState(fs::Mode::Full, false));
+  EXPECT_STREQ("off", fs::FrameRingState(fs::Mode::PerfOnly, true));
+  EXPECT_STREQ("off", fs::FrameRingState(fs::Mode::Off, false));
+}
+
+TEST(FrameStatsDecisions, ThePerfCopyKeepsDataInFullAndPerfModesNotOff) {
+  EXPECT_TRUE(fs::KeepsPerfStats(fs::Mode::Full));
+  EXPECT_TRUE(fs::KeepsPerfStats(fs::Mode::PerfOnly));
+  EXPECT_FALSE(fs::KeepsPerfStats(fs::Mode::Off));
+}
+
+TEST(FrameStatsDecisions, ALoopHeadReadingIsRecordedOnlyWhenArmedAndTheClockGaveATime) {
+  EXPECT_TRUE(fs::ShouldRecordLoopHead(1, true));
+  EXPECT_FALSE(fs::ShouldRecordLoopHead(0, true));
+  EXPECT_FALSE(fs::ShouldRecordLoopHead(5000000, false));
+}
+
+TEST(FrameStatsDecisions, ARecordedLoopHeadReadingCarriesTheTimeAndTheRingsDropCount) {
+  fs::SpscRing<fs::FrameSlot, 2> ring;
+  fs::RecordLoopHead(ring, 111);
+  fs::RecordLoopHead(ring, 222);
+  fs::RecordLoopHead(ring, 333);  // full: dropped
+  fs::RecordLoopHead(ring, 444);  // full: dropped
+  fs::FrameSlot a, b, c;
+  ASSERT_TRUE(ring.Pop(a));
+  ASSERT_TRUE(ring.Pop(b));
+  EXPECT_FALSE(ring.Pop(c));
+  EXPECT_EQ(111u, a.us);
+  EXPECT_EQ(0u, a.dropped);
+  EXPECT_EQ(222u, b.us);
+  EXPECT_EQ(0u, b.dropped);
+  fs::RecordLoopHead(ring, 555);
+  ASSERT_TRUE(ring.Pop(c));
+  EXPECT_EQ(555u, c.us);
+  EXPECT_EQ(2u, c.dropped);
+}
+
+TEST(FrameStatsDecisions, ThePerfResultIsCopiedOnlyOnSuccessWithABufferWhileTheProbeIsOn) {
+  auto stats = MakeStats(1);
+  EXPECT_TRUE(fs::ShouldCopyPerf(0, stats.data(), true));
+  EXPECT_TRUE(fs::ShouldCopyPerf(7, stats.data(), true));
+  EXPECT_FALSE(fs::ShouldCopyPerf(-1, stats.data(), true));
+  EXPECT_FALSE(fs::ShouldCopyPerf(-1004, stats.data(), true));  // ovr_GetPerfStats with no session
+  EXPECT_FALSE(fs::ShouldCopyPerf(0, nullptr, true));
+  EXPECT_FALSE(fs::ShouldCopyPerf(0, stats.data(), false));
+}
+
+TEST(FrameStatsDecisions, CapturingAPerfResultPushesTheEntriesOldestFirstAndCountsTheRefusedOnes) {
+  fs::SpscRing<fs::PerfSample, 8> ring;
+  std::atomic<uint64_t> rejected{0};
+  auto stats = MakeStats(3);
+  fs::CapturePerf(stats.data(), ring, rejected);
+  EXPECT_EQ(0u, rejected.load());
+  fs::PerfSample s;
+  ASSERT_TRUE(ring.Pop(s));
+  EXPECT_EQ(102, s.appDropped);  // entry 2 is the oldest
+  ASSERT_TRUE(ring.Pop(s));
+  EXPECT_EQ(101, s.appDropped);
+  ASSERT_TRUE(ring.Pop(s));
+  EXPECT_EQ(100, s.appDropped);
+  EXPECT_FALSE(ring.Pop(s));
+
+  auto bad = MakeStats(2);
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  std::memcpy(bad.data() + 0x48 + 0x14, &nan, sizeof(nan));  // entry 1's cpu time
+  fs::CapturePerf(bad.data(), ring, rejected);
+  EXPECT_EQ(1u, rejected.load());
+  ASSERT_TRUE(ring.Pop(s));
+  EXPECT_EQ(100, s.appDropped);  // only entry 0 survived
+  EXPECT_FALSE(ring.Pop(s));
+
+  auto outOfRange = MakeStats(9);
+  fs::CapturePerf(outOfRange.data(), ring, rejected);
+  EXPECT_EQ(2u, rejected.load());
+  EXPECT_FALSE(ring.Pop(s));
 }

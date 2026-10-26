@@ -43,12 +43,8 @@ WindowClock g_clock;
 int32_t __fastcall PerfStatsHook(void* session, void* outStats) {
   nevr_hook_liveness::Mark(nevr_hook_liveness::kOvrGetPerfStats);
   const int32_t result = g_originalPerfStats(session, outStats);
-  if (result >= 0 && outStats != nullptr && g_perfOn.load(std::memory_order_relaxed)) {  // OVR_SUCCESS(result)
-    PerfSample samples[kPerfMaxEntries];
-    std::size_t rejected = 0;
-    const std::size_t n = ExtractPerfSamples(outStats, samples, &rejected);
-    for (std::size_t i = 0; i < n; ++i) g_perfRing.Push(samples[i]);
-    if (rejected != 0) g_perfRejected.fetch_add(rejected, std::memory_order_relaxed);
+  if (ShouldCopyPerf(result, outStats, g_perfOn.load(std::memory_order_relaxed))) {  // OVR_SUCCESS(result)
+    CapturePerf(outStats, g_perfRing, g_perfRejected);
   }
   return result;
 }
@@ -73,23 +69,22 @@ const char* InstallPerfStatsHook(uintptr_t gameBase, bool isServer) {
 }  // namespace
 
 void Configure(uintptr_t gameBase, bool isServer, Mode mode, bool recognised) {
-  const char* frameRing = "off";
+  bool callSiteMatches = false;
   if (mode == Mode::Full) {
     const void* site = nevr::ResolveVA_Checked(gameBase, nevr::ECHOVR_DEFAULT_IMAGE_BASE + kLoopHeadCallRva);
-    if (LoopHeadCallMatches(site)) {
-      g_frameRingOn.store(true, std::memory_order_release);
-      frameRing = "armed";
-    } else {
-      frameRing = "site_mismatch";
+    callSiteMatches = LoopHeadCallMatches(site);
+    if (!callSiteMatches) {
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.PERF] frame ring not armed va=0x%llx reason=loop_head_call_mismatch",
           static_cast<unsigned long long>(nevr::ECHOVR_DEFAULT_IMAGE_BASE + kLoopHeadCallRva));
     }
   }
+  const char* frameRing = FrameRingState(mode, callSiteMatches);
+  g_frameRingOn.store(ArmsFrameRing(mode, callSiteMatches), std::memory_order_release);
   // The copy is installed on every client whatever the switch says (so the ring's own cost can be measured
   // against the game's app_cpu with the ring off); it keeps what it reads only while the probe is on.
   const char* perfHook = InstallPerfStatsHook(gameBase, isServer);
-  g_perfOn.store(mode != Mode::Off, std::memory_order_release);
+  g_perfOn.store(KeepsPerfStats(mode), std::memory_order_release);
   g_mode.store(mode, std::memory_order_release);
 
   if (!recognised) {
@@ -103,8 +98,8 @@ void Configure(uintptr_t gameBase, bool isServer, Mode mode, bool recognised) {
 }
 
 void OnLoopHead(uint64_t nowUs) {
-  if (nowUs == 0 || !g_frameRingOn.load(std::memory_order_relaxed)) return;
-  g_frameRing.Push(FrameSlot{nowUs, g_frameRing.Dropped()});
+  if (!ShouldRecordLoopHead(nowUs, g_frameRingOn.load(std::memory_order_relaxed))) return;
+  RecordLoopHead(g_frameRing, nowUs);
 }
 
 void Poll(uint64_t nowUs) {

@@ -183,7 +183,8 @@ struct PerfSample {
 
 // Layout of ovrPerfStats, from the Oculus PC SDK 1.35.0 OVR_CAPI.h (ovrPerfStatsPerCompositorFrame_, then
 // ovrPerfStats_). Every field is 4 bytes except ovrBool (a char, padded to 4 by OVR_ALIGNAS(4)), so an entry
-// is 18 x 4 = 0x48 bytes and the structure is 5 x 0x48 + 0x18 = 0x17c:
+// is 18 x 4 = 0x48 bytes and the structure is 5 x 0x48 + 0x14 = 0x17c (FrameStatsCount, AnyFrameStatsDropped,
+// AdaptiveGpuPerformanceScale, AswIsAvailable and VisibleProcessId follow the entries, 4 bytes each):
 //   +0x00 HmdVsyncIndex          +0x04 AppFrameIndex          +0x08 AppDroppedFrameCount
 //   +0x0c AppMotionToPhotonLatency   +0x10 AppQueueAheadTime  +0x14 AppCpuElapsedTime
 //   +0x18 AppGpuElapsedTime      +0x1c CompositorFrameIndex   +0x20 CompositorDroppedFrameCount
@@ -426,6 +427,48 @@ class WindowClock {
  private:
   uint64_t startUs_ = 0;
 };
+
+// ---------------------------------------------------------------------------------------------------------
+// What the hooks and Configure decide (pure, so the host test can force each branch)
+// ---------------------------------------------------------------------------------------------------------
+
+/// The ring is armed only in Full mode and only when the bytes before the loop head's return address are the call
+/// to GetTimeMicroseconds. The name is what the start line reports.
+inline const char* FrameRingState(Mode mode, bool callSiteMatches) {
+  if (mode != Mode::Full) return "off";
+  return callSiteMatches ? "armed" : "site_mismatch";
+}
+
+/// Whether the GetTimeMicroseconds hook may push readings: the same condition as the name above says "armed".
+inline bool ArmsFrameRing(Mode mode, bool callSiteMatches) { return mode == Mode::Full && callSiteMatches; }
+
+/// The perf copy keeps what it reads whenever the probe is on in either mode.
+inline bool KeepsPerfStats(Mode mode) { return mode != Mode::Off; }
+
+/// The GetTimeMicroseconds hook pushes a reading only when the ring is armed and the clock gave a time.
+inline bool ShouldRecordLoopHead(uint64_t nowUs, bool ringArmed) { return nowUs != 0 && ringArmed; }
+
+/// One loop-head reading, stamped with the ring's drop count so the reader can see a gap.
+template <std::size_t N>
+inline void RecordLoopHead(SpscRing<FrameSlot, N>& ring, uint64_t nowUs) {
+  ring.Push(FrameSlot{nowUs, ring.Dropped()});
+}
+
+/// The ovr_GetPerfStats copy keeps a result only when the call succeeded (OVR_SUCCESS: >= 0), the game gave a
+/// buffer, and the probe is on.
+inline bool ShouldCopyPerf(int32_t result, const void* outStats, bool keep) {
+  return result >= 0 && outStats != nullptr && keep;
+}
+
+/// Copies one successful ovr_GetPerfStats result into the ring and counts the entries ExtractPerfSamples refused.
+template <std::size_t N>
+inline void CapturePerf(const void* stats, SpscRing<PerfSample, N>& ring, std::atomic<uint64_t>& rejectedTotal) {
+  PerfSample samples[kPerfMaxEntries];
+  std::size_t rejected = 0;
+  const std::size_t n = ExtractPerfSamples(stats, samples, &rejected);
+  for (std::size_t i = 0; i < n; ++i) ring.Push(samples[i]);
+  if (rejected != 0) rejectedTotal.fetch_add(rejected, std::memory_order_relaxed);
+}
 
 // ---------------------------------------------------------------------------------------------------------
 // The lines
