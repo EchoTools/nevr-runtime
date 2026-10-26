@@ -55,9 +55,28 @@ class ModeIsReadBeforeTheFirstPluginPass(unittest.TestCase):
         for own in ("tolower", "towlower", "_stricmp", "lstrcmpiW", "wcsicmp"):
             self.assertNotIn(own, trust, "the name rule is cmdline_strip.h's; do not write a second one")
 
+    def test_a_throw_while_reading_the_line_makes_the_run_signed_only_and_nothing_is_swallowed(self):
+        trust = code(read("src/runtime/ext/plugin_trust.cpp"))
+        body = trust[trust.index("void ApplyCommandLine("):]
+        body = body[:body.index("\n}\n")]
+        self.assertIn("catch (const std::exception&)", body)
+        self.assertNotIn("catch (...)", trust, "the addendum forbids an ellipsis catch")
+        handler = body[body.index("catch (const std::exception&)"):]
+        handler = handler[:handler.index("return;")]
+        self.assertIn("Mode::SignedOnly", handler)
+        self.assertIn("ModeSource::CommandLineReadFailed", handler)
+
+    def test_the_argv_buffer_is_owned_so_no_path_leaks_it(self):
+        trust = code(read("src/runtime/ext/plugin_trust.cpp"))
+        self.assertIn("using ArgvPtr = std::unique_ptr<wchar_t*, ArgvDeleter>;", trust)
+        self.assertEqual(trust.count("LocalFree("), 1, "one owner frees the CommandLineToArgvW buffer")
+        self.assertNotIn("LocalFree(argv)", trust.replace("LocalFree(argv) == nullptr", ""))
+
     def test_either_reading_finding_the_flag_makes_the_run_signed_only(self):
         trust = code(read("src/runtime/ext/plugin_trust.cpp"))
-        self.assertRegex(trust, r"GameReadsTheFlag\(ansiLine\)\s*\|\|\s*ArgvReadsTheFlag\(wideLine\)")
+        self.assertIn("game = GameReading(ansiLine);", trust)
+        self.assertIn("argv = ArgvReading(wideLine);", trust)
+        self.assertIn("game == Reading::Found || argv == Reading::Found", trust)
         self.assertIn("ApplyUnreadableCommandLine();", trust[trust.index("void ApplyCommandLine("):])
 
     def test_the_preflight_runs_before_the_early_plugin_pass(self):

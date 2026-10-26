@@ -1081,12 +1081,20 @@ static void StatePluginTrustMode() {
   if (g_trustModeStated) return;
   g_trustModeStated = true;
   const nevr_plugin_trust::Mode mode = nevr_plugin_trust::ActiveMode();
-  Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] plugin trust: mode=%s source=%s build=%s literal=\"%s\" (%s)",
-      nevr_plugin_trust::ModeWord(mode), nevr_plugin_trust::ModeSourceWord(nevr_plugin_trust::ActiveModeSource()),
-      nevr_plugin_trust::BuildWord(), nevr_plugin_trust::ModeLiteral(),
-      mode == nevr_plugin_trust::Mode::SignedOnly
-          ? "a plugin not signed through the release pipeline does not load"
-          : "plugins load whether or not they are signed; -require-signed-plugins makes a run signed-only");
+  const nevr_plugin_trust::ModeSource source = nevr_plugin_trust::ActiveModeSource();
+  // A run that is signed-only because its command line could not be read is a degraded start, not the operator's choice.
+  const bool failedRead = source == nevr_plugin_trust::ModeSource::CommandLineUnreadable ||
+                          source == nevr_plugin_trust::ModeSource::CommandLineReadFailed;
+  const char* consequence =
+      failedRead ? "the command line could not be read, so whether -require-signed-plugins was given is unknown: a plugin "
+                   "not signed through the release pipeline does not load"
+      : mode == nevr_plugin_trust::Mode::SignedOnly ? "a plugin not signed through the release pipeline does not load"
+                                                     : "plugins load whether or not they are signed; "
+                                                       "-require-signed-plugins makes a run signed-only";
+  Log(failedRead ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
+      "[NEVR.PLUGIN] plugin trust: mode=%s source=%s build=%s literal=\"%s\" (%s)", nevr_plugin_trust::ModeWord(mode),
+      nevr_plugin_trust::ModeSourceWord(source), nevr_plugin_trust::BuildWord(), nevr_plugin_trust::ModeLiteral(),
+      consequence);
 }
 
 void LoadPlugins(PluginPhase phase) {

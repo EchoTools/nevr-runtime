@@ -218,8 +218,8 @@ The mode is set by the command line and by nothing else:
   not. The line is read two ways, the game's over `GetCommandLineA()` and `CommandLineToArgvW`'s over `GetCommandLineW()` (each argument
   converted to the ANSI code page), and `signed-only` wins if either finds the argument. A token inside a quoted value is not an option
   to the game and not the argument; a quoted `"-require-signed-plugins"` is the argument to `CommandLineToArgvW` and so counts. If a
-  line cannot be read or converted, whether the argument was given is unknown and the run is `signed-only`
-  (`ApplyUnreadableCommandLine`). The argument is registered with the game's parser (`cli.cpp`), because the game rejects a token
+  line cannot be read or converted, or reading it throws a `std::exception` (out of memory), whether the argument was given is unknown and
+  the run is `signed-only`; the mode line then says `source=command line unreadable` or `source=command line read failed` at Warning. The argument is registered with the game's parser (`cli.cpp`), because the game rejects a token
   with no syntax entry, and listed in the README.
 - **No config key and no environment variable sets the mode.** `config.yaml` is data a plugin or an installer can write, and the
   environment is inherited from whatever started the game; the command line is the one input a player types.

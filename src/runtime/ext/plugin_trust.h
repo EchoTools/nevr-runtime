@@ -22,6 +22,7 @@ enum class ModeSource {
   Default,                // no -require-signed-plugins on the command line
   CommandLine,            // -require-signed-plugins was on the command line
   CommandLineUnreadable,  // the command line could not be read, so signatures are required (fail closed)
+  CommandLineReadFailed,  // reading the command line threw (out of memory), so signatures are required (fail closed)
 };
 
 // True in the build the NEVR_ALLOW_UNSIGNED_PLUGINS option makes (the mingw-plugin-dev preset), which tools/package_release.py
@@ -46,7 +47,8 @@ const char* ModeLiteral();
 // GetCommandLineW(). The line is read two ways and either finding the flag makes the run SignedOnly: the game's own
 // way (its tokenizer and name rule, runtime/lifecycle/cmdline_strip.h: '-', '+' and 0x96 prefixes, any case, quoted
 // tokens are parameters) and CommandLineToArgvW's (what NEVR's own arguments come from), converted to the ANSI code
-// page. A null line is an unreadable one (SignedOnly). Called once, before the first LoadPlugins
+// page. A null line, a line a reading cannot parse or convert, and a reading that throws a std::exception are
+// unreadable ones: SignedOnly, with the source saying which (ModeSource). Called once, before the first LoadPlugins
 // (PreflightRuntimeBootstrap), so the early pass, the normal pass and the late-load filter read the same mode; later
 // calls replace the earlier one.
 void ApplyCommandLine(const wchar_t* wideLine, const char* ansiLine);
@@ -73,7 +75,26 @@ Mode ActiveMode();
 ModeSource ActiveModeSource();
 const nevr_plugin_signature::Policy& ActivePolicy();
 
+// The points of ApplyCommandLine's reading where a test build can make it fail (TestHook_SetReadFault); production
+// builds name them and never act on them.
+enum class ReadStage {
+  GameTokens,      // before the game's tokenizer builds its token list
+  ArgvParse,       // CommandLineToArgvW
+  ArgvParsed,      // CommandLineToArgvW returned a buffer that is now live
+  ArgvSizeQuery,   // WideCharToMultiByte, the size of an argument
+  ArgvText,        // before the converted text of an argument is allocated
+  ArgvConversion,  // WideCharToMultiByte, the text of an argument
+};
+
 #ifdef NEVR_TEST_HOOKS
+// Test builds only: called at each stage; true means the call at that stage fails (the reading is unreadable), and the
+// hook may throw instead.
+using ReadFaultHook = bool (*)(ReadStage);
+void TestHook_SetReadFault(ReadFaultHook hook);
+// Test builds only: CommandLineToArgvW buffers handed out and not yet freed (0 once ApplyCommandLine has returned, on
+// every path).
+int TestHook_ArgvBuffersLive();
+
 // Test builds only: enforce with `policy` (not owned; must outlive the use) in `mode`.
 void TestHook_SetTrust(Mode mode, const nevr_plugin_signature::Policy* policy);
 void TestHook_ResetTrust();

@@ -38,6 +38,8 @@
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <signal.h>
+#include <new>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -947,6 +949,33 @@ void ApplyArgs(std::initializer_list<const wchar_t*> args) {
   }
   ApplyLine(line);
 }
+
+// The read-fault seam of nevr_plugin_trust::ApplyCommandLine: at one stage the hook throws a std::exception or reports
+// that the call there failed.
+enum class InjectedFault { None, ThrowBadAlloc, ThrowLengthError, CallFails };
+nevr_plugin_trust::ReadStage g_faultStage = nevr_plugin_trust::ReadStage::GameTokens;
+InjectedFault g_fault = InjectedFault::None;
+
+bool InjectAtStage(nevr_plugin_trust::ReadStage stage) {
+  if (stage != g_faultStage) return false;
+  switch (g_fault) {
+    case InjectedFault::ThrowBadAlloc:
+      throw std::bad_alloc();
+    case InjectedFault::ThrowLengthError:
+      throw std::length_error("injected");
+    case InjectedFault::CallFails:
+      return true;
+    case InjectedFault::None:
+      break;
+  }
+  return false;
+}
+
+void ArmReadFault(nevr_plugin_trust::ReadStage stage, InjectedFault fault) {
+  g_faultStage = stage;
+  g_fault = fault;
+  nevr_plugin_trust::TestHook_SetReadFault(&InjectAtStage);
+}
 }  // namespace
 
 class PluginRunModeTest : public ::testing::Test {
@@ -1212,6 +1241,62 @@ TEST_F(PluginRunModeTest, TextTheGameDoesNotReadAsTheFlagLeavesTheRunUnsignedAll
     EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::UnsignedAllowed) << "line " << line;
     EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::Default) << line;
   }
+}
+
+// A std::bad_alloc (or any std::exception) while the line is read must not leave the run unsigned-allowed: the flag is
+// then unknown. The line has no flag, so the run is unsigned-allowed unless the fault is what decides.
+TEST_F(PluginRunModeTest, AnExceptionWhileReadingTheLineMakesTheRunSignedOnly) {
+  using nevr_plugin_trust::ReadStage;
+  ApplyArgs({L"echovr.exe", L"-windowed"});
+  ASSERT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::UnsignedAllowed) << "the premise: no fault, no flag";
+
+  for (ReadStage stage : {ReadStage::GameTokens, ReadStage::ArgvParsed, ReadStage::ArgvText}) {
+    for (InjectedFault fault : {InjectedFault::ThrowBadAlloc, InjectedFault::ThrowLengthError}) {
+      nevr_plugin_trust::TestHook_ResetTrust();
+      ArmReadFault(stage, fault);
+      ApplyArgs({L"echovr.exe", L"-windowed"});
+      EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly)
+          << "stage " << static_cast<int>(stage) << " fault " << static_cast<int>(fault);
+      EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::CommandLineReadFailed);
+      EXPECT_EQ(nevr_plugin_trust::TestHook_ArgvBuffersLive(), 0)
+          << "the CommandLineToArgvW buffer is freed on the path that threw";
+    }
+  }
+}
+
+// A call that fails (not an exception) is an unreadable line too, with the buffer freed on every path.
+TEST_F(PluginRunModeTest, AReadThatFailsMakesTheRunSignedOnlyAndFreesTheArgvBuffer) {
+  using nevr_plugin_trust::ReadStage;
+  for (ReadStage stage : {ReadStage::ArgvParse, ReadStage::ArgvSizeQuery, ReadStage::ArgvConversion}) {
+    nevr_plugin_trust::TestHook_ResetTrust();
+    ArmReadFault(stage, InjectedFault::CallFails);
+    ApplyArgs({L"echovr.exe", L"-windowed"});
+    EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly) << "stage " << static_cast<int>(stage);
+    EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::CommandLineUnreadable)
+        << "stage " << static_cast<int>(stage);
+    EXPECT_EQ(nevr_plugin_trust::TestHook_ArgvBuffersLive(), 0) << "stage " << static_cast<int>(stage);
+  }
+}
+
+// Both readings always run: a flag the game reading finds is the flag even when the other reading cannot read the line.
+TEST_F(PluginRunModeTest, AReadingThatCannotReadDoesNotHideAFlagTheOtherFound) {
+  ArmReadFault(nevr_plugin_trust::ReadStage::ArgvParse, InjectedFault::CallFails);
+  ApplyArgs({L"echovr.exe", L"-REQUIRE-SIGNED-PLUGINS"});
+  EXPECT_EQ(nevr_plugin_trust::ActiveMode(), nevr_plugin_trust::Mode::SignedOnly);
+  EXPECT_EQ(nevr_plugin_trust::ActiveModeSource(), nevr_plugin_trust::ModeSource::CommandLine);
+}
+
+TEST_F(PluginRunModeTest, ARunWhoseLineCouldNotBeReadSaysSoAtWarningAndRefusesTheUnsignedPlugin) {
+  ArmReadFault(nevr_plugin_trust::ReadStage::GameTokens, InjectedFault::ThrowBadAlloc);
+  ApplyArgs({L"echovr.exe"});
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "[NEVR.PLUGIN] plugin trust: mode=signed-only source=command line read failed"));
+  EXPECT_TRUE(TestLogContains("the command line could not be read"));
 }
 
 TEST_F(PluginRunModeTest, ALineThatIsNotThereIsAnUnreadableOne) {
