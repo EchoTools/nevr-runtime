@@ -12,7 +12,11 @@ void BugSplat_MiniDmpSender_Ctor(void*, const wchar_t*, const wchar_t*, const wc
   nevr_host::OnCrashReporterConstructed();  // reports the attach decisions recorded so far
 }
 void BugSplat_MiniDmpSender_Dtor(void*) {}
-void BugSplat_createReport(void*, PEXCEPTION_POINTERS) {}
+// The game's HandleCrashDump builds a MiniDmpSender on its stack and calls createReport with the
+// exception pointers it was handed. The host writes the minidump; it needs nothing from the runtime.
+void BugSplat_createReport(void*, PEXCEPTION_POINTERS exception_pointers) {
+  nevr_host::CreateReport(exception_pointers);
+}
 unsigned long BugSplat_getFlags(void*) { return 0; }
 void BugSplat_resetAppIdentifier(void*, const wchar_t*) {}
 void BugSplat_sendAdditionalFile(void*, const wchar_t*) {}
