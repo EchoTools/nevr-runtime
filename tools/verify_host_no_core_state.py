@@ -53,7 +53,8 @@ def shared_state(host_symbols, library_symbols_by_name):
 
 
 def check(host_listing, library_listings):
-    """`library_listings` is {label: nm output}. Raises SensorError on a shared name or a comparison that saw nothing."""
+    """`library_listings` is {label: nm output}. Raises SensorError when the host defines a writable symbol one of the libraries also defines,
+    or when a comparison saw nothing."""
     host = data_symbols(host_listing)
     if not host:
         raise SensorError("the host defines no writable data symbols: it is stripped, or this is not the host "

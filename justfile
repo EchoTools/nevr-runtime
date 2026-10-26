@@ -2560,8 +2560,9 @@ verify:
     fi
     # #853 (ADR 0012 decision 4): the host shares no writable data symbol with the core or ABI library. Run on the
     # build's own UNSTRIPPED bin/BugSplat64.dll (dist strips a copy later; a stripped host has no symbols to read and
-    # the tool then fails). The tool reads nm itself and fails closed: nm failing, an empty listing or a shared name
-    # all exit 1 (N93: no stage that can answer "no match" for "could not look").
+    # the tool then fails). The tool reads nm itself and fails closed: nm failing, an empty listing or a writable symbol
+    # the host shares with libnevr_core.a or libnevr_abi.a all exit 1 (N93: no stage that can answer "no match" for
+    # "could not look").
     python3 tools/verify_host_no_core_state.py --host-dll "build/{{ preset }}/bin/BugSplat64.dll" --lib "build/{{ preset }}/src/core/libnevr_core.a" --lib "build/{{ preset }}/src/abi/libnevr_abi.a"
     # #850: both shipped Windows files carry the pinned VERSIONINFO (Details tab), at the version the DLL's
     # own NEVR-BUILD literal states. Fail-closed: a file without the resource, a changed field or a

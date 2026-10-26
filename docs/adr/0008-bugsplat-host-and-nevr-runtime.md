@@ -267,6 +267,9 @@ Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
   runtime code: `tools/verify_pe_contract.py` pins its imports, its size and its image base, and
   `tools/verify_host_no_core_state.py` (run by `just verify` on the unstripped build) fails when the host
   defines writable data that `libnevr_core.a` or `libnevr_abi.a` also defines.
+- No exception crosses between the two images. The runtime catches everything in its `initialize` and in its 16 export entries
+  (`src/runtime/lifecycle/export_guard.h`), and the host's `RuntimeLoader::CallInitialize` catches whatever a runtime throws; these
+  are the only ellipsis catches the C++ addendum allows, at a DLL boundary, and each says why on its line.
 - After the flip the runtime does not hook the main wrapper; the host's detour is the only
   hook on it. The host context carries that hook's target and the first bytes found there
   after the host enabled it, with a flag (`wrapper_hook_bytes_valid`) that says whether those

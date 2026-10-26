@@ -95,6 +95,14 @@ A dev build (the `NEVR_ALLOW_UNSIGNED_PLUGINS` build of ADR 0010) loads an unsig
 defines, and carries the same `NEVR-PLUGIN-TRUST` literal; a plugin developer's dev host must load a dev `nevr-runtime.dll`. A signed-only
 build refuses it.
 
+### Until that check ships, the host loads `nevr-runtime.dll` unverified
+
+Step 2 maps `nevr-runtime.dll` with no check of the file: `RuntimeLoader::Load` in `src/runtime/host/runtime_load.cpp` resolves the path
+beside `BugSplat64.dll` and calls `LoadLibraryExW` with the DLL-directory and System32 search flags. The risk is accepted while the runtime
+sits beside `BugSplat64.dll`: anyone who can write that folder can already replace the host, and ADR 0010's threat model puts a replaced
+`BugSplat64.dll` outside what the gate protects. A runtime in a root a player can write without replacing the host has no such cover, so
+step 4 (the move to `%LOCALAPPDATA%`) does not ship before step 3, the check in the section above.
+
 ### Where state resolves
 
 - `nevr-runtime.dll` and `plugins\` resolve under the root. The plugin directory filter of ADR 0010 follows the plugin directory.
