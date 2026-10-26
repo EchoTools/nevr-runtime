@@ -4,9 +4,9 @@
 A release is a version (plain semver, taken from the tag) plus GitHub's pre-release flag. Nothing in a
 file depends on that flag, so promoting a release changes no byte: this tool has no flag input.
 
-  package_release.py tree  --version X.Y.Z --commit <sha40> --out DIR --dll BugSplat64.dll --server-exe echovr_server.exe
-                           --pc-header H
-      CI: gate the DLL and write the package tree (what the signing step signs) + release.json
+  package_release.py tree  --version X.Y.Z --commit <sha40> --out DIR --dll BugSplat64.dll --runtime-dll nevr-runtime.dll
+                           --server-exe echovr_server.exe --pc-header H
+      CI: gate the two DLLs and write the package tree (what the signing step signs) + release.json
   package_release.py seal  --tree DIR --out DIR [--require-signed]
       CI: zip the (signed or unsigned) tree with a SHA256SUMS regenerated from the files as they are now.
       The release is that one zip (the Quest library is built by its own job); it carries no Quest APK, and
@@ -15,12 +15,12 @@ file depends on that flag, so promoting a release changes no byte: this tool has
       the release body: the notes plus a SHA-256 table of the release's two assets (the zip and the Quest
       library) as they are in DIR, written after signing, from the final bytes
   package_release.py stamp --dll BugSplat64.dll [--version X.Y.Z] [--commit <sha40>]
-      CI: assert the DLL's one identity literal agrees with what the workflow computed
+      CI: assert a DLL's one identity literal agrees with what the workflow computed (run on each of the two)
   package_release.py quest-library --lib libovrplatformloader.so --version X.Y.Z --commit <sha40>
       CI: assert the Quest library carries exactly this version and this commit. It has no identity literal:
       kVersion and the short kCommit (cmake/nevr_build_info.h.in) and the full commit of the sentinel's build
       record are separate NUL-bounded strings, so each is matched whole.
-  package_release.py --commit <sha40> --out DIR --dll ... --server-exe ... --apk ... --pc-header ...
+  package_release.py --commit <sha40> --out DIR --dll ... --runtime-dll ... --server-exe ... --apk ... --pc-header ...
                      --quest-header ... --quest-build-info ...        (`just package-dev`, a LOCAL build)
       the full gate for a local development build (its version is X.Y.(Z+1)-dev.N+sha, never a release),
       then the same tree + seal, with the tester Quest APK, its SHA256SUMS and notes. Never attached to a
@@ -28,9 +28,11 @@ file depends on that flag, so promoting a release changes no byte: this tool has
 
 The identity literal (src/core/build_identity.cpp) is the one string binding version and commit:
     NEVR-BUILD <version> <commit40>        (NUL-bounded, exactly one per DLL)
-It does not build anything and never tags or uploads. It refuses (exit 1, nothing written) unless the
-DLL embeds exactly config/public-defaults.env (tools/check_embedded_defaults.py) and its identity literal
-carries the expected version and the build's commit.
+The package carries two DLLs of one build: BugSplat64.dll, the thin host the game loads, and nevr-runtime.dll, the
+runtime the host loads (docs/adr/0012-static-install-root.md). It does not build anything and never tags or uploads.
+It refuses (exit 1, nothing written) unless the runtime embeds exactly config/public-defaults.env
+(tools/check_embedded_defaults.py; the host embeds no endpoints), each DLL's identity literal carries the expected
+version and the build's commit and the two literals are the same, and the runtime (alone) says it is a release build.
 """
 
 import argparse
@@ -50,6 +52,9 @@ import pe_version_info  # noqa: E402
 
 PACKAGE_DIR = REPO / "tools" / "package-release"
 SENTINEL_IN_APK = "lib/arm64-v8a/libovrplatformloader.so"
+# The two DLLs of the package: the host the game loads, and the runtime the host loads at the rendezvous.
+HOST_DLL = "BugSplat64.dll"
+RUNTIME_DLL = "nevr-runtime.dll"
 # The dedicated-server launcher that rides in the Windows zip next to BugSplat64.dll.
 SERVER_EXE = "echovr_server.exe"
 
@@ -104,13 +109,21 @@ def plugin_trust_problems(label: str, blob: bytes) -> list:
     return []
 
 
-def expected_identity_problems(label: str, blob: bytes, version, commit: str) -> list:
-    """`version` None: any development version (a local build); else exactly that release version."""
+def host_trust_problems(label: str, blob: bytes) -> list:
+    """The host loads no plugin, so a plugin-trust literal in it means runtime code moved into the host."""
+    if PLUGIN_TRUST.search(blob):
+        return [f"{label}: carries a NEVR-PLUGIN-TRUST literal; the plugin loader is the runtime's, not the host's"]
+    return []
+
+
+def expected_identity_problems(label: str, blob: bytes, version, commit: str, runtime: bool = True) -> list:
+    """`version` None: any development version (a local build); else exactly that release version. `runtime`:
+    the runtime says it is a release build; the host carries no plugin-trust literal at all."""
     try:
         got_version, got_commit = identity_in(blob, label)
     except GateFailure as error:
         return [str(error)]
-    problems = plugin_trust_problems(label, blob)
+    problems = plugin_trust_problems(label, blob) if runtime else host_trust_problems(label, blob)
     if version is None:
         if not DEV_VERSION.match(got_version):
             problems.append(f"{label}: version '{got_version}' is not a development version "
@@ -173,21 +186,28 @@ def ps1_has_signature_block(path: Path) -> bool:
     return b"# SIG # Begin signature block" in path.read_bytes()
 
 
-def windows_problems(args, dll: Path) -> list:
-    """The Windows half of the gate: embedded defaults, the identity literal (version and commit), and the
-    VERSIONINFO of both files at that version (tools/pe_version_info.py)."""
-    problems = [f"windows: {p}" for p in defaults_check.check(Path(args.defaults), Path(args.pc_header), [dll])]
-    problems += expected_identity_problems("windows", dll.read_bytes(), args.version, args.commit)
+def windows_problems(args, dll: Path, runtime: Path) -> list:
+    """The Windows half of the gate: the runtime embeds the defaults (the host embeds none), each DLL's identity
+    literal (version and commit) and the two literals are one, and the VERSIONINFO of the three files at that
+    version (tools/pe_version_info.py)."""
+    problems = [f"windows: {p}" for p in defaults_check.check(Path(args.defaults), Path(args.pc_header), [runtime])]
+    problems += expected_identity_problems(HOST_DLL, dll.read_bytes(), args.version, args.commit, runtime=False)
+    problems += expected_identity_problems(RUNTIME_DLL, runtime.read_bytes(), args.version, args.commit)
+    try:
+        if identity_in(dll.read_bytes(), HOST_DLL) != identity_in(runtime.read_bytes(), RUNTIME_DLL):
+            problems.append(f"{HOST_DLL} and {RUNTIME_DLL} carry different identity literals: not one build")
+    except GateFailure:
+        pass  # the literal that is missing or doubled is already a problem above
     server = Path(args.server_exe)
     if not server.is_file() or server.read_bytes()[:2] != b"MZ":
         problems.append(f"windows: {SERVER_EXE} is missing or not a PE file: {server}")
-    problems += [f"windows: {p}" for p in pe_version_info.check(dll, server, args.version or None)]
+    problems += [f"windows: {p}" for p in pe_version_info.check(dll, server, args.version or None, runtime)]
     return problems
 
 
 def gate(args, work: Path) -> dict:
     """The full local gate (`just package-dev`): Windows and Quest, development version only."""
-    problems = windows_problems(args, Path(args.dll))
+    problems = windows_problems(args, Path(args.dll), Path(args.runtime_dll))
     with zipfile.ZipFile(args.apk) as apk:
         try:
             sentinel = work / "libovrplatformloader.so"
@@ -202,7 +222,7 @@ def gate(args, work: Path) -> dict:
     for key, what in (("NEVR_SOCKET_URI", "socket URI"), ("NEVR_PUBLIC_SOCKET_KEY", "server key")):
         if not embedded[key]:
             problems.append(f"quest: no embedded {what}: the APK would need a config.yaml to log in")
-    version, _ = identity_in(Path(args.dll).read_bytes(), "windows") if not problems else (None, None)
+    version, _ = identity_in(Path(args.runtime_dll).read_bytes(), "windows") if not problems else (None, None)
     if version is not None:
         if info["kVersion"] != version:
             problems.append(f"quest: build info version '{info['kVersion']}' is not the DLL's '{version}'")
@@ -236,7 +256,7 @@ def quest_library_problems(blob: bytes, version: str, commit: str) -> list:
 def stamp_check(dll: Path, version, commit: str = "") -> str:
     """The CI assertion after the build. `version` set: the identity literal must be exactly that release
     version; unset: it must be a development version. `commit` (when given): the checked-out commit."""
-    problems = expected_identity_problems(dll.name, dll.read_bytes(), version, commit)
+    problems = expected_identity_problems(dll.name, dll.read_bytes(), version, commit, runtime=dll.name != HOST_DLL)
     if problems:
         raise GateFailure("\n".join(problems))
     found_version, found_commit = identity_in(dll.read_bytes(), dll.name)
@@ -265,7 +285,8 @@ def write_tree(args, out: Path, version: str) -> Path:
     tree.mkdir(parents=True)
     values = {"VERSION": version, "COMMIT": args.commit,
               "ZIP": f"{base}-windows.zip", "APK": f"{base}-quest.apk"}
-    shutil.copyfile(args.dll, tree / "BugSplat64.dll")
+    shutil.copyfile(args.dll, tree / HOST_DLL)
+    shutil.copyfile(args.runtime_dll, tree / RUNTIME_DLL)
     shutil.copyfile(args.server_exe, tree / SERVER_EXE)
     shutil.copyfile(PACKAGE_DIR / "install.ps1", tree / "install.ps1")
     shutil.copyfile(PACKAGE_DIR / "uninstall.ps1", tree / "uninstall.ps1")
@@ -280,12 +301,12 @@ def write_tree(args, out: Path, version: str) -> Path:
 # which state this copy is in, so a signer replacing the signed entries never has to edit it.
 SIGNING_TEXT = """Signing
 
-The build itself signs nothing. A separate signing step may sign BugSplat64.dll, echovr_server.exe,
-install.ps1, uninstall.ps1 and quest-diagnose.ps1 afterwards and replace this zip under the same name. This
+The build itself signs nothing. A separate signing step may sign BugSplat64.dll, nevr-runtime.dll,
+echovr_server.exe, install.ps1, uninstall.ps1 and quest-diagnose.ps1 afterwards and replace this zip under the same name. This
 text is the same either way: it says how to check, not which state your copy is in.
 
 A file is signed when it carries a signature:
-  BugSplat64.dll, echovr_server.exe
+  BugSplat64.dll, nevr-runtime.dll, echovr_server.exe
                               an Authenticode signature
                               (PowerShell: Get-AuthenticodeSignature .\\BugSplat64.dll)
   install.ps1, uninstall.ps1, quest-diagnose.ps1
@@ -308,7 +329,7 @@ def seal(tree: Path, out: Path, apk: Path = None, require_signed: bool = False) 
     if apk is not None:  # before anything is written: a foreign APK never rides a package
         check_apk_version(apk, version, commit)
     files = sorted(p for p in tree.iterdir() if p.is_file() and p.name != "SHA256SUMS")
-    for required in ("BugSplat64.dll", SERVER_EXE):
+    for required in (HOST_DLL, RUNTIME_DLL, SERVER_EXE):
         if required not in {p.name for p in files}:
             raise GateFailure(f"{tree} has no {required}")
     if require_signed:
@@ -356,8 +377,8 @@ def quest_asset_name(version: str) -> str:
 
 def release_notes(assets: Path) -> str:
     """The release body: the notes plus a SHA-256 table of the release's two assets as they are in `assets`.
-    The version and commit are the ones the zip's own BugSplat64.dll carries (its identity literal), so the
-    table cannot describe a zip that is not this release's."""
+    The version and commit are the ones the zip's own BugSplat64.dll and nevr-runtime.dll carry (their identity
+    literals, which must agree), so the table cannot describe a zip that is not this release's."""
     zips = sorted(assets.glob("nevr-runtime-v*-windows.zip"))
     if len(zips) != 1:
         raise GateFailure(f"{assets}: expected exactly one nevr-runtime-v<X.Y.Z>-windows.zip, found {len(zips)}")
@@ -366,14 +387,19 @@ def release_notes(assets: Path) -> str:
     if not match:
         raise GateFailure(f"{zip_path.name}: not a release zip name (nevr-runtime-vX.Y.Z-windows.zip)")
     version = match.group(1)
+    literals = {}
     with zipfile.ZipFile(zip_path) as z:
-        try:
-            dll = z.read("BugSplat64.dll")
-        except KeyError:
-            raise GateFailure(f"{zip_path.name} has no BugSplat64.dll")
-    found_version, commit = identity_in(dll, f"{zip_path.name}:BugSplat64.dll")
+        for name in (HOST_DLL, RUNTIME_DLL):
+            try:
+                blob = z.read(name)
+            except KeyError:
+                raise GateFailure(f"{zip_path.name} has no {name}")
+            literals[name] = identity_in(blob, f"{zip_path.name}:{name}")
+    if literals[HOST_DLL] != literals[RUNTIME_DLL]:
+        raise GateFailure(f"{zip_path.name}: {HOST_DLL} and {RUNTIME_DLL} carry different identity literals: not one build")
+    found_version, commit = literals[HOST_DLL]
     if found_version != version:
-        raise GateFailure(f"{zip_path.name}: its BugSplat64.dll carries version '{found_version}', not '{version}'")
+        raise GateFailure(f"{zip_path.name}: its {HOST_DLL} carries version '{found_version}', not '{version}'")
     quest = assets / quest_asset_name(version)
     if not quest.is_file():
         raise GateFailure(f"{assets}: no {quest.name}")
@@ -420,7 +446,8 @@ def main(argv=None) -> int:
             parser.add_argument("--version", required=True)
         parser.add_argument("--commit", required=True)
         parser.add_argument("--out", required=True)
-        parser.add_argument("--dll", required=True)
+        parser.add_argument("--dll", required=True, help="BugSplat64.dll, the host")
+        parser.add_argument("--runtime-dll", required=True, help="nevr-runtime.dll, the runtime")
         parser.add_argument("--server-exe", required=True)
         parser.add_argument("--pc-header", required=True)
         parser.add_argument("--defaults", default=str(REPO / "config" / "public-defaults.env"))
@@ -458,7 +485,7 @@ def main(argv=None) -> int:
         elif mode == "tree":
             if not RELEASE_VERSION.match(args.version):
                 raise GateFailure(f"--version '{args.version}' is not X.Y.Z")
-            problems = windows_problems(args, Path(args.dll))
+            problems = windows_problems(args, Path(args.dll), Path(args.runtime_dll))
             if problems:
                 raise GateFailure("\n".join(problems))
             written = [write_tree(args, Path(args.out), args.version)]

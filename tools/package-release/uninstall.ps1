@@ -1,8 +1,10 @@
 # NEVR runtime release: uninstall.
 #
-# Puts back what install.ps1 set aside: the original BugSplat64.dll and a legacy dbgcore.dll. It never
+# Puts back what install.ps1 set aside: the original BugSplat64.dll and a legacy dbgcore.dll, and sets
+# nevr-runtime.dll, the file install.ps1 added, aside as nevr-runtime.dll.uninstalled-<timestamp>. It never
 # deletes anything: the backup stays where it is, and nothing is overwritten that was not put there by
-# install.ps1.
+# install.ps1. A nevr-runtime.dll that is not a NEVR runtime (it carries no NEVR-BUILD identity text) is left
+# alone and reported.
 #
 # usage:  powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 [-Dir <...\bin\win10>] [-Pause | -NoPause]
 # Without -Dir the folder is asked for.
@@ -99,8 +101,21 @@ if ($legacyAside -ne '') {
   Rename-Item -LiteralPath $legacyAside -NewName 'dbgcore.dll'
   Write-Output 'RESTORED dbgcore.dll'
 }
+# The game no longer loads the runtime: set it aside, if it is ours.
+$runtimeTarget = Join-Path $Dir 'nevr-runtime.dll'
+$runtimeRemoved = $false
+if (Test-Path -LiteralPath $runtimeTarget) {
+  if ([System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($runtimeTarget)).Contains('NEVR-BUILD ')) {
+    $runtimeAside = 'nevr-runtime.dll.uninstalled-' + (Get-Date).ToString('yyyyMMdd-HHmmss')
+    Rename-Item -LiteralPath $runtimeTarget -NewName $runtimeAside
+    $runtimeRemoved = $true
+    Write-Output "SET ASIDE nevr-runtime.dll as $runtimeAside"
+  } else {
+    Write-Output 'LEFT nevr-runtime.dll: it is not a NEVR runtime (no NEVR-BUILD identity text), so install.ps1 did not put it there'
+  }
+}
 Rename-Item -LiteralPath $state -NewName ('nevr-install.txt.undone-' + (Get-Date).ToString('yyyyMMdd-HHmmss'))
-Write-RunLog ("OK $scriptName RESTORED BugSplat64.dll Dir=$Dir")
+Write-RunLog ("OK $scriptName RESTORED BugSplat64.dll Dir=$Dir nevr-runtime.dll set aside=$runtimeRemoved")
 
 } catch {
   $exitCode = 1

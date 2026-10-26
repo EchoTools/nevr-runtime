@@ -50,9 +50,16 @@ def identity(version, commit=COMMIT):
 
 
 def binary(version, commit=COMMIT, literals=1, extra=b"", trust=(b"NEVR-PLUGIN-TRUST release",)):
-    """A fake DLL: a PE with the pinned VERSIONINFO, then the defaults, the identity literal NUL-bounded `literals` times, the plugin-trust
-    literal(s) in `trust` (ADR 0010), then `extra`."""
+    """A fake nevr-runtime.dll: a PE with the pinned VERSIONINFO, then the defaults, the identity literal NUL-bounded
+    `literals` times, the plugin-trust literal(s) in `trust` (ADR 0010), then `extra`."""
     parts = [v.encode() for v in VALUES.values()] + [identity(version, commit)] * literals + list(trust)
+    return shipped_pe("nevr-runtime.dll", version, b"\0" + b"\0".join(parts) + b"\0" + extra)
+
+
+def host_binary(version, commit=COMMIT, literals=1, extra=b""):
+    """A fake BugSplat64.dll, the thin host: a PE with the pinned VERSIONINFO and the identity literal. It embeds no
+    endpoints and carries no plugin-trust literal."""
+    parts = [identity(version, commit)] * literals
     return shipped_pe("BugSplat64.dll", version, b"\0" + b"\0".join(parts) + b"\0" + extra)
 
 
@@ -73,7 +80,9 @@ class PackageFixture(unittest.TestCase):
         self.info = self.tmp / "info.h"
         self.info.write_text(build_info(self.version))
         self.dll = self.tmp / "BugSplat64.dll"
-        self.dll.write_bytes(binary(self.version))
+        self.dll.write_bytes(host_binary(self.version))
+        self.runtime = self.tmp / "nevr-runtime.dll"
+        self.runtime.write_bytes(binary(self.version))
         self.server = self.tmp / "echovr_server.exe"
         self.server.write_bytes(shipped_pe("echovr_server.exe", self.version, b"\0the dedicated-server launcher\0"))
         self.apk = self.tmp / "signed.apk"
@@ -89,7 +98,7 @@ class PackageFixture(unittest.TestCase):
     def run_tool(self, **overrides):
         """The local path (`just package-dev`): no --version, the binaries must carry a dev version."""
         args = {"--commit": COMMIT, "--out": str(self.out), "--dll": str(self.dll),
-                "--server-exe": str(self.server), "--apk": str(self.apk), "--pc-header": str(self.pc_header),
+                "--runtime-dll": str(self.runtime), "--server-exe": str(self.server), "--apk": str(self.apk), "--pc-header": str(self.pc_header),
                 "--quest-header": str(self.quest_header), "--quest-build-info": str(self.info),
                 "--defaults": str(self.defaults)}
         args.update(overrides)
@@ -113,7 +122,7 @@ class LocalDevPackageTest(PackageFixture):
         with zipfile.ZipFile(zip_path) as z:
             self.assertEqual(sorted(z.namelist()),
                              ["BugSplat64.dll", "README.txt", "SHA256SUMS", "SIGNING.txt", "echovr_server.exe",
-                              "install.ps1", "quest-diagnose.ps1", "uninstall.ps1"])
+                              "install.ps1", "nevr-runtime.dll", "quest-diagnose.ps1", "uninstall.ps1"])
             sums = dict(line.split("  ")[::-1] for line in z.read("SHA256SUMS").decode().splitlines())
             for name in z.namelist():
                 if name != "SHA256SUMS":
@@ -128,7 +137,7 @@ class LocalDevPackageTest(PackageFixture):
             self.assertIn(needle, notes)
 
     def test_a_local_run_refuses_a_binary_stamped_as_a_release(self):
-        self.dll.write_bytes(binary(RELEASE))
+        self.runtime.write_bytes(binary(RELEASE))
         result = self.run_tool()
         self.assertEqual(result.returncode, 1)
         self.assertIn("is not a development version", result.stderr)
@@ -142,7 +151,7 @@ class LocalDevPackageTest(PackageFixture):
         self.assertIn("expected exactly one 'NEVR-BUILD <version> <commit40>' literal, found 0", result.stderr)
 
     def test_two_identity_literals_are_refused(self):
-        self.dll.write_bytes(binary(self.version, literals=2))
+        self.runtime.write_bytes(binary(self.version, literals=2))
         result = self.run_tool()
         self.assertEqual(result.returncode, 1)
         self.assertIn("found 2", result.stderr)
@@ -154,7 +163,7 @@ class LocalDevPackageTest(PackageFixture):
         self.assertIn("found 0", result.stderr)
 
     def test_the_wrong_commit_is_refused(self):
-        self.dll.write_bytes(binary(self.version, commit="f" * 40))
+        self.runtime.write_bytes(binary(self.version, commit="f" * 40))
         result = self.run_tool()
         self.assertEqual(result.returncode, 1)
         self.assertIn("is not the checked-out commit", result.stderr)
@@ -166,10 +175,10 @@ class LocalDevPackageTest(PackageFixture):
         self.assertFalse(self.out.exists())
 
     def test_a_dll_that_embeds_no_endpoints_is_refused_and_nothing_is_written(self):
-        self.dll.write_bytes(b"MZ\0" + identity(self.version) + b"\0")
+        self.runtime.write_bytes(b"MZ\0" + identity(self.version) + b"\0")
         result = self.run_tool()
         self.assertEqual(result.returncode, 1)
-        self.assertIn("windows: NEVR_SOCKET_URI: not embedded in BugSplat64.dll", result.stderr)
+        self.assertIn("windows: NEVR_SOCKET_URI: not embedded in nevr-runtime.dll", result.stderr)
         self.assertFalse(self.out.exists())
 
     def test_a_quest_build_that_needs_a_config_file_to_log_in_is_refused(self):
@@ -207,7 +216,7 @@ class ReleaseStagesTest(PackageFixture):
 
     def tree_args(self, **overrides):
         args = {"--version": RELEASE, "--commit": COMMIT, "--out": str(self.out), "--dll": str(self.dll),
-                "--server-exe": str(self.server), "--pc-header": str(self.pc_header),
+                "--runtime-dll": str(self.runtime), "--server-exe": str(self.server), "--pc-header": str(self.pc_header),
                 "--defaults": str(self.defaults)}
         args.update(overrides)
         return [x for kv in args.items() for x in kv]
@@ -226,26 +235,41 @@ class ReleaseStagesTest(PackageFixture):
     def test_tree_holds_the_files_the_signer_signs_and_no_checksums_yet(self):
         tree = self.make_tree()
         self.assertEqual(sorted(p.name for p in tree.iterdir()),
-                         ["BugSplat64.dll", "README.txt", "echovr_server.exe", "install.ps1", "quest-diagnose.ps1",
+                         ["BugSplat64.dll", "README.txt", "echovr_server.exe", "install.ps1", "nevr-runtime.dll", "quest-diagnose.ps1",
                           "uninstall.ps1"])
         info = (self.out / "release.json").read_text()
         self.assertIn('"version": "5.0.0"', info)
         self.assertIn(COMMIT, info)
 
     def test_the_tree_stage_refuses_a_development_version(self):
-        self.dll.write_bytes(binary(DEV))
+        self.runtime.write_bytes(binary(DEV))
         result = self.run_stage("tree", *self.tree_args())
         self.assertEqual(result.returncode, 1)
         self.assertIn("is not the expected '5.0.0'", result.stderr)
         self.assertFalse(self.out.exists())
 
     def test_the_tree_stage_refuses_another_release_version_or_commit(self):
-        self.dll.write_bytes(binary("5.0.1"))
+        self.runtime.write_bytes(binary("5.0.1"))
         self.assertEqual(self.run_stage("tree", *self.tree_args()).returncode, 1)
-        self.dll.write_bytes(binary(RELEASE, commit="e" * 40))
+        self.runtime.write_bytes(binary(RELEASE, commit="e" * 40))
         result = self.run_stage("tree", *self.tree_args())
         self.assertEqual(result.returncode, 1)
         self.assertIn("is not the checked-out commit", result.stderr)
+
+    def test_the_tree_stage_refuses_a_host_and_a_runtime_that_are_not_one_build(self):
+        self.dll.write_bytes(host_binary(RELEASE, commit="e" * 40))
+        result = self.run_stage("tree", *self.tree_args())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("BugSplat64.dll: commit eeeeeeeeeeee is not the checked-out commit", result.stderr)
+        self.assertIn("BugSplat64.dll and nevr-runtime.dll carry different identity literals", result.stderr)
+        self.assertFalse(self.out.exists())
+
+    def test_the_tree_stage_refuses_a_host_that_carries_the_plugin_trust_literal(self):
+        self.dll.write_bytes(host_binary(RELEASE, extra=b"NEVR-PLUGIN-TRUST release\0"))
+        result = self.run_stage("tree", *self.tree_args())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("BugSplat64.dll", result.stderr)
+        self.assertFalse(self.out.exists())
 
     def test_the_tree_stage_refuses_a_version_that_is_not_x_y_z(self):
         for bad in ("v5.0.0", "5.0", "5.0.0-rc.1", "5.0.0-dev.1+abc1234", "05.0.0", "5.00.0", "5.0.00", "5.0.0+x"):
@@ -255,13 +279,14 @@ class ReleaseStagesTest(PackageFixture):
                 self.assertIn("is not X.Y.Z", result.stderr)
 
     def test_the_tree_stage_refuses_a_dll_that_embeds_no_defaults(self):
-        self.dll.write_bytes(b"MZ\0" + identity(RELEASE) + b"\0")
+        self.runtime.write_bytes(b"MZ\0" + identity(RELEASE) + b"\0")
         result = self.run_stage("tree", *self.tree_args())
         self.assertEqual(result.returncode, 1)
-        self.assertIn("windows: NEVR_SOCKET_URI: not embedded in BugSplat64.dll", result.stderr)
+        self.assertIn("windows: NEVR_SOCKET_URI: not embedded in nevr-runtime.dll", result.stderr)
 
     def test_the_file_names_follow_the_tag_version(self):
-        self.dll.write_bytes(binary("5.1.2"))
+        self.dll.write_bytes(host_binary("5.1.2"))
+        self.runtime.write_bytes(binary("5.1.2"))
         self.server.write_bytes(shipped_pe("echovr_server.exe", "5.1.2", b"\0the dedicated-server launcher\0"))
         result = self.run_stage("tree", *self.tree_args(**{"--version": "5.1.2"}))
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -300,7 +325,8 @@ class ReleaseStagesTest(PackageFixture):
     def test_the_body_hashes_the_asset_bytes_as_they_are_so_a_resigned_zip_changes_it(self):
         tree = self.make_tree()
         first = self.notes_for(self.seal_to(tree, "one")).read_text()
-        (tree / "BugSplat64.dll").write_bytes(fake_pe(0x100, (tree / "BugSplat64.dll").read_bytes()))
+        for dll in ("BugSplat64.dll", "nevr-runtime.dll"):
+            (tree / dll).write_bytes(fake_pe(0x100, (tree / dll).read_bytes()))
         (tree / "echovr_server.exe").write_bytes(fake_pe(0x100, b"y"))
         self.sign_scripts(tree)
         second = self.notes_for(self.seal_to(tree, "two", "--require-signed")).read_text()
@@ -364,7 +390,7 @@ class ReleaseStagesTest(PackageFixture):
         with zipfile.ZipFile(sealed / "nevr-runtime-v5.0.0-windows.zip") as z:
             self.assertEqual(sorted(z.namelist()),
                              ["BugSplat64.dll", "README.txt", "SHA256SUMS", "SIGNING.txt", "echovr_server.exe",
-                              "install.ps1", "quest-diagnose.ps1", "uninstall.ps1"])
+                              "install.ps1", "nevr-runtime.dll", "quest-diagnose.ps1", "uninstall.ps1"])
             sums = dict(line.split("  ")[::-1] for line in z.read("SHA256SUMS").decode().splitlines())
             self.assertEqual(sorted(sums), sorted(n for n in z.namelist() if n != "SHA256SUMS"))
             for name in sums:
@@ -469,6 +495,8 @@ class ReleaseStagesTest(PackageFixture):
         before = self.seal_to(tree, "before")
         signed = fake_pe(0x100, (tree / "BugSplat64.dll").read_bytes())  # the signer rewrites the file
         (tree / "BugSplat64.dll").write_bytes(signed)
+        signed_runtime = fake_pe(0x100, (tree / "nevr-runtime.dll").read_bytes())
+        (tree / "nevr-runtime.dll").write_bytes(signed_runtime)
         signed_server = fake_pe(0x100, (tree / "echovr_server.exe").read_bytes())
         (tree / "echovr_server.exe").write_bytes(signed_server)
         self.sign_scripts(tree)
@@ -477,6 +505,7 @@ class ReleaseStagesTest(PackageFixture):
         with zipfile.ZipFile(zip_path) as z, zipfile.ZipFile(before / "nevr-runtime-v5.0.0-windows.zip") as zb:
             sums = dict(line.split("  ")[::-1] for line in z.read("SHA256SUMS").decode().splitlines())
             self.assertEqual(sums["BugSplat64.dll"], hashlib.sha256(signed).hexdigest())
+            self.assertEqual(sums["nevr-runtime.dll"], hashlib.sha256(signed_runtime).hexdigest())
             self.assertEqual(sums["echovr_server.exe"], hashlib.sha256(signed_server).hexdigest())
             self.assertNotEqual(sums["BugSplat64.dll"], unsigned_sha)
             self.assertEqual(z.read("SIGNING.txt"), zb.read("SIGNING.txt"), "the signing text never changes")
@@ -494,9 +523,10 @@ class ReleaseStagesTest(PackageFixture):
         tree = self.make_tree()
         result = self.run_stage("seal", "--tree", str(tree), "--out", str(self.tmp / "s"), "--require-signed")
         self.assertEqual(result.returncode, 1)
-        self.assertIn("not signed (no certificate table): BugSplat64.dll, echovr_server.exe", result.stderr)
+        self.assertIn("not signed (no certificate table): BugSplat64.dll, echovr_server.exe, nevr-runtime.dll", result.stderr)
         self.assertFalse((self.tmp / "s").exists())
         (tree / "BugSplat64.dll").write_bytes(fake_pe(0x100, b"x"))
+        (tree / "nevr-runtime.dll").write_bytes(fake_pe(0x100, b"z"))
         (tree / "echovr_server.exe").write_bytes(fake_pe(0x100, b"y"))
         result = self.run_stage("seal", "--tree", str(tree), "--out", str(self.tmp / "s"), "--require-signed")
         self.assertEqual(result.returncode, 1)
@@ -530,7 +560,7 @@ class ReleaseStagesTest(PackageFixture):
     # --- the CI assertion after the build -----------------------------------------------------------
 
     def stamp(self, *args, dll=None):
-        return self.run_stage("stamp", "--dll", str(dll or self.dll), *args)
+        return self.run_stage("stamp", "--dll", str(dll or self.runtime), *args)
 
     def test_stamp_accepts_the_expected_release_version_and_commit(self):
         result = self.stamp("--version", RELEASE, "--commit", COMMIT)
@@ -538,22 +568,30 @@ class ReleaseStagesTest(PackageFixture):
         self.assertIn(f"stamped identity: NEVR-BUILD 5.0.0 {COMMIT}", result.stdout)
 
     def test_stamp_refuses_a_dev_build_where_a_release_was_expected(self):
-        self.dll.write_bytes(binary(DEV))
+        self.runtime.write_bytes(binary(DEV))
         result = self.stamp("--version", RELEASE)
         self.assertEqual(result.returncode, 1)
         self.assertIn(f"version '{DEV}' is not the expected '5.0.0'", result.stderr)
 
     def test_stamp_without_a_version_wants_a_dev_build_and_refuses_a_release_stamp(self):
         self.assertEqual(self.stamp().returncode, 1)  # the fixture carries 5.0.0: a branch build must not
-        self.dll.write_bytes(binary(DEV))
+        self.runtime.write_bytes(binary(DEV))
         self.assertEqual(self.stamp().returncode, 0)
+
+    def test_stamp_checks_the_host_by_its_name_and_wants_no_trust_literal_in_it(self):
+        self.assertEqual(self.stamp("--version", RELEASE, "--commit", COMMIT, dll=self.dll).returncode, 0)
+        self.dll.write_bytes(host_binary(RELEASE) + b"\0NEVR-PLUGIN-TRUST release\0")
+        result = self.stamp("--version", RELEASE, dll=self.dll)
+        self.assertEqual(result.returncode, 1)
+        self.dll.write_bytes(host_binary(RELEASE, commit="d" * 40))
+        self.assertIn("is not the checked-out commit", self.stamp("--version", RELEASE, "--commit", COMMIT, dll=self.dll).stderr)
 
     def test_stamp_refuses_a_missing_or_doubled_literal_and_the_wrong_commit(self):
         self.dll.write_bytes(b"MZ\0" + b"5.0.0\0")
-        self.assertEqual(self.stamp("--version", RELEASE).returncode, 1)
-        self.dll.write_bytes(binary(RELEASE, literals=2))
+        self.assertEqual(self.stamp("--version", RELEASE, dll=self.dll).returncode, 1)
+        self.runtime.write_bytes(binary(RELEASE, literals=2))
         self.assertIn("found 2", self.stamp("--version", RELEASE).stderr)
-        self.dll.write_bytes(binary(RELEASE))
+        self.runtime.write_bytes(binary(RELEASE))
         result = self.stamp("--version", RELEASE, "--commit", "d" * 40)
         self.assertEqual(result.returncode, 1)
         self.assertIn("is not the checked-out commit", result.stderr)
@@ -621,26 +659,26 @@ class ReleaseStagesTest(PackageFixture):
     # --- the plugin signature gate (ADR 0010, #741) --------------------------------------------------
 
     def test_a_dev_build_is_never_stamped_or_packaged(self):
-        self.dll.write_bytes(binary(RELEASE, trust=(b"NEVR-PLUGIN-TRUST dev",)))
+        self.runtime.write_bytes(binary(RELEASE, trust=(b"NEVR-PLUGIN-TRUST dev",)))
         result = self.stamp("--version", RELEASE)
         self.assertEqual(result.returncode, 1)
         self.assertIn("'dev', not 'release'", result.stderr)
-        self.dll.write_bytes(binary(DEV, trust=(b"NEVR-PLUGIN-TRUST dev",)))
+        self.runtime.write_bytes(binary(DEV, trust=(b"NEVR-PLUGIN-TRUST dev",)))
         self.assertEqual(self.stamp().returncode, 1)  # a dev build is refused too: it can be handed to players
 
     def test_the_literals_the_runtime_used_to_embed_are_not_a_release(self):
         # A DLL built before the run's mode came from -require-signed-plugins says signed-only or unsigned-allowed;
         # neither is what this tool packages.
         for old in (b"signed-only", b"unsigned-allowed"):
-            self.dll.write_bytes(binary(RELEASE, trust=(b"NEVR-PLUGIN-TRUST " + old,)))
+            self.runtime.write_bytes(binary(RELEASE, trust=(b"NEVR-PLUGIN-TRUST " + old,)))
             result = self.stamp("--version", RELEASE)
             self.assertEqual(result.returncode, 1, old)
             self.assertIn(f"'{old.decode()}', not 'release'", result.stderr)
 
     def test_a_binary_without_the_plugin_trust_literal_is_refused_and_so_are_two(self):
-        self.dll.write_bytes(binary(RELEASE, trust=()))
+        self.runtime.write_bytes(binary(RELEASE, trust=()))
         self.assertIn("found 0", self.stamp("--version", RELEASE).stderr)
-        self.dll.write_bytes(binary(RELEASE, trust=(b"NEVR-PLUGIN-TRUST release",) * 2))
+        self.runtime.write_bytes(binary(RELEASE, trust=(b"NEVR-PLUGIN-TRUST release",) * 2))
         self.assertIn("found 2", self.stamp("--version", RELEASE).stderr)
 
     def test_stamp_refuses_a_version_argument_that_is_not_x_y_z(self):
@@ -680,8 +718,16 @@ class InstallScriptsTest(unittest.TestCase):
         for name in ("install.ps1", "uninstall.ps1"):
             shutil.copy(PACKAGE / name, self.pkg / name)
         (self.pkg / "BugSplat64.dll").write_bytes(b"NEW-RUNTIME")
-        digest = hashlib.sha256(b"NEW-RUNTIME").hexdigest()
-        (self.pkg / "SHA256SUMS").write_text(f"{digest}  BugSplat64.dll\n")
+        (self.pkg / "nevr-runtime.dll").write_bytes(self.RUNTIME_PAYLOAD)
+        self.write_sums()
+
+    RUNTIME_PAYLOAD = b"NEW-RUNTIME-DLL NEVR-BUILD x"
+
+    def write_sums(self):
+        """SHA256SUMS of the package's two DLLs as they are now."""
+        (self.pkg / "SHA256SUMS").write_text("".join(
+            f"{hashlib.sha256((self.pkg / name).read_bytes()).hexdigest()}  {name}\n"
+            for name in ("BugSplat64.dll", "nevr-runtime.dll")))
 
     def ps(self, script, *args):
         return subprocess.run(["pwsh", "-NoProfile", "-File", str(self.pkg / script), *args],
@@ -712,7 +758,7 @@ class InstallScriptsTest(unittest.TestCase):
     # the literal, are what they exercise.
     def set_package(self, payload):
         (self.pkg / "BugSplat64.dll").write_bytes(payload)
-        (self.pkg / "SHA256SUMS").write_text(f"{hashlib.sha256(payload).hexdigest()}  BugSplat64.dll\n")
+        self.write_sums()
 
     @staticmethod
     def runtime(version):
@@ -860,6 +906,105 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertIn("update failed", self.output(result))
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), installed)
         self.assertEqual(self.state()["installed_sha256"], hashlib.sha256(installed).hexdigest(), "the record is unchanged")
+
+    # The runtime half of the pair (#853): nevr-runtime.dll is a second file beside echovr.exe.
+    def limited_install(self, *args):
+        import resource
+        import signal
+
+        def limited():
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+            resource.setrlimit(resource.RLIMIT_FSIZE, (64 * 1024 * 1024, 64 * 1024 * 1024))
+
+        return subprocess.run(["pwsh", "-NoProfile", "-File", str(self.pkg / "install.ps1"), "-Dir", str(self.game), *args],
+                              capture_output=True, text=True, timeout=60, preexec_fn=limited)
+
+    def test_install_puts_the_runtime_beside_the_host_and_records_its_hash(self):
+        installed = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertEqual(installed.returncode, 0, self.output(installed))
+        self.assertEqual((self.game / "nevr-runtime.dll").read_bytes(), self.RUNTIME_PAYLOAD)
+        self.assertEqual(self.state()["runtime_sha256"], hashlib.sha256(self.RUNTIME_PAYLOAD).hexdigest())
+        self.assertIn("nevr-runtime.dll sha256=", installed.stdout)
+
+    def test_an_existing_nevr_runtime_dll_is_set_aside_not_overwritten(self):
+        (self.game / "nevr-runtime.dll").write_bytes(b"A-STRANGERS-FILE")
+        installed = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertEqual(installed.returncode, 0, self.output(installed))
+        aside = list(self.game.glob("nevr-runtime.dll.original-*"))
+        self.assertEqual([a.read_bytes() for a in aside], [b"A-STRANGERS-FILE"])
+        self.assertEqual((self.game / "nevr-runtime.dll").read_bytes(), self.RUNTIME_PAYLOAD)
+
+    def test_a_package_without_the_runtime_is_refused_and_the_game_is_untouched(self):
+        (self.pkg / "nevr-runtime.dll").unlink()
+        result = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("nevr-runtime.dll is not next to install.ps1", self.output(result))
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
+        self.assertEqual((self.game / "dbgcore.dll").read_bytes(), b"LEGACY")
+        self.assertFalse((self.game / "nevr-runtime.dll").exists())
+
+    def test_a_runtime_that_does_not_match_sha256sums_is_refused_and_the_game_is_untouched(self):
+        (self.pkg / "nevr-runtime.dll").write_bytes(b"TAMPERED")
+        result = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("nevr-runtime.dll does not match SHA256SUMS", self.output(result))
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
+        self.assertFalse((self.game / "nevr-runtime.dll").exists())
+
+    def test_an_update_replaces_the_runtime_too_and_records_its_new_hash(self):
+        self.assertEqual(self.install_a_then_update_to_b().returncode, 0)
+        self.set_package(self.plain("5.4.5"))
+        newer = b"NEWER-RUNTIME-DLL"
+        (self.pkg / "nevr-runtime.dll").write_bytes(newer)
+        self.write_sums()
+        updated = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertEqual(updated.returncode, 0, self.output(updated))
+        self.assertEqual((self.game / "nevr-runtime.dll").read_bytes(), newer)
+        self.assertEqual(self.state()["runtime_sha256"], hashlib.sha256(newer).hexdigest())
+
+    def test_a_failed_update_puts_the_previous_runtime_back_as_well(self):
+        self.set_package(self.plain("5.4.3"))
+        self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
+        runtime_before = (self.game / "nevr-runtime.dll").read_bytes()
+        host_before = (self.game / "BugSplat64.dll").read_bytes()
+        (self.pkg / "nevr-runtime.dll").write_bytes(b"NEXT-RUNTIME")
+        self.set_package(self.plain("5.4.4") + b"x" * (80 * 1024 * 1024))  # the host copy fails after the runtime went in
+        result = self.limited_install()
+        self.assertNotEqual(result.returncode, 0, self.output(result))
+        self.assertIn("update failed", self.output(result))
+        self.assertEqual((self.game / "nevr-runtime.dll").read_bytes(), runtime_before)
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), host_before)
+
+    def test_a_failed_first_install_puts_every_original_back_and_sets_the_new_runtime_aside(self):
+        (self.game / "nevr-runtime.dll").write_bytes(b"A-STRANGERS-FILE")
+        self.set_package(self.plain("5.4.3") + b"x" * (80 * 1024 * 1024))
+        result = self.limited_install()
+        self.assertNotEqual(result.returncode, 0, self.output(result))
+        self.assertIn("install failed", self.output(result))
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
+        self.assertEqual((self.game / "dbgcore.dll").read_bytes(), b"LEGACY")
+        self.assertEqual((self.game / "nevr-runtime.dll").read_bytes(), b"A-STRANGERS-FILE")
+        failed = list(self.game.glob("nevr-runtime.dll.failed-*"))
+        self.assertEqual([f.read_bytes() for f in failed], [self.RUNTIME_PAYLOAD], "the new runtime is set aside, never deleted")
+
+    def test_uninstall_sets_the_runtime_aside_and_never_deletes_it(self):
+        (self.pkg / "nevr-runtime.dll").write_bytes(self.runtime("5.4.3"))
+        self.write_sums()
+        self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
+        undone = self.ps("uninstall.ps1", "-Dir", str(self.game))
+        self.assertEqual(undone.returncode, 0, self.output(undone))
+        self.assertFalse((self.game / "nevr-runtime.dll").exists())
+        aside = list(self.game.glob("nevr-runtime.dll.uninstalled-*"))
+        self.assertEqual([a.read_bytes() for a in aside], [self.runtime("5.4.3")])
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
+
+    def test_uninstall_leaves_a_nevr_runtime_dll_that_carries_no_identity_literal(self):
+        self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
+        (self.game / "nevr-runtime.dll").write_bytes(b"NOT-OURS")
+        undone = self.ps("uninstall.ps1", "-Dir", str(self.game))
+        self.assertEqual(undone.returncode, 0, self.output(undone))
+        self.assertEqual((self.game / "nevr-runtime.dll").read_bytes(), b"NOT-OURS")
+        self.assertIn("LEFT nevr-runtime.dll", undone.stdout)
 
     def test_a_runtime_already_in_place_is_never_backed_up_as_the_original(self):
         # nevr-install.txt is gone (deleted by hand, or the runtime was copied in without install.ps1).
