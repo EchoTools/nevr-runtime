@@ -61,13 +61,14 @@ The chain, each step following from the one before it:
 2. **So the runtime does not need to fetch data for players.** Keeping the download out of the runtime keeps the release small
    and avoids a second installer inside the first. This is also the position recorded on #538 before ADR 0011 changed it: no
    player-facing data downloader.
-3. **The root the engine reads with no OBB is the media root when it holds `_data` and the data-root hook took, else the legacy
-   root.** The data step looks at, and a development build fetches into, the one root the engine reads this launch
+3. **The root the engine reads with no OBB is the media root when it holds the game's manifest and the data-root hook took, else the
+   legacy root.** The data step looks at, and a development build fetches into, the one root the engine reads this launch
    (`EngineRoot()` in `src/quest/sentinel/data_wiring.cpp`: the root the OBB skip served when a mount was skipped;
    `obb_skip::DataRootRedirect()` otherwise, which is non-null only when `ResolveRoot` found the manifest under the media root and
    the data-root slot holds our thunk; the legacy root in every other case). `data_step_start` logs `engine_root` and
-   `engine_root_source` (`obb_skip`, `data_root_hook` or `engine_default`). A media directory that exists without `_data`
-   directly under it is not redirected to. Data placed anywhere else is never read, so it is never a success.
+   `engine_root_source` (`obb_skip`, `data_root_hook` or `engine_default`). A media directory that holds `_data` but not the
+   manifest, or no `_data`, is not redirected to: a `_data` an older installer left behind must not take the engine away from complete
+   data in the legacy root. Data placed anywhere else is never read, so it is never a success.
 4. **The one thing the runtime still owes a player is a visible message when data is missing, instead of a silent exit.**
    A release build, when the data is not there, fetches nothing, writes nothing, recovers nothing, cleans nothing, shows
    `kGameDataMissing` ("Echo VR game data is missing. Install Echo VR with Echo Launcher first, then start the game again."),
@@ -106,7 +107,7 @@ assumption it drew a media-root-first data root (`data_root::Resolve`) and a fet
 | ADR 0011 | This record |
 | --- | --- |
 | Option A, fetch on first launch, for every player, with no switch ("Decisions" 1 and 3) | Development builds only; a release build never fetches (Design 4, 7) |
-| Fetch target: the media root, or whichever root `Resolve` returns | The one root the engine reads this launch (Design 3); the media root only when it holds `_data` |
+| Fetch target: the media root, or whichever root `Resolve` returns | The one root the engine reads this launch (Design 3); the media root only when it holds the manifest |
 | The sha256 pin is the trust for a player-facing download (Decision 2) | Unchanged for the development fetch; a release build has no download to trust |
 | "Fetch design", "Toast fallback plan", "Measurements to run first" | Still describe the development step and the open measurements; measurements 4 and 5 (media root) are parked with the media root |
 | The data step is reached only through `RequestPermissions` | Also through `CheckPermission` when the microphone is already granted (Design 6) |
