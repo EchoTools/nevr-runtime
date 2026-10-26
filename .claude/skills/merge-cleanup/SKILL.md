@@ -16,7 +16,7 @@ description: Use right after you merge a PR, or when df shows the disk tight. Re
    appends a removal row to the ledger.
 3. Build output is deleted outright; the Trash is the same disk. `git worktree remove` does that for the
    ignored `build/`, `vcpkg_installed/` and `target/` trees; never move them to the Trash.
-4. `df -h /`. Build trees outside `.claude/worktrees` (scratch under `/var/tmp/work-nevr-runtime/`) are
+4. `df -h /`. Build trees outside `.claude/worktrees` (scratch under `~/src/nevr-runtime-work/`) are
    not touched; delete the ones you made.
 
 `--owner <seat>` limits a run to one seat's worktrees. Each decision is a JSON line in

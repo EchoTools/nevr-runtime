@@ -65,7 +65,7 @@ does not override a separate failure record.
 only appears in the ~30 s periodic `hook_liveness` report, hence the window.
 
 Artifacts (`stdout.txt`, `windows.txt`, `results.txt`, the probe output) go to
-`/var/tmp/work-nevr-runtime/winvm-<timestamp>/`, or `--out`.
+`winvm-<timestamp>/` in the work root (`$NEVR_WORK_ROOT`, else `~/src/nevr-runtime-work`), or `--out`.
 
 ## Pitfalls
 

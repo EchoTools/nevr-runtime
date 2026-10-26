@@ -31,6 +31,7 @@ def install_scripts(checkout: pathlib.Path) -> None:
     """Copy the scripts under test and the helper they source into a fake checkout."""
     (checkout / "tools/lib").mkdir(parents=True, exist_ok=True)
     shutil.copy(LIB, checkout / "tools/lib/game_install.sh")
+    shutil.copy(LIB.with_name("work_root.sh"), checkout / "tools/lib/work_root.sh")
     for script in (SCRIPT, VERIFY_SERVER, LAUNCH_SERVER):
         shutil.copy(script, checkout / script.name)
 
@@ -597,6 +598,17 @@ class VerifyServerTest(unittest.TestCase):
     def rerun(self, name="run2"):
         return subprocess.run([str(self.checkout / "verify-server.sh"), name, "default", "1"], env=self.env,
                               cwd=self.checkout, capture_output=True, text=True, timeout=60)
+
+    def test_the_backup_a_killed_run_leaves_in_the_work_root_says_what_it_is(self):
+        # With no NEVR_RUN_SCRATCH_ROOT the backup is a directory in the work root, and carries a README.
+        work = self.tmp / "work"
+        env = {k: v for k, v in self.env.items() if k != "NEVR_RUN_SCRATCH_ROOT"}
+        started = self.started_fifo()
+        self.kill_after(dict(env, NEVR_WORK_ROOT=str(work), FAKE_WINE_SLEEP="8", FAKE_WINE_STARTED=str(started.path)),
+                        lambda: started.wait_for(1))
+        readme = (work / "verify-server-deploy-backup/README.md").read_text()
+        self.assertIn("saved from the game install", readme)
+        self.wait_for_lock_release()
 
     def test_a_killed_run_is_restored_by_the_next_run_not_mistaken_for_the_original(self):
         # The fake wine's orphan (FAKE_WINE_SLEEP) outlives SIGKILL for 8 s; it must NOT hold the lock.
