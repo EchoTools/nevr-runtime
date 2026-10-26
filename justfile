@@ -1173,8 +1173,8 @@ test-quest-hooks:
     [ -f "$jni" ] || { echo "test-quest-hooks: FAIL: $jni not found (the toast test needs the NDK's jni.h)" >&2; exit 1; }
     mkdir -p "$out/jni"
     cp "$jni" "$out/jni/jni.h"
-    "${cxx[@]}" -isystem "$out/jni" -fno-exceptions src/quest/tests/toast_presenter_test.cpp \
-        src/quest/sentinel/toast_presenter.cpp -o "$out/toast_presenter_test"
+    "${cxx[@]}" -isystem "$out/jni" -fno-exceptions -pthread src/quest/tests/toast_presenter_test.cpp \
+        src/quest/sentinel/toast_presenter.cpp src/quest/sentinel/hook_log.cpp -o "$out/toast_presenter_test" -ldl
     timeout 60 "$out/toast_presenter_test"
 
 # Quest config-string redirect on the host. Builds two fixture shared objects that import

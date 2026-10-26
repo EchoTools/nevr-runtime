@@ -1,6 +1,8 @@
 #include "data_wiring.h"
 
+#include <sys/syscall.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <atomic>
 #include <cstdio>
@@ -14,6 +16,7 @@
 #include "obb_skip_hook.h"
 #include "permission_wait_hook.h"
 #include "pinned_targets.h"
+#include "probe_command.h"
 #include "process_end_hook.h"
 #include "quest/data/curl_transport.h"
 #include "quest/data/data_step.h"
@@ -95,7 +98,32 @@ std::unique_ptr<data::CurlTransport> MakeProductionTransport() {
                                                kMinBytesPerSecond);
 }
 
-// The measurement probe: `toast <text>` or `block <seconds>`, once.
+// One probe line for a presenter that is not the floor's (`ui-toast`, `ui-post`, `dialog`, #829): what the presenter answered, on which
+// thread it was asked, and whether a looper was made for it. Only the tester can say whether anything was drawn.
+void ProbeShow(const char* kind, ShowFn presenter, const char* text) noexcept {
+  const long long tid = static_cast<long long>(::syscall(SYS_gettid));
+  const bool mainThread = tid == static_cast<long long>(::getpid());  // the UI thread's id is the process id
+  bool prepared = false;
+  const char* result = "empty_text";
+  if (*text == '\0') {
+    // nothing to show: the presenter is not asked
+  } else if (presenter == nullptr) {
+    result = "no_presenter";
+  } else {
+    result = presenter(CurrentApp(), text, &prepared);
+  }
+  const bool asked = std::strcmp(result, "requested") == 0 || std::strcmp(result, "posted") == 0;
+  sentinel::LogFields(asked ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn,
+                      "data_probe",
+                      {{"kind", kind},
+                       {"state", "end"},
+                       {"result", result},
+                       {"tid", tid},
+                       {"main_thread", mainThread ? "true" : "false"},
+                       {"looper_prepared", prepared ? "true" : "false"}});
+}
+
+// The measurement probe: `toast <text>`, `ui-toast <text>`, `ui-post <text>`, `dialog <text>` or `block <seconds>` (probe_command.h), once.
 void RunProbe() noexcept {
   const std::string path = !Opts().probe_path.empty()
                                ? Opts().probe_path
@@ -113,12 +141,19 @@ void RunProbe() noexcept {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "data_probe", {{"result", "rename_failed"}});
     return;  // a probe that cannot be consumed would act on every launch
   }
-  if (std::strncmp(buf, "toast ", 6) == 0) {
+  const ProbeCommand command = ParseProbeCommand(buf);
+  if (command.kind == ProbeKind::kToast) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "data_probe", {{"kind", "toast"}, {"state", "start"}});
-    Present(buf + 6, "probe");
+    Present(command.arg, "probe");
     sentinel::LogFields(sentinel::LogLevel::kInfo, "data_probe", {{"kind", "toast"}, {"state", "end"}});
-  } else if (std::strncmp(buf, "block ", 6) == 0) {
-    unsigned long seconds = std::strtoul(buf + 6, nullptr, 10);
+  } else if (command.kind == ProbeKind::kUiToast) {
+    ProbeShow("ui-toast", Opts().show_ui, command.arg);
+  } else if (command.kind == ProbeKind::kUiPost) {
+    ProbeShow("ui-post", Opts().show_post, command.arg);
+  } else if (command.kind == ProbeKind::kDialog) {
+    ProbeShow("dialog", Opts().show_dialog, command.arg);
+  } else if (command.kind == ProbeKind::kBlock) {
+    unsigned long seconds = std::strtoul(command.arg, nullptr, 10);
     if (seconds > kMaxProbeBlockSeconds) seconds = kMaxProbeBlockSeconds;
     sentinel::LogFields(sentinel::LogLevel::kInfo, "data_probe",
                         {{"kind", "block"}, {"state", "start"}, {"seconds", static_cast<long long>(seconds)}});
