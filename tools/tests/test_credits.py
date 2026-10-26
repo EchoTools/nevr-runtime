@@ -30,6 +30,7 @@ TESTERS = {"Crafter", "Nebula", "CyanoTex", "spike4887", "Trodd-", "DinkyBoi", "
            "marshmallow-mia", "arii", "berg", "zebra"}
 PATCHER_SOURCE = "echoApkPatch credit strings"
 TESTING_SOURCE = "tested in #nevr-runtime-testing (Discord)"
+WEBSITE_SOURCE = "echovrce.com website"
 TESTED_PHRASE = "tested nevr-runtime in #nevr-runtime-testing"
 # A link in the section is a person's or organisation's GitHub profile, or a repository.
 LINK_SHAPE = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?$")
@@ -226,6 +227,24 @@ class SharedFile(unittest.TestCase):
         self.assertEqual(block.count(b"Trodd-\n"), 1)
         self.assertNotIn(b"Trodd\n", block)
 
+    def test_trodd_dash_built_the_website_and_it_is_said_neutrally(self):
+        entry = self.entry("Trodd-")
+        self.assertIn("Built the echovrce.com website.", entry["what"])
+        self.assertIn("XInput fix", entry["what"])
+        self.assertIn(TESTED_PHRASE, entry["what"].lower())
+        self.assertIn(WEBSITE_SOURCE, entry["sources"])
+        # the same one entry, one README line carrying all three facts, under both headings
+        self.assertEqual(entry["headings"], ["testers"])
+        lines = [line for _title, line in self.readme_lines() if line.startswith("- **Trodd-**")]
+        self.assertEqual(len(lines), 1)
+        for fact in ("XInput fix", "Built the echovrce.com website.", "Tested nevr-runtime in #nevr-runtime-testing."):
+            self.assertIn(fact, lines[0])
+        # no owner or lead naming for him: not in his sources, not in his line, not in the file's notes
+        owner = re.compile(r"named by the project owner")
+        self.assertFalse([src for src in entry["sources"] if owner.search(src)])
+        self.assertIsNone(re.search(r"owner|lead|maintainer|founder", lines[0], re.I), lines[0])
+        self.assertNotRegex(" ".join(self.data["notes"]), r"Trodd-?[^.]*(owner|lead)")
+
     def test_sprockee_appears_once_in_every_rendered_list_and_never_first(self):
         # The ruled placement: one name among the helpers' thanks, in that group's ordinary order; never first,
         # never under a heading or a line of his own, never described as the owner or the lead.
@@ -286,7 +305,7 @@ class SharedFile(unittest.TestCase):
         self.assertTrue(problems(lambda d: d.update(extra=[])), "an unknown top-level key is refused")
         self.assertTrue(problems(lambda d: d["entries"][0].update(extra=1)), "an unknown entry key is refused")
 
-    def test_the_two_new_source_forms_are_exact(self):
+    def test_the_three_exact_source_texts_are_exact(self):
         def problems(source):
             data = copy.deepcopy(self.data)
             data["entries"][0]["sources"] = [source]
@@ -294,8 +313,10 @@ class SharedFile(unittest.TestCase):
 
         self.assertEqual(problems(PATCHER_SOURCE), [])
         self.assertEqual(problems(TESTING_SOURCE), [])
+        self.assertEqual(problems(WEBSITE_SOURCE), [])
         for near in ("echoApkPatch credit string", "echoApkPatch credit strings, sprockee", "tested in #nevr-runtime-testing",
-                     "tested in #other-channel (Discord)", "tested in #nevr-runtime-testing (Discord) and more"):
+                     "tested in #other-channel (Discord)", "tested in #nevr-runtime-testing (Discord) and more",
+                     "echovrce.com", "echovrce.com website, named by the project owner", "the echovrce.com website"):
             self.assertTrue(problems(near), near)
 
     def test_no_pronoun_for_a_person_anywhere_in_the_text(self):

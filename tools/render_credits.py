@@ -25,9 +25,9 @@ File shape (schema 1; every key is required):
               what      one line for the README; required when section is not null
               sources   evidence for `what`: a github.com URL, "#<number>" of this repo, a
                         repo-relative path, "named by the project owner[, MM-DD]" (no chat quoted), or one of the
-                        two exact texts "echoApkPatch credit strings" (the community installer's patcher thanks
-                        the name; the patcher's repository is private) and "tested in #nevr-runtime-testing
-                        (Discord)" (the name tested in that channel)
+                        three exact texts: "echoApkPatch credit strings" (the community installer's patcher thanks
+                        the name; the patcher's repository is private), "tested in #nevr-runtime-testing (Discord)"
+                        (the name tested in that channel) and "echovrce.com website" (the name built that site)
   notes     ordered [text], each non-empty: rules for whoever edits this file (placement of a name, where a
             source lives). Never rendered anywhere; this file is where they are kept so they travel with the data
   closing   one README line after the lists, or ""
@@ -58,9 +58,10 @@ SOURCE_URL = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.#/-]
 SOURCE_ISSUE = re.compile(r"^#[0-9]+$")
 # The project owner named the person or the work; the record of it is not public, so it is stated as that and nothing more.
 SOURCE_OWNER = re.compile(r"^named by the project owner(, [0-9]{2}-[0-9]{2})?$")
-# Two records that are not public by URL: the patcher's repository is private, and the testing channel is a chat.
+# Three records that are not public by URL: the patcher's repository is private, the testing channel is a chat, and
+# the website's work is recorded by the site's name.
 # Each is one exact text, so a free-form "source" cannot come in through them.
-SOURCE_TEXTS = frozenset({"echoApkPatch credit strings", "tested in #nevr-runtime-testing (Discord)"})
+SOURCE_TEXTS = frozenset({"echoApkPatch credit strings", "tested in #nevr-runtime-testing (Discord)", "echovrce.com website"})
 # The in-game page (#938). The game shows a line of at most 64 bytes of single-byte (Windows-1252) text, one
 # actor per LF-terminated line, and splits a line at '|' into two columns, so a name carries none of those.
 INGAME_ENCODING = "cp1252"

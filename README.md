@@ -29,7 +29,7 @@ nEVR is a community project, built on other people's work and tested by the peop
 
 ### People
 
-- **Trodd-**: Found the XInput fix that lets the spectator free cam see Xbox One and Series controllers, and brought it to the project (#877). Tested nevr-runtime in #nevr-runtime-testing.
+- **Trodd-**: Found the XInput fix that lets the spectator free cam see Xbox One and Series controllers, and brought it to the project (#877). Built the echovrce.com website. Tested nevr-runtime in #nevr-runtime-testing.
 - **DinkyBoi**: Reported a party of three queuing for arena with one member left out (#888), and the arm tablet's repeated "server full" message when joining a full social lobby (#889). Tested nevr-runtime in #nevr-runtime-testing.
 - **berg**: One of the party of three in #888: left out of the arena match once, and rejoined through a link. Tested nevr-runtime in #nevr-runtime-testing.
 - **zebra**: One of the party of three in #888, left out of the arena match. Tested nevr-runtime in #nevr-runtime-testing.

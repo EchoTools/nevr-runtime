@@ -104,9 +104,10 @@
       "section": "people",
       "headings": ["testers"],
       "link": "",
-      "what": "Found the XInput fix that lets the spectator free cam see Xbox One and Series controllers, and brought it to the project (#877). Tested nevr-runtime in #nevr-runtime-testing.",
+      "what": "Found the XInput fix that lets the spectator free cam see Xbox One and Series controllers, and brought it to the project (#877). Built the echovrce.com website. Tested nevr-runtime in #nevr-runtime-testing.",
       "sources": [
         "https://github.com/EchoTools/nevr-runtime/issues/877",
+        "echovrce.com website",
         "tested in #nevr-runtime-testing (Discord)"
       ]
     },
