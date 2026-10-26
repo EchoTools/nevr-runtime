@@ -1,7 +1,7 @@
 # ADR 0015: Quest texture quality is a config key applied by a GOT hook
 
 Status: accepted, implemented (`src/quest/sentinel/texture_quality.h`, `texture_quality_hook.{h,cpp}`, `sysprop_int_share.h`, #943). On in every Quest build; the default level is `stock`, which installs no hook.
-Not yet observed on a headset: the "Prediction" section is what the first run must show.
+Not yet observed on a headset: the "Prediction" section is what the first run must show. The procedure for the run, and the thresholds that decide the default, are in `docs/testing/quest-texture-quality-headset-sheet.md`.
 
 ## Context
 
