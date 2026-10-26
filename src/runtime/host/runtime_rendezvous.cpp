@@ -36,7 +36,7 @@ void ShowStopNotice(const wchar_t* text) noexcept {
 #endif
 }
 
-const char* StopCommandLine() noexcept {
+const char* StopCommandLine() {
 #if defined(NEVR_HOST_TESTING)
   if (RuntimeRendezvous::Seams().command_line != nullptr) return RuntimeRendezvous::Seams().command_line();
 #endif

@@ -18,6 +18,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -481,6 +482,35 @@ TEST(HostStopNotice, AnyHeadlessRunIsSpokenToByTheLogOnly) {
     EXPECT_EQ(RunStopWith(line), "suppressed_server_or_headless");
     EXPECT_TRUE(g_notice_texts.empty());
   }
+}
+
+namespace {
+const char* UnreadableCommandLine() { throw std::runtime_error("the command line cannot be read"); }
+}  // namespace
+
+TEST(HostStopNotice, ACommandLineThatCannotBeReadMeansNoDialogBecauseItMightHoldAServer) {
+  RendezvousSandbox sandbox;
+  g_events.clear();
+  g_notice_texts.clear();
+  RuntimeRendezvous::Seams().stop_game = &RecordStop;
+  RuntimeRendezvous::Seams().show_stop_notice = &RecordNotice;
+  RuntimeRendezvous::Seams().command_line = &UnreadableCommandLine;
+  const std::wstring local = MakeTempDir();
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  ReturningTarget target;
+  ASSERT_NE(target.code(), nullptr);
+  RuntimeRendezvous rendezvous;
+  rendezvous.Prepare(GetModuleHandleW(L"kernel32.dll"), GetModuleHandleW(nullptr), diagnostics);
+  ASSERT_NE(rendezvous.Install(target.code()), nullptr);
+  RuntimeRendezvous::GameMainWrapperDetour(0x1234);
+  EXPECT_TRUE(g_notice_texts.empty());
+  std::string notice = "(none)";
+  for (const nlohmann::json& record : Records(diagnostics, local)) {
+    if (record.value("event", "") == "game_stop") notice = record.value("notice", "(none)");
+  }
+  EXPECT_EQ(notice, "suppressed_server_or_headless");
+  RuntimeRendezvous::ResetActiveForTest();
 }
 
 TEST(HostStopNotice, ThePolicyReadsTokensNotSubstrings) {
