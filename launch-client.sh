@@ -53,7 +53,7 @@ fi
 GAME_DIR="$GAME_ROOT/echovr/bin/win10"
 LOCAL_DIR="$GAME_ROOT/echovr/_local"
 [[ -d "$GAME_DIR" ]] || { echo "ERROR: no game install at $GAME_DIR (set NEVR_GAME_ROOT to the checkout that has echovr/)" >&2; exit 2; }
-SCRATCH="${NEVR_RUN_SCRATCH_ROOT:-/var/tmp/work-nevr-runtime}/client-run-$(date +%Y%m%dT%H%M%S)"
+SCRATCH="${NEVR_RUN_SCRATCH_ROOT:-$NEVR_WORK_ROOT}/client-run-$(date +%Y%m%dT%H%M%S)"
 WINEPREFIX="$GAME_ROOT/echovr/.wineprefix"
 LOGDIR="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/EchoVR/logs"
 
@@ -93,7 +93,8 @@ else
   echo "=== note: no cached credentials; this run exercises the full device-code flow ==="
 fi
 
-mkdir -p "$SCRATCH"
+work_dir "$SCRATCH" "One client run of launch-client.sh: the original BugSplat64.dll it saved and the console log." \
+  "when the test that made the run ends; keep the run's log only while a PR cites it."
 CONSOLE_LOG="$SCRATCH/console.log"
 cp -p "$GAME_DIR/BugSplat64.dll" "$SCRATCH/BugSplat64.dll.orig"
 

@@ -42,7 +42,7 @@ Record the exact PCVR executable and the Quest APK plus `libr15.so`, `libpnsrad.
 SONAME, load-bias model, dependencies, imports and relocations. Compare each ELF hash with
 ReVault before interpreting an address. Commit only reviewed, non-secret fixtures under
 `tests/quest/fixtures/<build-id>/`; generated evidence and scratch go under
-`/var/tmp/work-nevr-runtime/`. A hash or build-ID mismatch fails the fixture test before any
+the work root (`NEVR_WORK_ROOT`, else `~/src/nevr-runtime-work`). A hash or build-ID mismatch fails the fixture test before any
 callback assertion.
 
 Record the portable source list used by both targets. A test fails if either target substitutes
