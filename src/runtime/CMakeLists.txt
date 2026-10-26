@@ -13,6 +13,7 @@ set(PATCHES_SOURCES
     "host/bootstrap_diagnostics.cpp"
     "host/crash_capture.cpp"
     "host/host_entry.cpp"
+    "host/minidmp_sender_exports.cpp"
     "host/runtime_load.cpp"
     "host/runtime_rendezvous.cpp"
     "lifecycle/system_module_loader.cpp"
@@ -245,7 +246,7 @@ nevr_build_identity_define(TARGET nevr_runtime READS VERSION
   SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/lifecycle/initialize.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/compat/ws_bridge.cpp")
 
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
-set_source_files_properties(host/bootstrap_diagnostics.cpp host/crash_capture.cpp host/host_entry.cpp host/runtime_load.cpp host/runtime_rendezvous.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(host/bootstrap_diagnostics.cpp host/crash_capture.cpp host/host_entry.cpp host/minidmp_sender_exports.cpp host/runtime_load.cpp host/runtime_rendezvous.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(compat/ws_bridge.cpp compat/session_router.cpp compat/ws_session_transport.cpp compat/social_names.cpp compat/evr_codec.cpp compat/self_check.cpp patch/asset_cache.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # #20: the export tracer's thunk layer is windows.h plus a global assembly block; the tracer logs through core.
 set_source_files_properties(hook/export_trace_thunk.cpp hook/export_tracer.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -400,6 +401,7 @@ if(BUILD_TESTING)
       host/bootstrap_diagnostics.cpp
       host/crash_capture.cpp
       host/host_entry.cpp
+      host/minidmp_sender_exports.cpp
       host/runtime_load.cpp
       host/runtime_rendezvous.cpp
       lifecycle/game_image_guard.cpp)
@@ -551,6 +553,9 @@ if(BUILD_TESTING)
       tests/host_crash/shim.cpp
       "tests/host_crash/shim.def")
     target_link_libraries(test_host_crash_shim PRIVATE nevr_host_core)
+    # BugSplat_createReport is defined in nevr_host_core (host/minidmp_sender_exports.cpp, the shipped file) and
+    # only named by shim.def, which does not make the linker take an archive member: ask for it.
+    target_link_options(test_host_crash_shim PRIVATE -Wl,--undefined=BugSplat_createReport)
     set_target_properties(test_host_crash_shim PROPERTIES PREFIX "" OUTPUT_NAME "BugSplat64")
     host_crash_output(test_host_crash_shim "${HOST_CRASH_DIR}")
 

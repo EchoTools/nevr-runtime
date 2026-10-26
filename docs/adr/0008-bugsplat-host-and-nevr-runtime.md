@@ -168,8 +168,12 @@ the lock is released.
 
 `BugSplat_createReport` (the `MiniDmpSender::createReport` export) writes a minidump
 with the `MiniDumpWriteDump` of the already-loaded `dbghelp.dll`, resolved with
-`GetModuleHandleW`; the game's `HandleCrashDump` loads dbghelp before it calls the
-reporter, so the host never loads it. It tries the three crash directories in order,
+`GetModuleHandleW`, and never loads a library inside the crash callback. Nothing in the game loads
+dbghelp (`echovr.exe` imports none and `HandleCrashDump` calls no loader function), so the host
+loads the system copy ahead of the fault: `OnProcessAttach` starts a thread that calls
+`CrashCapture::PreloadDbgHelp` (`LoadLibraryExW` with the System32 search flag), which runs once
+`DllMain` has released the loader lock; a failed load is a `dbghelp_preload` record. A crash before
+that thread has run reports `dbghelp_unavailable`. It tries the three crash directories in order,
 holds an atomic re-entry guard that is cleared on return, and falls back to a
 fixed-size text file when no dump can be written. No logger or runtime load is involved.
 Its records go through `BootstrapDiagnostics::AppendLine`, which opens and creates the log
