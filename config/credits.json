@@ -23,6 +23,16 @@
       ]
     },
     {
+      "name": "kfc",
+      "section": "projects",
+      "headings": ["code-contributions"],
+      "link": "",
+      "what": "Helped write a lot of EchoRelay.",
+      "sources": [
+        "named by the project owner, 10-19"
+      ]
+    },
+    {
       "name": "Dualgame",
       "section": "projects",
       "headings": ["code-contributions"],
@@ -44,10 +54,11 @@
       "section": "projects",
       "headings": ["code-contributions"],
       "link": "https://github.com/marshmallow-mia",
-      "what": "The [Echo VR installer](https://github.com/marshmallow-mia/Echo-VR-Installer) (PC and Quest) and [EchoVR_Launcher](https://github.com/marshmallow-mia/EchoVR_Launcher) (Windows and Linux). Reported #133 to #137, #495, #496, #511 to #513 and #719, and wrote the merged fixes #138 to #141, #500, #502, #514 to #516 and #721.",
+      "what": "The Echo VR Linux port, the [Echo VR installer](https://github.com/marshmallow-mia/Echo-VR-Installer) (PC and Quest) and [EchoVR_Launcher](https://github.com/marshmallow-mia/EchoVR_Launcher) (Windows and Linux). Reported #133 to #137, #495, #496, #511 to #513 and #719, and wrote the merged fixes #138 to #141, #500, #502, #514 to #516 and #721.",
       "sources": [
         "https://github.com/marshmallow-mia/Echo-VR-Installer",
         "https://github.com/marshmallow-mia/EchoVR_Launcher",
+        "named by the project owner",
         "https://github.com/EchoTools/nevr-runtime/issues/133",
         "https://github.com/EchoTools/nevr-runtime/issues/495",
         "https://github.com/EchoTools/nevr-runtime/issues/511",
@@ -68,7 +79,18 @@
         "https://github.com/Crafter-1/Quest-EchoVR-Installer",
         "docs/adr/0011-quest-game-data-first-run.md",
         "https://github.com/EchoTools/nevr-runtime/issues/925",
-        "https://github.com/EchoTools/nevr-runtime/issues/621"
+        "https://github.com/EchoTools/nevr-runtime/issues/621",
+        "named by the project owner"
+      ]
+    },
+    {
+      "name": "Ducky",
+      "section": "projects",
+      "headings": [],
+      "link": "",
+      "what": "The reverse engineer behind the Echo Combat Quest port.",
+      "sources": [
+        "named by the project owner, 10-13"
       ]
     },
     {

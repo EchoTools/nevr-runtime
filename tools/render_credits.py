@@ -18,8 +18,8 @@ File shape (schema 1; every key is required):
               headings  heading ids the in-game page lists this name under (may be empty)
               link      "" or https://github.com/<owner>[/<repo>]
               what      one line for the README; required when section is not null
-              sources   public evidence for `what`: a github.com URL, "#<number>" of this repo, or a
-                        repo-relative path
+              sources   evidence for `what`: a github.com URL, "#<number>" of this repo, a
+                        repo-relative path, or "named by the project owner[, MM-DD]" (no chat quoted)
   closing   one README line after the lists, or ""
 """
 from __future__ import annotations
@@ -43,6 +43,8 @@ LINK_SHAPE = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)
 URL = re.compile(r"https?://[^\s)>\]]+")
 SOURCE_URL = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.#/-]+)?$")
 SOURCE_ISSUE = re.compile(r"^#[0-9]+$")
+# The project owner named the person or the work; the record of it is not public, so it is stated as that and nothing more.
+SOURCE_OWNER = re.compile(r"^named by the project owner(, [0-9]{2}-[0-9]{2})?$")
 KEYS = {"schema", "headings", "sections", "entries", "closing"}
 ENTRY_KEYS = {"name", "section", "headings", "link", "what", "sources"}
 
@@ -93,10 +95,10 @@ def validate(data: dict, root: Path = ROOT) -> list[str]:
         if not entry["sources"]:
             problems.append(f"{name}: no source")
         for source in entry["sources"]:
-            ok = bool(SOURCE_URL.match(source) or SOURCE_ISSUE.match(source) or (
+            ok = bool(SOURCE_URL.match(source) or SOURCE_ISSUE.match(source) or SOURCE_OWNER.match(source) or (
                 not source.startswith(("http", "/")) and ".." not in source and (root / source).exists()))
             if not ok:
-                problems.append(f"{name}: source {source!r} is not a github.com URL, an issue number or a repo path that exists")
+                problems.append(f"{name}: source {source!r} is not a github.com URL, an issue number, 'named by the project owner[, MM-DD]' or a repo path that exists")
     for url in URL.findall(data["closing"]):
         problems.append(f"closing: link {url!r} not allowed")
     return problems

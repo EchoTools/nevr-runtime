@@ -115,6 +115,54 @@ class SharedFile(unittest.TestCase):
         self.assertNotIn("SupporterNameForTest", self.tool.render_readme(data))
         self.assertIn("SupporterNameForTest", [n for g in self.tool.ingame_groups(data) for n in g["names"]])
 
+    def entry(self, name):
+        found = [e for e in self.data["entries"] if e["name"] == name]
+        self.assertEqual(len(found), 1, f"{name} appears once in the file")
+        return found[0]
+
+    def test_in_game_code_contributions_are_these_names_in_file_order(self):
+        self.assertEqual(
+            self.tool.ingame_groups(self.data),
+            [{"id": "code-contributions", "ingame": "CODE CONTRIBUTIONS", "names": ["Xenomega", "kfc", "Dualgame", "marshmallow-mia"]}],
+        )
+
+    def test_names_the_project_owner_gave_say_so_in_their_sources(self):
+        owner = re.compile(r"^named by the project owner(, \d{2}-\d{2})?$")
+        for name, date in (("kfc", "10-19"), ("Ducky", "10-13"), ("marshmallow-mia", None)):
+            sources = [s for s in self.entry(name)["sources"] if owner.match(s)]
+            self.assertTrue(sources, f"{name}: no 'named by the project owner' source")
+            if date:
+                self.assertIn(f"named by the project owner, {date}", sources)
+
+    def test_kfc_and_ducky_are_in_the_readme_and_the_linux_port_is_credited(self):
+        block = self.tool.render_readme(self.data)
+        self.assertIn("**kfc**: Helped write a lot of EchoRelay.", block)
+        self.assertIn("**Ducky**: The reverse engineer behind the Echo Combat Quest port.", block)
+        self.assertIn("Linux port", self.entry("marshmallow-mia")["what"])
+        self.assertNotIn("quest.echovr.de", block)
+
+    def test_ducky_has_no_in_game_heading_and_crafter_is_one_entry(self):
+        self.assertEqual(self.entry("Ducky")["headings"], [])
+        self.assertEqual(self.entry("kfc")["headings"], ["code-contributions"])
+        self.assertNotIn("Crafter-1", [e["name"] for e in self.data["entries"]])
+
+    def test_no_pronoun_for_a_person_anywhere_in_the_text(self):
+        pronoun = re.compile(r"\b(he|she|him|her|hers|his|they|them|their|theirs)\b", re.I)
+        for entry in self.data["entries"]:
+            self.assertIsNone(pronoun.search(entry["what"]), f"{entry['name']}: {entry['what']}")
+        self.assertIsNone(pronoun.search(self.data["closing"]))
+
+    def test_a_source_is_public_or_says_the_project_owner_named_it(self):
+        def problems(source):
+            data = copy.deepcopy(self.data)
+            data["entries"][0]["sources"] = [source]
+            return self.tool.validate(data, ROOT)
+
+        self.assertEqual(problems("named by the project owner, 10-19"), [])
+        self.assertEqual(problems("named by the project owner"), [])
+        self.assertTrue(problems("sprockee said so"))
+        self.assertTrue(problems("named by the project owner in chat, 10-19"))
+
     def test_validate_refuses_a_bad_file(self):
         def problems(mutate):
             data = copy.deepcopy(self.data)
