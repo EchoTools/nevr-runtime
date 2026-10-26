@@ -856,9 +856,11 @@ your seat name, for example `claude-main` or `codex`.
   checkout's, with `tools/seed_build_tree.py`: the configured tree is copied with the checkout path rewritten in its
   text files, ninja's deps log and ninja's build log (paths and command hashes), and the mtimes of source files
   identical to the main checkout's are aligned, so a build that follows compiles only what differs. It seeds only an
-  absent or empty `build/$PRESET`, only a tree built at this worktree's HEAD commit with no uncommitted changes (every compile command carries the
-  commit and the `git describe --dirty` version, so otherwise ninja rebuilds every object whatever was copied, and the shared compiler cache answers
-  them), and never when a `ninja`, `cmake` or `ctest` is running in the main checkout's tree. It never writes the main checkout, prints what it did or why it did not (a
+  absent or empty `build/$PRESET`, only a tree whose `build.ninja` names the commit it was built at (a tree that does not is refused) and that commit is this
+  worktree's HEAD, with no uncommitted changes (every compile command carries the commit and the `git describe --dirty` version, so otherwise ninja
+  rebuilds every object whatever was copied, and the shared compiler cache answers them), only when the copy no longer names the main checkout's path
+  (a tree configured through a link to the checkout is refused), and never when a `ninja`, `cmake` or `ctest` is running in the main checkout's tree. It
+  never writes the main checkout, prints what it did or why it did not (a
   worktree that is not seeded still builds, from scratch), and appends one record to
   `$XDG_STATE_HOME/nevr-runtime/seed-build-tree.jsonl`.
   The build embeds the public client defaults from `config/public-defaults.env` (git-ignored: CI

@@ -26,9 +26,17 @@ build/ and moved into place when it is complete:
 The commit is a guard. The root CMakeLists.txt puts the commit (NEVR_GIT_COMMIT_FULL) and the version on every
 compile command, so at any other commit ninja sees every compile command changed and rebuilds every object
 whatever was copied. A copy whose build.ninja names a commit other than the worktree's HEAD is therefore not made
-(the first build is the ordinary one, answered object by object from the shared compiler cache). A tree whose
-commands carry no such definition is not checked. The version carries `-dirty` when the tree was configured with
+(the first build is the ordinary one, answered object by object from the shared compiler cache). A build.ninja
+from which the commit cannot be read (no such definition, or one that is not 40 hex digits) is refused too: the
+tool cannot show the tree is at this HEAD. The version carries `-dirty` when the tree was configured with
 uncommitted changes; such a tree is refused for the same reason.
+
+The copy is scanned before it is moved into place. The checkout path is rewritten only as the tool knows it (the
+resolved path); a tree configured through another spelling of it (a link to the checkout) would keep that
+spelling in build.ninja and regenerate the main checkout's tree. Every file of the copy that does not have a binary
+suffix is searched for the spellings of the main checkout's path (the resolved one, the one given, the one in
+CMakeCache.txt), with the worktree's own path set aside (a worktree under the main checkout contains it); a hit
+means the copy is not moved into place and nothing is kept.
 
 What is not carried: objects built in the main checkout keep the main checkout's path in anything they embed
 (`__FILE__`, debug info); the rebuilt ones carry the worktree's.
@@ -256,7 +264,8 @@ def rewrite_text_files(copy: pathlib.Path, rewrite) -> int:
 
 def align_source_mtimes(main: pathlib.Path, worktree: pathlib.Path) -> int:
     """Give each tracked file that is byte-identical to the main checkout's the main checkout's mtime."""
-    listing = subprocess.run(["git", "-C", str(worktree), "ls-files", "-z"], check=True, capture_output=True).stdout
+    listing = subprocess.run(["git", "-C", str(worktree), "ls-files", "-z"], check=True, capture_output=True,
+                             env=_git_env()).stdout
     aligned = 0
     for raw in listing.split(b"\0"):
         if not raw:
@@ -280,6 +289,12 @@ _COMMIT_DEFINE = re.compile(rb'NEVR_GIT_COMMIT_FULL=\\*"([0-9a-f]{40})')
 _DESCRIBE_DEFINE = re.compile(rb'NEVR_GIT_DESCRIBE=\\*"([^"\\ ]*)')
 
 
+def _git_env() -> dict:
+    """The environment for git: GIT_DIR and the other variables that override `git -C` are dropped, so a call about the
+    worktree is never answered by whatever repository the caller's environment names."""
+    return {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")}
+
+
 def built_commits(build_ninja: pathlib.Path) -> set[str]:
     """The commits the compile commands of a build tree carry (one commit per configure)."""
     return {m.group(1).decode() for m in _COMMIT_DEFINE.finditer(build_ninja.read_bytes())}
@@ -288,6 +303,36 @@ def built_commits(build_ninja: pathlib.Path) -> set[str]:
 def built_modified(build_ninja: pathlib.Path) -> bool:
     """True when the tree was configured with uncommitted changes (`git describe --dirty` ends in -dirty)."""
     return any(m.group(1).endswith(b"-dirty") for m in _DESCRIBE_DEFINE.finditer(build_ninja.read_bytes()))
+
+
+def leftover_main_path(copy: pathlib.Path, spellings: set[str], worktree: pathlib.Path) -> str | None:
+    """The first file (or link) of `copy` that still names the main checkout by one of `spellings`, as `path: spelling`.
+
+    Files with a binary suffix are not read (objects keep the old path in what they embed, by design). The worktree's
+    own path is set aside first: a worktree under the main checkout has the main checkout's path as its prefix."""
+    own = re.compile(re.escape(str(worktree).encode()) + rb"(?![\w.+-])")
+    patterns = [re.compile(re.escape(s.encode()) + rb"(?![\w.+-])") for s in sorted(spellings)]
+    spelled = {p.pattern: s for p, s in zip(patterns, sorted(spellings))}
+
+    def find(data: bytes) -> str | None:
+        data = own.sub(b"", data)
+        for pattern in patterns:
+            if pattern.search(data):
+                return spelled[pattern.pattern]
+        return None
+
+    for dirpath, dirs, files in os.walk(copy):
+        for name in files + [d for d in dirs if pathlib.Path(dirpath, d).is_symlink()]:
+            path = pathlib.Path(dirpath, name)
+            if path.is_symlink():
+                hit = find(os.readlink(path).encode())
+            elif pathlib.Path(name).suffix in BINARY_SUFFIXES:
+                continue
+            else:
+                hit = find(path.read_bytes())
+            if hit:
+                return f"{path.relative_to(copy)}: {hit}"
+    return None
 
 
 def _cache_value(cache: pathlib.Path, key: str) -> str | None:
@@ -336,6 +381,7 @@ def _is_empty_dir(path: pathlib.Path) -> bool:
 
 
 def seed(main: pathlib.Path, worktree: pathlib.Path, preset: str, *, ninja: str = "ninja") -> Result:
+    given = os.path.abspath(main)
     main, worktree = pathlib.Path(main).resolve(), pathlib.Path(worktree).resolve()
     if main == worktree:
         return Result("not-seeded", "the worktree is the main checkout; there is nothing to seed it from")
@@ -354,15 +400,18 @@ def seed(main: pathlib.Path, worktree: pathlib.Path, preset: str, *, ninja: str 
         if have is None or pathlib.Path(have).resolve() != want:
             return Result("not-seeded", f"{src}/CMakeCache.txt has {key}={have}, not {want}: that tree was configured for another checkout")
     commits = built_commits(src / "build.ninja")
-    if commits:
-        head = subprocess.run(["git", "-C", str(worktree), "rev-parse", "HEAD"], capture_output=True, text=True)
-        if head.returncode != 0:
-            return Result("not-seeded", f"cannot read the HEAD of {worktree}: {head.stderr.strip()}")
-        if commits != {head.stdout.strip()}:
-            built = ", ".join(sorted(c[:8] for c in commits))
-            return Result("not-seeded", f"{src} was built at {built} and this worktree is at {head.stdout.strip()[:8]}: every compile "
-                          "command carries the commit, so ninja would rebuild every object either way")
-    if commits and built_modified(src / "build.ninja"):
+    if not commits:
+        return Result("not-seeded", f"cannot read the commit {src} was built at: {src}/build.ninja has no "
+                      "NEVR_GIT_COMMIT_FULL=<40 hex digits> on any command, so it cannot be shown to be at this worktree's HEAD, "
+                      "and a tree built at another commit is rebuilt whole")
+    head = subprocess.run(["git", "-C", str(worktree), "rev-parse", "HEAD"], capture_output=True, text=True, env=_git_env())
+    if head.returncode != 0:
+        return Result("not-seeded", f"cannot read the HEAD of {worktree}: {head.stderr.strip()}")
+    if commits != {head.stdout.strip()}:
+        built = ", ".join(sorted(c[:8] for c in commits))
+        return Result("not-seeded", f"{src} was built at {built} and this worktree is at {head.stdout.strip()[:8]}: every compile "
+                      "command carries the commit, so ninja would rebuild every object either way")
+    if built_modified(src / "build.ninja"):
         return Result("not-seeded", f"{src} was configured with uncommitted changes (its version ends in -dirty), and every compile "
                       "command carries the version, so ninja would rebuild every object at a clean checkout")
     busy = _running_in(src)
@@ -396,6 +445,11 @@ def seed(main: pathlib.Path, worktree: pathlib.Path, preset: str, *, ninja: str 
             st = (staging / name).stat()
             (staging / name).write_bytes(content)
             os.utime(staging / name, ns=(st.st_atime_ns, st.st_mtime_ns))
+        spellings = {str(main), given, _cache_value(src / "CMakeCache.txt", "CMAKE_HOME_DIRECTORY") or str(main)}
+        left = leftover_main_path(staging, spellings, worktree)
+        if left:
+            return Result("not-seeded", f"the copy still names the main checkout after the rewrite ({left}): that tree was configured "
+                          "through another spelling of its path, so building it would regenerate the main checkout's tree")
         aligned = align_source_mtimes(main, worktree)
         if dst.exists():
             dst.rmdir()

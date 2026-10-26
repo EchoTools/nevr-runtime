@@ -16,6 +16,9 @@ import time
 import unittest
 from unittest import mock
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from gitenv import git  # noqa: E402
+
 REPO = pathlib.Path(__file__).resolve().parents[2]
 TOOL = REPO / "tools/seed_build_tree.py"
 
@@ -28,15 +31,12 @@ def load_tool():
     return module
 
 
-def git(cwd, *args):
-    return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(cwd), *args],
-                          check=True, capture_output=True, text=True)
-
-
-def tree_digest(root):
-    """Every path, its bytes and its mtime: a change anywhere under root changes the digest."""
+def tree_digest(root, skip=None):
+    """Every path, its bytes and its mtime: a change anywhere under root changes the digest (except under `skip`)."""
     h = hashlib.sha256()
     for path in sorted(pathlib.Path(root).rglob("*")):
+        if skip is not None and (path == skip or skip in path.parents):
+            continue
         st = path.lstat()
         h.update(f"{path.relative_to(root)}|{st.st_mtime_ns}|{st.st_size}\n".encode())
         if path.is_file() and not path.is_symlink():
@@ -54,7 +54,7 @@ class SeedFixture(unittest.TestCase):
     PRESET = "p"
     WORKTREE_NAME = "wt"
     DESCRIBE = None  # -DNEVR_GIT_DESCRIBE="<this>" on the compile commands, when set
-    COMMIT_DEFINE = False  # the compile commands carry -DNEVR_GIT_COMMIT_FULL="<HEAD>", as the root CMakeLists.txt does
+    COMMIT_DEFINE = True  # the compile commands carry -DNEVR_GIT_COMMIT_FULL="<HEAD>", as the root CMakeLists.txt does
 
     def setUp(self):
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="seed-build-tree-test-"))
@@ -130,7 +130,6 @@ class SeededTree(SeedFixture):
 
     def test_a_file_that_differs_from_main_is_rebuilt(self):
         (self.wt / "src/a.c").write_text('#include "h.h"\nint a(void) { return VAL + 40; }\n')
-        git(self.wt, "commit", "-q", "-a", "--no-gpg-sign", "-m", "branch change")
         self.assertEqual(self.seed().status, "seeded")
         steps, out = pending_steps(self.wt_build())
         self.assertEqual(steps, ["a.o", "app"], out)
@@ -140,7 +139,6 @@ class SeededTree(SeedFixture):
         changed = original.replace("return VAL;", "return 777;")
         self.assertEqual(len(changed), len(original))
         (self.wt / "src/a.c").write_text(changed)
-        git(self.wt, "commit", "-q", "-a", "--no-gpg-sign", "-m", "same size, other content")
         self.assertEqual(self.seed().status, "seeded")
         self.assertEqual(pending_steps(self.wt_build())[0], ["a.o", "app"])
 
@@ -153,9 +151,9 @@ class SeededTree(SeedFixture):
         self.assertNotIn(f"={self.main}\n", cache)
 
     def test_the_main_checkout_is_not_modified(self):
-        before = tree_digest(self.main)
+        before = tree_digest(self.main, skip=self.wt)  # the worktree may sit inside main (SeededTreeWithTheWorktreeInsideMain)
         self.assertEqual(self.seed().status, "seeded")
-        self.assertEqual(tree_digest(self.main), before)
+        self.assertEqual(tree_digest(self.main, skip=self.wt), before)
 
     def test_no_staging_directory_is_left_behind(self):
         self.assertEqual(self.seed().status, "seeded")
@@ -171,10 +169,10 @@ class SeededTree(SeedFixture):
 
 
     def test_files_that_are_not_text_are_copied_as_they_are(self):
-        blob = self.build / "blob.dat"
+        blob = self.build / "blob.o"  # an object embeds the checkout path in debug info and is carried as it is
         blob.write_bytes(b"\0\1" + str(self.main).encode() + b"/x\0")
         self.assertEqual(self.seed().status, "seeded")
-        self.assertEqual((self.wt_build() / "blob.dat").read_bytes(), blob.read_bytes())
+        self.assertEqual((self.wt_build() / "blob.o").read_bytes(), blob.read_bytes())
 
     def test_a_rewritten_text_file_keeps_its_mtime(self):
         before = (self.build / "CMakeCache.txt").stat().st_mtime_ns
@@ -201,6 +199,11 @@ class SeededTree(SeedFixture):
         self.assertEqual(pending_steps(self.wt_build())[0], [])
 
 
+class SeededTreeWithTheWorktreeInsideMain(SeededTree):
+    """The layout of the real repository: linked worktrees live under the main checkout's .claude/worktrees."""
+    WORKTREE_NAME = "main/.claude/worktrees/wt"
+
+
 class SeededTreeWithAnotherPathLength(SeededTree):
     """The deps log pads each path to four bytes: a worktree path of another length than main's must work too."""
     WORKTREE_NAME = "worktree-with-a-longer-name-x"
@@ -224,6 +227,133 @@ class CommitGuard(SeedFixture):
         self.assertIn(here[:8], result.reason)
         self.assertFalse(self.wt_build().exists())
         self.assertEqual([p.name for p in (self.wt / "build").glob(".seed-*")] if (self.wt / "build").exists() else [], [])
+
+
+class UnreadableCommit(SeedFixture):
+    """A tree whose commit cannot be read from build.ninja cannot be shown to be at this HEAD: not seeded."""
+    COMMIT_DEFINE = False
+
+    def assert_refused(self, result):
+        self.assertEqual(result.status, "not-seeded", result)
+        self.assertIn("commit", result.reason)
+        self.assertFalse(self.wt_build().exists())
+        self.assertEqual(list((self.wt / "build").glob(".seed-*")) if (self.wt / "build").exists() else [], [])
+
+    def test_a_build_ninja_that_names_no_commit_is_not_seeded_and_says_so(self):
+        result = self.seed()
+        self.assert_refused(result)
+        self.assertIn("NEVR_GIT_COMMIT_FULL", result.reason)
+
+    def test_a_definition_that_is_not_a_forty_hex_commit_is_not_seeded(self):
+        ninja = self.build / "build.ninja"
+        ninja.write_text(ninja.read_text().replace("-c $in", '-DNEVR_GIT_COMMIT_FULL=\\"unknown\\" -c $in'))
+        self.assertIn('NEVR_GIT_COMMIT_FULL=\\"unknown', ninja.read_text())
+        self.assert_refused(self.seed())
+
+    def test_the_cli_prints_the_reason_exits_zero_and_records_it(self):
+        log = self.tmp / "seed.jsonl"
+        proc = subprocess.run([sys.executable, "-I", str(TOOL), "--main", str(self.main), "--worktree", str(self.wt),
+                               "--preset", self.PRESET, "--log", str(log)], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("not seeded", proc.stderr)
+        self.assertIn("NEVR_GIT_COMMIT_FULL", proc.stderr)
+        self.assertEqual(json.loads(log.read_text().splitlines()[-1])["status"], "not-seeded")
+
+
+class AnotherSpellingOfMain(SeedFixture):
+    """A tree configured through a link to the main checkout names it by that spelling, which the rewrite does not
+    know: build.ninja would still regenerate the main checkout's tree. Resolved paths are equal, so the cache check
+    passes; the copy is scanned for what is left."""
+
+    def setUp(self):
+        super().setUp()
+        self.alias = self.tmp / "alias"
+        self.alias.symlink_to(self.main)
+        for name in ("build.ninja", "CMakeCache.txt"):
+            path = self.build / name
+            path.write_text(path.read_text().replace(str(self.main), str(self.alias)))
+
+    def assert_refused(self, result):
+        self.assertEqual(result.status, "not-seeded", result)
+        self.assertIn(str(self.alias), result.reason)
+        self.assertFalse(self.wt_build().exists())
+        self.assertEqual(list((self.wt / "build").glob(".seed-*")), [])
+
+    def test_a_copy_that_still_names_the_main_checkout_by_another_spelling_is_not_moved_into_place(self):
+        self.assert_refused(self.seed())
+
+    def test_the_same_when_main_is_given_by_that_spelling(self):
+        self.assert_refused(self.tool.seed(self.alias, self.wt, self.PRESET))
+
+    def test_the_reason_names_the_file(self):
+        self.assertRegex(self.seed().reason, r"build\.ninja|CMakeCache\.txt")
+
+
+class SpellingMainWasGivenBy(SeedFixture):
+    """The cache names the checkout by its real path; the caller names it through a link, and a file of the copy
+    (here the manifest, or a link) uses that spelling too."""
+
+    def setUp(self):
+        super().setUp()
+        self.alias = self.tmp / "alias"
+        self.alias.symlink_to(self.main)
+
+    def test_a_manifest_that_uses_the_spelling_main_was_given_by_is_not_moved_into_place(self):
+        ninja = self.build / "build.ninja"
+        ninja.write_text(ninja.read_text().replace(str(self.main), str(self.alias)))
+        result = self.tool.seed(self.alias, self.wt, self.PRESET)
+        self.assertEqual(result.status, "not-seeded", result)
+        self.assertIn(str(self.alias), result.reason)
+        self.assertFalse(self.wt_build().exists())
+
+    def test_a_link_through_that_spelling_is_found_too(self):
+        (self.build / "a-link").symlink_to(self.alias / "src" / "a.c")
+        result = self.tool.seed(self.alias, self.wt, self.PRESET)
+        self.assertEqual(result.status, "not-seeded", result)
+        self.assertIn("a-link", result.reason)
+        self.assertFalse(self.wt_build().exists())
+        self.assertEqual(list((self.wt / "build").glob(".seed-*")), [])
+
+
+class UnknownBinaryFile(SeedFixture):
+    def test_a_file_with_no_binary_suffix_that_names_the_main_checkout_is_not_carried_over_unrewritten(self):
+        (self.build / "blob.dat").write_bytes(b"\0\1" + str(self.main).encode() + b"/x\0")
+        result = self.seed()
+        self.assertEqual(result.status, "not-seeded", result)
+        self.assertIn("blob.dat", result.reason)
+        self.assertFalse(self.wt_build().exists())
+
+    def test_the_worktrees_own_path_is_not_taken_for_the_main_checkouts_when_it_is_inside_it(self):
+        inside = self.main / ".claude" / "worktrees" / "inside"
+        git(self.main, "worktree", "add", "-q", "--no-track", "-b", "inside", str(inside))
+        self.assertEqual(self.tool.seed(self.main, inside, self.PRESET).status, "seeded")
+
+    def test_a_sibling_directory_that_starts_with_the_checkouts_name_is_not_the_checkout(self):
+        (self.build / "sibling.txt").write_text(f"{self.main}-work/scratch\n")
+        self.assertEqual(self.seed().status, "seeded")
+
+
+class MainGivenThroughALink(SeedFixture):
+    def test_a_link_to_the_main_checkout_given_as_its_path_does_not_stop_a_tree_configured_at_the_real_path(self):
+        alias = self.tmp / "alias"
+        alias.symlink_to(self.main)
+        result = self.tool.seed(alias, self.wt, self.PRESET)
+        self.assertEqual(result.status, "seeded", result)
+        self.assertEqual(pending_steps(self.wt_build())[0], [])
+
+
+class GitEnvironment(SeedFixture):
+    def test_variables_naming_another_repository_do_not_redirect_the_seeders_git_calls(self):
+        sentinel = self.tmp / "sentinel"
+        sentinel.mkdir()
+        git(sentinel, "init", "-q", "-b", "main")
+        git(sentinel, "commit", "-q", "--allow-empty", "--no-gpg-sign", "-m", "another repository")
+        leak = {"GIT_DIR": str(sentinel / ".git"), "GIT_WORK_TREE": str(sentinel),
+                "GIT_INDEX_FILE": str(sentinel / ".git/index"), "GIT_COMMON_DIR": str(sentinel / ".git")}
+        with mock.patch.dict(os.environ, leak):
+            result = self.seed()
+        self.assertEqual(result.status, "seeded", result)  # the commit guard read the worktree's HEAD, not the sentinel's
+        self.assertEqual(pending_steps(self.wt_build())[0], [])  # and ls-files listed the worktree's files
 
 
 class ModifiedTree(SeedFixture):
@@ -313,6 +443,14 @@ class NotSeeded(SeedFixture):
         self.assertIn("no space left", result.reason)
         self.assertFalse(self.wt_build().exists())
         self.assertEqual(list((self.wt / "build").glob(".seed-*")), [])
+
+    def test_a_worktree_whose_head_cannot_be_read_is_not_seeded_and_the_reason_says_so(self):
+        plain = self.tmp / "not-a-repository"
+        plain.mkdir()
+        result = self.tool.seed(self.main, plain, self.PRESET)
+        self.assertEqual(result.status, "not-seeded", result)
+        self.assertIn("cannot read the HEAD", result.reason)
+        self.assertFalse((plain / "build").exists())
 
     def test_a_worktree_inside_the_tree_it_would_be_copied_from_is_refused(self):
         inside = self.build / "sub"

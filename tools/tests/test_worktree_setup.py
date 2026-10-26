@@ -5,6 +5,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -13,13 +14,10 @@ from unittest import mock
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools/worktree-setup.sh"
 SEEDER = REPO / "tools/seed_build_tree.py"
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from gitenv import clean_env, git  # noqa: E402
 SECRET = "NEVR_API_KEY=do-not-print-me"
 DEFAULTS = "NEVR_SOCKET_URI=wss://example.invalid/nevr\n"
-
-
-def git(cwd, *args):
-    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(cwd), *args],
-                   check=True, capture_output=True)
 
 
 class WorktreeSetupTest(unittest.TestCase):
@@ -77,7 +75,10 @@ class WorktreeSetupTest(unittest.TestCase):
         build.mkdir(parents=True)
         (build / "CMakeCache.txt").write_text(
             f"CMAKE_HOME_DIRECTORY:INTERNAL={self.main}\nCMAKE_CACHEFILE_DIR:INTERNAL={build}\n")
-        (build / "build.ninja").write_text(f"rule cp\n  command = cp $in $out\nbuild out.txt: cp {self.main}/src/in.txt\n")
+        commit = git(self.main, "rev-parse", "HEAD").stdout.strip()
+        # The compile commands of the real tree carry the commit (root CMakeLists.txt); the seeder reads it from here.
+        (build / "build.ninja").write_text(
+            f"rule cp\n  command = cp $in $out # -DNEVR_GIT_COMMIT_FULL=\\\"{commit}\\\"\nbuild out.txt: cp {self.main}/src/in.txt\n")
         subprocess.run(["ninja", "-C", str(build)], check=True, capture_output=True)
         time.sleep(0.05)
         return build
@@ -296,8 +297,7 @@ class WorktreeSetupTest(unittest.TestCase):
             self.assertTrue((self.main / "extern" / name / "CMakeLists.txt").exists(), name)
 
     def gitdir(self):
-        return pathlib.Path(subprocess.check_output(
-            ["git", "-C", str(self.wt), "rev-parse", "--path-format=absolute", "--git-dir"], text=True).strip())
+        return pathlib.Path(git(self.wt, "rev-parse", "--path-format=absolute", "--git-dir").stdout.strip())
 
     def test_scratch_from_a_killed_run_is_removed_and_user_directories_are_never_touched(self):
         scratch = self.wt / ".nevr-worktree-setup/tmp/minhook"
@@ -325,8 +325,7 @@ class WorktreeSetupTest(unittest.TestCase):
 
     def test_a_main_checkout_with_a_separate_git_dir_is_still_refused_under_an_override(self):
         sep = self.tmp / "sepmain"
-        subprocess.run(["git", "clone", "-q", "--separate-git-dir", str(self.tmp / "sep.git"), str(self.main), str(sep)],
-                       check=True, capture_output=True)
+        git(self.tmp, "clone", "-q", "--separate-git-dir", str(self.tmp / "sep.git"), str(self.main), str(sep))
         shutil.copytree(self.main / "extern", sep / "extern", dirs_exist_ok=True)
         (sep / "gen").mkdir()
         (sep / "gen/NOTES").write_text("hand written\n")
@@ -428,8 +427,7 @@ class WorktreeSetupTest(unittest.TestCase):
         self.assertFalse(mine_file.exists())
 
     def test_the_pin_warning_is_only_for_what_this_run_filled(self):
-        subprocess.run(["git", "-C", str(self.wt), "update-index", "--add", "--cacheinfo",
-                        "160000,2222222222222222222222222222222222222222,extern/minhook"], check=True, capture_output=True)
+        git(self.wt, "update-index", "--add", "--cacheinfo", "160000,2222222222222222222222222222222222222222,extern/minhook")
         git(self.wt, "commit", "-q", "-m", "pin", "--no-gpg-sign")
         (self.main / "extern/minhook/.git").unlink()
         first = self.run_script(self.wt)
@@ -468,11 +466,9 @@ class WorktreeSetupTest(unittest.TestCase):
 
     def test_a_branch_that_pins_other_submodule_commits_gets_a_warning(self):
         gitlink = "160000 commit 1111111111111111111111111111111111111111\textern/minhook\n"
-        subprocess.run(["git", "-C", str(self.main), "update-index", "--add", "--cacheinfo",
-                        "160000,1111111111111111111111111111111111111111,extern/minhook"], check=True, capture_output=True)
+        git(self.main, "update-index", "--add", "--cacheinfo", "160000,1111111111111111111111111111111111111111,extern/minhook")
         git(self.main, "commit", "-q", "-m", "pin", "--no-gpg-sign")
-        subprocess.run(["git", "-C", str(self.wt), "update-index", "--add", "--cacheinfo",
-                        "160000,2222222222222222222222222222222222222222,extern/minhook"], check=True, capture_output=True)
+        git(self.wt, "update-index", "--add", "--cacheinfo", "160000,2222222222222222222222222222222222222222,extern/minhook")
         git(self.wt, "commit", "-q", "-m", "other pin", "--no-gpg-sign")
         (self.main / "extern/minhook/.git").unlink()  # let git see the main checkout's own HEAD, as a real submodule has one
         result = self.run_script(self.wt)
@@ -496,8 +492,7 @@ class WorktreeSetupTest(unittest.TestCase):
     def test_a_bare_layout_needs_the_override_then_works(self):
         bare = self.tmp / "proj"
         bare.mkdir()
-        subprocess.run(["git", "clone", "-q", "--bare", str(self.main), str(bare / ".bare")], check=True,
-                       capture_output=True)
+        git(self.tmp, "clone", "-q", "--bare", str(self.main), str(bare / ".bare"))
         wt = bare / "wt"
         git(bare / ".bare", "worktree", "add", "-q", "--no-track", "-b", "b", str(wt))
         for name in ("minhook", "breakpad", "lss"):
@@ -540,7 +535,7 @@ class WorktreeSetupTest(unittest.TestCase):
 class WorktreeSetupLuauTest(unittest.TestCase):
     """extern/luau is a submodule the main checkout may not have initialised: setup fills it either way (#893)."""
 
-    ENV = dict(os.environ, GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="protocol.file.allow", GIT_CONFIG_VALUE_0="always")
+    ENV = dict(clean_env(), GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="protocol.file.allow", GIT_CONFIG_VALUE_0="always")
 
     def setUp(self):
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="worktree-setup-luau-test-", dir="/var/tmp"))
@@ -558,9 +553,7 @@ class WorktreeSetupLuauTest(unittest.TestCase):
         git(self.main, "init", "-q")
         git(self.main, "add", "tools/worktree-setup.sh", "tools/seed_build_tree.py")
         git(self.main, "commit", "-q", "-m", "init", "--no-gpg-sign")
-        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(self.main),
-                        "submodule", "add", "-q", str(self.upstream), "extern/luau"],
-                       check=True, capture_output=True, env=self.ENV)
+        git(self.main, "submodule", "add", "-q", str(self.upstream), "extern/luau", env=self.ENV)
         git(self.main, "commit", "-q", "-m", "pin luau", "--no-gpg-sign")
         for name in ("minhook", "breakpad", "lss"):
             d = self.main / "extern" / name
@@ -615,7 +608,7 @@ class WorktreeSetupLuauTest(unittest.TestCase):
 
     def test_a_branch_that_does_not_pin_luau_gets_none(self):
         git(self.wt, "reset", "-q", "--hard", "HEAD~1")
-        pinned = subprocess.run(["git", "-C", str(self.wt), "ls-tree", "HEAD", "extern/luau"], capture_output=True, text=True)
+        pinned = git(self.wt, "ls-tree", "HEAD", "extern/luau")
         self.assertEqual(pinned.stdout.strip(), "", "the branch pins no luau")
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
