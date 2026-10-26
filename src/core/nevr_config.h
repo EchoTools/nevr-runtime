@@ -89,6 +89,9 @@ struct PluginSpec {
   bool early = false;                        // load before the game reads its data (#496)
 };
 
+/// The kind of node a config path names (NevrConfig::Kind). `kNull` is a key written with no value (or `~`, `null`).
+enum class NodeKind { kAbsent, kNull, kScalar, kSequence, kMapping };
+
 class NevrConfig {
  public:
   NevrConfig();
@@ -117,6 +120,9 @@ class NevrConfig {
   /// is not set (its text stays in the returned value as written). That is exact: a literal "${"
   /// written with the $${ escape, or inside a set variable's value, does not count.
   std::optional<std::string> GetString(const std::string& path, bool* hadUnsetBare = nullptr) const;
+  /// What `path` names in the file. The typed getters give nullopt for everything but a scalar of the right type, so this is
+  /// how a caller tells "not set" from "set to something that is not a value" (a key with no value, a mapping, a list).
+  NodeKind Kind(const std::string& path) const;
   std::optional<bool> GetBool(const std::string& path) const;
   std::optional<std::int64_t> GetInt(const std::string& path) const;
   std::optional<double> GetFloat(const std::string& path) const;

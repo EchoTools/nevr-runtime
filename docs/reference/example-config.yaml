@@ -99,9 +99,10 @@ graphics:
   # measured any headset's native size): low 1680x1760, medium 2376x2568, high 3072x3380, very_high 3584x3944,
   # ultra 4096x4506, with 2 samples. A bigger size looks sharper and costs frame time; on a Quest 2 `high` is well above
   # the headset's native size. `stock` installs nothing: the game gets the size the headset runtime suggests.
-  # Read once at launch and fixed for the run: a change takes effect at the next launch. A value that is not one of the
-  # six words is ignored with a warning in the sentinel log that names it, and the default applies.
-  # Default (absent): high. The log line `texture_quality` in the sentinel log names the level, its source and the size.
+  # Read once at launch and fixed for the run: a change takes effect at the next launch. Any mistake (a value that is not
+  # one of the six words, a mapping or a list, a key with no value, a `graphics` that is not a mapping, an unset ${VAR}, a
+  # file rejected as a whole) gives `stock`, with a warning in the sentinel log that names the key.
+  # Default (absent): stock. The log line `texture_quality` in the sentinel log names the level, its source and the size.
   # texture_quality: high
 
 # ---------------------------------------------------------------------------

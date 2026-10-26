@@ -93,7 +93,8 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     r.Run(StepId::kArmCrashReporter, [&] { steps.ArmCrashReporter(); return true; });
 
     nevr_quest::Features want;  // all off if the configuration cannot be resolved
-    nevr_quest::TextureChoice texture;  // the default level (high) if the configuration cannot be resolved
+    nevr_quest::TextureChoice texture;  // `stock` if the configuration cannot be resolved: that is a mistake, not an absent key
+    texture.level = nevr_quest::texture_quality::kFallbackLevel;
     r.Run(StepId::kResolveConfig, [&] {
       const nevr_quest::ResolvedConfig& cfg = steps.ResolveConfig();
       want = cfg.effective;
@@ -144,8 +145,8 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // The OBB-mount skip (#319, #572) runs on every launch: no feature and no configuration turns it off.
     const bool obbCounters =
         r.Run(StepId::kRegisterObbSkipCounters, [&] { return steps.RegisterObbSkipCounters(); });
-    // The texture-quality hook (#943) runs on every launch with whatever level the configuration gave (the default, `high`,
-    // when it gave none), so its counters are registered on every launch, except for `stock`, which installs nothing.
+    // The texture-quality hook (#943) runs on every launch with whatever level the configuration gave (the default, `stock`
+    // for now, when it gave none), so its counters are registered on every launch, except for `stock`, which installs nothing.
     bool textureCounters = false;
     if (texture.level != nevr_quest::texture_quality::Level::kStock) {
       textureCounters =

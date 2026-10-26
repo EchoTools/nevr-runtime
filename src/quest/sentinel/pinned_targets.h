@@ -138,7 +138,7 @@ using LibR15GetDeviceExtensionsVulkanThunk = CallbackThunk<LibR15GetDeviceExtens
 
 // VrApi.h: int vrapi_GetSystemPropertyInt(const ovrJava* java, ovrSystemProperty propType). Imported (value 0): JUMP_SLOT
 // 0x36fa728 (`readelf -rW` on the pinned image), the slot the hardware dump hooks too (docs/adr/0006-quest-hardware-dump.md).
-// CVR::RefreshRTSize (0x1a709b0) calls it with ids 5 and 6, the suggested eye texture width and height
+// CVR::RefreshRTSize (0x1a709a0) calls it with ids 5 and 6, the suggested eye texture width and height
 // (`bl` at 0x1a709f4 and 0x1a70a04), multiplies the results by CustomViewportScale and stores the pair; CVR::Resize
 // (0x1a70d0c) creates the swap chain from it once per process. `java` is never dereferenced here (an incomplete type).
 struct OvrJavaOpaque;

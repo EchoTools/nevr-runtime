@@ -128,7 +128,10 @@ void TheTableIsTheInstallersTable() {
   }
   QCHECK(tq::SizeFor(tq::Level::kStock).width == 0 && tq::SizeFor(tq::Level::kStock).height == 0);
   QCHECK(std::strcmp(tq::LevelName(tq::Level::kStock), "stock") == 0);
-  QCHECK(tq::kDefaultLevel == tq::Level::kHigh);
+  // The pin: the flip to `high` is this line and the constant, after a Quest 2 is measured at `high` (#943). A mistake is
+  // `stock` whatever the default is.
+  QCHECK(tq::kDefaultLevel == tq::Level::kStock);
+  QCHECK(tq::kFallbackLevel == tq::Level::kStock);
   QCHECK(tq::kEyeWidthPropertyId == 5 && tq::kEyeHeightPropertyId == 6);
 }
 

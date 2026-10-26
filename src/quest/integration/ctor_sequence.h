@@ -37,7 +37,7 @@
 //      InstallTextureQuality         the eye-buffer size libr15 creates its swap chain with (#943): one libr15 slot
 //                                    (vrapi_GetSystemPropertyInt), on every launch, right after the Vulkan window hook and
 //                                    before the hardware dump (which then shares the slot); the level is the config's
-//                                    graphics.texture_quality, `high` when the configuration cannot be resolved; `stock`
+//                                    graphics.texture_quality, `stock` when the configuration cannot be resolved; `stock`
 //                                    installs nothing. Its counters are registered with the others (step 3), unless `stock`.
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):

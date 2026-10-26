@@ -367,6 +367,20 @@ std::optional<std::string> NevrConfig::GetString(const std::string& path, bool* 
   return value;
 }
 
+NodeKind NevrConfig::Kind(const std::string& path) const {
+  if (!impl_) return NodeKind::kAbsent;
+  const YAML::Node n = ResolvePath(impl_->root, path);
+  if (!n.IsDefined()) return NodeKind::kAbsent;
+  switch (n.Type()) {
+    case YAML::NodeType::Scalar: return NodeKind::kScalar;
+    case YAML::NodeType::Sequence: return NodeKind::kSequence;
+    case YAML::NodeType::Map: return NodeKind::kMapping;
+    case YAML::NodeType::Null: return NodeKind::kNull;
+    case YAML::NodeType::Undefined: return NodeKind::kAbsent;
+  }
+  return NodeKind::kAbsent;
+}
+
 std::optional<bool> NevrConfig::GetBool(const std::string& path) const {
   const std::optional<std::string> s = GetString(path);
   if (!s) return std::nullopt;

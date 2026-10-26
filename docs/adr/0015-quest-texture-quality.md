@@ -1,6 +1,6 @@
 # ADR 0015: Quest texture quality is a config key applied by a GOT hook
 
-Status: accepted, implemented (`src/quest/sentinel/texture_quality.h`, `texture_quality_hook.{h,cpp}`, `sysprop_int_share.h`, #943). On in every Quest build; the default level is `high`.
+Status: accepted, implemented (`src/quest/sentinel/texture_quality.h`, `texture_quality_hook.{h,cpp}`, `sysprop_int_share.h`, #943). On in every Quest build; the default level is `stock`, which installs no hook.
 Not yet observed on a headset: the "Prediction" section is what the first run must show.
 
 ## Context
@@ -9,13 +9,13 @@ The community installer's patcher (EchoTools/echoApkPatch, by marshmallow-mia, f
 
 What the game does (pinned `libr15.so`, build id `b243509c08ce677aeb95fa348016949b3fc45230`; `src/quest/sentinel/pinned_targets.h`):
 
-- `CVR::RefreshRTSize` (ELF `0x1a709b0`) asks the headset runtime for the suggested eye-buffer size with `vrapi_GetSystemPropertyInt` property id 5 (width, call at `0x1a709f4`) and id 6 (height, `0x1a70a04`), multiplies each by `CustomViewportScale` (1.0 unless a script sets it) and stores the pair.
+- `CVR::RefreshRTSize` (ELF `0x1a709a0`) asks the headset runtime for the suggested eye-buffer size with `vrapi_GetSystemPropertyInt` property id 5 (width, call at `0x1a709f4`) and id 6 (height, `0x1a70a04`), multiplies each by `CustomViewportScale` (1.0 unless a script sets it) and stores the pair.
 - `CVR::Resize` (`0x1a70d0c`) creates the swap chain from the pair, once per process, and logs `Creating OVR swap chain with size %i x %i (2 slices, %u sample[s])`.
 - `vrapi_GetSystemPropertyInt` is a `JUMP_SLOT` in libr15 at ELF `0x36fa728`; libr15 is `BIND_NOW`.
 
 ## Decision
 
-A config key, `graphics.texture_quality`, read from the Quest `config.yaml` (`src/quest/sentinel/quest_config.cpp`). Values: `stock`, `low`, `medium`, `high`, `very_high`, `ultra`, lower case. The default (key absent) is `high`.
+A config key, `graphics.texture_quality`, read from the Quest `config.yaml` (`src/quest/sentinel/quest_config.cpp`). Values: `stock`, `low`, `medium`, `high`, `very_high`, `ultra`, lower case. The default (key absent) is `stock`: no hook, the runtime's own size. `texture_quality.h` holds the default (`kDefaultLevel`) and, separately, the level every mistake gives (`kFallbackLevel`, always `stock`).
 
 One GOT hook on the `vrapi_GetSystemPropertyInt` slot. The handler calls the original with the game's own arguments every time and returns its answer, except for property ids 5 and 6 when a level other than `stock` is latched: those return the level's width or height. Every other id returns exactly what the runtime answered. `stock` installs nothing and the game gets the runtime's own size.
 
@@ -31,7 +31,11 @@ The sizes are the installer's absolute sizes, reported for a Quest 3; nothing he
 
 The level is latched by the first install in the process and never changes: the swap chain is created once, so its size has to stay what it was. A second install with another level is refused and logged. A change of the key takes effect at the next launch.
 
-A value that is not one of the six words keeps the default and logs a warning naming the word (`quest_config.cpp`, `rejected reason=unknown_level`).
+Any mistake in the key gives `stock`, never the default and never `high`, with one Warning that names the key (`quest_config.cpp`, `config file key=graphics.texture_quality rejected reason=<why> (falls back to stock; ...)`). The reasons: `unknown_level` (a word that is not one of the six: wrong case, a number, empty; the word is named when it is short printable ASCII), `not_a_word` (a mapping, a list, or the key with no value), `graphics_not_a_mapping` (`graphics: ultra`, `graphics: [ultra]`), `unset_variable` (a bare `${VAR}` that is not set) and `file_rejected` (the file is unusable as a whole, so it says nothing about this key). The fall back is separate from the default so that raising the default cannot turn a typo into the level that costs the most.
+
+### Known path: a stored size skips the query
+
+`CVR::RefreshRTSize` queries ids 5 and 6 only when the stored override pair at ELF `0x37a33e8` is zero. `CVR::SetRTSizeOverride` is the only writer found, and its one caller found is `ConfigureEngine`'s desktop 1920x1080 case. On that path the game never asks the runtime, so the key has no effect there. This is a static reading of the pinned library, not observed on a headset; the first Quest run shows the swap-chain line either way.
 
 The handler never logs on the game's call path. The install logs one line, whatever the level and the outcome (`texture_quality`, fields `result`, `quality`, `source`, `w`, `h`; `quality` and not `level`, because the log line's own `level` is its severity). Counters `gfx_native_eye_width` and `gfx_native_eye_height` carry the runtime's last answer to ids 5 and 6, which is the headset's native size, and `gfx_eye_size_served` counts the answers replaced.
 
@@ -45,10 +49,10 @@ The Quest reads the same `config.yaml` through the PC's `nevr_config` (`src/core
 
 ## Prediction (written before a headset run)
 
-Default (no `graphics` section): a `texture_quality` line `result=installed quality=high source=default w=3072 h=3380`, and the game's `Creating OVR swap chain with size 3072 x 3380 (2 slices, 2 sample[s])`. With `low`: `1680 x 1760`. With `stock`: `result=not_installed`, no hook, and the runtime's own size in the game's line. The counters `gfx_native_eye_width` and `gfx_native_eye_height` show the native size at the levels that install the hook.
+Default (no `graphics` section): a `texture_quality` line `result=not_installed quality=stock source=default why=stock`, no hook, and the runtime's own size in the game's `Creating OVR swap chain` line. With `high`: `result=installed quality=high source=config w=3072 h=3380` and `Creating OVR swap chain with size 3072 x 3380 (2 slices, 2 sample[s])`. With `low`: `1680 x 1760`. With `stock`: `result=not_installed`, no hook, and the runtime's own size in the game's line. The counters `gfx_native_eye_width` and `gfx_native_eye_height` show the native size at the levels that install the hook.
 
 What would prove it wrong: the swap-chain line shows a size other than the level's (the game reads the size somewhere other than ids 5 and 6, or creates the swap chain before the hook installs); no `texture_quality` line; a crash or a blank frame at `ultra` (GPU memory).
 
 ## Not claimed
 
-That the table's sizes suit a Quest 2: `high` is above its native size and costs frame time. The native sizes of the Quest 2 and Quest 3 are not measured here (the counters above measure them on the first run); a level defined as a scale of the native size is tracked separately (#953). That `low` is the installer's own number, not one derived from the other levels. That GPU memory suffices at `ultra`. The in-game menu control for the setting is separate work. The PC build has its own render scale and MSAA setting (`resolutionscale` and `msaa` in its saved graphics settings); whether this key gets a PC counterpart is tracked in #956.
+That the table's sizes suit a Quest 2: `high` is about 4.5 times a Quest 2's stock pixel count (a review's figure, from the runtime's suggested size) and costs frame time, and `ultra` may run out of GPU memory; this is why the default is `stock`. The default becomes `high` (one line, `kDefaultLevel`, and the test that pins it) after a Quest 2 has been run at `high` and its frame time and memory measured. The native sizes of the Quest 2 and Quest 3 are not measured here (the counters above measure them on the first run); a level defined as a scale of the native size is tracked separately (#953). That `low` is the installer's own number, not one derived from the other levels. That GPU memory suffices at `ultra`. The in-game menu control for the setting is separate work. The PC build has its own render scale and MSAA setting (`resolutionscale` and `msaa` in its saved graphics settings); whether this key gets a PC counterpart is tracked in #956.

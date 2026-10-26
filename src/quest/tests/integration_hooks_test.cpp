@@ -175,6 +175,8 @@ void TestCounterBudget() {
   RealCounterSteps steps;
   steps.config.effective.redirect = steps.config.effective.bridge = true;
   steps.config.effective.login = steps.config.effective.social = true;
+  // `stock` (the default) registers no texture counters and installs nothing; the budget is the one of a level that hooks.
+  steps.config.textureQuality = {nevr_quest::texture_quality::Level::kHigh, nevr_quest::Source::kFile};
   const ConstructorReport r = RunConstructorSequence(steps);
   for (StepId id : {StepId::kRegisterClockCounters, StepId::kRegisterRedirectCounters, StepId::kRegisterDlopenCounters,
                     StepId::kRegisterLoginCounters, StepId::kRegisterSocialCounters,

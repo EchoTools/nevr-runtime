@@ -460,6 +460,33 @@ TEST(NevrConfig, AcceptsGraphicsSection) {
   EXPECT_THROW(nevr::NevrConfig::LoadFromString("graphic:\n  texture_quality: high\n"), nevr::NevrConfigError);
 }
 
+// Kind tells "set to something that is not a value" from "not set": the typed getters give nullopt for both.
+TEST(NevrConfig, KindSeesEveryKindOfNodeTheGettersCannotRead) {
+  using nevr::NodeKind;
+  const auto cfg = nevr::NevrConfig::LoadFromString(
+      "graphics:\n  scalar: ultra\n  empty_string: \"\"\n  novalue:\n  tilde: ~\n  mapping:\n    a: 1\n  empty_mapping: {}\n"
+      "  list:\n    - a\n    - b\n  list_of_maps:\n    - k: v\n  empty_list: []\nflat: 5\n");
+  EXPECT_EQ(cfg.Kind("graphics"), NodeKind::kMapping);
+  EXPECT_EQ(cfg.Kind("graphics.scalar"), NodeKind::kScalar);
+  EXPECT_EQ(cfg.Kind("graphics.empty_string"), NodeKind::kScalar);
+  EXPECT_EQ(cfg.Kind("flat"), NodeKind::kScalar);
+  EXPECT_EQ(cfg.Kind("graphics.novalue"), NodeKind::kNull);
+  EXPECT_EQ(cfg.Kind("graphics.tilde"), NodeKind::kNull);
+  EXPECT_EQ(cfg.Kind("graphics.mapping"), NodeKind::kMapping);
+  EXPECT_EQ(cfg.Kind("graphics.empty_mapping"), NodeKind::kMapping);
+  EXPECT_EQ(cfg.Kind("graphics.list"), NodeKind::kSequence);
+  EXPECT_EQ(cfg.Kind("graphics.list_of_maps"), NodeKind::kSequence);
+  EXPECT_EQ(cfg.Kind("graphics.empty_list"), NodeKind::kSequence);
+  for (const char* absent : {"graphic", "graphics.other", "graphics.scalar.deeper", "flat.deeper", "novalue", "", "graphics."}) {
+    EXPECT_EQ(cfg.Kind(absent), NodeKind::kAbsent) << absent;
+  }
+  // The getters read none of the non-scalar nodes: that is the gap Kind closes.
+  for (const char* notAValue : {"graphics.novalue", "graphics.tilde", "graphics.mapping", "graphics.list", "graphics.empty_list"}) {
+    EXPECT_FALSE(cfg.GetString(notAValue).has_value()) << notAValue;
+  }
+  EXPECT_EQ(nevr::NevrConfig().Kind("graphics"), NodeKind::kAbsent);
+}
+
 // A rejection carries a stable reason token, never the parser's text: that text echoes the file's own words
 // (a key, a value), which the Quest's sentinel log must not repeat.
 TEST(NevrConfig, ErrorsCarryAStableReasonToken) {

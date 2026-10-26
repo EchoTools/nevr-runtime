@@ -117,6 +117,8 @@ struct FakeSteps final : Steps {
     s.config.effective.bridge = bridge;
     s.config.effective.login = login;
     s.config.effective.social = socialOn;
+    // A level that installs the hook, so the tests of the other steps see the texture steps run; the stock cases set their own.
+    s.config.textureQuality = {nevr_quest::texture_quality::Level::kHigh, nevr_quest::Source::kFile};
     return s;
   }
   int Index(const char* name) const {
@@ -242,13 +244,13 @@ void TestVkExtWindowIsUnconditionalIndependentAndContained() {
 }
 
 // The texture-quality hook (#943) runs on every launch like the Vulkan window: no feature turns it off, a configuration that
-// cannot be resolved gives it the default level (high), the level the configuration did give reaches it with its source,
+// cannot be resolved gives it `stock` (a mistake, never the default and never a level that costs memory), the level the configuration did give reaches it with its source,
 // its counters are registered before the single reporter start (except for `stock`, which installs nothing and needs none),
 // it installs right after the Vulkan window hook and before token auth and the hardware dump, and a refused counter, a
 // failing or a throwing step leaves every other step as it was.
 void TestTextureQualityIsUnconditionalIndependentAndContained() {
   namespace tq = nevr_quest::texture_quality;
-  {  // nothing in the configuration: the default level, from the default
+  {  // every feature off: the level the configuration gave still reaches the hook, with its source
     FakeSteps s = FakeSteps::With(false, false, false, false);
     const ConstructorReport r = RunConstructorSequence(s);
     QCHECK(r.at(StepId::kRegisterTextureQualityCounters).state == StepState::kOk);
@@ -256,7 +258,7 @@ void TestTextureQualityIsUnconditionalIndependentAndContained() {
     QCHECK(std::strcmp(StepName(StepId::kInstallTextureQuality), "install_texture_quality") == 0);
     QCHECK(std::strcmp(StepName(StepId::kRegisterTextureQualityCounters), "register_texture_quality_counters") == 0);
     QCHECK(s.textureCalls == 1);
-    QCHECK(s.textureSeen.level == tq::Level::kHigh && s.textureSeen.source != nevr_quest::Source::kFile);
+    QCHECK(s.textureSeen.level == tq::Level::kHigh && s.textureSeen.source == nevr_quest::Source::kFile);
     QCHECK(s.Index("texture") == s.Index("vk_ext_window") + 1);
     QCHECK(s.Index("reg_texture") == s.Index("reg_obb") + 1 && s.Index("reg_texture") < s.Index("reporter"));
   }
@@ -286,15 +288,17 @@ void TestTextureQualityIsUnconditionalIndependentAndContained() {
     QCHECK(s.textureCalls == 1 && s.textureSeen.level == tq::Level::kStock);
     QCHECK(s.Ran("texture") && !s.Ran("texture_uncounted"));
   }
-  {  // the configuration cannot be resolved: every feature is off, the level is the default, and the hook is still installed
+  {  // the configuration cannot be resolved: a mistake, so `stock` whatever the default is and whatever the fake config holds
     FakeSteps s = FakeSteps::With(true, true, true, true);
-    s.config.textureQuality = {tq::Level::kStock, nevr_quest::Source::kFile};  // not read: the configuration threw
+    s.config.textureQuality = {tq::Level::kUltra, nevr_quest::Source::kFile};  // not read: the configuration threw
     s.failing = {"config"};
     const ConstructorReport r = RunConstructorSequence(s);
     QCHECK(r.at(StepId::kResolveConfig).state == StepState::kThrew);
     QCHECK(r.at(StepId::kInstallTextureQuality).state == StepState::kOk);
-    QCHECK(s.textureSeen.level == tq::Level::kHigh && s.textureSeen.source != nevr_quest::Source::kFile);
-    QCHECK(s.Ran("reg_texture") && s.Ran("texture"));
+    QCHECK(s.textureSeen.level == tq::kFallbackLevel && s.textureSeen.level == tq::Level::kStock);
+    QCHECK(s.textureSeen.source != nevr_quest::Source::kFile);
+    QCHECK(!s.Ran("reg_texture") && s.Ran("texture"));
+    QCHECK(r.at(StepId::kRegisterTextureQualityCounters).state == StepState::kSkipped);
   }
   {  // counters refused: the hook is called once so its own rule logs the skip, and the step says why
     FakeSteps s = FakeSteps::With(true, true, true, true);
@@ -378,7 +382,8 @@ void TestObbSkipIsUnconditionalIndependentAndContained() {
     s.failing = {"config"};
     const ConstructorReport r = RunConstructorSequence(s);
     QCHECK(r.at(StepId::kResolveConfig).state == StepState::kThrew);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_texture", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture"};
+    // The unresolved configuration is a mistake, so the level is `stock`: no texture counters, and the step still runs.
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
   }

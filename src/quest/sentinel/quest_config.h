@@ -20,8 +20,11 @@
 // turns the hardware dump on, `diagnostics.ui_event_probe: true` the invite/party UI probe. A feature whose prerequisite is off or missing is forced off with a logged reason.
 //
 // `graphics.texture_quality` (#943) is one of stock, low, medium, high, very_high, ultra (texture_quality.h); absent, it is
-// `high`. It is not a feature and has no prerequisite: a value that is none of those words keeps the default and is
-// reported by key and by the (printable, short) word it was. `stock` leaves the headset runtime's own eye-buffer size.
+// texture_quality::kDefaultLevel (`stock` for now). It is not a feature and has no prerequisite. Any mistake in it gives
+// `stock`, never the default: a word that is not a level (wrong case, a number, empty), a value that is not a word (a
+// mapping, a list, a key with no value), an unset ${VAR}, a `graphics` section that is not a mapping, or a file that is
+// rejected as a whole. Each is one Warning that names the key (and the word, when it is short printable ASCII).
+// `stock` leaves the headset runtime's own eye-buffer size.
 #pragma once
 
 #include <cstddef>
@@ -83,7 +86,7 @@ struct Features {
 // The texture-quality setting (#943), after the file and the default have spoken.
 struct TextureChoice {
   texture_quality::Level level = texture_quality::kDefaultLevel;
-  Source source = Source::kAbsent;  // kFile: the file gave the level; anything else: the default did
+  Source source = Source::kAbsent;  // kFile: the file gave the level; anything else: the default did, or a mistake fell back
 };
 
 struct LogEvent {

@@ -36,7 +36,8 @@ constexpr const char* kSocialFacadeKey = "social.facade";                      /
 constexpr const char* kSendPresenceToMetaKey = "social.send_presence_to_meta";  // Quest only (default true)
 constexpr const char* kHardwareDumpKey = "diagnostics.hardware_dump";          // Quest only (default false)
 constexpr const char* kUiEventProbeKey = "diagnostics.ui_event_probe";          // Quest only (default false)
-constexpr const char* kTextureQualityKey = "graphics.texture_quality";          // Quest only (default high)
+constexpr const char* kTextureQualityKey = "graphics.texture_quality";          // Quest only (default stock)
+constexpr const char* kTextureQualitySection = "graphics";
 
 struct FeatureSpec {
   const char* name;
@@ -154,24 +155,42 @@ std::string DescribeRejectedWord(const std::string& text) {
   return text;
 }
 
-// graphics.texture_quality: absent keeps the default (high); a word that is not a level keeps it too, with a warning
-// naming the key and the word (#943).
+// What a mistake in graphics.texture_quality gives: `stock`, never the default (texture_quality.h kFallbackLevel), and one
+// Warning that names the key. `why` is a token and carries none of the file's words.
+void FallBackToStock(LoadResult& r, const std::string& why) {
+  r.config.textureQuality = {texture_quality::kFallbackLevel, Source::kAbsent};
+  Add(r, LogLevel::kWarn,
+      std::string("config file key=") + kTextureQualityKey + " rejected reason=" + why + " (falls back to " +
+          texture_quality::LevelName(texture_quality::kFallbackLevel) + "; allowed: stock, low, medium, high, very_high, ultra)");
+}
+
+// graphics.texture_quality (#943). Absent: the default (texture_quality.h kDefaultLevel). One of the six words: that level.
+// Anything else is a mistake and falls back to `stock`, never to the default, with a warning naming the key: a word that is
+// not a level (wrong case, a number, empty), a value that is not a word (a mapping, a list, a key with no value), a bare
+// ${VAR} that is not set, or a `graphics` section that is not a mapping.
 void ReadTextureQuality(const nevr::NevrConfig& cfg, LoadResult& r) {
-  const std::string fallback = std::string("default stays: ") + texture_quality::LevelName(texture_quality::kDefaultLevel);
   bool unsetBare = false;
   const std::optional<std::string> text = cfg.GetString(kTextureQualityKey, &unsetBare);
-  if (!text) return;
-  if (unsetBare) {
-    Add(r, LogLevel::kWarn,
-        std::string("config file key=") + kTextureQualityKey + " rejected reason=unset_variable (" + fallback + ")");
+  if (!text) {
+    // The getter gives nullopt for an absent key and for a node that is not a scalar alike; the kind tells them apart.
+    if (cfg.Kind(kTextureQualityKey) != nevr::NodeKind::kAbsent) {
+      FallBackToStock(r, "not_a_word");  // a mapping, a list, or a key with no value
+    } else {
+      const nevr::NodeKind section = cfg.Kind(kTextureQualitySection);
+      // `graphics:` alone (no value) is no mistake; `graphics: ultra` and `graphics: [ultra]` are.
+      if (section == nevr::NodeKind::kScalar || section == nevr::NodeKind::kSequence) {
+        FallBackToStock(r, "graphics_not_a_mapping");
+      }
+    }
     return;
   }
-  texture_quality::Level level = texture_quality::kDefaultLevel;
+  if (unsetBare) {
+    FallBackToStock(r, "unset_variable");
+    return;
+  }
+  texture_quality::Level level = texture_quality::kFallbackLevel;
   if (!texture_quality::ParseLevel(*text, &level)) {
-    Add(r, LogLevel::kWarn,
-        std::string("config file key=") + kTextureQualityKey + " rejected reason=unknown_level value=" +
-            DescribeRejectedWord(*text) + " (" + fallback +
-            "; allowed: stock, low, medium, high, very_high, ultra)");
+    FallBackToStock(r, "unknown_level value=" + DescribeRejectedWord(*text));
     return;
   }
   r.config.textureQuality = {level, Source::kFile};
@@ -314,6 +333,8 @@ LoadResult ResolveConfig(const EmbeddedDefaults& defaults, const std::string* fi
       r.config = ResolvedConfig();
       ApplyEmbedded(r.config, defaults, nullptr);
       SetDefaultRequests(r.config);
+      // The file might have said anything about the texture quality, so the answer is the mistake's, not the default's.
+      FallBackToStock(r, "file_rejected");
     }
   }
   Derive(r);

@@ -3,7 +3,7 @@
  * Pure: no Android, no game header, no hook, so quest_config.cpp (built with exceptions) and the hook
  * (texture_quality_hook.h, built with -fno-exceptions) share one table.
  *
- * What a level means. libr15's CVR::RefreshRTSize (ELF 0x1a709b0) asks the headset runtime for the suggested eye
+ * What a level means. libr15's CVR::RefreshRTSize (ELF 0x1a709a0) asks the headset runtime for the suggested eye
  * buffer size with vrapi_GetSystemPropertyInt ids 5 (width) and 6 (height), multiplies each by CustomViewportScale
  * (1.0 unless a script sets it) and CVR::Resize creates the swap chain from the result once per process, logging
  * "Creating OVR swap chain with size %i x %i (2 slices, %u sample[s])". A level other than `stock` answers those two
@@ -29,7 +29,13 @@ inline constexpr int kEyeHeightPropertyId = 6;
 
 enum class Level { kStock, kLow, kMedium, kHigh, kVeryHigh, kUltra };
 
-inline constexpr Level kDefaultLevel = Level::kHigh;
+// What the key gives when the file does not set it. `stock` (no hook, the headset runtime's own size) until a Quest 2 has been
+// measured at `high` for frame time and memory (#943): the flip is this one line, and the test that pins it.
+inline constexpr Level kDefaultLevel = Level::kStock;
+// What a mistake in the configuration gives (a word that is not a level, a value that is not a word, a section of the wrong
+// shape, a file that cannot be read as a whole): always `stock`, whatever the default is. A typo must never turn on the
+// level that costs the most.
+inline constexpr Level kFallbackLevel = Level::kStock;
 inline constexpr std::size_t kLevelCount = 6;
 
 struct EyeSize {

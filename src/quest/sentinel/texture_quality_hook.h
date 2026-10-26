@@ -9,10 +9,15 @@
  * exactly the arguments it was given, and returns:
  *   - for id 5 and id 6, when a level other than `stock` is latched, that level's width or height (texture_quality.h);
  *   - for every other id, and for 5 and 6 with no level latched, exactly what the original returned.
- * The level is the config's graphics.texture_quality (quest_config.h), default `high`. It is latched by the first
+ * The level is the config's graphics.texture_quality (quest_config.h), `stock` when it is absent or wrong (texture_quality.h
+ * kDefaultLevel, kFallbackLevel). It is latched by the first
  * Install in the process and never changes: the swap chain is created once and its size has to stay what it was, so a
  * second Install with another level is refused and the first level keeps answering. A change of the setting takes
  * effect at the next launch. `stock` installs nothing.
+ *
+ * One path the hook does not cover: CVR::RefreshRTSize skips the query when the stored size override (ELF 0x37a33e8, set
+ * only by CVR::SetRTSizeOverride, whose one caller found is the desktop 1920x1080 case in ConfigureEngine) is non-zero,
+ * so no level applies there. A Quest run does not set it (static reading, not observed on a headset).
  *
  * It never logs on the game's call path. Install logs one line, whatever the level and the outcome:
  *   {"level":"info","event":"texture_quality","result":"installed|not_installed|refused|skipped",
