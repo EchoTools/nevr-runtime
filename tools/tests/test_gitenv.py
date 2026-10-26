@@ -21,7 +21,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import gitenv  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-SUITES = ("tools/tests/test_seed_build_tree.py", "tools/tests/test_worktree_setup.py")
+SUITES = ("tools/tests/test_seed_build_tree.py", "tools/tests/test_worktree_setup.py", "tools/tests/test_remove_worktree.py")
 
 
 def raw_git(cwd, *args, env=None):

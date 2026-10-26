@@ -58,6 +58,10 @@ install-hooks:
 reap-merged *args:
     python3 -I tools/reap_merged.py {{ args }}
 
+# Remove one linked worktree: every proof first, then `git worktree remove` without --force and without `git submodule deinit` (tools/remove_worktree.py; --dry-run proves and changes nothing)
+remove-worktree *args:
+    python3 -I tools/remove_worktree.py {{ args }}
+
 # Build all components
 build: configure
     @cmake --build --preset {{ preset }}
