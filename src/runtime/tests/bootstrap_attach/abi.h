@@ -11,7 +11,7 @@
 //     units (runtime/host/) behind a DllMain: validate the image, validate the
 //     wrapper's prologue, MinHook the rendezvous, load nothing. The harness measures
 //     the code the game runs, not a copy of it;
-//   - runtime fixtures (runtime_probe.cpp, built as nevr.dll) — implement
+//   - runtime fixtures (runtime_probe.cpp, built as nevr-runtime.dll) — implement
 //     core/runtime_abi.h and record what they are called with.
 
 #include "core/runtime_abi.h"
@@ -53,7 +53,7 @@ enum Event : LONG {
   kHostAttachEnter = 1,
   kHostHookEnabled = 2,       // payload: first byte at the target after the host attach
   kHostHookFailed = 3,        // the host left the game unhooked
-  kHostAttachExit = 4,        // payload: 1 if nevr.dll was loaded at attach exit
+  kHostAttachExit = 4,        // payload: 1 if nevr-runtime.dll was loaded at attach exit
   kRuntimeDllAttach = 5,
   kRuntimeGetApi = 6,
   kRuntimeInitialized = 7,    // payload: host-supplied original wrapper trampoline

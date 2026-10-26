@@ -1,8 +1,8 @@
 """The runtime DLL has one file name, `nevr-runtime.dll` (docs/standards/naming.md, ADR 0012).
 
-The name `nevr.dll` is not spelled anywhere in the tree except where ADR 0012 records that ADR 0008 first used
-it, and no build target is given the output name `nevr`, which would produce that file. The allowed set is
-written out below on purpose: a new entry is a visible edit here."""
+The name `nevr.dll` is not spelled anywhere in the tree except in the dated audits and in this test, and no build
+target is given the output name `nevr`, which would produce that file. The allowed set is written out below on
+purpose: a new entry is a visible edit here."""
 from __future__ import annotations
 
 import pathlib
@@ -16,9 +16,9 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 OLD_NAME = re.compile(r"(?<![A-Za-z0-9_-])nevr\.dll(?![A-Za-z0-9_])", re.IGNORECASE)
 # A target given the output name `nevr` builds `nevr.dll`, whatever its sources say.
 OLD_OUTPUT_NAME = re.compile(r"OUTPUT_NAME\s+[\"']nevr[\"']")
-# Where the old name may appear: this test, ADR 0012 (the one sentence that says what ADR 0008 first called the
-# file) and the audits, which are the dated record of the tree as it was.
-ALLOWED_FILES = frozenset({"tools/tests/test_runtime_dll_name.py", "docs/adr/0012-static-install-root.md"})
+# Where the old name may appear: this test, and the audits, which are the dated record of the tree as it was
+# (AGENTS.md "Documentation, plans and findings").
+ALLOWED_FILES = frozenset({"tools/tests/test_runtime_dll_name.py"})
 ALLOWED_PREFIXES = ("docs/audits/",)
 
 
