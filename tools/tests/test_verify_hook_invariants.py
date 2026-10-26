@@ -10,6 +10,8 @@ import unittest
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "tools"))
+import work_root  # noqa: E402
 VERIFIER = REPO / "tools" / "verify_hook_invariants.py"
 
 
@@ -17,7 +19,7 @@ class VerifyHookInvariantsTest(unittest.TestCase):
     def test_rejects_new_self_collision_in_isolated_source_fixture(self):
         """A newly called detour target must fail instead of being silently accepted."""
         with tempfile.TemporaryDirectory(
-            prefix="hook-invariants-", dir="/var/tmp/work-nevr-runtime"
+            prefix="hook-invariants-", dir=work_root.test_scratch()
         ) as temp_dir:
             fixture = pathlib.Path(temp_dir)
             shutil.copytree(REPO / "src", fixture / "src")
@@ -46,7 +48,7 @@ class VerifyHookInvariantsTest(unittest.TestCase):
 
     def _run_in_fixture(self, extra_runtime_source=None):
         with tempfile.TemporaryDirectory(
-            prefix="hook-invariants-", dir="/var/tmp/work-nevr-runtime"
+            prefix="hook-invariants-", dir=work_root.test_scratch()
         ) as temp_dir:
             fixture = pathlib.Path(temp_dir)
             shutil.copytree(REPO / "src", fixture / "src")
@@ -93,7 +95,7 @@ class VerifyHookInvariantsTest(unittest.TestCase):
     def test_rejects_an_echovr_pointer_detour_on_a_patchaddresses_target(self):
         """#254: an EchoVR:: pointer and a nevr_patch_addresses:: constant naming one detoured address collide."""
         with tempfile.TemporaryDirectory(
-            prefix="hook-invariants-", dir="/var/tmp/work-nevr-runtime"
+            prefix="hook-invariants-", dir=work_root.test_scratch()
         ) as temp_dir:
             fixture = pathlib.Path(temp_dir)
             shutil.copytree(REPO / "src", fixture / "src")

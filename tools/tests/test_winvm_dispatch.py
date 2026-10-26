@@ -6,6 +6,7 @@ import contextlib
 import io
 import pathlib
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -45,8 +46,15 @@ class ScenarioDispatchTest(unittest.TestCase):
 
     def test_missing_credentials_are_environment_exit_two(self):
         output = io.StringIO()
-        with mock.patch.dict("os.environ", {}, clear=True), contextlib.redirect_stderr(output):
-            result = systest.main(["--scenario", "boot"])
+        # main makes its artifact directory before it reads the credentials: that goes in a root of this
+        # test's own, not the user's work root.
+        with tempfile.TemporaryDirectory(dir="/var/tmp") as root:
+            with mock.patch.dict("os.environ", {"NEVR_WORK_ROOT": root}, clear=True), \
+                    contextlib.redirect_stderr(output):
+                result = systest.main(["--scenario", "boot"])
+            made = [p.name for p in pathlib.Path(root).iterdir() if p.is_dir()]
+        self.assertEqual(len(made), 1, made)
+        self.assertTrue(made[0].startswith("winvm-"), made)
         self.assertEqual(result, 2)
         self.assertIn("ENV:", output.getvalue())
         self.assertIn("WINVM_USER", output.getvalue())

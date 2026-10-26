@@ -42,7 +42,7 @@ def main(argv: list[str]) -> int:
         return 2
     stamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
     out = args.out or run_scenario.SCRATCH / f"{stamp}-suite"
-    out.mkdir(parents=True, exist_ok=True)
+    run_scenario.work_root.ensure_dir(out, run_scenario.SCRATCH_PURPOSE, run_scenario.SCRATCH_REMOVED)
     print(f"suite: {len(scenarios)} scenarios -> {out}", flush=True)
 
     rows = []
