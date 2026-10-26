@@ -44,6 +44,46 @@ exec /usr/bin/shred "$@"
 '''
 
 
+FAKE_KEYTOOL = r'''#!/bin/bash
+# A fake `keytool`: record the full argument list where the test can see it, then do the real work.
+printf '%s\n' "$*" >> "$FAKE_KEYTOOL_LOG"
+exec "$FAKE_KEYTOOL_REAL" "$@"
+'''
+
+
+def process_table() -> dict:
+    """pid -> (ppid, argv) for every process this user can read, from /proc."""
+    table = {}
+    for entry in pathlib.Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            stat = (entry / "stat").read_text()
+            raw = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue  # the process ended while the table was being read
+        ppid = int(stat[stat.rindex(")") + 2:].split()[1])
+        argv = [part.decode(errors="replace") for part in raw.split(b"\0") if part]
+        table[int(entry.name)] = (ppid, argv)
+    return table
+
+
+def all_processes() -> list:
+    return [(pid, argv) for pid, (_, argv) in process_table().items()]
+
+
+def process_tree(root: int) -> list:
+    """(pid, argv) of `root` and of everything that descends from it right now."""
+    table = process_table()
+    members, queue = [], [root]
+    while queue:
+        pid = queue.pop()
+        if pid in table:
+            members.append((pid, table[pid][1]))
+        queue += [child for child, (ppid, _) in table.items() if ppid == pid]
+    return members
+
+
 def fingerprint(keystore: pathlib.Path) -> str:
     out = subprocess.run(
         ["keytool", "-list", "-keystore", str(keystore), "-alias", ALIAS, "-storepass", PASSPHRASE],
@@ -64,6 +104,9 @@ class QuestKeystoreTest(unittest.TestCase):
         (self.bin / "pass").chmod(0o755)
         (self.bin / "shred").write_text(FAKE_SHRED)
         (self.bin / "shred").chmod(0o755)
+        (self.bin / "keytool").write_text(FAKE_KEYTOOL)
+        (self.bin / "keytool").chmod(0o755)
+        self.keytool_log = self.tmp / "keytool.log"
         self.shred_log = self.tmp / "shred.log"
         self.store = self.tmp / "store"
         self.store.mkdir()
@@ -76,7 +119,8 @@ class QuestKeystoreTest(unittest.TestCase):
              "-dname", "CN=Quest Keystore Test, O=test"], capture_output=True, check=True)
         self.fp = fingerprint(self.ks)
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", FAKE_PASS_DIR=str(self.store),
-                        FAKE_SHRED_LOG=str(self.shred_log),
+                        FAKE_SHRED_LOG=str(self.shred_log), FAKE_KEYTOOL_LOG=str(self.keytool_log),
+                        FAKE_KEYTOOL_REAL=shutil.which("keytool"),
                         XDG_RUNTIME_DIR=str(self.run_dir), NEVR_QUEST_KS_IMPORT_PASS=PASSPHRASE)
 
     def entry(self, name: str) -> pathlib.Path:
@@ -129,16 +173,85 @@ class QuestKeystoreTest(unittest.TestCase):
         proc.communicate(timeout=20)
         self.assertEqual(self.left_behind(), [])
 
+    def passphrase_holders(self, script=SCRIPT):
+        """Command lines that carry the passphrase and belong to the tool under test: the tool itself, everything it
+        starts while the wrapped command runs, and every `keytool` call it makes (the fake `keytool` records those,
+        because they are over before the wrapped command starts). Processes that are not the tool's are not looked at:
+        other runs of this file, on the same host, put the passphrase on the command line of their own `keytool`."""
+        proc = subprocess.Popen([str(script), "with", "sleep", "30"], env=self.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        found = []
+        tree = []
+        try:
+            deadline = time.time() + 30
+            while time.time() < deadline and not any(argv[:1] == ["sleep"] for _, argv in tree):
+                time.sleep(0.05)
+                tree = process_tree(proc.pid)
+            self.assertTrue(any(argv[:1] == ["sleep"] for _, argv in tree),
+                            f"the wrapped command never started; tree {tree}")
+            self.assertGreaterEqual(len(tree), 2, f"the scan saw {tree}")
+            found += [" ".join(argv) for _, argv in tree if PASSPHRASE in " ".join(argv)]
+        finally:
+            # The tool first, so its trap shreds the key; then whatever it left running, which would hold the pipes
+            # open for `communicate`.
+            proc.send_signal(signal.SIGTERM)
+            try:
+                proc.wait(timeout=20)
+            finally:
+                for pid, _ in tree:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                proc.communicate(timeout=20)
+        calls = self.keytool_log.read_text().splitlines() if self.keytool_log.exists() else []
+        self.assertTrue(calls, "the tool never called keytool, so there was nothing to check")
+        found += [f"keytool {line}" for line in calls if PASSPHRASE in line]
+        return found
+
     def test_neither_the_passphrase_nor_the_key_is_printed_or_on_a_command_line(self):
         self.seed()
-        probe = 'ps -eo args | grep -c "[f]ixture-pass-7f3a91" || true'
-        result = self.run_script("with", "bash", "-c", probe)
+        self.assertEqual(self.passphrase_holders(), [], "the passphrase was on a command line of the tool")
+        result = self.run_script("with", "true")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "0", "the passphrase was on a command line")
         blob = base64.b64encode(self.ks.read_bytes()).decode()
         for text in (result.stdout, result.stderr):
             self.assertNotIn(PASSPHRASE, text)
             self.assertNotIn(blob[:40], text)
+
+    def test_a_process_that_is_not_the_tools_and_names_the_passphrase_does_not_fail_the_check(self):
+        self.seed()
+        # `bash -c <script> <name>`: the name is argument 0 of the script and stays on the command line. The script is
+        # two commands because bash replaces itself with a script that is one command, and that drops the name.
+        other = subprocess.Popen(["bash", "-c", "sleep 30; :", PASSPHRASE])
+        self.addCleanup(lambda: (other.kill(), other.wait()))
+        everyone = [argv for _, argv in all_processes()]
+        self.assertTrue(any(PASSPHRASE in " ".join(argv) for argv in everyone),
+                        "the unrelated process is not in the process table, so this test proves nothing")
+        self.assertEqual(self.passphrase_holders(), [])
+
+    def leaking_copy(self, old: str, new: str) -> pathlib.Path:
+        text = SCRIPT.read_text()
+        self.assertEqual(text.count(old), 1, f"{old!r} is not in the script exactly once")
+        copy = self.tmp / "leaky_quest_keystore.sh"
+        copy.write_text(text.replace(old, new))
+        copy.chmod(0o755)
+        return copy
+
+    def test_the_check_fails_when_the_tool_puts_the_passphrase_on_the_command_line_of_keytool(self):
+        self.seed()
+        leaky = self.leaking_copy('-alias "$ALIAS" -storepass:env NEVR_QUEST_KS_PASS >/dev/null 2>&1; then\n        err "the stored keystore',
+                                  '-alias "$ALIAS" -storepass "$passphrase" >/dev/null 2>&1; then\n        err "the stored keystore')
+        found = self.passphrase_holders(leaky)
+        self.assertTrue(any(line.startswith("keytool ") for line in found), found)
+
+    def test_the_check_fails_when_a_process_the_tool_starts_holds_the_passphrase(self):
+        self.seed()
+        leaky = self.leaking_copy('    log "keystore ready entry=$KS_ENTRY alias=$ALIAS"',
+                                  '    bash -c "sleep 30; :" "$passphrase" &\n    log "keystore ready entry=$KS_ENTRY alias=$ALIAS"')
+        found = self.passphrase_holders(leaky)
+        self.assertTrue(any(line.startswith("bash -c sleep 30; :") for line in found), found)
 
     def test_a_missing_key_is_an_error_that_names_the_import_and_the_command_never_runs(self):
         marker = self.tmp / "ran"
