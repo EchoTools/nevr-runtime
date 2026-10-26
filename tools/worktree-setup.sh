@@ -8,6 +8,10 @@
 # from the main checkout when that has it, else by `git submodule update --init extern/luau` here.
 # .env is runtime-only and is never copied here.
 #
+# It then seeds build/$PRESET (default mingw-release, as in the justfile) from the main checkout's build/$PRESET
+# with tools/seed_build_tree.py, so the first build in this worktree compiles only what differs from the main
+# checkout's last build. That is done only when build/$PRESET is absent or empty, and says why when it cannot be.
+#
 # What it will and will not do:
 #   - It runs only inside a LINKED worktree (never the main checkout), whatever env or arguments say.
 #   - It writes only where the destination is absent or an empty directory. It never deletes or
@@ -160,7 +164,7 @@ if [[ -e "$defaults" ]]; then
   kept+=("$defaults")
 elif [[ -f "$main/$defaults" ]]; then
   mkdir -p config
-  cp "$main/$defaults" "$scratch/tmp/public-defaults.env"
+  cp -p "$main/$defaults" "$scratch/tmp/public-defaults.env"
   mv -T -n "$scratch/tmp/public-defaults.env" "$defaults"
   # `mv -n` skips silently when the file appeared meanwhile: believe the filesystem, not the exit status.
   if [[ -e "$scratch/tmp/public-defaults.env" ]]; then kept+=("$defaults"); else filled+=("$defaults"); fi
@@ -179,6 +183,11 @@ for f in "${filled[@]:-}"; do
 done
 echo "filled from $main: ${filled[*]:-nothing}"
 [[ ${#kept[@]} -eq 0 ]] || echo "kept what this worktree already has: ${kept[*]}"
+# The build tree. The seeder prints what it did (or why it did not) and appends a record to its log; it only
+# reads the main checkout and writes nothing in this worktree unless build/$preset is absent or empty.
+preset=${PRESET:-mingw-release}
+python3 -I tools/seed_build_tree.py --main "$main" --worktree "$here" --preset "$preset" \
+  || refused+=("build/$preset (seeding it from the main checkout failed: see above)")
 if [[ ${#refused[@]} -gt 0 ]]; then
   printf 'error: not touched: %s\n' "${refused[@]}" >&2
   exit 1

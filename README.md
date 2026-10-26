@@ -12,6 +12,35 @@ Part of the **NEVR** project, keeping Echo VR alive.
 
 > Working in this repo as an agent? Start at [`AGENTS.md`](AGENTS.md).
 
+## Built on, and thanks
+
+nEVR is a community project, built on other people's work and tested by the people who reported what broke. These are the projects and people it builds on, and what each did.
+
+<!-- credits:begin (generated from config/credits.json by tools/render_credits.py; edit the JSON, then run it with --write) -->
+
+### Projects
+
+- **[Xenomega](https://github.com/Xenomega)**: [EchoRelay](https://github.com/Xenomega/EchoRelay), a reimplementation of Echo VR's web services and dedicated game servers. The frozen v1 game server code in `src/legacy/` was written for its ServerDB, and the legacy message translation in `docs/reference/legacy-translator.md` is read from its documentation.
+- **kfc**: Helped write a lot of EchoRelay.
+- **[Dualgame](https://github.com/Dualgame)**: [echo-symbols](https://github.com/Dualgame/echo-symbols), the recovered symbol names this repo pulls at a pinned commit for its log symbol cache, and [echovr-modkit](https://github.com/Dualgame/echovr-modkit) with its [EchoRelay fork](https://github.com/Dualgame/EchoRelay), which back invite codes and the early-quit lockout and which `docs/engine/early-quit.md` and the invite-code design (#906) draw on.
+- **[marshmallow-mia](https://github.com/marshmallow-mia)**: The Echo VR Linux port, the [Echo VR installer](https://github.com/marshmallow-mia/Echo-VR-Installer) (PC and Quest) and [EchoVR_Launcher](https://github.com/marshmallow-mia/EchoVR_Launcher) (Windows and Linux). Reported #133 to #137, #495, #496, #511 to #513 and #719, and wrote the merged fixes #138 to #141, #500, #502, #514 to #516 and #721.
+- **[Crafter](https://github.com/Crafter-1)**: [Quest-EchoVR-Installer](https://github.com/Crafter-1/Quest-EchoVR-Installer), a 3D Quest installer for Echo VR built in Unity. Reported #621, the game sending a Quest 3 player back to Home at launch, with a full logcat.
+- **Ducky**: The reverse engineer behind the Echo Combat Quest port.
+
+### People
+
+- **Trodd**: Found the XInput fix that lets the spectator free cam see Xbox One and Series controllers, and brought it to the project (#877).
+- **DinkyBoi**: Reported a party of three queuing for arena with one member left out (#888), and the arm tablet's repeated "server full" message when joining a full social lobby (#889).
+- **berg**: One of the party of three in #888: left out of the arena match once, and rejoined through a link.
+- **zebra**: One of the party of three in #888, left out of the arena match.
+- **Nebula**: Reported install.ps1 failing on a PC with no D: drive (#679) and the idea that it asks for the game folder (#680), the Quest game closing at start (#758), uninstall.ps1 refusing after an update (#759) and the tablet's missing Add friend button (#775).
+- **[chinmayee5599](https://github.com/chinmayee5599)**: Opened #510, which renamed three TCP game message symbols in `src/abi/symbols.h`.
+- **[brysonak](https://github.com/brysonak)**: Opened #12, which changed the server log file names and added a flag to keep the old names.
+
+Everyone else who tested in #nevr-runtime-testing and is not named here: thank you.
+
+<!-- credits:end -->
+
 ## What it does
 
 PC means the Windows or Wine game client, Quest means the Android sentinel, both
@@ -152,7 +181,7 @@ looks there first; `.credentials.json` does not.
 | Path | What it is | Code |
 | --- | --- | --- |
 | `logs\nevr-bootstrap.jsonl` | The host's own log: what it decided at attach, and its crash-dump records. Falls back to `%TEMP%\nevr\echovr\logs`, then the directory of `BugSplat64.dll`. | `kLogsSubdirectory`, `kBootstrapLogName` in `src/runtime/host/host_paths.h` |
-| `crashes\nevr-<pid>-<n>.dmp` | A minidump written by the host's crash capture, with the same fallbacks (`%TEMP%\nevr\echovr\crashes`, then the directory of `BugSplat64.dll`). The exported `BugSplat_createReport` in `src/runtime/lifecycle/dllmain.cpp` does not call it, so a shipped build writes no file here. | `kCrashesSubdirectory` in `src/runtime/host/host_paths.h`; `CrashCapture::Capture` in `src/runtime/host/crash_capture.cpp` |
+| `crashes\nevr-<pid>-<n>.dmp` | A minidump written by the host's crash capture, with the same fallbacks (`%TEMP%\nevr\echovr\crashes`, then the directory of `BugSplat64.dll`). The game's crash handler reaches it through the exported `BugSplat_createReport` in `src/runtime/host/minidmp_sender_exports.cpp`. | `kCrashesSubdirectory` in `src/runtime/host/host_paths.h`; `CrashCapture::Capture` in `src/runtime/host/crash_capture.cpp` |
 | `cache\<sha256>.blob`, `cache\index.json` | The content-addressed asset cache: the bytes under their own SHA-256, and the index that says which blob stands in for which resource. A write in progress is `<sha256>.<pid>.<tick>.tmp`. The cache is size-capped and evicts blobs the index does not name. Without `LOCALAPPDATA` there is no cache directory: the cache is disabled and the runtime logs `[NEVR.RESOURCE] cache disabled reason=no cache directory (LOCALAPPDATA unset)`. | `src/runtime/patch/asset_cache.h`, `DefaultDir` in `src/runtime/patch/asset_cache.cpp` |
 
 ### In `%LOCALAPPDATA%\EchoVR\`
@@ -179,6 +208,30 @@ built-in log filter, and the in-process game server
 (`src/runtime/server/`).
 
 Hooking is [MinHook](https://github.com/TsudaKageyu/minhook)-based.
+
+### Command-line arguments
+
+Arguments the runtime reads from the game's command line (`--name` works as well as `-name`). `--help` lists them.
+
+| Argument | Effect |
+| -------- | ------ |
+| `-server` | Run as a dedicated game server (implies headless) |
+| `-offline` | Run the game in offline mode |
+| `-windowed` | Run the game with no headset, in a window |
+| `-no-console` | Disable console window creation |
+| `-config`, `-config-path` | Path to a JSON file the game loads instead of `_local/config.json`; `config.yaml` is looked for in the same directory |
+| `-region` | Set the matchmaking region |
+| `-serverregion` | Set the server fleet region |
+| `-no-exit-on-error` | Keep a server running after a game service disconnect (default: exit) |
+| `-exit-on-error` | No effect: exiting on error is the default |
+| `-trace-exports` | Trace the export calls of platform DLLs (`pnsrad`, `pnsovr`, `pnsdemo` or `all`); off by default |
+| `-no-telemetry` | Disable telemetry streaming |
+| `-telemetry-rate` | Set the telemetry rate in Hz |
+| `-telemetry-diag` | Log telemetry diagnostics every second |
+| `-timestamps` | Prefix log lines with timestamps |
+| `-upnp` | Enable UPnP port forwarding |
+| `-skip-dbgcore-check` | Skip the check that refuses a `dbgcore.dll` in the game directory (legacy injection) |
+| `-require-signed-plugins` | Load only plugins signed through the release pipeline and refuse the rest. Without it, plugins load whether or not they are signed. The `plugin trust:` line in the log states which applied |
 
 ### Runtime-loaded modules
 

@@ -15,6 +15,7 @@ NevrGetRuntimeApiFn g_in_process_runtime = nullptr;
 std::atomic<bool> g_set_game_module_called{false};
 std::atomic<bool> g_attached_at_dll_main{false};
 std::atomic<HANDLE> g_failure_flush_thread{nullptr};
+std::atomic<HANDLE> g_dbghelp_preload_thread{nullptr};
 
 DWORD WINAPI FlushAfterAttachFailure(LPVOID) {
   g_diagnostics.FlushAttachJournal();
@@ -27,6 +28,19 @@ DWORD WINAPI FlushAfterAttachFailure(LPVOID) {
 void FlushJournalOffTheLoaderLock() noexcept {
   const HANDLE thread = CreateThread(nullptr, 0, &FlushAfterAttachFailure, nullptr, 0, nullptr);
   g_failure_flush_thread.store(thread, std::memory_order_release);
+}
+
+DWORD WINAPI PreloadDbgHelpThread(LPVOID) {
+  g_capture.PreloadDbgHelp();
+  return 0;
+}
+
+// The crash capture needs dbghelp.dll mapped before the fault (it never loads a library inside the crash
+// callback), and nothing else loads it. DllMain holds the loader lock, so the load runs on a thread: its start
+// waits for the lock, which DllMain releases on return. Started for both attach modes.
+void StartDbgHelpPreload() noexcept {
+  const HANDLE thread = CreateThread(nullptr, 0, &PreloadDbgHelpThread, nullptr, 0, nullptr);
+  g_dbghelp_preload_thread.store(thread, std::memory_order_release);
 }
 
 void* RendezvousTarget(HMODULE game_module) {
@@ -64,6 +78,7 @@ void OnProcessAttach(HMODULE host_module, HMODULE game_module, bool launcher_mod
   // file I/O, no runtime load.
   g_diagnostics.Prepare(host_module);
   g_capture.Prepare(host_module, &g_diagnostics);
+  StartDbgHelpPreload();
   if (launcher_mode) return;  // SetGameModule drives the rendezvous after LoadLibrary
   g_attached_at_dll_main.store(true);  // the process image is checked (and hooked, or refused) here
   InstallRendezvous(game_module);
@@ -82,6 +97,12 @@ void OnProcessDetach(bool process_terminating) noexcept {
 bool WaitForAttachFailureFlush(DWORD timeout_ms) noexcept {
   const HANDLE thread = g_failure_flush_thread.load(std::memory_order_acquire);
   if (thread == nullptr) return true;
+  return WaitForSingleObject(thread, timeout_ms) == WAIT_OBJECT_0;
+}
+
+bool WaitForDbgHelpPreload(DWORD timeout_ms) noexcept {
+  const HANDLE thread = g_dbghelp_preload_thread.load(std::memory_order_acquire);
+  if (thread == nullptr) return false;
   return WaitForSingleObject(thread, timeout_ms) == WAIT_OBJECT_0;
 }
 

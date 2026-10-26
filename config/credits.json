@@ -1,0 +1,173 @@
+{
+  "schema": 1,
+  "headings": [
+    {"id": "code-contributions", "ingame": "CODE CONTRIBUTIONS"},
+    {"id": "lounge-staff", "ingame": "ECHO VR LOUNGE STAFF"},
+    {"id": "supporters", "ingame": "SUPPORTERS"}
+  ],
+  "sections": [
+    {"id": "projects", "title": "Projects"},
+    {"id": "people", "title": "People"}
+  ],
+  "entries": [
+    {
+      "name": "Xenomega",
+      "section": "projects",
+      "headings": ["code-contributions"],
+      "link": "https://github.com/Xenomega",
+      "what": "[EchoRelay](https://github.com/Xenomega/EchoRelay), a reimplementation of Echo VR's web services and dedicated game servers. The frozen v1 game server code in `src/legacy/` was written for its ServerDB, and the legacy message translation in `docs/reference/legacy-translator.md` is read from its documentation.",
+      "sources": [
+        "https://github.com/Xenomega/EchoRelay",
+        "src/legacy/gameserver/gameserver.h",
+        "docs/reference/legacy-translator.md"
+      ]
+    },
+    {
+      "name": "kfc",
+      "section": "projects",
+      "headings": ["code-contributions"],
+      "link": "",
+      "what": "Helped write a lot of EchoRelay.",
+      "sources": [
+        "named by the project owner, 10-19"
+      ]
+    },
+    {
+      "name": "Dualgame",
+      "section": "projects",
+      "headings": ["code-contributions"],
+      "link": "https://github.com/Dualgame",
+      "what": "[echo-symbols](https://github.com/Dualgame/echo-symbols), the recovered symbol names this repo pulls at a pinned commit for its log symbol cache, and [echovr-modkit](https://github.com/Dualgame/echovr-modkit) with its [EchoRelay fork](https://github.com/Dualgame/EchoRelay), which back invite codes and the early-quit lockout and which `docs/engine/early-quit.md` and the invite-code design (#906) draw on.",
+      "sources": [
+        "https://github.com/Dualgame/echo-symbols",
+        "https://github.com/Dualgame/echovr-modkit",
+        "https://github.com/Dualgame/EchoRelay",
+        "tools/symcache/README.md",
+        "tools/symbols.pin",
+        "docs/engine/early-quit.md",
+        "https://github.com/EchoTools/nevr-runtime/pull/678",
+        "https://github.com/EchoTools/nevr-runtime/issues/906"
+      ]
+    },
+    {
+      "name": "marshmallow-mia",
+      "section": "projects",
+      "headings": ["code-contributions"],
+      "link": "https://github.com/marshmallow-mia",
+      "what": "The Echo VR Linux port, the [Echo VR installer](https://github.com/marshmallow-mia/Echo-VR-Installer) (PC and Quest) and [EchoVR_Launcher](https://github.com/marshmallow-mia/EchoVR_Launcher) (Windows and Linux). Reported #133 to #137, #495, #496, #511 to #513 and #719, and wrote the merged fixes #138 to #141, #500, #502, #514 to #516 and #721.",
+      "sources": [
+        "https://github.com/marshmallow-mia/Echo-VR-Installer",
+        "https://github.com/marshmallow-mia/EchoVR_Launcher",
+        "named by the project owner",
+        "https://github.com/EchoTools/nevr-runtime/issues/133",
+        "https://github.com/EchoTools/nevr-runtime/issues/495",
+        "https://github.com/EchoTools/nevr-runtime/issues/511",
+        "https://github.com/EchoTools/nevr-runtime/issues/719",
+        "https://github.com/EchoTools/nevr-runtime/pull/138",
+        "https://github.com/EchoTools/nevr-runtime/pull/500",
+        "https://github.com/EchoTools/nevr-runtime/pull/514",
+        "https://github.com/EchoTools/nevr-runtime/pull/721"
+      ]
+    },
+    {
+      "name": "Crafter",
+      "section": "projects",
+      "headings": [],
+      "link": "https://github.com/Crafter-1",
+      "what": "[Quest-EchoVR-Installer](https://github.com/Crafter-1/Quest-EchoVR-Installer), a 3D Quest installer for Echo VR built in Unity. Reported #621, the game sending a Quest 3 player back to Home at launch, with a full logcat.",
+      "sources": [
+        "https://github.com/Crafter-1/Quest-EchoVR-Installer",
+        "docs/adr/0011-quest-game-data-first-run.md",
+        "https://github.com/EchoTools/nevr-runtime/issues/925",
+        "https://github.com/EchoTools/nevr-runtime/issues/621",
+        "named by the project owner"
+      ]
+    },
+    {
+      "name": "Ducky",
+      "section": "projects",
+      "headings": [],
+      "link": "",
+      "what": "The reverse engineer behind the Echo Combat Quest port.",
+      "sources": [
+        "named by the project owner, 10-13"
+      ]
+    },
+    {
+      "name": "Trodd",
+      "section": "people",
+      "headings": [],
+      "link": "",
+      "what": "Found the XInput fix that lets the spectator free cam see Xbox One and Series controllers, and brought it to the project (#877).",
+      "sources": [
+        "https://github.com/EchoTools/nevr-runtime/issues/877"
+      ]
+    },
+    {
+      "name": "DinkyBoi",
+      "section": "people",
+      "headings": [],
+      "link": "",
+      "what": "Reported a party of three queuing for arena with one member left out (#888), and the arm tablet's repeated \"server full\" message when joining a full social lobby (#889).",
+      "sources": [
+        "https://github.com/EchoTools/nevr-runtime/issues/888",
+        "https://github.com/EchoTools/nevr-runtime/issues/889"
+      ]
+    },
+    {
+      "name": "berg",
+      "section": "people",
+      "headings": [],
+      "link": "",
+      "what": "One of the party of three in #888: left out of the arena match once, and rejoined through a link.",
+      "sources": [
+        "https://github.com/EchoTools/nevr-runtime/issues/888"
+      ]
+    },
+    {
+      "name": "zebra",
+      "section": "people",
+      "headings": [],
+      "link": "",
+      "what": "One of the party of three in #888, left out of the arena match.",
+      "sources": [
+        "https://github.com/EchoTools/nevr-runtime/issues/888"
+      ]
+    },
+    {
+      "name": "Nebula",
+      "section": "people",
+      "headings": [],
+      "link": "",
+      "what": "Reported install.ps1 failing on a PC with no D: drive (#679) and the idea that it asks for the game folder (#680), the Quest game closing at start (#758), uninstall.ps1 refusing after an update (#759) and the tablet's missing Add friend button (#775).",
+      "sources": [
+        "https://github.com/EchoTools/nevr-runtime/issues/679",
+        "https://github.com/EchoTools/nevr-runtime/pull/680",
+        "https://github.com/EchoTools/nevr-runtime/issues/758",
+        "https://github.com/EchoTools/nevr-runtime/issues/759",
+        "https://github.com/EchoTools/nevr-runtime/issues/775"
+      ]
+    },
+    {
+      "name": "chinmayee5599",
+      "section": "people",
+      "headings": [],
+      "link": "https://github.com/chinmayee5599",
+      "what": "Opened #510, which renamed three TCP game message symbols in `src/abi/symbols.h`.",
+      "sources": [
+        "https://github.com/EchoTools/nevr-runtime/pull/510"
+      ]
+    },
+    {
+      "name": "brysonak",
+      "section": "people",
+      "headings": [],
+      "link": "https://github.com/brysonak",
+      "what": "Opened #12, which changed the server log file names and added a flag to keep the old names.",
+      "sources": [
+        "https://github.com/EchoTools/nevr-runtime/pull/12"
+      ]
+    }
+  ],
+  "closing": "Everyone else who tested in #nevr-runtime-testing and is not named here: thank you."
+}

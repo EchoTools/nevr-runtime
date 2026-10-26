@@ -17,6 +17,7 @@
 #include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/coop_ai_trace.h"
 #include "runtime/ext/plugin_loader.h"
+#include "runtime/ext/plugin_trust.h"
 #include "extension/module_interface.h"
 
 // Statically-linked module entry points (the modules are linked into
@@ -69,11 +70,17 @@ nevr_server_timestep::FlagRecord g_flagRecord;
 // PreprocessCommandLineHook loads right after this: they serve game data the
 // original call reads, and must stay off the graphics path.
 // -server is needed for the config loader's fail-loud policy. -config-path is
-// needed by LoadLocalConfigHook while the original is running.
+// needed by LoadLocalConfigHook while the original is running. -require-signed-plugins
+// is needed by the early plugin pass (#924): it sets the plugin trust mode every pass and
+// the late-load filter read.
 void PreflightRuntimeBootstrap() {
   static bool s_done = false;
   if (s_done) return;
   s_done = true;
+
+  // The game reads its arguments from GetCommandLineA() with its own tokenizer, which differs from
+  // CommandLineToArgvW; ApplyCommandLine reads the line both ways and a line it cannot read is signed-only.
+  nevr_plugin_trust::ApplyCommandLine(GetCommandLineW(), GetCommandLineA());
 
   int argc = 0;
   LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -432,6 +439,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
           LogOptionWithoutValue("-timestep");
         }
       }
+    } else if (lstrcmpW(flag, L"-require-signed-plugins") == 0) {
+      // Already applied by PreflightRuntimeBootstrap, before the early plugin pass: nothing to do here. The plugin
+      // loader states the mode in effect, and where it came from, when it starts ("plugin trust: mode=...").
     } else if (lstrcmpW(flag, L"-headless") == 0) {
       // N99: -headless is never "redundant", and the log must not tell the
       // operator to remove it: removing the flag opens a window.

@@ -222,14 +222,30 @@ TEST(HostCrashCapture, WithoutDbghelpCaptureFailsWritesATextDiagnosticAndSaysWhy
   EXPECT_EQ(records[1].at("outcome"), "failed");
 }
 
+TEST(HostCrashCapture, PreloadDbgHelpMapsTheSystemLibraryOnceAndWritesNoRecordWhenItSucceeds) {
+  const std::wstring local = MakeTempDir(L"local");
+  Prepared prepared(local, MakeTempDir(L"temp"));
+  // Nothing in the game loads dbghelp.dll, so the host does it ahead of the crash (PreloadDbgHelp), never in Capture.
+  ASSERT_EQ(GetModuleHandleW(L"dbghelp.dll"), nullptr);
+  EXPECT_TRUE(prepared.capture.PreloadDbgHelp());
+  const HMODULE loaded = GetModuleHandleW(L"dbghelp.dll");
+  EXPECT_NE(loaded, nullptr);
+  EXPECT_TRUE(prepared.capture.PreloadDbgHelp()) << "a second call must find it already loaded";
+  EXPECT_EQ(GetModuleHandleW(L"dbghelp.dll"), loaded);
+  wchar_t path[MAX_PATH] = {};
+  ASSERT_NE(GetModuleFileNameW(loaded, path, MAX_PATH), 0u);
+  wchar_t system_dir[MAX_PATH] = {};
+  ASSERT_NE(GetSystemDirectoryW(system_dir, MAX_PATH), 0u);
+  EXPECT_EQ(_wcsnicmp(path, system_dir, wcslen(system_dir)), 0) << "loaded from outside System32";
+}
+
 TEST(HostCrashCapture, WritesAStructurallyValidMinidumpNamingTheThreadAndRecordsIt) {
   const std::wstring local = MakeTempDir(L"local");
   Prepared prepared(local, MakeTempDir(L"temp"));
   ASSERT_TRUE(prepared.capture.LocalReady());
 
-  // The game loads dbghelp before its crash path (HandleCrashDump); the host only
-  // resolves it, never loads it. Simulate that here.
-  ASSERT_NE(LoadLibraryW(L"dbghelp.dll"), nullptr);
+  // dbghelp.dll is mapped by the host ahead of the crash, not by Capture.
+  ASSERT_TRUE(prepared.capture.PreloadDbgHelp());
 
   // Capture real exception pointers from a benign first-chance exception.
   void* handler = AddVectoredExceptionHandler(1, CaptureVeh);
