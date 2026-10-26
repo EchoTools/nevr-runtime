@@ -22,8 +22,8 @@ Checks (all fail-closed; an unreadable or empty table is a failure, never a pass
                  BugSplat64.dll is imported BY NAME, equals the pinned
                  GAME_IMPORTS set, and is exported by the DLL.
   5. THIN HOST - the host carries no runtime code: its imports are a subset of
-                 HOST_ALLOWED_IMPORTS, none of RUNTIME_ONLY_MARKERS is in the file, its
-                 SizeOfImage stays under HOST_MAX_SIZE_OF_IMAGE, and it carries its own
+                 HOST_ALLOWED_IMPORTS, none of RUNTIME_ONLY_MARKERS is in the file, it is linked
+                 at HOST_IMAGE_BASE (N146), its SizeOfImage stays under HOST_MAX_SIZE_OF_IMAGE, and it carries its own
                  NEVR-BUILD literal.
   6. RUNTIME     - nevr-runtime.dll exports NEVR_GetRuntimeApi (the rendezvous entry), none
                  of the names the game imports from the host, carries exactly one NEVR-BUILD
@@ -273,6 +273,9 @@ def check_host_is_thin(objdump_text, blob):
     if present:
         raise ContractError(f"host carries runtime-only text: {present}")
     image = parse_image(objdump_text)
+    if image["base"] != HOST_IMAGE_BASE:
+        raise ContractError(f"host image base is {image['base']:#x}, expected {HOST_IMAGE_BASE:#x} "
+                            "(N146: the DLL the game imports keeps the stock image base)")
     if image["size"] > HOST_MAX_SIZE_OF_IMAGE:
         raise ContractError(f"host SizeOfImage is {image['size']:#x}, over the {HOST_MAX_SIZE_OF_IMAGE:#x} cap "
                             "(runtime code does not belong in the host)")

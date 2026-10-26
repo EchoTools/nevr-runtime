@@ -1036,6 +1036,67 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual([a.read_bytes() for a in aside], [self.runtime("5.4.3")])
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
 
+    def stranger_then_install(self, version="5.4.3"):
+        """A stranger's nevr-runtime.dll is in the game folder when a package whose runtime is ours is installed."""
+        (self.game / "nevr-runtime.dll").write_bytes(b"A-STRANGERS-FILE")
+        (self.pkg / "nevr-runtime.dll").write_bytes(self.runtime(version))
+        self.write_sums()
+        installed = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertEqual(installed.returncode, 0, self.output(installed))
+
+    def test_the_state_file_records_the_runtime_install_set_aside(self):
+        self.stranger_then_install()
+        aside = list(self.game.glob("nevr-runtime.dll.original-*"))
+        self.assertEqual(len(aside), 1)
+        self.assertEqual(self.state()["runtime_aside"], str(aside[0]))
+        # ... and an install that set nothing aside records the empty name.
+        other = self.game.parent / "other-game"
+        other.mkdir()
+        (other / "BugSplat64.dll").write_bytes(b"ORIGINAL")
+        (other / "echovr.exe").write_bytes(b"exe")
+        clean = self.ps("install.ps1", "-Dir", str(other))
+        self.assertEqual(clean.returncode, 0, self.output(clean))
+        self.assertEqual(dict(line.split("=", 1) for line in (other / "nevr-install.txt").read_text().splitlines())["runtime_aside"], "")
+
+    def test_uninstall_puts_back_the_runtime_file_install_set_aside(self):
+        self.stranger_then_install()
+        undone = self.ps("uninstall.ps1", "-Dir", str(self.game))
+        self.assertEqual(undone.returncode, 0, self.output(undone))
+        self.assertEqual((self.game / "nevr-runtime.dll").read_bytes(), b"A-STRANGERS-FILE")
+        self.assertEqual(list(self.game.glob("nevr-runtime.dll.original-*")), [], "renamed back, not copied and left")
+        self.assertEqual([a.read_bytes() for a in self.game.glob("nevr-runtime.dll.uninstalled-*")], [self.runtime("5.4.3")])
+        self.assertIn("RESTORED nevr-runtime.dll", undone.stdout)
+
+    def test_an_update_keeps_the_runtime_aside_so_uninstall_still_puts_it_back(self):
+        self.stranger_then_install()
+        (self.pkg / "nevr-runtime.dll").write_bytes(self.runtime("5.4.4"))
+        self.set_package(self.plain("5.4.4"))
+        self.write_sums()
+        self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
+        self.assertNotEqual(self.state()["runtime_aside"], "")
+        undone = self.ps("uninstall.ps1", "-Dir", str(self.game))
+        self.assertEqual(undone.returncode, 0, self.output(undone))
+        self.assertEqual((self.game / "nevr-runtime.dll").read_bytes(), b"A-STRANGERS-FILE")
+
+    def test_uninstall_stops_before_changing_anything_when_the_runtime_aside_is_gone(self):
+        self.stranger_then_install()
+        next(self.game.glob("nevr-runtime.dll.original-*")).unlink()
+        undone = self.ps("uninstall.ps1", "-Dir", str(self.game))
+        self.assertNotEqual(undone.returncode, 0)
+        self.assertIn("the set-aside nevr-runtime.dll is gone", self.output(undone))
+        self.assertNotEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL", "nothing was restored")
+        self.assertTrue((self.game / "nevr-install.txt").exists())
+
+    def test_uninstall_never_overwrites_a_runtime_file_that_is_not_ours_with_the_aside(self):
+        self.stranger_then_install()
+        (self.game / "nevr-runtime.dll").write_bytes(b"NOT-OURS")
+        undone = self.ps("uninstall.ps1", "-Dir", str(self.game))
+        self.assertEqual(undone.returncode, 0, self.output(undone))
+        self.assertEqual((self.game / "nevr-runtime.dll").read_bytes(), b"NOT-OURS")
+        self.assertEqual([a.read_bytes() for a in self.game.glob("nevr-runtime.dll.original-*")], [b"A-STRANGERS-FILE"],
+                         "the aside stays where it is")
+        self.assertIn("KEPT", undone.stdout)
+
     def test_uninstall_leaves_a_nevr_runtime_dll_that_carries_no_identity_literal(self):
         self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
         (self.game / "nevr-runtime.dll").write_bytes(b"NOT-OURS")

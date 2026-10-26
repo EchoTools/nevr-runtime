@@ -170,7 +170,8 @@ def runtime_dump(exports=None, base=RUNTIME_BASE, size=0x1800000, import_dlls=("
 
 def thin_host_dump(**kwargs):
     kwargs.setdefault("size", 0x400000)
-    return pe_dump(contract.EXPECTED_EXPORTS, HOST_BASE, kwargs.pop("size"), **kwargs)
+    base = kwargs.pop("base", HOST_BASE)
+    return pe_dump(contract.EXPECTED_EXPORTS, base, kwargs.pop("size"), **kwargs)
 
 
 class RuntimeContractTest(unittest.TestCase):
@@ -239,6 +240,13 @@ class ThinHostTest(unittest.TestCase):
     def test_a_host_the_size_of_the_runtime_is_not_thin(self):
         with self.assertRaisesRegex(contract.ContractError, "SizeOfImage"):
             contract.check_host_is_thin(thin_host_dump(size=0x1730000), b"MZ" + identity())
+
+    def test_the_host_is_linked_at_the_image_base_the_game_imports_it_at(self):
+        # N146: the DLL the game imports stays at the stock image base, so the game's graphics DLLs load.
+        for base in (RUNTIME_BASE, 0x140000000, 0x10000000):
+            with self.subTest(base=hex(base)):
+                with self.assertRaisesRegex(contract.ContractError, "host image base is .*expected 0x180000000"):
+                    contract.check_host_is_thin(thin_host_dump(base=base), b"MZ" + identity())
 
     def test_the_host_carries_its_own_identity_literal(self):
         with self.assertRaisesRegex(contract.ContractError, "expected exactly one NEVR-BUILD literal, found 0"):

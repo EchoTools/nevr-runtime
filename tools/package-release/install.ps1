@@ -128,9 +128,10 @@ function Test-NevrRuntime([string]$path) {
   return [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($path)).Contains('NEVR-BUILD ')
 }
 
-# The state file: both set-aside names, the recorded host and runtime hashes, and the host hashes of earlier builds.
-function Write-State([string]$Backup, [string]$Legacy, $Previous) {
-  $lines = @("backup=$Backup", "legacy=$Legacy", "installed_sha256=$ours", "runtime_sha256=$oursRuntime")
+# The state file: the set-aside names (the game's BugSplat64.dll, a legacy dbgcore.dll, a nevr-runtime.dll that was
+# there before the first install), the recorded host and runtime hashes, and the host hashes of earlier builds.
+function Write-State([string]$Backup, [string]$Legacy, $Previous, [string]$RuntimeAside) {
+  $lines = @("backup=$Backup", "legacy=$Legacy", "runtime_aside=$RuntimeAside", "installed_sha256=$ours", "runtime_sha256=$oursRuntime")
   if ($null -ne $Previous) { $lines += ('previous_sha256=' + $Previous) }
   Set-Content -LiteralPath $state -Encoding ASCII -Value $lines
 }
@@ -151,6 +152,8 @@ if (Test-Path -LiteralPath $state) {
   foreach ($key in 'backup', 'legacy', 'installed_sha256') {
     if (-not $values.ContainsKey($key)) { throw "nevr-install.txt has no $key (see $state)" }
   }
+  # An update keeps what the first install set aside; a state file from before runtime_aside existed names none.
+  $keptRuntimeAside = if ($values.ContainsKey('runtime_aside')) { $values['runtime_aside'] } else { '' }
   # #779: an install made before #762 may have saved a NEVR runtime as the original; never restore or keep one.
   if ((Test-Path -LiteralPath $values['backup']) -and (Test-NevrRuntime $values['backup'])) {
     throw "the backup $($values['backup']) is a NEVR runtime, not the game's own file (an earlier install.ps1 saved it); nothing was changed. Restore the game's original BugSplat64.dll (for example, Verify Files in the Meta Horizon app), delete $state, then run install.ps1 again"
@@ -164,7 +167,7 @@ if (Test-Path -LiteralPath $state) {
     # this package's runtime beside it so the pair is one build.
     if (-not $runtimeCurrent) { Copy-Runtime }
     $previous = @($known | Where-Object { $_ -ne $ours } | Select-Object -Unique)
-    Write-State $values['backup'] $values['legacy'] ($previous -join ',')
+    Write-State $values['backup'] $values['legacy'] ($previous -join ',') $keptRuntimeAside
     Write-Output "RECORDED BugSplat64.dll sha256=$ours and nevr-runtime.dll sha256=$oursRuntime as installed in $Dir (the original backup is unchanged: $($values['backup']))"
     Write-RunLog ("OK $scriptName RECORDED BugSplat64.dll sha256=$ours nevr-runtime.dll sha256=$oursRuntime Dir=$Dir")
     Wait-BeforeClose
@@ -198,7 +201,7 @@ if (Test-Path -LiteralPath $state) {
     throw
   }
   $previous = @($known | Where-Object { $_ -ne $ours } | Select-Object -Unique)
-  Write-State $values['backup'] $values['legacy'] ($previous -join ',')
+  Write-State $values['backup'] $values['legacy'] ($previous -join ',') $keptRuntimeAside
   Write-Output "UPDATED BugSplat64.dll sha256=$ours and nevr-runtime.dll sha256=$oursRuntime into $Dir (the original backup is unchanged: $($values['backup']))"
   Write-RunLog ("OK $scriptName UPDATED BugSplat64.dll sha256=$ours nevr-runtime.dll sha256=$oursRuntime Dir=$Dir")
   Wait-BeforeClose
@@ -255,8 +258,8 @@ try {
   throw
 }
 
-# What uninstall.ps1 needs: both set-aside names.
-Write-State $backup $legacyAside $null
+# What uninstall.ps1 needs: the set-aside names.
+Write-State $backup $legacyAside $null $runtimeAside
 Write-Output "INSTALLED BugSplat64.dll sha256=$ours and nevr-runtime.dll sha256=$oursRuntime into $Dir"
 Write-Output "To undo: powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 -Dir `"$Dir`""
 Write-RunLog ("OK $scriptName INSTALLED BugSplat64.dll sha256=$ours nevr-runtime.dll sha256=$oursRuntime Dir=$Dir")
