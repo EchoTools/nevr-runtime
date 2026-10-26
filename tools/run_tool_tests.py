@@ -60,7 +60,8 @@ Exit code: pytest's. Exceptions, each loud on stderr:
   exit code if it is non-zero, else 2: a run is never reported green without its record.
 
 Usage: run_tool_tests.py [pytest args...]   (default: -q tools/tests)
-Log directory: $NEVR_TEST_LOG_DIR, else /var/tmp/work-nevr-runtime/test-runs/tools-tests.
+Log directory: $NEVR_TEST_LOG_DIR, else test-runs/tools-tests in the work root (tools/work_root.py:
+$NEVR_WORK_ROOT, else src/nevr-runtime-work in the home directory).
 """
 import ctypes
 import datetime
@@ -85,7 +86,13 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 
-DEFAULT_LOG_DIR = "/var/tmp/work-nevr-runtime/test-runs/tools-tests"
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import work_root  # noqa: E402
+
+DEFAULT_LOG_DIR = str(work_root.work_root() / "test-runs" / "tools-tests")
+LOG_DIR_PURPOSE = ("Records of the runs of the tools test suite (tools/run_tool_tests.py): per run its full "
+                   "output, JUnit XML and the start and end records in runs.jsonl.")
+LOG_DIR_REMOVED = "kept: the record of every run is the evidence a PR cites; remove a run only when no open PR cites it."
 # pytest's closing line: "1 failed, 1246 passed, 10 skipped in 224.38s", "3 xfailed, 2 warnings in 1.0s",
 # "no tests ran in 0.01s", with or without "=" rules.
 SUMMARY_RE = re.compile(
@@ -445,7 +452,7 @@ def main(argv: list) -> int:
 
     log_dir = pathlib.Path(os.environ.get("NEVR_TEST_LOG_DIR") or DEFAULT_LOG_DIR)
     try:
-        log_dir.mkdir(parents=True, exist_ok=True)
+        work_root.ensure_dir(log_dir, LOG_DIR_PURPOSE, LOG_DIR_REMOVED)
         with tempfile.NamedTemporaryFile(dir=log_dir, prefix=".writable-"):
             pass
     except OSError as exc:

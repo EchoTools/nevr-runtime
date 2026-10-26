@@ -1,5 +1,5 @@
 // Host <-> runtime ABI descriptor validation (core/runtime_abi.h).
-// The version/size checks the host runs on nevr.dll's descriptor before it calls through it.
+// The version/size checks the host runs on nevr-runtime.dll's descriptor before it calls through it.
 
 #include "core/runtime_abi.h"
 

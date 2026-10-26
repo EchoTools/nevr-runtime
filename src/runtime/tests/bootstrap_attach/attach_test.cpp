@@ -21,7 +21,7 @@
 // Every child validates, from the recorded events (index order is a
 // linearization: each record takes its slot with InterlockedIncrement) and from the
 // host's own bootstrap records (nevr-bootstrap.jsonl in the scenario's directory):
-//   - host attach: enter < hook live (JMP written) < exit, with nevr.dll NOT loaded
+//   - host attach: enter < hook live (JMP written) < exit, with nevr-runtime.dll NOT loaded
 //     at attach exit; the records are the decisions in order with exactly one
 //     hook_install record when hooked and none when not;
 //   - no runtime operation (load, DllMain, GetApi, initialize, dispatch) before
@@ -314,7 +314,7 @@ void ValidateHostAttach(const std::vector<EventRecord>& events, const Expectatio
   const std::size_t enter = First(events, kHostAttachEnter);
   *attach_exit = First(events, kHostAttachExit);
   Require(enter < *attach_exit, "host attach exit recorded before enter");
-  Require(events[*attach_exit].payload == 0, "nevr.dll was loaded before host DllMain returned");
+  Require(events[*attach_exit].payload == 0, "nevr-runtime.dll was loaded before host DllMain returned");
   const BYTE first_target_byte = g_image[nevr_host::kGameMainWrapperRva];
   if (expect.hooked) {
     const std::size_t enabled = First(events, kHostHookEnabled);
@@ -345,7 +345,7 @@ void ValidateNoEarlyRuntime(const std::vector<EventRecord>& events, const Expect
       First(events, expect.static_import ? kMainEntered : kHostLoadReturned);
   Require(returned != kNone && attach_exit < returned,
           "attach return was not observed after host attach exit");
-  // Everything below is the load itself or code inside nevr.dll, and must follow attach exit.
+  // Everything below is the load itself or code inside nevr-runtime.dll, and must follow attach exit.
   const LONG runtime_events[] = {kRuntimeDllAttach, kRuntimeGetApi, kRuntimeInitialized,
                                  kRuntimeGameMainEnter, kRuntimeGameMainExit,
                                  kRuntimeSecondHookEnabled};
@@ -520,7 +520,7 @@ void ValidateDispatch(const std::vector<EventRecord>& events, const Expectation&
           "the host's hook record differs from the bytes at the wrapper: something else hooked it");
 
   if (!expect.hooked) {
-    Require(Count(events, kRuntimeDllAttach) == 0 && GetModuleHandleW(L"nevr.dll") == nullptr,
+    Require(Count(events, kRuntimeDllAttach) == 0 && GetModuleHandleW(L"nevr-runtime.dll") == nullptr,
             "runtime was loaded although the host rejected the image");
     Require(Count(events, kRuntimeGameMainEnter) == 0, "dispatch without a hook");
     return;
@@ -631,7 +631,7 @@ extern "C" __declspec(dllimport) void DetoursExportPlaceholder();
 
 int main() {
   BootstrapProbeRecordEvent(kMainEntered, 0);
-  Require(GetModuleHandleW(L"nevr.dll") == nullptr, "nevr.dll loaded before main");
+  Require(GetModuleHandleW(L"nevr-runtime.dll") == nullptr, "nevr-runtime.dll loaded before main");
   Require(g_image != nullptr, "host never requested the game image during static-import attach");
   DetoursExportPlaceholder();  // the import that makes the loader attach the host first
   CallTarget(kCommandLine);  // main enters the wrapper
@@ -798,13 +798,13 @@ int RunChildScenario(const std::string& mode) {
 }
 
 void StageRuntimeFixture(const std::wstring& root, const wchar_t* fixture) {
-  const std::wstring runtime = root + L"nevr.dll";
+  const std::wstring runtime = root + L"nevr-runtime.dll";
   if (fixture == nullptr) {
     DeleteFileW(runtime.c_str());
-    Require(GetFileAttributesW(runtime.c_str()) == INVALID_FILE_ATTRIBUTES, "could not remove nevr.dll");
+    Require(GetFileAttributesW(runtime.c_str()) == INVALID_FILE_ATTRIBUTES, "could not remove nevr-runtime.dll");
     return;
   }
-  const std::wstring source = root + L"fixtures\\" + fixture + L"\\nevr.dll";
+  const std::wstring source = root + L"fixtures\\" + fixture + L"\\nevr-runtime.dll";
   if (!CopyFileW(source.c_str(), runtime.c_str(), FALSE)) {
     std::fprintf(stderr, "CopyFileW %ls failed, Win32 error=%lu\n", source.c_str(),
                  static_cast<unsigned long>(GetLastError()));

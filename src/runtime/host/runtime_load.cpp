@@ -16,7 +16,7 @@
 namespace nevr_host {
 namespace {
 
-constexpr wchar_t kRuntimeFileName[] = L"nevr.dll";
+constexpr wchar_t kRuntimeFileName[] = L"nevr-runtime.dll";
 constexpr std::size_t kMarkerBytes = 512;
 
 // Bounded copy of a NUL-terminated wide path into a fixed buffer.

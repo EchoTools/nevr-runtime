@@ -1150,7 +1150,7 @@ static volatile LONG s_gameServerLibStarted = 0;
 
 // Upper bound on the game's own teardown. Measured at ~3.1s from
 // "Console close signal received" to "Terminated game server"
-// (/var/tmp/work-nevr-runtime/n13-run.log, 10:11:51.280 -> 10:11:53.391).
+// (one Wine server run, 10:11:51.280 -> 10:11:53.391; its log is not kept).
 // If it ever exceeds this we must still die: a hung shutdown is worse than an
 // ugly one, and a server blocked forever is the failure mode of N4.
 static constexpr DWORD kGameTeardownWatchdogMs = 20000;

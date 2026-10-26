@@ -61,7 +61,7 @@ the widget and above everything else.
   install, launch nested, wait for "logged in" and the social accessor, play the scenario, check the expected
   log lines against the run's log, tear down (clearing the prefix, because the client does not always exit),
   print PASS/FAIL with the failing expectation. It exits 1 on a failure. Run folders are under
-  `/var/tmp/work-nevr-runtime/scenario-runs/`.
+  `scenario-runs/` in the work root (`NEVR_WORK_ROOT`, else `~/src/nevr-runtime-work`).
 - **Scenarios** (`tools/scenario/scenarios/*.yaml`): setup injections, the action, and the expected log lines
   in order with timeouts: frame log (by message name), facade slot trace (slot, args, result), session events.
   A new feature test is a new file of about twenty lines.
