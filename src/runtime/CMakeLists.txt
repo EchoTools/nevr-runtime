@@ -376,6 +376,7 @@ if(BUILD_TESTING)
       host/bootstrap_diagnostics.cpp
       host/crash_capture.cpp
       host/host_entry.cpp
+      host/minidmp_sender_exports.cpp
       host/runtime_load.cpp
       host/runtime_rendezvous.cpp
       lifecycle/game_image_guard.cpp)
@@ -523,12 +524,13 @@ if(BUILD_TESTING)
       target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src)
     endfunction()
 
-    # host/minidmp_sender_exports.cpp is the shipped file: the harness drives the export bodies the DLL exports.
     add_library(test_host_crash_shim SHARED
       tests/host_crash/shim.cpp
-      host/minidmp_sender_exports.cpp
       "tests/host_crash/shim.def")
     target_link_libraries(test_host_crash_shim PRIVATE nevr_host_core)
+    # BugSplat_createReport is defined in nevr_host_core (host/minidmp_sender_exports.cpp, the shipped file) and
+    # only named by shim.def, which does not make the linker take an archive member: ask for it.
+    target_link_options(test_host_crash_shim PRIVATE -Wl,--undefined=BugSplat_createReport)
     set_target_properties(test_host_crash_shim PROPERTIES PREFIX "" OUTPUT_NAME "BugSplat64")
     host_crash_output(test_host_crash_shim "${HOST_CRASH_DIR}")
 

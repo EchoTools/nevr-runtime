@@ -66,14 +66,21 @@ class CreateReportWiringTest(unittest.TestCase):
                     self.assertIsNone(re.search(rf"\b{name}\s*\([^)]*\)\s*\{{", text),
                                       f"{path.name} defines {name}; the one definition is {EXPORTS_CPP.name}")
 
-    def test_the_dll_and_the_harness_both_compile_that_file(self):
+    def test_the_dll_compiles_that_file_and_the_harness_gets_it_from_the_host_library(self):
         cmake = CMAKE.read_text()
         sources = re.search(r"set\(PATCHES_SOURCES(.*?)\n\)", cmake, flags=re.S)
         self.assertIsNotNone(sources)
         self.assertIn('"host/minidmp_sender_exports.cpp"', sources.group(1))
+        # The host library holds the host units the harnesses link (tools/verify_host_seams.py reads it).
+        library = re.search(r"add_library\(nevr_host_core STATIC(.*?)\)", cmake, flags=re.S)
+        self.assertIsNotNone(library)
+        self.assertIn("host/minidmp_sender_exports.cpp", library.group(1))
         shim = re.search(r"add_library\(test_host_crash_shim SHARED(.*?)\)", cmake, flags=re.S)
         self.assertIsNotNone(shim)
-        self.assertIn("host/minidmp_sender_exports.cpp", shim.group(1))
+        self.assertNotIn("minidmp_sender_exports", shim.group(1), "the shim must link the host library's copy")
+        self.assertIn("target_link_libraries(test_host_crash_shim PRIVATE nevr_host_core)", cmake)
+        # shim.def names the symbol and an archive member is only taken for an undefined symbol.
+        self.assertIn("target_link_options(test_host_crash_shim PRIVATE -Wl,--undefined=BugSplat_createReport)", cmake)
 
     def test_the_export_table_still_maps_the_mangled_name_to_it(self):
         self.assertIn("?createReport@MiniDmpSender@@QEAAXPEAU_EXCEPTION_POINTERS@@@Z = BugSplat_createReport",
