@@ -1,6 +1,6 @@
 # Echo VR community beta: install, sign in, report bugs
 
-This beta replaces one file in your Echo VR install so the game connects to the community servers. It is
+This beta replaces one file in your Echo VR install and adds a second one beside it, so the game connects to the community servers. It is
 for **Echo VR on PC (PCVR) on Windows**. It has only been smoke tested: finding what breaks is why you
 have it, so please report anything odd (see "Report a bug").
 
@@ -8,7 +8,8 @@ have it, so please report anything odd (see "Report a bug").
 
 | File | What to do with it |
 |---|---|
-| `BugSplat64.dll` | The only file you install. |
+| `BugSplat64.dll` | Install it: it replaces the game's file of the same name. |
+| `nevr-runtime.dll` | Install it beside `BugSplat64.dll`: the runtime that `BugSplat64.dll` loads. Without it the game stops at start. |
 | `INSTALL.md` | This page. |
 | `echovr_server.exe`, `README.md` | Ignore them. They are for people running game servers or developing the runtime. |
 
@@ -18,7 +19,7 @@ have it, so please report anything odd (see "Report a bug").
 2. Find your Echo VR folder: the one that contains `bin\win10\echovr.exe`.
 3. In `bin\win10`, rename the existing `BugSplat64.dll` to `BugSplat64.dll.original`. Keep it: it is how
    you uninstall.
-4. Copy `BugSplat64.dll` from the zip into `bin\win10`.
+4. Copy `BugSplat64.dll` and `nevr-runtime.dll` from the zip into `bin\win10`.
 5. Start Echo VR the way you normally do.
 
 ## First start: sign in with Discord
@@ -39,7 +40,7 @@ want to sign in again (for example as a different Discord account).
 
 ## Uninstall
 
-Close Echo VR, delete `bin\win10\BugSplat64.dll`, and rename `BugSplat64.dll.original` back to
+Close Echo VR, delete `bin\win10\BugSplat64.dll` and `bin\win10\nevr-runtime.dll`, and rename `BugSplat64.dll.original` back to
 `BugSplat64.dll`.
 
 ## Known issues

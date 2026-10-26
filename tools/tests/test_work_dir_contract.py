@@ -264,9 +264,11 @@ class ShellToolDefaultsTest(unittest.TestCase):
         fixtures.install_scripts(self.checkout)
         self.dll = self.tmp / "test.dll"
         self.dll.write_bytes(fixtures.TEST_DLL)
+        (self.tmp / "nevr-runtime.dll").write_bytes(fixtures.TEST_RUNTIME)
         bin_dir = self.checkout / "build/mingw-release/bin"
         bin_dir.mkdir(parents=True)
         (bin_dir / "BugSplat64.dll").write_bytes(fixtures.TEST_DLL)
+        (bin_dir / "nevr-runtime.dll").write_bytes(fixtures.TEST_RUNTIME)
         self.env = child_env(
             PATH=f"{self.fake_bin}:{os.environ['PATH']}",
             NEVR_GAME_ROOT=str(self.game_root),

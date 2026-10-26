@@ -1,7 +1,7 @@
 """The shipped BugSplat64.dll's MiniDmpSender::createReport writes the host's minidump (#803, ADR 0008, ADR 0012 step 1b).
 
 The game's HandleCrashDump builds a MiniDmpSender and calls createReport(exception pointers). That export is
-BugSplat_createReport (src/runtime/exports.def). It must call nevr_host::CreateReport, there must be exactly one
+BugSplat_createReport (src/runtime/host/exports.def). It must call nevr_host::CreateReport, there must be exactly one
 definition of it in the product, and the crash harness must link that definition instead of defining its own,
 so the harness drives the code the DLL exports.
 """
@@ -16,7 +16,7 @@ EXPORTS_CPP = REPO / "src/runtime/host/minidmp_sender_exports.cpp"
 CMAKE = REPO / "src/runtime/CMakeLists.txt"
 SHIM = REPO / "src/runtime/tests/host_crash/shim.cpp"
 DLLMAIN = REPO / "src/runtime/lifecycle/dllmain.cpp"
-EXPORTS_DEF = REPO / "src/runtime/exports.def"
+EXPORTS_DEF = REPO / "src" / "runtime" / "host" / "exports.def"
 NINE = ("BugSplat_MiniDmpSender_Ctor", "BugSplat_MiniDmpSender_Dtor", "BugSplat_createReport", "BugSplat_getFlags",
         "BugSplat_resetAppIdentifier", "BugSplat_sendAdditionalFile", "BugSplat_setDefaultUserDescription",
         "BugSplat_setDefaultUserName", "BugSplat_setFlags")
@@ -68,13 +68,21 @@ class CreateReportWiringTest(unittest.TestCase):
 
     def test_the_dll_compiles_that_file_and_the_harness_gets_it_from_the_host_library(self):
         cmake = CMAKE.read_text()
+        # BugSplat64.dll is the host (#853): the game imports these nine from it, so the host's units hold the file
+        # and the runtime's sources do not.
+        units = re.search(r"set\(NEVR_HOST_UNITS(.*?)\n\)", cmake, flags=re.S)
+        self.assertIsNotNone(units)
+        self.assertIn('"host/minidmp_sender_exports.cpp"', units.group(1))
+        host = re.search(r"add_library\(nevr_host SHARED(.*?)\)", cmake, flags=re.S)
+        self.assertIsNotNone(host)
+        self.assertIn("${NEVR_HOST_UNITS}", host.group(1))
         sources = re.search(r"set\(PATCHES_SOURCES(.*?)\n\)", cmake, flags=re.S)
         self.assertIsNotNone(sources)
-        self.assertIn('"host/minidmp_sender_exports.cpp"', sources.group(1))
+        self.assertNotIn("minidmp_sender_exports", sources.group(1))
         # The host library holds the host units the harnesses link (tools/verify_host_seams.py reads it).
         library = re.search(r"add_library\(nevr_host_core STATIC(.*?)\)", cmake, flags=re.S)
         self.assertIsNotNone(library)
-        self.assertIn("host/minidmp_sender_exports.cpp", library.group(1))
+        self.assertIn("${NEVR_HOST_UNITS}", library.group(1))
         shim = re.search(r"add_library\(test_host_crash_shim SHARED(.*?)\)", cmake, flags=re.S)
         self.assertIsNotNone(shim)
         self.assertNotIn("minidmp_sender_exports", shim.group(1), "the shim must link the host library's copy")

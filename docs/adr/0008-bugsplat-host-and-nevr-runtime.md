@@ -2,9 +2,8 @@
 
 Status: accepted. The contract, the descriptor, the host units and their harnesses are
 in the tree, and the rendezvous is decided ("Decision: the rendezvous is the game's main
-wrapper"). `BugSplat64.dll` is still built from the whole of `src/runtime/` as one DLL:
-the host units are compiled into it and its `DllMain` calls them, and `nevr-runtime.dll`
-exists only as the test harnesses' fixtures until the target split.
+wrapper"). `BugSplat64.dll` is built from `src/runtime/host/` alone and `nevr-runtime.dll` from the
+rest of `src/runtime/`; the package is a matched pair ("The tree today").
 
 ## Context
 
@@ -230,17 +229,28 @@ What the rendezvous leaves outside the runtime:
 
 ### The tree today
 
-The shipped `BugSplat64.dll` is still the whole of `src/runtime/` in one DLL, and it
-adopts the host contract inside that DLL. `DllMain` and `NEVR_SetGameModule` call
-`nevr_host::OnProcessAttach` and `SetGameModule` (`src/runtime/host/host_entry.cpp`), which
-install the one detour on the wrapper. The runtime is handed to the host's loader as an
-in-process provider (`RuntimeLoader::PrepareInProcess`; the load record carries
-`source: in_process`), so nothing is loaded from disk. `initialize` (`runtime_entry.cpp`)
-runs from the detour at the wrapper's entry, outside the loader lock, and arms
-`RuntimeGameMain` (`ArmGameMain`, `crash_recovery.cpp`), which holds the `setjmp` and is
-the descriptor's `game_main`. The runtime registers the host's hook with HookGuard from the
-bytes the host wrote and installs no hook on the wrapper. The split follows: the runtime
-moves into `nevr-runtime.dll`.
+The shipped `BugSplat64.dll` is the host (`nevr_host`, the sources in `src/runtime/host/`) and
+`nevr-runtime.dll` is the runtime (`nevr_runtime`, the rest of `src/runtime/`). `DllMain` and
+`NEVR_SetGameModule` call `nevr_host::OnProcessAttach` and `SetGameModule`
+(`src/runtime/host/host_entry.cpp`), which install the one detour on the wrapper. At the
+wrapper's entry the detour loads `nevr-runtime.dll` from the directory of `BugSplat64.dll`
+(`RuntimeLoader`, `runtime_load.cpp`), calls the runtime's one rendezvous export,
+`NEVR_GetRuntimeApi`, and then `initialize` (`runtime_entry.cpp`), outside the loader lock.
+`initialize` arms `RuntimeGameMain` (`ArmGameMain`, `crash_recovery.cpp`), which holds the
+`setjmp` and is the descriptor's `game_main`. The runtime registers the host's hook with
+HookGuard from the bytes the host wrote and installs no hook on the wrapper.
+
+The 16 runtime functions the game's libraries and plugins reach through `BugSplat64.dll`
+(`NEVR_RegisterAsset`, the module entry points, `TokenAuth_*`, `NEVR_GetUPnPConfig`) are
+typed thunks in the host (`src/runtime/host/runtime_exports.cpp`) that call through the
+`NevrRuntimeExports` table the descriptor carries (ABI 1.1, `src/core/runtime_abi.h`).
+
+A runtime that cannot be used after attach stops the game: a missing or unloadable file, a
+descriptor that does not validate, an `initialize` that fails or throws. The host writes one
+`game_stop` record to `logs/nevr-bootstrap.jsonl` and ends the process with exit code 78
+(`RuntimeRendezvous::StopGame`), because a game that runs on without its runtime is a game
+without the fixes the runtime exists to make. A rejection at attach (a bad image, a changed
+prologue, a failed hook install) installs nothing and the game runs unmodified.
 
 Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
 (`src/extension/plugin_interface.h`) "host" is the runtime.
@@ -251,10 +261,15 @@ Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
   that carries one without the other is a defect, not a configuration.
 - The export table is part of the contract: a change to it is a change to
   `tools/verify_pe_contract.py` in the same commit.
-- Until the target split, `src/runtime/host/` (the entry points, the rendezvous, the
-  diagnostics, the crash capture and the loader) is compiled into `BugSplat64.dll`
-  (`src/runtime/CMakeLists.txt`), whose `DllMain` calls it (`nevr_host::OnProcessAttach`),
-  and into the test harnesses.
+- `src/runtime/host/` (the entry points, the rendezvous, the diagnostics, the crash capture and
+  the loader) is compiled into `BugSplat64.dll` and the test harnesses only
+  (`src/runtime/CMakeLists.txt`); the runtime target does not compile it. The host links no
+  runtime code: `tools/verify_pe_contract.py` pins its imports, its size and its image base, and
+  `tools/verify_host_no_core_state.py` (run by `just verify` on the unstripped build) fails when the host
+  defines writable data that `libnevr_core.a` or `libnevr_abi.a` also defines.
+- No exception crosses between the two images. The runtime catches everything in its `initialize` and in its 16 export entries
+  (`src/runtime/lifecycle/export_guard.h`), and the host's `RuntimeLoader::CallInitialize` catches whatever a runtime throws; these
+  are the only ellipsis catches the C++ addendum allows, at a DLL boundary, and each says why on its line.
 - After the flip the runtime does not hook the main wrapper; the host's detour is the only
   hook on it. The host context carries that hook's target and the first bytes found there
   after the host enabled it, with a flag (`wrapper_hook_bytes_valid`) that says whether those
@@ -265,6 +280,6 @@ Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
   cannot verify that hook, and the log says so) and keeps running; it does not register
   zeros. `HookRecordUsable` does not re-check the header, the target or the flag's range, so
   it is called only on a context `ValidateHostContext` accepted. The host module is required.
-  The shipped DLL does this in-process ("The tree today").
+  The shipped host does this by loading `nevr-runtime.dll` ("The tree today").
 - The host's `DllMain` validates the image and the wrapper's prologue, installs the one
   detour and journals each decision. It loads nothing and does no file I/O.

@@ -1,6 +1,6 @@
 # ADR 0012: the install folder is static; nEVR's runtime, plugins and state live in `%LOCALAPPDATA%\nevr\echovr`
 
-Status: proposed (#575, tracking issue #799). Nothing in the "Decision" section is built yet. ADR 0010 and ADR 0011 are accepted and
+Status: proposed (#575, tracking issue #799). Of the "Order of work", step 2 (the target split) is built; nothing else in the "Decision" section is. ADR 0010 and ADR 0011 are accepted and
 neither is superseded by this record. **It amends ADR 0008 (`0008-bugsplat-host-and-nevr-runtime.md`) in three places:** `nevr-runtime.dll`
 loads from the root, not from the directory of `BugSplat64.dll`; a refused or missing `nevr-runtime.dll` stops the game, where ADR 0008
 lets it run without the runtime; and the host's log gains a `versions` event. "Relation to other records" says which text of ADR 0008 each replaces. What exists today is named
@@ -12,8 +12,8 @@ The runtime DLL is named `nevr-runtime.dll`, in this record, in ADR 0008, in `sr
 
 The game's install folder holds things that change and things that are secret, next to files that never change:
 
-- the runtime is `BugSplat64.dll` itself, one DLL that carries the whole of `src/runtime/` (ADR 0008 in `0008-bugsplat-host-and-nevr-runtime.md`, "The tree today"), so every
-  runtime fix replaces the file the game imports;
+- the runtime is `nevr-runtime.dll`, loaded by the host `BugSplat64.dll` from the directory of `BugSplat64.dll` (ADR 0008 in `0008-bugsplat-host-and-nevr-runtime.md`, "The tree today"),
+  so a runtime fix replaces a file in the install folder;
 - plugins load from a `plugins/` directory next to the game binary (`src/runtime/ext/plugin_loader.cpp`);
 - `config.yaml` is found in `_local` next to the game module and one and two parents up, or beside the `-config`/`-config-path` file
   (`FindNevrConfigYamlPath` in `src/runtime/lifecycle/service_config.cpp`);
@@ -94,6 +94,14 @@ run, which get the log line and a non-zero exit instead.
 A dev build (the `NEVR_ALLOW_UNSIGNED_PLUGINS` build of ADR 0010) loads an unsigned `nevr-runtime.dll`, with the trust-mode log line ADR 0010
 defines, and carries the same `NEVR-PLUGIN-TRUST` literal; a plugin developer's dev host must load a dev `nevr-runtime.dll`. A signed-only
 build refuses it.
+
+### Until that check ships, the host loads `nevr-runtime.dll` unverified
+
+Step 2 maps `nevr-runtime.dll` with no check of the file: `RuntimeLoader::Load` in `src/runtime/host/runtime_load.cpp` resolves the path
+beside `BugSplat64.dll` and calls `LoadLibraryExW` with the DLL-directory and System32 search flags. The risk is accepted while the runtime
+sits beside `BugSplat64.dll`: anyone who can write that folder can already replace the host, and ADR 0010's threat model puts a replaced
+`BugSplat64.dll` outside what the gate protects. A runtime in a root a player can write without replacing the host has no such cover, so
+step 4 (the move to `%LOCALAPPDATA%`) does not ship before step 3, the check in the section above.
 
 ### Where state resolves
 

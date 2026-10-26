@@ -345,9 +345,9 @@ gh release edit v<x.y.z> --draft=false            # 5. publish, only after the d
 A release is the tag's version plus GitHub's pre-release flag. The version is exactly the tag (`v5.0.0` is `5.0.0`); every other build
 stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from and before the next release. The build goes through one
 packaging path (the sealed Windows zip, attested, and the Quest library; the notes and a SHA-256 table of both are the release body, written after signing; the `.tar.zst` archives stay a workflow artifact). Nothing in a file depends on the pre-release flag:
-promote with `gh release edit v<x.y.z> --prerelease=false`; it fires no workflow and changes no byte. `BugSplat64.dll` carries one
-identity literal, `NEVR-BUILD <version> <commit40>` (NUL-bounded, exactly one), that binds its version and its commit.
-The `dist` package and the Windows zip's DLL are both the stripped build (players get stripped builds only); `just dist` splits each shipped PE's debug info into `dist/symbols/<name>/<file>.dbg` first and links the
+promote with `gh release edit v<x.y.z> --prerelease=false`; it fires no workflow and changes no byte. `BugSplat64.dll` (the host) and `nevr-runtime.dll` (the runtime) each carry one
+identity literal, `NEVR-BUILD <version> <commit40>` (NUL-bounded, exactly one), that binds its version and its commit; the two literals are equal, and only the runtime carries the plugin-trust literal and the embedded defaults.
+The `dist` package and the Windows zip's DLLs are both the stripped build (players get stripped builds only); `just dist` splits each shipped PE's debug info into `dist/symbols/<name>/<file>.dbg` first and links the
 stripped file to it (`.gnu_debuglink`: name and CRC32; PE has no build-id). `build.yml` checks the pair with `tools/verify_symbols.py`,
 keeps the `.dbg` files as the `symbols` workflow artifact (not a release asset) and attests them. A build with symbols is the
 ordinary `build/<preset>/bin/` output.
@@ -417,10 +417,11 @@ The game has a ~15-20 second splash-screen delay at startup before any nEVR code
 
 | Component          | Output DLL       | Deploy As              | Purpose                                                                  |
 | ------------------ | ---------------- | ---------------------- | ------------------------------------------------------------------------ |
-| `src/runtime/` | `BugSplat64.dll` | `BugSplat64.dll`       | Runtime hooks, CLI flags, game modifications                             |
-| `src/runtime/server/` | *(in `BugSplat64.dll`)* | *(in-process)* | Multiplayer networking, session management |
+| `src/runtime/host/` | `BugSplat64.dll` | `BugSplat64.dll`       | The thin host the game loads: the 28 pinned exports, the rendezvous, crash capture |
+| `src/runtime/` (the rest) | `nevr-runtime.dll` | `nevr-runtime.dll`, beside the host | Runtime hooks, CLI flags, game modifications                 |
+| `src/runtime/server/` | *(in `nevr-runtime.dll`)* | *(in-process)* | Multiplayer networking, session management |
 
-The runtime replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. `tools/verify_pe_contract.py` pins its export table (28 names and ordinals, `DetoursExportPlaceholder` at ordinal 1, no import of `nevr-runtime.dll`) and, with the game binary present, the nine imports of `echovr.exe`. `docs/adr/0008-bugsplat-host-and-nevr-runtime.md` records the stable-host/`nevr-runtime.dll` design, what exists of it and the rendezvous decision (the game's main wrapper). Several features are built in rather than loaded as plugins: server-timing, token-auth, pnsrad-enabler.
+The runtime replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. `tools/verify_pe_contract.py` pins the host's export table (28 names and ordinals, `DetoursExportPlaceholder` at ordinal 1, no import of `nevr-runtime.dll`, no runtime code) and the runtime's (the rendezvous entry `NEVR_GetRuntimeApi` and the module entry points, plus the build-identity literal) and, with the game binary present, the nine imports of `echovr.exe`. A host whose runtime did not load after attach stops the game with exit code 78 and a `game_stop` record in `logs/nevr-bootstrap.jsonl`. `docs/adr/0008-bugsplat-host-and-nevr-runtime.md` records the stable-host/`nevr-runtime.dll` design, what exists of it and the rendezvous decision (the game's main wrapper). Several features are built in rather than loaded as plugins: server-timing, token-auth, pnsrad-enabler.
 
 `src/runtime/` is split by responsibility. Each subdirectory has a membership test:
 
@@ -431,7 +432,7 @@ The runtime replaces the original BugSplat64 crash reporter DLL — the game sta
 | `src/runtime/patch/` | mode_patches, headless_graphics, xpid_patch, pnsrad_enabler, resource_override, asset_cdn, binary_bug_fixes, broadcaster_guard | behaviour we change *in the game* |
 | `src/runtime/server/` | gameserver, server_context, websocket_client, telemetry_*, upnp, messages | the ServerDB / IServerLib subsystem |
 | `src/runtime/compat/` | ws_bridge | making the game's ageing network stack work against modern services |
-| `src/runtime/host/` | host_entry, runtime_rendezvous, game_targets, loader_lock, bootstrap_diagnostics, crash_capture, runtime_load, host_json, host_paths, path_buffer | what the stable `BugSplat64.dll` host runs behind its `DllMain` and exports; compiled into `BugSplat64.dll` and the test harnesses; `DllMain` and `NEVR_SetGameModule` call `nevr_host::OnProcessAttach` / `SetGameModule` (ADR 0008, ADR 0012) |
+| `src/runtime/host/` | host_entry, runtime_rendezvous, game_targets, loader_lock, bootstrap_diagnostics, crash_capture, runtime_load, host_json, host_paths, path_buffer | what the stable `BugSplat64.dll` host runs behind its `DllMain` and exports; compiled into `BugSplat64.dll` only (and the test harnesses); `DllMain` and `NEVR_SetGameModule` call `nevr_host::OnProcessAttach` / `SetGameModule` (ADR 0008, ADR 0012) |
 | `src/runtime/ext/` | plugin_loader, module_loader | loading other people's DLLs |
 | `src/runtime/log/` | boot_log_tee, builtin_filter | log capture and filtering |
 | `src/runtime/link/` | dbghelp_stubs.cpp, bcrypt_minimal.def | not code we run — code the *linker* needs |
@@ -468,12 +469,12 @@ A plugin logs through the host's structured `Log()` (N135): `NEVR_DEFINE_PLUGIN_
 
 ### Runtime-loaded modules
 
-`platform_compat` and `token_auth` are **statically linked** into `BugSplat64.dll`. There are no separate module DLLs — everything ships in one file. The `module_loader` infrastructure (`RegisterStaticModule`, `TickModules`, `NotifyModulesStateChange`) remains for any future modules.
+`platform_compat` and `token_auth` are **statically linked** into `nevr-runtime.dll`. There are no separate module DLLs. The `module_loader` infrastructure (`RegisterStaticModule`, `TickModules`, `NotifyModulesStateChange`) remains for any future modules.
 
 | Module | Output | Purpose |
 | ------ | ------ | ------- |
-| `src/modules/platform-compat/` | *(in `BugSplat64.dll`)* | Schannel TLS modernisation, MSXML6 pass-through hook, Wine `_temp` fix |
-| `src/modules/token-auth/` | *(in `BugSplat64.dll`)* | Device-code auth, token cache, `TokenAuth_GetToken`/`GetDiscordId` |
+| `src/modules/platform-compat/` | *(in `nevr-runtime.dll`)* | Schannel TLS modernisation, MSXML6 pass-through hook, Wine `_temp` fix |
+| `src/modules/token-auth/` | *(in `nevr-runtime.dll`)* | Device-code auth, token cache, `TokenAuth_GetToken`/`GetDiscordId` |
 
 ### Shared Libraries (static)
 
@@ -670,9 +671,9 @@ your seat name, for example `claude-main` or `codex`.
   `justfile`) may lag the count `python3 tools/verify_gtest_floor.py --floor 0` prints (`declarations=`) by up to
   `SLACK` in that test, so a PR that adds a few tests leaves the line alone. A PR that would put the count more than
   `SLACK` above the floor sets the floor to the count; a PR that drops the count below the floor sets the floor to
-  the count and says in its body which tests went and why. A PR that touches `src/runtime/exports.def`, an
+  the count and says in its body which tests went and why. A PR that touches `src/runtime/host/exports.def`, an
   `NEVR_MODULE_API` function or `src/runtime/host/` also runs
-  `python3 tools/verify_pe_contract.py --dll build/<preset>/bin/BugSplat64.dll` on the build it made. Every PR, whatever it touches, also runs
+  `python3 tools/verify_pe_contract.py --dll build/<preset>/bin/BugSplat64.dll --runtime-dll build/<preset>/bin/nevr-runtime.dll` on the build it made. Every PR, whatever it touches, also runs
   `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` (run `just worktree-setup`
   first in a fresh worktree: the doc-path check reads `extern/`). `just test-tools` keeps every run: its full output,
   JUnit XML, the pytest-randomly seed, and a start and an end record in `runs.jsonl`, under `$NEVR_TEST_LOG_DIR` (default
@@ -709,13 +710,14 @@ your seat name, for example `claude-main` or `codex`.
   pointed at: the scripts default to `echovr/` of the main checkout (through that link), the Go tests
   to `$EVR_GAME_DIR`, whose default is `../../ready-at-dawn-echo-arena` from the test directory. Point
   each at a copy explicitly:
-  - `verify-server.sh` deploys `BugSplat64.dll` into `echovr/bin/win10` of `$NEVR_GAME_ROOT` and, when
+  - `verify-server.sh` deploys `nevr-runtime.dll` and `BugSplat64.dll` into `echovr/bin/win10` of `$NEVR_GAME_ROOT` and, when
     `build/mingw-release/bin/plugins` exists, its files into `echovr/bin/win10/plugins`, and, when
     the install has none, a `config.yaml` into `echovr/_local`.
-  - `launch-client.sh` deploys `BugSplat64.dll` there and aborts (exit 3) when `plugins/*` is non-empty
+  - `launch-client.sh` deploys `nevr-runtime.dll` (the one beside `--dll`, or `--runtime-dll`) and `BugSplat64.dll`
+    there and aborts (exit 3) when `plugins/*` is non-empty, `nevr-runtime.dll` exists
     or `_local/config.yaml` or `_local/config.json` exists. `--print-game-root` and `--help` exit before
     any write.
-  - `launch-server.sh` copies `BugSplat64.dll` into `echovr/bin/win10` and, when
+  - `launch-server.sh` copies `nevr-runtime.dll` and `BugSplat64.dll` into `echovr/bin/win10` and, when
     `build/mingw-release/bin/plugins/*.dll` exist, that directory's files into
     `echovr/bin/win10/plugins`, and restores
     nothing; any other script that copies a DLL into a game directory is the same kind of writer.
@@ -784,7 +786,7 @@ your seat name, for example `claude-main` or `codex`.
       `bin/win10/plugins` empty.
       It reads the run's log from `echovr/.wineprefix`.
     - `verify-server.sh` needs `echovr/bin/win10/echovr.exe`. It tolerates an absent
-      `BugSplat64.dll` (it adds it and removes it on exit), creates `_local` when missing, and uses
+      `BugSplat64.dll` and `nevr-runtime.dll` (it adds them and removes them on exit), creates `_local` when missing, and uses
       a `_local/config.yaml` that is present as it is. It sets `WINEPREFIX` to
       `echovr/.wineprefix`.
   - **Who makes it, and reuse.** Only a human or the foreman makes the pristine copy, and nobody
@@ -797,11 +799,11 @@ your seat name, for example `claude-main` or `codex`.
     not after a SIGKILL: `launch-client.sh` only prints ERROR when its restore fails and then saves
     the leftover test DLL as the "original" on the next run, while `verify-server.sh` recovers from
     its backup directory. `launch-server.sh` and the Go tests put nothing back (they leave the test
-    DLL, or delete `BugSplat64.dll`; `launch-server.sh` also leaves plugins, which make
-    `launch-client.sh` abort). `verify-server.sh` keeps its
+    DLLs, or delete `BugSplat64.dll`; `launch-server.sh` also leaves plugins and `nevr-runtime.dll`, which make
+    `launch-client.sh` abort, as a leftover `nevr-runtime.dll` does). `verify-server.sh` keeps its
     backup at one fixed place, `$NEVR_RUN_SCRATCH_ROOT/verify-server-deploy-backup` (default
     the work root, `~/src/nevr-runtime-work/`), and restores it into the current copy. It also deletes, by the absolute paths it recorded, the
-    files the earlier run added (`BugSplat64.dll`, `plugins/*`, `_local/config.yaml`). Clear or
+    files the earlier run added (`BugSplat64.dll`, `nevr-runtime.dll`, `plugins/*`, `_local/config.yaml`). Clear or
     inspect that directory before a run against a different copy than the last. When no copy exists, the run
     waits for a human; a runtime change is not verified until then.
 
@@ -872,7 +874,7 @@ your seat name, for example `claude-main` or `codex`.
   not the environment. The build fails when the file is missing. `.env` is runtime-only (local overrides, git-ignored,
   never copied into a worktree, never compiled in); never print it.
 - **Client login test mechanics.** Run `NEVR_GAME_ROOT=<copy> ./launch-client.sh --dll <absolute path to the
-  build's BugSplat64.dll> --exit-after-login` from your checkout, where `<copy>` is a throwaway copy of the
+  build's BugSplat64.dll; the nevr-runtime.dll beside it is deployed with it> --exit-after-login` from your checkout, where `<copy>` is a throwaway copy of the
   install (see "The game install"), one client at a time (it exits 4 while an
   `echovr.exe` runs or another run holds the lock). It ends the run itself: exit 0 on `to logged in`;
   exit 1 on repeated `rad15_live failed` or `Service is unavailable` lines, a DLL that embeds no

@@ -34,6 +34,7 @@ const NevrRuntimeApi kApi = {
     },
     &Initialize,
     &GameMain,
+    {},  // no export table: the host's thunks return their failure values
 };
 
 }  // namespace

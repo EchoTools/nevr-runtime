@@ -161,6 +161,7 @@ if [[ $BUILD -eq 1 ]]; then
     || { write_record FAIL 1 "the scenario build failed"; alarm "the scenario build failed"; exit 1; }
 fi
 [[ -f "$DLL" ]] || { echo "ERROR: $DLL does not exist after build" >&2; exit 2; }
+[[ -f "$(dirname "$DLL")/nevr-runtime.dll" ]] || { echo "ERROR: $(dirname "$DLL")/nevr-runtime.dll does not exist after build" >&2; exit 2; }
 
 echo "=== smoke: one client boot, $SMOKE_YAML ==="
 set +e

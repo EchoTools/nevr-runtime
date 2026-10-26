@@ -149,6 +149,8 @@ trap 'exit 143' INT TERM
 trap restore EXIT
 
 echo "=== Deploying from build/mingw-release/bin/ ===" | tee -a "$LOG"
+# The runtime first: the host loads nevr-runtime.dll from the game directory and stops the game without it.
+deploy build/mingw-release/bin/nevr-runtime.dll "$GAME_DIR/nevr-runtime.dll"
 deploy build/mingw-release/bin/BugSplat64.dll "$GAME_DIR/BugSplat64.dll"
 if [ -d build/mingw-release/bin/plugins ]; then
   while IFS= read -r f; do deploy "$f" "$GAME_DIR/plugins/${f#build/mingw-release/bin/plugins/}"; done \

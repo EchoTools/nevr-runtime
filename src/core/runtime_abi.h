@@ -15,6 +15,8 @@
 //   - abi_minor: informational. Newer minors may only APPEND fields; a reader
 //     uses an appended field only after nevr_runtime_abi::DescriptorCovers() proves the
 //     writer's struct_size includes it.
+//       minor 1: NevrRuntimeApi::exports, the runtime's side of the 16 exports the host
+//                publishes under the names plugins resolve from BugSplat64.dll.
 //   - struct_size: the writer's sizeof. It is read before anything past the
 //     16-byte header, so a smaller (older) descriptor is never over-read.
 //
@@ -64,7 +66,39 @@ struct NevrHostContext {
   std::uint32_t reserved;
 };
 
-/// Returned by nevr-runtime.dll's NEVR_GetRuntimeApi export. All entries are required in v1.
+/// The runtime's implementation of the exports BugSplat64.dll publishes for the runtime (minor 1). The host
+/// exports a typed thunk under each name, so the export table the game, the launcher and the plugins resolve
+/// stays the one tools/verify_pe_contract.py pins, and a thunk calls through here only once the runtime is
+/// loaded and initialized. Each entry has the signature of the export it serves; a pointer the host cannot
+/// prove non-null is never called. The runtime catches every exception inside an entry: none crosses the
+/// boundary.
+struct NevrRuntimeExports {
+  // NEVR_* (plugins and the launcher)
+  void (*schedule_return_to_lobby)();
+  /// `out` is a NevrUPnPConfig (runtime/hook/patching.h); the host passes the caller's pointer through.
+  void (*get_upnp_config)(void* out);
+  void (*register_resource_override)(std::uint64_t type_hash, std::uint64_t name_hash, const void* data,
+                                     std::uint64_t size, const char* label);
+  void (*reset_resource_overrides)();
+  void (*deregister_resource_overrides)(const void* data_start, const void* data_end);
+  int (*register_asset)(std::uint64_t type_hash, std::uint64_t name_hash, const void* data, std::uint64_t size,
+                        const char* label);
+  void (*deregister_assets)(const void* data_start, const void* data_end);
+  // TokenAuth_* (resolved by name from the host module)
+  const char* (*token_auth_get_token)();
+  std::uint64_t (*token_auth_get_discord_id)();
+  const char* (*token_auth_get_username)();
+  // The two static modules' entry points (src/extension/module_interface.h); `ctx` is an NvrModuleContext.
+  std::uint32_t (*platform_compat_api_version)();
+  int (*platform_compat_init)(const void* ctx);
+  void (*platform_compat_shutdown)();
+  std::uint32_t (*token_auth_api_version)();
+  int (*token_auth_init)(const void* ctx);
+  void (*token_auth_shutdown)();
+};
+
+/// Returned by nevr-runtime.dll's NEVR_GetRuntimeApi export. initialize and game_main are required in v1;
+/// `exports` is read only when the descriptor covers it (minor 1).
 struct NevrRuntimeApi {
   NevrAbiHeader header;
   /// Returns 0 on success. Called once, after the descriptor validated, at the
@@ -74,6 +108,8 @@ struct NevrRuntimeApi {
   /// wrapper. Called by the host detour with the wrapper's argument; its result is
   /// the wrapper's result.
   std::int64_t (*game_main)(std::int64_t command_line);
+  /// Minor 1. Absent from a descriptor whose struct_size ends at game_main.
+  NevrRuntimeExports exports;
 };
 
 /// Signature of nevr-runtime.dll's single versioned entry point.
@@ -85,11 +121,14 @@ namespace nevr_runtime_abi {
 
 inline constexpr char kGetRuntimeApiExport[] = "NEVR_GetRuntimeApi";
 inline constexpr std::uint32_t kMajor = 1;
-inline constexpr std::uint32_t kMinor = 0;
+inline constexpr std::uint32_t kMinor = 1;
 
 /// Smallest struct_size a v1 writer may report: every v1 field present.
 inline constexpr std::uint32_t kRuntimeApiV1Size =
     static_cast<std::uint32_t>(offsetof(NevrRuntimeApi, game_main) + sizeof(void*));
+/// Size of a descriptor that carries the export table (minor 1).
+inline constexpr std::uint32_t kRuntimeApiV1_1Size =
+    static_cast<std::uint32_t>(offsetof(NevrRuntimeApi, exports) + sizeof(NevrRuntimeExports));
 inline constexpr std::uint32_t kHostContextV1Size = static_cast<std::uint32_t>(
     offsetof(NevrHostContext, reserved) + sizeof(NevrHostContext::reserved));
 
@@ -112,7 +151,10 @@ static_assert(offsetof(NevrHostContext, reserved) == 68);
 static_assert(sizeof(NevrHostContext) == kHostContextV1Size && kHostContextV1Size == 72);
 static_assert(offsetof(NevrRuntimeApi, initialize) == 16);
 static_assert(offsetof(NevrRuntimeApi, game_main) == 24);
-static_assert(sizeof(NevrRuntimeApi) == kRuntimeApiV1Size && kRuntimeApiV1Size == 32);
+static_assert(offsetof(NevrRuntimeApi, exports) == 32);
+static_assert(sizeof(NevrRuntimeExports) == 16 * sizeof(void*));
+static_assert(sizeof(NevrRuntimeApi) == kRuntimeApiV1_1Size && kRuntimeApiV1_1Size == 32 + 16 * 8);
+static_assert(kRuntimeApiV1Size == 32);
 
 enum class Status : std::uint32_t {
   kOk = 0,
@@ -151,6 +193,13 @@ inline Status CheckHeader(const NevrAbiHeader* header, std::uint32_t required_si
 /// — the gate for reading any field appended by a later minor version.
 inline bool DescriptorCovers(const NevrAbiHeader* header, std::size_t field_end) noexcept {
   return header != nullptr && header->struct_size >= field_end;
+}
+
+/// The runtime's export table, or nullptr when the descriptor is absent, malformed or older than minor 1. The
+/// host calls an entry only through this and only after checking the entry it wants is non-null.
+inline const NevrRuntimeExports* RuntimeExports(const NevrRuntimeApi* api) noexcept {
+  if (api == nullptr || !DescriptorCovers(&api->header, kRuntimeApiV1_1Size)) return nullptr;
+  return &api->exports;
 }
 
 /// Host side: validate nevr-runtime.dll's descriptor before calling through it.

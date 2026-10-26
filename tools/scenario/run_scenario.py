@@ -3,8 +3,8 @@
 
 Design: docs/design/2026-10-01-social-scenario-harness.md. The client is launched exactly as
 launch-client.sh launches it (nested display :101, pristine install and restore, production login),
-with the mingw-scenario build of BugSplat64.dll, which carries the test-only control endpoint
-(src/runtime/scenario/scenario_control.cpp). Steps come from a YAML file; each one either waits
+with the mingw-scenario build (BugSplat64.dll and the nevr-runtime.dll beside it), whose runtime carries the
+test-only control endpoint (src/runtime/scenario/scenario_control.cpp). Steps come from a YAML file; each one either waits
 for a line in the game's console log, talks to the control endpoint, or expects a line after the
 previous action. The first failing step stops the run and is named. Exit 0 only if every step passed.
 
@@ -542,8 +542,10 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     scenario = load_scenario(args.scenario)
-    if not args.dll.is_file() or MARKER not in args.dll.read_bytes():
-        print(f"ERROR: {args.dll} is not a scenario build (missing or no {MARKER.decode()}); "
+    # The control endpoint is compiled into the runtime, which the launcher deploys beside the host.
+    runtime = args.dll.with_name("nevr-runtime.dll")
+    if not args.dll.is_file() or not runtime.is_file() or MARKER not in runtime.read_bytes():
+        print(f"ERROR: {args.dll} is not a scenario build (missing, or its {runtime.name} is missing or has no {MARKER.decode()}); "
               "run `just preset=mingw-scenario build`", file=sys.stderr)
         return 2
     stamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")

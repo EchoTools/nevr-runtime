@@ -147,7 +147,7 @@ def setup_rig(g: Guest, tmp: pathlib.Path, with_legacy_dbgcore: bool = False) ->
 $src='@GAME@'; $root='@ROOT@'
 New-Item -ItemType Directory -Force -Path "$root\echovr\bin\win10","$root\echovr\_local","$root\run" | Out-Null
 # /A-:R drops the ReadOnly attribute the install's files carry; left on, Remove-Item cannot clear them.
-robocopy "$src\bin\win10" "$root\echovr\bin\win10" /E /A-:R /XF dbgcore.dll BugSplat64.dll BugSplat64.dll.stock /XD logs /NFL /NDL /NJH /NJS /NP | Out-Null
+robocopy "$src\bin\win10" "$root\echovr\bin\win10" /E /A-:R /XF dbgcore.dll BugSplat64.dll BugSplat64.dll.stock nevr-runtime.dll /XD logs /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed rc=$LASTEXITCODE" }
 # robocopy without /MIR never deletes: clear anything a previous run left behind.
 $dbg = "$root\echovr\bin\win10\dbgcore.dll"
@@ -170,6 +170,11 @@ foreach ($d in '_data','content','sourcedb') {
 
 def deploy(g: Guest, dll: pathlib.Path) -> None:
     kill_game(g)
+    # The host (BugSplat64.dll) loads nevr-runtime.dll from its own directory: the pair is one deploy, runtime first.
+    runtime = dll.with_name("nevr-runtime.dll")
+    if not runtime.is_file():
+        raise EnvError(f"{runtime} not found beside {dll}; run `just build` first")
+    g.put(runtime, f"{SMB_ROOT}/echovr/bin/win10", "nevr-runtime.dll")
     g.put(dll, f"{SMB_ROOT}/echovr/bin/win10", "BugSplat64.dll")
 
 

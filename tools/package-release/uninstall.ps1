@@ -1,8 +1,11 @@
 # NEVR runtime release: uninstall.
 #
-# Puts back what install.ps1 set aside: the original BugSplat64.dll and a legacy dbgcore.dll. It never
-# deletes anything: the backup stays where it is, and nothing is overwritten that was not put there by
-# install.ps1.
+# Puts back what install.ps1 set aside: the original BugSplat64.dll and a legacy dbgcore.dll, and sets
+# nevr-runtime.dll, the file install.ps1 added, aside as nevr-runtime.dll.uninstalled-<timestamp>. A
+# nevr-runtime.dll that install.ps1 had set aside (nevr-runtime.dll.original-<stamp>, named by runtime_aside in
+# nevr-install.txt) goes back under its own name. It never deletes anything: the backup stays where it is, and nothing is overwritten that was not put there by
+# install.ps1. A nevr-runtime.dll that is not a NEVR runtime (it carries no NEVR-BUILD identity text) is left
+# alone and reported.
 #
 # usage:  powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 [-Dir <...\bin\win10>] [-Pause | -NoPause]
 # Without -Dir the folder is asked for.
@@ -66,6 +69,9 @@ foreach ($key in 'backup', 'legacy', 'installed_sha256') {
 }
 $backup = $values['backup']
 $legacyAside = $values['legacy']
+# A nevr-runtime.dll that stood in the folder before install.ps1 (install.ps1 renamed it to nevr-runtime.dll.original-<stamp>);
+# a state file from before this key existed names none.
+$priorRuntimeAside = if ($values.ContainsKey('runtime_aside')) { $values['runtime_aside'] } else { '' }
 if (-not (Test-Path -LiteralPath $backup)) { throw "the backup is gone: ${backup}; nothing was changed" }
 # #779: an install made before #762 may have saved a NEVR runtime as the original; restoring it would restore the runtime.
 if ([System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($backup)).Contains('NEVR-BUILD ')) {
@@ -91,6 +97,9 @@ if ($legacyAside -ne '') {
   if (-not (Test-Path -LiteralPath $legacyAside)) { throw "the set-aside dbgcore.dll is gone: ${legacyAside}; nothing was changed" }
   if (Test-Path -LiteralPath (Join-Path $Dir 'dbgcore.dll')) { throw 'a dbgcore.dll exists again; nothing was changed' }
 }
+if (($priorRuntimeAside -ne '') -and -not (Test-Path -LiteralPath $priorRuntimeAside)) {
+  throw "the set-aside nevr-runtime.dll is gone: ${priorRuntimeAside}; nothing was changed"
+}
 
 Copy-Item -LiteralPath $backup -Destination $target -Force
 if ((Get-Sha $target) -ne (Get-Sha $backup)) { throw 'the restored BugSplat64.dll does not match the backup' }
@@ -99,8 +108,32 @@ if ($legacyAside -ne '') {
   Rename-Item -LiteralPath $legacyAside -NewName 'dbgcore.dll'
   Write-Output 'RESTORED dbgcore.dll'
 }
+# The game no longer loads the runtime: set it aside, if it is ours.
+$runtimeTarget = Join-Path $Dir 'nevr-runtime.dll'
+$runtimeRemoved = $false
+if (Test-Path -LiteralPath $runtimeTarget) {
+  if ([System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($runtimeTarget)).Contains('NEVR-BUILD ')) {
+    $runtimeAside = 'nevr-runtime.dll.uninstalled-' + (Get-Date).ToString('yyyyMMdd-HHmmss')
+    Rename-Item -LiteralPath $runtimeTarget -NewName $runtimeAside
+    $runtimeRemoved = $true
+    Write-Output "SET ASIDE nevr-runtime.dll as $runtimeAside"
+  } else {
+    Write-Output 'LEFT nevr-runtime.dll: it is not a NEVR runtime (no NEVR-BUILD identity text), so install.ps1 did not put it there'
+  }
+}
+# Then the file that stood there before install.ps1 goes back, when the name is free; it is never put over another file.
+$runtimeRestored = $false
+if ($priorRuntimeAside -ne '') {
+  if (Test-Path -LiteralPath $runtimeTarget) {
+    Write-Output "KEPT ${priorRuntimeAside}: nevr-runtime.dll is in the folder and was not touched, so the earlier file stays aside"
+  } else {
+    Rename-Item -LiteralPath $priorRuntimeAside -NewName 'nevr-runtime.dll'
+    $runtimeRestored = $true
+    Write-Output "RESTORED nevr-runtime.dll from ${priorRuntimeAside}"
+  }
+}
 Rename-Item -LiteralPath $state -NewName ('nevr-install.txt.undone-' + (Get-Date).ToString('yyyyMMdd-HHmmss'))
-Write-RunLog ("OK $scriptName RESTORED BugSplat64.dll Dir=$Dir")
+Write-RunLog ("OK $scriptName RESTORED BugSplat64.dll Dir=$Dir nevr-runtime.dll set aside=$runtimeRemoved earlier nevr-runtime.dll restored=$runtimeRestored")
 
 } catch {
   $exitCode = 1

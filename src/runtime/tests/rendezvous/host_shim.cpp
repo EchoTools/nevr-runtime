@@ -11,7 +11,8 @@
 //     nevr-runtime.dll load in attach);
 //   - the first GameMainWrapper call (after attach) loads the sibling nevr-runtime.dll
 //     through RuntimeLoader::Load, calls initialize and returns game_main's result,
-//     degrading to the original wrapper on any failure;
+//     stopping the game (exit code 78) when the runtime did not load; the harness installs the
+//     host's stop seam so a scenario can look on, unless the child asks for the real stop;
 //   - NEVR_SetGameModule is the launcher-mode external contract.
 // An attach failure is journalled in fixed memory; nevr_host_test_FlushDeferred stands
 // for the crash-reporter constructor, the trigger that reports it when no detour exists.
@@ -31,6 +32,14 @@ RecordEventFn g_record = nullptr;
 
 void Record(Event event, std::uint64_t payload = 0) {
   if (g_record != nullptr) g_record(event, payload);
+}
+
+void RecordStop(std::uint32_t exit_code) { Record(kHostStopGame, exit_code); }
+
+bool RealStop() {
+  HMODULE exe = GetModuleHandleW(nullptr);
+  const auto fn = exe == nullptr ? nullptr : reinterpret_cast<RealStopFn>(GetProcAddress(exe, kRealStopExport));
+  return fn != nullptr && fn() != 0;
 }
 
 bool LauncherMode() {
@@ -79,6 +88,7 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
   if (fail_create != nullptr && fail_create() != 0) {
     nevr_host::RuntimeRendezvous::Seams().fail_hook_create = true;
   }
+  if (!RealStop()) nevr_host::RuntimeRendezvous::Seams().stop_game = &RecordStop;
   nevr_host::OnProcessAttach(module, game, launcher);
 
   if (!launcher) {

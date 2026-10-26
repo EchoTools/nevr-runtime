@@ -303,6 +303,7 @@ package-dev store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
     just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so build/android-dev/repack
     python3 tools/package_release.py --commit "$commit" --out "$out" \
         --dll build/mingw-dev/bin/BugSplat64.dll \
+        --runtime-dll build/mingw-dev/bin/nevr-runtime.dll \
         --server-exe build/mingw-dev/bin/echovr_server.exe \
         --apk build/android-dev/repack/r15_nevr-sentinel_signed.apk \
         --pc-header build/mingw-dev/generated/nevr_builtin_defaults.h \
@@ -449,8 +450,9 @@ test-auth-unit:
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_runtime_abi
+    cmake --build --preset {{ preset }} --target test_runtime_export_guard
     cmake --build --preset {{ preset }} --target test_bootstrap_attach
-    cmake --build --preset {{ preset }} --target test_host_json --target test_bootstrap_diagnostics --target test_host_crash_capture --target test_host_runtime_load --target test_host_minidump --target test_host_rendezvous --target test_host_crash --target test_rendezvous
+    cmake --build --preset {{ preset }} --target test_host_json --target test_bootstrap_diagnostics --target test_host_crash_capture --target test_host_runtime_load --target test_host_minidump --target test_host_rendezvous --target test_host_exports --target test_host_crash --target test_rendezvous
     # The host units carry no test seam when NEVR_HOST_TESTING is not defined: each is compiled again
     # without it with the build's own flags and its object is read with nm (docs/adr/0008). Fail-close.
     python3 tools/verify_host_seams.py "build/{{ preset }}"
@@ -504,6 +506,12 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
+    bin="build/{{ preset }}/bin/test_runtime_export_guard.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
     # The attach-time MinHook proof gate (not a GTest: its own PASS/FAIL lines are the evidence). The
     # suite runs each scenario in a child process and fails on a hang, a loader-lock inversion or a
     # partially installed detour.
@@ -515,8 +523,8 @@ test-auth-unit:
     run_test "$bin"
     # The stable BugSplat64.dll host (src/runtime/host/): the fixed-buffer JSON writer, the
     # diagnostic recorder, the minidump capture, the runtime load state machine, the rendezvous's prologue
-    # validation and the minidump parser the crash harness trusts.
-    for name in test_host_json test_bootstrap_diagnostics test_host_crash_capture test_host_runtime_load test_host_minidump test_host_rendezvous; do
+    # validation, the export thunks and the minidump parser the crash harness trusts.
+    for name in test_host_json test_bootstrap_diagnostics test_host_crash_capture test_host_runtime_load test_host_minidump test_host_rendezvous test_host_exports; do
         bin="build/{{ preset }}/bin/$name.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -1563,7 +1571,7 @@ verify:
     # from the compiler/linker itself — a no-op when green, nonzero when truly broken.
     cmake --build --preset {{ preset }}
     # The DLL embeds exactly the public defaults file (the build reads no other source).
-    python3 tools/check_embedded_defaults.py --header build/{{ preset }}/generated/nevr_builtin_defaults.h --binary build/{{ preset }}/bin/BugSplat64.dll
+    python3 tools/check_embedded_defaults.py --header build/{{ preset }}/generated/nevr_builtin_defaults.h --binary build/{{ preset }}/bin/nevr-runtime.dll
     # --- Parallel test block --------------------------------------------------
     # Ten independent suites run concurrently (capped at nproc) instead of one after
     # another: each test-quest-* compiles its own host binary in its own out dir and runs
@@ -2538,21 +2546,28 @@ verify:
     python3 tools/verify_hook_invariants.py
     # The scenario-test control endpoint can inject messages into a live session; it exists only in
     # the mingw-scenario preset. The DLL this gate just built must not carry it.
-    python3 tools/verify_scenario_control_absent.py "build/{{ preset }}/bin/BugSplat64.dll"
-    # #575 step 1: the game-facing PE surface of BugSplat64.dll is pinned before any change of which
-    # target owns the code: the exact 28-name export set with its ordinals, DetoursExportPlaceholder at
-    # ordinal 1, no eager nevr-runtime.dll import. The game's own BugSplat64.dll imports are cross-checked when
+    python3 tools/verify_scenario_control_absent.py "build/{{ preset }}/bin/BugSplat64.dll" "build/{{ preset }}/bin/nevr-runtime.dll"
+    # #575, #853: the game-facing PE surface of BugSplat64.dll (the host) is pinned: the exact 28-name export
+    # set with its ordinals, DetoursExportPlaceholder at ordinal 1, no eager nevr-runtime.dll import, no runtime
+    # code in it; nevr-runtime.dll exports the rendezvous entry and the module entry points and carries the
+    # build-identity literal, and the two literals agree. The game's own BugSplat64.dll imports are cross-checked when
     # the game binary is present (it is not in CI or a fresh worktree). Fail-closed: no `|| true`.
     if [ -f echovr/bin/win10/echovr.exe ]; then
-        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll" --game-exe echovr/bin/win10/echovr.exe
+        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll" --runtime-dll "build/{{ preset }}/bin/nevr-runtime.dll" --game-exe echovr/bin/win10/echovr.exe
     else
         echo "pe-contract: NOTE game binary absent (echovr/bin/win10/echovr.exe) - game-import cross-check skipped; host export checks still run"
-        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll"
+        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll" --runtime-dll "build/{{ preset }}/bin/nevr-runtime.dll"
     fi
+    # #853 (ADR 0012 decision 4): the host shares no writable data symbol with the core or ABI library. Run on the
+    # build's own UNSTRIPPED bin/BugSplat64.dll (dist strips a copy later; a stripped host has no symbols to read and
+    # the tool then fails). The tool reads nm itself and fails closed: nm failing, an empty listing or a writable symbol
+    # the host shares with libnevr_core.a or libnevr_abi.a all exit 1 (N93: no stage that can answer "no match" for
+    # "could not look").
+    python3 tools/verify_host_no_core_state.py --host-dll "build/{{ preset }}/bin/BugSplat64.dll" --lib "build/{{ preset }}/src/core/libnevr_core.a" --lib "build/{{ preset }}/src/abi/libnevr_abi.a"
     # #850: both shipped Windows files carry the pinned VERSIONINFO (Details tab), at the version the DLL's
     # own NEVR-BUILD literal states. Fail-closed: a file without the resource, a changed field or a
     # version that is not the build's exits 1.
-    python3 tools/pe_version_info.py check --dll "build/{{ preset }}/bin/BugSplat64.dll" --exe "build/{{ preset }}/bin/echovr_server.exe"
+    python3 tools/pe_version_info.py check --dll "build/{{ preset }}/bin/BugSplat64.dll" --runtime-dll "build/{{ preset }}/bin/nevr-runtime.dll" --exe "build/{{ preset }}/bin/echovr_server.exe"
     # N84 runtime counterpart. The static check above scans source, so it only
     # sees plugins in THIS tree — a third-party plugin is a DLL we never compile.
     # HookGuard detects the effect (our bytes changed) instead of the source.
@@ -3278,7 +3293,7 @@ verify:
     # and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 1710
+    python3 tools/verify_gtest_floor.py --floor 1736
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py

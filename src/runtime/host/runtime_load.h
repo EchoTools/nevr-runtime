@@ -5,10 +5,10 @@
 // path ResolveRuntimePath returns with LoadLibraryExW (DLL-load-directory +
 // System32 search flags), validates the descriptor from core/runtime_abi.h
 // (major version, minimum struct size, required entries), and initializes it.
-// Every outcome, loaded or not, emits a bootstrap diagnostic; a failure degrades
-// to running the original game wrapper without ever calling a null pointer. The
-// descriptor is valid only when it carries every required entry (initialize and
-// game_main).
+// Every outcome, loaded or not, emits a bootstrap diagnostic; a failure stops the
+// game (docs/adr/0012-static-install-root.md: the game does not run without NEVR),
+// without ever calling a null pointer. The descriptor is valid only when it carries
+// every required entry (initialize and game_main).
 
 #include "core/runtime_abi.h"
 #include "runtime/host/bootstrap_diagnostics.h"
@@ -16,6 +16,7 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <climits>
 
 namespace nevr_host {
 
@@ -40,6 +41,9 @@ struct RuntimeLoadResult {
   std::uint32_t actual_major = 0;
   std::uint32_t actual_minor = 0;
   std::int32_t init_code = 0;
+  // True when initialize() threw a std::exception (init_code is then kInitThrewCode). The runtime catches its
+  // own exceptions; one that crosses the boundary is a load failure, not a crash in the host's detour.
+  bool init_threw = false;
   const NevrRuntimeApi* api = nullptr;
   HMODULE module = nullptr;
   wchar_t path[MAX_PATH] = {};
@@ -47,14 +51,18 @@ struct RuntimeLoadResult {
   // Whether the loading thread owned the process loader lock when the load began (measured
   // by Load, from the PEB). False at the rendezvous; the record says so.
   bool loader_lock_held = false;
-  // True when the descriptor came from the host's own image (RuntimeLoader::PrepareInProcess): no
-  // file was loaded and `module` is the host.
-  bool in_process = false;
 
   bool Loaded() const { return outcome == RuntimeLoadOutcome::kLoaded; }
   const char* OutcomeName() const;
   const char* DegradedAction() const;
 };
+
+/// The exit code of a game stopped because nevr-runtime.dll did not load: 78, EX_CONFIG in sysexits
+/// (docs/adr/0012-static-install-root.md, "Names this record fixes").
+inline constexpr std::uint32_t kRuntimeStopExitCode = 78;
+
+/// The init_code recorded when initialize() threw (INT32_MIN: not a value a runtime returns on purpose).
+inline constexpr std::int32_t kInitThrewCode = INT32_MIN;
 
 /// The one place that decides which file is the runtime: `nevr-runtime.dll` in the
 /// directory of `host_module`. Fixed buffer, no heap, no I/O, so it is safe under
@@ -74,6 +82,13 @@ RuntimeLoadResult ClassifyLoad(bool path_ok, const wchar_t* path, DWORD load_err
 // string) is replaced by a fixed-buffer marker line carrying the outcome and what failed.
 void EmitLoadDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result) noexcept;
 
+/// Emit the record that says the game is being stopped, with the cause and the exit code, before the host ends the
+/// process. Same guarantee as EmitLoadDiagnostic: never throws, and a record that cannot be built is replaced by a
+/// fixed-buffer marker line.
+/// `notice`, when not null, names what the player is told (stop_notice.h, StopNoticeName) and goes in the record.
+void EmitStopDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result,
+                        const char* notice = nullptr) noexcept;
+
 #if defined(NEVR_HOST_TESTING)
 // Test seam (compiled only into the test targets): make the record builder throw, to reach the marker line.
 void SetEmitLoadFailureForTest(bool fail) noexcept;
@@ -84,15 +99,14 @@ class RuntimeLoader {
   // Resolve the runtime path (ResolveRuntimePath) into a fixed buffer. No allocation, no I/O.
   void Prepare(HMODULE host_module);
 
-  // The runtime is compiled into the host's own image: `get_api` is its descriptor entry point,
-  // `module` in the result is `host_module`, and nothing is loaded from disk. The descriptor
-  // checks and initialize() are the same as for a file runtime.
-  void PrepareInProcess(HMODULE host_module, NevrGetRuntimeApiFn get_api);
-
   // Run the state machine against the prepared path. Emits a diagnostic on every
   // outcome. The failed runtime is left mapped (it may already have
   // patched something); it is never FreeLibrary'd.
   RuntimeLoadResult Load(const NevrHostContext& host, BootstrapDiagnostics& diagnostics);
+
+  /// Call api->initialize(&host). Returns its result; an exception of any type that escapes it is caught here
+  /// (exceptions must not cross the DLL boundary), sets *threw and returns kInitThrewCode.
+  static std::int32_t CallInitialize(const NevrRuntimeApi* api, const NevrHostContext& host, bool* threw) noexcept;
 
   const RuntimeLoadResult& Result() const { return result_; }
   const NevrRuntimeApi* Api() const { return result_.api; }
@@ -101,8 +115,6 @@ class RuntimeLoader {
   RuntimeLoadResult result_{};
   wchar_t path_[MAX_PATH] = {};
   bool path_ok_ = false;
-  HMODULE in_process_module_ = nullptr;
-  NevrGetRuntimeApiFn in_process_get_api_ = nullptr;
 };
 
 }  // namespace nevr_host

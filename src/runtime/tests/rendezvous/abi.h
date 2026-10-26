@@ -55,7 +55,8 @@ enum Event : LONG {
   kRuntimeHookMismatch = 12,    // the record's 16 bytes differ from the live bytes at the target
   kCallIssued = 13,             // payload: command_line
   kBadResult = 14,              // payload: command_line whose result was wrong
-  kEventLimit = 15,
+  kHostStopGame = 15,           // payload: the exit code the host stops the game with (the test seam)
+  kEventLimit = 16,
 };
 
 // Exports of the test executable, resolved with
@@ -64,6 +65,7 @@ inline constexpr char kRecordEventExport[] = "RendezvousProbeRecordEvent";
 inline constexpr char kGameImageExport[] = "RendezvousProbeGameImage";
 inline constexpr char kLauncherModeExport[] = "RendezvousProbeLauncherMode";
 inline constexpr char kFailHookCreateExport[] = "RendezvousProbeFailHookCreate";
+inline constexpr char kRealStopExport[] = "RendezvousProbeRealStop";
 using RecordEventFn = void (*)(LONG event, std::uint64_t payload);
 using GameImageFn = HMODULE (*)();
 // Returns 1 when the child is exercising the external NEVR_SetGameModule launcher
@@ -71,5 +73,8 @@ using GameImageFn = HMODULE (*)();
 // so the test can prove NEVR_SetGameModule does the Prepare -> Install -> dispatch.
 using LauncherModeFn = int (*)();
 using FailHookCreateFn = int (*)();
+// Returns 1 when the child lets the host really end the process on a failed runtime load; 0 installs the
+// host's stop seam, which records kHostStopGame and lets the original wrapper run so the harness can look on.
+using RealStopFn = int (*)();
 
 }  // namespace nevr_rendezvous_probe
