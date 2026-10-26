@@ -57,7 +57,7 @@ class RuntimeRendezvous {
   // True when the bytes at `target` match the pinned prologue.
   static bool PrologueMatches(const void* target);
 
-  // The detour body (MinHook calls it). Loads nevr.dll once under InitOnce and
+  // The detour body (MinHook calls it). Loads nevr-runtime.dll once under InitOnce and
   // returns the runtime's game_main(command_line), or the original wrapper's result when no
   // runtime is published; a same-thread re-entry during load bypasses to the original.
   static std::int64_t GameMainWrapperDetour(std::int64_t command_line);

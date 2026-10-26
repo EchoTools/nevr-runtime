@@ -301,7 +301,7 @@ quest-install yes="" apk="build/android-arm64/repack/r15_nevr-sentinel_signed.ap
 # --- Tests ---
 
 # The Python tool suite, kept: full output, JUnit XML, the pytest-randomly seed, and a start and an end
-# record in runs.jsonl per run, under $NEVR_TEST_LOG_DIR (default /var/tmp/work-nevr-runtime/test-runs/tools-tests).
+# record in runs.jsonl per run, under $NEVR_TEST_LOG_DIR (default test-runs/tools-tests in the work root, tools/work_root.py).
 # The end record names the failing tests. Exit code is pytest's, except 2 for a record that cannot be kept
 # and 128 + the signal for an interrupt, 130 for CTRL+C (tools/run_tool_tests.py). Args replace the
 # default `-q tools/tests` (#913).
@@ -424,9 +424,13 @@ test-auth-unit:
     # Signed fixtures for the plugin signature gate (ADR 0010, #741), made once for test_plugin_signature and the
     # gate tests in test_behavioral: a throwaway PKI and osslsigncode, offline, over the real test plugin. A
     # missing tool or a failed generation fails the recipe; the tests fail, never skip, without the directory.
-    mkdir -p /var/tmp/work-nevr-runtime
-    sigfix="$(mktemp -d /var/tmp/work-nevr-runtime/test-plugin-signature.XXXXXX)"
+    source tools/lib/work_root.sh
+    work_dir "$NEVR_WORK_ROOT/test-scratch" "Temporary directories of the tests; each test removes its own when it ends." \
+        "a directory in here left behind by an interrupted test run can be removed at any time; this directory when no test run is live."
+    sigfix="$(mktemp -d "$NEVR_WORK_ROOT/test-scratch/test-plugin-signature.XXXXXX")"
     trap 'rm -rf "$sigfix"' EXIT
+    # test_nevr_config writes its fixture files here (a Linux path; Wine reaches it as Z:); removed with sigfix.
+    export NEVR_CONFIG_TEST_DIR="$sigfix/nevr-config-tests"
     python3 tools/gen_plugin_signature_fixtures.py "$sigfix" --plugin-dll "build/{{ preset }}/bin/plugins/test_plugin_onframe.dll"
     export NEVR_SIGFIX_DIR="$sigfix"
     # The real signed v5.4.3 BugSplat64.dll (#745), fetched by digest once and kept under build/: test_plugin_trust
@@ -2495,7 +2499,7 @@ verify:
     python3 tools/verify_scenario_control_absent.py "build/{{ preset }}/bin/BugSplat64.dll"
     # #575 step 1: the game-facing PE surface of BugSplat64.dll is pinned before any change of which
     # target owns the code: the exact 28-name export set with its ordinals, DetoursExportPlaceholder at
-    # ordinal 1, no eager nevr.dll import. The game's own BugSplat64.dll imports are cross-checked when
+    # ordinal 1, no eager nevr-runtime.dll import. The game's own BugSplat64.dll imports are cross-checked when
     # the game binary is present (it is not in CI or a fresh worktree). Fail-closed: no `|| true`.
     if [ -f echovr/bin/win10/echovr.exe ]; then
         python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll" --game-exe echovr/bin/win10/echovr.exe

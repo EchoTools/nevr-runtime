@@ -32,7 +32,9 @@ import uuid
 HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(REPO / "tools"))
 import checks  # noqa: E402
+import work_root  # noqa: E402
 
 ROOT = "C:\\nevr-systest"          # the rig; never the user's own install
 GAME = "C:\\echovr"                # the user's install, used read-only
@@ -340,6 +342,11 @@ def dispatch_scenarios(scenario: str, guest: Guest, out: pathlib.Path,
     return results
 
 
+def default_out_dir() -> pathlib.Path:
+    """winvm-<timestamp> in the work root (tools/work_root.py)."""
+    return work_root.work_root() / ("winvm-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--scenario", choices=["boot", "gai", "all"], default="all")
@@ -360,9 +367,9 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     args.wait = max(args.wait, 45)
 
-    out = args.out or pathlib.Path("/var/tmp/work-nevr-runtime") / (
-        "winvm-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
-    out.mkdir(parents=True, exist_ok=True)
+    out = args.out or default_out_dir()
+    work_root.ensure_dir(out, "Artifacts of one tools/winvm/systest.py run: stdout, windows, results and the probe output.",
+                         "when the PR that cites the run merges, unless the PR keeps it as evidence.")
 
     results: list[checks.Result] = []
     guest = None

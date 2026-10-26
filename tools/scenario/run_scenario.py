@@ -31,8 +31,14 @@ import time
 import yaml
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "tools"))
+import work_root  # noqa: E402
+
 DEFAULT_DLL = REPO / "build/mingw-scenario/bin/BugSplat64.dll"
-SCRATCH = pathlib.Path("/var/tmp/work-nevr-runtime/scenario-runs")
+SCRATCH = work_root.work_root() / "scenario-runs"
+SCRATCH_PURPOSE = ("Runs of the social scenario harness (tools/scenario/run_scenario.py and run_all.py): "
+                   "one directory per run or suite, with the console log, the game's JSONL log and result.json.")
+SCRATCH_REMOVED = "when the PR that cites a run merges, unless the PR keeps it as evidence."
 
 
 @functools.lru_cache(maxsize=None)
@@ -542,7 +548,7 @@ def main(argv: list[str]) -> int:
         return 2
     stamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
     out = args.out or SCRATCH / f"{stamp}-{scenario['name']}"
-    out.mkdir(parents=True, exist_ok=True)
+    work_root.ensure_dir(out, SCRATCH_PURPOSE, SCRATCH_REMOVED)
 
     loadavg_start = read_loadavg()
     run = Run(scenario, args.dll, out, args.config)
