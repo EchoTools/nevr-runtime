@@ -63,6 +63,33 @@ class ReleasePreflightTest(unittest.TestCase):
     def problems(self, result):
         return [line for line in result.stdout.splitlines() if line.startswith("release-preflight: PROBLEM:")]
 
+    def warnings(self, result):
+        return [line for line in result.stdout.splitlines() if line.startswith("release-preflight: WARNING:")]
+
+    def seed_commits(self, count):
+        """`count` empty commits on the seed's main in one fast-import, pushed to origin and fast-forwarded into the clone."""
+        stream = "".join(f"commit refs/heads/main\ncommitter t <t@example.invalid> {1_700_000_000 + i} +0000\n"
+                         f"data 2\nc\n" + ("from refs/heads/main^0\n" if i == 0 else "") + "\n" for i in range(count))
+        subprocess.run(["git", "fast-import", "--quiet", "--force"], cwd=self.seed, input=stream, text=True, check=True)
+        git(self.seed, "reset", "-q", "--hard", "main")
+        self.sync_clone()
+
+    def retag(self, tag):
+        """Tag the seed's current tip `tag` (annotated), and make it the nearest release tag; commits made after it count."""
+        self.seed_commits(1)  # a tag on its own commit: two tags on one commit tie, and describe may pick either
+        git(self.seed, "tag", "-a", "-m", tag, tag)
+        self.sync_clone()
+
+    def sync_clone(self):
+        git(self.seed, "push", "-q", "origin", "main", "--tags")
+        git(self.clone, "fetch", "-q", "origin", "--tags")
+        git(self.clone, "merge", "-q", "--ff-only", "origin/main")
+
+    def tagged_then_commits(self, tag, commits):
+        self.retag(tag)
+        if commits:
+            self.seed_commits(commits)
+
     def push_from_seed(self, name="two"):
         (self.seed / f"{name}.txt").write_text(name)
         git(self.seed, "add", f"{name}.txt")
@@ -302,6 +329,84 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertEqual(len([p for p in self.problems(result) if "a.txt" in p]), 1)
         self.assertEqual(len(self.problems(result)), 1, result.stdout)
 
+    # --- the versionCode early warning (tools/quest_apk_version.py): the version the next build would stamp ------
+
+    def test_a_clone_far_from_every_limit_has_no_warning(self):
+        result = self.run_preflight()
+        self.assertEqual((result.returncode, self.warnings(result)), (0, []), result.stdout)
+
+    def test_dev_distance_warns_from_901_and_not_at_900(self):
+        # a build 900 commits past v3.3.0 is 3.3.1-dev.900; 901 is the first warned
+        self.seed_commits(900)
+        quiet = self.run_preflight()
+        self.assertEqual((quiet.returncode, self.warnings(quiet)), (0, []), quiet.stdout)
+        self.seed_commits(1)
+        loud = self.run_preflight()
+        self.assertEqual(loud.returncode, 0, "a warning must not block: " + loud.stdout)
+        (line,) = self.warnings(loud)
+        self.assertIn("development distance N 901", line)
+        self.assertIn("998", line)
+        self.assertIn("release-preflight: OK", loud.stdout)
+
+    def test_minor_warns_from_91_and_not_at_90(self):
+        self.tagged_then_commits("v3.90.0", 1)
+        self.assertEqual(self.warnings(self.run_preflight()), [])
+        self.tagged_then_commits("v3.91.0", 1)
+        result = self.run_preflight()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        (line,) = self.warnings(result)
+        self.assertIn("minor 91", line)
+        self.assertIn("99", line)
+
+    def test_patch_warns_from_91_and_not_at_90(self):
+        # the build is one patch past the tag: v3.3.89 + commits builds 3.3.90-dev.N; v3.3.90 builds 3.3.91-dev.N
+        self.tagged_then_commits("v3.3.89", 1)
+        self.assertEqual(self.warnings(self.run_preflight()), [])
+        self.tagged_then_commits("v3.3.90", 1)
+        result = self.run_preflight()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        (line,) = self.warnings(result)
+        self.assertIn("patch 91", line)
+
+    def test_a_release_checkout_is_judged_by_its_own_version_not_a_next_patch(self):
+        # HEAD exactly on v3.3.99: the build is the release 3.3.99, patch 99, in range (warned, not refused)
+        self.retag("v3.3.99")
+        result = self.run_preflight()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("patch 99", self.warnings(result)[0])
+
+    def test_a_part_out_of_range_refuses_and_names_the_field(self):
+        self.tagged_then_commits("v3.100.0", 1)
+        result = self.run_preflight()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        (problem,) = self.problems(result)
+        self.assertIn("minor 100 is above 99", problem)
+
+    def test_dev_distance_999_refuses_and_998_does_not(self):
+        self.seed_commits(998)
+        ok = self.run_preflight()
+        self.assertEqual(ok.returncode, 0, ok.stdout)
+        self.assertIn("development distance N 998", self.warnings(ok)[0])
+        self.seed_commits(1)
+        refused = self.run_preflight()
+        self.assertEqual(refused.returncode, 1, refused.stdout)
+        self.assertIn("development distance N 999 is above 998", self.problems(refused)[0])
+
+    def test_warnings_are_in_the_log_record(self):
+        self.tagged_then_commits("v3.91.0", 1)
+        self.run_preflight()
+        record = json.loads(self.log.read_text().splitlines()[-1])
+        self.assertEqual(record["result"], "ok")
+        self.assertEqual(record["problems"], [])
+        self.assertTrue(any("minor 91" in w for w in record["warnings"]), record)
+
+    def test_a_clone_with_no_release_tag_warns_that_the_version_is_unknown_and_does_not_refuse(self):
+        git(self.clone, "tag", "-d", "v3.3.0")
+        git(self.seed, "push", "-q", "origin", ":refs/tags/v3.3.0")
+        result = self.run_preflight()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertTrue(any("cannot work out the version" in w for w in self.warnings(result)), result.stdout)
+
     # --- the contract: read-only, logged ------------------------------------------------------------
 
     def test_it_runs_no_git_command_that_changes_anything(self):
@@ -318,7 +423,7 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         calls = argv_log.read_text().splitlines()
         self.assertTrue(calls, "the shim saw no git call: the sensor is blind")
-        allowed = {"rev-parse", "config", "status", "for-each-ref", "ls-remote", "rev-list"}
+        allowed = {"rev-parse", "config", "status", "for-each-ref", "ls-remote", "rev-list", "describe"}
         for call in calls:
             words = call.split()
             while words and words[0] == "-c":
