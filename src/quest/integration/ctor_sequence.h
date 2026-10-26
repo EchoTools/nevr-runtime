@@ -21,8 +21,8 @@
 //  10  InstallSocial                 the NEVR social facade on libr15's CNSProvider::Social slot
 //  11  InstallDlopenHook             the post-load installs: login hook (and with it the login
 //                                    prerequisites), matchmaking redirect
-//      InstallObbSkip                the OBB-mount skip (#319): two libr15 slots (AStorageManager_mountObb,
-//                                    AStorageManager_getMountedObbPath); on every launch, whatever the
+//      InstallObbSkip                the OBB-mount skip (#319, #866): three libr15 slots (AStorageManager_mountObb,
+//                                    AStorageManager_getMountedObbPath, CSysInfo::GetDataRootDir); on every launch, whatever the
 //                                    configuration says, right after the clock hook so it is in place before
 //                                    libr15 runs CSysFile::Init. Its counters are registered with the others
 //                                    (step 3).
@@ -34,6 +34,11 @@
 //      InstallVkExtWindow            the device extensions libr15 requires stay inside the 128 entries it reads
 //                                    (#868): two libr15 slots (CSysModule::FindMethod, vrapi_GetDeviceExtensionsVulkan),
 //                                    on every launch, right after the permission-wait hook; no counters
+//      InstallResourceRequestLog     the log-only resource request hook (#871): one libr15 slot
+//                                    (CResourceManager::FillResourceFileRequest), in a development build only
+//                                    (Steps::ResourceRequestLogWanted; a release build skips it and registers no
+//                                    counters), right after the Vulkan extension window. Its counters are registered
+//                                    with the others (step 3).
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):
 //   token auth fails        -> the login prompt (token auth is what publishes it), bridge, login, social
@@ -45,6 +50,7 @@
 //   social counters fail    -> social is not installed
 //   prompt counters fail    -> the login-prompt hook is not installed
 //   obb counters fail       -> the OBB-mount skip is not installed
+//   resource request counters fail -> the resource request log is not installed
 // "redirect-through-the-bridge" is the redirect when the bridge feature is effective: a redirect that
 // points the game at a loopback port nobody listens on, or straight at a TLS endpoint the game cannot
 // speak, is worse than leaving the game's own hosts.
@@ -78,12 +84,14 @@ enum class StepId : std::uint8_t {
   kRegisterSocialCounters,
   kRegisterLoginPromptCounters,
   kRegisterObbSkipCounters,
+  kRegisterResourceRequestCounters,
   kStartReporter,
   kInstallClockHook,
   kInstallObbSkip,
   kInstallProcessEnd,
   kInstallPermissionWait,
   kInstallVkExtWindow,
+  kInstallResourceRequestLog,
   kStartTokenAuth,
   kInstallLoginPrompt,
   kStartBridge,
@@ -125,11 +133,16 @@ class Steps {
   virtual bool RegisterLoginPromptCounters() = 0;
   // The OBB-mount skip's counters (#319), registered on every launch.
   virtual bool RegisterObbSkipCounters() = 0;
+  // Whether the log-only resource request hook (#871) is wanted: a development build (nevr_build::kIsDev). A release build
+  // registers no counters for it and installs nothing.
+  virtual bool ResourceRequestLogWanted() = 0;
+  // The resource request log's counters (#871), registered when ResourceRequestLogWanted.
+  virtual bool RegisterResourceRequestCounters() = 0;
   virtual bool StartReporter() = 0;
 
   virtual bool InstallClockHook() = 0;
   // `countersRegistered`: the result of RegisterObbSkipCounters (the hook's own rule: without its counters it
-  // logs the skip and installs nothing). True when both slots hold their thunks.
+  // logs the skip and installs nothing). True when all three slots hold their thunks.
   virtual bool InstallObbSkip(bool countersRegistered) = 0;
   // The process ends when the game's android_main returns (#621): one libr15 slot, on every launch.
   virtual bool InstallProcessEnd() = 0;
@@ -138,6 +151,9 @@ class Steps {
   // The device extensions libr15 requires stay inside the 128 entries it reads (#868): two libr15 slots
   // (CSysModule::FindMethod, vrapi_GetDeviceExtensionsVulkan), on every launch.
   virtual bool InstallVkExtWindow() = 0;
+  // `countersRegistered`: the result of RegisterResourceRequestCounters (the hook's own rule: without its counters it logs the
+  // skip and installs nothing). True when the FillResourceFileRequest slot holds the thunk.
+  virtual bool InstallResourceRequestLog(bool countersRegistered) = 0;
   virtual bool StartTokenAuth() = 0;
   // `countersRegistered`: the result of RegisterLoginPromptCounters. The step applies the hook's own rule
   // (login_prompt::InstallIfCounted): without its counters it logs the skip and installs nothing.

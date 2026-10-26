@@ -173,8 +173,10 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15CheckPermission(), "libr15 CSysInfo::CheckPermission JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15MountObb(), "libr15 AStorageManager_mountObb JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetMountedObbPath(), "libr15 AStorageManager_getMountedObbPath JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15GetDataRootDir(), "libr15 CSysInfo::GetDataRootDir JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15FindMethod(), "libr15 CSysModule::FindMethod JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetDeviceExtensionsVulkan(), "libr15 vrapi_GetDeviceExtensionsVulkan JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");
   CheckTarget(mm, pinned::MatchmakingTString(), "libpnsradmatchmaking CJson::TString JUMP_SLOT");
@@ -296,6 +298,26 @@ int main(int argc, char** argv) {
                   pinned::kCheckPermissionCode, sizeof(pinned::kCheckPermissionCode)) != 0) {
     std::fprintf(stderr, "libr15 CSysInfo::CheckPermission: first instructions differ from the pinned ones\n");
     QCHECK(false);
+  }
+
+  // CResourceManager::FillResourceFileRequest (#871): the symbol the slot names is defined at the address the hook's comments
+  // give, and each of the six call sites the hook names is a `bl` to the PLT stub that loads the slot (the stub address
+  // is what the call-site table is relative to).
+  if (DynamicSymbolValue(r15, pinned::kFillResourceFileRequestSymbol) != 0x25439f0ULL) {
+    std::fprintf(stderr, "libr15 %s: .dynsym value is not 0x25439f0\n", pinned::kFillResourceFileRequestSymbol);
+    QCHECK(false);
+  }
+  for (const pinned::FillCallSite& site : pinned::kFillCallSites) {
+    std::uint32_t word = 0;
+    std::memcpy(&word, static_cast<const unsigned char*>(r15.mem) + site.bl, sizeof(word));
+    std::int64_t imm = static_cast<std::int64_t>(word & 0x03ffffffU);
+    if ((imm & 0x02000000) != 0) imm -= 0x04000000;  // 26-bit signed word offset
+    const std::uint64_t target = site.bl + static_cast<std::uint64_t>(imm * 4);
+    if ((word & 0xfc000000U) != 0x94000000U || target != pinned::kFillResourceFileRequestStub) {
+      std::fprintf(stderr, "libr15 FillResourceFileRequest call site %s at %#llx is not a bl to the stub (word %#x)\n", site.name,
+                   static_cast<unsigned long long>(site.bl), word);
+      QCHECK(false);
+    }
   }
 
   if (quest_test::Failures() != 0) {

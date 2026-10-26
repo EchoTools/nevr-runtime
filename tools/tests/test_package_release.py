@@ -21,9 +21,11 @@ PACKAGE = REPO / "tools" / "package-release"
 sys.path.insert(0, str(REPO / "tools"))
 import package_release  # noqa: E402
 from pe_version_fixtures import shipped_pe  # noqa: E402
+import axml_fixtures  # noqa: E402
 
 COMMIT = "3a35e0b945456dba8a9b56e8110df330178e7259"
 DEV = "5.0.1-dev.3+3a35e0b"
+DEV_VERSION_CODE = 50_001_003  # 5*10^7 + 0*10^5 + 1*10^3 + 3 (tools/quest_apk_version.py)
 RELEASE = "5.0.0"
 VALUES = {
     "NEVR_SOCKET_URI": "wss://host.example/nevr",
@@ -89,11 +91,11 @@ class PackageFixture(unittest.TestCase):
         self.write_apk(self.version)
         self.out = self.tmp / "out"
 
-    def write_apk(self, version):
+    def write_apk(self, version, version_code=DEV_VERSION_CODE, manifest=None):
         sentinel = b"\x7fELF" + b"\0".join([v.encode() for v in VALUES.values()] + [version.encode(), COMMIT[:8].encode()])
         with zipfile.ZipFile(self.apk, "w") as z:
             z.writestr("lib/arm64-v8a/libovrplatformloader.so", sentinel)
-            z.writestr("AndroidManifest.xml", b"<m/>")
+            z.writestr("AndroidManifest.xml", manifest if manifest is not None else axml_fixtures.build_manifest(version_code))
 
     def run_tool(self, **overrides):
         """The local path (`just package-dev`): no --version, the binaries must carry a dev version."""
@@ -192,6 +194,42 @@ class LocalDevPackageTest(PackageFixture):
                 self.assertEqual(result.returncode, 1)
                 self.assertIn(f"quest: no embedded {what}: the APK would need a config.yaml to log in", result.stderr)
                 self.assertFalse(self.out.exists())
+
+    def test_the_apk_must_carry_the_versionCode_of_this_build(self):
+        # the store APK's own code (the repack was skipped or failed to stamp), and the code of another build
+        for code, label in ((4_987_566, "the store APK's"), (50_001_004, "another build's"), (50_000_999, "the release before's")):
+            with self.subTest(label):
+                self.write_apk(self.version, version_code=code)
+                result = self.run_tool()
+                self.assertEqual(result.returncode, 1)
+                # "quest: " is the gate's prefix; the seal's own check (a second defence) has none
+                self.assertIn(f"quest: signed.apk: AndroidManifest.xml has versionCode {code}, not {DEV_VERSION_CODE}", result.stderr)
+                self.assertFalse(self.out.exists())
+
+    def test_the_seal_refuses_a_foreign_versionCode_on_its_own(self):
+        # seal() is the second defence, for an APK that reaches it without the gate
+        for code in (4_987_566, 50_001_004):
+            with self.subTest(code=code):
+                self.write_apk(self.version, version_code=code)
+                with self.assertRaisesRegex(package_release.GateFailure, f"has versionCode {code}, not {DEV_VERSION_CODE}"):
+                    package_release.check_apk_version(self.apk, self.version, COMMIT)
+        self.write_apk(self.version)
+        package_release.check_apk_version(self.apk, self.version, COMMIT)
+
+    def test_an_apk_whose_manifest_cannot_be_read_is_refused(self):
+        self.write_apk(self.version, manifest=b"<m/>")
+        result = self.run_tool()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("versionCode", result.stderr)
+        self.assertFalse(self.out.exists())
+
+    def test_an_apk_with_no_manifest_is_refused(self):
+        with zipfile.ZipFile(self.apk, "w") as z:
+            z.writestr("lib/arm64-v8a/libovrplatformloader.so",
+                       b"\x7fELF" + b"\0".join([v.encode() for v in VALUES.values()] + [self.version.encode(), COMMIT[:8].encode()]))
+        result = self.run_tool()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("AndroidManifest.xml", result.stderr)
 
     def test_the_apk_sentinel_must_embed_the_values_too(self):
         with zipfile.ZipFile(self.apk, "w") as z:

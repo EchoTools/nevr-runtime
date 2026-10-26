@@ -15,8 +15,8 @@ bool RegisterLoginPromptCounters() noexcept;  // 14 counters
 bool InstallLoginPromptHook(bool countersRegistered) noexcept;  // true when all three slots hold their thunks
 
 // The #319 OBB-mount skip (sentinel/obb_skip_hook.h), through this seam for the same reason.
-bool RegisterObbSkipCounters() noexcept;  // 4 counters
-// obb_skip::InstallIfCounted(countersRegistered): true when both slots hold their thunks.
+bool RegisterObbSkipCounters() noexcept;  // 6 counters
+// obb_skip::InstallIfCounted(countersRegistered): true when all three slots hold their thunks.
 bool InstallObbSkipHook(bool countersRegistered) noexcept;
 
 // The #621 process-end hook (sentinel/process_end_hook.h), through this seam for the same reason: the process ends
@@ -32,6 +32,14 @@ bool InstallPermissionWaitHook() noexcept;  // true when the RequestPermissions 
 // The #868 Vulkan extension window (sentinel/vk_ext_window.h), through this seam for the same reason: the device extensions
 // libr15 requires stay inside the 128 entries it reads. No counters.
 bool InstallVkExtWindowHook() noexcept;  // true when the FindMethod and VrApi slots hold their thunks
+
+// The #871 log-only resource request hook (sentinel/resource_request_hook.h), through this seam for the same reason: it
+// records every FillResourceFileRequest call. Development builds only (the sequence asks nevr_build::kIsDev through
+// ResourceRequestLogEnabled, defined in entry.cpp, which includes the generated nevr_build_info.h).
+bool ResourceRequestLogEnabled() noexcept;          // nevr_build::kIsDev
+bool RegisterResourceRequestCounters() noexcept;    // 2 counters
+// resource_request::InstallIfCounted(countersRegistered): true when the slot holds the thunk.
+bool InstallResourceRequestLogHook(bool countersRegistered) noexcept;
 
 // Defined in production_steps.cpp: the whole constructor sequence (ctor_sequence.h) over the real
 // libraries. Never throws and never blocks.
