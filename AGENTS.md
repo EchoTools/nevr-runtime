@@ -879,7 +879,9 @@ your seat name, for example `claude-main` or `codex`.
   drafts every public post (issue, PR body or edit, comment, review, release note) and sends the text to Spritz; it
   posts only after her approval. The reason: seats post on the owner's account, so their words are public in his name,
   and a seat's job is the code, not communication. A PR body, issue body, comment, review and commit message is public.
-  It MUST NOT contain a URL or host name that hands out builds or data (a download host, a CDN, a storage bucket), the
+  It MUST NOT contain a URL or host name that hands out builds or data (a download host, a CDN, a storage bucket),
+  except that a public download or CDN endpoint that installers must fetch from MAY be named (for example the manifest
+  location in the installer verification doc); internal hosts, buckets and machines stay out. It MUST NOT contain the
   words of a person from chat or a message (quoted, or paraphrased as the reason for a change), or a local path (e.g.
   `/home/...`, `/var/tmp/...`, `/mnt/...`, `/tmp/...`, `~/...`, `C:\...`). In findings and PR bodies, use repo-relative
   paths, or `<scratch>` for scratch output. Name a design decision by its reasoning, an issue or an ADR, never by "the
