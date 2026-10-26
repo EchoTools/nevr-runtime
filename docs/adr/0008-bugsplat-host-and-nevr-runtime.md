@@ -264,7 +264,9 @@ Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
 - `src/runtime/host/` (the entry points, the rendezvous, the diagnostics, the crash capture and
   the loader) is compiled into `BugSplat64.dll` and the test harnesses only
   (`src/runtime/CMakeLists.txt`); the runtime target does not compile it. The host links no
-  runtime code: `tools/verify_pe_contract.py` pins its imports and its size.
+  runtime code: `tools/verify_pe_contract.py` pins its imports, its size and its image base, and
+  `tools/verify_host_no_core_state.py` (run by `just verify` on the unstripped build) fails when the host
+  defines writable data that `libnevr_core.a` or `libnevr_abi.a` also defines.
 - After the flip the runtime does not hook the main wrapper; the host's detour is the only
   hook on it. The host context carries that hook's target and the first bytes found there
   after the host enabled it, with a flag (`wrapper_hook_bytes_valid`) that says whether those
