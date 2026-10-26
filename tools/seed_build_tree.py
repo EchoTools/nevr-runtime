@@ -27,7 +27,8 @@ The commit is a guard. The root CMakeLists.txt puts the commit (NEVR_GIT_COMMIT_
 compile command, so at any other commit ninja sees every compile command changed and rebuilds every object
 whatever was copied. A copy whose build.ninja names a commit other than the worktree's HEAD is therefore not made
 (the first build is the ordinary one, answered object by object from the shared compiler cache). A tree whose
-commands carry no such definition is not checked.
+commands carry no such definition is not checked. The version carries `-dirty` when the tree was configured with
+uncommitted changes; such a tree is refused for the same reason.
 
 What is not carried: objects built in the main checkout keep the main checkout's path in anything they embed
 (`__FILE__`, debug info); the rebuilt ones carry the worktree's.
@@ -276,9 +277,17 @@ def align_source_mtimes(main: pathlib.Path, worktree: pathlib.Path) -> int:
 _COMMIT_DEFINE = re.compile(rb'NEVR_GIT_COMMIT_FULL=\\*"([0-9a-f]{40})')
 
 
+_DESCRIBE_DEFINE = re.compile(rb'NEVR_GIT_DESCRIBE=\\*"([^"\\ ]*)')
+
+
 def built_commits(build_ninja: pathlib.Path) -> set[str]:
     """The commits the compile commands of a build tree carry (one commit per configure)."""
     return {m.group(1).decode() for m in _COMMIT_DEFINE.finditer(build_ninja.read_bytes())}
+
+
+def built_modified(build_ninja: pathlib.Path) -> bool:
+    """True when the tree was configured with uncommitted changes (`git describe --dirty` ends in -dirty)."""
+    return any(m.group(1).endswith(b"-dirty") for m in _DESCRIBE_DEFINE.finditer(build_ninja.read_bytes()))
 
 
 def _cache_value(cache: pathlib.Path, key: str) -> str | None:
@@ -353,6 +362,9 @@ def seed(main: pathlib.Path, worktree: pathlib.Path, preset: str, *, ninja: str 
             built = ", ".join(sorted(c[:8] for c in commits))
             return Result("not-seeded", f"{src} was built at {built} and this worktree is at {head.stdout.strip()[:8]}: every compile "
                           "command carries the commit, so ninja would rebuild every object either way")
+    if commits and built_modified(src / "build.ninja"):
+        return Result("not-seeded", f"{src} was configured with uncommitted changes (its version ends in -dirty), and every compile "
+                      "command carries the version, so ninja would rebuild every object at a clean checkout")
     busy = _running_in(src)
     if busy:
         return Result("not-seeded", f"a process is running in {src} (a build or a test): {busy[0]}")

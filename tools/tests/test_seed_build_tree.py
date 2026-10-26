@@ -53,6 +53,7 @@ def pending_steps(build_dir):
 class SeedFixture(unittest.TestCase):
     PRESET = "p"
     WORKTREE_NAME = "wt"
+    DESCRIBE = None  # -DNEVR_GIT_DESCRIBE="<this>" on the compile commands, when set
     COMMIT_DEFINE = False  # the compile commands carry -DNEVR_GIT_COMMIT_FULL="<HEAD>", as the root CMakeLists.txt does
 
     def setUp(self):
@@ -72,8 +73,10 @@ class SeedFixture(unittest.TestCase):
         self.build = self.main / "build" / self.PRESET
         self.build.mkdir(parents=True)
         define = ""
+        if self.DESCRIBE:
+            define += f' -DNEVR_GIT_DESCRIBE=\\"{self.DESCRIBE}\\"'
         if self.COMMIT_DEFINE:
-            define = f' -DNEVR_GIT_COMMIT_FULL=\\"{git(self.main, "rev-parse", "HEAD").stdout.strip()}\\"'
+            define += f' -DNEVR_GIT_COMMIT_FULL=\\"{git(self.main, "rev-parse", "HEAD").stdout.strip()}\\"'
         # An output spelled as an absolute path, as CMake does for some custom commands.
         (self.build / "build.ninja").write_text(
             f"rule cc\n  command = cc -MD -MF $out.d -I{self.main}/inc{define} -c $in -o $out\n"
@@ -221,6 +224,26 @@ class CommitGuard(SeedFixture):
         self.assertIn(here[:8], result.reason)
         self.assertFalse(self.wt_build().exists())
         self.assertEqual([p.name for p in (self.wt / "build").glob(".seed-*")] if (self.wt / "build").exists() else [], [])
+
+
+class ModifiedTree(SeedFixture):
+    COMMIT_DEFINE = True
+    DESCRIBE = "v1.2.3-4-gabcd-dirty"
+
+    def test_a_tree_configured_with_uncommitted_changes_is_not_seeded(self):
+        result = self.seed()
+        self.assertEqual(result.status, "not-seeded", result)
+        self.assertIn("-dirty", result.reason)
+        self.assertFalse(self.wt_build().exists())
+
+
+class CleanDescribe(SeedFixture):
+    COMMIT_DEFINE = True
+    DESCRIBE = "v1.2.3-4-gabcd"
+
+    def test_a_clean_tree_at_the_same_commit_is_seeded(self):
+        self.assertEqual(self.seed().status, "seeded")
+        self.assertEqual(pending_steps(self.wt_build())[0], [])
 
 
 class NotSeeded(SeedFixture):
