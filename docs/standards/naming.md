@@ -45,6 +45,7 @@ One family, three cases:
 | DLL export | `NEVR_<Verb><Noun>` |
 | Published C ABI (new interface) | `Nevr*` types and functions, `NEVR_*` macros; never `Nvr*` |
 | Flat config key | `nevr_<snake_case>` |
+| Runtime DLL file | `nevr-runtime.dll` (the file `nevr_host::ResolveRuntimePath` names, `kRuntimeFileName` in `src/runtime/host/runtime_load.cpp`; the file name is hyphenated, a CMake target is still `nevr_<name>`; `tools/tests/test_runtime_dll_name.py` forbids the one-word spelling) |
 | Git branch | use the branch format in `AGENTS.md` under "Branch lifecycle" |
 | Markdown document | kebab-case file name (`docs/standards/naming.md`, `docs/reference/client-exit-path.md`); a date prefix is `YYYY-MM-DD-` (`docs/design/2026-10-01-social-scenario-harness.md`); an ADR is `NNNN-<kebab-case>.md` |
 

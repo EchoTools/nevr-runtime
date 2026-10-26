@@ -8,8 +8,8 @@
 //
 //   - DLL_PROCESS_ATTACH prepares the diagnostics and the capture, validates the game
 //     image and installs ONE GameMainWrapper detour; it loads nothing else (no
-//     nevr.dll load in attach);
-//   - the first GameMainWrapper call (after attach) loads the sibling nevr.dll
+//     nevr-runtime.dll load in attach);
+//   - the first GameMainWrapper call (after attach) loads the sibling nevr-runtime.dll
 //     through RuntimeLoader::Load, calls initialize and returns game_main's result,
 //     degrading to the original wrapper on any failure;
 //   - NEVR_SetGameModule is the launcher-mode external contract.
@@ -90,6 +90,6 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
       Record(kHostHookFailed);
     }
   }
-  Record(kHostAttachExit, GetModuleHandleW(L"nevr.dll") != nullptr ? 1 : 0);
+  Record(kHostAttachExit, GetModuleHandleW(L"nevr-runtime.dll") != nullptr ? 1 : 0);
   return TRUE;  // the game statically imports this DLL; a FALSE would abort start
 }
