@@ -14,6 +14,7 @@
 #include <cstring>
 #include <set>
 #include <string>
+#include <thread>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <vector>
@@ -22,6 +23,7 @@
 #include "hook_log.h"
 #include "obb_skip_hook.h"
 #include "permission_wait_hook.h"
+#include "probe_command.h"
 #include "process_end_hook.h"
 #include "quest/data/data_step.h"
 #include "quest/data/sha256.h"
@@ -331,6 +333,190 @@ void AToastProbeShowsItsTextOnceAndIsConsumed() {
   QCHECK(g_shown.size() == 1);
 }
 
+// ---- the probe's kinds (#829) ----
+
+void TheProbeLineParsesIntoItsKindAndArgument() {
+  namespace dwp = nevr_quest::data_wiring;
+  struct Case {
+    const char* line;
+    dwp::ProbeKind kind;
+    const char* arg;
+  };
+  const Case cases[] = {
+      {"toast hello", dwp::ProbeKind::kToast, "hello"},
+      {"ui-toast hello world", dwp::ProbeKind::kUiToast, "hello world"},
+      {"dialog a dialog", dwp::ProbeKind::kDialog, "a dialog"},
+      {"block 3", dwp::ProbeKind::kBlock, "3"},
+      {"ui-toast  two spaces", dwp::ProbeKind::kUiToast, " two spaces"},  // one space ends the kind; the rest is the text
+      {"ui-toast ", dwp::ProbeKind::kUiToast, ""},
+      {"toasty hello", dwp::ProbeKind::kUnknown, ""},   // a kind is matched whole
+      {"ui-toast", dwp::ProbeKind::kUnknown, ""},       // and needs its space
+      {"UI-TOAST hello", dwp::ProbeKind::kUnknown, ""}, // and is case-sensitive
+      {"xui-toast hello", dwp::ProbeKind::kUnknown, ""},
+      {"dialogs hello", dwp::ProbeKind::kUnknown, ""},
+      {"", dwp::ProbeKind::kUnknown, ""},
+  };
+  for (const Case& c : cases) {
+    const dwp::ProbeCommand parsed = dwp::ParseProbeCommand(c.line);
+    QCHECK(parsed.kind == c.kind);
+    QCHECK(parsed.arg != nullptr && std::strcmp(parsed.arg, c.arg) == 0);
+  }
+  // The argument points into the parsed line, after the kind's word and one space.
+  const char* line = "ui-toast abc";
+  QCHECK(dwp::ParseProbeCommand(line).arg == line + 9);
+}
+
+std::vector<std::string> g_ui_shown;
+std::vector<std::string> g_dialog_shown;
+bool g_ui_prepared = false;
+const char* g_ui_result = "requested";
+const char* FakeShowUi(void*, const char* text, bool* prepared) noexcept {
+  g_ui_shown.push_back(text);
+  *prepared = g_ui_prepared;
+  return g_ui_result;
+}
+const char* FakeShowDialog(void*, const char* text, bool* prepared) noexcept {
+  g_dialog_shown.push_back(text);
+  *prepared = false;
+  return "requested";
+}
+void ResetProbeSeams() {
+  g_ui_shown.clear();
+  g_dialog_shown.clear();
+  g_ui_prepared = false;
+  g_ui_result = "requested";
+}
+
+std::vector<std::string> ProbeLines() {
+  std::vector<std::string> out;
+  for (const std::string& l : g_lines) {
+    if (Has(l, "\"event\":\"data_probe\"")) out.push_back(l);
+  }
+  return out;
+}
+
+void AUiToastProbeGoesToTheUiPresenterOnceAndSaysWhichThreadAndLooper() {
+  ResetProbeSeams();
+  Rig rig;
+  DataIn(Legacy());
+  rig.options.probe_enabled = true;
+  rig.options.show_ui = &FakeShowUi;
+  rig.options.show_dialog = &FakeShowDialog;
+  WriteFile(rig.options.probe_path, "ui-toast can you read this\n");
+  rig.BootRequest();
+  QCHECK(g_ui_shown.size() == 1 && g_ui_shown[0] == "can you read this");
+  QCHECK(g_shown.empty() && g_dialog_shown.empty());  // not the floor presenter, not the dialog
+  QCHECK(!Exists(rig.options.probe_path) && Exists(rig.options.probe_path + ".done"));
+  const std::vector<std::string> lines = ProbeLines();
+  QCHECK(lines.size() == 1);
+  if (lines.size() == 1) {
+    QCHECK(Has(lines[0], "\"kind\":\"ui-toast\"") && Has(lines[0], "\"result\":\"requested\""));
+    QCHECK(Has(lines[0], "\"looper_prepared\":\"false\"") && Has(lines[0], "\"tid\":"));
+    QCHECK(Has(lines[0], "\"main_thread\":\"true\""));  // the host test runs the step on the process's main thread
+    QCHECK(Has(lines[0], "\"level\":\"info\""));
+  }
+  rig.BootRequest();  // the next launch: no probe
+  QCHECK(g_ui_shown.size() == 1);
+}
+
+void TheProbeSaysWhenItRanOffTheMainThreadAndWhenALooperWasPrepared() {
+  ResetProbeSeams();
+  g_ui_prepared = true;
+  Rig rig;
+  DataIn(Legacy());
+  rig.options.probe_enabled = true;
+  rig.options.show_ui = &FakeShowUi;
+  WriteFile(rig.options.probe_path, "ui-toast x\n");
+  std::thread worker([&rig] { rig.BootRequest(); });  // the game's android_main is not the process's main thread
+  worker.join();
+  const std::vector<std::string> lines = ProbeLines();
+  QCHECK(lines.size() == 1);
+  if (lines.size() == 1) {
+    QCHECK(Has(lines[0], "\"main_thread\":\"false\"") && Has(lines[0], "\"looper_prepared\":\"true\""));
+  }
+}
+
+void AFailedUiToastIsAWarningWithItsToken() {
+  ResetProbeSeams();
+  g_ui_result = "looper_api_missing";
+  Rig rig;
+  DataIn(Legacy());
+  rig.options.probe_enabled = true;
+  rig.options.show_ui = &FakeShowUi;
+  WriteFile(rig.options.probe_path, "ui-toast x\n");
+  rig.BootRequest();
+  const std::vector<std::string> lines = ProbeLines();
+  QCHECK(lines.size() == 1);
+  if (lines.size() == 1) {
+    QCHECK(Has(lines[0], "\"result\":\"looper_api_missing\"") && Has(lines[0], "\"level\":\"warn\""));
+  }
+}
+
+void ADialogProbeGoesToTheDialogPresenterAndWithoutOneSaysNoPresenter() {
+  ResetProbeSeams();
+  {
+    Rig rig;
+    DataIn(Legacy());
+    rig.options.probe_enabled = true;
+    rig.options.show_ui = &FakeShowUi;
+    rig.options.show_dialog = &FakeShowDialog;
+    WriteFile(rig.options.probe_path, "dialog read me\n");
+    rig.BootRequest();
+    QCHECK(g_dialog_shown.size() == 1 && g_dialog_shown[0] == "read me" && g_ui_shown.empty() && g_shown.empty());
+    const std::vector<std::string> lines = ProbeLines();
+    QCHECK(lines.size() == 1 && Has(lines[0], "\"kind\":\"dialog\"") && Has(lines[0], "\"result\":\"requested\""));
+  }
+  ResetProbeSeams();
+  {
+    Rig rig;
+    DataIn(Legacy());
+    rig.options.probe_enabled = true;
+    WriteFile(rig.options.probe_path, "dialog read me\n");
+    rig.BootRequest();
+    const std::vector<std::string> lines = ProbeLines();
+    QCHECK(lines.size() == 1 && Has(lines[0], "\"kind\":\"dialog\"") && Has(lines[0], "\"result\":\"no_presenter\""));
+    QCHECK(Has(lines[0], "\"level\":\"warn\""));
+    QCHECK(g_shown.empty());  // nothing fell back to the floor presenter
+    QCHECK(Exists(rig.options.probe_path + ".done"));
+  }
+}
+
+void AUiToastProbeWithoutAPresenterOrWithoutTextShowsNothing() {
+  ResetProbeSeams();
+  {
+    Rig rig;
+    DataIn(Legacy());
+    rig.options.probe_enabled = true;
+    WriteFile(rig.options.probe_path, "ui-toast x\n");
+    rig.BootRequest();
+    const std::vector<std::string> lines = ProbeLines();
+    QCHECK(lines.size() == 1 && Has(lines[0], "\"result\":\"no_presenter\"") && g_shown.empty());
+  }
+  ResetProbeSeams();
+  {
+    Rig rig;
+    DataIn(Legacy());
+    rig.options.probe_enabled = true;
+    rig.options.show_ui = &FakeShowUi;
+    WriteFile(rig.options.probe_path, "ui-toast \n");
+    rig.BootRequest();
+    const std::vector<std::string> lines = ProbeLines();
+    QCHECK(g_ui_shown.empty());
+    QCHECK(lines.size() == 1 && Has(lines[0], "\"result\":\"empty_text\""));
+  }
+}
+
+void TheToastProbeStillUsesTheFloorPresenterAndNotTheUiOne() {
+  ResetProbeSeams();
+  Rig rig;
+  DataIn(Legacy());
+  rig.options.probe_enabled = true;
+  rig.options.show_ui = &FakeShowUi;
+  WriteFile(rig.options.probe_path, "toast plain\n");
+  rig.BootRequest();
+  QCHECK(g_shown.size() == 1 && g_shown[0] == "plain" && g_ui_shown.empty());
+}
+
 void ABlockProbeHoldsTheThreadForItsSeconds() {
   Rig rig;
   DataIn(Legacy());
@@ -583,6 +769,21 @@ void ADefaultExistsSeesTheFetchedDataOnTheNextLaunchAndFetchesNothingAgain() {
   QCHECK(aside == 0);
 }
 
+void TheNewProbeKindsAreNotReadInAShippedBuildOrWithoutTheGrant() {
+  ResetProbeSeams();
+  for (const bool devBuild : {false, true}) {
+    Rig rig;
+    DataIn(Legacy());
+    rig.options.probe_enabled = devBuild;
+    rig.options.show_ui = &FakeShowUi;
+    rig.options.show_dialog = &FakeShowDialog;
+    WriteFile(rig.options.probe_path, "ui-toast x\n");
+    rig.BootRequest(devBuild ? &DeniedCheck : &GrantedCheck);  // shipped with the grant, or a development build without it
+    QCHECK(g_ui_shown.empty() && g_dialog_shown.empty());
+    QCHECK(Exists(rig.options.probe_path) && !Exists(rig.options.probe_path + ".done"));
+  }
+}
+
 void TheProbeIsNotReadInAShippedBuild() {
   Rig rig;
   DataIn(Legacy());
@@ -628,6 +829,14 @@ int main() {
   AFailedFetchShowsTheMessageHoldsItAndEndsTheProcess();
   ARequestThatIsNotTheBootRequestRunsNothing();
   AToastProbeShowsItsTextOnceAndIsConsumed();
+  TheProbeLineParsesIntoItsKindAndArgument();
+  AUiToastProbeGoesToTheUiPresenterOnceAndSaysWhichThreadAndLooper();
+  TheProbeSaysWhenItRanOffTheMainThreadAndWhenALooperWasPrepared();
+  AFailedUiToastIsAWarningWithItsToken();
+  ADialogProbeGoesToTheDialogPresenterAndWithoutOneSaysNoPresenter();
+  AUiToastProbeWithoutAPresenterOrWithoutTextShowsNothing();
+  TheToastProbeStillUsesTheFloorPresenterAndNotTheUiOne();
+  TheNewProbeKindsAreNotReadInAShippedBuildOrWithoutTheGrant();
   ABlockProbeHoldsTheThreadForItsSeconds();
   ABlockProbeIsCapped();
   StorageNotGrantedWithoutAnObbShowsTheStorageMessageAndWritesNothing();

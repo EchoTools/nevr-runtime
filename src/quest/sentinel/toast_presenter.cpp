@@ -18,30 +18,55 @@ bool Pending(JNIEnv* env) noexcept {
   return true;
 }
 
-const char* ShowOnEnv(JNIEnv* env, jobject activity, const char* text, bool* looperPrepared) noexcept {
+// Where the Toast's handler runs. kThisThread: Toast.makeText(context, text, duration) takes the calling thread's looper
+// (made with Looper.prepare() when it has none). kMainLooper: Toast.makeText(context, Looper.getMainLooper(), text,
+// duration), the API 30 overload, so the handler runs on the UI thread's running looper.
+enum class Where { kThisThread, kMainLooper };
+
+const char* ShowOnEnv(JNIEnv* env, jobject activity, const char* text, bool* looperPrepared, Where where) noexcept {
   jclass looper = env->FindClass("android/os/Looper");
   if (Pending(env) || looper == nullptr) return "class_failed";
-  jmethodID myLooper = env->GetStaticMethodID(looper, "myLooper", "()Landroid/os/Looper;");
-  if (Pending(env) || myLooper == nullptr) return "looper_failed";
-  jobject current = env->CallStaticObjectMethod(looper, myLooper);
-  if (Pending(env)) return "looper_failed";
-  if (current == nullptr) {
-    jmethodID prepare = env->GetStaticMethodID(looper, "prepare", "()V");
-    if (Pending(env) || prepare == nullptr) return "looper_failed";
-    env->CallStaticVoidMethod(looper, prepare);
+  jobject mainLooper = nullptr;
+  if (where == Where::kMainLooper) {
+    jmethodID getMain = env->GetStaticMethodID(looper, "getMainLooper", "()Landroid/os/Looper;");
+    if (Pending(env) || getMain == nullptr) return "looper_failed";
+    mainLooper = env->CallStaticObjectMethod(looper, getMain);
+    if (Pending(env) || mainLooper == nullptr) return "looper_failed";
+  } else {
+    jmethodID myLooper = env->GetStaticMethodID(looper, "myLooper", "()Landroid/os/Looper;");
+    if (Pending(env) || myLooper == nullptr) return "looper_failed";
+    jobject current = env->CallStaticObjectMethod(looper, myLooper);
     if (Pending(env)) return "looper_failed";
-    *looperPrepared = true;
+    if (current == nullptr) {
+      jmethodID prepare = env->GetStaticMethodID(looper, "prepare", "()V");
+      if (Pending(env) || prepare == nullptr) return "looper_failed";
+      env->CallStaticVoidMethod(looper, prepare);
+      if (Pending(env)) return "looper_failed";
+      *looperPrepared = true;
+    }
   }
 
   jclass toastClass = env->FindClass("android/widget/Toast");
   if (Pending(env) || toastClass == nullptr) return "class_failed";
-  jmethodID makeText = env->GetStaticMethodID(
-      toastClass, "makeText", "(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;");
-  if (Pending(env) || makeText == nullptr) return "toast_failed";
-  jstring message = env->NewStringUTF(text);
-  if (Pending(env) || message == nullptr) return "toast_failed";
+  jstring message = nullptr;
+  jobject toast = nullptr;
   constexpr jint kLengthLong = 1;
-  jobject toast = env->CallStaticObjectMethod(toastClass, makeText, activity, message, kLengthLong);
+  if (where == Where::kMainLooper) {
+    jmethodID makeText = env->GetStaticMethodID(
+        toastClass, "makeText",
+        "(Landroid/content/Context;Landroid/os/Looper;Ljava/lang/CharSequence;I)Landroid/widget/Toast;");
+    if (Pending(env) || makeText == nullptr) return "looper_api_missing";  // before API 30: NoSuchMethodError, cleared
+    message = env->NewStringUTF(text);
+    if (Pending(env) || message == nullptr) return "toast_failed";
+    toast = env->CallStaticObjectMethod(toastClass, makeText, activity, mainLooper, message, kLengthLong);
+  } else {
+    jmethodID makeText = env->GetStaticMethodID(
+        toastClass, "makeText", "(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;");
+    if (Pending(env) || makeText == nullptr) return "toast_failed";
+    message = env->NewStringUTF(text);
+    if (Pending(env) || message == nullptr) return "toast_failed";
+    toast = env->CallStaticObjectMethod(toastClass, makeText, activity, message, kLengthLong);
+  }
   if (Pending(env) || toast == nullptr) return "toast_failed";
   jmethodID show = env->GetMethodID(toastClass, "show", "()V");
   if (Pending(env) || show == nullptr) return "show_failed";
@@ -50,9 +75,7 @@ const char* ShowOnEnv(JNIEnv* env, jobject activity, const char* text, bool* loo
   return "requested";
 }
 
-}  // namespace
-
-const char* Show(void* app, const char* text, bool* looperPrepared) noexcept {
+const char* ShowWhere(void* app, const char* text, bool* looperPrepared, Where where) noexcept {
   *looperPrepared = false;
   if (app == nullptr) return "no_app";
   void* const activity = sentinel::glue::ReadPointer(app, sentinel::glue::kAppActivity);
@@ -80,12 +103,22 @@ const char* Show(void* app, const char* text, bool* looperPrepared) noexcept {
     if (Pending(env) || pushed != 0) {
       result = "toast_failed";
     } else {
-      result = ShowOnEnv(env, clazz, text, looperPrepared);
+      result = ShowOnEnv(env, clazz, text, looperPrepared, where);
       env->PopLocalFrame(nullptr);
     }
   }
   if (attachedHere) vm->DetachCurrentThread();
   return result;
+}
+
+}  // namespace
+
+const char* Show(void* app, const char* text, bool* looperPrepared) noexcept {
+  return ShowWhere(app, text, looperPrepared, Where::kThisThread);
+}
+
+const char* ShowOnMainLooper(void* app, const char* text, bool* looperPrepared) noexcept {
+  return ShowWhere(app, text, looperPrepared, Where::kMainLooper);
 }
 
 }  // namespace nevr_quest::toast

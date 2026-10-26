@@ -98,6 +98,7 @@ bool InstallProcessEndHook() noexcept { return nevr_quest::process_end::Install(
 bool InstallPermissionWaitHook() noexcept {
     nevr_quest::data_wiring::Options options;
     options.show = &nevr_quest::toast::Show;
+    options.show_ui = &nevr_quest::toast::ShowOnMainLooper;  // read by the development probe's `ui-toast` kind only (#829)
     options.allow_fetch = nevr_build::kIsDev;  // a release build only looks and tells the player; it never downloads
     options.probe_enabled = nevr_build::kIsDev;  // the headset probe is for development builds only
     if (!nevr_build::kIsDev) options.hold_ms = 0;  // no presenter is known to draw on a headset: a release build holds nothing

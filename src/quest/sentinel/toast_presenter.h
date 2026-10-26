@@ -22,4 +22,11 @@ namespace nevr_quest::toast {
 // not the call returned null.
 const char* Show(void* app, const char* text, bool* looperPrepared) noexcept;
 
+// The same Toast, made with the MAIN looper (candidate A of #829): `Toast.makeText(activity, Looper.getMainLooper(), text,
+// LENGTH_LONG)` (API 30), so the toast's handler runs on the UI thread, which runs its looper, instead of on the
+// android_main thread's looper that nobody runs. No Looper.prepare() is made and `*looperPrepared` stays false. The result
+// tokens are Show's, plus "looper_api_missing" when the device has no such overload (before API 30). Whether the headset
+// draws it is not known; "requested" says only that show() returned.
+const char* ShowOnMainLooper(void* app, const char* text, bool* looperPrepared) noexcept;
+
 }  // namespace nevr_quest::toast

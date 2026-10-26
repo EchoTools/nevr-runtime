@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "android_glue_layout.h"
 #include "toast_presenter.h"
@@ -40,6 +41,9 @@ struct Fake {
   int detaches = 0;
   bool startDetached = false;
   bool attachedNow = false;
+  std::vector<std::string> methods;  // "name sig" of every GetStaticMethodID / GetMethodID, in order
+  const char* absentMethod = nullptr;  // a method name the fake VM does not have: NoSuchMethodError, null
+  bool mainLooperNull = false;         // Looper.getMainLooper() returns null
 };
 Fake g;
 
@@ -59,10 +63,22 @@ T Failable(T nonNull) {
 }
 
 jclass FindClass(JNIEnv*, const char*) { return static_cast<jclass>(Failable(Tok())); }
-jmethodID GetMethodID(JNIEnv*, jclass, const char*, const char*) {
+jmethodID GetMethodID(JNIEnv*, jclass, const char* name, const char* sig) {
+  g.methods.push_back(std::string(name) + " " + sig);
+  if (g.absentMethod != nullptr && std::strcmp(name, g.absentMethod) == 0 && g.failAt == 0) {
+    if (g.pending) ++g.calledWhilePending;
+    g.pending = true;  // NoSuchMethodError
+    return nullptr;
+  }
   return Failable(reinterpret_cast<jmethodID>(0x2000));
 }
-jobject CallStaticObjectMethodV(JNIEnv*, jclass, jmethodID, va_list) { return Failable(Tok()); }
+jobject CallStaticObjectMethodV(JNIEnv*, jclass, jmethodID, va_list) {
+  if (g.mainLooperNull && !g.methods.empty() && g.methods.back().rfind("getMainLooper", 0) == 0) {
+    ++g.calls;
+    return nullptr;
+  }
+  return Failable(Tok());
+}
 void CallStaticVoidMethodV(JNIEnv*, jclass, jmethodID, va_list) { Failable(Tok()); }
 void CallVoidMethodV(JNIEnv*, jobject, jmethodID, va_list) { Failable(Tok()); }
 jstring NewStringUTF(JNIEnv*, const char*) { return static_cast<jstring>(Failable(Tok())); }
@@ -128,13 +144,71 @@ void SetUpTables() {
   std::memcpy(g_app + sentinel::glue::kAppActivity, &activity, sizeof(activity));
 }
 
+using ShowFn = const char* (*)(void*, const char*, bool*) noexcept;
+ShowFn g_fn = &nevr_quest::toast::Show;
+
 const char* Run(int failAt, Mode mode, bool startDetached) {
   g = Fake{};
   g.failAt = failAt;
   g.mode = mode;
   g.startDetached = startDetached;
   bool prepared = false;
-  return nevr_quest::toast::Show(g_app, "hello", &prepared);
+  return g_fn(g_app, "hello", &prepared);
+}
+
+// Everything the first test run checks, for one presenter: a clean run, then a thrown exception at every failable call.
+void CheckPresenter(const char* name, ShowFn fn, int minCalls) {
+  g_fn = fn;
+  const char* ok = Run(0, Mode::kNone, false);
+  if (std::strcmp(ok, "requested") != 0) {
+    std::fprintf(stderr, "toast_presenter_test: %s: a clean run returned %s\n", name, ok);
+    ++g_failures;
+  }
+  TCHECK(!g.pending && g.calledWhilePending == 0);
+  const int total = g.calls;
+  if (total < minCalls) {
+    std::fprintf(stderr, "toast_presenter_test: %s: only %d failable calls\n", name, total);
+    ++g_failures;
+  }
+  for (const bool detached : {false, true}) {
+    for (const Mode mode : {Mode::kNullPending, Mode::kNonNullPending}) {
+      for (int at = 1; at <= total; ++at) {
+        const char* result = Run(at, mode, detached);
+        if (std::strcmp(result, "requested") == 0) {
+          std::fprintf(stderr, "toast_presenter_test: %s: call %d (mode %d) was reported as requested\n", name, at,
+                       static_cast<int>(mode));
+          ++g_failures;
+        }
+        if (g.pending) {
+          std::fprintf(stderr, "toast_presenter_test: %s: exception left pending after call %d (mode %d, detached %d)\n",
+                       name, at, static_cast<int>(mode), detached ? 1 : 0);
+          ++g_failures;
+        }
+        if (g.calledWhilePending != 0) {
+          std::fprintf(stderr, "toast_presenter_test: %s: a JNI call ran with an exception pending after call %d\n", name,
+                       at);
+          ++g_failures;
+        }
+        if (g.attaches != g.detaches) {
+          std::fprintf(stderr, "toast_presenter_test: %s: attach %d detach %d at call %d\n", name, g.attaches, g.detaches,
+                       at);
+          ++g_failures;
+        }
+      }
+    }
+  }
+  // A detached thread is attached for the call and detached after it, on success too; an attached one is never detached.
+  Run(0, Mode::kNone, true);
+  TCHECK(g.attaches == 1 && g.detaches == 1);
+  Run(0, Mode::kNone, false);
+  TCHECK(g.attaches == 0 && g.detaches == 0);
+  // The caller's own pending exception: no call is made and it is not cleared.
+  g = Fake{};
+  g.pending = true;
+  bool prepared = false;
+  TCHECK(std::strcmp(fn(g_app, "hello", &prepared), "exception_pending") == 0);
+  TCHECK(g.pending && g.calls == 0);
+  TCHECK(std::strcmp(fn(nullptr, "x", &prepared), "no_app") == 0);
 }
 
 }  // namespace
@@ -142,61 +216,59 @@ const char* Run(int failAt, Mode mode, bool startDetached) {
 int main() {
   SetUpTables();
 
-  // A clean run: every call succeeds. `myLooper` returns a token, so no Looper.prepare is made.
-  const char* ok = Run(0, Mode::kNone, false);
-  TCHECK(std::strcmp(ok, "requested") == 0);
-  TCHECK(!g.pending && g.calledWhilePending == 0);
-  const int total = g.calls;
-  TCHECK(total >= 8);
+  // The thread's own looper (Show): a clean run, then an exception at every failable call. `myLooper` returns a token,
+  // so no Looper.prepare is made.
+  CheckPresenter("Show", &nevr_quest::toast::Show, 8);
 
-  for (const bool detached : {false, true}) {
-    for (const Mode mode : {Mode::kNullPending, Mode::kNonNullPending}) {
-      for (int at = 1; at <= total; ++at) {
-        const char* result = Run(at, mode, detached);
-        if (std::strcmp(result, "requested") == 0) {
-          std::fprintf(stderr, "toast_presenter_test: call %d (mode %d) was reported as requested\n", at,
-                       static_cast<int>(mode));
-          ++g_failures;
-        }
-        if (g.pending) {
-          std::fprintf(stderr, "toast_presenter_test: exception left pending after call %d (mode %d, detached %d)\n", at,
-                       static_cast<int>(mode), detached ? 1 : 0);
-          ++g_failures;
-        }
-        if (g.calledWhilePending != 0) {
-          std::fprintf(stderr, "toast_presenter_test: a JNI call ran with an exception pending after call %d\n", at);
-          ++g_failures;
-        }
-        if (g.attaches != g.detaches) {
-          std::fprintf(stderr, "toast_presenter_test: attach %d detach %d at call %d\n", g.attaches, g.detaches, at);
-          ++g_failures;
-        }
+  // The main looper (ShowOnMainLooper, #829).
+  CheckPresenter("ShowOnMainLooper", &nevr_quest::toast::ShowOnMainLooper, 7);
+  {
+    // Which methods it asks for: the main looper and the makeText overload that takes a looper; never myLooper or prepare
+    // (a looper made on android_main would be one nobody runs).
+    g = Fake{};
+    bool prepared = true;
+    TCHECK(std::strcmp(nevr_quest::toast::ShowOnMainLooper(g_app, "hello", &prepared), "requested") == 0);
+    TCHECK(!prepared);  // reset to false, and never set
+    bool sawMain = false, sawLooperOverload = false, sawPlain = false, sawMyLooper = false, sawPrepare = false;
+    for (const std::string& m : g.methods) {
+      if (m == "getMainLooper ()Landroid/os/Looper;") sawMain = true;
+      if (m == "makeText (Landroid/content/Context;Landroid/os/Looper;Ljava/lang/CharSequence;I)Landroid/widget/Toast;") {
+        sawLooperOverload = true;
       }
+      if (m == "makeText (Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;") sawPlain = true;
+      if (m.rfind("myLooper", 0) == 0) sawMyLooper = true;
+      if (m.rfind("prepare", 0) == 0) sawPrepare = true;
     }
+    TCHECK(sawMain && sawLooperOverload && !sawPlain && !sawMyLooper && !sawPrepare);
+    // A device before API 30 has no such overload: a token that says so, nothing pending, nothing shown.
+    g = Fake{};
+    g.absentMethod = "makeText";
+    prepared = false;
+    TCHECK(std::strcmp(nevr_quest::toast::ShowOnMainLooper(g_app, "hello", &prepared), "looper_api_missing") == 0);
+    TCHECK(!g.pending && g.calledWhilePending == 0);
+    // No main looper: not a toast on some other thread.
+    g = Fake{};
+    g.mainLooperNull = true;
+    TCHECK(std::strcmp(nevr_quest::toast::ShowOnMainLooper(g_app, "hello", &prepared), "looper_failed") == 0);
+    TCHECK(!g.pending);
   }
-
-  // A detached thread is attached for the call and detached after it, on success too.
-  Run(0, Mode::kNone, true);
-  TCHECK(g.attaches == 1 && g.detaches == 1);
-  // An attached thread is never detached.
-  Run(0, Mode::kNone, false);
-  TCHECK(g.attaches == 0 && g.detaches == 0);
-
-  // The caller's own pending exception: no call is made and it is not cleared.
-  g = Fake{};
-  g.pending = true;
-  bool prepared = false;
-  const char* held = nevr_quest::toast::Show(g_app, "hello", &prepared);
-  TCHECK(std::strcmp(held, "exception_pending") == 0);
-  TCHECK(g.pending && g.calls == 0);
-
-  // The glue reads that fail leave nothing to clean up.
-  TCHECK(std::strcmp(nevr_quest::toast::Show(nullptr, "x", &prepared), "no_app") == 0);
+  // Show's old path is unchanged: myLooper, and the plain overload.
+  {
+    g = Fake{};
+    bool prepared = false;
+    TCHECK(std::strcmp(nevr_quest::toast::Show(g_app, "hello", &prepared), "requested") == 0);
+    bool sawPlain = false, sawLooperOverload = false;
+    for (const std::string& m : g.methods) {
+      if (m == "makeText (Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;") sawPlain = true;
+      if (m.find("Landroid/os/Looper;Ljava/lang/CharSequence;") != std::string::npos) sawLooperOverload = true;
+    }
+    TCHECK(sawPlain && !sawLooperOverload);
+  }
 
   if (g_failures != 0) {
     std::fprintf(stderr, "toast_presenter_test: %d check(s) failed\n", g_failures);
     return 1;
   }
-  std::printf("toast_presenter_test: all checks pass (%d failable JNI calls, each thrown at in 4 variants)\n", total);
+  std::printf("toast_presenter_test: all checks pass (both presenters, an exception thrown at each failable JNI call in 4 variants)\n");
   return 0;
 }

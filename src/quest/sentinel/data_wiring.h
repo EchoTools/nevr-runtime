@@ -35,9 +35,12 @@
  * `data_present` (result token of the toast, looper_prepared; "requested" means Toast.show() returned, not that it
  * drew); `data_probe`.
  *
- * Debug probe (ADR 0011 measurements 1 and 2): a file `nevr-data-probe` in the media data root whose first line is
- * `toast <text>` (show the text as the floor does and log how far it got) or `block <seconds>` (hold the android_main
- * thread, at most 900 s). It is read and renamed to `nevr-data-probe.done` the first time AfterStorage runs with Storage
+ * Debug probe (ADR 0011 measurements 1 and 2, ADR 0013 #829): a file `nevr-data-probe` in the media data root whose first
+ * line (probe_command.h) is `toast <text>` (show the text as the floor does and log how far it got), `ui-toast <text>` (the
+ * same text through a Toast whose handler runs on the main looper, toast::ShowOnMainLooper), `dialog <text>` (a dialog; no
+ * presenter exists, so the line says `no_presenter`) or `block <seconds>` (hold the android_main thread, at most 900 s). The
+ * `ui-toast` and `dialog` kinds log one `data_probe` line with the presenter's result, the thread id, whether it was the
+ * process's main thread and whether a looper was prepared. It is read and renamed to `nevr-data-probe.done` the first time AfterStorage runs with Storage
  * granted, so a probe acts for one launch. It is for the maintainers' headset runs and exists only in development
  * builds (Options::probe_enabled, set from nevr_build::kIsDev); no config key and no shipped file creates it.
  *
@@ -65,6 +68,8 @@ using AppFn = void* (*)() noexcept;
 // What the step touches. Production leaves everything but `show` at its default (null / empty).
 struct Options {
   ShowFn show = nullptr;                       // required for a visible message; null: the message is only logged
+  ShowFn show_ui = nullptr;                    // probe kind `ui-toast`: a Toast on the main looper; null: logged as no_presenter
+  ShowFn show_dialog = nullptr;                // probe kind `dialog`; null: logged as no_presenter
   AppFn app = nullptr;                         // the android_app; null: process_end::CurrentApp
   data_root::ExistsFn exists = nullptr;        // null: obb_skip::PathExists (directories and non-empty files)
   data::Transport* transport = nullptr;        // null: a CurlTransport with the pinned roots (data_host_roots.h)

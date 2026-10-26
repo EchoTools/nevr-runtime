@@ -179,9 +179,30 @@ class TheStepOrder(unittest.TestCase):
 
     def test_the_probe_is_consumed_before_it_acts(self):
         body = extract_braced_function(read("data_wiring.cpp"), "void RunProbe() noexcept {")
-        self.assertLess(body.index("std::rename"), body.index('"toast "'))
-        self.assertLess(body.index("std::rename"), body.index('"block "'))
+        # Every kind acts after the rename: the parse and the three presenters/waits are all below it.
+        for acts in ("ParseProbeCommand(", "Present(", "ProbeShow(", "Sleep("):
+            self.assertLess(body.index("std::rename"), body.index(acts), acts)
         self.assertIn("kMaxProbeBlockSeconds", body)
+
+    def test_the_probe_kinds_are_the_four_whole_words_and_each_has_its_presenter(self):
+        header = read("probe_command.h")
+        for word in ('"toast "', '"ui-toast "', '"dialog "', '"block "'):
+            self.assertIn(word, header)
+        body = extract_braced_function(read("data_wiring.cpp"), "void RunProbe() noexcept {")
+        self.assertIn('ProbeShow("ui-toast", Opts().show_ui, command.arg)', body)
+        self.assertIn('ProbeShow("dialog", Opts().show_dialog, command.arg)', body)
+        self.assertIn('Present(command.arg, "probe")', body)
+
+    def test_the_main_looper_toast_is_reachable_from_the_probe_only_the_floor_message_keeps_its_presenter(self):
+        entry = extract_braced_function(read("entry.cpp"), "bool InstallPermissionWaitHook() noexcept {")
+        self.assertIn("options.show = &nevr_quest::toast::Show;", entry)
+        self.assertIn("options.show_ui = &nevr_quest::toast::ShowOnMainLooper;", entry)
+        # The floor message goes through Opts().show; nothing but the probe reads show_ui or show_dialog.
+        text = re.sub(r"//[^\n]*", "", read("data_wiring.cpp"))
+        self.assertEqual(text.count("Opts().show_ui"), 1)
+        self.assertEqual(text.count("Opts().show_dialog"), 1)
+        present = extract_braced_function(read("data_wiring.cpp"), "void Present(")
+        self.assertIn("Opts().show(", present)
 
 
 class TheLeftoversArePutRightBeforeTheDecision(unittest.TestCase):
