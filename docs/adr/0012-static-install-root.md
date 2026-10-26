@@ -6,8 +6,7 @@ loads from the root, not from the directory of `BugSplat64.dll`; a refused or mi
 lets it run without the runtime; and the host's log gains a `versions` event. "Relation to other records" says which text of ADR 0008 each replaces. What exists today is named
 under "Context"; each piece that moves is re-measured by the pull request that moves it.
 
-The runtime DLL is named `nevr-runtime.dll` in this record. ADR 0008, `src/runtime/host/`, its tests and `tools/verify_pe_contract.py` still
-call the file `nevr.dll`; step 2 of "Order of work" builds it under the new name and changes those with it.
+The runtime DLL is named `nevr-runtime.dll`, in this record, in ADR 0008, in `src/runtime/host/`, in its tests and in `tools/verify_pe_contract.py`.
 
 ## Context
 
@@ -157,7 +156,7 @@ Each step is its own pull request with its own issue under #575, mergeable and t
 
 ## Names this record fixes
 
-- **The runtime DLL's name:** `nevr-runtime.dll`, in the root, signed by the release signer, replacing the tree's `nevr.dll`.
+- **The runtime DLL's name:** `nevr-runtime.dll`, in the root, signed by the release signer.
 - **The root layout and file names:** `%LOCALAPPDATA%\nevr\echovr\` holding `nevr-runtime.dll`, `plugins\`, `config.yaml`,
   `.credentials.json`, `logs\` and `crashes\`, as in the table. `nevr-bootstrap.jsonl` stays the host's log file name.
 - **`NEVR_ROOT`**, honoured only in a dev build, replaces `%LOCALAPPDATA%\nevr\echovr`; it lands in step 4.
@@ -175,8 +174,8 @@ Each step is its own pull request with its own issue under #575, mergeable and t
 ## Relation to other records
 
 - ADR 0008 is built on and **amended in three places**. Kept: the host and runtime are a matched pair behind one versioned C ABI, the
-  rendezvous is the game's main wrapper, `DllMain` does no file I/O, and the export table. Replaced (quoted in ADR 0008's own name for the file, `nevr.dll`): "`nevr.dll`, in the same
-  directory" and the `ResolveRuntimePath` rule "`nevr.dll` in the directory of `BugSplat64.dll`" become the root; and "when no runtime is published the
+  rendezvous is the game's main wrapper, `DllMain` does no file I/O, and the export table. Replaced: "`nevr-runtime.dll`, in the same
+  directory" and the `ResolveRuntimePath` rule "`nevr-runtime.dll` in the directory of `BugSplat64.dll`" become the root; and "when no runtime is published the
   detour returns the original wrapper's result" becomes a stop; and the host's journal events (`host_attach`, `runtime_load`, `crash_dump`) gain a `versions` event. The code that implements the first is
   `nevr_host::ResolveRuntimePath` (`src/runtime/host/runtime_load.cpp`).
 - ADR 0010 is extended, not superseded: its verifier gains a second use, the host's check of `nevr-runtime.dll`, and its refusal policy

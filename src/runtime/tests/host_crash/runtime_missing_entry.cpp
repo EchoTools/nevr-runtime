@@ -1,4 +1,4 @@
-// nevr.dll fixture with no NEVR_GetRuntimeApi export: exercises the host's
+// nevr-runtime.dll fixture with no NEVR_GetRuntimeApi export: exercises the host's
 // "missing entry point" path.
 
 #include <windows.h>

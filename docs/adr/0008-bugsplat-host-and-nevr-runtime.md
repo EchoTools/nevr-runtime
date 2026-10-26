@@ -1,9 +1,10 @@
-# ADR 0008: BugSplat64.dll is the stable host, nevr.dll is the runtime
+# ADR 0008: BugSplat64.dll is the stable host, nevr-runtime.dll is the runtime
 
 Status: accepted. The contract, the descriptor, the host units and their harnesses are
 in the tree, and the rendezvous is decided ("Decision: the rendezvous is the game's main
 wrapper"). `BugSplat64.dll` is still built from the whole of `src/runtime/` as one DLL:
-the host units are compiled only into the test harnesses until the target split.
+the host units are compiled into it and its `DllMain` calls them, and `nevr-runtime.dll`
+exists only as the test harnesses' fixtures until the target split.
 
 ## Context
 
@@ -16,14 +17,14 @@ the stable file, and a runtime that fails to load takes the crash reporter with 
 
 ## Decision
 
-`BugSplat64.dll` is the stable host. `nevr.dll`, in the same directory, is the changing
+`BugSplat64.dll` is the stable host. `nevr-runtime.dll`, in the same directory, is the changing
 runtime. The two speak one versioned C ABI and nothing else crosses between them.
 
 ### The host's PE contract
 
 `tools/verify_pe_contract.py` pins the export table of `BugSplat64.dll`: the 28 names
 and their ordinals, `DetoursExportPlaceholder` at ordinal 1, and no import of
-`nevr.dll`. With the game binary present it also checks that the nine
+`nevr-runtime.dll`. With the game binary present it also checks that the nine
 `BugSplat64.dll` imports of `echovr.exe` are imported by name, are the pinned set and
 are exported. `just verify` runs it on the built DLL. A PE export table carries no
 types, so signatures and calling conventions are not covered.
@@ -42,7 +43,7 @@ Export ownership, from the callers in the repository, `plugins/` and `src/extens
 
 ### The runtime descriptor
 
-`src/core/runtime_abi.h` defines it. `nevr.dll` exports one function,
+`src/core/runtime_abi.h` defines it. `nevr-runtime.dll` exports one function,
 `NEVR_GetRuntimeApi`, that returns a `NevrRuntimeApi` (`initialize`, `game_main`). The
 host validates the major version, the minimum `struct_size` and every required entry
 before it calls anything, and hands the runtime a `NevrHostContext` that carries the game
@@ -96,7 +97,7 @@ supported and an unsupported module. Each child asserts the ordered `host_attach
 once, with the exact command line and the exact result going back to the caller; and for a
 missing runtime that the original wrapper ran once. The runtime in that harness is a
 stand-in whose `game_main` runs the original wrapper through the trampoline; it is not
-`nevr.dll`.
+`nevr-runtime.dll`.
 
 ### The host's own files
 
@@ -175,14 +176,14 @@ Its records go through `BootstrapDiagnostics::AppendLine`, which opens and creat
 file and its directories, and waits on the log mutex above (bounded as described there); it
 creates no mutex. Whether `CreateFileW`, `CreateMutexW` or `MiniDumpWriteDump`
 allocate has not been measured. `src/runtime/tests/host_crash` faults a child process through the
-real mangled export, with `nevr.dll` absent, ABI-incompatible, entry-less,
+real mangled export, with `nevr-runtime.dll` absent, ABI-incompatible, entry-less,
 failing in `initialize` and compatible, with each destination blocked in turn, and
 validates the dump header, the faulting thread and process, and every record.
 
 ### Where the runtime loads from
 
 `nevr_host::ResolveRuntimePath` (`src/runtime/host/runtime_load.cpp`) is the one
-function that decides which file is the runtime: `nevr.dll` in the directory of
+function that decides which file is the runtime: `nevr-runtime.dll` in the directory of
 `BugSplat64.dll`, loaded with `LoadLibraryExW` and the DLL-load-directory and
 System32 search flags. A failed runtime stays mapped: it may already have patched
 something, and unmapping live code is worse than a leaked module.
@@ -235,20 +236,21 @@ runs from the detour at the wrapper's entry, outside the loader lock, and arms
 `RuntimeGameMain` (`ArmGameMain`, `crash_recovery.cpp`), which holds the `setjmp` and is
 the descriptor's `game_main`. The runtime registers the host's hook with HookGuard from the
 bytes the host wrote and installs no hook on the wrapper. The split follows: the runtime
-moves into `nevr.dll`.
+moves into `nevr-runtime.dll`.
 
 Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
 (`src/extension/plugin_interface.h`) "host" is the runtime.
 
 ## Consequences
 
-- `BugSplat64.dll` and `nevr.dll` are a matched pair; a package or a test deployment
+- `BugSplat64.dll` and `nevr-runtime.dll` are a matched pair; a package or a test deployment
   that carries one without the other is a defect, not a configuration.
 - The export table is part of the contract: a change to it is a change to
   `tools/verify_pe_contract.py` in the same commit.
 - Until the target split, `src/runtime/host/` (the entry points, the rendezvous, the
-  diagnostics, the crash capture and the loader) is compiled only into the test
-  harnesses. The shipped `BugSplat64.dll` does not use it.
+  diagnostics, the crash capture and the loader) is compiled into `BugSplat64.dll`
+  (`src/runtime/CMakeLists.txt`), whose `DllMain` calls it (`nevr_host::OnProcessAttach`),
+  and into the test harnesses.
 - After the flip the runtime does not hook the main wrapper; the host's detour is the only
   hook on it. The host context carries that hook's target and the first bytes found there
   after the host enabled it, with a flag (`wrapper_hook_bytes_valid`) that says whether those
@@ -259,6 +261,6 @@ Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
   cannot verify that hook, and the log says so) and keeps running; it does not register
   zeros. `HookRecordUsable` does not re-check the header, the target or the flag's range, so
   it is called only on a context `ValidateHostContext` accepted. The host module is required.
-  The shipped DLL does none of this yet ("The tree today").
+  The shipped DLL does this in-process ("The tree today").
 - The host's `DllMain` validates the image and the wrapper's prologue, installs the one
   detour and journals each decision. It loads nothing and does no file I/O.

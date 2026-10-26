@@ -93,8 +93,11 @@ class HostContractTest(unittest.TestCase):
             contract.check_host(host_dump(exports=surface))
 
     def test_eager_runtime_import_fails(self):
-        with self.assertRaisesRegex(contract.ContractError, "statically imports nevr.dll"):
-            contract.check_host(host_dump(import_dlls=("KERNEL32.dll", "NEVR.DLL")))
+        with self.assertRaisesRegex(contract.ContractError, "statically imports nevr-runtime.dll"):
+            contract.check_host(host_dump(import_dlls=("KERNEL32.dll", "NEVR-RUNTIME.DLL")))
+
+    def test_the_runtime_dll_is_named_nevr_runtime_dll(self):
+        self.assertEqual(contract.RUNTIME_DLL, "nevr-runtime.dll")
 
     def test_missing_export_table_fails_closed(self):
         with self.assertRaisesRegex(contract.ContractError, "no \\[Ordinal/Name Pointer\\]"):

@@ -1,4 +1,4 @@
-// nevr.dll stand-in for the attach-time proof-gate harness. Implements the v1
+// nevr-runtime.dll stand-in for the attach-time proof-gate harness. Implements the v1
 // descriptor from core/runtime_abi.h and records everything it is called with.
 //
 // Variants are compile definitions (one DLL per fixture directory):
