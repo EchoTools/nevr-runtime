@@ -378,6 +378,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if body is None:
             self.send_error(404)
             return
+        if isinstance(body, tuple):  # ("redirect", location)
+            self.send_response(302)
+            self.send_header("Location", body[1])
+            self.end_headers()
+            return
         self.send_response(200)
         if self.server.announce:
             self.send_header("Content-Length", str(len(body)))
@@ -665,6 +670,25 @@ class ManifestScript(ScriptCase):
     def test_a_missing_state_is_a_first_run(self):
         self.assertEqual(self.verify(self.signed(good_manifest()), self.t / "nothing" / "here").returncode, 0)
 
+    def test_a_state_directory_that_cannot_be_created_fails_at_step_6(self):
+        blocker = self.t / "blocker"
+        blocker.write_text("x")
+        result = self.verify(self.signed(good_manifest()), blocker / "state")
+        self.assertEqual(result.returncode, 1)
+        self.assertRegex(result.stderr.strip().splitlines()[-1], r"^FAIL step 6: ")
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads a file whatever its mode")
+    def test_a_state_file_that_is_not_readable_fails_and_nothing_is_written(self):
+        state_dir = self.fresh()
+        state_dir.mkdir()
+        (state_dir / "state.json").write_text(json.dumps({"highest_manifest_version": 1}))
+        (state_dir / "state.json").chmod(0)
+        self.addCleanup((state_dir / "state.json").chmod, 0o600)
+        result = self.verify(self.signed(good_manifest()), state_dir)
+        self.assertEqual(result.returncode, 1)
+        self.assertRegex(result.stderr.strip().splitlines()[-1], r"^FAIL step 6: ")
+        self.assertEqual(sorted(p.name for p in state_dir.iterdir()), ["state.json"])
+
     def test_no_temporary_file_is_left_in_the_state_directory(self):
         state_dir = self.verified(good_manifest())
         self.assertEqual(sorted(p.name for p in state_dir.iterdir()), ["manifest.json", "manifest.json.sig", "state.json"])
@@ -791,6 +815,14 @@ class ArtifactScripts(ScriptCase):
         result, out = self.artifact(state_dir, server.base)
         self.assertEqual(result.returncode, 1)
         self.assertRegex(result.stderr.strip().splitlines()[-1], r"^FAIL step 8: ")
+        self.assertFalse(out.exists())
+
+    def test_a_redirect_is_not_followed(self):
+        state_dir = self.state_for()
+        server = self.serve({self.PATH: ("redirect", "/nevr-runtime/other"), "/nevr-runtime/other": self.data})
+        result, out = self.artifact(state_dir, server.base)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(server.requests, [self.PATH], "the redirect target was requested")
         self.assertFalse(out.exists())
 
     def test_a_missing_file_is_a_failure(self):
@@ -1275,6 +1307,29 @@ class ImplCases:
     def test_a_missing_state_is_a_first_run(self):
         self.assertEqual(self.manifest_cmd(self.signed(good_manifest()), self.t / "nothing" / "here").returncode, 0)
 
+    def test_a_state_directory_that_cannot_be_created_fails_at_step_6(self):
+        blocker = self.t / "blocker"
+        blocker.write_text("x")
+        self.verdict(self.manifest_cmd(self.signed(good_manifest()), blocker / "state"), 6)
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads a file whatever its mode")
+    def test_a_state_file_that_is_not_readable_fails_and_nothing_is_written(self):
+        state_dir = self.fresh()
+        state_dir.mkdir()
+        (state_dir / "state.json").write_text(json.dumps({"highest_manifest_version": 1}))
+        (state_dir / "state.json").chmod(0)
+        self.addCleanup((state_dir / "state.json").chmod, 0o600)
+        self.verdict(self.manifest_cmd(self.signed(good_manifest()), state_dir), 6)
+        self.assertEqual(sorted(p.name for p in state_dir.iterdir()), ["state.json"])
+
+    def test_a_channel_that_names_something_that_is_not_x_y_z_is_refused_even_when_releases_holds_it(self):
+        for bad in ("../x", "5.5", "05.5.1", "5.5.1\n", "5.5.1 "):
+            with self.subTest(version=bad):
+                manifest = good_manifest()
+                manifest["channels"] = {"beta": bad}
+                manifest["releases"][bad] = manifest["releases"]["5.5.1"]
+                self.verdict(self.manifest_cmd(self.signed(manifest, name="c"), self.fresh()), 7, "not X.Y.Z")
+
     # ---- key compromise ------------------------------------------------------------------------------------------------
 
     def test_a_manifest_that_revokes_the_signing_key_is_accepted_and_that_key_is_refused_afterwards(self):
@@ -1329,6 +1384,13 @@ class ImplCases:
                 server = self.serve({self.PATH: self.DATA + b"\0" * 5_000_000}, announce=announce)
                 self.verdict(self.artifact_cmd(self.state_for(), server.base), 8, "more than %d bytes" % len(self.DATA))
                 self.assertFalse(self.last_out.exists())
+
+    def test_a_redirect_is_not_followed(self):
+        server = self.serve({self.PATH: ("redirect", "/nevr-runtime/other"), "/nevr-runtime/other": self.DATA})
+        result = self.artifact_cmd(self.state_for(), server.base)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(server.requests, [self.PATH], "the redirect target was requested")
+        self.assertFalse(self.last_out.exists())
 
     def test_a_path_that_is_not_one_version_directory_and_one_file_name_is_refused_before_any_request(self):
         for bad in ("v5.5.1/nevr-runtime-v5.5.1-windows.zip\n", "v5.5.1/nevr-runtime-v5.5.1-windows.zip/", "../v5.5.1/nevr-runtime-v5.5.1-windows.zip",
