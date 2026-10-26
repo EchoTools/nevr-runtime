@@ -51,7 +51,7 @@ def identity(version, commit=COMMIT):
     return f"NEVR-BUILD {version} {commit}".encode()
 
 
-def binary(version, commit=COMMIT, literals=1, extra=b"", trust=(b"NEVR-PLUGIN-TRUST signed-only",)):
+def binary(version, commit=COMMIT, literals=1, extra=b"", trust=(b"NEVR-PLUGIN-TRUST release",)):
     """A fake DLL: a PE with the pinned VERSIONINFO, then the defaults, the identity literal NUL-bounded `literals` times, the plugin-trust
     literal(s) in `trust` (ADR 0010), then `extra`."""
     parts = [v.encode() for v in VALUES.values()] + [identity(version, commit)] * literals + list(trust)
@@ -431,7 +431,7 @@ class ReleaseStagesTest(PackageFixture):
         self.assertEqual(result.returncode, 1)
         self.assertIn("windows: echovr_server.exe: FILEVERSION 5.0.1.0 is not 5.0.0.0", result.stderr)
         self.server.write_bytes(shipped_pe("echovr_server.exe", RELEASE))
-        parts = [v.encode() for v in VALUES.values()] + [identity(RELEASE), b"NEVR-PLUGIN-TRUST signed-only"]
+        parts = [v.encode() for v in VALUES.values()] + [identity(RELEASE), b"NEVR-PLUGIN-TRUST release"]
         self.dll.write_bytes(b"MZ\0" + b"\0".join(parts) + b"\0")  # everything but the VERSIONINFO
         result = self.run_stage("tree", *self.tree_args())
         self.assertEqual(result.returncode, 1)
@@ -658,18 +658,27 @@ class ReleaseStagesTest(PackageFixture):
 
     # --- the plugin signature gate (ADR 0010, #741) --------------------------------------------------
 
-    def test_a_binary_that_loads_unsigned_plugins_is_never_stamped_or_packaged(self):
-        self.dll.write_bytes(binary(RELEASE, trust=(b"NEVR-PLUGIN-TRUST unsigned-allowed",)))
+    def test_a_dev_build_is_never_stamped_or_packaged(self):
+        self.dll.write_bytes(binary(RELEASE, trust=(b"NEVR-PLUGIN-TRUST dev",)))
         result = self.stamp("--version", RELEASE)
         self.assertEqual(result.returncode, 1)
-        self.assertIn("'unsigned-allowed', not 'signed-only'", result.stderr)
-        self.dll.write_bytes(binary(DEV, trust=(b"NEVR-PLUGIN-TRUST unsigned-allowed",)))
+        self.assertIn("'dev', not 'release'", result.stderr)
+        self.dll.write_bytes(binary(DEV, trust=(b"NEVR-PLUGIN-TRUST dev",)))
         self.assertEqual(self.stamp().returncode, 1)  # a dev build is refused too: it can be handed to players
+
+    def test_the_literals_the_runtime_used_to_embed_are_not_a_release(self):
+        # A DLL built before the run's mode came from -require-signed-plugins says signed-only or unsigned-allowed;
+        # neither is what this tool packages.
+        for old in (b"signed-only", b"unsigned-allowed"):
+            self.dll.write_bytes(binary(RELEASE, trust=(b"NEVR-PLUGIN-TRUST " + old,)))
+            result = self.stamp("--version", RELEASE)
+            self.assertEqual(result.returncode, 1, old)
+            self.assertIn(f"'{old.decode()}', not 'release'", result.stderr)
 
     def test_a_binary_without_the_plugin_trust_literal_is_refused_and_so_are_two(self):
         self.dll.write_bytes(binary(RELEASE, trust=()))
         self.assertIn("found 0", self.stamp("--version", RELEASE).stderr)
-        self.dll.write_bytes(binary(RELEASE, trust=(b"NEVR-PLUGIN-TRUST signed-only",) * 2))
+        self.dll.write_bytes(binary(RELEASE, trust=(b"NEVR-PLUGIN-TRUST release",) * 2))
         self.assertIn("found 2", self.stamp("--version", RELEASE).stderr)
 
     def test_stamp_refuses_a_version_argument_that_is_not_x_y_z(self):
