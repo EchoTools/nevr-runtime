@@ -14,6 +14,11 @@ when, they appear in all capitals, as shown here.
   `perf`, `test`, `build`, `ci`, `chore`, `revert`. A breaking change is marked with `!` before the colon or a
   `BREAKING CHANGE:` footer. Per spec item 15, types are case-insensitive. `.github/workflows/pr-title-check.yml`
   (`tools/check_pr_title.py`) checks the PR title.
+- **Credit the people whose work we integrate, every time.** A commit that draws on a person's code, patch, research
+  or findings carries a `Co-Authored-By` trailer for that person, alongside the house trailers: their GitHub noreply
+  address, `<id>+<login>@users.noreply.github.com` (`gh api users/<login>` gives the id). Someone with no GitHub
+  account is credited by name in the commit body and in the README thanks. A squash merge keeps those trailers in the
+  merge commit message.
 - **Versions** follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html). Tags stay `vX.Y.Z`.
 - **Requirement words** (MUST, SHALL, SHOULD, MAY and their negations) follow
   [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) as clarified by
@@ -131,6 +136,9 @@ your PR does:
   ```
 - **Evidence on the exact tip**, as "Review, verification and merge" says: each command run on the tip SHA and its
   result, what was not run, and the tracking issue.
+- **Platform parity.** PCVR and Quest stay at parity. A PR that adds or changes player-facing behavior says in its
+  body what the other platform's status is: done in this PR, already present (`file:line`), not applicable (the
+  reason), or a linked twin issue filed in the same turn.
 
 **Write an issue as a falsifiable claim** (see #519 and #520), with these sections:
 
@@ -221,7 +229,7 @@ comment (for example N41, N48) is not a rule.
 | N120 | On a server a degraded runtime does not keep running: the HookGuard verdict is captured and escalated to `ServerFatal`, `platform_compat` fails a server run on a missing TLS hook, and the XPID patch logs both outcomes and escalates a validation failure, a failed byte write and a failed `GetProviderPrefix` (OVR-ORG) detour alike (`g_bootHookFailed` with a cause, so `boot.cpp` refuses the server), and the server bring-up prologues are validated at boot (`ValidatePrologue`, N97) with a mismatch escalated to `ServerFatal` (see N102). | `src/runtime/ext/plugin_loader.cpp`, `src/modules/platform-compat/src/platform_compat.cpp`, `src/runtime/patch/xpid_patch.cpp`, `src/runtime/lifecycle/state_machine.cpp`, `src/runtime/lifecycle/boot.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` (`XpidPatchBoot`, `XpidPrefixDetourBoot`), `src/runtime/tests/test_server_bringup.cpp`, `tools/tests/test_server_bringup_wiring.py` |
 | N133 | Every nEVR config key is read from `config.yaml` (`nevr_config`), never from the game's JSON; the flat key map has 33 entries; modules read config through `NvrModuleContext.config_get`, and a module reports its API version; the sample config has the `auth`, `services`, `identity` and `version` sections. | `src/runtime/lifecycle/config.cpp`, `src/runtime/lifecycle/service_config.cpp`, `src/core/nevr_config.h`, `src/modules/token-auth/src/token_auth.cpp`, `docs/reference/example-config.yaml` | verify (N133 S7a-d); `src/runtime/tests/test_behavioral.cpp` |
 | N134 | The plugin set is the ordered `plugins:` list in `config.yaml`, and a required plugin that fails to load is a failure (S6); plugins get `ctx_size` and the plugin-query API, and load in capability-priority order (S8). | `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_loader.h`, `src/runtime/ext/plugin_load_plan.h`, `src/runtime/lifecycle/service_config.cpp` | verify (N134 S8, N114 S7); `src/runtime/tests/test_behavioral.cpp`, `src/runtime/tests/test_plugin_load_plan.cpp` |
-| N147 | A release build loads only plugins signed through the release-signer pipeline: `StageOne` verifies the file (`VerifyPluginFile`: Authenticode digest, `messageDigest` bound to the signed content, chain to the pinned Microsoft root through an exclusive-root engine at the stamped time, whole-OID profile EKU, bound RFC 3161 token, denylist) on a handle held `FILE_SHARE_READ` across the load, with no default-search fallback; a plugin's imports, delay-load imports and forwarded exports pass the same check transitively (`VerifyPluginTree`, held open across the load; a name gets `.dll` when it has no extension, and one that is neither a file in the plugins directory nor supplied by the system is refused, an absent delay-load excepted: the late-load filter checks it when it is called), and so does every later `LoadLibrary*` of a file in that directory, one made from a staged plugin's `DllMain` included (a `DllLoadHook` filter: the name gets `.dll` when it has no extension, a relative path with a directory part (`\` or `/`) is refused whatever it leads to (the loader appends it to every directory it searches, each through links, so no candidate list is complete; a bare name and a full path keep their rules), the directory is the ANSI path converted through the code page; refused with `ERROR_MOD_NOT_FOUND`); a refusal is a manifest entry, a log line and, on a client with graphics only, one dialog per run (`plugin_refusal_notice.h`, never on a server or headless run; a refusal after `LoadPlugins` finished shows it itself), and for a required plugin `ServerFatal`. The dev build (`mingw-plugin-dev`, `NEVR_ALLOW_UNSIGNED_PLUGINS`) carries `NEVR-PLUGIN-TRUST unsigned-allowed` and `tools/package_release.py` refuses to package it. The profile EKU pin is confirmed against the real signed v5.4.3 `BugSplat64.dll` (`RealSigned.*` in `test_plugin_trust`, which `just test-auth-unit` feeds from `tools/fetch_real_signed_dll.py`); the signer subject is deliberately not pinned. A signed-only build refuses an unsigned plugin. | `src/runtime/ext/plugin_signature.cpp`, `src/runtime/ext/plugin_trust.cpp`, `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_tree.cpp`, `src/runtime/ext/plugin_refusal_notice.h`, `src/runtime/hook/dll_load_hook.cpp`, `tools/package_release.py` | `src/runtime/tests/test_plugin_signature.cpp`, `src/runtime/tests/test_plugin_trust.cpp`, `src/runtime/tests/test_plugin_tree.cpp`, `src/runtime/tests/test_behavioral.cpp` (`PluginSignatureGateTest`, `PluginDependencyGateTest`, `PluginRefusalNotice`), `tools/tests/test_package_release.py`, `tools/tests/test_build_identity_literal.py` (the late-load spellings, the non-ASCII game path, the `DllMain` load and the late notice) |
+| N147 | A run loads unsigned plugins unless it is started with `-require-signed-plugins`, which makes it signed-only (release-signer does not sign plugins yet; once it does, the default flips to signed-only in a separate change). `PreflightRuntimeBootstrap` reads the argument before the early plugin pass and sets the mode once (`nevr_plugin_trust::ApplyCommandLine`: any token the game would read as the argument counts, by the game's tokenizer and name rule in `cmdline_strip.h` over `GetCommandLineA()` and by `CommandLineToArgvW` over `GetCommandLineW()`, and either finding it makes the run signed-only; a command line it cannot read, or whose reading throws, makes the run signed-only too, and the mode line says so at Warning), so the early pass, the normal pass and the late-load filter read one `ActiveMode()`; no config key or environment variable sets it. The loader states the mode in effect once per run (`[NEVR.PLUGIN] plugin trust: mode=<signed-only\|unsigned-allowed> source=<default\|-require-signed-plugins\|command line unreadable> build=<release\|dev>`), and in an unsigned-allowed run an unsigned plugin loads with a Warning per plugin. A signed-only run loads only plugins signed through the release-signer pipeline: `StageOne` verifies the file (`VerifyPluginFile`: Authenticode digest, `messageDigest` bound to the signed content, chain to the pinned Microsoft root through an exclusive-root engine at the stamped time, whole-OID profile EKU, bound RFC 3161 token, denylist) on a handle held `FILE_SHARE_READ` across the load, with no default-search fallback; a plugin's imports, delay-load imports and forwarded exports pass the same check transitively (`VerifyPluginTree`, held open across the load; a name gets `.dll` when it has no extension, and one that is neither a file in the plugins directory nor supplied by the system is refused, an absent delay-load excepted: the late-load filter checks it when it is called), and so does every later `LoadLibrary*` of a file in that directory, one made from a staged plugin's `DllMain` included (a `DllLoadHook` filter: the name gets `.dll` when it has no extension, a relative path with a directory part (`\` or `/`) is refused whatever it leads to (the loader appends it to every directory it searches, each through links, so no candidate list is complete; a bare name and a full path keep their rules), the directory is the ANSI path converted through the code page; refused with `ERROR_MOD_NOT_FOUND`); a refusal is a manifest entry, a log line and, on a client with graphics only, one dialog per run (`plugin_refusal_notice.h`, never on a server or headless run; a refusal after `LoadPlugins` finished shows it itself), and for a required plugin `ServerFatal`. The dev build (`mingw-plugin-dev`, `NEVR_ALLOW_UNSIGNED_PLUGINS`) carries `NEVR-PLUGIN-TRUST dev`, a release `NEVR-PLUGIN-TRUST release` (the literal names the kind of build, not the mode of a run), and `tools/package_release.py` refuses to package anything but a release. The profile EKU pin is confirmed against the real signed v5.4.3 `BugSplat64.dll` (`RealSigned.*` in `test_plugin_trust`, which `just test-auth-unit` feeds from `tools/fetch_real_signed_dll.py`); the signer subject is deliberately not pinned. A signed-only run refuses an unsigned plugin. | `src/runtime/ext/plugin_signature.cpp`, `src/runtime/ext/plugin_trust.cpp`, `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_tree.cpp`, `src/runtime/ext/plugin_refusal_notice.h`, `src/runtime/hook/dll_load_hook.cpp`, `src/runtime/lifecycle/boot.cpp`, `src/runtime/lifecycle/cli.cpp`, `src/core/cli_flags.h`, `tools/package_release.py` | `src/runtime/tests/test_plugin_signature.cpp`, `src/runtime/tests/test_plugin_trust.cpp`, `src/runtime/tests/test_plugin_tree.cpp`, `src/runtime/tests/test_behavioral.cpp` (`PluginSignatureGateTest`, `PluginDependencyGateTest`, `PluginRefusalNotice`, `PluginRunModeTest`: an unsigned plugin loads with no argument and is refused with `-require-signed-plugins`, on the release-configured build), `tools/tests/test_plugin_trust_run_mode.py` (the argument is read before the early pass, registered with the game's parser and listed in the README), `tools/tests/test_package_release.py`, `tools/tests/test_build_identity_literal.py` (the late-load spellings, the non-ASCII game path, the `DllMain` load and the late notice) |
 
 #### Hooks and binary patches
 
@@ -298,9 +306,7 @@ Every branch an agent creates has a documented deletion point from the moment it
 - **"Merged" means** the PR state is MERGED (GitHub squash-merges, so `git branch -d` refuses those branches) or the tip is in `origin/main`. Use `gh pr view <branch> --json state`.
 - **A branch that lands with no PR** (a fast-forward or a hand merge) counts as merged when `git merge-base --is-ancestor <branch> origin/main` succeeds, and its creator deletes it then.
 - **Before deleting an unmerged branch,** print its tip SHA, and check `git -C <worktree> status --porcelain` is empty. Uncommitted work is work.
-- **Remove a worktree only behind the cwd check** (the "no process has its cwd inside" proof of "Ownership and cleanup"; `tools/reap_merged.py` runs the same check), in one command that removes nothing and fails when any process has its cwd inside, a shell of your own session included:
-  `W=$(realpath .claude/worktrees/<branch>); hits=$(for p in /proc/[0-9]*; do c=$(readlink "$p/cwd" 2>/dev/null) && case "$c" in "$W"|"$W"/*) echo "${p#/proc/} $c";; esac; done); if [ -n "$hits" ]; then echo "$hits"; false; else git worktree unlock "$W" 2>/dev/null; git worktree remove "$W"; fi`.
-  A check that only prints, followed by a removal, is not the check.
+- **Remove a worktree with `just remove-worktree <absolute path>`** (`tools/remove_worktree.py`; `--dry-run` proves and changes nothing; run it from the main checkout or another worktree, never from inside the one it removes). Before it changes anything it refuses when a process has its cwd inside (a shell of your own session included), when anything is uncommitted or ignored beyond build output, when an initialised submodule has uncommitted work or a commit that is on no remote, or when a plain copy under `extern/` (what `just worktree-setup` makes) differs from the main checkout's. It runs no `git submodule deinit` and no `--force`, and leaves the shared submodule config as it found it. `tools/reap_merged.py` removes through it. A check that only prints, followed by a removal, is not the check.
 
 ## Build Commands
 
@@ -627,20 +633,17 @@ your seat name, for example `claude-main` or `codex`.
   directory, is not proof: another seat's live worktree can sit there. Anything you cannot prove is another
   seat's; leave it and ask its owner.
 - **Remove a worktree only after proving it is redundant.** Its branch tip is merged into
-  `origin/main` by ancestry or `git cherry`, or is on a remote; `git status --short` is empty
-  and `git status --short --ignored` lists only build output (move any run log you need out
-  first); no process has its cwd inside. Run
-  `git worktree unlock <path>` first. Never `--force`. For a worktree with initialised submodules,
-  run `git submodule deinit --all`, check that each submodule's HEAD and local branches have no
-  commits beyond upstream, delete `$(git rev-parse --git-common-dir)/worktrees/<name>/modules`
-  (`<name>` is the directory under `worktrees/`), then remove the worktree. Afterwards delete
-  the branch locally (and on origin once merged) and update the ledger row.
-  **Join the steps of any cleanup (copy, deinit, check, delete) with `&&`, or run them under
-  `set -e`; never `;`.** A failed copy, deinit or check stops every delete after it, and a delete is
-  never the step after an unchecked one. For a worktree with initialised submodules:
+  `origin/main` by ancestry or `git cherry`, or is on a remote; any run log you need is moved out
+  of it first. Then `just remove-worktree <absolute path>` (see "Branch lifecycle"), which unlocks the
+  worktree and makes the remaining proofs. Never `--force`, never `git submodule deinit`, never
+  `rm -rf` of a worktree's `modules` directory by hand. Afterwards delete the branch locally (and on
+  origin once merged) and update the ledger row.
+  **Join the steps of any cleanup (copy, check, delete) with `&&`, or run them under
+  `set -e`; never `;`.** A failed copy or check stops every delete after it, and a delete is
+  never the step after an unchecked one:
 
   ```sh
-  git worktree unlock <path> && git -C <path> submodule deinit --all && <the submodule check, exiting non-zero on a commit beyond upstream> && rm -rf "$(git rev-parse --git-common-dir)/worktrees/<name>/modules" && git worktree remove <path> && git branch -D <branch>
+  just remove-worktree <absolute path> && git branch -D <branch>
   ```
 - **Disk.** Check `df -h /` before starting a worktree build, keep one build tree per agent, and
   remove it when its PR merges.
@@ -971,6 +974,8 @@ When something fails, the first act is reading the failing program's **own** log
 - **Never modify `src/legacy/`** — frozen v1 code, self-contained by design.
 - **Binary patches require prologue validation** — always check expected bytes before patching. Never blind-write.
 - **Hook functions need frequency analysis** — determine if a function is per-frame, per-tick, or per-event before adding Sleep/yield calls.
+- **Nothing from another project's patch is taken verbatim.** Before building an equivalent, reconstruct and analyze the patched code in ReVault: every function the patch touches, its callers, and what each byte change does; write the reconstructions back into ReVault with grades; design our implementation from that understanding, to this repo's standard (GOT hooks or checked patches, logs, failing-first tests, a prediction). Their address list says where to look; it is not the design.
+- **Prefer a hook to a byte patch.** Reconstruct the function in ReVault, then replace or wrap it with a hook whose code says, in readable C++, what the original did and what we change. A byte patch or NOP is the exception, used where a hook would cost something measurable (a per-frame hot path, a call too frequent to detour); the PR names the case, the reason and, where possible, a number. A checked patch (`nevr_checked_patch`) stays the form for those exceptions.
 
 ## Dependencies
 
@@ -986,8 +991,8 @@ When something fails, the first act is reading the failing program's **own** log
 - **Defects.** Track defects in GitHub issues.
 - **Commit identity.** Author `Andrew Bates <a@sprock.io>`
   (`--author="Andrew Bates <a@sprock.io>"`), unsigned (`--no-gpg-sign`), with a
-  single `Co-Authored-By: <agent name> <agents@sprock.io>` trailer, a
-  conventional prefix, and one logical change per commit. Exception: work by
+  single house `Co-Authored-By: <agent name> <agents@sprock.io>` trailer (plus the credit
+  trailers above), a conventional prefix, and one logical change per commit. Exception: work by
   Teth, Spritz or Glow Sprock is authored by that sister, with
   `Co-Authored-By: Andrew Bates <a@sprock.io>`. You **SHALL** verify after each
   commit: `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
