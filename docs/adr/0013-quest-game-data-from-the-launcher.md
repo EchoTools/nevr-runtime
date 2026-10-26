@@ -138,8 +138,10 @@ is `@hide` in AOSP (`android-12.0.0_r1`, `core/java/android/widget/Toast.java`: 
 specified looper ... @hide"), so a lookup from native code may be refused by the hidden-API policy; the probe's
 `looper_overload_unavailable` token says the lookup failed, not why. The target SDK is 29, so the toast takes the legacy view
 path whose handler needs a running looper (`CHANGE_TEXT_TOASTS_IN_THE_SYSTEM` is enabled for target SDK above 29), which is why a
-main-looper handler is the candidate. `dialog`: has no presenter, because showing a dialog or posting any call to the UI thread
-through JNI alone takes a `Runnable` or `Handler.Callback` object (`Activity.runOnUiThread`, `Handler.post`; by reading, no
-exception was found), and the sentinel ships no dex to define one; the probe logs `no_presenter`. A UI-thread post that
-needs no Java class (`ALooper_forThread()` taken on the UI thread plus a pipe callback) is not built; it is the next candidate
-if `ui-toast` reports `looper_overload_unavailable`.
+main-looper handler is the candidate. `ui-post`: showing a dialog or posting any call to the UI thread through JNI alone takes a
+`Runnable` or `Handler.Callback` object (`Activity.runOnUiThread`, `Handler.post`; by reading, no exception was found), and the
+sentinel ships no dex to define one, so the UI thread's native looper is used instead: the ELF constructor takes
+`ALooper_forThread()` (from `libandroid.so` by `dlsym`; the constructor is expected to run on the UI thread, which the
+`ui_post state=capture` line records) and adds the read end of a pipe to it; `ShowOnUiThread` writes a queued text to the pipe and
+the looper's callback makes the plain Toast on the UI thread, whose `Looper.myLooper()` is the running main looper. The capture
+runs in development builds only. `dialog`: has no presenter (it needs the same `Runnable`); the probe logs `no_presenter`.
