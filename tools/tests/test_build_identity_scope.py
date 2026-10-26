@@ -33,6 +33,9 @@ IDENTITY_MACROS = (
     "NEVR_GIT_COMMIT_HASH",
     "NEVR_GIT_COMMIT_FULL",
     "NEVR_GIT_DESCRIBE",
+    # the unprefixed spellings the frozen src/legacy sources read
+    "PROJECT_VERSION",
+    "GIT_COMMIT_HASH",
 )
 MACRO = re.compile(r"\b(" + "|".join(IDENTITY_MACROS) + r")\b")
 DEFINED_ON_COMMAND_LINE = re.compile(r"-D(" + "|".join(IDENTITY_MACROS) + r")=")
@@ -107,7 +110,9 @@ class IdentityScope(unittest.TestCase):
                          {"NEVR_PROJECT_VERSION", "NEVR_GIT_COMMIT_HASH", "NEVR_GIT_COMMIT_FULL", "NEVR_GIT_DESCRIBE"})
         self.assertEqual(carried.get("ws_bridge.cpp"), {"NEVR_PROJECT_VERSION"})
         self.assertEqual(carried.get("initialize.cpp"), {"NEVR_PROJECT_VERSION"})
-        self.assertEqual(set(carried), {"build_identity.cpp", "ws_bridge.cpp", "initialize.cpp"},
+        self.assertEqual(carried.get("patches.cpp"), {"PROJECT_VERSION", "GIT_COMMIT_HASH"})
+        self.assertEqual(carried.get("gameserver.cpp"), {"PROJECT_VERSION", "GIT_COMMIT_HASH"})
+        self.assertEqual(set(carried), {"build_identity.cpp", "ws_bridge.cpp", "initialize.cpp", "patches.cpp", "gameserver.cpp"},
                          "another file now reads the identity: give it its definition in its CMakeLists.txt")
 
     def test_the_commit_and_the_describe_string_are_on_no_edge_but_those_compile_edges(self):
