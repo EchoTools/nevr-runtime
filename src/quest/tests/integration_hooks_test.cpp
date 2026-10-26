@@ -134,10 +134,10 @@ void TestInstallWithoutTheModuleFailsCleanly() {
 // CSysHttp::CreateConnection thunk's calls and faults, and the URL decisions' two),
 // dlopen 1, login 2 (#237: calls and faults of the SendLogInRequest thunk), login prerequisites 22 (#411 adds the refused social org-id requests, the local entitlement answer and the local message pump's four: pops, deliveries, deferrals, SDK ids in the local range; #338:
 // one calls counter per hook), social 26 (the facade's, the invite gate's, the rich presence trace's four, its three local answers), login prompt 16 (#239, #672, login_prompt_hook.h kCounterCount), OBB-mount
-// skip 6 (#319, #866: the mount, the path and the data-root question, obb_skip_hook.h kCounterCount), resource request log 2 (#871,
-// resource_request_hook.h kCounterCount; development builds only, so a release build registers 2 fewer), texture quality 4 (#943,
-// texture_quality_hook.h kCounterCount). 91 on main before #943, 95 of 96 with it.
-constexpr int kSentinelCounters = 2 + 14 + 1 + 2 + 22 + 26 + 16 + 6 + 2 + 4;
+// skip 6 (#319, #866: the mount, the path and the data-root question, obb_skip_hook.h kCounterCount), texture quality 4 (#943,
+// texture_quality_hook.h kCounterCount), resource request log 2 (#871, resource_request_hook.h kCounterCount; development
+// builds only, so a release build registers 2 fewer). 91 on main before #943, 95 of 96 with it.
+constexpr int kSentinelCounters = 2 + 14 + 1 + 2 + 22 + 26 + 16 + 6 + 4 + 2;
 static_assert(kSentinelCounters <= static_cast<int>(sentinel::kMaxReportCounters),
               "the sentinel's hooks register more counters than the reporter holds");
 
