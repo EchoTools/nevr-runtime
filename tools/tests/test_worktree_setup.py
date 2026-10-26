@@ -109,6 +109,17 @@ class WorktreeSetupTest(unittest.TestCase):
         self.assertIn("seeded build/mingw-debug", result.stdout)
         self.assertFalse((self.wt / "build/mingw-release").exists())
 
+    def test_a_seeder_failure_fails_the_setup_and_names_the_build_tree(self):
+        self.build_main_tree("mingw-release")
+        blocker = self.tmp / "not-a-directory"
+        blocker.write_text("a file where the log directory would go\n")
+        env = dict(os.environ, XDG_STATE_HOME=str(blocker))
+        result = subprocess.run([str(self.wt / "tools/worktree-setup.sh")], cwd=self.wt, capture_output=True, text=True,
+                                env=env, timeout=60)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("build/mingw-release", result.stderr)
+        self.assertIn("seeding it from the main checkout failed", result.stderr)
+
     def test_the_public_defaults_keep_the_main_checkouts_mtime(self):
         old = 1_700_000_000
         os.utime(self.main / "config/public-defaults.env", (old, old))
