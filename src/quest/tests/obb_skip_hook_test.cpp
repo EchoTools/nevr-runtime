@@ -51,6 +51,17 @@ const char* RealPathNone(AStorageManagerOpaque*, const char*) {
   return nullptr;
 }
 
+// CSysInfo::GetDataRootDir with no gOBBPath recorded: the legacy literal (libr15 0xf87250).
+int g_realDataRootCalls = 0;
+const char* RealDataRoot() {
+  ++g_realDataRootCalls;
+  return sentinel::pinned::kObbFallbackDataRoot;
+}
+
+obb::DataRootThunk::Fn DataRootEntry() {
+  return reinterpret_cast<obb::DataRootThunk::Fn>(obb::DataRootThunk::EntryAddress());
+}
+
 obb::MountThunk::Fn MountEntry() { return reinterpret_cast<obb::MountThunk::Fn>(obb::MountThunk::EntryAddress()); }
 obb::PathThunk::Fn PathEntry() { return reinterpret_cast<obb::PathThunk::Fn>(obb::PathThunk::EntryAddress()); }
 
@@ -91,10 +102,12 @@ std::string GetDataRootDir() {
 
 void Reset() {
   g_game = GameState();
-  g_realMountCalls = g_realPathCalls = 0;
+  g_realMountCalls = g_realPathCalls = g_realDataRootCalls = 0;
   obb::ResetForTest();
   obb::MountThunk::Reset();
   obb::PathThunk::Reset();
+  obb::DataRootThunk::Reset();
+  *obb::DataRootThunk::OriginalOut() = reinterpret_cast<void*>(&RealDataRoot);
   *obb::MountThunk::OriginalOut() = reinterpret_cast<void*>(&RealMountRefused);
   *obb::PathThunk::OriginalOut() = reinterpret_cast<void*>(&RealPathNone);
 }
@@ -293,6 +306,91 @@ void WithNoRootTheGameKeepsItsFallbackAndOneErrorLineNamesBothPaths() {
   QCHECK(SomeLineContains("/storage/emulated/0/readyatdawn"));
 }
 
+// ---- the engine's data-root question (#866): no OBB file, so no mount and no path request ever reaches the hooks ----
+
+void NoObbFileTheEngineAsksForTheDataRootAndIsToldTheMediaRootThatHoldsTheData() {
+  Reset();
+  g_existing = {kMediaData, kLegacyData};
+  obb::ResolveRoot(&FakeExists);
+  obb::ArmForTest();
+  const char* root = DataRootEntry()();  // the game's call, and no mountObb before it
+  QCHECK(root != nullptr && std::strcmp(root, kMediaDir) == 0);
+  QCHECK(g_realDataRootCalls == 0 && g_realMountCalls == 0 && g_realPathCalls == 0);
+  QCHECK(obb::CurrentCounts().dataRootServed == 1 && obb::CurrentCounts().mountSkipped == 0);
+  QCHECK(obb::DataRootRedirect() != nullptr && std::strcmp(obb::DataRootRedirect(), kMediaDir) == 0);
+  // Every later question gets the same answer: the two callers both read it once, at boot.
+  QCHECK(std::strcmp(DataRootEntry()(), kMediaDir) == 0 && obb::CurrentCounts().dataRootServed == 2);
+}
+
+void TheEngineKeepsItsOwnAnswerWhenOnlyTheLegacyRootHoldsTheData() {
+  Reset();
+  g_existing = {kLegacyData};
+  obb::ResolveRoot(&FakeExists);
+  obb::ArmForTest();
+  const char* root = DataRootEntry()();
+  QCHECK(root != nullptr && std::strcmp(root, "/storage/emulated/0/readyatdawn") == 0);
+  QCHECK(g_realDataRootCalls == 1 && obb::CurrentCounts().dataRootServed == 0);
+  QCHECK(obb::DataRootRedirect() == nullptr);
+}
+
+void TheEngineKeepsItsOwnAnswerForAnUnmarkedMediaDirectoryAndForNoRoot() {
+  for (int unmarked = 0; unmarked < 2; ++unmarked) {
+    Reset();
+    g_existing = unmarked != 0 ? std::set<std::string>{kMediaDir} : std::set<std::string>{};
+    obb::ResolveRoot(&FakeExists);
+    obb::ArmForTest();
+    QCHECK(std::strcmp(DataRootEntry()(), "/storage/emulated/0/readyatdawn") == 0);
+    QCHECK(g_realDataRootCalls == 1 && obb::CurrentCounts().dataRootServed == 0);
+    QCHECK(obb::DataRootRedirect() == nullptr);
+  }
+}
+
+void NothingIsRedirectedBeforeTheResolverHasRun() {
+  Reset();
+  obb::ArmForTest();
+  QCHECK(std::strcmp(DataRootEntry()(), "/storage/emulated/0/readyatdawn") == 0);
+  QCHECK(g_realDataRootCalls == 1 && obb::DataRootRedirect() == nullptr);
+}
+
+// A refused GOT slot leaves the engine reading the legacy root: the data step must not take the media root for the
+// engine's, so DataRootRedirect() says nothing until the install took.
+void TheRedirectIsNotTheEnginesRootUntilTheHookIsInstalled() {
+  Reset();
+  g_existing = {kMediaData};
+  obb::ResolveRoot(&FakeExists);  // resolved; Install() would mark the hook live only when the slot took
+  QCHECK(obb::DataRootRedirect() == nullptr);
+}
+
+void ADisarmedDataRootHookPassesTheQuestionThrough() {
+  Reset();
+  g_existing = {kMediaData};
+  obb::ResolveRoot(&FakeExists);
+  obb::ArmForTest();
+  obb::DataRootThunk::Disarm();
+  QCHECK(std::strcmp(DataRootEntry()(), "/storage/emulated/0/readyatdawn") == 0);
+  QCHECK(g_realDataRootCalls == 1 && obb::CurrentCounts().dataRootServed == 0);
+}
+
+void ADataRootThunkWithoutAnOriginalIsAFault() {
+  Reset();
+  g_existing = {kLegacyData};
+  obb::ResolveRoot(&FakeExists);
+  obb::ArmForTest();
+  *obb::DataRootThunk::OriginalOut() = nullptr;
+  QCHECK(DataRootEntry()() == nullptr);
+  QCHECK(obb::DataRootThunk::Faults() == 1);
+}
+
+// With an OBB file the skipped mount records the media root and the engine's later question gets the same answer.
+void ASkippedMountAndTheDataRootQuestionAgree() {
+  Reset();
+  g_existing = {kMediaData};
+  obb::ResolveRoot(&FakeExists);
+  obb::ArmForTest();
+  GameInit(10);
+  QCHECK(GetDataRootDir() == kMediaDir && std::strcmp(DataRootEntry()(), kMediaDir) == 0);
+}
+
 void TheRealFilesystemCheckSaysDirectoryOnlyForADirectory() {
   char tmpl[] = "/tmp/obb_skip_rootXXXXXX";
   char* dir = ::mkdtemp(tmpl);
@@ -314,10 +412,10 @@ void TheRealFilesystemCheckSaysDirectoryOnlyForADirectory() {
   ::rmdir(base.c_str());
 }
 
-void TheFourCountersRegisterAndLeaveTheRestOfTheTable() {
+void TheSixCountersRegisterAndLeaveTheRestOfTheTable() {
   sentinel::StopReporter();
   QCHECK(obb::RegisterCounters());
-  // The four counters are in the table; the rest of it is still free, and a full table refuses a registration
+  // The six counters are in the table; the rest of it is still free, and a full table refuses a registration
   // rather than dropping it silently.
   int extra = 0;
   static std::atomic<std::uint64_t> spare[sentinel::kMaxReportCounters];
@@ -348,7 +446,15 @@ int main() {
   ASkippedMountServesTheResolvedRootAndTheGameReadsFromIt();
   WithNoRootTheGameKeepsItsFallbackAndOneErrorLineNamesBothPaths();
   TheRealFilesystemCheckSaysDirectoryOnlyForADirectory();
-  TheFourCountersRegisterAndLeaveTheRestOfTheTable();
+  NoObbFileTheEngineAsksForTheDataRootAndIsToldTheMediaRootThatHoldsTheData();
+  TheEngineKeepsItsOwnAnswerWhenOnlyTheLegacyRootHoldsTheData();
+  TheEngineKeepsItsOwnAnswerForAnUnmarkedMediaDirectoryAndForNoRoot();
+  NothingIsRedirectedBeforeTheResolverHasRun();
+  TheRedirectIsNotTheEnginesRootUntilTheHookIsInstalled();
+  ADisarmedDataRootHookPassesTheQuestionThrough();
+  ADataRootThunkWithoutAnOriginalIsAFault();
+  ASkippedMountAndTheDataRootQuestionAgree();
+  TheSixCountersRegisterAndLeaveTheRestOfTheTable();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "obb_skip_hook_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

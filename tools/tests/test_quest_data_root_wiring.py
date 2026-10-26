@@ -21,6 +21,24 @@ class InstallChoosesTheRootFirst(unittest.TestCase):
         self.assertIn("ResolveRoot(&DirectoryExists)", body)
         self.assertLess(body.index("ResolveRoot(&DirectoryExists)"), body.index("PathThunk::Arm"))
 
+    def test_install_hooks_the_engines_data_root_question_after_the_root_is_chosen(self):
+        """#866: with no OBB file neither OBB hook ever runs, so the data-root slot is what redirects the engine."""
+        source = (ROOT / "src/quest/sentinel/obb_skip_hook.cpp").read_text()
+        body = extract_braced_function(source, "bool Install() noexcept {")
+        self.assertIn("InstallThunk<DataRootThunk>(g_dataRootHook, sentinel::pinned::LibR15GetDataRootDir())", body)
+        self.assertLess(body.index("ResolveRoot(&DirectoryExists)"), body.index("DataRootThunk::Arm"))
+        self.assertLess(body.index("DataRootThunk::Arm"), body.index("InstallThunk<DataRootThunk>"))
+        self.assertIn("g_dataRootHookLive.store(dataRoot == sentinel::GotStatus::kOk", body)
+        # The install result includes it: a refused slot is an error line and a false return, not a quiet pass.
+        self.assertRegex(body, r"const bool ok = [^;]*dataRoot == sentinel::GotStatus::kOk")
+
+    def test_the_data_step_asks_the_hook_for_the_engines_root_when_no_mount_was_skipped(self):
+        source = (ROOT / "src/quest/sentinel/data_wiring.cpp").read_text()
+        body = extract_braced_function(source, "EngineRootChoice EngineRoot() {")
+        self.assertIn("obb_skip::DataRootRedirect()", body)
+        self.assertIn('"data_root_hook"', body)
+        self.assertLess(body.index("mountSkipped"), body.index("DataRootRedirect"))
+
 
 
 
@@ -48,6 +66,10 @@ class TheGamesCallPathDoesNoWork(unittest.TestCase):
 
     def test_the_path_handler_does_no_filesystem_or_log_work(self):
         body = self.handler("const char* PathHandler(", "g_root.load")
+        self.assertIsNone(self.FORBIDDEN.search(body), self.FORBIDDEN.search(body))
+
+    def test_the_data_root_handler_does_no_filesystem_or_log_work(self):
+        body = self.handler("const char* DataRootHandler(", "g_dataRootRedirect.load")
         self.assertIsNone(self.FORBIDDEN.search(body), self.FORBIDDEN.search(body))
 
 

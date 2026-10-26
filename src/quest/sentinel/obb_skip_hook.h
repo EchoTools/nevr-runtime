@@ -9,15 +9,20 @@
  * where its assets are read from. The skip serves the first root that holds the game's `_data` directory
  * (data_root.h: the installer app's Android/media directory, then that fallback), chosen once by ResolveRoot.
  *
- * Two GOT hooks in libr15.so, both lock-free, both on the caller's thread (android_main):
+ * Three GOT hooks in libr15.so, all lock-free, all on the caller's thread (android_main):
  *   - AStorageManager_mountObb: when the game passes a callback, report AOBB_STATE_MOUNTED to it at once
  *     (cb(filename, 1, data), synchronously, the original is not called). The game's own callback then
  *     asks for the mounted path, records it and sets its completion flag, exactly as for a real mount.
  *   - AStorageManager_getMountedObbPath: after that skip, return the root ResolveRoot chose (the game's
  *     fallback root when neither candidate holds `_data`), so the game records the root it would have used
  *     after the timeout.
+ *   - CSysInfo::GetDataRootDir (#866): with no OBB file CSysFile::Init returns at "OBB not found", before any mount, so
+ *     the two hooks above never run and the engine reads the legacy root whatever ResolveRoot found. When ResolveRoot
+ *     found the game's `_data` under the Android/media root ("android_media"), this hook answers the engine's
+ *     data-root question with that root; for every other resolution it calls the original. Both callers of the
+ *     function (pinned_targets.h) only read the returned pointer.
  * The path hook is installed first and the mount hook only when it took: a mount skipped without the path
- * would record an empty path and the game would retry for the same ~30 s.
+ * would record an empty path and the game would retry for the same ~30 s. The data-root hook is independent of both.
  *
  * A call without a callback goes to the original. A path request before any skip goes to the original.
  *
@@ -25,6 +30,8 @@
  *   obb_mount_skipped              the mount request was answered with "mounted"
  *   obb_path_served                the fallback data root was returned for a path request
  *   obb_mount_thunk_faults / obb_path_thunk_faults   a thunk had no original
+ *   data_root_served               the engine's data-root question was answered with the media root
+ *   data_root_thunk_faults         the data-root thunk had no original
  *
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h.
  */
@@ -37,15 +44,16 @@ namespace nevr_quest::obb_skip {
 
 using MountThunk = sentinel::pinned::LibR15MountObbThunk;
 using PathThunk = sentinel::pinned::LibR15GetMountedObbPathThunk;
+using DataRootThunk = sentinel::pinned::LibR15GetDataRootDirThunk;
 
-inline constexpr int kCounterCount = 4;
+inline constexpr int kCounterCount = 6;
 
 // Registers the counters. Call before sentinel::StartReporter. Returns false, having logged one line
 // {"event":"obb_skip_counters","result":"refused",...}, when any was refused.
 bool RegisterCounters() noexcept;
 
-// Arms both handlers and installs the thunks in libr15.so (path first). One line
-// {"event":"obb_skip_install",...} says what was installed. True only when both slots hold their thunks.
+// Arms the handlers and installs the thunks in libr15.so (path, mount, then the data root). One line
+// {"event":"obb_skip_install",...} says what was installed. True only when all three slots hold their thunks.
 bool Install() noexcept;
 
 // Install() when `countersRegistered`; otherwise logs the skip and installs nothing.
@@ -64,7 +72,13 @@ bool DirectoryExists(const char* path) noexcept;
 // pinned zip), so DirectoryExists would call present data missing.
 bool PathExists(const char* path) noexcept;
 
-// Test support: arms both handlers without touching a GOT slot, and clears the "skipped" state.
+// The media root the engine is told to read, or nullptr when it is not: non-null only when ResolveRoot found the
+// game's `_data` under the media root AND the data-root hook is installed (Install took the slot). It is what the
+// first-run data step treats as the engine's root when no mount was skipped (data_wiring.cpp, #866).
+const char* DataRootRedirect() noexcept;
+
+// Test support: arms the handlers without touching a GOT slot, marks the data-root hook installed, and clears the
+// "skipped" state.
 void ArmForTest() noexcept;
 void ResetForTest() noexcept;
 
@@ -72,7 +86,7 @@ void ResetForTest() noexcept;
 const char* CurrentRoot() noexcept;
 
 struct Counts {
-  unsigned long long mountSkipped, pathServed;
+  unsigned long long mountSkipped, pathServed, dataRootServed;
 };
 Counts CurrentCounts() noexcept;
 

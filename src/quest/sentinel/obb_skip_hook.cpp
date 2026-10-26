@@ -19,15 +19,22 @@ using sentinel::pinned::ObbCallbackFn;
 
 sentinel::GotHook g_mountHook;
 sentinel::GotHook g_pathHook;
+sentinel::GotHook g_dataRootHook;
 
 std::atomic<std::uint64_t> g_mountSkipped{0};
 std::atomic<std::uint64_t> g_pathServed{0};
+std::atomic<std::uint64_t> g_dataRootServed{0};
 // Set before the callback is called (the callback asks for the path), never cleared in production: the
 // game's mount request was answered, and every later path request is for that mount.
 std::atomic<bool> g_skipped{false};
 // The root served for the skipped mount (#749): chosen by ResolveRoot before the game runs, so the game's call path
 // never touches the filesystem or the log. A string literal in data_root.h, never freed.
 std::atomic<const char*> g_root{sentinel::pinned::kObbFallbackDataRoot};
+// The root the data-root hook answers with (#866): the media root when ResolveRoot found `_data` there, else null (the
+// original answers). Chosen by ResolveRoot before the hook is installed; a string literal, never freed.
+std::atomic<const char*> g_dataRootRedirect{nullptr};
+// Set once the data-root slot holds our thunk: only then is the engine reading the redirected root.
+std::atomic<bool> g_dataRootHookLive{false};
 
 // AStorageManager_mountObb. A request without a callback has nobody to answer: the original.
 void MountHandler(MountThunk::Fn original, AStorageManagerOpaque* manager, const char* filename, const char* key,
@@ -48,8 +55,17 @@ const char* PathHandler(PathThunk::Fn original, AStorageManagerOpaque* manager, 
   return g_root.load(std::memory_order_acquire);
 }
 
+// CSysInfo::GetDataRootDir. Redirected only to the media root that holds the game's data; otherwise the original.
+const char* DataRootHandler(DataRootThunk::Fn original) noexcept {
+  const char* const redirect = g_dataRootRedirect.load(std::memory_order_acquire);
+  if (redirect == nullptr) return original();
+  g_dataRootServed.fetch_add(1, std::memory_order_relaxed);
+  return redirect;
+}
+
 NEVR_HOOK_RECORD(kMountHook, MountThunk, &MountHandler);
 NEVR_HOOK_RECORD(kPathHook, PathThunk, &PathHandler);
+NEVR_HOOK_RECORD(kDataRootHook, DataRootThunk, &DataRootHandler);
 
 }  // namespace
 
@@ -76,6 +92,8 @@ bool RegisterCounters() noexcept {
       {"obb_path_served", &g_pathServed, sentinel::ReportKind::kCalls},
       {"obb_mount_thunk_faults", &MountThunk::FaultCounter(), sentinel::ReportKind::kFaults},
       {"obb_path_thunk_faults", &PathThunk::FaultCounter(), sentinel::ReportKind::kFaults},
+      {"data_root_served", &g_dataRootServed, sentinel::ReportKind::kCalls},
+      {"data_root_thunk_faults", &DataRootThunk::FaultCounter(), sentinel::ReportKind::kFaults},
   };
   int registered = 0;
   for (const Entry& e : entries) registered += sentinel::RegisterReportCounter(e.name, e.value, e.kind) ? 1 : 0;
@@ -89,9 +107,17 @@ bool RegisterCounters() noexcept {
 
 const char* CurrentRoot() noexcept { return g_root.load(std::memory_order_acquire); }
 
+const char* DataRootRedirect() noexcept {
+  return g_dataRootHookLive.load(std::memory_order_acquire) ? g_dataRootRedirect.load(std::memory_order_acquire)
+                                                            : nullptr;
+}
+
 void ResolveRoot(data_root::ExistsFn exists) noexcept {
   const data_root::Resolution r = data_root::Resolve(exists);
   g_root.store(r.root, std::memory_order_release);
+  // Only a media root proven to hold `_data` is told to the engine; an unmarked one is served to a skipped mount only.
+  g_dataRootRedirect.store(r.found && std::strcmp(r.source, "android_media") == 0 ? r.root : nullptr,
+                           std::memory_order_release);
   if (r.found && std::strcmp(r.source, "android_media_unmarked") == 0) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "data_root",
                         {{"result", "found"},
@@ -120,11 +146,21 @@ bool Install() noexcept {
     MountThunk::Arm(kMountHook);
     mount = sentinel::InstallThunk<MountThunk>(g_mountHook, sentinel::pinned::LibR15MountObb());
   }
-  const bool ok = path == sentinel::GotStatus::kOk && mount == sentinel::GotStatus::kOk;
+  // The data-root hook does not depend on the other two: with no OBB file they never run and this one is what matters.
+  DataRootThunk::Arm(kDataRootHook);
+  const sentinel::GotStatus dataRoot =
+      sentinel::InstallThunk<DataRootThunk>(g_dataRootHook, sentinel::pinned::LibR15GetDataRootDir());
+  g_dataRootHookLive.store(dataRoot == sentinel::GotStatus::kOk, std::memory_order_release);
+  const bool ok = path == sentinel::GotStatus::kOk && mount == sentinel::GotStatus::kOk &&
+                  dataRoot == sentinel::GotStatus::kOk;
+  const char* result = "installed";
+  if (!ok) result = path == sentinel::GotStatus::kOk && mount == sentinel::GotStatus::kOk ? "data_root_failed"
+                    : path == sentinel::GotStatus::kOk ? "path_only" : "failed";
   sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "obb_skip_install",
-                      {{"result", ok ? "installed" : (path == sentinel::GotStatus::kOk ? "path_only" : "failed")},
+                      {{"result", result},
                        {"path", sentinel::GotStatusName(path)},
-                       {"mount", sentinel::GotStatusName(mount)}});
+                       {"mount", sentinel::GotStatusName(mount)},
+                       {"data_root", sentinel::GotStatusName(dataRoot)}});
   return ok;
 }
 
@@ -141,6 +177,8 @@ void ArmForTest() noexcept {
   g_skipped.store(false, std::memory_order_relaxed);
   PathThunk::Arm(kPathHook);
   MountThunk::Arm(kMountHook);
+  DataRootThunk::Arm(kDataRootHook);
+  g_dataRootHookLive.store(true, std::memory_order_relaxed);
 }
 
 void ResetForTest() noexcept {
@@ -148,10 +186,14 @@ void ResetForTest() noexcept {
   g_root.store(sentinel::pinned::kObbFallbackDataRoot, std::memory_order_relaxed);
   g_mountSkipped.store(0, std::memory_order_relaxed);
   g_pathServed.store(0, std::memory_order_relaxed);
+  g_dataRootServed.store(0, std::memory_order_relaxed);
+  g_dataRootRedirect.store(nullptr, std::memory_order_relaxed);
+  g_dataRootHookLive.store(false, std::memory_order_relaxed);
 }
 
 Counts CurrentCounts() noexcept {
-  return {g_mountSkipped.load(std::memory_order_relaxed), g_pathServed.load(std::memory_order_relaxed)};
+  return {g_mountSkipped.load(std::memory_order_relaxed), g_pathServed.load(std::memory_order_relaxed),
+          g_dataRootServed.load(std::memory_order_relaxed)};
 }
 
 }  // namespace nevr_quest::obb_skip
