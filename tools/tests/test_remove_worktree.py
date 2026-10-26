@@ -16,11 +16,13 @@ import stat
 import subprocess
 import sys
 import unittest
+import unittest.mock
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "tools/tests"))
 import work_root  # noqa: E402
+import git_fixture  # noqa: E402
 from git_fixture import clean_env, git, real_repo_unchanged  # noqa: E402
 
 SCRIPT = REPO / "tools/remove_worktree.py"
@@ -342,6 +344,24 @@ class RemoveWorktreeTest(FixtureCase):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("the shared submodule config changed", result.stderr)
         self.assertIn("shared-config-changed", [r["action"] for r in self.records()])
+
+
+class RealRepoGuardTest(unittest.TestCase):
+    def test_the_guard_fails_when_the_state_it_watches_changes_and_passes_when_it_does_not(self):
+        with unittest.mock.patch.object(git_fixture, "real_repo_state", side_effect=[b"a", b"a"]):
+            with real_repo_unchanged(self):
+                pass
+        with unittest.mock.patch.object(git_fixture, "real_repo_state", side_effect=[b"a", b"b"]):
+            with self.assertRaises(AssertionError):
+                with real_repo_unchanged(self):
+                    pass
+
+    def test_the_state_it_watches_names_the_submodule_config_and_the_worktree_paths_not_their_heads(self):
+        state = git_fixture.real_repo_state().decode()
+        config, _, worktrees = state.partition("\0")
+        self.assertRegex(worktrees, r"(?m)^worktree /")
+        self.assertNotIn("HEAD ", worktrees)
+        self.assertTrue(config == "" or config.startswith("submodule."), config[:60])
 
 
 if __name__ == "__main__":

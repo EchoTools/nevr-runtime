@@ -30,12 +30,19 @@ def git(cwd, *args, check=True):
 
 
 def real_repo_state():
-    """The submodule config and the worktree list of the checkout the tests run from, as bytes."""
+    """The submodule config and the worktree paths and locks of the checkout the tests run from, as bytes.
+
+    The worktree list is reduced to its `worktree` and `locked` lines: the HEAD each worktree reports moves
+    whenever any other session commits, and a block that lasts a second must not fail on that.
+    """
     env = {k: v for k, v in os.environ.items() if k not in STRIPPED_ENV}
-    out = b""
-    for args in (["config", "--get-regexp", r"^submodule\."], ["worktree", "list"]):
-        out += subprocess.run(["git", "-C", str(REPO), *args], env=env, capture_output=True).stdout + b"\0"
-    return out
+
+    def run(*args):
+        return subprocess.run(["git", "-C", str(REPO), *args], env=env, capture_output=True, text=True).stdout
+
+    worktrees = [ln for ln in run("worktree", "list", "--porcelain").splitlines()
+                 if ln.startswith(("worktree ", "locked"))]
+    return (run("config", "--get-regexp", r"^submodule\.") + "\0" + "\n".join(worktrees)).encode()
 
 
 @contextlib.contextmanager
