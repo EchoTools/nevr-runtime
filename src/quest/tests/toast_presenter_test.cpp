@@ -309,7 +309,7 @@ void CheckUiPost() {
 
   // The text is checked before it is queued.
   TCHECK(std::strcmp(toast::ShowOnUiThread(g_app, std::string(401, 'x').c_str(), &prepared), "text_too_long") == 0);
-  TCHECK(std::strcmp(toast::ShowOnUiThread(g_app, nullptr, &prepared), "text_too_long") == 0);
+  TCHECK(std::strcmp(toast::ShowOnUiThread(g_app, nullptr, &prepared), "no_text") == 0);
   TCHECK(toast::UiQueuedForTest() == 0);
   // 400 bytes is the longest text; it is queued whole and shown.
   g = Fake{};

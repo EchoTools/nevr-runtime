@@ -247,7 +247,8 @@ void ResetUiLooperForTest() noexcept {
 const char* ShowOnUiThread(void* app, const char* text, bool* looperPrepared) noexcept {
   *looperPrepared = false;
   if (g_uiState.load() != kUiReady) return "no_ui_looper";
-  if (text == nullptr || std::strlen(text) > kMaxPostedText) return "text_too_long";
+  if (text == nullptr) return "no_text";
+  if (std::strlen(text) > kMaxPostedText) return "text_too_long";
   Posted* posted = new (std::nothrow) Posted;
   if (posted == nullptr) return "alloc_failed";
   posted->app = app;

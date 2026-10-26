@@ -41,7 +41,7 @@ const char* ShowOnMainLooper(void* app, const char* text, bool* looperPrepared) 
 const char* CaptureUiLooper() noexcept;
 
 // ShowOnUiThread's result is "posted" (the text is queued; nothing is known of the Toast yet) or "no_ui_looper",
-// "text_too_long" (over 400 bytes), "alloc_failed", "queue_full" or "write_failed". `*looperPrepared` is false. The Toast's own
+// "no_text" (a null text), "text_too_long" (over 400 bytes), "alloc_failed", "queue_full" or "write_failed". `*looperPrepared` is false. The Toast's own
 // result is logged from the UI thread as one `ui_post` line with state=ran, the result token of Show(), the thread id and
 // whether that is the process's main thread.
 const char* ShowOnUiThread(void* app, const char* text, bool* looperPrepared) noexcept;
