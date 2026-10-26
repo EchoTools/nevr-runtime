@@ -268,6 +268,15 @@ TEST(LobbySettingsRelay, NoBroadcasterStopsBeforeTheSend) {
   EXPECT_NE(report.line.find("reason=no_broadcaster"), std::string::npos) << report.line;
 }
 
+TEST(LobbySettingsRelay, MissingSinksAreNamedAsNoBroadcasterNotAsAnException) {
+  // gameserver_callbacks.cpp leaves both sinks empty when the game has no broadcaster yet.
+  const auto frame = MakeFrame(kDocument);
+  const auto report = RelayLobbySettings(frame.data(), frame.size(), "s", LobbySettingsSinks{});
+  EXPECT_FALSE(report.relayed);
+  EXPECT_EQ(report.drop, LobbySettingsDrop::kNoBroadcaster);
+  EXPECT_NE(report.line.find("reason=no_broadcaster"), std::string::npos) << report.line;
+}
+
 TEST(LobbySettingsRelay, ASinkThatThrowsIsContained) {
   const auto frame = MakeFrame(kDocument);
   Calls calls;
