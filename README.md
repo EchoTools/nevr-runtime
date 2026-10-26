@@ -131,20 +131,20 @@ are inside the prefix (`<prefix>/drive_c/users/<user>/AppData/Local`).
 | `BugSplat64.dll.original-<timestamp>`, `dbgcore.dll.legacy-<date>`, `nevr-install.txt` | What `install.ps1` leaves: the game's own `BugSplat64.dll`, a legacy `dbgcore.dll` set aside, and the state file `uninstall.ps1` reads (renamed `nevr-install.txt.undone-<timestamp>` when it undoes the install). Both scripts append their runs to `nevr-install.log` beside the script, not in the game folder. | `tools/package-release/install.ps1`, `tools/package-release/uninstall.ps1` |
 | `plugins\` | Plugin DLLs. A plugin loads only when the ordered `plugins:` list in `config.yaml` names it; a DLL the list does not name is ignored. | `LoadPlugins` (`pluginDir`) in `src/runtime/ext/plugin_loader.cpp` |
 | `_overrides\` | Files registered as resource overrides at start. | `src/runtime/patch/resource_override.cpp` |
-| `logs\nevr-boot.jsonl` | The boot log: one JSON line per event from before the log filter starts, appended across runs; the main log replays this run's lines. Created at start. | `nevr_boot_log_tee::Init` in `src/runtime/log/boot_log_tee.cpp` |
+| `logs\nevr-boot.jsonl` | The boot log: one JSON line per event from before the log filter starts, appended across runs; the main log replays this run's lines. Created at start, with the `logs` folder. If the folder cannot be created or the file cannot be opened, the lines go to standard error only. | `nevr_boot_log_tee::Init` in `src/runtime/log/boot_log_tee.cpp` |
 | `log_filter_config.yml`, `.yaml`, `.jsonc`, `.json` | Optional settings of the built-in log filter (`file_dir`, rotation). The first that exists is used, searched in this order, then in the working directory. | `FindConfigFile` in `src/runtime/log/builtin_filter.cpp` |
 
 ### In `_local`
 
 `_local` is searched as `<game folder>\_local`, then `<game folder>\..\_local`, then `<game folder>\..\..\_local` (the
-stock install keeps it beside `bin`). The directory of a path named by `-config` or `-config-path` is searched first for
-`config.yaml`.
+stock install keeps it beside `bin`). Only `config.yaml` also looks in the directory of a path named by `-config` or `-config-path`, and
+looks there first; `.credentials.json` does not.
 
 | Path | What it is | Code |
 | --- | --- | --- |
 | `_local\config.yaml` | Every nEVR setting: service addresses and keys, the `plugins:` list, arena rules. A missing file is a warning and a defaults-only run; a malformed one stops a dedicated server. | `FindNevrConfigYamlPath` in `src/runtime/lifecycle/service_config.cpp` |
 | `_local\config.json` | Optional. Only the keys the stock engine reads. | `LoadEarlyConfig` in `src/runtime/lifecycle/config.cpp` |
-| `_local\.credentials.json` | The cached refresh token and identity (the access token is never written). An existing file in any searched directory is used; otherwise the file goes beside the first `config.yaml` found, otherwise in `<game folder>\_local`. A write goes to `.credentials.json.tmp` first. | `SelectCredentialCacheLocation` in `src/core/auth_token.h`; `TempPathFor` in `src/core/credential_write.h` |
+| `_local\.credentials.json` | The cached refresh token and identity (the access token is never written). The function looks at `<game folder>\_local`, `..\_local` and `..\..\_local` only (it ignores `-config` and `-config-path`) and uses the first one that already holds a `.credentials.json`; if none does, the first of those three that holds a `config.yaml`; if none does, `<game folder>\_local`, which a write creates. A write goes to `.credentials.json.tmp` first, then replaces the cache. | `SelectCredentialCacheLocation` in `src/core/auth_token.h`; `TempPathFor` in `src/core/credential_write.h` |
 | `_local\r14logs\*.log` | The game's own log. The runtime only reads the newest, relative to the working directory. | `src/runtime/lifecycle/state_machine.cpp` |
 
 ### In `%LOCALAPPDATA%\nevr\echovr\`
@@ -153,7 +153,7 @@ stock install keeps it beside `bin`). The directory of a path named by `-config`
 | --- | --- | --- |
 | `logs\nevr-bootstrap.jsonl` | The host's own log: what it decided at attach, and its crash-dump records. Falls back to `%TEMP%\nevr\echovr\logs`, then the directory of `BugSplat64.dll`. | `kLogsSubdirectory`, `kBootstrapLogName` in `src/runtime/host/host_paths.h` |
 | `crashes\nevr-<pid>-<n>.dmp` | A minidump written by the host's crash capture, with the same fallbacks (`%TEMP%\nevr\echovr\crashes`, then the directory of `BugSplat64.dll`). The exported `BugSplat_createReport` in `src/runtime/lifecycle/dllmain.cpp` does not call it, so a shipped build writes no file here. | `kCrashesSubdirectory` in `src/runtime/host/host_paths.h`; `CrashCapture::Capture` in `src/runtime/host/crash_capture.cpp` |
-| `cache\<sha256>.blob`, `cache\index.json` | The content-addressed asset cache: the bytes under their own SHA-256, and the index that says which blob stands in for which resource. A write in progress is `<sha256>.<pid>.<tick>.tmp`. The cache is size-capped and evicts blobs the index does not name. | `src/runtime/patch/asset_cache.h`, `DefaultDir` in `src/runtime/patch/asset_cache.cpp` |
+| `cache\<sha256>.blob`, `cache\index.json` | The content-addressed asset cache: the bytes under their own SHA-256, and the index that says which blob stands in for which resource. A write in progress is `<sha256>.<pid>.<tick>.tmp`. The cache is size-capped and evicts blobs the index does not name. Without `LOCALAPPDATA` there is no cache directory: the cache is disabled and the runtime logs `[NEVR.RESOURCE] cache disabled reason=no cache directory (LOCALAPPDATA unset)`. | `src/runtime/patch/asset_cache.h`, `DefaultDir` in `src/runtime/patch/asset_cache.cpp` |
 
 ### In `%LOCALAPPDATA%\EchoVR\`
 
@@ -161,9 +161,9 @@ This is the game's own folder, which the runtime also writes to.
 
 | Path | What it is | Code |
 | --- | --- | --- |
-| `logs\nevr-<timestamp>.jsonl` | The main run log (the built-in filter's output). Rotated by size and age; the newest `rotate_keep` files are kept. Without `LOCALAPPDATA` it is `logs\` beside the game's executable. | `GetDefaultLogDir`, `BuildLogFilePath` in `src/runtime/log/builtin_filter.cpp` |
-| `logs\nevr-crash-<run id>.txt` | The crash record: the `[NEVR.CRASH]` lines, written only once a crash path is entered. | `PrepareCrashRecordPath` in `src/runtime/lifecycle/crash_recovery.cpp` |
-| `cosmetics\v1\packages\` | Downloaded cosmetic packages (client only). | `GetCacheDir` in `src/runtime/patch/asset_cdn.cpp` |
+| `logs\nevr-<timestamp>.jsonl` | The main run log (the built-in filter's output). Rotated by size and age; the newest `rotate_keep` files are kept. Without `LOCALAPPDATA` it is `logs\` beside the game's executable. The `file_dir` setting of the filter config replaces the folder in both cases. | `GetDefaultLogDir`, `BuildLogFilePath` in `src/runtime/log/builtin_filter.cpp` |
+| `logs\nevr-crash-<run id>.txt` | The crash record: the `[NEVR.CRASH]` lines, written only once a crash path is entered. Without `LOCALAPPDATA` (or when its value is `MAX_PATH` characters or longer) it is `logs\nevr-crash-<run id>.txt` beside the game's executable. Neither case creates the `logs` folder: if it does not exist the file is not written. | `PrepareCrashRecordPath` in `src/runtime/lifecycle/crash_recovery.cpp` |
+| `cosmetics\v1\packages\` | Downloaded cosmetic packages (client only). The folder is created on demand under the user's Local AppData known folder (not the `LOCALAPPDATA` variable); if that lookup or the creation fails, the error is logged and no package is stored. | `GetCacheDir` in `src/runtime/patch/asset_cdn.cpp` |
 
 ## What gets built
 
