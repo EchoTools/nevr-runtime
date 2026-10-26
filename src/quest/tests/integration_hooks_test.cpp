@@ -32,6 +32,10 @@ bool RegisterCounters() noexcept;
 namespace nevr_quest::obb_skip {
 bool RegisterCounters() noexcept;
 }  // namespace nevr_quest::obb_skip
+// And for sentinel/resource_request_hook.h (#871).
+namespace nevr_quest::resource_request {
+bool RegisterCounters() noexcept;
+}  // namespace nevr_quest::resource_request
 
 namespace {
 
@@ -126,8 +130,9 @@ void TestInstallWithoutTheModuleFailsCleanly() {
 // CSysHttp::CreateConnection thunk's calls and faults, and the URL decisions' two),
 // dlopen 1, login 2 (#237: calls and faults of the SendLogInRequest thunk), login prerequisites 22 (#411 adds the refused social org-id requests, the local entitlement answer and the local message pump's four: pops, deliveries, deferrals, SDK ids in the local range; #338:
 // one calls counter per hook), social 26 (the facade's, the invite gate's, the rich presence trace's four, its three local answers), login prompt 16 (#239, #672, login_prompt_hook.h kCounterCount), OBB-mount
-// skip 4 (#319, obb_skip_hook.h kCounterCount).
-constexpr int kSentinelCounters = 2 + 14 + 1 + 2 + 22 + 26 + 16 + 4;
+// skip 4 (#319, obb_skip_hook.h kCounterCount), resource request log 2 (#871, resource_request_hook.h kCounterCount; development builds
+// only, so a release build registers 2 fewer).
+constexpr int kSentinelCounters = 2 + 14 + 1 + 2 + 22 + 26 + 16 + 4 + 2;
 static_assert(kSentinelCounters <= static_cast<int>(sentinel::kMaxReportCounters),
               "the sentinel's hooks register more counters than the reporter holds");
 
@@ -147,6 +152,8 @@ struct RealCounterSteps final : Steps {
   bool RegisterSocialCounters() override { return nevr_quest::integration::RegisterSocialCounters(); }
   bool RegisterLoginPromptCounters() override { return nevr_quest::login_prompt::RegisterCounters(); }
   bool RegisterObbSkipCounters() override { return nevr_quest::obb_skip::RegisterCounters(); }
+  bool ResourceRequestLogWanted() override { return true; }  // the budget is the development build's, the larger one
+  bool RegisterResourceRequestCounters() override { return nevr_quest::resource_request::RegisterCounters(); }
   // The reporter is started after the budget is measured (below), so a refused registration shows here.
   bool StartReporter() override { return true; }
   bool InstallClockHook() override { return true; }
@@ -154,6 +161,7 @@ struct RealCounterSteps final : Steps {
   bool InstallProcessEnd() override { return true; }
   bool InstallPermissionWait() override { return true; }
   bool InstallVkExtWindow() override { return true; }
+  bool InstallResourceRequestLog(bool counted) override { return counted; }
   bool StartTokenAuth() override { return true; }
   bool InstallLoginPrompt(bool counted) override { return counted; }
   bool StartBridge() override { return true; }
@@ -172,12 +180,13 @@ void TestCounterBudget() {
   const ConstructorReport r = RunConstructorSequence(steps);
   for (StepId id : {StepId::kRegisterClockCounters, StepId::kRegisterRedirectCounters, StepId::kRegisterDlopenCounters,
                     StepId::kRegisterLoginCounters, StepId::kRegisterSocialCounters,
-                    StepId::kRegisterLoginPromptCounters, StepId::kRegisterObbSkipCounters}) {
+                    StepId::kRegisterLoginPromptCounters, StepId::kRegisterObbSkipCounters,
+                    StepId::kRegisterResourceRequestCounters}) {
     QCHECK(r.at(id).state == StepState::kOk);
   }
   // No hook was left out for want of a counter slot.
   for (StepId id : {StepId::kInstallRedirect, StepId::kInstallSocial, StepId::kInstallLoginPrompt,
-                    StepId::kInstallDlopenHook, StepId::kInstallObbSkip}) {
+                    StepId::kInstallDlopenHook, StepId::kInstallObbSkip, StepId::kInstallResourceRequestLog}) {
     QCHECK(r.at(id).state == StepState::kOk);
   }
 

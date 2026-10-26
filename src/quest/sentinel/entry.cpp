@@ -20,6 +20,7 @@
 #include "obb_skip_hook.h"
 #include "permission_wait_hook.h"
 #include "process_end_hook.h"
+#include "resource_request_hook.h"
 #include "toast_presenter.h"
 #include "vk_ext_window.h"
 #include "pinned_targets.h"
@@ -108,6 +109,14 @@ bool InstallPermissionWaitHook() noexcept {
 // The Vulkan extension window (#868): the device extensions libr15 requires stay inside the 128 entries it reads. A
 // refused install is logged by GotHook and leaves the game's calls intact.
 bool InstallVkExtWindowHook() noexcept { return nevr_quest::vk_window::Install(); }
+
+// The log-only resource request hook (#871): development builds only. A refused install is logged by GotHook and leaves the
+// game's call intact.
+bool ResourceRequestLogEnabled() noexcept { return nevr_build::kIsDev; }
+bool RegisterResourceRequestCounters() noexcept { return nevr_quest::resource_request::RegisterCounters(); }
+bool InstallResourceRequestLogHook(bool countersRegistered) noexcept {
+    return nevr_quest::resource_request::InstallIfCounted(countersRegistered);
+}
 
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
 // token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.

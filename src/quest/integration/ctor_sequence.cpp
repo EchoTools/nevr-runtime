@@ -25,12 +25,14 @@ const char* StepName(StepId id) {
     case StepId::kRegisterSocialCounters: return "register_social_counters";
     case StepId::kRegisterLoginPromptCounters: return "register_login_prompt_counters";
     case StepId::kRegisterObbSkipCounters: return "register_obb_skip_counters";
+    case StepId::kRegisterResourceRequestCounters: return "register_resource_request_counters";
     case StepId::kStartReporter: return "start_reporter";
     case StepId::kInstallClockHook: return "install_clock_hook";
     case StepId::kInstallObbSkip: return "install_obb_skip";
     case StepId::kInstallProcessEnd: return "install_process_end";
     case StepId::kInstallPermissionWait: return "install_permission_wait";
     case StepId::kInstallVkExtWindow: return "install_vk_ext_window";
+    case StepId::kInstallResourceRequestLog: return "install_resource_request_log";
     case StepId::kStartTokenAuth: return "start_token_auth";
     case StepId::kInstallLoginPrompt: return "install_login_prompt";
     case StepId::kStartBridge: return "start_bridge";
@@ -140,6 +142,19 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // The OBB-mount skip (#319, #572) runs on every launch: no feature and no configuration turns it off.
     const bool obbCounters =
         r.Run(StepId::kRegisterObbSkipCounters, [&] { return steps.RegisterObbSkipCounters(); });
+    // The resource request log (#871) is for development builds: a release build registers nothing for it.
+    bool resourceWanted = false;
+    try {
+      resourceWanted = steps.ResourceRequestLogWanted();
+    } catch (const std::exception&) {
+      resourceWanted = false;  // cannot tell: not wanted
+    }
+    bool resourceCounters = false;
+    if (resourceWanted) {
+      resourceCounters = r.Run(StepId::kRegisterResourceRequestCounters, [&] { return steps.RegisterResourceRequestCounters(); });
+    } else {
+      r.Skip(StepId::kRegisterResourceRequestCounters, "release_build");
+    }
     r.Run(StepId::kStartReporter, [&] { return steps.StartReporter(); });
 
     r.Run(StepId::kInstallClockHook, [&] { return steps.InstallClockHook(); });
@@ -166,6 +181,21 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // The device extensions libr15 requires stay inside the 128 entries it reads (#868): every launch, no feature, no
     // counters. libr15 resolves its Vulkan functions when it starts the game, after the constructor.
     r.Run(StepId::kInstallVkExtWindow, [&] { return steps.InstallVkExtWindow(); });
+
+    // The log-only resource request hook (#871): a development build only, and only with its counters. Every libr15 slot
+    // it needs exists from the start; the game requests resources after the constructor.
+    if (!resourceWanted) {
+      r.Skip(StepId::kInstallResourceRequestLog, "release_build");
+    } else if (!resourceCounters) {
+      try {
+        steps.InstallResourceRequestLog(false);  // the hook's own rule logs that it installs nothing
+      } catch (const std::exception&) {
+        // Contained like every step; the outcome is the skip below either way.
+      }
+      r.Skip(StepId::kInstallResourceRequestLog, "counters_refused");
+    } else {
+      r.Run(StepId::kInstallResourceRequestLog, [&] { return steps.InstallResourceRequestLog(true); });
+    }
 
     bool tokenOk = false;
     if (wantTokenAuth) {

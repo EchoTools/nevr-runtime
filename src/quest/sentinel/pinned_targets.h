@@ -135,6 +135,60 @@ using VrapiExtensionsSig = std::int32_t(char* extension_names, std::uint32_t* ex
 struct LibR15GetDeviceExtensionsVulkanTag {};
 using LibR15GetDeviceExtensionsVulkanThunk = CallbackThunk<LibR15GetDeviceExtensionsVulkanTag, VrapiExtensionsSig>;
 
+// NRadEngine::CResourceManager::FillResourceFileRequest(CSymbol64 type, CSymbol64 name, unsigned long long,
+// CAllocator*, void*, unsigned long long, SFileRequestData&), defined in libr15 at 0x25439f0 (524 bytes; ReVault lists it
+// at 0x26439f0): the single manifest resolver (#871). It clears the request (ClearFileRequestData, 0x2a9759c), binary-searches
+// the manifest for (type, name) and on a hit fills the request with the package file handle, the chunk and the words
+// that locate the bytes; on a miss it raises "Cannot find resource" and returns the error object. Every reader of a
+// manifest resource passes through it before ReadFileAsync: the base loads, the archive loader, the streamed mips and
+// the forced full mip load.
+//   this (x0, CResourceManager*), type (x1), name (x2), unused by the body (x3), allocator (x4, stored at request+0x460),
+//   owner (x5, stored at request+0x00: the CResource* for a base load), index (x6, stored at request+0x08: the buffer
+//   index, or the mip index), request (x7, the 0x470-byte SFileRequestData). Returns 0 on a hit.
+// CSymbol64 is one u64 passed by value, so a symbol is a plain integer argument here. Called through libr15's own PLT
+// stub (0xf30730, JUMP_SLOT 0x36efa80); the thunk passes the game's return address to the handler (kCaller) so a handler
+// can tell which of the six call sites it serves.
+struct CResourceManagerOpaque;
+using FillResourceFileRequestSig = std::uint64_t(CResourceManagerOpaque* manager, std::uint64_t type, std::uint64_t name,
+                                                 std::uint64_t unused, void* allocator, void* owner, std::uint64_t index,
+                                                 unsigned char* request);
+struct LibR15FillResourceFileRequestTag {};
+using LibR15FillResourceFileRequestThunk =
+    CallbackThunk<LibR15FillResourceFileRequestTag, FillResourceFileRequestSig, /*kCaller=*/true>;
+inline constexpr const char* kFillResourceFileRequestSymbol =
+    "_ZN10NRadEngine16CResourceManager23FillResourceFileRequestENS_9CSymbol64ES1_yPNS_10CAllocatorEPvyRNS_16SFileRequestDataE";
+
+// SFileRequestData (0x470 bytes), the fields the log-only hook reads after a hit (ClearFileRequestData, 0x2a9759c, sets
+// +0x10 and +0x418 to -1; the hit overwrites both). Measured on the pinned libr15 from the function's own stores
+// (0x2543a2c-0x2543bf8).
+namespace resource_request_layout {
+inline constexpr std::size_t kRequestBytes = 0x470;
+inline constexpr std::size_t kPackageHandle = 0x10;      // i64: the package file handle, -1 when none
+inline constexpr std::size_t kChunkIndex = 0x418;        // i64: the manifest record's chunk index, -1 when none
+inline constexpr std::size_t kChunkFileOffset = 0x420;   // u64: the chunk's offset in the package file
+inline constexpr std::size_t kChunkCompressed = 0x428;   // u64: the chunk's compressed size
+inline constexpr std::size_t kChunkDecompressed = 0x430; // u64: the chunk's decompressed size
+inline constexpr std::size_t kOffsetInChunk = 0x438;     // u64: the resource's offset inside the chunk
+inline constexpr std::size_t kSize = 0x440;              // u64: the resource's size
+inline constexpr std::size_t kAlignment = 0x450;         // u64: the record's alignment
+}  // namespace resource_request_layout
+
+// The six call sites of the stub in libr15 (ELF scan of bl to 0xf30730; pinned vaddrs, the address of the bl). The game
+// return address a handler sees is the bl plus 4. got_pinned_test.cpp checks each is a bl to the stub in the real library.
+inline constexpr std::uint64_t kFillResourceFileRequestStub = 0xf30730;
+struct FillCallSite {
+  std::uint64_t bl;
+  const char* name;
+};
+inline constexpr FillCallSite kFillCallSites[] = {
+    {0x25438f4, "resource_load_a"},    // CResourceManager::ResourceLoadInternal, first buffer
+    {0x2543984, "resource_load_b"},    // CResourceManager::ResourceLoadInternal, second buffer
+    {0x1341b18, "archive_load_a"},     // the CArchiveLoader request filler (0x1341a88)
+    {0x1341b9c, "archive_load_b"},     // the same function, second site
+    {0x18e39f0, "mip_request"},        // CGTextureCache::RequestNewMipmaps, per streamed mip
+    {0x18e661c, "force_load_all_mips"} // CGTextureResource::BeginForceLoadAllMips
+};
+
 // android_main(android_app*), defined in libr15 at 0xf784c4 and called by the native-activity glue's thread entry
 // through libr15's own PLT (`mov x0, x19; bl 0xf27bc0` at 0xf79a4c; the stub loads JUMP_SLOT 0x36eb4c8). The glue
 // ignores the result and then runs its teardown. android_main shuts the engine down after Main returns and, when
@@ -389,6 +443,12 @@ inline GotTarget LibR15FindMethod() {
 // imported, value 0).
 inline GotTarget LibR15GetDeviceExtensionsVulkan() {
   return {kLibR15, kGetDeviceExtensionsVulkanSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36dd440ULL};
+}
+
+// libr15.so's slot for CResourceManager::FillResourceFileRequest, defined in libr15 itself (JUMP_SLOT 0x36efa80,
+// `readelf -rW` on the pinned image; the PLT stub at 0xf30730 loads it).
+inline GotTarget LibR15FillResourceFileRequest() {
+  return {kLibR15, kFillResourceFileRequestSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36efa80ULL};
 }
 
 // libpnsradmatchmaking.so's slot for the same function, defined in
