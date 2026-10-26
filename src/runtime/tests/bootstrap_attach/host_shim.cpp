@@ -88,6 +88,6 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
     Record(kHostAttachHeld, hold_ms);
     Sleep(hold_ms);
   }
-  Record(kHostAttachExit, GetModuleHandleW(L"nevr.dll") != nullptr ? 1 : 0);
+  Record(kHostAttachExit, GetModuleHandleW(L"nevr-runtime.dll") != nullptr ? 1 : 0);
   return TRUE;  // the game statically imports this DLL; a FALSE would abort start
 }

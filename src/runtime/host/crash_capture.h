@@ -4,7 +4,7 @@
 // (docs/adr/0008-bugsplat-host-and-nevr-runtime.md).
 //
 // The stable host's createReport must write a structurally valid minidump even
-// when nevr.dll is absent or failed to load. It therefore:
+// when nevr-runtime.dll is absent or failed to load. It therefore:
 //   - resolves MiniDumpWriteDump from the ALREADY-LOADED dbghelp.dll
 //     (GetModuleHandleW + GetProcAddress; never LoadLibrary: the game's
 //     HandleCrashDump has loaded dbghelp before this callback runs);
