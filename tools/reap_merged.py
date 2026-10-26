@@ -12,10 +12,12 @@ A worktree is reaped only when every proof holds:
   3. ignored:  `git status --short --ignored` lists only build output (IGNORED_OK below);
   4. idle:     no process has its cwd inside the worktree;
   5. ledger:   the ledger credits the worktree to a seat (an item not in the ledger is not ours);
-  6. no submodule gitdirs: a worktree with initialised submodules is finished by hand.
+  6. submodules:  tools/remove_worktree.py proves each initialised submodule holds nothing that is on no
+               remote and each plain copy under extern/ equals the main checkout's.
 Anything that fails a proof is listed with the reason and left alone.
 
-For a worktree that passes: print the ignored list, unlock, `git worktree remove` (never --force),
+For a worktree that passes: print the ignored list, unlock, remove it with tools/remove_worktree.py (no
+`git submodule deinit`, never --force; it leaves the shared submodule config as it was),
 delete the local branch, delete the origin branch when its PR is merged and origin still has the
 tip, and append a removal row to the ledger.
 
@@ -33,13 +35,13 @@ import re
 import subprocess
 import sys
 
-# Ignored paths that are build output or per-worktree setup, not work. Anything else ignored (a run
-# log, a scratch file) blocks removal: move it out first.
-IGNORED_OK = (
-    "build/", "dist/", "gen/", ".env", ".nevr-worktree-setup/", ".cache/", "compile_commands.json",
-    "extern/",
-)
-IGNORED_OK_PARTS = ("__pycache__/",)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import remove_worktree as rw  # noqa: E402
+
+# One definition of the removal proofs (idle, clean, ignored, submodules) and of the removal itself.
+cwd_holders = rw.cwd_holders
+ignored_entries = rw.ignored_entries
+is_build_output = rw.is_build_output
 
 
 def git(*args, cwd=None, check=True):
@@ -105,34 +107,6 @@ def ledger_owners(ledger_text, rel, branch):
             if re.fullmatch(r"[\w-]+", cells[1]) and cells[1] not in owners:
                 owners.append(cells[1])
     return owners
-
-
-def cwd_holders(path):
-    real = os.path.realpath(path)
-    holders = []
-    for pid in filter(str.isdigit, os.listdir("/proc")):
-        try:
-            cwd = os.readlink(f"/proc/{pid}/cwd")
-        except OSError:
-            continue
-        if cwd == real or cwd.startswith(real + "/"):
-            try:
-                comm = open(f"/proc/{pid}/comm").read().strip()
-            except OSError:
-                comm = "?"
-            holders.append(f"{pid} {comm}")
-    return holders
-
-
-def ignored_entries(path):
-    lines = git("status", "--short", "--ignored", cwd=path).stdout.splitlines()
-    plain = [ln for ln in lines if not ln.startswith("!! ")]
-    ign = [ln[3:] for ln in lines if ln.startswith("!! ")]
-    return plain, ign
-
-
-def is_build_output(entry):
-    return entry.startswith(IGNORED_OK) or any(p in entry for p in IGNORED_OK_PARTS)
 
 
 def gh_prs(gh, *args):
@@ -211,30 +185,18 @@ def assess(wt, root, base, gh, ledger_text):
     if not anc and pr is None:
         reasons.append(f"not merged: tip {tip[:12]} is not in {base} and {why or 'no branch'}")
 
-    # 2/3. clean, ignored
-    plain, ign = ignored_entries(path)
-    facts["ignored"] = ign
-    if plain:
-        reasons.append("uncommitted or untracked work: " + "; ".join(plain[:8]) + (" ..." if len(plain) > 8 else ""))
-    odd = [e for e in ign if not is_build_output(e)]
-    if odd:
-        reasons.append("ignored files that are not build output (move any run log out first): " + ", ".join(odd[:8]))
-
-    # 4. idle
-    holders = cwd_holders(path)
-    if holders:
-        reasons.append("process cwd inside: " + ", ".join(holders))
+    # 2/3/4/6. clean, ignored, idle, submodules: the proofs tools/remove_worktree.py makes before it removes
+    facts["ignored"] = ignored_entries(path)[1]
+    try:
+        rw.plan(path)
+    except rw.Refused as e:
+        reasons += e.reasons
 
     # 5. ledger
     owners = ledger_owners(ledger_text, rel, branch)
     facts["owners"] = owners
     if not owners:
         reasons.append("not in the ledger (an item not in it is not ours to remove)")
-
-    # 6. submodule gitdirs
-    gitdir = git("rev-parse", "--path-format=absolute", "--git-dir", cwd=path).stdout.strip()
-    if os.path.isdir(os.path.join(gitdir, "modules")):
-        reasons.append("initialised submodules (" + os.path.join(gitdir, "modules") + "): deinit by hand")
     return reasons, facts
 
 
@@ -263,12 +225,13 @@ def apply_one(wt, facts, root, ledger, log, protected=("main", "master")):
     if wt["locked"] is not None:
         git("worktree", "unlock", path, cwd=root)
         log.write(action="unlock", **{k: facts[k] for k in ("worktree", "branch", "tip")})
-    r = git("worktree", "remove", path, cwd=root, check=False)
-    if r.returncode != 0:
+    try:
+        rw.remove(path, log)
+    except (rw.Refused, rw.RemoveFailed) as e:
         if wt["locked"] is not None:
             git("worktree", "lock", "--reason", wt["locked"] or "relocked by reap-merged after a failed remove", path,
                 cwd=root, check=False)
-        raise RuntimeError(f"git worktree remove {rel}: {r.stderr.strip()}")
+        raise RuntimeError(f"remove {rel}: {e}")
     log.write(action="worktree-remove", worktree=rel, branch=branch, tip=tip)
     note = ["worktree removed"]
     if branch:
