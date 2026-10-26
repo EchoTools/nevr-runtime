@@ -552,6 +552,44 @@ call it (`PluginLogBind(ctx)` in init, then `PluginLog`, `PluginLogWarning`, `Pl
 
 **Where:** `src/runtime/ext/plugin_loader.cpp` (`HostPluginLog`), `src/runtime/ext/plugin_log.h`.
 
+### Rule 16: A client records the lobby requests it sends and the answers it gets
+
+A client's bridge writes one Info record for each lobby message that decides where the player ends up, so a
+tester's log answers "how many join attempts did this client make, and what did each get". All four lines carry
+the tag `[NEVR.WS]` and the connection index (Rule 9):
+
+```
+[NEVR.WS] lobby find requested conn=2 mode=<name or 0x..> entrants=3 accounts=OVR-ORG-1,OVR-ORG-2,OVR-ORG-3 current_lobby=<GUID or none> group=<GUID>
+[NEVR.WS] lobby join requested conn=3 lobby=<GUID> entrants=1 accounts=OVR-ORG-1
+[NEVR.WS] lobby session success conn=3 lobby=<GUID> group=<GUID>
+[NEVR.WS] lobby session failure conn=3 code=8 reason=lobby_full group=<GUID>
+```
+
+- **Ids, not names.** A lobby or group is its GUID in upper case and the Windows layout, the text the service
+  writes as the party data's `lobbyid`; an entrant is its XPID. `current_lobby=none` is a find from no lobby.
+- **The outcome is the code.** `code` is the number in the frame and `reason` is the game's own name for it
+  (echovr.exe 0x14017d380, `CR15NetClientLobby::LobbySessionFailureCB`: 0 to 13, `lobby_full` is 8); a number
+  outside 0 to 13 reads `unknown`. A failure frame carries no lobby id: pair it with the request before it on
+  the same `conn`.
+- **Remote text is not a field** (Rule 4). The settings JSON of a request and the message of a failure are
+  never read out.
+- **A frame the decode cannot read** is a Warning, `lobby <find request|join request|session success|session
+  failure> could not be read conn=<n> payload_bytes=<n>`. Nothing is read past the frame's end.
+- **A client only.** A dedicated server logs every message of every frame at Info (`LogFrameMessages`), so these
+  lines are not written there.
+- **Rate.** The bridge cannot bound how often the game sends a request: its party-follow loop runs from the
+  game's own update. Each kind (find, join, success, failure) writes at most 10 records per 10 s window and
+  counts the rest. The next lobby frame of any kind after the window ends writes
+  `[NEVR.WS] lobby frame records suppressed kind=<find|join|success|failure> count=<n> window_ms=10000`, with
+  the exact number of records the window did not write, so requests per second are `(10 + count) / 10` for a
+  full window.
+- **Not covered.** The create request, the legacy-family symbols (`compat/legacy_codec.h`) and the Quest
+  target (`src/quest`).
+
+**Where:** `src/runtime/compat/lobby_frame.h` (decode, text, limiter) and `LogClientLobbyMessage` in
+`src/runtime/compat/ws_bridge.cpp`; tests `WsBridgeLobbyFrameLog` in `src/runtime/tests/test_behavioral.cpp` and
+`src/runtime/tests/test_lobby_frame.cpp`.
+
 ---
 
 ## BEFORE / AFTER Reference
@@ -589,6 +627,7 @@ form.
 | Message forward          | DEBUG | Rate-limited     | Summary every N seconds or N messages        |
 | Per-frame diagnostic     | DEBUG | Off in prod      | Gated by verbosity flag                     |
 | Login injected           | INFO  | Once per conn    | Log XPID + conn + size                      |
+| Lobby find/join request, session success/failure (client) | INFO | 10 per kind per 10 s, then counted | Rule 16; the count is the suppressed line |
 | Registration request     | INFO  | Once             | Log message type + size                     |
 | Registration response    | INFO  | Once             | Log server_id + status                      |
 | Hook failure             | WARN  | Once per failure | Log VA + expected + actual                  |
