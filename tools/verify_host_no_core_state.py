@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The thin host carries no writable state of nEVR's core or ABI libraries (#853, ADR 0012 decision 4).
+"""The thin host carries no writable state of the runtime's core or ABI libraries (#853, ADR 0012 decision 4).
 
 BugSplat64.dll and nevr-runtime.dll are separate images. A global from libnevr_core.a or libnevr_abi.a linked into
 both would be two variables with one name: `g_isServer` set by the runtime's command-line parse and read as false by
@@ -67,7 +67,7 @@ def check(host_listing, library_listings):
     shared = shared_state(host, libraries)
     if shared:
         lines = [f"  {lib}: {', '.join(names)}" for lib, names in sorted(shared.items())]
-        raise SensorError("the host defines writable data that nEVR's core or ABI library also defines "
+        raise SensorError("the host defines writable data that the runtime's core or ABI library also defines "
                           "(two variables with one name across two images):\n" + "\n".join(lines))
     return len(host), {label: len(names) for label, names in libraries.items()}
 
