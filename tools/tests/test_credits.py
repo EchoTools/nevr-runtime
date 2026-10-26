@@ -316,7 +316,8 @@ class SharedFile(unittest.TestCase):
         self.assertEqual(problems(WEBSITE_SOURCE), [])
         for near in ("echoApkPatch credit string", "echoApkPatch credit strings, sprockee", "tested in #nevr-runtime-testing",
                      "tested in #other-channel (Discord)", "tested in #nevr-runtime-testing (Discord) and more",
-                     "echovrce.com", "echovrce.com website, named by the project owner", "the echovrce.com website"):
+                     "echovrce.com", "echovrce.com website, named by the project owner", "the echovrce.com website",
+                     "echovrce.com website and more", "echovrce.com website "):
             self.assertTrue(problems(near), near)
 
     def test_no_pronoun_for_a_person_anywhere_in_the_text(self):
