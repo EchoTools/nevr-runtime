@@ -136,6 +136,9 @@ your PR does:
   ```
 - **Evidence on the exact tip**, as "Review, verification and merge" says: each command run on the tip SHA and its
   result, what was not run, and the tracking issue.
+- **Platform parity.** PCVR and Quest stay at parity. A PR that adds or changes player-facing behavior says in its
+  body what the other platform's status is: done in this PR, already present (`file:line`), not applicable (the
+  reason), or a linked twin issue filed in the same turn.
 
 **Write an issue as a falsifiable claim** (see #519 and #520), with these sections:
 
