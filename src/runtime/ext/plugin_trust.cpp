@@ -166,7 +166,8 @@ const char kModeArray[] = "\0NEVR-PLUGIN-TRUST release";
 // The run's mode (#924). Unsigned plugins load until the command line says otherwise: release-signer does not sign
 // plugins yet, so a player's plugins are unsigned. Written by ApplyCommandLine before the first plugin pass and read
 // by every pass and by the late-load filter (any thread), so it is atomic.
-std::atomic<Mode> g_runMode{Mode::UnsignedAllowed};
+constexpr Mode kDefaultMode = Mode::UnsignedAllowed;
+std::atomic<Mode> g_runMode{kDefaultMode};
 std::atomic<ModeSource> g_runModeSource{ModeSource::Default};
 
 nevr_plugin_signature::Policy MakeProductionPolicy() {
@@ -182,7 +183,7 @@ nevr_plugin_signature::Policy MakeProductionPolicy() {
 
 #ifdef NEVR_TEST_HOOKS
 bool g_overridden = false;
-Mode g_overrideMode = Mode::UnsignedAllowed;
+Mode g_overrideMode = kDefaultMode;
 const nevr_plugin_signature::Policy* g_overridePolicy = nullptr;
 #endif
 
@@ -213,7 +214,7 @@ void ApplyCommandLine(int argc, const wchar_t* const* argv) {
   for (int i = 0; argv != nullptr && i < argc; ++i) {
     if (nevr_cli::IsFlag(argv[i], L"-require-signed-plugins")) required = true;
   }
-  g_runMode.store(required ? Mode::SignedOnly : Mode::UnsignedAllowed);
+  g_runMode.store(required ? Mode::SignedOnly : kDefaultMode);
   g_runModeSource.store(required ? ModeSource::CommandLine : ModeSource::Default);
 }
 
@@ -258,9 +259,9 @@ void TestHook_SetTrust(Mode mode, const nevr_plugin_signature::Policy* policy) {
 
 void TestHook_ResetTrust() {
   g_overridden = false;
-  g_overrideMode = Mode::UnsignedAllowed;
+  g_overrideMode = kDefaultMode;
   g_overridePolicy = nullptr;
-  g_runMode.store(Mode::UnsignedAllowed);
+  g_runMode.store(kDefaultMode);
   g_runModeSource.store(ModeSource::Default);
 }
 #endif
