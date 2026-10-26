@@ -21,6 +21,7 @@
 #include "hook_log.h"
 #include "hook_report.h"
 #include "obb_skip_hook.h"
+#include "quest/data/plan.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -198,6 +199,9 @@ void CaptureLine(sentinel::LogLevel, const char* line) { g_lines.emplace_back(li
 constexpr const char* kMediaDir = "/sdcard/Android/media/com.readyatdawn.r15/files";
 constexpr const char* kMediaData = "/sdcard/Android/media/com.readyatdawn.r15/files/_data";
 constexpr const char* kLegacyData = "/storage/emulated/0/readyatdawn/_data";
+// The file the data step takes as "this version of the data is there" (quest/data/plan.h): a root holding it is complete.
+const std::string kMediaManifest = std::string(kMediaDir) + "/" + nevr_quest::data::kManifestPath;
+const std::string kLegacyManifest = std::string("/storage/emulated/0/readyatdawn/") + nevr_quest::data::kManifestPath;
 
 bool SomeLineContains(const char* needle) {
   for (const std::string& l : g_lines) {
@@ -310,7 +314,7 @@ void WithNoRootTheGameKeepsItsFallbackAndOneErrorLineNamesBothPaths() {
 
 void NoObbFileTheEngineAsksForTheDataRootAndIsToldTheMediaRootThatHoldsTheData() {
   Reset();
-  g_existing = {kMediaData, kLegacyData};
+  g_existing = {kMediaData, kMediaManifest, kLegacyData};
   obb::ResolveRoot(&FakeExists);
   obb::ArmForTest();
   const char* root = DataRootEntry()();  // the game's call, and no mountObb before it
@@ -356,14 +360,14 @@ void NothingIsRedirectedBeforeTheResolverHasRun() {
 // engine's, so DataRootRedirect() says nothing until the install took.
 void TheRedirectIsNotTheEnginesRootUntilTheHookIsInstalled() {
   Reset();
-  g_existing = {kMediaData};
+  g_existing = {kMediaData, kMediaManifest};
   obb::ResolveRoot(&FakeExists);  // resolved; Install() would mark the hook live only when the slot took
   QCHECK(obb::DataRootRedirect() == nullptr);
 }
 
 void ADisarmedDataRootHookPassesTheQuestionThrough() {
   Reset();
-  g_existing = {kMediaData};
+  g_existing = {kMediaData, kMediaManifest};
   obb::ResolveRoot(&FakeExists);
   obb::ArmForTest();
   obb::DataRootThunk::Disarm();
@@ -384,11 +388,141 @@ void ADataRootThunkWithoutAnOriginalIsAFault() {
 // With an OBB file the skipped mount records the media root and the engine's later question gets the same answer.
 void ASkippedMountAndTheDataRootQuestionAgree() {
   Reset();
-  g_existing = {kMediaData};
+  g_existing = {kMediaData, kMediaManifest};
   obb::ResolveRoot(&FakeExists);
   obb::ArmForTest();
   GameInit(10);
   QCHECK(GetDataRootDir() == kMediaDir && std::strcmp(DataRootEntry()(), kMediaDir) == 0);
+}
+
+// ---- complete data, not just a `_data` directory (#932) ----
+
+void AStaleMediaDataDirectoryDoesNotTakeTheEngineFromCompleteLegacyData() {
+  Reset();
+  g_lines.clear();
+  sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
+  g_existing = {kMediaData, kLegacyData, kLegacyManifest};  // the media copy has no manifest: partial or another build
+  obb::ResolveRoot(&FakeExists);
+  sentinel::SetLogSink(previous);
+  obb::ArmForTest();
+  QCHECK(obb::DataRootRedirect() == nullptr);
+  QCHECK(std::strcmp(DataRootEntry()(), "/storage/emulated/0/readyatdawn") == 0);
+  QCHECK(g_realDataRootCalls == 1 && obb::CurrentCounts().dataRootServed == 0);
+  QCHECK(SomeLineContains("\"engine_redirect\":\"media_incomplete\""));  // and the log says why
+}
+
+void CompleteMediaDataIsRedirectedToWhetherOrNotLegacyIsComplete() {
+  for (int legacyComplete = 0; legacyComplete < 2; ++legacyComplete) {
+    Reset();
+    g_lines.clear();
+    sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
+    g_existing = {kMediaData, kMediaManifest};
+    if (legacyComplete != 0) g_existing.insert({kLegacyData, kLegacyManifest});
+    obb::ResolveRoot(&FakeExists);
+    sentinel::SetLogSink(previous);
+    obb::ArmForTest();
+    QCHECK(obb::DataRootRedirect() != nullptr && std::strcmp(obb::DataRootRedirect(), kMediaDir) == 0);
+    QCHECK(std::strcmp(DataRootEntry()(), kMediaDir) == 0);
+    QCHECK(SomeLineContains("\"engine_redirect\":\"media_complete\""));
+  }
+}
+
+void NeitherRootCompleteLeavesTheEngineWhereItWas() {
+  Reset();
+  g_existing = {kMediaData, kLegacyData};  // both partial
+  obb::ResolveRoot(&FakeExists);
+  obb::ArmForTest();
+  QCHECK(obb::DataRootRedirect() == nullptr);
+  QCHECK(std::strcmp(DataRootEntry()(), "/storage/emulated/0/readyatdawn") == 0);
+  // A skipped mount is served as before (#749): the first root with a `_data` directory.
+  QCHECK(std::strcmp(obb::CurrentRoot(), kMediaDir) == 0);
+}
+
+void TheManifestIsLookedUpWithTheFileCheckAndTheDirectoriesWithTheDirectoryCheck() {
+  Reset();
+  g_existing = {kMediaData};  // directories only
+  std::set<std::string> files = {kMediaManifest};
+  static std::set<std::string>* filesPtr;
+  filesPtr = &files;
+  obb::ResolveRoot(&FakeExists, [](const char* path) noexcept { return filesPtr->count(path) != 0; });
+  obb::ArmForTest();
+  QCHECK(obb::DataRootRedirect() != nullptr);
+  files.clear();
+  obb::ResolveRoot(&FakeExists, [](const char* path) noexcept { return filesPtr->count(path) != 0; });
+  QCHECK(obb::DataRootRedirect() == nullptr);
+}
+
+// ---- Install() itself (#932): the path that sets the hook live, driven with the slot installers faked ----
+
+int g_installPathCalls = 0;
+int g_installMountCalls = 0;
+int g_installDataRootCalls = 0;
+sentinel::GotStatus g_pathStatus = sentinel::GotStatus::kOk;
+sentinel::GotStatus g_mountStatus = sentinel::GotStatus::kOk;
+sentinel::GotStatus g_dataRootStatus = sentinel::GotStatus::kOk;
+sentinel::GotStatus FakeInstallPath() noexcept {
+  ++g_installPathCalls;
+  return g_pathStatus;
+}
+sentinel::GotStatus FakeInstallMount() noexcept {
+  ++g_installMountCalls;
+  return g_mountStatus;
+}
+sentinel::GotStatus FakeInstallDataRoot() noexcept {
+  ++g_installDataRootCalls;
+  return g_dataRootStatus;
+}
+obb::InstallEnv FakeEnv() {
+  g_installPathCalls = g_installMountCalls = g_installDataRootCalls = 0;
+  g_pathStatus = g_mountStatus = g_dataRootStatus = sentinel::GotStatus::kOk;
+  return {&FakeExists, &FakeExists, &FakeInstallPath, &FakeInstallMount, &FakeInstallDataRoot};
+}
+
+// Not ArmForTest: the answer must come from what InstallWith itself armed and marked.
+void InstallWithEveryHookTakingTurnsTheRedirectOnAndAnswersTheEngine() {
+  Reset();
+  g_lines.clear();
+  g_existing = {kMediaData, kMediaManifest};
+  sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
+  QCHECK(obb::InstallWith(FakeEnv()));
+  sentinel::SetLogSink(previous);
+  QCHECK(g_installPathCalls == 1 && g_installMountCalls == 1 && g_installDataRootCalls == 1);
+  QCHECK(obb::DataRootRedirect() != nullptr && std::strcmp(obb::DataRootRedirect(), kMediaDir) == 0);
+  QCHECK(std::strcmp(DataRootEntry()(), kMediaDir) == 0);  // the handler InstallWith armed
+  QCHECK(g_realDataRootCalls == 0);
+  QCHECK(SomeLineContains("\"result\":\"installed\"") && SomeLineContains("\"data_root\":\"ok\""));
+}
+
+void InstallWithARefusedDataRootSlotIsNotLiveAndTheInstallFails() {
+  Reset();
+  g_lines.clear();
+  g_existing = {kMediaData, kMediaManifest};
+  obb::InstallEnv env = FakeEnv();
+  g_dataRootStatus = sentinel::GotStatus::kModuleNotLoaded;
+  sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
+  QCHECK(!obb::InstallWith(env));
+  sentinel::SetLogSink(previous);
+  QCHECK(obb::DataRootRedirect() == nullptr);  // the engine still reads the legacy root, so nothing may say otherwise
+  QCHECK(SomeLineContains("\"result\":\"data_root_failed\"") && SomeLineContains("\"data_root\":\"module_not_loaded\""));
+  QCHECK(SomeLineContains("\"level\":\"error\""));
+}
+
+void InstallWithARefusedPathSlotStillInstallsTheDataRootHookAndSkipsTheMount() {
+  Reset();
+  g_existing = {kMediaData, kMediaManifest};
+  obb::InstallEnv env = FakeEnv();
+  g_pathStatus = sentinel::GotStatus::kSlotChanged;
+  QCHECK(!obb::InstallWith(env));
+  QCHECK(g_installMountCalls == 0 && g_installDataRootCalls == 1);
+  QCHECK(obb::DataRootRedirect() != nullptr);
+}
+
+void InstallWithAnIncompleteMediaCopyInstallsTheHookButRedirectsNothing() {
+  Reset();
+  g_existing = {kMediaData};
+  QCHECK(obb::InstallWith(FakeEnv()));
+  QCHECK(obb::DataRootRedirect() == nullptr);
+  QCHECK(std::strcmp(DataRootEntry()(), "/storage/emulated/0/readyatdawn") == 0 && g_realDataRootCalls == 1);
 }
 
 void TheRealFilesystemCheckSaysDirectoryOnlyForADirectory() {
@@ -454,6 +588,14 @@ int main() {
   ADisarmedDataRootHookPassesTheQuestionThrough();
   ADataRootThunkWithoutAnOriginalIsAFault();
   ASkippedMountAndTheDataRootQuestionAgree();
+  AStaleMediaDataDirectoryDoesNotTakeTheEngineFromCompleteLegacyData();
+  CompleteMediaDataIsRedirectedToWhetherOrNotLegacyIsComplete();
+  NeitherRootCompleteLeavesTheEngineWhereItWas();
+  TheManifestIsLookedUpWithTheFileCheckAndTheDirectoriesWithTheDirectoryCheck();
+  InstallWithEveryHookTakingTurnsTheRedirectOnAndAnswersTheEngine();
+  InstallWithARefusedDataRootSlotIsNotLiveAndTheInstallFails();
+  InstallWithARefusedPathSlotStillInstallsTheDataRootHookAndSkipsTheMount();
+  InstallWithAnIncompleteMediaCopyInstallsTheHookButRedirectsNothing();
   TheSixCountersRegisterAndLeaveTheRestOfTheTable();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "obb_skip_hook_test: %d check(s) failed\n", quest_test::Failures());

@@ -28,12 +28,14 @@ OBB file exists:
 - Without one, `CSysFile::Init` returns at `OBB not found` (the `access()` call at `0xf853b8`, ADR 0007, Context, step 1),
   before `AStorageManager_mountObb`. The OBB skip hooks on `mountObb` and `getMountedObbPath` never run, `gOBBPath` stays
   empty, and `CSysInfo::GetDataRootDir` (`0xf87250`) answers its literal fallback, `/storage/emulated/0/readyatdawn` (ADR 0007,
-  Context). A third hook of the OBB-skip module is on `GetDataRootDir` itself: when `ResolveRoot` found the game's `_data` under
-  the `Android/media` directory it answers the media root, and otherwise it passes the call to the original
+  Context). A third hook of the OBB-skip module is on `GetDataRootDir` itself: when `ResolveRoot` found the `Android/media` directory
+  holding the game's manifest (`data::kManifestPath`, the file the data step takes as "this version of the data is there") it
+  answers the media root, and otherwise it passes the call to the original
   (`DataRootHandler` in `src/quest/sentinel/obb_skip_hook.cpp`).
 
-So on a headset with no OBB the engine reads the media root when that holds `_data` and the data-root hook is installed, and the
-legacy root in every other case. Reading the legacy root needs the storage permission (ADR 0009); reading the media root needs
+So on a headset with no OBB the engine reads the media root when that holds the complete data and the data-root hook is installed,
+and the legacy root in every other case; a `_data` under the media root without the manifest (a partial copy, or another build
+left by an older installer) does not take the engine away from complete data in the legacy root. Reading the legacy root needs the storage permission (ADR 0009); reading the media root needs
 none.
 
 **Premise B (with no OBB and no data-root hook the engine never reads `Android/media`): established by code reading, plus one
@@ -62,7 +64,7 @@ The chain, each step following from the one before it:
 3. **The root the engine reads with no OBB is the media root when it holds `_data` and the data-root hook took, else the legacy
    root.** The data step looks at, and a development build fetches into, the one root the engine reads this launch
    (`EngineRoot()` in `src/quest/sentinel/data_wiring.cpp`: the root the OBB skip served when a mount was skipped;
-   `obb_skip::DataRootRedirect()` otherwise, which is non-null only when `ResolveRoot` found `_data` under the media root and
+   `obb_skip::DataRootRedirect()` otherwise, which is non-null only when `ResolveRoot` found the manifest under the media root and
    the data-root slot holds our thunk; the legacy root in every other case). `data_step_start` logs `engine_root` and
    `engine_root_source` (`obb_skip`, `data_root_hook` or `engine_default`). A media directory that exists without `_data`
    directly under it is not redirected to. Data placed anywhere else is never read, so it is never a success.

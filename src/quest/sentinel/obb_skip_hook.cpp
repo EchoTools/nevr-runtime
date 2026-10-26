@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <sys/stat.h>
 
@@ -9,6 +10,7 @@
 #include "hook_install.h"
 #include "hook_log.h"
 #include "hook_report.h"
+#include "quest/data/plan.h"
 
 namespace nevr_quest::obb_skip {
 
@@ -30,7 +32,7 @@ std::atomic<bool> g_skipped{false};
 // The root served for the skipped mount (#749): chosen by ResolveRoot before the game runs, so the game's call path
 // never touches the filesystem or the log. A string literal in data_root.h, never freed.
 std::atomic<const char*> g_root{sentinel::pinned::kObbFallbackDataRoot};
-// The root the data-root hook answers with (#866): the media root when ResolveRoot found `_data` there, else null (the
+// The root the data-root hook answers with (#866): the media root when ResolveRoot found the manifest there, else null (the
 // original answers). Chosen by ResolveRoot before the hook is installed; a string literal, never freed.
 std::atomic<const char*> g_dataRootRedirect{nullptr};
 // Set once the data-root slot holds our thunk: only then is the engine reading the redirected root.
@@ -112,12 +114,28 @@ const char* DataRootRedirect() noexcept {
                                                             : nullptr;
 }
 
-void ResolveRoot(data_root::ExistsFn exists) noexcept {
-  const data_root::Resolution r = data_root::Resolve(exists);
+namespace {
+
+// True when `root` holds the manifest the data step takes as "this version of the data is there" (quest/data/plan.h).
+bool HoldsManifest(const char* root, data_root::ExistsFn fileExists) noexcept {
+  char path[512];
+  const int n = std::snprintf(path, sizeof(path), "%s/%s", root, data::kManifestPath);
+  return n > 0 && static_cast<std::size_t>(n) < sizeof(path) && fileExists(path);
+}
+
+}  // namespace
+
+void ResolveRoot(data_root::ExistsFn exists) noexcept { ResolveRoot(exists, exists); }
+
+void ResolveRoot(data_root::ExistsFn dirExists, data_root::ExistsFn fileExists) noexcept {
+  const data_root::Resolution r = data_root::Resolve(dirExists);
   g_root.store(r.root, std::memory_order_release);
-  // Only a media root proven to hold `_data` is told to the engine; an unmarked one is served to a skipped mount only.
-  g_dataRootRedirect.store(r.found && std::strcmp(r.source, "android_media") == 0 ? r.root : nullptr,
-                           std::memory_order_release);
+  // The engine is told the media root only when it holds the manifest: a `_data` directory alone may be a partial or an
+  // older copy, and the legacy root may hold the complete one (#932). An unmarked media root is served to a skipped
+  // mount only.
+  const bool mediaWithData = r.found && std::strcmp(r.source, "android_media") == 0;
+  const bool mediaComplete = mediaWithData && HoldsManifest(r.root, fileExists);
+  g_dataRootRedirect.store(mediaComplete ? r.root : nullptr, std::memory_order_release);
   if (r.found && std::strcmp(r.source, "android_media_unmarked") == 0) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "data_root",
                         {{"result", "found"},
@@ -126,7 +144,10 @@ void ResolveRoot(data_root::ExistsFn exists) noexcept {
                          {"detail", "the media directory exists but holds no _data directly under it"}});
   } else if (r.found) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "data_root",
-                        {{"result", "found"}, {"source", r.source}, {"root", r.root}});
+                        {{"result", "found"},
+                         {"source", r.source},
+                         {"root", r.root},
+                         {"engine_redirect", mediaComplete ? "media_complete" : mediaWithData ? "media_incomplete" : "no"}});
   } else {
     sentinel::LogFields(sentinel::LogLevel::kError, "data_root",
                         {{"result", "not_found"},
@@ -136,20 +157,36 @@ void ResolveRoot(data_root::ExistsFn exists) noexcept {
   }
 }
 
+namespace {
+
+sentinel::GotStatus InstallPathSlot() noexcept {
+  return sentinel::InstallThunk<PathThunk>(g_pathHook, sentinel::pinned::LibR15GetMountedObbPath());
+}
+sentinel::GotStatus InstallMountSlot() noexcept {
+  return sentinel::InstallThunk<MountThunk>(g_mountHook, sentinel::pinned::LibR15MountObb());
+}
+sentinel::GotStatus InstallDataRootSlot() noexcept {
+  return sentinel::InstallThunk<DataRootThunk>(g_dataRootHook, sentinel::pinned::LibR15GetDataRootDir());
+}
+
+}  // namespace
+
 bool Install() noexcept {
-  ResolveRoot(&DirectoryExists);
+  return InstallWith({&DirectoryExists, &PathExists, &InstallPathSlot, &InstallMountSlot, &InstallDataRootSlot});
+}
+
+bool InstallWith(const InstallEnv& env) noexcept {
+  ResolveRoot(env.dirExists, env.fileExists);
   PathThunk::Arm(kPathHook);
-  const sentinel::GotStatus path =
-      sentinel::InstallThunk<PathThunk>(g_pathHook, sentinel::pinned::LibR15GetMountedObbPath());
+  const sentinel::GotStatus path = env.installPath();
   sentinel::GotStatus mount = sentinel::GotStatus::kNotInstalled;
   if (path == sentinel::GotStatus::kOk) {
     MountThunk::Arm(kMountHook);
-    mount = sentinel::InstallThunk<MountThunk>(g_mountHook, sentinel::pinned::LibR15MountObb());
+    mount = env.installMount();
   }
   // The data-root hook does not depend on the other two: with no OBB file they never run and this one is what matters.
   DataRootThunk::Arm(kDataRootHook);
-  const sentinel::GotStatus dataRoot =
-      sentinel::InstallThunk<DataRootThunk>(g_dataRootHook, sentinel::pinned::LibR15GetDataRootDir());
+  const sentinel::GotStatus dataRoot = env.installDataRoot();
   g_dataRootHookLive.store(dataRoot == sentinel::GotStatus::kOk, std::memory_order_release);
   const bool ok = path == sentinel::GotStatus::kOk && mount == sentinel::GotStatus::kOk &&
                   dataRoot == sentinel::GotStatus::kOk;

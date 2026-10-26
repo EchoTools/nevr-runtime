@@ -17,20 +17,48 @@ ROOT = Path(__file__).resolve().parents[2]
 class InstallChoosesTheRootFirst(unittest.TestCase):
     def test_install_resolves_the_root_with_the_real_filesystem_before_the_first_thunk(self):
         source = (ROOT / "src/quest/sentinel/obb_skip_hook.cpp").read_text()
+        body = extract_braced_function(source, "bool InstallWith(const InstallEnv& env) noexcept {")
+        self.assertIn("ResolveRoot(env.dirExists, env.fileExists)", body)
+        self.assertLess(body.index("ResolveRoot(env.dirExists, env.fileExists)"), body.index("PathThunk::Arm"))
+
+    def test_install_is_install_with_over_the_real_filesystem_and_the_three_real_slots(self):
+        """The host test drives InstallWith with fakes (#932); this pins that production Install() is that call, with the
+        real directory check, the real file check and the real installers of the three libr15 slots."""
+        source = (ROOT / "src/quest/sentinel/obb_skip_hook.cpp").read_text()
         body = extract_braced_function(source, "bool Install() noexcept {")
-        self.assertIn("ResolveRoot(&DirectoryExists)", body)
-        self.assertLess(body.index("ResolveRoot(&DirectoryExists)"), body.index("PathThunk::Arm"))
+        self.assertRegex(
+            body,
+            r"^\{\s*return InstallWith\(\{&DirectoryExists, &PathExists, &InstallPathSlot, &InstallMountSlot, "
+            r"&InstallDataRootSlot\}\);\s*\}$",
+        )
+        slots = {
+            "InstallPathSlot": "InstallThunk<PathThunk>(g_pathHook, sentinel::pinned::LibR15GetMountedObbPath())",
+            "InstallMountSlot": "InstallThunk<MountThunk>(g_mountHook, sentinel::pinned::LibR15MountObb())",
+            "InstallDataRootSlot": "InstallThunk<DataRootThunk>(g_dataRootHook, sentinel::pinned::LibR15GetDataRootDir())",
+        }
+        for name, call in slots.items():
+            self.assertIn(call, extract_braced_function(source, f"sentinel::GotStatus {name}() noexcept {{"))
 
     def test_install_hooks_the_engines_data_root_question_after_the_root_is_chosen(self):
         """#866: with no OBB file neither OBB hook ever runs, so the data-root slot is what redirects the engine."""
         source = (ROOT / "src/quest/sentinel/obb_skip_hook.cpp").read_text()
-        body = extract_braced_function(source, "bool Install() noexcept {")
-        self.assertIn("InstallThunk<DataRootThunk>(g_dataRootHook, sentinel::pinned::LibR15GetDataRootDir())", body)
-        self.assertLess(body.index("ResolveRoot(&DirectoryExists)"), body.index("DataRootThunk::Arm"))
-        self.assertLess(body.index("DataRootThunk::Arm"), body.index("InstallThunk<DataRootThunk>"))
+        body = extract_braced_function(source, "bool InstallWith(const InstallEnv& env) noexcept {")
+        self.assertIn("env.installDataRoot()", body)
+        self.assertLess(body.index("ResolveRoot(env.dirExists, env.fileExists)"), body.index("DataRootThunk::Arm"))
+        self.assertLess(body.index("DataRootThunk::Arm"), body.index("env.installDataRoot()"))
         self.assertIn("g_dataRootHookLive.store(dataRoot == sentinel::GotStatus::kOk", body)
         # The install result includes it: a refused slot is an error line and a false return, not a quiet pass.
         self.assertRegex(body, r"const bool ok = [^;]*dataRoot == sentinel::GotStatus::kOk")
+
+    def test_the_redirect_needs_the_manifest_the_data_step_checks_not_just_a_data_directory(self):
+        source = (ROOT / "src/quest/sentinel/obb_skip_hook.cpp").read_text()
+        body = extract_braced_function(
+            source, "void ResolveRoot(data_root::ExistsFn dirExists, data_root::ExistsFn fileExists) noexcept {"
+        )
+        self.assertIn("HoldsManifest(r.root, fileExists)", body)
+        self.assertRegex(body, r"g_dataRootRedirect\.store\(mediaComplete \? r\.root : nullptr")
+        helper = extract_braced_function(source, "bool HoldsManifest(")
+        self.assertIn("data::kManifestPath", helper)
 
     def test_the_data_step_asks_the_hook_for_the_engines_root_when_no_mount_was_skipped(self):
         source = (ROOT / "src/quest/sentinel/data_wiring.cpp").read_text()
@@ -78,11 +106,11 @@ class InstallCallsResolveRootUnconditionally(unittest.TestCase):
 
     def install_body(self):
         source = (ROOT / "src/quest/sentinel/obb_skip_hook.cpp").read_text()
-        return extract_braced_function(source, "bool Install() noexcept {")
+        return extract_braced_function(source, "bool InstallWith(const InstallEnv& env) noexcept {")
 
     def test_resolve_root_is_the_first_statement_of_install(self):
         body = self.install_body()
-        self.assertRegex(body, r"^\{\s*ResolveRoot\(&DirectoryExists\);")
+        self.assertRegex(body, r"^\{\s*ResolveRoot\(env\.dirExists, env\.fileExists\);")
 
     def test_install_has_no_preprocessor_conditional(self):
         self.assertIsNone(re.search(r"^\s*#\s*(if|ifdef|ifndef|elif|else)\b", self.install_body(), re.M))

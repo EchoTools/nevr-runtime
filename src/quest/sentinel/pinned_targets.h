@@ -116,11 +116,12 @@ struct LibR15GetMountedObbPathTag {};
 using LibR15GetMountedObbPathThunk = CallbackThunk<LibR15GetMountedObbPathTag, GetMountedObbPathSig>;
 // NRadEngine::CSysInfo::GetDataRootDir() (libr15 0xf87250, 32 bytes, exported): returns gOBBPath when its first byte is
 // non-zero, else the literal above; no argument, the result is a borrowed char const* in x0 that the callers only read.
-// libr15 calls it through its own PLT (stub 0xf34e20, JUMP_SLOT 0x36f1df8) from exactly two sites, the only
-// `bl`/`b` to that stub in the pinned .text: CFileTypes::InitializeDirectories (bl at 0x11eb144, when the root it was
+// By code reading of the pinned image (a disassembly scan; NOT observed on a headset): libr15 calls it through its own
+// PLT (stub 0xf34e20, JUMP_SLOT 0x36f1df8) from exactly two sites, the only `bl`/`b` to that stub in the pinned .text: CFileTypes::InitializeDirectories (bl at 0x11eb144, when the root it was
 // given is empty) and CEngine::Initialize (bl at 0x2abfe7c, when the engine config carries no data root, the result
 // stored at config +0x178). Both take the pointer and copy the string; neither writes through it. No relocation other
-// than that JUMP_SLOT names the function (no R_AARCH64_RELATIVE or ABS64 to 0xf87250), so no call bypasses the slot.
+// than that JUMP_SLOT names the function (no R_AARCH64_RELATIVE or ABS64 to 0xf87250), so, by that reading, no call
+// bypasses the slot. The headset run (#866 Work 4) is what observes it.
 inline constexpr const char* kGetDataRootDirSymbol = "_ZN10NRadEngine8CSysInfo14GetDataRootDirEv";
 using GetDataRootDirSig = const char*();
 struct LibR15GetDataRootDirTag {};

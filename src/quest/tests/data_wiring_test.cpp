@@ -242,6 +242,8 @@ std::string Media(const char* rel = "") {
   return std::string(nevr_quest::data_root::kMediaRoot) + (*rel != '\0' ? std::string("/") + rel : std::string());
 }
 void DataIn(const std::string& root) { g_present.insert({root, root + "/_data", root + "/" + kManifestRel}); }
+// A `_data` directory with no manifest: a partial copy, or the data of another build.
+void StaleDataIn(const std::string& root) { g_present.insert({root, root + "/_data"}); }
 
 void DataAlreadyThereIsNotFetchedAndTheProcessContinues() {
   Rig rig;
@@ -495,6 +497,50 @@ void DataOnlyInTheLegacyRootStillNeedsTheGrantWithNoObbFile() {
   QCHECK(Has(LineOf("data_step_start"), "\"engine_root_source\":\"engine_default\""));
 }
 
+// A `_data` under the media root that is not this version's (no manifest) is not what the engine is sent to read: with
+// complete data in the legacy root it keeps reading that (#932).
+void StaleMediaDataAndCompleteLegacyDataKeepsTheEngineOnTheLegacyRoot() {
+  for (const bool granted : {true, false}) {
+    Rig rig;  // a development build: a wrong root would download 937 MB
+    StaleDataIn(Media());
+    DataIn(Legacy());
+    obb::ResolveRoot(&FakeExists);
+    obb::ArmForTest();
+    rig.BootRequest(granted ? &GrantedCheck : &DeniedCheck);
+    const std::string start = LineOf("data_step_start");
+    QCHECK(Has(start, "\"engine_root\":\"" + Legacy() + "\"") && Has(start, "\"engine_root_source\":\"engine_default\""));
+    if (granted) {
+      QCHECK(rig.net.calls == 0 && g_ends == 0 && g_shown.empty());
+      QCHECK(Has(LineOf("data_check"), "\"action\":\"use\"") && Has(LineOf("data_check"), "\"root\":\"" + Legacy() + "\""));
+    } else {
+      QCHECK(g_ends == 1 && g_exit_reason == "no_storage_grant");  // the engine reads shared storage, so the grant is needed
+    }
+  }
+}
+
+void CompleteMediaDataIsTheEnginesRootEvenWhenLegacyDataIsCompleteToo() {
+  Rig rig;
+  DataIn(Media());
+  DataIn(Legacy());
+  obb::ResolveRoot(&FakeExists);
+  obb::ArmForTest();
+  rig.BootRequest(&DeniedCheck);
+  QCHECK(g_ends == 0 && g_shown.empty() && rig.net.calls == 0);
+  const std::string start = LineOf("data_step_start");
+  QCHECK(Has(start, "\"engine_root\":\"" + Media() + "\"") && Has(start, "\"engine_root_source\":\"data_root_hook\""));
+}
+
+void NeitherRootCompleteLeavesTheEngineOnTheLegacyRoot() {
+  Rig rig;
+  StaleDataIn(Media());
+  StaleDataIn(Legacy());
+  obb::ResolveRoot(&FakeExists);
+  obb::ArmForTest();
+  rig.BootRequest(&DeniedCheck);
+  QCHECK(Has(LineOf("data_step_start"), "\"engine_root_source\":\"engine_default\""));
+  QCHECK(g_ends == 1 && g_exit_reason == "no_storage_grant");
+}
+
 // The hook is what makes the engine read the media root. When it did not install (a refused GOT slot), the engine still
 // reads the legacy root, so the data under the media root does not count and the grant is asked for.
 void WithoutTheDataRootHookTheMediaRootIsNotTheEngineRoot() {
@@ -710,6 +756,9 @@ int main() {
   AReleaseBuildFindsTheDataInTheMediaRootWithNoObbFileAndSaysNothing();
   DataOnlyInTheLegacyRootStillNeedsTheGrantWithNoObbFile();
   WithoutTheDataRootHookTheMediaRootIsNotTheEngineRoot();
+  StaleMediaDataAndCompleteLegacyDataKeepsTheEngineOnTheLegacyRoot();
+  CompleteMediaDataIsTheEnginesRootEvenWhenLegacyDataIsCompleteToo();
+  NeitherRootCompleteLeavesTheEngineOnTheLegacyRoot();
   AGrantedUnwritableRootEndsWithTheStepsOwnReason();
   TheStepRunsOnceWhenTheMicrophoneIsDeniedAndAnotherCheckFollows();
   TheStepRunsOnceWhenTheMicrophoneIsGrantedAndARequestFollows();
