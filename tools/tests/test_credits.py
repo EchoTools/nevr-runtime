@@ -23,6 +23,15 @@ CREDITS = ROOT / "config" / "credits.json"
 TOOL = ROOT / "tools" / "render_credits.py"
 
 SECTION_HEADING = "## Built on, and thanks"
+# The six names the community installer's patcher thanks, spelled exactly as it spells them (#974).
+THANKS = ["marshmallow_mia", "AvaGoosa", "h4ck3r210", "Elominator", "sprockee", "he_is_the_cat"]
+# Everyone named as having tested in #nevr-runtime-testing (#974): the set, not an order.
+TESTERS = {"Crafter", "Nebula", "CyanoTex", "spike4887", "Trodd-", "DinkyBoi", "he_is_the_cat", "TekEmperor",
+           "marshmallow-mia", "arii", "berg", "zebra"}
+PATCHER_SOURCE = "echoApkPatch credit strings"
+TESTING_SOURCE = "tested in #nevr-runtime-testing (Discord)"
+WEBSITE_SOURCE = "echovrce.com website"
+TESTED_PHRASE = "tested nevr-runtime in #nevr-runtime-testing"
 # A link in the section is a person's or organisation's GitHub profile, or a repository.
 LINK_SHAPE = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?$")
 
@@ -122,10 +131,17 @@ class SharedFile(unittest.TestCase):
         self.assertEqual(len(found), 1, f"{name} appears once in the file")
         return found[0]
 
-    def test_in_game_code_contributions_are_these_names_in_file_order(self):
+    def test_in_game_groups_are_these_names_in_file_order(self):
         self.assertEqual(
             self.tool.ingame_groups(self.data),
-            [{"id": "code-contributions", "ingame": "CODE CONTRIBUTIONS", "names": ["Xenomega", "kfc", "Dualgame", "marshmallow-mia"]}],
+            [
+                {"id": "code-contributions", "ingame": "CODE CONTRIBUTIONS",
+                 "names": ["Xenomega", "kfc", "Dualgame", "marshmallow-mia"]},
+                {"id": "thanks", "ingame": "THANKS", "names": THANKS},
+                {"id": "testers", "ingame": "TESTERS",
+                 "names": ["marshmallow-mia", "Crafter", "Trodd-", "DinkyBoi", "berg", "zebra", "Nebula",
+                           "CyanoTex", "spike4887", "TekEmperor", "arii", "he_is_the_cat"]},
+            ],
         )
 
     def test_names_the_project_owner_gave_say_so_in_their_sources(self):
@@ -147,6 +163,162 @@ class SharedFile(unittest.TestCase):
         self.assertEqual(self.entry("Ducky")["headings"], [])
         self.assertEqual(self.entry("kfc")["headings"], ["code-contributions"])
         self.assertNotIn("Crafter-1", [e["name"] for e in self.data["entries"]])
+
+    def readme_lines(self):
+        """(section title, line) for every entry line the README block renders."""
+        title, found = None, []
+        for line in self.tool.render_readme(self.data).splitlines():
+            if line.startswith("### "):
+                title = line[4:]
+            elif line.startswith("- **"):
+                found.append((title, line))
+        return found
+
+    def test_the_thanks_group_is_the_patchers_six_strings_spelled_as_it_spells_them(self):
+        group = next(g for g in self.tool.ingame_groups(self.data) if g["id"] == "thanks")
+        self.assertEqual(group["names"], THANKS)
+        for name in THANKS:
+            entry = self.entry(name)
+            self.assertIn(PATCHER_SOURCE, entry["sources"], name)
+            self.assertIn("thanks", entry["headings"], name)
+            self.assertNotIn("code-contributions", entry["headings"], name)
+
+    def test_elominator_is_its_own_string_and_marshmallow_mia_keeps_her_code_entry(self):
+        self.assertEqual(self.entry("Elominator")["headings"], ["thanks"])
+        mia = self.entry("marshmallow-mia")
+        self.assertIn("code-contributions", mia["headings"])
+        self.assertIn(PATCHER_SOURCE, mia["sources"], "the patcher is her own work")
+        # her patcher string is a separate in-game name; the README shows her once
+        self.assertIsNone(self.entry("marshmallow_mia")["section"])
+        self.assertEqual(sum(1 for _title, line in self.readme_lines() if "marshmallow" in line.lower()), 1)
+
+    def test_the_testers_are_exactly_these_people_each_sourced_and_said_so_in_the_readme(self):
+        group = next(g for g in self.tool.ingame_groups(self.data) if g["id"] == "testers")
+        self.assertEqual(set(group["names"]), TESTERS)
+        self.assertEqual(len(group["names"]), len(TESTERS), "each tester once")
+        for name in TESTERS:
+            entry = self.entry(name)
+            self.assertIn(TESTING_SOURCE, entry["sources"], name)
+            self.assertIn(TESTED_PHRASE, entry["what"].lower(), name)
+        for entry in self.data["entries"]:
+            if "testers" not in entry["headings"]:
+                self.assertNotIn(TESTED_PHRASE, entry["what"].lower(), f"{entry['name']} is not named as a tester")
+
+    def test_someone_under_another_heading_is_also_a_tester_if_they_tested(self):
+        for name in ("marshmallow-mia", "Crafter", "Trodd-", "DinkyBoi", "berg", "zebra", "Nebula", "he_is_the_cat"):
+            self.assertIn("testers", self.entry(name)["headings"], name)
+        self.assertEqual(self.entry("he_is_the_cat")["headings"], ["thanks", "testers"])
+        self.assertEqual(self.entry("marshmallow-mia")["headings"], ["code-contributions", "testers"])
+
+    def test_trodd_is_one_entry_shown_as_trodd_dash_under_people_and_testers(self):
+        names = [e["name"] for e in self.data["entries"]]
+        self.assertNotIn("Trodd", names)
+        self.assertEqual(names.count("Trodd-"), 1)
+        entry = self.entry("Trodd-")
+        self.assertEqual(entry["section"], "people")
+        self.assertIn("testers", entry["headings"])
+        self.assertIn("https://github.com/EchoTools/nevr-runtime/issues/877", entry["sources"])
+        self.assertIn(TESTING_SOURCE, entry["sources"])
+        trodd_lines = [(t, line) for t, line in self.readme_lines() if "trodd" in line.lower()]
+        self.assertEqual(len(trodd_lines), 1, trodd_lines)
+        self.assertEqual(trodd_lines[0][0], "People")
+        self.assertTrue(trodd_lines[0][1].startswith("- **Trodd-**: "))
+        block = self.tool.ingame_text(self.data)
+        self.assertEqual(block.count(b"Trodd-\n"), 1)
+        self.assertNotIn(b"Trodd\n", block)
+
+    def test_trodd_dash_built_the_website_and_it_is_said_neutrally(self):
+        entry = self.entry("Trodd-")
+        self.assertIn("Built the echovrce.com website.", entry["what"])
+        self.assertIn("XInput fix", entry["what"])
+        self.assertIn(TESTED_PHRASE, entry["what"].lower())
+        self.assertIn(WEBSITE_SOURCE, entry["sources"])
+        # the same one entry, one README line carrying all three facts, under both headings
+        self.assertEqual(entry["headings"], ["testers"])
+        lines = [line for _title, line in self.readme_lines() if line.startswith("- **Trodd-**")]
+        self.assertEqual(len(lines), 1)
+        for fact in ("XInput fix", "Built the echovrce.com website.", "Tested nevr-runtime in #nevr-runtime-testing."):
+            self.assertIn(fact, lines[0])
+        # no owner or lead naming for him: not in his sources, not in his line, not in the file's notes
+        owner = re.compile(r"named by the project owner")
+        self.assertFalse([src for src in entry["sources"] if owner.search(src)])
+        self.assertIsNone(re.search(r"owner|lead|maintainer|founder", lines[0], re.I), lines[0])
+        self.assertNotRegex(" ".join(self.data["notes"]), r"Trodd-?[^.]*(owner|lead)")
+
+    def test_sprockee_appears_once_in_every_rendered_list_and_never_first(self):
+        # The ruled placement: one name among the helpers' thanks, in that group's ordinary order; never first,
+        # never under a heading or a line of his own, never described as the owner or the lead.
+        lines = [line for line in self.tool.ingame_text(self.data).decode("cp1252").split("\n")]
+        self.assertEqual(lines.count("sprockee"), 1, "once in the in-game block")
+        self.assertEqual(sum("sprockee" in line for line in lines), 1)
+        groups = {g["id"]: g["names"] for g in self.tool.ingame_groups(self.data)}
+        self.assertEqual([i for i, names in groups.items() if "sprockee" in names], ["thanks"])
+        self.assertGreater(groups["thanks"].index("sprockee"), 0, "not first in THANKS")
+        for heading in self.data["headings"]:
+            self.assertNotIn("sprockee", (heading["id"] + heading["ingame"]).lower())
+
+        readme_lines = self.readme_lines()
+        mine = [(title, line) for title, line in readme_lines if "sprockee" in line]
+        self.assertEqual(len(mine), 1, "once among the README lines")
+        title, line = mine[0]
+        self.assertEqual(title, "Thanks")
+        in_group = [l for t, l in readme_lines if t == title]
+        self.assertGreater(in_group.index(line), 0, "not first in the README thanks group")
+        self.assertIsNone(re.search(r"owner|lead|maintainer|founder|created", line, re.I), line)
+
+        block = self.tool.render_readme(self.data)
+        self.assertEqual(block.count("sprockee"), 1, "the credits block names him once, nowhere else")
+        section = readme_section(README.read_text(encoding="utf-8"))
+        self.assertEqual(section.count("sprockee"), 1, "nor does the section's own text, intro or closing")
+
+    def test_the_rule_is_recorded_in_the_files_notes(self):
+        self.assertTrue(self.data["notes"])
+        joined = " ".join(self.data["notes"])
+        self.assertIn("sprockee", joined)
+        self.assertRegex(joined, r"once")
+        self.assertRegex(joined, r"never first")
+        # a note is not rendered: README and in-game text carry none of it
+        self.assertNotIn(self.data["notes"][0], self.tool.render_readme(self.data))
+
+    def test_the_closing_line_thanks_everyone_in_the_testing_channel_named_or_not(self):
+        self.assertIn("#nevr-runtime-testing", self.data["closing"])
+        self.assertIn("named or not", self.data["closing"])
+        self.assertIn(self.data["closing"], self.tool.render_readme(self.data))
+
+    def test_every_name_shown_in_game_is_drawn_by_the_games_font(self):
+        shown = [n for g in self.tool.ingame_groups(self.data) for n in g["names"]]
+        for name in shown:
+            self.assertEqual(self.tool._undrawn(name), "", name)
+            self.assertTrue(name.isascii(), name)
+
+    def test_notes_are_a_list_of_non_empty_texts_and_an_unknown_key_is_refused(self):
+        def problems(mutate):
+            data = copy.deepcopy(self.data)
+            mutate(data)
+            return self.tool.validate(data, ROOT)
+
+        self.assertEqual(problems(lambda d: None), [])
+        self.assertTrue(problems(lambda d: d.pop("notes")), "notes are required")
+        self.assertTrue(problems(lambda d: d.update(notes="one string")), "notes is a list")
+        self.assertTrue(problems(lambda d: d.update(notes=[""])), "a note says something")
+        self.assertTrue(problems(lambda d: d.update(notes=[3])), "a note is text")
+        self.assertTrue(problems(lambda d: d.update(extra=[])), "an unknown top-level key is refused")
+        self.assertTrue(problems(lambda d: d["entries"][0].update(extra=1)), "an unknown entry key is refused")
+
+    def test_the_three_exact_source_texts_are_exact(self):
+        def problems(source):
+            data = copy.deepcopy(self.data)
+            data["entries"][0]["sources"] = [source]
+            return self.tool.validate(data, ROOT)
+
+        self.assertEqual(problems(PATCHER_SOURCE), [])
+        self.assertEqual(problems(TESTING_SOURCE), [])
+        self.assertEqual(problems(WEBSITE_SOURCE), [])
+        for near in ("echoApkPatch credit string", "echoApkPatch credit strings, sprockee", "tested in #nevr-runtime-testing",
+                     "tested in #other-channel (Discord)", "tested in #nevr-runtime-testing (Discord) and more",
+                     "echovrce.com", "echovrce.com website, named by the project owner", "the echovrce.com website",
+                     "echovrce.com website and more", "echovrce.com website "):
+            self.assertTrue(problems(near), near)
 
     def test_no_pronoun_for_a_person_anywhere_in_the_text(self):
         pronoun = re.compile(r"\b(he|she|him|her|hers|his|they|them|their|theirs)\b", re.I)
@@ -271,14 +443,16 @@ class IngameText(unittest.TestCase):
             for name in names:
                 entries.append({"name": name, "section": None, "headings": [f"h{i}"], "link": "", "what": "",
                                 "sources": ["#938"]})
-        return {"schema": 1, "headings": headings, "sections": [], "entries": entries, "closing": ""}
+        return {"schema": 1, "headings": headings, "sections": [], "entries": entries, "notes": [], "closing": ""}
 
-    def test_the_real_file_renders_the_heading_a_blank_the_names_and_three_blanks(self):
-        names = [n for g in self.tool.ingame_groups(self.data) for n in g["names"]]
-        self.assertEqual(
-            self.tool.ingame_text(self.data),
-            ("CODE CONTRIBUTIONS\n\n" + "".join(n + "\n" for n in names) + "\n\n\n").encode("cp1252"),
+    def test_the_real_file_renders_each_heading_a_blank_the_names_and_three_blanks(self):
+        expected = "".join(
+            group["ingame"] + "\n\n" + "".join(n + "\n" for n in group["names"]) + "\n\n\n"
+            for group in self.tool.ingame_groups(self.data)
         )
+        self.assertEqual(self.tool.ingame_text(self.data), expected.encode("cp1252"))
+        self.assertTrue(expected.startswith("CODE CONTRIBUTIONS\n\nXenomega\n"))
+        self.assertEqual(expected.count("\n"), 37, "three groups of 4, 6 and 12 names: 9 + 11 + 17 lines")
 
     def test_groups_are_separated_by_three_blank_lines(self):
         data = self.data_with({"ONE": ["a", "b"], "TWO": ["c"]})
