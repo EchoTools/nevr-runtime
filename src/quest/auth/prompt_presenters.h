@@ -27,9 +27,12 @@ namespace nevr::quest_auth {
 // shows a prompt; Mode::kNotice), and once the bound on unanswered codes is reached (Mode::kPrompt):
 // kTimedOutText when a code was shown, kNoCodeShownText when none could be. The new sign-in is
 // stored in the credential cache and served by QuestTokenAuth::Token(); nothing hands it to a login
-// the game is already running; the login-failed screen the notice replaces has a RETRY button, and
-// RETRY starts a login that asks for the stored sign-in, so the player is told to select it. The
-// timed-out and no-code texts have no sign-in to retry with and still say to restart.
+// the game is already running. The login-failed screen the notice replaces has a button that reads
+// QUIT on the headset (#622), not RETRY. The login hook starts the login itself once the notice is
+// on screen (login_prompt_hook.cpp, StartLogin / RestartLoginAfterSignIn, #672), so the player is not
+// asked to press anything; the "Select RETRY" wording is the notice's text until that login starts,
+// and the button's event is not confirmed on the headset. The timed-out and no-code texts have no
+// sign-in to retry with and still say to restart.
 inline constexpr char kSignedInText[] = "Signed in to EchoVRCE.\nSelect RETRY to finish.";
 inline constexpr char kTimedOutText[] = "Sign-in timed out.\nRestart the game to try again.";
 inline constexpr char kNoCodeShownText[] = "No sign-in code could be shown.\nRestart the game to try again.";

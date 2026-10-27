@@ -449,10 +449,11 @@ void ResendErrorEvent(CR15NetGameOpaque* self) noexcept {
   quit(self);
 }
 
-// The device code was accepted and the account exists: the screen shows the signed-in notice, which tells the
-// player to select RETRY. RETRY runs the game's BeginLogIn; this runs it once for the notice, so the player
-// does not have to (#672). Only with the notice on screen (the login may proceed, so the logging-in page is not
-// held back), only while the followed instance sits in "login failed", and only once per notice version.
+// The device code was accepted and the account exists: the screen shows the signed-in notice, whose text says
+// "Select RETRY" but whose button reads QUIT on the headset (#622). The game's BeginLogIn is what RETRY runs;
+// this runs it once for the notice, so the player does not have to (#672, #622). Only with the notice on
+// screen (the login may proceed, so the logging-in page is not held back), only while the followed
+// instance sits in "login failed", and only once per notice version.
 // On the game's thread, inside the Update hook.
 void StartLogin(CR15NetGameOpaque* self) noexcept {
   const BeginLogInFn begin = g_beginLogIn.load(std::memory_order_acquire);

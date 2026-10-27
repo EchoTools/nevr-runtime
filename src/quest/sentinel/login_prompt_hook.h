@@ -46,7 +46,8 @@
  *     proves the function (build ID, first four instructions) and logs "quit_on_error".
  *
  *   - CR15UIPage2EnablePageNode::Enter (the third; it can run on a task-scheduler worker thread, so it reads
- *     only atomics): the prompt latch. After the player selects RETRY the game's UI scripts replace the
+ *     only atomics): the prompt latch. After the player's select on the login-failed screen's button (RETRY in
+ *     the RE; QUIT on the headset, #622) the game's UI scripts replace the
  *     screen that shows the code, either with the error page (a parked script wakes when the logging-in
  *     page is enabled) or with the logging-in page, which has no header and no buttons. While the latch is
  *     armed (the error block still holds exactly the prompt or notice this hook last wrote, kept apart
