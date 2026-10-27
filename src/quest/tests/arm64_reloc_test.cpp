@@ -144,11 +144,18 @@ void Load(Cpu& c, const Prog& p, unsigned opc, unsigned simd, unsigned rt, std::
   if (rt != 31) c.x[rt] = value;
 }
 
+// Position-independent words of a real prologue (SUB sp, STP, ORR) that the interpreter does not model; a test
+// that names them here compares only what the PC-relative words and the jumps do.
+std::vector<std::uint32_t> g_opaque;
+
 void Step(Cpu& c, const Prog& p) {
   const std::uint32_t i = p.words[(c.pc - p.base) / 4];
   const std::uint64_t pc = c.pc;
   c.pc = pc + 4;
   if (i == kNop) return;
+  for (const std::uint32_t w : g_opaque) {
+    if (i == w) return;
+  }
   if ((i & 0x7C000000u) == 0x14000000u) {  // B, BL
     if ((i & 0x80000000u) != 0) c.x[30] = pc + 4;
     c.pc = pc + static_cast<std::uint64_t>(Sext(i & 0x3FFFFFFu, 26) * 4);
@@ -692,6 +699,31 @@ TEST(TargetsJustOutsideTheWindowAreRelocated) {
   std::uint64_t value = 0;
   CHECK(LiteralOf(tr, 0, &rt, &value));
   CHECK_EQ(value, kOriginal + 8);
+}
+
+TEST(TheQuestSetTextPrologueRelocates) {
+  // The first four words of CCanvasUICS::SetText in the pinned libr15 (src/quest/social/menu_version_label.cpp):
+  // cbz x3, #0x48 ; sub sp, sp, #0x20 ; stp x19, x30, [sp, #16] ; mov x19, x3. The version label's install was
+  // refused on the first word.
+  const std::uint32_t window[4] = {0xB4000243u, 0xD10083FFu, 0xA9017BF3u, 0xAA0303F3u};
+  CHECK_EQ(sentinel::ClassifyPcRel(window[0]) == PcRelKind::kCbz, true);
+  Trampoline tr;
+  RelocRefusal refusal;
+  CHECK(BuildTrampoline(kOriginal, window, tr, refusal));
+  CHECK_EQ(tr.words[0], 0xB5000063u);  // CBNZ x3, over the jump
+  unsigned rt = 0;
+  std::uint64_t value = 0;
+  CHECK(LiteralOf(tr, 1, &rt, &value));
+  CHECK_EQ(value, kOriginal + 0x48);
+  CHECK_EQ(tr.words[2], kBrX16);
+  for (std::size_t i = 1; i < 4; ++i) CHECK_EQ(tr.words[2 + i], window[i]);  // the rest is copied
+  g_opaque.assign(window + 1, window + 4);
+  for (const std::uint64_t v : {std::uint64_t{0}, std::uint64_t{1}, std::uint64_t{0x100000000ull}}) {
+    Cpu c = RandomCpu(100);
+    c.x[3] = v;
+    CheckWindowEquivalent("SetText prologue", window, c);
+  }
+  g_opaque.clear();
 }
 
 TEST(AWindowThatWritesX16JumpsBackThroughX17) {
