@@ -98,6 +98,10 @@ void PreflightRuntimeBootstrap() {
       g_isServer = TRUE;
       g_isHeadless = TRUE;
       g_noOvr = TRUE;  // -server implies -noovr unconditionally
+    } else if (nevr_cli::IsFlag(arg, L"-headless")) {
+      // Read here with -server, so g_isHeadless is set before the deferred pass applies the headless gates.
+      // The deferred parse logs the token.
+      g_isHeadless = TRUE;
     } else if (nevr_cli::IsFlag(arg, L"-windowed")) {
       g_isWindowed = TRUE;
       g_noOvr = TRUE;  // -windowed implies -noovr (no VR headset)
@@ -451,15 +455,13 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     } else if (lstrcmpW(flag, L"-headless") == 0) {
       // N99: -headless is never "redundant", and the log must not tell the
       // operator to remove it: removing the flag opens a window.
-      // -headless is a NATIVE echovr.exe token; the game's
-      // own arg handler applies pGame+0x1D4 &= 0xFFFEFEFE only when it is
-      // present. NEVR now applies that same mask for -server
-      // (PatchEnableHeadless), and AND-masking is idempotent, so the token is
-      // harmless either way. Say only what was measured, and instruct the
-      // operator to remove nothing.
+      // -headless is a NATIVE echovr.exe token; the game's own arg handler applies
+      // pGame+0x1D4 &= 0xFFFEFEFE when it is present. The preflight pass set
+      // g_isHeadless from it, so PatchEnableHeadless runs the same gate set as -server.
+      // Without those gates a client run reaches the game's D3D12 device init with no
+      // GPU path and aborts ("Unknown error while loading the game"; addresses.h).
       Log(EchoVR::LogLevel::Info,
-          "[NEVR.PATCH] -headless: native echovr.exe flag; -server applies the same "
-          "engine-flags mask, so this token is a harmless no-op here.");
+          "[NEVR.PATCH] -headless: native echovr.exe flag; headless gates applied, the same set -server runs.");
     } else if (lstrcmpW(flag, L"-noovr") == 0) {
       // Native token, and the game handles it itself: a single flag write,
       // orq $0x8000000, 0x7ae0(%rdi) at 0x1401168BA. NOT pGame+0x178 — that is
@@ -480,9 +482,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
 
   LogTimestepArgs();
 
-  // -server forces -headless unconditionally (set in the -server branch above).
+  // -server forces -headless unconditionally (set in the preflight pass above, with -headless).
   // The OR here is a safety net: if g_isHeadless was set to TRUE for any other
-  // reason, -noovr is also applied. In practice, g_isHeadless is only set by -server.
+  // reason, -noovr is also applied. g_isHeadless is set by -server or -headless.
   g_isHeadless = g_isHeadless || g_isServer;
   // -server implies -noovr unconditionally.
   g_noOvr = g_noOvr || g_isServer;
