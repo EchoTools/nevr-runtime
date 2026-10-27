@@ -73,6 +73,13 @@ for i in "${!paths[@]}"; do
 done
 echo "nevr-post-checkout: worktree=$top${summary:- (nothing listed)}" >&2
 
+# The generated and vendored build inputs (#1053): name the one command when gen/ is not the output for the pin or
+# extern/minhook is empty. The hook never runs it: the generator needs the BSR and the vcpkg protoc, and a checkout
+# must not wait on either.
+if ! python3 -I "$top/tools/proto_stamp.py" --root "$top" check >/dev/null 2>&1 || [ ! -f "$top/extern/minhook/CMakeLists.txt" ]; then
+    echo "nevr-post-checkout: build inputs missing or stale in this worktree; run: just worktree-setup" >&2
+fi
+
 log_dir="$common_dir/nevr-logs"
 args=()
 for i in "${!paths[@]}"; do
