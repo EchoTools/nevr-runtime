@@ -6,8 +6,10 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "core/credential_write.h"
 #include "core/logging.h"
 #include "core/nevr_root.h"
+#include "core/system_info.h"
 
 namespace nevr_root_move {
 namespace {
@@ -18,6 +20,7 @@ using Names = nevr_root::Names<wchar_t>;
 struct Item {
   std::wstring from;
   std::wstring to;
+  bool credentials = false;  // the sign-in cache: moved through the protected write, not a plain rename
 };
 
 struct Source {
@@ -48,6 +51,74 @@ bool StartsWith(const std::wstring& s, const wchar_t* prefix) { return s.rfind(p
 
 bool EndsWith(const std::wstring& s, const std::wstring& suffix) {
   return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+// The ANSI form of a path, for the credential writer (which takes ANSI paths, as the cache's own save does). False when the path
+// does not survive the conversion.
+bool ToAnsi(const std::wstring& wide, std::string* out) {
+  if (wide.empty()) return false;
+  BOOL lossy = FALSE;
+  const int needed = WideCharToMultiByte(CP_ACP, 0, wide.c_str(), static_cast<int>(wide.size()), nullptr, 0, nullptr, &lossy);
+  if (needed <= 0) return false;
+  out->assign(static_cast<std::size_t>(needed), '\0');
+  WideCharToMultiByte(CP_ACP, 0, wide.c_str(), static_cast<int>(wide.size()), out->data(), needed, nullptr, &lossy);
+  return lossy == FALSE;
+}
+
+bool ReadWholeFile(const std::wstring& path, std::string* bytes, unsigned long* error) {
+  HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                            FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    *error = GetLastError();
+    return false;
+  }
+  bytes->clear();
+  char buffer[4096];
+  bool ok = true;
+  for (;;) {
+    DWORD got = 0;
+    if (ReadFile(file, buffer, sizeof(buffer), &got, nullptr) == FALSE) {
+      *error = GetLastError();
+      ok = false;
+      break;
+    }
+    if (got == 0) break;
+    bytes->append(buffer, got);
+  }
+  CloseHandle(file);
+  return ok;
+}
+
+// Moves the sign-in cache: the bytes go to `to` through the protected write the cache is saved with (born private, flushed, then
+// renamed in, core/credential_write.h), are read back, and only then is the old file removed. A plain MoveFileEx across volumes
+// would give the copy the destination's default protection (under Wine, the host's default mode). Any failure leaves the old
+// file where it is and writes nothing to `to`.
+bool MoveCredentials(const std::wstring& from, const std::wstring& to, unsigned long* error) {
+  std::string bytes;
+  if (!ReadWholeFile(from, &bytes, error)) return false;
+  std::string ansi_to;
+  if (!ToAnsi(to, &ansi_to)) {
+    *error = ERROR_NO_UNICODE_TRANSLATION;
+    return false;
+  }
+  std::string why;
+  const std::string temp = nevr_credential_write::TempPathFor(ansi_to);
+  if (!nevr_credential_write::WriteProtectedTemp(temp, bytes, nevr_system_info::Get().IsWine(), &why) ||
+      !nevr_credential_write::ReplaceCache(temp, ansi_to, &why)) {
+    *error = GetLastError() != 0 ? GetLastError() : ERROR_WRITE_FAULT;
+    return false;
+  }
+  std::string written;
+  if (!ReadWholeFile(to, &written, error) || written != bytes) {
+    if (*error == 0) *error = ERROR_CRC;
+    DeleteFileW(to.c_str());  // the copy this call just made and could not confirm: it must not outrank the file it came from
+    return false;
+  }
+  if (DeleteFileW(from.c_str()) == FALSE) {
+    *error = GetLastError();
+    return false;
+  }
+  return true;
 }
 
 std::string ToUtf8(const std::wstring& wide) {
@@ -93,6 +164,12 @@ std::vector<Event> Run(const Inputs& inputs) {
   if (inputs.root.empty()) return events;
 
   std::vector<Source> sources;
+  for (const std::wstring& dir : inputs.local_dirs) {
+    Source source{dir, {}};
+    const std::wstring from = nevr_root::Join(dir, Names::kCredentials);
+    if (Exists(from)) source.items.push_back({from, nevr_root::CredentialsPath(inputs.root), true});
+    sources.push_back(std::move(source));
+  }
   {
     Source logs{inputs.legacy_logs_dir, {}};
     const std::wstring to_dir = nevr_root::LogsDir(inputs.root);
@@ -127,9 +204,18 @@ std::vector<Event> Run(const Inputs& inputs) {
         events.push_back({Outcome::kLeftRootHasIt, item.from, item.to, 0});
         continue;
       }
-      if (!nevr_root::EnsureDirectoryTree(ParentOf(item.to)) ||
-          !MoveFileExW(item.from.c_str(), item.to.c_str(), MOVEFILE_COPY_ALLOWED)) {
-        events.push_back({Outcome::kLeftMoveFailed, item.from, item.to, GetLastError()});
+      unsigned long error = 0;
+      bool moved = nevr_root::EnsureDirectoryTree(ParentOf(item.to));
+      if (!moved) {
+        error = GetLastError();
+      } else if (item.credentials) {
+        moved = MoveCredentials(item.from, item.to, &error);
+      } else {
+        moved = MoveFileExW(item.from.c_str(), item.to.c_str(), MOVEFILE_COPY_ALLOWED) != FALSE;
+        if (!moved) error = GetLastError();
+      }
+      if (!moved) {
+        events.push_back({Outcome::kLeftMoveFailed, item.from, item.to, error});
         continue;
       }
       events.push_back({Outcome::kMoved, item.from, item.to, 0});
@@ -158,6 +244,18 @@ Inputs InputsFromEnvironment() {
     const std::wstring base = nevr_root::Join(std::wstring(local, n), L"EchoVR");
     inputs.legacy_logs_dir = nevr_root::Join(base, L"logs");
     inputs.legacy_cosmetics_dir = nevr_root::Join(base, L"cosmetics\\v1\\packages");
+  }
+
+  // The game executable's folder and the two above it: the order the sign-in cache was searched in (src/core/auth_token.h).
+  wchar_t exe[MAX_PATH * 2] = {};
+  const DWORD len = GetModuleFileNameW(nullptr, exe, static_cast<DWORD>(sizeof(exe) / sizeof(exe[0])));
+  if (len != 0 && len < sizeof(exe) / sizeof(exe[0])) {
+    std::wstring dir(exe, len);
+    const std::size_t slash = dir.find_last_of(Names::kSeparators);
+    if (slash != std::wstring::npos) {
+      dir.resize(slash + 1);
+      inputs.local_dirs = {dir + L"_local", dir + L"..\\_local", dir + L"..\\..\\_local"};
+    }
   }
   return inputs;
 }

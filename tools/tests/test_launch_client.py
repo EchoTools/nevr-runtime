@@ -229,6 +229,14 @@ class LaunchClientTest(unittest.TestCase):
         self.assertEqual((self.game_root / "echovr/bin/win10/nevr-runtime.dll").read_bytes(), b"LEFTOVER", "not deleted")
         self.assertEqual(self.deployed(), ORIGINAL)
 
+    def test_a_sign_in_cache_in_the_nevr_root_is_the_cached_flow(self):
+        root = self.game_root / "echovr/.wineprefix/drive_c/users" / getpass.getuser() / "AppData/Local/nevr/echovr"
+        (root / ".credentials.json").write_text("{}")
+        result = self.run_script("--dll", str(self.dll))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("cached credentials present", result.stdout)
+        self.assertIn("/nevr/echovr/.credentials.json", result.stdout)
+
     def test_the_run_log_is_read_from_the_nevr_root(self):
         result = self.run_script("--dll", str(self.dll))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

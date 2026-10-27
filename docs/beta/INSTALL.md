@@ -35,7 +35,7 @@ The first time, the game needs you to sign in:
 - If the 5 minutes run out, close the game and start it again to get a new code.
 
 After that the game logs in by itself on every start. Your sign-in is saved in a file named
-`.credentials.json` in a `_local` folder of your Echo VR install. Do not share that file; delete it if you
+`.credentials.json` in `%LOCALAPPDATA%\nevr\echovr` (older releases kept it in a `_local` folder of your Echo VR install; the game moves it on the first start). Do not share that file; delete it if you
 want to sign in again (for example as a different Discord account).
 
 ## Uninstall

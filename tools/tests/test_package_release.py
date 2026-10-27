@@ -6,6 +6,7 @@ A local build is a development build (X.Y.(Z+1)-dev.N+sha) and is packaged under
 """
 
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -771,6 +772,62 @@ class InstallScriptsTest(unittest.TestCase):
     def ps(self, script, *args):
         return subprocess.run(["pwsh", "-NoProfile", "-File", str(self.pkg / script), *args],
                               capture_output=True, text=True, timeout=60)
+
+    # ADR 0012 / #857: the runtime moved the sign-in cache out of the install's _local folder; uninstalling puts it back.
+    def _moved_cache_setup(self, *, local_cache=None, root_cache=b'{"refresh_token":"r-1"}', marker=True):
+        appdata = self.tmp / "appdata"
+        local = self.tmp / "game" / "_local"  # two parents up from bin\win10: where the stock install keeps it
+        local.mkdir(parents=True)
+        if marker:
+            (local / "MOVED-TO-NEVR-ROOT.txt").write_text("moved\n")
+        if local_cache is not None:
+            (local / ".credentials.json").write_bytes(local_cache)
+        root = appdata / "nevr" / "echovr"
+        if root_cache is not None:
+            root.mkdir(parents=True)
+            (root / ".credentials.json").write_bytes(root_cache)
+        installed = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+        return local, root
+
+    def uninstall_with_appdata(self):
+        env = dict(os.environ, LOCALAPPDATA=str(self.tmp / "appdata"))
+        return subprocess.run(["pwsh", "-NoProfile", "-File", str(self.pkg / "uninstall.ps1"), "-Dir", str(self.game)],
+                              capture_output=True, text=True, timeout=60, env=env)
+
+    def test_uninstall_puts_the_moved_sign_in_cache_back_and_keeps_the_roots_copy(self):
+        local, root = self._moved_cache_setup()
+        undone = self.uninstall_with_appdata()
+        self.assertEqual(undone.returncode, 0, undone.stdout + undone.stderr)
+        self.assertIn("RESTORED the sign-in cache", undone.stdout)
+        self.assertEqual((local / ".credentials.json").read_bytes(), b'{"refresh_token":"r-1"}')
+        self.assertEqual((root / ".credentials.json").read_bytes(), b'{"refresh_token":"r-1"}', "a later install keeps the login")
+        self.assertFalse((local / "MOVED-TO-NEVR-ROOT.txt").exists())
+        self.assertEqual(len(list(local.glob("MOVED-TO-NEVR-ROOT.txt.undone-*"))), 1, "set aside, not deleted")
+
+    def test_uninstall_never_overwrites_a_sign_in_cache_that_is_in_local(self):
+        local, root = self._moved_cache_setup(local_cache=b"newer")
+        undone = self.uninstall_with_appdata()
+        self.assertEqual(undone.returncode, 0, undone.stdout + undone.stderr)
+        self.assertIn("LEFT", undone.stdout)
+        self.assertEqual((local / ".credentials.json").read_bytes(), b"newer")
+
+    def test_uninstall_restores_nothing_into_a_folder_the_runtime_did_not_empty(self):
+        local, root = self._moved_cache_setup(marker=False)
+        undone = self.uninstall_with_appdata()
+        self.assertEqual(undone.returncode, 0, undone.stdout + undone.stderr)
+        self.assertFalse((local / ".credentials.json").exists())
+        self.assertNotIn("sign-in cache", undone.stdout)
+
+    def test_uninstall_says_so_when_there_is_no_cache_in_the_root_to_put_back(self):
+        local, root = self._moved_cache_setup(root_cache=None)
+        undone = self.uninstall_with_appdata()
+        self.assertEqual(undone.returncode, 0, "the game files are back; this is reported, not fatal")
+        self.assertIn("NOT RESTORED the sign-in cache", undone.stdout)
+        self.assertIn("there is none in", undone.stdout, "named for what it is, not as a failed copy")
+        self.assertEqual(sorted(p.name for p in local.glob(".credentials.json*")), [], "nothing is created for a cache that is not there")
+        self.assertTrue((local / "MOVED-TO-NEVR-ROOT.txt").exists(), "the marker stays while the cache is not back")
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
 
     def test_install_sets_the_originals_aside_and_uninstall_puts_them_back_without_deleting(self):
         installed = self.ps("install.ps1", "-Dir", str(self.game))
