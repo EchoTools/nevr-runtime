@@ -634,6 +634,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // honoured), after g_isServer/InstallFatalErrorHandler — a bad config.yaml or
   // an unset required secret fails loud at this point in server mode.
   {
+    // #843: a server takes the same built-in defaults as a client; this line names the ones it uses.
+    NevrCfgLogBuiltinDefaultsTaken();
     const char* socketUri = NevrCfgGetFlat("nevr_socket_uri");
     const bool hasSocketUri = socketUri && socketUri[0] != '\0';
     const char* allowOffline = NevrCfgGetFlat("nevr_allow_offline_server");

@@ -156,13 +156,14 @@ if [ -d build/mingw-release/bin/plugins ]; then
   while IFS= read -r f; do deploy "$f" "$GAME_DIR/plugins/${f#build/mingw-release/bin/plugins/}"; done \
     < <(find build/mingw-release/bin/plugins -type f)
 fi
-# A server with no config.yaml gets no embedded defaults (service_config.cpp BuiltinDefaults is
-# client-only) and refuses to boot without a login bridge (#16). When the install has none, deploy
-# the offline-boot config the Windows-VM rig uses (tools/winvm/systest.py OFFLINE_CONFIG_YAML) so the
-# flag sets reach what they test; an install's own config.yaml is used as it is. The runtime finds
-# it at exe-dir/../../_local (service_config.cpp), and the restore trap removes it afterwards.
+# A server with no config.yaml takes the embedded defaults (service_config.cpp BuiltinDefaults, #843), so
+# it would start a login bridge against the shipped endpoint. When the install has none, deploy the
+# offline-boot config the Windows-VM rig uses (tools/winvm/systest.py OFFLINE_CONFIG_YAML): an explicit
+# empty socket_uri, which takes no default, and allow_offline_server. The flag sets reach what they test;
+# an install's own config.yaml is used as it is. The runtime finds it at exe-dir/../../_local
+# (service_config.cpp), and the restore trap removes it afterwards.
 if [ ! -e "$GAME_ROOT/echovr/_local/config.yaml" ]; then
-  printf 'services:\n  allow_offline_server: true\n' > "$OUT/offline-config.yaml"
+  printf 'services:\n  socket_uri: ""\n  allow_offline_server: true\n' > "$OUT/offline-config.yaml"
   deploy "$OUT/offline-config.yaml" "$GAME_DIR/../../_local/config.yaml"
 fi
 

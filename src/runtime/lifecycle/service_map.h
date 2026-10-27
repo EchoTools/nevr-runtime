@@ -51,12 +51,11 @@ struct EmbeddedDefault {
   const char* value;
 };
 
-/// The built-in defaults a run may see. Client mode: every entry with a non-empty value, with
-/// `embeddedNames` / `missingNames` (when non-null) receiving the comma-joined key names of the
-/// entries that have / lack a value (names only, never values). Server mode: empty, with both name
-/// lists left untouched, because a dedicated server is configured explicitly and must never start a
-/// bridge or authenticate with an embedded key.
-FlatDefaults SelectBuiltinDefaults(bool serverMode, const EmbeddedDefault* entries, std::size_t count,
+/// The built-in defaults a run may see: every entry with a non-empty value, with `embeddedNames` /
+/// `missingNames` (when non-null) receiving the comma-joined key names of the entries that have /
+/// lack a value (names only, never values). Client and server alike (#843): a key config.yaml leaves
+/// unset takes the default, and a server with no endpoint left is refused by boot.
+FlatDefaults SelectBuiltinDefaults(const EmbeddedDefault* entries, std::size_t count,
                                    std::string* embeddedNames, std::string* missingNames);
 
 /// LookupFlat layered over the embedded defaults. The config.yaml value wins when it is
