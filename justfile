@@ -264,7 +264,8 @@ quest-keystore-fingerprint:
 # It also refuses a version part outside the Quest versionCode rule and warns near its limits (development distance N above 900,
 # minor or patch above 90; tools/quest_apk_version.py).
 # Read-only (git ls-remote is the only network call; there is no fetch). Run it before `just package-dev`,
-# before pushing a v<x.y.z> release tag and before `gh release create` (tools/release_preflight.py).
+# before pushing a v<x.y.z> release tag and before `gh release create` (tools/release_preflight.py). To start from a
+# tag's commit instead of origin's tip (release-quest-apk does), run tools/release_preflight.py --tag vX.Y.Z.
 release-preflight base="main":
     tools/release_preflight.py --base {{ quote(base) }}
 
@@ -325,14 +326,16 @@ _quest-apk store_apk mode="dev":
 # The Quest APK of a RELEASE: the repack of the store game built from the release tag vX.Y.Z, in the same steps as
 # package-dev, but with the identity of a CI tag build (kVersion = the tag's version, kIsDev = false), so the APK is a
 # release and not a development build. Run it from a clone whose HEAD is the tag's commit and that passes
-# tools/release_preflight.py. Writes build/quest-release/<tag>/nevr-runtime-<tag>-quest.apk and its .sha256; it uploads
-# nothing and never tags. The APK is published outside GitHub (RELEASING.md, "Quest APKs never go on GitHub").
+# `tools/release_preflight.py --tag <tag>` (HEAD is the tag's commit, which need not be origin's tip: an older tag builds
+# after main has moved on; the tree is clean and origin has the tag at that commit). Writes
+# build/quest-release/<tag>/nevr-runtime-<tag>-quest.apk and its .sha256; it uploads nothing and never tags. The APK is
+# published outside GitHub (RELEASING.md, "Quest APKs never go on GitHub").
 release-quest-apk tag store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
     #!/usr/bin/env bash
     set -euo pipefail
     tag="{{ tag }}"
     [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "release-quest-apk: not a release tag (vX.Y.Z): $tag" >&2; exit 1; }
-    tools/release_preflight.py
+    tools/release_preflight.py --tag "$tag"
     tag_commit=$(git rev-parse --verify "refs/tags/$tag^{commit}") || { echo "release-quest-apk: tag $tag is not in this clone" >&2; exit 1; }
     head=$(git rev-parse HEAD)
     [ "$tag_commit" = "$head" ] || { echo "release-quest-apk: HEAD ${head:0:7} is not the commit of $tag (${tag_commit:0:7}); check out the tag's commit" >&2; exit 1; }

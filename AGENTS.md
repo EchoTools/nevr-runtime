@@ -361,6 +361,8 @@ which `tools/release_already_built.sh` turns into a green no-op (both read `tool
 a dispatch is running makes that run upload to the published release. The signed Windows zip lives on the GitHub release; the Quest APKs and dry
 runs are published outside GitHub.
 
+`just release-quest-apk vX.Y.Z` runs `tools/release_preflight.py --tag vX.Y.Z` instead, which takes HEAD at that tag's commit rather
+than at origin's tip (clean tree, the tag on origin at the same commit; every other check unchanged), so an older tag still builds.
 `just release-preflight` also runs first inside `just package-dev`. It belongs before pushing a release tag (step 1) and before
 `gh release create` (step 3): the manual gate. It is not in `build.yml` (CI checks out the tag itself) and not in `just verify`
 (it must work in a dirty tree).

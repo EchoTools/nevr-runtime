@@ -203,7 +203,8 @@ gh release verify-asset vX.Y.Z <file> -R EchoTools/nevr-runtime          # a loc
 ## The Quest APK
 
 The APK is a repack of the store game, so no workflow builds it. From a clone whose HEAD is the release tag's commit,
-after the tag is pushed:
+after the tag is pushed (the commit need not be `origin/main`'s tip, so an older release can be built after main has moved
+on; the recipe runs `tools/release_preflight.py --tag vX.Y.Z`, which wants a clean tree and the tag on origin at that commit):
 
 ```sh
 just release-quest-apk vX.Y.Z   # build/quest-release/vX.Y.Z/nevr-runtime-vX.Y.Z-quest.apk and its .sha256
