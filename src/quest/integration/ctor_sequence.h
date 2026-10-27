@@ -44,6 +44,9 @@
 //                                    before the hardware dump (which then shares the slot); the level is the config's
 //                                    graphics.texture_quality, `stock` when the configuration cannot be resolved; `stock`
 //                                    installs nothing. Its counters are registered with the others (step 3), unless `stock`.
+//      InstallCreditsText            the project section of the CREDITS page (#970): two ADRP+ADD pairs in libr15 (the
+//                                    CREDITS component's two cursor stores), on every launch, right after the texture
+//                                    hook; no counters. Refused unless the libr15 build ID and the pinned words match.
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):
 //   token auth fails        -> the login prompt (token auth is what publishes it), bridge, login, social
@@ -100,6 +103,7 @@ enum class StepId : std::uint8_t {
   kInstallVkExtWindow,
   kInstallResourceRequestLog,
   kInstallTextureQuality,
+  kInstallCreditsText,
   kStartTokenAuth,
   kInstallLoginPrompt,
   kStartBridge,
@@ -168,6 +172,8 @@ class Steps {
   // `countersRegistered` is the result of RegisterTextureQualityCounters (a `stock` level needs none). The step applies the
   // hook's own rule (texture_quality::InstallIfCounted): without its counters it logs the skip and installs nothing.
   virtual bool InstallTextureQuality(const nevr_quest::TextureChoice& choice, bool countersRegistered) = 0;
+  // The project section of the CREDITS page (#970): two libr15 ADRP+ADD pairs, on every launch, no counters.
+  virtual bool InstallCreditsText() = 0;
   virtual bool StartTokenAuth() = 0;
   // `countersRegistered`: the result of RegisterLoginPromptCounters. The step applies the hook's own rule
   // (login_prompt::InstallIfCounted): without its counters it logs the skip and installs nothing.
