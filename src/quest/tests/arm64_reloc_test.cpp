@@ -728,6 +728,35 @@ TEST(AWindowWithoutX16UsesX16AndOneWithBothKeepsX16WhenNothingNeedsScratch) {
   CHECK_EQ(tr.words[5], 0xD61F0220u);  // BR x17
 }
 
+TEST(EveryLiteralIsEightByteAlignedAndTheImageIsWholeQuads) {
+  // Code of every length (an odd number of words gets a pad) so the pool starts on a quad boundary.
+  const std::uint32_t windows[][4] = {
+      {EncB(0x40), kNop, kNop, kNop},
+      {EncBCond(0, 0x40), kNop, kNop, kNop},
+      {EncBCond(0, 0x40), EncB(0x80), kNop, kNop},
+      {EncAdr(1, 8), kNop, kNop, kNop},
+      {EncAdr(1, 8), EncAdr(2, 8), EncAdr(3, 8), EncAdr(4, 8)},
+      {EncCb(1, 0, 0, 0x40), EncCb(1, 0, 1, 0x40), EncCb(1, 0, 2, 0x40), EncCb(1, 0, 3, 0x40)},
+      {EncLdrLit(0, 1, 1, 0x40), EncLdrLit(0, 1, 2, 0x40), EncBl(0x80), EncBCond(1, 0x40)},
+  };
+  for (const auto& window : windows) {
+    Trampoline tr;
+    RelocRefusal refusal;
+    CHECK(BuildTrampoline(kOriginal, window, tr, refusal));
+    CHECK(tr.count <= sentinel::kMaxTrampolineWords);
+    CHECK_EQ(tr.count % 2, static_cast<std::size_t>(0));
+    for (std::size_t i = 0; i < tr.count; ++i) {
+      unsigned rt = 0;
+      std::uint64_t value = 0;
+      if ((tr.words[i] & 0xFF000000u) != 0x58000000u) continue;  // an LDR x, literal (a pool word may look like one)
+      const std::size_t at = i + ((tr.words[i] >> 5) & 0x7FFFFu);
+      if (at >= tr.count) continue;
+      CHECK(LiteralOf(tr, i, &rt, &value));
+      CHECK_EQ(at % 2, static_cast<std::size_t>(0));
+    }
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }
