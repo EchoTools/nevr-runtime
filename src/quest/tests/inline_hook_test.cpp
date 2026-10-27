@@ -1,0 +1,222 @@
+// Host test for the arm64 inline (trampoline) hook backend (inline_hook.h).
+//
+// The host is x86_64, so the patched words are arm64 encodings that are never executed here. What
+// this test checks is the bytes an install leaves behind and the refusals: the PC-relative table on
+// fixed encodings, the trampoline's contents, the prologue, alignment and page checks, the registry,
+// and the thunk entry point. A detour that runs on a device is the Quest backend's own check
+// (docs/adr/0003); this file cannot stand in for it.
+//
+// Built with -fno-exceptions, like every translation unit that includes callback_thunk.h.
+// Run: inline_hook_test [name-filter]
+
+#include <sys/mman.h>
+#include <unistd.h>
+
+#include <cstdint>
+#include <cstring>
+#include <string>
+
+#include "callback_thunk.h"
+#include "hook_install.h"
+#include "hook_log.h"
+#include "inline_hook.h"
+#include "mini_test.h"
+
+namespace sentinel {
+// The one test seam into the private Install (inline_hook.h names it as a friend).
+struct InlineHookTestAccess {
+  static InlineStatus Install(const void* target, const InlinePrologue& expected, void* detour,
+                              void** originalOut) {
+    return InlineHook::Install(target, expected, detour, originalOut);
+  }
+};
+}  // namespace sentinel
+
+namespace {
+
+using sentinel::InlineHookTestAccess;
+using sentinel::InlinePrologue;
+using sentinel::InlineStatus;
+
+std::string g_lines;
+void CaptureSink(sentinel::LogLevel, const char* line) {
+  g_lines += line;
+  g_lines += '\n';
+}
+
+// A plausible arm64 function entry: STP x29,x30,[sp,#-16]! ; MOV x29,sp ; SUB sp,sp,#0x20 ; STR x19,[sp,#16].
+constexpr std::uint32_t kStpFp = 0xA9BF7BFDu;
+constexpr std::uint32_t kMovFp = 0x910003FDu;
+constexpr std::uint32_t kSubSp = 0xD10083FFu;
+constexpr std::uint32_t kStrX19 = 0xF90013F3u;
+const InlinePrologue kPrologue{{kStpFp, kMovFp, kSubSp, kStrX19}};
+
+std::size_t Page() { return static_cast<std::size_t>(sysconf(_SC_PAGESIZE)); }
+
+// An anonymous page with `count` words at its start, r-x when `executable`, rw otherwise.
+std::uint32_t* MakePage(const std::uint32_t* words, std::size_t count, bool executable) {
+  void* p = mmap(nullptr, Page(), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (p == MAP_FAILED) return nullptr;
+  std::memcpy(p, words, count * sizeof(std::uint32_t));
+  if (executable && mprotect(p, Page(), PROT_READ | PROT_EXEC) != 0) return nullptr;
+  return static_cast<std::uint32_t*>(p);
+}
+
+std::uint64_t Quad(const std::uint32_t* words) {
+  std::uint64_t v = 0;
+  std::memcpy(&v, words, sizeof v);
+  return v;
+}
+
+TEST(PcRelativeEncodingsAreRecognised) {
+  // Each of these depends on its own address; the encodings are the architecture's, with zero offsets.
+  const std::uint32_t pcRelative[] = {
+      0x14000000u,  // B #0
+      0x94000000u,  // BL #0
+      0x54000000u,  // B.EQ #0
+      0xB4000000u,  // CBZ x0, #0
+      0x34000000u,  // CBZ w0, #0
+      0x36000000u,  // TBZ w0, #0, #0
+      0x37000000u,  // TBNZ w0, #0, #0
+      0x10000000u,  // ADR x0, #0
+      0x90000000u,  // ADRP x0, #0
+      0x58000000u,  // LDR x0, #0 (literal)
+      0x98000000u,  // LDRSW x0, #0 (literal)
+      0x1C000000u,  // LDR s0, #0 (literal, SIMD)
+  };
+  for (std::uint32_t w : pcRelative) CHECK(sentinel::IsPcRelative(w));
+  const std::uint32_t position[] = {
+      kStpFp, kMovFp, kSubSp, kStrX19,
+      0x91000400u,  // ADD x0, x0, #1
+      0xF9400020u,  // LDR x0, [x1]
+      0x39400000u,  // LDRB w0, [x1]
+      0xD65F03C0u,  // RET
+      0xD61F0200u,  // BR x16
+      0xD503201Fu,  // NOP
+  };
+  for (std::uint32_t w : position) CHECK(!sentinel::IsPcRelative(w));
+}
+
+TEST(TrampolineConstantsAreTheAarch64Encodings) {
+  // LDR x16, #8 and BR x16, from the architecture manual's encodings: Rt = 16 in both.
+  CHECK_EQ(sentinel::kLdrX16Literal8, 0x58000050u);
+  CHECK_EQ(sentinel::kBrX16, 0xD61F0200u);
+  CHECK_EQ(sentinel::kInlinePatchBytes, static_cast<std::size_t>(16));
+}
+
+TEST(InstallWritesDetourAndTrampoline) {
+  std::uint32_t* page = MakePage(kPrologue.words, 4, true);
+  CHECK(page != nullptr);
+  if (page == nullptr) return;
+  const std::uint64_t detour = 0x0000007812345678ULL;  // any address: it is stored, never called here
+  void* original = nullptr;
+  g_lines.clear();
+  sentinel::SetLogSink(&CaptureSink);
+  const InlineStatus st = InlineHookTestAccess::Install(page, kPrologue, reinterpret_cast<void*>(detour), &original);
+  sentinel::SetLogSink(nullptr);
+  CHECK_EQ(st, InlineStatus::kOk);
+
+  // The patch: LDR x16,#8 ; BR x16 ; .quad detour.
+  CHECK_EQ(page[0], sentinel::kLdrX16Literal8);
+  CHECK_EQ(page[1], sentinel::kBrX16);
+  CHECK_EQ(Quad(&page[2]), detour);
+
+  // The trampoline: the displaced four words, then LDR/BR to target+16.
+  CHECK(original != nullptr);
+  if (original == nullptr) return;
+  auto* t = static_cast<std::uint32_t*>(original);
+  for (std::size_t i = 0; i < 4; ++i) CHECK_EQ(t[i], kPrologue.words[i]);
+  CHECK_EQ(t[4], sentinel::kLdrX16Literal8);
+  CHECK_EQ(t[5], sentinel::kBrX16);
+  CHECK_EQ(Quad(&t[6]), static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(page)) + 16);
+
+  CHECK(g_lines.find("\"event\":\"inline_hook\"") != std::string::npos);
+  CHECK(g_lines.find("\"status\":\"ok\"") != std::string::npos);
+}
+
+TEST(PrologueMismatchChangesNothing) {
+  std::uint32_t* page = MakePage(kPrologue.words, 4, true);
+  CHECK(page != nullptr);
+  if (page == nullptr) return;
+  InlinePrologue wrong = kPrologue;
+  wrong.words[2] = 0xD503201Fu;  // a NOP where the page holds SUB
+  void* original = nullptr;
+  const InlineStatus st = InlineHookTestAccess::Install(page, wrong, reinterpret_cast<void*>(0x1000), &original);
+  CHECK_EQ(st, InlineStatus::kPrologueMismatch);
+  CHECK_EQ(page[0], kStpFp);
+  CHECK_EQ(page[1], kMovFp);
+  CHECK_EQ(page[2], kSubSp);
+  CHECK_EQ(page[3], kStrX19);
+  CHECK(original == nullptr);
+}
+
+TEST(PcRelativePrologueIsRefusedNotRelocated) {
+  // A B #0x40 inside the window: a displaced branch would land somewhere else in the trampoline.
+  const std::uint32_t words[4] = {kStpFp, 0x14000010u, kSubSp, kStrX19};
+  std::uint32_t* page = MakePage(words, 4, true);
+  CHECK(page != nullptr);
+  if (page == nullptr) return;
+  const InlinePrologue prologue{{words[0], words[1], words[2], words[3]}};
+  void* original = nullptr;
+  const InlineStatus st = InlineHookTestAccess::Install(page, prologue, reinterpret_cast<void*>(0x1000), &original);
+  CHECK_EQ(st, InlineStatus::kPcRelativeInstruction);
+  CHECK_EQ(page[1], 0x14000010u);
+  CHECK(original == nullptr);
+}
+
+TEST(NonExecutablePageIsRefused) {
+  std::uint32_t* page = MakePage(kPrologue.words, 4, false);
+  CHECK(page != nullptr);
+  if (page == nullptr) return;
+  void* original = nullptr;
+  const InlineStatus st = InlineHookTestAccess::Install(page, kPrologue, reinterpret_cast<void*>(0x1000), &original);
+  CHECK_EQ(st, InlineStatus::kPageNotExecutable);
+  CHECK_EQ(page[0], kStpFp);
+  CHECK(original == nullptr);
+}
+
+TEST(AlignmentBadArgumentAndPageStraddleAreRefused) {
+  std::uint32_t* page = MakePage(kPrologue.words, 4, true);
+  CHECK(page != nullptr);
+  if (page == nullptr) return;
+  CHECK_EQ(sentinel::CheckInlineTarget(nullptr, kPrologue), InlineStatus::kBadArgument);
+  CHECK_EQ(sentinel::CheckInlineTarget(reinterpret_cast<const char*>(page) + 2, kPrologue),
+           InlineStatus::kNotWordAligned);
+  // The last 8 bytes of a page: the 16 patched bytes would cross into the next page.
+  CHECK_EQ(sentinel::CheckInlineTarget(reinterpret_cast<const char*>(page) + Page() - 8, kPrologue),
+           InlineStatus::kWindowStraddlesPage);
+  CHECK_EQ(sentinel::CheckInlineTarget(page, kPrologue), InlineStatus::kOk);
+}
+
+TEST(SecondInstallOfATargetIsRefused) {
+  std::uint32_t* page = MakePage(kPrologue.words, 4, true);
+  CHECK(page != nullptr);
+  if (page == nullptr) return;
+  void* first = nullptr;
+  CHECK_EQ(InlineHookTestAccess::Install(page, kPrologue, reinterpret_cast<void*>(0x2000), &first), InlineStatus::kOk);
+  void* second = nullptr;
+  const InlineStatus st = InlineHookTestAccess::Install(page, kPrologue, reinterpret_cast<void*>(0x3000), &second);
+  CHECK_EQ(st, InlineStatus::kAlreadyInstalled);
+  CHECK(second == nullptr);
+  CHECK_EQ(Quad(&page[2]), static_cast<std::uint64_t>(0x2000));
+}
+
+// A thunk for the entry-point check; the tag makes its statics its own.
+struct InlineTestTag {};
+using InlineTestThunk = sentinel::CallbackThunk<InlineTestTag, int(int)>;
+
+TEST(ThunkEntryBecomesTheDetourAndItsOriginalIsTheTrampoline) {
+  std::uint32_t* page = MakePage(kPrologue.words, 4, true);
+  CHECK(page != nullptr);
+  if (page == nullptr) return;
+  const InlineStatus st = sentinel::InstallInlineThunk<InlineTestThunk>(page, kPrologue);
+  CHECK_EQ(st, InlineStatus::kOk);
+  CHECK_EQ(page[0], sentinel::kLdrX16Literal8);
+  CHECK_EQ(Quad(&page[2]), static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(InlineTestThunk::EntryAddress())));
+  CHECK(*InlineTestThunk::OriginalOut() != nullptr);
+  CHECK(reinterpret_cast<void*>(InlineTestThunk::Original()) == *InlineTestThunk::OriginalOut());
+}
+
+}  // namespace
+
+int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }

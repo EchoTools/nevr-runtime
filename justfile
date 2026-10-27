@@ -1124,6 +1124,14 @@ test-quest-hooks:
         src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp "$out/thunk_exception_fixture.o" \
         -o "$out/got_hook_test" -ldl -pthread
     timeout 300 "$out/got_hook_test" "$out"  # a hang is a failure, not a stuck gate
+    # The inline (trampoline) backend (inline_hook.h): the arm64 encodings, the prologue, page and
+    # registry refusals, the trampoline's bytes and the thunk entry point. Host bytes only; the detour
+    # runs on a device, not here.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/inline_hook_test.cpp \
+        src/quest/sentinel/inline_hook.cpp src/quest/sentinel/got_hook.cpp \
+        src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/inline_hook_test" -ldl -pthread
+    timeout 120 "$out/inline_hook_test"
     # The login-prompt hook (#239): the real handler and prompt board, built as the sentinel builds
     # them (no exceptions), driven through the thunk entry.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/login_prompt_hook_test.cpp \
