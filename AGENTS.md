@@ -998,13 +998,16 @@ When something fails, the first act is reading the failing program's **own** log
 > **Maintainers only.** The "Commit identity" and "Scratch dir" bullets. Contributors: see "For contributors", "Maintainers only, and what to do instead".
 
 - **Defects.** Track defects in GitHub issues.
-- **Commit identity.** Author `Andrew Bates <a@sprock.io>`
-  (`--author="Andrew Bates <a@sprock.io>"`), unsigned (`--no-gpg-sign`), with a
-  single house `Co-Authored-By: <agent name> <agents@sprock.io>` trailer (plus the credit
-  trailers above), a conventional prefix, and one logical change per commit. Exception: work by
-  Teth, Spritz or Glow Sprock is authored by that sister, with
-  `Co-Authored-By: Andrew Bates <a@sprock.io>`. You **SHALL** verify after each
-  commit: `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
+- **Commit identity.** Author `Spritz Metis Sprock <spritz@sprock.io>` (the repo's local git
+  config already sets it; never pass `--author` with another name), unsigned (`--no-gpg-sign`),
+  with a single house `Co-Authored-By: <agent name> <agents@sprock.io>` trailer for the agent that
+  wrote it, plus `Co-Authored-By: Andrew Bates <a@sprock.io>` and the credit trailers above, a
+  conventional prefix, and one logical change per commit. Work by Teth or Glow Sprock is authored
+  by that sister, with the same two trailers. You **SHALL** verify after each commit:
+  `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
+- **GitHub account.** Every `gh` action a maintainer agent takes (issues, PRs, comments, reviews,
+  merges, releases) runs through `gh-spritz`, which acts as the metis-sprock account, never the
+  plain `gh` login.
 - **C++ pre-read.** Before C++ or build work, read the C++ Mingw Addendum below;
   its hard stops bind every build and configuration change.
 - **Scratch dir.** All agent scratch/staging/evidence files live under
