@@ -594,13 +594,19 @@ void RedirectIsGatedByActivation() {
 
 }  // namespace
 
-// The UI event probe (#391, #318): `diagnostics.ui_event_probe`, off unless the file says true, and it needs social.
-void UiEventProbeIsOnlyEverOnByTheDiagnosticsKeyAndNeedsSocial() {
+// The UI event (#391, #318): `diagnostics.ui_event_probe`, on by default (the party tab's Invite Members opens the
+// tablet's Friends list), off only when the file says false, and it needs social.
+void UiEventProbeIsOnByDefaultAndOffOnlyByTheDiagnosticsKeyAndNeedsSocial() {
   {
-    const LoadResult r = Load(Full(), "diagnostics:\n  ui_event_probe: true\n");
+    // A default config (no file at all, or a file without the key) posts the event.
+    const LoadResult r = nevr_quest::ResolveConfig(Full(), nullptr);
     CHECK(r.config.requested.uiEventProbe && r.config.effective.uiEventProbe);
     CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kUiEventProbe));
     CHECK(EventsContain(r, "feature=ui_event_probe requested=on effective=on"));
+  }
+  {
+    const LoadResult r = Load(Full(), "diagnostics:\n  ui_event_probe: true\n");
+    CHECK(r.config.requested.uiEventProbe && r.config.effective.uiEventProbe);
     CHECK(!HasLevel(r, LogLevel::kWarn));
   }
   {
@@ -610,14 +616,19 @@ void UiEventProbeIsOnlyEverOnByTheDiagnosticsKeyAndNeedsSocial() {
   }
   {
     const LoadResult r = Load(Full(), "diagnostics:\n  ui_event_probe: maybe\n");
-    CHECK(!r.config.effective.uiEventProbe);
+    CHECK(r.config.effective.uiEventProbe);
     CHECK(EventsContain(r, "config file key=diagnostics.ui_event_probe rejected reason=not_a_boolean"));
   }
-  for (const char* text : {"diagnostics:\n  ui_event_probe: false\n", "social:\n  ui_event_probe: true\n",
-                           "ui_event_probe: true\n", "diagnostics: {}\n"}) {
-    const LoadResult r = Load(Full(), text);
-    CHECK(!r.config.effective.uiEventProbe);
+  {
+    const LoadResult r = Load(Full(), "diagnostics:\n  ui_event_probe: false\n");
+    CHECK(!r.config.requested.uiEventProbe && !r.config.effective.uiEventProbe);
     CHECK(EventsContain(r, "feature=ui_event_probe requested=off effective=off"));
+  }
+  // A key in the wrong place is not read: the default stands.
+  for (const char* text : {"social:\n  ui_event_probe: false\n", "ui_event_probe: false\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(r.config.effective.uiEventProbe);
+    CHECK(EventsContain(r, "feature=ui_event_probe requested=on effective=on"));
   }
   CHECK(std::string(nevr_quest::FeatureName(Feature::kUiEventProbe)) == "ui_event_probe");
 }
@@ -843,7 +854,7 @@ int main() {
   ABooleanThatIsNotOneKeepsItsDefaultAndIsRejectedByName();
   SendPresenceToMetaFalseIsTheLocalPresencePath();
   HardwareDumpIsOnlyEverOnByTheDiagnosticsKey();
-  UiEventProbeIsOnlyEverOnByTheDiagnosticsKeyAndNeedsSocial();
+  UiEventProbeIsOnByDefaultAndOffOnlyByTheDiagnosticsKeyAndNeedsSocial();
   TextureQualityIsTheDefaultUnlessTheFileNamesAnotherLevel();
   ATextureQualityThatIsNotALevelFallsBackToStockAndNamesTheWord();
   ATextureQualityThatIsNotAWordFallsBackToStock();

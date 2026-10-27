@@ -17,7 +17,7 @@
 // resolves, login when the bridge is on and `auth.server_key` resolves; the social facade is on unless
 // `social.facade` is false (PC's key and default) and still needs login here; its status names ride with it.
 // `social.send_presence_to_meta: false` answers the rich presence locally; `diagnostics.hardware_dump: true`
-// turns the hardware dump on, `diagnostics.ui_event_probe: true` the invite/party UI probe. A feature whose prerequisite is off or missing is forced off with a logged reason.
+// turns the hardware dump on, `diagnostics.ui_event_probe: false` turns off the invite/party UI event (on by default). A feature whose prerequisite is off or missing is forced off with a logged reason.
 //
 // `graphics.texture_quality` (#943) is one of stock, low, medium, high, very_high, ultra (texture_quality.h); absent, it is
 // texture_quality::kDefaultLevel (`stock` for now). It is not a feature and has no prerequisite. Any mistake in it gives
@@ -78,10 +78,10 @@ struct Features {
   // fail for this APK's identity anyway). Friends' status comes from the game service, which derives it from
   // the match. `social.send_presence_to_meta: false` turns it on; needs the social facade.
   bool presenceLocal = false;
-  // The invite/party UI probe (#391, #318): the Invite Members and own-id Party slots also post the friends script
-  // event, to see whether the tablet switches to its Friends list. `diagnostics.ui_event_probe: true` turns it on;
-  // never on unless the file asks, and it needs the social facade.
-  bool uiEventProbe = false;
+  // The invite/party UI event (#391, #318): the party tab's Invite Members (slots 40 and own-id 44) also posts the
+  // friends script event, so the tablet switches to its Friends list, where the "+" invites. On by default;
+  // `diagnostics.ui_event_probe: false` turns it off. It needs the social facade.
+  bool uiEventProbe = true;
 };
 
 // The texture-quality setting (#943), after the file and the default have spoken.

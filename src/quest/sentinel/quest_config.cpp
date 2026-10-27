@@ -35,7 +35,7 @@ constexpr std::array<KeySpec, 4> kKeys = {{
 constexpr const char* kSocialFacadeKey = "social.facade";                      // PC's key and default (true)
 constexpr const char* kSendPresenceToMetaKey = "social.send_presence_to_meta";  // Quest only (default true)
 constexpr const char* kHardwareDumpKey = "diagnostics.hardware_dump";          // Quest only (default false)
-constexpr const char* kUiEventProbeKey = "diagnostics.ui_event_probe";          // Quest only (default false)
+constexpr const char* kUiEventProbeKey = "diagnostics.ui_event_probe";          // Quest only (default true)
 constexpr const char* kTextureQualityKey = "graphics.texture_quality";          // Quest only (default stock)
 constexpr const char* kTextureQualitySection = "graphics";
 constexpr const char* kTextureQualityName = "texture_quality";  // the one key `graphics` has
@@ -124,7 +124,7 @@ void SetDefaultRequests(ResolvedConfig& config) {
   config.requested.presenceNames = true;
   config.requested.presenceLocal = false;
   config.requested.hwdump = false;
-  config.requested.uiEventProbe = false;
+  config.requested.uiEventProbe = true;
 }
 
 // A boolean key: absent keeps `fallback`; an unusable value keeps it too and is rejected by key, never by value.
@@ -248,7 +248,7 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   want.social = ReadBool(cfg, kSocialFacadeKey, true, r);
   want.presenceNames = want.social;
   want.hwdump = ReadBool(cfg, kHardwareDumpKey, false, r);
-  want.uiEventProbe = ReadBool(cfg, kUiEventProbeKey, false, r);
+  want.uiEventProbe = ReadBool(cfg, kUiEventProbeKey, true, r);
   want.presenceLocal = !ReadBool(cfg, kSendPresenceToMetaKey, true, r);
   ReadTextureQuality(cfg, r);
 }
@@ -320,10 +320,11 @@ void Derive(LoadResult& r) {
     c.effective.presenceLocal = false;
     force_off("presence_local", "social_not_enabled");
   }
-  // The probe works through the social facade's slots, so it follows social.
+  // The probe works through the social facade's slots, so it follows social. It is on by default, so with social
+  // off this is the expected state, not a fault: logged at Info, not Warn.
   if (c.effective.uiEventProbe && !c.effective.social) {
     c.effective.uiEventProbe = false;
-    force_off("ui_event_probe", "social_not_enabled");
+    Add(r, LogLevel::kInfo, "feature=ui_event_probe forced off reason=social_not_enabled");
   }
 }
 

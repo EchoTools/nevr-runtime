@@ -81,10 +81,10 @@ diagnostics:
   # Default (absent): false.
   # hardware_dump: true
 
-  # Quest only. The invite/party UI probe: the party tab's Invite Members and the main-menu FRIENDS LIST press also
-  # ask the tablet to switch to its Friends list, to measure whether that opens an invite path. Needs social.facade.
-  # Default (absent): false.
-  # ui_event_probe: true
+  # Quest only. The invite/party UI event: the party tab's Invite Members and the main-menu FRIENDS LIST press also
+  # ask the tablet to switch to its Friends list, where the "+" invites. Needs social.facade.
+  # Default (absent): true. Set false to turn it off.
+  # ui_event_probe: false
 
 # ---------------------------------------------------------------------------
 # graphics — render quality
