@@ -50,8 +50,9 @@ commit that `tools/next_release_version.py` counts (feat, fix, perf or a breakin
 
 1. **Switch.** The train does nothing until the repository variable `RELEASE_TRAIN` is `true`. Merging the workflow cuts
    nothing.
-2. **Gate.** The train cuts a commit only when a `build.yml` run on that exact commit has succeeded. Nothing runs CI on a
-   push to `main`, so a maintainer dispatches `build.yml` on `main` first. Until that run is green the train waits.
+2. **No build gate.** The train does not wait for a green `build.yml` run on `main`: nothing runs CI on a push to `main`,
+   so `main` never has one. Each PR was built and tested before it merged, and the build of the tag (step 3 of "What CI
+   does") is the proof. A red tag build leaves the draft unpublished (rule 4).
 3. **Ceiling and small.** A release carries what is on `main` when it is cut. `main` is never frozen for a release.
 4. **Forward.** A failure on the way out (a red step, a bad asset, a signer refusal) never holds a release open. The run
    stays red and the draft unpublished; fix forward on `main` and let the next cut be the fix. A tag is never reused.

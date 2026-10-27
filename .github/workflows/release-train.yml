@@ -12,8 +12,10 @@ on:
     - cron: "17 * * * *"
   workflow_dispatch:
 
+# actions: write is for `gh workflow run build.yml` with this run's token (step 3 of the cut job).
 permissions:
   contents: write
+  actions: write
 
 # One train at a time: a second run waits, and never cuts a tag beside a running one.
 concurrency:
@@ -37,10 +39,8 @@ jobs:
 
     # The next version is computed by tools/next_release_version.py from the commits since the newest vX.Y.Z tag
     # reachable from origin/main (docs/standards/planning.md, "Release versions"). Exit 1 is "nothing to release".
-    - name: Plan the release and check that main's build is green on that commit
+    - name: Plan the release
       id: plan
-      env:
-        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         rc=0
@@ -53,16 +53,9 @@ jobs:
         esac
         base=$(jq -r 'select(.event == "base") | .base' plan.jsonl)
         sha=$(git rev-parse origin/main)
-        # The commit's gate: a successful build.yml run on exactly this commit. Nothing runs CI on a push to main, so a
-        # maintainer dispatches build.yml on main first; until that run is green, the train waits and cuts nothing.
-        # A failed query fails this step red: it is not read as "not green".
-        green=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build.yml --branch main --status success --limit 20 \
-          --json headSha --jq "[.[] | select(.headSha == \"$sha\")] | length")
-        if [ "$green" -lt 1 ]; then
-          echo "no green build.yml run on $sha yet: the train waits for one" >&2
-          echo "cut=false" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
+        # No build gate here: nothing runs CI on a push to main, so main never has a build.yml run to wait for. Each PR
+        # was built and tested before it merged, and the build of the tag in the cut job is the proof
+        # (RELEASING.md, "When to release").
         { echo "cut=true"; echo "version=$version"; echo "base=$base"; } >> "$GITHUB_OUTPUT"
         echo "release train: v$version from $sha, base $base"
 
@@ -96,14 +89,23 @@ jobs:
       run: gh release create "v$VERSION" --title "v$VERSION" --draft --prerelease --verify-tag
 
     # 3. build.yml on the tag: builds, attests and attaches the two files to the draft. Verify is skipped on a tag
-    #    (#1008): the PR that merged each commit ran the tests.
+    #    (#1008): the PR that merged each commit ran the tests. The run is the one whose headBranch is the tag and that
+    #    was created after the dispatch (the tag is new, so no earlier run can match); a run that does not appear within
+    #    five minutes fails the step red.
     - name: Build the draft's files
       run: |
         set -euo pipefail
+        since=$(date -u -d '10 seconds ago' +%Y-%m-%dT%H:%M:%SZ)
         gh workflow run build.yml --repo "$GITHUB_REPOSITORY" --ref "v$VERSION"
-        sleep 20
-        id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build.yml --event workflow_dispatch --limit 10 \
-          --json databaseId,headBranch --jq "[.[] | select(.headBranch == \"v$VERSION\")] | .[0].databaseId")
+        id=""
+        for _ in $(seq 1 30); do
+          id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build.yml --event workflow_dispatch --limit 50 \
+            --json databaseId,headBranch,createdAt | jq -r --arg tag "v$VERSION" --arg since "$since" \
+            '[.[] | select(.headBranch == $tag and .createdAt >= $since)] | sort_by(.createdAt) | .[0].databaseId // empty')
+          if [ -n "$id" ]; then break; fi
+          sleep 10
+        done
+        test -n "$id" || { echo "no build.yml run on v$VERSION created since $since" >&2; exit 1; }
         echo "build run: $id"
         gh run watch "$id" --repo "$GITHUB_REPOSITORY" --exit-status
 
@@ -118,10 +120,25 @@ jobs:
       run: |
         set -euo pipefail
         test -n "$GH_TOKEN" || { echo "RELEASE_SIGNER_TOKEN is not set: the signer cannot be dispatched" >&2; exit 1; }
+        since=$(date -u -d '10 seconds ago' +%Y-%m-%dT%H:%M:%SZ)
         gh workflow run sign-release.yml --repo thesprockee/release-signer --ref main \
           -f repo="$GITHUB_REPOSITORY" -f tag="v$VERSION" -f dry_run=false
-        sleep 20
-        id=$(gh run list --repo thesprockee/release-signer --workflow sign-release.yml --event workflow_dispatch --limit 10 --json databaseId --jq '.[0].databaseId')
+        # The signer's runs carry no tag in their branch, and the API does not list a run's inputs. The run is one created
+        # after the dispatch whose display title names the tag; failing that, the only run created after it. Two or more
+        # runs created after it and none naming the tag is ambiguous: it is not guessed, and the step fails red.
+        id=""
+        for _ in $(seq 1 30); do
+          id=$(gh run list --repo thesprockee/release-signer --workflow sign-release.yml --event workflow_dispatch --limit 50 \
+            --json databaseId,displayTitle,createdAt | jq -r --arg tag "v$VERSION" --arg since "$since" \
+            '[.[] | select(.createdAt >= $since)] as $new
+             | [$new[] | select(.displayTitle | contains($tag))] as $named
+             | if ($named | length) >= 1 then ($named | sort_by(.createdAt) | .[0].databaseId)
+               elif ($new | length) == 1 then $new[0].databaseId
+               else empty end')
+          if [ -n "$id" ]; then break; fi
+          sleep 10
+        done
+        test -n "$id" || { echo "no unambiguous sign-release.yml run for v$VERSION created since $since" >&2; exit 1; }
         echo "signer run: $id"
         gh run watch "$id" --repo thesprockee/release-signer --exit-status
 
