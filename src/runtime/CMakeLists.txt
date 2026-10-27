@@ -605,6 +605,14 @@ if(BUILD_TESTING)
     target_link_libraries(test_host_rendezvous PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_host_rendezvous DISCOVERY_MODE PRE_TEST)
 
+    # The host's verdict on nevr-runtime.dll (ADR 0012 step 3, #854): the decision table and the detour over real
+    # staged files, signed by tools/gen_plugin_signature_fixtures.py (NEVR_SIGFIX_DIR; the rendezvous runtime
+    # stand-in is the file it signs).
+    add_executable(test_host_runtime_verify tests/test_host_runtime_verify.cpp)
+    target_compile_options(test_host_runtime_verify PRIVATE -Werror)
+    target_link_libraries(test_host_runtime_verify PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_runtime_verify DISCOVERY_MODE PRE_TEST)
+
     # The host's sixteen export thunks: the shipped file (host/runtime_exports.cpp) is one of the host units the
     # library holds, and the test pulls it from there.
     add_executable(test_host_exports tests/test_host_exports.cpp)

@@ -459,8 +459,9 @@ TEST(HostStopNotice, AClientWithGraphicsIsToldOnceBeforeTheProcessEndsHoweverOft
   EXPECT_EQ(RunStopWith("\"C:\\Games\\echovr.exe\" -windowed"), "shown");
   EXPECT_EQ(g_notice_texts.size(), 1u);
   ASSERT_FALSE(g_notice_texts.empty());
-  EXPECT_EQ(g_notice_texts[0],
-            L"nEVR couldn't start: nevr-runtime.dll is missing or damaged. Please reinstall with the installer.");
+  // kernel32's directory has no nevr-runtime.dll: the notice says it is missing (test_host_runtime_verify holds the
+  // words for each other cause).
+  EXPECT_EQ(g_notice_texts[0], L"nEVR couldn't start: nevr-runtime.dll is missing. Please run the installer.");
   ASSERT_GE(g_events.size(), 2u);
   EXPECT_EQ(g_events[0], "notice") << "the player is told before the process is ended";
   EXPECT_EQ(g_events[1], "stop");

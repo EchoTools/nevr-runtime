@@ -12,6 +12,7 @@
 
 #include "core/runtime_abi.h"
 #include "runtime/host/bootstrap_diagnostics.h"
+#include "runtime/ext/plugin_signature.h"
 
 #include <windows.h>
 
@@ -59,11 +60,36 @@ struct RuntimeLoadResult {
   const char* verify = nullptr;
   // What the verifier said, in its own words (nevr_plugin_signature::Verdict::Describe), or "unreadable".
   std::string verify_reason;
+  // The same verdict as a code, for the words the player reads (stop_notice.h). Meaningful when `verify` is "refused"
+  // or "unsigned_allowed"; Reason::Unreadable for a file that could not be opened for reading.
+  nevr_plugin_signature::Reason verify_reason_code = nevr_plugin_signature::Reason::Accepted;
 
   bool Loaded() const { return outcome == RuntimeLoadOutcome::kLoaded; }
   const char* OutcomeName() const;
   const char* DegradedAction() const;
 };
+
+/// What the host found when it looked for nevr-runtime.dll at the path ResolveRuntimePath returned.
+enum class RuntimeFile : std::uint8_t {
+  kAbsent,      ///< no file there (not found, or no such directory)
+  kUnreadable,  ///< a file is there and could not be opened for reading
+  kReadable,    ///< opened for reading, with FILE_SHARE_READ, and held
+};
+
+/// The decision on one file, from the facts alone (docs/adr/0012-static-install-root.md, "The host verifies
+/// nevr-runtime.dll before it loads it"). No Win32 calls, no allocation: the table in test_host_runtime_verify.
+struct VerifyDecision {
+  bool refused = false;             ///< the game stops, and the file is never mapped
+  bool may_load = false;            ///< the host maps the file next
+  const char* verify = nullptr;     ///< the word in the runtime_load record; null when no file was checked
+  bool reason_is_verdict = false;   ///< verify_reason is the verifier's own words (otherwise "unreadable", or none)
+};
+
+/// `verify_enabled` is false only in a test target's harness, which loads unsigned fixture runtimes. `accepted` is the
+/// verifier's verdict and is read only for a readable file with the check enabled. `dev_build` is the plugin
+/// developers' build (nevr_plugin_pins::IsDevBuild): it loads a file the verifier did not accept, and says so, but never
+/// a file the host could not read.
+VerifyDecision DecideVerify(RuntimeFile file, bool verify_enabled, bool accepted, bool dev_build) noexcept;
 
 /// The exit code of a game stopped because nevr-runtime.dll did not load: 78, EX_CONFIG in sysexits
 /// (docs/adr/0012-static-install-root.md, "Names this record fixes").
@@ -103,6 +129,13 @@ void SetEmitLoadFailureForTest(bool fail) noexcept;
 // Test seam: whether RuntimeLoader::Load verifies nevr-runtime.dll. Off by default in the test targets, whose harnesses
 // load unsigned fixture runtimes; the gate's own tests turn it on. Production always verifies.
 void SetVerifyRuntimeForTest(bool enabled) noexcept;
+// Test seam: the policy the verdict is taken against, instead of nevr_plugin_pins::PinnedPolicy() (the pinned Microsoft
+// root), so a harness can verify files signed by a throwaway PKI. Null: the pins. The policy must outlive the loads.
+void SetVerifyPolicyForTest(const nevr_plugin_signature::Policy* policy) noexcept;
+// Test seam: -1 the build's own (nevr_plugin_pins::IsDevBuild), 0 a release build, 1 the plugin developers' build.
+void SetDevBuildForTest(int mode) noexcept;
+// Test seam: called once with the path just before the load, while the verified file is still held.
+void SetBeforeLoadHookForTest(void (*hook)(const wchar_t* path)) noexcept;
 #endif
 
 class RuntimeLoader {

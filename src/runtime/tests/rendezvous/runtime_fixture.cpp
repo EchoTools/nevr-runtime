@@ -75,6 +75,12 @@ std::int64_t GameMain(std::int64_t command_line) {
   return result;
 }
 
+// The identity literal a real runtime carries: NUL-bounded "NEVR-BUILD <version> <commit40>" (src/core and
+// host_identity.cpp). The host reads the version out of the file for its `versions` record
+// (test_host_runtime_verify), and this stand-in has to say one.
+extern "C" __attribute__((used)) const char kNevrBuildLiteral[] =
+    "\0NEVR-BUILD 7.7.7 0123456789abcdef0123456789abcdef01234567";
+
 const NevrRuntimeApi kApi = {
     {
         sizeof(NevrRuntimeApi),
