@@ -1983,10 +1983,26 @@ void InstallWebSocketBridge() {
                         {
                           // Payload: 0x20 zero bytes (provider_id + UUID + token); the server ignores it.
                           const std::string subscribeMsg = nevr_evr_codec::BuildFriendListSubscribe();
-                          pairPtr->remoteWs->sendBinary(subscribeMsg);
-                          Log(EchoVR::LogLevel::Debug,
-                              "[NEVR.WS] Injected FriendListSubscribeRequest (%zu bytes)",
-                              subscribeMsg.size());
+                          // pairPtr is not read here: g_pairs owns the pair and a closing game socket erases it under
+                          // g_pairsMutex (#752). The pair is found by its game socket, as ForwardGameFrameToRemote does,
+                          // and the send runs outside the mutex: a failed send runs the remote's Close callback on this
+                          // thread, and that callback takes the mutex (#738).
+                          std::shared_ptr<ix::WebSocket> subscribeRemote;
+                          {
+                            std::lock_guard<std::mutex> lk(g_pairsMutex);
+                            auto it = g_pairs.find(gameWsPtr);
+                            if (it != g_pairs.end()) subscribeRemote = it->second->remoteWs;
+                          }
+                          if (subscribeRemote) {
+                            subscribeRemote->sendBinary(subscribeMsg);
+                            Log(EchoVR::LogLevel::Debug,
+                                "[NEVR.WS] Injected FriendListSubscribeRequest (%zu bytes)",
+                                subscribeMsg.size());
+                          } else {
+                            Log(EchoVR::LogLevel::Debug,
+                                "[NEVR.WS] FriendListSubscribeRequest not sent: game socket %d has no pair",
+                                connIdx);
+                          }
                         }
                       }
                       // STcpConnectionUnrequireEvent is deliberately NOT acted on.
