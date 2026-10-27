@@ -551,6 +551,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         script = (ROOT / "verify-server.sh").read_text()
         self.assertRegex(script, r'if \[ ! -e "\$GAME_ROOT/echovr/_local/config\.yaml" \]')
         self.assertIn("allow_offline_server: true", script)
+        self.assertIn('socket_uri: ""', script)  # #843: an explicit empty socket_uri takes no embedded default
         self.assertRegex(script, r'deploy "\$OUT/offline-config\.yaml" "\$GAME_DIR/\.\./\.\./_local/config\.yaml"')
 
     def test_token_mints_are_serialized(self):

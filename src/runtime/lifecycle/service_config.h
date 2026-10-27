@@ -54,6 +54,10 @@ const char* NevrGameNativeDefault(const char* key);
 /// True unless config.yaml explicitly sets `social.facade: false`.
 bool NevrCfgSocialFacadeEnabled();
 
+/// Boot logs, once, the built-in defaults this run uses (names only): the keys config.yaml and the
+/// environment leave unset that take an embedded value (#843). Reads config.yaml, so call it after it loads.
+void NevrCfgLogBuiltinDefaultsTaken();
+
 /// JSON text of the game-native config to hand the game when it found no `_local/config.json`
 /// (the `social_plugin` block that turns on friends, parties and presence), built from the
 /// Nakama HTTP base and server key via config.yaml, else the build's embedded defaults. nullptr

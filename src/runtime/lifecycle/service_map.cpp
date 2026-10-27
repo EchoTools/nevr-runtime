@@ -106,10 +106,9 @@ std::optional<std::string> LookupFlat(const nevr::NevrConfig& cfg, const std::st
   return value;
 }
 
-FlatDefaults SelectBuiltinDefaults(bool serverMode, const EmbeddedDefault* entries, std::size_t count,
+FlatDefaults SelectBuiltinDefaults(const EmbeddedDefault* entries, std::size_t count,
                                    std::string* embeddedNames, std::string* missingNames) {
   FlatDefaults defaults;
-  if (serverMode) return defaults;
   for (std::size_t i = 0; i < count; ++i) {
     const bool embedded = entries[i].value != nullptr && entries[i].value[0] != '\0';
     std::string* list = embedded ? embeddedNames : missingNames;

@@ -52,9 +52,11 @@ OFFLINE_CONFIG = """{
 """
 
 
-# A dedicated server without services.socket_uri refuses to start (#16). The rig has no service to log
-# in to, so it opts in to an offline boot explicitly.
+# A dedicated server takes the build's embedded socket_uri when config.yaml leaves it out (#843), and
+# refuses to start with none (#16). The rig has no service to log in to: an explicit empty socket_uri
+# takes no embedded default, and allow_offline_server opts in to an offline boot.
 OFFLINE_CONFIG_YAML = """services:
+  socket_uri: ""
   allow_offline_server: true
 """
 
