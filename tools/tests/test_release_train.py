@@ -150,6 +150,13 @@ class AudienceSection(unittest.TestCase):
         self.assertNotIn("a worktree recipe", out)
         self.assertIn("- a real change", out)
 
+    def test_release_tooling_scope_is_left_out_even_as_a_feature_or_a_fix(self) -> None:
+        out = audience.sections(["feat(release): a publish recipe", "fix(release): a script", "fix(quest): a real fix"])
+        self.assertNotIn("a publish recipe", out)
+        self.assertNotIn("a script", out)
+        self.assertIn("- a real fix", out)
+        self.assertEqual(out.count("Nothing for this audience in this release."), 2)
+
     def test_an_empty_audience_says_so(self) -> None:
         out = audience.sections(["fix(quest): a thing"])
         self.assertIn("### For plugin developers\n\n- Nothing for this audience in this release.", out)

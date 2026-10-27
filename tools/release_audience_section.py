@@ -21,8 +21,8 @@ SCOPE_AUDIENCE = {
     "arena": "For server hosts",
     "plugins": "For plugin developers",
 }
-# Tooling and CI do not reach a player or a host (RELEASING.md, "When to release", rule 1): they are left out.
-EXCLUDED_SCOPES = {"tools", "ci", "build", "test", "docs"}
+# Tooling, CI and the release process itself change no shipped file, so no audience reads them: they are left out.
+EXCLUDED_SCOPES = {"tools", "ci", "build", "test", "docs", "release"}
 CONVENTIONAL = re.compile(r"^(?P<type>feat|fix|perf)(?:\((?P<scope>[^)]*)\))?(?P<bang>!)?: (?P<text>.+)$")
 RELEASE_NOTE = re.compile(r"^Release-note:[ \t]*(?P<text>\S.*?)[ \t]*$", re.M)
 RECORD_END = "\x1e"
