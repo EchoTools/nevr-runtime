@@ -66,6 +66,9 @@ inline bool IsEvent(const nlohmann::json& object, const char* panel_name, const 
 
 }  // namespace detail
 
+// A cheap test run before any JSON parse: the submit sees every remote log line, and only a wizard line names this panel.
+inline bool MayBeWizardMetric(std::string_view line) { return line.find("deep_linking") != std::string_view::npos; }
+
 inline Metric ParseMetric(std::string_view line) {
   Metric metric;
   if (line.empty() || line.size() > kMetricMaxBytes) return metric;
@@ -291,6 +294,16 @@ inline std::string SentLine(const Plan& plan, std::string_view fingerprint) {
     return "[NEVR.INVITE] request sent op=create expires_s=" + std::to_string(plan.expires_s);
   }
   return "[NEVR.INVITE] request sent op=resolve code_len=" + std::to_string(plan.code_len) +
+         " code_fp=" + std::string(fingerprint);
+}
+
+// Until the worker that posts the request exists, a planned request is logged as planned, never as sent.
+inline std::string PlannedLine(const Plan& plan, std::string_view fingerprint) {
+  if (!plan.request.has_value()) return "";
+  if (plan.op == Op::Create) {
+    return "[NEVR.INVITE] request planned op=create expires_s=" + std::to_string(plan.expires_s);
+  }
+  return "[NEVR.INVITE] request planned op=resolve code_len=" + std::to_string(plan.code_len) +
          " code_fp=" + std::string(fingerprint);
 }
 
