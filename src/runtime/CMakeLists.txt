@@ -97,6 +97,7 @@ set(PATCHES_SOURCES
     "server/registration_envelope.cpp"
     "server/registration_metadata.cpp"
     "server/installed_levels.cpp"
+    "server/telemetry_game_type.cpp"
     "server/messages.cpp"
     "server/server_context.cpp"
     "server/websocket_client.cpp"
@@ -832,6 +833,14 @@ if(BUILD_TESTING)
     target_link_libraries(test_installed_levels PRIVATE GTest::gtest GTest::gtest_main zstd::libzstd
       nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_installed_levels DISCOVERY_MODE PRE_TEST)
+
+    # #990: the capture header's game type follows the lobby type (telemetry_game_type.cpp).
+    add_executable(test_telemetry_game_type tests/test_telemetry_game_type.cpp server/telemetry_game_type.cpp)
+    set_source_files_properties(tests/test_telemetry_game_type.cpp server/telemetry_game_type.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_telemetry_game_type PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_telemetry_game_type PRIVATE GTest::gtest GTest::gtest_main nevr_api)
+    gtest_discover_tests(test_telemetry_game_type DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_callback_unregistration
       tests/test_callback_unregistration.cpp
