@@ -561,6 +561,12 @@ TEST(MicProviderPolicy, InstalledOnNativeWindowsAndUnderWine) {
   EXPECT_TRUE(nevr_mic_policy::ShouldInstallProvider(/*isWine=*/true));
 }
 
+// #879: a dedicated server opens no capture device; a client keeps the provider's capture path.
+TEST(MicProviderPolicy, ServerProvidesNoCaptureAndAClientDoes) {
+  EXPECT_FALSE(nevr_mic_policy::ProvidesCapture(/*isServer=*/true));
+  EXPECT_TRUE(nevr_mic_policy::ProvidesCapture(/*isServer=*/false));
+}
+
 TEST(MicProviderPolicy, BootLineNamesTheDecisionAndNeverClaimsAProviderThatIsNotInstalled) {
   EXPECT_STREQ(nevr_mic_policy::BootLine(true, /*isWine=*/true), "[NEVR.MIC] provider installed: Wine\n");
   EXPECT_STREQ(nevr_mic_policy::BootLine(true, /*isWine=*/false), "[NEVR.MIC] provider installed: native Windows\n");
@@ -639,6 +645,42 @@ TEST(MicDeviceChoice, HeadsetNamesMatchCaseInsensitivelyAndBareMetaDoesNot) {
   EXPECT_TRUE(nevr_mic_device::NameLooksLikeHeadset(L"Microphone (Meta Link)"));
   EXPECT_FALSE(nevr_mic_device::NameLooksLikeHeadset(L"Microphone (Metallic Studio USB)"));
   EXPECT_FALSE(nevr_mic_device::NameLooksLikeHeadset(L"Microphone (Chromium Capture Device)"));
+}
+
+// #412: audio.capture_device in config.yaml is the player's saved choice and comes before LibOVR's answer.
+TEST(MicDeviceChoice, SavedIdWinsOverLibOvrAndTheHeadsetName) {
+  const auto pick = nevr_mic_device::ChooseWithPreference(false, kWebcam.id, kHeadset.id, 0,
+                                                          {kChromium, kHeadset, kWebcam});
+  EXPECT_EQ(pick.choice, Choice::Configured);
+  EXPECT_EQ(pick.endpoint.id, kWebcam.id);
+}
+
+TEST(MicDeviceChoice, SavedNameMatchesCaseInsensitivelyAsAPart) {
+  const auto pick = nevr_mic_device::ChooseWithPreference(false, L"hd pro", L"", -1, {kChromium, kWebcam});
+  EXPECT_EQ(pick.choice, Choice::Configured);
+  EXPECT_EQ(pick.endpoint.id, kWebcam.id);
+}
+
+TEST(MicDeviceChoice, SavedChoiceNamingNoActiveEndpointFallsThroughWithTheReason) {
+  const auto pick = nevr_mic_device::ChooseWithPreference(false, L"Unplugged USB", kHeadset.id, 0,
+                                                          {kChromium, kHeadset});
+  EXPECT_EQ(pick.choice, Choice::LibOvr);
+  EXPECT_EQ(pick.endpoint.id, kHeadset.id);
+  EXPECT_NE(pick.reason.find("audio.capture_device names no active capture endpoint"), std::string::npos)
+      << pick.reason;
+}
+
+TEST(MicDeviceChoice, NoSavedChoiceIsTheRuleBeforeIssue412) {
+  const auto withEmpty = nevr_mic_device::ChooseWithPreference(false, L"", kHeadset.id, 0, {kChromium, kHeadset});
+  const auto plain = nevr_mic_device::Choose(false, kHeadset.id, 0, {kChromium, kHeadset});
+  EXPECT_EQ(withEmpty.choice, plain.choice);
+  EXPECT_EQ(withEmpty.endpoint.id, plain.endpoint.id);
+  EXPECT_EQ(withEmpty.reason, plain.reason);
+}
+
+TEST(MicDeviceChoice, WineIgnoresASavedChoice) {
+  const auto pick = nevr_mic_device::ChooseWithPreference(true, kWebcam.id, L"", -1, {kChromium, kWebcam});
+  EXPECT_EQ(pick.choice, Choice::OsDefault);
 }
 
 // The results that mean the capture endpoint is lost (#399): the device was invalidated, or the stream's

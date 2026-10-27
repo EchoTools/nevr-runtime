@@ -166,6 +166,7 @@ set(PATCHES_HEADERS
     "compat/ws_bridge.h"
     "compat/socket_role.h"
     "patch/invite_wizard.h"
+    "patch/guild_picker.h"
     "compat/evr_codec.h"
     "compat/lobby_frame.h"
     "patch/xpid_patch.h"
@@ -1175,6 +1176,13 @@ if(BUILD_TESTING)
     target_include_directories(test_invite_wizard PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_invite_wizard PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_invite_wizard DISCOVERY_MODE PRE_TEST)
+
+    # #963: the CREATE GAME guild picker (patch/guild_picker.h): header only, pure.
+    add_executable(test_guild_picker tests/test_guild_picker.cpp)
+    set_source_files_properties(tests/test_guild_picker.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_guild_picker PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_guild_picker PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_guild_picker DISCOVERY_MODE PRE_TEST)
 
     # The #408 self-check (compat/status_redirect_check.h): the game's API connections counted as redirected or
     # passed through. Header only on top of the self-check unit.

@@ -659,37 +659,53 @@ VOID PatchEnableServer() {
 VOID PatchEnableOffline() {
   using namespace nevr_patch_addresses;
 
+  // N17: every site reports its outcome by name, and one aggregate line at Info says how many were written.
+  // Before this, a failed write was silent here (only ApplyPatch's offset-only warning), so a boot could not
+  // show which offline patches were in effect.
+  int attempted = 0;
+  int written = 0;
+  const auto apply = [&attempted, &written](const char* site, uintptr_t offset, const BYTE* patch, size_t size) {
+    ++attempted;
+    const bool ok = ApplyPatch(offset, patch, size);
+    if (ok) ++written;
+    Log(ok ? EchoVR::LogLevel::Debug : EchoVR::LogLevel::Warning, "[NEVR.PATCH] offline site=%s result=%s", site,
+        ok ? "applied" : "failed");
+  };
+
   // Patch multiplayer initialization for offline mode
   const BYTE multiplayerPatch[] = {0xE8, 0xCD, 0x02, 0x00, 0x00};  // CALL +0x2CD
   static_assert(sizeof(multiplayerPatch) == OFFLINE_MULTIPLAYER_SIZE, "OFFLINE_MULTIPLAYER patch size mismatch");
-  ApplyPatch(OFFLINE_MULTIPLAYER, multiplayerPatch, sizeof(multiplayerPatch));
+  apply("multiplayer", OFFLINE_MULTIPLAYER, multiplayerPatch, sizeof(multiplayerPatch));
 
   // Patch incident reporting
   const BYTE incidentsPatch[] = {0x75, 0x0A};  // JNZ +0x0A
   static_assert(sizeof(incidentsPatch) == OFFLINE_INCIDENTS_SIZE, "OFFLINE_INCIDENTS patch size mismatch");
-  ApplyPatch(OFFLINE_INCIDENTS, incidentsPatch, sizeof(incidentsPatch));
+  apply("incidents", OFFLINE_INCIDENTS, incidentsPatch, sizeof(incidentsPatch));
 
   // Patch title/session checks
   const BYTE titlePatch[] = {0x74, 0x12};  // JZ +0x12
   static_assert(sizeof(titlePatch) == OFFLINE_TITLE_SIZE, "OFFLINE_TITLE patch size mismatch");
-  ApplyPatch(OFFLINE_TITLE, titlePatch, sizeof(titlePatch));
+  apply("title", OFFLINE_TITLE, titlePatch, sizeof(titlePatch));
 
   // Force transaction service to load (two conditional jumps to NOP)
   // Both patches use the same 2-byte NOP pattern and share the same SIZE constant
   const BYTE nopConditionalJump[] = {0x90, 0x90};  // 2x NOP
   static_assert(sizeof(nopConditionalJump) == OFFLINE_TRANSACTION_SIZE, "OFFLINE_TRANSACTION patch size mismatch");
-  ApplyPatch(OFFLINE_TRANSACTION_1, nopConditionalJump, sizeof(nopConditionalJump));
-  ApplyPatch(OFFLINE_TRANSACTION_2, nopConditionalJump, sizeof(nopConditionalJump));
+  apply("transaction_1", OFFLINE_TRANSACTION_1, nopConditionalJump, sizeof(nopConditionalJump));
+  apply("transaction_2", OFFLINE_TRANSACTION_2, nopConditionalJump, sizeof(nopConditionalJump));
 
   // Skip failed logon service code
   const BYTE skipLogon[] = {0xE9, 0x92, 0x00, 0x00, 0x00, 0x00};  // JMP +0x97
   static_assert(sizeof(skipLogon) == OFFLINE_LOGON_SIZE, "OFFLINE_LOGON patch size mismatch");
-  ApplyPatch(OFFLINE_LOGON, skipLogon, sizeof(skipLogon));
+  apply("logon", OFFLINE_LOGON, skipLogon, sizeof(skipLogon));
 
   // Redirect tutorial beginning
   const BYTE tutorialRedirect[] = {0xE8, 0xD6, 0x17, 0x68, 0xFF};  // CALL relative
   static_assert(sizeof(tutorialRedirect) == OFFLINE_TUTORIAL_SIZE, "OFFLINE_TUTORIAL patch size mismatch");
-  ApplyPatch(OFFLINE_TUTORIAL, tutorialRedirect, sizeof(tutorialRedirect));
+  apply("tutorial", OFFLINE_TUTORIAL, tutorialRedirect, sizeof(tutorialRedirect));
+
+  // The aggregate line is always written, so an offline boot that wrote nothing still says so (N122/N124).
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] offline mode: %d of %d patch sites written", written, attempted);
 }
 
 // ============================================================================

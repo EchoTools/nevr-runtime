@@ -507,6 +507,38 @@ void OpenFriendRequestUI(void*, std::uint64_t, std::uint64_t target) {
   SendParty("friend request", nevr_social_party::Global().RequestFriend(target));
 }
 
+// The party tab's "Invite Members" slots (#955, the PC twin of #318). The game passes no target to the
+// no-target slots and the facade has no friend picker, so they send no invite: inviting every online friend on
+// one tap would send invites nobody asked for. The Friends tab's "+" is the way to invite. The Quest side posts a
+// script event to switch the tablet to its Friends tab (SendComponentEventGlobal); that is not ported here (no
+// PC address for it is pinned), so the PC tab does not switch by itself.
+void LogInviteUiNoInvite(const char* slot, const char* result) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] %s: result=%s, no invite sent (use the Friends tab)", slot, result);
+}
+
+// Slot 38 OpenSendInviteUI(LocalUserID): no target, no picker.
+void OpenSendInviteUI(void*, std::uint32_t) { LogInviteUiNoInvite("open send invite ui", "no_target_no_invite_sent"); }
+
+// Slot 39 OpenNewSendInviteUI(LocalUserID, UserAccountID): the game names the user to invite, so this is the
+// invite SendInvite sends for the Friends tab.
+void OpenNewSendInviteUITarget(void*, std::uint32_t, std::uint64_t target) { SendInvite(nullptr, target); }
+
+// Slot 40 OpenNewSendInviteUI(LocalUserID): the party tab's "Invite Members" (no target).
+void OpenNewSendInviteUI(void*, std::uint32_t) { LogInviteUiNoInvite("open new send invite ui", "no_target_no_invite_sent"); }
+
+// Slot 41 OpenRecvInviteUI(LocalUserID): the received-invites UI. Nothing shows the game calls it from an invite
+// action, so it sends nothing.
+void OpenRecvInviteUI(void*, std::uint32_t) { LogInviteUiNoInvite("open recv invite ui", "no_invite_sent"); }
+
+// Slot 42 OpenPartyUI(LocalUserID, UserAccountID): open the party UI for a user, not an invite.
+void OpenPartyUITarget(void*, std::uint32_t, std::uint64_t target) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] open party ui: target=%llx, no invite sent",
+      static_cast<unsigned long long>(target));
+}
+
+// Slot 43 OpenPartyUI(LocalUserID): called when the party tab opens; must never invite.
+void OpenPartyUI(void*, std::uint32_t) { LogInviteUiNoInvite("open party ui", "no_invite_sent"); }
+
 // Slot 30 MemberDataWritable (0x18008fcf0): only for the local member (index 0, once a local user
 // exists), it marks the data dirty and returns the member's JSON root for the game to write into.
 std::uint64_t MemberDataWritable(void* self, std::int32_t index) {
@@ -1083,12 +1115,12 @@ const std::array<Slot, kVtableSlotCount> kVtable = {
     TRACED(35, UnimplementedSlot),  // 35 EnterGame
     TRACED(36, UnimplementedSlot),  // 36 ExitGame
     TRACED(37, OpenFriendRequestUI),  // 37 OpenFriendRequestUI
-    TRACED(38, UnimplementedSlot),  // 38 OpenSendInviteUI
-    TRACED(39, UnimplementedSlot),  // 39 OpenNewSendInviteUI(target): 0x140187230 passes (0, account)
-    TRACED(40, UnimplementedSlot),  // 40 OpenNewSendInviteUI: 0x140187330 passes (0)
-    TRACED(41, UnimplementedSlot),  // 41 OpenRecvInviteUI
-    TRACED(42, UnimplementedSlot),  // 42 OpenPartyUI(target): 0x1401873f0 passes (0, account)
-    TRACED(43, UnimplementedSlot),  // 43 OpenPartyUI: 0x1401874f0 passes (0)
+    TRACED(38, OpenSendInviteUI),  // 38 OpenSendInviteUI
+    TRACED(39, OpenNewSendInviteUITarget),  // 39 OpenNewSendInviteUI(target): 0x140187230 passes (0, account)
+    TRACED(40, OpenNewSendInviteUI),  // 40 OpenNewSendInviteUI: 0x140187330 passes (0)
+    TRACED(41, OpenRecvInviteUI),  // 41 OpenRecvInviteUI
+    TRACED(42, OpenPartyUITarget),  // 42 OpenPartyUI(target): 0x1401873f0 passes (0, account)
+    TRACED(43, OpenPartyUI),  // 43 OpenPartyUI: 0x1401874f0 passes (0)
     TRACED(44, Zero0),  // 44 RefreshingFriends
     TRACED(45, RefreshFriends),  // 45 RefreshFriends
     TRACED(46, FriendCount),  // 46 FriendCount
