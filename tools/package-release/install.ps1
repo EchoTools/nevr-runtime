@@ -178,6 +178,10 @@ if (Test-Path -LiteralPath $state) {
   foreach ($key in 'backup', 'legacy', 'installed_sha256') {
     if (-not $values.ContainsKey($key)) { throw "nevr-install.txt has no $key (see $state)" }
   }
+  # #781: both the recorded path and the update path depend on the backup and on no dbgcore.dll, so these checks run
+  # before either branch writes anything; the recorded path would otherwise report success for an install uninstall.ps1 cannot undo.
+  if (-not (Test-Path -LiteralPath $values['backup'])) { throw "the backup is gone: $($values['backup']); nothing was changed" }
+  if (Test-Path -LiteralPath (Join-Path $Dir 'dbgcore.dll')) { throw 'a dbgcore.dll exists again; run uninstall.ps1 first' }
   # An update keeps what the first install set aside; a state file from before runtime_aside existed names none.
   $keptRuntimeAside = if ($values.ContainsKey('runtime_aside')) { $values['runtime_aside'] } else { '' }
   # #779: an install made before #762 may have saved a NEVR runtime as the original; never restore or keep one.
@@ -205,8 +209,6 @@ if (Test-Path -LiteralPath $state) {
     }
     throw "BugSplat64.dll is neither one install.ps1 put there nor a NEVR runtime, so uninstall.ps1 cannot undo it either; nothing was changed. Restore the game's own file (for example, Verify Files in the Meta Horizon app), delete $state, then run install.ps1 again"
   }
-  if (-not (Test-Path -LiteralPath $values['backup'])) { throw "the backup is gone: $($values['backup']); nothing was changed" }
-  if (Test-Path -LiteralPath (Join-Path $Dir 'dbgcore.dll')) { throw 'a dbgcore.dll exists again; run uninstall.ps1 first' }
   # The runtime goes first: a host that is not yet replaced loads whichever runtime stands beside it, and a failure
   # puts both files back as they were.
   $prior = [System.IO.File]::ReadAllBytes($target)

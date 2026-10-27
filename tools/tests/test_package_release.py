@@ -1240,6 +1240,36 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), self.plain("5.4.3"))
         self.assertEqual(self.state()["installed_sha256"], hashlib.sha256(self.plain("5.4.3")).hexdigest())
 
+    def game_files(self):
+        return {p.name: p.read_bytes() for p in self.game.iterdir() if p.is_file()}
+
+    def test_a_recorded_hand_copy_with_the_backup_gone_is_refused_and_writes_nothing(self):  # #781
+        self.set_package(self.plain("5.4.3"))
+        self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
+        (backup,) = self.game.glob("BugSplat64.dll.original-*")
+        backup.unlink()
+        self.set_package(self.plain("5.4.4"))
+        (self.game / "BugSplat64.dll").write_bytes(self.plain("5.4.4"))  # the package DLL, copied in by hand
+        before = self.game_files()
+        result = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertNotEqual(result.returncode, 0, self.output(result))
+        self.assertIn("the backup is gone", self.output(result))
+        self.assertNotIn("RECORDED", self.output(result))
+        self.assertEqual(self.game_files(), before)
+
+    def test_a_recorded_hand_copy_with_a_dbgcore_dll_back_is_refused_and_writes_nothing(self):  # #781
+        self.set_package(self.plain("5.4.3"))
+        self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
+        self.set_package(self.plain("5.4.4"))
+        (self.game / "BugSplat64.dll").write_bytes(self.plain("5.4.4"))  # the package DLL, copied in by hand
+        (self.game / "dbgcore.dll").write_bytes(b"legacy dbgcore")
+        before = self.game_files()
+        result = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertNotEqual(result.returncode, 0, self.output(result))
+        self.assertIn("a dbgcore.dll exists again", self.output(result))
+        self.assertNotIn("RECORDED", self.output(result))
+        self.assertEqual(self.game_files(), before)
+
     def test_after_verify_files_and_deleting_the_record_install_backs_up_the_games_own_file(self):
         backup = self.poison_the_backup()
         (self.game / "BugSplat64.dll").write_bytes(b"ORIGINAL")  # Verify Files
