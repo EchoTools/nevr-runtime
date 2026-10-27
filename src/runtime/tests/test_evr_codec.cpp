@@ -269,11 +269,13 @@ TEST(EvrCodecPolicy, TheCnsUserProviderNibbleIsTheLoginPlatform) {
   EXPECT_EQ(nevr_provider_identity::WithLoginProvider(0xABCDEF07ULL, 4), 0xABCDEF04ULL);
 }
 
-// The flag is the one the stock login reads for the "N/A" serial: bit 20 of game+0x7ae0. -noovr (bit 27) and a
-// plain windowed client do not set it; a dedicated server never counts as a No VR client.
+// The flag is the one the stock login reads for the "N/A" serial: bit 20 of game+0x7ae0. -noovr (bit 27) does not
+// set it; the game sets it itself when it finds no headset (a plain -windowed client with none read 0x42700000
+// in a live run); a dedicated server never counts as a No VR client.
 TEST(EvrCodecPolicy, TheNoVrDecisionReadsBit20OfTheGameFlagsAndNeverOnAServer) {
   EXPECT_TRUE(nevr_hmd_serial::LoginIsNoVr(false, 0x100000ULL));
   EXPECT_TRUE(nevr_hmd_serial::LoginIsNoVr(false, 0x2100000ULL)) << "-spectatorstream ORs 0x2100000";
+  EXPECT_TRUE(nevr_hmd_serial::LoginIsNoVr(false, 0x42700000ULL)) << "the word of a -windowed client with no headset";
   EXPECT_FALSE(nevr_hmd_serial::LoginIsNoVr(false, 0));
   EXPECT_FALSE(nevr_hmd_serial::LoginIsNoVr(false, 0x8000000ULL)) << "-noovr alone sets bit 27, not bit 20";
   EXPECT_FALSE(nevr_hmd_serial::LoginIsNoVr(false, 0xFFEFFFFFULL)) << "every bit but 20";
