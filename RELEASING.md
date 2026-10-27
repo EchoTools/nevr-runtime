@@ -1,21 +1,21 @@
 # Releasing nEVR runtime
 
-Every release follows this file (`AGENTS.md`). A release is a tag, a draft that CI fills, a signing pass, and one
-publish. The checks before the tag run locally; the workflow runs once, on the real tag (GitHub Actions minutes are
-billed). Nothing about a published release is edited afterwards: a wrong release is fixed by the next version.
+A release is a tag, a draft, two files attached to it, the signer's replacement of those files, the checks on the
+result, and one publish. CI does all of it, in `.github/workflows/release-train.yml` (the train) and `build.yml` (the
+build). A person does the same steps by hand only when the train is off or a run has gone red. Nothing about a published
+release is edited afterwards: a wrong release is fixed by the next version.
 
 ## Names
 
 - **Version:** plain semver, `X.Y.Z` (no leading zeros, `tools/release_asset_names.sh` `release_tag_regex`). It is
-  computed, not chosen: `python3 tools/next_release_version.py` prints it from the commits since the last release tag
-  (`docs/standards/planning.md`, "Release versions"). Every other build stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts
-  after the tag it descends from; it is never released.
-- **Tag:** `vX.Y.Z`, annotated (`git tag -a vX.Y.Z -m "X.Y.Z"`), cut from `origin/main`.
-- **GitHub release title:** the tag, `vX.Y.Z`, and nothing else (`gh release create vX.Y.Z --title vX.Y.Z`).
+  computed, not chosen: `python3 tools/next_release_version.py` prints it from the feat, fix, perf and breaking commits
+  since the newest `vX.Y.Z` tag reachable from `origin/main` (`docs/standards/planning.md`, "Release versions"). Every
+  other build stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from; it is never released.
+- **Tag:** `vX.Y.Z`, annotated (`git tag -a vX.Y.Z -m "X.Y.Z"`), on `origin/main`.
+- **GitHub release title:** the tag, `vX.Y.Z`, and nothing else.
 - **Pre-release or release:** the flag is the only difference. A release is created as a pre-release; promoting it
   (`gh release edit vX.Y.Z --prerelease=false`) changes no byte and fires no workflow. Nothing in a file depends on the flag.
-  There is no `-rc` tag: `release_tag_regex` accepts only `vX.Y.Z`, so a pre-release carries the version it will have if
-  promoted, and the next pre-release is the next version the commits compute (a published tag is never reused).
+  There is no `-rc` tag: `release_tag_regex` accepts only `vX.Y.Z`, and a published tag is never reused.
 
 ## Assets
 
@@ -30,8 +30,9 @@ from the build.
 
 There is no top-level `SHA256SUMS` and no `RELEASE-NOTES.md` asset. The **release body** carries the notes and a table
 of the SHA-256 of each of the two assets, rendered by `python3 tools/package_release.py notes` from
-`tools/package-release/RELEASE-NOTES.template.md` and the asset files as they are after signing ("Write the release
-body"). The attestation stays the machine-checkable proof of the CI bytes.
+`tools/package-release/RELEASE-NOTES.template.md` and the asset files as they are after signing, followed by the
+per-audience section from `tools/release_audience_section.py` ("The release body"). The attestation stays the
+machine-checkable proof of the CI bytes.
 
 Not release assets: the `.tar.zst` archives and the `.dbg` symbol files (workflow artifacts, 7 and 90 days), and any Quest APK.
 
@@ -44,44 +45,35 @@ installed: the CDN caches the 200 HTML answer for that exact address. A changed 
 
 ## When to release
 
-A release is a train, not an event. These rules decide when one leaves; nobody schedules it.
+A release is a train, not an event. The train (`release-train.yml`) runs hourly and cuts a pre-release when `main` has a
+commit that `tools/next_release_version.py` counts (feat, fix, perf or a breaking change) since the newest tag.
 
-1. **Trigger.** A pre-release is cut as soon as `main` has at least one player-visible change that isn't in the last
-   published release. A merged PR is player-visible if its title is `feat` or `fix` and it touches what a player
-   installs or runs. Docs, CI and tooling don't trigger a release; they ride the next one.
-2. **Ceiling.** No more than 24 hours pass between a player-visible merge and a published pre-release that contains it.
-   If that would be exceeded, cutting the release is the next thing the maintainer does.
-3. **Small.** A release carries what is on `main` when it's cut. It never waits to batch more changes in, and `main` is
-   never frozen for a release.
-4. **Parallel.** Tag, the tag's CI build, the PC login test and the release notes run at the same time. The tag's CI run
-   is the proof that the build and packaging work; it isn't rehearsed first.
-5. **Forward.** A failure on the way out (CI, a gate, a bad asset) never holds the release open. Delete the unpublished
-   draft, fix forward on `main`, and cut the next patch version. A tag is never reused.
-6. **Stable.** A pre-release is promoted to stable once testers have run it with no new defect filed against it.
+1. **Switch.** The train does nothing until the repository variable `RELEASE_TRAIN` is `true`. Merging the workflow cuts
+   nothing.
+2. **Gate.** The train cuts a commit only when a `build.yml` run on that exact commit has succeeded. Nothing runs CI on a
+   push to `main`, so a maintainer dispatches `build.yml` on `main` first. Until that run is green the train waits.
+3. **Ceiling and small.** A release carries what is on `main` when it is cut. `main` is never frozen for a release.
+4. **Forward.** A failure on the way out (a red step, a bad asset, a signer refusal) never holds a release open. The run
+   stays red and the draft unpublished; fix forward on `main` and let the next cut be the fix. A tag is never reused.
+5. **Stable.** A pre-release is promoted to stable once testers have run it with no new defect filed against it.
 
 ## Before the tag
 
+These run by hand once per release, before the train's first step, from a clone of `origin/main`:
+
 1. `git fetch origin` and `just release-preflight` pass: this clone is exactly `origin/main`, no local-only tag, nothing
    unpushed, no uncommitted change.
-2. Every PR merged since the last release passed its own checks before it merged. Before the tag, run only the tests
-   for what those PRs changed (each PR body names them), not a full `just verify` of the tree. The full suite runs in the
-   tag's CI build.
-3. In parallel with the tag's CI run, run the packaging the workflow runs, from the same clone, to catch a packaging
-   failure early:
-   ```sh
-   just package-dev    # tools/package_release.py over the stripped DLL and the Quest library; stamps -dev, not a release
-   ```
-   Read its output to the end: it fails on a Windows or Quest build that does not package. It needs the Quest signing
-   keystore in `pass`, the store APK and the NDK, as its recipe says. What it cannot show is the signer, the attestation
-   and the draft upload; those are checked on the draft ("Check the draft").
-4. The PC login test passes with this tip's `BugSplat64.dll` and `nevr-runtime.dll` on a throwaway copy of the install, against production
-   (`AGENTS.md`, "Client login test mechanics"): the run's log shows the four keys on the `built-in defaults embedded in
-   this build:` line, then `LOGIN SUCCESS` and `to logged in`.
+2. Every PR merged since the last release passed its own checks before it merged. The full suite is not run again: the
+   tag's build skips it (#1008).
+3. `just package-dev` reads to the end. It fails on a Windows or Quest build that does not package. It needs the Quest
+   signing keystore in `pass`, the store APK and the NDK, as its recipe says.
+4. The PC login test passes with this tip's `BugSplat64.dll` and `nevr-runtime.dll` on a throwaway copy of the install,
+   against production (`AGENTS.md`, "Client login test mechanics"): the run's log shows the four keys on the
+   `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in`.
 
-## Cut the draft
+## Cut the draft by hand
 
-A release is built from a **draft**. A draft fires no workflow, so the build is started by hand on the tag ref, attaches
-its files to the draft, and the draft stays a draft until the checks below pass.
+Only when the train is off or its run is red. A draft fires no workflow, so the build is started by hand on the tag ref.
 
 ```sh
 just release-preflight                                    # 1. refuses unless this clone is exactly origin/main
@@ -92,24 +84,36 @@ gh workflow run build.yml --ref vX.Y.Z                    # 4. build, attest, at
 
 `tools/release_draft.sh` decides what step 4 does: a tag with exactly one draft, no published release, and neither of the
 two names on the draft is built and attached; a draft that already carries either of the two names fails the run red, so a
-second dispatch never overwrites files. The `quest` job runs only for a draft dispatch or a release event, never for a
-plain dispatch: a green plain dispatch says nothing about the Quest tests.
+second dispatch never overwrites files.
 
-**The draft path is the only path.** Release immutability is on for this repository. A release created as published is
-locked the moment it exists, before the build can attach its files, and can never be filled or fixed. Never run
-`gh release create` without `--draft`.
+## What CI does
 
-**A draft that fails its checks is deleted and cut again.** A second `gh workflow run build.yml` onto a draft that already
-carries either of the two names fails red, so a bad draft is never rebuilt in place. Delete it (`gh release delete vX.Y.Z
---yes`; this leaves the tag) and, when the fault is in the files only, create the draft again from step 3. When the fault
-is in the tree, also delete the tag (`git push origin --delete vX.Y.Z`, `git tag -d vX.Y.Z`), fix `main`, and start again at
-"Before the tag". A tag with no published release may be removed; the rule that a tag name is never reused applies once a
-release is published ("When a published release is wrong"). Each cut is another workflow run, so the local checks before
-the tag are where a fault is found.
+`release-train.yml`, job `cut`, in this order. Each step fails the run red on its first error.
+
+1. **Tag** `origin/main`'s tip as `vX.Y.Z` and push the tag. The tag push starts no workflow.
+2. **Draft**: `gh release create vX.Y.Z --draft --prerelease --verify-tag`. A draft fires no workflow.
+3. **Build**: `gh workflow run build.yml --ref vX.Y.Z`, watched to its end. `build.yml` builds, attests the two files
+   and attaches them to the draft. Its `Verify` step is skipped on a tag build (#1008).
+4. **Check the draft**: `tools/release_check_draft.sh vX.Y.Z` runs "Check the draft" below.
+5. **Sign**: `gh workflow run sign-release.yml -R thesprockee/release-signer --ref main -f repo=EchoTools/nevr-runtime
+   -f tag=vX.Y.Z -f dry_run=false`, watched to its end. The signer replaces the draft's two files. The dispatch needs the
+   repository secret `RELEASE_SIGNER_TOKEN`, a token with `actions: write` on `thesprockee/release-signer`; without it
+   the step fails red before any dispatch.
+6. **Check the signed draft**: `tools/release_check_draft.sh --signed vX.Y.Z` runs "Check the signed draft" below.
+7. **Body**: `tools/package_release.py notes` renders the notes and the SHA-256 table from the signed files, and
+   `tools/release_audience_section.py` appends the per-audience section from the feat and fix commits since the base tag.
+8. **Publish**: `gh release edit vX.Y.Z --draft=false`, last. The `published` event does not rebuild: `build.yml`'s guard
+   sees the two names and skips.
+
+A draft that fails its checks is deleted and cut again: a red run leaves an unpublished draft. Delete it
+(`gh release delete vX.Y.Z --yes`) and fix forward; the tag stays, and a tag with no published release may be removed by
+hand (`git push origin --delete vX.Y.Z`). A second `gh workflow run build.yml` onto a draft that already carries either
+of the two names fails red, so a bad draft is never rebuilt in place.
 
 ## Check the draft
 
-All of these on the draft, before anything is signed or published. Read the output; do not trust a green run.
+`tools/release_check_draft.sh` runs these on the draft, before anything is signed or published. They are listed here so a
+person can run each one by hand when the train is off.
 
 ```sh
 gh release view vX.Y.Z --json assets --jq '.assets[].name'          # exactly the two names above
@@ -122,69 +126,66 @@ python3 tools/pe_version_info.py check --dll "$S.unzipped/BugSplat64.dll" --runt
 ```
 
 Each `NEVR-BUILD` line (one per DLL) must be exactly `NEVR-BUILD X.Y.Z <the tag's commit, 40 hex>` (one literal; `git rev-parse vX.Y.Z^{commit}`).
-The last line reads the VERSIONINFO of the three files (the Details tab: description, product name, copyright, company, original
-file name and the file and product version `X.Y.Z`, numeric `X.Y.Z.0`) and compares every field with the pinned values and
-with the version in the DLL's `NEVR-BUILD` literal; `python3 tools/pe_version_info.py show <file>` prints them.
+The VERSIONINFO check compares every field of the three files with the pinned values and with the version in the DLL's
+`NEVR-BUILD` literal; `python3 tools/pe_version_info.py show <file>` prints them.
 
 ## Sign
 
 Signing is a separate pipeline in `thesprockee/release-signer` (the nEVR Signer GitHub App and the signing service). The
 build signs nothing. The signer reads the draft's files, signs the PE files and scripts in them, and puts the files back
-under the same names.
+under the same names. It replaces the assets of the **draft** only; it never writes a published release and never flips
+the pre-release flag. It needs the signer's GitHub App installed on this repository, and the signing credentials; both
+are the owner's. The signer also takes `dry_run=true` (it writes nothing to the draft).
+
+By hand:
 
 ```sh
 gh workflow run sign-release.yml -R thesprockee/release-signer --ref main \
   -f repo=EchoTools/nevr-runtime -f tag=vX.Y.Z -f dry_run=false    # signs, verifies, replaces the DRAFT's assets
 ```
 
-The run keeps the signed set as a workflow artifact and a decision record binding the tag, the source commit and each
-asset's unsigned and signed SHA-256. It replaces the assets of the **draft** only (the signer never writes a published
-release and never flips the pre-release flag); it needs the signer's GitHub App to be installed on this repository. That
-installation, and the signing credentials, are the owner's. The signer also takes `dry_run=true` (it writes nothing to the
-draft); it is another Actions run, so it is not a step here.
-
 Check a signed file as `SIGNING.txt` in the Windows zip says: `Get-AuthenticodeSignature` status `Valid`, or
 `osslsigncode verify` with both `-CAfile` and `-TSA-CAfile` set to the Microsoft Identity Verification Root 2020
 certificate. The CI attestation covers the bytes CI built; for a file the signer replaced, the Authenticode signature and
 the signer's decision record are the evidence for the new bytes.
 
-After the signer has replaced assets, run the checks above again on the draft before publishing,
-read this way:
+## Check the signed draft
 
-- The signer replaces the zip. The `SHA256SUMS` inside it lists the signed files in it, so unzip the signed zip into a
-  new directory and run `sha256sum -c SHA256SUMS` there.
+After the signer has replaced the assets, `tools/release_check_draft.sh --signed` runs these, read this way:
+
+- The signer replaces the zip. The `SHA256SUMS` inside it lists the signed files, so the check unzips the signed zip into
+  a new directory and runs `sha256sum -c SHA256SUMS` there.
 - `gh attestation verify` covers the unsigned build output CI attested, not the bytes the signer replaced. The loop under
   "Check the draft" exits non-zero for the signed zip (`HTTP 404: Not Found` from the attestations API) and still exits 0
   for the Quest library, which the signer does not replace; that failure is the signer's work, not a bad draft. For a
-  replaced file the evidence is the Authenticode check above and the signer's decision record.
+  replaced file the evidence is the Authenticode check above and the signer's decision record. The signed mode does not
+  run that loop.
 - The same two names must still be on the draft.
-- Run `python3 tools/pe_version_info.py check` on the signed files too (the command under "Check the draft"): signing
-  must leave the VERSIONINFO as the build wrote it.
-- Write the release body next (below) from these final bytes.
+- `python3 tools/pe_version_info.py check` runs on the signed files too: signing must leave the VERSIONINFO as the build wrote it.
 
 ## Write the release body
 
-The release body is the notes and a SHA-256 table of the two assets as they are on the draft after signing. Render it
-from the draft's own files, put it on the draft, and read it back against the files:
+The release body is the notes and a SHA-256 table of the two assets as they are on the draft after signing, then the
+per-audience section. CI writes it (step 7 above). By hand:
 
 ```sh
 mkdir -p "$S" && gh release download vX.Y.Z -D "$S"                  # a new, empty directory
 python3 tools/package_release.py notes --assets "$S" --out "$N"      # $N: a new file outside $S; refuses unless $S holds exactly the two assets
+python3 tools/release_audience_section.py --base <previous tag> --rev vX.Y.Z >> "$N"
 gh release edit vX.Y.Z --notes-file "$N"
 gh release view vX.Y.Z --json body --jq .body                         # the table's two SHA-256 values
 (cd "$S" && sha256sum nevr-runtime-vX.Y.Z-*)                          # the same two values
 ```
 
-`notes` takes the version and the commit from the `BugSplat64.dll` and `nevr-runtime.dll` inside the zip (they must agree), so the body cannot describe another
-build. The table must be written after the last signing pass: each pass signs with a fresh timestamp and changes the
-zip's bytes. `notes` renders the table and the install notes only. Before the body goes on the draft, append a section
-that says, for each audience the release is for (players, server hosts, plugin developers), what changed for them in plain
-words, and says what is not tested or not in the build. The body of a published release stays editable ("Immutable
-releases"); the assets do not.
+`notes` takes the version and the commit from the `BugSplat64.dll` and `nevr-runtime.dll` inside the zip (they must agree),
+so the body cannot describe another build. The table must be written after the last signing pass: each pass signs with a
+fresh timestamp and changes the zip's bytes. The per-audience section lists each feat, fix and perf commit under the
+audience of its scope (players, server hosts, plugin developers), and ends with what was not tested in the build. The body
+of a published release stays editable ("Immutable releases"); the assets do not.
 
 ## Publish
 
-Only from the checked draft. The tag and the publish cannot be undone: the owner is told right before the publish.
+Only from the checked draft. The tag and the publish cannot be undone.
 
 ```sh
 gh release edit vX.Y.Z --draft=false          # publish; the pre-release flag is untouched
@@ -197,8 +198,6 @@ nothing. Then:
 gh release verify vX.Y.Z -R EchoTools/nevr-runtime                       # needs immutable releases on; GitHub CLI 2.81.0 or newer
 gh release verify-asset vX.Y.Z <file> -R EchoTools/nevr-runtime          # a local file against the release's asset
 ```
-
-Announce a green pre-release the same hour, saying which asset is for whom.
 
 ## Immutable releases
 
