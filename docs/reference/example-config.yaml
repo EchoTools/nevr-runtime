@@ -386,7 +386,8 @@ telemetry:
 
 arena:
   # Round time in seconds. Overrides the game's "round_time" config value.
-  # Absent: game default (typically 180.0).
+  # Absent: game default (typically 180.0), except on a server, where public Arena
+  # uses 480.0 (8:00) and private matches keep the game default (#982).
   # Not a secret.
   # round_time: 300.0
 

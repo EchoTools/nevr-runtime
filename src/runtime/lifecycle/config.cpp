@@ -360,6 +360,9 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
   return result;
 }
 
+/// Public Arena round length on a server with no arena.round_time in config.yaml: 8:00 (#982).
+constexpr FLOAT kArenaPublicRoundTimeDefault = 480.0f;
+
 /// <summary>
 /// Hook for CJson_GetFloat to override arena rule config values at load time.
 /// Matches specific JSON path suffixes and returns overridden values from config.json.
@@ -373,10 +376,21 @@ FLOAT CJsonGetFloatHook(PVOID root, const CHAR* path, FLOAT defaultValue, INT32 
         strstr(path, "_private") == NULL) {
       return g_arenaCelebrationTime;
     }
-    // round_time (but not round_time_private)
-    if (g_arenaRoundTime > 0.0f && strstr(path, "round_time") != NULL && strstr(path, "_private") == NULL &&
+    // round_time (but not round_time_private). A server without arena.round_time starts
+    // public Arena at 8:00 (#982); the _private paths and every other key keep the game's value.
+    if (strstr(path, "round_time") != NULL && strstr(path, "_private") == NULL &&
         strstr(path, "round_timer") == NULL && strstr(path, "sudden_death_round_time") == NULL) {
-      return g_arenaRoundTime;
+      if (g_arenaRoundTime > 0.0f) return g_arenaRoundTime;
+      if (g_isServer) {
+        static std::atomic<bool> s_defaultLogged{false};
+        if (!s_defaultLogged.exchange(true)) {
+          Log(EchoVR::LogLevel::Info,
+              "[NEVR.PATCH] arena_round_time default=%.0fs source=runtime (public Arena on a server; "
+              "config.yaml arena.round_time absent) path=%s game_default=%.0fs",
+              kArenaPublicRoundTimeDefault, path, result);
+        }
+        return kArenaPublicRoundTimeDefault;
+      }
     }
     // mercy_win_point_spread (but not the _private variant)
     if (g_arenaMercyScore > 0.0f && strstr(path, "mercy_win_point_spread") != NULL &&
