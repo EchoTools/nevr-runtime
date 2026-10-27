@@ -483,4 +483,29 @@ TEST(InviteAnswer, AResolvedMatchIdIsAUuidBeforeItIsStagedAsTheLobbyId) {
   EXPECT_FALSE(nevr_invite::ParseResolved("nope").has_value());
 }
 
+// The submit sees every remote log line; only one that names the wizard's panel is parsed at all.
+TEST(InviteHook, OnlyALineThatNamesTheWizardPanelMayBeAMetric) {
+  EXPECT_TRUE(nevr_invite::MayBeWizardMetric(R"({"panel_type":"deep_linking"})"));
+  EXPECT_FALSE(nevr_invite::MayBeWizardMetric(R"({"panel_type":"main_menu"})"));
+  EXPECT_FALSE(nevr_invite::MayBeWizardMetric(""));
+}
+
+// A planned request is logged as planned, never as sent: nothing is posted until the worker exists.
+TEST(InviteHook, APlannedRequestIsLoggedAsPlannedNotSent) {
+  nevr_invite::Metric join;
+  join.kind = nevr_invite::Kind::Join;
+  join.join_code = "ABCD-2345";
+  const nevr_invite::Plan plan = nevr_invite::PlanRequest(join, nevr_invite::Choices{});
+  const std::string line = nevr_invite::PlannedLine(plan, "0a1b2c3d");
+  EXPECT_EQ(line, "[NEVR.INVITE] request planned op=resolve code_len=8 code_fp=0a1b2c3d");
+  EXPECT_EQ(line.find("request sent"), std::string::npos);
+
+  nevr_invite::Metric create;
+  create.kind = nevr_invite::Kind::Create;
+  const nevr_invite::Plan incomplete = nevr_invite::PlanRequest(create, nevr_invite::Choices{});
+  EXPECT_EQ(nevr_invite::PlannedLine(incomplete, ""), "");
+  EXPECT_EQ(nevr_invite::NotSentLine(incomplete.skip, incomplete.code_len),
+            "[NEVR.INVITE] request not sent reason=incomplete code_len=0");
+}
+
 }  // namespace

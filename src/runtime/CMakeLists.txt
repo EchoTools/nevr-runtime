@@ -77,6 +77,7 @@ set(PATCHES_SOURCES
     "patch/pnsrad_enabler.cpp"
     "patch/mic_provider.cpp"
     "patch/party_invite_gate.cpp"
+    "patch/invite_wizard_hook.cpp"
     "patch/early_quit_lockout.cpp"
     "patch/social_facade.cpp"
     "patch/social_facade_object.cpp"
