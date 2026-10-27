@@ -13,6 +13,7 @@ sys.path.insert(0, str(REPO / "tools"))
 import work_root  # noqa: E402
 VERIFIER = REPO / "tools" / "verify_patch_source_inventory.py"
 EXPECTED_PATCH_SOURCES = (
+    "patch/arena_public_clock.cpp",
     "patch/asset_cache.cpp",
     "patch/asset_cdn.cpp",
     "patch/asset_registry.cpp",
@@ -82,7 +83,7 @@ class VerifyPatchSourceInventoryTest(unittest.TestCase):
             )
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("patch-source-inventory: OK count=24", result.stdout)
+        self.assertIn("patch-source-inventory: OK count=25", result.stdout)
 
     def test_rejects_missing_duplicate_unexpected_and_missing_disk_entries(self):
         scenarios = (

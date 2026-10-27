@@ -18,6 +18,7 @@
 #include "runtime/patch/credits_block.h"
 #include "runtime/patch/credits_text_install.h"
 #include "runtime/patch/invite_wizard_hook.h"
+#include "runtime/patch/arena_public_clock.h"
 #include "runtime/patch/coop_ai_trace.h"
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/ext/plugin_trust.h"
@@ -590,6 +591,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     PatchLogServerProfile();
     // Issue #63: co-op AI bots stand still on community servers; log what gates them.
     nevr_coop_ai_trace::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress));
+    // #982: a public Arena match's clock keeps counting through goals, like a private match (arena_public_clock_rules.h).
+    nevr_arena_public_clock::Install();
 
     // Server frame pacing (CPrecisionSleep::BusyWait) is patched only by
     // patch/binary_bug_fixes.cpp, which validates the address and saves the
