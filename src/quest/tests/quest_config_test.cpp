@@ -707,8 +707,31 @@ void TextureQualityIsTheDefaultUnlessTheFileNamesAnotherLevel() {
       CHECK(IsStockFallback(r, "file_rejected", true));
     } else {
       CHECK(IsDefault(r));
-      CHECK(!HasLevel(r, LogLevel::kWarn));
+      // #583: an unknown key under a known section (`diagnostics`) is ignored and counted into one Warning; the
+      // other two spellings are not under a known section and warn of nothing.
+      if (std::string(text).rfind("diagnostics:", 0) == 0) {
+        CHECK(EventsContain(r, "unknown_nested=1"));
+      } else {
+        CHECK(!HasLevel(r, LogLevel::kWarn));
+      }
     }
+  }
+}
+
+// #583: a duplicate key and an unknown key under a known section are counted into one Warning that names no key and no
+// value; a file with neither logs no count line.
+void DuplicateAndUnknownKeysAreCountedInOneWarning() {
+  {
+    const LoadResult r = Load(Full(), "social:\n  facade: true\n  facade: false\n  send_presense: false\n");
+    CHECK(!r.fileRejected);
+    CHECK(EventsWithAreAtLevel(r, "duplicates=1 unknown_nested=1 (", LogLevel::kWarn));
+    CHECK(!EventsContain(r, "send_presense"));
+    CHECK(CountLevel(r, LogLevel::kWarn) == 1);
+  }
+  {
+    const LoadResult r = Load(Full(), "social:\n  send_presence_to_meta: false\n");
+    CHECK(!EventsContain(r, "duplicates="));
+    CHECK(!EventsContain(r, "unknown_nested="));
   }
 }
 
@@ -864,6 +887,7 @@ int main() {
   ATextureQualityThatIsNotAWordFallsBackToStock();
   AGraphicsSectionThatIsNotAMappingFallsBackToStock();
   AnUnknownKeyUnderGraphicsWarnsAndNamesTheKey();
+  DuplicateAndUnknownKeysAreCountedInOneWarning();
   AMistakeNeverUsesTheDefault();
   MalformedFileFallsBackToDefaults();
   ARejectedFileNeverEchoesWhatItHeld();

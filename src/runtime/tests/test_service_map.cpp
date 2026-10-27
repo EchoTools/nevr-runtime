@@ -28,6 +28,7 @@
 namespace {
 
 using nevr_cfg::FlatKeyToYamlPath;
+using nevr_cfg::MigratedYamlPaths;
 using nevr_cfg::GameNativeDefault;
 using nevr_cfg::HostSource;
 using nevr_cfg::LookupFlat;
@@ -115,6 +116,18 @@ TEST(ServiceMap, FlatKeyToYamlPath_EveryMigratedKey) {
   // URI) are DISTINCT paths — the cutover must never collapse them together.
   EXPECT_EQ(FlatKeyToYamlPath("serverdb_host"), "services.serverdb");
   EXPECT_NE(FlatKeyToYamlPath("serverdb_host"), FlatKeyToYamlPath("nevr_serverdb_uri"));
+}
+
+// #583: every section path the PC migrates a key to is on the schema the unknown-key count checks against, so a key the
+// PC reads is never counted as unknown. `guilds` and the x- extensions are top-level, not sections, and are not checked.
+TEST(ServiceMap, EveryMigratedPathIsOnTheConfigSchema) {
+  const std::vector<std::string> known = nevr::KnownConfigKeyPaths();
+  for (const std::string& path : MigratedYamlPaths()) {
+    if (path == "guilds" || path.rfind("x-", 0) == 0) continue;
+    bool onSchema = false;
+    for (const std::string& k : known) onSchema = onSchema || (k == path);
+    EXPECT_TRUE(onSchema) << path << " is read by the PC but is not on the config schema";
+  }
 }
 
 TEST(ServiceMap, FlatKeyToYamlPath_UnmigratedKeysAreEmpty) {

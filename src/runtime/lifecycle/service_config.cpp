@@ -135,6 +135,7 @@ const nevr::NevrConfig& NevrCfg() {
     try {
       nevr::NevrConfig c = nevr::NevrConfig::LoadFromFile(path);
       nevr::LogUnsetBareVars(c);  // the parser logs nothing (it is shared with the Quest); the PC caller reports
+      nevr::LogShapeWarnings(c);
       Log(EchoVR::LogLevel::Info, "[NEVR.CONFIG] config.yaml loaded from: %s", path.c_str());
       return c;
     } catch (const nevr::NevrConfigError& e) {

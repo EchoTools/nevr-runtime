@@ -128,8 +128,8 @@ graphics:
 # connection will fail unless the WebSocket bridge is active).
 #
 # Fallback chain (per-key, in GetServiceHostWithFallback):
-#   1. Specific service key (e.g. configservice_host)
-#   2. loginservice_host (shared fallback)
+#   1. Specific service key (e.g. services.config)
+#   2. services.login (shared fallback)
 #   3. Game hardcoded default
 #
 # Reader: src/runtime/lifecycle/config.cpp (HttpConnectHook, GetServiceHostWithFallback)
@@ -159,47 +159,47 @@ services:
   # every other service key that is not explicitly set.
   # Default (absent): https://login.readyatdawn.com
   # Not a secret.
-  # loginservice_host: "https://login.echovrce.com"
+  # login: "https://login.echovrce.com"
 
   # Config / settings service (game config, feature flags, etc.).
-  # Fallback: loginservice_host
+  # Fallback: services.login
   # Default (absent): https://config.readyatdawn.com
   # Not a secret.
-  # configservice_host: "https://config.echovrce.com"
+  # config: "https://config.echovrce.com"
 
   # General API service (REST endpoints for account, inventory, etc.).
   # Legacy key "api_host" is also checked if apiservice_host is absent.
-  # Fallback: loginservice_host
+  # Fallback: services.login
   # Default (absent): https://api.readyatdawn.com
   # Not a secret.
-  # apiservice_host: "https://api.echovrce.com"
+  # api: "https://api.echovrce.com"
 
   # Transaction / IAP service.
-  # Fallback: loginservice_host
+  # Fallback: services.login
   # Default (absent): https://transaction.readyatdawn.com
   # Not a secret.
-  # transactionservice_host: "https://transaction.echovrce.com"
+  # transaction: "https://transaction.echovrce.com"
 
   # Matchmaking service (lobby creation, server discovery).
   # When the WebSocket bridge is active and no explicit override is set,
   # this service is auto-relayed through the bridge's local proxy.
-  # Fallback: loginservice_host
+  # Fallback: services.login
   # Default (absent): wss://matchmaking.readyatdawn.com
   # Not a secret.
-  # matchingservice_host: "wss://matchmaking.echovrce.com"
+  # matchmaking: "wss://matchmaking.echovrce.com"
 
   # ServerDB / registry service (game server registration and heartbeat).
   # Auto-relayed through the WebSocket bridge when active.
-  # Fallback: loginservice_host
+  # Fallback: services.login
   # Default (absent): wss://serverdb.readyatdawn.com
   # Not a secret.
-  # serverdb_host: "wss://serverdb.echovrce.com"
+  # serverdb: "wss://serverdb.echovrce.com"
 
   # Oculus Graph API. Only relevant if the game still queries Oculus services.
   # Legacy key "graphservice_host" is also checked.
   # Default (absent): https://graph.oculus.com
   # Not a secret.
-  # graph_host: "https://graph.oculus.com"
+  # graph: "https://graph.oculus.com"
 
 # ---------------------------------------------------------------------------
 # network — IP and port configuration for server hosting
@@ -277,11 +277,6 @@ identity:
   # Not a secret, but personally identifying — do not commit to public repos.
   # discord_id: "${NEVR_DISCORD_ID:?discord_id is required for server registration}"
 
-  # Server password. Sent as a query parameter in the ServerDB WebSocket URI.
-  # Optional; absent means no password auth.
-  # SECRET — use env-var substitution in production.
-  # password: "${NEVR_PASSWORD:?password is required}"
-
 # ---------------------------------------------------------------------------
 # auth — authentication and API endpoint configuration
 #
@@ -324,6 +319,11 @@ auth:
   # SECRET — use env-var substitution in production.
   # server_key: "${NEVR_SOCKET_KEY:?server_key is required for servers}"
 
+  # Server password. Sent as a query parameter in the ServerDB WebSocket URI (the key the runtime reads is auth.password).
+  # Optional; absent means no password auth.
+  # SECRET — use env-var substitution in production.
+  # password: "${NEVR_PASSWORD:?password is required}"
+
 # ---------------------------------------------------------------------------
 # guilds — guild filter for server registration
 #
@@ -346,7 +346,8 @@ auth:
 # Not a secret.
 # Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration)
 # ---------------------------------------------------------------------------
-# regions: "us-west"
+# network:
+#   regions: "us-west"
 
 # ---------------------------------------------------------------------------
 # telemetry — real-time game state streaming
