@@ -28,9 +28,10 @@ struct RegistrationParams {
   std::vector<std::string> guilds;        // guild ids this server hosts for (field 11)
 };
 
-/// "<git describe> (<commit> <build type>)": the version field's content.
+/// "<git describe> (<commit> <build type> <provenance>)": the version field's content. The provenance word is
+/// "signed-release", "self-built", "dev" or "unchecked" (nevr_build_identity::Provenance, #842).
 std::string FormatRegistrationVersion(std::string_view gitDescribe, std::string_view gitCommit,
-                                      std::string_view buildType);
+                                      std::string_view buildType, std::string_view provenance);
 
 gameservice::v1::Envelope BuildRegistrationEnvelope(const RegistrationParams& params);
 

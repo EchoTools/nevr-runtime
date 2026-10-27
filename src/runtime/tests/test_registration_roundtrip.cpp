@@ -138,7 +138,7 @@ nevr_game_server::RegistrationParams SampleParams() {
   params.regionId = 0xAABBCCDDEEFF0011ULL;
   params.versionLock = 0x1122334455667788ULL;
   params.timeStepUsecs = 16667;
-  params.version = nevr_game_server::FormatRegistrationVersion("v4.2.0-5-gabc1234", "abc1234", "Release");
+  params.version = nevr_game_server::FormatRegistrationVersion("v4.2.0-5-gabc1234", "abc1234", "Release", "signed-release");
   params.installedLevels = {0x576ed3f8428ebc4bULL, 0x0123456789abcdefULL};  // mpl_arena_a, and a value for the round trip
   params.regions = {"us-east", "eu_west"};
   params.guilds = {"111", "222"};
@@ -159,7 +159,9 @@ TEST(RegistrationEnvelope, CarriesEveryParameterAndAFormattedVersion) {
   EXPECT_EQ(r.region(), params.regionId);
   EXPECT_EQ(r.version_lock(), params.versionLock);
   EXPECT_EQ(r.time_step_usecs(), params.timeStepUsecs);
-  EXPECT_EQ(r.version(), "v4.2.0-5-gabc1234 (abc1234 Release)");
+  EXPECT_EQ(r.version(), "v4.2.0-5-gabc1234 (abc1234 Release signed-release)");  // #842: the provenance word rides last
+  EXPECT_EQ(nevr_game_server::FormatRegistrationVersion("v5.7.1-dev.3+abc1234", "abc1234", "Debug", "dev"),
+            "v5.7.1-dev.3+abc1234 (abc1234 Debug dev)");
   EXPECT_EQ(std::vector<uint64_t>(r.installed_levels().begin(), r.installed_levels().end()), params.installedLevels);
   EXPECT_EQ(std::vector<std::string>(r.regions().begin(), r.regions().end()), params.regions);
   EXPECT_EQ(std::vector<std::string>(r.guilds().begin(), r.guilds().end()), params.guilds);
