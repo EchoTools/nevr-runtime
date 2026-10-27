@@ -96,7 +96,7 @@ dist-legacy: build
 
 # Regenerate C++ protobuf from BSR at proto_pin (buf.build/echotools/nevr-api) and stamp gen/ (tools/proto_stamp.py).
 # Uses vcpkg's host protoc to match the runtime version; the protoc must be installed (`just configure` does that).
-# `configure` regenerates on its own when gen/ is stale, so this recipe is for forcing a refresh.
+# Generate before CMake configure: `configure` regenerates on its own when gen/ is stale, so this recipe is for forcing a refresh.
 proto:
     python3 -I tools/proto_stamp.py --root "{{ justfile_directory() }}" generate --protoc-dir "{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed/x64-linux/tools/protobuf"
 
