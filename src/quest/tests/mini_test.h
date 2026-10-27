@@ -71,12 +71,16 @@ inline int RunAll(int argc, char** argv, std::chrono::seconds per_test_deadline 
     std::promise<void> done;
     std::future<void> finished = done.get_future();
     std::thread runner([&t, &done] {
+#if defined(__cpp_exceptions)
       try {
         t.fn();
       } catch (const std::exception& e) {
         std::fprintf(stderr, "  exception: %s\n", e.what());
         ++Failures();
       }
+#else
+      t.fn();  // a translation unit built -fno-exceptions (callback_thunk.h's contract) has nothing to catch
+#endif
       done.set_value();
     });
     if (finished.wait_for(per_test_deadline) != std::future_status::ready) {
