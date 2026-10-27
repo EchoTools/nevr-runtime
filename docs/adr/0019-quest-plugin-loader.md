@@ -183,7 +183,7 @@ on the game's `dlopen` slot.
 (`src/extension/plugin_interface.h:28-106`, `:108-176`). The exports a Quest plugin may provide are the optional set
 the PC plugin already uses: `NvrPluginGetInfo` (required), `NvrPluginGetApiVersion`, `NvrPluginGetCapabilities`,
 `NvrPluginInitEx` or `NvrPluginInit`, `NvrPluginOnFrame`, `NvrPluginOnGameStateChange`, `NvrPluginShutdown`.
-`NvrPluginShutdown` is not relied on: Quest processes end by `_exit` at the end of `android_main` (ADR 0008), and the
+`NvrPluginShutdown` is not relied on: Quest processes end by `_exit` at the end of `android_main` (ADR 0020), and the
 header already says shutdown is not guaranteed on process exit (`plugin_interface.h:119-128`).
 
 **Quest additions (all additive).**
@@ -530,7 +530,7 @@ line moves, the symbol named beside it is the anchor.
   `:1801-1806` (stage logs), `:1808-1811` (not run on a headset), `:1817-1821` (activation gates);
   `docs/adr/0004-quest-verification-regime.md:38-48` (step 0), `:139-142` (Bionic blocker);
   `docs/adr/0006-quest-hardware-dump.md:26` (18 GOT hooks);
-  `docs/adr/0008-quest-process-end.md:9` (`android_main` slot, process ends on return);
+  `docs/adr/0020-quest-process-end.md:9` (`android_main` slot, process ends on return);
   `docs/adr/0009-quest-permission-wait.md:3-4` (status), `:17` (slot);
   `docs/adr/0010-signed-plugins-only.md:8-11` (run mode), `:29-32` (threat model), `:41-58` (PC checks), `:224-225` (no config key sets the mode);
   `docs/adr/0013-quest-game-data-from-the-launcher.md:9-12` (requirement, player data), `:25-27` (data root);

@@ -10,7 +10,7 @@ does not wait for the answer. `CR15Game::Initialize` (`0x11f9b40`) calls `CSysIn
 forget JNI `requestPermissions` on the NativeActivity, and goes straight into `CncaGame::Initialize`, whose package-manifest read
 (`ReadManifestFile`, `0x2541404`) needs the storage permissions. The read fails 260 ms later, while the grant dialog has not
 started; `ShowInitializationError` reports "Unknown error while loading the game." and `android_main` finishes the activity. The
-process-end hook (#621, ADR 0008) makes the relaunch after the grant start clean; this decision is the first launch itself.
+process-end hook (#621, ADR 0020) makes the relaunch after the grant start clean; this decision is the first launch itself.
 
 ## Decision
 
