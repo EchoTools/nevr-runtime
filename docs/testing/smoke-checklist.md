@@ -6,7 +6,7 @@ One row per feature a tester can check on a PC game client, a Quest game client 
 
 1. Sync the clock first. Every tester syncs the device clock (PC: Windows time sync; Quest: automatic time on) before the run, so PC and Quest log timestamps can be lined up afterwards.
 2. One tester per platform. One person drives the PC game client, one drives the Quest. Rows that involve another player (friends, party, voice) need two real game clients; say who the second tester was in the notes.
-3. Walk an area top to bottom. For each row do the player action in "Smoke test", then find the line in "Proof": PC logs are `%LOCALAPPDATA%\EchoVR\logs\nevr-<timestamp>.jsonl` (the earliest boot lines are also in `nevr-boot.jsonl` in the same folder); Quest logs are logcat tag `NEVR-Sentinel` and `nevr-sentinel.log` in the game's external files folder.
+3. Walk an area top to bottom. For each row do the player action in "Smoke test", then find the line in "Proof": PC logs are `%LOCALAPPDATA%\nevr\echovr\logs\nevr-<timestamp>.jsonl` (the earliest boot lines are also in `nevr-boot.jsonl` in `logs\` of the game folder); Quest logs are logcat tag `NEVR-Sentinel` and `nevr-sentinel.log` in the game's external files folder.
 4. Tick the box only when you saw the action work and found the line. Paste the line into the notes. A line that appears while the action visibly failed is a fail: leave it unticked and note it.
 5. "Log-only" means no player action reaches the row; the cell says how to trigger or read it. "Absent" means the game has no UI for it.
 6. Platform: PC means the Windows or Wine game client; Quest means the Android sentinel; both means the same row applies to each (test it on each).
@@ -198,7 +198,7 @@ Merged from the social test plan: TP#2 to 5, 9 to 19. Party features need two re
 
 | [ ] | ID | Feature | Platform | Smoke test | Proof (log line, source file) |
 | --- | --- | --- | --- | --- | --- |
-| [ ] | D01 | Boot lines go to `nevr-boot.jsonl` and the main log opens with a timestamped name | PC | After a start, both files exist under `%LOCALAPPDATA%\EchoVR\logs` | `[NEVR.BOOT] initialization complete; continuing in %LOCALAPPDATA%\EchoVR\logs\nevr-<timestamp>.jsonl` (src/runtime/lifecycle/initialize.cpp) |
+| [ ] | D01 | Boot lines go to `nevr-boot.jsonl` and the main log opens with a timestamped name | PC | After a start, `nevr-boot.jsonl` exists in `logs\` of the game folder and the main log exists under `%LOCALAPPDATA%\nevr\echovr\logs` | `[NEVR.BOOT] initialization complete; continuing in %LOCALAPPDATA%\nevr\echovr\logs\nevr-<timestamp>.jsonl` (src/runtime/lifecycle/initialize.cpp) |
 | [ ] | D02 | The built-in log filter captures and filters the game's own log | PC | Log-only: game lines appear in the jsonl | `[NEVR.PATCH] hooked name=CLog::PrintfImpl va=0x%llX` (src/runtime/log/builtin_filter.cpp) |
 | [ ] | D03 | Repeated identical lines are folded | PC | Log-only: a repeated line shows a count | `[NEVR.LOGFILTER] repeated count=%u window_s=%llu msg="%s"` (src/runtime/log/builtin_filter.cpp) |
 | [ ] | D04 | Periodic filter health report, and an honest "captured zero game lines" warning (#17) | PC | Log-only: wait one interval | `[NEVR.LOGFILTER] health emitted=%llu suppressed=%llu` (src/runtime/log/builtin_filter.cpp)<br>`[NEVR.LOGFILTER] CAPTURED ZERO GAME LINES this interval` (src/runtime/log/builtin_filter.cpp) |

@@ -409,7 +409,7 @@ deserializer running between 2 and 4 on a scheduler thread under a global lock.
 
 Engine lines go through `CLog::PrintfImpl` (`0x1400ebe70`; levels 1 debug, 2 info, 4 warning, 8 error;
 every asset call site uses category 0). nEVR hooks it (`src/runtime/log/builtin_filter.cpp`) and writes
-`%LOCALAPPDATA%\EchoVR\logs\nevr-<ts>.jsonl` with an `[EVR]` prefix and names resolved through the symcache;
+`%LOCALAPPDATA%\nevr\echovr\logs\nevr-<ts>.jsonl` with an `[EVR]` prefix and names resolved through the symcache;
 its default suppressions drop `"Loading global archives"`, `"Loading game archives"`, `"Loading archive 0x"`
 and `"[LEVELLOAD] Allocator used:"`, and it drops a `Loading archive 0x…` line even if the engine prints one,
 so its absence from the JSONL is not evidence. Whether the engine's `Assert` (`0x14151e280`) writes its text

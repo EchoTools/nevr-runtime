@@ -60,7 +60,8 @@ LOCAL_DIR="$GAME_ROOT/echovr/_local"
 [[ -d "$GAME_DIR" ]] || { echo "ERROR: no game install at $GAME_DIR (set NEVR_GAME_ROOT to the checkout that has echovr/)" >&2; exit 2; }
 SCRATCH="${NEVR_RUN_SCRATCH_ROOT:-$NEVR_WORK_ROOT}/client-run-$(date +%Y%m%dT%H%M%S)"
 WINEPREFIX="$GAME_ROOT/echovr/.wineprefix"
-LOGDIR="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/EchoVR/logs"
+# The nevr root of the prefix's Windows user (src/core/nevr_root.h, ADR 0012): the run log and the caches live under it.
+LOGDIR="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/nevr/echovr/logs"
 
 acquire_game_run_lock
 
@@ -169,12 +170,14 @@ if [[ -n "$TRACE_EXPORTS" ]]; then
 fi
 # The newest game log THIS run wrote: a file that did not exist when the run started (names carry a
 # millisecond timestamp, so they are unique per run) and was modified since. Judging by mtime alone
-# let a previous run's log, last written in the same second the run started, decide the verdict.
+# let a previous run's log, last written in the same second the run started, decide the verdict. The host's
+# nevr-bootstrap.jsonl lives in the same folder and is new in a root the host has not written to before.
 pre_logs=$(for f in "$LOGDIR"/nevr-*.jsonl; do [[ -e "$f" ]] && printf '%s\n' "$f"; done || true)
 newest_run_log() {
   local f found=""
   for f in "$LOGDIR"/nevr-*.jsonl; do
     [[ -f "$f" && $(stat -c %Y "$f") -ge $start ]] || continue
+    [[ "$f" == */nevr-bootstrap.jsonl ]] && continue  # the host's record, in the same folder: not the game's log
     grep -qxF -- "$f" <<<"$pre_logs" && continue
     found="$f"
   done

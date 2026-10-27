@@ -49,9 +49,9 @@ Windows Defender or SmartScreen may warn about a file that is not signed.
 @IF_APK@not a code-signing certificate.
 
 ## Notes
-@IF_APK@- The Windows log is `%LOCALAPPDATA%\EchoVR\logs\nevr-*.jsonl`; the Quest log is
+@IF_APK@- The Windows log is `%LOCALAPPDATA%\nevr\echovr\logs\nevr-*.jsonl`; the Quest log is
 @IF_APK@  `/sdcard/Android/data/com.readyatdawn.r15/files/nevr-sentinel.log`.
 @IF_APK@- The version is `@VERSION@`, in both artifacts.
-@IF_NOAPK@- The Windows log is `%LOCALAPPDATA%\EchoVR\logs\nevr-*.jsonl`.
+@IF_NOAPK@- The Windows log is `%LOCALAPPDATA%\nevr\echovr\logs\nevr-*.jsonl`.
 @IF_NOAPK@- The version is `@VERSION@`; `BugSplat64.dll` and `nevr-runtime.dll` each carry it with the commit in one identity string,
 @IF_NOAPK@  `NEVR-BUILD @VERSION@ @COMMIT@`.

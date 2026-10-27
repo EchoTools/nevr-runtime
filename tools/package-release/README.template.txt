@@ -80,5 +80,5 @@ Signing
   the value you were given.
 
 Logs
-  The runtime writes its log under %LOCALAPPDATA%\EchoVR\logs. When you report a problem, send the
+  The runtime writes its log under %LOCALAPPDATA%\nevr\echovr\logs. When you report a problem, send the
   newest nevr-*.jsonl file from that folder.
