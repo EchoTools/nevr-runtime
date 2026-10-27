@@ -1388,6 +1388,49 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
         self.assertTrue((self.game / "dbgcore.dll").exists())
 
+    # #770: Verify Files restores the game's own BugSplat64.dll after an install. The record then describes a file that
+    # is no longer there: install.ps1 sets the record aside and installs again, uninstall.ps1 treats the stock file as
+    # already restored.
+    def test_install_after_verify_files_restored_the_stock_dll_sets_the_stale_record_aside_and_installs(self):
+        self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
+        (self.game / "BugSplat64.dll").write_bytes(b"ORIGINAL")  # Verify Files
+        result = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertEqual(result.returncode, 0, self.output(result))
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"NEW-RUNTIME")
+        stale = list(self.game.glob("nevr-install.txt.stale-*"))
+        self.assertEqual(len(stale), 1, self.output(result))
+        self.assertIn("installed_sha256=", stale[0].read_text())
+        self.assertEqual(self.state()["installed_sha256"], hashlib.sha256(b"NEW-RUNTIME").hexdigest())
+        self.assertIn("stale", self.output(result))
+
+    def test_uninstall_after_verify_files_restored_the_stock_dll_leaves_it_and_retires_the_record(self):
+        self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
+        (self.game / "BugSplat64.dll").write_bytes(b"ORIGINAL")  # Verify Files
+        undone = self.ps("uninstall.ps1", "-Dir", str(self.game))
+        self.assertEqual(undone.returncode, 0, self.output(undone))
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
+        self.assertFalse((self.game / "nevr-install.txt").exists())
+        self.assertEqual(len(list(self.game.glob("nevr-install.txt.undone-*"))), 1)
+
+    # #770: install.ps1 and uninstall.ps1 write nevr-install.txt as UTF-8 without a BOM and read it back as UTF-8, so a
+    # folder with a non-ASCII name keeps its backup path. Under -Encoding ASCII the name became '?' and uninstall
+    # could not find the backup.
+    def test_a_non_ascii_folder_name_round_trips_through_the_state_file(self):
+        zoe = self.tmp / "Zoë" / "bin" / "win10"
+        zoe.mkdir(parents=True)
+        (zoe / "echovr.exe").write_bytes(b"exe")
+        (zoe / "BugSplat64.dll").write_bytes(b"ORIGINAL")
+        (zoe / "dbgcore.dll").write_bytes(b"LEGACY")
+        installed = self.ps("install.ps1", "-Dir", str(zoe))
+        self.assertEqual(installed.returncode, 0, self.output(installed))
+        raw = (zoe / "nevr-install.txt").read_bytes()
+        self.assertFalse(raw.startswith(b"\xef\xbb\xbf"), "the state file is written without a BOM")
+        self.assertIn("Zoë".encode("utf-8"), raw)
+        undone = self.ps("uninstall.ps1", "-Dir", str(zoe))
+        self.assertEqual(undone.returncode, 0, self.output(undone))
+        self.assertEqual((zoe / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
+        self.assertEqual((zoe / "dbgcore.dll").read_bytes(), b"LEGACY")
+
     def test_no_script_deletes_anything(self):
         for name in ("install.ps1", "uninstall.ps1"):
             text = (PACKAGE / name).read_text()

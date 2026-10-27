@@ -133,7 +133,9 @@ function Test-NevrRuntime([string]$path) {
 function Write-State([string]$Backup, [string]$Legacy, $Previous, [string]$RuntimeAside) {
   $lines = @("backup=$Backup", "legacy=$Legacy", "runtime_aside=$RuntimeAside", "installed_sha256=$ours", "runtime_sha256=$oursRuntime")
   if ($null -ne $Previous) { $lines += ('previous_sha256=' + $Previous) }
-  Set-Content -LiteralPath $state -Encoding ASCII -Value $lines
+  # #770: UTF-8 without a BOM (Windows PowerShell 5.1 has no utf8NoBOM); -Encoding ASCII wrote a non-ASCII folder as '?'.
+  $path = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($state)
+  [System.IO.File]::WriteAllLines($path, [string[]]$lines, (New-Object System.Text.UTF8Encoding($false)))
 }
 # Copy the package's runtime into the folder and check the copy.
 function Copy-Runtime {
@@ -141,12 +143,32 @@ function Copy-Runtime {
   if ((Get-Sha $runtimeTarget) -ne $oursRuntime) { throw 'the installed nevr-runtime.dll does not match the package' }
 }
 
+# #770: Verify Files restores the game's own BugSplat64.dll after an install, and the record then describes a file that is
+# no longer there. A DLL with no NEVR-BUILD literal that the record does not list is the game's own file, so the record
+# is stale: it is renamed aside (never deleted) and this run is a first install.
+function Test-StaleRecord {
+  $values = @{}
+  foreach ($line in Get-Content -LiteralPath $state -Encoding UTF8) {
+    if ($line -match '^([a-z_0-9]+)=(.*)$') { $values[$Matches[1]] = $Matches[2] }
+  }
+  $known = @($values['installed_sha256'])
+  if ($values.ContainsKey('previous_sha256') -and $values['previous_sha256'] -ne '') { $known += $values['previous_sha256'].Split(',') }
+  return (($originalSha -ne $ours) -and ($known -notcontains $originalSha) -and -not (Test-NevrRuntime $target))
+}
+if ((Test-Path -LiteralPath $state) -and (Test-StaleRecord)) {
+  $staleAside = Join-Path $Dir ('nevr-install.txt.stale-' + (Get-Date).ToString('yyyyMMdd-HHmmss'))
+  if (Test-Path -LiteralPath $staleAside) { throw "name exists: ${staleAside}" }
+  Rename-Item -LiteralPath $state -NewName (Split-Path -Leaf $staleAside)
+  Write-Output "STALE nevr-install.txt set aside as $staleAside: BugSplat64.dll is the game's own file and the record does not list it, so this is a first install"
+  Write-RunLog ("NOTE $scriptName STALE nevr-install.txt set aside as $staleAside Dir=$Dir")
+}
+
 # #759: already installed means an update. The DLL must be one this folder's install put there (the recorded
 # build or an earlier one); the original backup and the set-aside dbgcore.dll stay as the first install left
 # them, so uninstall.ps1 still restores the oldest original. The new hash is recorded and the old ones kept.
 if (Test-Path -LiteralPath $state) {
   $values = @{}
-  foreach ($line in Get-Content -LiteralPath $state) {
+  foreach ($line in Get-Content -LiteralPath $state -Encoding UTF8) {
     if ($line -match '^([a-z_0-9]+)=(.*)$') { $values[$Matches[1]] = $Matches[2] }
   }
   foreach ($key in 'backup', 'legacy', 'installed_sha256') {
