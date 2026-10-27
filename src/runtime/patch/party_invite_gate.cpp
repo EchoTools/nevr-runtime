@@ -10,6 +10,7 @@
 #include "core/logging.h"
 #include "nevr_common.h"
 #include "runtime/hook/patching.h"
+#include "runtime/compat/social_roster.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/lifecycle/config.h"
 
@@ -57,7 +58,21 @@ constexpr std::array<std::uint8_t, 16> kRespondNodePrologue = {0x48, 0x89, 0x5C,
 constexpr std::size_t kNodeStateOffset = 0x18;  // 0 = bind, 1 = run (reads input, posts), 2 = wait
 constexpr std::size_t kNodeDataOffset = 0xB0;   // pointer to the node's input block
 
+// R15NetIsFriendExpression's run function (ReVault echovr.exe 0x140d98950): the tablet's SetupFriendButton
+// graph (a9bf5a844a019d97.dll, node 0xd7ee6bee) branches on its `output` and sets the ADD FRIEND button's
+// enabled and shown flags to the opposite: false (not a friend) enables and shows it, true disables and hides
+// it. The function reads the player's id string through `getter`, builds an SNSUserID, and calls
+// CR15NetGame::FriendIndex (0x14016bee0), which scans the facade's FriendCount (vtable +0x170) and FriendId
+// (+0x188); it writes `output` (a bool at offset 0) and the matching index (an int at offset 4, -1 for none).
+// Nothing else is logged on that path, so an ADD FRIEND button that is missing could not be told from one
+// that was hidden for a friend (#775); this trace says which, and which roster entry matched.
+constexpr std::uint64_t kIsFriendExpressionVA = 0x140D98950;
+constexpr std::array<std::uint8_t, 16> kIsFriendExpressionPrologue = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C,
+                                                                      0x24, 0x18, 0x56, 0x57, 0x41, 0x56, 0x48, 0x81};
+constexpr std::uint32_t kIsFriendTraceLines = 200;
+
 using NodeRunFn = std::uint64_t (*)(void* node);
+using ExpressionRunFn = void (*)(void* node, std::uint32_t* out, void* thread, void* getter);
 
 using InviteHandlerFn = void (*)(void* netGame, std::uint64_t* xpid);
 using SocialInviteFn = void (*)(void* social, std::uint64_t accountId);
@@ -72,6 +87,8 @@ InviteHandlerFn g_originalInviteHandler = nullptr;
 NodeRunFn g_originalSendInviteNode = nullptr;
 NodeRunFn g_originalAddFriendNode = nullptr;
 NodeRunFn g_originalRespondInviteNode = nullptr;
+ExpressionRunFn g_originalIsFriendExpression = nullptr;
+std::atomic<std::uint32_t> g_isFriendEvaluations{0};
 SocialInviteFn g_originalSocialInvite = nullptr;
 UserProviderIdFn g_userProviderId = nullptr;
 Symbol64Fn g_symbol64 = nullptr;
@@ -141,6 +158,26 @@ std::uint64_t RespondInviteNodeHook(void* node) {
         accept != 0 ? 1U : 0U);
   }
   return g_originalRespondInviteNode(node);
+}
+
+void IsFriendExpressionHook(void* node, std::uint32_t* out, void* thread, void* getter) {
+  g_originalIsFriendExpression(node, out, thread, getter);
+  // With no output block or no input getter the original logs its own version error and writes nothing.
+  if (out == nullptr || getter == nullptr) return;
+  const std::uint32_t evaluation = g_isFriendEvaluations.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (evaluation > kIsFriendTraceLines) return;
+  const bool isFriend = (out[0] & 0xFFU) != 0;
+  const std::int32_t index = static_cast<std::int32_t>(out[1]);
+  std::uint64_t matched = 0;
+  const char* matchedName = "";
+  if (index >= 0 && nevr_social_roster::Global().IdAt(static_cast<std::uint32_t>(index), &matched)) {
+    matchedName = nevr_social_roster::Global().NameAt(static_cast<std::uint32_t>(index));
+  }
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.PARTY] expression R15NetIsFriendExpression #%u friend=%d index=%d roster_count=%u matched_account=%llu "
+      "matched_name=\"%s\" (ADD FRIEND is shown only when friend=0)",
+      evaluation, isFriend ? 1 : 0, index, nevr_social_roster::Global().Count(),
+      static_cast<unsigned long long>(matched), matchedName);
 }
 
 void InviteHandlerHook(void* netGame, std::uint64_t* xpid) {
@@ -221,6 +258,8 @@ void Install(std::uintptr_t gameBase) {
                  reinterpret_cast<PVOID>(&AddFriendNodeHook), "R15NetAddFriendNode");
   InstallChecked(gameBase, kRespondInviteNodeVA, kRespondNodePrologue, g_originalRespondInviteNode,
                  reinterpret_cast<PVOID>(&RespondInviteNodeHook), "R15NetPartyRespondToInviteNode");
+  InstallChecked(gameBase, kIsFriendExpressionVA, kIsFriendExpressionPrologue, g_originalIsFriendExpression,
+                 reinterpret_cast<PVOID>(&IsFriendExpressionHook), "R15NetIsFriendExpression");
 }
 
 }  // namespace nevr_party_invite_gate
