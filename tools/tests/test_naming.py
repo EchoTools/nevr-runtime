@@ -88,6 +88,11 @@ BRAND_PROSE_SPELLINGS = {
     "tools/tests/test_pe_version_info.py": {"nEVR"},  # the same pins, read back from built files
     "tools/package-release/RELEASE-NOTES.template.md": {"nEVR"},
     "tools/winvm/README.md": {"nEVR"},
+    "src/core/nevr_root.h": {"nEVR"},  # comment prose: where nEVR keeps its files
+    "src/runtime/lifecycle/nevr_root_move.h": {"nEVR"},  # comment prose about the one-time move
+    "src/runtime/lifecycle/nevr_root_move.cpp": {"nEVR"},  # comment prose, and the MOVED-TO-NEVR-ROOT.txt text a player reads
+    "src/runtime/tests/test_nevr_root.cpp": {"nEVR"},  # comment prose and a failure message
+    "tools/tests/test_nevr_root_wiring.py": {"nEVR"},  # docstring prose
 }
 
 

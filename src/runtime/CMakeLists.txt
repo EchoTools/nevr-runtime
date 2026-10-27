@@ -42,6 +42,7 @@ set(PATCHES_SOURCES
     "lifecycle/service_redirect.cpp"
     "lifecycle/stable_string_pool.cpp"
     "lifecycle/service_config.cpp"
+    "lifecycle/nevr_root_move.cpp"
     "lifecycle/login_redirect_override.cpp"
     "patch/mode_patches.cpp"
     "patch/coop_ai_trace.cpp"
@@ -296,6 +297,7 @@ set_source_files_properties(
   lifecycle/service_redirect.cpp
   lifecycle/stable_string_pool.cpp
   lifecycle/service_config.cpp
+  lifecycle/nevr_root_move.cpp
   lifecycle/login_redirect_override.cpp
   PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N134 S6: plugin_load_plan.cpp is the pure builder — nevr_config + nlohmann-json,
@@ -1079,6 +1081,17 @@ if(BUILD_TESTING)
     target_link_libraries(test_asset_cache PRIVATE
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json advapi32)
     gtest_discover_tests(test_asset_cache DISCOVERY_MODE PRE_TEST)
+
+    # #857: the nevr root's paths (core/nevr_root.h) and the one-time move into it (lifecycle/nevr_root_move.cpp), driven for
+    # real against a temp tree.
+    add_executable(test_nevr_root
+      tests/test_nevr_root.cpp
+      lifecycle/nevr_root_move.cpp)
+    set_source_files_properties(tests/test_nevr_root.cpp lifecycle/nevr_root_move.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_nevr_root PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_nevr_root PRIVATE GTest::gtest GTest::gtest_main nevr_core)
+    gtest_discover_tests(test_nevr_root DISCOVERY_MODE PRE_TEST)
 
     # EVR codec (compat/evr_codec.cpp): platform-neutral frame parse/build and login layout, the same
     # source the Quest target compiles. login_profile.cpp supplies the real profile JSON the tests parse.

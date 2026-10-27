@@ -11,6 +11,7 @@
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/config.h"
 #include "runtime/lifecycle/crash_recovery.h"
+#include "runtime/lifecycle/nevr_root_move.h"
 #include "runtime/lifecycle/veh_policy.h"
 #include "runtime/hook/patching.h"
 #include "runtime/hook/hook_guard.h"
@@ -371,6 +372,9 @@ static VOID InitializeAfterGameImageGuard() {
   // Where this run is hosted (#673): a crash report names the Wine version without a second question.
   // Boot phase (the tee is open, the game's CLog is not): Get() touches only ntdll and kernel32, as at the mic-policy line below.
   nevr_boot_log_tee::TeeFprintf("%s", nevr_host_environment::BootLine(nevr_system_info::Get()).c_str());
+  // The nevr root (ADR 0012, #857): move what an older release left in %LOCALAPPDATA%\EchoVR into it before the
+  // log or any cache is opened. Win32 file calls and Log() (the boot tee while the boot phase lasts) only.
+  nevr_root_move::RunAndLog();
   EchoVR::InitializeFunctionPointers();
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] function pointers resolved\n");
 
@@ -624,7 +628,7 @@ static VOID InitializeAfterGameImageGuard() {
   // the builtin_log_filter own the rotating JSONL file.  Any remaining
   // TeeFprintf calls after this write to stderr only.
   nevr_boot_log_tee::TeeFprintf(
-      "[NEVR.BOOT] initialization complete; continuing in %%LOCALAPPDATA%%\\EchoVR\\logs\\nevr-<timestamp>.jsonl\n");
+      "[NEVR.BOOT] initialization complete; continuing in %%LOCALAPPDATA%%\\nevr\\echovr\\logs\\nevr-<timestamp>.jsonl\n");
   nevr_boot_log_tee::Close();
   nevr_builtin_log_filter::ReplayBootTail();  // after Close nothing appends: the lines written since the main log opened (#5)
 

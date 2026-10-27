@@ -27,6 +27,7 @@
 #include "abi/echovr_functions.h"
 #include "core/globals.h"
 #include "core/logging.h"
+#include "core/nevr_root.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/hook/patching.h"
 #include "runtime/hook/addresses.h"
@@ -364,7 +365,7 @@ VOID WINAPI ExitProcessHook(UINT uExitCode) {
 // allocation. No float conversions are used (those may allocate on some libcs).
 
 // The crash record (beta gate G17): a tester launching from the Meta app has no console, so the
-// [NEVR.CRASH] lines also go to %LOCALAPPDATA%\EchoVR\logs\nevr-crash-<run id>.txt, next to the run log,
+// [NEVR.CRASH] lines also go to %LOCALAPPDATA%\nevr\echovr\logs\nevr-crash-<run id>.txt, next to the run log,
 // once a crash path has been entered (ArmCrashRecord). The path is built at init; the handler only opens
 // and appends with raw syscalls and flushes every line, because the process may die at any point (N70).
 static char g_crashRecordPath[MAX_PATH] = {};
@@ -372,12 +373,10 @@ static HANDLE g_crashRecordHandle = INVALID_HANDLE_VALUE;
 static volatile LONG g_crashRecordArmed = 0;
 
 static void PrepareCrashRecordPath() {
-  char dir[MAX_PATH] = {};
-  const DWORD len = GetEnvironmentVariableA("LOCALAPPDATA", dir, MAX_PATH);
+  const std::string logs = nevr_root::LogsDir(nevr_root::RootA());  // empty when LOCALAPPDATA is unset or too long
   int n = 0;
-  if (len > 0 && len < MAX_PATH) {
-    n = snprintf(g_crashRecordPath, sizeof(g_crashRecordPath), "%s\\EchoVR\\logs\\nevr-crash-%s.txt", dir,
-                 GetRunId());
+  if (!logs.empty()) {
+    n = snprintf(g_crashRecordPath, sizeof(g_crashRecordPath), "%s\\nevr-crash-%s.txt", logs.c_str(), GetRunId());
   } else {
     char exe[MAX_PATH] = {};
     const DWORD elen = GetModuleFileNameA(nullptr, exe, MAX_PATH);

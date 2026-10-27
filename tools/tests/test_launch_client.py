@@ -79,7 +79,7 @@ def make_game_root(root: pathlib.Path) -> pathlib.Path:
     win10.mkdir(parents=True)
     (win10 / "BugSplat64.dll").write_bytes(ORIGINAL)
     (root / "echovr/_local").mkdir()
-    (root / "echovr/.wineprefix/drive_c/users" / getpass.getuser() / "AppData/Local/EchoVR/logs").mkdir(
+    (root / "echovr/.wineprefix/drive_c/users" / getpass.getuser() / "AppData/Local/nevr/echovr/logs").mkdir(
         parents=True)
     return root
 
@@ -100,11 +100,12 @@ def make_fake_bin(directory: pathlib.Path) -> None:
         'exit 1\n')
     (directory / "wine").write_text(
         '#!/bin/bash\n'
-        'logs="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/EchoVR/logs"\n'
+        'logs="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/nevr/echovr/logs"\n'
         '[[ -n "${FAKE_WINE_STARTED:-}" ]] && echo started > "$FAKE_WINE_STARTED"  # the script deploys before it starts the game\n'
+        '[[ -n "${FAKE_HOST_BOOTSTRAP:-}" ]] && echo \'{"event":"host_attach"}\' > "$logs/nevr-bootstrap.jsonl"  # the host writes its record into the same folder\n'
         'sleep "${FAKE_WINE_LOG_DELAY:-0}"\n'
-        'if [[ -n "${FAKE_LOG_TEXT:-}" ]]; then printf "%b" "$FAKE_LOG_TEXT" > "$logs/nevr-fake-$(date +%s%N).jsonl"\n'
-        'else echo \'{"msg":"NetGame switching state (from logging in, to logged in)"}\' > "$logs/nevr-fake-$(date +%s%N).jsonl"; fi\n'
+        'if [[ -n "${FAKE_LOG_TEXT:-}" ]]; then printf "%b" "$FAKE_LOG_TEXT" > "$logs/${FAKE_LOG_PREFIX:-nevr-fake-}$(date +%s%N).jsonl"\n'
+        'else echo \'{"msg":"NetGame switching state (from logging in, to logged in)"}\' > "$logs/${FAKE_LOG_PREFIX:-nevr-fake-}$(date +%s%N).jsonl"; fi\n'
         '[[ -n "${FAKE_WINE_ARGS:-}" ]] && printf "%s\\n" "$*" > "$FAKE_WINE_ARGS"\n'
         'cmp -s "$FAKE_EXPECT_DLL" "./BugSplat64.dll" || { echo "wrong DLL deployed" >&2; exit 9; }\n'
         '[[ -z "${FAKE_EXPECT_RUNTIME:-}" ]] || cmp -s "$FAKE_EXPECT_RUNTIME" "./nevr-runtime.dll" || { echo "wrong runtime deployed" >&2; exit 9; }\n'
@@ -228,6 +229,21 @@ class LaunchClientTest(unittest.TestCase):
         self.assertEqual((self.game_root / "echovr/bin/win10/nevr-runtime.dll").read_bytes(), b"LEFTOVER", "not deleted")
         self.assertEqual(self.deployed(), ORIGINAL)
 
+    def test_the_run_log_is_read_from_the_nevr_root(self):
+        result = self.run_script("--dll", str(self.dll))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, r"=== game log: .*/AppData/Local/nevr/echovr/logs/nevr-fake-")
+
+    def test_the_hosts_bootstrap_record_in_the_same_folder_is_not_the_run_log(self):
+        # In a root that had no nevr-bootstrap.jsonl when the run began, the host's record is a new nevr-*.jsonl
+        # and sorts after the run log; judging it would fail a run that logged in.
+        # A real run log is named nevr-<timestamp>.jsonl, which sorts before nevr-bootstrap.jsonl.
+        env = dict(self.env, FAKE_HOST_BOOTSTRAP="1", FAKE_LOG_PREFIX="nevr-2026-10-27T17-57-53.")
+        result = self.run_script("--dll", str(self.dll), env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, r"=== game log: .*/logs/nevr-2026-10-27T17-57-53\.")
+        self.assertNotIn("nevr-bootstrap.jsonl", result.stdout)
+
     def test_require_in_game_fails_when_the_client_only_logs_in(self):
         # The default fake run reaches "to logged in" and stops; with --require-in-game the launcher
         # must refuse that as never entering multiplayer, not report the one-assertion-short PASS.
@@ -321,7 +337,7 @@ class LaunchClientTest(unittest.TestCase):
         self.assertLess(elapsed, 2.5)
 
     def test_a_previous_runs_log_from_the_same_second_cannot_decide_the_verdict(self):
-        logs = self.game_root / "echovr/.wineprefix/drive_c/users" / getpass.getuser() / "AppData/Local/EchoVR/logs"
+        logs = self.game_root / "echovr/.wineprefix/drive_c/users" / getpass.getuser() / "AppData/Local/nevr/echovr/logs"
         stale = logs / "nevr-2026-10-07T00-00-00.000.jsonl"
         stale.write_text('{"msg":"NetGame switching state (from logging in, to logged in)"}\n')
         # This run's own log has no login at all; the stale file must not be mistaken for it.

@@ -795,7 +795,7 @@ your seat name, for example `claude-main` or `codex`.
     runs from it. A run, by a script or a Go test, uses its own copy made from the pristine one with
     `cp -a`, which it deletes when the run ends. A run writes into whatever copy it uses: the Wine
     registry under `echovr/.wineprefix`, the files it deploys, and logs. `launch-client.sh` reads the
-    run's log under `echovr/.wineprefix/drive_c/users/<user>/AppData/Local/EchoVR/logs`;
+    run's log under `echovr/.wineprefix/drive_c/users/<user>/AppData/Local/nevr/echovr/logs`;
     `verify-server.sh` reads `echovr/bin/win10/logs` (that the runtime writes there is unverified).
     `launch-client.sh` and `verify-server.sh` put back what they deploy on a normal or trapped exit,
     not after a SIGKILL: `launch-client.sh` only prints ERROR when its restore fails and then saves
