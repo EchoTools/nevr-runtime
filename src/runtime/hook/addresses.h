@@ -642,9 +642,10 @@ constexpr size_t XPID_PLATFORM_COMPACT_FALLBACK_NAME_SIZE = 4;
 /// entry via a switch.  ReVault lists 17 distinct callers (31 call edges),
 /// including CNSIUsers::CreateUser, SaveLocalData, the three Send() functions
 /// (0x14060e380, 0x140613900, 0x140618480) and Inspect<CBindingsOffsetOfInspector
-/// <float>>.  Detour this to return the OVR-ORG entry unconditionally, and the
-/// xpids built through it (CreateUser log, profile save, LobbyFindSession,
-/// LobbyPlayerSessions) use the same prefix without any string-table patching.
+/// <float>>.  Detour this to return the OVR-ORG entry (or the DMO entry, for the
+/// nibble 7 a No VR login sets) and the xpids built through it (CreateUser log,
+/// profile save, LobbyFindSession, LobbyPlayerSessions) use the same prefix
+/// without any string-table patching.
 constexpr uintptr_t GET_PROVIDER_PREFIX = 0x60D640;
 
 /// The other xpid choke-point, not hooked: echovr.exe VA 0x1401ba630 (ReVault name
@@ -664,6 +665,10 @@ constexpr uintptr_t GET_USER_ID_STRING = 0x1BA630;
 /// uses the same values (its const block starts with XPlatformIdSize, which
 /// consumes iota 0, so STM is 1 there too).
 constexpr uintptr_t PROVIDER_STRING_OVR_ORG = 0x16D7140;
+
+/// RVA of the DMO compact-name string-table entry (case 7 of the same switch): the jump-table entry
+/// for nibble 7 (0x14060d691) is `lea rax,[rip+0x10c9ab4]`, which lands on "DMO" at VA 0x1416D714C.
+constexpr uintptr_t PROVIDER_STRING_DMO = 0x16D714C;
 /// (N14: EULA acceptance cached per-platform-prefix, so a ???- prefix breaks cache lookup).
 constexpr uintptr_t XPID_PLATFORM_FALLBACK_PREFIX = 0x16D0F9C;
 constexpr size_t XPID_PLATFORM_FALLBACK_PREFIX_SIZE = 4;
