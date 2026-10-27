@@ -17,6 +17,7 @@
 #include "runtime/log/url_diagnostics.h"
 #include "runtime/log/security_diagnostics.h"
 #include "runtime/server/telemetry_game_status.h"
+#include "runtime/server/telemetry_game_type.h"
 
 extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 
@@ -1064,13 +1065,11 @@ bool TelemetryStreamer::SendHeaderWithSnapshot(const TelemetrySnapshot& snap) {
   ts->set_seconds(secs.count());
   ts->set_nanos(static_cast<int32_t>(nanos.count()));
 
+  // The lobby type is the game type now: private_match and match_type are removed from the schema (#990).
+  nevr_telemetry_header::SetCaptureGameType(header, m_isPrivateMatch);
   auto* ah = header->mutable_echo_arena();
   ah->set_session_id(m_sessionId);
   ah->set_client_name("nevr-runtime");
-  ah->set_private_match(m_isPrivateMatch);
-  ah->set_match_type(m_isPrivateMatch
-      ? telemetry::v2::MATCH_TYPE_PRIVATE
-      : telemetry::v2::MATCH_TYPE_ARENA);
   ah->set_map_name("mpl_arena_a");
   ah->set_total_round_count(3);
 

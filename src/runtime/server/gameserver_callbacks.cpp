@@ -1,4 +1,5 @@
 #include "runtime/server/gameserver.h"
+#include "runtime/server/registration_metadata.h"
 #include "core/hex_dump.h"
 #include "core/curl_global.h"
 #include <atomic>
@@ -812,6 +813,7 @@ void GameServerLib::ProcessPendingReconnect() {
   params.versionLock = state.versionLock;
   params.timeStepUsecs = state.defaultTimeStepUsecs;
   params.version = nevr_game_server::FormatRegistrationVersion(buildId.git_describe, buildId.git_commit, buildId.build_type);
+  nevr_game_server::FillRegistrationMetadata(params);  // #990: installed levels, regions, guilds
   const gameservice::v1::Envelope envelope = nevr_game_server::BuildRegistrationEnvelope(params);
 
   if (!SendProtobufEnvelope(this, envelope)) {

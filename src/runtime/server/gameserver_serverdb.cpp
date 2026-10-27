@@ -17,6 +17,7 @@
 #include "runtime/server/failure_detail.h"
 #include "runtime/server/protobuf_transport.h"
 #include "runtime/server/registration_envelope.h"
+#include "runtime/server/registration_metadata.h"
 #include "runtime/server/serialized_mint.h"
 #include "runtime/server/serverdb_uri.h"
 #include "runtime/server/session_success_dispatch.h"
@@ -370,6 +371,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   params.versionLock = versionLock;
   params.timeStepUsecs = state.defaultTimeStepUsecs;
   params.version = nevr_game_server::FormatRegistrationVersion(buildId.git_describe, buildId.git_commit, buildId.build_type);
+  nevr_game_server::FillRegistrationMetadata(params);  // #990: installed levels, regions, guilds
   const gameservice::v1::Envelope envelope = nevr_game_server::BuildRegistrationEnvelope(params);
 
   if (!SendProtobufEnvelope(this, envelope)) {
