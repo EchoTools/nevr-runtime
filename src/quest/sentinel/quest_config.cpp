@@ -35,7 +35,7 @@ constexpr std::array<KeySpec, 4> kKeys = {{
 constexpr const char* kSocialFacadeKey = "social.facade";                      // PC's key and default (true)
 constexpr const char* kSendPresenceToMetaKey = "social.send_presence_to_meta";  // Quest only (default true)
 constexpr const char* kHardwareDumpKey = "diagnostics.hardware_dump";          // Quest only (default false)
-constexpr const char* kUiEventProbeKey = "diagnostics.ui_event_probe";          // Quest only (default false)
+constexpr const char* kUiEventProbeKey = "diagnostics.ui_event_probe";          // Quest only (default on with social, #318)
 constexpr const char* kTextureQualityKey = "graphics.texture_quality";          // Quest only (default stock)
 constexpr const char* kTextureQualitySection = "graphics";
 constexpr const char* kTextureQualityName = "texture_quality";  // the one key `graphics` has
@@ -124,7 +124,7 @@ void SetDefaultRequests(ResolvedConfig& config) {
   config.requested.presenceNames = true;
   config.requested.presenceLocal = false;
   config.requested.hwdump = false;
-  config.requested.uiEventProbe = false;
+  config.requested.uiEventProbe = true;
 }
 
 // A boolean key: absent keeps `fallback`; an unusable value keeps it too and is rejected by key, never by value.
@@ -248,7 +248,9 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   want.social = ReadBool(cfg, kSocialFacadeKey, true, r);
   want.presenceNames = want.social;
   want.hwdump = ReadBool(cfg, kHardwareDumpKey, false, r);
-  want.uiEventProbe = ReadBool(cfg, kUiEventProbeKey, false, r);
+  // Defaults to the social facade's state (on unless social.facade is false), like presence_names: a facade-off file
+  // gets no forced-off warning for a key it never asked for.
+  want.uiEventProbe = ReadBool(cfg, kUiEventProbeKey, want.social, r);
   want.presenceLocal = !ReadBool(cfg, kSendPresenceToMetaKey, true, r);
   ReadTextureQuality(cfg, r);
 }

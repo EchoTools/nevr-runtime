@@ -239,7 +239,8 @@ void CheckGameFunctions(const LoadedElf& r15) {
   const quest_social::GameEvents events = quest_social::ResolveGameEvents(&LookupFixed);
   g_lookupImage = nullptr;
   QCHECK(address(events.send) == r15.image.base + quest_social::kLibR15SendComponentEventVaddr);
-  // features.ui_event_probe off (the default): the facade gets no post function even on the pinned build.
+  // features.ui_event_probe off (the `diagnostics.ui_event_probe: false` case): the facade gets no post function even on
+  // the pinned build. On (the default, #318) the same call resolves the event, which is what a default config installs.
   g_lookupImage = &r15.image;
   const quest_social::GameEvents off = quest_social::SelectGameEvents(false, &LookupFixed);
   const quest_social::GameEvents on = quest_social::SelectGameEvents(true, &LookupFixed);

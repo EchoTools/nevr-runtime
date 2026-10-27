@@ -102,6 +102,9 @@ void DefaultsWithoutFile() {
   CHECK(!r.config.requested.hwdump && !r.config.effective.hwdump);
   CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kHwDump));
   CHECK(EventsContain(r, "feature=hwdump requested=off effective=off"));
+  // The invite/party tab event (#318) is on in a default config: it is what switches the tablet to Friends.
+  CHECK(r.config.requested.uiEventProbe && r.config.effective.uiEventProbe);
+  CHECK(EventsContain(r, "feature=ui_event_probe requested=on effective=on"));
   // The OBB-mount skip (#319) is not a feature (#572): the feature report does not name it.
   CHECK(!EventsContain(r, "obb_skip"));
   // The keys are named by their config.yaml path, and the file's absence is logged with the file name.
@@ -594,8 +597,8 @@ void RedirectIsGatedByActivation() {
 
 }  // namespace
 
-// The UI event probe (#391, #318): `diagnostics.ui_event_probe`, off unless the file says true, and it needs social.
-void UiEventProbeIsOnlyEverOnByTheDiagnosticsKeyAndNeedsSocial() {
+// The invite/party tab event (#391, #318): `diagnostics.ui_event_probe`, on unless the file says false; needs social.
+void UiEventProbeIsOnByDefaultOffOnlyByTheDiagnosticsKeyAndNeedsSocial() {
   {
     const LoadResult r = Load(Full(), "diagnostics:\n  ui_event_probe: true\n");
     CHECK(r.config.requested.uiEventProbe && r.config.effective.uiEventProbe);
@@ -610,14 +613,26 @@ void UiEventProbeIsOnlyEverOnByTheDiagnosticsKeyAndNeedsSocial() {
   }
   {
     const LoadResult r = Load(Full(), "diagnostics:\n  ui_event_probe: maybe\n");
-    CHECK(!r.config.effective.uiEventProbe);
+    CHECK(r.config.effective.uiEventProbe);  // a rejected value keeps the default, which is on
     CHECK(EventsContain(r, "config file key=diagnostics.ui_event_probe rejected reason=not_a_boolean"));
   }
-  for (const char* text : {"diagnostics:\n  ui_event_probe: false\n", "social:\n  ui_event_probe: true\n",
-                           "ui_event_probe: true\n", "diagnostics: {}\n"}) {
-    const LoadResult r = Load(Full(), text);
-    CHECK(!r.config.effective.uiEventProbe);
+  {
+    const LoadResult r = Load(Full(), "diagnostics:\n  ui_event_probe: false\n");
+    CHECK(!r.config.requested.uiEventProbe && !r.config.effective.uiEventProbe);
     CHECK(EventsContain(r, "feature=ui_event_probe requested=off effective=off"));
+  }
+  {
+    // The default follows the facade: a facade-off file never asked for the event, so nothing is forced off.
+    const LoadResult r = Load(Full(), "social:\n  facade: false\n");
+    CHECK(!r.config.requested.uiEventProbe && !r.config.effective.uiEventProbe);
+    CHECK(EventsContain(r, "feature=ui_event_probe requested=off effective=off"));
+    CHECK(!HasLevel(r, LogLevel::kWarn));
+  }
+  // Spellings the key does not read leave the default in place: on, with the social facade on.
+  for (const char* text : {"social:\n  ui_event_probe: false\n", "ui_event_probe: false\n", "diagnostics: {}\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(r.config.effective.uiEventProbe);
+    CHECK(EventsContain(r, "feature=ui_event_probe requested=on effective=on"));
   }
   CHECK(std::string(nevr_quest::FeatureName(Feature::kUiEventProbe)) == "ui_event_probe");
 }
@@ -843,7 +858,7 @@ int main() {
   ABooleanThatIsNotOneKeepsItsDefaultAndIsRejectedByName();
   SendPresenceToMetaFalseIsTheLocalPresencePath();
   HardwareDumpIsOnlyEverOnByTheDiagnosticsKey();
-  UiEventProbeIsOnlyEverOnByTheDiagnosticsKeyAndNeedsSocial();
+  UiEventProbeIsOnByDefaultOffOnlyByTheDiagnosticsKeyAndNeedsSocial();
   TextureQualityIsTheDefaultUnlessTheFileNamesAnotherLevel();
   ATextureQualityThatIsNotALevelFallsBackToStockAndNamesTheWord();
   ATextureQualityThatIsNotAWordFallsBackToStock();
