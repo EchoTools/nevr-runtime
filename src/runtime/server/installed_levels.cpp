@@ -122,6 +122,16 @@ InstalledLevels CollectInstalledLevels(const std::filesystem::path& manifestDir,
   return result;
 }
 
+void AddRegisteredLevels(const std::vector<std::pair<uint64_t, uint64_t>>& registered, InstalledLevels* levels) {
+  for (const auto& [type, name] : registered) {
+    if (type != kLevelRootType) continue;
+    levels->levels.push_back(name);
+    ++levels->pluginLevels;
+  }
+  std::sort(levels->levels.begin(), levels->levels.end());
+  levels->levels.erase(std::unique(levels->levels.begin(), levels->levels.end()), levels->levels.end());
+}
+
 std::vector<std::string> SplitCsvList(std::string_view csv) {
   std::vector<std::string> items;
   std::size_t start = 0;

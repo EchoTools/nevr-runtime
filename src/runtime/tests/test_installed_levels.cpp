@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "abi/symbol_hash.h"
+#include "runtime/patch/asset_registry.h"
 #include "runtime/server/installed_levels.h"
 
 namespace {
@@ -222,4 +223,32 @@ TEST(InstalledLevels, StockInstallHasThirtyTwoLevels) {
   EXPECT_TRUE(result.problems.empty()) << result.problems[0];
   EXPECT_EQ(result.manifestsRead, 2u);
   EXPECT_EQ(result.levels.size(), 32u);
+}
+
+TEST(InstalledLevels, PluginRegisteredLevelsJoinTheManifestLevelsWithoutDuplicates) {
+  InstalledLevels levels;
+  levels.levels = {kMplArenaA};
+  AddRegisteredLevels({{kLevelRootType, 0xCAFE}, {kLevelRootType, kMplArenaA}, {0x1111111111111111ULL, 0x2222ULL}},
+                      &levels);
+  EXPECT_EQ(levels.levels, (std::vector<uint64_t>{0xCAFE, kMplArenaA}));  // sorted; the duplicate is kept once
+  EXPECT_EQ(levels.pluginLevels, 2u);                                      // the other type is not a level
+}
+
+// The registry a plugin's NEVR_RegisterAsset call lands in is the source of these entries: this drives a real
+// Registry through Register and feeds its Snapshot into the level list.
+TEST(InstalledLevels, AssetsARegistryHoldsOfTheLevelTypeAreThePluginLevels) {
+  const uint8_t payload[4] = {1, 2, 3, 4};
+  nevr::assets::Registry registry;
+  ASSERT_EQ(registry.Register(kLevelRootType, 0xCAFE, payload, sizeof(payload), "plugin-level"),
+            nevr::assets::RegisterStatus::Ok);
+  ASSERT_EQ(registry.Register(0x1111111111111111ULL, 0x2222ULL, payload, sizeof(payload), "plugin-texture"),
+            nevr::assets::RegisterStatus::Ok);
+  std::vector<std::pair<uint64_t, uint64_t>> keys;
+  for (const nevr::assets::Asset& asset : registry.Snapshot()) keys.emplace_back(asset.type, asset.name);
+
+  InstalledLevels levels;
+  levels.levels = {kMplArenaA};
+  AddRegisteredLevels(keys, &levels);
+  EXPECT_EQ(levels.levels, (std::vector<uint64_t>{0xCAFE, kMplArenaA}));
+  EXPECT_EQ(levels.pluginLevels, 1u);
 }

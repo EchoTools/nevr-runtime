@@ -824,11 +824,13 @@ if(BUILD_TESTING)
     # #990: the installed levels read from the package manifests (installed_levels.cpp: std and zstd only).
     add_executable(test_installed_levels
       tests/test_installed_levels.cpp
-      server/installed_levels.cpp)
-    set_source_files_properties(tests/test_installed_levels.cpp server/installed_levels.cpp
+      server/installed_levels.cpp
+      patch/asset_registry.cpp)
+    set_source_files_properties(tests/test_installed_levels.cpp server/installed_levels.cpp patch/asset_registry.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_installed_levels PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_installed_levels PRIVATE GTest::gtest GTest::gtest_main zstd::libzstd)
+    target_link_libraries(test_installed_levels PRIVATE GTest::gtest GTest::gtest_main zstd::libzstd
+      nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_installed_levels DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_callback_unregistration

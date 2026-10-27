@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace nevr_game_server {
@@ -41,12 +42,17 @@ bool ParseLevelRoots(const std::vector<uint8_t>& file, std::vector<uint64_t>* le
 struct InstalledLevels {
   std::vector<uint64_t> levels;      // sorted, no duplicates, across every set read
   std::size_t manifestsRead = 0;     // sets whose file parsed
+  std::size_t pluginLevels = 0;      // level-root registrations a plugin made (AddRegisteredLevels)
   std::vector<std::string> problems;  // one line per set that did not parse or was missing
 };
 
 // Reads <manifestDir>/<%016llx set id> for each set and collects the level roots. A missing or unreadable
 // file is a problem line, never an exception: the other sets still count.
 InstalledLevels CollectInstalledLevels(const std::filesystem::path& manifestDir, const std::vector<uint64_t>& setIds);
+
+// Adds the names of the level-root registrations (type, name) a plugin made through NEVR_RegisterAsset to the
+// manifest levels. Other types are ignored. The result stays sorted, without duplicates.
+void AddRegisteredLevels(const std::vector<std::pair<uint64_t, uint64_t>>& registered, InstalledLevels* levels);
 
 // "a,b,,c" -> {"a", "b", "c"}: the list shape the regions and guilds config keys carry, split the way the
 // ServerDB URL builder splits them, with empty elements dropped.

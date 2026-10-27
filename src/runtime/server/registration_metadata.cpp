@@ -9,6 +9,7 @@
 
 #include "core/logging.h"
 #include "runtime/lifecycle/service_config.h"
+#include "runtime/patch/asset_registry.h"
 #include "runtime/server/installed_levels.h"
 
 namespace nevr_game_server {
@@ -44,12 +45,16 @@ void FillRegistrationMetadata(RegistrationParams& params) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] level manifest not read dir=%s %s", manifestDir.string().c_str(),
         problem.c_str());
   }
+  std::vector<std::pair<uint64_t, uint64_t>> registered;
+  for (const nevr::assets::Asset& asset : nevr::assets::Global().Snapshot()) registered.emplace_back(asset.type, asset.name);
+  AddRegisteredLevels(registered, &levels);
   params.installedLevels = levels.levels;
   params.regions = ConfigCsvList("nevr_regions");
   params.guilds = ConfigCsvList("nevr_guilds");
   Log(EchoVR::LogLevel::Info,
-      "[NEVR.GAMESERVER] registration metadata levels=%zu manifests_read=%zu regions=%zu guilds=%zu",
-      params.installedLevels.size(), levels.manifestsRead, params.regions.size(), params.guilds.size());
+      "[NEVR.GAMESERVER] registration metadata levels=%zu manifests_read=%zu plugin_levels=%zu regions=%zu guilds=%zu",
+      params.installedLevels.size(), levels.manifestsRead, levels.pluginLevels, params.regions.size(),
+      params.guilds.size());
 }
 
 }  // namespace nevr_game_server
