@@ -86,6 +86,7 @@ add_library(nevr_quest_social STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/social/social_install.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/social/social_invite_gate.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/social/lobby_full_hooks.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/social/menu_version_label.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/social_names.cpp")
 # social_names.cpp is the PC's friend-name decoder. The sentinel may carry no dynamic initializer, so the
 # static registration the PC uses is compiled out and InstallSocialHook registers the decoder explicitly.
@@ -99,6 +100,7 @@ set_source_files_properties(
   "${CMAKE_CURRENT_SOURCE_DIR}/social/social_install.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/social/social_invite_gate.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/social/lobby_full_hooks.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/social/menu_version_label.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/tests/social_install_test.cpp"
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 target_include_directories(nevr_quest_social PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
