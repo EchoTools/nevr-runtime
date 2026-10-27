@@ -188,5 +188,29 @@ class ProtoStampTest(unittest.TestCase):
         self.assertEqual(records[-1]["pin"], PIN)
 
 
+class JustfileWiringTest(unittest.TestCase):
+    """configure regenerates a stale gen/ after vcpkg (which installs the protoc) and before its check."""
+
+    def dry_run(self, recipe):
+        out = subprocess.run(["just", "--dry-run", recipe], cwd=REPO, capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return out.stdout + out.stderr
+
+    def test_configure_regenerates_between_vcpkg_and_the_check(self):
+        text = self.dry_run("configure")
+        vcpkg = text.find("vcpkg install")
+        ensure = text.find("proto_stamp.py")
+        check = text.find("worktree-setup.sh --check")
+        self.assertGreater(vcpkg, -1, text)
+        self.assertGreater(ensure, vcpkg, "gen/ is regenerated before vcpkg has installed protoc")
+        self.assertGreater(check, ensure, "gen/ is checked before it is regenerated")
+        self.assertIn(" ensure ", text[ensure:ensure + 200])
+
+    def test_proto_runs_the_generator_at_the_pin(self):
+        text = self.dry_run("proto")
+        self.assertIn("proto_stamp.py", text)
+        self.assertIn(" generate ", text)
+
+
 if __name__ == "__main__":
     unittest.main()
