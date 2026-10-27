@@ -31,7 +31,7 @@ Commit `@COMMIT@`.
 - **Windows:** unzip, close the game, run `install.ps1` (PowerShell, `-ExecutionPolicy Bypass`). It backs up
   the original `BugSplat64.dll` with a timestamp, renames a legacy `dbgcore.dll` aside and puts both new DLLs in; `uninstall.ps1`
   restores both. Nothing is deleted.
-@IF_NOAPK@- **Dedicated server:** copy `echovr_server.exe` next to `echovr.exe` and write `_local\config.yaml`; the zip's
+@IF_NOAPK@- **Dedicated server:** copy `echovr_server.exe` next to `echovr.exe` and write `%LOCALAPPDATA%\nevr\echovr\config.yaml`; the zip's
 @IF_NOAPK@  `README.txt` has the command and the smallest working config.
 @IF_APK@- **Quest:** `adb install -r @APK@` over the build you already have (it is signed with the same key as
 @IF_APK@  earlier test builds; a different key needs an uninstall first, which clears the app's data).
@@ -49,9 +49,9 @@ Windows Defender or SmartScreen may warn about a file that is not signed.
 @IF_APK@not a code-signing certificate.
 
 ## Notes
-@IF_APK@- The Windows log is `%LOCALAPPDATA%\EchoVR\logs\nevr-*.jsonl`; the Quest log is
+@IF_APK@- The Windows log is `%LOCALAPPDATA%\nevr\echovr\logs\nevr-*.jsonl`; the Quest log is
 @IF_APK@  `/sdcard/Android/data/com.readyatdawn.r15/files/nevr-sentinel.log`.
 @IF_APK@- The version is `@VERSION@`, in both artifacts.
-@IF_NOAPK@- The Windows log is `%LOCALAPPDATA%\EchoVR\logs\nevr-*.jsonl`.
+@IF_NOAPK@- The Windows log is `%LOCALAPPDATA%\nevr\echovr\logs\nevr-*.jsonl`.
 @IF_NOAPK@- The version is `@VERSION@`; `BugSplat64.dll` and `nevr-runtime.dll` each carry it with the commit in one identity string,
 @IF_NOAPK@  `NEVR-BUILD @VERSION@ @COMMIT@`.

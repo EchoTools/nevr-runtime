@@ -62,7 +62,7 @@ means each. Every feature below is on `main`; [`docs/testing/smoke-checklist.md`
 says how to check each one and which log line proves it.
 
 ### Get in
-- **Nothing to configure.** The service endpoints and the public client keys are built in, so a game client with a build-embedded configuration signs in with no `config.yaml`. A `config.yaml` overrides them, on the PC next to the game and on the Quest in the app's files folder ([`docs/reference/example-config.yaml`](docs/reference/example-config.yaml) lists every key and which builds read it). (both)
+- **Nothing to configure.** The service endpoints and the public client keys are built in, so a game client with a build-embedded configuration signs in with no `config.yaml`. A `config.yaml` overrides them, on the PC in `%LOCALAPPDATA%\nevr\echovr` and on the Quest in the app's files folder ([`docs/reference/example-config.yaml`](docs/reference/example-config.yaml) lists every key and which builds read it). (both)
 - **Sign in with Discord.** A device-code sign-in in your browser; the saved sign-in is reused on the next start and refreshed in the background. (PC)
 - **Saved sign-in on the headset.** The Quest build reuses its saved sign-in, and shows a sign-in code on the game's own login-error screen when it has none. (Quest)
 - **Windowed, no headset.** `-windowed` runs the game in a window with the headset checks patched out. (PC)
@@ -95,7 +95,7 @@ says how to check each one and which log line proves it.
 - **Local minidump.** A Quest crash writes a minidump and the maps file locally. (Quest)
 
 ### Diagnostics
-- **Structured logs.** One JSON line per event: `nevr-boot.jsonl` in `logs\` of the game folder, a timestamped `nevr-<timestamp>.jsonl` under `%LOCALAPPDATA%\EchoVR\logs` and the host's `nevr-bootstrap.jsonl` under `%LOCALAPPDATA%\nevr\echovr\logs` on PC (every PC file is listed in "Files the runtime uses"); logcat tag `NEVR-Sentinel` and `nevr-sentinel.log` on Quest.
+- **Structured logs.** One JSON line per event: `nevr-boot.jsonl` in `logs\` of the game folder, a timestamped `nevr-<timestamp>.jsonl` and the host's `nevr-bootstrap.jsonl` under `%LOCALAPPDATA%\nevr\echovr\logs` on PC (every PC file is listed in "Files the runtime uses"); logcat tag `NEVR-Sentinel` and `nevr-sentinel.log` on Quest.
 - **The game's own log, filtered.** The built-in filter captures the game's log lines, folds repeats and reports its own health. (PC)
 - **Hook accounting.** Each hook reports whether it was ever entered; overwritten hooks are detected; counters are reported once the game runs. (both)
 - **Export tracing.** `-trace-exports` records the platform DLL calls. (PC)
@@ -212,12 +212,10 @@ are inside the prefix (`<prefix>/drive_c/users/<user>/AppData/Local`).
 ### In `_local`
 
 `_local` is searched as `<game folder>\_local`, then `<game folder>\..\_local`, then `<game folder>\..\..\_local` (the
-stock install keeps it beside `bin`). Only `config.yaml` also looks in the directory of a path named by `-config` or `-config-path`, and
-looks there first; `.credentials.json` does not.
+stock install keeps it beside `bin`). `config.yaml` is not looked for here.
 
 | Path | What it is | Code |
 | --- | --- | --- |
-| `_local\config.yaml` | Every nEVR setting: service addresses and keys, the `plugins:` list, arena rules. A missing file is a warning and a defaults-only run; a malformed one stops a dedicated server. | `FindNevrConfigYamlPath` in `src/runtime/lifecycle/service_config.cpp` |
 | `_local\config.json` | Optional. Only the keys the stock engine reads. | `LoadEarlyConfig` in `src/runtime/lifecycle/config.cpp` |
 | `_local\.credentials.json` | The cached refresh token and identity (the access token is never written). The function looks at `<game folder>\_local`, `..\_local` and `..\..\_local` only (it ignores `-config` and `-config-path`) and uses the first one that already holds a `.credentials.json`; if none does, the first of those three that holds a `config.yaml`; if none does, `<game folder>\_local`, which a write creates. A write goes to `.credentials.json.tmp` first, then replaces the cache. | `SelectCredentialCacheLocation` in `src/core/auth_token.h`; `TempPathFor` in `src/core/credential_write.h` |
 | `_local\r14logs\*.log` | The game's own log. The runtime only reads the newest, relative to the working directory. | `src/runtime/lifecycle/state_machine.cpp` |
@@ -229,16 +227,12 @@ looks there first; `.credentials.json` does not.
 | `logs\nevr-bootstrap.jsonl` | The host's own log: what it decided at attach, and its crash-dump records. Falls back to `%TEMP%\nevr\echovr\logs`, then the directory of `BugSplat64.dll`. | `kLogsSubdirectory`, `kBootstrapLogName` in `src/runtime/host/host_paths.h` |
 | `crashes\nevr-<pid>-<n>.dmp` | A minidump written by the host's crash capture, with the same fallbacks (`%TEMP%\nevr\echovr\crashes`, then the directory of `BugSplat64.dll`). The game's crash handler reaches it through the exported `BugSplat_createReport` in `src/runtime/host/minidmp_sender_exports.cpp`. | `kCrashesSubdirectory` in `src/runtime/host/host_paths.h`; `CrashCapture::Capture` in `src/runtime/host/crash_capture.cpp` |
 | `cache\<sha256>.blob`, `cache\index.json` | The content-addressed asset cache: the bytes under their own SHA-256, and the index that says which blob stands in for which resource. A write in progress is `<sha256>.<pid>.<tick>.tmp`. The cache is size-capped and evicts blobs the index does not name. Without `LOCALAPPDATA` there is no cache directory: the cache is disabled and the runtime logs `[NEVR.RESOURCE] cache disabled reason=no cache directory (LOCALAPPDATA unset)`. | `src/runtime/patch/asset_cache.h`, `DefaultDir` in `src/runtime/patch/asset_cache.cpp` |
-
-### In `%LOCALAPPDATA%\EchoVR\`
-
-This is the game's own folder, which the runtime also writes to.
-
-| Path | What it is | Code |
-| --- | --- | --- |
+| `config.yaml` | Every nEVR setting: service addresses and keys, the `plugins:` list, arena rules. When `-config` or `-config-path` names a file, the `config.yaml` in that file's folder is used instead. A missing file is a warning and a defaults-only run; a malformed one stops a dedicated server. | `FindNevrConfigYamlPath` in `src/runtime/lifecycle/service_config.cpp` |
 | `logs\nevr-<timestamp>.jsonl` | The main run log (the built-in filter's output). Rotated by size and age; the newest `rotate_keep` files are kept. Without `LOCALAPPDATA` it is `logs\` beside the game's executable. The `file_dir` setting of the filter config replaces the folder in both cases. | `GetDefaultLogDir`, `BuildLogFilePath` in `src/runtime/log/builtin_filter.cpp` |
 | `logs\nevr-crash-<run id>.txt` | The crash record: the `[NEVR.CRASH]` lines, written only once a crash path is entered. Without `LOCALAPPDATA` (or when its value is `MAX_PATH` characters or longer) it is `logs\nevr-crash-<run id>.txt` beside the game's executable. Neither case creates the `logs` folder: if it does not exist the file is not written. | `PrepareCrashRecordPath` in `src/runtime/lifecycle/crash_recovery.cpp` |
-| `cosmetics\v1\packages\` | Downloaded cosmetic packages (client only). The folder is created on demand under the user's Local AppData known folder (not the `LOCALAPPDATA` variable); if that lookup or the creation fails, the error is logged and no package is stored. | `GetCacheDir` in `src/runtime/patch/asset_cdn.cpp` |
+| `cosmetics\v1\packages\` | Downloaded cosmetic packages (client only). The folder is created on demand; without `LOCALAPPDATA`, or if the creation fails, the error is logged and no package is stored. | `GetCacheDir` in `src/runtime/patch/asset_cdn.cpp` |
+
+On the first run the runtime moves files it finds in the old places (the previous log, crash record, cosmetics and `config.yaml` locations) into this folder and leaves `MOVED-TO-NEVR-ROOT.txt` in each old folder it emptied something from.
 
 ## What gets built
 

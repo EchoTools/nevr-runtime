@@ -563,10 +563,12 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # login bridge (#16), so every verify-server.sh flag set died at boot. The script deploys the
         # offline-boot config the Windows-VM rig uses, only when the install has none.
         script = (ROOT / "verify-server.sh").read_text()
-        self.assertRegex(script, r'if \[ ! -e "\$GAME_ROOT/echovr/_local/config\.yaml" \]')
+        self.assertRegex(script, r'NEVR_ROOT_REL="\.\./\.\./\.wineprefix/drive_c/users/\$\(id -un\)/AppData/Local/nevr/echovr"')
+        self.assertRegex(script, r'if \[ ! -e "\$GAME_DIR/\$NEVR_ROOT_REL/config\.yaml" \]')
         self.assertIn("allow_offline_server: true", script)
         self.assertIn('socket_uri: ""', script)  # #843: an explicit empty socket_uri takes no embedded default
-        self.assertRegex(script, r'deploy "\$OUT/offline-config\.yaml" "\$GAME_DIR/\.\./\.\./_local/config\.yaml"')
+        self.assertRegex(script, r'deploy "\$OUT/offline-config\.yaml" "\$GAME_DIR/\$NEVR_ROOT_REL/config\.yaml"')
+        self.assertNotIn("_local/config.yaml", script, "config.yaml is read from the nevr root, not from the install's _local")
 
     def test_token_mints_are_serialized(self):
         # Issue #246: the ServerDB refresher, the telemetry refresher and RequestRegistration all

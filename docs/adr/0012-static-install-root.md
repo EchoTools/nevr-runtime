@@ -1,6 +1,6 @@
 # ADR 0012: the install folder is static; nEVR's runtime, plugins and state live in `%LOCALAPPDATA%\nevr\echovr`
 
-Status: proposed (#575, tracking issue #799). Of the "Order of work", step 2 (the target split) is built; nothing else in the "Decision" section is. ADR 0010 and ADR 0011 are accepted and
+Status: proposed (#575, tracking issue #799). Of the "Order of work", step 2 (the target split) is built, and of step 5 the root, the one-time move and the resolution of `config.yaml`, `logs\`, `crashes\` and the caches (`core/nevr_root.h`, `lifecycle/nevr_root_move.cpp`); nothing else in the "Decision" section is. ADR 0010 and ADR 0011 are accepted and
 neither is superseded by this record. **It amends ADR 0008 (`0008-bugsplat-host-and-nevr-runtime.md`) in three places:** `nevr-runtime.dll`
 loads from the root, not from the directory of `BugSplat64.dll`; a refused or missing `nevr-runtime.dll` stops the game, where ADR 0008
 lets it run without the runtime; and the host's log gains a `versions` event. "Relation to other records" says which text of ADR 0008 each replaces. What exists today is named
@@ -44,7 +44,8 @@ One root per game: `%LOCALAPPDATA%\nevr\echovr\`. The install folder keeps the g
 | `plugins\` | plugin DLLs and their dependencies |
 | `config.yaml` | the nEVR configuration, when no `-config` folder is given |
 | `.credentials.json` | the sign-in cache, one per machine, for clients and servers alike |
-| caches, `logs\`, `crashes\` | what the runtime and the host write |
+| `logs\`, `crashes\` | the run log and the crash record (`nevr-crash-<run id>.txt`) the runtime writes, the host's log and minidumps |
+| `cache\`, `cosmetics\v1\packages\` | the asset cache, and the downloaded cosmetic packages |
 
 `%LOCALAPPDATA%\EchoVR` stays the original game's folder; nothing of ours is written there.
 
@@ -127,7 +128,10 @@ On the first run that finds the old layout, the runtime moves, and logs every fi
   `config.yaml` is not moved: it stays where it is, and the rule of "Where state resolves" finds it there;
 - from `%LOCALAPPDATA%\EchoVR\logs`: nEVR's own files, which are the run logs the built-in filter writes (`BuildLogFilePath` in
   `builtin_filter.cpp`, whose prefix is configurable) and `nevr-crash-<run id>.txt` (`PrepareCrashRecordPath`), never the game's own.
-  The move recognises them by the names those writers use; step 5 of the order of work fixes the list from the code of that day.
+  The move recognises them by the names those writers use. That list is `nevr-*.jsonl` and `nevr-*.log` (the run log) and `nevr-crash-*.txt` (the crash
+  record), moved to the root's `logs\`;
+- from `%LOCALAPPDATA%\EchoVR\cosmetics\v1\packages`: every file, the downloaded cosmetic packages, moved to the root's `cosmetics\v1\packages`.
+  `MOVED-TO-NEVR-ROOT.txt` is left in each of these two folders as well as in `_local`.
 
 The credentials move first, so a player who updates keeps their login. The move never overwrites a file already in the root, is
 safe to run twice, and leaves a file in place, with a log line, when it cannot move it. Nothing is deleted that was not moved. When
