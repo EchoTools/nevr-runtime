@@ -245,7 +245,9 @@ InlineStatus InlineHook::Install(const void* target, const InlinePrologue& expec
     LogResult(LogLevel::kError, InlineStatus::kRestoreProtectFailed, target, tramp);
     return InlineStatus::kRestoreProtectFailed;
   }
-  __builtin___clear_cache(static_cast<char*>(target), static_cast<char*>(target) + kInlinePatchBytes);
+  // The flush takes a writable range; the patch above was written through the page's own mapping.
+  char* const patchBegin = const_cast<char*>(static_cast<const char*>(target));
+  __builtin___clear_cache(patchBegin, patchBegin + kInlinePatchBytes);
 
   if (!committedVerified) {
     LogResult(LogLevel::kError, InlineStatus::kWriteVerifyFailed, target, tramp);
