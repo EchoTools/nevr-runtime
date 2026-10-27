@@ -3,12 +3,14 @@
 namespace nevr_game_server {
 
 std::string FormatRegistrationVersion(std::string_view gitDescribe, std::string_view gitCommit,
-                                      std::string_view buildType) {
+                                      std::string_view buildType, std::string_view provenance) {
   std::string version(gitDescribe);
   version += " (";
   version += gitCommit;
   version += " ";
   version += buildType;
+  version += " ";
+  version += provenance;
   version += ")";
   return version;
 }

@@ -55,6 +55,7 @@ set(PATCHES_SOURCES
     "ext/plugin_signature.cpp"
     "ext/plugin_tree.cpp"
     "ext/plugin_trust.cpp"
+    "ext/self_provenance.cpp"
     "ext/module_loader.cpp"
     "patch/resource_override.cpp"
     "patch/asset_cache.cpp"
@@ -310,7 +311,7 @@ if(NEVR_ALLOW_UNSIGNED_PLUGINS)
   set_source_files_properties(ext/plugin_trust.cpp PROPERTIES COMPILE_DEFINITIONS NEVR_ALLOW_UNSIGNED_PLUGINS=1)
   message(STATUS "NEVR_ALLOW_UNSIGNED_PLUGINS=ON: BugSplat64.dll is marked as a plugin developer build (never ship)")
 endif()
-set_source_files_properties(ext/plugin_signature.cpp ext/plugin_tree.cpp ext/plugin_trust.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(ext/plugin_signature.cpp ext/plugin_tree.cpp ext/plugin_trust.cpp ext/self_provenance.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # Scenario-test control endpoint (docs/design/2026-10-01-social-scenario-harness.md). It can inject
 # messages into a live session, so it is OFF by default and only the mingw-scenario preset turns it
@@ -1363,6 +1364,18 @@ if(BUILD_TESTING)
     target_include_directories(test_plugin_trust PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_plugin_trust PRIVATE GTest::gtest GTest::gtest_main crypt32 advapi32)
     gtest_discover_tests(test_plugin_trust DISCOVERY_MODE PRE_TEST)
+
+    # self_provenance tests (#842, ADR 0010 section 1): the label for a signed release, an unsigned build and a dev version,
+    # and the module's own file read through the verifier. Compiles the decision and the verifier only, no game.
+    add_executable(test_self_provenance
+      tests/test_self_provenance.cpp
+      ext/self_provenance.cpp
+      ext/plugin_signature.cpp)
+    set_source_files_properties(tests/test_self_provenance.cpp ext/self_provenance.cpp ext/plugin_signature.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_self_provenance PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_self_provenance PRIVATE GTest::gtest GTest::gtest_main crypt32 advapi32)
+    gtest_discover_tests(test_self_provenance DISCOVERY_MODE PRE_TEST)
 
     # Behavioral tests — N68 (plugin/module tick dispatch) + N61 (callback
     # lifecycle). Links plugin_loader.cpp, module_loader.cpp, and ws_bridge.cpp
