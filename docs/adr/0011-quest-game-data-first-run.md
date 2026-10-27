@@ -26,7 +26,7 @@ to this design.
 **The failure, confirmed once.** On a Quest 2 with `_data` hidden (the t5-no-game-data run, #758), every launch logged, in order,
 `RAD: Initialization Error: Unknown error while loading the game.`, then
 `Failed to find package manifest file /storage/emulated/0/readyatdawn/_data/5932408047/rad15/android/manifests/48037dc70b0ecab2`,
-then the sentinel's `android_main_returned ... exit_code=0` (ADR 0008, `0008-quest-process-end.md`). The process ended; the player saw Home. The build on the
+then the sentinel's `android_main_returned ... exit_code=0` (ADR 0020, `0020-quest-process-end.md`). The process ended; the player saw Home. The build on the
 headset (`c4b37a28`) predates #755; #755 adds the one `data_root` log line and fails the same way.
 
 **The likely cause for players who already had the data.** The data version is not the cause: the `_data.zip` that
@@ -80,7 +80,7 @@ signed runtime is the trust, so the zip carries no separate signature.
 3. No `_data` at all: fetch, same staging and a single rename into place. This includes the case `data_root::Resolve` reports as
    found with a warning (`android_media_unmarked`: the `Android/media` directory exists without `_data`); the fetch fills that
    directory, and `found` alone is not the test for case 1.
-4. The fetch failed (no network, no space, a digest that does not match): show the visible message (the floor), then end the process cleanly (ADR 0008, `0008-quest-process-end.md`) instead of
+4. The fetch failed (no network, no space, a digest that does not match): show the visible message (the floor), then end the process cleanly (ADR 0020, `0020-quest-process-end.md`) instead of
    letting the game fail its own load.
 
 The floor message names the missing file and what to do, in these cases: `Echo VR data is missing: <path the game wants>. Copy the

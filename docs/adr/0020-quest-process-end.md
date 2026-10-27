@@ -1,4 +1,4 @@
-# ADR 0008: the Quest process ends when the game's android_main returns
+# ADR 0020: the Quest process ends when the game's android_main returns
 
 Status: accepted, implemented (`src/quest/sentinel/process_end_hook.{h,cpp}`, #621). On in every Quest build, with no feature
 flag. Not yet observed on a headset: the "Prediction" section is what the first run must show.
