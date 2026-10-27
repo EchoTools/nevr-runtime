@@ -150,6 +150,8 @@ std::atomic<int> g_before_load_calls{0};
 DWORD g_write_open_error = 0;
 bool g_write_open_succeeded = false;
 bool g_delete_succeeded = false;
+std::wstring g_log_path;
+bool g_versions_written_before_load = false;
 
 void RecordNotice(const wchar_t* text) {
   g_events.push_back("notice");
@@ -161,6 +163,8 @@ void RecordStop(std::uint32_t code) {
 }
 const char* CommandLine() { return g_command_line; }
 
+std::string ReadAll(const std::wstring& path);
+
 // While the file is held between the verdict and the load, nothing may write, delete or replace it.
 void BeforeLoad(const wchar_t* path) {
   g_before_load_calls.fetch_add(1);
@@ -170,6 +174,8 @@ void BeforeLoad(const wchar_t* path) {
   g_write_open_error = g_write_open_succeeded ? 0 : GetLastError();
   if (g_write_open_succeeded) CloseHandle(writer);
   g_delete_succeeded = DeleteFileW(path) != FALSE;
+  // The versions record is on disk before the runtime can run a line of its own.
+  g_versions_written_before_load = ReadAll(g_log_path).find("\"event\":\"versions\"") != std::string::npos;
 }
 
 std::string ReadAll(const std::wstring& path) {
@@ -323,6 +329,8 @@ class HostRuntimeVerify : public ::testing::Test {
     ASSERT_NE(CreateDirectoryW(install_.c_str(), nullptr), FALSE);
     ASSERT_NE(CreateDirectoryW(local_.c_str(), nullptr), FALSE);
     runtime_path_ = install_ + L"\\nevr-runtime.dll";
+    g_log_path = local_ + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl";
+    g_versions_written_before_load = false;
 
     // The host stand-in: a module whose directory is the install directory, so the production path rule
     // (nevr-runtime.dll beside the host) finds the staged file. Any plain DLL will do.
@@ -569,6 +577,7 @@ TEST_F(HostRuntimeVerify, TheFileIsHeldAgainstAWriteAndADeleteBetweenTheVerdictA
   EXPECT_FALSE(g_write_open_succeeded) << "a writer opened the verified file before it was mapped";
   EXPECT_EQ(g_write_open_error, static_cast<DWORD>(ERROR_SHARING_VIOLATION));
   EXPECT_FALSE(g_delete_succeeded) << "the verified file was deleted before it was mapped";
+  EXPECT_TRUE(g_versions_written_before_load) << "the versions record was not on disk when the load began";
 }
 
 TEST_F(HostRuntimeVerify, AServerIsRefusedTheSameWayWithTheRecordsAndNoDialog) {
