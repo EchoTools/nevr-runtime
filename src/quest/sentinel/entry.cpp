@@ -99,7 +99,7 @@ bool InstallProcessEndHook() noexcept { return nevr_quest::process_end::Install(
 // is armed first.
 bool InstallPermissionWaitHook() noexcept {
     nevr_quest::data_wiring::Options options;
-    options.show = &nevr_quest::toast::Show;
+    options.show = &nevr_quest::toast::ShowPreferUiThread;  // #829: the UI thread's looper runs the Toast, else the caller's
     options.show_ui = &nevr_quest::toast::ShowOnMainLooper;  // read by the development probe's `ui-toast` kind only (#829)
     options.show_post = &nevr_quest::toast::ShowOnUiThread;  // and `ui-post`
     options.allow_fetch = nevr_build::kIsDev;  // a release build only looks and tells the player; it never downloads
@@ -150,8 +150,8 @@ const char* nevr_sentinel_marker() {
 __attribute__((constructor))
 static void nevr_sentinel_ctor() {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "sentinel_ctor", {{"action", "begin"}});
-    // #829: the thread that loads the library takes the UI looper for the probe's `ui-post` kind (it logs what it found).
-    if (nevr_build::kIsDev) nevr_quest::toast::CaptureUiLooper();
+    // #829: the thread that loads the library takes the UI looper for the floor message's presenter (it logs what it found).
+    nevr_quest::toast::CaptureUiLooper();
     // Everything the constructor does is one sequence (integration/ctor_sequence.h): crash reporter,
     // configuration, counters, the single reporter start, then each hook gated by its feature switch.
     nevr_quest::integration::RunSentinelConstructor();
