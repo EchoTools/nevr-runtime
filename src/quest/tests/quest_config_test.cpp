@@ -707,7 +707,13 @@ void TextureQualityIsTheDefaultUnlessTheFileNamesAnotherLevel() {
       CHECK(IsStockFallback(r, "file_rejected", true));
     } else {
       CHECK(IsDefault(r));
-      CHECK(!HasLevel(r, LogLevel::kWarn));
+      // #583: an unknown key under a known section (`diagnostics`) is ignored and counted into one Warning; the
+      // other two spellings are not under a known section and warn of nothing.
+      if (std::string(text).rfind("diagnostics:", 0) == 0) {
+        CHECK(EventsContain(r, "unknown_nested=1"));
+      } else {
+        CHECK(!HasLevel(r, LogLevel::kWarn));
+      }
     }
   }
 }

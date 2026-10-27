@@ -28,6 +28,7 @@
 namespace {
 
 using nevr_cfg::FlatKeyToYamlPath;
+using nevr_cfg::MigratedYamlPaths;
 using nevr_cfg::GameNativeDefault;
 using nevr_cfg::HostSource;
 using nevr_cfg::LookupFlat;
