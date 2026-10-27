@@ -43,6 +43,7 @@
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/patch/early_quit_lockout.h"
 #include "runtime/patch/social_facade.h"
+#include "runtime/patch/splash_skip.h"
 
 #include <windows.h>
 
@@ -342,6 +343,9 @@ static VOID InitializeAfterGameImageGuard() {
   // The early quit lockout: the shipped client cannot show it from any game service message
   // (early_quit_lockout.h).
   nevr_early_quit_lockout::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+
+  // A button press skips the splash screen (splash_skip.h).
+  nevr_splash_skip::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
 
   // --- DLL load interceptor (patch DLLs as they load) ---
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing DLL load hooks...\n");
