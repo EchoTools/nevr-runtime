@@ -1157,10 +1157,15 @@ test-quest-hooks:
     # registry refusals, the trampoline's bytes and the thunk entry point. Host bytes only; the detour
     # runs on a device, not here.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/inline_hook_test.cpp \
-        src/quest/sentinel/inline_hook.cpp src/quest/sentinel/got_hook.cpp \
+        src/quest/sentinel/inline_hook.cpp src/quest/sentinel/arm64_reloc.cpp src/quest/sentinel/got_hook.cpp \
         src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/inline_hook_test" -ldl -pthread
     timeout 120 "$out/inline_hook_test"
+    # The PC-relative relocator (arm64_reloc.h): each kind decoded and then run, original window against the
+    # relocated trampoline far away, on a small A64 interpreter. Pure; no device.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/arm64_reloc_test.cpp \
+        src/quest/sentinel/arm64_reloc.cpp -o "$out/arm64_reloc_test" -pthread
+    timeout 120 "$out/arm64_reloc_test"
     # The lobby-full policy (#1001): the #889 cases on the 16-byte lobby key. Pure; no libr15 here.
     "${cxx[@]}" -pthread src/quest/tests/lobby_full_test.cpp -o "$out/lobby_full_test"
     timeout 60 "$out/lobby_full_test"

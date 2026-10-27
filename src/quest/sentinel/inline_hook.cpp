@@ -1,5 +1,6 @@
 #include "inline_hook.h"
 
+#include "arm64_reloc.h"
 #include "hook_log.h"
 
 #include <pthread.h>
@@ -113,23 +114,16 @@ const char* InlineStatusName(InlineStatus status) {
   return "unknown";
 }
 
-bool IsPcRelative(std::uint32_t insn) noexcept {
-  // B and BL: opcode bits 31..26 are 000101 or 100101.
-  if ((insn & 0xFC000000u) == 0x14000000u || (insn & 0xFC000000u) == 0x94000000u) return true;
-  // B.cond (bit 4 clear).
-  if ((insn & 0xFF000010u) == 0x54000000u) return true;
-  // CBZ, CBNZ.
-  if ((insn & 0x7E000000u) == 0x34000000u) return true;
-  // TBZ, TBNZ.
-  if ((insn & 0x7E000000u) == 0x36000000u) return true;
-  // ADR (bit 31 clear) and ADRP (bit 31 set).
-  if ((insn & 0x9F000000u) == 0x10000000u || (insn & 0x9F000000u) == 0x90000000u) return true;
-  // LDR, LDRSW and PRFM (literal): bits 29..27 are 011, bits 25..24 are 00.
-  if ((insn & 0x3B000000u) == 0x18000000u) return true;
-  return false;
-}
+bool IsPcRelative(std::uint32_t insn) noexcept { return ClassifyPcRel(insn) != PcRelKind::kNone; }
 
-InlineStatus CheckInlineTarget(const void* target, const InlinePrologue& expected) noexcept {
+namespace {
+
+static_assert(kInlinePatchBytes == kRelocWindowBytes, "the relocator's window is the patch's");
+
+// The address and prologue checks, then the trampoline's relocation. On kPcRelativeInstruction `refusal` names
+// the word and the instruction; on kOk `tramp` holds the trampoline's words.
+InlineStatus CheckAndRelocate(const void* target, const InlinePrologue& expected, Trampoline& tramp,
+                              RelocRefusal& refusal) noexcept {
   if (target == nullptr) return InlineStatus::kBadArgument;
   const auto addr = reinterpret_cast<std::uintptr_t>(target);
   if ((addr & 3u) != 0) return InlineStatus::kNotWordAligned;
@@ -138,10 +132,28 @@ InlineStatus CheckInlineTarget(const void* target, const InlinePrologue& expecte
     const std::uint32_t live = LoadWord(static_cast<const std::uint8_t*>(target) + 4 * i);
     if (live != expected.words[i]) return InlineStatus::kPrologueMismatch;
   }
-  for (std::size_t i = 0; i < 4; ++i) {
-    if (IsPcRelative(expected.words[i])) return InlineStatus::kPcRelativeInstruction;
-  }
+  if (!BuildTrampoline(addr, expected.words, tramp, refusal)) return InlineStatus::kPcRelativeInstruction;
   return InlineStatus::kOk;
+}
+
+void LogRefusal(const void* target, const RelocRefusal& refusal) {
+  char tb[19];
+  char eb[19];
+  LogFields(LogLevel::kError, "inline_hook",
+            {{"status", InlineStatusName(InlineStatus::kPcRelativeInstruction)},
+             {"target", HexString(tb, reinterpret_cast<std::uintptr_t>(target))},
+             {"word", refusal.index},
+             {"encoding", HexString(eb, refusal.insn)},
+             {"instruction", PcRelName(refusal.kind)},
+             {"reason", refusal.reason}});
+}
+
+}  // namespace
+
+InlineStatus CheckInlineTarget(const void* target, const InlinePrologue& expected) noexcept {
+  Trampoline tramp;
+  RelocRefusal refusal;
+  return CheckAndRelocate(target, expected, tramp, refusal);
 }
 
 InlineStatus InlineHook::Install(const void* target, const InlinePrologue& expected, void* detour,
@@ -164,7 +176,13 @@ InlineStatus InlineHook::Install(const void* target, const InlinePrologue& expec
     LogResult(LogLevel::kError, InlineStatus::kRegistryFull, target, nullptr);
     return InlineStatus::kRegistryFull;
   }
-  const InlineStatus pre = CheckInlineTarget(target, expected);
+  Trampoline relocated;
+  RelocRefusal refusal;
+  const InlineStatus pre = CheckAndRelocate(target, expected, relocated, refusal);
+  if (pre == InlineStatus::kPcRelativeInstruction) {
+    LogRefusal(target, refusal);
+    return pre;
+  }
   if (pre != InlineStatus::kOk) {
     LogResult(LogLevel::kError, pre, target, nullptr);
     return pre;
@@ -175,26 +193,23 @@ InlineStatus InlineHook::Install(const void* target, const InlinePrologue& expec
     return InlineStatus::kPageNotExecutable;
   }
 
-  // The trampoline: the displaced words, then LDR x16,#8 ; BR x16 ; .quad target+16. It is complete
-  // and executable before the target can reach it.
+  // The trampoline: the displaced words, PC-relative ones rewritten (arm64_reloc.h), then LDR x16,#8 ;
+  // BR x16 ; .quad target+16 and the literal pool. It is complete and executable before the target can
+  // reach it.
   const std::size_t pageSize = PageSize();
   void* const tramp = mmap(nullptr, pageSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (tramp == MAP_FAILED) {
     LogResult(LogLevel::kError, InlineStatus::kTrampolineFailed, target, nullptr);
     return InlineStatus::kTrampolineFailed;
   }
-  auto* t = static_cast<std::uint32_t*>(tramp);
-  for (std::size_t i = 0; i < 4; ++i) t[i] = expected.words[i];
-  t[4] = kLdrX16Literal8;
-  t[5] = kBrX16;
-  const std::uint64_t resume = addr + kInlinePatchBytes;
-  std::memcpy(&t[6], &resume, sizeof resume);
+  const std::size_t trampolineBytes = relocated.count * sizeof(std::uint32_t);
+  std::memcpy(tramp, relocated.words, trampolineBytes);
   if (mprotect(tramp, pageSize, PROT_READ | PROT_EXEC) != 0) {
     munmap(tramp, pageSize);
     LogResult(LogLevel::kError, InlineStatus::kTrampolineFailed, target, nullptr);
     return InlineStatus::kTrampolineFailed;
   }
-  __builtin___clear_cache(static_cast<char*>(tramp), static_cast<char*>(tramp) + kInlinePatchBytes * 2);
+  __builtin___clear_cache(static_cast<char*>(tramp), static_cast<char*>(tramp) + trampolineBytes);
 
   // Publish the original before the commit; restored to its entry value on any failure below.
   void* const previousOriginal = *originalOut;

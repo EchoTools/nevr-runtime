@@ -9,9 +9,9 @@
  *     BR  x16            ; tail-jump into the detour
  *     .quad detour       ; 64-bit absolute address
  *
- * and builds, in a fresh page, a trampoline that runs the four displaced instructions and
- * then branches to target+16. The detour receives the trampoline as its original, so it
- * can call the real function. x16 (IP0) is the one register the patch uses; the AAPCS64
+ * and builds, in a fresh page, a trampoline that runs the four displaced instructions (the
+ * PC-relative ones rewritten, arm64_reloc.h) and then branches to target+16. The detour receives
+ * the trampoline as its original, so it can call the real function. x16 (IP0) is the one register the patch uses; the AAPCS64
  * lets a call site treat it as clobbered by any call.
  *
  * What is checked before any byte is written:
@@ -19,9 +19,11 @@
  *     size is sysconf(_SC_PAGESIZE)),
  *   - the four words at the target equal the caller's expected prologue, which the caller
  *     got from the pinned build and the decompilation (never a guess),
- *   - none of the four words is PC-relative (IsPcRelative). A displaced PC-relative
- *     instruction would read a different address in the trampoline, and this backend does
- *     not rewrite them. Such a target is refused, not relocated,
+ *   - every PC-relative word among the four can be relocated (arm64_reloc.h): B, BL, B.cond, CBZ/CBNZ,
+ *     TBZ/TBNZ, ADR, ADRP and LDR literal are rewritten in the trampoline to use absolute addresses held there.
+ *     A word the relocator does not handle (a branch or literal inside the patched 16 bytes, BC.cond, a
+ *     sequence that would clobber an x16 the window itself wrote) refuses the target, and the log line names
+ *     the instruction,
  *   - the target's page is mapped r-xp in /proc/self/maps; a page that is not is refused.
  *
  * Write order and atomicity. Under one process-wide lock the page is made writable once and
@@ -66,7 +68,7 @@ enum class InlineStatus : std::uint8_t {
   kNotWordAligned,         // the target is not 4-byte aligned
   kWindowStraddlesPage,    // the 16 patched bytes cross a page boundary
   kPrologueMismatch,       // the four words at the target are not the expected prologue
-  kPcRelativeInstruction,  // a displaced word depends on its own address (see IsPcRelative)
+  kPcRelativeInstruction,  // a displaced PC-relative word the relocator refuses (arm64_reloc.h)
   kPageNotExecutable,      // the target's page is not mapped r-xp in /proc/self/maps
   kAlreadyInstalled,       // this target already has a detour in this process
   kRegistryFull,           // more inline hooks than kMaxInlineHooks in one process
@@ -93,9 +95,9 @@ inline constexpr std::size_t kInlinePatchBytes = 16;
 // More than this many inline hooks in one process is refused (kRegistryFull).
 inline constexpr std::size_t kMaxInlineHooks = 16;
 
-// True when the A64 instruction encodes a dependency on its own address: B, BL, B.cond,
+// True when the A64 instruction encodes a dependency on its own address: B, BL, B.cond, BC.cond,
 // CBZ/CBNZ, TBZ/TBNZ, ADR, ADRP, and LDR/LDRSW/PRFM (literal). Such a word cannot be displaced
-// unchanged into a trampoline at another address, so the backend refuses it. Pure: the
+// unchanged into a trampoline at another address; the backend rewrites it (arm64_reloc.h). Pure: the
 // table is exercised by the host test on fixed encodings.
 bool IsPcRelative(std::uint32_t insn) noexcept;
 
