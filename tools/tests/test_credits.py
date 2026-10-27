@@ -136,11 +136,13 @@ class SharedFile(unittest.TestCase):
             self.tool.ingame_groups(self.data),
             [
                 {"id": "code-contributions", "ingame": "CODE CONTRIBUTIONS",
-                 "names": ["Xenomega", "kfc", "Dualgame", "marshmallow-mia"]},
+                 "names": ["Xenomega", "kfc", "Dualgame", "marshmallow-mia", "Ducky", "babs", "chinmayee5599",
+                           "brysonak"]},
                 {"id": "thanks", "ingame": "THANKS", "names": THANKS},
                 {"id": "testers", "ingame": "TESTERS",
                  "names": ["marshmallow-mia", "Crafter", "Trodd-", "DinkyBoi", "berg", "zebra", "Nebula",
                            "CyanoTex", "spike4887", "TekEmperor", "arii", "he_is_the_cat"]},
+                {"id": "supporters", "ingame": "SUPPORTERS", "names": ["Furo"]},
             ],
         )
 
@@ -159,8 +161,10 @@ class SharedFile(unittest.TestCase):
         self.assertIn("Linux port", self.entry("marshmallow-mia")["what"])
         self.assertNotIn("quest.echovr.de", block)
 
-    def test_ducky_has_no_in_game_heading_and_crafter_is_one_entry(self):
-        self.assertEqual(self.entry("Ducky")["headings"], [])
+    def test_ducky_babs_and_the_code_contributors_have_a_heading_and_crafter_is_one_entry(self):
+        for name in ("Ducky", "babs", "chinmayee5599", "brysonak"):
+            self.assertEqual(self.entry(name)["headings"], ["code-contributions"], name)
+        self.assertEqual(self.entry("Furo")["headings"], ["supporters"])
         self.assertEqual(self.entry("kfc")["headings"], ["code-contributions"])
         self.assertNotIn("Crafter-1", [e["name"] for e in self.data["entries"]])
 
@@ -452,7 +456,7 @@ class IngameText(unittest.TestCase):
         )
         self.assertEqual(self.tool.ingame_text(self.data), expected.encode("cp1252"))
         self.assertTrue(expected.startswith("CODE CONTRIBUTIONS\n\nXenomega\n"))
-        self.assertEqual(expected.count("\n"), 37, "three groups of 4, 6 and 12 names: 9 + 11 + 17 lines")
+        self.assertEqual(expected.count("\n"), 47, "four groups of 8, 6, 12 and 1 names: 13 + 11 + 17 + 6 lines")
 
     def test_groups_are_separated_by_three_blank_lines(self):
         data = self.data_with({"ONE": ["a", "b"], "TWO": ["c"]})

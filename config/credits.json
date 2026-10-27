@@ -92,11 +92,22 @@
     {
       "name": "Ducky",
       "section": "projects",
-      "headings": [],
+      "headings": ["code-contributions"],
       "link": "",
       "what": "The reverse engineer behind the Echo Combat Quest port.",
       "sources": [
         "named by the project owner, 10-13"
+      ]
+    },
+    {
+      "name": "babs",
+      "section": "projects",
+      "headings": ["code-contributions"],
+      "link": "https://github.com/nmdurkee",
+      "what": "Echo Frenzy, a community game mode for Echo VR that paved the way for others making game modes; the pipeline for editing Echo's in-game screens (Doom on Echo is built on it); EchoCraft; and the moderator tablet for kicking players from lobbies. Has been there every step of the way, before and since Echo's shutdown.",
+      "sources": [
+        "https://github.com/nmdurkee",
+        "named by the project owner, 10-27"
       ]
     },
     {
@@ -204,7 +215,7 @@
     {
       "name": "chinmayee5599",
       "section": "people",
-      "headings": [],
+      "headings": ["code-contributions"],
       "link": "https://github.com/chinmayee5599",
       "what": "Opened #510, which renamed three TCP game message symbols in `src/abi/symbols.h`.",
       "sources": [
@@ -214,11 +225,21 @@
     {
       "name": "brysonak",
       "section": "people",
-      "headings": [],
+      "headings": ["code-contributions"],
       "link": "https://github.com/brysonak",
       "what": "Opened #12, which changed the server log file names and added a flag to keep the old names.",
       "sources": [
         "https://github.com/EchoTools/nevr-runtime/pull/12"
+      ]
+    },
+    {
+      "name": "Furo",
+      "section": "people",
+      "headings": ["supporters"],
+      "link": "",
+      "what": "Supporter of nevr-runtime.",
+      "sources": [
+        "named by the project owner, 10-27"
       ]
     },
     {
