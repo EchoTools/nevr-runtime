@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <climits>
+#include <string>
 
 namespace nevr_host {
 
@@ -30,6 +31,7 @@ enum class RuntimeLoadOutcome : std::uint32_t {
   kNullDescriptor = 6,       // get_api() returned null
   kAbiRejected = 7,          // ValidateRuntimeApi rejected (see abi_status)
   kInitFailed = 8,           // initialize() returned nonzero
+  kRuntimeRefused = 9,       // the verifier refused nevr-runtime.dll, or it could not be read: never loaded (#854)
 };
 
 struct RuntimeLoadResult {
@@ -51,6 +53,12 @@ struct RuntimeLoadResult {
   // Whether the loading thread owned the process loader lock when the load began (measured
   // by Load, from the PEB). False at the rendezvous; the record says so.
   bool loader_lock_held = false;
+  // The verdict of the signature check on nevr-runtime.dll (docs/adr/0012-static-install-root.md, "The host verifies
+  // nevr-runtime.dll before it loads it"): "accepted", "unsigned_allowed" (a dev build loads an unsigned file) or
+  // "refused". Null when no file was checked (the file is absent).
+  const char* verify = nullptr;
+  // What the verifier said, in its own words (nevr_plugin_signature::Verdict::Describe), or "unreadable".
+  std::string verify_reason;
 
   bool Loaded() const { return outcome == RuntimeLoadOutcome::kLoaded; }
   const char* OutcomeName() const;
@@ -92,6 +100,9 @@ void EmitStopDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResu
 #if defined(NEVR_HOST_TESTING)
 // Test seam (compiled only into the test targets): make the record builder throw, to reach the marker line.
 void SetEmitLoadFailureForTest(bool fail) noexcept;
+// Test seam: whether RuntimeLoader::Load verifies nevr-runtime.dll. Off by default in the test targets, whose harnesses
+// load unsigned fixture runtimes; the gate's own tests turn it on. Production always verifies.
+void SetVerifyRuntimeForTest(bool enabled) noexcept;
 #endif
 
 class RuntimeLoader {
