@@ -4802,7 +4802,7 @@ TEST(N84_HookGuard, UnreadableTarget_Ignored) {
 // nevr_hook_guard::Record (counted in hook_guard.cpp, next to kMaxGuarded); a capacity below it drops
 // guards on a healthy boot. A new site raises that count and this number with it.
 TEST(N84_HookGuard, CapacityCoversEveryInstallSiteTheRuntimeHas) {
-    constexpr int kInstallSitesInSource = 64;
+    constexpr int kInstallSitesInSource = 65;
     EXPECT_GE(nevr_hook_guard::Capacity(), kInstallSitesInSource);
 }
 
