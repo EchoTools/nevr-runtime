@@ -76,6 +76,8 @@ BRAND_PROSE_SPELLINGS = {
     "src/runtime/CMakeLists.txt": {"nEVR"},  # the DLL's FileDescription
     "src/core/build_identity.h": {"nEVR"},  # MenuVersionLabel: the text a player sees
     "src/core/build_identity.cpp": {"nEVR"},  # MenuVersionLabel: the text a player sees
+    "src/quest/social/menu_version_label.h": {"nEVR"},  # the Quest menu label: the text a player sees
+    "src/quest/social/menu_version_label.cpp": {"nEVR"},  # the Quest menu label: the text a player sees
     "src/runtime/ext/plugin_refusal_notice.h": {"nEVR"},
     "src/runtime/host/stop_notice.h": {"nEVR"},  # the player's text when the runtime did not load
     "src/runtime/tests/test_host_rendezvous.cpp": {"nEVR"},  # asserts that text
