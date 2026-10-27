@@ -4799,11 +4799,11 @@ TEST(N84_HookGuard, UnreadableTarget_Ignored) {
     VirtualFree(reserved, 0, MEM_RELEASE);
 }
 
-// The table holds every install site the runtime has. 62 is the count of sites in src/ that reach
+// The table holds every install site the runtime has. 63 is the count of sites in src/ that reach
 // nevr_hook_guard::Record (counted in hook_guard.cpp, next to kMaxGuarded); a capacity below it drops
 // guards on a healthy boot. A new site raises that count and this number with it.
 TEST(N84_HookGuard, CapacityCoversEveryInstallSiteTheRuntimeHas) {
-    constexpr int kInstallSitesInSource = 62;
+    constexpr int kInstallSitesInSource = 63;
     EXPECT_GE(nevr_hook_guard::Capacity(), kInstallSitesInSource);
 }
 
@@ -4997,6 +4997,12 @@ TEST(BuildIdentity, IdentityLiteralBindsTheVersionAndTheFullCommit) {
 
 TEST(BuildIdentity, IsCachedNotRemeasured) {
     EXPECT_EQ(&nevr_build_identity::Get(), &nevr_build_identity::Get());
+}
+
+// The text the menu draws (#747): "nEVR " and the project version exactly as CMake set it, so a screenshot names the build.
+TEST(BuildIdentity, MenuVersionLabelIsNevrAndTheProjectVersion) {
+    const nevr_build_identity::Info& id = nevr_build_identity::Get();
+    EXPECT_EQ(nevr_build_identity::MenuVersionLabel(), "nEVR " + id.project_version);
 }
 
 // ============================================================================
