@@ -39,9 +39,27 @@ class TrainWorkflow(unittest.TestCase):
         self.assertIn("if: vars.RELEASE_TRAIN == 'true'", self.text)
         self.assertIn("if: needs.decide.outputs.cut == 'true'", self.text)
 
-    def test_the_build_gate_queries_a_green_run_on_the_candidate_commit(self) -> None:
-        self.assertIn("--workflow build.yml --branch main --status success", self.text)
-        self.assertIn('select(.headSha == \\"$sha\\")', self.text)
+    def test_there_is_no_green_build_gate_on_main(self) -> None:
+        # build.yml has no push trigger, so main never has a run: a gate on one never passes.
+        self.assertNotIn("--branch main --status success", self.text)
+        self.assertNotIn("headSha", self.text)
+
+    def test_the_token_may_dispatch_build_yml(self) -> None:
+        permissions = re.search(r"^permissions:\n((?:  .+\n)+)", self.text, re.M)
+        self.assertIsNotNone(permissions)
+        self.assertIn("  actions: write\n", permissions.group(1))
+
+    def test_the_build_run_is_selected_by_the_tag_and_the_dispatch_time(self) -> None:
+        self.assertIn(".headBranch == $tag and .createdAt >= $since", self.text)
+        self.assertNotIn("--jq \"[.[] | select(.headBranch", self.text)
+
+    def test_the_signer_run_is_selected_by_the_dispatch_time_and_the_tag(self) -> None:
+        self.assertIn("select(.createdAt >= $since)", self.text)
+        self.assertIn("select(.displayTitle | contains($tag))", self.text)
+
+    def test_no_run_id_is_the_first_of_a_latest_list(self) -> None:
+        self.assertNotIn("--jq '.[0].databaseId'", self.text)
+        self.assertNotIn('.[0].databaseId")', self.text)
 
     def test_the_signer_dispatch_is_real_and_uses_the_named_secret(self) -> None:
         self.assertIn("gh workflow run sign-release.yml --repo thesprockee/release-signer", self.text)
