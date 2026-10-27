@@ -201,17 +201,14 @@ static void LogOptionWithoutValue(const char* option) {
   Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] %s was given without a value; it is ignored", option);
 }
 
-// #697: what the command line's spelling of a NEVR flag earns. A deprecated alias is reported once per run
-// per alias (the text is nevr_cli::kAliasWarningFormat, pinned by test_cmdline_strip); a token with three or
-// more leading dashes on a NEVR flag is rejected, since the game's own lookup would still read it.
+// #697: a token with three or more leading dashes on a NEVR flag is rejected and logged, since the game's own
+// lookup would still read it. The pre-#697 spellings are not in nevr_cli::kFlags, so they reach here as unknown
+// tokens and the game's parser refuses them as before (#698).
 static void NoteCommandLineToken(const wchar_t* token, const nevr_cli::Resolved& named) {
-  static nevr_cli::AliasReports s_reports;
   if (named.rejected) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] %ls has more than two leading dashes; NEVR ignores it (write -name or --name)", token);
-    return;
   }
-  if (s_reports.First(named)) Log(EchoVR::LogLevel::Warning, nevr_cli::kAliasWarningFormat, named.alias, named.flag);
 }
 
 static void LogTimestepArgs() {

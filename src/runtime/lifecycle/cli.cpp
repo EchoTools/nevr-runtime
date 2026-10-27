@@ -78,16 +78,6 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgHelpString(pArgSyntax, "-config-path", "[NEVR] Same as -config");
 
 
-  // #697: the names these flags had before they were kebab-case. The game's parser rejects a token with no
-  // syntax entry (ValidateMainArgs, echovr.exe 0x1400da830), so each stays registered, with no help string so
-  // `--help` never lists it. boot.cpp maps each to its new flag and warns once per run (core/cli_flags.h).
-  EchoVR::AddArgSyntax(pArgSyntax, "-noconsole", 0, 0, FALSE);
-  EchoVR::AddArgSyntax(pArgSyntax, "-noexitonerror", 0, 0, FALSE);
-  EchoVR::AddArgSyntax(pArgSyntax, "-exitonerror", 0, 0, FALSE);
-  EchoVR::AddArgSyntax(pArgSyntax, "-notelemetry", 0, 0, FALSE);
-  EchoVR::AddArgSyntax(pArgSyntax, "-telemetryrate", 1, 1, FALSE);
-  EchoVR::AddArgSyntax(pArgSyntax, "-telemetrydiag", 0, 0, FALSE);
-  EchoVR::AddArgSyntax(pArgSyntax, "-traceexports", 1, 1, FALSE);
   // #875: the removed -skip-dbgcore-check and -allow-dbgcore stay registered, with no help line, so the game's
   // parser accepts them and the dbgcore.dll check in boot.cpp refuses the start on any command line.
   EchoVR::AddArgSyntax(pArgSyntax, "-skip-dbgcore-check", 0, 0, FALSE);

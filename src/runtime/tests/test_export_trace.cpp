@@ -308,7 +308,7 @@ TEST(ExportTracePolicy, ReadsTheFlagValueFromACommandLine) {
   EXPECT_FALSE(Policy::ExtractFlagValue(nullptr, L"-trace-exports", out, sizeof(out)));
 }
 
-// #697: `--name` is `-name`, three dashes are neither, and the tracer still reads the deprecated spelling.
+// #697: `--name` is `-name`, and three dashes are neither.
 TEST(ExportTracePolicy, ReadsTheFlagWithOneOrTwoLeadingDashes) {
   char out[64];
   EXPECT_TRUE(Policy::ExtractFlagValue(L"echovr.exe --trace-exports pnsovr", L"-trace-exports", out, sizeof(out)));
@@ -321,15 +321,19 @@ TEST(ExportTracePolicy, ReadsTheFlagWithOneOrTwoLeadingDashes) {
       << "a different name is a different flag";
 }
 
-TEST(ExportTracePolicy, ReadsTheNewNameAndTheDeprecatedAlias) {
+// #698: the pre-#697 spelling is an unknown option again, so the tracer does not read its list.
+TEST(ExportTracePolicy, ReadsTheNewNameAndNotTheRemovedSpelling) {
   char out[64];
-  const wchar_t* const lines[] = {L"echovr.exe -trace-exports pnsrad", L"echovr.exe --trace-exports pnsrad",
-                                  L"echovr.exe -traceexports pnsrad", L"echovr.exe --traceexports pnsrad"};
+  const wchar_t* const lines[] = {L"echovr.exe -trace-exports pnsrad", L"echovr.exe --trace-exports pnsrad"};
   for (const wchar_t* line : lines) {
     out[0] = '\0';
     EXPECT_TRUE(Policy::ExtractTraceExportsValue(line, out, sizeof(out))) << "a line the tracer must read";
     EXPECT_STREQ(out, "pnsrad");
   }
+  out[0] = '\0';
+  EXPECT_FALSE(Policy::ExtractTraceExportsValue(L"echovr.exe -traceexports pnsrad", out, sizeof(out)))
+      << "the removed spelling is not read";
+  EXPECT_FALSE(Policy::ExtractTraceExportsValue(L"echovr.exe --traceexports pnsrad", out, sizeof(out)));
   EXPECT_FALSE(Policy::ExtractTraceExportsValue(L"echovr.exe ---traceexports pnsrad", out, sizeof(out)));
   EXPECT_FALSE(Policy::ExtractTraceExportsValue(L"echovr.exe -windowed", out, sizeof(out)));
 }
@@ -380,7 +384,7 @@ TEST(ExportTracer, EndToEndAgainstAModuleNamedPnsrad) {
 
   // A lookup before the flag is known must not decide anything: the flag is read from the command line,
   // which was complete from process start.
-  nevr_export_tracer::ConfigureFromCommandLineText(L"echovr.exe -windowed -TraceExports pnsrad -no-console");
+  nevr_export_tracer::ConfigureFromCommandLineText(L"echovr.exe -windowed -Trace-Exports pnsrad -no-console");
   ASSERT_TRUE(nevr_export_tracer::Enabled());
 
   void* const wrapped = nevr_export_tracer::WrapSymbol(module, "FixtureCode", code);
