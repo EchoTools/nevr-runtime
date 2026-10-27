@@ -19,7 +19,7 @@
 // `social.send_presence_to_meta: false` answers the rich presence locally; `diagnostics.hardware_dump: true`
 // turns the hardware dump on, `diagnostics.ui_event_probe: true` the invite/party UI probe. A feature whose prerequisite is off or missing is forced off with a logged reason.
 //
-// `graphics.texture_quality` (#943) is one of stock, low, medium, high, very_high, ultra (texture_quality.h); absent, it is
+// `graphics.texture_quality` (#943) is one of stock, very_low, low, medium, high, very_high, ultra (texture_quality.h); absent, it is
 // texture_quality::kDefaultLevel (`stock` for now). It is not a feature and has no prerequisite. Any mistake in it gives
 // `stock`, never the default: a word that is not a level (wrong case, a number, empty), a value that is not a word (a
 // mapping, a list, a key with no value), an unset ${VAR}, a `graphics` section that is not a mapping, or a file that is

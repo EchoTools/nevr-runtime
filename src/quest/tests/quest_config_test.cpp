@@ -622,7 +622,7 @@ void UiEventProbeIsOnlyEverOnByTheDiagnosticsKeyAndNeedsSocial() {
   CHECK(std::string(nevr_quest::FeatureName(Feature::kUiEventProbe)) == "ui_event_probe");
 }
 
-// The texture quality (#943): `graphics.texture_quality`, one of six words, texture_quality::kDefaultLevel unless the file names
+// The texture quality (#943): `graphics.texture_quality`, one of seven words, texture_quality::kDefaultLevel unless the file names
 // another. Every test of the absent key is written against kDefaultLevel (so the flip to `high` changes the pin test only);
 // every test of a mistake is written against the literal `stock`, which must hold whatever the default is.
 const char* DefaultWord() { return nevr_quest::texture_quality::LevelName(nevr_quest::texture_quality::kDefaultLevel); }
@@ -659,8 +659,8 @@ void TextureQualityIsTheDefaultUnlessTheFileNamesAnotherLevel() {
   const struct {
     const char* word;
     tq::Level level;
-  } kWords[] = {{"stock", tq::Level::kStock},       {"low", tq::Level::kLow},   {"medium", tq::Level::kMedium},
-                {"high", tq::Level::kHigh},         {"very_high", tq::Level::kVeryHigh},
+  } kWords[] = {{"stock", tq::Level::kStock},       {"very_low", tq::Level::kVeryLow}, {"low", tq::Level::kLow},
+                {"medium", tq::Level::kMedium},     {"high", tq::Level::kHigh},         {"very_high", tq::Level::kVeryHigh},
                 {"ultra", tq::Level::kUltra}};
   for (const auto& w : kWords) {  // each word, plain and quoted
     for (const char* quote : {"", "\""}) {
@@ -827,7 +827,7 @@ void AGraphicsSectionThatIsNotAMappingFallsBackToStock() {
 void AMistakeNeverUsesTheDefault() {
   namespace tq = nevr_quest::texture_quality;
   CHECK(tq::kFallbackLevel == tq::Level::kStock);
-  CHECK(tq::SizeFor(tq::kFallbackLevel).width == 0);  // no hook, so no eye size
+  CHECK(tq::SizeFor(tq::kFallbackLevel, tq::Headset::kQuest3).width == 0);  // no hook, so no eye size
 }
 
 int main() {

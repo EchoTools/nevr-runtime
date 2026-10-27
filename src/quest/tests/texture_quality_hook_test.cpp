@@ -26,17 +26,24 @@ namespace {
 namespace tq = nevr_quest::texture_quality;
 using sentinel::pinned::OvrJavaOpaque;
 
-// The runtime's own answers, synthetic: this test says nothing about any headset's native size.
+// The runtime's own answers. The defaults are synthetic and name a Quest 3 (width at least 1680); SetStock names another
+// headset's stock size. This test says nothing about any headset's native size.
 constexpr int kNativeWidth = 2064;
 constexpr int kNativeHeight = 2208;
+int g_natW = kNativeWidth;
+int g_natH = kNativeHeight;
 
 int g_realCalls = 0;
 const OvrJavaOpaque* g_lastJava = nullptr;
 int g_lastId = -1;
 int NativeAnswer(int id) {
-  if (id == 5) return kNativeWidth;
-  if (id == 6) return kNativeHeight;
+  if (id == 5) return g_natW;
+  if (id == 6) return g_natH;
   return id * 10 + 7;
+}
+void SetStock(int width, int height) {
+  g_natW = width;
+  g_natH = height;
 }
 int FakeRuntime(const OvrJavaOpaque* java, int id) {
   ++g_realCalls;
@@ -97,36 +104,45 @@ void Reset() {
   g_realCalls = 0;
   g_lastJava = nullptr;
   g_lastId = -1;
+  SetStock(kNativeWidth, kNativeHeight);
   tq::ResetForTest();
   tq::SystemPropertyIntThunk::Reset();
   *tq::SystemPropertyIntThunk::OriginalOut() = reinterpret_cast<void*>(&FakeRuntime);
   sentinel::SetSysPropIntObserver(nullptr);
 }
 
+// One level's eye size on each headset: the Quest 3 pair and the Quest 2 pair, from the installer's tables (texture_quality.h).
 struct Row {
   tq::Level level;
   const char* name;
-  int width;
-  int height;
+  int q3Width, q3Height;
+  int q2Width, q2Height;
 };
-// The installer's table, per eye (the community patch repository's Graphics Patch setting; see texture_quality.h).
 const Row kRows[] = {
-    {tq::Level::kLow, "low", 1680, 1760},
-    {tq::Level::kMedium, "medium", 2376, 2568},
-    {tq::Level::kHigh, "high", 3072, 3380},
-    {tq::Level::kVeryHigh, "very_high", 3584, 3944},
-    {tq::Level::kUltra, "ultra", 4096, 4506},
+    {tq::Level::kVeryLow, "very_low", 1344, 1408, 1152, 1264},
+    {tq::Level::kLow, "low", 1680, 1760, 1440, 1584},
+    {tq::Level::kMedium, "medium", 2376, 2568, 1728, 1904},
+    {tq::Level::kHigh, "high", 3072, 3380, 2016, 2224},
+    {tq::Level::kVeryHigh, "very_high", 3584, 3944, 2304, 2528},
+    {tq::Level::kUltra, "ultra", 4096, 4506, 2592, 2848},
 };
+// The stock sizes that name each headset: a Quest 3 is 1680x1760 and a Quest 2 is 1440x1584 (texture_quality.h).
+constexpr int kQ3StockW = 1680, kQ3StockH = 1760;
+constexpr int kQ2StockW = 1440, kQ2StockH = 1584;
 
 // ---- the table and the words --------------------------------------------------------------------------------------------
 
 void TheTableIsTheInstallersTable() {
   for (const Row& r : kRows) {
-    QCHECK(tq::SizeFor(r.level).width == r.width);
-    QCHECK(tq::SizeFor(r.level).height == r.height);
+    QCHECK(tq::SizeFor(r.level, tq::Headset::kQuest3).width == r.q3Width);
+    QCHECK(tq::SizeFor(r.level, tq::Headset::kQuest3).height == r.q3Height);
+    QCHECK(tq::SizeFor(r.level, tq::Headset::kQuest2).width == r.q2Width);
+    QCHECK(tq::SizeFor(r.level, tq::Headset::kQuest2).height == r.q2Height);
     QCHECK(std::strcmp(tq::LevelName(r.level), r.name) == 0);
   }
-  QCHECK(tq::SizeFor(tq::Level::kStock).width == 0 && tq::SizeFor(tq::Level::kStock).height == 0);
+  for (const tq::Headset h : {tq::Headset::kQuest2, tq::Headset::kQuest3}) {
+    QCHECK(tq::SizeFor(tq::Level::kStock, h).width == 0 && tq::SizeFor(tq::Level::kStock, h).height == 0);
+  }
   QCHECK(std::strcmp(tq::LevelName(tq::Level::kStock), "stock") == 0);
   // The pin: the flip to `high` is this line and the constant, after a Quest 2 is measured at `high` (#943). A mistake is
   // `stock` whatever the default is.
@@ -135,7 +151,18 @@ void TheTableIsTheInstallersTable() {
   QCHECK(tq::kEyeWidthPropertyId == 5 && tq::kEyeHeightPropertyId == 6);
 }
 
-void OnlyTheSixWordsParse() {
+// The split is one number on both axes: a stock size of 1680 or more is a Quest 3, anything less (and 0, unanswered) a Quest 2.
+void TheHeadsetSplitsAtOneSixEightyOnBothAxes() {
+  QCHECK(tq::HeadsetForStockSize(0) == tq::Headset::kQuest2);
+  QCHECK(tq::HeadsetForStockSize(kQ2StockW) == tq::Headset::kQuest2);
+  QCHECK(tq::HeadsetForStockSize(kQ2StockH) == tq::Headset::kQuest2);
+  QCHECK(tq::HeadsetForStockSize(1679) == tq::Headset::kQuest2);
+  QCHECK(tq::HeadsetForStockSize(1680) == tq::Headset::kQuest3);
+  QCHECK(tq::HeadsetForStockSize(kQ3StockW) == tq::Headset::kQuest3);
+  QCHECK(tq::HeadsetForStockSize(kQ3StockH) == tq::Headset::kQuest3);
+}
+
+void OnlySevenWordsParse() {
   for (const Row& r : kRows) {
     tq::Level out = tq::Level::kStock;
     QCHECK(tq::ParseLevel(r.name, &out) && out == r.level);
@@ -143,9 +170,38 @@ void OnlyTheSixWordsParse() {
   tq::Level out = tq::Level::kUltra;
   QCHECK(tq::ParseLevel("stock", &out) && out == tq::Level::kStock);
   out = tq::Level::kMedium;
-  for (const char* bad : {"", "High", "HIGH", "very-high", "veryhigh", "high ", " high", "ultra\n", "5", "default", "stock,low"}) {
+  for (const char* bad : {"", "High", "HIGH", "very-high", "veryhigh", "very low", "high ", " high", "ultra\n", "5", "default",
+                          "stock,low"}) {
     QCHECK(!tq::ParseLevel(bad, &out));
     QCHECK(out == tq::Level::kMedium);  // a refusal leaves the caller's value alone
+  }
+}
+
+// ---- the sizes follow the headset ---------------------------------------------------------------------------------------
+
+// On a Quest 2 each level answers the Quest 2 pair, and on a Quest 3 the Quest 3 pair, decided by the runtime's own
+// answer to the same call.
+void EachLevelAnswersTheTableOfTheHeadsetTheRuntimeNames() {
+  for (const Row& r : kRows) {
+    for (const bool quest3 : {false, true}) {
+      Reset();
+      SetStock(quest3 ? kQ3StockW : kQ2StockW, quest3 ? kQ3StockH : kQ2StockH);
+      QCHECK(tq::ArmForTest(r.level));
+      QCHECK(Entry()(kJava, 5) == (quest3 ? r.q3Width : r.q2Width));
+      QCHECK(Entry()(kJava, 6) == (quest3 ? r.q3Height : r.q2Height));
+      QCHECK(tq::CurrentCounts().served == 2);
+    }
+  }
+}
+
+// Low is the stock size on each headset, so it answers what the runtime answers (the native sizes, not a fixed table).
+void LowAnswersTheStockSizeOfEachHeadset() {
+  for (const bool quest3 : {false, true}) {
+    Reset();
+    SetStock(quest3 ? kQ3StockW : kQ2StockW, quest3 ? kQ3StockH : kQ2StockH);
+    QCHECK(tq::ArmForTest(tq::Level::kLow));
+    QCHECK(Entry()(kJava, 5) == (quest3 ? kQ3StockW : kQ2StockW));
+    QCHECK(Entry()(kJava, 6) == (quest3 ? kQ3StockH : kQ2StockH));
   }
 }
 
@@ -158,12 +214,12 @@ void WithNothingArmedEveryQueryIsTheRuntimesOwn() {
   QCHECK(g_realCalls == 2);
 }
 
-void EachLevelAnswersTheEyeSizeFromTheTable() {
+void EachLevelLatchesAndAnswers() {
   for (const Row& r : kRows) {
-    Reset();
+    Reset();  // the default natives are a Quest 3's: the Quest 3 pair
     QCHECK(tq::ArmForTest(r.level));
-    QCHECK(Entry()(kJava, 5) == r.width);
-    QCHECK(Entry()(kJava, 6) == r.height);
+    QCHECK(Entry()(kJava, 5) == r.q3Width);
+    QCHECK(Entry()(kJava, 6) == r.q3Height);
     QCHECK(tq::LatchedLevel() == r.level && tq::IsLatched());
   }
 }
@@ -267,14 +323,14 @@ void AnInstalledLevelLogsOneLineWithTheLevelTheSourceAndTheSize() {
       QCHECK(!line.empty());
       QCHECK(Field(line, "quality") == r.name);
       QCHECK(Field(line, "source") == (fromConfig ? "config" : "default"));
-      QCHECK(Field(line, "w") == std::to_string(r.width));
-      QCHECK(Field(line, "h") == std::to_string(r.height));
+      QCHECK(Field(line, "w") == "0" && Field(line, "h") == "0");  // the size depends on the headset, not known at install
+      QCHECK(Field(line, "sizes") == "per_headset");
       QCHECK(Field(line, "result") == "installed");
       QCHECK(line.find("\"level\":\"info\"") != std::string::npos);  // the severity key, not the setting
       QCHECK(g_lines.size() == 1);
       QCHECK(tq::IsLatched() && tq::LatchedLevel() == r.level);
       QCHECK(sentinel::SysPropIntSlotOwned());
-      QCHECK(Entry()(kJava, 5) == r.width && Entry()(kJava, 6) == r.height);
+      QCHECK(Entry()(kJava, 5) == r.q3Width && Entry()(kJava, 6) == r.q3Height);
     }
   }
 }
@@ -454,9 +510,12 @@ void ARefusedCounterIsOneLoudLine() {
 
 int main() {
   TheTableIsTheInstallersTable();
-  OnlyTheSixWordsParse();
+  TheHeadsetSplitsAtOneSixEightyOnBothAxes();
+  OnlySevenWordsParse();
   WithNothingArmedEveryQueryIsTheRuntimesOwn();
-  EachLevelAnswersTheEyeSizeFromTheTable();
+  EachLevelLatchesAndAnswers();
+  EachLevelAnswersTheTableOfTheHeadsetTheRuntimeNames();
+  LowAnswersTheStockSizeOfEachHeadset();
   OnlyIds5And6AreAnsweredWithTheSizeAndTheRestPassThrough();
   TheOriginalIsCalledOnceWithTheGamesArgumentsForTheTwoIdsToo();
   TheLevelIsLatchedAndANewOneIsRefused();
