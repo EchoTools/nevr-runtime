@@ -1228,6 +1228,31 @@ class InstallScriptsTest(unittest.TestCase):
     def test_install_does_not_count_the_marker_in_lower_case_as_a_runtime(self):
         self.assert_install_treats_these_bytes_as_the_games_own_file(b"MZ\0nevr-build 5.0.0 " + b"a" * 8)
 
+    # #785: a runtime built before the NEVR-BUILD literal carries the CDN user agent instead, and is a runtime too: an
+    # install must not back it up as the game's original, and uninstall must not restore it.
+    PRE_MARKER_RUNTIME = b"MZ\0nevr-runtime/1.0\0" + b"a" * 8
+
+    def test_uninstall_refuses_a_pre_marker_runtime_saved_as_the_original(self):
+        backup = self.poison_the_backup()
+        backup.write_bytes(self.PRE_MARKER_RUNTIME)
+        undone = self.ps("uninstall.ps1", "-Dir", str(self.game))
+        self.assertNotEqual(undone.returncode, 0, self.output(undone))
+        self.assertIn("is a NEVR runtime", self.output(undone))
+        self.assertEqual(backup.read_bytes(), self.PRE_MARKER_RUNTIME)
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), self.plain("5.4.3"), "nothing was changed")
+
+    def test_install_refuses_a_pre_marker_runtime_as_the_games_own_file(self):
+        fresh = self.tmp / "fresh-785" / "bin" / "win10"
+        fresh.mkdir(parents=True)
+        (fresh / "echovr.exe").write_bytes(b"exe")
+        (fresh / "BugSplat64.dll").write_bytes(self.PRE_MARKER_RUNTIME)
+        self.set_package(self.plain("5.4.4"))
+        first = self.ps("install.ps1", "-Dir", str(fresh))
+        self.assertNotEqual(first.returncode, 0, self.output(first))
+        self.assertIn("is a NEVR runtime", self.output(first))
+        self.assertEqual((fresh / "BugSplat64.dll").read_bytes(), self.PRE_MARKER_RUNTIME, "nothing was changed")
+        self.assertEqual(list(fresh.glob("BugSplat64.dll.original-*")), [], "no original was backed up")
+
     def test_an_update_with_the_backup_deleted_says_so_and_changes_nothing(self):
         self.set_package(self.plain("5.4.3"))
         self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
