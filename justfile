@@ -4,6 +4,10 @@
 default_preset := if os() == "linux" { "mingw-release" } else { "release" }
 preset := env("PRESET", default_preset)
 
+# The BSR commit gen/ is generated from (tools/proto_stamp.py reads this line). Bump it only with the schema:
+# `buf registry commit list buf.build/echotools/nevr-api --page-size 1`. It matches nevr-stream's Go module revision (N132).
+proto_pin := "259a506a3e1b490ba3482e24e92ba4db"
+
 # Shared compiler cache: used when ccache is installed, ignored when it is not (CI and release builds are unchanged).
 # NEVR_CCACHE= (set, empty) configures a fresh tree without it.
 # CMake reads the launcher variables on a build tree's first configure, so an existing tree keeps the choice it was configured with.
@@ -34,8 +38,12 @@ generate-symcache:
         --if-pin-changed
 
 # Configure CMake (fails early with the fix when a fresh worktree lacks its build inputs)
-configure: generate-symcache _vcpkg-mingw _build-inputs
+configure: generate-symcache _vcpkg-mingw _proto-current _build-inputs
     @unset VCPKG_ROOT && cmake --preset {{ preset }} > /dev/null 2>&1 || (unset VCPKG_ROOT && cmake --preset {{ preset }})
+
+# Regenerate gen/ when it is not the output for the pinned BSR commit (after vcpkg, whose protoc does the work)
+_proto-current:
+    @python3 -I tools/proto_stamp.py --root "{{ justfile_directory() }}" ensure --protoc-dir "{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed/x64-linux/tools/protobuf"
 
 # Stop with the fix when the submodule or gen/ a root-preset build needs is missing (after vcpkg, whose protoc `just proto` uses)
 _build-inputs:
@@ -86,14 +94,11 @@ verbose-dist: build
 dist-legacy: build
     cmake --build --preset {{ preset }} --target dist-legacy
 
-# Regenerate C++ protobuf from BSR (buf.build/echotools/nevr-api).
-# Uses vcpkg's host protoc to match the runtime version. Dependencies must be
-# installed first; generate before CMake configure so a clean checkout works.
-# PINNED to a specific BSR commit so the generated code is reproducible and
-# matches nevr-stream's Go module revision (N132). Bump this when the BSR schema
-# changes: `buf registry commit list buf.build/echotools/nevr-api --page-size 1`.
+# Regenerate C++ protobuf from BSR at proto_pin (buf.build/echotools/nevr-api) and stamp gen/ (tools/proto_stamp.py).
+# Uses vcpkg's host protoc to match the runtime version; the protoc must be installed (`just configure` does that).
+# Generate before CMake configure: `configure` regenerates on its own when gen/ is stale, so this recipe is for forcing a refresh.
 proto:
-    PATH="{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed/x64-linux/tools/protobuf:$PATH" buf generate buf.build/echotools/nevr-api:259a506a3e1b490ba3482e24e92ba4db
+    python3 -I tools/proto_stamp.py --root "{{ justfile_directory() }}" generate --protoc-dir "{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed/x64-linux/tools/protobuf"
 
 # Remove build and dist directories
 clean:

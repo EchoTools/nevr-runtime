@@ -1,6 +1,7 @@
 """tools/worktree-setup.sh on a throwaway main checkout and worktree: it never touches the real repo."""
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import shutil
@@ -15,9 +16,27 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools/worktree-setup.sh"
 SEEDER = REPO / "tools/seed_build_tree.py"
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+sys.path.insert(0, str(REPO / "tools"))
 from gitenv import clean_env, git  # noqa: E402
+from test_proto_stamp import FAKE_BUF  # noqa: E402
+import proto_stamp  # noqa: E402
 SECRET = "NEVR_API_KEY=do-not-print-me"
 DEFAULTS = "NEVR_SOCKET_URI=wss://example.invalid/nevr\n"
+# The real pin and a different one, so a test can make the copied gen/ stale by editing the worktree's justfile.
+PIN = "259a506a3e1b490ba3482e24e92ba4db"
+NEW_PIN = "0123456789abcdef0123456789abcdef"
+# The files a fixture needs so that gen/ can be a stamped, current output (tools/proto_stamp.py reads the pin from the justfile).
+GEN_INPUTS = ("justfile", "buf.gen.yaml", "tools/proto_stamp.py")
+
+
+def copy_gen_inputs(main):
+    for rel in GEN_INPUTS:
+        shutil.copy(REPO / rel, main / rel)
+
+
+def stamp_gen(root):
+    """Record the fixture's cpp/x.pb.cc as the generator's output for the justfile's pin, as a real generate would."""
+    proto_stamp.record_existing(root, ["cpp/x.pb.cc"])
 
 
 class WorktreeSetupTest(unittest.TestCase):
@@ -30,8 +49,9 @@ class WorktreeSetupTest(unittest.TestCase):
         shutil.copy(SEEDER, self.main / "tools/seed_build_tree.py")
         (self.main / "src").mkdir()
         (self.main / "src/in.txt").write_text("input\n")
+        copy_gen_inputs(self.main)
         git(self.main, "init", "-q")
-        git(self.main, "add", "tools/worktree-setup.sh", "tools/seed_build_tree.py", "src/in.txt")
+        git(self.main, "add", "tools/worktree-setup.sh", "tools/seed_build_tree.py", "src/in.txt", *GEN_INPUTS)
         # The seeder appends to a log under XDG_STATE_HOME: keep a test run out of the real one.
         patcher = mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(self.tmp / "state")})
         patcher.start()
@@ -45,6 +65,7 @@ class WorktreeSetupTest(unittest.TestCase):
             (d / ".git").write_text("gitdir: elsewhere\n")
         (self.main / "gen/cpp").mkdir(parents=True)
         (self.main / "gen/cpp/x.pb.cc").write_text("// generated\n")
+        stamp_gen(self.main)
         (self.main / ".env").write_text(SECRET + "\n")
         (self.main / "config").mkdir()
         (self.main / "config/public-defaults.env").write_text(DEFAULTS)
@@ -296,6 +317,75 @@ class WorktreeSetupTest(unittest.TestCase):
         for name in ("minhook", "breakpad", "lss"):
             self.assertTrue((self.main / "extern" / name / "CMakeLists.txt").exists(), name)
 
+    def run_setup(self, env=None):
+        return subprocess.run([str(self.wt / "tools/worktree-setup.sh")], cwd=self.wt, capture_output=True, text=True,
+                              env=env, timeout=120)
+
+    def bump_pin(self, pin):
+        justfile = self.wt / "justfile"
+        justfile.write_text(justfile.read_text().replace(PIN, pin))
+
+    def fake_protoc(self, preset="mingw-release"):
+        protoc = self.wt / f"build/{preset}/vcpkg_installed/x64-linux/tools/protobuf/protoc"
+        protoc.parent.mkdir(parents=True)
+        protoc.write_text("#!/bin/sh\nexit 0\n")
+        protoc.chmod(0o755)
+
+    def fake_buf_env(self, files, fail=False):
+        shim = self.tmp / "shim"
+        shim.mkdir(exist_ok=True)
+        (shim / "buf").write_text(FAKE_BUF)
+        (shim / "buf").chmod(0o755)
+        env = dict(os.environ, PATH=f"{shim}{os.pathsep}{os.environ['PATH']}", FAKE_BUF_LOG=str(self.tmp / "buf.log"),
+                   FAKE_BUF_FILES=json.dumps(files), XDG_STATE_HOME=str(self.tmp / "state"))
+        env.pop("FAKE_BUF_FAIL", None)
+        if fail:
+            env["FAKE_BUF_FAIL"] = "1"
+        return env
+
+    def test_a_stamped_gen_whose_file_was_edited_fails_check(self):
+        self.assertEqual(self.run_script(self.wt).returncode, 0)
+        (self.wt / "gen/cpp/x.pb.cc").write_text("edited\n")
+        result = self.run_script(self.wt, "--check")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("gen/cpp/x.pb.cc differs", result.stderr)
+
+    def test_a_gen_without_a_stamp_fails_check_and_names_the_reason(self):
+        self.assertEqual(self.run_script(self.wt).returncode, 0)
+        (self.wt / "gen/.proto-stamp").unlink()
+        result = self.run_script(self.wt, "--check")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no stamp", result.stderr)
+
+    def test_a_stale_gen_is_regenerated_at_the_justfile_pin_with_the_build_trees_protoc(self):
+        self.assertEqual(self.run_script(self.wt).returncode, 0)
+        self.bump_pin(NEW_PIN)
+        self.fake_protoc()
+        result = self.run_setup(self.fake_buf_env({"cpp/x.pb.cc": "regenerated\n"}))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.wt / "gen/cpp/x.pb.cc").read_text(), "regenerated\n")
+        self.assertIn(f"buf.build/echotools/nevr-api:{NEW_PIN}", (self.tmp / "buf.log").read_text())
+        self.assertEqual(self.run_script(self.wt, "--check").returncode, 0)
+
+    def test_without_the_protoc_a_stale_gen_is_named_and_left_alone(self):
+        self.assertEqual(self.run_script(self.wt).returncode, 0)
+        self.bump_pin(NEW_PIN)
+        result = self.run_script(self.wt)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("gen/ is not current", result.stderr)
+        self.assertIn("just configure regenerates it", result.stderr)
+        self.assertEqual((self.wt / "gen/cpp/x.pb.cc").read_text(), "// generated\n")
+        self.assertEqual(self.run_script(self.wt, "--check").returncode, 1)
+
+    def test_a_failed_regeneration_fails_the_setup_and_names_gen(self):
+        self.assertEqual(self.run_script(self.wt).returncode, 0)
+        self.bump_pin(NEW_PIN)
+        self.fake_protoc()
+        result = self.run_setup(self.fake_buf_env({}, fail=True))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("regenerating it at the justfile's pin failed", result.stderr)
+        self.assertEqual((self.wt / "gen/cpp/x.pb.cc").read_text(), "// generated\n")
+
     def gitdir(self):
         return pathlib.Path(git(self.wt, "rev-parse", "--path-format=absolute", "--git-dir").stdout.strip())
 
@@ -453,7 +543,7 @@ class WorktreeSetupTest(unittest.TestCase):
         result = self.run_script(self.wt, "--check")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("extern/minhook", result.stderr)
-        self.assertIn("gen/cpp", result.stderr)
+        self.assertIn("no stamp", result.stderr)
 
     def test_a_copy_of_the_script_below_the_worktree_root_is_refused(self):
         (self.wt / "sub/tools").mkdir(parents=True)
@@ -482,7 +572,7 @@ class WorktreeSetupTest(unittest.TestCase):
         result = self.run_script(self.wt, "--check")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("extern/minhook", result.stderr)
-        self.assertIn("gen/cpp", result.stderr)
+        self.assertIn("no stamp", result.stderr)
 
     def test_gen_keeps_the_main_checkouts_mode(self):
         (self.main / "gen").chmod(0o755)
@@ -512,6 +602,8 @@ class WorktreeSetupTest(unittest.TestCase):
         (self.wt / "gen/cpp").mkdir(parents=True)
         self.assertEqual(self.run_script(self.wt, "--check").returncode, 1)  # gen/cpp holds no file
         (self.wt / "gen/cpp/g.pb.cc").write_text("g\n")
+        self.assertEqual(self.run_script(self.wt, "--check").returncode, 1)  # an unstamped gen/ file is not an output
+        proto_stamp.record_existing(self.wt, ["cpp/g.pb.cc"])
         self.assertEqual(self.run_script(self.wt, "--check").returncode, 0)  # breakpad and lss still empty
         shutil.rmtree(self.wt / "extern/minhook")
         (self.wt / "extern/minhook").mkdir()
@@ -550,8 +642,9 @@ class WorktreeSetupLuauTest(unittest.TestCase):
         (self.main / "tools").mkdir(parents=True)
         shutil.copy(SCRIPT, self.main / "tools/worktree-setup.sh")
         shutil.copy(SEEDER, self.main / "tools/seed_build_tree.py")
+        copy_gen_inputs(self.main)
         git(self.main, "init", "-q")
-        git(self.main, "add", "tools/worktree-setup.sh", "tools/seed_build_tree.py")
+        git(self.main, "add", "tools/worktree-setup.sh", "tools/seed_build_tree.py", *GEN_INPUTS)
         git(self.main, "commit", "-q", "-m", "init", "--no-gpg-sign")
         git(self.main, "submodule", "add", "-q", str(self.upstream), "extern/luau", env=self.ENV)
         git(self.main, "commit", "-q", "-m", "pin luau", "--no-gpg-sign")
@@ -561,6 +654,7 @@ class WorktreeSetupLuauTest(unittest.TestCase):
             (d / "CMakeLists.txt").write_text(f"# {name}\n")
         (self.main / "gen/cpp").mkdir(parents=True)
         (self.main / "gen/cpp/x.pb.cc").write_text("// generated\n")
+        stamp_gen(self.main)
         (self.main / "config").mkdir()
         (self.main / "config/public-defaults.env").write_text(DEFAULTS)
         self.wt = self.tmp / "wt"
