@@ -144,8 +144,8 @@ function Copy-Runtime {
 }
 
 # #770: Verify Files restores the game's own BugSplat64.dll after an install, and the record then describes a file that is
-# no longer there. A DLL with no NEVR-BUILD literal that the record does not list is the game's own file, so the record
-# is stale: it is renamed aside (never deleted) and this run is a first install.
+# no longer there. A DLL with no NEVR-BUILD literal that the record does not list and that equals the recorded backup is the
+# game's own file, so the record is stale: it is renamed aside (never deleted) and this run is a first install.
 function Test-StaleRecord {
   $values = @{}
   foreach ($line in Get-Content -LiteralPath $state -Encoding UTF8) {
@@ -153,7 +153,11 @@ function Test-StaleRecord {
   }
   $known = @($values['installed_sha256'])
   if ($values.ContainsKey('previous_sha256') -and $values['previous_sha256'] -ne '') { $known += $values['previous_sha256'].Split(',') }
-  return (($originalSha -ne $ours) -and ($known -notcontains $originalSha) -and -not (Test-NevrRuntime $target))
+  if (($originalSha -eq $ours) -or ($known -contains $originalSha)) { return $false }
+  # The game's own file is the recorded backup; a DLL that is neither recorded nor that backup is a stranger, and the
+  # update path below refuses it.
+  $recordedBackup = $values['backup']
+  return ((-not [string]::IsNullOrEmpty($recordedBackup)) -and (Test-Path -LiteralPath $recordedBackup) -and ((Get-Sha $recordedBackup) -eq $originalSha) -and -not (Test-NevrRuntime $target))
 }
 if ((Test-Path -LiteralPath $state) -and (Test-StaleRecord)) {
   $staleAside = Join-Path $Dir ('nevr-install.txt.stale-' + (Get-Date).ToString('yyyyMMdd-HHmmss'))
