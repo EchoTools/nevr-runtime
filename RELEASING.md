@@ -38,10 +38,12 @@ Not release assets: the `.tar.zst` archives and the `.dbg` symbol files (workflo
 
 **The signed Windows zip lives on the GitHub release.** Quest APKs are published outside GitHub.
 
-**Quest APKs never go on GitHub.** They are published outside GitHub, under `nevr-runtime/quest/<file>` with a
-`<file>.sha256` beside it. Check the file locally (size, `sha256sum`, `unzip -tq`), install it on the publishing host
-without overwriting a name, and verify it from outside by hash. Never request the published address before the file is
-installed: the CDN caches the 200 HTML answer for that exact address. A changed file gets a new name (the version is in it).
+**Quest APKs never go on GitHub.** They are published outside GitHub, on the release host that serves the signed
+manifest, by `just publish-quest-apk vX.Y.Z` (see "The Quest APK"). Where a file lands, and which host answers for it, is in
+`docs/reference/verifying-a-release.md`, "Quest APKs". Check the file locally (size, `sha256sum`, `unzip -tq`) before it
+goes up. The recipe never overwrites a name, so a changed file gets a new name (the version is in it). Never request the
+published address before the file is installed: the CDN caches the 200 HTML answer for that exact address; the recipe
+fetches the files back only after it has put them there.
 
 ## When to release
 
@@ -214,8 +216,26 @@ just release-quest-apk vX.Y.Z   # build/quest-release/vX.Y.Z/nevr-runtime-vX.Y.Z
 ```
 
 It builds with the tag's identity (`kVersion` is the tag, `kIsDev` is false) and checks both in the generated header. It
-uploads nothing. Check the file as above, install it on the publishing host, and post its SHA-256 and the commit it was
-built from, saying it is not a release asset.
+uploads nothing. Check the file as above, then publish it from the same clone:
+
+```sh
+just publish-quest-apk vX.Y.Z   # puts the APK and its .sha256 on R2, then fetches both back from the public host
+```
+
+The recipe takes the bucket, the public host, the release-signer executable and checkout and a GitHub read token from the
+environment and nothing else: `R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
+`RELEASE_PUBLIC_BASE`, `RELEASE_SIGNER_BIN`, `RELEASE_SIGNER_DIR` and `GH_TOKEN`. A missing one is a refusal that names
+it. The APK goes up through the signer's `put-quest-apk`, run from `RELEASE_SIGNER_DIR` (the signer reads `config/` from
+its working directory), which checks that the release is published, that the APK was built from the tag's commit and
+that it carries the pinned signer certificate, and writes the object only if absent; the sidecar goes up with
+`rclone copyto --ignore-existing`. The recipe then fetches both files from `RELEASE_PUBLIC_BASE` and exits non-zero unless
+each equals the local one in size and sha256; an HTML answer or a redirect is a failure. It logs each step to
+`$XDG_STATE_HOME/nevr-runtime/publish-quest-apk.jsonl` and never prints or logs a value from the environment. No workflow
+runs it: the APK is built from the store game on the publisher's machine, so there is nothing for a job to upload.
+Where the files land and which host answers for them is in `docs/reference/verifying-a-release.md`, "Quest APKs".
+
+Then post the SHA-256 and the commit the APK was built from, saying it is not a release asset, and replace the line in the
+release body that says there is no Quest APK with its address and SHA-256 (the body of a published release stays editable).
 
 ## Immutable releases
 
