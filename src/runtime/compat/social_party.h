@@ -724,6 +724,20 @@ class State {
     return out;
   }
 
+  /// The local rich presence the game set (#396, presence_local): the 0x20 header of the local member, then
+  /// JsonLen(4) and the game's compact JSON document. The server keeps it as this session's status. Empty
+  /// before the local account is known: there is no member to publish for.
+  std::vector<Message> PresenceUpdate(std::uint64_t symbol, const std::string& json) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    std::vector<Message> out;
+    if (self_ == 0) return out;
+    Message m = Short(symbol, SelfUuid());
+    AppendLe(m.payload, json.size(), 4);
+    m.payload += json;
+    out.push_back(std::move(m));
+    return out;
+  }
+
   /// A data notify from the server (the bridge has checked it is a JSON object). Data for the party
   /// being joined is held until PartyJoinSuccess, which then adds every member it names; data for an
   /// unknown member of the current party adds that member, MemberJoined, as pnsovr's data packet did

@@ -76,8 +76,9 @@ struct Features {
   bool presenceNames = false;
   // Rich presence is not sent to Meta's platform service (#396, option b of #393): the presence object's
   // ShareData, RefreshDestinations and Clear are answered locally, so no group_presence request leaves (they
-  // fail for this APK's identity anyway). Friends' status comes from the game service, which derives it from
-  // the match. `social.send_presence_to_meta: false` turns it on; needs the social facade.
+  // fail for this APK's identity anyway). Each changed presence document the game sets is published to the NEVR
+  // session as SNSPresenceUpdateRequest instead (the server half is in nakama; a server without it drops the frame).
+  // `social.send_presence_to_meta: false` turns it on; needs the social facade.
   bool presenceLocal = false;
   // The invite/party tab event (#391, #318): the Invite Members and own-id Party slots also post the friends script
   // event, which switches the tablet to its Friends list. On by default; `diagnostics.ui_event_probe: false` turns it

@@ -17,10 +17,12 @@
 #include <cstdint>
 
 #include <atomic>
+#include <vector>
 
 #include "callback_thunk.h"
 #include "got_hook.h"
 #include "quest/social/social_abi.h"
+#include "runtime/compat/social_party.h"
 
 namespace quest_social {
 
@@ -123,14 +125,19 @@ void SetPresenceNames(bool enabled) noexcept;
 
 // Whether rich presence stops going to Meta (#396, config feature presence_local; off by default): the object's
 // ShareData, RefreshDestinations and Clear are answered locally (the state word ends as the game's own functions
-// and their result callbacks leave it) and no group_presence request is made. The server needs nothing from the client for
-// this: a friend's status is derived from the match they are in (nakama server/evr_friend_presence.go).
+// and their result callbacks leave it) and no group_presence request is made. Each changed document the game sets
+// is published to the NEVR session as SNSPresenceUpdateRequest instead (the nakama half handles it; a server that
+// does not drops the frame). A friend's status is then the server's to derive.
 void SetPresenceLocal(bool enabled) noexcept;
 
 // Test seams: whether the seven wrapped slots are checked against the pinned addresses (a test's fake
 // functions live elsewhere), and the game's EncodeToCompact the Set wrapper reads the document with (nullptr:
 // resolved from the loaded libr15 on first use).
 void SetPresenceSeamsForTest(bool slotCheck, CJsonEncodeToCompactFn encode) noexcept;
+
+// The sender the presence publish uses (#396). nullptr: the production sender (ProductionPorts().send).
+using PresenceSendFn = bool (*)(const std::vector<nevr_social_party::Message>& messages);
+void SetPresenceSendForTest(PresenceSendFn send) noexcept;
 
 // Registers the counters with the sentinel's reporter (hook_report.h): the thunk's calls, the selected
 // count, the three pass-through counters, the thunk's faults, the facade's eleven (members hidden,
