@@ -86,6 +86,7 @@ set(PATCHES_SOURCES
     "patch/early_quit_lockout.cpp"
     "patch/lobby_full_backoff.cpp"
     "patch/menu_version_label.cpp"
+    "patch/splash_skip.cpp"
     "patch/social_facade.cpp"
     "patch/social_facade_object.cpp"
     "log/builtin_filter.cpp"
@@ -1286,6 +1287,13 @@ if(BUILD_TESTING)
     target_include_directories(test_menu_version_label PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_menu_version_label PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_menu_version_label DISCOVERY_MODE PRE_TEST)
+
+    # test_splash_skip.cpp (#962, header-only patch/splash_skip_rules.h).
+    add_executable(test_splash_skip tests/test_splash_skip.cpp)
+    set_source_files_properties(tests/test_splash_skip.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_splash_skip PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_splash_skip PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_splash_skip DISCOVERY_MODE PRE_TEST)
 
     # test_cmdline_strip.cpp (#515, header-only lifecycle/cmdline_strip.h); nevr_core supplies g_headlessTickRateHz.
     add_executable(test_cmdline_strip tests/test_cmdline_strip.cpp tests/test_timestep_log.cpp)
