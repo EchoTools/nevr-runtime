@@ -44,6 +44,7 @@ inline constexpr const char* kAndroidMainSymbol = "android_main";
 inline constexpr const char* kFindMethodSymbol = "_ZN10NRadEngine10CSysModule10FindMethodEmPKc";
 inline constexpr const char* kGetDeviceExtensionsVulkanSymbol = "vrapi_GetDeviceExtensionsVulkan";
 inline constexpr const char* kGetSystemPropertyIntSymbol = "vrapi_GetSystemPropertyInt";
+inline constexpr const char* kShowSystemUISymbol = "vrapi_ShowSystemUI";
 inline constexpr const char* kEnablePageNodeEnterSymbol =
     "_ZN10NRadEngine8NRadGame25CR15UIPage2EnablePageNode5EnterERKNS0_29SR15UIPage2EnablePageNodeDataE";
 
@@ -477,6 +478,18 @@ inline GotTarget LibR15GetDeviceExtensionsVulkan() {
 // value 0).
 inline GotTarget LibR15GetSystemPropertyInt() {
   return {kLibR15, kGetSystemPropertyIntSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36fa728ULL};
+}
+
+// VrApi.h: int vrapi_ShowSystemUI(const ovrJava* java, const ovrSystemUiType type). Called only from CVR::ShowSystemUI
+// (ReVault 0x1b73990; ReVault VA = pinned VA + 0x100000), which always passes type 1. The PLT thunk at ReVault 0xffb730
+// has one direct caller, 0x1b7399c (`revault_xrefs 0xffb730`). The JUMP_SLOT is ReVault 0x37d5280 (`revault_imports`),
+// pinned 0x36d5280. Pin unverified until `just test-quest-hooks-pinned` runs on the real libr15.
+using ShowSystemUISig = int(const OvrJavaOpaque* java, int type);
+struct LibR15ShowSystemUITag {};
+using LibR15ShowSystemUIThunk = CallbackThunk<LibR15ShowSystemUITag, ShowSystemUISig>;
+
+inline GotTarget LibR15ShowSystemUI() {
+  return {kLibR15, kShowSystemUISymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36d5280ULL};
 }
 
 // libr15.so's slot for CResourceManager::FillResourceFileRequest, defined in libr15 itself (JUMP_SLOT 0x36efa80,
