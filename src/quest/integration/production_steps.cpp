@@ -34,6 +34,7 @@
 #include "quest/net/curl_ws_connector.h"
 #include "quest/net/session_bridge.h"
 #include "quest/redirect/hook_adapter.h"
+#include "quest/social/lobby_full_hooks.h"
 #include "quest/social/social_facade.h"
 #include "quest/social/social_frames.h"
 #include "runtime/compat/friend_request_check.h"
@@ -545,6 +546,9 @@ class ProductionSteps final : public Steps {
     detail_ = detail;
     // The login declares the social level only when the facade is in place (docs/adr/0003, contract 5).
     if (ok) R().socialLevel.store(nevr_social_party::kSocialLevel);
+    // The lobby-full policy (#1001) rides this step: its three libr15 hooks need the facade's libr15 in place
+    // and nothing else. Its result is logged by the hooks themselves; a refusal does not fail social.
+    if (ok) quest_social::lobby_full::InstallLobbyFullHooks();
     return ok;
   }
 
