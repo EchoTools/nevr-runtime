@@ -256,6 +256,8 @@ void DataAlreadyThereIsNotFetchedAndTheProcessContinues() {
   QCHECK(g_ends == 0);
   QCHECK(g_shown.empty());
   QCHECK(Has(LineOf("data_check"), "\"action\":\"use\""));
+  // The sentinel log says which data it found, not only where: the version folder and the manifest hash fields.
+  QCHECK(Has(LineOf("data_check"), "\"data_version\":") && Has(LineOf("data_check"), "\"manifest_sha256\":"));
 }
 
 void AFetchPlacesTheDataInTheRootTheEngineReads() {

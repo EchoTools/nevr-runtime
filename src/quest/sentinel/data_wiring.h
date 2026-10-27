@@ -34,8 +34,8 @@
  * The android_main thread blocks for the whole step. Whether Android tolerates that for the length of a download is
  * ADR 0011 measurement 2; `data_probe` below is how the headset run measures it.
  *
- * Events (sentinel log, no URL): `data_step_install`; `data_check`, `data_fetch`, `data_extract`, `data_swap` (the
- * step's own events, fields as the step reports them); `data_step` (outcome, action, root, status, detail);
+ * Events (sentinel log, no URL): `data_step_install`; `data_check` (carries `data_version` and `manifest_sha256`: the data found), `data_fetch`,
+ * `data_extract`, `data_swap`, `data_version` (the data a fetch placed) (the step's own events, fields as the step reports them); `data_step` (outcome, action, root, status, detail);
  * `data_present` (result token of the toast, looper_prepared; "requested" means Toast.show() returned, not that it
  * drew); `data_probe`.
  *
