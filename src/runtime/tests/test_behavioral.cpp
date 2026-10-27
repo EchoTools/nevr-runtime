@@ -2627,7 +2627,11 @@ class RemoteService {
               received_.push_back(symbol);
             }
             const bool isLogin = symbol == nevr_evr_codec::kSymLoginRequest;
-            if (isLogin) ++loginRequests_;
+            if (isLogin) {
+              std::lock_guard<std::mutex> lock(urisMutex_);
+              if (loginFrame_.empty()) loginFrame_ = message->str;
+              ++loginRequests_;
+            }
             uint64_t reply = nevr_evr_codec::kSymDocumentSuccess;
             if (isLogin) reply = loginReply_.load();
             if (symbol == nevr_evr_codec::kSymConfigRequest) {
@@ -2685,6 +2689,11 @@ class RemoteService {
   }
   std::string Uri() const { return "ws://127.0.0.1:" + std::to_string(port_) + "/"; }
   int LoginRequests() const { return loginRequests_.load(); }
+  // The first LoginRequest frame the service received, as the game's bridge sent it.
+  std::string LoginFrame() {
+    std::lock_guard<std::mutex> lock(urisMutex_);
+    return loginFrame_;
+  }
   // Connections the bridge has opened to the service.
   int Opens() const { return opens_.load(); }
   // The request target (path and query) of each connection the bridge opened, in order.
@@ -2720,6 +2729,7 @@ class RemoteService {
   std::unique_ptr<ix::WebSocketServer> server_;
   int port_ = 0;
   std::atomic<int> loginRequests_{0};
+  std::string loginFrame_;  // guarded by urisMutex_
   std::atomic<int> opens_{0};
   std::atomic<bool> holdLobbyReplies_{false};
   std::atomic<int> heldLobbyReplies_{0};
@@ -3329,6 +3339,64 @@ TEST_F(RouterAllTest, ANewMatchmakerDoesNotTakeTheAnswerAnotherIsWaitingFor) {
   remote_.ReleaseLobbyReplies();
   ASSERT_TRUE(first.WaitForSymbol(RemoteService::kLobbyReplySymbol)) << "the answer did not reach the asker";
   EXPECT_EQ(second.Count(RemoteService::kLobbyReplySymbol), 0);
+}
+
+// #1082, through the real router: the login the bridge injects follows the game's own No VR flag. The flag word
+// stands in for game+0x7ae0 (the hook is -1 outside these tests).
+// A little-endian u64 at `offset` of a frame (the platform at 40 and the account at 48 of a LoginRequest).
+static uint64_t FrameU64(const std::string& frame, size_t offset) {
+  uint64_t value = 0;
+  for (size_t i = 0; i < 8; ++i) value |= static_cast<uint64_t>(static_cast<unsigned char>(frame[offset + i])) << (8 * i);
+  return value;
+}
+
+class GameFlagScope {
+ public:
+  GameFlagScope(int64_t flags, BOOL isServer) : wasServer_(g_isServer) {
+    g_isServer = isServer;
+    TestHook_SetGameFlagWord(flags);
+  }
+  ~GameFlagScope() {
+    TestHook_SetGameFlagWord(-1);
+    g_isServer = wasServer_;
+  }
+
+ private:
+  BOOL wasServer_;
+};
+
+TEST_F(RouterAllTest, ANoVrClientsInjectedLoginIsDmoNotTheOvrOrgOfItsVrSelf) {
+  GameFlagScope flags(0x2100000, FALSE);  // -spectatorstream ORs 0x2100000
+  GameSocket login;
+  AdmitLogin(login);
+  const std::string frame = remote_.LoginFrame();
+  ASSERT_GE(frame.size(), 56U);
+  const uint64_t account = FrameU64(frame, 48);
+  EXPECT_EQ(FrameU64(frame, 40), 7ULL) << "a No VR client logs in as DMO";
+  EXPECT_FALSE(LogLinesContaining("login injected xpid=DMO-" + std::to_string(account) + " platform=7").empty());
+  EXPECT_TRUE(LogLinesContaining("login injected xpid=OVR-ORG-").empty());
+  EXPECT_FALSE(LogLinesContaining("login platform=7 (DMO) no_vr=1 game_flags=0x2100000 is_server=0").empty());
+}
+
+TEST_F(RouterAllTest, AVrClientsInjectedLoginStaysOvrOrg) {
+  GameFlagScope flags(0x8000000, FALSE);  // -noovr alone sets bit 27, which is not the flag
+  GameSocket login;
+  AdmitLogin(login);
+  const std::string frame = remote_.LoginFrame();
+  ASSERT_GE(frame.size(), 56U);
+  const uint64_t account = FrameU64(frame, 48);
+  EXPECT_EQ(FrameU64(frame, 40), 4ULL);
+  EXPECT_FALSE(LogLinesContaining("login injected xpid=OVR-ORG-" + std::to_string(account) + " platform=4").empty());
+  EXPECT_TRUE(LogLinesContaining("login injected xpid=DMO-").empty());
+}
+
+TEST_F(RouterAllTest, AServerWithTheNoVrFlagStillLogsInAsOvrOrg) {
+  GameFlagScope flags(0x100000, TRUE);
+  GameSocket login;
+  AdmitLogin(login);
+  const std::string frame = remote_.LoginFrame();
+  ASSERT_GE(frame.size(), 56U);
+  EXPECT_EQ(FrameU64(frame, 40), 4ULL);
 }
 
 // L5: a dedicated server has no login to complete; the service's LoginFailure reaches the game as a LoginSuccess.
@@ -4484,17 +4552,29 @@ TEST(WsBridgeRemoteBearer, OnlyTheWsPathReplacesTheBearer) {
   EXPECT_FALSE(TestHook_IsBearerReplacingPath("wss://g.echovrce.com"));
 }
 
-// SelectPlatformCode: the bridge always logs in as platform 4 (OVR_ORG), the provider it forces
-// into the game's own CNSUser. A login as platform 6 (-noovr) made Nakama answer the game's
-// later LobbyPlayerSessionsRequest (sent as OVR-ORG) with "requesting player not found in
-// match", so the game never reached a lobby host.
-TEST(WsBridgeSelectPlatform, AlwaysOvrOrgToMatchTheGamesOwnIdentity) {
-  EXPECT_EQ(TestHook_SelectPlatformCode(true, true), 4ULL);
+// SelectPlatformCode: the bridge logs in as platform 4 (OVR_ORG), the provider it forces into the game's own
+// CNSUser. A login as platform 6 (-noovr) made Nakama answer the game's later LobbyPlayerSessionsRequest (sent
+// as OVR-ORG) with "requesting player not found in match", so the game never reached a lobby host: the platform
+// the login carries and the CNSUser nibble must be one value. The one exception is a client the game marks No VR
+// (#1082): it logs in as 7 (DMO), and PatchCnsUserLoginState and the provider-prefix detour use the same 7.
+TEST(WsBridgeSelectPlatform, OvrOrgForAVrClientToMatchTheGamesOwnIdentity) {
   EXPECT_EQ(TestHook_SelectPlatformCode(true, false), 4ULL);
-  EXPECT_EQ(TestHook_SelectPlatformCode(false, true), 4ULL);
   EXPECT_EQ(TestHook_SelectPlatformCode(false, false), 4ULL);
   // The code the bridge logs in as is the one labelled OVR-ORG, the provider the game names itself with.
   EXPECT_STREQ(TestHook_PlatformPrefix(TestHook_SelectPlatformCode(false, false)), "OVR-ORG");
+}
+
+TEST(WsBridgeSelectPlatform, DmoForAClientTheGameMarksNoVr) {
+  EXPECT_EQ(TestHook_SelectPlatformCode(true, true), 7ULL);
+  EXPECT_EQ(TestHook_SelectPlatformCode(false, true), 7ULL);
+  EXPECT_STREQ(TestHook_PlatformPrefix(TestHook_SelectPlatformCode(false, true)), "DMO");
+  // Through the bridge's own login builder: the NoVR frame carries platform 7 and the same account as the VR one.
+  const std::string vrRequest = TestHook_BuildLoginRequest(999888777ULL, TestHook_SelectPlatformCode(false, false), "Test", "");
+  const std::string noVrRequest = TestHook_BuildLoginRequest(999888777ULL, TestHook_SelectPlatformCode(false, true), "Test", "");
+  ASSERT_GE(noVrRequest.size(), 56U);
+  EXPECT_EQ(ReadLe64(vrRequest, 40), 4ULL);
+  EXPECT_EQ(ReadLe64(noVrRequest, 40), 7ULL);
+  EXPECT_EQ(ReadLe64(noVrRequest, 48), ReadLe64(vrRequest, 48));
 }
 
 TEST(WsBridgeCallbackGuard, ContainsStdExceptionsAtTheCallbackBoundary) {
@@ -5344,6 +5424,7 @@ TEST(XpidPrefixDetourBoot, AnInstalledDetourReturnsTheOvrOrgPrefixAndBootContinu
     ASSERT_NE(base, nullptr);
     memcpy(base + nevr_patch_addresses::GET_PROVIDER_PREFIX, kStandInPrefixFunction, sizeof(kStandInPrefixFunction));
     memcpy(base + nevr_patch_addresses::PROVIDER_STRING_OVR_ORG, "OVR-ORG", 8);
+    memcpy(base + nevr_patch_addresses::PROVIDER_STRING_DMO, "DMO", 4);
     {
         XpidBaseScope scope(base);
         PatchProviderPrefixOvrOrg();
@@ -5353,6 +5434,16 @@ TEST(XpidPrefixDetourBoot, AnInstalledDetourReturnsTheOvrOrgPrefixAndBootContinu
         uint32_t provider = 2;  // PSN: the detour answers OVR-ORG whatever the game asked for
         const char* prefix = reinterpret_cast<PrefixFn>(base + nevr_patch_addresses::GET_PROVIDER_PREFIX)(&provider);
         EXPECT_STREQ(prefix, "OVR-ORG");
+        // #1082: the nibble 7 a No VR login sets answers the game's own DMO entry; the other bits of the
+        // login-state word are not part of the provider.
+        provider = 7;
+        EXPECT_STREQ(reinterpret_cast<PrefixFn>(base + nevr_patch_addresses::GET_PROVIDER_PREFIX)(&provider), "DMO");
+        provider = 0x17;
+        EXPECT_STREQ(reinterpret_cast<PrefixFn>(base + nevr_patch_addresses::GET_PROVIDER_PREFIX)(&provider), "DMO");
+        provider = 4;
+        EXPECT_STREQ(reinterpret_cast<PrefixFn>(base + nevr_patch_addresses::GET_PROVIDER_PREFIX)(&provider), "OVR-ORG");
+        provider = 0x14;
+        EXPECT_STREQ(reinterpret_cast<PrefixFn>(base + nevr_patch_addresses::GET_PROVIDER_PREFIX)(&provider), "OVR-ORG");
     }
     MH_Uninitialize();
     VirtualFree(base, 0, MEM_RELEASE);

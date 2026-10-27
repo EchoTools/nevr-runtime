@@ -10,8 +10,9 @@
 /// "DSC-".
 VOID PatchDscProvider();
 
-/// Detour CNSUser::GetProviderPrefix (fcn.14060d640, 17 distinct callers) to always
-/// return the OVR-ORG string-table entry.  It is one of two xpid choke-points:
+/// Detour CNSUser::GetProviderPrefix (fcn.14060d640, 17 distinct callers) to return the OVR-ORG
+/// string-table entry, or the game's DMO entry when the provider nibble is 7 (the platform a No VR
+/// login carries; see nevr_evr_codec::SelectPlatformCode).  It is one of two xpid choke-points:
 /// CreateUser, SaveLocalData, LobbyFindSession, LobbyPlayerSessions and three
 /// Send() paths flow through it.  The other, GetUserIDString (echovr.exe
 /// 0x1401ba630, 22 distinct callers), has its own switch over the same string table

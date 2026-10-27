@@ -220,8 +220,13 @@ The platform prefix SHALL be derived from the actual platform code in the
 login payload, not hardcoded. Platform codes are the game's own
 1-indexed numbering (STM=1, DSC=2, XBX=3, OVR_ORG=4, OVR=5, BOT=6, DMO=7);
 code 2 is "PSN" in the game's string table and reads "DSC" after the runtime rewrites it.
-The bridge logs in as OVR_ORG (code 4), so its XPID is `OVR-ORG-<id>`; a
-login as DSC (code 2) would produce `DSC-<id>`.
+The bridge logs in as OVR_ORG (code 4), so its XPID is `OVR-ORG-<id>`, except
+when the game marks the client No VR (bit 20 of the game's flag word, which
+the stock login also reads to send the "N/A" HMD serial): that client logs in
+as DMO (code 7) and its XPID is `DMO-<id>`. A login as DSC (code 2) would
+produce `DSC-<id>`. `login platform=<code> (<prefix>) no_vr=<0|1> game_flags=0x<hex>`
+precedes the `login injected` line and records the flag word the choice was
+made from.
 
 **Where:** the injection site is `InstallWebSocketBridge` in
 `src/runtime/compat/ws_bridge.cpp` (the `login injected xpid=` log line).

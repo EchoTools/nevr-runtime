@@ -3,7 +3,10 @@
 // independent reader below (which shares no code with the codec), and by parsing its output back.
 
 #include "runtime/compat/evr_codec.h"
+#include "runtime/compat/hmd_serial.h"
 #include "runtime/compat/login_profile.h"
+#include "runtime/compat/social_party.h"
+#include "runtime/patch/provider_identity.h"
 #include "runtime/tests/evr_codec_test_reader.h"
 
 #include <gtest/gtest.h>
@@ -217,11 +220,64 @@ TEST(EvrCodecParse, LoginFailureReadsTheStatusCodeAndMessageLengthOnly) {
 
 TEST(EvrCodecPolicy, BridgeLoginsAsOvrOrg) {
   static_assert(nevr_evr_codec::kBridgeLoginPlatform == 4, "OVR_ORG in the game's numbering");
-  EXPECT_EQ(nevr_evr_codec::SelectPlatformCode(true, true), 4u);
+  EXPECT_EQ(nevr_evr_codec::SelectPlatformCode(true, false), 4u);
   EXPECT_EQ(nevr_evr_codec::SelectPlatformCode(false, false), 4u);
   EXPECT_STREQ(nevr_evr_codec::PlatformPrefix(nevr_evr_codec::kBridgeLoginPlatform), "OVR-ORG");
   EXPECT_STREQ(nevr_evr_codec::PlatformPrefix(0), "UNK");
   EXPECT_STREQ(nevr_evr_codec::PlatformPrefix(8), "UNK");
+}
+
+// #1082: a client the game marks No VR logs in as DMO (7), a separate session identity from the same account's
+// VR client (OVR-ORG, 4). On 2026-10-26 a spectator logging in as a player's own account evicted the player's Quest
+// because both were OVR-ORG-<account>.
+TEST(EvrCodecPolicy, NoVrClientLogsInAsDmoAndIsADifferentIdentityFromTheSameAccountsVrClient) {
+  static_assert(nevr_evr_codec::kNoVrLoginPlatform == 7, "DMO in the game's and Nakama's numbering");
+  const uint64_t account = 695081603180789771ULL;
+  const uint64_t vr = nevr_evr_codec::SelectPlatformCode(false, false);
+  const uint64_t noVr = nevr_evr_codec::SelectPlatformCode(false, true);
+  EXPECT_EQ(vr, 4u) << "a VR client does not change";
+  EXPECT_EQ(noVr, 7u);
+  EXPECT_EQ(nevr_evr_codec::SelectPlatformCode(true, true), 7u) << "URL credentials do not change the platform";
+
+  const std::string vrXpid = std::string(nevr_evr_codec::PlatformPrefix(vr)) + "-" + std::to_string(account);
+  const std::string noVrXpid = std::string(nevr_evr_codec::PlatformPrefix(noVr)) + "-" + std::to_string(account);
+  EXPECT_EQ(vrXpid, "OVR-ORG-695081603180789771");
+  EXPECT_EQ(noVrXpid, "DMO-695081603180789771");
+  EXPECT_NE(noVrXpid, vrXpid) << "the NoVR id must differ from the VR id for the same account number";
+
+  // The login frame carries the platform, and the same account number.
+  nevr_evr_codec_test::LoginRequestFields vrFields, noVrFields;
+  ASSERT_EQ(nevr_evr_codec_test::ParseLoginRequest(*nevr_evr_codec::BuildLoginRequest(vr, account, "{}"), &vrFields),
+            nevr_evr_codec_test::LoginRequestStatus::Ok);
+  ASSERT_EQ(nevr_evr_codec_test::ParseLoginRequest(*nevr_evr_codec::BuildLoginRequest(noVr, account, "{}"), &noVrFields),
+            nevr_evr_codec_test::LoginRequestStatus::Ok);
+  EXPECT_EQ(vrFields.platformCode, 4u);
+  EXPECT_EQ(noVrFields.platformCode, 7u);
+  EXPECT_EQ(vrFields.accountId, noVrFields.accountId);
+
+  // The session UUID Nakama derives from the EvrId, which the party requests carry as the local user.
+  EXPECT_STREQ(nevr_social_party::LoginPlatformPrefix(vr), nevr_evr_codec::PlatformPrefix(vr));
+  EXPECT_STREQ(nevr_social_party::LoginPlatformPrefix(noVr), nevr_evr_codec::PlatformPrefix(noVr));
+  EXPECT_NE(nevr_social_party::MemberUuid(account, noVr), nevr_social_party::MemberUuid(account, vr));
+}
+
+// The CNSUser provider nibble is the platform the login carried, and nothing else of the word moves.
+TEST(EvrCodecPolicy, TheCnsUserProviderNibbleIsTheLoginPlatform) {
+  EXPECT_EQ(nevr_provider_identity::WithLoginProvider(0, 4), 4u);
+  EXPECT_EQ(nevr_provider_identity::WithLoginProvider(0, 7), 7u);
+  EXPECT_EQ(nevr_provider_identity::WithLoginProvider(0xABCDEF02ULL, 7), 0xABCDEF07ULL);
+  EXPECT_EQ(nevr_provider_identity::WithLoginProvider(0xABCDEF07ULL, 4), 0xABCDEF04ULL);
+}
+
+// The flag is the one the stock login reads for the "N/A" serial: bit 20 of game+0x7ae0. -noovr (bit 27) and a
+// plain windowed client do not set it; a dedicated server never counts as a No VR client.
+TEST(EvrCodecPolicy, TheNoVrDecisionReadsBit20OfTheGameFlagsAndNeverOnAServer) {
+  EXPECT_TRUE(nevr_hmd_serial::LoginIsNoVr(false, 0x100000ULL));
+  EXPECT_TRUE(nevr_hmd_serial::LoginIsNoVr(false, 0x2100000ULL)) << "-spectatorstream ORs 0x2100000";
+  EXPECT_FALSE(nevr_hmd_serial::LoginIsNoVr(false, 0));
+  EXPECT_FALSE(nevr_hmd_serial::LoginIsNoVr(false, 0x8000000ULL)) << "-noovr alone sets bit 27, not bit 20";
+  EXPECT_FALSE(nevr_hmd_serial::LoginIsNoVr(false, 0xFFEFFFFFULL)) << "every bit but 20";
+  EXPECT_FALSE(nevr_hmd_serial::LoginIsNoVr(true, 0x100000ULL)) << "a server keeps its platform";
 }
 
 TEST(EvrCodecPolicy, RemoteBearerIsTheServerKeyOnlyWithUrlCredentials) {
