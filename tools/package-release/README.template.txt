@@ -55,7 +55,7 @@ Update
   the update fails, both files are put back as they were. It stops and leaves
   the file alone when it is one the script did not put there. If the BugSplat64.dll in the folder is already
   this package's (copied in by hand), install.ps1 records it so uninstall.ps1 can undo it. uninstall.ps1 also
-  accepts any NEVR runtime DLL (one carrying the NEVR-BUILD identity text) in the folder.
+  accepts any NEVR runtime DLL (one carrying the NEVR-BUILD identity text, or the older nevr-runtime/1.0 user agent) in the folder.
 
 Uninstall
   Close Echo VR, then:

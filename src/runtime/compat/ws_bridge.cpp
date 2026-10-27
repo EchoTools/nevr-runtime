@@ -214,7 +214,15 @@ static nevr_socket_role::RoleTable g_roles;
 static auto& g_pairs = *new std::unordered_map<ix::WebSocket*, std::unique_ptr<ProxyPair>>();
 
 // Defined after the login-session globals below.
-static bool ForgetLoginSessionLocked(const ix::WebSocket* remote);
+static bool ForgetLoginSessionLocked(const ix::WebSocket* remote, std::shared_ptr<ix::WebSocket>* ended);
+
+// Drops one reference to an ix::WebSocket on a thread of its own (#751). ~WebSocket calls stop(), which joins the
+// socket's thread: released on that thread it joins itself, and released under g_pairsMutex it waits for threads
+// that are blocked on the mutex. Only the handoff happens at the call site; the destructor runs on the new thread.
+static void ReleaseOffThread(std::shared_ptr<ix::WebSocket> ws) {
+  if (!ws) return;
+  std::thread([last = std::move(ws)]() {}).detach();
+}
 
 // The game sockets whose pair forwards to `remote` (the login socket and any matchmaker sockets sharing
 // its session). Caller holds g_pairsMutex.
@@ -250,11 +258,14 @@ struct RemoteSessionEndingScope {
 static void CloseGameSocketsForRemote(const ix::WebSocket* remote, int connIdx, unsigned int code) {
   std::vector<const ix::WebSocket*> games;
   bool wasLoginSession = false;
+  std::shared_ptr<ix::WebSocket> endedLogin;
   {
     std::lock_guard<std::mutex> lk(g_pairsMutex);
     games = GameSocketsBoundToLocked(remote);
-    wasLoginSession = ForgetLoginSessionLocked(remote);
+    wasLoginSession = ForgetLoginSessionLocked(remote, &endedLogin);
   }
+  // This is the remote's own callback thread and the mutex is free: the last reference, if this was it, dies elsewhere.
+  ReleaseOffThread(std::move(endedLogin));
   if (wasLoginSession) {
     RemoteSessionEndingScope ending;  // this is the closing remote's own callback thread: send nothing on it
     nevr_self_check::SetLoggedIn(false);  // no result is sent until the next LoginSuccess; outside g_pairsMutex
@@ -325,10 +336,11 @@ static ix::WebSocket* g_loginGameWs = nullptr;
 // was the login session. The caller ends the self-check session (nevr_self_check::SetLoggedIn(false)) AFTER it
 // releases the mutex: that call flushes the queued results through SendFrameToServer, which takes g_pairsMutex
 // itself, so calling it here deadlocked the remote's thread on its own lock and made WebSocket::stop() wait on
-// that thread forever (#723, #729).
-static bool ForgetLoginSessionLocked(const ix::WebSocket* remote) {
+// that thread forever (#723, #729). The session's reference moves into `ended`, which the caller releases through
+// ReleaseOffThread after it releases the mutex: dropping it here could run ~WebSocket under the lock (#751).
+static bool ForgetLoginSessionLocked(const ix::WebSocket* remote, std::shared_ptr<ix::WebSocket>* ended) {
   if (remote == nullptr || remote != g_loginRemoteWs.get()) return false;
-  g_loginRemoteWs.reset();
+  *ended = std::move(g_loginRemoteWs);
   g_loginGameWs = nullptr;
   g_roles.LoginSessionEnded();
   return true;
@@ -2113,16 +2125,19 @@ void InstallWebSocketBridge() {
                   }
                 }));
 
+            std::shared_ptr<ix::WebSocket> previousLogin;  // released after g_pairsMutex: see ReleaseOffThread (#751)
             {
               std::lock_guard<std::mutex> lk(g_pairsMutex);
               g_pairs[gameWsPtr] = std::move(pair);
               // Save the login connection for reuse by the sockets that share its session
               if (role == nevr_socket_role::Role::Login) {
+                previousLogin = std::move(g_loginRemoteWs);
                 g_loginRemoteWs = remote;
                 g_activeGameWs = gameWsPtr;
                 g_loginGameWs = gameWsPtr;
               }
             }
+            ReleaseOffThread(std::move(previousLogin));
             // Start after insertion so the remote callback can find the pair in g_pairs
             remote->start();
             Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, %s, ws=%p)", connIdx,
@@ -2530,13 +2545,18 @@ void* TestHook_N61_RegisterMatchmaker(void* gameWsHandle, bool* callbackFired) {
 // The test hook is the observer; the logic under test is production.
 bool TestHook_ForgetLoginSession(void* remoteHandle, int* nextConnIdx) {
   auto* remotePtr = static_cast<std::shared_ptr<ix::WebSocket>*>(remoteHandle);
-  std::lock_guard<std::mutex> lk(g_pairsMutex);
-  const bool forgot = ForgetLoginSessionLocked(remotePtr->get());
-  if (nextConnIdx != nullptr) {
-    // The slot the game's next /login socket would take, asked of a copy so nothing is claimed.
-    nevr_socket_role::RoleTable next = g_roles;
-    *nextConnIdx = next.Admit(nevr_socket_role::Listener::Service, nevr_socket_role::Role::Login).connIdx;
+  std::shared_ptr<ix::WebSocket> ended;
+  bool forgot = false;
+  {
+    std::lock_guard<std::mutex> lk(g_pairsMutex);
+    forgot = ForgetLoginSessionLocked(remotePtr->get(), &ended);
+    if (nextConnIdx != nullptr) {
+      // The slot the game's next /login socket would take, asked of a copy so nothing is claimed.
+      nevr_socket_role::RoleTable next = g_roles;
+      *nextConnIdx = next.Admit(nevr_socket_role::Listener::Service, nevr_socket_role::Role::Login).connIdx;
+    }
   }
+  ReleaseOffThread(std::move(ended));
   return forgot;
 }
 

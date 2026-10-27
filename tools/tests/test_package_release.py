@@ -1228,6 +1228,31 @@ class InstallScriptsTest(unittest.TestCase):
     def test_install_does_not_count_the_marker_in_lower_case_as_a_runtime(self):
         self.assert_install_treats_these_bytes_as_the_games_own_file(b"MZ\0nevr-build 5.0.0 " + b"a" * 8)
 
+    # #785: a runtime built before the NEVR-BUILD literal carries the CDN user agent instead, and is a runtime too: an
+    # install must not back it up as the game's original, and uninstall must not restore it.
+    PRE_MARKER_RUNTIME = b"MZ\0nevr-runtime/1.0\0" + b"a" * 8
+
+    def test_uninstall_refuses_a_pre_marker_runtime_saved_as_the_original(self):
+        backup = self.poison_the_backup()
+        backup.write_bytes(self.PRE_MARKER_RUNTIME)
+        undone = self.ps("uninstall.ps1", "-Dir", str(self.game))
+        self.assertNotEqual(undone.returncode, 0, self.output(undone))
+        self.assertIn("is a NEVR runtime", self.output(undone))
+        self.assertEqual(backup.read_bytes(), self.PRE_MARKER_RUNTIME)
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), self.plain("5.4.3"), "nothing was changed")
+
+    def test_install_refuses_a_pre_marker_runtime_as_the_games_own_file(self):
+        fresh = self.tmp / "fresh-785" / "bin" / "win10"
+        fresh.mkdir(parents=True)
+        (fresh / "echovr.exe").write_bytes(b"exe")
+        (fresh / "BugSplat64.dll").write_bytes(self.PRE_MARKER_RUNTIME)
+        self.set_package(self.plain("5.4.4"))
+        first = self.ps("install.ps1", "-Dir", str(fresh))
+        self.assertNotEqual(first.returncode, 0, self.output(first))
+        self.assertIn("is a NEVR runtime", self.output(first))
+        self.assertEqual((fresh / "BugSplat64.dll").read_bytes(), self.PRE_MARKER_RUNTIME, "nothing was changed")
+        self.assertEqual(list(fresh.glob("BugSplat64.dll.original-*")), [], "no original was backed up")
+
     def test_an_update_with_the_backup_deleted_says_so_and_changes_nothing(self):
         self.set_package(self.plain("5.4.3"))
         self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
@@ -1239,6 +1264,36 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertIn("the backup is gone", self.output(result))
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), self.plain("5.4.3"))
         self.assertEqual(self.state()["installed_sha256"], hashlib.sha256(self.plain("5.4.3")).hexdigest())
+
+    def game_files(self):
+        return {p.name: p.read_bytes() for p in self.game.iterdir() if p.is_file()}
+
+    def test_a_recorded_hand_copy_with_the_backup_gone_is_refused_and_writes_nothing(self):  # #781
+        self.set_package(self.plain("5.4.3"))
+        self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
+        (backup,) = self.game.glob("BugSplat64.dll.original-*")
+        backup.unlink()
+        self.set_package(self.plain("5.4.4"))
+        (self.game / "BugSplat64.dll").write_bytes(self.plain("5.4.4"))  # the package DLL, copied in by hand
+        before = self.game_files()
+        result = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertNotEqual(result.returncode, 0, self.output(result))
+        self.assertIn("the backup is gone", self.output(result))
+        self.assertNotIn("RECORDED", self.output(result))
+        self.assertEqual(self.game_files(), before)
+
+    def test_a_recorded_hand_copy_with_a_dbgcore_dll_back_is_refused_and_writes_nothing(self):  # #781
+        self.set_package(self.plain("5.4.3"))
+        self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
+        self.set_package(self.plain("5.4.4"))
+        (self.game / "BugSplat64.dll").write_bytes(self.plain("5.4.4"))  # the package DLL, copied in by hand
+        (self.game / "dbgcore.dll").write_bytes(b"legacy dbgcore")
+        before = self.game_files()
+        result = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertNotEqual(result.returncode, 0, self.output(result))
+        self.assertIn("a dbgcore.dll exists again", self.output(result))
+        self.assertNotIn("RECORDED", self.output(result))
+        self.assertEqual(self.game_files(), before)
 
     def test_after_verify_files_and_deleting_the_record_install_backs_up_the_games_own_file(self):
         backup = self.poison_the_backup()

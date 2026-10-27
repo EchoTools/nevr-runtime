@@ -300,12 +300,7 @@ package-dev store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
         cmake --preset mingw-dev
         cmake --build --preset mingw-dev
     )
-    # Quest sentinel: its own build tree (build/android-dev).
-    (cd src/quest && CMAKE_C_COMPILER_LAUNCHER= CMAKE_CXX_COMPILER_LAUNCHER= ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev)
-    ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
-    objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
-    tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
-    just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so build/android-dev/repack
+    just _quest-apk "{{ store_apk }}"
     python3 tools/package_release.py --commit "$commit" --out "$out" \
         --dll build/mingw-dev/bin/BugSplat64.dll \
         --runtime-dll build/mingw-dev/bin/nevr-runtime.dll \
@@ -314,6 +309,48 @@ package-dev store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
         --pc-header build/mingw-dev/generated/nevr_builtin_defaults.h \
         --quest-header build/android-dev/generated/nevr_builtin_defaults.h \
         --quest-build-info build/android-dev/generated/nevr_build_info.h
+
+# The Quest half of a package: the sentinel built in build/android-dev, checked, and repacked from the store APK.
+# mode "release" reconfigures the tree (--fresh) so the build info is generated again; release-quest-apk sets the
+# CI identity of a tag build in the environment before it calls this. Private: package-dev and release-quest-apk only.
+_quest-apk store_apk mode="dev":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    (cd src/quest && CMAKE_C_COMPILER_LAUNCHER= CMAKE_CXX_COMPILER_LAUNCHER= ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev {{ if mode == "release" { "--fresh" } else { "" } }})
+    ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
+    objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
+    tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
+    just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so build/android-dev/repack
+
+# The Quest APK of a RELEASE: the repack of the store game built from the release tag vX.Y.Z, in the same steps as
+# package-dev, but with the identity of a CI tag build (kVersion = the tag's version, kIsDev = false), so the APK is a
+# release and not a development build. Run it from a clone whose HEAD is the tag's commit and that passes
+# tools/release_preflight.py. Writes build/quest-release/<tag>/nevr-runtime-<tag>-quest.apk and its .sha256; it uploads
+# nothing and never tags. The APK is published outside GitHub (RELEASING.md, "Quest APKs never go on GitHub").
+release-quest-apk tag store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag="{{ tag }}"
+    [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "release-quest-apk: not a release tag (vX.Y.Z): $tag" >&2; exit 1; }
+    tools/release_preflight.py
+    tag_commit=$(git rev-parse --verify "refs/tags/$tag^{commit}") || { echo "release-quest-apk: tag $tag is not in this clone" >&2; exit 1; }
+    head=$(git rev-parse HEAD)
+    [ "$tag_commit" = "$head" ] || { echo "release-quest-apk: HEAD ${head:0:7} is not the commit of $tag (${tag_commit:0:7}); check out the tag's commit" >&2; exit 1; }
+    [ -f "{{ store_apk }}" ] || { echo "release-quest-apk: store APK not found: {{ store_apk }}" >&2; exit 1; }
+    pass show services/echovrce/quest-signing-keystore >/dev/null 2>&1 || { echo "release-quest-apk: no Quest signing keystore in pass; store one with: just import-quest-keystore <keystore>" >&2; exit 1; }
+    ver="${tag#v}"
+    out="build/quest-release/$tag"
+    echo "release-quest-apk: building $tag from ${head:0:7}" >&2
+    GITHUB_ACTIONS=true GITHUB_REF_TYPE=tag GITHUB_REF_NAME="$tag" just _quest-apk "{{ store_apk }}" release
+    header=build/android-dev/generated/nevr_build_info.h
+    grep -qF "kVersion = \"$ver\"" "$header" || { echo "release-quest-apk: $header does not name version $ver:" >&2; grep -F kVersion "$header" >&2; exit 1; }
+    grep -qF 'kIsDev = false;' "$header" || { echo "release-quest-apk: $header is a development build, not $tag:" >&2; grep -F kIsDev "$header" >&2; exit 1; }
+    mkdir -p "$out"
+    name="nevr-runtime-$tag-quest.apk"
+    cp -f build/android-dev/repack/r15_nevr-sentinel_signed.apk "$out/$name"
+    (cd "$out" && sha256sum "$name" > "$name.sha256")
+    cat "$out/$name.sha256"
+    echo "release-quest-apk: $out/$name is $tag at ${head:0:7}. It is NOT a release asset: publish it outside GitHub (RELEASING.md)." >&2
 
 # Install the repacked Quest APK + game data onto the connected headset (sideload).
 # Pass `yes` (`just quest-install yes`) to allow removing the store build when the

@@ -200,6 +200,19 @@ gh release verify vX.Y.Z -R EchoTools/nevr-runtime                       # needs
 gh release verify-asset vX.Y.Z <file> -R EchoTools/nevr-runtime          # a local file against the release's asset
 ```
 
+## The Quest APK
+
+The APK is a repack of the store game, so no workflow builds it. From a clone whose HEAD is the release tag's commit,
+after the tag is pushed:
+
+```sh
+just release-quest-apk vX.Y.Z   # build/quest-release/vX.Y.Z/nevr-runtime-vX.Y.Z-quest.apk and its .sha256
+```
+
+It builds with the tag's identity (`kVersion` is the tag, `kIsDev` is false) and checks both in the generated header. It
+uploads nothing. Check the file as above, install it on the publishing host, and post its SHA-256 and the commit it was
+built from, saying it is not a release asset.
+
 ## Immutable releases
 
 With the repository setting on, once a release is published its tag cannot be moved or deleted and its assets cannot be

@@ -139,8 +139,8 @@ VOID PatchEnableHeadless(PVOID pGame) {
   // with one game window present for the entire run.
   //
   // Ordering: this function runs from RunDeferredRuntimeBootstrap's
-  // `if (g_isHeadless)` block (boot.cpp), after `-server` has set that global
-  // during argument parsing and AFTER PreprocessCommandLineHook's original
+  // `if (g_isHeadless)` block (boot.cpp), after `-server` or `-headless` has set that global
+  // during the preflight pass and AFTER PreprocessCommandLineHook's original
   // EchoVR::PreprocessCommandLine(pGame) call has returned. That original call
   // is where the game applies this identical mask when the token IS present, so
   // on a `-server`-only run our write lands after it, not before it. Whether any
