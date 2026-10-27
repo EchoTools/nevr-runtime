@@ -3320,7 +3320,7 @@ verify:
     # and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 1789
+    python3 tools/verify_gtest_floor.py --floor 1817
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py
