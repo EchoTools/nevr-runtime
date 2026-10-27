@@ -17,6 +17,7 @@
 #include "runtime/lifecycle/return_to_lobby.h"
 #include "runtime/server/constants.h"
 #include "runtime/server/failure_detail.h"
+#include "runtime/server/lobby_settings_relay.h"
 #include "runtime/server/protobuf_transport.h"
 #include "runtime/server/registration_envelope.h"
 #include "runtime/server/serialized_mint.h"
@@ -709,6 +710,50 @@ void GameServerLib::RegisterBroadcasterCallbacks() {
                                                           reinterpret_cast<VOID*>(OnMsgReliableTeamStatUpdate));
 }
 
+static_assert(nevr_game_server::kLobbySettingsAllPeers == EchoVR::Peer_AllPeers,
+              "the relay's all-peers constant is the game's (echovr.exe DAT_142025f28)");
+
+// The game service's lobby settings document (#905). The ServerDB frame carries the TCP form of the message;
+// the dedicated server never registers the game's TCP handler (PatchEnableServer forces the local handler set),
+// so this raises the local event the game's local handler stores, and sends the same document to every peer
+// that is connected now. Peers accepted later get it from the game (AcceptPlayersSuccessCBHost, 0x140603e20).
+// Runs from GameServerLib::Update() through WebSocketClient::ProcessReceivedMessages: the game thread.
+static void RelayLobbySettingsFrame(GameServerLib* self, const VOID* data, UINT64 size) {
+  auto& context = self->GetContext();
+  EchoVR::Broadcaster* broadcaster = context.GetBroadcaster();
+
+  nevr_game_server::LobbySettingsSinks sinks;
+  if (broadcaster != nullptr && EchoVR::BroadcasterReceiveLocalEvent != nullptr && EchoVR::BroadcasterSend != nullptr) {
+    sinks.raiseLocalEvent = [broadcaster](void* message, uint64_t messageSize) {
+      EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbySettingsResponse, "SNSLobbySettingsResponse", message,
+                                           messageSize);
+      return true;
+    };
+    // CBroadcaster::Send takes the item and buffer as mutable pointers and only reads them; the relay owns both.
+    sinks.sendToPeer = [broadcaster](const void* item, uint64_t itemSize, const void* body, uint64_t bodySize,
+                                     uint64_t peer) -> int32_t {
+      return EchoVR::BroadcasterSend(broadcaster, Sym::LobbySettingsResponse, 0, const_cast<VOID*>(item), itemSize,
+                                     const_cast<VOID*>(body), bodySize, peer, ~0ULL, 1.0f,
+                                     static_cast<EchoVR::SymbolId>(-1));
+    };
+  }
+
+  const std::string session = context.GetSessionState().lobbySessionId;
+  const nevr_game_server::LobbySettingsReport report = nevr_game_server::RelayLobbySettings(data, size, session, sinks);
+  const EchoVR::LogLevel level = report.level == nevr_game_server::LobbySettingsLogLevel::kWarning
+                                     ? EchoVR::LogLevel::Warning
+                                     : EchoVR::LogLevel::Info;
+  Log(level, "%s", report.line.c_str());
+  if (report.relayed) {
+    nevr_game_server::LobbySettingsRecord record;
+    record.present = true;
+    record.wireBytes = report.wireBytes;
+    record.jsonBytes = report.jsonBytes;
+    record.sessionId = session;
+    context.RecordLobbySettings(record);
+  }
+}
+
 void GameServerLib::RegisterTcpCallbacks() {
   auto& cb = m_context->GetCallbackRegistry();
 
@@ -756,10 +801,20 @@ void GameServerLib::RegisterTcpCallbacks() {
     } else if (msgId == SYM_LEGACY_PLAYERS_REJECTED) {
       // Skip legacy - handled by protobuf kLobbyEntrantReject
       Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Skipping legacy players rejected (handled via protobuf)");
+    } else if (msgId == TcpSym::LobbySettingsResponse) {
+      RelayLobbySettingsFrame(this, data, size);
     } else {
       Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Unhandled WebSocket msgId: 0x%llX (size: %llu)", msgId, size);
     }
   });
+
+  // A session boundary drops the record of the last lobby settings document and says what it dropped, so a session
+  // that never received one is visible in the log (#905).
+  m_context->SetLobbySettingsClearedHandler(
+      [](const nevr_game_server::LobbySettingsRecord& cleared, const char* reason, const std::string& sessionId) {
+        Log(EchoVR::LogLevel::Info, "%s",
+            nevr_game_server::FormatLobbySettingsCleared(cleared, reason, sessionId).c_str());
+      });
 
   // Re-register on WebSocket reconnection so nakama knows we're available for new sessions.
   // During level transitions the game engine stops calling Update(), messages pile up,
