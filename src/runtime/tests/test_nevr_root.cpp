@@ -42,9 +42,7 @@ unsigned Count(const std::vector<move::Event>& events, Outcome outcome) {
 }
 
 // A fresh tree per test, UTF-16 on purpose ("é", a CJK character): the user name in %LOCALAPPDATA% may not be ASCII.
-//   <base>\game\bin\win10\_local   the install's nearest _local        (local_[0])
-//   <base>\game\bin\_local         one parent up                       (local_[1])
-//   <base>\game\_local             two parents up                      (local_[2])
+//   <base>\game\bin\win10\_local   the install's _local, which the move must leave alone (install_local_)
 //   <base>\appdata\EchoVR\...      the original game's folder, where nEVR used to write logs and cosmetic packages
 //   <base>\appdata\nevr\echovr     the nevr root
 class NevrRootMove : public ::testing::Test {
@@ -56,7 +54,7 @@ class NevrRootMove : public ::testing::Test {
     base_ = std::wstring(tmp) + L"nevr-root-test-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
             std::wstring(test.begin(), test.end()) + L"-\u00e9\u4e2d";
     Wipe();
-    local_ = {base_ + L"\\game\\bin\\win10\\_local", base_ + L"\\game\\bin\\_local", base_ + L"\\game\\_local"};
+    install_local_ = base_ + L"\\game\\bin\\win10\\_local";
     legacy_logs_ = base_ + L"\\appdata\\EchoVR\\logs";
     legacy_cosmetics_ = base_ + L"\\appdata\\EchoVR\\cosmetics\\v1\\packages";
     root_ = nevr_root::RootUnder(base_ + L"\\appdata");
@@ -71,7 +69,6 @@ class NevrRootMove : public ::testing::Test {
   move::Inputs Inputs() const {
     move::Inputs in;
     in.root = root_;
-    in.local_dirs = local_;
     in.legacy_logs_dir = legacy_logs_;
     in.legacy_cosmetics_dir = legacy_cosmetics_;
     return in;
@@ -79,7 +76,6 @@ class NevrRootMove : public ::testing::Test {
 
   // The layout an older release left behind.
   void OldLayout() {
-    Write(local_[0] + L"\\config.yaml", "services: near");
     Write(legacy_logs_ + L"\\nevr-2026-10-01T10-00-00.000.jsonl", "{\"msg\":\"run log\"}\n");
     Write(legacy_logs_ + L"\\nevr-2026-10-01T10-00-00.001.log", "plain run log\n");
     Write(legacy_logs_ + L"\\nevr-crash-abc123.txt", "[NEVR.CRASH] record\n");
@@ -87,8 +83,7 @@ class NevrRootMove : public ::testing::Test {
     Write(legacy_cosmetics_ + L"\\hat.evrp", "package bytes");
   }
 
-  std::wstring base_, root_, legacy_logs_, legacy_cosmetics_;
-  std::vector<std::wstring> local_;
+  std::wstring base_, root_, install_local_, legacy_logs_, legacy_cosmetics_;
 };
 
 TEST(NevrRootPaths, EveryFolderIsUnderTheRootUnderLocalAppData) {
@@ -106,15 +101,6 @@ TEST(NevrRootPaths, AnUnresolvedRootStaysUnresolvedAllTheWayDown) {
   EXPECT_TRUE(none.empty());
   EXPECT_TRUE(nevr_root::LogsDir(none).empty());
   EXPECT_TRUE(nevr_root::CosmeticsDir(none).empty());
-  EXPECT_TRUE(nevr_root::ConfigYamlPath(std::wstring(), none).empty());
-}
-
-TEST(NevrRootPaths, ConfigYamlIsTheCustomFoldersOrTheRootsAndNeverASearch) {
-  const std::string root = "C:\\L\\nevr\\echovr";
-  EXPECT_EQ(nevr_root::ConfigYamlPath(std::string(), root), "C:\\L\\nevr\\echovr\\config.yaml");
-  EXPECT_EQ(nevr_root::ConfigYamlPath(std::string("D:\\srv\\one\\config.json"), root), "D:\\srv\\one\\config.yaml");
-  EXPECT_EQ(nevr_root::ConfigYamlPath(std::string("D:/srv/two/x.json"), root), "D:/srv/two/config.yaml");
-  EXPECT_EQ(nevr_root::ConfigYamlPath(std::string("x.json"), root), "config.yaml") << "a bare name is the working folder, not the root";
 }
 
 TEST(NevrRootPaths, RootWReadsLocalAppDataAndNothingElse) {
@@ -159,36 +145,34 @@ TEST_F(NevrRootMove, TheOldLayoutMovesIntoTheRootAndEachEmptiedFolderSaysWhy) {
   OldLayout();
   const std::vector<move::Event> events = move::Run(Inputs());
 
-  EXPECT_EQ(Count(events, Outcome::kMoved), 5u) << "config.yaml, three nEVR log files, one cosmetic package";
-  EXPECT_EQ(Count(events, Outcome::kMarkerWritten), 3u) << "the _local folder, the old logs folder and the old cosmetics folder";
-  EXPECT_EQ(ReadAll(root_ + L"\\config.yaml"), "services: near");
+  EXPECT_EQ(Count(events, Outcome::kMoved), 4u) << "three nEVR log files, one cosmetic package";
+  EXPECT_EQ(Count(events, Outcome::kMarkerWritten), 2u) << "the old logs folder and the old cosmetics folder";
   EXPECT_EQ(ReadAll(root_ + L"\\logs\\nevr-2026-10-01T10-00-00.000.jsonl"), "{\"msg\":\"run log\"}\n");
   EXPECT_EQ(ReadAll(root_ + L"\\logs\\nevr-2026-10-01T10-00-00.001.log"), "plain run log\n");
   EXPECT_EQ(ReadAll(root_ + L"\\logs\\nevr-crash-abc123.txt"), "[NEVR.CRASH] record\n");
   EXPECT_EQ(ReadAll(root_ + L"\\cosmetics\\v1\\packages\\hat.evrp"), "package bytes");
 
   // The old copies are gone: nothing reads them any more.
-  EXPECT_FALSE(Exists(local_[0] + L"\\config.yaml"));
   EXPECT_FALSE(Exists(legacy_logs_ + L"\\nevr-crash-abc123.txt"));
   EXPECT_FALSE(Exists(legacy_cosmetics_ + L"\\hat.evrp"));
   // What is not nEVR's stays.
   EXPECT_EQ(ReadAll(legacy_logs_ + L"\\other-tool.log"), "not ours\n");
 
-  for (const std::wstring& dir : {local_[0], legacy_logs_, legacy_cosmetics_}) {
+  for (const std::wstring& dir : {legacy_logs_, legacy_cosmetics_}) {
     const std::string marker = ReadAll(dir + L"\\MOVED-TO-NEVR-ROOT.txt");
     EXPECT_NE(marker.find("nevr\\echovr"), std::string::npos) << "the marker names the root";
   }
-  EXPECT_FALSE(Exists(local_[1] + L"\\MOVED-TO-NEVR-ROOT.txt")) << "a folder nothing was taken from gets no marker";
+  EXPECT_FALSE(Exists(install_local_ + L"\\MOVED-TO-NEVR-ROOT.txt")) << "a folder nothing was taken from gets no marker";
 }
 
 TEST_F(NevrRootMove, ASecondRunMovesNothing) {
   OldLayout();
   ASSERT_FALSE(move::Run(Inputs()).empty());
-  const std::string marker = ReadAll(local_[0] + L"\\MOVED-TO-NEVR-ROOT.txt");
+  const std::string marker = ReadAll(legacy_logs_ + L"\\MOVED-TO-NEVR-ROOT.txt");
   const std::vector<move::Event> again = move::Run(Inputs());
   EXPECT_TRUE(again.empty()) << "no file is left to move, so no event and no rewritten marker";
-  EXPECT_EQ(ReadAll(local_[0] + L"\\MOVED-TO-NEVR-ROOT.txt"), marker);
-  EXPECT_EQ(ReadAll(root_ + L"\\config.yaml"), "services: near");
+  EXPECT_EQ(ReadAll(legacy_logs_ + L"\\MOVED-TO-NEVR-ROOT.txt"), marker);
+  EXPECT_EQ(ReadAll(root_ + L"\\logs\\nevr-crash-abc123.txt"), "[NEVR.CRASH] record\n");
 }
 
 TEST_F(NevrRootMove, NothingToMoveCreatesNoRoot) {
@@ -197,34 +181,21 @@ TEST_F(NevrRootMove, NothingToMoveCreatesNoRoot) {
 }
 
 TEST_F(NevrRootMove, TheMoveNeverOverwritesAFileAlreadyInTheRoot) {
-  Write(root_ + L"\\config.yaml", "services: root");
-  Write(local_[0] + L"\\config.yaml", "services: old");
+  Write(root_ + L"\\logs\\nevr-crash-abc123.txt", "root copy");
+  Write(legacy_logs_ + L"\\nevr-crash-abc123.txt", "old copy");
   const std::vector<move::Event> events = move::Run(Inputs());
 
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].outcome, Outcome::kLeftRootHasIt);
-  EXPECT_EQ(ReadAll(root_ + L"\\config.yaml"), "services: root");
-  EXPECT_EQ(ReadAll(local_[0] + L"\\config.yaml"), "services: old") << "nothing is deleted that was not moved";
-  EXPECT_FALSE(Exists(local_[0] + L"\\MOVED-TO-NEVR-ROOT.txt")) << "nothing was moved, so no marker";
-}
-
-TEST_F(NevrRootMove, TheNearestLocalFolderWinsAndTheFartherOnesAreLeft) {
-  Write(local_[0] + L"\\config.yaml", "near");
-  Write(local_[1] + L"\\config.yaml", "parent");
-  Write(local_[2] + L"\\config.yaml", "grandparent");
-  const std::vector<move::Event> events = move::Run(Inputs());
-
-  EXPECT_EQ(ReadAll(root_ + L"\\config.yaml"), "near");
-  EXPECT_EQ(Count(events, Outcome::kMoved), 1u);
-  EXPECT_EQ(Count(events, Outcome::kLeftRootHasIt), 2u);
-  EXPECT_EQ(ReadAll(local_[1] + L"\\config.yaml"), "parent");
-  EXPECT_EQ(ReadAll(local_[2] + L"\\config.yaml"), "grandparent");
+  EXPECT_EQ(ReadAll(root_ + L"\\logs\\nevr-crash-abc123.txt"), "root copy");
+  EXPECT_EQ(ReadAll(legacy_logs_ + L"\\nevr-crash-abc123.txt"), "old copy") << "nothing is deleted that was not moved";
+  EXPECT_FALSE(Exists(legacy_logs_ + L"\\MOVED-TO-NEVR-ROOT.txt")) << "nothing was moved, so no marker";
 }
 
 TEST_F(NevrRootMove, AFileThatCannotBeMovedStaysAndTheNextRunMovesIt) {
-  Write(local_[0] + L"\\config.yaml", "services: near");
-  HANDLE hold = CreateFileW((local_[0] + L"\\config.yaml").c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING,
-                            FILE_ATTRIBUTE_NORMAL, nullptr);
+  const std::wstring log = legacy_logs_ + L"\\nevr-2026-10-01T10-00-00.000.jsonl";
+  Write(log, "run log");
+  HANDLE hold = CreateFileW(log.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   ASSERT_NE(hold, INVALID_HANDLE_VALUE);
 
   const std::vector<move::Event> events = move::Run(Inputs());
@@ -233,22 +204,22 @@ TEST_F(NevrRootMove, AFileThatCannotBeMovedStaysAndTheNextRunMovesIt) {
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].outcome, Outcome::kLeftMoveFailed);
   EXPECT_NE(events[0].error, 0ul);
-  EXPECT_EQ(ReadAll(local_[0] + L"\\config.yaml"), "services: near");
-  EXPECT_FALSE(Exists(root_ + L"\\config.yaml"));
-  EXPECT_FALSE(Exists(local_[0] + L"\\MOVED-TO-NEVR-ROOT.txt")) << "the marker says files moved; none did";
+  EXPECT_EQ(ReadAll(log), "run log");
+  EXPECT_FALSE(Exists(root_ + L"\\logs\\nevr-2026-10-01T10-00-00.000.jsonl"));
+  EXPECT_FALSE(Exists(legacy_logs_ + L"\\MOVED-TO-NEVR-ROOT.txt")) << "the marker says files moved; none did";
 
   EXPECT_EQ(Count(move::Run(Inputs()), Outcome::kMoved), 1u);
-  EXPECT_EQ(ReadAll(root_ + L"\\config.yaml"), "services: near");
+  EXPECT_EQ(ReadAll(root_ + L"\\logs\\nevr-2026-10-01T10-00-00.000.jsonl"), "run log");
 }
 
 TEST_F(NevrRootMove, ARootThatCannotBeCreatedMovesNothingAndSaysSo) {
-  Write(local_[0] + L"\\config.yaml", "services: near");
+  Write(legacy_logs_ + L"\\nevr-crash-abc123.txt", "[NEVR.CRASH] record\n");
   Write(base_ + L"\\appdata\\nevr", "a file where the root's parent folder belongs");
   const std::vector<move::Event> events = move::Run(Inputs());
 
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].outcome, Outcome::kRootUnavailable);
-  EXPECT_EQ(ReadAll(local_[0] + L"\\config.yaml"), "services: near");
+  EXPECT_EQ(ReadAll(legacy_logs_ + L"\\nevr-crash-abc123.txt"), "[NEVR.CRASH] record\n");
 }
 
 TEST_F(NevrRootMove, WithoutARootTheMoveDoesNothing) {
@@ -256,18 +227,22 @@ TEST_F(NevrRootMove, WithoutARootTheMoveDoesNothing) {
   move::Inputs in = Inputs();
   in.root.clear();
   EXPECT_TRUE(move::Run(in).empty());
-  EXPECT_TRUE(Exists(local_[0] + L"\\config.yaml"));
+  EXPECT_TRUE(Exists(legacy_logs_ + L"\\nevr-crash-abc123.txt"));
 }
 
-TEST_F(NevrRootMove, TheCredentialCacheIsNotMovedHere) {
-  Write(local_[0] + L"\\.credentials.json", "{\"refresh_token\":\"x\"}");
-  Write(local_[0] + L"\\config.yaml", "services: near");
+TEST_F(NevrRootMove, NothingInTheInstallsLocalFolderIsMoved) {
+  Write(install_local_ + L"\\config.yaml", "services: near");
+  Write(install_local_ + L"\\.credentials.json", "{\"refresh_token\":\"x\"}");
+  OldLayout();
   move::Run(Inputs());
-  EXPECT_TRUE(Exists(local_[0] + L"\\.credentials.json"));
+  EXPECT_EQ(ReadAll(install_local_ + L"\\config.yaml"), "services: near") << "config.yaml keeps its resolution (ADR 0012 step 6)";
+  EXPECT_TRUE(Exists(install_local_ + L"\\.credentials.json"));
+  EXPECT_FALSE(Exists(root_ + L"\\config.yaml"));
   EXPECT_FALSE(Exists(root_ + L"\\.credentials.json"));
+  EXPECT_FALSE(Exists(install_local_ + L"\\MOVED-TO-NEVR-ROOT.txt"));
 }
 
-TEST(NevrRootMoveEnvironment, TheInputsComeFromLocalAppDataAndTheGameFolder) {
+TEST(NevrRootMoveEnvironment, TheInputsComeFromLocalAppData) {
   wchar_t saved[MAX_PATH * 2] = {};
   const DWORD had = GetEnvironmentVariableW(L"LOCALAPPDATA", saved, static_cast<DWORD>(sizeof(saved) / sizeof(saved[0])));
   SetEnvironmentVariableW(L"LOCALAPPDATA", L"C:\\Users\\u\\AppData\\Local");
@@ -275,10 +250,6 @@ TEST(NevrRootMoveEnvironment, TheInputsComeFromLocalAppDataAndTheGameFolder) {
   EXPECT_EQ(in.root, L"C:\\Users\\u\\AppData\\Local\\nevr\\echovr");
   EXPECT_EQ(in.legacy_logs_dir, L"C:\\Users\\u\\AppData\\Local\\EchoVR\\logs");
   EXPECT_EQ(in.legacy_cosmetics_dir, L"C:\\Users\\u\\AppData\\Local\\EchoVR\\cosmetics\\v1\\packages");
-  ASSERT_EQ(in.local_dirs.size(), 3u);
-  EXPECT_NE(in.local_dirs[0].find(L"\\_local"), std::wstring::npos);
-  EXPECT_NE(in.local_dirs[1].find(L"..\\_local"), std::wstring::npos);
-  EXPECT_NE(in.local_dirs[2].find(L"..\\..\\_local"), std::wstring::npos);
   SetEnvironmentVariableW(L"LOCALAPPDATA", nullptr);
   EXPECT_TRUE(move::InputsFromEnvironment().root.empty());
   if (had != 0) SetEnvironmentVariableW(L"LOCALAPPDATA", saved);

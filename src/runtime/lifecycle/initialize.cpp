@@ -372,8 +372,8 @@ static VOID InitializeAfterGameImageGuard() {
   // Where this run is hosted (#673): a crash report names the Wine version without a second question.
   // Boot phase (the tee is open, the game's CLog is not): Get() touches only ntdll and kernel32, as at the mic-policy line below.
   nevr_boot_log_tee::TeeFprintf("%s", nevr_host_environment::BootLine(nevr_system_info::Get()).c_str());
-  // The nevr root (ADR 0012, #857): move what an older release left in _local and %LOCALAPPDATA%\EchoVR into it before the
-  // config, the log or any cache is opened. Win32 file calls and Log() (the boot tee while the boot phase lasts) only.
+  // The nevr root (ADR 0012, #857): move what an older release left in %LOCALAPPDATA%\EchoVR into it before the
+  // log or any cache is opened. Win32 file calls and Log() (the boot tee while the boot phase lasts) only.
   nevr_root_move::RunAndLog();
   EchoVR::InitializeFunctionPointers();
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] function pointers resolved\n");

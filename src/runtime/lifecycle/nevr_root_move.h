@@ -1,8 +1,8 @@
 // nevr_root_move.h: the one-time move of nEVR's own files into the nevr root (ADR 0012 "The one-time move", #857).
 //
-// Before this change nEVR read config.yaml from the install's _local folders and wrote its run log, crash record and cosmetic
-// packages under %LOCALAPPDATA%\EchoVR. The first run that finds those files moves them to %LOCALAPPDATA%\nevr\echovr and leaves
-// MOVED-TO-NEVR-ROOT.txt in each folder it took something from, so a player or support can see why the folder is empty. The move
+// Before this change nEVR wrote its run log, crash record and cosmetic packages under %LOCALAPPDATA%\EchoVR. The first run that
+// finds those files moves them to %LOCALAPPDATA%\nevr\echovr and leaves MOVED-TO-NEVR-ROOT.txt in each folder it took something
+// from, so a player or support can see why the folder is empty. It moves nothing out of the install's _local folders. The move
 // never overwrites a file already in the root, is safe to run twice, leaves a file where it is (with an event saying why) when it
 // cannot move it, and deletes nothing that it did not move. Run() takes every folder as an input and returns what it did, so the
 // tests drive it against a temp tree; RunAndLog() is the one call the runtime makes.
@@ -31,7 +31,6 @@ struct Event {
 
 struct Inputs {
   std::wstring root;                     // %LOCALAPPDATA%\nevr\echovr; empty: the move does nothing
-  std::vector<std::wstring> local_dirs;  // the install's _local folders, nearest first (the old config.yaml search order)
   std::wstring legacy_logs_dir;          // %LOCALAPPDATA%\EchoVR\logs
   std::wstring legacy_cosmetics_dir;     // %LOCALAPPDATA%\EchoVR\cosmetics\v1\packages
 };

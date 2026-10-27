@@ -24,7 +24,6 @@
 #include "abi/echovr_functions.h"         // EchoVR::g_GameBaseAddress
 #include "core/logging.h"                 // Log()
 #include "core/nevr_config.h"
-#include "core/nevr_root.h"
 #include "generated/nevr_builtin_defaults.h"  // build-tree only; values from config/public-defaults.env
 
 #ifdef NEVR_TEST_HOOKS
@@ -62,16 +61,43 @@ bool IsServerMode() {
 }
 
 // --- config.yaml discovery -------------------------------------------------
-// The one file a run reads (nevr_root::ConfigYamlPath, ADR 0012): config.yaml in the folder of the -config/-config-path file
-// when one was given (by first access g_customConfigPath is parsed), otherwise the nevr root's. The install's _local folders
-// are not searched: the one-time move (nevr_root_move) took their config.yaml to the root. "" if the file does not exist; the
-// caller names `*searched` in its warning so a missing file says where it looked.
-std::string FindNevrConfigYamlPath(std::string* searched) {
-  const std::string wanted = nevr_root::ConfigYamlPath(std::string(g_customConfigPath), nevr_root::RootA());
-  if (searched != nullptr) *searched = wanted;
-  if (wanted.empty()) return std::string();
-  std::ifstream f(wanted, std::ios::binary);
-  return f.good() ? wanted : std::string();
+// Mirrors LoadEarlyConfig's search for config.json (config.cpp): _local next to
+// the game module, then one and two parents up. Additionally honours an explicit
+// -config/-config-path directory when one was given (LoadEarlyConfig itself does
+// not, but by first-access time g_customConfigPath is parsed, so we can). First
+// existing file wins; "" if none is found.
+std::string FindNevrConfigYamlPath() {
+  CHAR moduleDir[MAX_PATH] = {0};
+  GetModuleFileNameA(reinterpret_cast<HMODULE>(EchoVR::g_GameBaseAddress), moduleDir, MAX_PATH);
+  if (CHAR* lastSlash = strrchr(moduleDir, '\\')) *(lastSlash + 1) = '\0';
+
+  std::vector<std::string> candidates;
+
+  // An explicit -config/-config-path override: look for config.yaml in the same
+  // directory as the named path.
+  if (g_customConfigPath[0] != '\0') {
+    std::string cp(g_customConfigPath);
+    const std::size_t slash = cp.find_last_of("\\/");
+    const std::string dir = (slash == std::string::npos) ? std::string() : cp.substr(0, slash + 1);
+    candidates.push_back(dir + "config.yaml");
+  }
+
+  const char* rel[] = {
+      "%s_local\\config.yaml",
+      "%s..\\_local\\config.yaml",
+      "%s..\\..\\_local\\config.yaml",
+  };
+  for (const char* r : rel) {
+    CHAR p[MAX_PATH] = {0};
+    snprintf(p, MAX_PATH, r, moduleDir);
+    candidates.push_back(p);
+  }
+
+  for (const std::string& c : candidates) {
+    std::ifstream f(c, std::ios::binary);
+    if (f.good()) return c;
+  }
+  return std::string();
 }
 
 // The one parsed config.yaml, loaded lazily on first access. Thread-safe init via
@@ -100,12 +126,10 @@ const nevr::NevrConfig& NevrCfg() {
   if (g_testInputsSet && g_testConfig != nullptr) return *g_testConfig;
 #endif
   static const nevr::NevrConfig cfg = []() -> nevr::NevrConfig {
-    std::string searched;
-    const std::string path = FindNevrConfigYamlPath(&searched);
+    const std::string path = FindNevrConfigYamlPath();
     if (path.empty()) {
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.CONFIG] no config.yaml found at %s — NEVR config keys use built-in defaults",
-          searched.empty() ? "(no nevr root: LOCALAPPDATA is unset)" : searched.c_str());
+          "[NEVR.CONFIG] no config.yaml found — NEVR config keys use built-in defaults");
       return nevr::NevrConfig();
     }
     try {

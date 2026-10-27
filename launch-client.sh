@@ -60,9 +60,8 @@ LOCAL_DIR="$GAME_ROOT/echovr/_local"
 [[ -d "$GAME_DIR" ]] || { echo "ERROR: no game install at $GAME_DIR (set NEVR_GAME_ROOT to the checkout that has echovr/)" >&2; exit 2; }
 SCRATCH="${NEVR_RUN_SCRATCH_ROOT:-$NEVR_WORK_ROOT}/client-run-$(date +%Y%m%dT%H%M%S)"
 WINEPREFIX="$GAME_ROOT/echovr/.wineprefix"
-# The nevr root of the prefix's Windows user (src/core/nevr_root.h, ADR 0012): the run log, config.yaml and the caches live under it.
-NEVR_ROOT_DIR="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/nevr/echovr"
-LOGDIR="$NEVR_ROOT_DIR/logs"
+# The nevr root of the prefix's Windows user (src/core/nevr_root.h, ADR 0012): the run log and the caches live under it.
+LOGDIR="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/nevr/echovr/logs"
 
 acquire_game_run_lock
 
@@ -77,8 +76,7 @@ export WINEPREFIX
 # before anything is deployed. The runtime reads config.yaml and ignores config.json;
 # with neither present it must start on its built-in defaults.
 drift=0
-# config.yaml is read from the root (not _local), so a copy in either place is a leftover that sets the run's config.
-for f in "$LOCAL_DIR/config.json" "$LOCAL_DIR/config.yaml" "$NEVR_ROOT_DIR/config.yaml"; do
+for f in "$LOCAL_DIR/config.json" "$LOCAL_DIR/config.yaml"; do
   if [[ -e "$f" || -L "$f" ]]; then echo "DRIFT: $f exists (expected absent)" >&2; drift=1; fi
 done
 shopt -s nullglob

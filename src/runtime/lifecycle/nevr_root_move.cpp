@@ -50,9 +50,6 @@ bool EndsWith(const std::wstring& s, const std::wstring& suffix) {
   return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
-// What nEVR keeps in an install's _local folder.
-std::vector<const wchar_t*> LocalFileNames() { return {Names::kConfigYaml}; }
-
 std::string ToUtf8(const std::wstring& wide) {
   if (wide.empty()) return std::string();
   const int needed = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
@@ -96,14 +93,6 @@ std::vector<Event> Run(const Inputs& inputs) {
   if (inputs.root.empty()) return events;
 
   std::vector<Source> sources;
-  for (const std::wstring& dir : inputs.local_dirs) {
-    Source source{dir, {}};
-    for (const wchar_t* name : LocalFileNames()) {
-      const std::wstring from = nevr_root::Join(dir, name);
-      if (Exists(from)) source.items.push_back({from, nevr_root::Join(inputs.root, name)});
-    }
-    sources.push_back(std::move(source));
-  }
   {
     Source logs{inputs.legacy_logs_dir, {}};
     const std::wstring to_dir = nevr_root::LogsDir(inputs.root);
@@ -169,18 +158,6 @@ Inputs InputsFromEnvironment() {
     const std::wstring base = nevr_root::Join(std::wstring(local, n), L"EchoVR");
     inputs.legacy_logs_dir = nevr_root::Join(base, L"logs");
     inputs.legacy_cosmetics_dir = nevr_root::Join(base, L"cosmetics\\v1\\packages");
-  }
-
-  // The game executable's folder, and the two _local folders above it: the search order config.yaml had.
-  wchar_t exe[MAX_PATH * 2] = {};
-  const DWORD len = GetModuleFileNameW(nullptr, exe, static_cast<DWORD>(sizeof(exe) / sizeof(exe[0])));
-  if (len != 0 && len < sizeof(exe) / sizeof(exe[0])) {
-    std::wstring dir(exe, len);
-    const std::size_t slash = dir.find_last_of(Names::kSeparators);
-    if (slash != std::wstring::npos) {
-      dir.resize(slash + 1);
-      inputs.local_dirs = {dir + L"_local", dir + L"..\\_local", dir + L"..\\..\\_local"};
-    }
   }
   return inputs;
 }

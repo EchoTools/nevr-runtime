@@ -1,6 +1,6 @@
 # ADR 0012: the install folder is static; nEVR's runtime, plugins and state live in `%LOCALAPPDATA%\nevr\echovr`
 
-Status: proposed (#575, tracking issue #799). Of the "Order of work", step 2 (the target split) is built, and of step 5 the root, the one-time move and the resolution of `config.yaml`, `logs\`, `crashes\` and the caches (`core/nevr_root.h`, `lifecycle/nevr_root_move.cpp`); nothing else in the "Decision" section is. ADR 0010 and ADR 0011 are accepted and
+Status: proposed (#575, tracking issue #799). Of the "Order of work", step 2 (the target split) is built, and of step 5 the root, the one-time move and the resolution of `logs\`, `crashes\` and the caches (`core/nevr_root.h`, `lifecycle/nevr_root_move.cpp`); nothing else in the "Decision" section is. ADR 0010 and ADR 0011 are accepted and
 neither is superseded by this record. **It amends ADR 0008 (`0008-bugsplat-host-and-nevr-runtime.md`) in three places:** `nevr-runtime.dll`
 loads from the root, not from the directory of `BugSplat64.dll`; a refused or missing `nevr-runtime.dll` stops the game, where ADR 0008
 lets it run without the runtime; and the host's log gains a `versions` event. "Relation to other records" says which text of ADR 0008 each replaces. What exists today is named

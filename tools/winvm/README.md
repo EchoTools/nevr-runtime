@@ -93,8 +93,6 @@ Artifacts (`stdout.txt`, `windows.txt`, `results.txt`, the probe output) go to
 - The offline rig also writes `_local\config.yaml` with `services.socket_uri: ""` and
   `services.allow_offline_server: true`. The empty socket_uri keeps the server off the embedded endpoint (#843);
   a server with no socket_uri at all exits at start-up unless allow_offline_server is set (#16).
-  The runtime reads `config.yaml` from the nevr root (`%LOCALAPPDATA%\nevr\echovr`, ADR 0012), not from `_local`, so the
-  rig's copy is read only once the rig points the runtime at its own root (the dev-only `NEVR_ROOT` of ADR 0012 step 4).
 
 ## Adding a check
 

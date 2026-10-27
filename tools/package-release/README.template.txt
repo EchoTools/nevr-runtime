@@ -29,7 +29,7 @@ Running a dedicated server
   It starts echovr.exe -server -headless -no-console from its own folder and passes any arguments on. A server
   has no built-in service settings yet (issue #843), so it needs a config file that sets services.socket_uri,
   and without one it exits.
-  Create %LOCALAPPDATA%\nevr\echovr\config.yaml. The smallest one that works:
+  Create ...\ready-at-dawn-echo-arena\_local\config.yaml. The smallest one that works:
 
        services:
          socket_uri: "wss://<the game service's websocket address>"

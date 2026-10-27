@@ -2,8 +2,9 @@
 
 Source-shape sensors (the behaviour is src/runtime/tests/test_nevr_root.cpp, run under Wine):
 
-  - the run log, the crash record, the asset cache, the cosmetic packages and config.yaml each name nevr_root, and none of
-    those files names the original game's %LOCALAPPDATA%\\EchoVR folder or an install _local\\config.yaml;
+  - the run log, the crash record, the asset cache and the cosmetic packages each name nevr_root, and none of those files names
+    the original game's %LOCALAPPDATA%\\EchoVR folder; config.yaml and the credential cache are not moved by this change
+    (ADR 0012 steps 6 and 5's credential part), and the move reads nothing from an install's _local folders;
   - initialize.cpp runs the move after the boot log opens and before the main log, the config or any cache is opened;
   - the host's own folder names are tied to the same names at compile time;
   - the test target exists and both justfile lists run it.
@@ -28,7 +29,6 @@ class EveryWriterUsesTheRoot(unittest.TestCase):
         sites = (
             ("src/runtime/log/builtin_filter.cpp", "static std::string GetDefaultLogDir(", "nevr_root::LogsDir("),
             ("src/runtime/lifecycle/crash_recovery.cpp", "static void PrepareCrashRecordPath(", "nevr_root::LogsDir("),
-            ("src/runtime/lifecycle/service_config.cpp", "std::string FindNevrConfigYamlPath(", "nevr_root::ConfigYamlPath("),
             ("src/runtime/patch/asset_cache.cpp", "std::wstring DefaultDir(", "nevr_root::CacheDir("),
             ("src/runtime/patch/asset_cdn.cpp", "std::string nevr_asset_cdn::GetCacheDir(", "nevr_root::CosmeticsDir("),
         )
@@ -36,11 +36,10 @@ class EveryWriterUsesTheRoot(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn(call, extract_braced_function(read(path), signature))
 
-    def test_no_writer_names_the_original_games_folder_or_a_local_config_yaml(self):
+    def test_no_writer_names_the_original_games_folder(self):
         for path in (
             "src/runtime/log/builtin_filter.cpp",
             "src/runtime/lifecycle/crash_recovery.cpp",
-            "src/runtime/lifecycle/service_config.cpp",
             "src/runtime/patch/asset_cache.cpp",
             "src/runtime/patch/asset_cdn.cpp",
         ):
@@ -49,16 +48,6 @@ class EveryWriterUsesTheRoot(unittest.TestCase):
                 self.assertNotIn("EchoVR\\\\logs", code)
                 self.assertNotIn("\\\\EchoVR\\\\", code)
                 self.assertNotIn("cosmetics\\\\v1", code, "the cosmetics folder is named once, in nevr_root.h")
-                self.assertNotIn("_local\\\\config.yaml", code)
-
-    def test_the_config_search_has_no_install_folder_candidates(self):
-        body = extract_braced_function(read("src/runtime/lifecycle/service_config.cpp"), "std::string FindNevrConfigYamlPath(")
-        self.assertNotIn("_local", body)
-        self.assertNotIn("GetModuleFileName", body)
-
-    def test_a_missing_config_yaml_names_where_it_looked(self):
-        source = strip_comments(read("src/runtime/lifecycle/service_config.cpp"))
-        self.assertRegex(source, r"no config\.yaml found at %s")
 
 
 class TheMoveRunsFirst(unittest.TestCase):
@@ -74,6 +63,16 @@ class TheMoveRunsFirst(unittest.TestCase):
         code = read("src/runtime/lifecycle/initialize.cpp")
         self.assertIn("%%LOCALAPPDATA%%\\\\nevr\\\\echovr\\\\logs\\\\nevr-<timestamp>.jsonl", code)
         self.assertNotIn("%%LOCALAPPDATA%%\\\\EchoVR", code)
+
+    def test_the_move_takes_nothing_from_the_installs_local_folders(self):
+        code = strip_comments(read("src/runtime/lifecycle/nevr_root_move.cpp"))
+        self.assertNotIn("_local", code)
+        self.assertNotIn("config.yaml", code)
+        self.assertNotIn("local_dirs", code)
+
+    def test_config_yaml_keeps_its_resolution(self):
+        code = strip_comments(read("src/runtime/lifecycle/service_config.cpp"))
+        self.assertNotIn("nevr_root", code, "where config.yaml lives is ADR 0012 step 6")
 
     def test_the_move_never_overwrites_and_deletes_nothing(self):
         code = strip_comments(read("src/runtime/lifecycle/nevr_root_move.cpp"))
