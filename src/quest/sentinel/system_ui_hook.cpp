@@ -7,6 +7,7 @@ namespace nevr_quest::system_ui {
 
 namespace {
 
+using sentinel::pinned::LibR15ShowSystemUIThunk;
 using sentinel::pinned::OvrJavaOpaque;
 
 sentinel::GotHook g_hook;
