@@ -319,6 +319,23 @@ inline constexpr PageName kPageNames[] = {
 };
 }  // namespace ui_layout
 
+// CR15VRMenuWidgetCS::Update(), the pointer-ray menu widget's per-frame update, defined in libr15 at pinned 0x199a7a0
+// (ReVault 0x209a7a0 = pinned + 0x100000; `revault_function 0x209a7a0`). The engine registers its address
+// (R15RegisterComponentSystemUpdates), so no GOT slot names it: the splash skip hooks the entry (inline, arm64).
+// Its first four words are `sub sp,sp,#0x110; stp d9,d8; stp x28,x26; stp x25,x24`; the widget fields the hook
+// reads (ctx +0x80, defs +0xb8, dense +0xf8, links +0x100, bounds +0xf2/+0xf4, input +0x138) are the ones the
+// update itself reads (the PC twin's offsets, checked against this decompilation).
+inline constexpr std::uint64_t kWidgetUpdateVaddr = 0x199a7a0;
+inline constexpr std::uint32_t kWidgetUpdateCode[4] = {0xd10443ffu, 0x6d0b23e9u, 0xa90c6bfcu, 0xa90d63f9u};
+
+// NRadEngine::CInputListener::Pressed(state, id), the body behind the thunk at pinned 0x1037be0 (its `br` goes to
+// pinned 0x2539920; ReVault 0x2639920). It reads the button table at state+0x80/+0x50 and returns bit 2 of the entry's
+// flags at +0x230 (set for one input step when the button became active): the same predicate the PC splash skip
+// reads at 0x140f9b770. The id arrives in x1; the decompilation does not show it. Reached like QuitOnError.
+inline constexpr std::uint64_t kInputPressedVaddr = 0x2539920;
+inline constexpr std::uint32_t kInputPressedCode[4] = {0xf940400au, 0xb400024au, 0xf9402808u, 0xaa1f03e9u};
+using InputPressedSig = std::uint32_t(void* state, std::uint64_t id);
+
 // NRadEngine::NRadGame::CR15NetGame::Update(unsigned long long), defined in libr15 at 0x1294b40,
 // called from CR15Game::UpdateGame (bl at 0x11fb5cc, the only call site, up to four times per
 // game-loop iteration with UpdateGame's own argument;
