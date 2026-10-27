@@ -75,6 +75,10 @@ set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/resource_re
 target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_quality_hook.cpp")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_quality_hook.cpp"
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# And the #928 clock-levels hook's counters (also without exceptions).
+target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/clock_levels_hook.cpp")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/clock_levels_hook.cpp"
+  PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
 # Sensor controls, never run: tests/quest frames_sensor_test.go reads them. Both hooks have a handler that
 # calls a helper with a personality directly; only in frames_probe_ok is the helper annotated.

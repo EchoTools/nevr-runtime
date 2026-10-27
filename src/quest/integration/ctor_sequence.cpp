@@ -27,6 +27,7 @@ const char* StepName(StepId id) {
     case StepId::kRegisterObbSkipCounters: return "register_obb_skip_counters";
     case StepId::kRegisterResourceRequestCounters: return "register_resource_request_counters";
     case StepId::kRegisterTextureQualityCounters: return "register_texture_quality_counters";
+    case StepId::kRegisterClockLevelsCounters: return "register_clock_levels_counters";
     case StepId::kStartReporter: return "start_reporter";
     case StepId::kInstallClockHook: return "install_clock_hook";
     case StepId::kInstallObbSkip: return "install_obb_skip";
@@ -36,6 +37,7 @@ const char* StepName(StepId id) {
     case StepId::kInstallResourceRequestLog: return "install_resource_request_log";
     case StepId::kInstallTextureQuality: return "install_texture_quality";
     case StepId::kInstallCreditsText: return "install_credits_text";
+    case StepId::kInstallClockLevels: return "install_clock_levels";
     case StepId::kStartTokenAuth: return "start_token_auth";
     case StepId::kInstallLoginPrompt: return "install_login_prompt";
     case StepId::kStartBridge: return "start_bridge";
@@ -170,6 +172,10 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     } else {
       r.Skip(StepId::kRegisterTextureQualityCounters, "stock");
     }
+    // The clock-level hook (#928) is installed on every launch (the switch decides only whether it rewrites), so its counters
+    // are registered on every launch too.
+    const bool clockLevelsCounters =
+        r.Run(StepId::kRegisterClockLevelsCounters, [&] { return steps.RegisterClockLevelsCounters(); });
     r.Run(StepId::kStartReporter, [&] { return steps.StartReporter(); });
 
     r.Run(StepId::kInstallClockHook, [&] { return steps.InstallClockHook(); });
@@ -228,6 +234,20 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // The project section of the CREDITS page (#970): every launch, no counters; it points two libr15 cursor stores at a
     // buffer the sentinel builds, so it runs before the page can be opened.
     r.Run(StepId::kInstallCreditsText, [&] { return steps.InstallCreditsText(); });
+
+    // The CPU and GPU clock levels libr15 asks VrApi for (#928): every launch. libr15 makes the call when it enters VR mode,
+    // long after the constructor. The switch is the resolved `diagnostics.clock_levels_override`; it is off when the
+    // configuration could not be resolved.
+    if (!clockLevelsCounters) {
+      try {
+        steps.InstallClockLevels(false, want.clockLevels);  // the hook's own rule logs that it installs nothing
+      } catch (const std::exception&) {
+        // Contained like every step; the outcome is the skip below either way.
+      }
+      r.Skip(StepId::kInstallClockLevels, "counters_refused");
+    } else {
+      r.Run(StepId::kInstallClockLevels, [&] { return steps.InstallClockLevels(true, want.clockLevels); });
+    }
 
     bool tokenOk = false;
     if (wantTokenAuth) {

@@ -356,8 +356,8 @@ an atomic counter, and a reporter thread (`hook_report.h`, created from the cons
 first hook is installed) logs "reporter_started", then a counter's first change within the first
 10 seconds, then "never_fired" once for each counter still zero when that window closes (the hook
 is installed and the game never called it), and from then on one pass a minute that logs a counter
-only if it changed. The counter table holds 96 counters for the whole program (`sentinel::kMaxReportCounters`), and every
-`RegisterReportCounter` call must come before `StartReporter` (a later registration, or the 97th, is
+only if it changed. The counter table holds 128 counters for the whole program (`sentinel::kMaxReportCounters`), and every
+`RegisterReportCounter` call must come before `StartReporter` (a later registration, or the 129th, is
 refused and logged as `register_refused` with its `reason`: `reporter_running`, `table_full` or
 `null_argument`). The constructor therefore registers every counter first and starts the reporter once;
 `StopReporter` forgets the table, so a Stop, Register, Start sequence loses the counters registered before

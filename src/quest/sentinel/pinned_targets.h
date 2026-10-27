@@ -45,6 +45,7 @@ inline constexpr const char* kFindMethodSymbol = "_ZN10NRadEngine10CSysModule10F
 inline constexpr const char* kGetDeviceExtensionsVulkanSymbol = "vrapi_GetDeviceExtensionsVulkan";
 inline constexpr const char* kGetSystemPropertyIntSymbol = "vrapi_GetSystemPropertyInt";
 inline constexpr const char* kShowSystemUISymbol = "vrapi_ShowSystemUI";
+inline constexpr const char* kSetClockLevelsSymbol = "vrapi_SetClockLevels";
 inline constexpr const char* kEnablePageNodeEnterSymbol =
     "_ZN10NRadEngine8NRadGame25CR15UIPage2EnablePageNode5EnterERKNS0_29SR15UIPage2EnablePageNodeDataE";
 
@@ -211,6 +212,17 @@ inline constexpr FillCallSite kFillCallSites[] = {
     {0x18e39f0, "mip_request"},        // CGTextureCache::RequestNewMipmaps, per streamed mip
     {0x18e661c, "force_load_all_mips"} // CGTextureResource::BeginForceLoadAllMips
 };
+// VrApi.h: ovrResult vrapi_SetClockLevels(ovrMobile* ovr, const int32_t cpuLevel, const int32_t gpuLevel). libr15 has one
+// call site, CVR::UpdateTracking (bl at 0x1a71cc8, through the PLT stub at 0xedfe10: `adrp x16, 0x36c7000; ldr x17,
+// [x16, #0x5f0]; br x17`), right after vrapi_EnterVrMode (bl at 0x1a71c84) returned a session: so once per entry into VR
+// mode, not per frame. The levels are the mov immediates before it: w1/w2 = 5 when CGRenderConfig::StablePowerState()
+// (bl at 0x1a71c90) returns non-zero, else 2 (0x1a71cbc/0x1a71cc0). x0 is the session the game just stored at
+// [x24] (0x37a33f0 + 0, the CVR session pointer). The result (w0) is not read by the caller. Imported (value 0):
+// JUMP_SLOT 0x36c75f0.
+struct OvrMobileOpaque;
+using SetClockLevelsSig = std::int32_t(OvrMobileOpaque* ovr, std::int32_t cpu_level, std::int32_t gpu_level);
+struct LibR15SetClockLevelsTag {};
+using LibR15SetClockLevelsThunk = CallbackThunk<LibR15SetClockLevelsTag, SetClockLevelsSig>;
 
 // android_main(android_app*), defined in libr15 at 0xf784c4 and called by the native-activity glue's thread entry
 // through libr15's own PLT (`mov x0, x19; bl 0xf27bc0` at 0xf79a4c; the stub loads JUMP_SLOT 0x36eb4c8). The glue
@@ -513,6 +525,12 @@ inline GotTarget LibR15ShowSystemUI() {
 // `readelf -rW` on the pinned image; the PLT stub at 0xf30730 loads it).
 inline GotTarget LibR15FillResourceFileRequest() {
   return {kLibR15, kFillResourceFileRequestSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36efa80ULL};
+}
+
+// libr15.so's slot for the VrApi clock-level import (JUMP_SLOT 0x36c75f0, `readelf -rW` on the pinned image: `R_AARCH64_JUMP_SLOT
+// 0 vrapi_SetClockLevels`; imported, value 0).
+inline GotTarget LibR15SetClockLevels() {
+  return {kLibR15, kSetClockLevelsSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c75f0ULL};
 }
 
 // libpnsradmatchmaking.so's slot for the same function, defined in

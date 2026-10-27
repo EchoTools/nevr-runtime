@@ -40,6 +40,9 @@ constexpr const char* kTextureQualityKey = "graphics.texture_quality";          
 constexpr const char* kTextureQualitySection = "graphics";
 constexpr const char* kTextureQualityName = "texture_quality";  // the one key `graphics` has
 constexpr std::size_t kMaxUnknownKeyWarnings = 8;  // a file full of unknown keys must not flood the log
+// Quest only (default true in this build). The top level is `diagnostics`, not `features`: nevr_config rejects a file with an
+// unknown top-level key (src/core/nevr_config.cpp AllowedTopLevelKeys), and the PC accepts `diagnostics` and reads nothing.
+constexpr const char* kClockLevelsOverrideKey = "diagnostics.clock_levels_override";
 
 struct FeatureSpec {
   const char* name;
@@ -47,7 +50,7 @@ struct FeatureSpec {
   bool Features::*flag;
 };
 
-constexpr std::array<FeatureSpec, 8> kFeatures = {{
+constexpr std::array<FeatureSpec, 9> kFeatures = {{
     {"redirect", Feature::kRedirect, &Features::redirect},
     {"bridge", Feature::kBridge, &Features::bridge},
     {"login", Feature::kLogin, &Features::login},
@@ -56,6 +59,7 @@ constexpr std::array<FeatureSpec, 8> kFeatures = {{
     {"presence_names", Feature::kPresenceNames, &Features::presenceNames},
     {"presence_local", Feature::kPresenceLocal, &Features::presenceLocal},
     {"ui_event_probe", Feature::kUiEventProbe, &Features::uiEventProbe},
+    {"clock_levels", Feature::kClockLevels, &Features::clockLevels},
 }};
 
 bool HasControlOrSpace(std::string_view s) {
@@ -115,7 +119,8 @@ void ApplyEmbedded(ResolvedConfig& config, const EmbeddedDefaults& d, std::vecto
 }
 
 // What the build and an absent or rejected file give: the network features follow from the targets (Derive checks
-// them), the social facade and its names are on, the local presence and the hardware dump are off.
+// them), the social facade and its names are on, the local presence and the hardware dump are off, the clock-level
+// override is on.
 void SetDefaultRequests(ResolvedConfig& config) {
   config.requested.redirect = true;
   config.requested.bridge = true;
@@ -125,6 +130,7 @@ void SetDefaultRequests(ResolvedConfig& config) {
   config.requested.presenceLocal = false;
   config.requested.hwdump = false;
   config.requested.uiEventProbe = true;
+  config.requested.clockLevels = true;
 }
 
 // A boolean key: absent keeps `fallback`; an unusable value keeps it too and is rejected by key, never by value.
@@ -258,6 +264,7 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   // Defaults to the social facade's state (on unless social.facade is false), like presence_names: a facade-off file
   // gets no forced-off warning for a key it never asked for.
   want.uiEventProbe = ReadBool(cfg, kUiEventProbeKey, want.social, r);
+  want.clockLevels = ReadBool(cfg, kClockLevelsOverrideKey, true, r);
   want.presenceLocal = !ReadBool(cfg, kSendPresenceToMetaKey, true, r);
   ReadTextureQuality(cfg, r);
 }

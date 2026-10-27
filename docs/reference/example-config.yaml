@@ -15,7 +15,7 @@
 # builds read it ("both", "PC only", "Quest only"), its default, and the file that reads it.
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
-# social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe and graphics.texture_quality. Every other key below is PC only: the
+# social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe, diagnostics.clock_levels_override and graphics.texture_quality. Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -120,6 +120,13 @@ graphics:
   # `graphics` (a misspelling such as `texture_qualty`, or `Texture_Quality`) is ignored with a warning that names it.
   # Default (absent): stock. The log line `texture_quality` in the sentinel log names the level, its source and the size.
   # texture_quality: high
+
+  # Quest only. The clock-level override (#928, perf-test builds): the game asks VrApi for CPU and GPU clock level 2/2
+  # once per entry into VR mode, and with this on the sentinel asks for 4/4 instead; any other pair the game asks for
+  # is passed through unchanged. Each call logs one `clock_levels` line with the levels asked for, the levels applied
+  # and VrApi's answer; the resolved value is logged at start-up even when off. Needs no other feature.
+  # Default (absent): true in this build.
+  # clock_levels_override: false
 
 # ---------------------------------------------------------------------------
 # services — URL overrides for game service endpoints

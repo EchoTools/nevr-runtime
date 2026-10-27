@@ -67,10 +67,10 @@ std::size_t CountLevel(const LoadResult& r, LogLevel level) {
   return n;
 }
 
-// Everything the file does not switch: redirect, bridge, login, social and the names on, the diagnostics and the
-// local presence off.
+// Everything the file does not switch: redirect, bridge, login, social, the names and the clock-level override (#928) on,
+// the diagnostics and the local presence off.
 bool DefaultsOnly(const nevr_quest::Features& f) {
-  return f.redirect && f.bridge && f.login && f.social && f.presenceNames && !f.hwdump && !f.presenceLocal;
+  return f.redirect && f.bridge && f.login && f.social && f.presenceNames && f.clockLevels && !f.hwdump && !f.presenceLocal;
 }
 
 // Index of the first event whose message contains `needle`, or -1.
@@ -105,6 +105,10 @@ void DefaultsWithoutFile() {
   // The invite/party tab event (#318) is on in a default config: it is what switches the tablet to Friends.
   CHECK(r.config.requested.uiEventProbe && r.config.effective.uiEventProbe);
   CHECK(EventsContain(r, "feature=ui_event_probe requested=on effective=on"));
+  // The clock-level override (#928) is on with no file, and the feature report says so.
+  CHECK(r.config.requested.clockLevels && r.config.effective.clockLevels);
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kClockLevels));
+  CHECK(EventsContain(r, "feature=clock_levels requested=on effective=on"));
   // The OBB-mount skip (#319) is not a feature (#572): the feature report does not name it.
   CHECK(!EventsContain(r, "obb_skip"));
   // The keys are named by their config.yaml path, and the file's absence is logged with the file name.
@@ -868,6 +872,49 @@ void AMistakeNeverUsesTheDefault() {
   CHECK(tq::SizeFor(tq::kFallbackLevel, tq::Headset::kQuest3).width == 0);  // no hook, so no eye size
 }
 
+// The clock-level override (#928): `diagnostics.clock_levels_override`, on unless the file says false, with no prerequisite.
+// It is a key under `diagnostics`: a `features` section is an unknown top-level key and rejects the whole file.
+void ClockLevelsOverrideIsOnUnlessTheDiagnosticsKeyIsFalse() {
+  for (const char* word : {"false", "False", "FALSE", "no", "No", "off", "Off", "0"}) {
+    const LoadResult r = Load(Full(), std::string("diagnostics:\n  clock_levels_override: ") + word + "\n");
+    CHECK(!r.fileRejected);
+    CHECK(!r.config.requested.clockLevels && !r.config.effective.clockLevels);
+    CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kClockLevels));
+    // The resolved value is logged at Info even when off.
+    CHECK(EventsWithAreAtLevel(r, "feature=clock_levels requested=off effective=off", LogLevel::kInfo));
+    CHECK(r.config.effective.redirect && r.config.effective.social);  // nothing else moved
+  }
+  for (const char* word : {"true", "True", "yes", "on", "1"}) {
+    const LoadResult r = Load(Full(), std::string("diagnostics:\n  clock_levels_override: ") + word + "\n");
+    CHECK(r.config.effective.clockLevels);
+    CHECK(EventsContain(r, "feature=clock_levels requested=on effective=on"));
+    CHECK(!HasLevel(r, LogLevel::kWarn));
+  }
+  {  // it needs nothing else: with no service target at all it is still on, and false still turns it off
+    CHECK(Load(EmbeddedDefaults(), "diagnostics: {}\n").config.effective.clockLevels);
+    CHECK(!Load(EmbeddedDefaults(), "diagnostics:\n  clock_levels_override: false\n").config.effective.clockLevels);
+  }
+  {  // an unusable value keeps the default (on), is rejected by key and is never echoed
+    LoadResult r = Load(Full(), "diagnostics:\n  clock_levels_override: maybe\n");
+    CHECK(!r.fileRejected && r.config.effective.clockLevels);
+    CHECK(EventsWithAreAtLevel(r, "config file key=diagnostics.clock_levels_override rejected reason=not_a_boolean",
+                               LogLevel::kWarn));
+    CHECK(!EventsContain(r, "maybe"));
+  }
+  // Anywhere but diagnostics.clock_levels_override leaves the default (on).
+  for (const char* text : {"social:\n  clock_levels_override: false\n", "x-clock_levels_override: false\n",
+                           "diagnostics:\n  clock_levels: false\n", "diagnostics: {}\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(r.config.effective.clockLevels);
+    CHECK(EventsContain(r, "feature=clock_levels requested=on effective=on"));
+  }
+  {  // a `features` section is an unknown top-level key: the file is rejected and the default (on) stays
+    const LoadResult r = Load(Full(), "features:\n  clock_levels_override: false\n");
+    CHECK(r.fileRejected && r.config.effective.clockLevels);
+  }
+  CHECK(std::string(nevr_quest::FeatureName(Feature::kClockLevels)) == "clock_levels");
+}
+
 int main() {
   DefaultsWithoutFile();
   NothingEmbeddedAndNoFileTurnsTheNetworkFeaturesOff();
@@ -889,6 +936,7 @@ int main() {
   AnUnknownKeyUnderGraphicsWarnsAndNamesTheKey();
   DuplicateAndUnknownKeysAreCountedInOneWarning();
   AMistakeNeverUsesTheDefault();
+  ClockLevelsOverrideIsOnUnlessTheDiagnosticsKeyIsFalse();
   MalformedFileFallsBackToDefaults();
   ARejectedFileNeverEchoesWhatItHeld();
   AnUnknownKeyInsideAKnownSectionIsNotAnError();

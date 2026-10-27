@@ -17,7 +17,8 @@
 // resolves, login when the bridge is on and `auth.server_key` resolves; the social facade is on unless
 // `social.facade` is false (PC's key and default) and still needs login here; its status names ride with it.
 // `social.send_presence_to_meta: false` answers the rich presence locally; `diagnostics.hardware_dump: true`
-// turns the hardware dump on, and `diagnostics.ui_event_probe` (on by default) sets the invite/party tab event (#318).
+// turns the hardware dump on, and `diagnostics.ui_event_probe` (on by default) sets the invite/party tab event (#318), and `diagnostics.clock_levels_override` (default true in this build) decides whether
+// the CPU and GPU clock levels libr15 asks VrApi for are raised from (2, 2) to (4, 4) (#928).
 // A feature whose prerequisite is off or missing is forced off with a logged reason.
 //
 // `graphics.texture_quality` (#943) is one of stock, very_low, low, medium, high, very_high, ultra (texture_quality.h); absent, it is
@@ -43,7 +44,7 @@ inline constexpr const char* kConfigFileName = "config.yaml";
 inline constexpr const char* kLegacyConfigFileName = "nevr-quest.json";
 inline constexpr std::size_t kMaxConfigBytes = 64 * 1024;
 
-enum class Feature { kRedirect, kBridge, kLogin, kSocial, kHwDump, kPresenceNames, kPresenceLocal, kUiEventProbe };
+enum class Feature { kRedirect, kBridge, kLogin, kSocial, kHwDump, kPresenceNames, kPresenceLocal, kUiEventProbe, kClockLevels };
 
 enum class Source { kAbsent, kEmbedded, kFile };
 
@@ -83,6 +84,10 @@ struct Features {
   // event, which switches the tablet to its Friends list. On by default; `diagnostics.ui_event_probe: false` turns it
   // off, and it needs the social facade.
   bool uiEventProbe = true;
+  // Raise the clock levels libr15 asks VrApi for from (2, 2) to (4, 4) (#928): `diagnostics.clock_levels_override`. The hook is
+  // installed and logs each call whatever this says; this decides whether it rewrites. No prerequisite. The struct's own
+  // default is off (an unresolved configuration rewrites nothing); the configuration's default is on.
+  bool clockLevels = false;
 };
 
 // The texture-quality setting (#943), after the file and the default have spoken.

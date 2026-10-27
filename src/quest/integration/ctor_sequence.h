@@ -47,6 +47,11 @@
 //      InstallCreditsText            the project section of the CREDITS page (#970): two ADRP+ADD pairs in libr15 (the
 //                                    CREDITS component's two cursor stores), on every launch, right after the texture
 //                                    hook; no counters. Refused unless the libr15 build ID and the pinned words match.
+//      InstallClockLevels            the CPU and GPU clock levels libr15 asks VrApi for (#928): one libr15 slot
+//                                    (vrapi_SetClockLevels), on every launch, right after the Vulkan hook; its counters are
+//                                    registered with the others (step 3). The hook is installed whatever the switch says
+//                                    and logs each call; the switch (`diagnostics.clock_levels_override`) decides whether
+//                                    the (2, 2) the game asks for is rewritten.
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):
 //   token auth fails        -> the login prompt (token auth is what publishes it), bridge, login, social
@@ -60,6 +65,7 @@
 //   obb counters fail       -> the OBB-mount skip is not installed
 //   resource request counters fail -> the resource request log is not installed
 //   texture counters fail   -> the texture-quality hook is not installed (not asked of `stock`)
+//   clock-levels counters fail -> the clock-level hook is not installed
 // "redirect-through-the-bridge" is the redirect when the bridge feature is effective: a redirect that
 // points the game at a loopback port nobody listens on, or straight at a TLS endpoint the game cannot
 // speak, is worse than leaving the game's own hosts.
@@ -95,6 +101,7 @@ enum class StepId : std::uint8_t {
   kRegisterObbSkipCounters,
   kRegisterResourceRequestCounters,
   kRegisterTextureQualityCounters,
+  kRegisterClockLevelsCounters,
   kStartReporter,
   kInstallClockHook,
   kInstallObbSkip,
@@ -104,6 +111,7 @@ enum class StepId : std::uint8_t {
   kInstallResourceRequestLog,
   kInstallTextureQuality,
   kInstallCreditsText,
+  kInstallClockLevels,
   kStartTokenAuth,
   kInstallLoginPrompt,
   kStartBridge,
@@ -152,6 +160,8 @@ class Steps {
   virtual bool RegisterResourceRequestCounters() = 0;
   // The texture-quality hook's counters (#943), registered when the level is not `stock`.
   virtual bool RegisterTextureQualityCounters() = 0;
+  // The clock-level hook's counters (#928), registered on every launch.
+  virtual bool RegisterClockLevelsCounters() = 0;
   virtual bool StartReporter() = 0;
 
   virtual bool InstallClockHook() = 0;
@@ -174,6 +184,10 @@ class Steps {
   virtual bool InstallTextureQuality(const nevr_quest::TextureChoice& choice, bool countersRegistered) = 0;
   // The project section of the CREDITS page (#970): two libr15 ADRP+ADD pairs, on every launch, no counters.
   virtual bool InstallCreditsText() = 0;
+  // The CPU and GPU clock levels libr15 asks VrApi for (#928): one libr15 slot (vrapi_SetClockLevels), on every launch.
+  // `countersRegistered`: the result of RegisterClockLevelsCounters (the hook's own rule: without its counters it logs the
+  // skip and installs nothing). `overrideOn`: the resolved switch, Features::clockLevels.
+  virtual bool InstallClockLevels(bool countersRegistered, bool overrideOn) = 0;
   virtual bool StartTokenAuth() = 0;
   // `countersRegistered`: the result of RegisterLoginPromptCounters. The step applies the hook's own rule
   // (login_prompt::InstallIfCounted): without its counters it logs the skip and installs nothing.

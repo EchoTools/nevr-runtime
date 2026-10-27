@@ -59,6 +59,12 @@ bool ResourceRequestLogEnabled() noexcept;          // nevr_build::kIsDev
 bool RegisterResourceRequestCounters() noexcept;    // 2 counters
 // resource_request::InstallIfCounted(countersRegistered): true when the slot holds the thunk.
 bool InstallResourceRequestLogHook(bool countersRegistered) noexcept;
+// The #928 clock-level hook (sentinel/clock_levels_hook.h), through this seam for the same reason: the CPU and GPU levels
+// libr15 asks VrApi for.
+bool RegisterClockLevelsCounters() noexcept;  // 3 counters
+// clock_levels::InstallIfCounted(countersRegistered, overrideOn): installs only with its counters registered; true when the
+// slot holds the thunk. `overrideOn` is the switch (diagnostics.clock_levels_override).
+bool InstallClockLevelsHook(bool countersRegistered, bool overrideOn) noexcept;
 
 // Defined in production_steps.cpp: the whole constructor sequence (ctor_sequence.h) over the real
 // libraries. Never throws and never blocks.

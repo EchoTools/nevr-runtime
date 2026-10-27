@@ -12,6 +12,7 @@
 #include "sentinel.h"
 #include "generated/nevr_build_info.h"
 #include "got_hook.h"
+#include "clock_levels_hook.h"
 #include "hook_install.h"
 #include "hook_log.h"
 #include "hook_report.h"
@@ -140,6 +141,13 @@ bool ResourceRequestLogEnabled() noexcept { return nevr_build::kIsDev; }
 bool RegisterResourceRequestCounters() noexcept { return nevr_quest::resource_request::RegisterCounters(); }
 bool InstallResourceRequestLogHook(bool countersRegistered) noexcept {
     return nevr_quest::resource_request::InstallIfCounted(countersRegistered);
+}
+
+// The CPU and GPU clock levels libr15 asks VrApi for (#928). The counters are registered with the others, before the single
+// StartReporter. A refused install is logged by GotHook and leaves the game's call intact.
+bool RegisterClockLevelsCounters() noexcept { return nevr_quest::clock_levels::RegisterCounters(); }
+bool InstallClockLevelsHook(bool countersRegistered, bool overrideOn) noexcept {
+    return nevr_quest::clock_levels::InstallIfCounted(countersRegistered, overrideOn);
 }
 
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
