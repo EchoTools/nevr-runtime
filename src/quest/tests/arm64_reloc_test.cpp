@@ -227,25 +227,30 @@ Cpu RandomCpu(std::uint64_t seed) {
 // The original window sits at kOriginal; each placement puts the trampoline far away (more than 1 MiB for the
 // 19-bit and 14-bit forms, more than 128 MiB for B and BL, both directions).
 constexpr std::uint64_t kOriginal = 0x0000007AB1230010ull;
+// A window whose first two words end one 4 KiB page and whose last two start the next: ADRP's page is the word's
+// own, so it differs between them. (The install never takes such a window on a 4 KiB-page device, but a 16 KiB
+// one holds it.)
+constexpr std::uint64_t kStraddling = 0x0000007AB1230FF8ull;
 const std::int64_t kTrampolineOffsets[] = {0x200000, -0x200000, 0x10000000, -0x10000000, 0x1234567000ll, -0x7AB0000000ll};
 
-// Relocates `window`, runs the original and the relocated trampoline at each far placement and compares. `what`
-// names the case.
-void CheckWindowEquivalent(const std::string& what, const std::uint32_t (&window)[4], const Cpu& init) {
+// Relocates `window` (at `windowAt`), runs the original and the relocated trampoline at each far placement and
+// compares. `what` names the case.
+void CheckWindowEquivalentAt(std::uint64_t windowAt, const std::string& what, const std::uint32_t (&window)[4],
+                             const Cpu& init) {
   Trampoline tr;
   RelocRefusal refusal;
-  if (!BuildTrampoline(kOriginal, window, tr, refusal)) {
+  if (!BuildTrampoline(windowAt, window, tr, refusal)) {
     std::fprintf(stderr, "  %s: refused (%s)\n", what.c_str(), refusal.reason);
     CHECK(false);
     return;
   }
   for (const std::int64_t offset : kTrampolineOffsets) {
-    const std::uint64_t at = kOriginal + static_cast<std::uint64_t>(offset);
-    Prog original{kOriginal, {window, window + 4}};
+    const std::uint64_t at = windowAt + static_cast<std::uint64_t>(offset);
+    Prog original{windowAt, {window, window + 4}};
     Prog relocated{at, {tr.words, tr.words + tr.count}};
     Cpu a = init;
     Cpu b = init;
-    a.pc = kOriginal;
+    a.pc = windowAt;
     b.pc = at;
     bool ok = Run(a, original) && Run(b, relocated);
     ok = ok && a.pc == b.pc;
@@ -279,6 +284,11 @@ void CheckWindowEquivalent(const std::string& what, const std::uint32_t (&window
     }
     CHECK(ok);
   }
+}
+
+void CheckWindowEquivalent(const std::string& what, const std::uint32_t (&window)[4], const Cpu& init) {
+  CheckWindowEquivalentAt(kOriginal, what, window, init);
+  CheckWindowEquivalentAt(kStraddling, what, window, init);
 }
 
 // Places `insn` at `index` of a NOP window, then CheckWindowEquivalent.
