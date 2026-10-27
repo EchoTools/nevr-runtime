@@ -549,6 +549,9 @@ class ProductionSteps final : public Steps {
     // The lobby-full policy (#1001) rides this step: its three libr15 hooks need the facade's libr15 in place
     // and nothing else. Its result is logged by the hooks themselves; a refusal does not fail social.
     if (ok) quest_social::lobby_full::InstallLobbyFullHooks();
+    // The UI texture top mip (#961) rides this step too: its one libr15 detour needs only the libr15 image, and the hook
+    // logs its own outcome, so a refusal does not fail social.
+    nevr_quest::integration::InstallUiTextureMipsHook();
     return ok;
   }
 
