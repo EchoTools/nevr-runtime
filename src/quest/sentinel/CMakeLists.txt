@@ -13,6 +13,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/breakpad.cmake)
 # personality.
 add_library(nevr_quest_got_hook STATIC
   got_hook.cpp
+  arm64_reloc.cpp
   inline_hook.cpp
   hook_log.cpp
   hook_report.cpp)

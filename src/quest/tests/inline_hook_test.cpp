@@ -16,6 +16,7 @@
 #include <cstring>
 #include <string>
 
+#include "arm64_reloc.h"
 #include "callback_thunk.h"
 #include "hook_install.h"
 #include "hook_log.h"
@@ -80,6 +81,7 @@ TEST(PcRelativeEncodingsAreRecognised) {
       0x37000000u,  // TBNZ w0, #0, #0
       0x10000000u,  // ADR x0, #0
       0x90000000u,  // ADRP x0, #0
+      0x54000010u,  // BC.cond #0
       0x58000000u,  // LDR x0, #0 (literal)
       0x98000000u,  // LDRSW x0, #0 (literal)
       0x1C000000u,  // LDR s0, #0 (literal, SIMD)
@@ -150,18 +152,58 @@ TEST(PrologueMismatchChangesNothing) {
   CHECK(original == nullptr);
 }
 
-TEST(PcRelativePrologueIsRefusedNotRelocated) {
-  // A B #0x40 inside the window: a displaced branch would land somewhere else in the trampoline.
-  const std::uint32_t words[4] = {kStpFp, 0x14000010u, kSubSp, kStrX19};
+TEST(PcRelativePrologueIsRelocatedIntoTheTrampoline) {
+  // The shape of the Quest version label's entry: a compare-and-branch first. CBZ x0, #0x2000 at word 0,
+  // then ADRP x1 and a call; the trampoline sits in another mapping, so none of them can be copied as is.
+  const std::uint32_t words[4] = {0xB4010000u /* CBZ x0, #0x2000 */, 0xB0000001u /* ADRP x1, #0x1000 */,
+                                  0x94000010u /* BL #0x40 */, kStrX19};
   std::uint32_t* page = MakePage(words, 4, true);
   CHECK(page != nullptr);
   if (page == nullptr) return;
   const InlinePrologue prologue{{words[0], words[1], words[2], words[3]}};
+  CHECK_EQ(sentinel::CheckInlineTarget(page, prologue), InlineStatus::kOk);
   void* original = nullptr;
+  g_lines.clear();
+  sentinel::SetLogSink(&CaptureSink);
+  const InlineStatus st = InlineHookTestAccess::Install(page, prologue, reinterpret_cast<void*>(0x2000), &original);
+  sentinel::SetLogSink(nullptr);
+  CHECK_EQ(st, InlineStatus::kOk);
+  CHECK(original != nullptr);
+  if (original == nullptr) return;
+
+  // The patch is the usual one; the trampoline is exactly what the relocator builds for this address.
+  CHECK_EQ(page[0], sentinel::kLdrX16Literal8);
+  sentinel::Trampoline expected;
+  sentinel::RelocRefusal refusal;
+  CHECK(sentinel::BuildTrampoline(reinterpret_cast<std::uintptr_t>(page), prologue.words, expected, refusal));
+  const auto* t = static_cast<const std::uint32_t*>(original);
+  for (std::size_t i = 0; i < expected.count; ++i) CHECK_EQ(t[i], expected.words[i]);
+  // The first word is no longer the CBZ: it is its inverse, CBNZ x0, over the jump.
+  CHECK_EQ(t[0], 0xB5000060u);
+  CHECK(g_lines.find("\"status\":\"ok\"") != std::string::npos);
+}
+
+TEST(PcRelativeBranchIntoThePatchedBytesIsRefusedAndTheLogNamesIt) {
+  // B #8 at word 1 lands on word 3: inside the 16 bytes the detour overwrites, so the original word is gone.
+  const std::uint32_t words[4] = {kStpFp, 0x14000002u, kSubSp, kStrX19};
+  std::uint32_t* page = MakePage(words, 4, true);
+  CHECK(page != nullptr);
+  if (page == nullptr) return;
+  const InlinePrologue prologue{{words[0], words[1], words[2], words[3]}};
+  CHECK_EQ(sentinel::CheckInlineTarget(page, prologue), InlineStatus::kPcRelativeInstruction);
+  void* original = nullptr;
+  g_lines.clear();
+  sentinel::SetLogSink(&CaptureSink);
   const InlineStatus st = InlineHookTestAccess::Install(page, prologue, reinterpret_cast<void*>(0x1000), &original);
+  sentinel::SetLogSink(nullptr);
   CHECK_EQ(st, InlineStatus::kPcRelativeInstruction);
-  CHECK_EQ(page[1], 0x14000010u);
+  CHECK_EQ(page[1], 0x14000002u);
   CHECK(original == nullptr);
+  CHECK(g_lines.find("\"status\":\"pc_relative_instruction\"") != std::string::npos);
+  CHECK(g_lines.find("\"instruction\":\"B\"") != std::string::npos);
+  CHECK(g_lines.find("\"word\":1") != std::string::npos);
+  CHECK(g_lines.find("\"encoding\":\"0x0000000014000002\"") != std::string::npos);
+  CHECK(g_lines.find("inside the patched bytes") != std::string::npos);
 }
 
 TEST(NonExecutablePageIsRefused) {

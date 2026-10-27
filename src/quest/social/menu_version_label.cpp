@@ -18,8 +18,8 @@ using sentinel::InlinePrologue;
 using sentinel::InlineStatus;
 
 // The first four words of CCanvasUICS::SetText in the pinned libr15 (ReVault 0x149111c; the bytes at the link-time
-// address). Word 0 is `cbz x3, ...`, PC-relative: CheckInlineTarget refuses the hook on this build. The words are the
-// check, not a guess: a build that differs refuses too.
+// address). Word 0 is `cbz x3, ...`, PC-relative: the inline backend relocates it into the trampoline
+// (sentinel/arm64_reloc.h). The words are the check, not a guess: a build that differs refuses.
 constexpr InlinePrologue kSetTextPrologue{{0xb4000243u, 0xd10083ffu, 0xa9017bf3u, 0xaa0303f3u}};
 
 struct SetTextTag {};
