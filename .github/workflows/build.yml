@@ -17,8 +17,8 @@ name: Build
 # depends on the pre-release flag, and no step reads it: the uploads leave the `prerelease` input unset so the
 # release keeps whatever the human set. The whole workflow runs on
 # ubuntu-latest: no Windows runner, no cloud login. A `workflow_dispatch` started on a vX.Y.Z tag ref runs
-# the same path as a dry run and publishes nothing, unless the tag's release is a DRAFT carrying none of the
-# built files: then the two files are attached to that draft, which stays a draft (see `drafts`).
+# the same path as a dry run without the Verify step (#1008), and publishes nothing, unless the tag's release is a
+# DRAFT carrying none of the built files: then the two files are attached to that draft, which stays a draft (see `drafts`).
 on:
   workflow_dispatch:
   release:
@@ -327,7 +327,10 @@ jobs:
     - name: Set up the Android NDK
       uses: ./.github/actions/setup-ndk
 
+    # Tag builds skip Verify (#1008): every commit on main already passed `just verify` on its PR, and the tag's
+    # build proves the build and packaging (RELEASING.md). A branch or main dispatch still runs it.
     - name: Verify
+      if: github.ref_type != 'tag'
       env:
         # A release or draft build never fetches the real signed plugin fixture from outside GitHub (justfile, test-auth-unit).
         NEVR_RELEASE_BUILD: ${{ steps.release.outputs.version != '' && '1' || '' }}
