@@ -19,12 +19,12 @@ constexpr int kSnapshotBytes = 16;
 ///
 /// The bound is found, not set. Counting the install sites in src/ that reach Record() (every
 /// PatchDetour/InstallBootDetour call, each row of the binary_bug_fixes hook table, and the raw
-/// MinHook installs that call Record directly) gives 64 for a build with every optional hook
+/// MinHook installs that call Record directly) gives 65 for a build with every optional hook
 /// present: crash_recovery 9, mode_patches 8, binary_bug_fixes 7, party_invite_gate 7,
 /// initialize 8 (6 InstallBootDetour + CSysDLL_GetSymbol + CSysDLL_Load), headless_graphics 4,
-/// social_facade 4, dll_load_hook 4, coop_ai_trace 3, pnsrad_enabler 2, early_quit_lockout 2, menu_version_label 1, splash_skip 1,
+/// social_facade 4, dll_load_hook 4, coop_ai_trace 3, pnsrad_enabler 2, early_quit_lockout 2, menu_version_label 1, splash_skip 1, ui_texture_mips 1,
 /// and one each in xpid_patch, return_to_lobby, resource_override, builtin_filter. The
-/// capacity is twice that counted 64 sites, so a new hook has room. If the table fills,
+/// capacity is twice that counted 65 sites, so a new hook has room. If the table fills,
 /// Record() counts the drop (never silent): VerifyAll() reports it at ERROR and
 /// DroppedCount() exposes it.
 constexpr int kMaxGuarded = 128;
