@@ -107,6 +107,7 @@ struct FakeSteps final : Steps {
     // `stock` registers no counters and needs none.
     return Step(counted || choice.level == nevr_quest::texture_quality::Level::kStock ? "texture" : "texture_uncounted");
   }
+  bool InstallCreditsText() override { return Step("credits"); }
   bool StartTokenAuth() override { return Step("token"); }
   bool InstallLoginPrompt(bool counted) override { return Step(counted ? "prompt" : "prompt_uncounted"); }
   bool StartBridge() override { return Step("bridge"); }
@@ -147,7 +148,7 @@ struct FakeSteps final : Steps {
 void TestEverythingOffInstallsOnlyTheProofHookAndTheObbSkip() {
   FakeSteps s = FakeSteps::WithTexture(false, false, false, false);
   const ConstructorReport r = RunConstructorSequence(s);
-  const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_texture", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture"};
+  const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_texture", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture", "credits"};
   QCHECK(s.calls == want);
   QCHECK(r.at(StepId::kStartTokenAuth).state == StepState::kSkipped);
   QCHECK(r.at(StepId::kInstallRedirect).state == StepState::kSkipped);
@@ -167,7 +168,7 @@ void TestFullStackOrder() {
   const ConstructorReport r = RunConstructorSequence(s);
   const std::vector<std::string> want = {"arm",       "config",     "reg_clock",  "reg_redirect", "reg_dlopen",
                                          "reg_login", "reg_social", "reg_prompt", "reg_obb",      "reg_resource", "reg_texture", "reporter",
-                                         "clock",     "obb", "process_end", "permission_wait", "vk_ext_window", "resource", "texture",       "token",      "prompt",       "bridge",
+                                         "clock",     "obb", "process_end", "permission_wait", "vk_ext_window", "resource", "texture", "credits",       "token",      "prompt",       "bridge",
                                          "redirect",  "social",     "dlopen",     "hwdump"};
   QCHECK(s.calls == want);
   QCHECK(s.loginArg && s.mmArg);
@@ -181,7 +182,7 @@ void TestHwDumpIsIndependentAndContained() {
     FakeSteps s = FakeSteps::With(false, false, false, false);
     s.config.effective.hwdump = true;
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture", "hwdump"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture", "credits", "hwdump"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kInstallHwDump).state == StepState::kOk);
   }
@@ -364,7 +365,7 @@ void TestResourceRequestLogIsDevelopmentOnlyOrderedAndContained() {
   {  // release: nothing runs, both steps say why, and the other steps are exactly as before
     FakeSteps s = FakeSteps::With(false, false, false, false);
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture", "credits"};
     QCHECK(s.calls == want);
     QCHECK(s.devAsked == 1);
     QCHECK(r.at(StepId::kRegisterResourceRequestCounters).state == StepState::kSkipped);
@@ -378,7 +379,7 @@ void TestResourceRequestLogIsDevelopmentOnlyOrderedAndContained() {
     FakeSteps s = FakeSteps::With(false, false, false, false);
     s.devBuild = true;
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "resource", "texture"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "resource", "texture", "credits"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kRegisterResourceRequestCounters).state == StepState::kOk);
     QCHECK(r.at(StepId::kInstallResourceRequestLog).state == StepState::kOk);
@@ -463,7 +464,7 @@ void TestObbSkipIsUnconditionalIndependentAndContained() {
   {
     FakeSteps s = FakeSteps::WithTexture(false, false, false, false);
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_texture", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_texture", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture", "credits"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kRegisterObbSkipCounters).state == StepState::kOk);
     QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
@@ -475,7 +476,7 @@ void TestObbSkipIsUnconditionalIndependentAndContained() {
     const ConstructorReport r = RunConstructorSequence(s);
     QCHECK(r.at(StepId::kResolveConfig).state == StepState::kThrew);
     // The unresolved configuration is a mistake, so the level is `stock`: no texture counters, and the step still runs.
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture", "credits"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
   }
@@ -665,7 +666,7 @@ void TestCounterRefusalDisablesOnlyThatPiece() {
 
 void TestEveryStepThrowingIsContained() {
   for (const char* name : {"arm", "config", "reg_clock", "reg_redirect", "reg_dlopen", "reg_social", "reg_prompt",
-                           "reg_obb", "reg_texture", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture", "token", "prompt", "bridge", "redirect", "social",
+                           "reg_obb", "reg_texture", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture", "credits", "token", "prompt", "bridge", "redirect", "social",
                            "dlopen"}) {
     FakeSteps s = FakeSteps::With(true, true, true, true);
     s.throwing = {name};
