@@ -61,4 +61,6 @@ const Info& Get() {
   return info;
 }
 
+std::string MenuVersionLabel() { return std::string("nEVR ") + Get().project_version; }
+
 }  // namespace nevr_build_identity

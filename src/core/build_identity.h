@@ -51,4 +51,9 @@ const Info& Get();
 /// and a binary contains exactly one. Returned without the leading NUL.
 const char* IdentityLiteral();
 
+/// The text a player sees for this build, e.g. "nEVR 5.0.0" for a tag build and
+/// "nEVR 5.0.1-dev.3+abc1234..." for a dev build: the project version string as CMake set it, unshortened,
+/// so a screenshot names the exact build. Derived from Get(); nothing is measured.
+std::string MenuVersionLabel();
+
 }  // namespace nevr_build_identity
