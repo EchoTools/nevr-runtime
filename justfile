@@ -2558,7 +2558,9 @@ verify:
     # produced the whole broadcaster thread — an address given a name nobody
     # re-derived, then reasoned about by that name forever after.
     # Known bugs warn (and stay visible); anything NEW is a hard failure.
-    timeout -k 10 600 python3 -m unittest discover -s tools/tests -p 'test_*.py'
+    # 1500 s, not 600: the full suite (1737 tests) took 457 s on the developer machine and about 574 s
+    # for 1145 tests on the CI runner (#1004, release build 40454435804, killed at 600 s with exit 124).
+    timeout -k 10 1500 python3 -m unittest discover -s tools/tests -p 'test_*.py'
     python3 tools/verify_hook_invariants.py
     # The scenario-test control endpoint can inject messages into a live session; it exists only in
     # the mingw-scenario preset. The DLL this gate just built must not carry it.
