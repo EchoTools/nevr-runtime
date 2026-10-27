@@ -36,6 +36,21 @@ class VerifyModePatchGroundTruth(unittest.TestCase):
         self.assertIn(SPECTATOR_RVA, rewrites)
         self.assertIn(SPECTATOR_RVA, covered)
 
+    def test_shipped_source_inventories_every_offline_site_written_through_the_apply_helper(self):
+        # PatchEnableOffline writes through `apply("site", OFFSET, ...)`, a lambda over ApplyPatch (#728); the
+        # verifier reads each call site's RVA, and skips only the lambda's own ApplyPatch(offset, ...).
+        rewrites, covered = self.run_verifier()
+        offline = {0xFDE0E, 0x17F0B1, 0x17F77B, 0x17F817, 0x17F823, 0x1AC83E, 0xA7C685}
+        self.assertLessEqual(offline, rewrites)
+        self.assertLessEqual(offline, covered)
+
+    def test_an_apply_call_site_that_is_not_a_named_rva_is_not_recognised(self):
+        needle = 'apply("tutorial", OFFLINE_TUTORIAL,'
+        source = SOURCE.read_text()
+        self.assertIn(needle, source)
+        with self.assertRaises(verifier.InventoryError):
+            self.run_verifier(source=source.replace(needle, 'apply("tutorial", tutorialOffset,'))
+
     def test_shipped_source_uses_the_form_the_verifier_is_taught(self):
         # Guards the test itself: the lambda below must be what the source really contains.
         self.assertIn(LAMBDA, SOURCE.read_text())
