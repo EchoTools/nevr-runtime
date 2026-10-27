@@ -936,6 +936,33 @@ static void EmitLine(uint32_t level, const char* message, int len) {
     g_emitted_count++;
 }
 
+/* Emits the `repeated count=` summary of every rate slot that folded lines and whose
+ * window has closed (`all` false), or of every such slot (`all` true, shutdown), then
+ * clears the slot's counts. RateCheck only closes a window when a later line lands on
+ * the same slot, so a run that goes quiet would otherwise never report its count (#894).
+ * Each summary is built under g_rate_mutex and written after it is released, because
+ * EmitLine takes g_file_mutex. */
+static void FlushRateSummaries(bool all) {
+    const uint64_t now = GetEpochSeconds();
+    for (size_t i = 0; i < kRateTableSize; i++) {
+        char summary[256];
+        {
+            std::lock_guard<std::mutex> lock(g_rate_mutex);
+            RateEntry& e = g_rate[i];
+            if (e.hash == 0 || e.seen <= e.emitted) continue;
+            if (!all && now - e.window_start < kRateWindowSec) continue;
+            snprintf(summary, sizeof(summary),
+                     "[NEVR.LOGFILTER] repeated count=%u window_s=%llu msg=\"%s\"",
+                     e.seen - e.emitted,
+                     static_cast<unsigned long long>(now - e.window_start),
+                     e.sample);
+            e.seen = 0;
+            e.emitted = 0;
+        }
+        EmitLine(LOG_LEVEL_INFO, summary, static_cast<int>(std::strlen(summary)));
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* N79 — filter health, emitted while the process is alive             */
 /* ------------------------------------------------------------------ */
@@ -1009,6 +1036,10 @@ static void MaybeEmitHealth() {
                            static_cast<unsigned long long>(gameLines),
                            kHealthIntervalSec);
     if (n > 0) EmitLine(LOG_LEVEL_INFO, line, n);
+
+    /* #894: a collapsed run that went quiet reports its count here, not only when a
+     * later line reuses its slot. */
+    FlushRateSummaries(/*all=*/false);
 
     /* Must be a RATE, not a total. Falsified: with the superseded plugin allowed
      * to load, the cumulative count sat at 13 — lines captured in the seconds
@@ -1309,5 +1340,6 @@ void nevr_builtin_log_filter::Shutdown() {
                static_cast<unsigned long long>(g_suppressed_count.load()));
     }
 
+    FlushRateSummaries(/*all=*/true);
     ShutdownFileLogging();
 }
