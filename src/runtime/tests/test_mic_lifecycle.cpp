@@ -561,6 +561,12 @@ TEST(MicProviderPolicy, InstalledOnNativeWindowsAndUnderWine) {
   EXPECT_TRUE(nevr_mic_policy::ShouldInstallProvider(/*isWine=*/true));
 }
 
+// #879: a dedicated server opens no capture device; a client keeps the provider's capture path.
+TEST(MicProviderPolicy, ServerProvidesNoCaptureAndAClientDoes) {
+  EXPECT_FALSE(nevr_mic_policy::ProvidesCapture(/*isServer=*/true));
+  EXPECT_TRUE(nevr_mic_policy::ProvidesCapture(/*isServer=*/false));
+}
+
 TEST(MicProviderPolicy, BootLineNamesTheDecisionAndNeverClaimsAProviderThatIsNotInstalled) {
   EXPECT_STREQ(nevr_mic_policy::BootLine(true, /*isWine=*/true), "[NEVR.MIC] provider installed: Wine\n");
   EXPECT_STREQ(nevr_mic_policy::BootLine(true, /*isWine=*/false), "[NEVR.MIC] provider installed: native Windows\n");
