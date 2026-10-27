@@ -193,9 +193,23 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
     /* Step 3: Validate the prologue — wrong bytes = wrong game version. */
     const uint8_t* actualBytes = static_cast<const uint8_t*>(target);
     if (!nevr::ValidatePrologue(target, kPrologue, sizeof(kPrologue))) {
+        /* A JMP rel32 at entry means a detour is already installed there. The runtime's built-in
+         * early-quit lockout (src/runtime/patch/early_quit_lockout.cpp) detours this same function, and
+         * MinHook cannot chain a second detour from a plugin, so the forced injection cannot be installed.
+         * Fail the load: the loader then reports this plugin as not loaded instead of Loaded. */
+        if (actualBytes[0] == 0xE9) {
+            PluginLogError("hook: 0x%llx already holds a detour (JMP at entry: actual=%02x%02x%02x%02x%02x%02x)"
+                      " — the runtime's built-in lockout detour owns it; forced injection cannot be installed,"
+                      " plugin load fails",
+                      static_cast<unsigned long long>(kHookTargetVA),
+                      static_cast<unsigned int>(actualBytes[0]), static_cast<unsigned int>(actualBytes[1]),
+                      static_cast<unsigned int>(actualBytes[2]), static_cast<unsigned int>(actualBytes[3]),
+                      static_cast<unsigned int>(actualBytes[4]), static_cast<unsigned int>(actualBytes[5]));
+            return -1;
+        }
         PluginLogError("hook: prologue mismatch at 0x%llx expected=%02x%02x%02x%02x%02x%02x"
                   " actual=%02x%02x%02x%02x%02x%02x —"
-                  " wrong game version? skipping this hook",
+                  " wrong game version? plugin load fails",
                   static_cast<unsigned long long>(kHookTargetVA),
                   static_cast<unsigned int>(kPrologue[0]), static_cast<unsigned int>(kPrologue[1]),
                   static_cast<unsigned int>(kPrologue[2]), static_cast<unsigned int>(kPrologue[3]),
@@ -203,7 +217,7 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
                   static_cast<unsigned int>(actualBytes[0]), static_cast<unsigned int>(actualBytes[1]),
                   static_cast<unsigned int>(actualBytes[2]), static_cast<unsigned int>(actualBytes[3]),
                   static_cast<unsigned int>(actualBytes[4]), static_cast<unsigned int>(actualBytes[5]));
-        return 0;
+        return -1;
     }
 
     /* Step 4: Create and enable the hook via HookManager. */
