@@ -712,6 +712,23 @@ void TextureQualityIsTheDefaultUnlessTheFileNamesAnotherLevel() {
   }
 }
 
+// #583: a duplicate key and an unknown key under a known section are counted into one Warning that names no key and no
+// value; a file with neither logs no count line.
+void DuplicateAndUnknownKeysAreCountedInOneWarning() {
+  {
+    const LoadResult r = Load(Full(), "social:\n  facade: true\n  facade: false\n  send_presense: false\n");
+    CHECK(!r.fileRejected);
+    CHECK(EventsWithAreAtLevel(r, "duplicates=1 unknown_nested=1 (", LogLevel::kWarn));
+    CHECK(!EventsContain(r, "send_presense"));
+    CHECK(CountLevel(r, LogLevel::kWarn) == 1);
+  }
+  {
+    const LoadResult r = Load(Full(), "social:\n  send_presence_to_meta: false\n");
+    CHECK(!EventsContain(r, "duplicates="));
+    CHECK(!EventsContain(r, "unknown_nested="));
+  }
+}
+
 // Any key under `graphics` other than texture_quality is named in a Warning, so a misspelling or another case is heard
 // instead of silently giving the default (which a later change of the default would turn into a silent change of level).
 // The level is not touched by it: the key is absent, so it is the default.
@@ -864,6 +881,7 @@ int main() {
   ATextureQualityThatIsNotAWordFallsBackToStock();
   AGraphicsSectionThatIsNotAMappingFallsBackToStock();
   AnUnknownKeyUnderGraphicsWarnsAndNamesTheKey();
+  DuplicateAndUnknownKeysAreCountedInOneWarning();
   AMistakeNeverUsesTheDefault();
   MalformedFileFallsBackToDefaults();
   ARejectedFileNeverEchoesWhatItHeld();

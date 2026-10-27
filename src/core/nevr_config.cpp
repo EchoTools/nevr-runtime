@@ -18,6 +18,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
+#include <map>
 #include <set>
 #include <string>
 #include <sstream>
@@ -145,18 +146,26 @@ void EnterNode(WalkBudget& budget, std::size_t depth, const YAML::Mark& mark) {
 // yaml-cpp (measured — services/network/arena became unreadable after `auth`,
 // the one section whose values actually changed). So interpolation is applied
 // lazily at read time (GetString etc.); this walk only validates. Bounded by `budget`.
-void ValidateInterpolation(const YAML::Node& node, UnsetSink unset, WalkBudget& budget, std::size_t depth) {
+// It also counts, into `duplicates`, each key that repeats within its mapping (#583): it already visits every
+// mapping, so the count costs no second walk and no node budget.
+void ValidateInterpolation(const YAML::Node& node, UnsetSink unset, WalkBudget& budget, std::size_t depth,
+                           std::size_t& duplicates) {
   EnterNode(budget, depth, node.Mark());
   switch (node.Type()) {
     case YAML::NodeType::Scalar:
       (void)InterpolateString(node.Scalar(), unset, node.Mark());  // may throw
       break;
     case YAML::NodeType::Sequence:
-      for (const auto& child : node) ValidateInterpolation(child, unset, budget, depth + 1);
+      for (const auto& child : node) ValidateInterpolation(child, unset, budget, depth + 1, duplicates);
       break;
-    case YAML::NodeType::Map:
-      for (const auto& kv : node) ValidateInterpolation(kv.second, unset, budget, depth + 1);
+    case YAML::NodeType::Map: {
+      std::set<std::string> seen;
+      for (const auto& kv : node) {
+        if (kv.first.IsScalar() && !seen.insert(kv.first.Scalar()).second) ++duplicates;
+        ValidateInterpolation(kv.second, unset, budget, depth + 1, duplicates);
+      }
       break;
+    }
     default:
       break;
   }
@@ -211,6 +220,50 @@ void ValidateTopLevel(const YAML::Node& root) {
           NevrConfigErrorKind::kUnknownTopLevelKey, SourceLine(kv.first.Mark()), SourceColumn(kv.first.Mark()));
     }
   }
+}
+
+// The keys each known section holds, for every reader of either build (#583). The PC reads a key through
+// service_map.cpp (FlatKeyToYamlPath) or a direct getter; the Quest reads its keys through quest_config.cpp.
+// A key missing here is ignored by the reader, so it is counted as unknown. Keep it in step with those readers:
+// test_service_map (MigratedYamlPaths) and test_nevr_config (the Quest list) fail when a read key is missing.
+const std::map<std::string, std::set<std::string>>& KnownSections() {
+  static const std::map<std::string, std::set<std::string>> kSections = {
+      {"identity", {"discord_id"}},
+      {"auth", {"http_uri", "http_key", "server_key", "password"}},
+      {"services",
+       {"login", "serverdb", "matchmaking", "api", "api_legacy", "config", "transaction", "graph", "graph_service",
+        "socket_uri", "allow_offline_server", "serverdb_uri"}},
+      {"network",
+       {"external_ip", "internal_ip", "upnp", "upnp_port", "empty_server_ttl_seconds", "tick_rate_hz", "session_router",
+        "regions"}},
+      {"assets", {"cdn_url"}},
+      {"arena", {"round_time", "celebration_time", "mercy_score"}},
+      {"telemetry", {"uri", "token"}},
+      {"social", {"facade", "send_presence_to_meta"}},
+      {"diagnostics", {"hardware_dump", "ui_event_probe"}},
+      {"graphics", {"texture_quality"}},
+  };
+  return kSections;
+}
+
+// Keys under a known section that no reader reads, counted once per key. An `x-` key is an extension and is not
+// counted, as at the top level. A section that is not a mapping has no keys to count.
+std::size_t CountUnknownNestedKeys(const YAML::Node& root) {
+  std::size_t unknown = 0;
+  for (const auto& section : KnownSections()) {
+    const YAML::Node node = ChildByKey(root, section.first);
+    if (!node.IsMap()) continue;
+    for (const auto& kv : node) {
+      if (!kv.first.IsScalar()) {
+        ++unknown;
+        continue;
+      }
+      const std::string key = kv.first.Scalar();
+      if (key.rfind("x-", 0) == 0 || section.second.count(key) != 0) continue;
+      ++unknown;
+    }
+  }
+  return unknown;
 }
 
 // Bounded by `budget` like ValidateInterpolation; `depth` is the depth of `node` in the file's tree.
@@ -310,6 +363,14 @@ std::optional<bool> ParseBool(const std::string& s) {
   return std::nullopt;
 }
 
+std::vector<std::string> KnownConfigKeyPaths() {
+  std::vector<std::string> paths;
+  for (const auto& section : KnownSections()) {
+    for (const std::string& key : section.second) paths.push_back(section.first + "." + key);
+  }
+  return paths;  // std::map and std::set keep both levels sorted
+}
+
 // --- NevrConfig -------------------------------------------------------------
 
 NevrConfig::NevrConfig() = default;
@@ -342,7 +403,9 @@ NevrConfig NevrConfig::LoadFromString(const std::string& yaml) {
   ValidateTopLevel(raw);
   std::set<std::string> unsetBare;
   WalkBudget budget;
-  ValidateInterpolation(raw, &unsetBare, budget, 0);  // fail loud NOW on an unset ${VAR:?}; does not mutate raw
+  // fail loud NOW on an unset ${VAR:?}; does not mutate raw
+  ValidateInterpolation(raw, &unsetBare, budget, 0, cfg.duplicateKeys_);
+  cfg.unknownKeys_ = CountUnknownNestedKeys(raw);
   cfg.unsetBareVars_.assign(unsetBare.begin(), unsetBare.end());
   cfg.impl_->root = raw;       // store the parsed tree; scalars interpolate at read time
   ParsePlugins(cfg.impl_->root, cfg.plugins_, budget);

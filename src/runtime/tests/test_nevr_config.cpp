@@ -6,6 +6,7 @@
 // and malformed-YAML failure. Built under -DBUILD_TESTING=ON and run under
 // Wine by `just test-auth-unit` (which `just verify` invokes).
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <cstdio>
@@ -686,6 +687,67 @@ TEST(NevrConfig, LoadFromFileOrFailLogsTheUnsetVariableWarning) {
   const std::string logged = testing::internal::GetCapturedStderr();
   EXPECT_FALSE(cfg.Empty());
   EXPECT_NE(logged.find("[NEVR.CONFIG] environment variable NEVR_TEST_BARE_LOG_C is not set"), std::string::npos) << logged;
+}
+
+// #583: a key that repeats in one mapping is counted, and the first value is the one read (pinned: it is what yaml-cpp
+// gives and what the Quest reads too).
+TEST(NevrConfig, DuplicateKeysAreCountedAndTheFirstValueIsRead) {
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "services:\n  socket_uri: \"wss://first.example/x\"\n  socket_uri: \"wss://second.example/x\"\n"
+      "social:\n  facade: true\n  facade: false\n");
+  EXPECT_EQ(cfg.DuplicateKeyCount(), 2u);
+  EXPECT_EQ(cfg.UnknownKeyCount(), 0u);
+  EXPECT_EQ(cfg.GetString("services.socket_uri").value_or(""), "wss://first.example/x");
+  EXPECT_EQ(cfg.GetBool("social.facade").value_or(false), true);
+}
+
+// #583: a key under a known section that no reader reads is counted; known keys, x- extensions and a free-form
+// section (profiles) are not.
+TEST(NevrConfig, UnknownKeysUnderKnownSectionsAreCounted) {
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "social:\n  send_presence_to_meta: false\n  send_presense_to_meta: false\n  x-note: 1\n"
+      "services:\n  socket_uri: \"wss://a.example/x\"\n  loginservice_host: \"wss://b.example/x\"\n"
+      "profiles:\n  anything_goes: 1\n");
+  EXPECT_EQ(cfg.UnknownKeyCount(), 2u);
+  EXPECT_EQ(cfg.DuplicateKeyCount(), 0u);
+}
+
+TEST(NevrConfig, ACleanFileCountsNothing) {
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "version: 1\nauth:\n  password: \"x\"\nnetwork:\n  regions: \"us-west\"\n");
+  EXPECT_EQ(cfg.UnknownKeyCount(), 0u);
+  EXPECT_EQ(cfg.DuplicateKeyCount(), 0u);
+}
+
+// #583: the PC's one Warning per load names the counts and no key or value.
+TEST(NevrConfig, ShapeWarningCarriesCountsOnly) {
+  ASSERT_TRUE(EnsureScratchConfigDirectory());
+  ScopedScratchFile file(ScratchConfigPath("shape-warning-config"));
+  {
+    std::ofstream output(file.path(), std::ios::binary);
+    ASSERT_TRUE(output.is_open());
+    output << "social:\n  facade: true\n  facade: false\n  send_presense: false\n";
+  }
+  testing::internal::CaptureStderr();
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromFileOrFail(file.path(), /*is_server=*/false);
+  const std::string logged = testing::internal::GetCapturedStderr();
+  EXPECT_FALSE(cfg.Empty());
+  EXPECT_NE(logged.find("[NEVR.CONFIG] config.yaml has duplicates=1 unknown_nested=1"), std::string::npos) << logged;
+  EXPECT_EQ(logged.find("send_presense"), std::string::npos) << logged;
+  EXPECT_EQ(logged.find("facade"), std::string::npos) << logged;
+}
+
+// #583: every key the Quest reads is on the schema, so the unknown-key count never flags a key a build uses. The
+// PC's keys are checked against the same list in test_service_map (MigratedYamlPaths).
+TEST(NevrConfig, KnownPathsCoverEveryKeyTheQuestReads) {
+  const std::vector<std::string> known = nevr::KnownConfigKeyPaths();
+  const std::vector<std::string> questReads = {
+      "services.socket_uri", "auth.http_uri",          "auth.http_key",          "auth.server_key",
+      "social.facade",       "social.send_presence_to_meta", "diagnostics.hardware_dump",
+      "diagnostics.ui_event_probe", "graphics.texture_quality"};
+  for (const std::string& path : questReads) {
+    EXPECT_NE(std::find(known.begin(), known.end(), path), known.end()) << path << " is read but not on the schema";
+  }
 }
 
 }  // namespace
