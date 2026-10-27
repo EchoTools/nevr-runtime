@@ -181,7 +181,10 @@ gh release view vX.Y.Z --json body --jq .body                         # the tabl
 `notes` takes the version and the commit from the `BugSplat64.dll` and `nevr-runtime.dll` inside the zip (they must agree),
 so the body cannot describe another build. The table must be written after the last signing pass: each pass signs with a
 fresh timestamp and changes the zip's bytes. The per-audience section lists each feat, fix and perf commit under the
-audience of its scope (players, server hosts, plugin developers), and ends with what was not tested in the build. The body
+audience of its scope (players, server hosts, plugin developers; `arena`, `server` and `ws-bridge` are server hosts), and
+ends with what was not tested in the build. A commit is listed by its subject unless its message has a line
+`Release-note: <text>`, which is listed in its place: write one when the subject misstates what a player or a host sees.
+Read the section against the pull request bodies before publishing. The body
 of a published release stays editable ("Immutable releases"); the assets do not.
 
 ## Publish
