@@ -1,8 +1,10 @@
 # Package manifest format (echovr.exe 34.4.631547)
 
 How the engine's resource manager learns which resources a package set holds. Decoded from the game's own
-reader and checked against two shipped manifests. Nothing in nevr-runtime writes or reads this format; it is
-recorded here so the knowledge survives. The plugin asset path (`plugin-assets.md`) does not use it.
+reader and checked against two shipped manifests. nevr-runtime reads the container and the resource array (the
+records of type `CGameLevelResourceWin10`, for the installed levels a game server registers) in
+`src/runtime/server/installed_levels.cpp`; nothing in it writes this format. The plugin asset path (`plugin-assets.md`)
+does not use it.
 
 ## Where it lives
 

@@ -24,6 +24,9 @@ gameservice::v1::Envelope BuildRegistrationEnvelope(const RegistrationParams& pa
   registration->set_version_lock(params.versionLock);
   registration->set_time_step_usecs(params.timeStepUsecs);
   registration->set_version(params.version);
+  for (const uint64_t level : params.installedLevels) registration->add_installed_levels(level);
+  for (const std::string& region : params.regions) registration->add_regions(region);
+  for (const std::string& guild : params.guilds) registration->add_guilds(guild);
   return envelope;
 }
 

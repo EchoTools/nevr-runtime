@@ -95,6 +95,8 @@ set(PATCHES_SOURCES
     "server/gameserver_telemetry.cpp"
     "server/gameserver_serverdb.cpp"
     "server/registration_envelope.cpp"
+    "server/registration_metadata.cpp"
+    "server/installed_levels.cpp"
     "server/messages.cpp"
     "server/server_context.cpp"
     "server/websocket_client.cpp"
@@ -754,7 +756,7 @@ if(BUILD_TESTING)
       server/websocket_frame.cpp
       log/url_diagnostics.cpp
       server/websocket_client.cpp)
-    set_source_files_properties(tests/test_protobuf_transport.cpp tests/test_registration_roundtrip.cpp server/registration_envelope.cpp server/protobuf_transport.cpp log/url_diagnostics.cpp server/websocket_client.cpp
+    set_source_files_properties(tests/test_protobuf_transport.cpp tests/test_registration_roundtrip.cpp server/registration_envelope.cpp server/installed_levels.cpp server/protobuf_transport.cpp log/url_diagnostics.cpp server/websocket_client.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_compile_definitions(test_protobuf_transport PRIVATE NEVR_TEST_HOOKS)
     target_include_directories(test_protobuf_transport PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -818,6 +820,16 @@ if(BUILD_TESTING)
     target_include_directories(test_serverdb_uri PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_serverdb_uri PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)
     gtest_discover_tests(test_serverdb_uri DISCOVERY_MODE PRE_TEST)
+
+    # #990: the installed levels read from the package manifests (installed_levels.cpp: std and zstd only).
+    add_executable(test_installed_levels
+      tests/test_installed_levels.cpp
+      server/installed_levels.cpp)
+    set_source_files_properties(tests/test_installed_levels.cpp server/installed_levels.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_installed_levels PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_installed_levels PRIVATE GTest::gtest GTest::gtest_main zstd::libzstd)
+    gtest_discover_tests(test_installed_levels DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_callback_unregistration
       tests/test_callback_unregistration.cpp

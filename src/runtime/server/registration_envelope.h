@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "gameservice/v1/gameservice.pb.h"
 
@@ -22,6 +23,9 @@ struct RegistrationParams {
   uint64_t versionLock = 0;
   uint32_t timeStepUsecs = 0;
   std::string version;
+  std::vector<uint64_t> installedLevels;  // level-root symbols (installed_levels, field 9)
+  std::vector<std::string> regions;       // regions this server serves (field 10)
+  std::vector<std::string> guilds;        // guild ids this server hosts for (field 11)
 };
 
 /// "<git describe> (<commit> <build type>)": the version field's content.
