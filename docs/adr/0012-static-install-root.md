@@ -1,6 +1,6 @@
 # ADR 0012: the install folder is static; nEVR's runtime, plugins and state live in `%LOCALAPPDATA%\nevr\echovr`
 
-Status: proposed (#575, tracking issue #799). Of the "Order of work", step 2 (the target split) is built, and of step 5 the root, the one-time move and the resolution of `logs\`, `crashes\` and the caches (`core/nevr_root.h`, `lifecycle/nevr_root_move.cpp`); nothing else in the "Decision" section is. ADR 0010 and ADR 0011 are accepted and
+Status: proposed (#575, tracking issue #799). Of the "Order of work", step 2 (the target split) is built, and of step 5 the root, the one-time move and the resolution of the sign-in cache, `logs\`, `crashes\` and the caches (`core/nevr_root.h`, `lifecycle/nevr_root_move.cpp`); nothing else in the "Decision" section is. ADR 0010 and ADR 0011 are accepted and
 neither is superseded by this record. **It amends ADR 0008 (`0008-bugsplat-host-and-nevr-runtime.md`) in three places:** `nevr-runtime.dll`
 loads from the root, not from the directory of `BugSplat64.dll`; a refused or missing `nevr-runtime.dll` stops the game, where ADR 0008
 lets it run without the runtime; and the host's log gains a `versions` event. "Relation to other records" says which text of ADR 0008 each replaces. What exists today is named
@@ -124,8 +124,11 @@ for harnesses and native test machines. A signed-only build ignores it and logs 
 
 On the first run that finds the old layout, the runtime moves, and logs every file it moves or leaves:
 
-- from the install's `_local` directories: `config.yaml`, `.credentials.json` and the caches. A `-config` folder's own
-  `config.yaml` is not moved: it stays where it is, and the rule of "Where state resolves" finds it there;
+- from the install's `_local` directories: `.credentials.json`, nearest first, through the protected write the cache is saved with
+  (`core/credential_write.h`), read back before the old file is removed. `config.yaml` is not moved until step 6 decides where server and
+  client config live, and a `-config` folder's own `config.yaml` never is: it stays where it is, and the rule of "Where state resolves"
+  finds it there. A cache the move could not take (or whose root path does not fit the ANSI code page) is still read, and written back where it is,
+  until a later run moves it;
 - from `%LOCALAPPDATA%\EchoVR\logs`: nEVR's own files, which are the run logs the built-in filter writes (`BuildLogFilePath` in
   `builtin_filter.cpp`, whose prefix is configurable) and `nevr-crash-<run id>.txt` (`PrepareCrashRecordPath`), never the game's own.
   The move recognises them by the names those writers use. That list is `nevr-*.jsonl` and `nevr-*.log` (the run log) and `nevr-crash-*.txt` (the crash
@@ -138,8 +141,8 @@ safe to run twice, and leaves a file in place, with a log line, when it cannot m
 it has moved anything out of a `_local` directory, it writes `MOVED-TO-NEVR-ROOT.txt` there, naming the root, so a player or support
 can see why that folder is empty.
 
-The uninstaller puts back what the move took: it copies `config.yaml` and `.credentials.json` from the root into `_local` and removes
-`MOVED-TO-NEVR-ROOT.txt`, and leaves the root as it is, so uninstalling and then installing a pre-split release keeps the login.
+The uninstaller puts back what the move took: it copies `.credentials.json` from the root into the `_local` folder that holds a marker (never over a file there) and sets
+`MOVED-TO-NEVR-ROOT.txt` aside as `MOVED-TO-NEVR-ROOT.txt.undone-<timestamp>`, and leaves the root as it is, so uninstalling and then installing a pre-split release keeps the login.
 
 ### Updating only the host, and going back
 

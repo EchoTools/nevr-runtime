@@ -1,7 +1,7 @@
 // nevr_root.h: where nEVR keeps what it writes and reads on a PC (ADR 0012, #857).
 //
-// One root per game, %LOCALAPPDATA%\nevr\echovr. The run log and crash record (logs\), the asset cache (cache\) and the cosmetic
-// packages (cosmetics\v1\packages) resolve under it; %LOCALAPPDATA%\EchoVR is the original game's folder and nothing of ours is
+// One root per game, %LOCALAPPDATA%\nevr\echovr. The run log and crash record (logs\), the asset cache (cache\), the cosmetic
+// packages (cosmetics\v1\packages) and the sign-in cache (.credentials.json) resolve under it; %LOCALAPPDATA%\EchoVR is the original game's folder and nothing of ours is
 // written there. Where config.yaml lives is not decided here (ADR 0012 step 6). The names are defined here once. The host
 // (runtime/host/host_paths.h) pins its own copies of the root, logs and crashes names to these at compile time, so the host and
 // the runtime cannot name different folders.
@@ -32,6 +32,7 @@ struct Names<char> {
   static constexpr const char* kCrashes = "crashes";
   static constexpr const char* kCache = "cache";
   static constexpr const char* kCosmetics = "cosmetics\\v1\\packages";
+  static constexpr const char* kCredentials = ".credentials.json";
   static constexpr const char* kMovedMarker = "MOVED-TO-NEVR-ROOT.txt";
   static constexpr const char* kSeparators = "\\/";
 };
@@ -43,6 +44,7 @@ struct Names<wchar_t> {
   static constexpr const wchar_t* kCrashes = L"crashes";
   static constexpr const wchar_t* kCache = L"cache";
   static constexpr const wchar_t* kCosmetics = L"cosmetics\\v1\\packages";
+  static constexpr const wchar_t* kCredentials = L".credentials.json";
   static constexpr const wchar_t* kMovedMarker = L"MOVED-TO-NEVR-ROOT.txt";
   static constexpr const wchar_t* kSeparators = L"\\/";
 };
@@ -82,6 +84,11 @@ std::basic_string<C> CacheDir(const std::basic_string<C>& root) {
 template <typename C>
 std::basic_string<C> CosmeticsDir(const std::basic_string<C>& root) {
   return Join(root, Names<C>::kCosmetics);
+}
+
+template <typename C>
+std::basic_string<C> CredentialsPath(const std::basic_string<C>& root) {
+  return Join(root, Names<C>::kCredentials);
 }
 
 #ifdef _WIN32

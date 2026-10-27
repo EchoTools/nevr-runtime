@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <winsock2.h>  // before windows.h: core/credential_write.h reaches core/logging.h, which pulls it in
 #include <windows.h>
 
 #include <filesystem>
@@ -11,7 +12,9 @@
 #include <string>
 #include <vector>
 
+#include "core/credential_write.h"
 #include "core/nevr_root.h"
+#include "core/system_info.h"
 #include "runtime/lifecycle/nevr_root_move.h"
 
 namespace {
@@ -42,7 +45,9 @@ unsigned Count(const std::vector<move::Event>& events, Outcome outcome) {
 }
 
 // A fresh tree per test, UTF-16 on purpose ("é", a CJK character): the user name in %LOCALAPPDATA% may not be ASCII.
-//   <base>\game\bin\win10\_local   the install's _local, which the move must leave alone (install_local_)
+//   <base>\game\bin\win10\_local   the install's nearest _local        (local_[0], install_local_)
+//   <base>\game\bin\_local         one parent up                       (local_[1])
+//   <base>\game\_local             two parents up                      (local_[2])
 //   <base>\appdata\EchoVR\...      the original game's folder, where nEVR used to write logs and cosmetic packages
 //   <base>\appdata\nevr\echovr     the nevr root
 class NevrRootMove : public ::testing::Test {
@@ -52,14 +57,17 @@ class NevrRootMove : public ::testing::Test {
     ASSERT_NE(GetTempPathW(MAX_PATH, tmp), 0u);
     const std::string test = ::testing::UnitTest::GetInstance()->current_test_info()->name();
     base_ = std::wstring(tmp) + L"nevr-root-test-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
-            std::wstring(test.begin(), test.end()) + L"-\u00e9\u4e2d";
+            std::wstring(test.begin(), test.end()) + Suffix();
     Wipe();
     install_local_ = base_ + L"\\game\\bin\\win10\\_local";
+    local_ = {install_local_, base_ + L"\\game\\bin\\_local", base_ + L"\\game\\_local"};
     legacy_logs_ = base_ + L"\\appdata\\EchoVR\\logs";
     legacy_cosmetics_ = base_ + L"\\appdata\\EchoVR\\cosmetics\\v1\\packages";
     root_ = nevr_root::RootUnder(base_ + L"\\appdata");
   }
   void TearDown() override { Wipe(); }
+  // UTF-16 on purpose; the sign-in cache's tests use plain ASCII (the credential writer takes ANSI paths).
+  virtual std::wstring Suffix() const { return L"-\u00e9\u4e2d"; }
 
   void Wipe() {
     std::error_code ec;
@@ -69,6 +77,7 @@ class NevrRootMove : public ::testing::Test {
   move::Inputs Inputs() const {
     move::Inputs in;
     in.root = root_;
+    in.local_dirs = local_;
     in.legacy_logs_dir = legacy_logs_;
     in.legacy_cosmetics_dir = legacy_cosmetics_;
     return in;
@@ -84,6 +93,7 @@ class NevrRootMove : public ::testing::Test {
   }
 
   std::wstring base_, root_, install_local_, legacy_logs_, legacy_cosmetics_;
+  std::vector<std::wstring> local_;
 };
 
 TEST(NevrRootPaths, EveryFolderIsUnderTheRootUnderLocalAppData) {
@@ -230,16 +240,101 @@ TEST_F(NevrRootMove, WithoutARootTheMoveDoesNothing) {
   EXPECT_TRUE(Exists(legacy_logs_ + L"\\nevr-crash-abc123.txt"));
 }
 
-TEST_F(NevrRootMove, NothingInTheInstallsLocalFolderIsMoved) {
+// The sign-in cache moves through the protected write, whose paths are ANSI: these run under a plain ASCII folder name.
+class NevrRootCredentialMove : public NevrRootMove {
+ protected:
+  std::wstring Suffix() const override { return L"-ascii"; }
+
+  std::wstring Cache(const std::wstring& dir) const { return dir + L"\\.credentials.json"; }
+  static std::string Narrow(const std::wstring& wide) { return std::string(wide.begin(), wide.end()); }
+};
+
+TEST_F(NevrRootCredentialMove, TheSignInCacheMovesIntoTheRootAndTheLocalFolderSaysWhy) {
+  const std::string token = "{\"refresh_token\":\"r-1\",\"refresh_token_expiry\":2000000000}";
+  Write(Cache(local_[0]), token);
+  const std::vector<move::Event> events = move::Run(Inputs());
+
+  EXPECT_EQ(Count(events, Outcome::kMoved), 1u);
+  EXPECT_EQ(Count(events, Outcome::kMarkerWritten), 1u);
+  EXPECT_EQ(ReadAll(Cache(root_)), token) << "byte for byte: the login survives";
+  EXPECT_FALSE(Exists(Cache(local_[0])));
+  EXPECT_FALSE(Exists(Cache(root_) + L".tmp")) << "the temp file of the protected write is renamed away";
+  EXPECT_NE(ReadAll(local_[0] + L"\\MOVED-TO-NEVR-ROOT.txt").find("nevr\\echovr"), std::string::npos);
+  if (nevr_system_info::Get().IsWine()) {
+    EXPECT_EQ(nevr_credential_write::WineHostMode(Narrow(Cache(root_))), "600") << "as private as a cache saved by the runtime";
+  }
+}
+
+TEST_F(NevrRootCredentialMove, TheMoveNeverOverwritesTheRootsCache) {
+  Write(Cache(root_), "root cache");
+  Write(Cache(local_[0]), "old cache");
+  const std::vector<move::Event> events = move::Run(Inputs());
+
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].outcome, Outcome::kLeftRootHasIt);
+  EXPECT_EQ(ReadAll(Cache(root_)), "root cache");
+  EXPECT_EQ(ReadAll(Cache(local_[0])), "old cache");
+  EXPECT_FALSE(Exists(local_[0] + L"\\MOVED-TO-NEVR-ROOT.txt"));
+}
+
+TEST_F(NevrRootCredentialMove, TheNearestCacheWinsAndTheFartherOnesAreLeft) {
+  Write(Cache(local_[0]), "near");
+  Write(Cache(local_[1]), "parent");
+  Write(Cache(local_[2]), "grandparent");
+  const std::vector<move::Event> events = move::Run(Inputs());
+
+  EXPECT_EQ(ReadAll(Cache(root_)), "near");
+  EXPECT_EQ(Count(events, Outcome::kMoved), 1u);
+  EXPECT_EQ(Count(events, Outcome::kLeftRootHasIt), 2u);
+  EXPECT_EQ(ReadAll(Cache(local_[1])), "parent");
+  EXPECT_EQ(ReadAll(Cache(local_[2])), "grandparent");
+}
+
+TEST_F(NevrRootCredentialMove, ACacheThatCannotBeReadStaysAndNothingIsWrittenToTheRoot) {
+  Write(Cache(local_[0]), "held");
+  HANDLE hold = CreateFileW(Cache(local_[0]).c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  ASSERT_NE(hold, INVALID_HANDLE_VALUE);
+  const std::vector<move::Event> events = move::Run(Inputs());
+  CloseHandle(hold);
+
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].outcome, Outcome::kLeftMoveFailed);
+  EXPECT_NE(events[0].error, 0ul);
+  EXPECT_EQ(ReadAll(Cache(local_[0])), "held");
+  EXPECT_FALSE(Exists(Cache(root_))) << "a cache in the root outranks the old one, so a failed move leaves none";
+  EXPECT_FALSE(Exists(local_[0] + L"\\MOVED-TO-NEVR-ROOT.txt"));
+
+  EXPECT_EQ(Count(move::Run(Inputs()), Outcome::kMoved), 1u) << "the next run tries again";
+  EXPECT_EQ(ReadAll(Cache(root_)), "held");
+}
+
+TEST_F(NevrRootCredentialMove, OnlyTheSignInCacheIsTakenFromTheInstallsLocalFolders) {
   Write(install_local_ + L"\\config.yaml", "services: near");
-  Write(install_local_ + L"\\.credentials.json", "{\"refresh_token\":\"x\"}");
-  OldLayout();
+  Write(install_local_ + L"\\config.json", "{}");
+  Write(Cache(install_local_), "cache");
   move::Run(Inputs());
   EXPECT_EQ(ReadAll(install_local_ + L"\\config.yaml"), "services: near") << "config.yaml keeps its resolution (ADR 0012 step 6)";
-  EXPECT_TRUE(Exists(install_local_ + L"\\.credentials.json"));
+  EXPECT_EQ(ReadAll(install_local_ + L"\\config.json"), "{}");
   EXPECT_FALSE(Exists(root_ + L"\\config.yaml"));
+  EXPECT_EQ(ReadAll(Cache(root_)), "cache");
+}
+
+TEST_F(NevrRootCredentialMove, ASecondRunMovesNothing) {
+  Write(Cache(local_[0]), "cache");
+  ASSERT_FALSE(move::Run(Inputs()).empty());
+  EXPECT_TRUE(move::Run(Inputs()).empty());
+  EXPECT_EQ(ReadAll(Cache(root_)), "cache");
+}
+
+TEST_F(NevrRootMove, ACachePathThatIsNotAnsiIsLeftNotLost) {
+  if (GetACP() == CP_UTF8) GTEST_SKIP() << "the ANSI code page is UTF-8 here, so every path converts";
+  Write(local_[0] + L"\\.credentials.json", "cache");
+  const std::vector<move::Event> events = move::Run(Inputs());
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].outcome, Outcome::kLeftMoveFailed);
+  EXPECT_EQ(events[0].error, static_cast<unsigned long>(ERROR_NO_UNICODE_TRANSLATION));
+  EXPECT_EQ(ReadAll(local_[0] + L"\\.credentials.json"), "cache");
   EXPECT_FALSE(Exists(root_ + L"\\.credentials.json"));
-  EXPECT_FALSE(Exists(install_local_ + L"\\MOVED-TO-NEVR-ROOT.txt"));
 }
 
 TEST(NevrRootMoveEnvironment, TheInputsComeFromLocalAppData) {
@@ -250,6 +345,10 @@ TEST(NevrRootMoveEnvironment, TheInputsComeFromLocalAppData) {
   EXPECT_EQ(in.root, L"C:\\Users\\u\\AppData\\Local\\nevr\\echovr");
   EXPECT_EQ(in.legacy_logs_dir, L"C:\\Users\\u\\AppData\\Local\\EchoVR\\logs");
   EXPECT_EQ(in.legacy_cosmetics_dir, L"C:\\Users\\u\\AppData\\Local\\EchoVR\\cosmetics\\v1\\packages");
+  ASSERT_EQ(in.local_dirs.size(), 3u);
+  EXPECT_NE(in.local_dirs[0].find(L"\\_local"), std::wstring::npos);
+  EXPECT_NE(in.local_dirs[1].find(L"..\\_local"), std::wstring::npos);
+  EXPECT_NE(in.local_dirs[2].find(L"..\\..\\_local"), std::wstring::npos);
   SetEnvironmentVariableW(L"LOCALAPPDATA", nullptr);
   EXPECT_TRUE(move::InputsFromEnvironment().root.empty());
   if (had != 0) SetEnvironmentVariableW(L"LOCALAPPDATA", saved);

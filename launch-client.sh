@@ -60,8 +60,9 @@ LOCAL_DIR="$GAME_ROOT/echovr/_local"
 [[ -d "$GAME_DIR" ]] || { echo "ERROR: no game install at $GAME_DIR (set NEVR_GAME_ROOT to the checkout that has echovr/)" >&2; exit 2; }
 SCRATCH="${NEVR_RUN_SCRATCH_ROOT:-$NEVR_WORK_ROOT}/client-run-$(date +%Y%m%dT%H%M%S)"
 WINEPREFIX="$GAME_ROOT/echovr/.wineprefix"
-# The nevr root of the prefix's Windows user (src/core/nevr_root.h, ADR 0012): the run log and the caches live under it.
-LOGDIR="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/nevr/echovr/logs"
+# The nevr root of the prefix's Windows user (src/core/nevr_root.h, ADR 0012): the run log, the caches and the sign-in cache live under it.
+NEVR_ROOT_DIR="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/nevr/echovr"
+LOGDIR="$NEVR_ROOT_DIR/logs"
 
 acquire_game_run_lock
 
@@ -91,11 +92,11 @@ if [[ -e "$GAME_DIR/nevr-runtime.dll" || -L "$GAME_DIR/nevr-runtime.dll" ]]; the
   echo "DRIFT: $GAME_DIR/nevr-runtime.dll exists (expected absent)" >&2; drift=1
 fi
 if [[ $drift -ne 0 ]]; then echo "ABORT: game directory is not pristine" >&2; exit 3; fi
-# The runtime takes the first cache in exe-relative order: _local, ../_local, ../../_local
-# (src/core/auth_token.h SelectCredentialCacheLocation); a device-code login with none saves to
-# $GAME_DIR/_local.
+# The runtime takes the nevr root's cache, then (until the one-time move has taken it) the first in exe-relative order:
+# _local, ../_local, ../../_local (src/core/auth_token.h SelectCredentialCacheLocation); a device-code login with none
+# saves to the root.
 cached=""
-for c in "$GAME_DIR/_local" "$GAME_DIR/../_local" "$LOCAL_DIR"; do
+for c in "$NEVR_ROOT_DIR" "$GAME_DIR/_local" "$GAME_DIR/../_local" "$LOCAL_DIR"; do
   if [[ -f "$c/.credentials.json" ]]; then cached="$c/.credentials.json"; break; fi
 done
 if [[ -n "$cached" ]]; then

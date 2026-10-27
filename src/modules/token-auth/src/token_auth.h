@@ -78,8 +78,9 @@ DeviceAuthFlowResult RunDeviceAuthFlow(bool is_server, const DeviceAuthState& in
 DeviceAuthState InspectInitialDeviceAuth();
 DeviceAuthState InspectDeviceAuthAfterRefresh(const ::CachedAuthToken& auth);
 // Exercises the production executable-relative credential-cache lookup. The
-// caller owns fixture setup and must ensure _local/.credentials.json beside the
-// test executable is restored when this returns.
+// caller owns fixture setup and must ensure the cache the lookup selects (the nevr
+// root's .credentials.json, else _local/.credentials.json beside the test
+// executable) is restored when this returns.
 DeviceAuthState InspectDeviceAuthFromCache();
 
 // Drives the background refresh thread's expiry guard, in-process and without

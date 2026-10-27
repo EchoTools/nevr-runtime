@@ -3,8 +3,8 @@
 Source-shape sensors (the behaviour is src/runtime/tests/test_nevr_root.cpp, run under Wine):
 
   - the run log, the crash record, the asset cache and the cosmetic packages each name nevr_root, and none of those files names
-    the original game's %LOCALAPPDATA%\\EchoVR folder; config.yaml and the credential cache are not moved by this change
-    (ADR 0012 steps 6 and 5's credential part), and the move reads nothing from an install's _local folders;
+    the original game's %LOCALAPPDATA%\\EchoVR folder; the sign-in cache is the root's .credentials.json (the move takes it from an
+    install's _local folders through the protected write, nothing else), and config.yaml is not moved (ADR 0012 step 6);
   - initialize.cpp runs the move after the boot log opens and before the main log, the config or any cache is opened;
   - the host's own folder names are tied to the same names at compile time;
   - the test target exists and both justfile lists run it.
@@ -64,11 +64,25 @@ class TheMoveRunsFirst(unittest.TestCase):
         self.assertIn("%%LOCALAPPDATA%%\\\\nevr\\\\echovr\\\\logs\\\\nevr-<timestamp>.jsonl", code)
         self.assertNotIn("%%LOCALAPPDATA%%\\\\EchoVR", code)
 
-    def test_the_move_takes_nothing_from_the_installs_local_folders(self):
+    def test_the_move_takes_only_the_sign_in_cache_from_the_installs_local_folders(self):
         code = strip_comments(read("src/runtime/lifecycle/nevr_root_move.cpp"))
-        self.assertNotIn("_local", code)
         self.assertNotIn("config.yaml", code)
-        self.assertNotIn("local_dirs", code)
+        self.assertNotIn("kConfigYaml", code)
+        self.assertEqual(len(re.findall(r"Names::kCredentials", code)), 1, "the one file taken from _local")
+        self.assertIn("nevr_credential_write::WriteProtectedTemp", code, "the cache is moved through the protected write")
+
+    def test_the_cache_is_selected_in_the_root_first_with_the_older_search_as_the_fallback(self):
+        code = strip_comments(read("src/core/auth_token.h"))
+        body = extract_braced_function(
+            code, "inline CredentialCacheLocation SelectCredentialCacheLocation(const std::string& exeDir, const std::string& root)")
+        self.assertIn("nevr_root::CredentialsPath(root)", body)
+        self.assertLess(body.index("nevr_root::CredentialsPath(root)"), body.index("kLocalSuffixes"))
+        self.assertIn("SelectLegacyCredentialCacheLocation(exeDir)", body)
+
+    def test_the_move_deletes_only_what_it_moved(self):
+        code = strip_comments(read("src/runtime/lifecycle/nevr_root_move.cpp"))
+        deletes = re.findall(r"DeleteFileW\(([a-z_]+)\.c_str\(\)\)", code)
+        self.assertEqual(sorted(deletes), ["from", "to"], "the moved cache's source, and a copy that failed its read-back")
 
     def test_config_yaml_keeps_its_resolution(self):
         code = strip_comments(read("src/runtime/lifecycle/service_config.cpp"))
@@ -78,7 +92,7 @@ class TheMoveRunsFirst(unittest.TestCase):
         code = strip_comments(read("src/runtime/lifecycle/nevr_root_move.cpp"))
         self.assertIn("MOVEFILE_COPY_ALLOWED", code)
         self.assertNotIn("MOVEFILE_REPLACE_EXISTING", code)
-        self.assertNotIn("DeleteFile", code)
+        self.assertNotIn("DeleteFileA", code)
 
 
 class TheHostAndTheRuntimeNameTheSameFolders(unittest.TestCase):
