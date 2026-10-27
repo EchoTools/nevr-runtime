@@ -445,10 +445,13 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertIn("tools/package_release.py stamp", step["run"])
         self.assertIn('--commit "$GITHUB_SHA"', step["run"])
 
-    def test_verify_always_runs_there_is_no_input_that_skips_it(self):
-        data, _ = load()
+    def test_verify_is_skipped_only_on_a_tag_and_no_input_skips_it(self):
+        # #1008: a tag build skips Verify (every commit on main passed its own checks); a branch or main dispatch
+        # runs it, and no workflow_dispatch input can turn it off.
+        data, on = load()
         step = next(s for s in data["jobs"]["build"]["steps"] if s.get("name") == "Verify")
-        self.assertNotIn("if", step)
+        self.assertEqual(step.get("if"), "github.ref_type != 'tag'")
+        self.assertFalse((on.get("workflow_dispatch") or {}).get("inputs"))
 
     def test_the_release_is_gated_then_sealed_with_no_apk(self):
         data, _ = load()
