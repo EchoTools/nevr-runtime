@@ -332,22 +332,9 @@ TEST(CmdlineStrip, AServerLineLosesItsTimestepArgsAndThenGetsTheConfiguredStep) 
   EXPECT_EQ(stepField, 8333u);
 }
 
-// --- #697: kebab-case flag names, deprecated aliases, one or two leading dashes ----------------------------------
+// --- #697: kebab-case flag names, one or two leading dashes; #698: the pre-#697 spellings name nothing ------------
 
 namespace {
-
-struct AliasPair {
-  const wchar_t* alias;
-  const wchar_t* flag;
-};
-
-// Written out here, not read from nevr_cli::kFlags, so the table cannot vouch for itself.
-const AliasPair kAliasPairs[] = {
-    {L"-noconsole", L"-no-console"},         {L"-noexitonerror", L"-no-exit-on-error"},
-    {L"-exitonerror", L"-exit-on-error"},    {L"-notelemetry", L"-no-telemetry"},
-    {L"-telemetryrate", L"-telemetry-rate"}, {L"-telemetrydiag", L"-telemetry-diag"},
-    {L"-traceexports", L"-trace-exports"},
-};
 
 bool SameWide(const wchar_t* a, const wchar_t* b) { return a != nullptr && b != nullptr && std::wcscmp(a, b) == 0; }
 
@@ -355,29 +342,27 @@ std::wstring OneMoreDash(const std::wstring& token) { return std::wstring(L"-") 
 
 }  // namespace
 
-TEST(CliFlags, EveryAliasMapsToItsNewFlagAndNamesItself) {
-  for (const AliasPair& p : kAliasPairs) {
-    const nevr_cli::Resolved r = nevr_cli::Resolve(p.alias);
-    EXPECT_TRUE(SameWide(r.flag, p.flag)) << "alias maps to the new flag";
-    EXPECT_TRUE(SameWide(r.alias, p.alias)) << "the alias is reported as the alias";
-    EXPECT_FALSE(r.rejected);
-    const nevr_cli::Resolved fresh = nevr_cli::Resolve(p.flag);
-    EXPECT_TRUE(SameWide(fresh.flag, p.flag));
-    EXPECT_EQ(fresh.alias, nullptr) << "the new name is not an alias";
+// The seven names removed in v6.0.0 (#698). Each is an unknown option again: it names no flag, and the caller
+// reads it as it reads any unknown token. (-skip-dbgcore-check and -allow-dbgcore went in #875: they name no flag
+// either, but stay registered with the game so the dbgcore.dll refusal is what the player sees.)
+TEST(CliFlags, EveryRemovedSpellingNamesNoFlag) {
+  const wchar_t* const removed[] = {L"-noconsole",     L"-noexitonerror", L"-exitonerror", L"-notelemetry",
+                                    L"-telemetryrate", L"-telemetrydiag", L"-traceexports"};
+  const wchar_t* const renamed[] = {L"-no-console",      L"-no-exit-on-error", L"-exit-on-error", L"-no-telemetry",
+                                    L"-telemetry-rate",  L"-telemetry-diag",   L"-trace-exports"};
+  for (std::size_t i = 0; i < sizeof(removed) / sizeof(removed[0]); ++i) {
+    const nevr_cli::Resolved r = nevr_cli::Resolve(removed[i]);
+    EXPECT_EQ(r.flag, nullptr) << removed[i];
+    EXPECT_FALSE(r.rejected) << removed[i];
+    EXPECT_FALSE(nevr_cli::IsFlag(removed[i], renamed[i])) << removed[i] << " is not an alias of " << renamed[i];
+    EXPECT_EQ(nevr_cli::Resolve(OneMoreDash(removed[i]).c_str()).flag, nullptr) << "--" << removed[i];
+    EXPECT_TRUE(SameWide(nevr_cli::Resolve(renamed[i]).flag, renamed[i])) << "the new name still reads";
   }
-}
-
-TEST(CliFlags, TheAliasTableIsExactlyTheEightRenames) {
-  std::size_t aliases = 0;
-  for (const nevr_cli::FlagSpec& spec : nevr_cli::kFlags) {
-    if (spec.alias != nullptr) ++aliases;
-  }
-  EXPECT_EQ(aliases, sizeof(kAliasPairs) / sizeof(kAliasPairs[0]));
 }
 
 TEST(CliFlags, OneOrTwoLeadingDashesNameTheFlagThreeAreRejected) {
-  // A plain flag, a value flag, a game token NEVR also reads, and an alias.
-  for (const wchar_t* flag : {L"-server", L"-telemetry-rate", L"-headless", L"-noconsole"}) {
+  // A plain flag, a value flag, a game token NEVR also reads, and a flag with a hyphen.
+  for (const wchar_t* flag : {L"-server", L"-telemetry-rate", L"-headless", L"-no-console"}) {
     const std::wstring two = OneMoreDash(flag);
     const std::wstring three = OneMoreDash(two);
     const nevr_cli::Resolved rOne = nevr_cli::Resolve(flag);
@@ -385,7 +370,6 @@ TEST(CliFlags, OneOrTwoLeadingDashesNameTheFlagThreeAreRejected) {
     const nevr_cli::Resolved rThree = nevr_cli::Resolve(three.c_str());
     ASSERT_NE(rOne.flag, nullptr);
     EXPECT_TRUE(SameWide(rOne.flag, rTwo.flag)) << "--name is -name";
-    EXPECT_EQ(rOne.alias, rTwo.alias);
     EXPECT_EQ(rThree.flag, nullptr) << "---name is not read";
     EXPECT_TRUE(rThree.rejected) << "---name is refused, so the caller can say so";
     EXPECT_FALSE(rOne.rejected);
@@ -398,12 +382,11 @@ TEST(CliFlags, RequireSignedPluginsIsAFlagWithNoOldSpelling) {
   EXPECT_TRUE(nevr_cli::IsFlag(L"--require-signed-plugins", L"-require-signed-plugins"));
   EXPECT_FALSE(nevr_cli::IsFlag(L"---require-signed-plugins", L"-require-signed-plugins"));
   EXPECT_FALSE(nevr_cli::IsFlag(L"-requiresignedplugins", L"-require-signed-plugins"));
-  EXPECT_EQ(nevr_cli::Resolve(L"-require-signed-plugins").alias, nullptr);
 }
 
 TEST(CliFlags, TokensThatNameNoFlagResolveToNothing) {
   for (const wchar_t* token : {L"server", L"+server", L"-Server", L"-servers", L"-serve", L"-", L"--", L"", L"-5",
-                               L"--unknown-flag", L"---unknown-flag", L"-no-consol"}) {
+                               L"--unknown-flag", L"---unknown-flag", L"-no-consol", L"-noconsole", L"-traceexports"}) {
     const nevr_cli::Resolved r = nevr_cli::Resolve(token);
     EXPECT_EQ(r.flag, nullptr) << "not a NEVR flag";
     EXPECT_FALSE(r.rejected) << "an unknown token is left to the caller, as before";
@@ -411,19 +394,12 @@ TEST(CliFlags, TokensThatNameNoFlagResolveToNothing) {
   EXPECT_EQ(nevr_cli::Resolve(nullptr).flag, nullptr);
 }
 
-TEST(CliFlags, IsFlagAnswersForTheNameAndForTheAlias) {
+TEST(CliFlags, IsFlagAnswersForTheNameOnly) {
   EXPECT_TRUE(nevr_cli::IsFlag(L"-no-console", L"-no-console"));
   EXPECT_TRUE(nevr_cli::IsFlag(L"--no-console", L"-no-console"));
-  EXPECT_TRUE(nevr_cli::IsFlag(L"-noconsole", L"-no-console"));
+  EXPECT_FALSE(nevr_cli::IsFlag(L"-noconsole", L"-no-console")) << "the removed spelling is not the flag";
   EXPECT_FALSE(nevr_cli::IsFlag(L"-no-console", L"-server"));
   EXPECT_FALSE(nevr_cli::IsFlag(L"---no-console", L"-no-console"));
-}
-
-// The text a deprecated alias earns, once per run: pinned whole, including the version it goes away in.
-TEST(CliFlags, TheAliasWarningTextIsPinned) {
-  char line[256];
-  std::snprintf(line, sizeof(line), nevr_cli::kAliasWarningFormat, L"-noconsole", L"-no-console");
-  EXPECT_STREQ(line, "[NEVR.PATCH] -noconsole is deprecated and will be removed in v6.0.0; use -no-console");
 }
 
 // `--server` is a server to NEVR (boot.cpp through nevr_cli, the strip through HasServerToken) and to the game
@@ -453,20 +429,3 @@ TEST(CliFlags, ThreeDashesIsNotAServerToNevrAndTheDisagreementIsPinned) {
   EXPECT_FALSE(HasServerToken("echovr.exe +server"));
 }
 
-TEST(CliFlags, AnAliasIsReportedOncePerRunPerAlias) {
-  nevr_cli::AliasReports reports;
-  const nevr_cli::Resolved noConsole = nevr_cli::Resolve(L"-noconsole");
-  const nevr_cli::Resolved noConsoleTwoDashes = nevr_cli::Resolve(L"--noconsole");
-  const nevr_cli::Resolved rate = nevr_cli::Resolve(L"-telemetryrate");
-  EXPECT_TRUE(reports.First(noConsole)) << "the first use warns";
-  EXPECT_FALSE(reports.First(noConsole)) << "the second does not";
-  EXPECT_FALSE(reports.First(noConsoleTwoDashes)) << "another spelling of the same alias does not";
-  EXPECT_TRUE(reports.First(rate)) << "a different alias warns on its own";
-  EXPECT_FALSE(reports.First(rate));
-  EXPECT_FALSE(reports.First(nevr_cli::Resolve(L"-no-console"))) << "the new name never warns";
-  EXPECT_FALSE(reports.First(nevr_cli::Resolve(L"-unknown")));
-  EXPECT_FALSE(reports.First(nevr_cli::Resolve(L"---noconsole"))) << "a refused token is not an alias use";
-
-  nevr_cli::AliasReports another;
-  EXPECT_TRUE(another.First(noConsole)) << "each run starts clean";
-}
