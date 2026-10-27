@@ -24,7 +24,7 @@
 #include <string>
 #include <vector>
 
-#include "data/sha256.h"
+#include "quest/data/sha256.h"
 #include "got_hook.h"
 #include "hook_log.h"
 #include "pinned_targets.h"
