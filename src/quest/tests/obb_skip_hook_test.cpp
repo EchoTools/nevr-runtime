@@ -202,6 +202,7 @@ constexpr const char* kLegacyData = "/storage/emulated/0/readyatdawn/_data";
 // The file the data step takes as "this version of the data is there" (quest/data/plan.h): a root holding it is complete.
 const std::string kMediaManifest = std::string(kMediaDir) + "/" + nevr_quest::data::kManifestPath;
 const std::string kLegacyManifest = std::string("/storage/emulated/0/readyatdawn/") + nevr_quest::data::kManifestPath;
+constexpr const char* kLegacyDir = "/storage/emulated/0/readyatdawn";
 
 bool SomeLineContains(const char* needle) {
   for (const std::string& l : g_lines) {
@@ -491,6 +492,7 @@ void InstallWithEveryHookTakingTurnsTheRedirectOnAndAnswersTheEngine() {
   QCHECK(std::strcmp(DataRootEntry()(), kMediaDir) == 0);  // the handler InstallWith armed
   QCHECK(g_realDataRootCalls == 0);
   QCHECK(SomeLineContains("\"result\":\"installed\"") && SomeLineContains("\"data_root\":\"ok\""));
+  QCHECK(SomeLineContains("\"engine_redirect\":\"/sdcard/Android/media/com.readyatdawn.r15/files\""));
 }
 
 void InstallWithARefusedDataRootSlotIsNotLiveAndTheInstallFails() {
@@ -505,6 +507,8 @@ void InstallWithARefusedDataRootSlotIsNotLiveAndTheInstallFails() {
   QCHECK(obb::DataRootRedirect() == nullptr);  // the engine still reads the legacy root, so nothing may say otherwise
   QCHECK(SomeLineContains("\"result\":\"data_root_failed\"") && SomeLineContains("\"data_root\":\"module_not_loaded\""));
   QCHECK(SomeLineContains("\"level\":\"error\""));
+  // The resolver said media_complete; the install did not take, so the line must not.
+  QCHECK(SomeLineContains("\"engine_redirect\":\"hook_not_live\""));
 }
 
 void InstallWithARefusedPathSlotStillInstallsTheDataRootHookAndSkipsTheMount() {
@@ -523,6 +527,58 @@ void InstallWithAnIncompleteMediaCopyInstallsTheHookButRedirectsNothing() {
   QCHECK(obb::InstallWith(FakeEnv()));
   QCHECK(obb::DataRootRedirect() == nullptr);
   QCHECK(std::strcmp(DataRootEntry()(), "/storage/emulated/0/readyatdawn") == 0 && g_realDataRootCalls == 1);
+}
+
+// ---- the four cases (#965): which root the game's data is read from, with the log line that says why ----
+
+// Each case is what the headset holds, the root the engine and a skipped mount read, the redirect the hook answers
+// with, and the data_root line's source and engine_redirect. Checked through the engine's question (no OBB) and
+// through a skipped mount (OBB present), which must agree.
+void TheFourCasesReadTheRootThatHoldsTheDataAndSayWhy() {
+  struct Case {
+    std::set<std::string> existing;
+    const char* root;
+    const char* source;
+    const char* engineRedirect;
+    const char* redirect;  // null: the engine is not redirected
+  };
+  const Case cases[] = {
+      {{kLegacyData, kLegacyManifest}, kLegacyDir, "legacy", "no", nullptr},
+      {{kMediaData, kMediaManifest}, kMediaDir, "android_media", "media_complete", kMediaDir},
+      {{kMediaData, kMediaManifest, kLegacyData, kLegacyManifest}, kMediaDir, "android_media", "media_complete",
+       kMediaDir},
+      {{kMediaData, kLegacyData, kLegacyManifest}, kLegacyDir, "legacy", "media_incomplete", nullptr},
+  };
+  for (const Case& c : cases) {
+    Reset();
+    g_lines.clear();
+    g_existing = c.existing;
+    sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
+    obb::ResolveRoot(&FakeExists);
+    sentinel::SetLogSink(previous);
+    QCHECK(std::strcmp(obb::CurrentRoot(), c.root) == 0);  // what a skipped mount serves
+    QCHECK(SomeLineContains(("\"source\":\"" + std::string(c.source) + "\"").c_str()));
+    QCHECK(SomeLineContains(("\"engine_redirect\":\"" + std::string(c.engineRedirect) + "\"").c_str()));
+    obb::ArmForTest();
+    QCHECK(std::strcmp(DataRootEntry()(), c.root) == 0);  // what the engine's own question is answered with
+    if (c.redirect == nullptr) {
+      QCHECK(obb::DataRootRedirect() == nullptr);
+    } else {
+      QCHECK(obb::DataRootRedirect() != nullptr && std::strcmp(obb::DataRootRedirect(), c.redirect) == 0);
+    }
+  }
+}
+
+// #965: a skipped mount (an OBB file present) must not serve a media copy without the manifest while the legacy
+// root holds the complete data; the engine's answer and the mount's answer agree on the legacy root.
+void AnOBBSkipServesCompleteLegacyDataNotAStaleMediaCopy() {
+  Reset();
+  g_existing = {kMediaData, kLegacyData, kLegacyManifest};
+  obb::ResolveRoot(&FakeExists);
+  obb::ArmForTest();
+  GameInit(10);
+  QCHECK(GetDataRootDir() == "/storage/emulated/0/readyatdawn");
+  QCHECK(std::strcmp(obb::CurrentRoot(), "/storage/emulated/0/readyatdawn") == 0);
 }
 
 void TheRealFilesystemCheckSaysDirectoryOnlyForADirectory() {
@@ -596,6 +652,8 @@ int main() {
   InstallWithARefusedDataRootSlotIsNotLiveAndTheInstallFails();
   InstallWithARefusedPathSlotStillInstallsTheDataRootHookAndSkipsTheMount();
   InstallWithAnIncompleteMediaCopyInstallsTheHookButRedirectsNothing();
+  TheFourCasesReadTheRootThatHoldsTheDataAndSayWhy();
+  AnOBBSkipServesCompleteLegacyDataNotAStaleMediaCopy();
   TheSixCountersRegisterAndLeaveTheRestOfTheTable();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "obb_skip_hook_test: %d check(s) failed\n", quest_test::Failures());

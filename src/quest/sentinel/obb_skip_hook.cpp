@@ -128,7 +128,15 @@ bool HoldsManifest(const char* root, data_root::ExistsFn fileExists) noexcept {
 void ResolveRoot(data_root::ExistsFn exists) noexcept { ResolveRoot(exists, exists); }
 
 void ResolveRoot(data_root::ExistsFn dirExists, data_root::ExistsFn fileExists) noexcept {
-  const data_root::Resolution r = data_root::Resolve(dirExists);
+  data_root::Resolution r = data_root::Resolve(dirExists);
+  // A media root with `_data` but no manifest is a partial or older copy (#932). When the legacy root holds the
+  // complete data, the legacy root is chosen (#965): a skipped mount then serves the same root the engine's own
+  // question does, and the data step reads the complete copy. Without this a skipped mount served the stale copy.
+  const bool mediaPartial =
+      r.found && std::strcmp(r.source, "android_media") == 0 && !HoldsManifest(r.root, fileExists);
+  if (mediaPartial && HoldsManifest(data_root::kLegacyRoot, fileExists)) {
+    r = {data_root::kLegacyRoot, "legacy", true};
+  }
   g_root.store(r.root, std::memory_order_release);
   // The engine is told the media root only when it holds the manifest: a `_data` directory alone may be a partial or an
   // older copy, and the legacy root may hold the complete one (#932). An unmarked media root is served to a skipped
@@ -143,11 +151,13 @@ void ResolveRoot(data_root::ExistsFn dirExists, data_root::ExistsFn fileExists) 
                          {"root", r.root},
                          {"detail", "the media directory exists but holds no _data directly under it"}});
   } else if (r.found) {
+    // "media_incomplete" with source legacy: the media directory has `_data` without the manifest and was passed over.
     sentinel::LogFields(sentinel::LogLevel::kInfo, "data_root",
                         {{"result", "found"},
                          {"source", r.source},
                          {"root", r.root},
-                         {"engine_redirect", mediaComplete ? "media_complete" : mediaWithData ? "media_incomplete" : "no"}});
+                         {"engine_redirect", mediaComplete ? "media_complete"
+                                             : (mediaWithData || mediaPartial) ? "media_incomplete" : "no"}});
   } else {
     sentinel::LogFields(sentinel::LogLevel::kError, "data_root",
                         {{"result", "not_found"},
@@ -193,10 +203,16 @@ bool InstallWith(const InstallEnv& env) noexcept {
   const char* result = "installed";
   if (!ok) result = path == sentinel::GotStatus::kOk && mount == sentinel::GotStatus::kOk ? "data_root_failed"
                     : path == sentinel::GotStatus::kOk ? "path_only" : "failed";
+  // What the engine's data-root question is answered with, after the install: the data_root line before this one says
+  // what was resolved, this one says whether the redirect is in effect (#965). A refused slot means it is not.
+  const char* engineRedirect = dataRoot != sentinel::GotStatus::kOk ? "hook_not_live"
+                               : DataRootRedirect() != nullptr      ? DataRootRedirect()
+                                                                    : "none";
   sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "obb_skip_install",
                       {{"result", result},
                        {"path", sentinel::GotStatusName(path)},
                        {"mount", sentinel::GotStatusName(mount)},
+                       {"engine_redirect", engineRedirect},
                        {"data_root", sentinel::GotStatusName(dataRoot)}});
   return ok;
 }
