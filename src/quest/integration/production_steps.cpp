@@ -38,6 +38,7 @@
 #include "quest/social/menu_version_label.h"
 #include "quest/social/social_facade.h"
 #include "quest/social/social_frames.h"
+#include "quest/sentinel/splash_skip_hook.h"
 #include "runtime/compat/friend_request_check.h"
 #include "runtime/compat/party_leave_check.h"
 #include "runtime/compat/party_share_check.h"
@@ -555,6 +556,9 @@ class ProductionSteps final : public Steps {
     // The UI texture top mip (#961) rides this step too: its one libr15 detour needs only the libr15 image, and the hook
     // logs its own outcome, so a refusal does not fail social.
     nevr_quest::integration::InstallUiTextureMipsHook();
+    // The button-press splash skip (#962) rides the same step: one inline hook on libr15's menu widget, which the
+    // game reaches through a function pointer. Its result is logged by the hook; a refusal does not fail social.
+    if (ok) nevr_quest::splash_skip::Install();
     return ok;
   }
 
