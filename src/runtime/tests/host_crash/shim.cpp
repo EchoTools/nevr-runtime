@@ -10,6 +10,7 @@
 
 #include "core/runtime_abi.h"
 #include "runtime/host/host_entry.h"
+#include "runtime/host/path_buffer.h"
 #include "runtime/host/runtime_load.h"
 
 #include <windows.h>
@@ -72,7 +73,10 @@ extern "C" void nevr_host_test_Prepare(HMODULE host_module) {
   if (!nevr_host::WaitForDbgHelpPreload(30000)) {
     std::fprintf(stderr, "host crash shim: the dbghelp preload thread did not finish\n");
   }
-  g_loader.Prepare(host_module);
+  // The fixture runtime is staged beside this shim; the production rule (the nEVR root) is the subject of test_host_runtime_load.
+  static wchar_t runtime_dir[MAX_PATH];
+  if (nevr_host::DirOfModule(runtime_dir, MAX_PATH, host_module)) nevr_host::SetRuntimeDirForTest(runtime_dir);
+  g_loader.Prepare();
 }
 
 extern "C" std::uint32_t nevr_host_test_LoadRuntime() {

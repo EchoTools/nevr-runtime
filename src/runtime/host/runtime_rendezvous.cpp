@@ -119,7 +119,7 @@ void RuntimeRendezvous::Prepare(HMODULE host_module, HMODULE game_module,
   host_module_ = host_module;
   game_module_ = game_module;
   diagnostics_ = &diagnostics;
-  loader_.Prepare(host_module);
+  loader_.Prepare();
   g_active_rendezvous = this;
 }
 

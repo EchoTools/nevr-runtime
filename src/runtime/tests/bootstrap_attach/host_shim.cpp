@@ -19,6 +19,8 @@
 #include "runtime/tests/bootstrap_attach/abi.h"
 
 #include "runtime/host/host_entry.h"
+#include "runtime/host/path_buffer.h"
+#include "runtime/host/runtime_load.h"
 
 namespace {
 
@@ -76,6 +78,9 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
     nevr_host::RuntimeRendezvous::Seams().fail_event_create = true;
   }
   nevr_host::RuntimeRendezvous::Seams().stop_game = &RecordStop;
+  // The fixture runtime is staged beside this shim; the production rule (the nEVR root) is the subject of test_host_runtime_load.
+  static wchar_t runtime_dir[MAX_PATH];
+  if (nevr_host::DirOfModule(runtime_dir, MAX_PATH, module)) nevr_host::SetRuntimeDirForTest(runtime_dir);
   nevr_host::OnProcessAttach(module, game, false);
 
   if (nevr_host::Rendezvous().Installed()) {

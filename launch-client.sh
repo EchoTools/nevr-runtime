@@ -86,11 +86,14 @@ shopt -u nullglob
 if [[ ${#plugin_files[@]} -ne 0 ]]; then
   echo "DRIFT: $GAME_DIR/plugins is not empty: ${plugin_files[*]}" >&2; drift=1
 fi
-# A game install has no nevr-runtime.dll: one there is a leftover of another run, which the restore step below
-# would delete as its own.
-if [[ -e "$GAME_DIR/nevr-runtime.dll" || -L "$GAME_DIR/nevr-runtime.dll" ]]; then
-  echo "DRIFT: $GAME_DIR/nevr-runtime.dll exists (expected absent)" >&2; drift=1
-fi
+# The host loads nevr-runtime.dll from the nevr root, never from the game install (ADR 0012). One in either place
+# is a leftover of another run (or a file the host would never load), which the restore step below would delete
+# as its own.
+for stale in "$GAME_DIR/nevr-runtime.dll" "$NEVR_ROOT_DIR/nevr-runtime.dll"; do
+  if [[ -e "$stale" || -L "$stale" ]]; then
+    echo "DRIFT: $stale exists (expected absent)" >&2; drift=1
+  fi
+done
 if [[ $drift -ne 0 ]]; then echo "ABORT: game directory is not pristine" >&2; exit 3; fi
 # The runtime takes the nevr root's cache, then (until the one-time move has taken it) the first in exe-relative order:
 # _local, ../_local, ../../_local (src/core/auth_token.h SelectCredentialCacheLocation); a device-code login with none
@@ -113,11 +116,11 @@ cp -p "$GAME_DIR/BugSplat64.dll" "$SCRATCH/BugSplat64.dll.orig"
 restore() {
   trap - EXIT
   cp -p "$SCRATCH/BugSplat64.dll.orig" "$GAME_DIR/BugSplat64.dll"
-  rm -f "$GAME_DIR/nevr-runtime.dll"
-  if cmp -s "$SCRATCH/BugSplat64.dll.orig" "$GAME_DIR/BugSplat64.dll" && [[ ! -e "$GAME_DIR/nevr-runtime.dll" ]]; then
-    echo "=== original BugSplat64.dll restored and verified, nevr-runtime.dll removed ==="
+  rm -f "$NEVR_ROOT_DIR/nevr-runtime.dll"
+  if cmp -s "$SCRATCH/BugSplat64.dll.orig" "$GAME_DIR/BugSplat64.dll" && [[ ! -e "$NEVR_ROOT_DIR/nevr-runtime.dll" ]]; then
+    echo "=== original BugSplat64.dll restored and verified, nevr-runtime.dll removed from the nevr root ==="
   else
-    echo "ERROR: BugSplat64.dll restore failed (or nevr-runtime.dll is still there); original is $SCRATCH/BugSplat64.dll.orig" >&2
+    echo "ERROR: BugSplat64.dll restore failed (or nevr-runtime.dll is still in the nevr root); original is $SCRATCH/BugSplat64.dll.orig" >&2
   fi
   # A cleanup step, not a gate: wineserver exits 1 when no server is left to kill, and as the last command
   # of an EXIT trap under `set -e` that would replace the script's own exit status.
@@ -128,12 +131,13 @@ trap 'exit 143' INT TERM
 trap restore EXIT
 
 echo "=== Deploying $DLL ==="
-# The runtime first: until the host is replaced nothing loads it.
-cp -v "$RUNTIME_DLL" "$GAME_DIR/nevr-runtime.dll"
-cmp -s "$RUNTIME_DLL" "$GAME_DIR/nevr-runtime.dll"
+# The runtime first, into the nevr root where the host looks for it: until the host is replaced nothing loads it.
+mkdir -p "$NEVR_ROOT_DIR"
+cp -v "$RUNTIME_DLL" "$NEVR_ROOT_DIR/nevr-runtime.dll"
+cmp -s "$RUNTIME_DLL" "$NEVR_ROOT_DIR/nevr-runtime.dll"
 cp -v "$DLL" "$GAME_DIR/BugSplat64.dll"
 cmp -s "$DLL" "$GAME_DIR/BugSplat64.dll"
-sha256sum "$GAME_DIR/BugSplat64.dll" "$GAME_DIR/nevr-runtime.dll"
+sha256sum "$GAME_DIR/BugSplat64.dll" "$NEVR_ROOT_DIR/nevr-runtime.dll"
 
 echo "=== Starting echovr.exe -windowed (DISPLAY=$DISPLAY, WAYLAND_DISPLAY unset) ==="
 echo "=== Console log: $CONSOLE_LOG ==="

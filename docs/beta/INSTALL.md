@@ -9,7 +9,7 @@ have it, so please report anything odd (see "Report a bug").
 | File | What to do with it |
 |---|---|
 | `BugSplat64.dll` | Install it: it replaces the game's file of the same name. |
-| `nevr-runtime.dll` | Install it beside `BugSplat64.dll`: the runtime that `BugSplat64.dll` loads. Without it the game stops at start. |
+| `nevr-runtime.dll` | Install it in `%LOCALAPPDATA%\nevr\echovr`, not beside `BugSplat64.dll`: the runtime that `BugSplat64.dll` loads. Without it the game stops at start. |
 | `INSTALL.md` | This page. |
 | `echovr_server.exe`, `README.md` | Ignore them. They are for people running game servers or developing the runtime. |
 
@@ -19,7 +19,9 @@ have it, so please report anything odd (see "Report a bug").
 2. Find your Echo VR folder: the one that contains `bin\win10\echovr.exe`.
 3. In `bin\win10`, rename the existing `BugSplat64.dll` to `BugSplat64.dll.original`. Keep it: it is how
    you uninstall.
-4. Copy `BugSplat64.dll` and `nevr-runtime.dll` from the zip into `bin\win10`.
+4. Copy `BugSplat64.dll` from the zip into `bin\win10`. Copy `nevr-runtime.dll` into `%LOCALAPPDATA%\nevr\echovr`
+   (paste that into the File Explorer address bar; create the folders if they are not there). If an older
+   release left a `nevr-runtime.dll` in `bin\win10`, delete it: the game no longer loads it.
 5. Start Echo VR the way you normally do.
 
 ## First start: sign in with Discord
@@ -40,7 +42,7 @@ want to sign in again (for example as a different Discord account).
 
 ## Uninstall
 
-Close Echo VR, delete `bin\win10\BugSplat64.dll` and `bin\win10\nevr-runtime.dll`, and rename `BugSplat64.dll.original` back to
+Close Echo VR, delete `bin\win10\BugSplat64.dll` and `%LOCALAPPDATA%\nevr\echovr\nevr-runtime.dll`, and rename `BugSplat64.dll.original` back to
 `BugSplat64.dll`.
 
 ## Known issues

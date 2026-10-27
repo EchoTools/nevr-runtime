@@ -4,6 +4,7 @@
 #include "runtime/host/host_json.h"
 #include "runtime/host/loader_lock.h"
 #include "runtime/host/path_buffer.h"
+#include "core/nevr_root.h"
 
 #include "runtime/ext/plugin_pins.h"
 #include "runtime/ext/plugin_signature.h"
@@ -66,6 +67,7 @@ std::atomic<bool> g_verify_for_test{false};
 std::atomic<const nevr_plugin_signature::Policy*> g_policy_for_test{nullptr};
 std::atomic<int> g_dev_build_for_test{-1};
 std::atomic<void (*)(const wchar_t*)> g_before_load_for_test{nullptr};
+std::atomic<const wchar_t*> g_runtime_dir_for_test{nullptr};
 #endif
 
 // The policy the verdict is taken against: the pins, the same constants the runtime's own policy starts from.
@@ -307,6 +309,8 @@ void SetVerifyPolicyForTest(const nevr_plugin_signature::Policy* policy) noexcep
 void SetDevBuildForTest(int mode) noexcept { g_dev_build_for_test.store(mode); }
 
 void SetBeforeLoadHookForTest(void (*hook)(const wchar_t* path)) noexcept { g_before_load_for_test.store(hook); }
+
+void SetRuntimeDirForTest(const wchar_t* directory) noexcept { g_runtime_dir_for_test.store(directory); }
 #endif
 
 VerifyDecision DecideVerify(RuntimeFile file, bool verify_enabled, bool accepted, bool dev_build) noexcept {
@@ -353,6 +357,9 @@ void EmitLoadDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResu
     record["path_ok"] = result.path_ok;
     record["loader_lock_held"] = result.loader_lock_held;
     if (result.path_ok) record["path"] = ToUtf8(result.path);
+    if (result.path_ok) record["root"] = RuntimeRootSourceName(result.root_source);
+    // NEVR_ROOT was set and this build does not honour it: said in the record, never silently dropped.
+    if (result.root_override_ignored) record["root_override"] = "ignored";
     record["expected_abi"] = AbiVersion(result.expected_major, result.expected_minor);
     const bool descriptor_read = DescriptorRead(result.outcome);
     if (descriptor_read) {
@@ -438,22 +445,105 @@ void EmitVersionsRecord(BootstrapDiagnostics& diagnostics, const std::string& ho
 
 }  // namespace
 
-bool ResolveRuntimePath(HMODULE host_module, wchar_t* out, std::size_t out_size) noexcept {
-  if (out == nullptr || out_size == 0) return false;
-  out[0] = L'\0';
-  if (!DirOfModule(out, out_size, host_module)) return false;
-  const std::size_t directory_length = wcslen(out);
-  constexpr std::size_t kNameLength = sizeof(kRuntimeFileName) / sizeof(kRuntimeFileName[0]);
-  if (directory_length + kNameLength > out_size) {
+namespace {
+
+// A directory that is spelled from a drive or a share: X:\ or X:/ or \\server. A relative NEVR_ROOT would resolve against
+// whatever the working directory is, and the runtime must not be found that way.
+bool IsAbsoluteDirectory(const wchar_t* path) noexcept {
+  if (path == nullptr) return false;
+  const bool drive = ((path[0] >= L'A' && path[0] <= L'Z') || (path[0] >= L'a' && path[0] <= L'z')) && path[1] == L':' &&
+                     (path[2] == L'\\' || path[2] == L'/');
+  const bool share = path[0] == L'\\' && path[1] == L'\\';
+  return drive || share;
+}
+
+std::size_t Length(const wchar_t* text) noexcept { return text == nullptr ? 0 : wcslen(text); }
+
+// directory + one backslash (none added when it already ends in a separator) + child, into out. Appends to the
+// `used` characters already in out. False, with out emptied, when it does not fit with its NUL.
+bool Append(wchar_t* out, std::size_t out_size, std::size_t* used, const wchar_t* piece) noexcept {
+  const std::size_t length = Length(piece);
+  if (*used + length + 1 > out_size) {
     out[0] = L'\0';
     return false;
   }
-  std::memcpy(out + directory_length, kRuntimeFileName, sizeof(kRuntimeFileName));
+  std::memcpy(out + *used, piece, length * sizeof(wchar_t));
+  *used += length;
+  out[*used] = L'\0';
   return true;
 }
 
-void RuntimeLoader::Prepare(HMODULE host_module) {
-  path_ok_ = ResolveRuntimePath(host_module, path_, MAX_PATH);
+bool AppendChild(wchar_t* out, std::size_t out_size, std::size_t* used, const wchar_t* child) noexcept {
+  if (*used != 0 && out[*used - 1] != L'\\' && out[*used - 1] != L'/') {
+    if (!Append(out, out_size, used, L"\\")) return false;
+  }
+  return Append(out, out_size, used, child);
+}
+
+// An environment value into a fixed buffer; empty when it is unset or does not fit.
+void ReadEnvironment(const wchar_t* name, wchar_t* out, std::size_t out_size) noexcept {
+  out[0] = L'\0';
+  const DWORD n = GetEnvironmentVariableW(name, out, static_cast<DWORD>(out_size));
+  if (n == 0 || n >= out_size) out[0] = L'\0';
+}
+
+}  // namespace
+
+const char* RuntimeRootSourceName(RuntimeRootSource source) noexcept {
+  switch (source) {
+    case RuntimeRootSource::kLocalAppData: return "local_appdata";
+    case RuntimeRootSource::kOverride: return "nevr_root_override";
+    case RuntimeRootSource::kUnresolved: break;
+  }
+  return "unresolved";
+}
+
+RuntimePathChoice ResolveRuntimePathFrom(const wchar_t* local_app_data, const wchar_t* nevr_root_override,
+                                         bool dev_build, wchar_t* out, std::size_t out_size) noexcept {
+  RuntimePathChoice choice;
+  if (out == nullptr || out_size == 0) return choice;
+  out[0] = L'\0';
+  std::size_t used = 0;
+  const bool override_set = nevr_root_override != nullptr && nevr_root_override[0] != L'\0';
+  const bool honoured = override_set && dev_build && IsAbsoluteDirectory(nevr_root_override);
+  choice.override_ignored = override_set && !honoured;
+  if (honoured) {
+    if (!Append(out, out_size, &used, nevr_root_override)) return choice;
+    choice.source = RuntimeRootSource::kOverride;
+  } else {
+    if (local_app_data == nullptr || local_app_data[0] == L'\0') return choice;
+    if (!Append(out, out_size, &used, local_app_data)) return choice;
+    if (!AppendChild(out, out_size, &used, nevr_root::Names<wchar_t>::kRoot)) return choice;
+    choice.source = RuntimeRootSource::kLocalAppData;
+  }
+  if (!AppendChild(out, out_size, &used, kRuntimeFileName)) {
+    choice.source = RuntimeRootSource::kUnresolved;
+  }
+  return choice;
+}
+
+RuntimePathChoice ResolveRuntimePath(wchar_t* out, std::size_t out_size) noexcept {
+#if defined(NEVR_HOST_TESTING)
+  if (const wchar_t* directory = g_runtime_dir_for_test.load()) {
+    RuntimePathChoice choice;
+    if (out == nullptr || out_size == 0) return choice;
+    out[0] = L'\0';
+    std::size_t used = 0;
+    if (!Append(out, out_size, &used, directory) || !AppendChild(out, out_size, &used, kRuntimeFileName)) return choice;
+    choice.source = RuntimeRootSource::kOverride;
+    return choice;
+  }
+#endif
+  wchar_t local_app_data[MAX_PATH] = {};
+  wchar_t nevr_root_override[MAX_PATH] = {};
+  ReadEnvironment(L"LOCALAPPDATA", local_app_data, MAX_PATH);
+  ReadEnvironment(L"NEVR_ROOT", nevr_root_override, MAX_PATH);
+  return ResolveRuntimePathFrom(local_app_data, nevr_root_override, DevBuild(), out, out_size);
+}
+
+void RuntimeLoader::Prepare() {
+  choice_ = ResolveRuntimePath(path_, MAX_PATH);
+  path_ok_ = choice_.source != RuntimeRootSource::kUnresolved;
   if (!path_ok_) path_[0] = L'\0';
 }
 
@@ -476,6 +566,8 @@ RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host,
   result_ = RuntimeLoadResult{};
   result_.path_ok = path_ok_;
   CopyPath(result_.path, MAX_PATH, path_);
+  result_.root_source = choice_.source;
+  result_.root_override_ignored = choice_.override_ignored;
   const bool loader_lock_held = LoaderLockHeldByThisThread();
 
   HMODULE module = nullptr;
@@ -561,6 +653,8 @@ RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host,
   result_ = ClassifyLoad(path_ok_, path_, load_error, module, has_entry, api, abi_status,
                          init_code);
   if (refused) result_.outcome = RuntimeLoadOutcome::kRuntimeRefused;
+  result_.root_source = choice_.source;
+  result_.root_override_ignored = choice_.override_ignored;
   result_.verify = verify;
   result_.verify_reason = verify_reason;
   result_.verify_reason_code = verify_reason_code;

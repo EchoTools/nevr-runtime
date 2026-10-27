@@ -328,12 +328,16 @@ class HostRuntimeVerify : public ::testing::Test {
     local_ = root_ + L"\\local";
     ASSERT_NE(CreateDirectoryW(install_.c_str(), nullptr), FALSE);
     ASSERT_NE(CreateDirectoryW(local_.c_str(), nullptr), FALSE);
-    runtime_path_ = install_ + L"\\nevr-runtime.dll";
+    nevr_root_ = root_ + L"\\nevr-root";
+    ASSERT_NE(CreateDirectoryW(nevr_root_.c_str(), nullptr), FALSE);
+    runtime_path_ = nevr_root_ + L"\\nevr-runtime.dll";
+    nevr_host::SetRuntimeDirForTest(nevr_root_.c_str());
     g_log_path = local_ + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl";
     g_versions_written_before_load = false;
 
-    // The host stand-in: a module whose directory is the install directory, so the production path rule
-    // (nevr-runtime.dll beside the host) finds the staged file. Any plain DLL will do.
+    // The host stand-in, in the install directory: the game's folder, where the runtime is no longer looked for.
+    // Any plain DLL will do. The runtime is looked for in nevr_root_ through the seam; the production rule is
+    // the subject of test_host_runtime_load.
     const std::wstring host_path = install_ + L"\\BugSplat64.dll";
     ASSERT_TRUE(CopyFileW(WinPath(fixtures_ + "/" + manifest_["files"]["good"].get<std::string>()).c_str(),
                           host_path.c_str(), FALSE));
@@ -360,10 +364,13 @@ class HostRuntimeVerify : public ::testing::Test {
     nevr_host::SetVerifyPolicyForTest(nullptr);
     nevr_host::SetDevBuildForTest(-1);
     nevr_host::SetBeforeLoadHookForTest(nullptr);
+    nevr_host::SetRuntimeDirForTest(nullptr);
     RuntimeRendezvous::Seams() = RuntimeRendezvous::TestSeams{};
     if (host_ != nullptr) FreeLibrary(host_);
     // Best effort: the staged files of this test, by exact path.
     DeleteFileW(runtime_path_.c_str());
+    DeleteFileW((install_ + L"\\nevr-runtime.dll").c_str());
+    RemoveDirectoryW(nevr_root_.c_str());
     DeleteFileW((install_ + L"\\BugSplat64.dll").c_str());
     RemoveDirectoryW(install_.c_str());
     DeleteFileW((local_ + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl").c_str());
@@ -424,7 +431,7 @@ class HostRuntimeVerify : public ::testing::Test {
   std::string fixtures_;
   nlohmann::json manifest_;
   nevr_plugin_signature::Policy policy_;
-  std::wstring root_, install_, local_, runtime_path_;
+  std::wstring root_, install_, local_, nevr_root_, runtime_path_;
   HMODULE host_ = nullptr;
   std::string host_sha256_;
 };
@@ -451,6 +458,31 @@ TEST_F(HostRuntimeVerify, ASignedRuntimeIsAcceptedLoadedAndNamedInTheVersionsRec
   EXPECT_LT(IndexOf(outcome.records, "versions"), IndexOf(outcome.records, "runtime_load"))
       << "the versions record is written after the verdict and before the load's own record";
   EXPECT_EQ(IndexOf(outcome.records, "game_stop"), -1);
+}
+
+// The old layout (ADR 0012, "The one-time move" and "Updating only the host"): a runtime left beside the host in the
+// game's folder is not found. The host looks in the nEVR root only, so a host updated alone over an old install stops
+// with the "run the installer" words and names the root as the path it searched; it never maps the stale file.
+TEST_F(HostRuntimeVerify, ARuntimeLeftBesideTheHostIsNotFoundAndTheGameStopsNamingTheRoot) {
+  const std::wstring stale = install_ + L"\\nevr-runtime.dll";
+  ASSERT_TRUE(CopyFileW(FixtureFile("nevr-runtime.signed").c_str(), stale.c_str(), FALSE));
+  const Outcome outcome = Run();
+  const bool stale_mapped = GetModuleHandleW(stale.c_str()) != nullptr;
+  DeleteFileW(stale.c_str());
+
+  EXPECT_EQ(g_events, (std::vector<std::string>{"notice", "stop"}));
+  EXPECT_EQ(g_stop_code, 78u);
+  ASSERT_EQ(g_notices.size(), 1u);
+  EXPECT_NE(g_notices[0].find(L"nevr-runtime.dll is missing"), std::wstring::npos);
+  EXPECT_FALSE(outcome.runtime_mapped);
+  EXPECT_FALSE(stale_mapped) << "the signed file beside the host was never mapped";
+  EXPECT_EQ(g_before_load_calls.load(), 0);
+  const nlohmann::json stop = Only(outcome, "game_stop");
+  EXPECT_EQ(stop.at("reason"), "runtime_absent");
+  const std::string searched = stop.at("runtime_path").get<std::string>();
+  EXPECT_NE(searched.find("nevr-root\\nevr-runtime.dll"), std::string::npos) << searched;
+  EXPECT_EQ(searched.find("\\install\\"), std::string::npos) << "the game's folder is not where it looked: " << searched;
+  EXPECT_EQ(Only(outcome, "versions").at("runtime_sha256"), "unavailable");
 }
 
 TEST_F(HostRuntimeVerify, AMissingRuntimeStopsTheGameWithCode78AndSaysWhichPathWasSearched) {

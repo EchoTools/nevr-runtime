@@ -117,7 +117,9 @@ before a signed `nevr-runtime.dll` exists (step 3's prerequisite).
 - caches, logs and the crash record resolve under the root; the host's own paths are already there.
 
 A build that allows unsigned plugins also honours one environment variable, `NEVR_ROOT`, which replaces `%LOCALAPPDATA%\nevr\echovr`
-for harnesses and native test machines. A signed-only build ignores it and logs that it did. Test deployments under Wine put
+for harnesses and native test machines. A signed-only build ignores it and logs that it did. The host reads it for the one thing it
+resolves, where `nevr-runtime.dll` is; it must be an absolute path, and the `runtime_load` record names the root's source and
+says when an override was ignored. The runtime's own state paths (`core/nevr_root.h`) read `%LOCALAPPDATA%` only. Test deployments under Wine put
 `nevr-runtime.dll` and the plugins into the Wine prefix's own root, so a run on a game copy never touches the user's.
 
 ### The one-time move
