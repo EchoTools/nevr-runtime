@@ -44,6 +44,7 @@
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/patch/early_quit_lockout.h"
 #include "runtime/patch/lobby_full_backoff.h"
+#include "runtime/patch/menu_version_label.h"
 #include "runtime/patch/social_facade.h"
 
 #include <windows.h>
@@ -393,6 +394,9 @@ static VOID InitializeAfterGameImageGuard() {
   // The lobby-full retry: a party-follow join the lobby refused is held, not re-queued every frame (#1011,
   // lobby_full_backoff.h).
   nevr_lobby_full_backoff::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+
+  // The runtime version on the menu's versions panel (menu_version_label.h).
+  nevr_menu_version_label::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
 
   // --- DLL load interceptor (patch DLLs as they load) ---
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing DLL load hooks...\n");

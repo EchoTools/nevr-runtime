@@ -79,6 +79,7 @@ BRAND_PROSE_SPELLINGS = {
     "src/runtime/ext/plugin_refusal_notice.h": {"nEVR"},
     "src/runtime/host/stop_notice.h": {"nEVR"},  # the player's text when the runtime did not load
     "src/runtime/tests/test_host_rendezvous.cpp": {"nEVR"},  # asserts that text
+    "src/runtime/tests/test_menu_version_label.cpp": {"nEVR"},  # the label text the menu shows
     "src/runtime/tests/test_behavioral.cpp": {"nEVR"},  # asserts the refusal dialog's player prose
     "tools/package-release/README.template.txt": {"nEVR"},
     "tools/pe_version_info.py": {"nEVR"},  # the pinned ProductName and FileDescription

@@ -32,6 +32,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/headless_graphics.cpp",
     "patch/invite_wizard_hook.cpp",
     "patch/lobby_full_backoff.cpp",
+    "patch/menu_version_label.cpp",
     "patch/mic_provider.cpp",
     "patch/mode_patches.cpp",
     "patch/plugin_assets.cpp",
@@ -42,7 +43,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/social_facade_object.cpp",
     "patch/xpid_patch.cpp",
 )
-EXPECTED_PATCH_SOURCE_COUNT = 21
+EXPECTED_PATCH_SOURCE_COUNT = 22
 
 
 class InventoryError(Exception):
