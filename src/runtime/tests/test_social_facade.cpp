@@ -1432,6 +1432,29 @@ TEST(SocialFriends, FriendChangesAreRecognisedAndTheRefreshRepliesAreNot) {
   EXPECT_FALSE(nevr_social_roster::IsFriendChangeSymbol(0xa78aeb2a4e89b10bULL));  // FriendListResponse
 }
 
+// A removed friend must leave the roster at once: until it does, the tablet hides the add-friend button for them.
+TEST(SocialRoster, ARemovedFriendLeavesTheRosterAtOnce) {
+  nevr_social_roster::Roster roster;
+  roster.BeginList(2);
+  roster.Notify(5, nevr_social_roster::kStatusOnline);
+  roster.Notify(6, nevr_social_roster::kStatusOffline);
+  ASSERT_EQ(roster.Count(), 2u);
+
+  const auto removal = StatusNotifyPayload(5, nevr_social_roster::kStatusOnline);
+  std::uint64_t id = 0;
+  EXPECT_FALSE(nevr_social_roster::ParseFriendRemoval(0x26a19dc4d2d5579dULL, removal.data(), removal.size(), &id));
+  EXPECT_FALSE(nevr_social_roster::ParseFriendRemoval(0xe06972f49cd72265ULL, removal.data(), 15, &id));
+  ASSERT_TRUE(nevr_social_roster::ParseFriendRemoval(0xe06972f49cd72265ULL, removal.data(), removal.size(), &id));
+  EXPECT_EQ(id, 5u);
+
+  EXPECT_TRUE(roster.Remove(5));
+  EXPECT_FALSE(roster.Remove(5));
+  EXPECT_EQ(roster.Count(), 1u);
+  std::uint64_t left = 0;
+  ASSERT_TRUE(roster.IdAt(0, &left));
+  EXPECT_EQ(left, 6u);
+}
+
 TEST(ScenarioProtocol, InjectsFriendNotifiesAndFiresAddFriend) {
   nevr_scenario_protocol::Command cmd;
   std::string error;
