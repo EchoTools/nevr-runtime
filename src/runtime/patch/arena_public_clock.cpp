@@ -1,5 +1,6 @@
 #include "runtime/patch/arena_public_clock.h"
 
+#include <winsock2.h>
 #include <windows.h>
 
 #include <MinHook.h>
@@ -127,6 +128,12 @@ void Refresh() {
 }
 
 }  // namespace
+
+#ifdef NEVR_ARENA_PUBLIC_CLOCK_TESTING
+void RefreshForTest() { Refresh(); }
+BindFn OriginalForTest(std::size_t site) { return g_hooks[site].original.load(); }
+void SetOriginalForTest(std::size_t site, BindFn original) { g_hooks[site].original.store(original); }
+#endif
 
 void Install() {
   {

@@ -880,6 +880,18 @@ if(BUILD_TESTING)
     target_link_libraries(test_arena_public_clock PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_arena_public_clock DISCOVERY_MODE PRE_TEST)
 
+    # #982: the hook on the real stock Arena script DLLs under MinHook (needs NEVR_SCRIPT_DLL_DIR; skips without it).
+    add_executable(test_arena_public_clock_hook tests/test_arena_public_clock_hook.cpp patch/arena_public_clock.cpp
+      lifecycle/arena_round_time.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_arena_public_clock_hook.cpp patch/arena_public_clock.cpp
+      lifecycle/arena_round_time.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_arena_public_clock_hook PRIVATE NEVR_USE_MINHOOK NEVR_DLL_LOAD_HOOK_TESTING
+      NEVR_TEST_HOOKS NEVR_ARENA_PUBLIC_CLOCK_TESTING)
+    target_include_directories(test_arena_public_clock_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_arena_public_clock_hook PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_arena_public_clock_hook DISCOVERY_MODE PRE_TEST)
+
     add_executable(test_callback_unregistration
       tests/test_callback_unregistration.cpp
       tests/test_main_thread_handoff.cpp
