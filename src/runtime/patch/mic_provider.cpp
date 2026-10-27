@@ -33,6 +33,7 @@
 #include "core/mic_lifecycle.h"
 #include "core/mic_owner_thread.h"
 #include "core/system_info.h"
+#include "runtime/lifecycle/service_config.h"  // NevrCfgCaptureDevice (#412: audio.capture_device)
 #include "runtime/patch/mic_device_choice.h"
 
 #ifdef _WIN32
@@ -376,6 +377,16 @@ std::string Utf8(const std::wstring& w) {
 constexpr size_t kLibOvrDeviceBufferChars = 1024;
 constexpr size_t kLibOvrDeviceMaxIdChars = 256;
 
+// config.yaml text (UTF-8) as a wide string, for matching against endpoint ids and friendly names.
+std::wstring Wide(const char* text) {
+  if (text == nullptr || text[0] == '\0') return std::wstring();
+  const int n = MultiByteToWideChar(CP_UTF8, 0, text, -1, nullptr, 0);
+  if (n <= 1) return std::wstring();
+  std::wstring out(static_cast<size_t>(n - 1), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, text, -1, &out[0], n);
+  return out;
+}
+
 // First 64 chars of a wide string as UTF-8, for rejection log lines.
 std::string Prefix64(const std::wstring& text) {
   return Utf8(text.substr(0, 64));
@@ -464,13 +475,17 @@ HRESULT OpenChosenCaptureDevice(IMMDeviceEnumerator* enumerator, IMMDevice** dev
   long libovrCode = 0;
   const bool isWine = nevr_system_info::Get().IsWine();
   std::wstring libovrId;
+  std::wstring preference;
   std::vector<nevr_mic_device::Endpoint> active;
   if (nevr_mic_device::ShouldChooseHeadsetDevice(isWine)) {
+    preference = Wide(NevrCfgCaptureDevice());
     libovrId = LibOvrCaptureEndpointId(&libovrCode, log);
     active = EnumerateActiveCaptureEndpoints(enumerator);
   }
-  nevr_mic_device::Pick pick = nevr_mic_device::Choose(isWine, libovrId, libovrCode, active);
-  if (log && !libovrId.empty() && pick.choice != nevr_mic_device::Choice::LibOvr) {
+  nevr_mic_device::Pick pick =
+      nevr_mic_device::ChooseWithPreference(isWine, preference, libovrId, libovrCode, active);
+  if (log && !libovrId.empty() && pick.choice != nevr_mic_device::Choice::LibOvr &&
+      pick.choice != nevr_mic_device::Choice::Configured) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.MIC] LibOVR code=%ld answered id=\"%s\" which is not an active capture endpoint; falling to the name match",
         libovrCode, Prefix64(libovrId).c_str());
