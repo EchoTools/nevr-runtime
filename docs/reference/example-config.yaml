@@ -139,8 +139,10 @@ services:
   # WebSocket endpoint for all game services (login, matchmaking, config, serverdb). Both builds. The runtime
   # rewrites the game's hardcoded wss://*.readyatdawn.com URLs to it; the in-process WebSocket bridge connects to it
   # outbound, and the game's own connections go through the bridge (ws://127.0.0.1:<port>).
-  # Default (absent): the value embedded in the build (config/public-defaults.env); on a dedicated server, none
-  # (a server is configured explicitly and exits without it unless allow_offline_server is set).
+  # Default (absent): the value embedded in the build (config/public-defaults.env), on a client and a dedicated
+  # server alike (#843). An explicit empty value (`socket_uri: ""`) on a dedicated server takes no default: the
+  # server then exits without it unless allow_offline_server is set. The log line `[NEVR.CONFIG] built-in defaults
+  # in use` names the keys taken from the build.
   # On the Quest this one key (or auth.http_uri) is what turns the redirect on, and with it the bridge: there is no
   # key for either. Login then needs auth.server_key.
   # Not a secret.
@@ -148,8 +150,8 @@ services:
   # socket_uri: "wss://g.echovrce.com/ws"
 
   # Dedicated server only: boot without services.socket_uri (no login bridge). Without this a server
-  # that has no socket_uri exits at start-up, because it could never log in. Set it only for offline
-  # boots (test rigs); such a server never logs in or registers.
+  # that has no socket_uri after the built-in default (set socket_uri: "" to take none) exits at start-up,
+  # because it could never log in. Set it only for offline boots (test rigs); such a server never logs in or registers.
   # Default (absent): false
   # allow_offline_server: true
 

@@ -45,7 +45,7 @@ Running a dedicated server
   socket_uri. A server signs in with the account's refresh token when it has one, and with auth.password
   otherwise. The server logs in, registers with the game service and logs "registration successful"; every
   step is in the log (see Logs). Stop it with Ctrl+C in its console: the log then says "Graceful shutdown
-  initiated". services.allow_offline_server: true starts a server with no service at all (it never
+  initiated". services.socket_uri: "" with services.allow_offline_server: true starts a server with no service at all (it never
   registers); docs/reference/example-config.yaml in the source repository lists every key.
 
 Update
