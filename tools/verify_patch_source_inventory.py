@@ -38,9 +38,10 @@ EXPECTED_PATCH_SOURCES = (
     "patch/party_invite_gate.cpp",
     "patch/social_facade.cpp",
     "patch/social_facade_object.cpp",
+    "patch/ui_texture_mips.cpp",
     "patch/xpid_patch.cpp",
 )
-EXPECTED_PATCH_SOURCE_COUNT = 19
+EXPECTED_PATCH_SOURCE_COUNT = 20
 
 
 class InventoryError(Exception):

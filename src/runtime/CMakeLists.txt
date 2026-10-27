@@ -78,6 +78,7 @@ set(PATCHES_SOURCES
     "patch/mic_provider.cpp"
     "patch/party_invite_gate.cpp"
     "patch/early_quit_lockout.cpp"
+    "patch/ui_texture_mips.cpp"
     "patch/social_facade.cpp"
     "patch/social_facade_object.cpp"
     "log/builtin_filter.cpp"
@@ -1256,6 +1257,13 @@ if(BUILD_TESTING)
     target_include_directories(test_early_quit_lockout PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_early_quit_lockout PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_early_quit_lockout DISCOVERY_MODE PRE_TEST)
+
+    # test_ui_texture_mips.cpp (#961, header-only patch/ui_texture_mips_rules.h).
+    add_executable(test_ui_texture_mips tests/test_ui_texture_mips.cpp)
+    set_source_files_properties(tests/test_ui_texture_mips.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_ui_texture_mips PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_ui_texture_mips PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_ui_texture_mips DISCOVERY_MODE PRE_TEST)
 
     # test_cmdline_strip.cpp (#515, header-only lifecycle/cmdline_strip.h); nevr_core supplies g_headlessTickRateHz.
     add_executable(test_cmdline_strip tests/test_cmdline_strip.cpp tests/test_timestep_log.cpp)
