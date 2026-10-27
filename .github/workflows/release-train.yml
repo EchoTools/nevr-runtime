@@ -1,0 +1,148 @@
+name: Release train
+
+# Cuts a pre-release by itself when main carries a feat, fix, perf or breaking change that the newest tag does not
+# (RELEASING.md, "When to release"). It runs hourly and does nothing until the repository variable RELEASE_TRAIN is
+# "true": merging this file cuts no release. Every step that could leave a bad release fails the run red and leaves
+# the draft unpublished (RELEASING.md, "A draft that fails its checks"). Nothing here reads the pre-release flag.
+#
+# Credentials: the signer dispatch needs the secret RELEASE_SIGNER_TOKEN, a token with actions: write on
+# thesprockee/release-signer. Without it the sign step fails red and nothing is published.
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One train at a time: a second run waits, and never cuts a tag beside a running one.
+concurrency:
+  group: release-train
+  cancel-in-progress: false
+
+jobs:
+  decide:
+    if: vars.RELEASE_TRAIN == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      cut: ${{ steps.plan.outputs.cut }}
+      version: ${{ steps.plan.outputs.version }}
+      base: ${{ steps.plan.outputs.base }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        ref: main
+        fetch-depth: 0
+
+    # The next version is computed by tools/next_release_version.py from the commits since the newest vX.Y.Z tag
+    # reachable from origin/main (docs/standards/planning.md, "Release versions"). Exit 1 is "nothing to release".
+    - name: Plan the release and check that main's build is green on that commit
+      id: plan
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        rc=0
+        version=$(python3 tools/next_release_version.py --repo . --rev origin/main 2>plan.jsonl) || rc=$?
+        cat plan.jsonl
+        case "$rc" in
+          0) ;;
+          1) echo "cut=false" >> "$GITHUB_OUTPUT"; echo "nothing to release on origin/main"; exit 0 ;;
+          *) echo "next_release_version.py failed with exit $rc" >&2; exit "$rc" ;;
+        esac
+        base=$(jq -r 'select(.event == "base") | .base' plan.jsonl)
+        sha=$(git rev-parse origin/main)
+        # The commit's gate: a successful build.yml run on exactly this commit. Nothing runs CI on a push to main, so a
+        # maintainer dispatches build.yml on main first; until that run is green, the train waits and cuts nothing.
+        # A failed query fails this step red: it is not read as "not green".
+        green=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build.yml --branch main --status success --limit 20 \
+          --json headSha --jq "[.[] | select(.headSha == \"$sha\")] | length")
+        if [ "$green" -lt 1 ]; then
+          echo "no green build.yml run on $sha yet: the train waits for one" >&2
+          echo "cut=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        { echo "cut=true"; echo "version=$version"; echo "base=$base"; } >> "$GITHUB_OUTPUT"
+        echo "release train: v$version from $sha, base $base"
+
+  cut:
+    needs: decide
+    if: needs.decide.outputs.cut == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.decide.outputs.version }}
+      BASE: ${{ needs.decide.outputs.base }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        ref: main
+        fetch-depth: 0
+
+    # 1. The tag, annotated, on origin's tip (RELEASING.md, "Names"). Pushed with this run's token: the tag push starts
+    #    no workflow, so the build is dispatched below.
+    - name: Tag origin's tip
+      run: |
+        set -euo pipefail
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git tag -a "v$VERSION" -m "$VERSION" origin/main
+        git push origin "v$VERSION"
+
+    # 2. The draft: a draft fires no workflow, so the build is dispatched on the tag by name.
+    - name: Create the draft
+      run: gh release create "v$VERSION" --title "v$VERSION" --draft --prerelease --verify-tag
+
+    # 3. build.yml on the tag: builds, attests and attaches the two files to the draft. Verify is skipped on a tag
+    #    (#1008): the PR that merged each commit ran the tests.
+    - name: Build the draft's files
+      run: |
+        set -euo pipefail
+        gh workflow run build.yml --repo "$GITHUB_REPOSITORY" --ref "v$VERSION"
+        sleep 20
+        id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build.yml --event workflow_dispatch --limit 10 \
+          --json databaseId,headBranch --jq "[.[] | select(.headBranch == \"v$VERSION\")] | .[0].databaseId")
+        echo "build run: $id"
+        gh run watch "$id" --repo "$GITHUB_REPOSITORY" --exit-status
+
+    # 4. The checks on the draft, as RELEASING.md "Check the draft" lists them, run by tools/release_check_draft.sh.
+    - name: Check the draft before signing
+      run: tools/release_check_draft.sh "v$VERSION"
+
+    # 5. The signer: thesprockee/release-signer replaces the draft's two files with signed ones (RELEASING.md, "Sign").
+    - name: Sign the draft
+      env:
+        GH_TOKEN: ${{ secrets.RELEASE_SIGNER_TOKEN }}
+      run: |
+        set -euo pipefail
+        test -n "$GH_TOKEN" || { echo "RELEASE_SIGNER_TOKEN is not set: the signer cannot be dispatched" >&2; exit 1; }
+        gh workflow run sign-release.yml --repo thesprockee/release-signer --ref main \
+          -f repo="$GITHUB_REPOSITORY" -f tag="v$VERSION" -f dry_run=false
+        sleep 20
+        id=$(gh run list --repo thesprockee/release-signer --workflow sign-release.yml --event workflow_dispatch --limit 10 --json databaseId --jq '.[0].databaseId')
+        echo "signer run: $id"
+        gh run watch "$id" --repo thesprockee/release-signer --exit-status
+
+    # 6. The post-sign checks, on the replaced files (RELEASING.md, "After the signer has replaced assets").
+    - name: Check the signed draft
+      run: tools/release_check_draft.sh --signed "v$VERSION"
+
+    # 7. The body: the notes and the SHA-256 table from the signed files, then the per-audience section generated from
+    #    the feat and fix commits since the base tag (tools/release_audience_section.py).
+    - name: Write the release body
+      run: |
+        set -euo pipefail
+        assets=$(mktemp -d)
+        gh release download "v$VERSION" -D "$assets"
+        notes=$(mktemp)
+        python3 tools/package_release.py notes --assets "$assets" --out "$notes"
+        python3 tools/release_audience_section.py --repo . --base "$BASE" --rev "v$VERSION" >> "$notes"
+        gh release edit "v$VERSION" --notes-file "$notes"
+        gh release view "v$VERSION" --json body --jq .body
+
+    # 8. Publish. Only after every check above passed. The published event does not rebuild: build.yml's guard sees the
+    #    two names on the release and skips.
+    - name: Publish the pre-release
+      run: gh release edit "v$VERSION" --draft=false
