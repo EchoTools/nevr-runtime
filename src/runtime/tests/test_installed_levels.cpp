@@ -17,13 +17,16 @@
 #include <vector>
 
 #include "abi/symbol_hash.h"
+#include "gameservice/v1/gameservice.pb.h"
 #include "runtime/patch/asset_registry.h"
 #include "runtime/server/installed_levels.h"
+#include "runtime/server/registration_envelope.h"
 
 namespace {
 
 using nevr_game_server::BootPackageSets;
 using nevr_game_server::CollectInstalledLevels;
+using nevr_game_server::CollectInstalledLevelsFromDirs;
 using nevr_game_server::InstalledLevels;
 using nevr_game_server::kLevelRootType;
 using nevr_game_server::ParseLevelRoots;
@@ -150,7 +153,7 @@ TEST(InstalledLevels, RejectsAFrameThatDoesNotDecodeToTheDeclaredLength) {
   std::vector<uint64_t> levels;
   std::string error;
   EXPECT_FALSE(ParseLevelRoots(file, &levels, &error));
-  EXPECT_EQ(error, "zstd frame does not decode to the declared length");
+  EXPECT_EQ(error, "frame declares a different size than the container");
 }
 
 TEST(InstalledLevels, RejectsAResourceCountThatRunsPastTheBody) {
@@ -199,10 +202,95 @@ TEST(InstalledLevels, BootSetsAndLevelTypeAreTheNamedSymbols) {
   EXPECT_EQ(EchoVR::CSymbol64Hash("mpl_arena_a"), kMplArenaA);
 }
 
-TEST(InstalledLevels, ManifestFolderIsTheEnginesLayoutUnderTheInstallRoot) {
-  const std::filesystem::path exe = std::filesystem::path("game") / "echovr" / "bin" / "win10" / "echovr.exe";
-  EXPECT_EQ(nevr_game_server::ManifestDirFromExe(exe),
-            std::filesystem::path("game") / "echovr" / "_data" / "5932408047" / "rad15" / "win10" / "manifests");
+TEST(InstalledLevels, FindsEveryDataVersionsManifestFolderAndSkipsTheRest) {
+  ScratchDir dir;
+  const std::filesystem::path exe = dir.Path() / "echovr" / "bin" / "win10" / "echovr.exe";
+  const std::filesystem::path data = dir.Path() / "echovr" / "_data";
+  std::filesystem::create_directories(data / "5932408047" / "rad15" / "win10" / "manifests");
+  std::filesystem::create_directories(data / "6000000000" / "rad15" / "win10" / "manifests");
+  std::filesystem::create_directories(data / "7000000000" / "rad15" / "win10");  // no manifests folder
+  const std::vector<std::filesystem::path> found = nevr_game_server::FindManifestDirs(exe);
+  EXPECT_EQ(found, (std::vector<std::filesystem::path>{data / "5932408047" / "rad15" / "win10" / "manifests",
+                                                       data / "6000000000" / "rad15" / "win10" / "manifests"}));
+}
+
+TEST(InstalledLevels, NoDataDirMeansNoManifestFolders) {
+  ScratchDir dir;
+  EXPECT_TRUE(nevr_game_server::FindManifestDirs(dir.Path() / "echovr" / "bin" / "win10" / "echovr.exe").empty());
+}
+
+TEST(InstalledLevels, AHeaderThatDisagreesWithTheFrameIsRefusedBeforeAnyAllocation) {
+  // The container claims 200 MiB; the frame declares the real 5 MB body. The check refuses it, so no 200 MiB buffer exists.
+  std::vector<uint8_t> file = MakeManifest({{kLevelRootType, kMplArenaA}});
+  PutU64(file, 8, 200ULL * 1024 * 1024);
+  std::vector<uint64_t> levels;
+  std::string error;
+  EXPECT_FALSE(ParseLevelRoots(file, &levels, &error));
+  EXPECT_EQ(error, "frame declares a different size than the container");
+}
+
+TEST(InstalledLevels, AManifestOverTheFileSizeCapIsAProblemAndIsNotRead) {
+  ScratchDir dir;
+  WriteFile(dir.Path() / "48037dc70b0ecab2", {});
+  std::filesystem::resize_file(dir.Path() / "48037dc70b0ecab2", 64ULL * 1024 * 1024 + 1);
+  const InstalledLevels result = CollectInstalledLevels(dir.Path(), {kSetNetClient});
+  EXPECT_EQ(result.manifestsRead, 0u);
+  ASSERT_EQ(result.problems.size(), 1u);
+  EXPECT_EQ(result.problems[0], "48037dc70b0ecab2: larger than the manifest size cap");
+}
+
+TEST(InstalledLevels, CollectionOverSeveralFoldersMergesThemWithoutDuplicates) {
+  ScratchDir a;
+  ScratchDir b;
+  WriteFile(a.Path() / "48037dc70b0ecab2", MakeManifest({{kLevelRootType, kMplArenaA}}));
+  WriteFile(b.Path() / "48037dc70b0ecab2", MakeManifest({{kLevelRootType, kMplArenaA}, {kLevelRootType, 0xBB}}));
+  const InstalledLevels result = CollectInstalledLevelsFromDirs({a.Path(), b.Path()}, {kSetNetClient});
+  EXPECT_EQ(result.levels, (std::vector<uint64_t>{0xBB, kMplArenaA}));
+  EXPECT_EQ(result.manifestsRead, 2u);
+}
+
+TEST(InstalledLevels, ListsFollowTheServerDbParseNotATrim) {
+  std::size_t rejected = 0;
+  // " eu_west" has a space nakama's region pattern rejects; it is dropped, not trimmed.
+  EXPECT_EQ(nevr_game_server::ParseServerDbList("us-east, eu_west,,us-east", nevr_game_server::ListItemKind::kRegion,
+                                                &rejected),
+            (std::vector<std::string>{"us-east", "us-east"}));
+  EXPECT_EQ(rejected, 1u);
+
+  EXPECT_EQ(nevr_game_server::ParseServerDbList("111,any,abc,222", nevr_game_server::ListItemKind::kGuild, &rejected),
+            (std::vector<std::string>{"111", "222", "any"}));
+  EXPECT_EQ(rejected, 1u);
+}
+
+TEST(InstalledLevels, AnItemIsCutTo32BytesBeforeThePatternIsChecked) {
+  std::size_t rejected = 0;
+  const std::string longRegion(40, 'r');
+  const std::vector<std::string> items =
+      nevr_game_server::ParseServerDbList(longRegion, nevr_game_server::ListItemKind::kRegion, &rejected);
+  ASSERT_EQ(items.size(), 1u);
+  EXPECT_EQ(items[0], std::string(32, 'r'));
+  EXPECT_EQ(rejected, 0u);
+}
+
+// The registration still goes out when a manifest is corrupt: the reader reports a problem, and the envelope
+// is built with the registration's own fields and no levels.
+TEST(InstalledLevels, ACorruptManifestStillLetsTheRegistrationGoOut) {
+  ScratchDir dir;
+  std::vector<uint8_t> corrupt = MakeManifest({{kLevelRootType, kMplArenaA}});
+  corrupt.resize(corrupt.size() / 2);  // a truncated frame
+  WriteFile(dir.Path() / "48037dc70b0ecab2", corrupt);
+  const InstalledLevels result = CollectInstalledLevels(dir.Path(), BootPackageSets());
+  EXPECT_TRUE(result.levels.empty());
+  EXPECT_EQ(result.problems.size(), 2u);  // the corrupt set and the absent locale set
+
+  nevr_game_server::RegistrationParams params;
+  params.loginSessionId = "11111111-2222-3333-4444-555555555555";
+  params.serverId = 4242;
+  params.installedLevels = result.levels;
+  const gameservice::v1::Envelope envelope = nevr_game_server::BuildRegistrationEnvelope(params);
+  ASSERT_EQ(envelope.message_case(), gameservice::v1::Envelope::kGameServerRegistration);
+  EXPECT_EQ(envelope.game_server_registration().server_id(), 4242u);
+  EXPECT_EQ(envelope.game_server_registration().installed_levels_size(), 0);
 }
 
 TEST(InstalledLevels, SplitsTheListShapedConfigValuesLikeTheUrlBuilder) {

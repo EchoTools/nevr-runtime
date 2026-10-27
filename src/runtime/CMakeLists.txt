@@ -826,12 +826,13 @@ if(BUILD_TESTING)
     add_executable(test_installed_levels
       tests/test_installed_levels.cpp
       server/installed_levels.cpp
+      server/registration_envelope.cpp
       patch/asset_registry.cpp)
-    set_source_files_properties(tests/test_installed_levels.cpp server/installed_levels.cpp patch/asset_registry.cpp
-      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    set_source_files_properties(tests/test_installed_levels.cpp server/installed_levels.cpp server/registration_envelope.cpp
+      patch/asset_registry.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_installed_levels PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_installed_levels PRIVATE GTest::gtest GTest::gtest_main zstd::libzstd
-      nlohmann_json::nlohmann_json)
+      nlohmann_json::nlohmann_json nevr_api)
     gtest_discover_tests(test_installed_levels DISCOVERY_MODE PRE_TEST)
 
     # #990: the capture header's game type follows the lobby type (telemetry_game_type.cpp).
