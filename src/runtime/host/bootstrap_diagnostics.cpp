@@ -112,6 +112,9 @@ std::atomic<bool> g_log_lock_unreliable{false};
 // How long an append waits on the log mutex.
 std::atomic<DWORD> g_log_wait_ms{kBootstrapLogLockWaitMs};
 
+// How many times an append tries to open the log file before it gives up on that destination (#733).
+constexpr int kAppendOpenAttempts = 4;
+
 // Serializes the writes of this process's appenders once the named mutex's wait has ended without it. An append
 // that timed out on the mutex writes unlocked; two such writes from one process to the same FILE_APPEND_DATA
 // handle race in the file system (under Wine a line is reported written and is absent from the file, #997). The
@@ -619,8 +622,13 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
 
   const bool exiting = g_exit_flush.load();
   if (exiting && g_exit_lock_lost.load() && g_log_mutex.load(std::memory_order_acquire) != nullptr) return false;
-  HANDLE file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  // An open refused while other appenders have the file open (a sharing violation under load) is retried at once,
+  // a bounded number of times: a line whose open fails here is lost from the file.
+  HANDLE file = INVALID_HANDLE_VALUE;
+  for (int attempt = 0; attempt < kAppendOpenAttempts && file == INVALID_HANDLE_VALUE; ++attempt) {
+    file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
+                       FILE_ATTRIBUTE_NORMAL, nullptr);
+  }
   if (file == INVALID_HANDLE_VALUE) return false;
 
   // Serialize the write only, with the mutex Prepare() created (none: the write is unserialized).
@@ -651,8 +659,15 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
   // The write is serialized within the process whether or not the mutex was taken: a write that did not get the mutex
   // must not race another write of this process (#997).
   EnterCriticalSection(&g_log_local_lock);
+  // A short write is continued from where it stopped, so a line is never left without its tail.
   DWORD written = 0;
-  const BOOL ok = WriteFile(file, line, static_cast<DWORD>(length), &written, nullptr);
+  BOOL ok = TRUE;
+  while (written < length && ok) {
+    DWORD chunk = 0;
+    ok = WriteFile(file, line + written, static_cast<DWORD>(length) - written, &chunk, nullptr);
+    if (chunk == 0) break;
+    written += chunk;
+  }
   FlushFileBuffers(file);
   LeaveCriticalSection(&g_log_local_lock);
   if (locked) ReleaseMutex(lock);

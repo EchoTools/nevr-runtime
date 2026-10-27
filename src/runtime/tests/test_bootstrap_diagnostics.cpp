@@ -551,7 +551,8 @@ void AppendConcurrently(BootstrapDiagnostics& diagnostics, int threads, int line
     jobs[static_cast<std::size_t>(t)] = AppendJob{&diagnostics, t, lines, prefix};
     handles.push_back(CreateThread(nullptr, 0, &AppendLines, &jobs[static_cast<std::size_t>(t)], 0, nullptr));
   }
-  WaitForMultipleObjects(static_cast<DWORD>(handles.size()), handles.data(), TRUE, 120000);
+  // A wait that times out would read a file that is still being written: the result is checked, not ignored.
+  EXPECT_EQ(WaitForMultipleObjects(static_cast<DWORD>(handles.size()), handles.data(), TRUE, 120000), WAIT_OBJECT_0);
   for (HANDLE handle : handles) CloseHandle(handle);
 }
 
