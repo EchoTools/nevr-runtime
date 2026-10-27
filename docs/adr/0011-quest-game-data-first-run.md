@@ -99,6 +99,9 @@ build, what to do) is not optional.
 - **Download, resume, retry.** Into `<root>/_data.zip.part` (a name our code creates), HTTP `Range` from the part's size, a
   bounded number of attempts with backoff (2, 4, 8, 16 s, then 30 s between attempts, slept in 250 ms slices that a cancel ends), then give up to the floor. The whole-file sha256 is verified at the end only (the
   pin is one digest of the zip); a mismatch deletes that `.part` and counts as a failed attempt, never a retry on the same bytes.
+  **Where from (2026-10-27).** `kZipUrl` is `https://evr.echo.taxi/nevr-runtime/data/echovr-data-fc2eedeacc50.zip`: the same bytes under a name made
+  from their own sha256 (first 12 hex), listed as the `game-data` artifact in the signed release manifest. It replaced the bare
+  `https://mia.cdn.echo.taxi/_data.zip`, which names no version. The digest check is unchanged and is what makes the file trusted.
 - **Extract.** Into `<root>/_data.staging-<sha prefix>/`, every entry path checked to stay inside that directory (a zip entry
   with `..` or an absolute path is a failure of the whole fetch), then one `rename` to `<root>/_data`. Every item the step
   creates in the root (the `.part`, the staging directory, a kept `_data.replaced-<utc stamp>`) has a marker file beside it,
