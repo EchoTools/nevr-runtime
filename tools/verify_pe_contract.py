@@ -104,9 +104,10 @@ RUNTIME_IMAGE_BASE = 0x181000000
 # The identity both files carry (src/core/build_identity.cpp, src/runtime/host/host_identity.cpp).
 IDENTITY = re.compile(rb"(?<=\x00)NEVR-BUILD ([0-9A-Za-z.+-]+) ([0-9a-f]{40})(?=\x00)")
 
-# What the thin host may import: kernel32 and the UCRT. Anything else is code the host has no business running
-# inside a crash path (sockets, TLS, COM, the shell, the registry).
-HOST_ALLOWED_IMPORTS = ("kernel32.dll",)
+# What the thin host may import: kernel32 and the UCRT, and crypt32 and advapi32 for the one check it makes before it
+# loads nevr-runtime.dll (the signature verifier and the file's SHA-256, docs/adr/0012-static-install-root.md, #854).
+# Anything else is code the host has no business running inside a crash path (sockets, TLS, COM, the shell, the registry).
+HOST_ALLOWED_IMPORTS = ("kernel32.dll", "crypt32.dll", "advapi32.dll")
 HOST_ALLOWED_IMPORT_PREFIXES = ("api-ms-win-crt-",)
 # Text that only the runtime carries: a plugin trust literal, a log tag of the bridge, a library's name.
 RUNTIME_ONLY_MARKERS = (b"NEVR-PLUGIN-TRUST ", b"[NEVR.PLUGIN]", b"[NEVR.WS]", b"ixwebsocket")

@@ -20,6 +20,9 @@ set(NEVR_HOST_UNITS
     "host/runtime_exports.cpp"
     "host/runtime_load.cpp"
     "host/runtime_rendezvous.cpp"
+    # The signature verifier and the pins it checks against (ADR 0012: the host verifies nevr-runtime.dll before it loads it).
+    "ext/plugin_pins.cpp"
+    "ext/plugin_signature.cpp"
     "lifecycle/game_image_guard.cpp"
 )
 
@@ -53,6 +56,7 @@ set(PATCHES_SOURCES
     "ext/plugin_load_plan.cpp"
     "ext/plugin_manifest.cpp"
     "ext/plugin_signature.cpp"
+    "ext/plugin_pins.cpp"
     "ext/plugin_tree.cpp"
     "ext/plugin_trust.cpp"
     "ext/module_loader.cpp"
@@ -307,10 +311,10 @@ endif()
 # It does not change how a run checks plugins. No config key and no environment variable changes the mode of a run.
 option(NEVR_ALLOW_UNSIGNED_PLUGINS "Mark the build as the plugin developers' build (never ship)" OFF)
 if(NEVR_ALLOW_UNSIGNED_PLUGINS)
-  set_source_files_properties(ext/plugin_trust.cpp PROPERTIES COMPILE_DEFINITIONS NEVR_ALLOW_UNSIGNED_PLUGINS=1)
+  set_source_files_properties(ext/plugin_trust.cpp ext/plugin_pins.cpp PROPERTIES COMPILE_DEFINITIONS NEVR_ALLOW_UNSIGNED_PLUGINS=1)
   message(STATUS "NEVR_ALLOW_UNSIGNED_PLUGINS=ON: BugSplat64.dll is marked as a plugin developer build (never ship)")
 endif()
-set_source_files_properties(ext/plugin_signature.cpp ext/plugin_tree.cpp ext/plugin_trust.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(ext/plugin_signature.cpp ext/plugin_tree.cpp ext/plugin_trust.cpp ext/plugin_pins.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # Scenario-test control endpoint (docs/design/2026-10-01-social-scenario-harness.md). It can inject
 # messages into a live session, so it is OFF by default and only the mingw-scenario preset turns it
@@ -404,7 +408,7 @@ add_library(nevr_host SHARED
   lifecycle/system_module_loader.cpp
   host/exports.def)
 target_include_directories(nevr_host PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(nevr_host PRIVATE minhook nlohmann_json::nlohmann_json)
+target_link_libraries(nevr_host PRIVATE minhook nlohmann_json::nlohmann_json crypt32 advapi32)
 set_target_properties(nevr_host PROPERTIES
   OUTPUT_NAME "BugSplat64"
   PREFIX ""
@@ -469,7 +473,7 @@ if(BUILD_TESTING)
     # target that builds the host into BugSplat64.dll (nevr_host) must not define it
     # (tools/tests/test_host_test_seams.py).
     target_compile_definitions(nevr_host_core PUBLIC NEVR_HOST_TESTING)
-    target_link_libraries(nevr_host_core PUBLIC minhook nlohmann_json::nlohmann_json)
+    target_link_libraries(nevr_host_core PUBLIC minhook nlohmann_json::nlohmann_json crypt32 advapi32)
 
     # Attach-time MinHook proof gate for the BugSplat64.dll / nevr-runtime.dll split
     # (docs/adr/0008-bugsplat-host-and-nevr-runtime.md, "Proof gate").
@@ -1332,8 +1336,9 @@ if(BUILD_TESTING)
     # verifier TU and crypt32/advapi32: no game stubs, no Log.
     add_executable(test_plugin_signature
       tests/test_plugin_signature.cpp
-      ext/plugin_signature.cpp)
-    set_source_files_properties(tests/test_plugin_signature.cpp ext/plugin_signature.cpp
+      ext/plugin_signature.cpp
+      ext/plugin_pins.cpp)
+    set_source_files_properties(tests/test_plugin_signature.cpp ext/plugin_signature.cpp ext/plugin_pins.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_plugin_signature PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_plugin_signature PRIVATE
@@ -1345,8 +1350,9 @@ if(BUILD_TESTING)
     add_executable(test_plugin_tree
       tests/test_plugin_tree.cpp
       ext/plugin_tree.cpp
-      ext/plugin_signature.cpp)
-    set_source_files_properties(tests/test_plugin_tree.cpp ext/plugin_tree.cpp ext/plugin_signature.cpp
+      ext/plugin_signature.cpp
+      ext/plugin_pins.cpp)
+    set_source_files_properties(tests/test_plugin_tree.cpp ext/plugin_tree.cpp ext/plugin_signature.cpp ext/plugin_pins.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_plugin_tree PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_plugin_tree PRIVATE
@@ -1357,8 +1363,9 @@ if(BUILD_TESTING)
     add_executable(test_plugin_trust
       tests/test_plugin_trust.cpp
       ext/plugin_trust.cpp
-      ext/plugin_signature.cpp)
-    set_source_files_properties(tests/test_plugin_trust.cpp ext/plugin_trust.cpp ext/plugin_signature.cpp
+      ext/plugin_signature.cpp
+      ext/plugin_pins.cpp)
+    set_source_files_properties(tests/test_plugin_trust.cpp ext/plugin_trust.cpp ext/plugin_signature.cpp ext/plugin_pins.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_plugin_trust PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_plugin_trust PRIVATE GTest::gtest GTest::gtest_main crypt32 advapi32)
@@ -1402,6 +1409,7 @@ if(BUILD_TESTING)
       patch/asset_registry.cpp
       # #741: the signature gate StageOne consults, linked as production source.
       ext/plugin_signature.cpp
+      ext/plugin_pins.cpp
       ext/plugin_tree.cpp
       ext/plugin_trust.cpp
       ext/module_loader.cpp
@@ -1447,6 +1455,7 @@ if(BUILD_TESTING)
       ext/plugin_manifest.cpp
       patch/asset_registry.cpp
       ext/plugin_signature.cpp
+      ext/plugin_pins.cpp
       ext/plugin_tree.cpp
       ext/plugin_trust.cpp
       ext/module_loader.cpp

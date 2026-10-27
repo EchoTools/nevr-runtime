@@ -75,14 +75,14 @@ A last-known-good copy of `nevr-runtime.dll` is out of scope until there is a re
 ### The host verifies `nevr-runtime.dll` before it loads it
 
 A root a player can write is a way in, so the host verifies the file before it maps it, with the verifier ADR 0010 defined for
-plugins: the source files `src/runtime/ext/plugin_signature.cpp` and `src/runtime/ext/plugin_trust.cpp` compile into the host and
-into `nevr-runtime.dll` unchanged, so there is one implementation and one set of pins. The file is opened `FILE_SHARE_READ` and held open
+plugins: the source files `src/runtime/ext/plugin_signature.cpp` and `src/runtime/ext/plugin_pins.cpp` compile into the host and
+into `nevr-runtime.dll`, so there is one implementation and one set of pins. The pins are in `plugin_pins.cpp`, not in `plugin_trust.cpp`,
+because `plugin_trust.cpp` carries the `NEVR-PLUGIN-TRUST` literal that the host must not carry (`tools/package_release.py`). The file is opened `FILE_SHARE_READ` and held open
 across the load, as the plugin loader does.
 
 The host's policy is the production policy of ADR 0010 without the denylist: the pinned Microsoft root, the profile EKU and the
-code-signing EKU, as ADR 0010 requires. Today `ProductionPolicy` and `plugin_trust.cpp` are runtime units that also carry the
-`NEVR-PLUGIN-TRUST` literal; the host takes the same pins through a second policy constructor over the same constants, not a
-copy, and the pull request that does it measures what moves. The denylist stays in `nevr-runtime.dll` and covers plugins. A denylist change
+code-signing EKU, as ADR 0010 requires. The host takes the same pins as the runtime through `nevr_plugin_pins::PinnedPolicy()`, the same constants, not a copy; the
+runtime adds the denylist to them in `ProductionPolicy`. The denylist stays in `nevr-runtime.dll` and covers plugins. A denylist change
 must not need a new `BugSplat64.dll`, because that file changes rarely. The accepted cost: a genuinely signed `nevr-runtime.dll` that is on
 the denylist is stopped only by a new host release; the host changes rarely, and that is the price of keeping it small.
 
@@ -95,13 +95,13 @@ A dev build (the `NEVR_ALLOW_UNSIGNED_PLUGINS` build of ADR 0010) loads an unsig
 defines, and carries the same `NEVR-PLUGIN-TRUST` literal; a plugin developer's dev host must load a dev `nevr-runtime.dll`. A signed-only
 build refuses it.
 
-### Until that check ships, the host loads `nevr-runtime.dll` unverified
+### The unverified load is gone; the move waits for step 3's signed file
 
-Step 2 maps `nevr-runtime.dll` with no check of the file: `RuntimeLoader::Load` in `src/runtime/host/runtime_load.cpp` resolves the path
-beside `BugSplat64.dll` and calls `LoadLibraryExW` with the DLL-directory and System32 search flags. The risk is accepted while the runtime
-sits beside `BugSplat64.dll`: anyone who can write that folder can already replace the host, and ADR 0010's threat model puts a replaced
-`BugSplat64.dll` outside what the gate protects. A runtime in a root a player can write without replacing the host has no such cover, so
-step 4 (the move to `%LOCALAPPDATA%`) does not ship before step 3, the check in the section above.
+Until step 3 the host mapped `nevr-runtime.dll` with no check. `RuntimeLoader::Load` in `src/runtime/host/runtime_load.cpp` now
+verifies the file first (`nevr_plugin_signature::VerifyPluginFile` with `nevr_plugin_pins::PinnedPolicy()`, the file held open
+`FILE_SHARE_READ` through the load) and calls `LoadLibraryExW` only on an accepted file, or on an unsigned one in a dev build. A
+refused or unreadable file, and a missing one, stop the game (exit 78). Step 4 (the move to `%LOCALAPPDATA%`) still does not ship
+before a signed `nevr-runtime.dll` exists (step 3's prerequisite).
 
 ### Where state resolves
 
