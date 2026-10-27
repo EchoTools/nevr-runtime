@@ -1132,6 +1132,9 @@ test-quest-hooks:
         src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/inline_hook_test" -ldl -pthread
     timeout 120 "$out/inline_hook_test"
+    # The lobby-full policy (#1001): the #889 cases on the 16-byte lobby key. Pure; no libr15 here.
+    "${cxx[@]}" -pthread src/quest/tests/lobby_full_test.cpp -o "$out/lobby_full_test"
+    timeout 60 "$out/lobby_full_test"
     # The login-prompt hook (#239): the real handler and prompt board, built as the sentinel builds
     # them (no exceptions), driven through the thunk entry.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/login_prompt_hook_test.cpp \
