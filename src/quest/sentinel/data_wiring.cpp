@@ -86,8 +86,10 @@ void Present(const std::string& text, const char* what) noexcept {
   }
   bool prepared = false;
   const char* result = Opts().show(CurrentApp(), text.c_str(), &prepared);
-  // "requested": Toast.show() returned. Whether the headset drew it is ADR 0011 measurement 1, so no line says "shown".
-  sentinel::LogFields(std::strcmp(result, "requested") == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn,
+  // "requested": Toast.show() returned on this thread. "posted": queued to the UI thread (ShowPreferUiThread, #829), whose
+  // Toast result follows as a ui_post line. Whether the headset drew it is ADR 0011 measurement 1, so no line says "shown".
+  const bool accepted = std::strcmp(result, "requested") == 0 || std::strcmp(result, "posted") == 0;
+  sentinel::LogFields(accepted ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn,
                       "data_present",
                       {{"what", what}, {"result", result}, {"looper_prepared", prepared ? "true" : "false"}});
 }

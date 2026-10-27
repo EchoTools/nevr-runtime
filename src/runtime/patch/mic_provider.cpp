@@ -33,7 +33,10 @@
 #include "core/mic_lifecycle.h"
 #include "core/mic_owner_thread.h"
 #include "core/system_info.h"
+#include "runtime/lifecycle/service_config.h"  // NevrCfgCaptureDevice (#412: audio.capture_device)
 #include "runtime/patch/mic_device_choice.h"
+#include "runtime/patch/mic_policy.h"
+#include "runtime/lifecycle/cli.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -376,6 +379,16 @@ std::string Utf8(const std::wstring& w) {
 constexpr size_t kLibOvrDeviceBufferChars = 1024;
 constexpr size_t kLibOvrDeviceMaxIdChars = 256;
 
+// config.yaml text (UTF-8) as a wide string, for matching against endpoint ids and friendly names.
+std::wstring Wide(const char* text) {
+  if (text == nullptr || text[0] == '\0') return std::wstring();
+  const int n = MultiByteToWideChar(CP_UTF8, 0, text, -1, nullptr, 0);
+  if (n <= 1) return std::wstring();
+  std::wstring out(static_cast<size_t>(n - 1), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, text, -1, &out[0], n);
+  return out;
+}
+
 // First 64 chars of a wide string as UTF-8, for rejection log lines.
 std::string Prefix64(const std::wstring& text) {
   return Utf8(text.substr(0, 64));
@@ -464,13 +477,17 @@ HRESULT OpenChosenCaptureDevice(IMMDeviceEnumerator* enumerator, IMMDevice** dev
   long libovrCode = 0;
   const bool isWine = nevr_system_info::Get().IsWine();
   std::wstring libovrId;
+  std::wstring preference;
   std::vector<nevr_mic_device::Endpoint> active;
   if (nevr_mic_device::ShouldChooseHeadsetDevice(isWine)) {
+    preference = Wide(NevrCfgCaptureDevice());
     libovrId = LibOvrCaptureEndpointId(&libovrCode, log);
     active = EnumerateActiveCaptureEndpoints(enumerator);
   }
-  nevr_mic_device::Pick pick = nevr_mic_device::Choose(isWine, libovrId, libovrCode, active);
-  if (log && !libovrId.empty() && pick.choice != nevr_mic_device::Choice::LibOvr) {
+  nevr_mic_device::Pick pick =
+      nevr_mic_device::ChooseWithPreference(isWine, preference, libovrId, libovrCode, active);
+  if (log && !libovrId.empty() && pick.choice != nevr_mic_device::Choice::LibOvr &&
+      pick.choice != nevr_mic_device::Choice::Configured) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.MIC] LibOVR code=%ld answered id=\"%s\" which is not an active capture endpoint; falling to the name match",
         libovrCode, Prefix64(libovrId).c_str());
@@ -842,6 +859,10 @@ void RequestRecoveryAfterLoss() {
 // listening, so that read gets fresh audio. MicAvailable is only a poll: the game calls it from the moment
 // capture starts and makes its first MicRead hundreds of milliseconds later, so it neither drops nor counts
 // as a consumer (MicRingBuffer::NoteReaderActive).
+// #879: a dedicated server opens no capture device. Read at call time, because the lookup hook is installed
+// before the CLI sets g_isServer.
+static bool ServerHasNoCapture() { return !nevr_mic_policy::ProvidesCapture(g_isServer != FALSE); }
+
 static void NoteGameReader() {
   const uint32_t stale = g_ring.NoteReaderActive();
   if (stale > 0) {
@@ -853,6 +874,7 @@ static void NoteGameReader() {
 }
 
 uint64_t nevr_mic_provider::MicAvailable() {
+  if (ServerHasNoCapture()) return 0;
   g_availableCalls.fetch_add(1, std::memory_order_relaxed);
   {
     const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -869,6 +891,7 @@ uint64_t nevr_mic_provider::MicAvailable() {
 }
 
 uint64_t nevr_mic_provider::MicCreate() {
+  if (ServerHasNoCapture()) return 1;
   MicCallRequest request{};
   if (!DispatchMicCall(MicCall::Create, &request)) return 1;
   if (!request.result) {
@@ -881,6 +904,7 @@ uint64_t nevr_mic_provider::MicCreate() {
 }
 
 uint64_t nevr_mic_provider::MicDetected() {
+  if (ServerHasNoCapture()) return 0;
   if (g_lifecycle.IsCreated()) return 1;
   HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
@@ -906,6 +930,7 @@ uint64_t nevr_mic_provider::MicDetected() {
 }
 
 uint64_t nevr_mic_provider::MicRead(void* buffer, uint64_t sampleCount) {
+  if (ServerHasNoCapture()) return 0;
   if (!buffer || sampleCount == 0) return 0;
   NoteGameReader();
   const uint32_t count = sampleCount > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(sampleCount);
@@ -916,6 +941,7 @@ uint64_t nevr_mic_provider::MicRead(void* buffer, uint64_t sampleCount) {
 }
 
 void nevr_mic_provider::MicStart() {
+  if (ServerHasNoCapture()) return;
   MicCallRequest request{};
   if (!DispatchMicCall(MicCall::Start, &request)) return;
   if (request.result) {
@@ -937,6 +963,7 @@ void nevr_mic_provider::MicStart() {
 }
 
 void nevr_mic_provider::MicStop() {
+  if (ServerHasNoCapture()) return;
   MicCallRequest request{};
   if (!DispatchMicCall(MicCall::Stop, &request)) return;
   if (!request.result) {
@@ -954,6 +981,7 @@ void nevr_mic_provider::MicStop() {
 }
 
 void nevr_mic_provider::MicDestroy() {
+  if (ServerHasNoCapture()) return;
   MicCallRequest request{};
   if (!DispatchMicCall(MicCall::Destroy, &request)) return;
   if (!request.result) {

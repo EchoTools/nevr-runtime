@@ -115,7 +115,6 @@ BOOL   g_exitOnError        = TRUE;
 BOOL   g_noOvr              = FALSE;
 BOOL   g_telemetryEnabled   = FALSE;
 BOOL   g_timestampLogs      = FALSE;
-BOOL   g_allowDbgCore       = FALSE;
 BOOL   g_upnpEnabled        = FALSE;
 UINT32 g_headlessTickRateHz = 60;
 UINT32 g_telemetryRateHz    = 10;

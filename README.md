@@ -277,7 +277,6 @@ Arguments the runtime reads from the game's command line (`--name` works as well
 | `-telemetry-diag` | Log telemetry diagnostics every second |
 | `-timestamps` | Prefix log lines with timestamps |
 | `-upnp` | Enable UPnP port forwarding |
-| `-skip-dbgcore-check` | Skip the check that refuses a `dbgcore.dll` in the game directory (legacy injection) |
 | `-require-signed-plugins` | Load only plugins signed through the release pipeline and refuse the rest. Without it, plugins load whether or not they are signed. The `plugin trust:` line in the log states which applied |
 
 ### Runtime-loaded modules

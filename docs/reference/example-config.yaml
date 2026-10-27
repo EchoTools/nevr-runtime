@@ -46,6 +46,19 @@
 version: 1
 
 # ---------------------------------------------------------------------------
+# audio — the player's chosen devices (#412). Optional: absent means the default rule.
+#
+# Reader: src/runtime/lifecycle/service_config.cpp (NevrCfgCaptureDevice), used by
+#         src/runtime/patch/mic_provider.cpp (PC, native Windows only; Wine keeps the OS default)
+# ---------------------------------------------------------------------------
+
+audio:
+  # The microphone to capture from: an endpoint id, or a part of its friendly name (case-insensitive).
+  # When it names no active capture endpoint, the default rule runs: LibOVR's headset mic, a headset-named
+  # endpoint, then the OS default. Default (absent): that default rule.
+  # capture_device: "Headset Microphone"
+
+# ---------------------------------------------------------------------------
 # social — platform social-provider compatibility
 #
 # pnsrad exports no Social object, so the game's friends and parties would be

@@ -268,7 +268,7 @@ parser in `src/runtime/lifecycle/cli.cpp`.
 
 - **Handled by that loop:** `-server`, `-offline`, `-no-console`, `-windowed`,
   `-no-exit-on-error`, `-no-telemetry`, `-telemetry-rate N`, `-telemetry-diag`, `-timestamps`,
-  `-upnp`, `-skip-dbgcore-check`, `-config` / `-config-path PATH`, `-region` /
+  `-upnp`, `-config` / `-config-path PATH`, `-region` /
   `-serverregion S`, `-trace-exports` (consumes a value; the tracer reads its own).
 - **`-exit-on-error`** is accepted and logs that it has no effect (it is the default).
 - **`-timestep` / `-fixedtimestep`:** on a server `GameMainWrapperHook`

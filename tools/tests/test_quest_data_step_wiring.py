@@ -198,7 +198,7 @@ class TheStepOrder(unittest.TestCase):
 
     def test_the_main_looper_toast_is_reachable_from_the_probe_only_the_floor_message_keeps_its_presenter(self):
         entry = extract_braced_function(read("entry.cpp"), "bool InstallPermissionWaitHook() noexcept {")
-        self.assertIn("options.show = &nevr_quest::toast::Show;", entry)
+        self.assertIn("options.show = &nevr_quest::toast::ShowPreferUiThread;", entry)
         self.assertIn("options.show_ui = &nevr_quest::toast::ShowOnMainLooper;", entry)
         self.assertIn("options.show_post = &nevr_quest::toast::ShowOnUiThread;", entry)
         # The floor message goes through Opts().show; nothing but the probe reads show_ui or show_dialog.
@@ -209,9 +209,11 @@ class TheStepOrder(unittest.TestCase):
         present = extract_braced_function(read("data_wiring.cpp"), "void Present(")
         self.assertIn("Opts().show(", present)
 
-    def test_the_ui_looper_is_taken_in_the_constructor_and_only_in_development_builds(self):
+    def test_the_ui_looper_is_taken_in_the_constructor_in_every_build(self):
+        # #829: the floor message's presenter needs the UI looper in a release build too, so the capture is unconditional.
         ctor = extract_braced_function(read("entry.cpp"), "static void nevr_sentinel_ctor() {")
-        self.assertIn("if (nevr_build::kIsDev) nevr_quest::toast::CaptureUiLooper();", ctor)
+        self.assertIn("nevr_quest::toast::CaptureUiLooper();", ctor)
+        self.assertNotIn("kIsDev) nevr_quest::toast::CaptureUiLooper", ctor)
 
     def test_the_looper_callback_makes_the_toast_on_the_calling_thread_and_never_the_main_looper_overload(self):
         text = re.sub(r"//[^\n]*", "", read("toast_presenter.cpp"))
