@@ -109,6 +109,10 @@ std::atomic<HANDLE> g_log_mutex{nullptr};
 // there is no per-process budget.
 std::atomic<bool> g_log_lock_unreliable{false};
 
+// Writes that skipped the mutex because it was marked unreliable. Read by the concurrent-append test when a line
+// is missing (#840): with it and the host_log_lock record, a short file says whether the lock path ran.
+std::atomic<unsigned long long> g_log_unlocked_writes{0};
+
 // How long an append waits on the log mutex.
 std::atomic<DWORD> g_log_wait_ms{kBootstrapLogLockWaitMs};
 
@@ -274,6 +278,7 @@ void BootstrapDiagnostics::SetLogMutexNameForTest(const wchar_t* name) {
 }
 
 bool BootstrapDiagnostics::LogLockUnreliableForTest() { return g_log_lock_unreliable.load(); }
+unsigned long long BootstrapDiagnostics::UnlockedWritesForTest() { return g_log_unlocked_writes.load(); }
 std::size_t BootstrapDiagnostics::JournalClaimed() const { return claimed_.load(); }
 #endif
 
@@ -647,6 +652,8 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
     if (waited == WAIT_FAILED) wait_error = GetLastError();
     locked = waited == WAIT_OBJECT_0 || waited == WAIT_ABANDONED;
     if (!locked) marked_unreliable = !g_log_lock_unreliable.exchange(true);
+  } else if (lock != nullptr) {
+    g_log_unlocked_writes.fetch_add(1);
   }
   // The write is serialized within the process whether or not the mutex was taken: a write that did not get the mutex
   // must not race another write of this process (#997).

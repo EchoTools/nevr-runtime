@@ -15,6 +15,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <mutex>
@@ -530,6 +531,7 @@ struct AppendJob {
   int thread;
   int lines;
   const char* prefix;
+  std::atomic<int>* dropped;
 };
 
 DWORD WINAPI AppendLines(void* raw) {
@@ -537,18 +539,23 @@ DWORD WINAPI AppendLines(void* raw) {
   for (int at = 0; at < job->lines; ++at) {
     char line[48];
     const int length = std::snprintf(line, sizeof(line), "%s-T%02d-L%05d\n", job->prefix, job->thread, at);
-    job->diagnostics->AppendLine(line, static_cast<std::size_t>(length));
+    const nevr_host::DiagnosticDestination where =
+        job->diagnostics->AppendLine(line, static_cast<std::size_t>(length));
+    if (where == nevr_host::DiagnosticDestination::kDropped) job->dropped->fetch_add(1);
   }
   return 0;
 }
 
-// Runs `threads` appenders of `lines` lines each; returns the number of complete lines in the file and
-// how many of them are distinct.
-void AppendConcurrently(BootstrapDiagnostics& diagnostics, int threads, int lines, const char* prefix) {
+// Runs `threads` appenders of `lines` lines each. `dropped`, when given, counts the appends that reported
+// kDropped (no destination took the line).
+void AppendConcurrently(BootstrapDiagnostics& diagnostics, int threads, int lines, const char* prefix,
+                        std::atomic<int>* dropped = nullptr) {
+  std::atomic<int> none{0};
+  std::atomic<int>* counter = dropped != nullptr ? dropped : &none;
   std::vector<AppendJob> jobs(static_cast<std::size_t>(threads));
   std::vector<HANDLE> handles;
   for (int t = 0; t < threads; ++t) {
-    jobs[static_cast<std::size_t>(t)] = AppendJob{&diagnostics, t, lines, prefix};
+    jobs[static_cast<std::size_t>(t)] = AppendJob{&diagnostics, t, lines, prefix, counter};
     handles.push_back(CreateThread(nullptr, 0, &AppendLines, &jobs[static_cast<std::size_t>(t)], 0, nullptr));
   }
   WaitForMultipleObjects(static_cast<DWORD>(handles.size()), handles.data(), TRUE, 120000);
@@ -577,16 +584,41 @@ LineCount CountLines(const std::string& text) {
 
 }  // namespace
 
+// The lock records the file holds and the process's lock state, printed when a line is missing (#840): a short
+// file with no host_log_lock record and no unlocked writes points at the append itself, not at the mutex.
+std::string LockDiagnosis(const std::string& text) {
+  std::string records;
+  std::size_t start = 0;
+  while (start < text.size()) {
+    const std::size_t end = text.find('\n', start);
+    if (end == std::string::npos) break;
+    const std::string line = text.substr(start, end - start);
+    if (line.find("host_log_lock") != std::string::npos) records += line + "\n";
+    start = end + 1;
+  }
+  const bool unreliable = BootstrapDiagnostics::LogLockUnreliableForTest();
+  std::string summary = std::string("lock_unreliable=") + (unreliable ? "true" : "false") +
+                        " unlocked_writes=" + std::to_string(BootstrapDiagnostics::UnlockedWritesForTest()) +
+                        "\nhost_log_lock records in the file:\n";
+  return summary + (records.empty() ? std::string("(none)\n") : records);
+}
+
 TEST(BootstrapDiagnostics, ConcurrentAppendersToOneFileLoseNoLine) {
   for (const int threads : {1, 2, 4, 8}) {
     const std::wstring local = MakeTempDir(L"local");
     BootstrapDiagnostics diagnostics;
     diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
     constexpr int kLines = 300;
-    AppendConcurrently(diagnostics, threads, kLines, "A");
-    const LineCount count = CountLines(ReadAll(local + kLogsFile));
-    EXPECT_EQ(count.lines, static_cast<std::size_t>(threads * kLines)) << threads << " threads";
-    EXPECT_EQ(count.distinct, static_cast<std::size_t>(threads * kLines)) << threads << " threads";
+    std::atomic<int> dropped{0};
+    AppendConcurrently(diagnostics, threads, kLines, "A", &dropped);
+    const std::string text = ReadAll(local + kLogsFile);
+    const LineCount count = CountLines(text);
+    const std::size_t expected = static_cast<std::size_t>(threads * kLines);
+    // The record of a short file: the lock state at the end, the dropped appends, and the lock records.
+    EXPECT_EQ(count.lines, expected) << threads << " threads, dropped=" << dropped.load() << "\n"
+                                     << LockDiagnosis(text);
+    EXPECT_EQ(count.distinct, expected) << threads << " threads, dropped=" << dropped.load() << "\n"
+                                        << LockDiagnosis(text);
   }
 }
 
