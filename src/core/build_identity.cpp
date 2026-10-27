@@ -1,5 +1,7 @@
 #include "core/build_identity.h"
 
+#include <atomic>
+
 // CMake sets these as compile definitions (root CMakeLists.txt:38-45).
 // Fallbacks match the pattern in src/core/globals.h — a build without
 // CMake (manual compiler invocation) gets safe defaults.
@@ -39,6 +41,13 @@ namespace nevr_build_identity {
 static const char kIdentityArray[] = "\0NEVR-BUILD " NEVR_PROJECT_VERSION " " NEVR_GIT_COMMIT_FULL;
 
 const char* IdentityLiteral() { return kIdentityArray + 1; }
+
+// Written once by the runtime's self-check at boot and read by the registration; atomic so a read on another thread is never torn.
+static std::atomic<const char*> g_provenance{"unchecked"};
+
+const char* Provenance() { return g_provenance.load(); }
+
+void SetProvenance(const char* word) { g_provenance.store(word); }
 
 const Info& Get() {
   static const Info info = []() {

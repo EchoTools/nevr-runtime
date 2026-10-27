@@ -21,6 +21,7 @@
 #include "runtime/patch/coop_ai_trace.h"
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/ext/plugin_trust.h"
+#include "runtime/ext/self_provenance.h"
 #include "extension/module_interface.h"
 
 // Statically-linked module entry points (the modules are linked into
@@ -47,6 +48,7 @@ const char* TokenAuth_GetUsername(void);
 #include "runtime/lifecycle/server_timestep.h"
 #include "runtime/lifecycle/cmdline_strip.h"
 #include "runtime/lifecycle/timestep_log.h"
+#include "core/build_identity.h"
 #include "core/cli_flags.h"
 #include "core/cli_option_value.h"
 #include "core/globals.h"
@@ -58,6 +60,7 @@ const char* TokenAuth_GetUsername(void);
 #include <exception>
 #include <new>
 #include <atomic>
+#include <ctime>
 #include <shellapi.h>
 
 namespace {
@@ -683,6 +686,19 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     if (!nevr_return_to_lobby::Configure(ttlSeconds)) {
       Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] empty-server TTL requested but not armed; the server keeps today's behaviour");
     }
+  }
+
+  // The runtime's own signature (#842, ADR 0010): one line says whether this is the signed release or a self-built or dev
+  // build. The word is what the server registration carries (nevr_build_identity::Provenance). Reads the file, so it runs
+  // here, after the original PreprocessCommandLine call (N146), not in the preflight.
+  {
+    const nevr_build_identity::Info& buildId = nevr_build_identity::Get();
+    const nevr_self_provenance::Result provenance = nevr_self_provenance::CheckOwnModule(
+        buildId.project_version, nevr_plugin_trust::IsDevBuild(), nevr_plugin_trust::ProductionPolicy(),
+        static_cast<int64_t>(std::time(nullptr)));
+    nevr_build_identity::SetProvenance(provenance.word);
+    Log(EchoVR::LogLevel::Info, "[NEVR.BOOT] runtime provenance=%s version=%s reason=\"%s\"", provenance.word,
+        provenance.version.c_str(), provenance.reason.c_str());
   }
 
   // Load external plugins from plugins/ subdirectory

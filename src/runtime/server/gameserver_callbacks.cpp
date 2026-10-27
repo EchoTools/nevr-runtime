@@ -816,7 +816,8 @@ void GameServerLib::ProcessPendingReconnect() {
   params.regionId = state.regionId;
   params.versionLock = state.versionLock;
   params.timeStepUsecs = state.defaultTimeStepUsecs;
-  params.version = nevr_game_server::FormatRegistrationVersion(buildId.git_describe, buildId.git_commit, buildId.build_type);
+  params.version = nevr_game_server::FormatRegistrationVersion(buildId.git_describe, buildId.git_commit, buildId.build_type,
+                                                               nevr_build_identity::Provenance());  // #842
   nevr_game_server::FillRegistrationMetadata(params);  // #990: installed levels, regions, guilds
   const gameservice::v1::Envelope envelope = nevr_game_server::BuildRegistrationEnvelope(params);
 

@@ -56,4 +56,10 @@ const char* IdentityLiteral();
 /// so a screenshot names the exact build. Derived from Get(); nothing is measured.
 std::string MenuVersionLabel();
 
+/// How this runtime's own Authenticode signature checks out (#842): "signed-release", "self-built" or "dev", set once at
+/// boot by the runtime's self-check (src/runtime/ext/self_provenance.h). "unchecked" until that has run. This is the one
+/// field here that is measured at runtime, not compiled in; it is still written once, before any registration.
+const char* Provenance();
+void SetProvenance(const char* word);
+
 }  // namespace nevr_build_identity
