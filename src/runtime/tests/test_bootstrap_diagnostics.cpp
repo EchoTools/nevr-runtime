@@ -681,6 +681,67 @@ bool MutexExists(const wchar_t* name) {
 
 }  // namespace
 
+namespace {
+
+struct HoldFor {
+  HANDLE ready;
+  DWORD milliseconds;
+};
+
+// Takes the log mutex, says so, and keeps it for the given time: longer than an append's bounded wait.
+DWORD WINAPI HoldLogLockFor(void* raw) {
+  const auto* hold = static_cast<const HoldFor*>(raw);
+  HANDLE mutex = OpenMutexW(SYNCHRONIZE | MUTEX_MODIFY_STATE, FALSE, g_holder_mutex_name.c_str());
+  if (mutex == nullptr) return 1;
+  WaitForSingleObject(mutex, 5000);
+  SetEvent(hold->ready);
+  Sleep(hold->milliseconds);
+  ReleaseMutex(mutex);
+  CloseHandle(mutex);
+  return 0;
+}
+
+// The distinct lines of `text` that start with `prefix`.
+std::size_t DistinctLinesWithPrefix(const std::string& text, char prefix) {
+  std::set<std::string> distinct;
+  std::size_t start = 0;
+  while (start < text.size()) {
+    const std::size_t end = text.find('\n', start);
+    if (end == std::string::npos) break;
+    if (end > start && text[start] == prefix) distinct.insert(text.substr(start, end - start));
+    start = end + 1;
+  }
+  return distinct.size();
+}
+
+}  // namespace
+
+// The lock is held for longer than an append's bounded wait while the appenders run. The wait times out, and the
+// appends that follow write without the lock. Every appended line must still be in the file.
+TEST(BootstrapDiagnostics, ConcurrentAppendersKeepEveryLineWhileTheLockIsHeldPastItsWait) {
+  g_holder_mutex_name = UniqueMutexName(L"held-past-wait");
+  ScopedLogMutexName scoped(g_holder_mutex_name);
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  HoldFor hold{ready, 3000};
+  HANDLE holder = CreateThread(nullptr, 0, &HoldLogLockFor, &hold, 0, nullptr);
+  ASSERT_NE(holder, nullptr);
+  ASSERT_EQ(WaitForSingleObject(ready, 5000), WAIT_OBJECT_0);
+
+  constexpr int kThreads = 8;
+  constexpr int kLines = 300;
+  AppendConcurrently(diagnostics, kThreads, kLines, "H");
+  WaitForSingleObject(holder, 10000);
+  CloseHandle(holder);
+  CloseHandle(ready);
+
+  EXPECT_TRUE(BootstrapDiagnostics::LogLockUnreliableForTest())
+      << "the appends did not time out on the lock; the test forces nothing";
+  EXPECT_EQ(DistinctLinesWithPrefix(ReadAll(local + kLogsFile), 'H'), static_cast<std::size_t>(kThreads * kLines));
+}
+
 // A holder that never lets go must delay an append by the bounded wait at most; the line is still written.
 TEST(BootstrapDiagnostics, AnAppendIsNotBlockedForeverByAnotherThreadHoldingTheLogLock) {
   ScopedLogMutexName scoped(UniqueMutexName(L"blocked"));

@@ -112,6 +112,14 @@ std::atomic<bool> g_log_lock_unreliable{false};
 // How long an append waits on the log mutex.
 std::atomic<DWORD> g_log_wait_ms{kBootstrapLogLockWaitMs};
 
+// Serializes the writes of this process's appenders once the named mutex's wait has ended without it. An append
+// that timed out on the mutex writes unlocked; two such writes from one process to the same FILE_APPEND_DATA
+// handle race in the file system (under Wine a line is reported written and is absent from the file, #997). The
+// critical section is recursive for its owner, so the crash callback on the thread that holds it still writes at
+// once, and it is taken after the mutex's bounded wait, so no path waits on it while it waits on the mutex.
+CRITICAL_SECTION g_log_local_lock;
+std::atomic<bool> g_log_local_lock_ready{false};
+
 // The last flush of a process that is ending (FlushAttachJournalAtExit). The log mutex is named, so a live process on
 // the same prefix can hold it. The exit flush waits at most kBootstrapExitLogLockWaitMs for it and, when it does not
 // get it, writes nothing: an unlocked write could interleave with a live process's line. After the first such
@@ -210,6 +218,10 @@ void BootstrapDiagnostics::Prepare(HMODULE host_module) {
 }
 
 void BootstrapDiagnostics::EnsureLogMutex() noexcept {
+  if (!g_log_local_lock_ready.load(std::memory_order_acquire)) {
+    InitializeCriticalSection(&g_log_local_lock);
+    g_log_local_lock_ready.store(true, std::memory_order_release);
+  }
   const DWORD error = CreateLogMutex();
   if (error != 0) {
     // Nothing is written here (the loader lock may be held): the journal says it when it is flushed.
@@ -633,9 +645,14 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
     locked = waited == WAIT_OBJECT_0 || waited == WAIT_ABANDONED;
     if (!locked) marked_unreliable = !g_log_lock_unreliable.exchange(true);
   }
+  // The write is serialized within the process whether or not the mutex was taken: a write that did not get the mutex
+  // must not race another write of this process (#997).
+  const bool local = g_log_local_lock_ready.load(std::memory_order_acquire);
+  if (local) EnterCriticalSection(&g_log_local_lock);
   DWORD written = 0;
   const BOOL ok = WriteFile(file, line, static_cast<DWORD>(length), &written, nullptr);
   FlushFileBuffers(file);
+  if (local) LeaveCriticalSection(&g_log_local_lock);
   if (locked) ReleaseMutex(lock);
   if (marked_unreliable) {
     // The one record that says the log is no longer serialized: written to the open file, without the lock,
