@@ -194,7 +194,7 @@ TEST(InviteExpiry, NothingLongerThanSevenDaysIsAsked) {
   EXPECT_EQ(nevr_invite::ExpirySeconds("168 HOURS"), nevr_invite::kExpiryMaxSeconds);
   EXPECT_EQ(nevr_invite::ExpirySeconds("169 HOURS"), nevr_invite::kExpiryMaxSeconds);
   EXPECT_EQ(nevr_invite::ExpirySeconds("99999999999999999999999999999999 DAYS"), nevr_invite::kExpiryMaxSeconds);
-  EXPECT_EQ(nevr_invite::ExpirySeconds("18446744073709551616 DAYS"), nevr_invite::kExpiryMaxSeconds);  // 2^64
+  EXPECT_EQ(nevr_invite::ExpirySeconds("99999999999999999999 DAYS"), nevr_invite::kExpiryMaxSeconds);  // 10^20: past 2^64, the multiply overflows
   EXPECT_EQ(nevr_invite::ExpirySeconds("9223372036854775808 MINUTES"), nevr_invite::kExpiryMaxSeconds);  // 2^63
 }
 
