@@ -881,10 +881,15 @@ static INT64 HandleCrashDumpHook(void* a1, void* a2, void* a3, void* a4) {
                                                     ? ep->ExceptionRecord->ExceptionInformation[1] : 0));
       if (ep->ContextRecord != nullptr && nevr_crash_recovery::IsReadableMemory(ep->ContextRecord, sizeof(CONTEXT))) {
         const DWORD64 rip = ep->ContextRecord->Rip;
-        VehPrintf("[NEVR.CRASH] >>> rip=0x%llX rva=%s0x%llX rsp=0x%llX rcx=0x%llX rdx=0x%llX",
+        // #673: a fault outside the game names its module from the init-time snapshot (N70: no enumeration here), so a
+        // Proton report says which DLL faulted; "unknown" means that module was loaded after the snapshot.
+        const char* faultModule =
+            nevr_crash_recovery::ModuleNameForAddress(g_moduleCache, static_cast<int>(g_moduleCacheCount), rip);
+        VehPrintf("[NEVR.CRASH] >>> rip=0x%llX rva=%s0x%llX module=%s rsp=0x%llX rcx=0x%llX rdx=0x%llX",
                   static_cast<unsigned long long>(rip),
                   (rip >= base && rip < base + 0x2000000) ? "game+" : "abs:",
                   static_cast<unsigned long long>((rip >= base && rip < base + 0x2000000) ? rip - base : rip),
+                  faultModule != nullptr ? faultModule : "unknown",
                   ep->ContextRecord->Rsp, ep->ContextRecord->Rcx, ep->ContextRecord->Rdx);
       }
     } else {
