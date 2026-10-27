@@ -19,6 +19,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# The same commit built in two worktrees must give the same bytes (#658): keep the repository root and the build
+# directory out of __FILE__, assertions and debug info, as the root CMakeLists.txt does for the Windows DLLs. The
+# build tree is <repo>/build/<preset>, so its mapping is relative too.
+get_filename_component(NEVR_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+add_compile_options(
+  "-ffile-prefix-map=${NEVR_REPO_ROOT}=."
+  "-ffile-prefix-map=${CMAKE_BINARY_DIR}=build"
+)
+
 message(STATUS "nevr_quest: ABI=${ANDROID_ABI} platform=${ANDROID_PLATFORM} STL=${ANDROID_STL}")
 
 # ── Toolchain probe ─────────────────────────────────────────────────────
