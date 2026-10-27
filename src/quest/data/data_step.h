@@ -84,6 +84,11 @@ struct StepConfig {
   std::function<void(const std::string& message)> present;  // the visible message; null: none
   std::function<void()> hold;                                // after the message, so it can be read; null: none
   std::function<void(const Event&)> on_step;                // data_check; null: none
+  // Read-only seams for the data version the step logs (`data_version`, `manifest_sha256`). Null: the real filesystem.
+  // `list_dir` gives the names in a directory (none when it cannot be read); `read_file` fills `bytes` with a whole
+  // file of at most 16 MiB and says whether it could.
+  std::function<std::vector<std::string>(const std::string& dir)> list_dir;
+  std::function<bool(const std::string& path, std::string& bytes)> read_file;
 };
 
 // The roots the leftovers are put right on: `recovery_roots`, or every candidate when it is empty, without the legacy

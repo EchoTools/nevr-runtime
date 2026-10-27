@@ -111,8 +111,10 @@ build, what to do) is not optional.
   `_data`. The root is synced after each rename.
 - **After success.** Delete the zip we downloaded (about 937 MB), nothing else.
 - **Logging** (repo rule: every path logs, queryable): one structured sentinel event per step, with the path, bytes, free space and
-  result: `data_check`, `data_fetch` (start, progress at a coarse interval, retry, verified, failed with the reason),
-  `data_extract`, `data_swap`. No URL query strings or credentials in them (there are none).
+  result: `data_check` (with `data_version`, the folder under `_data` that holds the manifest the game reads, and `manifest_sha256`, the
+  sha256 of that file, both read from the root and never from the pins, so a report says which data the player has; `none` when
+  there is none), `data_fetch` (start, progress at a coarse interval, retry, verified, failed with the reason),
+  `data_extract`, `data_swap`, and after a fetch a `data_version` event with the same two fields for the data it placed. No URL query strings or credentials in them (there are none).
 
 ## What the player sees (the open problem)
 
