@@ -14,10 +14,14 @@
 #include "runtime/hook/addresses.h"
 #include "runtime/lifecycle/server_timestep.h"
 #include "runtime/lifecycle/readable_memory.h"
+#include "runtime/lifecycle/arena_round_time.h"
 
 #include <atomic>
 #include <exception>
+#include <mutex>
 #include <new>
+#include <optional>
+#include <string>
 
 /// <summary>
 /// The game instance pointer -- stored globally for social message injection.
@@ -363,6 +367,22 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
 /// Public Arena round length on a server with no arena.round_time in config.yaml: 8:00 (#982).
 constexpr FLOAT kArenaPublicRoundTimeDefault = 480.0f;
 
+/// Logs the round_time decision when it changes (applied, or the reason it was not), so one server run shows the
+/// order of the session's game type and the reads (#982). Unchanged decisions are not logged again.
+void LogRoundTimeDecision(const nevr_arena_round_time::RoundTimeDecision& decision,
+                          const std::optional<std::string>& gameType, const CHAR* path, FLOAT gameDefault) {
+  static std::mutex s_lastMutex;
+  static std::string s_lastKey;
+  const std::string key = std::string(decision.reason) + "|" + gameType.value_or("");
+  std::lock_guard<std::mutex> lock(s_lastMutex);
+  if (key == s_lastKey) return;
+  s_lastKey = key;
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.PATCH] arena_round_time default=%.0fs applied=%d reason=%s game_type=%s path=%s game_default=%.0fs",
+      kArenaPublicRoundTimeDefault, decision.applied ? 1 : 0, std::string(decision.reason).c_str(),
+      gameType ? gameType->c_str() : "none", path, gameDefault);
+}
+
 /// <summary>
 /// Hook for CJson_GetFloat to override arena rule config values at load time.
 /// Matches specific JSON path suffixes and returns overridden values from config.json.
@@ -376,20 +396,17 @@ FLOAT CJsonGetFloatHook(PVOID root, const CHAR* path, FLOAT defaultValue, INT32 
         strstr(path, "_private") == NULL) {
       return g_arenaCelebrationTime;
     }
-    // round_time (but not round_time_private). A server without arena.round_time starts
-    // public Arena at 8:00 (#982); the _private paths and every other key keep the game's value.
+    // round_time (but not round_time_private). A server without arena.round_time starts a public Arena
+    // session at 8:00 (#982); the _private paths, every other game type and a read before any session keep the
+    // game's value.
     if (strstr(path, "round_time") != NULL && strstr(path, "_private") == NULL &&
         strstr(path, "round_timer") == NULL && strstr(path, "sudden_death_round_time") == NULL) {
       if (g_arenaRoundTime > 0.0f) return g_arenaRoundTime;
       if (g_isServer) {
-        static std::atomic<bool> s_defaultLogged{false};
-        if (!s_defaultLogged.exchange(true)) {
-          Log(EchoVR::LogLevel::Info,
-              "[NEVR.PATCH] arena_round_time default=%.0fs source=runtime (public Arena on a server; "
-              "config.yaml arena.round_time absent) path=%s game_default=%.0fs",
-              kArenaPublicRoundTimeDefault, path, result);
-        }
-        return kArenaPublicRoundTimeDefault;
+        const std::optional<std::string> gameType = nevr_arena_round_time::SessionGameType();
+        const auto decision = nevr_arena_round_time::DecideRoundTimeDefault(gameType);
+        LogRoundTimeDecision(decision, gameType, path, result);
+        if (decision.applied) return kArenaPublicRoundTimeDefault;
       }
     }
     // mercy_win_point_spread (but not the _private variant)
