@@ -272,6 +272,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // MessageBoxA. In client mode the handler is NOT installed — the user at the
   // screen should see the modal dialog so they know the game fatally failed.
   if (g_isServer) {
+    // #879: the mic provider answers "no device" on a server (mic_provider.cpp), so no capture device is opened.
+    Log(EchoVR::LogLevel::Info, "[NEVR.MIC] server: no capture device; Mic* calls answer no-device");
     InstallFatalErrorHandler();
 
     // Deferred fatal-condition checks — these conditions are detected in
