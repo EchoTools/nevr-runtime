@@ -163,7 +163,7 @@ void FallBackToStock(LoadResult& r, const std::string& why) {
   r.config.textureQuality = {texture_quality::kFallbackLevel, Source::kAbsent};
   Add(r, LogLevel::kWarn,
       std::string("config file key=") + kTextureQualityKey + " rejected reason=" + why + " (falls back to " +
-          texture_quality::LevelName(texture_quality::kFallbackLevel) + "; allowed: stock, low, medium, high, very_high, ultra)");
+          texture_quality::LevelName(texture_quality::kFallbackLevel) + "; allowed: stock, very_low, low, medium, high, very_high, ultra)");
 }
 
 // Any key under `graphics` other than texture_quality is a mistake the file's author wants to hear about: a misspelling
@@ -188,7 +188,7 @@ void WarnUnknownGraphicsKeys(const nevr::NevrConfig& cfg, LoadResult& r) {
   }
 }
 
-// graphics.texture_quality (#943). Absent: the default (texture_quality.h kDefaultLevel). One of the six words: that level.
+// graphics.texture_quality (#943). Absent: the default (texture_quality.h kDefaultLevel). One of the seven words: that level.
 // Anything else is a mistake and falls back to `stock`, never to the default, with a warning naming the key: a word that is
 // not a level (wrong case, a number, empty), a value that is not a word (a mapping, a list, a key with no value), a bare
 // ${VAR} that is not set, or a `graphics` section that is not a mapping.

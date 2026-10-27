@@ -107,13 +107,15 @@ diagnostics:
 
 graphics:
   # Quest only. The size of the eye buffer the game renders into (per eye, the swap chain the game creates once, at
-  # start-up). One of: stock, low, medium, high, very_high, ultra (lower case, exactly). The sizes are the ones the
-  # community installer's Graphics Patch setting uses for the same names (reported for a Quest 3; this build has not
-  # measured any headset's native size): low 1680x1760, medium 2376x2568, high 3072x3380, very_high 3584x3944,
-  # ultra 4096x4506, with 2 samples. A bigger size looks sharper and costs frame time; on a Quest 2 `high` is well above
-  # the headset's native size. `stock` installs nothing: the game gets the size the headset runtime suggests.
+  # start-up). One of: stock, very_low, low, medium, high, very_high, ultra (lower case, exactly). The sizes are the ones
+  # the community patch repository's Texture Resolution setting uses for the same names, chosen by headset (a Quest 2 or
+  # a Quest 3, from the suggested width): Quest 3 very_low 1344x1408, low 1680x1760, medium 2376x2568, high 3072x3380,
+  # very_high 3584x3944, ultra 4096x4506; Quest 2 very_low 1152x1264, low 1440x1584, medium 1728x1904, high 2016x2224,
+  # very_high 2304x2528, ultra 2592x2848; 2 samples. This build has not measured any headset's native size. A bigger
+  # size looks sharper and costs frame time. `low` answers the headset's own size, and `stock` installs nothing: the
+  # game gets the size the headset runtime suggests.
   # Read once at launch and fixed for the run: a change takes effect at the next launch. Any mistake (a value that is not
-  # one of the six words, a mapping or a list, a key with no value, a `graphics` that is not a mapping, an unset ${VAR}, a
+  # one of the seven words, a mapping or a list, a key with no value, a `graphics` that is not a mapping, an unset ${VAR}, a
   # file rejected as a whole) gives `stock`, with a warning in the sentinel log that names the key. Any other key under
   # `graphics` (a misspelling such as `texture_qualty`, or `Texture_Quality`) is ignored with a warning that names it.
   # Default (absent): stock. The log line `texture_quality` in the sentinel log names the level, its source and the size.

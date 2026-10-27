@@ -7,7 +7,8 @@
  *
  * One GOT hook, on libr15's vrapi_GetSystemPropertyInt slot (JUMP_SLOT 0x36fa728). The handler calls the original with
  * exactly the arguments it was given, and returns:
- *   - for id 5 and id 6, when a level other than `stock` is latched, that level's width or height (texture_quality.h);
+ *   - for id 5 and id 6, when a level other than `stock` is latched, that level's width or height for the headset the
+ *     runtime's own answer names (texture_quality.h HeadsetForStockSize, SizeFor);
  *   - for every other id, and for 5 and 6 with no level latched, exactly what the original returned.
  * The level is the config's graphics.texture_quality (quest_config.h), `stock` when it is absent or wrong (texture_quality.h
  * kDefaultLevel, kFallbackLevel). It is latched by the first
@@ -21,9 +22,9 @@
  *
  * It never logs on the game's call path. Install logs one line, whatever the level and the outcome:
  *   {"level":"info","event":"texture_quality","result":"installed|not_installed|refused|skipped",
- *    "quality":"high","source":"config|default","w":3072,"h":3380,...}
- * (`level` is the log severity; the setting is `quality`.) `w` and `h` are the sizes this hook answers with, 0 when it
- * answers with none. `not_installed` is `stock` (no hook, the runtime's own size); `refused` is a GotHook refusal (the status rides in
+ *    "quality":"high","source":"config|default","w":0,"h":0,"sizes":"per_headset",...}
+ * (`level` is the log severity; the setting is `quality`.) `w` and `h` are 0 on an installed hook: the size depends on
+ * the headset, which the first query names, so the swap-chain line is the record of the size served. `not_installed` is `stock` (no hook, the runtime's own size); `refused` is a GotHook refusal (the status rides in
  * `status`) or a second level; `skipped` is the counters refused. Counters (hook_report.h), registered by
  * RegisterCounters(); the first two are values, not counts, and carry the runtime's own answers (what the game would
  * have got with `stock`), which is the headset's native size:

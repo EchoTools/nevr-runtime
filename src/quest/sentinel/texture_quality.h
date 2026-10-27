@@ -1,4 +1,4 @@
-/* The Quest texture-quality levels and the eye-buffer size each one asks the headset runtime for (#943).
+/* The Quest texture-quality levels and the eye-buffer size each one asks the headset runtime for (#943, #1012).
  *
  * Pure: no Android, no game header, no hook, so quest_config.cpp (built with exceptions) and the hook
  * (texture_quality_hook.h, built with -fno-exceptions) share one table.
@@ -7,12 +7,15 @@
  * buffer size with vrapi_GetSystemPropertyInt ids 5 (width) and 6 (height), multiplies each by CustomViewportScale
  * (1.0 unless a script sets it) and CVR::Resize creates the swap chain from the result once per process, logging
  * "Creating OVR swap chain with size %i x %i (2 slices, %u sample[s])". A level other than `stock` answers those two
- * ids with the sizes below instead of the runtime's. The sizes are the absolute per-eye sizes the community patch
- * repository's Graphics Patch setting (EchoTools/echoApkPatch, by marshmallow-mia) uses for the same names, reported
- * for a Quest 3; nothing here measured the native size of any headset. The samples stay at two.
+ * ids with the size below instead of the runtime's. The sizes are the absolute per-eye sizes of the community patch
+ * repository's Texture Resolution setting (EchoTools/echoApkPatch, by marshmallow-mia, graphics v9: native/texres/texres.c
+ * kQ3W/kQ2W/kQ3H/kQ2H); nothing here measured the native size of any headset. The samples stay at two.
  *
- * Aspect. Levels low..ultra are 1680x1760, 2376x2568, 3072x3380, 3584x3944 and 4096x4506: the ratio width/height is
- * 0.9545, 0.9252, 0.9089, 0.9087 and 0.9090. The first is the table's own; the others are what the table gives.
+ * Per headset. The table is chosen by the runtime's own answer to the same call: a stock width or height of at least
+ * kHeadsetSplit is a Quest 3 (stock 1680x1760), below it a Quest 2 (stock 1440x1584). Very Low is about 0.8 times the
+ * stock size per axis (the patch's own values: Quest 3 1344x1408, Quest 2 1152x1264, where 0.8 x 1584 would be 1267).
+ * Low is the stock size on each headset, so it answers what `stock` would answer; it is a level so that a player can
+ * ask for it by name.
  *
  * `stock` installs no hook: the game asks the runtime and gets the runtime's own answer.
  */
@@ -27,7 +30,15 @@ namespace nevr_quest::texture_quality {
 inline constexpr int kEyeWidthPropertyId = 5;
 inline constexpr int kEyeHeightPropertyId = 6;
 
-enum class Level { kStock, kLow, kMedium, kHigh, kVeryHigh, kUltra };
+enum class Level { kStock, kVeryLow, kLow, kMedium, kHigh, kVeryHigh, kUltra };
+
+// The headset a stock size belongs to. A Quest 3's stock size is 1680x1760 and a Quest 2's is 1440x1584, so one split
+// at 1680 separates them on either axis. A size the runtime did not answer (0) is a Quest 2.
+enum class Headset { kQuest2, kQuest3 };
+inline constexpr int kHeadsetSplit = 1680;
+constexpr Headset HeadsetForStockSize(int stockSize) noexcept {
+  return stockSize >= kHeadsetSplit ? Headset::kQuest3 : Headset::kQuest2;
+}
 
 // What the key gives when the file does not set it. `stock` (no hook, the headset runtime's own size) until a Quest 2 has been
 // measured at `high` for frame time and memory (#943): the flip is this one line, and the test that pins it.
@@ -36,22 +47,24 @@ inline constexpr Level kDefaultLevel = Level::kStock;
 // shape, a file that cannot be read as a whole): always `stock`, whatever the default is. A typo must never turn on the
 // level that costs the most.
 inline constexpr Level kFallbackLevel = Level::kStock;
-inline constexpr std::size_t kLevelCount = 6;
+inline constexpr std::size_t kLevelCount = 7;
 
 struct EyeSize {
   int width;
   int height;
 };
 
-// The size a level answers ids 5 and 6 with. `stock` has none: {0, 0}.
-constexpr EyeSize SizeFor(Level level) noexcept {
+// The size a level answers ids 5 and 6 with on a headset. `stock` has none: {0, 0}.
+constexpr EyeSize SizeFor(Level level, Headset headset) noexcept {
+  const bool quest3 = headset == Headset::kQuest3;
   switch (level) {
     case Level::kStock: return {0, 0};
-    case Level::kLow: return {1680, 1760};
-    case Level::kMedium: return {2376, 2568};
-    case Level::kHigh: return {3072, 3380};
-    case Level::kVeryHigh: return {3584, 3944};
-    case Level::kUltra: return {4096, 4506};
+    case Level::kVeryLow: return quest3 ? EyeSize{1344, 1408} : EyeSize{1152, 1264};
+    case Level::kLow: return quest3 ? EyeSize{1680, 1760} : EyeSize{1440, 1584};
+    case Level::kMedium: return quest3 ? EyeSize{2376, 2568} : EyeSize{1728, 1904};
+    case Level::kHigh: return quest3 ? EyeSize{3072, 3380} : EyeSize{2016, 2224};
+    case Level::kVeryHigh: return quest3 ? EyeSize{3584, 3944} : EyeSize{2304, 2528};
+    case Level::kUltra: return quest3 ? EyeSize{4096, 4506} : EyeSize{2592, 2848};
   }
   return {0, 0};
 }
@@ -60,6 +73,7 @@ constexpr EyeSize SizeFor(Level level) noexcept {
 constexpr const char* LevelName(Level level) noexcept {
   switch (level) {
     case Level::kStock: return "stock";
+    case Level::kVeryLow: return "very_low";
     case Level::kLow: return "low";
     case Level::kMedium: return "medium";
     case Level::kHigh: return "high";
@@ -69,7 +83,7 @@ constexpr const char* LevelName(Level level) noexcept {
   return "unknown";
 }
 
-// Exactly one of the six words, lower case. Returns false and leaves `out` alone for anything else.
+// Exactly one of the seven words, lower case. Returns false and leaves `out` alone for anything else.
 inline bool ParseLevel(std::string_view word, Level* out) noexcept {
   for (std::size_t i = 0; i < kLevelCount; ++i) {
     const Level level = static_cast<Level>(i);

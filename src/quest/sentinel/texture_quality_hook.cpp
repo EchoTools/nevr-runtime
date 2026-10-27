@@ -18,9 +18,6 @@ sentinel::GotHook g_hook;
 constexpr int kUnset = -1;
 // The latched level (a Level, or kUnset). Written once per process by the first install; the answers below follow it.
 std::atomic<int> g_latched{kUnset};
-// The sizes the handler answers ids 5 and 6 with; 0 means "answer with the runtime's own".
-std::atomic<int> g_width{0};
-std::atomic<int> g_height{0};
 
 std::atomic<std::uint64_t> g_nativeWidth{0};
 std::atomic<std::uint64_t> g_nativeHeight{0};
@@ -30,24 +27,31 @@ std::uint64_t NonNegative(int value) noexcept { return value > 0 ? static_cast<s
 
 // vrapi_GetSystemPropertyInt. Calls the original with the game's own arguments every time, tells the hardware dump's
 // observer (if any) what the runtime answered, then replaces the answer to the eye width and height ids when a level is
-// latched. Never logs, allocates or throws: it is live across the call into the runtime (callback_thunk.h rule 1).
+// latched. The size is the latched level's for the headset the runtime's own answer names (HeadsetForStockSize), so the
+// same level is a Quest 2 table on a Quest 2. Never logs, allocates or throws: it is live across the call into the
+// runtime (callback_thunk.h rule 1).
 int Handler(SystemPropertyIntThunk::Fn original, const OvrJavaOpaque* java, int id) noexcept {
   const int native = original(java, id);
   const sentinel::SysPropIntObserver observer = sentinel::GetSysPropIntObserver();
   if (observer != nullptr) observer(java, id, native);
+  const int latched = g_latched.load(std::memory_order_acquire);
   if (id == kEyeWidthPropertyId) {
     g_nativeWidth.store(NonNegative(native), std::memory_order_relaxed);
-    const int width = g_width.load(std::memory_order_acquire);
-    if (width > 0) {
-      g_served.fetch_add(1, std::memory_order_relaxed);
-      return width;
+    if (latched != kUnset) {
+      const int width = SizeFor(static_cast<Level>(latched), HeadsetForStockSize(native)).width;
+      if (width > 0) {
+        g_served.fetch_add(1, std::memory_order_relaxed);
+        return width;
+      }
     }
   } else if (id == kEyeHeightPropertyId) {
     g_nativeHeight.store(NonNegative(native), std::memory_order_relaxed);
-    const int height = g_height.load(std::memory_order_acquire);
-    if (height > 0) {
-      g_served.fetch_add(1, std::memory_order_relaxed);
-      return height;
+    if (latched != kUnset) {
+      const int height = SizeFor(static_cast<Level>(latched), HeadsetForStockSize(native)).height;
+      if (height > 0) {
+        g_served.fetch_add(1, std::memory_order_relaxed);
+        return height;
+      }
     }
   }
   return native;
@@ -64,17 +68,7 @@ Latch TryLatch(Level level) noexcept {
   return expected == static_cast<int>(level) ? Latch::kSame : Latch::kOther;
 }
 
-void Publish(Level level) noexcept {
-  const EyeSize size = SizeFor(level);
-  g_width.store(size.width, std::memory_order_release);
-  g_height.store(size.height, std::memory_order_release);
-}
-
-void Unpublish() noexcept {
-  g_width.store(0, std::memory_order_release);
-  g_height.store(0, std::memory_order_release);
-  g_latched.store(kUnset, std::memory_order_release);
-}
+void Unlatch() noexcept { g_latched.store(kUnset, std::memory_order_release); }
 
 sentinel::GotStatus RealInstall() noexcept {
   return sentinel::InstallThunk<SystemPropertyIntThunk>(g_hook, sentinel::pinned::LibR15GetSystemPropertyInt());
@@ -120,22 +114,21 @@ bool InstallVia(Level level, bool fromConfig, InstallFn install) noexcept {
                          {"why", "level_already_latched"}, {"latched", LevelName(LatchedLevel())}});
     return false;
   }
-  // The sizes are published before the thunk can be entered, so its first call already sees them.
-  Publish(level);
+  // The level is latched before the thunk can be entered, so its first call already sees it.
   SystemPropertyIntThunk::Arm(kHook);
   const sentinel::GotStatus status = install();
   if (status != sentinel::GotStatus::kOk) {
-    Unpublish();
+    Unlatch();
     sentinel::LogFields(sentinel::LogLevel::kError, "texture_quality",
                         {{"result", "refused"}, {"quality", quality}, {"source", source}, {"w", 0}, {"h", 0},
                          {"status", sentinel::GotStatusName(status)}});
     return false;
   }
   sentinel::MarkSysPropIntSlotOwned(true);
-  const EyeSize size = SizeFor(level);
+  // The sizes depend on the headset, which only the first query names; the swap-chain line shows the size served.
   sentinel::LogFields(sentinel::LogLevel::kInfo, "texture_quality",
-                      {{"result", "installed"}, {"quality", quality}, {"source", source}, {"w", size.width},
-                       {"h", size.height}, {"slot", sentinel::pinned::kGetSystemPropertyIntSymbol},
+                      {{"result", "installed"}, {"quality", quality}, {"source", source}, {"w", 0}, {"h", 0},
+                       {"sizes", "per_headset"}, {"slot", sentinel::pinned::kGetSystemPropertyIntSymbol},
                        {"status", sentinel::GotStatusName(status)}});
   return true;
 }
@@ -159,13 +152,12 @@ bool ArmForTest(Level level) noexcept {
     return true;
   }
   if (TryLatch(level) == Latch::kOther) return false;
-  Publish(level);
   SystemPropertyIntThunk::Arm(kHook);
   return true;
 }
 
 void ResetForTest() noexcept {
-  Unpublish();
+  Unlatch();
   g_nativeWidth.store(0, std::memory_order_relaxed);
   g_nativeHeight.store(0, std::memory_order_relaxed);
   g_served.store(0, std::memory_order_relaxed);

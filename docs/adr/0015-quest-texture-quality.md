@@ -15,19 +15,22 @@ What the game does (pinned `libr15.so`, build id `b243509c08ce677aeb95fa34801694
 
 ## Decision
 
-A config key, `graphics.texture_quality`, read from the Quest `config.yaml` (`src/quest/sentinel/quest_config.cpp`). Values: `stock`, `low`, `medium`, `high`, `very_high`, `ultra`, lower case. The default (key absent) is `stock`: no hook, the runtime's own size. `texture_quality.h` holds the default (`kDefaultLevel`) and, separately, the level every mistake gives (`kFallbackLevel`, always `stock`).
+A config key, `graphics.texture_quality`, read from the Quest `config.yaml` (`src/quest/sentinel/quest_config.cpp`). Values: `stock`, `very_low`, `low`, `medium`, `high`, `very_high`, `ultra`, lower case. The default (key absent) is `stock`: no hook, the runtime's own size. `texture_quality.h` holds the default (`kDefaultLevel`) and, separately, the level every mistake gives (`kFallbackLevel`, always `stock`).
 
-One GOT hook on the `vrapi_GetSystemPropertyInt` slot. The handler calls the original with the game's own arguments every time and returns its answer, except for property ids 5 and 6 when a level other than `stock` is latched: those return the level's width or height. Every other id returns exactly what the runtime answered. `stock` installs nothing and the game gets the runtime's own size.
+One GOT hook on the `vrapi_GetSystemPropertyInt` slot. The handler calls the original with the game's own arguments every time and returns its answer, except for property ids 5 and 6 when a level other than `stock` is latched: those return the level's width or height for the headset the runtime's own answer to the same call names (`HeadsetForStockSize`: a stock size of 1680 or more is a Quest 3, below it a Quest 2). Every other id returns exactly what the runtime answered. `stock` installs nothing and the game gets the runtime's own size.
 
-| level | width | height |
+| level | Quest 3 width x height | Quest 2 width x height |
 | --- | --- | --- |
-| low | 1680 | 1760 |
-| medium | 2376 | 2568 |
-| high | 3072 | 3380 |
-| very_high | 3584 | 3944 |
-| ultra | 4096 | 4506 |
+| very_low | 1344 x 1408 | 1152 x 1264 |
+| low (the stock size) | 1680 x 1760 | 1440 x 1584 |
+| medium | 2376 x 2568 | 1728 x 1904 |
+| high | 3072 x 3380 | 2016 x 2224 |
+| very_high | 3584 x 3944 | 2304 x 2528 |
+| ultra | 4096 x 4506 | 2592 x 2848 |
 
-The sizes are the installer's absolute sizes, reported for a Quest 3; nothing here measured any headset's native size. Samples stay at 2. The width/height ratio is 0.9545 for `low` and between 0.9087 and 0.9252 for the other four, as the table gives it (`texture_quality.h`).
+The sizes are the absolute per-eye sizes of EchoTools/echoApkPatch's Texture Resolution setting (graphics v9, `native/texres/texres.c` at `8aa27ecdc`, by marshmallow-mia); the Quest 3 column is what #943 shipped. Nothing here measured any headset's native size. Samples stay at 2. The sizes are per headset because a Quest 2 at the Quest 3 table renders about 4.5 times its stock pixels at `high` (#943, #1012).
+
+The level is latched by the first install and fixed for the process: a change of the key takes effect at the next launch. Changing a level while the game runs (the in-game control and the live change the patch repository makes with trampolines into libr15) is not in this tree; see #1012.
 
 The level is latched by the first install in the process and never changes: the swap chain is created once, so its size has to stay what it was. A second install with another level is refused and logged. A change of the key takes effect at the next launch.
 
@@ -49,10 +52,10 @@ The Quest reads the same `config.yaml` through the PC's `nevr_config` (`src/core
 
 ## Prediction (written before a headset run)
 
-Default (no `graphics` section): a `texture_quality` line `result=not_installed quality=stock source=default why=stock`, no hook, and the runtime's own size in the game's `Creating OVR swap chain` line. With `high`: `result=installed quality=high source=config w=3072 h=3380` and `Creating OVR swap chain with size 3072 x 3380 (2 slices, 2 sample[s])`. With `low`: `1680 x 1760`. With `stock`: `result=not_installed`, no hook, and the runtime's own size in the game's line. The counters `gfx_native_eye_width` and `gfx_native_eye_height` show the native size at the levels that install the hook.
+Default (no `graphics` section): a `texture_quality` line `result=not_installed quality=stock source=default why=stock`, no hook, and the runtime's own size in the game's `Creating OVR swap chain` line. With `high`: `result=installed quality=high source=config w=0 h=0 sizes=per_headset`, and then `Creating OVR swap chain with size 3072 x 3380 (2 slices, 2 sample[s])` on a Quest 3 or `2016 x 2224` on a Quest 2. With `very_low`: `1344 x 1408` on a Quest 3, `1152 x 1264` on a Quest 2. With `low`: the runtime's own size, which is `1680 x 1760` or `1440 x 1584`. With `stock`: `result=not_installed`, no hook, and the runtime's own size in the game's line. The counters `gfx_native_eye_width` and `gfx_native_eye_height` show the native size at the levels that install the hook.
 
 What would prove it wrong: the swap-chain line shows a size other than the level's (the game reads the size somewhere other than ids 5 and 6, or creates the swap chain before the hook installs); no `texture_quality` line; a crash or a blank frame at `ultra` (GPU memory).
 
 ## Not claimed
 
-That the table's sizes suit a Quest 2: `high` is about 4.5 times a Quest 2's stock pixel count (a review's figure, from the runtime's suggested size) and costs frame time, and `ultra` may run out of GPU memory; this is why the default is `stock`. The default becomes `high` (one line, `kDefaultLevel`, and the test that pins it) after a Quest 2 has been run at `high` and its frame time and memory measured. The native sizes of the Quest 2 and Quest 3 are not measured here (the counters above measure them on the first run); a level defined as a scale of the native size is tracked separately (#953). That `low` is the installer's own number, not one derived from the other levels. That GPU memory suffices at `ultra`. The in-game menu control for the setting is separate work. The PC build has its own render scale and MSAA setting (`resolutionscale` and `msaa` in its saved graphics settings); whether this key gets a PC counterpart is tracked in #956.
+That the Quest 2 sizes work on a headset: they are the patch repository's values, measured there on a Quest 3 only (its `UPDATE.md`, Graphics v10), and `high` and `ultra` cost frame time and GPU memory on either headset; this is why the default is `stock`. The default becomes `high` (one line, `kDefaultLevel`, and the test that pins it) after a Quest 2 has been run at `high` and its frame time and memory measured. The native sizes of the Quest 2 and Quest 3 are not measured here (the counters above measure them on the first run); a level defined as a scale of the native size is tracked separately (#953). That `low` is the installer's own number, not one derived from the other levels. That GPU memory suffices at `ultra`. The in-game menu control for the setting is separate work. The PC build has its own render scale and MSAA setting (`resolutionscale` and `msaa` in its saved graphics settings); whether this key gets a PC counterpart is tracked in #956.

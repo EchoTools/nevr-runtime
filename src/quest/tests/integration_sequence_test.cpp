@@ -289,7 +289,7 @@ void TestTextureQualityIsUnconditionalIndependentAndContained() {
     QCHECK(s.Index("texture") < s.Index("hwdump"));
   }
   for (const nevr_quest::texture_quality::Level level :
-       {tq::Level::kLow, tq::Level::kMedium, tq::Level::kHigh, tq::Level::kVeryHigh, tq::Level::kUltra}) {
+       {tq::Level::kVeryLow, tq::Level::kLow, tq::Level::kMedium, tq::Level::kHigh, tq::Level::kVeryHigh, tq::Level::kUltra}) {
     FakeSteps s = FakeSteps::WithTexture(false, false, false, false);
     s.config.textureQuality = {level, nevr_quest::Source::kFile};
     RunConstructorSequence(s);
