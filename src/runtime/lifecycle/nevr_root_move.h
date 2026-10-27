@@ -1,6 +1,6 @@
-// nevr_root_move.h: the one-time move of nEVR's own files into the nevr root (ADR 0012 "The one-time move", #857).
+// nevr_root_move.h: the one-time move of NEVR's own files into the nevr root (ADR 0012 "The one-time move", #857).
 //
-// Before this change nEVR read config.yaml from the install's _local folders and wrote its run log, crash record and cosmetic
+// Before this change NEVR read config.yaml from the install's _local folders and wrote its run log, crash record and cosmetic
 // packages under %LOCALAPPDATA%\EchoVR. The first run that finds those files moves them to %LOCALAPPDATA%\nevr\echovr and leaves
 // MOVED-TO-NEVR-ROOT.txt in each folder it took something from, so a player or support can see why the folder is empty. The move
 // never overwrites a file already in the root, is safe to run twice, leaves a file where it is (with an event saying why) when it
@@ -36,7 +36,7 @@ struct Inputs {
   std::wstring legacy_cosmetics_dir;     // %LOCALAPPDATA%\EchoVR\cosmetics\v1\packages
 };
 
-// True for the names nEVR's own writers give a file in the legacy logs folder: the run log (nevr-<timestamp>.jsonl, or .log with
+// True for the names NEVR's own writers give a file in the legacy logs folder: the run log (nevr-<timestamp>.jsonl, or .log with
 // the plain-text format) and the crash record (nevr-crash-<run id>.txt). Nothing else in that folder is ours.
 bool IsNevrLogFileName(const std::wstring& name);
 

@@ -1,4 +1,4 @@
-// nevr_root.h: where nEVR keeps what it writes and reads on a PC (ADR 0012, #857).
+// nevr_root.h: where NEVR keeps what it writes and reads on a PC (ADR 0012, #857).
 //
 // One root per game, %LOCALAPPDATA%\nevr\echovr. The run log and crash record (logs\), the asset cache (cache\), the cosmetic
 // packages (cosmetics\v1\packages) and config.yaml all resolve under it; %LOCALAPPDATA%\EchoVR is the original game's folder and
