@@ -329,6 +329,146 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertEqual(len([p for p in self.problems(result) if "a.txt" in p]), 1)
         self.assertEqual(len(self.problems(result)), 1, result.stdout)
 
+    # --- --tag vX.Y.Z (#1080): HEAD is the tag's commit, not origin's tip, so an older release can still be built ----
+
+    def older_tag_clone(self):
+        """origin's main is two commits past v3.3.0; the clone has fetched everything and checked out the tag."""
+        self.push_from_seed("two")
+        self.push_from_seed("three")
+        git(self.clone, "fetch", "-q", "--tags")
+        git(self.clone, "checkout", "-q", "--detach", "v3.3.0")
+
+    def test_a_clone_at_an_older_tag_passes_with_tag_and_is_refused_without_it(self):
+        self.older_tag_clone()
+        result = self.run_preflight("--tag", "v3.3.0")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("release-preflight: OK: HEAD", result.stdout)
+        self.assertIn("tag v3.3.0", result.stdout)
+        self.assertEqual(self.problems(result), [])
+        record = json.loads(self.log.read_text().splitlines()[-1])
+        self.assertEqual((record["tag"], record["result"]), ("v3.3.0", "ok"))
+        plain = self.run_preflight()  # no flag: exactly as before, HEAD must be origin's tip
+        self.assertEqual(plain.returncode, 1, plain.stdout)
+        self.assertIn("behind origin/main by 2 commits", plain.stdout)
+        self.assertIsNone(json.loads(self.log.read_text().splitlines()[-1])["tag"])
+
+    def test_a_lightweight_tag_is_accepted_at_its_commit(self):
+        git(self.seed, "tag", "v3.3.1")
+        git(self.seed, "push", "-q", "origin", "v3.3.1")
+        self.push_from_seed("two")
+        git(self.clone, "fetch", "-q", "--tags")
+        git(self.clone, "checkout", "-q", "--detach", "v3.3.1")
+        result = self.run_preflight("--tag", "v3.3.1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_tag_at_origins_tip_passes_too(self):
+        self.assertEqual(self.run_preflight("--tag", "v3.3.0").returncode, 0)
+
+    def test_a_modified_tracked_file_is_refused_with_tag(self):
+        self.older_tag_clone()
+        (self.clone / "a.txt").write_text("changed\n")
+        result = self.run_preflight("--tag", "v3.3.0")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(len(self.problems(result)), 1, result.stdout)
+        self.assertIn("uncommitted change: a.txt", result.stdout)
+
+    def test_an_untracked_file_is_refused_with_tag(self):
+        self.older_tag_clone()
+        (self.clone / "scratch.txt").write_text("s")
+        result = self.run_preflight("--tag", "v3.3.0")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(len(self.problems(result)), 1, result.stdout)
+        self.assertIn("untracked file: scratch.txt", result.stdout)
+
+    def test_a_head_that_is_not_the_tags_commit_is_refused_with_tag(self):
+        self.push_from_seed("two")
+        git(self.clone, "fetch", "-q")
+        git(self.clone, "merge", "-q", "--ff-only", "origin/main")  # HEAD is origin's tip, one past v3.3.0
+        result = self.run_preflight("--tag", "v3.3.0")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("is not the commit of v3.3.0", result.stdout)
+        self.assertNotIn("release-preflight: OK", result.stdout)
+
+    def test_a_head_on_another_tags_commit_is_refused_with_tag(self):
+        self.retag("v3.4.0")
+        git(self.clone, "checkout", "-q", "--detach", "v3.3.0")
+        result = self.run_preflight("--tag", "v3.4.0")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("is not the commit of v3.4.0", result.stdout)
+
+    def test_an_unpushed_commit_is_not_the_tags_commit(self):
+        self.older_tag_clone()
+        (self.clone / "c.txt").write_text("c")
+        git(self.clone, "add", "c.txt")
+        git(self.clone, "commit", "-q", "-m", "c")
+        result = self.run_preflight("--tag", "v3.3.0")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("is not the commit of v3.3.0", result.stdout)
+
+    def test_a_tag_missing_on_origin_is_refused_with_tag(self):
+        self.older_tag_clone()
+        git(self.seed, "push", "-q", "origin", ":refs/tags/v3.3.0")
+        result = self.run_preflight("--tag", "v3.3.0")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("tag v3.3.0 is not on origin", result.stdout)
+        self.assertIn("exists only in this clone", result.stdout)
+
+    def test_a_tag_that_origin_has_but_this_clone_does_not_is_refused_with_tag(self):
+        self.older_tag_clone()
+        git(self.seed, "tag", "-a", "-m", "v3.4.0", "v3.4.0")
+        git(self.seed, "push", "-q", "origin", "v3.4.0")
+        result = self.run_preflight("--tag", "v3.4.0")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("tag v3.4.0 is not in this clone", result.stdout)
+        self.assertNotIn("release-preflight: OK", result.stdout)
+
+    def test_a_tag_that_points_elsewhere_on_origin_is_refused_with_tag(self):
+        self.older_tag_clone()
+        moved = self.push_from_seed("four")
+        git(self.seed, "tag", "-f", "-a", "-m", "moved", "v3.3.0", moved)
+        git(self.seed, "push", "-q", "-f", "origin", "v3.3.0")
+        result = self.run_preflight("--tag", "v3.3.0")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("tag v3.3.0 points at", result.stdout)
+
+    def test_the_other_checks_still_apply_with_tag(self):
+        self.older_tag_clone()
+        git(self.clone, "tag", "-a", "-m", "v4.0.0", "v4.0.0")  # a local-only tag, on the same commit
+        wrong_origin = self.run_preflight("--tag", "v3.3.0", "--expect-origin", "^nowhere$")
+        self.assertEqual(wrong_origin.returncode, 1)
+        self.assertIn("not the project's repository", wrong_origin.stdout)
+        self.assertIn("tag v4.0.0 exists only in this clone", wrong_origin.stdout)
+
+    def test_the_version_rule_still_applies_with_tag(self):
+        self.retag("v3.100.0")
+        result = self.run_preflight("--tag", "v3.100.0")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("minor 100 is above 99", result.stdout)
+
+    def test_tag_does_not_consult_the_base_branch(self):
+        self.older_tag_clone()
+        self.assertEqual(self.run_preflight("--tag", "v3.3.0", "--base", "nonesuch").returncode, 0)
+
+    def test_a_tag_name_that_is_not_a_release_is_rejected_before_any_check(self):
+        for bad in ("main", "v3.3", "3.3.0", "v3.3.0-rc.1", "refs/tags/v3.3.0", "v03.3.0", ""):
+            with self.subTest(tag=bad):
+                result = self.run_preflight("--tag", bad)
+                self.assertEqual(result.returncode, 2, result.stdout)
+                self.assertIn("is not a release tag", result.stderr)
+        self.assertFalse(self.log.exists(), "a rejected argument is not a preflight run")
+
+    def test_it_runs_no_git_command_that_changes_anything_with_tag(self):
+        self.older_tag_clone()
+        argv_log = self.tmp / "argv.log"
+        env = self.shimmed(f"printf '%s\\n' \"$*\" >> '{argv_log}'")
+        result = self.run_preflight("--tag", "v3.3.0", env=env)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        allowed = {"rev-parse", "config", "status", "for-each-ref", "ls-remote", "rev-list", "describe"}
+        calls = argv_log.read_text().splitlines()
+        self.assertTrue(calls, "the shim saw no git call: the sensor is blind")
+        for call in calls:
+            self.assertIn(call.split()[0], allowed, f"a git call outside the read-only list: {call}")
+
     # --- the versionCode early warning (tools/quest_apk_version.py): the version the next build would stamp ------
 
     def test_a_clone_far_from_every_limit_has_no_warning(self):
@@ -480,6 +620,13 @@ class RecipeAndDocsTest(unittest.TestCase):
         self.assertEqual(first_command, "tools/release_preflight.py")
         self.assertNotIn("git status --porcelain", body)
         self.assertIn("\nrelease-preflight", text)
+
+    def test_release_quest_apk_runs_the_preflight_for_its_tag_and_not_the_bare_one(self):
+        text = (REPO / "justfile").read_text()
+        start = text.index("\nrelease-quest-apk ")
+        body = text[start:text.index("\n\n", start)]
+        calls = [l.strip() for l in body.splitlines() if l.strip().startswith("tools/release_preflight.py")]
+        self.assertEqual(calls, ['tools/release_preflight.py --tag "$tag"'])
 
     def test_the_agents_md_release_steps_name_the_preflight_and_the_tag_gate(self):
         text = (REPO / "AGENTS.md").read_text()
