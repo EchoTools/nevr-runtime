@@ -355,6 +355,14 @@ release-quest-apk tag store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
     cat "$out/$name.sha256"
     echo "release-quest-apk: $out/$name is $tag at ${head:0:7}. It is NOT a release asset: publish it outside GitHub (RELEASING.md)." >&2
 
+# Put the Quest APK that `release-quest-apk <tag>` wrote, and its .sha256, on R2 under nevr-runtime/<tag>/, then fetch both
+# back from the public host and compare size and sha256 (tools/publish_quest_apk.py; #1098). Run it from the clone that
+# built the APK. The bucket, the public host, the release-signer executable and a GitHub read token come from the
+# environment only (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, RELEASE_PUBLIC_BASE, RELEASE_SIGNER_DIR,
+# RELEASE_SIGNER_BIN, GH_TOKEN); a missing one is a refusal that names it. Nothing is overwritten.
+publish-quest-apk tag:
+    python3 tools/publish_quest_apk.py "{{ tag }}"
+
 # Install the repacked Quest APK + game data onto the connected headset (sideload).
 # Pass `yes` (`just quest-install yes`) to allow removing the store build when the
 # headset refuses an in-place update because the debug signature differs; that

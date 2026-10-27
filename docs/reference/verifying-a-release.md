@@ -144,6 +144,24 @@ The Rust program and the C# harness below do the same step as `fetch <base-url> 
 If step 2 fails on a pair you just fetched, fetch the pair again, twice, 3 seconds apart, before you report the failure:
 the two files are separate objects and a reader can catch them between two writes.
 
+## Quest APKs
+
+A release's Quest APK is not a GitHub asset. It is served from the same host and base as the manifest, in the release's
+version directory, with its SHA-256 beside it:
+
+```
+https://evr.echo.taxi/nevr-runtime/v<version>/nevr-runtime-v<version>-quest.apk
+https://evr.echo.taxi/nevr-runtime/v<version>/nevr-runtime-v<version>-quest.apk.sha256
+```
+
+The only host is `evr.echo.taxi`. A request for the APK under any other directory of that host (for example
+`nevr-runtime/quest/`) is a 404, and bare `echo.taxi` is not the host: it answers 200 with HTML for any path, so a 200
+from it proves nothing. A fetch counts only when it comes from `evr.echo.taxi`, is not a redirect, is not `text/html`, and
+has the size and SHA-256 you expected (the `.sha256` file holds one `sha256sum` line for the APK's name).
+
+`just publish-quest-apk vX.Y.Z` puts both files there and makes this check against the public host before it exits 0
+(RELEASING.md, "The Quest APK"). Nothing else writes to that location, and a published name is never overwritten.
+
 ## Step 2: the signature
 
 The signature is a minisign signature in the hashed mode (`ED`): Ed25519 over the BLAKE2b-512 hash of the file, plus a
