@@ -742,6 +742,46 @@ TEST(BootstrapDiagnostics, ConcurrentAppendersKeepEveryLineWhileTheLockIsHeldPas
   EXPECT_EQ(DistinctLinesWithPrefix(ReadAll(local + kLogsFile), 'H'), static_cast<std::size_t>(kThreads * kLines));
 }
 
+// The first appends of a process run the one-time initialization of the local lock. This helper is that first use:
+// it is the only test the child process runs, and eight threads log for the first time at once.
+TEST(BootstrapDiagnostics, FirstAppendsHelperInAFreshProcess) {
+  wchar_t dir[MAX_PATH] = {};
+  wchar_t name[128] = {};
+  if (GetEnvironmentVariableW(L"NEVR_TEST_FIRST_USE_DIR", dir, MAX_PATH) == 0) GTEST_SKIP() << "helper process only";
+  GetEnvironmentVariableW(L"NEVR_TEST_FIRST_USE_MUTEX", name, 128);
+  BootstrapDiagnostics::SetLogMutexNameForTest(name);
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(dir, nullptr, nullptr);
+  AppendConcurrently(diagnostics, 8, 300, "F");
+}
+
+// Eight threads log for the first time at once, in a process of their own, so the one-time initialization of the
+// local lock is raced, not run by an earlier test. Every line must be in the file.
+TEST(BootstrapDiagnostics, FirstConcurrentAppendsInAFreshProcessLoseNoLine) {
+  const std::wstring local = MakeTempDir(L"first");
+  const std::wstring name = UniqueMutexName(L"first");
+  SetEnvironmentVariableW(L"NEVR_TEST_FIRST_USE_DIR", local.c_str());
+  SetEnvironmentVariableW(L"NEVR_TEST_FIRST_USE_MUTEX", name.c_str());
+  wchar_t self[MAX_PATH] = {};
+  ASSERT_GT(GetModuleFileNameW(nullptr, self, MAX_PATH), 0u);
+  std::wstring command = L"\"" + std::wstring(self) +
+                         L"\" --gtest_filter=BootstrapDiagnostics.FirstAppendsHelperInAFreshProcess";
+  STARTUPINFOW startup = {};
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION process = {};
+  ASSERT_NE(CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &process),
+            FALSE);
+  CloseHandle(process.hThread);
+  EXPECT_EQ(WaitForSingleObject(process.hProcess, 120000), WAIT_OBJECT_0);
+  DWORD code = 1;
+  GetExitCodeProcess(process.hProcess, &code);
+  CloseHandle(process.hProcess);
+  SetEnvironmentVariableW(L"NEVR_TEST_FIRST_USE_DIR", nullptr);
+  SetEnvironmentVariableW(L"NEVR_TEST_FIRST_USE_MUTEX", nullptr);
+  EXPECT_EQ(code, 0u) << "the helper process failed";
+  EXPECT_EQ(DistinctLinesWithPrefix(ReadAll(local + kLogsFile), 'F'), static_cast<std::size_t>(8 * 300));
+}
+
 // A holder that never lets go must delay an append by the bounded wait at most; the line is still written.
 TEST(BootstrapDiagnostics, AnAppendIsNotBlockedForeverByAnotherThreadHoldingTheLogLock) {
   ScopedLogMutexName scoped(UniqueMutexName(L"blocked"));

@@ -118,7 +118,13 @@ std::atomic<DWORD> g_log_wait_ms{kBootstrapLogLockWaitMs};
 // critical section is recursive for its owner, so the crash callback on the thread that holds it still writes at
 // once, and it is taken after the mutex's bounded wait, so no path waits on it while it waits on the mutex.
 CRITICAL_SECTION g_log_local_lock;
-std::atomic<bool> g_log_local_lock_ready{false};
+// Initialized once, on the first append, by InitOnceExecuteOnce: two threads that log for the first time together
+// run the callback once, and each waits for it to finish. kernel32 only, so it is safe where the loader lock is held.
+INIT_ONCE g_log_local_lock_once = INIT_ONCE_STATIC_INIT;
+BOOL CALLBACK InitLogLocalLock(PINIT_ONCE, PVOID, PVOID*) noexcept {
+  InitializeCriticalSection(&g_log_local_lock);
+  return TRUE;
+}
 
 // The last flush of a process that is ending (FlushAttachJournalAtExit). The log mutex is named, so a live process on
 // the same prefix can hold it. The exit flush waits at most kBootstrapExitLogLockWaitMs for it and, when it does not
@@ -218,10 +224,6 @@ void BootstrapDiagnostics::Prepare(HMODULE host_module) {
 }
 
 void BootstrapDiagnostics::EnsureLogMutex() noexcept {
-  if (!g_log_local_lock_ready.load(std::memory_order_acquire)) {
-    InitializeCriticalSection(&g_log_local_lock);
-    g_log_local_lock_ready.store(true, std::memory_order_release);
-  }
   const DWORD error = CreateLogMutex();
   if (error != 0) {
     // Nothing is written here (the loader lock may be held): the journal says it when it is flushed.
@@ -603,6 +605,7 @@ DiagnosticDestination BootstrapDiagnostics::AppendLine(const char* line,
 
 bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const char* line,
                                     std::size_t length) noexcept {
+  if (!InitOnceExecuteOnce(&g_log_local_lock_once, InitLogLocalLock, nullptr, nullptr)) return false;
   wchar_t path[MAX_PATH] = {};
   if (!AppendPath(path, MAX_PATH, dir, kBootstrapLogName)) return false;
 
@@ -647,12 +650,11 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
   }
   // The write is serialized within the process whether or not the mutex was taken: a write that did not get the mutex
   // must not race another write of this process (#997).
-  const bool local = g_log_local_lock_ready.load(std::memory_order_acquire);
-  if (local) EnterCriticalSection(&g_log_local_lock);
+  EnterCriticalSection(&g_log_local_lock);
   DWORD written = 0;
   const BOOL ok = WriteFile(file, line, static_cast<DWORD>(length), &written, nullptr);
   FlushFileBuffers(file);
-  if (local) LeaveCriticalSection(&g_log_local_lock);
+  LeaveCriticalSection(&g_log_local_lock);
   if (locked) ReleaseMutex(lock);
   if (marked_unreliable) {
     // The one record that says the log is no longer serialized: written to the open file, without the lock,
