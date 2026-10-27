@@ -172,7 +172,8 @@ function Restore-SignInCache([string]$GameDir) {
           $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me, 'FullControl', 'Allow')))
           Set-Acl -LiteralPath $cache -AclObject $acl
         }
-        Copy-Item -LiteralPath $rootCache -Destination $cache -Force
+        # The bytes go into the file that is already private: Copy-Item -Force can replace the file, and with it the ACL set above.
+        [System.IO.File]::WriteAllBytes($cache, [System.IO.File]::ReadAllBytes($rootCache))
       } catch {
         $why = $_.Exception.Message
         # Nothing is deleted: a file that did not get its content or its protection is set aside, so the runtime does not read it.
