@@ -232,8 +232,13 @@ void* g_earlyConfigPtr = nullptr;
 // would. The N61 tests drive the Close handler, not login injection.
 // #708: nevr_session_router answers from g_testRouterMode, so a test picks the bridge's routing mode.
 const char* g_testRouterMode = nullptr;
+// #1082: nevr_discord_id answers from g_testDiscordId (the config fallback of the login identity), so a login test
+// has an account that is not 0 (the local user's UUID is the zero UUID for account 0).
+const char* g_testDiscordId = nullptr;
 const char* NevrCfgGetFlat(const char* flatKey) {
-  return std::strcmp(flatKey, "nevr_session_router") == 0 ? g_testRouterMode : nullptr;
+  if (std::strcmp(flatKey, "nevr_session_router") == 0) return g_testRouterMode;
+  if (std::strcmp(flatKey, "nevr_discord_id") == 0) return g_testDiscordId;
+  return nullptr;
 }
 
 // --- plugin_load_plan.h (N134 S6, referenced by plugin_loader.cpp LoadPlugins) ---
@@ -3350,13 +3355,23 @@ static uint64_t FrameU64(const std::string& frame, size_t offset) {
   return value;
 }
 
+// The local user's UUID in the party/friend requests the bridge now builds: V5(<prefix>-<account>) of the login.
+static bool SelfUuidIs(const std::string& xpid) {
+  const auto out = nevr_social_party::Global().RefreshFriends();
+  if (out.size() != 1U || out[0].payload.size() < 24U) return false;
+  const nevr_social_party::Uuid want = nevr_social_party::UuidV5Nil(xpid);
+  return std::memcmp(out[0].payload.data() + 8, want.data(), want.size()) == 0;
+}
+
 class GameFlagScope {
  public:
   GameFlagScope(int64_t flags, BOOL isServer) : wasServer_(g_isServer) {
     g_isServer = isServer;
     TestHook_SetGameFlagWord(flags);
+    g_testDiscordId = "123456789012345678";
   }
   ~GameFlagScope() {
+    g_testDiscordId = nullptr;
     TestHook_SetGameFlagWord(-1);
     g_isServer = wasServer_;
   }
@@ -3372,10 +3387,12 @@ TEST_F(RouterAllTest, ANoVrClientsInjectedLoginIsDmoNotTheOvrOrgOfItsVrSelf) {
   const std::string frame = remote_.LoginFrame();
   ASSERT_GE(frame.size(), 56U);
   const uint64_t account = FrameU64(frame, 48);
+  EXPECT_EQ(account, 123456789012345678ULL);
   EXPECT_EQ(FrameU64(frame, 40), 7ULL) << "a No VR client logs in as DMO";
   EXPECT_FALSE(LogLinesContaining("login injected xpid=DMO-" + std::to_string(account) + " platform=7").empty());
   EXPECT_TRUE(LogLinesContaining("login injected xpid=OVR-ORG-").empty());
   EXPECT_FALSE(LogLinesContaining("login platform=7 (DMO) no_vr=1 game_flags=0x2100000 is_server=0").empty());
+  EXPECT_TRUE(SelfUuidIs("DMO-" + std::to_string(account))) << "the party/friend requests name the local user by its login";
 }
 
 TEST_F(RouterAllTest, AVrClientsInjectedLoginStaysOvrOrg) {
@@ -3385,9 +3402,11 @@ TEST_F(RouterAllTest, AVrClientsInjectedLoginStaysOvrOrg) {
   const std::string frame = remote_.LoginFrame();
   ASSERT_GE(frame.size(), 56U);
   const uint64_t account = FrameU64(frame, 48);
+  EXPECT_EQ(account, 123456789012345678ULL);
   EXPECT_EQ(FrameU64(frame, 40), 4ULL);
   EXPECT_FALSE(LogLinesContaining("login injected xpid=OVR-ORG-" + std::to_string(account) + " platform=4").empty());
   EXPECT_TRUE(LogLinesContaining("login injected xpid=DMO-").empty());
+  EXPECT_TRUE(SelfUuidIs("OVR-ORG-" + std::to_string(FrameU64(frame, 48))));
 }
 
 TEST_F(RouterAllTest, AServerWithTheNoVrFlagStillLogsInAsOvrOrg) {
@@ -3397,6 +3416,37 @@ TEST_F(RouterAllTest, AServerWithTheNoVrFlagStillLogsInAsOvrOrg) {
   const std::string frame = remote_.LoginFrame();
   ASSERT_GE(frame.size(), 56U);
   EXPECT_EQ(FrameU64(frame, 40), 4ULL);
+}
+
+// The same decision through the bridge's own rules (network.session_router absent: the legacy Open handler, the
+// default), which inject the login by their own path.
+TEST_F(RolesByPathTest, LegacyNoVrClientsInjectedLoginIsDmoNotTheOvrOrgOfItsVrSelf) {
+  GameFlagScope flags(0x2100000, FALSE);
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings));
+  const std::string frame = remote_.LoginFrame();
+  ASSERT_GE(frame.size(), 56U);
+  const uint64_t account = FrameU64(frame, 48);
+  EXPECT_EQ(account, 123456789012345678ULL);
+  EXPECT_EQ(FrameU64(frame, 40), 7ULL);
+  EXPECT_FALSE(LogLinesContaining("login injected xpid=DMO-" + std::to_string(account) + " platform=7").empty());
+  EXPECT_TRUE(LogLinesContaining("login injected xpid=OVR-ORG-").empty());
+  EXPECT_FALSE(LogLinesContaining("login platform=7 (DMO) no_vr=1 game_flags=0x2100000 is_server=0").empty());
+  EXPECT_TRUE(SelfUuidIs("DMO-" + std::to_string(account))) << "the party/friend requests name the local user by its login";
+}
+
+TEST_F(RolesByPathTest, LegacyVrClientsInjectedLoginStaysOvrOrg) {
+  GameFlagScope flags(0x8000000, FALSE);
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings));
+  const std::string frame = remote_.LoginFrame();
+  ASSERT_GE(frame.size(), 56U);
+  EXPECT_EQ(FrameU64(frame, 40), 4ULL);
+  EXPECT_FALSE(LogLinesContaining("login injected xpid=OVR-ORG-" + std::to_string(FrameU64(frame, 48)) + " platform=4").empty());
+  EXPECT_TRUE(LogLinesContaining("login injected xpid=DMO-").empty());
+  EXPECT_TRUE(SelfUuidIs("OVR-ORG-" + std::to_string(FrameU64(frame, 48))));
 }
 
 // L5: a dedicated server has no login to complete; the service's LoginFailure reaches the game as a LoginSuccess.
