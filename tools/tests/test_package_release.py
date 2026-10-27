@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -1394,6 +1395,7 @@ class InstallScriptsTest(unittest.TestCase):
     def test_install_after_verify_files_restored_the_stock_dll_sets_the_stale_record_aside_and_installs(self):
         self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
         (self.game / "BugSplat64.dll").write_bytes(b"ORIGINAL")  # Verify Files
+        time.sleep(1.1)  # the backup name carries a one-second stamp; the second install must not reuse the first's
         result = self.ps("install.ps1", "-Dir", str(self.game))
         self.assertEqual(result.returncode, 0, self.output(result))
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"NEW-RUNTIME")
