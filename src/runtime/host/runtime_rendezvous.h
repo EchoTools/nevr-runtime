@@ -90,7 +90,7 @@ class RuntimeRendezvous {
     // can go on observing. Null in production: the process ends and nothing runs after.
     void (*stop_game)(std::uint32_t exit_code) = nullptr;
     // StopGame shows the player's notice through this instead of a message box; null: no dialog is ever opened
-    // in a test. The text is kStopNoticeText.
+    // in a test. The text is StopNoticeTextFor(outcome, reason) (stop_notice.h).
     void (*show_stop_notice)(const wchar_t* text) = nullptr;
     // The command line StopGame reads to tell a client from a server; null: the process's own.
     const char* (*command_line)() = nullptr;

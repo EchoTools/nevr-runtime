@@ -507,7 +507,7 @@ test-auth-unit:
     cmake --build --preset {{ preset }} --target test_runtime_abi
     cmake --build --preset {{ preset }} --target test_runtime_export_guard
     cmake --build --preset {{ preset }} --target test_bootstrap_attach
-    cmake --build --preset {{ preset }} --target test_host_json --target test_bootstrap_diagnostics --target test_host_crash_capture --target test_host_runtime_load --target test_host_minidump --target test_host_rendezvous --target test_host_exports --target test_host_crash --target test_rendezvous
+    cmake --build --preset {{ preset }} --target test_host_json --target test_bootstrap_diagnostics --target test_host_crash_capture --target test_host_runtime_load --target test_host_minidump --target test_host_rendezvous --target test_host_exports --target test_host_crash --target test_rendezvous --target test_host_runtime_verify
     # The host units carry no test seam when NEVR_HOST_TESTING is not defined: each is compiled again
     # without it with the build's own flags and its object is read with nm (docs/adr/0008). Fail-close.
     python3 tools/verify_host_seams.py "build/{{ preset }}"
@@ -522,7 +522,7 @@ test-auth-unit:
     trap 'rm -rf "$sigfix"' EXIT
     # test_nevr_config writes its fixture files here (a Linux path; Wine reaches it as Z:); removed with sigfix.
     export NEVR_CONFIG_TEST_DIR="$sigfix/nevr-config-tests"
-    python3 tools/gen_plugin_signature_fixtures.py "$sigfix" --plugin-dll "build/{{ preset }}/bin/plugins/test_plugin_onframe.dll"
+    python3 tools/gen_plugin_signature_fixtures.py "$sigfix" --plugin-dll "build/{{ preset }}/bin/plugins/test_plugin_onframe.dll" --plugin-dll "build/{{ preset }}/bin/rendezvous/fixtures/good/nevr-runtime.dll"
     export NEVR_SIGFIX_DIR="$sigfix"
     # The real signed v5.4.3 BugSplat64.dll (#745), fetched by digest once and kept under build/: test_plugin_trust
     # verifies the production pins against it. A failed fetch or a digest that does not match fails the recipe, and
@@ -579,7 +579,7 @@ test-auth-unit:
     # The stable BugSplat64.dll host (src/runtime/host/): the fixed-buffer JSON writer, the
     # diagnostic recorder, the minidump capture, the runtime load state machine, the rendezvous's prologue
     # validation, the export thunks and the minidump parser the crash harness trusts.
-    for name in test_host_json test_bootstrap_diagnostics test_host_crash_capture test_host_runtime_load test_host_minidump test_host_rendezvous test_host_exports; do
+    for name in test_host_json test_bootstrap_diagnostics test_host_crash_capture test_host_runtime_load test_host_minidump test_host_rendezvous test_host_runtime_verify test_host_exports; do
         bin="build/{{ preset }}/bin/$name.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -3412,7 +3412,7 @@ verify:
     # and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 1927
+    python3 tools/verify_gtest_floor.py --floor 1958
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py

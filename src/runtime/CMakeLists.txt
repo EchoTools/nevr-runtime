@@ -605,6 +605,14 @@ if(BUILD_TESTING)
     target_link_libraries(test_host_rendezvous PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_host_rendezvous DISCOVERY_MODE PRE_TEST)
 
+    # The host's verdict on nevr-runtime.dll (ADR 0012 step 3, #854): the decision table and the detour over real
+    # staged files, signed by tools/gen_plugin_signature_fixtures.py (NEVR_SIGFIX_DIR; the rendezvous runtime
+    # stand-in is the file it signs).
+    add_executable(test_host_runtime_verify tests/test_host_runtime_verify.cpp)
+    target_compile_options(test_host_runtime_verify PRIVATE -Werror)
+    target_link_libraries(test_host_runtime_verify PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_runtime_verify DISCOVERY_MODE PRE_TEST)
+
     # The host's sixteen export thunks: the shipped file (host/runtime_exports.cpp) is one of the host units the
     # library holds, and the test pulls it from there.
     add_executable(test_host_exports tests/test_host_exports.cpp)
@@ -1423,16 +1431,15 @@ if(BUILD_TESTING)
 
     # plugin_signature tests (ADR 0010, #741) — the pure verifier over signed fixtures that
     # tools/gen_plugin_signature_fixtures.py writes into $NEVR_SIGFIX_DIR. Links only the
-    # verifier TU and crypt32/advapi32: no game stubs, no Log.
+    # verifier TU and crypt32/advapi32: no game stubs, no Log. The verifier comes from nevr_host_core, the one
+    # library built with NEVR_HOST_TESTING, because the throwing seam exists only there (verify_host_seams.py).
     add_executable(test_plugin_signature
-      tests/test_plugin_signature.cpp
-      ext/plugin_signature.cpp
-      ext/plugin_pins.cpp)
-    set_source_files_properties(tests/test_plugin_signature.cpp ext/plugin_signature.cpp ext/plugin_pins.cpp
+      tests/test_plugin_signature.cpp)
+    set_source_files_properties(tests/test_plugin_signature.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_plugin_signature PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_plugin_signature PRIVATE
-      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json crypt32 advapi32)
+      nevr_host_core GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json crypt32 advapi32)
     gtest_discover_tests(test_plugin_signature DISCOVERY_MODE PRE_TEST)
 
     # plugin_tree tests (ADR 0010, #741): a plugin's imports, delay loads and forwarders from its own directory

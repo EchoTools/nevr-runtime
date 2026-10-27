@@ -248,7 +248,10 @@ std::int64_t RuntimeRendezvous::StopGame(std::int64_t command_line) {
       // decision stays suppressed
     }
     EmitStopDiagnostic(*diagnostics_, loader_.Result(), StopNoticeName(decision));
-    if (decision == StopNotice::kShow) ShowStopNotice(kStopNoticeText);
+    if (decision == StopNotice::kShow) {
+      const RuntimeLoadResult& result = loader_.Result();
+      ShowStopNotice(StopNoticeTextFor(result.outcome, result.verify_reason_code));
+    }
   }
 #if defined(NEVR_HOST_TESTING)
   if (Seams().stop_game != nullptr) {

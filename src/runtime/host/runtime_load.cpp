@@ -63,7 +63,26 @@ std::string AbiVersion(std::uint32_t major, std::uint32_t minor) {
 
 #if defined(NEVR_HOST_TESTING)
 std::atomic<bool> g_verify_for_test{false};
+std::atomic<const nevr_plugin_signature::Policy*> g_policy_for_test{nullptr};
+std::atomic<int> g_dev_build_for_test{-1};
+std::atomic<void (*)(const wchar_t*)> g_before_load_for_test{nullptr};
 #endif
+
+// The policy the verdict is taken against: the pins, the same constants the runtime's own policy starts from.
+const nevr_plugin_signature::Policy& VerifyPolicy() {
+#if defined(NEVR_HOST_TESTING)
+  if (const nevr_plugin_signature::Policy* policy = g_policy_for_test.load()) return *policy;
+#endif
+  return nevr_plugin_pins::PinnedPolicy();
+}
+
+bool DevBuild() {
+#if defined(NEVR_HOST_TESTING)
+  const int mode = g_dev_build_for_test.load();
+  if (mode >= 0) return mode != 0;
+#endif
+  return nevr_plugin_pins::IsDevBuild();
+}
 
 // The verdict is taken in production. The test targets' harnesses (the crash and attach shims) load unsigned fixture
 // runtimes, so a test build verifies only when a test asks it to (SetVerifyRuntimeForTest).
@@ -282,7 +301,45 @@ std::atomic<bool> g_fail_emit_for_test{false};
 void SetEmitLoadFailureForTest(bool fail) noexcept { g_fail_emit_for_test.store(fail); }
 
 void SetVerifyRuntimeForTest(bool enabled) noexcept { g_verify_for_test.store(enabled); }
+
+void SetVerifyPolicyForTest(const nevr_plugin_signature::Policy* policy) noexcept { g_policy_for_test.store(policy); }
+
+void SetDevBuildForTest(int mode) noexcept { g_dev_build_for_test.store(mode); }
+
+void SetBeforeLoadHookForTest(void (*hook)(const wchar_t* path)) noexcept { g_before_load_for_test.store(hook); }
 #endif
+
+VerifyDecision DecideVerify(RuntimeFile file, bool verify_enabled, bool accepted, bool dev_build) noexcept {
+  VerifyDecision decision;
+  switch (file) {
+    case RuntimeFile::kAbsent:
+      return decision;  // nothing was checked: the load fails by itself, as runtime_absent
+    case RuntimeFile::kUnreadable:
+      decision.refused = true;
+      decision.verify = "refused";
+      return decision;  // refused in every build: a dev build allows an unsigned file, not one it cannot read
+    case RuntimeFile::kReadable:
+      break;
+  }
+  if (!verify_enabled) {
+    decision.may_load = true;
+    decision.verify = "not_checked";
+    return decision;
+  }
+  if (accepted) {
+    decision.may_load = true;
+    decision.verify = "accepted";
+  } else if (dev_build) {
+    decision.may_load = true;
+    decision.verify = "unsigned_allowed";
+    decision.reason_is_verdict = true;
+  } else {
+    decision.refused = true;
+    decision.verify = "refused";
+    decision.reason_is_verdict = true;
+  }
+  return decision;
+}
 
 void EmitLoadDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result) noexcept {
   try {
@@ -433,10 +490,10 @@ RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host,
   // with FILE_SHARE_READ from the check through the load, so nothing can write it in between; the verifier reads it
   // from offset 0 through this handle, and the load maps the same bytes.
   const std::string host_sha256 = HostSha256(host.host_module);
-  bool refused = false;
-  bool may_load = false;
-  const char* verify = nullptr;
+  VerifyDecision decision;
   std::string verify_reason;
+  std::string verdict_text;
+  nevr_plugin_signature::Reason verify_reason_code = nevr_plugin_signature::Reason::Accepted;
   FileFacts runtime_facts;
   HANDLE file = INVALID_HANDLE_VALUE;
 
@@ -448,40 +505,39 @@ RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host,
     if (attributes == INVALID_FILE_ATTRIBUTES &&
         (GetLastError() == ERROR_FILE_NOT_FOUND || GetLastError() == ERROR_PATH_NOT_FOUND)) {
       load_error = ERROR_FILE_NOT_FOUND;
+      decision = DecideVerify(RuntimeFile::kAbsent, VerifyEnabled(), false, DevBuild());
     } else {
       file = CreateFileW(path_, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                          FILE_ATTRIBUTE_NORMAL, nullptr);
       if (file == INVALID_HANDLE_VALUE) {
-        refused = true;
-        verify = "refused";
+        decision = DecideVerify(RuntimeFile::kUnreadable, VerifyEnabled(), false, DevBuild());
         verify_reason = "unreadable";
+        verify_reason_code = nevr_plugin_signature::Reason::Unreadable;
       } else {
-        if (!VerifyEnabled()) {
-          verify = "not_checked";  // a test build's harness only: production always verifies
-        } else {
+        bool accepted = false;
+        if (VerifyEnabled()) {
           const nevr_plugin_signature::Verdict verdict = nevr_plugin_signature::VerifyPluginFile(
-              file, nevr_plugin_pins::PinnedPolicy(), static_cast<std::int64_t>(std::time(nullptr)));
-          if (verdict.accepted()) {
-            verify = "accepted";
-          } else if (nevr_plugin_pins::IsDevBuild()) {
-            // A dev build loads an unsigned runtime, and says so in the record (the same rule as the plugin loader).
-            verify = "unsigned_allowed";
-            verify_reason = verdict.Describe();
-          } else {
-            refused = true;
-            verify = "refused";
-            verify_reason = verdict.Describe();
-          }
+              file, VerifyPolicy(), static_cast<std::int64_t>(std::time(nullptr)));
+          accepted = verdict.accepted();
+          verify_reason_code = verdict.reason;
+          verdict_text = verdict.Describe();
         }
-        if (!refused) runtime_facts = FactsOf(file, true);
-        may_load = !refused;
+        decision = DecideVerify(RuntimeFile::kReadable, VerifyEnabled(), accepted, DevBuild());
+        if (decision.reason_is_verdict) verify_reason = verdict_text;
+        if (!decision.refused) runtime_facts = FactsOf(file, true);
       }
     }
   }
+  const bool refused = decision.refused;
+  const bool may_load = decision.may_load;
+  const char* verify = decision.verify;
   // The versions record: after the verdict, before the runtime can run a line. The runtime's facts are "unavailable"
   // when it is missing or refused.
   EmitVersionsRecord(diagnostics, host_sha256, runtime_facts, result_);
   if (may_load) {
+#if defined(NEVR_HOST_TESTING)
+    if (const auto hook = g_before_load_for_test.load()) hook(path_);
+#endif
     module = LoadLibraryExW(path_, nullptr,
                             LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (module == nullptr) load_error = GetLastError();
@@ -507,6 +563,7 @@ RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host,
   if (refused) result_.outcome = RuntimeLoadOutcome::kRuntimeRefused;
   result_.verify = verify;
   result_.verify_reason = verify_reason;
+  result_.verify_reason_code = verify_reason_code;
   result_.loader_lock_held = loader_lock_held;
   result_.init_threw = init_threw;
   EmitLoadDiagnostic(diagnostics, result_);

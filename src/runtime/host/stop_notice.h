@@ -12,17 +12,49 @@
 //   * never under the loader lock (the dialog pumps messages);
 //   * one dialog per run: the first thread into StopGame shows it, the others wait behind it.
 
+#include "runtime/ext/plugin_signature.h"
+#include "runtime/host/runtime_load.h"
 #include "runtime/lifecycle/cmdline_strip.h"
 
 #include <cstddef>
+#include <string>
 #include <string_view>
 
 namespace nevr_host {
 
-/// What the player reads. The brand is spelled as it is in prose (docs/standards/naming.md).
+/// What the player reads. The brand is spelled as it is in prose (docs/standards/naming.md). Each cause of a refusal
+/// names the file and says what is wrong in plain words (docs/adr/0012-static-install-root.md, "The host verifies
+/// nevr-runtime.dll before it loads it"); the log line carries the verifier's own words and the path searched.
 inline constexpr wchar_t kStopNoticeText[] =
     L"nEVR couldn't start: nevr-runtime.dll is missing or damaged. Please reinstall with the installer.";
+inline constexpr wchar_t kStopNoticeMissingText[] =
+    L"nEVR couldn't start: nevr-runtime.dll is missing. Please run the installer.";
+inline constexpr wchar_t kStopNoticeUnsignedText[] =
+    L"nEVR couldn't start: nevr-runtime.dll is not signed by the nEVR release process. Please reinstall with the installer.";
+inline constexpr wchar_t kStopNoticeChangedText[] =
+    L"nEVR couldn't start: nevr-runtime.dll was changed after it was signed. Please reinstall with the installer.";
+inline constexpr wchar_t kStopNoticeUnreadableText[] =
+    L"nEVR couldn't start: nevr-runtime.dll could not be read. Please reinstall with the installer.";
+inline constexpr wchar_t kStopNoticeRefusedText[] =
+    L"nEVR couldn't start: the signature on nevr-runtime.dll is not accepted. Please reinstall with the installer.";
 inline constexpr wchar_t kStopNoticeTitle[] = L"nEVR";
+
+/// The words for a runtime that did not load: the outcome decides, and for a refusal the verifier's reason.
+inline const wchar_t* StopNoticeTextFor(RuntimeLoadOutcome outcome, nevr_plugin_signature::Reason reason) {
+  using nevr_plugin_signature::Reason;
+  switch (outcome) {
+    case RuntimeLoadOutcome::kRuntimeAbsent: return kStopNoticeMissingText;
+    case RuntimeLoadOutcome::kRuntimeRefused:
+      switch (reason) {
+        case Reason::Unsigned: return kStopNoticeUnsignedText;
+        case Reason::DigestMismatch:
+        case Reason::SignatureInvalid: return kStopNoticeChangedText;
+        case Reason::Unreadable: return kStopNoticeUnreadableText;
+        default: return kStopNoticeRefusedText;
+      }
+    default: return kStopNoticeText;
+  }
+}
 
 enum class StopNotice {
   kShow,                         ///< A player is at the screen: tell them.

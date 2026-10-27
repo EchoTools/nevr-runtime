@@ -87,7 +87,10 @@ struct Dependencies {
 };
 bool ListDependencies(HANDLE file, Dependencies* out, std::string* error);
 
-// Test only: makes the next VerifyPluginFile calls raise std::bad_alloc inside, to prove they come back as a refusal.
+#if defined(NEVR_HOST_TESTING)
+// Test only, and only in a unit compiled with NEVR_HOST_TESTING (nevr_host_core): makes the next VerifyPluginFile
+// calls raise std::bad_alloc inside, to prove they come back as a refusal. No shipped DLL carries it.
 void TestHook_ThrowInVerify(bool enable);
+#endif
 
 }  // namespace nevr_plugin_signature

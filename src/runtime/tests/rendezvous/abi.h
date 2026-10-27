@@ -66,6 +66,7 @@ inline constexpr char kGameImageExport[] = "RendezvousProbeGameImage";
 inline constexpr char kLauncherModeExport[] = "RendezvousProbeLauncherMode";
 inline constexpr char kFailHookCreateExport[] = "RendezvousProbeFailHookCreate";
 inline constexpr char kRealStopExport[] = "RendezvousProbeRealStop";
+inline constexpr char kVerifyRuntimeExport[] = "RendezvousProbeVerifyRuntime";
 using RecordEventFn = void (*)(LONG event, std::uint64_t payload);
 using GameImageFn = HMODULE (*)();
 // Returns 1 when the child is exercising the external NEVR_SetGameModule launcher
@@ -76,5 +77,8 @@ using FailHookCreateFn = int (*)();
 // Returns 1 when the child lets the host really end the process on a failed runtime load; 0 installs the
 // host's stop seam, which records kHostStopGame and lets the original wrapper run so the harness can look on.
 using RealStopFn = int (*)();
+// Returns 1 when the child has the host verify nevr-runtime.dll with the production pins (the harness's fixture runtime
+// is unsigned, so the host then refuses it); 0 loads the fixture without a check, as every other scenario does.
+using VerifyRuntimeFn = int (*)();
 
 }  // namespace nevr_rendezvous_probe
