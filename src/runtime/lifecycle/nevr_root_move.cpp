@@ -50,7 +50,7 @@ bool EndsWith(const std::wstring& s, const std::wstring& suffix) {
   return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
-// What NEVR keeps in an install's _local folder.
+// What nEVR keeps in an install's _local folder.
 std::vector<const wchar_t*> LocalFileNames() { return {Names::kConfigYaml}; }
 
 std::string ToUtf8(const std::wstring& wide) {
@@ -70,7 +70,7 @@ std::wstring ParentOf(const std::wstring& path) {
 // MOVED-TO-NEVR-ROOT.txt in `dir`, naming the root.
 bool WriteMarker(const std::wstring& dir, const std::wstring& root, std::wstring* path, unsigned long* error) {
   *path = nevr_root::Join(dir, Names::kMovedMarker);
-  const std::string text = "NEVR moved its files out of this folder to " + ToUtf8(root) + "\r\n";
+  const std::string text = "nEVR moved its files out of this folder to " + ToUtf8(root) + "\r\n";
   HANDLE file = CreateFileW(path->c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (file == INVALID_HANDLE_VALUE) {
     *error = GetLastError();

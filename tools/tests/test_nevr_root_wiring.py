@@ -1,4 +1,4 @@
-"""#857: every place NEVR writes or reads resolves through core/nevr_root.h, and the one-time move runs first.
+"""#857: every place nEVR writes or reads resolves through core/nevr_root.h, and the one-time move runs first.
 
 Source-shape sensors (the behaviour is src/runtime/tests/test_nevr_root.cpp, run under Wine):
 

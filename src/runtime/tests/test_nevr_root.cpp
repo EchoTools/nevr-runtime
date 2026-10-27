@@ -45,7 +45,7 @@ unsigned Count(const std::vector<move::Event>& events, Outcome outcome) {
 //   <base>\game\bin\win10\_local   the install's nearest _local        (local_[0])
 //   <base>\game\bin\_local         one parent up                       (local_[1])
 //   <base>\game\_local             two parents up                      (local_[2])
-//   <base>\appdata\EchoVR\...      the original game's folder, where NEVR used to write logs and cosmetic packages
+//   <base>\appdata\EchoVR\...      the original game's folder, where nEVR used to write logs and cosmetic packages
 //   <base>\appdata\nevr\echovr     the nevr root
 class NevrRootMove : public ::testing::Test {
  protected:
@@ -159,7 +159,7 @@ TEST_F(NevrRootMove, TheOldLayoutMovesIntoTheRootAndEachEmptiedFolderSaysWhy) {
   OldLayout();
   const std::vector<move::Event> events = move::Run(Inputs());
 
-  EXPECT_EQ(Count(events, Outcome::kMoved), 5u) << "config.yaml, three NEVR log files, one cosmetic package";
+  EXPECT_EQ(Count(events, Outcome::kMoved), 5u) << "config.yaml, three nEVR log files, one cosmetic package";
   EXPECT_EQ(Count(events, Outcome::kMarkerWritten), 3u) << "the _local folder, the old logs folder and the old cosmetics folder";
   EXPECT_EQ(ReadAll(root_ + L"\\config.yaml"), "services: near");
   EXPECT_EQ(ReadAll(root_ + L"\\logs\\nevr-2026-10-01T10-00-00.000.jsonl"), "{\"msg\":\"run log\"}\n");
@@ -171,7 +171,7 @@ TEST_F(NevrRootMove, TheOldLayoutMovesIntoTheRootAndEachEmptiedFolderSaysWhy) {
   EXPECT_FALSE(Exists(local_[0] + L"\\config.yaml"));
   EXPECT_FALSE(Exists(legacy_logs_ + L"\\nevr-crash-abc123.txt"));
   EXPECT_FALSE(Exists(legacy_cosmetics_ + L"\\hat.evrp"));
-  // What is not NEVR's stays.
+  // What is not nEVR's stays.
   EXPECT_EQ(ReadAll(legacy_logs_ + L"\\other-tool.log"), "not ours\n");
 
   for (const std::wstring& dir : {local_[0], legacy_logs_, legacy_cosmetics_}) {
