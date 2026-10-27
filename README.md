@@ -26,6 +26,7 @@ nEVR is a community project, built on other people's work and tested by the peop
 - **[marshmallow-mia](https://github.com/marshmallow-mia)**: The Echo VR Linux port, the [Echo VR installer](https://github.com/marshmallow-mia/Echo-VR-Installer) (PC and Quest) and [EchoVR_Launcher](https://github.com/marshmallow-mia/EchoVR_Launcher) (Windows and Linux). Reported #133 to #137, #495, #496, #511 to #513 and #719, and wrote the merged fixes #138 to #141, #500, #502, #514 to #516 and #721. Tested nevr-runtime in #nevr-runtime-testing.
 - **[Crafter](https://github.com/Crafter-1)**: [Quest-EchoVR-Installer](https://github.com/Crafter-1/Quest-EchoVR-Installer), a 3D Quest installer for Echo VR built in Unity. Reported #621, the game sending a Quest 3 player back to Home at launch, with a full logcat. Tested nevr-runtime in #nevr-runtime-testing.
 - **Ducky**: The reverse engineer behind the Echo Combat Quest port.
+- **[babs](https://github.com/nmdurkee)**: Echo Frenzy, a community game mode for Echo VR that paved the way for others making game modes; the pipeline for editing Echo's in-game screens (Doom on Echo is built on it); EchoCraft; and the moderator tablet for kicking players from lobbies. Has been there every step of the way, before and since Echo's shutdown.
 
 ### People
 
@@ -40,6 +41,7 @@ nEVR is a community project, built on other people's work and tested by the peop
 - **arii**: Tested nevr-runtime in #nevr-runtime-testing.
 - **[chinmayee5599](https://github.com/chinmayee5599)**: Opened #510, which renamed three TCP game message symbols in `src/abi/symbols.h`.
 - **[brysonak](https://github.com/brysonak)**: Opened #12, which changed the server log file names and added a flag to keep the old names.
+- **Furo**: Supporter of nevr-runtime.
 
 ### Thanks
 
