@@ -835,6 +835,15 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
             name != nullptr ? name : "<unnamed>", static_cast<unsigned long long>(friendId),
             nevr_social_party::Send(nevr_social_party::Global().RefreshFriends()) ? 1 : 0);
       }
+      // A removed friend leaves the roster now, not when the refresh above lands (social_roster.h).
+      {
+        uint64_t removedId = 0;
+        if (nevr_social_roster::ParseFriendRemoval(sym, payload, static_cast<size_t>(len), &removedId)) {
+          const bool dropped = nevr_social_roster::Global().Remove(removedId);
+          Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] friend removed account=%llu dropped=%d",
+              static_cast<unsigned long long>(removedId), dropped ? 1 : 0);
+        }
+      }
       // Party messages update the facade's party; any requests that were waiting on the reply
       // (invites queued behind the party's creation) go out now. This runs on the remote's
       // callback thread outside g_pairsMutex, and SendFrameToServer takes it itself.

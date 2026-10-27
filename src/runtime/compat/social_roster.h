@@ -169,6 +169,24 @@ class Roster {
     PublishLocked(std::vector<Entry>());
   }
 
+  /// Drops a friend the server has just removed, from the live roster and from a list still being
+  /// built, so the game stops counting them as a friend now rather than when the refresh lands.
+  /// True when the live roster held them.
+  bool Remove(std::uint64_t id) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    const auto drop = [id](std::vector<Entry>& list) {
+      const std::size_t before = list.size();
+      list.erase(std::remove_if(list.begin(), list.end(), [id](const Entry& e) { return e.id == id; }), list.end());
+      return list.size() != before;
+    };
+    drop(pending_);
+    if (!current_) return false;
+    std::vector<Entry> next = current_->entries;
+    if (!drop(next)) return false;
+    PublishLocked(std::move(next));
+    return true;
+  }
+
   std::uint32_t Count() const { return static_cast<std::uint32_t>(Snap()->entries.size()); }
   std::uint32_t Online() const { return Snap()->online; }
   std::uint32_t Offline() const { return Count() - Online(); }
@@ -559,6 +577,19 @@ inline RequestEvent ApplyFriendMessage(RecentList& recent, std::uint64_t symbol,
     event.pending = recent.RequestCount();
   }
   return event;
+}
+
+/// The account a removal names: SNSFriendRemoveNotify (a friend removed us) and SNSFriendRemoveResponse
+/// (we removed them). Both carry the other account first, as ApplyFriendMessage reads it. The roster
+/// drops that friend at once (Roster::Remove); the list refresh that follows only rebuilds it.
+inline bool ParseFriendRemoval(std::uint64_t symbol, const std::uint8_t* payload, std::size_t len, std::uint64_t* id) {
+  if (symbol != 0xe06972f49cd72265ULL && symbol != 0xc2bf83a08ea3a955ULL) return false;
+  if (payload == nullptr || id == nullptr || len < 16) return false;
+  std::uint64_t value = 0;
+  for (int i = 7; i >= 0; --i) value = (value << 8) | payload[8 + i];
+  if (value == 0) return false;
+  *id = value;
+  return true;
 }
 
 inline bool IsFriendChange(const char* name) {
