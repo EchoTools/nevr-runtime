@@ -67,8 +67,12 @@ IDENTITY = re.compile(rb"(?<=\x00)NEVR-BUILD ([0-9A-Za-z.+-]+) ([0-9a-f]{40})(?=
 # release; dev is the mingw-plugin-dev preset and is never packaged.
 PLUGIN_TRUST = re.compile(rb"(?<=\x00)NEVR-PLUGIN-TRUST ([a-z-]+)(?=\x00)")
 _NUM = r"(?:0|[1-9]\d*)"  # semver: no leading zeros
-RELEASE_VERSION = re.compile(rf"^{_NUM}\.{_NUM}\.{_NUM}$")
-DEV_VERSION = re.compile(rf"^{_NUM}\.{_NUM}\.{_NUM}-dev\.{_NUM}\+[0-9a-f]{{7,40}}$")
+# A release is X.Y.Z, or an rc X.Y.Z-rc.N (a tag vX.Y.Z-rc.N, #714). A development build is X.Y.(Z+1)-dev.N+sha after a
+# release, or X.Y.Z-rc.N.dev.N+sha after an rc (set_project_version_from_git.cmake).
+_RC = rf"-rc\.[1-9]\d*"
+_BASE = rf"{_NUM}\.{_NUM}\.{_NUM}"
+RELEASE_VERSION = re.compile(rf"^{_BASE}(?:{_RC})?$")
+DEV_VERSION = re.compile(rf"^(?:{_BASE}-dev\.{_NUM}|{_BASE}{_RC}\.dev\.{_NUM})\+[0-9a-f]{{7,40}}$")
 
 
 class GateFailure(Exception):
@@ -128,7 +132,7 @@ def expected_identity_problems(label: str, blob: bytes, version, commit: str, ru
     if version is None:
         if not DEV_VERSION.match(got_version):
             problems.append(f"{label}: version '{got_version}' is not a development version "
-                            f"(<x.y.z>-dev.<n>+<sha>): a local build is never a release")
+                            f"(<x.y.z>-dev.<n>+<sha> or <x.y.z>-rc.<n>.dev.<n>+<sha>): a local build is never a release")
     elif got_version != version:
         problems.append(f"{label}: version '{got_version}' is not the expected '{version}'")
     if commit and got_commit != commit:
@@ -141,10 +145,9 @@ def package_base(version: str, commit: str) -> str:
     nevr-runtime-v<X.Y.Z-dev.N>-<sha7> (the build metadata dropped, the commit kept)."""
     if RELEASE_VERSION.match(version):
         return f"nevr-runtime-v{version}"
-    match = re.match(rf"^({_NUM}\.{_NUM}\.{_NUM}-dev\.{_NUM})\+", version)
-    if not match:
-        raise GateFailure(f"version '{version}' is neither X.Y.Z nor X.Y.Z-dev.N+sha")
-    return f"nevr-runtime-v{match.group(1)}-{commit[:7]}"
+    if not DEV_VERSION.match(version):
+        raise GateFailure(f"version '{version}' is neither X.Y.Z, X.Y.Z-rc.N nor a development version (+sha)")
+    return f"nevr-runtime-v{version.partition('+')[0]}-{commit[:7]}"
 
 
 def render(template: Path, values: dict, apk: bool = False) -> str:
@@ -403,9 +406,9 @@ def release_notes(assets: Path) -> str:
     if len(zips) != 1:
         raise GateFailure(f"{assets}: expected exactly one nevr-runtime-v<X.Y.Z>-windows.zip, found {len(zips)}")
     zip_path = zips[0]
-    match = re.fullmatch(rf"nevr-runtime-v({_NUM}\.{_NUM}\.{_NUM})-windows\.zip", zip_path.name)
+    match = re.fullmatch(rf"nevr-runtime-v({_BASE}(?:{_RC})?)-windows\.zip", zip_path.name)
     if not match:
-        raise GateFailure(f"{zip_path.name}: not a release zip name (nevr-runtime-vX.Y.Z-windows.zip)")
+        raise GateFailure(f"{zip_path.name}: not a release zip name (nevr-runtime-vX.Y.Z[-rc.N]-windows.zip)")
     version = match.group(1)
     literals = {}
     with zipfile.ZipFile(zip_path) as z:

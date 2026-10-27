@@ -14,8 +14,9 @@
 # The Quest library's name has ONE source, release_quest_asset_name: build.yml's quest job names its output
 # with it, so the file it uploads is the one this list (and so the published guard) expects.
 # The .tar.zst archives are a workflow artifact and never a release asset.
-# The tag a release has: a plain semver vX.Y.Z (no leading zeros); BASH_REMATCH[1] is X.Y.Z.
-release_tag_regex='^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$'
+# The tag a release has: a plain semver vX.Y.Z (no leading zeros), or an rc vX.Y.Z-rc.N (#714); BASH_REMATCH[1] is the
+# version, X.Y.Z or X.Y.Z-rc.N.
+release_tag_regex='^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?)$'
 
 release_quest_asset_name() {
   local version=${1:?usage: release_quest_asset_name <X.Y.Z>}

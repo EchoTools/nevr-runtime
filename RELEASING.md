@@ -7,7 +7,8 @@ release is edited afterwards: a wrong release is fixed by the next version.
 
 ## Names
 
-- **Version:** plain semver, `X.Y.Z` (no leading zeros, `tools/release_asset_names.sh` `release_tag_regex`). It is
+- **Version:** semver, `X.Y.Z`, or a release candidate `X.Y.Z-rc.N` (no leading zeros, `tools/release_asset_names.sh`
+  `release_tag_regex`; a candidate is tagged `vX.Y.Z-rc.N` and published as a pre-release, #714). It is
   computed, not chosen: `python3 tools/next_release_version.py` prints it from the feat, fix, perf and breaking commits
   since the newest `vX.Y.Z` tag reachable from `origin/main` (`docs/standards/planning.md`, "Release versions"). Every
   other build stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from; it is never released.

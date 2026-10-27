@@ -64,9 +64,10 @@ class VersionReconfigureTest(unittest.TestCase):
         self.assertEqual(self.built_version(), f"1.2.4-dev.0+{self.head()}")
 
     def test_a_pre_release_history_tag_is_ignored_and_the_commit_after_it_rebuilds_as_dev(self):
-        # `git describe --long` prints v4.0.0-rc.1-1-g<sha> after a pre-release tag; --exclude "v*-*" keeps
-        # such history tags from ever being the base, so the nearest release tag (v1.2.3) still is.
-        git(self.src, "tag", "-a", "-m", "history", "v4.0.0-rc.1")
+        # `git describe --long` prints v4.0.0-beta.1-1-g<sha> after a pre-release tag; --exclude "v*-[!r]*" keeps
+        # such history tags from ever being the base, so the nearest release tag (v1.2.3) still is. An rc tag is a base
+        # (#714), so this test uses a beta.
+        git(self.src, "tag", "-a", "-m", "history", "v4.0.0-beta.1")
         git(self.src, "commit", "-q", "--allow-empty", "-m", "after the history tag")
         self.assertEqual(self.built_version(), f"1.2.4-dev.2+{self.head()}")
 
