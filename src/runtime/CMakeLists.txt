@@ -37,6 +37,7 @@ set(PATCHES_SOURCES
     "lifecycle/cli.cpp"
     "lifecycle/boot.cpp"
     "lifecycle/config.cpp"
+    "lifecycle/arena_round_time.cpp"
     "lifecycle/service_map.cpp"
     "lifecycle/service_redirect.cpp"
     "lifecycle/stable_string_pool.cpp"
@@ -857,6 +858,14 @@ if(BUILD_TESTING)
     target_link_libraries(test_telemetry_game_type PRIVATE GTest::gtest GTest::gtest_main nevr_api
       nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_telemetry_game_type DISCOVERY_MODE PRE_TEST)
+
+    # #982: the public Arena round default applies only to a stored public Arena session (arena_round_time.cpp).
+    add_executable(test_arena_round_time tests/test_arena_round_time.cpp lifecycle/arena_round_time.cpp)
+    set_source_files_properties(tests/test_arena_round_time.cpp lifecycle/arena_round_time.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_arena_round_time PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_arena_round_time PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_arena_round_time DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_callback_unregistration
       tests/test_callback_unregistration.cpp
