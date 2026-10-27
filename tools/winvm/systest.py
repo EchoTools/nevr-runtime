@@ -366,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
                     choices=[n for n, _ in checks.ENGINE_STAGES])
     ap.add_argument("--with-legacy-dbgcore", action="store_true",
                     help="put the guest install's legacy Echo Relay dbgcore.dll in the rig "
-                         "(NEVR refuses to run beside it unless -skip-dbgcore-check is in --game-args)")
+                         "(NEVR refuses to run beside it, on any command line)")
     ap.add_argument("--dump-on-fail", action="store_true", help="fetch a minidump if the game is stuck")
     ap.add_argument("--out", type=pathlib.Path)
     args = ap.parse_args(argv)

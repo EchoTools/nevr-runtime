@@ -406,8 +406,6 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       g_timestampLogs = TRUE;
     } else if (lstrcmpW(flag, L"-upnp") == 0) {
       g_upnpEnabled = TRUE;
-    } else if (lstrcmpW(flag, L"-skip-dbgcore-check") == 0) {
-      g_allowDbgCore = TRUE;
     } else if (lstrcmpW(flag, L"-config") == 0 || lstrcmpW(flag, L"-config-path") == 0) {
       if (const wchar_t* value = nevr_cli::OptionValue(argc, argv, i)) {
         WideCharToMultiByte(CP_UTF8, 0, value, -1, g_customConfigPath, MAX_PATH, NULL, NULL);
@@ -504,8 +502,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // In the launcher path, BugSplat64.dll is loaded by echovr_game.dll. If a
   // leftover dbgcore.dll is also present in the game directory, the OS loader
   // resolves it during import resolution BEFORE the launcher can intervene,
-  // causing a double-load condition. The -skip-dbgcore-check flag permits this
-  // intentionally for the legacy injection path.
+  // causing a double-load condition. No command-line flag skips this check: a
+  // legacy dbgcore.dll is an older runtime, and the player is told to rename it.
   {
     char exePath[MAX_PATH];
     DWORD len = GetModuleFileNameA(NULL, exePath, MAX_PATH);
@@ -518,27 +516,23 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
         int written = snprintf(dbgcorePath, MAX_PATH, "%sdbgcore.dll", exePath);
         if (written > 0 && written < MAX_PATH) {
           if (GetFileAttributesA(dbgcorePath) != INVALID_FILE_ATTRIBUTES) {
-            if (g_allowDbgCore) {
-              Log(EchoVR::LogLevel::Info,
-                  "[NEVR.PATCH] dbgcore.dll present in game directory — "
-                  "legacy injection permitted (-skip-dbgcore-check)");
-            } else if (g_isServer) {
+            if (g_isServer) {
               // The refusal is logged before FatalError: on a client FatalError only shows a dialog (#726).
               Log(EchoVR::LogLevel::Error,
                   "[NEVR.PATCH] dbgcore.dll present in game directory — refusing to start "
-                  "(pass -skip-dbgcore-check to permit legacy injection)");
+                  "(rename it to dbgcore.dll.legacy-<date> or remove it)");
               FatalError(
-                  "dbgcore.dll detected in game directory — legacy DLL hijack artifact; remove "
-                  "it or pass -skip-dbgcore-check",
+                  "dbgcore.dll detected in game directory — legacy DLL hijack artifact; rename it "
+                  "(dbgcore.dll.legacy-<date>) or remove it",
                   "dbgcore.dll hijack detected");
             } else {
               Log(EchoVR::LogLevel::Error,
                   "[NEVR.PATCH] dbgcore.dll present in game directory — refusing to start "
-                  "(pass -skip-dbgcore-check to permit legacy injection)");
+                  "(rename it to dbgcore.dll.legacy-<date> or remove it)");
               FatalError(
                   "dbgcore.dll detected in the game directory.\n\n"
-                  "This file is a legacy DLL hijack artifact. If you are intentionally using "
-                  "the legacy injection path, add -skip-dbgcore-check to your command line.\n\n"
+                  "This file is a legacy DLL hijack artifact, and the runtime will not start beside "
+                  "it. Rename it (for example to dbgcore.dll.legacy-<date>) or remove it.\n\n"
                   "If you are using the NEVR launcher, remove dbgcore.dll from the game "
                   "directory and use BugSplat64.dll instead.",
                   "dbgcore.dll hijack detected");

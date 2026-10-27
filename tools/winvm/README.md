@@ -75,8 +75,8 @@ Artifacts (`stdout.txt`, `windows.txt`, `results.txt`, the probe output) go to
   interactive session (`tools/winvm/enum_windows.ps1`) for this reason.
 - The legacy `dbgcore.dll` rejects its own no-console flag unless `-headless` is also given (the dialog
   above is the legacy `dbgcore.dll` saying so).
-- A `dbgcore.dll` in the game directory is fatal to the nEVR runtime unless
-  `-skip-dbgcore-check` is passed. `--with-legacy-dbgcore` reproduces that configuration.
+- A `dbgcore.dll` in the game directory is fatal to the nEVR runtime on any command line. `--with-legacy-dbgcore`
+  reproduces that configuration.
 - The stock install was extracted one level too deep
   (`_data\_data\<version>\...`); the game then cannot find its packages. Preflight
   reports this and how to fix it (a directory junction).
