@@ -2,6 +2,7 @@
 #include "runtime/lifecycle/game_image_guard.h"
 
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "runtime/log/boot_log_tee.h"
@@ -122,6 +123,42 @@ static void* MicProviderSymbolOverride(void* dll_handle, const char* symbol_name
   return nullptr;
 }
 
+// Binds a client's XInput symbols to xinput1_4 (#877). The game's XInput9_1_0 predates Xbox One support and
+// reports every slot as not connected. xinput1_4 is loaded by its system-directory path, so a DLL beside
+// echovr.exe cannot stand in for it (N75). Returns nullptr when it cannot be bound; the caller keeps the stub.
+static void* BindClientXInput(const char* symbol_name) {
+  static HMODULE xinput = nullptr;
+  static bool attempted = false;
+  if (!attempted) {
+    attempted = true;
+    char dir[MAX_PATH] = {};
+    const UINT len = GetSystemDirectoryA(dir, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH - 16) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] xinput: system directory unavailable (%lu); the not-connected stub stays",
+          static_cast<unsigned long>(len));
+      return nullptr;
+    }
+    const std::string path = std::string(dir) + "\\xinput1_4.dll";
+    xinput = LoadLibraryA(path.c_str());
+    if (xinput == nullptr) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] xinput: %s not loadable (error %lu); the not-connected stub stays",
+          path.c_str(), static_cast<unsigned long>(GetLastError()));
+      return nullptr;
+    }
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] xinput bound module=%s (client; the game's XInput9_1_0 stub is not used)",
+        path.c_str());
+  }
+  if (xinput == nullptr) return nullptr;
+  const FARPROC fn = GetProcAddress(xinput, symbol_name);
+  if (fn == nullptr) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] xinput: xinput1_4 has no export %s; the not-connected stub stays",
+        symbol_name);
+    return nullptr;
+  }
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] xinput bound name=%s", symbol_name);
+  return reinterpret_cast<void*>(fn);
+}
+
 static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
   // The export tracer (#20; off unless -trace-exports names a platform DLL) wraps what the game is handed for a
   // symbol of a selected DLL, so the mic provider's overrides are traced as well as pnsrad's own exports.
@@ -164,8 +201,16 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
   }
   void* result = g_original_GetSymbol(dll_handle, symbol_name);
 
-  // XInput stubs (keep these)
+  // XInput. A server or headless run has no pad and keeps the "not connected" stubs (2fe27303). A client gets
+  // xinput1_4's functions, which see Xbox One/Series pads (#877); if they cannot be bound, the stub stays.
   if (symbol_name && result != nullptr) {
+    const bool xinputSymbol = strcmp(symbol_name, "XInputGetState") == 0 ||
+                              strcmp(symbol_name, "XInputSetState") == 0 ||
+                              strcmp(symbol_name, "XInputGetCapabilities") == 0;
+    if (xinputSymbol && !g_isServer && !g_isHeadless) {
+      if (void* bound = BindClientXInput(symbol_name)) return traced(bound);
+    }
+
     static auto xinput_get_state = +[](uint32_t, void*) -> uint32_t { return 0x48F; };
     static auto xinput_set_state = +[](uint32_t, void*) -> uint32_t { return 0x48F; };
     static auto xinput_get_caps  = +[](uint32_t, uint32_t, void*) -> uint32_t { return 0x48F; };
