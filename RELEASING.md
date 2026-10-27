@@ -42,15 +42,32 @@ Not release assets: the `.tar.zst` archives and the `.dbg` symbol files (workflo
 without overwriting a name, and verify it from outside by hash. Never request the published address before the file is
 installed: the CDN caches the 200 HTML answer for that exact address. A changed file gets a new name (the version is in it).
 
+## When to release
+
+A release is a train, not an event. These rules decide when one leaves; nobody schedules it.
+
+1. **Trigger.** A pre-release is cut as soon as `main` has at least one player-visible change that isn't in the last
+   published release. A merged PR is player-visible if its title is `feat` or `fix` and it touches what a player
+   installs or runs. Docs, CI and tooling don't trigger a release; they ride the next one.
+2. **Ceiling.** No more than 24 hours pass between a player-visible merge and a published pre-release that contains it.
+   If that would be exceeded, cutting the release is the next thing the maintainer does.
+3. **Small.** A release carries what is on `main` when it's cut. It never waits to batch more changes in, and `main` is
+   never frozen for a release.
+4. **Parallel.** Tag, the tag's CI build, the PC login test and the release notes run at the same time. The tag's CI run
+   is the proof that the build and packaging work; it isn't rehearsed first.
+5. **Forward.** A failure on the way out (CI, a gate, a bad asset) never holds the release open. Delete the unpublished
+   draft, fix forward on `main`, and cut the next patch version. A tag is never reused.
+6. **Stable.** A pre-release is promoted to stable once testers have run it with no new defect filed against it.
+
 ## Before the tag
 
 1. `git fetch origin` and `just release-preflight` pass: this clone is exactly `origin/main`, no local-only tag, nothing
    unpushed, no uncommitted change.
-2. `just verify` has run on this tip of `main`: its log starts `verify: HEAD <sha>` and `verify: tree clean`, and ends
-   `verify: OK`. It runs once per tip (`AGENTS.md`, "Builds"); a missing HEAD line is checked, not re-run.
-3. The build the workflow does passes locally on this exact commit. GitHub Actions minutes are billed, so the pipeline
-   runs once, on the real tag; nothing is rehearsed there. After step 2 (which builds `mingw-release` and checks it),
-   run the packaging the workflow runs, from the same clone:
+2. Every PR merged since the last release passed its own checks before it merged. Before the tag, run only the tests
+   for what those PRs changed (each PR body names them), not a full `just verify` of the tree. The full suite runs in the
+   tag's CI build.
+3. In parallel with the tag's CI run, run the packaging the workflow runs, from the same clone, to catch a packaging
+   failure early:
    ```sh
    just package-dev    # tools/package_release.py over the stripped DLL and the Quest library; stamps -dev, not a release
    ```
