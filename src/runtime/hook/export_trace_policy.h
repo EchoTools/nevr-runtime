@@ -124,10 +124,11 @@ inline bool ExtractFlagValue(const wchar_t* commandLine, const wchar_t* flag, ch
   }
 }
 
-/// The `-trace-exports` list in `commandLine`, with one or two leading dashes (#697). The spelling NEVR read
-/// before #697 was removed in v6.0.0 (#698) and is not read.
+/// The `-trace-exports` list in `commandLine`, under its name or its deprecated alias `-traceexports` (#697;
+/// boot.cpp reports the alias, this only reads it), with one or two leading dashes either way.
 inline bool ExtractTraceExportsValue(const wchar_t* commandLine, char* out, std::size_t capacity) {
-  return ExtractFlagValue(commandLine, L"-trace-exports", out, capacity);
+  return ExtractFlagValue(commandLine, L"-trace-exports", out, capacity) ||
+         ExtractFlagValue(commandLine, L"-traceexports", out, capacity);
 }
 
 inline const char* ModuleName(std::uint32_t bit) {
