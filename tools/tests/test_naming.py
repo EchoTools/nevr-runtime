@@ -74,6 +74,8 @@ BRAND_PROSE_SPELLINGS = {
     "plugins/example/README.md": {"nEVR"},
     "src/launcher/CMakeLists.txt": {"nEVR"},  # the exe's FileDescription
     "src/runtime/CMakeLists.txt": {"nEVR"},  # the DLL's FileDescription
+    "src/core/build_identity.h": {"nEVR"},  # MenuVersionLabel: the text a player sees
+    "src/core/build_identity.cpp": {"nEVR"},  # MenuVersionLabel: the text a player sees
     "src/runtime/ext/plugin_refusal_notice.h": {"nEVR"},
     "src/runtime/host/stop_notice.h": {"nEVR"},  # the player's text when the runtime did not load
     "src/runtime/tests/test_host_rendezvous.cpp": {"nEVR"},  # asserts that text
