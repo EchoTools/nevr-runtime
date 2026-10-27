@@ -389,6 +389,23 @@ void CheckUiPost() {
 
 }  // namespace
 
+// The floor message's presenter (#829): the UI thread's post when the looper was captured, else Show on this thread.
+void CheckPreferUiThread() {
+  namespace toast = nevr_quest::toast;
+  bool prepared = false;
+  toast::ResetUiLooperForTest();
+  g = Fake{};
+  TCHECK(std::strcmp(toast::ShowPreferUiThread(g_app, "hello", &prepared), "requested") == 0);
+  TCHECK(g.calls > 0);  // no capture: the caller's thread makes the Toast, as Show does
+  g = Fake{};
+  g_looper = FakeLooper{};
+  TCHECK(std::strcmp(toast::CaptureUiLooperWith(FakeApi()), "captured") == 0);
+  TCHECK(std::strcmp(toast::ShowPreferUiThread(g_app, "hello", &prepared), "posted") == 0);
+  TCHECK(g.calls == 0);  // captured: nothing is made here, the looper's thread makes it
+  TCHECK(std::strcmp(toast::ShowPreferUiThread(g_app, std::string(401, 'x').c_str(), &prepared), "text_too_long") == 0);
+  toast::ResetUiLooperForTest();
+}
+
 int main() {
   SetUpTables();
 
@@ -443,6 +460,7 @@ int main() {
   }
 
   CheckUiPost();
+  CheckPreferUiThread();
 
   if (g_failures != 0) {
     std::fprintf(stderr, "toast_presenter_test: %d check(s) failed\n", g_failures);

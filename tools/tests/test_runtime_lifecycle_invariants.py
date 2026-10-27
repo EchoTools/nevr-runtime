@@ -212,6 +212,20 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertTrue(guard.end() < free < end,
                         "FreeLibrary(g_realDbgCore) is outside the lpReserved == NULL block")
 
+    def test_the_dbgcore_refusal_logs_a_line_before_each_fatal_error(self):
+        # Issue #726: on a client FatalError only shows a dialog, so the refusal must leave a record first.
+        source = strip_comments((ROOT / "src/runtime/lifecycle/boot.cpp").read_text())
+        fatals = [m.start() for m in re.finditer(r'FatalError\(', source)
+                  if '"dbgcore.dll hijack detected"' in source[m.start():m.start() + 600]]
+        self.assertEqual(len(fatals), 2, "subject vanished: expected the server and client dbgcore refusals")
+        for fatal in fatals:
+            last_log = source.rfind("Log(", 0, fatal)
+            self.assertTrue(last_log > source.rfind("FatalError(", 0, fatal),
+                            "the dbgcore FatalError has no Log( since the previous FatalError")
+            window = source[last_log:fatal]
+            self.assertIn("LogLevel::Error", window)
+            self.assertIn('"[NEVR.PATCH] dbgcore.dll present', window)
+
     def test_server_shutdown_uses_console_handler_without_crt_signals(self):
         source = (ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text()
         stripped = strip_comments(source)

@@ -379,6 +379,14 @@ bool NevrCfgSocialFacadeEnabled() {
   return nevr_cfg::SocialFacadeEnabled(NevrCfg());
 }
 
+const char* NevrCfgCaptureDevice() {
+  return AccessorBoundary("NevrCfgCaptureDevice", [&]() -> const char* {
+    const std::optional<std::string> device = NevrCfg().GetString("audio.capture_device");
+    if (!device || device->empty()) return nullptr;
+    return InternCStr(*device, "NevrCfgCaptureDevice");
+  });
+}
+
 const char* NevrCfgGameNativeConfigJson() {
   return AccessorBoundary("NevrCfgGameNativeConfigJson", [&]() -> const char* {
     if (IsServerMode()) return nullptr;  // a dedicated server has no social layer to configure

@@ -46,6 +46,11 @@ const char* CaptureUiLooper() noexcept;
 // whether that is the process's main thread.
 const char* ShowOnUiThread(void* app, const char* text, bool* looperPrepared) noexcept;
 
+// The presenter the floor message uses in every build (#829, candidate A first): ShowOnUiThread when the UI looper was
+// captured, else Show on the calling thread. Returns "posted" (queued to the UI thread) or Show's tokens; "no_ui_looper"
+// is the only token that falls back, so a refused text ("no_text", "text_too_long") is answered as is.
+const char* ShowPreferUiThread(void* app, const char* text, bool* looperPrepared) noexcept;
+
 // The NDK's looper functions the capture needs, so a host test can stand in for them.
 struct LooperApi {
   using AddFd = int (*)(void* looper, int fd, int ident, int events, int (*callback)(int fd, int events, void* data),

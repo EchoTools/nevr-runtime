@@ -61,7 +61,7 @@ if (@(Get-Process -Name echovr -ErrorAction SilentlyContinue).Count -gt 0) { thr
 $state = Join-Path $Dir 'nevr-install.txt'
 if (-not (Test-Path -LiteralPath $state)) { throw "no nevr-install.txt in ${Dir}: nothing installed by install.ps1 to undo" }
 $values = @{}
-foreach ($line in Get-Content -LiteralPath $state) {
+foreach ($line in Get-Content -LiteralPath $state -Encoding UTF8) {
   if ($line -match '^([a-z_0-9]+)=(.*)$') { $values[$Matches[1]] = $Matches[2] }
 }
 foreach ($key in 'backup', 'legacy', 'installed_sha256') {
@@ -82,6 +82,8 @@ $target = Join-Path $Dir 'BugSplat64.dll'
 # or the one in the package this script came with (a DLL copied in by hand from a newer package).
 $known = @($values['installed_sha256'])
 if ($values.ContainsKey('previous_sha256') -and $values['previous_sha256'] -ne '') { $known += $values['previous_sha256'].Split(',') }
+# #770: after Verify Files the game's own file is back, and it is the backup: already restored, so nothing is overwritten.
+$known += Get-Sha $backup
 $sums = Join-Path $here 'SHA256SUMS'
 if (Test-Path -LiteralPath $sums) {
   foreach ($line in Get-Content -LiteralPath $sums) {

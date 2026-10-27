@@ -121,7 +121,10 @@ class PrePushHookTest(unittest.TestCase):
 
     def test_a_tag_of_a_tree_does_not_end_the_check_of_the_refs_after_it(self):
         self.bad_side_branch()
-        self.run_git("tag", "treetag", "main^{tree}")
+        # update-ref, not `git tag`: a tag of a tree object is written as a plain ref, and the result is
+        # checked so the push below cannot fail on a missing src refspec instead of the hook's verdict.
+        made = self.run_git("update-ref", "refs/tags/treetag", "main^{tree}")
+        self.assertEqual(made.returncode, 0, made.stderr)
         for refs in (("refs/tags/treetag", "side"), ("side", "refs/tags/treetag")):
             result = self.push(*refs)
             self.assertNotEqual(result.returncode, 0, " ".join(refs) + result.stdout + result.stderr)

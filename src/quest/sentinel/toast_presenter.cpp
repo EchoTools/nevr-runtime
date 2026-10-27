@@ -267,6 +267,12 @@ const char* Show(void* app, const char* text, bool* looperPrepared) noexcept {
   return ShowWhere(app, text, looperPrepared, Where::kThisThread);
 }
 
+const char* ShowPreferUiThread(void* app, const char* text, bool* looperPrepared) noexcept {
+  const char* const posted = ShowOnUiThread(app, text, looperPrepared);
+  if (std::strcmp(posted, "no_ui_looper") != 0) return posted;
+  return Show(app, text, looperPrepared);
+}
+
 const char* ShowOnMainLooper(void* app, const char* text, bool* looperPrepared) noexcept {
   return ShowWhere(app, text, looperPrepared, Where::kMainLooper);
 }
