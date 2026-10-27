@@ -120,6 +120,7 @@ subsystems that nEVR annotates.
 | `[NEVR.FATAL]`        | Fatal-error path (ServerFatal)               |
 | `[NEVR.SCENARIO]`     | Scenario-test control endpoint (test builds only; never in a release DLL) |
 | `[NEVR.SELFCHECK]`    | Self-checks: one result per run-card check (every build, `compat/self_check.h`) |
+| `[NEVR.MENU]`         | Menu text the runtime sets: the nEVR version on the menu's versions panel (`patch/menu_version_label.h`) |
 | `[NEVR.INVITE]`       | Invite codes for the CREATE GAME / JOIN VIA CODE wizard (`patch/invite_wizard.h`, ADR 0017): a code is never logged, only `code_len` and `code_fp` |
 | `[NEVR.HOST]`         | The `BugSplat64.dll` host's own JSONL records (`nevr-bootstrap.jsonl`): attach decisions, runtime load, crash dump. The value of the record's `tag` field; the host writes no `Log()` line |
 | `[server_timing]`     | Server tick-rate / timing patches             |
