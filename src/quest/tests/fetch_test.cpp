@@ -33,8 +33,9 @@ class ScriptedTransport : public Transport {
  public:
   ScriptedTransport(std::string payload, std::vector<Step> steps) : payload_(std::move(payload)), steps_(std::move(steps)) {}
 
-  TransportResult GetRange(const std::string&, std::uint64_t offset, const BodyFn& on_body,
+  TransportResult GetRange(const std::string& url, std::uint64_t offset, const BodyFn& on_body,
                            const KeepGoingFn& keep_going) override {
+    urls.push_back(url);
     offsets.push_back(offset);
     const Step& step = steps_[std::min(offsets.size() - 1, steps_.size() - 1)];
     TransportResult r;
@@ -70,6 +71,7 @@ class ScriptedTransport : public Transport {
   }
 
   std::vector<std::uint64_t> offsets;
+  std::vector<std::string> urls;  // what each request asked for
 
  private:
   std::string payload_;
@@ -132,6 +134,43 @@ struct Rig {
 const char* kManifest = "_data/5932408047/rad15/android/manifests/48037dc70b0ecab2";
 
 }  // namespace
+
+// The pin the shipped build fetches by and checks against, written out here so that editing plan.h alone fails.
+const char* kPinnedSha256 = "fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c";
+const char* kPinnedUrl = "https://evr.echo.taxi/nevr-runtime/data/echovr-data-fc2eedeacc50.zip";
+
+TEST(TheShippedPinFetchesTheVersionedContentAddressedFileNotABareName) {
+  const FetchConfig defaults;
+  CHECK_EQ(defaults.url, std::string(kPinnedUrl));
+  CHECK_EQ(defaults.sha256, std::string(kPinnedSha256));
+  // The file name is the first 12 hex of the digest it must have, so a URL cannot name other bytes.
+  CHECK_EQ(defaults.url.substr(defaults.url.rfind('/') + 1), "echovr-data-" + defaults.sha256.substr(0, 12) + ".zip");
+  CHECK(defaults.url.find("_data.zip") == std::string::npos);
+}
+
+TEST(AFileThatIsNotTheShippedPinIsRefusedBeforeExtractingAndAFileThatIsIsAccepted) {
+  Rig rig;
+  rig.config.url = kZipUrl;
+  rig.config.sha256 = kZipSha256;  // the shipped pin, not a digest taken from the test's own zip
+  rig.config.max_attempts = 2;
+  ScriptedTransport bad(rig.zip, {Step{}});
+  const FetchResult r = RunFetch(rig.config, bad);
+  CHECK_EQ(r.status, FetchStatus::kRetriesExhausted);
+  CHECK_EQ(r.detail, std::string("sha256_mismatch"));
+  CHECK(rig.HasEvent("data_fetch outcome=attempt_failed attempt=1 reason=sha256_mismatch"));
+  CHECK(!Exists(rig.config.root + "/_data"));  // nothing was extracted
+  CHECK(!Exists(rig.Part()));
+  CHECK(!bad.urls.empty());
+  for (const std::string& u : bad.urls) CHECK_EQ(u, std::string(kPinnedUrl));
+  // The control: the same transport, URL and body pass when the pin is the body's digest.
+  Rig good;
+  good.config.url = kZipUrl;
+  ScriptedTransport ok(good.zip, {Step{}});
+  CHECK_EQ(RunFetch(good.config, ok).status, FetchStatus::kOk);
+  CHECK_EQ(ReadFile(good.config.root + "/" + kManifest).size(), static_cast<std::size_t>(20000));
+  CHECK_EQ(ok.urls.size(), static_cast<std::size_t>(1));
+  CHECK_EQ(ok.urls[0], std::string(kPinnedUrl));
+}
 
 TEST(FetchesVerifiesExtractsAndSwaps) {
   Rig rig;

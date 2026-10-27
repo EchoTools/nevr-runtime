@@ -2,7 +2,7 @@
  * not the device's whole store and not one root. The sha256 pin (plan.h) is the integrity check; TLS keeps the download
  * private and stable.
  *
- * Why a set. The data host (mia.cdn.echo.taxi) is behind Cloudflare with a Universal SSL certificate. Cloudflare's
+ * Why a set. The data host (evr.echo.taxi; mia.cdn.echo.taxi before) is behind Cloudflare with a Universal SSL certificate. Cloudflare's
  * "Certificate authorities" page (https://developers.cloudflare.com/ssl/reference/certificate-authorities/, read
  * 2026-10-22) lists the CAs Universal SSL issues from: Let's Encrypt, Google Trust Services and SSL.com (Sectigo is not
  * used for Universal), and says "Cloudflare controls the validity periods and certificate authorities (CAs), making
@@ -15,7 +15,11 @@
  * Measured 2026-10-22 with `openssl s_client -connect mia.cdn.echo.taxi:443 -showcerts`: leaf
  * CN=4d2e64e3.sni.cloudflaressl.com (issuer GTS WE1), GTS WE1 (issuer GTS Root R4), GTS Root R4 (the cross-signature
  * issued by GlobalSign Root CA). `curl --cacert` with only the self-signed GTS Root R4 fetched
- * `https://mia.cdn.echo.taxi/_data.zip` (HTTP 206, ssl_verify_result 0). The PEMs come from Google's list
+ * `https://mia.cdn.echo.taxi/_data.zip` (HTTP 206, ssl_verify_result 0). The data is now fetched from evr.echo.taxi
+ * (plan.h kZipUrl), the same Cloudflare Universal SSL setup; measured 2026-10-27: leaf CN=fb4ccb60.sni.cloudflaressl.com
+ * (issuer GTS WE1), the same GTS WE1 and GTS Root R4 chain, and `curl --cacert` with only the self-signed GTS Root R4 PEM
+ * from this file fetched bytes 0-99 of `https://evr.echo.taxi/nevr-runtime/data/echovr-data-fc2eedeacc50.zip` (HTTP 206,
+ * ssl_verify_result 0, content-range total 937395400). The PEMs come from Google's list
  * (https://pki.goog/roots.pem) and the system store; each SHA-256 below is the DER fingerprint, checked at start by
  * CheckDataHostRoots().
  */

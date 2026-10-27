@@ -14,7 +14,10 @@
 
 namespace nevr_quest::data {
 
-inline constexpr const char* kZipUrl = "https://mia.cdn.echo.taxi/_data.zip";
+// The data is published under a name made from its own bytes, echovr-data-<first 12 hex of the sha256>.zip, on the same
+// R2 bucket and prefix as the releases and listed in the signed manifest as the `game-data` artifact (release-signer
+// `put-game-data`). The bare `_data.zip` names no version; this one cannot name other bytes.
+inline constexpr const char* kZipUrl = "https://evr.echo.taxi/nevr-runtime/data/echovr-data-fc2eedeacc50.zip";
 inline constexpr const char* kZipSha256 = "fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c";
 inline constexpr std::uint64_t kZipBytes = 937395400;
 
