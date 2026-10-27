@@ -453,6 +453,12 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
+  bool InstallCreditsText() override {
+    const bool ok = nevr_quest::integration::InstallCreditsTextHook();
+    detail_ = ok ? "ok" : "refused";
+    return ok;
+  }
+
   bool InstallLoginPrompt(bool countersRegistered) override {
     const bool ok = nevr_quest::integration::InstallLoginPromptHook(countersRegistered);
     detail_ = ok ? "ok" : "got_hook_refused";

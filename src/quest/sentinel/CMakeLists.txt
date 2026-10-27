@@ -34,6 +34,21 @@ target_compile_options(nevr_quest_data_wiring PRIVATE
   -Wall -Wextra -Werror -fno-exceptions -fvisibility=hidden -fvisibility-inlines-hidden)
 target_link_libraries(nevr_quest_data_wiring PUBLIC nevr_quest_got_hook nevr_quest_data nevr_quest_data_net)
 
+# #970: the project section of the in-game CREDITS page is rendered from config/credits.json by the same tool the
+# PC build runs (src/runtime/CMakeLists.txt), so both platforms show the same bytes. The generated source is
+# compiled into ovrplatformloader; credits_text.cpp points the page at it (sentinel/credits_text.h).
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+set(NEVR_QUEST_CREDITS_BLOCK_CPP "${CMAKE_CURRENT_BINARY_DIR}/generated/credits_block.cpp")
+add_custom_command(
+  OUTPUT "${NEVR_QUEST_CREDITS_BLOCK_CPP}"
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/../../../tools/render_credits.py"
+          --ingame-source "${NEVR_QUEST_CREDITS_BLOCK_CPP}"
+          --json "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/credits.json"
+  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/credits.json"
+          "${CMAKE_CURRENT_SOURCE_DIR}/../../../tools/render_credits.py"
+  COMMENT "Rendering the in-game credits block from config/credits.json"
+  VERBATIM)
+
 add_library(ovrplatformloader SHARED
   entry.cpp
   login_prompt_hook.cpp
@@ -48,7 +63,9 @@ add_library(ovrplatformloader SHARED
   android_glue_layout_check.cpp
   sentinel.cpp
   sentinel_log.cpp
-  activation.cpp)
+  activation.cpp
+  credits_text.cpp
+  "${NEVR_QUEST_CREDITS_BLOCK_CPP}")
 
 # Emit libovrplatformloader.so (CMake adds the lib prefix + .so suffix).
 set_target_properties(ovrplatformloader PROPERTIES OUTPUT_NAME ovrplatformloader)
@@ -66,7 +83,7 @@ target_link_libraries(ovrplatformloader PRIVATE nevr_quest_got_hook nevr_quest_c
 # src/quest/CMakeLists.txt) is compiled without exception support so its frames carry no
 # personality or LSDA; see the contract in callback_thunk.h. tests/quest
 # TestHookFramesCarryNoPersonality pins it.
-set_source_files_properties(entry.cpp login_prompt_hook.cpp obb_skip_hook.cpp process_end_hook.cpp permission_wait_hook.cpp vk_ext_window.cpp resource_request_hook.cpp texture_quality_hook.cpp system_ui_hook.cpp toast_presenter.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+set_source_files_properties(entry.cpp login_prompt_hook.cpp obb_skip_hook.cpp process_end_hook.cpp permission_wait_hook.cpp vk_ext_window.cpp resource_request_hook.cpp texture_quality_hook.cpp system_ui_hook.cpp toast_presenter.cpp credits_text.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
 # android_glue_layout_check.cpp asserts the glue offsets against the NDK's own native_app_glue header.
 if(DEFINED ANDROID_NDK)

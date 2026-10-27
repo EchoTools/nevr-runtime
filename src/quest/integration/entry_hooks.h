@@ -28,6 +28,9 @@ bool RegisterTextureQualityCounters() noexcept;  // 4 counters
 // asked for none.
 bool InstallTextureQualityHook(nevr_quest::texture_quality::Level level, bool fromConfig,
                                bool countersRegistered) noexcept;
+// The project section of the CREDITS page (#970), through this seam for the same reason: credits_text::InstallCreditsText
+// (sentinel/credits_text.h) proves the libr15 build and the pinned words before it writes, and logs its outcome itself.
+bool InstallCreditsTextHook() noexcept;
 
 // The #621 process-end hook (sentinel/process_end_hook.h), through this seam for the same reason: the process ends
 // when the game's android_main returns. No counters. `SetProcessEndCallback` registers what runs on the hook's

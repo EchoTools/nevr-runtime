@@ -890,6 +890,11 @@ test-quest-shared: _vcpkg-quest-host
         src/quest/tests/quest_config_test.cpp "$yaml_lib" \
         -o "$out/quest_config_test"
     "$out/quest_config_test"
+    # #970: the CREDITS patch's ADRP/ADD encoding against the pinned libr15 words (header only, no game image).
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/tests \
+        src/quest/tests/credits_text_test.cpp \
+        -o "$out/credits_text_test"
+    "$out/credits_text_test"
     # The hardware dump (#335): field schema, procfs/sysfs readers against a fake root, the os section's
     # never-omitted fields, and the record table (also under ThreadSanitizer: the libr15 hooks write it from
     # game threads while the dump thread reads it).

@@ -21,6 +21,7 @@
 #include "permission_wait_hook.h"
 #include "process_end_hook.h"
 #include "texture_quality_hook.h"
+#include "credits_text.h"
 #include "system_ui_hook.h"
 #include "resource_request_hook.h"
 #include "toast_presenter.h"
@@ -124,6 +125,9 @@ bool InstallTextureQualityHook(nevr_quest::texture_quality::Level level, bool fr
                                bool countersRegistered) noexcept {
     return nevr_quest::texture_quality::InstallIfCounted(level, fromConfig, countersRegistered);
 }
+
+// The project section of the CREDITS page (#970). credits_text.cpp logs its own outcome line.
+bool InstallCreditsTextHook() noexcept { return nevr_quest::credits_text::InstallCreditsText(); }
 
 // The log-only resource request hook (#871): development builds only. A refused install is logged by GotHook and leaves the
 // game's call intact.

@@ -128,6 +128,10 @@ add_executable(quest_config_test tests/quest_config_test.cpp)
 target_link_libraries(quest_config_test PRIVATE nevr_quest_config nlohmann_json::nlohmann_json)
 target_compile_options(quest_config_test PRIVATE -Wall -Wextra -Werror)
 
+# #970: the credits patch's pure encoding (sentinel/credits_text.h), checked against the pinned libr15 words.
+add_executable(credits_text_test tests/credits_text_test.cpp)
+target_compile_options(credits_text_test PRIVATE -Wall -Wextra -Werror)
+
 # Config-string redirect (CJson::TString hook adapter and decision logic).
 add_subdirectory(redirect)
 

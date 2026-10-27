@@ -35,6 +35,7 @@ const char* StepName(StepId id) {
     case StepId::kInstallVkExtWindow: return "install_vk_ext_window";
     case StepId::kInstallResourceRequestLog: return "install_resource_request_log";
     case StepId::kInstallTextureQuality: return "install_texture_quality";
+    case StepId::kInstallCreditsText: return "install_credits_text";
     case StepId::kStartTokenAuth: return "start_token_auth";
     case StepId::kInstallLoginPrompt: return "install_login_prompt";
     case StepId::kStartBridge: return "start_bridge";
@@ -223,6 +224,10 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     } else {
       r.Run(StepId::kInstallTextureQuality, [&] { return steps.InstallTextureQuality(texture, textureCounters); });
     }
+
+    // The project section of the CREDITS page (#970): every launch, no counters; it points two libr15 cursor stores at a
+    // buffer the sentinel builds, so it runs before the page can be opened.
+    r.Run(StepId::kInstallCreditsText, [&] { return steps.InstallCreditsText(); });
 
     bool tokenOk = false;
     if (wantTokenAuth) {
