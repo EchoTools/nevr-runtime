@@ -370,12 +370,14 @@ release-quest-apk tag store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
 # docs/adr/0007-quest-obb-mount-skip.md).
 # The download is cached at build/android-arm64/quest-data/_data.zip (~937 MB; a
 # different data_sha256 gets its own _data-<hash prefix>.zip),
-# written as .part and renamed only after the hash matches. data_sha256
-# is trust-on-first-use: it is the SHA-256 of the file served from data_url when
-# the pin was taken, not a publisher-signed value; a cached file that does not
-# match its own hash is deleted. The download and every long adb call have time
+# written as .part and renamed only after the hash matches. The default data_url is the
+# content-addressed file the signed release manifest (https://evr.echo.taxi/nevr-runtime/manifest.json)
+# lists as its `game-data` artifact, named echovr-data-<first 12 hex of the sha256>.zip, and the
+# default data_sha256 is that artifact's sha256. A data_url or data_sha256 passed by hand is
+# trust-on-first-use: the SHA-256 of whatever the URL served when the pin was taken, not a
+# publisher-signed value. A cached file that does not match its own hash is deleted. The download and every long adb call have time
 # limits. The recipe body is tools/quest-install.sh (tested in tools/tests/test_quest_install.py).
-quest-install yes="" apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" data_url="https://mia.cdn.echo.taxi/_data.zip" data_sha256="fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c":
+quest-install yes="" apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" data_url="https://evr.echo.taxi/nevr-runtime/data/echovr-data-fc2eedeacc50.zip" data_sha256="fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c":
     tools/quest-install.sh {{ quote(yes) }} {{ quote(apk) }} {{ quote(data_url) }} {{ quote(data_sha256) }}
 
 # --- Tests ---

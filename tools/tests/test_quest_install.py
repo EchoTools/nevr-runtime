@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -12,6 +13,8 @@ import unittest
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools/quest-install.sh"
 DEFAULT_SHA = "fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c"
+# The game data under the name made from its own bytes: the signed manifest's `game-data` artifact.
+VERSIONED_URL = "https://evr.echo.taxi/nevr-runtime/data/echovr-data-fc2eedeacc50.zip"
 BODY = b"game-data-zip"
 BODY_SHA = hashlib.sha256(BODY).hexdigest()
 ONE_DEVICE = "List of devices attached\nQUEST123\tdevice\n"
@@ -208,6 +211,42 @@ class QuestInstallTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("does not match pinned SHA-256", result.stderr)
         self.assertEqual(list((self.work / "build/android-arm64/quest-data").glob("*.part")), [])
+
+    def shipped_defaults(self):
+        """The URL and digest each installer defaults to, read from its own source."""
+        just = re.search(r'^quest-install .*?data_url="([^"]+)" data_sha256="([0-9a-f]{64})":', (REPO / "justfile").read_text(), re.M)
+        ps1 = (REPO / "tools/quest-install.ps1").read_text()
+        ps1_url = re.search(r"\$DataUrl = '([^']+)'", ps1)
+        ps1_sha = re.search(r"\$DataSha256 = '([0-9a-f]{64})'", ps1)
+        sh_sha = re.search(r"^default_data_sha256=([0-9a-f]{64})$", SCRIPT.read_text(), re.M)
+        self.assertTrue(just and ps1_url and ps1_sha and sh_sha, "a default was not found")
+        return {"justfile": (just.group(1), just.group(2)), "ps1": (ps1_url.group(1), ps1_sha.group(1)),
+                "sh": (None, sh_sha.group(1))}
+
+    def test_the_installers_default_to_the_versioned_content_addressed_file(self):
+        defaults = self.shipped_defaults()
+        for name, (url, sha) in defaults.items():
+            self.assertEqual(sha, DEFAULT_SHA, name)
+            if url is not None:
+                self.assertEqual(url, VERSIONED_URL, name)
+                # The file name is the first 12 hex of the digest it must have, so the URL cannot name other bytes.
+                self.assertEqual(url.rsplit("/", 1)[1], f"echovr-data-{sha[:12]}.zip", name)
+                self.assertNotIn("_data.zip", url, name)
+
+    def test_the_shipped_url_and_pin_refuse_a_file_that_is_not_the_pinned_zip(self):
+        url, sha = self.shipped_defaults()["justfile"]
+        result = self.run_script(sha=sha, url=url)  # the fake curl serves BODY, which is not the pinned file
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(f"does not match pinned SHA-256 {sha}", result.stderr)
+        self.assertEqual(self.curl_log.read_text().count(url), 1, self.curl_log.read_text())
+        calls = self.adb_calls()
+        self.assertFalse(any(c.startswith("push") or "unzip" in c for c in calls), calls)  # nothing pushed or extracted
+        cache = self.work / "build/android-arm64/quest-data"
+        self.assertEqual(list(cache.glob("*")), [])
+        # The control: the same URL with the digest of the body it serves is accepted and extracted.
+        ok = self.run_script(sha=BODY_SHA, url=url)
+        self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+        self.assertTrue(any("unzip -o" in c for c in self.adb_calls()))
 
     def test_a_failed_download_is_an_error(self):
         result = self.run_script(env=dict(self.env, FAKE_CURL_FAIL="1"))
