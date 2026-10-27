@@ -82,18 +82,6 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgHelpString(pArgSyntax, "-config-path", "[NEVR] Same as -config");
 
 
-  // #697: the names these flags had before they were kebab-case. The game's parser rejects a token with no
-  // syntax entry (ValidateMainArgs, echovr.exe 0x1400da830), so each stays registered, with no help string so
-  // `--help` never lists it. boot.cpp maps each to its new flag and warns once per run (core/cli_flags.h).
-  EchoVR::AddArgSyntax(pArgSyntax, "-noconsole", 0, 0, FALSE);
-  EchoVR::AddArgSyntax(pArgSyntax, "-noexitonerror", 0, 0, FALSE);
-  EchoVR::AddArgSyntax(pArgSyntax, "-exitonerror", 0, 0, FALSE);
-  EchoVR::AddArgSyntax(pArgSyntax, "-notelemetry", 0, 0, FALSE);
-  EchoVR::AddArgSyntax(pArgSyntax, "-telemetryrate", 1, 1, FALSE);
-  EchoVR::AddArgSyntax(pArgSyntax, "-telemetrydiag", 0, 0, FALSE);
-  EchoVR::AddArgSyntax(pArgSyntax, "-traceexports", 1, 1, FALSE);
-  EchoVR::AddArgSyntax(pArgSyntax, "-allow-dbgcore", 0, 0, FALSE);
-
   // GameMainWrapperHook removes -timestep and -fixedtimestep from the command line before the game parses
   // it when the line holds an option token exactly `-server` (crash_recovery.cpp, #515). They still reach
   // the game on a client, when the removal fails (out of memory) and when NEVR's reading of -server
