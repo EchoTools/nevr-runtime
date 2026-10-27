@@ -60,8 +60,9 @@ class TelemetryStreamer {
   // attempt presents. Leave unset for a configured telemetry_token.
   void SetBearerTokenRefresher(BearerReconnectAuth::Refresher refresher);
 
-  // Start streaming for a session. Launches the telemetry thread.
-  void Start(const std::string& sessionId, uint32_t rateHz = 30, bool isPrivateMatch = false);
+  // Start streaming for a session. Launches the telemetry thread. gameType is the engine's game-type symbol
+  // for the session (CaptureHeader.game_type), verbatim.
+  void Start(const std::string& sessionId, uint32_t rateHz = 30, const std::string& gameType = "echo_arena");
 
   // Stop streaming. Sends footer, joins telemetry thread.
   void Stop();
@@ -143,8 +144,8 @@ class TelemetryStreamer {
   BearerReconnectAuth m_bearerAuth{"[NEVR.TELEMETRY]"};
   BearerReconnectAuth::Refresher m_bearerRefresher;
 
-  // Match metadata
-  bool m_isPrivateMatch{false};
+  // Session metadata
+  std::string m_gameType{"echo_arena"};
 
   // Session tracking
   std::string m_sessionId;

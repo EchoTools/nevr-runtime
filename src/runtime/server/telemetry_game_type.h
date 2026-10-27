@@ -3,20 +3,31 @@
 // The game type a telemetry capture header carries (CaptureHeader.game_type, telemetry/v2/capture.proto).
 //
 // The schema's rule: the engine's own game-type symbol, verbatim and lowercase ("echo_arena",
-// "echo_arena_private"), never an enum. The runtime does not read the engine's symbol yet; until it does, the
-// game type of a session follows its lobby type, which is what the removed match_type and private_match fields
-// were derived from.
+// "echo_arena_private", "echo_combat"), never an enum. The engine reads that symbol from the session's
+// settings JSON: CR15NetClientLobby::LobbySessionStartingCB (echovr.exe 0x1401AD040) looks up the "gametype"
+// key with OwnerJson_GetSymbol. The runtime forwards the same settings JSON in LobbySessionCreate, so it reads
+// the key from there. When the key is absent or not a symbol, the game type falls back to the lobby type.
 
+#include <string>
 #include <string_view>
 
 #include "telemetry/v2/capture.pb.h"
 
 namespace nevr_telemetry_header {
 
-// "echo_arena_private" for a private lobby, "echo_arena" for a public one.
+// The fallback when the settings name no game type: "echo_arena_private" for a private lobby,
+// "echo_arena" for a public one.
 std::string_view GameTypeForLobby(bool isPrivateMatch);
 
-// Sets header->game_type() for the session's lobby type.
-void SetCaptureGameType(telemetry::v2::CaptureHeader* header, bool isPrivateMatch);
+struct SessionGameType {
+  std::string gameType;
+  bool fromSettings{false};  // true when the value is the settings JSON's "gametype", false when it is the fallback
+};
+
+// The game type of a session: the settings JSON's "gametype" when it names a symbol, else GameTypeForLobby.
+SessionGameType GameTypeForSession(const std::string& settingsJson, bool isPrivateMatch);
+
+// Sets header->game_type() to the session's game type.
+void SetCaptureGameType(telemetry::v2::CaptureHeader* header, std::string_view gameType);
 
 }  // namespace nevr_telemetry_header

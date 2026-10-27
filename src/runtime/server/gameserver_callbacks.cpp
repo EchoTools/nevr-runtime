@@ -1,5 +1,6 @@
 #include "runtime/server/gameserver.h"
 #include "runtime/server/registration_metadata.h"
+#include "runtime/server/telemetry_game_type.h"
 #include "core/hex_dump.h"
 #include "core/curl_global.h"
 #include <atomic>
@@ -132,10 +133,13 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
         // Access telemetry via the GameServerLib* — we need to add an accessor
         // This is called via OnTcpMsgProtobuf which has `self` as GameServerLib*
         if (self->GetTelemetry().IsConnected()) {
-          self->GetTelemetry().Start(
-              sessionCreate.lobby_session_id(),
-              g_telemetryRateHz,
-              sessionCreate.lobby_type() == 1);  // LOBBY_TYPE_PRIVATE
+          // The game type is the engine's symbol from the settings JSON; the lobby type is only the fallback (#996).
+          const auto gameType = nevr_telemetry_header::GameTypeForSession(sessionCreate.settings_json(),
+                                                                          sessionCreate.lobby_type() == 1);
+          Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] session=%s game_type=%s source=%s",
+              sessionCreate.lobby_session_id().c_str(), gameType.gameType.c_str(),
+              gameType.fromSettings ? "settings" : "lobby_type");
+          self->GetTelemetry().Start(sessionCreate.lobby_session_id(), g_telemetryRateHz, gameType.gameType);
         }
       }
 
