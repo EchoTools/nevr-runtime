@@ -384,7 +384,7 @@ TEST(ExportTracer, EndToEndAgainstAModuleNamedPnsrad) {
 
   // A lookup before the flag is known must not decide anything: the flag is read from the command line,
   // which was complete from process start.
-  nevr_export_tracer::ConfigureFromCommandLineText(L"echovr.exe -windowed -TraceExports pnsrad -no-console");
+  nevr_export_tracer::ConfigureFromCommandLineText(L"echovr.exe -windowed -Trace-Exports pnsrad -no-console");
   ASSERT_TRUE(nevr_export_tracer::Enabled());
 
   void* const wrapped = nevr_export_tracer::WrapSymbol(module, "FixtureCode", code);
