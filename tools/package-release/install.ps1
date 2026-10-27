@@ -159,7 +159,7 @@ if ((Test-Path -LiteralPath $state) -and (Test-StaleRecord)) {
   $staleAside = Join-Path $Dir ('nevr-install.txt.stale-' + (Get-Date).ToString('yyyyMMdd-HHmmss'))
   if (Test-Path -LiteralPath $staleAside) { throw "name exists: ${staleAside}" }
   Rename-Item -LiteralPath $state -NewName (Split-Path -Leaf $staleAside)
-  Write-Output "STALE nevr-install.txt set aside as $staleAside: BugSplat64.dll is the game's own file and the record does not list it, so this is a first install"
+  Write-Output "STALE nevr-install.txt set aside as ${staleAside}: BugSplat64.dll is the game's own file and the record does not list it, so this is a first install"
   Write-RunLog ("NOTE $scriptName STALE nevr-install.txt set aside as $staleAside Dir=$Dir")
 }
 
