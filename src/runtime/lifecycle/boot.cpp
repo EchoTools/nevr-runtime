@@ -17,6 +17,7 @@
 #include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/credits_block.h"
 #include "runtime/patch/credits_text_install.h"
+#include "runtime/patch/invite_wizard_hook.h"
 #include "runtime/patch/coop_ai_trace.h"
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/ext/plugin_trust.h"
@@ -611,6 +612,14 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     nevr_credits_text::Install(nevr_credits_block::kText, nevr_credits_block::kSize);
   } else {
     Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] credits_text skipped reason=server_mode (no credits page on a server)");
+  }
+
+  // #906, ADR 0017: observe the CREATE GAME / JOIN VIA CODE wizard's click metric. Client only, and it sends nothing
+  // yet (the worker waits for the service RPCs). It forwards every submit unchanged.
+  if (!g_isServer) {
+    nevr_invite_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
+  } else {
+    Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] wizard observer skipped reason=server_mode");
   }
 
   // N92: start the WebSocket bridge in-process, as part of this DLL rather than
