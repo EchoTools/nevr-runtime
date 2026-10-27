@@ -21,6 +21,7 @@
 #include "permission_wait_hook.h"
 #include "process_end_hook.h"
 #include "texture_quality_hook.h"
+#include "system_ui_hook.h"
 #include "resource_request_hook.h"
 #include "toast_presenter.h"
 #include "vk_ext_window.h"
@@ -106,6 +107,9 @@ bool InstallPermissionWaitHook() noexcept {
     options.probe_enabled = nevr_build::kIsDev;  // the headset probe is for development builds only
     if (!nevr_build::kIsDev) options.hold_ms = 0;  // no presenter is known to draw on a headset: a release build holds nothing
     nevr_quest::data_wiring::Install(options);
+    // The main-menu QUIT's system UI (#392) is one more GOT hook, installed on every launch from this step. A refused
+    // install is logged by GotHook and by the hook's own line.
+    nevr_quest::system_ui::Install();
     return nevr_quest::permission_wait::Install();
 }
 
