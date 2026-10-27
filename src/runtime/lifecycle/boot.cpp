@@ -523,11 +523,18 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
                   "[NEVR.PATCH] dbgcore.dll present in game directory — "
                   "legacy injection permitted (-skip-dbgcore-check)");
             } else if (g_isServer) {
+              // The refusal is logged before FatalError: on a client FatalError only shows a dialog (#726).
+              Log(EchoVR::LogLevel::Error,
+                  "[NEVR.PATCH] dbgcore.dll present in game directory — refusing to start "
+                  "(pass -skip-dbgcore-check to permit legacy injection)");
               FatalError(
                   "dbgcore.dll detected in game directory — legacy DLL hijack artifact; remove "
                   "it or pass -skip-dbgcore-check",
                   "dbgcore.dll hijack detected");
             } else {
+              Log(EchoVR::LogLevel::Error,
+                  "[NEVR.PATCH] dbgcore.dll present in game directory — refusing to start "
+                  "(pass -skip-dbgcore-check to permit legacy injection)");
               FatalError(
                   "dbgcore.dll detected in the game directory.\n\n"
                   "This file is a legacy DLL hijack artifact. If you are intentionally using "
