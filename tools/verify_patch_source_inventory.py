@@ -20,6 +20,7 @@ DEFAULT_CMAKE = REPO / "src/runtime/CMakeLists.txt"
 # Updating this list is an intentional review point: adding or removing a
 # runtime patch must update the expected inventory in the same reviewed change.
 EXPECTED_PATCH_SOURCES = (
+    "patch/arena_public_clock.cpp",
     "patch/asset_cache.cpp",
     "patch/asset_cdn.cpp",
     "patch/asset_registry.cpp",
@@ -45,7 +46,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/ui_texture_mips.cpp",
     "patch/xpid_patch.cpp",
 )
-EXPECTED_PATCH_SOURCE_COUNT = 24
+EXPECTED_PATCH_SOURCE_COUNT = 25
 
 
 class InventoryError(Exception):

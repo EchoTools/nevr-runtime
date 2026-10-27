@@ -86,6 +86,7 @@ set(PATCHES_SOURCES
     "patch/party_invite_gate.cpp"
     "patch/invite_wizard_hook.cpp"
     "patch/early_quit_lockout.cpp"
+    "patch/arena_public_clock.cpp"
     "patch/lobby_full_backoff.cpp"
     "patch/menu_version_label.cpp"
     "patch/splash_skip.cpp"
@@ -147,6 +148,8 @@ set(PATCHES_HEADERS
     "patch/mode_patches.h"
     "patch/coop_ai_trace.h"
     "patch/coop_ai_trace_rules.h"
+    "patch/arena_public_clock.h"
+    "patch/arena_public_clock_rules.h"
     "lifecycle/crash_recovery.h"
     "lifecycle/return_to_lobby.h"
     "lifecycle/return_to_lobby_hold.h"
@@ -868,6 +871,14 @@ if(BUILD_TESTING)
     target_include_directories(test_arena_round_time PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_arena_round_time PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_arena_round_time DISCOVERY_MODE PRE_TEST)
+
+    # #982: the public Arena match clock keeps counting through goals (patch/arena_public_clock_rules.h).
+    add_executable(test_arena_public_clock tests/test_arena_public_clock.cpp lifecycle/arena_round_time.cpp)
+    set_source_files_properties(tests/test_arena_public_clock.cpp lifecycle/arena_round_time.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_arena_public_clock PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_arena_public_clock PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_arena_public_clock DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_callback_unregistration
       tests/test_callback_unregistration.cpp
