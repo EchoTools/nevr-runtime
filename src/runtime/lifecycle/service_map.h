@@ -37,6 +37,10 @@ namespace nevr_cfg {
 /// caller then keeps that key's old source. This map IS the cutover.
 std::string FlatKeyToYamlPath(const std::string& flatKey);
 
+/// The config.yaml dotted path of every migrated flat key, one per entry of the cutover map (#583). The schema test
+/// checks each against nevr::KnownConfigKeyPaths(), so a key the PC reads cannot be missing from the unknown-key list.
+std::vector<std::string> MigratedYamlPaths();
+
 /// Read a migrated flat key from `cfg`. nullopt when the key is unmapped or the
 /// path is absent; may return an empty string when the key is present-but-empty
 /// (the caller applies the same `[0] != '\0'` check the JSON readers did).

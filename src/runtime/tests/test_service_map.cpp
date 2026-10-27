@@ -117,6 +117,18 @@ TEST(ServiceMap, FlatKeyToYamlPath_EveryMigratedKey) {
   EXPECT_NE(FlatKeyToYamlPath("serverdb_host"), FlatKeyToYamlPath("nevr_serverdb_uri"));
 }
 
+// #583: every section path the PC migrates a key to is on the schema the unknown-key count checks against, so a key the
+// PC reads is never counted as unknown. `guilds` and the x- extensions are top-level, not sections, and are not checked.
+TEST(ServiceMap, EveryMigratedPathIsOnTheConfigSchema) {
+  const std::vector<std::string> known = nevr::KnownConfigKeyPaths();
+  for (const std::string& path : MigratedYamlPaths()) {
+    if (path == "guilds" || path.rfind("x-", 0) == 0) continue;
+    bool onSchema = false;
+    for (const std::string& k : known) onSchema = onSchema || (k == path);
+    EXPECT_TRUE(onSchema) << path << " is read by the PC but is not on the config schema";
+  }
+}
+
 TEST(ServiceMap, FlatKeyToYamlPath_UnmigratedKeysAreEmpty) {
   // Keys no consumer reads through the flat map: publisher_lock is read elsewhere
   // (or not at all); anything unknown is empty. (nevr_http_uri, nevr_serverdb_uri,

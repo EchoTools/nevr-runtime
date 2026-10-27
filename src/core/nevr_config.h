@@ -137,6 +137,11 @@ class NevrConfig {
   /// Names of unset bare ${VAR} references found at load, each once, sorted. Their text stays in
   /// the value as written; the loader does not log them (LogUnsetBareVars, or the caller, does).
   const std::vector<std::string>& UnsetBareVars() const { return unsetBareVars_; }
+  /// Mistakes in the file's shape that the parser keeps going past (#583). DuplicateKeyCount: a key that repeats in
+  /// one mapping (the first value is the one read). UnknownKeyCount: a key under a section in KnownConfigKeyPaths()
+  /// that no reader reads (ignored). Counts only: the names and values stay out, as the Quest's log requires.
+  std::size_t DuplicateKeyCount() const { return duplicateKeys_; }
+  std::size_t UnknownKeyCount() const { return unknownKeys_; }
 
  private:
   struct Impl;                       // holds the interpolated yaml-cpp tree (.cpp only)
@@ -144,11 +149,22 @@ class NevrConfig {
   std::vector<PluginSpec> plugins_;
   bool empty_ = true;
   std::vector<std::string> unsetBareVars_;
+  std::size_t duplicateKeys_ = 0;
+  std::size_t unknownKeys_ = 0;
 };
+
+/// Every dotted path a reader of either build reads under a known section, sorted (#583): the one list the unknown-key
+/// count checks against. A section not listed here (plugins, guilds, profiles, version, x-* extensions) is free-form
+/// and is not checked.
+std::vector<std::string> KnownConfigKeyPaths();
 
 /// PC only (defined in nevr_config_policy.cpp): logs one Warning per name in cfg.UnsetBareVars(), through Log().
 /// The parser itself logs nothing, so the Quest can build it without the PC logger.
 void LogUnsetBareVars(const NevrConfig& cfg);
+
+/// PC only (defined in nevr_config_policy.cpp): one Warning with the duplicate and unknown-key counts when either is
+/// non-zero (#583). Names and values are not logged.
+void LogShapeWarnings(const NevrConfig& cfg);
 
 /// Case-insensitive true/yes/on/1 and false/no/off/0; nullopt for anything else. The plugin-list
 /// flags and the flat-key consumers use it; NevrConfig::GetBool also falls back to yaml-cpp's
