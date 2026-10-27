@@ -123,9 +123,11 @@ $runtimeTarget = Join-Path $Dir 'nevr-runtime.dll'
 if (-not (Test-Path -LiteralPath $target)) { throw "no BugSplat64.dll in $Dir to back up" }
 $state = Join-Path $Dir 'nevr-install.txt'
 $originalSha = Get-Sha $target
-# A NEVR runtime carries the NEVR-BUILD identity literal (#759).
+# A NEVR runtime carries the NEVR-BUILD identity literal (#759). A runtime built before that literal (#785) carries
+# the CDN user agent 'nevr-runtime/1.0' (src/runtime/patch/asset_cdn.cpp) instead, so either one marks a runtime.
 function Test-NevrRuntime([string]$path) {
-  return [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($path)).Contains('NEVR-BUILD ')
+  $text = [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($path))
+  return $text.Contains('NEVR-BUILD ') -or $text.Contains('nevr-runtime/1.0')
 }
 
 # The state file: the set-aside names (the game's BugSplat64.dll, a legacy dbgcore.dll, a nevr-runtime.dll that was

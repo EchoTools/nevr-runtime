@@ -4,8 +4,8 @@
 # nevr-runtime.dll, the file install.ps1 added, aside as nevr-runtime.dll.uninstalled-<timestamp>. A
 # nevr-runtime.dll that install.ps1 had set aside (nevr-runtime.dll.original-<stamp>, named by runtime_aside in
 # nevr-install.txt) goes back under its own name. It never deletes anything: the backup stays where it is, and nothing is overwritten that was not put there by
-# install.ps1. A nevr-runtime.dll that is not a NEVR runtime (it carries no NEVR-BUILD identity text) is left
-# alone and reported.
+# install.ps1. A nevr-runtime.dll that is not a NEVR runtime (it carries neither the NEVR-BUILD identity text nor the
+# CDN user agent 'nevr-runtime/1.0', #785) is left alone and reported.
 #
 # usage:  powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 [-Dir <...\bin\win10>] [-Pause | -NoPause]
 # Without -Dir the folder is asked for.
@@ -14,6 +14,12 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
 
 function Get-Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLower() }
+# A NEVR runtime carries the NEVR-BUILD identity literal (#759); one built before that literal (#785) carries the CDN
+# user agent 'nevr-runtime/1.0' (src/runtime/patch/asset_cdn.cpp). Either one marks a runtime.
+function Test-NevrRuntime([string]$path) {
+  $text = [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($path))
+  return $text.Contains('NEVR-BUILD ') -or $text.Contains('nevr-runtime/1.0')
+}
 
 # #736: a tester who double-clicks this script must see why it stopped. Every error is printed plainly, appended
 # with the time and the folder to nevr-install.log next to this script, and the window waits for Enter when it was
@@ -74,7 +80,7 @@ $legacyAside = $values['legacy']
 $priorRuntimeAside = if ($values.ContainsKey('runtime_aside')) { $values['runtime_aside'] } else { '' }
 if (-not (Test-Path -LiteralPath $backup)) { throw "the backup is gone: ${backup}; nothing was changed" }
 # #779: an install made before #762 may have saved a NEVR runtime as the original; restoring it would restore the runtime.
-if ([System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($backup)).Contains('NEVR-BUILD ')) {
+if (Test-NevrRuntime $backup) {
   throw "the backup ${backup} is a NEVR runtime, not the game's own file (an earlier install.ps1 saved it); nothing was changed. Restore the game's original BugSplat64.dll (for example, Verify Files in the Meta Horizon app), then delete $state"
 }
 $target = Join-Path $Dir 'BugSplat64.dll'
@@ -91,7 +97,7 @@ if (Test-Path -LiteralPath $sums) {
   }
 }
 # A DLL carrying the NEVR-BUILD identity literal is a NEVR runtime: putting the original back over it is safe.
-$isRuntime = (Test-Path -LiteralPath $target) -and [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($target)).Contains('NEVR-BUILD ')
+$isRuntime = (Test-Path -LiteralPath $target) -and (Test-NevrRuntime $target)
 if ((Test-Path -LiteralPath $target) -and ($known -notcontains (Get-Sha $target)) -and -not $isRuntime) {
   throw 'BugSplat64.dll is not the one install.ps1 put there (changed since); nothing was changed'
 }
@@ -114,13 +120,13 @@ if ($legacyAside -ne '') {
 $runtimeTarget = Join-Path $Dir 'nevr-runtime.dll'
 $runtimeRemoved = $false
 if (Test-Path -LiteralPath $runtimeTarget) {
-  if ([System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($runtimeTarget)).Contains('NEVR-BUILD ')) {
+  if (Test-NevrRuntime $runtimeTarget) {
     $runtimeAside = 'nevr-runtime.dll.uninstalled-' + (Get-Date).ToString('yyyyMMdd-HHmmss')
     Rename-Item -LiteralPath $runtimeTarget -NewName $runtimeAside
     $runtimeRemoved = $true
     Write-Output "SET ASIDE nevr-runtime.dll as $runtimeAside"
   } else {
-    Write-Output 'LEFT nevr-runtime.dll: it is not a NEVR runtime (no NEVR-BUILD identity text), so install.ps1 did not put it there'
+    Write-Output 'LEFT nevr-runtime.dll: it is not a NEVR runtime (no NEVR-BUILD identity text or nevr-runtime/1.0 user agent), so install.ps1 did not put it there'
   }
 }
 # Then the file that stood there before install.ps1 goes back, when the name is free; it is never put over another file.
