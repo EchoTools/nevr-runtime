@@ -5,6 +5,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -14,6 +15,7 @@ import release_audience_section as audience  # noqa: E402
 
 TRAIN = ROOT / ".github" / "workflows" / "release-train.yml"
 CHECK = ROOT / "tools" / "release_check_draft.sh"
+AUDIENCE_TOOL = ROOT / "tools" / "release_audience_section.py"
 
 
 def step_names(text: str, job: str) -> list[str]:
@@ -154,6 +156,53 @@ class AudienceSection(unittest.TestCase):
 
     def test_it_always_ends_with_what_was_not_tested(self) -> None:
         self.assertTrue(audience.sections([]).rstrip().endswith(audience.NOT_TESTED))
+
+    def test_arena_changes_are_for_server_hosts(self) -> None:
+        out = audience.sections(["fix(arena): public Arena on a server starts at 8:00 (refs #982) (#1091)"])
+        hosts = out.split("### For server hosts", 1)[1].split("### For plugin developers", 1)[0]
+        players = out.split("### For players", 1)[1].split("### For server hosts", 1)[0]
+        self.assertIn("public Arena on a server starts at 8:00", hosts)
+        self.assertNotIn("public Arena", players)
+
+    def test_a_release_note_line_replaces_the_subject(self) -> None:
+        message = (
+            "feat(runtime): logs, config.yaml and caches resolve under the nevr root (#1090)\n\n"
+            "Longer body.\nRelease-note: logs and caches move to the nevr folder; config.yaml stays\n"
+            "Co-Authored-By: Someone <a@example.com>"
+        )
+        out = audience.sections([message])
+        self.assertIn("- logs and caches move to the nevr folder; config.yaml stays", out)
+        self.assertNotIn("config.yaml and caches resolve", out)
+
+    def test_a_release_note_keeps_the_breaking_mark_and_the_audience(self) -> None:
+        out = audience.sections(["feat(server)!: a subject\n\nRelease-note: what a host sees"])
+        hosts = out.split("### For server hosts", 1)[1].split("### For plugin developers", 1)[0]
+        self.assertIn("- BREAKING: what a host sees", hosts)
+
+    def test_a_message_without_a_release_note_is_listed_by_its_subject(self) -> None:
+        out = audience.sections(["fix(quest): the subject\n\nA body that mentions Release-note: only mid-line."])
+        self.assertIn("- the subject", out)
+
+    def test_the_not_tested_text_does_not_say_verify_ran_on_each_pull_request(self) -> None:
+        self.assertNotIn("ran on each pull request", audience.NOT_TESTED)
+        self.assertIn("quick check", audience.NOT_TESTED)
+        self.assertIn("#1008", audience.NOT_TESTED)
+
+    def test_the_log_is_read_with_bodies_and_split_per_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            git = ["git", "-C", tmp, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
+            subprocess.run(["git", "init", "-q", tmp], check=True)
+            for message in ("chore: base", "feat(arena): one\n\nRelease-note: said by the body", "fix(quest): two"):
+                subprocess.run(git + ["commit", "-q", "--allow-empty", "-m", message], check=True)
+            subprocess.run(git + ["branch", "base", "HEAD~2"], check=True)
+            result = subprocess.run(
+                [sys.executable, "-I", str(AUDIENCE_TOOL), "--repo", tmp, "--base", "base", "--rev", "HEAD"],
+                capture_output=True, text=True,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("- said by the body", result.stdout)
+        self.assertIn("- two", result.stdout)
+        self.assertNotIn("- one", result.stdout)
 
 
 if __name__ == "__main__":
