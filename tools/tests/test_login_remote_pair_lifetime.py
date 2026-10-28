@@ -34,6 +34,16 @@ def bridge_code() -> str:
     return strip_comments(BRIDGE.read_text(encoding="utf-8"))
 
 
+def routing_block(code: str) -> str:
+    """The routing decision in the login remote's Message branch: from the pair lookup to the drop check."""
+    start = code.index("const auto pit = g_pairs.find(gameWsPtr);")
+    return code[start:code.index("if (target == nullptr)", start)]
+
+
+FOUND_BRANCH = "if (pit != g_pairs.end()) {"
+ERASED_BRANCH = "} else if (remoteAddress == g_loginRemoteWs.get()) {"
+
+
 class LoginRemotePairLifetime(unittest.TestCase):
     def test_no_callback_dereferences_the_captured_pair_pointer(self):
         derefs = re.findall(r"\bpairPtr\s*->", bridge_code())
@@ -47,6 +57,26 @@ class LoginRemotePairLifetime(unittest.TestCase):
     def test_the_routing_lookup_checks_the_pair_exists_before_it_uses_it(self):
         self.assertRegex(bridge_code(), r"const auto pit = g_pairs\.find\(gameWsPtr\);[\s\S]{0,160}?pit != g_pairs\.end\(\)",
                          "a closed game socket's pair is gone: the routing check tests for it before reading remoteWs")
+
+    def test_gamewsptr_is_used_only_while_its_pair_is_present(self):
+        block = routing_block(bridge_code())
+        self.assertEqual(block.count("target = gameWsPtr;"), 1, "the one send to the game socket")
+        self.assertIn(FOUND_BRANCH, block)
+        self.assertIn(ERASED_BRANCH, block)
+        send = block.index("target = gameWsPtr;")
+        self.assertLess(block.index(FOUND_BRANCH), send, "the game-socket route is inside the found-pair branch")
+        self.assertLess(send, block.index(ERASED_BRANCH), "no game-socket route after the erased-pair branch starts")
+
+    def test_an_erased_pair_routes_a_shared_login_remote_and_drops_any_other(self):
+        block = routing_block(bridge_code())
+        erased = block[block.index(ERASED_BRANCH):]
+        # Erased pair, remote still the login remote: the matchmaker route, and nothing else in that branch.
+        self.assertRegex(erased, r"^\} else if \(remoteAddress == g_loginRemoteWs\.get\(\)\) \{\s*SharedRouteLocked\(&target\);\s*\}")
+        # Erased pair, any other remote: the chain has no else after the login-remote case, so nothing sets target
+        # and it stays null into the drop check.
+        self.assertNotIn("else", erased[len(ERASED_BRANCH):])
+        self.assertNotIn("gameWsPtr", erased)
+        self.assertIn("if (target == nullptr)", bridge_code())
 
 
 if __name__ == "__main__":

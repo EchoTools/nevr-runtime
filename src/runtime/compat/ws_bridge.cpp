@@ -2123,12 +2123,19 @@ void InstallWebSocketBridge() {
                         {
                           std::lock_guard<std::mutex> lk(g_pairsMutex);
                           const auto pit = g_pairs.find(gameWsPtr);
-                          const bool sharedLogin = pit != g_pairs.end() && pit->second->remoteWs != nullptr &&
-                                                   pit->second->remoteWs == g_loginRemoteWs;
-                          if (sharedLogin)
+                          if (pit != g_pairs.end()) {
+                            // The pair is present, so its game socket has not closed and gameWsPtr is alive.
+                            if (pit->second->remoteWs != nullptr && pit->second->remoteWs == g_loginRemoteWs)
+                              SharedRouteLocked(&target);
+                            else
+                              target = gameWsPtr;
+                          } else if (remoteAddress == g_loginRemoteWs.get()) {
+                            // The login game socket closed and its pair is gone, but the shared login remote still
+                            // carries this callback: route to the live matchmaker connection. gameWsPtr is not used.
                             SharedRouteLocked(&target);
-                          else
-                            target = gameWsPtr;
+                          }
+                          // Otherwise the game socket closed and nothing shares this remote: target stays null, and
+                          // the frame is dropped below. gameWsPtr is never used without its pair.
                         }
                         if (target == nullptr) {
                           LogSharedFrameDropped(rmsg->str.size());

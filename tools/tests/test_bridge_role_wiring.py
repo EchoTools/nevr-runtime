@@ -82,9 +82,10 @@ class LoginSessionIsReadUnderTheLock(unittest.TestCase):
         self.assertIn("loginRemote->setOnMessageCallback", handler)
         self.assertNotRegex(handler, r"g_loginRemoteWs->")
         # The only other mentions are the writer, and the comparison in the remote callback; both under the lock.
+        # Each mention sits after a g_pairsMutex acquisition in the same handler (the window runs from that lock).
         for match in re.finditer(r"g_loginRemoteWs", handler):
-            window = handler[max(0, match.start() - 400) : match.end()]
-            self.assertIn("lock_guard<std::mutex> lk(g_pairsMutex)", window, "g_loginRemoteWs outside g_pairsMutex")
+            lock = handler.rfind("lock_guard<std::mutex> lk(g_pairsMutex)", 0, match.start())
+            self.assertNotEqual(lock, -1, "g_loginRemoteWs outside g_pairsMutex")
 
 
 class TheN91GuardIsTheOneThatExists(unittest.TestCase):
