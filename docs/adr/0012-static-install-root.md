@@ -54,6 +54,8 @@ One root per game: `%LOCALAPPDATA%\nevr\echovr\`. The install folder keeps the g
 These names and this layout are fixed by this record (see "Names this record fixes"). Where a file's own name is not in the table
 (the caches), the pull request that moves it names it and this record is amended.
 
+What a launcher or installer does to match this layout, and what it can read afterwards, is in `docs/reference/launcher-install-root.md`.
+
 Updating `nevr-runtime.dll` or a plugin writes only the root, so it needs no administrator rights, and the install can stay in
 `Program Files` or a Steam library untouched. A clean install is the game's files plus `BugSplat64.dll` in the install folder, and
 the installer puts `nevr-runtime.dll` in the root.
