@@ -231,6 +231,9 @@ fi
 run_log=$(newest_run_log)
 if [[ -z "$run_log" ]]; then
   echo "FAIL: no game log written since this run started ($LOGDIR)" >&2
+  # The runtime writes the game log, so a host that stopped the game before the runtime ran leaves none; the host's
+  # own record says why (#1122).
+  if cause=$(host_stop_cause "$LOGDIR" "$start"); then echo "FAIL: $cause" >&2; fi
   exit 1
 fi
 count() { grep -c "$1" "$run_log" || test $? -eq 1; }

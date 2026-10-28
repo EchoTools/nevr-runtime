@@ -183,6 +183,7 @@ count_game_windows() {
 
 find "$GAME_ROOT/echovr/" -iname '*.dmp' -newermt '-1 minute' 2>/dev/null | wc -l > "$OUT/dumps_before.txt"
 
+RUN_START_EPOCH=$(date +%s)  # host_stop_cause reads the host's record from here on
 echo "=== Starting echovr.exe ${ARGS[*]} ===" | tee -a "$LOG"
 ( cd "$GAME_DIR" && exec wine ./echovr.exe "${ARGS[@]}" ) >> "$LOG" 2>&1 9>&- &
 WINE_PID=$!
@@ -242,4 +243,6 @@ ls -t "$GAME_DIR/logs/"*.jsonl 2>/dev/null | head -1 > "$OUT/jsonl_path.txt"
   echo "engine flags lines  = $(grep -c 'engine flags' "$LOG")"
   grep 'engine flags' "$LOG" || true
   echo "log                 = $LOG"
+  # A host that stopped the game before the runtime ran leaves no game log; the host's record says why (#1122).
+  echo "host stop           = $(host_stop_cause "$GAME_ROOT/echovr/.wineprefix/drive_c/users/$(id -un)/AppData/Local/nevr/echovr/logs" "$RUN_START_EPOCH" || echo none)"
 } | tee "$OUT/summary.txt"
