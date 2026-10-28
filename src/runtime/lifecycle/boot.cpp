@@ -18,6 +18,8 @@
 #include "runtime/patch/credits_block.h"
 #include "runtime/patch/credits_text_install.h"
 #include "runtime/patch/invite_choice_hook.h"
+#include "runtime/patch/invite_config.h"
+#include "runtime/patch/invite_service.h"
 #include "runtime/patch/menu_cards.h"
 #include "runtime/patch/ui_text_writer.h"
 #include "runtime/patch/invite_wizard_hook.h"
@@ -31,6 +33,10 @@
 // Statically-linked module entry points (the modules are linked into
 // BugSplat64.dll). Each module's symbols are prefixed to avoid
 // collisions — both define NvrModuleInit/NvrModuleApiVersion/etc.
+namespace nevr_token_auth {
+std::string GetToken();  // token_auth.h: thread-safe; statically linked, so called directly
+}
+
 extern "C" {
 // platform_compat
 int platform_compat_Init(const NvrModuleContext* ctx);
@@ -634,12 +640,24 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     Log(EchoVR::LogLevel::Info, "[NEVR.MENU] main-menu cards skipped reason=server_mode (a server draws no menu)");
   }
 
-  // #906, ADR 0017: observe the CREATE GAME / JOIN VIA CODE wizard's click metric. Client only, and it sends nothing
-  // yet (the worker waits for the service RPCs). It forwards every submit unchanged.
+  // #906, #1156, ADR 0017: observe the CREATE GAME / JOIN VIA CODE wizard's click metric. Client only. A typed code is
+  // posted to the game service when network.invite_codes is on (the service below); a create is only planned until the
+  // menu can show its result. The hook forwards every submit unchanged.
   if (!g_isServer) {
+    nevr_invite_service::Settings invite;
+    invite.invite_codes = nevr_invite::ParseSwitch(NevrCfgGetFlat("nevr_invite_codes"));
+    const char* httpUri = NevrCfgGetFlat("nevr_http_uri");
+    invite.http_uri = httpUri != nullptr ? httpUri : "";
+    invite.token = [] { return nevr_token_auth::GetToken(); };  // thread-safe; the export TokenAuth_GetToken is not
+    invite.log = [](nevr_invite::LogLevel level, const std::string& line) {
+      Log(level == nevr_invite::LogLevel::Warning ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info, "%s", line.c_str());
+    };
+    invite.salt = std::to_string(GetTickCount64());
+    nevr_invite_service::Start(std::move(invite));
     nevr_invite_choice_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
     nevr_invite_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
   } else {
+    Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] service skipped reason=server_mode");
     Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] wizard observer skipped reason=server_mode");
     Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] choice observer skipped reason=server_mode");
   }

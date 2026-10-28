@@ -110,7 +110,11 @@ exports (an export whose RVA lies inside the export directory and names `dll.sym
   file, or a module already loaded in the process: `SuppliedByTheSystem`) is refused: a file put there before the load would be mapped unchecked.
 - An absent delay-load is not refused: it is resolved when first called, by a `LoadLibrary` the late-load filter checks then, and an
   optional one (`nvapi64.dll` on a machine without it) must not refuse a plugin that loads without it.
-System32 imports are the OS's.
+- A name that only System32 supplies (not an API set, not a module already loaded: `SuppliedBySystem32Only`) is loaded from System32 by its
+  full path before the plugin, and kept loaded until the plugin is staged. The loader searches the plugin's directory before System32
+  for a name that is not already loaded, and the check cannot hold a file that is not there, so a file put in the directory after the
+  check would otherwise map with the plugin; a module already loaded under the name is taken first. A staged plugin (`PinSystemDependencies`)
+  and a later load the filter accepts both pin, and a name that cannot be pinned refuses the plugin.
 
 **Plugin-initiated loads.** A plugin that calls `LoadLibrary` after its init, or from its `DllMain`, is not on the staged path.
 `DllLoadHook` (`src/runtime/hook/dll_load_hook.cpp`) hooks all four LoadLibrary variants; its filter in `plugin_loader.cpp` checks
@@ -121,6 +125,13 @@ the load against the same verifier and refuses (null, `ERROR_MOD_NOT_FOUND`) on 
   trailing dot or space cannot slip past a text compare), with the ANSI path converted through the code page;
 - a relative path with a directory part is refused whatever it leads to: the loader appends it to every directory it searches, each
   through links, so no list of candidates is complete. A plugin that needs such a load passes a full path.
+- a full path the filter accepts is loaded by the final path of the file it checked and holds, not by the caller's text: the hook
+  asks a rewriter (`AddLoadRewriter`) right after the filters and calls the real `LoadLibraryExW` with that path and the caller's flags,
+  so a link in the text that is pointed elsewhere after the check cannot lead the load to a file that was not checked. A bare name is
+  left to the OS search (the plugins directory may not be on it), and a file the filter cannot name is refused (#1177);
+The loader's own load of a staged plugin is not checked again, because `StageOne` checked the file: the path being loaded is kept per
+thread for the call, and the filter lets that path through only while this thread does not hold the loader lock. The plugin's `DllMain`
+runs inside the same call with the lock held, so a load made there, by that path or another, is checked (`PluginDllMainLoadTest`).
 An unsigned-allowed run logs the line `a plugin loads <file> after its init: <reason>, allowed because plugin signatures are not
 required in this run (plugin trust mode <mode>)` and allows it. Known gaps, recorded and not claimed closed: a load by an absolute path outside the plugins directory (it is
 not a plugin file); under Wine, a unix symbolic link to the plugins directory is not recognised by the final-path compare, so an
@@ -329,11 +340,14 @@ GTest under Wine, in `src/runtime/tests/test_plugin_signature.cpp`, `test_plugin
 | the real signed v5.4.3 `BugSplat64.dll` (`RealSigned.*`, fed by `tools/fetch_real_signed_dll.py` through `just test-auth-unit`) | accepted by the production pins |
 | import with no extension, absent import or forwarder not supplied by the system, absent delay-load | the first two refused, the third left to the late-load filter |
 | late load by a relative path with a directory part, in a signed-only run | refused whatever it leads to |
+| a signed plugin imports a System32 library; an unsigned file of that name is put in the plugins directory after the check (a staged plugin, and a later load) | the plugin loads and the planted file does not (`PluginSystemDependencyTest`) |
+| a staged plugin's `DllMain` loads the plugin's own path | checked by the filter (it holds the file); the loader's own load of it is not checked a second time |
+| late load by a full path, a link in it repointed after the check, signed-only run | the checked file loads; an unsigned-allowed run loads what the caller named |
 
 Mutants (AGENTS.md "What a PR carries"): drop the root check, drop the status test, compare the EKU by prefix, drop the digest check,
 drop the imprint binding, pass `pTime = now`, drop the denylist test, restore the unrestricted fallback, let the 64-file dependency cap fail open
 (a 65th dependency is then accepted), compare the late-load path as text instead of its final path (an 8.3 name, a `\\?\` prefix or a trailing dot
-or space then loads unchecked); each makes its row fail.
+or space then loads unchecked), let a late load go by the caller's text after the check, rewrite in an unsigned-allowed run, rewrite a bare name; each makes its row fail.
 
 Integration: a game copy with one signed fixture plugin and one unsigned, on the nested display; the run's log must contain the load
 line of the first and the refusal line of the second, and the login's `nevr_plugins` must list the second as failed.

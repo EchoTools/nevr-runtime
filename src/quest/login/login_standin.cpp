@@ -20,6 +20,7 @@ constexpr std::size_t kNameHex = 8;
 // 0 = empty, 1 = being written, 2 = published (acquire to read the buffers).
 std::atomic<int> g_state{0};
 std::uint64_t g_org = 0;
+std::uint64_t g_user = 0;
 char g_org_text[21] = {};  // "%llu" of g_org; u64 max is 20 digits + NUL
 char g_token[kTokenHex + 1] = {};
 char g_nonce[kNonceHex + 1] = {};
@@ -66,6 +67,11 @@ void Generate() noexcept {
   if (!g_state.compare_exchange_strong(expected, 1, std::memory_order_acq_rel)) return;
   std::uint64_t org = 0;
   while (org == 0 || org == ~std::uint64_t{0}) arc4random_buf(&org, sizeof(org));
+  std::uint64_t user = 0;
+  while (user == 0 || user == org) {
+    arc4random_buf(&user, sizeof(user));
+    user &= ~(std::uint64_t{1} << 63);  // a non-negative signed 64-bit value, as CJson::SetInt stores it
+  }
   unsigned char raw[kTokenHex / 2];
   arc4random_buf(raw, sizeof(raw));
   Hex(raw, kTokenHex / 2, g_token);
@@ -75,6 +81,7 @@ void Generate() noexcept {
   std::memcpy(g_name, kNamePrefix, sizeof(kNamePrefix) - 1);
   Hex(raw, kNameHex / 2, g_name + sizeof(kNamePrefix) - 1);
   g_org = org;
+  g_user = user;
   // decimal "%llu" without snprintf (keep this allocation-free and format-locale-free)
   char tmp[21];
   std::size_t n = 0;
@@ -90,9 +97,11 @@ const char* OrgIdText() noexcept { return Published() ? g_org_text : ""; }
 const char* AccessToken() noexcept { return Published() ? g_token : ""; }
 const char* Nonce() noexcept { return Published() ? g_nonce : ""; }
 const char* OculusId() noexcept { return Published() ? g_name : ""; }
+std::uint64_t UserId() noexcept { return Published() ? g_user : 0; }
 
 bool IsOrgId(std::uint64_t value) noexcept { return Published() && value != 0 && value == g_org; }
 bool IsOrgIdText(const char* value) noexcept { return Published() && Equal(value, g_org_text, sizeof(g_org_text)); }
+bool IsUserId(std::uint64_t value) noexcept { return Published() && value != 0 && value == g_user; }
 bool IsAccessToken(const char* value) noexcept { return Published() && Equal(value, g_token, sizeof(g_token)); }
 bool IsNonce(const char* value) noexcept { return Published() && Equal(value, g_nonce, sizeof(g_nonce)); }
 bool IsOculusId(const char* value, std::size_t capacity) noexcept {
@@ -121,6 +130,8 @@ void SetForTest(std::uint64_t org, const char* token, const char* nonce, const c
   Copy(g_name, sizeof(g_name), oculus_id);
   g_state.store(2, std::memory_order_release);
 }
+
+void SetUserIdForTest(std::uint64_t user) noexcept { g_user = user; }
 
 void ResetForTest() noexcept { g_state.store(0, std::memory_order_release); }
 #endif

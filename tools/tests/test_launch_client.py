@@ -74,6 +74,11 @@ def open_gate(path: pathlib.Path) -> None:
     os.close(fd)
 
 
+def nevr_root_of(game_root: pathlib.Path) -> pathlib.Path:
+    """The nevr root of the prefix's Windows user: where the host looks for nevr-runtime.dll (ADR 0012)."""
+    return game_root / "echovr/.wineprefix/drive_c/users" / getpass.getuser() / "AppData/Local/nevr/echovr"
+
+
 def make_game_root(root: pathlib.Path) -> pathlib.Path:
     """A fake main checkout: echovr/bin/win10 with the original DLL, an empty _local and a log dir."""
     win10 = root / "echovr/bin/win10"
@@ -113,7 +118,9 @@ def make_fake_bin(directory: pathlib.Path) -> None:
         'else sleep "${FAKE_WINE_LOG_DELAY:-0}"; echo \'{"msg":"NetGame switching state (from logging in, to logged in)"}\' > "$logs/${FAKE_LOG_PREFIX:-nevr-fake-}$(date +%s%N).jsonl"; fi\n'
         '[[ -n "${FAKE_WINE_ARGS:-}" ]] && printf "%s\\n" "$*" > "$FAKE_WINE_ARGS"\n'
         'cmp -s "$FAKE_EXPECT_DLL" "./BugSplat64.dll" || { echo "wrong DLL deployed" >&2; exit 9; }\n'
-        '[[ -z "${FAKE_EXPECT_RUNTIME:-}" ]] || cmp -s "$FAKE_EXPECT_RUNTIME" "./nevr-runtime.dll" || { echo "wrong runtime deployed" >&2; exit 9; }\n'
+        '# The host loads the runtime from the nevr root (the folder above logs), never from beside itself (ADR 0012).\n'
+        '[[ -z "${FAKE_EXPECT_RUNTIME:-}" ]] || cmp -s "$FAKE_EXPECT_RUNTIME" "$logs/../nevr-runtime.dll" || { echo "wrong runtime deployed" >&2; exit 9; }\n'
+        '[[ -z "${FAKE_EXPECT_RUNTIME:-}" ]] || [[ ! -e "./nevr-runtime.dll" ]] || { echo "runtime deployed beside the host" >&2; exit 9; }\n'
         '(sleep 3 >/dev/null 2>&1) &  # a leftover child, like a lingering wineserver, must not keep the lock\n'
         '# (its output goes nowhere: a child holding the test\'s stdout pipe would make subprocess.run wait for it)\n'
         '# A directory where the DLL was makes the restore fail for any user; chmod 444 does not stop root,\n'
@@ -169,6 +176,10 @@ class LaunchClientTest(unittest.TestCase):
     def deployed(self) -> bytes:
         return (self.game_root / "echovr/bin/win10/BugSplat64.dll").read_bytes()
 
+    @property
+    def root_runtime(self) -> pathlib.Path:
+        return nevr_root_of(self.game_root) / "nevr-runtime.dll"
+
     def test_trace_exports_is_passed_to_the_game_and_absent_otherwise(self):
         args_file = self.tmp / "wine-args.txt"
         env = dict(self.env, FAKE_WINE_ARGS=str(args_file))
@@ -207,9 +218,10 @@ class LaunchClientTest(unittest.TestCase):
         result = self.run_script("--dll", str(self.dll))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("PASS: client reached logged in", result.stdout)
-        self.assertIn("original BugSplat64.dll restored and verified, nevr-runtime.dll removed", result.stdout)
+        self.assertIn("original BugSplat64.dll restored and verified, nevr-runtime.dll removed from the nevr root", result.stdout)
         self.assertEqual(self.deployed(), ORIGINAL)
         self.assertFalse((self.game_root / "echovr/bin/win10/nevr-runtime.dll").exists())
+        self.assertFalse(self.root_runtime.exists(), "the deployed runtime was left in the nevr root")
 
     def test_the_runtime_beside_the_dll_is_deployed_for_the_run_and_a_named_one_wins(self):
         other = self.tmp / "other-runtime.dll"
@@ -218,12 +230,22 @@ class LaunchClientTest(unittest.TestCase):
                                  env=dict(self.env, FAKE_EXPECT_RUNTIME=str(other)))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse((self.game_root / "echovr/bin/win10/nevr-runtime.dll").exists())
+        self.assertFalse(self.root_runtime.exists())
 
     def test_a_missing_runtime_is_refused_before_anything_is_deployed(self):
         self.runtime.unlink()
         result = self.run_script("--dll", str(self.dll))
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("nevr-runtime.dll does not exist", result.stderr)
+        self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_a_nevr_runtime_dll_already_in_the_nevr_root_is_drift(self):
+        self.root_runtime.parent.mkdir(parents=True, exist_ok=True)
+        self.root_runtime.write_bytes(b"LEFTOVER")
+        result = self.run_script("--dll", str(self.dll))
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertIn(f"{self.root_runtime} exists (expected absent)", result.stderr)
+        self.assertEqual(self.root_runtime.read_bytes(), b"LEFTOVER", "not deleted")
         self.assertEqual(self.deployed(), ORIGINAL)
 
     def test_a_nevr_runtime_dll_already_in_the_game_directory_is_drift(self):
@@ -603,6 +625,8 @@ class VerifyServerTest(unittest.TestCase):
         self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), ORIGINAL)
         self.assertFalse((self.win10 / "plugins/extra.dll").exists(), "a deployed plugin was left behind")
         self.assertFalse((self.win10 / "nevr-runtime.dll").exists(), "the deployed runtime was left behind")
+        self.assertFalse((nevr_root_of(self.game_root) / "nevr-runtime.dll").exists(),
+                         "the deployed runtime was left behind in the nevr root")
         self.assertIn("deployed files restored and verified", (self.tmp / "server-runs/run1/server.log").read_text())
 
     def test_the_timestep_flag_set_passes_the_options_a_server_strips(self):
@@ -832,7 +856,8 @@ class LaunchServerTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertLess(time.monotonic() - started, 2.0, "the run waited for the game's leftover child")
         self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), TEST_DLL)
-        self.assertEqual((self.win10 / "nevr-runtime.dll").read_bytes(), TEST_RUNTIME)
+        self.assertEqual((nevr_root_of(self.game_root) / "nevr-runtime.dll").read_bytes(), TEST_RUNTIME)
+        self.assertFalse((self.win10 / "nevr-runtime.dll").exists(), "the host never loads a runtime beside itself")
         self.assertFalse((self.checkout / "echovr").exists())
 
     def test_refuses_while_another_game_run_holds_the_lock(self):

@@ -118,6 +118,7 @@ struct FakeSteps final : Steps {
   bool InstallProcessEnd() override { return Step("process_end"); }
   bool InstallPermissionWait() override { return Step("permission_wait"); }
   bool InstallVkExtWindow() override { return Step("vk_ext_window"); }
+  bool InstallOsBuildGate() override { return Step("os_build_gate"); }
   bool InstallResourceRequestLog(bool counted) override { return Step(counted ? "resource" : "resource_uncounted"); }
   bool InstallTextureQuality(const nevr_quest::TextureChoice& choice, bool counted) override {
     textureSeen = choice;
@@ -126,6 +127,7 @@ struct FakeSteps final : Steps {
     return Step(counted || choice.level == nevr_quest::texture_quality::Level::kStock ? "texture" : "texture_uncounted");
   }
   bool InstallCreditsText() override { return Step("credits"); }
+  bool InstallMenuCards() override { return Step("menu_cards"); }
   bool StartTokenAuth() override { return Step("token"); }
   bool InstallLoginPrompt(bool counted) override { return Step(counted ? "prompt" : "prompt_uncounted"); }
   bool StartBridge() override { return Step("bridge"); }
@@ -167,7 +169,7 @@ struct FakeSteps final : Steps {
 void TestEverythingOffInstallsOnlyTheProofHookAndTheObbSkip() {
   FakeSteps s = FakeSteps::WithTexture(false, false, false, false);
   const ConstructorReport r = RunConstructorSequence(s);
-  const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_texture", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture", "credits"};
+  const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_texture", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "credits", "menu_cards"};
   QCHECK(s.calls == want);
   QCHECK(r.at(StepId::kStartTokenAuth).state == StepState::kSkipped);
   QCHECK(r.at(StepId::kInstallRedirect).state == StepState::kSkipped);
@@ -188,7 +190,7 @@ void TestFullStackOrder() {
   const ConstructorReport r = RunConstructorSequence(s);
   const std::vector<std::string> want = {"arm",       "config",     "plugins_plan", "reg_clock",  "reg_redirect", "reg_dlopen",
                                          "reg_login", "reg_social", "reg_prompt", "reg_obb",      "reg_resource", "reg_texture", "reporter",
-                                         "plugins_early", "clock",     "obb", "process_end", "permission_wait", "vk_ext_window", "resource", "texture", "credits",       "token",      "prompt",       "bridge",
+                                         "plugins_early", "clock",     "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "credits", "menu_cards",       "token",      "prompt",       "bridge",
                                          "redirect",  "social",     "dlopen",     "hwdump"};
   QCHECK(s.calls == want);
   QCHECK(s.loginArg && s.mmArg && s.pluginsArg);
@@ -202,7 +204,7 @@ void TestHwDumpIsIndependentAndContained() {
     FakeSteps s = FakeSteps::With(false, false, false, false);
     s.config.effective.hwdump = true;
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture", "credits", "hwdump"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "credits", "menu_cards", "hwdump"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kInstallHwDump).state == StepState::kOk);
   }
@@ -284,10 +286,43 @@ void TestVkExtWindowIsUnconditionalIndependentAndContained() {
   }
 }
 
+// The OS build floor (#945) runs on every launch like the Vulkan window: no feature and no configuration turns it off, it
+// needs no counters, it installs right after the Vulkan window hook and before token auth, and a failing or a throwing
+// step leaves every other step as it was.
+void TestOsBuildGateIsUnconditionalIndependentAndContained() {
+  {
+    FakeSteps s = FakeSteps::With(false, false, false, false);
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallOsBuildGate).state == StepState::kOk);
+    QCHECK(std::strcmp(StepName(StepId::kInstallOsBuildGate), "install_os_build_gate") == 0);
+    QCHECK(s.Index("os_build_gate") == s.Index("vk_ext_window") + 1);
+  }
+  {  // before token auth, which a configuration with the network features does run
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    RunConstructorSequence(s);
+    QCHECK(s.Index("os_build_gate") >= 0 && s.Index("os_build_gate") < s.Index("token"));
+  }
+  {  // the configuration cannot be resolved and the Vulkan window hook fails: still installed
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.failing = {"config", "vk_ext_window"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallOsBuildGate).state == StepState::kOk);
+    QCHECK(s.Ran("os_build_gate"));
+  }
+  for (const char* mode : {"fail", "throw"}) {
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    if (std::strcmp(mode, "fail") == 0) s.failing = {"os_build_gate"}; else s.throwing = {"os_build_gate"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallOsBuildGate).state != StepState::kOk);
+    QCHECK(s.Ran("token") && s.Ran("bridge") && s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen"));
+    QCHECK(s.Ran("texture"));
+  }
+}
+
 // The texture-quality hook (#943) runs on every launch like the Vulkan window: no feature turns it off, a configuration that
 // cannot be resolved gives it `stock` (a mistake, never the default and never a level that costs memory), the level the configuration did give reaches it with its source,
 // its counters are registered before the single reporter start (except for `stock`, which installs nothing and needs none),
-// it installs right after the Vulkan window hook and before token auth and the hardware dump, and a refused counter, a
+// it installs right after the OS build floor hook and before token auth and the hardware dump, and a refused counter, a
 // failing or a throwing step leaves every other step as it was.
 void TestTextureQualityIsUnconditionalIndependentAndContained() {
   namespace tq = nevr_quest::texture_quality;
@@ -300,7 +335,7 @@ void TestTextureQualityIsUnconditionalIndependentAndContained() {
     QCHECK(std::strcmp(StepName(StepId::kRegisterTextureQualityCounters), "register_texture_quality_counters") == 0);
     QCHECK(s.textureCalls == 1);
     QCHECK(s.textureSeen.level == tq::Level::kHigh && s.textureSeen.source == nevr_quest::Source::kFile);
-    QCHECK(s.Index("texture") == s.Index("vk_ext_window") + 1);
+    QCHECK(s.Index("texture") == s.Index("os_build_gate") + 1);
     QCHECK(s.Index("reg_texture") == s.Index("reg_obb") + 1 && s.Index("reg_texture") < s.Index("reporter"));
   }
   {  // before token auth and before the hardware dump, which shares the slot when this hook owns it
@@ -367,7 +402,7 @@ void TestTextureQualityIsUnconditionalIndependentAndContained() {
     QCHECK(s.Ran("token") && s.Ran("bridge") && s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen"));
   }
   // The steps beside it are not its prerequisites: any of them failing or throwing still leaves it installed.
-  for (const char* other : {"reg_clock", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window"}) {
+  for (const char* other : {"reg_clock", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate"}) {
     for (const char* mode : {"fail", "throw"}) {
       FakeSteps s = FakeSteps::WithTexture(false, false, false, false);
       if (std::strcmp(mode, "fail") == 0) s.failing = {other}; else s.throwing = {other};
@@ -378,15 +413,45 @@ void TestTextureQualityIsUnconditionalIndependentAndContained() {
   }
 }
 
+// The main-menu cards (#966) install on every launch, whatever else is on, right after the credits step and before token
+// auth; the step has its own stable name; a failing or throwing step contained: every other step still runs, and it
+// still runs when any single other early step fails or throws.
+void TestMenuCardsAreUnconditionalOrderedAndContained() {
+  QCHECK(std::strcmp(StepName(StepId::kInstallMenuCards), "install_menu_cards") == 0);
+  for (const bool everything : {false, true}) {
+    FakeSteps s = FakeSteps::With(everything, everything, everything, everything);
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallMenuCards).state == StepState::kOk);
+    QCHECK(s.Index("menu_cards") == s.Index("credits") + 1);
+    QCHECK(s.Index("menu_cards") < s.Index("token") || !s.Ran("token"));
+  }
+  for (const char* mode : {"fail", "throw"}) {
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    if (std::strcmp(mode, "fail") == 0) s.failing = {"menu_cards"}; else s.throwing = {"menu_cards"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallMenuCards).state != StepState::kOk);
+    QCHECK(s.Ran("token") && s.Ran("bridge") && s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen"));
+  }
+  for (const char* other : {"reg_clock", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture", "credits"}) {
+    for (const char* mode : {"fail", "throw"}) {
+      FakeSteps s = FakeSteps::With(false, false, false, false);
+      if (std::strcmp(mode, "fail") == 0) s.failing = {other}; else s.throwing = {other};
+      const ConstructorReport r = RunConstructorSequence(s);
+      QCHECK(r.at(StepId::kInstallMenuCards).state == StepState::kOk);
+      QCHECK(s.Ran("menu_cards"));
+    }
+  }
+}
+
 // The log-only resource request hook (#871) is for development builds: a release build skips both its counter step and its
 // install step with the same reason and the sequence is the one it was; a development build registers its counters before the
-// single StartReporter and installs it right after the Vulkan extension window, before token auth; and the hook is independent
+// single StartReporter and installs it right after the OS build floor hook, before token auth; and the hook is independent
 // of every feature, of the other hooks, and contained when it fails, throws or has its counters refused.
 void TestResourceRequestLogIsDevelopmentOnlyOrderedAndContained() {
   {  // release: nothing runs, both steps say why, and the other steps are exactly as before
     FakeSteps s = FakeSteps::With(false, false, false, false);
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture", "credits"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "credits", "menu_cards"};
     QCHECK(s.calls == want);
     QCHECK(s.devAsked == 1);
     QCHECK(r.at(StepId::kRegisterResourceRequestCounters).state == StepState::kSkipped);
@@ -396,16 +461,16 @@ void TestResourceRequestLogIsDevelopmentOnlyOrderedAndContained() {
     QCHECK(std::strcmp(StepName(StepId::kRegisterResourceRequestCounters), "register_resource_request_counters") == 0);
     QCHECK(std::strcmp(StepName(StepId::kInstallResourceRequestLog), "install_resource_request_log") == 0);
   }
-  {  // development, every feature off: counters before the reporter, install right after the Vulkan window
+  {  // development, every feature off: counters before the reporter, install right after the OS build floor hook
     FakeSteps s = FakeSteps::With(false, false, false, false);
     s.devBuild = true;
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "resource", "texture", "credits"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "credits", "menu_cards"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kRegisterResourceRequestCounters).state == StepState::kOk);
     QCHECK(r.at(StepId::kInstallResourceRequestLog).state == StepState::kOk);
     QCHECK(s.Index("reg_resource") < s.Index("reporter"));
-    QCHECK(s.Index("resource") == s.Index("vk_ext_window") + 1);
+    QCHECK(s.Index("resource") == s.Index("os_build_gate") + 1);
   }
   {  // before token auth, which a configuration with the network features does run
     FakeSteps s = FakeSteps::With(true, true, true, true);
@@ -485,7 +550,7 @@ void TestObbSkipIsUnconditionalIndependentAndContained() {
   {
     FakeSteps s = FakeSteps::WithTexture(false, false, false, false);
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_texture", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture", "credits"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_texture", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "credits", "menu_cards"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kRegisterObbSkipCounters).state == StepState::kOk);
     QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
@@ -497,7 +562,7 @@ void TestObbSkipIsUnconditionalIndependentAndContained() {
     const ConstructorReport r = RunConstructorSequence(s);
     QCHECK(r.at(StepId::kResolveConfig).state == StepState::kThrew);
     // The unresolved configuration is a mistake, so the level is `stock`: no texture counters, and the step still runs.
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture", "credits"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "credits", "menu_cards"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
   }
@@ -597,7 +662,7 @@ void TestClockHookFailureLeavesTheRest() {
   s.failing = {"clock"};
   const ConstructorReport r = RunConstructorSequence(s);
   QCHECK(r.at(StepId::kInstallClockHook).state == StepState::kFailed);
-  for (const char* ran : {"obb", "process_end", "permission_wait", "vk_ext_window", "texture", "token", "bridge", "redirect", "social", "dlopen"}) QCHECK(s.Ran(ran));
+  for (const char* ran : {"obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "token", "bridge", "redirect", "social", "dlopen"}) QCHECK(s.Ran(ran));
 }
 
 void TestTokenAuthFailureTurnsOffTheBridgeAndWhatNeedsIt() {
@@ -687,7 +752,7 @@ void TestCounterRefusalDisablesOnlyThatPiece() {
 
 void TestEveryStepThrowingIsContained() {
   for (const char* name : {"arm", "config", "reg_clock", "reg_redirect", "reg_dlopen", "reg_social", "reg_prompt",
-                           "reg_obb", "reg_texture", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "texture", "credits", "token", "prompt", "bridge", "redirect", "social",
+                           "reg_obb", "reg_texture", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "credits", "menu_cards", "token", "prompt", "bridge", "redirect", "social",
                            "dlopen"}) {
     FakeSteps s = FakeSteps::With(true, true, true, true);
     s.throwing = {name};
@@ -1650,8 +1715,10 @@ int main() {
   TestProcessEndIsUnconditionalIndependentAndContained();
   TestPermissionWaitIsUnconditionalIndependentAndContained();
   TestVkExtWindowIsUnconditionalIndependentAndContained();
+  TestOsBuildGateIsUnconditionalIndependentAndContained();
   TestResourceRequestLogIsDevelopmentOnlyOrderedAndContained();
   TestTextureQualityIsUnconditionalIndependentAndContained();
+  TestMenuCardsAreUnconditionalOrderedAndContained();
   TestCountersBeforeTheSingleReporterStart();
   TestCrashReporterAndConfigComeFirst();
   TestFeatureGating();

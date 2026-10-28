@@ -1,0 +1,238 @@
+#include "menu_cards_hook.h"
+
+#include <atomic>
+#include <cstddef>
+#include <cstring>
+#include <mutex>
+#include <string>
+#include <vector>
+
+#include "got_hook.h"
+#include "hook_install.h"
+#include "hook_log.h"
+#include "menu_cards_swap.h"
+#include "outside_game_call.h"
+#include "pinned_targets.h"
+#include "quest/data/sha256.h"
+#include "runtime/patch/menu_cards.h"
+
+namespace nevr_quest::menu_cards {
+
+namespace {
+
+using Thunk = sentinel::pinned::LibR15AsyncResourceIOCallbackThunk;
+
+sentinel::GotHook g_hook;
+std::atomic<void* const*> g_contextSlot{nullptr};
+std::atomic<const char*> g_pin{nevr_menu_cards::kQuestStockPageSha256};
+std::atomic<unsigned long long> g_deliveries{0};
+std::atomic<unsigned long long> g_pages{0};
+std::atomic<unsigned long long> g_swapped{0};
+
+// Two bounded diagnostics over finished primary buffers. A key is claimed by fetch_add; two threads racing on the same new
+// key can each log it once, which only costs a line.
+//   classes: the first delivery of each resource class (kClassLines of them), so a run shows what the Quest calls its
+//            resource classes whatever else is loaded around them;
+//   band:    the first delivery of each (class, name) whose primary buffer is as large as a UI page, so the page shows up
+//            under whatever name and class the Quest gives it.
+struct SeenPair {
+  std::atomic<std::uint64_t> classSymbol{0};
+  std::atomic<std::uint64_t> nameSymbol{0};
+};
+SeenPair g_seenClasses[kClassLines];
+std::atomic<unsigned> g_seenClassCount{0};
+SeenPair g_seenBand[kBandLines];
+std::atomic<unsigned> g_seenBandCount{0};
+
+// What FreeResource will release buffer 0 through: the allocator at context + 0x10, or null before the game has one.
+void* ReleaseAllocator() noexcept {
+  void* const* const slot = g_contextSlot.load(std::memory_order_acquire);
+  if (slot == nullptr) return nullptr;
+  const unsigned char* const context = static_cast<const unsigned char*>(*slot);
+  if (context == nullptr) return nullptr;
+  return Load<void*>(context, kContextAllocatorOffset);
+}
+
+// True the first time `key` is offered (while the table has room), recording it.
+bool Claim(SeenPair* table, std::atomic<unsigned>& count, unsigned capacity, const Delivery& d, bool byClassOnly) noexcept {
+  const unsigned known = count.load(std::memory_order_acquire);
+  for (unsigned i = 0; i < known && i < capacity; ++i) {
+    if (table[i].classSymbol.load(std::memory_order_relaxed) == d.classSymbol &&
+        (byClassOnly || table[i].nameSymbol.load(std::memory_order_relaxed) == d.nameSymbol)) {
+      return false;
+    }
+  }
+  const unsigned slot = count.fetch_add(1, std::memory_order_acq_rel);
+  if (slot >= capacity) return false;
+  table[slot].classSymbol.store(d.classSymbol, std::memory_order_relaxed);
+  table[slot].nameSymbol.store(d.nameSymbol, std::memory_order_relaxed);
+  return true;
+}
+
+void NoteResource(const Delivery& d) noexcept {
+  char classHex[19], nameHex[19];
+  if (Claim(g_seenClasses, g_seenClassCount, kClassLines, d, /*byClassOnly=*/true)) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "menu_cards_class",
+                        {{"class", sentinel::HexString(classHex, d.classSymbol)},
+                         {"name", sentinel::HexString(nameHex, d.nameSymbol)},
+                         {"bytes", d.size}});
+  }
+  if (d.size >= kBandMin && d.size <= kBandMax &&
+      Claim(g_seenBand, g_seenBandCount, kBandLines, d, /*byClassOnly=*/false)) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "menu_cards_resource",
+                        {{"class", sentinel::HexString(classHex, d.classSymbol)},
+                         {"name", sentinel::HexString(nameHex, d.nameSymbol)},
+                         {"bytes", d.size}});
+  }
+}
+
+// The page served for the pinned stock page: built once, kept for the life of the process (the game keeps reading
+// what it was given, and a later load copies from here again). Heap objects that are never freed, so no static
+// destructor runs under a game thread.
+struct Cache {
+  std::mutex mutex;
+  std::string stockSha256;
+  std::vector<unsigned char> bytes;
+};
+std::atomic<Cache*> g_cache{nullptr};
+
+Cache& TheCache() noexcept {
+  Cache* c = g_cache.load(std::memory_order_acquire);
+  if (c != nullptr) return *c;
+  Cache* const fresh = new Cache();
+  if (g_cache.compare_exchange_strong(c, fresh, std::memory_order_acq_rel)) return *fresh;
+  delete fresh;
+  return *c;
+}
+
+}  // namespace
+
+struct Served {
+  const unsigned char* bytes = nullptr;
+  std::size_t size = 0;
+  const char* why = "none";  // a fixed token when bytes is null
+};
+
+// Hashes the delivered page, compares it with the pin and builds the page with the cards. Runs before any game code
+// (the handler calls the game's allocator only after it returns) and calls none: it may allocate, and carries a
+// personality (outside_game_call.h).
+NEVR_OUTSIDE_GAME_CALL Served PrepareCards(const unsigned char* page, std::size_t size, std::uint64_t classSymbol,
+                                           std::uint64_t nameSymbol) noexcept {
+  const std::string sha = nevr_quest::data::Sha256Hex(page, size);
+  const char* const pin = g_pin.load(std::memory_order_acquire);
+  const char* const pinState = pin[0] == '\0' ? "unset" : (sha == pin ? "match" : "mismatch");
+  char classHex[19], nameHex[19];
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "menu_cards_page",
+                      {{"class", sentinel::HexString(classHex, classSymbol)},
+                       {"name", sentinel::HexString(nameHex, nameSymbol)},
+                       {"bytes", size},
+                       {"sha256", sha.c_str()},
+                       {"pin", pinState}});
+
+  Cache& cache = TheCache();
+  std::lock_guard<std::mutex> lock(cache.mutex);
+  if (!cache.bytes.empty() && cache.stockSha256 == sha) return {cache.bytes.data(), cache.bytes.size(), "none"};
+
+  const nevr_menu_cards::Result r = nevr_menu_cards::Patch(page, size, sha, pin, nevr_menu_cards::Cards());
+  if (r.verdict == nevr_menu_cards::Verdict::NotStock) return {nullptr, 0, pin[0] == '\0' ? "pin_unset" : "page_not_pinned"};
+  if (r.verdict == nevr_menu_cards::Verdict::Refused) return {nullptr, 0, nevr_menu_page::StatusName(r.status)};
+  cache.bytes = r.bytes;
+  cache.stockSha256 = sha;
+  return {cache.bytes.data(), cache.bytes.size(), "none"};
+}
+
+namespace {
+
+// Runs before the game's callback, on whichever thread finished the read. Never throws (the unit has no exceptions).
+void Offer(unsigned char* data) noexcept {
+  g_deliveries.fetch_add(1, std::memory_order_relaxed);
+  if (data == nullptr) return;
+  const Delivery d = Inspect(data);
+  if (!IsFinishedPrimary(d)) return;
+  NoteResource(d);
+  // The page is the CR15UIPage2CR resource under mnu_master_lowspec. The name is also the main-menu level's, so about sixty
+  // resources of other classes arrive under it (headset run 2): only the class picks the page out, and the rest are
+  // neither touched nor logged as pages.
+  if (d.classSymbol != nevr_menu_cards::kPageType || d.nameSymbol != nevr_menu_cards::kQuestPageName) return;
+  g_pages.fetch_add(1, std::memory_order_relaxed);
+  if (d.size > nevr_menu_page::kMaxResourceBytes) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "menu_cards_skip", {{"reason", "page_too_large"}, {"bytes", d.size}});
+    return;
+  }
+  const Served served = PrepareCards(d.buffer, static_cast<std::size_t>(d.size), d.classSymbol, d.nameSymbol);
+  if (served.bytes == nullptr) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "menu_cards_skip", {{"reason", served.why}});
+    return;
+  }
+  const Swap swap = SwapIn(data, served.bytes, served.size, ReleaseAllocator());
+  if (swap != Swap::Swapped) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "menu_cards_skip", {{"reason", SwapName(swap)}});
+    return;
+  }
+  g_swapped.fetch_add(1, std::memory_order_relaxed);
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "menu_cards_swap",
+                      {{"result", "swapped"}, {"bytes_before", d.size}, {"bytes_after", served.size}});
+}
+
+// CResourceManager::AsyncResourceIOCallback. The cards go in first; the game's callback always runs, on the block as it
+// is then, and its result is returned as it came.
+std::uint64_t Handler(Thunk::Fn original, unsigned char* data) noexcept {
+  Offer(data);
+  return original(data);
+}
+
+NEVR_HOOK_RECORD(kHook, Thunk, &Handler);
+
+}  // namespace
+
+bool Install() noexcept {
+  sentinel::ElfImage image;
+  const bool found = sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image);
+  if (found) {
+    g_contextSlot.store(reinterpret_cast<void* const*>(image.base + sentinel::pinned::kMemoryContextVaddr),
+                        std::memory_order_release);
+  }
+  Thunk::Arm(kHook);
+  const sentinel::GotStatus status = sentinel::InstallThunk<Thunk>(g_hook, sentinel::pinned::LibR15AsyncResourceIOCallback());
+  const bool ok = status == sentinel::GotStatus::kOk;
+  char baseHex[19];
+  sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "menu_cards_install",
+                      {{"result", ok ? "installed" : "failed"},
+                       {"slot", sentinel::GotStatusName(status)},
+                       {"pin", nevr_menu_cards::kQuestStockPageSha256[0] == '\0' ? "unset" : "set"},
+                       {"load_base", sentinel::HexString(baseHex, found ? static_cast<std::uint64_t>(image.base) : 0)}});
+  return ok;
+}
+
+void ArmForTest(const char* pinHex, void* const* contextSlot) noexcept {
+  g_pin.store(pinHex, std::memory_order_release);
+  g_contextSlot.store(contextSlot, std::memory_order_release);
+  Thunk::Arm(kHook);
+}
+
+void ResetForTest() noexcept {
+  g_deliveries.store(0, std::memory_order_relaxed);
+  g_pages.store(0, std::memory_order_relaxed);
+  g_swapped.store(0, std::memory_order_relaxed);
+  g_seenClassCount.store(0, std::memory_order_relaxed);
+  g_seenBandCount.store(0, std::memory_order_relaxed);
+  for (SeenPair& p : g_seenClasses) {
+    p.classSymbol.store(0, std::memory_order_relaxed);
+    p.nameSymbol.store(0, std::memory_order_relaxed);
+  }
+  for (SeenPair& p : g_seenBand) {
+    p.classSymbol.store(0, std::memory_order_relaxed);
+    p.nameSymbol.store(0, std::memory_order_relaxed);
+  }
+  g_pin.store(nevr_menu_cards::kQuestStockPageSha256, std::memory_order_release);
+  g_contextSlot.store(nullptr, std::memory_order_release);
+  Cache* const old = g_cache.exchange(nullptr, std::memory_order_acq_rel);
+  delete old;  // tests only: no game thread is running
+}
+
+Totals CurrentTotals() noexcept {
+  return {g_deliveries.load(std::memory_order_relaxed), g_pages.load(std::memory_order_relaxed),
+          g_swapped.load(std::memory_order_relaxed)};
+}
+
+}  // namespace nevr_quest::menu_cards

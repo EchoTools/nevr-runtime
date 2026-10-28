@@ -213,6 +213,14 @@
     },
 
     {
+      "name": "DC Coffey",
+      "section": "people",
+      "headings": ["code-contributions"],
+      "link": "https://www.dccoffey.com/work/echo-vr",
+      "what": "Designed the invite and create-game menu (CREATE GAME and JOIN VIA CODE), which Dualgame implemented.",
+      "sources": ["https://www.dccoffey.com/work/echo-vr"]
+    },
+    {
       "name": "chinmayee5599",
       "section": "people",
       "headings": ["code-contributions"],

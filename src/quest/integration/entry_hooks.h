@@ -50,6 +50,10 @@ bool InstallPermissionWaitHook() noexcept;  // true when the RequestPermissions 
 // libr15 requires stay inside the 128 entries it reads. No counters.
 bool InstallVkExtWindowHook() noexcept;  // true when the FindMethod and VrApi slots hold their thunks
 
+// The #945 OS build floor (sentinel/os_build_gate_hook.h), through this seam for the same reason: the game never refuses a
+// headset for its OS build number. No counters.
+bool InstallOsBuildGateHook() noexcept;  // true when the OSBuildVersion slot holds the thunk
+
 // The #871 log-only resource request hook (sentinel/resource_request_hook.h), through this seam for the same reason: it
 // records every FillResourceFileRequest call. Development builds only (the sequence asks nevr_build::kIsDev through
 // ResourceRequestLogEnabled, defined in entry.cpp, which includes the generated nevr_build_info.h).
@@ -57,6 +61,10 @@ bool ResourceRequestLogEnabled() noexcept;          // nevr_build::kIsDev
 bool RegisterResourceRequestCounters() noexcept;    // 2 counters
 // resource_request::InstallIfCounted(countersRegistered): true when the slot holds the thunk.
 bool InstallResourceRequestLogHook(bool countersRegistered) noexcept;
+
+// The #966 main-menu cards (sentinel/menu_cards_hook.h), through this seam for the same reason: it includes
+// callback_thunk.h. No counters. True when the callback slot holds the thunk.
+bool InstallMenuCardsHook() noexcept;
 
 // Defined in production_steps.cpp: the whole constructor sequence (ctor_sequence.h) over the real
 // libraries. Never throws and never blocks.

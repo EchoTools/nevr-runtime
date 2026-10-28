@@ -36,6 +36,7 @@
 #include "quest/plugin/plugin_plan.h"
 #include "quest/plugin/plugin_runtime.h"
 #include "quest/redirect/hook_adapter.h"
+#include "quest/social/menu_version_label.h"
 #include "quest/social/social_facade.h"
 #include "quest/social/social_frames.h"
 #include "runtime/compat/friend_request_check.h"
@@ -491,6 +492,12 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
+  bool InstallOsBuildGate() override {
+    const bool ok = nevr_quest::integration::InstallOsBuildGateHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
   bool InstallResourceRequestLog(bool countersRegistered) override {
     const bool ok = nevr_quest::integration::InstallResourceRequestLogHook(countersRegistered);
     detail_ = ok ? "ok" : "got_hook_refused";
@@ -508,6 +515,12 @@ class ProductionSteps final : public Steps {
     LogCodeWriteSkipped("credits_text");
     detail_ = "skipped_waits_on_1132";
     return true;  // a step that is deliberately not run did not fail
+  }
+
+  bool InstallMenuCards() override {
+    const bool ok = nevr_quest::integration::InstallMenuCardsHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
   }
 
   bool InstallLoginPrompt(bool countersRegistered) override {
@@ -602,12 +615,14 @@ class ProductionSteps final : public Steps {
     detail_ = detail;
     // The login declares the social level only when the facade is in place (docs/adr/0003, contract 5).
     if (ok) R().socialLevel.store(nevr_social_party::kSocialLevel);
-    // Five libr15 features write a code page (four inline-hook features here, the credits pairs in their own step) and
+    // The menu version label (#747) rides this step: one GOT hook on libr15's SetText slot, a data page, so it writes no code
+    // page. The hook logs its own outcome; a refusal does not fail social.
+    if (ok) quest_social::menu_version::InstallMenuVersionLabelHook();
+    // Four libr15 features write a code page (three inline-hook features here, the credits pairs in their own step) and
     // are not installed: the current
     // Horizon policy denies execmod on a written libr15 page, and the first call into it faults (#1127). Each waits on
     // the build-time patch (#1132), which writes no code page at run time.
     LogCodeWriteSkipped("lobby_full");
-    LogCodeWriteSkipped("menu_version");
     LogCodeWriteSkipped("ui_texture");
     LogCodeWriteSkipped("splash_skip");
     return ok;

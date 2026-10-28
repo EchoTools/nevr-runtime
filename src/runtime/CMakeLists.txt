@@ -86,6 +86,8 @@ set(PATCHES_SOURCES
     "patch/party_invite_gate.cpp"
     "patch/invite_choice_hook.cpp"
     "patch/invite_wizard_hook.cpp"
+    "patch/invite_transport_curl.cpp"
+    "patch/invite_service.cpp"
     "patch/early_quit_lockout.cpp"
     "patch/arena_public_clock.cpp"
     "patch/lobby_full_backoff.cpp"
@@ -186,6 +188,11 @@ set(PATCHES_HEADERS
     "compat/ws_bridge.h"
     "compat/socket_role.h"
     "patch/invite_wizard.h"
+    "patch/invite_worker.h"
+    "patch/invite_transport.h"
+    "patch/invite_transport_curl.h"
+    "patch/invite_service.h"
+    "patch/invite_config.h"
     "patch/menu_page.h"
     "patch/menu_cards.h"
     "patch/guild_picker.h"
@@ -201,6 +208,7 @@ set(PATCHES_HEADERS
     "patch/social_facade.h"
     "patch/social_facade_install.h"
     "log/builtin_filter.h"
+    "log/rate_limiter.h"
     "log/symcache.h"
     "log/url_diagnostics.h"
     "log/security_diagnostics.h"
@@ -1249,11 +1257,34 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_socket_role DISCOVERY_MODE PRE_TEST)
 
     # #906, docs/adr/0017: the client half of the invite codes (patch/invite_wizard.h): header only, pure.
-    add_executable(test_invite_wizard tests/test_invite_wizard.cpp)
-    set_source_files_properties(tests/test_invite_wizard.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    # It links the generated symbol cache: the map cards' level names are the cache's, and the test reads them from it.
+    add_executable(test_invite_wizard tests/test_invite_wizard.cpp log/symcache_data.cpp)
+    set_source_files_properties(tests/test_invite_wizard.cpp log/symcache_data.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_invite_wizard PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_invite_wizard PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_invite_wizard DISCOVERY_MODE PRE_TEST)
+
+    # #1156, docs/adr/0017: the request worker (patch/invite_worker.h): header only, pure, a real thread over a fake transport.
+    add_executable(test_invite_worker tests/test_invite_worker.cpp)
+    set_source_files_properties(tests/test_invite_worker.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_invite_worker PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_invite_worker PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_invite_worker DISCOVERY_MODE PRE_TEST)
+
+    # #1156, docs/adr/0017: the invite transport (patch/invite_transport.h, patch/invite_transport_curl.cpp): libcurl against a
+    # scripted loopback server.
+    add_executable(test_invite_transport tests/test_invite_transport.cpp patch/invite_transport_curl.cpp)
+    set_source_files_properties(tests/test_invite_transport.cpp patch/invite_transport_curl.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_invite_transport PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_invite_transport PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl ws2_32)
+    gtest_discover_tests(test_invite_transport DISCOVERY_MODE PRE_TEST)
+
+    # #1156, docs/adr/0017: the invite service (patch/invite_service.cpp): config key, address check, transport and worker.
+    add_executable(test_invite_service tests/test_invite_service.cpp patch/invite_service.cpp patch/invite_transport_curl.cpp)
+    set_source_files_properties(tests/test_invite_service.cpp patch/invite_service.cpp patch/invite_transport_curl.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_invite_service PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_invite_service PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json CURL::libcurl ws2_32)
+    gtest_discover_tests(test_invite_service DISCOVERY_MODE PRE_TEST)
 
     # #906, docs/adr/0017: what the wizard's cards chose (patch/invite_choices.h): header only, pure.
     add_executable(test_invite_choices tests/test_invite_choices.cpp)
@@ -1392,9 +1423,10 @@ if(BUILD_TESTING)
     target_link_libraries(test_cmdline_strip PRIVATE GTest::gtest GTest::gtest_main nevr_core)
     gtest_discover_tests(test_cmdline_strip DISCOVERY_MODE PRE_TEST)
 
-    # test_scenario_ui_text.cpp (#906, the ui_text fire action in runtime/scenario/scenario_protocol.h) rides in this executable.
-    add_executable(test_scenario_early_quit tests/test_scenario_early_quit.cpp tests/test_scenario_ui_text.cpp)
-    set_source_files_properties(tests/test_scenario_early_quit.cpp tests/test_scenario_ui_text.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    # test_scenario_ui_text.cpp (#906, the ui_text fire action in runtime/scenario/scenario_protocol.h) and test_scenario_invite.cpp
+    # (#1156, the invite fire actions) ride in this executable.
+    add_executable(test_scenario_early_quit tests/test_scenario_early_quit.cpp tests/test_scenario_ui_text.cpp tests/test_scenario_invite.cpp)
+    set_source_files_properties(tests/test_scenario_early_quit.cpp tests/test_scenario_ui_text.cpp tests/test_scenario_invite.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_scenario_early_quit PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_scenario_early_quit PRIVATE
       GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json)
@@ -1738,11 +1770,12 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_messages DISCOVERY_MODE PRE_TEST)
 
     # test_plugin_logger.cpp (#34, header-only plugins/common/include/plugin_logger.h) and
-    # test_plugin_log.cpp (#598, header-only ext/plugin_log.h) ride in this
+    # test_plugin_log.cpp (#598, header-only ext/plugin_log.h) and
+    # test_rate_limiter.cpp (#894, header-only log/rate_limiter.h) ride in this
     # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp lifecycle/crash_dump_format.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp lifecycle/crash_dump_format.cpp
+      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_rate_limiter.cpp lifecycle/crash_dump_format.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_rate_limiter.cpp lifecycle/crash_dump_format.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src
       ${CMAKE_SOURCE_DIR}/plugins/common/include)

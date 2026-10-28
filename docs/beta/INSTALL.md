@@ -9,17 +9,20 @@ have it, so please report anything odd (see "Report a bug").
 | File | What to do with it |
 |---|---|
 | `BugSplat64.dll` | Install it: it replaces the game's file of the same name. |
-| `nevr-runtime.dll` | Install it beside `BugSplat64.dll`: the runtime that `BugSplat64.dll` loads. Without it the game stops at start. |
-| `INSTALL.md` | This page. |
-| `echovr_server.exe`, `README.md` | Ignore them. They are for people running game servers or developing the runtime. |
+| `nevr-runtime.dll` | Install it in `%LOCALAPPDATA%\nevr\echovr`, not beside `BugSplat64.dll`: the runtime that `BugSplat64.dll` loads. Without it the game stops at start. |
+| `install.ps1`, `uninstall.ps1` | Optional: they do the install and the uninstall for you (see Install and Uninstall). |
+| `README.txt`, `SIGNING.txt`, `SHA256SUMS` | Reference: the package's own notes, how to check each file's signature, and the file hashes. |
+| `echovr_server.exe`, `quest-diagnose.ps1` | Ignore them unless you run a server or have a Quest problem (`README.txt` says how). |
 
 ## Install
 
 1. Close Echo VR.
 2. Find your Echo VR folder: the one that contains `bin\win10\echovr.exe`.
 3. In `bin\win10`, rename the existing `BugSplat64.dll` to `BugSplat64.dll.original`. Keep it: it is how
-   you uninstall.
-4. Copy `BugSplat64.dll` and `nevr-runtime.dll` from the zip into `bin\win10`.
+   you uninstall. (`install.ps1` keeps the backup as `BugSplat64.dll.original-<timestamp>` instead.)
+4. Copy `BugSplat64.dll` from the zip into `bin\win10`. Copy `nevr-runtime.dll` into `%LOCALAPPDATA%\nevr\echovr`
+   (paste that into the File Explorer address bar; create the folders if they are not there). If an older
+   release left a `nevr-runtime.dll` in `bin\win10`, delete it: the game no longer loads it.
 5. Start Echo VR the way you normally do.
 
 ## First start: sign in with Discord
@@ -40,8 +43,12 @@ want to sign in again (for example as a different Discord account).
 
 ## Uninstall
 
-Close Echo VR, delete `bin\win10\BugSplat64.dll` and `bin\win10\nevr-runtime.dll`, and rename `BugSplat64.dll.original` back to
-`BugSplat64.dll`.
+Close Echo VR, then either:
+
+- if you installed with `install.ps1`: run `powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 -Dir "<the bin\win10 folder>"`
+  from the unzipped folder. It restores your original `BugSplat64.dll` and sets `nevr-runtime.dll` aside;
+- if you installed by hand: delete `bin\win10\BugSplat64.dll` and `%LOCALAPPDATA%\nevr\echovr\nevr-runtime.dll`, and rename
+  `BugSplat64.dll.original` back to `BugSplat64.dll`.
 
 ## Known issues
 
@@ -49,10 +56,6 @@ You do not need to report these:
 
 - A friend's status (in a menu, a lobby or a match) is not live: it is what it was when your friends list
   last refreshed ([nakama#663](https://github.com/EchoTools/nakama/issues/663)).
-- A friend added on the website only appears after you restart the game
-  ([#57](https://github.com/EchoTools/nevr-runtime/issues/57)).
-- If the game loses its connection to the server (your internet drops, or the server restarts), it may
-  not recover on its own: restart the game ([#70](https://github.com/EchoTools/nevr-runtime/issues/70)).
 
 ## Report a bug
 
@@ -66,8 +69,8 @@ files. Attach them by dragging them into the form:
 |---|---|
 | The game's log for that session | `%LOCALAPPDATA%\nevr\echovr\logs\`: the `nevr-<date>T<time>.jsonl` file from that session (newest first if it just happened). Paste `%LOCALAPPDATA%\nevr\echovr\logs` into the Explorer address bar to get there. |
 | The start-up log | `bin\win10\logs\nevr-boot.jsonl` in your Echo VR folder. |
-| If the game crashed | **`nevr-crash-<id>.txt`** in the same `%LOCALAPPDATA%\nevr\echovr\logs\` folder: the crash record (what failed, where, and what called it). Also the newest files in `_temp\crashes\` and in `bin\win10\_temp\crashes\` in your Echo VR folder (names like `RAD_CRASHDUMP_<you>_echovr_<day>_<time>.log` and `.json`). |
+| If the game crashed | **`nevr-crash-<id>.txt`** in the same `%LOCALAPPDATA%\nevr\echovr\logs\` folder: the crash record (what failed, where, and what called it). |
 
-**What these files contain:** your Discord account id; the crash files also contain your Windows user
-name and computer name. They do not contain your saved sign-in or its tokens. A
+**What these files contain:** your Discord account id, and file paths, which can include your Windows user
+name. They do not contain your saved sign-in or its tokens. A
 GitHub issue is public: if you would rather not post them, say so in the report and leave them out.
