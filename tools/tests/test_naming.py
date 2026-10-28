@@ -67,6 +67,7 @@ BRAND_PROSE_SPELLINGS = {
     "docs/adr/0012-static-install-root.md": {"nEVR"},
     "docs/design/2026-09-21-mic-provider-voip-fix.md": {"nEVR"},
     "docs/reference/example-config.yaml": {"nEVR"},
+    "docs/reference/launcher-install-root.md": {"nEVR"},
     "docs/reference/verifying-a-release.md": {"nEVR"},
     "docs/standards/logging.md": {"nEVR"},
     "cmake/nevr_version_info.rc.in": {"nEVR"},  # ProductName and FileDescription are brand prose
