@@ -8,8 +8,10 @@
 
 #include <filesystem>
 #include <fstream>
+#include <atomic>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "core/credential_write.h"
@@ -324,6 +326,163 @@ TEST_F(NevrRootCredentialMove, ASecondRunMovesNothing) {
   ASSERT_FALSE(move::Run(Inputs()).empty());
   EXPECT_TRUE(move::Run(Inputs()).empty());
   EXPECT_EQ(ReadAll(Cache(root_)), "cache");
+}
+
+// #1114: another process acting while this one moves the cache. Each hook below stands in for that process at one point of the
+// move; the cache path the hooks write is set by the test.
+namespace {
+std::wstring g_hookCache;  // where the other process writes its sign-in
+std::string g_hookBytes;
+void OtherProcessWritesItsSignIn(const std::wstring&) {
+  std::ofstream out(std::filesystem::path(g_hookCache), std::ios::binary | std::ios::trunc);
+  out << g_hookBytes;
+}
+void OtherProcessWritesItsSignInAtTheRoot(const std::wstring& installed) { OtherProcessWritesItsSignIn(installed); }
+void CorruptTheTemp(const std::wstring& temp) {
+  std::ofstream out(std::filesystem::path(temp), std::ios::binary | std::ios::app);
+  out << "x";
+}
+void WriteMidWrite() { OtherProcessWritesItsSignIn(g_hookCache); }
+HANDLE g_holdsTheCache = INVALID_HANDLE_VALUE;
+void SomethingHoldsTheCacheOpen(const std::wstring& installed) {
+  g_holdsTheCache = CreateFileW(installed.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+}
+
+std::vector<std::wstring> NamesIn(const std::wstring& dir) {
+  std::vector<std::wstring> names;
+  std::error_code ec;
+  for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::path(dir), ec)) {
+    names.push_back(entry.path().filename().wstring());
+  }
+  return names;
+}
+unsigned TempsIn(const std::wstring& dir) {
+  unsigned n = 0;
+  for (const std::wstring& name : NamesIn(dir)) n += name.size() > 4 && name.compare(name.size() - 4, 4, L".tmp") == 0 ? 1 : 0;
+  return n;
+}
+}  // namespace
+
+class NevrRootConcurrentMove : public NevrRootCredentialMove {
+ protected:
+  void SetUp() override {
+    NevrRootCredentialMove::SetUp();
+    g_hookCache = Cache(root_);
+    g_hookBytes = "fresh sign-in";
+  }
+  void TearDown() override {
+    nevr_credential_write::g_midWriteHook = nullptr;
+    move::g_afterTempWrittenHook = nullptr;
+    move::g_afterInstallHook = nullptr;
+    NevrRootCredentialMove::TearDown();
+  }
+};
+
+TEST(NevrRootTempName, TheMovesTempNameIsItsOwnPerProcessAndNewEachCall) {
+  const std::string cache = "C:\\x\\.credentials.json";
+  const std::string first = nevr_credential_write::UniqueTempPathFor(cache);
+  const std::string second = nevr_credential_write::UniqueTempPathFor(cache);
+  EXPECT_NE(first, nevr_credential_write::TempPathFor(cache)) << "the cache's own save uses that name";
+  EXPECT_NE(first, second);
+  const std::string pid = "." + std::to_string(GetCurrentProcessId()) + ".";
+  EXPECT_NE(first.find(pid), std::string::npos) << first << ": a second process must get another name";
+  EXPECT_EQ(first.rfind(cache + ".", 0), 0u) << "beside the cache, so the install is a rename on one volume";
+  EXPECT_EQ(first.substr(first.size() - 4), ".tmp");
+}
+
+TEST_F(NevrRootConcurrentMove, ASignInWrittenWhileTheMoveIsInFlightIsNeverOverwritten) {
+  Write(Cache(local_[0]), "old cache");
+  nevr_credential_write::g_midWriteHook = &WriteMidWrite;  // after the root was checked, before the cache is installed
+  const std::vector<move::Event> events = move::Run(Inputs());
+
+  EXPECT_EQ(ReadAll(Cache(root_)), "fresh sign-in") << "the move replaced a sign-in it did not write";
+  EXPECT_EQ(ReadAll(Cache(local_[0])), "old cache") << "the old cache is left where it is";
+  EXPECT_EQ(Count(events, Outcome::kMoved), 0u);
+  EXPECT_EQ(Count(events, Outcome::kLeftRootHasIt), 1u);
+  EXPECT_EQ(TempsIn(root_), 0u) << "the move's temp file is removed when the root has the cache";
+  EXPECT_FALSE(Exists(local_[0] + L"\\MOVED-TO-NEVR-ROOT.txt"));
+}
+
+TEST_F(NevrRootConcurrentMove, ASignInThatReplacesTheCopyBeforeTheReadBackIsNeverDeleted) {
+  Write(Cache(local_[0]), "old cache");
+  move::g_afterInstallHook = &OtherProcessWritesItsSignInAtTheRoot;
+  const std::vector<move::Event> events = move::Run(Inputs());
+
+  EXPECT_EQ(ReadAll(Cache(root_)), "fresh sign-in") << "the mismatch path deleted a sign-in the move did not write";
+  EXPECT_EQ(ReadAll(Cache(local_[0])), "old cache");
+  EXPECT_EQ(Count(events, Outcome::kMoved), 0u);
+  EXPECT_FALSE(Exists(local_[0] + L"\\MOVED-TO-NEVR-ROOT.txt"));
+}
+
+TEST_F(NevrRootConcurrentMove, ACopyThatCannotBeReadBackKeepsTheOldCacheAndDeletesNothing) {
+  Write(Cache(local_[0]), "old cache");
+  move::g_afterInstallHook = &SomethingHoldsTheCacheOpen;
+  const std::vector<move::Event> events = move::Run(Inputs());
+  ASSERT_NE(g_holdsTheCache, INVALID_HANDLE_VALUE);
+  CloseHandle(g_holdsTheCache);
+  g_holdsTheCache = INVALID_HANDLE_VALUE;
+
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].outcome, Outcome::kLeftMoveFailed);
+  EXPECT_NE(events[0].error, 0ul);
+  EXPECT_EQ(ReadAll(Cache(local_[0])), "old cache") << "the old cache goes only once the copy was read back";
+  EXPECT_EQ(ReadAll(Cache(root_)), "old cache") << "the copy that was installed is left in place";
+  EXPECT_FALSE(Exists(local_[0] + L"\\MOVED-TO-NEVR-ROOT.txt"));
+}
+
+TEST_F(NevrRootConcurrentMove, AnotherWritersTempFileIsNeverTouched) {
+  Write(Cache(local_[0]), "old cache");
+  const std::wstring theirs = Cache(root_) + L".tmp";  // the name the sign-in cache's own save uses
+  Write(theirs, "another process, mid-write");
+  const std::vector<move::Event> events = move::Run(Inputs());
+
+  EXPECT_EQ(Count(events, Outcome::kMoved), 1u);
+  EXPECT_EQ(ReadAll(Cache(root_)), "old cache");
+  EXPECT_EQ(ReadAll(theirs), "another process, mid-write") << "the move removed or reused a temp file it did not create";
+  EXPECT_EQ(TempsIn(root_), 1u) << "only the other process's temp file is left";
+}
+
+TEST_F(NevrRootConcurrentMove, ACopyThatFailsItsCheckIsNeverInstalled) {
+  Write(Cache(local_[0]), "old cache");
+  move::g_afterTempWrittenHook = &CorruptTheTemp;
+  const std::vector<move::Event> events = move::Run(Inputs());
+
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].outcome, Outcome::kLeftMoveFailed);
+  EXPECT_FALSE(Exists(Cache(root_))) << "a cache in the root outranks the old one, so a failed copy leaves none";
+  EXPECT_EQ(ReadAll(Cache(local_[0])), "old cache");
+  EXPECT_EQ(TempsIn(root_), 0u);
+
+  move::g_afterTempWrittenHook = nullptr;
+  EXPECT_EQ(Count(move::Run(Inputs()), Outcome::kMoved), 1u) << "the next run tries again";
+  EXPECT_EQ(ReadAll(Cache(root_)), "old cache");
+}
+
+TEST_F(NevrRootConcurrentMove, TwoMovesAtOnceInstallOneCacheAndLeaveTheOtherSource) {
+  for (int round = 0; round < 5; ++round) {
+    Wipe();
+    Write(Cache(local_[0]), "a");
+    Write(Cache(local_[1]), "b");
+    move::Inputs a = Inputs();
+    a.local_dirs = {local_[0]};
+    move::Inputs b = Inputs();
+    b.local_dirs = {local_[1]};
+    std::vector<move::Event> ea, eb;
+    std::atomic<bool> go{false};
+    std::thread ta([&] { while (!go) {} ea = move::Run(a); });
+    std::thread tb([&] { while (!go) {} eb = move::Run(b); });
+    go = true;
+    ta.join();
+    tb.join();
+
+    const unsigned moved = Count(ea, Outcome::kMoved) + Count(eb, Outcome::kMoved);
+    const std::string root = ReadAll(Cache(root_));
+    ASSERT_EQ(moved, 1u) << "round " << round << ": both moves reported installing the cache";
+    ASSERT_TRUE(root == "a" || root == "b") << "round " << round << ": the root holds '" << root << "'";
+    EXPECT_EQ(Exists(Cache(local_[0])), root != "a") << "the source of the winner goes, the other stays";
+    EXPECT_EQ(Exists(Cache(local_[1])), root != "b");
+    EXPECT_EQ(TempsIn(root_), 0u);
+  }
 }
 
 TEST_F(NevrRootMove, ACachePathThatIsNotAnsiIsLeftNotLost) {
