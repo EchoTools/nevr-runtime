@@ -1244,10 +1244,11 @@ test-quest-hooks json_include="":
     # compile, with the message that names the rule (not for some unrelated reason).
     snip=src/quest/tests/compile_fail
     "${cxx[@]}" -fno-exceptions -fsyntax-only "$snip/control.cpp"
+    "${cxx[@]}" -fno-exceptions -fsyntax-only "$snip/row_control.cpp"
     # The patterns below are GCC's wording, which is why the recipe pins g++ (clang words the same errors differently).
     # Each snippet must fail with errors that are ALL the rule's own: every `error:` line has to
     # match the rule's pattern (a second, unrelated error fails the check), and there must be one.
-    for pair in fake_thunk:"error: static assertion failed: InstallThunk requires a CallbackThunk" direct_record:"HookRecord.*is private within this context" plain_handler:"error: invalid conversion from .*::Handler"; do
+    for pair in fake_thunk:"error: static assertion failed: InstallThunk requires a CallbackThunk" row_fake_thunk:"error: static assertion failed: InstallRowThunk requires a CallbackThunk" direct_record:"HookRecord.*is private within this context" plain_handler:"error: invalid conversion from .*::Handler"; do
         name="${pair%%:*}"; want="${pair#*:}"
         if "${cxx[@]}" -fno-exceptions -fsyntax-only "$snip/$name.cpp" > "$out/$name.err" 2>&1; then
             echo "test-quest-hooks: $snip/$name.cpp compiled, but must not" >&2; exit 1
@@ -1609,7 +1610,11 @@ test-quest-patcher-pinned libr15 json_include="" signed_libr15="": (quest-patche
     g++ -std=c++17 -O1 -Wall -Wextra -Werror -Isrc -pthread \
         src/quest/tests/libr15_patcher_pinned_test.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp \
         -o "$out/libr15_patcher_pinned_test"
-    timeout 600 "$out/libr15_patcher_pinned_test" "$out/quest_patch_libr15" "$libr15" "$scratch" ${signed_arg[@]+"${signed_arg[@]}"}
+    timeout 600 "$out/libr15_patcher_pinned_test" "$out/quest_patch_libr15" "$libr15" "$scratch" ${signed_arg[@]+"${signed_arg[@]}"} | tee "$scratch/run.log"
+    # With a signed file the test must have run and passed: a run that dropped it (SKIP) is not a pass of test 5.
+    if [ -n "$signed_libr15" ]; then
+        grep -qx 'PASS SignedApkLibr15IsThePatchersOutput' "$scratch/run.log" || { echo "test-quest-patcher-pinned: SignedApkLibr15IsThePatchersOutput did not run and pass" >&2; exit 1; }
+    fi
     echo "test-quest-patcher-pinned: the tool's output on the pinned libr15 is as the table says"
 
 # Quest social provider on the host (docs/adr/0003, "Social provider"): the ABI pins against the

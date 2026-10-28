@@ -447,6 +447,13 @@ class RepackPatchesLibr15Test(RepackFixture):
         self.assertEqual(len(runs), 2)  # the repack, then verify-signed on its own copy
         for argv in runs:
             self.assertNotIn("--extra-rows", argv)
+        work = self.tmp / "work"
+        repack, verify = (dict(zip(argv[0::2], argv[1::2])) for argv in runs)
+        self.assertEqual(pathlib.Path(repack["--stock"]).resolve(), work.resolve() / "orig" / "lib" / "arm64-v8a" / "libr15.so")
+        self.assertEqual(pathlib.Path(repack["--out"]).resolve(), work.resolve() / "stage" / "lib" / "arm64-v8a" / "libr15.so")
+        self.assertEqual(pathlib.Path(repack["--report"]).resolve(), work.resolve() / "libr15-patch-report.json")
+        self.assertTrue((work / "libr15-patch-report.json").is_file())
+        self.assertEqual(pathlib.Path(verify["--stock"]).resolve().parent.parent, work.resolve())  # verify-signed's copy is under the work dir
 
     def test_the_extra_rows_file_goes_to_the_patcher_and_to_verify_signed(self):
         self.make_inputs(DEV_VERSION)
@@ -496,7 +503,7 @@ class RepackPatchesLibr15Test(RepackFixture):
         empty.mkdir()
         result = self.run_recipe("", "", "", "", str(empty))
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn(f"{empty}/nlohmann/json.hpp not found", result.stderr)
+        self.assertIn(f"android-repack-apk: FAIL - {empty}/nlohmann/json.hpp not found (json_include)", result.stderr)
         self.assertFalse(self.signed.exists())
 
 
