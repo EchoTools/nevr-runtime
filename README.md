@@ -150,8 +150,7 @@ yet. On PC:
 3. **Uninstall:** `uninstall.ps1 -Dir <bin\win10>` restores both and keeps the backups.
 4. **Quest:** a release is the Windows zip only: the APK repacks the store game, so it is not on GitHub. The
    development build (`nevr-runtime-v<X.Y.Z-dev.N>-<sha7>-quest.apk`, built by `just package-dev`) is published
-   outside GitHub; download it and install it with `adb install -r`. It is signed with the same key as
-   earlier test builds, so it installs over them and keeps your data.
+   outside GitHub; download it and install it with `adb install`. Uninstall the old version first; this build is signed with the new key.
 5. Windows Defender or SmartScreen may warn about a file that carries no signature. `Get-AuthenticodeSignature .\BugSplat64.dll`
    (PowerShell) says whether a file is signed.
 

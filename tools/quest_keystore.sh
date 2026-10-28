@@ -6,19 +6,20 @@
 #
 #   just import-quest-keystore <keystore>     store the key and its passphrase (once)
 #   just quest-keystore-fingerprint           print the signer's SHA-256
+#   tools/quest_keystore.sh check             exit 1, naming the entry, unless both entries are stored
 #   tools/quest_keystore.sh with <command...> run a command with NEVR_QUEST_KS set
 #
 # `with` exports, for the command's environment only:
 #   NEVR_QUEST_KS        path to a mode-600 copy of the key, in a mode-700 directory on tmpfs
-#   NEVR_QUEST_KS_ALIAS  the key's alias (nevrdebug)
+#   NEVR_QUEST_KS_ALIAS  the key's alias (nevr)
 #   NEVR_QUEST_KS_PASS   the store passphrase, so apksigner/keytool read it with `env:` and it is
 #                        never an argument (visible in `ps`)
 # The copy is shredded and its directory removed on every exit path, including SIGTERM/SIGINT/SIGHUP.
 set -euo pipefail
 
-readonly KS_ENTRY="services/echovrce/quest-signing-keystore"
-readonly PASS_ENTRY="services/echovrce/quest-signing-keystore-pass"
-readonly ALIAS="nevrdebug"
+readonly KS_ENTRY="services/echovrce/quest-signing-keystore-v2"
+readonly PASS_ENTRY="services/echovrce/quest-signing-keystore-v2-pass"
+readonly ALIAS="nevr"
 readonly IMPORT_HINT="just import-quest-keystore <keystore>"
 
 # Set by materialize_key(); the EXIT trap cleans up whichever of them exists.
@@ -33,6 +34,7 @@ usage() {
     cat >&2 <<EOF
 usage: $0 with <command...>
        $0 fingerprint
+       $0 check
        $0 import <keystore-file>
 EOF
     exit 2
@@ -150,6 +152,16 @@ cmd_with() {
     exit "$status"
 }
 
+# Both entries are in pass: the recipes that sign ask here instead of naming the entries themselves.
+cmd_check() {
+    command -v pass >/dev/null 2>&1 || { err "pass is not installed"; exit 1; }
+    local entry
+    for entry in "$KS_ENTRY" "$PASS_ENTRY"; do
+        pass show "$entry" >/dev/null 2>&1 \
+            || { err "no Quest signing key material in pass at $entry; store it with: $IMPORT_HINT"; exit 1; }
+    done
+}
+
 cmd_fingerprint() {
     local fp
     materialize_key
@@ -209,6 +221,10 @@ main() {
         fingerprint)
             [[ "$#" -eq 1 ]] || usage
             cmd_fingerprint
+            ;;
+        check)
+            [[ "$#" -eq 1 ]] || usage
+            cmd_check
             ;;
         import)
             shift
