@@ -36,6 +36,43 @@ class DistCmakeSequenceTest(unittest.TestCase):
             self.assertLess(strip, link, name)
 
 
+class ReleaseWorkflowInstallerSymbolsTest(unittest.TestCase):
+    """nevr-install.exe rides in the Windows zip, so the tree check (verify_symbols.py --tree) needs its symbol file
+    in the same symbols directory as the DLLs' (.github/workflows/build.yml)."""
+
+    @staticmethod
+    def steps():
+        text = (REPO / ".github" / "workflows" / "build.yml").read_text()
+        out = {}
+        for chunk in text.split("\n    - name: ")[1:]:
+            out[chunk.split("\n", 1)[0].strip()] = chunk
+        return list(out), out
+
+    def test_the_installer_is_split_stripped_and_linked_into_the_dist_symbols_before_they_are_verified_and_uploaded(self):
+        order, steps = self.steps()
+        build = "Build the core installer for Windows"
+        for earlier, later in (("Create distribution packages (unsigned)", build),
+                               (build, "Verify the symbol files match the stripped binaries"),
+                               (build, "Upload the symbol files"),
+                               (build, "Gate and assemble the release tree")):
+            self.assertLess(order.index(earlier), order.index(later), f"{earlier!r} runs before {later!r}")
+        body = steps[build]
+        dbg = '"dist/symbols/$name/nevr-install.exe.dbg"'
+        keep = body.index(f'--only-keep-debug "$exe" {dbg}')
+        strip = body.index('x86_64-w64-mingw32-strip --strip-all "$exe"')
+        link = body.index(f'"--add-gnu-debuglink=dist/symbols/$name/nevr-install.exe.dbg" "$exe"')
+        self.assertLess(keep, strip)
+        self.assertLess(strip, link)
+
+    def test_the_installer_is_built_with_line_tables_so_its_symbol_file_carries_dwarf(self):
+        # A release build has no DWARF unless asked: verify_symbols.py refuses a symbol file without it.
+        self.assertIn("CARGO_PROFILE_RELEASE_DEBUG: line-tables-only", self.steps()[1]["Build the core installer for Windows"])
+
+    def test_the_symbol_check_pairs_the_installer_with_its_symbol_file(self):
+        body = self.steps()[1]["Verify the symbol files match the stripped binaries"]
+        self.assertRegex(body, r'verify_symbols\.py "\$installer" "dist/symbols/\$name/nevr-install\.exe\.dbg"')
+
+
 def make_pe(sections: list[tuple[str, bytes]], nsyms: int = 0) -> bytes:
     """A minimal PE/COFF image: DOS stub pointer, PE signature, COFF header, section table, section data, then
     a COFF symbol table of nsyms 18-byte records and a string table that carries the long section names."""
@@ -260,6 +297,26 @@ class StrippedBinaryMatchesItsSymbolsTest(unittest.TestCase):
         result = self.tree_run(package, symbols)
         self.assertEqual(result.returncode, 1)
         self.assertIn("no symbol file", result.stderr)
+
+    def test_a_windows_tree_with_the_installer_needs_the_installers_symbol_file(self):
+        self.link()
+        package, symbols = self.tree()
+        shutil.copy(self.exe, package / "nevr-install.exe")
+        result = self.tree_run(package, symbols)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("nevr-install.exe: no symbol file", result.stderr)
+        shutil.copy(self.dbg, symbols / "nevr-install.exe.dbg")
+        self.assertEqual(self.tree_run(package, symbols).returncode, 1, "a link to t.exe.dbg is not a link to nevr-install.exe.dbg")
+
+    def test_a_windows_tree_with_the_installer_split_under_its_own_name_passes(self):
+        package, symbols = self.tree()
+        installer, dbg = package / "nevr-install.exe", symbols / "nevr-install.exe.dbg"
+        shutil.copy(self.dir / "full.exe", installer)
+        subprocess.run([OBJCOPY, "--only-keep-debug", str(installer), str(dbg)], check=True)
+        subprocess.run([STRIP, "--strip-all", str(installer)], check=True)
+        subprocess.run([OBJCOPY, f"--add-gnu-debuglink={dbg}", str(installer)], check=True)
+        result = self.tree_run(package, symbols)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_an_empty_package_tree_is_refused(self):
         package, symbols = self.tree()
