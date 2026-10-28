@@ -9,7 +9,7 @@ body:
         `docs/beta/INSTALL.md` here); no need to report those.
 
         **Files to attach** (drag them into the box at the end):
-        - the session's game log: `%LOCALAPPDATA%\nevr\echovr\logs\nevr-<date>T<time>.jsonl` (paste `%LOCALAPPDATA%\nevr\echovr\logs` into the Explorer address bar);
+        - the session's game log, always: `%LOCALAPPDATA%\nevr\echovr\logs\nevr-<date>T<time>.jsonl` (paste `%LOCALAPPDATA%\nevr\echovr\logs` into the Explorer address bar). Its `render_config` line (your graphics card, headset, refresh rate, render resolution and the game's graphics settings) is the first thing we read, so attach the log even if nothing crashed. On a Quest headset, attach `nevr-sentinel.log` from `/sdcard/Android/data/com.readyatdawn.r15/files/` instead;
         - the start-up log: `bin\win10\logs\nevr-boot.jsonl` in your Echo VR folder;
         - if it crashed: `nevr-crash-<id>.txt` from the same `%LOCALAPPDATA%\nevr\echovr\logs` folder (the crash record), and the newest files in `_temp\crashes\` and `bin\win10\_temp\crashes\` in your Echo VR folder.
 
@@ -72,4 +72,4 @@ body:
     id: files
     attributes:
       label: Files
-      description: Drag the log files (and crash files, if it crashed) here.
+      description: Drag the log files (and crash files, if it crashed) here. The game log with its `render_config` line is needed for every report.

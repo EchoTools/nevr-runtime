@@ -64,9 +64,15 @@ files. Attach them by dragging them into the form:
 
 | File | Where it is |
 |---|---|
-| The game's log for that session | `%LOCALAPPDATA%\nevr\echovr\logs\`: the `nevr-<date>T<time>.jsonl` file from that session (newest first if it just happened). Paste `%LOCALAPPDATA%\nevr\echovr\logs` into the Explorer address bar to get there. |
+| The game's log for that session (**always attach it**) | `%LOCALAPPDATA%\nevr\echovr\logs\`: the `nevr-<date>T<time>.jsonl` file from that session (newest first if it just happened). Paste `%LOCALAPPDATA%\nevr\echovr\logs` into the Explorer address bar to get there. |
 | The start-up log | `bin\win10\logs\nevr-boot.jsonl` in your Echo VR folder. |
 | If the game crashed | **`nevr-crash-<id>.txt`** in the same `%LOCALAPPDATA%\nevr\echovr\logs\` folder: the crash record (what failed, where, and what called it). Also the newest files in `_temp\crashes\` and in `bin\win10\_temp\crashes\` in your Echo VR folder (names like `RAD_CRASHDUMP_<you>_echovr_<day>_<time>.log` and `.json`). |
+
+**The line we read first.** The game's log holds a `render_config` line from the first rendered frame of the session, and another each time
+the picture setup changes: your graphics card and driver, the headset and its refresh rate, the render resolution and scale, and the game's
+graphics settings with what set them. A report about stutter, a low frame rate or a blurry picture is read against that line, so attach the log
+even when the problem does not look like a crash. On a Quest headset the same line is in `nevr-sentinel.log`, in the game's folder on the
+headset (`/sdcard/Android/data/com.readyatdawn.r15/files/`).
 
 **What these files contain:** your Discord account id; the crash files also contain your Windows user
 name and computer name. They do not contain your saved sign-in or its tokens. A
