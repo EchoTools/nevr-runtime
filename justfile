@@ -1676,6 +1676,29 @@ test-quest-plugins:
     timeout -k 5 120 "$out/plugin_runtime_test" "$out"
     echo "test-quest-plugins: all plugin loader tests pass on the host"
 
+# The Quest autopilot plugin on the host (#1202, docs/adr/0025-quest-autopilot-route.md): the route grammar, every
+# derived bit and limit, the clock, the filter against a fake clock, the event ring (two producers), and the plugin's
+# exports against a fake host with a real route file and its real reporter thread. The start-file and the
+# stopped-run cases each run in their own process (the plugin keeps one run per process). Built as the device builds
+# it, without exceptions. Fail-close.
+test-quest-autopilot:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-autopilot-host"
+    mkdir -p "$out/scratch"
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -pthread -Isrc)
+    "${cxx[@]}" src/quest/tests/autopilot_route_test.cpp src/quest/plugins/autopilot/route.cpp \
+        -o "$out/autopilot_route_test"
+    timeout 60 "$out/autopilot_route_test"
+    "${cxx[@]}" -DNEVR_AUTOPILOT_BUILD_IDS='"0000000000000000000000000000000000000000"' \
+        src/quest/tests/autopilot_run_test.cpp src/quest/plugins/autopilot/route.cpp \
+        src/quest/plugins/autopilot/autopilot.cpp src/quest/plugins/autopilot/plugin.cpp src/quest/data/sha256.cpp \
+        -o "$out/autopilot_run_test"
+    timeout 120 "$out/autopilot_run_test" "$out/scratch"
+    timeout 60 "$out/autopilot_run_test" "$out/scratch" start_file
+    timeout 60 "$out/autopilot_run_test" "$out/scratch" stopped
+    echo "test-quest-autopilot: all autopilot tests pass on the host"
+
 # The integration's pinned dlopen target against the real libr15.so (docs/adr/0003). Extracts it from the
 # store APK, checks its SHA-256 and resolves LibR15Dlopen() the way the loader would lay the image out.
 # Fail-close, including when the APK is absent (58 MB, not in the repository), so it is not part of
@@ -1825,6 +1848,7 @@ verify:
         test-quest-data-net \
         test-quest-integration \
         test-quest-plugins \
+        test-quest-autopilot \
         test-scripting
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.

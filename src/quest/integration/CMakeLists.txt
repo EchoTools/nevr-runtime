@@ -121,6 +121,25 @@ target_include_directories(nevr_noop_plugin PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}
 target_compile_options(nevr_noop_plugin PRIVATE -Wall -Wextra -Werror)
 target_link_options(nevr_noop_plugin PRIVATE -Wl,--build-id=sha1)
 
+# The autopilot (#1202, docs/adr/0025-quest-autopilot-route.md): a development-build plugin that drives the controllers
+# through a route file, for repeatable performance runs. It declares the libr15 build the input seam is pinned to. Like
+# nevr_noop it is in no APK the release or package-dev recipes build; `just quest-autopilot-apk` carries it. Built without
+# exceptions (its filter runs on the game's input thread); hidden visibility, so only the NEVR_PLUGIN_API entry points are
+# exported.
+add_library(nevr_autopilot_plugin SHARED
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/autopilot/plugin.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/autopilot/autopilot.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/autopilot/route.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../data/sha256.cpp")
+set_target_properties(nevr_autopilot_plugin PROPERTIES OUTPUT_NAME nevr_autopilot)
+target_compile_definitions(nevr_autopilot_plugin PRIVATE NEVR_AUTOPILOT_BUILD_IDS="${nevr_pinned_build_id}")
+target_include_directories(nevr_autopilot_plugin PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+target_link_libraries(nevr_autopilot_plugin PRIVATE nlohmann_json::nlohmann_json)
+target_compile_options(nevr_autopilot_plugin PRIVATE -Wall -Wextra -Werror -fno-exceptions -fvisibility=hidden
+                       -fvisibility-inlines-hidden)
+# --exclude-libs: the static libc++ archive keeps its symbols out of the export set, as the sentinel does.
+target_link_options(nevr_autopilot_plugin PRIVATE -Wl,--build-id=sha1 -Wl,--exclude-libs,ALL)
+
 # Sensor controls, never run: tests/quest frames_sensor_test.go reads them. Both hooks have a handler that
 # calls a helper with a personality directly; only in frames_probe_ok is the helper annotated.
 foreach(variant ok bad)
