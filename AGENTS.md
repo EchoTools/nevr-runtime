@@ -275,6 +275,12 @@ comment (for example N41, N48) is not a rule.
 | N109 | `src/runtime/CMakeLists.txt` does not put its own source directory on the include path. | `src/runtime/CMakeLists.txt` | verify |
 | N122, N124 | A config or mode decision logs its outcome at Info even when nothing happens (UPnP key and mapping, telemetry disabled, the server bring-up prologue check). | `src/runtime/lifecycle/config.cpp`, `src/runtime/server/upnp.cpp`, `src/runtime/server/gameserver_serverdb.cpp`, `src/runtime/server/gameserver_telemetry.cpp`, `src/runtime/lifecycle/state_machine.cpp` | nothing in verify; a run scored by `tests/smoke/score-log.sh` |
 
+#### The game folder
+
+| Rule | Statement | Guards | Checked by |
+| --- | --- | --- | --- |
+| (standing rule) | Nothing of ours is written to the game install except `bin\win10\BugSplat64.dll`, the host the game loads: no `config.yaml`, `_local`, `_temp`, logs, install record, set-aside or backup file (`.original`, `.legacy`, `.migrated`), `plugins` folder or MOVED-TO note. All of it lives under `%LOCALAPPDATA%\nevr\echovr` (the install record at `installer\nevr-install.txt`, every set-aside file in `installer\aside`). A snapshot of the install root taken before and after install, an update, a client run, a `-server` run and uninstall may differ only in the content of the host, and after uninstall not at all. | `installer/src/pc.rs`, `tools/package-release/install.ps1`, `tools/package-release/uninstall.ps1`, and every write the runtime makes at run time | `tools/tests/test_installer_scripts.py` (`GameFolderInvariantTest`: install, update and uninstall through the real core, in the Python suite verify runs); `tools/tests/test_game_folder_invariant.py` (the snapshot library). The client-run and `-server`-run steps are filled in with the commands in `NEVR_INVARIANT_CLIENT_RUN` and `NEVR_INVARIANT_SERVER_RUN` (`tools/game_folder_invariant.py`) and print NOT RUN until they are, so nothing checks the runtime's own writes yet (`docs/reference/launcher-install-root.md` lists what still writes there) |
+
 #### Writing a sensor (N93, N99, N101, N111)
 
 A sensor in `just verify` must fail when the thing it watches is gone, and only then:

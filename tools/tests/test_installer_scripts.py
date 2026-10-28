@@ -15,9 +15,13 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+import sys
 import unittest
 
 from installer_world import GAME, HOST, REPO, RUNTIME, World, core_binary, sha
+
+sys.path.insert(0, str(REPO / "tools"))
+import game_folder_invariant as invariant  # noqa: E402
 
 PKG = REPO / "tools/package-release"
 
@@ -70,8 +74,13 @@ class ScriptTestBase(unittest.TestCase):
 class InstallPs1Test(ScriptTestBase):
     def run_install(self, pkg: pathlib.Path, world: World, *extra: str):
         core_args = ",".join(f"'{a}'" for a in world.core_args())
-        command = (f"& '{pkg / 'install.ps1'}' -Dir '{world.game}' -NoPause {' '.join(extra)} -CoreArgs {core_args}; exit $LASTEXITCODE")
+        command = (f"& '{pkg / 'install.ps1'}' -Dir '{world.game}' -Root '{world.nevr}' -NoPause {' '.join(extra)} -CoreArgs {core_args}; exit $LASTEXITCODE")
         return subprocess.run(["pwsh", "-NoProfile", "-Command", command], capture_output=True, text=True, timeout=300,
+                              env=dict(os.environ, DISPLAY="", WAYLAND_DISPLAY=""))
+
+    def run_uninstall(self, pkg: pathlib.Path, world: World):
+        return subprocess.run(["pwsh", "-NoProfile", "-File", str(pkg / "uninstall.ps1"), "-Dir", str(world.game),
+                               "-Root", str(world.nevr), "-NoPause"], capture_output=True, text=True, timeout=120,
                               env=dict(os.environ, DISPLAY="", WAYLAND_DISPLAY=""))
 
     def test_a_real_run_installs_the_manifests_bytes_and_logs_the_run(self):
@@ -79,7 +88,9 @@ class InstallPs1Test(ScriptTestBase):
         result = self.run_install(pkg, world)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((world.game / "BugSplat64.dll").read_bytes(), HOST)
-        self.assertEqual((world.game / "nevr-runtime.dll").read_bytes(), RUNTIME)
+        self.assertEqual((world.nevr / "nevr-runtime.dll").read_bytes(), RUNTIME)
+        self.assertTrue((world.nevr / "installer/nevr-install.txt").is_file())
+        self.assertEqual(world.game_files(), ["BugSplat64.dll", "echovr.exe"], "nothing of ours but the host is in the game folder")
         events = world.events()
         for want in ("run_start", "manifest_check", "run_end"):
             self.assertIn(want, events)
@@ -96,7 +107,7 @@ class InstallPs1Test(ScriptTestBase):
         (pkg / "BugSplat64.dll").write_bytes(HOST)
         (pkg / "nevr-runtime.dll").write_bytes(RUNTIME)
         core_args = ",".join(f"'{a}'" for a in world.core_args())
-        command = f"& '{pkg / 'install.ps1'}' -Dir '{world.game}' -NoPause -CoreArgs {core_args}; exit $LASTEXITCODE"
+        command = f"& '{pkg / 'install.ps1'}' -Dir '{world.game}' -Root '{world.nevr}' -NoPause -CoreArgs {core_args}; exit $LASTEXITCODE"
         result = subprocess.run(["pwsh", "-NoProfile", "-Command", command], capture_output=True, text=True, timeout=300)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((world.game / "BugSplat64.dll").read_bytes(), HOST)
@@ -115,10 +126,12 @@ class InstallPs1Test(ScriptTestBase):
     def test_uninstall_ps1_undoes_what_the_core_installed(self):
         world, pkg = self.world(), self.package()
         self.assertEqual(self.run_install(pkg, world).returncode, 0)
-        undone = subprocess.run(["pwsh", "-NoProfile", "-File", str(pkg / "uninstall.ps1"), "-Dir", str(world.game)],
-                                capture_output=True, text=True, timeout=120)
+        undone = self.run_uninstall(pkg, world)
         self.assertEqual(undone.returncode, 0, undone.stdout + undone.stderr)
         self.assertEqual((world.game / "BugSplat64.dll").read_bytes(), GAME)
+        self.assertFalse((world.nevr / "nevr-runtime.dll").exists(), "the runtime is set aside in the nevr folder")
+        self.assertEqual(len(list((world.nevr / "installer/aside").glob("nevr-runtime.dll.uninstalled-*"))), 1)
+        self.assertEqual(world.game_files(), ["BugSplat64.dll", "echovr.exe"], "uninstall leaves nothing of ours in the game folder")
 
     def test_a_damaged_core_is_named_before_it_runs(self):
         world, pkg = self.world(), self.package()
@@ -134,7 +147,8 @@ class InstallPs1Test(ScriptTestBase):
         result = self.run_install(pkg, world)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertEqual((world.game / "BugSplat64.dll").read_bytes(), GAME)
-        self.assertFalse((world.game / "nevr-runtime.dll").exists())
+        self.assertFalse((world.nevr / "nevr-runtime.dll").exists())
+        self.assertEqual(world.game_files(), ["BugSplat64.dll", "echovr.exe"])
         end = world.records()[-1]
         self.assertEqual((end["event"], end["state"], end["failed"]), ("run_end", "unchanged", True))
 
@@ -142,6 +156,65 @@ class InstallPs1Test(ScriptTestBase):
         text = (PKG / "install.ps1").read_text()
         for needle in ("Copy-Item", "Rename-Item", "WriteAllBytes", "Write-State"):
             self.assertNotIn(needle, text)
+
+
+@unittest.skipUnless(shutil.which("pwsh"), "pwsh not installed")
+class GameFolderInvariantTest(ScriptTestBase):
+    """The standing rule: nothing of ours is written to the game install except BugSplat64.dll (AGENTS.md, "The game folder").
+
+    The install root is snapshotted before and after install, an update, a client run, a `-server` run and the uninstall; only the
+    content of `bin/win10/BugSplat64.dll` may differ from the first snapshot, and after the uninstall nothing does. The two game
+    runs are filled in with NEVR_INVARIANT_CLIENT_RUN and NEVR_INVARIANT_SERVER_RUN (tools/game_folder_invariant.py). A run whose
+    variable is unset is printed as NOT RUN: this test says nothing about it."""
+
+    def fake_install(self) -> pathlib.Path:
+        install = self.tmp / "ready-at-dawn-echo-arena"
+        (install / "bin/win10").mkdir(parents=True)
+        (install / "bin/win10/echovr.exe").write_bytes(b"exe")
+        (install / "bin/win10/BugSplat64.dll").write_bytes(GAME)
+        (install / "_local/r14logs").mkdir(parents=True)
+        (install / "_local/r14logs/old.log").write_text("the game's own log")
+        (install / "_local/config.json").write_text("{}")
+        return install
+
+    def script(self, pkg: pathlib.Path, name: str, game: pathlib.Path, world: World, *extra: str) -> subprocess.CompletedProcess:
+        core_args = ",".join(f"'{a}'" for a in world.core_args())
+        tail = f" -CoreArgs {core_args}" if name == "install.ps1" else ""
+        command = f"& '{pkg / name}' -Dir '{game}' -Root '{world.nevr}' -NoPause {' '.join(extra)}{tail}; exit $LASTEXITCODE"
+        return subprocess.run(["pwsh", "-NoProfile", "-Command", command], capture_output=True, text=True, timeout=300,
+                              env=dict(os.environ, DISPLAY="", WAYLAND_DISPLAY=""))
+
+    def test_install_update_client_run_server_run_and_uninstall_change_nothing_but_the_hosts_content(self):
+        world, pkg = self.world(), self.package()
+        second = World(self.tmp, host=b"second host NEVR-BUILD 9.9.10", runtime=b"second runtime NEVR-BUILD 9.9.10",
+                       manifest_version=6, name="w2")
+        self.addCleanup(second.server.close)
+        install = self.fake_install()
+        game = install / "bin/win10"
+        initial = invariant.snapshot(install)
+
+        def run_script(name, using):
+            def step(_root):
+                done = self.script(pkg, name, game, using)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            return step
+
+        results = invariant.run_steps(install, [
+            ("install", run_script("install.ps1", world)),
+            ("client run", invariant.command_step(invariant.CLIENT_RUN_ENV)),
+            ("update", run_script("install.ps1", second)),
+            ("server run", invariant.command_step(invariant.SERVER_RUN_ENV)),
+            ("uninstall", run_script("uninstall.ps1", world)),
+        ])
+        self.assertEqual([r.name for r in results], ["install", "client run", "update", "server run", "uninstall"])
+        for r in results:
+            if r.ran:
+                self.assertTrue(r.ok, f"step '{r.name}': {r.error or r.violations}")
+        for must in ("install", "update", "uninstall"):
+            self.assertTrue(next(r for r in results if r.name == must).ran, must)
+        self.assertEqual(invariant.snapshot(install), initial, "after the uninstall the install is exactly as it was")
+        self.assertEqual((game / "BugSplat64.dll").read_bytes(), GAME)
+        self.assertTrue((world.nevr / "installer/aside").is_dir(), "the set-aside files went to the nevr folder")
 
 
 @unittest.skipUnless(shutil.which("pwsh"), "pwsh not installed")
