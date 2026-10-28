@@ -660,9 +660,10 @@ fn a_folder_with_a_non_ascii_name_round_trips_through_the_record() {
     fs::create_dir_all(&game).unwrap();
     fs::write(game.join("echovr.exe"), b"exe").unwrap();
     fs::write(game.join(pc::HOST), GAME).unwrap();
-    let root = tempfile::tempdir().unwrap();
+    // The backup is kept under the root, so the root's name is non-ASCII too: the record has to carry it intact.
+    let root = parent.path().join("Zoë root");
     let scratch = tempfile::tempdir().unwrap();
-    let layout = Layout::new(&game, root.path());
+    let layout = Layout::new(&game, &root);
     let package = pkg(HOST_A, RT_A);
     let obs = pc::observe(&layout, false).unwrap();
     let plan = pc::plan(&obs, &package, false);
