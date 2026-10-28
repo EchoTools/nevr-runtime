@@ -60,10 +60,10 @@ def binary(version, commit=COMMIT, literals=1, extra=b"", trust=(b"NEVR-PLUGIN-T
     return shipped_pe("nevr-runtime.dll", version, b"\0" + b"\0".join(parts) + b"\0" + extra)
 
 
-def host_binary(version, commit=COMMIT, literals=1, extra=b""):
-    """A fake BugSplat64.dll, the thin host: a PE with the pinned VERSIONINFO and the identity literal. It embeds no
-    endpoints and carries no plugin-trust literal."""
-    parts = [identity(version, commit)] * literals
+def host_binary(version, commit=COMMIT, literals=1, extra=b"", build=(b"NEVR-HOST-BUILD release",)):
+    """A fake BugSplat64.dll, the thin host: a PE with the pinned VERSIONINFO, the identity literal and the host-build
+    literal (#1122). It embeds no endpoints and carries no plugin-trust literal."""
+    parts = [identity(version, commit)] * literals + list(build)
     return shipped_pe("BugSplat64.dll", version, b"\0" + b"\0".join(parts) + b"\0" + extra)
 
 
@@ -718,6 +718,22 @@ class ReleaseStagesTest(PackageFixture):
         self.assertIn("'dev', not 'release'", result.stderr)
         self.runtime.write_bytes(binary(DEV, trust=(b"NEVR-PLUGIN-TRUST dev",)))
         self.assertEqual(self.stamp().returncode, 1)  # a dev build is refused too: it can be handed to players
+
+    def test_a_dev_host_is_never_stamped_or_packaged(self):
+        # #1122: the host has no plugin-trust literal, yet a host built as the plugin developers' build loads an
+        # unsigned nevr-runtime.dll, so it carries a literal of its own and the release path reads it.
+        self.dll.write_bytes(host_binary(RELEASE, build=(b"NEVR-HOST-BUILD dev",)))
+        result = self.stamp("--version", RELEASE, dll=self.dll)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("NEVR-HOST-BUILD is 'dev', not 'release'", result.stderr)
+        self.dll.write_bytes(host_binary(DEV, build=(b"NEVR-HOST-BUILD dev",)))
+        self.assertEqual(self.stamp(dll=self.dll).returncode, 1)  # refused in a development package too: it can be handed to players
+
+    def test_a_host_without_the_host_build_literal_is_refused_and_so_are_two(self):
+        self.dll.write_bytes(host_binary(RELEASE, build=()))
+        self.assertIn("found 0", self.stamp("--version", RELEASE, dll=self.dll).stderr)
+        self.dll.write_bytes(host_binary(RELEASE, build=(b"NEVR-HOST-BUILD release",) * 2))
+        self.assertIn("found 2", self.stamp("--version", RELEASE, dll=self.dll).stderr)
 
     def test_the_literals_the_runtime_used_to_embed_are_not_a_release(self):
         # A DLL built before the run's mode came from -require-signed-plugins says signed-only or unsigned-allowed;

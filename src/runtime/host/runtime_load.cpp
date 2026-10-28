@@ -422,6 +422,7 @@ void EmitVersionsRecord(BootstrapDiagnostics& diagnostics, const std::string& ho
     nlohmann::json record;
     record["event"] = "versions";
     record["host_version"] = nevr_host::Version();
+    record["host_build"] = nevr_host::BuildWord();
     record["host_sha256"] = host_sha256.empty() ? kUnavailable : host_sha256;
     record["runtime_version"] = runtime.version.empty() ? kUnavailable : runtime.version;
     record["runtime_sha256"] = runtime.sha256.empty() ? kUnavailable : runtime.sha256;

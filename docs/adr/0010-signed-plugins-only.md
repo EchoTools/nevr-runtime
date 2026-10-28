@@ -234,7 +234,7 @@ Testing a plugin's signed-only behaviour needs no special build: start any build
 **The literal names the build, not the run.** Every build embeds a NUL-bounded literal, `\0NEVR-PLUGIN-TRUST <build>\0`, with `<build>`
 either `release` or `dev` (`kModeArray` in `src/runtime/ext/plugin_trust.cpp`). It is a fact of the file, so it cannot say which mode a
 run had; the log line above does. `-DNEVR_ALLOW_UNSIGNED_PLUGINS=ON` (the `mingw-plugin-dev` preset, which inherits `mingw-release` the
-way `mingw-scenario` does for `NEVR_SCENARIO_CONTROL`) makes the DLL say `dev`, and `tools/package_release.py` finds exactly one such
+way `mingw-scenario` does for `NEVR_SCENARIO_CONTROL`; `mingw-scenario` sets this option too, because the host must load its unsigned `nevr-runtime.dll`) makes the DLL say `dev`, and `tools/package_release.py` finds exactly one such
 literal in each packaged `BugSplat64.dll`, requires that it says `release`, and fails the package otherwise. `tools/tests/test_package_release.py` pins that check. The identity literal
 (`\0NEVR-BUILD <version> <commit40>\0`) is a cross-repo contract (`tools/package_release.py`, the `binary:` entries of
 `release-signer/config/sources.yml`, rule 2.3) and gets no new field. `release-signer` is unchanged by this ADR; a stage there that reads the

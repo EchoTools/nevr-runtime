@@ -325,9 +325,13 @@ endif()
 # build as the plugin developers' build: the DLL embeds the NUL-bounded literal "NEVR-PLUGIN-TRUST dev" instead of
 # "NEVR-PLUGIN-TRUST release", and tools/package_release.py refuses to package any DLL that does not say release.
 # It does not change how a run checks plugins. No config key and no environment variable changes the mode of a run.
+# It is also the build whose unsigned nevr-runtime.dll the host loads (ADR 0012), so every preset that makes a test DLL pair
+# (mingw-plugin-dev, mingw-scenario) sets it; tools/tests/test_preset_unsigned_runtime.py pins that.
 option(NEVR_ALLOW_UNSIGNED_PLUGINS "Mark the build as the plugin developers' build (never ship)" OFF)
 if(NEVR_ALLOW_UNSIGNED_PLUGINS)
   set_source_files_properties(ext/plugin_trust.cpp ext/plugin_pins.cpp PROPERTIES COMPILE_DEFINITIONS NEVR_ALLOW_UNSIGNED_PLUGINS=1)
+  # The host carries no NEVR-PLUGIN-TRUST literal, so it says the same in a literal of its own (host/host_identity.cpp).
+  set_property(SOURCE host/host_identity.cpp APPEND PROPERTY COMPILE_DEFINITIONS NEVR_ALLOW_UNSIGNED_PLUGINS=1)
   message(STATUS "NEVR_ALLOW_UNSIGNED_PLUGINS=ON: BugSplat64.dll is marked as a plugin developer build (never ship)")
 endif()
 set_source_files_properties(ext/plugin_signature.cpp ext/plugin_tree.cpp ext/plugin_trust.cpp ext/plugin_pins.cpp ext/self_provenance.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
