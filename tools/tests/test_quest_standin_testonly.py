@@ -1,6 +1,6 @@
 """The Quest stand-in test hooks must never ship in the production library.
 
-StandIn::SetForTest / ResetForTest exist only to let the host tests fix or clear the per-process
+StandIn::SetForTest / SetUserIdForTest / ResetForTest exist only to let the host tests fix or clear the per-process
 stand-ins; ResetForTest unpublishes them, which makes every stand-in predicate answer false and so
 disables the login send gate. They are compiled only under NEVR_QUEST_TESTING. This sensor proves,
 from the source and the build graph (no Android toolchain needed), that:
@@ -47,12 +47,12 @@ def _guarded(text: str, name: str) -> bool:
 class StandInTestOnly(unittest.TestCase):
     def test_setfortest_and_resetfortest_are_guarded_in_the_cpp(self):
         text = CPP.read_text()
-        for name in ("SetForTest", "ResetForTest"):
+        for name in ("SetForTest", "SetUserIdForTest", "ResetForTest"):
             self.assertTrue(_guarded(text, name), f"{name} is not under NEVR_QUEST_TESTING in {CPP}")
 
     def test_header_guards_them_too(self):
         text = HDR.read_text()
-        for name in ("SetForTest", "ResetForTest"):
+        for name in ("SetForTest", "SetUserIdForTest", "ResetForTest"):
             self.assertTrue(_guarded(text, name), f"{name} is not under NEVR_QUEST_TESTING in {HDR}")
 
     def test_no_production_target_defines_the_macro(self):

@@ -106,4 +106,6 @@ void TestHook_FailNamingTheHeldFile(bool fail);
 void TestHook_SetAfterDependenciesChecked(void (*hook)());
 // Makes every System32 pin of a plugin's dependencies fail with ERROR_ACCESS_DENIED (false restores it).
 void TestHook_FailPinning(bool fail);
+// Runs after a late load's check has passed and before the filter lets the load go on (#1177).
+void TestHook_SetAfterLateLoadAccepted(void (*hook)(const std::wstring& checked));
 #endif

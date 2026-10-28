@@ -15,6 +15,9 @@ bool InstallSocialHook(const char** detail, bool presenceNames, bool presenceLoc
   quest_social::SetPresenceNames(presenceNames);
   quest_social::SetPresenceLocal(presenceLocal);
   const quest_social::InstallResult result = quest_social::InstallSocialHook(/*enabled=*/true, uiEventProbe);
+  // ovr_GetLoggedInUserID stands a zero id in only when CNSOVRSocial, a reader of that id, will not be driven (#944).
+  // This runs before libpnsovr is loaded, so the answer is known when RadPluginMain asks.
+  nevr_quest_login::local::SetSocialFacadeInstalled(result.status == quest_social::InstallStatus::kOk);
   if (detail != nullptr) {
     *detail = result.status == quest_social::InstallStatus::kHookFailed ? sentinel::GotStatusName(result.got)
                                                                        : quest_social::InstallStatusName(result.status);

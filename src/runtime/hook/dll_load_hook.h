@@ -45,6 +45,18 @@ typedef bool (*LoadFilter)(const wchar_t* lower_path);
  * (the truncation is logged); IsLoadBlocked reports the truncated name. */
 void AddLoadFilter(const char* name, LoadFilter filter);
 
+/* Names the file a load that no filter refused must map (#1177). `lower_path` is what a filter was given (the
+ * caller's text, lowercased). Return true and set `load_path` to the full path to load instead of the caller's
+ * text: a filter that checked a file and holds it returns that file's own path, so a link in the caller's text that
+ * is pointed elsewhere after the check cannot lead the load to a file that was not checked. The hook then calls the
+ * real LoadLibraryExW with `load_path` and the caller's flags. A rewriter runs on the thread of the filter it
+ * belongs to, right after the filters, and only for a load no filter refused. */
+typedef bool (*LoadRewriter)(const wchar_t* lower_path, std::wstring* load_path);
+void AddLoadRewriter(const char* name, LoadRewriter rewriter);
+
+/* The first registered rewriter's answer for `lower_path` (what the hooks call; exposed for tests). */
+bool RewriteLoad(const wchar_t* lower_path, std::wstring* load_path);
+
 /* The Oculus Platform SDK predicate: true when the FILE NAME of `lower_path` (the part after the
  * last '\\' or '/') contains "ovrplatform", e.g. libovrplatform64_1.dll. A folder named like that
  * does not match, so a library under such a directory is not refused. */

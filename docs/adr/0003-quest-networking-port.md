@@ -1126,6 +1126,19 @@ on an error message of type `0x186b58b1`. The JUMP_SLOT (`0x6df638`) is hooked (
 no message of that type is ever queued. It needs no identity, so it is independent of `IdentitySource::Ready`
 and of substitution; `prereq_entitlement_local_calls` counts the requests that did not reach Meta.
 
+The logged-in user id is answered when the SDK has none (#944). `RadPluginMain` calls `ovr_GetLoggedInUserID`
+once (`0x206828`), stores the result in `0x70e3e8`, logs "[OVR] Logged in user app-scoped id: %llu" and, on 0,
+fails the plugin with `OVRLoggedInUserFail` ("There's a problem with the logged in user...", `0x206850` ->
+`0x206a5c`), before any login. The other readers of `0x70e3e8` are `ovr_User_GetOrgScopedID` at the login's three
+sites, the login member `accountid` (`GotUserProofCB`, `0x1ed740`) and four `CNSOVRSocial` functions. The JUMP_SLOT
+(`0x6dc080`) is hooked (`kLoggedInUserId`, `OnLoggedInUserId`): a nonzero id is returned unchanged; a zero is
+answered with a per-process stand-in (`StandIn::UserId`) only while local answers are on (the org-id requests that
+pass it never reach the SDK) and the social facade's hook is installed (`CNSOVRSocial` is not driven); otherwise the
+zero stays and the game fails as before. The rewrite replaces `accountid` with the NEVR account id, and the send
+gate refuses a login that still carries the stand-in there (`WireCheck::account_member_stand_in`). One record,
+`quest_logged_in_user_id`, says which answer was given and why; `prereq_user_id_calls` and
+`prereq_user_id_stand_ins` count the calls and the stand-ins.
+
 The four user requests are answered without Meta either (local answers, `login_prerequisites.h` namespace
 `local`). Once every hook they depend on is in (all four callbacks, eight accessors with `ovr_Message_IsError`,
 the four request imports and `ovr_PopMessage`, `ovr_Message_GetType`, `ovr_Message_GetRequestID`,
@@ -1177,13 +1190,12 @@ its flag first, so one `GotUserProofCB` runs per `LogIn` call.
 
 The community patch repo edits libpnsovr.so in 79 places: its 8 entitlement patches, its 70-site license overlay and
 a per-player id slot that its patcher bot stamps. `tools/quest_patcher_sites.tsv` lists each one (#944) with the
-hook in this tree that covers it, or, where there is none, why none is needed. 64 rows are covered by the hooks above
-or by the social facade and presence hooks. 14 of the other 15 need no hook. Two are the game's own HMD-serial
-check, which passes because nothing here writes the fields it compares. Eight are IAP's success processing, which is
-not a gate. Two are a function with no reference in the library. One is a TLS-handle cache test that is not a gate.
-One is the per-player id slot, which the NEVR login makes unnecessary. One row is open: `RadPluginMain` fails with
-`OVRLoggedInUserFail` when `ovr_GetLoggedInUserID` returns 0. Recorded device runs show it nonzero, but an account
-that never owned the app is not measured. `tools/quest_patcher_sites.py` fails a row
+hook in this tree that covers it, or, where there is none, why none is needed. 66 rows are covered by the hooks above
+(the per-player id stamp and the zero test after `ovr_GetLoggedInUserID` by `OnLoggedInUserId`) or by the social
+facade and presence hooks. The other 13 need no hook. Two are the game's own HMD-serial check, which passes because
+nothing here writes the fields it compares. Eight are IAP's success processing, which is not a gate. Two are a
+function with no reference in the library. One is a TLS-handle cache test that is not a gate.
+`tools/quest_patcher_sites.py` fails a row
 that has neither a hook nor a reason, or that names a hook not in the tree (`just test-tools`). With the extracted
 library (`just test-quest-hooks-pinned`) it also checks each row's stock word and function.
 
