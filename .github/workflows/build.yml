@@ -367,6 +367,30 @@ jobs:
           [[ "$tar_entries" == *echovr_server.exe* ]]
         done
 
+    # The core installer (installer/, ADR 0023) that install.ps1 runs: built locked from the committed Cargo.lock for
+    # Windows with the same mingw the DLLs use, then put through the dist target's sequence: debug info split into
+    # dist/symbols/<package>/nevr-install.exe.dbg, stripped, linked to it. A release build has no DWARF unless asked,
+    # and verify_symbols.py requires the symbol file to carry it, hence line tables. It rides in the zip as its own
+    # file, so the signed manifest's `contents` covers it. It runs after the dist target, which recreates dist/symbols.
+    - name: Build the core installer for Windows
+      if: steps.release.outputs.version != ''
+      shell: bash
+      env:
+        CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
+        CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+      run: |
+        set -euo pipefail
+        packages=(dist/nevr-runtime-v*/)
+        test "${#packages[@]}" -eq 1
+        name=$(basename "${packages[0]%/}")
+        exe=build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe
+        rustup target add x86_64-pc-windows-gnu
+        cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path installer/Cargo.toml --bin nevr-install --target-dir build/installer
+        x86_64-w64-mingw32-objcopy --only-keep-debug "$exe" "dist/symbols/$name/nevr-install.exe.dbg"
+        x86_64-w64-mingw32-strip --strip-all "$exe"
+        x86_64-w64-mingw32-objcopy "--add-gnu-debuglink=dist/symbols/$name/nevr-install.exe.dbg" "$exe"
+        test -s "$exe"
+
     # Every shipped PE is stripped and linked (.gnu_debuglink: name and CRC32) to the symbol file the dist
     # target split off it, and the stripped DLL still carries its identity literal (version and commit):
     # a crash from the field maps to function names through the .dbg's COFF symbol table (a release build has
@@ -386,6 +410,8 @@ jobs:
         for file in BugSplat64.dll nevr-runtime.dll echovr_server.exe; do
           python3 tools/verify_symbols.py "$pkg/$file" "dist/symbols/$name/$file.dbg"
         done
+        installer=build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe
+        python3 tools/verify_symbols.py "$installer" "dist/symbols/$name/nevr-install.exe.dbg"
         python3 tools/verify_symbols.py --tree "$pkg" "dist/symbols/$name"
         for file in BugSplat64.dll nevr-runtime.dll; do
           python3 tools/package_release.py stamp --dll "$pkg/$file" --version "$VERSION" --commit "$GITHUB_SHA"
@@ -401,21 +427,6 @@ jobs:
         path: dist/symbols/
         if-no-files-found: error
         retention-days: 90
-
-    # The core installer (installer/, ADR 0023) that install.ps1 runs: built locked from the committed Cargo.lock for
-    # Windows with the same mingw the DLLs use, and stripped. It rides in the zip as its own file, so the signed
-    # manifest's `contents` covers it.
-    - name: Build the core installer for Windows
-      if: steps.release.outputs.version != ''
-      shell: bash
-      env:
-        CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
-      run: |
-        set -euo pipefail
-        rustup target add x86_64-pc-windows-gnu
-        cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path installer/Cargo.toml --bin nevr-install --target-dir build/installer
-        x86_64-w64-mingw32-strip build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe
-        test -s build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe
 
     # The release package tree (the Windows zip's contents, no checksums yet) is gated here: the DLL
     # embeds exactly config/public-defaults.env and its identity literal carries this version and commit.
