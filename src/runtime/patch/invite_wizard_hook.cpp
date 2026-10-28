@@ -11,9 +11,16 @@
 #include "core/logging.h"
 #include "nevr_common.h"
 #include "runtime/hook/patching.h"
+#include "runtime/log/symcache.h"
 #include "runtime/patch/invite_choice_hook.h"
 #include "runtime/patch/invite_service.h"
 #include "runtime/patch/invite_wizard.h"
+#include "runtime/patch/ui_texture_mips_rules.h"  // NameForHash, the search of the table sorted by hash
+
+namespace evr {
+extern const SymCacheEntry kSymCacheData[];  // the generated symbol cache, sorted by hash (symcache_data.cpp)
+extern const int kSymCacheCount;
+}  // namespace evr
 
 // The wizard's click metric leaves the game through the remote-log submit (ADR 0017, "Runtime hook"). Its only caller is
 // CR15NetJsonLog::vslot[1] (ReVault echovr.exe 0x1401ccf40), which passes the serialised JSON line and its length to the
@@ -21,6 +28,11 @@
 // until a live capture). The bytes are read only when they are committed, readable memory; a wrong layout is refused, not
 // dereferenced.
 namespace nevr_invite_hook {
+
+const char* LevelName(std::uint64_t symbol) {
+  return nevr_ui_texture_mips::NameForHash(evr::kSymCacheData, static_cast<std::size_t>(evr::kSymCacheCount), symbol);
+}
+
 namespace {
 
 constexpr std::uint64_t kSubmitVA = 0x140113960ULL;
@@ -61,7 +73,7 @@ void ObserveMetric(std::uint64_t data, std::uint64_t length) {
   // The card choices (experience, mode, map) are what the component-event observer last saw (invite_choice_hook.cpp);
   // with none seen a create click is "incomplete".
   const nevr_invite::Choices choices = nevr_invite_choice_hook::Choices().Snapshot();
-  const nevr_invite::Plan plan = nevr_invite::PlanRequest(metric, choices);
+  const nevr_invite::Plan plan = nevr_invite::PlanRequest(metric, choices, LevelName);
   if (plan.skip != nevr_invite::Skip::None) {
     Log(EchoVR::LogLevel::Info, "%s", nevr_invite::NotSentLine(plan.skip, plan.code_len).c_str());
     return;

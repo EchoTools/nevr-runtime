@@ -53,6 +53,20 @@ class TheHookFeedsTheService(unittest.TestCase):
         self.assertNotRegex(hook, r"Submit\([^)]*\)\s*;[^}]*Op::Create")
 
 
+class ThePlanNamesTheMapCardsLevel(unittest.TestCase):
+    """A map card's level is named through the symbol cache; a plan built without that lookup refuses every payload and
+    capture-point create as no_level, so both callers of PlanRequest pass it."""
+
+    def test_the_wizard_hook_passes_the_symbol_cache_lookup(self):
+        hook = code("src/runtime/patch/invite_wizard_hook.cpp")
+        self.assertRegex(hook, r"nevr_invite::PlanRequest\(\s*metric\s*,\s*choices\s*,\s*LevelName\s*\)")
+        self.assertRegex(hook, r"NameForHash\(\s*evr::kSymCacheData\s*,[^;]*evr::kSymCacheCount")
+
+    def test_the_scenario_create_passes_the_same_lookup(self):
+        scenario = code("src/runtime/scenario/scenario_control.cpp")
+        self.assertRegex(scenario, r"nevr_invite::PlanRequest\(\s*metric\s*,\s*choices\s*,\s*nevr_invite_hook::LevelName\s*\)")
+
+
 class ShutdownStopsTheService(unittest.TestCase):
     def test_the_clients_normal_exit_stops_it_after_the_cdn_thread(self):
         text = code("src/runtime/lifecycle/crash_recovery.cpp")

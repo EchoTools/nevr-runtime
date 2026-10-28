@@ -1257,8 +1257,9 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_socket_role DISCOVERY_MODE PRE_TEST)
 
     # #906, docs/adr/0017: the client half of the invite codes (patch/invite_wizard.h): header only, pure.
-    add_executable(test_invite_wizard tests/test_invite_wizard.cpp)
-    set_source_files_properties(tests/test_invite_wizard.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    # It links the generated symbol cache: the map cards' level names are the cache's, and the test reads them from it.
+    add_executable(test_invite_wizard tests/test_invite_wizard.cpp log/symcache_data.cpp)
+    set_source_files_properties(tests/test_invite_wizard.cpp log/symcache_data.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_invite_wizard PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_invite_wizard PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_invite_wizard DISCOVERY_MODE PRE_TEST)

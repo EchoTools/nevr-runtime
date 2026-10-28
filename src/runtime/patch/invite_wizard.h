@@ -175,9 +175,9 @@ struct Choices {
 };
 
 enum class Op { Create, Resolve };
-enum class Skip { None, Empty, Malformed, TooLong, Incomplete, NotConfigured, NoToken, Busy, Stopped };
-// The first four are the plan's own; the last four are the worker's (invite_worker.h): the feature is off, no token is held,
-// the queue is full, the worker has stopped.
+enum class Skip { None, Empty, Malformed, TooLong, Incomplete, NoLevel, NotConfigured, NoToken, Busy, Stopped };
+// The first five are the plan's own (NoLevel: the chosen map card has no level name); the last four are the worker's
+// (invite_worker.h): the feature is off, no token is held, the queue is full, the worker has stopped.
 
 struct Request {
   std::string rpc;
@@ -193,13 +193,28 @@ struct Plan {
   std::string code;           // Resolve: the normalised code, only when a request is sent; never logged
 };
 
-/// The level name the service reads in `map` (a string: a number makes it refuse the request as `invalid`). The map page's
-/// cards (1, 2) have no level name recorded yet, so every choice sends "", which the service reads as any level of the
-/// mode; a card's name goes here once ReVault names it.
-inline std::string MapLevelName(const Choices& choices) {
-  (void)choices;
-  return std::string();
+// ---- the map page: which level a card is ----
+
+// The levels of the two combat map pages (page 39 of mnu_master), as CSymbol64 of the level name. The game's own page script
+// (a38aa87473ea079a) builds one card slot per handler with a payload label and a capture label: slot 1 FISSION / DYSON, slot 2
+// SURGE / COMBUSTION, and SURGE is the level `gauss` (the label table of accde4944e61e68f maps the short symbol gauss to
+// SURGE). The names are the generated symbol cache's (log/symcache_data.cpp), which is where a symbol becomes a name.
+inline constexpr std::uint64_t kLevelFission = 0xdf5ca7b7dfa383d4ULL;     // mpl_combat_fission
+inline constexpr std::uint64_t kLevelGauss = 0x43e2da7a0c623a19ULL;       // mpl_combat_gauss (the card says SURGE)
+inline constexpr std::uint64_t kLevelDyson = 0x43e2da7914642604ULL;       // mpl_combat_dyson
+inline constexpr std::uint64_t kLevelCombustion = 0x42670f2bed45703cULL;  // mpl_combat_combustion
+
+/// The level symbol a map card leads to, 0 when the choices name no map card: a mode with no map page, or a card the page does
+/// not have. Payload: card 1 FISSION, card 2 SURGE. Capture point: card 1 DYSON, card 2 COMBUSTION.
+inline std::uint64_t MapLevelSymbol(const Choices& choices) {
+  if (choices.experience != "combat") return 0;
+  if (choices.mode == "payload") return choices.map == 1 ? kLevelFission : choices.map == 2 ? kLevelGauss : 0;
+  if (choices.mode == "capture") return choices.map == 1 ? kLevelDyson : choices.map == 2 ? kLevelCombustion : 0;
+  return 0;
 }
+
+/// A level symbol's name, nullptr when unknown. The runtime passes the symbol cache's lookup; with none, no level has a name.
+using LevelNamer = const char* (*)(std::uint64_t);
 
 /// The region the service reads. The review page's `Server_region` is display text ("US WEST"), not a code, and no generic
 /// region code exists: the service picks a server by the player's stored pings when none is sent. So none is sent, until
@@ -209,7 +224,10 @@ inline std::string RegionCode(const Metric& metric) {
   return std::string();
 }
 
-inline Plan PlanRequest(const Metric& metric, const Choices& choices) {
+/// `level_name` resolves a map card's symbol to the level name the service reads in `map` (a string: a number makes it refuse
+/// the request as `invalid`). A mode with no map page sends "", which the service reads as any level of the mode; a map card
+/// whose symbol has no name is not sent (Skip::NoLevel), never sent as any level.
+inline Plan PlanRequest(const Metric& metric, const Choices& choices, LevelNamer level_name = nullptr) {
   Plan plan;
   if (metric.kind == Kind::Join) {
     plan.op = Op::Resolve;
@@ -243,10 +261,20 @@ inline Plan PlanRequest(const Metric& metric, const Choices& choices) {
       plan.skip = Skip::Incomplete;
       return plan;
     }
+    std::string map;
+    if (needsMap) {
+      const std::uint64_t symbol = MapLevelSymbol(choices);
+      const char* name = symbol != 0 && level_name != nullptr ? level_name(symbol) : nullptr;
+      if (name == nullptr || *name == '\0') {
+        plan.skip = Skip::NoLevel;
+        return plan;
+      }
+      map = name;
+    }
     plan.expires_s = ExpirySeconds(metric.expires_text);
     const nlohmann::json body = {{"experience", choices.experience},
                                  {"mode", choices.mode},
-                                 {"map", MapLevelName(choices)},
+                                 {"map", map},
                                  {"region", RegionCode(metric)},
                                  {"expires_s", plan.expires_s}};
     plan.request = Request{"invite/create", body.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace)};
@@ -303,6 +331,9 @@ inline std::string NotSentLine(Skip skip, std::size_t code_len) {
       break;
     case Skip::Incomplete:
       reason = "incomplete";
+      break;
+    case Skip::NoLevel:
+      reason = "no_level";
       break;
     case Skip::NotConfigured:
       reason = "not_configured";

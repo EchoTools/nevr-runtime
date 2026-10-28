@@ -12,7 +12,15 @@
 
 #include <nlohmann/json.hpp>
 
+#include "abi/symbol_hash.h"
+#include "runtime/log/symcache.h"
 #include "runtime/patch/invite_wizard.h"
+#include "runtime/patch/ui_texture_mips_rules.h"
+
+namespace evr {
+extern const SymCacheEntry kSymCacheData[];  // the generated symbol cache, sorted by hash (symcache_data.cpp)
+extern const int kSymCacheCount;
+}  // namespace evr
 
 namespace {
 
@@ -219,18 +227,120 @@ TEST(InvitePlan, ACreateSendsTheChoicesAnEmptyRegionAndTheExpiryAndNothingElse) 
   EXPECT_EQ(p.expires_s, 10800);
 }
 
+// The runtime names a level symbol through the generated symbol cache (invite_wizard_hook.cpp LevelName); so does this test, with
+// the real table.
+const char* SymCacheName(std::uint64_t symbol) {
+  return nevr_ui_texture_mips::NameForHash(evr::kSymCacheData, static_cast<std::size_t>(evr::kSymCacheCount), symbol);
+}
+
+// What the service accepts for a private combat game: `LevelsByMode` in nakama's server/evr/gameserver_session_start.go
+// (nakama cebca6aa6; the service hashes the request's `map` text and checks it against this list).
+const char* const kNakamaCombatLevels[] = {"mpl_combat_combustion", "mpl_combat_dyson", "mpl_combat_fission",
+                                           "mpl_combat_gauss"};
+
+bool NakamaAccepts(const std::string& level) {
+  for (const char* accepted : kNakamaCombatLevels) {
+    if (level == accepted) return true;
+  }
+  return false;
+}
+
+struct MapCard {
+  const char* mode;
+  int card;
+  const char* level;
+};
+
+// Every map card the wizard can show: the combat map page, after PAYLOAD (FISSION, SURGE) or CAPTURE POINT (DYSON, COMBUSTION).
+// SURGE is the level named gauss.
+const MapCard kMapCards[] = {{"payload", 1, "mpl_combat_fission"},
+                             {"payload", 2, "mpl_combat_gauss"},
+                             {"capture", 1, "mpl_combat_dyson"},
+                             {"capture", 2, "mpl_combat_combustion"}};
+
 // #1156, found by the first live call: the service reads `map` as a string (a level name) and refuses the whole request as
-// `invalid` when it is a number. The card index has no known level name yet, so the field is the empty string, which the
-// service reads as "any level of the mode".
+// `invalid` when it is a number.
 TEST(InvitePlan, TheMapIsAlwaysAStringNeverANumber) {
-  for (const Choices& choices : {Choices{"arena", "custom", 0}, Choices{"combat", "payload", 1}, Choices{"combat", "capture", 2}}) {
+  for (const Choices& choices : {Choices{"arena", "custom", 0}, Choices{"combat", "payload", 1}, Choices{"combat", "capture", 2},
+                                 Choices{"combat", "random", 0}, Choices{"lobby", "", 0}}) {
     const int map = choices.map;
-    const Plan p = nevr_invite::PlanRequest(nevr_invite::ParseMetric(CreateLine("US WEST", "3 HOURS")), choices);
+    const Plan p = nevr_invite::PlanRequest(nevr_invite::ParseMetric(CreateLine("US WEST", "3 HOURS")), choices, SymCacheName);
     ASSERT_TRUE(p.request.has_value()) << map;
     const nlohmann::json body = nlohmann::json::parse(p.request->body);
     ASSERT_TRUE(body.contains("map")) << map;
     EXPECT_TRUE(body["map"].is_string()) << map;
   }
+}
+
+// The chosen card's level is what the create asks for, resolved through the symbol cache, and every one of them is a name the
+// service accepts for a combat game.
+TEST(InviteMapCards, EveryMapCardResolvesToALevelNameNakamaAccepts) {
+  for (const MapCard& card : kMapCards) {
+    const Plan p = nevr_invite::PlanRequest(nevr_invite::ParseMetric(CreateLine("EU", "1 DAY")),
+                                            Choices{"combat", card.mode, card.card}, SymCacheName);
+    ASSERT_TRUE(p.request.has_value()) << card.mode << " card " << card.card;
+    EXPECT_EQ(p.skip, Skip::None);
+    const std::string level = nlohmann::json::parse(p.request->body)["map"];
+    EXPECT_EQ(level, card.level) << card.mode << " card " << card.card;
+    EXPECT_TRUE(NakamaAccepts(level)) << level;
+  }
+}
+
+TEST(InviteMapCards, TheFourLevelSymbolsAreTheHashesOfTheirNamesAndTheCacheKnowsThem) {
+  EXPECT_EQ(nevr_invite::kLevelFission, EchoVR::CSymbol64Hash("mpl_combat_fission"));
+  EXPECT_EQ(nevr_invite::kLevelGauss, EchoVR::CSymbol64Hash("mpl_combat_gauss"));
+  EXPECT_EQ(nevr_invite::kLevelDyson, EchoVR::CSymbol64Hash("mpl_combat_dyson"));
+  EXPECT_EQ(nevr_invite::kLevelCombustion, EchoVR::CSymbol64Hash("mpl_combat_combustion"));
+  for (const MapCard& card : kMapCards) {
+    const std::uint64_t symbol = nevr_invite::MapLevelSymbol(Choices{"combat", card.mode, card.card});
+    ASSERT_NE(symbol, 0u) << card.mode << " card " << card.card;
+    const char* name = SymCacheName(symbol);
+    ASSERT_NE(name, nullptr) << card.mode << " card " << card.card;
+    EXPECT_STREQ(name, card.level);
+  }
+}
+
+TEST(InviteMapCards, ACardTheMapPageDoesNotHaveIsRefusedNotSentAsAnyLevel) {
+  for (const Choices& choices : {Choices{"combat", "payload", 3}, Choices{"combat", "capture", 3}, Choices{"combat", "payload", 9},
+                                 Choices{"combat", "capture", -1}}) {
+    const Plan p = nevr_invite::PlanRequest(nevr_invite::ParseMetric(CreateLine("EU", "1 DAY")), choices, SymCacheName);
+    EXPECT_FALSE(p.request.has_value()) << choices.mode << " card " << choices.map;
+    EXPECT_EQ(p.skip, Skip::NoLevel) << choices.mode << " card " << choices.map;
+  }
+}
+
+TEST(InviteMapCards, ASymbolWithNoNameIsRefusedNotSentAsAnyLevel) {
+  const Choices choices{"combat", "payload", 1};
+  const Metric metric = nevr_invite::ParseMetric(CreateLine("EU", "1 DAY"));
+  const auto none = [](std::uint64_t) -> const char* { return nullptr; };
+  const auto empty = [](std::uint64_t) -> const char* { return ""; };
+  EXPECT_EQ(nevr_invite::PlanRequest(metric, choices, none).skip, Skip::NoLevel);
+  EXPECT_EQ(nevr_invite::PlanRequest(metric, choices, empty).skip, Skip::NoLevel);
+  EXPECT_EQ(nevr_invite::PlanRequest(metric, choices).skip, Skip::NoLevel) << "no namer at all";
+  EXPECT_FALSE(nevr_invite::PlanRequest(metric, choices, none).request.has_value());
+}
+
+// A namer that would name any symbol, even 0: a card with no level must not reach it.
+TEST(InviteMapCards, ACardWithNoSymbolNeverReachesTheNamer) {
+  const auto names_anything = [](std::uint64_t) -> const char* { return "mpl_combat_dyson"; };
+  const Metric metric = nevr_invite::ParseMetric(CreateLine("EU", "1 DAY"));
+  EXPECT_EQ(nevr_invite::PlanRequest(metric, Choices{"combat", "payload", 3}, names_anything).skip, Skip::NoLevel);
+  EXPECT_EQ(nevr_invite::PlanRequest(metric, Choices{"combat", "capture", 7}, names_anything).skip, Skip::NoLevel);
+}
+
+TEST(InviteMapCards, AModeWithNoMapPageSendsNoLevelAndIsNotRefused) {
+  for (const Choices& choices : {Choices{"arena", "custom", 0}, Choices{"arena", "ai", 0}, Choices{"combat", "random", 0},
+                                 Choices{"lobby", "", 0}}) {
+    const Plan p = nevr_invite::PlanRequest(nevr_invite::ParseMetric(CreateLine("EU", "1 DAY")), choices, SymCacheName);
+    ASSERT_TRUE(p.request.has_value()) << choices.experience << " " << choices.mode;
+    EXPECT_EQ(nlohmann::json::parse(p.request->body)["map"], "") << choices.experience << " " << choices.mode;
+  }
+}
+
+TEST(InviteMapCards, ThePayloadAndCapturePagesLeadToDifferentLevelsForTheSameCard) {
+  EXPECT_NE(nevr_invite::MapLevelSymbol(Choices{"combat", "payload", 1}), nevr_invite::MapLevelSymbol(Choices{"combat", "capture", 1}));
+  EXPECT_NE(nevr_invite::MapLevelSymbol(Choices{"combat", "payload", 2}), nevr_invite::MapLevelSymbol(Choices{"combat", "capture", 2}));
+  EXPECT_EQ(nevr_invite::MapLevelSymbol(Choices{"arena", "payload", 1}), 0u) << "only combat has the map page";
 }
 
 TEST(InvitePlan, ThePasswordTheMetricCarriesIsNeverForwarded) {
@@ -348,6 +458,7 @@ TEST(InviteLog, ARequestNotSentSaysWhy) {
   EXPECT_EQ(nevr_invite::NotSentLine(Skip::TooLong, 64), "[NEVR.INVITE] request not sent reason=too_long code_len=64");
   EXPECT_EQ(nevr_invite::NotSentLine(Skip::Incomplete, 0),
             "[NEVR.INVITE] request not sent reason=incomplete code_len=0");
+  EXPECT_EQ(nevr_invite::NotSentLine(Skip::NoLevel, 0), "[NEVR.INVITE] request not sent reason=no_level code_len=0");
   EXPECT_EQ(nevr_invite::NotSentLine(Skip::None, 0), "");
 }
 

@@ -30,6 +30,7 @@
 #include "runtime/lifecycle/config.h"
 #include "runtime/patch/invite_service.h"
 #include "runtime/patch/invite_wizard.h"
+#include "runtime/patch/invite_wizard_hook.h"
 #include "runtime/patch/party_invite_gate.h"
 #include "runtime/patch/social_facade.h"
 #include "runtime/patch/ui_text_writer.h"
@@ -414,7 +415,7 @@ std::string FireAction(const nevr_scenario_protocol::Command& cmd) {
       choices.mode = cmd.inviteMode;
       choices.map = static_cast<int>(cmd.number);
     }
-    const nevr_invite::Plan plan = nevr_invite::PlanRequest(metric, choices);
+    const nevr_invite::Plan plan = nevr_invite::PlanRequest(metric, choices, nevr_invite_hook::LevelName);
     if (plan.skip != nevr_invite::Skip::None) {
       return std::string("the invite plan was not made: ") + nevr_invite::NotSentLine(plan.skip, plan.code_len);
     }
