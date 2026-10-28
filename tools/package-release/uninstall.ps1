@@ -12,11 +12,8 @@
 # by install.ps1. A nevr-runtime.dll that is not a NEVR runtime (it carries neither the NEVR-BUILD identity text nor the
 # CDN user agent 'nevr-runtime/1.0', #785) is left alone and reported.
 #
-# It also puts the sign-in cache back: the runtime moves .credentials.json from an install's _local folder to
-# %LOCALAPPDATA%\nevr\echovr and leaves MOVED-TO-NEVR-ROOT.txt in the folder it took it from (ADR 0012). A runtime from
-# before that reads _local only, so the cache is copied back beside the marker (never over a file there; the root keeps
-# its copy, so a later install keeps the login) and the marker is set aside as MOVED-TO-NEVR-ROOT.txt.undone-<timestamp>.
-# The cache is created empty and made private before the token is copied into it; a copy that fails is set aside.
+# The sign-in cache stays where the runtime keeps it, in <nevr folder> (.credentials.json), and uninstall writes nothing
+# into the game folder's _local: a runtime that still reads _local only starts a new sign-in.
 #
 # usage:  powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 [-Dir <...\bin\win10>] [-Root <nevr folder>] [-Pause | -NoPause]
 # Without -Dir the folder is asked for. -Root names the nevr folder when it is not %LOCALAPPDATA%\nevr\echovr (an
@@ -186,48 +183,6 @@ if ($movedRuntimeAside -ne '') {
     Write-Output "RESTORED nevr-runtime.dll from ${movedRuntimeAside}"
   }
 }
-# The sign-in cache. The game files are already back, so a failure here is reported loudly but does not undo them.
-function Restore-SignInCache([string]$GameDir) {
-  if (-not $env:LOCALAPPDATA) { Write-Output 'NOT RESTORED the sign-in cache: LOCALAPPDATA is not set'; return }
-  $rootCache = Join-Path (Join-Path (Join-Path $env:LOCALAPPDATA 'nevr') 'echovr') '.credentials.json'
-  $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
-  foreach ($local in @((Join-Path $GameDir '_local'), (Join-Path (Join-Path $GameDir '..') '_local'), (Join-Path (Join-Path (Join-Path $GameDir '..') '..') '_local'))) {
-    $marker = Join-Path $local 'MOVED-TO-NEVR-ROOT.txt'
-    if (-not (Test-Path -LiteralPath $marker)) { continue }
-    $cache = Join-Path $local '.credentials.json'
-    if (Test-Path -LiteralPath $cache) {
-      Write-Output "LEFT ${cache}: a sign-in cache is already there"
-    } elseif (-not (Test-Path -LiteralPath $rootCache)) {
-      Write-Output "NOT RESTORED the sign-in cache to ${local}: there is none in $rootCache"
-      continue
-    } else {
-      try {
-        # An empty file first, made private before any of the token is written into it: the runtime writes the cache readable
-        # by its user only, and the restored one is no wider.
-        New-Item -ItemType File -Path $cache | Out-Null
-        if ([System.Environment]::OSVersion.Platform -eq 'Win32NT') {
-          $acl = New-Object System.Security.AccessControl.FileSecurity
-          $acl.SetAccessRuleProtection($true, $false)
-          $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-          $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me, 'FullControl', 'Allow')))
-          Set-Acl -LiteralPath $cache -AclObject $acl
-        }
-        # The bytes go into the file that is already private: Copy-Item -Force can replace the file, and with it the ACL set above.
-        [System.IO.File]::WriteAllBytes($cache, [System.IO.File]::ReadAllBytes($rootCache))
-      } catch {
-        $why = $_.Exception.Message
-        # Nothing is deleted: a file that did not get its content or its protection is set aside, so the runtime does not read it.
-        if (Test-Path -LiteralPath $cache) { Rename-Item -LiteralPath $cache -NewName ('.credentials.json.not-restored-' + $stamp) }
-        Write-Output "NOT RESTORED the sign-in cache to ${local}: $why"
-        Write-RunLog ("$scriptName WARNING sign-in cache not restored to ${local}: $why")
-        continue
-      }
-      Write-Output "RESTORED the sign-in cache to $cache (the copy in $rootCache is kept)"
-    }
-    Rename-Item -LiteralPath $marker -NewName ('MOVED-TO-NEVR-ROOT.txt.undone-' + $stamp)
-  }
-}
-Restore-SignInCache $Dir
 # The record is set aside under the nevr folder; one read from beside echovr.exe leaves the game folder this way.
 New-Item -ItemType Directory -Force -Path $asideDir | Out-Null
 $undoneRecord = Join-Path $asideDir ('nevr-install.txt.undone-' + (Get-Date).ToString('yyyyMMdd-HHmmss'))
