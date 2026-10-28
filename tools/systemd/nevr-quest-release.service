@@ -4,10 +4,14 @@ OnFailure=nevr-quest-release-failed.service
 
 [Service]
 Type=oneshot
-WorkingDirectory=%h/src/nevr-runtime
+WorkingDirectory=%h/src/nevr-runtime-work/release-timer/checkout
 # The R2 credential: R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY. It never appears in this file.
 EnvironmentFile=%h/.config/metis/r2-evr-echo-taxi.env
 Environment=RELEASE_PUBLIC_BASE=https://evr.echo.taxi
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
-ExecStart=/usr/bin/python3 -I %h/src/nevr-runtime/tools/quest_release_timer.py
+# The checkout is the timer's own: it moves it to the freshly fetched origin/main, and the tool refuses a dirty one or one
+# that is not at origin/main.
+ExecStartPre=/usr/bin/git -C %h/src/nevr-runtime-work/release-timer/checkout fetch --quiet origin main
+ExecStartPre=/usr/bin/git -C %h/src/nevr-runtime-work/release-timer/checkout switch --quiet --detach origin/main
+ExecStart=/usr/bin/python3 -I %h/src/nevr-runtime-work/release-timer/checkout/tools/quest_release_timer.py
 TimeoutStartSec=3h

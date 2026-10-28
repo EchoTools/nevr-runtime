@@ -66,17 +66,20 @@ install-hooks:
 reap-merged *args:
     python3 -I tools/reap_merged.py {{ args }}
 
-# Link the Quest release timer's units from this checkout into the user systemd and arm the timer (RELEASING.md, "The Quest half of the train"; #1210). The units name ~/src/nevr-runtime, so any other checkout is refused
+# Make the Quest release timer's own checkout (a detached worktree at origin/main under the work root), link its units from there into the user systemd and arm the timer (RELEASING.md, "The Quest half of the train"; #1210). The unit moves that checkout to the fetched origin/main before every run
 install-quest-release-timer:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ "$(readlink -f "{{ justfile_directory() }}")" != "$(readlink -f "$HOME/src/nevr-runtime")" ]; then
-        echo "install-quest-release-timer: refused: the units run $HOME/src/nevr-runtime; run this from there" >&2
-        exit 1
-    fi
+    CHECKOUT="$HOME/src/nevr-runtime-work/release-timer/checkout"
     test -f "$HOME/.config/metis/r2-evr-echo-taxi.env" || { echo "install-quest-release-timer: refused: ~/.config/metis/r2-evr-echo-taxi.env is missing" >&2; exit 1; }
+    git -C "{{ justfile_directory() }}" fetch --quiet origin main
+    if [ ! -e "$CHECKOUT/.git" ]; then
+        mkdir -p "$(dirname "$CHECKOUT")"
+        git -C "{{ justfile_directory() }}" worktree add --detach "$CHECKOUT" origin/main
+    fi
     for unit in nevr-quest-release.service nevr-quest-release-failed.service nevr-quest-release.timer; do
-        systemctl --user link "{{ justfile_directory() }}/tools/systemd/$unit"
+        test -f "$CHECKOUT/tools/systemd/$unit" || { echo "install-quest-release-timer: refused: $CHECKOUT has no tools/systemd/$unit (origin/main does not carry the units yet)" >&2; exit 1; }
+        systemctl --user link "$CHECKOUT/tools/systemd/$unit"
     done
     systemctl --user daemon-reload
     systemctl --user enable --now nevr-quest-release.timer
