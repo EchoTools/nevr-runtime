@@ -1447,7 +1447,7 @@ static void HandleRemoteOpen(ProxyPair* pair, int connIdx, uint64_t discordId, c
   }
 }
 
-// #1254: a refused login. A client cannot stop, and the game reconnects a closed login socket by itself, so the
+// N149 (#1254): a refused login. A client cannot stop, and the game reconnects a closed login socket by itself, so the
 // refusal is said once per refused sign-in and the later sockets of that sign-in are ended without a trip to the
 // service. Own mutex: the Error callback runs on the remote's thread and PrepareRemote on the game socket's.
 static std::mutex g_refusalMutex;
@@ -1485,7 +1485,7 @@ static void OnRemoteLoginRefused(int httpStatus, const std::string& refusalKey, 
 }
 
 static PreparedRemote PrepareRemote(nevr_socket_role::Role role, int connIdx) {
-  // #1254: a server's only credential for the community service is the one in config.yaml. Without it the
+  // N149 (#1254): a server's only credential for the community service is the one in config.yaml. Without it the
   // login would go out as account 0, or unauthenticated, and be refused every few seconds for ever, while
   // nothing else of the server (ServerDB, the HTTP listener) can start. Stop with the cause instead.
   if (g_isServer) {

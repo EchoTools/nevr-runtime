@@ -6504,10 +6504,17 @@ TEST_F(RefusedLoginClientTest, ALoginAfterARefusedOneIsStillALoginNotAShareOfNot
   GameSocket second;
   ASSERT_TRUE(second.Connect(port_, "/login"));
   ASSERT_TRUE(second.WaitForClose());
+  // The second socket is refused without a trip to the service; the slot it took must go back too, or the third
+  // /login is taken for a share of a login session that does not exist.
+  GameSocket third;
+  ASSERT_TRUE(third.Connect(port_, "/login"));
+  ASSERT_TRUE(third.WaitForClose());
   const std::vector<std::string> admitted = LogLinesContaining("game socket admitted");
-  ASSERT_EQ(admitted.size(), 2u);
-  EXPECT_NE(admitted[1].find("role=login"), std::string::npos) << admitted[1];
-  EXPECT_EQ(admitted[1].find("login-claimed"), std::string::npos) << admitted[1];
+  ASSERT_EQ(admitted.size(), 3u);
+  for (size_t i = 1; i < admitted.size(); ++i) {
+    EXPECT_NE(admitted[i].find("role=login"), std::string::npos) << admitted[i];
+    EXPECT_EQ(admitted[i].find("login-claimed"), std::string::npos) << admitted[i];
+  }
 }
 
 TEST_F(RefusedLoginRouterClientTest, AClientSaysARefusalOnceAndDoesNotGoBackForTheSameSignIn) {
