@@ -1520,6 +1520,77 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
 test-quest-apk-patch-map patch_repo:
     python3 tools/quest_apk_patch_map.py --repo "{{ patch_repo }}"
 
+# The libr15 build-time patcher (docs/adr/0021): builds the host tool quest_patch_libr15 into
+# build/quest-patcher/ with plain host g++. nlohmann::json comes from the header the build installed from
+# vcpkg.json (as in test-quest-social), never a system package; pass the include directory
+# that holds nlohmann/json.hpp as json_include when this worktree has no build of its own.
+quest-patcher json_include="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-patcher"
+    inc="{{ json_include }}"
+    [ -n "$inc" ] || inc="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include"
+    if [[ ! -f "$inc/nlohmann/json.hpp" ]]; then
+        echo "quest-patcher: FAIL - $inc/nlohmann/json.hpp not found; run 'just build' with a mingw-* preset first, or pass json_include" >&2
+        exit 1
+    fi
+    mkdir -p "$out/json_inc"
+    ln -sfn "$(cd "$inc" && pwd)/nlohmann" "$out/json_inc/nlohmann"
+    g++ -std=c++17 -O2 -Wall -Wextra -Werror -Isrc -isystem "$out/json_inc" \
+        src/quest/patch/quest_patch_libr15.cpp src/quest/patch/libr15_patcher.cpp src/quest/patch/libr15_patcher_cli.cpp \
+        src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp src/quest/sentinel/arm64_reloc.cpp \
+        -o "$out/quest_patch_libr15"
+    [ -x "$out/quest_patch_libr15" ] || { echo "quest-patcher: FAIL - $out/quest_patch_libr15 was not produced" >&2; exit 1; }
+    echo "quest-patcher: built $out/quest_patch_libr15"
+
+# The patcher and its tables on the host (docs/adr/0021 tests 1 to 3 and 9): the stub codec against
+# binutils-checked vectors, the patch table and the build ID derived from it, and the tool on a synthetic
+# ELF built in memory (the byte diff, every refusal with its row id, the extra-rows file, the command line).
+# The relocator window cases run in test-quest-hooks (arm64_reloc_test). No NDK, no device,
+# no real libr15. Fail-close.
+test-quest-patcher json_include="": (quest-patcher json_include)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-patcher"
+    # _GLIBCXX_ASSERTIONS: an out-of-bounds operator[] or an empty optional dereference in the patcher aborts the
+    # test that reached it, instead of reading past the buffer and passing.
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -D_GLIBCXX_ASSERTIONS -Isrc -isystem "$out/json_inc" -pthread)
+    scratch="$out/test-scratch"
+    rm -rf "$scratch"; mkdir -p "$scratch"
+    trap 'rm -rf "$scratch"' EXIT
+    "${cxx[@]}" src/quest/tests/stub_codec_test.cpp -o "$out/stub_codec_test"
+    timeout 60 "$out/stub_codec_test"
+    "${cxx[@]}" src/quest/tests/libr15_patch_table_test.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp \
+        -o "$out/libr15_patch_table_test"
+    timeout 60 "$out/libr15_patch_table_test"
+    "${cxx[@]}" src/quest/tests/libr15_patcher_test.cpp src/quest/patch/libr15_patcher.cpp src/quest/patch/libr15_patcher_cli.cpp \
+        src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp src/quest/sentinel/arm64_reloc.cpp \
+        -o "$out/libr15_patcher_test"
+    timeout 300 "$out/libr15_patcher_test" "$scratch" src/quest/tests/fixtures "$out/quest_patch_libr15"
+    echo "test-quest-patcher: stub codec, patch table and patcher tests pass on the host"
+
+# The shipped patcher on the real store libr15.so (docs/adr/0021 test 2, pinned): checks the file's SHA-256,
+# runs the tool twice and checks the output against the file and readelf (build ID, exactly which byte ranges
+# differ, stubs and credits words decoded back to their slots, segments, sections and end symbols). The
+# libr15 is the store APK's 58 MB file: pass its path, it is not in the repository and nothing here copies it
+# in. The two patched copies are written under build/quest-patcher/pinned-scratch and removed at the end.
+# Fail-close, including when the file is absent.
+test-quest-patcher-pinned libr15 json_include="": (quest-patcher json_include)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    libr15="{{ libr15 }}"
+    [ -f "$libr15" ] || { echo "test-quest-patcher-pinned: libr15.so not found: $libr15" >&2; exit 1; }
+    out="build/quest-patcher"
+    echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $libr15" | sha256sum -c -
+    scratch="$out/pinned-scratch"
+    rm -rf "$scratch"; mkdir -p "$scratch"
+    trap 'rm -rf "$scratch"' EXIT
+    g++ -std=c++17 -O1 -Wall -Wextra -Werror -Isrc -pthread \
+        src/quest/tests/libr15_patcher_pinned_test.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp \
+        -o "$out/libr15_patcher_pinned_test"
+    timeout 600 "$out/libr15_patcher_pinned_test" "$out/quest_patch_libr15" "$libr15" "$scratch"
+    echo "test-quest-patcher-pinned: the tool's output on the pinned libr15 is as the table says"
+
 # Quest social provider on the host (docs/adr/0003, "Social provider"): the ABI pins against the
 # recorded vtable, the facade driven through its vtable, the hook decision through the real callback
 # thunk, and the exception contract. The frames that sit under a call into the game
