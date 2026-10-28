@@ -18,6 +18,7 @@
 #include "login_prompt_hook.h"
 #include "data_wiring.h"
 #include "obb_skip_hook.h"
+#include "os_build_gate_hook.h"
 #include "permission_wait_hook.h"
 #include "process_end_hook.h"
 #include "texture_quality_hook.h"
@@ -116,6 +117,10 @@ bool InstallPermissionWaitHook() noexcept {
 // The Vulkan extension window (#868): the device extensions libr15 requires stay inside the 128 entries it reads. A
 // refused install is logged by GotHook and leaves the game's calls intact.
 bool InstallVkExtWindowHook() noexcept { return nevr_quest::vk_window::Install(); }
+
+// The game never refuses a headset for its OS build number (#945). A refused install is logged by GotHook and by the
+// hook's own line, and leaves the game's call intact.
+bool InstallOsBuildGateHook() noexcept { return nevr_quest::os_build_gate::Install(); }
 
 // The eye-buffer size libr15 creates its swap chain with (#943). A refused install is logged by GotHook and by the hook's
 // own line, and leaves the game's calls intact.

@@ -1298,6 +1298,13 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/vk_ext_window_test" -ldl
     timeout 120 "$out/vk_ext_window_test"
+    # The OS build floor (#945): the real handler through the thunk entry against a stand-in for CSysInfo::OSBuildVersion,
+    # a number below the floor, above it, none, and an unknown floor.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/os_build_gate_hook_test.cpp \
+        src/quest/sentinel/os_build_gate_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/os_build_gate_hook_test" -ldl
+    timeout 120 "$out/os_build_gate_hook_test"
     # The texture-quality hook (#943): the real handler through the thunk entry against a stand-in for vrapi_GetSystemPropertyInt,
     # every level's eye size, the pass-through of every other id, the latch, `stock`, and the shared slot's observer.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/texture_quality_hook_test.cpp \

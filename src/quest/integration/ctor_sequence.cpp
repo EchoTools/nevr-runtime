@@ -37,6 +37,7 @@ const char* StepName(StepId id) {
     case StepId::kInstallProcessEnd: return "install_process_end";
     case StepId::kInstallPermissionWait: return "install_permission_wait";
     case StepId::kInstallVkExtWindow: return "install_vk_ext_window";
+    case StepId::kInstallOsBuildGate: return "install_os_build_gate";
     case StepId::kInstallResourceRequestLog: return "install_resource_request_log";
     case StepId::kInstallTextureQuality: return "install_texture_quality";
     case StepId::kInstallCreditsText: return "install_credits_text";
@@ -217,6 +218,10 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // The device extensions libr15 requires stay inside the 128 entries it reads (#868): every launch, no feature, no
     // counters. libr15 resolves its Vulkan functions when it starts the game, after the constructor.
     r.Run(StepId::kInstallVkExtWindow, [&] { return steps.InstallVkExtWindow(); });
+
+    // The game never refuses a headset for its OS build number (#945): every launch, no feature, no counters.
+    // CR15NetGame::Initialize asks for the number after the constructor.
+    r.Run(StepId::kInstallOsBuildGate, [&] { return steps.InstallOsBuildGate(); });
 
     // The log-only resource request hook (#871): a development build only, and only with its counters. Every libr15 slot
     // it needs exists from the start; the game requests resources after the constructor.
