@@ -17,7 +17,7 @@ import zipfile
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 HOST = b"new host NEVR-BUILD 9.9.9"
-RUNTIME = b"new runtime"
+RUNTIME = b"new runtime NEVR-BUILD 9.9.9"
 GAME = b"the game's own BugSplat64.dll"
 _CORE: list = []
 
@@ -98,6 +98,7 @@ class World:
             (site / "manifest.json").write_bytes(body.replace(b"beta", b"bata"))
         self.server = Server(site)
         self.root = tmp / "core-root"
+        self.nevr = tmp / "nevr-root"  # the player's nevr folder: runtime, install record and set-aside files (ADR 0012)
         self.game = tmp / "game"
         self.game.mkdir()
         (self.game / "echovr.exe").write_bytes(b"exe")
@@ -105,6 +106,10 @@ class World:
 
     def core_args(self) -> list[str]:
         return ["--root", str(self.root), "--base", self.server.base, "--pins", str(self.pins)]
+
+    def game_files(self) -> list[str]:
+        """What the game folder holds, by name: the standing rule is that only BugSplat64.dll of ours is ever in it."""
+        return sorted(p.name for p in self.game.iterdir())
 
     def records(self) -> list[dict]:
         log = self.root / "logs/nevr-install.jsonl"

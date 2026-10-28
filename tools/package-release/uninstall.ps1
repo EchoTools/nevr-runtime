@@ -1,13 +1,15 @@
 # NEVR runtime release: uninstall.
 #
 # Puts back what install.ps1 set aside: the original BugSplat64.dll and a legacy dbgcore.dll, and sets
-# nevr-runtime.dll, the file install.ps1 added to the player's nevr folder (%LOCALAPPDATA%\nevr\echovr, named by
-# runtime_root in nevr-install.txt; a record from before the split names none and the runtime is looked for beside
-# echovr.exe), aside as nevr-runtime.dll.uninstalled-<timestamp> in that folder. A nevr-runtime.dll that install.ps1
-# had set aside there (nevr-runtime.dll.original-<stamp>, named by runtime_aside) goes back under its own name, and
-# so does one it moved out of the game folder (nevr-runtime.dll.legacy-<stamp>, named by runtime_legacy), into the game
-# folder. It never deletes anything: the backup stays where it is, and nothing is overwritten that was not put there by
-# install.ps1. A nevr-runtime.dll that is not a NEVR runtime (it carries neither the NEVR-BUILD identity text nor the
+# nevr-runtime.dll, the file install.ps1 added to the player's nevr folder (%LOCALAPPDATA%\nevr\echovr, ADR 0012), aside
+# as nevr-runtime.dll.uninstalled-<timestamp>. Nothing of ours is written to the game folder: BugSplat64.dll is the only
+# file of ours that sits there. The install record is <nevr folder>\installer\nevr-install.txt and every file this script
+# sets aside goes to <nevr folder>\installer\aside; a record an earlier install.ps1 left beside echovr.exe is read when
+# the nevr folder has none, and is moved into the aside folder when the uninstall ends. A nevr-runtime.dll that install.ps1
+# had set aside there (nevr-runtime.dll.original-<stamp>, named by runtime_aside) goes back under its own name, and so does
+# one it moved out of the game folder (nevr-runtime.dll.legacy-<stamp>, named by runtime_legacy), into the game folder. It
+# never deletes anything of the player's: the backup stays where it is, and nothing is overwritten that was not put there
+# by install.ps1. A nevr-runtime.dll that is not a NEVR runtime (it carries neither the NEVR-BUILD identity text nor the
 # CDN user agent 'nevr-runtime/1.0', #785) is left alone and reported.
 #
 # It also puts the sign-in cache back: the runtime moves .credentials.json from an install's _local folder to
@@ -17,8 +19,8 @@
 # The cache is created empty and made private before the token is copied into it; a copy that fails is set aside.
 #
 # usage:  powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 [-Dir <...\bin\win10>] [-Root <nevr folder>] [-Pause | -NoPause]
-# Without -Dir the folder is asked for. -Root names the nevr folder when the record does not (it always does for an install
-# made by this release); without either, a record from before the split is read as having the runtime beside echovr.exe.
+# Without -Dir the folder is asked for. -Root names the nevr folder when it is not %LOCALAPPDATA%\nevr\echovr (an
+# administrator's prompt); the record of an install made by this release names it too (runtime_root).
 param([string]$Dir = '', [string]$Root = '', [switch]$Pause, [switch]$NoPause)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
@@ -74,15 +76,29 @@ if ($Dir -eq '') {
 }
 
 if (@(Get-Process -Name echovr -ErrorAction SilentlyContinue).Count -gt 0) { throw 'echovr.exe is running; close the game first' }
-$state = Join-Path $Dir 'nevr-install.txt'
-if (-not (Test-Path -LiteralPath $state)) { throw "no nevr-install.txt in ${Dir}: nothing installed by install.ps1 to undo" }
+# The record: <nevr folder>\installer\nevr-install.txt; a record beside echovr.exe (an earlier install.ps1) is read when the
+# nevr folder has none. The nevr folder is -Root, else %LOCALAPPDATA%\nevr\echovr, else the one the legacy record names.
+$nevrRoot = $Root
+if ($nevrRoot -eq '' -and $env:LOCALAPPDATA) { $nevrRoot = Join-Path (Join-Path $env:LOCALAPPDATA 'nevr') 'echovr' }
+$legacyState = Join-Path $Dir 'nevr-install.txt'
+$state = ''
+if ($nevrRoot -ne '') {
+  $rootState = Join-Path (Join-Path $nevrRoot 'installer') 'nevr-install.txt'
+  if (Test-Path -LiteralPath $rootState) { $state = $rootState }
+}
+if ($state -eq '' -and (Test-Path -LiteralPath $legacyState)) { $state = $legacyState }
+if ($state -eq '') { throw "no nevr-install.txt in $(if ($nevrRoot -ne '') { Join-Path $nevrRoot 'installer' } else { 'the nevr folder' }) or in ${Dir}: nothing installed by install.ps1 to undo" }
 $values = @{}
 foreach ($line in Get-Content -LiteralPath $state -Encoding UTF8) {
   if ($line -match '^([a-z_0-9]+)=(.*)$') { $values[$Matches[1]] = $Matches[2] }
 }
 foreach ($key in 'backup', 'legacy', 'installed_sha256') {
-  if (-not $values.ContainsKey($key)) { throw "nevr-install.txt has no $key" }
+  if (-not $values.ContainsKey($key)) { throw "$state has no $key" }
 }
+if ($nevrRoot -eq '' -and $values.ContainsKey('runtime_root') -and $values['runtime_root'] -ne '') { $nevrRoot = $values['runtime_root'] }
+if ($nevrRoot -eq '') { throw 'the nevr folder is unknown (LOCALAPPDATA is not set); pass -Root <nevr folder>' }
+# Every file this script sets aside lands here, never in the game folder.
+$asideDir = Join-Path (Join-Path $nevrRoot 'installer') 'aside'
 $backup = $values['backup']
 $legacyAside = $values['legacy']
 # A nevr-runtime.dll that stood in the folder before install.ps1 (install.ps1 renamed it to nevr-runtime.dll.original-<stamp>);
@@ -95,7 +111,7 @@ $runtimeRoot = if ($Root -ne '') { $Root } elseif ($values.ContainsKey('runtime_
 if (-not (Test-Path -LiteralPath $backup)) { throw "the backup is gone: ${backup}; nothing was changed" }
 # #779: an install made before #762 may have saved a NEVR runtime as the original; restoring it would restore the runtime.
 if (Test-NevrRuntime $backup) {
-  throw "the backup ${backup} is a NEVR runtime, not the game's own file (an earlier install.ps1 saved it); nothing was changed. Restore the game's original BugSplat64.dll (for example, Verify Files in the Meta Horizon app), then delete $state"
+  throw "the backup ${backup} is a NEVR runtime, not the game's own file (an earlier install.ps1 saved it); nothing was changed. Restore the game's original BugSplat64.dll (for example, Verify Files in the Meta Horizon app), then set $state aside"
 }
 $target = Join-Path $Dir 'BugSplat64.dll'
 # #759: the DLL must be a build of ours: the one recorded, an earlier one install.ps1 recorded when it updated,
@@ -130,7 +146,7 @@ Copy-Item -LiteralPath $backup -Destination $target -Force
 if ((Get-Sha $target) -ne (Get-Sha $backup)) { throw 'the restored BugSplat64.dll does not match the backup' }
 Write-Output ("RESTORED BugSplat64.dll sha256=" + (Get-Sha $target) + " from $backup (backup kept)")
 if ($legacyAside -ne '') {
-  Rename-Item -LiteralPath $legacyAside -NewName 'dbgcore.dll'
+  Move-Item -LiteralPath $legacyAside -Destination (Join-Path $Dir 'dbgcore.dll')
   Write-Output 'RESTORED dbgcore.dll'
 }
 # The game no longer loads the runtime: set it aside, if it is ours.
@@ -139,9 +155,10 @@ $runtimeRemoved = $false
 if (Test-Path -LiteralPath $runtimeTarget) {
   if (Test-NevrRuntime $runtimeTarget) {
     $runtimeAside = 'nevr-runtime.dll.uninstalled-' + (Get-Date).ToString('yyyyMMdd-HHmmss')
-    Rename-Item -LiteralPath $runtimeTarget -NewName $runtimeAside
+    New-Item -ItemType Directory -Force -Path $asideDir | Out-Null
+    Move-Item -LiteralPath $runtimeTarget -Destination (Join-Path $asideDir $runtimeAside)
     $runtimeRemoved = $true
-    Write-Output "SET ASIDE nevr-runtime.dll as $runtimeAside in $runtimeRoot"
+    Write-Output "SET ASIDE nevr-runtime.dll as $runtimeAside in $asideDir"
   } else {
     Write-Output 'LEFT nevr-runtime.dll: it is not a NEVR runtime (no NEVR-BUILD identity text or nevr-runtime/1.0 user agent), so install.ps1 did not put it there'
   }
@@ -152,7 +169,7 @@ if ($priorRuntimeAside -ne '') {
   if (Test-Path -LiteralPath $runtimeTarget) {
     Write-Output "KEPT ${priorRuntimeAside}: nevr-runtime.dll is in the folder and was not touched, so the earlier file stays aside"
   } else {
-    Rename-Item -LiteralPath $priorRuntimeAside -NewName 'nevr-runtime.dll'
+    Move-Item -LiteralPath $priorRuntimeAside -Destination $runtimeTarget
     $runtimeRestored = $true
     Write-Output "RESTORED nevr-runtime.dll from ${priorRuntimeAside}"
   }
@@ -164,7 +181,7 @@ if ($movedRuntimeAside -ne '') {
   if (Test-Path -LiteralPath $legacyRuntimeTarget) {
     Write-Output "KEPT ${movedRuntimeAside}: nevr-runtime.dll is in the game folder and was not touched, so the earlier file stays aside"
   } else {
-    Rename-Item -LiteralPath $movedRuntimeAside -NewName 'nevr-runtime.dll'
+    Move-Item -LiteralPath $movedRuntimeAside -Destination $legacyRuntimeTarget
     $movedRestored = $true
     Write-Output "RESTORED nevr-runtime.dll from ${movedRuntimeAside}"
   }
@@ -211,7 +228,10 @@ function Restore-SignInCache([string]$GameDir) {
   }
 }
 Restore-SignInCache $Dir
-Rename-Item -LiteralPath $state -NewName ('nevr-install.txt.undone-' + (Get-Date).ToString('yyyyMMdd-HHmmss'))
+# The record is set aside under the nevr folder; one read from beside echovr.exe leaves the game folder this way.
+New-Item -ItemType Directory -Force -Path $asideDir | Out-Null
+$undoneRecord = Join-Path $asideDir ('nevr-install.txt.undone-' + (Get-Date).ToString('yyyyMMdd-HHmmss'))
+Move-Item -LiteralPath $state -Destination $undoneRecord
 Write-RunLog ("OK $scriptName RESTORED BugSplat64.dll Dir=$Dir nevr-runtime.dll set aside=$runtimeRemoved earlier nevr-runtime.dll restored=$runtimeRestored moved nevr-runtime.dll restored=$movedRestored runtime folder=$runtimeRoot")
 
 } catch {

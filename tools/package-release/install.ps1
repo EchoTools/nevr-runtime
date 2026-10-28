@@ -79,6 +79,7 @@ function Test-Echo([string]$Folder) { [System.IO.File]::Exists((Get-ExePath $Fol
 
 # The library folders the Oculus / Meta Horizon app records for this user (value Path, or
 # OriginalPath when the library was moved). A missing key or an unreadable one adds nothing.
+# PowerShell names are case-insensitive: nothing below may be called $root, which is the -Root parameter.
 function Get-LibraryRoots {
   $out = @()
   try {
@@ -98,14 +99,14 @@ function Get-LibraryRoots {
 }
 
 if ($Dir -eq '') {
-  $roots = @('C:\Program Files\Meta Horizon', 'C:\Program Files\Oculus', 'C:\Program Files (x86)\Oculus',
+  $libraryRoots = @('C:\Program Files\Meta Horizon', 'C:\Program Files\Oculus', 'C:\Program Files (x86)\Oculus',
              'D:\Oculus', 'D:\Meta Horizon', 'E:\Oculus', 'E:\Meta Horizon') + @(Get-LibraryRoots)
   $suffixes = @('Software\Software\ready-at-dawn-echo-arena\bin\win10', 'Software\ready-at-dawn-echo-arena\bin\win10',
                 'ready-at-dawn-echo-arena\bin\win10')
   $found = @()
-  foreach ($root in $roots) {
+  foreach ($libraryRoot in $libraryRoots) {
     foreach ($suffix in $suffixes) {
-      $location = $root.TrimEnd('\', '/') + '\' + $suffix
+      $location = $libraryRoot.TrimEnd('\', '/') + '\' + $suffix
       if ((Test-Echo $location) -and ($found -inotcontains $location)) { $found += $location }
     }
   }

@@ -131,10 +131,11 @@ here until a passing run on a current build is recorded in that issue.
    core installer in the zip (`docs/adr/0023-core-install-method.md`). The core checks the signed release manifest,
    installs the two DLLs from the zip when their SHA-256 matches the manifest's entry for that release and downloads
    the package the manifest names when they are missing or differ, copies your original `BugSplat64.dll` to
-   `BugSplat64.dll.original-<timestamp>`, renames a legacy `dbgcore.dll` to
-   `dbgcore.dll.legacy-<date>` and installs the two files. It deletes nothing, puts the folder back as it was if a
+   `BugSplat64.dll.original-<timestamp>` in the nEVR folder (`%LOCALAPPDATA%\nevr\echovr\installer\aside`), moves
+   a legacy `dbgcore.dll` there as `dbgcore.dll.legacy-<date>` and installs the two files. The only file of ours in
+   the game folder is `BugSplat64.dll`. It deletes nothing, puts the folder back as it was if a
    step fails, and writes a `[NEVR.INSTALL]` log whose path it prints.
-3. **Uninstall:** `uninstall.ps1 -Dir <bin\win10>` restores both and keeps the backups.
+3. **Uninstall:** `uninstall.ps1 -Dir <bin\win10>` (plus `-Root <folder>` when `install.ps1` was given one) restores both and keeps the backups.
 4. **Quest:** the Quest APK is not on GitHub: it repacks the store game. When a release has one (its release
    notes say so), it is at `https://evr.echo.taxi/nevr-runtime/v<X.Y.Z>/nevr-runtime-v<X.Y.Z>-quest.apk`, the
    address [`docs/reference/verifying-a-release.md`](docs/reference/verifying-a-release.md) gives; install it with

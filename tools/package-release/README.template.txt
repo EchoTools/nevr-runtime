@@ -66,9 +66,10 @@ Update
 Uninstall
   Close Echo VR, then:
        powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 -Dir "<the same bin\win10 folder>"
-  This puts your original BugSplat64.dll and a legacy dbgcore.dll back and sets nevr-runtime.dll aside, in your
-  nEVR folder, as nevr-runtime.dll.uninstalled-<timestamp>. A runtime install.ps1 moved out of the game folder
-  goes back there. The backup files stay.
+  (add -Root "<folder>" if you gave install.ps1 one). This puts your original BugSplat64.dll and a legacy
+  dbgcore.dll back and sets nevr-runtime.dll aside, in your nEVR folder (installer\aside), as
+  nevr-runtime.dll.uninstalled-<timestamp>. A runtime install.ps1 moved out of the game folder goes back there.
+  The backup files stay.
 
 If the Quest build will not start
   Connect the headset by USB (USB debugging on), then:

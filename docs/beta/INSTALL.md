@@ -18,11 +18,12 @@ have it, so please report anything odd (see "Report a bug").
 
 1. Close Echo VR.
 2. Find your Echo VR folder: the one that contains `bin\win10\echovr.exe`.
-3. In `bin\win10`, rename the existing `BugSplat64.dll` to `BugSplat64.dll.original`. Keep it: it is how
-   you uninstall. (`install.ps1` keeps the backup as `BugSplat64.dll.original-<timestamp>` instead.)
-4. Copy `BugSplat64.dll` from the zip into `bin\win10`. Copy `nevr-runtime.dll` into `%LOCALAPPDATA%\nevr\echovr`
-   (paste that into the File Explorer address bar; create the folders if they are not there). If an older
-   release left a `nevr-runtime.dll` in `bin\win10`, delete it: the game no longer loads it.
+3. Copy (do not rename) the existing `bin\win10\BugSplat64.dll` to `%LOCALAPPDATA%\nevr\echovr\installer\aside\BugSplat64.dll.original`
+   (paste the folder into the File Explorer address bar; create the folders if they are not there). Keep it: it is how
+   you uninstall. (`install.ps1` keeps the backup there as `BugSplat64.dll.original-<timestamp>` instead.) Nothing but
+   `BugSplat64.dll` of ours belongs in the game folder.
+4. Copy `BugSplat64.dll` from the zip into `bin\win10`. Copy `nevr-runtime.dll` into `%LOCALAPPDATA%\nevr\echovr`.
+   If an older release left a `nevr-runtime.dll` in `bin\win10`, delete it: the game no longer loads it.
 5. Start Echo VR the way you normally do.
 
 ## First start: sign in with Discord
@@ -46,9 +47,10 @@ want to sign in again (for example as a different Discord account).
 Close Echo VR, then either:
 
 - if you installed with `install.ps1`: run `powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 -Dir "<the bin\win10 folder>"`
-  from the unzipped folder. It restores your original `BugSplat64.dll` and sets `nevr-runtime.dll` aside;
-- if you installed by hand: delete `bin\win10\BugSplat64.dll` and `%LOCALAPPDATA%\nevr\echovr\nevr-runtime.dll`, and rename
-  `BugSplat64.dll.original` back to `BugSplat64.dll`.
+  from the unzipped folder (add `-Root "<folder>"` if you gave `install.ps1` one). It restores your original `BugSplat64.dll`
+  and sets `nevr-runtime.dll` aside in `%LOCALAPPDATA%\nevr\echovr\installer\aside`;
+- if you installed by hand: delete `%LOCALAPPDATA%\nevr\echovr\nevr-runtime.dll`, and copy
+  `%LOCALAPPDATA%\nevr\echovr\installer\aside\BugSplat64.dll.original` over `bin\win10\BugSplat64.dll`.
 
 ## Known issues
 
