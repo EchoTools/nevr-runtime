@@ -94,6 +94,14 @@ struct NvrGameContext {
                                  *   entry. Process-lifetime stable, so a plugin may keep it and
                                  *   log with it from any thread, including from Shutdown. */
     NevrLogFn   log;            /* the host's structured log; see NevrLogFn */
+
+    /* --- v8 additions (#1094) --- */
+    uint64_t    level_symbol;   /* CSymbol64 of the level the game holds as its main level, 0 while it holds none
+                                 *   (or the host cannot tell). Read on every context the host builds, so it is
+                                 *   current at init, on every frame and at every state change. */
+    const char* level_name;     /* level_symbol's name when the host's symbol table resolves it, else nullptr (a
+                                 *   level a plugin registered is not in the table: compare level_symbol with the
+                                 *   CSymbol64 of the name your config gives you). Process-lifetime stable. */
 };
 
 /* Host capability flags */
@@ -182,6 +190,12 @@ typedef void (*NvrPluginShutdown_fn)(void);
  * cross-DLL export signature changes in a backward-incompatible way.
  * Adding new optional exports or new NvrHostFlags values does NOT require a bump.
  *
+ * v8 (#1094): adds level_symbol + level_name to the TAIL of NvrGameContext, so a plugin can switch itself on
+ * for the levels its config names. A plugin checks ctx->ctx_size covers ctx->level_name before reading them,
+ * exactly as for v5 and v6; a pre-v8 plugin never reads them. The host fills them in every context it passes
+ * (init, per-frame, state change). A level can load with no game-state transition (the menu level at boot
+ * loads before the first transition), so read them in OnFrame as well as in OnGameStateChange.
+ *
  * v7 (#432): plugin-carried assets. The host exports NEVR_RegisterAsset / NEVR_DeregisterAssets (see "Plugin
  * assets" below) so a plugin can add levels and resources that live inside its own image. Additive: no
  * existing struct or signature changes, so the bump is a CAPABILITY signal. A plugin that registers assets
@@ -217,7 +231,7 @@ typedef void (*NvrPluginShutdown_fn)(void);
  * the plugin is v1 (pre-versioning). Fully backward-compatible — existing
  * plugins don't need recompilation.
  */
-#define NEVR_PLUGIN_API_VERSION 7
+#define NEVR_PLUGIN_API_VERSION 8
 
 /* Optional: return the API version the plugin was compiled against */
 typedef uint32_t (*NvrPluginGetApiVersion_fn)(void);

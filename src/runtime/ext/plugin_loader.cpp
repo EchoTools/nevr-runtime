@@ -13,10 +13,13 @@
 #include <string_view>
 #include <vector>
 
+#include "abi/game_level.h"           // #1094: where the game keeps its main level
 #include "core/globals.h"
 #include "core/logging.h"
 
+#include "runtime/hook/symbol_corpus.h"      // #1094: a level symbol's name
 #include "runtime/lifecycle/cli.h"
+#include "runtime/lifecycle/config.h"    // g_pGame
 #include "runtime/lifecycle/crash_recovery.h"  // ServerFatal
 #include "runtime/hook/hook_guard.h"
 #include "runtime/ext/plugin_load_plan.h"       // N134 S6: config-driven load plan
@@ -89,11 +92,36 @@ void HostPluginLog(const char* pluginId, uint32_t level, const char* message,
   Log(hostLevel, "%s", out.line.c_str());
 }
 
-// The context one plugin sees: the caller's, with that plugin's id and the host log filled in.
+// #1094: a level symbol as a log reads it: "none", the name when the symbol table knows it, else the hex value.
+static std::string LevelLabel(uint64_t symbol) {
+  if (symbol == 0) return "none";
+  char label[40];
+  EchoVR::FormatSymbolId(label, sizeof(label), symbol);
+  return label;
+}
+
+// #1094: the level the game holds as its main level, read from the game object (the runtime's g_pGame) on every
+// context the loader builds, so a plugin sees the level at init, on every frame and at every state change.
+// A level can load with no state transition, so the frame context carries it too. The host logs each change
+// once, whichever plugin or frame sees it first.
+static uint64_t ObserveMainLevel() {
+  const uint64_t level = EchoVR::ReadMainLevelSymbol(g_pGame, EchoVR::kPcMainLevelSymbolOffset);
+  static std::atomic<uint64_t> s_lastLogged{0};
+  const uint64_t before = s_lastLogged.exchange(level);
+  if (before != level) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] main level changed: from=%s to=%s symbol=0x%016llx",
+        LevelLabel(before).c_str(), LevelLabel(level).c_str(), static_cast<unsigned long long>(level));
+  }
+  return level;
+}
+
+// The context one plugin sees: the caller's, with that plugin's id, the host log and the current level filled in.
 static NvrGameContext ContextFor(const NvrGameContext& base, const char* id) {
   NvrGameContext ctx = base;
   ctx.plugin_id = id != nullptr ? id : "";
   ctx.log = HostPluginLog;
+  ctx.level_symbol = ObserveMainLevel();
+  ctx.level_name = ctx.level_symbol != 0 ? EchoVR::LookupSymbolName(ctx.level_symbol) : nullptr;
   return ctx;
 }
 

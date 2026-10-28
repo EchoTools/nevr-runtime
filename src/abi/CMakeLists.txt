@@ -9,7 +9,7 @@
 # core -> abi, never the reverse, and `just verify` enforces it.
 
 set(ABI_SOURCES "echovr_functions.cpp")
-set(ABI_HEADERS "echovr.h" "echovr_functions.h" "symbols.h" "symbol_hash.h")
+set(ABI_HEADERS "echovr.h" "echovr_functions.h" "symbols.h" "symbol_hash.h" "game_level.h")
 
 add_library(nevr_abi STATIC ${ABI_SOURCES} ${ABI_HEADERS})
 

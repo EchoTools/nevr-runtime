@@ -48,6 +48,9 @@
 // so pch.h includes become no-ops via include guards.
 #include "abi/echovr.h"
 #include "abi/echovr_functions.h"
+#include "abi/game_level.h"
+#include "abi/symbol_hash.h"
+#include "runtime/hook/symbol_corpus.h"
 #include "core/logging.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/compat/login_profile.h"
@@ -1926,7 +1929,7 @@ static uint32_t LoggingFixtureBoundAtInit(const char* dll) {
 }
 
 TEST(PluginLogApi, ContextCarriesALogFunctionAndTheVersionSaysSo) {
-  EXPECT_EQ(static_cast<uint32_t>(NEVR_PLUGIN_API_VERSION), 7u);
+  EXPECT_EQ(static_cast<uint32_t>(NEVR_PLUGIN_API_VERSION), 8u);
   NvrGameContext ctx = {};
   ctx.ctx_size = sizeof(NvrGameContext);
   EXPECT_GE(ctx.ctx_size, offsetof(NvrGameContext, log) + sizeof(NevrLogFn));
@@ -1987,6 +1990,180 @@ TEST(PluginLogHost, HostLogFunctionTagsLevelsAndKeepsAPercentSignOutOfTheFormat)
   EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
                                      "[NEVR.PLUGIN] plugin=direct bad level level_invalid=99"));
   ClearTestLogs();
+}
+
+// ----------------------------------------------------------------------------
+// #1094: a plugin sees the level the game holds as its main level, in every context it is handed.
+// The fixture (plugin_level_test_dll.cpp) keeps the last level each kind of context carried. The game object
+// is a zeroed buffer with the level written at the PC offset, so a level change is a store the test makes.
+// ----------------------------------------------------------------------------
+
+namespace {
+
+constexpr uint64_t kArenaA = 0x576ed3f8428ebc4bULL;           // CSymbol64("mpl_arena_a"), in the symbol corpus
+constexpr uint64_t kCombatCombustion = 0x42670f2bed45703cULL;  // CSymbol64("mpl_combat_combustion"), in the corpus
+
+std::vector<unsigned char> g_fakeGame;
+
+void SetFakeGameLevel(uint64_t symbol) {
+  std::memcpy(g_fakeGame.data() + EchoVR::kPcMainLevelSymbolOffset, &symbol, sizeof(symbol));
+}
+
+uint64_t LevelFixtureU64(const char* name, uint32_t which) {
+  const HMODULE plugin = GetModuleHandleA("test_plugin_level.dll");
+  if (plugin == nullptr) return 0xDEADDEADDEADDEADull;
+  const auto fn = reinterpret_cast<uint64_t (*)(uint32_t)>(GetProcAddress(plugin, name));
+  return fn != nullptr ? fn(which) : 0xDEADDEADDEADDEADull;
+}
+
+const char* LevelFixtureName(uint32_t which) {
+  const HMODULE plugin = GetModuleHandleA("test_plugin_level.dll");
+  if (plugin == nullptr) return "<fixture not loaded>";
+  const auto fn = reinterpret_cast<const char* (*)(uint32_t)>(GetProcAddress(plugin, "NevrTestPluginLevelName"));
+  return fn != nullptr ? fn(which) : "<export missing>";
+}
+
+constexpr uint32_t kInitCtx = 0;
+constexpr uint32_t kFrameCtx = 1;
+constexpr uint32_t kStateCtx = 2;
+
+class PluginLevelTest : public PluginLoaderDiagnosticTest {
+ protected:
+  void SetUp() override {
+    PluginLoaderDiagnosticTest::SetUp();
+    g_fakeGame.assign(0x8000, 0);
+    SetFakeGameLevel(EchoVR::kNoLevelInGame);
+    g_pGame = g_fakeGame.data();
+    g_testPluginLoadPlan.push_back({"lvl", "test_plugin_level.dll", false, "", "{}"});
+  }
+  void TearDown() override {
+    g_pGame = nullptr;
+    PluginLoaderDiagnosticTest::TearDown();
+  }
+  static void StateChange(uint32_t from, uint32_t to) {
+    NvrGameContext ctx = {};
+    ctx.ctx_size = sizeof(NvrGameContext);
+    NotifyPluginsStateChange(&ctx, from, to);
+  }
+};
+
+}  // namespace
+
+TEST(GameLevel, ReadsTheSymbolAtThePcAndTheQuestOffsetAndMapsNoLevelToZero) {
+  std::vector<unsigned char> game(0x8000, 0);
+  EXPECT_EQ(EchoVR::ReadMainLevelSymbol(nullptr, EchoVR::kPcMainLevelSymbolOffset), 0u);
+  const uint64_t none = EchoVR::kNoLevelInGame;
+  std::memcpy(game.data() + EchoVR::kPcMainLevelSymbolOffset, &none, sizeof(none));
+  EXPECT_EQ(EchoVR::ReadMainLevelSymbol(game.data(), EchoVR::kPcMainLevelSymbolOffset), 0u);
+  const uint64_t pc = kArenaA;
+  std::memcpy(game.data() + EchoVR::kPcMainLevelSymbolOffset, &pc, sizeof(pc));
+  EXPECT_EQ(EchoVR::ReadMainLevelSymbol(game.data(), EchoVR::kPcMainLevelSymbolOffset), kArenaA);
+  const uint64_t quest = kCombatCombustion;
+  std::memcpy(game.data() + EchoVR::kQuestMainLevelSymbolOffset, &quest, sizeof(quest));
+  EXPECT_EQ(EchoVR::ReadMainLevelSymbol(game.data(), EchoVR::kQuestMainLevelSymbolOffset), kCombatCombustion);
+}
+
+TEST(GameLevel, TheCorpusNamesTheLevelsTheFixturesUseAndNotACustomOne) {
+  EXPECT_EQ(EchoVR::CSymbol64Hash("mpl_arena_a"), kArenaA);
+  EXPECT_EQ(EchoVR::CSymbol64Hash("mpl_combat_combustion"), kCombatCombustion);
+  ASSERT_NE(EchoVR::LookupSymbolName(kArenaA), nullptr);
+  EXPECT_STREQ(EchoVR::LookupSymbolName(kArenaA), "mpl_arena_a");
+  EXPECT_EQ(EchoVR::LookupSymbolName(EchoVR::CSymbol64Hash("mpl_arena_dodgeball")), nullptr);
+}
+
+TEST_F(PluginLevelTest, InitContextCarriesTheLevelTheGameAlreadyHolds) {
+  SetFakeGameLevel(kArenaA);
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelCovered", kInitCtx), 1u) << "ctx_size does not reach level_name";
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kInitCtx), kArenaA);
+  ASSERT_NE(LevelFixtureName(kInitCtx), nullptr);
+  EXPECT_STREQ(LevelFixtureName(kInitCtx), "mpl_arena_a");
+}
+
+TEST_F(PluginLevelTest, NoLevelAndNoGameObjectBothReadAsNoLevel) {
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kInitCtx), 0u) << "the game holds -1";
+  EXPECT_EQ(LevelFixtureName(kInitCtx), nullptr);
+
+  g_pGame = nullptr;
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelCalls", kFrameCtx), 1u);
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kFrameCtx), 0u);
+  EXPECT_EQ(LevelFixtureName(kFrameCtx), nullptr);
+}
+
+TEST_F(PluginLevelTest, FrameContextSeesALevelChangeWithNoStateTransition) {
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kFrameCtx), 0u);
+
+  SetFakeGameLevel(kArenaA);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kFrameCtx), kArenaA);
+  EXPECT_STREQ(LevelFixtureName(kFrameCtx), "mpl_arena_a");
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelCalls", kStateCtx), 0u) << "no state change was announced";
+
+  SetFakeGameLevel(kCombatCombustion);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kFrameCtx), kCombatCombustion);
+  EXPECT_STREQ(LevelFixtureName(kFrameCtx), "mpl_combat_combustion");
+}
+
+TEST_F(PluginLevelTest, StateChangeContextFollowsTheLevelAcrossLevelChangesAndIsLogged) {
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+
+  SetFakeGameLevel(kArenaA);
+  StateChange(6, 7);
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kStateCtx), kArenaA);
+  EXPECT_STREQ(LevelFixtureName(kStateCtx), "mpl_arena_a");
+
+  ClearTestLogs();
+  SetFakeGameLevel(kCombatCombustion);
+  StateChange(7, 8);
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kStateCtx), kCombatCombustion);
+  EXPECT_STREQ(LevelFixtureName(kStateCtx), "mpl_combat_combustion");
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "[NEVR.PLUGIN] plugin=lvl state change level from=7 to=8 level_symbol=0x42670f2bed45703c "
+      "level=mpl_combat_combustion"));
+}
+
+TEST_F(PluginLevelTest, ALevelTheSymbolTableDoesNotKnowHasASymbolAndNoName) {
+  const uint64_t custom = EchoVR::CSymbol64Hash("mpl_arena_dodgeball");
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+
+  SetFakeGameLevel(custom);
+  StateChange(6, 7);
+
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kStateCtx), custom);
+  EXPECT_EQ(LevelFixtureName(kStateCtx), nullptr);
+}
+
+TEST_F(PluginLevelTest, TheHostLogsEachLevelChangeOnceHoweverManyPluginsAndFramesSeeIt) {
+  g_testPluginLoadPlan.push_back({"lvl2", "test_plugin_onframe.dll", false, "", "{}"});
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 2);
+  TickLoadedPluginsOnce();  // settles the observer on "no level"
+
+  ClearTestLogs();
+  SetFakeGameLevel(kArenaA);
+  TickLoadedPluginsOnce();
+  TickLoadedPluginsOnce();
+  StateChange(6, 7);
+  EXPECT_EQ(TestLogCount("[NEVR.PLUGIN] main level changed: from=none to=mpl_arena_a"), 1);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] main level changed: from=none to=mpl_arena_a"));
+
+  ClearTestLogs();
+  SetFakeGameLevel(EchoVR::kNoLevelInGame);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(TestLogCount("[NEVR.PLUGIN] main level changed: from=mpl_arena_a to=none"), 1);
 }
 
 // #60: the login reports every configured plugin — the one that loaded, the one

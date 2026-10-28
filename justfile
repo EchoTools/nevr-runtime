@@ -2511,10 +2511,10 @@ verify:
     sensor_nonempty "N114 plugin capability ABI" "non-comment lines of extension/plugin_interface.h" "$N114_ABI"
     # Pinned to the CURRENT ABI version. The pin guards against a silent REGRESSION
     # below the version where the capability channel (v3), the args channel (v4), the
-    # query API (v5), the host log (v6, #598) and the plugin assets (v7, #432) landed — a
-    # deliberate bump updates this line, exactly as this one did.
-    if ! grep -q 'NEVR_PLUGIN_API_VERSION 7' <<<"$N114_ABI"; then
-        echo "verify: FAIL — N114 NEVR_PLUGIN_API_VERSION is not 7; the capability (v3) + args (v4) + query-API (v5) + host-log (v6) + asset (v7) channels must not regress below v7." >&2
+    # query API (v5), the host log (v6, #598), the plugin assets (v7, #432) and the current level (v8, #1094)
+    # landed — a deliberate bump updates this line, exactly as this one did.
+    if ! grep -q 'NEVR_PLUGIN_API_VERSION 8' <<<"$N114_ABI"; then
+        echo "verify: FAIL — N114 NEVR_PLUGIN_API_VERSION is not 8; the capability (v3) + args (v4) + query-API (v5) + host-log (v6) + asset (v7) + level (v8) channels must not regress below v8." >&2
         exit 1
     fi
     # N134 S7: the host must resolve NvrPluginInitEx — the v4 per-plugin-args init
