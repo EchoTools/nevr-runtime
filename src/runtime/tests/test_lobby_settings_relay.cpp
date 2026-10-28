@@ -68,7 +68,8 @@ LobbySettingsSinks MakeSinks(Calls& calls, bool broadcasterPresent = true, int32
     calls.localMessage.assign(bytes, bytes + size);
     return broadcasterPresent;
   };
-  sinks.sendToPeer = [&calls, sendResult](const void* item, uint64_t itemSize, const void* body, uint64_t bodySize,
+  // The sink takes the item and the body as mutable pointers, as CBroadcaster::Send does: no cast is needed to call it.
+  sinks.sendToPeer = [&calls, sendResult](void* item, uint64_t itemSize, void* body, uint64_t bodySize,
                                           uint64_t peer) {
     calls.order.push_back("send");
     ++calls.sends;
