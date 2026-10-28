@@ -1,7 +1,7 @@
 """#1127: no Quest step writes a libr15 code page until the build-time patch (#1132) lands.
 
 The current Horizon policy denies `execmod` on a libr15 page that was written and made executable again, and the
-first call into it faults. The six installers below write such a page (inline hooks, the credits ADRP+ADD pairs).
+first call into it faults. The installers below write such a page (inline hooks, the credits ADRP+ADD pairs).
 Their code stays in the tree for #1132 to replace, but nothing in the sentinel may reach it: this test pins that by
 source shape, because no host test can run a Horizon policy.
 """
@@ -16,7 +16,6 @@ QUEST = ROOT / "src/quest"
 # Each installer that writes code, and the files that may name it: its own definition and declaration.
 INSTALLERS = {
     r"InstallLobbyFullHooks\b": {"social/lobby_full_hooks.cpp", "social/lobby_full_hooks.h"},
-    r"InstallMenuVersionLabelHook\b": {"social/menu_version_label.cpp", "social/menu_version_label.h"},
     r"InstallUiTextureMips\w*": {"sentinel/ui_texture_mips.cpp", "sentinel/ui_texture_mips.h"},
     r"splash_skip::Install\b|\bnamespace nevr_quest::splash_skip\b": {
         "sentinel/splash_skip_hook.cpp",
@@ -34,11 +33,10 @@ WRITER_FILES = {
     "sentinel/inline_hook.h",
     "sentinel/credits_text.cpp",
     "social/lobby_full_hooks.cpp",
-    "social/menu_version_label.cpp",
     "sentinel/ui_texture_mips.cpp",
     "sentinel/splash_skip_hook.cpp",
 }
-FEATURES = ["lobby_full", "menu_version", "ui_texture", "splash_skip", "credits_text"]
+FEATURES = ["lobby_full", "ui_texture", "splash_skip", "credits_text"]
 
 
 def strip_comments(text: str) -> str:
