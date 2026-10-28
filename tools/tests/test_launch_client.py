@@ -256,6 +256,26 @@ class LaunchClientTest(unittest.TestCase):
         self.assertEqual((self.game_root / "echovr/bin/win10/nevr-runtime.dll").read_bytes(), b"LEFTOVER", "not deleted")
         self.assertEqual(self.deployed(), ORIGINAL)
 
+    def test_a_plugin_in_the_nevr_roots_plugins_folder_is_drift(self):
+        plugins = self.root_runtime.parent / "plugins"
+        plugins.mkdir(parents=True, exist_ok=True)
+        (plugins / "leftover.dll").write_bytes(b"LEFTOVER")
+        result = self.run_script("--dll", str(self.dll))
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertIn("plugins folder is not empty", result.stderr)
+        self.assertIn(str(plugins / "leftover.dll"), result.stderr)
+        self.assertEqual((plugins / "leftover.dll").read_bytes(), b"LEFTOVER", "not deleted")
+        self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_a_plugin_in_the_game_directorys_plugins_folder_is_drift(self):
+        plugins = self.game_root / "echovr/bin/win10/plugins"
+        plugins.mkdir(parents=True, exist_ok=True)
+        (plugins / "leftover.dll").write_bytes(b"LEFTOVER")
+        result = self.run_script("--dll", str(self.dll))
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertIn(str(plugins / "leftover.dll"), result.stderr)
+        self.assertEqual(self.deployed(), ORIGINAL)
+
     def test_a_sign_in_cache_in_the_nevr_root_is_the_cached_flow(self):
         root = self.game_root / "echovr/.wineprefix/drive_c/users" / getpass.getuser() / "AppData/Local/nevr/echovr"
         (root / ".credentials.json").write_text("{}")

@@ -153,9 +153,11 @@ function Write-State([string]$Backup, [string]$Legacy, $Previous, [string]$Runti
   $path = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($state)
   [System.IO.File]::WriteAllLines($path, [string[]]$lines, (New-Object System.Text.UTF8Encoding($false)))
 }
-# Copy the package's runtime into the nevr folder (made when it is missing) and check the copy.
+# Copy the package's runtime into the nevr folder (made when it is missing) and check the copy. The nevr folder's plugins\ is
+# where the runtime loads plugins from (ADR 0012); it is made empty here and anything in it is left as it is.
 function Copy-Runtime {
   New-Item -ItemType Directory -Force -Path $Root | Out-Null
+  New-Item -ItemType Directory -Force -Path (Join-Path $Root 'plugins') | Out-Null
   Copy-Item -LiteralPath $runtimeDll -Destination $runtimeTarget -Force
   if ((Get-Sha $runtimeTarget) -ne $oursRuntime) { throw 'the installed nevr-runtime.dll does not match the package' }
 }
