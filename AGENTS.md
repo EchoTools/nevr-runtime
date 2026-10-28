@@ -740,10 +740,10 @@ your seat name, for example `claude-main` or `codex`.
   - `verify-server.sh` deploys `BugSplat64.dll` into `echovr/bin/win10` of `$NEVR_GAME_ROOT`, `nevr-runtime.dll` into the nevr root of
     its Wine prefix (`echovr/.wineprefix/drive_c/users/<user>/AppData/Local/nevr/echovr`) and, when
     `build/mingw-release/bin/plugins` exists, its files into that root's `plugins`, and, when
-    the install has none, a `config.yaml` into `echovr/_local`.
+    the install has none, a `config.yaml` into that root.
   - `launch-client.sh` deploys `nevr-runtime.dll` (the one beside `--dll`, or `--runtime-dll`) and `BugSplat64.dll`
     there and aborts (exit 3) when `plugins/*` (the game folder's or the nevr root's) is non-empty, `nevr-runtime.dll` exists,
-    `_local/config.yaml` or `_local/config.json` exists, or (with `NEVR_GAME_ROOT` set) any `.credentials.json*`
+    `_local/config.yaml`, `_local/config.json` or the nevr root's `config.yaml` exists, or (with `NEVR_GAME_ROOT` set) any `.credentials.json*`
     exists under `echovr/`. `--print-game-root` and `--help` exit before any write.
   - `launch-server.sh` copies `BugSplat64.dll` into `echovr/bin/win10`, `nevr-runtime.dll` into the nevr root of the Wine prefix and, when
     `build/mingw-release/bin/plugins/*.dll` exist, that directory's files into
@@ -815,13 +815,13 @@ your seat name, for example `claude-main` or `codex`.
   - **Shape.** The scripts differ:
     - `launch-client.sh` needs `echovr/bin/win10/echovr.exe` and the original
       `echovr/bin/win10/BugSplat64.dll` (it saves and restores it and stops under `set -e` without
-      it), no `echovr/_local/config.yaml` or `config.json` (a missing `_local` passes), no `.credentials.json*`
+      it), no `echovr/_local/config.yaml` or `config.json` (a missing `_local` passes), no `config.yaml` in the nevr root, no `.credentials.json*`
       anywhere under `echovr/` and `bin/win10/plugins` and the nevr root's `plugins` empty.
       It reads the run's log from `echovr/.wineprefix`.
     - `verify-server.sh` needs `echovr/bin/win10/echovr.exe`. It tolerates an absent
       `BugSplat64.dll` and `nevr-runtime.dll` (it adds them and removes them on exit), needs no `.credentials.json*`
-      anywhere under `echovr/`, creates `_local` when missing, and uses
-      a `_local/config.yaml` that is present as it is. It sets `WINEPREFIX` to
+      anywhere under `echovr/`, and uses a `_local/config.yaml` or a nevr-root `config.yaml` that is present as it is. It sets
+      `WINEPREFIX` to
       `echovr/.wineprefix`.
   - **Who makes it, and reuse.** Only a human or the foreman makes the pristine copy, and nobody
     runs from it. A run, by a script or a Go test, uses its own copy made from the pristine one with
@@ -837,7 +837,7 @@ your seat name, for example `claude-main` or `codex`.
     `launch-client.sh` abort, as a leftover `nevr-runtime.dll` does). `verify-server.sh` keeps its
     backup at one fixed place, `$NEVR_RUN_SCRATCH_ROOT/verify-server-deploy-backup` (default
     the work root, `~/src/nevr-runtime-work/`), and restores it into the current copy. It also deletes, by the absolute paths it recorded, the
-    files the earlier run added (`BugSplat64.dll`, `nevr-runtime.dll`, `plugins/*`, `_local/config.yaml`). Clear or
+    files the earlier run added (`BugSplat64.dll`, `nevr-runtime.dll`, `plugins/*`, the nevr root's `config.yaml`). Clear or
     inspect that directory before a run against a different copy than the last. When no copy exists, the run
     waits for a human; a runtime change is not verified until then.
 

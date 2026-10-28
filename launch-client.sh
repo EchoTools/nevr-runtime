@@ -13,7 +13,8 @@ GAME_ROOT=$(resolve_game_root) || exit $?
 # --dll PATH deploys that BugSplat64.dll instead of the release build (the scenario runner passes
 # the mingw-scenario build; see tools/scenario/run_scenario.py). The runtime is the nevr-runtime.dll beside it,
 # or --runtime-dll PATH: the host loads it from the game's own directory, so a run deploys both. --config PATH starts the game with
-# `-config PATH` (a JSON file; the runtime reads config.yaml from the same directory), so a run can
+# `-config PATH` (the game's JSON file) and, when a config.yaml sits in the same directory, `-config-file` naming
+# it (the runtime reads config.yaml only from the file `-config-file` names, else from the nevr root), so a run can
 # use its own config without touching the game directory. --require-in-game fails the run unless the
 # client also reaches "in game" (multiplayer entry), not just "logged in" -- the scenario runner
 # passes it with `--game-arg -mp`. --exit-after-login stops the game itself:
@@ -79,10 +80,10 @@ export DISPLAY=:101
 export WINEPREFIX
 
 # Pristine state. A run is only meaningful against known files, so any drift aborts
-# before anything is deployed. The runtime reads config.yaml and ignores config.json;
-# with neither present it must start on its built-in defaults.
+# before anything is deployed. The runtime reads config.yaml (from the nevr root unless -config-file names one) and
+# ignores config.json; with no config.yaml in the root and none in _local it must start on its built-in defaults.
 drift=0
-for f in "$LOCAL_DIR/config.json" "$LOCAL_DIR/config.yaml"; do
+for f in "$LOCAL_DIR/config.json" "$LOCAL_DIR/config.yaml" "$NEVR_ROOT_DIR/config.yaml"; do
   if [[ -e "$f" || -L "$f" ]]; then echo "DRIFT: $f exists (expected absent)" >&2; drift=1; fi
 done
 shopt -s nullglob
@@ -180,7 +181,13 @@ fi
 if [[ -n "$CONFIG" ]]; then
   [[ -f "$CONFIG" ]] || { echo "ERROR: --config $CONFIG does not exist" >&2; exit 2; }
   game_args+=(-config "Z:${CONFIG//\//\\}")
-  echo "=== game config: $CONFIG (config.yaml from its directory) ==="
+  CONFIG_YAML="$(dirname "$CONFIG")/config.yaml"
+  if [[ -f "$CONFIG_YAML" ]]; then
+    game_args+=(-config-file "Z:${CONFIG_YAML//\//\\}")
+    echo "=== game config: $CONFIG, config.yaml: $CONFIG_YAML (-config-file) ==="
+  else
+    echo "=== game config: $CONFIG (no config.yaml beside it: the run reads the nevr root's, else the built-in defaults) ==="
+  fi
 fi
 if [[ -n "$TRACE_EXPORTS" ]]; then
   [[ "$TRACE_EXPORTS" =~ ^[A-Za-z,.]+$ ]] || { echo "ERROR: --trace-exports takes a comma separated list of pnsrad, pnsovr, pnsdemo, all" >&2; exit 2; }

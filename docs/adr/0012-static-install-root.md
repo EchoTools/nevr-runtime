@@ -15,8 +15,8 @@ The game's install folder holds things that change and things that are secret, n
 - the runtime is `nevr-runtime.dll`, loaded by the host `BugSplat64.dll` from the directory of `BugSplat64.dll` (ADR 0008 in `0008-bugsplat-host-and-nevr-runtime.md`, "The tree today"),
   so a runtime fix replaces a file in the install folder;
 - plugins load from `plugins\` in the root (`LoadPlugins` in `src/runtime/ext/plugin_loader.cpp`); they used to load from a `plugins/` directory next to the game binary;
-- `config.yaml` is found in `_local` next to the game module and one and two parents up, or beside the `-config`/`-config-path` file
-  (`FindNevrConfigYamlPath` in `src/runtime/lifecycle/service_config.cpp`);
+- `config.yaml` is read from the nEVR root, or from the file `-config-file` names; the `_local` copies beside the game module are
+  never read (`nevr_config_yaml::Choose` in `src/runtime/lifecycle/config_yaml_choice.h`);
 - the sign-in cache `.credentials.json` is chosen among the same `_local` directories (`SelectCredentialCacheLocation` in
   `src/core/auth_token.h`);
 - the log and crash record are written under `%LOCALAPPDATA%\EchoVR\logs`, the original game's own folder
@@ -116,7 +116,10 @@ before a signed `nevr-runtime.dll` exists (step 3's prerequisite).
 - `nevr-runtime.dll` and `plugins\` resolve under the root. The plugin directory filter of ADR 0010 follows the plugin directory. With no
   `%LOCALAPPDATA%` there is no plugin directory: every configured plugin fails with that reason (an `[NEVR.PLUGIN]` Error line and the entry's `error` in the
   login's plugin report) and the game folder is never searched.
-- `config.yaml` is the one in the folder of the `-config` or `-config-path` file when one is given, and otherwise the root's.
+- `config.yaml` is the file `-config-file <file>` names when it is given, and otherwise the root's. Nothing else is searched. A
+  `-config-file` that names no readable file ends the run with exit code 64. A `_local\config.yaml` beside the game module is never
+  read: the first one found is copied into the root when the root has none, and ignored with a warning when it has one; the old file
+  is left as it is and nothing is written in the game folder.
 - **Clients and servers:** one `.credentials.json` at the root (#574's decision), the sign-in cache of the account on that machine;
   a client or a server launched with a `-config` elsewhere keeps its login at the root as well. A dedicated server signs in the way a
   client does, by token, from the same cache (`SelectCredentialCacheLocation` takes only the executable's directory); there is no server-only cache
