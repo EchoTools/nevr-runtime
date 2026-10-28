@@ -88,6 +88,10 @@ std::atomic<std::uint64_t> g_issued{0};        // ids handed out: 1..g_issued
 std::atomic<std::uint64_t> g_next_deliver{1};  // the next id to hand the pump
 std::atomic<bool> g_local_enabled{false};
 std::atomic<local::SocialSelectedFn> g_social_selected{nullptr};
+std::atomic<bool> g_social_facade_installed{false};
+// ovr_GetLoggedInUserID (#944): whether the one record was written, and the stand-in answers.
+std::atomic<bool> g_user_id_logged{false};
+std::atomic<std::uint64_t> g_user_id_stand_ins{0};
 std::atomic<std::uint64_t> g_local_refused{0};
 std::atomic<std::uint64_t> g_refused_ids{0};
 constexpr std::size_t kRefusedSites = 16;                // distinct call sites logged; libpnsovr has nine
@@ -666,6 +670,11 @@ void OnFreeMessage(void (*original)(void*), void* message) noexcept {
 void SetSocialSelectedProbe(SocialSelectedFn probe) noexcept {
   g_social_selected.store(probe, std::memory_order_release);
 }
+void SetSocialFacadeInstalled(bool installed) noexcept {
+  g_social_facade_installed.store(installed, std::memory_order_release);
+}
+bool SocialFacadeInstalled() noexcept { return g_social_facade_installed.load(std::memory_order_acquire); }
+
 bool SocialSelected() noexcept {
   const SocialSelectedFn probe = g_social_selected.load(std::memory_order_acquire);
   return probe != nullptr && probe();
@@ -719,6 +728,7 @@ void ResetForTest() noexcept {
   g_next_deliver.store(1, std::memory_order_relaxed);
   g_local_enabled.store(false, std::memory_order_relaxed);
   g_social_selected.store(nullptr, std::memory_order_relaxed);
+  g_social_facade_installed.store(false, std::memory_order_relaxed);
   g_local_refused.store(0, std::memory_order_relaxed);
   g_refused_ids.store(0, std::memory_order_relaxed);
   for (std::size_t i = 0; i < kRefusedSites; ++i) g_refused_site[i].store(0, std::memory_order_relaxed);
@@ -751,6 +761,29 @@ std::uint64_t PrerequisiteRequests(Prerequisite which) noexcept {
   return g_requests[Index(which)].load(std::memory_order_relaxed);
 }
 
+std::uint64_t OnLoggedInUserId(std::uint64_t (*original)()) noexcept {
+  // Frequency: RadPluginMain calls it once per process (0x206828, the only call site).
+  const std::uint64_t sdk = original();
+  const bool local_on = local::Enabled();
+  const bool facade = local::SocialFacadeInstalled();
+  std::uint64_t answer = sdk;
+  if (sdk == 0 && local_on && facade) answer = StandIn::UserId();  // 0 until the stand-ins are generated
+  if (sdk == 0 && answer != 0) g_user_id_stand_ins.fetch_add(1, std::memory_order_relaxed);
+  if (g_user_id_logged.exchange(true, std::memory_order_acq_rel)) return answer;
+  const char* reason = sdk != 0     ? "sdk_nonzero"
+                       : !local_on  ? "local_answers_off"
+                       : !facade    ? "social_facade_not_installed"
+                       : answer == 0 ? "stand_in_not_generated"
+                                     : "sdk_zero";
+  sentinel::LogFields(answer != 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "quest_logged_in_user_id",
+                      {{"answer", sdk != 0 ? "sdk" : answer != 0 ? "stand_in" : "zero"},
+                       {"sdk_zero", sdk == 0 ? 1 : 0},
+                       {"reason", reason}});
+  return answer;
+}
+std::uint64_t LoggedInUserIdStandIns() noexcept { return g_user_id_stand_ins.load(std::memory_order_relaxed); }
+const std::atomic<std::uint64_t>& LoggedInUserIdStandInCounter() noexcept { return g_user_id_stand_ins; }
+
 void ResetPrerequisitesForTest() noexcept {
   g_configured.store(false, std::memory_order_release);
   g_config = Config{};
@@ -762,6 +795,8 @@ void ResetPrerequisitesForTest() noexcept {
     g_requests[i].store(0, std::memory_order_relaxed);
   }
   local::ResetForTest();
+  g_user_id_logged.store(false, std::memory_order_relaxed);
+  g_user_id_stand_ins.store(0, std::memory_order_relaxed);
   EndPrerequisiteAttempt();
 }
 

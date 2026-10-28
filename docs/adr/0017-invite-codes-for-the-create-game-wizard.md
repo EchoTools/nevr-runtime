@@ -218,9 +218,11 @@ credential: a line carries `code_len` and a short fingerprint of the code (`code
 | Event | Level | Fields |
 | --- | --- | --- |
 | wizard click seen | Info | `event=create_invite\|join_via_code panel=deep_linking` |
-| request not sent | Info | `reason=empty\|malformed\|too_long\|incomplete\|not_configured\|no_token` and `code_len=<n>` (nothing is sent) |
+| request not sent | Info | `reason=empty\|malformed\|too_long\|incomplete\|not_configured\|no_token\|busy\|stopped` and `code_len=<n>` (nothing is sent) |
 | request sent | Info | `op=create\|resolve\|revoke expires_s=<n> code_len=<n> code_fp=<8 hex>` |
 | answer | Info / Warning | `op status=<http status> latency_ms=<n> result=<ok\|invalid\|expired\|closed\|denied\|limit\|rate>` |
+| worker stopped | Info | `dropped=<n>`: requests still queued when the worker stopped, never sent |
+| answers dropped | Warning | `reason=not_taken kept=<n>`: the oldest answer went because the menu had not taken them |
 | text written | Info | `page=<n> field=<name>`; a failed write at Warning with the cause |
 | join started | Info | `route=stage\|join lobby=<uuid> state_from=<n>`; the state change after it is the game's own `[NETGAME]` line |
 | feature off | Info | `reason=` (a prologue differed, no token, not configured) |
