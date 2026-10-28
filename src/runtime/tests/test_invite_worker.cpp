@@ -20,6 +20,7 @@
 #include <thread>
 #include <vector>
 
+#include "runtime/patch/invite_config.h"
 #include "runtime/patch/invite_wizard.h"
 #include "runtime/patch/invite_worker.h"
 
@@ -153,7 +154,6 @@ nevr_invite::Plan Resolve(const std::string& typed = "abcd-2345") {
 nevr_invite::Plan Create() {
   nevr_invite::Metric metric;
   metric.kind = nevr_invite::Kind::Create;
-  metric.region = "US WEST";
   metric.expires_text = "3 HOURS";
   nevr_invite::Choices choices;
   choices.experience = "arena";
@@ -219,6 +219,80 @@ TEST(InviteWorker, TheRequestLineThenTheAnswerLineAreTheOnlyLinesAndCarryNoSecre
   EXPECT_FALSE(Contains(lines, "ABCD2345"));
   EXPECT_FALSE(Contains(lines, "tok-secret-1"));
   EXPECT_FALSE(Contains(lines, "body-detail-text"));
+}
+
+TEST(InviteWorker, ARefusalTheServiceDidNotNameSaysTheStatusDecidedItAndTheBodyStaysOut) {
+  struct Case {
+    int status;
+    const char* body;
+    const char* line;
+  };
+  const Case cases[] = {
+      {404, R"({"code":5,"message":"RPC function not found"})",
+       "[NEVR.INVITE] answer op=resolve status=404 latency_ms=7 result=invalid via=status"},
+      {401, R"({"code":16,"message":"Auth token invalid"})",
+       "[NEVR.INVITE] answer op=resolve status=401 latency_ms=7 result=server_error via=status"},
+  };
+  for (const Case& c : cases) {
+    Rig rig;
+    rig.transport.Answers(c.status, c.body);
+    nevr_invite::Worker worker(rig.Parts());
+    ASSERT_EQ(worker.Enqueue(Resolve()), Submit::Queued);
+    const std::vector<Answer> answers = WaitForAnswers(worker, 1);
+    ASSERT_EQ(answers.size(), 1u);
+    EXPECT_TRUE(answers[0].via_status) << c.status;
+    worker.Stop();
+    const std::vector<Line> lines = rig.Lines();
+    ASSERT_EQ(lines.size(), 2u);
+    EXPECT_EQ(lines[1].text, c.line);
+    EXPECT_FALSE(Contains(lines, "not found"));
+    EXPECT_FALSE(Contains(lines, "Auth token"));
+  }
+}
+
+TEST(InviteWorker, AnUnnamedRefusalHandsItsMessageBackForTheTestEndpointAndNeverLogsIt) {
+  Rig rig;
+  rig.transport.Answers(503, R"({"code":14,"message":"no servers available"})");
+  nevr_invite::Worker worker(rig.Parts());
+  ASSERT_EQ(worker.Enqueue(Resolve()), Submit::Queued);
+  const std::vector<Answer> answers = WaitForAnswers(worker, 1);
+  ASSERT_EQ(answers.size(), 1u);
+  EXPECT_EQ(answers[0].refusal_message, "no servers available");
+  EXPECT_TRUE(answers[0].body.empty());
+  worker.Stop();
+  EXPECT_FALSE(Contains(rig.Lines(), "no servers"));
+}
+
+TEST(InviteWorker, ARefusalTheServiceNamedCarriesNoMessage) {
+  Rig rig;
+  rig.transport.Answers(400, R"({"code":3,"message":"invalid"})");
+  nevr_invite::Worker worker(rig.Parts());
+  ASSERT_EQ(worker.Enqueue(Resolve()), Submit::Queued);
+  const std::vector<Answer> answers = WaitForAnswers(worker, 1);
+  ASSERT_EQ(answers.size(), 1u);
+  EXPECT_TRUE(answers[0].refusal_message.empty());
+}
+
+TEST(InviteWorker, AResultTheServiceNamedIsNotViaStatus) {
+  Rig rig;
+  rig.transport.Answers(404, R"({"message":"invalid"})");
+  nevr_invite::Worker worker(rig.Parts());
+  ASSERT_EQ(worker.Enqueue(Resolve()), Submit::Queued);
+  const std::vector<Answer> answers = WaitForAnswers(worker, 1);
+  ASSERT_EQ(answers.size(), 1u);
+  EXPECT_FALSE(answers[0].via_status);
+}
+
+TEST(InviteWorker, NoAnswerAtAllIsNotViaStatus) {
+  Rig rig;
+  rig.transport.Answers(0, "");
+  nevr_invite::Worker worker(rig.Parts());
+  ASSERT_EQ(worker.Enqueue(Resolve()), Submit::Queued);
+  const std::vector<Answer> answers = WaitForAnswers(worker, 1);
+  ASSERT_EQ(answers.size(), 1u);
+  EXPECT_FALSE(answers[0].via_status);
+  worker.Stop();
+  EXPECT_FALSE(Contains(rig.Lines(), "via=status"));
 }
 
 TEST(InviteWorker, ASuccessIsLoggedAtInfoAndItsBodyIsHandedBackNotLogged) {
@@ -426,4 +500,24 @@ TEST(InviteWorker, TakeAnswersHandsEachAnswerOverOnce) {
   ASSERT_EQ(worker.Enqueue(Resolve()), Submit::Queued);
   ASSERT_EQ(WaitForAnswers(worker, 1).size(), 1u);
   EXPECT_TRUE(worker.TakeAnswers().empty());
+}
+
+// ---- network.invite_codes (N133) ----
+
+TEST(InviteConfig, TheFeatureIsOffUnlessTheKeyTurnsItOn) {
+  using nevr_invite::ParseSwitch;
+  using nevr_invite::Switch;
+  EXPECT_EQ(ParseSwitch(nullptr), Switch::Off);
+  EXPECT_EQ(ParseSwitch(""), Switch::Off);
+  for (const char* on : {"true", "TRUE", "True", "on", "On", "yes", "1"}) EXPECT_EQ(ParseSwitch(on), Switch::On) << on;
+  for (const char* off : {"false", "FALSE", "off", "no", "0"}) EXPECT_EQ(ParseSwitch(off), Switch::Off) << off;
+}
+
+TEST(InviteConfig, AValueNobodyMeantIsOffAndSaidToBeUnrecognised) {
+  using nevr_invite::ParseSwitch;
+  using nevr_invite::Switch;
+  for (const char* odd : {"enabled", "2", "tru", " true", "true ", "ture"}) EXPECT_EQ(ParseSwitch(odd), Switch::Unrecognised) << odd;
+  EXPECT_FALSE(nevr_invite::SwitchIsOn(Switch::Unrecognised));
+  EXPECT_TRUE(nevr_invite::SwitchIsOn(Switch::On));
+  EXPECT_FALSE(nevr_invite::SwitchIsOn(Switch::Off));
 }

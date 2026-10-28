@@ -1199,6 +1199,19 @@ function with no reference in the library. One is a TLS-handle cache test that i
 that has neither a hook nor a reason, or that names a hook not in the tree (`just test-tools`). With the extracted
 library (`just test-quest-hooks-pinned`) it also checks each row's stock word and function.
 
+The rest of what the patch repo applies to the APK is in `tools/quest_apk_patch_map.tsv` (#1187): every address of
+its libr15.so and libpnsradmatchmaking.so YAMLs, the build string its patch.py writes, the steps of its packaging
+script, its texture and asset libraries, and each of its other tracked files, one row each. A row is `done` (our code
+that does the same job, named `<path>:<symbol>`), `open` (the issue that will do it), `not_needed` (why our build needs
+no counterpart) or `table` (the libpnsovr.so files, whose sites are the rows above). The open rows are the storage path
+and the local config file (#1185), the data path helpers (#948), the permission request (#947), the live texture
+resize and its menu control (#1012, #1186) and the general asset override (#871); #1188 tracks them. The patch repo does not
+edit the manifest; ours changes only its versionCode. `tools/quest_apk_patch_map.py` fails a row whose status lacks what it
+needs or names code not in this tree (`just test-tools`). `just test-quest-apk-patch-map <checkout>` checks the table
+against a checkout of the patch repo at the commit the table pins: each tracked file has a row, each applied address
+has a row with its feature, no row names an address the repo does not apply, the libpnsovr addresses are rows of
+`tools/quest_patcher_sites.tsv`, and the stock libraries carry our pinned build IDs.
+
 Each callback logs one `quest_login_prerequisite` record (call, `result` real or synthesized,
 `reason`, `accessor`, `ovr_error`, `error_code`, `http_code`; a locally answered one also carries `ready`, 0 when the
 not-ready reset withdraws the stand-in it gave) and each request one
