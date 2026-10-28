@@ -293,6 +293,18 @@ using LibR15CheckPermissionThunk = CallbackThunk<LibR15CheckPermissionTag, Check
 inline constexpr const char* kRequestPermissionsSymbol =
     "_ZN10NRadEngine8CSysInfo18RequestPermissionsENS_10CArrayViewIPKcLy0EEE";
 
+// NRadEngine::CVR::ShowSystemUI(), defined in libr15 at 0x1a73990 (exported; ReVault 0x1b73990): `mov w1, #1` and a tail
+// call of vrapi_ShowSystemUI(&java, 1). libr15 calls it through its own PLT (stub 0xf47880, JUMP_SLOT 0x36fb328) from
+// exactly one place, state 0 of CR15VRMenuWidgetCS::UpdateExclusive (bl at 0x1f99ca0), the menu's QUIT; state 1 of that
+// switch calls CR15Game::QuitToMain. No other library in the APK imports it (`readelf -rW` over all 483).
+inline constexpr const char* kShowSystemUISymbol = "_ZN10NRadEngine3CVR12ShowSystemUIEv";
+inline constexpr std::uint64_t kShowSystemUIVaddr = 0x1a73990;
+inline constexpr std::uint64_t kShowSystemUIStub = 0xf47880;
+inline constexpr std::uint64_t kShowSystemUICallSite = 0x1f99ca0;  // CR15VRMenuWidgetCS::UpdateExclusive, state 0
+using ShowSystemUISig = void();
+struct LibR15ShowSystemUITag {};
+using LibR15ShowSystemUIThunk = CallbackThunk<LibR15ShowSystemUITag, ShowSystemUISig>;
+
 // NRadEngine::CSysInfo::OSBuildVersion(unsigned long long&), defined in libr15 at 0xf875c4 (184 bytes, exported; ReVault
 // 0x10875c4): reads the system property ro.build.version.incremental, and when it is at most 20 characters of decimal
 // digits stores the number through its argument and returns 1; otherwise it returns 0 and stores nothing. The return is
@@ -518,6 +530,12 @@ inline GotTarget LibR15RequestPermissions() {
 // pinned image: `R_AARCH64_JUMP_SLOT 0xf87298 _ZN10NRadEngine8CSysInfo15CheckPermissionEPKc`).
 inline GotTarget LibR15CheckPermission() {
   return {kLibR15, kCheckPermissionSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c37c8ULL};
+}
+
+// libr15.so's slot for CVR::ShowSystemUI, defined in libr15 itself (JUMP_SLOT 0x36fb328, `readelf -rW` on the pinned
+// image: `R_AARCH64_JUMP_SLOT 0x1a73990 _ZN10NRadEngine3CVR12ShowSystemUIEv`).
+inline GotTarget LibR15ShowSystemUI() {
+  return {kLibR15, kShowSystemUISymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36fb328ULL};
 }
 
 // libr15.so's slot for CSysInfo::OSBuildVersion, defined in libr15 itself (JUMP_SLOT 0x36ff9b8, `readelf -rW` on the

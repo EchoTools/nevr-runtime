@@ -1364,6 +1364,13 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/os_build_gate_hook_test" -ldl
     timeout 120 "$out/os_build_gate_hook_test"
+    # The main-menu QUIT (#1276): the real handler through the thunk entry against stand-ins for CVR::ShowSystemUI and
+    # ANativeActivity_finish (the activity finished; no app, no activity or no finisher leaves the game's call).
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/quit_hook_test.cpp \
+        src/quest/sentinel/quit_hook.cpp src/quest/sentinel/process_end_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/quit_hook_test" -ldl
+    timeout 120 "$out/quit_hook_test"
     # The Quest main menu shows the runtime version (#747): the real handler through the thunk entry against a stand-in for
     # CCanvasUICS::SetText (the lobby_version item replaced, every other item, an empty text and a null text left alone).
     # The handler includes the build-tree header generated/nevr_build_info.h; a stub stands in for it here.
@@ -1719,6 +1726,7 @@ test-quest-integration: _vcpkg-quest-host
     "${off[@]}" -c src/quest/sentinel/login_title_hook.cpp -o "$out/login_title_hook.o"
     "${off[@]}" -c src/quest/sentinel/obb_skip_hook.cpp -o "$out/obb_skip_hook.o"
     "${off[@]}" -c src/quest/sentinel/texture_quality_hook.cpp -o "$out/texture_quality_hook.o"
+    "${off[@]}" -c src/quest/sentinel/quit_hook.cpp -o "$out/quit_hook.o"
     "${off[@]}" -c src/quest/sentinel/resource_request_hook.cpp -o "$out/resource_request_hook.o"
     "${off[@]}" -c src/quest/login/login_counters.cpp -o "$out/login_counters.o"
     # login_counters.cpp reads the local-answer counters of login_prerequisites.cpp (#411).
