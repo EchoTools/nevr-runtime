@@ -2,7 +2,6 @@
 // exit code. Kept apart from main() so the host tests drive the same code against a synthetic spec.
 #include <cstdio>
 #include <fstream>
-#include <iterator>
 #include <ostream>
 
 #include "quest/data/sha256.h"
@@ -13,11 +12,24 @@ namespace {
 
 using Json = nlohmann::json;
 
+// stdio, not an istreambuf_iterator: a read error (--stock naming a directory opens fine and fails on the first
+// read) must come back as `false`, and an iterator over a stream throws std::ios_base::failure instead.
 bool ReadFile(const std::string& path, std::vector<std::uint8_t>* bytes) {
-  std::ifstream in(path, std::ios::binary);
-  if (!in) return false;
-  bytes->assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-  return !in.bad();
+  std::FILE* f = std::fopen(path.c_str(), "rb");
+  if (f == nullptr) return false;
+  bytes->clear();
+  std::uint8_t chunk[1 << 16];
+  std::size_t got = 0;
+  while ((got = std::fread(chunk, 1, sizeof chunk, f)) > 0) bytes->insert(bytes->end(), chunk, chunk + got);
+  const bool failed = std::ferror(f) != 0;
+  std::fclose(f);
+  return !failed;
+}
+
+// Every JSON line the tool prints goes through here. A path from the command line, or a section name in the file, need
+// not be UTF-8; the default dump() throws on such a string, and the tool must exit with its code, not abort.
+std::string Dump(const nlohmann::json& j, int indent = -1) {
+  return j.dump(indent, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
 bool WriteFileAtomically(const std::string& path, const std::vector<std::uint8_t>& bytes) {
@@ -57,26 +69,25 @@ int RunCli(const std::vector<std::string>& args, const PatchSpec& spec, std::ost
     else if (args[i] == "--report") slot = &reportPath;
     else if (args[i] == "--extra-rows") slot = &extraPath;
     if (slot == nullptr || !slot->empty() || i + 1 >= args.size()) {
-      err << Error("usage_error", "unexpected, repeated or incomplete argument \"" + args[i] +
-                                      "\"; usage: quest_patch_libr15 --stock <libr15.so> --out <file> --report <json> [--extra-rows <file>]")
-                 .dump()
+      err << Dump(Error("usage_error", "unexpected, repeated or incomplete argument \"" + args[i] +
+                                           "\"; usage: quest_patch_libr15 --stock <libr15.so> --out <file> --report <json> [--extra-rows <file>]"))
           << "\n";
       return 2;
     }
     *slot = args[++i];
   }
   if (stockPath.empty() || outPath.empty() || reportPath.empty()) {
-    err << Error("usage_error", "--stock, --out and --report are required").dump() << "\n";
+    err << Dump(Error("usage_error", "--stock, --out and --report are required")) << "\n";
     return 2;
   }
   if (outPath == stockPath) {
-    err << Error("usage_error", "--out must not be the --stock file").dump() << "\n";
+    err << Dump(Error("usage_error", "--out must not be the --stock file")) << "\n";
     return 2;
   }
 
   std::vector<std::uint8_t> stock;
   if (!ReadFile(stockPath, &stock)) {
-    err << Error("io_error", "cannot read --stock " + stockPath).dump() << "\n";
+    err << Dump(Error("io_error", "cannot read --stock " + stockPath)) << "\n";
     return 2;
   }
   std::vector<WordPatchRow> extra;
@@ -86,7 +97,7 @@ int RunCli(const std::vector<std::string>& args, const PatchSpec& spec, std::ost
   if (!extraPath.empty()) {
     std::vector<std::uint8_t> raw;
     if (!ReadFile(extraPath, &raw)) {
-      err << Error("io_error", "cannot read --extra-rows " + extraPath).dump() << "\n";
+      err << Dump(Error("io_error", "cannot read --extra-rows " + extraPath)) << "\n";
       return 2;
     }
     extraSha = data::Sha256Hex(raw.data(), raw.size());
@@ -105,19 +116,19 @@ int RunCli(const std::vector<std::string>& args, const PatchSpec& spec, std::ost
   const Json report = {{"events", Json(result.events)}, {"summary", result.summary}};
   {
     std::ofstream r(reportPath, std::ios::binary | std::ios::trunc);
-    r << report.dump(2) << "\n";
+    r << Dump(report, 2) << "\n";
     r.flush();
     if (!r) {
-      err << Error("io_error", "cannot write --report " + reportPath).dump() << "\n";
+      err << Dump(Error("io_error", "cannot write --report " + reportPath)) << "\n";
       return 2;
     }
   }
   if (!result.ok) {
-    err << result.summary.dump() << "\n";
+    err << Dump(result.summary) << "\n";
     return 1;
   }
   if (!WriteFileAtomically(outPath, result.output)) {
-    err << Error("io_error", "cannot write --out " + outPath).dump() << "\n";
+    err << Dump(Error("io_error", "cannot write --out " + outPath)) << "\n";
     return 2;
   }
   // The file on disk is what was validated.
@@ -125,11 +136,11 @@ int RunCli(const std::vector<std::string>& args, const PatchSpec& spec, std::ost
   if (!ReadFile(outPath, &written) ||
       data::Sha256Hex(written.data(), written.size()) != result.summary["patched_sha256"].get<std::string>()) {
     std::remove(outPath.c_str());
-    err << Error("io_error", "the written --out file does not read back as the validated bytes; removed").dump() << "\n";
+    err << Dump(Error("io_error", "the written --out file does not read back as the validated bytes; removed")) << "\n";
     return 2;
   }
-  for (const Json& e : result.events) out << e.dump() << "\n";
-  out << result.summary.dump() << "\n";
+  for (const Json& e : result.events) out << Dump(e) << "\n";
+  out << Dump(result.summary) << "\n";
   return 0;
 }
 

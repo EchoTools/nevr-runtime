@@ -7,6 +7,7 @@
 // shipped tool, run against the synthetic file (it must refuse: the synthetic file is not the pinned libr15).
 
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -843,6 +844,146 @@ TEST(UsageAndIoErrorsExitTwo) {
   CHECK(!Exists(g_scratch + "/o.so"));
   CHECK(so.str().empty());
   CHECK(Json::parse(se.str().substr(0, se.str().find('\n')))["status"] == "usage_error");
+}
+
+// The one JSON line RunCli writes to `err` for a usage or I/O error: exactly one line, ending in a newline.
+Json OneErrorLine(const std::ostringstream& err, const char* what) {
+  const std::string text = err.str();
+  if (text.empty() || text.back() != '\n' || text.find('\n') != text.size() - 1) {
+    std::fprintf(stderr, "  %s: stderr is not exactly one line: \"%s\"\n", what, text.c_str());
+    ++mini_test::Failures();
+    return Json::object();
+  }
+  const Json j = Json::parse(text, nullptr, /*allow_exceptions=*/false);
+  if (j.is_discarded()) {
+    std::fprintf(stderr, "  %s: stderr is not JSON: \"%s\"\n", what, text.c_str());
+    ++mini_test::Failures();
+    return Json::object();
+  }
+  return j;
+}
+
+TEST(AFileTheToolCannotReadExitsTwoWithOneJsonLineInsteadOfAborting) {
+  World w;
+  const std::string stock = g_scratch + "/read_stock.so", out = g_scratch + "/read_out.so", report = g_scratch + "/read_report.json";
+  const std::string dir = g_scratch + "/read_dir";
+  CHECK_EQ(mkdir(dir.c_str(), 0755), 0);
+  WriteBytes(stock, w.elf.bytes);
+  std::remove(out.c_str());
+  std::remove(report.c_str());
+  {  // --stock names a directory: open succeeds, the first read fails
+    std::ostringstream so, se;
+    CHECK_EQ(RunCli({"--stock", dir, "--out", out, "--report", report}, w.spec, so, se), 2);
+    Json e = OneErrorLine(se, "stock is a directory");
+    CHECK(e["status"] == "io_error");
+    CHECK(e["detail"].get<std::string>().find("--stock") != std::string::npos);
+    CHECK(so.str().empty());
+    CHECK(!Exists(out));
+    CHECK(!Exists(report));
+  }
+  {  // --extra-rows names a directory
+    std::ostringstream so, se;
+    CHECK_EQ(RunCli({"--stock", stock, "--out", out, "--report", report, "--extra-rows", dir}, w.spec, so, se), 2);
+    Json e = OneErrorLine(se, "extra rows is a directory");
+    CHECK(e["status"] == "io_error");
+    CHECK(e["detail"].get<std::string>().find("--extra-rows") != std::string::npos);
+    CHECK(!Exists(out));
+  }
+  {  // --extra-rows names a file that is not there
+    std::ostringstream so, se;
+    CHECK_EQ(RunCli({"--stock", stock, "--out", out, "--report", report, "--extra-rows", g_scratch + "/no_such_rows.json"}, w.spec, so, se), 2);
+    Json e = OneErrorLine(se, "extra rows missing");
+    CHECK(e["status"] == "io_error");
+    CHECK(e["detail"].get<std::string>().find("--extra-rows") != std::string::npos);
+    CHECK(!Exists(out));
+  }
+  // The shipped tool does the same as a process: exit 2 (not a signal), one JSON line on stderr, no output file.
+  const std::string so = g_scratch + "/read.stdout", se = g_scratch + "/read.stderr";
+  CHECK_EQ(RunProcess({g_tool, "--stock", dir, "--out", out, "--report", report}, so, se), 2);
+  const std::string text = ReadText(se);
+  CHECK(!text.empty() && text.find('\n') == text.size() - 1);
+  CHECK(Json::parse(text, nullptr, false)["status"] == "io_error");
+  CHECK(!Exists(out));
+  for (const std::string& f : {stock, so, se}) std::remove(f.c_str());
+  CHECK_EQ(rmdir(dir.c_str()), 0);
+}
+
+TEST(NoExtraRowsFileCanMakeTheCommandLineThrow) {
+  // Each of these reaches a call that throws (std::stoull, or a typed get<std::string>() on a number) unless the
+  // check in front of it refuses the value first; the command line must answer with a refusal, exit 1, never an abort.
+  struct Case {
+    const char* what;
+    const char* from;
+    const char* to;
+    const char* reason;
+  };
+  const Case cases[] = {
+      {"revault_va is only the prefix", "\"0x1500010\"", "\"0x\"", "extra_rows_revault_va"},
+      {"revault_va has 17 digits", "\"0x1500010\"", "\"0x10000000000000000\"", "extra_rows_revault_va"},
+      {"stock_build_id is a number", "\"b243509c08ce677aeb95fa348016949b3fc45230\"", "5", "extra_rows_stock_build_id"},
+      {"id is a number", "\"x.example_guard\"", "5", "extra_rows_id"},
+      {"kind is a number", "\"word_patch\"", "5", "extra_rows_kind"},
+  };
+  World w;
+  const std::string stock = g_scratch + "/throw_stock.so", out = g_scratch + "/throw_out.so", report = g_scratch + "/throw_report.json";
+  const std::string rows = g_scratch + "/throw_rows.json";
+  WriteBytes(stock, w.elf.bytes);
+  for (const Case& c : cases) {
+    std::string text = Fixture();
+    if (!Replace(&text, c.from, c.to)) {
+      std::fprintf(stderr, "  %s: the fixture does not hold exactly one \"%s\"\n", c.what, c.from);
+      CHECK(false);
+      continue;
+    }
+    std::ofstream(rows, std::ios::binary | std::ios::trunc) << text;
+    std::remove(out.c_str());
+    std::ostringstream so, se;
+    const int rc = RunCli({"--stock", stock, "--out", out, "--report", report, "--extra-rows", rows}, w.spec, so, se);
+    if (rc != 1) std::fprintf(stderr, "  %s: exit %d, stderr %s\n", c.what, rc, se.str().c_str());
+    CHECK_EQ(rc, 1);
+    Json e = OneErrorLine(se, c.what);
+    if (e["reason"] != c.reason) std::fprintf(stderr, "  %s: reason %s, expected %s\n", c.what, e.value("reason", "?").c_str(), c.reason);
+    CHECK(e["reason"] == c.reason);
+    CHECK(!Exists(out));
+  }
+  for (const std::string& f : {stock, report, rows}) std::remove(f.c_str());
+}
+
+TEST(APathOrASectionNameThatIsNotUtf8StillGetsItsExitCodeAndItsReport) {
+  const std::string replacement = "\xEF\xBF\xBD";  // U+FFFD: what the dump writes for a byte that is not UTF-8
+  {
+    World w;
+    std::ostringstream so, se;
+    const int rc = RunCli({"--stock", g_scratch + "/no_such_\xff.so", "--out", g_scratch + "/u.so", "--report", g_scratch + "/u.json"}, w.spec, so, se);
+    CHECK_EQ(rc, 2);
+    Json e = OneErrorLine(se, "path that is not UTF-8");
+    CHECK(e["status"] == "io_error");
+    CHECK(e["detail"].get<std::string>().find("no_such_" + replacement + ".so") != std::string::npos);
+  }
+  {
+    SynthOptions o = World::DefaultOptions();
+    o.bssName = "\xff.bss";
+    World w(o);
+    const std::string stock = g_scratch + "/utf_stock.so", out = g_scratch + "/utf_out.so", report = g_scratch + "/utf_report.json";
+    WriteBytes(stock, w.elf.bytes);
+    std::remove(out.c_str());
+    std::ostringstream so, se;
+    CHECK_EQ(RunCli({"--stock", stock, "--out", out, "--report", report}, w.spec, so, se), 0);
+    CHECK(se.str().empty());
+    CHECK(Exists(out));
+    const Json rep = Json::parse(ReadText(report), nullptr, false);
+    CHECK(!rep.is_discarded());
+    if (!rep.is_discarded()) CHECK(rep["summary"]["bss_section"] == replacement + ".bss");
+    std::istringstream lines(so.str());
+    std::string line;
+    std::size_t n = 0;
+    while (std::getline(lines, line)) {
+      CHECK(!Json::parse(line, nullptr, false).is_discarded());
+      ++n;
+    }
+    CHECK_EQ(n, static_cast<std::size_t>(7));  // 6 sites and the summary
+    for (const std::string& f : {stock, out, report}) std::remove(f.c_str());
+  }
 }
 
 TEST(TheShippedToolRefusesAFileThatIsNotThePinnedLibr15) {
