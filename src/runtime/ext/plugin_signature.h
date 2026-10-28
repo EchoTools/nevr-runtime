@@ -12,12 +12,16 @@
 #pragma once
 
 #include <windows.h>
+#include <wincrypt.h>
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace nevr_plugin_signature {
+
+// The signature of CertCreateCertificateChainEngine, which the verifier calls through (see TestHook_SetEngineCreate).
+using EngineCreateFn = BOOL (*)(CERT_CHAIN_ENGINE_CONFIG*, HCERTCHAINENGINE*);
 
 // Why a file was accepted or refused. The name (ReasonName) is the word the refusal log line carries.
 enum class Reason {
@@ -61,6 +65,7 @@ struct Verdict {
   std::string detail;         // what the reason line adds: a chain-status name list, an EKU, a serial, an error
   uint32_t chainStatus = 0;   // dwErrorStatus when reason is ChainStatus or NoTimestampAndExpired
   int64_t signingTime = 0;    // the timestamp's genTime (unix seconds) when one verified, else 0
+  uint32_t engineCbSize = 0;   // when accepted: the CERT_CHAIN_ENGINE_CONFIG cbSize the chain engine was made with (88, or 80 on a Wine before 11.5)
 
   bool accepted() const { return reason == Reason::Accepted; }
   // "<reason>" or "<reason>: <detail>"; no file name, the caller adds it.
@@ -91,6 +96,9 @@ bool ListDependencies(HANDLE file, Dependencies* out, std::string* error);
 // Test only, and only in a unit compiled with NEVR_HOST_TESTING (nevr_host_core): makes the next VerifyPluginFile
 // calls raise std::bad_alloc inside, to prove they come back as a refusal. No shipped DLL carries it.
 void TestHook_ThrowInVerify(bool enable);
+// Test only, same guard: replaces CertCreateCertificateChainEngine inside the verifier (nullptr restores it), so a test
+// can stand in for a Wine that rejects the 88-byte struct (#1262) and see every cbSize the verifier tries.
+void TestHook_SetEngineCreate(EngineCreateFn create);
 #endif
 
 }  // namespace nevr_plugin_signature
