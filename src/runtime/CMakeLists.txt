@@ -1535,6 +1535,7 @@ if(BUILD_TESTING)
       # #41: ws_bridge.cpp builds its URL credentials through the ServerDbUri encoder.
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
+      log/symcache_data.cpp
       # N84: plugin_loader calls nevr_hook_guard::VerifyAll after each plugin init.
       # Linked as production source (not a stub) so the test drives the real
       # guard — a stub here would make the N84 tests tautological.
@@ -1577,6 +1578,7 @@ if(BUILD_TESTING)
       compat/self_check.cpp
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
+      log/symcache_data.cpp
       hook/hook_liveness.cpp
       hook/dll_load_hook.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON

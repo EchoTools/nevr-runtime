@@ -193,8 +193,10 @@ typedef void (*NvrPluginShutdown_fn)(void);
  * v8 (#1094): adds level_symbol + level_name to the TAIL of NvrGameContext, so a plugin can switch itself on
  * for the levels its config names. A plugin checks ctx->ctx_size covers ctx->level_name before reading them,
  * exactly as for v5 and v6; a pre-v8 plugin never reads them. The host fills them in every context it passes
- * (init, per-frame, state change). A level can load with no game-state transition (the menu level at boot
- * loads before the first transition), so read them in OnFrame as well as in OnGameStateChange.
+ * (init, per-frame, state change). The game sets the level as it enters the "loading level" state, so the
+ * state-change context of that transition already carries it, and it holds none (0) at the menus. The measured
+ * runs changed it only with a state transition; the per-frame context carries it as well, so a plugin that
+ * polls in OnFrame misses nothing if a build changes it without one.
  *
  * v7 (#432): plugin-carried assets. The host exports NEVR_RegisterAsset / NEVR_DeregisterAssets (see "Plugin
  * assets" below) so a plugin can add levels and resources that live inside its own image. Additive: no

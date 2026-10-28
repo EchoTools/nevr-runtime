@@ -18,6 +18,8 @@
 #include "core/logging.h"
 
 #include "runtime/hook/symbol_corpus.h"      // #1094: a level symbol's name
+#include "runtime/log/symcache.h"             // #1094: the larger name table, which names the lobby and arena levels
+#include "runtime/patch/ui_texture_mips_rules.h"  // #1094: NameForHash, the search of the table sorted by hash
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/config.h"    // g_pGame
 #include "runtime/lifecycle/crash_recovery.h"  // ServerFatal
@@ -92,15 +94,30 @@ void HostPluginLog(const char* pluginId, uint32_t level, const char* message,
   Log(hostLevel, "%s", out.line.c_str());
 }
 
-// #1094: a level symbol as a log reads it: "none", the name when the symbol table knows it, else the hex value.
+namespace evr {
+extern const SymCacheEntry kSymCacheData[];  // the generated symbol cache, sorted by hash (symcache_data.cpp)
+extern const int kSymCacheCount;
+}  // namespace evr
+
+// #1094: a level symbol's name, or nullptr. The symbol corpus first, then the symbol cache: the corpus holds the
+// names the game binary spells out, the cache holds the lobby and match levels too. A level neither table knows
+// (a custom one) has no name.
+static const char* LevelNameOf(uint64_t symbol) {
+  if (symbol == 0) return nullptr;
+  if (const char* name = EchoVR::LookupSymbolName(symbol)) return name;
+  return nevr_ui_texture_mips::NameForHash(evr::kSymCacheData, static_cast<size_t>(evr::kSymCacheCount), symbol);
+}
+
+// #1094: a level symbol as a log reads it: "none", the name when a table knows it, else the hex value.
 static std::string LevelLabel(uint64_t symbol) {
   if (symbol == 0) return "none";
+  if (const char* name = LevelNameOf(symbol)) return name;
   char label[40];
   EchoVR::FormatSymbolId(label, sizeof(label), symbol);
   return label;
 }
 
-// #1094: the level the game holds as its main level, read from the game object (the runtime's g_pGame) on every
+// #1094: the level the game holds as its main level, read from the game context (the runtime's g_pGame) on every
 // context the loader builds, so a plugin sees the level at init, on every frame and at every state change.
 // A level can load with no state transition, so the frame context carries it too. The host logs each change
 // once, whichever plugin or frame sees it first.
@@ -121,7 +138,7 @@ static NvrGameContext ContextFor(const NvrGameContext& base, const char* id) {
   ctx.plugin_id = id != nullptr ? id : "";
   ctx.log = HostPluginLog;
   ctx.level_symbol = ObserveMainLevel();
-  ctx.level_name = ctx.level_symbol != 0 ? EchoVR::LookupSymbolName(ctx.level_symbol) : nullptr;
+  ctx.level_name = LevelNameOf(ctx.level_symbol);
   return ctx;
 }
 

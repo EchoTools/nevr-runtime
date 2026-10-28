@@ -2,13 +2,14 @@
 
 // The level the game holds as its main level (#1094).
 //
-// The game object (the runtime's g_pGame, `*(CR15NetGame + 8)`) keeps the CSymbol64 of its main level in one
-// qword and the level instance's handle id in the next. Every level load writes them: CncaGameSpace::LoadLevel
-// stores the game space's symbol (game space +0x58) there when the handle slot is -1, the per-frame update of a
-// game space (echovr.exe 0x1404efd00; Quest ExclusiveUpdate 0x18ef190) stores it when a pending handle arrives,
-// the command-line `-level` / `-startlevel` argument seeds it at boot (echovr.exe 0x140504790), and the reset
-// that precedes a level request and the game object's constructor write -1. docs/reference/game-level.md has
-// the addresses, the instructions that prove each offset and what a run showed.
+// The game context (the runtime's g_pGame, the CR15Game: `*(*(g_pGame + 0x8518) + 8)` is the same address) keeps
+// the CSymbol64 of the main level in one qword, with the qword after it serialised alongside by the game's
+// SaveLoad (CR15Game vslot 91, echovr.exe 0x1401064b0). The game looks its game space up by this symbol (the spawn
+// point code does: CR15SpawnPointCS::CycleSpawnPoint 0x1408a52c0 through the accessor 0x140100d90), and a reset
+// (0x1400f6130) stores -1. A live run showed the qword go from -1 to the lobby level's symbol while the state
+// was "loading level" and keep it through "in game", and show it hold -1 through the menu levels, which live
+// in other qwords of the same object. docs/reference/game-level.md has the addresses, the instructions that
+// prove each offset and what the runs showed.
 //
 // Pure: std only, so the unit test links it on its own and the Quest sentinel can include it.
 
@@ -18,11 +19,12 @@
 
 namespace EchoVR {
 
-/// echovr.exe: the main level symbol in the game object (the handle id is the qword after it).
-inline constexpr std::size_t kPcMainLevelSymbolOffset = 0x7678;
+/// echovr.exe: the main level symbol in the game context.
+inline constexpr std::size_t kPcMainLevelSymbolOffset = 0x8a48;
 
-/// libr15.so: the same two qwords in the reverse order, so the symbol is the first (the handle id follows at +0x7678).
-inline constexpr std::size_t kQuestMainLevelSymbolOffset = 0x7670;
+/// libr15.so: the same field (CR15Game::CurrentSpawnGameSpace 0x130065c loads it; SetCurrentSpawnGameSpace 0x12fbcf8
+/// stores the game space's symbol, game space +0x58, into it).
+inline constexpr std::size_t kQuestMainLevelSymbolOffset = 0x8a40;
 
 /// What the game stores in both qwords while no level is the main level.
 inline constexpr std::uint64_t kNoLevelInGame = ~std::uint64_t{0};

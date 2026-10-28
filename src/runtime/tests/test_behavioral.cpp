@@ -2003,6 +2003,8 @@ namespace {
 constexpr uint64_t kArenaA = 0x576ed3f8428ebc4bULL;           // CSymbol64("mpl_arena_a"), in the symbol corpus
 constexpr uint64_t kCombatCombustion = 0x42670f2bed45703cULL;  // CSymbol64("mpl_combat_combustion"), in the corpus
 
+constexpr uint64_t kLobbyB2 = 0xd09afd15b1c75c04ULL;  // CSymbol64("mpl_lobby_b2"): in the symbol cache, not the corpus
+
 std::vector<unsigned char> g_fakeGame;
 
 void SetFakeGameLevel(uint64_t symbol) {
@@ -2031,7 +2033,7 @@ class PluginLevelTest : public PluginLoaderDiagnosticTest {
  protected:
   void SetUp() override {
     PluginLoaderDiagnosticTest::SetUp();
-    g_fakeGame.assign(0x8000, 0);
+    g_fakeGame.assign(0x10000, 0);
     SetFakeGameLevel(EchoVR::kNoLevelInGame);
     g_pGame = g_fakeGame.data();
     g_testPluginLoadPlan.push_back({"lvl", "test_plugin_level.dll", false, "", "{}"});
@@ -2049,8 +2051,13 @@ class PluginLevelTest : public PluginLoaderDiagnosticTest {
 
 }  // namespace
 
+TEST(GameLevel, TheOffsetsAreTheOnesMeasuredInTheGame) {
+  EXPECT_EQ(EchoVR::kPcMainLevelSymbolOffset, 0x8a48u) << "echovr.exe: CR15Game +0x8a48, accessor 0x140100d90";
+  EXPECT_EQ(EchoVR::kQuestMainLevelSymbolOffset, 0x8a40u) << "libr15.so: CurrentSpawnGameSpace 0x130065c";
+}
+
 TEST(GameLevel, ReadsTheSymbolAtThePcAndTheQuestOffsetAndMapsNoLevelToZero) {
-  std::vector<unsigned char> game(0x8000, 0);
+  std::vector<unsigned char> game(0x10000, 0);
   EXPECT_EQ(EchoVR::ReadMainLevelSymbol(nullptr, EchoVR::kPcMainLevelSymbolOffset), 0u);
   const uint64_t none = EchoVR::kNoLevelInGame;
   std::memcpy(game.data() + EchoVR::kPcMainLevelSymbolOffset, &none, sizeof(none));
@@ -2132,6 +2139,21 @@ TEST_F(PluginLevelTest, StateChangeContextFollowsTheLevelAcrossLevelChangesAndIs
       EchoVR::LogLevel::Info,
       "[NEVR.PLUGIN] plugin=lvl state change level from=7 to=8 level_symbol=0x42670f2bed45703c "
       "level=mpl_combat_combustion"));
+}
+
+TEST_F(PluginLevelTest, ALevelOnlyTheSymbolCacheNamesStillGetsItsName) {
+  EXPECT_EQ(EchoVR::CSymbol64Hash("mpl_lobby_b2"), kLobbyB2);
+  EXPECT_EQ(EchoVR::LookupSymbolName(kLobbyB2), nullptr) << "the corpus names it: this test no longer proves the cache fallback";
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+
+  SetFakeGameLevel(kLobbyB2);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kFrameCtx), kLobbyB2);
+  ASSERT_NE(LevelFixtureName(kFrameCtx), nullptr);
+  EXPECT_STREQ(LevelFixtureName(kFrameCtx), "mpl_lobby_b2");
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "[NEVR.PLUGIN] main level changed: from=none to=mpl_lobby_b2 symbol=0xd09afd15b1c75c04"));
 }
 
 TEST_F(PluginLevelTest, ALevelTheSymbolTableDoesNotKnowHasASymbolAndNoName) {
