@@ -23,7 +23,7 @@ sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "tools" / "tests"))
 import quest_repack_libs as libs  # noqa: E402
 import work_root  # noqa: E402
-from quest_patcher_standin import MARKER, make_standin, recorded_argv  # noqa: E402
+from quest_patcher_standin import MARKER, make_standin, recorded_argv, recorded_runs  # noqa: E402
 from test_quest_repack_version import DEV_VERSION, JUSTFILE, MISSING, RepackFixture  # noqa: E402
 
 LIBR15 = b"\x7fELF the game\0" * 50  # what RepackFixture.make_inputs puts under lib/arm64-v8a/libr15.so
@@ -301,6 +301,35 @@ class VerifySignedTest(unittest.TestCase):
         new = set(self.tmp.iterdir()) - before
         self.assertEqual({p.name for p in new}, {"store.apk", "signed.apk", "stage"})
 
+    def test_the_command_line_passes_the_extra_rows_and_the_scratch_directory_to_the_patcher(self):
+        rows = self.tmp / "rows.json"
+        rows.write_text("{}")
+        self.extra_rows = rows
+        result = self.run_cli()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        argv = recorded_argv(self.patcher)
+        flags = dict(zip(argv[0::2], argv[1::2]))
+        self.assertEqual(flags["--extra-rows"], str(rows))
+        self.assertEqual(pathlib.Path(flags["--stock"]).parent.parent, self.tmp)  # --scratch
+
+    def test_the_command_line_without_a_patcher_is_a_usage_error_not_a_pass(self):
+        make_zip(self.tmp / "store.apk", self.store)
+        make_zip(self.tmp / "signed.apk", self.signed)
+        (self.tmp / "stage" / "lib" / "arm64-v8a").mkdir(parents=True)
+        result = subprocess.run([sys.executable, "-I", str(REPO / "tools" / "quest_repack_libs.py"), "verify-signed",
+                                 "--source", str(self.tmp / "store.apk"), "--signed", str(self.tmp / "signed.apk"),
+                                 "--stage", str(self.tmp / "stage")], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--patcher", result.stderr)
+        self.assertNotIn("OK", result.stdout)
+
+    def test_a_patcher_that_does_not_end_is_stopped_and_refused(self):
+        self.patcher = make_standin(self.tmp / "bin-hang", "hang")
+        saved = libs.PATCHER_TIMEOUT_SECONDS
+        libs.PATCHER_TIMEOUT_SECONDS = 1
+        self.addCleanup(setattr, libs, "PATCHER_TIMEOUT_SECONDS", saved)
+        self.assertIn("did not run to its end", self.only_problem())
+
     def test_the_signed_libr15_is_compared_with_the_patcher_run_on_this_store_file(self):
         # the digest the signed entry is compared with comes from a run on THIS store file: the stand-in appends the
         # marker to whatever it is given, so a signed libr15 made from a different input never matches
@@ -382,6 +411,93 @@ class RepackWithAPluginTest(RepackFixture):
         result = self.repack()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("verify-signed OK", result.stdout)
+
+
+@unittest.skipIf(MISSING, f"the recipe needs {', '.join(MISSING)}")
+class RepackPatchesLibr15Test(RepackFixture):
+    """`just android-repack-apk`: libr15.so goes through the patcher (the `patcher` parameter is the stand-in), is stored
+    like the store's entry, and the patcher's file is checked again by verify-signed (ADR 0021 section 9)."""
+
+    def run_recipe(self, *tail: str):
+        work = self.tmp / "work"
+        result = subprocess.run(
+            ["just", "--justfile", str(JUSTFILE), "--working-directory", str(REPO), "android-repack-apk",
+             str(self.apk), str(self.shim), os.path.relpath(work, REPO), *tail],
+            capture_output=True, text=True, env=self.env, timeout=300)
+        self.signed = work / "r15_nevr-sentinel_signed.apk"
+        return result
+
+    def test_the_signed_libr15_is_the_patchers_output_and_is_stored_deflated_like_the_store_entry(self):
+        self.make_inputs(DEV_VERSION)
+        result = self.run_recipe("", "", "", str(self.patcher))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with zipfile.ZipFile(self.apk) as store, zipfile.ZipFile(self.signed) as out:
+            self.assertEqual(store.getinfo("lib/arm64-v8a/libr15.so").compress_type, zipfile.ZIP_DEFLATED)
+            self.assertEqual(out.getinfo("lib/arm64-v8a/libr15.so").compress_type, zipfile.ZIP_DEFLATED)
+            self.assertEqual(out.read("lib/arm64-v8a/libr15.so"), PATCHED_LIBR15)
+            # the two staged loaders are the stored, page-aligned entries
+            self.assertEqual(out.getinfo("lib/arm64-v8a/libovrplatformloader.so").compress_type, zipfile.ZIP_STORED)
+        self.assertIn("sha256 patched " + hashlib.sha256(PATCHED_LIBR15).hexdigest(), result.stdout)
+        self.assertIn("sha256 signed  " + hashlib.sha256(PATCHED_LIBR15).hexdigest(), result.stdout)
+
+    def test_the_patcher_runs_twice_with_no_extra_rows_when_none_are_given(self):
+        self.make_inputs(DEV_VERSION)
+        self.assertEqual(self.run_recipe("", "", "", str(self.patcher)).returncode, 0)
+        runs = recorded_runs(self.patcher)
+        self.assertEqual(len(runs), 2)  # the repack, then verify-signed on its own copy
+        for argv in runs:
+            self.assertNotIn("--extra-rows", argv)
+
+    def test_the_extra_rows_file_goes_to_the_patcher_and_to_verify_signed(self):
+        self.make_inputs(DEV_VERSION)
+        rows = self.tmp / "rows.json"
+        rows.write_text("{}")
+        result = self.run_recipe("", "", str(rows), str(self.patcher))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        runs = recorded_runs(self.patcher)
+        self.assertEqual(len(runs), 2)
+        for argv in runs:
+            self.assertEqual(argv[argv.index("--extra-rows") + 1], str(rows))
+
+    def test_an_extra_rows_file_that_is_not_there_is_refused_before_anything_is_staged(self):
+        self.make_inputs(DEV_VERSION)
+        result = self.run_recipe("", "", str(self.tmp / "no-rows.json"), str(self.patcher))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("extra rows file not found", result.stderr)
+        self.assertEqual(recorded_runs(self.patcher), [])
+        self.assertFalse(self.signed.exists())
+
+    def test_a_patcher_that_refuses_stops_the_recipe_with_no_signed_apk(self):
+        self.make_inputs(DEV_VERSION)
+        self.patcher = make_standin(self.tmp / "patcher-fail", "fail")
+        result = self.run_recipe("", "", "", str(self.patcher))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("standin patcher: refused", result.stderr)
+        self.assertFalse(self.signed.exists())
+
+    def test_a_patcher_that_writes_nothing_stops_the_recipe_with_no_signed_apk(self):
+        self.make_inputs(DEV_VERSION)
+        self.patcher = make_standin(self.tmp / "patcher-nowrite", "nowrite")
+        result = self.run_recipe("", "", "", str(self.patcher))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("the libr15 patcher wrote no libr15.so", result.stderr)
+        self.assertFalse(self.signed.exists())
+
+    def test_a_patcher_path_that_is_not_an_executable_is_refused(self):
+        self.make_inputs(DEV_VERSION)
+        result = self.run_recipe("", "", "", str(self.tmp / "no-such-patcher"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("the libr15 patcher is not an executable file", result.stderr)
+        self.assertFalse(self.signed.exists())
+
+    def test_a_json_include_without_the_header_is_refused_naming_it(self):
+        self.make_inputs(DEV_VERSION)
+        empty = self.tmp / "empty-include"
+        empty.mkdir()
+        result = self.run_recipe("", "", "", "", str(empty))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f"{empty}/nlohmann/json.hpp not found", result.stderr)
+        self.assertFalse(self.signed.exists())
 
 
 if __name__ == "__main__":

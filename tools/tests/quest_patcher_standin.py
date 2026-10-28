@@ -2,8 +2,8 @@
 
 The real tool refuses any file but the store's 58 MB libr15.so, so the tests that run `tools/quest_repack_libs.py
 verify-signed` or `just android-repack-apk` over a fabricated APK give them this executable instead. It takes the real
-tool's command line (`--stock F --out F --report F [--extra-rows F]`), records the arguments it was given in
-`<script>.argv` beside itself, and by mode:
+tool's command line (`--stock F --out F --report F [--extra-rows F]`), records the arguments it was given beside itself
+(`<script>.argv`: the last run's, one per line; `<script>.runs`: one line per run, in order), and by mode:
 
   ok       writes --out as the --stock bytes followed by MARKER (so its output differs from its input and depends on it)
            and a --report file, exits 0
@@ -11,6 +11,7 @@ tool's command line (`--stock F --out F --report F [--extra-rows F]`), records t
   nowrite  exits 0 without writing --out
   empty    exits 0 after writing an empty --out
   same     writes --out as the --stock bytes unchanged and exits 0 (a patcher that patched nothing)
+  hang     sleeps for a minute and writes nothing (for a test that shortens the caller's timeout)
 """
 from __future__ import annotations
 
@@ -27,12 +28,18 @@ import sys
 argv = sys.argv[1:]
 me = pathlib.Path(__file__)
 me.with_name(me.name + ".argv").write_text("\\n".join(argv) + "\\n")
+with me.with_name(me.name + ".runs").open("a") as runs:
+    runs.write(" ".join(argv) + "\\n")
 flags = dict(zip(argv[0::2], argv[1::2]))
 mode = {mode!r}
 if mode == "fail":
     sys.stderr.write("standin patcher: refused (mode fail)\\n")
     sys.exit(3)
 if mode == "nowrite":
+    sys.exit(0)
+if mode == "hang":
+    import time
+    time.sleep(60)
     sys.exit(0)
 out = pathlib.Path(flags["--out"])
 if mode == "empty":
@@ -56,3 +63,9 @@ def make_standin(directory: pathlib.Path, mode: str = "ok", name: str = "quest_p
 def recorded_argv(path: pathlib.Path) -> list[str]:
     """The arguments the stand-in was last run with."""
     return path.with_name(path.name + ".argv").read_text().splitlines()
+
+
+def recorded_runs(path: pathlib.Path) -> list[list[str]]:
+    """The arguments of every run of the stand-in, oldest first."""
+    runs = path.with_name(path.name + ".runs")
+    return [line.split() for line in runs.read_text().splitlines()] if runs.exists() else []
