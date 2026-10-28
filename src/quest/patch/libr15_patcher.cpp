@@ -333,8 +333,8 @@ bool ParseExtraRows(const std::string& fileBytes, const PatchSpec& spec, std::ve
     *refusal = Refuse("extra_rows_version", "", "version must be the integer 1");
     return false;
   }
-  if (!doc["stock_build_id"].is_string() || !IsLowerHex(doc["stock_build_id"].get<std::string>(), 40) ||
-      doc["stock_build_id"].get<std::string>() != BuildIdHex(spec.stockBuildId)) {
+  // BuildIdHex is 40 lowercase digits, so equality with it also refuses a wrong length or an upper-case digit.
+  if (!doc["stock_build_id"].is_string() || doc["stock_build_id"].get<std::string>() != BuildIdHex(spec.stockBuildId)) {
     *refusal = Refuse("extra_rows_stock_build_id", "", "stock_build_id is not the pinned stock build ID " + BuildIdHex(spec.stockBuildId));
     return false;
   }
@@ -390,7 +390,8 @@ bool ParseExtraRows(const std::string& fileBytes, const PatchSpec& spec, std::ve
         return false;
       }
       const Json& off = w["offset"];
-      if (!off.is_number_integer() || off.get<std::int64_t>() < 0 || off.get<std::int64_t>() > kMaxWordOffset ||
+      // `previous` starts at -1, so "strictly increasing" also refuses every negative offset.
+      if (!off.is_number_integer() || off.get<std::int64_t>() > kMaxWordOffset ||
           (off.get<std::int64_t>() & 3) != 0 || off.get<std::int64_t>() <= previous) {
         *refusal = Refuse("extra_rows_offset", id, "offset must be an integer multiple of 4 in 0 to 4092, strictly increasing");
         return false;

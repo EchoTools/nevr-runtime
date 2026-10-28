@@ -331,6 +331,14 @@ TEST(RowsThatShareBytesAreRefusedNamingTheSecondRow) {
   ExpectRefusal(w.Patch(), "sites_overlap", "s.fail", "rows overlap");
 }
 
+TEST(AnAddressBelowTheBiasIsRefusedAsSuchNotAsAnUnmappedOne) {
+  World w;
+  w.rows[0].sites[0].revaultVa = 0x1000;
+  const PatchResult r = w.Patch();
+  ExpectRefusal(r, "site_outside_text", "s.join", "site below the bias");
+  CHECK(r.refusal.detail.find("below the bias") != std::string::npos);
+}
+
 TEST(AWindowTheRelocatorCannotDisplaceIsRefusedWithTheRowId) {
   World w;
   w.elf.PutWord(kJoinVa, 0xb4000040u);  // cbz x0, +8: lands inside the 12 bytes the stub overwrites
@@ -354,7 +362,9 @@ TEST(ACreditsPairThatIsNotAnAdrpAndAnAddIsRefused) {
   World notAdrp;  // the first word of a pair is not an ADRP
   notAdrp.rows[2].sites[0].words[0] = AddImm(8, 8, 0);
   notAdrp.elf.PutWord(kAdrp0, notAdrp.rows[2].sites[0].words[0]);
-  ExpectRefusal(notAdrp.Patch(), "credits_shape", "s.credits", "credits first word");
+  const PatchResult notAdrpResult = notAdrp.Patch();
+  ExpectRefusal(notAdrpResult, "credits_shape", "s.credits", "credits first word");
+  CHECK(notAdrpResult.refusal.detail.find("not an ADRP") != std::string::npos);
   World b;
   b.rows[2].sites[3].words[0] = AddImm(12, 12, 0x44);  // the second pair loads another address
   b.elf.PutWord(kAdd1, b.rows[2].sites[3].words[0]);
@@ -406,7 +416,9 @@ TEST(ATableOrAFileTheCodeCannotWriteIsRefusedNotGuessedAt) {
   ExpectRefusal(w.Patch({edit}), "word_offset", "x.direct", "offset not a multiple of 4");
   edit.edits[0].offset = 0;
   edit.revaultVa = 0x1000;
-  ExpectRefusal(w.Patch({edit}), "word_outside_text", "x.direct", "address below the bias");
+  const PatchResult below = w.Patch({edit});
+  ExpectRefusal(below, "word_outside_text", "x.direct", "address below the bias");
+  CHECK(below.refusal.detail.find("below the bias") != std::string::npos);
   edit.revaultVa = kGuardA + kRevaultBias;
   CHECK(w.Patch({edit}).ok);
 }
@@ -563,6 +575,8 @@ TEST(EachRuleOfTheExtraRowsFormatIsRefusedInItsOwnCase) {
       {"revault_va not a multiple of 4", "\"0x1500010\"", "\"0x1500012\"", "extra_rows_revault_va", "x.example_guard"},
       {"revault_va upper case", "\"0x1500010\"", "\"0x1500A10\"", "extra_rows_revault_va", "x.example_guard"},
       {"revault_va without 0x", "\"0x1500010\"", "\"1500010\"", "extra_rows_revault_va", "x.example_guard"},
+      {"revault_va with a capital X", "\"0x1500010\"", "\"0X1500010\"", "extra_rows_revault_va", "x.example_guard"},
+      {"revault_va with another prefix", "\"0x1500010\"", "\"zz1500010\"", "extra_rows_revault_va", "x.example_guard"},
       {"revault_va leading zero", "\"0x1500010\"", "\"0x01500010\"", "extra_rows_revault_va", "x.example_guard"},
       {"revault_va is a number", "\"0x1500010\"", "22020112", "extra_rows_revault_va", "x.example_guard"},
       {"offset not a multiple of 4", "\"offset\": 8", "\"offset\": 6", "extra_rows_offset", "x.example_guard"},
@@ -571,6 +585,9 @@ TEST(EachRuleOfTheExtraRowsFormatIsRefusedInItsOwnCase) {
       {"offset past 4092", "\"offset\": 8", "\"offset\": 4096", "extra_rows_offset", "x.example_guard"},
       {"offset negative", "\"offset\": 8", "\"offset\": -4", "extra_rows_offset", "x.example_guard"},
       {"offset is a float", "\"offset\": 8", "\"offset\": 8.0", "extra_rows_offset", "x.example_guard"},
+      {"stock bytes a number", "\"e0031faa\"", "5", "extra_rows_bytes", "x.example_guard"},
+      {"new bytes a number", "\"new_bytes\": \"1f2003d5\" },\n        { \"offset\": 8", "\"new_bytes\": 5 },\n        { \"offset\": 8", "extra_rows_bytes", "x.example_guard"},
+      {"a word that is not an object", "{ \"offset\": 8, \"stock_bytes\": \"00010054\", \"new_bytes\": \"1f2003d5\" }", "7", "extra_rows_json", "x.example_guard"},
       {"bytes with a prefix", "\"e0031faa\"", "\"0xe0031faa\"", "extra_rows_bytes", "x.example_guard"},
       {"bytes upper case", "\"e0031faa\"", "\"E0031FAA\"", "extra_rows_bytes", "x.example_guard"},
       {"bytes too short", "\"e0031faa\"", "\"e0031fa\"", "extra_rows_bytes", "x.example_guard"},
@@ -657,6 +674,21 @@ TEST(TheRulesThatNeedMoreThanOneRowOrManyWords) {
   CHECK(!Parse(head + "[" + row("x.public_row", "0x1500100", 1) + "]}", pub, &rows, &refusal));
   CHECK_EQ(refusal.code, std::string("extra_rows_id"));
   CHECK_EQ(refusal.id, std::string("x.public_row"));
+  // A row that is not an object.
+  CHECK(!Parse(head + "[7]}", w, &rows, &refusal));
+  CHECK_EQ(refusal.code, std::string("extra_rows_json"));
+  CHECK(!Parse(head + "[[]]}", w, &rows, &refusal));
+  CHECK_EQ(refusal.code, std::string("extra_rows_json"));
+  // A key repeated in a row AFTER the row held nested objects (the words): the scope of the repeat check is the
+  // object being read, not the first one.
+  const std::string repeated = head + "[{\"id\":\"x.a\",\"kind\":\"word_patch\",\"revault_va\":\"0x1500100\",\"words\":[" + word(0) + "],\"kind\":\"word_patch\"}]}";
+  CHECK(!Parse(repeated, w, &rows, &refusal));
+  CHECK_EQ(refusal.code, std::string("extra_rows_duplicate_key"));
+  // The same key in two different rows is fine.
+  CHECK(Parse(head + "[" + row("x.a", "0x1500100", 1) + "," + row("x.b", "0x1500200", 1) + "]}", w, &rows, &refusal));
+  // Ids: digits, dots and underscores are allowed; 62 characters after the prefix are the limit.
+  CHECK(Parse(head + "[" + row("x.a.b_9.c", "0x1500100", 1) + "]}", w, &rows, &refusal));
+  CHECK(Parse(head + "[" + row("x.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "0x1500100", 1) + "]}", w, &rows, &refusal));
   // Not JSON, trailing text, a top-level array.
   CHECK(!Parse("not json", w, &rows, &refusal));
   CHECK_EQ(refusal.code, std::string("extra_rows_json"));
