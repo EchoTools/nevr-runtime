@@ -39,6 +39,7 @@ target_compile_options(nevr_quest_plugin PRIVATE -Wall -Wextra -Werror -fvisibil
 
 add_library(nevr_quest_integration STATIC
   ctor_sequence.cpp
+  libr15_attach_step.cpp
   post_load.cpp
   identity_source.cpp
   stage_log.cpp

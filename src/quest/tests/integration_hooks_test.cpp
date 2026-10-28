@@ -176,6 +176,7 @@ struct RealCounterSteps final : Steps {
   bool RegisterTextureQualityCounters() override { return nevr_quest::texture_quality::RegisterCounters(); }
   // The reporter is started after the budget is measured (below), so a refused registration shows here.
   bool StartReporter() override { return true; }
+  bool AttachLibR15() override { return true; }
   bool InstallClockHook() override { return true; }
   bool InstallObbSkip(bool counted) override { return counted; }
   bool InstallProcessEnd() override { return true; }

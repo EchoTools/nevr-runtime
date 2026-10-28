@@ -31,6 +31,7 @@ const char* StepName(StepId id) {
     case StepId::kRegisterResourceRequestCounters: return "register_resource_request_counters";
     case StepId::kRegisterTextureQualityCounters: return "register_texture_quality_counters";
     case StepId::kStartReporter: return "start_reporter";
+    case StepId::kAttachLibR15: return "attach_libr15";
     case StepId::kRunEarlyPlugins: return "run_early_plugins";
     case StepId::kInstallClockHook: return "install_clock_hook";
     case StepId::kInstallObbSkip: return "install_obb_skip";
@@ -187,8 +188,14 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     }
     r.Run(StepId::kStartReporter, [&] { return steps.StartReporter(); });
 
-    // The early plugin pass (#438): the reporter is running, so a plugin's first line reaches the same sinks, and the clock
-    // hook is not armed yet.
+    // The build-time libr15 patch (ADR 0021): the first libr15 step. The reporter is running, so Attach's lines reach the same
+    // sinks as every later one; it precedes the early plugin pass because a plugin's build ID is decided at Load time from
+    // what Attach recorded, and it precedes the clock hook and every other hook because each of them compares the live build ID
+    // with the patched file's. It gates nothing: a refusal leaves the game as it came (ctor_sequence.h, "Dependencies").
+    r.Run(StepId::kAttachLibR15, [&] { return steps.AttachLibR15(); });
+
+    // The early plugin pass (#438): Attach has run, so a plugin is shown the identity Attach recorded, and the clock hook is not
+    // armed yet.
     if (plugins.early > 0) {
       r.Run(StepId::kRunEarlyPlugins, [&] { return steps.RunEarlyPlugins(); });
     } else {
@@ -252,8 +259,8 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
       r.Run(StepId::kInstallTextureQuality, [&] { return steps.InstallTextureQuality(texture, textureCounters); });
     }
 
-    // The project section of the CREDITS page (#970): every launch, no counters; it points two libr15 cursor stores at a
-    // buffer the sentinel builds, so it runs before the page can be opened.
+    // The project section of the CREDITS page (#970): every launch, no counters; it stores the address of a buffer the sentinel
+    // builds in the patched libr15's credits slot, so it runs before the page can be opened.
     r.Run(StepId::kInstallCreditsText, [&] { return steps.InstallCreditsText(); });
 
     // The main-menu cards (#966): every launch, no counters. One libr15 data slot; libr15 reads it each time it starts a

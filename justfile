@@ -1880,6 +1880,22 @@ test-quest-plugins:
     "${cxx[@]}" -pthread src/quest/tests/plugin_runtime_test.cpp src/quest/plugin/plugin_runtime.cpp \
         src/runtime/ext/plugin_load_plan.cpp "${loader[@]}" -o "$out/plugin_runtime_test" -ldl
     timeout -k 5 120 "$out/plugin_runtime_test" "$out"
+    # The constructor's attach step (docs/adr/0021 sections 6, 7, 10, 12): the real Attach on the shipped patcher's output laid
+    # out in host memory, and the plugin identity and build-ID alias it registers. The patcher and its identity are built with
+    # exceptions (nlohmann::json); the sentinel half is built without, as on the device.
+    for src in src/quest/patch/libr15_patcher.cpp src/quest/patch/libr15_patch_identity.cpp; do
+        "${cxx[@]}" -D_GLIBCXX_ASSERTIONS -c "$src" -o "$out/step_$(basename "$src" .cpp).o"
+    done
+    "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/libr15_identity.cpp -o "$out/step_libr15_identity.o"
+    "${cxx[@]}" -fno-exceptions -c src/quest/integration/libr15_attach_step.cpp -o "$out/step_libr15_attach_step.o"
+    for src in libr15_attach process_end_hook arm64_reloc; do
+        "${cxx[@]}" -fno-exceptions -D_GLIBCXX_ASSERTIONS -c "src/quest/sentinel/$src.cpp" -o "$out/step_$src.o"
+    done
+    "${cxx[@]}" -pthread -Isrc/quest/tests -D_GLIBCXX_ASSERTIONS src/quest/tests/libr15_attach_step_test.cpp \
+        "$out/step_libr15_attach_step.o" "$out/step_libr15_patcher.o" "$out/step_libr15_patch_identity.o" "$out/step_libr15_identity.o" \
+        "$out/step_libr15_attach.o" "$out/step_process_end_hook.o" "$out/step_arm64_reloc.o" \
+        "${loader[@]}" -o "$out/libr15_attach_step_test" -ldl
+    timeout -k 5 120 "$out/libr15_attach_step_test" src/quest/tests/fixtures
     echo "test-quest-plugins: all plugin loader tests pass on the host"
 
 # The integration's pinned dlopen target against the real libr15.so (docs/adr/0003). Extracts it from the
