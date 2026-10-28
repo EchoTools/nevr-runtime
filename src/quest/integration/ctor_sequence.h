@@ -49,8 +49,9 @@
 //                                    graphics.texture_quality, `stock` when the configuration cannot be resolved; `stock`
 //                                    installs nothing. Its counters are registered with the others (step 3), unless `stock`.
 //      InstallCreditsText            the project section of the CREDITS page (#970): two ADRP+ADD pairs in libr15 (the
-//                                    CREDITS component's two cursor stores), on every launch, right after the texture
-//                                    hook; no counters. Refused unless the libr15 build ID and the pinned words match.
+//                                    CREDITS component's two cursor stores), right after the texture hook; no counters.
+//                                    The production step writes nothing and succeeds: a libr15 code page cannot be
+//                                    written on the current Horizon policy (#1127), so it waits on #1132.
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):
 //   token auth fails        -> the login prompt (token auth is what publishes it), bridge, login, social

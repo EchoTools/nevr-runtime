@@ -30,14 +30,6 @@ bool RegisterTextureQualityCounters() noexcept;  // 4 counters
 // asked for none.
 bool InstallTextureQualityHook(nevr_quest::texture_quality::Level level, bool fromConfig,
                                bool countersRegistered) noexcept;
-// The project section of the CREDITS page (#970), through this seam for the same reason: credits_text::InstallCreditsText
-// (sentinel/credits_text.h) proves the libr15 build and the pinned words before it writes, and logs its outcome itself.
-bool InstallCreditsTextHook() noexcept;
-
-// The #961 UI texture top mip (sentinel/ui_texture_mips.h), through this seam for the same reason: its Attach detour is
-// installed by the sentinel's own object. Returns the number of hooks installed (0 or 1); no counters.
-std::size_t InstallUiTextureMipsHook() noexcept;
-
 // The #621 process-end hook (sentinel/process_end_hook.h), through this seam for the same reason: the process ends
 // when the game's android_main returns. No counters. `SetProcessEndCallback` registers what runs on the hook's
 // helper thread just before the process ends (the self-check report and flush); call it before the install.

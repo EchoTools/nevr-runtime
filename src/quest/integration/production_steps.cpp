@@ -36,11 +36,8 @@
 #include "quest/plugin/plugin_plan.h"
 #include "quest/plugin/plugin_runtime.h"
 #include "quest/redirect/hook_adapter.h"
-#include "quest/social/lobby_full_hooks.h"
-#include "quest/social/menu_version_label.h"
 #include "quest/social/social_facade.h"
 #include "quest/social/social_frames.h"
-#include "quest/sentinel/splash_skip_hook.h"
 #include "runtime/compat/friend_request_check.h"
 #include "runtime/compat/party_leave_check.h"
 #include "runtime/compat/party_share_check.h"
@@ -252,6 +249,12 @@ void LoginLog(nevr_quest_login::Level level, const char* event, const nevr_quest
 }
 
 // A stage line for a post-load install once it is settled (a retry is not a result).
+// A feature that would write a libr15 code page: one line names it and the issue it waits on.
+void LogCodeWriteSkipped(const char* feature) {
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "code_write_skipped",
+                      {{"feature", feature}, {"reason", "execmod_denied_on_libr15"}, {"waits_on", "#1132"}});
+}
+
 ActionResult Staged(const char* stage, ActionResult result) {
   if (result.settle != Settle::kRetryLater) {
     const bool ok = result.settle == Settle::kDone;
@@ -487,9 +490,9 @@ class ProductionSteps final : public Steps {
   }
 
   bool InstallCreditsText() override {
-    const bool ok = nevr_quest::integration::InstallCreditsTextHook();
-    detail_ = ok ? "ok" : "refused";
-    return ok;
+    LogCodeWriteSkipped("credits_text");
+    detail_ = "skipped_waits_on_1132";
+    return true;  // a step that is deliberately not run did not fail
   }
 
   bool InstallLoginPrompt(bool countersRegistered) override {
@@ -584,17 +587,14 @@ class ProductionSteps final : public Steps {
     detail_ = detail;
     // The login declares the social level only when the facade is in place (docs/adr/0003, contract 5).
     if (ok) R().socialLevel.store(nevr_social_party::kSocialLevel);
-    // The lobby-full policy (#1001) rides this step: its three libr15 hooks need the facade's libr15 in place
-    // and nothing else. Its result is logged by the hooks themselves; a refusal does not fail social.
-    if (ok) quest_social::lobby_full::InstallLobbyFullHooks();
-    // The menu version label (#747) rides the same step: one hook on libr15's SetText. A refusal is logged by the hook.
-    if (ok) quest_social::menu_version::InstallMenuVersionLabelHook();
-    // The UI texture top mip (#961) rides this step too: its one libr15 detour needs only the libr15 image, and the hook
-    // logs its own outcome, so a refusal does not fail social.
-    nevr_quest::integration::InstallUiTextureMipsHook();
-    // The button-press splash skip (#962) rides the same step: one inline hook on libr15's menu widget, which the
-    // game reaches through a function pointer. Its result is logged by the hook; a refusal does not fail social.
-    if (ok) nevr_quest::splash_skip::Install();
+    // Five libr15 features write a code page (four inline-hook features here, the credits pairs in their own step) and
+    // are not installed: the current
+    // Horizon policy denies execmod on a written libr15 page, and the first call into it faults (#1127). Each waits on
+    // the build-time patch (#1132), which writes no code page at run time.
+    LogCodeWriteSkipped("lobby_full");
+    LogCodeWriteSkipped("menu_version");
+    LogCodeWriteSkipped("ui_texture");
+    LogCodeWriteSkipped("splash_skip");
     return ok;
   }
 
