@@ -201,6 +201,14 @@ inline std::string MapLevelName(const Choices& choices) {
   return std::string();
 }
 
+/// The region the service reads. The review page's `Server_region` is display text ("US WEST"), not a code, and no generic
+/// region code exists: the service picks a server by the player's stored pings when none is sent. So none is sent, until
+/// the row carries a code the service itself offered (#1192).
+inline std::string RegionCode(const Metric& metric) {
+  (void)metric;
+  return std::string();
+}
+
 inline Plan PlanRequest(const Metric& metric, const Choices& choices) {
   Plan plan;
   if (metric.kind == Kind::Join) {
@@ -239,7 +247,7 @@ inline Plan PlanRequest(const Metric& metric, const Choices& choices) {
     const nlohmann::json body = {{"experience", choices.experience},
                                  {"mode", choices.mode},
                                  {"map", MapLevelName(choices)},
-                                 {"region", metric.region},
+                                 {"region", RegionCode(metric)},
                                  {"expires_s", plan.expires_s}};
     plan.request = Request{"invite/create", body.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace)};
   }

@@ -207,14 +207,14 @@ TEST(InviteExpiry, WhatIsNotUnderstoodAsksForNothingSoTheServiceDefaultApplies) 
 
 // ---- the plan: which request is sent ----
 
-TEST(InvitePlan, ACreateSendsTheChoicesTheRegionAndTheExpiryAndNothingElse) {
+TEST(InvitePlan, ACreateSendsTheChoicesAnEmptyRegionAndTheExpiryAndNothingElse) {
   const Plan p = nevr_invite::PlanRequest(nevr_invite::ParseMetric(CreateLine("US WEST", "3 HOURS")), ArenaCustom());
   ASSERT_TRUE(p.request.has_value());
   EXPECT_EQ(p.skip, Skip::None);
   EXPECT_EQ(p.op, Op::Create);
   EXPECT_EQ(p.request->rpc, "invite/create");
   const nlohmann::json body = nlohmann::json::parse(p.request->body);
-  EXPECT_EQ(body, (nlohmann::json{{"experience", "arena"}, {"mode", "custom"}, {"map", ""}, {"region", "US WEST"},
+  EXPECT_EQ(body, (nlohmann::json{{"experience", "arena"}, {"mode", "custom"}, {"map", ""}, {"region", ""},
                                   {"expires_s", 10800}}));
   EXPECT_EQ(p.expires_s, 10800);
 }
@@ -253,12 +253,24 @@ TEST(InvitePlan, ACreateWithAnExpiryNotUnderstoodAsksForZeroAndTheServiceDecides
   EXPECT_EQ(nlohmann::json::parse(p.request->body)["expires_s"], 0);
 }
 
-TEST(InvitePlan, ARegionWithQuotesStaysValidJson) {
-  const Plan p =
-      nevr_invite::PlanRequest(nevr_invite::ParseMetric(CreateLine("US \"WEST\" \\ x", "1 DAY")), ArenaCustom());
+// No generic region code exists and the row's text is display text, so the request carries none and the service picks a
+// server by the player's stored pings. Whatever the row says, the body's region is empty.
+TEST(InvitePlan, TheRowsRegionTextIsNeverSent) {
+  for (const char* text : {"US WEST", "us-west", "EU", "", "US \"WEST\" \\ x"}) {
+    const Plan p = nevr_invite::PlanRequest(nevr_invite::ParseMetric(CreateLine(text, "1 DAY")), ArenaCustom());
+    ASSERT_TRUE(p.request.has_value()) << text;
+    const nlohmann::json body = nlohmann::json::parse(p.request->body);
+    ASSERT_TRUE(body.contains("region")) << text;
+    EXPECT_EQ(body["region"], "") << text;
+  }
+}
+
+TEST(InvitePlan, AModeWithQuotesStaysValidJson) {
+  const Plan p = nevr_invite::PlanRequest(nevr_invite::ParseMetric(CreateLine("US WEST", "1 DAY")),
+                                          Choices{"arena", "a\"b\\ c", 0});
   ASSERT_TRUE(p.request.has_value());
   const nlohmann::json body = nlohmann::json::parse(p.request->body);
-  EXPECT_EQ(body["region"], "US \"WEST\" \\ x");
+  EXPECT_EQ(body["mode"], "a\"b\\ c");
 }
 
 TEST(InvitePlan, ACreateBeforeTheCardsWereChosenSendsNothing) {

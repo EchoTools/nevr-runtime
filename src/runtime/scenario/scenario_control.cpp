@@ -409,7 +409,6 @@ std::string FireAction(const nevr_scenario_protocol::Command& cmd) {
       metric.join_code = cmd.value;
     } else {
       metric.kind = nevr_invite::Kind::Create;
-      metric.region = cmd.value;
       metric.expires_text = cmd.key;
       choices.experience = cmd.inviteExperience;
       choices.mode = cmd.inviteMode;

@@ -154,7 +154,6 @@ nevr_invite::Plan Resolve(const std::string& typed = "abcd-2345") {
 nevr_invite::Plan Create() {
   nevr_invite::Metric metric;
   metric.kind = nevr_invite::Kind::Create;
-  metric.region = "US WEST";
   metric.expires_text = "3 HOURS";
   nevr_invite::Choices choices;
   choices.experience = "arena";

@@ -184,8 +184,9 @@ inline bool ParseFireAction(const nlohmann::json& j, const std::string& action, 
     ok = text("code", true, &cmd.value) && !cmd.value.empty();
     if (!ok && error->empty()) *error = "fire invite_resolve needs a non-empty \"code\"";
   } else if (action == "invite_create") {
-    // The create metric's two fields (Server_region, Expires_after) and the card choices (experience, mode, map).
-    ok = text("region", true, &cmd.value) && text("expires", true, &cmd.key) && text("experience", true, &cmd.inviteExperience) &&
+    // The create metric's expiry (Expires_after) and the card choices (experience, mode, map). No region: the request sends
+    // none (invite_wizard.h RegionCode), so the service picks a server by the player's stored pings.
+    ok = text("expires", true, &cmd.key) && text("experience", true, &cmd.inviteExperience) &&
          text("mode", true, &cmd.inviteMode) && (!j.contains("map") || u64("map", 255, &cmd.number));
   } else if (action == "early_quit_feature_flags") {
     cmd.flag = false;  // raw: store the byte as sent, without the callback's & 0xdd

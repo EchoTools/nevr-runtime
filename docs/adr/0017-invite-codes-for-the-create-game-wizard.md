@@ -64,9 +64,11 @@ issues a code and never builds a route shaped after the wizard.
 
 A refusal is a nakama RPC error whose message is one stable token: `invalid` (no such code), `expired`, `closed` (revoked,
 or its match ended), `denied` (the guild check, decision D2), `limit` (decision D1, live codes per user), `rate` (too many
-attempts) or `unavailable` (the match could not be allocated). The create request's `map` is a level name string (the
-service refuses a number as `invalid`); the map page's cards have no level name recorded yet, so the runtime sends "",
-which the service reads as any level of the mode. The runtime maps the token to the wizard's text and logs the token; it never logs or shows any other text of
+attempts) or `unavailable` (the match could not be allocated: no server was available to the player). The create request's
+`map` is a level name string (the service refuses a number as `invalid`). The request's `region` is empty: the review
+page's `Server_region` is display text, no generic region code exists, and with none sent the service picks a server by
+the player's stored pings (#1192 makes the row a list of codes the service offers, and the request then sends the chosen
+one). The runtime maps the token to the wizard's text and logs the token; it never logs or shows any other text of
 the answer (`docs/standards/logging.md` Rule 4).
 
 - **Storage.** One object per code in a system-owned collection, key = the code, value = match id, owner user id,

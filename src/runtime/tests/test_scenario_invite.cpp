@@ -3,9 +3,9 @@
 //
 // Prediction, written before the code. The control endpoint takes three commands:
 //   {"op":"fire","action":"invite_resolve","code":"ZZZZZZ"}
-//   {"op":"fire","action":"invite_create","region":"US WEST","expires":"3 HOURS","experience":"arena","mode":"custom","map":1}
+//   {"op":"fire","action":"invite_create","expires":"3 HOURS","experience":"arena","mode":"custom","map":1}
 //   {"op":"invite_answers"}
-// and refuses a resolve with no code, a create with no region, expiry, experience or mode, and a map above 255.
+// and refuses a resolve with no code, a create with no expiry, experience or mode, and a map above 255.
 // Falsifier: any of those parses to a command the control endpoint would act on with a field missing.
 #include <gtest/gtest.h>
 
@@ -40,15 +40,14 @@ TEST(ScenarioInvite, AResolveWithoutACodeIsRefused) {
   EXPECT_FALSE(Parses(R"({"op":"fire","action":"invite_resolve","code":5})", &cmd, &error));
 }
 
-TEST(ScenarioInvite, ACreateTakesTheMetricsFieldsAndTheCardChoices) {
+TEST(ScenarioInvite, ACreateTakesTheExpiryAndTheCardChoices) {
   nevr_scenario_protocol::Command cmd;
   std::string error;
   ASSERT_TRUE(Parses(
-      R"({"op":"fire","action":"invite_create","region":"US WEST","expires":"3 HOURS","experience":"arena","mode":"custom","map":1})",
+      R"({"op":"fire","action":"invite_create","expires":"3 HOURS","experience":"arena","mode":"custom","map":1})",
       &cmd, &error))
       << error;
   EXPECT_EQ(cmd.action, "invite_create");
-  EXPECT_EQ(cmd.value, "US WEST");
   EXPECT_EQ(cmd.key, "3 HOURS");
   EXPECT_EQ(cmd.inviteExperience, "arena");
   EXPECT_EQ(cmd.inviteMode, "custom");
@@ -58,16 +57,15 @@ TEST(ScenarioInvite, ACreateTakesTheMetricsFieldsAndTheCardChoices) {
 TEST(ScenarioInvite, ACreateNeedsEveryFieldButTheMap) {
   nevr_scenario_protocol::Command cmd;
   std::string error;
-  EXPECT_TRUE(Parses(R"({"op":"fire","action":"invite_create","region":"US WEST","expires":"3 HOURS","experience":"lobby","mode":""})",
+  EXPECT_TRUE(Parses(R"({"op":"fire","action":"invite_create","expires":"3 HOURS","experience":"lobby","mode":""})",
                      &cmd, &error))
       << error;
   EXPECT_EQ(cmd.number, 0u);
-  EXPECT_FALSE(Parses(R"({"op":"fire","action":"invite_create","expires":"3 HOURS","experience":"arena","mode":"custom"})", &cmd, &error));
-  EXPECT_FALSE(Parses(R"({"op":"fire","action":"invite_create","region":"US WEST","experience":"arena","mode":"custom"})", &cmd, &error));
-  EXPECT_FALSE(Parses(R"({"op":"fire","action":"invite_create","region":"US WEST","expires":"3 HOURS","mode":"custom"})", &cmd, &error));
-  EXPECT_FALSE(Parses(R"({"op":"fire","action":"invite_create","region":"US WEST","expires":"3 HOURS","experience":"arena"})", &cmd, &error));
+  EXPECT_FALSE(Parses(R"({"op":"fire","action":"invite_create","experience":"arena","mode":"custom"})", &cmd, &error));
+  EXPECT_FALSE(Parses(R"({"op":"fire","action":"invite_create","expires":"3 HOURS","mode":"custom"})", &cmd, &error));
+  EXPECT_FALSE(Parses(R"({"op":"fire","action":"invite_create","expires":"3 HOURS","experience":"arena"})", &cmd, &error));
   EXPECT_FALSE(Parses(
-      R"({"op":"fire","action":"invite_create","region":"US WEST","expires":"3 HOURS","experience":"arena","mode":"custom","map":256})",
+      R"({"op":"fire","action":"invite_create","expires":"3 HOURS","experience":"arena","mode":"custom","map":256})",
       &cmd, &error));
 }
 
