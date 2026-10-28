@@ -58,6 +58,10 @@ bool RegisterResourceRequestCounters() noexcept;    // 2 counters
 // resource_request::InstallIfCounted(countersRegistered): true when the slot holds the thunk.
 bool InstallResourceRequestLogHook(bool countersRegistered) noexcept;
 
+// The #966 main-menu cards (sentinel/menu_cards_hook.h), through this seam for the same reason: it includes
+// callback_thunk.h. No counters. True when the callback slot holds the thunk.
+bool InstallMenuCardsHook() noexcept;
+
 // Defined in production_steps.cpp: the whole constructor sequence (ctor_sequence.h) over the real
 // libraries. Never throws and never blocks.
 void RunSentinelConstructor() noexcept;
