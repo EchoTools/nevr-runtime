@@ -47,7 +47,7 @@ fetches the files back only after it has put them there.
 
 ## When to release
 
-A release is a train, not an event. The train (`release-train.yml`) runs hourly and cuts a pre-release when `main` has a
+A release is a train, not an event. The train (`release-train.yml`) runs every three hours and cuts a pre-release when `main` has a
 commit that `tools/next_release_version.py` counts (feat, fix, perf or a breaking change) since the newest tag.
 
 1. **Switch.** The train does nothing until the repository variable `RELEASE_TRAIN` is `true`. Merging the workflow cuts
