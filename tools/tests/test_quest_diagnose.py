@@ -28,7 +28,7 @@ GOOD_DIRS = f"{MEDIA}:{MEDIA}/files:{MEDIA}/files/_data:{MEDIA}/asset_patches:{F
 HWSERIAL = "HWSER0987654"
 WIFI_SERIAL = "192.168.1.5:5555"
 PRIVACY = "never in a public channel"
-CONTACT = "sprockee on the EchoVRCE Discord"
+CONTACT = "Do not attach it to a public GitHub issue"
 ZIP_FILES = {
     "verdict.txt", "device.txt", "package.txt", "installer_version.txt", "launch.txt", "logcat.txt",
     "logcat_before_launch.txt", "listings/readyatdawn.txt", "listings/readyatdawn_data.txt", "listings/media.txt",
