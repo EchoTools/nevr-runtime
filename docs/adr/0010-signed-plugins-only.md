@@ -67,8 +67,10 @@ There are two plugin loaders in the tree, not one.
   entry in the phase.
 - `StageOne` is the only caller of `LoadModule`. It refuses a disabled entry, a superseded one, a duplicate and a file outside the
   plugins directory (`PluginFileStaysInDirectory`), then verifies the file, before that call.
-- `LoadModule` is the only place a plugin file is mapped: `LoadLibraryExA(path, nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
-  LOAD_LIBRARY_SEARCH_SYSTEM32)`. In an unsigned-allowed run, on `ERROR_INVALID_PARAMETER`, an unrestricted `LoadLibraryA(path)` follows.
+- `LoadModule` is the only place a plugin file is mapped: `LoadLibraryExW(held path, nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+  LOAD_LIBRARY_SEARCH_SYSTEM32)`, where the held path is the final path of the handle the check holds (below). With no handle held
+  (an unsigned-allowed run that could not open the file) it is `LoadLibraryExA(path, ...)` as the entry spells it. In an
+  unsigned-allowed run, on `ERROR_INVALID_PARAMETER`, an unrestricted `LoadLibraryW(held path)` (or `LoadLibraryA(path)`) follows.
 - The early pass (N146) and the normal pass both go through `StageOne`. `module_loader.cpp` and the statically linked modules load no
   DLL files of ours (`platform_compat.cpp` loads the system's `Secur32.dll` and `ole32.dll`).
 
@@ -136,6 +138,12 @@ filed as #783 and is closed.
 **Check and load are separate steps.** A file can change between them.
 - `StageOne` opens the file with `FILE_SHARE_READ` only (no write or delete sharing), passes that handle to `VerifyPluginFile` and
   keeps it open across `LoadModule`, so a Windows process cannot write or replace the file in between.
+- The load names the file the handle holds, not the path the entry spells. `CheckSignature` takes the handle's final path
+  (`GetFinalPathNameByHandleW`: no link, no junction, no 8.3 name, no prefix) and `LoadModule` loads that path, so a link, a
+  junction or a directory someone can rename in the configured path cannot make the load map another file than the one checked. A
+  signed-only run that cannot name the held file refuses the plugin (`cannot name the file it checked`); an unsigned-allowed run
+  loads the configured path and says so at Warning. The tests drive the file-link form under Wine (`ALinkRepointedBetweenTheCheckAndTheLoad...`); the
+  directory-link form rests on Windows's own final path for a handle and is not run here.
 - Known gap: under Wine and Proton a Linux process of the same user can write the underlying file without the Windows sharing rules.
   The test in section 5 measures whether Wine honours the sharing mode against another Wine process; it cannot cover a native Linux
   writer, and the threat model puts a same-user native writer out of scope. The mitigation that would cover it (copy the verified bytes
@@ -316,6 +324,8 @@ GTest under Wine, in `src/runtime/tests/test_plugin_signature.cpp`, `test_plugin
 | plugin calls `LoadLibrary` on an unsigned file in the plugins directory after init | refused by the `DllLoadHook` filter |
 | restricted-search load rejected with `ERROR_INVALID_PARAMETER` | refused, no fallback load |
 | file written while the verify handle is held, from another Wine process | the write fails, or the loaded bytes equal the verified bytes |
+| the entry's path is a link, pointed at an unsigned file between the check and the load | the file that was checked loads; the unsigned file is not mapped |
+| the held file's path cannot be had | signed-only: refused, `cannot name the file it checked`; otherwise the configured path loads, with a Warning |
 | release-configured build, no argument, unsigned plugin (`PluginRunModeTest`) | loaded, with the mode line and the Warning line |
 | the same build and plugin with `-require-signed-plugins` | refused, `refused: unsigned`, one dialog on a client, `ServerFatal` for a required plugin on a server |
 | the early pass and a later load under each mode | both follow the run's mode; the mode line is written once |

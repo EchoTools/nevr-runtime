@@ -293,6 +293,10 @@ class HeldFile {
   // The System32 libraries the plugin names that nothing in its directory does, loaded before the plugin (#768).
   PinnedModules pins;
 
+  // #767: where the held file is, from the handle: no link, no 8.3 name, no prefix. This is what the load names, so
+  // the load is of the file that was checked, whatever the configured path leads to by then. Empty: nothing is held.
+  std::wstring loadPath;
+
  private:
   HANDLE handle_ = INVALID_HANDLE_VALUE;
 };
@@ -400,12 +404,10 @@ std::string NarrowName(const std::wstring& wide) {
   return out;
 }
 
-// The final path of an open file or directory: long names resolved, the extended-length prefix removed, lowercase.
-// This is what the plugins directory is compared with. The text of the path a caller passes cannot be: an 8.3 short
-// name, an extended-length prefix, a trailing dot or space and a junction all name a file in the plugins directory
-// without spelling it. Windows resolves symbolic links and junctions in the final path; Wine does not resolve a unix
-// symbolic link, so a link to the plugins directory is not recognised there (#788).
-bool FinalPathOfHandle(HANDLE handle, std::wstring* out) {
+// The final path of an open file or directory: long names resolved, the extended-length prefix removed, the case the
+// file system reports. Windows resolves symbolic links and junctions in it; Wine does not resolve a unix symbolic link
+// to a directory, so a link to the plugins directory is not recognised there (#788).
+bool FinalPathOfHandleExact(HANDLE handle, std::wstring* out) {
   std::wstring buf(512, L'\0');
   for (;;) {
     const DWORD n = GetFinalPathNameByHandleW(handle, buf.data(), static_cast<DWORD>(buf.size()),
@@ -433,8 +435,16 @@ bool FinalPathOfHandle(HANDLE handle, std::wstring* out) {
       buf = expanded;
     }
   }
-  if (!buf.empty()) CharLowerBuffW(buf.data(), static_cast<DWORD>(buf.size()));
   *out = buf;
+  return true;
+}
+
+// The same, lowercase: what the plugins directory is compared with. The text of the path a caller passes cannot be: an
+// 8.3 short name, an extended-length prefix, a trailing dot or space and a junction all name a file in the plugins
+// directory without spelling it.
+bool FinalPathOfHandle(HANDLE handle, std::wstring* out) {
+  if (!FinalPathOfHandleExact(handle, out)) return false;
+  if (!out->empty()) CharLowerBuffW(out->data(), static_cast<DWORD>(out->size()));
   return true;
 }
 
@@ -451,6 +461,10 @@ bool FinalPathOf(const std::wstring& path, std::wstring* out) {
 #ifdef NEVR_TEST_HOOKS
 // Runs between resolving a late load's path and opening it: where a test points the name somewhere else.
 void (*g_betweenResolveAndOpen)(const std::wstring& resolved) = nullptr;
+// Runs between a staged plugin's check and its load: where a test points the path somewhere else.
+void (*g_betweenCheckAndLoad)(const std::wstring& staged) = nullptr;
+// Makes the query for a held file's path fail, as the OS can (a handle to a file on a volume that cannot name it).
+bool g_failNamingHeldFile = false;
 #endif
 
 #ifdef NEVR_TEST_HOOKS
@@ -781,11 +795,14 @@ class PluginLoadRun {
     }
     HeldFile held;
     if (!CheckSignature(item, path, itemReport, &held)) return;
+#ifdef NEVR_TEST_HOOKS
+    if (g_betweenCheckAndLoad != nullptr) g_betweenCheckAndLoad(nevr_dll_load_hook::AnsiPathToLowerWide(path.c_str()));
+#endif
     const bool enforcing = nevr_plugin_trust::ActiveMode() == nevr_plugin_trust::Mode::SignedOnly;
 #ifdef NEVR_TEST_HOOKS
     if (g_afterDependenciesChecked != nullptr) g_afterDependenciesChecked();
 #endif
-    HMODULE hPlugin = LoadModule(path, filename, enforcing);
+    HMODULE hPlugin = LoadModule(path, held.loadPath, filename, enforcing);
     if (!hPlugin) {
       const DWORD error = GetLastError();
       if (enforcing && error == ERROR_INVALID_PARAMETER) {
@@ -825,6 +842,7 @@ class PluginLoadRun {
       return false;
     }
     held->Adopt(h);
+    if (!NameHeldFile(item, path, held, itemReport)) return false;
     const nevr_plugin_signature::Verdict verdict = nevr_plugin_signature::VerifyPluginFile(
         held->get(), nevr_plugin_trust::ActivePolicy(), static_cast<int64_t>(std::time(nullptr)));
     if (verdict.accepted()) return enforcing ? CheckDependencies(item, held, itemReport) : true;
@@ -844,6 +862,45 @@ class PluginLoadRun {
     RecordRefusal(item.file);
     FailPluginLoad(item, reason, itemReport);
     return false;
+  }
+
+  // #767: the held file's own path, which LoadModule loads. The configured path is a name, and a name that goes
+  // through a link, a junction or a directory someone can rename leads to another file by the time of the load; the
+  // handle does not. A signed-only run refuses a plugin whose held file cannot be named; any other run loads the
+  // configured path, as it did before, and says so.
+  bool NameHeldFile(const PluginLoadItem& item, const std::string& path, HeldFile* held, PluginManifestEntry& itemReport) {
+    const bool enforcing = nevr_plugin_trust::ActiveMode() == nevr_plugin_trust::Mode::SignedOnly;
+    bool named = FinalPathOfHandleExact(held->get(), &held->loadPath);
+#ifdef NEVR_TEST_HOOKS
+    if (g_failNamingHeldFile) {
+      named = false;
+      SetLastError(ERROR_ACCESS_DENIED);
+    }
+#endif
+    if (!named) {
+      const DWORD error = GetLastError();
+      held->loadPath.clear();
+      const std::string reason = "cannot name the file it checked: error " + std::to_string(error);
+      if (enforcing) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] plugin=%s file=%s refused: %s", item.name.c_str(),
+            item.file.c_str(), reason.c_str());
+        FailPluginLoad(item, "refused: " + reason, itemReport);
+        return false;
+      }
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PLUGIN] plugin=%s file=%s %s; loading the configured path, which is not tied to the file checked "
+          "(plugin trust mode %s)",
+          item.name.c_str(), item.file.c_str(), reason.c_str(), nevr_plugin_trust::ModeWord(nevr_plugin_trust::ActiveMode()));
+      return true;
+    }
+    std::wstring configured = nevr_dll_load_hook::AnsiPathToLowerWide(path.c_str());
+    std::wstring heldLower = held->loadPath;
+    CharLowerBuffW(heldLower.data(), static_cast<DWORD>(heldLower.size()));
+    if (NormalizeWide(configured.c_str()) != heldLower) {
+      Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] plugin=%s file=%s is loaded from %s, the file that was checked",
+          item.name.c_str(), item.file.c_str(), NarrowName(held->loadPath).c_str());
+    }
+    return true;
   }
 
   // ADR 0010 section 1: the DLLs this plugin names (imports, delay-load imports, forwarded exports) that sit in
@@ -952,8 +1009,10 @@ class PluginLoadRun {
     return false;
   }
 
-  // LoadLibrary with the restricted search; null on failure (the caller reports it).
-  static HMODULE LoadModule(const std::string& path, const char* filename, bool enforcing) {
+  // LoadLibrary with the restricted search; null on failure (the caller reports it). `heldPath` is the path of the
+  // file the check held (#767): the load names it, not `path`. Empty: nothing was held (a run that allows unsigned
+  // plugins and could not open the file), and `path` is loaded as it always was.
+  static HMODULE LoadModule(const std::string& path, const std::wstring& heldPath, const char* filename, bool enforcing) {
   /* N75: LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32.
    *
    * The risk was never loading OUR dll — we pass a full path. It is how ITS
@@ -970,20 +1029,20 @@ class PluginLoadRun {
    * log and fall back rather than failing to load — but we say so, because a
    * silent fallback would defeat the whole point. */
   struct StagedLoadScope {  // this path is the loader's own load of a file it checked (PluginLoadFilter)
-    explicit StagedLoadScope(const std::string& staged) {
-      t_stagedPath = nevr_plugin_tree::WithDefaultExtension(NormalizeWide(nevr_dll_load_hook::AnsiPathToLowerWide(staged.c_str()).c_str()));
+    explicit StagedLoadScope(const std::wstring& staged) {
+      t_stagedPath = nevr_plugin_tree::WithDefaultExtension(NormalizeWide(staged.c_str()));
     }
     ~StagedLoadScope() { t_stagedPath.clear(); }
-  } stagedScope(path);
-  HMODULE hPlugin = LoadLibraryExA(path.c_str(), nullptr,
-                                   LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
-                                   LOAD_LIBRARY_SEARCH_SYSTEM32);
+  } stagedScope(heldPath.empty() ? nevr_dll_load_hook::AnsiPathToLowerWide(path.c_str()) : heldPath);
+  const DWORD flags = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32;
+  HMODULE hPlugin = heldPath.empty() ? LoadLibraryExA(path.c_str(), nullptr, flags)
+                                     : LoadLibraryExW(heldPath.c_str(), nullptr, flags);
   // A signed-only run has no fallback (ADR 0010 section 1): the caller refuses on ERROR_INVALID_PARAMETER.
   if (!hPlugin && RestrictedSearchFallbackAllowed(enforcing, GetLastError())) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PLUGIN] %s: restricted search flags unsupported — falling back to "
         "default search order (hardening inactive for this load)", filename);
-    hPlugin = LoadLibraryA(path.c_str());
+    hPlugin = heldPath.empty() ? LoadLibraryA(path.c_str()) : LoadLibraryW(heldPath.c_str());
   }
     return hPlugin;
   }
@@ -1431,6 +1490,10 @@ void TestHook_InstallPluginLoadFilter(const std::string& pluginDir) { InstallPlu
 void TestHook_SetBetweenResolveAndOpen(void (*hook)(const std::wstring& resolved)) { g_betweenResolveAndOpen = hook; }
 void TestHook_SetAfterDependenciesChecked(void (*hook)()) { g_afterDependenciesChecked = hook; }
 void TestHook_FailPinning(bool fail) { g_failPinning = fail; }
+
+void TestHook_SetBetweenCheckAndLoad(void (*hook)(const std::wstring& staged)) { g_betweenCheckAndLoad = hook; }
+
+void TestHook_FailNamingTheHeldFile(bool fail) { g_failNamingHeldFile = fail; }
 
 void TestHook_ForgetLoadFilterRegistration() { g_filterRegistered = false; }
 

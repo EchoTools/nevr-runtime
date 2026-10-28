@@ -22,7 +22,8 @@ back (so a second `mprotect(RX)` is the same denied call), and the first call in
 libr15+0x18e7b28`, on the page the Attach hook patched, in every launch of the capture. The same capture shows the
 trampoline pages (anonymous memory, `mmap` then `mprotect(RX)`) being made without a denial (`"trampoline":"0x0000007b8d527000"`
 in the `restore_protect_failed` line of the join hook, and the next hook's line likewise): `execmod` is a rule about file-backed
-pages that were written, not about executable anonymous pages.
+pages that were written, not about executable anonymous pages. The Quest 2 capture below shows the same, with its addresses (see
+"What this does not know").
 
 A Quest 2 on Horizon v207 (build 52242990035800150, factory reset to the current OS) fails the same way on NEVR 5.16.1: six
 launches, each `Thread-2: potentially unexpected fatal signal 11` about a second in, with 14 `avc: denied { execmod }` lines
@@ -100,6 +101,20 @@ row.slotVaddr` from the table and checks it three ways before it stores anything
 exactly the stub the table implies (so a stock site, or a stub from another table, is refused); (b) decoding the live `ADRP` and
 `LDR` gives the same slot address; (c) the slot lies inside the live program headers' writable `PT_LOAD` and at or after
 `p_vaddr + p_filesz` (it is bss). Any failure is a refusal that names the row and the check.
+
+**The linker-defined end symbols are not updated.** libr15's `.dynsym` defines six absolute symbols at the end of its image:
+`__end__`, `__bss_end__`, `_bss_end__` and `_end` (all 0x37d2538, the old end of `.bss`), and `_edata`, `__bss_start`
+(0x3761178). Their names are in `.dynstr`. The patcher leaves them as they are: `.dynstr` is not touched, and the slot area
+(section 4) lies after `_end`. Nothing reads them, measured on the pinned file (`readelf -rW` and `readelf --dyn-syms -W` on
+the four libraries of the store APK, `strings -a` on libr15):
+- no relocation in libr15 names any of the six, and none of the four libraries (`libr15.so`, `libpnsovr.so`,
+  `libpnsradmatchmaking.so`, `lib7f2363b8976491aa.so`) has an undefined reference to one;
+- each name occurs once as a string in libr15 (its `.dynstr` entry; `_bss_end__` is the tail of `__bss_end__`'s), so no literal
+  `dlsym` argument names one (libr15 imports `dlsym`; a name built at run time is not excluded by this);
+- no file under `src/` or `tools/` names one (`git grep` for the six).
+A reader that took `_end` as the first free address would see the slots as free, and no such reader exists in these four
+libraries; the patcher's report lists the six values unchanged so a future reader is a visible change. Pinned test: the
+patched file's six symbol values equal the stock file's (test 5 below).
 
 ### 5. Trampolines: from the table's stock words, in anonymous memory
 
@@ -192,6 +207,87 @@ with the same file, so it computes that ID; a public sentinel meeting such a lib
 sentinel meeting a public libr15 reports the same, so neither can pass as the other. The patcher's summary and the sentinel's
 `libr15_patch` line carry `extra_rows` (a count) and `extra_rows_sha256` (the file's digest), never the rows.
 
+**The extra-rows file, format 1.** One UTF-8 JSON object. Every field below is required, an unknown field at any level is a
+refusal, and so is a duplicate key in one object (the patcher reads the file with a parser that sees duplicates). The example
+uses invented values.
+
+```json
+{
+  "format": "nevr-libr15-extra-rows",
+  "version": 1,
+  "stock_build_id": "b243509c08ce677aeb95fa348016949b3fc45230",
+  "rows": [
+    {
+      "id": "x.example_guard",
+      "kind": "word_patch",
+      "revault_va": "0x1500010",
+      "words": [
+        { "offset": 0, "stock_bytes": "e0031faa", "new_bytes": "1f2003d5" },
+        { "offset": 8, "stock_bytes": "00010054", "new_bytes": "1f2003d5" }
+      ]
+    }
+  ]
+}
+```
+
+- `format` is exactly `nevr-libr15-extra-rows` and `version` is the integer 1. `stock_build_id` is 40 lowercase hex digits and
+  must equal the patcher's pinned stock ID: the file is bound to one libr15, and a file for another is refused before any row is
+  read.
+- A **row is identified by `id`**: `x.` followed by 1 to 62 characters of `[a-z0-9_.]`, unique in the file and never equal to a
+  public row's id (public ids do not start with `x.`). Every refusal, report line and log line names the row by `id`.
+- `kind` is exactly `word_patch` (the only kind a file may carry). `revault_va` is the ReVault address of the first word the row
+  may touch, as `0x` followed by lowercase hex without leading zeros; the patcher derives the file address with
+  `kRevaultBias` (section 1) and the typed value is the only address in the file. It is a multiple of 4.
+- `words` holds 1 to 64 entries in strictly increasing `offset` order. `offset` is a JSON integer, a multiple of 4, 0 to 4092, the
+  distance in bytes from `revault_va`. A file holds at most 256 words in all.
+- **A word is written as bytes in memory order**: `stock_bytes` and `new_bytes` are each exactly 8 lowercase hex digits, the four
+  bytes in the order they stand in the file and in `xxd` or `objdump -s` output, without a prefix. They are not the little-endian
+  value of the instruction: the A64 instruction `0xd503201f` (NOP) is `1f2003d5`. The patcher's report prints both forms
+  (`stock_bytes` and `stock_word`) for every word, so a reader can compare against a disassembler.
+- A row is refused when any `stock_bytes` differs from the stock file at `revault_va + offset - kRevaultBias` (the message names
+  the `id` and the `offset`), when a word lies outside the text segment, when it lies in a byte a public row or another extra row
+  also writes, or when `new_bytes` equals `stock_bytes`.
+- Build identity: the rows are sorted by `revault_va` and serialised as fixed binary (id, `revault_va`, each offset, each
+  `new_bytes`, each `stock_bytes`) for the hash of section 7, so the build ID does not depend on the file's key order, spacing or
+  the order of its rows. `extra_rows_sha256` in the report is the digest of the file's bytes as given.
+- Public prose and the file: the file is supplied at build time by whoever builds the variant. It is not committed, and the
+  tests use only invented addresses, in a fixture file beside the patcher tests that is the example above made into a file
+  for the synthetic ELF of test 9.
+
+### 12. Plugins keep the stock identity
+
+ADR 0019 compares each plugin's declared build-ID list (`NEVR_DECLARE_SUPPORTED_BUILD_IDS`) with the running libr15's live note
+(`SentinelPlatform::GameBuildId` into `DecideBuildId`, `plugin_loader.cpp`), and its host API compares a plugin target's `buildId`
+with the live note (`Prepare` in `got_hook.cpp`) and keys the slot registry by build ID and slot. After section 7 the live note is
+the derived ID, which no plugin lists: every plugin would be refused `build_id_unsupported`, and every plugin target
+`kBuildIdMismatch`. The patched file differs from the stock one only in the bytes the patcher reports (stubs, credits pairs, word
+patches, the slot area, the note and the `p_memsz` fields), so a plugin's addresses are properties of the stock file and hold.
+
+**Decision.** The loader hands plugins the **plugin identity**:
+
+- it is `kLibR15StockBuildId` when the running libr15 is our patched file, and the live note otherwise;
+- "is our patched file" needs both: (a) `Attach` recorded `libr15_patch status=verified` in this process, which means the live
+  note equalled `PatchedBuildId()` recomputed from the compiled-in table (extra rows included, section 11) and every row passed
+  checks (a) to (c) of section 4, so the live stub words are the table's; and (b) the live note, read again by the loader, still
+  equals `PatchedBuildId()`. With either missing the identity is the live note, and a plugin built for the stock ID is refused
+  as today. A file that only carries the derived ID in its note, without the verified stubs, gets no mapping;
+- it is used in three places: `DecideBuildId` accepts a plugin whose list names the plugin identity (a list that names the live
+  note is accepted as before); `ctx.game_build_id` is the plugin identity, so a plugin that copies it into its targets works on
+  both files; and the host API accepts a plugin target whose `buildId` equals the live note or the plugin identity, and keys the
+  slot registry by the plugin identity for every target, the sentinel's (which carry the derived ID, section 7) and the
+  plugin's. Keyed by the live note, a plugin's stock-ID claim and the sentinel's derived-ID claim on one slot would be two keys
+  and both would succeed;
+- the `plugin_load` record keeps `game_build_id` as the live note and gains `plugin_view_build_id` (the ID compared) and
+  `libr15_patched` (true or false), so the log says which file ran and which ID decided.
+
+A stock libr15 under a patched sentinel (`libr15_not_patched`, section 7) has the live note as its identity, and plugins are
+decided against it exactly as today.
+
+**What a plugin sees of the patched sites.** The patched file's bytes at the table's sites are the stubs, the credits pairs'
+`LDR` and the word patches. `CheckedWrite` requires the expected stock word (ADR 0019), so a plugin write over a patched site is
+refused loudly; a plugin that reads a patched entry reads the stub, not the stock prologue. The site list is the patcher's
+report, and a plugin that needs a stock prologue at one of those addresses cannot have it from this file.
+
 ## Tests, failing first
 
 Each is run once with the line it covers changed and must fail (the mutant discipline of `AGENTS.md`).
@@ -220,8 +316,29 @@ Each is run once with the line it covers changed and must fail (the mutant disci
 9. **Word patches and extra rows**, on the synthetic stock ELF: a wrong stock word, an overlapping word, a word outside the text
    and an offset that is not a multiple of 4 are each refused with the row's `id`; the output differs from the input in the
    named words and nowhere else; a file of extra rows changes the build ID and the same file twice gives the same bytes; a
-   row of any kind but `kWordPatch` in the file is refused; the public table's ID is the one a build without the file computes;
+   row of any kind but `kWordPatch` in the file is refused; each rule of the extra-rows format is refused in its own case (wrong
+   `format`, `version` or `stock_build_id`; an unknown field; a duplicate key; a bad, duplicate or public `id`; a `revault_va`
+   or `offset` not a multiple of 4; offsets out of order; 65 words in a row; a word written as a little-endian value instead of
+   bytes; a stock mismatch; a word outside the text, overlapping a public row or another extra row, or unchanged); the fixture
+   loads, and its report prints each word's `stock_bytes` and `stock_word`; the public table's ID is the one a build without the file computes;
    `Attach` on an image whose live word differs ends with `libr15_patch_row_words`.
+10. **Plugin identity** (section 12), in `plugin_loader_test.cpp` with the fake platform, and `got_hook_test.cpp`:
+    - a plugin declaring only the stock ID is `loaded` when the platform reports the live note `PatchedBuildId()` with
+      `libr15_patch` verified; its `ctx.game_build_id` is the stock ID, its record has `game_build_id` = the derived ID,
+      `plugin_view_build_id` = the stock ID and `libr15_patched` true;
+    - the same plugin is refused `build_id_unsupported` when the live note is the derived ID but `Attach` did not record
+      `verified`, when `verified` was recorded but the live note read now is another ID, and when the running libr15 is a third
+      ID;
+    - a plugin declaring only the derived ID loads on the patched file and is refused on a stock one;
+    - on a stock libr15 the plugin declaring the stock ID loads, with `libr15_patched` false;
+    - a plugin target carrying the stock ID resolves on the patched image and is refused (`kBuildIdMismatch`) on the same image
+      when the patch is not verified; a target carrying the derived ID resolves on the patched image;
+    - the sentinel's claim on a slot with the derived ID, then a plugin's claim on the same slot with the stock ID, is refused
+      as already owned (one key);
+    - pinned, on the real files (test 5): the `plugin_load` decision for a fixture declaring the stock ID, given the note of
+      the patcher's output for the store APK's libr15, is `loaded`.
+    Mutants: map to the stock ID without the `verified` record; map without re-reading the note; compare the list with the live
+    note only; `ctx.game_build_id` set to the live note; key the registry by the live note. Each must fail one of the cases above.
 
 ## Prediction
 
@@ -235,8 +352,10 @@ Written before any run. Lines are from the sentinel's log; "no execmod" means th
    step was `credits_text`);
 4. the process stays up past the first minute and reaches the login (`to logged in`); there is no `SIGSEGV`, and no `execmod`
    anywhere in the capture. The menu's version label shows the build's version and the splash skip runs (their pins are now right).
+5. with the no-op plugin of ADR 0019 slice 1 (it declares the stock ID only) in `plugins:`: one `plugin_load outcome=loaded`
+   record with `game_build_id` = the patched ID, `plugin_view_build_id` = `b243509c...`, `libr15_patched` true.
 Falsifiers: any `avc: denied { execmod }` for `libr15.so`; a `SIGSEGV` at a libr15 page; a `libr15_patch` line with a reason;
-the process dying inside `dlopen` (the linker refused the patched ELF).
+the process dying inside `dlopen` (the linker refused the patched ELF); the plugin record with `build_id_unsupported`.
 
 **Quest 2 (Horizon v207, build 52242990035800150).** The same four points as the Quest 3, and the same falsifiers.
 Both headsets deny `execmod` today, so a Quest 2 run is a second device on the
@@ -247,7 +366,20 @@ the Quest 3 does not show is a defect of the patched file for that OS.
 
 - That Bionic's linker (on either OS) loads a libr15 whose writable `PT_LOAD` has a larger `p_memsz` and whose build-ID note
   descriptor is rewritten. Both edits keep every offset and the segment order; neither has been measured here.
-- That anonymous executable pages stay allowed. The Quest 3 capture shows them allowed today.
+- That anonymous executable pages stay allowed, and that code runs from them. What the captures show is the creation: the
+  sentinel maps a page `PROT_READ|PROT_WRITE`, copies the displaced words in, and `mprotect`s it `PROT_READ|PROT_EXEC`
+  (`inline_hook.cpp`: the `mmap`, the `mprotect` with the `trampoline_rx` failure path, then the page write that fails); the
+  `trampoline` field of the `restore_protect_failed` line is logged only when both succeeded.
+  Quest 3: `trampoline` `0x0000007b8d527000` (Context).
+  Quest 2 (the run of 2026-10-28, v5.16.1 first launch, 07:09 to 07:41 local time): the sentinel log holds six launches between
+  07:38:53 and 07:39:07 local time (`ts_unix_ms` 1793191133724 to 1793191147229), each with two `restore_protect_failed` lines
+  and the same two trampolines: `0x000000748dfe9000` for the join hook (target page ending `ba8`) and `0x000000748df5d000` for
+  `ui_texture.attach` (target page ending `5c4`), 12 lines in all, none with `trampoline_map` or `trampoline_rx`. The same log's
+  later launch of a 5.16.2 development build writes no code and makes no trampoline (`code_write_skipped`). Limits: the sentinel
+  log has no device field (`hwdump` is off), so "Quest 2" rests on the run's record and the timestamps; the logcat capture
+  of that run has no `NEVR-Sentinel` and no libr15 line at all, so its silence on `execmem` or `execmod` for libr15 proves
+  nothing; and neither device has shown a call through a trampoline, because the first call into the patched page faulted
+  before reaching it. The first Quest 2 run of this design is the first execution from an anonymous executable page on that OS.
 - That the instructions between each credits `ADRP` and `ADD` do not use the page register (the same assumption as the
   existing patch).
 - Whether shipping a modified copy of the game's library changes anything about distributing the APK, which already carries the
