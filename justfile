@@ -1359,6 +1359,19 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         "$extra/identity.o" "$extra/extra_rows.o" "$extra/data.o" "$extra/hook_log.o" \
         "$out/attach_libr15_patch_identity.o" "$out/attach_sha256.o" -o "$extra/libr15_extra_rows_identity_test"
     timeout 120 "$extra/libr15_extra_rows_identity_test" src/quest/tests/fixtures
+    # An embedded text that does not parse stops the process with the log line and never falls back to the public rows
+    # (SIGILL from __builtin_trap, exit status 132). Configure parses the file first, so this is a corrupted build; the generator
+    # alone embeds whatever it is given, which is how the case is made here.
+    printf '{' > "$extra/unparsable.json"
+    cmake -DNEVR_EXTRA_ROWS_FILE="$PWD/$extra/unparsable.json" -DNEVR_EXTRA_ROWS_OUT="$extra/unparsable_data.cpp" -P src/quest/cmake/generate_libr15_extra_rows.cmake
+    "${attach[@]}" -fno-exceptions -c "$extra/unparsable_data.cpp" -o "$extra/unparsable_data.o"
+    "${attach[@]}" -Isrc/quest/tests src/quest/tests/libr15_extra_rows_identity_test.cpp \
+        "$extra/identity.o" "$extra/extra_rows.o" "$extra/unparsable_data.o" "$extra/hook_log.o" \
+        "$out/attach_libr15_patch_identity.o" "$out/attach_sha256.o" -o "$extra/unparsable_identity_test"
+    unparsable_rc=0
+    timeout 60 "$extra/unparsable_identity_test" src/quest/tests/fixtures > "$extra/unparsable.out" 2>&1 || unparsable_rc=$?
+    [ "$unparsable_rc" -eq 132 ] || { echo "test-quest-hooks: FAIL - an unparsable embedded rows text exited $unparsable_rc, not 132 (SIGILL from __builtin_trap)" >&2; cat "$extra/unparsable.out" >&2; exit 1; }
+    grep -qF '"event":"libr15_extra_rows"' "$extra/unparsable.out" && grep -qF '"status":"unparsable"' "$extra/unparsable.out" || { echo "test-quest-hooks: FAIL - the unparsable embedded text left no libr15_extra_rows log line" >&2; cat "$extra/unparsable.out" >&2; exit 1; }
     # Every byte value survives the generated source: a file of bytes 0 to 255 is embedded and written back byte for byte.
     python3 -c 'import sys; sys.stdout.buffer.write(bytes(range(256)))' > "$extra/all_bytes.bin"
     cmake -DNEVR_EXTRA_ROWS_FILE="$PWD/$extra/all_bytes.bin" -DNEVR_EXTRA_ROWS_OUT="$extra/all_bytes_data.cpp" -P src/quest/cmake/generate_libr15_extra_rows.cmake
