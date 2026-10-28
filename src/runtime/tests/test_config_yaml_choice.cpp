@@ -246,6 +246,13 @@ TEST(CliRejectExit, TheProcessEndsWithCode64AndOneLineOnStderr) {
               "\"detail\":\"-config-path: use -config-file <file>\"");
 }
 
+// The raw line on stderr and the log's copy of it (Log falls back to stderr here, prefixed with the tag) are two lines: a
+// run that dropped the raw write would still match the test above through the log's copy.
+TEST(CliRejectExit, TheStopLineIsWrittenToStderrOnItsOwnAndAgainThroughTheLog) {
+  ASSERT_EXIT(RejectCommandLine("-config-path", "use -config-file <file>"), ::testing::ExitedWithCode(64),
+              "\"tag\":\"NEVR\\.STOP\".*\n.*\\[NEVR\\.STOP\\] \\{\"tag\"");
+}
+
 // --- the file-system half, against a real tree -------------------------------------------------------------------------
 
 std::wstring W(const std::string& utf8) {

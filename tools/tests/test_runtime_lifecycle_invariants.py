@@ -237,7 +237,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
 
     def test_early_boot_never_reads_config(self):
         # service_config.cpp NevrCfg() loads config.yaml on first access and documents that first
-        # access is after the CLI is parsed (g_isServer, -config-path). 3d4a994 called
+        # access is after the CLI is parsed (g_isServer, -config-file). 3d4a994 called
         # NevrCfgSocialFacadeEnabled() from the boot sequence and a real server with a config.yaml
         # died silently right after "minhook initialized".
         source = (ROOT / "src/runtime/lifecycle/initialize.cpp").read_text()
