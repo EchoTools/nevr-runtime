@@ -21,10 +21,11 @@ File shape (schema 1; every key is required):
                         (the game's font draws nothing else), at most 64 bytes; any other character is refused
               section   a sections id, or null for a name the README does not show
               headings  heading ids the in-game page lists this name under (may be empty)
-              link      "" or https://github.com/<owner>[/<repo>]
+              link      "" or https://github.com/<owner>[/<repo>], or one of PORTFOLIO_LINKS (a person with no GitHub
+                        account, linked to the page of their own work that names the project)
               what      one line for the README; required when section is not null
               sources   evidence for `what`: a github.com URL, "#<number>" of this repo, a
-                        repo-relative path, "named by the project owner[, MM-DD]" (no chat quoted), or one of the
+                        repo-relative path, one of PORTFOLIO_LINKS, "named by the project owner[, MM-DD]" (no chat quoted), or one of the
                         three exact texts: "echoApkPatch credit strings" (the community installer's patcher thanks
                         the name; the patcher's repository is private), "tested in #nevr-runtime-testing (Discord)"
                         (the name tested in that channel) and "echovrce.com website" (the name built that site)
@@ -53,6 +54,9 @@ BLOCK = re.compile(re.escape(BEGIN) + r".*?" + re.escape(END) + r"\n", re.S)
 
 # A link is a GitHub profile or a repository, nothing that hands out builds.
 LINK_SHAPE = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?$")
+# A person with no GitHub account is linked to the page of their own work that names this project. Each page is listed
+# here by its exact address, so no other host passes.
+PORTFOLIO_LINKS = frozenset({"https://www.dccoffey.com/work/echo-vr"})
 URL = re.compile(r"https?://[^\s)>\]]+")
 SOURCE_URL = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.#/-]+)?$")
 SOURCE_ISSUE = re.compile(r"^#[0-9]+$")
@@ -117,17 +121,17 @@ def validate(data: dict, root: Path = ROOT) -> list[str]:
                 problems.append(f"{name}: unknown heading {tag!r}")
         if len(entry["headings"]) != len(set(entry["headings"])):
             problems.append(f"{name}: a heading is listed twice")
-        if entry["link"] and not LINK_SHAPE.match(entry["link"]):
-            problems.append(f"{name}: link {entry['link']!r} is not github.com/<owner>[/<repo>]")
+        if entry["link"] and not (LINK_SHAPE.match(entry["link"]) or entry["link"] in PORTFOLIO_LINKS):
+            problems.append(f"{name}: link {entry['link']!r} is not github.com/<owner>[/<repo>] or a listed portfolio page")
         if entry["section"] is not None and not entry["what"].strip():
             problems.append(f"{name}: shown in the README with nothing said")
         for url in URL.findall(entry["what"]):
-            if not LINK_SHAPE.match(url):
-                problems.append(f"{name}: link {url!r} in the text is not github.com/<owner>[/<repo>]")
+            if not (LINK_SHAPE.match(url) or url in PORTFOLIO_LINKS):
+                problems.append(f"{name}: link {url!r} in the text is not github.com/<owner>[/<repo>] or a listed portfolio page")
         if not entry["sources"]:
             problems.append(f"{name}: no source")
         for source in entry["sources"]:
-            ok = bool(SOURCE_URL.match(source) or SOURCE_ISSUE.match(source) or SOURCE_OWNER.match(source) or source in SOURCE_TEXTS or (
+            ok = bool(SOURCE_URL.match(source) or source in PORTFOLIO_LINKS or SOURCE_ISSUE.match(source) or SOURCE_OWNER.match(source) or source in SOURCE_TEXTS or (
                 not source.startswith(("http", "/")) and ".." not in source and (root / source).exists()))
             if not ok:
                 problems.append(f"{name}: source {source!r} is not a github.com URL, an issue number, 'named by the project owner[, MM-DD]', one of {sorted(SOURCE_TEXTS)} or a repo path that exists")

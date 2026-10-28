@@ -293,6 +293,7 @@ func TestHookFramesCarryNoPersonality(t *testing.T) {
 	want := map[string]*regexp.Regexp{
 		"login compose phase":         regexp.MustCompile(`^_ZN16nevr_quest_login11ComposePlanE`),
 		"post-load installs (dlopen)": regexp.MustCompile(`^_ZN10nevr_quest11integration11AfterDlopenE`),
+		"main-menu cards page build":  regexp.MustCompile(`^_ZN10nevr_quest10menu_cards12PrepareCardsE`),
 	}
 	for what, re := range want {
 		if !anyMatches(v.annotatedReached, re) {

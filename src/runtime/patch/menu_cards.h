@@ -28,12 +28,21 @@ namespace nevr_menu_cards {
 /// (`0x4a3fe67c1ff9ccc4`), which the callback never shows.
 inline constexpr uint64_t kPageType = EchoVR::CSymbol64Hash("CR15UIPage2CR");
 inline constexpr uint64_t kPageName = 0xac360e41e4ede056ULL;
+/// The Quest build requests its main-menu page under `mnu_master_lowspec` (type 0x43433aacbeeab166, 81160 bytes, the
+/// byte count of the PC page; src/runtime/log/symcache_data.cpp names it). The name is also the name of the main-menu
+/// level, so about sixty resources of other classes arrive under it; the page is the one of class CR15UIPage2CR
+/// (kPageType, the same class as PC), found by headset run 2 of dev APK 5.16.2-dev.13.
+inline constexpr uint64_t kQuestPageName = 0xf927772b9e2aefb1ULL;
 /// The page of the main menu inside that resource.
 inline constexpr uint64_t kMainMenuPage = 24;
 
 /// SHA-256 of the stock resource, lowercase hex. Any other bytes (another build, an already patched page) are left
 /// alone.
 inline constexpr char kStockPageSha256[] = "af396701cfe27cb5d9fd512943b1ad732477b6399c4df5a2b36971375a6919eb";
+/// SHA-256 of the stock resource in the Quest build (APK 6528386917200980), lowercase hex, as headset run 2 of dev APK
+/// 5.16.2-dev.13 logged it for class 0x75e5993f80940cd0, name 0xf927772b9e2aefb1, 81160 bytes. It equals kStockPageSha256:
+/// the Quest and PC pages are byte-identical, so the same cards apply to both.
+inline constexpr char kQuestStockPageSha256[] = "af396701cfe27cb5d9fd512943b1ad732477b6399c4df5a2b36971375a6919eb";
 /// SHA-256 of the page the echovr-modkit tool writes from that stock page with these two cards. Logged next to our
 /// own result so a run says whether the two builders agree; it is not a gate.
 inline constexpr char kReferenceResultSha256[] = "ac3a7173bbc78c75ba22fc9ad2f7bf12003d27bdc1b8ff1d215cdd8cae97f8b5";
