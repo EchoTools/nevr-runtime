@@ -9,10 +9,12 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <cstddef>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -289,6 +291,180 @@ TEST_F(PluginSignature, ChainStatusNamesTheBits) {
   EXPECT_EQ(nevr_plugin_signature::ChainStatusNames(0x21),
             "CERT_TRUST_IS_NOT_TIME_VALID,CERT_TRUST_IS_UNTRUSTED_ROOT");
   EXPECT_EQ(nevr_plugin_signature::ChainStatusNames(0), "");
+}
+
+}  // namespace
+
+// #1262: Wine before 11.5 knows CERT_CHAIN_ENGINE_CONFIG without dwExclusiveFlags and refuses the 88-byte cbSize with
+// E_INVALIDARG, which refused the signed runtime on every Proton. The verifier retries once at the size up to
+// dwExclusiveFlags. These tests stand in for that Wine (the real API is called for every size the stand-in accepts) and
+// prove the retry accepts what the 88-byte path accepts and refuses what it refuses, for the same reason.
+namespace {
+
+constexpr DWORD kLegacyCbSize = offsetof(CERT_CHAIN_ENGINE_CONFIG, dwExclusiveFlags);
+
+std::vector<DWORD> g_triedSizes;
+DWORD g_failWith = static_cast<DWORD>(E_INVALIDARG);
+bool g_exclusiveRootSeen = true;
+DWORD g_exclusiveFlagsSeen = 0;
+
+void Record(const CERT_CHAIN_ENGINE_CONFIG* config) {
+  g_triedSizes.push_back(config->cbSize);
+  g_exclusiveRootSeen = g_exclusiveRootSeen && config->hExclusiveRoot != nullptr;
+  g_exclusiveFlagsSeen |= config->dwExclusiveFlags;
+}
+
+// A Wine before 11.5: only the legacy size is known, and at that size the pinned root is honored. The engine is
+// made by the host's own API from a full-size config carrying the same hExclusiveRoot, because what a newer Wine does
+// with a legacy-size struct is not what this stand-in is about (11.19 does not honor the root at 80 bytes, and never
+// sees that call, since it accepts 88). What a real Wine 11.0 does at 80 bytes is run, not simulated: this suite is
+// run under Proton Experimental (Wine 11.0), where the verifier takes the retry itself (PR #1262).
+BOOL OldWineEngine(CERT_CHAIN_ENGINE_CONFIG* config, HCERTCHAINENGINE* engine) {
+  Record(config);
+  if (config->cbSize != kLegacyCbSize) {
+    SetLastError(g_failWith);
+    return FALSE;
+  }
+  CERT_CHAIN_ENGINE_CONFIG full{};
+  full.cbSize = sizeof(full);
+  full.hExclusiveRoot = config->hExclusiveRoot;
+  return CertCreateCertificateChainEngine(&full, engine);
+}
+
+// Windows, or a Wine from 11.5: every size is known.
+BOOL CurrentEngine(CERT_CHAIN_ENGINE_CONFIG* config, HCERTCHAINENGINE* engine) {
+  Record(config);
+  return CertCreateCertificateChainEngine(config, engine);
+}
+
+// An engine that cannot be made at any size.
+BOOL NoEngine(CERT_CHAIN_ENGINE_CONFIG* config, HCERTCHAINENGINE*) {
+  Record(config);
+  SetLastError(g_failWith);
+  return FALSE;
+}
+
+class PluginSignatureEngine : public PluginSignature {
+ protected:
+  void SetUp() override {
+    PluginSignature::SetUp();
+    g_triedSizes.clear();
+    g_failWith = static_cast<DWORD>(E_INVALIDARG);
+    g_exclusiveRootSeen = true;
+    g_exclusiveFlagsSeen = 0;
+  }
+  void TearDown() override { nevr_plugin_signature::TestHook_SetEngineCreate(nullptr); }
+};
+
+TEST_F(PluginSignatureEngine, TheLegacySizeIsTheOneBeforeDwExclusiveFlags) {
+  EXPECT_EQ(kLegacyCbSize, 80u);
+  EXPECT_LT(kLegacyCbSize, sizeof(CERT_CHAIN_ENGINE_CONFIG));
+}
+
+TEST_F(PluginSignatureEngine, AnEngineThatTakesTheFullSizeIsMadeOnce) {
+  nevr_plugin_signature::TestHook_SetEngineCreate(&CurrentEngine);
+  const Verdict v = Verify("good");
+  EXPECT_TRUE(v.accepted()) << v.Describe();
+  EXPECT_EQ(v.engineCbSize, sizeof(CERT_CHAIN_ENGINE_CONFIG));
+  // Two chains are built (the timestamp's and the signer's), each at the full size and never retried.
+  ASSERT_EQ(g_triedSizes.size(), 2u);
+  for (const DWORD size : g_triedSizes) EXPECT_EQ(size, sizeof(CERT_CHAIN_ENGINE_CONFIG));
+}
+
+TEST_F(PluginSignatureEngine, AWineThatRejectsTheFullSizeAcceptsTheRetryAtTheLegacySize) {
+  nevr_plugin_signature::TestHook_SetEngineCreate(&OldWineEngine);
+  const Verdict v = Verify("good");
+  EXPECT_TRUE(v.accepted()) << v.Describe();
+  EXPECT_EQ(v.engineCbSize, kLegacyCbSize);
+  EXPECT_EQ(v.signingTime, manifest_["stamp_time"]["good"].get<int64_t>());
+  // Each of the two chains tries the full size, then the legacy size, once.
+  const std::vector<DWORD> expected = {static_cast<DWORD>(sizeof(CERT_CHAIN_ENGINE_CONFIG)), kLegacyCbSize,
+                                       static_cast<DWORD>(sizeof(CERT_CHAIN_ENGINE_CONFIG)), kLegacyCbSize};
+  EXPECT_EQ(g_triedSizes, expected);
+}
+
+TEST_F(PluginSignatureEngine, TheRetryStillTrustsTheExclusiveRootAloneAndLeavesDwExclusiveFlagsZero) {
+  nevr_plugin_signature::TestHook_SetEngineCreate(&OldWineEngine);
+  EXPECT_TRUE(Verify("good").accepted());
+  EXPECT_TRUE(g_exclusiveRootSeen);
+  EXPECT_EQ(g_exclusiveFlagsSeen, 0u);
+}
+
+TEST_F(PluginSignatureEngine, GoodFilesAreAcceptedOnBothPaths) {
+  for (const char* name : {"good", "good_unstamped", "expired_stamped_inside"}) {
+    nevr_plugin_signature::TestHook_SetEngineCreate(&CurrentEngine);
+    const Verdict full = Verify(name);
+    nevr_plugin_signature::TestHook_SetEngineCreate(&OldWineEngine);
+    const Verdict legacy = Verify(name);
+    EXPECT_TRUE(full.accepted()) << name << ": " << full.Describe();
+    EXPECT_TRUE(legacy.accepted()) << name << ": " << legacy.Describe();
+    EXPECT_EQ(full.signingTime, legacy.signingTime) << name;
+  }
+}
+
+// Every file the verifier refuses is refused on the retry path for the same reason, detail and chain status as on
+// the full-size path. The expected reasons are the ones the tests above state, not read from either run.
+TEST_F(PluginSignatureEngine, WronglySignedFilesAreRefusedOnBothPathsForTheSameReason) {
+  struct Case {
+    const char* name;
+    Reason reason;
+  };
+  const Case cases[] = {
+      {"unsigned", Reason::Unsigned},
+      {"wrong_eku", Reason::MissingEku},
+      {"other_root", Reason::ChainStatus},
+      {"forged_root", Reason::ChainStatus},
+      {"tampered_code", Reason::DigestMismatch},
+      {"tampered_signature", Reason::SignatureInvalid},
+      {"expired_unstamped", Reason::NoTimestampAndExpired},
+      {"stamped_after_expiry", Reason::ChainStatus},
+      {"token_copied", Reason::TimestampNotBound},
+      {"tsa_untrusted", Reason::TimestampInvalid},
+      {"content_swap", Reason::SignatureInvalid},
+      {"backdated_token", Reason::TimestampInvalid},
+      {"weak_key", Reason::ChainStatus},
+      {"tsa_weak", Reason::TimestampInvalid},
+  };
+  for (const Case& c : cases) {
+    nevr_plugin_signature::TestHook_SetEngineCreate(&CurrentEngine);
+    const Verdict full = Verify(c.name);
+    nevr_plugin_signature::TestHook_SetEngineCreate(&OldWineEngine);
+    const Verdict legacy = Verify(c.name);
+    EXPECT_EQ(full.reason, c.reason) << c.name << " full-size path: " << full.Describe();
+    EXPECT_EQ(legacy.reason, c.reason) << c.name << " retry path: " << legacy.Describe();
+    EXPECT_EQ(legacy.detail, full.detail) << c.name;
+    EXPECT_EQ(legacy.chainStatus, full.chainStatus) << c.name;
+    EXPECT_FALSE(legacy.accepted()) << c.name;
+  }
+}
+
+TEST_F(PluginSignatureEngine, AnEngineThatCannotBeMadeAtEitherSizeIsARefusalThatNamesBothErrors) {
+  nevr_plugin_signature::TestHook_SetEngineCreate(&NoEngine);
+  const Verdict v = Verify("good");
+  EXPECT_FALSE(v.accepted());
+  EXPECT_EQ(v.reason, Reason::TimestampInvalid) << v.Describe();
+  EXPECT_NE(v.detail.find("cannot make the chain engine: error 2147942487, and at 80 bytes error 2147942487"),
+            std::string::npos)
+      << v.Describe();
+  const std::vector<DWORD> expected = {static_cast<DWORD>(sizeof(CERT_CHAIN_ENGINE_CONFIG)), kLegacyCbSize};
+  EXPECT_EQ(g_triedSizes, expected);
+}
+
+TEST_F(PluginSignatureEngine, AnUnsignedTimestampFreeFileThatCannotGetAnEngineIsRefusedAtTheSignerChain) {
+  nevr_plugin_signature::TestHook_SetEngineCreate(&NoEngine);
+  const Verdict v = Verify("good_unstamped");
+  EXPECT_EQ(v.reason, Reason::ChainStatus) << v.Describe();
+  EXPECT_NE(v.detail.find("cannot make the chain engine"), std::string::npos) << v.Describe();
+}
+
+TEST_F(PluginSignatureEngine, AnErrorOtherThanInvalidArgumentIsNotRetried) {
+  g_failWith = ERROR_ACCESS_DENIED;
+  nevr_plugin_signature::TestHook_SetEngineCreate(&OldWineEngine);
+  const Verdict v = Verify("good_unstamped");
+  EXPECT_FALSE(v.accepted());
+  EXPECT_EQ(v.detail, "cannot make the chain engine: error " + std::to_string(ERROR_ACCESS_DENIED)) << v.Describe();
+  const std::vector<DWORD> expected = {static_cast<DWORD>(sizeof(CERT_CHAIN_ENGINE_CONFIG))};
+  EXPECT_EQ(g_triedSizes, expected);
 }
 
 }  // namespace
