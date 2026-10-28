@@ -9,7 +9,7 @@
 #include "quest/diag/hwdump_report.h"
 #include "quest/patch/libr15_patch_table.h"
 #include "quest/sentinel/got_hook.h"
-#include "quest/sentinel/pinned_targets.h"
+#include "quest/sentinel/libr15_identity.h"
 #include "quest/sentinel/sentinel_log.h"
 
 #include <pthread.h>
@@ -30,11 +30,12 @@ using nevr_quest::LogLevel;
 
 constexpr const char* kFileName = "nevr-hwdump.json";
 
-// The GNU build ID of the libr15 mapped in this process, or "(unavailable)".
+// The GNU build ID of the libr15 mapped in this process, or "(unavailable)". The module name is spelled here, not taken
+// from pinned_targets.h: that header includes callback_thunk.h, which only -fno-exceptions units may include.
 std::string LiveLibR15BuildId() {
   sentinel::ElfImage image;
   char id[64] = {};
-  if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image) || !sentinel::ReadBuildId(image, id, sizeof(id))) {
+  if (!sentinel::FindLoadedImage("libr15.so", &image) || !sentinel::ReadBuildId(image, id, sizeof(id))) {
     return "(unavailable)";
   }
   return id;
