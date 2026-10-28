@@ -1324,6 +1324,16 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/os_build_gate_hook_test" -ldl
     timeout 120 "$out/os_build_gate_hook_test"
+    # The Quest main menu shows the runtime version (#747): the real handler through the thunk entry against a stand-in for
+    # CCanvasUICS::SetText (the lobby_version item replaced, every other item, an empty text and a null text left alone).
+    # The handler includes the build-tree header generated/nevr_build_info.h; a stub stands in for it here.
+    mkdir -p "$out/menu_version_gen/generated"
+    printf 'namespace nevr_build { inline constexpr const char* kVersion = "5.17.0"; }\n' > "$out/menu_version_gen/generated/nevr_build_info.h"
+    "${cxx[@]}" -I"$out/menu_version_gen" -fno-exceptions -pthread src/quest/tests/menu_version_label_test.cpp \
+        src/quest/social/menu_version_label.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/menu_version_label_test" -ldl
+    timeout 120 "$out/menu_version_label_test"
     # The texture-quality hook (#943): the real handler through the thunk entry against a stand-in for vrapi_GetSystemPropertyInt,
     # every level's eye size, the pass-through of every other id, the latch, `stock`, and the shared slot's observer.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/texture_quality_hook_test.cpp \
