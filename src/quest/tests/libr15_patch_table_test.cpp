@@ -38,6 +38,16 @@ TEST(TheTableHasTheSixRowsOfTheAdrInOrder) {
   for (std::size_t i = 0; i < kRowCount; ++i) CHECK(seen.insert(kRows[i].id).second);
 }
 
+// ADR 0021 section 11: a public row's id never starts with the prefix an extra row's id must have. The patcher's
+// refusal of an extra row whose id is a public row's (ParseExtraRows) is therefore unreachable with the shipped table; the
+// synthetic tables of libr15_patcher_test, whose ids do start with it, reach it
+// (TheRulesThatNeedMoreThanOneRowOrManyWords). This test is what keeps the shipped table out of that case.
+TEST(NoPublicRowIdStartsWithTheExtraRowPrefix) {
+  for (std::size_t i = 0; i < kRowCount; ++i) {
+    CHECK(std::strncmp(kRows[i].id, kExtraRowIdPrefix, std::strlen(kExtraRowIdPrefix)) != 0);
+  }
+}
+
 TEST(TheVaddrIsTheReVaultAddressMinusTheBiasInCode) {
   // The ReVault addresses of ADR section 1, and the pinned vaddrs they give (the stock words were read at these).
   struct Expect { const char* id; std::uint64_t revault; std::uint64_t vaddr; };
