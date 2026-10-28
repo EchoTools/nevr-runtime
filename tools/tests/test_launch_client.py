@@ -121,6 +121,8 @@ def make_fake_bin(directory: pathlib.Path) -> None:
         '# The host loads the runtime from the nevr root (the folder above logs), never from beside itself (ADR 0012).\n'
         '[[ -z "${FAKE_EXPECT_RUNTIME:-}" ]] || cmp -s "$FAKE_EXPECT_RUNTIME" "$logs/../nevr-runtime.dll" || { echo "wrong runtime deployed" >&2; exit 9; }\n'
         '[[ -z "${FAKE_EXPECT_RUNTIME:-}" ]] || [[ ! -e "./nevr-runtime.dll" ]] || { echo "runtime deployed beside the host" >&2; exit 9; }\n'
+        '# A plugin the run was given is in the nevr root\'s plugins folder while the game runs (ADR 0012).\n'
+        '[[ -z "${FAKE_EXPECT_PLUGIN:-}" ]] || cmp -s "$FAKE_EXPECT_PLUGIN" "$logs/../plugins/$(basename "$FAKE_EXPECT_PLUGIN")" || { echo "wrong plugin deployed" >&2; exit 9; }\n'
         '(sleep 3 >/dev/null 2>&1) &  # a leftover child, like a lingering wineserver, must not keep the lock\n'
         '# (its output goes nowhere: a child holding the test\'s stdout pipe would make subprocess.run wait for it)\n'
         '# A directory where the DLL was makes the restore fail for any user; chmod 444 does not stop root,\n'
@@ -254,6 +256,22 @@ class LaunchClientTest(unittest.TestCase):
         self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
         self.assertIn("nevr-runtime.dll exists (expected absent)", result.stderr)
         self.assertEqual((self.game_root / "echovr/bin/win10/nevr-runtime.dll").read_bytes(), b"LEFTOVER", "not deleted")
+        self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_a_named_plugin_is_in_the_nevr_roots_plugins_folder_for_the_run_and_gone_after(self):
+        plugin = self.tmp / "my_plugin.dll"
+        plugin.write_bytes(b"A-PLUGIN")
+        result = self.run_script("--dll", str(self.dll), "--plugin", str(plugin),
+                                 env=dict(self.env, FAKE_EXPECT_PLUGIN=str(plugin)))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("my_plugin.dll", result.stdout)
+        self.assertFalse((nevr_root_of(self.game_root) / "plugins" / "my_plugin.dll").exists(), "the run's plugin is removed")
+        self.assertFalse((self.game_root / "echovr/bin/win10/plugins").exists(), "nothing goes in the game folder")
+
+    def test_a_plugin_that_does_not_exist_is_refused_before_anything_is_deployed(self):
+        result = self.run_script("--dll", str(self.dll), "--plugin", str(self.tmp / "missing.dll"))
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("missing.dll does not exist", result.stderr)
         self.assertEqual(self.deployed(), ORIGINAL)
 
     def test_a_plugin_in_the_nevr_roots_plugins_folder_is_drift(self):
