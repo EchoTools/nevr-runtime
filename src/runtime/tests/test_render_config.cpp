@@ -247,6 +247,16 @@ TEST(RenderConfigCollector, UnreadableMemoryReadsUnavailableAndTheSettingsBefore
   EXPECT_NE(line.find(" settings_source=unknown quality_level=unavailable msaa=unavailable "), std::string::npos) << line;
 }
 
+TEST(RenderConfigCollector, ADescriptorWithNoProductNameReadsTheWholeHeadsetGroupUnavailable) {
+  World w;
+  BootApplyWithSelector(w);
+  w.image.PokeText(At(kHmdDescVa) + kHmdProductNameOffset, "");  // the descriptor before VR starts: all zero
+  Collector c(w.image, kBase, w.observer, w.Ext());
+  const std::string line = c.Poll(0);
+  EXPECT_NE(line.find(" headset=unavailable hmd_type=unavailable "), std::string::npos) << line;
+  EXPECT_NE(line.find(" refresh_hz=unavailable hmd_w=unavailable hmd_h=unavailable "), std::string::npos) << line;
+}
+
 TEST(RenderConfigCollector, TheDriverAndTheRuntimeVersionAreAskedForOnceAtTheFirstLineOnly) {
   World w;
   BootApplyWithSelector(w);
@@ -388,6 +398,11 @@ TEST(RenderConfigSettingsSource, ASettingsStructThatCannotBeReadIsCountedAndChan
   EXPECT_EQ(after.applyCalls, 2U);
   EXPECT_EQ(after.source, before.source);
   EXPECT_EQ(after.settings.msaa, before.settings.msaa);
+
+  SettingsObserver fresh;  // nothing read yet: a failed read must not make the settings look seen
+  fresh.OnApply(w.image, 0x50000000ULL, kMenuReturn, kBootReturn);
+  EXPECT_FALSE(fresh.Snapshot().seen);
+  EXPECT_EQ(fresh.Snapshot().source, SettingsSource::Unknown);
 }
 
 }  // namespace

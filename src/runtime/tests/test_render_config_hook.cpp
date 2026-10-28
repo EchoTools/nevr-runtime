@@ -77,6 +77,14 @@ int CountContaining(const char* needle) {
   return n;
 }
 
+int CountEmpty() {
+  int n = 0;
+  for (const std::string& line : g_logged) {
+    if (line.empty()) ++n;
+  }
+  return n;
+}
+
 std::string LineContaining(const char* needle) {
   for (const std::string& line : g_logged) {
     if (line.find(needle) != std::string::npos) return line;
@@ -320,6 +328,7 @@ TEST_F(RenderConfigHook, TheFirstFrameLineIsLoggedOnceAtInfoWithTheImagesValues)
   hook::Poll(2'000'000);
   hook::Poll(30'000'000);
   EXPECT_EQ(CountContaining("[NEVR.RENDER] render_config reason="), 1);
+  EXPECT_EQ(CountEmpty(), 0) << "a pass with nothing to say wrote an empty log line";
   const std::string line = LineContaining("reason=first_frame");
   EXPECT_NE(line.find("changed=- platform=pcvr gpu=\"NVIDIA GeForce GTX 970\""), std::string::npos) << line;
   EXPECT_NE(line.find(" gpu_driver=31.0.15.3623 "), std::string::npos) << line;
