@@ -207,6 +207,53 @@ with the same file, so it computes that ID; a public sentinel meeting such a lib
 sentinel meeting a public libr15 reports the same, so neither can pass as the other. The patcher's summary and the sentinel's
 `libr15_patch` line carry `extra_rows` (a count) and `extra_rows_sha256` (the file's digest), never the rows.
 
+**The extra-rows file, format 1.** One UTF-8 JSON object. Every field below is required, an unknown field at any level is a
+refusal, and so is a duplicate key in one object (the patcher reads the file with a parser that sees duplicates). The example
+uses invented values.
+
+```json
+{
+  "format": "nevr-libr15-extra-rows",
+  "version": 1,
+  "stock_build_id": "b243509c08ce677aeb95fa348016949b3fc45230",
+  "rows": [
+    {
+      "id": "x.example_guard",
+      "kind": "word_patch",
+      "revault_va": "0x1500010",
+      "words": [
+        { "offset": 0, "stock_bytes": "e0031faa", "new_bytes": "1f2003d5" },
+        { "offset": 8, "stock_bytes": "00010054", "new_bytes": "1f2003d5" }
+      ]
+    }
+  ]
+}
+```
+
+- `format` is exactly `nevr-libr15-extra-rows` and `version` is the integer 1. `stock_build_id` is 40 lowercase hex digits and
+  must equal the patcher's pinned stock ID: the file is bound to one libr15, and a file for another is refused before any row is
+  read.
+- A **row is identified by `id`**: `x.` followed by 1 to 62 characters of `[a-z0-9_.]`, unique in the file and never equal to a
+  public row's id (public ids do not start with `x.`). Every refusal, report line and log line names the row by `id`.
+- `kind` is exactly `word_patch` (the only kind a file may carry). `revault_va` is the ReVault address of the first word the row
+  may touch, as `0x` followed by lowercase hex without leading zeros; the patcher derives the file address with
+  `kRevaultBias` (section 1) and the typed value is the only address in the file. It is a multiple of 4.
+- `words` holds 1 to 64 entries in strictly increasing `offset` order. `offset` is a JSON integer, a multiple of 4, 0 to 4092, the
+  distance in bytes from `revault_va`. A file holds at most 256 words in all.
+- **A word is written as bytes in memory order**: `stock_bytes` and `new_bytes` are each exactly 8 lowercase hex digits, the four
+  bytes in the order they stand in the file and in `xxd` or `objdump -s` output, without a prefix. They are not the little-endian
+  value of the instruction: the A64 instruction `0xd503201f` (NOP) is `1f2003d5`. The patcher's report prints both forms
+  (`stock_bytes` and `stock_word`) for every word, so a reader can compare against a disassembler.
+- A row is refused when any `stock_bytes` differs from the stock file at `revault_va + offset - kRevaultBias` (the message names
+  the `id` and the `offset`), when a word lies outside the text segment, when it lies in a byte a public row or another extra row
+  also writes, or when `new_bytes` equals `stock_bytes`.
+- Build identity: the rows are sorted by `revault_va` and serialised as fixed binary (id, `revault_va`, each offset, each
+  `new_bytes`, each `stock_bytes`) for the hash of section 7, so the build ID does not depend on the file's key order, spacing or
+  the order of its rows. `extra_rows_sha256` in the report is the digest of the file's bytes as given.
+- Public prose and the file: the file is supplied at build time by whoever builds the variant. It is not committed, and the
+  tests use only invented addresses, in a fixture file beside the patcher tests that is the example above made into a file
+  for the synthetic ELF of test 9.
+
 ### 12. Plugins keep the stock identity
 
 ADR 0019 compares each plugin's declared build-ID list (`NEVR_DECLARE_SUPPORTED_BUILD_IDS`) with the running libr15's live note
@@ -269,7 +316,11 @@ Each is run once with the line it covers changed and must fail (the mutant disci
 9. **Word patches and extra rows**, on the synthetic stock ELF: a wrong stock word, an overlapping word, a word outside the text
    and an offset that is not a multiple of 4 are each refused with the row's `id`; the output differs from the input in the
    named words and nowhere else; a file of extra rows changes the build ID and the same file twice gives the same bytes; a
-   row of any kind but `kWordPatch` in the file is refused; the public table's ID is the one a build without the file computes;
+   row of any kind but `kWordPatch` in the file is refused; each rule of the extra-rows format is refused in its own case (wrong
+   `format`, `version` or `stock_build_id`; an unknown field; a duplicate key; a bad, duplicate or public `id`; a `revault_va`
+   or `offset` not a multiple of 4; offsets out of order; 65 words in a row; a word written as a little-endian value instead of
+   bytes; a stock mismatch; a word outside the text, overlapping a public row or another extra row, or unchanged); the fixture
+   loads, and its report prints each word's `stock_bytes` and `stock_word`; the public table's ID is the one a build without the file computes;
    `Attach` on an image whose live word differs ends with `libr15_patch_row_words`.
 10. **Plugin identity** (section 12), in `plugin_loader_test.cpp` with the fake platform, and `got_hook_test.cpp`:
     - a plugin declaring only the stock ID is `loaded` when the platform reports the live note `PatchedBuildId()` with
