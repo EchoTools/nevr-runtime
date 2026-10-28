@@ -24,6 +24,8 @@
  */
 
 #include "runtime/frame/tick.h"
+
+#include <atomic>
 #include "runtime/frame/window_watch.h"
 #ifdef NEVR_SCENARIO_CONTROL
 #include "runtime/scenario/scenario_control.h"
@@ -43,12 +45,14 @@
 #include "runtime/lifecycle/server_timestep.h"
 #include "runtime/log/builtin_filter.h"
 #include "runtime/patch/pnsrad_enabler.h"
+#include "runtime/patch/ui_text_writer.h"
 
 namespace nevr_frame {
 
 namespace {
 
 volatile LONG g_tickReentry = 0;
+std::atomic<DWORD> g_pacerThread{0};
 uint64_t g_lastTickUs = 0;
 
 constexpr uint64_t kTickIntervalUs = 8000;  // ~125 Hz, the frame-pacer cadence
@@ -58,6 +62,13 @@ constexpr uint64_t kSelfCheckIntervalUs = 250000;  // self-check probes and send
 constexpr LONG kLivenessReportEvery = 3750;
 
 }  // namespace
+
+void NotePacerThread() { g_pacerThread.store(GetCurrentThreadId(), std::memory_order_relaxed); }
+bool OnPacerThread() {
+    const DWORD pacer = g_pacerThread.load(std::memory_order_relaxed);
+    return pacer != 0 && pacer == GetCurrentThreadId();
+}
+unsigned long PacerThreadId() { return g_pacerThread.load(std::memory_order_relaxed); }
 
 void DispatchPerFrameWork(uint64_t nowUs) {
     // 0 means the caller had no usable clock. Bail rather than let the unsigned
@@ -152,6 +163,9 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     mctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
     mctx.flags = gctx.flags;
     TickModules(&mctx);
+
+    // #906, #896: the UI text writer touches the game's UI state, so it runs on the frame pacer's thread only.
+    if (OnPacerThread()) nevr_ui_text::OnFrame();
 
 #ifdef NEVR_SCENARIO_CONTROL
     nevr_scenario_control::OnFrame();  // test builds only: queued scenario actions run on the loop's thread

@@ -24,4 +24,12 @@ namespace nevr_frame {
 /// available; the call is then a no-op rather than a wrapped comparison.
 void DispatchPerFrameWork(uint64_t nowUs);
 
+/// The client's frame pacer (CPrecisionSleep::Wait hook) calls this on every frame: it records the calling thread as the
+/// one that runs the game's frame. Work that touches the game's UI state runs only when `OnPacerThread()` is true, because
+/// the dispatcher is also driven from GetTimeMicroseconds, which any thread may call. A server has no pacer: both stay
+/// false and the work never runs there.
+void NotePacerThread();
+bool OnPacerThread();
+unsigned long PacerThreadId();
+
 }  // namespace nevr_frame

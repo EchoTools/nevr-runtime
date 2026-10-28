@@ -92,6 +92,8 @@ set(PATCHES_SOURCES
     # #906, ADR 0017 D4: the main-menu cards (pure logic in menu_page.h and menu_cards.h).
     "patch/menu_cards.cpp"
     "patch/splash_skip.cpp"
+    # #896, #906: the UI text writer (pure logic in ui_text.h).
+    "patch/ui_text.cpp"
     "patch/ui_texture_mips.cpp"
     "patch/social_facade.cpp"
     "patch/social_facade_object.cpp"
@@ -1252,6 +1254,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_invite_wizard PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_invite_wizard DISCOVERY_MODE PRE_TEST)
 
+    # #896, #906, docs/adr/0017: the UI text writer (patch/ui_text.h): header only, pure.
+    add_executable(test_ui_text tests/test_ui_text.cpp)
+    set_source_files_properties(tests/test_ui_text.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_ui_text PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_ui_text PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_ui_text DISCOVERY_MODE PRE_TEST)
+
     # #963: the CREATE GAME guild picker (patch/guild_picker.h): header only, pure.
     add_executable(test_guild_picker tests/test_guild_picker.cpp)
     set_source_files_properties(tests/test_guild_picker.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -1375,8 +1384,9 @@ if(BUILD_TESTING)
     target_link_libraries(test_cmdline_strip PRIVATE GTest::gtest GTest::gtest_main nevr_core)
     gtest_discover_tests(test_cmdline_strip DISCOVERY_MODE PRE_TEST)
 
-    add_executable(test_scenario_early_quit tests/test_scenario_early_quit.cpp)
-    set_source_files_properties(tests/test_scenario_early_quit.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    # test_scenario_ui_text.cpp (#906, the ui_text fire action in runtime/scenario/scenario_protocol.h) rides in this executable.
+    add_executable(test_scenario_early_quit tests/test_scenario_early_quit.cpp tests/test_scenario_ui_text.cpp)
+    set_source_files_properties(tests/test_scenario_early_quit.cpp tests/test_scenario_ui_text.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_scenario_early_quit PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_scenario_early_quit PRIVATE
       GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json)

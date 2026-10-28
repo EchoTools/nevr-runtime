@@ -33,6 +33,8 @@ struct Command {
   std::uint64_t number = 0;        // fire: mode, mask, policy, index or feature, per action
   bool flag = false;               // fire: lock, mute or enable, per action
   std::string key;                 // fire set_party_*_string: the data key
+  std::uint64_t uiActor = 0;       // fire ui_text: the actor's CSymbol64
+  std::uint64_t uiElement = 0;     // fire ui_text: the canvas text element's CSymbol64
   std::string value;               // fire set_party_*_string: the value; inject FriendPresenceNotify: the text    // inject PartyJoinFailure: Nakama's code (1 unknown party, 2 refused)
   std::uint32_t inviteIndex = 0;   // fire respond_to_invite: the game's invite index (newest first)
   bool accept = false;
@@ -160,6 +162,21 @@ inline bool ParseFireAction(const nlohmann::json& j, const std::string& action, 
          hex.find_first_not_of("0123456789abcdefABCDEF", 2) == std::string::npos;
     if (ok) cmd.number = std::stoull(hex.substr(2), nullptr, 16);
     if (!ok && error->empty()) *error = "fire dispatch_event needs \"event\": a \"0x...\" hex symbol of up to 16 digits";
+  } else if (action == "ui_text") {
+    // Write a text into the menu through the runtime's UI text writer (patch/ui_text.h): the actor and the element as
+    // "0x..." hex symbols, the text as it is to read (it stays out of the log).
+    const auto hex64 = [&](const char* field, std::uint64_t* value) {
+      std::string hex;
+      if (!text(field, true, &hex)) return false;
+      if (hex.size() <= 2 || hex.size() > 18 || hex.rfind("0x", 0) != 0 ||
+          hex.find_first_not_of("0123456789abcdefABCDEF", 2) != std::string::npos) {
+        *error = "fire ui_text needs \"" + std::string(field) + "\": a \"0x...\" hex symbol of up to 16 digits";
+        return false;
+      }
+      *value = std::stoull(hex.substr(2), nullptr, 16);
+      return true;
+    };
+    ok = hex64("actor", &cmd.uiActor) && hex64("element", &cmd.uiElement) && text("text", true, &cmd.value);
   } else if (action == "early_quit_feature_flags") {
     cmd.flag = false;  // raw: store the byte as sent, without the callback's & 0xdd
     ok = u64("flags", 0xFF, &cmd.number) && (!j.contains("raw") || boolean("raw", &cmd.flag));
@@ -167,7 +184,7 @@ inline bool ParseFireAction(const nlohmann::json& j, const std::string& action, 
     *error = "fire supports friend_invite, add_friend, respond_to_invite, invite_users, request_profile, party_join, "
              "party_lock, set_join_policy, voip_mute_self, voip_mute_user, social_groups_set_active, enable_social_feature, "
              "set_party_member_string, set_party_string, refresh_friends, refresh_recently_met, find_arena, "
-             "party_join_failed_callback, early_quit_lockout, early_quit_countdown_active, early_quit_warning, early_quit_feature_flags and dispatch_event";
+             "party_join_failed_callback, early_quit_lockout, early_quit_countdown_active, early_quit_warning, early_quit_feature_flags, dispatch_event and ui_text";
     return false;
   }
   if (!ok) return false;
