@@ -25,6 +25,7 @@ class SentinelPlatform final : public Platform {
 
   bool ReadFile(const std::string& file, std::vector<std::uint8_t>* bytes) override;
   void* Open(const std::string& file) override;
+  void Close(void* handle) override;
   void* Symbol(void* handle, const char* name) override;
   std::string GameBuildId() override;
   std::uintptr_t GameBase() override;

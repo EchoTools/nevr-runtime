@@ -11,7 +11,7 @@
 #ifndef FX_NAME
 #define FX_NAME "fx"
 #endif
-// The build IDs this plugin says it supports (the test's fake running build is the second one).
+// The build IDs this plugin says it supports, as the ELF note the loader reads before it maps the file (the test's fake running build is the second one).
 #ifndef FX_IDS
 #define FX_IDS "1111111111111111111111111111111111111111 2222222222222222222222222222222222222222"
 #endif
@@ -23,10 +23,18 @@ extern "C" {
 __attribute__((visibility("default"))) FxSeen fx_seen = {};
 }
 
+#ifndef FX_NO_IDS
+NEVR_DECLARE_SUPPORTED_BUILD_IDS(FX_IDS);
+#endif
+
 namespace {
+#ifndef FX_NO_CTOR
+// A namespace-scope constructor, which a shipped plugin must not have (tools/check_quest_static_init.sh --plugin); the
+// loader tests keep it to show that a refused plugin's constructors never ran. The device plugin is built without it.
 struct Ctor {
   Ctor() { fx_seen.ctor_ran = 1; }
 } g_ctor;
+#endif
 
 void Copy(char* to, std::size_t cap, const char* from) {
   std::strncpy(to, from != nullptr ? from : "", cap - 1);
@@ -64,9 +72,6 @@ NEVR_PLUGIN_API NvrPluginInfo NvrPluginGetInfo(void) { return {FX_NAME, "loader 
 #endif
 NEVR_PLUGIN_API uint32_t NvrPluginGetApiVersion(void) { return NEVR_PLUGIN_API_VERSION; }
 NEVR_PLUGIN_API uint32_t NvrPluginGetCapabilities(void) { return NEVR_PLUGIN_CAP_OBSERVES_ONLY; }
-#ifndef FX_NO_IDS
-NEVR_PLUGIN_API const char* NEVR_GetSupportedBuildIds(void) { return FX_IDS; }
-#endif
 #ifdef FX_LEGACY_INIT
 NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
   Record(ctx, "");

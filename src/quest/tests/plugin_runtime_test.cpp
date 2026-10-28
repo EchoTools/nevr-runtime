@@ -145,7 +145,7 @@ TEST(EachMomentLoadsItsOwnEntriesAndEachEntryGetsOneRecord) {
   if (normal == nullptr) return;
   CHECK_EQ(normal->value("phase", ""), std::string("normal"));
   CHECK_EQ(normal->value("outcome", ""), std::string("failed"));
-  CHECK_EQ(normal->value("reason", ""), std::string(reason::kDlopenFailed));
+  CHECK_EQ(normal->value("reason", ""), std::string(reason::kFileUnreadable));
   // Nothing is left for the end of the process, and running a moment again writes nothing.
   RunEarlyPlugins();
   RunNormalPlugins();

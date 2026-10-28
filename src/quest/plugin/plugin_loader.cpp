@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <exception>
+#include <optional>
 #include <utility>
 
 #include "quest/data/sha256.h"
@@ -13,8 +14,6 @@ namespace {
 
 // The one loader the plugins' C callbacks (ctx->get_plugin_count, ctx->log) reach. A process has one.
 std::atomic<Loader*> g_active{nullptr};
-
-using IdsFn = const char* (*)(void);
 
 template <typename Fn>
 Fn Resolve(Platform& platform, void* handle, const char* name) {
@@ -124,7 +123,19 @@ NvrGameContext Loader::ContextFor(const PlanEntry& entry) const {
 
 void Loader::Load(PlanEntry& entry) {
   LoadRecord record = BaseRecord(entry);
+  void* handle = nullptr;  // set once the object is mapped; closed again on every path that does not keep the plugin
+  const auto close = [&] {
+    if (handle == nullptr) return;
+    void* const mapped = handle;
+    handle = nullptr;
+    try {
+      platform_.Close(mapped);
+    } catch (const std::exception&) {
+      // The object stays mapped; the record below still says why the plugin was not kept.
+    }
+  };
   const auto end = [&](Outcome outcome, const char* reasonToken) {
+    if (outcome != Outcome::kLoaded) close();
     record.outcome = outcome;
     record.reason = reasonToken;
     Settle(entry, record);
@@ -134,32 +145,33 @@ void Loader::Load(PlanEntry& entry) {
     if (gameBase_ == 0) gameBase_ = platform_.GameBase();
     if (!gameBuildId_.empty()) record.gameBuildId = gameBuildId_;
 
+    // Everything that decides whether the plugin may run is decided from the file's bytes, before dlopen: mapping a
+    // shared object runs its constructors, so a refusal after the mapping would come after the plugin's own code.
     std::vector<std::uint8_t> bytes;
-    if (platform_.ReadFile(entry.item.file, &bytes)) {
-      record.sha256 = data::Sha256Hex(bytes.data(), bytes.size());
-      const std::string id = BuildIdOf(bytes.data(), bytes.size());
-      record.pluginBuildId = id.empty() ? "none" : id;
-      if (!IsSharedObjectFor(bytes.data(), bytes.size(), options_.machine)) return end(Outcome::kRefused, reason::kMachineType);
-    } else {
+    if (!platform_.ReadFile(entry.item.file, &bytes)) {
       record.sha256 = "unavailable";
       record.pluginBuildId = "unavailable";
+      return end(Outcome::kFailed, reason::kFileUnreadable);
     }
+    record.sha256 = data::Sha256Hex(bytes.data(), bytes.size());
+    const std::string id = BuildIdOf(bytes.data(), bytes.size());
+    record.pluginBuildId = id.empty() ? "none" : id;
+    if (!IsSharedObjectFor(bytes.data(), bytes.size(), options_.machine)) return end(Outcome::kRefused, reason::kMachineType);
 
-    void* const handle = platform_.Open(entry.item.file);
-    if (handle == nullptr) return end(Outcome::kFailed, reason::kDlopenFailed);
-
-    const auto getInfo = Resolve<NvrPluginGetInfo_fn>(platform_, handle, "NvrPluginGetInfo");
-    if (getInfo == nullptr) return end(Outcome::kFailed, reason::kNoPluginInfo);
-
-    // The plugin's own list of the libr15 builds its addresses hold for, against the build that is running. Its
-    // constructors have run by now (dlopen ran them); the refusal is before its init.
-    const auto buildIds = Resolve<IdsFn>(platform_, handle, "NEVR_GetSupportedBuildIds");
-    switch (DecideBuildId(buildIds != nullptr ? buildIds() : nullptr, gameBuildId_)) {
+    // The plugin's own list of the libr15 builds its addresses hold for (an ELF note), against the build that is running.
+    const std::optional<std::string> declared = SupportedBuildIdsOf(bytes.data(), bytes.size());
+    switch (DecideBuildId(declared.has_value() ? declared->c_str() : nullptr, gameBuildId_)) {
       case BuildIdVerdict::kSupported: break;
       case BuildIdVerdict::kUndeclared: return end(Outcome::kRefused, reason::kBuildIdsUndeclared);
       case BuildIdVerdict::kUnknownGame: return end(Outcome::kRefused, reason::kGameBuildIdUnavailable);
       case BuildIdVerdict::kUnsupported: return end(Outcome::kRefused, reason::kBuildIdUnsupported);
     }
+
+    handle = platform_.Open(entry.item.file);
+    if (handle == nullptr) return end(Outcome::kFailed, reason::kDlopenFailed);
+
+    const auto getInfo = Resolve<NvrPluginGetInfo_fn>(platform_, handle, "NvrPluginGetInfo");
+    if (getInfo == nullptr) return end(Outcome::kFailed, reason::kNoPluginInfo);
 
     const NvrPluginInfo info = getInfo();
     LoadedPlugin plugin;

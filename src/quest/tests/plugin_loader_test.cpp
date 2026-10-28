@@ -87,7 +87,10 @@ class FakePlatform final : public Platform {
     if (handle != nullptr) handles[file] = handle;
     return handle;
   }
-  void* Symbol(void* handle, const char* name) override { return ::dlsym(handle, name); }
+  void* Symbol(void* handle, const char* name) override {
+    if (!throwOnSymbol.empty() && throwOnSymbol == name) throw std::runtime_error("symbol");
+    return ::dlsym(handle, name);
+  }
   std::string GameBuildId() override { return gameBuild; }
   std::uintptr_t GameBase() override { return base; }
   void Emit(const LoadRecord& record) override { records.push_back(record); }
@@ -97,9 +100,24 @@ class FakePlatform final : public Platform {
   }
   void PluginLine(std::uint32_t level, const std::string& line) override { lines.push_back({level, line}); }
 
-  FxSeen* Seen(const std::string& file) const {
+  // Unloads the object for real (the next test sees a fresh library) after keeping a copy of what it recorded.
+  void Close(void* handle) override {
+    for (auto it = handles.begin(); it != handles.end(); ++it) {
+      if (it->second != handle) continue;
+      if (const auto* seen = static_cast<const FxSeen*>(::dlsym(handle, "fx_seen"))) closedSeen[it->first] = *seen;
+      closed.push_back(it->first);
+      ::dlclose(handle);
+      handles.erase(it);
+      return;
+    }
+  }
+
+  // What the plugin recorded: live while its object is mapped, the copy taken at Close afterwards, null if it never was.
+  const FxSeen* Seen(const std::string& file) const {
     const auto it = handles.find(file);
-    return it == handles.end() ? nullptr : static_cast<FxSeen*>(::dlsym(it->second, "fx_seen"));
+    if (it != handles.end()) return static_cast<const FxSeen*>(::dlsym(it->second, "fx_seen"));
+    const auto gone = closedSeen.find(file);
+    return gone == closedSeen.end() ? nullptr : &gone->second;
   }
   const LoadRecord* Record(const std::string& name) const {
     const LoadRecord* found = nullptr;
@@ -121,9 +139,12 @@ class FakePlatform final : public Platform {
   std::uintptr_t base = 0x7000000000;
   bool readFromDisk = true;
   std::string throwOnRead;
+  std::string throwOnSymbol;
   std::map<std::string, std::vector<std::uint8_t>> memory;
   std::map<std::string, void*> handles;
   std::vector<std::string> opened;
+  std::vector<std::string> closed;
+  std::map<std::string, FxSeen> closedSeen;
   std::size_t reads = 0;
   std::vector<LoadRecord> records;
   struct Plan {
@@ -181,6 +202,23 @@ TEST(PlanRefusesAFileWithAPathSeparator) {
     CHECK_EQ(plan[0].reasonToken, std::string(reason::kFileOutsideDirectory));
   }
   CHECK(BuildPlan({Item("x", "libx.so")}, true)[0].pending);
+}
+
+TEST(PlanRefusesNulEmptyDotAndDotDotFiles) {
+  const std::string nul("libx.so\0y", 9);
+  for (const std::string& file : {nul, std::string("\0", 1), std::string(""), std::string("."), std::string("..")}) {
+    const auto plan = BuildPlan({Item("x", file)}, true);
+    CHECK(!plan[0].pending);
+    CHECK(plan[0].outcome == Outcome::kRefused);
+    CHECK_EQ(plan[0].reasonToken, std::string(reason::kFileOutsideDirectory));
+  }
+  // "...", ".x" and "x." are file names, not directory references.
+  for (const char* file : {"...", ".libx.so", "libx."}) CHECK(BuildPlan({Item("x", file)}, true)[0].pending);
+  // Two entries cannot name one OS path by way of a NUL: the path would end at it, so the second would init the plugin again.
+  const auto twice = BuildPlan({Item("a", "libsame.so"), Item("b", std::string("libsame.so\0tail", 15))}, true);
+  CHECK(twice[0].pending);
+  CHECK(!twice[1].pending);
+  CHECK_EQ(twice[1].reasonToken, std::string(reason::kFileOutsideDirectory));
 }
 
 TEST(PlanRefusesASecondEntryNamingTheSameFile) {
@@ -290,6 +328,65 @@ std::vector<std::uint8_t> ElfWithNote(std::uint32_t type, const char* name4, std
 TEST(ImageReadsTheGnuBuildIdNote) {
   const auto b = ElfWithNote(3, "GNU", 4, 4);
   CHECK_EQ(BuildIdOf(b.data(), b.size()), std::string("a0a1a2a3"));
+}
+
+// An ELF with one PT_NOTE segment holding one note owned by "NEVR" (namesz 5, padded to 8), the shape
+// NEVR_DECLARE_SUPPORTED_BUILD_IDS (plugin_interface.h) emits.
+std::vector<std::uint8_t> ElfWithNevrNote(std::uint32_t type, const std::string& text, std::uint32_t declaredDesc) {
+  std::vector<std::uint8_t> b = ElfHeader(3, kMachineAarch64, 1);
+  const std::uint64_t noteOffset = b.size();
+  const std::uint64_t noteSize = 12 + 8 + ((text.size() + 3) & ~std::size_t{3});
+  auto put32 = [&](std::size_t at, std::uint32_t v) { std::memcpy(b.data() + at, &v, 4); };
+  auto put64 = [&](std::size_t at, std::uint64_t v) { std::memcpy(b.data() + at, &v, 8); };
+  b.resize(noteOffset + noteSize, 0);
+  put32(64, 4);                 // p_type = PT_NOTE
+  put64(64 + 8, noteOffset);    // p_offset
+  put64(64 + 32, noteSize);     // p_filesz
+  put32(noteOffset, 5);         // namesz
+  put32(noteOffset + 4, declaredDesc);
+  put32(noteOffset + 8, type);
+  std::memcpy(b.data() + noteOffset + 12, "NEVR", 5);
+  std::memcpy(b.data() + noteOffset + 20, text.data(), text.size());
+  return b;
+}
+
+TEST(ImageReadsTheDeclaredBuildIdsFromTheFileWithoutMappingIt) {
+  const auto b = ElfWithNevrNote(1, "aaaa bbbb", 9);
+  const auto ids = SupportedBuildIdsOf(b.data(), b.size());
+  CHECK(ids.has_value());
+  if (ids.has_value()) CHECK_EQ(*ids, std::string("aaaa bbbb"));
+  // A fixture compiled with the macro carries the same note, found in the real linked object.
+  const std::vector<std::uint8_t> real = Slurp(g_dir + "/libfx_ok.so");
+  const auto declared = SupportedBuildIdsOf(real.data(), real.size());
+  CHECK(declared.has_value());
+  if (declared.has_value()) {
+    CHECK_EQ(*declared, std::string("1111111111111111111111111111111111111111 2222222222222222222222222222222222222222"));
+  }
+  const std::vector<std::uint8_t> undeclared = Slurp(g_dir + "/libfx_noids.so");
+  CHECK(!SupportedBuildIdsOf(undeclared.data(), undeclared.size()).has_value());
+}
+
+TEST(ImageIgnoresANoteThatIsNotTheNevrBuildIdList) {
+  const auto wrongType = ElfWithNevrNote(2, "aaaa", 4);
+  CHECK(!SupportedBuildIdsOf(wrongType.data(), wrongType.size()).has_value());
+  auto wrongOwner = ElfWithNevrNote(1, "aaaa", 4);
+  wrongOwner[64 + 56 + 12] = 'X';  // "XEVR"
+  CHECK(!SupportedBuildIdsOf(wrongOwner.data(), wrongOwner.size()).has_value());
+  const auto gnu = ElfWithNote(3, "GNU", 4, 4);  // the GNU build ID is not the plugin's list
+  CHECK(!SupportedBuildIdsOf(gnu.data(), gnu.size()).has_value());
+  const auto none = ElfHeader(3, kMachineAarch64);
+  CHECK(!SupportedBuildIdsOf(none.data(), none.size()).has_value());
+  CHECK(!SupportedBuildIdsOf(nullptr, 0).has_value());
+}
+
+TEST(ImageReadsNoDeclaredListPastTheFile) {
+  const auto lying = ElfWithNevrNote(1, "aaaa", 0xffffffffu);
+  CHECK(!SupportedBuildIdsOf(lying.data(), lying.size()).has_value());
+  auto cut = ElfWithNevrNote(1, "aaaaaaaa", 8);
+  cut.resize(cut.size() - 6);
+  CHECK(!SupportedBuildIdsOf(cut.data(), cut.size()).has_value());
+  const auto huge = ElfWithNevrNote(1, std::string(70 * 1024, 'a'), 70 * 1024);  // beyond the 64 KiB bound
+  CHECK(!SupportedBuildIdsOf(huge.data(), huge.size()).has_value());
 }
 
 TEST(ImageGivesNoBuildIdWhenTheNoteIsNotOne) {
@@ -469,20 +566,18 @@ TEST(LoaderRefusesAPluginThatDoesNotListTheRunningBuild) {
   if (r == nullptr) return;
   CHECK(r->outcome == Outcome::kRefused);
   CHECK_EQ(r->reason, std::string(reason::kBuildIdUnsupported));
-  const FxSeen* seen = env.platform.Seen("libfx_otherids.so");
-  CHECK(seen != nullptr);
-  if (seen == nullptr) return;
-  CHECK_EQ(seen->init_count, 0u);  // refused before init
-  CHECK_EQ(seen->ctor_ran, 1u);    // dlopen ran its constructors: the ADR's order, and the static-init check's reason
+  // Refused from the file's bytes: the object was never mapped, so none of its code (constructors included) ran.
+  CHECK(env.platform.opened.empty());
+  CHECK(env.platform.Seen("libfx_otherids.so") == nullptr);
 }
 
-TEST(LoaderRefusesAPluginWithoutTheBuildIdExport) {
+TEST(LoaderRefusesAPluginWithoutTheBuildIdNote) {
   Env env;
   env.loader->Plan({Item("noids", "libfx_noids.so")});
   env.loader->RunPhase(PluginPhase::Normal);
   CHECK(env.platform.Record("noids")->outcome == Outcome::kRefused);
   CHECK_EQ(env.platform.Record("noids")->reason, std::string(reason::kBuildIdsUndeclared));
-  CHECK_EQ(env.platform.Seen("libfx_noids.so")->init_count, 0u);
+  CHECK(env.platform.opened.empty());
 }
 
 TEST(LoaderRefusesEveryPluginWhenTheRunningBuildCannotBeRead) {
@@ -493,7 +588,7 @@ TEST(LoaderRefusesEveryPluginWhenTheRunningBuildCannotBeRead) {
   CHECK(env.platform.Record("ok")->outcome == Outcome::kRefused);
   CHECK_EQ(env.platform.Record("ok")->reason, std::string(reason::kGameBuildIdUnavailable));
   CHECK_EQ(env.platform.Record("ok")->gameBuildId, std::string("none"));
-  CHECK_EQ(env.platform.Seen("libfx_ok.so")->init_count, 0u);
+  CHECK(env.platform.opened.empty());
 }
 
 TEST(LoaderReadsTheRunningBuildAgainOnALaterPass) {
@@ -540,23 +635,38 @@ TEST(LoaderRefusesAnEmptyFile) {
   CHECK_EQ(env.platform.Record("empty")->reason, std::string(reason::kMachineType));
 }
 
-TEST(LoaderStillTriesToMapAFileItCannotRead) {
+TEST(LoaderDoesNotMapAFileItCannotRead) {
+  // The library directory is not a directory (an APK-mapped path): the bytes cannot be checked, so nothing is mapped.
   Env env;
-  env.platform.readFromDisk = false;  // the library directory is not a directory (an APK-mapped path)
+  env.platform.readFromDisk = false;
   env.loader->Plan({Item("ok", "libfx_ok.so")});
   env.loader->RunPhase(PluginPhase::Normal);
   const LoadRecord* r = env.platform.Record("ok");
-  CHECK(r->outcome == Outcome::kLoaded);
+  CHECK(r->outcome == Outcome::kFailed);
+  CHECK_EQ(r->reason, std::string(reason::kFileUnreadable));
   CHECK_EQ(r->sha256, std::string("unavailable"));
   CHECK_EQ(r->pluginBuildId, std::string("unavailable"));
+  CHECK(env.platform.opened.empty());
 }
 
-TEST(LoaderReportsAMissingFileAsADlopenFailure) {
+TEST(LoaderReportsAMissingFileAsUnreadable) {
   Env env;
   env.loader->Plan({Item("gone", "libfx_missing.so")});
   env.loader->RunPhase(PluginPhase::Normal);
   CHECK(env.platform.Record("gone")->outcome == Outcome::kFailed);
-  CHECK_EQ(env.platform.Record("gone")->reason, std::string(reason::kDlopenFailed));
+  CHECK_EQ(env.platform.Record("gone")->reason, std::string(reason::kFileUnreadable));
+  CHECK(env.platform.opened.empty());
+}
+
+TEST(LoaderReportsACheckedFileThatDoesNotMapAsADlopenFailure) {
+  Env env;
+  env.platform.memory["libfx_ghost.so"] = Slurp(g_dir + "/libfx_ok.so");  // passes every static check, but is not on disk
+  env.loader->Plan({Item("ghost", "libfx_ghost.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  CHECK(env.platform.Record("ghost")->outcome == Outcome::kFailed);
+  CHECK_EQ(env.platform.Record("ghost")->reason, std::string(reason::kDlopenFailed));
+  CHECK_EQ(env.platform.opened.size(), std::size_t{1});
+  CHECK(env.platform.closed.empty());  // nothing was mapped, so nothing to close
 }
 
 TEST(LoaderFailsAPluginWithoutGetInfo) {
@@ -566,6 +676,8 @@ TEST(LoaderFailsAPluginWithoutGetInfo) {
   CHECK(env.platform.Record("noinfo")->outcome == Outcome::kFailed);
   CHECK_EQ(env.platform.Record("noinfo")->reason, std::string(reason::kNoPluginInfo));
   CHECK_EQ(env.platform.Seen("libfx_noinfo.so")->init_count, 0u);
+  CHECK_EQ(env.platform.closed.size(), std::size_t{1});  // mapped, then refused: unmapped again
+  CHECK_EQ(env.platform.closed[0], std::string("libfx_noinfo.so"));
 }
 
 TEST(LoaderFailsAPluginWhoseInitFailsAndContinues) {
@@ -576,6 +688,28 @@ TEST(LoaderFailsAPluginWhoseInitFailsAndContinues) {
   CHECK_EQ(env.platform.Record("initfail")->reason, std::string(reason::kInitFailed));
   CHECK_EQ(env.platform.Seen("libfx_initfail.so")->shutdown_count, 1u);  // the documented lifecycle
   CHECK(env.platform.Record("ok")->outcome == Outcome::kLoaded);
+  CHECK_EQ(env.platform.closed.size(), std::size_t{1});  // the failed plugin is unmapped after its Shutdown; the loaded one stays
+  CHECK_EQ(env.platform.closed[0], std::string("libfx_initfail.so"));
+  CHECK(env.platform.handles.count("libfx_ok.so") == 1);
+}
+
+TEST(LoaderUnmapsAPluginWhenTheLoaderThrowsAfterMappingIt) {
+  Env env;
+  env.platform.throwOnSymbol = "NvrPluginGetInfo";
+  env.loader->Plan({Item("ok", "libfx_ok.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  CHECK(env.platform.Record("ok")->outcome == Outcome::kFailed);
+  CHECK_EQ(env.platform.Record("ok")->reason, std::string(reason::kException));
+  CHECK_EQ(env.platform.closed.size(), std::size_t{1});
+  CHECK_EQ(env.platform.RecordsFor("ok"), std::size_t{1});
+}
+
+TEST(LoaderKeepsALoadedPluginMapped) {
+  Env env;
+  env.loader->Plan({Item("ok", "libfx_ok.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  CHECK(env.platform.Record("ok")->outcome == Outcome::kLoaded);
+  CHECK(env.platform.closed.empty());
 }
 
 TEST(LoaderKeepsGoingWhenARequiredPluginFails) {
@@ -782,6 +916,20 @@ TEST(PlatformOpensTheDirectoryQualifiedPathAndNeverTheBareName) {
   SentinelPlatform nowhere("", false);
   CHECK(nowhere.Open("libc.so.6") == nullptr);
   CHECK(nowhere.Open("libfx_ok.so") == nullptr);
+}
+
+TEST(PlatformCloseUnmapsWhatOpenMapped) {
+  const std::string path = g_dir + "/libfx_second.so";
+  CHECK(::dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD) == nullptr);  // not mapped yet: an earlier test unmapped it
+  SentinelPlatform platform(g_dir, false);
+  void* const handle = platform.Open("libfx_second.so");
+  CHECK(handle != nullptr);
+  void* const again = ::dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD);
+  CHECK(again != nullptr);
+  if (again != nullptr) ::dlclose(again);
+  platform.Close(handle);
+  CHECK(::dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD) == nullptr);
+  platform.Close(nullptr);  // nothing to close is not an error
 }
 
 TEST(PlatformWritesAPluginLineToTheSentinelLog) {

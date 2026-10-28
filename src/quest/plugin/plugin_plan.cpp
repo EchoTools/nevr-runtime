@@ -23,7 +23,12 @@ std::string DefaultFile(const std::string& name) { return "lib" + name + ".so"; 
 
 namespace {
 
-bool HasSeparator(const std::string& file) { return file.find_first_of("/\\") != std::string::npos; }
+// `file` names one entry of the native library directory: the shared rule of the PC loader's PluginFileStaysInDirectory. A
+// NUL would end the path early (two entries could then name one file), and "", "." and ".." name no plugin.
+bool FileLeavesDirectory(const std::string& file) {
+  if (file.empty() || file == "." || file == "..") return true;
+  return file.find_first_of(std::string("/\\") + '\0') != std::string::npos;
+}
 
 // The shared duplicate rule (runtime/ext/plugin_load_plan.h): `it` names a file an earlier, still-enabled claim holds.
 // dlopen hands back the module it already mapped for such a repeat, which would run the plugin's init twice.
@@ -57,7 +62,7 @@ std::vector<PlanEntry> BuildPlan(std::vector<PluginLoadItem> items, bool earlySu
     const PluginLoadItem& it = entry.item;
     if (!it.enabled) {
       Settle(entry, Outcome::kDisabled, reason::kDisabled);
-    } else if (HasSeparator(it.file)) {
+    } else if (FileLeavesDirectory(it.file)) {
       Settle(entry, Outcome::kRefused, reason::kFileOutsideDirectory);
     } else if (NamesAClaimedFile(claims, it)) {
       Settle(entry, Outcome::kRefused, reason::kDuplicateFile);
