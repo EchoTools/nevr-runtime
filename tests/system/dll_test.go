@@ -42,7 +42,8 @@ func TestDLLLoading_BugSplat(t *testing.T) {
 	t.Logf("BugSplat64.dll deployed successfully to %s (%d bytes)", targetPath, info.Size())
 }
 
-// TestDLLLoading_AllDLLs verifies the host and the runtime can be deployed
+// TestDLLLoading_AllDLLs verifies the host and the runtime can be deployed: the host to the game directory, the
+// runtime to the nevr root of the Wine prefix
 func TestDLLLoading_AllDLLs(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -73,7 +74,7 @@ func TestDLLLoading_AllDLLs(t *testing.T) {
 
 	// Verify all DLLs were deployed
 	for _, dllName := range dllNames {
-		targetPath := filepath.Join(gameDir, "bin", "win10", dllName)
+		targetPath := deployedPath(gameDir, dllName)
 		info, err := os.Stat(targetPath)
 		require.NoError(t, err, "Deployed DLL %s not found at target location", dllName)
 		assert.Greater(t, info.Size(), int64(0), "Deployed DLL %s has zero size", dllName)
@@ -110,7 +111,7 @@ func TestDLLLoading_CleanupRemovesAllDLLs(t *testing.T) {
 
 	// Verify DLL exists
 	for _, dllName := range dllNames {
-		targetPath := filepath.Join(gameDir, "bin", "win10", dllName)
+		targetPath := deployedPath(gameDir, dllName)
 		_, err := os.Stat(targetPath)
 		require.NoError(t, err, "DLL %s should exist after deployment", dllName)
 	}
@@ -120,7 +121,7 @@ func TestDLLLoading_CleanupRemovesAllDLLs(t *testing.T) {
 
 	// Verify DLL was removed
 	for _, dllName := range dllNames {
-		targetPath := filepath.Join(gameDir, "bin", "win10", dllName)
+		targetPath := deployedPath(gameDir, dllName)
 		_, err := os.Stat(targetPath)
 		assert.True(t, os.IsNotExist(err), "DLL %s should not exist after cleanup", dllName)
 	}
