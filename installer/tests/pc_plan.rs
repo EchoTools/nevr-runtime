@@ -249,6 +249,8 @@ fn an_installed_release_newer_than_the_offered_one_is_refused_unless_allowed() {
     assert_eq!(plan_of(&w, &pkg_v("2.1.0", HOST_A, RT_A), false).1.outcome, Outcome::Proceed);
     // Versions compare as numbers, not as text.
     assert_eq!(plan_of(&w, &pkg_v("2.10.0", HOST_A, RT_A), false).1.outcome, Outcome::Proceed);
+    run(&w, &pkg_v("2.10.0", HOST_B, RT_B));
+    assert_eq!(plan_of(&w, &pkg_v("2.9.0", HOST_A, RT_A), false).1.outcome, Outcome::NeedsUser, "2.10.0 is newer than 2.9.0");
 }
 
 #[test]

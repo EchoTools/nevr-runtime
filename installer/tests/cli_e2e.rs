@@ -283,3 +283,15 @@ fn launch_check_reads_the_hosts_log_in_the_nevr_root() {
     let (code, out, _) = run(&w, &["pc", "launch-check", "--dir", dir]);
     assert_eq!((code, out["state"].as_str()), (0, Some("unchanged")), "{out}");
 }
+
+#[test]
+fn an_install_that_cannot_start_changing_anything_exits_1_unchanged() {
+    let w = world(false);
+    // A file where the aside folder goes: the first thing the install does is make that folder.
+    std::fs::create_dir_all(w.nevr.path().join("installer")).unwrap();
+    std::fs::write(w.nevr.path().join("installer/aside"), b"in the way").unwrap();
+    let (code, out, _) = run(&w, &["pc", "install", "--dir", w.game.path().to_str().unwrap()]);
+    assert_eq!((code, out["state"].as_str(), out["failed"].as_bool()), (1, Some("unchanged"), Some(true)), "{out}");
+    assert_eq!(std::fs::read(w.game.path().join("BugSplat64.dll")).unwrap(), GAME);
+    assert!(!w.nevr.path().join("nevr-runtime.dll").exists());
+}

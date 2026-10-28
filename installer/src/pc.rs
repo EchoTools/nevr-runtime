@@ -291,7 +291,7 @@ pub fn plan(obs: &Observed, pkg: &Package, allow_downgrade: bool) -> Plan {
             if obs.backup_is_nevr {
                 return needs("the recorded backup is a NEVR runtime, not the game's own file; restore the game's BugSplat64.dll (Verify Files), delete nevr-install.txt, then run again");
             }
-            if let Some(installed) = r.get("release").filter(|v| !allow_downgrade && !v.is_empty()) {
+            if let Some(installed) = r.get("release").filter(|_| !allow_downgrade) {
                 if semver_cmp(installed, &pkg.version) == Some(std::cmp::Ordering::Greater) {
                     return needs(&format!("release {installed} is installed and newer than the offered {}; pass --allow-downgrade to install the older one", pkg.version));
                 }

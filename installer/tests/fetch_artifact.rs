@@ -79,6 +79,8 @@ fn only_the_loopback_host_itself_is_fetched_over_http_not_a_name_that_starts_lik
         "http://127.0.0.10/x",
         "http://127.0.0.1@example.invalid/x",
         "http://localhost@example.invalid/x",
+        "http://user@127.0.0.1/x",
+        "http://user:pass@localhost:80/x",
         "http://127.0.0.1:80@example.invalid/x",
         "http://[::2]/x",
         "http://127.0.0.1%2eexample.invalid/x",
