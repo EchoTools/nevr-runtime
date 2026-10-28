@@ -157,24 +157,24 @@ the APK with libpnsovr. The sentinel keeps the `libovrplatformloader.so` name, w
 
 Each step is its own PR, tests first, and the build stays shippable after each:
 
-1. **The libr15 answers, behind the Create hook.** `CNSProvider::Create` (rename), `ProviderID` and `UserProviderID`
+1. **The libr15 answers, behind the Create hook** (#1220). `CNSProvider::Create` (rename), `ProviderID` and `UserProviderID`
    (`OVR`), `CNSUser::LogIn` (our login). Tests: pinned-slot tests in `got_pinned_test.cpp` for the four slots; unit tests
    of the name rule (`pnsovr`, `pnsdemo` renamed, `pnsrad` and others untouched, null json); a login test that parses
    the json the builder makes and checks every member in the table above; a mutant per changed line.
-2. **The facade selects on a null `Social()`** instead of pnsovr's vtable pointer, as the PC facade does.
+2. **The facade selects on a null `Social()`** (#1221) instead of pnsovr's vtable pointer, as the PC facade does.
    `SelectSocialObject` (`social_install.cpp`) passes a null original through today and selects only an object whose
    vtable is `CNSOVRSocial`'s; its `SetPnsovrBias` lets the facade's `Initialize` read pnsovr's provider word
    (`kPnsovrProviderSymbolVaddr`), which becomes the `OVR` symbol the `ProviderID` slot answers. The RichPresence
    trace (#393) and the presence names built on it (#1185) lose pnsovr's object; what replaces them is decided in that
    PR, from what `SyncRichPresence` does with a null object.
-3. **Retire what lived on pnsovr**, in the same PR as the headset run that shows step 1 logging in: the login hook and
+3. **Retire what lived on pnsovr** (#1222), in the same PR as the headset run that shows step 1 logging in: the login hook and
    rewrite on libpnsovr (`login_hook.cpp`, the libpnsovr half of `login_rewrite.h`), the login prerequisites and their
    `ovr_*` stand-ins (#1183, `login_prerequisites*`, `login_standin.h`, the `prereq_*` counters), the entitlement-related
    stand-ins (#411), `game_login_failures.h`'s libpnsovr sites, `post_load.cpp`'s `libpnsovr_loaded` line (it becomes a
    check that the line never appears), and `tools/pinned_ovr_*`. In `tools/quest_patcher_sites.tsv` all 79 rows (8 from
    `libpnsovr.so.yaml`, 71 from `license_patch.yaml`) are covered by "not loaded (ADR 0026)", and the checker accepts
    that as their cover only while the repack recipe ships no `libpnsovr.so`.
-4. **Stop shipping** `libpnsovr.so` and `libovrplatformloader_orig.so`: the repack recipe drops both, the sentinel's
+4. **Stop shipping** (#1223) `libpnsovr.so` and `libovrplatformloader_orig.so`: the repack recipe drops both, the sentinel's
    added `DT_NEEDED` goes, and `tools/quest_repack_libs.py` and its tests follow.
 
 ## Prediction
