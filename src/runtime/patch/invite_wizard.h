@@ -193,6 +193,14 @@ struct Plan {
   std::string code;           // Resolve: the normalised code, only when a request is sent; never logged
 };
 
+/// The level name the service reads in `map` (a string: a number makes it refuse the request as `invalid`). The map page's
+/// cards (1, 2) have no level name recorded yet, so every choice sends "", which the service reads as any level of the
+/// mode; a card's name goes here once ReVault names it.
+inline std::string MapLevelName(const Choices& choices) {
+  (void)choices;
+  return std::string();
+}
+
 inline Plan PlanRequest(const Metric& metric, const Choices& choices) {
   Plan plan;
   if (metric.kind == Kind::Join) {
@@ -230,7 +238,7 @@ inline Plan PlanRequest(const Metric& metric, const Choices& choices) {
     plan.expires_s = ExpirySeconds(metric.expires_text);
     const nlohmann::json body = {{"experience", choices.experience},
                                  {"mode", choices.mode},
-                                 {"map", choices.map},
+                                 {"map", MapLevelName(choices)},
                                  {"region", metric.region},
                                  {"expires_s", plan.expires_s}};
     plan.request = Request{"invite/create", body.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace)};
@@ -327,30 +335,65 @@ inline std::string PlannedLine(const Plan& plan, std::string_view fingerprint) {
 
 // ---- the answer ----
 
-enum class Result { Ok, Invalid, Expired, Closed, Denied, Limit, Rate, Unavailable, ServerError };
+// NoServer is the service's `unavailable` token (the match could not be allocated); Unavailable is the client's own: no answer.
+enum class Result { Ok, Invalid, Expired, Closed, Denied, Limit, Rate, Unavailable, ServerError, NoServer };
 
 // The service's RPC error carries one exact token in its message (ADR 0017, "Service"); nothing else in the body is
 // interpreted or logged. Without a token the HTTP status decides; status 0 is no answer at all.
+namespace detail {
+
+inline std::optional<Result> TokenResult(std::string_view body) {
+  const nlohmann::json doc = nlohmann::json::parse(body.begin(), body.end(), nullptr, false);
+  if (!doc.is_object()) return std::nullopt;
+  const nlohmann::json* message = StringField(doc, "message");
+  if (message == nullptr) return std::nullopt;
+  const std::string token = message->get<std::string>();
+  if (token == "invalid") return Result::Invalid;
+  if (token == "expired") return Result::Expired;
+  if (token == "closed") return Result::Closed;
+  if (token == "denied") return Result::Denied;
+  if (token == "limit") return Result::Limit;
+  if (token == "rate") return Result::Rate;
+  if (token == "unavailable") return Result::NoServer;
+  return std::nullopt;
+}
+
+}  // namespace detail
+
 inline Result ResultFromAnswer(int http_status, std::string_view body) {
   if (http_status == 200) return Result::Ok;
   if (http_status <= 0) return Result::Unavailable;
-  const nlohmann::json doc = nlohmann::json::parse(body.begin(), body.end(), nullptr, false);
-  if (doc.is_object()) {
-    const nlohmann::json* message = detail::StringField(doc, "message");
-    if (message != nullptr) {
-      const std::string token = message->get<std::string>();
-      if (token == "invalid") return Result::Invalid;
-      if (token == "expired") return Result::Expired;
-      if (token == "closed") return Result::Closed;
-      if (token == "denied") return Result::Denied;
-      if (token == "limit") return Result::Limit;
-      if (token == "rate") return Result::Rate;
-    }
-  }
+  if (const std::optional<Result> named = detail::TokenResult(body)) return *named;
   if (http_status == 404) return Result::Invalid;
   if (http_status == 403) return Result::Denied;
   if (http_status == 429) return Result::Rate;
   return Result::ServerError;
+}
+
+inline constexpr std::size_t kRefusalMessageMax = 96;
+
+/// The message of an error body, printable ASCII only (anything else becomes '?') and at most kRefusalMessageMax bytes.
+/// For the scenario endpoint, which tells a missing route from a failed allocation; the log and the menu never carry it.
+inline std::string RefusalMessage(std::string_view body) {
+  const nlohmann::json doc = nlohmann::json::parse(body.begin(), body.end(), nullptr, false);
+  if (!doc.is_object()) return std::string();
+  const nlohmann::json* message = detail::StringField(doc, "message");
+  if (message == nullptr) return std::string();
+  std::string out;
+  for (const char raw : message->get<std::string>()) {
+    if (out.size() >= kRefusalMessageMax) break;
+    const auto u = static_cast<unsigned char>(raw);
+    out.push_back(u >= 0x20 && u <= 0x7e ? raw : '?');
+  }
+  return out;
+}
+
+/// True when the message is one of the service's seven tokens. A refusal that is not one (a route that is not registered
+/// answers 404 with another message; a rejected token answers 401) is mapped from the HTTP status alone, and the answer
+/// line says so (`via=status`), because `invalid` from a missing route is not `invalid` from the service.
+inline bool AnswerNamesResult(int http_status, std::string_view body) {
+  if (http_status == 200 || http_status <= 0) return false;
+  return detail::TokenResult(body).has_value();
 }
 
 inline const char* ResultName(Result result) {
@@ -373,6 +416,8 @@ inline const char* ResultName(Result result) {
       return "unavailable";
     case Result::ServerError:
       return "server_error";
+    case Result::NoServer:
+      return "unavailable";
   }
   return "server_error";
 }
@@ -398,16 +443,18 @@ inline const char* WizardText(Result result) {
       return "NO CONNECTION";
     case Result::ServerError:
       return "SERVER ERROR";
+    case Result::NoServer:
+      return "NO SERVER AVAILABLE";
   }
   return "SERVER ERROR";
 }
 
 inline bool IsFailure(Result result) { return result != Result::Ok; }
 
-inline std::string AnswerLine(Op op, int http_status, long latency_ms, Result result) {
+inline std::string AnswerLine(Op op, int http_status, long latency_ms, Result result, bool via_status = false) {
   return std::string("[NEVR.INVITE] answer op=") + (op == Op::Create ? "create" : "resolve") +
          " status=" + std::to_string(http_status) + " latency_ms=" + std::to_string(latency_ms) +
-         " result=" + ResultName(result);
+         " result=" + ResultName(result) + (via_status ? " via=status" : "");
 }
 
 namespace detail {

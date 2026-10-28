@@ -214,9 +214,23 @@ TEST(InvitePlan, ACreateSendsTheChoicesTheRegionAndTheExpiryAndNothingElse) {
   EXPECT_EQ(p.op, Op::Create);
   EXPECT_EQ(p.request->rpc, "invite/create");
   const nlohmann::json body = nlohmann::json::parse(p.request->body);
-  EXPECT_EQ(body, (nlohmann::json{{"experience", "arena"}, {"mode", "custom"}, {"map", 1}, {"region", "US WEST"},
+  EXPECT_EQ(body, (nlohmann::json{{"experience", "arena"}, {"mode", "custom"}, {"map", ""}, {"region", "US WEST"},
                                   {"expires_s", 10800}}));
   EXPECT_EQ(p.expires_s, 10800);
+}
+
+// #1156, found by the first live call: the service reads `map` as a string (a level name) and refuses the whole request as
+// `invalid` when it is a number. The card index has no known level name yet, so the field is the empty string, which the
+// service reads as "any level of the mode".
+TEST(InvitePlan, TheMapIsAlwaysAStringNeverANumber) {
+  for (const Choices& choices : {Choices{"arena", "custom", 0}, Choices{"combat", "payload", 1}, Choices{"combat", "capture", 2}}) {
+    const int map = choices.map;
+    const Plan p = nevr_invite::PlanRequest(nevr_invite::ParseMetric(CreateLine("US WEST", "3 HOURS")), choices);
+    ASSERT_TRUE(p.request.has_value()) << map;
+    const nlohmann::json body = nlohmann::json::parse(p.request->body);
+    ASSERT_TRUE(body.contains("map")) << map;
+    EXPECT_TRUE(body["map"].is_string()) << map;
+  }
 }
 
 TEST(InvitePlan, ThePasswordTheMetricCarriesIsNeverForwarded) {
@@ -356,6 +370,37 @@ TEST(InviteLog, TheAnswerLineCarriesTheStatusTheLatencyAndTheResult) {
             "[NEVR.INVITE] answer op=create status=429 latency_ms=7 result=limit");
 }
 
+// #1156: a refusal the service did not name (a route that is not registered, a rejected token) is told apart from one it did.
+TEST(InviteLog, AnAnswerTheStatusAloneDecidedSaysSo) {
+  EXPECT_EQ(nevr_invite::AnswerLine(Op::Resolve, 404, 12, Result::Invalid, true),
+            "[NEVR.INVITE] answer op=resolve status=404 latency_ms=12 result=invalid via=status");
+  EXPECT_EQ(nevr_invite::AnswerLine(Op::Resolve, 404, 12, Result::Invalid, false),
+            "[NEVR.INVITE] answer op=resolve status=404 latency_ms=12 result=invalid");
+}
+
+// #1156: for the test endpoint only (never the log, never the menu): the message of a refusal the service did not name, so a
+// run can tell a missing route from a failed allocation.
+TEST(InviteAnswer, TheMessageOfAnUnnamedRefusalIsReadableAndBounded) {
+  EXPECT_EQ(nevr_invite::RefusalMessage(R"({"code":14,"message":"no servers available"})"), "no servers available");
+  EXPECT_EQ(nevr_invite::RefusalMessage("not json"), "");
+  EXPECT_EQ(nevr_invite::RefusalMessage(R"({"code":14})"), "");
+  EXPECT_EQ(nevr_invite::RefusalMessage(R"({"message":"a\u0001b\nc\u00e9"})"), "a?b?c??");  // é is two UTF-8 bytes
+  const std::string longText(300, 'x');
+  EXPECT_EQ(nevr_invite::RefusalMessage(nlohmann::json{{"message", longText}}.dump()).size(), nevr_invite::kRefusalMessageMax);
+}
+
+TEST(InviteAnswer, OnlyAMessageOfTheSixTokensNamesTheResult) {
+  EXPECT_TRUE(nevr_invite::AnswerNamesResult(404, R"({"code":5,"message":"invalid"})"));
+  EXPECT_TRUE(nevr_invite::AnswerNamesResult(429, R"({"message":"rate"})"));
+  EXPECT_TRUE(nevr_invite::AnswerNamesResult(503, R"({"code":14,"message":"unavailable"})"));
+  EXPECT_FALSE(nevr_invite::AnswerNamesResult(404, R"({"code":5,"message":"RPC function not found"})"));
+  EXPECT_FALSE(nevr_invite::AnswerNamesResult(401, R"({"code":16,"message":"Auth token invalid"})"));
+  EXPECT_FALSE(nevr_invite::AnswerNamesResult(404, "not json"));
+  EXPECT_FALSE(nevr_invite::AnswerNamesResult(404, ""));
+  EXPECT_FALSE(nevr_invite::AnswerNamesResult(200, R"({"message":"invalid"})"));
+  EXPECT_FALSE(nevr_invite::AnswerNamesResult(0, R"({"message":"invalid"})"));
+}
+
 // ---- the answer ----
 
 TEST(InviteAnswer, TheTokenInTheErrorSaysWhatHappened) {
@@ -363,7 +408,8 @@ TEST(InviteAnswer, TheTokenInTheErrorSaysWhatHappened) {
     const char* token;
     Result result;
   } cases[] = {{"invalid", Result::Invalid}, {"expired", Result::Expired}, {"closed", Result::Closed},
-               {"denied", Result::Denied},   {"limit", Result::Limit},     {"rate", Result::Rate}};
+               {"denied", Result::Denied},   {"limit", Result::Limit},     {"rate", Result::Rate},
+               {"unavailable", Result::NoServer}};
   for (const auto& c : cases) {
     const std::string body = std::string("{\"code\":9,\"message\":\"") + c.token + "\"}";
     EXPECT_EQ(nevr_invite::ResultFromAnswer(400, body), c.result) << c.token;
@@ -414,6 +460,7 @@ TEST(InviteAnswer, TheWizardSaysEachResultInItsOwnWords) {
   EXPECT_STREQ(nevr_invite::WizardText(Result::Denied), "NOT ALLOWED");
   EXPECT_STREQ(nevr_invite::WizardText(Result::Limit), "TOO MANY CODES");
   EXPECT_STREQ(nevr_invite::WizardText(Result::Rate), "TRY AGAIN LATER");
+  EXPECT_STREQ(nevr_invite::WizardText(Result::NoServer), "NO SERVER AVAILABLE");
   EXPECT_STREQ(nevr_invite::WizardText(Result::Unavailable), "NO CONNECTION");
   EXPECT_STREQ(nevr_invite::WizardText(Result::ServerError), "SERVER ERROR");
 }

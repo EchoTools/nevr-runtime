@@ -222,6 +222,80 @@ TEST(InviteWorker, TheRequestLineThenTheAnswerLineAreTheOnlyLinesAndCarryNoSecre
   EXPECT_FALSE(Contains(lines, "body-detail-text"));
 }
 
+TEST(InviteWorker, ARefusalTheServiceDidNotNameSaysTheStatusDecidedItAndTheBodyStaysOut) {
+  struct Case {
+    int status;
+    const char* body;
+    const char* line;
+  };
+  const Case cases[] = {
+      {404, R"({"code":5,"message":"RPC function not found"})",
+       "[NEVR.INVITE] answer op=resolve status=404 latency_ms=7 result=invalid via=status"},
+      {401, R"({"code":16,"message":"Auth token invalid"})",
+       "[NEVR.INVITE] answer op=resolve status=401 latency_ms=7 result=server_error via=status"},
+  };
+  for (const Case& c : cases) {
+    Rig rig;
+    rig.transport.Answers(c.status, c.body);
+    nevr_invite::Worker worker(rig.Parts());
+    ASSERT_EQ(worker.Enqueue(Resolve()), Submit::Queued);
+    const std::vector<Answer> answers = WaitForAnswers(worker, 1);
+    ASSERT_EQ(answers.size(), 1u);
+    EXPECT_TRUE(answers[0].via_status) << c.status;
+    worker.Stop();
+    const std::vector<Line> lines = rig.Lines();
+    ASSERT_EQ(lines.size(), 2u);
+    EXPECT_EQ(lines[1].text, c.line);
+    EXPECT_FALSE(Contains(lines, "not found"));
+    EXPECT_FALSE(Contains(lines, "Auth token"));
+  }
+}
+
+TEST(InviteWorker, AnUnnamedRefusalHandsItsMessageBackForTheTestEndpointAndNeverLogsIt) {
+  Rig rig;
+  rig.transport.Answers(503, R"({"code":14,"message":"no servers available"})");
+  nevr_invite::Worker worker(rig.Parts());
+  ASSERT_EQ(worker.Enqueue(Resolve()), Submit::Queued);
+  const std::vector<Answer> answers = WaitForAnswers(worker, 1);
+  ASSERT_EQ(answers.size(), 1u);
+  EXPECT_EQ(answers[0].refusal_message, "no servers available");
+  EXPECT_TRUE(answers[0].body.empty());
+  worker.Stop();
+  EXPECT_FALSE(Contains(rig.Lines(), "no servers"));
+}
+
+TEST(InviteWorker, ARefusalTheServiceNamedCarriesNoMessage) {
+  Rig rig;
+  rig.transport.Answers(400, R"({"code":3,"message":"invalid"})");
+  nevr_invite::Worker worker(rig.Parts());
+  ASSERT_EQ(worker.Enqueue(Resolve()), Submit::Queued);
+  const std::vector<Answer> answers = WaitForAnswers(worker, 1);
+  ASSERT_EQ(answers.size(), 1u);
+  EXPECT_TRUE(answers[0].refusal_message.empty());
+}
+
+TEST(InviteWorker, AResultTheServiceNamedIsNotViaStatus) {
+  Rig rig;
+  rig.transport.Answers(404, R"({"message":"invalid"})");
+  nevr_invite::Worker worker(rig.Parts());
+  ASSERT_EQ(worker.Enqueue(Resolve()), Submit::Queued);
+  const std::vector<Answer> answers = WaitForAnswers(worker, 1);
+  ASSERT_EQ(answers.size(), 1u);
+  EXPECT_FALSE(answers[0].via_status);
+}
+
+TEST(InviteWorker, NoAnswerAtAllIsNotViaStatus) {
+  Rig rig;
+  rig.transport.Answers(0, "");
+  nevr_invite::Worker worker(rig.Parts());
+  ASSERT_EQ(worker.Enqueue(Resolve()), Submit::Queued);
+  const std::vector<Answer> answers = WaitForAnswers(worker, 1);
+  ASSERT_EQ(answers.size(), 1u);
+  EXPECT_FALSE(answers[0].via_status);
+  worker.Stop();
+  EXPECT_FALSE(Contains(rig.Lines(), "via=status"));
+}
+
 TEST(InviteWorker, ASuccessIsLoggedAtInfoAndItsBodyIsHandedBackNotLogged) {
   Rig rig;
   rig.transport.Answers(200, R"({"code":"KQ7M2X4P","match_id":"2f1c9b0e-6a3d-4c58-9d11-0a7e5b3c4d21"})");
