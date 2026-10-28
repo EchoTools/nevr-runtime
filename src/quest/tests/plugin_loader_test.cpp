@@ -332,7 +332,8 @@ TEST(ImageReadsTheGnuBuildIdNote) {
 
 // An ELF with one PT_NOTE segment holding one note owned by "NEVR" (namesz 5, padded to 8), the shape
 // NEVR_DECLARE_SUPPORTED_BUILD_IDS (plugin_interface.h) emits.
-std::vector<std::uint8_t> ElfWithNevrNote(std::uint32_t type, const std::string& text, std::uint32_t declaredDesc) {
+std::vector<std::uint8_t> ElfWithNevrNote(std::uint32_t type, const std::string& text, std::uint32_t declaredDesc,
+                                          std::uint32_t namesz = 5) {
   std::vector<std::uint8_t> b = ElfHeader(3, kMachineAarch64, 1);
   const std::uint64_t noteOffset = b.size();
   const std::uint64_t noteSize = 12 + 8 + ((text.size() + 3) & ~std::size_t{3});
@@ -342,7 +343,7 @@ std::vector<std::uint8_t> ElfWithNevrNote(std::uint32_t type, const std::string&
   put32(64, 4);                 // p_type = PT_NOTE
   put64(64 + 8, noteOffset);    // p_offset
   put64(64 + 32, noteSize);     // p_filesz
-  put32(noteOffset, 5);         // namesz
+  put32(noteOffset, namesz);
   put32(noteOffset + 4, declaredDesc);
   put32(noteOffset + 8, type);
   std::memcpy(b.data() + noteOffset + 12, "NEVR", 5);
@@ -372,6 +373,8 @@ TEST(ImageIgnoresANoteThatIsNotTheNevrBuildIdList) {
   auto wrongOwner = ElfWithNevrNote(1, "aaaa", 4);
   wrongOwner[64 + 56 + 12] = 'X';  // "XEVR"
   CHECK(!SupportedBuildIdsOf(wrongOwner.data(), wrongOwner.size()).has_value());
+  const auto longerOwner = ElfWithNevrNote(1, "aaaa", 4, 8);  // "NEVR\0\0\0\0": the owner is "NEVR" exactly
+  CHECK(!SupportedBuildIdsOf(longerOwner.data(), longerOwner.size()).has_value());
   const auto gnu = ElfWithNote(3, "GNU", 4, 4);  // the GNU build ID is not the plugin's list
   CHECK(!SupportedBuildIdsOf(gnu.data(), gnu.size()).has_value());
   const auto none = ElfHeader(3, kMachineAarch64);
