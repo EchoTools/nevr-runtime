@@ -461,7 +461,7 @@ TEST_F(HostRuntimeVerify, ASignedRuntimeIsAcceptedLoadedAndNamedInTheVersionsRec
 }
 
 // The old layout (ADR 0012, "The one-time move" and "Updating only the host"): a runtime left beside the host in the
-// game's folder is not found. The host looks in the nEVR root only, so a host updated alone over an old install stops
+// game's folder is not found. The host looks in the nevr root only, so a host updated alone over an old install stops
 // with the "run the installer" words and names the root as the path it searched; it never maps the stale file.
 TEST_F(HostRuntimeVerify, ARuntimeLeftBesideTheHostIsNotFoundAndTheGameStopsNamingTheRoot) {
   const std::wstring stale = install_ + L"\\nevr-runtime.dll";

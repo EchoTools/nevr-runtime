@@ -756,7 +756,7 @@ class InstallScriptsTest(unittest.TestCase):
         (self.game / "echovr.exe").write_bytes(b"exe")
         (self.game / "BugSplat64.dll").write_bytes(b"ORIGINAL")
         (self.game / "dbgcore.dll").write_bytes(b"LEGACY")
-        # ADR 0012: nevr-runtime.dll goes to the nEVR root under the user's %LOCALAPPDATA%, not into the game folder.
+        # ADR 0012: nevr-runtime.dll goes to the nevr root under the user's %LOCALAPPDATA%, not into the game folder.
         self.appdata = self.tmp / "appdata"
         self.root = self.appdata / "nevr" / "echovr"
         patcher = mock.patch.dict(os.environ, {"LOCALAPPDATA": str(self.appdata)})
@@ -1010,7 +1010,7 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), installed)
         self.assertEqual(self.state()["installed_sha256"], hashlib.sha256(installed).hexdigest(), "the record is unchanged")
 
-    # The runtime half of the pair (#853, #855): nevr-runtime.dll is a second file, in the nEVR root.
+    # The runtime half of the pair (#853, #855): nevr-runtime.dll is a second file, in the nevr root.
     def limited_install(self, *args):
         import resource
         import signal

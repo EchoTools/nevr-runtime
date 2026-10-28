@@ -523,22 +523,22 @@ RuntimePathChoice ResolveRuntimePathFrom(const wchar_t* local_app_data, const wc
 }
 
 RuntimePathChoice ResolveRuntimePath(wchar_t* out, std::size_t out_size) noexcept {
-#if defined(NEVR_HOST_TESTING)
-  if (const wchar_t* directory = g_runtime_dir_for_test.load()) {
-    RuntimePathChoice choice;
-    if (out == nullptr || out_size == 0) return choice;
-    out[0] = L'\0';
-    std::size_t used = 0;
-    if (!Append(out, out_size, &used, directory) || !AppendChild(out, out_size, &used, kRuntimeFileName)) return choice;
-    choice.source = RuntimeRootSource::kOverride;
-    return choice;
-  }
-#endif
   wchar_t local_app_data[MAX_PATH] = {};
   wchar_t nevr_root_override[MAX_PATH] = {};
   ReadEnvironment(L"LOCALAPPDATA", local_app_data, MAX_PATH);
   ReadEnvironment(L"NEVR_ROOT", nevr_root_override, MAX_PATH);
-  return ResolveRuntimePathFrom(local_app_data, nevr_root_override, DevBuild(), out, out_size);
+  const wchar_t* override_root = nevr_root_override;
+  bool dev_build = DevBuild();
+#if defined(NEVR_HOST_TESTING)
+  // The seam's directory is an absolute root in a dev build's terms, through the same resolver (one straight path, no
+  // branch of its own).
+  if (const wchar_t* directory = g_runtime_dir_for_test.load()) {
+    override_root = directory;
+    dev_build = true;
+    local_app_data[0] = L'\0';
+  }
+#endif
+  return ResolveRuntimePathFrom(local_app_data, override_root, dev_build, out, out_size);
 }
 
 void RuntimeLoader::Prepare() {

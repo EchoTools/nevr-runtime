@@ -78,7 +78,7 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
     nevr_host::RuntimeRendezvous::Seams().fail_event_create = true;
   }
   nevr_host::RuntimeRendezvous::Seams().stop_game = &RecordStop;
-  // The fixture runtime is staged beside this shim; the production rule (the nEVR root) is the subject of test_host_runtime_load.
+  // The fixture runtime is staged beside this shim; the production rule (the nevr root) is the subject of test_host_runtime_load.
   static wchar_t runtime_dir[MAX_PATH];
   if (nevr_host::DirOfModule(runtime_dir, MAX_PATH, module)) nevr_host::SetRuntimeDirForTest(runtime_dir);
   nevr_host::OnProcessAttach(module, game, false);

@@ -100,7 +100,7 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
   // The test targets load the fixture runtime without a check; a scenario can turn the host's own check on, with the
   // production pins, to watch the refusal of that unsigned file.
   if (VerifyRuntime()) nevr_host::SetVerifyRuntimeForTest(true);
-  // The fixture runtime is staged beside this shim; the production rule (the nEVR root) is the subject of test_host_runtime_load.
+  // The fixture runtime is staged beside this shim; the production rule (the nevr root) is the subject of test_host_runtime_load.
   static wchar_t runtime_dir[MAX_PATH];
   if (nevr_host::DirOfModule(runtime_dir, MAX_PATH, module)) nevr_host::SetRuntimeDirForTest(runtime_dir);
   nevr_host::OnProcessAttach(module, game, launcher);

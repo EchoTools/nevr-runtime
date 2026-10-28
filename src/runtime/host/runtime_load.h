@@ -117,7 +117,7 @@ inline constexpr std::uint32_t kRuntimeStopExitCode = 78;
 /// The init_code recorded when initialize() threw (INT32_MIN: not a value a runtime returns on purpose).
 inline constexpr std::int32_t kInitThrewCode = INT32_MIN;
 
-/// The one place that decides which file is the runtime: `nevr-runtime.dll` in the nEVR root of the Windows user,
+/// The one place that decides which file is the runtime: `nevr-runtime.dll` in the nevr root of the Windows user,
 /// `%LOCALAPPDATA%\nevr\echovr`, never beside `BugSplat64.dll`. The inputs are the two environment values (null or
 /// empty when unset), so a test supplies its own. `nevr_root_override` (NEVR_ROOT, an absolute path) replaces the root
 /// when `dev_build` is true and is ignored otherwise, with `override_ignored` set. Fixed buffer, no heap, no I/O, so it is
@@ -161,7 +161,7 @@ void SetVerifyPolicyForTest(const nevr_plugin_signature::Policy* policy) noexcep
 void SetDevBuildForTest(int mode) noexcept;
 // Test seam: called once with the path just before the load, while the verified file is still held.
 void SetBeforeLoadHookForTest(void (*hook)(const wchar_t* path)) noexcept;
-// Test seam: the folder the runtime is looked for in, instead of the nEVR root. Null: the production rule. The string
+// Test seam: the folder the runtime is looked for in, instead of the nevr root. Null: the production rule. The string
 // must outlive the loads; a harness that stages a runtime beside its host stand-in passes that folder.
 void SetRuntimeDirForTest(const wchar_t* directory) noexcept;
 #endif

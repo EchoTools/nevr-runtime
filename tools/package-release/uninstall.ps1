@@ -1,7 +1,7 @@
 # NEVR runtime release: uninstall.
 #
 # Puts back what install.ps1 set aside: the original BugSplat64.dll and a legacy dbgcore.dll, and sets
-# nevr-runtime.dll, the file install.ps1 added to the player's nEVR folder (%LOCALAPPDATA%\nevr\echovr, named by
+# nevr-runtime.dll, the file install.ps1 added to the player's nevr folder (%LOCALAPPDATA%\nevr\echovr, named by
 # runtime_root in nevr-install.txt; a record from before the split names none and the runtime is looked for beside
 # echovr.exe), aside as nevr-runtime.dll.uninstalled-<timestamp> in that folder. A nevr-runtime.dll that install.ps1
 # had set aside there (nevr-runtime.dll.original-<stamp>, named by runtime_aside) goes back under its own name, and
@@ -16,8 +16,8 @@
 # its copy, so a later install keeps the login) and the marker is set aside as MOVED-TO-NEVR-ROOT.txt.undone-<timestamp>.
 # The cache is created empty and made private before the token is copied into it; a copy that fails is set aside.
 #
-# usage:  powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 [-Dir <...\bin\win10>] [-Root <nEVR folder>] [-Pause | -NoPause]
-# Without -Dir the folder is asked for. -Root names the nEVR folder when the record does not (it always does for an install
+# usage:  powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 [-Dir <...\bin\win10>] [-Root <nevr folder>] [-Pause | -NoPause]
+# Without -Dir the folder is asked for. -Root names the nevr folder when the record does not (it always does for an install
 # made by this release); without either, a record from before the split is read as having the runtime beside echovr.exe.
 param([string]$Dir = '', [string]$Root = '', [switch]$Pause, [switch]$NoPause)
 $ErrorActionPreference = 'Stop'

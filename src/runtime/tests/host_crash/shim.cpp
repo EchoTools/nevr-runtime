@@ -73,7 +73,7 @@ extern "C" void nevr_host_test_Prepare(HMODULE host_module) {
   if (!nevr_host::WaitForDbgHelpPreload(30000)) {
     std::fprintf(stderr, "host crash shim: the dbghelp preload thread did not finish\n");
   }
-  // The fixture runtime is staged beside this shim; the production rule (the nEVR root) is the subject of test_host_runtime_load.
+  // The fixture runtime is staged beside this shim; the production rule (the nevr root) is the subject of test_host_runtime_load.
   static wchar_t runtime_dir[MAX_PATH];
   if (nevr_host::DirOfModule(runtime_dir, MAX_PATH, host_module)) nevr_host::SetRuntimeDirForTest(runtime_dir);
   g_loader.Prepare();

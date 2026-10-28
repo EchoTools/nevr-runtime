@@ -581,7 +581,7 @@ TEST(HostRuntimeLoad, LoadRecordsWhetherTheLoaderLockWasHeld) {
   EXPECT_TRUE(inside.loader_lock_held);
 }
 
-// Prepare and Load run the production rule end to end: the file looked for is in the nEVR root of this process's
+// Prepare and Load run the production rule end to end: the file looked for is in the nevr root of this process's
 // %LOCALAPPDATA%, a NEVR_ROOT that is set is not honoured by a release build, and the result says both.
 TEST(HostRuntimeLoad, LoadLooksInTheNevrRootAndTheResultSaysWhichRootAndWhetherNevrRootWasIgnored) {
   wchar_t saved_local[MAX_PATH] = {};
