@@ -39,7 +39,7 @@ writes only data. One path for every headset, no flag.
 
 ### 1. One table, one typed address per site
 
-`src/quest/patches/libr15_patch_table.h` (new) is the only place a patch site is written down. A row holds:
+A new header, libr15_patch_table.h, in a new directory under src/quest, is the only place a patch site is written down. A row holds:
 
 - `id` (`lobby_full.join`), the game function's ReVault name, and the **ReVault address**, the only address typed by hand. The
   pinned vaddr is derived (`revaultVa - kRevaultBias`, `kRevaultBias = 0x100000`), so the subtraction that went wrong twice is
