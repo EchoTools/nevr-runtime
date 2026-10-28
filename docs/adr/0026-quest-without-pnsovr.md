@@ -104,7 +104,7 @@ with these changes, each answered on Quest from libr15's side:
 | PC change (`pnsrad_enabler.cpp`) | Why | Quest |
 | --- | --- | --- |
 | `pnsovr`/`pnsdemo` strings in `echovr.exe` become `pnsrad` | load pnsrad as the platform provider | the `Create` slot (section 1) |
-| NOP the OVR branch in `PlatformModuleDecisionAndInitialize` (`echovr.exe` 0x1401580e5) | the OVR init path needs the Oculus runtime | not yet looked for in libr15 (Migration, step 1 starts by reading it) |
+| NOP the OVR branch in `PlatformModuleDecisionAndInitialize` (`echovr.exe` 0x1401580e5) | the OVR init path needs the Oculus runtime | none in libr15: `CR15Game::Initialize` has two `Create` calls (0x11f9f80, reached with `pnsovr` from 0x11f9cb0 or `pnsdemo`; 0x11f9fdc, `pnsrad`) and, after them, picks the microphone handle by its symbol (OVR the platform handle, DMO the demo handle, else RAD, 0x11fa00c-0x11fa090); nothing else in it depends on the provider |
 | NOP `jne` at `pnsrad.dll` 0x180085b53 | the login check | `CNSUser::LogIn` slot, below |
 | NOP the identity guard in `LogInSuccessCB` (0x18008ef25) and the state check in `LoginIdResponseCB` (0x18008f1b6) | the bridge injects a login pnsrad's state machine never made | not needed if our login goes out through `CNSUser::SendLogInRequest` with the identity set (below); the prediction checks it |
 | `UserProviderID` body returns `OVR` (`provider_identity.h`) | the game compares a friend's provider with it; every id is `OVR-ORG-<id>` | the `UserProviderID` and `ProviderID` slots return `OVR` (on PC both exports share the patched body, 0x180088d70) |
@@ -130,14 +130,16 @@ same code as libpnsrad's 0x3cd370: return if flags at +0x9c have any of 0xe, set
 that slot. It sets the user's identity (`[+0x88]` the NEVR account id, `[+0x90]` platform 4, `OVR_ORG`: the fields
 `CNSUser::AccountID`, libpnsrad 0x3cd4c0, and the wire read), adds the login members the provider used to add, sets flag 0x2 as
 `LogIn` does, and calls libr15's `CNSUser::SendLogInRequest` (0x1932838) on the open login connection. The internet gate
-is never reached, so nothing inside libpnsrad is written. The members pnsovr adds today and where each comes from after:
+is never reached, so nothing inside libpnsrad is written. pnsovr adds its members in `CNSOVRUser::GotUserProofCB`, on a
+copy of the game's json (0x1ed720), at 0x1ed73c-0x1ed9ac; each, and where it comes from after:
 
 | Member | Today (pnsovr) | After |
 | --- | --- | --- |
 | `accountid`, `access_token`, `nonce`, `displayname`, `bypassauth`, `desiredclientprofileversion`, `nevr_identity`, `nevr_social` | rewritten by the login rewrite from the shared `LoginProfile` | the same builder, writing a fresh json instead of rewriting the Oculus one |
 | `buildversion` | 630783, written by pnsovr (libpnsovr 0x1ed938-0x1ed944) | the same value, the game's own, cited at that address; the server reads it to classify the client as Quest |
 | `appid` | from the platform `Create` json | captured by the `Create` hook before it drops that json |
-| `system_info\|*` | pnsovr's own `CSysInfo` copy (its `GotUserProofCB`) | libr15's `CSysInfo`; the member list is enumerated before implementation (Work, step 4) |
+| `lobbyversion`, `publisher_lock`, `hmdserialnumber` | set again by pnsovr (0x1ed930, 0x1ed95c, 0x1ed970) over the game's own | the game's own, set by `CR15NetGame::LogIn` |
+| `system_info\|*` | `system_info\|headset_type` (0x1ed984), then `CNSUser::SystemInfo(json)` (0x1ed98c) and `system_info\|build_version` from `CSysInfo::OSBuildVersion` (0x1ed994-0x1ed9ac), libpnsovr's copies | libr15's own copies of the same two functions, `CNSUser::SystemInfo` (0x1932770) and `CSysInfo::OSBuildVersion` (0xf875c4); `headset_type`'s value in pnsovr is not traced |
 
 ## 4. Where pnsovr's `ovr_*` calls land today
 
@@ -199,8 +201,6 @@ libr15, not to trying a variant.
 
 - The ~150 consumers of the `Users`, `IAP`, `RichPresence` and `Social` pointers that were not read. PC runs with the
   last three null; whether a Quest-only consumer dereferences one without a check is not shown.
-- Whether libr15 has a counterpart of PC's OVR branch in `PlatformModuleDecisionAndInitialize` that needs pnsovr loaded.
-  None was found in `CR15Game::Initialize`; the first run shows it.
 - What libpnsrad's `InitGlobals` does when it runs a second time on Quest. PC does this on every run.
 - Whether the server accepts a login without the Oculus `nonce` proof. The NEVR identity already replaces it on
   both platforms (ADR 0003); a headset run confirms it on Quest.
