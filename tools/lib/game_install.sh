@@ -26,12 +26,30 @@ resolve_game_root() {
   printf '%s\n' "$root"
 }
 
+# refuse_copy_credentials <game root>: a throwaway copy of the install carries no sign-in. When NEVR_GAME_ROOT names the
+# root (a copy; unset is the main checkout's own install, which holds the owner's sign-in), any `.credentials.json*`
+# file under <game root>/echovr, in `_local` or in the nevr root of the Wine prefix, makes the run sign in as whoever
+# the file belongs to. Prints one line naming the files by path (never their content) and exits 3 (the exit of
+# launch-client.sh's other "not pristine" aborts); exits 2 when the tree cannot be searched, so a failed search is
+# not read as "none". A symbolic link counts; a directory does not. AGENTS.md "The game install", "Make it safe".
+refuse_copy_credentials() {
+  local root=$1 listing
+  [[ -n "${NEVR_GAME_ROOT:-}" ]] || return 0
+  listing=$(find "$root/echovr" -name '.credentials.json*' ! -type d -print) \
+    || { echo "ERROR: cannot search $root/echovr for sign-in files (.credentials.json*); not starting the game" >&2; exit 2; }
+  [[ -z "$listing" ]] && return 0
+  echo "ABORT: the game copy holds sign-in file(s) the game would sign in with: ${listing//$'\n'/ } (remove them: AGENTS.md \"The game install\", \"Make it safe\")" >&2
+  exit 3
+}
+
 # One game run at a time: a second run would save the first run's test DLL as its "original" and
 # restore that. The flock covers the caller's whole run (including its restore); the pgrep covers a
 # game started some other way. fd 9 holds the lock: the caller closes it (9>&-) for the children it
-# starts so a leftover wineserver cannot hold it. Exits 4.
+# starts so a leftover wineserver cannot hold it. Exits 4; exits 3 first when refuse_copy_credentials refuses the copy.
 acquire_game_run_lock() {
   local running
+  # Before the lock file, the work directory or any deploy is touched. GAME_ROOT is the caller's resolve_game_root.
+  refuse_copy_credentials "${GAME_ROOT:?acquire_game_run_lock needs GAME_ROOT (resolve_game_root)}"
   GAME_RUN_LOCK="${NEVR_LAUNCH_LOCK:-$NEVR_WORK_ROOT/launch-client.lock}"
   work_dir "$(dirname "$GAME_RUN_LOCK")" "The game-run lock and what tools keep next to it." \
     "the lock file is kept; it holds no data." || exit 4
