@@ -1381,7 +1381,7 @@ void LoadPlugins(PluginPhase phase) {
   const bool early = phase == PluginPhase::Early;
   StatePluginTrustMode();
 
-  // ADR 0012: plugins load from the nEVR root's plugins\ folder, never from beside the game executable. An
+  // ADR 0012: plugins load from the nevr root's plugins\ folder, never from beside the game executable. An
   // unresolved root (no %LOCALAPPDATA%) leaves the directory empty: every configured plugin then fails with the
   // reason below, and nothing is searched in the game folder.
   const std::string rootPlugins = nevr_root::PluginsDir(nevr_root::RootA());
