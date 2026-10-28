@@ -15,6 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 FEATURE = ROOT / "src/quest/social/menu_version_label.cpp"
 HEADER = ROOT / "src/quest/social/menu_version_label.h"
+HOOK_HEADER = ROOT / "src/quest/social/menu_version_label_hook.h"
 STEPS = ROOT / "src/quest/integration/production_steps.cpp"
 TARGETS = ROOT / "src/quest/sentinel/pinned_targets.h"
 JUSTFILE = ROOT / "justfile"
@@ -34,10 +35,19 @@ class QuestMenuVersionIsAGotHook(unittest.TestCase):
         self.assertEqual(len(re.findall(r"InstallThunk\s*<", text)), 1)
 
     def test_the_feature_writes_no_code_and_changes_no_protection(self):
-        for path in (FEATURE, HEADER):
+        for path in (FEATURE, HEADER, HOOK_HEADER):
             text = strip_comments(path.read_text())
             self.assertNotRegex(text, r"InstallInlineThunk|InlineHook|\bWriteWord\b|\bmprotect\s*\(|PROT_EXEC", path.name)
             self.assertNotIn("inline_hook.h", text, path.name)
+
+    def test_the_public_header_keeps_the_thunk_out_of_exception_code(self):
+        # production_steps.cpp is built with exceptions; callback_thunk.h refuses to be included there.
+        for path in (HEADER, STEPS):
+            text = strip_comments(path.read_text())
+            self.assertNotIn("menu_version_label_hook.h", text, path.name)
+            self.assertNotIn("pinned_targets.h", text, path.name)
+            self.assertNotIn("callback_thunk.h", text, path.name)
+        self.assertIn("callback_thunk.h", strip_comments(HOOK_HEADER.read_text()) + strip_comments(TARGETS.read_text()))
 
     def test_the_target_is_the_one_measured_slot(self):
         text = TARGETS.read_text()

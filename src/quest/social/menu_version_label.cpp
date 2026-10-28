@@ -1,4 +1,4 @@
-#include "quest/social/menu_version_label.h"
+#include "quest/social/menu_version_label_hook.h"
 
 #include <atomic>
 #include <cstdint>

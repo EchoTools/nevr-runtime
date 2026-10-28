@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "hook_log.h"
-#include "quest/social/menu_version_label.h"
+#include "quest/social/menu_version_label_hook.h"
 #include "quest/tests/test_check.h"
 #include "runtime/patch/menu_version_label_rules.h"
 
