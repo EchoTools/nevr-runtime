@@ -562,6 +562,30 @@ void PluginTargetsResolveByTheStockIdOnlyOnTheVerifiedPatchedImage() {
   dlclose(m.handle);
 }
 
+const char* AnswersNothing(const char*) { return nullptr; }
+const char* AnswersEmpty(const char*) { return ""; }
+
+// An alias that has no answer (null) or an empty one maps nothing: an empty target ID is not "accepted" because both sides are empty.
+void AnAliasThatAnswersNothingOrEmptyMapsNothing() {
+  Prepare();
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const char* const stock = nevr_quest::patch::kLibR15StockBuildId;
+  AddThunk::Arm(kAddPlus100);
+  for (BuildIdAliasFn fn : {&AnswersNothing, &AnswersEmpty}) {
+    const AliasScope scope(fn);
+    for (const char* target : {stock, ""}) {
+      GotHook hook;
+      void* out = nullptr;
+      QCHECK_STATUS(Install(hook, GotTarget{so, "fx_add", RelocKind::kJumpSlot, target}, AddThunk::EntryAddress(), &out),
+                    GotStatus::kBuildIdMismatch);
+      if (hook.installed()) hook.Remove();
+    }
+  }
+  QCHECK(m.callAdd(2, 3) == 5);
+  dlclose(m.handle);
+}
+
 void ASentinelClaimThenAPluginClaimOnOneSlotIsRefusedAsOwned() {
   Prepare();
   const char* so = "libgotfx_consumer_now.so";
@@ -1815,6 +1839,7 @@ int main(int argc, char** argv) {
   NegativeCases();
   DuplicateAndChained();
   PluginTargetsResolveByTheStockIdOnlyOnTheVerifiedPatchedImage();
+  AnAliasThatAnswersNothingOrEmptyMapsNothing();
   ASentinelClaimThenAPluginClaimOnOneSlotIsRefusedAsOwned();
   ModuleUnloaded();
   ConcurrentCallers();
