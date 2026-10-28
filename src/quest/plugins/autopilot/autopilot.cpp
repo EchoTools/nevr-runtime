@@ -82,21 +82,16 @@ void Run::Filter(NevrQuestControllerState* state) noexcept {
     return;
   }
   if (!started_.exchange(true, std::memory_order_acq_rel)) Emit(Event{Event::kStart, 0, 0, now});
+  // Both hands poll in one frame; whichever moves the key first reports the step, once.
   const std::uint64_t key = ((static_cast<std::uint64_t>(p.pass) << 32) | p.index) + 1;
-  std::uint64_t last = lastStep_.load(std::memory_order_acquire);
-  while (last != key) {
-    if (lastStep_.compare_exchange_weak(last, key, std::memory_order_acq_rel)) {
-      Emit(Event{Event::kStep, p.pass, p.index, now});
-      break;
-    }
+  if (lastStep_.exchange(key, std::memory_order_acq_rel) != key) Emit(Event{Event::kStep, p.pass, p.index, now});
+  const std::uint32_t hand = state->hand;
+  if (hand != NEVR_QUEST_HAND_LEFT && hand != NEVR_QUEST_HAND_RIGHT) {
+    counters_.framesUnknownHand.fetch_add(1, std::memory_order_relaxed);  // a hand we cannot name: counted, not driven
+    return;
   }
-  const std::uint32_t hand = state->hand <= NEVR_QUEST_HAND_UNKNOWN ? state->hand : NEVR_QUEST_HAND_UNKNOWN;
   CountGap(hand, now.monotonicNs);
-  switch (hand) {
-    case NEVR_QUEST_HAND_LEFT: counters_.framesLeft.fetch_add(1, std::memory_order_relaxed); break;
-    case NEVR_QUEST_HAND_RIGHT: counters_.framesRight.fetch_add(1, std::memory_order_relaxed); break;
-    default: counters_.framesUnknownHand.fetch_add(1, std::memory_order_relaxed); return;  // a hand we cannot name
-  }
+  (hand == NEVR_QUEST_HAND_LEFT ? counters_.framesLeft : counters_.framesRight).fetch_add(1, std::memory_order_relaxed);
   if (!route_.drives[hand]) return;
   const HandState& s = route_.steps[p.index].hands[hand];
   state->buttons = s.buttons;

@@ -354,6 +354,19 @@ _quest-apk store_apk:
     tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
     just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so build/android-dev/repack
 
+# The development APK for an autopilot run on a Quest (#1202, docs/adr/0025-quest-autopilot-route.md): the local
+# android-arm64 sentinel (a development build: the input seam refuses a release) with libnevr_autopilot.so beside it,
+# repacked from the store APK. The plugin is off unless the headset's config.yaml names nevr_autopilot. Writes
+# build/android-arm64/repack/r15_nevr-sentinel_signed.apk, the path test-quest-hooks-pinned reads. No release or
+# package-dev APK carries the plugin.
+quest-autopilot-apk store_apk="/mnt/games/cache/r15_goldmaster_store.apk": build-android
+    just android-repack-apk "{{ store_apk }}" build/android-arm64/sentinel/libovrplatformloader.so build/android-arm64/repack build/android-arm64/integration/libnevr_autopilot.so
+
+# One unattended autopilot run on the attached Quest (tools/quest_autopilot_run.py --help): pushes the route, starts the
+# game with the proximity sensor overridden, waits for route_end, and records the run under the work root.
+quest-autopilot-run route *args:
+    python3 tools/quest_autopilot_run.py --route "{{ route }}" {{ args }}
+
 # The Quest APK of a RELEASE: the repack of the store game with the loader CI built from the release tag. That loader is
 # the release's own asset (nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so): it is downloaded (tools/quest_release_loader.py
 # fetch: the sha256 GitHub recorded for it, then `gh attestation verify`), checked to carry the tag's version and commit
@@ -1678,9 +1691,9 @@ test-quest-plugins:
 
 # The Quest autopilot plugin on the host (#1202, docs/adr/0025-quest-autopilot-route.md): the route grammar, every
 # derived bit and limit, the clock, the filter against a fake clock, the event ring (two producers), and the plugin's
-# exports against a fake host with a real route file and its real reporter thread. The start-file and the
-# stopped-run cases each run in their own process (the plugin keeps one run per process). Built as the device builds
-# it, without exceptions. Fail-close.
+# exports against a fake host with a real route file and its real reporter thread; and every shipped route file
+# (tools/quest_autopilot_routes/) parses. The start-file case and the two stopped-run cases each run in their own process
+# (the plugin keeps one run per process). Built as the device builds it, without exceptions. Fail-close.
 test-quest-autopilot:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1689,7 +1702,9 @@ test-quest-autopilot:
     cxx=(g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -pthread -Isrc)
     "${cxx[@]}" src/quest/tests/autopilot_route_test.cpp src/quest/plugins/autopilot/route.cpp \
         -o "$out/autopilot_route_test"
-    timeout 60 "$out/autopilot_route_test"
+    routes=(tools/quest_autopilot_routes/*.txt)
+    [ -f "${routes[0]}" ] || { echo "test-quest-autopilot: no shipped route file" >&2; exit 1; }
+    timeout 60 "$out/autopilot_route_test" "${routes[@]}"
     "${cxx[@]}" -DNEVR_AUTOPILOT_BUILD_IDS='"0000000000000000000000000000000000000000"' \
         src/quest/tests/autopilot_run_test.cpp src/quest/plugins/autopilot/route.cpp \
         src/quest/plugins/autopilot/autopilot.cpp src/quest/plugins/autopilot/plugin.cpp src/quest/data/sha256.cpp \
@@ -1697,6 +1712,7 @@ test-quest-autopilot:
     timeout 120 "$out/autopilot_run_test" "$out/scratch"
     timeout 60 "$out/autopilot_run_test" "$out/scratch" start_file
     timeout 60 "$out/autopilot_run_test" "$out/scratch" stopped
+    timeout 60 "$out/autopilot_run_test" "$out/scratch" stopped_waiting
     echo "test-quest-autopilot: all autopilot tests pass on the host"
 
 # The integration's pinned dlopen target against the real libr15.so (docs/adr/0003). Extracts it from the

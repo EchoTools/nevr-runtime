@@ -2,10 +2,13 @@
 // docs/adr/0025-quest-autopilot-route.md, "The route file"). Every limit and every derived bit is written out here as a
 // literal, so a change to route.cpp fails this test rather than following it.
 //
-// Built and run by `just test-quest-autopilot`.
+// Built and run by `just test-quest-autopilot`, which also passes every route file the repo ships
+// (tools/quest_autopilot_routes/): each must parse.
 
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
+#include <sstream>
 #include <string>
 
 #include "quest/plugins/autopilot/route.h"
@@ -139,73 +142,91 @@ void NumbersAreExact() {
   QCHECK(Parse(Head() + "start_after 0\nstep 1\n").startAfterNs == 0);
   QCHECK(Parse(Head() + "start_after 600\nstep 1\n").startAfterNs == 600000000000LL);
   QCHECK(Parse(Head() + "repeat 1000\nstep 1\n").repeat == 1000u);
+  // The longest spellings each number allows: 6 whole digits for seconds, 9 digits for a count.
+  QCHECK(Parse(Head() + "start_after 000600\nstep 1\n").startAfterNs == 600000000000LL);
+  QCHECK(Parse(Head() + "repeat 000001000\nstep 1\n").repeat == 1000u);
+  QCHECK(Parse(Head() + "repeat 9\nstep 1\n").repeat == 9u);
+}
+
+void TheNameAndTextCharsetsHoldAtTheirEdges() {
+  QCHECK(Parse("autopilot-route 1\nname a0_z9\nstep 1\n").name == "a0_z9");
+  QCHECK(Parse("autopilot-route 1\nname " + std::string(32, 'a') + "\nstep 1\n").name == std::string(32, 'a'));
+  // '~' (0x7e) is the last printable character.
+  QCHECK(Parse(Head() + "step 1 # ~\n").steps.size() == 1u);
 }
 
 void EachRefusalNamesItsLine() {
   struct Case {
     std::string text;
     std::size_t line;
+    const char* reason;  // the operator reads this in route_refused
   };
   const Case cases[] = {
-      {"", 0},                                                          // no header
-      {"# only a comment\n", 0},                                        // no header
-      {"name r\nautopilot-route 1\nstep 1\n", 1},                      // header not first
-      {"autopilot-route 2\nname r\nstep 1\n", 1},                      // wrong version
-      {"autopilot-route 1 x\nname r\nstep 1\n", 1},                    // extra word
-      {"autopilot-route 1\nautopilot-route 1\nname r\nstep 1\n", 2},   // header twice
-      {"autopilot-route 1\nstep 1\n", 0},                              // no name
-      {"autopilot-route 1\nname r\n", 0},                              // no step
-      {Head() + "name s\nstep 1\n", 3},                                // name twice
-      {"autopilot-route 1\nname Upper\nstep 1\n", 2},                  // name charset
-      {"autopilot-route 1\nname a-b\nstep 1\n", 2},
-      {"autopilot-route 1\nname " + std::string(33, 'a') + "\nstep 1\n", 2},
-      {"autopilot-route 1\nname\nstep 1\n", 2},
-      {Head() + "start_after 600.000000001\nstep 1\n", 3},
-      {Head() + "start_after -1\nstep 1\n", 3},
-      {Head() + "start_after 1\nstart_after 1\nstep 1\n", 4},
-      {Head() + "step 1\nstart_after 1\n", 4},                         // start_after after a step
-      {Head() + "repeat 0\nstep 1\n", 3},
-      {Head() + "repeat 1001\nstep 1\n", 3},
-      {Head() + "repeat 1.5\nstep 1\n", 3},
-      {Head() + "repeat 2\nrepeat 2\nstep 1\n", 4},
-      {Head() + "step 1\nrepeat 2\n", 4},                              // repeat after a step
-      {Head() + "step\n", 3},
-      {Head() + "step 0.009\n", 3},
-      {Head() + "step 600.000000001\n", 3},
-      {Head() + "step 1.\n", 3},
-      {Head() + "step .5\n", 3},
-      {Head() + "step 1.0000000001\n", 3},                             // ten fractional digits
-      {Head() + "step 1e1\n", 3},
-      {Head() + "step -1\n", 3},
-      {Head() + "step 1 left.stick=0\n", 3},
-      {Head() + "step 1 left.stick=1.01,0\n", 3},
-      {Head() + "step 1 left.stick=0,-1.5\n", 3},
-      {Head() + "step 1 left.trigger=-0.1\n", 3},
-      {Head() + "step 1 left.trigger=1.5\n", 3},
-      {Head() + "step 1 left.grip=2\n", 3},
-      {Head() + "step 1 left.buttons=a\n", 3},                         // a is a right-hand button
-      {Head() + "step 1 right.buttons=x\n", 3},
-      {Head() + "step 1 right.buttons=menu\n", 3},
-      {Head() + "step 1 right.buttons=a+a\n", 3},
-      {Head() + "step 1 right.buttons=\n", 3},
-      {Head() + "step 1 right.buttons=a+\n", 3},
-      {Head() + "step 1 right.trigger=1 right.trigger=0\n", 3},       // named twice
-      {Head() + "step 1 right.stick=0,0 right.stick=0,0\n", 3},
-      {Head() + "step 1 right.grip=1 right.grip=1\n", 3},
-      {Head() + "step 1 right.buttons=a right.buttons=b\n", 3},
-      {Head() + "step 1 middle.trigger=1\n", 3},
-      {Head() + "step 1 right.trigger\n", 3},
-      {Head() + "step 1 right.wheel=1\n", 3},
-      {Head() + "walk 1\n", 3},
-      {Head() + "step 1 \x01\n", 3},                                    // not printable
-      {Head() + "step 1 \xc3\xa9\n", 3},                                // not ASCII
-      {Head() + "repeat 7\nstep 600\n", 0},                            // 4200 s over the 3600 s cap
+      {"", 0, "the file has no 'autopilot-route 1'"},  // no header
+      {"# only a comment\n", 0, "the file has no 'autopilot-route 1'"},  // no header
+      {"name r\nautopilot-route 1\nstep 1\n", 1, "the first directive is not 'autopilot-route 1'"},  // header not first
+      {"autopilot-route 2\nname r\nstep 1\n", 1, "the first directive is not 'autopilot-route 1'"},  // wrong version
+      {"autopilot-route 1 x\nname r\nstep 1\n", 1, "the first directive is not 'autopilot-route 1'"},  // extra word
+      {"autopilot-route 1\nautopilot-route 1\nname r\nstep 1\n", 2, "'autopilot-route' appears twice"},  // header twice
+      {"autopilot-route 1\nstep 1\n", 0, "the file has no 'name'"},  // no name
+      {"autopilot-route 1\nname r\n", 0, "the file has no step"},  // no step
+      {Head() + "name s\nstep 1\n", 3, "'name' appears twice"},  // name twice
+      {"autopilot-route 1\nname Upper\nstep 1\n", 2, "the name is not [a-z0-9_]{1,32}"},  // name charset
+      {"autopilot-route 1\nname a-b\nstep 1\n", 2, "the name is not [a-z0-9_]{1,32}"},
+      {"autopilot-route 1\nname " + std::string(33, 'a') + "\nstep 1\n", 2, "the name is not [a-z0-9_]{1,32}"},
+      {"autopilot-route 1\nname\nstep 1\n", 2, "the name is not [a-z0-9_]{1,32}"},
+      {Head() + "step 0000001\n", 3, "the step duration is not a number of seconds in 0.01..600"},  // 7 whole digits
+      {Head() + "repeat 0000000001\nstep 1\n", 3, "repeat is not a whole number in 1..1000"},  // 10 digits
+      {Head() + "start_after 600.000000001\nstep 1\n", 3, "start_after is not a number of seconds in 0..600"},
+      {Head() + "start_after -1\nstep 1\n", 3, "start_after is not a number of seconds in 0..600"},
+      {Head() + "start_after 1\nstart_after 1\nstep 1\n", 4, "'start_after' appears twice"},
+      {Head() + "step 1\nstart_after 1\n", 4, "'start_after' after a step"},  // start_after after a step
+      {Head() + "repeat 0\nstep 1\n", 3, "repeat is not a whole number in 1..1000"},
+      {Head() + "repeat 1001\nstep 1\n", 3, "repeat is not a whole number in 1..1000"},
+      {Head() + "repeat 1.5\nstep 1\n", 3, "repeat is not a whole number in 1..1000"},
+      {Head() + "repeat 2\nrepeat 2\nstep 1\n", 4, "'repeat' appears twice"},
+      {Head() + "step 1\nrepeat 2\n", 4, "'repeat' after a step"},  // repeat after a step
+      {Head() + "step\n", 3, "the step duration is not a number of seconds in 0.01..600"},
+      {Head() + "step 0.009\n", 3, "the step duration is not a number of seconds in 0.01..600"},
+      {Head() + "step 600.000000001\n", 3, "the step duration is not a number of seconds in 0.01..600"},
+      {Head() + "step 1.\n", 3, "the step duration is not a number of seconds in 0.01..600"},
+      {Head() + "step .5\n", 3, "the step duration is not a number of seconds in 0.01..600"},
+      // ten fractional digits
+      {Head() + "step 1.0000000001\n", 3, "the step duration is not a number of seconds in 0.01..600"},
+      {Head() + "step 1e1\n", 3, "the step duration is not a number of seconds in 0.01..600"},
+      {Head() + "step -1\n", 3, "the step duration is not a number of seconds in 0.01..600"},
+      {Head() + "step 1 left.stick=0\n", 3, "stick '0' is not x,y with each in -1..1"},
+      {Head() + "step 1 left.stick=1.01,0\n", 3, "stick '1.01,0' is not x,y with each in -1..1"},
+      {Head() + "step 1 left.stick=0,-1.5\n", 3, "stick '0,-1.5' is not x,y with each in -1..1"},
+      {Head() + "step 1 left.trigger=-0.1\n", 3, "trigger '-0.1' is not in 0..1"},
+      {Head() + "step 1 left.trigger=1.5\n", 3, "trigger '1.5' is not in 0..1"},
+      {Head() + "step 1 left.grip=2\n", 3, "grip '2' is not in 0..1"},
+      {Head() + "step 1 left.buttons=a\n", 3, "no button 'a' on the left hand"},  // a is a right-hand button
+      {Head() + "step 1 right.buttons=x\n", 3, "no button 'x' on the right hand"},
+      {Head() + "step 1 right.buttons=menu\n", 3, "no button 'menu' on the right hand"},
+      {Head() + "step 1 right.buttons=a+a\n", 3, "button 'a' named twice"},
+      {Head() + "step 1 right.buttons=\n", 3, "empty button list"},
+      {Head() + "step 1 right.buttons=a+\n", 3, "no button '' on the right hand"},
+      // named twice
+      {Head() + "step 1 right.trigger=1 right.trigger=0\n", 3, "control 'trigger' named twice for one hand"},
+      {Head() + "step 1 right.stick=0,0 right.stick=0,0\n", 3, "control 'stick' named twice for one hand"},
+      {Head() + "step 1 right.grip=1 right.grip=1\n", 3, "control 'grip' named twice for one hand"},
+      {Head() + "step 1 right.buttons=a right.buttons=b\n", 3, "control 'buttons' named twice for one hand"},
+      {Head() + "step 1 middle.trigger=1\n", 3, "control 'middle.trigger=1' names no hand (left. or right.)"},
+      {Head() + "step 1 right.trigger\n", 3, "control 'right.trigger' has no '='"},
+      {Head() + "step 1 right.wheel=1\n", 3, "unknown control 'wheel'"},
+      {Head() + "walk 1\n", 3, "unknown directive 'walk'"},
+      {Head() + "step 1 \x01\n", 3, "a character that is not printable ASCII"},  // not printable
+      {Head() + "step 1 \xc3\xa9\n", 3, "a character that is not printable ASCII"},  // not ASCII
+      // 4200 s over the 3600 s cap
+      {Head() + "repeat 7\nstep 600\n", 0, "the steps times repeat last more than 3600 seconds"},
   };
   for (const Case& c : cases) {
     const ap::ParseError e = Refusal(c.text);
     if (e.line != c.line) std::fprintf(stderr, "line %zu, expected %zu: %s\n", e.line, c.line, e.reason.c_str());
+    if (e.reason != c.reason) std::fprintf(stderr, "reason '%s', expected '%s'\n", e.reason.c_str(), c.reason);
     QCHECK(e.line == c.line);
-    QCHECK(!e.reason.empty());
+    QCHECK(e.reason == c.reason);
   }
 }
 
@@ -247,12 +268,30 @@ void LocateWalksTheSteps() {
 
 }  // namespace
 
-int main() {
+// Each shipped route file parses and drives a hand. A file that cannot be read fails too.
+void TheShippedRoutesParse(int argc, char** argv) {
+  for (int i = 1; i < argc; ++i) {
+    std::ifstream in(argv[i], std::ios::binary);
+    QCHECK(in.good());
+    std::ostringstream text;
+    text << in.rdbuf();
+    ap::Route r;
+    ap::ParseError e;
+    const bool ok = ap::ParseRoute(text.str(), &r, &e);
+    if (!ok) std::fprintf(stderr, "%s: refused, line %zu: %s\n", argv[i], e.line, e.reason.c_str());
+    QCHECK(ok);
+    QCHECK(r.drives[ap::kLeft] || r.drives[ap::kRight]);
+  }
+}
+
+int main(int argc, char** argv) {
+  TheShippedRoutesParse(argc, argv);
   TheSampleParses();
   DefaultsAndOneHand();
   TheRestStateIsTheHeadersBaseState();
   TheDerivedBits();
   NumbersAreExact();
+  TheNameAndTextCharsetsHoldAtTheirEdges();
   EachRefusalNamesItsLine();
   TheLimitsHoldAtTheirEdges();
   LocateWalksTheSteps();

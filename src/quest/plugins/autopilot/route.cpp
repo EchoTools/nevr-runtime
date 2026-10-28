@@ -26,7 +26,7 @@ std::vector<std::string_view> Words(std::string_view line) {
 bool ParseFixed9(std::string_view text, bool allowNegative, std::int64_t* out) {
   std::size_t i = 0;
   bool negative = false;
-  if (i < text.size() && text[i] == '-') {
+  if (text.substr(0, 1) == "-") {
     if (!allowNegative) return false;
     negative = true;
     ++i;
@@ -131,7 +131,7 @@ bool ParseButtons(Hand hand, std::string_view list, Named* named, std::string* r
   return true;
 }
 
-bool ParseControl(std::string_view word, Named named[2], std::string* reason) {
+bool ParseControl(std::string_view word, Named (&named)[2], std::string* reason) {
   Hand hand;
   std::string_view rest;
   if (word.substr(0, 5) == "left.") {
@@ -324,15 +324,14 @@ Position Locate(const Route& route, std::int64_t sinceStartNs) noexcept {
   }
   p.phase = Position::kRunning;
   p.pass = static_cast<std::uint32_t>(t / passNs);
+  // inPass < passNs, the sum of the durations, so the walk stops on a step.
   std::int64_t inPass = t % passNs;
-  for (std::uint32_t i = 0; i < route.steps.size(); ++i) {
-    if (inPass < route.steps[i].durationNs) {
-      p.index = i;
-      return p;
-    }
+  std::uint32_t i = 0;
+  while (inPass >= route.steps[i].durationNs) {
     inPass -= route.steps[i].durationNs;
+    ++i;
   }
-  p.index = static_cast<std::uint32_t>(route.steps.size() - 1);  // unreachable: inPass < passNs
+  p.index = i;
   return p;
 }
 

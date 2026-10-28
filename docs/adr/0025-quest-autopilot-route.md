@@ -23,8 +23,8 @@ What the tree and the binary give us (pinned `libr15.so`, build ID `b243509c08ce
   0x1a718fc) and takes the hand from the left-hand bit (`eor w8, w9, w8, lsr #2; and x29, x8, #0x1`, 0x1a71914: left 0,
   otherwise 1). Then it calls `vrapi_GetCurrentInputState(ovr, deviceId, cvr + 0x300 + hand * 0x48)` (0x1a7191c-0x1a71928).
 - **The layout.** The stride 0x48 (72) is `sizeof(ovrInputStateTrackedRemote)` in the public Oculus Mobile SDK
-  `VrApi_Input.h` (SDK API 1.1.15 and later). That layout is a 16-byte header (`ControllerType`, `TimeInSeconds`), then
-  `Buttons` at 16, `TrackpadStatus` 20, `TrackpadPosition` 24, battery and recenter bytes 32, `IndexTrigger` 36,
+  header VrApi_Input.h (SDK API 1.1.15 and later). That layout is a 16-byte header (`ControllerType`,
+  `TimeInSeconds`), then `Buttons` at 16, `TrackpadStatus` 20, `TrackpadPosition` 24, battery and recenter bytes 32, `IndexTrigger` 36,
   `GripTrigger` 40, `Touches` 44, `Joystick` 52 and `JoystickNoDeadZone` 60, padded to 72. The game's capabilities buffer
   (sp+0x18 to sp+0x48, 48 bytes) is `sizeof(ovrInputTrackedRemoteCapabilities)`. `ControllerCapabilities` sits at offset 8,
   the word the game reads at sp+0x20. Two independent measurements agree with the header.
@@ -99,8 +99,8 @@ step 0.5 right.grip=1 right.buttons=a+b       # grip held, A and B held
   seconds; the file at most 64 KiB.
 - Controls: `left.` or `right.` followed by `stick=x,y` (each -1 to 1), `trigger=v` and `grip=v` (0 to 1), and
   `buttons=` a `+`-joined set. The left hand may hold `x`, `y`, `thumb` and `menu`; the right `a`, `b` and `thumb`
-  (`VrApi_Input.h`, `ovrButton`: A 0x1, B 0x2, RThumb 0x4, X 0x100, Y 0x200, LThumb 0x400, Enter 0x100000, the menu
-  button on the left controller). A button named on the wrong hand is a refusal.
+  (the SDK header VrApi_Input.h, `ovrButton`: A 0x1, B 0x2, RThumb 0x4, X 0x100, Y 0x200, LThumb 0x400, Enter
+  0x100000, the menu button on the left controller). A button named on the wrong hand is a refusal.
 - What the plugin derives, so the state reads like a controller in a hand: `trigger >= 0.5` adds `ovrButton_Trigger`
   (0x20000000), `grip >= 0.5` adds `ovrButton_GripTrigger` (0x04000000), `thumb` adds `ovrButton_Joystick`
   (0x80000000) with the hand's thumb bit. Touches follow the same header (`ovrTouch`): a pressed button touches its
@@ -139,7 +139,9 @@ plugins:
   force-stops the game, sends `com.oculus.vrpowermanager.automation_disable` to give the sensor back, and saves the
   logcat and `nevr-sentinel.log`. It writes one JSON record per step, plus a summary that carries the `route_start`
   and `route_end` fields, to `runs.jsonl` in its output directory under the work root. It exits 0 only when
-  `route_end` arrived and every hand the route drives has a non-zero `frames_driven`.
+  `route_end` arrived and every hand the route drives has a non-zero `frames_driven`. `just quest-autopilot-run <route>`
+  runs it. The routes the repo ships are in `tools/quest_autopilot_routes/` (`lobby_loop.txt`: walk, turn, walk back
+  and turn, 120 s), and `just test-quest-autopilot` parses each one.
 
 ### Logging
 

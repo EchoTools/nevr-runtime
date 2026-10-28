@@ -23,7 +23,7 @@ struct Clocks {
   std::int64_t boottimeNs = 0;
 };
 using ClockFn = Clocks (*)() noexcept;
-// Called after an event is queued, from the filter: it must not block or lock (plugin.cpp posts a semaphore).
+// Called after an event is queued, from the filter: it must not block or lock (plugin.cpp writes an eventfd).
 using WakeFn = void (*)(void* user) noexcept;
 
 struct Event {
@@ -93,7 +93,7 @@ class Run {
   std::atomic<bool> ended_{false};
   // The (pass << 32 | index) + 1 of the last step reported; 0 before the first.
   std::atomic<std::uint64_t> lastStep_{0};
-  std::atomic<std::int64_t> lastFrameNs_[3] = {};  // per hand: the previous frame inside the route
+  std::atomic<std::int64_t> lastFrameNs_[2] = {};  // per hand: the previous frame inside the route
   EventRing ring_;
   Counters counters_;
 };
