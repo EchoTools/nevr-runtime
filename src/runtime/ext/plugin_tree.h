@@ -47,6 +47,11 @@ std::wstring WithDefaultExtension(const std::wstring& name);
 // first), or a file in System32 (the other directory N75 allows).
 bool SuppliedByTheSystem(const std::string& file);
 
+// True when `file` is supplied by a file in System32 alone: not an API-set name and not a module already loaded in
+// this process. The loader searches the plugin's own directory before System32 for such a name, so a file put in
+// the plugins directory after the check would be mapped in its place; the loader pins these (#768).
+bool SuppliedBySystem32Only(const std::string& file);
+
 struct TreeVerdict {
   bool accepted = true;
   std::string file;  // when refused: the file that failed, a dependency's name or the plugin's own
@@ -60,8 +65,9 @@ struct TreeVerdict {
 // Checks every file reachable from `root` (the plugin, already open) that exists in `pluginDir` (a directory with a
 // trailing backslash), transitively, each with VerifyPluginFile. A name that is in neither the directory nor
 // SuppliedByTheSystem is refused. The first failure ends the walk. At most 64 files; a longer tree is refused.
-// Dependencies that pass stay open in `held`.
+// Dependencies that pass stay open in `held`. `system32Only`, when given, receives the lowercase name of each
+// dependency that is absent from `pluginDir` and satisfies SuppliedBySystem32Only, once each.
 TreeVerdict VerifyPluginTree(const std::string& pluginDir, HANDLE root, const nevr_plugin_signature::Policy& policy,
-                             int64_t nowUnix, HeldFiles* held);
+                             int64_t nowUnix, HeldFiles* held, std::vector<std::string>* system32Only = nullptr);
 
 }  // namespace nevr_plugin_tree

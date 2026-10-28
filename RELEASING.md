@@ -215,8 +215,11 @@ on; the recipe runs `tools/release_preflight.py --tag vX.Y.Z`, which wants a cle
 just release-quest-apk vX.Y.Z   # build/quest-release/vX.Y.Z/nevr-runtime-vX.Y.Z-quest.apk and its .sha256
 ```
 
-It builds with the tag's identity (`kVersion` is the tag, `kIsDev` is false) and checks both in the generated header. It
-uploads nothing. Check the file as above, then publish it from the same clone:
+It compiles nothing: the loader in the APK is the release's own asset, so the asset and the APK carry one file. The recipe
+downloads the asset (the draft is enough; `gh` is `$GH_BIN`, default `gh`), checks its size and sha256 against what GitHub
+recorded for it and `gh attestation verify`, checks that it carries the tag's version and commit, repacks the store game
+with it, and refuses unless the signed APK's loader has the asset's sha256. The APK is signed with the key in `pass`
+(`tools/quest_keystore.sh`; `just quest-keystore-fingerprint` prints the signer's SHA-256). It uploads nothing. Check the file as above, then publish it from the same clone:
 
 ```sh
 just publish-quest-apk vX.Y.Z   # puts the APK and its .sha256 on R2, then fetches both back from the public host
@@ -233,6 +236,10 @@ each equals the local one in size and sha256; an HTML answer or a redirect is a 
 `$XDG_STATE_HOME/nevr-runtime/publish-quest-apk.jsonl` and never prints or logs a value from the environment. No workflow
 runs it: the APK is built from the store game on the publisher's machine, so there is nothing for a job to upload.
 Where the files land and which host answers for them is in `docs/reference/verifying-a-release.md`, "Quest APKs".
+
+The release notes for a build signed with a new key carry one line for Quest players: uninstall the old version first; this
+build is signed with the new key (Android refuses an update from a different signer). `put-quest-apk` pins the signer
+certificate in the release-signer's `config/`; a new key needs that pin changed there before the publish.
 
 Then post the SHA-256 and the commit the APK was built from, saying it is not a release asset, and replace the line in the
 release body that says there is no Quest APK with its address and SHA-256 (the body of a published release stays editable).

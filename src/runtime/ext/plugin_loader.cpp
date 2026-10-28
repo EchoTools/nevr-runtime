@@ -214,6 +214,66 @@ bool PluginFileStaysInDirectory(const std::string& file) {
          name.find('\0') == std::string_view::npos;
 }
 
+// #768 (ADR 0010): a library the plugin names that only System32 supplies. The loader searches the plugin's own
+// directory before System32 (N75) for a name that is not already loaded, so a file put in that directory after the
+// check would map in its place, unchecked. The check cannot hold a file that is not there; instead the System32
+// library is loaded by its full path first, and the loader takes a module already loaded under a name before it
+// searches for one. Whoever holds this object keeps the libraries loaded.
+thread_local bool t_pinning = false;  // PluginLoadFilter ignores the loads made while this thread pins
+#ifdef NEVR_TEST_HOOKS
+bool g_failPinning = false;  // a test makes every pin fail with ERROR_ACCESS_DENIED
+#endif
+
+class PinnedModules {
+ public:
+  PinnedModules() = default;
+  PinnedModules(const PinnedModules&) = delete;
+  PinnedModules& operator=(const PinnedModules&) = delete;
+  ~PinnedModules() {
+    for (HMODULE m : modules_) FreeLibrary(m);
+  }
+
+  // Loads each lowercase name from System32. False when one cannot be: `failed` names it, `error` is why.
+  bool Pin(const std::vector<std::string>& names, std::string* failed, DWORD* error) {
+    if (names.empty()) return true;
+    char system[MAX_PATH] = {};
+    const UINT n = GetSystemDirectoryA(system, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) {
+      *failed = "the system directory";
+      *error = GetLastError();
+      return false;
+    }
+    struct Pinning {
+      Pinning() { t_pinning = true; }
+      ~Pinning() { t_pinning = false; }
+    } pinning;
+    for (const std::string& name : names) {
+      HMODULE m = LoadLibraryExA((std::string(system) + "\\" + name).c_str(), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+#ifdef NEVR_TEST_HOOKS
+      if (g_failPinning) {
+        if (m != nullptr) FreeLibrary(m);
+        m = nullptr;
+        SetLastError(ERROR_ACCESS_DENIED);
+      }
+#endif
+      if (m == nullptr) {
+        *failed = name;
+        *error = GetLastError();
+        return false;
+      }
+      modules_.push_back(m);
+    }
+    return true;
+  }
+
+  // The libraries stay loaded for the life of the process (a filter's verified plugin is loaded later, at a time
+  // this code cannot see, and unloading them at exit would run under the loader lock).
+  void KeepForTheLifeOfTheProcess() { modules_.clear(); }
+
+ private:
+  std::vector<HMODULE> modules_;
+};
+
 // #741 (ADR 0010): the plugin file, open for reading with FILE_SHARE_READ only, so no Windows process can
 // write to it or replace it while it is held. StageOne verifies the signature on it and keeps it open
 // across LoadModule: the bytes that were checked are the bytes that load.
@@ -230,6 +290,8 @@ class HeldFile {
 
   // The plugin's dependencies from its own directory, held the same way across the load.
   nevr_plugin_tree::HeldFiles deps;
+  // The System32 libraries the plugin names that nothing in its directory does, loaded before the plugin (#768).
+  PinnedModules pins;
 
   // #767: where the held file is, from the handle: no link, no 8.3 name, no prefix. This is what the load names, so
   // the load is of the file that was checked, whatever the configured path leads to by then. Empty: nothing is held.
@@ -294,8 +356,8 @@ void RecordLateRefusal(const std::string& file) {
 // DllLoadHook runs this predicate before every LoadLibrary* in the process. A path inside the plugins directory
 // has to pass the same check as a staged plugin (and so does everything it names). The loader's own staged loads
 // were checked before they were made and the OS resolves their imports without the hook, so the path of the load
-// in progress is kept per thread and that one path is not checked twice. A load the plugin itself makes from its
-// DllMain is another path and is checked.
+// in progress is kept per thread and that one path is not checked twice, while the loader is the one loading it.
+// A load the plugin itself makes from its DllMain, by that path or another, is checked.
 
 thread_local std::wstring t_stagedPath;
 
@@ -310,6 +372,7 @@ struct FilterState {
   struct Verified {
     HANDLE handle = INVALID_HANDLE_VALUE;
     nevr_plugin_tree::HeldFiles deps;
+    PinnedModules pins;
     Verified() = default;
     Verified(const Verified&) = delete;
     Verified& operator=(const Verified&) = delete;
@@ -404,6 +467,12 @@ void (*g_betweenCheckAndLoad)(const std::wstring& staged) = nullptr;
 bool g_failNamingHeldFile = false;
 #endif
 
+#ifdef NEVR_TEST_HOOKS
+// Runs after a plugin has been checked and before the load that maps it: where a test plants a file in the
+// plugins directory.
+void (*g_afterDependenciesChecked)() = nullptr;
+#endif
+
 // Whether `candidate` names a file in the plugins directory, and which one. False: it names nothing there.
 bool FileInPluginsDirectory(const FilterState& f, const std::wstring& candidate, std::wstring* full) {
   if (FinalPathOf(candidate, full)) {
@@ -418,12 +487,16 @@ bool FileInPluginsDirectory(const FilterState& f, const std::wstring& candidate,
 
 bool PluginLoadFilter(const wchar_t* lowerPath) {
   if (lowerPath == nullptr) return false;
+  if (t_pinning) return false;  // this thread is loading a System32 library for the filter's own pin, holding f.mutex
   FilterState& f = Filter();
   std::lock_guard<std::mutex> lock(f.mutex);
   if (f.dirLower.empty()) return false;
   // LoadLibrary appends ".dll" to a name with no extension: the file it maps is the one to check.
   const std::wstring p = nevr_plugin_tree::WithDefaultExtension(NormalizeWide(lowerPath));
-  if (!t_stagedPath.empty() && p == t_stagedPath) return false;  // the loader's own load of a file it checked
+  // The loader's own load of a file it checked. It is exempt only until the loader has taken its lock: the plugin's
+  // DllMain runs inside the same LoadLibrary call with the lock held, and a load made there is the plugin's own, so it
+  // is checked even when it names the path being loaded.
+  if (!t_stagedPath.empty() && p == t_stagedPath && !nevr_dll_load_hook::LoaderLockHeldByThisThread()) return false;
   const bool enforcing = nevr_plugin_trust::ActiveMode() == nevr_plugin_trust::Mode::SignedOnly;
   // Where the OS can find the name. A bare name searches the usual places; if the plugins directory holds that
   // name, it is the one at risk. A relative path with a directory part is tried against the current directory and
@@ -512,14 +585,30 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
   } else if (!v.accepted()) {
     refusal = v.Describe();
   } else {
+    std::vector<std::string> system32Only;
     const nevr_plugin_tree::TreeVerdict t = nevr_plugin_tree::VerifyPluginTree(
-        f.dirNarrow, h, nevr_plugin_trust::ActivePolicy(), now, &entry->deps);
+        f.dirNarrow, h, nevr_plugin_trust::ActivePolicy(), now, &entry->deps, &system32Only);
     if (!t.accepted) {
       refusal = "dependency " + t.Describe();
       RecordRefusal(t.file);
+    } else if (enforcing) {
+      std::string failed;
+      DWORD error = 0;
+      if (!entry->pins.Pin(system32Only, &failed, &error)) {
+        refusal = "dependency " + failed + " cannot be loaded from the system directory to pin it: error " +
+                  std::to_string(error);
+        RecordRefusal(failed);
+      } else if (!system32Only.empty() && !nevr_dll_load_hook::LoaderLockHeldByThisThread()) {
+        Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] later load of %s: %lu system dependencies loaded from the system directory first",
+            file.c_str(), static_cast<unsigned long>(system32Only.size()));
+      }
     }
   }
   if (refusal.empty()) {
+#ifdef NEVR_TEST_HOOKS
+    if (g_afterDependenciesChecked != nullptr) g_afterDependenciesChecked();
+#endif
+    entry->pins.KeepForTheLifeOfTheProcess();
     f.verified[full] = std::move(entry);
     return false;
   }
@@ -713,6 +802,9 @@ class PluginLoadRun {
     if (g_betweenCheckAndLoad != nullptr) g_betweenCheckAndLoad(nevr_dll_load_hook::AnsiPathToLowerWide(path.c_str()));
 #endif
     const bool enforcing = nevr_plugin_trust::ActiveMode() == nevr_plugin_trust::Mode::SignedOnly;
+#ifdef NEVR_TEST_HOOKS
+    if (g_afterDependenciesChecked != nullptr) g_afterDependenciesChecked();
+#endif
     HMODULE hPlugin = LoadModule(path, held.loadPath, filename, enforcing);
     if (!hPlugin) {
       const DWORD error = GetLastError();
@@ -817,15 +909,39 @@ class PluginLoadRun {
   // ADR 0010 section 1: the DLLs this plugin names (imports, delay-load imports, forwarded exports) that sit in
   // the plugins directory pass the same check, or the plugin does not load. They stay held across the load.
   bool CheckDependencies(const PluginLoadItem& item, HeldFile* held, PluginManifestEntry& itemReport) {
+    std::vector<std::string> system32Only;
     const nevr_plugin_tree::TreeVerdict tree = nevr_plugin_tree::VerifyPluginTree(
         pluginDir, held->get(), nevr_plugin_trust::ActivePolicy(), static_cast<int64_t>(std::time(nullptr)),
-        &held->deps);
-    if (tree.accepted) return true;
+        &held->deps, &system32Only);
+    if (tree.accepted) return PinSystemDependencies(item, system32Only, held, itemReport);
     const std::string reason = "refused: dependency " + tree.Describe();
     Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] plugin=%s file=%s %s", item.name.c_str(), item.file.c_str(),
         reason.c_str());
     RecordRefusal(item.file);  // the dialog names the plugin the player asked for and the file that stopped it
     RecordRefusal(tree.file);
+    FailPluginLoad(item, reason, itemReport);
+    return false;
+  }
+
+  // #768 (ADR 0010): the System32 libraries the plugin names are loaded before it, so a file put in the plugins
+  // directory after the check cannot take their place. Held until the plugin is loaded and staged.
+  bool PinSystemDependencies(const PluginLoadItem& item, const std::vector<std::string>& names, HeldFile* held,
+                             PluginManifestEntry& itemReport) {
+    std::string failed;
+    DWORD error = 0;
+    if (held->pins.Pin(names, &failed, &error)) {
+      if (!names.empty()) {
+        Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] plugin=%s file=%s %lu system dependencies loaded from the system directory first",
+            item.name.c_str(), item.file.c_str(), static_cast<unsigned long>(names.size()));
+      }
+      return true;
+    }
+    const std::string reason = "refused: dependency " + failed +
+                               " cannot be loaded from the system directory to pin it: error " + std::to_string(error);
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] plugin=%s file=%s %s", item.name.c_str(), item.file.c_str(),
+        reason.c_str());
+    RecordRefusal(item.file);
+    RecordRefusal(failed);
     FailPluginLoad(item, reason, itemReport);
     return false;
   }
@@ -1375,12 +1491,20 @@ void TestHook_RecordRefusal(const std::string& file) { RecordRefusal(file); }
 void TestHook_InstallPluginLoadFilter(const std::string& pluginDir) { InstallPluginLoadFilter(pluginDir); }
 
 void TestHook_SetBetweenResolveAndOpen(void (*hook)(const std::wstring& resolved)) { g_betweenResolveAndOpen = hook; }
+void TestHook_SetAfterDependenciesChecked(void (*hook)()) { g_afterDependenciesChecked = hook; }
+void TestHook_FailPinning(bool fail) { g_failPinning = fail; }
 
 void TestHook_SetBetweenCheckAndLoad(void (*hook)(const std::wstring& staged)) { g_betweenCheckAndLoad = hook; }
 
 void TestHook_FailNamingTheHeldFile(bool fail) { g_failNamingHeldFile = fail; }
 
 void TestHook_ForgetLoadFilterRegistration() { g_filterRegistered = false; }
+
+size_t TestHook_LoadFilterVerifiedCount() {
+  FilterState& f = Filter();
+  std::lock_guard<std::mutex> lock(f.mutex);
+  return f.verified.size();
+}
 
 void TestHook_ResetPluginLoadFilter() {
   FilterState& f = Filter();

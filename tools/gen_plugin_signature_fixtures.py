@@ -145,6 +145,21 @@ def build_dependency_dlls(work):
             '.fill 24,1,0\\n.fill 32,1,0\\n.section .rdata,\\"dr\\"\\nnevr_delay_name:\\n.asciz \\"dep.dll\\"\\n.text\\n");\n' + stub)
     delayer = work / "delayer.dll"
     set_data_dir(delayer, 13, section_rva(delayer, ".didat"), 64)
+    # A plugin whose one import is a System32 library (hid.dll, which the test process does not load), and a stand-in
+    # for that library: it exports the same function and says it was loaded by setting NEVR_TEST_DECOY_LOADED. A
+    # test puts the stand-in in the plugin's directory after the check; the loader searches that directory before
+    # System32 for a name that is not already loaded.
+    build_c(work, "sysimporter",
+            '__declspec(dllimport) void __stdcall HidD_GetHidGuid(void*);\n'
+            'void (__stdcall *volatile nevr_keep_import)(void*) = HidD_GetHidGuid;\n'
+            'int __stdcall DllMain(void*a,unsigned long b,void*c){(void)a;(void)b;(void)c;return nevr_keep_import!=0;}\n',
+            ["-lhid"])
+    build_c(work, "decoy_hid",
+            '__declspec(dllimport) int __stdcall SetEnvironmentVariableA(const char*, const char*);\n'
+            '__declspec(dllexport) void __stdcall HidD_GetHidGuid(void*g){(void)g;}\n'
+            'int __stdcall DllMain(void*a,unsigned long b,void*c){(void)a;(void)c;\n'
+            '  if(b==1)SetEnvironmentVariableA("NEVR_TEST_DECOY_LOADED","1");\n'
+            '  return 1;}\n', ["-lkernel32"])
     # An import directory that points outside the image: a file whose dependencies cannot be listed.
     build_c(work, "broken", stub)
     set_data_dir(work / "broken.dll", 1, 0x7FFFF000, 40)
@@ -252,6 +267,9 @@ def build_corpus(work):
     # The same, naming a library the system supplies: hid.dll is in System32 and is not loaded by the test process.
     data = bytearray(importer)
     put("import_system_without_extension", data.replace(b"dep.dll\0", b"hid\0\0\0\0\0"), True)
+    # The same name in capitals: the loader compares names without regard to case, so the walk reports it in lower case.
+    data = bytearray(importer)
+    put("import_system_uppercase", data.replace(b"dep.dll\0", b"HID.DLL\0"), True)
     return corpus
 
 
@@ -596,7 +614,12 @@ def main():
          "dep.dll", "import", "Unsigned")
     tree("malformed", "broken.dll", {"broken.dll": ("broken", good)}, "the plugin", "", "MalformedSignature")
     tree("dllmain_load", "dllmain_loader.dll", {"dllmain_loader.dll": ("dllmain_loader", good)})
-
+    # A signed plugin that imports a System32 library: nothing in the directory names it, so the check accepts the
+    # tree. "decoy" is the unsigned stand-in a test plants in the directory afterwards.
+    tree("import_system", "sysimporter.dll", {"sysimporter.dll": ("sysimporter", good)})
+    (out / "decoy_hid").mkdir(exist_ok=True)
+    shutil.copy(out / "decoy_hid.dll", out / "decoy_hid" / "hid.dll")
+    trees["import_system"]["decoy"] = "decoy_hid/hid.dll"
 
     # The 64-file cap: 64 signed dependencies pass, a 65th is refused (and the walk does not fail open).
     cap_names = build_cap_dlls(out, 65)
@@ -627,6 +650,8 @@ def main():
          "dep.dll", "import", "Unreadable")
     tree("import_system_without_extension", "corpus_import_system_without_extension.dll",
          {"corpus_import_system_without_extension.dll": ("corpus_import_system_without_extension", good)})
+    tree("import_system_uppercase", "corpus_import_system_uppercase.dll",
+         {"corpus_import_system_uppercase.dll": ("corpus_import_system_uppercase", good)})
 
     manifest = {
         "now": now,
