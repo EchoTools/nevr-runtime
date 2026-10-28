@@ -1803,7 +1803,8 @@ test-quest-plugins:
             src/quest/plugin/plugin_record_log.cpp src/quest/plugin/plugin_platform.cpp src/quest/data/sha256.cpp
             src/quest/sentinel/hook_log.cpp src/quest/sentinel/sentinel_log.cpp
             "$out/got_hook.o" "$out/hook_report.o" "$out/plugin_game_image.o")
-    "${cxx[@]}" -pthread src/quest/tests/plugin_loader_test.cpp "${loader[@]}" -o "$out/plugin_loader_test" -ldl
+    "${cxx[@]}" -pthread src/quest/tests/plugin_loader_test.cpp src/quest/patch/libr15_patch_identity.cpp "${loader[@]}" \
+        -o "$out/plugin_loader_test" -ldl
     timeout -k 5 120 "$out/plugin_loader_test" "$out"
     "${cxx[@]}" -pthread src/quest/tests/plugin_runtime_test.cpp src/quest/plugin/plugin_runtime.cpp \
         src/runtime/ext/plugin_load_plan.cpp "${loader[@]}" -o "$out/plugin_runtime_test" -ldl

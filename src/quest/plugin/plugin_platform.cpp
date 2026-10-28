@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cerrno>
 
 #include "quest/plugin/plugin_game_image.h"
@@ -18,7 +19,13 @@ namespace {
 // A plugin is a shared object of a few hundred kilobytes; a file past this is not one.
 constexpr off_t kMaxPluginBytes = 64 * 1024 * 1024;
 
+std::atomic<Libr15PatchSource> g_patchSource{nullptr};
+
 }  // namespace
+
+Libr15PatchSource SetLibr15PatchSource(Libr15PatchSource source) {
+  return g_patchSource.exchange(source, std::memory_order_acq_rel);
+}
 
 std::string DirectoryOf(const char* path) {
   if (path == nullptr) return "";
@@ -76,6 +83,11 @@ void* SentinelPlatform::Symbol(void* handle, const char* name) { return ::dlsym(
 std::string SentinelPlatform::GameBuildId() {
   char id[128] = {};
   return ReadGameBuildId(id, sizeof(id)) ? std::string(id) : std::string();
+}
+
+Libr15PatchState SentinelPlatform::Libr15Patch() {
+  const Libr15PatchSource source = g_patchSource.load(std::memory_order_acquire);
+  return source != nullptr ? source() : Libr15PatchState{};
 }
 
 std::uintptr_t SentinelPlatform::GameBase() { return GameBaseAddress(); }
