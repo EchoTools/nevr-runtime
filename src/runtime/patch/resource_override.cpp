@@ -33,6 +33,7 @@
 #include <set>
 #include <string>
 #include <utility>
+#include <atomic>
 #include <vector>
 #include <winsock2.h>
 #include <windows.h>
@@ -43,6 +44,7 @@
 
 #include "core/globals.h"
 #include "core/logging.h"
+#include "runtime/patch/game_buffer.h"
 
 /* Embedded assets */
 #include "runtime/patch/splash_texture.h"
@@ -83,6 +85,11 @@ static void (*g_fatal_line_sink)(const char*) = nullptr;
 static unsigned g_deregister_wait_ms = 30000;
 static unsigned long long g_deregister_timeouts = 0;
 
+/* The address of the 8-byte slot that holds the game's memory-context pointer; set when the hook installs. A buffer
+ * written into a callback block is freed by the game through the allocator at context + 0x10, so only memory from that
+ * allocator may be written there (#1146, game_buffer.h). */
+static std::atomic<void* const*> g_memory_context_slot{nullptr};
+
 /* ── Known asset hashes ───────────────────────────────────────────── */
 
 constexpr uint64_t TYPE_DDS_TEXTURE     = 0xbeac1969cb7b8861ULL;
@@ -112,7 +119,29 @@ struct CallbackLease {
     }
 };
 
-/* Offers the game's buffer to a transform and, when it answers, points the callback at the answer. */
+/* Hands the game `bytes` as the buffer of the callback block: a copy allocated through the game's own allocator, because
+ * the game frees that buffer through it when the resource unloads. The caller keeps its bytes. Returns false, and
+ * leaves the block alone, when no copy could be made (the game keeps its own buffer). */
+static bool GiveGameACopy(uintptr_t cbd, const void* bytes, uint64_t size, const char* label, uint64_t type_hash,
+                          uint64_t name_hash) {
+    void* copy = nullptr;
+    const nevr_game_buffer::Copy result = nevr_game_buffer::CopyIntoGameHeap(
+        g_memory_context_slot.load(std::memory_order_acquire), reinterpret_cast<const unsigned char*>(cbd), bytes, size,
+        &copy);
+    if (result != nevr_game_buffer::Copy::Copied) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.RESOURCE] game-heap copy refused label=%s type=0x%016llx name=0x%016llx bytes=%llu reason=%s - the "
+            "game's own buffer is kept",
+            label, static_cast<unsigned long long>(type_hash), static_cast<unsigned long long>(name_hash),
+            static_cast<unsigned long long>(size), nevr_game_buffer::CopyName(result));
+        return false;
+    }
+    *reinterpret_cast<void**>(cbd + 0x18) = copy;
+    *reinterpret_cast<uint64_t*>(cbd + 0x20) = size;
+    return true;
+}
+
+/* Offers the game's buffer to a transform and, when it answers, points the callback at a copy of the answer. */
 static void ApplyTransform(ResourceOverride& ovr, uintptr_t cbd, uint64_t type_hash, uint64_t name_hash) {
     const void* in = *reinterpret_cast<const void**>(cbd + 0x18);
     const uint64_t inSize = *reinterpret_cast<uint64_t*>(cbd + 0x20);
@@ -135,8 +164,7 @@ static void ApplyTransform(ResourceOverride& ovr, uintptr_t cbd, uint64_t type_h
             static_cast<unsigned long long>(name_hash), static_cast<unsigned long long>(inSize));
         return;
     }
-    *reinterpret_cast<const void**>(cbd + 0x18) = out;
-    *reinterpret_cast<uint64_t*>(cbd + 0x20) = outSize;
+    if (!GiveGameACopy(cbd, out, outSize, ovr.label.c_str(), type_hash, name_hash)) return;
     Log(EchoVR::LogLevel::Info,
         "[NEVR.RESOURCE] transform applied label=%s type=0x%016llx name=0x%016llx orig_bytes=%llu new_bytes=%llu",
         ovr.label.c_str(), static_cast<unsigned long long>(type_hash), static_cast<unsigned long long>(name_hash),
@@ -174,10 +202,8 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
                         break;
                     }
 
-                    /* Match — replace the buffer */
+                    /* Match — the buffer is replaced below, outside the lock: the copy calls the game's allocator */
                     orig_size = *reinterpret_cast<uint64_t*>(cbd + 0x20);
-                    *reinterpret_cast<const void**>(cbd + 0x18) = ovr->data;
-                    *reinterpret_cast<uint64_t*>(cbd + 0x20) = ovr->size;
                     ovr->applied = true;
                     ++ovr->in_flight;
                     selected = ovr;
@@ -190,6 +216,11 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
     CallbackLease lease(selected);
     if (selected && selected->transform) {
         ApplyTransform(*selected, reinterpret_cast<uintptr_t>(callback_data), type_hash, name_hash);
+    } else if (selected && !GiveGameACopy(reinterpret_cast<uintptr_t>(callback_data), selected->data, selected->size,
+                                          selected->label.c_str(), type_hash, name_hash)) {
+        /* Not applied: the game keeps its own buffer, and the replacement is offered again on the next load. */
+        std::lock_guard<std::mutex> lock(g_overrides_mutex);
+        selected->applied = false;
     } else if (selected) {
         // Resolve both hashes to human names the same way registration does.
         char typeBuf[128], nameBuf[128];
@@ -336,6 +367,10 @@ static void EnsureHookInstalled() {
 
     void* hookTarget = reinterpret_cast<void*>(
         reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + 0xFA16D0);
+    g_memory_context_slot.store(
+        reinterpret_cast<void* const*>(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) +
+                                       nevr_game_buffer::kMemoryContextRva),
+        std::memory_order_release);
     AsyncIOCallback_fn original = nullptr;
 
     MH_STATUS cst = MH_CreateHook(hookTarget, reinterpret_cast<void*>(Hook_AsyncIOCallback),
@@ -843,6 +878,8 @@ void TestHook_SetOriginal(void (*original)(void*)) {
 void TestHook_RunResourceCallback(void* callback_data) {
     Hook_AsyncIOCallback(callback_data);
 }
+
+void TestHook_SetMemoryContextSlot(void* const* slot) { g_memory_context_slot.store(slot, std::memory_order_release); }
 
 void TestHook_CloseResourceOverrides() {
     std::lock_guard<std::mutex> lock(g_overrides_mutex);
