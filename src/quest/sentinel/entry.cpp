@@ -16,6 +16,7 @@
 #include "hook_log.h"
 #include "hook_report.h"
 #include "login_prompt_hook.h"
+#include "login_title_hook.h"
 #include "data_wiring.h"
 #include "obb_skip_hook.h"
 #include "permission_wait_hook.h"
@@ -81,7 +82,13 @@ bool InstallClockHook() noexcept {
            sentinel::GotStatus::kOk;
 }
 
-bool RegisterLoginPromptCounters() noexcept { return nevr_quest::login_prompt::RegisterCounters(); }
+// The login-failed page's title hook (#1137) is the prompt's second half: its counters register in the same step, so the
+// reporter holds both or the step reports the refusal and the prompt installs nothing.
+bool RegisterLoginPromptCounters() noexcept {
+    const bool prompt = nevr_quest::login_prompt::RegisterCounters();
+    const bool title = nevr_quest::login_title::RegisterCounters();
+    return prompt && title;
+}
 
 bool RegisterObbSkipCounters() noexcept { return nevr_quest::obb_skip::RegisterCounters(); }
 
@@ -138,6 +145,11 @@ bool InstallResourceRequestLogHook(bool countersRegistered) noexcept {
 bool InstallLoginPromptHook(bool countersRegistered) noexcept {
     return nevr_quest::login_prompt::InstallIfCounted(countersRegistered);
 }
+
+// The title of the login-failed page (#1137): installed after the game maps the page's script library, so the
+// post-load action asks again after each dlopen until it answers anything but kModuleNotLoaded. A refused install is
+// logged by GotHook and by the hook's own line and leaves the game's constructor call intact.
+sentinel::GotStatus InstallLoginTitleHook() noexcept { return nevr_quest::login_title::Install(); }
 
 }  // namespace nevr_quest::integration
 

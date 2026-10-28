@@ -24,6 +24,9 @@ inline constexpr std::size_t kMaxLines = 4;
 inline constexpr std::size_t kMaxLineChars = 63;
 inline constexpr std::size_t kCapacity = kMaxLines * kMaxLineChars + (kMaxLines - 1);
 inline constexpr int kReadAttempts = 16;
+// The title the game's login-failed page carries over the text (#1137): at most this many characters, so it fits the
+// 64-byte string the game builds its title in (string_t holds 64 bytes, NUL included).
+inline constexpr std::size_t kMaxTitleChars = 31;
 
 enum class Mode : std::uint8_t {
   // Replaces the game's message when its login fails, and refreshes a screen that shows a prompt.
@@ -39,9 +42,11 @@ enum class ReadResult {
   kBusy,    // a writer kept the buffer busy through every attempt (out is "")
 };
 
-// Makes `text` (`len` bytes, no NUL inside) the published text. Returns false and leaves the
-// board unchanged when `text` is null, `len` is 0 or above kCapacity, or `text` holds a NUL.
-bool Publish(const char* text, std::size_t len, Mode mode) noexcept;
+// Makes `text` (`len` bytes, no NUL inside) the published text, with `title` (a NUL-terminated string of 1 to
+// kMaxTitleChars characters) as the title the screen carries over it; a null `title` publishes none, and the
+// game's own title stays. Returns false and leaves the board unchanged when `text` is null, `len` is 0 or above
+// kCapacity, `text` holds a NUL, or `title` is empty or longer than kMaxTitleChars.
+bool Publish(const char* text, std::size_t len, Mode mode, const char* title = nullptr) noexcept;
 
 // Removes the published text and overwrites the buffer with zeros. Returns whether text was
 // published.
@@ -50,6 +55,11 @@ bool Withdraw() noexcept;
 // Copies the published text, NUL-terminated, into `out` (`cap` must be at least kCapacity + 1;
 // smaller reads as kEmpty). `mode` and `version` may be null.
 ReadResult Read(char* out, std::size_t cap, Mode* mode, std::uint64_t* version) noexcept;
+
+// Copies the published title, NUL-terminated, into `out` (`cap` must be at least kMaxTitleChars + 1). Returns true
+// only when a title is published and was copied whole; false (out is "") when none is published, when `cap` is too
+// small, or when a writer kept the buffer busy through every attempt. Same lock-free rules as Read().
+bool ReadTitle(char* out, std::size_t cap) noexcept;
 
 // Changes so far (each publish or withdraw adds one). Read() reports the version it copied, so a
 // reader can tell whether what it applied is still current.

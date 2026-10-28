@@ -176,6 +176,8 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
 
 INT64 RuntimeGameMain(INT64 arg1) { return GameMainWrapperHook(arg1); }
 
+unsigned long GameLoopThreadId() { return g_gameLoopThreadId.load(std::memory_order_relaxed); }
+
 void ArmGameMain(const NevrHostContext* host) {
   // The host owns the detour on the game's main wrapper (runtime/host) and calls RuntimeGameMain
   // from it, so the setjmp recovery point sits in the call chain without a second hook (N125).
