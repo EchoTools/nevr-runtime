@@ -372,22 +372,17 @@ std::cerr << "failed" << std::endl;
 
 ### `Log()` does not emit JSON, and that is a decision — not an omission
 
-`FormatJsonLogEntry` is declared in `src/core/logging.h` and defined in
-`src/core/logging.cpp`. It is called from
-nowhere in production (the only other reference is a test stub). `Log()` routes
-by boot phase: during the boot phase (Rule 12) it reports through the boot tee;
-after it, to the game's own `EchoVR::WriteLog`, falling back to
+`Log()` routes by boot phase: during the boot phase (Rule 12) it reports through
+the boot tee; after it, to the game's own `EchoVR::WriteLog`, falling back to
 `vfprintf(stderr)` only before the game logger exists.
 
 So nEVR lines go through the game's logger and appear in its stream, rather than
-being emitted as a second, parallel JSON format. Do not wire `FormatJsonLogEntry`
-into `Log()` on the assumption it was left half-done: it would double every log
-line.
+being emitted as a second, parallel JSON format: a JSON writer inside `Log()`
+would double every log line.
 
 **Structured JSONL does ship, from a different place**: the built-in filter writes
-a per-run JSONL file (`src/runtime/log/builtin_filter.cpp`), and its schema is NOT
-the one `FormatJsonLogEntry` produces — it carries a `run` field and has no
-`caller` field.
+a per-run JSONL file (`src/runtime/log/builtin_filter.cpp`), and every record
+carries a `run` field.
 
 ### Rule 8: State transitions log FROM -> TO
 
@@ -848,4 +843,4 @@ Log(EchoVR::LogLevel::Warning,
 - **`AGENTS.md`** — project conventions, `Log()` usage, subsystem architecture,
   and the C++ Mingw Addendum's structured-output rule.
 - **`src/core/logging.h`** — `Log()` and `FatalError()` declarations.
-- **`src/core/logging.cpp`** — `Log()` implementation, `FormatJsonLogEntry`.
+- **`src/core/logging.cpp`** — `Log()` implementation.

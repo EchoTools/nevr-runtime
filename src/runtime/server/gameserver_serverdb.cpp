@@ -105,9 +105,6 @@ static std::string AuthenticateServer(std::string& reason) {
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, nevr::CurlWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
-#ifdef NEVR_INSECURE_SKIP_TLS_VERIFY
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-#endif
 
     CURLcode res = curl_easy_perform(curl);
     long http_code = 0;

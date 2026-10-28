@@ -6,9 +6,6 @@
 
 #include "abi/echovr_functions.h"
 
-// Helper function to get ISO8601 timestamp
-extern std::string GetISO8601Timestamp();
-
 /// N80: stable per-process run identifier, shared by every log writer in the
 /// process so lines from different files can be correlated to one run.
 ///
@@ -24,9 +21,6 @@ extern const CHAR* GetRunId();
 
 // Helper function to get log level string
 extern const char* GetLogLevelString(EchoVR::LogLevel level);
-
-// Helper function to format JSON log entry
-extern std::string FormatJsonLogEntry(EchoVR::LogLevel level, const char* message, const char* caller = nullptr);
 
 /// The single log entry point. It routes by boot phase: while a boot sink is set it reports through
 /// that sink, otherwise through the game's CLog (EchoVR::WriteLog), or stderr before that is resolved.
