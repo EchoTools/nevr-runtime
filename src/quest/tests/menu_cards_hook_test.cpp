@@ -202,7 +202,9 @@ void Reset(const std::string& pin, bool withContext = true) {
   mc::ArmForTest(g_pinStorage.c_str(), withContext ? &g_contextPointer : nullptr);
 }
 
-constexpr std::uint64_t kPage = nevr_menu_cards::kPageType, kName = nevr_menu_cards::kPageName;
+// The Quest page is matched by its name alone (the class the Quest callback reports is not known yet); kPage is the class a
+// PC-like resource would carry and is used only as a plausible value.
+constexpr std::uint64_t kPage = nevr_menu_cards::kPageType, kName = nevr_menu_cards::kQuestPageName;
 
 // ---- tests -----------------------------------------------------------------------------------------
 
@@ -301,8 +303,8 @@ void OnlyTheMainMenuPageInItsFinishedPrimaryBufferIsOffered() {
   };
   const Case cases[] = {
       {"status not done", 5, 0, kPage, kName},     {"status zero", 0, 0, kPage, kName},
-      {"secondary buffer", 4, 1, kPage, kName},    {"another class", 4, 0, kPage ^ 1, kName},
-      {"another name", 4, 0, kPage, kName ^ 1},
+      {"secondary buffer", 4, 1, kPage, kName},    {"another name", 4, 0, kPage, kName ^ 1},
+      {"the PC page name", 4, 0, kPage, nevr_menu_cards::kPageName},
   };
   for (const Case& c : cases) {
     Reset(Sha(page));
@@ -450,23 +452,104 @@ void ConcurrentLoadsAllGetTheSamePage() {
   QCHECK(mc::CurrentTotals().swapped == 161);
 }
 
-void TheFirstDistinctResourcesAreNamedOnceEach() {
+void ThePageIsRecognisedByItsNameWhateverTheClass() {
+  std::vector<unsigned char> page = StockPage();
+  const std::uint64_t classes[] = {kPage, 0x1234, 0, ~0ull};
+  for (const std::uint64_t cls : classes) {
+    Reset(Sha(page));
+    Block block;
+    Resource res;
+    Fill(block, res, 4, 0, page.data(), page.size(), &g_alloc, 0x10, cls, kName);
+    QCHECK(Call(block) == kCallbackResult);
+    QCHECK(g_seen.buffer != page.data() && g_seen.size > page.size() && mc::CurrentTotals().swapped == 1);
+    const std::vector<std::string> lines = Lines("menu_cards_page");
+    QCHECK(lines.size() == 1);
+    if (!lines.empty()) {
+      char hex[19];
+      std::snprintf(hex, sizeof(hex), "0x%016llx", static_cast<unsigned long long>(cls));
+      QCHECK(Field(lines[0], "class") == std::string("\"") + hex + "\"");
+      QCHECK(Field(lines[0], "name") == "\"0xf927772b9e2aefb1\"");
+    }
+  }
+}
+
+void EachResourceClassIsNamedOnceUpToItsBound() {
   Reset("");
   std::vector<unsigned char> bytes(16, 0);
   for (int round = 0; round < 2; ++round) {
-    for (std::uint64_t i = 0; i < mc::kTypeLines + 4; ++i) {
-      Block block;
-      Resource res;
-      Fill(block, res, 4, 0, bytes.data(), bytes.size(), &g_alloc, 0x10, 0x1000 + i, 0x2000 + i);
-      Call(block);
+    for (std::uint64_t i = 0; i < mc::kClassLines + 4; ++i) {
+      for (std::uint64_t n = 0; n < 3; ++n) {  // three names of the same class: still one class line
+        Block block;
+        Resource res;
+        Fill(block, res, 4, 0, bytes.data(), bytes.size(), &g_alloc, 0x10, 0x1000 + i, 0x2000 + n);
+        Call(block);
+      }
     }
   }
-  const std::vector<std::string> lines = Lines("menu_cards_resource");
-  QCHECK(lines.size() == mc::kTypeLines);
+  const std::vector<std::string> lines = Lines("menu_cards_class");
+  QCHECK(lines.size() == mc::kClassLines);
   if (!lines.empty()) {
     QCHECK(Field(lines[0], "class") == "\"0x0000000000001000\"" && Field(lines[0], "name") == "\"0x0000000000002000\"");
     QCHECK(Field(lines[0], "bytes") == "16");
   }
+  QCHECK(Lines("menu_cards_resource").empty());  // none of them is as large as a page
+}
+
+void AClassOfSevenTexturesDoesNotHideTheNextClass() {
+  // The headset run that found the page filled the old eight-line listing with seven textures of one class.
+  Reset("");
+  std::vector<unsigned char> bytes(16, 0);
+  for (std::uint64_t n = 0; n < 7; ++n) {
+    Block block;
+    Resource res;
+    Fill(block, res, 4, 0, bytes.data(), bytes.size(), &g_alloc, 0x10, 0xb3ebe9e0bf0eb81fULL, 0x100 + n);
+    Call(block);
+  }
+  Block block;
+  Resource res;
+  Fill(block, res, 4, 0, bytes.data(), bytes.size(), &g_alloc, 0x10, 0x857497d08cb4096bULL, 0x1);
+  Call(block);
+  const std::vector<std::string> lines = Lines("menu_cards_class");
+  QCHECK(lines.size() == 2);
+  if (lines.size() == 2) QCHECK(Field(lines[1], "class") == "\"0x857497d08cb4096b\"");
+}
+
+void APageSizedResourceIsNamedWhateverItsNameUpToItsBound() {
+  Reset("");
+  std::vector<unsigned char> big(81160, 0);
+  for (int round = 0; round < 2; ++round) {
+    for (std::uint64_t i = 0; i < mc::kBandLines + 4; ++i) {
+      Block block;
+      Resource res;
+      Fill(block, res, 4, 0, big.data(), big.size(), &g_alloc, 0x10, 0x77, 0x9000 + i);
+      Call(block);
+    }
+  }
+  const std::vector<std::string> lines = Lines("menu_cards_resource");
+  QCHECK(lines.size() == mc::kBandLines);
+  if (!lines.empty()) {
+    QCHECK(Field(lines[0], "class") == "\"0x0000000000000077\"" && Field(lines[0], "name") == "\"0x0000000000009000\"");
+    QCHECK(Field(lines[0], "bytes") == "81160");
+  }
+  // The band's two edges are listed; just outside it is not.
+  Reset("");
+  std::vector<unsigned char> atMin(mc::kBandMin, 0), atMax(mc::kBandMax, 0);
+  Block edge;
+  Resource edgeRes;
+  Fill(edge, edgeRes, 4, 0, atMin.data(), atMin.size(), &g_alloc, 0x10, 0x1, 0x2);
+  Call(edge);
+  Fill(edge, edgeRes, 4, 0, atMax.data(), atMax.size(), &g_alloc, 0x10, 0x1, 0x3);
+  Call(edge);
+  QCHECK(Lines("menu_cards_resource").size() == 2);
+  Reset("");
+  std::vector<unsigned char> small(mc::kBandMin - 1, 0), large(mc::kBandMax + 1, 0);
+  Block block;
+  Resource res;
+  Fill(block, res, 4, 0, small.data(), small.size(), &g_alloc, 0x10, 0x1, 0x2);
+  Call(block);
+  Fill(block, res, 4, 0, large.data(), large.size(), &g_alloc, 0x10, 0x1, 0x3);
+  Call(block);
+  QCHECK(Lines("menu_cards_resource").empty());
 }
 
 void ARepeatedResourceIsNamedOnce() {
@@ -478,7 +561,7 @@ void ARepeatedResourceIsNamedOnce() {
     Fill(block, res, 4, 0, bytes.data(), bytes.size(), &g_alloc, 0x10, 0x1234, 0x5678);
     Call(block);
   }
-  QCHECK(Lines("menu_cards_resource").size() == 1);
+  QCHECK(Lines("menu_cards_class").size() == 1);
   QCHECK(mc::CurrentTotals().deliveries == 5);
 }
 
@@ -506,7 +589,10 @@ int main() {
   AFailedAllocationLeavesTheBlockAsItWas();
   EveryLoadGetsItsOwnCopyOfThePageBuiltOnce();
   ConcurrentLoadsAllGetTheSamePage();
-  TheFirstDistinctResourcesAreNamedOnceEach();
+  ThePageIsRecognisedByItsNameWhateverTheClass();
+  EachResourceClassIsNamedOnceUpToItsBound();
+  AClassOfSevenTexturesDoesNotHideTheNextClass();
+  APageSizedResourceIsNamedWhateverItsNameUpToItsBound();
   ARepeatedResourceIsNamedOnce();
   TheQuestPinIsAWellFormedDigestOrEmpty();
   sentinel::SetLogSink(nullptr);

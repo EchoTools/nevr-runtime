@@ -29,14 +29,20 @@ std::atomic<unsigned long long> g_deliveries{0};
 std::atomic<unsigned long long> g_pages{0};
 std::atomic<unsigned long long> g_swapped{0};
 
-// The first kTypeLines distinct (class, name) pairs of finished primary buffers. A pair is claimed by fetch_add; two
-// threads racing on the same new pair can each log it once, which only costs a line.
+// Two bounded diagnostics over finished primary buffers. A key is claimed by fetch_add; two threads racing on the same new
+// key can each log it once, which only costs a line.
+//   classes: the first delivery of each resource class (kClassLines of them), so a run shows what the Quest calls its
+//            resource classes whatever else is loaded around them;
+//   band:    the first delivery of each (class, name) whose primary buffer is as large as a UI page, so the page shows up
+//            under whatever name and class the Quest gives it.
 struct SeenPair {
   std::atomic<std::uint64_t> classSymbol{0};
   std::atomic<std::uint64_t> nameSymbol{0};
 };
-SeenPair g_seen[kTypeLines];
-std::atomic<unsigned> g_seenCount{0};
+SeenPair g_seenClasses[kClassLines];
+std::atomic<unsigned> g_seenClassCount{0};
+SeenPair g_seenBand[kBandLines];
+std::atomic<unsigned> g_seenBandCount{0};
 
 // What FreeResource will release buffer 0 through: the allocator at context + 0x10, or null before the game has one.
 void* ReleaseAllocator() noexcept {
@@ -47,23 +53,37 @@ void* ReleaseAllocator() noexcept {
   return Load<void*>(context, kContextAllocatorOffset);
 }
 
-void NoteResource(const Delivery& d) noexcept {
-  const unsigned known = g_seenCount.load(std::memory_order_acquire);
-  for (unsigned i = 0; i < known && i < kTypeLines; ++i) {
-    if (g_seen[i].classSymbol.load(std::memory_order_relaxed) == d.classSymbol &&
-        g_seen[i].nameSymbol.load(std::memory_order_relaxed) == d.nameSymbol) {
-      return;
+// True the first time `key` is offered (while the table has room), recording it.
+bool Claim(SeenPair* table, std::atomic<unsigned>& count, unsigned capacity, const Delivery& d, bool byClassOnly) noexcept {
+  const unsigned known = count.load(std::memory_order_acquire);
+  for (unsigned i = 0; i < known && i < capacity; ++i) {
+    if (table[i].classSymbol.load(std::memory_order_relaxed) == d.classSymbol &&
+        (byClassOnly || table[i].nameSymbol.load(std::memory_order_relaxed) == d.nameSymbol)) {
+      return false;
     }
   }
-  const unsigned slot = g_seenCount.fetch_add(1, std::memory_order_acq_rel);
-  if (slot >= kTypeLines) return;
-  g_seen[slot].classSymbol.store(d.classSymbol, std::memory_order_relaxed);
-  g_seen[slot].nameSymbol.store(d.nameSymbol, std::memory_order_relaxed);
+  const unsigned slot = count.fetch_add(1, std::memory_order_acq_rel);
+  if (slot >= capacity) return false;
+  table[slot].classSymbol.store(d.classSymbol, std::memory_order_relaxed);
+  table[slot].nameSymbol.store(d.nameSymbol, std::memory_order_relaxed);
+  return true;
+}
+
+void NoteResource(const Delivery& d) noexcept {
   char classHex[19], nameHex[19];
-  sentinel::LogFields(sentinel::LogLevel::kInfo, "menu_cards_resource",
-                      {{"class", sentinel::HexString(classHex, d.classSymbol)},
-                       {"name", sentinel::HexString(nameHex, d.nameSymbol)},
-                       {"bytes", d.size}});
+  if (Claim(g_seenClasses, g_seenClassCount, kClassLines, d, /*byClassOnly=*/true)) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "menu_cards_class",
+                        {{"class", sentinel::HexString(classHex, d.classSymbol)},
+                         {"name", sentinel::HexString(nameHex, d.nameSymbol)},
+                         {"bytes", d.size}});
+  }
+  if (d.size >= kBandMin && d.size <= kBandMax &&
+      Claim(g_seenBand, g_seenBandCount, kBandLines, d, /*byClassOnly=*/false)) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "menu_cards_resource",
+                        {{"class", sentinel::HexString(classHex, d.classSymbol)},
+                         {"name", sentinel::HexString(nameHex, d.nameSymbol)},
+                         {"bytes", d.size}});
+  }
 }
 
 // The page served for the pinned stock page: built once, kept for the life of the process (the game keeps reading
@@ -96,12 +116,18 @@ struct Served {
 // Hashes the delivered page, compares it with the pin and builds the page with the cards. Runs before any game code
 // (the handler calls the game's allocator only after it returns) and calls none: it may allocate, and carries a
 // personality (outside_game_call.h).
-NEVR_OUTSIDE_GAME_CALL Served PrepareCards(const unsigned char* page, std::size_t size) noexcept {
+NEVR_OUTSIDE_GAME_CALL Served PrepareCards(const unsigned char* page, std::size_t size, std::uint64_t classSymbol,
+                                           std::uint64_t nameSymbol) noexcept {
   const std::string sha = nevr_quest::data::Sha256Hex(page, size);
   const char* const pin = g_pin.load(std::memory_order_acquire);
   const char* const pinState = pin[0] == '\0' ? "unset" : (sha == pin ? "match" : "mismatch");
+  char classHex[19], nameHex[19];
   sentinel::LogFields(sentinel::LogLevel::kInfo, "menu_cards_page",
-                      {{"bytes", size}, {"sha256", sha.c_str()}, {"pin", pinState}});
+                      {{"class", sentinel::HexString(classHex, classSymbol)},
+                       {"name", sentinel::HexString(nameHex, nameSymbol)},
+                       {"bytes", size},
+                       {"sha256", sha.c_str()},
+                       {"pin", pinState}});
 
   Cache& cache = TheCache();
   std::lock_guard<std::mutex> lock(cache.mutex);
@@ -124,13 +150,15 @@ void Offer(unsigned char* data) noexcept {
   const Delivery d = Inspect(data);
   if (!IsFinishedPrimary(d)) return;
   NoteResource(d);
-  if (d.classSymbol != nevr_menu_cards::kPageType || d.nameSymbol != nevr_menu_cards::kPageName) return;
+  // By name alone: the class the Quest callback reports for the page is not known yet (the log carries it), and the
+  // bytes are still pinned by digest before anything is served.
+  if (d.nameSymbol != nevr_menu_cards::kQuestPageName) return;
   g_pages.fetch_add(1, std::memory_order_relaxed);
   if (d.size > nevr_menu_page::kMaxResourceBytes) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "menu_cards_skip", {{"reason", "page_too_large"}, {"bytes", d.size}});
     return;
   }
-  const Served served = PrepareCards(d.buffer, static_cast<std::size_t>(d.size));
+  const Served served = PrepareCards(d.buffer, static_cast<std::size_t>(d.size), d.classSymbol, d.nameSymbol);
   if (served.bytes == nullptr) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "menu_cards_skip", {{"reason", served.why}});
     return;
@@ -185,8 +213,13 @@ void ResetForTest() noexcept {
   g_deliveries.store(0, std::memory_order_relaxed);
   g_pages.store(0, std::memory_order_relaxed);
   g_swapped.store(0, std::memory_order_relaxed);
-  g_seenCount.store(0, std::memory_order_relaxed);
-  for (SeenPair& p : g_seen) {
+  g_seenClassCount.store(0, std::memory_order_relaxed);
+  g_seenBandCount.store(0, std::memory_order_relaxed);
+  for (SeenPair& p : g_seenClasses) {
+    p.classSymbol.store(0, std::memory_order_relaxed);
+    p.nameSymbol.store(0, std::memory_order_relaxed);
+  }
+  for (SeenPair& p : g_seenBand) {
     p.classSymbol.store(0, std::memory_order_relaxed);
     p.nameSymbol.store(0, std::memory_order_relaxed);
   }

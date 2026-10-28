@@ -28,6 +28,12 @@ namespace nevr_menu_cards {
 /// (`0x4a3fe67c1ff9ccc4`), which the callback never shows.
 inline constexpr uint64_t kPageType = EchoVR::CSymbol64Hash("CR15UIPage2CR");
 inline constexpr uint64_t kPageName = 0xac360e41e4ede056ULL;
+/// The Quest build requests its main-menu page under `mnu_master_lowspec`: a headset run (dev APK 5.16.2-dev.12) logged
+/// one 81160-byte primary-buffer request for it per menu load (type 0x43433aacbeeab166, name below; 81160 is also the
+/// byte count of the PC page), and the repository's symbol cache names it (src/runtime/log/symcache_data.cpp). The
+/// Quest class symbol the loader callback reports for it is not known yet, so the Quest hook matches the name alone and
+/// logs the class.
+inline constexpr uint64_t kQuestPageName = 0xf927772b9e2aefb1ULL;
 /// The page of the main menu inside that resource.
 inline constexpr uint64_t kMainMenuPage = 24;
 
