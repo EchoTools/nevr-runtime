@@ -491,7 +491,7 @@ class ReleaseStagesTest(PackageFixture):
         self.assertEqual(texts["SIGNING.txt"].count("quest-diagnose.ps1"), 2)
         # The README section says what the diagnose zip holds and where to send it (#750).
         for needle in ("-File quest-diagnose.ps1", "nevr-diagnose-YYYYMMDDTHHMMSSZ.zip", "crash dumps",
-                       "Wi-Fi name", "numeric user ids", "sprockee on the EchoVRCE Discord",
+                       "Wi-Fi name", "numeric user ids", "Do not attach it to a public GitHub issue",
                        "never in a public channel"):
             self.assertIn(needle, texts["README.txt"], needle)
         # No sentence may be false in a package built anywhere: not "built by CI", not "UNSIGNED".
@@ -522,19 +522,20 @@ class ReleaseStagesTest(PackageFixture):
         section = readme.split("Running a dedicated server\n", 1)[1].split("\nUpdate\n", 1)[0]
         prose = " ".join(section.split())  # the README wraps lines; a phrase may break across one
         for needle in (r".\echovr_server.exe", "-server -headless -no-console", r"_local\config.yaml",
-                       "services.socket_uri", "issue #843", "auth.password", "never in the socket_uri",
-                       "refresh token", "registration successful", "Graceful shutdown initiated",
+                       "services.socket_uri", "issue #843", "auth.password", "The password goes in auth.password",
+                       "refresh token", "requested game server registration", "Received registration success",
+                       "Graceful shutdown initiated",
                        "services.allow_offline_server"):
             self.assertIn(needle, prose, needle)
         block = [l for l in section.splitlines() if l.startswith("       ") and not l.startswith("       .\\")]
         config = yaml.safe_load("\n".join(l[7:] for l in block))
         paths = {f"{top}.{key}" for top, body in config.items() for key in body}
-        self.assertEqual(paths, {"services.socket_uri", "auth.http_uri", "auth.http_key",
-                                 "auth.password", "identity.discord_id"})
+        # #843 / #1035: the service addresses and key come from the build, so the smallest config is the account only.
+        self.assertEqual(paths, {"auth.password", "identity.discord_id"})
         mapped = set(re.findall(r'\{"[a-z_]+", "([a-z_]+\.[a-z_]+)"\}',
                                 (REPO / "src/runtime/lifecycle/service_map.cpp").read_text(encoding="utf-8")))
         self.assertEqual(paths - mapped, set(), "the README config names a key service_map.cpp does not map")
-        self.assertNotRegex(config["services"]["socket_uri"], r"[?&]|@", "no credential rides in the URI")
+        self.assertNotRegex(prose, r"(wss?|https?)://\S*[?&@]", "no credential rides in a service address")
 
     def test_the_repository_readme_that_ships_in_the_dist_zips_makes_no_signing_fact(self):
         # README.md is copied into nevr-runtime-vX.Y.Z.zip, which is attested and never

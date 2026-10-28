@@ -32,24 +32,20 @@ Running a dedicated server
   (...\ready-at-dawn-echo-arena\bin\win10) and run it from a console there:
        .\echovr_server.exe
   It starts echovr.exe -server -headless -no-console from its own folder and passes any arguments on. A server
-  has no built-in service settings yet (issue #843), so it needs a config file that sets services.socket_uri,
-  and without one it exits.
+  takes the game service's addresses and public API key from the build, as a player's game does (issue #843),
+  so its config file needs only its own account.
   Create ...\ready-at-dawn-echo-arena\_local\config.yaml. The smallest one that works:
 
-       services:
-         socket_uri: "wss://<the game service's websocket address>"
        auth:
-         http_uri: "https://<the game service's http address>"
-         http_key: "<the service's public API key>"
          password: "<the password of your server account>"
        identity:
          discord_id: "<the Discord id of your server account>"
 
-  The two addresses and the public API key are the ones every client has built in; ask the service operator
-  for them. A server does not read auth.server_key. The password goes in auth.password, never in the
-  socket_uri. A server signs in with the account's refresh token when it has one, and with auth.password
-  otherwise. The server logs in, registers with the game service and logs "registration successful"; every
-  step is in the log (see Logs). Stop it with Ctrl+C in its console: the log then says "Graceful shutdown
+  The password goes in auth.password. A server does not read auth.server_key. A server signs in with the
+  account's refresh token when it has one, and with auth.password otherwise. To run it against another service,
+  set services.socket_uri, auth.http_uri and auth.http_key in the same file too. The server logs in, registers
+  with the game service, and logs "requested game server registration" and then "Received registration success
+  via protobuf"; every step is in the log (see Logs). Stop it with Ctrl+C in its console: the log then says "Graceful shutdown
   initiated". services.socket_uri: "" with services.allow_offline_server: true starts a server with no service at all (it never
   registers); docs/reference/example-config.yaml in the source repository lists every key.
 
@@ -78,7 +74,9 @@ If the Quest build will not start
   the game once. It does not copy your sign-in link. It replaces the headset's serial numbers and any e-mail
   address with <device-serial> and <email>, and masks nothing else: the zip holds the runtime's crash dumps as
   they are and the headset's whole system log, which can show your Wi-Fi name, its BSSID, IP addresses and numeric user ids.
-  Send the zip by direct message to sprockee on the EchoVRCE Discord, never in a public channel.
+  Describe the problem on the Beta bug report form, https://github.com/EchoTools/nevr-runtime/issues/new?template=beta-bug.yml.
+  Do not attach it to a public GitHub issue; send it to a maintainer by direct message on the EchoVRCE Discord. It holds
+  your Wi-Fi name, IP addresses and numeric user ids, and it is never in a public channel.
 
 Signing
   SIGNING.txt in this package says how to check whether each file is signed. A file that is not signed may be

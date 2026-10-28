@@ -9,6 +9,8 @@
 
 #include <cstdio>
 
+#include "quest/login/login_standin.h"
+
 #include "quest/login/login_prerequisite_thunks.h"
 #include "quest/login/login_prerequisites.h"
 #include "quest/sentinel/hook_install.h"
@@ -23,6 +25,11 @@ bool Ready() noexcept { return true; }
 int g_lines = 0;
 bool g_sawPartial = false;
 bool g_sawResidual = false;
+bool g_sawUserIdInstallFields = false;
+int g_userIdLines = 0;
+bool g_userIdStandIn = false;
+bool g_userIdKeptZero = false;
+const char* g_userIdReason = nullptr;
 bool Contains(const char* line, const char* needle) {
   for (const char* s = line; *s != '\0'; ++s) {
     const char* a = s;
@@ -39,6 +46,20 @@ void Sink(sentinel::LogLevel, const char* line) {
   ++g_lines;
   if (Contains(line, "\"partial\"")) g_sawPartial = true;
   if (Contains(line, "quest_login_prerequisites_residual")) g_sawResidual = true;
+  if (Contains(line, "quest_login_prerequisites_install") && Contains(line, "\"logged_in_user_id\":0") &&
+      Contains(line, "\"social_facade\":\"not_installed\"")) {
+    g_sawUserIdInstallFields = true;
+  }
+  if (Contains(line, "quest_logged_in_user_id")) {
+    ++g_userIdLines;
+    g_userIdStandIn = Contains(line, "\"answer\":\"stand_in\"");
+    g_userIdKeptZero = Contains(line, "\"answer\":\"zero\"");
+    g_userIdReason = nullptr;
+    if (Contains(line, "\"reason\":\"sdk_nonzero\"")) g_userIdReason = "sdk_nonzero";
+    if (Contains(line, "\"reason\":\"local_answers_off\"")) g_userIdReason = "local_answers_off";
+    if (Contains(line, "\"reason\":\"social_facade_not_installed\"")) g_userIdReason = "social_facade_not_installed";
+    if (Contains(line, "\"reason\":\"sdk_zero\"")) g_userIdReason = "sdk_zero";
+  }
 }
 
 // A real "is-error" the configured-but-off handler can call; it is never reached when substitution
@@ -51,6 +72,15 @@ std::uint64_t FakeEntitlementOriginal() {
   ++g_entitlementOriginalCalls;
   return 0xBEEF;  // a request id the SDK would have returned
 }
+// ovr_GetLoggedInUserID: what the SDK answers is set per case.
+std::uint64_t g_sdkUserId = 0;
+int g_userIdOriginalCalls = 0;
+std::uint64_t FakeLoggedInUserIdOriginal() {
+  ++g_userIdOriginalCalls;
+  return g_sdkUserId;
+}
+NEVR_HOOK_RECORD(kTestUserIdHook, nevr_quest_login::LoggedInUserIdThunk, &nevr_quest_login::OnLoggedInUserId);
+
 NEVR_HOOK_RECORD(kTestEntitlementHook, nevr_quest_login::EntitlementRequestThunk, &nevr_quest_login::OnEntitlementRequest);
 
 // The org-id request: the real handler behind a recorder that keeps the caller the thunk handed it, so the test
@@ -94,6 +124,8 @@ int main() {
   sentinel::ElfImage dummy{};  // base 0, no program headers: every slot resolution fails
   const nevr_quest_login::PrerequisiteInstall r = nevr_quest_login::InstallLoginPrerequisites(dummy, &Ready, nullptr, nullptr);
   QCHECK(r.callbacks == 0 && r.accessors == 0 && r.requests == 0 && !r.substitute);
+  QCHECK(r.user_id == 0);  // no libpnsovr.so: the ovr_GetLoggedInUserID slot is not hooked either
+  QCHECK(g_sawUserIdInstallFields);  // the summary says so, and whether the facade's hook is in
   QCHECK(g_sawPartial);
   QCHECK(!g_sawResidual);  // only a substituting install warns about residuals
   const int linesAfterFirst = g_lines;
@@ -141,6 +173,74 @@ int main() {
     QCHECK(g_lines == linesBefore);           // the handler never logs
     Thunk::Disarm();
     Thunk::Reset();
+  }
+
+  // #944: ovr_GetLoggedInUserID. A nonzero id is the SDK's, always; a zero is stood in only with local answers on
+  // AND the social facade installed (every reader of the id covered), else the game keeps its zero and fails as
+  // before. One record, on the first call. Driven through the real thunk entry the slot would point at.
+  {
+    namespace L = nevr_quest_login::local;
+    namespace SI = nevr_quest_login::StandIn;
+    using Thunk = nevr_quest_login::LoggedInUserIdThunk;
+    using Entry = std::uint64_t (*)();
+    Thunk::Reset();
+    *Thunk::OriginalOut() = reinterpret_cast<void*>(&FakeLoggedInUserIdOriginal);
+    Thunk::Arm(kTestUserIdHook);
+    Entry entry = nullptr;
+    void* address = Thunk::EntryAddress();
+    __builtin_memcpy(&entry, &address, sizeof(entry));
+    SI::Generate();
+    QCHECK(SI::UserId() != 0);
+
+    // A real id passes through unchanged, whatever the gates say; the record names it.
+    nevr_quest_login::ResetPrerequisitesForTest();
+    L::SetEnabled(true);
+    L::SetSocialFacadeInstalled(true);
+    g_userIdLines = 0;
+    g_sdkUserId = 0x1234567;
+    QCHECK(entry() == 0x1234567);
+    QCHECK(g_userIdLines == 1 && !g_userIdStandIn && g_userIdReason != nullptr &&
+           __builtin_strcmp(g_userIdReason, "sdk_nonzero") == 0);
+    QCHECK(nevr_quest_login::LoggedInUserIdStandIns() == 0);
+
+    // Zero, every reader covered: the stand-in, counted, one record.
+    nevr_quest_login::ResetPrerequisitesForTest();
+    L::SetEnabled(true);
+    L::SetSocialFacadeInstalled(true);
+    g_userIdLines = 0;
+    g_sdkUserId = 0;
+    const std::uint64_t answered = entry();
+    QCHECK(answered != 0 && SI::IsUserId(answered));
+    QCHECK(g_userIdLines == 1 && g_userIdStandIn && g_userIdReason != nullptr &&
+           __builtin_strcmp(g_userIdReason, "sdk_zero") == 0);
+    QCHECK(nevr_quest_login::LoggedInUserIdStandIns() == 1);
+    QCHECK(entry() == answered);  // a second call answers the same and writes no second record
+    QCHECK(g_userIdLines == 1);
+    QCHECK(nevr_quest_login::LoggedInUserIdStandIns() == 2);
+
+    // Zero with local answers off: the org-id requests that take the id would reach the SDK, so the zero stays.
+    nevr_quest_login::ResetPrerequisitesForTest();
+    L::SetSocialFacadeInstalled(true);
+    g_userIdLines = 0;
+    QCHECK(entry() == 0);
+    QCHECK(g_userIdLines == 1 && g_userIdKeptZero && g_userIdReason != nullptr &&
+           __builtin_strcmp(g_userIdReason, "local_answers_off") == 0);
+    QCHECK(nevr_quest_login::LoggedInUserIdStandIns() == 0);
+
+    // Zero with the social facade not installed: CNSOVRSocial would read the id, so the zero stays.
+    nevr_quest_login::ResetPrerequisitesForTest();
+    L::SetEnabled(true);
+    g_userIdLines = 0;
+    QCHECK(!L::SocialFacadeInstalled());  // the reset clears it: it defaults to not installed
+    QCHECK(entry() == 0);
+    QCHECK(g_userIdLines == 1 && g_userIdKeptZero && g_userIdReason != nullptr &&
+           __builtin_strcmp(g_userIdReason, "social_facade_not_installed") == 0);
+
+    QCHECK(g_userIdOriginalCalls == 5);  // the SDK is always asked first
+    QCHECK(Thunk::Calls() == 5);         // prereq_user_id_calls
+    Thunk::Disarm();
+    Thunk::Reset();
+    nevr_quest_login::ResetPrerequisitesForTest();
   }
 
   // #431: ovr_User_GetOrgScopedID is called by the login (three sites) and by CNSOVRSocial (nine). Driven through
