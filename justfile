@@ -1716,6 +1716,7 @@ test-quest-autopilot:
     timeout 60 "$out/autopilot_run_test" "$out/scratch" start_file
     timeout 60 "$out/autopilot_run_test" "$out/scratch" stopped
     timeout 60 "$out/autopilot_run_test" "$out/scratch" stopped_waiting
+    timeout 60 "$out/autopilot_run_test" "$out/scratch" fd_zero
     echo "test-quest-autopilot: all autopilot tests pass on the host"
 
 # The integration's pinned dlopen target against the real libr15.so (docs/adr/0003). Extracts it from the

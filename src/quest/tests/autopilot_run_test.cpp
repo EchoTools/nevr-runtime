@@ -6,6 +6,8 @@
 // Built and run by `just test-quest-autopilot`.
 
 #include <dirent.h>
+#include <fcntl.h>
+#include <link.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -13,6 +15,7 @@
 #include <cerrno>
 #include <cmath>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -766,15 +769,70 @@ int ChildStoppedWaiting() {
   return quest_test::Failures() == 0 ? 0 : 1;
 }
 
+// The library carries its NEVR build-ID note, which the Quest loader refuses a plugin without (build_ids_undeclared):
+// read from this program's own PT_NOTE segments, where plugin.cpp's note is linked.
+void TheImageDeclaresItsBuildIds() {
+  struct Found {
+    bool seen = false;
+    std::string desc;
+  } found;
+  dl_iterate_phdr(
+      [](dl_phdr_info* info, std::size_t, void* data) -> int {
+        if (info->dlpi_name != nullptr && info->dlpi_name[0] != '\0') return 0;  // the main program only
+        Found* f = static_cast<Found*>(data);
+        for (int i = 0; i < info->dlpi_phnum; ++i) {
+          const ElfW(Phdr)& ph = info->dlpi_phdr[i];
+          if (ph.p_type != PT_NOTE) continue;
+          const unsigned char* at = reinterpret_cast<const unsigned char*>(info->dlpi_addr + ph.p_vaddr);
+          const unsigned char* const end = at + ph.p_memsz;
+          while (end - at >= static_cast<std::ptrdiff_t>(sizeof(ElfW(Nhdr)))) {
+            ElfW(Nhdr) n;
+            std::memcpy(&n, at, sizeof n);
+            const unsigned char* name = at + sizeof n;
+            const std::size_t nameLen = (n.n_namesz + 3u) & ~std::size_t{3};
+            const std::size_t descLen = (n.n_descsz + 3u) & ~std::size_t{3};
+            if (static_cast<std::size_t>(end - name) < nameLen + descLen) break;
+            if (n.n_type == 1 && n.n_namesz == 5 && std::memcmp(name, "NEVR", 5) == 0) {
+              f->seen = true;
+              f->desc.assign(reinterpret_cast<const char*>(name + nameLen), n.n_descsz);
+            }
+            at = name + nameLen + descLen;
+          }
+        }
+        return 1;
+      },
+      &found);
+  QCHECK(found.seen);
+  QCHECK(found.desc == NEVR_AUTOPILOT_BUILD_IDS);
+}
+
+// With stdin closed the wake eventfd is descriptor 0, a valid one: a refused init closes it, and an init that gets it
+// runs the route.
+int ChildFdZero() {
+  const std::string path = WriteRoute("zero.txt", "autopilot-route 1\nname zero\nstep 0.2 left.grip=1\n");
+  const NvrGameContext ctx = Context(&kApi);
+  ::close(0);
+  QCHECK(ap::plugin::InitWith(&ctx, Args(path).c_str(), kNoThread) == 1);
+  QCHECK(::fcntl(0, F_GETFD) == -1 && errno == EBADF);
+  QCHECK(ap::plugin::InitWith(&ctx, Args(path).c_str(), ap::plugin::RealOs()) == 0);
+  char target[64] = {};
+  QCHECK(::readlink("/proc/self/fd/0", target, sizeof target - 1) > 0);
+  QCHECK(std::strcmp(target, "anon_inode:[eventfd]") == 0);
+  QCHECK(DriveUntil("route_end", 3000));
+  ap::plugin::Shutdown();
+  return quest_test::Failures() == 0 ? 0 : 1;
+}
+
 int main(int argc, char** argv) {
   if (argc < 2) {
-    std::fprintf(stderr, "usage: autopilot_run_test <scratch dir> [start_file|stopped|stopped_waiting]\n");
+    std::fprintf(stderr, "usage: autopilot_run_test <scratch dir> [start_file|stopped|stopped_waiting|fd_zero]\n");
     return 2;
   }
   g_dir = argv[1];
   if (argc == 3 && std::strcmp(argv[2], "start_file") == 0) return ChildStartFile();
   if (argc == 3 && std::strcmp(argv[2], "stopped") == 0) return ChildStopped();
   if (argc == 3 && std::strcmp(argv[2], "stopped_waiting") == 0) return ChildStoppedWaiting();
+  if (argc == 3 && std::strcmp(argv[2], "fd_zero") == 0) return ChildFdZero();
   TheRouteDrivesOnlyItsHandsAndOnlyWhileItRuns();
   AnUnknownHandIsCountedAndNeverDriven();
   TheStartWaitsForTheTrigger();
@@ -784,6 +842,7 @@ int main(int argc, char** argv) {
   TheRingKeepsOrderAcrossWraps();
   TheRingTakesTwoProducers();
   ThePluginNamesItself();
+  TheImageDeclaresItsBuildIds();
   InitRefusesWhatItCannotRun();
   EachHostRefusalIsNamedAndTheReporterJoined();
   RouteLoadedDescribesTheRoute();
