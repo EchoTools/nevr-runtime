@@ -295,3 +295,92 @@ fn an_install_that_cannot_start_changing_anything_exits_1_unchanged() {
     assert_eq!(std::fs::read(w.game.path().join("BugSplat64.dll")).unwrap(), GAME);
     assert!(!w.nevr.path().join("nevr-runtime.dll").exists());
 }
+
+// A log that stops accepting writes part-way through a run (a disk that fills, a size limit): the shape is a per-file size
+// limit (`ulimit -f`, SIGXFSZ ignored so the write fails with EFBIG instead of killing the process). The log file is padded
+// so the limit falls just before the record named by `target`; every record before it is written and that one and the rest
+// are lost. A probe world runs the same scenario with a healthy log to find where the record sits.
+
+fn setup_failing_host_write(w: &World) {
+    use std::os::unix::fs::PermissionsExt;
+    // The game folder refuses the host's temporary file, so the host write fails after the runtime was written.
+    std::fs::set_permissions(w.game.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+}
+
+fn reopen_game_folder(w: &World) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(w.game.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Bytes of log written before the first record named `target` in a healthy run of the scenario.
+fn log_bytes_before(target: &str, scenario: fn(&World)) -> usize {
+    let probe = world(false);
+    scenario(&probe);
+    let _ = run(&probe, &["pc", "install", "--dir", probe.game.path().to_str().unwrap()]);
+    reopen_game_folder(&probe);
+    let text = std::fs::read_to_string(probe.root.path().join("logs/nevr-install.jsonl")).unwrap();
+    let mut before = 0;
+    for line in text.lines() {
+        let v: Value = serde_json::from_str(line).unwrap();
+        if v["event"] == target {
+            return before;
+        }
+        before += line.len() + 1;
+    }
+    panic!("the probe run never wrote {target}: {text}");
+}
+
+fn run_with_log_cut_before(w: &World, target: &str, scenario: fn(&World)) -> (i32, Value, String) {
+    let before = log_bytes_before(target, scenario);
+    let kb = (before + 100).div_ceil(1024);
+    let pad = kb * 1024 - before - 60;
+    std::fs::create_dir_all(w.root.path().join("logs")).unwrap();
+    std::fs::write(w.root.path().join("logs/nevr-install.jsonl"), format!("{}\n", "#".repeat(pad - 1))).unwrap();
+    scenario(w);
+    let o = Command::new("bash")
+        .args(["-c", "trap '' XFSZ; ulimit -f \"$0\"; exec \"$@\"", &kb.to_string(), env!("CARGO_BIN_EXE_nevr-install")])
+        .args(["pc", "install", "--dir", w.game.path().to_str().unwrap()])
+        .args(["--root", w.root.path().to_str().unwrap(), "--nevr-root", w.nevr.path().to_str().unwrap(), "--base", &w.base, "--pins", w.pins.to_str().unwrap(), "--now", NOW])
+        .output()
+        .unwrap();
+    reopen_game_folder(w);
+    let out: Value = serde_json::from_slice(&o.stdout).unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {}", String::from_utf8_lossy(&o.stdout)));
+    (o.status.code().unwrap(), out, String::from_utf8_lossy(&o.stderr).to_string())
+}
+
+#[test]
+fn a_log_that_fails_while_the_rollback_is_due_does_not_stop_the_rollback() {
+    let w = world(false);
+    let (code, out, _) = run_with_log_cut_before(&w, "install_failed", setup_failing_host_write);
+    assert_eq!((code, out["state"].as_str()), (3, Some("restored")), "{out}");
+    assert_eq!(std::fs::read(w.game.path().join("BugSplat64.dll")).unwrap(), GAME);
+    assert!(!w.nevr.path().join("nevr-runtime.dll").exists(), "the runtime written before the host is taken back");
+    assert!(!w.nevr.path().join("installer/nevr-install.txt").exists());
+    let reason = out["reason"].as_str().unwrap();
+    // The record of the failure and the record of the one file put back were both lost.
+    assert!(reason.contains("; 2 log record(s) could not be written during the rollback: FAIL step 0: cannot write the log"), "the lost records are said: {reason}");
+}
+
+#[test]
+fn a_log_that_fails_after_the_install_does_not_turn_it_into_unchanged() {
+    let w = world(false);
+    let (code, out, _) = run_with_log_cut_before(&w, "run_end", |_| {});
+    assert_eq!((code, out["state"].as_str(), out["failed"].as_bool()), (0, Some("installed"), Some(false)), "{out}");
+    assert_eq!(std::fs::read(w.game.path().join("BugSplat64.dll")).unwrap(), HOST);
+    assert_eq!(std::fs::read(w.nevr.path().join("nevr-runtime.dll")).unwrap(), RT);
+    assert!(out["reason"].as_str().unwrap().contains("the log could not record the end"), "{out}");
+}
+
+#[test]
+fn a_log_that_fails_at_the_install_record_failure_still_ends_installed() {
+    // Both the informational record and the log fail after the files are installed.
+    fn block_record(w: &World) {
+        std::fs::create_dir_all(w.root.path().join("state/install-record.json")).unwrap();
+    }
+    let w = world(false);
+    let (code, out, _) = run_with_log_cut_before(&w, "install_record", block_record);
+    assert_eq!((code, out["state"].as_str()), (0, Some("installed")), "{out}");
+    let reason = out["reason"].as_str().unwrap();
+    assert!(reason.contains("install-record.json was not written") && reason.contains("the log could not record"), "{reason}");
+    assert_eq!(std::fs::read(w.game.path().join("BugSplat64.dll")).unwrap(), HOST);
+}

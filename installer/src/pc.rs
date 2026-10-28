@@ -457,22 +457,33 @@ impl Undo {
     }
 }
 
-/// Takes every change back, newest first, and returns what could not be taken back.
-fn rollback(undo: Vec<Undo>, seam: &Seam, log: &Log) -> Vec<String> {
+/// Takes every change back, newest first, whatever the log does. Returns what could not be taken back and the log writes
+/// that failed along the way (the run's end says so; a record lost is never silent).
+fn rollback(undo: Vec<Undo>, seam: &Seam, log: &Log) -> (Vec<String>, Vec<String>) {
     let mut failed = Vec::new();
+    let mut log_lost = Vec::new();
     for u in undo.into_iter().rev() {
         let r = if seam.fail_undo == Some(u.what()) { Err(std::io::Error::other(format!("injected failure at undo {}", u.what()))) } else { u.run() };
-        match r {
-            Ok(()) => {
-                let _ = log.info("file_restore", 9, json!({"path": u.target().display().to_string(), "what": u.what(), "ok": true}));
-            }
+        let logged = match r {
+            Ok(()) => log.info("file_restore", 9, json!({"path": u.target().display().to_string(), "what": u.what(), "ok": true})),
             Err(e) => {
-                let _ = log.error("restore_failed", 9, json!({"path": u.target().display().to_string(), "what": u.what(), "reason": e.to_string()}));
                 failed.push(format!("{} ({}: {e})", u.target().display(), u.what()));
+                log.error("restore_failed", 9, json!({"path": u.target().display().to_string(), "what": u.what(), "reason": e.to_string()}))
             }
+        };
+        if let Err(e) = logged {
+            log_lost.push(e.to_string());
         }
     }
-    failed
+    (failed, log_lost)
+}
+
+/// What a lost log record adds to the end reason.
+fn log_lost_note(lost: &[String]) -> String {
+    match lost.first() {
+        Some(first) => format!("; {} log record(s) could not be written during the rollback: {first}", lost.len()),
+        None => String::new(),
+    }
 }
 
 /// Executes a `Proceed` plan with the verified package. Every change is logged as a `file_write`.
@@ -486,12 +497,15 @@ pub fn execute_with(l: &Layout, plan: &Plan, obs: &Observed, pkg: &Package, log:
         Ok(()) => Ok(End { state: "installed", reason: String::new() }),
         Err(why) if undo.is_empty() => Ok(End { state: "unchanged", reason: why }),
         Err(why) => {
-            log.error("install_failed", 9, json!({"reason": why, "changes_to_take_back": undo.len()}))?;
-            let failed = rollback(undo, seam, log);
+            // The rollback runs whatever the log does: a log that cannot be written must not leave the files changed.
+            let mut lost: Vec<String> = log.error("install_failed", 9, json!({"reason": why, "changes_to_take_back": undo.len()})).err().map(|e| e.to_string()).into_iter().collect();
+            let (failed, lost_in_rollback) = rollback(undo, seam, log);
+            lost.extend(lost_in_rollback);
+            let note = log_lost_note(&lost);
             if failed.is_empty() {
-                Ok(End { state: "restored", reason: why })
+                Ok(End { state: "restored", reason: format!("{why}{note}") })
             } else {
-                Ok(End { state: "needs-user", reason: format!("{why}; these files could not be put back: {}; the set-aside copies are in {}", failed.join("; "), l.aside_dir().display()) })
+                Ok(End { state: "needs-user", reason: format!("{why}; these files could not be put back: {}; the set-aside copies are in {}{note}", failed.join("; "), l.aside_dir().display()) })
             }
         }
     }

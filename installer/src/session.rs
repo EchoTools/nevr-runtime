@@ -105,6 +105,15 @@ impl Session {
         Ok(Ended { state, reason: reason.to_string(), failed })
     }
 
+    /// The end of a run whose files have changed: the state is the files', so a failed `run_end` write is added to the
+    /// reason instead of replacing the state.
+    fn end_after_change(&self, state: &'static str, reason: &str, failed: bool) -> Ended {
+        match self.end_with(state, reason, failed) {
+            Ok(end) => end,
+            Err(le) => Ended { state, reason: format!("{reason}; and the log could not record the end: {le}"), failed },
+        }
+    }
+
     /// An error ends the run as `unchanged` (nothing was written before the failing check) and says why.
     pub fn fail(&self, e: &Error) -> Ended {
         let _ = self.log.error("manifest_check", e.step, json!({"ok": false, "reason": e.to_string()}));
@@ -252,18 +261,21 @@ impl Session {
             pc::Outcome::Proceed if !install => self.end("unchanged", "plan only: nothing was changed")?,
             pc::Outcome::Proceed => {
                 let end = pc::execute(&layout, &plan, &observed, &pkg, &self.log)?;
+                // From here the folders have changed (or been put back): a log that cannot be written is reported in the
+                // end, never allowed to turn the run into `unchanged`.
                 if end.state == "installed" {
                     // The files are installed and read back; the installer's own record of it is informational, so a
                     // failure to write it is reported, not turned into a failed install.
                     match self.write_record(&v, &m, &Some(art.clone()), &None) {
-                        Ok(()) => self.end_with(end.state, &end.reason, false)?,
+                        Ok(()) => self.end_after_change(end.state, &end.reason, false),
                         Err(e) => {
-                            self.log.error("install_record", 9, json!({"ok": false, "reason": e.to_string()}))?;
-                            self.end_with("installed", &format!("installed, but install-record.json was not written: {e}"), false)?
+                            let lost = self.log.error("install_record", 9, json!({"ok": false, "reason": e.to_string()})).err();
+                            let reason = format!("installed, but install-record.json was not written: {e}");
+                            self.end_after_change("installed", &match lost { Some(l) => format!("{reason}; and the log could not record it: {l}"), None => reason }, false)
                         }
                     }
                 } else {
-                    self.end_with(end.state, &end.reason, end.state == "unchanged")?
+                    self.end_after_change(end.state, &end.reason, end.state == "unchanged")
                 }
             }
         };
