@@ -160,3 +160,5 @@ dump.rdb
 
 # installer/ (Rust): the build tree is regenerable
 /installer/target/
+# the lock file is committed so a build never resolves a crate nobody reviewed (docs/reference/verifying-a-release.md)
+!/installer/Cargo.lock
