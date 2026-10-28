@@ -100,4 +100,8 @@ void TestHook_SetBetweenResolveAndOpen(void (*hook)(const std::wstring& resolved
 void TestHook_SetBetweenCheckAndLoad(void (*hook)(const std::wstring& staged));
 // Makes the query for the path of the file a staged plugin's check holds fail.
 void TestHook_FailNamingTheHeldFile(bool fail);
+// Called after a plugin (a staged one, or a later load the filter accepted) is checked and before the load that maps it (null clears it).
+void TestHook_SetAfterDependenciesChecked(void (*hook)());
+// Makes every System32 pin of a plugin's dependencies fail with ERROR_ACCESS_DENIED (false restores it).
+void TestHook_FailPinning(bool fail);
 #endif
