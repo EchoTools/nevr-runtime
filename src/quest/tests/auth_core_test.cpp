@@ -1040,20 +1040,22 @@ std::string BoardText(prompt_board::Mode* mode = nullptr) {
                                                                                                   : std::string();
 }
 
-// The title the login-failed page carries (#1137): empty when the board holds none, so the game's own title stays.
+// The title the login-failed page carries (#1137). "<none>" when the board holds none, so the game's own title
+// stays; it is not the empty string, which a title length left over from an earlier publish would also read as.
+constexpr const char* kNoTitle = "<none>";
 std::string BoardTitle() {
   char out[prompt_board::kMaxTitleChars + 1];
-  return prompt_board::ReadTitle(out, sizeof(out)) ? std::string(out) : std::string();
+  return prompt_board::ReadTitle(out, sizeof(out)) ? std::string(out) : std::string(kNoTitle);
 }
 
 TEST(the_prompt_board_carries_a_title_with_its_text_and_drops_it_with_the_text) {
   prompt_board::Withdraw();
-  CHECK(BoardTitle().empty());
+  CHECK_EQ(BoardTitle(), std::string(kNoTitle));
   CHECK(prompt_board::Publish("abc", 3, prompt_board::Mode::kPrompt, "SIGN IN"));
   CHECK_EQ(BoardTitle(), std::string("SIGN IN"));
   // A publish with no title takes the old title off the board; the text is the new one.
   CHECK(prompt_board::Publish("def", 3, prompt_board::Mode::kPrompt));
-  CHECK(BoardTitle().empty());
+  CHECK_EQ(BoardTitle(), std::string(kNoTitle));
   CHECK_EQ(BoardText(), std::string("def"));
   CHECK(prompt_board::Publish("abc", 3, prompt_board::Mode::kNotice, "SIGNED IN"));
   CHECK_EQ(BoardTitle(), std::string("SIGNED IN"));
@@ -1071,7 +1073,7 @@ TEST(the_prompt_board_carries_a_title_with_its_text_and_drops_it_with_the_text) 
   CHECK(!prompt_board::ReadTitle(tiny, sizeof(tiny)));
   // Withdraw zeroes the title bytes with the text's.
   CHECK(prompt_board::Withdraw());
-  CHECK(BoardTitle().empty());
+  CHECK_EQ(BoardTitle(), std::string(kNoTitle));
   CHECK_EQ(prompt_board::NonZeroTextBytesForTest(), size_t(0));
 }
 
@@ -1180,15 +1182,15 @@ TEST(the_game_text_presenter_titles_the_code_as_a_sign_in_and_the_notice_as_sign
   // A failure keeps the game's title: the timed-out and the no-code texts publish text and no title.
   p.Conclude(LoginOutcome::TimedOut);
   CHECK_EQ(BoardText(), std::string(kTimedOutText));
-  CHECK(BoardTitle().empty());
+  CHECK_EQ(BoardTitle(), std::string(kNoTitle));
   CHECK(p.Present(SamplePrompt()) > kBrowserOpenAcceptedAbove);
   CHECK_EQ(BoardTitle(), std::string(kSignInTitle));
   p.Conclude(LoginOutcome::NoCodeShown);
   CHECK_EQ(BoardText(), std::string(kNoCodeShownText));
-  CHECK(BoardTitle().empty());
+  CHECK_EQ(BoardTitle(), std::string(kNoTitle));
   CHECK_EQ(log.Count(LogLevel::Info, R"("title":"game")"), size_t(2));
   p.Clear();
-  CHECK(BoardTitle().empty());
+  CHECK_EQ(BoardTitle(), std::string(kNoTitle));
   prompt_board::Withdraw();
 }
 
@@ -1299,7 +1301,7 @@ TEST(when_no_code_is_entered_the_login_stops_after_six_codes_and_tells_the_playe
   prompt_board::Mode mode = prompt_board::Mode::kNotice;
   CHECK_EQ(BoardText(&mode), std::string(kTimedOutText));  // shown at every later login failure
   CHECK(mode == prompt_board::Mode::kPrompt);
-  CHECK(BoardTitle().empty());  // #1137: nothing is coming, so this is a failure and the game's title stays
+  CHECK_EQ(BoardTitle(), std::string(kNoTitle));  // #1137: nothing is coming, so this is a failure and the game's title stays
   clock.Allow(10);  // the recovery period passes: a final login does not come back
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   CHECK_EQ(http.Count("request"), static_cast<int>(Session::kMaxUnansweredCodes));
