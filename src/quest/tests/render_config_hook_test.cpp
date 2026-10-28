@@ -365,6 +365,7 @@ void AThunkWithoutAnOriginalIsReportedInTheLine() {
 // ---- the texture-quality choice ---------------------------------------------------------------------------------------------
 
 sentinel::GotStatus InstallAllOk(int) noexcept { return sentinel::GotStatus::kOk; }
+sentinel::GotStatus InstallNone(int) noexcept { return sentinel::GotStatus::kModuleNotLoaded; }
 
 void ALevelThatReplacesTheSizeIsNamedWithTheRuntimesOwnAnswer() {
   Capture capture;
@@ -585,6 +586,27 @@ void TheThreadWritesTheLineAfterTheFirstFrameAndAgainAfterAChange() {
   if (lines.size() == 2) QCHECK(Field(lines[1], "changed") == "foveation_level");
 }
 
+// Install() starts the poller once a slot holds its thunk, and not otherwise.
+void AnInstallStartsThePollerOnlyWhenASlotHoldsItsThunk() {
+  Capture capture;
+  ResetAll();
+  GameStartup();
+  Entry<SubmitT>()(kOvr, nullptr);
+  QCHECK(rc::InstallVia(tq::Level::kStock, false, &InstallAllOk, &kFake, 20));
+  for (int i = 0; i < 500 && Lines("render_config").empty(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  QCHECK(Lines("render_config").size() == 1);
+  rc::StopPollerForTest();
+
+  ResetAll();
+  Capture::Clear();
+  GameStartup();
+  Entry<SubmitT>()(kOvr, nullptr);
+  QCHECK(!rc::InstallVia(tq::Level::kStock, false, &InstallNone, &kFake, 20));  // nothing installed: nothing to wait for
+  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  QCHECK(Lines("render_config").empty());
+  QCHECK(Field(Lines("render_config_install")[0], "result") == "not_installed");
+}
+
 }  // namespace
 
 int main() {
@@ -607,6 +629,7 @@ int main() {
   HertzAreWrittenInTenths();
   AHostWithoutLibr15ReportsNoGlobalsAndNoCrash();
   TheThreadWritesTheLineAfterTheFirstFrameAndAgainAfterAChange();
+  AnInstallStartsThePollerOnlyWhenASlotHoldsItsThunk();
   rc::ResetForTest();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "render_config_hook_test: %d check(s) failed\n", quest_test::Failures());

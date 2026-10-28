@@ -113,10 +113,11 @@ bool PollOnce(const Source& source) noexcept;
 bool Install(texture_quality::Level textureLevel, bool fromConfig) noexcept;
 
 // Test support. `InstallVia` is Install() with the GOT step replaced by `install` (the status GotHook would return for
-// the slot number 0..4 in the order refresh-rate, clock-levels, set-property-int, system-property-float, submit-frame), and
-// without starting the poller.
+// the slot number 0..4 in the order refresh-rate, clock-levels, set-property-int, system-property-float, submit-frame). The
+// poller starts, with `pollerSource` and a period of `periodMs`, only when `pollerSource` is given.
 using InstallFn = sentinel::GotStatus (*)(int slot) noexcept;
-bool InstallVia(texture_quality::Level textureLevel, bool fromConfig, InstallFn install) noexcept;
+bool InstallVia(texture_quality::Level textureLevel, bool fromConfig, InstallFn install,
+                const Source* pollerSource = nullptr, unsigned periodMs = 1000) noexcept;
 // Arms the five thunks without touching a slot.
 void ArmForTest() noexcept;
 // Forgets everything: the atomics, the last logged snapshot, the cached device, the slot marks. Stops the poller.

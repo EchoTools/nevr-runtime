@@ -405,7 +405,8 @@ void StopPoller() noexcept {
   pthread_mutex_unlock(&g_control);
 }
 
-bool InstallImpl(texture_quality::Level level, bool fromConfig, InstallFn install, bool startPoller) noexcept {
+bool InstallImpl(texture_quality::Level level, bool fromConfig, InstallFn install, const Source* pollerSource,
+                 unsigned periodMs) noexcept {
   g_textureName.store(texture_quality::LevelName(level), std::memory_order_relaxed);
   g_textureFromConfig.store(fromConfig, std::memory_order_relaxed);
   g_textureReplacesSize.store(level != texture_quality::Level::kStock, std::memory_order_relaxed);
@@ -431,7 +432,7 @@ bool InstallImpl(texture_quality::Level level, bool fromConfig, InstallFn instal
                        {kSlotSymbols[4], sentinel::GotStatusName(status[4])},
                        {"texture_quality", texture_quality::LevelName(level)}});
   // A partial install still logs what it can see; with none installed there is nothing to wait for.
-  if (installed > 0 && startPoller) StartPoller(ProductionSource(), 1000);
+  if (installed > 0 && pollerSource != nullptr) StartPoller(*pollerSource, periodMs);
   return all;
 }
 
@@ -510,12 +511,13 @@ bool PollOnce(const Source& source) noexcept {
   return true;
 }
 
-bool InstallVia(texture_quality::Level level, bool fromConfig, InstallFn install) noexcept {
-  return InstallImpl(level, fromConfig, install, false);
+bool InstallVia(texture_quality::Level level, bool fromConfig, InstallFn install, const Source* pollerSource,
+                unsigned periodMs) noexcept {
+  return InstallImpl(level, fromConfig, install, pollerSource, periodMs);
 }
 
 bool Install(texture_quality::Level level, bool fromConfig) noexcept {
-  return InstallImpl(level, fromConfig, &RealInstall, true);
+  return InstallImpl(level, fromConfig, &RealInstall, &ProductionSource(), 1000);
 }
 
 void ArmForTest() noexcept { ArmAll(); }
