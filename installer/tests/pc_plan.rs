@@ -168,13 +168,142 @@ fn the_same_package_twice_is_unchanged() {
     assert_eq!(plan.outcome, Outcome::Unchanged);
 }
 
-#[test]
-fn a_stranger_host_with_no_record_is_not_set_aside_as_the_games_own() {
+const OTHER_NEVR_HOST: &[u8] = b"x NEVR-BUILD 0.1";
+
+/// A NEVR host in the game folder and no record anywhere (the root was lost): the install adopts it.
+fn lost_root_world() -> World {
     let w = world();
-    fs::write(w.game.path().join(pc::HOST), b"x NEVR-BUILD 0.1").unwrap();
+    fs::write(w.game.path().join(pc::HOST), OTHER_NEVR_HOST).unwrap();
+    w
+}
+
+#[test]
+fn a_nevr_host_with_no_record_is_adopted_not_set_aside_as_the_games_own_and_not_refused() {
+    let w = lost_root_world();
+    let (obs, plan) = plan_of(&w, &pkg(HOST_A, RT_A), false);
+    assert_eq!((plan.outcome, plan.action), (Outcome::Proceed, Some(Action::Adopt)), "{:?}", plan.reasons);
+    let end = pc::execute(&w.layout(), &plan, &obs, &pkg(HOST_A, RT_A), &w.log()).unwrap();
+    assert_eq!((end.state, end.reason.as_str()), ("installed", ""));
+    assert_eq!(fs::read(w.game.path().join(pc::HOST)).unwrap(), HOST_A);
+    assert_eq!(fs::read(w.root.path().join(pc::RUNTIME)).unwrap(), RT_A);
+    assert_eq!(listing(w.game.path()), vec!["BugSplat64.dll", "echovr.exe"]);
+    assert!(!listing(&aside(&w)).iter().any(|n| n.starts_with("BugSplat64.dll.original-")), "a NEVR host is never kept as the game's own file");
+    let rec = w.record();
+    assert_eq!(rec.get("original"), Some("unknown"));
+    assert_eq!(rec.get("backup"), Some(""));
+    assert_eq!(rec.get("installed_sha256").unwrap(), nevr_install::util::sha256_hex(HOST_A));
+    assert_eq!(rec.get("previous_sha256").unwrap(), nevr_install::util::sha256_hex(OTHER_NEVR_HOST), "the host that was there is a known one");
+}
+
+#[test]
+fn a_lost_root_with_this_packages_host_already_in_place_records_it_and_brings_the_runtime() {
+    let w = world();
+    fs::write(w.game.path().join(pc::HOST), HOST_A).unwrap();
+    let (obs, plan) = plan_of(&w, &pkg(HOST_A, RT_A), false);
+    assert_eq!((plan.outcome, plan.action), (Outcome::Proceed, Some(Action::Adopt)), "{:?}", plan.reasons);
+    let end = pc::execute(&w.layout(), &plan, &obs, &pkg(HOST_A, RT_A), &w.log()).unwrap();
+    assert_eq!(end.state, "installed", "{}", end.reason);
+    assert_eq!(fs::read(w.root.path().join(pc::RUNTIME)).unwrap(), RT_A);
+    let rec = w.record();
+    assert_eq!(rec.get("original"), Some("unknown"));
+    assert_eq!(rec.get("previous_sha256"), Some(""), "the host was already this package's");
+    assert_eq!(plan_of(&w, &pkg(HOST_A, RT_A), false).1.outcome, Outcome::Unchanged, "the record is back, so the next run changes nothing");
+}
+
+#[test]
+fn this_packages_own_host_is_adopted_even_when_it_carries_no_build_stamp() {
+    // Recognition by the stamp is for other builds; the package's own bytes are known without it.
+    let w = world();
+    let plain: &[u8] = b"a host with no identity literal";
+    fs::write(w.game.path().join(pc::HOST), plain).unwrap();
+    let (plan, end) = run(&w, &pkg(plain, RT_A));
+    assert_eq!((plan.action, end.state), (Some(Action::Adopt), "installed"), "{}", end.reason);
+    assert_eq!(w.record().get("original"), Some("unknown"));
+    assert!(!listing(&aside(&w)).iter().any(|n| n.starts_with("BugSplat64.dll.original-")));
+}
+
+#[test]
+fn an_adopted_install_updates_without_a_backup_and_keeps_the_original_unknown() {
+    let w = lost_root_world();
+    run(&w, &pkg(HOST_A, RT_A));
+    let (plan, end) = run(&w, &pkg_v("2.0.0", HOST_B, RT_B));
+    assert_eq!((plan.action, end.state), (Some(Action::Update), "installed"), "{}", end.reason);
+    assert_eq!(fs::read(w.game.path().join(pc::HOST)).unwrap(), HOST_B);
+    let rec = w.record();
+    assert_eq!(rec.get("original"), Some("unknown"));
+    assert_eq!(rec.get("backup"), Some(""));
+    let previous = rec.get("previous_sha256").unwrap();
+    assert!(previous.contains(&nevr_install::util::sha256_hex(OTHER_NEVR_HOST)) && previous.contains(&nevr_install::util::sha256_hex(HOST_A)), "{previous}");
+}
+
+#[test]
+fn the_games_own_file_restored_over_an_adopted_install_is_set_aside_and_becomes_the_known_original() {
+    let w = lost_root_world();
+    run(&w, &pkg(HOST_A, RT_A));
+    fs::write(w.game.path().join(pc::HOST), GAME).unwrap();
+    let (plan, end) = run(&w, &pkg_v("2.0.0", HOST_B, RT_B));
+    assert!(plan.stale_record);
+    assert_eq!((plan.action, end.state), (Some(Action::First), "installed"), "{}", end.reason);
+    let rec = w.record();
+    assert_eq!(rec.get("original"), None, "the original is known again");
+    assert_eq!(fs::read(rec.get("backup").unwrap()).unwrap(), GAME);
+}
+
+#[test]
+fn an_adopt_that_fails_puts_the_host_and_runtime_back_and_writes_no_record() {
+    let w = lost_root_world();
+    fs::write(w.root.path().join(pc::RUNTIME), b"stranger").unwrap();
+    let seam = Seam { fail_step: Some("record_final"), fail_undo: None };
+    let (obs, plan) = plan_of(&w, &pkg(HOST_A, RT_A), false);
+    assert_eq!(plan.action, Some(Action::Adopt));
+    let end = pc::execute_with(&w.layout(), &plan, &obs, &pkg(HOST_A, RT_A), &w.log(), &seam).unwrap();
+    assert_eq!(end.state, "restored", "{}", end.reason);
+    assert_eq!(fs::read(w.game.path().join(pc::HOST)).unwrap(), OTHER_NEVR_HOST);
+    assert_eq!(fs::read(w.root.path().join(pc::RUNTIME)).unwrap(), b"stranger");
+    assert!(!w.layout().record().exists());
+}
+
+#[test]
+fn a_legacy_dbgcore_beside_an_adopted_host_is_moved_into_the_root() {
+    let w = lost_root_world();
+    fs::write(w.game.path().join("dbgcore.dll"), b"legacy").unwrap();
+    let (plan, end) = run(&w, &pkg(HOST_A, RT_A));
+    assert_eq!((plan.action, end.state), (Some(Action::Adopt), "installed"), "{}", end.reason);
+    assert_eq!(listing(w.game.path()), vec!["BugSplat64.dll", "echovr.exe"]);
+    assert_eq!(fs::read(aside_named(&w, "dbgcore.dll.legacy-")).unwrap(), b"legacy");
+    assert!(w.record().get("legacy").unwrap().contains("dbgcore.dll.legacy-"));
+}
+
+#[test]
+fn the_pinned_vanilla_hash_and_the_recovery_text_without_an_original() {
+    assert_eq!(pc::VANILLA_HOST_SHA256, "618e34d3bfde69846c0202d42951366bff5e03cd2885b6825f55e09fb2cf160b");
+    let text = pc::recovery_without_original();
+    for want in [pc::VANILLA_HOST_SHA256, "verify", "reinstall", "doesn't restore it"] {
+        assert!(text.to_lowercase().contains(&want.to_lowercase()), "{want} missing from: {text}");
+    }
+    // The plan tells the player the same thing when it adopts, so a lost original is known before it matters.
+    let w = lost_root_world();
     let (_, plan) = plan_of(&w, &pkg(HOST_A, RT_A), false);
-    assert_eq!(plan.outcome, Outcome::NeedsUser);
-    assert!(plan.reasons[0].contains("NEVR runtime"), "{:?}", plan.reasons);
+    assert!(plan.reasons.iter().any(|r| r.contains(pc::VANILLA_HOST_SHA256)), "{:?}", plan.reasons);
+}
+
+#[test]
+fn the_log_says_whether_the_original_host_is_the_pinned_one() {
+    let read = |w: &World| -> Vec<serde_json::Value> {
+        fs::read_to_string(w.scratch.path().join("log.jsonl")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).filter(|r: &serde_json::Value| r["event"] == "host_original").collect()
+    };
+    let w = world();
+    run(&w, &pkg(HOST_A, RT_A));
+    let rec = read(&w);
+    assert_eq!(rec.len(), 1);
+    assert_eq!(rec[0]["state"], "saved");
+    assert_eq!(rec[0]["matches_pinned"], false, "the test's stand-in is not the pinned file");
+    assert_eq!(rec[0]["sha256"], nevr_install::util::sha256_hex(GAME));
+    let w = lost_root_world();
+    run(&w, &pkg(HOST_A, RT_A));
+    let rec = read(&w);
+    assert_eq!((rec.len(), rec[0]["state"].as_str()), (1, Some("unknown")));
+    assert_eq!(rec[0]["pinned_sha256"], pc::VANILLA_HOST_SHA256);
 }
 
 #[test]

@@ -78,9 +78,11 @@ flowchart TD
     P1 --> P2{BugSplat64.dll in the folder}
     P2 -->|the game's own file| P3[copy to root/installer/aside/BugSplat64.dll.original-timestamp, verify the copy]
     P2 -->|a nevr-runtime host the record lists| P4[update: keep the first original]
+    P2 -->|a NEVR host and no record| PA[adopt: write a fresh record in the root, original unknown, then as an update]
     P2 -->|neither| X[needs-user: restore the game's file first]
     P3 --> P5[move legacy dbgcore.dll into the aside folder, never delete]
     P4 --> P6
+    PA --> P5
     P5 --> P6[write nevr-runtime.dll into the nevr root, then BugSplat64.dll beside the game through a temp file and a rename: until the host is replaced nothing loads the runtime]
     P6 --> P6b[move an earlier nevr-runtime.dll out of the game folder into the aside folder]
     P6b --> P7[read both back: sha256 equals the manifest]
@@ -97,6 +99,18 @@ folder is copied, read back, and only then removed. The host is replaced by a te
 it, so a reader sees the old host or the new one. The nevr root is `--nevr-root`, else `%LOCALAPPDATA%\nevr\echovr`; when
 neither is known the plan stops with `needs-user` before it fetches or changes anything. A record an earlier installer left
 beside the game is read like the root's and is moved into the aside folder by the next successful install.
+
+The record and the copy of the game's own `BugSplat64.dll` live only in the nevr root; there is no second copy in the game
+folder. When the root is lost and `BugSplat64.dll` is a NEVR host (it carries the `NEVR-BUILD ` literal, or is this package's
+own file) with no record, the plan is `adopt`: it installs like an update and writes a fresh record with `original=unknown`
+and no `backup`. Nothing is refused, so update and uninstall keep working. The prior host's hash goes into `previous_sha256`.
+If the game's own file is later put back (platform file verification), the record is stale, is set aside, and the next
+install saves that file as the original. The game's own file has the pinned SHA-256
+`618e34d3bfde69846c0202d42951366bff5e03cd2885b6825f55e09fb2cf160b` (build 34.4.631547.1, 630,288 bytes). An uninstall with no
+saved original ends `needs-user` with `recovery_without_original()`: verify the game's files on the platform, and if
+verification doesn't restore it, reinstall the game; the hash lets a copy be checked first. The core has no uninstall yet
+(`uninstall.ps1` does that); the text and the `original` key are in place for it. The install logs `host_original` with
+`state` (`saved`, `unknown` or `kept`) and, for `saved`, whether the file matches the pinned hash.
 
 The record keeps the keys `uninstall.ps1` reads (`backup`, `legacy`, `runtime_aside`, `runtime_legacy`, `runtime_root`,
 `installed_sha256`, `runtime_sha256`, `previous_sha256`) and adds `game_dir` and `release`. An installed `release` newer than
@@ -356,7 +370,8 @@ Each is run once with the line it covers changed, and must fail (the mutant disc
    with the real pins.
 2. The Quest plan: one test per branch of the diagram (absent, same signer lower/equal/higher, different signer without and
    with consent, no `signer_cert_sha256`).
-3. The PC plan against a temporary game folder and a temporary nevr root: first install, update, a stranger's `BugSplat64.dll`,
+3. The PC plan against a temporary game folder and a temporary nevr root: first install, update, adopting a NEVR host with no record (also the package's own host, and an adopted install's update and
+   its failure), a stranger's `BugSplat64.dll`,
    the game folder holding only `echovr.exe` and `BugSplat64.dll` afterwards, a failure injected after each file (both folders
    return to their prior bytes), a restore that fails (reported, never `restored`), an older release over a newer one, and the
    state file read by the real `uninstall.ps1` logic's keys.

@@ -17,6 +17,17 @@ pub const HOST: &str = "BugSplat64.dll";
 pub const RUNTIME: &str = "nevr-runtime.dll";
 pub const STATE_FILE: &str = "nevr-install.txt";
 
+/// The SHA-256 of the game's own `BugSplat64.dll` (build 34.4.631547.1, 630,288 bytes), so a copy can be checked by hand.
+pub const VANILLA_HOST_SHA256: &str = "618e34d3bfde69846c0202d42951366bff5e03cd2885b6825f55e09fb2cf160b";
+
+/// What to do when an uninstall finds no copy of the game's own `BugSplat64.dll`: the record says `original=unknown`
+/// (the root was lost and the install adopted), or the copy is gone.
+pub fn recovery_without_original() -> String {
+    format!(
+        "the game's own BugSplat64.dll was not kept: verify the game's files on the platform (Steam, Oculus) to restore it; if verification doesn't restore it, reinstall the game. The game's own file has SHA-256 {VANILLA_HOST_SHA256}; check a copy with sha256sum or Get-FileHash before using it"
+    )
+}
+
 /// Where the plan reads and writes: `game` is the folder with `echovr.exe`, `root` the nevr root.
 #[derive(Debug, Clone)]
 pub struct Layout {
@@ -91,6 +102,8 @@ pub struct RecordFields<'a> {
     pub installed: &'a str,
     pub runtime: &'a str,
     pub previous: Option<&'a str>,
+    /// The game's own host was not kept (the install adopted a NEVR host with no record): writes `original=unknown`.
+    pub original_unknown: bool,
 }
 
 impl Record {
@@ -108,6 +121,11 @@ impl Record {
 
     pub fn get(&self, k: &str) -> Option<&str> {
         self.values.get(k).map(String::as_str)
+    }
+
+    /// The record says the game's own `BugSplat64.dll` was not kept.
+    pub fn original_unknown(&self) -> bool {
+        self.get("original") == Some("unknown")
     }
 
     /// Every host hash this folder's installs put there: the recorded one and the earlier ones.
@@ -133,6 +151,9 @@ impl Record {
         ];
         if let Some(p) = f.previous {
             lines.push(format!("previous_sha256={p}"));
+        }
+        if f.original_unknown {
+            lines.push("original=unknown".to_string());
         }
         lines.join("\n") + "\n"
     }
@@ -214,6 +235,8 @@ pub enum Action {
     Update,
     /// This package's host was copied in by hand: record it and bring the runtime beside it.
     RecordOnly,
+    /// A NEVR host with no record (the root was lost): record it, keep it working, and note the game's own file is unknown.
+    Adopt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -269,7 +292,8 @@ pub fn plan(obs: &Observed, pkg: &Package, allow_downgrade: bool) -> Plan {
     let mut stale = false;
     if let Some(r) = &record {
         let known = r.known();
-        let recorded_backup_is_orig = obs.backup_exists && obs.backup_sha.as_deref() == Some(orig);
+        // The game's own file is back when it equals the kept copy, or when no copy was kept (the check below rules out NEVR's).
+        let recorded_backup_is_orig = r.original_unknown() || (obs.backup_exists && obs.backup_sha.as_deref() == Some(orig));
         if orig != ours && !known.iter().any(|k| k == orig) && recorded_backup_is_orig && !obs.target_is_nevr {
             stale = true;
             record = None;
@@ -282,13 +306,14 @@ pub fn plan(obs: &Observed, pkg: &Package, allow_downgrade: bool) -> Plan {
                     return needs(&format!("nevr-install.txt has no {key}"));
                 }
             }
-            if !obs.backup_exists {
+            let original_unknown = r.original_unknown();
+            if !original_unknown && !obs.backup_exists {
                 return needs("the backup named in nevr-install.txt is gone; nothing was changed");
             }
             if obs.dbgcore_present {
                 return needs("a dbgcore.dll exists again; run uninstall.ps1 first");
             }
-            if obs.backup_is_nevr {
+            if !original_unknown && obs.backup_is_nevr {
                 return needs("the recorded backup is a NEVR runtime, not the game's own file; restore the game's BugSplat64.dll (Verify Files), delete nevr-install.txt, then run again");
             }
             if let Some(installed) = r.get("release").filter(|_| !allow_downgrade) {
@@ -313,11 +338,8 @@ pub fn plan(obs: &Observed, pkg: &Package, allow_downgrade: bool) -> Plan {
             p(Outcome::Proceed, Some(Action::Update), "update", None, false)
         }
         None => {
-            if orig == ours {
-                return p(Outcome::Unchanged, None, "unchanged", Some("the installed BugSplat64.dll is already this package".into()), stale);
-            }
-            if obs.target_is_nevr {
-                return needs("the installed BugSplat64.dll is a NEVR runtime, not the game's own file, and nevr-install.txt is missing; restore the game's original (Verify Files), then run again");
+            if obs.target_is_nevr || orig == ours {
+                return p(Outcome::Proceed, Some(Action::Adopt), "adopt", Some(format!("nevr-install.txt is missing and BugSplat64.dll is a NEVR host: the install is recorded again here and the game's own file is marked unknown; {}", recovery_without_original())), stale);
             }
             p(Outcome::Proceed, Some(Action::First), "install", None, stale)
         }
@@ -511,6 +533,15 @@ fn apply(l: &Layout, plan: &Plan, obs: &Observed, pkg: &Package, log: &Log, seam
     let mut runtime_aside = record.as_ref().and_then(|r| r.get("runtime_aside")).unwrap_or("").to_string();
     let mut runtime_legacy = record.as_ref().and_then(|r| r.get("runtime_legacy")).unwrap_or("").to_string();
 
+    // The host is written for every action but a record of a host already in place (a hand copy, or an adopted file that is
+    // this package's own).
+    let writes_host = match action {
+        Action::RecordOnly => false,
+        Action::Adopt => orig != ours,
+        Action::First | Action::Update => true,
+    };
+    let original_unknown = action == Action::Adopt || record.as_ref().is_some_and(Record::original_unknown);
+
     if action == Action::First {
         // The game's own file, copied before anything replaces it.
         let b = fresh(&aside, &format!("{HOST}.original-{st}"));
@@ -518,6 +549,8 @@ fn apply(l: &Layout, plan: &Plan, obs: &Observed, pkg: &Package, log: &Log, seam
         verify_file(&b, &orig).map_err(|e| format!("{e} (delete the bad copy by hand)"))?;
         write_log(&b, &orig, "", &host.display().to_string())?;
         backup = b.display().to_string();
+    }
+    if action == Action::First || action == Action::Adopt {
         if obs.dbgcore_present {
             let to = fresh(&aside, &format!("dbgcore.dll.legacy-{}", &st[..8]));
             let bytes = move_out(&l.legacy_dbgcore(), &to)?;
@@ -526,10 +559,22 @@ fn apply(l: &Layout, plan: &Plan, obs: &Observed, pkg: &Package, log: &Log, seam
             legacy = to.display().to_string();
         }
     }
+    log.info(
+        "host_original",
+        9,
+        if action == Action::First {
+            json!({"state": "saved", "sha256": orig, "pinned_sha256": VANILLA_HOST_SHA256, "matches_pinned": orig == VANILLA_HOST_SHA256, "backup": backup})
+        } else if original_unknown {
+            json!({"state": "unknown", "pinned_sha256": VANILLA_HOST_SHA256, "recovery": recovery_without_original()})
+        } else {
+            json!({"state": "kept", "backup": backup})
+        },
+    )
+    .map_err(|e| e.to_string())?;
 
     // The runtime, into the root. A different file already there is set aside first; it is put back on failure.
     let prior_runtime = fs::read(&runtime).ok();
-    if action != Action::RecordOnly || obs.runtime_sha.as_deref() != Some(ours_rt.as_str()) {
+    if writes_host || obs.runtime_sha.as_deref() != Some(ours_rt.as_str()) {
         fs::create_dir_all(&l.root).map_err(|e| io(&l.root, e))?;
         if prior_runtime.is_some() && action == Action::First {
             let to = fresh(&aside, &format!("{RUNTIME}.original-{st}"));
@@ -549,7 +594,7 @@ fn apply(l: &Layout, plan: &Plan, obs: &Observed, pkg: &Package, log: &Log, seam
         seam.step("runtime_written")?;
     }
 
-    if action != Action::RecordOnly {
+    if writes_host {
         put(&host, &pkg.host).map_err(|e| io(&host, e))?;
         undo.push(Undo::Restore { what: "host", path: host.clone(), bytes: host_bytes });
         write_log(&host, &ours, &orig, if action == Action::First { &backup } else { "" })?;
@@ -577,11 +622,14 @@ fn apply(l: &Layout, plan: &Plan, obs: &Observed, pkg: &Package, log: &Log, seam
 
     verify_installed(l, pkg, log, seam)?;
 
+    // An adopted host is one of this folder's hosts from now on: a later update recognizes it.
+    let adopted = if action == Action::Adopt { vec![orig.clone()] } else { Vec::new() };
     let previous: Vec<String> = record
         .as_ref()
         .map(|r| r.known())
         .unwrap_or_default()
         .into_iter()
+        .chain(adopted)
         .filter(|k| *k != ours && !k.is_empty())
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
@@ -598,6 +646,7 @@ fn apply(l: &Layout, plan: &Plan, obs: &Observed, pkg: &Package, log: &Log, seam
         installed: &ours,
         runtime: &ours_rt,
         previous: if action == Action::First { None } else { Some(&previous) },
+        original_unknown,
     });
     seam.step("record_written")?;
     let rec = l.record();
