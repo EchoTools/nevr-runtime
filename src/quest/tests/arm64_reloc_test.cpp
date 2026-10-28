@@ -21,6 +21,7 @@
 
 #include "arm64_reloc.h"
 #include "mini_test.h"
+#include "quest/patch/libr15_patch_table.h"
 
 namespace {
 
@@ -242,7 +243,8 @@ const std::int64_t kTrampolineOffsets[] = {0x200000, -0x200000, 0x10000000, -0x1
 
 // Relocates `window` (at `windowAt`), runs the original and the relocated trampoline at each far placement and
 // compares. `what` names the case.
-void CheckWindowEquivalentAt(std::uint64_t windowAt, const std::string& what, const std::uint32_t (&window)[4],
+template <std::size_t N>
+void CheckWindowEquivalentAt(std::uint64_t windowAt, const std::string& what, const std::uint32_t (&window)[N],
                              const Cpu& init) {
   Trampoline tr;
   RelocRefusal refusal;
@@ -253,7 +255,7 @@ void CheckWindowEquivalentAt(std::uint64_t windowAt, const std::string& what, co
   }
   for (const std::int64_t offset : kTrampolineOffsets) {
     const std::uint64_t at = windowAt + static_cast<std::uint64_t>(offset);
-    Prog original{windowAt, {window, window + 4}};
+    Prog original{windowAt, {window, window + N}};
     Prog relocated{at, {tr.words, tr.words + tr.count}};
     Cpu a = init;
     Cpu b = init;
@@ -293,7 +295,8 @@ void CheckWindowEquivalentAt(std::uint64_t windowAt, const std::string& what, co
   }
 }
 
-void CheckWindowEquivalent(const std::string& what, const std::uint32_t (&window)[4], const Cpu& init) {
+template <std::size_t N>
+void CheckWindowEquivalent(const std::string& what, const std::uint32_t (&window)[N], const Cpu& init) {
   CheckWindowEquivalentAt(kOriginal, what, window, init);
   CheckWindowEquivalentAt(kStraddling, what, window, init);
 }
@@ -795,6 +798,144 @@ TEST(EveryLiteralIsEightByteAlignedAndTheImageIsWholeQuads) {
       if (at >= tr.count) continue;
       CHECK(LiteralOf(tr, i, &rt, &value));
       CHECK_EQ(at % 2, static_cast<std::size_t>(0));
+    }
+  }
+}
+
+// ---- the window is a parameter (ADR 0021): the build-time stub overwrites three words ------------------------
+
+TEST(AThreeWordWindowResumesTwelveBytesOn) {
+  const std::uint32_t window[3] = {0xD10183FFu, 0xF9001BF6u, 0xA90453F5u};  // lobby_full.join's stock words
+  Trampoline tr;
+  RelocRefusal refusal;
+  CHECK(BuildTrampoline(kOriginal, window, tr, refusal));
+  for (std::size_t i = 0; i < 3; ++i) CHECK_EQ(tr.words[i], window[i]);
+  unsigned rt = 0;
+  std::uint64_t value = 0;
+  CHECK(LiteralOf(tr, 3, &rt, &value));
+  CHECK_EQ(rt, 16u);
+  CHECK_EQ(value, kOriginal + 12);  // not +16: the fourth word is not displaced
+  CHECK_EQ(tr.words[4], kBrX16);
+  // The four-word default is unchanged: the same words and a fourth one resume at +16.
+  const std::uint32_t four[4] = {window[0], window[1], window[2], 0xA9057BF3u};
+  CHECK(BuildTrampoline(kOriginal, four, tr, refusal));
+  CHECK(LiteralOf(tr, 4, &rt, &value));
+  CHECK_EQ(value, kOriginal + 16);
+  // One and two words work as well.
+  const std::uint32_t one[1] = {window[0]};
+  CHECK(BuildTrampoline(kOriginal, one, tr, refusal));
+  CHECK(LiteralOf(tr, 1, &rt, &value));
+  CHECK_EQ(value, kOriginal + 4);
+}
+
+TEST(AThreeWordWindowIsExactlyTwelveBytesForTheBranchChecks) {
+  Trampoline tr;
+  RelocRefusal refusal{};
+  // A branch to site+12 lands outside a 3-word window (relocated), and inside a 4-word one (refused).
+  const std::uint32_t three[3] = {EncB(12), kNop, kNop};
+  CHECK(BuildTrampoline(kOriginal, three, tr, refusal));
+  unsigned rt = 0;
+  std::uint64_t value = 0;
+  CHECK(LiteralOf(tr, 0, &rt, &value));
+  CHECK_EQ(value, kOriginal + 12);
+  const std::uint32_t four[4] = {EncB(12), kNop, kNop, kNop};
+  CHECK(!BuildTrampoline(kOriginal, four, tr, refusal));
+  // A branch to site+8 is inside both.
+  const std::uint32_t inside[3] = {EncB(8), kNop, kNop};
+  CHECK(!BuildTrampoline(kOriginal, inside, tr, refusal));
+  CHECK(std::strstr(refusal.reason, "target is inside the patched bytes") != nullptr);
+  // A literal load that reads site+12 (the first byte past a 3-word window) is allowed; one that reads site+8 is not.
+  const std::uint32_t pastLoad[3] = {EncLdrLit(1, 0, 1, 12), kNop, kNop};
+  CHECK(BuildTrampoline(kOriginal, pastLoad, tr, refusal));
+  const std::uint32_t insideLoad[3] = {EncLdrLit(1, 0, 1, 8), kNop, kNop};
+  CHECK(!BuildTrampoline(kOriginal, insideLoad, tr, refusal));
+  CHECK(std::strstr(refusal.reason, "literal it loads is inside the patched bytes") != nullptr);
+}
+
+TEST(AWindowOfAnyOtherSizeIsRefused) {
+  Trampoline tr;
+  RelocRefusal refusal{};
+  const std::uint32_t words[5] = {kNop, kNop, kNop, kNop, kNop};
+  CHECK(!sentinel::BuildTrampolineWindow(kOriginal, words, 0, tr, refusal));
+  CHECK(std::strstr(refusal.reason, "window size") != nullptr);
+  refusal = {};
+  CHECK(!sentinel::BuildTrampolineWindow(kOriginal, words, 5, tr, refusal));
+  CHECK(std::strstr(refusal.reason, "window size") != nullptr);
+  CHECK(!sentinel::BuildTrampolineWindow(kOriginal, nullptr, 3, tr, refusal));
+  CHECK(sentinel::BuildTrampolineWindow(kOriginal, words, 4, tr, refusal));
+}
+
+TEST(TheQuestSetTextLeadingCbzRelocatesInAThreeWordWindow) {
+  // The stock words of CCanvasUICS::SetText (libr15 ReVault 0x149111c; the menu version label hooks that function
+  // through its GOT slot, so it is not a patch-table row): cbz x3, #0x48 ; sub sp, sp, #0x20 ; stp x19, x30,
+  // [sp, #16]. The CBZ is the case that matters: its target is far outside the window and the trampoline is far
+  // from it, so it becomes CBNZ over an absolute jump.
+  const std::uint32_t window[3] = {0xB4000243u, 0xD10083FFu, 0xA9017BF3u};
+  Trampoline tr;
+  RelocRefusal refusal;
+  CHECK(BuildTrampoline(kOriginal, window, tr, refusal));
+  CHECK_EQ(tr.words[0], 0xB5000063u);  // CBNZ x3, over the jump
+  unsigned rt = 0;
+  std::uint64_t value = 0;
+  CHECK(LiteralOf(tr, 1, &rt, &value));
+  CHECK_EQ(value, kOriginal + 0x48);
+  g_opaque.assign(window + 1, window + 3);
+  for (const std::uint64_t v : {std::uint64_t{0}, std::uint64_t{1}, std::uint64_t{0x100000000ull}}) {
+    Cpu c = RandomCpu(100);
+    c.x[3] = v;
+    CheckWindowEquivalent("SetText three-word window", window, c);
+  }
+  g_opaque.clear();
+}
+
+TEST(EveryInlineRowOfThePatchTableRelocatesInItsThreeWordWindow) {
+  // The real stock words of each inline-hook row of src/quest/patch/libr15_patch_table.h, at the row's own pinned
+  // vaddr (a real address, so a PC-relative word would resolve against it), original window against the trampoline.
+  std::size_t inlineRows = 0;
+  for (std::size_t r = 0; r < nevr_quest::patch::kRowCount; ++r) {
+    const nevr_quest::patch::Row& row = nevr_quest::patch::kRows[r];
+    if (row.kind != nevr_quest::patch::RowKind::kInlineHook) continue;
+    ++inlineRows;
+    CHECK_EQ(row.sites[0].wordCount, static_cast<std::uint8_t>(3));
+    std::uint32_t window[3] = {row.sites[0].words[0], row.sites[0].words[1], row.sites[0].words[2]};
+    Trampoline tr;
+    RelocRefusal refusal{};
+    if (!BuildTrampoline(row.sites[0].Vaddr(), window, tr, refusal)) {
+      std::fprintf(stderr, "  %s: refused (%s)\n", row.id, refusal.reason);
+      CHECK(false);
+      continue;
+    }
+    g_opaque.clear();
+    for (const std::uint32_t w : window) {
+      if (sentinel::ClassifyPcRel(w) == PcRelKind::kNone) g_opaque.push_back(w);
+    }
+    for (unsigned seed = 0; seed < 3; ++seed) {
+      Cpu c = RandomCpu(500 + seed);
+      c.x[3] = seed;  // a window may start with a CBZ/CBNZ on x3: take it both ways
+      CheckWindowEquivalentAt(row.sites[0].Vaddr(), row.id, window, c);
+    }
+    g_opaque.clear();
+  }
+  CHECK_EQ(inlineRows, static_cast<std::size_t>(5));
+}
+
+TEST(ThreeWordWindowsWithEveryPcRelativeKindRunLikeTheOriginal) {
+  const std::uint32_t windows[][3] = {
+      {EncBCond(1, 0x100), kNop, kNop},
+      {kNop, EncCb(1, 0, 5, 0x1000), kNop},
+      {kNop, kNop, EncTb(1, 6, 40, 0x100)},
+      {EncAdrp(8, 0x1234), EncAddImm(8, 8, 0x123), kNop},
+      {EncAdr(9, 0x40), kNop, EncB(0x100)},
+      {kNop, EncBl(0x1000), kNop},
+      {EncLdrLit(1, 0, 3, 0x800), EncLdrLit(1, 1, 4, 0x800), kNop},
+  };
+  for (const auto& window : windows) {
+    Trampoline tr;
+    RelocRefusal refusal;
+    CHECK(BuildTrampoline(kOriginal, window, tr, refusal));
+    for (unsigned seed = 0; seed < 4; ++seed) {
+      Cpu c = RandomCpu(300 + seed);
+      CheckWindowEquivalent("three-word window", window, c);
     }
   }
 }

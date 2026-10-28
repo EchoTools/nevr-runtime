@@ -1,0 +1,16 @@
+{
+  "format": "nevr-libr15-extra-rows",
+  "version": 1,
+  "stock_build_id": "b243509c08ce677aeb95fa348016949b3fc45230",
+  "rows": [
+    {
+      "id": "x.example_guard",
+      "kind": "word_patch",
+      "revault_va": "0x1500010",
+      "words": [
+        { "offset": 0, "stock_bytes": "e0031faa", "new_bytes": "1f2003d5" },
+        { "offset": 8, "stock_bytes": "00010054", "new_bytes": "1f2003d5" }
+      ]
+    }
+  ]
+}

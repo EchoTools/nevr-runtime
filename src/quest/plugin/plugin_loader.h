@@ -60,6 +60,8 @@ class Platform {
   // A line a plugin logged through ctx->log, already in the `[NEVR.PLUGIN] plugin=<id> ...` shape. `level` is an
   // NevrLogLevel value. May be called from any thread.
   virtual void PluginLine(std::uint32_t level, const std::string& line) = 0;
+  // The Quest host services a plugin reaches through ctx->quest (#1202, ADR 0025).
+  virtual const NevrQuestHostApi* QuestHostApi() = 0;
 };
 
 struct Options {

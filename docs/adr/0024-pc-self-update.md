@@ -76,6 +76,7 @@ installer once.
 | `update\swap.json` | host | the journal of a swap or rollback in progress |
 | `update\lock` | host, runtime, installer | held from the host's first read of `update\` until its runtime is mapped, and around every write to `update\` |
 | `update\manifest\` | core | the updater's own copy of the manifest, signature and version floor (the core's state directory) |
+| `update\work\` | core | the download area: the release zip while it downloads (a cut-off download's `.part` stays for a resume) and until it is verified and extracted; emptied after a stage |
 | `logs\nevr-update.jsonl` | core | the core's `[NEVR.INSTALL]` records for the updater's runs |
 
 The runtime stays at the top of the root and plugins stay in `plugins\`: the layout of ADR 0012 and the paths the host
@@ -300,7 +301,7 @@ Each row is a test in "Tests, failing first", and a live run on a game copy wher
 
 | # | Case | What happens | Final state | The log that proves it |
 | --- | --- | --- | --- | --- |
-| F1 | the download is cut off (connection closed, body shorter than `size`) | the core deletes the partial file; no staging is created | unchanged; the next launch tries again | `artifact_fetch ok=false reason=short_body`, `update check action=failed` |
+| F1 | the download is cut off (connection closed, body shorter than `size`) | the core keeps the partial download in `update\work\` for a resume (a wrong size or hash deletes it); no staging is created | unchanged; the next launch tries again | `artifact_fetch ok=false reason=short_body`, `update check action=failed` |
 | F2 | the zip's sha256, or a member's, is wrong | the core refuses; staging removed | unchanged | `artifact_fetch ok=false reason=sha256`, or `stage_member ok=false` |
 | F3 | the manifest has a bad signature, is expired, or is older than the stored version floor | the chain stops at its step | unchanged | `manifest_check ok=false` with the `FAIL step N` text |
 | F4 | the manifest cannot be fetched (offline) | nothing is checked | unchanged | `update check action=failed reason=network` |
