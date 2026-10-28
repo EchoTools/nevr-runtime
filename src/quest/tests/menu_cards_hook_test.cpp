@@ -202,8 +202,8 @@ void Reset(const std::string& pin, bool withContext = true) {
   mc::ArmForTest(g_pinStorage.c_str(), withContext ? &g_contextPointer : nullptr);
 }
 
-// The Quest page is matched by its name alone (the class the Quest callback reports is not known yet); kPage is the class a
-// PC-like resource would carry and is used only as a plausible value.
+// The Quest page is the resource of class CR15UIPage2CR under the name mnu_master_lowspec. The name is also the name of the
+// main-menu level, so about sixty resources of other classes arrive under it (headset run 2); only the class picks the page.
 constexpr std::uint64_t kPage = nevr_menu_cards::kPageType, kName = nevr_menu_cards::kQuestPageName;
 
 // ---- tests -----------------------------------------------------------------------------------------
@@ -303,7 +303,8 @@ void OnlyTheMainMenuPageInItsFinishedPrimaryBufferIsOffered() {
   };
   const Case cases[] = {
       {"status not done", 5, 0, kPage, kName},     {"status zero", 0, 0, kPage, kName},
-      {"secondary buffer", 4, 1, kPage, kName},    {"another name", 4, 0, kPage, kName ^ 1},
+      {"secondary buffer", 4, 1, kPage, kName},    {"another class", 4, 0, kPage ^ 1, kName},
+      {"another name", 4, 0, kPage, kName ^ 1},
       {"the PC page name", 4, 0, kPage, nevr_menu_cards::kPageName},
   };
   for (const Case& c : cases) {
@@ -452,24 +453,29 @@ void ConcurrentLoadsAllGetTheSamePage() {
   QCHECK(mc::CurrentTotals().swapped == 161);
 }
 
-void ThePageIsRecognisedByItsNameWhateverTheClass() {
+void OtherClassesUnderThePagesNameAreLeftAloneAndSilent() {
+  // Headset run 2: sixty classes arrive under mnu_master_lowspec. None is the page, none is touched, none is logged as one.
   std::vector<unsigned char> page = StockPage();
-  const std::uint64_t classes[] = {kPage, 0x1234, 0, ~0ull};
-  for (const std::uint64_t cls : classes) {
-    Reset(Sha(page));
+  Reset(Sha(page));
+  for (std::uint64_t i = 0; i < 60; ++i) {
     Block block;
     Resource res;
-    Fill(block, res, 4, 0, page.data(), page.size(), &g_alloc, 0x10, cls, kName);
+    Fill(block, res, 4, 0, page.data(), page.size(), &g_alloc, 0x10, 0xd4ce6a5004d8248cULL + i, kName);
     QCHECK(Call(block) == kCallbackResult);
-    QCHECK(g_seen.buffer != page.data() && g_seen.size > page.size() && mc::CurrentTotals().swapped == 1);
-    const std::vector<std::string> lines = Lines("menu_cards_page");
-    QCHECK(lines.size() == 1);
-    if (!lines.empty()) {
-      char hex[19];
-      std::snprintf(hex, sizeof(hex), "0x%016llx", static_cast<unsigned long long>(cls));
-      QCHECK(Field(lines[0], "class") == std::string("\"") + hex + "\"");
-      QCHECK(Field(lines[0], "name") == "\"0xf927772b9e2aefb1\"");
-    }
+    QCHECK(g_seen.buffer == page.data() && g_seen.size == page.size());
+  }
+  QCHECK(g_allocCalls == 0 && Lines("menu_cards_page").empty() && Lines("menu_cards_skip").empty());
+  QCHECK(mc::CurrentTotals().pages == 0 && mc::CurrentTotals().swapped == 0 && mc::CurrentTotals().deliveries == 60);
+  // The page itself, among them, is served and says which class and name it came as.
+  Block block;
+  Resource res;
+  Fill(block, res, 4, 0, page.data(), page.size(), &g_alloc, 0x10, kPage, kName);
+  QCHECK(Call(block) == kCallbackResult && g_seen.buffer != page.data() && mc::CurrentTotals().swapped == 1);
+  const std::vector<std::string> lines = Lines("menu_cards_page");
+  QCHECK(lines.size() == 1);
+  if (!lines.empty()) {
+    QCHECK(Field(lines[0], "class") == "\"0x75e5993f80940cd0\"");
+    QCHECK(Field(lines[0], "name") == "\"0xf927772b9e2aefb1\"");
   }
 }
 
@@ -565,10 +571,13 @@ void ARepeatedResourceIsNamedOnce() {
   QCHECK(mc::CurrentTotals().deliveries == 5);
 }
 
-void TheQuestPinIsAWellFormedDigestOrEmpty() {
+void TheQuestPinIsTheDigestTheHeadsetLogged() {
+  // Headset run 2 (APK 5.16.2-dev.13+9b381cae) logged this digest for class 0x75e5993f80940cd0, name 0xf927772b9e2aefb1,
+  // 81160 bytes: the same digest as the PC stock page (kStockPageSha256), so the two pages are byte-identical.
   const std::string pin = nevr_menu_cards::kQuestStockPageSha256;
-  QCHECK(pin.empty() || pin.size() == 64);
-  for (const char c : pin) QCHECK((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'));
+  QCHECK(pin == "af396701cfe27cb5d9fd512943b1ad732477b6399c4df5a2b36971375a6919eb");
+  QCHECK(pin == nevr_menu_cards::kStockPageSha256);
+  QCHECK(nevr_menu_cards::kPageType == 0x75e5993f80940cd0ULL && nevr_menu_cards::kQuestPageName == 0xf927772b9e2aefb1ULL);
 }
 
 }  // namespace
@@ -589,12 +598,12 @@ int main() {
   AFailedAllocationLeavesTheBlockAsItWas();
   EveryLoadGetsItsOwnCopyOfThePageBuiltOnce();
   ConcurrentLoadsAllGetTheSamePage();
-  ThePageIsRecognisedByItsNameWhateverTheClass();
+  OtherClassesUnderThePagesNameAreLeftAloneAndSilent();
   EachResourceClassIsNamedOnceUpToItsBound();
   AClassOfSevenTexturesDoesNotHideTheNextClass();
   APageSizedResourceIsNamedWhateverItsNameUpToItsBound();
   ARepeatedResourceIsNamedOnce();
-  TheQuestPinIsAWellFormedDigestOrEmpty();
+  TheQuestPinIsTheDigestTheHeadsetLogged();
   sentinel::SetLogSink(nullptr);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "menu_cards_hook_test: %d check(s) failed\n", quest_test::Failures());

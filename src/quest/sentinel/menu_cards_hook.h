@@ -3,8 +3,8 @@
  * One GOT hook on the data slot libr15 passes to the streaming reader as its read-finished callback
  * (CResourceManager::AsyncResourceIOCallback, GLOB_DAT 0x37195b8; pinned_targets.h). A data write: no code page is
  * written (#1132). The handler looks at the callback block before the game's callback runs (menu_cards_swap.h has the
- * block layout and the rules). When the finished resource is the main-menu page (name mnu_master_lowspec, any class:
- * runtime/patch/menu_cards.h kQuestPageName; primary buffer) it hashes the bytes and, only when they are the pinned stock page (runtime/patch/menu_cards.h,
+ * block layout and the rules). When the finished resource is the main-menu page (class CR15UIPage2CR under the
+ * name mnu_master_lowspec, runtime/patch/menu_cards.h kPageType and kQuestPageName; primary buffer) it hashes the bytes and, only when they are the pinned stock page (runtime/patch/menu_cards.h,
  * kQuestStockPageSha256), builds the page with the two cards added (runtime/patch/menu_page.h, shared with PC) and serves
  * a copy allocated through the game's own allocator. Everything else is passed through untouched, and the game's callback
  * always runs, with the block it was given or with the swapped bytes.
@@ -12,8 +12,9 @@
  * The data is the headset's own: the cards are built in memory from the page the game delivered; nothing derived from
  * Ready At Dawn's data is stored or shipped.
  *
- * Until a headset run has logged the stock page's digest the pin is empty, so a build serves the stock page unchanged and
- * says so: `menu_cards_page` carries the digest, the byte count and `pin=unset`.
+ * The pin is the digest headset run 2 logged for the page (kQuestStockPageSha256); it equals the PC stock page's, so the PC
+ * cards apply unchanged. A page whose digest differs (another build) is served unchanged and says so in `menu_cards_page`
+ * (`pin=mismatch`) and `menu_cards_skip`.
  *
  * Events (sentinel log, JSON): `menu_cards_install` once; `menu_cards_class` for the first delivery of each resource
  * class (at most kClassLines), so a run shows what the Quest calls its resource classes; `menu_cards_resource` for the first

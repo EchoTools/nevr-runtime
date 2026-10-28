@@ -150,9 +150,10 @@ void Offer(unsigned char* data) noexcept {
   const Delivery d = Inspect(data);
   if (!IsFinishedPrimary(d)) return;
   NoteResource(d);
-  // By name alone: the class the Quest callback reports for the page is not known yet (the log carries it), and the
-  // bytes are still pinned by digest before anything is served.
-  if (d.nameSymbol != nevr_menu_cards::kQuestPageName) return;
+  // The page is the CR15UIPage2CR resource under mnu_master_lowspec. The name is also the main-menu level's, so about sixty
+  // resources of other classes arrive under it (headset run 2): only the class picks the page out, and the rest are
+  // neither touched nor logged as pages.
+  if (d.classSymbol != nevr_menu_cards::kPageType || d.nameSymbol != nevr_menu_cards::kQuestPageName) return;
   g_pages.fetch_add(1, std::memory_order_relaxed);
   if (d.size > nevr_menu_page::kMaxResourceBytes) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "menu_cards_skip", {{"reason", "page_too_large"}, {"bytes", d.size}});
