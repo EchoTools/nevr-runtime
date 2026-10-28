@@ -139,6 +139,9 @@ TEST(TheExtraRowsOfTheBuildReachAttachInTheOptions) {
   Fresh fresh;
   const libr15_patch::AttachOptions options = integration::BuildAttachOptions();
   CHECK(options.extraRows.size() == sentinel::pinned::LibR15ExtraRows().size());
+  CHECK_EQ(options.extraRowsSha256, std::string(sentinel::pinned::LibR15ExtraRowsSha256()));
+  CHECK(options.extraRows.empty());  // the public build carries no row and no digest
+  CHECK(options.extraRowsSha256.empty());
   // The default seams: Attach runs the real lookup and the real protection and map calls on the device.
   CHECK(options.lookup == sentinel::FindLoadedImage);
   CHECK(options.protect == nullptr && options.map == nullptr && options.end == nullptr);

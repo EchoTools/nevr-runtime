@@ -30,6 +30,12 @@ add_compile_options(
 
 message(STATUS "nevr_quest: ABI=${ANDROID_ABI} platform=${ANDROID_PLATFORM} STL=${ANDROID_STL}")
 
+# The extra rows of a variant build (docs/adr/0021 section 11): a file of word-patch rows, the same file the libr15 patcher is
+# given (`android-repack-apk ... extra_rows=<file>`). Empty is the public build: no parser is linked and no row is carried. A
+# relative path is taken from the repository root. A file the patcher would refuse is a configure error
+# (cmake/libr15_extra_rows.cmake). The file is supplied by whoever builds the variant; it is never committed.
+set(NEVR_LIBR15_EXTRA_ROWS "" CACHE FILEPATH "Word-patch rows for a variant build (empty: the public build)")
+
 # ── Toolchain probe ─────────────────────────────────────────────────────
 # Trivial .so that compiles + links green, proving the NDK path works before
 # any breakpad/sentinel code is involved (task #1 acceptance).

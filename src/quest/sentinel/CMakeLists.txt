@@ -28,6 +28,23 @@ target_compile_options(nevr_quest_got_hook PRIVATE
 # the SHA-256 in nevr_quest_data, which this static library pulls in only for that object.
 target_link_libraries(nevr_quest_got_hook PUBLIC nevr_quest_data log dl)
 
+# The extra rows of a variant build (NEVR_LIBR15_EXTRA_ROWS, src/quest/CMakeLists.txt; docs/adr/0021 section 11). The public
+# build adds nothing here. A variant build checks the file with the patcher's parser at configure time, embeds its text and digest,
+# and links the parser so libr15_identity.cpp can read the rows back and compute the same patched build ID as its libr15.
+if(NEVR_LIBR15_EXTRA_ROWS)
+  include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/libr15_extra_rows.cmake)
+  get_filename_component(NEVR_EXTRA_ROWS_FILE "${NEVR_LIBR15_EXTRA_ROWS}" ABSOLUTE BASE_DIR "${NEVR_REPO_ROOT}")
+  get_target_property(NEVR_EXTRA_ROWS_JSON_INCLUDE nlohmann_json::nlohmann_json INTERFACE_INCLUDE_DIRECTORIES)
+  list(GET NEVR_EXTRA_ROWS_JSON_INCLUDE 0 NEVR_EXTRA_ROWS_JSON_INCLUDE)
+  set(NEVR_EXTRA_ROWS_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/libr15_extra_rows_data.cpp")
+  nevr_libr15_extra_rows("${NEVR_EXTRA_ROWS_FILE}" "${NEVR_EXTRA_ROWS_SOURCE}" "${NEVR_REPO_ROOT}/src"
+                         "${NEVR_EXTRA_ROWS_JSON_INCLUDE}" "${CMAKE_CURRENT_BINARY_DIR}/extra_rows_check")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${NEVR_EXTRA_ROWS_FILE}")
+  target_sources(nevr_quest_got_hook PRIVATE ../patch/libr15_extra_rows.cpp "${NEVR_EXTRA_ROWS_SOURCE}")
+  target_compile_definitions(nevr_quest_got_hook PRIVATE NEVR_LIBR15_EXTRA_ROWS=1)
+  target_link_libraries(nevr_quest_got_hook PRIVATE nlohmann_json::nlohmann_json)
+endif()
+
 # The first-run data step (#807). Its std::function lambdas instantiate libc++ templates whose type info is exported
 # from an object file of the shared library; in an archive, --exclude-libs (below) keeps it out of the export set
 # (tests/quest TestExportAllowlist). It calls into the hook sources that are the shared library's own objects.

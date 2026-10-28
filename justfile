@@ -1319,11 +1319,11 @@ test-quest-hooks json_include="":
     mkdir -p "$out/attach_json_inc"
     ln -sfn "$(cd "$attach_json" && pwd)/nlohmann" "$out/attach_json_inc/nlohmann"
     attach=(g++ -std=c++17 -Wall -Wextra -Werror -D_GLIBCXX_ASSERTIONS -Isrc -Isrc/quest/sentinel -isystem "$out/attach_json_inc" -pthread)
-    for src in src/quest/patch/libr15_patcher.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp; do
+    for src in src/quest/patch/libr15_patcher.cpp src/quest/patch/libr15_extra_rows.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp; do
         "${attach[@]}" -c "$src" -o "$out/attach_$(basename "$src" .cpp).o"
     done
     "${attach[@]}" -fno-exceptions src/quest/tests/libr15_attach_test.cpp \
-        "$out/attach_libr15_patcher.o" "$out/attach_libr15_patch_identity.o" "$out/attach_sha256.o" \
+        "$out/attach_libr15_patcher.o" "$out/attach_libr15_extra_rows.o" "$out/attach_libr15_patch_identity.o" "$out/attach_sha256.o" \
         "$out/id_libr15_identity.o" src/quest/sentinel/libr15_attach.cpp src/quest/sentinel/process_end_hook.cpp src/quest/sentinel/arm64_reloc.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/libr15_attach_test" -ldl
@@ -1332,7 +1332,7 @@ test-quest-hooks json_include="":
     # and the credits install (section 8), each run against the same Attach-verified synthetic image (libr15_live_image.h):
     # the slots the installs wrote, the log lines they emitted, the refusals that leave a row pass-through, and no protection
     # change on the image. The feature files and the sentinel's attach half are built without exceptions, as on the device.
-    attach_objs=("$out/attach_libr15_patcher.o" "$out/attach_libr15_patch_identity.o" "$out/attach_sha256.o" "$out/id_libr15_identity.o")
+    attach_objs=("$out/attach_libr15_patcher.o" "$out/attach_libr15_extra_rows.o" "$out/attach_libr15_patch_identity.o" "$out/attach_sha256.o" "$out/id_libr15_identity.o")
     attach_sentinel=(src/quest/sentinel/libr15_attach.cpp src/quest/sentinel/process_end_hook.cpp src/quest/sentinel/arm64_reloc.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp)
     "${attach[@]}" -fno-exceptions -Isrc/quest/tests src/quest/tests/row_hooks_install_test.cpp \
@@ -1342,6 +1342,50 @@ test-quest-hooks json_include="":
     "${attach[@]}" -fno-exceptions -Isrc/quest/tests src/quest/tests/credits_text_test.cpp src/quest/sentinel/credits_text.cpp \
         "${attach_objs[@]}" "${attach_sentinel[@]}" -o "$out/credits_text_test" -ldl
     timeout 300 "$out/credits_text_test"
+    # The variant build (docs/adr/0021 section 11): the sentinel compiled with NEVR_LIBR15_EXTRA_ROWS and the source configure
+    # generates for the example fixture. The rows it reads back are the parser's, the patched ID it expects is the patcher's for
+    # them and not the public one, and its digest is the file's. Built without exceptions, as on the device. The generator is the
+    # one the Quest build runs (cmake/libr15_extra_rows.cmake).
+    extra="$out/extra_rows"; rm -rf "$extra"; mkdir -p "$extra"
+    cmake -DNEVR_EXTRA_ROWS_FILE="$PWD/src/quest/tests/fixtures/libr15_extra_rows_example.json" \
+        -DNEVR_EXTRA_ROWS_OUT="$extra/libr15_extra_rows_data.cpp" -P src/quest/cmake/generate_libr15_extra_rows.cmake
+    "${attach[@]}" -fno-exceptions -DNEVR_LIBR15_EXTRA_ROWS=1 -c src/quest/sentinel/libr15_identity.cpp -o "$extra/identity.o"
+    "${attach[@]}" -fno-exceptions -c src/quest/patch/libr15_extra_rows.cpp -o "$extra/extra_rows.o"
+    "${attach[@]}" -fno-exceptions -c "$extra/libr15_extra_rows_data.cpp" -o "$extra/data.o"
+    "${attach[@]}" -fno-exceptions -c src/quest/sentinel/hook_log.cpp -o "$extra/hook_log.o"
+    "${attach[@]}" -Isrc/quest/tests src/quest/tests/libr15_extra_rows_identity_test.cpp \
+        "$extra/identity.o" "$extra/extra_rows.o" "$extra/data.o" "$extra/hook_log.o" \
+        "$out/attach_libr15_patch_identity.o" "$out/attach_sha256.o" -o "$extra/libr15_extra_rows_identity_test"
+    timeout 120 "$extra/libr15_extra_rows_identity_test" src/quest/tests/fixtures
+    # Every byte value survives the generated source: a file of bytes 0 to 255 is embedded and written back byte for byte.
+    python3 -c 'import sys; sys.stdout.buffer.write(bytes(range(256)))' > "$extra/all_bytes.bin"
+    cmake -DNEVR_EXTRA_ROWS_FILE="$PWD/$extra/all_bytes.bin" -DNEVR_EXTRA_ROWS_OUT="$extra/all_bytes_data.cpp" -P src/quest/cmake/generate_libr15_extra_rows.cmake
+    "${cxx[@]}" -I"$extra" src/quest/tests/extra_rows_embedding_check.cpp "$extra/all_bytes_data.cpp" -o "$extra/embedding_check"
+    "$extra/embedding_check" > "$extra/all_bytes.out"
+    cmp "$extra/all_bytes.bin" "$extra/all_bytes.out"
+    # A file the patcher would refuse stops the Quest build at configure. The configure step is cmake/libr15_extra_rows.cmake's
+    # nevr_libr15_extra_rows, run here in a project of its own (the Android project's own configure takes minutes and needs the
+    # NDK; this is the same function with the same arguments).
+    json_dir="$(cd "$attach_json" && pwd)"
+    configure_extra() { # file expected-substring (empty: must succeed)
+        local dir="$extra/configure"; rm -rf "$dir"
+        if cmake -S src/quest/tests/extra_rows_configure -B "$dir" -DNEVR_LIBR15_EXTRA_ROWS="$1" -DNEVR_JSON_INCLUDE="$json_dir" \
+                -DNEVR_SRC_ROOT="$PWD/src" > "$extra/configure.log" 2>&1; then
+            [ -z "$2" ] || { echo "test-quest-hooks: configure accepted $1, but must refuse it with '$2'" >&2; cat "$extra/configure.log" >&2; exit 1; }
+        else
+            [ -n "$2" ] || { echo "test-quest-hooks: configure refused $1" >&2; cat "$extra/configure.log" >&2; exit 1; }
+            grep -qF "$2" "$extra/configure.log" || { echo "test-quest-hooks: configure refused $1, but not with '$2'" >&2; cat "$extra/configure.log" >&2; exit 1; }
+        fi
+    }
+    configure_extra "$PWD/src/quest/tests/fixtures/libr15_extra_rows_example.json" ""
+    [ -f "$extra/configure/generated.cpp" ] || { echo "test-quest-hooks: configure of the fixture generated no source" >&2; exit 1; }
+    printf '{"format": ' > "$extra/malformed.json"
+    configure_extra "$PWD/$extra/malformed.json" "extra_rows_json"
+    sed 's/"stock_build_id": "b2/"stock_build_id": "b3/' src/quest/tests/fixtures/libr15_extra_rows_example.json > "$extra/other_libr15.json"
+    configure_extra "$PWD/$extra/other_libr15.json" "extra_rows_stock_build_id"
+    sed 's/"kind": "word_patch"/"kind": "word_patch", "extra": 1/' src/quest/tests/fixtures/libr15_extra_rows_example.json > "$extra/unknown_field.json"
+    configure_extra "$PWD/$extra/unknown_field.json" "extra_rows_unknown_field"
+    configure_extra "$PWD/$extra/does_not_exist.json" "the file does not exist"
     # The PC-relative relocator (arm64_reloc.h): each kind decoded and then run, original window against the
     # relocated trampoline far away, on a small A64 interpreter. Pure; no device.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/arm64_reloc_test.cpp \
@@ -1585,7 +1629,7 @@ quest-patcher json_include="":
     mkdir -p "$out/json_inc"
     ln -sfn "$(cd "$inc" && pwd)/nlohmann" "$out/json_inc/nlohmann"
     g++ -std=c++17 -O2 -Wall -Wextra -Werror -Isrc -isystem "$out/json_inc" \
-        src/quest/patch/quest_patch_libr15.cpp src/quest/patch/libr15_patcher.cpp src/quest/patch/libr15_patcher_cli.cpp \
+        src/quest/patch/quest_patch_libr15.cpp src/quest/patch/libr15_patcher.cpp src/quest/patch/libr15_extra_rows.cpp src/quest/patch/libr15_patcher_cli.cpp \
         src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp src/quest/sentinel/arm64_reloc.cpp \
         -o "$out/quest_patch_libr15"
     [ -x "$out/quest_patch_libr15" ] || { echo "quest-patcher: FAIL - $out/quest_patch_libr15 was not produced" >&2; exit 1; }
@@ -1611,7 +1655,7 @@ test-quest-patcher json_include="": (quest-patcher json_include)
     "${cxx[@]}" src/quest/tests/libr15_patch_table_test.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp \
         -o "$out/libr15_patch_table_test"
     timeout 60 "$out/libr15_patch_table_test"
-    "${cxx[@]}" src/quest/tests/libr15_patcher_test.cpp src/quest/patch/libr15_patcher.cpp src/quest/patch/libr15_patcher_cli.cpp \
+    "${cxx[@]}" src/quest/tests/libr15_patcher_test.cpp src/quest/patch/libr15_patcher.cpp src/quest/patch/libr15_extra_rows.cpp src/quest/patch/libr15_patcher_cli.cpp \
         src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp src/quest/sentinel/arm64_reloc.cpp \
         -o "$out/libr15_patcher_test"
     timeout 300 "$out/libr15_patcher_test" "$scratch" src/quest/tests/fixtures "$out/quest_patch_libr15"
@@ -1883,7 +1927,7 @@ test-quest-plugins:
     # The constructor's attach step (docs/adr/0021 sections 6, 7, 10, 12): the real Attach on the shipped patcher's output laid
     # out in host memory, and the plugin identity and build-ID alias it registers. The patcher and its identity are built with
     # exceptions (nlohmann::json); the sentinel half is built without, as on the device.
-    for src in src/quest/patch/libr15_patcher.cpp src/quest/patch/libr15_patch_identity.cpp; do
+    for src in src/quest/patch/libr15_patcher.cpp src/quest/patch/libr15_extra_rows.cpp src/quest/patch/libr15_patch_identity.cpp; do
         "${cxx[@]}" -D_GLIBCXX_ASSERTIONS -c "$src" -o "$out/step_$(basename "$src" .cpp).o"
     done
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/libr15_identity.cpp -o "$out/step_libr15_identity.o"
@@ -1892,7 +1936,7 @@ test-quest-plugins:
         "${cxx[@]}" -fno-exceptions -D_GLIBCXX_ASSERTIONS -c "src/quest/sentinel/$src.cpp" -o "$out/step_$src.o"
     done
     "${cxx[@]}" -pthread -Isrc/quest/tests -D_GLIBCXX_ASSERTIONS src/quest/tests/libr15_attach_step_test.cpp \
-        "$out/step_libr15_attach_step.o" "$out/step_libr15_patcher.o" "$out/step_libr15_patch_identity.o" "$out/step_libr15_identity.o" \
+        "$out/step_libr15_attach_step.o" "$out/step_libr15_patcher.o" "$out/step_libr15_extra_rows.o" "$out/step_libr15_patch_identity.o" "$out/step_libr15_identity.o" \
         "$out/step_libr15_attach.o" "$out/step_process_end_hook.o" "$out/step_arm64_reloc.o" \
         "${loader[@]}" -o "$out/libr15_attach_step_test" -ldl
     timeout -k 5 120 "$out/libr15_attach_step_test" src/quest/tests/fixtures
@@ -3001,7 +3045,7 @@ verify:
     # The allowlists are repeated in tools/tests/test_quest_no_code_writes.py, which fails when they differ.
     # BEGIN N149
     N149_PROT_OK=" sentinel/got_hook.cpp sentinel/libr15_attach.cpp sentinel/libr15_attach.h sentinel/credits_text.cpp sentinel/credits_text.h "
-    N149_ID_OK=" diag/hwdump_run.cpp patch/libr15_patch_identity.cpp patch/libr15_patch_table.h patch/libr15_patcher.cpp plugin/plugin_identity.h sentinel/credits_text.cpp sentinel/data_wiring.cpp sentinel/libr15_attach.cpp sentinel/libr15_identity.cpp sentinel/pinned_targets.h "
+    N149_ID_OK=" diag/hwdump_run.cpp patch/libr15_patch_identity.cpp patch/libr15_extra_rows.cpp patch/libr15_patch_table.h plugin/plugin_identity.h sentinel/credits_text.cpp sentinel/data_wiring.cpp sentinel/libr15_attach.cpp sentinel/libr15_identity.cpp sentinel/pinned_targets.h "
     n149_fail() { echo "verify: FAIL — N149 $1 (docs/adr/0021: the sentinel changes no code page at run time)." >&2; exit 1; }
     N149_RC=0; N149_PROT=$(grep -rnE '\b(mprotect|mmap|mremap|pkey_mprotect)\b|PROT_(EXEC|WRITE)' src/quest --include='*.cpp' --include='*.h' --exclude-dir=tests) || N149_RC=$?
     sensor_stage1 "N149 protection calls" "src/quest" "$N149_RC"

@@ -41,7 +41,7 @@ STOCK_ID_ALLOWLIST = {
     "diag/hwdump_run.cpp",  # the hardware report names the file it ran on
     "patch/libr15_patch_identity.cpp",  # the patcher's identity derivation starts from the stock ID
     "patch/libr15_patch_table.h",  # the definition
-    "patch/libr15_patcher.cpp",  # the patcher's spec: the file it accepts
+    "patch/libr15_extra_rows.cpp",  # PublicSpec(): the stock file the patcher accepts
     "plugin/plugin_identity.h",  # the ID a plugin is shown on the verified patched file
     "sentinel/credits_text.cpp",  # picks the refusal reason: the stock file is libr15_not_patched
     "sentinel/data_wiring.cpp",  # the game build the downloaded data is for

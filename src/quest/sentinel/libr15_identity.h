@@ -21,8 +21,16 @@
 namespace sentinel::pinned {
 
 // The word-patch rows this build was compiled with (ADR section 11). Empty in the public build: no address or word of a
-// row that came through --extra-rows is in this repository.
+// row that came through --extra-rows is in this repository. A variant build is configured with NEVR_LIBR15_EXTRA_ROWS=<file>
+// (src/quest/cmake/libr15_extra_rows.cmake): configure checks the file with the parser below, embeds its text, and this
+// function parses that text with nevr_quest::patch::ParseExtraRows on first use. A text that does not parse cannot have
+// passed configure; if it ever fails here the process logs `libr15_extra_rows status=unparsable` and traps, and never
+// continues with the public rows.
 const std::vector<nevr_quest::patch::WordPatchRow>& LibR15ExtraRows();
+
+// The SHA-256 of the extra-rows file as given, 64 lowercase hex characters; "" in the public build. Attach logs it with the
+// row count (never the rows).
+const char* LibR15ExtraRowsSha256();
 
 // The ID of the patched libr15 this build expects, 40 lowercase hex characters, computed once. The pointer is stable for
 // the life of the process.

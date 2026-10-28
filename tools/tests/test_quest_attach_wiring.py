@@ -104,5 +104,42 @@ class AttachIsWired(unittest.TestCase):
             self.assertNotRegex((QUEST / header).read_text(), r'#include\s+"[^"]*callback_thunk\.h"', header)
 
 
+class ExtraRowsAreAVariantBuildSwitch(unittest.TestCase):
+    """docs/adr/0021 section 11: the public build carries no extra row, no parser and no digest."""
+
+    def test_the_cache_variable_is_empty_by_default(self):
+        cmake = (QUEST / "CMakeLists.txt").read_text()
+        self.assertRegex(cmake, r'set\(NEVR_LIBR15_EXTRA_ROWS "" CACHE FILEPATH')
+
+    def test_the_parser_is_linked_only_when_the_variable_is_set(self):
+        text = (QUEST / "sentinel/CMakeLists.txt").read_text()
+        block = text[text.index("if(NEVR_LIBR15_EXTRA_ROWS)") : text.index("endif()", text.index("if(NEVR_LIBR15_EXTRA_ROWS)"))]
+        self.assertIn("libr15_extra_rows.cpp", block)
+        self.assertIn("NEVR_LIBR15_EXTRA_ROWS=1", block)
+        self.assertIn("nevr_libr15_extra_rows(", block)
+        outside = text.replace(block, "")
+        self.assertNotIn("libr15_extra_rows", outside)
+
+    def test_no_public_recipe_and_no_preset_passes_a_file(self):
+        # Only the host test recipe names it (it configures a harness project with the example fixture).
+        text = (ROOT / "justfile").read_text()
+        recipes = re.split(r"(?m)^(?=[A-Za-z_][\w-]*[^\n]*:\s*(?:\(.*\))?\s*$)", text)
+        users = [r.split("\n", 1)[0] for r in recipes if "NEVR_LIBR15_EXTRA_ROWS" in r]
+        self.assertEqual(len(users), 1, users)
+        self.assertTrue(users[0].startswith("test-quest-hooks"), users)
+        self.assertNotIn("NEVR_LIBR15_EXTRA_ROWS", (QUEST / "CMakePresets.json").read_text())
+
+    def test_the_identity_switch_is_a_compile_definition_and_the_default_is_empty(self):
+        identity = code("sentinel/libr15_identity.cpp")
+        self.assertIn("#ifdef NEVR_LIBR15_EXTRA_ROWS", (QUEST / "sentinel/libr15_identity.cpp").read_text())
+        self.assertIn("__builtin_trap()", identity)  # an unparsable embedded text never falls back to the public rows
+        self.assertIn('return "";', identity)
+
+    def test_the_attach_options_carry_the_rows_and_the_digest(self):
+        unit = code("integration/libr15_attach_step.cpp")
+        self.assertIn("options.extraRows = sentinel::pinned::LibR15ExtraRows();", unit)
+        self.assertIn("options.extraRowsSha256 = sentinel::pinned::LibR15ExtraRowsSha256();", unit)
+
+
 if __name__ == "__main__":
     unittest.main()

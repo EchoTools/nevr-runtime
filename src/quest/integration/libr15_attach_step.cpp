@@ -23,6 +23,7 @@ void RegisterIdentityOnce() {
 libr15_patch::AttachOptions BuildAttachOptions() {
   libr15_patch::AttachOptions options;
   options.extraRows = sentinel::pinned::LibR15ExtraRows();
+  options.extraRowsSha256 = sentinel::pinned::LibR15ExtraRowsSha256();
   return options;
 }
 
