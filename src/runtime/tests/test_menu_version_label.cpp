@@ -65,4 +65,13 @@ TEST(MenuVersionLabel, AnEmptyLabelReplacesNothing) {
   EXPECT_EQ(ReplacementFor(kLobbyVersionItem, "2023-04-04T17:47:47+00:00", std::string()), nullptr);
 }
 
+// The Quest hook keeps its label in a fixed buffer and passes it as a C string.
+TEST(MenuVersionLabel, ACStringLabelThatIsNullOrEmptyReplacesNothing) {
+  const char* const none = nullptr;
+  EXPECT_EQ(ReplacementFor(kLobbyVersionItem, "2023-04-04T17:47:47+00:00", none), nullptr);
+  EXPECT_EQ(ReplacementFor(kLobbyVersionItem, "2023-04-04T17:47:47+00:00", ""), nullptr);
+  const char buffer[] = "nEVR 5.8.0";
+  EXPECT_STREQ(ReplacementFor(kLobbyVersionItem, "2023-04-04T17:47:47+00:00", buffer), "nEVR 5.8.0");
+}
+
 }  // namespace

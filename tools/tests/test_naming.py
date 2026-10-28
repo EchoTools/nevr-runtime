@@ -78,6 +78,8 @@ BRAND_PROSE_SPELLINGS = {
     "src/core/build_identity.cpp": {"nEVR"},  # MenuVersionLabel: the text a player sees
     "src/quest/social/menu_version_label.h": {"nEVR"},  # the Quest menu label: the text a player sees
     "src/quest/social/menu_version_label.cpp": {"nEVR"},  # the Quest menu label: the text a player sees
+    "src/quest/tests/menu_version_label_test.cpp": {"nEVR"},  # asserts the label text the menu shows
+    "docs/testing/smoke-checklist.md": {"nEVR"},  # the rows that quote the menu label text (Q28, X11)
     "src/runtime/ext/plugin_refusal_notice.h": {"nEVR"},
     "src/runtime/host/stop_notice.h": {"nEVR"},  # the player's text when the runtime did not load
     "src/runtime/tests/test_host_rendezvous.cpp": {"nEVR"},  # asserts that text

@@ -14,10 +14,22 @@
 // installs on the pinned build.
 namespace quest_social::menu_version {
 
-inline constexpr std::uint64_t kSetTextVaddr = 0x148111cULL;  // CCanvasUICS::SetText(this, handle, item, text)
+inline constexpr std::uint64_t kSetTextVaddr = 0x139111cULL;  // CCanvasUICS::SetText(this, handle, item, text)
+
+// The first four instruction words at kSetTextVaddr in the pinned libr15.so; the install refuses any other bytes, and
+// got_pinned_test.cpp compares them with the real library.
+inline constexpr std::uint32_t kSetTextPrologueWords[4] = {0xb4000243u, 0xd10083ffu, 0xa9017bf3u, 0xaa0303f3u};
 
 // Installs the hook on the loaded libr15.so. Returns 1 when installed, 0 when refused or libr15 is not usable. Logs one
 // line either way.
 std::size_t InstallMenuVersionLabelHook() noexcept;
+
+// Host-test support (src/quest/tests/menu_version_label_test.cpp): sets the label the handler draws, without touching
+// libr15, and arms the handler. SetTextEntryForTest is the address the game's calls would reach; the test sets
+// SetTextOriginalForTest to a stand-in for the game's SetText. ResetForTest disarms the handler and clears both.
+void ArmForTest(const char* label) noexcept;
+void* SetTextEntryForTest() noexcept;
+void SetTextOriginalForTest(void* original) noexcept;
+void ResetForTest() noexcept;
 
 }  // namespace quest_social::menu_version

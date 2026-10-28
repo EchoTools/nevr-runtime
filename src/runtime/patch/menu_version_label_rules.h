@@ -44,11 +44,16 @@ inline std::string FitLabel(std::string_view label, std::size_t maxChars = kMaxL
 // The text to draw for one SetText call, or nullptr to leave the call alone. Only the lobby_version item with a
 // non-empty text is replaced: the empty text is the script clearing the item when its page is disabled, and it
 // must stay empty.
-inline const char* ReplacementFor(std::uint64_t item, const char* text, const std::string& fittedLabel) {
+// `fittedLabel` is a NUL-terminated string; the Quest hook keeps it in a fixed buffer, as its call path allocates nothing.
+inline const char* ReplacementFor(std::uint64_t item, const char* text, const char* fittedLabel) {
   if (item != kLobbyVersionItem) return nullptr;
   if (text == nullptr || text[0] == '\0') return nullptr;
-  if (fittedLabel.empty()) return nullptr;
-  return fittedLabel.c_str();
+  if (fittedLabel == nullptr || fittedLabel[0] == '\0') return nullptr;
+  return fittedLabel;
+}
+
+inline const char* ReplacementFor(std::uint64_t item, const char* text, const std::string& fittedLabel) {
+  return ReplacementFor(item, text, fittedLabel.c_str());
 }
 
 }  // namespace nevr_menu_version_label

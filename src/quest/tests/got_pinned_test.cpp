@@ -28,6 +28,7 @@
 #include "quest/login/login_prerequisite_targets.h"
 #include "quest/game_login_failures.h"
 #include "quest/login/login_rewrite.h"
+#include "quest/social/menu_version_label.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -318,6 +319,23 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "libr15 FillResourceFileRequest call site %s at %#llx is not a bl to the stub (word %#x)\n", site.name,
                    static_cast<unsigned long long>(site.bl), word);
       QCHECK(false);
+    }
+  }
+
+  // The menu version label's inline hook (#747): CCanvasUICS::SetText is at the vaddr the hook pins, and its first four
+  // instruction words are the ones the install proves before patching. (ReVault lists libr15 at the pinned address plus
+  // 0x100000: the first pin, ReVault's 0x149111c less 0x10000, pointed at unrelated code.)
+  {
+    std::uint32_t words[4] = {};
+    std::memcpy(words, static_cast<const unsigned char*>(r15.mem) + quest_social::menu_version::kSetTextVaddr,
+                sizeof(words));
+    for (int i = 0; i < 4; ++i) {
+      if (words[i] != quest_social::menu_version::kSetTextPrologueWords[i]) {
+        std::fprintf(stderr, "libr15 CCanvasUICS::SetText at %#llx: word %d is %#x, the hook expects %#x\n",
+                     static_cast<unsigned long long>(quest_social::menu_version::kSetTextVaddr), i, words[i],
+                     quest_social::menu_version::kSetTextPrologueWords[i]);
+        QCHECK(false);
+      }
     }
   }
 

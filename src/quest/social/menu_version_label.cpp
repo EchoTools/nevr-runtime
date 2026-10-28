@@ -20,7 +20,8 @@ using sentinel::InlineStatus;
 // The first four words of CCanvasUICS::SetText in the pinned libr15 (ReVault 0x149111c; the bytes at the link-time
 // address). Word 0 is `cbz x3, ...`, PC-relative: the inline backend relocates it into the trampoline
 // (sentinel/arm64_reloc.h). The words are the check, not a guess: a build that differs refuses.
-constexpr InlinePrologue kSetTextPrologue{{0xb4000243u, 0xd10083ffu, 0xa9017bf3u, 0xaa0303f3u}};
+constexpr InlinePrologue kSetTextPrologue{
+    {kSetTextPrologueWords[0], kSetTextPrologueWords[1], kSetTextPrologueWords[2], kSetTextPrologueWords[3]}};
 
 struct SetTextTag {};
 using SetTextThunk = sentinel::CallbackThunk<SetTextTag, std::uint64_t(void*, std::uint32_t, std::uint64_t, const char*)>;
@@ -33,10 +34,8 @@ char g_label[32] = {};
 // (callback_thunk.h rule 1). An empty text is the script clearing the item and stays empty.
 std::uint64_t OnSetText(SetTextThunk::Fn original, void* canvas, std::uint32_t handle, std::uint64_t item,
                         const char* text) noexcept {
-  if (item != nevr_menu_version_label::kLobbyVersionItem || text == nullptr || text[0] == '\0' || g_label[0] == '\0') {
-    return original(canvas, handle, item, text);
-  }
-  return original(canvas, handle, item, g_label);
+  const char* replacement = nevr_menu_version_label::ReplacementFor(item, text, static_cast<const char*>(g_label));
+  return original(canvas, handle, item, replacement != nullptr ? replacement : text);
 }
 
 NEVR_HOOK_RECORD(kSetTextRecord, SetTextThunk, &OnSetText);
@@ -74,6 +73,21 @@ std::size_t InstallMenuVersionLabelHook() noexcept {
                        {"label", g_label},
                        {"target", sentinel::HexString(targetText, reinterpret_cast<std::uintptr_t>(target))}});
   return st == InlineStatus::kOk ? 1 : 0;
+}
+
+void ArmForTest(const char* label) noexcept {
+  std::memset(g_label, 0, sizeof g_label);
+  std::strncpy(g_label, label, sizeof g_label - 1);  // the last byte stays NUL
+  SetTextThunk::Arm(kSetTextRecord);
+}
+
+void* SetTextEntryForTest() noexcept { return SetTextThunk::EntryAddress(); }
+
+void SetTextOriginalForTest(void* original) noexcept { *SetTextThunk::OriginalOut() = original; }
+
+void ResetForTest() noexcept {
+  SetTextThunk::Reset();
+  std::memset(g_label, 0, sizeof g_label);
 }
 
 }  // namespace quest_social::menu_version

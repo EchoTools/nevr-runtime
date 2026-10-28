@@ -1247,6 +1247,14 @@ test-quest-hooks:
     # The lobby-full policy (#1001): the #889 cases on the 16-byte lobby key. Pure; no libr15 here.
     "${cxx[@]}" -pthread src/quest/tests/lobby_full_test.cpp -o "$out/lobby_full_test"
     timeout 60 "$out/lobby_full_test"
+    # The Quest menu version label (#747): the real SetText handler through the thunk entry against a stand-in for
+    # CCanvasUICS::SetText, the pinned prologue words, and the install's refusal when libr15 is not loaded. The
+    # build-info header is the host stub (no release version).
+    "${cxx[@]}" -fno-exceptions -pthread -Isrc/quest/tests/stub src/quest/tests/menu_version_label_test.cpp \
+        src/quest/social/menu_version_label.cpp src/quest/sentinel/inline_hook.cpp src/quest/sentinel/arm64_reloc.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/menu_version_label_test" -ldl
+    timeout 120 "$out/menu_version_label_test"
     # The login-prompt hook (#239): the real handler and prompt board, built as the sentinel builds
     # them (no exceptions), driven through the thunk entry.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/login_prompt_hook_test.cpp \
