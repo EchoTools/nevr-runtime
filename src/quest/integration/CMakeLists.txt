@@ -19,7 +19,8 @@ endif()
 
 # The Quest plugin loader (docs/adr/0019-quest-plugin-loader.md): the plan, the ELF checks, the loader, its records and the
 # sentinel's binding of it. The PC's plan builder (runtime/ext/plugin_load_plan.cpp) is compiled in so one `plugins:` list
-# reads the same on both platforms. plugin_game_image.cpp reaches pinned_targets.h, so it is built without exceptions.
+# reads the same on both platforms. plugin_game_image.cpp and input_seam_hook.cpp reach pinned_targets.h, so they are built
+# without exceptions.
 add_library(nevr_quest_plugin STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_plan.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_image.cpp"
@@ -28,8 +29,10 @@ add_library(nevr_quest_plugin STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_platform.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_runtime.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_game_image.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/input_seam_hook.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/ext/plugin_load_plan.cpp")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_game_image.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/input_seam_hook.cpp"
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 target_include_directories(nevr_quest_plugin PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 target_include_directories(nevr_quest_plugin PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel")
