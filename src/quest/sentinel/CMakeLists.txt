@@ -15,6 +15,8 @@ add_library(nevr_quest_got_hook STATIC
   got_hook.cpp
   arm64_reloc.cpp
   inline_hook.cpp
+  libr15_attach.cpp
+  ../patch/libr15_patch_identity.cpp
   hook_log.cpp
   hook_report.cpp)
 target_include_directories(nevr_quest_got_hook PUBLIC
@@ -22,7 +24,9 @@ target_include_directories(nevr_quest_got_hook PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 target_compile_options(nevr_quest_got_hook PRIVATE
   -Wall -Wextra -Werror -fno-exceptions -fvisibility=hidden -fvisibility-inlines-hidden)
-target_link_libraries(nevr_quest_got_hook PUBLIC log dl)
+# libr15_attach.cpp derives the patched build ID from the compiled-in table (ADR 0021 section 7): the identity source and
+# the SHA-256 in nevr_quest_data, which this static library pulls in only for that object.
+target_link_libraries(nevr_quest_got_hook PUBLIC nevr_quest_data log dl)
 
 # The first-run data step (#807). Its std::function lambdas instantiate libc++ templates whose type info is exported
 # from an object file of the shared library; in an archive, --exclude-libs (below) keeps it out of the export set

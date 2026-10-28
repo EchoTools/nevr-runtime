@@ -13,6 +13,7 @@
 #include "callback_thunk.h"
 #include "got_hook.h"
 #include "inline_hook.h"
+#include "libr15_attach.h"
 
 namespace sentinel {
 
@@ -54,6 +55,26 @@ InlineStatus InstallInlineThunk(const void* target, const InlinePrologue& prolog
   static_assert(IsCallbackThunk<Thunk>::value,
                 "InstallInlineThunk requires a CallbackThunk<Tag, Ret(Args...)> instantiation");
   return InlineThunkInstaller::Install<Thunk>(target, prologue);
+}
+
+// Befriended by RowActivation so it can reach the private activation (libr15_attach.h).
+struct RowThunkInstaller {
+  template <typename Thunk>
+  static nevr_quest::libr15_patch::ActivateStatus Install(const char* rowId) {
+    static_assert(IsCallbackThunk<Thunk>::value,
+                  "InstallRowThunk requires a CallbackThunk<Tag, Ret(Args...)> instantiation");
+    return nevr_quest::libr15_patch::RowActivation::ActivateRow(rowId, Thunk::EntryAddress(), Thunk::OriginalOut());
+  }
+};
+
+// Activates the build-time patch's row `rowId` (ADR 0021): `Thunk`'s entry goes into the row's slot with one atomic
+// store, and the thunk's original pointer is the row's trampoline, published before the store. No page is written
+// or re-protected. Same rule as InstallInlineThunk: the detour is always a thunk entry, so the frame sensor walks it.
+template <typename Thunk>
+nevr_quest::libr15_patch::ActivateStatus InstallRowThunk(const char* rowId) {
+  static_assert(IsCallbackThunk<Thunk>::value,
+                "InstallRowThunk requires a CallbackThunk<Tag, Ret(Args...)> instantiation");
+  return RowThunkInstaller::Install<Thunk>(rowId);
 }
 
 }  // namespace sentinel
