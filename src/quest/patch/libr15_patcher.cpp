@@ -493,9 +493,6 @@ PatchResult PatchLibr15(const std::vector<std::uint8_t>& stock, const PatchSpec&
       return Failed(Refuse("layout_relro", "", "GNU_RELRO ends at " + Hex(p.p_vaddr + p.p_memsz) + ", past the slot area at " + Hex(slotArea)), stockSha);
     }
   }
-  if (slotArea < target->p_vaddr + target->p_filesz) {
-    return Failed(Refuse("layout_not_bss", "", "the slot area would lie in the file-backed part of the segment"), stockSha);
-  }
   // The section that ends the segment: a NOBITS section ending at the image end (.bss).
   std::size_t bssIndex = elf.sh.size();
   for (std::size_t i = 0; i < elf.sh.size(); ++i) {

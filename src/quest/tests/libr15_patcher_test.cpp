@@ -289,6 +289,11 @@ TEST(AGrowthThatWouldOverlapTheNextSegmentIsRefused) {
   o.trailingLoadVaddr = 0x1404000;  // ... where another PT_LOAD is
   World blocked(o);
   ExpectRefusal(blocked.Patch(), "layout_overlap", "", "growth overlaps");
+  SynthOptions sharedPage = o;  // the next segment starts past the grown end but inside the last page it maps
+  sharedPage.imageEnd = 0x1403f00;
+  sharedPage.trailingLoadVaddr = 0x1403f80;
+  World shares(sharedPage);
+  ExpectRefusal(shares.Patch(), "layout_overlap", "", "shares the last page");
   SynthOptions clear = o;
   clear.trailingLoadVaddr = 0x1405000;  // one page further: room
   World fine(clear);
@@ -338,6 +343,18 @@ TEST(ACreditsPairThatIsNotAnAdrpAndAnAddIsRefused) {
   w.rows[2].sites[1].words[0] = AddImm(9, 8, 0x40);  // add x9, x8, #0x40: another destination
   w.elf.PutWord(kAdd0, w.rows[2].sites[1].words[0]);
   ExpectRefusal(w.Patch(), "credits_shape", "s.credits", "credits shape");
+  World source;  // add x8, x9, #imm: another source register
+  source.rows[2].sites[1].words[0] = AddImm(8, 9, kBlob & 0xFFF);
+  source.elf.PutWord(kAdd0, source.rows[2].sites[1].words[0]);
+  ExpectRefusal(source.Patch(), "credits_shape", "s.credits", "credits source register");
+  World shifted;  // add x8, x8, #imm, lsl #12: another opcode
+  shifted.rows[2].sites[1].words[0] = AddImm(8, 8, kBlob & 0xFFF) | (1u << 22);
+  shifted.elf.PutWord(kAdd0, shifted.rows[2].sites[1].words[0]);
+  ExpectRefusal(shifted.Patch(), "credits_shape", "s.credits", "credits shifted add");
+  World notAdrp;  // the first word of a pair is not an ADRP
+  notAdrp.rows[2].sites[0].words[0] = AddImm(8, 8, 0);
+  notAdrp.elf.PutWord(kAdrp0, notAdrp.rows[2].sites[0].words[0]);
+  ExpectRefusal(notAdrp.Patch(), "credits_shape", "s.credits", "credits first word");
   World b;
   b.rows[2].sites[3].words[0] = AddImm(12, 12, 0x44);  // the second pair loads another address
   b.elf.PutWord(kAdd1, b.rows[2].sites[3].words[0]);
@@ -358,6 +375,40 @@ TEST(AnInputThatIsNotTheExpectedElfIsRefused) {
   std::vector<std::uint8_t> noBss = w.elf.bytes;
   noBss[w.elf.BssSizeOffset()] ^= 0x40;  // .bss no longer ends at the segment's end
   ExpectRefusal(PatchLibr15(noBss, w.spec, {}, ""), "layout_bss_section", "", "no bss section");
+}
+
+TEST(ATableOrAFileTheCodeCannotWriteIsRefusedNotGuessedAt) {
+  // A slot area more than 4 GiB from a site: the ADRP cannot reach it.
+  SynthOptions far = World::DefaultOptions();
+  far.imageEnd = 0x140000000;
+  World farWorld(far);
+  ExpectRefusal(farWorld.Patch(), "stub_out_of_range", "s.join", "slot out of ADRP range");
+  World farCredits(far);  // only the credits row: its LDR cannot reach the slot either
+  farCredits.rows.erase(farCredits.rows.begin(), farCredits.rows.begin() + 2);
+  farCredits.rows[0].slot = 0;
+  farCredits.Rebind();
+  ExpectRefusal(farCredits.Patch(), "stub_out_of_range", "s.credits", "credits slot out of range");
+  // A writable segment whose memory ends inside its file-backed part is not a valid ELF to patch.
+  SynthOptions small = World::DefaultOptions();
+  small.imageEnd = 0x1403100;
+  World smallWorld(small);
+  ExpectRefusal(smallWorld.Patch(), "elf_invalid", "", "memsz below filesz");
+  // A public row of the word_patch kind: the table (not a file) may not hold one.
+  World kind;
+  kind.rows[0].kind = RowKind::kWordPatch;
+  ExpectRefusal(kind.Patch(), "row_kind", "s.join", "public word_patch row");
+  // Word edits that did not come through the file reader: the patcher checks them again.
+  World w;
+  WordPatchRow edit;
+  edit.id = "x.direct";
+  edit.revaultVa = kGuardA + kRevaultBias;
+  edit.edits.push_back({2, {0xe0, 0x03, 0x1f, 0xaa}, {0x1f, 0x20, 0x03, 0xd5}});
+  ExpectRefusal(w.Patch({edit}), "word_offset", "x.direct", "offset not a multiple of 4");
+  edit.edits[0].offset = 0;
+  edit.revaultVa = 0x1000;
+  ExpectRefusal(w.Patch({edit}), "word_outside_text", "x.direct", "address below the bias");
+  edit.revaultVa = kGuardA + kRevaultBias;
+  CHECK(w.Patch({edit}).ok);
 }
 
 // ---- ADR test 9: word patches and the extra-rows file (format 1) ---------------------------------------------------
