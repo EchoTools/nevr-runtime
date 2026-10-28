@@ -1687,6 +1687,31 @@ TEST(AnExtraRowsFileWithoutATrailingNewlineIsTheSameFile) {
   for (const std::string& f : {stock, out, report, rows}) std::remove(f.c_str());
 }
 
+// ReadFile reads in 64 KiB chunks: a file whose last chunk is one byte, and a file of several chunks, arrive whole.
+TEST(AnExtraRowsFileLongerThanOneReadChunkIsReadWhole) {
+  World w;
+  const std::string stock = g_scratch + "/chunk_stock.so", out = g_scratch + "/chunk_out.so", report = g_scratch + "/chunk_report.json";
+  const std::string rows = g_scratch + "/chunk_rows.json";
+  WriteBytes(stock, w.elf.bytes);
+  std::string body = Fixture();
+  while (!body.empty() && (body.back() == '\n' || body.back() == ' ')) body.pop_back();
+  CHECK(!body.empty() && body.back() == '}');
+  for (const std::size_t total : {static_cast<std::size_t>(65537), static_cast<std::size_t>(65536), static_cast<std::size_t>(3 * 65536 + 1)}) {
+    // Leading spaces make the length exact and leave the last byte, the closing brace, the byte a short read would lose.
+    const std::string text = std::string(total - body.size(), ' ') + body;
+    CHECK_EQ(text.size(), total);
+    std::ofstream(rows, std::ios::binary | std::ios::trunc) << text;
+    std::remove(out.c_str());
+    std::ostringstream so, se;
+    CHECK_EQ(RunCli({"--stock", stock, "--out", out, "--report", report, "--extra-rows", rows}, w.spec, so, se), 0);
+    CHECK(se.str().empty());
+    const Json rep = Json::parse(ReadText(report), nullptr, false);
+    CHECK(!rep.is_discarded());
+    if (!rep.is_discarded()) CHECK(rep["summary"]["extra_rows_sha256"] == nevr_quest::data::Sha256Hex(text.data(), text.size()));
+  }
+  for (const std::string& f : {stock, out, report, rows}) std::remove(f.c_str());
+}
+
 TEST(AFileTheToolCannotReadExitsTwoWithOneJsonLineInsteadOfAborting) {
   World w;
   const std::string stock = g_scratch + "/read_stock.so", out = g_scratch + "/read_out.so", report = g_scratch + "/read_report.json";
