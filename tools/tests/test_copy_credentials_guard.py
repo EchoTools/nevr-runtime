@@ -91,6 +91,7 @@ class CopyCredentialsGuardTest(unittest.TestCase):
         self.assertFalse((self.win10 / "plugins").exists(), "a plugin directory was made")
         self.assertFalse(self.started.exists(), "the game was started")
         self.assertFalse(self.lock.exists(), "the run lock was taken before the refusal")
+        self.assertFalse((self.tmp / "README.md").exists(), "the lock's work directory was made before the refusal")
         self.assertFalse((self.tmp / "work").exists(), "the work root was written before the refusal")
         self.assertFalse((self.tmp / "server-runs").exists(), "a run's output directory was made")
         self.assertEqual(list(self.tmp.glob("client-run-*")), [], "a run's scratch directory was made")
@@ -204,8 +205,8 @@ class CopyCredentialsGuardTest(unittest.TestCase):
                 self.assertRegex(text, r"(?m)^acquire_game_run_lock$")
         helper = re.sub(r"(?m)^\s*#.*$", "", (REPO / "tools/lib/game_install.sh").read_text())
         body = helper[helper.index("acquire_game_run_lock() {"):]
-        self.assertLess(body.index("refuse_copy_credentials"), body.index("exec 9>"),
-                        "the guard must run before the lock file is opened")
+        self.assertLess(body.index("refuse_copy_credentials"), body.index("work_dir"),
+                        "the guard must run before the lock's directory is made and its file opened")
 
 
 if __name__ == "__main__":
