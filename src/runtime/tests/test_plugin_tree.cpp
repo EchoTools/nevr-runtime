@@ -82,13 +82,15 @@ class PluginTree : public ::testing::Test {
   }
 
   // Runs the tree walk the way the loader does: the plugin open, its directory with a trailing backslash.
-  TreeVerdict Walk(const std::string& name, size_t* heldCount = nullptr) {
+  TreeVerdict Walk(const std::string& name, size_t* heldCount = nullptr,
+                   std::vector<std::string>* system32Only = nullptr) {
     const nlohmann::json& t = manifest_["trees"][name];
     const std::string directory = dir_ + "/" + t["dir"].get<std::string>() + "/";
     HANDLE root = Open(directory + t["root"].get<std::string>());
     if (root == INVALID_HANDLE_VALUE) return {};
     HeldFiles held;
-    const TreeVerdict v = nevr_plugin_tree::VerifyPluginTree(WinPath(directory), root, policy_, now_, &held);
+    const TreeVerdict v =
+        nevr_plugin_tree::VerifyPluginTree(WinPath(directory), root, policy_, now_, &held, system32Only);
     if (heldCount != nullptr) *heldCount = held.size();
     CloseHandle(root);
     return v;
@@ -174,6 +176,31 @@ TEST_F(PluginTree, ImportOfASystemLibraryNeedsNoFileInTheDirectory) {
   ASSERT_EQ(GetModuleHandleA("hid.dll"), nullptr) << "hid.dll is loaded: the System32 branch is not under test";
   const TreeVerdict v = Walk("import_system_without_extension");
   EXPECT_TRUE(v.accepted) << v.Describe();
+}
+
+// #768: the libraries only System32 supplies are reported, so the loader can load them before the plugin.
+TEST_F(PluginTree, ASystemLibraryOnlySystem32SuppliesIsReportedOnceInLowerCase) {
+  ASSERT_EQ(GetModuleHandleA("hid.dll"), nullptr) << "hid.dll is loaded: the System32 branch is not under test";
+  std::vector<std::string> names;
+  const TreeVerdict v = Walk("import_system_without_extension", nullptr, &names);
+  EXPECT_TRUE(v.accepted) << v.Describe();
+  ASSERT_EQ(names.size(), 1u);
+  EXPECT_EQ(names[0], "hid.dll");
+}
+
+TEST_F(PluginTree, ADependencyInTheDirectoryIsHeldNotReportedAsSystem) {
+  std::vector<std::string> names;
+  size_t held = 0;
+  const TreeVerdict v = Walk("import_ok", &held, &names);
+  EXPECT_TRUE(v.accepted) << v.Describe();
+  EXPECT_EQ(held, 1u);
+  EXPECT_TRUE(names.empty());
+}
+
+TEST(PluginTreeNames, AnApiSetNameAndALoadedModuleAreNotSystem32Only) {
+  EXPECT_FALSE(nevr_plugin_tree::SuppliedBySystem32Only("api-ms-win-core-synch-l1-2-0.dll"));
+  EXPECT_FALSE(nevr_plugin_tree::SuppliedBySystem32Only("kernel32.dll"));  // loaded in every process
+  EXPECT_FALSE(nevr_plugin_tree::SuppliedBySystem32Only("no-such-library-anywhere.dll"));
 }
 
 TEST(PluginTreeNames, TheDefaultExtensionIsAppendedToANameWithNone) {

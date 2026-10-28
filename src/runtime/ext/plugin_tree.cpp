@@ -55,15 +55,22 @@ std::string Lower(std::string s) {
 std::string WithDefaultExtension(const std::string& name) { return WithDefaultExtensionOf(name); }
 std::wstring WithDefaultExtension(const std::wstring& name) { return WithDefaultExtensionOf(name); }
 
-bool SuppliedByTheSystem(const std::string& file) {
+bool SuppliedBySystem32Only(const std::string& file) {
   const std::string lower = Lower(file);
-  if (lower.compare(0, 7, "api-ms-") == 0 || lower.compare(0, 7, "ext-ms-") == 0) return true;  // API sets: no file
-  if (GetModuleHandleA(lower.c_str()) != nullptr) return true;
+  if (lower.compare(0, 7, "api-ms-") == 0 || lower.compare(0, 7, "ext-ms-") == 0) return false;
+  if (GetModuleHandleA(lower.c_str()) != nullptr) return false;
   char system[MAX_PATH] = {};
   const UINT n = GetSystemDirectoryA(system, MAX_PATH);
   if (n == 0 || n >= MAX_PATH) return false;
   const DWORD attributes = GetFileAttributesA((std::string(system) + "\\" + lower).c_str());
   return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+bool SuppliedByTheSystem(const std::string& file) {
+  const std::string lower = Lower(file);
+  if (lower.compare(0, 7, "api-ms-") == 0 || lower.compare(0, 7, "ext-ms-") == 0) return true;  // API sets: no file
+  if (GetModuleHandleA(lower.c_str()) != nullptr) return true;
+  return SuppliedBySystem32Only(lower);
 }
 
 HeldFiles::~HeldFiles() {
@@ -80,7 +87,7 @@ std::string TreeVerdict::Describe() const {
 }
 
 TreeVerdict VerifyPluginTree(const std::string& pluginDir, HANDLE root, const nevr_plugin_signature::Policy& policy,
-                             int64_t nowUnix, HeldFiles* held) {
+                             int64_t nowUnix, HeldFiles* held, std::vector<std::string>* system32Only) {
   std::deque<std::pair<HANDLE, Pending>> work;  // an open file and how it was reached
   work.push_back({root, Pending{"", ""}});
   std::set<std::string> seen;
@@ -119,7 +126,10 @@ TreeVerdict VerifyPluginTree(const std::string& pluginDir, HANDLE root, const ne
             // marked seen: the same name as a static import or forwarder is still held to the rule below.
             if (isDelayLoad) continue;
             seen.insert(name);
-            if (SuppliedByTheSystem(name)) continue;
+            if (SuppliedByTheSystem(name)) {
+              if (system32Only != nullptr && SuppliedBySystem32Only(name)) system32Only->push_back(Lower(name));
+              continue;
+            }
             return Refuse(name, kind.second, Reason::Unreadable,
                           "not in the plugins directory and not supplied by the system: a file put there before "
                           "the load would be mapped unchecked");

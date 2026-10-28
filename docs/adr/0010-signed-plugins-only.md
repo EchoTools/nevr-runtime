@@ -108,7 +108,11 @@ exports (an export whose RVA lies inside the export directory and names `dll.sym
   file, or a module already loaded in the process: `SuppliedByTheSystem`) is refused: a file put there before the load would be mapped unchecked.
 - An absent delay-load is not refused: it is resolved when first called, by a `LoadLibrary` the late-load filter checks then, and an
   optional one (`nvapi64.dll` on a machine without it) must not refuse a plugin that loads without it.
-System32 imports are the OS's.
+- A name that only System32 supplies (not an API set, not a module already loaded: `SuppliedBySystem32Only`) is loaded from System32 by its
+  full path before the plugin, and kept loaded until the plugin is staged. The loader searches the plugin's directory before System32
+  for a name that is not already loaded, and the check cannot hold a file that is not there, so a file put in the directory after the
+  check would otherwise map with the plugin; a module already loaded under the name is taken first. A staged plugin (`PinSystemDependencies`)
+  and a later load the filter accepts both pin, and a name that cannot be pinned refuses the plugin.
 
 **Plugin-initiated loads.** A plugin that calls `LoadLibrary` after its init, or from its `DllMain`, is not on the staged path.
 `DllLoadHook` (`src/runtime/hook/dll_load_hook.cpp`) hooks all four LoadLibrary variants; its filter in `plugin_loader.cpp` checks
@@ -319,6 +323,7 @@ GTest under Wine, in `src/runtime/tests/test_plugin_signature.cpp`, `test_plugin
 | the real signed v5.4.3 `BugSplat64.dll` (`RealSigned.*`, fed by `tools/fetch_real_signed_dll.py` through `just test-auth-unit`) | accepted by the production pins |
 | import with no extension, absent import or forwarder not supplied by the system, absent delay-load | the first two refused, the third left to the late-load filter |
 | late load by a relative path with a directory part, in a signed-only run | refused whatever it leads to |
+| a signed plugin imports a System32 library; an unsigned file of that name is put in the plugins directory after the check (a staged plugin, and a later load) | the plugin loads and the planted file does not (`PluginSystemDependencyTest`) |
 
 Mutants (AGENTS.md "What a PR carries"): drop the root check, drop the status test, compare the EKU by prefix, drop the digest check,
 drop the imprint binding, pass `pTime = now`, drop the denylist test, restore the unrestricted fallback, let the 64-file dependency cap fail open

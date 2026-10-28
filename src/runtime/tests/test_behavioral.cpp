@@ -847,6 +847,52 @@ TEST_F(PluginSystemDependencyTest, AStandInPlantedForASystemImportAfterTheCheckI
   EXPECT_FALSE(TheDecoyRan()) << "the stand-in planted after the check was loaded with the plugin";
   EXPECT_FALSE(TestLogContains("LoadLibrary failed")) << "the plugin did not load";
   EXPECT_FALSE(TestLogContains("refused"));
+  EXPECT_TRUE(TestLogContains("plugin=sysimporter.dll file=sysimporter.dll 1 system dependencies loaded from the system directory first"));
+}
+
+TEST_F(PluginSystemDependencyTest, ASystemLibraryThatCannotBePinnedRefusesTheStagedPlugin) {
+  PlanTree("import_system");
+  TestHook_FailPinning(true);
+  LoadPlugins();
+  TestHook_FailPinning(false);
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(GetModuleHandleA("sysimporter.dll"), nullptr) << "the plugin was mapped";
+  const std::string expected = "refused: dependency hid.dll cannot be loaded from the system directory to pin it: error 5";
+  EXPECT_TRUE(TestLogContains(expected));
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 1u);
+  EXPECT_EQ(manifest[0]["error"].get<std::string>(), expected);
+  EXPECT_FALSE(g_refusalDialogs.empty());
+}
+
+TEST_F(PluginSystemDependencyTest, ASystemLibraryThatCannotBePinnedRefusesALaterLoad) {
+  Copy("import_system");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  TestHook_FailPinning(true);
+  const bool blocked = Blocked("sysimporter.dll");
+  TestHook_FailPinning(false);
+  EXPECT_TRUE(blocked);
+  EXPECT_TRUE(TestLogContains("refused a later load of sysimporter.dll: dependency hid.dll cannot be loaded from the system directory to pin it: error 5"));
+}
+
+TEST_F(PluginSystemDependencyTest, ALaterLoadsPinStaysLoadedAfterTheFilterIsReset) {
+  Copy("import_system");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_FALSE(Blocked("sysimporter.dll"));
+  EXPECT_NE(GetModuleHandleA("hid.dll"), nullptr) << "the filter did not pin hid.dll";
+  TestHook_ResetPluginLoadFilter();  // drops the filter's verified entries
+  EXPECT_NE(GetModuleHandleA("hid.dll"), nullptr) << "the pin was released with the entry, before the load it protects";
+}
+
+TEST_F(PluginSystemDependencyTest, AnUnsignedAllowedRunPinsNothing) {
+  nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
+  Copy("import_system");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_FALSE(Blocked("sysimporter.dll"));
+  EXPECT_EQ(GetModuleHandleA("hid.dll"), nullptr) << "a run that does not require signatures loaded a library for the check";
 }
 
 TEST_F(PluginSystemDependencyTest, AStandInPlantedForASystemImportAfterALaterLoadsCheckIsNotTheOneThatLoads) {
