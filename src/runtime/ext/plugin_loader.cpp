@@ -390,6 +390,12 @@ bool FinalPathOf(const std::wstring& path, std::wstring* out) {
 void (*g_betweenResolveAndOpen)(const std::wstring& resolved) = nullptr;
 #endif
 
+#ifdef NEVR_TEST_HOOKS
+// Runs after a plugin has been checked and before the load that maps it: where a test plants a file in the
+// plugins directory.
+void (*g_afterDependenciesChecked)() = nullptr;
+#endif
+
 // Whether `candidate` names a file in the plugins directory, and which one. False: it names nothing there.
 bool FileInPluginsDirectory(const FilterState& f, const std::wstring& candidate, std::wstring* full) {
   if (FinalPathOf(candidate, full)) {
@@ -506,6 +512,9 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
     }
   }
   if (refusal.empty()) {
+#ifdef NEVR_TEST_HOOKS
+    if (g_afterDependenciesChecked != nullptr) g_afterDependenciesChecked();
+#endif
     f.verified[full] = std::move(entry);
     return false;
   }
@@ -696,6 +705,9 @@ class PluginLoadRun {
     HeldFile held;
     if (!CheckSignature(item, path, itemReport, &held)) return;
     const bool enforcing = nevr_plugin_trust::ActiveMode() == nevr_plugin_trust::Mode::SignedOnly;
+#ifdef NEVR_TEST_HOOKS
+    if (g_afterDependenciesChecked != nullptr) g_afterDependenciesChecked();
+#endif
     HMODULE hPlugin = LoadModule(path, filename, enforcing);
     if (!hPlugin) {
       const DWORD error = GetLastError();
@@ -1316,6 +1328,7 @@ void TestHook_RecordRefusal(const std::string& file) { RecordRefusal(file); }
 void TestHook_InstallPluginLoadFilter(const std::string& pluginDir) { InstallPluginLoadFilter(pluginDir); }
 
 void TestHook_SetBetweenResolveAndOpen(void (*hook)(const std::wstring& resolved)) { g_betweenResolveAndOpen = hook; }
+void TestHook_SetAfterDependenciesChecked(void (*hook)()) { g_afterDependenciesChecked = hook; }
 
 void TestHook_ForgetLoadFilterRegistration() { g_filterRegistered = false; }
 

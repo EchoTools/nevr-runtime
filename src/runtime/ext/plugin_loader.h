@@ -96,4 +96,6 @@ void TestHook_ResetPluginLoadFilter();
 void TestHook_ForgetLoadFilterRegistration();  // after nevr_dll_load_hook::Shutdown() cleared the registered filters
 // Called by the filter between resolving a late load's path and opening it (null clears it).
 void TestHook_SetBetweenResolveAndOpen(void (*hook)(const std::wstring& resolved));
+// Called after a plugin (a staged one, or a later load the filter accepted) is checked and before the load that maps it (null clears it).
+void TestHook_SetAfterDependenciesChecked(void (*hook)());
 #endif

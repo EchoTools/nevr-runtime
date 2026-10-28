@@ -799,6 +799,80 @@ TEST_F(PluginDependencyGateTest, ALoadMadeFromAStagedPluginsDllMainIsChecked) {
   EXPECT_NE(g_refusalDialogs[0].find("dllmain_victim.dll"), std::string::npos);
 }
 
+// #768: a signed plugin whose one import is a System32 library (hid.dll). Nothing in the plugins directory names it,
+// so the check accepts the tree; the loader searches the plugin's own directory before System32 for a name that is
+// not already loaded, so an unsigned stand-in put there after the check is the one that maps. The stand-in says it
+// was loaded by setting NEVR_TEST_DECOY_LOADED.
+std::string g_decoyFrom;
+std::string g_decoyTo;
+
+void PlantTheDecoyInThePluginsDirectory() { CopyFileA(g_decoyFrom.c_str(), g_decoyTo.c_str(), FALSE); }
+
+class PluginSystemDependencyTest : public PluginDependencyGateTest {
+ protected:
+  void SetUp() override {
+    PluginDependencyGateTest::SetUp();
+    ReleaseTheFixtureModules();
+    ASSERT_EQ(GetModuleHandleA("hid.dll"), nullptr) << "hid.dll is already loaded in this process: nothing to plant against";
+    const nlohmann::json& t = manifest_["trees"]["import_system"];
+    g_decoyFrom = fixtures_ + "/" + t["decoy"].get<std::string>();
+    g_decoyTo = pluginsDir_ + "hid.dll";
+    SetEnvironmentVariableA("NEVR_TEST_DECOY_LOADED", nullptr);
+  }
+
+  void TearDown() override {
+    TestHook_SetAfterDependenciesChecked(nullptr);
+    ReleaseTheFixtureModules();
+    SetEnvironmentVariableA("NEVR_TEST_DECOY_LOADED", nullptr);
+    PluginDependencyGateTest::TearDown();
+  }
+
+  static void ReleaseTheFixtureModules() {
+    for (const char* name : {"sysimporter.dll", "hid.dll"}) {
+      while (HMODULE m = GetModuleHandleA(name)) {
+        if (!FreeLibrary(m)) break;
+      }
+    }
+  }
+
+  static bool TheDecoyRan() { return GetEnvironmentVariableA("NEVR_TEST_DECOY_LOADED", nullptr, 0) != 0; }
+};
+
+TEST_F(PluginSystemDependencyTest, AStandInPlantedForASystemImportAfterTheCheckIsNotTheOneThatLoads) {
+  PlanTree("import_system");
+  TestHook_SetAfterDependenciesChecked(&PlantTheDecoyInThePluginsDirectory);
+  LoadPlugins();
+  TestHook_SetAfterDependenciesChecked(nullptr);
+  copies_.push_back(g_decoyTo);  // removed at teardown, unless it was mapped
+  EXPECT_FALSE(TheDecoyRan()) << "the stand-in planted after the check was loaded with the plugin";
+  EXPECT_FALSE(TestLogContains("LoadLibrary failed")) << "the plugin did not load";
+  EXPECT_FALSE(TestLogContains("refused"));
+}
+
+TEST_F(PluginSystemDependencyTest, AStandInPlantedForASystemImportAfterALaterLoadsCheckIsNotTheOneThatLoads) {
+  Copy("import_system");
+  g_testPluginLoadPlan.clear();
+  const std::string plugin = pluginsDir_ + "sysimporter.dll";
+  // The plugin's own LoadLibrary reaches the filter only through the real hooks.
+  ASSERT_EQ(MH_Initialize(), MH_OK);
+  const int hooked = nevr_dll_load_hook::Install();
+  if (hooked == 4) {
+    TestHook_InstallPluginLoadFilter(pluginsDir_);
+    TestHook_SetAfterDependenciesChecked(&PlantTheDecoyInThePluginsDirectory);
+    SetLastError(0);
+    HMODULE loaded = LoadLibraryExA(plugin.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    TestHook_SetAfterDependenciesChecked(nullptr);
+    EXPECT_NE(loaded, nullptr) << "the checked plugin did not load: error " << GetLastError();
+  }
+  nevr_dll_load_hook::Shutdown();  // also clears the registered filters
+  MH_Uninitialize();
+  nevr_hook_guard::ResetForTest();
+  TestHook_ForgetLoadFilterRegistration();
+  ASSERT_EQ(hooked, 4) << "the LoadLibrary hooks did not install";
+  copies_.push_back(g_decoyTo);
+  EXPECT_FALSE(TheDecoyRan()) << "the stand-in planted after the filter's check was loaded with the plugin";
+}
+
 // The path the filter resolved is opened a moment later; a name pointed elsewhere in between must not be verified
 // as the file that was resolved (heldPath != full). The hook turns the resolved name into a link to a signed file.
 std::wstring g_linkTarget;
