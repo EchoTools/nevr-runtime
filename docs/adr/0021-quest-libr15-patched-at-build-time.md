@@ -102,7 +102,7 @@ no caller may branch to site+4..site+11 (the same obligation as today, over fewe
 
 libr15's writable `PT_LOAD` (vaddr 0x35f9eb0, `p_memsz` 0x1d8688 in the pinned file) ends at 0x37d2538, inside a page the
 linker already maps; nothing follows it. The patcher raises that segment's `p_memsz` (and `.bss`'s `sh_size`) so it ends at
-`roundup(0x37d2538, 64) + 8 * rows = 0x37d2578` (`p_memsz` 0x1d86c8; `p_filesz` and every file offset unchanged). The slot area is
+`roundup(0x37d2538, 64) + 8 * rows = 0x37d2570` (`p_memsz` 0x1d86c0; `p_filesz` and every file offset unchanged). The slot area is
 zero-initialised memory outside `GNU_RELRO` (which ends at 0x372c000), so a store to a slot needs no `mprotect` at all. Slot *i*
 is at `0x37d2540 + 8 * i`. A row's stub names its own slot; the credits pairs share one slot.
 
@@ -197,7 +197,7 @@ the public recipes pass none.
 ### 10. Logging
 
 The patcher's per-row JSON (section 2) goes to the build log and `--report`. The sentinel writes, to logcat and its on-disk log:
-`{"event":"libr15_patch","status":"verified","build_id":"<patched>","stock_build_id":"b243509c...","rows":7,"slot_area":"0x...."}`
+`{"event":"libr15_patch","status":"verified","build_id":"<patched>","stock_build_id":"b243509c...","rows":6,"slot_area":"0x...."}`
 once, then per row `{"event":"inline_hook","status":"ok","id":...,"target":...,"slot":...,"trampoline":...,"page_perms":"r-xp"}`
 (`page_perms` is read from `/proc/self/maps` after the activation: it is the evidence that no protection changed), and
 `credits_text` as today with the slot. The `mmap`/`mprotect` errno logging of the trampoline step (#1131) stays.
