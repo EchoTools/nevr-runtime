@@ -257,7 +257,7 @@ TEST_F(NevrRootMove, ThePluginsFolderBesideTheGameMovesIntoTheRootsPluginsAndSay
   const std::vector<move::Event> events = move::Run(Inputs());
 
   EXPECT_EQ(Count(events, Outcome::kMoved), 3u) << "the three files at the top of the folder";
-  EXPECT_EQ(Count(events, Outcome::kMarkerWritten), 1u);
+  EXPECT_EQ(Count(events, Outcome::kMarkerWritten), 0u) << "nothing of ours is written to the game folder";
   EXPECT_EQ(ReadAll(root_ + L"\\plugins\\alpha.dll"), "alpha bytes");
   EXPECT_EQ(ReadAll(root_ + L"\\plugins\\beta.dll"), "beta bytes");
   EXPECT_EQ(ReadAll(root_ + L"\\plugins\\beta.yaml"), "beta data");
@@ -265,8 +265,7 @@ TEST_F(NevrRootMove, ThePluginsFolderBesideTheGameMovesIntoTheRootsPluginsAndSay
   EXPECT_FALSE(Exists(legacy_plugins_ + L"\\beta.dll"));
   EXPECT_EQ(ReadAll(legacy_plugins_ + L"\\sub\\gamma.dll"), "in a subfolder") << "a folder is not a plugin file and is left alone";
   EXPECT_FALSE(Exists(root_ + L"\\plugins\\sub"));
-  const std::string marker = ReadAll(legacy_plugins_ + L"\\MOVED-TO-NEVR-ROOT.txt");
-  EXPECT_NE(marker.find("nevr\\echovr"), std::string::npos) << "the marker names the root";
+  EXPECT_FALSE(Exists(legacy_plugins_ + L"\\MOVED-TO-NEVR-ROOT.txt")) << "no note is left in the game folder";
 }
 
 TEST_F(NevrRootMove, APluginAlreadyInTheRootIsNeverOverwritten) {
@@ -282,10 +281,11 @@ TEST_F(NevrRootMove, APluginAlreadyInTheRootIsNeverOverwritten) {
   EXPECT_EQ(ReadAll(root_ + L"\\plugins\\beta.dll"), "beta bytes");
 }
 
-TEST_F(NevrRootMove, ASecondPluginsRunMovesNothingAndTheMarkerIsNotAPlugin) {
+TEST_F(NevrRootMove, ASecondPluginsRunMovesNothingAndLeavesNothingBehind) {
   Write(legacy_plugins_ + L"\\alpha.dll", "alpha bytes");
   ASSERT_EQ(Count(move::Run(Inputs()), Outcome::kMoved), 1u);
-  EXPECT_TRUE(move::Run(Inputs()).empty()) << "the marker left in the folder is not moved as a plugin";
+  EXPECT_FALSE(Exists(legacy_plugins_ + L"\\MOVED-TO-NEVR-ROOT.txt")) << "the first run left no note in the game folder";
+  EXPECT_TRUE(move::Run(Inputs()).empty()) << "nothing is left to move";
   EXPECT_FALSE(Exists(root_ + L"\\plugins\\MOVED-TO-NEVR-ROOT.txt"));
   Write(legacy_plugins_ + L"\\delta.dll", "a later plugin");
   EXPECT_EQ(Count(move::Run(Inputs()), Outcome::kMoved), 1u) << "a plugin dropped there later is moved too";
