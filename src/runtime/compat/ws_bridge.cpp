@@ -1680,7 +1680,9 @@ static std::optional<std::string> BuildRouterLogin() {
 // game would stall at the login gate. The router delivers this LoginSuccess in its place (Options::replaceLoginFailure).
 static std::optional<std::string> ServerModeLoginSuccess() {
   if (!g_isServer) return std::nullopt;
-  Log(EchoVR::LogLevel::Debug, "[NEVR.WS] Server mode — injecting fake LoginSuccess to bypass login gate");
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.WS] Server mode — the service answered the server's /login with a LoginFailure; the game gets a "
+      "synthesized LoginSuccess (the server's credential is checked at ServerDB registration)");
   return nevr_evr_codec::BuildLoginSuccess(CurrentPlatformCode(), g_lastInjectedDiscordId);
 }
 
@@ -2121,8 +2123,10 @@ void InstallWebSocketBridge() {
                         // gate. Synthesize the LoginSuccess the game is waiting for and
                         // do NOT forward the failure.
                         if (g_isServer) {
-                          Log(EchoVR::LogLevel::Debug,
-                              "[NEVR.WS] Server mode — injecting fake LoginSuccess to bypass login gate");
+                          Log(EchoVR::LogLevel::Info,
+                              "[NEVR.WS] Server mode — the service answered the server's /login with a LoginFailure; "
+                              "the game gets a synthesized LoginSuccess (the server's credential is checked at "
+                              "ServerDB registration)");
                           uint64_t serverPlatformCode;
                           {
                             const char* cfgDiscordId2 = NevrCfgGetFlat("nevr_discord_id");

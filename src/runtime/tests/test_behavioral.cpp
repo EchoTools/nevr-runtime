@@ -4127,6 +4127,18 @@ TEST_F(RouterAllTest, AServersLoginFailureReachesTheGameAsALoginSuccess) {
   Admit(login, "/login");
   ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSuccess)) << "the game was left at the login gate";
   EXPECT_FALSE(login.HasReceived(nevr_evr_codec::kSymLoginFailure));
+  // The substitution is said at Info, with its reason: Debug is off in production.
+  bool saidAtInfo = false;
+  {
+    std::lock_guard<std::mutex> lock(g_testLogMutex);
+    for (const auto& entry : g_testLogLeveled) {
+      if (entry.first == EchoVR::LogLevel::Info &&
+          entry.second.find("the service answered the server's /login with a LoginFailure") != std::string::npos) {
+        saidAtInfo = true;
+      }
+    }
+  }
+  EXPECT_TRUE(saidAtInfo);
 }
 
 // L6: an Unrequire nobody asked for is dropped and counted, not handed to a socket.
@@ -4559,6 +4571,19 @@ TEST(SecurityDiagnostics, CapturedLoginFailureSummaryExcludesServerMessage) {
   ASSERT_EQ(g_testLogMessages.size(), 1U);
   EXPECT_NE(g_testLogMessages[0].find("login failed status=502 message_bytes="), std::string::npos);
   EXPECT_EQ(g_testLogMessages[0].find(kSecret), std::string::npos);
+}
+
+TEST(SecurityDiagnostics, AServersLoginFailureSummaryDoesNotClaimItIsExpectedEveryBoot) {
+  ClearTestLogs();
+  const std::string frame = BuildLoginFailureFrame(24 + 4, 401, "nope");
+
+  EXPECT_TRUE(TestHook_LogLoginFailureDiagnostic(frame, true));
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  ASSERT_EQ(g_testLogMessages.size(), 1U);
+  EXPECT_NE(g_testLogMessages[0].find("login failed status=401"), std::string::npos);
+  EXPECT_NE(g_testLogMessages[0].find("synthesized LoginSuccess"), std::string::npos);
+  EXPECT_NE(g_testLogMessages[0].find("credential is checked at ServerDB registration"), std::string::npos);
+  EXPECT_EQ(g_testLogMessages[0].find("expected every boot"), std::string::npos);
 }
 
 TEST(WsBridgeLoginFailure, DiagnosticUsesDeclaredLengthForConcatenatedFrames) {
