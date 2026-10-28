@@ -46,7 +46,7 @@ A new header, libr15_patch_table.h, in a new directory under src/quest, is the o
   code, not a comment;
 - the **stock words** at the site (3 words for an inline hook; for the credits pairs the ADRP and ADD words), copied from
   ReVault with `revault_disassemble <revaultVa>`;
-- the kind (`kInlineHook` or `kCreditsPair`) and the handler's name.
+- the kind (`kInlineHook`, `kCreditsPair` or `kWordPatch`, section 11) and the handler's name.
 
 The sentinel's hook files (`lobby_full_hooks.cpp`, `ui_texture_mips.cpp`, `splash_skip_hook.cpp`, `menu_version_label.cpp`) keep
 their handlers and lose their per-file `kXxxVaddr` and prologue constants; they name a table row. The seven rows are:
@@ -58,7 +58,7 @@ their handlers and lose their per-file `kXxxVaddr` and prologue constants; they 
 
 `quest_patch_libr15` (new, C++ compiled by the justfile with the host `g++`, as the `test-quest-hooks` tests are; it includes the
 table header and `arm64_reloc.h`, so there is no second encoding of anything). `quest_patch_libr15 --stock <libr15.so> --out
-<file> --report <json>`:
+<file> --report <json> [--extra-rows <file>]` (the optional file is section 11):
 
 1. refuses unless the stock file's GNU build ID is `kLibR15StockBuildId` (the current `kLibR15BuildId`) and its sha-256 is the
    pinned one;
@@ -123,7 +123,7 @@ the `mmap`/`mprotect` errno. A loud exit is the acceptable cost; a crash at the 
 ### 7. Identity: the patched file has its own build ID, and the sentinel refuses anything else
 
 The patcher replaces the 20-byte descriptor of the GNU build-ID note with the first 20 bytes of `SHA-256("NEVR-LIBR15-PATCH-1" ||
-stock build-ID bytes || canonical serialisation of the table)`. The note's size and place do not change. The sentinel computes
+stock build-ID bytes || canonical serialisation of the table, extra rows included)`. The note's size and place do not change. The sentinel computes
 the same value from its compiled-in table (the sha-256 in `src/quest/data/sha256.h`) and compares it with the live note, so no
 generated constant can drift from the patcher's. `kLibR15BuildId` splits: `kLibR15StockBuildId` (patcher, tests) and
 `PatchedBuildId()` (everything that is checked at run time: the `GotTarget`s in `pinned_targets.h`, the hook files, the
@@ -155,6 +155,8 @@ with the shim, in place of the store's entry (the store entry is deflated; the p
 verify-signed` stops requiring libr15 to equal the store's bytes and instead requires it to equal the patcher's output for
 that store APK (it runs the patcher again and compares sha-256), and prints both digests; every other library is still
 compared with the store's. The patcher is built by the same recipe, so `package-dev` and the release recipe take the same path.
+A build with extra rows (section 11) passes the same file to the patcher, to `verify-signed` and to the sentinel's compile;
+the public recipes pass none.
 
 ### 10. Logging
 
@@ -163,6 +165,32 @@ The patcher's per-row JSON (section 2) goes to the build log and `--report`. The
 once, then per row `{"event":"inline_hook","status":"ok","id":...,"target":...,"slot":...,"trampoline":...,"page_perms":"r-xp"}`
 (`page_perms` is read from `/proc/self/maps` after the activation: it is the evidence that no protection changed), and
 `credits_text` as today with the slot. The `mmap`/`mprotect` errno logging of the trampoline step (#1131) stays.
+
+### 11. Word patches, and rows that are not in the public table
+
+`kWordPatch` is a row that replaces words inside a function and nowhere else. It has no slot, no trampoline, no handler and no
+relocator window, and the sentinel installs nothing for it. A row is an `id`, a ReVault address and a list of
+`{offset, stock word, replacement word}`; each offset is a multiple of 4 from the address, and each replacement is one
+32-bit word that takes the place of the stock word at the same address. The patcher:
+
+- refuses unless every stock word is what the stock file holds at that vaddr, naming the row `id` and the word's offset;
+- refuses a word that lies in another row's bytes (an inline hook's first 12 bytes, a credits pair, another word patch), and a
+  word outside the text;
+- writes the replacements, and reports each as `{"event":"libr15_patch_word","id":...,"vaddr":...,"stock":...,"word":...}`.
+
+A replacement is only what one word can do: a PC-relative word is encoded for its own address, and no word reaches code that
+the file does not already hold (libr15 has no spare executable space; the executable-segment alternative below is not built).
+The "no caller branches into site+4..+11" obligation of section 3 does not apply, because no entry is rewritten. At run time
+`Attach` checks the live words equal the replacements; a difference is `libr15_patch_row_words`, ending the process like
+the other row checks.
+
+**Extra rows.** `--extra-rows <file>` is a JSON list of `kWordPatch` rows (and only that kind: they add no slot, so the slot
+area and `p_memsz` of section 4 do not depend on them). The public table, the public release APK and the public recipes carry
+none, and the repo holds no address or word of a row that came this way. The rows are merged into the table before the
+serialisation of section 7, so a build with extra rows has its own patched build ID. The sentinel of such a build is compiled
+with the same file, so it computes that ID; a public sentinel meeting such a libr15 reports `build_id_mismatch`, and a variant
+sentinel meeting a public libr15 reports the same, so neither can pass as the other. The patcher's summary and the sentinel's
+`libr15_patch` line carry `extra_rows` (a count) and `extra_rows_sha256` (the file's digest), never the rows.
 
 ## Tests, failing first
 
@@ -189,6 +217,11 @@ Each is run once with the line it covers changed and must fail (the mutant disci
    `mprotect`. Registered as an N-rule in `AGENTS.md` with a `just verify` sensor when the change lands.
 7. **`verify-signed`** unit test: a signed APK whose libr15 is the store's, or a patcher output for another input, fails.
 8. **Headset rows** in `docs/testing/smoke-checklist.md`, Quest 3 and Quest 2 (below).
+9. **Word patches and extra rows**, on the synthetic stock ELF: a wrong stock word, an overlapping word, a word outside the text
+   and an offset that is not a multiple of 4 are each refused with the row's `id`; the output differs from the input in the
+   named words and nowhere else; a file of extra rows changes the build ID and the same file twice gives the same bytes; a
+   row of any kind but `kWordPatch` in the file is refused; the public table's ID is the one a build without the file computes;
+   `Attach` on an image whose live word differs ends with `libr15_patch_row_words`.
 
 ## Prediction
 
