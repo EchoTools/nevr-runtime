@@ -1754,9 +1754,6 @@ int main() {
   TestResourceRequestLogIsDevelopmentOnlyOrderedAndContained();
   TestTextureQualityIsUnconditionalIndependentAndContained();
   TestRenderConfigIsUnconditionalOrderedAndContained();
-  }
-}
-
   TestMenuCardsAreUnconditionalOrderedAndContained();
   TestCountersBeforeTheSingleReporterStart();
   TestCrashReporterAndConfigComeFirst();
