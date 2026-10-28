@@ -1,8 +1,10 @@
 // The command line of quest_patch_libr15 (libr15_patcher.h RunCli): argument parsing, the files, the report and the
 // exit code. Kept apart from main() so the host tests drive the same code against a synthetic spec.
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <ostream>
+#include <system_error>
 
 #include "quest/data/sha256.h"
 #include "quest/patch/libr15_patcher.h"
@@ -32,8 +34,30 @@ std::string Dump(const nlohmann::json& j, int indent = -1) {
   return j.dump(indent, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
+// The file the output is written to before it is renamed over --out.
+std::string PartialName(const std::string& path) { return path + ".partial"; }
+
+// Whether two paths name the same file, or would once the parts that are missing exist. It never throws: a path it
+// cannot resolve is, for this purpose, a different file (the write that follows then fails with its own error).
+//  - the same spelling;
+//  - both exist and are the same device and inode: a hard link, a symlink to it, a path through a symlinked directory;
+//  - neither need exist: the same place after every symlink that exists is resolved and the dot and dot-dot components
+//    of the rest are removed (a --report and an --out that are both still to be created).
+bool SameFile(const std::string& a, const std::string& b) {
+  if (a == b) return true;
+  const std::filesystem::path pa(a), pb(b);
+  std::error_code ec;
+  if (std::filesystem::equivalent(pa, pb, ec) && !ec) return true;
+  ec.clear();
+  const std::filesystem::path ca = std::filesystem::weakly_canonical(pa, ec);
+  if (ec) return false;
+  const std::filesystem::path cb = std::filesystem::weakly_canonical(pb, ec);
+  if (ec) return false;
+  return ca == cb;
+}
+
 bool WriteFileAtomically(const std::string& path, const std::vector<std::uint8_t>& bytes) {
-  const std::string partial = path + ".partial";
+  const std::string partial = PartialName(path);
   {
     std::ofstream o(partial, std::ios::binary | std::ios::trunc);
     if (!o) return false;
@@ -80,9 +104,37 @@ int RunCli(const std::vector<std::string>& args, const PatchSpec& spec, std::ost
     err << Dump(Error("usage_error", "--stock, --out and --report are required")) << "\n";
     return 2;
   }
-  if (outPath == stockPath) {
-    err << Dump(Error("usage_error", "--out must not be the --stock file")) << "\n";
-    return 2;
+  // Before anything is read or written: no file the run writes may be a file it reads or has written. The writes are
+  // --out (through its temporary file) and --report; the reads are --stock and --extra-rows. A file is refused when it
+  // is the same file by any name (SameFile), including the temporary file beside --out.
+  struct Pair {
+    const char* aName;
+    std::string a;
+    const char* bName;
+    std::string b;
+  };
+  const std::string partialPath = PartialName(outPath);
+  std::vector<Pair> pairs = {
+      {"--out", outPath, "--stock", stockPath},
+      {"the temporary file beside --out", partialPath, "--stock", stockPath},
+      {"--report", reportPath, "--stock", stockPath},
+      {"--report", reportPath, "--out", outPath},
+      {"the temporary file beside --out", partialPath, "--report", reportPath},
+  };
+  if (!extraPath.empty()) {
+    pairs.push_back({"--extra-rows", extraPath, "--out", outPath});
+    pairs.push_back({"--extra-rows", extraPath, "--report", reportPath});
+    pairs.push_back({"the temporary file beside --out", partialPath, "--extra-rows", extraPath});
+  }
+  for (const Pair& p : pairs) {
+    if (SameFile(p.a, p.b)) {
+      const bool temp = std::string(p.aName).rfind("the temporary", 0) == 0;
+      err << Dump(Error("usage_error", std::string(p.aName) + " must not be the " + p.bName + " file" +
+                                           (temp ? std::string(" (") + p.a + ")" : std::string()) +
+                                           ": both name the same file, and the run would overwrite it"))
+          << "\n";
+      return 2;
+    }
   }
 
   std::vector<std::uint8_t> stock;

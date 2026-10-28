@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -1663,6 +1664,210 @@ TEST(TheStockFileIsNeverTheOutputAndAFailedWriteLeavesAnExistingOutputAlone) {
     CHECK(!Exists(out));
   }
   for (const std::string& f : {stock, out, report}) std::remove(f.c_str());
+}
+
+std::vector<std::uint8_t> FixtureBytes() {
+  const std::string text = Fixture();
+  return std::vector<std::uint8_t>(text.begin(), text.end());
+}
+
+// A file on disk that must come out of a refused run as it went in: its sha-256 before and after are in the failure
+// line, so a destroyed input says so. It is put back after the report, so that the next case starts from the same bytes.
+bool Unchanged(const std::string& path, const std::string& before, const std::string& label) {
+  const std::string now = ReadText(path);
+  if (now == before) return true;
+  std::fprintf(stderr, "  %s: %s changed: sha256 before=%s after=%s\n", label.c_str(), path.c_str(),
+               nevr_quest::data::Sha256Hex(before.data(), before.size()).c_str(), nevr_quest::data::Sha256Hex(now.data(), now.size()).c_str());
+  std::ofstream(path, std::ios::binary | std::ios::trunc) << before;
+  return false;
+}
+
+// The paths the aliasing cases make, removed at the end (the links first, the directories last).
+struct AliasTree {
+  std::string root, real, linkDir;
+  std::vector<std::string> made;
+  explicit AliasTree(const std::string& name) {
+    // Absolute: a symlink's target is read relative to the link's own directory, and the scratch directory may be given
+    // relative to the working directory (the recipe does).
+    char* resolved = realpath(g_scratch.c_str(), nullptr);
+    CHECK(resolved != nullptr);
+    root = std::string(resolved != nullptr ? resolved : g_scratch.c_str()) + "/" + name;
+    std::free(resolved);
+    real = root + "/real";
+    linkDir = root + "/linkdir";
+    CHECK_EQ(mkdir(root.c_str(), 0755), 0);
+    CHECK_EQ(mkdir(real.c_str(), 0755), 0);
+    CHECK_EQ(symlink(real.c_str(), linkDir.c_str()), 0);  // a directory that is another name for real/
+  }
+  std::string File(const std::string& name, const std::vector<std::uint8_t>& bytes) {
+    const std::string path = real + "/" + name;
+    WriteBytes(path, bytes);
+    made.push_back(path);
+    return path;
+  }
+  void Track(const std::string& path) { made.push_back(path); }
+  ~AliasTree() {
+    for (auto it = made.rbegin(); it != made.rend(); ++it) std::remove(it->c_str());
+    std::remove(linkDir.c_str());
+    rmdir(real.c_str());
+    rmdir(root.c_str());
+  }
+};
+
+// One refused spelling: exit 2, one JSON line on stderr naming the rule, nothing written, every listed input as it was.
+void ExpectAliasRefused(const World& w, const char* label, const std::vector<std::string>& args, const char* detail,
+                        const std::vector<std::pair<std::string, std::string>>& inputs, const std::vector<std::string>& mustNotAppear) {
+  std::ostringstream so, se;
+  const int rc = RunCli(args, w.spec, so, se);
+  if (rc != 2) std::fprintf(stderr, "  %s: exit %d, not 2\n", label, rc);
+  CHECK_EQ(rc, 2);
+  CHECK(so.str().empty());
+  Json e = OneErrorLine(se, label);
+  CHECK(e["status"] == "usage_error");
+  const std::string got = e["detail"].is_string() ? e["detail"].get<std::string>() : std::string();
+  if (got.find(detail) == std::string::npos) std::fprintf(stderr, "  %s: detail \"%s\" does not say \"%s\"\n", label, got.c_str(), detail);
+  CHECK(got.find(detail) != std::string::npos);
+  if (std::string(label).rfind("the temporary file", 0) == 0) CHECK(got.find(".partial") != std::string::npos);  // it names the temporary file
+  for (const auto& in : inputs) CHECK(Unchanged(in.first, in.second, label));
+  for (const std::string& path : mustNotAppear) {
+    if (Exists(path)) {
+      std::fprintf(stderr, "  %s: %s was created\n", label, path.c_str());
+      std::remove(path.c_str());
+    }
+    CHECK(!Exists(path));
+  }
+}
+
+TEST(AnOutputThatIsTheStockByAnyNameIsRefusedBeforeAnythingIsReadOrWritten) {
+  World w;
+  const char* kOutIsStock = "--out must not be the --stock file";
+  AliasTree t("alias_out");
+  const std::string stock = t.File("stock.so", w.elf.bytes);
+  const std::string before = ReadText(stock);
+  const std::string report = t.real + "/report.json";
+  t.Track(report);
+  t.Track(stock + ".partial");
+  const std::vector<std::pair<std::string, std::string>> keep = {{stock, before}};
+  const std::vector<std::string> none = {report, stock + ".partial"};
+  auto run = [&](const char* label, const std::string& out) {
+    ExpectAliasRefused(w, label, {"--stock", stock, "--out", out, "--report", report}, kOutIsStock, keep, none);
+  };
+  run("another spelling: a dot component", t.real + "/./stock.so");
+  run("another spelling: a dot-dot component", t.real + "/../real/stock.so");
+  run("another spelling: a doubled slash", t.real + "//stock.so");
+  run("a path through a symlinked directory", t.linkDir + "/stock.so");
+  {  // a symlink to the stock
+    const std::string link = t.real + "/to_stock.so";
+    CHECK_EQ(symlink(stock.c_str(), link.c_str()), 0);
+    t.Track(link);
+    run("a symlink to the stock", link);
+    CHECK(Exists(link));  // refused, so the link is still there
+  }
+  {  // a hard link to the stock: the same device and inode under another name
+    const std::string hard = t.real + "/hard_to_stock.so";
+    CHECK_EQ(link(stock.c_str(), hard.c_str()), 0);
+    t.Track(hard);
+    run("a hard link to the stock", hard);
+    CHECK(Unchanged(hard, before, "the hard link"));
+  }
+  {  // the stock is itself the symlink and --out names its target
+    const std::string target = t.File("target.so", w.elf.bytes);
+    const std::string viaLink = t.real + "/stock_link.so";
+    CHECK_EQ(symlink(target.c_str(), viaLink.c_str()), 0);
+    t.Track(viaLink);
+    const std::string targetBefore = ReadText(target);
+    ExpectAliasRefused(w, "the stock is a symlink to --out", {"--stock", viaLink, "--out", target, "--report", report}, kOutIsStock,
+                       {{target, targetBefore}}, none);
+  }
+  {  // the same spelling of a path that cannot be resolved (it runs through a symlink loop): still the same file
+    const std::string loop = t.real + "/loop";
+    CHECK_EQ(symlink(loop.c_str(), loop.c_str()), 0);
+    t.Track(loop);
+    const std::string unresolvable = loop + "/stock.so";
+    ExpectAliasRefused(w, "the same spelling of a path that cannot be resolved", {"--stock", unresolvable, "--out", unresolvable, "--report", report},
+                       kOutIsStock, keep, none);
+  }
+  {  // the temporary file the output is written to is the stock
+    const std::string stockPartial = t.File("tmp_stock.so.partial", w.elf.bytes);
+    const std::string partialBefore = ReadText(stockPartial);
+    ExpectAliasRefused(w, "the temporary file beside --out is the stock", {"--stock", stockPartial, "--out", t.real + "/tmp_stock.so", "--report", report},
+                       "must not be the --stock file", {{stockPartial, partialBefore}}, {report, t.real + "/tmp_stock.so"});
+  }
+}
+
+TEST(AReportOrAnExtraRowsFileThatWouldBeOverwrittenByAnotherNameIsRefused) {
+  World w;
+  AliasTree t("alias_other");
+  const std::string stock = t.File("stock.so", w.elf.bytes);
+  const std::string stockBefore = ReadText(stock);
+  const std::string rows = t.File("rows.json", FixtureBytes());
+  const std::string rowsBefore = ReadText(rows);
+  const std::string out = t.real + "/out.so", report = t.real + "/report.json";
+  t.Track(out);
+  t.Track(report);
+  t.Track(out + ".partial");
+  // --report is the stock: it would be truncated after the stock was read.
+  ExpectAliasRefused(w, "--report is the stock", {"--stock", stock, "--out", out, "--report", t.real + "/./stock.so"}, "--report must not be the --stock file",
+                     {{stock, stockBefore}}, {out, out + ".partial"});
+  // --report is --out, neither exists yet: only a path comparison can tell.
+  ExpectAliasRefused(w, "--report is --out (neither exists)", {"--stock", stock, "--out", out, "--report", t.real + "/./out.so"},
+                     "--report must not be the --out file", {{stock, stockBefore}}, {out, out + ".partial"});
+  ExpectAliasRefused(w, "--report is --out through a symlinked directory (neither exists)", {"--stock", stock, "--out", out, "--report", t.linkDir + "/out.so"},
+                     "--report must not be the --out file", {{stock, stockBefore}}, {out, out + ".partial"});
+  {  // --report is --out and both exist, as a hard link
+    WriteBytes(out, {9, 8, 7});
+    const std::string hard = t.real + "/report_hard.json";
+    CHECK_EQ(link(out.c_str(), hard.c_str()), 0);
+    t.Track(hard);
+    ExpectAliasRefused(w, "--report is a hard link to --out", {"--stock", stock, "--out", out, "--report", hard}, "--report must not be the --out file",
+                       {{stock, stockBefore}, {out, std::string("\x09\x08\x07")}}, {out + ".partial"});
+    std::remove(hard.c_str());
+    std::remove(out.c_str());
+  }
+  // --extra-rows is --out: the rows file would be replaced by the patched ELF.
+  ExpectAliasRefused(w, "--extra-rows is --out", {"--stock", stock, "--out", t.real + "/./rows.json", "--report", report, "--extra-rows", rows},
+                     "--extra-rows must not be the --out file", {{stock, stockBefore}, {rows, rowsBefore}}, {report, rows + ".partial"});
+  // --extra-rows is --report: the rows file would be truncated by the report.
+  ExpectAliasRefused(w, "--extra-rows is --report", {"--stock", stock, "--out", out, "--report", t.linkDir + "/rows.json", "--extra-rows", rows},
+                     "--extra-rows must not be the --report file", {{stock, stockBefore}, {rows, rowsBefore}}, {out, out + ".partial"});
+  // The temporary file beside --out is the report, or the rows file.
+  ExpectAliasRefused(w, "the temporary file beside --out is --report", {"--stock", stock, "--out", out, "--report", out + ".partial"},
+                     "must not be the --report file", {{stock, stockBefore}}, {out, out + ".partial"});
+  const std::string tmpRows = t.File("rows_tmp.json.partial", FixtureBytes());
+  ExpectAliasRefused(w, "the temporary file beside --out is --extra-rows", {"--stock", stock, "--out", t.real + "/rows_tmp.json", "--report", report, "--extra-rows", tmpRows},
+                     "must not be the --extra-rows file", {{stock, stockBefore}, {tmpRows, rowsBefore}}, {report, t.real + "/rows_tmp.json"});
+}
+
+TEST(AnOutputThatIsNotTheStockStillWorksWhateverItsSpelling) {
+  World w;
+  AliasTree t("alias_ok");
+  const std::string stock = t.File("stock.so", w.elf.bytes);
+  const std::string before = ReadText(stock);
+  const std::string out = t.real + "/out.so", report = t.real + "/report.json";
+  t.Track(out);
+  t.Track(report);
+  t.Track(out + ".partial");
+  {  // an --out that does not exist yet, reached through dots and a symlinked directory
+    std::ostringstream so, se;
+    CHECK_EQ(RunCli({"--stock", t.real + "/./stock.so", "--out", t.linkDir + "/../real/./out.so", "--report", report}, w.spec, so, se), 0);
+    CHECK(se.str().empty());
+    CHECK(Exists(out));
+    CHECK(Unchanged(stock, before, "the stock after a good run"));
+    CHECK(ReadText(out) != before);
+  }
+  {  // an --out that exists and is another file: replaced
+    std::ostringstream so, se;
+    CHECK_EQ(RunCli({"--stock", stock, "--out", out, "--report", report}, w.spec, so, se), 0);
+    CHECK(se.str().empty());
+    CHECK(Unchanged(stock, before, "the stock after a second good run"));
+  }
+  {  // names that only share a prefix are different files
+    std::ostringstream so, se;
+    CHECK_EQ(RunCli({"--stock", stock, "--out", t.real + "/stock.so2", "--report", t.real + "/stock.so.json"}, w.spec, so, se), 0);
+    CHECK(Unchanged(stock, before, "the stock after a run with similar names"));
+    std::remove((t.real + "/stock.so2").c_str());
+    std::remove((t.real + "/stock.so.json").c_str());
+  }
 }
 
 TEST(AnExtraRowsFileWithoutATrailingNewlineIsTheSameFile) {
