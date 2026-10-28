@@ -1452,6 +1452,12 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
     # function tools/quest_patcher_sites.tsv names, so the table's mapping to our hooks is about this library.
     python3 tools/quest_patcher_sites.py --lib "$out/lib/lib/arm64-v8a/libpnsovr.so"
 
+# #1187: every change the community patch repo applies to the Quest APK has a row of
+# tools/quest_apk_patch_map.tsv (what our build does instead, the issue that will, or why none is needed), checked
+# against a read-only checkout of that repo at the commit the table pins. `just test-tools` checks the table alone.
+test-quest-apk-patch-map patch_repo:
+    python3 tools/quest_apk_patch_map.py --repo "{{ patch_repo }}"
+
 # Quest social provider on the host (docs/adr/0003, "Social provider"): the ABI pins against the
 # recorded vtable, the facade driven through its vtable, the hook decision through the real callback
 # thunk, and the exception contract. The frames that sit under a call into the game
