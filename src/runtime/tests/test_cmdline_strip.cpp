@@ -346,7 +346,7 @@ const AliasPair kAliasPairs[] = {
     {L"-noconsole", L"-no-console"},         {L"-noexitonerror", L"-no-exit-on-error"},
     {L"-exitonerror", L"-exit-on-error"},    {L"-notelemetry", L"-no-telemetry"},
     {L"-telemetryrate", L"-telemetry-rate"}, {L"-telemetrydiag", L"-telemetry-diag"},
-    {L"-traceexports", L"-trace-exports"},   {L"-allow-dbgcore", L"-skip-dbgcore-check"},
+    {L"-traceexports", L"-trace-exports"},
 };
 
 bool SameWide(const wchar_t* a, const wchar_t* b) { return a != nullptr && b != nullptr && std::wcscmp(a, b) == 0; }
@@ -393,6 +393,14 @@ TEST(CliFlags, OneOrTwoLeadingDashesNameTheFlagThreeAreRejected) {
   }
 }
 
+TEST(CliFlags, RequireSignedPluginsIsAFlagWithNoOldSpelling) {
+  EXPECT_TRUE(nevr_cli::IsFlag(L"-require-signed-plugins", L"-require-signed-plugins"));
+  EXPECT_TRUE(nevr_cli::IsFlag(L"--require-signed-plugins", L"-require-signed-plugins"));
+  EXPECT_FALSE(nevr_cli::IsFlag(L"---require-signed-plugins", L"-require-signed-plugins"));
+  EXPECT_FALSE(nevr_cli::IsFlag(L"-requiresignedplugins", L"-require-signed-plugins"));
+  EXPECT_EQ(nevr_cli::Resolve(L"-require-signed-plugins").alias, nullptr);
+}
+
 TEST(CliFlags, TokensThatNameNoFlagResolveToNothing) {
   for (const wchar_t* token : {L"server", L"+server", L"-Server", L"-servers", L"-serve", L"-", L"--", L"", L"-5",
                                L"--unknown-flag", L"---unknown-flag", L"-no-consol"}) {
@@ -416,8 +424,6 @@ TEST(CliFlags, TheAliasWarningTextIsPinned) {
   char line[256];
   std::snprintf(line, sizeof(line), nevr_cli::kAliasWarningFormat, L"-noconsole", L"-no-console");
   EXPECT_STREQ(line, "[NEVR.PATCH] -noconsole is deprecated and will be removed in v6.0.0; use -no-console");
-  std::snprintf(line, sizeof(line), nevr_cli::kAliasWarningFormat, L"-allow-dbgcore", L"-skip-dbgcore-check");
-  EXPECT_STREQ(line, "[NEVR.PATCH] -allow-dbgcore is deprecated and will be removed in v6.0.0; use -skip-dbgcore-check");
 }
 
 // `--server` is a server to NEVR (boot.cpp through nevr_cli, the strip through HasServerToken) and to the game

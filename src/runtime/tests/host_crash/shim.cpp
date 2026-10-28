@@ -1,10 +1,11 @@
-// BugSplat64.dll shim for the crash harness: the production host objects
-// (runtime/host/) behind the real mangled MiniDmpSender::createReport export, plus
-// test seams that run the host's runtime load/validate state machine against the
-// sibling nevr.dll fixture and arm the capture's fault-injection hooks.
+// BugSplat64.dll shim for the crash harness: the production host objects (runtime/host/) behind the real
+// mangled MiniDmpSender::createReport export, plus test seams that run the host's runtime load/validate
+// state machine against the sibling nevr-runtime.dll fixture and arm the capture's fault-injection hooks.
+// The export bodies are the shipped ones: runtime/host/minidmp_sender_exports.cpp is linked into this
+// shim and defines BugSplat_createReport, which the shim must not define itself.
 //
 // The crash capture never depends on the runtime load: a valid dump is written
-// whether nevr.dll is absent, ABI-incompatible, missing its entry point, or failing
+// whether nevr-runtime.dll is absent, ABI-incompatible, missing its entry point, or failing
 // to initialize.
 
 #include "core/runtime_abi.h"
@@ -52,10 +53,6 @@ __declspec(noinline) void ReentrancyProbe() {
 
 }  // namespace
 
-extern "C" void BugSplat_createReport(void*, PEXCEPTION_POINTERS exception_pointers) {
-  nevr_host::CreateReport(exception_pointers);
-}
-
 extern "C" void nevr_host_test_SetCaptureProbe(const wchar_t* probe_path) {
   if (probe_path != nullptr && probe_path[0] != L'\0') {
     wcsncpy(g_probe_path, probe_path, MAX_PATH - 1);
@@ -71,6 +68,10 @@ extern "C" void nevr_host_test_SetFailWrites() {
 extern "C" void nevr_host_test_Prepare(HMODULE host_module) {
   // Launcher mode prepares the diagnostics and the capture and installs nothing.
   nevr_host::OnProcessAttach(host_module, nullptr, true);
+  // The host loads dbghelp.dll on a thread started at attach; the child crashes only after it has run.
+  if (!nevr_host::WaitForDbgHelpPreload(30000)) {
+    std::fprintf(stderr, "host crash shim: the dbghelp preload thread did not finish\n");
+  }
   g_loader.Prepare(host_module);
 }
 

@@ -26,10 +26,12 @@
 // Headless graphics-gate skip helper
 // ============================================================================
 
-/// The CEngine init function (FUN_14154a950) enables graphics subsystems one by
-/// one, each gated by a bit in the graphics-enable word at CEngine+0x2cfec. Each
-/// gate is a `je <skip>` taken when the bit is clear (the game's own device-free
-/// branch). In server mode the bits are set, so the game runs the GPU init and
+/// CEngine enables graphics subsystems one by one, each gated, directly or through
+/// a flag derived from it, by a bit in the graphics-enable word at CEngine+0x2cfec.
+/// The gates are in FUN_14154a950 (three), FUN_14154b670 and FUN_14154d6c0; the
+/// comment on each HEADLESS_* gate constant in hook/addresses.h names its
+/// function. Each gate is a conditional jump to the skip taken when the bit is clear (the game's own
+/// device-free branch). In server mode the bits are set, so the game runs the GPU init and
 /// asserts. Forcing `je`(0x74)->`jmp`(0xEB) — same rel8 displacement — makes the
 /// game take its native graphics-disabled branch. Prologue-VALIDATED: patches
 /// only when the current byte is the expected conditional-jump opcode (never
@@ -137,8 +139,8 @@ VOID PatchEnableHeadless(PVOID pGame) {
   // with one game window present for the entire run.
   //
   // Ordering: this function runs from RunDeferredRuntimeBootstrap's
-  // `if (g_isHeadless)` block (boot.cpp), after `-server` has set that global
-  // during argument parsing and AFTER PreprocessCommandLineHook's original
+  // `if (g_isHeadless)` block (boot.cpp), after `-server` or `-headless` has set that global
+  // during the preflight pass and AFTER PreprocessCommandLineHook's original
   // EchoVR::PreprocessCommandLine(pGame) call has returned. That original call
   // is where the game applies this identical mask when the token IS present, so
   // on a `-server`-only run our write lands after it, not before it. Whether any
@@ -387,13 +389,13 @@ static VOID InitializeGlobalGameSpaceHook(PVOID pGame, PVOID pGameSpace) {
 }
 
 // ============================================================================
-// Engine entity lookup null-check hook — prevent AV in server mode
+// CBroadcaster::Listen null-check hook — prevent AV in server mode
 // ============================================================================
 
 /// CBroadcaster::Listen @ 0x140f80ed0 reads the listener table through arg1.
 /// A low pointer in either link can fault before the table-value guard runs.
-typedef INT16 EngineEntityLookupFunc(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5);
-static EngineEntityLookupFunc* OriginalEngineEntityLookup = nullptr;
+typedef INT16 CBroadcasterListenFunc(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5);
+static CBroadcasterListenFunc* OriginalCBroadcasterListen = nullptr;
 
 // N83: this hooks CBroadcaster::Listen (0xF80ED0), NOT an entity lookup — see
 // hook/addresses.h. What that means for the code below:
@@ -417,7 +419,7 @@ static EngineEntityLookupFunc* OriginalEngineEntityLookup = nullptr;
 // function is never called proves nothing. If you are debugging a server that registers but
 // receives nothing, grep the log for `hook_liveness name=CBroadcaster::Listen` first.
 
-static INT16 EngineEntityLookupHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
+static INT16 CBroadcasterListenHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
   nevr_hook_liveness::Mark(nevr_hook_liveness::kBroadcasterListen);
   if (g_isServer) {
     INT64 hashTablePtr = 0;
@@ -442,18 +444,18 @@ static INT16 EngineEntityLookupHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 ar
       return -1;
     }
   }
-  return OriginalEngineEntityLookup(arg1, arg2, arg3, arg4, arg5);
+  return OriginalCBroadcasterListen(arg1, arg2, arg3, arg4, arg5);
 }
 
 // ============================================================================
-// Engine entity property dispatch null-check hook — prevent AV in server mode
+// CBroadcaster::ReceiveLocalEvent null-check hook — prevent AV in server mode
 // ============================================================================
 
 /// CBroadcaster::ReceiveLocalEvent @ 0x140f87aa0 reads its broadcaster through
 /// arg1. A low pointer in either link can fault before dispatch reaches the
 /// listener table.
-typedef VOID EngineEntityPropDispatchFunc(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5);
-static EngineEntityPropDispatchFunc* OriginalEngineEntityPropDispatch = nullptr;
+typedef VOID CBroadcasterReceiveLocalEventFunc(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5);
+static CBroadcasterReceiveLocalEventFunc* OriginalCBroadcasterReceiveLocalEvent = nullptr;
 
 // N83 (2026-07-26): re-implemented as the null-guard it was always described as.
 //
@@ -481,7 +483,7 @@ static EngineEntityPropDispatchFunc* OriginalEngineEntityPropDispatch = nullptr;
 //
 // So: skip only when that chain is actually unsafe; dispatch whenever it is valid.
 // The original protection is preserved; the collateral severance is not.
-static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
+static VOID CBroadcasterReceiveLocalEventHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
   nevr_hook_liveness::Mark(nevr_hook_liveness::kBroadcasterReceiveLocal);
   if (g_isServer) {
     INT64 table = 0;
@@ -506,11 +508,11 @@ static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT
       return;  // the AV 7beccee was written to prevent
     }
   }
-  OriginalEngineEntityPropDispatch(arg1, arg2, arg3, arg4, arg5);
+  OriginalCBroadcasterReceiveLocalEvent(arg1, arg2, arg3, arg4, arg5);
 }
 
 // The unconditional server-mode skip of the broadcaster's listener dispatcher, and why its justification is false.
-[[maybe_unused]] static VOID EngineEntityPropDispatchHook_Original(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
+[[maybe_unused]] static VOID CBroadcasterReceiveLocalEventHook_Original(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
   // !! N83 — the justification below is FALSE. It is quoted so the next reader
   // !! can recognise the shape of the mistake:
   // !!
@@ -541,7 +543,7 @@ static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT
   // deleting the line because the name was wrong — that is the same error in the
   // opposite direction.
   if (g_isServer) return;
-  OriginalEngineEntityPropDispatch(arg1, arg2, arg3, arg4, arg5);
+  OriginalCBroadcasterReceiveLocalEvent(arg1, arg2, arg3, arg4, arg5);
 }
 
 // ============================================================================
@@ -574,8 +576,8 @@ static VOID BugSplatCrashHandlerHook(INT64 exitCode) {
     // This one hook is reached from 5 different game call sites (missing
     // actors, dialogue scenes, etc.) — the caller return address distinguishes
     // which, since exitCode alone does not. Rate-limited the same way as the
-    // other repeat-prone guards in this file (entity lookup / dispatch guard
-    // above): first 3 in full, then a periodic total so a retriggering
+    // other repeat-prone guards in this file (the CBroadcaster::Listen and
+    // ReceiveLocalEvent guards above): first 3 in full, then a periodic total so a retriggering
     // condition doesn't flood identical WARNINGs forever.
     static volatile LONG count = 0;
     const LONG c = InterlockedIncrement(&count);
@@ -606,7 +608,7 @@ static VOID BugSplatCrashHandlerHook(INT64 exitCode) {
 VOID PatchEnableServer() {
   using namespace nevr_patch_addresses;
 
-  // Patch server flag checks in command line processing (FUN_140116720 in cr15game.cpp)
+  // Patch the server flag checks inside fcn.140157fb0 (SERVER_FLAGS_CHECK; BeginMultiplayer calls it)
   // This sets bit 2 (load sessions from broadcast) and bit 3 (dedicated server flag)
   // permanently, bypassing the normal conditional checks
   const BYTE serverFlagsCheck[] = {
@@ -657,37 +659,53 @@ VOID PatchEnableServer() {
 VOID PatchEnableOffline() {
   using namespace nevr_patch_addresses;
 
+  // N17: every site reports its outcome by name, and one aggregate line at Info says how many were written.
+  // Before this, a failed write was silent here (only ApplyPatch's offset-only warning), so a boot could not
+  // show which offline patches were in effect.
+  int attempted = 0;
+  int written = 0;
+  const auto apply = [&attempted, &written](const char* site, uintptr_t offset, const BYTE* patch, size_t size) {
+    ++attempted;
+    const bool ok = ApplyPatch(offset, patch, size);
+    if (ok) ++written;
+    Log(ok ? EchoVR::LogLevel::Debug : EchoVR::LogLevel::Warning, "[NEVR.PATCH] offline site=%s result=%s", site,
+        ok ? "applied" : "failed");
+  };
+
   // Patch multiplayer initialization for offline mode
   const BYTE multiplayerPatch[] = {0xE8, 0xCD, 0x02, 0x00, 0x00};  // CALL +0x2CD
   static_assert(sizeof(multiplayerPatch) == OFFLINE_MULTIPLAYER_SIZE, "OFFLINE_MULTIPLAYER patch size mismatch");
-  ApplyPatch(OFFLINE_MULTIPLAYER, multiplayerPatch, sizeof(multiplayerPatch));
+  apply("multiplayer", OFFLINE_MULTIPLAYER, multiplayerPatch, sizeof(multiplayerPatch));
 
   // Patch incident reporting
   const BYTE incidentsPatch[] = {0x75, 0x0A};  // JNZ +0x0A
   static_assert(sizeof(incidentsPatch) == OFFLINE_INCIDENTS_SIZE, "OFFLINE_INCIDENTS patch size mismatch");
-  ApplyPatch(OFFLINE_INCIDENTS, incidentsPatch, sizeof(incidentsPatch));
+  apply("incidents", OFFLINE_INCIDENTS, incidentsPatch, sizeof(incidentsPatch));
 
   // Patch title/session checks
   const BYTE titlePatch[] = {0x74, 0x12};  // JZ +0x12
   static_assert(sizeof(titlePatch) == OFFLINE_TITLE_SIZE, "OFFLINE_TITLE patch size mismatch");
-  ApplyPatch(OFFLINE_TITLE, titlePatch, sizeof(titlePatch));
+  apply("title", OFFLINE_TITLE, titlePatch, sizeof(titlePatch));
 
   // Force transaction service to load (two conditional jumps to NOP)
   // Both patches use the same 2-byte NOP pattern and share the same SIZE constant
   const BYTE nopConditionalJump[] = {0x90, 0x90};  // 2x NOP
   static_assert(sizeof(nopConditionalJump) == OFFLINE_TRANSACTION_SIZE, "OFFLINE_TRANSACTION patch size mismatch");
-  ApplyPatch(OFFLINE_TRANSACTION_1, nopConditionalJump, sizeof(nopConditionalJump));
-  ApplyPatch(OFFLINE_TRANSACTION_2, nopConditionalJump, sizeof(nopConditionalJump));
+  apply("transaction_1", OFFLINE_TRANSACTION_1, nopConditionalJump, sizeof(nopConditionalJump));
+  apply("transaction_2", OFFLINE_TRANSACTION_2, nopConditionalJump, sizeof(nopConditionalJump));
 
   // Skip failed logon service code
   const BYTE skipLogon[] = {0xE9, 0x92, 0x00, 0x00, 0x00, 0x00};  // JMP +0x97
   static_assert(sizeof(skipLogon) == OFFLINE_LOGON_SIZE, "OFFLINE_LOGON patch size mismatch");
-  ApplyPatch(OFFLINE_LOGON, skipLogon, sizeof(skipLogon));
+  apply("logon", OFFLINE_LOGON, skipLogon, sizeof(skipLogon));
 
   // Redirect tutorial beginning
   const BYTE tutorialRedirect[] = {0xE8, 0xD6, 0x17, 0x68, 0xFF};  // CALL relative
   static_assert(sizeof(tutorialRedirect) == OFFLINE_TUTORIAL_SIZE, "OFFLINE_TUTORIAL patch size mismatch");
-  ApplyPatch(OFFLINE_TUTORIAL, tutorialRedirect, sizeof(tutorialRedirect));
+  apply("tutorial", OFFLINE_TUTORIAL, tutorialRedirect, sizeof(tutorialRedirect));
+
+  // The aggregate line is always written, so an offline boot that wrote nothing still says so (N122/N124).
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] offline mode: %d of %d patch sites written", written, attempted);
 }
 
 // ============================================================================
@@ -761,10 +779,10 @@ VOID PatchDisableWwise() {
   PVOID base = GetModuleHandleA(NULL);
 
   Original_Wwise_Init = (Wwise_Init_t)((uintptr_t)base + nevr_patch_addresses::WWISE_INIT);
-  PatchDetour(&Original_Wwise_Init, (PVOID)Wwise_Init_Hook, "AK::SoundEngine::Init");
+  PatchDetour(&Original_Wwise_Init, (PVOID)Wwise_Init_Hook, "CWwiseEngine::Init");
 
   Original_Wwise_RenderAudio = (Wwise_RenderAudio_t)((uintptr_t)base + nevr_patch_addresses::WWISE_RENDERAUDIO);
-  PatchDetour(&Original_Wwise_RenderAudio, (PVOID)Wwise_RenderAudio_Hook, "AK::SoundEngine::RenderAudio");
+  PatchDetour(&Original_Wwise_RenderAudio, (PVOID)Wwise_RenderAudio_Hook, "CWwiseEngine::RenderAudio");
 
   Log(EchoVR::LogLevel::Debug,
       "[NEVR.PATCH] Wwise audio blocking hooks installed — VOIP preserved "
@@ -842,20 +860,20 @@ VOID PatchLogServerProfile() {
 // ============================================================================
 
 VOID InstallEntityHooks() {
-  // Hook engine entity lookup to prevent null-pointer AV in server mode.
-  // The function dereferences a hash table pointer at +0x5e0 that's uninitialized
-  // in dedicated server mode (no player actor / client-side state).
-  OriginalEngineEntityLookup =
-      (EngineEntityLookupFunc*)(EchoVR::g_GameBaseAddress + nevr_patch_addresses::ENGINE_ENTITY_LOOKUP);
-  PatchDetour(&OriginalEngineEntityLookup, reinterpret_cast<PVOID>(EngineEntityLookupHook), "EngineEntityLookup");
-  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Engine entity lookup hook installed (null-pointer guard)");
+  // Hook CBroadcaster::Listen to prevent a null-pointer AV in server mode.
+  // It dereferences the listener table pointer at +0x5e0, which can be
+  // uninitialized in dedicated server mode.
+  OriginalCBroadcasterListen =
+      (CBroadcasterListenFunc*)(EchoVR::g_GameBaseAddress + nevr_patch_addresses::BROADCASTER_LISTEN);
+  PatchDetour(&OriginalCBroadcasterListen, reinterpret_cast<PVOID>(CBroadcasterListenHook), "CBroadcaster::Listen");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] hooked name=CBroadcaster::Listen va=0x140F80ED0 mode=null_guard");
 
   // N83: re-installed 2026-07-26 with a real null-guard body (see above). The
   // hook now preserves the AV protection 7beccee intended while allowing the
   // broadcaster's listener dispatch through when the structure is valid.
-  OriginalEngineEntityPropDispatch =
-      (EngineEntityPropDispatchFunc*)(EchoVR::g_GameBaseAddress + nevr_patch_addresses::ENGINE_ENTITY_PROP_DISPATCH);
-  PatchDetour(&OriginalEngineEntityPropDispatch, reinterpret_cast<PVOID>(EngineEntityPropDispatchHook), "EngineEntityPropDispatch");
+  OriginalCBroadcasterReceiveLocalEvent =
+      (CBroadcasterReceiveLocalEventFunc*)(EchoVR::g_GameBaseAddress + nevr_patch_addresses::BROADCASTER_RECEIVE_LOCAL_EVENT);
+  PatchDetour(&OriginalCBroadcasterReceiveLocalEvent, reinterpret_cast<PVOID>(CBroadcasterReceiveLocalEventHook), "CBroadcaster::ReceiveLocalEvent");
   Log(EchoVR::LogLevel::Debug,
       "[NEVR.PATCH] hooked name=CBroadcaster::ReceiveLocalEvent va=0x140F87AA0 mode=null_guard");
 }

@@ -245,7 +245,7 @@ TCP = {
     'LobbyRegistrationSuccess': 'SNSLobbyRegistrationSuccess',
     'LobbyRegistrationFailure': 'SNSLobbyRegistrationFailure',
     'LobbySessionSuccessV5': 'SNSLobbySessionSuccessv5',
-    'GameClientMsg1': 'SNSLobbySettingsResponse',
+    'LobbySettingsResponse': 'SNSLobbySettingsResponse',
     'GameClientMsg2': 'SNSServerSettingsResponsev2',
     'GameClientMsg3': 'SNSRewardsSettings',
 }

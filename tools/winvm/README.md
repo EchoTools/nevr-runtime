@@ -65,7 +65,7 @@ does not override a separate failure record.
 only appears in the ~30 s periodic `hook_liveness` report, hence the window.
 
 Artifacts (`stdout.txt`, `windows.txt`, `results.txt`, the probe output) go to
-`/var/tmp/work-nevr-runtime/winvm-<timestamp>/`, or `--out`.
+`winvm-<timestamp>/` in the work root (`$NEVR_WORK_ROOT`, else `~/src/nevr-runtime-work`), or `--out`.
 
 ## Pitfalls
 
@@ -75,8 +75,8 @@ Artifacts (`stdout.txt`, `windows.txt`, `results.txt`, the probe output) go to
   interactive session (`tools/winvm/enum_windows.ps1`) for this reason.
 - The legacy `dbgcore.dll` rejects its own no-console flag unless `-headless` is also given (the dialog
   above is the legacy `dbgcore.dll` saying so).
-- A `dbgcore.dll` in the game directory is fatal to the nEVR runtime unless
-  `-skip-dbgcore-check` is passed. `--with-legacy-dbgcore` reproduces that configuration.
+- A `dbgcore.dll` in the game directory is fatal to the nEVR runtime on any command line. `--with-legacy-dbgcore`
+  reproduces that configuration.
 - The stock install was extracted one level too deep
   (`_data\_data\<version>\...`); the game then cannot find its packages. Preflight
   reports this and how to fix it (a directory junction).
@@ -90,8 +90,9 @@ Artifacts (`stdout.txt`, `windows.txt`, `results.txt`, the probe output) go to
   signature of a server that never got a service session (the offline config here
   produces it). It is a symptom of "no dispatch happened yet", not evidence of a
   broken hook.
-- The offline rig also writes `_local\config.yaml` with `services.allow_offline_server: true`.
-  A server with no `services.socket_uri` exits at start-up unless that key is set (#16).
+- The offline rig also writes `_local\config.yaml` with `services.socket_uri: ""` and
+  `services.allow_offline_server: true`. The empty socket_uri keeps the server off the embedded endpoint (#843);
+  a server with no socket_uri at all exits at start-up unless allow_offline_server is set (#16).
 
 ## Adding a check
 

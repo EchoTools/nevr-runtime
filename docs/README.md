@@ -30,6 +30,14 @@ What a player does, for builds that include the feature.
 | ---- | ----------- | -------- |
 | `quest/SIGN-IN.md` | Signing in to EchoVRCE on Quest with a device code: what the headset shows, what to do, and what to do if the game closes first | Quest players and testers |
 
+## Installers
+
+Checks an installer or launcher makes before it puts nEVR on a player's machine.
+
+| File | Description | Audience |
+| ---- | ----------- | -------- |
+| `reference/verifying-a-release.md` | Verify a release end to end from the signed manifest: signature and pinned keys, version and expiry, every artifact and zip member, the Quest APK, what the PC host checks, what to tell the player, with commands and test vectors (`reference/release-verification/`) | Installer and launcher maintainers |
+
 ## Process
 
 Operational procedures and testing protocols.

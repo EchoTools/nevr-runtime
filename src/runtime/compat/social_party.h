@@ -204,9 +204,17 @@ inline Uuid UuidV5Nil(const std::string& name) {
   return out;
 }
 
+/// The EvrId prefix of the platform a local user logs in as: DMO for code 7 (a No VR client), else OVR-ORG
+/// (4, the platform the game forces). This header stays std-only, so it does not use the full table in
+/// nevr_evr_codec::PlatformPrefix; test_social_facade.cpp pins the two to agree.
+inline const char* LoginPlatformPrefix(std::uint64_t platformCode) { return platformCode == 7 ? "DMO" : "OVR-ORG"; }
+
 /// The UUID a party member goes by in Kick, Pass and invite responses. Nakama keys these by the
-/// EvrId of the platform the game forces (OVR-ORG) with the Discord id as the account id.
-inline Uuid MemberUuid(std::uint64_t accountId) { return UuidV5Nil("OVR-ORG-" + std::to_string(accountId)); }
+/// EvrId of the platform the user logged in with and the Discord id as the account id. Every other member
+/// is taken to be OVR-ORG (the platform the game forces); the local user's own UUID follows its login.
+inline Uuid MemberUuid(std::uint64_t accountId, std::uint64_t platformCode = 4) {
+  return UuidV5Nil(std::string(LoginPlatformPrefix(platformCode)) + "-" + std::to_string(accountId));
+}
 
 /// 0x28-byte payload: RoutingID(8) LocalUserUUID(16) SessionGUID(8) last(8).
 inline Message Standard(std::uint64_t symbol, const Uuid& self, std::uint64_t last) {
@@ -374,9 +382,12 @@ struct View {
 
 class State {
  public:
-  void SetSelf(std::uint64_t accountId, const std::string& name = std::string()) {
+  /// `platformCode` is the platform this client's login carried (4 OVR-ORG, 7 DMO): the local user's UUID in
+  /// every request is the EvrId of that login.
+  void SetSelf(std::uint64_t accountId, const std::string& name = std::string(), std::uint64_t platformCode = 4) {
     std::lock_guard<std::mutex> guard(mutex_);
     self_ = accountId;
+    selfPlatform_ = platformCode;
     selfName_ = name;
     if (!name.empty()) RenameLocked(accountId, name);
   }
@@ -915,7 +926,7 @@ class State {
   }
 
  private:
-  Uuid SelfUuid() const { return self_ == 0 ? Uuid{} : MemberUuid(self_); }
+  Uuid SelfUuid() const { return self_ == 0 ? Uuid{} : MemberUuid(self_, selfPlatform_); }
 
   int Find(std::uint64_t id) const {
     for (std::size_t i = 0; i < members_.size(); ++i)
@@ -1023,6 +1034,7 @@ class State {
 
   mutable std::mutex mutex_;
   std::uint64_t self_ = 0;
+  std::uint64_t selfPlatform_ = 4;
   std::string selfName_;
   std::uint64_t partyId_ = 0;
   std::uint64_t ownerId_ = 0;

@@ -30,6 +30,12 @@ inline constexpr const char* kLibR15BuildId = "b243509c08ce677aeb95fa348016949b3
 inline constexpr const char* kMatchmaking = "libpnsradmatchmaking.so";
 inline constexpr const char* kMatchmakingBuildId = "8c4fddc079eae65909530132a56c48da48b2708c";
 
+// The game's script library that builds the login-failed page's title (#1137). It has no GNU build ID and no SONAME, so
+// the target pins the module file name, the symbol and the link-time slot address (`readelf -rW` on the store APK's
+// copy: JUMP_SLOT 0x12dd0 `_ZN8string_tC2EPKc`, the library's only relocation of that symbol; BIND_NOW).
+inline constexpr const char* kLoginScriptLib = "lib7f2363b8976491aa.so";
+inline constexpr const char* kStringTCtorSymbol = "_ZN8string_tC2EPKc";
+
 inline constexpr const char* kTStringSymbol = "_ZNK10NRadEngine5CJson7TStringEPKcS2_j";
 inline constexpr const char* kClockGettimeSymbol = "clock_gettime";
 inline constexpr const char* kCreateConnectionSymbol = "_ZN10NRadEngine8CSysHttp16CreateConnectionERmPKc";
@@ -43,6 +49,8 @@ inline constexpr const char* kGetMountedObbPathSymbol = "AStorageManager_getMoun
 inline constexpr const char* kAndroidMainSymbol = "android_main";
 inline constexpr const char* kFindMethodSymbol = "_ZN10NRadEngine10CSysModule10FindMethodEmPKc";
 inline constexpr const char* kGetDeviceExtensionsVulkanSymbol = "vrapi_GetDeviceExtensionsVulkan";
+inline constexpr const char* kGetSystemPropertyIntSymbol = "vrapi_GetSystemPropertyInt";
+inline constexpr const char* kShowSystemUISymbol = "vrapi_ShowSystemUI";
 inline constexpr const char* kEnablePageNodeEnterSymbol =
     "_ZN10NRadEngine8NRadGame25CR15UIPage2EnablePageNode5EnterERKNS0_29SR15UIPage2EnablePageNodeDataE";
 
@@ -64,6 +72,20 @@ struct LibR15TStringTag {};
 struct MatchmakingTStringTag {};
 using LibR15TStringThunk = CallbackThunk<LibR15TStringTag, CJsonTStringSig>;
 using MatchmakingTStringThunk = CallbackThunk<MatchmakingTStringTag, CJsonTStringSig>;
+
+// string_t::string_t(char const*), defined in the login-failed page's script library itself (ReVault 0x10df98, 44 bytes:
+// NRadString::Copy(this, text, 0x40)), reached only through that library's PLT stub (ReVault 0x104a90), whose one caller
+// is execute_node_cfa11df1 (ReVault 0x10d0e8), the node that builds the literal "LOGIN FAILED" and hands it to
+// EXTERNALFUNCTIONNODE::setparam as the page's title. `self` (x0) is the string_t, a 64-byte inline buffer the
+// constructor fills; `text` (x1) is copied, never kept. The ReVault VA is the file vaddr + 0x100000.
+struct StringTOpaque;
+using StringTCtorSig = void(StringTOpaque* self, const char* text);
+struct LoginScriptStringTag {};
+using LoginScriptStringThunk = CallbackThunk<LoginScriptStringTag, StringTCtorSig>;
+
+inline GotTarget LoginScriptStringCtor() {
+  return {kLoginScriptLib, kStringTCtorSymbol, RelocKind::kJumpSlot, nullptr, 0x12dd0ULL};
+}
 
 // NRadEngine::CSysHttp::CreateConnection(unsigned long&, char const*), defined in libr15 at 0xf96c08 and
 // called through libr15's own PLT (JUMP_SLOT 0x36e8028): `handle` (x0, the `unsigned long&`) receives the
@@ -114,6 +136,18 @@ using LibR15MountObbThunk = CallbackThunk<LibR15MountObbTag, MountObbSig>;
 using GetMountedObbPathSig = const char*(AStorageManagerOpaque* manager, const char* filename);
 struct LibR15GetMountedObbPathTag {};
 using LibR15GetMountedObbPathThunk = CallbackThunk<LibR15GetMountedObbPathTag, GetMountedObbPathSig>;
+// NRadEngine::CSysInfo::GetDataRootDir() (libr15 0xf87250, 32 bytes, exported): returns gOBBPath when its first byte is
+// non-zero, else the literal above; no argument, the result is a borrowed char const* in x0 that the callers only read.
+// By code reading of the pinned image (a disassembly scan; NOT observed on a headset): libr15 calls it through its own
+// PLT (stub 0xf34e20, JUMP_SLOT 0x36f1df8) from exactly two sites, the only `bl`/`b` to that stub in the pinned .text: CFileTypes::InitializeDirectories (bl at 0x11eb144, when the root it was
+// given is empty) and CEngine::Initialize (bl at 0x2abfe7c, when the engine config carries no data root, the result
+// stored at config +0x178). Both take the pointer and copy the string; neither writes through it. No relocation other
+// than that JUMP_SLOT names the function (no R_AARCH64_RELATIVE or ABS64 to 0xf87250), so, by that reading, no call
+// bypasses the slot. The headset run (#866 Work 4) is what observes it.
+inline constexpr const char* kGetDataRootDirSymbol = "_ZN10NRadEngine8CSysInfo14GetDataRootDirEv";
+using GetDataRootDirSig = const char*();
+struct LibR15GetDataRootDirTag {};
+using LibR15GetDataRootDirThunk = CallbackThunk<LibR15GetDataRootDirTag, GetDataRootDirSig>;
 // AOBB_STATE_MOUNTED, the success state the game's callback treats as "mounted".
 inline constexpr std::int32_t kObbStateMounted = 1;
 // The data root the game already falls back to when no OBB path was recorded (GetDataRootDir, above).
@@ -134,6 +168,69 @@ using LibR15FindMethodThunk = CallbackThunk<LibR15FindMethodTag, FindMethodSig>;
 using VrapiExtensionsSig = std::int32_t(char* extension_names, std::uint32_t* extension_names_size);
 struct LibR15GetDeviceExtensionsVulkanTag {};
 using LibR15GetDeviceExtensionsVulkanThunk = CallbackThunk<LibR15GetDeviceExtensionsVulkanTag, VrapiExtensionsSig>;
+
+// VrApi.h: int vrapi_GetSystemPropertyInt(const ovrJava* java, ovrSystemProperty propType). Imported (value 0): JUMP_SLOT
+// 0x36fa728 (`readelf -rW` on the pinned image), the slot the hardware dump hooks too (docs/adr/0006-quest-hardware-dump.md).
+// CVR::RefreshRTSize (0x1a709a0) calls it with ids 5 and 6, the suggested eye texture width and height
+// (`bl` at 0x1a709f4 and 0x1a70a04), multiplies the results by CustomViewportScale and stores the pair; CVR::Resize
+// (0x1a70d0c) creates the swap chain from it once per process. `java` is never dereferenced here (an incomplete type).
+struct OvrJavaOpaque;
+using GetSystemPropertyIntSig = int(const OvrJavaOpaque* java, int property);
+struct LibR15GetSystemPropertyIntTag {};
+using LibR15GetSystemPropertyIntThunk = CallbackThunk<LibR15GetSystemPropertyIntTag, GetSystemPropertyIntSig>;
+// NRadEngine::CResourceManager::FillResourceFileRequest(CSymbol64 type, CSymbol64 name, unsigned long long,
+// CAllocator*, void*, unsigned long long, SFileRequestData&), defined in libr15 at 0x25439f0 (524 bytes; ReVault lists it
+// at 0x26439f0): the single manifest resolver (#871). It clears the request (ClearFileRequestData, 0x2a9759c), binary-searches
+// the manifest for (type, name) and on a hit fills the request with the package file handle, the chunk and the words
+// that locate the bytes; on a miss it raises "Cannot find resource" and returns the error object. Every reader of a
+// manifest resource passes through it before ReadFileAsync: the base loads, the archive loader, the streamed mips and
+// the forced full mip load.
+//   this (x0, CResourceManager*), type (x1), name (x2), unused by the body (x3), allocator (x4, stored at request+0x460),
+//   owner (x5, stored at request+0x00: the CResource* for a base load), index (x6, stored at request+0x08: the buffer
+//   index, or the mip index), request (x7, the 0x470-byte SFileRequestData). Returns 0 on a hit.
+// CSymbol64 is one u64 passed by value, so a symbol is a plain integer argument here. Called through libr15's own PLT
+// stub (0xf30730, JUMP_SLOT 0x36efa80); the thunk passes the game's return address to the handler (kCaller) so a handler
+// can tell which of the six call sites it serves.
+struct CResourceManagerOpaque;
+using FillResourceFileRequestSig = std::uint64_t(CResourceManagerOpaque* manager, std::uint64_t type, std::uint64_t name,
+                                                 std::uint64_t unused, void* allocator, void* owner, std::uint64_t index,
+                                                 unsigned char* request);
+struct LibR15FillResourceFileRequestTag {};
+using LibR15FillResourceFileRequestThunk =
+    CallbackThunk<LibR15FillResourceFileRequestTag, FillResourceFileRequestSig, /*kCaller=*/true>;
+inline constexpr const char* kFillResourceFileRequestSymbol =
+    "_ZN10NRadEngine16CResourceManager23FillResourceFileRequestENS_9CSymbol64ES1_yPNS_10CAllocatorEPvyRNS_16SFileRequestDataE";
+
+// SFileRequestData (0x470 bytes), the fields the log-only hook reads after a hit (ClearFileRequestData, 0x2a9759c, sets
+// +0x10 and +0x418 to -1; the hit overwrites both). Measured on the pinned libr15 from the function's own stores
+// (0x2543a2c-0x2543bf8).
+namespace resource_request_layout {
+inline constexpr std::size_t kRequestBytes = 0x470;
+inline constexpr std::size_t kPackageHandle = 0x10;      // i64: the package file handle, -1 when none
+inline constexpr std::size_t kChunkIndex = 0x418;        // i64: the manifest record's chunk index, -1 when none
+inline constexpr std::size_t kChunkFileOffset = 0x420;   // u64: the chunk's offset in the package file
+inline constexpr std::size_t kChunkCompressed = 0x428;   // u64: the chunk's compressed size
+inline constexpr std::size_t kChunkDecompressed = 0x430; // u64: the chunk's decompressed size
+inline constexpr std::size_t kOffsetInChunk = 0x438;     // u64: the resource's offset inside the chunk
+inline constexpr std::size_t kSize = 0x440;              // u64: the resource's size
+inline constexpr std::size_t kAlignment = 0x450;         // u64: the record's alignment
+}  // namespace resource_request_layout
+
+// The six call sites of the stub in libr15 (ELF scan of bl to 0xf30730; pinned vaddrs, the address of the bl). The game
+// return address a handler sees is the bl plus 4. got_pinned_test.cpp checks each is a bl to the stub in the real library.
+inline constexpr std::uint64_t kFillResourceFileRequestStub = 0xf30730;
+struct FillCallSite {
+  std::uint64_t bl;
+  const char* name;
+};
+inline constexpr FillCallSite kFillCallSites[] = {
+    {0x25438f4, "resource_load_a"},    // CResourceManager::ResourceLoadInternal, first buffer
+    {0x2543984, "resource_load_b"},    // CResourceManager::ResourceLoadInternal, second buffer
+    {0x1341b18, "archive_load_a"},     // the CArchiveLoader request filler (0x1341a88)
+    {0x1341b9c, "archive_load_b"},     // the same function, second site
+    {0x18e39f0, "mip_request"},        // CGTextureCache::RequestNewMipmaps, per streamed mip
+    {0x18e661c, "force_load_all_mips"} // CGTextureResource::BeginForceLoadAllMips
+};
 
 // android_main(android_app*), defined in libr15 at 0xf784c4 and called by the native-activity glue's thread entry
 // through libr15's own PLT (`mov x0, x19; bl 0xf27bc0` at 0xf79a4c; the stub loads JUMP_SLOT 0x36eb4c8). The glue
@@ -176,6 +273,27 @@ struct LibR15CheckPermissionTag {};
 using LibR15CheckPermissionThunk = CallbackThunk<LibR15CheckPermissionTag, CheckPermissionSig>;
 inline constexpr const char* kRequestPermissionsSymbol =
     "_ZN10NRadEngine8CSysInfo18RequestPermissionsENS_10CArrayViewIPKcLy0EEE";
+
+// NRadEngine::CSysInfo::OSBuildVersion(unsigned long long&), defined in libr15 at 0xf875c4 (184 bytes, exported; ReVault
+// 0x10875c4): reads the system property ro.build.version.incremental, and when it is at most 20 characters of decimal
+// digits stores the number through its argument and returns 1; otherwise it returns 0 and stores nothing. The return is
+// w0, 0 or 1. libr15 calls it through its own PLT (stub 0xf505a0, JUMP_SLOT 0x36ff9b8) from exactly one place,
+// CR15NetGame::Initialize (bl at 0x1285ff8): when it returns 1 and the number is below kMinOSBuildVersion, Initialize
+// switches the net game to state -100, "os needs update" (CR15NetGame::GameStateString), and never reaches the login.
+// libpnsovr has its own copy (its GotUserProofCB puts the number into the login's system info); this slot does not
+// reach it.
+inline constexpr const char* kOSBuildVersionSymbol = "_ZN10NRadEngine8CSysInfo14OSBuildVersionERy";
+inline constexpr std::uint64_t kOSBuildVersionVaddr = 0xf875c4;
+inline constexpr std::uint64_t kOSBuildVersionStub = 0xf505a0;
+inline constexpr std::uint64_t kOSBuildVersionCallSite = 0x1285ff8;  // CR15NetGame::Initialize
+using OSBuildVersionSig = int(std::uint64_t* version);
+struct LibR15OSBuildVersionTag {};
+using LibR15OSBuildVersionThunk = CallbackThunk<LibR15OSBuildVersionTag, OSBuildVersionSig>;
+// NRadEngine::kMinOSBuildVersion, the floor Initialize compares with (an 8-byte constant in .rodata, exported; Initialize
+// reads it through GLOB_DAT 0x371bd38). Its value in the pinned build is kMinOSBuildVersionValue.
+inline constexpr const char* kMinOSBuildVersionSymbol = "_ZN10NRadEngine18kMinOSBuildVersionE";
+inline constexpr std::uint64_t kMinOSBuildVersionVaddr = 0x2b9ca88;
+inline constexpr std::uint64_t kMinOSBuildVersionValue = 6023800249000000ULL;
 
 // NRadEngine::NRadGame::CR15UIPage2EnablePageNode::Enter(SR15UIPage2EnablePageNodeData const&), defined in
 // libr15 at 0x1fc210c: the UI script node that enables a page. `node` (x0) is the node object, which is the
@@ -241,6 +359,24 @@ inline constexpr PageName kPageNames[] = {
     {0xfbc6a43d068f418dULL, "transition_to_game_page", "all"},
 };
 }  // namespace ui_layout
+
+// CR15VRMenuWidgetCS::Update(), the pointer-ray menu widget's per-frame update, defined in libr15 at pinned 0x1f9a7a0
+// (ReVault 0x209a7a0 = pinned + 0x100000; `revault_function 0x209a7a0`). The engine registers its address
+// (R15RegisterComponentSystemUpdates), so no GOT slot names it: the splash skip hooks the entry (inline, arm64).
+// got_pinned_test reads the four words below at this vaddr in the real library.
+// Its first four words are `sub sp,sp,#0x110; stp d9,d8; stp x28,x26; stp x25,x24`; the widget fields the hook
+// reads (ctx +0x80, defs +0xb8, dense +0xf8, links +0x100, bounds +0xf2/+0xf4, input +0x138) are the ones the
+// update itself reads (the PC twin's offsets, checked against this decompilation).
+inline constexpr std::uint64_t kWidgetUpdateVaddr = 0x1f9a7a0;
+inline constexpr std::uint32_t kWidgetUpdateCode[4] = {0xd10443ffu, 0x6d0b23e9u, 0xa90c6bfcu, 0xa90d63f9u};
+
+// NRadEngine::CInputListener::Pressed(state, id), the body behind the thunk at pinned 0x1037be0 (its `br` goes to
+// pinned 0x2539920; ReVault 0x2639920). It reads the button table at state+0x80/+0x50 and returns bit 2 of the entry's
+// flags at +0x230 (set for one input step when the button became active): the same predicate the PC splash skip
+// reads at 0x140f9b770. The id arrives in x1; the decompilation does not show it. Reached like QuitOnError.
+inline constexpr std::uint64_t kInputPressedVaddr = 0x2539920;
+inline constexpr std::uint32_t kInputPressedCode[4] = {0xf940400au, 0xb400024au, 0xf9402808u, 0xaa1f03e9u};
+using InputPressedSig = std::uint32_t(void* state, std::uint64_t id);
 
 // NRadEngine::NRadGame::CR15NetGame::Update(unsigned long long), defined in libr15 at 0x1294b40,
 // called from CR15Game::UpdateGame (bl at 0x11fb5cc, the only call site, up to four times per
@@ -365,6 +501,12 @@ inline GotTarget LibR15CheckPermission() {
   return {kLibR15, kCheckPermissionSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c37c8ULL};
 }
 
+// libr15.so's slot for CSysInfo::OSBuildVersion, defined in libr15 itself (JUMP_SLOT 0x36ff9b8, `readelf -rW` on the
+// pinned image: `R_AARCH64_JUMP_SLOT 0xf875c4 _ZN10NRadEngine8CSysInfo14OSBuildVersionERy`).
+inline GotTarget LibR15OSBuildVersion() {
+  return {kLibR15, kOSBuildVersionSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ff9b8ULL};
+}
+
 // libr15.so's slot for CR15UIPage2EnablePageNode::Enter, defined in libr15 itself (JUMP_SLOT 0x36c1cf8).
 inline GotTarget LibR15EnablePageNodeEnter() {
   return {kLibR15, kEnablePageNodeEnterSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c1cf8ULL};
@@ -379,6 +521,12 @@ inline GotTarget LibR15GetMountedObbPath() {
   return {kLibR15, kGetMountedObbPathSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36f5b48ULL};
 }
 
+// libr15.so's slot for CSysInfo::GetDataRootDir, defined in libr15 itself (JUMP_SLOT 0x36f1df8, `readelf -rW` on the
+// pinned image: `R_AARCH64_JUMP_SLOT 0xf87250 _ZN10NRadEngine8CSysInfo14GetDataRootDirEv`).
+inline GotTarget LibR15GetDataRootDir() {
+  return {kLibR15, kGetDataRootDirSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36f1df8ULL};
+}
+
 // libr15.so's slot for CSysModule::FindMethod, defined in libr15 itself (JUMP_SLOT 0x36db9f8, `readelf -rW` on the
 // pinned image).
 inline GotTarget LibR15FindMethod() {
@@ -389,6 +537,30 @@ inline GotTarget LibR15FindMethod() {
 // imported, value 0).
 inline GotTarget LibR15GetDeviceExtensionsVulkan() {
   return {kLibR15, kGetDeviceExtensionsVulkanSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36dd440ULL};
+}
+
+// libr15.so's slot for vrapi_GetSystemPropertyInt (JUMP_SLOT 0x36fa728, `readelf -rW` on the pinned image; imported,
+// value 0).
+inline GotTarget LibR15GetSystemPropertyInt() {
+  return {kLibR15, kGetSystemPropertyIntSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36fa728ULL};
+}
+
+// VrApi.h: int vrapi_ShowSystemUI(const ovrJava* java, const ovrSystemUiType type). Called only from CVR::ShowSystemUI
+// (ReVault 0x1b73990; ReVault VA = pinned VA + 0x100000), which always passes type 1. The PLT thunk at ReVault 0xffb730
+// has one direct caller, 0x1b7399c (`revault_xrefs 0xffb730`). The JUMP_SLOT is ReVault 0x37d5280 (`revault_imports`),
+// pinned 0x36d5280. Pin unverified until `just test-quest-hooks-pinned` runs on the real libr15.
+using ShowSystemUISig = int(const OvrJavaOpaque* java, int type);
+struct LibR15ShowSystemUITag {};
+using LibR15ShowSystemUIThunk = CallbackThunk<LibR15ShowSystemUITag, ShowSystemUISig>;
+
+inline GotTarget LibR15ShowSystemUI() {
+  return {kLibR15, kShowSystemUISymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36d5280ULL};
+}
+
+// libr15.so's slot for CResourceManager::FillResourceFileRequest, defined in libr15 itself (JUMP_SLOT 0x36efa80,
+// `readelf -rW` on the pinned image; the PLT stub at 0xf30730 loads it).
+inline GotTarget LibR15FillResourceFileRequest() {
+  return {kLibR15, kFillResourceFileRequestSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36efa80ULL};
 }
 
 // libpnsradmatchmaking.so's slot for the same function, defined in

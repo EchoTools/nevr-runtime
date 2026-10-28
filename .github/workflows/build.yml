@@ -17,8 +17,8 @@ name: Build
 # depends on the pre-release flag, and no step reads it: the uploads leave the `prerelease` input unset so the
 # release keeps whatever the human set. The whole workflow runs on
 # ubuntu-latest: no Windows runner, no cloud login. A `workflow_dispatch` started on a vX.Y.Z tag ref runs
-# the same path as a dry run and publishes nothing, unless the tag's release is a DRAFT carrying none of the
-# built files: then the two files are attached to that draft, which stays a draft (see `drafts`).
+# the same path as a dry run without the Verify step (#1008), and publishes nothing, unless the tag's release is a
+# DRAFT carrying none of the built files: then the two files are attached to that draft, which stays a draft (see `drafts`).
 on:
   workflow_dispatch:
   release:
@@ -308,14 +308,18 @@ jobs:
       run: cmake --build --preset mingw-release
 
     # What the build actually stamped, logged and checked against the version computed above: the DLL's
-    # one identity literal "NEVR-BUILD <version> <commit40>" must carry exactly that version and this
+    # one identity literal "NEVR-BUILD <version> <commit40>" (each of the two DLLs carries it) must carry exactly that version and this
     # commit; with no version (a branch build) it must carry a development version. The tree gate below
     # (package_release.py tree) is the backstop and refuses a package whose DLL is not stamped.
     - name: Assert the stamped version
       shell: bash
       env:
         VERSION: ${{ steps.release.outputs.version }}
-      run: python3 tools/package_release.py stamp --dll build/mingw-release/bin/BugSplat64.dll --version "$VERSION" --commit "$GITHUB_SHA"
+      run: |
+        set -euo pipefail
+        for file in BugSplat64.dll nevr-runtime.dll; do
+          python3 tools/package_release.py stamp --dll "build/mingw-release/bin/$file" --version "$VERSION" --commit "$GITHUB_SHA"
+        done
 
     # `just verify` runs test-quest-hooks, which copies the NDK's jni.h ({{ ndk }} in the justfile), so this job needs the
     # NDK the quest job has. Set up here, after the build and before Verify, so the vcpkg binary cache and its
@@ -323,7 +327,10 @@ jobs:
     - name: Set up the Android NDK
       uses: ./.github/actions/setup-ndk
 
+    # Tag builds skip Verify (#1008): every commit on main already passed `just verify` on its PR, and the tag's
+    # build proves the build and packaging (RELEASING.md). A branch or main dispatch still runs it.
     - name: Verify
+      if: github.ref_type != 'tag'
       env:
         # A release or draft build never fetches the real signed plugin fixture from outside GitHub (justfile, test-auth-unit).
         NEVR_RELEASE_BUILD: ${{ steps.release.outputs.version != '' && '1' || '' }}
@@ -349,12 +356,14 @@ jobs:
           test -s "$archive"
           zip_entries=$(cmake -E tar tf "$archive")
           [[ "$zip_entries" == *BugSplat64.dll* ]]
+          [[ "$zip_entries" == *nevr-runtime.dll* ]]
           [[ "$zip_entries" == *echovr_server.exe* ]]
         done
         for archive in "${tars[@]}"; do
           test -s "$archive"
           tar_entries=$(tar --zstd -tf "$archive")
           [[ "$tar_entries" == *BugSplat64.dll* ]]
+          [[ "$tar_entries" == *nevr-runtime.dll* ]]
           [[ "$tar_entries" == *echovr_server.exe* ]]
         done
 
@@ -374,11 +383,13 @@ jobs:
         test "${#packages[@]}" -eq 1
         pkg=${packages[0]%/}
         name=$(basename "$pkg")
-        for file in BugSplat64.dll echovr_server.exe; do
+        for file in BugSplat64.dll nevr-runtime.dll echovr_server.exe; do
           python3 tools/verify_symbols.py "$pkg/$file" "dist/symbols/$name/$file.dbg"
         done
         python3 tools/verify_symbols.py --tree "$pkg" "dist/symbols/$name"
-        python3 tools/package_release.py stamp --dll "$pkg/BugSplat64.dll" --version "$VERSION" --commit "$GITHUB_SHA"
+        for file in BugSplat64.dll nevr-runtime.dll; do
+          python3 tools/package_release.py stamp --dll "$pkg/$file" --version "$VERSION" --commit "$GITHUB_SHA"
+        done
 
     # The symbol files are a workflow artifact for the maintainers, not a release asset: players never see
     # them. The publish job attests them to this commit.
@@ -393,7 +404,7 @@ jobs:
 
     # The release package tree (the Windows zip's contents, no checksums yet) is gated here: the DLL
     # embeds exactly config/public-defaults.env and its identity literal carries this version and commit.
-    # The DLL is the stripped, debuglinked one from the dist package (players get stripped builds only);
+    # The two DLLs are the stripped, debuglinked ones from the dist package (players get stripped builds only);
     # its symbols are the `symbols` artifact above.
     - name: Gate and assemble the release tree
       if: steps.release.outputs.version != ''
@@ -407,6 +418,7 @@ jobs:
         pkg=${packages[0]%/}
         python3 tools/package_release.py tree --version "$VERSION" --commit "$GITHUB_SHA" --out release-stage \
           --dll "$pkg/BugSplat64.dll" \
+          --runtime-dll "$pkg/nevr-runtime.dll" \
           --server-exe "$pkg/echovr_server.exe" \
           --pc-header build/mingw-release/generated/nevr_builtin_defaults.h
 

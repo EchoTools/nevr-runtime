@@ -27,6 +27,7 @@
 #include "abi/echovr_functions.h"
 #include "core/globals.h"
 #include "core/logging.h"
+#include "core/nevr_root.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/hook/patching.h"
 #include "runtime/hook/addresses.h"
@@ -174,6 +175,8 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
 }
 
 INT64 RuntimeGameMain(INT64 arg1) { return GameMainWrapperHook(arg1); }
+
+unsigned long GameLoopThreadId() { return g_gameLoopThreadId.load(std::memory_order_relaxed); }
 
 void ArmGameMain(const NevrHostContext* host) {
   // The host owns the detour on the game's main wrapper (runtime/host) and calls RuntimeGameMain
@@ -364,7 +367,7 @@ VOID WINAPI ExitProcessHook(UINT uExitCode) {
 // allocation. No float conversions are used (those may allocate on some libcs).
 
 // The crash record (beta gate G17): a tester launching from the Meta app has no console, so the
-// [NEVR.CRASH] lines also go to %LOCALAPPDATA%\EchoVR\logs\nevr-crash-<run id>.txt, next to the run log,
+// [NEVR.CRASH] lines also go to %LOCALAPPDATA%\nevr\echovr\logs\nevr-crash-<run id>.txt, next to the run log,
 // once a crash path has been entered (ArmCrashRecord). The path is built at init; the handler only opens
 // and appends with raw syscalls and flushes every line, because the process may die at any point (N70).
 static char g_crashRecordPath[MAX_PATH] = {};
@@ -372,12 +375,10 @@ static HANDLE g_crashRecordHandle = INVALID_HANDLE_VALUE;
 static volatile LONG g_crashRecordArmed = 0;
 
 static void PrepareCrashRecordPath() {
-  char dir[MAX_PATH] = {};
-  const DWORD len = GetEnvironmentVariableA("LOCALAPPDATA", dir, MAX_PATH);
+  const std::string logs = nevr_root::LogsDir(nevr_root::RootA());  // empty when LOCALAPPDATA is unset or too long
   int n = 0;
-  if (len > 0 && len < MAX_PATH) {
-    n = snprintf(g_crashRecordPath, sizeof(g_crashRecordPath), "%s\\EchoVR\\logs\\nevr-crash-%s.txt", dir,
-                 GetRunId());
+  if (!logs.empty()) {
+    n = snprintf(g_crashRecordPath, sizeof(g_crashRecordPath), "%s\\nevr-crash-%s.txt", logs.c_str(), GetRunId());
   } else {
     char exe[MAX_PATH] = {};
     const DWORD elen = GetModuleFileNameA(nullptr, exe, MAX_PATH);
@@ -718,10 +719,11 @@ LONG WINAPI BreakpointVEH(PEXCEPTION_POINTERS pExceptionInfo) {
       for (LONG m = 0; m < mc; m++) {
         // The cache is deliberately comprehensive for crash attribution, so a
         // range match alone means only "some loaded DLL" — including Wine and
-        // DXVK.  This client loads no plugins; BugSplat64.dll is the only NEVR
-        // image allowed to enter the dump path.
+        // DXVK.  This client loads no plugins; BugSplat64.dll (the host) and
+        // nevr-runtime.dll (the runtime) are the only NEVR images allowed to
+        // enter the dump path (N70, nevr_veh_policy::IsNevrImageName).
         if (rip >= g_moduleCache[m].base && rip < g_moduleCache[m].end &&
-            _stricmp(g_moduleCache[m].name, "BugSplat64.dll") == 0) {
+            nevr_veh_policy::IsNevrImageName(g_moduleCache[m].name)) {
           inNevrModule = true;
           break;
         }
@@ -880,10 +882,15 @@ static INT64 HandleCrashDumpHook(void* a1, void* a2, void* a3, void* a4) {
                                                     ? ep->ExceptionRecord->ExceptionInformation[1] : 0));
       if (ep->ContextRecord != nullptr && nevr_crash_recovery::IsReadableMemory(ep->ContextRecord, sizeof(CONTEXT))) {
         const DWORD64 rip = ep->ContextRecord->Rip;
-        VehPrintf("[NEVR.CRASH] >>> rip=0x%llX rva=%s0x%llX rsp=0x%llX rcx=0x%llX rdx=0x%llX",
+        // #673: a fault outside the game names its module from the init-time snapshot (N70: no enumeration here), so a
+        // Proton report says which DLL faulted; "unknown" means that module was loaded after the snapshot.
+        const char* faultModule =
+            nevr_crash_recovery::ModuleNameForAddress(g_moduleCache, static_cast<int>(g_moduleCacheCount), rip);
+        VehPrintf("[NEVR.CRASH] >>> rip=0x%llX rva=%s0x%llX module=%s rsp=0x%llX rcx=0x%llX rdx=0x%llX",
                   static_cast<unsigned long long>(rip),
                   (rip >= base && rip < base + 0x2000000) ? "game+" : "abs:",
                   static_cast<unsigned long long>((rip >= base && rip < base + 0x2000000) ? rip - base : rip),
+                  faultModule != nullptr ? faultModule : "unknown",
                   ep->ContextRecord->Rsp, ep->ContextRecord->Rcx, ep->ContextRecord->Rdx);
       }
     } else {
@@ -1150,7 +1157,7 @@ static volatile LONG s_gameServerLibStarted = 0;
 
 // Upper bound on the game's own teardown. Measured at ~3.1s from
 // "Console close signal received" to "Terminated game server"
-// (/var/tmp/work-nevr-runtime/n13-run.log, 10:11:51.280 -> 10:11:53.391).
+// (one Wine server run, 10:11:51.280 -> 10:11:53.391; its log is not kept).
 // If it ever exceeds this we must still die: a hung shutdown is worse than an
 // ugly one, and a server blocked forever is the failure mode of N4.
 static constexpr DWORD kGameTeardownWatchdogMs = 20000;

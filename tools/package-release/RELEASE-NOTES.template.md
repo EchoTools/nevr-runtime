@@ -9,8 +9,8 @@ Commit `@COMMIT@`.
 @IF_NOAPK@| file | SHA-256 | what |
 @IF_APK@|---|---|
 @IF_NOAPK@|---|---|---|
-@IF_APK@| `@ZIP@` | Windows: `BugSplat64.dll`, `echovr_server.exe`, `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
-@IF_NOAPK@| `@ZIP@` | `@SHA_ZIP@` | Windows, for players and server operators: `BugSplat64.dll`, `echovr_server.exe` (both stripped, no debug symbols), `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
+@IF_APK@| `@ZIP@` | Windows: `BugSplat64.dll`, `nevr-runtime.dll`, `echovr_server.exe`, `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
+@IF_NOAPK@| `@ZIP@` | `@SHA_ZIP@` | Windows, for players and server operators: `BugSplat64.dll`, `nevr-runtime.dll`, `echovr_server.exe` (all stripped, no debug symbols), `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
 @IF_APK@| `@APK@` | Quest: the repacked, debug-signed APK |
 @IF_APK@| `SHA256SUMS` | SHA-256 of the two files above |
 @IF_NOAPK@| `@QUEST@` | `@SHA_QUEST@` | Quest library for packagers: a loose ELF, attested and not signed |
@@ -29,7 +29,7 @@ Commit `@COMMIT@`.
 
 ## Install and uninstall
 - **Windows:** unzip, close the game, run `install.ps1` (PowerShell, `-ExecutionPolicy Bypass`). It backs up
-  the original `BugSplat64.dll` with a timestamp and renames a legacy `dbgcore.dll` aside; `uninstall.ps1`
+  the original `BugSplat64.dll` with a timestamp, renames a legacy `dbgcore.dll` aside and puts both new DLLs in; `uninstall.ps1`
   restores both. Nothing is deleted.
 @IF_NOAPK@- **Dedicated server:** copy `echovr_server.exe` next to `echovr.exe` and write `_local\config.yaml`; the zip's
 @IF_NOAPK@  `README.txt` has the command and the smallest working config.
@@ -37,9 +37,9 @@ Commit `@COMMIT@`.
 @IF_APK@  earlier test builds; a different key needs an uninstall first, which clears the app's data).
 
 ## Signing
-The runtime in this release loads only plugins signed through the release-signer pipeline. An unsigned plugin (or one with a changed byte) is refused and listed in the plugin manifest; a plugin marked required that is refused stops a server.
+The runtime loads unsigned plugins by default, and logs a warning for each one. Start a run with `-require-signed-plugins` to load only plugins signed through the release-signer pipeline: an unsigned plugin (or one with a changed byte) is then refused and listed in the plugin manifest, and a plugin marked required that is refused stops a server.
 
-A separate signing step may sign `BugSplat64.dll`, `echovr_server.exe`, `install.ps1`, `uninstall.ps1` and `quest-diagnose.ps1` after the build and
+A separate signing step may sign `BugSplat64.dll`, `nevr-runtime.dll`, `echovr_server.exe`, `install.ps1`, `uninstall.ps1` and `quest-diagnose.ps1` after the build and
 replace the zip under the same name; these notes are the same either way. A file is signed when it carries a
 signature, and `SIGNING.txt` inside the zip says how to check each one.
 @IF_APK@Compare the zip's SHA-256 with `SHA256SUMS`; the zip's own `SHA256SUMS` lists the files inside it.
@@ -49,9 +49,9 @@ Windows Defender or SmartScreen may warn about a file that is not signed.
 @IF_APK@not a code-signing certificate.
 
 ## Notes
-@IF_APK@- The Windows log is `%LOCALAPPDATA%\EchoVR\logs\nevr-*.jsonl`; the Quest log is
+@IF_APK@- The Windows log is `%LOCALAPPDATA%\nevr\echovr\logs\nevr-*.jsonl`; the Quest log is
 @IF_APK@  `/sdcard/Android/data/com.readyatdawn.r15/files/nevr-sentinel.log`.
 @IF_APK@- The version is `@VERSION@`, in both artifacts.
-@IF_NOAPK@- The Windows log is `%LOCALAPPDATA%\EchoVR\logs\nevr-*.jsonl`.
-@IF_NOAPK@- The version is `@VERSION@`; `BugSplat64.dll` carries it with the commit in one identity string,
+@IF_NOAPK@- The Windows log is `%LOCALAPPDATA%\nevr\echovr\logs\nevr-*.jsonl`.
+@IF_NOAPK@- The version is `@VERSION@`; `BugSplat64.dll` and `nevr-runtime.dll` each carry it with the commit in one identity string,
 @IF_NOAPK@  `NEVR-BUILD @VERSION@ @COMMIT@`.

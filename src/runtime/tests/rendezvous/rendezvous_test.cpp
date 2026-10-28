@@ -7,14 +7,16 @@
 // 13-byte GameMainWrapper prologue and then calls a C body that records the
 // call and returns ExpectedResult(command_line). The host shim (BugSplat64.dll)
 // validates and MinHooks it from DLL_PROCESS_ATTACH, then on the first call loads
-// the sibling nevr.dll, calls its initialize and returns its game_main.
+// the sibling nevr-runtime.dll, calls its initialize and returns its game_main.
 //
 // Each child validates, from the recorded events:
 //   - host attach installs the hook (or, on a bad prologue, leaves the game
-//     unhooked) and never loads nevr.dll before attach returns;
+//     unhooked) and never loads nevr-runtime.dll before attach returns;
 //   - valid: the runtime's initialize ran once, then game_main ran once with the
 //     exact argument, and the caller got game_main's exact result;
-//   - missing: the original wrapper ran once and the caller got its exact result;
+//   - missing: the host stopped the game once with exit code 78 (its test seam records the stop and lets the
+//     original wrapper run, once, with its exact result) and wrote the game_stop record;
+//   - missing-real-stop: the same without the seam: the process ends with exit code 78 inside the call;
 //   - reenter: a same-thread re-entry during initialize bypassed to the original
 //     (one lone original) and the call that followed was dispatched;
 //   - the host context carried the wrapper's trampoline and the hook record: the
@@ -57,6 +59,8 @@ volatile LONG g_event_overflow = 0;
 bool g_wrong_prologue = false;
 bool g_wrong_image = false;       // an image the host refuses: not the supported build
 bool g_fail_hook_create = false;  // MH_CreateHook "fails" in the host
+bool g_real_stop = false;         // the host really ends the process when the runtime did not load
+bool g_verify_runtime = false;    // the host verifies nevr-runtime.dll with the production pins (the fixture is unsigned)
 int g_launcher_mode = 0;
 // A value that needs all 64 bits: a truncated argument or result changes it.
 constexpr std::int64_t kCommandLine = 0x1234'5678'9ABC'DEF0;
@@ -150,6 +154,14 @@ extern "C" __declspec(dllexport) int RendezvousProbeFailHookCreate() {
   return g_fail_hook_create ? 1 : 0;
 }
 
+extern "C" __declspec(dllexport) int RendezvousProbeRealStop() {
+  return g_real_stop ? 1 : 0;
+}
+
+extern "C" __declspec(dllexport) int RendezvousProbeVerifyRuntime() {
+  return g_verify_runtime ? 1 : 0;
+}
+
 namespace {
 
 [[noreturn]] void Fail(const char* message);
@@ -171,7 +183,7 @@ const char* EventName(LONG event) {
       "host.attach_exit", "runtime.dll_attach", "runtime.initialized",
       "runtime.game_main_enter", "original", "runtime.game_main_exit",
       "runtime.hook_target", "runtime.hook_bytes", "runtime.hook_mismatch",
-      "call.issued", "call.bad_result"};
+      "call.issued", "call.bad_result", "host.stop_game"};
   return event > 0 && event < kEventLimit ? kNames[event] : "?";
 }
 
@@ -264,7 +276,7 @@ void ValidateAttach(const std::vector<EventRecord>& events, bool expect_hooked) 
   const std::size_t enter = First(events, kHostAttachEnter);
   const std::size_t exit = First(events, kHostAttachExit);
   Require(enter < exit, "host attach exit before enter");
-  Require(events[exit].payload == 0, "nevr.dll was loaded before host DllMain returned");
+  Require(events[exit].payload == 0, "nevr-runtime.dll was loaded before host DllMain returned");
   if (expect_hooked) {
     Require(Count(events, kHostHookEnabled) == 1, "host did not enable the hook");
     Require(events[First(events, kHostHookEnabled)].payload == 0xE9,
@@ -275,7 +287,15 @@ void ValidateAttach(const std::vector<EventRecord>& events, bool expect_hooked) 
   }
 }
 
-void ValidateDispatch(const std::vector<EventRecord>& events, bool dispatched, LONG expected_lone) {
+void ValidateDispatch(const std::vector<EventRecord>& events, bool dispatched, LONG expected_lone,
+                      bool expect_stop = false) {
+  // The host stops the game exactly when the runtime did not load, and then with the stable exit code.
+  Require(Count(events, kHostStopGame) == (expect_stop ? 1 : 0),
+          expect_stop ? "the host did not stop the game once for a runtime that did not load"
+                      : "the host stopped the game though the runtime loaded or the game was never hooked");
+  if (expect_stop) {
+    Require(events[First(events, kHostStopGame)].payload == 78, "the host stopped the game with the wrong exit code");
+  }
   const LONG calls = Count(events, kCallIssued);
   Require(calls > 0, "scenario issued no calls");
   Require(Count(events, kOriginal) == calls, "original did not run exactly once per call");
@@ -313,6 +333,7 @@ void ValidateDispatch(const std::vector<EventRecord>& events, bool dispatched, L
 void RunChildScenario(const std::string& scenario) {
   bool expect_hooked = true;
   bool dispatched = true;
+  bool expect_stop = false;
   const LONG calls = 1;
 
   if (scenario == "bad-prologue") {
@@ -324,8 +345,11 @@ void RunChildScenario(const std::string& scenario) {
     g_fail_hook_create = scenario == "hook-create-fails";
     expect_hooked = false;
     dispatched = false;
-  } else if (scenario == "missing") {
+  } else if (scenario == "missing" || scenario == "missing-real-stop" || scenario == "refused-real-stop") {
     dispatched = false;
+    expect_stop = true;
+    g_real_stop = scenario != "missing";
+    g_verify_runtime = scenario == "refused-real-stop";
   } else if (scenario != "valid" && scenario != "reenter") {
     Fail("unknown child scenario");
   }
@@ -349,10 +373,12 @@ void RunChildScenario(const std::string& scenario) {
   }
 
   for (LONG call = 0; call < calls; ++call) CallTarget(kCommandLine + (static_cast<std::int64_t>(call) << 4));
+  // With the real stop the process ended inside the call, with the stable exit code; getting here is the failure.
+  Require(!g_real_stop, "the call returned though the host ends the process when the runtime did not load");
 
   const std::vector<EventRecord> events = Snapshot();
   ValidateAttach(events, expect_hooked);
-  ValidateDispatch(events, dispatched, expected_lone);
+  ValidateDispatch(events, dispatched, expected_lone, expect_stop);
   std::printf("rendezvous test: PASS: %s (calls=%ld originals=%ld dispatched=%ld lone=%ld)\n",
               scenario.c_str(), static_cast<long>(Count(events, kCallIssued)),
               static_cast<long>(Count(events, kOriginal)),
@@ -379,13 +405,13 @@ std::wstring Utf8ToWide(const char* text) {
 }
 
 void StageRuntimeFixture(const std::wstring& root, const wchar_t* fixture) {
-  const std::wstring runtime = root + L"nevr.dll";
+  const std::wstring runtime = root + L"nevr-runtime.dll";
   if (fixture == nullptr) {
     DeleteFileW(runtime.c_str());
-    Require(GetFileAttributesW(runtime.c_str()) == INVALID_FILE_ATTRIBUTES, "could not remove nevr.dll");
+    Require(GetFileAttributesW(runtime.c_str()) == INVALID_FILE_ATTRIBUTES, "could not remove nevr-runtime.dll");
     return;
   }
-  const std::wstring source = root + L"fixtures\\" + fixture + L"\\nevr.dll";
+  const std::wstring source = root + L"fixtures\\" + fixture + L"\\nevr-runtime.dll";
   Require(CopyFileW(source.c_str(), runtime.c_str(), FALSE) != FALSE, "could not stage runtime fixture");
 }
 
@@ -476,7 +502,8 @@ int Find(const std::vector<nlohmann::json>& records, const char* event, const ch
 // The attach decisions of a hooked run, in order, followed by what the load decided. Each
 // target record carries the wrapper's rva and prologue; the install names the MinHook stage
 // and status; the load says the loader lock was not held.
-void ExpectHookedRecords(const std::vector<nlohmann::json>& records, const char* load_outcome) {
+void ExpectHookedRecords(const std::vector<nlohmann::json>& records, const char* load_outcome,
+                         bool expect_stop = false) {
   const int image = Find(records, "host_attach", "image_check", "accepted");
   const int prologue = Find(records, "host_attach", "prologue_check", "accepted");
   const int hook = Find(records, "host_attach", "hook_install", "enabled");
@@ -486,7 +513,23 @@ void ExpectHookedRecords(const std::vector<nlohmann::json>& records, const char*
           "a hooked run did not record its image, prologue, hook, install-wait and runtime-load decisions");
   Require(image < prologue && prologue < hook && hook < wait && wait < load,
           "the host's decisions were recorded out of order");
-  Require(records.size() == 5, "a hooked run recorded something other than its five decisions");
+  const bool loaded = std::strcmp(load_outcome, "loaded") == 0;
+  const int versions = Find(records, "versions", "", "");
+  Require(versions >= 0, "a hooked run recorded no versions record after the verdict on the runtime");
+  Require(wait < versions && versions < load, "the versions record is not between the install wait and the runtime load");
+  Require(records.size() == (expect_stop ? 7u : 6u),
+          "a hooked run recorded something other than its six decisions (and the stop, when it stopped)");
+  Require(expect_stop == !loaded, "a run that did not load must stop, and one that loaded must not");
+  const nlohmann::json& versions_record = records[static_cast<std::size_t>(versions)];
+  Require(versions_record.value("host_sha256", "").size() == 64, "the versions record does not carry the host's sha256");
+  if (loaded) {
+    Require(versions_record.value("runtime_sha256", "").size() == 64 && versions_record.value("runtime_version", "") == "7.7.7",
+            "the versions record does not name the runtime that loaded (its sha256 and its NEVR-BUILD version)");
+  } else {
+    Require(versions_record.value("runtime_sha256", "") == "unavailable" &&
+                versions_record.value("runtime_version", "") == "unavailable",
+            "the versions record names a runtime that did not load");
+  }
   Require(!records[static_cast<std::size_t>(hook)].contains("hook_bytes"),
           "the install record says the hook bytes were unread");
   for (const int index : {prologue, hook}) {
@@ -499,8 +542,17 @@ void ExpectHookedRecords(const std::vector<nlohmann::json>& records, const char*
   Require(install.at("stage") == "enable" && install.at("mh_status") == 0,
           "the install record does not name the enable stage and MH_OK");
   Require(records[static_cast<std::size_t>(load)].at("degraded_action") ==
-              (std::strcmp(load_outcome, "loaded") == 0 ? "dispatch" : "run_original_only"),
+              (loaded ? "dispatch" : "stop_game"),
           "the runtime-load record names the wrong degraded action");
+  if (expect_stop) {
+    // The stop is the last record: it names the cause, the code and the host, and follows the load record.
+    const nlohmann::json& stop = records.back();
+    Require(stop.value("event", "") == "game_stop" && stop.value("reason", "") == load_outcome &&
+                stop.value("exit_code", 0) == 78 && stop.value("host_identity", "").rfind("NEVR-BUILD ", 0) == 0,
+            "the game_stop record does not name the cause, exit code 78 and the host's identity");
+    Require(stop.contains("runtime_path"), "the game_stop record does not name the path searched");
+    Require(static_cast<int>(records.size()) - 1 > load, "the game_stop record does not follow the runtime-load record");
+  }
   Require(records[static_cast<std::size_t>(load)].contains("loader_lock_held") &&
               records[static_cast<std::size_t>(load)].at("loader_lock_held") == false,
           "the runtime-load record does not say the loader lock was not held");
@@ -662,12 +714,44 @@ int RunSuite() {
               "a failed MH_CreateHook was not on disk as a hook_install failed record after the two accepted checks");
       Require(records[2].at("stage") == "create", "the hook_install failure does not name the create stage");
     } else if (std::strcmp(scenario.name, "missing") == 0) {
-      ExpectHookedRecords(records, "runtime_absent");
+      ExpectHookedRecords(records, "runtime_absent", true);
     } else {
       ExpectHookedRecords(records, "loaded");
     }
     std::printf("rendezvous test: [%s] %zu host records parsed and ordered\n", scenario.name,
                 records.size());
+  }
+
+  // The stop for real: no seam, so the host ends the child inside the first call with the stable exit code, after it
+  // wrote the game_stop record. The child never reaches its own checks; the exit code and the record are the proof.
+  {
+    StageRuntimeFixture(root, nullptr);
+    const std::wstring dir = base + L"\\missing-real-stop";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    SetEnvironmentVariableW(L"LOCALAPPDATA", dir.c_str());
+    SetEnvironmentVariableW(L"TEMP", dir.c_str());
+    RunChild(L"\"" + std::wstring(self, length) + L"\" --child missing-real-stop", "missing-real-stop", 78);
+    ExpectHookedRecords(ReadHostRecords(dir), "runtime_absent", true);
+    std::printf("rendezvous test: [missing-real-stop] the host ended the game with exit code 78\n");
+  }
+
+  // A refused runtime, for real: the host verifies the (unsigned) fixture with the production pins, never maps it, and
+  // ends the child with the stable exit code inside the first call, after the versions, runtime-load and game_stop
+  // records. The fixture's DllMain would have recorded its attach: the file was never mapped.
+  {
+    StageRuntimeFixture(root, L"good");
+    const std::wstring dir = base + L"\\refused-real-stop";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    SetEnvironmentVariableW(L"LOCALAPPDATA", dir.c_str());
+    SetEnvironmentVariableW(L"TEMP", dir.c_str());
+    RunChild(L"\"" + std::wstring(self, length) + L"\" --child refused-real-stop", "refused-real-stop", 78);
+    const std::vector<nlohmann::json> records = ReadHostRecords(dir);
+    ExpectHookedRecords(records, "runtime_refused", true);
+    const int load = Find(records, "runtime_load", "", "runtime_refused");
+    Require(load >= 0 && records[static_cast<std::size_t>(load)].value("verify", "") == "refused" &&
+                records[static_cast<std::size_t>(load)].value("verify_reason", "").rfind("unsigned", 0) == 0,
+            "the runtime_load record does not say the verifier refused an unsigned file");
+    std::printf("rendezvous test: [refused-real-stop] the host refused the unsigned runtime and ended the game with exit code 78\n");
   }
 
   // External NEVR_SetGameModule contract: resolves, is callable with void(HMODULE),

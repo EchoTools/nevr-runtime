@@ -32,7 +32,9 @@ import uuid
 HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(REPO / "tools"))
 import checks  # noqa: E402
+import work_root  # noqa: E402
 
 ROOT = "C:\\nevr-systest"          # the rig; never the user's own install
 GAME = "C:\\echovr"                # the user's install, used read-only
@@ -50,9 +52,11 @@ OFFLINE_CONFIG = """{
 """
 
 
-# A dedicated server without services.socket_uri refuses to start (#16). The rig has no service to log
-# in to, so it opts in to an offline boot explicitly.
+# A dedicated server takes the build's embedded socket_uri when config.yaml leaves it out (#843), and
+# refuses to start with none (#16). The rig has no service to log in to: an explicit empty socket_uri
+# takes no embedded default, and allow_offline_server opts in to an offline boot.
 OFFLINE_CONFIG_YAML = """services:
+  socket_uri: ""
   allow_offline_server: true
 """
 
@@ -145,7 +149,7 @@ def setup_rig(g: Guest, tmp: pathlib.Path, with_legacy_dbgcore: bool = False) ->
 $src='@GAME@'; $root='@ROOT@'
 New-Item -ItemType Directory -Force -Path "$root\echovr\bin\win10","$root\echovr\_local","$root\run" | Out-Null
 # /A-:R drops the ReadOnly attribute the install's files carry; left on, Remove-Item cannot clear them.
-robocopy "$src\bin\win10" "$root\echovr\bin\win10" /E /A-:R /XF dbgcore.dll BugSplat64.dll BugSplat64.dll.stock /XD logs /NFL /NDL /NJH /NJS /NP | Out-Null
+robocopy "$src\bin\win10" "$root\echovr\bin\win10" /E /A-:R /XF dbgcore.dll BugSplat64.dll BugSplat64.dll.stock nevr-runtime.dll /XD logs /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed rc=$LASTEXITCODE" }
 # robocopy without /MIR never deletes: clear anything a previous run left behind.
 $dbg = "$root\echovr\bin\win10\dbgcore.dll"
@@ -168,6 +172,11 @@ foreach ($d in '_data','content','sourcedb') {
 
 def deploy(g: Guest, dll: pathlib.Path) -> None:
     kill_game(g)
+    # The host (BugSplat64.dll) loads nevr-runtime.dll from its own directory: the pair is one deploy, runtime first.
+    runtime = dll.with_name("nevr-runtime.dll")
+    if not runtime.is_file():
+        raise EnvError(f"{runtime} not found beside {dll}; run `just build` first")
+    g.put(runtime, f"{SMB_ROOT}/echovr/bin/win10", "nevr-runtime.dll")
     g.put(dll, f"{SMB_ROOT}/echovr/bin/win10", "BugSplat64.dll")
 
 
@@ -340,6 +349,11 @@ def dispatch_scenarios(scenario: str, guest: Guest, out: pathlib.Path,
     return results
 
 
+def default_out_dir() -> pathlib.Path:
+    """winvm-<timestamp> in the work root (tools/work_root.py)."""
+    return work_root.work_root() / ("winvm-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--scenario", choices=["boot", "gai", "all"], default="all")
@@ -354,15 +368,15 @@ def main(argv: list[str] | None = None) -> int:
                     choices=[n for n, _ in checks.ENGINE_STAGES])
     ap.add_argument("--with-legacy-dbgcore", action="store_true",
                     help="put the guest install's legacy Echo Relay dbgcore.dll in the rig "
-                         "(NEVR refuses to run beside it unless -skip-dbgcore-check is in --game-args)")
+                         "(NEVR refuses to run beside it, on any command line)")
     ap.add_argument("--dump-on-fail", action="store_true", help="fetch a minidump if the game is stuck")
     ap.add_argument("--out", type=pathlib.Path)
     args = ap.parse_args(argv)
     args.wait = max(args.wait, 45)
 
-    out = args.out or pathlib.Path("/var/tmp/work-nevr-runtime") / (
-        "winvm-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
-    out.mkdir(parents=True, exist_ok=True)
+    out = args.out or default_out_dir()
+    work_root.ensure_dir(out, "Artifacts of one tools/winvm/systest.py run: stdout, windows, results and the probe output.",
+                         "when the PR that cites the run merges, unless the PR keeps it as evidence.")
 
     results: list[checks.Result] = []
     guest = None

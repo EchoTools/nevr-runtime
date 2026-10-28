@@ -181,6 +181,10 @@ class BootstrapDiagnostics {
   /// True once an append's wait on the log mutex timed out.
   static bool LogLockUnreliableForTest();
 
+  /// Appends written without waiting on the log mutex since the process started (the lock was marked
+  /// unreliable). A concurrent test prints it with the file's host_log_lock records when a line is missing.
+  static unsigned long long UnlockedWritesForTest();
+
   /// Set the process's run token (0: compute it again), so a test can stand for another process that had this pid.
   static void SetRunTokenForTest(std::uint64_t token);
   static std::uint64_t RunTokenForTest();

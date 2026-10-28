@@ -89,6 +89,9 @@ struct PluginSpec {
   bool early = false;                        // load before the game reads its data (#496)
 };
 
+/// The kind of node a config path names (NevrConfig::Kind). `kNull` is a key written with no value (or `~`, `null`).
+enum class NodeKind { kAbsent, kNull, kScalar, kSequence, kMapping };
+
 class NevrConfig {
  public:
   NevrConfig();
@@ -117,6 +120,12 @@ class NevrConfig {
   /// is not set (its text stays in the returned value as written). That is exact: a literal "${"
   /// written with the $${ escape, or inside a set variable's value, does not count.
   std::optional<std::string> GetString(const std::string& path, bool* hadUnsetBare = nullptr) const;
+  /// What `path` names in the file. The typed getters give nullopt for everything but a scalar of the right type, so this is
+  /// how a caller tells "not set" from "set to something that is not a value" (a key with no value, a mapping, a list).
+  NodeKind Kind(const std::string& path) const;
+  /// The scalar keys of the mapping at `path`, in file order; empty when `path` is absent or is not a mapping. A key that is
+  /// not a scalar (a mapping or a sequence used as a key) is left out. Keys are returned as written, never interpolated.
+  std::vector<std::string> MappingKeys(const std::string& path) const;
   std::optional<bool> GetBool(const std::string& path) const;
   std::optional<std::int64_t> GetInt(const std::string& path) const;
   std::optional<double> GetFloat(const std::string& path) const;
@@ -128,6 +137,11 @@ class NevrConfig {
   /// Names of unset bare ${VAR} references found at load, each once, sorted. Their text stays in
   /// the value as written; the loader does not log them (LogUnsetBareVars, or the caller, does).
   const std::vector<std::string>& UnsetBareVars() const { return unsetBareVars_; }
+  /// Mistakes in the file's shape that the parser keeps going past (#583). DuplicateKeyCount: a key that repeats in
+  /// one mapping (the first value is the one read). UnknownKeyCount: a key under a section in KnownConfigKeyPaths()
+  /// that no reader reads (ignored). Counts only: the names and values stay out, as the Quest's log requires.
+  std::size_t DuplicateKeyCount() const { return duplicateKeys_; }
+  std::size_t UnknownKeyCount() const { return unknownKeys_; }
 
  private:
   struct Impl;                       // holds the interpolated yaml-cpp tree (.cpp only)
@@ -135,11 +149,22 @@ class NevrConfig {
   std::vector<PluginSpec> plugins_;
   bool empty_ = true;
   std::vector<std::string> unsetBareVars_;
+  std::size_t duplicateKeys_ = 0;
+  std::size_t unknownKeys_ = 0;
 };
+
+/// Every dotted path a reader of either build reads under a known section, sorted (#583): the one list the unknown-key
+/// count checks against. A section not listed here (plugins, guilds, profiles, version, x-* extensions) is free-form
+/// and is not checked.
+std::vector<std::string> KnownConfigKeyPaths();
 
 /// PC only (defined in nevr_config_policy.cpp): logs one Warning per name in cfg.UnsetBareVars(), through Log().
 /// The parser itself logs nothing, so the Quest can build it without the PC logger.
 void LogUnsetBareVars(const NevrConfig& cfg);
+
+/// PC only (defined in nevr_config_policy.cpp): one Warning with the duplicate and unknown-key counts when either is
+/// non-zero (#583). Names and values are not logged.
+void LogShapeWarnings(const NevrConfig& cfg);
 
 /// Case-insensitive true/yes/on/1 and false/no/off/0; nullopt for anything else. The plugin-list
 /// flags and the flat-key consumers use it; NevrConfig::GetBool also falls back to yaml-cpp's

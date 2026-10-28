@@ -131,6 +131,51 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertRegex(server_exit,
                          r"ShutdownResourceOverride\s*\(\s*\)\s*;\s*ForceFatalExit\s*\(\s*exitCode\s*\)")
 
+    def test_the_crash_attribution_names_both_nevr_images_through_the_policy_not_a_literal(self):
+        # N70 after the host/runtime split (#853): the handler runs in nevr-runtime.dll, the game imports
+        # BugSplat64.dll, and a fault in either is NEVR's. The module cache holds every loaded DLL (Wine and DXVK
+        # too), so the name decides, through one function the GTest drives.
+        source = (ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text()
+        vectored = extract_braced_function(source, "LONG WINAPI BreakpointVEH(")
+        self.assertRegex(vectored, r"nevr_veh_policy::IsNevrImageName\s*\(\s*g_moduleCache\[m\]\.name\s*\)")
+        self.assertNotIn("BugSplat64", strip_comments(source), "the attribution compares names through IsNevrImageName only")
+        self.assertNotIn("nevr-runtime", strip_comments(source))
+        policy = strip_comments((ROOT / "src/runtime/lifecycle/veh_policy.h").read_text())
+        names = extract_braced_function(policy, "inline bool IsNevrImageName(")
+        self.assertEqual(sorted(re.findall(r'"([^"]+\.dll)"', names)), ["BugSplat64.dll", "nevr-runtime.dll"])
+        self.assertIn("_stricmp", names, "module names are matched without case")
+
+    # Exceptions do not cross the DLL boundary (#853, decision 9). The ellipsis catch is the one the C++ addendum
+    # allows only at such a boundary, so each one carries its reason on the line, and there are no others here.
+    def test_every_ellipsis_catch_at_the_two_dll_boundaries_says_why(self):
+        for name in ("src/runtime/host/runtime_load.cpp", "src/runtime/lifecycle/export_guard.h"):
+            with self.subTest(file=name):
+                lines = (ROOT / name).read_text().splitlines()
+                hits = [i for i, line in enumerate(lines) if re.search(r"catch\s*\(\s*\.\.\.\s*\)", line)]
+                self.assertTrue(hits, f"{name} has no ellipsis catch at its boundary")
+                for i in hits:
+                    text = lines[i] + (lines[i - 1] if i else "")
+                    self.assertRegex(text, r"//.*must not cross the DLL boundary",
+                                     f"{name}:{i + 1}: an ellipsis catch needs its justification on the line")
+
+    def test_the_runtime_export_entries_all_go_through_the_one_guard(self):
+        source = strip_comments((ROOT / "src/runtime/lifecycle/runtime_exports.cpp").read_text())
+        self.assertNotRegex(source, r"\btry\b|\bcatch\b", "the entries stop exceptions in export_guard.h only")
+        entries = re.findall(r"\bGuarded(?:Void)?\s*\(", source)
+        table = re.findall(r"table\.\w+\s*=\s*&", source)
+        self.assertEqual(len(table), 16)
+        self.assertEqual(len(entries), len(table), "every table entry calls Guarded or GuardedVoid once")
+
+    def test_the_runtimes_initialize_runs_behind_the_guard(self):
+        # The host calls initialize from its detour: no exception may unwind into it.
+        source = strip_comments((ROOT / "src/runtime/lifecycle/runtime_entry.cpp").read_text())
+        self.assertNotRegex(source, r"\btry\b|\bcatch\b", "the guard in export_guard.h is the one place that catches")
+        body = extract_braced_function(source, "std::int32_t Initialize(")
+        self.assertRegex(body, r"\bGuardedInitialize\s*\(\s*&nevr_runtime_exports::ReportThrew\b")
+        for call in ("ValidateHostContext(", "InitializeGameModule(", "ArmGameMain("):
+            self.assertIn(call, body)
+            self.assertGreater(body.index(call), body.index("GuardedInitialize("), f"{call} runs outside the guard")
+
     def test_dllmain_does_not_run_plugin_shutdown_or_unload(self):
         source = (ROOT / "src/runtime/lifecycle/dllmain.cpp").read_text()
         body = extract_braced_function(source, "BOOL APIENTRY DllMain(")
@@ -142,7 +187,8 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # Issue #40: FreeLibrary(g_realDbgCore) ran on process termination too (lpReserved != NULL).
         # Calling FreeLibrary from DllMain during termination can leave a module in use after the
         # system ran its termination code; only a dynamic unload (lpReserved == NULL) frees it.
-        source = (ROOT / "src/runtime/lifecycle/dllmain.cpp").read_text()
+        # The dbgcore proxy is the host's (#853): BugSplat64.dll's DllMain owns it.
+        source = (ROOT / "src/runtime/host/host_dllmain.cpp").read_text()
         body = extract_braced_function(source, "BOOL APIENTRY DllMain(")
 
         detach = body.index("case DLL_PROCESS_DETACH")
@@ -151,7 +197,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertEqual(len(frees), 1, "subject vanished: expected exactly one FreeLibrary(g_realDbgCore)")
         free = frees[0] - detach
         self.assertGreater(free, 0, "FreeLibrary(g_realDbgCore) is not in the DLL_PROCESS_DETACH case")
-        guard = re.search(r"if\s*\(\s*lpReserved\s*==\s*NULL\s*\)\s*\{", section)
+        guard = re.search(r"if\s*\(\s*lpReserved\s*==\s*NULL\s*&&\s*g_realDbgCore\s*\)\s*\{", section)
         self.assertIsNotNone(guard, "subject vanished: no lpReserved == NULL guard in DLL_PROCESS_DETACH")
         depth, end = 0, None
         for index in range(guard.end() - 1, len(section)):
@@ -165,6 +211,20 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertIsNotNone(end)
         self.assertTrue(guard.end() < free < end,
                         "FreeLibrary(g_realDbgCore) is outside the lpReserved == NULL block")
+
+    def test_the_dbgcore_refusal_logs_a_line_before_each_fatal_error(self):
+        # Issue #726: on a client FatalError only shows a dialog, so the refusal must leave a record first.
+        source = strip_comments((ROOT / "src/runtime/lifecycle/boot.cpp").read_text())
+        fatals = [m.start() for m in re.finditer(r'FatalError\(', source)
+                  if '"dbgcore.dll hijack detected"' in source[m.start():m.start() + 600]]
+        self.assertEqual(len(fatals), 2, "subject vanished: expected the server and client dbgcore refusals")
+        for fatal in fatals:
+            last_log = source.rfind("Log(", 0, fatal)
+            self.assertTrue(last_log > source.rfind("FatalError(", 0, fatal),
+                            "the dbgcore FatalError has no Log( since the previous FatalError")
+            window = source[last_log:fatal]
+            self.assertIn("LogLevel::Error", window)
+            self.assertIn('"[NEVR.PATCH] dbgcore.dll present', window)
 
     def test_server_shutdown_uses_console_handler_without_crt_signals(self):
         source = (ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text()
@@ -434,8 +494,8 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         patches = strip_comments((ROOT / "src/runtime/patch/mode_patches.cpp").read_text())
         for gone in ("g_listenHookEntries", "g_dispatchHookEntries", "LogBroadcasterHookStats"):
             self.assertNotIn(gone, patches)
-        for hook, marker in (("static INT16 EngineEntityLookupHook(", "kBroadcasterListen"),
-                             ("static VOID EngineEntityPropDispatchHook(", "kBroadcasterReceiveLocal")):
+        for hook, marker in (("static INT16 CBroadcasterListenHook(", "kBroadcasterListen"),
+                             ("static VOID CBroadcasterReceiveLocalEventHook(", "kBroadcasterReceiveLocal")):
             body = extract_braced_function(patches, hook)
             self.assertIn(f"nevr_hook_liveness::Mark(nevr_hook_liveness::{marker})", body)
             self.assertRegex(body, r"chainReadable\s*=\s*nevr_broadcaster_guard::TryReadListenerTable\(")
@@ -448,8 +508,8 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
 
     def test_broadcaster_hooks_report_rejected_chains_before_original_call(self):
         patches = strip_comments((ROOT / "src/runtime/patch/mode_patches.cpp").read_text())
-        for hook, original in (("static INT16 EngineEntityLookupHook(", "OriginalEngineEntityLookup("),
-                               ("static VOID EngineEntityPropDispatchHook(", "OriginalEngineEntityPropDispatch(")):
+        for hook, original in (("static INT16 CBroadcasterListenHook(", "OriginalCBroadcasterListen("),
+                               ("static VOID CBroadcasterReceiveLocalEventHook(", "OriginalCBroadcasterReceiveLocalEvent(")):
             body = extract_braced_function(patches, hook)
             guard = body.find("nevr_broadcaster_guard::TryReadListenerTable(")
             self.assertGreaterEqual(guard, 0, hook)
@@ -505,6 +565,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         script = (ROOT / "verify-server.sh").read_text()
         self.assertRegex(script, r'if \[ ! -e "\$GAME_ROOT/echovr/_local/config\.yaml" \]')
         self.assertIn("allow_offline_server: true", script)
+        self.assertIn('socket_uri: ""', script)  # #843: an explicit empty socket_uri takes no embedded default
         self.assertRegex(script, r'deploy "\$OUT/offline-config\.yaml" "\$GAME_DIR/\.\./\.\./_local/config\.yaml"')
 
     def test_token_mints_are_serialized(self):

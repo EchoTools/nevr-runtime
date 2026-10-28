@@ -40,7 +40,7 @@ source tools/lib/game_install.sh
 GAME_ROOT=$(resolve_game_root) || exit $?
 GAME_DIR="$GAME_ROOT/echovr/bin/win10"
 [ -d "$GAME_DIR" ] || { echo "ERROR: no game install at $GAME_DIR (set NEVR_GAME_ROOT to the checkout that has echovr/)" >&2; exit 2; }
-SCRATCH_ROOT="${NEVR_RUN_SCRATCH_ROOT:-/var/tmp/work-nevr-runtime}"
+SCRATCH_ROOT="${NEVR_RUN_SCRATCH_ROOT:-$NEVR_WORK_ROOT}"
 OUT="$SCRATCH_ROOT/server-runs/${RUN_NAME}"
 
 case "$FLAGSET" in
@@ -71,7 +71,8 @@ fi
 # The lock comes before this run's output files are touched: a run that is refused must not empty
 # the log of the run that holds the lock.
 acquire_game_run_lock
-mkdir -p "$OUT"
+work_dir "$OUT" "Server runs of verify-server.sh: one directory per run name, with the run's log, context and summary." \
+  "when the PR that cites a run merges, unless the PR keeps it as evidence."
 LOG="$OUT/server.log"
 : > "$LOG"
 
@@ -116,7 +117,8 @@ if [ -d "$BACKUP" ]; then
   echo "=== restoring files an earlier verify-server.sh run left deployed ===" | tee -a "$LOG"
   restore_deployed || { echo "ERROR: could not restore the earlier run's files; fix $BACKUP by hand" >&2; exit 3; }
 fi
-mkdir -p "$BACKUP"
+work_dir "$BACKUP" "The files verify-server.sh saved from the game install before it deployed over them." \
+  "by the script itself when it restores them at the end of the run."
 : > "$ADDED"
 deploy() {
   local src=$1 dst=$2 rel
@@ -147,18 +149,21 @@ trap 'exit 143' INT TERM
 trap restore EXIT
 
 echo "=== Deploying from build/mingw-release/bin/ ===" | tee -a "$LOG"
+# The runtime first: the host loads nevr-runtime.dll from the game directory and stops the game without it.
+deploy build/mingw-release/bin/nevr-runtime.dll "$GAME_DIR/nevr-runtime.dll"
 deploy build/mingw-release/bin/BugSplat64.dll "$GAME_DIR/BugSplat64.dll"
 if [ -d build/mingw-release/bin/plugins ]; then
   while IFS= read -r f; do deploy "$f" "$GAME_DIR/plugins/${f#build/mingw-release/bin/plugins/}"; done \
     < <(find build/mingw-release/bin/plugins -type f)
 fi
-# A server with no config.yaml gets no embedded defaults (service_config.cpp BuiltinDefaults is
-# client-only) and refuses to boot without a login bridge (#16). When the install has none, deploy
-# the offline-boot config the Windows-VM rig uses (tools/winvm/systest.py OFFLINE_CONFIG_YAML) so the
-# flag sets reach what they test; an install's own config.yaml is used as it is. The runtime finds
-# it at exe-dir/../../_local (service_config.cpp), and the restore trap removes it afterwards.
+# A server with no config.yaml takes the embedded defaults (service_config.cpp BuiltinDefaults, #843), so
+# it would start a login bridge against the shipped endpoint. When the install has none, deploy the
+# offline-boot config the Windows-VM rig uses (tools/winvm/systest.py OFFLINE_CONFIG_YAML): an explicit
+# empty socket_uri, which takes no default, and allow_offline_server. The flag sets reach what they test;
+# an install's own config.yaml is used as it is. The runtime finds it at exe-dir/../../_local
+# (service_config.cpp), and the restore trap removes it afterwards.
 if [ ! -e "$GAME_ROOT/echovr/_local/config.yaml" ]; then
-  printf 'services:\n  allow_offline_server: true\n' > "$OUT/offline-config.yaml"
+  printf 'services:\n  socket_uri: ""\n  allow_offline_server: true\n' > "$OUT/offline-config.yaml"
   deploy "$OUT/offline-config.yaml" "$GAME_DIR/../../_local/config.yaml"
 fi
 
@@ -178,6 +183,7 @@ count_game_windows() {
 
 find "$GAME_ROOT/echovr/" -iname '*.dmp' -newermt '-1 minute' 2>/dev/null | wc -l > "$OUT/dumps_before.txt"
 
+RUN_START_EPOCH=$(date +%s)  # host_stop_cause reads the host's record from here on
 echo "=== Starting echovr.exe ${ARGS[*]} ===" | tee -a "$LOG"
 ( cd "$GAME_DIR" && exec wine ./echovr.exe "${ARGS[@]}" ) >> "$LOG" 2>&1 9>&- &
 WINE_PID=$!
@@ -237,4 +243,6 @@ ls -t "$GAME_DIR/logs/"*.jsonl 2>/dev/null | head -1 > "$OUT/jsonl_path.txt"
   echo "engine flags lines  = $(grep -c 'engine flags' "$LOG")"
   grep 'engine flags' "$LOG" || true
   echo "log                 = $LOG"
+  # A host that stopped the game before the runtime ran leaves no game log; the host's record says why (#1122).
+  echo "host stop           = $(host_stop_cause "$GAME_ROOT/echovr/.wineprefix/drive_c/users/$(id -un)/AppData/Local/nevr/echovr/logs" "$RUN_START_EPOCH" || echo none)"
 } | tee "$OUT/summary.txt"

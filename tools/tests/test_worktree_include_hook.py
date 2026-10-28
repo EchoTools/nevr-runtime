@@ -13,6 +13,7 @@ import pathlib
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -22,6 +23,10 @@ INSTALLER = REPO / "tools/install-git-hooks.sh"
 CANARY = "CANARY-7f3a9c-do-not-print"
 INCLUDE = ".mcp.json\n.claude/settings.local.json\n"
 LOG_REL = "nevr-logs/post-checkout.jsonl"
+PIN = "259a506a3e1b490ba3482e24e92ba4db"
+NEW_PIN = "0123456789abcdef0123456789abcdef"
+sys.path.insert(0, str(REPO / "tools"))
+import proto_stamp  # noqa: E402
 
 
 def mode(path: pathlib.Path) -> int:
@@ -197,6 +202,65 @@ class HookTest(unittest.TestCase):
         self.assertEqual(outcomes["*.json"], "rejected")
         self.assertEqual(outcomes[".mcp.json"], "copied")
         self.assertEqual(len(outcomes), 4)
+
+
+class BuildInputsHintTest(unittest.TestCase):
+    """The hook names `just worktree-setup` when a linked worktree lacks gen/ or extern/minhook (#1053), and never runs it."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory(prefix="wti-gen-")
+        self.addCleanup(self._tmp.cleanup)
+        self.root = pathlib.Path(self._tmp.name)
+
+    def fixture(self) -> Fixture:
+        fx = Fixture(self.root)
+        for rel in ("justfile", "buf.gen.yaml", "tools/proto_stamp.py"):
+            (fx.main / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(REPO / rel, fx.main / rel)
+        fx.commit("add the build-input files")
+        return fx
+
+    def make_inputs(self, wt: pathlib.Path) -> None:
+        (wt / "extern/minhook").mkdir(parents=True)
+        (wt / "extern/minhook/CMakeLists.txt").write_text("# minhook\n")
+        (wt / "gen/cpp").mkdir(parents=True)
+        (wt / "gen/cpp/x.pb.cc").write_text("// generated\n")
+        proto_stamp.record_existing(wt, ["cpp/x.pb.cc"])
+
+    def test_a_new_worktree_without_its_inputs_is_told_the_one_command(self) -> None:
+        fx = self.fixture()
+        wt, res = fx.add_worktree()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("build inputs missing or stale", res.stderr)
+        self.assertIn("run: just worktree-setup", res.stderr)
+        self.assertFalse((wt / "gen").exists(), "the hook ran the setup; it must only name it")
+
+    def test_a_worktree_with_current_inputs_gets_no_hint(self) -> None:
+        fx = self.fixture()
+        wt, _ = fx.add_worktree()
+        self.make_inputs(wt)
+        res = fx.run_hook(wt)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertNotIn("build inputs missing", res.stderr)
+
+    def test_a_missing_submodule_is_hinted_even_when_gen_is_current(self) -> None:
+        fx = self.fixture()
+        wt, _ = fx.add_worktree()
+        self.make_inputs(wt)
+        shutil.rmtree(wt / "extern/minhook")
+        res = fx.run_hook(wt)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("run: just worktree-setup", res.stderr)
+
+    def test_a_stale_gen_is_hinted_even_when_extern_is_there(self) -> None:
+        fx = self.fixture()
+        wt, _ = fx.add_worktree()
+        self.make_inputs(wt)
+        justfile = wt / "justfile"
+        justfile.write_text(justfile.read_text().replace(PIN, NEW_PIN))
+        res = fx.run_hook(wt)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("run: just worktree-setup", res.stderr)
 
 
 class InstallerTest(unittest.TestCase):

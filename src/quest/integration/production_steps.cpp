@@ -33,6 +33,8 @@
 #include "quest/login/login_hook.h"
 #include "quest/net/curl_ws_connector.h"
 #include "quest/net/session_bridge.h"
+#include "quest/plugin/plugin_plan.h"
+#include "quest/plugin/plugin_runtime.h"
 #include "quest/redirect/hook_adapter.h"
 #include "quest/social/social_facade.h"
 #include "quest/social/social_frames.h"
@@ -247,6 +249,12 @@ void LoginLog(nevr_quest_login::Level level, const char* event, const nevr_quest
 }
 
 // A stage line for a post-load install once it is settled (a retry is not a result).
+// A feature that would write a libr15 code page: one line names it and the issue it waits on.
+void LogCodeWriteSkipped(const char* feature) {
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "code_write_skipped",
+                      {{"feature", feature}, {"reason", "execmod_denied_on_libr15"}, {"waits_on", "#1132"}});
+}
+
 ActionResult Staged(const char* stage, ActionResult result) {
   if (result.settle != Settle::kRetryLater) {
     const bool ok = result.settle == Settle::kDone;
@@ -324,6 +332,36 @@ ActionResult MatchmakingAction() noexcept {
   }
 }
 
+// The title of the login-failed page (#1137): its script library is mapped by the game after the constructor, so this
+// answers kRetryLater until it is. A refusal that a retry cannot change is a stage line at Error, and leaves the game's
+// own LOGIN FAILED title where it was.
+ActionResult LoginTitleAction() noexcept {
+  const sentinel::GotStatus status = nevr_quest::integration::InstallLoginTitleHook();
+  switch (status) {
+    case sentinel::GotStatus::kOk: return Staged("login_title_hook_installed", {Settle::kDone, "installed"});
+    case sentinel::GotStatus::kAlreadyInstalled:
+      return Staged("login_title_hook_installed", {Settle::kDone, "already_installed"});
+    case sentinel::GotStatus::kModuleNotLoaded: return {Settle::kRetryLater, "module_not_loaded"};
+    default: break;
+  }
+  return Staged("login_title_hook_installed", {Settle::kGiveUp, sentinel::GotStatusName(status)});
+}
+
+// The normal plugin pass (#438): the first post-load call is its moment. The loader records every outcome itself and
+// never throws; the pass settles whatever it did.
+ActionResult PluginsAction() noexcept {
+  nevr_quest::plugin::RunNormalPlugins();
+  return {Settle::kDone, "ran"};
+}
+
+// Runs on the process-end hook's helper thread when the game's android_main returns (#621), on every launch: the plugin
+// entries that never got their moment end as `not_started` (#438), then the self-check report goes out (a no-op unless
+// the bridge that carries it enabled the self-checks).
+void OnGameProcessEnd() noexcept {
+  nevr_quest::plugin::FinishPlugins(nevr_quest::plugin::reason::kGameExitedFirst);
+  ReportAndroidMainReturned();
+}
+
 // --- the steps -----------------------------------------------------------------------------------
 
 class ProductionSteps final : public Steps {
@@ -349,6 +387,19 @@ class ProductionSteps final : public Steps {
     return cfg;
   }
 
+  PluginCounts PlanPlugins() override {
+    const nevr_quest::plugin::PlanCounts counts = nevr_quest::plugin::PlanPlugins(
+        sentinel::ActiveConfig().plugins, nevr_quest::integration::ResourceRequestLogEnabled());
+    return {counts.early, counts.normal};
+  }
+
+  bool RunEarlyPlugins() override {
+    nevr_quest::plugin::RunEarlyPlugins();
+    return true;
+  }
+
+  void FinishPlugins(const char* reason) override { nevr_quest::plugin::FinishPlugins(reason); }
+
   bool RegisterClockCounters() override { return nevr_quest::integration::RegisterClockCounters(); }
   bool RegisterRedirectCounters() override { return nevr_quest::redirect::RegisterRedirectCounters(); }
   bool RegisterDlopenCounters() override { return nevr_quest::integration::RegisterDlopenCounters(); }
@@ -356,6 +407,9 @@ class ProductionSteps final : public Steps {
   bool RegisterSocialCounters() override { return nevr_quest::integration::RegisterSocialCounters(); }
   bool RegisterLoginPromptCounters() override { return nevr_quest::integration::RegisterLoginPromptCounters(); }
   bool RegisterObbSkipCounters() override { return nevr_quest::integration::RegisterObbSkipCounters(); }
+  bool ResourceRequestLogWanted() override { return nevr_quest::integration::ResourceRequestLogEnabled(); }
+  bool RegisterResourceRequestCounters() override { return nevr_quest::integration::RegisterResourceRequestCounters(); }
+  bool RegisterTextureQualityCounters() override { return nevr_quest::integration::RegisterTextureQualityCounters(); }
   bool StartReporter() override { return sentinel::StartReporter(/*firstMs=*/1000, /*graceMs=*/10000, /*steadyMs=*/60000); }
 
   bool InstallClockHook() override {
@@ -419,6 +473,7 @@ class ProductionSteps final : public Steps {
   }
 
   bool InstallProcessEnd() override {
+    nevr_quest::integration::SetProcessEndCallback(&OnGameProcessEnd);  // before the install, as the hook asks
     const bool ok = nevr_quest::integration::InstallProcessEndHook();
     detail_ = ok ? "ok" : "got_hook_refused";
     return ok;
@@ -434,6 +489,31 @@ class ProductionSteps final : public Steps {
     const bool ok = nevr_quest::integration::InstallVkExtWindowHook();
     detail_ = ok ? "ok" : "got_hook_refused";
     return ok;
+  }
+
+  bool InstallOsBuildGate() override {
+    const bool ok = nevr_quest::integration::InstallOsBuildGateHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
+  bool InstallResourceRequestLog(bool countersRegistered) override {
+    const bool ok = nevr_quest::integration::InstallResourceRequestLogHook(countersRegistered);
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
+  bool InstallTextureQuality(const nevr_quest::TextureChoice& choice, bool countersRegistered) override {
+    const bool ok = nevr_quest::integration::InstallTextureQualityHook(
+        choice.level, choice.source == nevr_quest::Source::kFile, countersRegistered);
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
+  bool InstallCreditsText() override {
+    LogCodeWriteSkipped("credits_text");
+    detail_ = "skipped_waits_on_1132";
+    return true;  // a step that is deliberately not run did not fail
   }
 
   bool InstallLoginPrompt(bool countersRegistered) override {
@@ -462,7 +542,6 @@ class ProductionSteps final : public Steps {
       hooks.build = NEVR_QUEST_PROJECT_VERSION;
       ApplySelfCheck(&config.tap, hooks);
       // The process ends when the game's android_main returns (#621): its report goes out first (best effort).
-      nevr_quest::integration::SetProcessEndCallback(&ReportAndroidMainReturned);
       nevr_status_redirect_check::Register(&nevr_status_redirect_check::ProcessProbe);  // #408
       nevr_self_check::Register({"matchmaking_reload_redirect",
                                  "the matchmaking redirect is installed on every libpnsradmatchmaking image the game mapped (installs >= images)",
@@ -529,15 +608,25 @@ class ProductionSteps final : public Steps {
     detail_ = detail;
     // The login declares the social level only when the facade is in place (docs/adr/0003, contract 5).
     if (ok) R().socialLevel.store(nevr_social_party::kSocialLevel);
+    // Five libr15 features write a code page (four inline-hook features here, the credits pairs in their own step) and
+    // are not installed: the current
+    // Horizon policy denies execmod on a written libr15 page, and the first call into it faults (#1127). Each waits on
+    // the build-time patch (#1132), which writes no code page at run time.
+    LogCodeWriteSkipped("lobby_full");
+    LogCodeWriteSkipped("menu_version");
+    LogCodeWriteSkipped("ui_texture");
+    LogCodeWriteSkipped("splash_skip");
     return ok;
   }
 
   bool StartHwDump() override { return nevr_quest::hwdump::StartHwDump(); }
 
-  bool InstallDlopenHook(bool login, bool matchmaking) override {
+  bool InstallDlopenHook(bool login, bool matchmaking, bool plugins) override {
     PostLoadActions actions;
     if (login) actions.login = &LoginAction;
     if (matchmaking) actions.matchmaking = &MatchmakingAction;
+    if (login) actions.loginTitle = &LoginTitleAction;  // the title is the prompt's second half: wanted with the login
+    if (plugins) actions.plugins = &PluginsAction;
     SetPostLoadActions(actions);
     sentinel::GotStatus status = sentinel::GotStatus::kNotInstalled;
     const bool ok = nevr_quest::integration::InstallDlopenHook(&status) == DlopenInstall::kOk;

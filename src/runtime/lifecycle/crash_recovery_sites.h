@@ -35,8 +35,8 @@ inline constexpr std::array<KnownNullDerefSite, 30> kKnownNullDerefSites = {{
     {0x15F530, "OnMsgCurrentLoadoutRequest"},
     {0x1A79D0, "OnMsgSaveLoadoutRequest"},
     {0x1C98C0, "GetUserName"},        {0x113A90, "GetNetGameFromContext"},
-    {0x170770, "GetHeadsetTypeName"}, {0x170730, "GetHeadsetTypeName_B"},
-    {0x170750, "GetHeadsetTypeName_C"},
+    {0x170770, "GetHeadsetTypeName"}, {0x170730, "GetLobbyProviderField_0x58"},
+    {0x170750, "GetLobbyProviderField_0x60"},
 }};
 
 inline const char* LookupKnownNullDerefSite(int64_t rva) {

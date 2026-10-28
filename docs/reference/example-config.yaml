@@ -15,7 +15,7 @@
 # builds read it ("both", "PC only", "Quest only"), its default, and the file that reads it.
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
-# social.facade, social.send_presence_to_meta, diagnostics.hardware_dump and diagnostics.ui_event_probe. Every other key below is PC only: the
+# social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe and graphics.texture_quality. Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -24,7 +24,7 @@
 # run on the embedded defaults. The Quest also rejects a file over 64 KiB. Top-level keys are the sections below
 # plus x-* extensions.
 #
-# Config keys are read by the nEVR runtime (`BugSplat64.dll` on PC, the sentinel `libovrplatformloader.so` on Quest),
+# Config keys are read by the nEVR runtime (`nevr-runtime.dll` on PC, the sentinel `libovrplatformloader.so` on Quest),
 # which runs in-process with the game.
 #
 # Secrets (keys, tokens, passwords) MUST use ${VAR:?error} environment-variable
@@ -44,6 +44,19 @@
 # existing ones. Currently always 1.
 # Reader: src/runtime/lifecycle/config.cpp (LoadLocalConfigHook)
 version: 1
+
+# ---------------------------------------------------------------------------
+# audio — the player's chosen devices (#412). Optional: absent means the default rule.
+#
+# Reader: src/runtime/lifecycle/service_config.cpp (NevrCfgCaptureDevice), used by
+#         src/runtime/patch/mic_provider.cpp (PC, native Windows only; Wine keeps the OS default)
+# ---------------------------------------------------------------------------
+
+audio:
+  # The microphone to capture from: an endpoint id, or a part of its friendly name (case-insensitive).
+  # When it names no active capture endpoint, the default rule runs: LibOVR's headset mic, a headset-named
+  # endpoint, then the OS default. Default (absent): that default rule.
+  # capture_device: "Headset Microphone"
 
 # ---------------------------------------------------------------------------
 # social — platform social-provider compatibility
@@ -81,10 +94,32 @@ diagnostics:
   # Default (absent): false.
   # hardware_dump: true
 
-  # Quest only. The invite/party UI probe: the party tab's Invite Members and the main-menu FRIENDS LIST press also
-  # ask the tablet to switch to its Friends list, to measure whether that opens an invite path. Needs social.facade.
-  # Default (absent): false.
-  # ui_event_probe: true
+  # Quest only. The invite/party tab event: the party tab's Invite Members (and the own-id Party button) asks the
+  # tablet to switch to its Friends list, where the "+" sends the invite. Needs social.facade.
+  # Default (absent): true. Set false to turn the event off.
+  # ui_event_probe: false
+
+# ---------------------------------------------------------------------------
+# graphics — render quality
+#
+# Reader: src/quest/sentinel/quest_config.cpp (Quest). The PC accepts the section and reads nothing from it.
+# ---------------------------------------------------------------------------
+
+graphics:
+  # Quest only. The size of the eye buffer the game renders into (per eye, the swap chain the game creates once, at
+  # start-up). One of: stock, very_low, low, medium, high, very_high, ultra (lower case, exactly). The sizes are the ones
+  # the community patch repository's Texture Resolution setting uses for the same names, chosen by headset (a Quest 2 or
+  # a Quest 3, from the suggested width): Quest 3 very_low 1344x1408, low 1680x1760, medium 2376x2568, high 3072x3380,
+  # very_high 3584x3944, ultra 4096x4506; Quest 2 very_low 1152x1264, low 1440x1584, medium 1728x1904, high 2016x2224,
+  # very_high 2304x2528, ultra 2592x2848; 2 samples. This build has not measured any headset's native size. A bigger
+  # size looks sharper and costs frame time. `low` answers the headset's own size, and `stock` installs nothing: the
+  # game gets the size the headset runtime suggests.
+  # Read once at launch and fixed for the run: a change takes effect at the next launch. Any mistake (a value that is not
+  # one of the seven words, a mapping or a list, a key with no value, a `graphics` that is not a mapping, an unset ${VAR}, a
+  # file rejected as a whole) gives `stock`, with a warning in the sentinel log that names the key. Any other key under
+  # `graphics` (a misspelling such as `texture_qualty`, or `Texture_Quality`) is ignored with a warning that names it.
+  # Default (absent): stock. The log line `texture_quality` in the sentinel log names the level, its source and the size.
+  # texture_quality: high
 
 # ---------------------------------------------------------------------------
 # services — URL overrides for game service endpoints
@@ -95,8 +130,8 @@ diagnostics:
 # connection will fail unless the WebSocket bridge is active).
 #
 # Fallback chain (per-key, in GetServiceHostWithFallback):
-#   1. Specific service key (e.g. configservice_host)
-#   2. loginservice_host (shared fallback)
+#   1. Specific service key (e.g. services.config)
+#   2. services.login (shared fallback)
 #   3. Game hardcoded default
 #
 # Reader: src/runtime/lifecycle/config.cpp (HttpConnectHook, GetServiceHostWithFallback)
@@ -106,8 +141,10 @@ services:
   # WebSocket endpoint for all game services (login, matchmaking, config, serverdb). Both builds. The runtime
   # rewrites the game's hardcoded wss://*.readyatdawn.com URLs to it; the in-process WebSocket bridge connects to it
   # outbound, and the game's own connections go through the bridge (ws://127.0.0.1:<port>).
-  # Default (absent): the value embedded in the build (config/public-defaults.env); on a dedicated server, none
-  # (a server is configured explicitly and exits without it unless allow_offline_server is set).
+  # Default (absent): the value embedded in the build (config/public-defaults.env), on a client and a dedicated
+  # server alike (#843). An explicit empty value (`socket_uri: ""`) on a dedicated server takes no default: the
+  # server then exits without it unless allow_offline_server is set. The log line `[NEVR.CONFIG] built-in defaults
+  # in use` names the keys taken from the build.
   # On the Quest this one key (or auth.http_uri) is what turns the redirect on, and with it the bridge: there is no
   # key for either. Login then needs auth.server_key.
   # Not a secret.
@@ -115,8 +152,8 @@ services:
   # socket_uri: "wss://g.echovrce.com/ws"
 
   # Dedicated server only: boot without services.socket_uri (no login bridge). Without this a server
-  # that has no socket_uri exits at start-up, because it could never log in. Set it only for offline
-  # boots (test rigs); such a server never logs in or registers.
+  # that has no socket_uri after the built-in default (set socket_uri: "" to take none) exits at start-up,
+  # because it could never log in. Set it only for offline boots (test rigs); such a server never logs in or registers.
   # Default (absent): false
   # allow_offline_server: true
 
@@ -124,47 +161,47 @@ services:
   # every other service key that is not explicitly set.
   # Default (absent): https://login.readyatdawn.com
   # Not a secret.
-  # loginservice_host: "https://login.echovrce.com"
+  # login: "https://login.echovrce.com"
 
   # Config / settings service (game config, feature flags, etc.).
-  # Fallback: loginservice_host
+  # Fallback: services.login
   # Default (absent): https://config.readyatdawn.com
   # Not a secret.
-  # configservice_host: "https://config.echovrce.com"
+  # config: "https://config.echovrce.com"
 
   # General API service (REST endpoints for account, inventory, etc.).
   # Legacy key "api_host" is also checked if apiservice_host is absent.
-  # Fallback: loginservice_host
+  # Fallback: services.login
   # Default (absent): https://api.readyatdawn.com
   # Not a secret.
-  # apiservice_host: "https://api.echovrce.com"
+  # api: "https://api.echovrce.com"
 
   # Transaction / IAP service.
-  # Fallback: loginservice_host
+  # Fallback: services.login
   # Default (absent): https://transaction.readyatdawn.com
   # Not a secret.
-  # transactionservice_host: "https://transaction.echovrce.com"
+  # transaction: "https://transaction.echovrce.com"
 
   # Matchmaking service (lobby creation, server discovery).
   # When the WebSocket bridge is active and no explicit override is set,
   # this service is auto-relayed through the bridge's local proxy.
-  # Fallback: loginservice_host
+  # Fallback: services.login
   # Default (absent): wss://matchmaking.readyatdawn.com
   # Not a secret.
-  # matchingservice_host: "wss://matchmaking.echovrce.com"
+  # matchmaking: "wss://matchmaking.echovrce.com"
 
   # ServerDB / registry service (game server registration and heartbeat).
   # Auto-relayed through the WebSocket bridge when active.
-  # Fallback: loginservice_host
+  # Fallback: services.login
   # Default (absent): wss://serverdb.readyatdawn.com
   # Not a secret.
-  # serverdb_host: "wss://serverdb.echovrce.com"
+  # serverdb: "wss://serverdb.echovrce.com"
 
   # Oculus Graph API. Only relevant if the game still queries Oculus services.
   # Legacy key "graphservice_host" is also checked.
   # Default (absent): https://graph.oculus.com
   # Not a secret.
-  # graph_host: "https://graph.oculus.com"
+  # graph: "https://graph.oculus.com"
 
 # ---------------------------------------------------------------------------
 # network — IP and port configuration for server hosting
@@ -242,11 +279,6 @@ identity:
   # Not a secret, but personally identifying — do not commit to public repos.
   # discord_id: "${NEVR_DISCORD_ID:?discord_id is required for server registration}"
 
-  # Server password. Sent as a query parameter in the ServerDB WebSocket URI.
-  # Optional; absent means no password auth.
-  # SECRET — use env-var substitution in production.
-  # password: "${NEVR_PASSWORD:?password is required}"
-
 # ---------------------------------------------------------------------------
 # auth — authentication and API endpoint configuration
 #
@@ -289,6 +321,11 @@ auth:
   # SECRET — use env-var substitution in production.
   # server_key: "${NEVR_SOCKET_KEY:?server_key is required for servers}"
 
+  # Server password. Sent as a query parameter in the ServerDB WebSocket URI (the key the runtime reads is auth.password).
+  # Optional; absent means no password auth.
+  # SECRET — use env-var substitution in production.
+  # password: "${NEVR_PASSWORD:?password is required}"
+
 # ---------------------------------------------------------------------------
 # guilds — guild filter for server registration
 #
@@ -311,7 +348,8 @@ auth:
 # Not a secret.
 # Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration)
 # ---------------------------------------------------------------------------
-# regions: "us-west"
+# network:
+#   regions: "us-west"
 
 # ---------------------------------------------------------------------------
 # telemetry — real-time game state streaming
@@ -348,7 +386,9 @@ telemetry:
 
 arena:
   # Round time in seconds. Overrides the game's "round_time" config value.
-  # Absent: game default (typically 180.0).
+  # Absent: game default (typically 180.0), except on a server, where a public Arena
+  # session uses 480.0 (8:00). Other game types, private Arena and reads before any
+  # session keep the game default (#982).
   # Not a secret.
   # round_time: 300.0
 

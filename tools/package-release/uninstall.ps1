@@ -1,8 +1,17 @@
 # NEVR runtime release: uninstall.
 #
-# Puts back what install.ps1 set aside: the original BugSplat64.dll and a legacy dbgcore.dll. It never
-# deletes anything: the backup stays where it is, and nothing is overwritten that was not put there by
-# install.ps1.
+# Puts back what install.ps1 set aside: the original BugSplat64.dll and a legacy dbgcore.dll, and sets
+# nevr-runtime.dll, the file install.ps1 added, aside as nevr-runtime.dll.uninstalled-<timestamp>. A
+# nevr-runtime.dll that install.ps1 had set aside (nevr-runtime.dll.original-<stamp>, named by runtime_aside in
+# nevr-install.txt) goes back under its own name. It never deletes anything: the backup stays where it is, and nothing is overwritten that was not put there by
+# install.ps1. A nevr-runtime.dll that is not a NEVR runtime (it carries neither the NEVR-BUILD identity text nor the
+# CDN user agent 'nevr-runtime/1.0', #785) is left alone and reported.
+#
+# It also puts the sign-in cache back: the runtime moves .credentials.json from an install's _local folder to
+# %LOCALAPPDATA%\nevr\echovr and leaves MOVED-TO-NEVR-ROOT.txt in the folder it took it from (ADR 0012). A runtime from
+# before that reads _local only, so the cache is copied back beside the marker (never over a file there; the root keeps
+# its copy, so a later install keeps the login) and the marker is set aside as MOVED-TO-NEVR-ROOT.txt.undone-<timestamp>.
+# The cache is created empty and made private before the token is copied into it; a copy that fails is set aside.
 #
 # usage:  powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 [-Dir <...\bin\win10>] [-Pause | -NoPause]
 # Without -Dir the folder is asked for.
@@ -11,6 +20,12 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
 
 function Get-Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLower() }
+# A NEVR runtime carries the NEVR-BUILD identity literal (#759); one built before that literal (#785) carries the CDN
+# user agent 'nevr-runtime/1.0' (src/runtime/patch/asset_cdn.cpp). Either one marks a runtime.
+function Test-NevrRuntime([string]$path) {
+  $text = [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($path))
+  return $text.Contains('NEVR-BUILD ') -or $text.Contains('nevr-runtime/1.0')
+}
 
 # #736: a tester who double-clicks this script must see why it stopped. Every error is printed plainly, appended
 # with the time and the folder to nevr-install.log next to this script, and the window waits for Enter when it was
@@ -58,7 +73,7 @@ if (@(Get-Process -Name echovr -ErrorAction SilentlyContinue).Count -gt 0) { thr
 $state = Join-Path $Dir 'nevr-install.txt'
 if (-not (Test-Path -LiteralPath $state)) { throw "no nevr-install.txt in ${Dir}: nothing installed by install.ps1 to undo" }
 $values = @{}
-foreach ($line in Get-Content -LiteralPath $state) {
+foreach ($line in Get-Content -LiteralPath $state -Encoding UTF8) {
   if ($line -match '^([a-z_0-9]+)=(.*)$') { $values[$Matches[1]] = $Matches[2] }
 }
 foreach ($key in 'backup', 'legacy', 'installed_sha256') {
@@ -66,9 +81,12 @@ foreach ($key in 'backup', 'legacy', 'installed_sha256') {
 }
 $backup = $values['backup']
 $legacyAside = $values['legacy']
+# A nevr-runtime.dll that stood in the folder before install.ps1 (install.ps1 renamed it to nevr-runtime.dll.original-<stamp>);
+# a state file from before this key existed names none.
+$priorRuntimeAside = if ($values.ContainsKey('runtime_aside')) { $values['runtime_aside'] } else { '' }
 if (-not (Test-Path -LiteralPath $backup)) { throw "the backup is gone: ${backup}; nothing was changed" }
 # #779: an install made before #762 may have saved a NEVR runtime as the original; restoring it would restore the runtime.
-if ([System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($backup)).Contains('NEVR-BUILD ')) {
+if (Test-NevrRuntime $backup) {
   throw "the backup ${backup} is a NEVR runtime, not the game's own file (an earlier install.ps1 saved it); nothing was changed. Restore the game's original BugSplat64.dll (for example, Verify Files in the Meta Horizon app), then delete $state"
 }
 $target = Join-Path $Dir 'BugSplat64.dll'
@@ -76,6 +94,8 @@ $target = Join-Path $Dir 'BugSplat64.dll'
 # or the one in the package this script came with (a DLL copied in by hand from a newer package).
 $known = @($values['installed_sha256'])
 if ($values.ContainsKey('previous_sha256') -and $values['previous_sha256'] -ne '') { $known += $values['previous_sha256'].Split(',') }
+# #770: after Verify Files the game's own file is back, and it is the backup: already restored, so nothing is overwritten.
+$known += Get-Sha $backup
 $sums = Join-Path $here 'SHA256SUMS'
 if (Test-Path -LiteralPath $sums) {
   foreach ($line in Get-Content -LiteralPath $sums) {
@@ -83,13 +103,16 @@ if (Test-Path -LiteralPath $sums) {
   }
 }
 # A DLL carrying the NEVR-BUILD identity literal is a NEVR runtime: putting the original back over it is safe.
-$isRuntime = (Test-Path -LiteralPath $target) -and [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($target)).Contains('NEVR-BUILD ')
+$isRuntime = (Test-Path -LiteralPath $target) -and (Test-NevrRuntime $target)
 if ((Test-Path -LiteralPath $target) -and ($known -notcontains (Get-Sha $target)) -and -not $isRuntime) {
   throw 'BugSplat64.dll is not the one install.ps1 put there (changed since); nothing was changed'
 }
 if ($legacyAside -ne '') {
   if (-not (Test-Path -LiteralPath $legacyAside)) { throw "the set-aside dbgcore.dll is gone: ${legacyAside}; nothing was changed" }
   if (Test-Path -LiteralPath (Join-Path $Dir 'dbgcore.dll')) { throw 'a dbgcore.dll exists again; nothing was changed' }
+}
+if (($priorRuntimeAside -ne '') -and -not (Test-Path -LiteralPath $priorRuntimeAside)) {
+  throw "the set-aside nevr-runtime.dll is gone: ${priorRuntimeAside}; nothing was changed"
 }
 
 Copy-Item -LiteralPath $backup -Destination $target -Force
@@ -99,8 +122,74 @@ if ($legacyAside -ne '') {
   Rename-Item -LiteralPath $legacyAside -NewName 'dbgcore.dll'
   Write-Output 'RESTORED dbgcore.dll'
 }
+# The game no longer loads the runtime: set it aside, if it is ours.
+$runtimeTarget = Join-Path $Dir 'nevr-runtime.dll'
+$runtimeRemoved = $false
+if (Test-Path -LiteralPath $runtimeTarget) {
+  if (Test-NevrRuntime $runtimeTarget) {
+    $runtimeAside = 'nevr-runtime.dll.uninstalled-' + (Get-Date).ToString('yyyyMMdd-HHmmss')
+    Rename-Item -LiteralPath $runtimeTarget -NewName $runtimeAside
+    $runtimeRemoved = $true
+    Write-Output "SET ASIDE nevr-runtime.dll as $runtimeAside"
+  } else {
+    Write-Output 'LEFT nevr-runtime.dll: it is not a NEVR runtime (no NEVR-BUILD identity text or nevr-runtime/1.0 user agent), so install.ps1 did not put it there'
+  }
+}
+# Then the file that stood there before install.ps1 goes back, when the name is free; it is never put over another file.
+$runtimeRestored = $false
+if ($priorRuntimeAside -ne '') {
+  if (Test-Path -LiteralPath $runtimeTarget) {
+    Write-Output "KEPT ${priorRuntimeAside}: nevr-runtime.dll is in the folder and was not touched, so the earlier file stays aside"
+  } else {
+    Rename-Item -LiteralPath $priorRuntimeAside -NewName 'nevr-runtime.dll'
+    $runtimeRestored = $true
+    Write-Output "RESTORED nevr-runtime.dll from ${priorRuntimeAside}"
+  }
+}
+# The sign-in cache. The game files are already back, so a failure here is reported loudly but does not undo them.
+function Restore-SignInCache([string]$GameDir) {
+  if (-not $env:LOCALAPPDATA) { Write-Output 'NOT RESTORED the sign-in cache: LOCALAPPDATA is not set'; return }
+  $rootCache = Join-Path (Join-Path (Join-Path $env:LOCALAPPDATA 'nevr') 'echovr') '.credentials.json'
+  $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
+  foreach ($local in @((Join-Path $GameDir '_local'), (Join-Path (Join-Path $GameDir '..') '_local'), (Join-Path (Join-Path (Join-Path $GameDir '..') '..') '_local'))) {
+    $marker = Join-Path $local 'MOVED-TO-NEVR-ROOT.txt'
+    if (-not (Test-Path -LiteralPath $marker)) { continue }
+    $cache = Join-Path $local '.credentials.json'
+    if (Test-Path -LiteralPath $cache) {
+      Write-Output "LEFT ${cache}: a sign-in cache is already there"
+    } elseif (-not (Test-Path -LiteralPath $rootCache)) {
+      Write-Output "NOT RESTORED the sign-in cache to ${local}: there is none in $rootCache"
+      continue
+    } else {
+      try {
+        # An empty file first, made private before any of the token is written into it: the runtime writes the cache readable
+        # by its user only, and the restored one is no wider.
+        New-Item -ItemType File -Path $cache | Out-Null
+        if ([System.Environment]::OSVersion.Platform -eq 'Win32NT') {
+          $acl = New-Object System.Security.AccessControl.FileSecurity
+          $acl.SetAccessRuleProtection($true, $false)
+          $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+          $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me, 'FullControl', 'Allow')))
+          Set-Acl -LiteralPath $cache -AclObject $acl
+        }
+        # The bytes go into the file that is already private: Copy-Item -Force can replace the file, and with it the ACL set above.
+        [System.IO.File]::WriteAllBytes($cache, [System.IO.File]::ReadAllBytes($rootCache))
+      } catch {
+        $why = $_.Exception.Message
+        # Nothing is deleted: a file that did not get its content or its protection is set aside, so the runtime does not read it.
+        if (Test-Path -LiteralPath $cache) { Rename-Item -LiteralPath $cache -NewName ('.credentials.json.not-restored-' + $stamp) }
+        Write-Output "NOT RESTORED the sign-in cache to ${local}: $why"
+        Write-RunLog ("$scriptName WARNING sign-in cache not restored to ${local}: $why")
+        continue
+      }
+      Write-Output "RESTORED the sign-in cache to $cache (the copy in $rootCache is kept)"
+    }
+    Rename-Item -LiteralPath $marker -NewName ('MOVED-TO-NEVR-ROOT.txt.undone-' + $stamp)
+  }
+}
+Restore-SignInCache $Dir
 Rename-Item -LiteralPath $state -NewName ('nevr-install.txt.undone-' + (Get-Date).ToString('yyyyMMdd-HHmmss'))
-Write-RunLog ("OK $scriptName RESTORED BugSplat64.dll Dir=$Dir")
+Write-RunLog ("OK $scriptName RESTORED BugSplat64.dll Dir=$Dir nevr-runtime.dll set aside=$runtimeRemoved earlier nevr-runtime.dll restored=$runtimeRestored")
 
 } catch {
   $exitCode = 1

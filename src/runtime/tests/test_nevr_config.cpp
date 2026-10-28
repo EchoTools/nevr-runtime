@@ -6,12 +6,14 @@
 // and malformed-YAML failure. Built under -DBUILD_TESTING=ON and run under
 // Wine by `just test-auth-unit` (which `just verify` invokes).
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <cstdio>
 #include <fstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
@@ -32,14 +34,31 @@ void SetEnv(const char* name, const char* value) { _putenv_s(name, value); }
 // nevr_config treats an empty env value as unset, so "" is the unset case.
 void UnsetEnv(const char* name) { _putenv_s(name, ""); }
 
-// This Wine path maps only to the agent scratch hierarchy on the Linux host.
-// Never use the game directory for config-load unit-test fixtures.
-constexpr const char* kScratchConfigDirectory = R"(Z:\var\tmp\work-nevr-runtime\nevr-config-tests\)";
+// Where the fixture files go, as a Windows path ending in a backslash. $NEVR_CONFIG_TEST_DIR names it
+// (`just test-auth-unit` sets it to a directory it removes afterwards); a Linux path is reached through
+// Wine's Z: drive. Without it the process's own temporary directory is used. Never the game directory.
+std::string ScratchConfigDirectory() {
+  const char* configured = std::getenv("NEVR_CONFIG_TEST_DIR");
+  if (configured == nullptr || configured[0] == '\0') {
+    char temp[MAX_PATH + 1] = {};
+    const DWORD length = GetTempPathA(static_cast<DWORD>(sizeof(temp)), temp);
+    return std::string(temp, length) + "nevr-config-tests\\";
+  }
+  std::string directory(configured);
+  if (directory[0] == '/') {
+    directory = "Z:" + directory;
+    for (char& c : directory) {
+      if (c == '/') c = '\\';
+    }
+  }
+  if (directory.back() != '\\') directory += '\\';
+  return directory;
+}
 
-// Creates each missing level ("Z:\var", "Z:\var\tmp", ...): on a fresh machine (the CI container,
-// run 37151801289) only Z:\var\tmp exists, and CreateDirectoryA makes one level at a time.
+// Creates each missing level ("Z:\var", "Z:\var\tmp", ...): CreateDirectoryA makes one level at a time,
+// and a fresh machine (the CI container, run 37151801289) has only some of them.
 bool EnsureScratchConfigDirectory() {
-  const std::string full(kScratchConfigDirectory);
+  const std::string full = ScratchConfigDirectory();
   for (size_t sep = full.find('\\', 3); sep != std::string::npos; sep = full.find('\\', sep + 1)) {
     const std::string level = full.substr(0, sep);
     if (CreateDirectoryA(level.c_str(), nullptr) == FALSE && GetLastError() != ERROR_ALREADY_EXISTS) return false;
@@ -48,7 +67,7 @@ bool EnsureScratchConfigDirectory() {
 }
 
 std::string ScratchConfigPath(const char* name) {
-  return std::string(kScratchConfigDirectory) + name + "-" + std::to_string(GetCurrentProcessId()) +
+  return ScratchConfigDirectory() + name + "-" + std::to_string(GetCurrentProcessId()) +
          ".yaml";
 }
 
@@ -433,6 +452,59 @@ TEST(NevrConfig, AcceptsDiagnosticsSection) {
   EXPECT_FALSE(cfg.Empty());
 }
 
+// `graphics` is a top-level section (the Quest's texture quality is `graphics.texture_quality`, #943). The PC accepts it and
+// reads nothing from it, so one config.yaml can serve both builds; an unknown section is still refused.
+TEST(NevrConfig, AcceptsGraphicsSection) {
+  const auto cfg = nevr::NevrConfig::LoadFromString("graphics:\n  texture_quality: very_high\n");
+  ASSERT_TRUE(cfg.GetString("graphics.texture_quality").has_value());
+  EXPECT_EQ(*cfg.GetString("graphics.texture_quality"), "very_high");
+  EXPECT_FALSE(cfg.Empty());
+  EXPECT_THROW(nevr::NevrConfig::LoadFromString("graphic:\n  texture_quality: high\n"), nevr::NevrConfigError);
+}
+
+// Kind tells "set to something that is not a value" from "not set": the typed getters give nullopt for both.
+TEST(NevrConfig, KindSeesEveryKindOfNodeTheGettersCannotRead) {
+  using nevr::NodeKind;
+  const auto cfg = nevr::NevrConfig::LoadFromString(
+      "graphics:\n  scalar: ultra\n  empty_string: \"\"\n  novalue:\n  tilde: ~\n  mapping:\n    a: 1\n  empty_mapping: {}\n"
+      "  list:\n    - a\n    - b\n  list_of_maps:\n    - k: v\n  empty_list: []\nx-flat: 5\n");
+  EXPECT_EQ(cfg.Kind("graphics"), NodeKind::kMapping);
+  EXPECT_EQ(cfg.Kind("graphics.scalar"), NodeKind::kScalar);
+  EXPECT_EQ(cfg.Kind("graphics.empty_string"), NodeKind::kScalar);
+  EXPECT_EQ(cfg.Kind("x-flat"), NodeKind::kScalar);
+  EXPECT_EQ(cfg.Kind("graphics.novalue"), NodeKind::kNull);
+  EXPECT_EQ(cfg.Kind("graphics.tilde"), NodeKind::kNull);
+  EXPECT_EQ(cfg.Kind("graphics.mapping"), NodeKind::kMapping);
+  EXPECT_EQ(cfg.Kind("graphics.empty_mapping"), NodeKind::kMapping);
+  EXPECT_EQ(cfg.Kind("graphics.list"), NodeKind::kSequence);
+  EXPECT_EQ(cfg.Kind("graphics.list_of_maps"), NodeKind::kSequence);
+  EXPECT_EQ(cfg.Kind("graphics.empty_list"), NodeKind::kSequence);
+  for (const char* absent : {"graphic", "graphics.other", "graphics.scalar.deeper", "x-flat.deeper", "novalue", "", "graphics."}) {
+    EXPECT_EQ(cfg.Kind(absent), NodeKind::kAbsent) << absent;
+  }
+  // The getters read none of the non-scalar nodes: that is the gap Kind closes.
+  for (const char* notAValue : {"graphics.novalue", "graphics.tilde", "graphics.mapping", "graphics.list", "graphics.empty_list"}) {
+    EXPECT_FALSE(cfg.GetString(notAValue).has_value()) << notAValue;
+  }
+  EXPECT_EQ(nevr::NevrConfig().Kind("graphics"), NodeKind::kAbsent);
+}
+
+// MappingKeys lists the scalar keys of a mapping in file order, and nothing for anything that is not a mapping.
+TEST(NevrConfig, MappingKeysListsTheKeysOfAMappingInFileOrder) {
+  const auto cfg = nevr::NevrConfig::LoadFromString(
+      "graphics:\n  zeta: 1\n  alpha:\n    nested: 1\n  Mixed_Case: x\n  list:\n    - a\n  scalar_section_below: 1\n"
+      "diagnostics: on\nsocial:\n  - a\n");
+  const std::vector<std::string> want = {"zeta", "alpha", "Mixed_Case", "list", "scalar_section_below"};
+  EXPECT_EQ(cfg.MappingKeys("graphics"), want);
+  EXPECT_EQ(cfg.MappingKeys("graphics.alpha"), std::vector<std::string>{"nested"});
+  EXPECT_TRUE(cfg.MappingKeys("graphics.zeta").empty());   // a scalar
+  EXPECT_TRUE(cfg.MappingKeys("graphics.list").empty());   // a sequence
+  EXPECT_TRUE(cfg.MappingKeys("diagnostics").empty());     // a scalar section
+  EXPECT_TRUE(cfg.MappingKeys("social").empty());          // a sequence section
+  EXPECT_TRUE(cfg.MappingKeys("services").empty());        // absent
+  EXPECT_TRUE(nevr::NevrConfig().MappingKeys("graphics").empty());
+}
+
 // A rejection carries a stable reason token, never the parser's text: that text echoes the file's own words
 // (a key, a value), which the Quest's sentinel log must not repeat.
 TEST(NevrConfig, ErrorsCarryAStableReasonToken) {
@@ -500,6 +572,26 @@ std::chrono::milliseconds RejectionTime(const std::string& yaml) {
   const auto start = std::chrono::steady_clock::now();
   ReasonOf(yaml);
   return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+}
+
+// The fixture directory follows the environment and names no machine: a Linux path becomes a Z: path,
+// and without the variable the process's temporary directory is used.
+TEST(NevrConfig, ScratchConfigDirectoryFollowsTheEnvironment) {
+  const char* saved = std::getenv("NEVR_CONFIG_TEST_DIR");
+  const std::string restore = saved == nullptr ? "" : saved;
+
+  SetEnv("NEVR_CONFIG_TEST_DIR", "/some/scratch/dir");
+  EXPECT_EQ(ScratchConfigDirectory(), "Z:\\some\\scratch\\dir\\");
+  EXPECT_EQ(ScratchConfigPath("x").rfind("Z:\\some\\scratch\\dir\\x-", 0), 0u);
+
+  UnsetEnv("NEVR_CONFIG_TEST_DIR");
+  const std::string fallback = ScratchConfigDirectory();
+  const std::string suffix = "\\nevr-config-tests\\";
+  EXPECT_TRUE(fallback.size() > suffix.size() &&
+              fallback.compare(fallback.size() - suffix.size(), suffix.size(), suffix) == 0)
+      << fallback;
+
+  SetEnv("NEVR_CONFIG_TEST_DIR", restore.c_str());
 }
 
 }  // namespace
@@ -595,6 +687,67 @@ TEST(NevrConfig, LoadFromFileOrFailLogsTheUnsetVariableWarning) {
   const std::string logged = testing::internal::GetCapturedStderr();
   EXPECT_FALSE(cfg.Empty());
   EXPECT_NE(logged.find("[NEVR.CONFIG] environment variable NEVR_TEST_BARE_LOG_C is not set"), std::string::npos) << logged;
+}
+
+// #583: a key that repeats in one mapping is counted, and the first value is the one read (pinned: it is what yaml-cpp
+// gives and what the Quest reads too).
+TEST(NevrConfig, DuplicateKeysAreCountedAndTheFirstValueIsRead) {
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "services:\n  socket_uri: \"wss://first.example/x\"\n  socket_uri: \"wss://second.example/x\"\n"
+      "social:\n  facade: true\n  facade: false\n");
+  EXPECT_EQ(cfg.DuplicateKeyCount(), 2u);
+  EXPECT_EQ(cfg.UnknownKeyCount(), 0u);
+  EXPECT_EQ(cfg.GetString("services.socket_uri").value_or(""), "wss://first.example/x");
+  EXPECT_EQ(cfg.GetBool("social.facade").value_or(false), true);
+}
+
+// #583: a key under a known section that no reader reads is counted; known keys, x- extensions and a free-form
+// section (profiles) are not.
+TEST(NevrConfig, UnknownKeysUnderKnownSectionsAreCounted) {
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "social:\n  send_presence_to_meta: false\n  send_presense_to_meta: false\n  x-note: 1\n"
+      "services:\n  socket_uri: \"wss://a.example/x\"\n  loginservice_host: \"wss://b.example/x\"\n"
+      "profiles:\n  anything_goes: 1\n");
+  EXPECT_EQ(cfg.UnknownKeyCount(), 2u);
+  EXPECT_EQ(cfg.DuplicateKeyCount(), 0u);
+}
+
+TEST(NevrConfig, ACleanFileCountsNothing) {
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "version: 1\nauth:\n  password: \"x\"\nnetwork:\n  regions: \"us-west\"\n");
+  EXPECT_EQ(cfg.UnknownKeyCount(), 0u);
+  EXPECT_EQ(cfg.DuplicateKeyCount(), 0u);
+}
+
+// #583: the PC's one Warning per load names the counts and no key or value.
+TEST(NevrConfig, ShapeWarningCarriesCountsOnly) {
+  ASSERT_TRUE(EnsureScratchConfigDirectory());
+  ScopedScratchFile file(ScratchConfigPath("shape-warning-config"));
+  {
+    std::ofstream output(file.path(), std::ios::binary);
+    ASSERT_TRUE(output.is_open());
+    output << "social:\n  facade: true\n  facade: false\n  send_presense: false\n";
+  }
+  testing::internal::CaptureStderr();
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromFileOrFail(file.path(), /*is_server=*/false);
+  const std::string logged = testing::internal::GetCapturedStderr();
+  EXPECT_FALSE(cfg.Empty());
+  EXPECT_NE(logged.find("[NEVR.CONFIG] config.yaml has duplicates=1 unknown_nested=1"), std::string::npos) << logged;
+  EXPECT_EQ(logged.find("send_presense"), std::string::npos) << logged;
+  EXPECT_EQ(logged.find("facade"), std::string::npos) << logged;
+}
+
+// #583: every key the Quest reads is on the schema, so the unknown-key count never flags a key a build uses. The
+// PC's keys are checked against the same list in test_service_map (MigratedYamlPaths).
+TEST(NevrConfig, KnownPathsCoverEveryKeyTheQuestReads) {
+  const std::vector<std::string> known = nevr::KnownConfigKeyPaths();
+  const std::vector<std::string> questReads = {
+      "services.socket_uri", "auth.http_uri",          "auth.http_key",          "auth.server_key",
+      "social.facade",       "social.send_presence_to_meta", "diagnostics.hardware_dump",
+      "diagnostics.ui_event_probe", "graphics.texture_quality"};
+  for (const std::string& path : questReads) {
+    EXPECT_NE(std::find(known.begin(), known.end(), path), known.end()) << path << " is read but not on the schema";
+  }
 }
 
 }  // namespace

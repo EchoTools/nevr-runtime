@@ -65,7 +65,7 @@ feels risky":
 > test for runtime and auth changes") when the change touches runtime or auth code. A PR that adds or removes
 > GTest declarations in `src/runtime/tests/*.cpp` [...] runs
 > `python3 -m pytest tools/tests/test_verify_gtest_floor.py`. [...] Every PR, whatever it touches, also runs
-> `python3 -m pytest -q tools/tests` and `python3 tools/verify_doc_paths.py` [...]. Run the quick check on the PR's tip, in the build slice, and report each item with its result; an item
+> `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` [...]. Run the quick check on the PR's tip, in the build slice, and report each item with its result; an item
 > not run is named as not run.
 
 Because `just build` greps its own output and always exits 0, the build item is
@@ -268,7 +268,7 @@ parser in `src/runtime/lifecycle/cli.cpp`.
 
 - **Handled by that loop:** `-server`, `-offline`, `-no-console`, `-windowed`,
   `-no-exit-on-error`, `-no-telemetry`, `-telemetry-rate N`, `-telemetry-diag`, `-timestamps`,
-  `-upnp`, `-skip-dbgcore-check`, `-config` / `-config-path PATH`, `-region` /
+  `-upnp`, `-config` / `-config-path PATH`, `-region` /
   `-serverregion S`, `-trace-exports` (consumes a value; the tracer reads its own).
 - **`-exit-on-error`** is accepted and logs that it has no effect (it is the default).
 - **`-timestep` / `-fixedtimestep`:** on a server `GameMainWrapperHook`
@@ -333,7 +333,7 @@ parser in `src/runtime/lifecycle/cli.cpp`.
   pristine copy, made with `cp -a --reflink=auto`, deleted when the run ends, with the
   safety steps and link check AGENTS.md lists; point the scripts at it with
   `NEVR_GAME_ROOT=<copy>`. Scratch and the copies live under
-  `/var/tmp/work-nevr-runtime/<agent>/`. Every build, test or run goes in
+  `~/src/nevr-runtime-work/<agent>/`. Every build, test or run goes in
   `nevr-builds.slice` (AGENTS.md "Builds"); wait while 2 or more `ninja` run. If no pristine
   copy exists, the run waits for a human; a runtime change is not verified until then
   (maintainers only).
@@ -345,7 +345,7 @@ parser in `src/runtime/lifecycle/cli.cpp`.
   and does not `tee`; output goes to stdout, so under a desktop session this is a
   `DISPLAY`-SET run, not a headless one. `./verify-server.sh <run-name> [flag-set] [seconds]`
   deploys the same way, captures to files under `$NEVR_RUN_SCRATCH_ROOT`
-  (default `/var/tmp/work-nevr-runtime/`, maintainers only), sends CTRL+C, restores what it deployed, and
+  (default `~/src/nevr-runtime-work/`, maintainers only), sends CTRL+C, restores what it deployed, and
   `./tests/smoke/score-log.sh <log>` scores the log. `-headless` is a native token, so
   passing it logs an Info line and nothing more.
 - `echovr/_local/launch-nevr-server.sh` exists in the owner's install (it is not in the
@@ -460,7 +460,7 @@ git. Trust the issues rather than trusting this section to stay current.
   refspec (`git push origin HEAD:refs/heads/<branch>`), and delete the worktree, local
   branch and origin branch in the same turn the PR merges or closes. Update with
   `git fetch` + `git merge origin/main`, never `git pull`; no rebase, amend or force-push
-  on a pushed branch. Scratch lives under `/var/tmp/work-nevr-runtime/<agent>/` (maintainers only); keep a
+  on a pushed branch. Scratch lives under `~/src/nevr-runtime-work/<agent>/` (maintainers only); keep a
   ledger row for every worktree, branch and scratch file you create in
   `~/.local/share/repo-hygiene/nevr-runtime-ledger.md` (maintainers only).
 - **Maintainers only.** Push branches by explicit refspec only. Never `git push --mirror`, and never push a raw SHA from a maintainer clone. Before any push, run the push-time check in the maintainers' private notes. Never push, merge or rebase from local `main` without the owner's per-instance instruction.

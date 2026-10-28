@@ -51,4 +51,15 @@ const Info& Get();
 /// and a binary contains exactly one. Returned without the leading NUL.
 const char* IdentityLiteral();
 
+/// The text a player sees for this build, e.g. "nEVR 5.0.0" for a tag build and
+/// "nEVR 5.0.1-dev.3+abc1234..." for a dev build: the project version string as CMake set it, unshortened,
+/// so a screenshot names the exact build. Derived from Get(); nothing is measured.
+std::string MenuVersionLabel();
+
+/// How this runtime's own Authenticode signature checks out (#842): "signed-release", "self-built" or "dev", set once at
+/// boot by the runtime's self-check (src/runtime/ext/self_provenance.h). "unchecked" until that has run. This is the one
+/// field here that is measured at runtime, not compiled in; it is still written once, before any registration.
+const char* Provenance();
+void SetProvenance(const char* word);
+
 }  // namespace nevr_build_identity

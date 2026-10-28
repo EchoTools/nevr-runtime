@@ -44,12 +44,15 @@ class SmokeSyncTest(unittest.TestCase):
         git(self.seed, "checkout", "-q", "-b", "main")
         (self.seed / "tools/scenario").mkdir(parents=True)
         shutil.copy(SMOKE, self.seed / "tools/scenario/smoke.sh")
+        (self.seed / "tools/lib").mkdir(parents=True)
+        shutil.copy(REPO / "tools/lib/work_root.sh", self.seed / "tools/lib/work_root.sh")
         (self.seed / "marker.txt").write_text("one\n")
         # A stand-in runner: writes the result.json the real one writes, with what the test asks for.
         (self.seed / "tools/scenario/run_scenario.py").write_text(FAKE_RUNNER)
         (self.seed / "tools/scenario/smoke.yaml").write_text("name: smoke\n")
         (self.seed / "build/mingw-scenario/bin").mkdir(parents=True)
         (self.seed / "build/mingw-scenario/bin/BugSplat64.dll").write_text("dll")
+        (self.seed / "build/mingw-scenario/bin/nevr-runtime.dll").write_text("dll")
         git(self.seed, "add", "-A")
         git(self.seed, "commit", "-q", "-m", "one")
         git(self.seed, "push", "-q", "origin", "main")
@@ -186,6 +189,32 @@ class SmokeSyncTest(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 20)
         self.assert_loud(result, "cannot fetch origin/main for")
         self.assertIn("within 1 s", result.stderr)
+
+    def test_the_record_defaults_to_the_work_root_with_a_readme(self):
+        # No NEVR_SMOKE_STATUS_DIR: the status directory is under NEVR_WORK_ROOT, and carries a README.
+        root = self.tmp / "work"
+        env = dict(self.env, NEVR_WORK_ROOT=str(root), HOME=str(self.tmp / "home"))
+        env.pop("NEVR_SMOKE_STATUS_DIR")
+        (self.tree / "marker.txt").write_text("local edit\n")
+        result = subprocess.run([str(self.tree / "tools/scenario/smoke.sh"), "--sync-only"], env=env,
+                                capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(json.loads((root / "scenario-smoke/last.json").read_text())["verdict"], "FAIL")
+        self.assertIn("smoke.sh", (root / "scenario-smoke/README.md").read_text())
+
+    def test_the_game_run_lock_defaults_to_the_work_root(self):
+        # The smoke waits on the lock launch-client.sh takes; with no NEVR_LAUNCH_LOCK that is the work root's.
+        import fcntl
+        root = self.tmp / "work"
+        root.mkdir()
+        env = dict(self.env, NEVR_WORK_ROOT=str(root), HOME=str(self.tmp / "home"), SMOKE_LOCK_WAIT_SECONDS="1")
+        env.pop("NEVR_LAUNCH_LOCK", None)
+        with open(root / "launch-client.lock", "w") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            result = subprocess.run([str(self.tree / "tools/scenario/smoke.sh"), "--no-sync", "--no-build"], env=env,
+                                    capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn(f"game-run lock {root}/launch-client.lock still busy", result.stderr)
 
     def test_a_dry_run_alarm_records_the_failure_and_fires_nothing(self):
         (self.tree / "marker.txt").write_text("local edit\n")

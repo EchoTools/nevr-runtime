@@ -1,5 +1,7 @@
 #include "runtime/patch/asset_cache.h"
 
+#include "core/nevr_root.h"
+
 #include <wincrypt.h>
 
 #include <algorithm>
@@ -181,12 +183,7 @@ std::uint64_t FileTimeValue(const FILETIME& ft) {
 
 }  // namespace
 
-std::wstring DefaultDir() {
-  wchar_t buf[MAX_PATH * 2];
-  const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", buf, static_cast<DWORD>(sizeof(buf) / sizeof(buf[0])));
-  if (n == 0 || n >= sizeof(buf) / sizeof(buf[0])) return std::wstring();
-  return JoinPath(std::wstring(buf, n), L"nevr\\echovr\\cache");
-}
+std::wstring DefaultDir() { return nevr_root::CacheDir(nevr_root::RootW()); }
 
 std::string Sha256Hex(const void* data, std::size_t len) {
   HCRYPTPROV prov = 0;

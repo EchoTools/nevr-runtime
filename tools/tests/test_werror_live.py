@@ -42,9 +42,12 @@ class WerrorFlagTest(unittest.TestCase):
         self.assertRegex(options, re.compile(r"^\s*-Werror\s*$", re.M), "plain -Werror is missing from the MinGW compile options")
 
     def test_only_the_frozen_legacy_target_opts_out(self):
+        # Tracked files only: an untracked tree inside the checkout (a worktree, a scratch copy) is not main.
+        tracked = subprocess.run(["git", "ls-files", "--", "*CMakeLists.txt"], cwd=REPO, capture_output=True, text=True, check=True).stdout.split()
+        self.assertTrue(tracked, "git ls-files lists no CMakeLists.txt: the scan would be watching nothing")
         offenders = []
-        for path in REPO.rglob("CMakeLists.txt"):
-            rel = path.relative_to(REPO).as_posix()
+        for rel in tracked:
+            path = REPO / rel
             if rel.startswith(("build/", "extern/", "src/quest/")) or "/vcpkg" in rel:
                 continue
             for number, line in enumerate(strip_comments(path.read_text(errors="replace")).splitlines(), 1):

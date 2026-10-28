@@ -30,6 +30,10 @@ void Record(Event event, std::uint64_t payload = 0) {
   if (g_record != nullptr) g_record(event, payload);
 }
 
+// The host's stop seam: the stop is recorded and the original wrapper runs after it, so this harness can go on
+// observing. The process-ending stop itself is measured by tests/rendezvous (missing-real-stop).
+void RecordStop(std::uint32_t exit_code) { Record(kHostStopGame, exit_code); }
+
 }  // namespace
 
 // Ordinal 1, as in the production exports.def. The static-import harness binds to it.
@@ -71,6 +75,7 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
   if (no_event != nullptr && no_event() != 0) {
     nevr_host::RuntimeRendezvous::Seams().fail_event_create = true;
   }
+  nevr_host::RuntimeRendezvous::Seams().stop_game = &RecordStop;
   nevr_host::OnProcessAttach(module, game, false);
 
   if (nevr_host::Rendezvous().Installed()) {
@@ -88,6 +93,6 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
     Record(kHostAttachHeld, hold_ms);
     Sleep(hold_ms);
   }
-  Record(kHostAttachExit, GetModuleHandleW(L"nevr.dll") != nullptr ? 1 : 0);
+  Record(kHostAttachExit, GetModuleHandleW(L"nevr-runtime.dll") != nullptr ? 1 : 0);
   return TRUE;  // the game statically imports this DLL; a FALSE would abort start
 }

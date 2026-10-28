@@ -33,10 +33,13 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 SMOKE_YAML="$REPO/tools/scenario/smoke.yaml"
 RUN_SCENARIO="$REPO/tools/scenario/run_scenario.py"
 DLL="$REPO/build/mingw-scenario/bin/BugSplat64.dll"
-STATUS_DIR="${NEVR_SMOKE_STATUS_DIR:-/var/tmp/work-nevr-runtime/scenario-smoke}"
+# NEVR_WORK_ROOT and work_dir (tools/lib/work_root.sh).
+# shellcheck source=tools/lib/work_root.sh
+source "$REPO/tools/lib/work_root.sh"
+STATUS_DIR="${NEVR_SMOKE_STATUS_DIR:-$NEVR_WORK_ROOT/scenario-smoke}"
 RUN_DIR="$STATUS_DIR/run"
 ALARM_FROM="scenario-smoke"
-GAME_RUN_LOCK="${NEVR_LAUNCH_LOCK:-/var/tmp/work-nevr-runtime/launch-client.lock}"
+GAME_RUN_LOCK="${NEVR_LAUNCH_LOCK:-$NEVR_WORK_ROOT/launch-client.lock}"
 SLOW_SECONDS=300
 # The branch this worktree exists to track origin/main on; any other state is a dev tree.
 SMOKE_BRANCH="${NEVR_SMOKE_BRANCH:-nevr-runtime/792-smoke-main}"
@@ -85,7 +88,8 @@ if [[ -n "$ALARM_DRY_RUN_REASON" ]]; then
   exit 0
 fi
 
-mkdir -p "$STATUS_DIR"
+work_dir "$STATUS_DIR" "The daily scenario smoke (tools/scenario/smoke.sh): the last verdict, last.json and last.txt, and the run's own files." \
+  "kept: each run overwrites the record and the files of the run directory."
 
 # write_record VERDICT EXIT REASON: the durable one-line verdict ($STATUS_DIR/last.json, last.txt).
 write_record() {
@@ -157,6 +161,7 @@ if [[ $BUILD -eq 1 ]]; then
     || { write_record FAIL 1 "the scenario build failed"; alarm "the scenario build failed"; exit 1; }
 fi
 [[ -f "$DLL" ]] || { echo "ERROR: $DLL does not exist after build" >&2; exit 2; }
+[[ -f "$(dirname "$DLL")/nevr-runtime.dll" ]] || { echo "ERROR: $(dirname "$DLL")/nevr-runtime.dll does not exist after build" >&2; exit 2; }
 
 echo "=== smoke: one client boot, $SMOKE_YAML ==="
 set +e

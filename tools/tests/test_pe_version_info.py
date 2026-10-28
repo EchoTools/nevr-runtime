@@ -1,4 +1,4 @@
-"""The VERSIONINFO of BugSplat64.dll and echovr_server.exe (#850): tools/pe_version_info.py and the CMake template.
+"""The VERSIONINFO of BugSplat64.dll, nevr-runtime.dll and echovr_server.exe (#850): tools/pe_version_info.py and the CMake template.
 
 The oracle is the real resource compiler: RenderedTemplateTest fills cmake/nevr_version_info.rc.in the way
 nevr_add_version_info does, builds it with MinGW windres and gcc, and reads the result back with the reader.
@@ -107,7 +107,7 @@ class RenderedTemplateTest(unittest.TestCase):
         self.assertEqual(info.translations, [(0x0409, 1200)])
         self.assertEqual(info.tables, {"040904B0": {
             "CompanyName": "Andrew Bates",
-            "FileDescription": "nEVR runtime for Echo VR",
+            "FileDescription": "nEVR host for Echo VR",
             "FileVersion": DEV_VERSION,
             "InternalName": "BugSplat64.dll",
             "LegalCopyright": "© 2026 Andrew Bates <a@sprock.io>",
@@ -140,7 +140,7 @@ class RenderedTemplateTest(unittest.TestCase):
         rc = self.dev_rc("BugSplat64.dll", "m")
         mutations = {
             "CompanyName": ('VALUE "CompanyName", "Andrew Bates"', 'VALUE "CompanyName", "Someone Else"'),
-            "FileDescription": ('"nEVR runtime for Echo VR"', '"nEVR runtime"'),
+            "FileDescription": ('"nEVR host for Echo VR"', '"nEVR runtime"'),
             "FileVersion": (f'VALUE "FileVersion", "{DEV_VERSION}"', 'VALUE "FileVersion", "5.5.1"'),
             "InternalName": ('VALUE "InternalName", "BugSplat64.dll"', 'VALUE "InternalName", "bugsplat64.dll"'),
             "LegalCopyright": ("© 2026 Andrew Bates", "(c) 2026 Andrew Bates"),
@@ -223,6 +223,20 @@ class RenderedTemplateTest(unittest.TestCase):
         found = vi.check(dll, exe)
         self.assertTrue(any("FILEVERSION 5.5.1.3 is not 5.5.1.0" in p for p in found), found)
 
+    def test_check_covers_the_runtime_and_binds_it_to_the_hosts_version(self):
+        dll = self.build("BugSplat64.dll", self.dev_rc("BugSplat64.dll", "r1"), "r_dll")
+        runtime = self.build("nevr-runtime.dll", self.dev_rc("nevr-runtime.dll", "r2"), "r_rt")
+        exe = self.build("echovr_server.exe", self.dev_rc("echovr_server.exe", "r3"), "r_exe", identity_version=None)
+        self.assertEqual(vi.check(dll, exe, None, runtime), [])
+        # a runtime of another build is not this host's pair
+        other = self.build("nevr-runtime.dll", self.dev_rc("nevr-runtime.dll", "r4"), "r_other", identity_version="5.5.1")
+        found = vi.check(dll, exe, None, other)
+        self.assertTrue(any("nevr-runtime.dll: its identity version 5.5.1 is not BugSplat64.dll's" in p for p in found), found)
+        # a runtime carrying the host's description is the wrong file
+        wrong = self.dev_rc("nevr-runtime.dll", "r5").replace("nEVR runtime for Echo VR", "nEVR host for Echo VR")
+        found = vi.check(dll, exe, None, self.build("nevr-runtime.dll", wrong, "r_wrong"))
+        self.assertTrue(any("FileDescription" in p and "nevr-runtime.dll" in p for p in found), found)
+
     def test_check_fails_without_an_identity_literal_and_without_a_version(self):
         dll = self.build("BugSplat64.dll", self.dev_rc("BugSplat64.dll", "i1"), "i_dll", identity_version=None)
         exe = self.build("echovr_server.exe", self.dev_rc("echovr_server.exe", "i2"), "i_exe", identity_version=None)
@@ -264,11 +278,14 @@ include("${{CMAKE_SOURCE_DIR}}/cmake/nevr_version_info.cmake")
 add_library(runtime SHARED runtime.c)
 set_target_properties(runtime PROPERTIES OUTPUT_NAME "BugSplat64" PREFIX "")
 nevr_add_version_info(runtime {runtime_args})
+add_library(nevr_runtime_dll SHARED runtime.c)
+set_target_properties(nevr_runtime_dll PROPERTIES OUTPUT_NAME "nevr-runtime" PREFIX "")
+nevr_add_version_info(nevr_runtime_dll FILE_DESCRIPTION "nEVR runtime for Echo VR" ORIGINAL_FILENAME "nevr-runtime.dll" TYPE DLL)
 add_executable(launcher launcher.c)
 set_target_properties(launcher PROPERTIES OUTPUT_NAME "echovr_server")
 nevr_add_version_info(launcher FILE_DESCRIPTION "nEVR dedicated server launcher" ORIGINAL_FILENAME "echovr_server.exe" TYPE APP)
 """
-RUNTIME_ARGS = 'FILE_DESCRIPTION "nEVR runtime for Echo VR" ORIGINAL_FILENAME "BugSplat64.dll" TYPE DLL'
+RUNTIME_ARGS = 'FILE_DESCRIPTION "nEVR host for Echo VR" ORIGINAL_FILENAME "BugSplat64.dll" TYPE DLL'
 
 
 @unittest.skipUnless(TOOLCHAIN and shutil.which("ninja"), "needs MinGW gcc, windres, cmake and ninja")
@@ -450,7 +467,7 @@ class SyntheticPeTest(unittest.TestCase):
         path = self.write(pe_with_resources(resource_tree(self.good_blob())))
         other = path.with_name("other.dll")
         other.write_bytes(path.read_bytes())
-        self.assertEqual(vi.problems_for(other, DEV_VERSION), ["other.dll: not one of ['BugSplat64.dll', 'echovr_server.exe']"])
+        self.assertEqual(vi.problems_for(other, DEV_VERSION), ["other.dll: not one of ['BugSplat64.dll', 'echovr_server.exe', 'nevr-runtime.dll']"])
 
 
 class WiringTest(unittest.TestCase):
@@ -465,7 +482,8 @@ class WiringTest(unittest.TestCase):
         return found[0]
 
     def test_each_shipped_target_is_attached_with_the_pinned_description_and_file_name(self):
-        for path, target, name, kind in (("src/runtime/CMakeLists.txt", "nevr_runtime", "BugSplat64.dll", "DLL"),
+        for path, target, name, kind in (("src/runtime/CMakeLists.txt", "nevr_host", "BugSplat64.dll", "DLL"),
+                                         ("src/runtime/CMakeLists.txt", "nevr_runtime", "nevr-runtime.dll", "DLL"),
                                          ("src/launcher/CMakeLists.txt", "echovr_server", "echovr_server.exe", "APP")):
             with self.subTest(target=target):
                 description, original, file_type = self.call(path, target)
@@ -480,12 +498,12 @@ class WiringTest(unittest.TestCase):
     def test_the_verify_recipe_reads_both_built_files_back(self):
         recipe = (REPO / "justfile").read_text().split("\nverify:", 1)[1]
         line = ('python3 tools/pe_version_info.py check --dll "build/{{ preset }}/bin/BugSplat64.dll" '
-                '--exe "build/{{ preset }}/bin/echovr_server.exe"')
+                '--runtime-dll "build/{{ preset }}/bin/nevr-runtime.dll" --exe "build/{{ preset }}/bin/echovr_server.exe"')
         self.assertEqual(recipe.count(line), 1)
 
     def test_the_release_gate_runs_the_check_on_the_windows_files(self):
         gate = (REPO / "tools" / "package_release.py").read_text()
-        self.assertIn("pe_version_info.check(dll, server, args.version or None)", gate)
+        self.assertIn("pe_version_info.check(dll, server, args.version or None, runtime)", gate)
 
 
 class BuiltFilesTest(unittest.TestCase):
@@ -493,11 +511,11 @@ class BuiltFilesTest(unittest.TestCase):
 
     BIN = REPO / "build" / "mingw-release" / "bin"
 
-    def test_the_built_dll_and_server_exe_carry_the_pinned_resource(self):
-        dll, exe = self.BIN / "BugSplat64.dll", self.BIN / "echovr_server.exe"
-        if not (dll.is_file() and exe.is_file()):
-            self.skipTest(f"{self.BIN} has no BugSplat64.dll and echovr_server.exe; run `just build` first")
-        self.assertEqual(vi.check(dll, exe), [])
+    def test_the_built_dlls_and_server_exe_carry_the_pinned_resource(self):
+        dll, runtime, exe = self.BIN / "BugSplat64.dll", self.BIN / "nevr-runtime.dll", self.BIN / "echovr_server.exe"
+        if not (dll.is_file() and runtime.is_file() and exe.is_file()):
+            self.skipTest(f"{self.BIN} has no BugSplat64.dll, nevr-runtime.dll and echovr_server.exe; run `just build` first")
+        self.assertEqual(vi.check(dll, exe, None, runtime), [])
 
 
 if __name__ == "__main__":

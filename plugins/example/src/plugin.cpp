@@ -91,7 +91,7 @@
  *   feature didn't exist when the plugin was built; the host treats
  *   the absence as "not supported" rather than "error."
  *
- *   NEVR_PLUGIN_API_VERSION is currently 7 (#432).
+ *   NEVR_PLUGIN_API_VERSION is currently 8 (#1094).
  *
  *   | Export present        | What it signals                                 |
  *   |-----------------------|-------------------------------------------------|
@@ -124,6 +124,7 @@
 #include "extension/plugin_interface.h"
 #include "plugin_logger.h"
 #include "hook_manager.h"
+#include "level_gate.h"
 #include "nevr_common.h"
 #include "yaml_config.h"
 
@@ -132,6 +133,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 /*
  * ── NEVR_PLUGIN_EXPORTS ────────────────────────────────────────────
@@ -206,14 +208,14 @@ NEVR_DEFINE_PLUGIN_LOG("[nevr_example]")
  */
 
 /*
- * Hook target: CMatSym::Hash (CSymbol64_Hash) at 0x140107F80.
+ * Hook target: CMatSym::Hash at 0x140107F80.
  *
  * This is a pure query function (no side effects) with a clean, stable
  * prologue: PUSH RBX; SUB RSP, 0x20.  Six bytes, MinHook-safe — no
  * RIP-relative offsets in the prologue that would change across builds.
  *
  * The detour logs the first N calls then passes through silently to the
- * original, so even a frequently-called target (CSymbol64_Hash is used
+ * original, so even a frequently-called target (CMatSym::Hash is used
  * by the game's string interning) won't flood the log.
  *
  * The VA and prologue bytes are sourced from ReVault and validated at
@@ -240,6 +242,41 @@ using HashFn = uint64_t (__fastcall *)(const char* str, uint64_t seed);
 
 static HashFn             g_original_hash = nullptr;
 static nevr::HookManager  g_hooks;
+
+/* The per-level pattern (v8, #1094). The config entry's `levels` arg names the levels this plugin is for, as a
+ * comma-separated string ("mpl_arena_dodgeball,mpl_arena_a"; args are flat strings). The gate hashes the names
+ * once; each callback asks it whether the context's level is one of them. No `levels` arg = every level. */
+static LevelGate          g_levelGate;
+static bool               g_levelOn = true;  /* what the gate said last, so a change is logged once */
+
+static std::vector<std::string> SplitLevels(const std::string& csv)
+{
+    std::vector<std::string> names;
+    size_t start = 0;
+    while (start <= csv.size()) {
+        size_t end = csv.find(',', start);
+        if (end == std::string::npos) end = csv.size();
+        std::string item = csv.substr(start, end - start);
+        const size_t first = item.find_first_not_of(" \t");
+        const size_t last = item.find_last_not_of(" \t");
+        if (first != std::string::npos) names.push_back(item.substr(first, last - first + 1));
+        start = end + 1;
+    }
+    return names;
+}
+
+/* Decide, from this context, whether the plugin is on, and say so once per change. A level can load with no
+ * game-state transition, so OnFrame asks as well as OnGameStateChange. */
+static bool UpdateLevelGate(const NvrGameContext* ctx)
+{
+    const bool on = g_levelGate.Allows(ctx);
+    if (on != g_levelOn) {
+        g_levelOn = on;
+        PluginLogFields(NEVR_LOG_INFO, on ? "level gate: on" : "level gate: off",
+                        {{"level", (LevelGate::Covers(ctx) && ctx->level_name != nullptr) ? ctx->level_name : "?"}});
+    }
+    return on;
+}
 
 /*
  * Detour function — called INSTEAD of CMatSym::Hash.
@@ -586,6 +623,14 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
                 PluginLog("initex: greeting arg = %s",
                           a["greeting"].get<std::string>().c_str());
             }
+            /* The per-level pattern: the levels this plugin is for, named in its own config entry. */
+            if (a.contains("levels")) {
+                g_levelGate.Set(SplitLevels(a["levels"].get<std::string>()));
+                g_levelOn = !g_levelGate.Configured();
+                PluginLogFields(NEVR_LOG_INFO, "initex: levels arg read",
+                                {{"configured", g_levelGate.Configured() ? "true" : "false"},
+                                 {"host_reports_level", LevelGate::Covers(ctx) ? "true" : "false"}});
+            }
         } catch (const nlohmann::json::parse_error& e) {
             PluginLogError("initex: args_json parse error: %s", e.what());
             /* Do not fail the load for a parse error — the plugin may
@@ -848,7 +893,10 @@ NEVR_PLUGIN_API void NvrPluginOnFrame(const NvrGameContext* ctx)
      *   }
      */
 
-    (void)ctx; /* unused in this minimal example */
+    /* Per-level pattern: act only while the gate is open. A real plugin does its per-frame work under
+     * `if (on)`; this one only reports the gate's changes. */
+    const bool on = UpdateLevelGate(ctx);
+    (void)on;
 }
 
 /*
@@ -902,7 +950,9 @@ NEVR_PLUGIN_API void NvrPluginOnGameStateChange(const NvrGameContext* ctx,
      *   }
      */
 
-    (void)ctx;
+    /* Per-level pattern: ctx->level_symbol / ctx->level_name name the level the game holds now. */
+    const bool on = UpdateLevelGate(ctx);
+    (void)on;
     (void)old_state;
     (void)new_state;
 }

@@ -1,11 +1,14 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <shared_mutex>
+#include <string>
 
 #include "abi/echovr.h"
 #include "core/pch.h"
+#include "runtime/server/lobby_settings_relay.h"
 
 namespace nevr_game_server {
 
@@ -135,6 +138,15 @@ class ServerContext {
   SessionState GetSessionState() const;
   void UpdateSessionState(const SessionState& state);
 
+  // The last lobby settings document relayed to the game (#905). StartSession and EndSession drop it and report
+  // what they dropped to the handler, after releasing every lock, so the log shows a session that never received
+  // one. The handler runs on the thread that made the transition.
+  using LobbySettingsClearedHandler =
+      std::function<void(const LobbySettingsRecord& cleared, const char* reason, const std::string& sessionId)>;
+  void SetLobbySettingsClearedHandler(LobbySettingsClearedHandler handler);
+  void RecordLobbySettings(const LobbySettingsRecord& record);
+  LobbySettingsRecord GetLobbySettings() const;
+
   // Callback registry — NOT internally synchronized.
   // Safe to call without locking when all access is from the game's main thread
   // (RegisterBroadcasterCallbacks, UnregisterAllCallbacks, Initialize, Terminate).
@@ -159,6 +171,8 @@ class ServerContext {
 
   // Session state
   SessionState m_sessionState;
+  LobbySettingsRecord m_lobbySettings;  // guarded by m_sessionMutex
+  LobbySettingsClearedHandler m_lobbySettingsCleared;  // guarded by m_sessionMutex
 
   // Callback handles
   CallbackRegistry m_callbacks;

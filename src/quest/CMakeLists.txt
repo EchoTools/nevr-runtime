@@ -19,6 +19,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# The same commit built in two worktrees must give the same bytes (#658): keep the repository root and the build
+# directory out of __FILE__, assertions and debug info, as the root CMakeLists.txt does for the Windows DLLs. The
+# build tree is <repo>/build/<preset>, so its mapping is relative too.
+get_filename_component(NEVR_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+add_compile_options(
+  "-ffile-prefix-map=${NEVR_REPO_ROOT}=."
+  "-ffile-prefix-map=${CMAKE_BINARY_DIR}=build"
+)
+
 message(STATUS "nevr_quest: ABI=${ANDROID_ABI} platform=${ANDROID_PLATFORM} STL=${ANDROID_STL}")
 
 # ── Toolchain probe ─────────────────────────────────────────────────────
@@ -85,6 +94,9 @@ add_library(nevr_quest_social STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/social/social_game_calls.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/social/social_install.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/social/social_invite_gate.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/social/lobby_full_hooks.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/social/menu_version_label.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/sentinel/splash_skip_hook.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/social_names.cpp")
 # social_names.cpp is the PC's friend-name decoder. The sentinel may carry no dynamic initializer, so the
 # static registration the PC uses is compiled out and InstallSocialHook registers the decoder explicitly.
@@ -97,9 +109,14 @@ set_source_files_properties(
   "${CMAKE_CURRENT_SOURCE_DIR}/social/social_game_calls.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/social/social_install.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/social/social_invite_gate.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/social/lobby_full_hooks.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/social/menu_version_label.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/sentinel/splash_skip_hook.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/tests/social_install_test.cpp"
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 target_include_directories(nevr_quest_social PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
+# menu_version_label.cpp includes generated/nevr_build_info.h, which nevr_generate_build_info writes to the build tree.
+target_include_directories(nevr_quest_social PRIVATE "${CMAKE_BINARY_DIR}")
 target_link_libraries(nevr_quest_social PUBLIC nevr_quest_got_hook dl PRIVATE zstd::libzstd nlohmann_json::nlohmann_json)
 target_compile_options(nevr_quest_social PRIVATE -Wall -Wextra -Werror)
 
@@ -125,6 +142,10 @@ target_compile_options(nevr_quest_config PRIVATE -Wall -Wextra -Werror)
 add_executable(quest_config_test tests/quest_config_test.cpp)
 target_link_libraries(quest_config_test PRIVATE nevr_quest_config nlohmann_json::nlohmann_json)
 target_compile_options(quest_config_test PRIVATE -Wall -Wextra -Werror)
+
+# #970: the credits patch's pure encoding (sentinel/credits_text.h), checked against the pinned libr15 words.
+add_executable(credits_text_test tests/credits_text_test.cpp)
+target_compile_options(credits_text_test PRIVATE -Wall -Wextra -Werror)
 
 # Config-string redirect (CJson::TString hook adapter and decision logic).
 add_subdirectory(redirect)

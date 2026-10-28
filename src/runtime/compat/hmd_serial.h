@@ -19,6 +19,13 @@ namespace nevr_hmd_serial {
 constexpr std::size_t kSerialBytes = 24;  // the game's 0x18-byte serial buffer
 constexpr unsigned long long kNoVrFlag = 0x100000ULL;  // game+0x7ae0 bit 20
 
+// The login platform follows the same flag the stock login reads for the serial (#1082): a client the
+// game itself marks No VR is a different session identity from the same player's VR client. A dedicated
+// server keeps the platform it has always logged in with.
+inline bool LoginIsNoVr(bool isServer, unsigned long long gameFlags) {
+  return !isServer && (gameFlags & kNoVrFlag) != 0;
+}
+
 enum class Source { GameBuffer, NoVr, Unavailable };
 
 struct Choice {

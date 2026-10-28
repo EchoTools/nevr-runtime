@@ -7,6 +7,8 @@
 
 #include "core/runtime_abi.h"
 #include "runtime/host/bootstrap_diagnostics.h"
+#include "runtime/host/host_identity.h"
+#include "runtime/ext/plugin_pins.h"
 #include "runtime/host/loader_lock.h"
 
 #include <gtest/gtest.h>
@@ -17,6 +19,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 
 namespace {
@@ -83,23 +86,23 @@ TEST(HostRuntimeLoad, NoPathYieldsNoPath) {
   EXPECT_EQ(result.outcome, RuntimeLoadOutcome::kNoPath);
   EXPECT_FALSE(result.Loaded());
   EXPECT_EQ(result.api, nullptr);
-  EXPECT_STREQ(result.DegradedAction(), "run_original_only");
+  EXPECT_STREQ(result.DegradedAction(), "stop_game");
 }
 
 TEST(HostRuntimeLoad, DistinguishesAbsentDependencyAndGenericLoadFailures) {
   const RuntimeLoadResult absent =
-      ClassifyLoad(true, L"C:\\g\\nevr.dll", kFileNotFound, nullptr, false, nullptr,
+      ClassifyLoad(true, L"C:\\g\\nevr-runtime.dll", kFileNotFound, nullptr, false, nullptr,
                    nevr_runtime_abi::Status::kNullDescriptor, 0);
   EXPECT_EQ(absent.outcome, RuntimeLoadOutcome::kRuntimeAbsent);
   EXPECT_EQ(absent.win32_error, kFileNotFound);
 
   const RuntimeLoadResult dependency =
-      ClassifyLoad(true, L"C:\\g\\nevr.dll", kModuleNotFound, nullptr, false, nullptr,
+      ClassifyLoad(true, L"C:\\g\\nevr-runtime.dll", kModuleNotFound, nullptr, false, nullptr,
                    nevr_runtime_abi::Status::kNullDescriptor, 0);
   EXPECT_EQ(dependency.outcome, RuntimeLoadOutcome::kDependencyLoadFailed);
 
   const RuntimeLoadResult other =
-      ClassifyLoad(true, L"C:\\g\\nevr.dll", ERROR_ACCESS_DENIED, nullptr, false, nullptr,
+      ClassifyLoad(true, L"C:\\g\\nevr-runtime.dll", ERROR_ACCESS_DENIED, nullptr, false, nullptr,
                    nevr_runtime_abi::Status::kNullDescriptor, 0);
   EXPECT_EQ(other.outcome, RuntimeLoadOutcome::kLoadFailed);
 }
@@ -107,14 +110,14 @@ TEST(HostRuntimeLoad, DistinguishesAbsentDependencyAndGenericLoadFailures) {
 TEST(HostRuntimeLoad, MissingEntryAndNullDescriptorAreNeverLoaded) {
   HMODULE module = GetModuleHandleW(nullptr);
   const RuntimeLoadResult missing =
-      ClassifyLoad(true, L"C:\\g\\nevr.dll", 0, module, false, nullptr,
+      ClassifyLoad(true, L"C:\\g\\nevr-runtime.dll", 0, module, false, nullptr,
                    nevr_runtime_abi::Status::kNullDescriptor, 0);
   EXPECT_EQ(missing.outcome, RuntimeLoadOutcome::kMissingEntry);
 
   // Mutation check: a null descriptor must never be reported loaded, even when
   // the caller wrongly claims the ABI validation passed.
   const RuntimeLoadResult null_descriptor =
-      ClassifyLoad(true, L"C:\\g\\nevr.dll", 0, module, true, nullptr, nevr_runtime_abi::Status::kOk, 0);
+      ClassifyLoad(true, L"C:\\g\\nevr-runtime.dll", 0, module, true, nullptr, nevr_runtime_abi::Status::kOk, 0);
   EXPECT_EQ(null_descriptor.outcome, RuntimeLoadOutcome::kNullDescriptor);
   EXPECT_EQ(null_descriptor.api, nullptr);
 }
@@ -125,7 +128,7 @@ TEST(HostRuntimeLoad, AbiMismatchIsNeverLoadedAndRecordsTheActualVersion) {
   api.header.abi_major = nevr_runtime_abi::kMajor + 1;
 
   const RuntimeLoadResult result = ClassifyLoad(
-      true, L"C:\\g\\nevr.dll", 0, module, true, &api, nevr_runtime_abi::Status::kMajorMismatch, 0);
+      true, L"C:\\g\\nevr-runtime.dll", 0, module, true, &api, nevr_runtime_abi::Status::kMajorMismatch, 0);
   EXPECT_EQ(result.outcome, RuntimeLoadOutcome::kAbiRejected);
   EXPECT_EQ(result.abi_status, nevr_runtime_abi::Status::kMajorMismatch);
   EXPECT_EQ(result.actual_major, nevr_runtime_abi::kMajor + 1);
@@ -136,7 +139,7 @@ TEST(HostRuntimeLoad, AbiMismatchIsNeverLoadedAndRecordsTheActualVersion) {
 TEST(HostRuntimeLoad, InitFailureIsDistinctFromAbiRejection) {
   HMODULE module = GetModuleHandleW(nullptr);
   const NevrRuntimeApi api = ValidApi();
-  const RuntimeLoadResult result = ClassifyLoad(true, L"C:\\g\\nevr.dll", 0, module, true, &api,
+  const RuntimeLoadResult result = ClassifyLoad(true, L"C:\\g\\nevr-runtime.dll", 0, module, true, &api,
                                                 nevr_runtime_abi::Status::kOk, 7);
   EXPECT_EQ(result.outcome, RuntimeLoadOutcome::kInitFailed);
   EXPECT_EQ(result.init_code, 7);
@@ -145,7 +148,7 @@ TEST(HostRuntimeLoad, InitFailureIsDistinctFromAbiRejection) {
 TEST(HostRuntimeLoad, AValidRuntimeLoadsAndDispatches) {
   HMODULE module = GetModuleHandleW(nullptr);
   const NevrRuntimeApi api = ValidApi();
-  const RuntimeLoadResult result = ClassifyLoad(true, L"C:\\g\\nevr.dll", 0, module, true, &api,
+  const RuntimeLoadResult result = ClassifyLoad(true, L"C:\\g\\nevr-runtime.dll", 0, module, true, &api,
                                                 nevr_runtime_abi::Status::kOk, 0);
   EXPECT_EQ(result.outcome, RuntimeLoadOutcome::kLoaded);
   EXPECT_TRUE(result.Loaded());
@@ -160,7 +163,7 @@ TEST(HostRuntimeLoad, DoesNotReadTheActualVersionPastAShortHeader) {
   NevrRuntimeApi api = ValidApi();
   api.header.struct_size = sizeof(NevrAbiHeader);
   const RuntimeLoadResult result = ClassifyLoad(
-      true, L"C:\\g\\nevr.dll", 0, module, true, &api, nevr_runtime_abi::Status::kHeaderTooSmall, 0);
+      true, L"C:\\g\\nevr-runtime.dll", 0, module, true, &api, nevr_runtime_abi::Status::kHeaderTooSmall, 0);
   EXPECT_EQ(result.outcome, RuntimeLoadOutcome::kAbiRejected);
   EXPECT_EQ(result.actual_major, 0u);
   EXPECT_EQ(result.actual_minor, 0u);
@@ -178,7 +181,7 @@ TEST(HostRuntimeLoad, EmitLoadDiagnosticWritesAParseableRecord) {
   RuntimeLoadResult result;
   result.outcome = RuntimeLoadOutcome::kAbiRejected;
   result.path_ok = true;
-  const wchar_t path[] = L"C:\\games\\nevr.dll";
+  const wchar_t path[] = L"C:\\games\\nevr-runtime.dll";
   std::size_t i = 0;
   while (path[i] != L'\0' && i + 1 < MAX_PATH) {
     result.path[i] = path[i];
@@ -197,9 +200,9 @@ TEST(HostRuntimeLoad, EmitLoadDiagnosticWritesAParseableRecord) {
   const nlohmann::json record = nlohmann::json::parse(line);
   EXPECT_EQ(record.at("event"), "runtime_load");
   EXPECT_EQ(record.at("outcome"), "abi_rejected");
-  EXPECT_EQ(record.at("degraded_action"), "run_original_only");
-  EXPECT_EQ(record.at("path"), "C:\\games\\nevr.dll");
-  EXPECT_EQ(record.at("expected_abi"), "1.0");
+  EXPECT_EQ(record.at("degraded_action"), "stop_game");
+  EXPECT_EQ(record.at("path"), "C:\\games\\nevr-runtime.dll");
+  EXPECT_EQ(record.at("expected_abi"), "1.1");
   EXPECT_EQ(record.at("actual_abi"), "2.0");
   EXPECT_EQ(record.at("abi_status"), "major_mismatch");
 }
@@ -220,7 +223,7 @@ TEST(HostRuntimeLoad, EmitLoadDiagnosticOmitsAbiFieldsWhenNoDescriptorWasRead) {
   RuntimeLoadResult result;
   result.outcome = RuntimeLoadOutcome::kRuntimeAbsent;
   result.path_ok = true;
-  const wchar_t path[] = L"C:\\games\\nevr.dll";
+  const wchar_t path[] = L"C:\\games\\nevr-runtime.dll";
   std::size_t i = 0;
   while (path[i] != L'\0' && i + 1 < MAX_PATH) {
     result.path[i] = path[i];
@@ -237,9 +240,9 @@ TEST(HostRuntimeLoad, EmitLoadDiagnosticOmitsAbiFieldsWhenNoDescriptorWasRead) {
   const nlohmann::json record = nlohmann::json::parse(line);
   EXPECT_EQ(record.at("event"), "runtime_load");
   EXPECT_EQ(record.at("outcome"), "runtime_absent");
-  EXPECT_EQ(record.at("degraded_action"), "run_original_only");
-  EXPECT_EQ(record.at("path"), "C:\\games\\nevr.dll");
-  EXPECT_EQ(record.at("expected_abi"), "1.0");
+  EXPECT_EQ(record.at("degraded_action"), "stop_game");
+  EXPECT_EQ(record.at("path"), "C:\\games\\nevr-runtime.dll");
+  EXPECT_EQ(record.at("expected_abi"), "1.1");
   EXPECT_EQ(record.at("win32_error").get<int>(), static_cast<int>(kFileNotFound));
   EXPECT_FALSE(record.contains("abi_status"));
   EXPECT_FALSE(record.contains("actual_abi"));
@@ -253,7 +256,7 @@ TEST(HostRuntimeLoad, ALoadedRuntimeIsRecordedToo) {
   BootstrapDiagnostics diagnostics;
   diagnostics.Prepare(GetModuleHandleW(nullptr));
   const NevrRuntimeApi api = ValidApi();
-  const RuntimeLoadResult result = ClassifyLoad(true, L"C:\\games\\nevr.dll", 0,
+  const RuntimeLoadResult result = ClassifyLoad(true, L"C:\\games\\nevr-runtime.dll", 0,
                                                 GetModuleHandleW(nullptr), true, &api,
                                                 nevr_runtime_abi::Status::kOk, 0);
   ASSERT_TRUE(result.Loaded());
@@ -265,23 +268,52 @@ TEST(HostRuntimeLoad, ALoadedRuntimeIsRecordedToo) {
   EXPECT_EQ(record.at("event"), "runtime_load");
   EXPECT_EQ(record.at("outcome"), "loaded");
   EXPECT_EQ(record.at("degraded_action"), "dispatch");
-  EXPECT_EQ(record.at("path"), "C:\\games\\nevr.dll");
-  EXPECT_EQ(record.at("expected_abi"), "1.0");
-  EXPECT_EQ(record.at("actual_abi"), "1.0");
+  EXPECT_EQ(record.at("path"), "C:\\games\\nevr-runtime.dll");
+  EXPECT_EQ(record.at("expected_abi"), "1.1");
+  EXPECT_EQ(record.at("actual_abi"), "1.1");
   EXPECT_EQ(record.at("abi_status"), "ok");
   EXPECT_EQ(record.at("init_code"), 0);
   EXPECT_FALSE(record.contains("win32_error"));
 }
 
-TEST(HostRuntimeLoad, TheRuntimeIsTheNevrDllNextToTheHostModule) {
+TEST(HostRuntimeLoad, TheRuntimeIsTheNevrRuntimeDllNextToTheHostModule) {
   wchar_t path[MAX_PATH] = {};
   ASSERT_TRUE(ResolveRuntimePath(GetModuleHandleW(nullptr), path, MAX_PATH));
   wchar_t exe[MAX_PATH] = {};
   ASSERT_GT(GetModuleFileNameW(nullptr, exe, MAX_PATH), 0u);
   std::wstring expected(exe);
   expected.resize(expected.find_last_of(L'\\') + 1);
-  expected += L"nevr.dll";
+  expected += L"nevr-runtime.dll";
   EXPECT_EQ(std::wstring(path), expected);
+}
+
+// The buffer arithmetic of ResolveRuntimePath sizes the name from the file name itself: a buffer of exactly the
+// directory plus the name and its NUL fits, and one wide character fewer yields no path, an empty buffer and no
+// write past the size it was given. kernel32.dll is the host module because its own file name (12 characters) is
+// shorter than the runtime's (16), so the module path itself fits the one-short buffer.
+TEST(HostRuntimeLoad, ABufferOfExactlyTheDirectoryAndTheNameFitsAndOneFewerDoesNot) {
+  HMODULE host = GetModuleHandleW(L"kernel32.dll");
+  ASSERT_NE(host, nullptr);
+  wchar_t module_path[MAX_PATH] = {};
+  ASSERT_GT(GetModuleFileNameW(host, module_path, MAX_PATH), 0u);
+  std::wstring directory(module_path);
+  directory.resize(directory.find_last_of(L'\\') + 1);
+  const std::wstring name = L"nevr-runtime.dll";
+  const std::size_t exact = directory.size() + name.size() + 1;
+
+  constexpr wchar_t kCanary = L'\x7e7e';
+  constexpr std::size_t kSpare = 8;
+  std::wstring fits(exact + kSpare, kCanary);
+  ASSERT_TRUE(ResolveRuntimePath(host, fits.data(), exact));
+  EXPECT_EQ(std::wstring(fits.c_str()), directory + name);
+  for (std::size_t i = exact; i < fits.size(); ++i) EXPECT_EQ(fits[i], kCanary) << "wrote past the size at " << i;
+
+  std::wstring short_by_one(exact + kSpare, kCanary);
+  EXPECT_FALSE(ResolveRuntimePath(host, short_by_one.data(), exact - 1));
+  EXPECT_EQ(short_by_one[0], L'\0');
+  for (std::size_t i = exact - 1; i < short_by_one.size(); ++i) {
+    EXPECT_EQ(short_by_one[i], kCanary) << "wrote past the size at " << i;
+  }
 }
 
 TEST(HostRuntimeLoad, APathThatDoesNotFitYieldsNoPathAndAnEmptyBuffer) {
@@ -401,7 +433,7 @@ TEST(HostLoaderLock, AnotherThreadHoldingTheLockIsNotThisThreadHoldingIt) {
 // The runtime_load record says whether the runtime was loaded under the loader lock, so a
 // log shows the rendezvous ran outside it. Measured by Load itself, not passed in.
 TEST(HostRuntimeLoad, LoadRecordsWhetherTheLoaderLockWasHeld) {
-  // kernel32's directory has no nevr.dll: the load ends at "runtime absent" without a LoadLibrary.
+  // kernel32's directory has no nevr-runtime.dll: the load ends at "runtime absent" without a LoadLibrary.
   HMODULE not_the_host = GetModuleHandleW(L"kernel32.dll");
   nevr_host::RuntimeLoader loader;
   loader.Prepare(not_the_host);
@@ -471,66 +503,129 @@ TEST(HostRuntimeLoad, ARecordThatCannotBeBuiltBecomesAMarkerLineNotAnException) 
   EXPECT_TRUE(marker.contains("what"));
 }
 
-// The runtime inside the host's own image (#800): no LoadLibrary, the module is the host, and the
-// record says the descriptor came from the process itself.
-namespace {
-const NevrRuntimeApi* InProcessApi() {
-  static const NevrRuntimeApi api = ValidApi();
-  return &api;
+// The host stops the game when the runtime did not load (docs/adr/0012-static-install-root.md): the exit code is
+// 78, EX_CONFIG, and the record that says so names the cause, the code, the host's identity and the path searched.
+TEST(HostRuntimeLoad, TheStopExitCodeIs78) {
+  EXPECT_EQ(nevr_host::kRuntimeStopExitCode, 78u);
 }
-const NevrRuntimeApi* NullApi() { return nullptr; }
-const NevrRuntimeApi* BadMajorApi() {
-  static NevrRuntimeApi api = ValidApi();
-  api.header.abi_major = nevr_runtime_abi::kMajor + 1;
-  return &api;
-}
-}  // namespace
 
-TEST(HostRuntimeLoad, InProcessRuntimeLoadsWithoutALoadLibraryAndRecordsItsSource) {
-  const std::wstring local = MakeTempDir(L"inproc");
+TEST(HostRuntimeLoad, EveryOutcomeButLoadedNamesTheStopAsItsAction) {
+  RuntimeLoadResult result;
+  for (const RuntimeLoadOutcome outcome :
+       {RuntimeLoadOutcome::kNoPath, RuntimeLoadOutcome::kRuntimeAbsent, RuntimeLoadOutcome::kDependencyLoadFailed,
+        RuntimeLoadOutcome::kLoadFailed, RuntimeLoadOutcome::kMissingEntry, RuntimeLoadOutcome::kNullDescriptor,
+        RuntimeLoadOutcome::kAbiRejected, RuntimeLoadOutcome::kInitFailed}) {
+    result.outcome = outcome;
+    EXPECT_STREQ(result.DegradedAction(), "stop_game") << result.OutcomeName();
+  }
+  result.outcome = RuntimeLoadOutcome::kLoaded;
+  EXPECT_STREQ(result.DegradedAction(), "dispatch");
+}
+
+TEST(HostRuntimeLoad, TheStopRecordNamesTheCauseTheCodeTheHostAndThePathSearched) {
+  const std::wstring local = MakeTempDir(L"stop");
   BootstrapDiagnostics diagnostics;
   diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
-  HMODULE host_module = GetModuleHandleW(L"kernel32.dll");
-  nevr_host::RuntimeLoader loader;
-  loader.PrepareInProcess(host_module, &InProcessApi);
-  NevrHostContext host{};
+  RuntimeLoadResult result;
+  result.outcome = RuntimeLoadOutcome::kRuntimeAbsent;
+  result.path_ok = true;
+  result.win32_error = ERROR_FILE_NOT_FOUND;
+  const wchar_t path[] = L"C:\\games\\echovr\\bin\\win10\\nevr-runtime.dll";
+  std::size_t i = 0;
+  for (; path[i] != L'\0'; ++i) result.path[i] = path[i];
+  result.path[i] = L'\0';
 
-  const RuntimeLoadResult result = loader.Load(host, diagnostics);
+  nevr_host::EmitStopDiagnostic(diagnostics, result);
 
-  EXPECT_EQ(result.outcome, RuntimeLoadOutcome::kLoaded);
-  EXPECT_EQ(result.module, host_module);
-  EXPECT_EQ(result.api, InProcessApi());
-  EXPECT_TRUE(result.in_process);
   const std::string text = ReadAll((local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl").c_str());
   ASSERT_FALSE(text.empty());
   const nlohmann::json record = nlohmann::json::parse(text.substr(0, text.find('\n')));
-  EXPECT_EQ(record.at("outcome"), "loaded");
-  EXPECT_EQ(record.at("source"), "in_process");
+  EXPECT_EQ(record.at("tag"), "NEVR.HOST");
+  EXPECT_EQ(record.at("event"), "game_stop");
+  EXPECT_EQ(record.at("reason"), "runtime_absent");
+  EXPECT_EQ(record.at("exit_code"), 78);
+  EXPECT_EQ(record.at("runtime_path"), "C:\\games\\echovr\\bin\\win10\\nevr-runtime.dll");
+  EXPECT_EQ(record.at("win32_error"), ERROR_FILE_NOT_FOUND);
+  // The host's identity: the literal the packager reads from this file, so the log names exactly what ran.
+  EXPECT_EQ(record.at("host_identity"), std::string(nevr_host::IdentityLiteral()));
+  EXPECT_EQ(std::string(nevr_host::IdentityLiteral()).rfind("NEVR-BUILD ", 0), 0u);
 }
 
-TEST(HostRuntimeLoad, InProcessRuntimeStillGoesThroughTheDescriptorChecks) {
+// #1122: the host carries no plugin-trust literal, so this is the mark the release path reads to refuse a dev host. It
+// must say what DecideVerify acts on: the pins' dev-build answer, from the same compile definition.
+TEST(HostRuntimeLoad, TheHostBuildLiteralSaysWhetherThisHostLoadsAnUnsignedRuntime) {
+  const std::string literal = nevr_host::BuildLiteral();
+  EXPECT_EQ(literal.rfind("NEVR-HOST-BUILD ", 0), 0u) << literal;
+  EXPECT_EQ(literal, std::string("NEVR-HOST-BUILD ") + nevr_host::BuildWord());
+  EXPECT_STREQ(nevr_host::BuildWord(), nevr_plugin_pins::IsDevBuild() ? "dev" : "release");
+}
+
+TEST(HostRuntimeLoad, AStopRecordThatCannotBeBuiltBecomesAMarkerLineNotAnException) {
+  const std::wstring local = MakeTempDir(L"stopmark");
   BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(L"", L"", L"");
-  HMODULE host_module = GetModuleHandleW(L"kernel32.dll");
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  RuntimeLoadResult result;
+  result.outcome = RuntimeLoadOutcome::kInitFailed;
+
+  nevr_host::SetEmitLoadFailureForTest(true);
+  EXPECT_NO_THROW(nevr_host::EmitStopDiagnostic(diagnostics, result));
+  nevr_host::SetEmitLoadFailureForTest(false);
+
+  const std::string text = ReadAll((local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl").c_str());
+  ASSERT_FALSE(text.empty());
+  const nlohmann::json marker = nlohmann::json::parse(text.substr(0, text.find('\n')));
+  EXPECT_EQ(marker.at("event"), "game_stop");
+  EXPECT_EQ(marker.at("error"), "record_build_failed");
+  EXPECT_EQ(marker.at("reason"), "init_failed");
+  EXPECT_EQ(marker.at("exit_code"), 78);
+}
+
+// An exception that escapes the runtime's initialize() is a load failure, not a crash in the host's detour.
+namespace {
+std::int32_t ThrowingInitialize(const NevrHostContext*) { throw std::runtime_error("initialize threw"); }
+std::int32_t FailingInitialize(const NevrHostContext*) { return 7; }
+// Not derived from std::exception: a runtime built with another library, or a throw of a plain value.
+struct ForeignError {};
+std::int32_t ThrowingForeignInitialize(const NevrHostContext*) { throw ForeignError{}; }
+std::int32_t ThrowingIntInitialize(const NevrHostContext*) { throw 42; }
+}  // namespace
+
+TEST(HostRuntimeLoad, AnExceptionFromInitializeIsCaughtAndReportedAsAFailure) {
+  NevrRuntimeApi api = ValidApi();
+  api.initialize = &ThrowingInitialize;
   NevrHostContext host{};
-  {
-    nevr_host::RuntimeLoader loader;
-    loader.PrepareInProcess(host_module, &NullApi);
-    EXPECT_EQ(loader.Load(host, diagnostics).outcome, RuntimeLoadOutcome::kNullDescriptor);
-  }
-  {
-    nevr_host::RuntimeLoader loader;
-    loader.PrepareInProcess(host_module, &BadMajorApi);
-    EXPECT_EQ(loader.Load(host, diagnostics).outcome, RuntimeLoadOutcome::kAbiRejected);
+  bool threw = false;
+  std::int32_t code = 0;
+  EXPECT_NO_THROW(code = nevr_host::RuntimeLoader::CallInitialize(&api, host, &threw));
+  EXPECT_TRUE(threw);
+  EXPECT_EQ(code, nevr_host::kInitThrewCode);
+  // ... and the classifier turns that nonzero code into the init_failed outcome the stop acts on.
+  const RuntimeLoadResult classified = ClassifyLoad(true, L"x", 0, GetModuleHandleW(nullptr), true, &api,
+                                                    nevr_runtime_abi::Status::kOk, code);
+  EXPECT_EQ(classified.outcome, RuntimeLoadOutcome::kInitFailed);
+}
+
+// Nothing crosses the DLL boundary as an exception, whatever type it is (the ellipsis catch in CallInitialize).
+TEST(HostRuntimeLoad, AnExceptionOfAnyTypeFromInitializeIsCaughtAndReportedAsAFailure) {
+  NevrHostContext host{};
+  for (auto initialize : {&ThrowingForeignInitialize, &ThrowingIntInitialize}) {
+    NevrRuntimeApi api = ValidApi();
+    api.initialize = initialize;
+    bool threw = false;
+    std::int32_t code = 0;
+    EXPECT_NO_THROW(code = nevr_host::RuntimeLoader::CallInitialize(&api, host, &threw));
+    EXPECT_TRUE(threw);
+    EXPECT_EQ(code, nevr_host::kInitThrewCode);
   }
 }
 
-TEST(HostRuntimeLoad, AFileRuntimeIsNotReportedAsInProcess) {
-  HMODULE not_the_host = GetModuleHandleW(L"kernel32.dll");
-  nevr_host::RuntimeLoader loader;
-  loader.Prepare(not_the_host);
-  BootstrapDiagnostics diagnostics;
-  diagnostics.PrepareForTest(L"", L"", L"");
+TEST(HostRuntimeLoad, AnInitializeThatReturnsNormallyIsNotReportedAsThrowing) {
+  NevrRuntimeApi api = ValidApi();
   NevrHostContext host{};
-  EXPECT_FALSE(loader.Load(host, diagnostics).in_process);
+  bool threw = true;
+  EXPECT_EQ(nevr_host::RuntimeLoader::CallInitialize(&api, host, &threw), 0);
+  EXPECT_FALSE(threw);
+  api.initialize = &FailingInitialize;
+  EXPECT_EQ(nevr_host::RuntimeLoader::CallInitialize(&api, host, &threw), 7);
+  EXPECT_FALSE(threw);
 }

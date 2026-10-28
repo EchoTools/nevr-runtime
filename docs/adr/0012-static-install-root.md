@@ -1,20 +1,19 @@
 # ADR 0012: the install folder is static; nEVR's runtime, plugins and state live in `%LOCALAPPDATA%\nevr\echovr`
 
-Status: proposed (#575, tracking issue #799). Nothing in the "Decision" section is built yet. ADR 0010 and ADR 0011 are accepted and
+Status: proposed (#575, tracking issue #799). Of the "Order of work", step 2 (the target split) is built, and of step 5 the root, the one-time move and the resolution of the sign-in cache, `logs\`, `crashes\` and the caches (`core/nevr_root.h`, `lifecycle/nevr_root_move.cpp`); nothing else in the "Decision" section is. ADR 0010 and ADR 0011 are accepted and
 neither is superseded by this record. **It amends ADR 0008 (`0008-bugsplat-host-and-nevr-runtime.md`) in three places:** `nevr-runtime.dll`
 loads from the root, not from the directory of `BugSplat64.dll`; a refused or missing `nevr-runtime.dll` stops the game, where ADR 0008
 lets it run without the runtime; and the host's log gains a `versions` event. "Relation to other records" says which text of ADR 0008 each replaces. What exists today is named
 under "Context"; each piece that moves is re-measured by the pull request that moves it.
 
-The runtime DLL is named `nevr-runtime.dll` in this record. ADR 0008, `src/runtime/host/`, its tests and `tools/verify_pe_contract.py` still
-call the file `nevr.dll`; step 2 of "Order of work" builds it under the new name and changes those with it.
+The runtime DLL is named `nevr-runtime.dll`, in this record, in ADR 0008, in `src/runtime/host/`, in its tests and in `tools/verify_pe_contract.py`.
 
 ## Context
 
 The game's install folder holds things that change and things that are secret, next to files that never change:
 
-- the runtime is `BugSplat64.dll` itself, one DLL that carries the whole of `src/runtime/` (ADR 0008 in `0008-bugsplat-host-and-nevr-runtime.md`, "The tree today"), so every
-  runtime fix replaces the file the game imports;
+- the runtime is `nevr-runtime.dll`, loaded by the host `BugSplat64.dll` from the directory of `BugSplat64.dll` (ADR 0008 in `0008-bugsplat-host-and-nevr-runtime.md`, "The tree today"),
+  so a runtime fix replaces a file in the install folder;
 - plugins load from a `plugins/` directory next to the game binary (`src/runtime/ext/plugin_loader.cpp`);
 - `config.yaml` is found in `_local` next to the game module and one and two parents up, or beside the `-config`/`-config-path` file
   (`FindNevrConfigYamlPath` in `src/runtime/lifecycle/service_config.cpp`);
@@ -45,7 +44,8 @@ One root per game: `%LOCALAPPDATA%\nevr\echovr\`. The install folder keeps the g
 | `plugins\` | plugin DLLs and their dependencies |
 | `config.yaml` | the nEVR configuration, when no `-config` folder is given |
 | `.credentials.json` | the sign-in cache, one per machine, for clients and servers alike |
-| caches, `logs\`, `crashes\` | what the runtime and the host write |
+| `logs\`, `crashes\` | the run log and the crash record (`nevr-crash-<run id>.txt`) the runtime writes, the host's log and minidumps |
+| `cache\`, `cosmetics\v1\packages\` | the asset cache, and the downloaded cosmetic packages |
 
 `%LOCALAPPDATA%\EchoVR` stays the original game's folder; nothing of ours is written there.
 
@@ -68,7 +68,7 @@ because the file sits in the install folder.
    without nEVR, and there is no fallback to a single-DLL install. The load, the check, the dialog and the stop run in the host's
    detour on the game's main wrapper (ADR 0008's rendezvous), never in `DllMain`: ADR 0008's rule that `DllMain` does no file I/O
    and returns `TRUE` stands, and the dialog is shown without the loader lock held.
-4. **The host's export table does not change** (the 26 names and ordinals `tools/verify_pe_contract.py` pins). Logging stays in
+4. **The host's export table does not change** (the names and ordinals `tools/verify_pe_contract.py` pins). Logging stays in
    the host as ADR 0008 describes it (`nevr-bootstrap.jsonl`, `crash_capture`).
 
 A last-known-good copy of `nevr-runtime.dll` is out of scope until there is a reason for one. The plugin loader stays in `nevr-runtime.dll`.
@@ -76,14 +76,14 @@ A last-known-good copy of `nevr-runtime.dll` is out of scope until there is a re
 ### The host verifies `nevr-runtime.dll` before it loads it
 
 A root a player can write is a way in, so the host verifies the file before it maps it, with the verifier ADR 0010 defined for
-plugins: the source files `src/runtime/ext/plugin_signature.cpp` and `src/runtime/ext/plugin_trust.cpp` compile into the host and
-into `nevr-runtime.dll` unchanged, so there is one implementation and one set of pins. The file is opened `FILE_SHARE_READ` and held open
+plugins: the source files `src/runtime/ext/plugin_signature.cpp` and `src/runtime/ext/plugin_pins.cpp` compile into the host and
+into `nevr-runtime.dll`, so there is one implementation and one set of pins. The pins are in `plugin_pins.cpp`, not in `plugin_trust.cpp`,
+because `plugin_trust.cpp` carries the `NEVR-PLUGIN-TRUST` literal that the host must not carry (`tools/package_release.py`). The file is opened `FILE_SHARE_READ` and held open
 across the load, as the plugin loader does.
 
 The host's policy is the production policy of ADR 0010 without the denylist: the pinned Microsoft root, the profile EKU and the
-code-signing EKU, as ADR 0010 requires. Today `ProductionPolicy` and `plugin_trust.cpp` are runtime units that also carry the
-`NEVR-PLUGIN-TRUST` literal; the host takes the same pins through a second policy constructor over the same constants, not a
-copy, and the pull request that does it measures what moves. The denylist stays in `nevr-runtime.dll` and covers plugins. A denylist change
+code-signing EKU, as ADR 0010 requires. The host takes the same pins as the runtime through `nevr_plugin_pins::PinnedPolicy()`, the same constants, not a copy; the
+runtime adds the denylist to them in `ProductionPolicy`. The denylist stays in `nevr-runtime.dll` and covers plugins. A denylist change
 must not need a new `BugSplat64.dll`, because that file changes rarely. The accepted cost: a genuinely signed `nevr-runtime.dll` that is on
 the denylist is stopped only by a new host release; the host changes rarely, and that is the price of keeping it small.
 
@@ -94,7 +94,18 @@ run, which get the log line and a non-zero exit instead.
 
 A dev build (the `NEVR_ALLOW_UNSIGNED_PLUGINS` build of ADR 0010) loads an unsigned `nevr-runtime.dll`, with the trust-mode log line ADR 0010
 defines, and carries the same `NEVR-PLUGIN-TRUST` literal; a plugin developer's dev host must load a dev `nevr-runtime.dll`. A signed-only
-build refuses it.
+build refuses it. The presets that make a test DLL pair, `mingw-plugin-dev` and `mingw-scenario`, are dev builds; any other preset's host
+refuses their unsigned runtime. The host carries no `NEVR-PLUGIN-TRUST` literal, so it carries `NEVR-HOST-BUILD <release|dev>` instead
+(`host/host_identity.cpp`), and `tools/package_release.py` refuses a host that does not say `release`, as it refuses a runtime whose
+`NEVR-PLUGIN-TRUST` literal does not.
+
+### The unverified load is gone; the move waits for step 3's signed file
+
+Until step 3 the host mapped `nevr-runtime.dll` with no check. `RuntimeLoader::Load` in `src/runtime/host/runtime_load.cpp` now
+verifies the file first (`nevr_plugin_signature::VerifyPluginFile` with `nevr_plugin_pins::PinnedPolicy()`, the file held open
+`FILE_SHARE_READ` through the load) and calls `LoadLibraryExW` only on an accepted file, or on an unsigned one in a dev build. A
+refused or unreadable file, and a missing one, stop the game (exit 78). Step 4 (the move to `%LOCALAPPDATA%`) still does not ship
+before a signed `nevr-runtime.dll` exists (step 3's prerequisite).
 
 ### Where state resolves
 
@@ -116,19 +127,25 @@ for harnesses and native test machines. A signed-only build ignores it and logs 
 
 On the first run that finds the old layout, the runtime moves, and logs every file it moves or leaves:
 
-- from the install's `_local` directories: `config.yaml`, `.credentials.json` and the caches. A `-config` folder's own
-  `config.yaml` is not moved: it stays where it is, and the rule of "Where state resolves" finds it there;
+- from the install's `_local` directories: `.credentials.json`, nearest first, through the protected write the cache is saved with
+  (`core/credential_write.h`), read back before the old file is removed. `config.yaml` is not moved until step 6 decides where server and
+  client config live, and a `-config` folder's own `config.yaml` never is: it stays where it is, and the rule of "Where state resolves"
+  finds it there. A cache the move could not take (or whose root path does not fit the ANSI code page) is still read, and written back where it is,
+  until a later run moves it;
 - from `%LOCALAPPDATA%\EchoVR\logs`: nEVR's own files, which are the run logs the built-in filter writes (`BuildLogFilePath` in
   `builtin_filter.cpp`, whose prefix is configurable) and `nevr-crash-<run id>.txt` (`PrepareCrashRecordPath`), never the game's own.
-  The move recognises them by the names those writers use; step 5 of the order of work fixes the list from the code of that day.
+  The move recognises them by the names those writers use. That list is `nevr-*.jsonl` and `nevr-*.log` (the run log) and `nevr-crash-*.txt` (the crash
+  record), moved to the root's `logs\`;
+- from `%LOCALAPPDATA%\EchoVR\cosmetics\v1\packages`: every file, the downloaded cosmetic packages, moved to the root's `cosmetics\v1\packages`.
+  `MOVED-TO-NEVR-ROOT.txt` is left in each of these two folders as well as in `_local`.
 
 The credentials move first, so a player who updates keeps their login. The move never overwrites a file already in the root, is
 safe to run twice, and leaves a file in place, with a log line, when it cannot move it. Nothing is deleted that was not moved. When
 it has moved anything out of a `_local` directory, it writes `MOVED-TO-NEVR-ROOT.txt` there, naming the root, so a player or support
 can see why that folder is empty.
 
-The uninstaller puts back what the move took: it copies `config.yaml` and `.credentials.json` from the root into `_local` and removes
-`MOVED-TO-NEVR-ROOT.txt`, and leaves the root as it is, so uninstalling and then installing a pre-split release keeps the login.
+The uninstaller puts back what the move took: it copies `.credentials.json` from the root into the `_local` folder that holds a marker (never over a file there) and sets
+`MOVED-TO-NEVR-ROOT.txt` aside as `MOVED-TO-NEVR-ROOT.txt.undone-<timestamp>`, and leaves the root as it is, so uninstalling and then installing a pre-split release keeps the login.
 
 ### Updating only the host, and going back
 
@@ -157,13 +174,13 @@ Each step is its own pull request with its own issue under #575, mergeable and t
 
 ## Names this record fixes
 
-- **The runtime DLL's name:** `nevr-runtime.dll`, in the root, signed by the release signer, replacing the tree's `nevr.dll`.
+- **The runtime DLL's name:** `nevr-runtime.dll`, in the root, signed by the release signer.
 - **The root layout and file names:** `%LOCALAPPDATA%\nevr\echovr\` holding `nevr-runtime.dll`, `plugins\`, `config.yaml`,
   `.credentials.json`, `logs\` and `crashes\`, as in the table. `nevr-bootstrap.jsonl` stays the host's log file name.
 - **`NEVR_ROOT`**, honoured only in a dev build, replaces `%LOCALAPPDATA%\nevr\echovr`; it lands in step 4.
 - **The `versions` record:** written by the host's detour on the game's main wrapper right after the verdict on `nevr-runtime.dll`: the first
   record of that process after the verdict (attach records before it are fine; every record carries the `pid`, so the log reads per
-  process). It goes to `nevr-bootstrap.jsonl` with `tag` `NEVR.HOST`, `event` `versions`, and the fields `host_version`, `host_sha256`, `runtime_version`, `runtime_sha256` (the last two
+  process). It goes to `nevr-bootstrap.jsonl` with `tag` `NEVR.HOST`, `event` `versions`, and the fields `host_version`, `host_build` (`release` or `dev`), `host_sha256`, `runtime_version`, `runtime_sha256` (the last two
   `unavailable` when `nevr-runtime.dll` is missing or refused, with the path searched in `runtime_path`).
 - **The exit code** after the refusal dialog on a client, and on a server or headless run, is 78 (free in `src/` today; 78 is `EX_CONFIG`
   in sysexits). The host ends the process by its own call, `TerminateProcess(GetCurrentProcess(), 78)`, as it already does for an
@@ -175,8 +192,8 @@ Each step is its own pull request with its own issue under #575, mergeable and t
 ## Relation to other records
 
 - ADR 0008 is built on and **amended in three places**. Kept: the host and runtime are a matched pair behind one versioned C ABI, the
-  rendezvous is the game's main wrapper, `DllMain` does no file I/O, and the export table. Replaced (quoted in ADR 0008's own name for the file, `nevr.dll`): "`nevr.dll`, in the same
-  directory" and the `ResolveRuntimePath` rule "`nevr.dll` in the directory of `BugSplat64.dll`" become the root; and "when no runtime is published the
+  rendezvous is the game's main wrapper, `DllMain` does no file I/O, and the export table. Replaced: "`nevr-runtime.dll`, in the same
+  directory" and the `ResolveRuntimePath` rule "`nevr-runtime.dll` in the directory of `BugSplat64.dll`" become the root; and "when no runtime is published the
   detour returns the original wrapper's result" becomes a stop; and the host's journal events (`host_attach`, `runtime_load`, `crash_dump`) gain a `versions` event. The code that implements the first is
   `nevr_host::ResolveRuntimePath` (`src/runtime/host/runtime_load.cpp`).
 - ADR 0010 is extended, not superseded: its verifier gains a second use, the host's check of `nevr-runtime.dll`, and its refusal policy

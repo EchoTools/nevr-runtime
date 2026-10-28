@@ -591,6 +591,23 @@ TEST(SocialParty, OpeningTheFriendsTabAsksTheServerForAFreshList) {
   EXPECT_EQ(std::memcmp(out[0].payload.data() + 8, self.data(), 16), 0);
 }
 
+// #1082: the local user's UUID in every request is the EvrId of its login: DMO-<id> for a No VR client.
+TEST(SocialParty, ANoVrClientsRequestsCarryItsDmoUuidNotTheVrOne) {
+  nevr_social_party::State vrState;
+  vrState.SetSelf(100);
+  nevr_social_party::State noVrState;
+  noVrState.SetSelf(100, std::string(), 7);
+  const auto vrOut = vrState.RefreshFriends();
+  const auto noVrOut = noVrState.RefreshFriends();
+  ASSERT_EQ(vrOut.size(), 1u);
+  ASSERT_EQ(noVrOut.size(), 1u);
+  const auto vrUuid = nevr_social_party::UuidV5Nil("OVR-ORG-100");
+  const auto noVrUuid = nevr_social_party::UuidV5Nil("DMO-100");
+  EXPECT_EQ(std::memcmp(vrOut[0].payload.data() + 8, vrUuid.data(), 16), 0);
+  EXPECT_EQ(std::memcmp(noVrOut[0].payload.data() + 8, noVrUuid.data(), 16), 0);
+  EXPECT_NE(std::memcmp(noVrOut[0].payload.data() + 8, vrUuid.data(), 16), 0);
+}
+
 TEST(SocialParty, TheFriendsTabRefreshIsRateLimited) {
   nevr_social_party::State state;
   state.SetSelf(100);
@@ -1413,6 +1430,29 @@ TEST(SocialFriends, FriendChangesAreRecognisedAndTheRefreshRepliesAreNot) {
   EXPECT_TRUE(nevr_social_roster::IsFriendChangeSymbol(0xc237c84c31d3ae05ULL));   // FriendAcceptNotify
   EXPECT_FALSE(nevr_social_roster::IsFriendChangeSymbol(0x26a19dc4d2d5579dULL));  // FriendStatusNotify
   EXPECT_FALSE(nevr_social_roster::IsFriendChangeSymbol(0xa78aeb2a4e89b10bULL));  // FriendListResponse
+}
+
+// A removed friend must leave the roster at once: until it does, the tablet hides the add-friend button for them.
+TEST(SocialRoster, ARemovedFriendLeavesTheRosterAtOnce) {
+  nevr_social_roster::Roster roster;
+  roster.BeginList(2);
+  roster.Notify(5, nevr_social_roster::kStatusOnline);
+  roster.Notify(6, nevr_social_roster::kStatusOffline);
+  ASSERT_EQ(roster.Count(), 2u);
+
+  const auto removal = StatusNotifyPayload(5, nevr_social_roster::kStatusOnline);
+  std::uint64_t id = 0;
+  EXPECT_FALSE(nevr_social_roster::ParseFriendRemoval(0x26a19dc4d2d5579dULL, removal.data(), removal.size(), &id));
+  EXPECT_FALSE(nevr_social_roster::ParseFriendRemoval(0xe06972f49cd72265ULL, removal.data(), 15, &id));
+  ASSERT_TRUE(nevr_social_roster::ParseFriendRemoval(0xe06972f49cd72265ULL, removal.data(), removal.size(), &id));
+  EXPECT_EQ(id, 5u);
+
+  EXPECT_TRUE(roster.Remove(5));
+  EXPECT_FALSE(roster.Remove(5));
+  EXPECT_EQ(roster.Count(), 1u);
+  std::uint64_t left = 0;
+  ASSERT_TRUE(roster.IdAt(0, &left));
+  EXPECT_EQ(left, 6u);
 }
 
 TEST(ScenarioProtocol, InjectsFriendNotifiesAndFiresAddFriend) {

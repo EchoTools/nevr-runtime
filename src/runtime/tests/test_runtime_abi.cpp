@@ -1,5 +1,5 @@
 // Host <-> runtime ABI descriptor validation (core/runtime_abi.h).
-// The version/size checks the host runs on nevr.dll's descriptor before it calls through it.
+// The version/size checks the host runs on nevr-runtime.dll's descriptor before it calls through it.
 
 #include "core/runtime_abi.h"
 
@@ -110,6 +110,23 @@ TEST(RuntimeAbi, RejectsEachMissingRequiredEntry) {
   EXPECT_EQ(nevr_runtime_abi::ValidateRuntimeApi(&api), nevr_runtime_abi::Status::kMissingEntry);
 }
 
+// Minor 1 appends the export table (the runtime's side of the 16 exports the host publishes). A reader uses it
+// only when the writer's struct_size covers it, so a v1.0 runtime is still accepted and has no exports.
+TEST(RuntimeAbi, ExportTableIsUsedOnlyWhenTheDescriptorCoversIt) {
+  EXPECT_EQ(nevr_runtime_abi::kMinor, 1u);
+  NevrRuntimeApi api = ValidApi();
+  EXPECT_EQ(nevr_runtime_abi::RuntimeExports(&api), &api.exports);
+  EXPECT_EQ(nevr_runtime_abi::RuntimeExports(nullptr), nullptr);
+
+  api.header.struct_size = nevr_runtime_abi::kRuntimeApiV1Size;  // a v1.0 writer: ends at game_main
+  EXPECT_EQ(nevr_runtime_abi::ValidateRuntimeApi(&api), nevr_runtime_abi::Status::kOk);
+  EXPECT_EQ(nevr_runtime_abi::RuntimeExports(&api), nullptr);
+
+  api.header.struct_size = nevr_runtime_abi::kRuntimeApiV1_1Size - 1;  // one byte short of the table
+  EXPECT_EQ(nevr_runtime_abi::ValidateRuntimeApi(&api), nevr_runtime_abi::Status::kOk);
+  EXPECT_EQ(nevr_runtime_abi::RuntimeExports(&api), nullptr);
+}
+
 // The v1 layout is the contract: the rendezvous is the game's main wrapper, so the descriptor
 // carries `game_main` and the context carries the wrapper's trampoline and a record of the
 // host's hook on it. Pinned here as well as by the header's static_asserts, so a change to
@@ -119,7 +136,10 @@ TEST(RuntimeAbi, V1LayoutIsPinned) {
   EXPECT_EQ(offsetof(NevrRuntimeApi, initialize), 16u);
   EXPECT_EQ(offsetof(NevrRuntimeApi, game_main), 24u);
   EXPECT_EQ(nevr_runtime_abi::kRuntimeApiV1Size, 32u);
-  EXPECT_EQ(sizeof(NevrRuntimeApi), 32u);
+  EXPECT_EQ(offsetof(NevrRuntimeApi, exports), 32u);
+  EXPECT_EQ(sizeof(NevrRuntimeExports), 16u * sizeof(void*));
+  EXPECT_EQ(nevr_runtime_abi::kRuntimeApiV1_1Size, 160u);
+  EXPECT_EQ(sizeof(NevrRuntimeApi), 160u);
   EXPECT_EQ(offsetof(NevrHostContext, host_module), 16u);
   EXPECT_EQ(offsetof(NevrHostContext, game_module), 24u);
   EXPECT_EQ(offsetof(NevrHostContext, original_game_main_wrapper), 32u);

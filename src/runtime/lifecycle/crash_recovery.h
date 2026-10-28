@@ -21,6 +21,10 @@ void InstallCrashRecoveryHooks();
 /// its longjmp counterpart (N125).
 INT64 RuntimeGameMain(INT64 arg1);
 
+/// The id of the thread that runs the game's main wrapper (the game loop), 0 before it started. Evidence for a
+/// logged claim that work ran on the game's own thread; not a lock.
+unsigned long GameLoopThreadId();
+
 /// Takes over the host's hook on the game-main wrapper: resolves GameMain and records the hook with
 /// HookGuard from the bytes the host wrote. Called from the runtime's initialize (N125); `host`
 /// must have passed nevr_runtime_abi::ValidateHostContext.

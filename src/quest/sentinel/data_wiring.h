@@ -7,12 +7,16 @@
  *
  * The one root that counts is the root the engine reads this launch. With an OBB file the OBB skip ran before this
  * (CSysFile::Init mounts in android_main, ahead of the game's Initialize) and the game recorded the root it served
- * (obb_skip::CurrentRoot); without one CSysFile::Init returned at "OBB not found", the skip never ran, and
- * CSysInfo::GetDataRootDir answers the legacy root. So:
+ * (obb_skip::CurrentRoot); without one CSysFile::Init returned at "OBB not found" and the skip never ran. Then
+ * CSysInfo::GetDataRootDir decides: our hook on it answers the media root when ResolveRoot found the game's manifest
+ * (data::kManifestPath) there and the hook took (obb_skip::DataRootRedirect, #866), and the function answers the legacy root otherwise.
+ * `data_step_start` logs the root and where it came from (`engine_root_source`: obb_skip, data_root_hook or
+ * engine_default). So:
  *   - Storage not granted and the engine reads the legacy root (shared storage): nothing is looked at, fetched or
  *     written; the player is shown data::kNeedsStoragePermission, it is held ten seconds (a release build holds
  *     nothing: Options::hold_ms 0), and the process ends nonzero
- *     (`data_step outcome=no_storage_grant`). The media root needs no permission and is used as it is.
+ *     (`data_step outcome=no_storage_grant`). The media root needs no permission and is used as it is, whether the engine
+ *     reads it through a skipped mount or through the data-root hook.
  *   - data::RunDataStep looks at that root only (StepConfig::engine_root), after (development builds only) putting the
  *     leftovers of an interrupted install right (RecoverReplaced, CleanLeftovers):
  *   - data already there: nothing is fetched and one `data_check action=use` line says so;
@@ -30,14 +34,18 @@
  * The android_main thread blocks for the whole step. Whether Android tolerates that for the length of a download is
  * ADR 0011 measurement 2; `data_probe` below is how the headset run measures it.
  *
- * Events (sentinel log, no URL): `data_step_install`; `data_check`, `data_fetch`, `data_extract`, `data_swap` (the
- * step's own events, fields as the step reports them); `data_step` (outcome, action, root, status, detail);
+ * Events (sentinel log, no URL): `data_step_install`; `data_check` (carries `data_version` and `manifest_sha256`: the data found), `data_fetch`,
+ * `data_extract`, `data_swap`, `data_version` (the data a fetch placed) (the step's own events, fields as the step reports them); `data_step` (outcome, action, root, status, detail);
  * `data_present` (result token of the toast, looper_prepared; "requested" means Toast.show() returned, not that it
  * drew); `data_probe`.
  *
- * Debug probe (ADR 0011 measurements 1 and 2): a file `nevr-data-probe` in the media data root whose first line is
- * `toast <text>` (show the text as the floor does and log how far it got) or `block <seconds>` (hold the android_main
- * thread, at most 900 s). It is read and renamed to `nevr-data-probe.done` the first time AfterStorage runs with Storage
+ * Debug probe (ADR 0011 measurements 1 and 2, ADR 0013 #829): a file `nevr-data-probe` in the media data root whose first
+ * line (probe_command.h) is `toast <text>` (show the text as the floor does and log how far it got), `ui-toast <text>` (the
+ * same text through a Toast whose handler runs on the main looper, toast::ShowOnMainLooper), `ui-post <text>` (the same text
+ * queued to the UI thread's native looper, toast::ShowOnUiThread; the Toast's own result is a later `ui_post` line), `dialog <text>` (a dialog; no
+ * presenter exists, so the line says `no_presenter`) or `block <seconds>` (hold the android_main thread, at most 900 s). The
+ * `ui-toast`, `ui-post` and `dialog` kinds log one `data_probe` line with the presenter's result, the thread id, whether it was the
+ * process's main thread and whether a looper was prepared. It is read and renamed to `nevr-data-probe.done` the first time AfterStorage runs with Storage
  * granted, so a probe acts for one launch. It is for the maintainers' headset runs and exists only in development
  * builds (Options::probe_enabled, set from nevr_build::kIsDev); no config key and no shipped file creates it.
  *
@@ -65,6 +73,9 @@ using AppFn = void* (*)() noexcept;
 // What the step touches. Production leaves everything but `show` at its default (null / empty).
 struct Options {
   ShowFn show = nullptr;                       // required for a visible message; null: the message is only logged
+  ShowFn show_ui = nullptr;                    // probe kind `ui-toast`: a Toast on the main looper; null: logged as no_presenter
+  ShowFn show_post = nullptr;                  // probe kind `ui-post`: a call queued to the UI thread's looper; null: no_presenter
+  ShowFn show_dialog = nullptr;                // probe kind `dialog`; null: logged as no_presenter
   AppFn app = nullptr;                         // the android_app; null: process_end::CurrentApp
   data_root::ExistsFn exists = nullptr;        // null: obb_skip::PathExists (directories and non-empty files)
   data::Transport* transport = nullptr;        // null: a CurlTransport with the pinned roots (data_host_roots.h)

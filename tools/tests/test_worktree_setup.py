@@ -1,22 +1,42 @@
 """tools/worktree-setup.sh on a throwaway main checkout and worktree: it never touches the real repo."""
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import shutil
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
+from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools/worktree-setup.sh"
+SEEDER = REPO / "tools/seed_build_tree.py"
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+sys.path.insert(0, str(REPO / "tools"))
+from gitenv import clean_env, git  # noqa: E402
+from test_proto_stamp import FAKE_BUF  # noqa: E402
+import proto_stamp  # noqa: E402
 SECRET = "NEVR_API_KEY=do-not-print-me"
 DEFAULTS = "NEVR_SOCKET_URI=wss://example.invalid/nevr\n"
+# The real pin and a different one, so a test can make the copied gen/ stale by editing the worktree's justfile.
+PIN = "259a506a3e1b490ba3482e24e92ba4db"
+NEW_PIN = "0123456789abcdef0123456789abcdef"
+# The files a fixture needs so that gen/ can be a stamped, current output (tools/proto_stamp.py reads the pin from the justfile).
+GEN_INPUTS = ("justfile", "buf.gen.yaml", "tools/proto_stamp.py")
 
 
-def git(cwd, *args):
-    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(cwd), *args],
-                   check=True, capture_output=True)
+def copy_gen_inputs(main):
+    for rel in GEN_INPUTS:
+        shutil.copy(REPO / rel, main / rel)
+
+
+def stamp_gen(root):
+    """Record the fixture's cpp/x.pb.cc as the generator's output for the justfile's pin, as a real generate would."""
+    proto_stamp.record_existing(root, ["cpp/x.pb.cc"])
 
 
 class WorktreeSetupTest(unittest.TestCase):
@@ -26,8 +46,16 @@ class WorktreeSetupTest(unittest.TestCase):
         self.main = self.tmp / "main"
         (self.main / "tools").mkdir(parents=True)
         shutil.copy(SCRIPT, self.main / "tools/worktree-setup.sh")
+        shutil.copy(SEEDER, self.main / "tools/seed_build_tree.py")
+        (self.main / "src").mkdir()
+        (self.main / "src/in.txt").write_text("input\n")
+        copy_gen_inputs(self.main)
         git(self.main, "init", "-q")
-        git(self.main, "add", "tools/worktree-setup.sh")
+        git(self.main, "add", "tools/worktree-setup.sh", "tools/seed_build_tree.py", "src/in.txt", *GEN_INPUTS)
+        # The seeder appends to a log under XDG_STATE_HOME: keep a test run out of the real one.
+        patcher = mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(self.tmp / "state")})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         git(self.main, "commit", "-q", "-m", "init", "--no-gpg-sign")
         # The inputs a build needs, untracked like the real submodules/gen in a worktree (and a .env the build ignores).
         for name in ("minhook", "breakpad", "lss"):
@@ -37,6 +65,7 @@ class WorktreeSetupTest(unittest.TestCase):
             (d / ".git").write_text("gitdir: elsewhere\n")
         (self.main / "gen/cpp").mkdir(parents=True)
         (self.main / "gen/cpp/x.pb.cc").write_text("// generated\n")
+        stamp_gen(self.main)
         (self.main / ".env").write_text(SECRET + "\n")
         (self.main / "config").mkdir()
         (self.main / "config/public-defaults.env").write_text(DEFAULTS)
@@ -61,6 +90,63 @@ class WorktreeSetupTest(unittest.TestCase):
         self.assertFalse((self.wt / ".env").exists(), ".env is runtime-only and is never copied into a worktree")
         after = sorted(str(p.relative_to(self.main)) for p in self.main.rglob("*") if ".git/" not in str(p))
         self.assertEqual(before, after, "the main checkout changed")
+
+    def build_main_tree(self, preset):
+        build = self.main / "build" / preset
+        build.mkdir(parents=True)
+        (build / "CMakeCache.txt").write_text(
+            f"CMAKE_HOME_DIRECTORY:INTERNAL={self.main}\nCMAKE_CACHEFILE_DIR:INTERNAL={build}\n")
+        commit = git(self.main, "rev-parse", "HEAD").stdout.strip()
+        # The compile commands of the real tree carry the commit (root CMakeLists.txt); the seeder reads it from here.
+        (build / "build.ninja").write_text(
+            f"rule cp\n  command = cp $in $out # -DNEVR_GIT_COMMIT_FULL=\\\"{commit}\\\"\nbuild out.txt: cp {self.main}/src/in.txt\n")
+        subprocess.run(["ninja", "-C", str(build)], check=True, capture_output=True)
+        time.sleep(0.05)
+        return build
+
+    def test_a_main_checkout_without_a_build_tree_is_not_seeded_and_says_why(self):
+        result = self.run_script(self.wt)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("not seeded", result.stderr)
+        self.assertIn("build/mingw-release", result.stderr)
+        self.assertFalse((self.wt / "build/mingw-release").exists())
+
+    def test_a_built_main_checkout_seeds_the_worktree_build_tree(self):
+        self.build_main_tree("mingw-release")
+        result = self.run_script(self.wt)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("seeded build/mingw-release", result.stdout)
+        out = subprocess.run(["ninja", "-C", str(self.wt / "build/mingw-release"), "-n"], check=True,
+                             capture_output=True, text=True).stdout
+        self.assertIn("no work to do", out)
+        again = self.run_script(self.wt)
+        self.assertIn("kept: build/mingw-release already has content", again.stdout)
+
+    def test_the_preset_to_seed_is_the_PRESET_the_justfile_uses(self):
+        self.build_main_tree("mingw-debug")
+        env = dict(os.environ, PRESET="mingw-debug")
+        result = subprocess.run([str(self.wt / "tools/worktree-setup.sh")], cwd=self.wt, capture_output=True, text=True,
+                                env=env, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("seeded build/mingw-debug", result.stdout)
+        self.assertFalse((self.wt / "build/mingw-release").exists())
+
+    def test_a_seeder_failure_fails_the_setup_and_names_the_build_tree(self):
+        self.build_main_tree("mingw-release")
+        blocker = self.tmp / "not-a-directory"
+        blocker.write_text("a file where the log directory would go\n")
+        env = dict(os.environ, XDG_STATE_HOME=str(blocker))
+        result = subprocess.run([str(self.wt / "tools/worktree-setup.sh")], cwd=self.wt, capture_output=True, text=True,
+                                env=env, timeout=60)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("build/mingw-release", result.stderr)
+        self.assertIn("seeding it from the main checkout failed", result.stderr)
+
+    def test_the_public_defaults_keep_the_main_checkouts_mtime(self):
+        old = 1_700_000_000
+        os.utime(self.main / "config/public-defaults.env", (old, old))
+        self.assertEqual(self.run_script(self.wt).returncode, 0)
+        self.assertEqual(int((self.wt / "config/public-defaults.env").stat().st_mtime), old)
 
     def test_the_secret_is_never_printed(self):
         result = self.run_script(self.wt)
@@ -231,9 +317,77 @@ class WorktreeSetupTest(unittest.TestCase):
         for name in ("minhook", "breakpad", "lss"):
             self.assertTrue((self.main / "extern" / name / "CMakeLists.txt").exists(), name)
 
+    def run_setup(self, env=None):
+        return subprocess.run([str(self.wt / "tools/worktree-setup.sh")], cwd=self.wt, capture_output=True, text=True,
+                              env=env, timeout=120)
+
+    def bump_pin(self, pin):
+        justfile = self.wt / "justfile"
+        justfile.write_text(justfile.read_text().replace(PIN, pin))
+
+    def fake_protoc(self, preset="mingw-release"):
+        protoc = self.wt / f"build/{preset}/vcpkg_installed/x64-linux/tools/protobuf/protoc"
+        protoc.parent.mkdir(parents=True)
+        protoc.write_text("#!/bin/sh\nexit 0\n")
+        protoc.chmod(0o755)
+
+    def fake_buf_env(self, files, fail=False):
+        shim = self.tmp / "shim"
+        shim.mkdir(exist_ok=True)
+        (shim / "buf").write_text(FAKE_BUF)
+        (shim / "buf").chmod(0o755)
+        env = dict(os.environ, PATH=f"{shim}{os.pathsep}{os.environ['PATH']}", FAKE_BUF_LOG=str(self.tmp / "buf.log"),
+                   FAKE_BUF_FILES=json.dumps(files), XDG_STATE_HOME=str(self.tmp / "state"))
+        env.pop("FAKE_BUF_FAIL", None)
+        if fail:
+            env["FAKE_BUF_FAIL"] = "1"
+        return env
+
+    def test_a_stamped_gen_whose_file_was_edited_fails_check(self):
+        self.assertEqual(self.run_script(self.wt).returncode, 0)
+        (self.wt / "gen/cpp/x.pb.cc").write_text("edited\n")
+        result = self.run_script(self.wt, "--check")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("gen/cpp/x.pb.cc differs", result.stderr)
+
+    def test_a_gen_without_a_stamp_fails_check_and_names_the_reason(self):
+        self.assertEqual(self.run_script(self.wt).returncode, 0)
+        (self.wt / "gen/.proto-stamp").unlink()
+        result = self.run_script(self.wt, "--check")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no stamp", result.stderr)
+
+    def test_a_stale_gen_is_regenerated_at_the_justfile_pin_with_the_build_trees_protoc(self):
+        self.assertEqual(self.run_script(self.wt).returncode, 0)
+        self.bump_pin(NEW_PIN)
+        self.fake_protoc()
+        result = self.run_setup(self.fake_buf_env({"cpp/x.pb.cc": "regenerated\n"}))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.wt / "gen/cpp/x.pb.cc").read_text(), "regenerated\n")
+        self.assertIn(f"buf.build/echotools/nevr-api:{NEW_PIN}", (self.tmp / "buf.log").read_text())
+        self.assertEqual(self.run_script(self.wt, "--check").returncode, 0)
+
+    def test_without_the_protoc_a_stale_gen_is_named_and_left_alone(self):
+        self.assertEqual(self.run_script(self.wt).returncode, 0)
+        self.bump_pin(NEW_PIN)
+        result = self.run_script(self.wt)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("gen/ is not current", result.stderr)
+        self.assertIn("just configure regenerates it", result.stderr)
+        self.assertEqual((self.wt / "gen/cpp/x.pb.cc").read_text(), "// generated\n")
+        self.assertEqual(self.run_script(self.wt, "--check").returncode, 1)
+
+    def test_a_failed_regeneration_fails_the_setup_and_names_gen(self):
+        self.assertEqual(self.run_script(self.wt).returncode, 0)
+        self.bump_pin(NEW_PIN)
+        self.fake_protoc()
+        result = self.run_setup(self.fake_buf_env({}, fail=True))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("regenerating it at the justfile's pin failed", result.stderr)
+        self.assertEqual((self.wt / "gen/cpp/x.pb.cc").read_text(), "// generated\n")
+
     def gitdir(self):
-        return pathlib.Path(subprocess.check_output(
-            ["git", "-C", str(self.wt), "rev-parse", "--path-format=absolute", "--git-dir"], text=True).strip())
+        return pathlib.Path(git(self.wt, "rev-parse", "--path-format=absolute", "--git-dir").stdout.strip())
 
     def test_scratch_from_a_killed_run_is_removed_and_user_directories_are_never_touched(self):
         scratch = self.wt / ".nevr-worktree-setup/tmp/minhook"
@@ -261,8 +415,7 @@ class WorktreeSetupTest(unittest.TestCase):
 
     def test_a_main_checkout_with_a_separate_git_dir_is_still_refused_under_an_override(self):
         sep = self.tmp / "sepmain"
-        subprocess.run(["git", "clone", "-q", "--separate-git-dir", str(self.tmp / "sep.git"), str(self.main), str(sep)],
-                       check=True, capture_output=True)
+        git(self.tmp, "clone", "-q", "--separate-git-dir", str(self.tmp / "sep.git"), str(self.main), str(sep))
         shutil.copytree(self.main / "extern", sep / "extern", dirs_exist_ok=True)
         (sep / "gen").mkdir()
         (sep / "gen/NOTES").write_text("hand written\n")
@@ -364,8 +517,7 @@ class WorktreeSetupTest(unittest.TestCase):
         self.assertFalse(mine_file.exists())
 
     def test_the_pin_warning_is_only_for_what_this_run_filled(self):
-        subprocess.run(["git", "-C", str(self.wt), "update-index", "--add", "--cacheinfo",
-                        "160000,2222222222222222222222222222222222222222,extern/minhook"], check=True, capture_output=True)
+        git(self.wt, "update-index", "--add", "--cacheinfo", "160000,2222222222222222222222222222222222222222,extern/minhook")
         git(self.wt, "commit", "-q", "-m", "pin", "--no-gpg-sign")
         (self.main / "extern/minhook/.git").unlink()
         first = self.run_script(self.wt)
@@ -391,7 +543,7 @@ class WorktreeSetupTest(unittest.TestCase):
         result = self.run_script(self.wt, "--check")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("extern/minhook", result.stderr)
-        self.assertIn("gen/cpp", result.stderr)
+        self.assertIn("no stamp", result.stderr)
 
     def test_a_copy_of_the_script_below_the_worktree_root_is_refused(self):
         (self.wt / "sub/tools").mkdir(parents=True)
@@ -404,11 +556,9 @@ class WorktreeSetupTest(unittest.TestCase):
 
     def test_a_branch_that_pins_other_submodule_commits_gets_a_warning(self):
         gitlink = "160000 commit 1111111111111111111111111111111111111111\textern/minhook\n"
-        subprocess.run(["git", "-C", str(self.main), "update-index", "--add", "--cacheinfo",
-                        "160000,1111111111111111111111111111111111111111,extern/minhook"], check=True, capture_output=True)
+        git(self.main, "update-index", "--add", "--cacheinfo", "160000,1111111111111111111111111111111111111111,extern/minhook")
         git(self.main, "commit", "-q", "-m", "pin", "--no-gpg-sign")
-        subprocess.run(["git", "-C", str(self.wt), "update-index", "--add", "--cacheinfo",
-                        "160000,2222222222222222222222222222222222222222,extern/minhook"], check=True, capture_output=True)
+        git(self.wt, "update-index", "--add", "--cacheinfo", "160000,2222222222222222222222222222222222222222,extern/minhook")
         git(self.wt, "commit", "-q", "-m", "other pin", "--no-gpg-sign")
         (self.main / "extern/minhook/.git").unlink()  # let git see the main checkout's own HEAD, as a real submodule has one
         result = self.run_script(self.wt)
@@ -422,7 +572,7 @@ class WorktreeSetupTest(unittest.TestCase):
         result = self.run_script(self.wt, "--check")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("extern/minhook", result.stderr)
-        self.assertIn("gen/cpp", result.stderr)
+        self.assertIn("no stamp", result.stderr)
 
     def test_gen_keeps_the_main_checkouts_mode(self):
         (self.main / "gen").chmod(0o755)
@@ -432,8 +582,7 @@ class WorktreeSetupTest(unittest.TestCase):
     def test_a_bare_layout_needs_the_override_then_works(self):
         bare = self.tmp / "proj"
         bare.mkdir()
-        subprocess.run(["git", "clone", "-q", "--bare", str(self.main), str(bare / ".bare")], check=True,
-                       capture_output=True)
+        git(self.tmp, "clone", "-q", "--bare", str(self.main), str(bare / ".bare"))
         wt = bare / "wt"
         git(bare / ".bare", "worktree", "add", "-q", "--no-track", "-b", "b", str(wt))
         for name in ("minhook", "breakpad", "lss"):
@@ -453,6 +602,8 @@ class WorktreeSetupTest(unittest.TestCase):
         (self.wt / "gen/cpp").mkdir(parents=True)
         self.assertEqual(self.run_script(self.wt, "--check").returncode, 1)  # gen/cpp holds no file
         (self.wt / "gen/cpp/g.pb.cc").write_text("g\n")
+        self.assertEqual(self.run_script(self.wt, "--check").returncode, 1)  # an unstamped gen/ file is not an output
+        proto_stamp.record_existing(self.wt, ["cpp/g.pb.cc"])
         self.assertEqual(self.run_script(self.wt, "--check").returncode, 0)  # breakpad and lss still empty
         shutil.rmtree(self.wt / "extern/minhook")
         (self.wt / "extern/minhook").mkdir()
@@ -476,7 +627,7 @@ class WorktreeSetupTest(unittest.TestCase):
 class WorktreeSetupLuauTest(unittest.TestCase):
     """extern/luau is a submodule the main checkout may not have initialised: setup fills it either way (#893)."""
 
-    ENV = dict(os.environ, GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="protocol.file.allow", GIT_CONFIG_VALUE_0="always")
+    ENV = dict(clean_env(), GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="protocol.file.allow", GIT_CONFIG_VALUE_0="always")
 
     def setUp(self):
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="worktree-setup-luau-test-", dir="/var/tmp"))
@@ -490,12 +641,12 @@ class WorktreeSetupLuauTest(unittest.TestCase):
         self.main = self.tmp / "main"
         (self.main / "tools").mkdir(parents=True)
         shutil.copy(SCRIPT, self.main / "tools/worktree-setup.sh")
+        shutil.copy(SEEDER, self.main / "tools/seed_build_tree.py")
+        copy_gen_inputs(self.main)
         git(self.main, "init", "-q")
-        git(self.main, "add", "tools/worktree-setup.sh")
+        git(self.main, "add", "tools/worktree-setup.sh", "tools/seed_build_tree.py", *GEN_INPUTS)
         git(self.main, "commit", "-q", "-m", "init", "--no-gpg-sign")
-        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(self.main),
-                        "submodule", "add", "-q", str(self.upstream), "extern/luau"],
-                       check=True, capture_output=True, env=self.ENV)
+        git(self.main, "submodule", "add", "-q", str(self.upstream), "extern/luau", env=self.ENV)
         git(self.main, "commit", "-q", "-m", "pin luau", "--no-gpg-sign")
         for name in ("minhook", "breakpad", "lss"):
             d = self.main / "extern" / name
@@ -503,6 +654,7 @@ class WorktreeSetupLuauTest(unittest.TestCase):
             (d / "CMakeLists.txt").write_text(f"# {name}\n")
         (self.main / "gen/cpp").mkdir(parents=True)
         (self.main / "gen/cpp/x.pb.cc").write_text("// generated\n")
+        stamp_gen(self.main)
         (self.main / "config").mkdir()
         (self.main / "config/public-defaults.env").write_text(DEFAULTS)
         self.wt = self.tmp / "wt"
@@ -512,7 +664,7 @@ class WorktreeSetupLuauTest(unittest.TestCase):
 
     def run_script(self):
         return subprocess.run([str(self.wt / "tools/worktree-setup.sh")], cwd=self.wt, capture_output=True, text=True,
-                              timeout=120, env=self.ENV)
+                              timeout=120, env=dict(self.ENV, XDG_STATE_HOME=str(self.tmp / "state")))
 
     def test_luau_is_copied_from_a_main_checkout_that_has_it(self):
         self.assertTrue((self.main / "extern/luau/VM/src/lapi.cpp").exists(), "the fixture's main has luau")
@@ -550,7 +702,7 @@ class WorktreeSetupLuauTest(unittest.TestCase):
 
     def test_a_branch_that_does_not_pin_luau_gets_none(self):
         git(self.wt, "reset", "-q", "--hard", "HEAD~1")
-        pinned = subprocess.run(["git", "-C", str(self.wt), "ls-tree", "HEAD", "extern/luau"], capture_output=True, text=True)
+        pinned = git(self.wt, "ls-tree", "HEAD", "extern/luau")
         self.assertEqual(pinned.stdout.strip(), "", "the branch pins no luau")
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

@@ -10,11 +10,13 @@
 
 namespace nevr_cfg {
 
-std::string FlatKeyToYamlPath(const std::string& flatKey) {
-  // The cutover map. Left column = the exact key the game-JSON readers used;
-  // right column = the config.yaml dotted path that now owns it. A flat key
-  // ABSENT from this table is NOT migrated in S3 (caller keeps its old source):
-  // in particular nevr_http_uri (RedirectServiceUrl's https branch) is S4/S5.
+namespace {
+
+// The cutover map. Left column = the exact key the game-JSON readers used;
+// right column = the config.yaml dotted path that now owns it. A flat key
+// ABSENT from this table is NOT migrated in S3 (caller keeps its old source):
+// in particular nevr_http_uri (RedirectServiceUrl's https branch) is S4/S5.
+const std::unordered_map<std::string, std::string>& FlatKeyMap() {
   static const std::unordered_map<std::string, std::string> kMap = {
       // services — endpoint redirects (config.cpp GetServiceHostWithFallback /
       // HttpConnectHook / RedirectServiceUrl)
@@ -89,8 +91,21 @@ std::string FlatKeyToYamlPath(const std::string& flatKey) {
       // for a deprecated flag: it rides the schema's x- extension namespace.
       {"exitonerror", "x-exitonerror"},
   };
+  return kMap;
+}
+
+}  // namespace
+
+std::string FlatKeyToYamlPath(const std::string& flatKey) {
+  const auto& kMap = FlatKeyMap();
   const auto it = kMap.find(flatKey);
   return it == kMap.end() ? std::string() : it->second;
+}
+
+std::vector<std::string> MigratedYamlPaths() {
+  std::vector<std::string> paths;
+  for (const auto& entry : FlatKeyMap()) paths.push_back(entry.second);
+  return paths;
 }
 
 std::optional<std::string> LookupFlat(const nevr::NevrConfig& cfg, const std::string& flatKey) {
@@ -106,10 +121,9 @@ std::optional<std::string> LookupFlat(const nevr::NevrConfig& cfg, const std::st
   return value;
 }
 
-FlatDefaults SelectBuiltinDefaults(bool serverMode, const EmbeddedDefault* entries, std::size_t count,
+FlatDefaults SelectBuiltinDefaults(const EmbeddedDefault* entries, std::size_t count,
                                    std::string* embeddedNames, std::string* missingNames) {
   FlatDefaults defaults;
-  if (serverMode) return defaults;
   for (std::size_t i = 0; i < count; ++i) {
     const bool embedded = entries[i].value != nullptr && entries[i].value[0] != '\0';
     std::string* list = embedded ? embeddedNames : missingNames;

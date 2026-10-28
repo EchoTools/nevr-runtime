@@ -35,6 +35,7 @@ inline constexpr FlagSpec kFlags[] = {
     {L"-timestamps", nullptr},
     {L"-upnp", nullptr},
     {L"-timestep", nullptr},
+    {L"-require-signed-plugins", nullptr},
     // The game's own tokens that NEVR reads as well (it registers them so the game's parser accepts them).
     {L"-region", nullptr},
     {L"-serverregion", nullptr},
@@ -49,7 +50,6 @@ inline constexpr FlagSpec kFlags[] = {
     {L"-telemetry-rate", L"-telemetryrate"},
     {L"-telemetry-diag", L"-telemetrydiag"},
     {L"-trace-exports", L"-traceexports"},
-    {L"-skip-dbgcore-check", L"-allow-dbgcore"},
 };
 
 inline constexpr std::size_t kFlagCount = sizeof(kFlags) / sizeof(kFlags[0]);

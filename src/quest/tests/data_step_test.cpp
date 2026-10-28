@@ -533,6 +533,76 @@ TEST(WithoutAllowFetchAnInterruptedInstallIsNotRecovered) {
   CHECK(!Exists(g_legacy_dir + "/_data"));
 }
 
+TEST(TheDataCheckNamesTheVersionFolderAndTheManifestHashOfTheDataItFound) {
+  // The root holds the pinned manifest id under another version folder: the line names that folder, not the pin.
+  Rig rig;
+  const std::string other = "_data/7777777777/rad15/android/manifests/48037dc70b0ecab2";
+  rig.present = {Media(), Media("_data"), Media(other)};
+  rig.config.list_dir = [](const std::string& dir) {
+    return dir == Media("_data") ? std::vector<std::string>{"7777777777"} : std::vector<std::string>{};
+  };
+  rig.config.read_file = [&](const std::string& path, std::string& bytes) {
+    if (path != Media(other)) return false;
+    bytes = "another build's manifest";
+    return true;
+  };
+  rig.config.allow_fetch = false;
+  OneShotTransport net(rig.zip, true);
+  RunDataStep(rig.config, net);
+  CHECK(!rig.events.empty());
+  CHECK(Contains(rig.events[0], "data_version=7777777777"));
+  CHECK(!Contains(rig.events[0], "data_version=5932408047"));
+  const std::string bytes = "another build's manifest";
+  CHECK(Contains(rig.events[0], "manifest_sha256=" + Sha256Hex(bytes.data(), bytes.size())));
+}
+
+TEST(TheDataCheckNamesThePinnedFolderAndItsManifestHashWhenThatIsWhatIsThere) {
+  Rig rig;
+  rig.present = {Media(), Media("_data"), Media(kManifestRel)};
+  rig.config.list_dir = [](const std::string& dir) {
+    return dir == Media("_data") ? std::vector<std::string>{"5932408047"} : std::vector<std::string>{};
+  };
+  rig.config.read_file = [](const std::string&, std::string& bytes) {
+    bytes = "pinned manifest";
+    return true;
+  };
+  OneShotTransport net(rig.zip, true);
+  RunDataStep(rig.config, net);
+  const std::string bytes = "pinned manifest";
+  CHECK(Contains(rig.events[0], "action=use"));
+  CHECK(Contains(rig.events[0], "data_version=5932408047 manifest_sha256=" + Sha256Hex(bytes.data(), bytes.size())));
+}
+
+TEST(TheDataCheckSaysNoneWhenThereIsNoDataAndHashesNothing) {
+  Rig rig;
+  OneShotTransport net(rig.zip, false);
+  RunDataStep(rig.config, net);
+  CHECK(Contains(rig.events[0], "data_version=none manifest_sha256=none"));
+}
+
+TEST(AFolderNameThatIsNotPlainIsNotLogged) {
+  Rig rig;
+  rig.present = {Media(), Media("_data")};
+  rig.config.list_dir = [](const std::string&) { return std::vector<std::string>{"a b forged=1", "x/y"}; };
+  rig.config.allow_fetch = false;
+  OneShotTransport net(rig.zip, true);
+  RunDataStep(rig.config, net);
+  CHECK(Contains(rig.events[0], "data_version=none manifest_sha256=none"));
+  CHECK(!Contains(rig.events[0], "forged"));
+}
+
+TEST(AFetchLogsTheVersionAndManifestHashOfTheDataItPlaced) {
+  Rig rig;
+  rig.present = {rig.Root() + "/" + kManifestRel};  // the fake `exists` must see what the fetch extracts; the decision only asks about the media and legacy roots
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CHECK_EQ(r.outcome, StepOutcome::kFetched);
+  CHECK_EQ(rig.events.size(), static_cast<std::size_t>(2));
+  const std::string manifest = Pattern(20000);
+  CHECK(Contains(rig.events[1], "data_version root=" + rig.Root()));
+  CHECK(Contains(rig.events[1], "data_version=5932408047 manifest_sha256=" + Sha256Hex(manifest.data(), manifest.size())));
+}
+
 TEST(TheMissingOutcomeHasAName) {
   CHECK_EQ(std::string(StepOutcomeName(StepOutcome::kMissing)), std::string("missing"));
 }

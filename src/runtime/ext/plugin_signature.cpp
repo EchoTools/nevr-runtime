@@ -930,10 +930,14 @@ std::string ChainStatusNames(uint32_t status) {
 }
 
 namespace {
-std::atomic<bool> g_throwInVerify{false};
+#if defined(NEVR_HOST_TESTING)
+std::atomic<bool> g_throwInVerifyForTest{false};
+#endif
 
 Verdict VerifyImpl(HANDLE file, const Policy& policy, int64_t nowUnix) {
-  if (g_throwInVerify.load()) throw std::bad_alloc();
+#if defined(NEVR_HOST_TESTING)
+  if (g_throwInVerifyForTest.load()) throw std::bad_alloc();
+#endif
   Bytes data;
   std::string error;
   if (!ReadWholeFile(file, &data, &error)) return Refuse(Reason::Unreadable, error);
@@ -1152,6 +1156,8 @@ bool ListDependencies(HANDLE file, Dependencies* out, std::string* error) {
   }
 }
 
-void TestHook_ThrowInVerify(bool enable) { g_throwInVerify.store(enable); }
+#if defined(NEVR_HOST_TESTING)
+void TestHook_ThrowInVerify(bool enable) { g_throwInVerifyForTest.store(enable); }
+#endif
 
 }  // namespace nevr_plugin_signature

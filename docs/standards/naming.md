@@ -45,6 +45,7 @@ One family, three cases:
 | DLL export | `NEVR_<Verb><Noun>` |
 | Published C ABI (new interface) | `Nevr*` types and functions, `NEVR_*` macros; never `Nvr*` |
 | Flat config key | `nevr_<snake_case>` |
+| Runtime DLL file | `nevr-runtime.dll` (the file `nevr_host::ResolveRuntimePath` names, `kRuntimeFileName` in `src/runtime/host/runtime_load.cpp`; the file name is hyphenated, a CMake target is still `nevr_<name>`; `tools/tests/test_runtime_dll_name.py` forbids the one-word spelling) |
 | Git branch | use the branch format in `AGENTS.md` under "Branch lifecycle" |
 | Markdown document | kebab-case file name (`docs/standards/naming.md`, `docs/reference/client-exit-path.md`); a date prefix is `YYYY-MM-DD-` (`docs/design/2026-10-01-social-scenario-harness.md`); an ADR is `NNNN-<kebab-case>.md` |
 
@@ -89,8 +90,10 @@ separate namespace is an open ABI decision, issue #130.
   `Hooking::Attach` and `Hooking::Initialize` through the compat header) and `EchoVR::Symbols` with its
   nested `Social` and `Tcp` (`src/abi/symbols.h`, named after the game's symbol tables).
 - `PROJECT_VERSION`, `GIT_COMMIT_HASH` and `USE_MINHOOK` as macro names: only the frozen `src/legacy` reads
-  them; the root `CMakeLists.txt` defines them for those two targets, and every other target defines
-  `NEVR_PROJECT_VERSION`, `NEVR_GIT_COMMIT_HASH` and `NEVR_USE_MINHOOK`.
+  them; the root `CMakeLists.txt` defines them for the two files that read them, and every other file that reads
+  the build identity gets `NEVR_PROJECT_VERSION`, `NEVR_GIT_COMMIT_HASH`, `NEVR_GIT_COMMIT_FULL` or `NEVR_GIT_DESCRIBE`
+  from `nevr_build_identity_define` (`cmake/nevr_build_identity.cmake`), per source file; `NEVR_USE_MINHOOK` is a
+  target definition.
 - `NEVRProtobufJSONMessageV1` (`src/abi/symbols.h`): its spelling is fixed by the hashed protocol string.
 - `NevrCfg*` functions are global, not in `namespace nevr`; `NevrConfig` and `NevrConfigError` are in it.
 

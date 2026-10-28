@@ -16,6 +16,8 @@
 #include "telemetry/v2/echo_arena.pb.h"
 #include "runtime/log/url_diagnostics.h"
 #include "runtime/log/security_diagnostics.h"
+#include "runtime/server/telemetry_game_status.h"
+#include "runtime/server/telemetry_game_type.h"
 
 extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 
@@ -99,7 +101,7 @@ bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token
   return true;
 }
 
-void TelemetryStreamer::Start(const std::string& sessionId, uint32_t rateHz, bool isPrivateMatch) {
+void TelemetryStreamer::Start(const std::string& sessionId, uint32_t rateHz, const std::string& gameType) {
   std::lock_guard<std::mutex> lifecycleLock(m_lifecycleMutex);
   if (m_active.load(std::memory_order_relaxed) || m_thread.joinable()) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.TELEMETRY] Already streaming, stopping previous session");
@@ -108,7 +110,7 @@ void TelemetryStreamer::Start(const std::string& sessionId, uint32_t rateHz, boo
 
   m_sessionId = sessionId;
   m_rateHz = rateHz > 0 ? rateHz : 30;
-  m_isPrivateMatch = isPrivateMatch;
+  m_gameType = gameType;
   m_frameIndex = 0;
   m_sessionStartTime = std::chrono::steady_clock::now();
   m_lastSnapshotTime = m_sessionStartTime;
@@ -276,25 +278,16 @@ void TelemetryStreamer::RunDiagnostics() {
       entityMgr, (unsigned)nevr_game_offsets::ENTITY_MANAGER_OFFSET);
 
   // --- Game function calls ---
-  if (m_getSymbolHash) {
-    uint64_t statusHash = m_getSymbolHash(netGame, nevr_property_hash::GAME_STATUS);
-    int32_t statusEnum = MapGameStatus(statusHash);
-    Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] GameStatus: hash=0x%016llX → enum=%d",
-        (unsigned long long)statusHash, statusEnum);
-  } else {
+  if (!m_getSymbolHash) {
     Log(EchoVR::LogLevel::Warning, "[TELEMETRY.DIAG] GetSymbolHash fn not resolved");
   }
-
-  if (m_getFloatProperty) {
-    float clock = m_getFloatProperty(netGame, nevr_property_hash::GAME_CLOCK);
-    Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] GameClock: %.2f", clock);
-  }
-
-  if (m_getIntProperty && gsd) {
-    int32_t blue = m_getIntProperty(gsd, nevr_property_hash::BLUE_POINTS);
-    int32_t orange = m_getIntProperty(gsd, nevr_property_hash::ORANGE_POINTS);
-    Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] Scores: blue=%d, orange=%d", blue, orange);
-  }
+  const GameProperties props =
+      ReadGameProperties({m_getSymbolHash, m_getFloatProperty, m_getIntProperty}, netGame);
+  Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] GameStatus: hash=0x%016llX → enum=%d",
+      (unsigned long long)props.statusHash, MapGameStatus(props.statusHash));
+  Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] GameClock: %.2f", props.clock);
+  Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] Scores: blue=%d, orange=%d", props.bluePoints,
+      props.orangePoints);
 
   // --- Player count ---
   uint16_t playerCount = *reinterpret_cast<uint16_t*>(ngBase + nevr_game_offsets::PLAYER_COUNT_OFFSET);
@@ -497,16 +490,12 @@ void TelemetryStreamer::SnapshotGameState(TelemetrySnapshot* snap) {
   CHAR* gsdBase = reinterpret_cast<CHAR*>(m_gameStateData);
 
   // --- Game function calls (game thread only) ---
-  if (m_getSymbolHash) {
-    snap->gameStatusHash = m_getSymbolHash(m_netGame, nevr_property_hash::GAME_STATUS);
-  }
-  if (m_getFloatProperty) {
-    snap->gameClock = m_getFloatProperty(m_netGame, nevr_property_hash::GAME_CLOCK);
-  }
-  if (m_getIntProperty && m_gameStateData) {
-    snap->bluePoints = m_getIntProperty(m_gameStateData, nevr_property_hash::BLUE_POINTS);
-    snap->orangePoints = m_getIntProperty(m_gameStateData, nevr_property_hash::ORANGE_POINTS);
-  }
+  const GameProperties props =
+      ReadGameProperties({m_getSymbolHash, m_getFloatProperty, m_getIntProperty}, m_netGame);
+  snap->gameStatusHash = props.statusHash;
+  snap->gameClock = props.clock;
+  snap->bluePoints = props.bluePoints;
+  snap->orangePoints = props.orangePoints;
 
   // --- Direct memory reads ---
 
@@ -765,40 +754,7 @@ void TelemetryStreamer::Run() {
 // ============================================================================
 
 int32_t TelemetryStreamer::MapGameStatus(uint64_t hash) {
-  using namespace nevr_game_status_hash;
-  switch (hash) {
-    case PRE_MATCH_1:
-    case PRE_MATCH_2:
-    case PRE_MATCH_3:
-      return static_cast<int32_t>(telemetry::v2::GAME_STATUS_PRE_MATCH);
-    case ROUND_START_1:
-    case ROUND_START_2:
-    case ROUND_START_3:
-      return static_cast<int32_t>(telemetry::v2::GAME_STATUS_ROUND_START);
-    case PLAYING_1:
-    case PLAYING_2:
-      return static_cast<int32_t>(telemetry::v2::GAME_STATUS_PLAYING);
-    case SCORE_1:
-    case SCORE_2:
-      return static_cast<int32_t>(telemetry::v2::GAME_STATUS_SCORE);
-    case ROUND_OVER_1:
-    case ROUND_OVER_2:
-      return static_cast<int32_t>(telemetry::v2::GAME_STATUS_ROUND_OVER);
-    case POST_MATCH_1:
-    case POST_MATCH_2:
-      return static_cast<int32_t>(telemetry::v2::GAME_STATUS_POST_MATCH);
-    case PRE_SUDDEN_DEATH_1:
-    case PRE_SUDDEN_DEATH_2:
-      return static_cast<int32_t>(telemetry::v2::GAME_STATUS_PRE_SUDDEN_DEATH);
-    case SUDDEN_DEATH_1:
-    case SUDDEN_DEATH_2:
-      return static_cast<int32_t>(telemetry::v2::GAME_STATUS_SUDDEN_DEATH);
-    case POST_SUDDEN_DEATH_1:
-    case POST_SUDDEN_DEATH_2:
-      return static_cast<int32_t>(telemetry::v2::GAME_STATUS_POST_SUDDEN_DEATH);
-    default:
-      return static_cast<int32_t>(telemetry::v2::GAME_STATUS_UNSPECIFIED);
-  }
+  return static_cast<int32_t>(GameStatusFromSymbol(hash));
 }
 
 void TelemetryStreamer::BuildAndSendFrame(const TelemetrySnapshot& snap) {
@@ -1109,13 +1065,11 @@ bool TelemetryStreamer::SendHeaderWithSnapshot(const TelemetrySnapshot& snap) {
   ts->set_seconds(secs.count());
   ts->set_nanos(static_cast<int32_t>(nanos.count()));
 
+  // The engine's game-type symbol for the session, from the settings JSON (#996).
+  nevr_telemetry_header::SetCaptureGameType(header, m_gameType);
   auto* ah = header->mutable_echo_arena();
   ah->set_session_id(m_sessionId);
   ah->set_client_name("nevr-runtime");
-  ah->set_private_match(m_isPrivateMatch);
-  ah->set_match_type(m_isPrivateMatch
-      ? telemetry::v2::MATCH_TYPE_PRIVATE
-      : telemetry::v2::MATCH_TYPE_ARENA);
   ah->set_map_name("mpl_arena_a");
   ah->set_total_round_count(3);
 

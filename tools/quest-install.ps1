@@ -9,7 +9,7 @@ param(
     [string]$Adb,
     [switch]$Yes,
     [switch]$NoPause,
-    [string]$DataUrl = 'https://mia.cdn.echo.taxi/_data.zip',
+    [string]$DataUrl = 'https://evr.echo.taxi/nevr-runtime/data/echovr-data-fc2eedeacc50.zip',
     [string]$DataSha256 = 'fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c'
 )
 

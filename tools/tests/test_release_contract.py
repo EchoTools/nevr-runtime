@@ -6,11 +6,14 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "tools"))
+import work_root  # noqa: E402
 
 
 class ReleaseContractTest(unittest.TestCase):
@@ -45,6 +48,7 @@ class ReleaseContractTest(unittest.TestCase):
             "test_session_unregister",
             "test_mic_lifecycle",
             "test_telemetry_snapshot_store",
+            "test_telemetry_game_properties",
         )
         for target in targets:
             self.assertIn(f"--target {target}", recipe)
@@ -202,6 +206,7 @@ class ReleaseContractTest(unittest.TestCase):
 
     def test_distribution_targets_build_required_runtime_and_validate_packages(self):
         cmake = (REPO / "CMakeLists.txt").read_text()
+        self.assertIn("add_dependencies(dist-prepare nevr_host)", cmake)
         self.assertIn("add_dependencies(dist-prepare nevr_runtime)", cmake)
         self.assertIn("add_dependencies(dist-prepare echovr_server)", cmake)
         self.assertIn("find_program(MINGW_STRIP_TOOL NAMES x86_64-w64-mingw32-strip llvm-strip strip)", cmake)
@@ -215,6 +220,7 @@ class ReleaseContractTest(unittest.TestCase):
                         post_build.index('COMMAND ${CMAKE_COMMAND} -E echo "Distribution packages'))
         validator = (REPO / "cmake/VerifyDistribution.cmake").read_text()
         self.assertIn("echovr_server.exe", validator)
+        self.assertIn("ITEMS BugSplat64.dll nevr-runtime.dll echovr_server.exe", validator)
         distribution = cmake.split("# Distribution Package Target", 1)[1].split("# Legacy Distribution Package Target", 1)[0]
         executable_lines = re.sub(r"(?m)^\s*#.*$", "", distribution)
         self.assertNotRegex(executable_lines, r"\|\|\s*(true|\$\{CMAKE_COMMAND\}\s+-E\s+true)")
@@ -306,7 +312,7 @@ class ReleaseContractTest(unittest.TestCase):
     def test_docs_describe_static_modules_and_cmake_minimum(self):
         readme = (REPO / "README.md").read_text()
         agents = (REPO / "AGENTS.md").read_text()
-        self.assertRegex(readme, r"statically linked into\s+`BugSplat64\.dll`")
+        self.assertRegex(readme, r"statically linked into\s+`nevr-runtime\.dll`")
         self.assertNotIn("`platform_compat.dll`", readme)
         self.assertNotIn("`token_auth.dll`", readme)
         self.assertIn("CMake 4.0+", readme)
@@ -335,19 +341,16 @@ class ReleaseContractTest(unittest.TestCase):
         # #800: DllMain and NEVR_SetGameModule hand the process to the host (runtime/host), which installs
         # the one detour on the game's main wrapper; the runtime's initialize, called from that detour,
         # is the only caller of InitializeGameModule.
-        dllmain = (REPO / "src/runtime/lifecycle/dllmain.cpp").read_text()
+        # #853: the host's DllMain (BugSplat64.dll) does the attach; the runtime's DllMain does nothing at attach.
+        dllmain = (REPO / "src/runtime/host/host_dllmain.cpp").read_text()
+        runtime_dllmain = (REPO / "src/runtime/lifecycle/dllmain.cpp").read_text()
         entry = (REPO / "src/runtime/lifecycle/runtime_entry.cpp").read_text()
         initialize = (REPO / "src/runtime/lifecycle/initialize.cpp").read_text()
         self.assertIn("nevr_host::OnProcessAttach(", dllmain)
-        # The in-process runtime entry the host loads nothing for: a null here passes every other check and makes
-        # every release run the unmodified game.
-        self.assertRegex(
-            dllmain,
-            r"nevr_host::OnProcessAttach\([^;]*&nevr_runtime_entry::GetRuntimeApi\s*\)",
-            "DllMain must pass &nevr_runtime_entry::GetRuntimeApi to OnProcessAttach",
-        )
-        self.assertIn("nevr_host::SetGameModule(hGame)", dllmain)
+        self.assertNotIn("nevr_host::", runtime_dllmain, "the runtime image carries no host entry point")
         self.assertNotIn("InitializeGameModule", dllmain)
+        self.assertNotIn("InitializeGameModule", runtime_dllmain)
+        self.assertIn("nevr_host::SetGameModule(hGame)", dllmain)
         # #804: a process that ends right after a failed attach never reaches a later flush trigger, so DllMain's
         # process-detach hands termination (lpReserved != NULL) to the host, which writes the journal's remainder.
         detach = dllmain.split("case DLL_PROCESS_DETACH:", 1)[1]
@@ -364,8 +367,7 @@ class ReleaseContractTest(unittest.TestCase):
 
 class DistributionArchiveTest(unittest.TestCase):
     def setUp(self):
-        scratch = pathlib.Path("/var/tmp/work-nevr-runtime")
-        scratch.mkdir(parents=True, exist_ok=True)
+        scratch = work_root.test_scratch()
         self.temp = tempfile.TemporaryDirectory(dir=scratch)
         self.root = pathlib.Path(self.temp.name)
         self.validator = REPO / "cmake/VerifyDistribution.cmake"
@@ -374,7 +376,7 @@ class DistributionArchiveTest(unittest.TestCase):
         self.temp.cleanup()
 
     def make_archives(self, directory: pathlib.Path, files: tuple[str, ...] =
-                      ("BugSplat64.dll", "echovr_server.exe"), corrupt_tar: bool = False):
+                      ("BugSplat64.dll", "nevr-runtime.dll", "echovr_server.exe"), corrupt_tar: bool = False):
         payload = directory / "payload"
         payload.mkdir(parents=True)
         for name in files:
@@ -429,16 +431,17 @@ class DistributionArchiveTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_missing_corrupt_and_incomplete_archives_fail_closed_without_upload(self):
-        variants = ("missing-archive", "corrupt-archive", "missing-bugsplat", "missing-launcher")
+        variants = ("missing-archive", "corrupt-archive", "missing-bugsplat", "missing-runtime", "missing-launcher")
         for variant in variants:
             with self.subTest(variant=variant):
                 case = self.root / variant
                 case.mkdir()
                 files = {
-                    "missing-archive": ("BugSplat64.dll", "echovr_server.exe"),
-                    "corrupt-archive": ("BugSplat64.dll", "echovr_server.exe"),
-                    "missing-bugsplat": ("echovr_server.exe",),
-                    "missing-launcher": ("BugSplat64.dll",),
+                    "missing-archive": ("BugSplat64.dll", "nevr-runtime.dll", "echovr_server.exe"),
+                    "corrupt-archive": ("BugSplat64.dll", "nevr-runtime.dll", "echovr_server.exe"),
+                    "missing-bugsplat": ("nevr-runtime.dll", "echovr_server.exe"),
+                    "missing-runtime": ("BugSplat64.dll", "echovr_server.exe"),
+                    "missing-launcher": ("BugSplat64.dll", "nevr-runtime.dll"),
                 }[variant]
                 tar_archive, zip_archive = self.make_archives(
                     case, files, corrupt_tar=variant == "corrupt-archive")

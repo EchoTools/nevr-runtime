@@ -112,6 +112,11 @@ constexpr std::size_t kFriendListSubscribePayloadSize = 0x20;
 // requester up under the platform the LoginRequest carried. OVR_ORG in the game's numbering.
 inline constexpr uint64_t kBridgeLoginPlatform = 4;
 
+// The platform a client the game marks No VR logs in as (DMO in the game's and Nakama's numbering). The same
+// rule holds: it is the provider forced into the CNSUser, and the one the game's provider-prefix detour
+// answers for that nibble.
+inline constexpr uint64_t kNoVrLoginPlatform = 7;
+
 // Little-endian 64-bit integer helpers, shared with compat/legacy_codec.
 uint64_t ReadLE64(const uint8_t* p);
 void AppendLE64(std::string& buffer, uint64_t value);
@@ -193,8 +198,11 @@ std::optional<LoginFailure> ParseLoginFailure(const std::string& frame);
 // the game's own fallback prefix for an unknown provider is "???".
 const char* PlatformPrefix(uint64_t platformCode);
 
-// The platform code the bridge sends. The arguments do not influence the result.
-uint64_t SelectPlatformCode(bool hasUrlCredentials, bool noOvr);
+// The platform code the login carries and the game's CNSUser provider nibble takes: DMO (7) when the game's
+// own No VR login flag is set (`noVr`, nevr_hmd_serial::LoginIsNoVr), else the bridge's OVR_ORG (4). A No VR
+// client is thereby a different session identity (`DMO-<account>`) from the same account's VR client
+// (`OVR-ORG-<account>`). `hasUrlCredentials` does not influence the result.
+uint64_t SelectPlatformCode(bool hasUrlCredentials, bool noVr);
 
 // Which Bearer goes on the remote upgrade. The game front's /nevr ingress forwards the caller's
 // Authorization header unchanged. A token-auth client sends its JWT, which authenticates the session.
@@ -226,10 +234,10 @@ struct ConfigKey {
 
 // The service's string to symbol conversion for a resource name (nakama server/evr ToSymbol), byte for byte: an
 // empty string is 0, an 18-character "0x" + 16 hex digits string is that number, and anything else is the
-// CSymbol64 hash over the bytes as given, upper-case A-Z folded to lower case and every byte taken unsigned (zero
-// extended). It reproduces the service because the service computes the reply symbols; it is not
-// EchoVR::CSymbol64Hash, which differs for "", "0x" + hex and bytes >= 0x80 (issue #657). If the service's hash
-// changes to match the game, this changes in the same release.
+// CSymbol64 hash over the bytes as given, upper-case A-Z folded to lower case and a byte >= 0x80 sign-extended, as
+// the game does. It reproduces the service because the service computes the reply symbols; it is not
+// EchoVR::CSymbol64Hash, which differs for "" and "0x" + hex. If the service's hash changes, this changes in the
+// same release.
 uint64_t ConfigSymbol(std::string_view text);
 
 // The key of a config request payload; nullopt when the payload is not a pad byte (any value, '{' included) and a JSON object whose

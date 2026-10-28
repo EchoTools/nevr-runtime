@@ -37,6 +37,10 @@ namespace nevr_cfg {
 /// caller then keeps that key's old source. This map IS the cutover.
 std::string FlatKeyToYamlPath(const std::string& flatKey);
 
+/// The config.yaml dotted path of every migrated flat key, one per entry of the cutover map (#583). The schema test
+/// checks each against nevr::KnownConfigKeyPaths(), so a key the PC reads cannot be missing from the unknown-key list.
+std::vector<std::string> MigratedYamlPaths();
+
 /// Read a migrated flat key from `cfg`. nullopt when the key is unmapped or the
 /// path is absent; may return an empty string when the key is present-but-empty
 /// (the caller applies the same `[0] != '\0'` check the JSON readers did).
@@ -51,12 +55,11 @@ struct EmbeddedDefault {
   const char* value;
 };
 
-/// The built-in defaults a run may see. Client mode: every entry with a non-empty value, with
-/// `embeddedNames` / `missingNames` (when non-null) receiving the comma-joined key names of the
-/// entries that have / lack a value (names only, never values). Server mode: empty, with both name
-/// lists left untouched, because a dedicated server is configured explicitly and must never start a
-/// bridge or authenticate with an embedded key.
-FlatDefaults SelectBuiltinDefaults(bool serverMode, const EmbeddedDefault* entries, std::size_t count,
+/// The built-in defaults a run may see: every entry with a non-empty value, with `embeddedNames` /
+/// `missingNames` (when non-null) receiving the comma-joined key names of the entries that have /
+/// lack a value (names only, never values). Client and server alike (#843): a key config.yaml leaves
+/// unset takes the default, and a server with no endpoint left is refused by boot.
+FlatDefaults SelectBuiltinDefaults(const EmbeddedDefault* entries, std::size_t count,
                                    std::string* embeddedNames, std::string* missingNames);
 
 /// LookupFlat layered over the embedded defaults. The config.yaml value wins when it is

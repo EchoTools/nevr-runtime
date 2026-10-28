@@ -4,13 +4,13 @@
 # what "already built" means. Sourced, not run.
 #
 #   release_asset_names <X.Y.Z>   prints the two names, one per line (RELEASING.md, "Assets"):
-#     nevr-runtime-vX.Y.Z-windows.zip   the Windows package, sealed (BugSplat64.dll, echovr_server.exe, install.ps1,
+#     nevr-runtime-vX.Y.Z-windows.zip   the Windows package, sealed (BugSplat64.dll, nevr-runtime.dll, echovr_server.exe, install.ps1,
 #                                       uninstall.ps1, quest-diagnose.ps1, README.txt, SIGNING.txt, SHA256SUMS)
 #     nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so   the Quest library (a loose ELF: attested and not
 #                                       signed; declared in the signer's config/sources.yml)
 # There is no top-level SHA256SUMS and no RELEASE-NOTES.md: the notes and a SHA-256 table of both assets are the
 # release's body, written after signing (tools/package_release.py notes). The zip's own SHA256SUMS stays: install.ps1
-# and uninstall.ps1 check BugSplat64.dll against it.
+# and uninstall.ps1 check both DLLs against it.
 # The Quest library's name has ONE source, release_quest_asset_name: build.yml's quest job names its output
 # with it, so the file it uploads is the one this list (and so the published guard) expects.
 # The .tar.zst archives are a workflow artifact and never a release asset.

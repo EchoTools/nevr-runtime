@@ -58,6 +58,12 @@ void HookConfigGetLanguage(ConfigGetTwoCharsFn original, void* config, char* out
 void HookConfigGetCountry(ConfigGetTwoCharsFn original, void* config, char* out) noexcept;
 int HookVrapiInitialize(VrapiInitializeFn original, const OvrInitParms* parms) noexcept;
 int HookVrapiGetSystemPropertyInt(VrapiGetIntFn original, const OvrJava* java, int id) noexcept;
+// The same capture and record, for when another hook owns libr15's vrapi_GetSystemPropertyInt slot and tells this one
+// what the runtime answered (sentinel/sysprop_int_share.h; the texture-quality hook, #943). `java` is an OvrJava*,
+// `result` is the runtime's own answer, before any override.
+void ObserveVrapiGetSystemPropertyInt(const void* java, int id, int result) noexcept;
+// How many queries ObserveVrapiGetSystemPropertyInt has seen.
+std::uint64_t ObservedSysPropIntCalls() noexcept;
 float HookVrapiGetSystemPropertyFloat(VrapiGetFloatFn original, const OvrJava* java, int id) noexcept;
 int HookVrapiGetSystemPropertyFloatArray(VrapiGetFloatArrayFn original, const OvrJava* java, int id, float* values,
                                          int capacity) noexcept;

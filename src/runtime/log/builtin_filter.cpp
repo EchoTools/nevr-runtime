@@ -15,6 +15,7 @@
 #include "runtime/log/builtin_filter.h"
 #include "runtime/log/symcache.h"
 #include "core/json_escape.h"
+#include "core/nevr_root.h"
 #include "core/logging.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/log/boot_log_tee.h"
@@ -602,16 +603,12 @@ static void RotateIfNeeded() {
 
 static std::string GetDefaultLogDir() {
 #ifdef _WIN32
-    // %LOCALAPPDATA%\EchoVR\logs — proper var directory, not application dir
-    char buf[MAX_PATH];
-    DWORD len = GetEnvironmentVariableA("LOCALAPPDATA", buf, MAX_PATH);
-    if (len > 0 && len < MAX_PATH) {
-        std::string dir(buf, len);
-        dir += "\\EchoVR";
-        CreateDirectoryA(dir.c_str(), nullptr);
-        dir += "\\logs";
-        CreateDirectoryA(dir.c_str(), nullptr);
-        return dir;
+    // %LOCALAPPDATA%\nevr\echovr\logs (core/nevr_root.h, ADR 0012): the nevr root, never the original game's EchoVR folder
+    const std::string root = nevr_root::RootA();
+    if (!root.empty()) {
+        const std::string dir = nevr_root::LogsDir(root);
+        if (nevr_root::EnsureDirectoryTree(dir)) return dir;
+        BlfLog("could not create the log folder %s; falling back to the game folder", dir.c_str());
     }
     // Fallback: module directory (shouldn't happen but be safe)
     char mod_path[MAX_PATH];

@@ -9,8 +9,8 @@ the game. It fails with the alarm (bonk and a courier to spritz) when the worktr
 `nevr-runtime/792-smoke-main` (`NEVR_SMOKE_BRANCH`) and exactly at `origin/main` after the fast-forward,
 when `git fetch` does not finish within 120 s, when the build fails or when a check fails.
 
-The record is `/var/tmp/work-nevr-runtime/scenario-smoke/last.json` and `last.txt`; the run's own
-`result.json`, `console.log` and `game.jsonl` are in `.../scenario-smoke/run/`. `result.json` and
+The record is `scenario-smoke/last.json` and `last.txt` in the work root (`NEVR_SMOKE_STATUS_DIR` overrides the directory); the run's own
+`result.json`, `console.log` and `game.jsonl` are in `scenario-smoke/run/`. `result.json` and
 `last.json` carry `loadavg_start` (`/proc/loadavg` when the run started) and `states` (every NetGame
 state change with its timestamp). A pass that reached in game after more than 300 s is a PASS with
 `"slow": true`; the in-game wait is 600 s.

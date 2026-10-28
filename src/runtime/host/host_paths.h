@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/nevr_root.h"
+
 // Where the stable host keeps what it writes: in its own per-game folder, never in
 // the game's own %LOCALAPPDATA%\EchoVR:
 //   %LOCALAPPDATA%\nevr\echovr\logs\nevr-bootstrap.jsonl
@@ -11,6 +13,28 @@ namespace nevr_host {
 
 inline constexpr wchar_t kLogsSubdirectory[] = L"nevr\\echovr\\logs";
 inline constexpr wchar_t kCrashesSubdirectory[] = L"nevr\\echovr\\crashes";
+
+// The runtime resolves the same folders through core/nevr_root.h (#857). The host keeps its literals (it links no core code),
+// and these checks make a drift between the two a compile error: each literal is <root>\<child> in nevr_root's names.
+namespace host_paths_detail {
+constexpr bool IsRootChild(const wchar_t* path, const wchar_t* child) {
+  const wchar_t* root = nevr_root::Names<wchar_t>::kRoot;
+  std::size_t i = 0;
+  for (; root[i] != L'\0'; ++i) {
+    if (path[i] != root[i]) return false;
+  }
+  if (path[i] != L'\\') return false;
+  ++i;
+  std::size_t j = 0;
+  for (; child[j] != L'\0'; ++j) {
+    if (path[i + j] != child[j]) return false;
+  }
+  return path[i + j] == L'\0';
+}
+static_assert(IsRootChild(kLogsSubdirectory, nevr_root::Names<wchar_t>::kLogs), "host logs folder differs from nevr_root");
+static_assert(IsRootChild(kCrashesSubdirectory, nevr_root::Names<wchar_t>::kCrashes), "host crashes folder differs from nevr_root");
+}  // namespace host_paths_detail
+
 inline constexpr wchar_t kBootstrapLogName[] = L"nevr-bootstrap.jsonl";
 
 // One append to the log is serialized with this named mutex. WriteFile with FILE_APPEND_DATA is not

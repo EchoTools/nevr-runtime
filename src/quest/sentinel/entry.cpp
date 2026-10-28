@@ -16,10 +16,15 @@
 #include "hook_log.h"
 #include "hook_report.h"
 #include "login_prompt_hook.h"
+#include "login_title_hook.h"
 #include "data_wiring.h"
 #include "obb_skip_hook.h"
+#include "os_build_gate_hook.h"
 #include "permission_wait_hook.h"
 #include "process_end_hook.h"
+#include "texture_quality_hook.h"
+#include "system_ui_hook.h"
+#include "resource_request_hook.h"
 #include "toast_presenter.h"
 #include "vk_ext_window.h"
 #include "pinned_targets.h"
@@ -78,7 +83,13 @@ bool InstallClockHook() noexcept {
            sentinel::GotStatus::kOk;
 }
 
-bool RegisterLoginPromptCounters() noexcept { return nevr_quest::login_prompt::RegisterCounters(); }
+// The login-failed page's title hook (#1137) is the prompt's second half: its counters register in the same step, so the
+// reporter holds both or the step reports the refusal and the prompt installs nothing.
+bool RegisterLoginPromptCounters() noexcept {
+    const bool prompt = nevr_quest::login_prompt::RegisterCounters();
+    const bool title = nevr_quest::login_title::RegisterCounters();
+    return prompt && title;
+}
 
 bool RegisterObbSkipCounters() noexcept { return nevr_quest::obb_skip::RegisterCounters(); }
 
@@ -97,11 +108,16 @@ bool InstallProcessEndHook() noexcept { return nevr_quest::process_end::Install(
 // is armed first.
 bool InstallPermissionWaitHook() noexcept {
     nevr_quest::data_wiring::Options options;
-    options.show = &nevr_quest::toast::Show;
+    options.show = &nevr_quest::toast::ShowPreferUiThread;  // #829: the UI thread's looper runs the Toast, else the caller's
+    options.show_ui = &nevr_quest::toast::ShowOnMainLooper;  // read by the development probe's `ui-toast` kind only (#829)
+    options.show_post = &nevr_quest::toast::ShowOnUiThread;  // and `ui-post`
     options.allow_fetch = nevr_build::kIsDev;  // a release build only looks and tells the player; it never downloads
     options.probe_enabled = nevr_build::kIsDev;  // the headset probe is for development builds only
     if (!nevr_build::kIsDev) options.hold_ms = 0;  // no presenter is known to draw on a headset: a release build holds nothing
     nevr_quest::data_wiring::Install(options);
+    // The main-menu QUIT's system UI (#392) is one more GOT hook, installed on every launch from this step. A refused
+    // install is logged by GotHook and by the hook's own line.
+    nevr_quest::system_ui::Install();
     return nevr_quest::permission_wait::Install();
 }
 
@@ -109,11 +125,36 @@ bool InstallPermissionWaitHook() noexcept {
 // refused install is logged by GotHook and leaves the game's calls intact.
 bool InstallVkExtWindowHook() noexcept { return nevr_quest::vk_window::Install(); }
 
+// The game never refuses a headset for its OS build number (#945). A refused install is logged by GotHook and by the
+// hook's own line, and leaves the game's call intact.
+bool InstallOsBuildGateHook() noexcept { return nevr_quest::os_build_gate::Install(); }
+
+// The eye-buffer size libr15 creates its swap chain with (#943). A refused install is logged by GotHook and by the hook's
+// own line, and leaves the game's calls intact.
+bool RegisterTextureQualityCounters() noexcept { return nevr_quest::texture_quality::RegisterCounters(); }
+bool InstallTextureQualityHook(nevr_quest::texture_quality::Level level, bool fromConfig,
+                               bool countersRegistered) noexcept {
+    return nevr_quest::texture_quality::InstallIfCounted(level, fromConfig, countersRegistered);
+}
+
+// The log-only resource request hook (#871): development builds only. A refused install is logged by GotHook and leaves the
+// game's call intact.
+bool ResourceRequestLogEnabled() noexcept { return nevr_build::kIsDev; }
+bool RegisterResourceRequestCounters() noexcept { return nevr_quest::resource_request::RegisterCounters(); }
+bool InstallResourceRequestLogHook(bool countersRegistered) noexcept {
+    return nevr_quest::resource_request::InstallIfCounted(countersRegistered);
+}
+
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
 // token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.
 bool InstallLoginPromptHook(bool countersRegistered) noexcept {
     return nevr_quest::login_prompt::InstallIfCounted(countersRegistered);
 }
+
+// The title of the login-failed page (#1137): installed after the game maps the page's script library, so the
+// post-load action asks again after each dlopen until it answers anything but kModuleNotLoaded. A refused install is
+// logged by GotHook and by the hook's own line and leaves the game's constructor call intact.
+sentinel::GotStatus InstallLoginTitleHook() noexcept { return nevr_quest::login_title::Install(); }
 
 }  // namespace nevr_quest::integration
 
@@ -130,6 +171,8 @@ const char* nevr_sentinel_marker() {
 __attribute__((constructor))
 static void nevr_sentinel_ctor() {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "sentinel_ctor", {{"action", "begin"}});
+    // #829: the thread that loads the library takes the UI looper for the floor message's presenter (it logs what it found).
+    nevr_quest::toast::CaptureUiLooper();
     // Everything the constructor does is one sequence (integration/ctor_sequence.h): crash reporter,
     // configuration, counters, the single reporter start, then each hook gated by its feature switch.
     nevr_quest::integration::RunSentinelConstructor();

@@ -112,8 +112,9 @@ func cleanupDLLs(gameDir string) error {
 
 	dllDir := filepath.Join(absGameDir, "bin", "win10")
 
-	// Monolithic DLL (2026-08-02: gamepatches, gameserver, telemetryagent folded into BugSplat64)
+	// The pair: the host (BugSplat64.dll) and the runtime it loads (nevr-runtime.dll)
 	dllNames := []string{
+		"nevr-runtime.dll",
 		"BugSplat64.dll",
 	}
 
@@ -139,6 +140,7 @@ func cleanupDLLs(gameDir string) error {
 func deployAllDLLs(t *testing.T) {
 	gameDir := getGameDir()
 	dllNames := []string{
+		"nevr-runtime.dll",
 		"BugSplat64.dll",
 	}
 

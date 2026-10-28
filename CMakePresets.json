@@ -97,7 +97,8 @@
             "displayName": "MinGW Release + scenario control endpoint (test only, never ship)",
             "inherits": "mingw-release",
             "cacheVariables": {
-                "NEVR_SCENARIO_CONTROL": "ON"
+                "NEVR_SCENARIO_CONTROL": "ON",
+                "NEVR_ALLOW_UNSIGNED_PLUGINS": "ON"
             }
         },
         {
@@ -107,7 +108,7 @@
         },
         {
             "name": "mingw-plugin-dev",
-            "displayName": "MinGW Release that loads unsigned plugins (plugin developers only, never ship)",
+            "displayName": "MinGW Release marked as the plugin developers' build (never ship)",
             "inherits": "mingw-release",
             "cacheVariables": {
                 "NEVR_ALLOW_UNSIGNED_PLUGINS": "ON"

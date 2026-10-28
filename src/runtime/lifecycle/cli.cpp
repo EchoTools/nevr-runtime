@@ -68,9 +68,10 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgSyntax(pArgSyntax, "-upnp", 0, 0, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-upnp", "[NEVR] Enable UPnP port forwarding");
 
-  EchoVR::AddArgSyntax(pArgSyntax, "-skip-dbgcore-check", 0, 0, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-skip-dbgcore-check",
-      "[NEVR] Skip the check that refuses a dbgcore.dll in the game directory (legacy injection)");
+  EchoVR::AddArgSyntax(pArgSyntax, "-require-signed-plugins", 0, 0, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-require-signed-plugins",
+      "[NEVR] Load only plugins signed through the release pipeline; refuse the rest (default: unsigned plugins load). "
+      "Read before the first plugin loads (runtime/lifecycle/boot.cpp, runtime/ext/plugin_trust.cpp)");
 
   // -config-path is NOT ignored: boot.cpp handles it exactly like -config.
   EchoVR::AddArgSyntax(pArgSyntax, "-config-path", 1, 1, FALSE);
@@ -87,6 +88,9 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgSyntax(pArgSyntax, "-telemetryrate", 1, 1, FALSE);
   EchoVR::AddArgSyntax(pArgSyntax, "-telemetrydiag", 0, 0, FALSE);
   EchoVR::AddArgSyntax(pArgSyntax, "-traceexports", 1, 1, FALSE);
+  // #875: the removed -skip-dbgcore-check and -allow-dbgcore stay registered, with no help line, so the game's
+  // parser accepts them and the dbgcore.dll check in boot.cpp refuses the start on any command line.
+  EchoVR::AddArgSyntax(pArgSyntax, "-skip-dbgcore-check", 0, 0, FALSE);
   EchoVR::AddArgSyntax(pArgSyntax, "-allow-dbgcore", 0, 0, FALSE);
 
   // GameMainWrapperHook removes -timestep and -fixedtimestep from the command line before the game parses

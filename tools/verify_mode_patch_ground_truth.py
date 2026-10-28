@@ -126,6 +126,14 @@ def table_gate_targets(addresses: str, constants: dict[str, int]) -> set[int]:
     return {resolve(name, constants) for name in names}
 
 
+_OFFLINE_HELPER = re.compile(
+    r"const\s+auto\s+apply\s*=\s*\[[^\]]*\]\s*\(\s*const\s+char\*\s+site\s*,\s*uintptr_t\s+offset\b"
+)
+_OFFLINE_APPLY_CALL = re.compile(
+    r"^\s*apply\s*\(\s*\"[^\"]*\"\s*,\s*((?:nevr_patch_addresses::)?\w+|0x[0-9a-fA-F]+)\s*,", re.MULTILINE
+)
+
+
 def byte_rewrite_targets(source: str, addresses: str) -> set[int]:
     constants = integer_constants(addresses)
     constants.update(integer_constants(source))
@@ -140,6 +148,14 @@ def byte_rewrite_targets(source: str, addresses: str) -> set[int]:
         r"\bApplyPatch\s*\(\s*((?:nevr_patch_addresses::)?\w+|0x[0-9a-fA-F]+)\s*,",
         source,
     ):
+        if expression == "offset" and _OFFLINE_HELPER.search(source):
+            # The offline helper's definition is not an installation call; its call sites are read below.
+            continue
+        targets.add(resolve(expression, constants))
+
+    # PatchEnableOffline writes through `apply("site", OFFSET, patch, size)`, a lambda over ApplyPatch.  Each call
+    # site names its target as a resolvable RVA, read the same way.
+    for expression in _OFFLINE_APPLY_CALL.findall(source):
         targets.add(resolve(expression, constants))
 
     # ForceHeadlessSkip has one dynamic argument, whose concrete sites are the

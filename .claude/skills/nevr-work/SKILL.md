@@ -20,7 +20,7 @@ below.
   gate without its verification action is skipping the gate.
 - Bound to the PR quick check (AGENTS.md "Builds", "A PR runs the quick check, not
   `just verify`"): the build, the covering test recipes, the PC login for runtime or
-  auth changes, and on every PR `python3 -m pytest -q tools/tests` and
+  auth changes, and on every PR `just test-tools` (kept: output, JUnit XML, `runs.jsonl`) and
   `python3 tools/verify_doc_paths.py`. Every "done/verified" claim resolves against the
   items you ran, each with its result, and an item not run is named as not run — not
   against a proxy. `just verify` runs only on main, when prepping a release, once per
@@ -40,7 +40,7 @@ below.
 | Slot | Value |
 |------|-------|
 | `{REPO}` | `~/src/nevr-runtime` (maintainers only; work in a worktree under `.claude/worktrees/`, AGENTS.md "Branch lifecycle") |
-| `{PR_GATE_CMD}` | The quick check, on the PR's tip, in the build slice (maintainers only): `just build` plus a raw `cmake --build --preset <preset>` (because `just build` always exits 0); the covering test recipes (`just --list`: `test-auth-unit`, `test-quest-shared`, `test-quest-*`, `test-android` for a change under `src/quest`, ...); the PC login test for runtime or auth changes; `python3 -m pytest tools/tests/test_verify_gtest_floor.py` when `TEST(`/`TEST_F(` declarations in `src/runtime/tests/*.cpp` change; on every PR `python3 -m pytest -q tools/tests` and `python3 tools/verify_doc_paths.py` (run `just worktree-setup` first in a fresh worktree). Each item reported with its result; an item not run named as not run. `just verify` is NOT this gate: it runs only on main when prepping a release (AGENTS.md "Builds"). |
+| `{PR_GATE_CMD}` | The quick check, on the PR's tip, in the build slice (maintainers only): `just build` plus a raw `cmake --build --preset <preset>` (because `just build` always exits 0); the covering test recipes (`just --list`: `test-auth-unit`, `test-quest-shared`, `test-quest-*`, `test-android` for a change under `src/quest`, ...); the PC login test for runtime or auth changes; `python3 -m pytest tools/tests/test_verify_gtest_floor.py` when `TEST(`/`TEST_F(` declarations in `src/runtime/tests/*.cpp` change; on every PR `just test-tools` (kept: output, JUnit XML, `runs.jsonl`) and `python3 tools/verify_doc_paths.py` (run `just worktree-setup` first in a fresh worktree). Each item reported with its result; an item not run named as not run. `just verify` is NOT this gate: it runs only on main when prepping a release (AGENTS.md "Builds"). |
 | `{FINDINGS}` | GitHub issues, not a ledger file (there is no `BUGS.md`: `git ls-tree origin/main BUGS.md` returns nothing). A defect you do not fix in the same turn gets an issue (AGENTS.md "Documentation, plans and findings", "Fix it or file it, in the same turn") written as a falsifiable claim with Evidence at `<sha>`, Not shown, Falsifier, Work (AGENTS.md "What a PR carries"). A security-sensitive finding is reported to the owner, not filed. The `N<number>` tags are the code's own rule tags, indexed in AGENTS.md "The N-rules index"; the highest in `src`, `tools` and `justfile` is N146 (`git grep -ohE '\bN[0-9]+\b' origin/main -- src tools justfile | sort -V | uniq`). |
 | `{INVARIANTS}` | Never modify `src/legacy/`; never commit generated protobuf; prologue-validate before any binary patch; hook frequency analysis before sleeps; production deploy forbidden without per-instance approval; no agent writes into the owner's game install (runs use a throwaway copy); CPP addendum hard-stops (no C-style casts, no `catch(...)`, never throw across a DLL boundary, no I/O from DllMain, Ninja-only, vcpkg-manifest deps only; `-Werror` is on every MinGW target except the frozen legacy one, see the engineer primer's "Compiler warnings"). Source: AGENTS.md "Guardrails", "Production Deployment", "The game install", and the inlined addendum. |
 | `{EXPERTISE_PREREADS}` | The C++ MinGW Addendum inlined in AGENTS.md (after its `CPP-MINGW-ADDENDUM` separator) — mandatory pre-read gate before any C++/build work. A maintainer-only copy also exists elsewhere; AGENTS.md wins on conflict. |
@@ -54,7 +54,7 @@ below.
 5. **CANDIDATE lines.** Any ad-hoc integrity check is reported as one line — the predicate it tests, and yes/no on graduation into a persistent checker. A lesson that does not become a sensor dies with its transcript.
 6. **USAGE lines.** Any unit touching a CLI/interface surface notes usage-doc/man gaps as one line. `--help`/`-h` output IS the behavioral acceptance contract for the interface.
 7. **Same failure twice = stop and report.** Do not grind.
-8. **Scratch in `/var/tmp/work-nevr-runtime/<agent>/`** (maintainers only; a contributor uses `/var/tmp/work-nevr-runtime/<handle>/`, AGENTS.md "For contributors"). Never `/tmp` (RAM-backed on this host), never the repo. Game runs use a throwaway copy of the install, never the owner's.
+8. **Scratch in `~/src/nevr-runtime-work/<agent>/`** (maintainers only; a contributor uses `~/src/nevr-runtime-work/<handle>/`, AGENTS.md "For contributors"). Never `/tmp` (RAM-backed on this host), never the repo. Game runs use a throwaway copy of the install, never the owner's.
 9. **Commit identity.** Author `Andrew Bates <a@sprock.io>` (`--author=`), `--no-gpg-sign`, single `Co-Authored-By: <agent name> <agents@sprock.io>` trailer (sisters: the sister as author, Andrew as co-author; maintainers only); see AGENTS.md "Commit and verification conventions". Verify after each commit: `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
 10. **CPP pre-read gate.** Before any C++/build work, read `{EXPERTISE_PREREADS}` in full; its Hard-Stops bind the change.
 11. **Heartbeat expectation.** A standing unit emits a heartbeat; a silent unit is treated as stuck, not assumed working.
@@ -194,12 +194,12 @@ what you are building. Return to Gate 3.
 report each item with its result.
 1. **The build:** `just build`, then a raw `cmake --build --preset <preset>` whose exit
    code you read (`just build` always exits 0). Quote the tail and exit code, read from a
-   file under `/var/tmp/work-nevr-runtime/<agent>/` (maintainers only), never `$?` after a pipe.
+   file under `~/src/nevr-runtime-work/<agent>/` (maintainers only), never `$?` after a pipe.
 2. **The covering test recipes** (`just --list`; `test-auth-unit`, `test-quest-shared`,
    `test-quest-*`, `test-android` for a change under `src/quest`, ...). If the change
    adds or removes `TEST(`/`TEST_F(` declarations in `src/runtime/tests/*.cpp`, run
    `python3 -m pytest tools/tests/test_verify_gtest_floor.py`. Every PR, whatever it
-   touches: `python3 -m pytest -q tools/tests` and `python3 tools/verify_doc_paths.py`.
+   touches: `just test-tools` and `python3 tools/verify_doc_paths.py`.
 3. **A runtime or auth change ALWAYS runs the PC login on the PR's tip** (AGENTS.md
    "System test for runtime and auth changes"; "Client login test mechanics"):
    `NEVR_GAME_ROOT=<copy> ./launch-client.sh --dll <absolute path to the build's
@@ -242,12 +242,13 @@ finding (a GitHub issue) with its measurement and a Decision-line; do NOT fake g
 - **Commit identity:** governed by AGENTS.md "Commit and verification conventions" —
   **that is the authority; read it rather than this summary if they disagree.**
   Author `Andrew Bates <a@sprock.io>` (`--author=`), `--no-gpg-sign`, and a
-  **single** trailer `Co-Authored-By: <agent name> <agents@sprock.io>` (sisters author
+  **single** house trailer `Co-Authored-By: <agent name> <agents@sprock.io>` (sisters author
   their own work with Andrew as co-author; maintainers only); conventional prefix (`feat:`/`fix:`/`docs:`/
   `test:`/`build:`); one logical change per commit. **Verify after each commit:**
   `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
-  No second `Co-authored-by` trailer.
-- **Scratch** lives under `/var/tmp/work-nevr-runtime/<agent>/` (maintainers only), never `/tmp`, never the
+  No second house `Co-authored-by` trailer; a person whose work the commit draws on gets a credit trailer
+  (AGENTS.md "Commits, versions and requirement words").
+- **Scratch** lives under `~/src/nevr-runtime-work/<agent>/` (maintainers only), never `/tmp`, never the
   repo (AGENTS.md "Working practices for every agent"). Delete the scripts, copies and
   build output you created, outright; keep run logs and evidence.
 - **Branch and worktree:** cut with `git worktree add --no-track -b <seat>/<issue>-<slug>

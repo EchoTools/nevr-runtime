@@ -21,7 +21,7 @@
 // Every child validates, from the recorded events (index order is a
 // linearization: each record takes its slot with InterlockedIncrement) and from the
 // host's own bootstrap records (nevr-bootstrap.jsonl in the scenario's directory):
-//   - host attach: enter < hook live (JMP written) < exit, with nevr.dll NOT loaded
+//   - host attach: enter < hook live (JMP written) < exit, with nevr-runtime.dll NOT loaded
 //     at attach exit; the records are the decisions in order with exactly one
 //     hook_install record when hooked and none when not;
 //   - no runtime operation (load, DllMain, GetApi, initialize, dispatch) before
@@ -33,7 +33,8 @@
 //   - the runtime never hooks the wrapper: the host's record of its hook (target and
 //     the first 16 bytes after MH_EnableHook) still equals the bytes at the wrapper
 //     after the runtime's initialize and in game_main;
-//   - load/API/init failures degrade to original-only calls and never dispatch.
+//   - load/API/init failures stop the game (the host's test seam records the stop with exit code 78 and the
+//     original runs after it) and never dispatch.
 
 #include "runtime/tests/bootstrap_attach/abi.h"
 
@@ -194,7 +195,7 @@ const char* EventName(LONG event) {
       "original", "runtime.game_main_exit", "call.issued", "call.bad_result", "main.entered",
       "host.loadlibrary_returned", "runtime.second_hook_enabled", "second.detour",
       "second.original", "host.attach_held", "runtime.hook_target", "runtime.hook_bytes",
-      "runtime.hook_mismatch"};
+      "runtime.hook_mismatch", "host.stop_game"};
   return event > 0 && event < kEventLimit ? kNames[event] : "?";
 }
 
@@ -314,7 +315,7 @@ void ValidateHostAttach(const std::vector<EventRecord>& events, const Expectatio
   const std::size_t enter = First(events, kHostAttachEnter);
   *attach_exit = First(events, kHostAttachExit);
   Require(enter < *attach_exit, "host attach exit recorded before enter");
-  Require(events[*attach_exit].payload == 0, "nevr.dll was loaded before host DllMain returned");
+  Require(events[*attach_exit].payload == 0, "nevr-runtime.dll was loaded before host DllMain returned");
   const BYTE first_target_byte = g_image[nevr_host::kGameMainWrapperRva];
   if (expect.hooked) {
     const std::size_t enabled = First(events, kHostHookEnabled);
@@ -345,7 +346,7 @@ void ValidateNoEarlyRuntime(const std::vector<EventRecord>& events, const Expect
       First(events, expect.static_import ? kMainEntered : kHostLoadReturned);
   Require(returned != kNone && attach_exit < returned,
           "attach return was not observed after host attach exit");
-  // Everything below is the load itself or code inside nevr.dll, and must follow attach exit.
+  // Everything below is the load itself or code inside nevr-runtime.dll, and must follow attach exit.
   const LONG runtime_events[] = {kRuntimeDllAttach, kRuntimeGetApi, kRuntimeInitialized,
                                  kRuntimeGameMainEnter, kRuntimeGameMainExit,
                                  kRuntimeSecondHookEnabled};
@@ -449,9 +450,13 @@ void ValidateHostRecords(const Expectation& expect) {
     }
     return;
   }
-  Require(records.size() == 5, "a hooked run recorded something other than its five decisions");
+  // A hooked run whose runtime did not load stops the game: one more record, the game_stop, however many calls arrived.
+  const bool stops = !expect.dispatched;
+  Require(CountRecords(records, "versions", "") == 1, "a hooked run did not record exactly one versions record");
+  Require(records.size() == (stops ? 7u : 6u),
+          "a hooked run recorded something other than its six decisions (and the stop, when it stopped)");
   if (expect.no_install_event) {
-    // The load did not wait for the install, so the install record can land after the load's: all five
+    // The load did not wait for the install, so the install record can land after the load's: all of them
     // must still be there (the load flushes the journal again), in whatever order the race gave.
     Require(CountRecords(records, "host_attach", "image_check") == 1 &&
                 CountRecords(records, "host_attach", "prologue_check") == 1 &&
@@ -478,17 +483,24 @@ void ValidateHostRecords(const Expectation& expect) {
               records[1].value("outcome", "") == "accepted" &&
               records[2].value("step", "") == "hook_install" && records[2].value("outcome", "") == "enabled" &&
               records[3].value("step", "") == "install_wait" && records[3].value("outcome", "") == "signalled" &&
-              records[4].value("event", "") == "runtime_load",
-          "the host's decisions were not recorded in order");
+              records[4].value("event", "") == "versions" && records[5].value("event", "") == "runtime_load",
+          "the host's decisions were not recorded in order (the versions record sits between the install wait and the load)");
   Require(!records[2].contains("hook_bytes"), "the install record says the hook bytes were unread");
   Require(records[2].at("rva") == "0xcd510" && records[2].at("stage") == "enable" &&
               records[2].at("mh_status") == 0 &&
               records[2].at("actual_prologue") == records[2].at("expected_prologue"),
           "the install record lacks the rva, the enable stage, MH_OK or the matching bytes");
-  Require(records[4].value("outcome", "") == expect.load_record,
+  Require(records[5].value("outcome", "") == expect.load_record,
           "the runtime_load record has an unexpected outcome");
-  Require(records[4].contains("loader_lock_held") && records[4].at("loader_lock_held") == false,
+  Require(records[5].contains("loader_lock_held") && records[5].at("loader_lock_held") == false,
           "the runtime_load record does not say the loader lock was not held");
+  Require(records[5].value("degraded_action", "") == (stops ? "stop_game" : "dispatch"),
+          "the runtime_load record names the wrong action");
+  if (stops) {
+    Require(records[6].value("event", "") == "game_stop" && records[6].value("reason", "") == expect.load_record &&
+                records[6].value("exit_code", 0) == 78,
+            "the game_stop record does not follow the load and name its cause and exit code 78");
+  }
 }
 
 void ValidateDispatch(const std::vector<EventRecord>& events, const Expectation& expect) {
@@ -519,8 +531,10 @@ void ValidateDispatch(const std::vector<EventRecord>& events, const Expectation&
   Require(Count(events, kRuntimeHookMismatch) == 0,
           "the host's hook record differs from the bytes at the wrapper: something else hooked it");
 
+  Require(expect.hooked || Count(events, kHostStopGame) == 0, "the host stopped a game it never hooked");
+  Require(!expect.dispatched || Count(events, kHostStopGame) == 0, "the host stopped a game whose runtime loaded");
   if (!expect.hooked) {
-    Require(Count(events, kRuntimeDllAttach) == 0 && GetModuleHandleW(L"nevr.dll") == nullptr,
+    Require(Count(events, kRuntimeDllAttach) == 0 && GetModuleHandleW(L"nevr-runtime.dll") == nullptr,
             "runtime was loaded although the host rejected the image");
     Require(Count(events, kRuntimeGameMainEnter) == 0, "dispatch without a hook");
     return;
@@ -528,6 +542,9 @@ void ValidateDispatch(const std::vector<EventRecord>& events, const Expectation&
   if (!expect.dispatched) {
     Require(Count(events, kRuntimeGameMainEnter) == 0 && Count(events, kRuntimeGameMainExit) == 0,
             "a failed runtime was dispatched");
+    // Every call into the wrapper met the stop, with the stable exit code; none was run as the game.
+    Require(Count(events, kHostStopGame) == calls, "a call into the wrapper did not meet the host's stop");
+    Require(events[First(events, kHostStopGame)].payload == 78, "the host stopped the game with the wrong exit code");
     return;
   }
   Require(Count(events, kRuntimeDllAttach) == 1 && Count(events, kRuntimeGetApi) == 1 &&
@@ -631,7 +648,7 @@ extern "C" __declspec(dllimport) void DetoursExportPlaceholder();
 
 int main() {
   BootstrapProbeRecordEvent(kMainEntered, 0);
-  Require(GetModuleHandleW(L"nevr.dll") == nullptr, "nevr.dll loaded before main");
+  Require(GetModuleHandleW(L"nevr-runtime.dll") == nullptr, "nevr-runtime.dll loaded before main");
   Require(g_image != nullptr, "host never requested the game image during static-import attach");
   DetoursExportPlaceholder();  // the import that makes the loader attach the host first
   CallTarget(kCommandLine);  // main enters the wrapper
@@ -798,13 +815,13 @@ int RunChildScenario(const std::string& mode) {
 }
 
 void StageRuntimeFixture(const std::wstring& root, const wchar_t* fixture) {
-  const std::wstring runtime = root + L"nevr.dll";
+  const std::wstring runtime = root + L"nevr-runtime.dll";
   if (fixture == nullptr) {
     DeleteFileW(runtime.c_str());
-    Require(GetFileAttributesW(runtime.c_str()) == INVALID_FILE_ATTRIBUTES, "could not remove nevr.dll");
+    Require(GetFileAttributesW(runtime.c_str()) == INVALID_FILE_ATTRIBUTES, "could not remove nevr-runtime.dll");
     return;
   }
-  const std::wstring source = root + L"fixtures\\" + fixture + L"\\nevr.dll";
+  const std::wstring source = root + L"fixtures\\" + fixture + L"\\nevr-runtime.dll";
   if (!CopyFileW(source.c_str(), runtime.c_str(), FALSE)) {
     std::fprintf(stderr, "CopyFileW %ls failed, Win32 error=%lu\n", source.c_str(),
                  static_cast<unsigned long>(GetLastError()));
