@@ -25,6 +25,10 @@ int main(int argc, char **argv) {
   CHECK(NevrPcStage(s, argv[2], argv[3], &res), NEVR_OK);
   printf("stage=%s\n", res);
   NevrStringFree(res);
+  /* No current_json means "nothing is running": the release is staged all the same, as an install. */
+  CHECK(NevrPcStage(s, argv[2], NULL, &res), NEVR_OK);
+  if (strstr(res, "\"direction\":\"install\"") == NULL) { fprintf(stderr, "second stage: %s\n", res); return 1; }
+  NevrStringFree(res);
   CHECK(NevrRunEnd(s, "unchanged", "stage check"), NEVR_OK);
   NevrClose(s);
   return 0;

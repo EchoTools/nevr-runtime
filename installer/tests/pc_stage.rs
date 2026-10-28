@@ -169,6 +169,8 @@ fn the_channels_release_is_staged_with_the_runtime_and_nothing_else() {
     assert_eq!(r["files"], json!([{"path": "nevr-runtime.dll", "size": RT.len(), "sha256": sha256_hex(RT)}]));
     let dir = staging(&w).join("1.0.0");
     assert_eq!(std::fs::read(dir.join("nevr-runtime.dll")).unwrap(), RT);
+    let work: Vec<_> = std::fs::read_dir(w.root.path().join("update/work")).map(|d| d.map(|e| e.unwrap().file_name()).collect()).unwrap_or_default();
+    assert!(work.is_empty(), "the downloaded zip is removed once staged: {work:?}");
     assert!(!dir.join("BugSplat64.dll").exists(), "the host is never staged");
     assert!(!dir.join("README.txt").exists(), "only the runtime and plugin members are extracted");
     let names: Vec<String> = std::fs::read_dir(staging(&w)).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
@@ -383,6 +385,19 @@ fn a_windows_zip_without_a_runtime_is_blocked() {
     assert_eq!(code, 0, "{out}");
     assert_eq!((out["plan"]["action"].as_str(), out["plan"]["reason"].as_str()), (Some("blocked"), Some("no_runtime_member")));
     assert!(!events(&w).contains(&"artifact_fetch".to_string()), "nothing to stage, nothing fetched");
+}
+
+#[test]
+fn only_plain_plugin_names_are_staged() {
+    let w = world();
+    let long = format!("plugins/{}.dll", "a".repeat(65));
+    let mut o = Opts::new();
+    o.members = vec![("nevr-runtime.dll", RT), ("plugins/ok-1_a.dll", PLUGIN), ("plugins/notes.txt", PLUGIN), ("plugins/sub/x.dll", PLUGIN), ("plugins/.dll", PLUGIN), (long.as_str(), PLUGIN)];
+    let base = publish(&w, &o);
+    let (code, out, err) = run(&w, &base, &current("0.9.0", b"old"), &[]);
+    assert_eq!(code, 0, "{out} {err}");
+    let paths: Vec<&str> = out["plan"]["files"].as_array().unwrap().iter().map(|f| f["path"].as_str().unwrap()).collect();
+    assert_eq!(paths, vec!["nevr-runtime.dll", "plugins/ok-1_a.dll"], "{out}");
 }
 
 #[test]
