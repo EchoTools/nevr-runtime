@@ -61,6 +61,7 @@ struct FakePlatform {
   }
   uintptr_t refuse = 0;                  // an address the reader cannot read
   bool canvas = true;                    // FindCanvas succeeds
+  uintptr_t canvasAddress = 0xc0ffee;    // what it hands back (0: a finder that says yes and gives nothing)
   bool setter = true;                    // SetText reports the element exists
   int gameSpaceCalls = 0;
   int findCalls = 0;
@@ -88,7 +89,7 @@ struct FakePlatform {
     lastIdent = ident;
     if (onFind) onFind();
     if (!canvas) return false;
-    *cs = 0xc0ffee;
+    *cs = canvasAddress;
     *handle = 7;
     return true;
   }
@@ -116,6 +117,7 @@ TEST(UiText, ARequestNeedsAnActorAndAnElementAndShortPrintableText) {
   EXPECT_EQ(nevr_ui_text::CheckRequest(Req("caf\xc3\xa9")), Check::NotPrintable);
   EXPECT_EQ(nevr_ui_text::CheckRequest(Req("\x7f")), Check::NotPrintable);
   EXPECT_EQ(nevr_ui_text::CheckRequest(Req(" ~")), Check::Ok);
+  EXPECT_EQ(nevr_ui_text::CheckRequest(Req("\x1f")), Check::NotPrintable) << "the last control character";
 }
 
 // ---- finding the actor ----
@@ -221,6 +223,7 @@ TEST(UiTextApply, NoGameIsNoGameAndAnActorInNoGamespaceIsNoActor) {
   EXPECT_EQ(nevr_ui_text::Apply(p, Req("X")), Outcome::NoActor);
   EXPECT_EQ(p.findCalls, 0);
   EXPECT_EQ(p.setCalls, 0);
+  EXPECT_EQ(p.gameSpaceCalls, 2) << "the walk stops at the first index the game has no gamespace for";
 }
 
 TEST(UiTextApply, ACanvasThatIsNotThereYetIsNoCanvasAndASetterThatRefusesIsNotWritten) {
@@ -233,6 +236,10 @@ TEST(UiTextApply, ACanvasThatIsNotThereYetIsNoCanvasAndASetterThatRefusesIsNotWr
   EXPECT_EQ(nevr_ui_text::Apply(p, Req("X")), Outcome::NoCanvas);
   EXPECT_EQ(p.setCalls, 0);
   p.canvas = true;
+  p.canvasAddress = 0;
+  EXPECT_EQ(nevr_ui_text::Apply(p, Req("X")), Outcome::NoCanvas) << "a finder that reports success with no canvas is no canvas";
+  EXPECT_EQ(p.setCalls, 0);
+  p.canvasAddress = 0xc0ffee;
   p.setter = false;
   EXPECT_EQ(nevr_ui_text::Apply(p, Req("X")), Outcome::NotWritten);
   EXPECT_EQ(p.setCalls, 1);
@@ -366,6 +373,26 @@ TEST(UiTextPending, ARequestThatNeverCanBeWrittenIsDroppedAfterTheGiveUpTimeAndS
   EXPECT_EQ(last[0].outcome, Outcome::NoActor);
   EXPECT_GE(now, nevr_ui_text::kGiveUpMs);
   EXPECT_EQ(pending.Size(), 0u);
+}
+
+// The give-up time is reached, not passed: a request posted at 0 is dropped by the drain made exactly kGiveUpMs later,
+// and still waits at the drain one millisecond before.
+TEST(UiTextPending, TheGiveUpTimeIsReachedNotPassed) {
+  FakePlatform p;
+  Pending pending;
+  ASSERT_EQ(pending.Post(Req("X"), 0), Check::Ok);
+  std::vector<Report> r = pending.Drain(p, nevr_ui_text::kGiveUpMs - 1);
+  ASSERT_EQ(r.size(), 1u);
+  EXPECT_FALSE(r[0].dropped);
+  r = pending.Drain(p, nevr_ui_text::kGiveUpMs - 1 + nevr_ui_text::kRetryIntervalMs);
+  ASSERT_EQ(r.size(), 1u);
+  EXPECT_TRUE(r[0].dropped);
+
+  Pending exact;
+  ASSERT_EQ(exact.Post(Req("X"), 0), Check::Ok);
+  r = exact.Drain(p, nevr_ui_text::kGiveUpMs);
+  ASSERT_EQ(r.size(), 1u);
+  EXPECT_TRUE(r[0].dropped) << "a drain exactly kGiveUpMs after the post gives up";
 }
 
 TEST(UiTextPending, ANewerPostMadeWhileADrainIsInTheGameWinsOverTheRetryOfTheOldOne) {

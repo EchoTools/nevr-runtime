@@ -44,6 +44,8 @@ TEST(ScenarioUiText, RefusesWhatItCannotRead) {
   EXPECT_FALSE(Parses(R"({"op":"fire","action":"ui_text","actor":"0x1","element":"0x2"})", &cmd, &error));
   EXPECT_FALSE(Parses(R"({"op":"fire","action":"ui_text","actor":"1","element":"0x2","text":"x"})", &cmd, &error));
   EXPECT_FALSE(Parses(R"({"op":"fire","action":"ui_text","actor":"0x","element":"0x2","text":"x"})", &cmd, &error));
+  EXPECT_FALSE(Parses(R"({"op":"fire","action":"ui_text","actor":"ab12cd","element":"0x2","text":"x"})", &cmd, &error))
+      << "a long enough hex string without its 0x is not a symbol";
   EXPECT_FALSE(Parses(R"({"op":"fire","action":"ui_text","actor":"0x1ffffffffffffffff","element":"0x2","text":"x"})", &cmd, &error));
   EXPECT_FALSE(Parses(R"({"op":"fire","action":"ui_text","actor":"0xzz","element":"0x2","text":"x"})", &cmd, &error));
   EXPECT_FALSE(Parses(R"({"op":"fire","action":"ui_text","actor":5,"element":"0x2","text":"x"})", &cmd, &error));
