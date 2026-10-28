@@ -9,7 +9,7 @@ have it, so please report anything odd (see "Report a bug").
 | File | What to do with it |
 |---|---|
 | `BugSplat64.dll` | Install it: it replaces the game's file of the same name. |
-| `nevr-runtime.dll` | Install it beside `BugSplat64.dll`: the runtime that `BugSplat64.dll` loads. Without it the game stops at start. |
+| `nevr-runtime.dll` | Install it in `%LOCALAPPDATA%\nevr\echovr`, not beside `BugSplat64.dll`: the runtime that `BugSplat64.dll` loads. Without it the game stops at start. |
 | `install.ps1`, `uninstall.ps1` | Optional: they do the install and the uninstall for you (see Install and Uninstall). |
 | `README.txt`, `SIGNING.txt`, `SHA256SUMS` | Reference: the package's own notes, how to check each file's signature, and the file hashes. |
 | `echovr_server.exe`, `quest-diagnose.ps1` | Ignore them unless you run a server or have a Quest problem (`README.txt` says how). |
@@ -20,7 +20,9 @@ have it, so please report anything odd (see "Report a bug").
 2. Find your Echo VR folder: the one that contains `bin\win10\echovr.exe`.
 3. In `bin\win10`, rename the existing `BugSplat64.dll` to `BugSplat64.dll.original`. Keep it: it is how
    you uninstall. (`install.ps1` keeps the backup as `BugSplat64.dll.original-<timestamp>` instead.)
-4. Copy `BugSplat64.dll` and `nevr-runtime.dll` from the zip into `bin\win10`.
+4. Copy `BugSplat64.dll` from the zip into `bin\win10`. Copy `nevr-runtime.dll` into `%LOCALAPPDATA%\nevr\echovr`
+   (paste that into the File Explorer address bar; create the folders if they are not there). If an older
+   release left a `nevr-runtime.dll` in `bin\win10`, delete it: the game no longer loads it.
 5. Start Echo VR the way you normally do.
 
 ## First start: sign in with Discord
@@ -45,7 +47,7 @@ Close Echo VR, then either:
 
 - if you installed with `install.ps1`: run `powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 -Dir "<the bin\win10 folder>"`
   from the unzipped folder. It restores your original `BugSplat64.dll` and sets `nevr-runtime.dll` aside;
-- if you installed by hand: delete `bin\win10\BugSplat64.dll` and `bin\win10\nevr-runtime.dll`, and rename
+- if you installed by hand: delete `bin\win10\BugSplat64.dll` and `%LOCALAPPDATA%\nevr\echovr\nevr-runtime.dll`, and rename
   `BugSplat64.dll.original` back to `BugSplat64.dll`.
 
 ## Known issues
