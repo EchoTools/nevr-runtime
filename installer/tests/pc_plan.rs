@@ -358,3 +358,65 @@ fn launch_witness_reads_the_hosts_own_records() {
     let stopped = format!("{good}{{\"event\":\"game_stop\"}}\n");
     assert!(pc::launch_witness(&stopped, h, r).unwrap_err().contains("stopped"));
 }
+
+#[test]
+fn an_error_before_anything_changed_ends_unchanged_not_restored() {
+    let w = world();
+    // A file where the installer folder goes: the aside folder cannot be made, and nothing has been touched yet.
+    let (obs, plan) = plan_of(&w, &pkg(HOST_A, RT_A), false);
+    fs::write(w.root.path().join("installer"), b"in the way").unwrap();
+    let end = pc::execute(&w.layout(), &plan, &obs, &pkg(HOST_A, RT_A), &w.log()).unwrap();
+    assert_eq!(end.state, "unchanged", "{}", end.reason);
+    assert_eq!(fs::read(w.game.path().join(pc::HOST)).unwrap(), GAME);
+    assert!(!w.root.path().join(pc::RUNTIME).exists());
+}
+
+#[test]
+fn the_same_files_under_a_new_release_number_update_the_record() {
+    let w = world();
+    run(&w, &pkg_v("1.0.0", HOST_A, RT_A));
+    let (plan, end) = run(&w, &pkg_v("1.0.1", HOST_A, RT_A));
+    assert_eq!((plan.action, end.state), (Some(Action::RecordOnly), "installed"));
+    assert_eq!(w.record().get("release"), Some("1.0.1"));
+}
+
+#[test]
+fn a_record_beside_the_game_for_the_current_package_is_moved_into_the_root() {
+    let w = world();
+    run(&w, &pkg(HOST_A, RT_A));
+    let text = fs::read_to_string(w.layout().record()).unwrap();
+    fs::remove_file(w.layout().record()).unwrap();
+    fs::write(w.game.path().join(pc::STATE_FILE), text).unwrap();
+    let (plan, end) = run(&w, &pkg(HOST_A, RT_A));
+    assert_eq!((plan.action, end.state), (Some(Action::RecordOnly), "installed"), "{}", end.reason);
+    assert!(w.layout().record().is_file() && !w.game.path().join(pc::STATE_FILE).exists());
+}
+
+#[test]
+fn an_earlier_runtime_that_appears_beside_the_game_after_an_install_is_moved_too() {
+    let w = world();
+    run(&w, &pkg(HOST_A, RT_A));
+    fs::write(w.game.path().join(pc::RUNTIME), b"an older runtime NEVR-BUILD 0.9.0").unwrap();
+    let (plan, end) = run(&w, &pkg(HOST_A, RT_A));
+    assert_eq!((plan.action, end.state), (Some(Action::RecordOnly), "installed"));
+    assert_eq!(listing(w.game.path()), vec!["BugSplat64.dll", "echovr.exe"]);
+}
+
+#[test]
+fn a_failure_after_the_record_was_written_takes_the_record_back_too() {
+    let w = world();
+    // First install: the record did not exist, so it must not exist afterwards.
+    let seam = Seam { fail_step: Some("record_final"), fail_undo: None };
+    let (obs, plan) = plan_of(&w, &pkg(HOST_A, RT_A), false);
+    let end = pc::execute_with(&w.layout(), &plan, &obs, &pkg(HOST_A, RT_A), &w.log(), &seam).unwrap();
+    assert_eq!(end.state, "restored", "{}", end.reason);
+    assert!(!w.layout().record().exists());
+    assert_eq!(fs::read(w.game.path().join(pc::HOST)).unwrap(), GAME);
+    // An update: the record that described the earlier install comes back byte for byte.
+    run(&w, &pkg(HOST_A, RT_A));
+    let before = fs::read(w.layout().record()).unwrap();
+    let (obs, plan) = plan_of(&w, &pkg_v("2.0.0", HOST_B, RT_B), false);
+    let end = pc::execute_with(&w.layout(), &plan, &obs, &pkg_v("2.0.0", HOST_B, RT_B), &w.log(), &seam).unwrap();
+    assert_eq!(end.state, "restored", "{}", end.reason);
+    assert_eq!(fs::read(w.layout().record()).unwrap(), before);
+}

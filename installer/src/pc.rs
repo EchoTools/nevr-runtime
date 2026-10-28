@@ -382,7 +382,7 @@ pub struct End {
 }
 
 /// Test hooks: make the named step, or the named undo, fail as an I/O error would. Steps: `runtime_written`,
-/// `host_written`, `legacy_moved`, `verify_installed`, `record_written`. Undos: `legacy_runtime`, `legacy_dbgcore`, `host`,
+/// `host_written`, `legacy_moved`, `verify_installed`, `record_written` (before the record is written), `record_final` (after). Undos: `legacy_runtime`, `legacy_dbgcore`, `host`,
 /// `runtime`.
 #[derive(Debug, Default, Clone)]
 pub struct Seam {
@@ -609,6 +609,7 @@ fn apply(l: &Layout, plan: &Plan, obs: &Observed, pkg: &Package, log: &Log, seam
         None => Undo::Remove { what: "record", path: rec.clone() },
     });
     write_log(&rec, &sha256_hex(text.as_bytes()), "", "")?;
+    seam.step("record_final")?;
     Ok(())
 }
 

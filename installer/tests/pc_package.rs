@@ -66,3 +66,16 @@ fn a_member_that_differs_from_its_signed_entry_is_refused_even_when_the_zip_hash
     let e = read_package(&d.path().join("a.zip"), &a, "1.0.0").unwrap_err();
     assert!(e.to_string().contains("BugSplat64.dll in the zip does not match"), "{e}");
 }
+
+#[test]
+fn a_swapped_zip_with_the_same_members_but_other_bytes_is_refused_by_the_whole_zip_hash() {
+    let d = tempfile::tempdir().unwrap();
+    let members: [(&str, &[u8]); 2] = [("BugSplat64.dll", HOST), ("nevr-runtime.dll", RT)];
+    let zip = zip_of(&members);
+    let a = art(&zip, &members);
+    // Every member still matches `contents`, but the file is not the zip the manifest hashed (an extra entry).
+    let swapped = zip_of(&[("BugSplat64.dll", HOST), ("nevr-runtime.dll", RT), ("extra.txt", b"x")]);
+    std::fs::write(d.path().join("a.zip"), &swapped).unwrap();
+    let e = read_package(&d.path().join("a.zip"), &a, "1.0.0").unwrap_err();
+    assert!(e.to_string().contains("does not match the manifest's size and sha256 when it is read"), "{e}");
+}

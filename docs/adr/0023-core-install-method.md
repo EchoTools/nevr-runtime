@@ -74,24 +74,39 @@ platform:
 
 ```mermaid
 flowchart TD
-    P0[game folder given or found: echovr.exe present, game not running] --> P1[extract nothing yet: members verified in memory against contents]
+    P0[game folder given or found: echovr.exe present, game not running; nevr root known] --> P1[extract nothing yet: the zip and each member verified in memory against the manifest]
     P1 --> P2{BugSplat64.dll in the folder}
-    P2 -->|the game's own file| P3[copy to BugSplat64.dll.original-timestamp, verify the copy]
+    P2 -->|the game's own file| P3[copy to root/installer/aside/BugSplat64.dll.original-timestamp, verify the copy]
     P2 -->|a nevr-runtime host the record lists| P4[update: keep the first original]
     P2 -->|neither| X[needs-user: restore the game's file first]
-    P3 --> P5[set legacy dbgcore.dll aside, never delete]
+    P3 --> P5[move legacy dbgcore.dll into the aside folder, never delete]
     P4 --> P6
-    P5 --> P6[write nevr-runtime.dll, then BugSplat64.dll: until the host is replaced nothing loads the runtime]
-    P6 --> P7[read both back: sha256 equals the manifest]
-    P7 -->|any failure| R[restored: put every file back from the set-aside copies]
-    P7 --> P8[write nevr-install record]
+    P5 --> P6[write nevr-runtime.dll into the nevr root, then BugSplat64.dll beside the game through a temp file and a rename: until the host is replaced nothing loads the runtime]
+    P6 --> P6b[move an earlier nevr-runtime.dll out of the game folder into the aside folder]
+    P6b --> P7[read both back: sha256 equals the manifest]
+    P7 -->|any failure| R[restored: every changed file put back; needs-user, naming the file, when one cannot be]
+    P7 --> P8[write the record in root/installer]
     P8 --> P9[first launch: nevr-bootstrap.jsonl versions record, runtime_load verify=accepted]
 ```
 
-The layout is the one in this tree (`BugSplat64.dll` and `nevr-runtime.dll` beside `echovr.exe`). ADR 0012 moves the runtime
-to `%LOCALAPPDATA%\nevr\echovr` (#855, not built); the layout is one value of the PC plan, so that change edits one constant
-and its test. The state file keeps the keys `uninstall.ps1` reads (`backup`, `legacy`, `runtime_aside`, `installed_sha256`,
-`runtime_sha256`, `previous_sha256`), so the uninstaller works on an install the core made.
+The layout is ADR 0012's. The only file the plan writes beside `echovr.exe` is `BugSplat64.dll`, the host. The runtime goes to
+`<nevr root>\nevr-runtime.dll`; the record `nevr-install.txt` and every set-aside file (`BugSplat64.dll.original-<stamp>`, a
+legacy `dbgcore.dll`, an earlier `nevr-runtime.dll` beside the game, a stale record, a runtime that was already in the root)
+go to `<nevr root>\installer\` and `<nevr root>\installer\aside\`. Nothing is deleted: a file that leaves the game
+folder is copied, read back, and only then removed. The host is replaced by a temporary file in the game folder renamed over
+it, so a reader sees the old host or the new one. The nevr root is `--nevr-root`, else `%LOCALAPPDATA%\nevr\echovr`; when
+neither is known the plan stops with `needs-user` before it fetches or changes anything. A record an earlier installer left
+beside the game is read like the root's and is moved into the aside folder by the next successful install.
+
+The record keeps the keys `uninstall.ps1` reads (`backup`, `legacy`, `runtime_aside`, `runtime_legacy`, `runtime_root`,
+`installed_sha256`, `runtime_sha256`, `previous_sha256`) and adds `game_dir` and `release`. An installed `release` newer than
+the offered one is refused (`needs-user`) unless the caller passes `--allow-downgrade`; versions compare as numbers.
+
+A failure after the first change takes every change back, newest first, and ends the run `restored`. A change that cannot be
+taken back is logged (`restore_failed`) and the run ends `needs-user` with the file named and the aside folder pointed at; a run
+is never `unchanged` or `restored` while the folders differ from what they were. The files that are installed come from one
+read of the zip: it is hashed whole against the manifest and each member against its `contents` entry, and the final read-back
+compares the folders with those same hashes.
 
 ### 3. Quest plan
 
@@ -329,7 +344,8 @@ issue's own statement; none was measured on a headset for this record):
 
 No installer builds, patches, re-signs or repacks an APK or DLL; fetches an artifact by a URL the manifest does not name;
 accepts an APK whose signer the manifest does not name; applies a file list that is not a signed `content` artifact; writes
-into a game folder before every check of the set has passed; or ends a run without a `run_end` record.
+into a game folder before every check of the set has passed, or (on PC) writes there anything but `BugSplat64.dll`; or ends a
+run without a `run_end` record.
 
 ## Tests, failing first
 
@@ -340,8 +356,10 @@ Each is run once with the line it covers changed, and must fail (the mutant disc
    with the real pins.
 2. The Quest plan: one test per branch of the diagram (absent, same signer lower/equal/higher, different signer without and
    with consent, no `signer_cert_sha256`).
-3. The PC plan against a temporary game folder: first install, update, a stranger's `BugSplat64.dll`, a failure injected after
-   the first file (the folder returns to its prior bytes), and the state file read by the real `uninstall.ps1` logic's keys.
+3. The PC plan against a temporary game folder and a temporary nevr root: first install, update, a stranger's `BugSplat64.dll`,
+   the game folder holding only `echovr.exe` and `BugSplat64.dll` afterwards, a failure injected after each file (both folders
+   return to their prior bytes), a restore that fails (reported, never `restored`), an older release over a newer one, and the
+   state file read by the real `uninstall.ps1` logic's keys.
 4. The log: a run that is made to fail at each step writes `run_end` with the state and the reason; an unwritable log refuses
    to change anything.
 5. The C ABI from a C program (not Rust): open, verify a fixture manifest, pick, build a plan, report, close.

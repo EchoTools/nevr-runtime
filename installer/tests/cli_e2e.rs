@@ -265,3 +265,21 @@ fn usage_error_exits_1() {
     let o = Command::new(env!("CARGO_BIN_EXE_nevr-install")).arg("nonsense").output().unwrap();
     assert_eq!(o.status.code(), Some(1));
 }
+
+#[test]
+fn launch_check_reads_the_hosts_log_in_the_nevr_root() {
+    let w = world(false);
+    let dir = w.game.path().to_str().unwrap();
+    let (code, ..) = run(&w, &["pc", "install", "--dir", dir]);
+    assert_eq!(code, 0);
+    // No witness yet: the host has not started the game.
+    std::fs::create_dir_all(w.nevr.path().join("logs")).unwrap();
+    std::fs::write(w.nevr.path().join("logs/nevr-bootstrap.jsonl"), "").unwrap();
+    let (code, out, _) = run(&w, &["pc", "launch-check", "--dir", dir]);
+    assert_eq!((code, out["state"].as_str()), (2, Some("needs-user")), "{out}");
+    let line = |v: Value| v.to_string() + "\n";
+    let text = line(json!({"event": "versions", "host_sha256": sha256_hex(HOST), "runtime_sha256": sha256_hex(RT)})) + &line(json!({"event": "runtime_load", "verify": "accepted"}));
+    std::fs::write(w.nevr.path().join("logs/nevr-bootstrap.jsonl"), text).unwrap();
+    let (code, out, _) = run(&w, &["pc", "launch-check", "--dir", dir]);
+    assert_eq!((code, out["state"].as_str()), (0, Some("unchanged")), "{out}");
+}
