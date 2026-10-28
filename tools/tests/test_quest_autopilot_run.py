@@ -262,6 +262,32 @@ class RunnerTest(unittest.TestCase):
                                                             "shell am broadcast -a com.oculus.vrpowermanager.automation_disable"])
         self.assertTrue(self.logcat_is_gone())
 
+    def test_a_launch_the_os_blocks_ends_the_run_at_once(self):
+        # Horizon OS's launch check, as a Quest 2 with no controller connected logged it for this app (#1202).
+        blocked = ("         1793218573.325  1550  3832 I ActivityLaunchInterceptorController: "
+                   "RequiresControllersLaunchInterceptor: com.readyatdawn.r15/com.oculus.gles3jni.MainActivity "
+                   "com.oculus.vrshell/com.oculus.vrshell.systemdialog.launchcheck."
+                   "LaunchCheckControllerRequiredDialogActivity\n")
+        started = time.monotonic()
+        p = self.go(blocked + LOADED + REGISTERED + START_LINE + end_line(), "--timeout", "60")
+        self.assertLess(time.monotonic() - started, 30)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        end = self.last("run_end")
+        self.assertEqual(end["outcome"], "launch_blocked")
+        self.assertEqual(end["reasons"], ["the run ended with launch_blocked, not route_end"])
+        self.assertIn("RequiresControllersLaunchInterceptor", self.last("launch_blocked")["line"])
+        self.assertIsNone(end["route_loaded"])
+        self.assertEqual(self.tail("logcat -v epoch")[:2], ["shell am force-stop com.readyatdawn.r15",
+                                                            "shell am broadcast -a com.oculus.vrpowermanager.automation_disable"])
+
+    def test_another_apps_launch_check_is_not_this_runs(self):
+        other = ("  1.0  1550  3832 I ActivityLaunchInterceptorController: RequiresControllersLaunchInterceptor: "
+                 "com.example.other/.Main com.oculus.vrshell/.systemdialog.launchcheck."
+                 "LaunchCheckControllerRequiredDialogActivity\n")
+        p = self.go(other + LOAD + LOADED + SEAM + REGISTERED + START_LINE + STEPS + end_line())
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(self.last("run_end")["outcome"], "route_end")
+
     def test_start_on_touches_the_start_file_at_the_match(self):
         stream = (LOADED + REGISTERED + "  1.0  1  1 I EchoVR : lobby loaded\n" + "  1.1  1  1 I EchoVR : lobby loaded\n" +
                   START_LINE + end_line())

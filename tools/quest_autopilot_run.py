@@ -11,8 +11,8 @@ What it does, in order:
   3. overrides the proximity sensor (`am broadcast -a com.oculus.vrpowermanager.prox_close`), force-stops the game,
      clears logcat and starts the game;
   4. reads logcat until the plugin logs route_end, the plugin refuses (route_refused, a failed input_filter, a failed
-     plugin_load), or --timeout passes; with --start-on REGEX it creates the start file at the first logcat line the
-     regex matches;
+     plugin_load), Horizon OS blocks the launch (launch_blocked: no controller is connected), or --timeout passes;
+     with --start-on REGEX it creates the start file at the first logcat line the regex matches;
   5. force-stops the game, gives the sensor back (`automation_disable`), and saves the run's logcat and
      nevr-sentinel.log.
 
@@ -52,6 +52,8 @@ SENTINEL_LOG = f"{FILES}/nevr-sentinel.log"
 PLUGIN = "nevr_autopilot"
 PROX_CLOSE = "com.oculus.vrpowermanager.prox_close"
 PROX_RESTORE = "com.oculus.vrpowermanager.automation_disable"
+# Horizon OS refuses to start an app that requires controllers while none is connected; the game never runs (#1202).
+LAUNCH_BLOCKED = re.compile(rf"RequiresControllersLaunchInterceptor: {re.escape(PACKAGE)}/")
 PLUGIN_LINE = re.compile(r"\[NEVR\.PLUGIN\] plugin=(\S+) (\S+)(.*)$")
 FIELD = re.compile(r'(\w+)=("(?:[^"\\]|\\.)*"|\S*)')
 
@@ -181,6 +183,10 @@ def watch_lines(adb: Adb, rec: Recorder, save, lines: queue.Queue, deadline: flo
             adb.run("shell", "touch", start_file)
             seen["start_file_touched"] = True
             rec.write("start_file_touched", start_file=start_file, matched=line.strip()[-300:])
+        if LAUNCH_BLOCKED.search(line):
+            rec.write("launch_blocked", line=line.strip()[-400:])
+            seen["outcome"] = "launch_blocked"
+            return
         parsed = parse_plugin_line(line)
         if parsed is None:
             host = parse_host_record(line) if "NEVR-Sentinel" in line else {}

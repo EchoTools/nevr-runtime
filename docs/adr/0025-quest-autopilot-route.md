@@ -2,8 +2,10 @@
 
 Status: Proposed. Tracking issue: #1202.
 
-Not yet observed on a headset. Every statement below about the headset, the controllers, the proximity sensor or OVR
-Metrics is a prediction, and the "Predictions" table is what the first headset run checks.
+The route has not yet run on a headset. One fact is measured: on a Quest 2 (Horizon OS, Android 14) with no controller
+connected, the system refuses to start the game (`RequiresControllersLaunchInterceptor`; see "Starting and stopping a
+run"). Every other statement below about the headset, the controllers, the proximity sensor or OVR Metrics is a
+prediction, and the "Predictions" table is what the first headset run checks.
 
 ## Context
 
@@ -117,7 +119,11 @@ step 0.5 right.grip=1 right.buttons=a+b       # grip held, A and B held
 
 ### Starting and stopping a run
 
-No person is involved after a one-time setup of `config.yaml` on the headset:
+No person is involved after a one-time setup of `config.yaml` on the headset, and with both controllers on and
+connected. They don't have to be held. Horizon OS starts this app only when a controller is connected: otherwise
+`am start` brings up the system's controller-required dialog instead (logcat:
+`ActivityLaunchInterceptorController: RequiresControllersLaunchInterceptor: com.readyatdawn.r15/...`), and the game
+process never starts.
 
 ```yaml
 plugins:
@@ -138,7 +144,8 @@ plugins:
   plugin and the route path. It pushes the route and removes a stale start file. It sends
   `am broadcast -a com.oculus.vrpowermanager.prox_close` (Meta's scriptable-testing guide: the headset acts as worn),
   force-stops the game, clears logcat, and starts `com.readyatdawn.r15/com.oculus.gles3jni.MainActivity`. With
-  `--start-on <regex>` it creates the start file when a logcat line matches. It waits for `route_end` (or its timeout),
+  `--start-on <regex>` it creates the start file when a logcat line matches. It waits for `route_end` (or its timeout,
+  or the launch check's line for this app, which ends the run at once as `launch_blocked`),
   force-stops the game, sends `com.oculus.vrpowermanager.automation_disable` to give the sensor back, and saves the
   logcat and `nevr-sentinel.log`. It writes one JSON record per step, plus a summary that carries the `route_start`
   and `route_end` fields, to `runs.jsonl` in its output directory under the work root. It exits 0 only when
