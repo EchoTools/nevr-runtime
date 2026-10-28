@@ -126,6 +126,7 @@ subsystems that nEVR annotates.
 | `[NEVR.UI]`           | The UI text writer (`patch/ui_text.h`, `patch/ui_text_writer.h`, #896): `text writer ready`/`off` with the three pins, one `text written` or `text dropped` line per request with `actor`, `element`, `bytes` and `attempts`, and `text first write` with the writing thread and the game-loop thread. A text is never logged, only its size |
 | `[NEVR.INVITE]`       | Invite codes for the CREATE GAME / JOIN VIA CODE wizard (`patch/invite_wizard.h`, ADR 0017): a code is never logged, only `code_len` and `code_fp` |
 | `[NEVR.HOST]`         | The `BugSplat64.dll` host's own JSONL records (`nevr-bootstrap.jsonl`): attach decisions, runtime load, crash dump. The value of the record's `tag` field; the host writes no `Log()` line |
+| `[NEVR.INSTALL]`      | The core installer's own JSONL run log (`installer/`, ADR 0023): one record per event, appended, never truncated; the value of the record's `tag` field. Never carries a token or a response body |
 | `[server_timing]`     | Server tick-rate / timing patches             |
 
 **Rule:** If you add a new component, add its tag to this table. If you

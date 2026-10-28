@@ -7,10 +7,12 @@
 // shipped tool, run against the synthetic file (it must refuse: the synthetic file is not the pinned libr15).
 
 #include <fcntl.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
@@ -1091,6 +1093,112 @@ TEST(AWordNextToAClaimedRangeOnEitherSideIsNotAnOverlap) {
   ExpectRefusal(w.Patch({edit(kJoinVa)}), "word_overlap", "x.next", "the stub's first word");
 }
 
+// ---- bytes the file's structure and the tool itself own ---------------------------------------------------------------
+
+// The first PT_LOAD is executable and starts at file offset 0, so the ELF header, the program header table and the build-ID
+// note are inside the file-backed text; a second executable PT_LOAD over the section header table makes that table
+// reachable too (the pinned libr15's tables are not in its text; a different libr15 need not be the same).
+constexpr std::uint64_t kShdrLoadVaddr = 0x1412000;
+
+World ProtectedWorld() {
+  SynthOptions o = World::DefaultOptions();
+  o.execLoads = {ExecLoad{kShdrLoadVaddr, kShdrOffset, 8 * sizeof(Elf64_Shdr)}};
+  return World(o);
+}
+
+std::uint64_t VaOfFileOffset(std::uint64_t fileOffset) {
+  return fileOffset < kShdrOffset ? kLoad0Vaddr + fileOffset : kShdrLoadVaddr + (fileOffset - kShdrOffset);
+}
+
+WordPatchRow WordRowAtFileOffset(const World& w, const std::string& id, std::uint64_t fileOffset) {
+  WordPatchRow r;
+  r.id = id;
+  r.revaultVa = VaOfFileOffset(fileOffset) + kRevaultBias;
+  WordEdit e;
+  std::memcpy(e.stock.data(), w.elf.bytes.data() + fileOffset, 4);
+  e.word = e.stock;
+  e.word[0] = static_cast<std::uint8_t>(e.word[0] ^ 0xff);
+  r.edits.push_back(e);
+  return r;
+}
+
+// Every byte range the tool writes is its own: the words of the rows (the claims against each other), the p_memsz of the
+// grown segment, the sh_size of the section that ends it, and the build ID. The structures around them are the file's.
+// An extra row that reaches any of them is refused, naming the row and the region; without that, the later write (the
+// derived ID, the grown sizes) would silently replace the row's word while the report said the row's word was written.
+TEST(AnExtraRowThatReachesTheElfStructuresOrAByteTheToolWritesItselfIsRefused) {
+  World w = ProtectedWorld();
+  struct Case {
+    const char* what;
+    std::uint64_t fileOffset;
+    const char* region;
+  };
+  const std::uint64_t phnum = Ehdr(w.elf.bytes).e_phnum;  // the three of the synthetic file and the executable segment over the section headers
+  const std::uint64_t memsz = w.elf.PhdrMemszOffset();
+  const std::uint64_t bssSize = w.elf.BssSizeOffset();
+  const Case cases[] = {
+      {"e_flags", 0x30, "ELF header"},
+      {"the last word of the ELF header", sizeof(Elf64_Ehdr) - 4, "ELF header"},
+      {"the first word of the program header table", kPhdrOffset, "program header table"},
+      {"a field of the first program header (p_align)", kPhdrOffset + offsetof(Elf64_Phdr, p_align), "program header table"},
+      {"the last word of the program header table", kPhdrOffset + phnum * sizeof(Elf64_Phdr) - 4, "program header table"},
+      {"the first half of the grown segment's p_memsz", memsz, "p_memsz"},
+      {"the second half of the grown segment's p_memsz", memsz + 4, "p_memsz"},
+      {"the first word of the build-ID note", kNoteOffset, "build-ID note"},
+      {"the build-ID descriptor", kNoteDescOffset, "build-ID note"},
+      {"the last word of the build-ID note", kNoteDescOffset + 16, "build-ID note"},
+      {"the first word of the section header table", kShdrOffset, "section header table"},
+      {"a field of a section header (sh_addr of .text)", kShdrOffset + kSecText * sizeof(Elf64_Shdr) + offsetof(Elf64_Shdr, sh_addr), "section header table"},
+      {"the last word of the section header table", kShdrOffset + 8 * sizeof(Elf64_Shdr) - 4, "section header table"},
+      {"the first half of the .bss section's sh_size", bssSize, "sh_size"},
+      {"the second half of the .bss section's sh_size", bssSize + 4, "sh_size"},
+  };
+  for (const Case& c : cases) {
+    const PatchResult r = w.Patch({WordRowAtFileOffset(w, "x.reach", c.fileOffset)});
+    if (r.ok || r.refusal.code != "protected_region" || r.refusal.detail.find(c.region) == std::string::npos) {
+      std::fprintf(stderr, "  %s: ok=%d code=%s detail=%s (expected protected_region naming %s)\n", c.what, r.ok ? 1 : 0, r.refusal.code.c_str(),
+                   r.refusal.detail.c_str(), c.region);
+    }
+    CHECK(!r.ok);
+    CHECK_EQ(r.refusal.code, std::string("protected_region"));
+    CHECK_EQ(r.refusal.id, std::string("x.reach"));
+    CHECK(r.refusal.detail.find(c.region) != std::string::npos);
+    CHECK(r.output.empty());
+  }
+  // A site of a public row reaches them the same way.
+  {
+    World pub = ProtectedWorld();
+    pub.rows.push_back(pub.Inline("s.in_phdrs", kLoad0Vaddr + kPhdrOffset, 3));
+    pub.Rebind();
+    const PatchResult r = pub.Patch();
+    CHECK(!r.ok);
+    CHECK_EQ(r.refusal.code, std::string("protected_region"));
+    CHECK_EQ(r.refusal.id, std::string("s.in_phdrs"));
+    CHECK(r.refusal.detail.find("program header table") != std::string::npos);
+  }
+  {  // a three-word window whose first word is outside a region and whose last word is inside it
+    World pub = ProtectedWorld();
+    pub.rows.push_back(pub.Inline("s.into_note", kLoad0Vaddr + kNoteOffset - 8, 3));
+    pub.Rebind();
+    const PatchResult r = pub.Patch();
+    CHECK(!r.ok);
+    CHECK_EQ(r.refusal.code, std::string("protected_region"));
+    CHECK_EQ(r.refusal.id, std::string("s.into_note"));
+    CHECK(r.refusal.detail.find("build-ID note") != std::string::npos);
+  }
+  // The words just outside each region are the file's text like any other, and are written.
+  const std::uint64_t outside[] = {
+      kPhdrOffset + phnum * sizeof(Elf64_Phdr),  // the word after the program header table
+      kNoteOffset - 4,                       // the word before the note
+      kNoteOffset + 36,                      // the word after the note (12 + 4 + 20 bytes)
+  };
+  for (const std::uint64_t offset : outside) {
+    const PatchResult r = w.Patch({WordRowAtFileOffset(w, "x.beside", offset)});
+    if (!r.ok) std::fprintf(stderr, "  file offset 0x%llx: refused: %s %s\n", static_cast<unsigned long long>(offset), r.refusal.code.c_str(), r.refusal.detail.c_str());
+    CHECK(r.ok);
+  }
+}
+
 // ---- ADR test 9: word patches and the extra-rows file (format 1) ---------------------------------------------------
 
 bool Parse(const std::string& text, const World& w, std::vector<WordPatchRow>* rows, Refusal* refusal) {
@@ -1665,7 +1773,7 @@ TEST(TheStockFileIsNeverTheOutputAndAFailedWriteLeavesAnExistingOutputAlone) {
     CHECK(ReadText(out) == std::string("\x01\x02\x03"));
     CHECK_EQ(rmdir((out + ".partial").c_str()), 0);
   }
-  {  // --out in a directory that is not there: exit 2, and the report (written first) says what was validated
+  {  // --out in a directory that is not there: exit 2, and the report says the write failed (it does not say patched)
     std::remove(report.c_str());
     std::ostringstream so, se;
     CHECK_EQ(RunCli({"--stock", stock, "--out", g_scratch + "/no_such_dir/out.so", "--report", report}, w.spec, so, se), 2);
@@ -1673,7 +1781,7 @@ TEST(TheStockFileIsNeverTheOutputAndAFailedWriteLeavesAnExistingOutputAlone) {
     CHECK(e["status"] == "io_error");
     CHECK(e["detail"].get<std::string>().find("--out") != std::string::npos);
     CHECK(so.str().empty());
-    CHECK(Json::parse(ReadText(report), nullptr, false)["summary"]["status"] == "patched");
+    CHECK(Json::parse(ReadText(report), nullptr, false)["summary"]["status"] == "io_error");
   }
   {  // --report in a directory that is not there: exit 2 before any output
     std::remove(out.c_str());
@@ -1889,6 +1997,241 @@ TEST(AnOutputThatIsNotTheStockStillWorksWhateverItsSpelling) {
     std::remove((t.real + "/stock.so2").c_str());
     std::remove((t.real + "/stock.so.json").c_str());
   }
+}
+
+std::string ShaOf(const std::string& bytes) { return nevr_quest::data::Sha256Hex(bytes.data(), bytes.size()); }
+
+bool IsSymlink(const std::string& path) {
+  struct stat st;
+  return lstat(path.c_str(), &st) == 0 && S_ISLNK(st.st_mode);
+}
+
+// The output is written to <out>.partial first. A name that is already there, a link included, is not ours to open: the
+// run stops before anything is written or read, and what the name leads to is as it was.
+TEST(ATemporaryFileThatAlreadyExistsIsNeverFollowedOrWrittenThrough) {
+  World w;
+  AliasTree t("partial_links");
+  const std::string stock = t.File("stock.so", w.elf.bytes);
+  const std::string precious = t.File("precious.txt", std::vector<std::uint8_t>{'p', 'r', 'e', 'c', 'i', 'o', 'u', 's'});
+  const std::string out = t.real + "/o.so", report = t.real + "/r.json", partial = out + ".partial";
+  t.Track(out);
+  t.Track(report);
+  t.Track(partial);
+  const std::string preciousBefore = ReadText(precious);
+  auto run = [&](const char* label, int expectedExit) {
+    std::ostringstream so, se;
+    const int rc = RunCli({"--stock", stock, "--out", out, "--report", report}, w.spec, so, se);
+    if (rc != expectedExit) std::fprintf(stderr, "  %s: exit %d, not %d; stderr %s\n", label, rc, expectedExit, se.str().c_str());
+    CHECK_EQ(rc, expectedExit);
+    CHECK(so.str().empty());
+    const Json e = OneErrorLine(se, label);
+    const std::string detail = e.value("detail", std::string());
+    if (detail.find(".partial") == std::string::npos) std::fprintf(stderr, "  %s: detail \"%s\" does not name the temporary file\n", label, detail.c_str());
+    CHECK(detail.find(".partial") != std::string::npos);
+    CHECK(!Exists(out));
+    CHECK(!Exists(report));  // the run stopped before it wrote anything
+  };
+  {  // a link to a file that exists: what it leads to keeps its bytes, and the link is still there
+    CHECK_EQ(symlink(precious.c_str(), partial.c_str()), 0);
+    run("a temporary-file name that is a link to an existing file", 2);
+    CHECK(Unchanged(precious, preciousBefore, "the file the link leads to"));
+    CHECK(IsSymlink(partial));
+    CHECK_EQ(unlink(partial.c_str()), 0);
+  }
+  {  // a link to a path that does not exist yet and is the report: the report is not created through it
+    CHECK_EQ(symlink(report.c_str(), partial.c_str()), 0);
+    run("a temporary-file name that is a dangling link to the report", 2);
+    CHECK(!Exists(report));
+    CHECK(IsSymlink(partial));
+    CHECK_EQ(unlink(partial.c_str()), 0);
+  }
+  {  // a link to a path that does not exist yet and is nothing else: it is not created either
+    const std::string victim = t.real + "/victim.txt";
+    t.Track(victim);
+    CHECK_EQ(symlink(victim.c_str(), partial.c_str()), 0);
+    run("a temporary-file name that is a dangling link", 2);
+    CHECK(!Exists(victim));
+    CHECK(IsSymlink(partial));
+    CHECK_EQ(unlink(partial.c_str()), 0);
+  }
+  {  // a file left by an earlier run: refused, not truncated
+    WriteBytes(partial, {7, 7, 7});
+    run("a temporary file left behind", 2);
+    CHECK(ReadText(partial) == std::string("\x07\x07\x07"));
+    CHECK_EQ(unlink(partial.c_str()), 0);
+  }
+}
+
+// The same through the function itself, which the command line's early look does not stand in front of: the file is
+// created with O_EXCL and O_NOFOLLOW, so a link that appears after the look is refused too.
+TEST(TheOutputFileIsCreatedExclusivelyAndNeverThroughALink) {
+  AliasTree t("write_output");
+  const std::string precious = t.File("precious.txt", std::vector<std::uint8_t>{'p', 'r', 'e', 'c', 'i', 'o', 'u', 's'});
+  const std::string out = t.real + "/direct.so", partial = out + ".partial", victim = t.real + "/victim.txt";
+  t.Track(out);
+  t.Track(partial);
+  t.Track(victim);
+  const std::vector<std::uint8_t> bytes = {1, 2, 3, 4, 5, 6, 7, 8};
+  const std::string text(bytes.begin(), bytes.end());
+  const std::string preciousBefore = ReadText(precious);
+  std::string why;
+  CHECK_EQ(symlink(precious.c_str(), partial.c_str()), 0);
+  CHECK(!WriteOutputFile(out, bytes, ShaOf(text), &why));
+  CHECK(why.find(".partial") != std::string::npos);
+  CHECK(why.find("remove it") != std::string::npos);  // it says what to do about a name that is taken
+  CHECK(Unchanged(precious, preciousBefore, "the file the link leads to"));
+  CHECK(!Exists(out));
+  CHECK(IsSymlink(partial));  // not ours, so not removed
+  CHECK_EQ(unlink(partial.c_str()), 0);
+  why.clear();
+  CHECK_EQ(symlink(victim.c_str(), partial.c_str()), 0);
+  CHECK(!WriteOutputFile(out, bytes, ShaOf(text), &why));
+  CHECK(!Exists(victim));
+  CHECK(!Exists(out));
+  CHECK(IsSymlink(partial));
+  CHECK_EQ(unlink(partial.c_str()), 0);
+  why.clear();
+  WriteBytes(partial, {9});
+  CHECK(!WriteOutputFile(out, bytes, ShaOf(text), &why));
+  CHECK(ReadText(partial) == std::string("\x09"));
+  CHECK_EQ(unlink(partial.c_str()), 0);
+  // With the name free the file is written, is the bytes, and leaves no temporary file.
+  why.clear();
+  CHECK(WriteOutputFile(out, bytes, ShaOf(text), &why));
+  CHECK(why.empty());
+  CHECK(ReadText(out) == text);
+  CHECK(!Exists(partial));
+  {  // the mode an ordinary create gives (0666 less the umask), not the 0600 of the exclusive create
+    const mode_t mask = umask(0);
+    umask(mask);
+    struct stat st;
+    CHECK_EQ(stat(out.c_str(), &st), 0);
+    CHECK_EQ(static_cast<unsigned>(st.st_mode & 0777), static_cast<unsigned>(0666 & ~mask));
+  }
+  // A file that does not read back as the validated bytes never replaces the output: the output keeps what it held, and
+  // the temporary file is gone.
+  why.clear();
+  WriteBytes(out, {0x0a, 0x0b});
+  CHECK(!WriteOutputFile(out, bytes, ShaOf("not these bytes"), &why));
+  CHECK(why.find("read back") != std::string::npos);
+  CHECK(ReadText(out) == std::string("\x0a\x0b"));
+  CHECK(!Exists(partial));
+}
+
+// An alias is judged by what the open reaches, a link to a path that is not there yet included.
+TEST(AReportThatIsADanglingLinkToTheOutputIsTheOutput) {
+  World w;
+  AliasTree t("dangling_report");
+  const std::string stock = t.File("stock.so", w.elf.bytes);
+  const std::string stockBefore = ReadText(stock);
+  const std::string out = t.real + "/out.so", link = t.real + "/report_link.json";
+  t.Track(out);
+  t.Track(out + ".partial");
+  t.Track(link);
+  CHECK_EQ(symlink(out.c_str(), link.c_str()), 0);  // out.so does not exist: the link dangles
+  ExpectAliasRefused(w, "--report is a dangling link to --out", {"--stock", stock, "--out", out, "--report", link}, "--report must not be the --out file",
+                     {{stock, stockBefore}}, {out, out + ".partial"});
+  // The same link spelled through a symlinked directory.
+  ExpectAliasRefused(w, "--report is a dangling link to --out, through a symlinked directory",
+                     {"--stock", stock, "--out", t.linkDir + "/out.so", "--report", link}, "--report must not be the --out file", {{stock, stockBefore}},
+                     {out, out + ".partial"});
+}
+
+// The report is the account of what is on disk. A run whose --out could not be put in place says so in the report: it never
+// leaves one that says "patched", not even the one an earlier good run wrote to the same path.
+TEST(AFailedOutputWriteNeverLeavesAReportThatSaysPatched) {
+  World w;
+  AliasTree t("failed_out");
+  const std::string stock = t.File("stock.so", w.elf.bytes);
+  const std::string stockBefore = ReadText(stock);
+  const std::string report = t.real + "/report.json", goodOut = t.real + "/good.so", outDir = t.real + "/out_is_a_directory";
+  t.Track(report);
+  t.Track(goodOut);
+  t.Track(outDir);
+  t.Track(outDir + ".partial");
+  CHECK_EQ(mkdir(outDir.c_str(), 0755), 0);
+  auto statusOf = [&]() {
+    const Json r = Json::parse(ReadText(report), nullptr, /*allow_exceptions=*/false);
+    return r.is_object() && r.contains("summary") && r["summary"].contains("status") ? r["summary"]["status"].get<std::string>() : std::string("<no report>");
+  };
+  auto fails = [&](const char* label, const std::string& out) {
+    // A good run first, so that a report saying "patched" is on disk when the failing run starts.
+    std::ostringstream so0, se0;
+    CHECK_EQ(RunCli({"--stock", stock, "--out", goodOut, "--report", report}, w.spec, so0, se0), 0);
+    CHECK_EQ(statusOf(), std::string("patched"));
+    std::ostringstream so, se;
+    const int rc = RunCli({"--stock", stock, "--out", out, "--report", report}, w.spec, so, se);
+    if (rc != 2) std::fprintf(stderr, "  %s: exit %d, not 2; stderr %s\n", label, rc, se.str().c_str());
+    CHECK_EQ(rc, 2);
+    CHECK(so.str().empty());
+    const Json e = OneErrorLine(se, label);
+    CHECK(e.value("status", std::string()) == "io_error");
+    CHECK(e.value("detail", std::string()).find("--out") != std::string::npos);
+    const std::string status = statusOf();
+    if (status != "io_error") std::fprintf(stderr, "  %s: the report's summary status is \"%s\", not io_error\n", label, status.c_str());
+    CHECK(status != "patched");
+    CHECK_EQ(status, std::string("io_error"));
+    const Json r = Json::parse(ReadText(report), nullptr, false);
+    CHECK(r["summary"].value("detail", std::string()).find("--out") != std::string::npos);
+    CHECK(Unchanged(stock, stockBefore, label));
+    CHECK(!Exists(out + ".partial"));  // the temporary file is gone
+  };
+  fails("--out is an existing directory", outDir);
+  fails("--out is the stock file with a slash after it", stock + "/");
+  fails("--out is in a directory that is not there", t.real + "/no_such_dir/out.so");
+  {  // the same bytes and the same status after a good run: the report is the good run's again
+    std::ostringstream so, se;
+    CHECK_EQ(RunCli({"--stock", stock, "--out", goodOut, "--report", report}, w.spec, so, se), 0);
+    CHECK_EQ(statusOf(), std::string("patched"));
+  }
+}
+
+// A run that dies while --out is being written leaves the report it started with, which says the run did not finish.
+// The child's file size limit stops it (SIGXFSZ) on the first write past 8000 bytes: the report written before --out is
+// small, the output is 16 KB.
+TEST(AReportDoesNotSayPatchedWhileTheOutputIsStillBeingWritten) {
+  World w;
+  AliasTree t("killed_run");
+  const std::string stock = t.File("stock.so", w.elf.bytes);
+  const std::string out = t.real + "/out.so", report = t.real + "/report.json", partial = out + ".partial";
+  t.Track(out);
+  t.Track(report);
+  t.Track(partial);
+  const pid_t pid = fork();
+  if (pid == 0) {
+    struct rlimit core = {0, 0};
+    struct rlimit fsize = {8000, 8000};
+    if (setrlimit(RLIMIT_CORE, &core) != 0 || setrlimit(RLIMIT_FSIZE, &fsize) != 0) _exit(127);
+    std::ostringstream so, se;
+    RunCli({"--stock", stock, "--out", out, "--report", report}, w.spec, so, se);
+    _exit(0);  // not reached: the write past the limit ends the process
+  }
+  int status = 0;
+  CHECK(pid > 0 && waitpid(pid, &status, 0) == pid);
+  CHECK(WIFSIGNALED(status));
+  CHECK_EQ(WTERMSIG(status), SIGXFSZ);
+  const Json r = Json::parse(ReadText(report), nullptr, /*allow_exceptions=*/false);
+  CHECK(r.is_object() && r.contains("summary"));
+  const std::string reported = r.is_object() && r.contains("summary") ? r["summary"].value("status", std::string()) : std::string("<no report>");
+  if (reported != "incomplete") std::fprintf(stderr, "  the report of the killed run says \"%s\"\n", reported.c_str());
+  CHECK_EQ(reported, std::string("incomplete"));
+  CHECK(r.is_object() && r.contains("events") && r["events"].is_array() && r["events"].empty());  // no event of a patch that is not there
+  CHECK(!Exists(out));
+}
+
+// A --report that cannot take the record is found before --out is touched.
+TEST(AReportThatCannotBeWrittenIsFoundBeforeTheOutputIsWritten) {
+  World w;
+  AliasTree t("full_report");
+  const std::string stock = t.File("stock.so", w.elf.bytes);
+  const std::string out = t.real + "/out.so";
+  t.Track(out);
+  t.Track(out + ".partial");
+  std::ostringstream so, se;
+  CHECK_EQ(RunCli({"--stock", stock, "--out", out, "--report", "/dev/full"}, w.spec, so, se), 2);
+  CHECK(OneErrorLine(se, "report on a full device").value("detail", std::string()).find("--report") != std::string::npos);
+  CHECK(!Exists(out));
+  CHECK(!Exists(out + ".partial"));
 }
 
 TEST(AnExtraRowsFileWithoutATrailingNewlineIsTheSameFile) {

@@ -214,6 +214,23 @@ struct Change {
   std::string what;
 };
 
+// A byte range of the file that is not a row's to write: the file's own structure, and every byte the tool itself writes
+// (the p_memsz of the grown segment, the sh_size of the section that ends it, the build ID). A row's word that reaches one
+// would be written and then written over, or would change what the file's tables say, while the report listed it as a
+// word of the row.
+struct Region {
+  std::uint64_t begin;  // file offset
+  std::uint64_t end;
+  std::string name;
+};
+
+const Region* ProtectedRegionAt(const std::vector<Region>& regions, std::uint64_t offset, std::uint64_t length) {
+  for (const Region& r : regions) {
+    if (offset < r.end && r.begin < offset + length) return &r;
+  }
+  return nullptr;
+}
+
 }  // namespace
 
 // ---- public pieces -----------------------------------------------------------------------------------------------
@@ -504,6 +521,28 @@ PatchResult PatchLibr15(const std::vector<std::uint8_t>& stock, const PatchSpec&
     return Failed(Refuse("layout_bss_section", "", "no NOBITS section ends at the image end " + Hex(imageEnd)), stockSha);
   }
 
+  // The bytes no row may reach, the ones the tool writes itself first so that they are named for what they are.
+  const std::vector<Region> regions = {
+      {elf.eh.e_phoff + targetIndex * sizeof(Elf64_Phdr) + offsetof(Elf64_Phdr, p_memsz),
+       elf.eh.e_phoff + targetIndex * sizeof(Elf64_Phdr) + offsetof(Elf64_Phdr, p_memsz) + 8, "the p_memsz of the grown segment"},
+      {elf.eh.e_shoff + bssIndex * sizeof(Elf64_Shdr) + offsetof(Elf64_Shdr, sh_size),
+       elf.eh.e_shoff + bssIndex * sizeof(Elf64_Shdr) + offsetof(Elf64_Shdr, sh_size) + 8,
+       "the sh_size of the " + elf.SectionName(elf.sh[bssIndex]) + " section"},
+      {0, sizeof(Elf64_Ehdr), "the ELF header"},
+      {elf.eh.e_phoff, elf.eh.e_phoff + static_cast<std::uint64_t>(elf.eh.e_phnum) * sizeof(Elf64_Phdr), "the program header table"},
+      {elf.eh.e_shoff, elf.eh.e_shoff + static_cast<std::uint64_t>(elf.eh.e_shnum) * sizeof(Elf64_Shdr), "the section header table"},
+      // The note's header (12 bytes), its name ("GNU", padded to 4) and the 20 bytes of the ID.
+      {note.descOffset - sizeof(Elf64_Nhdr) - 4, note.descOffset + kBuildIdBytes, "the build-ID note"},
+  };
+  auto protectedRefusal = [&](const char* code, const std::string& id, const std::string& what, std::uint64_t fileOffset, std::uint64_t length,
+                              Refusal* r) {
+    const Region* hit = ProtectedRegionAt(regions, fileOffset, length);
+    if (hit == nullptr) return false;
+    *r = Refuse(code, id, what + " (file offset " + Hex(fileOffset) + ") lies in " + hit->name +
+                              ": the file's structure and the bytes the tool writes itself are not a row's to patch");
+    return true;
+  };
+
   // ---- the plan: every word the patch writes ----
   std::vector<Planned> planned;
   std::vector<Claim> claims;
@@ -535,6 +574,9 @@ PatchResult PatchLibr15(const std::vector<std::uint8_t>& stock, const PatchSpec&
       std::uint64_t off = 0;
       if (!TextOffset(elf, site.Vaddr(), 4ull * site.wordCount, &off)) {
         return Failed(Refuse("site_outside_text", id, "site " + std::to_string(s) + " at " + Hex(site.Vaddr()) + " is not in an executable segment"), stockSha);
+      }
+      if (protectedRefusal("protected_region", id, "site " + std::to_string(s) + " at " + Hex(site.Vaddr()), off, 4ull * site.wordCount, &rf)) {
+        return Failed(rf, stockSha);
       }
       const std::vector<std::uint32_t> live = readWords(off, site.wordCount);
       for (std::size_t w = 0; w < site.wordCount; ++w) {
@@ -627,6 +669,10 @@ PatchResult PatchLibr15(const std::vector<std::uint8_t>& stock, const PatchSpec&
       std::uint64_t off = 0;
       if (!TextOffset(elf, va, 4, &off)) {
         return Failed(Refuse("word_outside_text", row->id, "offset " + std::to_string(e.offset) + " at " + Hex(va) + " is not in an executable segment"), stockSha);
+      }
+      Refusal reach;
+      if (protectedRefusal("protected_region", row->id, "offset " + std::to_string(e.offset) + " at " + Hex(va), off, 4, &reach)) {
+        return Failed(reach, stockSha);
       }
       WordBytes live{};
       std::memcpy(live.data(), stock.data() + off, 4);

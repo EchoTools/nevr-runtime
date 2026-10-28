@@ -78,9 +78,9 @@ std::vector<uint8_t> BuildLobbySettingsLocalEvent(const std::string& json);
 struct LobbySettingsSinks {
   /// Raises Symbols::LobbySettingsResponse on the broadcaster. False when the game has no broadcaster.
   std::function<bool(void* message, uint64_t size)> raiseLocalEvent;
-  /// CBroadcaster::Send of Symbols::LobbySettingsResponse to `peer`; returns the call's result code.
-  std::function<int32_t(const void* item, uint64_t itemSize, const void* body, uint64_t bodySize, uint64_t peer)>
-      sendToPeer;
+  /// CBroadcaster::Send of Symbols::LobbySettingsResponse to `peer`; returns the call's result code. The send takes
+  /// `item` and `body` as mutable pointers (and only reads them): the relay owns both buffers and passes them as such.
+  std::function<int32_t(void* item, uint64_t itemSize, void* body, uint64_t bodySize, uint64_t peer)> sendToPeer;
 };
 
 enum class LobbySettingsLogLevel { kInfo, kWarning };
