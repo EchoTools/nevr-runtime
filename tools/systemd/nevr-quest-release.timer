@@ -1,5 +1,5 @@
 [Unit]
-Description=nEVR Quest release: look for a new release tag every 30 minutes (#1210)
+Description=nevr-runtime Quest release: look for a new release tag every 30 minutes (#1210)
 
 [Timer]
 OnCalendar=*:0/30

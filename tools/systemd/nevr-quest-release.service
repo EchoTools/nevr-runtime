@@ -1,5 +1,5 @@
 [Unit]
-Description=nEVR Quest release: build, publish and list the Quest APK of a new release tag (#1210)
+Description=nevr-runtime Quest release: build, publish and list the Quest APK of a new release tag (#1210)
 OnFailure=nevr-quest-release-failed.service
 
 [Service]

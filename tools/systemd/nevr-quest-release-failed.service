@@ -1,5 +1,5 @@
 [Unit]
-Description=nEVR Quest release: tell the release owner the timer's run failed (#1210)
+Description=nevr-runtime Quest release: tell the release owner the timer's run failed (#1210)
 
 [Service]
 Type=oneshot
