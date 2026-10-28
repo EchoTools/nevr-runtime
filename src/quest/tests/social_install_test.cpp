@@ -745,6 +745,10 @@ void TestResolveGameJson() {
     const GameJson json = ResolveGameJson(lookup);
     QCHECK(json.reset == nullptr && json.decode == nullptr && json.encode == nullptr);
   }
+  {  // the patched file's ID is the pinned build for this lookup; the stock file's is not (it is not what runs)
+    const GameJson json = ResolveGameJson(&PinnedBuildIdImage);
+    QCHECK(json.reset != nullptr && json.decode != nullptr && json.encode != nullptr);
+  }
   QCHECK(kLibR15CJsonResetVaddr == 0xfa227cULL);
   QCHECK(kLibR15CJsonDecodeFromVaddr == 0xfa7e8cULL);
   QCHECK(kLibR15CJsonEncodeToCompactVaddr == 0xfa7e64ULL);
@@ -771,6 +775,14 @@ void TestTarget() {
   QCHECK(t.slotVaddr.has_value() && *t.slotVaddr == 0x36ef528ULL);
 }
 
+void TestInviteGateTarget() {
+  const sentinel::GotTarget t = LibR15Boolean();
+  QCHECK(std::strcmp(t.module, "libr15.so") == 0);
+  QCHECK(t.kind == sentinel::RelocKind::kJumpSlot);
+  QCHECK(t.buildId != nullptr && std::strcmp(t.buildId, sentinel::pinned::LibR15PatchedBuildId()) == 0);
+  QCHECK(t.slotVaddr.has_value());
+}
+
 }  // namespace
 
 int main() {
@@ -785,6 +797,7 @@ int main() {
   TestResolveGameEvents();
   TestProbeOffMeansNoPostFunction();
   TestTarget();
+  TestInviteGateTarget();
   TestPresenceSelection();
   TestPresenceSlotCheckAcceptsTheRealAddresses();
   TestPresenceWrappersPassThroughAndLogOnChange();

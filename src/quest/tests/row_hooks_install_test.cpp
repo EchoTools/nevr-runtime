@@ -192,6 +192,23 @@ TEST(TheTextureInstallActivatesItsRowAfterProvingTheForceLoadPrologue) {
   CHECK(live.MapsLines() == mapsBefore);
 }
 
+TEST(ASecondTextureInstallIsRefusedByTheRowReturnsZeroAndLeavesTheFirstHook) {
+  Env env;
+  LiveImage live(PatchedBytes());
+  AttachVerified(live);
+  PlantTheCalledFunctions(live);
+  CHECK_EQ(ui_texture_mips::InstallUiTextureMips(&Lookup), 1u);
+  void* const first = *live.Slot(RowIndex("ui_texture.attach"));
+  g.lines.clear();
+
+  CHECK_EQ(ui_texture_mips::InstallUiTextureMips(&Lookup), 0u);
+
+  CHECK(*live.Slot(RowIndex("ui_texture.attach")) == first);
+  const std::string* line = RowLine("ui_texture", "ui_texture.attach");
+  CHECK(line != nullptr);
+  if (line != nullptr) CHECK(Has(*line, "\"status\":\"already_activated\""));
+}
+
 TEST(TheTextureInstallRefusesAForceLoadPrologueThatIsNotThePinnedOneAndLeavesTheRowPassThrough) {
   Env env;
   LiveImage live(PatchedBytes());
