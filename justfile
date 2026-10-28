@@ -1234,7 +1234,7 @@ test-quest-tls:
 # RELRO, BIND_NOW without RELRO, lazy) and runs src/quest/tests/got_hook_test.cpp,
 # which drives the production GotHook, CallbackThunk and core/hook_lifecycle.h
 # against them and against images built in memory. No NDK, no Android. Fail-close.
-test-quest-hooks:
+test-quest-hooks json_include="":
     #!/usr/bin/env bash
     set -euo pipefail
     out="build/quest-hooks-host"
@@ -1289,6 +1289,27 @@ test-quest-hooks:
         src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/inline_hook_test" -ldl -pthread
     timeout 120 "$out/inline_hook_test"
+    # The sentinel's run-time half of the libr15 build-time patch (docs/adr/0021 test 4): Attach on the shipped patcher's
+    # output for a synthetic stock libr15 at the table's real addresses, laid out in host memory (text pages r-x); every
+    # refusal of section 7, each row check, the trampolines, the activation store, and a protection seam that must see no
+    # call on the image. The patcher and its identity are built with exceptions (nlohmann::json), the sentinel half and the
+    # test without. nlohmann::json comes from the header the build installed from vcpkg.json (as in quest-patcher); pass
+    # json_include when this worktree has no build of its own.
+    attach_json="{{ json_include }}"
+    [ -n "$attach_json" ] || attach_json="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include"
+    [ -f "$attach_json/nlohmann/json.hpp" ] || { echo "test-quest-hooks: FAIL - $attach_json/nlohmann/json.hpp not found; run 'just build' with a mingw-* preset first, or pass json_include" >&2; exit 1; }
+    mkdir -p "$out/attach_json_inc"
+    ln -sfn "$(cd "$attach_json" && pwd)/nlohmann" "$out/attach_json_inc/nlohmann"
+    attach=(g++ -std=c++17 -Wall -Wextra -Werror -D_GLIBCXX_ASSERTIONS -Isrc -Isrc/quest/sentinel -isystem "$out/attach_json_inc" -pthread)
+    for src in src/quest/patch/libr15_patcher.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp; do
+        "${attach[@]}" -c "$src" -o "$out/attach_$(basename "$src" .cpp).o"
+    done
+    "${attach[@]}" -fno-exceptions src/quest/tests/libr15_attach_test.cpp \
+        "$out/attach_libr15_patcher.o" "$out/attach_libr15_patch_identity.o" "$out/attach_sha256.o" \
+        src/quest/sentinel/libr15_attach.cpp src/quest/sentinel/process_end_hook.cpp src/quest/sentinel/arm64_reloc.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/libr15_attach_test" -ldl
+    timeout 300 "$out/libr15_attach_test" src/quest/tests/fixtures
     # The PC-relative relocator (arm64_reloc.h): each kind decoded and then run, original window against the
     # relocated trampoline far away, on a small A64 interpreter. Pure; no device.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/arm64_reloc_test.cpp \
