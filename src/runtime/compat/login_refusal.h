@@ -14,6 +14,7 @@
 // Platform neutral and pure: no sockets, no logging, no game state. The caller (ws_bridge.cpp) owns the latch
 // and holds its own lock around it.
 
+#include <cstddef>
 #include <set>
 #include <string>
 #include <string_view>
@@ -36,6 +37,14 @@ inline std::vector<std::string> MissingServerCredentialKeys(std::string_view dis
 // The statuses of an upgrade the community service refuses for the account presented: unauthenticated or
 // forbidden. A 5xx, a 404 or a transport failure is the service being down or misaddressed, not a refusal.
 inline bool IsLoginRefusalStatus(int httpStatus) { return httpStatus == 401 || httpStatus == 403; }
+
+// What to tell an operator about the config: the path that was loaded, or where the search looked.
+inline std::string DescribeConfigSource(std::string_view loadedPath, const std::vector<std::string>& searched) {
+  if (!loadedPath.empty()) return std::string(loadedPath);
+  std::string text = "none found";
+  for (std::size_t i = 0; i < searched.size(); ++i) text += (i == 0 ? ", searched " : ", ") + searched[i];
+  return text;
+}
 
 // Where the config came from, for the stop line. The caller passes the loaded path, or "none found, searched
 // <dirs>"; an empty description reads "none found".

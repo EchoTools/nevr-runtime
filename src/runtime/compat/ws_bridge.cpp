@@ -27,6 +27,7 @@
 #include <memory>
 #include <limits>
 #include <mutex>
+#include <map>
 #include <optional>
 #include <random>
 #include <string>
@@ -43,6 +44,8 @@
 #include "runtime/ext/plugin_loader.h"  // N112: plugin manifest
 #include "runtime/lifecycle/cli.h"  // g_isServer
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat (N133 S4a: config.yaml reads)
+#include "runtime/lifecycle/crash_recovery.h"  // ServerFatal (#1254: a refused server login stops)
+#include "runtime/compat/login_refusal.h"
 #include "runtime/log/url_diagnostics.h"
 #include "runtime/log/security_diagnostics.h"
 #include "runtime/server/serverdb_uri.h"
@@ -289,6 +292,27 @@ static void CloseGameSocketsForRemote(const ix::WebSocket* remote, int connIdx, 
   std::thread([toClose]() {
     for (const auto& game : toClose) game->close();
   }).detach();
+}
+
+// #1254: no remote can be made for a game socket that just opened (a server without a credential, or a sign-in the
+// service refused). The socket is ended so the game sees the login fail rather than wait on a session that will never
+// open, and the login slot it took (admission) is given back so the next /login is a login, not a share of nothing.
+// Closed off this thread for the reason CloseGameSocketsForRemote gives: close() waits on the server thread.
+static void AbandonGameSocket(ix::WebSocket* gameWs, nevr_socket_role::Role role, int connIdx) {
+  std::shared_ptr<ix::WebSocket> keep;
+  for (ix::WebSocketServer* server : {g_server.get(), g_matchServer.get()}) {
+    if (server == nullptr) continue;
+    for (const auto& client : server->getClients()) {
+      if (client.get() == gameWs) keep = client;
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lk(g_pairsMutex);
+    if (role == nevr_socket_role::Role::Login) g_roles.LoginSessionEnded();
+  }
+  Log(EchoVR::LogLevel::Debug, "[NEVR.WS] conn=%d (%s): no remote for this game socket; closing it", connIdx,
+      ConnLabel(connIdx));
+  if (keep) std::thread([keep]() { keep->close(); }).detach();
 }
 
 // Connection index of a game-side websocket (-1 when unknown), for log lines.
@@ -1154,7 +1178,8 @@ static void LogAdmission(const AdmittedSocket& admitted, const ix::WebSocket* ga
 // identity the login is built from. Shared by the legacy path (one remote per socket) and the router path
 // (RemoteTransport::Open), so both put the same bytes on the wire. `connIdx` is only for log lines.
 struct PreparedRemote {
-  std::shared_ptr<ix::WebSocket> remote;
+  std::shared_ptr<ix::WebSocket> remote;  // null: nothing to connect (a refused login, #1254); the caller ends the game socket
+  std::string refusalKey;                 // the sign-in the remote presents, for ClientRefusalLatch
   std::string bearerToken;
   std::string accountName;  // N123 - empty means "not known", never a placeholder
   uint64_t discordId = 0;
@@ -1422,7 +1447,59 @@ static void HandleRemoteOpen(ProxyPair* pair, int connIdx, uint64_t discordId, c
   }
 }
 
+// #1254: a refused login. A client cannot stop, and the game reconnects a closed login socket by itself, so the
+// refusal is said once per refused sign-in and the later sockets of that sign-in are ended without a trip to the
+// service. Own mutex: the Error callback runs on the remote's thread and PrepareRemote on the game socket's.
+static std::mutex g_refusalMutex;
+static nevr_login_refusal::ClientRefusalLatch& g_refusalLatch = *new nevr_login_refusal::ClientRefusalLatch();
+
+// The sign-in each router remote presents, by connection index, for the refused hook.
+static std::map<int, std::string> g_routerRefusalKeys;
+
+static bool ClientRefusedAlready(const std::string& key) {
+  std::lock_guard<std::mutex> lk(g_refusalMutex);
+  return g_refusalLatch.IsRefused(key);
+}
+
+// The remote's upgrade came back with `httpStatus`. A server stops with the cause (ServerFatal exits in server mode:
+// without the account the community service accepts there is no ServerDB registration and no HTTP listener); a client
+// says it once for this sign-in. A status that is not a refusal (an outage, a missing route) is left to the callers.
+static void OnRemoteLoginRefused(int httpStatus, const std::string& refusalKey, int connIdx) {
+  if (!nevr_login_refusal::IsLoginRefusalStatus(httpStatus)) return;
+  if (g_isServer) {
+    const std::string cause = nevr_login_refusal::RefusedLoginCause(httpStatus, NevrCfgSource());
+    ServerFatal("%s", cause.c_str());
+    return;
+  }
+  bool firstTime = false;
+  {
+    std::lock_guard<std::mutex> lk(g_refusalMutex);
+    firstTime = g_refusalLatch.ShouldSay(refusalKey);
+  }
+  if (firstTime) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.WS] login refused (HTTP %d) on conn=%d (%s): the service did not accept this sign-in; not asking "
+        "again until the sign-in changes",
+        httpStatus, connIdx, ConnLabel(connIdx));
+  }
+}
+
 static PreparedRemote PrepareRemote(nevr_socket_role::Role role, int connIdx) {
+  // #1254: a server's only credential for the community service is the one in config.yaml. Without it the
+  // login would go out as account 0, or unauthenticated, and be refused every few seconds for ever, while
+  // nothing else of the server (ServerDB, the HTTP listener) can start. Stop with the cause instead.
+  if (g_isServer) {
+    const char* cfgDiscordId = NevrCfgGetFlat("nevr_discord_id");
+    const char* cfgPassword = NevrCfgGetFlat("nevr_password");
+    const std::vector<std::string> missing = nevr_login_refusal::MissingServerCredentialKeys(
+        cfgDiscordId ? std::string_view(cfgDiscordId) : std::string_view(),
+        cfgPassword ? std::string_view(cfgPassword) : std::string_view());
+    if (!missing.empty()) {
+      const std::string cause = nevr_login_refusal::NoCredentialCause(missing, NevrCfgSource());
+      ServerFatal("%s", cause.c_str());
+      return PreparedRemote{};
+    }
+  }
   auto remote = std::make_shared<ix::WebSocket>();
 
   // Build remote URL with optional query param auth
@@ -1483,6 +1560,14 @@ static PreparedRemote PrepareRemote(nevr_socket_role::Role role, int connIdx) {
   // Sending Bearer on top may cause the server to use the JWT session instead
   // of the URL-credential session, breaking matchmaker state.
   bool hasUrlCredentials = remoteUrl.find("discordid=") != std::string::npos;
+  // #1254: the sign-in a refusal is held against: the token, or (URL credentials) the account's own pair.
+  const std::string refusalKey = bearerToken + (hasUrlCredentials ? "|url-credentials" : "");
+  if (!g_isServer && ClientRefusedAlready(refusalKey)) {
+    Log(EchoVR::LogLevel::Debug,
+        "[NEVR.WS] conn=%d (%s): this sign-in was refused earlier; not connecting to the service", connIdx,
+        ConnLabel(connIdx));
+    return PreparedRemote{};
+  }
   std::string serverKey;
   if (hasUrlCredentials) {
     const char* cfgServerKey = NevrCfgGetFlat("nevr_server_key");
@@ -1514,6 +1599,7 @@ static PreparedRemote PrepareRemote(nevr_socket_role::Role role, int connIdx) {
 
   PreparedRemote prepared;
   prepared.remote = std::move(remote);
+  prepared.refusalKey = refusalKey;
   prepared.bearerToken = std::move(bearerToken);
   prepared.accountName = std::move(accountName);
   prepared.discordId = discordId;
@@ -1653,7 +1739,21 @@ static nevr_ws_transport::RemoteHooks MakeRemoteHooks() {
 #ifdef NEVR_TEST_HOOKS
     if (g_testRefuseRemoteOpens.load()) return nullptr;
 #endif
-    return PrepareRemote(request.role, request.connIdx).remote;
+    PreparedRemote prepared = PrepareRemote(request.role, request.connIdx);
+    if (prepared.remote) {
+      std::lock_guard<std::mutex> lk(g_refusalMutex);
+      g_routerRefusalKeys[request.connIdx] = prepared.refusalKey;
+    }
+    return prepared.remote;
+  };
+  hooks.refused = [](const nevr_session_router::RemoteOpenRequest& request, int httpStatus) {
+    std::string key;
+    {
+      std::lock_guard<std::mutex> lk(g_refusalMutex);
+      const auto it = g_routerRefusalKeys.find(request.connIdx);
+      if (it != g_routerRefusalKeys.end()) key = it->second;
+    }
+    OnRemoteLoginRefused(httpStatus, key, request.connIdx);
   };
   hooks.tap = [](const nevr_session_router::RemoteOpenRequest& request, const std::string& frame) {
     ObserveSocialFrames("server->game", request.connIdx, frame);
@@ -1968,6 +2068,10 @@ void InstallWebSocketBridge() {
 
             // A config or login socket, or a matchmaker with no login session to share: create a new remote ws
             PreparedRemote prepared = PrepareRemote(role, connIdx);
+            if (!prepared.remote) {
+              AbandonGameSocket(&gameWs, role, connIdx);
+              break;
+            }
             const std::shared_ptr<ix::WebSocket> remote = prepared.remote;
             const std::string& bearerToken = prepared.bearerToken;
             const std::string& accountName = prepared.accountName;
@@ -1987,7 +2091,7 @@ void InstallWebSocketBridge() {
                 // accountName captured BY VALUE alongside discordId — this callback
                 // outlives the enclosing scope, so a reference would dangle (N123).
                 // remoteAddress: only compared, never dereferenced (capturing the shared_ptr would be a cycle).
-                [pairPtr, gameWsPtr, connIdx, discordId, accountName, bearerToken,
+                [pairPtr, gameWsPtr, connIdx, discordId, accountName, bearerToken, refusalKey = prepared.refusalKey,
                  remoteAddress = static_cast<const ix::WebSocket*>(remote.get())](const ix::WebSocketMessagePtr& rmsg) {
                   switch (rmsg->type) {
                     case ix::WebSocketMessageType::Open:
@@ -2174,6 +2278,7 @@ void InstallWebSocketBridge() {
                       Log(EchoVR::LogLevel::Warning,
                           "[NEVR.WS] Remote error: http_status=%d retries=%u",
                           rmsg->errorInfo.http_status, rmsg->errorInfo.retries);
+                      OnRemoteLoginRefused(rmsg->errorInfo.http_status, refusalKey, connIdx);
                       // Automatic reconnection is off, so a remote that fails (often its first connect,
                       // with no Close to follow) is dead; end the game's sockets on it so the game
                       // retries rather than waiting on a session that will never open (#70).
@@ -2998,6 +3103,9 @@ void TestHook_N61_ResetState() {
   g_activeGameWs = nullptr;
   g_roles.Reset();
   nevr_socket_role::GlobalAdvertisement().Reset();
+  std::lock_guard<std::mutex> refusalLock(g_refusalMutex);
+  g_refusalLatch = nevr_login_refusal::ClientRefusalLatch();
+  g_routerRefusalKeys.clear();
 }
 
 // ---- test rig for the flush in HandleRemoteOpen ----------------------------------------------------------------

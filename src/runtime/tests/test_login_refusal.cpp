@@ -12,6 +12,7 @@
 namespace {
 
 using nevr_login_refusal::ClientRefusalLatch;
+using nevr_login_refusal::DescribeConfigSource;
 using nevr_login_refusal::MissingServerCredentialKeys;
 using nevr_login_refusal::NoCredentialCause;
 using nevr_login_refusal::RefusedLoginCause;
@@ -75,6 +76,19 @@ TEST(LoginRefusalCause, TheRefusedCauseIsOneLineAndNamesNoConfigWhenNoneWasFound
   const std::string cause = RefusedLoginCause(403, "");
   EXPECT_EQ(cause.find('\n'), std::string::npos) << cause;
   EXPECT_NE(cause.find("config: none found"), std::string::npos) << cause;
+}
+
+TEST(LoginRefusalConfigSource, ALoadedConfigIsNamedByItsPath) {
+  EXPECT_EQ(DescribeConfigSource("C:\\nevr\\_local\\config.yaml", {"C:\\x", "C:\\y"}), "C:\\nevr\\_local\\config.yaml");
+}
+
+TEST(LoginRefusalConfigSource, NoConfigNamesWhereItLooked) {
+  EXPECT_EQ(DescribeConfigSource("", {"C:\\x\\config.yaml", "C:\\y\\config.yaml"}),
+            "none found, searched C:\\x\\config.yaml, C:\\y\\config.yaml");
+}
+
+TEST(LoginRefusalConfigSource, NoConfigAndNoSearchListIsJustNoneFound) {
+  EXPECT_EQ(DescribeConfigSource("", {}), "none found");
 }
 
 TEST(LoginRefusalStatus, OnlyTheAuthStatusesAreARefusal) {

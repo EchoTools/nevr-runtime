@@ -15,6 +15,7 @@
 
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/lifecycle/service_map.h"
+#include "runtime/compat/login_refusal.h"  // DescribeConfigSource: the config line of a refused-login stop
 #include "runtime/compat/socket_role.h"  // TagBridgeUrl: the config and login services get their own request target (#520)
 #include "runtime/lifecycle/stable_string_pool.h"
 #include "runtime/lifecycle/cli.h"        // g_customConfigPath, g_isServer (drags core/pch.h -> windows.h, now NOMINMAX)
@@ -66,7 +67,7 @@ bool IsServerMode() {
 // -config/-config-path directory when one was given (LoadEarlyConfig itself does
 // not, but by first-access time g_customConfigPath is parsed, so we can). First
 // existing file wins; "" if none is found.
-std::string FindNevrConfigYamlPath() {
+std::string FindNevrConfigYamlPath(std::vector<std::string>* searched = nullptr) {
   CHAR moduleDir[MAX_PATH] = {0};
   GetModuleFileNameA(reinterpret_cast<HMODULE>(EchoVR::g_GameBaseAddress), moduleDir, MAX_PATH);
   if (CHAR* lastSlash = strrchr(moduleDir, '\\')) *(lastSlash + 1) = '\0';
@@ -97,7 +98,15 @@ std::string FindNevrConfigYamlPath() {
     std::ifstream f(c, std::ios::binary);
     if (f.good()) return c;
   }
+  if (searched != nullptr) *searched = candidates;
   return std::string();
+}
+
+// What the config was, for the refused-login stop line (#1254): the path loaded, or where the search looked.
+// Written once by the loader below, before NevrCfg() returns, and read only after it.
+std::string& ConfigSourceStore() {
+  static std::string source = "not loaded";
+  return source;
 }
 
 // The one parsed config.yaml, loaded lazily on first access. Thread-safe init via
@@ -126,7 +135,9 @@ const nevr::NevrConfig& NevrCfg() {
   if (g_testInputsSet && g_testConfig != nullptr) return *g_testConfig;
 #endif
   static const nevr::NevrConfig cfg = []() -> nevr::NevrConfig {
-    const std::string path = FindNevrConfigYamlPath();
+    std::vector<std::string> searched;
+    const std::string path = FindNevrConfigYamlPath(&searched);
+    ConfigSourceStore() = nevr_login_refusal::DescribeConfigSource(path, searched);
     if (path.empty()) {
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.CONFIG] no config.yaml found — NEVR config keys use built-in defaults");
@@ -146,6 +157,7 @@ const nevr::NevrConfig& NevrCfg() {
                   "broken or incomplete config (an unset required secret must fail loud, "
                   "never silently degrade to no login)",
                   path.c_str(), detail.c_str());
+      ConfigSourceStore() = path + " (rejected; built-in defaults in use)";
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.CONFIG] continuing with built-in defaults after config.yaml rejection (client mode)");
       return nevr::NevrConfig();
@@ -339,6 +351,16 @@ const char* NevrCfgGetFlat(const char* flatKey) {
     const std::optional<std::string> v = Flat(flatKey);
     if (!v) return nullptr;  // unmapped or absent
     return InternCStr(*v, "NevrCfgGetFlat");
+  });
+}
+
+const char* NevrCfgSource() {
+  return AccessorBoundary("NevrCfgSource", [&]() -> const char* {
+#ifdef NEVR_TEST_HOOKS
+    if (g_testInputsSet) return InternCStr("test config", "NevrCfgSource");
+#endif
+    (void)NevrCfg();  // the loader sets the store; magic-static init completes before it returns
+    return InternCStr(ConfigSourceStore(), "NevrCfgSource");
   });
 }
 

@@ -16,6 +16,9 @@
 #include <shellapi.h>
 
 #include <gtest/gtest.h>
+#include <ixwebsocket/IXConnectionState.h>
+#include <ixwebsocket/IXSocket.h>
+#include <ixwebsocket/IXSocketServer.h>
 #include <ixwebsocket/IXNetSystem.h>
 #include <ixwebsocket/IXWebSocket.h>
 #include <ixwebsocket/IXWebSocketServer.h>
@@ -244,11 +247,16 @@ const char* g_testDiscordId = nullptr;
 // so the source holds no 18-digit string (the N20 sensor in `just verify` reads one as an account id).
 constexpr uint64_t kTestAccountId = 123456789012345678ULL;
 const std::string kTestAccountIdText = std::to_string(kTestAccountId);
+// #1254: nevr_password answers from g_testPassword; a server needs it and the discord id to log in.
+const char* g_testPassword = nullptr;
 const char* NevrCfgGetFlat(const char* flatKey) {
   if (std::strcmp(flatKey, "nevr_session_router") == 0) return g_testRouterMode;
   if (std::strcmp(flatKey, "nevr_discord_id") == 0) return g_testDiscordId;
+  if (std::strcmp(flatKey, "nevr_password") == 0) return g_testPassword;
   return nullptr;
 }
+// #1254: the config the stop line names; service_config.cpp is not linked here.
+const char* NevrCfgSource() { return "test config"; }
 
 // --- plugin_load_plan.h (N134 S6, referenced by plugin_loader.cpp LoadPlugins) ---
 // service_config.cpp defines the real one (BuildLoadPlan over the config.yaml
@@ -3498,6 +3506,10 @@ class RolesByPathTest : public ::testing::Test {
     TestHook_N61_ResetState();
     ClearTestLogs();
     g_testRouterMode = RouterMode();
+    // A client run unless a test says otherwise: a server with no credential stops (#1254), and these tests are
+    // about the roles, not the server's login. Without this they took the mode a test before them left behind.
+    wasServerBase_ = g_isServer;
+    g_isServer = FALSE;
     fatalBefore_ = g_fatalErrorCalls;
     ASSERT_TRUE(remote_.Start());
     SetWebSocketBridgeTarget(remote_.Uri().c_str());
@@ -3513,6 +3525,7 @@ class RolesByPathTest : public ::testing::Test {
     EXPECT_TRUE(YieldUntil([] { return TestHook_ConnectedGameSockets() == 0; }));
     StopWebSocketBridgeListener();
     g_testRouterMode = nullptr;
+    g_isServer = wasServerBase_;
     // The login session's remote outlives the game sockets that used it; dropping it closes the service's
     // connection, which the service's stop waits for.
     TestHook_N61_ResetState();
@@ -3524,6 +3537,7 @@ class RolesByPathTest : public ::testing::Test {
   virtual const char* RouterMode() const { return nullptr; }
   virtual bool BridgeExpected() const { return true; }
   int fatalBefore_ = 0;
+  BOOL wasServerBase_ = TRUE;
   // Connects `socket` at `target` and returns once the bridge has finished its Open handler for it.
   void Admit(GameSocket& socket, const std::string& target, uint16_t port = 0) {
     ASSERT_TRUE(socket.Connect(port != 0 ? port : port_, target)) << target;
@@ -4023,8 +4037,10 @@ class GameFlagScope {
     g_isServer = isServer;
     TestHook_SetGameFlagWord(flags);
     g_testDiscordId = kTestAccountIdText.c_str();
+    g_testPassword = "test-password";  // a server needs the pair (#1254)
   }
   ~GameFlagScope() {
+    g_testPassword = nullptr;
     g_testDiscordId = nullptr;
     TestHook_SetGameFlagWord(-1);
     g_isServer = wasServer_;
@@ -4105,6 +4121,7 @@ TEST_F(RolesByPathTest, LegacyVrClientsInjectedLoginStaysOvrOrg) {
 
 // L5: a dedicated server has no login to complete; the service's LoginFailure reaches the game as a LoginSuccess.
 TEST_F(RouterAllTest, AServersLoginFailureReachesTheGameAsALoginSuccess) {
+  GameFlagScope server(-1, TRUE);  // a server with a credential: without one it stops (#1254)
   remote_.SetLoginReply(nevr_evr_codec::kSymLoginFailure);
   GameSocket login;
   Admit(login, "/login");
@@ -6179,4 +6196,275 @@ TEST(CliOptionValue, NothingAfterTheOptionIsNoValue) {
     wchar_t* argv[] = {exe, flag, beyond};  // a token sits past argc: a lookahead that ignores argc finds it
     EXPECT_EQ(nevr_cli::OptionValue(2, argv, 1), nullptr);
     EXPECT_EQ(nevr_cli::OptionValue(2, nullptr, 1), nullptr);
+}
+
+// ============================================================================
+// #1254: what a refused login does. A server with no credential, or one the service refuses, stops through
+// ServerFatal with the cause and never sends account 0 or connects unauthenticated; a client says a refusal
+// once and does not go back to the service for the same sign-in. compat/login_refusal.h holds the decisions
+// (test_login_refusal); these drive them through the real bridge, the legacy rules and the router.
+// ============================================================================
+
+namespace {
+
+// A community service that refuses every upgrade with `status`, and counts the requests it refused. ix::HttpServer
+// cannot stand in: it hands a websocket upgrade to its websocket path, which accepts it.
+class RefusingServer final : public ix::SocketServer {
+ public:
+  RefusingServer(int port, int status, std::atomic<int>& requests)
+      : ix::SocketServer(port, "127.0.0.1"), status_(status), requests_(requests) {}
+  ~RefusingServer() override { stop(); }
+
+ private:
+  void handleConnection(std::unique_ptr<ix::Socket> socket, std::shared_ptr<ix::ConnectionState> state) override {
+    const auto never = [] { return false; };
+    bool first = true;
+    for (;;) {  // the request head, up to its blank line
+      const auto [ok, line] = socket->readLine(never);
+      if (!ok) break;
+      if (first) {
+        ++requests_;
+        first = false;
+      }
+      if (line == "\r\n" || line == "\n") break;
+    }
+    socket->writeBytes("HTTP/1.1 " + std::to_string(status_) +
+                           " Refused\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                       never);
+    socket->close();
+    state->setTerminated();
+  }
+  size_t getConnectedClientsCount() override { return 0; }
+
+  int status_;
+  std::atomic<int>& requests_;
+};
+
+class RefusingService {
+ public:
+  bool Start(int status) {
+    std::random_device device;
+    std::mt19937 generator(device());
+    std::uniform_int_distribution<int> ports(49152, 65535);
+    for (int attempt = 0; attempt < 20; ++attempt) {
+      const int port = ports(generator);
+      server_ = std::make_unique<RefusingServer>(port, status, requests_);
+      if (server_->listen().first) {
+        port_ = port;
+        server_->start();
+        return true;
+      }
+    }
+    server_.reset();
+    return false;
+  }
+  void Stop() {
+    if (server_) server_->stop();
+    server_.reset();
+  }
+  std::string Uri() const { return "ws://127.0.0.1:" + std::to_string(port_) + "/"; }
+  int Requests() const { return requests_.load(); }
+
+ private:
+  std::atomic<int> requests_{0};
+  std::unique_ptr<RefusingServer> server_;
+  int port_ = 0;
+};
+
+class RefusedLoginTest : public ::testing::Test {
+ protected:
+  virtual const char* RouterMode() const { return nullptr; }
+  virtual bool ServerRun() const { return true; }
+  void SetUp() override {
+    ix::initNetSystem();
+    TestHook_N61_ResetState();
+    ClearTestLogs();
+    g_testRouterMode = RouterMode();
+    wasServer_ = g_isServer;
+    g_isServer = ServerRun() ? TRUE : FALSE;
+    g_serverFatalCalls = 0;
+    g_lastServerFatal.clear();
+    g_testDiscordId = nullptr;
+    g_testPassword = nullptr;
+  }
+  void TearDown() override {
+    if (HasFailure()) {
+      // The bridge's own lines are the evidence of a failed run (they are otherwise swallowed by the Log stub).
+      std::lock_guard<std::mutex> lock(g_testLogMutex);
+      for (const std::string& line : g_testLogMessages) fprintf(stderr, "[bridge log] %s\n", line.c_str());
+    }
+    EXPECT_TRUE(YieldUntil([] { return TestHook_ConnectedGameSockets() == 0; }));
+    StopWebSocketBridgeListener();
+    TestHook_SetRouterGate(-1);
+    TestHook_SetRefuseRemoteOpens(false);
+    g_testRouterMode = nullptr;
+    g_testDiscordId = nullptr;
+    g_testPassword = nullptr;
+    g_isServer = wasServer_;
+    TestHook_N61_ResetState();
+    SetWebSocketBridgeTarget("");
+    refusing_.Stop();
+    if (accepting_started_) {
+      EXPECT_TRUE(accepting_.WaitForNoClients());
+      accepting_.Stop();
+    }
+  }
+  void StartBridgeTo(const std::string& remoteUri) {
+    SetWebSocketBridgeTarget(remoteUri.c_str());
+    InstallWebSocketBridge();
+    port_ = GetWebSocketBridgePort();
+    ASSERT_NE(port_, 0);
+  }
+  void StartRefusing(int status) {
+    ASSERT_TRUE(refusing_.Start(status));
+    StartBridgeTo(refusing_.Uri());
+  }
+  void StartAccepting() {
+    ASSERT_TRUE(accepting_.Start());
+    accepting_started_ = true;
+    StartBridgeTo(accepting_.Uri());
+  }
+  void GiveTheServerACredential() {
+    g_testDiscordId = kTestAccountIdText.c_str();
+    g_testPassword = "test-password";
+  }
+  static bool WaitForServerFatal() { return YieldUntil([] { return g_serverFatalCalls >= 1; }); }
+
+  RemoteService accepting_;
+  RefusingService refusing_;
+  bool accepting_started_ = false;
+  BOOL wasServer_ = TRUE;
+  uint16_t port_ = 0;
+};
+
+class RefusedLoginRouterTest : public RefusedLoginTest {
+ protected:
+  const char* RouterMode() const override { return "all"; }
+};
+
+class RefusedLoginClientTest : public RefusedLoginTest {
+ protected:
+  bool ServerRun() const override { return false; }
+};
+
+class RefusedLoginRouterClientTest : public RefusedLoginTest {
+ protected:
+  const char* RouterMode() const override { return "all"; }
+  bool ServerRun() const override { return false; }
+};
+
+// A server with no credential: it stops with the cause before any connection to the service, and never sends
+// the LoginRequest (account 0, unauthenticated) that it used to.
+void ExpectNoCredentialServerStops(RemoteService& service, uint16_t port) {
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port, "/login"));
+  ASSERT_TRUE(YieldUntil([] { return g_serverFatalCalls >= 1; })) << "the server did not stop";
+  EXPECT_EQ(g_serverFatalCalls, 1) << g_lastServerFatal;
+  EXPECT_NE(g_lastServerFatal.find("server login refused"), std::string::npos) << g_lastServerFatal;
+  EXPECT_NE(g_lastServerFatal.find("identity.discord_id"), std::string::npos) << g_lastServerFatal;
+  EXPECT_NE(g_lastServerFatal.find("auth.password"), std::string::npos) << g_lastServerFatal;
+  EXPECT_NE(g_lastServerFatal.find("test config"), std::string::npos) << g_lastServerFatal;
+  EXPECT_TRUE(login.WaitForClose()) << "the game's login socket was left open";
+  EXPECT_EQ(service.Opens(), 0) << "the server connected to the service without a credential";
+  EXPECT_EQ(service.LoginRequests(), 0) << "the server sent a LoginRequest without a credential";
+}
+
+// A server whose credential the service refuses: it stops with the status and the config.
+void ExpectRefusedServerStops(RefusingService& service, uint16_t port, int status) {
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port, "/login"));
+  ASSERT_TRUE(YieldUntil([] { return g_serverFatalCalls >= 1; })) << "the server did not stop";
+  EXPECT_EQ(g_serverFatalCalls, 1) << g_lastServerFatal;
+  EXPECT_NE(g_lastServerFatal.find("server login refused"), std::string::npos) << g_lastServerFatal;
+  EXPECT_NE(g_lastServerFatal.find("HTTP " + std::to_string(status)), std::string::npos) << g_lastServerFatal;
+  EXPECT_NE(g_lastServerFatal.find("test config"), std::string::npos) << g_lastServerFatal;
+  EXPECT_GE(service.Requests(), 1);
+}
+
+// A client says the refusal once, and the next login socket of the same sign-in does not go back to the service.
+void ExpectClientSaysRefusalOnce(RefusingService& service, uint16_t port) {
+  GameSocket first;
+  ASSERT_TRUE(first.Connect(port, "/login"));
+  ASSERT_TRUE(first.WaitForClose()) << "the refused login socket was left open";
+  ASSERT_TRUE(WaitForLogLines("login refused (HTTP 401)", 1));
+  EXPECT_EQ(service.Requests(), 1);
+  GameSocket second;
+  ASSERT_TRUE(second.Connect(port, "/login"));
+  ASSERT_TRUE(second.WaitForClose()) << "the next login socket was left open";
+  EXPECT_EQ(service.Requests(), 1) << "the client went back to the service with a sign-in it was refused for";
+  EXPECT_EQ(LogLinesContaining("login refused (HTTP").size(), 1u) << "the refusal was said more than once";
+  EXPECT_EQ(g_serverFatalCalls, 0) << "a client must not stop";
+}
+
+}  // namespace
+
+TEST_F(RefusedLoginTest, AServerWithNoCredentialStopsWithTheCauseAndNeverConnects) {
+  StartAccepting();
+  ExpectNoCredentialServerStops(accepting_, port_);
+}
+
+TEST_F(RefusedLoginRouterTest, AServerWithNoCredentialStopsWithTheCauseAndNeverConnects) {
+  StartAccepting();
+  ExpectNoCredentialServerStops(accepting_, port_);
+}
+
+TEST_F(RefusedLoginTest, AServerWithOnlyADiscordIdNamesJustThePassword) {
+  StartAccepting();
+  g_testDiscordId = kTestAccountIdText.c_str();
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port_, "/login"));
+  ASSERT_TRUE(YieldUntil([] { return g_serverFatalCalls >= 1; }));
+  EXPECT_NE(g_lastServerFatal.find("missing auth.password)"), std::string::npos) << g_lastServerFatal;
+  EXPECT_EQ(g_lastServerFatal.find("missing identity.discord_id"), std::string::npos) << g_lastServerFatal;
+  EXPECT_EQ(accepting_.Opens(), 0);
+}
+
+TEST_F(RefusedLoginTest, AServerWithACredentialConnectsAndIsNotStopped) {
+  StartAccepting();
+  GiveTheServerACredential();
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port_, "/login"));
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings));
+  EXPECT_EQ(g_serverFatalCalls, 0) << g_lastServerFatal;
+  EXPECT_EQ(accepting_.LoginRequests(), 1);
+}
+
+TEST_F(RefusedLoginClientTest, AClientWithNoCredentialIsNotStoppedByTheServerRule) {
+  StartAccepting();
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port_, "/login"));
+  ASSERT_TRUE(YieldUntil([&] { return accepting_.Opens() >= 1; })) << "a client was kept from connecting";
+  EXPECT_EQ(g_serverFatalCalls, 0) << g_lastServerFatal;
+}
+
+TEST_F(RefusedLoginTest, AServerWhoseCredentialTheServiceRefusesStopsWithTheStatus) {
+  GiveTheServerACredential();
+  StartRefusing(401);
+  ExpectRefusedServerStops(refusing_, port_, 401);
+}
+
+TEST_F(RefusedLoginRouterTest, AServerWhoseCredentialTheServiceRefusesStopsWithTheStatus) {
+  GiveTheServerACredential();
+  StartRefusing(403);
+  ExpectRefusedServerStops(refusing_, port_, 403);
+}
+
+TEST_F(RefusedLoginTest, AnOutageIsNotARefusalAndDoesNotStopTheServer) {
+  GiveTheServerACredential();
+  StartRefusing(503);
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port_, "/login"));
+  ASSERT_TRUE(login.WaitForClose());
+  EXPECT_GE(refusing_.Requests(), 1);
+  EXPECT_EQ(g_serverFatalCalls, 0) << g_lastServerFatal;
+}
+
+TEST_F(RefusedLoginClientTest, AClientSaysARefusalOnceAndDoesNotGoBackForTheSameSignIn) {
+  StartRefusing(401);
+  ExpectClientSaysRefusalOnce(refusing_, port_);
+}
+
+TEST_F(RefusedLoginRouterClientTest, AClientSaysARefusalOnceAndDoesNotGoBackForTheSameSignIn) {
+  StartRefusing(401);
+  ExpectClientSaysRefusalOnce(refusing_, port_);
 }
