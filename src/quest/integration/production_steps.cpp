@@ -332,6 +332,21 @@ ActionResult MatchmakingAction() noexcept {
   }
 }
 
+// The title of the login-failed page (#1137): its script library is mapped by the game after the constructor, so this
+// answers kRetryLater until it is. A refusal that a retry cannot change is a stage line at Error, and leaves the game's
+// own LOGIN FAILED title where it was.
+ActionResult LoginTitleAction() noexcept {
+  const sentinel::GotStatus status = nevr_quest::integration::InstallLoginTitleHook();
+  switch (status) {
+    case sentinel::GotStatus::kOk: return Staged("login_title_hook_installed", {Settle::kDone, "installed"});
+    case sentinel::GotStatus::kAlreadyInstalled:
+      return Staged("login_title_hook_installed", {Settle::kDone, "already_installed"});
+    case sentinel::GotStatus::kModuleNotLoaded: return {Settle::kRetryLater, "module_not_loaded"};
+    default: break;
+  }
+  return Staged("login_title_hook_installed", {Settle::kGiveUp, sentinel::GotStatusName(status)});
+}
+
 // The normal plugin pass (#438): the first post-load call is its moment. The loader records every outcome itself and
 // never throws; the pass settles whatever it did.
 ActionResult PluginsAction() noexcept {
@@ -604,6 +619,7 @@ class ProductionSteps final : public Steps {
     PostLoadActions actions;
     if (login) actions.login = &LoginAction;
     if (matchmaking) actions.matchmaking = &MatchmakingAction;
+    if (login) actions.loginTitle = &LoginTitleAction;  // the title is the prompt's second half: wanted with the login
     if (plugins) actions.plugins = &PluginsAction;
     SetPostLoadActions(actions);
     sentinel::GotStatus status = sentinel::GotStatus::kNotInstalled;

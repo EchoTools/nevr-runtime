@@ -12,6 +12,7 @@
 //   dlopen_hook_installed    the hook on libr15's dlopen slot
 //   libpnsovr_loaded         the game's dlopen returned libpnsovr.so
 //   login_hook_installed     the login hook on libpnsovr
+//   login_title_hook_installed  the title hook on the login-failed page's script library (#1137)
 //   matchmaking_redirect_installed   the TString thunk on libpnsradmatchmaking
 //   router_remote_connected  a remote WebSocket session to the NEVR service opened
 //   router_remote_failed     a remote session could not open (class = the reason)

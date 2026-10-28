@@ -28,6 +28,10 @@ using namespace nevr_quest::integration;
 namespace nevr_quest::login_prompt {
 bool RegisterCounters() noexcept;
 }  // namespace nevr_quest::login_prompt
+// The same for sentinel/login_title_hook.h (#1137).
+namespace nevr_quest::login_title {
+bool RegisterCounters() noexcept;
+}  // namespace nevr_quest::login_title
 // The same for sentinel/obb_skip_hook.h (#319).
 namespace nevr_quest::obb_skip {
 bool RegisterCounters() noexcept;
@@ -136,8 +140,10 @@ void TestInstallWithoutTheModuleFailsCleanly() {
 // one calls counter per hook), social 26 (the facade's, the invite gate's, the rich presence trace's four, its three local answers), login prompt 16 (#239, #672, login_prompt_hook.h kCounterCount), OBB-mount
 // skip 6 (#319, #866: the mount, the path and the data-root question, obb_skip_hook.h kCounterCount), texture quality 4 (#943,
 // texture_quality_hook.h kCounterCount), resource request log 2 (#871, resource_request_hook.h kCounterCount; development
-// builds only, so a release build registers 2 fewer). 91 on main before #943, 95 of 96 with it.
-constexpr int kSentinelCounters = 2 + 14 + 1 + 2 + 22 + 26 + 16 + 6 + 4 + 2;
+// builds only, so a release build registers 2 fewer), login title 5 (#1137, login_title_hook.h kCounterCount; registered
+// with the login prompt's, through the same step). 91 on main before #943, 95 with it, which filled the 96 the table held
+// then; the table holds 128 since #1137.
+constexpr int kSentinelCounters = 2 + 14 + 1 + 2 + 22 + 26 + 16 + 6 + 4 + 2 + 5;
 static_assert(kSentinelCounters <= static_cast<int>(sentinel::kMaxReportCounters),
               "the sentinel's hooks register more counters than the reporter holds");
 
@@ -158,7 +164,10 @@ struct RealCounterSteps final : Steps {
   bool RegisterDlopenCounters() override { return nevr_quest::integration::RegisterDlopenCounters(); }
   bool RegisterLoginCounters() override { return nevr_quest_login::RegisterLoginHookCounters(); }
   bool RegisterSocialCounters() override { return nevr_quest::integration::RegisterSocialCounters(); }
-  bool RegisterLoginPromptCounters() override { return nevr_quest::login_prompt::RegisterCounters(); }
+  // entry.cpp registers the login title hook's counters with the login prompt's, in the same step.
+  bool RegisterLoginPromptCounters() override {
+    return nevr_quest::login_prompt::RegisterCounters() && nevr_quest::login_title::RegisterCounters();
+  }
   bool RegisterObbSkipCounters() override { return nevr_quest::obb_skip::RegisterCounters(); }
   bool ResourceRequestLogWanted() override { return true; }  // the budget is the development build's, the larger one
   bool RegisterResourceRequestCounters() override { return nevr_quest::resource_request::RegisterCounters(); }
