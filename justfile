@@ -1334,6 +1334,13 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/resource_request_hook_test" -ldl
     timeout 120 "$out/resource_request_hook_test"
+    # The Quest main-menu cards (#966): the real handler through the thunk entry against a stand-in callback block, a
+    # CAllocator with the slots FreeResource and the streaming worker use, and the game's callback.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/menu_cards_hook_test.cpp \
+        src/quest/sentinel/menu_cards_hook.cpp src/quest/data/sha256.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/menu_cards_hook_test" -ldl
+    timeout 120 "$out/menu_cards_hook_test"
     # The toast presenter against a fake JNI (#807): a Java exception thrown at each JNI call in turn, null or not, is
     # never left pending. jni.h is the NDK's own; the recipe stops when it is absent.
     jni="{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/jni.h"
@@ -1429,6 +1436,9 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
     # answered locally, and the list the sentinel gates on equals what the library has.
     python3 tools/pinned_ovr_import_walk.py "$out/lib/lib/arm64-v8a/libpnsovr.so" --sites tools/pinned_ovr_sites.txt \
         --header src/quest/login/login_prerequisite_targets.h
+    # #944: every site the community patch repo edits in libpnsovr.so still holds the stock word and sits in the
+    # function tools/quest_patcher_sites.tsv names, so the table's mapping to our hooks is about this library.
+    python3 tools/quest_patcher_sites.py --lib "$out/lib/lib/arm64-v8a/libpnsovr.so"
 
 # Quest social provider on the host (docs/adr/0003, "Social provider"): the ABI pins against the
 # recorded vtable, the facade driven through its vtable, the hook decision through the real callback
