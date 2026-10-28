@@ -2972,6 +2972,53 @@ verify:
     #   src/abi      -> sensor_stage1 above (grep rc>=2 on a missing subject)
     #   src/core     -> the same, via the N81/N85/N20 path sets
     #   src/extension-> CMake, since its headers are in nevr_core's source list
+    # --- N149: the Quest sentinel changes no code page (docs/adr/0021) ------------
+    # Horizon denies execmod on a written libr15 page, so the libr15 is patched on the host at build time and the sentinel
+    # stores only DATA at run time. Four things keep it so, each a scan of src/quest outside the tests:
+    #   (1) a protection or mapping call (mprotect, mmap, mremap, PROT_EXEC, PROT_WRITE) appears only in the files that need
+    #       one: got_hook.cpp (the GOT's data pages), libr15_attach.cpp (its trampoline pages, anonymous memory) and
+    #       credits_text.cpp (its anonymous buffer), plus the two headers that declare those seams;
+    #   (2) the run-time code writers of the old inline hooks (InstallInlineThunk, WriteWord, AllocateInReach) do not come back;
+    #   (3) credits_text.cpp makes exactly one protection call, on its own buffer, and no other mprotect;
+    #   (4) the STOCK build ID constant is named only by the files that need the stock file's identity. A hook that compares the
+    #       stock ID where it means the patched one is a no-op on the patched libr15 that no unit test of the hook's own logic sees.
+    # The allowlists are repeated in tools/tests/test_quest_no_code_writes.py, which fails when they differ.
+    # BEGIN N149
+    N149_PROT_OK=" sentinel/got_hook.cpp sentinel/libr15_attach.cpp sentinel/libr15_attach.h sentinel/credits_text.cpp sentinel/credits_text.h "
+    N149_ID_OK=" diag/hwdump_run.cpp patch/libr15_patch_identity.cpp patch/libr15_patch_table.h patch/libr15_patcher.cpp plugin/plugin_identity.h sentinel/credits_text.cpp sentinel/data_wiring.cpp sentinel/libr15_attach.cpp sentinel/libr15_identity.cpp sentinel/pinned_targets.h "
+    n149_fail() { echo "verify: FAIL — N149 $1 (docs/adr/0021: the sentinel changes no code page at run time)." >&2; exit 1; }
+    N149_RC=0; N149_PROT=$(grep -rnE '\b(mprotect|mmap|mremap|pkey_mprotect)\b|PROT_(EXEC|WRITE)' src/quest --include='*.cpp' --include='*.h' --exclude-dir=tests) || N149_RC=$?
+    sensor_stage1 "N149 protection calls" "src/quest" "$N149_RC"
+    sensor_nonempty "N149 protection calls" "the protection calls of got_hook.cpp, libr15_attach.cpp and credits_text.cpp" "$N149_PROT"
+    N149_PROT_CODE=$(grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' <<<"$N149_PROT" || true)
+    while IFS= read -r n149_hit; do
+        [ -n "$n149_hit" ] || continue
+        n149_rel="${n149_hit%%:*}"; n149_rel="${n149_rel#src/quest/}"
+        case "$N149_PROT_OK" in *" $n149_rel "*) ;; *) n149_fail "$n149_rel changes or maps memory protection: $n149_hit" ;; esac
+    done <<<"$N149_PROT_CODE"
+    N149_RC=0; N149_BAD=$(grep -rnE 'InstallInlineThunk|\bWriteWord\b|AllocateInReach' src/quest --include='*.cpp' --include='*.h' --exclude-dir=tests) || N149_RC=$?
+    sensor_stage1 "N149 run-time code writers" "src/quest" "$N149_RC"
+    N149_BAD_CODE=$(grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' <<<"$N149_BAD" || true)
+    [ -z "$N149_BAD_CODE" ] || n149_fail "a run-time code writer is back: $N149_BAD_CODE"
+    N149_RC=0; N149_CRED=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/quest/sentinel/credits_text.cpp) || N149_RC=$?
+    sensor_stage1 "N149 credits install" "src/quest/sentinel/credits_text.cpp" "$N149_RC"
+    sensor_nonempty "N149 credits install" "non-comment lines of src/quest/sentinel/credits_text.cpp" "$N149_CRED"
+    N149_CALLS=$(grep -cE '\bprotect\(' <<<"$N149_CRED" || true)
+    N149_OWN=$(grep -cE '\bprotect\(memory,' <<<"$N149_CRED" || true)
+    { [ "$N149_CALLS" = "1" ] && [ "$N149_OWN" = "1" ]; } || n149_fail "credits_text.cpp makes $N149_CALLS protection call(s), $N149_OWN on its own buffer; it must make exactly one, on its buffer"
+    N149_MP=$(grep -cE '\bmprotect\b' <<<"$N149_CRED" || true)
+    N149_MP_DEFAULT=$(grep -cE ': &mprotect;' <<<"$N149_CRED" || true)
+    [ "$N149_MP" = "$N149_MP_DEFAULT" ] || n149_fail "credits_text.cpp names mprotect other than as the default of its protection seam"
+    N149_RC=0; N149_ID=$(grep -rn 'kLibR15StockBuildId' src/quest --include='*.cpp' --include='*.h' --exclude-dir=tests) || N149_RC=$?
+    sensor_stage1 "N149 stock build ID users" "src/quest" "$N149_RC"
+    sensor_nonempty "N149 stock build ID users" "the stock build ID's users" "$N149_ID"
+    N149_ID_CODE=$(grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' <<<"$N149_ID" || true)
+    while IFS= read -r n149_hit; do
+        [ -n "$n149_hit" ] || continue
+        n149_rel="${n149_hit%%:*}"; n149_rel="${n149_rel#src/quest/}"
+        case "$N149_ID_OK" in *" $n149_rel "*) ;; *) n149_fail "$n149_rel names kLibR15StockBuildId; a hook target carries sentinel::pinned::LibR15PatchedBuildId(): $n149_hit" ;; esac
+    done <<<"$N149_ID_CODE"
+    # END N149
     N81_RC=0; N81_HITS=$(grep -rn '"\[NEVR\] ' src/runtime src/abi src/core) || N81_RC=$?
     sensor_stage1 "N81 bare [NEVR] tag" "src/runtime src/abi src/core" "$N81_RC"
     if [ "$N81_RC" -eq 0 ] && printf '%s\n' "$N81_HITS" \
