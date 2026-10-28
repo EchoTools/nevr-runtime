@@ -39,6 +39,7 @@ nEVR is a community project, built on other people's work and tested by the peop
 - **spike4887**: Tested nevr-runtime in #nevr-runtime-testing.
 - **TekEmperor**: Tested nevr-runtime in #nevr-runtime-testing.
 - **arii**: Tested nevr-runtime in #nevr-runtime-testing.
+- **[DC Coffey](https://www.dccoffey.com/work/echo-vr)**: Designed the invite and create-game menu (CREATE GAME and JOIN VIA CODE), which Dualgame implemented.
 - **[chinmayee5599](https://github.com/chinmayee5599)**: Opened #510, which renamed three TCP game message symbols in `src/abi/symbols.h`.
 - **[brysonak](https://github.com/brysonak)**: Opened #12, which changed the server log file names and added a flag to keep the old names.
 - **Furo**: Supporter of nevr-runtime.

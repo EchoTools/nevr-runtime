@@ -41,6 +41,7 @@ const char* StepName(StepId id) {
     case StepId::kInstallResourceRequestLog: return "install_resource_request_log";
     case StepId::kInstallTextureQuality: return "install_texture_quality";
     case StepId::kInstallCreditsText: return "install_credits_text";
+    case StepId::kInstallMenuCards: return "install_menu_cards";
     case StepId::kStartTokenAuth: return "start_token_auth";
     case StepId::kInstallLoginPrompt: return "install_login_prompt";
     case StepId::kStartBridge: return "start_bridge";
@@ -254,6 +255,10 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // The project section of the CREDITS page (#970): every launch, no counters; it points two libr15 cursor stores at a
     // buffer the sentinel builds, so it runs before the page can be opened.
     r.Run(StepId::kInstallCreditsText, [&] { return steps.InstallCreditsText(); });
+
+    // The main-menu cards (#966): every launch, no counters. One libr15 data slot; libr15 reads it each time it starts a
+    // resource load, so the hook is in place before the menu page is requested.
+    r.Run(StepId::kInstallMenuCards, [&] { return steps.InstallMenuCards(); });
 
     bool tokenOk = false;
     if (wantTokenAuth) {
