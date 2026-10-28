@@ -134,7 +134,9 @@ TEST(HexRoundTripsAndRefusesBadStrings) {
   CHECK(!ParseBuildIdHex("b243509c08ce677aeb95fa348016949b3fc4523", &id));    // 39
   CHECK(!ParseBuildIdHex("b243509c08ce677aeb95fa348016949b3fc452300", &id));  // 41
   CHECK(!ParseBuildIdHex("B243509c08ce677aeb95fa348016949b3fc45230", &id));   // upper case
-  CHECK(!ParseBuildIdHex("g243509c08ce677aeb95fa348016949b3fc45230", &id));
+  CHECK(!ParseBuildIdHex("g243509c08ce677aeb95fa348016949b3fc45230", &id));  // the high digit of byte 0
+  CHECK(!ParseBuildIdHex("bg43509c08ce677aeb95fa348016949b3fc45230", &id));  // the low digit of byte 0
+  CHECK(!ParseBuildIdHex("b243509c08ce677aeb95fa348016949b3fc4523g", &id));  // the low digit of the last byte
 }
 
 TEST(ThePatchedIdIsAPureFunctionOfTheTableAndTheStockId) {
@@ -232,6 +234,30 @@ TEST(ExtraRowsChangeTheIdAndTheirOrderDoesNot) {
   CHECK(PatchedBuildId({split1}) != PatchedBuildId({split2a, split2b}));
   // The two word forms: bytes in memory order and the little-endian value.
   CHECK_EQ(WordValue(nop), 0xd503201fu);
+}
+
+// The patched ID of a table with extra rows, pinned as a literal. The value was computed outside this code (a script
+// that applies the serialisation below to the public table's canonical text and hashes it with SHA-256), so it checks
+// the serialisation itself and not just that it is deterministic. The extra rows are sorted by (revault_va, id) and
+// written after the public table as:
+//   "extra|" + hex(row count) + "\n"          the count as 0x%llx, as in the public part
+//   then, per row, binary and without separators:
+//     u8 id length, the id bytes, u64 little-endian revault_va, u8 word count,
+//     and per word: u16 little-endian offset, the 4 new_bytes, the 4 stock_bytes (each in memory order).
+// The ID is the first 20 bytes of SHA-256("NEVR-LIBR15-PATCH-1" + the 20 stock ID bytes + the table text).
+// Three rows: two share an address (the id breaks the tie, and one offset needs both bytes of its u16), one is later in
+// memory and has two words (the word count and the offsets of a row); they are listed here out of order.
+TEST(TheIdOfThreeInventedExtraRowsIsPinnedToTheByte) {
+  const WordPatchRow late{"x.late", 0x1500040, {Edit(0, {0x11, 0x22, 0x33, 0x44}, {0x55, 0x66, 0x77, 0x88}), Edit(8, {0x99, 0xaa, 0xbb, 0xcc}, {0xdd, 0xee, 0xff, 0x00})}};
+  const WordPatchRow tieB{"x.tie_b", 0x1500020, {Edit(4, {0x0a, 0x0b, 0x0c, 0x0d}, {0x01, 0x02, 0x03, 0x04})}};
+  const WordPatchRow tieA{"x.tie_a", 0x1500020, {Edit(0x104, {0x0f, 0x0e, 0x0d, 0x0c}, {0x04, 0x03, 0x02, 0x01})}};
+  const std::string pinned = "ccb7fde69c56a86c219885817fdc0f542e15928d";
+  CHECK_EQ(PatchedBuildId({late, tieB, tieA}), pinned);
+  CHECK_EQ(PatchedBuildId({tieA, late, tieB}), pinned);
+  CHECK_EQ(PatchedBuildId({tieB, tieA, late}), pinned);
+  // Each part of the pinned value, so a change to one serialisation rule is seen in its own value.
+  CHECK_EQ(PatchedBuildId({late}), std::string("7b61f482609d1d762e566dfddb98dff72db27bcb"));
+  CHECK_EQ(PatchedBuildId({tieB, tieA}), std::string("45831f0edfb0b2f31a334fffb03fc0fb805b8ded"));
 }
 
 }  // namespace
