@@ -221,35 +221,11 @@ add_subdirectory(src/nevr_api)
 add_subdirectory(src/runtime)
 add_subdirectory(src/modules/platform-compat)
 add_subdirectory(src/modules/token-auth)
-add_subdirectory(src/legacy/gamepatches)
-# src/legacy/ is frozen and may not be edited, and it is NOT self-contained:
-# gamepatcheslegacy resolves two headers out of the old src/common/ —
-# "common/hooking.h" (patches.cpp:8) and "common/nevr_plugin_interface.h"
-# (plugin_loader.h:3). Confirmed from the compiler's dependency graph:
-#   ninja -C build/<preset> -t deps | grep gamepatcheslegacy | grep src/common
-# Both now live under src/core/. Rather than edit a frozen file, give
-# this ONE target a compatibility include root holding two forwarding headers.
-# Scoped to the target so nothing else in the tree can resolve the old spelling.
-# Delete src/legacy-compat/ and this line together when legacy is retired.
-target_include_directories(gamepatcheslegacy PRIVATE "${CMAKE_SOURCE_DIR}/src/legacy-compat")
-# Frozen code carries warnings it may not lose; -Werror applies to everything else.
-if(MINGW)
-  target_compile_options(gamepatcheslegacy PRIVATE -Wno-error)
-endif()
 # There is no replacement pnsrad.dll target: ws_bridge pokes the game's ORIGINAL
 # pnsrad.dll at fixed offsets (+0x88 account_id, +0x90 login state, +0x9c flags),
 # and those layouts are documented there. The pure-RE copy of pnsrad lives in
 # echovr-reconstruction; nothing here may symlink into a private repo, which
 # breaks every clean clone.
-add_subdirectory(src/legacy/gameserver)
-# The frozen legacy sources read the unprefixed macro names (PROJECT_VERSION, GIT_COMMIT_HASH, USE_MINHOOK); only these
-# two files do (git grep -nE '\b(PROJECT_VERSION|GIT_COMMIT_HASH)\b' -- src/legacy).
-nevr_build_identity_define(TARGET gamepatcheslegacy LEGACY READS VERSION COMMIT_HASH
-  SOURCES "${CMAKE_SOURCE_DIR}/src/legacy/gamepatches/patches.cpp")
-nevr_build_identity_define(TARGET gameserverlegacy LEGACY READS VERSION COMMIT_HASH
-  SOURCES "${CMAKE_SOURCE_DIR}/src/legacy/gameserver/gameserver.cpp")
-# src/core/hooking.h (shared with the legacy build through src/legacy-compat) selects MinHook on NEVR_USE_MINHOOK.
-target_compile_definitions(gamepatcheslegacy PRIVATE NEVR_USE_MINHOOK)
 # telemetryagent lives in nevr-runtime-plugins (extras/) — it needs a protobuf-lite
 # refactor before it could be reintegrated here
 
@@ -394,64 +370,8 @@ add_custom_command(TARGET dist POST_BUILD
 )
 
 # =============================================================================
-# Legacy Distribution Package Target
-# =============================================================================
-# Creates distribution archives containing only legacy DLLs (v1 implementations)
-# Usage: cmake --build <build_dir> --target dist-legacy
-# =============================================================================
-
-set(DIST_LEGACY_NAME "nevr-runtime-v${PROJECT_VERSION}-legacy")
-set(DIST_LEGACY_DIR "${CMAKE_SOURCE_DIR}/dist/${DIST_LEGACY_NAME}")
-
-add_custom_target(dist-legacy-prepare
-  COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_LEGACY_DIR}"
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatcheslegacy.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatcheslegacy.dll" "${DIST_LEGACY_DIR}/" || true
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserverlegacy.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserverlegacy.dll" "${DIST_LEGACY_DIR}/" || true
-  COMMENT "Preparing legacy distribution directory: ${DIST_LEGACY_DIR}"
-  VERBATIM
-)
-
-if(OSSLSIGNCODE)
-  add_custom_target(dist-legacy-sign
-    COMMAND bash -c "\"${CODESIGN_SCRIPT}\" \"${DIST_LEGACY_DIR}/\"*.dll"
-    DEPENDS dist-legacy-prepare
-    COMMENT "Code signing legacy distribution artifacts"
-  )
-else()
-  add_custom_target(dist-legacy-sign
-    COMMAND ${CMAKE_COMMAND} -E echo "WARNING: osslsigncode not found, skipping code signing"
-    DEPENDS dist-legacy-prepare
-    VERBATIM
-  )
-endif()
-
-add_custom_target(dist-legacy-tar
-  COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_SOURCE_DIR}/dist"
-    tar --zstd -cf "${CMAKE_SOURCE_DIR}/dist/${DIST_LEGACY_NAME}.tar.zst" "${DIST_LEGACY_NAME}"
-  DEPENDS dist-legacy-sign
-  COMMENT "Creating ${DIST_LEGACY_NAME}.tar.zst"
-  VERBATIM
-)
-
-add_custom_target(dist-legacy-zip
-  COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_SOURCE_DIR}/dist"
-    ${CMAKE_COMMAND} -E tar cf "${CMAKE_SOURCE_DIR}/dist/${DIST_LEGACY_NAME}.zip" --format=zip "${DIST_LEGACY_NAME}"
-  DEPENDS dist-legacy-sign
-  COMMENT "Creating ${DIST_LEGACY_NAME}.zip"
-  VERBATIM
-)
-
-add_custom_target(dist-legacy
-  DEPENDS dist-legacy-tar dist-legacy-zip
-  COMMENT "Legacy distribution packages created: ${DIST_LEGACY_NAME}.tar.zst and ${DIST_LEGACY_NAME}.zip"
-)
-
-# =============================================================================
 # Combined dist-all target
 # =============================================================================
-# The legacy build is not part of it: its plugin loader (src/legacy/gamepatches/plugin_loader.cpp) loads every
-# DLL in plugins\ unchecked and src/legacy/ is frozen, so a legacy DLL never goes into a package that is
-# shipped (#741, docs/adr/0010-signed-plugins-only.md). `just dist-legacy` stays an explicit developer recipe.
 add_custom_target(dist-all
   DEPENDS dist
   COMMENT "All distribution packages created"

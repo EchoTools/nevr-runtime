@@ -109,10 +109,6 @@ dist: build
 verbose-dist: build
     cmake --build --preset {{ preset }} --target dist
 
-# Create legacy distribution package (v1 DLLs only)
-dist-legacy: build
-    cmake --build --preset {{ preset }} --target dist-legacy
-
 # Regenerate C++ protobuf from BSR at proto_pin (buf.build/echotools/nevr-api) and stamp gen/ (tools/proto_stamp.py).
 # Uses vcpkg's host protoc to match the runtime version; the protoc must be installed (`just configure` does that).
 # Generate before CMake configure: `configure` regenerates on its own when gen/ is stale, so this recipe is for forcing a refresh.
@@ -3757,7 +3753,7 @@ vcpkg-pin-check:
     # Linux is case-sensitive. CI creates the link; a development machine needs it too (#294).
     lib=${NEVR_MINGW_LIB:-/usr/x86_64-w64-mingw32/lib}
     if [ ! -e "$lib/libCrypt32.a" ]; then
-        echo "vcpkg-pin-check: FAIL — $lib/libCrypt32.a is missing; the legacy gameserver will not link (cannot find -lCrypt32)." >&2
+        echo "vcpkg-pin-check: FAIL — $lib/libCrypt32.a is missing; nevr-runtime.dll will not link ixwebsocket (cannot find -lCrypt32)." >&2
         echo "Fix: sudo ln -s libcrypt32.a $lib/libCrypt32.a   (CI does the same, see .github/workflows/build.yml)" >&2
         exit 1
     fi

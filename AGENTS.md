@@ -502,13 +502,6 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 `#include "echovr.h"`. `src/` is on the global include path (root
 `CMakeLists.txt`), so the spelling states which layer a dependency crosses.
 
-- **`src/legacy-compat/`** — two forwarding headers, existing solely because
-  `src/legacy/gamepatches` is frozen yet includes `common/hooking.h` and
-  `common/nevr_plugin_interface.h`, which these headers provide from
-  `src/legacy-compat/common/`.
-  Scoped to that
-  one target. Delete with `src/legacy/`.
-
 ### Key Source Files
 
 - `src/runtime/lifecycle/dllmain.cpp` — DLL entry point
@@ -532,7 +525,6 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
   The older PE-conversion launcher is gone — Wine could not load the game DLL at
   the required base address.
 - Android/Quest standalone target lives in `src/quest/` (separate CMake project).
-- **`src/legacy/`** — Frozen v1 implementations (self-contained, do not modify)
 
 ## Conventions
 
@@ -990,7 +982,6 @@ When something fails, the first act is reading the failing program's **own** log
 ## Guardrails
 
 - **Never commit generated protobuf** (`gen/cpp/*.pb.cc`, `gen/cpp/*.pb.h`) without regenerating from BSR first.
-- **Never modify `src/legacy/`** — frozen v1 code, self-contained by design.
 - **Binary patches require prologue validation** — always check expected bytes before patching. Never blind-write.
 - **Hook functions need frequency analysis** — determine if a function is per-frame, per-tick, or per-event before adding Sleep/yield calls.
 - **Nothing from another project's patch is taken verbatim.** Before building an equivalent, reconstruct and analyze the patched code in ReVault: every function the patch touches, its callers, and what each byte change does; write the reconstructions back into ReVault with grades; design our implementation from that understanding, to this repo's standard (GOT hooks or checked patches, logs, failing-first tests, a prediction). Their address list says where to look; it is not the design.
