@@ -69,7 +69,8 @@ If the Quest build will not start
   address with <device-serial> and <email>, and masks nothing else: the zip holds the runtime's crash dumps as
   they are and the headset's whole system log, which can show your Wi-Fi name, its BSSID, IP addresses and numeric user ids.
   Describe the problem on the Beta bug report form, https://github.com/EchoTools/nevr-runtime/issues/new?template=beta-bug.yml.
-  Do not attach it to a public GitHub issue: it holds your Wi-Fi name, IP addresses and numeric user ids, and it is never in a public channel.
+  Do not attach it to a public GitHub issue; send it to a maintainer by direct message on the EchoVRCE Discord. It holds
+  your Wi-Fi name, IP addresses and numeric user ids, and it is never in a public channel.
 
 Signing
   SIGNING.txt in this package says how to check whether each file is signed. A file that is not signed may be

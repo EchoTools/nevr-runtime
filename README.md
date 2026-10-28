@@ -110,13 +110,15 @@ says how to check each one and which log line proves it.
 - **Network.** UPnP port mapping, internal and external address overrides, match telemetry streaming. (PC)
 
 ### Quest
-- **A sentinel loaded with the game.** The redirect, the bridge, the login and the social façade follow from the embedded service endpoints and keys, with no switch of their own; `social.facade`, `social.send_presence_to_meta` and `diagnostics.hardware_dump` in `config.yaml` change the façade, the rich presence and the hardware dump (off by default). On every launch the sentinel answers the game's encrypted-OBB mount itself ([`docs/adr/0007-quest-obb-mount-skip.md`](docs/adr/0007-quest-obb-mount-skip.md)); the game then starts without the ~30 s wait ([#572](https://github.com/EchoTools/nevr-runtime/issues/572)). (Quest)
+- **A sentinel loaded with the game.** The redirect, the bridge, the login and the social façade follow from the embedded service endpoints and keys, with no switch of their own; `social.facade`, `social.send_presence_to_meta` and `diagnostics.hardware_dump` in `config.yaml` change the façade, the rich presence and the hardware dump (off by default). On every launch the sentinel answers the game's encrypted-OBB mount itself ([`docs/adr/0007-quest-obb-mount-skip.md`](docs/adr/0007-quest-obb-mount-skip.md)); the game then starts without the ~30 s wait (checked on a headset on 2026-10-16, recorded in [#572](https://github.com/EchoTools/nevr-runtime/issues/572)). (Quest)
 - **Login and social on the headset.** The game's login is rewritten into the NEVR login, and the social facade decodes friends, presence, recently-met and party frames from the game service. (Quest)
 
 ### Known gaps
-The issue tracker is the source of truth. Two things on Quest do not work yet: the main-menu
-FRIENDS LIST ([#391](https://github.com/EchoTools/nevr-runtime/issues/391)) and the party tab's
-Invite Members ([#318](https://github.com/EchoTools/nevr-runtime/issues/318)).
+The issue tracker is the source of truth. Three things on Quest do not work yet: the main-menu
+FRIENDS LIST ([#391](https://github.com/EchoTools/nevr-runtime/issues/391)), the party tab's
+Invite Members ([#318](https://github.com/EchoTools/nevr-runtime/issues/318)), and the status text under
+your name, which was fixed in code ([#393](https://github.com/EchoTools/nevr-runtime/issues/393)) but is kept
+here until a passing run on a current build is recorded in that issue.
 
 ## Install for testers
 
