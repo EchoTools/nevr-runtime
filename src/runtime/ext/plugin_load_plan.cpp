@@ -56,9 +56,9 @@ std::string ArgsToJson(const std::map<std::string, std::string>& args,
   }
 }
 
-std::vector<PluginLoadItem> BuildLoadPlan(const nevr::NevrConfig& cfg) {
+std::vector<PluginLoadItem> BuildLoadPlanFromSpecs(const std::vector<nevr::PluginSpec>& specs) {
   std::vector<PluginLoadItem> plan;
-  for (const nevr::PluginSpec& spec : cfg.Plugins()) {
+  for (const nevr::PluginSpec& spec : specs) {
     // enabled:false is carried, not dropped: the loader skips it, and the login
     // reports it as configured-but-disabled (#60).
     PluginLoadItem item;
@@ -75,5 +75,7 @@ std::vector<PluginLoadItem> BuildLoadPlan(const nevr::NevrConfig& cfg) {
   }
   return plan;
 }
+
+std::vector<PluginLoadItem> BuildLoadPlan(const nevr::NevrConfig& cfg) { return BuildLoadPlanFromSpecs(cfg.Plugins()); }
 
 }  // namespace nevr_plugincfg

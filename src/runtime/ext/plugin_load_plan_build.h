@@ -39,4 +39,8 @@ std::string ArgsToJson(const std::map<std::string, std::string>& args,
 // and item.args_replaced_keys lists the arg keys that held invalid UTF-8.
 std::vector<PluginLoadItem> BuildLoadPlan(const nevr::NevrConfig& cfg);
 
+// The same plan from the specs alone, for a caller that keeps the parsed `plugins:` list and not the NevrConfig (the
+// Quest sentinel's ResolvedConfig). BuildLoadPlan is this over cfg.Plugins().
+std::vector<PluginLoadItem> BuildLoadPlanFromSpecs(const std::vector<nevr::PluginSpec>& specs);
+
 }  // namespace nevr_plugincfg
