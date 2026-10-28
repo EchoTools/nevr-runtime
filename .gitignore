@@ -157,3 +157,6 @@ dump.rdb
 !.claude/agents/
 .claude/agents/*
 !.claude/agents/nevr-runtime-engineer.md
+
+# installer/ (Rust): the build tree is regenerable
+/installer/target/
