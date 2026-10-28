@@ -221,6 +221,9 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
         # `zip` replaces an entry of the same path: a plugin named like any lib/ entry of the store APK, or like a library
         # staged below, would take that library's place. Refuse before anything is staged (tools/quest_repack_libs.py).
         python3 -I tools/quest_repack_libs.py check-plugin-name --apk "$apk" --plugin "$plugin"
+        # The loader refuses a plugin whose NEVR note does not list the running libr15's build ID (plugin_image.h): an APK
+        # whose plugin is refused on the headset is refused here, against the store APK's own libr15.so.
+        python3 -I tools/quest_repack_libs.py check-plugin-build-ids --apk "$apk" --plugin "$plugin"
         # ADR 0019 section 1: a plugin runs the same static-init check as the shim, minus the shim's own constructor.
         llvm_bin="{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
         [ -x "$llvm_bin/llvm-nm" ] || llvm_bin="$(dirname "$(command -v llvm-nm || true)")"
@@ -372,6 +375,19 @@ _quest-apk store_apk:
     objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
     tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
     just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so build/android-dev/repack
+
+# The development APK for an autopilot run on a Quest (#1202, docs/adr/0025-quest-autopilot-route.md): the local
+# android-arm64 sentinel (a development build: the input seam refuses a release) with libnevr_autopilot.so beside it,
+# repacked from the store APK. The plugin is off unless the headset's config.yaml names nevr_autopilot. Writes
+# build/android-arm64/repack/r15_nevr-sentinel_signed.apk, the path test-quest-hooks-pinned reads. No release or
+# package-dev APK carries the plugin.
+quest-autopilot-apk store_apk="/mnt/games/cache/r15_goldmaster_store.apk": build-android
+    just android-repack-apk "{{ store_apk }}" build/android-arm64/sentinel/libovrplatformloader.so build/android-arm64/repack build/android-arm64/integration/libnevr_autopilot.so
+
+# One unattended autopilot run on the attached Quest (tools/quest_autopilot_run.py --help): pushes the route, starts the
+# game with the proximity sensor overridden, waits for route_end, and records the run under the work root.
+quest-autopilot-run route *args:
+    python3 tools/quest_autopilot_run.py --route "{{ route }}" {{ args }}
 
 # The Quest APK of a RELEASE: the repack of the store game with the loader CI built from the release tag. That loader is
 # the release's own asset (nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so): it is downloaded (tools/quest_release_loader.py
@@ -1387,6 +1403,13 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/menu_cards_hook_test" -ldl
     timeout 120 "$out/menu_cards_hook_test"
+    # The controller-input seam (#1202): the VrApi layout rules, the registration's every refusal and its one owner, and
+    # the real handler through the thunk entry against stand-ins for vrapi_GetCurrentInputState and
+    # vrapi_GetInputDeviceCapabilities. got_pinned_test resolves both slots in the real libr15.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/input_seam_test.cpp src/quest/plugin/input_seam_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/input_seam_test" -ldl
+    timeout 120 "$out/input_seam_test"
     # The toast presenter against a fake JNI (#807): a Java exception thrown at each JNI call in turn, null or not, is
     # never left pending. jni.h is the NDK's own; the recipe stops when it is absent.
     jni="{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/jni.h"
@@ -1496,6 +1519,77 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
 # against a read-only checkout of that repo at the commit the table pins. `just test-tools` checks the table alone.
 test-quest-apk-patch-map patch_repo:
     python3 tools/quest_apk_patch_map.py --repo "{{ patch_repo }}"
+
+# The libr15 build-time patcher (docs/adr/0021): builds the host tool quest_patch_libr15 into
+# build/quest-patcher/ with plain host g++. nlohmann::json comes from the header the build installed from
+# vcpkg.json (as in test-quest-social), never a system package; pass the include directory
+# that holds nlohmann/json.hpp as json_include when this worktree has no build of its own.
+quest-patcher json_include="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-patcher"
+    inc="{{ json_include }}"
+    [ -n "$inc" ] || inc="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include"
+    if [[ ! -f "$inc/nlohmann/json.hpp" ]]; then
+        echo "quest-patcher: FAIL - $inc/nlohmann/json.hpp not found; run 'just build' with a mingw-* preset first, or pass json_include" >&2
+        exit 1
+    fi
+    mkdir -p "$out/json_inc"
+    ln -sfn "$(cd "$inc" && pwd)/nlohmann" "$out/json_inc/nlohmann"
+    g++ -std=c++17 -O2 -Wall -Wextra -Werror -Isrc -isystem "$out/json_inc" \
+        src/quest/patch/quest_patch_libr15.cpp src/quest/patch/libr15_patcher.cpp src/quest/patch/libr15_patcher_cli.cpp \
+        src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp src/quest/sentinel/arm64_reloc.cpp \
+        -o "$out/quest_patch_libr15"
+    [ -x "$out/quest_patch_libr15" ] || { echo "quest-patcher: FAIL - $out/quest_patch_libr15 was not produced" >&2; exit 1; }
+    echo "quest-patcher: built $out/quest_patch_libr15"
+
+# The patcher and its tables on the host (docs/adr/0021 tests 1 to 3 and 9): the stub codec against
+# binutils-checked vectors, the patch table and the build ID derived from it, and the tool on a synthetic
+# ELF built in memory (the byte diff, every refusal with its row id, the extra-rows file, the command line).
+# The relocator window cases run in test-quest-hooks (arm64_reloc_test). No NDK, no device,
+# no real libr15. Fail-close.
+test-quest-patcher json_include="": (quest-patcher json_include)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-patcher"
+    # _GLIBCXX_ASSERTIONS: an out-of-bounds operator[] or an empty optional dereference in the patcher aborts the
+    # test that reached it, instead of reading past the buffer and passing.
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -D_GLIBCXX_ASSERTIONS -Isrc -isystem "$out/json_inc" -pthread)
+    scratch="$out/test-scratch"
+    rm -rf "$scratch"; mkdir -p "$scratch"
+    trap 'rm -rf "$scratch"' EXIT
+    "${cxx[@]}" src/quest/tests/stub_codec_test.cpp -o "$out/stub_codec_test"
+    timeout 60 "$out/stub_codec_test"
+    "${cxx[@]}" src/quest/tests/libr15_patch_table_test.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp \
+        -o "$out/libr15_patch_table_test"
+    timeout 60 "$out/libr15_patch_table_test"
+    "${cxx[@]}" src/quest/tests/libr15_patcher_test.cpp src/quest/patch/libr15_patcher.cpp src/quest/patch/libr15_patcher_cli.cpp \
+        src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp src/quest/sentinel/arm64_reloc.cpp \
+        -o "$out/libr15_patcher_test"
+    timeout 300 "$out/libr15_patcher_test" "$scratch" src/quest/tests/fixtures "$out/quest_patch_libr15"
+    echo "test-quest-patcher: stub codec, patch table and patcher tests pass on the host"
+
+# The shipped patcher on the real store libr15.so (docs/adr/0021 test 2, pinned): checks the file's SHA-256,
+# runs the tool twice and checks the output against the file and readelf (build ID, exactly which byte ranges
+# differ, stubs and credits words decoded back to their slots, segments, sections and end symbols). The
+# libr15 is the store APK's 58 MB file: pass its path, it is not in the repository and nothing here copies it
+# in. The two patched copies are written under build/quest-patcher/pinned-scratch and removed at the end.
+# Fail-close, including when the file is absent.
+test-quest-patcher-pinned libr15 json_include="": (quest-patcher json_include)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    libr15="{{ libr15 }}"
+    [ -f "$libr15" ] || { echo "test-quest-patcher-pinned: libr15.so not found: $libr15" >&2; exit 1; }
+    out="build/quest-patcher"
+    echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $libr15" | sha256sum -c -
+    scratch="$out/pinned-scratch"
+    rm -rf "$scratch"; mkdir -p "$scratch"
+    trap 'rm -rf "$scratch"' EXIT
+    g++ -std=c++17 -O1 -Wall -Wextra -Werror -Isrc -pthread \
+        src/quest/tests/libr15_patcher_pinned_test.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp \
+        -o "$out/libr15_patcher_pinned_test"
+    timeout 600 "$out/libr15_patcher_pinned_test" "$out/quest_patch_libr15" "$libr15" "$scratch"
+    echo "test-quest-patcher-pinned: the tool's output on the pinned libr15 is as the table says"
 
 # Quest social provider on the host (docs/adr/0003, "Social provider"): the ABI pins against the
 # recorded vtable, the facade driven through its vtable, the hook decision through the real callback
@@ -1702,16 +1796,44 @@ test-quest-plugins:
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/got_hook.cpp -o "$out/got_hook.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/hook_report.cpp -o "$out/hook_report.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/plugin/plugin_game_image.cpp -o "$out/plugin_game_image.o"
+    "${cxx[@]}" -fno-exceptions -c src/quest/plugin/input_seam_hook.cpp -o "$out/input_seam_hook.o"
     loader=(src/quest/plugin/plugin_plan.cpp src/quest/plugin/plugin_image.cpp src/quest/plugin/plugin_loader.cpp
             src/quest/plugin/plugin_record_log.cpp src/quest/plugin/plugin_platform.cpp src/quest/data/sha256.cpp
             src/quest/sentinel/hook_log.cpp src/quest/sentinel/sentinel_log.cpp
-            "$out/got_hook.o" "$out/hook_report.o" "$out/plugin_game_image.o")
+            "$out/got_hook.o" "$out/hook_report.o" "$out/plugin_game_image.o" "$out/input_seam_hook.o")
     "${cxx[@]}" -pthread src/quest/tests/plugin_loader_test.cpp "${loader[@]}" -o "$out/plugin_loader_test" -ldl
     timeout -k 5 120 "$out/plugin_loader_test" "$out"
     "${cxx[@]}" -pthread src/quest/tests/plugin_runtime_test.cpp src/quest/plugin/plugin_runtime.cpp \
         src/runtime/ext/plugin_load_plan.cpp "${loader[@]}" -o "$out/plugin_runtime_test" -ldl
     timeout -k 5 120 "$out/plugin_runtime_test" "$out"
     echo "test-quest-plugins: all plugin loader tests pass on the host"
+
+# The Quest autopilot plugin on the host (#1202, docs/adr/0025-quest-autopilot-route.md): the route grammar, every
+# derived bit and limit, the clock, the filter against a fake clock, the event ring (two producers), and the plugin's
+# exports against a fake host with a real route file and its real reporter thread; and every shipped route file
+# (tools/quest_autopilot_routes/) parses. The start-file case and the two stopped-run cases each run in their own process
+# (the plugin keeps one run per process). Built as the device builds it, without exceptions. Fail-close.
+test-quest-autopilot:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-autopilot-host"
+    mkdir -p "$out/scratch"
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -pthread -Isrc)
+    "${cxx[@]}" src/quest/tests/autopilot_route_test.cpp src/quest/plugins/autopilot/route.cpp \
+        -o "$out/autopilot_route_test"
+    routes=(tools/quest_autopilot_routes/*.txt)
+    [ -f "${routes[0]}" ] || { echo "test-quest-autopilot: no shipped route file" >&2; exit 1; }
+    timeout 60 "$out/autopilot_route_test" "${routes[@]}"
+    "${cxx[@]}" -DNEVR_AUTOPILOT_BUILD_IDS='"0000000000000000000000000000000000000000"' \
+        src/quest/tests/autopilot_run_test.cpp src/quest/plugins/autopilot/route.cpp \
+        src/quest/plugins/autopilot/autopilot.cpp src/quest/plugins/autopilot/plugin.cpp src/quest/data/sha256.cpp \
+        -o "$out/autopilot_run_test"
+    timeout 120 "$out/autopilot_run_test" "$out/scratch"
+    timeout 60 "$out/autopilot_run_test" "$out/scratch" start_file
+    timeout 60 "$out/autopilot_run_test" "$out/scratch" stopped
+    timeout 60 "$out/autopilot_run_test" "$out/scratch" stopped_waiting
+    timeout 60 "$out/autopilot_run_test" "$out/scratch" fd_zero
+    echo "test-quest-autopilot: all autopilot tests pass on the host"
 
 # The integration's pinned dlopen target against the real libr15.so (docs/adr/0003). Extracts it from the
 # store APK, checks its SHA-256 and resolves LibR15Dlopen() the way the loader would lay the image out.
@@ -1862,6 +1984,7 @@ verify:
         test-quest-data-net \
         test-quest-integration \
         test-quest-plugins \
+        test-quest-autopilot \
         test-scripting
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.

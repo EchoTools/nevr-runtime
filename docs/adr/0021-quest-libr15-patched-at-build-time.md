@@ -1,7 +1,10 @@
 # ADR 0021: libr15.so is patched at build time; no code page is written at run time
 
-Status: proposed (#1132). Not implemented. The "Prediction" section is what the first headset runs must show; the
-"What this does not know" section lists what no measurement in this tree covers.
+Status: proposed (#1132). The patcher (`quest_patch_libr15`), the patch table, the patched build ID and the stub codec are
+implemented and tested on the host (`just test-quest-patcher`, and `just test-quest-patcher-pinned` on the store libr15). The APK
+repack step, the sentinel's `Attach`, the activation and the plugin identity (section 12) are not in the tree yet; they are a
+later change of the same issue. The "Prediction" section is what the first headset runs must show; the "What this does not
+know" section lists what no measurement in this tree covers.
 
 ## Context
 
@@ -74,7 +77,15 @@ table header and `arm64_reloc.h`, so there is no second encoding of anything). `
 3. writes the stubs (below), the slot area (below), the credits pairs, and the new build ID (below). Every byte that differs from
    the stock file is accounted for in the report: `{"event":"libr15_patch_site","id":...,"revault_va":...,"vaddr":...,
    "stock":[...],"stub":[...],"slot":...}` per row, then a summary with the stock and patched sha-256. The output is a pure
-   function of the stock file and the table: the same inputs give the same bytes;
+   function of the stock file and the table: the same inputs give the same bytes. The report's vocabulary is fixed: the `kind` of
+   a `libr15_patch_site` event is `inline_hook` or `credits_pair` (a word patch has its own `libr15_patch_word` event, which has no
+   `kind`); each entry of the summary's list of changed byte ranges has a `what`
+   that is the row id and a suffix, `:stub` (an inline site's three words), `:credits_adrp` and `:credits_ldr` (the two words of a
+   credits pair) or `:word` (a word patch); `end_symbols` lists the six end symbols sorted by name in byte order. The summary's
+   `status` says what is on disk: `patched` only once `--out` is in place and has been read back, `refused` for a refusal (exit 1,
+   nothing written to `--out`), `io_error` when `--out` could not be written (exit 2), and `incomplete` in the record written
+   before `--out` is touched, which a run that dies while writing leaves behind. The temporary file beside `--out` is created
+   exclusively and never opened through a link; a name that is already taken stops the run;
 4. validates its own output as an ELF (PT_LOAD sorted and non-overlapping, `p_filesz <= p_memsz`, the build-ID note intact, the
    section table consistent) and refuses to write a file that fails.
 
@@ -98,7 +109,7 @@ no caller may branch to site+4..site+11 (the same obligation as today, over fewe
 
 libr15's writable `PT_LOAD` (vaddr 0x35f9eb0, `p_memsz` 0x1d8688 in the pinned file) ends at 0x37d2538, inside a page the
 linker already maps; nothing follows it. The patcher raises that segment's `p_memsz` (and `.bss`'s `sh_size`) so it ends at
-`roundup(0x37d2538, 64) + 8 * rows = 0x37d2578` (`p_memsz` 0x1d86c8; `p_filesz` and every file offset unchanged). The slot area is
+`roundup(0x37d2538, 64) + 8 * rows = 0x37d2570` (`p_memsz` 0x1d86c0; `p_filesz` and every file offset unchanged). The slot area is
 zero-initialised memory outside `GNU_RELRO` (which ends at 0x372c000), so a store to a slot needs no `mprotect` at all. Slot *i*
 is at `0x37d2540 + 8 * i`. A row's stub names its own slot; the credits pairs share one slot.
 
@@ -150,6 +161,17 @@ generated constant can drift from the patcher's. `kLibR15BuildId` splits: `kLibR
 `PatchedBuildId()` (everything that is checked at run time: the `GotTarget`s in `pinned_targets.h`, the hook files, the
 integration, the hardware dump). The tombstone and the sentinel log then say which libr15 ran.
 
+**The canonical serialisation is these bytes.** Its public part is text, every number written as `0x` and lowercase hex without
+leading zeros: the line `layout|bias=<kRevaultBias>|slot_area=<slot area>|slot_bytes=<slot size>` and a newline, then one line
+per table row, in table order, `row|<id>|<kind>|slot=<n>` where `<kind>` is `inline`, `credits` or `word`, followed for each site by
+`|<revault_va>:<word>,<word>,...` (the stock words, in order, each written as a number) and a newline. A build with extra rows
+(section 11) continues with the line `extra|<count>` and a newline and then, with no separator, one binary record per extra
+row, the rows sorted by `revault_va` and then by `id` in byte order: the id length (1 byte), the id, `revault_va` (8 bytes,
+little-endian), the word count (1 byte), and for each word `offset` (2 bytes, little-endian), then `new_bytes` (4 bytes), then
+`stock_bytes` (4 bytes), the word bytes in memory order as in the file. A build without extra rows has no `extra` line, so its ID
+is the public one. The byte widths are fixed here so that every program that derives the ID (the patcher, the sentinel's
+compile) gets the same value from the same rows; a test pins the ID of a fixed set of invented rows.
+
 Refusal, each with one `libr15_patch` line at error level naming the reason:
 
 | Live libr15 | Result |
@@ -182,7 +204,7 @@ the public recipes pass none.
 ### 10. Logging
 
 The patcher's per-row JSON (section 2) goes to the build log and `--report`. The sentinel writes, to logcat and its on-disk log:
-`{"event":"libr15_patch","status":"verified","build_id":"<patched>","stock_build_id":"b243509c...","rows":7,"slot_area":"0x...."}`
+`{"event":"libr15_patch","status":"verified","build_id":"<patched>","stock_build_id":"b243509c...","rows":6,"slot_area":"0x...."}`
 once, then per row `{"event":"inline_hook","status":"ok","id":...,"target":...,"slot":...,"trampoline":...,"page_perms":"r-xp"}`
 (`page_perms` is read from `/proc/self/maps` after the activation: it is the evidence that no protection changed), and
 `credits_text` as today with the slot. The `mmap`/`mprotect` errno logging of the trampoline step (#1131) stays.
@@ -252,10 +274,13 @@ uses invented values.
   (`stock_bytes` and `stock_word`) for every word, so a reader can compare against a disassembler.
 - A row is refused when any `stock_bytes` differs from the stock file at `revault_va + offset - kRevaultBias` (the message names
   the `id` and the `offset`), when a word lies outside the text segment, when it lies in a byte a public row or another extra row
-  also writes, or when `new_bytes` equals `stock_bytes`.
-- Build identity: the rows are sorted by `revault_va` and serialised as fixed binary (id, `revault_va`, each offset, each
-  `new_bytes`, each `stock_bytes`) for the hash of section 7, so the build ID does not depend on the file's key order, spacing or
-  the order of its rows. `extra_rows_sha256` in the report is the digest of the file's bytes as given.
+  also writes, when it lies in the ELF header, the program header table, the section header table or the build-ID note, or in a
+  byte the patcher writes itself (the `p_memsz` of the grown segment, the `sh_size` of the section that ends it; the build ID is
+  in the note) (the refusal is `protected_region`, naming the `id` and the region), or when `new_bytes` equals `stock_bytes`. A
+  public row's site is held to the same rule.
+- Build identity: the extra rows are part of the canonical serialisation of section 7, which defines the bytes (the `extra` line,
+  then one binary record per row, rows sorted by `revault_va` and then by `id`), so the build ID does not depend on the file's
+  key order, spacing or the order of its rows. `extra_rows_sha256` in the report is the digest of the file's bytes as given.
 - Public prose and the file: the file is supplied at build time by whoever builds the variant. It is not committed, and the
   tests use only invented addresses, in a fixture file beside the patcher tests that is the example above made into a file
   for the synthetic ELF of test 9.
@@ -326,7 +351,8 @@ Each is run once with the line it covers changed and must fail (the mutant disci
    row of any kind but `kWordPatch` in the file is refused; each rule of the extra-rows format is refused in its own case (wrong
    `format`, `version` or `stock_build_id`; an unknown field; a duplicate key; a bad, duplicate or public `id`; a `revault_va`
    or `offset` not a multiple of 4; offsets out of order; 65 words in a row; a word written as a little-endian value instead of
-   bytes; a stock mismatch; a word outside the text, overlapping a public row or another extra row, or unchanged); the fixture
+   bytes; a stock mismatch; a word outside the text, overlapping a public row or another extra row, in the ELF header, either
+   header table, the build-ID note or a byte the patcher writes itself, or unchanged); the fixture
    loads, and its report prints each word's `stock_bytes` and `stock_word`; the public table's ID is the one a build without the file computes;
    `Attach` on an image whose live word differs ends with `libr15_patch_row_words`.
 10. **Plugin identity** (section 12), in `plugin_loader_test.cpp` with the fake platform, and `got_hook_test.cpp`:

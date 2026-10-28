@@ -57,6 +57,8 @@ void Record(const NvrGameContext* ctx, const char* args) {
   fx_seen.covers_game_build_id =
       ctx->ctx_size >= offsetof(NvrGameContext, game_build_id) + sizeof(ctx->game_build_id) ? 1 : 0;
   if (fx_seen.covers_game_build_id != 0) Copy(fx_seen.game_build_id, sizeof(fx_seen.game_build_id), ctx->game_build_id);
+  fx_seen.covers_quest = ctx->ctx_size >= offsetof(NvrGameContext, quest) + sizeof(ctx->quest) ? 1 : 0;
+  if (fx_seen.covers_quest != 0) fx_seen.quest = ctx->quest;
   fx_seen.plugin_count_at_init = ctx->get_plugin_count != nullptr ? ctx->get_plugin_count() : -1;
   if (fx_seen.plugin_count_at_init > 0) {
     const NvrLoadedPluginInfo* first = ctx->get_plugin_info(0);

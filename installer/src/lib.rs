@@ -14,4 +14,5 @@ pub mod manifest;
 pub mod pc;
 pub mod quest;
 pub mod session;
+pub mod stage;
 pub mod util;
