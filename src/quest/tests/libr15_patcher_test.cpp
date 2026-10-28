@@ -225,6 +225,146 @@ TEST(TheOutputDiffersFromTheInputOnlyInTheNamedRanges) {
   CHECK(r.summary["patched_sha256"] != r.summary["stock_sha256"]);
 }
 
+std::string HexOf(std::uint64_t v) {
+  char b[24];
+  std::snprintf(b, sizeof b, "0x%llx", static_cast<unsigned long long>(v));
+  return b;
+}
+std::string Hex8Of(std::uint32_t v) {
+  char b[16];
+  std::snprintf(b, sizeof b, "0x%08x", v);
+  return b;
+}
+
+// The site event at a vaddr, or null.
+const Json* SiteAt(const PatchResult& r, std::uint64_t vaddr) {
+  for (const Json& e : r.events) {
+    if (e["event"] == "libr15_patch_site" && e["vaddr"] == HexOf(vaddr)) return &e;
+  }
+  return nullptr;
+}
+
+// The values in the report that the layout, the table and the file determine (the field names are the ADR's and the
+// code's own; the kind and what labels, and the order of end_symbols, are not asserted here).
+TEST(TheReportStatesTheFactsTheFileAndTheTableDetermine) {
+  World w;
+  const PatchResult r = w.Patch();
+  CHECK(r.ok);
+  if (!r.ok) return;
+  const Json& s = r.summary;
+  CHECK(s["event"] == "libr15_patch");
+  CHECK(s["status"] == "patched");
+  CHECK(s["stock_build_id"] == kLibR15StockBuildId);  // the stock ID, not the derived one
+  CHECK(s["build_id"] == BuildIdHex(DeriveBuildId(StockId(), CanonicalTable(w.spec.rows, w.spec.rowCount, {}, kSlotArea))));
+  CHECK(s["stock_sha256"] == nevr_quest::data::Sha256Hex(w.elf.bytes.data(), w.elf.bytes.size()));
+  CHECK(s["patched_sha256"] == nevr_quest::data::Sha256Hex(r.output.data(), r.output.size()));
+  CHECK(s["slot_area"] == "0x1403600");      // roundup(0x14035f8, 64)
+  CHECK(s["slot_area_end"] == "0x1403618");  // + 8 bytes per row, 3 rows
+  CHECK(s["p_memsz_stock"] == "0x5f8");      // 0x14035f8 - 0x1403000
+  CHECK(s["p_memsz_patched"] == "0x618");    // grown by 0x1403618 - 0x14035f8
+  CHECK(s["bss_section"] == ".bss");
+  CHECK_EQ(s["extra_rows"].get<int>(), 0);
+
+  // The site events: the table's address, the file's address and offset, the words, the slot and its address.
+  Stub stub{};
+  struct Site {
+    std::uint64_t vaddr;
+    const char* id;
+    unsigned slot;
+  };
+  for (const Site site : {Site{kJoinVa, "s.join", 0}, Site{kFailVa, "s.fail", 1}}) {
+    const Json* e = SiteAt(r, site.vaddr);
+    CHECK(e != nullptr);
+    if (e == nullptr) continue;
+    CHECK(EncodeSlotStub(site.vaddr, kSlotArea + 8 * site.slot, &stub));
+    CHECK((*e)["id"] == site.id);
+    CHECK((*e)["revault_va"] == HexOf(site.vaddr + kRevaultBias));
+    CHECK((*e)["file_offset"] == HexOf(SynthElf::FileOffsetOfText(site.vaddr)));
+    CHECK((*e)["slot"] == site.slot);
+    CHECK((*e)["slot_vaddr"] == HexOf(kSlotArea + 8 * site.slot));
+    CHECK_EQ((*e)["stock"].size(), static_cast<std::size_t>(3));
+    CHECK_EQ((*e)["stub"].size(), static_cast<std::size_t>(3));
+    for (std::size_t i = 0; i < 3 && (*e)["stock"].size() == 3 && (*e)["stub"].size() == 3; ++i) {
+      CHECK((*e)["stock"][i] == Hex8Of(w.elf.WordAt(site.vaddr + 4 * i)));
+      CHECK((*e)["stub"][i] == Hex8Of(stub.words[i]));
+    }
+  }
+  // The four credits words: slot 2, each with its own address and offset, its stock word and its replacement.
+  const std::uint64_t credits[4] = {kAdrp0, kAdd0, kAdrp1, kAdd1};
+  for (const std::uint64_t va : credits) {
+    const Json* e = SiteAt(r, va);
+    CHECK(e != nullptr);
+    if (e == nullptr) continue;
+    CHECK((*e)["id"] == "s.credits");
+    CHECK((*e)["revault_va"] == HexOf(va + kRevaultBias));
+    CHECK((*e)["file_offset"] == HexOf(SynthElf::FileOffsetOfText(va)));
+    CHECK((*e)["slot"] == 2);
+    CHECK((*e)["slot_vaddr"] == HexOf(kSlotArea + 16));
+    CHECK_EQ((*e)["stock"].size(), static_cast<std::size_t>(1));
+    CHECK_EQ((*e)["stub"].size(), static_cast<std::size_t>(1));
+    std::uint32_t written = 0;
+    std::memcpy(&written, r.output.data() + SynthElf::FileOffsetOfText(va), 4);
+    if ((*e)["stock"].size() == 1 && (*e)["stub"].size() == 1) {
+      CHECK((*e)["stock"][0] == Hex8Of(w.elf.WordAt(va)));
+      CHECK((*e)["stub"][0] == Hex8Of(written));
+    }
+  }
+  // Each change is a byte range of the file, with its length.
+  std::size_t checked = 0;
+  for (const Json& c : r.summary["changes"]) {
+    if (c["offset"] == HexOf(SynthElf::FileOffsetOfText(kJoinVa))) { CHECK_EQ(c["length"].get<int>(), 12); ++checked; }
+    if (c["offset"] == HexOf(SynthElf::FileOffsetOfText(kAdd1))) { CHECK_EQ(c["length"].get<int>(), 4); ++checked; }
+    if (c["offset"] == HexOf(w.elf.PhdrMemszOffset())) { CHECK_EQ(c["length"].get<int>(), 8); ++checked; }
+    if (c["offset"] == HexOf(w.elf.BssSizeOffset())) { CHECK_EQ(c["length"].get<int>(), 8); ++checked; }
+    if (c["offset"] == HexOf(kNoteDescOffset)) { CHECK_EQ(c["length"].get<int>(), 20); ++checked; }
+  }
+  CHECK_EQ(checked, static_cast<std::size_t>(5));
+}
+
+TEST(TheReportStatesTheWordsOfAnExtraRowWithTheirWidthsAndAddresses) {
+  World w;
+  // Words that begin with zero digits: the 8-digit form is zero-padded, in the word events and in a site's words.
+  w.elf.PutWord(kGuardA, 0x0000001f);
+  w.elf.PutWord(kJoinVa + 8, 0x0000001f);
+  w.rows[0] = w.Inline("s.join", kJoinVa, 0);
+  WordPatchRow row;
+  row.id = "x.zeros";
+  row.revaultVa = kGuardA + kRevaultBias;
+  row.edits.push_back({0, {0x1f, 0x00, 0x00, 0x00}, {0x01, 0x00, 0x00, 0x00}});
+  const PatchResult r = w.Patch({row});
+  CHECK(r.ok);
+  if (!r.ok) {
+    std::fprintf(stderr, "  %s\n", r.summary.dump().c_str());
+    return;
+  }
+  const Json* join = SiteAt(r, kJoinVa);
+  CHECK(join != nullptr);
+  if (join != nullptr && (*join)["stock"].size() == 3) CHECK((*join)["stock"][2] == "0x0000001f");
+  std::size_t words = 0;
+  for (const Json& e : r.events) {
+    if (e["event"] != "libr15_patch_word") continue;
+    ++words;
+    CHECK(e["id"] == "x.zeros");
+    CHECK(e["offset"] == 0);
+    CHECK(e["revault_va"] == HexOf(kGuardA + kRevaultBias));
+    CHECK(e["vaddr"] == HexOf(kGuardA));
+    CHECK(e["file_offset"] == HexOf(SynthElf::FileOffsetOfText(kGuardA)));
+    CHECK(e["stock_bytes"] == "1f000000");
+    CHECK(e["stock_word"] == "0x0000001f");
+    CHECK(e["new_bytes"] == "01000000");
+    CHECK(e["new_word"] == "0x00000001");
+  }
+  CHECK_EQ(words, static_cast<std::size_t>(1));
+  // The change that accounts for the word is 4 bytes long, at the word's offset.
+  std::size_t found = 0;
+  for (const Json& c : r.summary["changes"]) {
+    if (c["offset"] != HexOf(SynthElf::FileOffsetOfText(kGuardA))) continue;
+    CHECK_EQ(c["length"].get<int>(), 4);
+    ++found;
+  }
+  CHECK_EQ(found, static_cast<std::size_t>(1));
+}
+
 TEST(TheSameInputsGiveTheSameBytesAndTheSameReport) {
   World w;
   const PatchResult a = w.Patch();
@@ -424,6 +564,511 @@ TEST(ATableOrAFileTheCodeCannotWriteIsRefusedNotGuessedAt) {
   CHECK(w.Patch({edit}).ok);
 }
 
+// ---- crafted files: each rule of the ELF reader and of the layout, broken in a file of its own --------------------
+
+using Bytes = std::vector<std::uint8_t>;
+
+// An elf_invalid refusal whose detail names the rule (the code alone would not tell two rules apart).
+void ExpectElfInvalid(const PatchResult& r, const char* detailPart, const char* what) {
+  ExpectRefusal(r, "elf_invalid", "", what);
+  if (r.refusal.detail.find(detailPart) == std::string::npos) {
+    std::fprintf(stderr, "  %s: the detail \"%s\" does not name \"%s\"\n", what, r.refusal.detail.c_str(), detailPart);
+    ++mini_test::Failures();
+  }
+}
+
+PatchResult PatchBytes(const World& w, const Bytes& b) { return PatchLibr15(b, w.spec, {}, ""); }
+
+// Rewrites the note segment's content: one note (header, name padded to 4, descriptor padded to 4) at the note's offset.
+void PutNote(Bytes& b, const std::string& name, std::uint32_t type, std::uint32_t descsz, const Bytes& descBytes) {
+  Elf64_Nhdr nh{};
+  nh.n_namesz = static_cast<Elf64_Word>(name.size());
+  nh.n_descsz = descsz;
+  nh.n_type = type;
+  WriteAt(b, kNoteOffset, nh);
+  std::uint64_t at = kNoteOffset + sizeof nh;
+  std::memcpy(b.data() + at, name.data(), name.size());
+  at += (name.size() + 3) & ~std::uint64_t{3};
+  std::memcpy(b.data() + at, descBytes.data(), descBytes.size());
+  Elf64_Phdr note = Phdr(b, kPhNote);
+  note.p_filesz = note.p_memsz = (at + ((descsz + 3) & ~std::uint64_t{3})) - kNoteOffset;
+  SetPhdr(b, kPhNote, note);
+}
+
+Bytes StockIdBytes() {
+  const BuildIdBytes id = StockId();
+  return Bytes(id.begin(), id.end());
+}
+
+TEST(ATruncatedOrMisIdentifiedFileIsRefusedByTheHeaderRuleItBreaks) {
+  World w;
+  const Bytes good = w.elf.bytes;
+  CHECK(PatchBytes(w, good).ok);
+  ExpectElfInvalid(PatchBytes(w, Bytes(good.begin(), good.begin() + 63)), "shorter than an ELF header", "63 bytes");
+  ExpectElfInvalid(PatchBytes(w, Bytes(good.begin(), good.begin() + 64)), "program header table outside the file", "64 bytes: the header alone");
+  Bytes b = good;
+  b[1] = 'X';  // the 0x7f stays, the rest of the magic is wrong
+  ExpectElfInvalid(PatchBytes(w, b), "not a little-endian ELF64", "magic");
+  b = good;
+  b[EI_CLASS] = ELFCLASS32;
+  ExpectElfInvalid(PatchBytes(w, b), "not a little-endian ELF64", "ELFCLASS32");
+  b = good;
+  b[EI_DATA] = ELFDATA2MSB;
+  ExpectElfInvalid(PatchBytes(w, b), "not a little-endian ELF64", "big endian");
+  Elf64_Ehdr eh = Ehdr(good);
+  eh.e_type = ET_EXEC;
+  b = good;
+  SetEhdr(b, eh);
+  ExpectElfInvalid(PatchBytes(w, b), "not an AArch64 shared object", "ET_EXEC");
+  eh = Ehdr(good);
+  eh.e_shentsize = sizeof(Elf64_Shdr) + 1;
+  b = good;
+  SetEhdr(b, eh);
+  ExpectElfInvalid(PatchBytes(w, b), "unexpected header entry sizes", "e_shentsize");
+  eh = Ehdr(good);
+  eh.e_phentsize = sizeof(Elf64_Phdr) + 1;
+  b = good;
+  SetEhdr(b, eh);
+  ExpectElfInvalid(PatchBytes(w, b), "unexpected header entry sizes", "e_phentsize");
+  // A table count whose entry COUNT fits the file but whose byte length (count * entry size) does not.
+  eh = Ehdr(good);
+  eh.e_phnum = 300;  // 300 * 56 = 16800 bytes from offset 64 in a 16384-byte file
+  b = good;
+  SetEhdr(b, eh);
+  ExpectElfInvalid(PatchBytes(w, b), "program header table outside the file", "e_phnum * entry size");
+  eh = Ehdr(good);
+  eh.e_shnum = 60;  // 60 * 64 = 3840 bytes from 0x3300 in a file that ends 3328 bytes later
+  b = good;
+  SetEhdr(b, eh);
+  ExpectElfInvalid(PatchBytes(w, b), "section header table outside the file", "e_shnum * entry size");
+  // An empty section table at the very end of the file is a table inside it: the file then has no .bss to grow.
+  eh = Ehdr(good);
+  eh.e_shoff = good.size();
+  eh.e_shnum = 0;
+  eh.e_shstrndx = 0;
+  b = good;
+  SetEhdr(b, eh);
+  ExpectRefusal(PatchBytes(w, b), "layout_bss_section", "", "an empty section table at the end of the file");
+}
+
+TEST(AProgramHeaderTableThatBreaksTheLoadRulesIsRefusedWithTheRule) {
+  World w;
+  const Bytes good = w.elf.bytes;
+  Bytes b = good;
+  Elf64_Phdr ph = Phdr(b, kPhLoadData);
+  ph.p_filesz = ph.p_memsz = 0x2000;  // 0x3000 + 0x2000 is past the end of the 0x4000-byte file
+  SetPhdr(b, kPhLoadData, ph);
+  ExpectElfInvalid(PatchBytes(w, b), "file range is outside the file", "PT_LOAD past the end of the file");
+  b = good;
+  ph = Phdr(b, kPhLoadData);
+  ph.p_vaddr = 0x1401000;  // inside the text segment
+  SetPhdr(b, kPhLoadData, ph);
+  ExpectElfInvalid(PatchBytes(w, b), "not sorted by vaddr or overlap", "overlapping PT_LOADs");
+  b = good;
+  for (const std::size_t i : {kPhLoadText, kPhLoadData}) {
+    ph = Phdr(b, i);
+    ph.p_type = PT_NULL;
+    SetPhdr(b, i, ph);
+  }
+  ExpectElfInvalid(PatchBytes(w, b), "no PT_LOAD", "no PT_LOAD at all");
+  // A PT_LOAD with no memory at all is a valid (empty) one; one that wraps the address space is not.
+  SynthOptions o = World::DefaultOptions();
+  o.trailingLoadVaddr = 0x1405000;
+  World withTrailing(o);
+  b = withTrailing.elf.bytes;
+  ph = Phdr(b, 3);
+  CHECK(ph.p_type == PT_LOAD && ph.p_vaddr == 0x1405000);
+  ph.p_memsz = 0;
+  SetPhdr(b, 3, ph);
+  CHECK(PatchBytes(withTrailing, b).ok);
+  ph.p_vaddr = 0xfffffffffffff000ull;
+  ph.p_memsz = 0x2000;
+  SetPhdr(b, 3, ph);
+  ExpectElfInvalid(PatchBytes(withTrailing, b), "wraps the address space", "PT_LOAD that wraps");
+  // A PT_LOAD that starts exactly where the writable one ends is a valid table; growing into it is what is refused.
+  SynthOptions touching = World::DefaultOptions();
+  touching.trailingLoadVaddr = touching.imageEnd;
+  World touches(touching);
+  ExpectRefusal(touches.Patch(), "layout_overlap", "", "a PT_LOAD that starts at the image end");
+}
+
+TEST(ASectionTableThatBreaksTheRulesIsRefusedOrReadAsTheFileIntends) {
+  World w;
+  const Bytes good = w.elf.bytes;
+  // A null section header is skipped whatever its offset and size say.
+  Bytes b = good;
+  Elf64_Shdr null = Shdr(b, 0);
+  null.sh_offset = 0xffffff;
+  null.sh_size = 0x1000;
+  SetShdr(b, 0, null);
+  CHECK(PatchBytes(w, b).ok);
+  // A section that is not NOBITS must lie in the file.
+  b = good;
+  Elf64_Shdr dynstr = Shdr(b, kSecDynstr);
+  dynstr.sh_size = 0x8000;
+  SetShdr(b, kSecDynstr, dynstr);
+  ExpectElfInvalid(PatchBytes(w, b), "a section's file range is outside the file", "section past the end of the file");
+  // The section-name table: an index one past the last section, section 0 (no table), and a section that is not a string
+  // table all leave the names unread, so the report has no section name; the real table names the section.
+  const PatchResult named = PatchBytes(w, good);
+  CHECK(named.ok);
+  CHECK(named.summary["bss_section"] == ".bss");
+  Elf64_Ehdr eh = Ehdr(good);
+  eh.e_shstrndx = eh.e_shnum;
+  b = good;
+  SetEhdr(b, eh);
+  PatchResult r = PatchBytes(w, b);
+  CHECK(r.ok);
+  CHECK(r.summary["bss_section"] == "");
+  eh = Ehdr(good);
+  eh.e_shstrndx = 0;
+  b = good;
+  SetEhdr(b, eh);
+  SetShdr(b, 0, Shdr(good, kSecShstr));  // section 0 made to look like the name table, which index 0 never means
+  r = PatchBytes(w, b);
+  CHECK(r.ok);
+  CHECK(r.summary["bss_section"] == "");
+  b = good;
+  Elf64_Shdr notStrtab = Shdr(b, kSecShstr);
+  notStrtab.sh_type = SHT_PROGBITS;
+  SetShdr(b, kSecShstr, notStrtab);
+  r = PatchBytes(w, b);
+  CHECK(r.ok);
+  CHECK(r.summary["bss_section"] == "");
+  // The section that ends the writable segment: it must be NOBITS and allocated.
+  SynthOptions progbits = World::DefaultOptions();
+  progbits.bssType = SHT_PROGBITS;
+  World p(progbits);
+  ExpectRefusal(p.Patch(), "layout_bss_section", "", "the last section is not NOBITS");
+  SynthOptions unalloc = World::DefaultOptions();
+  unalloc.bssFlags = SHF_WRITE;
+  World u(unalloc);
+  ExpectRefusal(u.Patch(), "layout_bss_section", "", "the last section is not allocated");
+  // Every allocated section lies inside a PT_LOAD, entirely.
+  Elf64_Shdr stray{};
+  stray.sh_type = SHT_PROGBITS;
+  stray.sh_flags = SHF_ALLOC;
+  stray.sh_offset = 0x3c00;
+  stray.sh_size = 0x10;
+  stray.sh_addr = 0x1401000;  // inside the text segment
+  SynthOptions inside = World::DefaultOptions();
+  inside.extraSections = {stray};
+  World in(inside);
+  CHECK(in.Patch().ok);
+  stray.sh_addr = 0x2000000;  // in no segment
+  SynthOptions outside = World::DefaultOptions();
+  outside.extraSections = {stray};
+  World out(outside);
+  const PatchResult outResult = out.Patch();
+  ExpectRefusal(outResult, "output_invalid", "", "an allocated section outside every PT_LOAD");
+  CHECK(outResult.refusal.detail.find("outside every PT_LOAD") != std::string::npos);
+  stray.sh_addr = 0x1401f00;  // starts in the text segment, ends 0x300 bytes past it
+  stray.sh_size = 0x400;
+  SynthOptions straddling = World::DefaultOptions();
+  straddling.extraSections = {stray};
+  World straddles(straddling);
+  const PatchResult straddleResult = straddles.Patch();
+  ExpectRefusal(straddleResult, "output_invalid", "", "an allocated section that leaves its PT_LOAD");
+  CHECK(straddleResult.refusal.detail.find("outside every PT_LOAD") != std::string::npos);
+}
+
+TEST(ABuildIdNoteThatIsNotTheOneGnuNoteOfTwentyBytesIsRefused) {
+  World w;
+  const Bytes good = w.elf.bytes;
+  Bytes b = good;
+  // A name of 8 bytes that begins "GNU\0" is not the name "GNU".
+  PutNote(b, std::string("GNU\0\0\0\0\0", 8), NT_GNU_BUILD_ID, 20, StockIdBytes());
+  ExpectElfInvalid(PatchBytes(w, b), "no GNU build-ID note", "n_namesz 8");
+  // The owner is compared, not just its length.
+  b = good;
+  PutNote(b, std::string("XYZ\0", 4), NT_GNU_BUILD_ID, 20, StockIdBytes());
+  ExpectElfInvalid(PatchBytes(w, b), "no GNU build-ID note", "owner XYZ");
+  // A note of another type is not a build ID.
+  b = good;
+  PutNote(b, std::string("GNU\0", 4), NT_GNU_ABI_TAG, 20, StockIdBytes());
+  ExpectElfInvalid(PatchBytes(w, b), "no GNU build-ID note", "type is not NT_GNU_BUILD_ID");
+  // The descriptor is 20 bytes: shorter or longer is refused (the bytes after a short one still hold a whole ID).
+  b = good;
+  PutNote(b, std::string("GNU\0", 4), NT_GNU_BUILD_ID, 16, StockIdBytes());
+  ExpectElfInvalid(PatchBytes(w, b), "not 20 bytes", "descriptor of 16 bytes");
+  b = good;
+  Bytes longer = StockIdBytes();
+  longer.insert(longer.end(), {1, 2, 3, 4});
+  PutNote(b, std::string("GNU\0", 4), NT_GNU_BUILD_ID, 24, longer);
+  ExpectElfInvalid(PatchBytes(w, b), "not 20 bytes", "descriptor of 24 bytes");
+  // Two build-ID notes are ambiguous: neither is taken.
+  b = good;
+  Bytes second(good.begin() + kNoteOffset, good.begin() + kNoteOffset + 36);
+  std::memcpy(b.data() + kNoteOffset + 36, second.data(), second.size());
+  Elf64_Phdr note = Phdr(b, kPhNote);
+  note.p_filesz = note.p_memsz = 72;
+  SetPhdr(b, kPhNote, note);
+  ExpectElfInvalid(PatchBytes(w, b), "more than one GNU build-ID note", "two notes");
+}
+
+TEST(TheEdgesOfAnExecutableSegmentAreInsideItAndTheBytesNextToThemAreNot) {
+  SynthOptions o = World::DefaultOptions();
+  o.execLoads = {kExecLoadA, kExecLoadB};
+  World w(o);
+  auto edit = [&](std::uint64_t va) {
+    WordPatchRow row;
+    row.id = "x.edge";
+    row.revaultVa = va + kRevaultBias;
+    WordBytes stock{};
+    const std::uint32_t word = w.elf.WordAt(va);
+    std::memcpy(stock.data(), &word, 4);
+    row.edits.push_back({0, stock, {0x1f, 0x20, 0x03, 0xd5}});
+    return row;
+  };
+  // The first word of a segment, its last word, and a segment that is exactly one word long.
+  CHECK(w.Patch({edit(kExecLoadA.vaddr)}).ok);
+  CHECK(w.Patch({edit(kExecLoadA.vaddr + kExecLoadA.filesz - 4)}).ok);
+  CHECK(w.Patch({edit(kExecLoadB.vaddr)}).ok);
+  // One word before the first segment and one past its end are in no segment.
+  WordPatchRow before = edit(kExecLoadA.vaddr);
+  before.revaultVa -= 4;
+  const PatchResult beforeResult = w.Patch({before});
+  ExpectRefusal(beforeResult, "word_outside_text", "x.edge", "the word before a segment");
+  WordPatchRow past = edit(kExecLoadA.vaddr);
+  past.revaultVa += kExecLoadA.filesz;
+  ExpectRefusal(w.Patch({past}), "word_outside_text", "x.edge", "the word past a segment");
+  WordPatchRow pastB = edit(kExecLoadB.vaddr);
+  pastB.revaultVa += 4;
+  ExpectRefusal(w.Patch({pastB}), "word_outside_text", "x.edge", "the word past a one-word segment");
+  // An inline site is three words: it fits in the 0x100-byte segment at its start and at its end, not one word later.
+  for (const std::uint64_t va : {kExecLoadA.vaddr, kExecLoadA.vaddr + kExecLoadA.filesz - 12}) {
+    World site(o);
+    site.rows.push_back(site.Inline("s.far", va, 3));
+    site.Rebind();
+    const PatchResult r = site.Patch();
+    if (!r.ok) std::fprintf(stderr, "  site at %llx: %s\n", static_cast<unsigned long long>(va), r.summary.dump().c_str());
+    CHECK(r.ok);
+  }
+  World tooLate(o);
+  {  // the third word is past the segment, so its stock word is not in the file: the row is written by hand
+    const std::uint64_t va = kExecLoadA.vaddr + kExecLoadA.filesz - 8;
+    Row far{"s.far", "s.far", RowKind::kInlineHook, "handler", 3, 1, {}};
+    far.sites[0] = {va + kRevaultBias, 3, {tooLate.elf.WordAt(va), tooLate.elf.WordAt(va + 4), 0}};
+    tooLate.rows.push_back(far);
+  }
+  tooLate.Rebind();
+  ExpectRefusal(tooLate.Patch(), "site_outside_text", "s.far", "a site one word past the end of the segment");
+  // A segment exactly as long as a site holds it.
+  SynthOptions small = o;
+  small.execLoads = {ExecLoad{0x1411000, 0x3a00, 12}};
+  World tight(small);
+  tight.rows.push_back(tight.Inline("s.tight", 0x1411000, 3));
+  tight.Rebind();
+  CHECK(tight.Patch().ok);
+}
+
+TEST(AWritableSegmentThatIsNotALoadIsNotTheOneGrown) {
+  SynthOptions o = World::DefaultOptions();
+  o.writableTls = true;  // a PT_TLS (R W) that ends past the image end
+  World w(o);
+  const PatchResult r = w.Patch();
+  CHECK(r.ok);
+  if (r.ok) CHECK(r.summary["p_memsz_stock"] == "0x5f8");
+}
+
+TEST(AnEndSymbolTableIsReadAsTheFileSaysAndNotBeyondIt) {
+  World w;
+  const Bytes good = w.elf.bytes;
+  const std::uint64_t strSize = Shdr(good, kSecDynstr).sh_size;
+  const std::uint64_t symSize = Shdr(good, kSecDynsym).sh_size;
+  auto appendSymbol = [&](Bytes& b, std::uint32_t nameAt) {
+    Elf64_Sym sym{};
+    sym.st_name = nameAt;
+    sym.st_info = ELF64_ST_INFO(STB_GLOBAL, STT_NOTYPE);
+    sym.st_shndx = SHN_ABS;
+    sym.st_value = 0x1234;
+    WriteAt(b, kDynsymOffset + symSize, sym);
+    Elf64_Shdr dynsym = Shdr(b, kSecDynsym);
+    dynsym.sh_size += sizeof(Elf64_Sym);
+    SetShdr(b, kSecDynsym, dynsym);
+  };
+  PatchResult r = PatchBytes(w, good);
+  CHECK(r.ok);
+  CHECK_EQ(r.summary["end_symbols"].size(), static_cast<std::size_t>(6));
+  // A .dynsym that links past the section table has no string table: nothing is read from it.
+  Bytes b = good;
+  Elf64_Shdr dynsym = Shdr(b, kSecDynsym);
+  dynsym.sh_link = 100;
+  SetShdr(b, kSecDynsym, dynsym);
+  r = PatchBytes(w, b);
+  CHECK(r.ok);
+  CHECK_EQ(r.summary["end_symbols"].size(), static_cast<std::size_t>(0));
+  // A name offset past the string table is not read, even where the bytes there spell a wanted name.
+  b = good;
+  std::memcpy(b.data() + kDynstrOffset + strSize + 1, "_end", 5);
+  appendSymbol(b, static_cast<std::uint32_t>(strSize + 1));
+  r = PatchBytes(w, b);
+  CHECK(r.ok);
+  CHECK_EQ(r.summary["end_symbols"].size(), static_cast<std::size_t>(6));
+  // The last name of the table, with no terminator inside it, ends at the table's end and not at the next NUL after it.
+  b = good;
+  std::memcpy(b.data() + kDynstrOffset + strSize, "_endZZ", 7);  // "_end" is the table's last four bytes
+  Elf64_Shdr dynstr = Shdr(b, kSecDynstr);
+  dynstr.sh_size = strSize + 4;
+  SetShdr(b, kSecDynstr, dynstr);
+  appendSymbol(b, static_cast<std::uint32_t>(strSize));
+  r = PatchBytes(w, b);
+  CHECK(r.ok);
+  CHECK_EQ(r.summary["end_symbols"].size(), static_cast<std::size_t>(7));
+  // A string table that is not in the file (a NOBITS section with a size far past the end) is not read either:
+  // the six names are there, in the bytes the section would start at, and still none is reported.
+  Elf64_Shdr ghost{};
+  ghost.sh_type = SHT_NOBITS;
+  ghost.sh_offset = 0x3800;
+  ghost.sh_size = 0x10000;
+  SynthOptions o = World::DefaultOptions();
+  o.extraSections = {ghost};
+  World g(o);
+  std::memcpy(g.elf.bytes.data() + 0x3800, g.elf.bytes.data() + kDynstrOffset, strSize);
+  Elf64_Shdr link = Shdr(g.elf.bytes, kSecDynsym);
+  link.sh_link = 8;
+  SetShdr(g.elf.bytes, kSecDynsym, link);
+  r = g.Patch();
+  CHECK(r.ok);
+  CHECK_EQ(r.summary["end_symbols"].size(), static_cast<std::size_t>(0));
+}
+
+TEST(ASpecWithNoPinnedImageEndPatchesAndRecognisesItsOwnIdentity) {
+  World w;
+  w.spec.expectedImageEnd.reset();
+  PatchResult r = w.Patch();
+  CHECK(r.ok);
+  if (r.ok) CHECK(r.summary["slot_area"] == "0x1403600");
+  // With nothing pinned, the slot area an input would have been patched at is rounded from the input's own end:
+  // an input whose note is the ID of that table is the output of this patcher.
+  const BuildIdBytes derived = DeriveBuildId(StockId(), CanonicalTable(w.spec.rows, w.spec.rowCount, {}, kSlotArea));
+  std::memcpy(w.elf.bytes.data() + kNoteDescOffset, derived.data(), derived.size());
+  ExpectRefusal(w.Patch(), "already_patched", "", "the table's own ID, unpinned");
+}
+
+TEST(AGnuRelroThatEndsExactlyAtTheSlotAreaLeavesItFree) {
+  SynthOptions o = World::DefaultOptions();
+  o.relroEnd = kSlotArea;
+  World at(o);
+  CHECK(at.Patch().ok);
+  o.relroEnd = kSlotArea + 1;
+  World past(o);
+  ExpectRefusal(past.Patch(), "layout_relro", "", "RELRO one byte into the slot area");
+}
+
+TEST(AnAddressExactlyAtTheBiasIsInNoSegmentRatherThanBelowTheBias) {
+  World w;
+  w.rows[0].sites[0].revaultVa = kRevaultBias;
+  PatchResult r = w.Patch();
+  ExpectRefusal(r, "site_outside_text", "s.join", "site at the bias");
+  CHECK(r.refusal.detail.find("not in an executable segment") != std::string::npos);
+  WordPatchRow edit;
+  edit.id = "x.at_bias";
+  edit.revaultVa = kRevaultBias;
+  edit.edits.push_back({0, {0, 0, 0, 0}, {0x1f, 0x20, 0x03, 0xd5}});
+  World v;
+  r = v.Patch({edit});
+  ExpectRefusal(r, "word_outside_text", "x.at_bias", "word at the bias");
+  CHECK(r.refusal.detail.find("not in an executable segment") != std::string::npos);
+}
+
+TEST(ARowWhoseThirdWordCannotBeRelocatedIsRefusedNamingThatWord) {
+  World w;
+  w.elf.PutWord(kJoinVa + 8, 0x17fffffe);  // b .-8: back into the 12 bytes the stub overwrites
+  w.rows[0] = w.Inline("s.join", kJoinVa, 0);
+  const PatchResult r = w.Patch();
+  ExpectRefusal(r, "row_not_relocatable", "s.join", "a branch back into the window from the third word");
+  CHECK(r.refusal.detail.find("word 2") != std::string::npos);
+  World first;
+  first.elf.PutWord(kJoinVa, 0x14000001);  // b .+4: into the window from the first word, so the detail says word 0
+  first.rows[0] = first.Inline("s.join", kJoinVa, 0);
+  const PatchResult f = first.Patch();
+  ExpectRefusal(f, "row_not_relocatable", "s.join", "a branch back into the window from the first word");
+  CHECK(f.refusal.detail.find("word 0") != std::string::npos);
+}
+
+TEST(AnOutputBuiltWithExtraRowsIsAlreadyPatchedOnlyForThoseRows) {
+  World w;
+  std::vector<WordPatchRow> rows;
+  Refusal refusal;
+  CHECK(ParseExtraRows(Fixture(), w.spec, &rows, &refusal));
+  const PatchResult first = w.Patch(rows);
+  CHECK(first.ok);
+  if (!first.ok) return;
+  ExpectRefusal(PatchLibr15(first.output, w.spec, rows, ""), "already_patched", "", "re-patching with the same extra rows");
+}
+
+TEST(WordsOfTwoRowsAtTheSameAddressAreOrderedByIdAndRowsByAddress) {
+  World w;
+  auto bytesAt = [&](std::uint64_t va) {
+    WordBytes b{};
+    const std::uint32_t v = w.elf.WordAt(va);
+    std::memcpy(b.data(), &v, 4);
+    return b;
+  };
+  const WordBytes nop{0x1f, 0x20, 0x03, 0xd5};
+  auto row = [&](const char* id, std::uint64_t va, std::uint32_t offset) {
+    WordPatchRow r;
+    r.id = id;
+    r.revaultVa = va + kRevaultBias;
+    r.edits.push_back({offset, bytesAt(va + offset), nop});
+    return r;
+  };
+  // Same address, same word: the second row in id order is the one refused, whatever order the file lists them in.
+  PatchResult r = w.Patch({row("x.tie_b", kGuardA, 0), row("x.tie_a", kGuardA, 0)});
+  ExpectRefusal(r, "word_overlap", "x.tie_b", "equal addresses");
+  CHECK(r.refusal.detail.find("x.tie_a") != std::string::npos);
+  // Ids against addresses: x.z is lower in memory, x.a is lower by id. Address decides, so x.a is the second one.
+  r = w.Patch({row("x.a", kGuardB, 0), row("x.z", kGuardA, 8)});
+  ExpectRefusal(r, "word_overlap", "x.a", "address before id");
+  CHECK(r.refusal.detail.find("x.z") != std::string::npos);
+  // And the report lists the words in address order, then id order.
+  r = w.Patch({row("x.a", kGuardB + 0x10, 0), row("x.z", kGuardA, 0)});
+  CHECK(r.ok);
+  std::vector<std::string> ids;
+  for (const Json& e : r.events) {
+    if (e["event"] == "libr15_patch_word") ids.push_back(e["id"]);
+  }
+  CHECK(ids == (std::vector<std::string>{"x.z", "x.a"}));
+}
+
+TEST(WordsThatShareOneByteCollideWhetherOrNotTheyAreAligned) {
+  World w;
+  const std::uint64_t base = SynthElf::FileOffsetOfText(kGuardA);
+  auto row = [&](const char* id, std::uint64_t byteOffset) {
+    WordPatchRow r;
+    r.id = id;
+    r.revaultVa = kGuardA + byteOffset + kRevaultBias;
+    WordBytes stock{};
+    std::memcpy(stock.data(), w.elf.bytes.data() + base + byteOffset, 4);
+    r.edits.push_back({0, stock, {0x1f, 0x20, 0x03, 0xd5}});
+    return r;
+  };
+  // [+1, +5) and [+4, +8) share byte +4 (rows built directly: the file reader only produces aligned ones).
+  const PatchResult r = w.Patch({row("x.a", 1), row("x.b", 4)});
+  ExpectRefusal(r, "word_overlap", "x.b", "unaligned words that share a byte");
+  // [+1, +5) and [+5, +9) do not.
+  CHECK(w.Patch({row("x.a", 1), row("x.b", 5)}).ok);
+}
+
+TEST(AWordNextToAClaimedRangeOnEitherSideIsNotAnOverlap) {
+  World w;
+  auto edit = [&](std::uint64_t va) {
+    WordPatchRow r;
+    r.id = "x.next";
+    r.revaultVa = va + kRevaultBias;
+    WordBytes stock{};
+    const std::uint32_t v = w.elf.WordAt(va);
+    std::memcpy(stock.data(), &v, 4);
+    r.edits.push_back({0, stock, {0x1f, 0x20, 0x03, 0xd5}});
+    return r;
+  };
+  CHECK(w.Patch({edit(kJoinVa - 4)}).ok);   // ends where s.join's stub begins
+  CHECK(w.Patch({edit(kJoinVa + 12)}).ok);  // begins where it ends
+  ExpectRefusal(w.Patch({edit(kJoinVa + 8)}), "word_overlap", "x.next", "the stub's last word");
+  ExpectRefusal(w.Patch({edit(kJoinVa)}), "word_overlap", "x.next", "the stub's first word");
+}
+
 // ---- ADR test 9: word patches and the extra-rows file (format 1) ---------------------------------------------------
 
 bool Parse(const std::string& text, const World& w, std::vector<WordPatchRow>* rows, Refusal* refusal) {
@@ -539,6 +1184,21 @@ TEST(TheBuildIdDoesNotDependOnKeyOrderSpacingOrRowOrder) {
   CHECK(Json(ra.events).dump() == Json(rb.events).dump());
 }
 
+TEST(TheStockBuildIdTheFileMustNameIsTheSpecsNotAConstant) {
+  World w;
+  w.spec.stockBuildId = BuildIdBytes{};
+  w.spec.stockBuildId.fill(0x11);
+  const std::string other(40, '1');
+  std::vector<WordPatchRow> rows;
+  Refusal refusal;
+  std::string named = Fixture();
+  CHECK(Replace(&named, kLibR15StockBuildId, other));
+  CHECK(Parse(named, w, &rows, &refusal));
+  CHECK(!Parse(Fixture(), w, &rows, &refusal));
+  CHECK_EQ(refusal.code, std::string("extra_rows_stock_build_id"));
+  CHECK(refusal.detail.find(other) != std::string::npos);
+}
+
 struct RuleCase {
   const char* rule;      // the rule of ADR section 11 the case breaks
   const char* from;      // a substring of the fixture (exactly one occurrence), or "" to use `whole`
@@ -599,6 +1259,22 @@ TEST(EachRuleOfTheExtraRowsFormatIsRefusedInItsOwnCase) {
       {"a word below the bias", "\"0x1500010\"", "\"0x10\"", "word_outside_text", "x.example_guard"},
       {"a word in data", "\"0x1500010\"", "\"0x1503040\"", "word_outside_text", "x.example_guard"},
       {"a word past the text", "\"0x1500010\"", "\"0x1502000\"", "word_outside_text", "x.example_guard"},
+      // revault_va: the prefix alone and one digit too many reach std::stoull unless refused first; "0x0" is a valid
+      // spelling (the patcher refuses the address, below the bias); the top of the range keeps room for an offset.
+      {"revault_va is only the prefix", "\"0x1500010\"", "\"0x\"", "extra_rows_revault_va", "x.example_guard"},
+      {"revault_va has 17 digits", "\"0x1500010\"", "\"0x10000000000000000\"", "extra_rows_revault_va", "x.example_guard"},
+      {"revault_va with another first character", "\"0x1500010\"", "\"1x1500010\"", "extra_rows_revault_va", "x.example_guard"},
+      {"revault_va 0x0 parses", "\"0x1500010\"", "\"0x0\"", "word_outside_text", "x.example_guard"},
+      {"revault_va 0xffffffffffffff00", "\"0x1500010\"", "\"0xffffffffffffff00\"", "extra_rows_revault_va", "x.example_guard"},
+      {"revault_va 0xfffffffffffff000", "\"0x1500010\"", "\"0xfffffffffffff000\"", "extra_rows_revault_va", "x.example_guard"},
+      {"revault_va 0xffffffffffffeffc is the highest accepted", "\"0x1500010\"", "\"0xffffffffffffeffc\"", "word_outside_text", "x.example_guard"},
+      {"stock build id a number", "\"b243509c08ce677aeb95fa348016949b3fc45230\"", "5", "extra_rows_stock_build_id", ""},
+      {"id a number", "\"x.example_guard\"", "5", "extra_rows_id", ""},
+      {"kind a number", "\"word_patch\"", "5", "extra_rows_kind", "x.example_guard"},
+      {"row without an id", "      \"id\": \"x.example_guard\",\n", "", "extra_rows_missing_field", ""},
+      {"first offset negative", "\"offset\": 0, \"stock_bytes\": \"e0031faa\"", "\"offset\": -4, \"stock_bytes\": \"e0031faa\"", "extra_rows_offset", "x.example_guard"},
+      {"offset 4092 is the last allowed", "\"offset\": 8", "\"offset\": 4092", "word_stock_mismatch", "x.example_guard"},
+      {"id with the characters at both ends of the alphabet", "\"x.example_guard\"", "\"x.0z\"", "(accepted)", ""},
       {"empty rows", "\"revault_va\": \"0x1500010\",", "\"revault_va\": \"0x1500010\",", "", ""},  // replaced below
   };
   for (const RuleCase& c : cases) {
@@ -675,6 +1351,7 @@ TEST(TheRulesThatNeedMoreThanOneRowOrManyWords) {
   CHECK(!Parse(head + "[" + row("x.public_row", "0x1500100", 1) + "]}", pub, &rows, &refusal));
   CHECK_EQ(refusal.code, std::string("extra_rows_id"));
   CHECK_EQ(refusal.id, std::string("x.public_row"));
+  CHECK(refusal.detail.find("public") != std::string::npos);
   // A row that is not an object.
   CHECK(!Parse(head + "[7]}", w, &rows, &refusal));
   CHECK_EQ(refusal.code, std::string("extra_rows_json"));
@@ -690,13 +1367,39 @@ TEST(TheRulesThatNeedMoreThanOneRowOrManyWords) {
   // Ids: digits, dots and underscores are allowed; 62 characters after the prefix are the limit.
   CHECK(Parse(head + "[" + row("x.a.b_9.c", "0x1500100", 1) + "]}", w, &rows, &refusal));
   CHECK(Parse(head + "[" + row("x.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "0x1500100", 1) + "]}", w, &rows, &refusal));
+  // An id equal to the LAST public row's, and the detail names which of the two collisions it is.
+  World last;
+  last.rows[2].id = "x.last_public";
+  CHECK(!Parse(head + "[" + row("x.last_public", "0x1500100", 1) + "]}", last, &rows, &refusal));
+  CHECK_EQ(refusal.code, std::string("extra_rows_id"));
+  CHECK_EQ(refusal.id, std::string("x.last_public"));
+  CHECK(refusal.detail.find("public") != std::string::npos);
+  CHECK(!Parse(head + "[" + row("x.same", "0x1500100", 1) + "," + row("x.same", "0x1500200", 1) + "]}", w, &rows, &refusal));
+  CHECK(refusal.detail.find("twice") != std::string::npos);
+  // rows and words must be arrays: an object or a string holding the same content is not accepted as one.
+  CHECK(!Parse(head + "{\"k\":" + row("x.a", "0x1500100", 1) + "}}", w, &rows, &refusal));
+  CHECK_EQ(refusal.code, std::string("extra_rows_missing_field"));
+  CHECK(!Parse(head + "\"x\"}", w, &rows, &refusal));
+  CHECK_EQ(refusal.code, std::string("extra_rows_missing_field"));
+  const std::string rowHead = head + "[{\"id\":\"x.a\",\"kind\":\"word_patch\",\"revault_va\":\"0x1500100\",\"words\":";
+  CHECK(!Parse(rowHead + "{\"k\":" + word(0) + "}}]}", w, &rows, &refusal));
+  CHECK_EQ(refusal.code, std::string("extra_rows_words"));
+  CHECK_EQ(refusal.id, std::string("x.a"));
+  CHECK(!Parse(rowHead + "\"x\"}]}", w, &rows, &refusal));
+  CHECK_EQ(refusal.code, std::string("extra_rows_words"));
+  // A repeated key is named in the refusal.
+  CHECK(!Parse(R"({"format":"nevr-libr15-extra-rows","version":1,"version":1})", w, &rows, &refusal));
+  CHECK_EQ(refusal.code, std::string("extra_rows_duplicate_key"));
+  CHECK(refusal.detail.find("\"version\"") != std::string::npos);
   // Not JSON, trailing text, a top-level array.
   CHECK(!Parse("not json", w, &rows, &refusal));
   CHECK_EQ(refusal.code, std::string("extra_rows_json"));
+  CHECK(refusal.detail.find("not valid") != std::string::npos);
   CHECK(!Parse(head + "[" + row("x.a", "0x1500100", 1) + "]} trailing", w, &rows, &refusal));
   CHECK_EQ(refusal.code, std::string("extra_rows_json"));
   CHECK(!Parse("[]", w, &rows, &refusal));
   CHECK_EQ(refusal.code, std::string("extra_rows_json"));
+  CHECK(refusal.detail.find("not an object") != std::string::npos);
 }
 
 TEST(AWordInBytesAnotherRowWritesIsRefusedNamingTheSecondRow) {
@@ -714,6 +1417,7 @@ TEST(AWordInBytesAnotherRowWritesIsRefusedNamingTheSecondRow) {
   CHECK_EQ(r.refusal.code, std::string("word_overlap"));
   CHECK_EQ(r.refusal.id, std::string("x.over_public"));
   CHECK(r.refusal.detail.find("s.join") != std::string::npos);
+  CHECK(r.refusal.detail.rfind("offset 4: ", 0) == 0);  // the detail names the word's offset in the row first
   // The credits pair's ADD word.
   const std::string overCredits = head + R"({"id":"x.over_credits","kind":"word_patch","revault_va":"0x1500408","words":[{"offset":0,"stock_bytes":")" + bytesAt(kAdd0) +
                                   R"(","new_bytes":"1f2003d5"}]}]})";
@@ -816,6 +1520,18 @@ TEST(ARefusalExitsOneWritesTheReasonAndLeavesNoOutput) {
   CHECK(err["reason"] == "row_words_mismatch");
   CHECK(err["id"] == "s.join");
   CHECK(Json::parse(ReadText(report))["summary"]["status"] == "refused");
+  // No extra-rows file, no digest of one in the refusal (an empty one would read as "a file with no bytes").
+  CHECK(!err.contains("extra_rows_sha256"));
+  CHECK(!Json::parse(ReadText(report))["summary"].contains("extra_rows_sha256"));
+  {  // with a file that parsed, a refusal that comes later carries its digest
+    const std::string goodRows = g_fixtures + "/libr15_extra_rows_example.json";
+    const std::string fixture = Fixture();
+    std::ostringstream so3, se3;
+    CHECK_EQ(RunCli({"--stock", stock, "--out", out, "--report", report, "--extra-rows", goodRows}, w.spec, so3, se3), 1);
+    const Json later = Json::parse(se3.str());
+    CHECK(later["reason"] == "row_words_mismatch");
+    CHECK(later["extra_rows_sha256"] == nevr_quest::data::Sha256Hex(fixture.data(), fixture.size()));
+  }
   // A refused extra-rows file is a refusal too, with its digest in the report.
   World ok;
   const std::string badRows = g_scratch + "/cli_bad_rows.json";
@@ -861,6 +1577,114 @@ Json OneErrorLine(const std::ostringstream& err, const char* what) {
     return Json::object();
   }
   return j;
+}
+
+TEST(ArgumentsThatDoNotNameOneFilePerFlagAreRefusedBeforeAnythingIsWritten) {
+  World w;
+  const std::string stock = g_scratch + "/arg_stock.so", other = g_scratch + "/arg_other.so", out = g_scratch + "/arg_out.so",
+                    out2 = g_scratch + "/arg_out2.so", report = g_scratch + "/arg_report.json", report2 = g_scratch + "/arg_report2.json";
+  const std::string rows = g_fixtures + "/libr15_extra_rows_example.json";
+  WriteBytes(stock, w.elf.bytes);
+  WriteBytes(other, w.elf.bytes);
+  auto expectUsage = [&](const std::vector<std::string>& args, const char* what) {
+    std::ostringstream so, se;
+    const int rc = RunCli(args, w.spec, so, se);
+    if (rc != 2) std::fprintf(stderr, "  %s: exit %d, stderr %s\n", what, rc, se.str().c_str());
+    CHECK_EQ(rc, 2);
+    Json e = OneErrorLine(se, what);
+    if (e["status"] != "usage_error") std::fprintf(stderr, "  %s: status %s\n", what, e.dump().c_str());
+    CHECK(e["status"] == "usage_error");
+    CHECK(so.str().empty());
+    for (const std::string& f : {out, out2, report, report2}) {
+      CHECK(!Exists(f));
+      CHECK(!Exists(f + ".partial"));
+    }
+  };
+  // A flag given twice, both values naming files that exist: refused, not "the last one wins".
+  expectUsage({"--stock", stock, "--stock", other, "--out", out, "--report", report}, "--stock twice");
+  expectUsage({"--stock", stock, "--out", out, "--out", out2, "--report", report}, "--out twice");
+  expectUsage({"--stock", stock, "--out", out, "--report", report, "--report", report2}, "--report twice");
+  expectUsage({"--stock", stock, "--out", out, "--report", report, "--extra-rows", rows, "--extra-rows", rows}, "--extra-rows twice");
+  // A flag with no value after it, whichever flag ends the line.
+  expectUsage({"--out", out, "--report", report, "--stock"}, "--stock without a value");
+  expectUsage({"--stock", stock, "--report", report, "--out"}, "--out without a value");
+  expectUsage({"--stock", stock, "--out", out, "--report"}, "--report without a value");
+  expectUsage({"--stock", stock, "--out", out, "--report", report, "--extra-rows"}, "--extra-rows without a value");
+  // Each of the three required flags missing: a usage error, before the stock is read or a report is opened.
+  expectUsage({"--out", out, "--report", report}, "no --stock");
+  expectUsage({"--stock", stock, "--report", report}, "no --out");
+  expectUsage({"--stock", stock, "--out", out}, "no --report");
+  for (const std::string& f : {stock, other}) std::remove(f.c_str());
+}
+
+TEST(TheStockFileIsNeverTheOutputAndAFailedWriteLeavesAnExistingOutputAlone) {
+  World w;
+  const std::string stock = g_scratch + "/same_stock.so", out = g_scratch + "/same_out.so", report = g_scratch + "/same_report.json";
+  WriteBytes(stock, w.elf.bytes);
+  const std::string before = ReadText(stock);
+  {  // --out is the --stock file: refused; the stock is byte-identical afterwards and nothing else appeared
+    std::ostringstream so, se;
+    CHECK_EQ(RunCli({"--stock", stock, "--out", stock, "--report", report}, w.spec, so, se), 2);
+    Json e = OneErrorLine(se, "out is stock");
+    CHECK(e["status"] == "usage_error");
+    CHECK(e["detail"].get<std::string>().find("--out must not be the --stock file") != std::string::npos);
+    CHECK(ReadText(stock) == before);
+    CHECK(!Exists(stock + ".partial"));
+    CHECK(!Exists(report));
+  }
+  {  // the output is written beside itself and renamed: with the beside-name taken, an existing --out is untouched
+    WriteBytes(out, {1, 2, 3});
+    CHECK_EQ(mkdir((out + ".partial").c_str(), 0755), 0);
+    std::ostringstream so, se;
+    CHECK_EQ(RunCli({"--stock", stock, "--out", out, "--report", report}, w.spec, so, se), 2);
+    Json e = OneErrorLine(se, "partial taken");
+    CHECK(e["status"] == "io_error");
+    CHECK(e["detail"].get<std::string>().find("--out") != std::string::npos);
+    CHECK(ReadText(out) == std::string("\x01\x02\x03"));
+    CHECK_EQ(rmdir((out + ".partial").c_str()), 0);
+  }
+  {  // --out in a directory that is not there: exit 2, and the report (written first) says what was validated
+    std::remove(report.c_str());
+    std::ostringstream so, se;
+    CHECK_EQ(RunCli({"--stock", stock, "--out", g_scratch + "/no_such_dir/out.so", "--report", report}, w.spec, so, se), 2);
+    Json e = OneErrorLine(se, "out in a missing directory");
+    CHECK(e["status"] == "io_error");
+    CHECK(e["detail"].get<std::string>().find("--out") != std::string::npos);
+    CHECK(so.str().empty());
+    CHECK(Json::parse(ReadText(report), nullptr, false)["summary"]["status"] == "patched");
+  }
+  {  // --report in a directory that is not there: exit 2 before any output
+    std::remove(out.c_str());
+    std::ostringstream so, se;
+    CHECK_EQ(RunCli({"--stock", stock, "--out", out, "--report", g_scratch + "/no_such_dir/report.json"}, w.spec, so, se), 2);
+    Json e = OneErrorLine(se, "report in a missing directory");
+    CHECK(e["status"] == "io_error");
+    CHECK(e["detail"].get<std::string>().find("--report") != std::string::npos);
+    CHECK(!Exists(out));
+  }
+  for (const std::string& f : {stock, out, report}) std::remove(f.c_str());
+}
+
+TEST(AnExtraRowsFileWithoutATrailingNewlineIsTheSameFile) {
+  World w;
+  const std::string stock = g_scratch + "/nl_stock.so", out = g_scratch + "/nl_out.so", report = g_scratch + "/nl_report.json";
+  const std::string rows = g_scratch + "/nl_rows.json";
+  WriteBytes(stock, w.elf.bytes);
+  std::string text = Fixture();
+  CHECK(!text.empty() && text.back() == '\n');
+  text.pop_back();
+  CHECK(!text.empty() && text.back() == '}');
+  std::ofstream(rows, std::ios::binary | std::ios::trunc) << text;
+  std::ostringstream so, se;
+  CHECK_EQ(RunCli({"--stock", stock, "--out", out, "--report", report, "--extra-rows", rows}, w.spec, so, se), 0);
+  CHECK(se.str().empty());
+  const Json rep = Json::parse(ReadText(report), nullptr, false);
+  CHECK(!rep.is_discarded());
+  if (!rep.is_discarded()) {
+    CHECK_EQ(rep["summary"]["extra_rows"].get<int>(), 1);
+    CHECK(rep["summary"]["extra_rows_sha256"] == nevr_quest::data::Sha256Hex(text.data(), text.size()));
+  }
+  for (const std::string& f : {stock, out, report, rows}) std::remove(f.c_str());
 }
 
 TEST(AFileTheToolCannotReadExitsTwoWithOneJsonLineInsteadOfAborting) {
