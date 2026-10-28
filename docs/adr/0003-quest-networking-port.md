@@ -255,6 +255,23 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   thunks' fault counters, `_error_page_dropped`, `_logging_in_page_dropped`, `_page_passed_armed`,
   `_error_resent`, `_error_resend_unavailable`, `_login_restarted` and `_login_restart_unavailable`; installing logs one `login_prompt_install` line (or `skipped` when the
   counters were refused).
+- The title over the text. The login-failed page is titled `LOGIN FAILED` by a literal in the page's script library
+  (`lib7f2363b8976491aa.so`, no build ID, no SONAME): one script node (`execute_node_cfa11df1`, ReVault `0x10d0e8`)
+  builds `string_t("LOGIN FAILED")` and passes it to `EXTERNALFUNCTIONNODE::setparam`. The prompt board carries a title
+  with the text (`prompt_board::Publish(..., title)`): `SIGN IN` with the code, `SIGNED IN` with the notice, none with the
+  timed-out and no-code texts (`prompt_presenters.h`, `kSignInTitle`, `kSignedInTitle`). A GOT hook
+  (`sentinel/login_title_hook.h`) on that library's `string_t::string_t(char const*)` slot (JUMP_SLOT `0x12dd0`, BIND_NOW;
+  the constructor is defined in the library, ReVault `0x10df98`, and copies at most 63 characters into the string's own
+  64-byte buffer) hands the original the board's title in place of exactly the literal `LOGIN FAILED`, and the
+  game's own text in every other case, so a failure with no title on the board keeps the game's title. The slot's one
+  caller is that node (`revault_callers` on `0x10df98` and the PLT stub `0x104a90`: one edge), so the thunk runs once each
+  time the page's title is built; the alternative seam, `setparam`, is a GLOB_DAT function-pointer variable
+  (`0x12ea0`) that every script node in the library calls through and takes a `string_t` whose layout we would write. The
+  library loads after the sentinel's constructor, so the install is a post-load action (`PostLoadActions::loginTitle`),
+  tried after each dlopen until the library is mapped. The PC twin (`7f2363b8976491aa.dll`) holds the same literal,
+  but the PC client shows its code in its own sign-in window (`SignInDialog`, `token_auth.cpp`), never on the game's
+  login-failed page, so the PC has no title to change. Five counters: `login_title_string_calls`, `_replaced`, `_kept`,
+  `_other_text` and `_thunk_faults`; installing logs one `login_title_install` line.
 
 Exposure of the device code. It is shown to the player by design and is written to
 `device_login.txt` on `/sdcard`, readable by apps with storage access, until the login ends (or,
@@ -356,8 +373,8 @@ an atomic counter, and a reporter thread (`hook_report.h`, created from the cons
 first hook is installed) logs "reporter_started", then a counter's first change within the first
 10 seconds, then "never_fired" once for each counter still zero when that window closes (the hook
 is installed and the game never called it), and from then on one pass a minute that logs a counter
-only if it changed. The counter table holds 96 counters for the whole program (`sentinel::kMaxReportCounters`), and every
-`RegisterReportCounter` call must come before `StartReporter` (a later registration, or the 97th, is
+only if it changed. The counter table holds 128 counters for the whole program (`sentinel::kMaxReportCounters`), and every
+`RegisterReportCounter` call must come before `StartReporter` (a later registration, or the 129th, is
 refused and logged as `register_refused` with its `reason`: `reporter_running`, `table_full` or
 `null_argument`). The constructor therefore registers every counter first and starts the reporter once;
 `StopReporter` forgets the table, so a Stop, Register, Start sequence loses the counters registered before
@@ -1650,7 +1667,7 @@ What the integration commit calls, and when:
 
 1. **Install, in the sentinel constructor** (`nevr_sentinel_ctor`, after `InitActivation()`, next to the
    existing GOT hooks): `quest_social::RegisterSocialReportCounters()` before `StartReporter` (it takes 19
-   of the reporter's 96 counters; the clock hook takes 2 more, leaving room for the login, redirect and router hooks), then
+   of the reporter's 128 counters; the clock hook takes 2 more, leaving room for the login, redirect and router hooks), then
    `quest_social::InstallSocialHook(sentinel::FeatureEnabled(Feature::kSocial))` after it.
    The target is libr15's own BIND_NOW slot, so libr15 only has to be mapped, which it is when its
    `DT_NEEDED` dependencies' constructors run (the `clock_gettime` hook installs there today); libpnsovr

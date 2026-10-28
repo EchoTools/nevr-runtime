@@ -30,6 +30,12 @@ inline constexpr const char* kLibR15BuildId = "b243509c08ce677aeb95fa348016949b3
 inline constexpr const char* kMatchmaking = "libpnsradmatchmaking.so";
 inline constexpr const char* kMatchmakingBuildId = "8c4fddc079eae65909530132a56c48da48b2708c";
 
+// The game's script library that builds the login-failed page's title (#1137). It has no GNU build ID and no SONAME, so
+// the target pins the module file name, the symbol and the link-time slot address (`readelf -rW` on the store APK's
+// copy: JUMP_SLOT 0x12dd0 `_ZN8string_tC2EPKc`, the library's only relocation of that symbol; BIND_NOW).
+inline constexpr const char* kLoginScriptLib = "lib7f2363b8976491aa.so";
+inline constexpr const char* kStringTCtorSymbol = "_ZN8string_tC2EPKc";
+
 inline constexpr const char* kTStringSymbol = "_ZNK10NRadEngine5CJson7TStringEPKcS2_j";
 inline constexpr const char* kClockGettimeSymbol = "clock_gettime";
 inline constexpr const char* kCreateConnectionSymbol = "_ZN10NRadEngine8CSysHttp16CreateConnectionERmPKc";
@@ -66,6 +72,20 @@ struct LibR15TStringTag {};
 struct MatchmakingTStringTag {};
 using LibR15TStringThunk = CallbackThunk<LibR15TStringTag, CJsonTStringSig>;
 using MatchmakingTStringThunk = CallbackThunk<MatchmakingTStringTag, CJsonTStringSig>;
+
+// string_t::string_t(char const*), defined in the login-failed page's script library itself (ReVault 0x10df98, 44 bytes:
+// NRadString::Copy(this, text, 0x40)), reached only through that library's PLT stub (ReVault 0x104a90), whose one caller
+// is execute_node_cfa11df1 (ReVault 0x10d0e8), the node that builds the literal "LOGIN FAILED" and hands it to
+// EXTERNALFUNCTIONNODE::setparam as the page's title. `self` (x0) is the string_t, a 64-byte inline buffer the
+// constructor fills; `text` (x1) is copied, never kept. The ReVault VA is the file vaddr + 0x100000.
+struct StringTOpaque;
+using StringTCtorSig = void(StringTOpaque* self, const char* text);
+struct LoginScriptStringTag {};
+using LoginScriptStringThunk = CallbackThunk<LoginScriptStringTag, StringTCtorSig>;
+
+inline GotTarget LoginScriptStringCtor() {
+  return {kLoginScriptLib, kStringTCtorSymbol, RelocKind::kJumpSlot, nullptr, 0x12dd0ULL};
+}
 
 // NRadEngine::CSysHttp::CreateConnection(unsigned long&, char const*), defined in libr15 at 0xf96c08 and
 // called through libr15's own PLT (JUMP_SLOT 0x36e8028): `handle` (x0, the `unsigned long&`) receives the

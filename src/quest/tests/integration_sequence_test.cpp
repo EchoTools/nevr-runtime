@@ -770,6 +770,50 @@ void TestPostLoadRetriesUntilSettledThenStops() {
   QCHECK(stats.loginSettled == 1 && stats.matchmakingSettled == 1);
 }
 
+// The login-failed page's title hook (#1137) waits for the script library like the matchmaking redirect waits for its own:
+// tried after every non-null dlopen until it settles, never again after, and its settling is reported.
+int g_titleRuns = 0;
+Settle g_titleSettle = Settle::kRetryLater;
+ActionResult FakeLoginTitle() noexcept {
+  ++g_titleRuns;
+  return {g_titleSettle, "fake"};
+}
+
+void TestPostLoadRunsTheLoginTitleActionUntilItSettles() {
+  int dummy = 0;
+  g_titleRuns = 0;
+  g_titleSettle = Settle::kRetryLater;
+  PostLoadActions a;
+  a.loginTitle = &FakeLoginTitle;
+  SetPostLoadActions(a);
+  QCHECK(PostLoadPending());
+  AfterDlopen("libGLESv3.so", &dummy);
+  AfterDlopen("/data/app/x/lib/arm64/libc++_shared.so", &dummy);
+  QCHECK(g_titleRuns == 2);  // the library is not mapped yet: asked again after each dlopen
+  QCHECK(PostLoadStatsView().loginTitleSettled == 0);
+  QCHECK(PostLoadPending());
+  g_titleSettle = Settle::kDone;
+  AfterDlopen("/data/app/x/lib/arm64/lib7f2363b8976491aa.so", &dummy);
+  QCHECK(g_titleRuns == 3);
+  QCHECK(PostLoadStatsView().loginTitleSettled == 1);
+  QCHECK(!PostLoadPending());
+  AfterDlopen("libfoo.so", &dummy);
+  QCHECK(g_titleRuns == 3);  // done: never again
+  // A refusal a retry cannot change also ends it.
+  g_titleRuns = 0;
+  g_titleSettle = Settle::kGiveUp;
+  SetPostLoadActions(a);
+  AfterDlopen("libfoo.so", &dummy);
+  AfterDlopen("libbar.so", &dummy);
+  QCHECK(g_titleRuns == 1);
+  // No action wanted: nothing is pending and nothing runs.
+  g_titleRuns = 0;
+  SetPostLoadActions(PostLoadActions{});
+  QCHECK(!PostLoadPending());
+  AfterDlopen("libfoo.so", &dummy);
+  QCHECK(g_titleRuns == 0);
+}
+
 // Self-check "matchmaking_reload_redirect" (#451): the number of distinct libpnsradmatchmaking images is what the
 // once-installed redirect is compared with.
 void TestPostLoadCountsEachDistinctMatchmakingImage() {
@@ -1623,6 +1667,7 @@ int main() {
   TestPostLoadIgnoresANullHandle();
   TestPostLoadRetriesUntilSettledThenStops();
   TestPostLoadCountsEachDistinctMatchmakingImage();
+  TestPostLoadRunsTheLoginTitleActionUntilItSettles();
   TestMatchmakingReloadProbeWaitsForTheActionAndThenSpeaksOnce();
   TestMatchmakingReloadProbeFailsWhenTheActionGaveUp();
   TestApplySelfCheckWiresTheDebugQueryTheUserAndTheSender();

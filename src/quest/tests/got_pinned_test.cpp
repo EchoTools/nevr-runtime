@@ -1,6 +1,6 @@
 // Resolves the pinned Quest targets (src/quest/sentinel/pinned_targets.h and the login
 // prerequisites' src/quest/login/login_prerequisite_targets.h) against the real libr15.so,
-// libpnsradmatchmaking.so and libpnsovr.so, on any host.
+// libpnsradmatchmaking.so, libpnsovr.so and the login-failed page's script library, on any host.
 //
 // The ELF is laid out in memory the way a loader would (PT_LOAD segments copied to
 // their vaddrs inside one anonymous mapping), so the production ResolveSlot walks
@@ -9,7 +9,7 @@
 // patched, and relocation numbers are passed as AArch64's, so an x86_64 host can
 // check an AArch64 image.
 //
-// Run: got_pinned_test <libr15.so> <libpnsradmatchmaking.so> <libpnsovr.so>
+// Run: got_pinned_test <libr15.so> <libpnsradmatchmaking.so> <libpnsovr.so> <lib7f2363b8976491aa.so>
 
 #include <elf.h>
 #include <sys/mman.h>
@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "got_hook.h"
+#include "login_title_hook.h"
 #include "pinned_targets.h"
 #include "quest/login/login_prerequisite_targets.h"
 #include "quest/game_login_failures.h"
@@ -148,12 +149,13 @@ void CheckBuildId(const LoadedElf& elf, const char* expected) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc != 4) {
-    std::fprintf(stderr, "usage: got_pinned_test <libr15.so> <libpnsradmatchmaking.so> <libpnsovr.so>\n");
+  if (argc != 5) {
+    std::fprintf(stderr,
+                 "usage: got_pinned_test <libr15.so> <libpnsradmatchmaking.so> <libpnsovr.so> <lib7f2363b8976491aa.so>\n");
     return 2;
   }
-  LoadedElf r15, mm, ovr;
-  if (!Load(argv[1], &r15) || !Load(argv[2], &mm) || !Load(argv[3], &ovr)) {
+  LoadedElf r15, mm, ovr, script;
+  if (!Load(argv[1], &r15) || !Load(argv[2], &mm) || !Load(argv[3], &ovr) || !Load(argv[4], &script)) {
     std::fprintf(stderr, "got_pinned_test: cannot load an AArch64 ELF64 from the given paths\n");
     return 2;
   }
@@ -181,6 +183,17 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");
   CheckTarget(mm, pinned::MatchmakingTString(), "libpnsradmatchmaking CJson::TString JUMP_SLOT");
+
+  // The login-failed page's title (#1137): the script library has no build ID, so the slot is pinned by module, symbol
+  // and address, the symbol is defined in the library itself (string_t::string_t(char const*), ReVault 0x10df98 = link
+  // address 0xdf98), and the literal the hook replaces is in the file.
+  CheckTarget(script, pinned::LoginScriptStringCtor(), "lib7f2363b8976491aa string_t::string_t(char const*) JUMP_SLOT");
+  if (DynamicSymbolValue(script, pinned::kStringTCtorSymbol) != 0xdf98ULL) {
+    std::fprintf(stderr, "lib7f2363b8976491aa %s: .dynsym value is not 0xdf98\n", pinned::kStringTCtorSymbol);
+    QCHECK(false);
+  }
+  const std::vector<char> scriptFile = ReadAll(argv[4]);
+  QCHECK(HoldsString(scriptFile, nevr_quest::login_title::kGameTitle));
 
   // The matchmaking library's slot for the other CJson::TString overload is a
   // different symbol and a different slot.

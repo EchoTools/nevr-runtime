@@ -3,6 +3,7 @@
 //
 //   login hook          needs libpnsovr.so (loaded by CSysModule::Load -> dlopen)
 //   matchmaking hook    needs libpnsradmatchmaking.so (loaded by CNSLobby::LoadMatchmakingSupport)
+//   login title         needs the login-failed page's script library, lib7f2363b8976491aa.so (#1137)
 //   plugin pass         needs nothing but a running game: the first non-null dlopen is its moment (#438, ADR 0019
 //                       section 3), after the two installs above have had theirs
 //
@@ -38,6 +39,7 @@ using ActionFn = ActionResult (*)() noexcept;
 struct PostLoadActions {
   ActionFn login = nullptr;        // null: the feature is off, nothing is tried
   ActionFn matchmaking = nullptr;  // null: same
+  ActionFn loginTitle = nullptr;   // null: same
   // The normal plugin pass (#438). Runs once, on the first non-null dlopen, after the actions above and OUTSIDE the lock
   // that guards them, because a plugin's code may call dlopen (which reaches AfterDlopen again on this thread). A call that
   // arrives while it runs does not start it again. It settles whatever it answers (a plugin that fails is a record, not a
@@ -58,6 +60,7 @@ struct PostLoadStats {
   std::uint64_t attempts = 0;      // action runs
   std::uint64_t loginSettled = 0;  // 1 when the login action settled
   std::uint64_t matchmakingSettled = 0;
+  std::uint64_t loginTitleSettled = 0;  // 1 when the login title action settled
   std::uint64_t pluginsSettled = 0;  // 1 when the plugin pass ran
 };
 PostLoadStats PostLoadStatsView() noexcept;
