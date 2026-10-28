@@ -65,7 +65,12 @@ issues a code and never builds a route shaped after the wizard.
 A refusal is a nakama RPC error whose message is one stable token: `invalid` (no such code), `expired`, `closed` (revoked,
 or its match ended), `denied` (the guild check, decision D2), `limit` (decision D1, live codes per user), `rate` (too many
 attempts) or `unavailable` (the match could not be allocated: no server was available to the player). The create request's
-`map` is a level name string (the service refuses a number as `invalid`). The request's `region` is empty: the review
+`map` is a level name string (the service refuses a number as `invalid`). The runtime names it from the chosen map card:
+the card's level symbol is looked up in the generated symbol cache (`symcache_data.cpp`), giving `mpl_combat_fission` and
+`mpl_combat_gauss` for the payload cards and `mpl_combat_dyson` and `mpl_combat_combustion` for the capture-point cards.
+A card with no level, or a level the cache cannot name, is refused with the `no_level` reason and nothing is sent; the
+runtime never sends a create with no level for a mode that has a map page. A mode with no map page sends an empty `map`.
+The request's `region` is empty: the review
 page's `Server_region` is display text, no generic region code exists, and with none sent the service picks a server by
 the player's stored pings (#1192 makes the row a list of codes the service offers, and the request then sends the chosen
 one). The runtime maps the token to the wizard's text and logs the token; it never logs or shows any other text of
