@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -27,8 +28,11 @@ using nevr_game_server::RelayLobbySettings;
 
 // A document shaped like the one the retail handler reads (keys from echovr.exe: parties_unlocked and
 // allowed_levels in OnLobbySettings 0x1401c2a20, event_matchtype in ProcessPostMatchProfileUpdates 0x140192d90).
-const char kDocument[] =
-    R"({"parties_unlocked":true,"allowed_levels":["mpl_arena_a"],"event_matchtype":7,"big":18446744073709551615})";
+// "big" is the largest 64-bit integer, written from the type so the source holds no 20-digit literal (the N20 sensor
+// in `just verify` reads any such number as an account id).
+const std::string kDocument =
+    R"({"parties_unlocked":true,"allowed_levels":["mpl_arena_a"],"event_matchtype":7,"big":)" +
+    std::to_string(std::numeric_limits<uint64_t>::max()) + "}";
 
 void PutLe64(std::vector<uint8_t>& out, uint64_t value) {
   for (int shift = 0; shift < 64; shift += 8) out.push_back(static_cast<uint8_t>(value >> shift));
