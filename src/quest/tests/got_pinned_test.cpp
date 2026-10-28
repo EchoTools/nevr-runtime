@@ -256,6 +256,30 @@ int main(int argc, char** argv) {
     QCHECK(false);
   }
 
+  // CResourceManager::AsyncResourceIOCallback (#966): the GLOB_DAT slot resolves at its pin, the symbol it names is defined
+  // where the hook's comments say, ResourceLoadInternal loads the slot at the two pinned sites (`ldr x4, [x4, #1464]`, the
+  // GOT page's 0x5b8 offset into 0x37195b8, passed on as the read-finished callback), and the memory context the hook
+  // reads to find the allocator FreeResource releases through is exported at its pin.
+  CheckTarget(r15, pinned::LibR15AsyncResourceIOCallback(), "libr15 CResourceManager::AsyncResourceIOCallback GLOB_DAT");
+  if (DynamicSymbolValue(r15, pinned::kAsyncResourceIOCallbackSymbol) != 0x2543448ULL) {
+    std::fprintf(stderr, "libr15 %s: .dynsym value is not 0x2543448\n", pinned::kAsyncResourceIOCallbackSymbol);
+    QCHECK(false);
+  }
+  const unsigned char* const r15_base = static_cast<const unsigned char*>(r15.mem);
+  for (const std::uint64_t site : {0x254391cULL, 0x25439acULL}) {
+    std::uint32_t word = 0;
+    std::memcpy(&word, r15_base + site, sizeof(word));
+    if (word != 0xF942DC84u) {
+      std::fprintf(stderr, "libr15 ResourceLoadInternal: word at %#llx is %#x, not ldr x4,[x4,#1464]\n",
+                   static_cast<unsigned long long>(site), word);
+      QCHECK(false);
+    }
+  }
+  if (DynamicSymbolValue(r15, pinned::kMemoryContextSymbol) != pinned::kMemoryContextVaddr) {
+    std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", pinned::kMemoryContextSymbol,
+                 static_cast<unsigned long long>(pinned::kMemoryContextVaddr));
+    QCHECK(false);
+  }
   // CR15UIPage2EnablePageNode::Enter: the symbol the slot names is defined at the address the hook's comments give.
   if (DynamicSymbolValue(r15, pinned::kEnablePageNodeEnterSymbol) != 0x1fc210cULL) {
     std::fprintf(stderr, "libr15 %s: .dynsym value is not 0x1fc210c\n", pinned::kEnablePageNodeEnterSymbol);
@@ -294,6 +318,15 @@ int main(int argc, char** argv) {
   if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + pinned::kSendComponentEventVaddr,
                   pinned::kSendComponentEventCode, sizeof(pinned::kSendComponentEventCode)) != 0) {
     std::fprintf(stderr, "libr15 CncaGameSpace::SendComponentEvent: first instructions differ from the pinned ones\n");
+    QCHECK(false);
+  }
+
+  // CR15VRMenuWidgetCS::Update, the entry the splash skip patches inline (#1128): its first four instructions are the
+  // ones the install proves before writing, at the vaddr it patches.
+  if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + pinned::kWidgetUpdateVaddr, pinned::kWidgetUpdateCode,
+                  sizeof(pinned::kWidgetUpdateCode)) != 0) {
+    std::fprintf(stderr, "libr15 CR15VRMenuWidgetCS::Update: first instructions at %#llx differ from the pinned ones\n",
+                 static_cast<unsigned long long>(pinned::kWidgetUpdateVaddr));
     QCHECK(false);
   }
 
