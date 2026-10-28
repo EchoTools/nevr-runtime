@@ -274,6 +274,27 @@ using LibR15CheckPermissionThunk = CallbackThunk<LibR15CheckPermissionTag, Check
 inline constexpr const char* kRequestPermissionsSymbol =
     "_ZN10NRadEngine8CSysInfo18RequestPermissionsENS_10CArrayViewIPKcLy0EEE";
 
+// NRadEngine::CSysInfo::OSBuildVersion(unsigned long long&), defined in libr15 at 0xf875c4 (184 bytes, exported; ReVault
+// 0x10875c4): reads the system property ro.build.version.incremental, and when it is at most 20 characters of decimal
+// digits stores the number through its argument and returns 1; otherwise it returns 0 and stores nothing. The return is
+// w0, 0 or 1. libr15 calls it through its own PLT (stub 0xf505a0, JUMP_SLOT 0x36ff9b8) from exactly one place,
+// CR15NetGame::Initialize (bl at 0x1285ff8): when it returns 1 and the number is below kMinOSBuildVersion, Initialize
+// switches the net game to state -100, "os needs update" (CR15NetGame::GameStateString), and never reaches the login.
+// libpnsovr has its own copy (its GotUserProofCB puts the number into the login's system info); this slot does not
+// reach it.
+inline constexpr const char* kOSBuildVersionSymbol = "_ZN10NRadEngine8CSysInfo14OSBuildVersionERy";
+inline constexpr std::uint64_t kOSBuildVersionVaddr = 0xf875c4;
+inline constexpr std::uint64_t kOSBuildVersionStub = 0xf505a0;
+inline constexpr std::uint64_t kOSBuildVersionCallSite = 0x1285ff8;  // CR15NetGame::Initialize
+using OSBuildVersionSig = int(std::uint64_t* version);
+struct LibR15OSBuildVersionTag {};
+using LibR15OSBuildVersionThunk = CallbackThunk<LibR15OSBuildVersionTag, OSBuildVersionSig>;
+// NRadEngine::kMinOSBuildVersion, the floor Initialize compares with (an 8-byte constant in .rodata, exported; Initialize
+// reads it through GLOB_DAT 0x371bd38). Its value in the pinned build is kMinOSBuildVersionValue.
+inline constexpr const char* kMinOSBuildVersionSymbol = "_ZN10NRadEngine18kMinOSBuildVersionE";
+inline constexpr std::uint64_t kMinOSBuildVersionVaddr = 0x2b9ca88;
+inline constexpr std::uint64_t kMinOSBuildVersionValue = 6023800249000000ULL;
+
 // NRadEngine::NRadGame::CR15UIPage2EnablePageNode::Enter(SR15UIPage2EnablePageNodeData const&), defined in
 // libr15 at 0x1fc210c: the UI script node that enables a page. `node` (x0) is the node object, which is the
 // data record plus 0x20 (`node == data + 0x20`, checked by the hook), and `data` (x1) is the record. It
@@ -477,6 +498,12 @@ inline GotTarget LibR15RequestPermissions() {
 // pinned image: `R_AARCH64_JUMP_SLOT 0xf87298 _ZN10NRadEngine8CSysInfo15CheckPermissionEPKc`).
 inline GotTarget LibR15CheckPermission() {
   return {kLibR15, kCheckPermissionSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c37c8ULL};
+}
+
+// libr15.so's slot for CSysInfo::OSBuildVersion, defined in libr15 itself (JUMP_SLOT 0x36ff9b8, `readelf -rW` on the
+// pinned image: `R_AARCH64_JUMP_SLOT 0xf875c4 _ZN10NRadEngine8CSysInfo14OSBuildVersionERy`).
+inline GotTarget LibR15OSBuildVersion() {
+  return {kLibR15, kOSBuildVersionSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ff9b8ULL};
 }
 
 // libr15.so's slot for CR15UIPage2EnablePageNode::Enter, defined in libr15 itself (JUMP_SLOT 0x36c1cf8).
