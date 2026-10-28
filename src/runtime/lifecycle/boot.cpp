@@ -17,6 +17,7 @@
 #include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/credits_block.h"
 #include "runtime/patch/credits_text_install.h"
+#include "runtime/patch/invite_choice_hook.h"
 #include "runtime/patch/invite_wizard_hook.h"
 #include "runtime/patch/arena_public_clock.h"
 #include "runtime/patch/coop_ai_trace.h"
@@ -625,9 +626,11 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // #906, ADR 0017: observe the CREATE GAME / JOIN VIA CODE wizard's click metric. Client only, and it sends nothing
   // yet (the worker waits for the service RPCs). It forwards every submit unchanged.
   if (!g_isServer) {
+    nevr_invite_choice_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
     nevr_invite_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
   } else {
     Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] wizard observer skipped reason=server_mode");
+    Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] choice observer skipped reason=server_mode");
   }
 
   // N92: start the WebSocket bridge in-process, as part of this DLL rather than

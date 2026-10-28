@@ -11,6 +11,7 @@
 #include "core/logging.h"
 #include "nevr_common.h"
 #include "runtime/hook/patching.h"
+#include "runtime/patch/invite_choice_hook.h"
 #include "runtime/patch/invite_wizard.h"
 
 // The wizard's click metric leaves the game through the remote-log submit (ADR 0017, "Runtime hook"). Its only caller is
@@ -57,9 +58,9 @@ void ObserveMetric(std::uint64_t data, std::uint64_t length) {
   if (metric.kind == nevr_invite::Kind::NotWizard) return;
   Log(EchoVR::LogLevel::Info, "%s", nevr_invite::ClickLine(metric.kind).c_str());
 
-  // The card choices (experience, mode, map) come from component events the hook does not see yet, so a create click
-  // is "incomplete" until that observer lands (ADR 0017, "Runtime hook").
-  const nevr_invite::Choices choices{};
+  // The card choices (experience, mode, map) are what the component-event observer last saw (invite_choice_hook.cpp);
+  // with none seen a create click is "incomplete".
+  const nevr_invite::Choices choices = nevr_invite_choice_hook::Choices().Snapshot();
   const nevr_invite::Plan plan = nevr_invite::PlanRequest(metric, choices);
   if (plan.skip != nevr_invite::Skip::None) {
     Log(EchoVR::LogLevel::Info, "%s", nevr_invite::NotSentLine(plan.skip, plan.code_len).c_str());

@@ -84,6 +84,7 @@ set(PATCHES_SOURCES
     "patch/pnsrad_enabler.cpp"
     "patch/mic_provider.cpp"
     "patch/party_invite_gate.cpp"
+    "patch/invite_choice_hook.cpp"
     "patch/invite_wizard_hook.cpp"
     "patch/early_quit_lockout.cpp"
     "patch/arena_public_clock.cpp"
@@ -1247,6 +1248,13 @@ if(BUILD_TESTING)
     target_include_directories(test_invite_wizard PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_invite_wizard PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_invite_wizard DISCOVERY_MODE PRE_TEST)
+
+    # #906, docs/adr/0017: what the wizard's cards chose (patch/invite_choices.h): header only, pure.
+    add_executable(test_invite_choices tests/test_invite_choices.cpp)
+    set_source_files_properties(tests/test_invite_choices.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_invite_choices PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_invite_choices PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_invite_choices DISCOVERY_MODE PRE_TEST)
 
     # #963: the CREATE GAME guild picker (patch/guild_picker.h): header only, pure.
     add_executable(test_guild_picker tests/test_guild_picker.cpp)
