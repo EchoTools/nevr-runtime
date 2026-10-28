@@ -95,6 +95,15 @@ enum class AttachOutcome : std::uint32_t {
   kFailed = 3,    // MinHook returned an error (detail carries MH_STATUS)
 };
 
+/// The first step of the attach that left the game without the runtime, for the one stop line (stop_line.h). RecordAttach
+/// stores it where the failure is journalled, so every path that records one is covered.
+enum class AttachFailure : std::uint32_t {
+  kNone = 0,
+  kImageCheck = 1,     // the process image is not a supported echovr.exe
+  kPrologueCheck = 2,  // GameMainWrapper does not start with the pinned bytes
+  kHookInstall = 3,    // MinHook initialize, create or enable failed
+};
+
 class BootstrapDiagnostics {
  public:
   /// Copy %LOCALAPPDATA%, %TEMP% and the directory of `host_module`, compute the three log
@@ -130,6 +139,15 @@ class BootstrapDiagnostics {
   /// file cannot be written under the loader lock) and is counted, so a test can fail on it.
   static void MarkAttachThread(DWORD thread_id) noexcept;
   static std::size_t FlushesOnAttachThread() noexcept;
+
+  /// The first image check, prologue check or hook install that did not succeed; kNone when none did. Stored by
+  /// RecordAttach (an atomic, no I/O), so it is readable under the loader lock and from any thread.
+  AttachFailure FirstAttachFailure() const noexcept;
+
+  /// The full path of the log file records go to (`<dir>\nevr-bootstrap.jsonl`) into `out`: the directory the last append
+  /// reached, or, before any append, the first directory that is ready. False, with `out` emptied, when no directory is
+  /// ready or the path does not fit `size` wide characters. Fixed buffers only.
+  bool LogFilePath(wchar_t* out, std::size_t size) const noexcept;
 
   /// True when any recorded attach step was a rejection or a failure, an install record says its
   /// hook bytes were unread, or the journal dropped entries.
@@ -250,6 +268,8 @@ class BootstrapDiagnostics {
 #if defined(NEVR_HOST_TESTING)
   std::atomic<std::size_t> claimed_{0};
 #endif
+  std::atomic<std::uint32_t> first_failure_{0};   // AttachFailure of the first failed target step
+  std::atomic<int> last_destination_{static_cast<int>(DiagnosticDestination::kDropped)};  // where the last append landed
   std::atomic<std::size_t> dropped_{0};           // entries the full journal had no room for
   std::atomic<std::size_t> dropped_reported_{0};  // the total the last overflow record carried
 };

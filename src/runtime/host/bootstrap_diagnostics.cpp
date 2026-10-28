@@ -308,6 +308,15 @@ void BootstrapDiagnostics::RecordAttach(AttachStep step, AttachOutcome outcome,
   entry.ready.store(1, std::memory_order_release);
 }
 
+AttachFailure BootstrapDiagnostics::FirstAttachFailure() const noexcept {
+  return AttachFailure::kNone;  // scaffold
+}
+
+bool BootstrapDiagnostics::LogFilePath(wchar_t* out, std::size_t size) const noexcept {
+  if (out != nullptr && size != 0) out[0] = L'\0';  // scaffold
+  return false;
+}
+
 bool BootstrapDiagnostics::AttachDegraded() const noexcept {
   const std::size_t count = journal_count_.load();
   for (std::size_t at = 0; at < count && at < kJournalCapacity; ++at) {

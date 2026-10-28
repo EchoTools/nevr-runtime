@@ -499,6 +499,10 @@ const char* RuntimeRootSourceName(RuntimeRootSource source) noexcept {
   return "unresolved";
 }
 
+bool RuntimeFileBeside(const wchar_t*) noexcept {
+  return false;  // scaffold
+}
+
 RuntimePathChoice ResolveRuntimePathFrom(const wchar_t* local_app_data, const wchar_t* nevr_root_override,
                                          bool dev_build, wchar_t* out, std::size_t out_size) noexcept {
   RuntimePathChoice choice;

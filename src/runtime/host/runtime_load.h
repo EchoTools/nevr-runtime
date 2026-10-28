@@ -79,6 +79,9 @@ struct RuntimeLoadResult {
   const char* verify = nullptr;
   // What the verifier said, in its own words (nevr_plugin_signature::Verdict::Describe), or "unreadable".
   std::string verify_reason;
+  // The version in the NEVR-BUILD literal of nevr-runtime.dll, when the host read the file (it did not for an absent or
+  // a refused one): empty otherwise. The stop line states it, or "not loaded" (stop_line.h).
+  std::string runtime_version;
   // The same verdict as a code, for the words the player reads (stop_notice.h). Meaningful when `verify` is "refused"
   // or "unsigned_allowed"; Reason::Unreadable for a file that could not be opened for reading.
   nevr_plugin_signature::Reason verify_reason_code = nevr_plugin_signature::Reason::Accepted;
@@ -116,6 +119,10 @@ inline constexpr std::uint32_t kRuntimeStopExitCode = 78;
 
 /// The init_code recorded when initialize() threw (INT32_MIN: not a value a runtime returns on purpose).
 inline constexpr std::int32_t kInitThrewCode = INT32_MIN;
+
+/// True when a file named nevr-runtime.dll is in `directory` (with or without a trailing backslash): the old layout, which
+/// kept the runtime beside BugSplat64.dll and which the host no longer loads. One file-attribute call, fixed buffer, no heap.
+bool RuntimeFileBeside(const wchar_t* directory) noexcept;
 
 /// The one place that decides which file is the runtime: `nevr-runtime.dll` in the nevr root of the Windows user,
 /// `%LOCALAPPDATA%\nevr\echovr`, never beside `BugSplat64.dll`. The inputs are the two environment values (null or

@@ -45,8 +45,14 @@ inline bool FormatUtcTimestamp(char (&out)[kTimestampSize]) noexcept {
 
 class JsonLine {
  public:
+  // The host's own record: tag `NEVR.HOST`.
   JsonLine(char* buffer, std::size_t capacity, const char* event) noexcept
+      : JsonLine(buffer, capacity, "NEVR.HOST", event) {}
+
+  // A line of another tag (the stop line is `NEVR.STOP`, stop_line.h): the header is the same four fields.
+  JsonLine(char* buffer, std::size_t capacity, const char* tag, const char* event) noexcept
       : buffer_(buffer), capacity_(capacity) {
+    static_cast<void>(tag);  // scaffold: the tag is not used yet
     Raw('{');
     Key("tag");
     Quoted("NEVR.HOST");
