@@ -86,6 +86,7 @@ set(PATCHES_SOURCES
     "patch/party_invite_gate.cpp"
     "patch/invite_choice_hook.cpp"
     "patch/invite_wizard_hook.cpp"
+    "patch/invite_transport_curl.cpp"
     "patch/early_quit_lockout.cpp"
     "patch/arena_public_clock.cpp"
     "patch/lobby_full_backoff.cpp"
@@ -187,6 +188,8 @@ set(PATCHES_HEADERS
     "compat/socket_role.h"
     "patch/invite_wizard.h"
     "patch/invite_worker.h"
+    "patch/invite_transport.h"
+    "patch/invite_transport_curl.h"
     "patch/menu_page.h"
     "patch/menu_cards.h"
     "patch/guild_picker.h"
@@ -1262,6 +1265,14 @@ if(BUILD_TESTING)
     target_include_directories(test_invite_worker PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_invite_worker PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_invite_worker DISCOVERY_MODE PRE_TEST)
+
+    # #1156, docs/adr/0017: the invite transport (patch/invite_transport.h, patch/invite_transport_curl.cpp): libcurl against a
+    # scripted loopback server.
+    add_executable(test_invite_transport tests/test_invite_transport.cpp patch/invite_transport_curl.cpp)
+    set_source_files_properties(tests/test_invite_transport.cpp patch/invite_transport_curl.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_invite_transport PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_invite_transport PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl ws2_32)
+    gtest_discover_tests(test_invite_transport DISCOVERY_MODE PRE_TEST)
 
     # #906, docs/adr/0017: what the wizard's cards chose (patch/invite_choices.h): header only, pure.
     add_executable(test_invite_choices tests/test_invite_choices.cpp)
