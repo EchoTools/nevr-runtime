@@ -122,6 +122,19 @@ is never `unchanged` or `restored` while the folders differ from what they were.
 read of the zip: it is hashed whole against the manifest and each member against its `contents` entry, and the final read-back
 compares the folders with those same hashes.
 
+**The package folder.** An installer that ships beside the two DLLs (the Windows zip) passes the folder it sits in
+(`--package-dir`). The core then reads `BugSplat64.dll` and `nevr-runtime.dll` from it and compares their size and SHA-256
+with the `contents` entries the signed manifest lists for the chosen release. When both match, those bytes are what is
+installed and nothing is downloaded (`package_local ok=true`). When either is missing or differs, the files in the folder
+are not used at all, the `windows-zip` the manifest names is downloaded and checked as usual, and the record says why
+(`package_local ok=false reason=...`). The manifest, not the folder, is the authority: a folder cannot make the core install
+bytes the manifest does not list.
+
+**Offline.** When the manifest cannot be fetched (a network failure at step 1, not a failed check), the core re-verifies the
+pair it stored on an earlier run against the pinned keys, the stored version floor and the clock, and uses it when it is
+still valid (`manifest_check ok=true source=stored`). A stale copy, or none, ends the run `unchanged` with the network error.
+An install from the package folder therefore works offline after one online run, and stays verified.
+
 ### 3. Quest plan
 
 ```mermaid
@@ -169,6 +182,25 @@ no `game-data`, the check uses the newest `game-data` the manifest lists, becaus
 (`data_root`), so the first headset observation of Premise C can move it to the legacy root without touching any caller.
 Until that observation, the first-launch check for Quest names the log lines that decide it (ADR 0013, "What the first
 headset run must show"): `data_root` with `source=android_media`, `data_check action=use`.
+
+### 3a. A local tester APK: `--artifact-dir`
+
+Testers and developers install an APK built on their own machine (`just package-dev`, `just android-repack-apk`), which no
+manifest names. `nevr-install quest install --artifact-dir DIR` installs it, with its own checks in place of the manifest's:
+
+- `DIR` holds exactly one `.apk` and a sidecar for it: `<name>.apk.sha256`, or a `SHA256SUMS` with exactly one line for the
+  file. No sidecar is a refusal. The file's SHA-256 must equal the sidecar's.
+- `aapt2` must read package `com.readyatdawn.r15` and a versionCode from it, and `apksigner verify` must accept it and print
+  at least one signing certificate. The plan then runs the Quest plan of section 3 with those values in place of the
+  manifest's `android` object: the downgrade rule, the uninstall consent and the signer handling are unchanged.
+- The game data still comes from the signed manifest.
+- Every record the run writes after the manifest check (`dev_artifact`, `plan`, each `step_start` and `step_end`,
+  `artifact_use`) carries `trust: "unverified dev artifact"`, and the install record says `dev_artifact: true`. The file is
+  hashed again just before the install, so a change after the checks is refused.
+
+The option is for developer tools only: `tools/quest-install.sh` and `just quest-install` pass it when given a directory;
+no installer a player is handed (`install.ps1`, `quest-install.ps1`, the other projects' installers) passes it, and a test
+reads their sources for it. It never relaxes the manifest chain: an unverified manifest still stops the run first.
 
 ### 4. The `game-data` kind and what release-signer adds
 
@@ -334,7 +366,7 @@ The pull request to that installer removes the first two rows' mechanisms and ke
 | His feature | What replaces it | Notes |
 | --- | --- | --- |
 | Discord sign-in, a bot builds a patched APK per player | The `quest-apk` artifact: one APK we sign, the same for every player, whose signer certificate the manifest names | Retired only after #943, #944 and #945 land ("Retirement gate" below) |
-| "I already have an APK link" (paste a URL) | Removed at the retirement gate below: an APK that is not the manifest's is not installed | A tester build is installed with the CLI's `--artifact-dir` against a manifest signed for it, not by an unsigned URL |
+| "I already have an APK link" (paste a URL) | Removed at the retirement gate below: an APK that is not the manifest's is not installed | A tester build is a local file, installed with the CLI's `--artifact-dir` (section 3a), never a URL |
 | `update.manifest` `add`/`del` of asset files (Graphics Patch and the like) | `content` artifacts (section 4) | #943: our APK carries the Graphics Patch setting, so the first use of his patch list is covered without a patch file |
 | `BASE_APK` hash and the two APK mirrors | `quest-apk` of the channel's release | |
 | Game data download with resume | `game-data` artifact; resume with `Range`, only a `206` for exactly that range is accepted, then the whole file is hashed from disk | Crafter's installer already does this; the core takes the same rule |
@@ -378,8 +410,8 @@ Each is run once with the line it covers changed, and must fail (the mutant disc
 4. The log: a run that is made to fail at each step writes `run_end` with the state and the reason; an unwritable log refuses
    to change anything.
 5. The C ABI from a C program (not Rust): open, verify a fixture manifest, pick, build a plan, report, close.
-6. A source check that no installer in the tree contains a hash, a URL or a version of its own for a release artifact. It
-   lands with slice 2: the installers it would read still carry theirs.
+6. A source check that no installer in the tree contains a hash, a URL or a version of its own for a release artifact
+   (`tools/tests/test_installers_use_core.py`), and that no installer a player runs passes `--artifact-dir`.
 
 ## Prediction
 

@@ -18,13 +18,18 @@ Install
      (...\ready-at-dawn-echo-arena\bin\win10); type or paste it. If you have more than one Echo VR
      install, add
        -Dir "C:\...\ready-at-dawn-echo-arena\bin\win10"
-  The script checks the package against SHA256SUMS, copies your original BugSplat64.dll to
-  BugSplat64.dll.original-<timestamp> next to it, renames a legacy dbgcore.dll to
+  The script checks nevr-install.exe against SHA256SUMS and runs it. nevr-install.exe is the core installer: it
+  fetches the signed release manifest and checks its signature, and installs the two DLLs in this package when
+  their SHA-256 matches the manifest's entry for the release; when they are missing or differ it downloads the
+  package the manifest names and checks that instead. It copies your original BugSplat64.dll to
+  BugSplat64.dll.original-<timestamp> in your nEVR folder (installer\aside), moves a legacy dbgcore.dll to
   dbgcore.dll.legacy-<date> (the runtime refuses to start beside one), and installs the two new files. An
   nevr-runtime.dll already in your nEVR folder is renamed to nevr-runtime.dll.original-<timestamp> there. An
   nEVR runtime an earlier release left beside echovr.exe (the host no longer looks there) is renamed to
-  nevr-runtime.dll.legacy-<timestamp> in the game folder; another file of that name is left alone. It deletes
-  nothing. To use another nEVR folder, add -Root "<folder>".
+  nevr-runtime.dll.legacy-<timestamp>. It deletes nothing, writes only BugSplat64.dll in the game folder, puts
+  every file back as it was if a step fails, and writes a log (a [NEVR.INSTALL] JSON file) whose path it
+  prints. When the signed manifest cannot be fetched, the core uses the copy it stored on an earlier run if that
+  copy is still valid; with none stored it stops and changes nothing. To use another nEVR folder, add -Root "<folder>".
 
 Running a dedicated server
   echovr_server.exe in this package starts a dedicated server. install.ps1 does not copy it. Install
@@ -51,7 +56,7 @@ Running a dedicated server
 
 Update
   Unzip the newer package and run its install.ps1 the same way. When the BugSplat64.dll in the folder is
-  one this folder's install put there, the script replaces it and the nevr-runtime.dll in your nEVR folder with the new ones and keeps
+  one this folder's install put there, the installer replaces it and the nevr-runtime.dll in your nEVR folder with the new ones and keeps
   your original BugSplat64.dll backup as it was; uninstall.ps1 then still puts your original back. If
   the update fails, both files are put back as they were. It stops and leaves
   the file alone when it is one the script did not put there. If the BugSplat64.dll in the folder is already

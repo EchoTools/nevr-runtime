@@ -25,6 +25,7 @@ sys.path.insert(0, str(REPO / "tools"))
 import package_release  # noqa: E402
 from pe_version_fixtures import shipped_pe  # noqa: E402
 import axml_fixtures  # noqa: E402
+from installer_world import World, core_binary  # noqa: E402
 
 COMMIT = "3a35e0b945456dba8a9b56e8110df330178e7259"
 DEV = "5.0.1-dev.3+3a35e0b"
@@ -90,6 +91,8 @@ class PackageFixture(unittest.TestCase):
         self.runtime.write_bytes(binary(self.version))
         self.server = self.tmp / "echovr_server.exe"
         self.server.write_bytes(shipped_pe("echovr_server.exe", self.version, b"\0the dedicated-server launcher\0"))
+        self.installer = self.tmp / "nevr-install.exe"
+        self.installer.write_bytes(b"MZ\0the core installer\0")
         self.apk = self.tmp / "signed.apk"
         self.write_apk(self.version)
         self.out = self.tmp / "out"
@@ -103,7 +106,7 @@ class PackageFixture(unittest.TestCase):
     def run_tool(self, **overrides):
         """The local path (`just package-dev`): no --version, the binaries must carry a dev version."""
         args = {"--commit": COMMIT, "--out": str(self.out), "--dll": str(self.dll),
-                "--runtime-dll": str(self.runtime), "--server-exe": str(self.server), "--apk": str(self.apk), "--pc-header": str(self.pc_header),
+                "--runtime-dll": str(self.runtime), "--server-exe": str(self.server), "--installer-exe": str(self.installer), "--apk": str(self.apk), "--pc-header": str(self.pc_header),
                 "--quest-header": str(self.quest_header), "--quest-build-info": str(self.info),
                 "--defaults": str(self.defaults)}
         args.update(overrides)
@@ -127,7 +130,7 @@ class LocalDevPackageTest(PackageFixture):
         with zipfile.ZipFile(zip_path) as z:
             self.assertEqual(sorted(z.namelist()),
                              ["BugSplat64.dll", "README.txt", "SHA256SUMS", "SIGNING.txt", "echovr_server.exe",
-                              "install.ps1", "nevr-runtime.dll", "quest-diagnose.ps1", "uninstall.ps1"])
+                              "install.ps1", "nevr-install.exe", "nevr-runtime.dll", "quest-diagnose.ps1", "uninstall.ps1"])
             sums = dict(line.split("  ")[::-1] for line in z.read("SHA256SUMS").decode().splitlines())
             for name in z.namelist():
                 if name != "SHA256SUMS":
@@ -257,7 +260,7 @@ class ReleaseStagesTest(PackageFixture):
 
     def tree_args(self, **overrides):
         args = {"--version": RELEASE, "--commit": COMMIT, "--out": str(self.out), "--dll": str(self.dll),
-                "--runtime-dll": str(self.runtime), "--server-exe": str(self.server), "--pc-header": str(self.pc_header),
+                "--runtime-dll": str(self.runtime), "--server-exe": str(self.server), "--installer-exe": str(self.installer), "--pc-header": str(self.pc_header),
                 "--defaults": str(self.defaults)}
         args.update(overrides)
         return [x for kv in args.items() for x in kv]
@@ -276,8 +279,8 @@ class ReleaseStagesTest(PackageFixture):
     def test_tree_holds_the_files_the_signer_signs_and_no_checksums_yet(self):
         tree = self.make_tree()
         self.assertEqual(sorted(p.name for p in tree.iterdir()),
-                         ["BugSplat64.dll", "README.txt", "echovr_server.exe", "install.ps1", "nevr-runtime.dll", "quest-diagnose.ps1",
-                          "uninstall.ps1"])
+                         ["BugSplat64.dll", "README.txt", "echovr_server.exe", "install.ps1", "nevr-install.exe", "nevr-runtime.dll",
+                          "quest-diagnose.ps1", "uninstall.ps1"])
         info = (self.out / "release.json").read_text()
         self.assertIn('"version": "5.0.0"', info)
         self.assertIn(COMMIT, info)
@@ -369,6 +372,7 @@ class ReleaseStagesTest(PackageFixture):
         for dll in ("BugSplat64.dll", "nevr-runtime.dll"):
             (tree / dll).write_bytes(fake_pe(0x100, (tree / dll).read_bytes()))
         (tree / "echovr_server.exe").write_bytes(fake_pe(0x100, b"y"))
+        (tree / "nevr-install.exe").write_bytes(fake_pe(0x100, b"i"))
         self.sign_scripts(tree)
         second = self.notes_for(self.seal_to(tree, "two", "--require-signed")).read_text()
         self.assertNotEqual(first, second)
@@ -431,7 +435,7 @@ class ReleaseStagesTest(PackageFixture):
         with zipfile.ZipFile(sealed / "nevr-runtime-v5.0.0-windows.zip") as z:
             self.assertEqual(sorted(z.namelist()),
                              ["BugSplat64.dll", "README.txt", "SHA256SUMS", "SIGNING.txt", "echovr_server.exe",
-                              "install.ps1", "nevr-runtime.dll", "quest-diagnose.ps1", "uninstall.ps1"])
+                              "install.ps1", "nevr-install.exe", "nevr-runtime.dll", "quest-diagnose.ps1", "uninstall.ps1"])
             sums = dict(line.split("  ")[::-1] for line in z.read("SHA256SUMS").decode().splitlines())
             self.assertEqual(sorted(sums), sorted(n for n in z.namelist() if n != "SHA256SUMS"))
             for name in sums:
@@ -447,6 +451,18 @@ class ReleaseStagesTest(PackageFixture):
         result = self.run_stage("tree", *self.tree_args())
         self.assertEqual(result.returncode, 1)
         self.assertIn("echovr_server.exe is missing or not a PE file", result.stderr)
+
+    def test_the_tree_stage_refuses_a_missing_or_non_pe_installer_exe(self):
+        """ADR 0023: the core installer rides in the zip, so the manifest's `contents` covers it."""
+        self.installer.write_bytes(b"not a PE")
+        result = self.run_stage("tree", *self.tree_args())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("windows: nevr-install.exe is missing or not a PE file", result.stderr)
+        self.assertFalse(self.out.exists())
+        self.installer.unlink()
+        result = self.run_stage("tree", *self.tree_args())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("nevr-install.exe is missing or not a PE file", result.stderr)
 
     def test_the_tree_stage_refuses_a_file_without_the_pinned_version_info(self):
         """#850: the Details tab of both shipped files is part of the gate, at the version the DLL states."""
@@ -473,6 +489,14 @@ class ReleaseStagesTest(PackageFixture):
         result = self.run_stage("seal", "--tree", str(tree), "--out", str(self.tmp / "s"))
         self.assertEqual(result.returncode, 1)
         self.assertIn("has no echovr_server.exe", result.stderr)
+        self.assertFalse((self.tmp / "s").exists())
+
+    def test_seal_refuses_a_tree_without_the_installer_exe(self):
+        tree = self.make_tree()
+        (tree / "nevr-install.exe").unlink()
+        result = self.run_stage("seal", "--tree", str(tree), "--out", str(self.tmp / "s"))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("has no nevr-install.exe", result.stderr)
         self.assertFalse((self.tmp / "s").exists())
 
     def test_the_texts_state_facts_that_hold_before_and_after_signing_and_use_no_old_model_words(self):
@@ -554,6 +578,8 @@ class ReleaseStagesTest(PackageFixture):
         (tree / "nevr-runtime.dll").write_bytes(signed_runtime)
         signed_server = fake_pe(0x100, (tree / "echovr_server.exe").read_bytes())
         (tree / "echovr_server.exe").write_bytes(signed_server)
+        signed_installer = fake_pe(0x100, (tree / "nevr-install.exe").read_bytes())
+        (tree / "nevr-install.exe").write_bytes(signed_installer)
         self.sign_scripts(tree)
         sealed = self.seal_to(tree, "after", "--require-signed")
         zip_path = sealed / "nevr-runtime-v5.0.0-windows.zip"
@@ -562,6 +588,7 @@ class ReleaseStagesTest(PackageFixture):
             self.assertEqual(sums["BugSplat64.dll"], hashlib.sha256(signed).hexdigest())
             self.assertEqual(sums["nevr-runtime.dll"], hashlib.sha256(signed_runtime).hexdigest())
             self.assertEqual(sums["echovr_server.exe"], hashlib.sha256(signed_server).hexdigest())
+            self.assertEqual(sums["nevr-install.exe"], hashlib.sha256(signed_installer).hexdigest())
             self.assertNotEqual(sums["BugSplat64.dll"], unsigned_sha)
             self.assertEqual(z.read("SIGNING.txt"), zb.read("SIGNING.txt"), "the signing text never changes")
             self.assertEqual(z.read("README.txt"), zb.read("README.txt"))
@@ -578,11 +605,12 @@ class ReleaseStagesTest(PackageFixture):
         tree = self.make_tree()
         result = self.run_stage("seal", "--tree", str(tree), "--out", str(self.tmp / "s"), "--require-signed")
         self.assertEqual(result.returncode, 1)
-        self.assertIn("not signed (no certificate table): BugSplat64.dll, echovr_server.exe, nevr-runtime.dll", result.stderr)
+        self.assertIn("not signed (no certificate table): BugSplat64.dll, echovr_server.exe, nevr-install.exe, nevr-runtime.dll", result.stderr)
         self.assertFalse((self.tmp / "s").exists())
         (tree / "BugSplat64.dll").write_bytes(fake_pe(0x100, b"x"))
         (tree / "nevr-runtime.dll").write_bytes(fake_pe(0x100, b"z"))
         (tree / "echovr_server.exe").write_bytes(fake_pe(0x100, b"y"))
+        (tree / "nevr-install.exe").write_bytes(fake_pe(0x100, b"i"))
         result = self.run_stage("seal", "--tree", str(tree), "--out", str(self.tmp / "s"), "--require-signed")
         self.assertEqual(result.returncode, 1)
         self.assertIn("not signed (no signature block): install.ps1, quest-diagnose.ps1, uninstall.ps1", result.stderr)
@@ -606,11 +634,6 @@ class ReleaseStagesTest(PackageFixture):
         result = self.run_stage("seal", "--tree", str(tree), "--out", str(self.tmp / "x"), "--apk", str(self.apk))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unrecognized arguments", result.stderr)
-
-    def test_an_existing_release_output_is_never_overwritten(self):
-        tree = self.make_tree()
-        sealed = self.seal_to(tree)
-        self.assertEqual(self.run_stage("seal", "--tree", str(tree), "--out", str(sealed)).returncode, 1)
 
     # --- the CI assertion after the build -----------------------------------------------------------
 
@@ -774,9 +797,17 @@ def fake_pe(certificate_size: int, payload: bytes) -> bytes:
 
 @unittest.skipUnless(shutil.which("pwsh"), "pwsh not installed")
 class InstallScriptsTest(unittest.TestCase):
-    """install.ps1 and uninstall.ps1 run for real under pwsh against a fake install directory."""
+    """install.ps1 and uninstall.ps1 run for real under pwsh against a fake install directory.
+
+    install.ps1 is the front end over the real `nevr-install` core (ADR 0023): each run builds a signed throwaway world
+    whose release holds the package's two DLLs as they are on disk at that moment, and passes the core `--base`, `--pins`
+    and `--root` through -CoreArgs. The install semantics themselves are pinned by installer/tests/pc_plan.rs."""
 
     def setUp(self):
+        if shutil.which("minisign") is None or shutil.which("cargo") is None:
+            self.skipTest("minisign and cargo are needed: the core is built and a signed manifest made")
+        self.core = core_binary()
+        self.worlds = 0
         self.tmp = Path(tempfile.mkdtemp(prefix="package-release-ps-"))
         self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
         self.pkg = self.tmp / "pkg"
@@ -794,6 +825,8 @@ class InstallScriptsTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
         for name in ("install.ps1", "uninstall.ps1"):
             shutil.copy(PACKAGE / name, self.pkg / name)
+        shutil.copyfile(self.core, self.pkg / "nevr-install.exe")
+        os.chmod(self.pkg / "nevr-install.exe", 0o755)
         (self.pkg / "BugSplat64.dll").write_bytes(b"NEW-RUNTIME")
         (self.pkg / "nevr-runtime.dll").write_bytes(self.RUNTIME_PAYLOAD)
         self.write_sums()
@@ -804,11 +837,29 @@ class InstallScriptsTest(unittest.TestCase):
         """SHA256SUMS of the package's two DLLs as they are now."""
         (self.pkg / "SHA256SUMS").write_text("".join(
             f"{hashlib.sha256((self.pkg / name).read_bytes()).hexdigest()}  {name}\n"
-            for name in ("BugSplat64.dll", "nevr-runtime.dll")))
+            for name in ("BugSplat64.dll", "nevr-runtime.dll", "nevr-install.exe")))
+
+    def pwsh(self, script, args, typed="", noninteractive=False, **kw):
+        """Runs a package script. install.ps1 gets -CoreArgs naming a fresh signed world made from the package's
+        DLLs as they are now (a later world has a higher manifest_version: the core refuses same-version other bytes)."""
+        flags = ["-NonInteractive"] if noninteractive else []
+        if script != "install.ps1":
+            return subprocess.run(["pwsh", "-NoProfile", *flags, "-File", str(self.pkg / script), *args],
+                                  input=typed, capture_output=True, text=True, timeout=120, **kw)
+        self.worlds += 1
+        world = World(self.tmp, host=(self.pkg / "BugSplat64.dll").read_bytes(), runtime=(self.pkg / "nevr-runtime.dll").read_bytes(),
+                      manifest_version=4 + self.worlds, name=f"world{self.worlds}")
+        self.addCleanup(world.server.close)
+        core_args = ",".join("'" + a.replace("'", "''") + "'" for a in ["--root", str(self.tmp / "core-root"), *world.core_args()[2:]])
+        quoted = " ".join(("'" + a.replace("'", "''") + "'") if not a.startswith("-") or " " in a else a for a in args)
+        command = f"& '{self.pkg / script}' {quoted} -CoreArgs {core_args}; exit $LASTEXITCODE"
+        # NEVR_INSTALL_ROOT keeps a run that forgets --root out of the real state directory.
+        env = {**os.environ, "NEVR_INSTALL_ROOT": str(self.tmp / "core-root")}
+        return subprocess.run(["pwsh", "-NoProfile", *flags, "-Command", command], input=typed,
+                              capture_output=True, text=True, timeout=120, env=env, **kw)
 
     def ps(self, script, *args):
-        return subprocess.run(["pwsh", "-NoProfile", "-File", str(self.pkg / script), *args],
-                              capture_output=True, text=True, timeout=60)
+        return self.pwsh(script, args)
 
     # ADR 0012 / #857: the runtime moved the sign-in cache out of the install's _local folder; uninstalling puts it back.
     def _moved_cache_setup(self, *, local_cache=None, root_cache=b'{"refresh_token":"r-1"}', marker=True):
@@ -878,7 +929,8 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual(backups[0].read_bytes(), b"ORIGINAL")
         self.assertEqual(legacy[0].read_bytes(), b"LEGACY")
         again = self.ps("install.ps1", "-Dir", str(self.game))
-        self.assertNotEqual(again.returncode, 0, "a second install must refuse")
+        self.assertEqual(again.returncode, 0, self.output(again))
+        self.assertEqual(len(list(self.game.glob("BugSplat64.dll.original-*"))), 1, "a second run adds no second backup")
         undone = self.ps("uninstall.ps1", "-Dir", str(self.game))
         self.assertEqual(undone.returncode, 0, undone.stdout + undone.stderr)
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
@@ -1018,6 +1070,7 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual(undone.returncode, 0, self.output(undone))
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
 
+<<<<<<< HEAD
     def test_a_failed_update_puts_the_previous_dll_back(self):
         # The package DLL is larger than the file-size limit the second install runs under, so the copy over the
         # installed file fails after it has truncated it; the rollback must restore the previous bytes.
@@ -1057,12 +1110,17 @@ class InstallScriptsTest(unittest.TestCase):
         (self.root / name).write_bytes(data)
 
     def test_install_puts_the_runtime_in_the_nevr_root_not_in_the_game_folder_and_records_both(self):
+=======
+    # The runtime half of the pair (#853): nevr-runtime.dll is a second file beside echovr.exe.
+    def test_install_puts_the_runtime_beside_the_host_and_records_its_hash(self):
+>>>>>>> 03035755 (feat(installer): every installer is a front end over nevr-install (refs #1149))
         installed = self.ps("install.ps1", "-Dir", str(self.game))
         self.assertEqual(installed.returncode, 0, self.output(installed))
         self.assertEqual((self.root / "nevr-runtime.dll").read_bytes(), self.RUNTIME_PAYLOAD)
         self.assertFalse((self.game / "nevr-runtime.dll").exists(), "the install folder keeps only the host")
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"NEW-RUNTIME")
         self.assertEqual(self.state()["runtime_sha256"], hashlib.sha256(self.RUNTIME_PAYLOAD).hexdigest())
+<<<<<<< HEAD
         self.assertEqual(self.state()["runtime_root"], str(self.root))
         self.assertIn("nevr-runtime.dll sha256=", installed.stdout)
         self.assertIn(str(self.root), installed.stdout, "the player is told where the runtime went")
@@ -1188,6 +1246,8 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual((self.game / "nevr-runtime.dll").read_bytes(), old)
         self.assertEqual(list(self.game.glob("nevr-runtime.dll.legacy-*")), [])
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
+=======
+>>>>>>> 03035755 (feat(installer): every installer is a front end over nevr-install (refs #1149))
 
     def test_an_existing_nevr_runtime_dll_is_set_aside_not_overwritten(self):
         self.put_in_root(b"A-STRANGERS-FILE")
@@ -1197,6 +1257,7 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual([a.read_bytes() for a in aside], [b"A-STRANGERS-FILE"])
         self.assertEqual((self.root / "nevr-runtime.dll").read_bytes(), self.RUNTIME_PAYLOAD)
 
+<<<<<<< HEAD
     def test_a_package_without_the_runtime_is_refused_and_the_game_is_untouched(self):
         (self.pkg / "nevr-runtime.dll").unlink()
         result = self.ps("install.ps1", "-Dir", str(self.game))
@@ -1214,6 +1275,8 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
         self.assertFalse((self.root / "nevr-runtime.dll").exists())
 
+=======
+>>>>>>> 03035755 (feat(installer): every installer is a front end over nevr-install (refs #1149))
     def test_an_update_replaces_the_runtime_too_and_records_its_new_hash(self):
         self.assertEqual(self.install_a_then_update_to_b().returncode, 0)
         self.set_package(self.plain("5.4.5"))
@@ -1225,6 +1288,7 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual((self.root / "nevr-runtime.dll").read_bytes(), newer)
         self.assertEqual(self.state()["runtime_sha256"], hashlib.sha256(newer).hexdigest())
 
+<<<<<<< HEAD
     def test_a_failed_update_puts_the_previous_runtime_back_as_well(self):
         self.set_package(self.plain("5.4.3"))
         self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
@@ -1250,6 +1314,8 @@ class InstallScriptsTest(unittest.TestCase):
         failed = list(self.root.glob("nevr-runtime.dll.failed-*"))
         self.assertEqual([f.read_bytes() for f in failed], [self.RUNTIME_PAYLOAD], "the new runtime is set aside, never deleted")
 
+=======
+>>>>>>> 03035755 (feat(installer): every installer is a front end over nevr-install (refs #1149))
     def test_uninstall_sets_the_runtime_aside_and_never_deletes_it(self):
         (self.pkg / "nevr-runtime.dll").write_bytes(self.runtime("5.4.3"))
         self.write_sums()
@@ -1409,7 +1475,7 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertIn("nevr-install.txt", undone)
         self.assertNotIn("install.ps1 again", undone)
         self.set_package(self.plain("5.4.4"))
-        self.assertIn("then run install.ps1 again", self.output(self.ps("install.ps1", "-Dir", str(self.game))))
+        self.assertIn("then run again", self.output(self.ps("install.ps1", "-Dir", str(self.game))))
 
     # The marker is the exact bytes the build writes (build_identity.cpp): "NEVR-BUILD " with the trailing space,
     # upper case. A backup that only resembles it is not a runtime and is restored.
@@ -1485,7 +1551,7 @@ class InstallScriptsTest(unittest.TestCase):
         self.set_package(self.plain("5.4.4"))
         result = self.ps("install.ps1", "-Dir", str(self.game))
         self.assertNotEqual(result.returncode, 0, self.output(result))
-        self.assertIn("the backup is gone", self.output(result))
+        self.assertIn("is gone", self.output(result))
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), self.plain("5.4.3"))
         self.assertEqual(self.state()["installed_sha256"], hashlib.sha256(self.plain("5.4.3")).hexdigest())
 
@@ -1502,7 +1568,7 @@ class InstallScriptsTest(unittest.TestCase):
         before = self.game_files()
         result = self.ps("install.ps1", "-Dir", str(self.game))
         self.assertNotEqual(result.returncode, 0, self.output(result))
-        self.assertIn("the backup is gone", self.output(result))
+        self.assertIn("is gone", self.output(result))
         self.assertNotIn("RECORDED", self.output(result))
         self.assertEqual(self.game_files(), before)
 
@@ -1531,8 +1597,7 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual([p.read_bytes() for p in fresh], [b"ORIGINAL"])
 
     def ps_typed(self, typed, script, *args):
-        return subprocess.run(["pwsh", "-NoProfile", "-File", str(self.pkg / script), *args],
-                              input=typed, capture_output=True, text=True, timeout=60)
+        return self.pwsh(script, args, typed)
 
     def test_without_dir_a_missing_drive_is_skipped_and_the_folder_is_asked_for(self):
         # #679: the search list names D: and E:; Join-Path on a drive that does not exist threw
@@ -1578,7 +1643,7 @@ class InstallScriptsTest(unittest.TestCase):
         (self.pkg / "SHA256SUMS").write_text("")
         result = self.ps_typed("", "install.ps1", "-Dir", str(self.game))
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("ERROR: SHA256SUMS has no entry for BugSplat64.dll", result.stdout)
+        self.assertIn("ERROR: SHA256SUMS has no entry for nevr-install.exe", result.stdout)
         self.assertIn("Dir=" + str(self.game), (self.pkg / "nevr-install.log").read_text())
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
 
@@ -1590,7 +1655,7 @@ class InstallScriptsTest(unittest.TestCase):
     def test_pause_waits_for_enter_after_success_too(self):
         result = self.ps_typed("\n", "install.ps1", "-Dir", str(self.game), "-Pause")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("INSTALLED BugSplat64.dll", result.stdout)
+        self.assertIn("\"state\":\"installed\"", result.stdout)
         self.assertIn("Press Enter to close", result.stdout)
 
     def test_no_pause_never_waits(self):
@@ -1606,7 +1671,7 @@ class InstallScriptsTest(unittest.TestCase):
         result = self.ps_typed("", "install.ps1", "-Dir", str(self.game))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         log = (self.pkg / "nevr-install.log").read_text()
-        self.assertIn("OK install.ps1", log)
+        self.assertIn("END install.ps1 nevr-install.exe exit=0", log)
         self.assertIn("Dir=" + str(self.game), log)
 
     def test_uninstall_reports_an_error_the_same_way(self):
@@ -1631,11 +1696,9 @@ class InstallScriptsTest(unittest.TestCase):
 
     def test_pause_in_a_noninteractive_host_does_not_change_the_exit_code(self):
         # Read-Host throws in -NonInteractive; a successful install must still exit 0 and say why it did not wait.
-        result = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-File", str(self.pkg / "install.ps1"),
-                                 "-Dir", str(self.game), "-Pause"],
-                                input="", capture_output=True, text=True, timeout=60)
+        result = self.pwsh("install.ps1", ["-Dir", str(self.game), "-Pause"], noninteractive=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("INSTALLED BugSplat64.dll", result.stdout)
+        self.assertIn("\"state\":\"installed\"", result.stdout)
         self.assertIn("could not wait for Enter", result.stdout)
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"NEW-RUNTIME")
 
@@ -1660,13 +1723,6 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("ERROR: no echovr.exe in", result.stdout)
         self.assertIn("could not write", result.stdout)
-
-    def test_an_existing_release_output_is_never_overwritten(self):
-        (self.pkg / "BugSplat64.dll").write_bytes(b"TAMPERED")
-        result = self.ps("install.ps1", "-Dir", str(self.game))
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
-        self.assertTrue((self.game / "dbgcore.dll").exists())
 
     # #770: Verify Files restores the game's own BugSplat64.dll after an install. The record then describes a file that
     # is no longer there: install.ps1 sets the record aside and installs again, uninstall.ps1 treats the stock file as

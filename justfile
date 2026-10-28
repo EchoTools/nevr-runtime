@@ -352,11 +352,16 @@ package-dev store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
         cmake --preset mingw-dev
         cmake --build --preset mingw-dev
     )
+    # The core installer install.ps1 runs (installer/, ADR 0023), for Windows, locked and stripped.
+    CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc cargo build --locked --release --target x86_64-pc-windows-gnu \
+        --manifest-path installer/Cargo.toml --bin nevr-install --target-dir build/installer
+    x86_64-w64-mingw32-strip build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe
     just _quest-apk "{{ store_apk }}"
     python3 tools/package_release.py --commit "$commit" --out "$out" \
         --dll build/mingw-dev/bin/BugSplat64.dll \
         --runtime-dll build/mingw-dev/bin/nevr-runtime.dll \
         --server-exe build/mingw-dev/bin/echovr_server.exe \
+        --installer-exe build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe \
         --apk build/android-dev/repack/r15_nevr-sentinel_signed.apk \
         --pc-header build/mingw-dev/generated/nevr_builtin_defaults.h \
         --quest-header build/android-dev/generated/nevr_builtin_defaults.h \
@@ -417,30 +422,23 @@ release-quest-apk tag store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
 publish-quest-apk tag:
     python3 tools/publish_quest_apk.py "{{ tag }}"
 
-# Install the repacked Quest APK + game data onto the connected headset (sideload).
-# Pass `yes` (`just quest-install yes`) to allow removing the store build when the
-# headset refuses an in-place update because the signer differs; that
-# uninstall deletes the app's data on the headset. Without `yes` the recipe stops
-# and prints what would be deleted. Order: check host tools and the APK, require
-# exactly one authorized headset with ~2.2 GiB free on /sdcard and /data/local/tmp,
-# fetch and SHA-256-verify the game data, `adb install -r -g` the APK
-# (uninstalling first only on INSTALL_FAILED_UPDATE_INCOMPATIBLE and only with
-# `yes`), then push the data zip and extract it to the legacy path the unpatched
-# APK reads (/sdcard/readyatdawn/_data). The store OBB is a keyed (encrypted) OBB;
-# Horizon OS, like Android 11 and later, refuses every keyed mount whatever the
-# APK's signer, so it is never used (the sentinel answers the game's mount itself:
-# docs/adr/0007-quest-obb-mount-skip.md).
-# The download is cached at build/android-arm64/quest-data/_data.zip (~937 MB; a
-# different data_sha256 gets its own _data-<hash prefix>.zip),
-# written as .part and renamed only after the hash matches. The default data_url is the
-# content-addressed file the signed release manifest (https://evr.echo.taxi/nevr-runtime/manifest.json)
-# lists as its `game-data` artifact, named echovr-data-<first 12 hex of the sha256>.zip, and the
-# default data_sha256 is that artifact's sha256. A data_url or data_sha256 passed by hand is
-# trust-on-first-use: the SHA-256 of whatever the URL served when the pin was taken, not a
-# publisher-signed value. A cached file that does not match its own hash is deleted. The download and every long adb call have time
-# limits. The recipe body is tools/quest-install.sh (tested in tools/tests/test_quest_install.py).
-quest-install yes="" apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" data_url="https://evr.echo.taxi/nevr-runtime/data/echovr-data-fc2eedeacc50.zip" data_sha256="fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c":
-    tools/quest-install.sh {{ quote(yes) }} {{ quote(apk) }} {{ quote(data_url) }} {{ quote(data_sha256) }}
+# Build the core installer CLI (installer/, ADR 0023) for this machine: installer/target/release/nevr-install.
+# Locked to the committed Cargo.lock; set CARGO_TARGET_DIR to keep the regenerable build tree out of the checkout.
+build-installer:
+    cargo build --locked --release --manifest-path installer/Cargo.toml --bin nevr-install
+
+# Install the NEVR Quest APK + game data onto the connected headset (sideload) through the core installer
+# (tools/quest-install.sh calls `nevr-install quest install`). The core fetches the signed release manifest, takes the
+# APK and the game data the channel's release names, checks both, plans from what the headset holds and installs;
+# every run writes a [NEVR.INSTALL] log (the path is in its output). The recipe holds no hash, URL or version.
+# Pass `--yes-uninstall` (`just quest-install --yes-uninstall`) to let the core remove a differently signed install
+# when the headset refuses an in-place update; that uninstall deletes the app's data on the headset. Without it the run
+# ends `needs-user` and says what it would delete. `--version V` installs release V instead of the channel's.
+# Needs adb, aapt2 and apksigner on PATH. A locally repacked tester APK is not installed by this recipe: the core
+# installs only what a signed manifest names.
+[positional-arguments]
+quest-install *args: build-installer
+    NEVR_INSTALL="${CARGO_TARGET_DIR:-installer/target}/release/nevr-install" tools/quest-install.sh "$@"
 
 # --- Tests ---
 
