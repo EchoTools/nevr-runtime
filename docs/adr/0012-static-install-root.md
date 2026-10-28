@@ -94,7 +94,10 @@ run, which get the log line and a non-zero exit instead.
 
 A dev build (the `NEVR_ALLOW_UNSIGNED_PLUGINS` build of ADR 0010) loads an unsigned `nevr-runtime.dll`, with the trust-mode log line ADR 0010
 defines, and carries the same `NEVR-PLUGIN-TRUST` literal; a plugin developer's dev host must load a dev `nevr-runtime.dll`. A signed-only
-build refuses it.
+build refuses it. The presets that make a test DLL pair, `mingw-plugin-dev` and `mingw-scenario`, are dev builds; any other preset's host
+refuses their unsigned runtime. The host carries no `NEVR-PLUGIN-TRUST` literal, so it carries `NEVR-HOST-BUILD <release|dev>` instead
+(`host/host_identity.cpp`), and `tools/package_release.py` refuses a host that does not say `release`, as it refuses a runtime whose
+`NEVR-PLUGIN-TRUST` literal does not.
 
 ### The unverified load is gone; the move waits for step 3's signed file
 
@@ -177,7 +180,7 @@ Each step is its own pull request with its own issue under #575, mergeable and t
 - **`NEVR_ROOT`**, honoured only in a dev build, replaces `%LOCALAPPDATA%\nevr\echovr`; it lands in step 4.
 - **The `versions` record:** written by the host's detour on the game's main wrapper right after the verdict on `nevr-runtime.dll`: the first
   record of that process after the verdict (attach records before it are fine; every record carries the `pid`, so the log reads per
-  process). It goes to `nevr-bootstrap.jsonl` with `tag` `NEVR.HOST`, `event` `versions`, and the fields `host_version`, `host_sha256`, `runtime_version`, `runtime_sha256` (the last two
+  process). It goes to `nevr-bootstrap.jsonl` with `tag` `NEVR.HOST`, `event` `versions`, and the fields `host_version`, `host_build` (`release` or `dev`), `host_sha256`, `runtime_version`, `runtime_sha256` (the last two
   `unavailable` when `nevr-runtime.dll` is missing or refused, with the path searched in `runtime_path`).
 - **The exit code** after the refusal dialog on a client, and on a server or headless run, is 78 (free in `src/` today; 78 is `EX_CONFIG`
   in sysexits). The host ends the process by its own call, `TerminateProcess(GetCurrentProcess(), 78)`, as it already does for an

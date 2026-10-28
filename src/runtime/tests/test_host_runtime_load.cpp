@@ -8,6 +8,7 @@
 #include "core/runtime_abi.h"
 #include "runtime/host/bootstrap_diagnostics.h"
 #include "runtime/host/host_identity.h"
+#include "runtime/ext/plugin_pins.h"
 #include "runtime/host/loader_lock.h"
 
 #include <gtest/gtest.h>
@@ -548,6 +549,15 @@ TEST(HostRuntimeLoad, TheStopRecordNamesTheCauseTheCodeTheHostAndThePathSearched
   // The host's identity: the literal the packager reads from this file, so the log names exactly what ran.
   EXPECT_EQ(record.at("host_identity"), std::string(nevr_host::IdentityLiteral()));
   EXPECT_EQ(std::string(nevr_host::IdentityLiteral()).rfind("NEVR-BUILD ", 0), 0u);
+}
+
+// #1122: the host carries no plugin-trust literal, so this is the mark the release path reads to refuse a dev host. It
+// must say what DecideVerify acts on: the pins' dev-build answer, from the same compile definition.
+TEST(HostRuntimeLoad, TheHostBuildLiteralSaysWhetherThisHostLoadsAnUnsignedRuntime) {
+  const std::string literal = nevr_host::BuildLiteral();
+  EXPECT_EQ(literal.rfind("NEVR-HOST-BUILD ", 0), 0u) << literal;
+  EXPECT_EQ(literal, std::string("NEVR-HOST-BUILD ") + nevr_host::BuildWord());
+  EXPECT_STREQ(nevr_host::BuildWord(), nevr_plugin_pins::IsDevBuild() ? "dev" : "release");
 }
 
 TEST(HostRuntimeLoad, AStopRecordThatCannotBeBuiltBecomesAMarkerLineNotAnException) {

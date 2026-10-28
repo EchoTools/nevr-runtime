@@ -66,6 +66,9 @@ IDENTITY = re.compile(rb"(?<=\x00)NEVR-BUILD ([0-9A-Za-z.+-]+) ([0-9a-f]{40})(?=
 # enforces (a run's mode comes from -require-signed-plugins, #924). A packaged DLL carries exactly one, and it says
 # release; dev is the mingw-plugin-dev preset and is never packaged.
 PLUGIN_TRUST = re.compile(rb"(?<=\x00)NEVR-PLUGIN-TRUST ([a-z-]+)(?=\x00)")
+# The host's counterpart (#1122): "NEVR-HOST-BUILD <build>". The host carries no plugin-trust literal, yet a host built
+# as the plugin developers' build loads an unsigned nevr-runtime.dll, so a package needs to know which host it holds.
+HOST_BUILD = re.compile(rb"(?<=\x00)NEVR-HOST-BUILD ([a-z-]+)(?=\x00)")
 _NUM = r"(?:0|[1-9]\d*)"  # semver: no leading zeros
 RELEASE_VERSION = re.compile(rf"^{_NUM}\.{_NUM}\.{_NUM}$")
 DEV_VERSION = re.compile(rf"^{_NUM}\.{_NUM}\.{_NUM}-dev\.{_NUM}\+[0-9a-f]{{7,40}}$")
@@ -111,10 +114,18 @@ def plugin_trust_problems(label: str, blob: bytes) -> list:
 
 
 def host_trust_problems(label: str, blob: bytes) -> list:
-    """The host loads no plugin, so a plugin-trust literal in it means runtime code moved into the host."""
+    """The host loads no plugin, so a plugin-trust literal in it means runtime code moved into the host. It must say it
+    is a release host: a dev host (the plugin-developer preset) loads an unsigned nevr-runtime.dll."""
+    problems = []
     if PLUGIN_TRUST.search(blob):
-        return [f"{label}: carries a NEVR-PLUGIN-TRUST literal; the plugin loader is the runtime's, not the host's"]
-    return []
+        problems.append(f"{label}: carries a NEVR-PLUGIN-TRUST literal; the plugin loader is the runtime's, not the host's")
+    found = HOST_BUILD.findall(blob)
+    if len(found) != 1:
+        problems.append(f"{label}: expected exactly one 'NEVR-HOST-BUILD <build>' literal, found {len(found)}")
+    elif found[0] != b"release":
+        problems.append(f"{label}: NEVR-HOST-BUILD is '{found[0].decode('ascii')}', not 'release': a dev host (the "
+                        f"plugin-developer or scenario preset) loads an unsigned nevr-runtime.dll and is never packaged")
+    return problems
 
 
 def expected_identity_problems(label: str, blob: bytes, version, commit: str, runtime: bool = True) -> list:

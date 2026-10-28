@@ -13,6 +13,7 @@
 // throwaway PKI into the directory named by NEVR_SIGFIX_DIR (`just test-auth-unit` makes it). The tests that need them
 // fail without it: a verifier test that skips is a verifier nobody tested.
 
+#include "runtime/host/host_identity.h"
 #include "runtime/host/runtime_load.h"
 #include "runtime/host/runtime_rendezvous.h"
 #include "runtime/host/stop_notice.h"
@@ -447,6 +448,7 @@ TEST_F(HostRuntimeVerify, ASignedRuntimeIsAcceptedLoadedAndNamedInTheVersionsRec
   EXPECT_EQ(versions.at("runtime_version"), "7.7.7") << "the version is the one the file's NEVR-BUILD literal carries";
   EXPECT_EQ(versions.at("host_sha256"), host_sha256_);
   EXPECT_NE(versions.at("host_version"), "unavailable");
+  EXPECT_EQ(versions.at("host_build"), nevr_host::BuildWord()) << "the record says which kind of host ran (#1122)";
   EXPECT_NE(versions.at("runtime_path"), "");
   EXPECT_LT(IndexOf(outcome.records, "versions"), IndexOf(outcome.records, "runtime_load"))
       << "the versions record is written after the verdict and before the load's own record";
