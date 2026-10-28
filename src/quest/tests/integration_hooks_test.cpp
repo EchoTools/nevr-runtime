@@ -179,6 +179,7 @@ struct RealCounterSteps final : Steps {
   bool InstallProcessEnd() override { return true; }
   bool InstallPermissionWait() override { return true; }
   bool InstallVkExtWindow() override { return true; }
+  bool InstallOsBuildGate() override { return true; }
   bool InstallResourceRequestLog(bool counted) override { return counted; }
   bool InstallTextureQuality(const nevr_quest::TextureChoice&, bool counted) override { return counted; }
   bool InstallCreditsText() override { return true; }
