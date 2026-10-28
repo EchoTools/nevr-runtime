@@ -17,6 +17,7 @@ HOOK = ROOT / "src/runtime/patch/render_config_hook.cpp"
 MODEL = ROOT / "src/runtime/patch/render_config.cpp"
 MODEL_H = ROOT / "src/runtime/patch/render_config.h"
 LOGGING_DOC = ROOT / "docs/standards/logging.md"
+FILTER = ROOT / "src/runtime/log/builtin_filter.cpp"
 
 POLL_CALL = "nevr_render_config_hook::Poll(nowUs);"
 INSTALL_CALL = "nevr_render_config_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)), g_isServer != FALSE);"
@@ -143,6 +144,23 @@ def tag_problems(doc: str) -> list[str]:
     return [] if re.search(r"^\|\s*`\[NEVR\.RENDER\]`", doc, flags=re.M) else ["[NEVR.RENDER] is not in the tag table"]
 
 
+def line_cap_problems(filter_source: str) -> list[str]:
+    """The built-in filter's 500-byte line cap must not reach an nEVR line: the render_config line is longer than 500
+    bytes and a cap loses its last fields. ApplyTruncation returns the full length for a `[NEVR.` line before it applies
+    max_line_length."""
+    code = strip_comments(filter_source)
+    body = function_body(code, "static int ApplyTruncation(")
+    if body is None:
+        return ["ApplyTruncation not found in builtin_filter.cpp"]
+    exempt = body.find("if (IsNevrLine(message)) return len;")
+    cap = body.find("g_config.max_line_length")
+    if exempt < 0:
+        return ["ApplyTruncation does not return an nEVR line whole"]
+    if cap < 0 or exempt > cap:
+        return ["the nEVR-line exemption must come before the max_line_length cap"]
+    return []
+
+
 class RenderConfigWiring(unittest.TestCase):
     def test_poll_is_called_once_inside_the_per_frame_dispatcher(self):
         self.assertEqual(poll_call_problems(TICK.read_text(encoding="utf-8")), [])
@@ -228,6 +246,18 @@ class RenderConfigWiring(unittest.TestCase):
     def test_the_tag_is_registered(self):
         self.assertEqual(tag_problems(LOGGING_DOC.read_text(encoding="utf-8")), [])
         self.assertTrue(tag_problems("| `[NEVR.HOST]` | x |"))
+
+    def test_an_nevr_line_is_not_cut_by_the_line_cap(self):
+        text = FILTER.read_text(encoding="utf-8")
+        self.assertEqual(line_cap_problems(text), [])
+
+    def test_the_line_cap_check_fails_without_the_exemption_or_after_the_cap(self):
+        text = FILTER.read_text(encoding="utf-8")
+        gone = text.replace("if (IsNevrLine(message)) return len;", "")
+        self.assertNotEqual(line_cap_problems(gone), [])
+        moved = text.replace("if (IsNevrLine(message)) return len;", "").replace(
+            "    return len;\n}\n\n/* ----", "    if (IsNevrLine(message)) return len;\n    return len;\n}\n\n/* ----", 1)
+        self.assertNotEqual(line_cap_problems(moved), [])
 
 
 if __name__ == "__main__":

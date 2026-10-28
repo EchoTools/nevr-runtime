@@ -16,6 +16,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -339,6 +340,12 @@ TEST_F(RenderConfigHook, TheFirstFrameLineIsLoggedOnceAtInfoWithTheImagesValues)
       EXPECT_EQ(g_levels[i], EchoVR::LogLevel::Info);
     }
   }
+  // The trace follows the first line, once, naming what the observers saw.
+  EXPECT_EQ(CountContaining("[NEVR.RENDER] render_config settings_trace "), 1);
+  const std::string trace = LineContaining("settings_trace");
+  EXPECT_NE(trace.find(" apply_calls=2 read_failures=0 "), std::string::npos) << trace;
+  EXPECT_NE(trace.find(" last_apply_return=0x"), std::string::npos) << trace;
+  EXPECT_NE(trace.find(" boot_return=0x"), std::string::npos) << trace;
 }
 
 TEST_F(RenderConfigHook, AMsaaChangeThroughTheApplyHookAndANewRefreshRateAreOneChangeLine) {
@@ -368,6 +375,24 @@ TEST_F(RenderConfigHook, AMsaaChangeThroughTheApplyHookAndANewRefreshRateAreOneC
   hook::Poll(3'000'000);
   hook::Poll(4'000'000);
   EXPECT_EQ(CountContaining("reason=change"), 1) << "the same configuration was written again";
+  EXPECT_EQ(CountContaining("settings_trace"), 1) << "the trace is written with the first line only, not with a change";
+}
+
+TEST_F(RenderConfigHook, TheTraceNamesTheLastApplyReturnAndTheBootReturnAsTwoAddresses) {
+  ASSERT_TRUE(hook::Install(base_, false));
+  ASSERT_EQ(CallApplyFromBoot(ApplyEntry(), settings_.data()), kApplyResult);
+  const std::uintptr_t bootReturn = hook::LastApplyReturnForTest();
+  hook::SetBootReturnForTest(bootReturn);
+  ASSERT_EQ(CallApplyFromMenu(ApplyEntry(), settings_.data()), kApplyResult);
+  const std::uintptr_t menuReturn = hook::LastApplyReturnForTest();
+  ASSERT_NE(menuReturn, bootReturn);
+
+  hook::Poll(1'000'000);
+  const std::string trace = LineContaining("settings_trace");
+  char want[64];
+  std::snprintf(want, sizeof(want), " last_apply_return=0x%llx boot_return=0x%llx", static_cast<unsigned long long>(menuReturn),
+                static_cast<unsigned long long>(bootReturn));
+  EXPECT_NE(trace.find(want), std::string::npos) << trace << " wanted " << want;
 }
 
 TEST_F(RenderConfigHook, WithNoRenderTargetTheFirstLineComesAfterFiveSecondsWithTheTargetUnavailable) {

@@ -127,6 +127,7 @@ std::unique_ptr<Collector> g_collector;
 std::atomic<bool> g_active{false};
 std::atomic<bool> g_serverSkipLogged{false};
 std::atomic<bool> g_checkFailureLogged{false};
+std::atomic<bool> g_traceLogged{false};
 
 // noinline: __builtin_return_address(0) must name this function's caller, the game's call site.
 __attribute__((noinline)) std::uint64_t ApplyHook(void* settings, void* game, int logFlag) {
@@ -217,7 +218,20 @@ void Poll(std::uint64_t nowUs) {
   if (!g_active.load(std::memory_order_acquire)) return;
   try {
     const std::string line = g_collector->Poll(nowUs / 1000);
-    if (!line.empty()) Log(EchoVR::LogLevel::Info, "%s", line.c_str());
+    if (!line.empty()) {
+      Log(EchoVR::LogLevel::Info, "%s", line.c_str());
+      // Once, with the first line: what the observers saw, so a `settings_source=unknown` or `menu_or_json` explains itself
+      // (observers installed after the game's boot Apply call, or a boot return address that is not the one the game uses).
+      if (!g_traceLogged.exchange(true)) {
+        const SettingsObserver::View seen = g_observer.Snapshot();
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.RENDER] render_config settings_trace apply_calls=%llu read_failures=%llu last_apply_return=0x%llx "
+            "boot_return=0x%llx",
+            static_cast<unsigned long long>(seen.applyCalls), static_cast<unsigned long long>(seen.readFailures),
+            static_cast<unsigned long long>(g_lastApplyReturn.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(g_bootReturn.load(std::memory_order_relaxed)));
+      }
+    }
   } catch (const std::exception& error) {
     // Out of memory while building the line: the frame goes on, and the failure is said once.
     if (!g_checkFailureLogged.exchange(true)) {
@@ -252,6 +266,7 @@ void ResetForTest() {
   g_swallowed.store(0);
   g_serverSkipLogged.store(false);
   g_checkFailureLogged.store(false);
+  g_traceLogged.store(false);
   g_observer.Reset();
 }
 #endif
