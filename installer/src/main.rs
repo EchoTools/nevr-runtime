@@ -10,10 +10,13 @@ use std::process::ExitCode;
 
 const USAGE: &str = "usage: nevr-install <command> [options]
   manifest verify [--from-dir DIR]          steps 1 to 7: fetch (or read DIR), verify, store, pick the channel's release
-  quest plan|install [--no-device] [--serial S] [--version V] [--yes-uninstall]
-  pc plan|install --dir <folder with echovr.exe> [--nevr-root DIR] [--allow-downgrade] [--version V]
+  quest plan|install [--no-device] [--serial S] [--version V] [--yes-uninstall] [--artifact-dir DIR]
+  pc plan|install --dir <folder with echovr.exe> [--nevr-root DIR] [--allow-downgrade] [--version V] [--package-dir DIR]
   pc launch-check --dir <folder> [--nevr-root DIR] [--bootstrap-log FILE] [--version V]
 options: --root DIR  --base URL  --channel NAME  --log FILE  --state-dir DIR  --work-dir DIR  --pins FILE  --now UTC
+--artifact-dir installs a local tester APK (one .apk and its .sha256 sidecar) in place of the release's, and logs every step
+  as an unverified dev artifact; no installer a player runs passes it.
+--package-dir installs the DLLs in DIR when they match the signed manifest's entries, and downloads only when they do not.
 exit codes: 0 installed or nothing to do, 1 failed with nothing changed, 2 needs the player, 3 restored";
 
 fn default_root() -> PathBuf {
@@ -154,12 +157,22 @@ fn main() -> ExitCode {
                 } else {
                     sess.manifest()?;
                 }
+                let dev_apk = match args.val("--artifact-dir") {
+                    Some(d) => match nevr_install::quest::read_dev_apk(std::path::Path::new(&d)) {
+                        Ok(a) => Some(a),
+                        Err(e) => {
+                            sess.log.event("ERROR", "dev_artifact", 8, nevr_install::quest::with_trust(json!({"kind": "quest-apk", "dir": d, "ok": false, "reason": e.msg}), true))?;
+                            return Err(e);
+                        }
+                    },
+                    None => None,
+                };
                 let dev = if args.flag("--no-device") {
                     None
                 } else {
                     Some(AdbDevice::pick(args.val("--serial").as_deref()).map_err(|e| nevr_install::error::Error::new(9, e))?)
                 };
-                let (end, plan) = sess.quest(version.as_deref(), dev.as_ref().map(|d| d as &dyn nevr_install::device::Device), c == "install", args.flag("--yes-uninstall"))?;
+                let (end, plan) = sess.quest(version.as_deref(), dev.as_ref().map(|d| d as &dyn nevr_install::device::Device), c == "install", args.flag("--yes-uninstall"), dev_apk.as_ref())?;
                 Ok((end, Some(plan)))
             }
             ("pc", "launch-check") => {
@@ -189,7 +202,7 @@ fn main() -> ExitCode {
                 } else {
                     sess.manifest()?;
                 }
-                let (end, plan) = sess.pc(version.as_deref(), &dir, c == "install", game_running())?;
+                let (end, plan) = sess.pc(version.as_deref(), &dir, c == "install", game_running(), args.val("--package-dir").map(PathBuf::from).as_deref())?;
                 Ok((end, Some(plan)))
             }
             _ => unreachable!("the command table above is exhaustive"),

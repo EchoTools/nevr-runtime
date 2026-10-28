@@ -83,7 +83,7 @@ fn apk_art(bytes: &[u8]) -> Artifact {
 }
 
 fn plan_with(steps: Vec<Step>, apk: Option<Artifact>, data: Option<Artifact>) -> Plan {
-    Plan { outcome: Outcome::Proceed, decision: "test".into(), reasons: vec![], steps, apk, data, consequences: vec![], game_data: String::new(), signer: String::new() }
+    Plan { outcome: Outcome::Proceed, decision: "test".into(), reasons: vec![], steps, apk, data, consequences: vec![], game_data: String::new(), signer: String::new(), dev_artifact: None }
 }
 
 fn opts<'a>(d: &Path, base: &'a str, consent: bool) -> RunOpts<'a> {
@@ -202,4 +202,22 @@ fn roots_hold_checks_every_path_at_its_size() {
     assert!(!quest::roots_hold(&dev, quest::LEGACY_ROOT, &data).unwrap(), "a wrong size does not count");
     dev.shell_replies = vec![];
     assert!(!quest::roots_hold(&dev, quest::LEGACY_ROOT, &data).unwrap(), "nothing listed is nothing present");
+}
+
+#[test]
+fn a_local_apk_that_changed_after_it_was_checked_is_never_installed() {
+    let d = tempfile::tempdir().unwrap();
+    let checked = b"the bytes the checks read".to_vec();
+    let file = d.path().join("r15.apk");
+    std::fs::write(&file, b"other bytes written afterwards").unwrap();
+    let log = Log::open(&d.path().join("l.jsonl"), "quest").unwrap();
+    let dev = Fake::new(&[]);
+    let mut plan = plan_with(vec![Step::FetchApk, Step::CheckApk, Step::InstallApk { replace: false }], Some(apk_art(&checked)), None);
+    plan.dev_artifact = Some(file);
+    let end = quest::execute(&dev, &serde_json::json!({}), "1.0.0", &plan, &opts(d.path(), "http://127.0.0.1:1", true), &log).unwrap();
+    assert_eq!(end.state, "unchanged");
+    assert!(end.reason.contains("changed after"), "{}", end.reason);
+    assert!(!dev.calls().iter().any(|c| c.starts_with("install") || c.starts_with("uninstall")), "{:?}", dev.calls());
+    let r = records(log.path());
+    assert!(r.iter().filter(|x| x["event"] == "step_end").all(|x| x["trust"] == "unverified dev artifact"), "{r:?}");
 }

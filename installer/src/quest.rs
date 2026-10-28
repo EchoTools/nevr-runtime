@@ -18,6 +18,8 @@ pub const MEDIA_ROOT: &str = "/sdcard/Android/media/com.readyatdawn.r15/files";
 pub const LEGACY_ROOT: &str = "/sdcard/readyatdawn";
 const REMOTE_ZIP: &str = "/data/local/tmp/_nevr_data.zip";
 const PLATFORM: &str = "android-arm64";
+/// The `trust` field on every record written for a run that installs a local APK no manifest names (ADR 0023, 3a).
+pub const DEV_TRUST: &str = "unverified dev artifact";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Installed {
@@ -84,6 +86,8 @@ pub struct Plan {
     pub consequences: Vec<String>,
     pub game_data: String,
     pub signer: String,
+    /// The local APK this plan installs in place of the manifest's, when one was given (`--artifact-dir`).
+    pub dev_artifact: Option<PathBuf>,
 }
 
 impl Plan {
@@ -98,6 +102,7 @@ impl Plan {
             "uninstall_deletes": self.consequences,
             "game_data": self.game_data,
             "signer": self.signer,
+            "dev_artifact": self.dev_artifact.as_ref().map(|p| p.display().to_string()),
         })
     }
 }
@@ -113,6 +118,21 @@ fn consequences() -> Vec<String> {
 
 /// The Quest plan. `consent_uninstall` is the player's explicit agreement to remove a differently signed install.
 pub fn plan(m: &Value, version: &str, obs: &Observed, consent_uninstall: bool) -> Plan {
+    plan_with(m, version, obs, consent_uninstall, None)
+}
+
+/// A local APK (section 3a of the ADR): its file, sha256 (checked against its sidecar) and what `aapt2` and `apksigner`
+/// read from it. Nothing in it is signed by the project.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevApk {
+    pub path: PathBuf,
+    pub size: u64,
+    pub sha256: String,
+    pub android: Android,
+}
+
+/// The Quest plan, with `dev` standing in for the manifest's `quest-apk` entry. The game data still comes from `m`.
+pub fn plan_with(m: &Value, version: &str, obs: &Observed, consent_uninstall: bool, dev: Option<&DevApk>) -> Plan {
     let mut p = Plan {
         outcome: Outcome::Proceed,
         decision: String::new(),
@@ -123,6 +143,7 @@ pub fn plan(m: &Value, version: &str, obs: &Observed, consent_uninstall: bool) -
         consequences: vec![],
         game_data: String::new(),
         signer: String::new(),
+        dev_artifact: dev.map(|d| d.path.clone()),
     };
     let refuse = |mut p: Plan, why: String| {
         p.outcome = Outcome::Unchanged;
@@ -130,18 +151,28 @@ pub fn plan(m: &Value, version: &str, obs: &Observed, consent_uninstall: bool) -
         p.reasons.push(why);
         p
     };
-    let apk = match manifest::find(m, version, "quest-apk", Some(PLATFORM)) {
-        Ok(a) => a,
-        Err(e) => return refuse(p, e.msg),
+    let (apk, android) = match dev {
+        Some(d) => {
+            let file = d.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "quest.apk".into());
+            let art = Artifact { kind: "quest-apk".into(), platform: Some(PLATFORM.into()), path: file, size: d.size, sha256: d.sha256.clone(), android: Some(d.android.clone()), game_data: None, contents: vec![] };
+            (art, d.android.clone())
+        }
+        None => {
+            let apk = match manifest::find(m, version, "quest-apk", Some(PLATFORM)) {
+                Ok(a) => a,
+                Err(e) => return refuse(p, e.msg),
+            };
+            let android = match &apk.android {
+                Some(a) if a.package == PACKAGE => a.clone(),
+                Some(a) => return refuse(p, format!("the quest-apk is for package {}, not {PACKAGE}", a.package)),
+                None => return refuse(p, "the quest-apk entry has no android object".into()),
+            };
+            if android.signer_cert_sha256.is_empty() {
+                return refuse(p, "the quest-apk entry has no signer_cert_sha256: nothing to check the signer against".into());
+            }
+            (apk, android)
+        }
     };
-    let android = match &apk.android {
-        Some(a) if a.package == PACKAGE => a.clone(),
-        Some(a) => return refuse(p, format!("the quest-apk is for package {}, not {PACKAGE}", a.package)),
-        None => return refuse(p, "the quest-apk entry has no android object".into()),
-    };
-    if android.signer_cert_sha256.is_empty() {
-        return refuse(p, "the quest-apk entry has no signer_cert_sha256: nothing to check the signer against".into());
-    }
     p.apk = Some(apk);
     p.signer = match &obs.installed {
         None => "no package installed".into(),
@@ -249,20 +280,14 @@ pub fn parse_certs(text: &str) -> Vec<String> {
     v
 }
 
-/// The APK itself against the manifest's `android` object, before install (host-side `aapt2` and `apksigner`).
-pub fn check_apk(apk: &Path, want: &Android) -> Result<Vec<String>> {
+/// What the host's `aapt2` and `apksigner` read from an APK: package, versionCode, and the signing certificates' digests.
+pub fn inspect_apk(apk: &Path) -> Result<(String, u64, Vec<String>)> {
     let p = apk.to_string_lossy();
     let badging = run_with_timeout("aapt2", &["dump", "badging", &p], Duration::from_secs(120)).map_err(|e| Error::new(8, e))?;
     if badging.code != 0 {
         return Err(Error::new(8, format!("aapt2 could not read {p}")));
     }
     let (pkg, code) = parse_badging(&badging.text).ok_or_else(|| Error::new(8, "aapt2 printed no package line"))?;
-    if pkg != want.package {
-        return Err(Error::new(8, format!("the APK package is '{pkg}', the manifest says '{}'", want.package)));
-    }
-    if code != want.version_code {
-        return Err(Error::new(8, format!("the APK versionCode is '{code}', the manifest says '{}'", want.version_code)));
-    }
     let certs = run_with_timeout("apksigner", &["verify", "--print-certs", &p], Duration::from_secs(120)).map_err(|e| Error::new(8, e))?;
     if certs.code != 0 {
         return Err(Error::new(8, format!("apksigner does not accept {p}")));
@@ -271,10 +296,51 @@ pub fn check_apk(apk: &Path, want: &Android) -> Result<Vec<String>> {
     if digests.is_empty() {
         return Err(Error::new(8, "apksigner printed no signing certificate"));
     }
+    Ok((pkg, code, digests))
+}
+
+/// The APK itself against the manifest's `android` object, before install (host-side `aapt2` and `apksigner`).
+pub fn check_apk(apk: &Path, want: &Android) -> Result<Vec<String>> {
+    let (pkg, code, digests) = inspect_apk(apk)?;
+    if pkg != want.package {
+        return Err(Error::new(8, format!("the APK package is '{pkg}', the manifest says '{}'", want.package)));
+    }
+    if code != want.version_code {
+        return Err(Error::new(8, format!("the APK versionCode is '{code}', the manifest says '{}'", want.version_code)));
+    }
     if let Some(d) = digests.iter().find(|d| !want.signer_cert_sha256.contains(d)) {
         return Err(Error::new(8, format!("the APK is signed by {d}, which the manifest does not list")));
     }
     Ok(digests)
+}
+
+/// Reads the local tester APK in `dir` (section 3a): exactly one `.apk`, its sha256 sidecar, and its own facts. Every
+/// check that can be made without the manifest is made here; none of them makes the file trusted.
+pub fn read_dev_apk(dir: &Path) -> Result<DevApk> {
+    let entries = std::fs::read_dir(dir).map_err(|e| Error::new(8, format!("{}: {e}", dir.display())))?;
+    let mut apks: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("apk"))).collect();
+    apks.sort();
+    if apks.len() != 1 {
+        return Err(Error::new(8, format!("{} must hold exactly one .apk (found {})", dir.display(), apks.len())));
+    }
+    let path = apks.remove(0);
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let first_hash = |text: &str| text.split_whitespace().next().filter(|h| crate::util::is_sha256_hex(h)).map(str::to_string);
+    let sidecar = std::fs::read_to_string(dir.join(format!("{name}.sha256"))).ok().and_then(|t| first_hash(&t)).or_else(|| {
+        let sums = std::fs::read_to_string(dir.join("SHA256SUMS")).ok()?;
+        let lines: Vec<&str> = sums.lines().filter(|l| l.split_whitespace().nth(1).map(|n| n.trim_start_matches('*')) == Some(name.as_str())).collect();
+        if lines.len() == 1 { first_hash(lines[0]) } else { None }
+    });
+    let want = sidecar.ok_or_else(|| Error::new(8, format!("no sidecar for {name}: expected {name}.sha256 or exactly one line for it in SHA256SUMS")))?;
+    let (size, sha) = crate::fetch::sha256_file(&path).map_err(|e| Error::new(8, format!("{}: {e}", path.display())))?;
+    if sha != want {
+        return Err(Error::new(8, format!("sha256 of {name} is {sha}, its sidecar says {want}")));
+    }
+    let (package, version_code, signers) = inspect_apk(&path)?;
+    if package != PACKAGE {
+        return Err(Error::new(8, format!("{name} is package '{package}', not {PACKAGE}")));
+    }
+    Ok(DevApk { path, size, sha256: sha, android: Android { package, version_code, signer_cert_sha256: signers } })
 }
 
 fn sh_quote(s: &str) -> String {
@@ -336,8 +402,16 @@ pub struct RunOpts<'a> {
     pub consent_uninstall: bool,
 }
 
-fn step_log(log: &Log, step: &Step, ok: bool, reason: &str, started: u64) -> Result<()> {
-    log.event(if ok { "INFO" } else { "ERROR" }, "step_end", 9, json!({"step_id": step.name(), "ok": ok, "reason": reason, "step_ms": log.elapsed_ms() - started}))
+/// Adds the dev-artifact `trust` field to a record's fields when the run installs a local APK.
+pub fn with_trust(mut fields: Value, dev: bool) -> Value {
+    if dev {
+        fields["trust"] = json!(DEV_TRUST);
+    }
+    fields
+}
+
+fn step_log(log: &Log, step: &Step, ok: bool, reason: &str, started: u64, dev: bool) -> Result<()> {
+    log.event(if ok { "INFO" } else { "ERROR" }, "step_end", 9, with_trust(json!({"step_id": step.name(), "ok": ok, "reason": reason, "step_ms": log.elapsed_ms() - started}), dev))
 }
 
 /// Runs a `Proceed` plan against the headset. Every step is logged; a failure after nothing was changed is `unchanged`,
@@ -348,10 +422,23 @@ pub fn execute(dev: &dyn Device, m: &Value, version: &str, plan: &Plan, opts: &R
     let mut changed = false;
     let fail = |changed: bool, why: String| -> Result<End> { Ok(End { state: if changed { "needs-user" } else { "unchanged" }, reason: why }) };
     std::fs::create_dir_all(&opts.work_dir).map_err(|e| Error::new(9, format!("{}: {e}", opts.work_dir.display())))?;
+    let is_dev = plan.dev_artifact.is_some();
     for step in &plan.steps {
         let t0 = log.elapsed_ms();
-        log.info("step_start", 9, json!({"step_id": step.name()}))?;
+        log.info("step_start", 9, with_trust(json!({"step_id": step.name()}), is_dev))?;
         let res: std::result::Result<(), String> = (|| match step {
+            Step::FetchApk if plan.dev_artifact.is_some() => {
+                // The local file is used where it is; it is hashed again so a change after the checks is refused.
+                let a = plan.apk.as_ref().expect("apk in plan");
+                let path = plan.dev_artifact.as_ref().expect("checked by the guard");
+                let (_, sha) = crate::fetch::sha256_file(path).map_err(|e| format!("{}: {e}", path.display()))?;
+                if sha != a.sha256 {
+                    return Err(format!("{} changed after it was checked (sha256 {sha}, checked {})", path.display(), a.sha256));
+                }
+                log.info("artifact_use", 8, with_trust(json!({"kind": "quest-apk", "path": path.display().to_string(), "sha256": sha, "ok": true}), true)).map_err(|e| e.to_string())?;
+                apk_path = Some(path.clone());
+                Ok(())
+            }
             Step::FetchApk => {
                 let a = plan.apk.as_ref().expect("apk in plan");
                 let out = opts.work_dir.join(a.path.rsplit('/').next().unwrap_or("quest.apk"));
@@ -439,9 +526,9 @@ pub fn execute(dev: &dyn Device, m: &Value, version: &str, plan: &Plan, opts: &R
             }
         })();
         match res {
-            Ok(()) => step_log(log, step, true, "", t0)?,
+            Ok(()) => step_log(log, step, true, "", t0, is_dev)?,
             Err(why) => {
-                step_log(log, step, false, &why, t0)?;
+                step_log(log, step, false, &why, t0, is_dev)?;
                 return fail(changed, why);
             }
         }
