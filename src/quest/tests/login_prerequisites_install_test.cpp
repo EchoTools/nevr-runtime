@@ -25,6 +25,7 @@ bool Ready() noexcept { return true; }
 int g_lines = 0;
 bool g_sawPartial = false;
 bool g_sawResidual = false;
+bool g_sawUserIdInstallFields = false;
 int g_userIdLines = 0;
 bool g_userIdStandIn = false;
 bool g_userIdKeptZero = false;
@@ -45,6 +46,10 @@ void Sink(sentinel::LogLevel, const char* line) {
   ++g_lines;
   if (Contains(line, "\"partial\"")) g_sawPartial = true;
   if (Contains(line, "quest_login_prerequisites_residual")) g_sawResidual = true;
+  if (Contains(line, "quest_login_prerequisites_install") && Contains(line, "\"logged_in_user_id\":0") &&
+      Contains(line, "\"social_facade\":\"not_installed\"")) {
+    g_sawUserIdInstallFields = true;
+  }
   if (Contains(line, "quest_logged_in_user_id")) {
     ++g_userIdLines;
     g_userIdStandIn = Contains(line, "\"answer\":\"stand_in\"");
@@ -120,6 +125,7 @@ int main() {
   const nevr_quest_login::PrerequisiteInstall r = nevr_quest_login::InstallLoginPrerequisites(dummy, &Ready, nullptr, nullptr);
   QCHECK(r.callbacks == 0 && r.accessors == 0 && r.requests == 0 && !r.substitute);
   QCHECK(r.user_id == 0);  // no libpnsovr.so: the ovr_GetLoggedInUserID slot is not hooked either
+  QCHECK(g_sawUserIdInstallFields);  // the summary says so, and whether the facade's hook is in
   QCHECK(g_sawPartial);
   QCHECK(!g_sawResidual);  // only a substituting install warns about residuals
   const int linesAfterFirst = g_lines;

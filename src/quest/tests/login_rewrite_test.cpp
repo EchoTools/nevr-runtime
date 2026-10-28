@@ -1095,10 +1095,13 @@ void TestFinishLoginGate() {
     json.SetString("nonce", "real-nonce");
     json.SetInt("accountid", static_cast<std::int64_t>(nevr_quest_login::StandIn::UserId()));
     FakePrereqState st;
+    g_log.clear();
     const nevr_quest_login::FinishResult r =
         nevr_quest_login::FinishLogin(user, json, st, nevr_quest_login::Outcome::NoIdentity, &CaptureLog);
     QCHECK(r.decision == nevr_quest_login::SendDecision::FailClosed);
     QCHECK(r.wire.account_member_stand_in);
+    QCHECK(g_log.size() == 1 && g_log[0].find("quest_login_send ") == 0 &&
+           g_log[0].find(" account_member_stand_in=1") != std::string::npos);  // the record says why
     QCHECK(!r.wire.account_id_stand_in && !r.wire.access_token_stand_in && !r.wire.nonce_stand_in);
 
     json.SetInt("accountid", 7777777);
