@@ -262,6 +262,14 @@ network:
   # Not a secret.
   # session_router: legacy
 
+  # The invite codes for the CREATE GAME / JOIN VIA CODE wizard: when on, a code typed into JOIN VIA CODE is sent to the
+  # game service (auth.http_uri, with the token this client already holds) to find the match it names. Create is not sent yet.
+  # true/on/yes/1 turns it on; false/off/no/0 or absent leaves it off. Any other value leaves it off, with a warning in
+  # the log. Ignored by a dedicated server.
+  # Absent: off.
+  # Not a secret.
+  # invite_codes: false
+
 # ---------------------------------------------------------------------------
 # identity — server identity fields sent during ServerDB registration
 #

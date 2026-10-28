@@ -59,6 +59,8 @@ struct Answer {
   bool sent = false;  // false: nothing went out (no token)
   int status = 0;
   Result result = Result::Unavailable;
+  bool via_status = false;  // a refusal the service did not name: the HTTP status alone decided the result
+  std::string refusal_message;  // via_status only: for the scenario endpoint, never logged or shown
   std::string body;  // a success only
 };
 
@@ -193,9 +195,11 @@ class Worker {
     const long latency = static_cast<long>(parts_.clock_ms() - started);
     answer.status = http.status;
     answer.result = ResultFromAnswer(http.status, http.body);
+    answer.via_status = IsFailure(answer.result) && http.status > 0 && !AnswerNamesResult(http.status, http.body);
+    if (answer.via_status) answer.refusal_message = RefusalMessage(http.body);
     if (answer.result == Result::Ok) answer.body = std::move(http.body);
     Say(IsFailure(answer.result) ? LogLevel::Warning : LogLevel::Info,
-        AnswerLine(job.plan.op, answer.status, latency, answer.result));
+        AnswerLine(job.plan.op, answer.status, latency, answer.result, answer.via_status));
     return answer;
   }
 
