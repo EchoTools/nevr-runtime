@@ -17,8 +17,7 @@
 #include "core/globals.h"
 #include "core/logging.h"
 
-#include "runtime/hook/symbol_corpus.h"      // #1094: a level symbol's name
-#include "runtime/log/symcache.h"             // #1094: the larger name table, which names the lobby and arena levels
+#include "runtime/log/symcache.h"             // #1094: the symbol cache, which names the lobby and match levels
 #include "runtime/patch/ui_texture_mips_rules.h"  // #1094: NameForHash, the search of the table sorted by hash
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/config.h"    // g_pGame
@@ -99,21 +98,18 @@ extern const SymCacheEntry kSymCacheData[];  // the generated symbol cache, sort
 extern const int kSymCacheCount;
 }  // namespace evr
 
-// #1094: a level symbol's name, or nullptr. The symbol corpus first, then the symbol cache: the corpus holds the
-// names the game binary spells out, the cache holds the lobby and match levels too. A level neither table knows
-// (a custom one) has no name.
+// #1094: a level symbol's name from the symbol cache (the generated table of the game's PC and Quest names, which
+// holds the lobby and match levels), or nullptr. A level the cache does not know, such as a custom one, has none.
 static const char* LevelNameOf(uint64_t symbol) {
-  if (symbol == 0) return nullptr;
-  if (const char* name = EchoVR::LookupSymbolName(symbol)) return name;
   return nevr_ui_texture_mips::NameForHash(evr::kSymCacheData, static_cast<size_t>(evr::kSymCacheCount), symbol);
 }
 
-// #1094: a level symbol as a log reads it: "none", the name when a table knows it, else the hex value.
+// #1094: a level symbol as a log reads it: "none", the name when the cache knows it, else the hex value.
 static std::string LevelLabel(uint64_t symbol) {
   if (symbol == 0) return "none";
   if (const char* name = LevelNameOf(symbol)) return name;
-  char label[40];
-  EchoVR::FormatSymbolId(label, sizeof(label), symbol);
+  char label[24];
+  snprintf(label, sizeof(label), "0x%016llx", static_cast<unsigned long long>(symbol));
   return label;
 }
 

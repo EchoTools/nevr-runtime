@@ -50,6 +50,8 @@
 #include "abi/echovr_functions.h"
 #include "abi/game_level.h"
 #include "abi/symbol_hash.h"
+#include "runtime/log/symcache.h"
+#include "runtime/patch/ui_texture_mips_rules.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "core/logging.h"
 #include "runtime/hook/hook_guard.h"
@@ -1998,12 +2000,17 @@ TEST(PluginLogHost, HostLogFunctionTagsLevelsAndKeepsAPercentSignOutOfTheFormat)
 // is a zeroed buffer with the level written at the PC offset, so a level change is a store the test makes.
 // ----------------------------------------------------------------------------
 
+namespace evr {
+extern const SymCacheEntry kSymCacheData[];  // the generated symbol cache (symcache_data.cpp)
+extern const int kSymCacheCount;
+}  // namespace evr
+
 namespace {
 
-constexpr uint64_t kArenaA = 0x576ed3f8428ebc4bULL;           // CSymbol64("mpl_arena_a"), in the symbol corpus
-constexpr uint64_t kCombatCombustion = 0x42670f2bed45703cULL;  // CSymbol64("mpl_combat_combustion"), in the corpus
+constexpr uint64_t kArenaA = 0x576ed3f8428ebc4bULL;           // CSymbol64("mpl_arena_a"), in the symbol cache
+constexpr uint64_t kCombatCombustion = 0x42670f2bed45703cULL;  // CSymbol64("mpl_combat_combustion"), in the cache
 
-constexpr uint64_t kLobbyB2 = 0xd09afd15b1c75c04ULL;  // CSymbol64("mpl_lobby_b2"): in the symbol cache, not the corpus
+constexpr uint64_t kLobbyB2 = 0xd09afd15b1c75c04ULL;  // CSymbol64("mpl_lobby_b2"), in the symbol cache
 
 std::vector<unsigned char> g_fakeGame;
 
@@ -2070,12 +2077,18 @@ TEST(GameLevel, ReadsTheSymbolAtThePcAndTheQuestOffsetAndMapsNoLevelToZero) {
   EXPECT_EQ(EchoVR::ReadMainLevelSymbol(game.data(), EchoVR::kQuestMainLevelSymbolOffset), kCombatCombustion);
 }
 
-TEST(GameLevel, TheCorpusNamesTheLevelsTheFixturesUseAndNotACustomOne) {
+TEST(GameLevel, TheHashesAreTheGamesAndTheCacheNamesTheLevelsTheFixturesUseAndNotACustomOne) {
   EXPECT_EQ(EchoVR::CSymbol64Hash("mpl_arena_a"), kArenaA);
   EXPECT_EQ(EchoVR::CSymbol64Hash("mpl_combat_combustion"), kCombatCombustion);
-  ASSERT_NE(EchoVR::LookupSymbolName(kArenaA), nullptr);
-  EXPECT_STREQ(EchoVR::LookupSymbolName(kArenaA), "mpl_arena_a");
-  EXPECT_EQ(EchoVR::LookupSymbolName(EchoVR::CSymbol64Hash("mpl_arena_dodgeball")), nullptr);
+  EXPECT_EQ(EchoVR::CSymbol64Hash("mpl_lobby_b2"), kLobbyB2);
+  const auto nameOf = [](uint64_t hash) {
+    return nevr_ui_texture_mips::NameForHash(evr::kSymCacheData, static_cast<size_t>(evr::kSymCacheCount), hash);
+  };
+  ASSERT_NE(nameOf(kArenaA), nullptr);
+  EXPECT_STREQ(nameOf(kArenaA), "mpl_arena_a");
+  ASSERT_NE(nameOf(kLobbyB2), nullptr);
+  EXPECT_STREQ(nameOf(kLobbyB2), "mpl_lobby_b2");
+  EXPECT_EQ(nameOf(EchoVR::CSymbol64Hash("mpl_arena_dodgeball")), nullptr);
 }
 
 TEST_F(PluginLevelTest, InitContextCarriesTheLevelTheGameAlreadyHolds) {
@@ -2141,9 +2154,7 @@ TEST_F(PluginLevelTest, StateChangeContextFollowsTheLevelAcrossLevelChangesAndIs
       "level=mpl_combat_combustion"));
 }
 
-TEST_F(PluginLevelTest, ALevelOnlyTheSymbolCacheNamesStillGetsItsName) {
-  EXPECT_EQ(EchoVR::CSymbol64Hash("mpl_lobby_b2"), kLobbyB2);
-  EXPECT_EQ(EchoVR::LookupSymbolName(kLobbyB2), nullptr) << "the corpus names it: this test no longer proves the cache fallback";
+TEST_F(PluginLevelTest, TheLobbyLevelGetsItsNameInTheContextAndTheLog) {
   LoadPlugins();
   ASSERT_EQ(GetLoadedPluginCount(), 1);
 
