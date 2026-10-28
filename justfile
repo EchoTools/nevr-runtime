@@ -66,6 +66,22 @@ install-hooks:
 reap-merged *args:
     python3 -I tools/reap_merged.py {{ args }}
 
+# Link the Quest release timer's units from this checkout into the user systemd and arm the timer (RELEASING.md, "The Quest half of the train"; #1210). The units name ~/src/nevr-runtime, so any other checkout is refused
+install-quest-release-timer:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "$(readlink -f "{{ justfile_directory() }}")" != "$(readlink -f "$HOME/src/nevr-runtime")" ]; then
+        echo "install-quest-release-timer: refused: the units run $HOME/src/nevr-runtime; run this from there" >&2
+        exit 1
+    fi
+    test -f "$HOME/.config/metis/r2-evr-echo-taxi.env" || { echo "install-quest-release-timer: refused: ~/.config/metis/r2-evr-echo-taxi.env is missing" >&2; exit 1; }
+    for unit in nevr-quest-release.service nevr-quest-release-failed.service nevr-quest-release.timer; do
+        systemctl --user link "{{ justfile_directory() }}/tools/systemd/$unit"
+    done
+    systemctl --user daemon-reload
+    systemctl --user enable --now nevr-quest-release.timer
+    systemctl --user list-timers nevr-quest-release.timer --no-pager
+
 # Remove one linked worktree: every proof first, then `git worktree remove` without --force and without `git submodule deinit` (tools/remove_worktree.py; --dry-run proves and changes nothing)
 remove-worktree *args:
     python3 -I tools/remove_worktree.py {{ args }}

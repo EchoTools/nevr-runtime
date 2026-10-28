@@ -1,0 +1,10 @@
+[Unit]
+Description=nEVR Quest release: look for a new release tag every 30 minutes (#1210)
+
+[Timer]
+OnCalendar=*:0/30
+Persistent=true
+Unit=nevr-quest-release.service
+
+[Install]
+WantedBy=timers.target
