@@ -3233,6 +3233,9 @@ verify:
     # in README.md and CLAUDE.md because nothing checked. A fact about the tree
     # asserted in prose drifts silently; this is the cheapest possible enforcement.
     python3 tools/verify_doc_paths.py
+    # AGENTS.md imports the standards it makes part of its contract (#1277): an import
+    # line that is lost, fenced or moved below the first section is no longer expanded.
+    python3 tools/verify_agents_imports.py
     # N92/N105: exactly one ws_bridge. Two divergent copies would let a fix land in
     # the one that does not run (N61's matchmaker fix did). The bridge is
     # in-process (StopWebSocketBridgeListener); this guard keeps a separate
