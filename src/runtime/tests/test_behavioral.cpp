@@ -6347,6 +6347,10 @@ class RefusedLoginClientTest : public RefusedLoginTest {
   bool ServerRun() const override { return false; }
 };
 
+// The token the bridge reads as the client's sign-in (TokenAuth_GetToken, which token-auth registers in production).
+const char* g_testToken = nullptr;
+const char* TestTokenFn() { return g_testToken; }
+
 class RefusedLoginRouterClientTest : public RefusedLoginTest {
  protected:
   const char* RouterMode() const override { return "all"; }
@@ -6462,6 +6466,48 @@ TEST_F(RefusedLoginTest, AnOutageIsNotARefusalAndDoesNotStopTheServer) {
 TEST_F(RefusedLoginClientTest, AClientSaysARefusalOnceAndDoesNotGoBackForTheSameSignIn) {
   StartRefusing(401);
   ExpectClientSaysRefusalOnce(refusing_, port_);
+}
+
+// A refusal is held against the sign-in that was refused, not against the client: another sign-in is tried.
+void ExpectADifferentSignInIsTriedAgain(RefusingService& service, uint16_t port) {
+  RegisterModuleProc("TokenAuth_GetToken", reinterpret_cast<void*>(&TestTokenFn));
+  g_testToken = "sign-in-A";
+  GameSocket first;
+  ASSERT_TRUE(first.Connect(port, "/login"));
+  ASSERT_TRUE(first.WaitForClose());
+  ASSERT_TRUE(WaitForLogLines("login refused (HTTP 401)", 1));
+  g_testToken = "sign-in-B";
+  GameSocket second;
+  ASSERT_TRUE(second.Connect(port, "/login"));
+  ASSERT_TRUE(second.WaitForClose());
+  ASSERT_TRUE(WaitForLogLines("login refused (HTTP 401)", 2)) << "a new sign-in's refusal was not said";
+  EXPECT_EQ(service.Requests(), 2) << "a sign-in that was not refused before was not tried";
+  g_testToken = nullptr;
+}
+
+TEST_F(RefusedLoginClientTest, ADifferentSignInAfterARefusalIsTriedAgainAndSaidAgain) {
+  StartRefusing(401);
+  ExpectADifferentSignInIsTriedAgain(refusing_, port_);
+}
+
+TEST_F(RefusedLoginRouterClientTest, ADifferentSignInAfterARefusalIsTriedAgainAndSaidAgain) {
+  StartRefusing(401);
+  ExpectADifferentSignInIsTriedAgain(refusing_, port_);
+}
+
+TEST_F(RefusedLoginClientTest, ALoginAfterARefusedOneIsStillALoginNotAShareOfNothing) {
+  StartRefusing(401);
+  GameSocket first;
+  ASSERT_TRUE(first.Connect(port_, "/login"));
+  ASSERT_TRUE(first.WaitForClose());
+  ASSERT_TRUE(WaitForLogLines("login refused (HTTP 401)", 1));
+  GameSocket second;
+  ASSERT_TRUE(second.Connect(port_, "/login"));
+  ASSERT_TRUE(second.WaitForClose());
+  const std::vector<std::string> admitted = LogLinesContaining("game socket admitted");
+  ASSERT_EQ(admitted.size(), 2u);
+  EXPECT_NE(admitted[1].find("role=login"), std::string::npos) << admitted[1];
+  EXPECT_EQ(admitted[1].find("login-claimed"), std::string::npos) << admitted[1];
 }
 
 TEST_F(RefusedLoginRouterClientTest, AClientSaysARefusalOnceAndDoesNotGoBackForTheSameSignIn) {
