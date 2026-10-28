@@ -848,6 +848,9 @@ TEST_F(PluginSystemDependencyTest, AStandInPlantedForASystemImportAfterTheCheckI
   EXPECT_FALSE(TestLogContains("LoadLibrary failed")) << "the plugin did not load";
   EXPECT_FALSE(TestLogContains("refused"));
   EXPECT_TRUE(TestLogContains("plugin=sysimporter.dll file=sysimporter.dll 1 system dependencies loaded from the system directory first"));
+  // The fixture is not a real plugin, so it is unloaded for lacking the plugin exports; the pin goes with it.
+  EXPECT_EQ(GetModuleHandleA("sysimporter.dll"), nullptr);
+  EXPECT_EQ(GetModuleHandleA("hid.dll"), nullptr) << "the pin outlived the plugin it was taken for";
 }
 
 TEST_F(PluginSystemDependencyTest, ASystemLibraryThatCannotBePinnedRefusesTheStagedPlugin) {
