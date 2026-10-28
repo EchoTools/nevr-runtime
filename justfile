@@ -178,11 +178,12 @@ android-repack-libovr src="/mnt/games/evr/-src-evr-reconstruction/cache/quest_tr
 # `apk` is required (the store APK path). The signing key is the one persistent Quest key stored in
 # pass (tools/quest_keystore.sh): it is read into a private tmpfs file for the signing command only
 # and is never generated here. Store it once with: just import-quest-keystore <keystore>.
-android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="":
+android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="":
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(pwd)"
     apk="{{ apk }}"; shim="{{ shim }}"; plugin="{{ plugin }}"; version="{{ version }}"
+    extra_rows="{{ extra_rows }}"; patcher="{{ patcher }}"; json_include="{{ json_include }}"
     work="$root/{{ workdir }}"
     # An APK from an earlier run never outlives a run that stops: package-dev takes whatever is at this path.
     rm -f "$work/r15-repacked.apk" "$work/r15-repacked-aligned.apk" "$work/r15_nevr-sentinel_signed.apk"
@@ -191,6 +192,32 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     done
     [ -f "$apk" ]  || { echo "APK not found: $apk" >&2; exit 1; }
     [ -f "$shim" ] || { echo "shim not found (build it: just build-android): $shim" >&2; exit 1; }
+    # libr15.so is patched on the host (docs/adr/0021 section 9): the store's file goes through quest_patch_libr15 and the
+    # result takes its place in the APK. `patcher` is an already-built tool (the repack tests give a stand-in); empty builds
+    # build/quest-patcher/quest_patch_libr15 with `just quest-patcher`, which needs nlohmann/json.hpp: `json_include` (the
+    # directory holding nlohmann/json.hpp), else the first of the trees below that a build has installed it into. A clean
+    # clone has none of them: `just build` (mingw-*), `just preset=mingw-dev _vcpkg-mingw` or the Quest build installs one.
+    # `extra_rows` (docs/adr/0021 section 11) is a file of word-patch rows for a variant build: the patcher and verify-signed
+    # both get it. The public recipes (package-dev, release-quest-apk) pass none.
+    [ -z "$extra_rows" ] || [ -f "$extra_rows" ] || { echo "extra rows file not found: $extra_rows" >&2; exit 1; }
+    if [ -z "$patcher" ]; then
+        inc=""
+        json_trees=("build/{{ preset }}/vcpkg_installed/x64-mingw-static/include" build/mingw-dev/vcpkg_installed/x64-mingw-static/include build/android-dev/vcpkg_installed/arm64-android/include build/android-arm64/vcpkg_installed/arm64-android/include)
+        if [ -n "$json_include" ]; then
+            [ -f "$json_include/nlohmann/json.hpp" ] || { echo "android-repack-apk: FAIL - $json_include/nlohmann/json.hpp not found (json_include)" >&2; exit 1; }
+            inc="$json_include"
+        else
+            for tree in "${json_trees[@]}"; do
+                if [ -f "$tree/nlohmann/json.hpp" ]; then inc="$tree"; break; fi
+            done
+        fi
+        [ -n "$inc" ] || { echo "android-repack-apk: FAIL - nlohmann/json.hpp, which the libr15 patcher needs, is in none of: ${json_trees[*]}; run 'just build' with a mingw-* preset (or 'just preset=mingw-dev _vcpkg-mingw'), or pass json_include" >&2; exit 1; }
+        just quest-patcher "$inc"
+        patcher="$root/build/quest-patcher/quest_patch_libr15"
+    fi
+    [ -x "$patcher" ] || { echo "android-repack-apk: the libr15 patcher is not an executable file: $patcher" >&2; exit 1; }
+    extra=()
+    if [ -n "$extra_rows" ]; then extra=(--extra-rows "$extra_rows"); fi
     # `plugin` (docs/adr/0019-quest-plugin-loader.md): one plugin library to carry in the APK, for a headset run of the loader.
     # Empty for every release and package-dev APK. The file is lib<name>.so; `plugins:` in config.yaml names it.
     if [ -n "$plugin" ]; then
@@ -217,7 +244,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
         [ -f "$build_info" ] || { echo "build info not found (build it: just build-android): $build_info" >&2; exit 1; }
         version_source=(--build-info "$build_info")
     fi
-    rm -rf "$work/stage" "$work/orig" "$work/manifest"
+    rm -rf "$work/stage" "$work/orig" "$work/manifest" "$work/libr15-patch-report.json"
     mkdir -p "$work/stage/lib/arm64-v8a" "$work/orig" "$work/manifest"
     # 1. extract the real original loader from the store APK
     unzip -o -q "$apk" lib/arm64-v8a/libovrplatformloader.so -d "$work/orig"
@@ -228,6 +255,13 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     # 3. drop our shim in under the hijacked name
     cp "$shim" "$work/stage/lib/arm64-v8a/libovrplatformloader.so"
     stage_libs=(lib/arm64-v8a/libovrplatformloader.so lib/arm64-v8a/libovrplatformloader_orig.so)
+    # 3b. libr15.so: the store's file through the patcher (it refuses unless the file is the pinned one, and says why on
+    # stderr), staged as the file the APK will carry. It is not in stage_libs: the store stores libr15.so DEFLATED and the zip
+    # step below does the same for it, where the two libraries above go in STORED.
+    unzip -o -q "$apk" lib/arm64-v8a/libr15.so -d "$work/orig"
+    "$patcher" --stock "$work/orig/lib/arm64-v8a/libr15.so" --out "$work/stage/lib/arm64-v8a/libr15.so" \
+        --report "$work/libr15-patch-report.json" ${extra[@]+"${extra[@]}"}
+    [ -s "$work/stage/lib/arm64-v8a/libr15.so" ] || { echo "the libr15 patcher wrote no libr15.so: $patcher" >&2; exit 1; }
     if [ -n "$plugin" ]; then
         cp "$plugin" "$work/stage/lib/arm64-v8a/$(basename "$plugin")"
         stage_libs+=("lib/arm64-v8a/$(basename "$plugin")")
@@ -243,6 +277,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     cp -f "$apk" "$unsigned"
     zip -q -d "$unsigned" 'META-INF/*.RSA' 'META-INF/*.SF' 'META-INF/*.MF' || true
     ( cd "$work/stage" && zip -q -0 -X "$unsigned" "${stage_libs[@]}" )
+    ( cd "$work/stage" && zip -q -X "$unsigned" lib/arm64-v8a/libr15.so )
     # 4b. versionCode: extract the compiled manifest, set the code the build's version gives (the tool refuses
     # unless the field is exactly where Android reads it, and unless the shim carries the header's version),
     # and put the manifest back. A 4-byte write: the entry keeps every other byte.
@@ -269,9 +304,11 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     echo "== renamed original  lib/arm64-v8a/libovrplatformloader_orig.so =="
     readelf -d "$work/verify/lib/arm64-v8a/libovrplatformloader_orig.so" | grep -i soname
     echo ""
-    # Every library of the store APK (the loader aside, which the shim replaces) is in the SIGNED apk with its bytes, and
-    # every staged library is there as staged.
-    python3 -I tools/quest_repack_libs.py verify-signed --source "$apk" --signed "$signed" --stage "$work/stage"
+    # Every library of the store APK (the loader aside, which the shim replaces) is in the SIGNED apk with its bytes, libr15.so
+    # being the patcher's output for the store's (the tool runs again here, on its own copy; its three digests are printed),
+    # and every staged library is there as staged.
+    python3 -I tools/quest_repack_libs.py verify-signed --source "$apk" --signed "$signed" --stage "$work/stage" \
+        --patcher "$patcher" --scratch "$work" ${extra[@]+"${extra[@]}"}
     done_ok=1
     echo "Signed sideload APK ready -> $signed"
     echo "Install with: just quest-install"
@@ -358,7 +395,8 @@ _quest-apk store_apk:
 # the release's own asset (nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so): it is downloaded (tools/quest_release_loader.py
 # fetch: the sha256 GitHub recorded for it, then `gh attestation verify`), checked to carry the tag's version and commit
 # (tools/package_release.py quest-library), repacked, and the signed APK's loader is compared with the asset's sha256 before
-# the APK is copied out. Nothing is compiled, so the asset and the APK's loader are one file. `gh` is $GH_BIN (default gh).
+# the APK is copied out. The loader is not compiled, so the asset and the APK's loader are one file (the repack also builds the
+# host libr15 patcher, `just quest-patcher`, and patches the store's libr15.so with it, docs/adr/0021 section 9). `gh` is $GH_BIN (default gh).
 # Run it from a clone whose HEAD is the tag's commit and that passes `tools/release_preflight.py --tag <tag>` (HEAD is the
 # tag's commit, which need not be origin's tip: an older tag builds after main has moved on; the tree is clean and origin has
 # the tag at that commit); the release (a draft is enough) must carry the asset. Writes
