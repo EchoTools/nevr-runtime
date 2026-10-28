@@ -11,9 +11,11 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
+#include "hook_log.h"
 #include "permission_wait_hook.h"
 #include "quest/tests/test_check.h"
 
@@ -75,6 +77,44 @@ void Reset(int denyChecks) {
   pw::CheckThunk::Reset();
   *pw::RequestThunk::OriginalOut() = reinterpret_cast<void*>(&RealRequestPermissions);
   *pw::CheckThunk::OriginalOut() = reinterpret_cast<void*>(&ModelCheck);
+}
+
+// ---- the log and the requester (#947) ---------------------------------------------------------------------------
+
+std::vector<std::string> g_lines;
+void Sink(sentinel::LogLevel, const char* line) { g_lines.emplace_back(line); }
+std::vector<std::string> Lines(const char* event) {
+  const std::string needle = std::string("\"event\":\"") + event + "\"";
+  std::vector<std::string> out;
+  for (const std::string& l : g_lines) {
+    if (l.find(needle) != std::string::npos) out.push_back(l);
+  }
+  return out;
+}
+bool Has(const std::string& line, const char* text) { return line.find(text) != std::string::npos; }
+
+const char* g_requesterResult = "requested";
+const char* const* g_requesterNames = nullptr;
+std::uint64_t g_requesterCount = 0;
+int g_requesterCode = -1;
+int g_requesterCalls = 0;
+
+const char* Requester(const char* const* names, std::uint64_t count, int requestCode) noexcept {
+  ++g_requesterCalls;
+  g_requesterNames = names;
+  g_requesterCount = count;
+  g_requesterCode = requestCode;
+  g_events.push_back("ours");
+  return g_requesterResult;
+}
+
+void ResetRequester(const char* result) {
+  g_lines.clear();
+  g_requesterResult = result;
+  g_requesterNames = nullptr;
+  g_requesterCount = 0;
+  g_requesterCode = -1;
+  g_requesterCalls = 0;
 }
 
 long long ElapsedMs(std::chrono::steady_clock::time_point since) {
@@ -371,7 +411,82 @@ void TheProductionCapIsWhatAPlayerWaits() {
   QCHECK(pw::kPollMs <= 500);
 }
 
+// #947: the game's RequestPermissions passes no request code, so the request is made through the requester with
+// kRequestCode, and the game's function is not called.
+void WithARequesterTheRequestCarriesTheHooksCodeAndTheGamesCallIsNotMade() {
+  Reset(0);
+  ResetRequester("requested");
+  pw::ArmForTest(&ModelCheck, 5, 5000);
+  pw::SetRequester(&Requester);
+  RequestEntry()(kBoot, 3);
+  QCHECK(g_requesterCalls == 1);
+  QCHECK(g_requesterNames == kBoot && g_requesterCount == 3);  // the game's own arguments
+  QCHECK(g_requesterCode == pw::kRequestCode);
+  QCHECK(g_namesSeen == nullptr);                              // the game's function never ran
+  QCHECK(!g_events.empty() && g_events[0] == "ours");
+  for (const std::string& e : g_events) QCHECK(e != "request");
+  QCHECK(g_checkCalls == 2);                                   // the boot wait still ran after the request
+  QCHECK(pw::CurrentCounts().requests == 1 && pw::CurrentCounts().game_requests == 0);
+  const std::vector<std::string> lines = Lines("permission_request");
+  QCHECK(lines.size() == 1);
+  if (lines.size() == 1) {
+    QCHECK(Has(lines[0], "\"result\":\"requested\""));
+    QCHECK(Has(lines[0], "\"path\":\"ours\""));
+    QCHECK(Has(lines[0], "\"permissions\":3"));
+    QCHECK(Has(lines[0], "\"request_code\":1"));
+  }
+}
+
+void ARequesterThatCouldNotAskLeavesTheRequestToTheGame() {
+  Reset(0);
+  ResetRequester("no_app");
+  pw::ArmForTest(&ModelCheck, 5, 5000);
+  pw::SetRequester(&Requester);
+  RequestEntry()(kBoot, 3);
+  QCHECK(g_requesterCalls == 1);
+  QCHECK(g_namesSeen == kBoot && g_countSeen == 3);  // the game's call, with its own arguments
+  QCHECK(g_events.size() >= 2 && g_events[0] == "ours" && g_events[1] == "request");
+  QCHECK(pw::CurrentCounts().requests == 1 && pw::CurrentCounts().game_requests == 1);
+  const std::vector<std::string> lines = Lines("permission_request");
+  QCHECK(lines.size() == 1);
+  if (lines.size() == 1) {
+    QCHECK(Has(lines[0], "\"result\":\"no_app\""));
+    QCHECK(Has(lines[0], "\"path\":\"game\""));
+    QCHECK(!Has(lines[0], "request_code"));  // the game's call carries no code of ours
+  }
+}
+
+void WithoutARequesterTheGameAsksAndTheLineSaysSo() {
+  Reset(0);
+  ResetRequester("requested");
+  pw::ArmForTest(&ModelCheck, 5, 5000);
+  RequestEntry()(kBoot, 3);
+  QCHECK(g_requesterCalls == 0);
+  QCHECK(g_namesSeen == kBoot);
+  const std::vector<std::string> lines = Lines("permission_request");
+  QCHECK(lines.size() == 1 && Has(lines[0], "\"result\":\"no_requester\"") && Has(lines[0], "\"path\":\"game\""));
+}
+
+void EveryRequestGoesThroughTheRequesterAndOnlyTheFirstFewAreLogged() {
+  Reset(0);
+  ResetRequester("requested");
+  pw::ArmForTest(&ModelCheck, 5, 5000);
+  pw::SetRequester(&Requester);
+  const char* const script[1] = {kMic};
+  for (unsigned i = 0; i < pw::kMaxLoggedRequests + 3; ++i) RequestEntry()(i == 0 ? kBoot : script, i == 0 ? 3 : 1);
+  QCHECK(g_requesterCalls == static_cast<int>(pw::kMaxLoggedRequests + 3));  // the script nodes' requests too
+  QCHECK(g_requesterCode == pw::kRequestCode);
+  QCHECK(g_namesSeen == nullptr);
+  QCHECK(Lines("permission_request").size() == pw::kMaxLoggedRequests);
+  QCHECK(pw::CurrentCounts().requests == pw::kMaxLoggedRequests + 3);
+}
+
+void TheRequestCodeIsOneTheActivityAccepts() {
+  QCHECK(pw::kRequestCode >= 0);  // Activity.requestPermissions throws for a negative code
+}
+
 int main() {
+  sentinel::SetLogSink(&Sink);
   TheProductionCapIsWhatAPlayerWaits();
   ARequestWithoutTheHookIsJustTheGamesCall();
   TheBootRequestWaitsOnTheCallersThreadUntilTheStoragePermissionsAreGranted();
@@ -396,6 +511,12 @@ int main() {
   TheStepRunsOnceWhenTheCheckCameFirstAndARequestFollows();
   WithoutTheStepTheCheckIsTheGamesAnswerAlone();
   TheCheckThunkWithoutTheHookIsTheGamesCall();
+  WithARequesterTheRequestCarriesTheHooksCodeAndTheGamesCallIsNotMade();
+  ARequesterThatCouldNotAskLeavesTheRequestToTheGame();
+  WithoutARequesterTheGameAsksAndTheLineSaysSo();
+  EveryRequestGoesThroughTheRequesterAndOnlyTheFirstFewAreLogged();
+  TheRequestCodeIsOneTheActivityAccepts();
+  sentinel::SetLogSink(nullptr);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "permission_wait_hook_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
