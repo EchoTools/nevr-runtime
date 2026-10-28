@@ -21,6 +21,7 @@
 
 #include "arm64_reloc.h"
 #include "mini_test.h"
+#include "quest/patch/libr15_patch_table.h"
 
 namespace {
 
@@ -884,6 +885,37 @@ TEST(TheQuestSetTextLeadingCbzRelocatesInAThreeWordWindow) {
     CheckWindowEquivalent("SetText three-word window", window, c);
   }
   g_opaque.clear();
+}
+
+TEST(EveryInlineRowOfThePatchTableRelocatesInItsThreeWordWindow) {
+  // The real stock words of each inline-hook row of src/quest/patch/libr15_patch_table.h, at the row's own pinned
+  // vaddr (a real address, so a PC-relative word would resolve against it), original window against the trampoline.
+  std::size_t inlineRows = 0;
+  for (std::size_t r = 0; r < nevr_quest::patch::kRowCount; ++r) {
+    const nevr_quest::patch::Row& row = nevr_quest::patch::kRows[r];
+    if (row.kind != nevr_quest::patch::RowKind::kInlineHook) continue;
+    ++inlineRows;
+    CHECK_EQ(row.sites[0].wordCount, static_cast<std::uint8_t>(3));
+    std::uint32_t window[3] = {row.sites[0].words[0], row.sites[0].words[1], row.sites[0].words[2]};
+    Trampoline tr;
+    RelocRefusal refusal{};
+    if (!BuildTrampoline(row.sites[0].Vaddr(), window, tr, refusal)) {
+      std::fprintf(stderr, "  %s: refused (%s)\n", row.id, refusal.reason);
+      CHECK(false);
+      continue;
+    }
+    g_opaque.clear();
+    for (const std::uint32_t w : window) {
+      if (sentinel::ClassifyPcRel(w) == PcRelKind::kNone) g_opaque.push_back(w);
+    }
+    for (unsigned seed = 0; seed < 3; ++seed) {
+      Cpu c = RandomCpu(500 + seed);
+      c.x[3] = seed;  // menu_version.set_text's CBZ tests x3: take it both ways
+      CheckWindowEquivalentAt(row.sites[0].Vaddr(), row.id, window, c);
+    }
+    g_opaque.clear();
+  }
+  CHECK_EQ(inlineRows, static_cast<std::size_t>(6));
 }
 
 TEST(ThreeWordWindowsWithEveryPcRelativeKindRunLikeTheOriginal) {
