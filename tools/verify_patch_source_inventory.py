@@ -31,6 +31,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/early_quit_lockout.cpp",
     "patch/evrp_package.cpp",
     "patch/headless_graphics.cpp",
+    "patch/invite_answer_apply.cpp",
     "patch/invite_choice_hook.cpp",
     "patch/invite_service.cpp",
     "patch/invite_transport_curl.cpp",
@@ -51,7 +52,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/ui_texture_mips.cpp",
     "patch/xpid_patch.cpp",
 )
-EXPECTED_PATCH_SOURCE_COUNT = 30
+EXPECTED_PATCH_SOURCE_COUNT = 31
 
 
 class InventoryError(Exception):

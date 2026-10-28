@@ -641,8 +641,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   }
 
   // #906, #1156, ADR 0017: observe the CREATE GAME / JOIN VIA CODE wizard's click metric. Client only. A typed code is
-  // posted to the game service when network.invite_codes is on (the service below); a create is only planned until the
-  // menu can show its result. The hook forwards every submit unchanged.
+  // posted to the game service when network.invite_codes is on (the service below), and so is a create; the answer is
+  // written into the menu by nevr_invite_apply::OnFrame (frame/tick.cpp). The hook forwards every submit unchanged.
   if (!g_isServer) {
     nevr_invite_service::Settings invite;
     invite.invite_codes = nevr_invite::ParseSwitch(NevrCfgGetFlat("nevr_invite_codes"));

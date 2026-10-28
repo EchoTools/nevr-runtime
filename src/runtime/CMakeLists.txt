@@ -88,6 +88,7 @@ set(PATCHES_SOURCES
     "patch/invite_wizard_hook.cpp"
     "patch/invite_transport_curl.cpp"
     "patch/invite_service.cpp"
+    "patch/invite_answer_apply.cpp"
     "patch/early_quit_lockout.cpp"
     "patch/arena_public_clock.cpp"
     "patch/lobby_full_backoff.cpp"
@@ -189,6 +190,8 @@ set(PATCHES_HEADERS
     "compat/socket_role.h"
     "patch/invite_wizard.h"
     "patch/invite_worker.h"
+    "patch/invite_answer_apply.h"
+    "patch/invite_answer_text.h"
     "patch/invite_transport.h"
     "patch/invite_transport_curl.h"
     "patch/invite_service.h"
@@ -1270,6 +1273,13 @@ if(BUILD_TESTING)
     target_include_directories(test_invite_worker PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_invite_worker PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_invite_worker DISCOVERY_MODE PRE_TEST)
+
+    # #1278, docs/adr/0017: what the service's answer becomes in the wizard's text (patch/invite_answer_text.h): header only, pure.
+    add_executable(test_invite_answer_text tests/test_invite_answer_text.cpp)
+    set_source_files_properties(tests/test_invite_answer_text.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_invite_answer_text PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_invite_answer_text PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_invite_answer_text DISCOVERY_MODE PRE_TEST)
 
     # #1156, docs/adr/0017: the invite transport (patch/invite_transport.h, patch/invite_transport_curl.cpp): libcurl against a
     # scripted loopback server.
