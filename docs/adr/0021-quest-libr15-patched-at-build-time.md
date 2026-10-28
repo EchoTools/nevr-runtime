@@ -8,7 +8,7 @@ Status: proposed (#1132). Not implemented. The "Prediction" section is what the 
 The sentinel (`libovrplatformloader.so`, our shim) changes libr15's behaviour in two ways that GOT hooks cannot reach, and
 both write libr15's code at run time:
 
-- inline hooks (`src/quest/sentinel/inline_hook.cpp`): the lobby-full join, failure and success handlers, the texture
+- inline hooks (`git show 9c7c29fccfc38858f797bb0f8da29e32c1844735:src/quest/sentinel/inline_hook.cpp`): the lobby-full join, failure and success handlers, the texture
   `CGTextureResource::Attach`, and the splash-skip widget update. Each overwrites the
   first 16 bytes of a function (`LDR x16,#8; BR x16; .quad detour`) after `mprotect(page, RW)` and puts the page back with
   `mprotect(page, RX)`;
@@ -139,7 +139,7 @@ The trampoline's address is `*originalOut` of the row's `CallbackThunk`, as now.
 `Attach(image)` is the sentinel's first libr15 step. It verifies the image (section 7), builds every row's trampoline, and
 stores each trampoline's address in its row's slot. From that moment every patched function behaves exactly as stock. A hook's
 install (`InstallInlineThunk`) is reduced to `__atomic_store_n(slot, detour, __ATOMIC_RELEASE)`: no `mprotect`, no page write.
-A hook that is refused, or not wanted, stays pass-through. `inline_hook.cpp`'s write, rollback and restore code is deleted.
+A hook that is refused, or not wanted, stays pass-through. The old inline hook's write, rollback and restore code (`git show 9c7c29fccfc38858f797bb0f8da29e32c1844735:src/quest/sentinel/inline_hook.cpp`) is deleted.
 
 If a trampoline cannot be made, the slot would stay null and the first call would fault, so the sentinel ends the process
 with a named reason (`libr15_patch_trampoline_failed`) through the existing `EndWithExitCode` path (ADR 0020), after logging
@@ -390,7 +390,7 @@ the Quest 3 does not show is a defect of the patched file for that OS.
   descriptor is rewritten. Both edits keep every offset and the segment order; neither has been measured here.
 - That anonymous executable pages stay allowed, and that code runs from them. What the captures show is the creation: the
   sentinel maps a page `PROT_READ|PROT_WRITE`, copies the displaced words in, and `mprotect`s it `PROT_READ|PROT_EXEC`
-  (`inline_hook.cpp`: the `mmap`, the `mprotect` with the `trampoline_rx` failure path, then the page write that fails); the
+  (`git show 9c7c29fccfc38858f797bb0f8da29e32c1844735:src/quest/sentinel/inline_hook.cpp`: the `mmap`, the `mprotect` with the `trampoline_rx` failure path, then the page write that fails); the
   `trampoline` field of the `restore_protect_failed` line is logged only when both succeeded.
   Quest 3: `trampoline` `0x0000007b8d527000` (Context).
   Quest 2 (the run of 2026-10-28, v5.16.1 first launch, 07:09 to 07:41 local time): the sentinel log holds six launches between
@@ -407,7 +407,7 @@ the Quest 3 does not show is a defect of the patched file for that OS.
 - Whether shipping a modified copy of the game's library changes anything about distributing the APK, which already carries the
   unmodified copy. That is not an engineering question and is flagged for the owner.
 - The sentinel's constructor runs before libr15's initialisers (a dependency's constructors run first), so `Attach` fills the slots
-  before the game can call a patched function. That is the obligation `inline_hook.h` states today, and it is not measured here.
+  before the game can call a patched function. That is the obligation `git show 9c7c29fccfc38858f797bb0f8da29e32c1844735:src/quest/sentinel/inline_hook.h` stated, and it is not measured here.
 
 ## Alternatives considered
 

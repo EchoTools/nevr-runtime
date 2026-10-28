@@ -29,7 +29,7 @@
  *      refused or not wanted stays pass-through. Verified() is then true and one `libr15_patch` line says so.
  *
  * Activation (a hook's install) is one atomic store of the detour into the row's slot. It is reached only through
- * sentinel::InstallRowThunk (hook_install.h), which takes a CallbackThunk, as InstallInlineThunk does.
+ * sentinel::InstallRowThunk (hook_install.h), which takes a CallbackThunk.
  *
  * Built with -fno-exceptions, like the rest of the hook path. Nothing here has a namespace-scope constructor.
  */
@@ -101,6 +101,15 @@ AttachResult Attach(const AttachOptions& options);
 bool Verified() noexcept;
 // The patched build ID (40 lowercase hex characters) that Attach verified, or nullptr when it did not.
 const char* VerifiedBuildId() noexcept;
+
+// The run-time address of the patched function a row names (base + the row's first site), or 0 when Attach has not
+// verified this process's libr15 or the row is unknown. A hook file logs it as the `target` of its install line.
+std::uintptr_t RowSiteAddress(const char* rowId) noexcept;
+
+// The address of the credits row's 8-byte slot (the data the two patched ADRP+LDR pairs load the credits blob's address
+// from, ADR section 8), or nullptr unless Attach verified this process's libr15. Attach stored base + the game's own blob
+// address there; credits_text replaces it with one atomic store.
+void** CreditsSlot() noexcept;
 
 enum class ActivateStatus : std::uint8_t {
   kOk,

@@ -330,6 +330,40 @@ TEST(KnownEncodings) {
   CHECK_EQ(EncBCond(1, 8), 0x54000041u);             // B.NE #8
 }
 
+TEST(ClassificationOfLiteralWords) {
+  // Literal words with zero offsets, so the classifier is pinned to the architecture's encodings and not to the encoders
+  // in this file. Each pc-relative word depends on its own address; each other word is position independent.
+  const std::uint32_t pcRelative[] = {
+      0x14000000u,  // B #0
+      0x94000000u,  // BL #0
+      0x54000000u,  // B.EQ #0
+      0xB4000000u,  // CBZ x0, #0
+      0x34000000u,  // CBZ w0, #0
+      0x36000000u,  // TBZ w0, #0, #0
+      0x37000000u,  // TBNZ w0, #0, #0
+      0x10000000u,  // ADR x0, #0
+      0x90000000u,  // ADRP x0, #0
+      0x54000010u,  // BC.cond #0
+      0x58000000u,  // LDR x0, #0 (literal)
+      0x98000000u,  // LDRSW x0, #0 (literal)
+      0x1C000000u,  // LDR s0, #0 (literal, SIMD)
+  };
+  for (std::uint32_t w : pcRelative) CHECK(sentinel::ClassifyPcRel(w) != PcRelKind::kNone);
+  const std::uint32_t positionIndependent[] = {
+      0xA9BF7BFDu,  // STP x29, x30, [sp, #-16]!
+      0x910003FDu,  // MOV x29, sp
+      0xD10083FFu,  // SUB sp, sp, #32
+      0xF90013F3u,  // STR x19, [sp, #32]
+      0x91000400u,  // ADD x0, x0, #1
+      0xF9400020u,  // LDR x0, [x1]
+      0x39400000u,  // LDRB w0, [x1]
+      0xD65F03C0u,  // RET
+      0xD61F0200u,  // BR x16
+      0xD503201Fu,  // NOP
+  };
+  for (std::uint32_t w : positionIndependent) CHECK(sentinel::ClassifyPcRel(w) == PcRelKind::kNone);
+}
+
 TEST(ClassificationAndNames) {
   struct Row { std::uint32_t insn; PcRelKind kind; const char* name; };
   const Row rows[] = {

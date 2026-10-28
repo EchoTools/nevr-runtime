@@ -1013,11 +1013,6 @@ test-quest-shared: _vcpkg-quest-host
         src/quest/tests/quest_config_test.cpp "$yaml_lib" \
         -o "$out/quest_config_test"
     "$out/quest_config_test"
-    # #970: the CREDITS patch's ADRP/ADD encoding against the pinned libr15 words (header only, no game image).
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/tests \
-        src/quest/tests/credits_text_test.cpp \
-        -o "$out/credits_text_test"
-    "$out/credits_text_test"
     # The hardware dump (#335): field schema, procfs/sysfs readers against a fake root, the os section's
     # never-omitted fields, and the record table (also under ThreadSanitizer: the libr15 hooks write it from
     # game threads while the dump thread reads it).
@@ -1240,6 +1235,12 @@ test-quest-hooks json_include="":
     out="build/quest-hooks-host"
     mkdir -p "$out"
     cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    # The patched libr15's identity (sentinel::pinned::LibR15PatchedBuildId, docs/adr/0021 section 7): a link of any
+    # translation unit that calls a pinned_targets.h factory takes these three objects.
+    for src in sentinel/libr15_identity.cpp patch/libr15_patch_identity.cpp data/sha256.cpp; do
+        "${cxx[@]}" -fno-exceptions -c "src/quest/$src" -o "$out/id_$(basename "$src" .cpp).o"
+    done
+    ident=("$out/id_libr15_identity.o" "$out/id_libr15_patch_identity.o" "$out/id_sha256.o")
     # Type-level gates: the control compiles; each snippet that breaks one rule must fail to
     # compile, with the message that names the rule (not for some unrelated reason).
     snip=src/quest/tests/compile_fail
@@ -1282,14 +1283,6 @@ test-quest-hooks json_include="":
         src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp "$out/thunk_exception_fixture.o" \
         -o "$out/got_hook_test" -ldl -pthread
     timeout 300 "$out/got_hook_test" "$out"  # a hang is a failure, not a stuck gate
-    # The inline (trampoline) backend (inline_hook.h): the arm64 encodings, the prologue, page and
-    # registry refusals, the trampoline's bytes and the thunk entry point. Host bytes only; the detour
-    # runs on a device, not here.
-    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/inline_hook_test.cpp \
-        src/quest/sentinel/inline_hook.cpp src/quest/sentinel/arm64_reloc.cpp src/quest/sentinel/got_hook.cpp \
-        src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
-        -o "$out/inline_hook_test" -ldl -pthread
-    timeout 120 "$out/inline_hook_test"
     # The sentinel's run-time half of the libr15 build-time patch (docs/adr/0021 test 4): Attach on the shipped patcher's
     # output for a synthetic stock libr15 at the table's real addresses, laid out in host memory (text pages r-x); every
     # refusal of section 7, each row check, the trampolines, the activation store, and a protection seam that must see no
@@ -1307,10 +1300,24 @@ test-quest-hooks json_include="":
     done
     "${attach[@]}" -fno-exceptions src/quest/tests/libr15_attach_test.cpp \
         "$out/attach_libr15_patcher.o" "$out/attach_libr15_patch_identity.o" "$out/attach_sha256.o" \
-        src/quest/sentinel/libr15_attach.cpp src/quest/sentinel/process_end_hook.cpp src/quest/sentinel/arm64_reloc.cpp \
+        "$out/id_libr15_identity.o" src/quest/sentinel/libr15_attach.cpp src/quest/sentinel/process_end_hook.cpp src/quest/sentinel/arm64_reloc.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/libr15_attach_test" -ldl
     timeout 300 "$out/libr15_attach_test" src/quest/tests/fixtures
+    # The three feature files that take their hooks through rows of the patched libr15 (docs/adr/0021 sections 5 and 7, test 6),
+    # and the credits install (section 8), each run against the same Attach-verified synthetic image (libr15_live_image.h):
+    # the slots the installs wrote, the log lines they emitted, the refusals that leave a row pass-through, and no protection
+    # change on the image. The feature files and the sentinel's attach half are built without exceptions, as on the device.
+    attach_objs=("$out/attach_libr15_patcher.o" "$out/attach_libr15_patch_identity.o" "$out/attach_sha256.o" "$out/id_libr15_identity.o")
+    attach_sentinel=(src/quest/sentinel/libr15_attach.cpp src/quest/sentinel/process_end_hook.cpp src/quest/sentinel/arm64_reloc.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp)
+    "${attach[@]}" -fno-exceptions -Isrc/quest/tests src/quest/tests/row_hooks_install_test.cpp \
+        src/quest/sentinel/splash_skip_hook.cpp src/quest/sentinel/ui_texture_mips.cpp src/quest/social/lobby_full_hooks.cpp \
+        "${attach_objs[@]}" "${attach_sentinel[@]}" -o "$out/row_hooks_install_test" -ldl
+    timeout 300 "$out/row_hooks_install_test"
+    "${attach[@]}" -fno-exceptions -Isrc/quest/tests src/quest/tests/credits_text_test.cpp src/quest/sentinel/credits_text.cpp \
+        "${attach_objs[@]}" "${attach_sentinel[@]}" -o "$out/credits_text_test" -ldl
+    timeout 300 "$out/credits_text_test"
     # The PC-relative relocator (arm64_reloc.h): each kind decoded and then run, original window against the
     # relocated trampoline far away, on a small A64 interpreter. Pure; no device.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/arm64_reloc_test.cpp \
@@ -1324,14 +1331,14 @@ test-quest-hooks json_include="":
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/login_prompt_hook_test.cpp \
         src/quest/sentinel/login_prompt_hook.cpp src/quest/auth/prompt_board.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
-        -o "$out/login_prompt_hook_test" -ldl
+        "${ident[@]}" -o "$out/login_prompt_hook_test" -ldl
     timeout 120 "$out/login_prompt_hook_test"
     # The login-failed page's title (#1137): the real handler and prompt board driven through the thunk entry, against a
     # stand-in for the script library's string_t constructor.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/login_title_hook_test.cpp \
         src/quest/sentinel/login_title_hook.cpp src/quest/auth/prompt_board.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
-        -o "$out/login_title_hook_test" -ldl
+        "${ident[@]}" -o "$out/login_title_hook_test" -ldl
     timeout 120 "$out/login_title_hook_test"
     # The whole no-credentials chain (#581): the real prerequisite handlers and the real prompt hook together,
     # token auth awaiting the player -> the answers delivered -> the game's local failure -> the code written.
@@ -1343,14 +1350,14 @@ test-quest-hooks json_include="":
         src/quest/sentinel/login_prompt_hook.cpp src/quest/auth/prompt_board.cpp \
         "$out/chain_login_prerequisites.o" "$out/chain_login_standin.o" \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
-        -o "$out/login_signin_code_chain_test" -ldl
+        "${ident[@]}" -o "$out/login_signin_code_chain_test" -ldl
     timeout 120 "$out/login_signin_code_chain_test"
     # The OBB-mount skip (#319): the real handlers driven through the thunk entries, against a model of the
     # game's callback and wait loop.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/obb_skip_hook_test.cpp \
         src/quest/sentinel/obb_skip_hook.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
-        -o "$out/obb_skip_hook_test" -ldl
+        "${ident[@]}" -o "$out/obb_skip_hook_test" -ldl
     timeout 120 "$out/obb_skip_hook_test"
     # The process ends when the game's android_main returns (#621): the real handler through the thunk entry,
     # and a real process ended under a writer that saves the way the Quest code saves.
@@ -1361,28 +1368,28 @@ test-quest-hooks json_include="":
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/process_end_hook_test.cpp \
         src/quest/sentinel/process_end_hook.cpp src/quest/auth/atomic_write.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
-        -o "$out/process_end_hook_test" -ldl
+        "${ident[@]}" -o "$out/process_end_hook_test" -ldl
     timeout 300 "$out/process_end_hook_test" "$out"
     # The game waits for the storage permission it just asked for (#640): the real handler through the thunk entry,
     # against a stand-in for RequestPermissions and a model of CheckPermission.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/permission_wait_hook_test.cpp \
         src/quest/sentinel/permission_wait_hook.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
-        -o "$out/permission_wait_hook_test" -ldl
+        "${ident[@]}" -o "$out/permission_wait_hook_test" -ldl
     timeout 120 "$out/permission_wait_hook_test"
     # The Vulkan extension window (#868): the real wrapper chain through the thunk entries against a fake driver, with the
     # Quest 3 driver's 137-entry list as the central case.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/vk_ext_window_test.cpp \
         src/quest/sentinel/vk_ext_window.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
-        -o "$out/vk_ext_window_test" -ldl
+        "${ident[@]}" -o "$out/vk_ext_window_test" -ldl
     timeout 120 "$out/vk_ext_window_test"
     # The OS build floor (#945): the real handler through the thunk entry against a stand-in for CSysInfo::OSBuildVersion,
     # a number below the floor, above it, none, and an unknown floor.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/os_build_gate_hook_test.cpp \
         src/quest/sentinel/os_build_gate_hook.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
-        -o "$out/os_build_gate_hook_test" -ldl
+        "${ident[@]}" -o "$out/os_build_gate_hook_test" -ldl
     timeout 120 "$out/os_build_gate_hook_test"
     # The Quest main menu shows the runtime version (#747): the real handler through the thunk entry against a stand-in for
     # CCanvasUICS::SetText (the lobby_version item replaced, every other item, an empty text and a null text left alone).
@@ -1392,14 +1399,14 @@ test-quest-hooks json_include="":
     "${cxx[@]}" -I"$out/menu_version_gen" -fno-exceptions -pthread src/quest/tests/menu_version_label_test.cpp \
         src/quest/social/menu_version_label.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
-        -o "$out/menu_version_label_test" -ldl
+        "${ident[@]}" -o "$out/menu_version_label_test" -ldl
     timeout 120 "$out/menu_version_label_test"
     # The texture-quality hook (#943): the real handler through the thunk entry against a stand-in for vrapi_GetSystemPropertyInt,
     # every level's eye size, the pass-through of every other id, the latch, `stock`, and the shared slot's observer.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/texture_quality_hook_test.cpp \
         src/quest/sentinel/texture_quality_hook.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
-        -o "$out/texture_quality_hook_test" -ldl
+        "${ident[@]}" -o "$out/texture_quality_hook_test" -ldl
     timeout 120 "$out/texture_quality_hook_test"
     # The hardware dump on the shared vrapi_GetSystemPropertyInt slot (#943): owned by the texture-quality hook, the dump
     # installs nothing there and records the runtime's own answers through the observer.
@@ -1407,21 +1414,21 @@ test-quest-hooks json_include="":
         src/quest/sentinel/texture_quality_hook.cpp src/quest/diag/hwdump_install.cpp \
         src/quest/diag/hwdump_handlers.cpp src/quest/diag/hwdump_records.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
-        -o "$out/hwdump_share_test" -ldl
+        "${ident[@]}" -o "$out/hwdump_share_test" -ldl
     timeout 120 "$out/hwdump_share_test"
     # The log-only resource request hook (#871): the real handler through the thunk entry against a stand-in for
     # FillResourceFileRequest that fills a request the way the pinned function does.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/resource_request_hook_test.cpp \
         src/quest/sentinel/resource_request_hook.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
-        -o "$out/resource_request_hook_test" -ldl
+        "${ident[@]}" -o "$out/resource_request_hook_test" -ldl
     timeout 120 "$out/resource_request_hook_test"
     # The Quest main-menu cards (#966): the real handler through the thunk entry against a stand-in callback block, a
     # CAllocator with the slots FreeResource and the streaming worker use, and the game's callback.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/menu_cards_hook_test.cpp \
         src/quest/sentinel/menu_cards_hook.cpp src/quest/data/sha256.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
-        -o "$out/menu_cards_hook_test" -ldl
+        "${ident[@]:0:2}" -o "$out/menu_cards_hook_test" -ldl
     timeout 120 "$out/menu_cards_hook_test"
     # The toast presenter against a fake JNI (#807): a Java exception thrown at each JNI call in turn, null or not, is
     # never left pending. jni.h is the NDK's own; the recipe stops when it is absent.
@@ -1516,7 +1523,8 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
     echo "80c36268dbefd9f20ccae0aa35d3efe6f6480a8179f9f46709e71e33e0f110e4  $out/lib/lib/arm64-v8a/lib7f2363b8976491aa.so" | sha256sum -c -
     g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isrc/quest/sentinel \
         src/quest/tests/got_pinned_test.cpp src/quest/sentinel/got_hook.cpp \
-        src/quest/sentinel/hook_log.cpp -o "$out/got_pinned_test" -ldl
+        src/quest/sentinel/hook_log.cpp src/quest/sentinel/libr15_identity.cpp src/quest/patch/libr15_patch_identity.cpp \
+        src/quest/data/sha256.cpp -o "$out/got_pinned_test" -ldl
     "$out/got_pinned_test" "$out/lib/lib/arm64-v8a/libr15.so" "$out/lib/lib/arm64-v8a/libpnsradmatchmaking.so" \
         "$out/lib/lib/arm64-v8a/libpnsovr.so" "$out/lib/lib/arm64-v8a/lib7f2363b8976491aa.so"
     # #411: every ovr_* import the message pump and the login callbacks can reach is hooked or guarded, so a
@@ -1651,6 +1659,12 @@ test-quest-social:
     "${off[@]}" -c src/quest/social/social_game_calls.cpp -o "$out/social_game_calls.o"
     "${off[@]}" -c src/quest/social/social_install.cpp -o "$out/social_install.o"
     "${off[@]}" -c src/quest/social/social_invite_gate.cpp -o "$out/social_invite_gate.o"
+    # The patched libr15's identity (sentinel::pinned::LibR15PatchedBuildId, docs/adr/0021 section 7), which the hook
+    # translation units above call through the pinned_targets.h factories.
+    for src in sentinel/libr15_identity.cpp patch/libr15_patch_identity.cpp data/sha256.cpp; do
+        "${off[@]}" -c "src/quest/$src" -o "$out/id_$(basename "$src" .cpp).o"
+    done
+    ident=("$out/id_libr15_identity.o" "$out/id_libr15_patch_identity.o" "$out/id_sha256.o")
     # The friend-name decoder, as the Quest build compiles it: no static registration (the sentinel carries no
     # dynamic initializer; InstallSocialHook registers it).
     "${on[@]}" -DNEVR_SOCIAL_NAMES_NO_STATIC_REGISTRATION -c src/runtime/compat/social_names.cpp -o "$out/social_names.o"
@@ -1671,7 +1685,7 @@ test-quest-social:
     "$out/social_names_test"
     "${off[@]}" src/quest/tests/social_install_test.cpp "$out/social_install.o" "$out/social_facade.o" \
         "$out/social_game_calls.o" "$out/got_hook.o" "$out/hook_log.o" "$out/hook_report.o" "$out/social_names.o" \
-        "$out/social_invite_gate.o" -o "$out/social_install_test" -ldl -pthread -lzstd
+        "$out/social_invite_gate.o" "${ident[@]}" -o "$out/social_install_test" -ldl -pthread -lzstd
     timeout 300 "$out/social_install_test"  # a hang is a failure, not a stuck gate
 
 # The social pins against the real libr15.so and libpnsovr.so (docs/adr/0003). Extracts both from
@@ -1701,6 +1715,7 @@ test-quest-social-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signe
         src/quest/tests/social_pinned_test.cpp src/quest/social/social_install.cpp src/quest/social/social_invite_gate.cpp \
         src/quest/social/social_game_calls.cpp "$out/social_facade.o" "$out/social_names.o" \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        src/quest/sentinel/libr15_identity.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp \
         -o "$out/social_pinned_test" -ldl -pthread -lzstd
     "$out/social_pinned_test" "$lib/libr15.so" "$lib/libpnsovr.so"
     "$out/social_pinned_test" --dump "$lib/libpnsovr.so" > "$out/vtable.txt"
@@ -1758,6 +1773,12 @@ test-quest-integration: _vcpkg-quest-host
     "${off[@]}" -c src/quest/social/social_game_calls.cpp -o "$out/social_game_calls.o"
     "${off[@]}" -c src/quest/social/social_install.cpp -o "$out/social_install.o"
     "${off[@]}" -c src/quest/social/social_invite_gate.cpp -o "$out/social_invite_gate.o"
+    # The patched libr15's identity (sentinel::pinned::LibR15PatchedBuildId, docs/adr/0021 section 7), which the hook
+    # translation units above call through the pinned_targets.h factories.
+    for src in sentinel/libr15_identity.cpp patch/libr15_patch_identity.cpp data/sha256.cpp; do
+        "${off[@]}" -c "src/quest/$src" -o "$out/id_$(basename "$src" .cpp).o"
+    done
+    ident=("$out/id_libr15_identity.o" "$out/id_libr15_patch_identity.o" "$out/id_sha256.o")
     "${on[@]}" -c src/quest/social/social_facade.cpp -o "$out/social_facade.o"
     "${on[@]}" -c src/quest/sentinel/hook_log.cpp -o "$out/hook_log.o"
     "${on[@]}" -DNEVR_SOCIAL_NAMES_NO_STATIC_REGISTRATION -c src/runtime/compat/social_names.cpp -o "$out/social_names.o"
@@ -1777,7 +1798,7 @@ test-quest-integration: _vcpkg-quest-host
         "$out/social_game_calls.o" "$out/social_install.o" "$out/social_invite_gate.o" "$out/social_facade.o" "$out/hook_log.o" "$out/social_names.o" \
         "$out/login_prompt_hook.o" "$out/login_title_hook.o" "$out/obb_skip_hook.o" "$out/resource_request_hook.o" "$out/texture_quality_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
         "$out/login_prerequisites.o" "$out/login_standin.o" \
-        "$yaml_lib" -o "$out/integration_hooks_test" -ldl -pthread -lzstd
+        "${ident[@]}" "$yaml_lib" -o "$out/integration_hooks_test" -ldl -pthread -lzstd
     timeout 300 "$out/integration_hooks_test"
     # 3. the bridge end to end, with a fake connector (SessionBridge still links the libcurl connector it
     # builds when none is injected)
@@ -1858,6 +1879,7 @@ test-quest-integration-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_
     g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -c src/quest/integration/post_load.cpp -o "$out/post_load.o"
     "${off[@]}" src/quest/tests/integration_pinned_test.cpp "$out/dlopen_hook.o" "$out/post_load.o" \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        src/quest/sentinel/libr15_identity.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp \
         -o "$out/integration_pinned_test" -ldl -pthread
     "$out/integration_pinned_test" "$lib/libr15.so"
 

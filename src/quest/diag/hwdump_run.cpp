@@ -7,6 +7,9 @@
 #include "quest/diag/hwdump_install.h"
 #include "quest/diag/hwdump_os.h"
 #include "quest/diag/hwdump_report.h"
+#include "quest/patch/libr15_patch_table.h"
+#include "quest/sentinel/got_hook.h"
+#include "quest/sentinel/pinned_targets.h"
 #include "quest/sentinel/sentinel_log.h"
 
 #include <pthread.h>
@@ -26,7 +29,16 @@ using nlohmann::json;
 using nevr_quest::LogLevel;
 
 constexpr const char* kFileName = "nevr-hwdump.json";
-constexpr const char* kLibR15BuildId = "b243509c08ce677aeb95fa348016949b3fc45230";
+
+// The GNU build ID of the libr15 mapped in this process, or "(unavailable)".
+std::string LiveLibR15BuildId() {
+  sentinel::ElfImage image;
+  char id[64] = {};
+  if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image) || !sentinel::ReadBuildId(image, id, sizeof(id))) {
+    return "(unavailable)";
+  }
+  return id;
+}
 
 std::uint64_t MonotonicMs() {
   timespec ts{};
@@ -93,7 +105,12 @@ void Run() {
   json doc = json::object();
   doc["schema"] = "nevr-hwdump/1";
   doc["trigger"] = d.reason;
-  doc["libr15_build_id"] = kLibR15BuildId;
+  // `libr15_build_id` is the game build, the stock libr15's ID, as the dump has always promised (docs/adr/0006). The file
+  // the process ran is the build-time patcher's output (docs/adr/0021), whose own ID is `libr15_live_build_id`, read from
+  // the mapped note; `libr15_patched_build_id` is the one this build expects it to be, so a reader sees a mismatch.
+  doc["libr15_build_id"] = nevr_quest::patch::kLibR15StockBuildId;
+  doc["libr15_live_build_id"] = LiveLibR15BuildId();
+  doc["libr15_patched_build_id"] = sentinel::pinned::LibR15PatchedBuildId();
   doc["notice"] = "Contains device identifiers (serials, MAC and IP addresses, android_id). Do not commit or attach publicly.";
 
   JniSession jni(cap);  // detached on every path out of Run, by its destructor

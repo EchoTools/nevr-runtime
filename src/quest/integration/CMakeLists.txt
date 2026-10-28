@@ -105,11 +105,11 @@ set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_qua
 # declaring the libr15 build the sentinel is pinned to. It is not part of the sentinel or of any APK the recipes build; a
 # development APK gets it from `just android-repack-apk ... plugin=<this file>`.
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/pinned_targets.h" nevr_pinned_build_id_line
-     REGEX "kLibR15BuildId = \"[0-9a-f]+\"")
+     REGEX "kLibR15StockBuildId = \"[0-9a-f]+\"")
 string(REGEX MATCH "\"([0-9a-f]+)\"" nevr_pinned_build_id_match "${nevr_pinned_build_id_line}")
 set(nevr_pinned_build_id "${CMAKE_MATCH_1}")
 if(NOT nevr_pinned_build_id)
-  message(FATAL_ERROR "src/quest/sentinel/pinned_targets.h has no kLibR15BuildId literal")
+  message(FATAL_ERROR "src/quest/sentinel/pinned_targets.h has no kLibR15StockBuildId literal")
 endif()
 add_library(nevr_noop_plugin SHARED "${CMAKE_CURRENT_SOURCE_DIR}/../tests/plugin_fixture.cpp")
 set_target_properties(nevr_noop_plugin PROPERTIES OUTPUT_NAME nevr_noop)

@@ -12,6 +12,7 @@
 
 #include "got_hook.h"
 #include "hook_report.h"
+#include "libr15_identity.h"
 #include "quest/integration/ctor_sequence.h"
 #include "quest/integration/dlopen_hook.h"
 #include "quest/integration/post_load.h"
@@ -119,7 +120,7 @@ void TestPinnedDlopenTarget() {
   QCHECK(std::strcmp(t.module, "libr15.so") == 0);
   QCHECK(std::strcmp(t.symbol, "dlopen") == 0);
   QCHECK(t.kind == sentinel::RelocKind::kJumpSlot);
-  QCHECK(t.buildId != nullptr && std::strcmp(t.buildId, "b243509c08ce677aeb95fa348016949b3fc45230") == 0);
+  QCHECK(t.buildId != nullptr && std::strcmp(t.buildId, sentinel::pinned::LibR15PatchedBuildId()) == 0);
   QCHECK(t.slotVaddr.has_value() && *t.slotVaddr == 0x36c6380ULL);
 }
 

@@ -14,8 +14,8 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/breakpad.cmake)
 add_library(nevr_quest_got_hook STATIC
   got_hook.cpp
   arm64_reloc.cpp
-  inline_hook.cpp
   libr15_attach.cpp
+  libr15_identity.cpp
   ../patch/libr15_patch_identity.cpp
   hook_log.cpp
   hook_report.cpp)

@@ -159,7 +159,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "got_pinned_test: cannot load an AArch64 ELF64 from the given paths\n");
     return 2;
   }
-  CheckBuildId(r15, pinned::kLibR15BuildId);
+  CheckBuildId(r15, pinned::kLibR15StockBuildId);
   CheckBuildId(mm, pinned::kMatchmakingBuildId);
   CheckBuildId(ovr, nevr_quest_login::PrerequisiteTargets::kPnsovrBuildId);
 
@@ -322,12 +322,15 @@ int main(int argc, char** argv) {
     QCHECK(false);
   }
 
-  // CR15VRMenuWidgetCS::Update, the entry the splash skip patches inline (#1128): its first four instructions are the
-  // ones the install proves before writing, at the vaddr it patches.
-  if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + pinned::kWidgetUpdateVaddr, pinned::kWidgetUpdateCode,
-                  sizeof(pinned::kWidgetUpdateCode)) != 0) {
-    std::fprintf(stderr, "libr15 CR15VRMenuWidgetCS::Update: first instructions at %#llx differ from the pinned ones\n",
-                 static_cast<unsigned long long>(pinned::kWidgetUpdateVaddr));
+  // CGTextureResource::ForceLoadAllMips, which the UI texture hook calls through the address it proves: its first
+  // four instructions are the ones ui_texture_mips.cpp checks before calling it. The inline hook rows (the widget
+  // update, the lobby-full handlers, the texture attach) are not pinned here: the patcher pinned test checks every row's
+  // stock words against the real file (libr15_patcher_pinned_test.cpp).
+  if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + pinned::kForceLoadAllMipsVaddr,
+                  pinned::kForceLoadAllMipsCode, sizeof(pinned::kForceLoadAllMipsCode)) != 0) {
+    std::fprintf(stderr,
+                 "libr15 CGTextureResource::ForceLoadAllMips: first instructions at %#llx differ from the pinned ones\n",
+                 static_cast<unsigned long long>(pinned::kForceLoadAllMipsVaddr));
     QCHECK(false);
   }
 

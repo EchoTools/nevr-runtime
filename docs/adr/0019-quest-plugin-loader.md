@@ -307,7 +307,7 @@ lowercase hex IDs separated by spaces. It is data, not a function, because the l
 the object: mapping runs the object's constructors, and a plugin must not run any of its code for a build it does not
 support. The loader reads the note from the file bytes it has already read and hashed (`SupportedBuildIdsOf`), inside the
 APK signature, and compares it with the running libr15's build ID, read from its ELF note (`ReadBuildId`,
-`src/quest/sentinel/got_hook.h:149`). The pinned value is `kLibR15BuildId` (`src/quest/sentinel/pinned_targets.h:29`). When libr15 is patched at build time, the loader compares the plugin's list with the plugin identity, not the live note (`docs/adr/0021-quest-libr15-patched-at-build-time.md`, section 12).
+`src/quest/sentinel/got_hook.h:149`). The pinned value is `kLibR15StockBuildId` (`src/quest/sentinel/pinned_targets.h`). When libr15 is patched at build time, the loader compares the plugin's list with the plugin identity, not the live note (`docs/adr/0021-quest-libr15-patched-at-build-time.md`, section 12).
 The same file-bytes pass decides everything else that precedes `dlopen`: the file is readable (`file_unreadable`, no
 unchecked mapping), is an AArch64 shared object (`machine_type`) and declares the running build. A plugin that is
 mapped and then fails (`no_plugin_info`, `init_failed`, an exception) is `dlclose`d.

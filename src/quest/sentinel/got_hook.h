@@ -10,7 +10,7 @@
  * This reaches only calls a module makes through a dynamic relocation that names
  * a symbol, whether that symbol is defined in another library or in the module
  * itself. It cannot reach a direct call, an inlined call, or a call through a
- * vtable. An internal hook is an inline detour, inline_hook.h (docs/adr/0003).
+ * vtable. An internal hook is a row of the build-time libr15 patch (libr15_attach.h, docs/adr/0021).
  *
  * A target is one slot, named by module, symbol and relocation type
  * (R_AARCH64_JUMP_SLOT or R_AARCH64_GLOB_DAT). Nothing is patched unless

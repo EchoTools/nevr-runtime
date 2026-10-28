@@ -429,6 +429,22 @@ AttachResult Attach(const AttachOptions& options) {
   return r;
 }
 
+std::uintptr_t RowSiteAddress(const char* rowId) noexcept {
+  if (rowId == nullptr || !Verified()) return 0;
+  for (std::size_t i = 0; i < patch::kRowCount; ++i) {
+    if (std::strcmp(patch::kRows[i].id, rowId) == 0) return g_base + patch::kRows[i].sites[0].Vaddr();
+  }
+  return 0;
+}
+
+void** CreditsSlot() noexcept {
+  if (!Verified()) return nullptr;
+  for (std::size_t i = 0; i < patch::kRowCount; ++i) {
+    if (patch::kRows[i].kind == patch::RowKind::kCreditsPair) return g_rows[i].slot;
+  }
+  return nullptr;
+}
+
 ActivateStatus RowActivation::ActivateRow(const char* rowId, void* detour, void** originalOut) {
   auto refuse = [rowId](ActivateStatus status) {
     sentinel::LogFields(LogLevel::kError, "inline_hook",

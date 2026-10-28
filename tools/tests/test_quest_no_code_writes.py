@@ -1,9 +1,9 @@
-"""#1127: no Quest step writes a libr15 code page until the build-time patch (#1132) lands.
+"""#1127: the feature installers are named only by their own files until the sentinel runs Attach (#1132).
 
-The current Horizon policy denies `execmod` on a libr15 page that was written and made executable again, and the
-first call into it faults. The installers below write such a page (inline hooks, the credits ADRP+ADD pairs).
-Their code stays in the tree for #1132 to replace, but nothing in the sentinel may reach it: this test pins that by
-source shape, because no host test can run a Horizon policy.
+The installers below take their hooks through the rows of the build-time patched libr15 (docs/adr/0021) and write no
+code page; each needs Attach to have verified the file, and the production steps do not run Attach yet, so they skip
+the features. This test pins that by source shape: no step names an installer, and only the feature files call the row
+installer.
 """
 
 import re
@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 QUEST = ROOT / "src/quest"
 
-# Each installer that writes code, and the files that may name it: its own definition and declaration.
+# Each feature installer, and the files that may name it: its own definition and declaration.
 INSTALLERS = {
     r"InstallLobbyFullHooks\b": {"social/lobby_full_hooks.cpp", "social/lobby_full_hooks.h"},
     r"InstallUiTextureMips\w*": {"sentinel/ui_texture_mips.cpp", "sentinel/ui_texture_mips.h"},
@@ -26,11 +26,9 @@ INSTALLERS = {
         "sentinel/credits_text.h",
     },
 }
-# The only files that may call the code writers themselves.
+# The only files that may call the row installer themselves.
 WRITER_FILES = {
     "sentinel/hook_install.h",
-    "sentinel/inline_hook.cpp",
-    "sentinel/inline_hook.h",
     "sentinel/credits_text.cpp",
     "social/lobby_full_hooks.cpp",
     "sentinel/ui_texture_mips.cpp",
@@ -61,8 +59,8 @@ class NoQuestStepWritesCode(unittest.TestCase):
                     continue
                 self.assertIsNone(re.search(pattern, text), f"{rel} reaches {pattern}")
 
-    def test_only_the_dormant_feature_files_call_a_code_writer(self):
-        calls = re.compile(r"InstallInlineThunk\s*<|InlineHook::Install\s*\(|\bWriteWord\s*\(")
+    def test_only_the_dormant_feature_files_call_the_row_installer(self):
+        calls = re.compile(r"InstallRowThunk\s*<|\bWriteWord\s*\(")
         found = {rel for rel, text in sources() if calls.search(text)}
         self.assertTrue(found, "the dormant writers disappeared from the scan")
         self.assertLessEqual(found, WRITER_FILES, sorted(found - WRITER_FILES))
