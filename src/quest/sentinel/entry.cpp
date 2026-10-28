@@ -17,8 +17,10 @@
 #include "hook_report.h"
 #include "login_prompt_hook.h"
 #include "login_title_hook.h"
+#include "menu_cards_hook.h"
 #include "data_wiring.h"
 #include "obb_skip_hook.h"
+#include "os_build_gate_hook.h"
 #include "permission_wait_hook.h"
 #include "process_end_hook.h"
 #include "texture_quality_hook.h"
@@ -124,6 +126,10 @@ bool InstallPermissionWaitHook() noexcept {
 // refused install is logged by GotHook and leaves the game's calls intact.
 bool InstallVkExtWindowHook() noexcept { return nevr_quest::vk_window::Install(); }
 
+// The game never refuses a headset for its OS build number (#945). A refused install is logged by GotHook and by the
+// hook's own line, and leaves the game's call intact.
+bool InstallOsBuildGateHook() noexcept { return nevr_quest::os_build_gate::Install(); }
+
 // The eye-buffer size libr15 creates its swap chain with (#943). A refused install is logged by GotHook and by the hook's
 // own line, and leaves the game's calls intact.
 bool RegisterTextureQualityCounters() noexcept { return nevr_quest::texture_quality::RegisterCounters(); }
@@ -139,6 +145,10 @@ bool RegisterResourceRequestCounters() noexcept { return nevr_quest::resource_re
 bool InstallResourceRequestLogHook(bool countersRegistered) noexcept {
     return nevr_quest::resource_request::InstallIfCounted(countersRegistered);
 }
+
+// The CREATE GAME and JOIN VIA CODE cards (#966): a data-slot hook on the streaming reader's read-finished callback. A
+// refused install is logged by GotHook and by the hook's own line, and leaves the game's calls intact.
+bool InstallMenuCardsHook() noexcept { return nevr_quest::menu_cards::Install(); }
 
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
 // token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.

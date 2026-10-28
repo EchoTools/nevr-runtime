@@ -491,6 +491,12 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
+  bool InstallOsBuildGate() override {
+    const bool ok = nevr_quest::integration::InstallOsBuildGateHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
   bool InstallResourceRequestLog(bool countersRegistered) override {
     const bool ok = nevr_quest::integration::InstallResourceRequestLogHook(countersRegistered);
     detail_ = ok ? "ok" : "got_hook_refused";
@@ -508,6 +514,12 @@ class ProductionSteps final : public Steps {
     LogCodeWriteSkipped("credits_text");
     detail_ = "skipped_waits_on_1132";
     return true;  // a step that is deliberately not run did not fail
+  }
+
+  bool InstallMenuCards() override {
+    const bool ok = nevr_quest::integration::InstallMenuCardsHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
   }
 
   bool InstallLoginPrompt(bool countersRegistered) override {
