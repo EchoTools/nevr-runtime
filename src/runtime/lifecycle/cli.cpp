@@ -6,6 +6,7 @@ BOOL g_isServer = FALSE;
 BOOL g_isOffline = FALSE;
 BOOL g_isWindowed = FALSE;
 CHAR g_customConfigPath[MAX_PATH] = {0};
+ConfigYamlFlags g_configYamlFlags;
 CHAR g_regionOverride[64] = {0};
 
 UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {

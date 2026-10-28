@@ -283,6 +283,8 @@ const char* AccessorBoundary(const char* accessor, Body body) {
 
 }  // namespace
 
+void NevrCfgResolveConfigYaml() {}
+
 // #843: names of the built-in defaults this run uses, so an operator can see which keys a server took
 // from the build rather than from config.yaml. A key counts only when neither config.yaml nor the
 // environment sets it and a default does. Names only, never values. Boot calls it once, after config.yaml
