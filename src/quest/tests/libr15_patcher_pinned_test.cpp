@@ -181,7 +181,7 @@ TEST(TheToolPatchesTheStockFileAndSaysSo) {
   CHECK_EQ(r.exitCode, 0);
   CHECK(r.err.empty());
   CHECK(!ReadAll(r.outFile).empty());
-  // Stdout is JSON lines only: 6 inline sites + 4 credits sites, then the summary.
+  // Stdout is JSON lines only: 5 inline sites + 4 credits sites, then the summary.
   std::size_t lines = 0, sites = 0, summaries = 0;
   std::size_t at = 0;
   while (at < r.out.size()) {
@@ -194,9 +194,9 @@ TEST(TheToolPatchesTheStockFileAndSaysSo) {
     if (nl == std::string::npos) break;
     at = nl + 1;
   }
-  CHECK_EQ(sites, static_cast<std::size_t>(10));
+  CHECK_EQ(sites, static_cast<std::size_t>(9));
   CHECK_EQ(summaries, static_cast<std::size_t>(1));
-  CHECK_EQ(lines, static_cast<std::size_t>(11));
+  CHECK_EQ(lines, static_cast<std::size_t>(10));
 }
 
 TEST(TwoRunsGiveByteIdenticalFilesAndReports) {
@@ -362,7 +362,7 @@ TEST(TheSegmentsAndSectionsAreSaneAndTheEndSymbolsUnchanged) {
   CHECK_EQ(patched.ph[wl].p_vaddr + patched.ph[wl].p_memsz, kSlotAreaVaddr + kSlotBytes * kRowCount);
   CHECK_EQ(patched.ph[wl].p_filesz, stock.ph[wl].p_filesz);
   CHECK_EQ(patched.ph[wl].p_offset, stock.ph[wl].p_offset);
-  CHECK_EQ(patched.ph[wl].p_memsz, static_cast<std::uint64_t>(0x1d86c8));  // ADR 0021 section 4
+  CHECK_EQ(patched.ph[wl].p_memsz, static_cast<std::uint64_t>(0x1d86c0));  // ADR 0021 section 4
   // Sections: every one unchanged except the NOBITS one that ended the segment, which ends at the new end.
   std::size_t grown = 0;
   for (std::size_t i = 0; i < stock.sh.size(); ++i) {
@@ -374,7 +374,7 @@ TEST(TheSegmentsAndSectionsAreSaneAndTheEndSymbolsUnchanged) {
   }
   CHECK_EQ(grown, static_cast<std::size_t>(1));
   // readelf agrees with the headers it printed.
-  CHECK(patchedLoad.find(Hex(0x1d86c8).substr(0)) != std::string::npos);
+  CHECK(patchedLoad.find(Hex(0x1d86c0).substr(0)) != std::string::npos);
   CHECK(stockLoad.find("0x1d8688") != std::string::npos);
   CHECK(!stockSec.empty() && !patchedSec.empty());
   // The six end symbols have the same values and sizes in both files.

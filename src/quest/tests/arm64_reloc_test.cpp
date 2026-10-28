@@ -866,7 +866,8 @@ TEST(AWindowOfAnyOtherSizeIsRefused) {
 }
 
 TEST(TheQuestSetTextLeadingCbzRelocatesInAThreeWordWindow) {
-  // menu_version.set_text's stock words (libr15 ReVault 0x149111c): cbz x3, #0x48 ; sub sp, sp, #0x20 ; stp x19, x30,
+  // The stock words of CCanvasUICS::SetText (libr15 ReVault 0x149111c; the menu version label hooks that function
+  // through its GOT slot, so it is not a patch-table row): cbz x3, #0x48 ; sub sp, sp, #0x20 ; stp x19, x30,
   // [sp, #16]. The CBZ is the case that matters: its target is far outside the window and the trampoline is far
   // from it, so it becomes CBNZ over an absolute jump.
   const std::uint32_t window[3] = {0xB4000243u, 0xD10083FFu, 0xA9017BF3u};
@@ -910,12 +911,12 @@ TEST(EveryInlineRowOfThePatchTableRelocatesInItsThreeWordWindow) {
     }
     for (unsigned seed = 0; seed < 3; ++seed) {
       Cpu c = RandomCpu(500 + seed);
-      c.x[3] = seed;  // menu_version.set_text's CBZ tests x3: take it both ways
+      c.x[3] = seed;  // a window may start with a CBZ/CBNZ on x3: take it both ways
       CheckWindowEquivalentAt(row.sites[0].Vaddr(), row.id, window, c);
     }
     g_opaque.clear();
   }
-  CHECK_EQ(inlineRows, static_cast<std::size_t>(6));
+  CHECK_EQ(inlineRows, static_cast<std::size_t>(5));
 }
 
 TEST(ThreeWordWindowsWithEveryPcRelativeKindRunLikeTheOriginal) {

@@ -83,12 +83,10 @@ inline constexpr Row kRows[] = {
      {{0x19e75c4, 3, {0xd103c3ffu, 0xa90d53f5u, 0xa90e7bf3u}}}},
     {"splash_skip.widget_update", "CR15VRMenuWidgetCS::Update", RowKind::kInlineHook, "WidgetUpdateHook", 4, 1,
      {{0x209a7a0, 3, {0xd10443ffu, 0x6d0b23e9u, 0xa90c6bfcu}}}},
-    {"menu_version.set_text", "CCanvasUICS::SetText", RowKind::kInlineHook, "OnSetText", 5, 1,
-     {{0x149111c, 3, {0xb4000243u, 0xd10083ffu, 0xa9017bf3u}}}},
     // CR15CreditsUICS::InitCreditsUICI (ADRP x8, ADD x8) and OnComponentDisabled (ADRP x12, ADD x12): sites 0/1 and
     // 2/3 are the two ADRP+ADD pairs (#970); both load the credits blob and share the row's slot.
     {"credits.pairs", "CR15CreditsUICS::InitCreditsUICI, CR15CreditsUICS::OnComponentDisabled", RowKind::kCreditsPair,
-     "credits_text::Install", 6, 4,
+     "credits_text::Install", 5, 4,
      {{0x1ea1284, 1, {0xd000a008u}},
       {0x1ea1290, 1, {0x91378508u}},
       {0x1ea1d84, 1, {0xd000a00cu}},
@@ -113,7 +111,7 @@ constexpr bool TableIsWellFormed() {
 }
 static_assert(TableIsWellFormed(), "libr15_patch_table.h: a row is malformed");
 static_assert(kSlotAreaVaddr == 0x37d2540, "the slot area starts at the 64-byte boundary after the stock image end");
-static_assert(kSlotAreaVaddr + kSlotBytes * kRowCount == 0x37d2578, "ADR 0021 section 4: the grown end is 0x37d2578");
+static_assert(kSlotAreaVaddr + kSlotBytes * kRowCount == 0x37d2570, "ADR 0021 section 4: the grown end is 0x37d2570");
 
 /// Limits of the extra-rows file, format 1 (ADR 0021 section 11).
 inline constexpr const char* kExtraRowsFormat = "nevr-libr15-extra-rows";

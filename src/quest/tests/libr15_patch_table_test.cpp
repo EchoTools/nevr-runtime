@@ -26,10 +26,10 @@ const Row* Find(const char* id) {
   return nullptr;
 }
 
-TEST(TheTableHasTheSevenRowsOfTheAdrInOrder) {
+TEST(TheTableHasTheSixRowsOfTheAdrInOrder) {
   const char* ids[] = {"lobby_full.join", "lobby_full.failure", "lobby_full.success", "ui_texture.attach",
-                       "splash_skip.widget_update", "menu_version.set_text", "credits.pairs"};
-  CHECK_EQ(kRowCount, static_cast<std::size_t>(7));
+                       "splash_skip.widget_update", "credits.pairs"};
+  CHECK_EQ(kRowCount, static_cast<std::size_t>(6));
   for (std::size_t i = 0; i < kRowCount; ++i) {
     CHECK(std::strcmp(kRows[i].id, ids[i]) == 0);
     CHECK_EQ(kRows[i].slot, i);
@@ -44,7 +44,7 @@ TEST(TheVaddrIsTheReVaultAddressMinusTheBiasInCode) {
   const Expect expects[] = {
       {"lobby_full.join", 0x1340ba8, 0x1240ba8},          {"lobby_full.failure", 0x1340cc8, 0x1240cc8},
       {"lobby_full.success", 0x134024c, 0x124024c},       {"ui_texture.attach", 0x19e75c4, 0x18e75c4},
-      {"splash_skip.widget_update", 0x209a7a0, 0x1f9a7a0}, {"menu_version.set_text", 0x149111c, 0x139111c},
+      {"splash_skip.widget_update", 0x209a7a0, 0x1f9a7a0},
   };
   for (const Expect& e : expects) {
     const Row* row = Find(e.id);
@@ -71,9 +71,9 @@ TEST(TheVaddrIsTheReVaultAddressMinusTheBiasInCode) {
 TEST(TheSlotAreaIsSectionFourOfTheAdr) {
   CHECK_EQ(kStockImageEnd, static_cast<std::uint64_t>(0x37d2538));
   CHECK_EQ(kSlotAreaVaddr, static_cast<std::uint64_t>(0x37d2540));
-  CHECK_EQ(kSlotAreaVaddr + kSlotBytes * kRowCount, static_cast<std::uint64_t>(0x37d2578));
+  CHECK_EQ(kSlotAreaVaddr + kSlotBytes * kRowCount, static_cast<std::uint64_t>(0x37d2570));
   CHECK_EQ(kRows[0].SlotVaddr(), static_cast<std::uint64_t>(0x37d2540));
-  CHECK_EQ(kRows[6].SlotVaddr(), static_cast<std::uint64_t>(0x37d2570));
+  CHECK_EQ(kRows[5].SlotVaddr(), static_cast<std::uint64_t>(0x37d2568));
   CHECK_EQ(RoundUp(0x37d2538, 64), static_cast<std::uint64_t>(0x37d2540));
   CHECK_EQ(RoundUp(0x37d2540, 64), static_cast<std::uint64_t>(0x37d2540));
 }
@@ -152,7 +152,7 @@ TEST(ThePatchedIdIsAPureFunctionOfTheTableAndTheStockId) {
 TEST(ThePublicIdIsPinnedSoATableChangeIsAConsciousOne) {
   // Any change to a public row, a stock word, a slot or the layout moves this value. Update it in the commit that
   // changes the table, with the reason.
-  CHECK_EQ(PatchedBuildId(), std::string("cf8333283f12e3bd50fd3bb387c3d85887a2b54a"));
+  CHECK_EQ(PatchedBuildId(), std::string("3fd691e7044032cf8392e8526b8702bc13bcfd78"));
 }
 
 TEST(AnyChangeToAFactTheFileDependsOnMovesTheId) {
@@ -251,13 +251,13 @@ TEST(TheIdOfThreeInventedExtraRowsIsPinnedToTheByte) {
   const WordPatchRow late{"x.late", 0x1500040, {Edit(0, {0x11, 0x22, 0x33, 0x44}, {0x55, 0x66, 0x77, 0x88}), Edit(8, {0x99, 0xaa, 0xbb, 0xcc}, {0xdd, 0xee, 0xff, 0x00})}};
   const WordPatchRow tieB{"x.tie_b", 0x1500020, {Edit(4, {0x0a, 0x0b, 0x0c, 0x0d}, {0x01, 0x02, 0x03, 0x04})}};
   const WordPatchRow tieA{"x.tie_a", 0x1500020, {Edit(0x104, {0x0f, 0x0e, 0x0d, 0x0c}, {0x04, 0x03, 0x02, 0x01})}};
-  const std::string pinned = "ccb7fde69c56a86c219885817fdc0f542e15928d";
+  const std::string pinned = "791046e9c54db7ea54e9dc022d5c81956c616d6b";
   CHECK_EQ(PatchedBuildId({late, tieB, tieA}), pinned);
   CHECK_EQ(PatchedBuildId({tieA, late, tieB}), pinned);
   CHECK_EQ(PatchedBuildId({tieB, tieA, late}), pinned);
   // Each part of the pinned value, so a change to one serialisation rule is seen in its own value.
-  CHECK_EQ(PatchedBuildId({late}), std::string("7b61f482609d1d762e566dfddb98dff72db27bcb"));
-  CHECK_EQ(PatchedBuildId({tieB, tieA}), std::string("45831f0edfb0b2f31a334fffb03fc0fb805b8ded"));
+  CHECK_EQ(PatchedBuildId({late}), std::string("95097c5580ae826115669fc3f989a7dc76de7a4f"));
+  CHECK_EQ(PatchedBuildId({tieB, tieA}), std::string("9d74799f4d2e51cc7a3875095b51ba7c398d0d3e"));
 }
 
 }  // namespace

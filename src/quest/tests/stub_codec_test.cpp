@@ -35,8 +35,8 @@ TEST(ASlotBeforeTheSiteEncodesANegativePageDelta) {
 }
 
 TEST(DecodeReadsBackTheSlotOfEveryStub) {
-  const std::uint64_t sites[] = {0x1240ba8, 0x1240cc8, 0x124024c, 0x18e75c4, 0x1f9a7a0, 0x139111c, 0x200000, 0xfff0, 0xff8};
-  const std::uint64_t slots[] = {0x37d2540, 0x37d2548, 0x37d2570, 0x37d2ff8, 0x1ff008, 0x8, 0x1000};
+  const std::uint64_t sites[] = {0x1240ba8, 0x1240cc8, 0x124024c, 0x18e75c4, 0x1f9a7a0, 0x200000, 0xfff0, 0xff8};
+  const std::uint64_t slots[] = {0x37d2540, 0x37d2548, 0x37d2568, 0x37d2ff8, 0x1ff008, 0x8, 0x1000};
   for (const std::uint64_t site : sites) {
     for (const std::uint64_t slot : slots) {
       Stub stub{};
