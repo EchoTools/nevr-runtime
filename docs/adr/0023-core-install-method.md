@@ -231,14 +231,19 @@ function returns a `NevrStatus` and writes details to the log. Names follow the 
 
 | Function | What it does |
 | --- | --- |
-| `NevrInstallOpen(config, &session)` | pins, state directory, base URL, minimum manifest version, log file; refuses when the log cannot be opened |
-| `NevrManifestFetch` / `NevrManifestVerify` | steps 1 to 6 on bytes or on the base URL |
-| `NevrReleasePick(session, channel, &release)` | step 7 |
-| `NevrArtifactFetch(session, release, kind, platform, out_path)` | step 8 for one artifact; deletes the file on failure |
-| `NevrArtifactVerifyZip` | every member against `contents` |
-| `NevrPlanBuild(session, release, observed_json, &plan_json)` | the platform plan as data; the caller executes steps it owns (a package install on a headset) and reports each result with `NevrStepReport` |
-| `NevrRunEnd(session, state, reason)` | writes `run_end` and the install record |
-| `NevrClose` | |
+| `NevrInstallOpen(config_json, &session)` | `platform`, state directory, base URL, channel, pins, minimum manifest version, log file; refuses when the log cannot be opened |
+| `NevrManifestFetch` / `NevrManifestVerify` | steps 1 to 6 on the base URL, or on bytes the caller holds |
+| `NevrReleasePick(session, channel, &json)` | step 7: the version and its artifacts |
+| `NevrArtifactFetch(session, version, kind, platform, out_path)` | step 8 for one artifact; deletes the file on failure |
+| `NevrArtifactVerifyZip(session, version, kind, zip_path, allow_dirs)` | every member against `contents` |
+| `NevrPlanBuild(session, version, observed_json, &plan_json)` | the Quest plan as data, from what the caller observed; the caller executes the steps it owns (a package install on a headset) |
+| `NevrRunEnd(session, state, reason)` | writes `run_end`; the state is one of the four |
+| `NevrLastError`, `NevrStringFree`, `NevrClose`, `NevrCoreVersion` | the last failure's text, freeing a returned string, closing, the library version |
+
+The PC plan and its execution are reached through the CLI (`nevr-install pc install`), which is what PowerShell and every
+other PC installer calls; the library exposes the Quest plan because the on-headset callers cannot run a CLI. Step results
+of a caller-executed step are recorded by the caller's own `NevrRunEnd` reason in this slice; a per-step report function
+is a later addition and not part of this ABI.
 
 **How a Unity installer calls it.** The library is built as `libnevr_install.so` for `aarch64-linux-android`, placed in
 `Assets/Plugins/Android/arm64-v8a/`, and declared with `[DllImport("nevr_install")]`. Strings go through `IntPtr` with
@@ -340,7 +345,8 @@ Each is run once with the line it covers changed, and must fail (the mutant disc
 4. The log: a run that is made to fail at each step writes `run_end` with the state and the reason; an unwritable log refuses
    to change anything.
 5. The C ABI from a C program (not Rust): open, verify a fixture manifest, pick, build a plan, report, close.
-6. A source check that no installer in the tree contains a hash, a URL or a version of its own for a release artifact.
+6. A source check that no installer in the tree contains a hash, a URL or a version of its own for a release artifact. It
+   lands with slice 2: the installers it would read still carry theirs.
 
 ## Prediction
 
