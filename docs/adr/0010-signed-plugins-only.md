@@ -137,8 +137,8 @@ required in this run (plugin trust mode <mode>)` and allows it. Known gaps, reco
 not a plugin file); under Wine, a unix symbolic link to the plugins directory is not recognised by the final-path compare, so an
 unsigned file reached through it loads (#788, open); the lock order of the late-load filter against a load made from a plugin's
 `DllMain` is not proven (#784, open); a direct `LdrLoadDll` or a manual map by a plugin (code that is already signed by us and running in the process can do
-anything); a plugin's own build flags. Plugins built from `plugins/common` get `/DEPENDENTLOADFLAG:0x800` as a template default so
-their own implicit imports resolve the way N75 does; that flag lives in the plugin's repo and the runtime cannot enforce it. The
+anything); a plugin's own build flags. `/DEPENDENTLOADFLAG:0x800` makes a plugin's own implicit imports
+resolve the way N75 does; that flag lives in the plugin's repo and the runtime cannot enforce it. The
 race on a dependency that the system names (a file in `plugins\` that replaces a system DLL between the check and the load) was
 filed as #783 and is closed.
 

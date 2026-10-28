@@ -11,7 +11,7 @@
 
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
-#include "nevr_common.h"
+#include "nevr/pc/nevr_common.h"
 #include "runtime/hook/patching.h"
 #include "runtime/lifecycle/config.h"
 #include "runtime/lifecycle/service_config.h"

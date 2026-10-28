@@ -1,11 +1,11 @@
 /* SYNTHESIS -- custom tool code, not from binary */
 /*
- * Built-in log filter — adapted from plugins/log-filter for direct compilation
- * into gamepatches.dll. Hooks CLog::PrintfImpl to provide structured, filtered
- * log output with suppression, truncation, ANSI color, JSONL file output, and
- * file rotation.
+ * Built-in log filter, compiled into the runtime. Hooks CLog::PrintfImpl to
+ * provide structured, filtered log output with suppression, truncation, ANSI
+ * color, JSONL file output, and file rotation. The loader refuses the old
+ * log_filter.dll plugin by name (N89).
  *
- * Differences from the plugin version:
+ * Unlike a plugin:
  *   - No NvrPlugin* exports (built-in, not dynamically loaded)
  *   - No MH_Initialize/MH_Uninitialize (gamepatches core owns MinHook lifecycle)
  *   - No MH_DisableHook(MH_ALL_HOOKS) (would kill all hooks process-wide)
@@ -49,9 +49,9 @@
 #include <sys/stat.h>
 #endif
 
-#include "address_registry.h"
-#include "nevr_common.h"
-#include "yaml_config.h"
+#include "nevr/pc/address_registry.h"
+#include "nevr/pc/nevr_common.h"
+#include "nevr/yaml_config.h"
 
 /* ------------------------------------------------------------------ */
 /* Log levels (from CLog.h ELogLevel)                                  */

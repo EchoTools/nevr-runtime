@@ -255,7 +255,6 @@ target_precompile_headers(nevr_runtime PRIVATE "${CMAKE_SOURCE_DIR}/src/core/pch
 # into. Re-adding a directory here silently re-enables the flat namespace.
 target_include_directories(nevr_runtime PRIVATE
   ${CMAKE_SOURCE_DIR}/src
-  ${CMAKE_SOURCE_DIR}/plugins/common/include
   ${CMAKE_BINARY_DIR}
 )
 
@@ -878,7 +877,7 @@ if(BUILD_TESTING)
     set_source_files_properties(tests/test_installed_levels.cpp server/installed_levels.cpp server/registration_envelope.cpp
       patch/asset_registry.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_installed_levels PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_installed_levels PRIVATE GTest::gtest GTest::gtest_main zstd::libzstd
+    target_link_libraries(test_installed_levels PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main zstd::libzstd
       nlohmann_json::nlohmann_json nevr_api)
     gtest_discover_tests(test_installed_levels DISCOVERY_MODE PRE_TEST)
 
@@ -1025,7 +1024,7 @@ if(BUILD_TESTING)
     add_executable(test_telemetry_game_properties tests/test_telemetry_game_properties.cpp)
     set_source_files_properties(tests/test_telemetry_game_properties.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_telemetry_game_properties PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_telemetry_game_properties PRIVATE GTest::gtest GTest::gtest_main nevr_api)
+    target_link_libraries(test_telemetry_game_properties PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main nevr_api)
     gtest_discover_tests(test_telemetry_game_properties DISCOVERY_MODE PRE_TEST)
 
     # ParseEndpoint unit tests — validates N1 fix (strtoul + errno vs std::stoul throw)
@@ -1155,7 +1154,7 @@ if(BUILD_TESTING)
     set_source_files_properties(tests/test_evr_codec.cpp tests/test_lobby_frame.cpp compat/evr_codec.cpp
       compat/login_profile.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_evr_codec PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_evr_codec PRIVATE
+    target_link_libraries(test_evr_codec PRIVATE nevr::plugin_sdk
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_evr_codec DISCOVERY_MODE PRE_TEST)
 
@@ -1168,7 +1167,7 @@ if(BUILD_TESTING)
     set_source_files_properties(../quest/tests/session_router_test.cpp compat/session_router.cpp compat/evr_codec.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_session_router PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_session_router PRIVATE nlohmann_json::nlohmann_json)
+    target_link_libraries(test_session_router PRIVATE nevr::plugin_sdk nlohmann_json::nlohmann_json)
 
     # Self-check unit (compat/self_check.cpp): the registry that reports a run-card check's result as one
     # remote log string, and the SNSRemoteLogSetv3 frame builder it sends through. Platform neutral, the same
@@ -1180,7 +1179,7 @@ if(BUILD_TESTING)
     set_source_files_properties(tests/test_self_check.cpp compat/self_check.cpp compat/evr_codec.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_self_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_self_check PRIVATE
+    target_link_libraries(test_self_check PRIVATE nevr::plugin_sdk
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_self_check DISCOVERY_MODE PRE_TEST)
 
@@ -1193,7 +1192,7 @@ if(BUILD_TESTING)
     set_source_files_properties(tests/test_party_share_check.cpp compat/self_check.cpp compat/evr_codec.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_party_share_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_party_share_check PRIVATE
+    target_link_libraries(test_party_share_check PRIVATE nevr::plugin_sdk
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_party_share_check DISCOVERY_MODE PRE_TEST)
 
@@ -1206,7 +1205,7 @@ if(BUILD_TESTING)
     set_source_files_properties(tests/test_party_leave_check.cpp compat/self_check.cpp compat/evr_codec.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_party_leave_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_party_leave_check PRIVATE
+    target_link_libraries(test_party_leave_check PRIVATE nevr::plugin_sdk
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_party_leave_check DISCOVERY_MODE PRE_TEST)
 
@@ -1219,7 +1218,7 @@ if(BUILD_TESTING)
     set_source_files_properties(tests/test_quit_check.cpp compat/self_check.cpp compat/evr_codec.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_quit_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_quit_check PRIVATE
+    target_link_libraries(test_quit_check PRIVATE nevr::plugin_sdk
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_quit_check DISCOVERY_MODE PRE_TEST)
 
@@ -1232,7 +1231,7 @@ if(BUILD_TESTING)
     set_source_files_properties(tests/test_friend_request_check.cpp compat/self_check.cpp compat/evr_codec.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_friend_request_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_friend_request_check PRIVATE
+    target_link_libraries(test_friend_request_check PRIVATE nevr::plugin_sdk
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_friend_request_check DISCOVERY_MODE PRE_TEST)
 
@@ -1245,7 +1244,7 @@ if(BUILD_TESTING)
     set_source_files_properties(tests/test_credential_cache_check.cpp compat/self_check.cpp compat/evr_codec.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_credential_cache_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_credential_cache_check PRIVATE
+    target_link_libraries(test_credential_cache_check PRIVATE nevr::plugin_sdk
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_credential_cache_check DISCOVERY_MODE PRE_TEST)
 
@@ -1261,7 +1260,7 @@ if(BUILD_TESTING)
     add_executable(test_invite_wizard tests/test_invite_wizard.cpp log/symcache_data.cpp)
     set_source_files_properties(tests/test_invite_wizard.cpp log/symcache_data.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_invite_wizard PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_invite_wizard PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    target_link_libraries(test_invite_wizard PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_invite_wizard DISCOVERY_MODE PRE_TEST)
 
     # #1156, docs/adr/0017: the request worker (patch/invite_worker.h): header only, pure, a real thread over a fake transport.
@@ -1290,7 +1289,7 @@ if(BUILD_TESTING)
     add_executable(test_invite_choices tests/test_invite_choices.cpp)
     set_source_files_properties(tests/test_invite_choices.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_invite_choices PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_invite_choices PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    target_link_libraries(test_invite_choices PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_invite_choices DISCOVERY_MODE PRE_TEST)
 
     # #896, #906, docs/adr/0017: the UI text writer (patch/ui_text.h): header only, pure.
@@ -1316,7 +1315,7 @@ if(BUILD_TESTING)
     set_source_files_properties(tests/test_status_redirect_check.cpp compat/self_check.cpp compat/evr_codec.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_status_redirect_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_status_redirect_check PRIVATE
+    target_link_libraries(test_status_redirect_check PRIVATE nevr::plugin_sdk
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_status_redirect_check DISCOVERY_MODE PRE_TEST)
 
@@ -1330,17 +1329,17 @@ if(BUILD_TESTING)
     set_source_files_properties(tests/test_legacy_codec.cpp compat/legacy_codec.cpp compat/evr_codec.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_legacy_codec PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_legacy_codec PRIVATE
+    target_link_libraries(test_legacy_codec PRIVATE nevr::plugin_sdk
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json zstd::libzstd ZLIB::ZLIB)
     gtest_discover_tests(test_legacy_codec DISCOVERY_MODE PRE_TEST)
 
     # CSymbol64Hash with plain `char` unsigned, as under the NDK's AArch64 clang (#657). A change to
-    # abi/symbol_hash.h that zero-extends a byte >= 0x80 passes with the default signed char and fails here.
+    # nevr/symbol_hash.h that zero-extends a byte >= 0x80 passes with the default signed char and fails here.
     add_executable(test_symbol_hash tests/test_symbol_hash.cpp)
     set_source_files_properties(tests/test_symbol_hash.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_compile_options(test_symbol_hash PRIVATE -funsigned-char)
     target_include_directories(test_symbol_hash PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_symbol_hash PRIVATE GTest::gtest GTest::gtest_main)
+    target_link_libraries(test_symbol_hash PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_symbol_hash DISCOVERY_MODE PRE_TEST)
 
     # The per-login legacy session (compat/legacy_session.cpp) on top of the translator; same platform-neutral
@@ -1353,7 +1352,7 @@ if(BUILD_TESTING)
     set_source_files_properties(tests/test_legacy_session.cpp compat/legacy_session.cpp compat/legacy_codec.cpp
       compat/evr_codec.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_legacy_session PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_legacy_session PRIVATE
+    target_link_libraries(test_legacy_session PRIVATE nevr::plugin_sdk
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json zstd::libzstd ZLIB::ZLIB)
     gtest_discover_tests(test_legacy_session DISCOVERY_MODE PRE_TEST)
 
@@ -1365,7 +1364,7 @@ if(BUILD_TESTING)
     set_source_files_properties(tests/test_asset_registry.cpp patch/asset_registry.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_asset_registry PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_asset_registry PRIVATE
+    target_link_libraries(test_asset_registry PRIVATE nevr::plugin_sdk
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_asset_registry DISCOVERY_MODE PRE_TEST)
 
@@ -1399,14 +1398,14 @@ if(BUILD_TESTING)
     add_executable(test_menu_version_label tests/test_menu_version_label.cpp)
     set_source_files_properties(tests/test_menu_version_label.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_menu_version_label PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_menu_version_label PRIVATE GTest::gtest GTest::gtest_main)
+    target_link_libraries(test_menu_version_label PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_menu_version_label DISCOVERY_MODE PRE_TEST)
 
     # test_splash_skip.cpp (#962, header-only patch/splash_skip_rules.h).
     add_executable(test_splash_skip tests/test_splash_skip.cpp)
     set_source_files_properties(tests/test_splash_skip.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_splash_skip PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_splash_skip PRIVATE GTest::gtest GTest::gtest_main)
+    target_link_libraries(test_splash_skip PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_splash_skip DISCOVERY_MODE PRE_TEST)
 
     # test_ui_texture_mips.cpp (#961, header-only patch/ui_texture_mips_rules.h).
@@ -1438,9 +1437,8 @@ if(BUILD_TESTING)
     # test_window_watch.cpp (#341, the decision half of frame/window_watch.h) ride in this executable.
     add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp tests/test_return_to_lobby_hold.cpp
                    tests/test_server_bringup.cpp tests/test_return_to_lobby_queue.cpp tests/test_window_watch.cpp)
-    target_include_directories(test_schannel_cred_guard PRIVATE ${CMAKE_SOURCE_DIR}/src
-                               ${CMAKE_SOURCE_DIR}/plugins/common/include)
-    target_link_libraries(test_schannel_cred_guard PRIVATE GTest::gtest GTest::gtest_main)
+    target_include_directories(test_schannel_cred_guard PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_schannel_cred_guard PRIVATE GTest::gtest GTest::gtest_main nevr::plugin_sdk)
     gtest_discover_tests(test_schannel_cred_guard DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_hooking tests/test_hooking.cpp)
@@ -1644,7 +1642,6 @@ if(BUILD_TESTING)
     )
     target_include_directories(test_behavioral PRIVATE
       ${CMAKE_SOURCE_DIR}/src
-      ${CMAKE_SOURCE_DIR}/plugins/common/include
       ${CMAKE_BINARY_DIR}
     )
     # ws_bridge.cpp uses ixwebsocket and nlohmann-json. The test creates
@@ -1666,7 +1663,7 @@ if(BUILD_TESTING)
       )
     endif()
     target_link_libraries(test_behavioral PRIVATE
-      GTest::gtest GTest::gtest_main
+      GTest::gtest GTest::gtest_main nevr::plugin_sdk
       ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json minhook CURL::libcurl
       ws2_32 psapi advapi32 crypt32
     )
@@ -1678,7 +1675,7 @@ if(BUILD_TESTING)
     add_library(test_plugin_future_api SHARED
       tests/plugin_future_api_test_dll.cpp)
     target_compile_definitions(test_plugin_future_api PRIVATE NEVR_PLUGIN_EXPORTS)
-    target_include_directories(test_plugin_future_api PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_plugin_future_api PRIVATE nevr::plugin_sdk)
     set_target_properties(test_plugin_future_api PROPERTIES
       PREFIX ""
       OUTPUT_NAME "test_plugin_future_api"
@@ -1686,7 +1683,7 @@ if(BUILD_TESTING)
     add_library(test_plugin_onframe SHARED
       tests/plugin_onframe_test_dll.cpp)
     target_compile_definitions(test_plugin_onframe PRIVATE NEVR_PLUGIN_EXPORTS)
-    target_include_directories(test_plugin_onframe PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_plugin_onframe PRIVATE nevr::plugin_sdk)
     set_target_properties(test_plugin_onframe PROPERTIES
       PREFIX ""
       OUTPUT_NAME "test_plugin_onframe"
@@ -1697,7 +1694,7 @@ if(BUILD_TESTING)
         tests/plugin_logging_test_dll.cpp)
       target_compile_definitions(test_plugin_logging_${_logging_suffix} PRIVATE NEVR_PLUGIN_EXPORTS
         TEST_PLUGIN_NAME="test-plugin-logging-${_logging_suffix}")
-      target_include_directories(test_plugin_logging_${_logging_suffix} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+      target_link_libraries(test_plugin_logging_${_logging_suffix} PRIVATE nevr::plugin_sdk)
       set_target_properties(test_plugin_logging_${_logging_suffix} PROPERTIES
         PREFIX ""
         OUTPUT_NAME "test_plugin_logging_${_logging_suffix}"
@@ -1707,7 +1704,7 @@ if(BUILD_TESTING)
     add_library(test_plugin_level SHARED
       tests/plugin_level_test_dll.cpp)
     target_compile_definitions(test_plugin_level PRIVATE NEVR_PLUGIN_EXPORTS)
-    target_include_directories(test_plugin_level PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_plugin_level PRIVATE nevr::plugin_sdk)
     set_target_properties(test_plugin_level PROPERTIES
       PREFIX ""
       OUTPUT_NAME "test_plugin_level"
@@ -1715,7 +1712,7 @@ if(BUILD_TESTING)
     add_library(test_plugin_init_fail SHARED
       tests/plugin_init_fail_test_dll.cpp)
     target_compile_definitions(test_plugin_init_fail PRIVATE NEVR_PLUGIN_EXPORTS)
-    target_include_directories(test_plugin_init_fail PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_plugin_init_fail PRIVATE nevr::plugin_sdk)
     set_target_properties(test_plugin_init_fail PROPERTIES
       PREFIX ""
       OUTPUT_NAME "test_plugin_init_fail"
@@ -1723,7 +1720,7 @@ if(BUILD_TESTING)
     add_library(test_plugin_partial_init_fail SHARED
       tests/plugin_partial_init_fail_test_dll.cpp)
     target_compile_definitions(test_plugin_partial_init_fail PRIVATE NEVR_PLUGIN_EXPORTS)
-    target_include_directories(test_plugin_partial_init_fail PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_plugin_partial_init_fail PRIVATE nevr::plugin_sdk)
     set_target_properties(test_plugin_partial_init_fail PROPERTIES
       PREFIX ""
       OUTPUT_NAME "test_plugin_partial_init_fail"
@@ -1731,7 +1728,7 @@ if(BUILD_TESTING)
     add_library(test_plugin_info_keeper SHARED
       tests/plugin_info_keeper_test_dll.cpp)
     target_compile_definitions(test_plugin_info_keeper PRIVATE NEVR_PLUGIN_EXPORTS)
-    target_include_directories(test_plugin_info_keeper PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_plugin_info_keeper PRIVATE nevr::plugin_sdk)
     set_target_properties(test_plugin_info_keeper PROPERTIES
       PREFIX ""
       OUTPUT_NAME "test_plugin_info_keeper"
@@ -1769,7 +1766,7 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_abi nevr_api nlohmann_json::nlohmann_json ZLIB::ZLIB ws2_32)
     gtest_discover_tests(test_messages DISCOVERY_MODE PRE_TEST)
 
-    # test_plugin_logger.cpp (#34, header-only plugins/common/include/plugin_logger.h) and
+    # test_plugin_logger.cpp (#34, header-only sdk/include/nevr/plugin_logger.h) and
     # test_plugin_log.cpp (#598, header-only ext/plugin_log.h) and
     # test_rate_limiter.cpp (#894, header-only log/rate_limiter.h) ride in this
     # executable so the existing `just test-auth-unit` loop runs it.
@@ -1777,9 +1774,8 @@ if(BUILD_TESTING)
       tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_rate_limiter.cpp lifecycle/crash_dump_format.cpp)
     set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_rate_limiter.cpp lifecycle/crash_dump_format.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src
-      ${CMAKE_SOURCE_DIR}/plugins/common/include)
-    target_link_libraries(test_crash_recovery PRIVATE GTest::gtest GTest::gtest_main)
+    target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_crash_recovery PRIVATE GTest::gtest GTest::gtest_main nevr::plugin_sdk)
     gtest_discover_tests(test_crash_recovery DISCOVERY_MODE PRE_TEST)
   endif()
 endif()

@@ -7,7 +7,7 @@
 #include <mutex>
 
 #include "core/logging.h"
-#include "nevr_common.h"
+#include "nevr/pc/nevr_common.h"
 #include "runtime/hook/patching.h"
 #include "runtime/patch/coop_ai_trace_rules.h"
 

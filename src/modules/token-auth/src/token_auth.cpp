@@ -19,9 +19,9 @@
 #include "core/device_auth_flow.h"
 #include "core/signin_dialog_text.h"
 #include "core/signin_dialog_lifecycle.h"
-#include "auth_token_refresh.h"
+#include "core/auth_token_refresh.h"
 #include "core/bounded_retry.h"
-#include "nevr_curl.h"
+#include "core/nevr_curl.h"
 #include "runtime/log/url_diagnostics.h"
 #include "runtime/log/security_diagnostics.h"
 

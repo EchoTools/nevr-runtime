@@ -2,7 +2,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "extension/plugin_interface.h"
+#include "nevr/plugin_interface.h"
 #include "runtime/patch/asset_registry.h"
 
 using nevr::assets::Asset;
@@ -150,7 +150,7 @@ TEST(AssetRegistry, StatusNamesAreStableForLogsAndPlugins) {
     EXPECT_STREQ(ToString(RegisterStatus::AlreadyLoaded), "already_loaded");
 }
 
-// The status codes are public ABI (extension/plugin_interface.h, NevrAssetStatus): a plugin compiled against v6
+// The status codes are public ABI (nevr/plugin_interface.h, NevrAssetStatus): a plugin compiled against v6
 // compares the return of NEVR_RegisterAsset with those values, so the host's enum may never drift from them.
 static_assert(static_cast<int>(RegisterStatus::Ok) == NEVR_ASSET_OK);
 static_assert(static_cast<int>(RegisterStatus::BadArgument) == NEVR_ASSET_BAD_ARGUMENT);

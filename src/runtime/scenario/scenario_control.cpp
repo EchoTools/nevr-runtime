@@ -21,7 +21,7 @@
 
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
-#include "nevr_common.h"
+#include "nevr/pc/nevr_common.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
 #include "runtime/compat/ws_bridge.h"

@@ -27,7 +27,7 @@
 #include <thread>
 #include <vector>
 
-#include "extension/plugin_interface.h"
+#include "nevr/plugin_interface.h"
 #include "quest/plugins/autopilot/autopilot.h"
 #include "quest/plugins/autopilot/plugin.h"
 #include "quest/plugins/autopilot/route.h"

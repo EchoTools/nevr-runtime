@@ -215,6 +215,9 @@ find_package(Protobuf REQUIRED)
 # archive or the module DLLs, so yaml-cpp cannot leak into a module.
 find_package(yaml-cpp CONFIG REQUIRED)
 
+# The plugin SDK (sdk/CMakeLists.txt): nevr::plugin_sdk, the published plugin ABI and helpers. The runtime builds against
+# the same target a plugin outside this repository links.
+add_subdirectory(sdk)
 add_subdirectory(src/abi)
 add_subdirectory(src/core)
 add_subdirectory(src/nevr_api)
@@ -232,6 +235,8 @@ add_subdirectory(src/legacy/gamepatches)
 # Scoped to the target so nothing else in the tree can resolve the old spelling.
 # Delete src/legacy-compat/ and this line together when legacy is retired.
 target_include_directories(gamepatcheslegacy PRIVATE "${CMAKE_SOURCE_DIR}/src/legacy-compat")
+# common/nevr_plugin_interface.h forwards to the plugin SDK's nevr/plugin_interface.h.
+target_link_libraries(gamepatcheslegacy PRIVATE nevr::plugin_sdk)
 # Frozen code carries warnings it may not lose; -Werror applies to everything else.
 if(MINGW)
   target_compile_options(gamepatcheslegacy PRIVATE -Wno-error)
@@ -257,8 +262,6 @@ add_subdirectory(src/libovr-stub)
 
 # Server launcher — thin CreateProcess wrapper that spawns echovr.exe -server -no-console
 add_subdirectory(src/launcher)
-
-add_subdirectory(plugins)
 
 # =============================================================================
 # Optional drop-in build modules (modules/*/CMakeLists.txt)

@@ -283,24 +283,27 @@ speaks plaintext to a local proxy, and the proxy terminates TLS outbound.
 Optional, discovered from a `plugins/` directory next to the game binary and
 loaded via the `NvrPluginInterface` lifecycle.
 
-| Plugin | Output | Purpose |
-| ------ | ------ | ------- |
-| `example` | `nevr_example.dll` | Reference implementation for new plugin authors |
-| `debug-lockout` | `nevr_debug_lockout.dll` | Debug instrumentation for early-quit lockout state |
+A plugin builds against the plugin SDK in `sdk/`: the header-only CMake target
+`nevr::plugin_sdk`, with the plugin C ABI (`nevr/plugin_interface.h`) and the
+plugin-side helpers. `cmake -S sdk -B <dir> && cmake --install <dir> --prefix <prefix>`
+installs it for `find_package(NevrPluginSdk <api> CONFIG)`; FetchContent with
+`SOURCE_SUBDIR sdk` adds it from a source tree. `nevr/*.h` builds for PC and Quest;
+`nevr/pc/*.h` is Windows only.
 
 Gameplay and tooling plugins live in the separate `nevr-runtime-plugins`
-repository. `log-filter` source remains in `plugins/log-filter/`, but it is not
-built or packaged; the loader rejects `log_filter.dll` because its filter is
-already built into the runtime.
+repository. The loader rejects `log_filter.dll`, because its filter is built
+into the runtime.
 
 ### Other targets
 
 - `src/nevr_api/` — protobuf, generated into `gen/cpp/` (`just proto`)
 - `src/abi/` → `libnevr_abi.a` — the echovr.exe ABI surface: game types, function
-  pointers, symbol IDs, CSymbol64 hashing
+  pointers, symbol IDs
 - `src/core/` → `libnevr_core.a` — our own primitives: logging, globals, base64,
   hooking, auth-token model, `pch.h` (links `nevr_abi`)
-- `src/extension/` — header-only published C ABI for third-party plugins/modules
+- `sdk/` → `nevr::plugin_sdk` — the plugin SDK: the plugin C ABI, the CSymbol64 hash
+  and the plugin-side helpers, header-only
+- `src/extension/` — header-only published C ABI for the static modules and the scripting host
 - `src/launcher/` → `echovr_server.exe`, a `CreateProcess` wrapper spawning
   `echovr.exe -server -headless -no-console` (a dedicated game server)
 - `src/libovr-stub/` → `LibOVRPlatform64_1.dll` — Oculus platform stub, built
@@ -355,11 +358,11 @@ src/runtime/   nevr-runtime.dll — hooks, modes, crash recovery, gameserver; sr
 src/modules/       statically linked module implementations (platform-compat, token-auth)
 src/abi/           libnevr_abi.a  — the echovr.exe ABI surface
 src/core/          libnevr_core.a — our own primitives (links nevr_abi)
-src/extension/     header-only C ABI published to third-party DLLs
+src/extension/     header-only C ABI of the static modules and the scripting host
 src/nevr_api/      protobuf target
 src/legacy/        FROZEN v1
 src/legacy-compat/ two forwarding headers; frozen legacy needs them
-plugins/           optional plugins
+sdk/               the plugin SDK (nevr::plugin_sdk), header-only
 tools/             build and verify tooling
 tests/             Go system suites (not part of `just verify`)
 extern/            submodules: minhook, breakpad, lss

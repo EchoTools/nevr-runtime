@@ -16,7 +16,7 @@
 #include <cstdint>
 #include <mutex>
 
-#include "plugin_logger.h"
+#include "nevr/plugin_logger.h"
 
 namespace nevr {
 namespace detail {

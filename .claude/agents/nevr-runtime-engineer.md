@@ -210,11 +210,10 @@ The C++ addendum says warnings are errors. The MinGW targets apply it; check wit
   **Do NOT "restore" `log_filter.dll` to fix a logging problem — that plugin
   CAUSES the outage it looks like it would fix.** The loader refuses it by name
   (`kSupersededByBuiltin` = `log_filter.dll`, `log-filter.dll` in
-  `src/runtime/ext/plugin_loader.cpp`) per N89, and it is not built (N95; comment in
-  `plugins/CMakeLists.txt`) or packaged.
-- Plugin DLLs (`plugins/example`, `plugins/debug-lockout` per `plugins/CMakeLists.txt`)
-  are built statically: Win32/UCRT imports only, no libstdc++/libgcc/winpthread/vcpkg
-  runtime deps (earlier measurement, not re-measured this pass).
+  `src/runtime/ext/plugin_loader.cpp`) per N89, and it is not built (N95) or packaged.
+- No PC plugin is built in this repo. The plugin SDK is `sdk/` (`nevr::plugin_sdk`,
+  header-only; `sdk/include/nevr/` builds for PC and Quest, `sdk/include/nevr/pc/` is
+  Windows only); the test plugin fixtures in `src/runtime/tests/` build against it.
 
 ## The fatal-error path — legacy BUG N4 is **FIXED**
 

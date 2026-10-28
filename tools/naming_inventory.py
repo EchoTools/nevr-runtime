@@ -82,7 +82,7 @@ def pascal_namespaces(files):
 
 
 # Files that name the GAME's own log tags (to filter or match them), help text, and tests: not the project's tags.
-GAME_TAG_FILES = ("src/runtime/log/builtin_filter.", "plugins/log-filter/", "src/runtime/hook/addresses.h",
+GAME_TAG_FILES = ("src/runtime/log/builtin_filter.", "src/runtime/hook/addresses.h",
                   "src/quest/sentinel/pinned_targets.h", "src/quest/social/social_abi.h", "src/runtime/log/symcache.",
                   "src/runtime/lifecycle/cli.cpp", "src/core/logging.cpp")
 

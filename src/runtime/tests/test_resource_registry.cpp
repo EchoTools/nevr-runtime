@@ -11,7 +11,7 @@
 #include <map>
 #include <string>
 
-#include "resource_registry.h"
+#include "nevr/pc/resource_registry.h"
 
 namespace {
 
