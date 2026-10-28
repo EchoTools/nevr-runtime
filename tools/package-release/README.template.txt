@@ -29,7 +29,7 @@ Install
   nevr-runtime.dll.legacy-<timestamp>. It deletes nothing, writes only BugSplat64.dll in the game folder, puts
   every file back as it was if a step fails, and writes a log (a [NEVR.INSTALL] JSON file) whose path it
   prints. When the signed manifest cannot be fetched, the core uses the copy it stored on an earlier run if that
-  copy is still valid; with none stored it stops and changes nothing. To use another nEVR folder, add -Root "<folder>".
+  copy is still valid; with none stored it stops before it writes anything. To use another nEVR folder, add -Root "<folder>".
 
 Running a dedicated server
   echovr_server.exe in this package starts a dedicated server. install.ps1 does not copy it. Install

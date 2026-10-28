@@ -642,3 +642,219 @@ fn a_run_without_an_artifact_dir_logs_no_dev_trust_field() {
     assert_eq!(code, 1);
     assert!(records(&w).iter().all(|r| r.get("trust").is_none()));
 }
+
+#[test]
+fn a_sha256sums_line_next_to_the_apk_is_its_expected_hash() {
+    let w = world_with(false, true, true);
+    let tools = fake_tools("com.readyatdawn.r15", 7, DEV_SIGNER);
+    let sha = sha256_hex(b"apk-bytes");
+    // The plain form, and the `*name` form of binary mode (each against a headset that has nothing installed).
+    for line in [format!("{sha}  r15.apk\n"), format!("{sha} *r15.apk\n")] {
+        let state = tempfile::tempdir().unwrap();
+        let dir = dev_dir(b"apk-bytes", None);
+        std::fs::write(dir.path().join("SHA256SUMS"), &line).unwrap();
+        let (code, out, err) = run_dev(&w, &tools, &state, &dir, &[]);
+        assert_eq!((code, out["state"].as_str()), (0, Some("installed")), "{line:?}: {out} {err}");
+    }
+    // A line for another file, or two lines for this one, is not an expectation.
+    for sums in [format!("{sha}  other.apk\n"), format!("{sha}  r15.apk\n{sha}  r15.apk\n")] {
+        let state = tempfile::tempdir().unwrap();
+        let dir = dev_dir(b"apk-bytes", None);
+        std::fs::write(dir.path().join("SHA256SUMS"), &sums).unwrap();
+        let (code, out, _) = run_dev(&w, &tools, &state, &dir, &[]);
+        assert_eq!(code, 1, "{sums:?}: {out}");
+        assert!(out["reason"].as_str().unwrap().contains("no sidecar"), "{out}");
+    }
+}
+
+// ---- a Quest install from the signed release, against a fake headset ---------------------------------------------------
+
+const QUEST_APK: &[u8] = b"quest-apk-bytes";
+const QUEST_DATA_FILE: &[u8] = b"abc";
+
+/// A release with a `quest-apk` (versionCode 7, signed by `DEV_SIGNER`) and a one-file `game-data`, both served.
+fn quest_world() -> World {
+    let keys = tempfile::tempdir().unwrap();
+    let k = make_key(keys.path(), "k");
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut z = zip::ZipWriter::new(&mut buf);
+        z.start_file("_data/x", zip::write::SimpleFileOptions::default()).unwrap();
+        z.write_all(QUEST_DATA_FILE).unwrap();
+        z.finish().unwrap();
+    }
+    let data_zip = buf.into_inner();
+    let artifacts = vec![
+        json!({"kind": "quest-apk", "platform": "android-arm64", "path": "v1.0.0/nevr-runtime-v1.0.0-quest.apk", "size": QUEST_APK.len(), "sha256": sha256_hex(QUEST_APK),
+            "android": {"package": "com.readyatdawn.r15", "version_code": 7, "signer_cert_sha256": [DEV_SIGNER]}}),
+        json!({"kind": "game-data", "platform": "android-arm64", "path": "data/echovr-data-aaaaaaaaaaaa.zip", "size": data_zip.len(), "sha256": sha256_hex(&data_zip),
+            "game_data": {"data_version": "1", "echo_build": "2"},
+            "contents": [{"path": "_data/x", "sha256": sha256_hex(QUEST_DATA_FILE), "size": QUEST_DATA_FILE.len()}]}),
+    ];
+    let m = manifest_json(5, json!({"channels": {"beta": "1.0.0"}, "releases": {"1.0.0": {"artifacts": artifacts}}}));
+    let sig = sign(keys.path(), &k, &m, false);
+    let routes = HashMap::from([
+        ("/manifest.json".to_string(), m),
+        ("/manifest.json.sig".to_string(), sig),
+        ("/v1.0.0/nevr-runtime-v1.0.0-quest.apk".to_string(), QUEST_APK.to_vec()),
+        ("/data/echovr-data-aaaaaaaaaaaa.zip".to_string(), data_zip),
+    ]);
+    finish(serve_forever(routes), &k, keys)
+}
+
+/// A fake `adb` that behaves like a headset: `FAKE_STATE/installed` and `version` say what is installed (`install` makes it
+/// versionCode 7), `extracted` says the game data is there (`unzip` makes it so). Every call after `-s <serial>` is
+/// logged to `adb.log`, and the target of its stdin to `stdin.log`. `FAKE_DEVICES`, `FAKE_PM_RC`, `FAKE_PM_OUT` and
+/// `FAKE_PUSH_RC` change what it answers. aapt2 and apksigner report the release's own package, versionCode and signer.
+fn fake_headset() -> tempfile::TempDir {
+    let d = fake_tools("com.readyatdawn.r15", 7, DEV_SIGNER);
+    let adb = d.path().join("adb");
+    std::fs::write(
+        &adb,
+        r#"#!/bin/bash
+S="$FAKE_STATE"
+echo "stdin=$(readlink /proc/self/fd/0)" >> "$S/stdin.log"
+if [ "$1" = devices ]; then printf 'List of devices attached\n%b' "${FAKE_DEVICES-Q1\tdevice\n}"; exit 0; fi
+[ "$1" = -s ] && shift 2
+echo "$*" >> "$S/adb.log"
+case "$1" in
+  install) echo Success; echo 7 > "$S/version"; touch "$S/installed"; exit 0 ;;
+  uninstall) echo Success; exit 0 ;;
+  push) exit "${FAKE_PUSH_RC:-0}" ;;
+  shell)
+    case "$2" in
+      "pm path"*)
+        if [ -n "${FAKE_PM_RC:-}" ]; then echo "${FAKE_PM_OUT:-}"; exit "$FAKE_PM_RC"; fi
+        if [ -e "$S/installed" ]; then echo package:/x; exit 0; fi
+        exit 1 ;;
+      "dumpsys package"*) echo "    versionCode=$(cat "$S/version") minSdk=29"; exit 0 ;;
+      "getprop"*) echo fake; exit 0 ;;
+      "df -Pk"*) printf 'Filesystem 1K-blocks Used Available Use%% Mounted\nx 1 1 9000000 1%% /\n'; exit 0 ;;
+      "for f in"*) [ -e "$S/extracted" ] && echo "/sdcard/Android/media/com.readyatdawn.r15/files/_data/x 3"; exit 0 ;;
+      "mkdir -p"*) touch "$S/extracted"; exit 0 ;;
+      *) exit 0 ;;
+    esac ;;
+esac
+exit 0
+"#,
+    )
+    .unwrap();
+    d
+}
+
+fn run_quest(w: &World, tools: &tempfile::TempDir, state: &tempfile::TempDir, args: &[&str], envs: &[(&str, &str)]) -> (i32, Value, String) {
+    let path = format!("{}:{}", tools.path().display(), std::env::var("PATH").unwrap());
+    let mut all = vec![("PATH", path), ("FAKE_STATE", state.path().display().to_string())];
+    all.extend(envs.iter().map(|(k, v)| (*k, v.to_string())));
+    run_with(w, args, &w.base, &all)
+}
+
+fn adb_calls(state: &tempfile::TempDir) -> Vec<String> {
+    std::fs::read_to_string(state.path().join("adb.log")).unwrap_or_default().lines().map(String::from).collect()
+}
+
+/// `calls` holds one entry starting with each of `wanted`, in that order (other calls may lie between them).
+fn assert_in_order(calls: &[String], wanted: &[&str]) {
+    let mut at = 0;
+    for w in wanted {
+        match calls[at..].iter().position(|c| c.starts_with(w)) {
+            Some(i) => at += i + 1,
+            None => panic!("{w:?} is missing or out of order in {calls:#?}"),
+        }
+    }
+}
+
+#[test]
+fn a_quest_install_over_adb_runs_the_whole_sequence_in_order_and_removes_the_temp_zip() {
+    let (w, tools, state) = (quest_world(), fake_headset(), tempfile::tempdir().unwrap());
+    // An older build of the game is installed and the game data is absent.
+    std::fs::write(state.path().join("installed"), b"").unwrap();
+    std::fs::write(state.path().join("version"), b"6\n").unwrap();
+    let (code, out, err) = run_quest(&w, &tools, &state, &["quest", "install"], &[]);
+    assert_eq!((code, out["state"].as_str()), (0, Some("installed")), "{out} {err}");
+    let calls = adb_calls(&state);
+    let apk = w.root.path().join("work/nevr-runtime-v1.0.0-quest.apk");
+    let zip = w.root.path().join("work/echovr-data-aaaaaaaaaaaa.zip");
+    let media = "/sdcard/Android/media/com.readyatdawn.r15/files";
+    assert_in_order(
+        &calls,
+        &[
+            "shell pm path com.readyatdawn.r15",
+            "shell df -Pk /sdcard",
+            "shell df -Pk /data/local/tmp",
+            &format!("install -r -g {}", apk.display()),
+            &format!("push {} /data/local/tmp/_nevr_data.zip", zip.display()),
+            &format!("shell mkdir -p '{media}' && cd '{media}' && unzip -o '/data/local/tmp/_nevr_data.zip'"),
+            "shell rm -f '/data/local/tmp/_nevr_data.zip'",
+            "shell pm path com.readyatdawn.r15", // the read-back after the install
+        ],
+    );
+    assert!(!calls.iter().any(|c| c.starts_with("uninstall")), "{calls:?}");
+    assert!(w.root.path().join("state/install-record.json").exists());
+    // A second run finds the package current and the data present, and touches nothing.
+    std::fs::remove_file(state.path().join("adb.log")).unwrap();
+    let (code, out, _) = run_quest(&w, &tools, &state, &["quest", "install"], &[]);
+    assert_eq!((code, out["state"].as_str()), (0, Some("unchanged")), "{out}");
+    assert!(!adb_calls(&state).iter().any(|c| c.starts_with("install") || c.starts_with("push") || c.starts_with("uninstall")));
+}
+
+#[test]
+fn a_quest_install_on_a_headset_without_the_game_installs_instead_of_aborting() {
+    let (w, tools, state) = (quest_world(), fake_headset(), tempfile::tempdir().unwrap());
+    let (code, out, err) = run_quest(&w, &tools, &state, &["quest", "install"], &[]);
+    assert_eq!((code, out["state"].as_str()), (0, Some("installed")), "{out} {err}");
+    let apk = w.root.path().join("work/nevr-runtime-v1.0.0-quest.apk");
+    assert!(adb_calls(&state).contains(&format!("install -g {}", apk.display())), "{:?}", adb_calls(&state));
+}
+
+#[test]
+fn a_failing_package_check_stops_the_run_before_anything_is_installed() {
+    let (w, tools, state) = (quest_world(), fake_headset(), tempfile::tempdir().unwrap());
+    let (code, out, _) = run_quest(&w, &tools, &state, &["quest", "install"], &[("FAKE_PM_RC", "7"), ("FAKE_PM_OUT", "Error: boom")]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out["reason"].as_str().unwrap().contains("package check failed (exit 7): Error: boom"), "{out}");
+    assert!(!adb_calls(&state).iter().any(|c| c.starts_with("install") || c.starts_with("uninstall") || c.starts_with("push")), "{:?}", adb_calls(&state));
+    assert!(!w.root.path().join("state/install-record.json").exists());
+}
+
+#[test]
+fn two_attached_devices_stop_the_run_before_any_call_to_either() {
+    let (w, tools, state) = (quest_world(), fake_headset(), tempfile::tempdir().unwrap());
+    let (code, out, _) = run_quest(&w, &tools, &state, &["quest", "install"], &[("FAKE_DEVICES", "Q1\\tdevice\\nQ2\\tdevice\\n")]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out["reason"].as_str().unwrap().contains("2 adb devices attached"), "{out}");
+    assert_eq!(adb_calls(&state), Vec::<String>::new());
+    assert_eq!(out["state"], "unchanged");
+}
+
+#[test]
+fn a_run_that_changes_the_package_but_fails_to_push_says_needs_user() {
+    let (w, tools, state) = (quest_world(), fake_headset(), tempfile::tempdir().unwrap());
+    let (code, out, _) = run_quest(&w, &tools, &state, &["quest", "install"], &[("FAKE_PUSH_RC", "1")]);
+    assert_eq!((code, out["state"].as_str()), (2, Some("needs-user")), "{out}");
+    assert!(adb_calls(&state).iter().any(|c| c.starts_with("install")), "the package was changed before the push");
+    assert!(out["reason"].as_str().unwrap().contains("adb push failed"), "{out}");
+    assert!(!w.root.path().join("state/install-record.json").exists(), "no install record for a run that did not finish");
+}
+
+#[test]
+fn adb_is_never_given_the_terminal_or_the_callers_stdin() {
+    let (w, tools, state) = (quest_world(), fake_headset(), tempfile::tempdir().unwrap());
+    let path = format!("{}:{}", tools.path().display(), std::env::var("PATH").unwrap());
+    let mut child = Command::new(env!("CARGO_BIN_EXE_nevr-install"))
+        .args(["quest", "install", "--root", w.root.path().to_str().unwrap(), "--base", &w.base, "--pins", w.pins.to_str().unwrap(), "--now", NOW])
+        .env("PATH", path)
+        .env("FAKE_STATE", state.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // The caller's stdin is a pipe with data in it: an adb that inherited it would read it.
+    child.stdin.as_mut().unwrap().write_all(b"typed at the terminal\n").unwrap();
+    let o = child.wait_with_output().unwrap();
+    assert_eq!(o.status.code(), Some(0), "{} {}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    let seen: Vec<String> = std::fs::read_to_string(state.path().join("stdin.log")).unwrap().lines().map(String::from).collect();
+    assert!(seen.len() >= 10, "adb devices, the observations, install, push, extract and the read-back: {seen:?}");
+    assert!(seen.iter().all(|s| s == "stdin=/dev/null"), "{seen:?}");
+}

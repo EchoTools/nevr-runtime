@@ -434,8 +434,9 @@ build-installer:
 # Pass `--yes-uninstall` (`just quest-install --yes-uninstall`) to let the core remove a differently signed install
 # when the headset refuses an in-place update; that uninstall deletes the app's data on the headset. Without it the run
 # ends `needs-user` and says what it would delete. `--version V` installs release V instead of the channel's.
-# Needs adb, aapt2 and apksigner on PATH. A locally repacked tester APK is not installed by this recipe: the core
-# installs only what a signed manifest names.
+# Needs adb, aapt2 and apksigner on PATH. A locally built tester APK is installed by giving the recipe a directory that
+# holds exactly one .apk and its <name>.apk.sha256 (`just quest-install build/package-dev/<sha>`): the core checks the
+# file itself, logs every step as an unverified dev artifact, and still takes the game data from the signed manifest.
 [positional-arguments]
 quest-install *args: build-installer
     NEVR_INSTALL="${CARGO_TARGET_DIR:-installer/target}/release/nevr-install" tools/quest-install.sh "$@"

@@ -39,7 +39,20 @@ pub struct Observed {
     pub installed: Option<Installed>,
     /// `None`: not observed (no device).
     pub data: Option<DataRoots>,
+    /// Free space on the headset, in KiB. `None`: not observed (no device).
+    pub free: Option<FreeSpace>,
 }
+
+/// `df -Pk` of the two places the game data passes through; `None` for one that could not be read.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FreeSpace {
+    pub sdcard_kb: Option<u64>,
+    pub tmp_kb: Option<u64>,
+}
+
+/// The game data is downloaded to the host, pushed to `/data/local/tmp` and unpacked under `/sdcard`: a plan that
+/// downloads it needs this much free in both (2.2 GiB, the figure the shell installer used).
+pub const MIN_FREE_KB: u64 = 2_306_867;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
@@ -240,6 +253,18 @@ pub fn plan_with(m: &Value, version: &str, obs: &Observed, consent_uninstall: bo
         }
     }
 
+    if !data_steps.is_empty() {
+        if let Some(f) = obs.free {
+            for (what, kb) in [("/sdcard", f.sdcard_kb), ("/data/local/tmp", f.tmp_kb)] {
+                match kb {
+                    None => return refuse(p, format!("the free space on {what} could not be read; the game data needs {MIN_FREE_KB} KiB free there")),
+                    Some(kb) if kb < MIN_FREE_KB => return refuse(p, format!("{what} has {kb} KiB free, need {MIN_FREE_KB} KiB for the game data")),
+                    Some(_) => {}
+                }
+            }
+        }
+    }
+
     if needs_user {
         p.outcome = Outcome::NeedsUser;
         return p;
@@ -366,9 +391,11 @@ pub fn observe(dev: &dyn Device, data: Option<&Artifact>, log: &Log) -> Result<O
             facts[key] = json!(o.text.trim());
         }
     }
-    for (key, path) in [("free_kb_sdcard", "/sdcard"), ("free_kb_tmp", "/data/local/tmp")] {
+    let mut free = [None, None];
+    for (i, (key, path)) in [("free_kb_sdcard", "/sdcard"), ("free_kb_tmp", "/data/local/tmp")].into_iter().enumerate() {
         let o = dev.shell(&format!("df -Pk {path}"), 30).map_err(io)?;
-        facts[key] = json!(o.text.lines().nth(1).and_then(|l| l.split_whitespace().nth(3)).and_then(|n| n.parse::<u64>().ok()));
+        free[i] = o.text.lines().nth(1).and_then(|l| l.split_whitespace().nth(3)).and_then(|n| n.parse::<u64>().ok());
+        facts[key] = json!(free[i]);
     }
     let roots = match data {
         Some(a) => Some(DataRoots { media: roots_hold(dev, MEDIA_ROOT, a)?, legacy: roots_hold(dev, LEGACY_ROOT, a)? }),
@@ -376,7 +403,7 @@ pub fn observe(dev: &dyn Device, data: Option<&Artifact>, log: &Log) -> Result<O
     };
     facts["data_present"] = json!(roots.map(|r| json!({"media": r.media, "legacy": r.legacy})));
     log.info("device", 9, facts)?;
-    Ok(Observed { installed, data: roots })
+    Ok(Observed { installed, data: roots, free: Some(FreeSpace { sdcard_kb: free[0], tmp_kb: free[1] }) })
 }
 
 /// Whether every `contents` path of `data` exists under `root` with the listed size.
@@ -498,8 +525,11 @@ pub fn execute(dev: &dyn Device, m: &Value, version: &str, plan: &Plan, opts: &R
             }
             Step::ExtractData => {
                 let zip = data_zip.as_ref().expect("fetched");
-                let o = dev.push(zip, REMOTE_ZIP)?;
-                if o.code != 0 {
+                // A push that fails part way leaves a partial copy of the zip: it is removed on every path.
+                let pushed = dev.push(zip, REMOTE_ZIP);
+                if !matches!(&pushed, Ok(o) if o.code == 0) {
+                    let _ = dev.shell(&format!("rm -f {}", sh_quote(REMOTE_ZIP)), 60);
+                    let o = pushed?;
                     return Err(format!("adb push failed: {}", o.text.trim()));
                 }
                 let x = dev.shell(&format!("mkdir -p {r} && cd {r} && unzip -o {z}", r = sh_quote(MEDIA_ROOT), z = sh_quote(REMOTE_ZIP)), 900);
