@@ -500,6 +500,19 @@ class ReleaseStagesTest(PackageFixture):
         self.assertNotIn("windows-server", texts["RELEASE-NOTES.md"])
         self.assertNotRegex(texts["RELEASE-NOTES.md"], r"-(lite|debug)\.zip")
 
+    def test_the_notes_signing_section_states_the_default_policy_and_the_flag_that_enforces_it(self):
+        # Since #933 a run loads unsigned plugins unless -require-signed-plugins is given. The notes must say that,
+        # and the source must still say it: kDefaultMode (plugin_trust.cpp) and the flag's registration (cli.cpp).
+        sealed = self.seal_to(self.make_tree())
+        notes = self.notes_for(sealed).read_text()
+        self.assertIn("loads unsigned plugins by default", notes)
+        self.assertIn("`-require-signed-plugins`", notes)
+        self.assertNotIn("loads only plugins signed", notes)
+        plugin_trust = (REPO / "src/runtime/ext/plugin_trust.cpp").read_text()
+        self.assertIn("constexpr Mode kDefaultMode = Mode::UnsignedAllowed;", plugin_trust)
+        cli = (REPO / "src/runtime/lifecycle/cli.cpp").read_text()
+        self.assertIn('AddArgSyntax(pArgSyntax, "-require-signed-plugins"', cli)
+
     def test_the_zip_readme_tells_an_operator_how_to_start_a_server_and_its_config_uses_keys_the_runtime_reads(self):
         import yaml
         sealed = self.seal_to(self.make_tree())
