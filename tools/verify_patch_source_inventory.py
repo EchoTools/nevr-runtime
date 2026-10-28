@@ -40,6 +40,8 @@ EXPECTED_PATCH_SOURCES = (
     "patch/mode_patches.cpp",
     "patch/plugin_assets.cpp",
     "patch/pnsrad_enabler.cpp",
+    "patch/render_config.cpp",
+    "patch/render_config_hook.cpp",
     "patch/resource_override.cpp",
     "patch/party_invite_gate.cpp",
     "patch/social_facade.cpp",
@@ -48,7 +50,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/ui_texture_mips.cpp",
     "patch/xpid_patch.cpp",
 )
-EXPECTED_PATCH_SOURCE_COUNT = 27
+EXPECTED_PATCH_SOURCE_COUNT = 29
 
 
 class InventoryError(Exception):
