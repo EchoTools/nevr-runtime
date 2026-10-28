@@ -299,6 +299,12 @@ void RecordLateRefusal(const std::string& file) {
 
 thread_local std::wstring t_stagedPath;
 
+// The file a late load the filter accepted has to map (#1177): the text the filter was asked about (lowercase, as the
+// hook gave it) and the exact path of the file it checked and holds. Set by the filter as it accepts, taken by the
+// rewriter the hook asks next on the same thread, and cleared whenever the filter runs again.
+thread_local std::wstring t_checkedAsked;
+thread_local std::wstring t_checkedFile;
+
 struct FilterState {
   std::mutex mutex;
   std::wstring dirLower;  // plugins directory, lowercase, backslashes, trailing backslash; empty: filter inactive
@@ -309,6 +315,7 @@ struct FilterState {
   // are the bytes the real load maps, and nobody can swap them in between or afterwards.
   struct Verified {
     HANDLE handle = INVALID_HANDLE_VALUE;
+    std::wstring loadPath;  // the held file's final path, case kept: what a load of it has to name (#1177)
     nevr_plugin_tree::HeldFiles deps;
     Verified() = default;
     Verified(const Verified&) = delete;
@@ -418,7 +425,25 @@ bool FileInPluginsDirectory(const FilterState& f, const std::wstring& candidate,
   return false;  // not a file in the plugins directory, or no file at all (the real load reports that)
 }
 
+// Notes the file a late load that passed the check must map, when its text does not already name it (#1177). A bare
+// name is left to the OS search (the plugins directory may not be on it); a run that does not require signatures
+// loads what the caller named.
+void NoteCheckedFile(const wchar_t* lowerPath, const std::wstring& asked, const std::wstring& loadPath, bool bare,
+                     bool enforcing) {
+  if (!enforcing || bare || loadPath.empty() || NormalizeWide(loadPath.c_str()) == asked) return;
+  t_checkedAsked = lowerPath;
+  t_checkedFile = loadPath;
+  if (!nevr_dll_load_hook::LoaderLockHeldByThisThread()) {
+    std::string path;
+    for (wchar_t c : loadPath) path.push_back(c < 0x80 ? static_cast<char>(c) : '?');
+    Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] a later load of %s loads the file it checked, %s",
+        NarrowName(asked).c_str(), path.c_str());
+  }
+}
+
 bool PluginLoadFilter(const wchar_t* lowerPath) {
+  t_checkedAsked.clear();
+  t_checkedFile.clear();
   if (lowerPath == nullptr) return false;
   FilterState& f = Filter();
   std::lock_guard<std::mutex> lock(f.mutex);
@@ -480,7 +505,9 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
     }
   }
   if (!inDirectory) return false;
-  if (f.verified.count(full) != 0) {
+  const auto remembered = f.verified.find(full);
+  if (remembered != f.verified.end()) {
+    NoteCheckedFile(lowerPath, p, remembered->second->loadPath, bare, enforcing);
 #ifdef NEVR_TEST_HOOKS
     if (g_afterLateLoadAccepted != nullptr) g_afterLateLoadAccepted(full);
 #endif
@@ -514,7 +541,17 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
   std::wstring heldPath;
   const nevr_plugin_signature::Verdict v =
       nevr_plugin_signature::VerifyPluginFile(h, nevr_plugin_trust::ActivePolicy(), now);
-  if (!FinalPathOfHandle(h, &heldPath) || heldPath != full) {
+  bool named = FinalPathOfHandleExact(h, &entry->loadPath);
+#ifdef NEVR_TEST_HOOKS
+  if (g_failNamingHeldFile) named = false;
+#endif
+  if (named) {
+    heldPath = entry->loadPath;
+    CharLowerBuffW(heldPath.data(), static_cast<DWORD>(heldPath.size()));
+  }
+  if (!named) {
+    refusal = "cannot name the file it checked";
+  } else if (heldPath != full) {
     refusal = "the file changed between resolving its path and opening it";
   } else if (!v.accepted()) {
     refusal = v.Describe();
@@ -527,6 +564,7 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
     }
   }
   if (refusal.empty()) {
+    NoteCheckedFile(lowerPath, p, entry->loadPath, bare, enforcing);
     f.verified[full] = std::move(entry);
 #ifdef NEVR_TEST_HOOKS
     if (g_afterLateLoadAccepted != nullptr) g_afterLateLoadAccepted(full);
@@ -547,6 +585,16 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] refused a later load of %s: %s", file.c_str(), refusal.c_str());
   }
   RecordLateRefusal(file);
+  return true;
+}
+
+// The hook asks this right after the filters, for a load none of them refused: the file the filter just checked, if
+// the text it was given is not already that file's path (#1177).
+bool PluginLoadRewriter(const wchar_t* lowerPath, std::wstring* loadPath) {
+  if (lowerPath == nullptr || t_checkedFile.empty() || t_checkedAsked != lowerPath) return false;
+  *loadPath = std::move(t_checkedFile);
+  t_checkedFile.clear();
+  t_checkedAsked.clear();
   return true;
 }
 
@@ -581,6 +629,7 @@ void InstallPluginLoadFilter(const std::string& pluginDir) {
   if (!registered) {
     registered = true;
     nevr_dll_load_hook::AddLoadFilter("plugin-signature", &PluginLoadFilter);
+    nevr_dll_load_hook::AddLoadRewriter("plugin-signature", &PluginLoadRewriter);
   }
 }
 

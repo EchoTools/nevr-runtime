@@ -880,6 +880,7 @@ class PluginLateLoadTest : public PluginDependencyGateTest {
  protected:
   void TearDown() override {
     TestHook_SetAfterLateLoadAccepted(nullptr);
+    TestHook_FailNamingTheHeldFile(false);
     for (const char* name : {"late_link.dll", "late_real.dll", "late_evil.dll"}) {
       while (HMODULE m = GetModuleHandleA(name)) {
         if (!FreeLibrary(m)) break;
@@ -997,6 +998,24 @@ TEST_F(PluginLateLoadTest, AnUnsignedAllowedRunLoadsWhatTheCallerNamed) {
     ASSERT_NE(m, nullptr) << GetLastError();
     EXPECT_EQ(GetProcAddress(m, "NvrPluginGetInfo"), nullptr) << "a run that allows unsigned plugins rewrote a load";
   });
+}
+
+TEST_F(PluginLateLoadTest, AFileTheFilterCannotNameIsRefusedInASignedOnlyRun) {
+  Plan("late_real.dll", "signed");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  TestHook_FailNamingTheHeldFile(true);
+  EXPECT_TRUE(Blocked("late_real.dll"));
+  EXPECT_TRUE(TestLogContains("cannot name the file it checked"));
+}
+
+TEST_F(PluginLateLoadTest, AFileTheFilterCannotNameIsLoadedWhenSignaturesAreNotRequired) {
+  nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
+  Plan("late_real.dll", "signed");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  TestHook_FailNamingTheHeldFile(true);
+  EXPECT_FALSE(Blocked("late_real.dll"));
 }
 
 TEST_F(PluginDependencyGateTest, APluginReachedByItsOwnNameIsNotSaidToBeLoadedFromElsewhere) {
