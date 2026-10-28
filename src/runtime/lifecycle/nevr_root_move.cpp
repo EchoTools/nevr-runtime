@@ -65,6 +65,16 @@ bool ToAnsi(const std::wstring& wide, std::string* out) {
   return lossy == FALSE;
 }
 
+// The wide form of an ANSI path (the temp file's name, which the credential writer takes and returns as ANSI).
+std::wstring ToWide(const std::string& ansi) {
+  if (ansi.empty()) return std::wstring();
+  const int needed = MultiByteToWideChar(CP_ACP, 0, ansi.c_str(), static_cast<int>(ansi.size()), nullptr, 0);
+  if (needed <= 0) return std::wstring();
+  std::wstring out(static_cast<std::size_t>(needed), L'\0');
+  MultiByteToWideChar(CP_ACP, 0, ansi.c_str(), static_cast<int>(ansi.size()), out.data(), needed);
+  return out;
+}
+
 bool ReadWholeFile(const std::wstring& path, std::string* bytes, unsigned long* error) {
   HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
                             FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -89,36 +99,64 @@ bool ReadWholeFile(const std::wstring& path, std::string* bytes, unsigned long* 
   return ok;
 }
 
-// Moves the sign-in cache: the bytes go to `to` through the protected write the cache is saved with (born private, flushed, then
-// renamed in, core/credential_write.h), are read back, and only then is the old file removed. A plain MoveFileEx across volumes
-// would give the copy the destination's default protection (under Wine, the host's default mode). Any failure leaves the old
-// file where it is and writes nothing to `to`.
-bool MoveCredentials(const std::wstring& from, const std::wstring& to, unsigned long* error) {
+enum class CredentialMove {
+  kMoved,      // the cache is in the root, as read, and the old file is gone
+  kRootHasIt,  // the root has a cache this call did not leave there: the old file stays and nothing in the root was touched
+  kFailed      // the old file stays, `error` says why, and no cache this call wrote is in the root
+};
+
+// Moves the sign-in cache: the bytes go to a temp file of this call's own through the protected write the cache is saved with
+// (born private, flushed, core/credential_write.h), are read back from it, and are installed as `to` only if there is no cache
+// there, then the old file is removed. A plain MoveFileEx across volumes would give the copy the destination's default
+// protection (under Wine, the host's default mode). A cache in the root outranks the old one, so this never replaces one and
+// never deletes one: a sign-in another process wrote, before or after this call looked, is left exactly as it is. Any failure
+// leaves the old file where it is and no cache of this call's in the root.
+CredentialMove MoveCredentials(const std::wstring& from, const std::wstring& to, unsigned long* error) {
   std::string bytes;
-  if (!ReadWholeFile(from, &bytes, error)) return false;
+  if (!ReadWholeFile(from, &bytes, error)) return CredentialMove::kFailed;
   std::string ansi_to;
   if (!ToAnsi(to, &ansi_to)) {
     *error = ERROR_NO_UNICODE_TRANSLATION;
-    return false;
+    return CredentialMove::kFailed;
   }
   std::string why;
-  const std::string temp = nevr_credential_write::TempPathFor(ansi_to);
-  if (!nevr_credential_write::WriteProtectedTemp(temp, bytes, nevr_system_info::Get().IsWine(), &why) ||
-      !nevr_credential_write::ReplaceCache(temp, ansi_to, &why)) {
+  const std::string temp = nevr_credential_write::UniqueTempPathFor(ansi_to);
+  if (!nevr_credential_write::WriteProtectedTemp(temp, bytes, nevr_system_info::Get().IsWine(), &why)) {
     *error = GetLastError() != 0 ? GetLastError() : ERROR_WRITE_FAULT;
-    return false;
+    return CredentialMove::kFailed;
   }
-  std::string written;
-  if (!ReadWholeFile(to, &written, error) || written != bytes) {
+  const std::wstring wide_temp = ToWide(temp);
+#ifdef NEVR_TEST_HOOKS
+  if (g_afterTempWrittenHook != nullptr) g_afterTempWrittenHook(wide_temp);
+#endif
+  // The copy is checked while it is still the temp file this call made, so what is installed is what was read.
+  std::string stored;
+  if (!ReadWholeFile(wide_temp, &stored, error) || stored != bytes) {
     if (*error == 0) *error = ERROR_CRC;
-    DeleteFileW(to.c_str());  // the copy this call just made and could not confirm: it must not outrank the file it came from
-    return false;
+    DeleteFileW(wide_temp.c_str());  // the temp file of this call: a copy that failed its check must not be installed
+    return CredentialMove::kFailed;
   }
+  switch (nevr_credential_write::InstallCacheIfAbsent(temp, ansi_to, &why)) {
+    case nevr_credential_write::InstallResult::kInstalled:
+      break;
+    case nevr_credential_write::InstallResult::kAlreadyExists:
+      return CredentialMove::kRootHasIt;
+    case nevr_credential_write::InstallResult::kFailed:
+      *error = GetLastError() != 0 ? GetLastError() : ERROR_WRITE_FAULT;
+      return CredentialMove::kFailed;
+  }
+#ifdef NEVR_TEST_HOOKS
+  if (g_afterInstallHook != nullptr) g_afterInstallHook(to);
+#endif
+  // The file now at `to` is the one just installed unless another process has replaced it since; either way it stays.
+  std::string written;
+  if (!ReadWholeFile(to, &written, error)) return CredentialMove::kFailed;
+  if (written != bytes) return CredentialMove::kRootHasIt;
   if (DeleteFileW(from.c_str()) == FALSE) {
     *error = GetLastError();
-    return false;
+    return CredentialMove::kFailed;
   }
-  return true;
+  return CredentialMove::kMoved;
 }
 
 std::string ToUtf8(const std::wstring& wide) {
@@ -209,7 +247,12 @@ std::vector<Event> Run(const Inputs& inputs) {
       if (!moved) {
         error = GetLastError();
       } else if (item.credentials) {
-        moved = MoveCredentials(item.from, item.to, &error);
+        const CredentialMove result = MoveCredentials(item.from, item.to, &error);
+        if (result == CredentialMove::kRootHasIt) {
+          events.push_back({Outcome::kLeftRootHasIt, item.from, item.to, 0});
+          continue;
+        }
+        moved = result == CredentialMove::kMoved;
       } else {
         moved = MoveFileExW(item.from.c_str(), item.to.c_str(), MOVEFILE_COPY_ALLOWED) != FALSE;
         if (!moved) error = GetLastError();

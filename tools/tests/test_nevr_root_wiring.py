@@ -82,7 +82,15 @@ class TheMoveRunsFirst(unittest.TestCase):
     def test_the_move_deletes_only_what_it_moved(self):
         code = strip_comments(read("src/runtime/lifecycle/nevr_root_move.cpp"))
         deletes = re.findall(r"DeleteFileW\(([a-z_]+)\.c_str\(\)\)", code)
-        self.assertEqual(sorted(deletes), ["from", "to"], "the moved cache's source, and a copy that failed its read-back")
+        self.assertEqual(sorted(deletes), ["from", "wide_temp"], "the moved cache's source, and the move's own temp file when it failed its check")
+
+    def test_the_cache_is_installed_create_only_through_a_temp_file_of_its_own(self):
+        code = strip_comments(read("src/runtime/lifecycle/nevr_root_move.cpp"))
+        self.assertIn("nevr_credential_write::InstallCacheIfAbsent", code, "a cache already in the root is never replaced")
+        self.assertNotIn("ReplaceCache", code, "the replacing rename is the sign-in cache's own save, not the one-time move")
+        self.assertIn("nevr_credential_write::UniqueTempPathFor", code, "the cache's save shares TempPathFor; the move has its own name")
+        self.assertIsNone(re.search(r"(?<!Unique)TempPathFor\(", code), "no use of the shared temp name")
+        self.assertNotIn("DeleteFileW(to", code, "a cache in the root is never deleted by the move")
 
     def test_config_yaml_keeps_its_resolution(self):
         code = strip_comments(read("src/runtime/lifecycle/service_config.cpp"))

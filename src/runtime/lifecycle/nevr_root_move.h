@@ -15,6 +15,13 @@
 
 namespace nevr_root_move {
 
+#ifdef NEVR_TEST_HOOKS
+// For the tests: run just after the sign-in cache's temp file is written (its path), and just after the cache is in the
+// root (its path). They stand in for another process acting in those windows (#1114).
+inline void (*g_afterTempWrittenHook)(const std::wstring& temp) = nullptr;
+inline void (*g_afterInstallHook)(const std::wstring& installed) = nullptr;
+#endif
+
 enum class Outcome {
   kMoved,           // from -> to
   kLeftRootHasIt,   // from stays: `to` already exists in the root, and the move never overwrites

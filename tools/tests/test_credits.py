@@ -32,7 +32,10 @@ PATCHER_SOURCE = "echoApkPatch credit strings"
 TESTING_SOURCE = "tested in #nevr-runtime-testing (Discord)"
 WEBSITE_SOURCE = "echovrce.com website"
 TESTED_PHRASE = "tested nevr-runtime in #nevr-runtime-testing"
-# A link in the section is a person's or organisation's GitHub profile, or a repository.
+# The one page of a person's own work, outside GitHub, that the credits link to (the person has no GitHub account).
+PORTFOLIO = "https://www.dccoffey.com/work/echo-vr"
+PORTFOLIO_LINKS = {PORTFOLIO}
+# A link in the section is a person's or organisation's GitHub profile, or a repository, or that page.
 LINK_SHAPE = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?$")
 
 
@@ -69,6 +72,8 @@ class ReadmePlacement(unittest.TestCase):
         urls = re.findall(r"https?://[^\s)>\]]+", section)
         self.assertTrue(urls, "the section links the projects and people it names")
         for url in urls:
+            if url in PORTFOLIO_LINKS:
+                continue
             self.assertRegex(url, LINK_SHAPE, f"{url}: only github.com/<owner> or github.com/<owner>/<repo>")
 
 
@@ -136,8 +141,8 @@ class SharedFile(unittest.TestCase):
             self.tool.ingame_groups(self.data),
             [
                 {"id": "code-contributions", "ingame": "CODE CONTRIBUTIONS",
-                 "names": ["Xenomega", "kfc", "Dualgame", "marshmallow-mia", "Ducky", "babs", "chinmayee5599",
-                           "brysonak"]},
+                 "names": ["Xenomega", "kfc", "Dualgame", "marshmallow-mia", "Ducky", "babs", "DC Coffey",
+                           "chinmayee5599", "brysonak"]},
                 {"id": "thanks", "ingame": "THANKS", "names": THANKS},
                 {"id": "testers", "ingame": "TESTERS",
                  "names": ["marshmallow-mia", "Crafter", "Trodd-", "DinkyBoi", "berg", "zebra", "Nebula",
@@ -145,6 +150,17 @@ class SharedFile(unittest.TestCase):
                 {"id": "supporters", "ingame": "SUPPORTERS", "names": ["Furo"]},
             ],
         )
+
+    def test_dc_coffey_is_credited_by_name_and_portfolio_for_the_design_of_the_invite_and_create_game_menu(self):
+        entry = self.entry("DC Coffey")
+        self.assertEqual(entry["section"], "people")
+        self.assertEqual(entry["headings"], ["code-contributions"])
+        self.assertEqual(entry["link"], PORTFOLIO)
+        self.assertEqual(entry["sources"], [PORTFOLIO])
+        self.assertIn("Designed the invite and create-game menu", entry["what"])
+        self.assertIn("Dualgame implemented", entry["what"])
+        readme = README.read_text(encoding="utf-8")
+        self.assertIn(f"- **[DC Coffey]({PORTFOLIO})**: Designed the invite and create-game menu", readme)
 
     def test_names_the_project_owner_gave_say_so_in_their_sources(self):
         owner = re.compile(r"^named by the project owner(, \d{2}-\d{2})?$")
@@ -353,6 +369,24 @@ class SharedFile(unittest.TestCase):
         self.assertTrue(problems(lambda d: d["entries"][0].update(sources=[])), "no source")
         self.assertTrue(problems(lambda d: d["entries"][0].update(sources=["a chat message"])), "source not public")
         self.assertTrue(problems(lambda d: d["entries"][0].update(link="http://example.com/x")), "link shape")
+        self.assertTrue(problems(lambda d: d["entries"][0].update(link="https://www.dccoffey.com/work/other")),
+                        "a page on the portfolio's host that is not the listed page")
+        self.assertTrue(problems(lambda d: d["entries"][0].update(link=PORTFOLIO + "/")), "the listed page with a slash")
+        self.assertTrue(problems(lambda d: d["entries"][0].update(what="See https://www.dccoffey.com/work/other.")),
+                        "an unlisted page in the text")
+        self.assertTrue(problems(lambda d: d["entries"][0].update(sources=["https://www.dccoffey.com/work/other"])),
+                        "an unlisted page as a source")
+
+    def test_validate_accepts_the_listed_portfolio_page_as_link_text_and_source(self):
+        def problems(mutate):
+            data = copy.deepcopy(self.data)
+            mutate(data)
+            return self.tool.validate(data, ROOT)
+
+        self.assertEqual(problems(lambda d: d["entries"][0].update(link=PORTFOLIO)), [], "as the link")
+        self.assertEqual(problems(lambda d: d["entries"][0].update(what=f"Designed it, see {PORTFOLIO} for the work.")), [],
+                         "in the text")
+        self.assertEqual(problems(lambda d: d["entries"][0].update(sources=[PORTFOLIO])), [], "as the source")
         self.assertTrue(problems(lambda d: d["entries"][0].update(what="")), "README entry says nothing")
 
 
@@ -456,7 +490,7 @@ class IngameText(unittest.TestCase):
         )
         self.assertEqual(self.tool.ingame_text(self.data), expected.encode("cp1252"))
         self.assertTrue(expected.startswith("CODE CONTRIBUTIONS\n\nXenomega\n"))
-        self.assertEqual(expected.count("\n"), 47, "four groups of 8, 6, 12 and 1 names: 13 + 11 + 17 + 6 lines")
+        self.assertEqual(expected.count("\n"), 48, "four groups of 9, 6, 12 and 1 names: 14 + 11 + 17 + 6 lines")
 
     def test_groups_are_separated_by_three_blank_lines(self):
         data = self.data_with({"ONE": ["a", "b"], "TWO": ["c"]})

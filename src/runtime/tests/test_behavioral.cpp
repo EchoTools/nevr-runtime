@@ -48,6 +48,11 @@
 // so pch.h includes become no-ops via include guards.
 #include "abi/echovr.h"
 #include "abi/echovr_functions.h"
+#include "abi/game_level.h"
+#include "abi/symbol_hash.h"
+#include "runtime/log/symcache.h"
+#include "runtime/patch/ui_texture_mips_rules.h"
+#include "runtime/hook/symbol_corpus.h"
 #include "core/logging.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/compat/login_profile.h"
@@ -794,6 +799,129 @@ TEST_F(PluginDependencyGateTest, ALoadMadeFromAStagedPluginsDllMainIsChecked) {
   EXPECT_NE(g_refusalDialogs[0].find("dllmain_victim.dll"), std::string::npos);
 }
 
+// #768: a signed plugin whose one import is a System32 library (hid.dll). Nothing in the plugins directory names it,
+// so the check accepts the tree; the loader searches the plugin's own directory before System32 for a name that is
+// not already loaded, so an unsigned stand-in put there after the check is the one that maps. The stand-in says it
+// was loaded by setting NEVR_TEST_DECOY_LOADED.
+std::string g_decoyFrom;
+std::string g_decoyTo;
+
+void PlantTheDecoyInThePluginsDirectory() { CopyFileA(g_decoyFrom.c_str(), g_decoyTo.c_str(), FALSE); }
+
+class PluginSystemDependencyTest : public PluginDependencyGateTest {
+ protected:
+  void SetUp() override {
+    PluginDependencyGateTest::SetUp();
+    ReleaseTheFixtureModules();
+    ASSERT_EQ(GetModuleHandleA("hid.dll"), nullptr) << "hid.dll is already loaded in this process: nothing to plant against";
+    const nlohmann::json& t = manifest_["trees"]["import_system"];
+    g_decoyFrom = fixtures_ + "/" + t["decoy"].get<std::string>();
+    g_decoyTo = pluginsDir_ + "hid.dll";
+    SetEnvironmentVariableA("NEVR_TEST_DECOY_LOADED", nullptr);
+  }
+
+  void TearDown() override {
+    TestHook_SetAfterDependenciesChecked(nullptr);
+    ReleaseTheFixtureModules();
+    SetEnvironmentVariableA("NEVR_TEST_DECOY_LOADED", nullptr);
+    PluginDependencyGateTest::TearDown();
+  }
+
+  static void ReleaseTheFixtureModules() {
+    for (const char* name : {"sysimporter.dll", "hid.dll"}) {
+      while (HMODULE m = GetModuleHandleA(name)) {
+        if (!FreeLibrary(m)) break;
+      }
+    }
+  }
+
+  static bool TheDecoyRan() { return GetEnvironmentVariableA("NEVR_TEST_DECOY_LOADED", nullptr, 0) != 0; }
+};
+
+TEST_F(PluginSystemDependencyTest, AStandInPlantedForASystemImportAfterTheCheckIsNotTheOneThatLoads) {
+  PlanTree("import_system");
+  TestHook_SetAfterDependenciesChecked(&PlantTheDecoyInThePluginsDirectory);
+  LoadPlugins();
+  TestHook_SetAfterDependenciesChecked(nullptr);
+  copies_.push_back(g_decoyTo);  // removed at teardown, unless it was mapped
+  EXPECT_FALSE(TheDecoyRan()) << "the stand-in planted after the check was loaded with the plugin";
+  EXPECT_FALSE(TestLogContains("LoadLibrary failed")) << "the plugin did not load";
+  EXPECT_FALSE(TestLogContains("refused"));
+  EXPECT_TRUE(TestLogContains("plugin=sysimporter.dll file=sysimporter.dll 1 system dependencies loaded from the system directory first"));
+  // The fixture is not a real plugin, so it is unloaded for lacking the plugin exports; the pin goes with it.
+  EXPECT_EQ(GetModuleHandleA("sysimporter.dll"), nullptr);
+  EXPECT_EQ(GetModuleHandleA("hid.dll"), nullptr) << "the pin outlived the plugin it was taken for";
+}
+
+TEST_F(PluginSystemDependencyTest, ASystemLibraryThatCannotBePinnedRefusesTheStagedPlugin) {
+  PlanTree("import_system");
+  TestHook_FailPinning(true);
+  LoadPlugins();
+  TestHook_FailPinning(false);
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(GetModuleHandleA("sysimporter.dll"), nullptr) << "the plugin was mapped";
+  const std::string expected = "refused: dependency hid.dll cannot be loaded from the system directory to pin it: error 5";
+  EXPECT_TRUE(TestLogContains(expected));
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 1u);
+  EXPECT_EQ(manifest[0]["error"].get<std::string>(), expected);
+  EXPECT_FALSE(g_refusalDialogs.empty());
+}
+
+TEST_F(PluginSystemDependencyTest, ASystemLibraryThatCannotBePinnedRefusesALaterLoad) {
+  Copy("import_system");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  TestHook_FailPinning(true);
+  const bool blocked = Blocked("sysimporter.dll");
+  TestHook_FailPinning(false);
+  EXPECT_TRUE(blocked);
+  EXPECT_TRUE(TestLogContains("refused a later load of sysimporter.dll: dependency hid.dll cannot be loaded from the system directory to pin it: error 5"));
+}
+
+TEST_F(PluginSystemDependencyTest, ALaterLoadsPinStaysLoadedAfterTheFilterIsReset) {
+  Copy("import_system");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_FALSE(Blocked("sysimporter.dll"));
+  EXPECT_NE(GetModuleHandleA("hid.dll"), nullptr) << "the filter did not pin hid.dll";
+  TestHook_ResetPluginLoadFilter();  // drops the filter's verified entries
+  EXPECT_NE(GetModuleHandleA("hid.dll"), nullptr) << "the pin was released with the entry, before the load it protects";
+}
+
+TEST_F(PluginSystemDependencyTest, AnUnsignedAllowedRunPinsNothing) {
+  nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
+  Copy("import_system");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_FALSE(Blocked("sysimporter.dll"));
+  EXPECT_EQ(GetModuleHandleA("hid.dll"), nullptr) << "a run that does not require signatures loaded a library for the check";
+}
+
+TEST_F(PluginSystemDependencyTest, AStandInPlantedForASystemImportAfterALaterLoadsCheckIsNotTheOneThatLoads) {
+  Copy("import_system");
+  g_testPluginLoadPlan.clear();
+  const std::string plugin = pluginsDir_ + "sysimporter.dll";
+  // The plugin's own LoadLibrary reaches the filter only through the real hooks.
+  ASSERT_EQ(MH_Initialize(), MH_OK);
+  const int hooked = nevr_dll_load_hook::Install();
+  if (hooked == 4) {
+    TestHook_InstallPluginLoadFilter(pluginsDir_);
+    TestHook_SetAfterDependenciesChecked(&PlantTheDecoyInThePluginsDirectory);
+    SetLastError(0);
+    HMODULE loaded = LoadLibraryExA(plugin.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    TestHook_SetAfterDependenciesChecked(nullptr);
+    EXPECT_NE(loaded, nullptr) << "the checked plugin did not load: error " << GetLastError();
+  }
+  nevr_dll_load_hook::Shutdown();  // also clears the registered filters
+  MH_Uninitialize();
+  nevr_hook_guard::ResetForTest();
+  TestHook_ForgetLoadFilterRegistration();
+  ASSERT_EQ(hooked, 4) << "the LoadLibrary hooks did not install";
+  copies_.push_back(g_decoyTo);
+  EXPECT_FALSE(TheDecoyRan()) << "the stand-in planted after the filter's check was loaded with the plugin";
+}
+
 // The path the filter resolved is opened a moment later; a name pointed elsewhere in between must not be verified
 // as the file that was resolved (heldPath != full). The hook turns the resolved name into a link to a signed file.
 std::wstring g_linkTarget;
@@ -815,6 +943,81 @@ TEST_F(PluginDependencyGateTest, LateLoadOfANameRepointedBetweenResolveAndOpenIs
   TestHook_SetBetweenResolveAndOpen(nullptr);
   EXPECT_TRUE(blocked);
   EXPECT_TRUE(TestLogContains("the file changed between resolving its path and opening it"));
+}
+
+// #767: the staged plugin's path is opened to check it and named again to load it. The held handle stops a write to
+// the file; it does not stop the name, when it goes through a link, from leading somewhere else by the time of the
+// load. The load has to be of the file that was checked. The entry names a link to the signed plugin; between the
+// check and the load the link is pointed at an unsigned file that is no plugin at all.
+std::wstring g_stagedLink;
+std::wstring g_stagedLinkTarget;
+
+void PointTheStagedLinkAtTheUnsignedFile(const std::wstring&) {
+  DeleteFileW(g_stagedLink.c_str());
+  CreateSymbolicLinkW(g_stagedLink.c_str(), g_stagedLinkTarget.c_str(), 0);
+}
+
+TEST_F(PluginDependencyGateTest, ALinkRepointedBetweenTheCheckAndTheLoadDoesNotChangeTheFileThatLoads) {
+  Plan("staged_real.dll", "signed");
+  g_testPluginLoadPlan.clear();
+  const std::string evil = pluginsDir_ + "staged_evil.dll";
+  ASSERT_TRUE(CopyFileA((fixtures_ + "/" + manifest_["files"]["nevr-runtime.unsigned"].get<std::string>()).c_str(),
+                        evil.c_str(), FALSE))
+      << GetLastError();
+  copies_.push_back(evil);
+  const std::string link = pluginsDir_ + "staged_link.dll";
+  g_stagedLink.assign(link.begin(), link.end());
+  g_stagedLinkTarget.assign(pluginsDir_.begin(), pluginsDir_.end());
+  g_stagedLinkTarget += L"staged_real.dll";
+  ASSERT_TRUE(CreateSymbolicLinkW(g_stagedLink.c_str(), g_stagedLinkTarget.c_str(), 0)) << GetLastError();
+  copies_.push_back(link);
+  g_stagedLinkTarget.assign(evil.begin(), evil.end());  // where the hook points the link
+  g_testPluginLoadPlan.push_back({"staged_link.dll", "staged_link.dll", false, "", "{}"});
+
+  TestHook_SetBetweenCheckAndLoad(&PointTheStagedLinkAtTheUnsignedFile);
+  LoadPlugins();
+  TestHook_SetBetweenCheckAndLoad(nullptr);
+
+  EXPECT_EQ(GetModuleHandleA("staged_evil.dll"), nullptr) << "the unsigned file was mapped";
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 1u);
+  EXPECT_TRUE(manifest[0]["loaded"].get<bool>()) << "the plugin that was checked did not load: " << manifest.dump();
+  EXPECT_EQ(GetLoadedPluginCount(), 1) << "the file behind the link at the load was not the file that was checked";
+  EXPECT_TRUE(TestLogContains("plugin=staged_link.dll file=staged_link.dll is loaded from "))
+      << "a path that leads somewhere else than its name is not said";
+}
+
+TEST_F(PluginDependencyGateTest, APluginReachedByItsOwnNameIsNotSaidToBeLoadedFromElsewhere) {
+  Plan("staged_plain.dll", "signed");
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_FALSE(TestLogContains("is loaded from "));
+}
+
+// The OS can fail to name the file behind a handle. A signed-only run then has no path it can tie to the check.
+TEST_F(PluginDependencyGateTest, AHeldFileThatCannotBeNamedIsRefusedInASignedOnlyRun) {
+  Plan("unnamed.dll", "signed");
+  TestHook_FailNamingTheHeldFile(true);
+  LoadPlugins();
+  TestHook_FailNamingTheHeldFile(false);
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(GetModuleHandleA("unnamed.dll"), nullptr) << "a plugin whose checked file has no name was mapped";
+  EXPECT_TRUE(TestLogContains("plugin=unnamed.dll file=unnamed.dll refused: cannot name the file it checked: error 5"));
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 1u);
+  EXPECT_EQ(manifest[0]["error"].get<std::string>(), "refused: cannot name the file it checked: error 5");
+}
+
+TEST_F(PluginDependencyGateTest, AHeldFileThatCannotBeNamedLoadsByItsConfiguredPathWhenSignaturesAreNotRequired) {
+  nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
+  Plan("unnamed_dev.dll", "unsigned");
+  TestHook_FailNamingTheHeldFile(true);
+  LoadPlugins();
+  TestHook_FailNamingTheHeldFile(false);
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "cannot name the file it checked: error 5; loading the configured path, which is "
+                                     "not tied to the file checked (plugin trust mode unsigned-allowed)"));
 }
 
 TEST_F(PluginDependencyGateTest, LateLoadOfASignedFileIsLeftAlone) {
@@ -1926,7 +2129,7 @@ static uint32_t LoggingFixtureBoundAtInit(const char* dll) {
 }
 
 TEST(PluginLogApi, ContextCarriesALogFunctionAndTheVersionSaysSo) {
-  EXPECT_EQ(static_cast<uint32_t>(NEVR_PLUGIN_API_VERSION), 7u);
+  EXPECT_EQ(static_cast<uint32_t>(NEVR_PLUGIN_API_VERSION), 8u);
   NvrGameContext ctx = {};
   ctx.ctx_size = sizeof(NvrGameContext);
   EXPECT_GE(ctx.ctx_size, offsetof(NvrGameContext, log) + sizeof(NevrLogFn));
@@ -1987,6 +2190,219 @@ TEST(PluginLogHost, HostLogFunctionTagsLevelsAndKeepsAPercentSignOutOfTheFormat)
   EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
                                      "[NEVR.PLUGIN] plugin=direct bad level level_invalid=99"));
   ClearTestLogs();
+}
+
+// ----------------------------------------------------------------------------
+// #1094: a plugin sees the level the game holds as its main level, in every context it is handed.
+// The fixture (plugin_level_test_dll.cpp) keeps the last level each kind of context carried. The game object
+// is a zeroed buffer with the level written at the PC offset, so a level change is a store the test makes.
+// ----------------------------------------------------------------------------
+
+namespace evr {
+extern const SymCacheEntry kSymCacheData[];  // the generated symbol cache (symcache_data.cpp)
+extern const int kSymCacheCount;
+}  // namespace evr
+
+namespace {
+
+constexpr uint64_t kArenaA = 0x576ed3f8428ebc4bULL;           // CSymbol64("mpl_arena_a"), in the symbol cache
+constexpr uint64_t kCombatCombustion = 0x42670f2bed45703cULL;  // CSymbol64("mpl_combat_combustion"), in the cache
+
+constexpr uint64_t kLobbyB2 = 0xd09afd15b1c75c04ULL;  // CSymbol64("mpl_lobby_b2"), in the symbol cache
+
+std::vector<unsigned char> g_fakeGame;
+
+void SetFakeGameLevel(uint64_t symbol) {
+  std::memcpy(g_fakeGame.data() + EchoVR::kPcMainLevelSymbolOffset, &symbol, sizeof(symbol));
+}
+
+uint64_t LevelFixtureU64(const char* name, uint32_t which) {
+  const HMODULE plugin = GetModuleHandleA("test_plugin_level.dll");
+  if (plugin == nullptr) return 0xDEADDEADDEADDEADull;
+  const auto fn = reinterpret_cast<uint64_t (*)(uint32_t)>(GetProcAddress(plugin, name));
+  return fn != nullptr ? fn(which) : 0xDEADDEADDEADDEADull;
+}
+
+const char* LevelFixtureName(uint32_t which) {
+  const HMODULE plugin = GetModuleHandleA("test_plugin_level.dll");
+  if (plugin == nullptr) return "<fixture not loaded>";
+  const auto fn = reinterpret_cast<const char* (*)(uint32_t)>(GetProcAddress(plugin, "NevrTestPluginLevelName"));
+  return fn != nullptr ? fn(which) : "<export missing>";
+}
+
+constexpr uint32_t kInitCtx = 0;
+constexpr uint32_t kFrameCtx = 1;
+constexpr uint32_t kStateCtx = 2;
+
+class PluginLevelTest : public PluginLoaderDiagnosticTest {
+ protected:
+  void SetUp() override {
+    PluginLoaderDiagnosticTest::SetUp();
+    g_fakeGame.assign(0x10000, 0);
+    SetFakeGameLevel(EchoVR::kNoLevelInGame);
+    g_pGame = g_fakeGame.data();
+    g_testPluginLoadPlan.push_back({"lvl", "test_plugin_level.dll", false, "", "{}"});
+  }
+  void TearDown() override {
+    g_pGame = nullptr;
+    PluginLoaderDiagnosticTest::TearDown();
+  }
+  static void StateChange(uint32_t from, uint32_t to) {
+    NvrGameContext ctx = {};
+    ctx.ctx_size = sizeof(NvrGameContext);
+    NotifyPluginsStateChange(&ctx, from, to);
+  }
+};
+
+}  // namespace
+
+TEST(GameLevel, TheOffsetsAreTheOnesMeasuredInTheGame) {
+  EXPECT_EQ(EchoVR::kPcMainLevelSymbolOffset, 0x8a48u) << "echovr.exe: CR15Game +0x8a48, accessor 0x140100d90";
+  EXPECT_EQ(EchoVR::kQuestMainLevelSymbolOffset, 0x8a40u) << "libr15.so: CurrentSpawnGameSpace 0x130065c";
+}
+
+TEST(GameLevel, ReadsTheSymbolAtThePcAndTheQuestOffsetAndMapsNoLevelToZero) {
+  std::vector<unsigned char> game(0x10000, 0);
+  EXPECT_EQ(EchoVR::ReadMainLevelSymbol(nullptr, EchoVR::kPcMainLevelSymbolOffset), 0u);
+  const uint64_t none = EchoVR::kNoLevelInGame;
+  std::memcpy(game.data() + EchoVR::kPcMainLevelSymbolOffset, &none, sizeof(none));
+  EXPECT_EQ(EchoVR::ReadMainLevelSymbol(game.data(), EchoVR::kPcMainLevelSymbolOffset), 0u);
+  const uint64_t pc = kArenaA;
+  std::memcpy(game.data() + EchoVR::kPcMainLevelSymbolOffset, &pc, sizeof(pc));
+  EXPECT_EQ(EchoVR::ReadMainLevelSymbol(game.data(), EchoVR::kPcMainLevelSymbolOffset), kArenaA);
+  const uint64_t quest = kCombatCombustion;
+  std::memcpy(game.data() + EchoVR::kQuestMainLevelSymbolOffset, &quest, sizeof(quest));
+  EXPECT_EQ(EchoVR::ReadMainLevelSymbol(game.data(), EchoVR::kQuestMainLevelSymbolOffset), kCombatCombustion);
+}
+
+TEST(GameLevel, TheHashesAreTheGamesAndTheCacheNamesTheLevelsTheFixturesUseAndNotACustomOne) {
+  EXPECT_EQ(EchoVR::CSymbol64Hash("mpl_arena_a"), kArenaA);
+  EXPECT_EQ(EchoVR::CSymbol64Hash("mpl_combat_combustion"), kCombatCombustion);
+  EXPECT_EQ(EchoVR::CSymbol64Hash("mpl_lobby_b2"), kLobbyB2);
+  const auto nameOf = [](uint64_t hash) {
+    return nevr_ui_texture_mips::NameForHash(evr::kSymCacheData, static_cast<size_t>(evr::kSymCacheCount), hash);
+  };
+  ASSERT_NE(nameOf(kArenaA), nullptr);
+  EXPECT_STREQ(nameOf(kArenaA), "mpl_arena_a");
+  ASSERT_NE(nameOf(kLobbyB2), nullptr);
+  EXPECT_STREQ(nameOf(kLobbyB2), "mpl_lobby_b2");
+  EXPECT_EQ(nameOf(EchoVR::CSymbol64Hash("mpl_arena_dodgeball")), nullptr);
+}
+
+TEST_F(PluginLevelTest, InitContextCarriesTheLevelTheGameAlreadyHolds) {
+  SetFakeGameLevel(kArenaA);
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelCovered", kInitCtx), 1u) << "ctx_size does not reach level_name";
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kInitCtx), kArenaA);
+  ASSERT_NE(LevelFixtureName(kInitCtx), nullptr);
+  EXPECT_STREQ(LevelFixtureName(kInitCtx), "mpl_arena_a");
+}
+
+TEST_F(PluginLevelTest, NoLevelAndNoGameObjectBothReadAsNoLevel) {
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kInitCtx), 0u) << "the game holds -1";
+  EXPECT_EQ(LevelFixtureName(kInitCtx), nullptr);
+
+  g_pGame = nullptr;
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelCalls", kFrameCtx), 1u);
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kFrameCtx), 0u);
+  EXPECT_EQ(LevelFixtureName(kFrameCtx), nullptr);
+}
+
+TEST_F(PluginLevelTest, FrameContextSeesALevelChangeWithNoStateTransition) {
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kFrameCtx), 0u);
+
+  SetFakeGameLevel(kArenaA);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kFrameCtx), kArenaA);
+  EXPECT_STREQ(LevelFixtureName(kFrameCtx), "mpl_arena_a");
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelCalls", kStateCtx), 0u) << "no state change was announced";
+
+  SetFakeGameLevel(kCombatCombustion);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kFrameCtx), kCombatCombustion);
+  EXPECT_STREQ(LevelFixtureName(kFrameCtx), "mpl_combat_combustion");
+}
+
+TEST_F(PluginLevelTest, StateChangeContextFollowsTheLevelAcrossLevelChangesAndIsLogged) {
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+
+  SetFakeGameLevel(kArenaA);
+  StateChange(6, 7);
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kStateCtx), kArenaA);
+  EXPECT_STREQ(LevelFixtureName(kStateCtx), "mpl_arena_a");
+
+  ClearTestLogs();
+  SetFakeGameLevel(kCombatCombustion);
+  StateChange(7, 8);
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kStateCtx), kCombatCombustion);
+  EXPECT_STREQ(LevelFixtureName(kStateCtx), "mpl_combat_combustion");
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "[NEVR.PLUGIN] plugin=lvl state change level from=7 to=8 level_symbol=0x42670f2bed45703c "
+      "level=mpl_combat_combustion"));
+}
+
+TEST_F(PluginLevelTest, TheLobbyLevelGetsItsNameInTheContextAndTheLog) {
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+
+  SetFakeGameLevel(kLobbyB2);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kFrameCtx), kLobbyB2);
+  ASSERT_NE(LevelFixtureName(kFrameCtx), nullptr);
+  EXPECT_STREQ(LevelFixtureName(kFrameCtx), "mpl_lobby_b2");
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "[NEVR.PLUGIN] main level changed: from=none to=mpl_lobby_b2 symbol=0xd09afd15b1c75c04"));
+}
+
+TEST_F(PluginLevelTest, ALevelTheSymbolTableDoesNotKnowHasASymbolAndNoName) {
+  const uint64_t custom = EchoVR::CSymbol64Hash("mpl_arena_dodgeball");
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+
+  ClearTestLogs();
+  SetFakeGameLevel(custom);
+  StateChange(6, 7);
+
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kStateCtx), custom);
+  EXPECT_EQ(LevelFixtureName(kStateCtx), nullptr);
+  char hex[24];
+  snprintf(hex, sizeof(hex), "0x%016llx", static_cast<unsigned long long>(custom));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     std::string("[NEVR.PLUGIN] main level changed: from=none to=") + hex + " symbol=" + hex))
+      << "a level with no name is logged by its hex symbol";
+}
+
+TEST_F(PluginLevelTest, TheHostLogsEachLevelChangeOnceHoweverManyPluginsAndFramesSeeIt) {
+  g_testPluginLoadPlan.push_back({"lvl2", "test_plugin_onframe.dll", false, "", "{}"});
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 2);
+  TickLoadedPluginsOnce();  // settles the observer on "no level"
+
+  ClearTestLogs();
+  SetFakeGameLevel(kArenaA);
+  TickLoadedPluginsOnce();
+  TickLoadedPluginsOnce();
+  StateChange(6, 7);
+  EXPECT_EQ(TestLogCount("[NEVR.PLUGIN] main level changed:"), 1) << "one line per change, not one per read";
+  EXPECT_EQ(TestLogCount("[NEVR.PLUGIN] main level changed: from=none to=mpl_arena_a"), 1);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] main level changed: from=none to=mpl_arena_a"));
+
+  ClearTestLogs();
+  SetFakeGameLevel(EchoVR::kNoLevelInGame);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(TestLogCount("[NEVR.PLUGIN] main level changed:"), 1);
+  EXPECT_EQ(TestLogCount("[NEVR.PLUGIN] main level changed: from=mpl_arena_a to=none"), 1);
 }
 
 // #60: the login reports every configured plugin — the one that loaded, the one

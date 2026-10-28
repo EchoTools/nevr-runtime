@@ -868,6 +868,43 @@ void AMistakeNeverUsesTheDefault() {
   CHECK(tq::SizeFor(tq::kFallbackLevel, tq::Headset::kQuest3).width == 0);  // no hook, so no eye size
 }
 
+// #438: the file's `plugins:` list reaches the sentinel as the specs the PC parser read. The sentinel plans from them.
+void ThePluginsListIsKeptInOrderWithItsFlagsAndArgs() {
+  const LoadResult r = Load(Full(), R"YAML(
+plugins:
+  - name: first
+    file: libfirst.so
+    required: true
+    early: true
+    args:
+      level: 3
+  - name: second
+    enabled: false
+)YAML");
+  CHECK(!r.fileRejected);
+  CHECK(r.config.plugins.size() == 2);
+  if (r.config.plugins.size() != 2) return;
+  CHECK(r.config.plugins[0].name == "first");
+  CHECK(r.config.plugins[0].file == "libfirst.so");
+  CHECK(r.config.plugins[0].required);
+  CHECK(r.config.plugins[0].early);
+  CHECK(r.config.plugins[0].args.at("level") == "3");
+  CHECK(r.config.plugins[1].name == "second");
+  CHECK(!r.config.plugins[1].enabled);
+}
+
+void NoPluginsKeyAndAnAbsentFileGiveNoPlugins() {
+  CHECK(Load(Full(), "social:\n  facade: true\n").config.plugins.empty());
+  CHECK(nevr_quest::ResolveConfig(Full(), nullptr).config.plugins.empty());
+}
+
+// A file the sentinel rejects as a whole contributes nothing, plugins included: a half-read list never loads code.
+void ARejectedFileGivesNoPlugins() {
+  const LoadResult r = Load(Full(), "plugins:\n  - name: first\n  bad: [unclosed\n");
+  CHECK(r.fileRejected);
+  CHECK(r.config.plugins.empty());
+}
+
 int main() {
   DefaultsWithoutFile();
   NothingEmbeddedAndNoFileTurnsTheNetworkFeaturesOff();
@@ -905,6 +942,9 @@ int main() {
   AnEmptyFileValueCannotClearAnEmbeddedDefault();
   ConfigPathIsConfigYamlAndNeverGameConfigJson();
   RedirectIsGatedByActivation();
+  ThePluginsListIsKeptInOrderWithItsFlagsAndArgs();
+  NoPluginsKeyAndAnAbsentFileGiveNoPlugins();
+  ARejectedFileGivesNoPlugins();
   if (g_failures != 0) {
     std::fprintf(stderr, "quest_config_test: %d check(s) failed\n", g_failures);
     return 1;

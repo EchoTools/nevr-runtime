@@ -71,7 +71,10 @@ Summary of the recommendations. Each has alternatives and a reason in its sectio
 **Recommendation (R1).** Plugins are shared objects in the APK's `lib/arm64-v8a`, named `lib<name>.so`. The repack
 recipe (`justfile:174-214`) already copies two `.so` files into that directory with `zip -q -0`, then signs the APK. A
 plugin is one more entry in that list, and each plugin object runs the same static-init check as the shim
-(`justfile:124-131` runs `tools/check_quest_static_init.sh` on the shim today; the plugin list would run it too).
+(`tools/check_quest_static_init.sh --plugin`, run by the repack on every plugin it packages: only the two compiler-rt
+entries may run at load time). The repack refuses a plugin whose file name is the name of any `lib/` entry of the store
+APK or of a library it stages itself, and checks in the signed APK that every store library (the loader aside) and every
+staged library has its bytes (`tools/quest_repack_libs.py`).
 
 The loader finds the directory from the sentinel's own mapping, not from JNI. `dladdr` on the constructor
 (`nevr_sentinel_ctor`, `src/quest/sentinel/entry.cpp:151`) returns the path the linker mapped the sentinel from; its
@@ -115,8 +118,9 @@ else is not loaded in v1.
 (`src/core/nevr_config.cpp:264-281`): `name` (required), `file`, `enabled`, `required`, `early`, `target` (recorded,
 not acted on), `args` (flattened to dotted keys, string values). The Quest loader differs in three ways:
 
-- `file` is a basename only. A path separator in `file` is a refusal with reason `file_outside_directory`. This mirrors
-  the PC check `PluginFileStaysInDirectory` (`src/runtime/ext/plugin_loader.cpp`, `StageOne`).
+- `file` is a basename only. A path separator, a NUL, an empty value, `.` or `..` in `file` is a refusal with reason
+  `file_outside_directory`. This mirrors the PC check `PluginFileStaysInDirectory` (`src/runtime/ext/plugin_loader.cpp`,
+  `StageOne`).
 - The default `file` is `lib<name>.so`, not `<name>.dll`. The parser's default (`nevr_config.cpp:265`) is a PC name,
   so the Quest plan computes its own default. The shared parser is not changed for this.
 - `required` on a client logs and continues. This is already the client rule in the reference config
@@ -296,18 +300,23 @@ The host offers what needs host state. A plugin-side library offers what does no
 
 ## 7. Version pinning
 
-**Recommendation (R7).** A plugin declares the libr15 build IDs it supports through a new optional export,
-`NEVR_GetSupportedBuildIds`, returning a NUL-terminated list of lowercase hex IDs. The export lives in the plugin
-binary, so it is inside the APK signature. The loader compares the list with the running libr15's build ID, read from
-its ELF note (`ReadBuildId`, `src/quest/sentinel/got_hook.h:149`). The pinned value is `kLibR15BuildId`
-(`src/quest/sentinel/pinned_targets.h:29`).
+**Recommendation (R7).** A plugin declares the libr15 build IDs it supports as an ELF note in its own file
+(`NEVR_DECLARE_SUPPORTED_BUILD_IDS("<id> <id>")`, `src/extension/plugin_interface.h`): owner `NEVR`, type 1, the text of
+lowercase hex IDs separated by spaces. It is data, not a function, because the loader must know the list before it maps
+the object: mapping runs the object's constructors, and a plugin must not run any of its code for a build it does not
+support. The loader reads the note from the file bytes it has already read and hashed (`SupportedBuildIdsOf`), inside the
+APK signature, and compares it with the running libr15's build ID, read from its ELF note (`ReadBuildId`,
+`src/quest/sentinel/got_hook.h:149`). The pinned value is `kLibR15BuildId` (`src/quest/sentinel/pinned_targets.h:29`). When libr15 is patched at build time, the loader compares the plugin's list with the plugin identity, not the live note (`docs/adr/0021-quest-libr15-patched-at-build-time.md`, section 12).
+The same file-bytes pass decides everything else that precedes `dlopen`: the file is readable (`file_unreadable`, no
+unchecked mapping), is an AArch64 shared object (`machine_type`) and declares the running build. A plugin that is
+mapped and then fails (`no_plugin_info`, `init_failed`, an exception) is `dlclose`d.
 
-- A plugin with no such export is refused on Quest with reason `build_ids_undeclared`. This is stricter than PC, where
+- A plugin with no such note is refused on Quest with reason `build_ids_undeclared`. This is stricter than PC, where
   an absent capability declaration means UNDECLARED and still loads (`plugin_interface.h:250-263`). Quest is stricter
   because a plugin's addresses are only valid for the build it names.
 - A mismatch is refused before init, with one line: `plugin_load outcome=refused reason=build_id_unsupported`, the game
   build ID, and the plugin's list. The game still starts (client rule, R2).
-- Adding an optional export needs no bump (`plugin_interface.h:183`).
+- The note is additive and Quest-only (the PC loader does not read it), so it needs no bump (`plugin_interface.h:183`).
 
 **Rules that hold regardless.** No address is used without a pin: a `GotTarget` with a null build ID is refused in the host
 API. A plugin's `SwapWord` or `CheckedWrite` target needs the same pin. This is the ADR 0003 identity gate (`docs/adr/0003-quest-networking-port.md:1276-1281`)

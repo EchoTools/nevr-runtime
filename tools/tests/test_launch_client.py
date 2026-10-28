@@ -33,6 +33,7 @@ def install_scripts(checkout: pathlib.Path) -> None:
     (checkout / "tools/lib").mkdir(parents=True, exist_ok=True)
     shutil.copy(LIB, checkout / "tools/lib/game_install.sh")
     shutil.copy(LIB.with_name("work_root.sh"), checkout / "tools/lib/work_root.sh")
+    shutil.copy(REPO / "tools/host_stop_cause.py", checkout / "tools/host_stop_cause.py")
     for script in (SCRIPT, VERIFY_SERVER, LAUNCH_SERVER):
         shutil.copy(script, checkout / script.name)
 
@@ -108,9 +109,13 @@ def make_fake_bin(directory: pathlib.Path) -> None:
         'logs="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/nevr/echovr/logs"\n'
         '[[ -n "${FAKE_WINE_STARTED:-}" ]] && echo started > "$FAKE_WINE_STARTED"  # the script deploys before it starts the game\n'
         '[[ -n "${FAKE_HOST_BOOTSTRAP:-}" ]] && echo \'{"event":"host_attach"}\' > "$logs/nevr-bootstrap.jsonl"  # the host writes its record into the same folder\n'
-        'sleep "${FAKE_WINE_LOG_DELAY:-0}"\n'
-        'if [[ -n "${FAKE_LOG_TEXT:-}" ]]; then printf "%b" "$FAKE_LOG_TEXT" > "$logs/${FAKE_LOG_PREFIX:-nevr-fake-}$(date +%s%N).jsonl"\n'
-        'else echo \'{"msg":"NetGame switching state (from logging in, to logged in)"}\' > "$logs/${FAKE_LOG_PREFIX:-nevr-fake-}$(date +%s%N).jsonl"; fi\n'
+        '# A host that refuses nevr-runtime.dll writes these records and the runtime, which writes the game log, never runs.\n'
+        'if [[ -n "${FAKE_HOST_STOP:-}" ]]; then\n'
+        '  ts=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\n'
+        '  printf \'%s\\n\' \'{"event":"runtime_load","outcome":"runtime_refused","path":"Z:\\\\game\\\\nevr-runtime.dll","run":"r1","tag":"NEVR.HOST","ts":"\'$ts\'","verify":"refused","verify_reason":"\'$FAKE_HOST_STOP\'"}\' \\\n'
+        '    \'{"event":"game_stop","exit_code":78,"reason":"runtime_refused","run":"r1","tag":"NEVR.HOST","ts":"\'$ts\'"}\' > "$logs/nevr-bootstrap.jsonl"\n'
+        'elif [[ -n "${FAKE_LOG_TEXT:-}" ]]; then sleep "${FAKE_WINE_LOG_DELAY:-0}"; printf "%b" "$FAKE_LOG_TEXT" > "$logs/${FAKE_LOG_PREFIX:-nevr-fake-}$(date +%s%N).jsonl"\n'
+        'else sleep "${FAKE_WINE_LOG_DELAY:-0}"; echo \'{"msg":"NetGame switching state (from logging in, to logged in)"}\' > "$logs/${FAKE_LOG_PREFIX:-nevr-fake-}$(date +%s%N).jsonl"; fi\n'
         '[[ -n "${FAKE_WINE_ARGS:-}" ]] && printf "%s\\n" "$*" > "$FAKE_WINE_ARGS"\n'
         'cmp -s "$FAKE_EXPECT_DLL" "./BugSplat64.dll" || { echo "wrong DLL deployed" >&2; exit 9; }\n'
         '# The host loads the runtime from the nevr root (the folder above logs), never from beside itself (ADR 0012).\n'
@@ -273,6 +278,34 @@ class LaunchClientTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertRegex(result.stdout, r"=== game log: .*/logs/nevr-2026-10-27T17-57-53\.")
         self.assertNotIn("nevr-bootstrap.jsonl", result.stdout)
+
+    def test_a_host_that_refused_the_runtime_is_named_when_no_game_log_appears(self):
+        # #1122: the host stops the game and the runtime, which writes the game log, never runs. The launcher says
+        # why from the host's record, not only that no log was written.
+        env = dict(self.env, FAKE_HOST_STOP="unsigned")
+        result = self.run_script("--dll", str(self.dll), env=env)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no game log written", result.stderr)
+        self.assertIn("the host refused nevr-runtime.dll: unsigned", result.stderr)
+        self.assertIn("build with mingw-plugin-dev or mingw-scenario", result.stderr)
+        self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_a_run_without_a_game_log_and_without_a_host_stop_keeps_the_plain_message(self):
+        env = dict(self.env, FAKE_HOST_BOOTSTRAP="1", FAKE_LOG_TEXT="")
+        env["FAKE_LOG_PREFIX"] = "other-"  # not a nevr-*.jsonl, so the launcher finds no game log
+        result = self.run_script("--dll", str(self.dll), env=env)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no game log written", result.stderr)
+        self.assertNotIn("the host stopped the game", result.stderr)
+
+    def test_a_stop_from_before_the_run_is_not_blamed_on_it(self):
+        logs = self.game_root / "echovr/.wineprefix/drive_c/users" / getpass.getuser() / "AppData/Local/nevr/echovr/logs"
+        (logs / "nevr-bootstrap.jsonl").write_text(
+            '{"event":"game_stop","exit_code":78,"reason":"runtime_refused","run":"old","ts":"2026-10-01T00:00:00.000Z"}\n')
+        env = dict(self.env, FAKE_LOG_PREFIX="other-")
+        result = self.run_script("--dll", str(self.dll), env=env)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertNotIn("the host stopped the game", result.stderr)
 
     def test_require_in_game_fails_when_the_client_only_logs_in(self):
         # The default fake run reaches "to logged in" and stops; with --require-in-game the launcher
@@ -567,6 +600,23 @@ class VerifyServerTest(unittest.TestCase):
 
     def command(self):
         return [str(self.checkout / "verify-server.sh"), "run1", "default", "1"]
+
+    def test_the_summary_names_a_host_stop_and_says_none_otherwise(self):
+        # #1122: a host that refuses nevr-runtime.dll leaves no game log; the summary says why from the host's record.
+        stopped = subprocess.run(self.command(), env=dict(self.env, FAKE_HOST_STOP="unsigned"), cwd=self.checkout,
+                                 capture_output=True, text=True, timeout=60)
+        self.assertEqual(stopped.returncode, 0, stopped.stdout + stopped.stderr)
+        self.assertIn("host stop           = the host stopped the game (exit 78, reason runtime_refused): "
+                      "the host refused nevr-runtime.dll: unsigned", stopped.stdout)
+        # The fake runs are under a second apart; a real boot is not, so the first run's record is replaced by one
+        # from an earlier day: a stop the host wrote before this run is not this run's.
+        (self.game_root / "echovr/.wineprefix/drive_c/users" / getpass.getuser()
+         / "AppData/Local/nevr/echovr/logs/nevr-bootstrap.jsonl").write_text(
+            '{"event":"game_stop","exit_code":78,"reason":"runtime_refused","run":"old","ts":"2026-10-01T00:00:00.000Z"}\n')
+        normal = subprocess.run(self.command(), env=self.env, cwd=self.checkout, capture_output=True, text=True,
+                                timeout=60)
+        self.assertEqual(normal.returncode, 0, normal.stdout + normal.stderr)
+        self.assertIn("host stop           = none", normal.stdout)
 
     def test_a_finished_run_leaves_the_game_directory_as_it_found_it(self):
         result = subprocess.run(self.command(), env=self.env, cwd=self.checkout, capture_output=True,

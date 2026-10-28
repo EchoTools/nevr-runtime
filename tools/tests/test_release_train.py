@@ -139,6 +139,32 @@ class AudienceSection(unittest.TestCase):
         out = audience.sections(["feat(runtime)!: drop the old flag"])
         self.assertIn("- BREAKING: drop the old flag", out)
 
+    def test_types_are_case_insensitive(self) -> None:
+        out = audience.sections(["Feat(arena): keep the clock running", "FIX: a player fix", "Perf(quest): faster"])
+        hosts = out.split("### For server hosts", 1)[1].split("### For plugin developers", 1)[0]
+        players = out.split("### For players", 1)[1].split("### For server hosts", 1)[0]
+        self.assertIn("- keep the clock running", hosts)
+        self.assertIn("- a player fix", players)
+        self.assertIn("- faster", players)
+
+    def test_the_scope_is_lowercased_before_lookup(self) -> None:
+        out = audience.sections(["fix(Server): the bridge reconnects", "feat(Tools): a worktree recipe"])
+        hosts = out.split("### For server hosts", 1)[1].split("### For plugin developers", 1)[0]
+        self.assertIn("- the bridge reconnects", hosts)
+        self.assertNotIn("a worktree recipe", out)
+
+    def test_a_breaking_change_footer_is_marked(self) -> None:
+        for token in ("BREAKING CHANGE", "BREAKING-CHANGE"):
+            with self.subTest(token=token):
+                out = audience.sections([f"feat(server): a subject\n\nA body.\n\n{token}: the old flag is gone"])
+                hosts = out.split("### For server hosts", 1)[1].split("### For plugin developers", 1)[0]
+                self.assertIn("- BREAKING: a subject", hosts)
+
+    def test_breaking_change_only_mid_line_is_not_a_footer(self) -> None:
+        out = audience.sections(["fix(quest): the subject\n\nThis is not a BREAKING CHANGE: just prose."])
+        self.assertIn("- the subject", out)
+        self.assertNotIn("BREAKING:", out)
+
     def test_other_types_are_left_out(self) -> None:
         out = audience.sections(["docs: a note", "ci(release): tag builds skip verify", "chore: tidy"])
         self.assertNotIn("a note", out)
@@ -156,6 +182,16 @@ class AudienceSection(unittest.TestCase):
         self.assertNotIn("a script", out)
         self.assertIn("- a real fix", out)
         self.assertEqual(out.count("Nothing for this audience in this release."), 2)
+
+    def test_the_singular_plugin_scope_is_for_plugin_developers_too(self) -> None:
+        out = audience.sections(["feat(plugin): a level field, API v8", "fix(plugin): a loader fix", "fix(quest): a real fix"])
+        players = out.split("### For players", 1)[1].split("### For server hosts", 1)[0]
+        devs = out.split("### For plugin developers", 1)[1].split("## Not tested", 1)[0]
+        self.assertIn("- a level field, API v8", devs)
+        self.assertIn("- a loader fix", devs)
+        self.assertNotIn("a level field", players)
+        self.assertNotIn("a loader fix", players)
+        self.assertIn("- a real fix", players)
 
     def test_an_empty_audience_says_so(self) -> None:
         out = audience.sections(["fix(quest): a thing"])

@@ -5,6 +5,10 @@
 // Needs the stock script DLLs: NEVR_SCRIPT_DLL_DIR names the directory that holds 08317e89cc3ae611.dll and
 // fc4cbaae440e658c.dll (a read-only install's bin/win10/scripts). The test loads them and writes nothing to disk.
 // Without the variable the tests skip and say so.
+//
+// #1113: the tests of ArenaPublicClockTrampoline need no script DLL. They stand in for the two MinHook calls and
+// check that a caller who reaches the detour never finds a null or a freed trampoline: while a hook is attached,
+// when the attach fails, and after the old hook is removed.
 
 #include <gtest/gtest.h>
 
@@ -17,7 +21,13 @@
 #include <cstring>
 #include <string>
 
+#include <MinHook.h>
+
+#include <vector>
+
+#include "core/hook_lifecycle.h"
 #include "core/hooking.h"
+#include "core/logging.h"
 #include "runtime/lifecycle/arena_round_time.h"
 #include "runtime/lifecycle/cli.h"
 #include "runtime/patch/arena_public_clock.h"
@@ -155,6 +165,164 @@ TEST_F(ArenaPublicClockHook, AReloadedScriptIsHookedAgain) {
   auto state = State(1);
   CallBind(second, 0, state);
   EXPECT_EQ(g_recorded.valueSeen, 0);
+}
+
+// ---- #1113 ----------------------------------------------------------------------------------------------------
+
+// What the stand-ins record. `Game*` is the game's own bind function (the hook target), `Trampoline` the copy MinHook
+// would have made; `freed` models MH_RemoveHook freeing the trampoline.
+struct Probe {
+  int gameACalls{0};
+  int gameBCalls{0};
+  int trampolineCalls{0};
+  int freedTrampolineCalls{0};
+  bool freed{false};
+  // attach
+  void* attachEntry{nullptr};     // what *original held when attach was called: the target, as Hooking::Attach reads it
+  bool attachSucceeds{true};
+  bool callerBeforeCreate{false};  // a caller arrives at the start of the attach, before the trampoline exists
+  bool callerAtEnable{false};      // a caller arrives as the hook goes live
+  std::vector<std::int64_t> results;  // what each of those callers got back
+  // remove
+  std::vector<void*> removed;
+  int removeStatus{MH_OK};
+};
+Probe g_probe;
+
+std::int64_t GameA(void*, void*) { ++g_probe.gameACalls; return 11; }
+std::int64_t GameB(void*, void*) { ++g_probe.gameBCalls; return 12; }
+std::int64_t Trampoline(void*, void*) {
+  if (g_probe.freed) ++g_probe.freedTrampolineCalls;
+  ++g_probe.trampolineCalls;
+  return 7;
+}
+
+// The caller: a script node reaching the bind function through the detour, with a flag store it does not care about.
+void CallDetour(std::size_t site) {
+  std::array<std::uint8_t, 0x38> state{};
+  const std::uint64_t other = kPublicMatchFlag ^ 0x10;
+  std::memcpy(state.data() + kStateNameOffset, &other, sizeof(other));
+  g_probe.results.push_back(DetourForTest(site)(state.data(), nullptr));
+}
+
+// Hooking::Attach over a MinHook that can be told to fail: the same create / publish / enable order and rollback
+// (core/hook_lifecycle.h), with the target read from *original.
+bool ProbeAttach(void** original, void* /*detour*/) {
+  g_probe.attachEntry = *original;
+  if (g_probe.callerBeforeCreate) CallDetour(0);
+  g_probe.freed = false;
+  const nevr::hook::AttachStage stage = nevr::hook::AttachPublished(
+      original,
+      [&](void** trampoline) {
+        *trampoline = reinterpret_cast<void*>(&Trampoline);
+        return true;
+      },
+      [&] {
+        if (g_probe.callerAtEnable) CallDetour(0);
+        return g_probe.attachSucceeds;
+      },
+      [] {});
+  return stage == nevr::hook::AttachStage::kAttached;
+}
+
+int ProbeRemove(void* target) {
+  g_probe.removed.push_back(target);
+  if (g_probe.removeStatus == MH_OK) g_probe.freed = true;  // the old trampoline is gone
+  return g_probe.removeStatus;
+}
+
+std::vector<std::string> g_logged;
+void CaptureLog(EchoVR::LogLevel, const CHAR* message) { g_logged.push_back(message); }
+
+bool Logged(const char* needle) {
+  for (const std::string& line : g_logged) {
+    if (line.find(needle) != std::string::npos) return true;
+  }
+  return false;
+}
+
+class ArenaPublicClockTrampoline : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    g_probe = Probe{};
+    g_logged.clear();
+    ResetForTest();
+    SetBackendForTest(&ProbeAttach, &ProbeRemove);
+    SetBootLogSink(&CaptureLog);
+  }
+  void TearDown() override {
+    SetBootLogSink(nullptr);
+    ResetForTest();
+  }
+};
+
+TEST_F(ArenaPublicClockTrampoline, ACallerThatArrivesAsTheHookGoesLiveReachesTheTrampoline) {
+  g_probe.callerAtEnable = true;
+  ASSERT_TRUE(HookSiteForTest(0, reinterpret_cast<void*>(&GameA)));
+  EXPECT_EQ(g_probe.attachEntry, reinterpret_cast<void*>(&GameA)) << "attach was not handed the target to hook";
+  ASSERT_EQ(g_probe.results.size(), 1u);
+  EXPECT_EQ(g_probe.results[0], 7) << "the caller at enable did not reach the trampoline";
+  EXPECT_EQ(g_probe.trampolineCalls, 1);
+  EXPECT_EQ(g_probe.gameACalls, 0);
+
+  CallDetour(0);
+  EXPECT_EQ(g_probe.results.back(), 7);
+  EXPECT_EQ(OriginalForTest(0), &Trampoline);
+}
+
+TEST_F(ArenaPublicClockTrampoline, AFailedAttachLeavesTheDetourCallingTheGamesFunction) {
+  g_probe.callerAtEnable = true;
+  g_probe.attachSucceeds = false;
+  EXPECT_FALSE(HookSiteForTest(0, reinterpret_cast<void*>(&GameA)));
+  ASSERT_EQ(g_probe.results.size(), 1u);
+  EXPECT_EQ(g_probe.results[0], 7);  // it arrived while the trampoline was published
+
+  CallDetour(0);  // the attach rolled back: the hook is gone, the game's function is whole
+  EXPECT_EQ(g_probe.results.back(), 11) << "after a failed attach the detour did not reach the game's function";
+  EXPECT_EQ(g_probe.gameACalls, 1);
+  EXPECT_EQ(g_probe.trampolineCalls, 1) << "the rolled-back trampoline was called";
+}
+
+TEST_F(ArenaPublicClockTrampoline, ARemovedHooksTrampolineIsNeverCalled) {
+  ASSERT_TRUE(HookSiteForTest(0, reinterpret_cast<void*>(&GameA)));
+  ASSERT_EQ(OriginalForTest(0), &Trampoline);
+
+  // The script is released and mapped again: the old hook is removed (its trampoline freed), then the new image is
+  // hooked. A caller that reaches the detour between the two must reach a real function.
+  g_probe.callerBeforeCreate = true;
+  ASSERT_TRUE(HookSiteForTest(0, reinterpret_cast<void*>(&GameB)));
+  ASSERT_EQ(g_probe.removed.size(), 1u);
+  EXPECT_EQ(g_probe.removed[0], reinterpret_cast<void*>(&GameA));
+  ASSERT_EQ(g_probe.results.size(), 1u);
+  EXPECT_EQ(g_probe.freedTrampolineCalls, 0) << "the detour called a freed trampoline";
+  EXPECT_EQ(g_probe.results[0], 12) << "between the removal and the new attach the detour did not reach a real function";
+  EXPECT_EQ(g_probe.gameBCalls, 1);
+}
+
+TEST_F(ArenaPublicClockTrampoline, ANotCreatedAnswerIsTheHookAlreadyGone) {
+  ASSERT_TRUE(HookSiteForTest(0, reinterpret_cast<void*>(&GameA)));
+  g_probe.removeStatus = MH_ERROR_NOT_CREATED;
+  ASSERT_TRUE(HookSiteForTest(0, reinterpret_cast<void*>(&GameB)));
+  EXPECT_FALSE(Logged("remove")) << "an absent hook was reported as a failed removal";
+  CallDetour(0);
+  EXPECT_EQ(g_probe.results.back(), 7);
+}
+
+TEST_F(ArenaPublicClockTrampoline, AFailedRemovalIsLoggedAndTheOldHookIsRemovedAgainOnTheNextPass) {
+  ASSERT_TRUE(HookSiteForTest(0, reinterpret_cast<void*>(&GameA)));
+
+  g_probe.removeStatus = MH_ERROR_MEMORY_PROTECT;
+  g_probe.attachSucceeds = false;
+  EXPECT_FALSE(HookSiteForTest(0, reinterpret_cast<void*>(&GameB)));
+  EXPECT_TRUE(Logged("MH_ERROR_MEMORY_PROTECT")) << "the failed removal was not logged with its status";
+  EXPECT_EQ(g_probe.freedTrampolineCalls, 0);
+
+  // The old hook is still in MinHook's table: the next pass takes it out again before hooking.
+  g_probe.removeStatus = MH_OK;
+  g_probe.attachSucceeds = true;
+  ASSERT_TRUE(HookSiteForTest(0, reinterpret_cast<void*>(&GameB)));
+  ASSERT_EQ(g_probe.removed.size(), 2u);
+  EXPECT_EQ(g_probe.removed[1], reinterpret_cast<void*>(&GameA)) << "the old hook was forgotten after a failed removal";
 }
 
 }  // namespace

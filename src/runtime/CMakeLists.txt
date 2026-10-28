@@ -84,12 +84,17 @@ set(PATCHES_SOURCES
     "patch/pnsrad_enabler.cpp"
     "patch/mic_provider.cpp"
     "patch/party_invite_gate.cpp"
+    "patch/invite_choice_hook.cpp"
     "patch/invite_wizard_hook.cpp"
     "patch/early_quit_lockout.cpp"
     "patch/arena_public_clock.cpp"
     "patch/lobby_full_backoff.cpp"
     "patch/menu_version_label.cpp"
+    # #906, ADR 0017 D4: the main-menu cards (pure logic in menu_page.h and menu_cards.h).
+    "patch/menu_cards.cpp"
     "patch/splash_skip.cpp"
+    # #896, #906: the UI text writer (pure logic in ui_text.h).
+    "patch/ui_text.cpp"
     "patch/ui_texture_mips.cpp"
     "patch/social_facade.cpp"
     "patch/social_facade_object.cpp"
@@ -181,6 +186,8 @@ set(PATCHES_HEADERS
     "compat/ws_bridge.h"
     "compat/socket_role.h"
     "patch/invite_wizard.h"
+    "patch/menu_page.h"
+    "patch/menu_cards.h"
     "patch/guild_picker.h"
     "compat/evr_codec.h"
     "compat/lobby_frame.h"
@@ -194,6 +201,7 @@ set(PATCHES_HEADERS
     "patch/social_facade.h"
     "patch/social_facade_install.h"
     "log/builtin_filter.h"
+    "log/rate_limiter.h"
     "log/symcache.h"
     "log/url_diagnostics.h"
     "log/security_diagnostics.h"
@@ -325,9 +333,13 @@ endif()
 # build as the plugin developers' build: the DLL embeds the NUL-bounded literal "NEVR-PLUGIN-TRUST dev" instead of
 # "NEVR-PLUGIN-TRUST release", and tools/package_release.py refuses to package any DLL that does not say release.
 # It does not change how a run checks plugins. No config key and no environment variable changes the mode of a run.
+# It is also the build whose unsigned nevr-runtime.dll the host loads (ADR 0012), so every preset that makes a test DLL pair
+# (mingw-plugin-dev, mingw-scenario) sets it; tools/tests/test_preset_unsigned_runtime.py pins that.
 option(NEVR_ALLOW_UNSIGNED_PLUGINS "Mark the build as the plugin developers' build (never ship)" OFF)
 if(NEVR_ALLOW_UNSIGNED_PLUGINS)
   set_source_files_properties(ext/plugin_trust.cpp ext/plugin_pins.cpp PROPERTIES COMPILE_DEFINITIONS NEVR_ALLOW_UNSIGNED_PLUGINS=1)
+  # The host carries no NEVR-PLUGIN-TRUST literal, so it says the same in a literal of its own (host/host_identity.cpp).
+  set_property(SOURCE host/host_identity.cpp APPEND PROPERTY COMPILE_DEFINITIONS NEVR_ALLOW_UNSIGNED_PLUGINS=1)
   message(STATUS "NEVR_ALLOW_UNSIGNED_PLUGINS=ON: BugSplat64.dll is marked as a plugin developer build (never ship)")
 endif()
 set_source_files_properties(ext/plugin_signature.cpp ext/plugin_tree.cpp ext/plugin_trust.cpp ext/plugin_pins.cpp ext/self_provenance.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -1120,6 +1132,7 @@ if(BUILD_TESTING)
       lifecycle/nevr_root_move.cpp)
     set_source_files_properties(tests/test_nevr_root.cpp lifecycle/nevr_root_move.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_nevr_root PRIVATE NEVR_TEST_HOOKS)
     target_include_directories(test_nevr_root PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_nevr_root PRIVATE GTest::gtest GTest::gtest_main nevr_core)
     gtest_discover_tests(test_nevr_root DISCOVERY_MODE PRE_TEST)
@@ -1242,6 +1255,20 @@ if(BUILD_TESTING)
     target_include_directories(test_invite_wizard PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_invite_wizard PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_invite_wizard DISCOVERY_MODE PRE_TEST)
+
+    # #906, docs/adr/0017: what the wizard's cards chose (patch/invite_choices.h): header only, pure.
+    add_executable(test_invite_choices tests/test_invite_choices.cpp)
+    set_source_files_properties(tests/test_invite_choices.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_invite_choices PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_invite_choices PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_invite_choices DISCOVERY_MODE PRE_TEST)
+
+    # #896, #906, docs/adr/0017: the UI text writer (patch/ui_text.h): header only, pure.
+    add_executable(test_ui_text tests/test_ui_text.cpp)
+    set_source_files_properties(tests/test_ui_text.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_ui_text PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_ui_text PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_ui_text DISCOVERY_MODE PRE_TEST)
 
     # #963: the CREATE GAME guild picker (patch/guild_picker.h): header only, pure.
     add_executable(test_guild_picker tests/test_guild_picker.cpp)
@@ -1366,8 +1393,9 @@ if(BUILD_TESTING)
     target_link_libraries(test_cmdline_strip PRIVATE GTest::gtest GTest::gtest_main nevr_core)
     gtest_discover_tests(test_cmdline_strip DISCOVERY_MODE PRE_TEST)
 
-    add_executable(test_scenario_early_quit tests/test_scenario_early_quit.cpp)
-    set_source_files_properties(tests/test_scenario_early_quit.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    # test_scenario_ui_text.cpp (#906, the ui_text fire action in runtime/scenario/scenario_protocol.h) rides in this executable.
+    add_executable(test_scenario_early_quit tests/test_scenario_early_quit.cpp tests/test_scenario_ui_text.cpp)
+    set_source_files_properties(tests/test_scenario_early_quit.cpp tests/test_scenario_ui_text.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_scenario_early_quit PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_scenario_early_quit PRIVATE
       GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json)
@@ -1535,6 +1563,7 @@ if(BUILD_TESTING)
       # #41: ws_bridge.cpp builds its URL credentials through the ServerDbUri encoder.
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
+      log/symcache_data.cpp
       # N84: plugin_loader calls nevr_hook_guard::VerifyAll after each plugin init.
       # Linked as production source (not a stub) so the test drives the real
       # guard — a stub here would make the N84 tests tautological.
@@ -1577,6 +1606,7 @@ if(BUILD_TESTING)
       compat/self_check.cpp
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
+      log/symcache_data.cpp
       hook/hook_liveness.cpp
       hook/dll_load_hook.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON
@@ -1642,6 +1672,15 @@ if(BUILD_TESTING)
         OUTPUT_NAME "test_plugin_logging_${_logging_suffix}"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
     endforeach()
+    # #1094: a plugin that reads the main level from its init, per-frame and state-change contexts.
+    add_library(test_plugin_level SHARED
+      tests/plugin_level_test_dll.cpp)
+    target_compile_definitions(test_plugin_level PRIVATE NEVR_PLUGIN_EXPORTS)
+    target_include_directories(test_plugin_level PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    set_target_properties(test_plugin_level PROPERTIES
+      PREFIX ""
+      OUTPUT_NAME "test_plugin_level"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
     add_library(test_plugin_init_fail SHARED
       tests/plugin_init_fail_test_dll.cpp)
     target_compile_definitions(test_plugin_init_fail PRIVATE NEVR_PLUGIN_EXPORTS)
@@ -1667,7 +1706,8 @@ if(BUILD_TESTING)
       OUTPUT_NAME "test_plugin_info_keeper"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
     add_dependencies(test_behavioral test_plugin_future_api test_plugin_onframe test_plugin_init_fail
-      test_plugin_partial_init_fail test_plugin_info_keeper test_plugin_logging_a test_plugin_logging_b)
+      test_plugin_partial_init_fail test_plugin_info_keeper test_plugin_logging_a test_plugin_logging_b
+      test_plugin_level)
 
     gtest_discover_tests(test_behavioral DISCOVERY_MODE PRE_TEST)
 
@@ -1699,11 +1739,12 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_messages DISCOVERY_MODE PRE_TEST)
 
     # test_plugin_logger.cpp (#34, header-only plugins/common/include/plugin_logger.h) and
-    # test_plugin_log.cpp (#598, header-only ext/plugin_log.h) ride in this
+    # test_plugin_log.cpp (#598, header-only ext/plugin_log.h) and
+    # test_rate_limiter.cpp (#894, header-only log/rate_limiter.h) ride in this
     # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp lifecycle/crash_dump_format.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp lifecycle/crash_dump_format.cpp
+      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_rate_limiter.cpp lifecycle/crash_dump_format.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_rate_limiter.cpp lifecycle/crash_dump_format.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src
       ${CMAKE_SOURCE_DIR}/plugins/common/include)

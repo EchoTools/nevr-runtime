@@ -11,7 +11,7 @@ Commit `@COMMIT@`.
 @IF_NOAPK@|---|---|---|
 @IF_APK@| `@ZIP@` | Windows: `BugSplat64.dll`, `nevr-runtime.dll`, `echovr_server.exe`, `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
 @IF_NOAPK@| `@ZIP@` | `@SHA_ZIP@` | Windows, for players and server operators: `BugSplat64.dll`, `nevr-runtime.dll`, `echovr_server.exe` (all stripped, no debug symbols), `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
-@IF_APK@| `@APK@` | Quest: the repacked, debug-signed APK |
+@IF_APK@| `@APK@` | Quest: the repacked APK |
 @IF_APK@| `SHA256SUMS` | SHA-256 of the two files above |
 @IF_NOAPK@| `@QUEST@` | `@SHA_QUEST@` | Quest library for packagers: a loose ELF, attested and not signed |
 
@@ -33,11 +33,10 @@ Commit `@COMMIT@`.
   restores both. Nothing is deleted.
 @IF_NOAPK@- **Dedicated server:** copy `echovr_server.exe` next to `echovr.exe` and write `_local\config.yaml`; the zip's
 @IF_NOAPK@  `README.txt` has the command and the smallest working config.
-@IF_APK@- **Quest:** `adb install -r @APK@` over the build you already have (it is signed with the same key as
-@IF_APK@  earlier test builds; a different key needs an uninstall first, which clears the app's data).
+@IF_APK@- **Quest:** uninstall the old version first; this build is signed with the new key. Then `adb install @APK@`.
 
 ## Signing
-The runtime in this release loads only plugins signed through the release-signer pipeline. An unsigned plugin (or one with a changed byte) is refused and listed in the plugin manifest; a plugin marked required that is refused stops a server.
+The runtime loads unsigned plugins by default, and logs a warning for each one. Start a run with `-require-signed-plugins` to load only plugins signed through the release-signer pipeline: an unsigned plugin (or one with a changed byte) is then refused and listed in the plugin manifest, and a plugin marked required that is refused stops a server.
 
 A separate signing step may sign `BugSplat64.dll`, `nevr-runtime.dll`, `echovr_server.exe`, `install.ps1`, `uninstall.ps1` and `quest-diagnose.ps1` after the build and
 replace the zip under the same name; these notes are the same either way. A file is signed when it carries a
@@ -45,8 +44,8 @@ signature, and `SIGNING.txt` inside the zip says how to check each one.
 @IF_APK@Compare the zip's SHA-256 with `SHA256SUMS`; the zip's own `SHA256SUMS` lists the files inside it.
 @IF_NOAPK@Compare the zip's SHA-256 with the table above; the zip's own `SHA256SUMS` lists the files inside it.
 Windows Defender or SmartScreen may warn about a file that is not signed.
-@IF_APK@The Quest APK is debug-signed with the same key as earlier test builds, which is a sideload signature,
-@IF_APK@not a code-signing certificate.
+@IF_APK@The Quest APK is signed with the project's own key, which is a sideload signature, not a code-signing
+@IF_APK@certificate.
 
 ## Notes
 @IF_APK@- The Windows log is `%LOCALAPPDATA%\nevr\echovr\logs\nevr-*.jsonl`; the Quest log is

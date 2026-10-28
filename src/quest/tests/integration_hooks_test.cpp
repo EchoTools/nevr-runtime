@@ -28,6 +28,10 @@ using namespace nevr_quest::integration;
 namespace nevr_quest::login_prompt {
 bool RegisterCounters() noexcept;
 }  // namespace nevr_quest::login_prompt
+// The same for sentinel/login_title_hook.h (#1137).
+namespace nevr_quest::login_title {
+bool RegisterCounters() noexcept;
+}  // namespace nevr_quest::login_title
 // The same for sentinel/obb_skip_hook.h (#319).
 namespace nevr_quest::obb_skip {
 bool RegisterCounters() noexcept;
@@ -133,11 +137,13 @@ void TestInstallWithoutTheModuleFailsCleanly() {
 // names here because entry.cpp (jni.h, breakpad) cannot be built on the host. Clock 2, redirect 14 (#408: the
 // CSysHttp::CreateConnection thunk's calls and faults, and the URL decisions' two),
 // dlopen 1, login 2 (#237: calls and faults of the SendLogInRequest thunk), login prerequisites 22 (#411 adds the refused social org-id requests, the local entitlement answer and the local message pump's four: pops, deliveries, deferrals, SDK ids in the local range; #338:
-// one calls counter per hook), social 26 (the facade's, the invite gate's, the rich presence trace's four, its three local answers), login prompt 16 (#239, #672, login_prompt_hook.h kCounterCount), OBB-mount
+// one calls counter per hook), social 26 (the facade's, the invite gate's, the rich presence trace's four, its three local answers), login prompt 16 (#239, #672, login_prompt_hook.h kCounterCount), login title 5 (#1137, login_title_hook.h kCounterCount;
+// registered with the login prompt's, through the same step), OBB-mount
 // skip 6 (#319, #866: the mount, the path and the data-root question, obb_skip_hook.h kCounterCount), texture quality 4 (#943,
 // texture_quality_hook.h kCounterCount), resource request log 2 (#871, resource_request_hook.h kCounterCount; development
-// builds only, so a release build registers 2 fewer). 91 on main before #943, 95 of 96 with it.
-constexpr int kSentinelCounters = 2 + 14 + 1 + 2 + 22 + 26 + 16 + 6 + 4 + 2;
+// builds only, so a release build registers 2 fewer). 91 on main before #943, 95 with it, which filled the 96 the table held
+// then; the table holds 128 since #1137.
+constexpr int kSentinelCounters = 2 + 14 + 1 + 2 + 22 + 26 + 16 + 5 + 6 + 4 + 2;
 static_assert(kSentinelCounters <= static_cast<int>(sentinel::kMaxReportCounters),
               "the sentinel's hooks register more counters than the reporter holds");
 
@@ -145,6 +151,9 @@ struct RealCounterSteps final : Steps {
   nevr_quest::ResolvedConfig config;
   void ArmCrashReporter() override {}
   const nevr_quest::ResolvedConfig& ResolveConfig() override { return config; }
+  PluginCounts PlanPlugins() override { return {}; }  // the plugin loader registers no reporter counter
+  bool RunEarlyPlugins() override { return true; }
+  void FinishPlugins(const char*) override {}
   bool RegisterClockCounters() override {
     static std::atomic<std::uint64_t> calls{0}, faults{0};
     bool ok = sentinel::RegisterReportCounter("clock_gettime_calls", &calls);
@@ -155,7 +164,10 @@ struct RealCounterSteps final : Steps {
   bool RegisterDlopenCounters() override { return nevr_quest::integration::RegisterDlopenCounters(); }
   bool RegisterLoginCounters() override { return nevr_quest_login::RegisterLoginHookCounters(); }
   bool RegisterSocialCounters() override { return nevr_quest::integration::RegisterSocialCounters(); }
-  bool RegisterLoginPromptCounters() override { return nevr_quest::login_prompt::RegisterCounters(); }
+  // entry.cpp registers the login title hook's counters with the login prompt's, in the same step.
+  bool RegisterLoginPromptCounters() override {
+    return nevr_quest::login_prompt::RegisterCounters() && nevr_quest::login_title::RegisterCounters();
+  }
   bool RegisterObbSkipCounters() override { return nevr_quest::obb_skip::RegisterCounters(); }
   bool ResourceRequestLogWanted() override { return true; }  // the budget is the development build's, the larger one
   bool RegisterResourceRequestCounters() override { return nevr_quest::resource_request::RegisterCounters(); }
@@ -167,15 +179,17 @@ struct RealCounterSteps final : Steps {
   bool InstallProcessEnd() override { return true; }
   bool InstallPermissionWait() override { return true; }
   bool InstallVkExtWindow() override { return true; }
+  bool InstallOsBuildGate() override { return true; }
   bool InstallResourceRequestLog(bool counted) override { return counted; }
   bool InstallTextureQuality(const nevr_quest::TextureChoice&, bool counted) override { return counted; }
   bool InstallCreditsText() override { return true; }
+  bool InstallMenuCards() override { return true; }
   bool StartTokenAuth() override { return true; }
   bool InstallLoginPrompt(bool counted) override { return counted; }
   bool StartBridge() override { return true; }
   bool InstallRedirect() override { return true; }
   bool InstallSocial() override { return true; }
-  bool InstallDlopenHook(bool, bool) override { return true; }
+  bool InstallDlopenHook(bool, bool, bool) override { return true; }
   bool StartHwDump() override { return true; }
   void Note(const char*, const char*, const char*) override {}
 };

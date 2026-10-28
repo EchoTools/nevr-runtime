@@ -96,4 +96,12 @@ void TestHook_ResetPluginLoadFilter();
 void TestHook_ForgetLoadFilterRegistration();  // after nevr_dll_load_hook::Shutdown() cleared the registered filters
 // Called by the filter between resolving a late load's path and opening it (null clears it).
 void TestHook_SetBetweenResolveAndOpen(void (*hook)(const std::wstring& resolved));
+// Called by StageOne between a staged plugin's check and its load, with the path the entry names (null clears it).
+void TestHook_SetBetweenCheckAndLoad(void (*hook)(const std::wstring& staged));
+// Makes the query for the path of the file a staged plugin's check holds fail.
+void TestHook_FailNamingTheHeldFile(bool fail);
+// Called after a plugin (a staged one, or a later load the filter accepted) is checked and before the load that maps it (null clears it).
+void TestHook_SetAfterDependenciesChecked(void (*hook)());
+// Makes every System32 pin of a plugin's dependencies fail with ERROR_ACCESS_DENIED (false restores it).
+void TestHook_FailPinning(bool fail);
 #endif

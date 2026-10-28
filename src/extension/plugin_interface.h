@@ -94,6 +94,19 @@ struct NvrGameContext {
                                  *   entry. Process-lifetime stable, so a plugin may keep it and
                                  *   log with it from any thread, including from Shutdown. */
     NevrLogFn   log;            /* the host's structured log; see NevrLogFn */
+
+    /* --- v8 additions (#1094) --- */
+    uint64_t    level_symbol;   /* CSymbol64 of the level the game holds as its main level, 0 while it holds none
+                                 *   (or the host cannot tell). Read on every context the host builds, so it is
+                                 *   current at init, on every frame and at every state change. */
+    const char* level_name;     /* level_symbol's name when the host's symbol table resolves it, else nullptr (a
+                                 *   level a plugin registered is not in the table: compare level_symbol with the
+                                 *   CSymbol64 of the name your config gives you). Process-lifetime stable. */
+
+    /* --- Quest additions (#438; additive, no version bump: ADR 0019, section 4) --- */
+    const char* game_build_id;  /* Quest only: the running libr15's build ID in lowercase hex, process-lifetime
+                                 *   stable. nullptr on PC, and on a Quest host that could not read it. A plugin
+                                 *   checks ctx_size covers it first, and NEVR_HOST_PLATFORM_QUEST is set. */
 };
 
 /* Host capability flags */
@@ -103,6 +116,8 @@ enum NvrHostFlags : uint32_t {
     NEVR_HOST_IS_CLIENT     = 0x04, /* running as client */
     NEVR_HOST_COMBAT_MODE   = 0x08, /* game is in combat mode */
     NEVR_HOST_IS_HEADLESS   = 0x10, /* running in headless mode (no graphics/audio) */
+    NEVR_HOST_PLATFORM_QUEST = 0x20, /* running on Quest (#438): base_addr is the libr15 load base, net_game is
+                                      *   null and game_state is 0 until the Quest host measures a source for them */
 };
 
 /*
@@ -182,6 +197,14 @@ typedef void (*NvrPluginShutdown_fn)(void);
  * cross-DLL export signature changes in a backward-incompatible way.
  * Adding new optional exports or new NvrHostFlags values does NOT require a bump.
  *
+ * v8 (#1094): adds level_symbol + level_name to the TAIL of NvrGameContext, so a plugin can switch itself on
+ * for the levels its config names. A plugin checks ctx->ctx_size covers ctx->level_name before reading them,
+ * exactly as for v5 and v6; a pre-v8 plugin never reads them. The host fills them in every context it passes
+ * (init, per-frame, state change). The game sets the level as it enters the "loading level" state, so the
+ * state-change context of that transition already carries it, and it holds none (0) at the menus. The measured
+ * runs changed it only with a state transition; the per-frame context carries it as well, so a plugin that
+ * polls in OnFrame misses nothing if a build changes it without one.
+ *
  * v7 (#432): plugin-carried assets. The host exports NEVR_RegisterAsset / NEVR_DeregisterAssets (see "Plugin
  * assets" below) so a plugin can add levels and resources that live inside its own image. Additive: no
  * existing struct or signature changes, so the bump is a CAPABILITY signal. A plugin that registers assets
@@ -217,7 +240,7 @@ typedef void (*NvrPluginShutdown_fn)(void);
  * the plugin is v1 (pre-versioning). Fully backward-compatible — existing
  * plugins don't need recompilation.
  */
-#define NEVR_PLUGIN_API_VERSION 7
+#define NEVR_PLUGIN_API_VERSION 8
 
 /* Optional: return the API version the plugin was compiled against */
 typedef uint32_t (*NvrPluginGetApiVersion_fn)(void);
@@ -297,3 +320,28 @@ enum NevrAssetStatus : int32_t {
 typedef int  (*NevrRegisterAsset_fn)(uint64_t type_hash, uint64_t name_hash, const void* data, uint64_t size,
                                     const char* label);
 typedef void (*NevrDeregisterAssets_fn)(const void* data_start, const void* data_end);
+
+/*
+ * Supported libr15 builds, declared where the Quest loader can read them without running the plugin.
+ *
+ * A Quest plugin is a shared object whose addresses hold for particular libr15 builds. The loader must know the
+ * build list BEFORE it maps the object, because mapping runs the object's constructors. So the list is data in the
+ * file, an ELF note (owner "NEVR", type 1, text of lowercase hex build IDs separated by spaces), not a function the
+ * loader would have to call after dlopen. Put this once at global scope of the plugin:
+ *
+ *   NEVR_DECLARE_SUPPORTED_BUILD_IDS("<build id> <build id>");
+ *
+ * A plugin without the note is refused on Quest (`build_ids_undeclared`). The PC loader does not read it. ELF only.
+ */
+#ifdef __ELF__
+  #if defined(__aarch64__) || defined(__arm__)
+    #define NEVR_NOTE_SECTION_TYPE "%note"
+  #else
+    #define NEVR_NOTE_SECTION_TYPE "@note"
+  #endif
+  /* "aR": allocated, and retained by --gc-sections. Note layout: namesz=5 ("NEVR\0"), descsz, type=1. */
+  #define NEVR_DECLARE_SUPPORTED_BUILD_IDS(ids)                                                              \
+      __asm__(".pushsection .note.nevr.build_ids,\"aR\"," NEVR_NOTE_SECTION_TYPE "\n"                       \
+              ".balign 4\n.long 5\n.long 2f-1f\n.long 1\n.asciz \"NEVR\"\n.balign 4\n1:\n.ascii \"" ids "\"\n" \
+              "2:\n.balign 4\n.popsection\n")
+#endif
