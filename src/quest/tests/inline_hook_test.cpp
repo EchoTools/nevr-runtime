@@ -12,7 +12,9 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 
@@ -30,6 +32,7 @@ struct InlineHookTestAccess {
                               void** originalOut) {
     return InlineHook::Install(target, expected, detour, originalOut);
   }
+  static ProtectFn SetProtect(ProtectFn fn) { return InlineHook::SetProtectForTest(fn); }
 };
 }  // namespace sentinel
 
@@ -241,6 +244,169 @@ TEST(SecondInstallOfATargetIsRefused) {
   CHECK_EQ(st, InlineStatus::kAlreadyInstalled);
   CHECK(second == nullptr);
   CHECK_EQ(Quad(&page[2]), static_cast<std::uint64_t>(0x2000));
+}
+
+// A protection change that fails on demand (the Quest 3 in the field refused the final mprotect(RX) after a
+// successful mprotect(RW) on the same page); every other call is the real mprotect.
+struct ProtectFault {
+  std::uintptr_t page;  // 0: any address
+  int prot;             // the protection requested by the calls that fail
+  int failures;         // how many matching calls still fail
+  int err;
+};
+ProtectFault g_fault{};
+
+int FaultyProtect(void* addr, std::size_t len, int prot) {
+  const auto a = reinterpret_cast<std::uintptr_t>(addr);
+  if (g_fault.failures > 0 && prot == g_fault.prot && (g_fault.page == 0 || g_fault.page == a)) {
+    --g_fault.failures;
+    errno = g_fault.err;
+    return -1;
+  }
+  return mprotect(addr, len, prot);
+}
+
+// Arms the fault for the lifetime of one scope; the real mprotect comes back on exit.
+class FaultScope {
+ public:
+  FaultScope(std::uintptr_t page, int prot, int failures) {
+    g_fault = ProtectFault{page, prot, failures, EACCES};
+    previous_ = InlineHookTestAccess::SetProtect(&FaultyProtect);
+  }
+  ~FaultScope() { InlineHookTestAccess::SetProtect(previous_); }
+  FaultScope(const FaultScope&) = delete;
+  FaultScope& operator=(const FaultScope&) = delete;
+
+ private:
+  sentinel::ProtectFn previous_;
+};
+
+// The permissions /proc/self/maps shows for the mapping that holds `addr` ("r-xp"), "" when none does.
+std::string PermsOf(const void* addr) {
+  std::FILE* f = std::fopen("/proc/self/maps", "re");
+  if (f == nullptr) return "";
+  char line[512];
+  std::string perms;
+  const auto a = reinterpret_cast<std::uintptr_t>(addr);
+  while (perms.empty() && std::fgets(line, sizeof line, f) != nullptr) {
+    unsigned long lo = 0;
+    unsigned long hi = 0;
+    char p[5] = {};
+    if (std::sscanf(line, "%lx-%lx %4s", &lo, &hi, p) == 3 && a >= lo && a < hi) perms = p;
+  }
+  std::fclose(f);
+  return perms;
+}
+
+void CheckOriginalPrologue(const std::uint32_t* page) {
+  CHECK_EQ(page[0], kStpFp);
+  CHECK_EQ(page[1], kMovFp);
+  CHECK_EQ(page[2], kSubSp);
+  CHECK_EQ(page[3], kStrX19);
+}
+
+TEST(AFailedRestoreOfExecuteTakesTheHookBackOutAndTheSecondTryLeavesThePageExecutable) {
+  std::uint32_t* page = MakePage(kPrologue.words, 4, true);
+  CHECK(page != nullptr);
+  if (page == nullptr) return;
+  void* original = nullptr;
+  InlineStatus st = InlineStatus::kOk;
+  g_lines.clear();
+  sentinel::SetLogSink(&CaptureSink);
+  {
+    FaultScope fault(reinterpret_cast<std::uintptr_t>(page), PROT_READ | PROT_EXEC, 1);
+    st = InlineHookTestAccess::Install(page, kPrologue, reinterpret_cast<void*>(0x1000), &original);
+    CHECK_EQ(g_fault.failures, 0);  // the install did reach the final restore
+  }
+  sentinel::SetLogSink(nullptr);
+  CHECK_EQ(st, InlineStatus::kRestoreProtectUndone);
+  CHECK_EQ(PermsOf(page), std::string("r-xp"));
+  CheckOriginalPrologue(page);
+  CHECK(original == nullptr);  // the published original went back to its entry value
+  CHECK(g_lines.find("\"status\":\"restore_protect_undone\"") != std::string::npos);
+  CHECK(g_lines.find("\"level\":\"error\"") != std::string::npos);
+  CHECK(g_lines.find("\"op\":\"target_rx\"") != std::string::npos);
+  CHECK(g_lines.find("\"errno\":13") != std::string::npos);
+  CHECK(g_lines.find("\"page_perms\":\"rw-p\"") != std::string::npos);  // the state the failed call left
+  CHECK(g_lines.find("\"status\":\"ok\"") == std::string::npos);
+
+  // The registry let go of the target: the same page installs cleanly now.
+  void* again = nullptr;
+  CHECK_EQ(InlineHookTestAccess::Install(page, kPrologue, reinterpret_cast<void*>(0x2000), &again), InlineStatus::kOk);
+  CHECK_EQ(Quad(&page[2]), static_cast<std::uint64_t>(0x2000));
+  CHECK_EQ(PermsOf(page), std::string("r-xp"));
+}
+
+TEST(WhenTheSecondTryFailsTooTheOriginalBytesAreInPlaceAndTheLogSaysItIsFatal) {
+  std::uint32_t* page = MakePage(kPrologue.words, 4, true);
+  CHECK(page != nullptr);
+  if (page == nullptr) return;
+  void* original = nullptr;
+  InlineStatus st = InlineStatus::kOk;
+  g_lines.clear();
+  sentinel::SetLogSink(&CaptureSink);
+  {
+    FaultScope fault(reinterpret_cast<std::uintptr_t>(page), PROT_READ | PROT_EXEC, 2);
+    st = InlineHookTestAccess::Install(page, kPrologue, reinterpret_cast<void*>(0x1000), &original);
+  }
+  sentinel::SetLogSink(nullptr);
+  CHECK_EQ(st, InlineStatus::kRestoreProtectFailed);
+  CheckOriginalPrologue(page);
+  CHECK(original == nullptr);
+  CHECK_EQ(PermsOf(page), std::string("rw-p"));  // nothing here can make it executable again
+  CHECK(g_lines.find("\"status\":\"restore_protect_failed\"") != std::string::npos);
+  CHECK(g_lines.find("\"level\":\"error\"") != std::string::npos);
+  CHECK(g_lines.find("\"errno\":13") != std::string::npos);
+  CHECK(g_lines.find("\"retry_errno\":13") != std::string::npos);
+  CHECK(g_lines.find("fatal") != std::string::npos);
+  CHECK_EQ(mprotect(page, Page(), PROT_READ | PROT_EXEC), 0);  // leave the test process clean
+}
+
+TEST(EveryFailedProtectionChangeLogsItsErrnoAndThePagePermissions) {
+  // The target page cannot be made writable: nothing was touched and the line says why.
+  std::uint32_t* page = MakePage(kPrologue.words, 4, true);
+  CHECK(page != nullptr);
+  if (page == nullptr) return;
+  void* original = nullptr;
+  g_lines.clear();
+  sentinel::SetLogSink(&CaptureSink);
+  InlineStatus st = InlineStatus::kOk;
+  {
+    FaultScope fault(reinterpret_cast<std::uintptr_t>(page), PROT_READ | PROT_WRITE, 1);
+    st = InlineHookTestAccess::Install(page, kPrologue, reinterpret_cast<void*>(0x1000), &original);
+  }
+  CHECK_EQ(st, InlineStatus::kProtectFailed);
+  CHECK(g_lines.find("\"op\":\"target_rw\"") != std::string::npos);
+  CHECK(g_lines.find("\"errno\":13") != std::string::npos);
+  CHECK(g_lines.find("\"page_perms\":\"r-xp\"") != std::string::npos);
+  CheckOriginalPrologue(page);
+
+  // The trampoline page cannot be made executable (the first r-x request of an install).
+  g_lines.clear();
+  {
+    FaultScope fault(0, PROT_READ | PROT_EXEC, 1);
+    st = InlineHookTestAccess::Install(page, kPrologue, reinterpret_cast<void*>(0x1000), &original);
+  }
+  sentinel::SetLogSink(nullptr);
+  CHECK_EQ(st, InlineStatus::kTrampolineFailed);
+  CHECK(g_lines.find("\"op\":\"trampoline_rx\"") != std::string::npos);
+  CHECK(g_lines.find("\"errno\":13") != std::string::npos);
+  CheckOriginalPrologue(page);
+  CHECK(original == nullptr);
+}
+
+TEST(ASuccessfulInstallLogsNoErrno) {
+  std::uint32_t* page = MakePage(kPrologue.words, 4, true);
+  CHECK(page != nullptr);
+  if (page == nullptr) return;
+  void* original = nullptr;
+  g_lines.clear();
+  sentinel::SetLogSink(&CaptureSink);
+  const InlineStatus st = InlineHookTestAccess::Install(page, kPrologue, reinterpret_cast<void*>(0x1000), &original);
+  sentinel::SetLogSink(nullptr);
+  CHECK_EQ(st, InlineStatus::kOk);
+  CHECK(g_lines.find("errno") == std::string::npos);
+  CHECK_EQ(PermsOf(page), std::string("r-xp"));
 }
 
 // A thunk for the entry-point check; the tag makes its statics its own.
