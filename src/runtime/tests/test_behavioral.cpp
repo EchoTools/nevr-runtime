@@ -2172,11 +2172,17 @@ TEST_F(PluginLevelTest, ALevelTheSymbolTableDoesNotKnowHasASymbolAndNoName) {
   LoadPlugins();
   ASSERT_EQ(GetLoadedPluginCount(), 1);
 
+  ClearTestLogs();
   SetFakeGameLevel(custom);
   StateChange(6, 7);
 
   EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kStateCtx), custom);
   EXPECT_EQ(LevelFixtureName(kStateCtx), nullptr);
+  char hex[24];
+  snprintf(hex, sizeof(hex), "0x%016llx", static_cast<unsigned long long>(custom));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     std::string("[NEVR.PLUGIN] main level changed: from=none to=") + hex + " symbol=" + hex))
+      << "a level with no name is logged by its hex symbol";
 }
 
 TEST_F(PluginLevelTest, TheHostLogsEachLevelChangeOnceHoweverManyPluginsAndFramesSeeIt) {
