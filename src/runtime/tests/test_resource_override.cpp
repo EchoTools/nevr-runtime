@@ -8,6 +8,7 @@
 #include <cstring>
 #include <future>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -34,6 +35,93 @@ constexpr std::uint64_t kType = 0x11223344;
 constexpr std::uint64_t kName = 0x55667788;
 constexpr char kReentrantBytes[] = "reentrant";
 
+// ── #1146: the game's own heap, as the resource release sees it ───────────────────────────────────────────────
+// The game frees buffer 0 of a resource through the allocator at memory-context + 0x10, slot kFreeSlot, and never checks
+// where the pointer came from. This fake records what its alloc slot hands out; its free slot counts any pointer it
+// did not hand out as foreign, which in the game is a free into the Resource pool of memory it does not own.
+struct FakeHeap {
+  struct Block {
+    std::unique_ptr<std::uint8_t[]> memory;
+    std::uint64_t size = 0;
+    std::uint64_t alignment = 0;
+    bool freed = false;
+  };
+  std::mutex mutex;
+  std::vector<Block> blocks;
+  unsigned foreignFrees = 0;
+  bool failAllocations = false;
+
+  const Block* Find(const void* p) {
+    std::lock_guard<std::mutex> lock(mutex);
+    for (const Block& b : blocks) {
+      if (b.memory.get() == p) return &b;
+    }
+    return nullptr;
+  }
+};
+FakeHeap g_heap;
+
+struct FakeAllocator {
+  void* const* table;
+};
+void* FakeAlloc(void* /*allocator*/, std::uint64_t alignment, std::uint64_t size) {
+  std::lock_guard<std::mutex> lock(g_heap.mutex);
+  if (g_heap.failAllocations) return nullptr;
+  FakeHeap::Block block;
+  block.memory.reset(new std::uint8_t[static_cast<std::size_t>(size)]);
+  block.size = size;
+  block.alignment = alignment;
+  void* const p = block.memory.get();
+  g_heap.blocks.push_back(std::move(block));
+  return p;
+}
+std::uint64_t FakeFree(void* /*allocator*/, void* pointer) {
+  std::lock_guard<std::mutex> lock(g_heap.mutex);
+  for (FakeHeap::Block& b : g_heap.blocks) {
+    if (b.memory.get() == pointer && !b.freed) {
+      b.freed = true;
+      return 0;
+    }
+  }
+  ++g_heap.foreignFrees;
+  return 1;
+}
+void* g_fakeTable[8] = {};
+FakeAllocator g_fakeAllocator{g_fakeTable};
+std::uint8_t g_fakeContext[0x20] = {};
+void* g_fakeContextPointer = nullptr;
+
+void InstallFakeHeap() {
+  g_fakeTable[5]  /* byte offset 0x28: CElephantAllocator::vslot[5] */ = reinterpret_cast<void*>(&FakeAlloc);
+  g_fakeTable[7]  /* byte offset 0x38: CElephantAllocator::vslot[7] */ = reinterpret_cast<void*>(&FakeFree);
+  FakeAllocator* const allocator = &g_fakeAllocator;
+  std::memcpy(g_fakeContext + 0x10 /* memory context + 0x10 */, &allocator, sizeof(allocator));
+  g_fakeContextPointer = g_fakeContext;
+  {
+    std::lock_guard<std::mutex> lock(g_heap.mutex);
+    g_heap.blocks.clear();
+    g_heap.foreignFrees = 0;
+    g_heap.failAllocations = false;
+  }
+  TestHook_SetMemoryContextSlot(&g_fakeContextPointer);
+}
+void RemoveFakeHeap() { TestHook_SetMemoryContextSlot(nullptr); }
+
+// The allocator and alignment the game's reader records in the callback block before it allocates (SetupReadBuffer).
+void SeedBlock(std::uint8_t* block) {
+  FakeAllocator* const allocator = &g_fakeAllocator;
+  const std::uint64_t alignment = 16;
+  std::memcpy(block + 0x28, &allocator, sizeof(allocator));
+  std::memcpy(block + 0x30, &alignment, sizeof(alignment));
+}
+
+// The game unloads the resource: it frees the pointer it holds in the block.
+void GameFreesBuffer(const void* pointer) {
+  using FreeFn = std::uint64_t (*)(void*, void*);
+  reinterpret_cast<FreeFn>(g_fakeTable[7]  /* byte offset 0x38: CElephantAllocator::vslot[7] */)(&g_fakeAllocator,
+                                                                                    const_cast<void*>(pointer));
+}
+
 void BlockingOriginal(void* callbackData) {
   // A game callback may call back into the exported registry API on this thread.
   RegisterResourceOverride(kType, kName + 1, kReentrantBytes, sizeof(kReentrantBytes), "reentrant");
@@ -50,23 +138,22 @@ void BlockingOriginal(void* callbackData) {
   g_gate.wait(lock, [] { return g_releaseOriginal; });
 }
 
-void SelfDeregisteringOriginal(void* callbackData) {
-  const auto* bytes = static_cast<const std::uint8_t*>(callbackData);
-  const void* forwarded = nullptr;
-  std::uint64_t size = 0;
-  std::memcpy(&forwarded, bytes + 0x18, sizeof(forwarded));
-  std::memcpy(&size, bytes + 0x20, sizeof(size));
-  const auto* start = static_cast<const std::uint8_t*>(forwarded);
-  DeregisterResourceOverrides(start, start + size);
+char g_selfReplacement[] = "replacement";
+
+// The callback deregisters the replacement it is being served. The game holds a copy now (#1146), so the registry's own
+// bytes are named directly.
+void SelfDeregisteringOriginal(void* /*callbackData*/) {
+  DeregisterResourceOverrides(g_selfReplacement, g_selfReplacement + sizeof(g_selfReplacement));
 }
 
 void RunSelfDeregisterFixture() {
   TestHook_InitResourceOverrides(&SelfDeregisteringOriginal);
-  char replacement[] = "replacement";
-  RegisterResourceOverride(kType, kName, replacement, sizeof(replacement), "test");
+  InstallFakeHeap();
+  RegisterResourceOverride(kType, kName, g_selfReplacement, sizeof(g_selfReplacement), "test");
 
   std::array<std::uint8_t, 0x40> resource{};
-  std::array<std::uint8_t, 0x28> callback{};
+  std::array<std::uint8_t, 0x38> callback{};
+  SeedBlock(callback.data());
   void* resourcePtr = resource.data();
   std::memcpy(resource.data() + 0x28, &kType, sizeof(kType));
   std::memcpy(resource.data() + 0x38, &kName, sizeof(kName));
@@ -82,11 +169,13 @@ TEST(ResourceOverride, DeregistrationWaitsForOriginalCallbackAndReentryWorks) {
     g_forwardedBuffer = nullptr;
   }
   TestHook_InitResourceOverrides(&BlockingOriginal);
+  InstallFakeHeap();
   char replacement[] = "replacement";
   RegisterResourceOverride(kType, kName, replacement, sizeof(replacement), "test");
 
   std::array<std::uint8_t, 0x40> resource{};
-  std::array<std::uint8_t, 0x28> callback{};
+  std::array<std::uint8_t, 0x38> callback{};
+  SeedBlock(callback.data());
   void* resourcePtr = resource.data();
   std::memcpy(resource.data() + 0x28, &kType, sizeof(kType));
   std::memcpy(resource.data() + 0x38, &kName, sizeof(kName));
@@ -123,8 +212,13 @@ TEST(ResourceOverride, DeregistrationWaitsForOriginalCallbackAndReentryWorks) {
   EXPECT_EQ(whileOriginalRuns, std::future_status::timeout)
       << "deregistration erased the override while the game callback still held its buffer";
   EXPECT_EQ(afterOriginalReturns, std::future_status::ready);
-  EXPECT_EQ(g_forwardedBuffer, replacement);
+  // The game is handed a copy from its own heap, never the registry's bytes (#1146).
+  EXPECT_NE(g_forwardedBuffer, replacement);
+  ASSERT_NE(g_forwardedBuffer, nullptr);
+  EXPECT_NE(g_heap.Find(g_forwardedBuffer), nullptr);
+  EXPECT_EQ(std::memcmp(g_forwardedBuffer, replacement, sizeof(replacement)), 0);
   TestHook_CloseResourceOverrides();
+  RemoveFakeHeap();
 }
 
 TEST(ResourceOverride, ReentrantDeregistrationFailsClosed) {
@@ -155,7 +249,8 @@ void NoopOriginal(void*) {}
 
 void RunCallbackFor(std::uint64_t name) {
   std::array<std::uint8_t, 0x40> resource{};
-  std::array<std::uint8_t, 0x28> callback{};
+  std::array<std::uint8_t, 0x38> callback{};
+  SeedBlock(callback.data());
   void* resourcePtr = resource.data();
   std::memcpy(resource.data() + 0x28, &kType, sizeof(kType));
   std::memcpy(resource.data() + 0x38, &name, sizeof(name));
@@ -165,6 +260,7 @@ void RunCallbackFor(std::uint64_t name) {
 
 TEST(ResourceOverride, ShutdownReportsEveryOverrideTheGameNeverRequested) {
   TestHook_InitResourceOverrides(&NoopOriginal);
+  InstallFakeHeap();
   static char first[] = "first";
   static char second[] = "second";
   RegisterResourceOverride(kType, kName, first, sizeof(first), "first");
@@ -176,6 +272,7 @@ TEST(ResourceOverride, ShutdownReportsEveryOverrideTheGameNeverRequested) {
   EXPECT_EQ(report.never_applied, 1u) << "the never-requested override must be counted";
   EXPECT_TRUE(report.hook_installed) << "with the hook live the registry is kept (module pinned)";
   TestHook_CloseResourceOverrides();
+  RemoveFakeHeap();
 }
 
 TEST(ResourceOverride, ShutdownWithNoHookReleasesTheRegistry) {
@@ -227,6 +324,7 @@ TEST(ResourceOverride, DeregistrationGivesUpOnABlockedCallbackAndSaysSo) {
   }
   TestHook_SetDeregisterWaitMs(100);
   TestHook_InitResourceOverrides(&BlockingOriginal);
+  InstallFakeHeap();
   static char replacement[] = "replacement";
   RegisterResourceOverride(kType, kName, replacement, sizeof(replacement), "test");
 
@@ -250,6 +348,7 @@ TEST(ResourceOverride, DeregistrationGivesUpOnABlockedCallbackAndSaysSo) {
   callbackThread.join();
   TestHook_SetDeregisterWaitMs(30000);
   TestHook_CloseResourceOverrides();
+  RemoveFakeHeap();
 }
 
 // ── #703: overrides from the asset cache, and the label that outlives its caller ──────────────────────────────
@@ -266,10 +365,24 @@ void RecordingOriginal(void* callbackData) {
   std::memcpy(&g_seenSize, bytes + 0x20, sizeof(g_seenSize));
 }
 
+// What the engine must be holding after a replacement: bytes equal to `want`, in a block its own allocator handed out,
+// never the caller's pointer (#1146).
+void ExpectGameCopy(const void* want, std::size_t n) {
+  ASSERT_NE(g_seenBuffer, nullptr);
+  EXPECT_NE(g_seenBuffer, want) << "the engine was handed the registry's own bytes";
+  const FakeHeap::Block* block = g_heap.Find(g_seenBuffer);
+  ASSERT_NE(block, nullptr) << "the engine was handed memory its allocator did not allocate";
+  EXPECT_EQ(block->size, n);
+  EXPECT_GE(block->alignment, 16u);
+  EXPECT_EQ(g_seenSize, n);
+  EXPECT_EQ(std::memcmp(g_seenBuffer, want, n), 0);
+}
+
 // The game finishing the read of (type, name): buffer index 0, `origBuffer` of `origSize` bytes.
 void GameFinishesReading(std::uint64_t type, std::uint64_t name, const void* origBuffer, std::uint64_t origSize) {
   std::array<std::uint8_t, 0x40> resource{};
-  std::array<std::uint8_t, 0x28> callback{};
+  std::array<std::uint8_t, 0x38> callback{};
+  SeedBlock(callback.data());
   void* resourcePtr = resource.data();
   std::memcpy(resource.data() + 0x28, &type, sizeof(type));
   std::memcpy(resource.data() + 0x38, &name, sizeof(name));
@@ -291,10 +404,12 @@ class CachedOverrides : public ::testing::Test {
            std::wstring(test.begin(), test.end());
     Wipe();
     TestHook_InitResourceOverrides(&RecordingOriginal);
+    InstallFakeHeap();
     ClearTestLogs();
   }
   void TearDown() override {
     TestHook_CloseResourceOverrides();
+    RemoveFakeHeap();
     Wipe();
   }
   void Wipe() {
@@ -335,6 +450,7 @@ TEST_F(CachedOverrides, ACachedFileIsDeliveredForItsTypeAndNameAndLogged) {
   EXPECT_NE(g_seenBuffer, static_cast<const void*>(original)) << "the engine must be handed the cached bytes";
   EXPECT_EQ(g_seenSize, image.size());
   EXPECT_EQ(std::memcmp(g_seenBuffer, image.data(), image.size()), 0);
+  ExpectGameCopy(image.data(), image.size());
   EXPECT_TRUE(TestLogContains("cache hit sha256=" + sha + " bytes=3000 type=0xbeac1969cb7b8861 name=0x1f72c5e0fc9fc8c0"));
   EXPECT_TRUE(TestLogContains("Registered file override: cache_splash ("));
   EXPECT_TRUE(TestLogContains(sha + ".blob, 3000 bytes)"));
@@ -556,9 +672,10 @@ bool ProbeTransform(const void* in, std::uint64_t inSize, const void** out, std:
 
 // The game finishing buffer `index` of (type, name).
 void GameFinishesBuffer(std::uint64_t type, std::uint64_t name, std::uint32_t index, const void* buffer,
-                        std::uint64_t size) {
+                        std::uint64_t size, const void* blockAllocator = &g_fakeAllocator) {
   std::array<std::uint8_t, 0x40> resource{};
-  std::array<std::uint8_t, 0x28> callback{};
+  std::array<std::uint8_t, 0x38> callback{};
+  SeedBlock(callback.data());
   void* resourcePtr = resource.data();
   std::memcpy(resource.data() + 0x28, &type, sizeof(type));
   std::memcpy(resource.data() + 0x38, &name, sizeof(name));
@@ -566,6 +683,7 @@ void GameFinishesBuffer(std::uint64_t type, std::uint64_t name, std::uint32_t in
   std::memcpy(callback.data() + 0x10, &index, sizeof(index));
   std::memcpy(callback.data() + 0x18, &buffer, sizeof(buffer));
   std::memcpy(callback.data() + 0x20, &size, sizeof(size));
+  std::memcpy(callback.data() + 0x28, &blockAllocator, sizeof(blockAllocator));
   g_seenBuffer = nullptr;
   g_seenSize = 0;
   TestHook_RunResourceCallback(callback.data());
@@ -588,8 +706,7 @@ TEST_F(ResourceTransforms, TheTransformSeesTheGamesBufferAndItsAnswerIsWhatTheGa
   EXPECT_EQ(g_probe.seenIn, stock);
   EXPECT_EQ(g_probe.seenSize, sizeof(stock));
   EXPECT_EQ(g_probe.seenUser, &token);
-  EXPECT_EQ(g_seenBuffer, g_probe.served.data());
-  EXPECT_EQ(g_seenSize, g_probe.served.size());
+  ExpectGameCopy(g_probe.served.data(), g_probe.served.size());
   EXPECT_TRUE(TestLogContains("transform applied label=probe"));
 }
 
@@ -599,7 +716,7 @@ TEST_F(ResourceTransforms, EveryLoadOfTheResourceIsAnswered) {
   for (int load = 1; load <= 3; ++load) {
     GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
     EXPECT_EQ(g_probe.calls, load);
-    EXPECT_EQ(g_seenBuffer, g_probe.served.data()) << "load " << load;
+    ExpectGameCopy(g_probe.served.data(), g_probe.served.size());
   }
 }
 
@@ -658,6 +775,147 @@ TEST_F(ResourceTransforms, ARequestedTransformIsNotReportedAsNeverApplied) {
 TEST_F(ResourceTransforms, ANullTransformRegistersNothing) {
   RegisterResourceTransform(kTransformType, kTransformName, nullptr, nullptr, "none");
   EXPECT_EQ(ShutdownResourceOverride().registered, 0u);
+}
+
+// ── #1146: what reaches the game is the game's own memory ─────────────────────────────────────────────────────
+
+class GameHeapCopies : public ResourceTransforms {};
+
+TEST_F(GameHeapCopies, AFixedReplacementIsACopyTheGameCanFreeThroughItsOwnAllocator) {
+  static const std::uint8_t replacement[] = {10, 20, 30, 40, 50, 60};
+  RegisterResourceOverride(kTransformType, kTransformName, replacement, sizeof(replacement), "fixed");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  ExpectGameCopy(replacement, sizeof(replacement));
+  EXPECT_TRUE(TestLogContains("override applied label=fixed"));
+
+  const void* const held = g_seenBuffer;  // the pointer the game keeps in the resource
+  GameFreesBuffer(held);                  // the last reference goes
+  EXPECT_EQ(g_heap.foreignFrees, 0u) << "the game freed memory its allocator did not hand out";
+  EXPECT_EQ(replacement[0], 10) << "the registry's own bytes are untouched by the game's free";
+}
+
+TEST_F(GameHeapCopies, ATransformAnswerIsACopyTheGameCanFreeThroughItsOwnAllocator) {
+  RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "probe");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  ExpectGameCopy(g_probe.served.data(), g_probe.served.size());
+  GameFreesBuffer(g_seenBuffer);
+  EXPECT_EQ(g_heap.foreignFrees, 0u);
+  EXPECT_EQ(g_probe.served[0], 9) << "the transform's own answer is untouched by the game's free";
+}
+
+// The fake must be able to see the bug it guards against: freeing the transform's own answer is a foreign free.
+TEST_F(GameHeapCopies, TheFakeAllocatorCountsAFreeOfMemoryItDidNotHandOut) {
+  GameFreesBuffer(g_probe.served.data());
+  EXPECT_EQ(g_heap.foreignFrees, 1u);
+}
+
+TEST_F(GameHeapCopies, EveryLoadGetsItsOwnCopyAndEachCanBeFreed) {
+  RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "probe");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  std::vector<const void*> held;
+  for (int load = 0; load < 3; ++load) {
+    GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+    ExpectGameCopy(g_probe.served.data(), g_probe.served.size());
+    held.push_back(g_seenBuffer);
+  }
+  EXPECT_NE(held[0], held[1]);
+  EXPECT_NE(held[1], held[2]);
+  for (const void* p : held) GameFreesBuffer(p);
+  EXPECT_EQ(g_heap.foreignFrees, 0u);
+}
+
+TEST_F(GameHeapCopies, WithNoMemoryContextTheGamesBufferIsKeptAndTheLineSaysWhy) {
+  RemoveFakeHeap();
+  RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "probe");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  EXPECT_EQ(g_seenBuffer, stock);
+  EXPECT_EQ(g_seenSize, sizeof(stock));
+  EXPECT_TRUE(TestLogContains("game-heap copy refused label=probe"));
+  EXPECT_TRUE(TestLogContains("reason=no_memory_context"));
+  EXPECT_FALSE(TestLogContains("transform applied"));
+}
+
+TEST_F(GameHeapCopies, AFixedReplacementRefusedForWantOfAHeapIsOfferedAgainOnTheNextLoad) {
+  static const std::uint8_t replacement[] = {10, 20, 30};
+  RegisterResourceOverride(kTransformType, kTransformName, replacement, sizeof(replacement), "fixed");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  RemoveFakeHeap();
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  EXPECT_EQ(g_seenBuffer, stock);
+  EXPECT_TRUE(TestLogContains("reason=no_memory_context"));
+  InstallFakeHeap();
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  ExpectGameCopy(replacement, sizeof(replacement));
+}
+
+TEST_F(GameHeapCopies, AFailedAllocationKeepsTheGamesBufferAndSaysSo) {
+  RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "probe");
+  g_heap.failAllocations = true;
+  static const std::uint8_t stock[] = {1, 2, 3};
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  EXPECT_EQ(g_seenBuffer, stock);
+  EXPECT_TRUE(TestLogContains("reason=alloc_failed"));
+}
+
+TEST_F(GameHeapCopies, ABufferFromAnotherAllocatorIsNotReplaced) {
+  RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "probe");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  const FakeAllocator other{g_fakeTable};
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock), &other);
+  EXPECT_EQ(g_seenBuffer, stock);
+  EXPECT_TRUE(TestLogContains("reason=allocator_mismatch"));
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock), nullptr);
+  EXPECT_EQ(g_seenBuffer, stock);
+  EXPECT_TRUE(TestLogContains("reason=no_allocator"));
+  EXPECT_TRUE(g_heap.blocks.empty()) << "nothing was allocated for a block that was refused";
+}
+
+TEST_F(GameHeapCopies, TheAlignmentTheGameAskedForIsPassedOn) {
+  RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "probe");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  std::array<std::uint8_t, 0x38> callback{};
+  SeedBlock(callback.data());
+  const std::uint64_t alignment = 256;
+  std::memcpy(callback.data() + 0x30, &alignment, sizeof(alignment));
+  std::array<std::uint8_t, 0x40> resource{};
+  void* resourcePtr = resource.data();
+  std::uint64_t type = kTransformType, name = kTransformName, size = sizeof(stock);
+  const void* buffer = stock;
+  std::memcpy(resource.data() + 0x28, &type, sizeof(type));
+  std::memcpy(resource.data() + 0x38, &name, sizeof(name));
+  std::memcpy(callback.data() + 0x08, &resourcePtr, sizeof(resourcePtr));
+  std::memcpy(callback.data() + 0x18, &buffer, sizeof(buffer));
+  std::memcpy(callback.data() + 0x20, &size, sizeof(size));
+  TestHook_RunResourceCallback(callback.data());
+  ASSERT_NE(g_seenBuffer, nullptr);
+  const FakeHeap::Block* block = g_heap.Find(g_seenBuffer);
+  ASSERT_NE(block, nullptr);
+  EXPECT_EQ(block->alignment, 256u);
+}
+
+TEST_F(GameHeapCopies, AnAlignmentBelowTheAllocatorsMinimumIsRaisedToIt) {
+  RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "probe");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  std::array<std::uint8_t, 0x38> callback{};
+  SeedBlock(callback.data());
+  const std::uint64_t alignment = 0;
+  std::memcpy(callback.data() + 0x30, &alignment, sizeof(alignment));
+  std::array<std::uint8_t, 0x40> resource{};
+  void* resourcePtr = resource.data();
+  std::uint64_t type = kTransformType, name = kTransformName, size = sizeof(stock);
+  const void* buffer = stock;
+  std::memcpy(resource.data() + 0x28, &type, sizeof(type));
+  std::memcpy(resource.data() + 0x38, &name, sizeof(name));
+  std::memcpy(callback.data() + 0x08, &resourcePtr, sizeof(resourcePtr));
+  std::memcpy(callback.data() + 0x18, &buffer, sizeof(buffer));
+  std::memcpy(callback.data() + 0x20, &size, sizeof(size));
+  TestHook_RunResourceCallback(callback.data());
+  const FakeHeap::Block* block = g_heap.Find(g_seenBuffer);
+  ASSERT_NE(block, nullptr);
+  EXPECT_EQ(block->alignment, 16u);
 }
 
 }  // namespace

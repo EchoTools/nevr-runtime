@@ -5,6 +5,7 @@
 
 #include <cstddef>
 
+#include "quest/sentinel/got_hook.h"
 #include "quest/sentinel/texture_quality.h"
 
 namespace nevr_quest::integration {
@@ -14,9 +15,14 @@ bool RegisterClockCounters() noexcept;  // 2 counters
 bool InstallClockHook() noexcept;       // false when GotHook refused the slot (logged by GotHook)
 // The #239 login-prompt hook (sentinel/login_prompt_hook.h): its counters and its install, through this
 // seam because login_prompt_hook.h includes callback_thunk.h, which only -fno-exceptions units may.
-bool RegisterLoginPromptCounters() noexcept;  // 14 counters
+bool RegisterLoginPromptCounters() noexcept;  // 16 counters, and the title hook's 5 (#1137)
 // login_prompt::InstallIfCounted(countersRegistered): installs only with its counters registered.
 bool InstallLoginPromptHook(bool countersRegistered) noexcept;  // true when all three slots hold their thunks
+
+// The #1137 login-failed page title (sentinel/login_title_hook.h), through this seam for the same reason. Its counters are
+// registered by RegisterLoginPromptCounters. The library holding the page's script is mapped after the constructor, so the
+// install is a post-load action: kModuleNotLoaded means ask again after the next dlopen.
+sentinel::GotStatus InstallLoginTitleHook() noexcept;
 
 // The #319 OBB-mount skip (sentinel/obb_skip_hook.h), through this seam for the same reason.
 bool RegisterObbSkipCounters() noexcept;  // 6 counters
@@ -44,6 +50,10 @@ bool InstallPermissionWaitHook() noexcept;  // true when the RequestPermissions 
 // libr15 requires stay inside the 128 entries it reads. No counters.
 bool InstallVkExtWindowHook() noexcept;  // true when the FindMethod and VrApi slots hold their thunks
 
+// The #945 OS build floor (sentinel/os_build_gate_hook.h), through this seam for the same reason: the game never refuses a
+// headset for its OS build number. No counters.
+bool InstallOsBuildGateHook() noexcept;  // true when the OSBuildVersion slot holds the thunk
+
 // The #871 log-only resource request hook (sentinel/resource_request_hook.h), through this seam for the same reason: it
 // records every FillResourceFileRequest call. Development builds only (the sequence asks nevr_build::kIsDev through
 // ResourceRequestLogEnabled, defined in entry.cpp, which includes the generated nevr_build_info.h).
@@ -51,6 +61,10 @@ bool ResourceRequestLogEnabled() noexcept;          // nevr_build::kIsDev
 bool RegisterResourceRequestCounters() noexcept;    // 2 counters
 // resource_request::InstallIfCounted(countersRegistered): true when the slot holds the thunk.
 bool InstallResourceRequestLogHook(bool countersRegistered) noexcept;
+
+// The #966 main-menu cards (sentinel/menu_cards_hook.h), through this seam for the same reason: it includes
+// callback_thunk.h. No counters. True when the callback slot holds the thunk.
+bool InstallMenuCardsHook() noexcept;
 
 // Defined in production_steps.cpp: the whole constructor sequence (ctor_sequence.h) over the real
 // libraries. Never throws and never blocks.

@@ -166,21 +166,23 @@ android-repack-libovr src="/mnt/games/evr/-src-evr-reconstruction/cache/quest_tr
     readelf -d "$out/libovrplatformloader_orig.so" | grep -i soname
 
 # Full sideload repack: hijack an APK's libovrplatformloader.so with our shim,
-# forwarding to the renamed original. Produces a zipaligned, DEBUG-signed APK and
+# forwarding to the renamed original. Produces a zipaligned APK, signed with the Quest key in pass, and
 # verifies both libs' ELF shape from the SIGNED output (no headset needed).
 # It also sets the manifest's versionCode (tools/quest_apk_version.py): the store APK's 4987566 is below the
 # 4987570 build the community installer puts on a headset, which Android refuses to update (a downgrade). The
 # code comes from the build's own version (kVersion in <shim dir>/../generated/nevr_build_info.h), and the signed
 # APK's code is read back with aapt2 before the recipe says it is ready.
 # All work under build/android-arm64/repack — never mutates the source APK or shim.
+# `version` (X.Y.Z) names the build's version when the shim was built elsewhere and there is no build info beside it: a release
+# packages CI's loader (release-quest-apk). The versionCode comes from it, and the shim must carry the same string.
 # `apk` is required (the store APK path). The signing key is the one persistent Quest key stored in
 # pass (tools/quest_keystore.sh): it is read into a private tmpfs file for the signing command only
 # and is never generated here. Store it once with: just import-quest-keystore <keystore>.
-android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="":
+android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="":
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(pwd)"
-    apk="{{ apk }}"; shim="{{ shim }}"; plugin="{{ plugin }}"
+    apk="{{ apk }}"; shim="{{ shim }}"; plugin="{{ plugin }}"; version="{{ version }}"
     work="$root/{{ workdir }}"
     # An APK from an earlier run never outlives a run that stops: package-dev takes whatever is at this path.
     rm -f "$work/r15-repacked.apk" "$work/r15-repacked-aligned.apk" "$work/r15_nevr-sentinel_signed.apk"
@@ -205,9 +207,16 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
         [ -x "$llvm_bin/llvm-nm" ] || llvm_bin="$(dirname "$(command -v llvm-nm || true)")"
         tools/check_quest_static_init.sh --plugin "$llvm_bin" "$plugin"
     fi
-    # The build's version header sits beside the shim's build tree (build/<tree>/sentinel/ -> build/<tree>/generated/).
-    build_info="$(dirname "$(dirname "$shim")")/generated/nevr_build_info.h"
-    [ -f "$build_info" ] || { echo "build info not found (build it: just build-android): $build_info" >&2; exit 1; }
+    # The version the versionCode comes from: `version` when the shim was built elsewhere (a release's CI-built loader has no
+    # build tree here), else the build's version header, which sits beside the shim's build tree (build/<tree>/sentinel/ ->
+    # build/<tree>/generated/).
+    if [ -n "$version" ]; then
+        version_source=(--version "$version")
+    else
+        build_info="$(dirname "$(dirname "$shim")")/generated/nevr_build_info.h"
+        [ -f "$build_info" ] || { echo "build info not found (build it: just build-android): $build_info" >&2; exit 1; }
+        version_source=(--build-info "$build_info")
+    fi
     rm -rf "$work/stage" "$work/orig" "$work/manifest"
     mkdir -p "$work/stage/lib/arm64-v8a" "$work/orig" "$work/manifest"
     # 1. extract the real original loader from the store APK
@@ -238,7 +247,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     # unless the field is exactly where Android reads it, and unless the shim carries the header's version),
     # and put the manifest back. A 4-byte write: the entry keeps every other byte.
     unzip -o -q "$unsigned" AndroidManifest.xml -d "$work/manifest"
-    version_code=$(python3 -I tools/quest_apk_version.py patch-manifest "$work/manifest/AndroidManifest.xml" --build-info "$build_info" --shim "$shim")
+    version_code=$(python3 -I tools/quest_apk_version.py patch-manifest "$work/manifest/AndroidManifest.xml" "${version_source[@]}" --shim "$shim")
     ( cd "$work/manifest" && zip -q -X "$unsigned" AndroidManifest.xml )
     # 5. page-align uncompressed .so, then sign (v2/v3) — align BEFORE sign.
     # The key is a private tmpfs copy for this one command, shredded when it returns; the passphrase
@@ -311,7 +320,7 @@ package-dev store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
     set -euo pipefail
     # First: a package is built only from a pristine clone that is origin's main (tools/release_preflight.py).
     tools/release_preflight.py
-    pass show services/echovrce/quest-signing-keystore >/dev/null 2>&1 || { echo "package-dev: no Quest signing keystore in pass; store one with: just import-quest-keystore <keystore>" >&2; exit 1; }
+    tools/quest_keystore.sh check
     [ -f "{{ store_apk }}" ] || { echo "package-dev: store APK not found: {{ store_apk }}" >&2; exit 1; }
     commit=$(git rev-parse HEAD)
     echo "package-dev: LOCAL build of ${commit:0:7}: it stamps a DEVELOPMENT version, not a release (a release is a vX.Y.Z tag built by CI)" >&2
@@ -334,23 +343,25 @@ package-dev store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
         --quest-header build/android-dev/generated/nevr_builtin_defaults.h \
         --quest-build-info build/android-dev/generated/nevr_build_info.h
 
-# The Quest half of a package: the sentinel built in build/android-dev, checked, and repacked from the store APK.
-# mode "release" reconfigures the tree (--fresh) so the build info is generated again; release-quest-apk sets the
-# CI identity of a tag build in the environment before it calls this. Private: package-dev and release-quest-apk only.
-_quest-apk store_apk mode="dev":
+# The Quest half of a development package: the sentinel built in build/android-dev, checked, and repacked from the store
+# APK. Private: package-dev only (a release packages CI's loader, release-quest-apk).
+_quest-apk store_apk:
     #!/usr/bin/env bash
     set -euo pipefail
-    (cd src/quest && CMAKE_C_COMPILER_LAUNCHER= CMAKE_CXX_COMPILER_LAUNCHER= ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev {{ if mode == "release" { "--fresh" } else { "" } }})
+    (cd src/quest && CMAKE_C_COMPILER_LAUNCHER= CMAKE_CXX_COMPILER_LAUNCHER= ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev)
     ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
     objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
     tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
     just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so build/android-dev/repack
 
-# The Quest APK of a RELEASE: the repack of the store game built from the release tag vX.Y.Z, in the same steps as
-# package-dev, but with the identity of a CI tag build (kVersion = the tag's version, kIsDev = false), so the APK is a
-# release and not a development build. Run it from a clone whose HEAD is the tag's commit and that passes
-# `tools/release_preflight.py --tag <tag>` (HEAD is the tag's commit, which need not be origin's tip: an older tag builds
-# after main has moved on; the tree is clean and origin has the tag at that commit). Writes
+# The Quest APK of a RELEASE: the repack of the store game with the loader CI built from the release tag. That loader is
+# the release's own asset (nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so): it is downloaded (tools/quest_release_loader.py
+# fetch: the sha256 GitHub recorded for it, then `gh attestation verify`), checked to carry the tag's version and commit
+# (tools/package_release.py quest-library), repacked, and the signed APK's loader is compared with the asset's sha256 before
+# the APK is copied out. Nothing is compiled, so the asset and the APK's loader are one file. `gh` is $GH_BIN (default gh).
+# Run it from a clone whose HEAD is the tag's commit and that passes `tools/release_preflight.py --tag <tag>` (HEAD is the
+# tag's commit, which need not be origin's tip: an older tag builds after main has moved on; the tree is clean and origin has
+# the tag at that commit); the release (a draft is enough) must carry the asset. Writes
 # build/quest-release/<tag>/nevr-runtime-<tag>-quest.apk and its .sha256; it uploads nothing and never tags. The APK is
 # published outside GitHub (RELEASING.md, "Quest APKs never go on GitHub").
 release-quest-apk tag store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
@@ -363,20 +374,21 @@ release-quest-apk tag store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
     head=$(git rev-parse HEAD)
     [ "$tag_commit" = "$head" ] || { echo "release-quest-apk: HEAD ${head:0:7} is not the commit of $tag (${tag_commit:0:7}); check out the tag's commit" >&2; exit 1; }
     [ -f "{{ store_apk }}" ] || { echo "release-quest-apk: store APK not found: {{ store_apk }}" >&2; exit 1; }
-    pass show services/echovrce/quest-signing-keystore >/dev/null 2>&1 || { echo "release-quest-apk: no Quest signing keystore in pass; store one with: just import-quest-keystore <keystore>" >&2; exit 1; }
+    tools/quest_keystore.sh check
     ver="${tag#v}"
     out="build/quest-release/$tag"
-    echo "release-quest-apk: building $tag from ${head:0:7}" >&2
-    GITHUB_ACTIONS=true GITHUB_REF_TYPE=tag GITHUB_REF_NAME="$tag" just _quest-apk "{{ store_apk }}" release
-    header=build/android-dev/generated/nevr_build_info.h
-    grep -qF "kVersion = \"$ver\"" "$header" || { echo "release-quest-apk: $header does not name version $ver:" >&2; grep -F kVersion "$header" >&2; exit 1; }
-    grep -qF 'kIsDev = false;' "$header" || { echo "release-quest-apk: $header is a development build, not $tag:" >&2; grep -F kIsDev "$header" >&2; exit 1; }
+    rm -rf "$out"
     mkdir -p "$out"
+    echo "release-quest-apk: packaging the $tag loader asset at ${head:0:7}" >&2
+    loader_sha=$(python3 -I tools/quest_release_loader.py fetch --tag "$tag" --out "$out/loader")
+    python3 tools/package_release.py quest-library --lib "$out/loader/libovrplatformloader.so" --version "$ver" --commit "$tag_commit"
+    just android-repack-apk "{{ store_apk }}" "$out/loader/libovrplatformloader.so" "$out/repack" "" "$ver"
+    python3 -I tools/quest_release_loader.py verify-apk --apk "$out/repack/r15_nevr-sentinel_signed.apk" --sha256 "$loader_sha"
     name="nevr-runtime-$tag-quest.apk"
-    cp -f build/android-dev/repack/r15_nevr-sentinel_signed.apk "$out/$name"
+    cp -f "$out/repack/r15_nevr-sentinel_signed.apk" "$out/$name"
     (cd "$out" && sha256sum "$name" > "$name.sha256")
     cat "$out/$name.sha256"
-    echo "release-quest-apk: $out/$name is $tag at ${head:0:7}. It is NOT a release asset: publish it outside GitHub (RELEASING.md)." >&2
+    echo "release-quest-apk: $out/$name is $tag at ${head:0:7}, with the release's loader (sha256 $loader_sha). It is NOT a release asset: publish it outside GitHub (RELEASING.md)." >&2
 
 # Put the Quest APK that `release-quest-apk <tag>` wrote, and its .sha256, on R2 under nevr-runtime/<tag>/, then fetch both
 # back from the public host and compare size and sha256 (tools/publish_quest_apk.py; #1098). Run it from the clone that
@@ -388,11 +400,11 @@ publish-quest-apk tag:
 
 # Install the repacked Quest APK + game data onto the connected headset (sideload).
 # Pass `yes` (`just quest-install yes`) to allow removing the store build when the
-# headset refuses an in-place update because the debug signature differs; that
+# headset refuses an in-place update because the signer differs; that
 # uninstall deletes the app's data on the headset. Without `yes` the recipe stops
 # and prints what would be deleted. Order: check host tools and the APK, require
 # exactly one authorized headset with ~2.2 GiB free on /sdcard and /data/local/tmp,
-# fetch and SHA-256-verify the game data, `adb install -r -g` the debug-signed APK
+# fetch and SHA-256-verify the game data, `adb install -r -g` the APK
 # (uninstalling first only on INSTALL_FAILED_UPDATE_INCOMPATIBLE and only with
 # `yes`), then push the data zip and extract it to the legacy path the unpatched
 # APK reads (/sdcard/readyatdawn/_data). The store OBB is a keyed (encrypted) OBB;
@@ -1259,6 +1271,13 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/login_prompt_hook_test" -ldl
     timeout 120 "$out/login_prompt_hook_test"
+    # The login-failed page's title (#1137): the real handler and prompt board driven through the thunk entry, against a
+    # stand-in for the script library's string_t constructor.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/login_title_hook_test.cpp \
+        src/quest/sentinel/login_title_hook.cpp src/quest/auth/prompt_board.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/login_title_hook_test" -ldl
+    timeout 120 "$out/login_title_hook_test"
     # The whole no-credentials chain (#581): the real prerequisite handlers and the real prompt hook together,
     # token auth awaiting the player -> the answers delivered -> the game's local failure -> the code written.
     g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -c \
@@ -1303,6 +1322,13 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/vk_ext_window_test" -ldl
     timeout 120 "$out/vk_ext_window_test"
+    # The OS build floor (#945): the real handler through the thunk entry against a stand-in for CSysInfo::OSBuildVersion,
+    # a number below the floor, above it, none, and an unknown floor.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/os_build_gate_hook_test.cpp \
+        src/quest/sentinel/os_build_gate_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/os_build_gate_hook_test" -ldl
+    timeout 120 "$out/os_build_gate_hook_test"
     # The texture-quality hook (#943): the real handler through the thunk entry against a stand-in for vrapi_GetSystemPropertyInt,
     # every level's eye size, the pass-through of every other id, the latch, `stock`, and the shared slot's observer.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/texture_quality_hook_test.cpp \
@@ -1325,6 +1351,13 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/resource_request_hook_test" -ldl
     timeout 120 "$out/resource_request_hook_test"
+    # The Quest main-menu cards (#966): the real handler through the thunk entry against a stand-in callback block, a
+    # CAllocator with the slots FreeResource and the streaming worker use, and the game's callback.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/menu_cards_hook_test.cpp \
+        src/quest/sentinel/menu_cards_hook.cpp src/quest/data/sha256.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/menu_cards_hook_test" -ldl
+    timeout 120 "$out/menu_cards_hook_test"
     # The toast presenter against a fake JNI (#807): a Java exception thrown at each JNI call in turn, null or not, is
     # never left pending. jni.h is the NDK's own; the recipe stops when it is absent.
     jni="{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/jni.h"
@@ -1403,15 +1436,16 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
     [ -f "$apk" ] || { echo "test-quest-hooks-pinned: pinned APK not found: $apk" >&2; exit 1; }
     out="build/quest-hooks-pinned"
     rm -rf "$out"; mkdir -p "$out/lib"
-    unzip -o -q "$apk" lib/arm64-v8a/libr15.so lib/arm64-v8a/libpnsradmatchmaking.so lib/arm64-v8a/libpnsovr.so -d "$out/lib"
+    unzip -o -q "$apk" lib/arm64-v8a/libr15.so lib/arm64-v8a/libpnsradmatchmaking.so lib/arm64-v8a/libpnsovr.so lib/arm64-v8a/lib7f2363b8976491aa.so -d "$out/lib"
     echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $out/lib/lib/arm64-v8a/libr15.so" | sha256sum -c -
     echo "36236ab1df5783da57c064b0fbccc3a61c0e1d150c208022fbfc9cd6e5ed60ee  $out/lib/lib/arm64-v8a/libpnsradmatchmaking.so" | sha256sum -c -
     echo "26e9a216a710d42a303346a4ca5b84037ff38250ea725dc7112b055fcacada79  $out/lib/lib/arm64-v8a/libpnsovr.so" | sha256sum -c -
+    echo "80c36268dbefd9f20ccae0aa35d3efe6f6480a8179f9f46709e71e33e0f110e4  $out/lib/lib/arm64-v8a/lib7f2363b8976491aa.so" | sha256sum -c -
     g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isrc/quest/sentinel \
         src/quest/tests/got_pinned_test.cpp src/quest/sentinel/got_hook.cpp \
         src/quest/sentinel/hook_log.cpp -o "$out/got_pinned_test" -ldl
     "$out/got_pinned_test" "$out/lib/lib/arm64-v8a/libr15.so" "$out/lib/lib/arm64-v8a/libpnsradmatchmaking.so" \
-        "$out/lib/lib/arm64-v8a/libpnsovr.so"
+        "$out/lib/lib/arm64-v8a/libpnsovr.so" "$out/lib/lib/arm64-v8a/lib7f2363b8976491aa.so"
     # #411: every ovr_* import the message pump and the login callbacks can reach is hooked or guarded, so a
     # synthetic message handle never reaches the SDK (tools/pinned_ovr_imports.txt says how each is treated).
     python3 tools/pinned_ovr_import_walk.py "$out/lib/lib/arm64-v8a/libpnsovr.so" --expect tools/pinned_ovr_imports.txt
@@ -1419,6 +1453,9 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
     # answered locally, and the list the sentinel gates on equals what the library has.
     python3 tools/pinned_ovr_import_walk.py "$out/lib/lib/arm64-v8a/libpnsovr.so" --sites tools/pinned_ovr_sites.txt \
         --header src/quest/login/login_prerequisite_targets.h
+    # #944: every site the community patch repo edits in libpnsovr.so still holds the stock word and sits in the
+    # function tools/quest_patcher_sites.tsv names, so the table's mapping to our hooks is about this library.
+    python3 tools/quest_patcher_sites.py --lib "$out/lib/lib/arm64-v8a/libpnsovr.so"
 
 # Quest social provider on the host (docs/adr/0003, "Social provider"): the ABI pins against the
 # recorded vtable, the facade driven through its vtable, the hook decision through the real callback
@@ -1545,6 +1582,7 @@ test-quest-integration: _vcpkg-quest-host
     "${off[@]}" -c src/quest/integration/dlopen_hook.cpp -o "$out/dlopen_hook.o"
     "${off[@]}" -c src/quest/integration/social_shim.cpp -o "$out/social_shim.o"
     "${off[@]}" -c src/quest/sentinel/login_prompt_hook.cpp -o "$out/login_prompt_hook.o"
+    "${off[@]}" -c src/quest/sentinel/login_title_hook.cpp -o "$out/login_title_hook.o"
     "${off[@]}" -c src/quest/sentinel/obb_skip_hook.cpp -o "$out/obb_skip_hook.o"
     "${off[@]}" -c src/quest/sentinel/texture_quality_hook.cpp -o "$out/texture_quality_hook.o"
     "${off[@]}" -c src/quest/sentinel/system_ui_hook.cpp -o "$out/system_ui_hook.o"
@@ -1574,7 +1612,7 @@ test-quest-integration: _vcpkg-quest-host
         src/runtime/lifecycle/stable_string_pool.cpp \
         "$out/got_hook.o" "$out/hook_report.o" "$out/tstring_thunks.o" "$out/dlopen_hook.o" "$out/social_shim.o" \
         "$out/social_game_calls.o" "$out/social_install.o" "$out/social_invite_gate.o" "$out/social_facade.o" "$out/hook_log.o" "$out/social_names.o" \
-        "$out/login_prompt_hook.o" "$out/obb_skip_hook.o" "$out/resource_request_hook.o" "$out/texture_quality_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
+        "$out/login_prompt_hook.o" "$out/login_title_hook.o" "$out/obb_skip_hook.o" "$out/resource_request_hook.o" "$out/texture_quality_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
         "$out/login_prerequisites.o" "$out/login_standin.o" \
         "$yaml_lib" -o "$out/integration_hooks_test" -ldl -pthread -lzstd
     timeout 300 "$out/integration_hooks_test"
@@ -3487,7 +3525,7 @@ verify:
     # and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 2062
+    python3 tools/verify_gtest_floor.py --floor 2095
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py

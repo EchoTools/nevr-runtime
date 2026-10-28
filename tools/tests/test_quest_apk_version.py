@@ -352,6 +352,46 @@ class CommandLineTest(unittest.TestCase):
             self.assertIn("different builds", json.loads(done.stderr)["reason"])
             self.assertEqual(manifest.read_bytes(), original)
 
+    def test_patch_manifest_takes_the_version_directly_where_no_build_info_exists(self):
+        """A release APK packages CI's loader and has no build tree: the tag's version is the version (#1135)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            manifest = tmp / "AndroidManifest.xml"
+            manifest.write_bytes(fx.build_manifest(4987566))
+            shim = tmp / "shim.so"
+            shim.write_bytes(b"\x7fELF\0" + b"5.16.2" + b"\0")
+            done = self.run_tool("patch-manifest", str(manifest), "--version", "5.16.2", "--shim", str(shim))
+            self.assertEqual((done.returncode, done.stdout.strip()), (0, "51602999"), done.stderr)
+            self.assertEqual(manifest.read_bytes(), fx.build_manifest(51_602_999))
+
+    def test_patch_manifest_with_a_version_still_refuses_a_shim_that_does_not_carry_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            original = fx.build_manifest(4987566)
+            manifest = tmp / "AndroidManifest.xml"
+            manifest.write_bytes(original)
+            shim = tmp / "shim.so"
+            shim.write_bytes(b"\0" + b"5.16.1" + b"\0")
+            done = self.run_tool("patch-manifest", str(manifest), "--version", "5.16.2", "--shim", str(shim))
+            self.assertEqual(done.returncode, 1)
+            self.assertIn("5.16.2", json.loads(done.stderr)["reason"])
+            self.assertEqual(manifest.read_bytes(), original)
+
+    def test_patch_manifest_needs_exactly_one_source_of_the_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            manifest = tmp / "AndroidManifest.xml"
+            manifest.write_bytes(fx.build_manifest(4987566))
+            header = tmp / "nevr_build_info.h"
+            header.write_text('constexpr const char* kVersion = "5.16.2";\n')
+            shim = tmp / "shim.so"
+            shim.write_bytes(b"\0" + b"5.16.2" + b"\0")
+            neither = self.run_tool("patch-manifest", str(manifest), "--shim", str(shim))
+            both = self.run_tool("patch-manifest", str(manifest), "--version", "5.16.2", "--build-info", str(header),
+                                 "--shim", str(shim))
+            self.assertEqual((neither.returncode, both.returncode), (2, 2))
+            self.assertEqual(manifest.read_bytes(), fx.build_manifest(4987566))
+
     def test_an_apk_with_two_manifests_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             apk = pathlib.Path(tmp) / "dup.apk"

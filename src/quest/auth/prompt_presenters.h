@@ -37,6 +37,13 @@ inline constexpr char kSignedInText[] = "Signed in to EchoVRCE.\nSelect RETRY to
 inline constexpr char kTimedOutText[] = "Sign-in timed out.\nRestart the game to try again.";
 inline constexpr char kNoCodeShownText[] = "No sign-in code could be shown.\nRestart the game to try again.";
 
+// The title the login-failed page carries while the player is asked to sign in, and once the player has (#1137). The game
+// titles that page LOGIN FAILED from a literal in its own script library; the sentinel's title hook
+// (src/quest/sentinel/login_title_hook.h) hands the game the title the board carries instead. The timed-out and no-code
+// texts publish no title, so the game's own LOGIN FAILED stays over them: nothing is coming and the player must restart.
+inline constexpr char kSignInTitle[] = "SIGN IN";
+inline constexpr char kSignedInTitle[] = "SIGNED IN";
+
 // The four lines the game's login-error text shows, '\n'-separated, each at most
 // prompt_board::kMaxLineChars characters (the game truncates longer lines). The URL is shown
 // without its scheme. Returns false and sets `why` ("url_too_long", "code_too_long",
@@ -56,7 +63,7 @@ class GameTextPresenter : public LinkPresenter {
   void Conclude(LoginOutcome outcome) override;
 
  private:
-  bool Publish(const std::string& text, prompt_board::Mode mode, const char* what);
+  bool Publish(const std::string& text, prompt_board::Mode mode, const char* what, const char* title);
   nevr::auth::LogSink log_;
 };
 

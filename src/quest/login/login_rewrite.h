@@ -337,9 +337,12 @@ struct WireCheck {
   bool account_id_invalid = false;     // AccountID() is 0 or -1: the game never sends those
   bool access_token_stand_in = false;  // JSON access_token is the stand-in token
   bool nonce_stand_in = false;         // JSON nonce is the stand-in nonce
+  // JSON "accountid" is the stand-in logged-in user id: GotUserProofCB copies it from the global
+  // ovr_GetLoggedInUserID filled (0x1ed740), and only the rewrite replaces it (#944).
+  bool account_member_stand_in = false;
   bool Unsafe() const {
     return account_id_unreadable || account_id_stand_in || account_id_invalid || access_token_stand_in ||
-           nonce_stand_in;
+           nonce_stand_in || account_member_stand_in;
   }
 };
 
