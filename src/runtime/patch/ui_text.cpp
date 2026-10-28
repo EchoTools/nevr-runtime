@@ -8,7 +8,6 @@
 
 #include "core/logging.h"
 #include "nevr_common.h"
-#include "runtime/frame/tick.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/lifecycle/crash_recovery.h"
 #include "runtime/lifecycle/readable_memory.h"
@@ -108,6 +107,26 @@ void* Pinned(std::uint64_t va, const std::uint8_t* expected, std::size_t length,
   return nullptr;
 }
 
+/// What the gamespaces look like when a request finds no actor: one line per gamespace, so a miss explains itself.
+void ProbeSpaces(RealPlatform& p) {
+  const std::uintptr_t game = p.Game();
+  if (game == 0) return;
+  for (std::size_t i = 0; i < kMaxGameSpaces; ++i) {
+    const std::uintptr_t gs = p.GameSpace(game, i);
+    if (gs == 0) {
+      Log(EchoVR::LogLevel::Info, "[NEVR.UI] text probe spaces=%zu", i);
+      return;
+    }
+    std::uint64_t table = 0, names = 0, count = 0;
+    const bool read = p.Read(gs + kSpaceActorTableOffset, &table, sizeof(table)) && table != 0 &&
+                      p.Read(static_cast<std::uintptr_t>(table) + kTableNamesOffset, &names, sizeof(names)) &&
+                      p.Read(static_cast<std::uintptr_t>(table) + kTableCountOffset, &count, sizeof(count));
+    Log(EchoVR::LogLevel::Info, "[NEVR.UI] text probe space=%zu gs=0x%llx table=0x%llx names=0x%llx count=%llu read=%d", i,
+        static_cast<unsigned long long>(gs), static_cast<unsigned long long>(table), static_cast<unsigned long long>(names),
+        static_cast<unsigned long long>(count), read ? 1 : 0);
+  }
+}
+
 }  // namespace
 
 void Install(std::uintptr_t gameBase) {
@@ -144,16 +163,19 @@ void OnFrame() {
   static std::atomic<bool> s_firstWrite{false};
   for (const Report& r : g_pending.Drain(platform, NowMs())) {
     if (!r.done) {
-      if (r.attempts == 1) {
-        Log(EchoVR::LogLevel::Debug, "[NEVR.UI] text not yet actor=%s element=%s outcome=%s", Hex64(r.request.target.actor).c_str(),
-            Hex64(r.request.target.element).c_str(), OutcomeName(r.outcome));
+      // The first miss and then one a 5 s: a request the page never answers must explain itself before its give-up.
+      if (r.attempts == 1 || r.attempts % 50 == 0) {
+        Log(EchoVR::LogLevel::Info, "[NEVR.UI] text waiting actor=%s element=%s bytes=%zu attempts=%d outcome=%s",
+            Hex64(r.request.target.actor).c_str(), Hex64(r.request.target.element).c_str(), r.request.text.size(), r.attempts,
+            OutcomeName(r.outcome));
+        if (r.attempts == 1 && r.outcome == Outcome::NoActor) ProbeSpaces(platform);
       }
       continue;
     }
     Log(r.dropped ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info, "%s", ReportLine(r).c_str());
     if (!r.dropped && !s_firstWrite.exchange(true)) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.UI] text first write thread=%lu pacer_thread=%lu game_loop_thread=%lu",
-          static_cast<unsigned long>(GetCurrentThreadId()), nevr_frame::PacerThreadId(), GameLoopThreadId());
+      Log(EchoVR::LogLevel::Info, "[NEVR.UI] text first write thread=%lu game_loop_thread=%lu",
+          static_cast<unsigned long>(GetCurrentThreadId()), GameLoopThreadId());
     }
   }
 }

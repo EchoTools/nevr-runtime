@@ -1,7 +1,6 @@
-"""#896 / #906: the UI text writer is wired once, on a client only, and runs on the frame pacer's thread. The decisions
+"""#896 / #906: the UI text writer is wired once, on a client only, and runs on the game-loop thread. The decisions
 are tested by src/runtime/tests/test_ui_text.cpp; these are source sensors for what that cannot see: the install call in
-boot.cpp with its mode gate and the log for the other mode, the dispatcher's thread gate, the pacer hook that names the
-thread, the three pins, and that a text never reaches the log. Each check takes the text it reads, so a test can hand
+boot.cpp with its mode gate and the log for the other mode, the dispatcher's thread gate, the three pins, and that a text never reaches the log. Each check takes the text it reads, so a test can hand
 it a broken copy and see it fail."""
 from __future__ import annotations
 
@@ -12,7 +11,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 BOOT = ROOT / "src/runtime/lifecycle/boot.cpp"
 TICK = ROOT / "src/runtime/frame/tick.cpp"
-PACER = ROOT / "src/runtime/patch/binary_bug_fixes.cpp"
 WRITER = ROOT / "src/runtime/patch/ui_text.cpp"
 SCENARIO = ROOT / "src/runtime/scenario/scenario_control.cpp"
 
@@ -39,17 +37,13 @@ def install_problems(boot: str) -> list[str]:
 
 def dispatcher_problems(tick: str) -> list[str]:
     code = strip_comments(tick)
-    if "if (OnPacerThread()) nevr_ui_text::OnFrame();" not in code:
-        return ["DispatchPerFrameWork does not gate nevr_ui_text::OnFrame on OnPacerThread()"]
-    return []
-
-
-def pacer_problems(pacer: str) -> list[str]:
-    code = strip_comments(pacer)
-    body = code[code.index("PrecisionSleepWaitHook(") :]
-    body = body[: body.index("DispatchPerFrameWork(")]
-    if "nevr_frame::NotePacerThread();" not in body:
-        return ["PrecisionSleepWaitHook does not name the pacer thread before it dispatches"]
+    if "nevr_ui_text::OnFrame();" not in code:
+        return ["DispatchPerFrameWork does not call nevr_ui_text::OnFrame()"]
+    gate = code[: code.index("nevr_ui_text::OnFrame();")].rstrip()
+    if not gate.endswith("if (loop != 0 && loop == GetCurrentThreadId())"):
+        return ["nevr_ui_text::OnFrame() is not gated on the game-loop thread"]
+    if "GameLoopThreadId()" not in code:
+        return ["the gate does not read the game-loop thread the runtime records"]
     return []
 
 
@@ -61,7 +55,7 @@ def writer_problems(writer: str) -> list[str]:
             problems.append(f"the writer does not pin {va}")
     if "kSetTextPrologue" not in code:
         problems.append("the writer does not pin CCanvasUICS::SetText")
-    if re.search(r"Log\([^;]*(request\.text|\.text\.c_str\(\))", code):
+    if re.search(r"Log\([^;]*(request\.text(?!\.size\(\))|\.text\.c_str\(\))", code):
         problems.append("a log call carries the request's text")
     return problems
 
@@ -75,13 +69,9 @@ class UiTextWiring(unittest.TestCase):
         self.assertNotEqual(install_problems(text), [])
         self.assertNotEqual(install_problems(BOOT.read_text().replace(SERVER_LOG, "x")), [])
 
-    def test_the_dispatcher_gates_the_writer_on_the_pacer_thread(self) -> None:
+    def test_the_dispatcher_gates_the_writer_on_the_game_loop_thread(self) -> None:
         self.assertEqual(dispatcher_problems(TICK.read_text()), [])
-        self.assertNotEqual(dispatcher_problems(TICK.read_text().replace("if (OnPacerThread()) ", "")), [])
-
-    def test_the_pacer_hook_names_its_thread(self) -> None:
-        self.assertEqual(pacer_problems(PACER.read_text()), [])
-        self.assertNotEqual(pacer_problems(PACER.read_text().replace("nevr_frame::NotePacerThread();", "")), [])
+        self.assertNotEqual(dispatcher_problems(TICK.read_text().replace("loop != 0 && loop == GetCurrentThreadId()", "true")), [])
 
     def test_the_writer_pins_its_functions_and_never_logs_a_text(self) -> None:
         self.assertEqual(writer_problems(WRITER.read_text()), [])

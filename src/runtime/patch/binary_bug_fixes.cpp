@@ -318,9 +318,6 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
     // the first call on a thread this is a single bool test.
     EnsureStackReserve();
 
-    // #906, #896: this is the thread that runs the client's frame; the dispatcher gates UI work on it.
-    nevr_frame::NotePacerThread();
-
     // (nevr_hook_liveness::Mark above is the entry evidence this hook needs; no frame
     // counter is kept here.)
 
