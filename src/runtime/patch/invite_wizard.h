@@ -175,7 +175,9 @@ struct Choices {
 };
 
 enum class Op { Create, Resolve };
-enum class Skip { None, Empty, Malformed, TooLong, Incomplete };
+enum class Skip { None, Empty, Malformed, TooLong, Incomplete, NotConfigured, NoToken, Busy, Stopped };
+// The first four are the plan's own; the last four are the worker's (invite_worker.h): the feature is off, no token is held,
+// the queue is full, the worker has stopped.
 
 struct Request {
   std::string rpc;
@@ -285,6 +287,18 @@ inline std::string NotSentLine(Skip skip, std::size_t code_len) {
       break;
     case Skip::Incomplete:
       reason = "incomplete";
+      break;
+    case Skip::NotConfigured:
+      reason = "not_configured";
+      break;
+    case Skip::NoToken:
+      reason = "no_token";
+      break;
+    case Skip::Busy:
+      reason = "busy";
+      break;
+    case Skip::Stopped:
+      reason = "stopped";
       break;
     case Skip::None:
       return "";
