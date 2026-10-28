@@ -46,6 +46,7 @@ One root per game: `%LOCALAPPDATA%\nevr\echovr\`. The install folder keeps the g
 | `.credentials.json` | the sign-in cache, one per machine, for clients and servers alike |
 | `logs\`, `crashes\` | the run log and the crash record (`nevr-crash-<run id>.txt`) the runtime writes, the host's log and minidumps |
 | `cache\`, `cosmetics\v1\packages\` | the asset cache, and the downloaded cosmetic packages |
+| `update\` | what self-update stages, swaps and rolls back (ADR 0024) |
 
 `%LOCALAPPDATA%\EchoVR` stays the original game's folder; nothing of ours is written there.
 
@@ -71,7 +72,7 @@ because the file sits in the install folder.
 4. **The host's export table does not change** (the names and ordinals `tools/verify_pe_contract.py` pins). Logging stays in
    the host as ADR 0008 describes it (`nevr-bootstrap.jsonl`, `crash_capture`).
 
-A last-known-good copy of `nevr-runtime.dll` is out of scope until there is a reason for one. The plugin loader stays in `nevr-runtime.dll`.
+The last-known-good copy of `nevr-runtime.dll` is the one self-update keeps in `update\previous\` (ADR 0024). The plugin loader stays in `nevr-runtime.dll`.
 
 ### The host verifies `nevr-runtime.dll` before it loads it
 
