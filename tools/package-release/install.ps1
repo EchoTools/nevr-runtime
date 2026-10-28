@@ -248,7 +248,8 @@ if (Test-Path -LiteralPath $state) {
     throw "BugSplat64.dll is neither one install.ps1 put there nor a NEVR runtime, so uninstall.ps1 cannot undo it either; nothing was changed. Restore the game's own file (for example, Verify Files in the Meta Horizon app), delete $state, then run install.ps1 again"
   }
   # The runtime goes first: a host that is not yet replaced loads whichever runtime stands in the nevr folder, and a
-  # failure puts both files, and a runtime moved out of the game folder, back as they were.
+  # failure puts both files back as they were. The move of an old-layout runtime out of the game folder is the last step, so a
+  # failure earlier leaves it where it was.
   $prior = [System.IO.File]::ReadAllBytes($target)
   $hadRuntime = Test-Path -LiteralPath $runtimeTarget
   $priorRuntime = if ($hadRuntime) { [System.IO.File]::ReadAllBytes($runtimeTarget) } else { $null }
@@ -265,7 +266,6 @@ if (Test-Path -LiteralPath $state) {
     } elseif (Test-Path -LiteralPath $runtimeTarget) {
       Rename-Item -LiteralPath $runtimeTarget -NewName ('nevr-runtime.dll.failed-' + $stamp)
     }
-    if ($script:movedLegacy -ne '') { Rename-Item -LiteralPath $script:movedLegacy -NewName 'nevr-runtime.dll' }
     throw
   }
   $recordedLegacy = if ($keptRuntimeLegacy -ne '') { $keptRuntimeLegacy } else { $script:movedLegacy }
@@ -324,7 +324,6 @@ try {
   }
   if ($runtimeAside -ne '') { Rename-Item -LiteralPath $runtimeAside -NewName 'nevr-runtime.dll' }
   if ($legacyAside -ne '') { Rename-Item -LiteralPath $legacyAside -NewName 'dbgcore.dll' }
-  if ($script:movedLegacy -ne '') { Rename-Item -LiteralPath $script:movedLegacy -NewName 'nevr-runtime.dll' }
   throw
 }
 

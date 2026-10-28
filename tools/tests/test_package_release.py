@@ -1047,6 +1047,14 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual((self.game / "dbgcore.dll").read_bytes(), b"LEGACY")
         self.assertFalse((self.game / "nevr-install.txt").exists())
 
+    def test_a_relative_root_argument_is_refused_and_changes_nothing(self):
+        result = self.ps("install.ps1", "-Dir", str(self.game), "-Root", "relative/nevr")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("-Root must be an absolute path", self.output(result))
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
+        self.assertEqual((self.game / "dbgcore.dll").read_bytes(), b"LEGACY")
+        self.assertFalse((self.game / "nevr-install.txt").exists())
+
     def test_a_root_argument_replaces_local_app_data_and_uninstall_finds_it_through_the_record(self):
         elsewhere = self.tmp / "elsewhere"
         installed = self.ps("install.ps1", "-Dir", str(self.game), "-Root", str(elsewhere))
@@ -1141,7 +1149,7 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"NEW-RUNTIME", "nothing was restored")
         self.assertTrue((self.root / "nevr-runtime.dll").exists())
 
-    def test_a_failed_install_puts_the_old_layout_runtime_back_where_it_was(self):
+    def test_a_failed_install_leaves_the_old_layout_runtime_where_it_was(self):
         old = self.stage_old_layout_runtime()
         self.set_package(self.plain("5.4.3") + b"x" * (80 * 1024 * 1024))
         result = self.limited_install()
