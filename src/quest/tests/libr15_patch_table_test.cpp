@@ -30,7 +30,7 @@ TEST(TheTableHasTheSixRowsOfTheAdrInOrder) {
   const char* ids[] = {"lobby_full.join", "lobby_full.failure", "lobby_full.success", "ui_texture.attach",
                        "splash_skip.widget_update", "credits.pairs"};
   CHECK_EQ(kRowCount, static_cast<std::size_t>(6));
-  for (std::size_t i = 0; i < kRowCount; ++i) {
+  for (std::size_t i = 0; i < kRowCount && i < sizeof(ids) / sizeof(ids[0]); ++i) {  // a wrong count fails above, it does not read past ids
     CHECK(std::strcmp(kRows[i].id, ids[i]) == 0);
     CHECK_EQ(kRows[i].slot, i);
   }
