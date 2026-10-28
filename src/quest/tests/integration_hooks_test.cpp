@@ -17,6 +17,7 @@
 #include "quest/integration/post_load.h"
 #include "quest/integration/social_shim.h"
 #include "quest/login/login_hook.h"
+#include "quest/login/login_prerequisites.h"
 #include "quest/redirect/hook_adapter.h"
 #include "quest/tests/test_check.h"
 
@@ -136,14 +137,14 @@ void TestInstallWithoutTheModuleFailsCleanly() {
 // the table must have exactly the counters below in it. The clock hook's two are registered under its real
 // names here because entry.cpp (jni.h, breakpad) cannot be built on the host. Clock 2, redirect 14 (#408: the
 // CSysHttp::CreateConnection thunk's calls and faults, and the URL decisions' two),
-// dlopen 1, login 2 (#237: calls and faults of the SendLogInRequest thunk), login prerequisites 22 (#411 adds the refused social org-id requests, the local entitlement answer and the local message pump's four: pops, deliveries, deferrals, SDK ids in the local range; #338:
+// dlopen 1, login 2 (#237: calls and faults of the SendLogInRequest thunk), login prerequisites 24 (#944: ovr_GetLoggedInUserID's calls and stand-ins; #411 adds the refused social org-id requests, the local entitlement answer and the local message pump's four: pops, deliveries, deferrals, SDK ids in the local range; #338:
 // one calls counter per hook), social 26 (the facade's, the invite gate's, the rich presence trace's four, its three local answers), login prompt 16 (#239, #672, login_prompt_hook.h kCounterCount), login title 5 (#1137, login_title_hook.h kCounterCount;
 // registered with the login prompt's, through the same step), OBB-mount
 // skip 6 (#319, #866: the mount, the path and the data-root question, obb_skip_hook.h kCounterCount), texture quality 4 (#943,
 // texture_quality_hook.h kCounterCount), resource request log 2 (#871, resource_request_hook.h kCounterCount; development
 // builds only, so a release build registers 2 fewer). 91 on main before #943, 95 with it, which filled the 96 the table held
 // then; the table holds 128 since #1137.
-constexpr int kSentinelCounters = 2 + 14 + 1 + 2 + 22 + 26 + 16 + 5 + 6 + 4 + 2;
+constexpr int kSentinelCounters = 2 + 14 + 1 + 2 + 24 + 26 + 16 + 5 + 6 + 4 + 2;
 static_assert(kSentinelCounters <= static_cast<int>(sentinel::kMaxReportCounters),
               "the sentinel's hooks register more counters than the reporter holds");
 
@@ -228,6 +229,15 @@ void TestCounterBudget() {
 
 }  // namespace
 
+// The social shim records whether the facade's Social() hook went in, which ovr_GetLoggedInUserID's handler reads
+// (#944). On the host the hook cannot install (libr15 is not loaded), so a flag left set is cleared.
+void TestSocialShimRecordsTheFacadeInstall() {
+  nevr_quest_login::local::SetSocialFacadeInstalled(true);
+  const char* detail = nullptr;
+  QCHECK(!InstallSocialHook(&detail, false, false, false));
+  QCHECK(!nevr_quest_login::local::SocialFacadeInstalled());
+}
+
 int main() {
   TestNullHandleRunsNothingAndReturnsNull();
   TestNonNullHandleIsReturnedAndRunsThePostLoadActions();
@@ -235,6 +245,7 @@ int main() {
   TestPinnedDlopenTarget();
   TestInstallWithoutTheModuleFailsCleanly();
   TestCounterBudget();
+  TestSocialShimRecordsTheFacadeInstall();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "integration_hooks_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
