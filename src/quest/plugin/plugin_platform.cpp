@@ -60,7 +60,12 @@ bool SentinelPlatform::ReadFile(const std::string& file, std::vector<std::uint8_
 }
 
 // By name: the linker finds the file in the app's native library directory, the same one the sentinel was mapped from.
-void* SentinelPlatform::Open(const std::string& file) { return ::dlopen(file.c_str(), RTLD_NOW | RTLD_LOCAL); }
+// The path ReadFile hashed and checked, never the bare name: a bare name makes the linker search, so a name that shadows a
+// system or an already-mapped library could load something other than the bytes that were recorded.
+void* SentinelPlatform::Open(const std::string& file) {
+  if (libraryDir_.empty()) return nullptr;
+  return ::dlopen((libraryDir_ + "/" + file).c_str(), RTLD_NOW | RTLD_LOCAL);
+}
 
 void* SentinelPlatform::Symbol(void* handle, const char* name) { return ::dlsym(handle, name); }
 

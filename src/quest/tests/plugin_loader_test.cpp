@@ -768,6 +768,22 @@ TEST(PlatformReadsARegularFileAndRefusesALinkAndADirectory) {
   ::rmdir(root.c_str());
 }
 
+TEST(PlatformOpensTheDirectoryQualifiedPathAndNeverTheBareName) {
+  SentinelPlatform platform(g_dir, false);
+  void* const handle = platform.Open("libfx_ok.so");  // only in g_dir: a bare-name dlopen would search elsewhere and fail
+  CHECK(handle != nullptr);
+  if (handle != nullptr) {
+    CHECK(platform.Symbol(handle, "NvrPluginGetInfo") != nullptr);
+    ::dlclose(handle);
+  }
+  // A name the linker resolves from the system, absent from the library directory, must not load.
+  CHECK(platform.Open("libc.so.6") == nullptr);
+  CHECK(platform.Open("libmissing.so") == nullptr);
+  SentinelPlatform nowhere("", false);
+  CHECK(nowhere.Open("libc.so.6") == nullptr);
+  CHECK(nowhere.Open("libfx_ok.so") == nullptr);
+}
+
 TEST(PlatformWritesAPluginLineToTheSentinelLog) {
   LogcatWrites().clear();
   SentinelPlatform platform("", false);
