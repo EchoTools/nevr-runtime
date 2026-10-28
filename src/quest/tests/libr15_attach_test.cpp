@@ -15,6 +15,7 @@
 
 #include <elf.h>
 #include <sys/mman.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -326,7 +327,7 @@ class LiveImage {
     if (skew == 0) {
       for (const Elf64_Phdr& p : phdrs_) {
         if (p.p_type == PT_LOAD && (p.p_flags & PF_X) != 0) {
-          CHECK_EQ(mprotect(reinterpret_cast<void*>(base_ + p.p_vaddr), p.p_memsz, PROT_READ | PROT_EXEC), 0);
+          CHECK_EQ(syscall(SYS_mprotect, reinterpret_cast<void*>(base_ + p.p_vaddr), p.p_memsz, PROT_READ | PROT_EXEC), 0L);
         }
       }
     }
@@ -407,6 +408,19 @@ struct Seams {
 Seams g;
 LiveImage* g_live = nullptr;
 
+// Every mprotect the library code makes, whether it goes through the seam or calls mprotect itself. The executable's own
+// definition wins over libc's for the code linked into it, so a regression that changes a page's protection without the
+// seam is seen too. The test's own protection changes go through the system call directly.
+std::vector<ProtectCall> g_rawProtects;
+}  // namespace
+
+extern "C" int mprotect(void* addr, std::size_t len, int prot) noexcept {
+  g_rawProtects.push_back({addr, len, prot});
+  return static_cast<int>(syscall(SYS_mprotect, addr, len, prot));
+}
+
+namespace {
+
 bool Lookup(const char*, ElfImage* out) {
   if (g_live == nullptr) return false;
   *out = g_live->Image();
@@ -442,6 +456,7 @@ struct Env {
   Env() {
     libr15_patch::ResetForTest();
     g = Seams();
+    g_rawProtects.clear();
     sentinel::SetLogSink(&Sink);
   }
   ~Env() {
@@ -476,6 +491,14 @@ bool Has(const std::string& line, const std::string& needle) { return line.find(
 std::string Hex(std::uint64_t v) {
   char buf[19];
   return sentinel::HexString(buf, v);
+}
+
+// The data-only rule: no protection change anywhere on the image, by the seam or by a direct call, and no direct call
+// that the seam did not see.
+void ExpectNoImageProtection(const LiveImage& live) {
+  for (const ProtectCall& c : g_rawProtects) CHECK(!live.Intersects(c.addr, c.len));
+  for (const ProtectCall& c : g.protects) CHECK(!live.Intersects(c.addr, c.len));
+  CHECK_EQ(g_rawProtects.size(), g.protects.size());
 }
 
 bool UnmappedNow(const void* page) {
@@ -527,10 +550,8 @@ TEST(TheShippedPatchersOutputIsVerifiedAndEverySlotHoldsItsTrampoline) {
 
   // Data only: the only protection calls are the five trampoline pages (RW to RX), none on the image.
   CHECK_EQ(g.protects.size(), 5u);
-  for (const ProtectCall& c : g.protects) {
-    CHECK(!live.Intersects(c.addr, c.len));
-    CHECK_EQ(c.prot, PROT_READ | PROT_EXEC);
-  }
+  for (const ProtectCall& c : g.protects) CHECK_EQ(c.prot, PROT_READ | PROT_EXEC);
+  ExpectNoImageProtection(live);
   CHECK_EQ(g.mapCalls, 5);
   CHECK(live.MapsLines() == mapsBefore);
 }
@@ -596,6 +617,7 @@ void ExpectNothingInstalled(const LiveImage& live, const char* reason) {
   CHECK(live.SlotsAreCanaries());
   CHECK(g.ends.empty());  // the game runs as it came: the process is not ended
   CHECK(g.protects.empty());
+  CHECK(g_rawProtects.empty());
   CHECK_EQ(g.mapCalls, 0);
   const std::string* line = FindLine(reason);
   CHECK(line != nullptr);
@@ -694,6 +716,7 @@ void ExpectRowRefusal(const std::vector<std::uint8_t>& file, const char* reason,
   CHECK(!libr15_patch::Verified());
   CHECK(live.SlotsAreCanaries());
   CHECK(g.protects.empty());
+  CHECK(g_rawProtects.empty());
   CHECK_EQ(g.mapCalls, 0);
   CHECK_EQ(g.ends.size(), 1u);
   if (g.ends.size() == 1) {
@@ -905,6 +928,7 @@ TEST(ActivationPublishesTheTrampolineThenStoresTheDetourAndTouchesNoPage) {
     CHECK(Has(*line, "\"page_perms\":\"r-xp\""));
   }
   CHECK_EQ(g.protects.size(), protectsBefore);
+  ExpectNoImageProtection(live);
   CHECK(live.MapsLines() == mapsBefore);
 }
 
@@ -920,7 +944,7 @@ TEST(ActivatingEveryInlineRowNeverCallsTheProtectionSeamOnTheImage) {
     CHECK_EQ(AttachTestAccess::Activate(row.id, reinterpret_cast<void*>(&DummyDetour), &original), ActivateStatus::kOk);
   }
   // Zero calls whose range intersects the image's mapping: the test that fails if a code write comes back.
-  for (const ProtectCall& c : g.protects) CHECK(!live.Intersects(c.addr, c.len));
+  ExpectNoImageProtection(live);
   CHECK_EQ(g.protects.size(), 5u);
   CHECK(live.MapsLines() == mapsBefore);
   for (std::size_t i = 0; i < patch::kRowCount; ++i) {
