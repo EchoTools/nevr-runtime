@@ -26,7 +26,8 @@ namespace nevr_ui_text {
 
 // ---- what may be written ----
 
-/// The game's text element is a 64-byte buffer including the terminator.
+/// The game's text element is a 64-byte buffer including the terminator (the modkit author's figure, not verified here: the
+/// cap keeps a text inside it).
 inline constexpr size_t kMaxTextBytes = 63;
 inline constexpr size_t kMaxPending = 16;
 inline constexpr uint64_t kRetryIntervalMs = 100;
