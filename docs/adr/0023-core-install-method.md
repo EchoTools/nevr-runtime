@@ -198,7 +198,8 @@ manifest names. `nevr-install quest install --artifact-dir DIR` installs it, wit
   `artifact_use`) carries `trust: "unverified dev artifact"`, and the install record says `dev_artifact: true`. The file is
   hashed again just before the install, so a change after the checks is refused.
 
-The option is for developer tools only: `tools/quest-install.sh` and `just quest-install` pass it when given a directory;
+The option is for developer tools only: `tools/quest-install.sh` and `just quest-install` pass it when given a directory, or a `.apk` file (staged with a sidecar
+written from its bytes);
 no installer a player is handed (`install.ps1`, `quest-install.ps1`, the other projects' installers) passes it, and a test
 reads their sources for it. It never relaxes the manifest chain: an unverified manifest still stops the run first.
 

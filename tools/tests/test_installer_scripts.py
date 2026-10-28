@@ -213,6 +213,27 @@ class QuestInstallShTest(ScriptTestBase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(out.read_text().splitlines(), ["quest", "install", "--artifact-dir", str(apk_dir), "--yes-uninstall"])
 
+    def test_an_apk_argument_is_staged_with_its_sidecar_for_the_core_and_the_staging_is_removed(self):
+        stub = self.tmp / "stub-core"
+        out = self.tmp / "args.txt"
+        stub.write_text('#!/bin/bash\nprintf "%s\\n" "$@" > "$STUB_OUT"\nd=$4\nls "$d" >> "$STUB_OUT"\ncat "$d"/*.sha256 >> "$STUB_OUT"\nprintf "%s\\n" "$d" > "$STUB_OUT.dir"\n')
+        stub.chmod(0o755)
+        apk = self.tmp / "mine.apk"
+        apk.write_bytes(b"locally built apk")
+        result = subprocess.run([str(self.SCRIPT), str(apk), "--serial", "Q1"], capture_output=True, text=True, timeout=30,
+                                env=dict(os.environ, NEVR_INSTALL=str(stub), STUB_OUT=str(out)))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        lines = out.read_text().splitlines()
+        staged = pathlib.Path((self.tmp / "args.txt.dir").read_text().strip())
+        self.assertEqual(lines[:2], ["quest", "install"])
+        self.assertEqual(lines[2], "--artifact-dir")
+        self.assertEqual(lines[3], str(staged))
+        self.assertEqual(lines[4:6], ["--serial", "Q1"])
+        self.assertEqual(lines[6:8], ["mine.apk", "mine.apk.sha256"])
+        self.assertEqual(lines[8], f"{sha(b"locally built apk")}  mine.apk")
+        self.assertFalse(staged.exists(), "the staging directory is removed when the run ends")
+        self.assertEqual(apk.read_bytes(), b"locally built apk", "the caller's file is untouched")
+
     def test_without_a_core_the_script_says_so(self):
         env = {k: v for k, v in os.environ.items() if k != "NEVR_INSTALL"}
         env["PATH"] = "/usr/bin:/bin"
