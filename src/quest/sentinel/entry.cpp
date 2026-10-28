@@ -20,6 +20,7 @@
 #include "obb_skip_hook.h"
 #include "permission_wait_hook.h"
 #include "process_end_hook.h"
+#include "render_config.h"
 #include "texture_quality_hook.h"
 #include "system_ui_hook.h"
 #include "resource_request_hook.h"
@@ -123,6 +124,12 @@ bool RegisterTextureQualityCounters() noexcept { return nevr_quest::texture_qual
 bool InstallTextureQualityHook(nevr_quest::texture_quality::Level level, bool fromConfig,
                                bool countersRegistered) noexcept {
     return nevr_quest::texture_quality::InstallIfCounted(level, fromConfig, countersRegistered);
+}
+
+// The render-configuration log (#1139): the VrApi slots it reads and the poller thread. A refused install is logged by GotHook
+// and by the hook's own line, and leaves the game's calls intact.
+bool InstallRenderConfigHook(nevr_quest::texture_quality::Level level, bool fromConfig) noexcept {
+    return nevr_quest::render_config::Install(level, fromConfig);
 }
 
 // The log-only resource request hook (#871): development builds only. A refused install is logged by GotHook and leaves the
