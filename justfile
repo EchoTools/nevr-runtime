@@ -434,6 +434,11 @@ quest-install yes="" apk="build/android-arm64/repack/r15_nevr-sentinel_signed.ap
 test-tools *ARGS:
     python3 tools/run_tool_tests.py "$@"
 
+# The core installer (installer/, ADR 0023): library, CLI and C ABI tests. The build is locked to the committed
+# Cargo.lock; set CARGO_TARGET_DIR to keep the regenerable build tree out of the checkout.
+test-installer *ARGS:
+    cargo test --locked --manifest-path installer/Cargo.toml {{ ARGS }}
+
 # Run all system tests
 test-system:
     cd tests/system && go test -v ./...

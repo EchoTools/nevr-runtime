@@ -47,6 +47,7 @@ One root per game: `%LOCALAPPDATA%\nevr\echovr\`. The install folder keeps the g
 | `logs\`, `crashes\` | the run log and the crash record (`nevr-crash-<run id>.txt`) the runtime writes, the host's log and minidumps |
 | `cache\`, `cosmetics\v1\packages\` | the asset cache, and the downloaded cosmetic packages |
 | `update\` | what self-update stages, swaps and rolls back (ADR 0024) |
+| `installer\` | the core installer's record (`nevr-install.txt`) and, in `installer\aside\`, the files it sets aside; nothing in the install folder but `BugSplat64.dll` is written (ADR 0023) |
 
 `%LOCALAPPDATA%\EchoVR` stays the original game's folder; nothing of ours is written there.
 

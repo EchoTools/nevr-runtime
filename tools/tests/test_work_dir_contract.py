@@ -327,7 +327,8 @@ class ShellToolDefaultsTest(unittest.TestCase):
 
     def test_taking_the_game_run_lock_makes_the_root_with_its_readme(self):
         root = self.tmp / "fresh"
-        result = subprocess.run(["bash", "-c", f"set -eu; source {fixtures.LIB}; acquire_game_run_lock; echo $GAME_RUN_LOCK"],
+        game_root = fixtures.make_game_root(self.tmp / "game-root")  # the lock first checks the root for sign-in files (#1198)
+        result = subprocess.run(["bash", "-c", f"set -eu; source {fixtures.LIB}; GAME_ROOT={game_root}; acquire_game_run_lock; echo $GAME_RUN_LOCK"],
                                 env=dict(self.env, NEVR_WORK_ROOT=str(root)), capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), f"{root}/launch-client.lock")

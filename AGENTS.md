@@ -95,7 +95,7 @@ differ, and so does who makes the pristine copy:
 - Set `NEVR_RUN_SCRATCH_ROOT` to your scratch directory before using `verify-server.sh`.
 
 Everything else in "The game install" applies unchanged: the list of writers, how to point each at the copy, the
-size check, removing `_local/config.*` and `plugins/*`, and the shape each script needs.
+size check, removing `_local/config.*`, every `.credentials.json*` and `plugins/*`, and the shape each script needs.
 
 ### What a PR carries
 
@@ -717,9 +717,9 @@ your seat name, for example `claude-main` or `codex`.
     `build/mingw-release/bin/plugins` exists, its files into that root's `plugins`, and, when
     the install has none, a `config.yaml` into `echovr/_local`.
   - `launch-client.sh` deploys `nevr-runtime.dll` (the one beside `--dll`, or `--runtime-dll`) and `BugSplat64.dll`
-    there and aborts (exit 3) when `plugins/*` (the game folder's or the nevr root's) is non-empty, `nevr-runtime.dll` exists
-    or `_local/config.yaml` or `_local/config.json` exists. `--print-game-root` and `--help` exit before
-    any write.
+    there and aborts (exit 3) when `plugins/*` (the game folder's or the nevr root's) is non-empty, `nevr-runtime.dll` exists,
+    `_local/config.yaml` or `_local/config.json` exists, or (with `NEVR_GAME_ROOT` set) any `.credentials.json*`
+    exists under `echovr/`. `--print-game-root` and `--help` exit before any write.
   - `launch-server.sh` copies `BugSplat64.dll` into `echovr/bin/win10`, `nevr-runtime.dll` into the nevr root of the Wine prefix and, when
     `build/mingw-release/bin/plugins/*.dll` exist, that directory's files into
     that root's `plugins`, and restores
@@ -764,14 +764,21 @@ your seat name, for example `claude-main` or `codex`.
     with `du -sh "$SRC"` (disk usage; apparent size under-reports the many small files of a Wine
     prefix) and compare it with `df -h /var/tmp`; free space must exceed twice the figure while a run is live
     (the pristine copy plus the run's own copy). A full disk truncates the file being copied.
-  - **Make it safe.** Remove what a run must not start with, then list every link that leaves the
-    copy:
+  - **Make it safe.** Remove what a run must not start with, list every sign-in file, then list every link that
+    leaves the copy:
     ```sh
     rm -f <copy>/echovr/_local/config.yaml <copy>/echovr/_local/config.json
     if [ -d <copy>/echovr/bin/win10/plugins ]; then find <copy>/echovr/bin/win10/plugins -mindepth 1 -delete; fi
     for d in <copy>/echovr/.wineprefix/drive_c/users/*/AppData/Local/nevr/echovr/plugins; do if [ -d "$d" ]; then find "$d" -mindepth 1 -delete; fi; done
+    find <copy>/echovr -name '.credentials.json*' ! -type d -print
+    find <copy>/echovr -name '.credentials.json*' ! -type d -delete
+    find <copy>/echovr -name '.credentials.json*' ! -type d -print
     COPY=$(readlink -f <copy>) find <copy> -type l -exec sh -c 'for l; do t=$(readlink -f "$l"); case "$t" in "$COPY"/*) ;; *) echo "$l -> $t";; esac; done' sh {} +
     ```
+    The first `find` lists the sign-in files: those in `_local` (with their `.bak` and `.prod-bak` backups) and the
+    nevr root cache in the Wine prefix (`.wineprefix/drive_c/users/<user>/AppData/Local/nevr/echovr/`). The last
+    `find` prints nothing. `launch-client.sh`, `launch-server.sh` and `verify-server.sh` exit 3, before they take the
+    lock or deploy anything, when `NEVR_GAME_ROOT` names a root that holds one, and name each file by path.
     A Wine prefix has its own device and home links, which this check prints: on the owner's
     install, `.wineprefix/dosdevices/com1` to `com32` (to `/dev/ttyS*`), `d::` (to a block device),
     `z:` (to `/`), and `drive_c/users/<user>/{Documents,Desktop,Downloads,Music,Videos,Pictures}` and
@@ -786,11 +793,12 @@ your seat name, for example `claude-main` or `codex`.
   - **Shape.** The scripts differ:
     - `launch-client.sh` needs `echovr/bin/win10/echovr.exe` and the original
       `echovr/bin/win10/BugSplat64.dll` (it saves and restores it and stops under `set -e` without
-      it), no `echovr/_local/config.yaml` or `config.json` (a missing `_local` passes) and
-      `bin/win10/plugins` and the nevr root's `plugins` empty.
+      it), no `echovr/_local/config.yaml` or `config.json` (a missing `_local` passes), no `.credentials.json*`
+      anywhere under `echovr/` and `bin/win10/plugins` and the nevr root's `plugins` empty.
       It reads the run's log from `echovr/.wineprefix`.
     - `verify-server.sh` needs `echovr/bin/win10/echovr.exe`. It tolerates an absent
-      `BugSplat64.dll` and `nevr-runtime.dll` (it adds them and removes them on exit), creates `_local` when missing, and uses
+      `BugSplat64.dll` and `nevr-runtime.dll` (it adds them and removes them on exit), needs no `.credentials.json*`
+      anywhere under `echovr/`, creates `_local` when missing, and uses
       a `_local/config.yaml` that is present as it is. It sets `WINEPREFIX` to
       `echovr/.wineprefix`.
   - **Who makes it, and reuse.** Only a human or the foreman makes the pristine copy, and nobody

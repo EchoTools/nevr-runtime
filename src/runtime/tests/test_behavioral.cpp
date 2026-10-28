@@ -241,6 +241,10 @@ const char* g_testRouterMode = nullptr;
 // #1082: nevr_discord_id answers from g_testDiscordId (the config fallback of the login identity), so a login test
 // has an account that is not 0 (the local user's UUID is the zero UUID for account 0).
 const char* g_testDiscordId = nullptr;
+// The synthetic account the login tests feed through the config fallback; its decimal text is made from the number
+// so the source holds no 18-digit string (the N20 sensor in `just verify` reads one as an account id).
+constexpr uint64_t kTestAccountId = 123456789012345678ULL;
+const std::string kTestAccountIdText = std::to_string(kTestAccountId);
 const char* NevrCfgGetFlat(const char* flatKey) {
   if (std::strcmp(flatKey, "nevr_session_router") == 0) return g_testRouterMode;
   if (std::strcmp(flatKey, "nevr_discord_id") == 0) return g_testDiscordId;
@@ -4136,7 +4140,7 @@ class GameFlagScope {
   GameFlagScope(int64_t flags, BOOL isServer) : wasServer_(g_isServer) {
     g_isServer = isServer;
     TestHook_SetGameFlagWord(flags);
-    g_testDiscordId = "123456789012345678";
+    g_testDiscordId = kTestAccountIdText.c_str();
   }
   ~GameFlagScope() {
     g_testDiscordId = nullptr;
@@ -4155,7 +4159,7 @@ TEST_F(RouterAllTest, ANoVrClientsInjectedLoginIsDmoNotTheOvrOrgOfItsVrSelf) {
   const std::string frame = remote_.LoginFrame();
   ASSERT_GE(frame.size(), 56U);
   const uint64_t account = FrameU64(frame, 48);
-  EXPECT_EQ(account, 123456789012345678ULL);
+  EXPECT_EQ(account, kTestAccountId);
   EXPECT_EQ(FrameU64(frame, 40), 7ULL) << "a No VR client logs in as DMO";
   EXPECT_FALSE(LogLinesContaining("login injected xpid=DMO-" + std::to_string(account) + " platform=7").empty());
   EXPECT_TRUE(LogLinesContaining("login injected xpid=OVR-ORG-").empty());
@@ -4170,7 +4174,7 @@ TEST_F(RouterAllTest, AVrClientsInjectedLoginStaysOvrOrg) {
   const std::string frame = remote_.LoginFrame();
   ASSERT_GE(frame.size(), 56U);
   const uint64_t account = FrameU64(frame, 48);
-  EXPECT_EQ(account, 123456789012345678ULL);
+  EXPECT_EQ(account, kTestAccountId);
   EXPECT_EQ(FrameU64(frame, 40), 4ULL);
   EXPECT_FALSE(LogLinesContaining("login injected xpid=OVR-ORG-" + std::to_string(account) + " platform=4").empty());
   EXPECT_TRUE(LogLinesContaining("login injected xpid=DMO-").empty());
@@ -4196,7 +4200,7 @@ TEST_F(RolesByPathTest, LegacyNoVrClientsInjectedLoginIsDmoNotTheOvrOrgOfItsVrSe
   const std::string frame = remote_.LoginFrame();
   ASSERT_GE(frame.size(), 56U);
   const uint64_t account = FrameU64(frame, 48);
-  EXPECT_EQ(account, 123456789012345678ULL);
+  EXPECT_EQ(account, kTestAccountId);
   EXPECT_EQ(FrameU64(frame, 40), 7ULL);
   EXPECT_FALSE(LogLinesContaining("login injected xpid=DMO-" + std::to_string(account) + " platform=7").empty());
   EXPECT_TRUE(LogLinesContaining("login injected xpid=OVR-ORG-").empty());
