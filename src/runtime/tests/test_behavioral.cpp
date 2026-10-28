@@ -822,6 +822,81 @@ TEST_F(PluginDependencyGateTest, LateLoadOfANameRepointedBetweenResolveAndOpenIs
   EXPECT_TRUE(TestLogContains("the file changed between resolving its path and opening it"));
 }
 
+// #767: the staged plugin's path is opened to check it and named again to load it. The held handle stops a write to
+// the file; it does not stop the name, when it goes through a link, from leading somewhere else by the time of the
+// load. The load has to be of the file that was checked. The entry names a link to the signed plugin; between the
+// check and the load the link is pointed at an unsigned file that is no plugin at all.
+std::wstring g_stagedLink;
+std::wstring g_stagedLinkTarget;
+
+void PointTheStagedLinkAtTheUnsignedFile(const std::wstring&) {
+  DeleteFileW(g_stagedLink.c_str());
+  CreateSymbolicLinkW(g_stagedLink.c_str(), g_stagedLinkTarget.c_str(), 0);
+}
+
+TEST_F(PluginDependencyGateTest, ALinkRepointedBetweenTheCheckAndTheLoadDoesNotChangeTheFileThatLoads) {
+  Plan("staged_real.dll", "signed");
+  g_testPluginLoadPlan.clear();
+  const std::string evil = pluginsDir_ + "staged_evil.dll";
+  ASSERT_TRUE(CopyFileA((fixtures_ + "/" + manifest_["files"]["nevr-runtime.unsigned"].get<std::string>()).c_str(),
+                        evil.c_str(), FALSE))
+      << GetLastError();
+  copies_.push_back(evil);
+  const std::string link = pluginsDir_ + "staged_link.dll";
+  g_stagedLink.assign(link.begin(), link.end());
+  g_stagedLinkTarget.assign(pluginsDir_.begin(), pluginsDir_.end());
+  g_stagedLinkTarget += L"staged_real.dll";
+  ASSERT_TRUE(CreateSymbolicLinkW(g_stagedLink.c_str(), g_stagedLinkTarget.c_str(), 0)) << GetLastError();
+  copies_.push_back(link);
+  g_stagedLinkTarget.assign(evil.begin(), evil.end());  // where the hook points the link
+  g_testPluginLoadPlan.push_back({"staged_link.dll", "staged_link.dll", false, "", "{}"});
+
+  TestHook_SetBetweenCheckAndLoad(&PointTheStagedLinkAtTheUnsignedFile);
+  LoadPlugins();
+  TestHook_SetBetweenCheckAndLoad(nullptr);
+
+  EXPECT_EQ(GetModuleHandleA("staged_evil.dll"), nullptr) << "the unsigned file was mapped";
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 1u);
+  EXPECT_TRUE(manifest[0]["loaded"].get<bool>()) << "the plugin that was checked did not load: " << manifest.dump();
+  EXPECT_EQ(GetLoadedPluginCount(), 1) << "the file behind the link at the load was not the file that was checked";
+  EXPECT_TRUE(TestLogContains("plugin=staged_link.dll file=staged_link.dll is loaded from "))
+      << "a path that leads somewhere else than its name is not said";
+}
+
+TEST_F(PluginDependencyGateTest, APluginReachedByItsOwnNameIsNotSaidToBeLoadedFromElsewhere) {
+  Plan("staged_plain.dll", "signed");
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_FALSE(TestLogContains("is loaded from "));
+}
+
+// The OS can fail to name the file behind a handle. A signed-only run then has no path it can tie to the check.
+TEST_F(PluginDependencyGateTest, AHeldFileThatCannotBeNamedIsRefusedInASignedOnlyRun) {
+  Plan("unnamed.dll", "signed");
+  TestHook_FailNamingTheHeldFile(true);
+  LoadPlugins();
+  TestHook_FailNamingTheHeldFile(false);
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(GetModuleHandleA("unnamed.dll"), nullptr) << "a plugin whose checked file has no name was mapped";
+  EXPECT_TRUE(TestLogContains("plugin=unnamed.dll file=unnamed.dll refused: cannot name the file it checked: error 5"));
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 1u);
+  EXPECT_EQ(manifest[0]["error"].get<std::string>(), "refused: cannot name the file it checked: error 5");
+}
+
+TEST_F(PluginDependencyGateTest, AHeldFileThatCannotBeNamedLoadsByItsConfiguredPathWhenSignaturesAreNotRequired) {
+  nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
+  Plan("unnamed_dev.dll", "unsigned");
+  TestHook_FailNamingTheHeldFile(true);
+  LoadPlugins();
+  TestHook_FailNamingTheHeldFile(false);
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "cannot name the file it checked: error 5; loading the configured path, which is "
+                                     "not tied to the file checked (plugin trust mode unsigned-allowed)"));
+}
+
 TEST_F(PluginDependencyGateTest, LateLoadOfASignedFileIsLeftAlone) {
   Plan("late_signed.dll", "signed");
   g_testPluginLoadPlan.clear();
