@@ -24,6 +24,18 @@ void RefreshForTest();
 /// bind function needs the engine's callbacks.
 BindFn OriginalForTest(std::size_t site);
 void SetOriginalForTest(std::size_t site, BindFn original);
+/// The two MinHook calls the hook makes, so a test stands in for them: attach(original, detour) behaves as
+/// Hooking::Attach (reads the target from *original, leaves the trampoline there), remove(target) returns an
+/// MH_STATUS. nullptr restores that call's default.
+using AttachFn = bool (*)(void** original, void* detour);
+using RemoveFn = int (*)(void* target);
+void SetBackendForTest(AttachFn attach, RemoveFn remove);
+/// Hooks `target` as site `site`'s bind function (the step RefreshForTest takes once a site is validated).
+bool HookSiteForTest(std::size_t site, void* target);
+/// The detour installed for a site: what a hooked caller reaches.
+BindFn DetourForTest(std::size_t site);
+/// Forgets every site's hook state and restores the default MinHook calls.
+void ResetForTest();
 #endif
 
 }  // namespace nevr_arena_public_clock
