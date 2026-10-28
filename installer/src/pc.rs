@@ -1,24 +1,66 @@
-//! The PC plan (ADR 0023, section 2): the semantics of `tools/package-release/install.ps1`, made data and tested.
-//! The game's own `BugSplat64.dll` is set aside, never deleted; `nevr-runtime.dll` is written before the host that loads
-//! it; both are read back; any failure puts every file back; `nevr-install.txt` keeps the keys `uninstall.ps1` reads.
+//! The PC plan (ADR 0023, section 2): the semantics of `tools/package-release/install.ps1`, made data and tested, with the
+//! layout of ADR 0012. The only file written beside `echovr.exe` is the host, `BugSplat64.dll`; the runtime, the record and
+//! every set-aside file go to the nevr root. The game's own `BugSplat64.dll` is copied aside, never deleted; the runtime is
+//! written before the host that loads it; every file is read back; any failure puts every changed file back, and the run
+//! says `restored` only when that worked.
 
 use crate::error::{Error, Result};
 use crate::log::Log;
-use crate::util::{now_utc, sha256_hex};
+use crate::util::{now_utc, semver_cmp, sha256_hex};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub const HOST: &str = "BugSplat64.dll";
 pub const RUNTIME: &str = "nevr-runtime.dll";
 pub const STATE_FILE: &str = "nevr-install.txt";
 
-/// The files the plan installs, taken from the verified zip.
+/// Where the plan reads and writes: `game` is the folder with `echovr.exe`, `root` the nevr root.
+#[derive(Debug, Clone)]
+pub struct Layout {
+    pub game: PathBuf,
+    pub root: PathBuf,
+}
+
+impl Layout {
+    pub fn new(game: impl Into<PathBuf>, root: impl Into<PathBuf>) -> Layout {
+        Layout { game: game.into(), root: root.into() }
+    }
+    /// The host, the one file the plan writes in the game folder.
+    pub fn host(&self) -> PathBuf {
+        self.game.join(HOST)
+    }
+    pub fn runtime(&self) -> PathBuf {
+        self.root.join(RUNTIME)
+    }
+    /// An earlier layout put the runtime beside the game.
+    pub fn legacy_runtime(&self) -> PathBuf {
+        self.game.join(RUNTIME)
+    }
+    pub fn legacy_dbgcore(&self) -> PathBuf {
+        self.game.join("dbgcore.dll")
+    }
+    /// An earlier installer kept its record beside the game.
+    pub fn legacy_record(&self) -> PathBuf {
+        self.game.join(STATE_FILE)
+    }
+    pub fn record(&self) -> PathBuf {
+        self.root.join("installer").join(STATE_FILE)
+    }
+    /// Every file the plan sets aside lands here.
+    pub fn aside_dir(&self) -> PathBuf {
+        self.root.join("installer").join("aside")
+    }
+}
+
+/// The files the plan installs, taken from the verified zip, and the release they belong to.
 #[derive(Debug, Clone)]
 pub struct Package {
     pub host: Vec<u8>,
     pub runtime: Vec<u8>,
+    pub version: String,
 }
 
 impl Package {
@@ -34,6 +76,21 @@ impl Package {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Record {
     pub values: BTreeMap<String, String>,
+}
+
+/// What a record says; every key `uninstall` reads.
+#[derive(Debug, Default)]
+pub struct RecordFields<'a> {
+    pub backup: &'a str,
+    pub legacy: &'a str,
+    pub runtime_aside: &'a str,
+    pub runtime_legacy: &'a str,
+    pub runtime_root: &'a str,
+    pub game_dir: &'a str,
+    pub release: &'a str,
+    pub installed: &'a str,
+    pub runtime: &'a str,
+    pub previous: Option<&'a str>,
 }
 
 impl Record {
@@ -62,15 +119,19 @@ impl Record {
         k
     }
 
-    pub fn render(backup: &str, legacy: &str, previous: Option<&str>, runtime_aside: &str, installed: &str, runtime: &str) -> String {
+    pub fn render(f: &RecordFields) -> String {
         let mut lines = vec![
-            format!("backup={backup}"),
-            format!("legacy={legacy}"),
-            format!("runtime_aside={runtime_aside}"),
-            format!("installed_sha256={installed}"),
-            format!("runtime_sha256={runtime}"),
+            format!("backup={}", f.backup),
+            format!("legacy={}", f.legacy),
+            format!("runtime_aside={}", f.runtime_aside),
+            format!("runtime_legacy={}", f.runtime_legacy),
+            format!("runtime_root={}", f.runtime_root),
+            format!("game_dir={}", f.game_dir),
+            format!("release={}", f.release),
+            format!("installed_sha256={}", f.installed),
+            format!("runtime_sha256={}", f.runtime),
         ];
-        if let Some(p) = previous {
+        if let Some(p) = f.previous {
             lines.push(format!("previous_sha256={p}"));
         }
         lines.join("\n") + "\n"
@@ -89,15 +150,22 @@ pub struct Observed {
     pub game_running: bool,
     pub target_sha: Option<String>,
     pub target_is_nevr: bool,
+    /// The record, from the root or, failing that, from beside the game (an earlier installer put it there).
     pub record: Option<Record>,
+    pub record_path: Option<PathBuf>,
+    pub record_in_root: bool,
     pub backup_exists: bool,
     pub backup_is_nevr: bool,
     pub backup_sha: Option<String>,
+    /// The runtime in the root.
     pub runtime_sha: Option<String>,
     pub dbgcore_present: bool,
+    /// A runtime beside the game that carries the NEVR identity: the earlier layout, moved into the root's aside folder.
+    /// A file of that name that is not ours is left alone.
+    pub legacy_runtime_is_nevr: bool,
 }
 
-pub fn observe(dir: &Path, game_running: bool) -> Result<Observed> {
+pub fn observe(l: &Layout, game_running: bool) -> Result<Observed> {
     let io = |what: &Path, e: std::io::Error| Error::new(9, format!("{}: {e}", what.display()));
     let read_opt = |p: &Path| -> Result<Option<Vec<u8>>> {
         match fs::read(p) {
@@ -106,24 +174,35 @@ pub fn observe(dir: &Path, game_running: bool) -> Result<Observed> {
             Err(e) => Err(io(p, e)),
         }
     };
-    let target = read_opt(&dir.join(HOST))?;
-    let runtime = read_opt(&dir.join(RUNTIME))?;
-    let record = read_opt(&dir.join(STATE_FILE))?.map(|b| Record::parse(&String::from_utf8_lossy(&b)));
+    let target = read_opt(&l.host())?;
+    let runtime = read_opt(&l.runtime())?;
+    let legacy_runtime = read_opt(&l.legacy_runtime())?;
+    let (record_bytes, record_path) = match read_opt(&l.record())? {
+        Some(b) => (Some(b), Some(l.record())),
+        None => match read_opt(&l.legacy_record())? {
+            Some(b) => (Some(b), Some(l.legacy_record())),
+            None => (None, None),
+        },
+    };
+    let record = record_bytes.map(|b| Record::parse(&String::from_utf8_lossy(&b)));
     let backup = match record.as_ref().and_then(|r| r.get("backup")).filter(|b| !b.is_empty()) {
         Some(b) => read_opt(Path::new(b))?,
         None => None,
     };
     Ok(Observed {
-        has_exe: dir.join("echovr.exe").is_file(),
+        has_exe: l.game.join("echovr.exe").is_file(),
         game_running,
         target_is_nevr: target.as_deref().is_some_and(is_nevr_runtime),
         target_sha: target.as_deref().map(sha256_hex),
         record,
+        record_in_root: record_path.as_deref() == Some(l.record().as_path()),
+        record_path,
         backup_exists: backup.is_some(),
         backup_is_nevr: backup.as_deref().is_some_and(is_nevr_runtime),
         backup_sha: backup.as_deref().map(sha256_hex),
         runtime_sha: runtime.as_deref().map(sha256_hex),
-        dbgcore_present: dir.join("dbgcore.dll").exists(),
+        dbgcore_present: l.legacy_dbgcore().exists(),
+        legacy_runtime_is_nevr: legacy_runtime.as_deref().is_some_and(is_nevr_runtime),
     })
 }
 
@@ -166,7 +245,7 @@ impl Plan {
     }
 }
 
-pub fn plan(obs: &Observed, pkg: &Package) -> Plan {
+pub fn plan(obs: &Observed, pkg: &Package, allow_downgrade: bool) -> Plan {
     let ours = pkg.host_sha();
     let ours_rt = pkg.runtime_sha();
     let p = |outcome, action, decision: &str, reason: Option<String>, stale: bool| Plan {
@@ -212,9 +291,14 @@ pub fn plan(obs: &Observed, pkg: &Package) -> Plan {
             if obs.backup_is_nevr {
                 return needs("the recorded backup is a NEVR runtime, not the game's own file; restore the game's BugSplat64.dll (Verify Files), delete nevr-install.txt, then run again");
             }
+            if let Some(installed) = r.get("release").filter(|v| !allow_downgrade && !v.is_empty()) {
+                if semver_cmp(installed, &pkg.version) == Some(std::cmp::Ordering::Greater) {
+                    return needs(&format!("release {installed} is installed and newer than the offered {}; pass --allow-downgrade to install the older one", pkg.version));
+                }
+            }
             if orig == ours {
                 let runtime_current = obs.runtime_sha.as_deref() == Some(ours_rt.as_str());
-                if r.get("installed_sha256") == Some(ours.as_str()) && runtime_current {
+                if r.get("installed_sha256") == Some(ours.as_str()) && runtime_current && r.get("release") == Some(pkg.version.as_str()) && obs.record_in_root && !obs.legacy_runtime_is_nevr {
                     return p(Outcome::Unchanged, None, "unchanged", Some("the installed BugSplat64.dll and nevr-runtime.dll are already this package".into()), false);
                 }
                 return p(Outcome::Proceed, Some(Action::RecordOnly), "record", None, false);
@@ -263,146 +347,286 @@ fn verify_file(path: &Path, sha: &str) -> std::result::Result<(), String> {
     Ok(())
 }
 
+/// A temporary file in the same folder, renamed over `path`: a reader sees the old file or the new one, never half of
+/// either. The temporary is removed when the write or the rename fails.
+fn put(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = path.with_file_name(format!("{name}.nevr-new-{}", std::process::id()));
+    let r = (|| {
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        drop(f);
+        fs::rename(&tmp, path)
+    })();
+    if r.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    r
+}
+
+/// Copies `src` to `dst`, reads the copy back, and only then removes `src`; returns the bytes for an undo. Across volumes
+/// a rename is a copy, so this is the move.
+fn move_out(src: &Path, dst: &Path) -> std::result::Result<Vec<u8>, String> {
+    let b = fs::read(src).map_err(|e| format!("{}: {e}", src.display()))?;
+    put(dst, &b).map_err(|e| format!("{}: {e}", dst.display()))?;
+    verify_file(dst, &sha256_hex(&b))?;
+    fs::remove_file(src).map_err(|e| format!("{}: {e}", src.display()))?;
+    Ok(b)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct End {
     pub state: &'static str,
     pub reason: String,
 }
 
-/// Executes a `Proceed` plan in `dir` with the verified package. Every change is logged as a `file_write`.
-pub fn execute(dir: &Path, plan: &Plan, obs: &Observed, pkg: &Package, log: &Log) -> Result<End> {
-    let action = plan.action.expect("a Proceed plan has an action");
-    let target = dir.join(HOST);
-    let runtime_target = dir.join(RUNTIME);
-    let state_path = dir.join(STATE_FILE);
-    let ours = pkg.host_sha();
-    let ours_rt = pkg.runtime_sha();
-    let orig = obs.target_sha.clone().expect("observed");
-    let st = stamp();
-    let write_log = |path: &Path, sha: &str, replaced: &str, aside: &str| log.info("file_write", 9, json!({"path": path.display().to_string(), "sha256": sha, "replaced_sha256": replaced, "set_aside": aside}));
+/// Test hooks: make the named step, or the named undo, fail as an I/O error would. Steps: `runtime_written`,
+/// `host_written`, `legacy_moved`, `verify_installed`, `record_written`. Undos: `legacy_runtime`, `legacy_dbgcore`, `host`,
+/// `runtime`.
+#[derive(Debug, Default, Clone)]
+pub struct Seam {
+    pub fail_step: Option<&'static str>,
+    pub fail_undo: Option<&'static str>,
+}
 
-    if plan.stale_record {
-        let aside = fresh(dir, &format!("{STATE_FILE}.stale-{st}"));
-        fs::rename(&state_path, &aside).map_err(|e| Error::new(9, format!("{}: {e}", aside.display())))?;
-        write_log(&state_path, "", "", &aside.display().to_string())?;
-    }
-
-    let record = if plan.stale_record { None } else { obs.record.clone() };
-    match action {
-        Action::RecordOnly => {
-            let r = record.expect("record");
-            if obs.runtime_sha.as_deref() != Some(ours_rt.as_str()) {
-                fs::write(&runtime_target, &pkg.runtime).map_err(|e| Error::new(9, format!("{}: {e}", runtime_target.display())))?;
-                write_log(&runtime_target, &ours_rt, obs.runtime_sha.as_deref().unwrap_or(""), "")?;
-                if let Err(why) = verify_file(&runtime_target, &ours_rt) {
-                    return Ok(End { state: "needs-user", reason: why });
-                }
-            }
-            let previous: Vec<String> = r.known().into_iter().filter(|k| *k != ours && !k.is_empty()).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
-            let text = Record::render(r.get("backup").unwrap_or(""), r.get("legacy").unwrap_or(""), Some(&previous.join(",")), r.get("runtime_aside").unwrap_or(""), &ours, &ours_rt);
-            fs::write(&state_path, text).map_err(|e| Error::new(9, format!("{}: {e}", state_path.display())))?;
-            Ok(End { state: "installed", reason: String::new() })
-        }
-        Action::Update => {
-            let r = record.expect("record");
-            let prior = fs::read(&target).map_err(|e| Error::new(9, format!("{}: {e}", target.display())))?;
-            let prior_runtime = fs::read(&runtime_target).ok();
-            let attempt = (|| -> std::result::Result<(), String> {
-                fs::write(&runtime_target, &pkg.runtime).map_err(|e| e.to_string())?;
-                write_log(&runtime_target, &ours_rt, obs.runtime_sha.as_deref().unwrap_or(""), "").map_err(|e| e.to_string())?;
-                verify_file(&runtime_target, &ours_rt)?;
-                fs::write(&target, &pkg.host).map_err(|e| e.to_string())?;
-                write_log(&target, &ours, &orig, "").map_err(|e| e.to_string())?;
-                verify_file(&target, &ours)
-            })();
-            if let Err(why) = attempt {
-                let _ = fs::write(&target, &prior);
-                match prior_runtime {
-                    Some(b) => {
-                        let _ = fs::write(&runtime_target, b);
-                    }
-                    None => {
-                        let _ = fs::rename(&runtime_target, dir.join(format!("{RUNTIME}.failed-{st}")));
-                    }
-                }
-                return Ok(End { state: "restored", reason: why });
-            }
-            let previous: Vec<String> = r.known().into_iter().filter(|k| *k != ours && !k.is_empty()).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
-            let text = Record::render(r.get("backup").unwrap_or(""), r.get("legacy").unwrap_or(""), Some(&previous.join(",")), r.get("runtime_aside").unwrap_or(""), &ours, &ours_rt);
-            fs::write(&state_path, text).map_err(|e| Error::new(9, format!("{}: {e}", state_path.display())))?;
-            Ok(End { state: "installed", reason: String::new() })
-        }
-        Action::First => {
-            let backup = fresh(dir, &format!("{HOST}.original-{st}"));
-            fs::copy(&target, &backup).map_err(|e| Error::new(9, format!("{}: {e}", backup.display())))?;
-            if let Err(why) = verify_file(&backup, &orig) {
-                return Ok(End { state: "unchanged", reason: format!("{why} (delete the bad copy by hand)") });
-            }
-            write_log(&backup, &orig, "", &target.display().to_string())?;
-            let mut legacy_aside: Option<PathBuf> = None;
-            if obs.dbgcore_present {
-                let aside = fresh(dir, &format!("dbgcore.dll.legacy-{}", &st[..8]));
-                fs::rename(dir.join("dbgcore.dll"), &aside).map_err(|e| Error::new(9, format!("{}: {e}", aside.display())))?;
-                write_log(&dir.join("dbgcore.dll"), "", "", &aside.display().to_string())?;
-                legacy_aside = Some(aside);
-            }
-            let mut runtime_aside: Option<PathBuf> = None;
-            if obs.runtime_sha.is_some() {
-                let aside = fresh(dir, &format!("{RUNTIME}.original-{st}"));
-                fs::rename(&runtime_target, &aside).map_err(|e| Error::new(9, format!("{}: {e}", aside.display())))?;
-                write_log(&runtime_target, "", obs.runtime_sha.as_deref().unwrap_or(""), &aside.display().to_string())?;
-                runtime_aside = Some(aside);
-            }
-            let attempt = (|| -> std::result::Result<(), String> {
-                // The runtime first: until the host is replaced nothing loads it.
-                fs::write(&runtime_target, &pkg.runtime).map_err(|e| e.to_string())?;
-                write_log(&runtime_target, &ours_rt, "", "").map_err(|e| e.to_string())?;
-                verify_file(&runtime_target, &ours_rt)?;
-                fs::write(&target, &pkg.host).map_err(|e| e.to_string())?;
-                write_log(&target, &ours, &orig, &backup.display().to_string()).map_err(|e| e.to_string())?;
-                verify_file(&target, &ours)
-            })();
-            if let Err(why) = attempt {
-                let _ = fs::copy(&backup, &target);
-                if runtime_target.exists() {
-                    let _ = fs::rename(&runtime_target, dir.join(format!("{RUNTIME}.failed-{st}")));
-                }
-                if let Some(a) = &runtime_aside {
-                    let _ = fs::rename(a, &runtime_target);
-                }
-                if let Some(a) = &legacy_aside {
-                    let _ = fs::rename(a, dir.join("dbgcore.dll"));
-                }
-                return Ok(End { state: "restored", reason: why });
-            }
-            let text = Record::render(
-                &backup.display().to_string(),
-                &legacy_aside.map(|p| p.display().to_string()).unwrap_or_default(),
-                None,
-                &runtime_aside.map(|p| p.display().to_string()).unwrap_or_default(),
-                &ours,
-                &ours_rt,
-            );
-            fs::write(&state_path, text).map_err(|e| Error::new(9, format!("{}: {e}", state_path.display())))?;
-            Ok(End { state: "installed", reason: String::new() })
+impl Seam {
+    fn step(&self, name: &str) -> std::result::Result<(), String> {
+        if self.fail_step == Some(name) {
+            Err(format!("injected failure at {name}"))
+        } else {
+            Ok(())
         }
     }
 }
 
-/// Step 10: both files read back against the manifest.
-pub fn verify_installed(dir: &Path, pkg: &Package, log: &Log) -> Result<()> {
+/// One change to take back.
+enum Undo {
+    /// Write `bytes` back to `path`.
+    Restore { what: &'static str, path: PathBuf, bytes: Vec<u8> },
+    /// Move `from` back to `to`.
+    Move { what: &'static str, from: PathBuf, to: PathBuf },
+    /// Delete a file this run created.
+    Remove { what: &'static str, path: PathBuf },
+    /// Keep a failed install's file: move `path` into the aside folder under `name`.
+    SetAside { what: &'static str, path: PathBuf, dir: PathBuf, name: String },
+}
+
+impl Undo {
+    fn what(&self) -> &'static str {
+        match self {
+            Undo::Restore { what, .. } | Undo::Move { what, .. } | Undo::SetAside { what, .. } | Undo::Remove { what, .. } => what,
+        }
+    }
+    fn run(&self) -> std::io::Result<()> {
+        match self {
+            Undo::Restore { path, bytes, .. } => put(path, bytes),
+            Undo::Move { from, to, .. } => fs::rename(from, to),
+            Undo::SetAside { path, dir, name, .. } => fs::rename(path, fresh(dir, name)),
+            Undo::Remove { path, .. } => fs::remove_file(path),
+        }
+    }
+    fn target(&self) -> &Path {
+        match self {
+            Undo::Restore { path, .. } => path,
+            Undo::Move { to, .. } => to,
+            Undo::SetAside { path, .. } | Undo::Remove { path, .. } => path,
+        }
+    }
+}
+
+/// Takes every change back, newest first, and returns what could not be taken back.
+fn rollback(undo: Vec<Undo>, seam: &Seam, log: &Log) -> Vec<String> {
+    let mut failed = Vec::new();
+    for u in undo.into_iter().rev() {
+        let r = if seam.fail_undo == Some(u.what()) { Err(std::io::Error::other(format!("injected failure at undo {}", u.what()))) } else { u.run() };
+        match r {
+            Ok(()) => {
+                let _ = log.info("file_restore", 9, json!({"path": u.target().display().to_string(), "what": u.what(), "ok": true}));
+            }
+            Err(e) => {
+                let _ = log.error("restore_failed", 9, json!({"path": u.target().display().to_string(), "what": u.what(), "reason": e.to_string()}));
+                failed.push(format!("{} ({}: {e})", u.target().display(), u.what()));
+            }
+        }
+    }
+    failed
+}
+
+/// Executes a `Proceed` plan with the verified package. Every change is logged as a `file_write`.
+pub fn execute(l: &Layout, plan: &Plan, obs: &Observed, pkg: &Package, log: &Log) -> Result<End> {
+    execute_with(l, plan, obs, pkg, log, &Seam::default())
+}
+
+pub fn execute_with(l: &Layout, plan: &Plan, obs: &Observed, pkg: &Package, log: &Log, seam: &Seam) -> Result<End> {
+    let mut undo: Vec<Undo> = Vec::new();
+    match apply(l, plan, obs, pkg, log, seam, &mut undo) {
+        Ok(()) => Ok(End { state: "installed", reason: String::new() }),
+        Err(why) if undo.is_empty() => Ok(End { state: "unchanged", reason: why }),
+        Err(why) => {
+            log.error("install_failed", 9, json!({"reason": why, "changes_to_take_back": undo.len()}))?;
+            let failed = rollback(undo, seam, log);
+            if failed.is_empty() {
+                Ok(End { state: "restored", reason: why })
+            } else {
+                Ok(End { state: "needs-user", reason: format!("{why}; these files could not be put back: {}; the set-aside copies are in {}", failed.join("; "), l.aside_dir().display()) })
+            }
+        }
+    }
+}
+
+/// The steps. Each change pushes its undo first-hand, so an error at any point leaves `undo` holding exactly what changed.
+fn apply(l: &Layout, plan: &Plan, obs: &Observed, pkg: &Package, log: &Log, seam: &Seam, undo: &mut Vec<Undo>) -> std::result::Result<(), String> {
+    let action = plan.action.expect("a Proceed plan has an action");
+    let (host, runtime) = (l.host(), l.runtime());
+    let (ours, ours_rt) = (pkg.host_sha(), pkg.runtime_sha());
+    let orig = obs.target_sha.clone().expect("observed");
+    let st = stamp();
+    let aside = l.aside_dir();
+    let write_log = |path: &Path, sha: &str, replaced: &str, aside: &str| log.info("file_write", 9, json!({"path": path.display().to_string(), "sha256": sha, "replaced_sha256": replaced, "set_aside": aside})).map_err(|e| e.to_string());
+    let io = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
+
+    fs::create_dir_all(&aside).map_err(|e| io(&aside, e))?;
+    let host_bytes = fs::read(&host).map_err(|e| io(&host, e))?;
+    if sha256_hex(&host_bytes) != orig {
+        return Err(format!("{} changed after it was read for the plan", host.display()));
+    }
+
+    // A record that no longer describes the folder is set aside first.
+    let mut old_record_text: Option<Vec<u8>> = None;
+    if plan.stale_record {
+        if let Some(rp) = &obs.record_path {
+            let to = fresh(&aside, &format!("{STATE_FILE}.stale-{st}"));
+            let b = move_out(rp, &to)?;
+            undo.push(Undo::Restore { what: "stale_record", path: rp.clone(), bytes: b });
+            write_log(rp, "", "", &to.display().to_string())?;
+        }
+    } else if let Some(rp) = obs.record_path.as_ref().filter(|p| **p == l.legacy_record()) {
+        old_record_text = fs::read(rp).ok();
+    }
+    let record = if plan.stale_record { None } else { obs.record.clone() };
+
+    let mut backup = record.as_ref().and_then(|r| r.get("backup")).unwrap_or("").to_string();
+    let mut legacy = record.as_ref().and_then(|r| r.get("legacy")).unwrap_or("").to_string();
+    let mut runtime_aside = record.as_ref().and_then(|r| r.get("runtime_aside")).unwrap_or("").to_string();
+    let mut runtime_legacy = record.as_ref().and_then(|r| r.get("runtime_legacy")).unwrap_or("").to_string();
+
+    if action == Action::First {
+        // The game's own file, copied before anything replaces it.
+        let b = fresh(&aside, &format!("{HOST}.original-{st}"));
+        put(&b, &host_bytes).map_err(|e| io(&b, e))?;
+        verify_file(&b, &orig).map_err(|e| format!("{e} (delete the bad copy by hand)"))?;
+        write_log(&b, &orig, "", &host.display().to_string())?;
+        backup = b.display().to_string();
+        if obs.dbgcore_present {
+            let to = fresh(&aside, &format!("dbgcore.dll.legacy-{}", &st[..8]));
+            let bytes = move_out(&l.legacy_dbgcore(), &to)?;
+            undo.push(Undo::Restore { what: "legacy_dbgcore", path: l.legacy_dbgcore(), bytes });
+            write_log(&l.legacy_dbgcore(), "", "", &to.display().to_string())?;
+            legacy = to.display().to_string();
+        }
+    }
+
+    // The runtime, into the root. A different file already there is set aside first; it is put back on failure.
+    let prior_runtime = fs::read(&runtime).ok();
+    if action != Action::RecordOnly || obs.runtime_sha.as_deref() != Some(ours_rt.as_str()) {
+        fs::create_dir_all(&l.root).map_err(|e| io(&l.root, e))?;
+        if prior_runtime.is_some() && action == Action::First {
+            let to = fresh(&aside, &format!("{RUNTIME}.original-{st}"));
+            fs::rename(&runtime, &to).map_err(|e| io(&to, e))?;
+            undo.push(Undo::Move { what: "runtime_aside", from: to.clone(), to: runtime.clone() });
+            write_log(&runtime, "", obs.runtime_sha.as_deref().unwrap_or(""), &to.display().to_string())?;
+            runtime_aside = to.display().to_string();
+        }
+        // The runtime first: until the host is replaced nothing loads it.
+        put(&runtime, &pkg.runtime).map_err(|e| io(&runtime, e))?;
+        match &prior_runtime {
+            Some(prior) if action != Action::First => undo.push(Undo::Restore { what: "runtime", path: runtime.clone(), bytes: prior.clone() }),
+            _ => undo.push(Undo::SetAside { what: "runtime", path: runtime.clone(), dir: aside.clone(), name: format!("{RUNTIME}.failed-{st}") }),
+        }
+        write_log(&runtime, &ours_rt, obs.runtime_sha.as_deref().unwrap_or(""), "")?;
+        verify_file(&runtime, &ours_rt)?;
+        seam.step("runtime_written")?;
+    }
+
+    if action != Action::RecordOnly {
+        put(&host, &pkg.host).map_err(|e| io(&host, e))?;
+        undo.push(Undo::Restore { what: "host", path: host.clone(), bytes: host_bytes });
+        write_log(&host, &ours, &orig, if action == Action::First { &backup } else { "" })?;
+        verify_file(&host, &ours)?;
+        seam.step("host_written")?;
+    }
+
+    // The earlier layout's runtime beside the game goes last, so a failure above leaves it where it was.
+    if obs.legacy_runtime_is_nevr {
+        let to = fresh(&aside, &format!("{RUNTIME}.legacy-{st}"));
+        let bytes = move_out(&l.legacy_runtime(), &to)?;
+        undo.push(Undo::Restore { what: "legacy_runtime", path: l.legacy_runtime(), bytes });
+        write_log(&l.legacy_runtime(), "", "", &to.display().to_string())?;
+        runtime_legacy = to.display().to_string();
+        seam.step("legacy_moved")?;
+    }
+
+    // The record an earlier installer left beside the game moves into the root with the rest.
+    if let (Some(text), Some(rp)) = (old_record_text, obs.record_path.as_ref()) {
+        let to = fresh(&aside, &format!("{STATE_FILE}.legacy-{st}"));
+        move_out(rp, &to)?;
+        undo.push(Undo::Restore { what: "legacy_record", path: rp.clone(), bytes: text });
+        write_log(rp, "", "", &to.display().to_string())?;
+    }
+
+    verify_installed(l, pkg, log, seam)?;
+
+    let previous: Vec<String> = record
+        .as_ref()
+        .map(|r| r.known())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|k| *k != ours && !k.is_empty())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let previous = previous.join(",");
+    let text = Record::render(&RecordFields {
+        backup: &backup,
+        legacy: &legacy,
+        runtime_aside: &runtime_aside,
+        runtime_legacy: &runtime_legacy,
+        runtime_root: &l.root.display().to_string(),
+        game_dir: &l.game.display().to_string(),
+        release: &pkg.version,
+        installed: &ours,
+        runtime: &ours_rt,
+        previous: if action == Action::First { None } else { Some(&previous) },
+    });
+    seam.step("record_written")?;
+    let rec = l.record();
+    fs::create_dir_all(rec.parent().expect("the record has a folder")).map_err(|e| io(&l.root, e))?;
+    let prior_record = if obs.record_in_root { fs::read(&rec).ok() } else { None };
+    put(&rec, text.as_bytes()).map_err(|e| io(&rec, e))?;
+    undo.push(match prior_record {
+        Some(bytes) => Undo::Restore { what: "record", path: rec.clone(), bytes },
+        None => Undo::Remove { what: "record", path: rec.clone() },
+    });
+    write_log(&rec, &sha256_hex(text.as_bytes()), "", "")?;
+    Ok(())
+}
+
+/// Step 10: both files read back against the manifest's hashes (the package was checked against them when it was read).
+pub fn verify_installed(l: &Layout, pkg: &Package, log: &Log, seam: &Seam) -> std::result::Result<(), String> {
     let mut observed = serde_json::Map::new();
     let mut ok = true;
-    for (name, want) in [(HOST, pkg.host_sha()), (RUNTIME, pkg.runtime_sha())] {
-        let got = fs::read(dir.join(name)).map(|b| sha256_hex(&b)).unwrap_or_default();
+    for (name, path, want) in [(HOST, l.host(), pkg.host_sha()), (RUNTIME, l.runtime(), pkg.runtime_sha())] {
+        let got = fs::read(&path).map(|b| sha256_hex(&b)).unwrap_or_default();
         ok &= got == want;
         observed.insert(name.into(), json!({"expected": want, "observed": got}));
     }
-    log.event(if ok { "INFO" } else { "ERROR" }, "verify_installed", 10, json!({"ok": ok, "files": observed}))?;
+    ok &= seam.step("verify_installed").is_ok();
+    log.event(if ok { "INFO" } else { "ERROR" }, "verify_installed", 10, json!({"ok": ok, "files": observed})).map_err(|e| e.to_string())?;
     if ok {
         Ok(())
     } else {
-        Err(Error::new(10, "an installed file does not match the manifest"))
+        Err("an installed file does not match the manifest".into())
     }
 }
 

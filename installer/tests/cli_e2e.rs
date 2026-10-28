@@ -43,11 +43,18 @@ struct World {
     base: String,
     pins: std::path::PathBuf,
     root: tempfile::TempDir,
+    /// The nevr root (ADR 0012): the runtime, the record and the set-aside files.
+    nevr: tempfile::TempDir,
     game: tempfile::TempDir,
     _keys: tempfile::TempDir,
 }
 
 fn world(tamper_sig: bool) -> World {
+    world_of("1.0.0", 5, tamper_sig)
+}
+
+/// A server for release `version` at manifest version `manifest_version`, with its own key.
+fn world_of(version: &str, manifest_version: u64, tamper_sig: bool) -> World {
     let keys = tempfile::tempdir().unwrap();
     let k = make_key(keys.path(), "k");
     let zip_bytes = {
@@ -61,9 +68,9 @@ fn world(tamper_sig: bool) -> World {
         buf.into_inner()
     };
     let m = manifest_json(
-        5,
-        json!({"channels": {"beta": "1.0.0"}, "releases": {"1.0.0": {"artifacts": [{
-            "kind": "windows-zip", "platform": "windows-x86_64", "path": "v1.0.0/nevr-runtime-v1.0.0-windows.zip",
+        manifest_version,
+        json!({"channels": {"beta": version}, "releases": {version: {"artifacts": [{
+            "kind": "windows-zip", "platform": "windows-x86_64", "path": format!("v{version}/nevr-runtime-v{version}-windows.zip"),
             "size": zip_bytes.len(), "sha256": sha256_hex(&zip_bytes),
             "contents": [
                 {"path": "BugSplat64.dll", "sha256": sha256_hex(HOST), "size": HOST.len()},
@@ -80,7 +87,7 @@ fn world(tamper_sig: bool) -> World {
     let base = serve_forever(HashMap::from([
         ("/manifest.json".into(), m),
         ("/manifest.json.sig".into(), sig),
-        ("/v1.0.0/nevr-runtime-v1.0.0-windows.zip".into(), zip_bytes),
+        (format!("/v{version}/nevr-runtime-v{version}-windows.zip"), zip_bytes),
     ]));
     finish(base, &k, keys)
 }
@@ -91,13 +98,18 @@ fn finish(base: String, k: &Key, keys: tempfile::TempDir) -> World {
     let game = tempfile::tempdir().unwrap();
     std::fs::write(game.path().join("echovr.exe"), b"exe").unwrap();
     std::fs::write(game.path().join("BugSplat64.dll"), GAME).unwrap();
-    World { base, pins, root: tempfile::tempdir().unwrap(), game, _keys: keys }
+    World { base, pins, root: tempfile::tempdir().unwrap(), nevr: tempfile::tempdir().unwrap(), game, _keys: keys }
 }
 
 fn run(w: &World, args: &[&str]) -> (i32, Value, String) {
+    run_in(w, w, args)
+}
+
+/// Runs against `server`'s manifest, in `dirs`' installer root, nevr root and game folder.
+fn run_in(server: &World, dirs: &World, args: &[&str]) -> (i32, Value, String) {
     let o = Command::new(env!("CARGO_BIN_EXE_nevr-install"))
         .args(args)
-        .args(["--root", w.root.path().to_str().unwrap(), "--base", &w.base, "--pins", w.pins.to_str().unwrap(), "--now", NOW])
+        .args(["--root", dirs.root.path().to_str().unwrap(), "--nevr-root", dirs.nevr.path().to_str().unwrap(), "--base", &server.base, "--pins", server.pins.to_str().unwrap(), "--now", NOW])
         .output()
         .unwrap();
     let out: Value = serde_json::from_slice(&o.stdout).unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {}", String::from_utf8_lossy(&o.stdout)));
@@ -106,6 +118,10 @@ fn run(w: &World, args: &[&str]) -> (i32, Value, String) {
 
 fn records(w: &World) -> Vec<Value> {
     std::fs::read_to_string(w.root.path().join("logs/nevr-install.jsonl")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+}
+
+fn events_of(w: &World) -> Vec<String> {
+    events(w)
 }
 
 fn events(w: &World) -> Vec<String> {
@@ -120,7 +136,11 @@ fn pc_install_end_to_end_logs_every_step_and_installs_the_manifests_bytes() {
     assert_eq!(code, 0, "{out} {err}");
     assert_eq!(out["state"], "installed");
     assert_eq!(std::fs::read(w.game.path().join("BugSplat64.dll")).unwrap(), HOST);
-    assert_eq!(std::fs::read(w.game.path().join("nevr-runtime.dll")).unwrap(), RT);
+    assert_eq!(std::fs::read(w.nevr.path().join("nevr-runtime.dll")).unwrap(), RT);
+    assert!(!w.game.path().join("nevr-runtime.dll").exists(), "the runtime is not written beside the game");
+    let mut beside: Vec<String> = std::fs::read_dir(w.game.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    beside.sort();
+    assert_eq!(beside, vec!["BugSplat64.dll", "echovr.exe"], "the host is the only file the install writes beside echovr.exe");
     let ev = events(&w);
     for want in ["run_start", "manifest_fetch", "manifest_check", "release_selected", "artifact_fetch", "plan", "file_write", "verify_installed", "run_end"] {
         assert!(ev.contains(&want.to_string()), "missing {want} in {ev:?}");
@@ -141,7 +161,56 @@ fn pc_plan_changes_nothing() {
     assert_eq!(out["plan"]["decision"], "install");
     assert_eq!(std::fs::read(w.game.path().join("BugSplat64.dll")).unwrap(), GAME);
     assert!(!w.game.path().join("nevr-runtime.dll").exists());
+    assert!(!w.nevr.path().join("nevr-runtime.dll").exists());
     assert!(!w.root.path().join("state/install-record.json").exists());
+}
+
+#[test]
+fn without_a_nevr_root_the_install_asks_for_one_and_changes_nothing() {
+    let w = world(false);
+    let dir = w.game.path().to_str().unwrap();
+    for extra in [vec![], vec!["--nevr-root", "relative/root"]] {
+        let o = Command::new(env!("CARGO_BIN_EXE_nevr-install"))
+            .args(["pc", "install", "--dir", dir, "--root", w.root.path().to_str().unwrap(), "--base", &w.base, "--pins", w.pins.to_str().unwrap(), "--now", NOW])
+            .args(&extra)
+            .env_remove("LOCALAPPDATA")
+            .output()
+            .unwrap();
+        let out: Value = serde_json::from_slice(&o.stdout).unwrap();
+        assert_eq!((o.status.code(), out["state"].as_str()), (Some(2), Some("needs-user")), "{extra:?} {out}");
+        assert!(out["reason"].as_str().unwrap().contains("nevr root") || out["reason"].as_str().unwrap().contains("--nevr-root"), "{out}");
+        assert_eq!(std::fs::read(w.game.path().join("BugSplat64.dll")).unwrap(), GAME);
+    }
+    assert!(!events_of(&w).contains(&"artifact_fetch".to_string()), "nothing is downloaded before the root is known");
+}
+
+#[test]
+fn an_older_release_over_a_newer_one_is_refused_unless_allowed() {
+    let newer = world_of("2.0.0", 6, false);
+    let dir = newer.game.path().to_str().unwrap().to_string();
+    let (code, out, err) = run(&newer, &["pc", "install", "--dir", &dir]);
+    assert_eq!(code, 0, "{out} {err}");
+    // The channel now names 1.0.0, served by another manifest (a higher manifest version, so the floor does not stop it).
+    let older = world_of("1.0.0", 7, false);
+    let (code, out, _) = run_in(&older, &newer, &["pc", "install", "--dir", &dir]);
+    assert_eq!((code, out["state"].as_str()), (2, Some("needs-user")), "{out}");
+    assert!(out["reason"].as_str().unwrap().contains("2.0.0") && out["reason"].as_str().unwrap().contains("--allow-downgrade"), "{out}");
+    assert_eq!(std::fs::read(newer.nevr.path().join("nevr-runtime.dll")).unwrap(), RT);
+    let (code, out, err) = run_in(&older, &newer, &["pc", "install", "--dir", &dir, "--allow-downgrade"]);
+    assert_eq!((code, out["state"].as_str()), (0, Some("installed")), "{out} {err}");
+}
+
+#[test]
+fn an_install_record_that_cannot_be_written_is_reported_and_the_installed_files_stay_installed() {
+    let w = world(false);
+    // A directory where the record's file goes: the files are installed and verified, only the informational record fails.
+    std::fs::create_dir_all(w.root.path().join("state/install-record.json")).unwrap();
+    let (code, out, _) = run(&w, &["pc", "install", "--dir", w.game.path().to_str().unwrap()]);
+    assert_eq!((code, out["state"].as_str()), (0, Some("installed")), "{out}");
+    assert!(out["reason"].as_str().unwrap().contains("install-record.json was not written"), "{out}");
+    assert_eq!(std::fs::read(w.game.path().join("BugSplat64.dll")).unwrap(), HOST);
+    let bad = records(&w).into_iter().find(|r| r["event"] == "install_record").expect("the failure is on record");
+    assert_eq!(bad["ok"], false);
 }
 
 #[test]

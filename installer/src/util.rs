@@ -80,6 +80,12 @@ pub fn semver_ok(v: &str) -> bool {
         && parts.iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) && (*p == "0" || !p.starts_with('0')))
 }
 
+/// Two `X.Y.Z` versions compared as numbers (`2.10.0` is above `2.9.0`); `None` when either is not `X.Y.Z`.
+pub fn semver_cmp(a: &str, b: &str) -> Option<std::cmp::Ordering> {
+    let parts = |v: &str| -> Option<Vec<u64>> { semver_ok(v).then(|| v.split('.').filter_map(|p| p.parse().ok()).collect()) };
+    Some(parts(a)?.cmp(&parts(b)?))
+}
+
 /// `v<version>/nevr-runtime-v<version>-<name>`, the name made of a-z 0-9 . - only: one version directory, one file.
 pub fn path_ok(version: &str, path: &str) -> bool {
     semver_ok(version)

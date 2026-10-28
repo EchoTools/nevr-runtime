@@ -11,8 +11,8 @@ use std::process::ExitCode;
 const USAGE: &str = "usage: nevr-install <command> [options]
   manifest verify [--from-dir DIR]          steps 1 to 7: fetch (or read DIR), verify, store, pick the channel's release
   quest plan|install [--no-device] [--serial S] [--version V] [--yes-uninstall]
-  pc plan|install --dir <folder with echovr.exe> [--version V]
-  pc launch-check --dir <folder> [--bootstrap-log FILE] [--version V]
+  pc plan|install --dir <folder with echovr.exe> [--nevr-root DIR] [--allow-downgrade] [--version V]
+  pc launch-check --dir <folder> [--nevr-root DIR] [--bootstrap-log FILE] [--version V]
 options: --root DIR  --base URL  --channel NAME  --log FILE  --state-dir DIR  --work-dir DIR  --pins FILE  --now UTC
 exit codes: 0 installed or nothing to do, 1 failed with nothing changed, 2 needs the player, 3 restored";
 
@@ -38,7 +38,7 @@ struct Args {
 
 impl Args {
     fn parse(argv: Vec<String>) -> Args {
-        let flags = ["--no-device", "--yes-uninstall"];
+        let flags = ["--no-device", "--yes-uninstall", "--allow-downgrade"];
         let (mut rest, mut opts) = (vec![], vec![]);
         let mut it = argv.into_iter();
         while let Some(a) = it.next() {
@@ -92,6 +92,15 @@ fn main() -> ExitCode {
     };
     let root = args.val("--root").map(PathBuf::from).unwrap_or_else(default_root);
     let mut cfg = Config::new(platform, &root);
+    // The nevr root (ADR 0012): `--nevr-root`, else %LOCALAPPDATA%\nevr\echovr on Windows, else unknown.
+    cfg.nevr_root = args.val("--nevr-root").map(PathBuf::from).or_else(|| {
+        if cfg!(windows) {
+            std::env::var("LOCALAPPDATA").ok().filter(|p| !p.is_empty()).map(|p| PathBuf::from(p).join("nevr").join("echovr"))
+        } else {
+            None
+        }
+    });
+    cfg.allow_downgrade = args.flag("--allow-downgrade");
     if let Some(v) = args.val("--base") {
         cfg.base = v;
     }
@@ -159,7 +168,8 @@ fn main() -> ExitCode {
                 let (m, v) = sess.release(version.as_deref())?;
                 let art = nevr_install::manifest::find(&m, &v, "windows-zip", None)?;
                 let sha = |n: &str| art.contents.iter().find(|c| c.path == n).map(|c| c.sha256.clone()).unwrap_or_default();
-                let log_path = args.val("--bootstrap-log").map(PathBuf::from).unwrap_or_else(|| dir.join("logs").join("nevr-bootstrap.jsonl"));
+                // The host writes its log under the nevr root (ADR 0012); the game folder is the fallback for an older host.
+                let log_path = args.val("--bootstrap-log").map(PathBuf::from).unwrap_or_else(|| sess.cfg.nevr_root.as_ref().map(|r| r.join("logs")).unwrap_or_else(|| dir.join("logs")).join("nevr-bootstrap.jsonl"));
                 let text = std::fs::read_to_string(&log_path).map_err(|e| nevr_install::error::Error::new(11, format!("{}: {e}", log_path.display())))?;
                 match nevr_install::pc::launch_witness(&text, &sha("BugSplat64.dll"), &sha("nevr-runtime.dll")) {
                     Ok(w) => {

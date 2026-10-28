@@ -25,6 +25,11 @@ pub struct Config {
     pub min_manifest_version: u64,
     /// Overrides the clock (tests); `None` reads the system clock.
     pub now: Option<String>,
+    /// The nevr root (ADR 0012): where the PC plan puts the runtime, the record and every set-aside file. `None` when the
+    /// player's profile folder is unknown; a PC install then asks for `--nevr-root` and changes nothing.
+    pub nevr_root: Option<PathBuf>,
+    /// Install an older release over a newer one (a PC install refuses by default).
+    pub allow_downgrade: bool,
     /// Seconds between the two retries of a failed signature check (the pair may have been caught between two writes).
     pub retry_delay_secs: u64,
 }
@@ -41,6 +46,8 @@ impl Config {
             pins: Pins::builtin(),
             min_manifest_version: MIN_MANIFEST_VERSION,
             now: None,
+            nevr_root: None,
+            allow_downgrade: false,
             retry_delay_secs: 3,
         }
     }
@@ -209,16 +216,23 @@ impl Session {
             "manifest_version": m["manifest_version"],
             "last_manifest_sha256": state.last_sha256,
             "artifacts": arts,
-            "layout": if self.cfg.platform == "quest" { quest::MEDIA_ROOT } else { "beside echovr.exe" },
+            "layout": if self.cfg.platform == "quest" { quest::MEDIA_ROOT } else { "host in the game folder, everything else in the nevr root" },
             "time": crate::util::now_utc().unwrap_or_default(),
         });
         crate::util::write_atomic(&self.cfg.state_dir.join("install-record.json"), &serde_json::to_vec_pretty(&rec).expect("record serializes")).map_err(|e| Error::new(9, format!("install-record.json: {e}")))
     }
 
-    /// The PC command: verify the zip, plan against `dir`, and with `install` execute.
+    /// The PC command: verify the zip, plan against `dir` (the game folder) and the nevr root, and with `install` execute.
     pub fn pc(&self, version: Option<&str>, dir: &Path, install: bool, game_running: bool) -> Result<(Ended, Value)> {
         let (m, v) = self.release(version)?;
         let art = manifest::find(&m, &v, "windows-zip", None)?;
+        // The root is settled before anything is fetched or changed.
+        let root = match &self.cfg.nevr_root {
+            Some(r) if r.is_absolute() => r.clone(),
+            Some(r) => return self.pc_stop(&format!("--nevr-root {} is not an absolute path", r.display())),
+            None => return self.pc_stop("the nevr root is unknown (LOCALAPPDATA is not set); pass --nevr-root"),
+        };
+        let layout = pc::Layout::new(dir, root);
         let zip_path = self.cfg.work_dir.join(art.path.rsplit('/').next().unwrap_or("windows.zip"));
         std::fs::create_dir_all(&self.cfg.work_dir).map_err(|e| Error::new(8, format!("{}: {e}", self.cfg.work_dir.display())))?;
         let url = format!("{}/{}", self.cfg.base, art.path);
@@ -226,39 +240,63 @@ impl Session {
         self.log.info("artifact_fetch", 8, json!({"kind": "windows-zip", "url": url, "size": art.size, "bytes": f.bytes, "sha256": f.sha256, "ok": true, "resumed_from": f.resumed_from}))?;
         let n = artifact::verify_zip(&zip_path, &art, false)?;
         self.log.info("verify_installed", 8, json!({"ok": true, "what": "zip-members", "expected": art.contents.len(), "observed": n}))?;
-        let pkg = read_package(&zip_path, &art)?;
-        let observed = pc::observe(dir, game_running)?;
-        let plan = pc::plan(&observed, &pkg);
-        self.log.info("plan", 9, json!({"decision": plan.decision, "reasons": plan.reasons, "action": plan.action.map(|a| format!("{a:?}")), "installed": {"host_sha256": observed.target_sha, "runtime_sha256": observed.runtime_sha}}))?;
+        // The bytes that are planned and installed are the bytes just checked against the manifest, not a second read.
+        let pkg = read_package(&zip_path, &art, &v)?;
+        let observed = pc::observe(&layout, game_running)?;
+        let plan = pc::plan(&observed, &pkg, self.cfg.allow_downgrade);
+        self.log.info("plan", 9, json!({"decision": plan.decision, "reasons": plan.reasons, "action": plan.action.map(|a| format!("{a:?}")), "installed": {"host_sha256": observed.target_sha, "runtime_sha256": observed.runtime_sha}, "nevr_root": layout.root.display().to_string()}))?;
         let report = plan.to_json();
         let ended = match plan.outcome {
             pc::Outcome::Unchanged => self.end("unchanged", &plan.reasons.join("; "))?,
             pc::Outcome::NeedsUser => self.end("needs-user", &plan.reasons.join("; "))?,
             pc::Outcome::Proceed if !install => self.end("unchanged", "plan only: nothing was changed")?,
             pc::Outcome::Proceed => {
-                let end = pc::execute(dir, &plan, &observed, &pkg, &self.log)?;
+                let end = pc::execute(&layout, &plan, &observed, &pkg, &self.log)?;
                 if end.state == "installed" {
-                    pc::verify_installed(dir, &pkg, &self.log)?;
-                    self.write_record(&v, &m, &Some(art.clone()), &None)?;
+                    // The files are installed and read back; the installer's own record of it is informational, so a
+                    // failure to write it is reported, not turned into a failed install.
+                    match self.write_record(&v, &m, &Some(art.clone()), &None) {
+                        Ok(()) => self.end_with(end.state, &end.reason, false)?,
+                        Err(e) => {
+                            self.log.error("install_record", 9, json!({"ok": false, "reason": e.to_string()}))?;
+                            self.end_with("installed", &format!("installed, but install-record.json was not written: {e}"), false)?
+                        }
+                    }
+                } else {
+                    self.end_with(end.state, &end.reason, end.state == "unchanged")?
                 }
-                self.end_with(end.state, &end.reason, end.state == "unchanged")?
             }
         };
         Ok((ended, report))
     }
+
+    /// A PC run that stops before it fetches or changes anything: the player has to give the root.
+    fn pc_stop(&self, why: &str) -> Result<(Ended, Value)> {
+        self.log.error("plan", 9, json!({"decision": "needs-user", "reasons": [why]}))?;
+        let report = json!({"outcome": "needs-user", "decision": "needs-user", "reasons": [why], "action": null, "stale_record": false});
+        Ok((self.end("needs-user", why)?, report))
+    }
 }
 
-/// The two files the PC plan installs, read from a zip whose members already passed `verify_zip`.
-pub fn read_package(zip_path: &Path, art: &Artifact) -> Result<pc::Package> {
+/// The two files the PC plan installs, read from the zip. The zip is read into memory once and hashed whole against the
+/// manifest, then each member is hashed against `contents`: what is returned is exactly what the manifest names, even if
+/// the file on disk was swapped after `verify_zip` looked at it.
+pub fn read_package(zip_path: &Path, art: &Artifact, version: &str) -> Result<pc::Package> {
     use std::io::Read;
-    let file = std::fs::File::open(zip_path).map_err(|e| Error::new(9, format!("{}: {e}", zip_path.display())))?;
-    let mut z = zip::ZipArchive::new(file).map_err(|e| Error::new(9, e.to_string()))?;
+    let bytes = std::fs::read(zip_path).map_err(|e| Error::new(9, format!("{}: {e}", zip_path.display())))?;
+    if bytes.len() as u64 != art.size || crate::util::sha256_hex(&bytes) != art.sha256 {
+        return Err(Error::new(8, format!("{} does not match the manifest's size and sha256 when it is read for the install", zip_path.display())));
+    }
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| Error::new(9, e.to_string()))?;
     let mut take = |name: &str| -> Result<Vec<u8>> {
         let c = art.contents.iter().find(|c| c.path == name).ok_or_else(|| Error::new(9, format!("the windows-zip lists no {name}")))?;
         let mut e = z.by_name(name).map_err(|e| Error::new(9, format!("{name}: {e}")))?;
         let mut b = Vec::with_capacity(c.size as usize);
         e.by_ref().take(c.size + 1).read_to_end(&mut b).map_err(|e| Error::new(9, format!("{name}: {e}")))?;
+        if b.len() as u64 != c.size || crate::util::sha256_hex(&b) != c.sha256 {
+            return Err(Error::new(8, format!("{name} in the zip does not match the manifest's size and sha256")));
+        }
         Ok(b)
     };
-    Ok(pc::Package { host: take(pc::HOST)?, runtime: take(pc::RUNTIME)? })
+    Ok(pc::Package { host: take(pc::HOST)?, runtime: take(pc::RUNTIME)?, version: version.to_string() })
 }
