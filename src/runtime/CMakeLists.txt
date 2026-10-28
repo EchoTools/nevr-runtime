@@ -90,6 +90,8 @@ set(PATCHES_SOURCES
     "patch/arena_public_clock.cpp"
     "patch/lobby_full_backoff.cpp"
     "patch/menu_version_label.cpp"
+    # #906, ADR 0017 D4: the main-menu cards (pure logic in menu_page.h and menu_cards.h).
+    "patch/menu_cards.cpp"
     "patch/splash_skip.cpp"
     "patch/ui_texture_mips.cpp"
     "patch/social_facade.cpp"
@@ -182,6 +184,8 @@ set(PATCHES_HEADERS
     "compat/ws_bridge.h"
     "compat/socket_role.h"
     "patch/invite_wizard.h"
+    "patch/menu_page.h"
+    "patch/menu_cards.h"
     "patch/guild_picker.h"
     "compat/evr_codec.h"
     "compat/lobby_frame.h"
@@ -1727,8 +1731,8 @@ if(BUILD_TESTING)
     # test_plugin_log.cpp (#598, header-only ext/plugin_log.h) ride in this
     # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp lifecycle/crash_dump_format.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp lifecycle/crash_dump_format.cpp
+      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp lifecycle/crash_dump_format.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp lifecycle/crash_dump_format.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src
       ${CMAKE_SOURCE_DIR}/plugins/common/include)
