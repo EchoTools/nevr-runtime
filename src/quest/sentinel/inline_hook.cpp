@@ -7,6 +7,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
 
@@ -18,6 +19,11 @@ namespace {
 pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
 std::uintptr_t g_installed[kMaxInlineHooks] = {};
 std::size_t g_installedCount = 0;
+
+// Every protection change goes through g_protect so a host test can make one fail (InlineHookTestAccess); in the
+// sentinel it is mprotect.
+int RealProtect(void* addr, std::size_t len, int prot) { return mprotect(addr, len, prot); }
+ProtectFn g_protect = &RealProtect;
 
 class LockGuard {
  public:
@@ -70,19 +76,45 @@ bool IsReadExecute(const char (&perms)[5]) {
   return perms[0] == 'r' && perms[1] == '-' && perms[2] == 'x';
 }
 
-void LogResult(LogLevel level, InlineStatus status, const void* target, const void* trampoline) {
+// The permissions of the page that holds `target` as /proc/self/maps shows them now, "unknown" when they cannot be read.
+struct PagePerms {
+  char text[8];
+};
+PagePerms PagePermsNow(const void* target) {
+  PagePerms p = {};
+  char perms[5] = {};
+  if (MappingPerms(reinterpret_cast<std::uintptr_t>(target), perms)) {
+    std::memcpy(p.text, perms, sizeof perms);
+  } else {
+    std::memcpy(p.text, "unknown", sizeof "unknown");
+  }
+  return p;
+}
+
+// One line per outcome. A failed protection change carries `op` (which change) and `err` (its errno, read by the
+// caller right after the call) and `pagePerms`, the target page's permissions read right after that call (a caller
+// that goes on to change the page again reads them first), so the line says why the page is in the state it is in.
+void LogResult(LogLevel level, InlineStatus status, const void* target, const void* trampoline,
+               const char* op = nullptr, int err = 0, const char* note = nullptr, int retryErr = 0,
+               const PagePerms* pagePerms = nullptr) {
   char tb[19];
   char rb[19];
+  LogField fields[8] = {{"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}};
+  std::size_t n = 0;
+  fields[n++] = LogField("status", InlineStatusName(status));
+  fields[n++] = LogField("target", HexString(tb, reinterpret_cast<std::uintptr_t>(target)));
   if (trampoline != nullptr) {
-    LogFields(level, "inline_hook",
-              {{"status", InlineStatusName(status)},
-               {"target", HexString(tb, reinterpret_cast<std::uintptr_t>(target))},
-               {"trampoline", HexString(rb, reinterpret_cast<std::uintptr_t>(trampoline))}});
-  } else {
-    LogFields(level, "inline_hook",
-              {{"status", InlineStatusName(status)},
-               {"target", HexString(tb, reinterpret_cast<std::uintptr_t>(target))}});
+    fields[n++] = LogField("trampoline", HexString(rb, reinterpret_cast<std::uintptr_t>(trampoline)));
   }
+  if (op != nullptr) fields[n++] = LogField("op", op);
+  if (err != 0) {
+    fields[n++] = LogField("errno", err);
+    const PagePerms now = pagePerms != nullptr ? *pagePerms : PagePermsNow(target);
+    fields[n++] = LogField("page_perms", now.text);
+  }
+  if (retryErr != 0) fields[n++] = LogField("retry_errno", retryErr);
+  if (note != nullptr) fields[n++] = LogField("note", note);
+  LogFieldList(level, "inline_hook", fields, n);
 }
 
 // The four words of the detour: LDR x16,#8 ; BR x16 ; .quad detour (little-endian 64-bit address).
@@ -109,6 +141,7 @@ const char* InlineStatusName(InlineStatus status) {
     case InlineStatus::kTrampolineFailed: return "trampoline_failed";
     case InlineStatus::kProtectFailed: return "protect_failed";
     case InlineStatus::kWriteVerifyFailed: return "write_verify_failed";
+    case InlineStatus::kRestoreProtectUndone: return "restore_protect_undone";
     case InlineStatus::kRestoreProtectFailed: return "restore_protect_failed";
   }
   return "unknown";
@@ -149,6 +182,13 @@ void LogRefusal(const void* target, const RelocRefusal& refusal) {
 }
 
 }  // namespace
+
+ProtectFn InlineHook::SetProtectForTest(ProtectFn fn) {
+  LockGuard lock;
+  const ProtectFn previous = g_protect;
+  g_protect = fn != nullptr ? fn : &RealProtect;
+  return previous;
+}
 
 InlineStatus CheckInlineTarget(const void* target, const InlinePrologue& expected) noexcept {
   Trampoline tramp;
@@ -199,14 +239,16 @@ InlineStatus InlineHook::Install(const void* target, const InlinePrologue& expec
   const std::size_t pageSize = PageSize();
   void* const tramp = mmap(nullptr, pageSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (tramp == MAP_FAILED) {
-    LogResult(LogLevel::kError, InlineStatus::kTrampolineFailed, target, nullptr);
+    const int err = errno;
+    LogResult(LogLevel::kError, InlineStatus::kTrampolineFailed, target, nullptr, "trampoline_map", err);
     return InlineStatus::kTrampolineFailed;
   }
   const std::size_t trampolineBytes = relocated.count * sizeof(std::uint32_t);
   std::memcpy(tramp, relocated.words, trampolineBytes);
-  if (mprotect(tramp, pageSize, PROT_READ | PROT_EXEC) != 0) {
+  if (g_protect(tramp, pageSize, PROT_READ | PROT_EXEC) != 0) {
+    const int err = errno;
     munmap(tramp, pageSize);
-    LogResult(LogLevel::kError, InlineStatus::kTrampolineFailed, target, nullptr);
+    LogResult(LogLevel::kError, InlineStatus::kTrampolineFailed, target, nullptr, "trampoline_rx", err);
     return InlineStatus::kTrampolineFailed;
   }
   __builtin___clear_cache(static_cast<char*>(tramp), static_cast<char*>(tramp) + trampolineBytes);
@@ -224,10 +266,11 @@ InlineStatus InlineHook::Install(const void* target, const InlinePrologue& expec
   };
 
   const std::uintptr_t pageStart = addr & ~(static_cast<std::uintptr_t>(pageSize) - 1);
-  if (mprotect(reinterpret_cast<void*>(pageStart), pageSize, PROT_READ | PROT_WRITE) != 0) {
+  if (g_protect(reinterpret_cast<void*>(pageStart), pageSize, PROT_READ | PROT_WRITE) != 0) {
+    const int err = errno;
     *originalOut = previousOriginal;
     munmap(tramp, pageSize);
-    LogResult(LogLevel::kError, InlineStatus::kProtectFailed, target, nullptr);
+    LogResult(LogLevel::kError, InlineStatus::kProtectFailed, target, nullptr, "target_rw", err);
     return InlineStatus::kProtectFailed;
   }
 
@@ -242,9 +285,14 @@ InlineStatus InlineHook::Install(const void* target, const InlinePrologue& expec
   if (LoadWord(patch + 1) != detourWords[1] || LoadWord(patch + 2) != detourWords[2] ||
       LoadWord(patch + 3) != detourWords[3]) {
     rollBack(patch);
-    mprotect(reinterpret_cast<void*>(pageStart), pageSize, PROT_READ | PROT_EXEC);
     *originalOut = previousOriginal;
     munmap(tramp, pageSize);
+    if (g_protect(reinterpret_cast<void*>(pageStart), pageSize, PROT_READ | PROT_EXEC) != 0) {
+      const int err = errno;
+      LogResult(LogLevel::kError, InlineStatus::kRestoreProtectFailed, target, nullptr, "target_rx", err,
+                "fatal: page left writable and not executable, original bytes in place");
+      return InlineStatus::kRestoreProtectFailed;
+    }
     LogResult(LogLevel::kError, InlineStatus::kWriteVerifyFailed, target, nullptr);
     return InlineStatus::kWriteVerifyFailed;
   }
@@ -254,10 +302,27 @@ InlineStatus InlineHook::Install(const void* target, const InlinePrologue& expec
   const bool committedVerified = LoadWord(patch) == detourWords[0];
   g_installed[g_installedCount++] = addr;
 
-  if (mprotect(reinterpret_cast<void*>(pageStart), pageSize, PROT_READ | PROT_EXEC) != 0) {
-    // The hook is committed and the page is left writable and not executable. Nothing here can
-    // undo that; the caller must treat it as fatal.
-    LogResult(LogLevel::kError, InlineStatus::kRestoreProtectFailed, target, tramp);
+  if (g_protect(reinterpret_cast<void*>(pageStart), pageSize, PROT_READ | PROT_EXEC) != 0) {
+    // The page is writable and not executable: the first call into it would fault. Put the original
+    // words back while it is still writable (word 0 first, the commit in reverse), forget the hook, and
+    // try to make the page executable again with the original bytes in it.
+    const int firstErr = errno;
+    const PagePerms atFailure = PagePermsNow(target);
+    StoreWord(patch, expected.words[0]);
+    rollBack(patch);
+    --g_installedCount;
+    *originalOut = previousOriginal;
+    munmap(tramp, pageSize);
+    if (g_protect(reinterpret_cast<void*>(pageStart), pageSize, PROT_READ | PROT_EXEC) == 0) {
+      __builtin___clear_cache(reinterpret_cast<char*>(patch), reinterpret_cast<char*>(patch) + kInlinePatchBytes);
+      LogResult(LogLevel::kError, InlineStatus::kRestoreProtectUndone, target, nullptr, "target_rx", firstErr,
+                "hook undone and skipped, original bytes restored, page executable again", 0, &atFailure);
+      return InlineStatus::kRestoreProtectUndone;
+    }
+    const int retryErr = errno;
+    LogResult(LogLevel::kError, InlineStatus::kRestoreProtectFailed, target, nullptr, "target_rx", firstErr,
+              "fatal: page left writable and not executable, original bytes in place; the first call into it faults",
+              retryErr, &atFailure);
     return InlineStatus::kRestoreProtectFailed;
   }
   // The flush takes a writable range; the patch above was written through the page's own mapping.
