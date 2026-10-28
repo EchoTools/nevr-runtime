@@ -89,12 +89,18 @@ impl Session {
     /// Stages the release the channel names, unless it is the running one or a failed one. Returns the run's end and the
     /// report `{"action": "none"|"staged"|"blocked", "version", "direction", "files": [...], "reason"}`.
     pub fn pc_stage(&self, version: Option<&str>, root: &Path, cur: &Current) -> Result<(Ended, Value)> {
+        let (reason, report) = self.pc_stage_body(version, root, cur)?;
+        Ok((self.end("unchanged", &reason)?, report))
+    }
+
+    /// `pc_stage` without the `run_end` record, for a caller (the C ABI) that ends the run itself. Returns the end reason.
+    pub fn pc_stage_body(&self, version: Option<&str>, root: &Path, cur: &Current) -> Result<(String, Value)> {
         let (m, v) = self.release(version)?;
         let dir = direction(&cur.version, &v);
-        let none = |action: &str, reason: &str| -> Result<(Ended, Value)> {
+        let none = |action: &str, reason: &str| -> Result<(String, Value)> {
             self.log.info("stage_end", 8, json!({"version": v, "ok": true, "action": action, "reason": reason, "direction": dir}))?;
             let report = json!({"action": action, "version": v, "direction": dir, "reason": reason, "files": []});
-            Ok((self.end("unchanged", &format!("{action}: {reason}"))?, report))
+            Ok((format!("{action}: {reason}"), report))
         };
         let zips = m["releases"][v.as_str()]["artifacts"].as_array().map(|a| a.iter().filter(|x| x["kind"] == "windows-zip").count()).unwrap_or(0);
         if zips == 0 {
@@ -122,7 +128,7 @@ impl Session {
             "files": wanted.iter().map(|c| json!({"path": c.path, "size": c.size, "sha256": c.sha256})).collect::<Vec<_>>()});
         if published.as_deref() == Some(v.as_str()) && target.is_dir() && members_intact(&target, &wanted) {
             self.log.info("stage_end", 8, json!({"version": v, "ok": true, "action": "staged", "reason": "already_staged", "direction": dir, "files": wanted.len()}))?;
-            return Ok((self.end("unchanged", "staged: already_staged")?, report("already_staged")));
+            return Ok(("staged: already_staged".to_string(), report("already_staged")));
         }
         let _ = fs::remove_dir_all(&target);
 
@@ -160,7 +166,7 @@ impl Session {
         match staged {
             Ok(()) => {
                 self.log.info("stage_end", 8, json!({"version": v, "ok": true, "action": "staged", "direction": dir, "files": wanted.len()}))?;
-                Ok((self.end("unchanged", &format!("staged {v} ({dir})"))?, report("staged")))
+                Ok((format!("staged {v} ({dir})"), report("staged")))
             }
             Err(e) => {
                 self.log.error("stage_member", 8, json!({"ok": false, "reason": e.msg}))?;

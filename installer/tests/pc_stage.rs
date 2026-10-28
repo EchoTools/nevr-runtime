@@ -445,3 +445,35 @@ fn stage_needs_a_root_and_writes_nothing_without_one() {
 
 #[allow(dead_code)]
 fn _unused(_: &Path) {}
+
+#[test]
+fn a_c_program_stages_through_nevr_pc_stage_and_ends_the_run_once() {
+    // The static library the C program links (a `cargo test` run builds only the test profile's rlib).
+    let manifest = format!("{}/Cargo.toml", env!("CARGO_MANIFEST_DIR"));
+    let b = Command::new(env!("CARGO")).args(["build", "--lib", "--manifest-path", &manifest]).output().unwrap();
+    assert!(b.status.success(), "{}", String::from_utf8_lossy(&b.stderr));
+    let exe = std::env::current_exe().unwrap();
+    let lib = exe.parent().unwrap().parent().unwrap().join("libnevr_install.a");
+    assert!(lib.exists(), "{}", lib.display());
+
+    let w = world();
+    let base = publish(&w, &Opts::new());
+    let bin = w.keys.path().join("stage_check");
+    let cc = Command::new("cc")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/c/stage_check.c"))
+        .arg("-I").arg(concat!(env!("CARGO_MANIFEST_DIR"), "/include"))
+        .arg(&lib).args(["-lpthread", "-ldl", "-lm", "-Wall", "-Werror", "-o"]).arg(&bin)
+        .output().expect("cc is installed");
+    assert!(cc.status.success(), "{}", String::from_utf8_lossy(&cc.stderr));
+
+    let cfg = json!({"platform": "pc", "nevr_root": w.root.path(), "base": base, "pins": format!("T {}\n", w.key.b64), "now": NOW}).to_string();
+    let o = Command::new(&bin).arg(&cfg).arg(w.root.path()).arg(current("0.9.0", b"old runtime").to_string()).output().unwrap();
+    let (out, err) = (String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    assert!(o.status.success(), "stdout: {out}\nstderr: {err}");
+    let report: Value = serde_json::from_str(out.lines().find_map(|l| l.strip_prefix("stage=")).unwrap()).unwrap();
+    assert_eq!((report["action"].as_str(), report["version"].as_str()), (Some("staged"), Some("1.0.0")), "{report}");
+    assert_eq!(std::fs::read(staging(&w).join("1.0.0/nevr-runtime.dll")).unwrap(), RT);
+    let ev = events(&w);
+    assert_eq!(ev.iter().filter(|e| *e == "run_end").count(), 1, "the caller ends the run, the stage does not: {ev:?}");
+    assert!(ev.contains(&"stage_end".to_string()) && ev.contains(&"stage_member".to_string()), "{ev:?}");
+}

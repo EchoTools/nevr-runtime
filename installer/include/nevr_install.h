@@ -54,6 +54,14 @@ int NevrArtifactVerifyZip(NevrSession *s, const char *version, const char *kind,
  *  "data": {"legacy": bool, "media": bool} | null, "consent_uninstall": bool} */
 int NevrPlanBuild(NevrSession *s, const char *version, const char *observed_json, char **out_json);
 
+/* Self-update (docs/adr/0024-pc-self-update.md): stages the channel's release under <root_dir>/update/staging/<version> unless it
+ * is the running one or a quarantined one, after NevrManifestFetch has verified the manifest. Open the session with
+ * "nevr_root" in config_json so state, log and downloads live under the nevr root. current_json (may be NULL):
+ * {"version": "...", "runtime_sha256": "<hex>", "quarantine": [{"version": "...", "runtime_sha256": "<hex>"}]}.
+ * Result: {"action": "none"|"staged"|"blocked", "version", "direction": "upgrade"|"downgrade"|"replace"|"install",
+ *          "reason", "files": [{"path", "size", "sha256"}]}. Nothing is published unless every file passed its checks. */
+int NevrPcStage(NevrSession *s, const char *root_dir, const char *current_json, char **out_json);
+
 /* Ends the run: state is "installed", "unchanged", "restored" or "needs-user". */
 int NevrRunEnd(NevrSession *s, const char *state, const char *reason);
 
