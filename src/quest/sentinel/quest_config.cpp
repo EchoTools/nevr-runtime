@@ -260,6 +260,7 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   want.uiEventProbe = ReadBool(cfg, kUiEventProbeKey, want.social, r);
   want.presenceLocal = !ReadBool(cfg, kSendPresenceToMetaKey, true, r);
   ReadTextureQuality(cfg, r);
+  r.config.plugins = cfg.Plugins();
 }
 
 void Reject(LoadResult& r, const std::string& path, const std::string& reason) {

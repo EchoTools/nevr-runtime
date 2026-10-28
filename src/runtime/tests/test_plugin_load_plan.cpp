@@ -33,6 +33,7 @@ namespace {
 using nevr::NevrConfig;
 using nevr_plugincfg::ArgsToJson;
 using nevr_plugincfg::BuildLoadPlan;
+using nevr_plugincfg::BuildLoadPlanFromSpecs;
 
 // ---------------------------------------------------------------------------
 // 1. BuildLoadPlan — every configured entry, in list order, enabled flag carried.
@@ -57,6 +58,36 @@ plugins:
   EXPECT_TRUE(plan[0].enabled);          // absent enabled defaults to true
   EXPECT_FALSE(plan[1].enabled);
   EXPECT_TRUE(plan[2].enabled);
+}
+
+// The Quest sentinel keeps the parsed specs, not the NevrConfig (#438): the plan from the specs is the plan from the config.
+TEST(PluginLoadPlan, PlanFromSpecsEqualsPlanFromConfig) {
+  const NevrConfig cfg = NevrConfig::LoadFromString(R"YAML(
+plugins:
+  - name: first
+    file: first.dll
+    required: true
+    early: true
+    args:
+      level: 3
+  - name: middle
+    enabled: false
+)YAML");
+  const std::vector<PluginLoadItem> fromConfig = BuildLoadPlan(cfg);
+  const std::vector<PluginLoadItem> fromSpecs = BuildLoadPlanFromSpecs(cfg.Plugins());
+  ASSERT_EQ(fromSpecs.size(), 2u);
+  ASSERT_EQ(fromConfig.size(), fromSpecs.size());
+  for (std::size_t i = 0; i < fromSpecs.size(); ++i) {
+    EXPECT_EQ(fromSpecs[i].name, fromConfig[i].name);
+    EXPECT_EQ(fromSpecs[i].file, fromConfig[i].file);
+    EXPECT_EQ(fromSpecs[i].enabled, fromConfig[i].enabled);
+    EXPECT_EQ(fromSpecs[i].required, fromConfig[i].required);
+    EXPECT_EQ(fromSpecs[i].early, fromConfig[i].early);
+    EXPECT_EQ(fromSpecs[i].args_json, fromConfig[i].args_json);
+  }
+  EXPECT_TRUE(fromSpecs[0].early);
+  EXPECT_NE(fromSpecs[0].args_json.find("level"), std::string::npos);
+  EXPECT_TRUE(BuildLoadPlanFromSpecs({}).empty());
 }
 
 TEST(PluginLoadPlan, FileDefaultsToNamePlusDll) {

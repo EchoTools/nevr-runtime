@@ -102,6 +102,11 @@ struct NvrGameContext {
     const char* level_name;     /* level_symbol's name when the host's symbol table resolves it, else nullptr (a
                                  *   level a plugin registered is not in the table: compare level_symbol with the
                                  *   CSymbol64 of the name your config gives you). Process-lifetime stable. */
+
+    /* --- Quest additions (#438; additive, no version bump: ADR 0019, section 4) --- */
+    const char* game_build_id;  /* Quest only: the running libr15's build ID in lowercase hex, process-lifetime
+                                 *   stable. nullptr on PC, and on a Quest host that could not read it. A plugin
+                                 *   checks ctx_size covers it first, and NEVR_HOST_PLATFORM_QUEST is set. */
 };
 
 /* Host capability flags */
@@ -111,6 +116,8 @@ enum NvrHostFlags : uint32_t {
     NEVR_HOST_IS_CLIENT     = 0x04, /* running as client */
     NEVR_HOST_COMBAT_MODE   = 0x08, /* game is in combat mode */
     NEVR_HOST_IS_HEADLESS   = 0x10, /* running in headless mode (no graphics/audio) */
+    NEVR_HOST_PLATFORM_QUEST = 0x20, /* running on Quest (#438): base_addr is the libr15 load base, net_game is
+                                      *   null and game_state is 0 until the Quest host measures a source for them */
 };
 
 /*

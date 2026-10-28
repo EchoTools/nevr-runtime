@@ -1,0 +1,122 @@
+// The Quest plugin loader (docs/adr/0019-quest-plugin-loader.md, slice 1).
+//
+// Pure policy over a `Platform`: the host test gives it a fake platform and real fixture shared objects, the sentinel gives it
+// the one that reads the native library directory and calls dlopen (plugin_platform.h). No Android header is included here.
+//
+// One `plugin_load` record ends every plan entry, whatever its outcome (loaded, refused, disabled, not_started, failed). The
+// loader never throws and never ends the process: `required` on a client is recorded and the game goes on.
+//
+// What a plugin sees is the existing C ABI (extension/plugin_interface.h): the same NvrGameContext as on PC, with
+// base_addr the libr15 load base, net_game null, game_state 0, flags IS_CLIENT | PLATFORM_QUEST, the level fields empty (no
+// Quest source for the game object exists before the host tick, ADR 0019 slice 4), and game_build_id the running libr15's
+// build ID. The per-frame and state-change exports are not called in slice 1: nothing ticks them yet.
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <string>
+#include <vector>
+
+#include "extension/plugin_interface.h"
+#include "quest/plugin/plugin_image.h"
+#include "quest/plugin/plugin_plan.h"
+
+namespace nevr_quest::plugin {
+
+// The one `plugin_load` record of a plan entry. Unknown values are fixed tokens, never empty: "none" (the file was not
+// read: the plan refused or disabled the entry first), "unavailable" (the file could not be read).
+struct LoadRecord {
+  std::string name;
+  std::string file;
+  std::string sha256 = "none";           // of the bytes the loader read
+  std::string pluginBuildId = "none";    // the plugin file's GNU build ID
+  std::string gameBuildId = "none";      // the running libr15's
+  PluginPhase phase = PluginPhase::Normal;
+  Outcome outcome = Outcome::kNotStarted;
+  std::string reason;                    // a reason:: token; empty for `loaded`
+  bool required = false;
+  std::string argKeys;                   // the keys of the entry's args, never the values
+};
+
+// The loader's view of the world. Every method may throw std::exception; the loader contains it.
+class Platform {
+ public:
+  virtual ~Platform() = default;
+  // The bytes of `file` in the native library directory; false when they cannot be read.
+  virtual bool ReadFile(const std::string& file, std::vector<std::uint8_t>* bytes) = 0;
+  // dlopen of `file`; null on failure.
+  virtual void* Open(const std::string& file) = 0;
+  virtual void* Symbol(void* handle, const char* name) = 0;
+  // The running libr15's build ID, lowercase hex; "" when it cannot be read.
+  virtual std::string GameBuildId() = 0;
+  virtual std::uintptr_t GameBase() = 0;
+  virtual void Emit(const LoadRecord& record) = 0;
+  // One line of the plan: how many entries, and how each stands at the end of the plan step.
+  virtual void EmitPlan(std::size_t entries, std::size_t early, std::size_t normal, std::size_t refused,
+                        std::size_t disabled) = 0;
+  // A line a plugin logged through ctx->log, already in the `[NEVR.PLUGIN] plugin=<id> ...` shape. `level` is an
+  // NevrLogLevel value. May be called from any thread.
+  virtual void PluginLine(std::uint32_t level, const std::string& line) = 0;
+};
+
+struct Options {
+  std::uint16_t machine = kMachineAarch64;  // the host test builds its fixtures for x86-64
+  bool earlySupported = true;               // ADR 0019 P10, decided on a headset: false refuses `early` entries
+};
+
+class Loader {
+ public:
+  Loader(Platform& platform, Options options);
+  ~Loader();
+  Loader(const Loader&) = delete;
+  Loader& operator=(const Loader&) = delete;
+
+  // Builds the plan and writes the record of every entry the plan alone settled (disabled, refused), then the plan line.
+  // Runs no plugin code. Call once.
+  void Plan(std::vector<PluginLoadItem> items);
+
+  // Loads the pending entries of `phase`, in list order, each ending in its one record. The normal pass also takes the
+  // `early` entries when no early pass ran (PluginInPhase), so a boot path that never reaches the early moment still loads
+  // them.
+  void RunPhase(PluginPhase phase);
+
+  // Ends every still-pending entry as `not_started` with `reasonToken`.
+  void Finish(const char* reasonToken);
+
+  // How many entries still wait for `phase` (counting the early ones in the normal phase when no early pass ran).
+  std::size_t PendingFor(PluginPhase phase) const;
+  const std::vector<PlanEntry>& Entries() const { return entries_; }
+
+ private:
+  // What the query API (ctx->get_plugin_info) hands out: the strings are copies, the struct is process-lifetime stable
+  // (a deque never moves an element).
+  struct LoadedPlugin {
+    std::string name;
+    std::string description;
+    NvrLoadedPluginInfo info{};
+  };
+
+  void Load(PlanEntry& entry);
+  // Ends `entry` with `record`'s outcome and writes the record. A platform that throws while writing it does not stop
+  // the loader.
+  void Settle(PlanEntry& entry, const LoadRecord& record);
+  NvrGameContext ContextFor(const PlanEntry& entry) const;
+
+  static int GetLoadedPluginCount();
+  static const NvrLoadedPluginInfo* GetLoadedPluginInfo(int index);
+  static void HostLog(const char* pluginId, std::uint32_t level, const char* message, const NevrLogField* fields,
+                      std::uint32_t fieldCount);
+
+  Platform& platform_;
+  Options options_;
+  std::vector<PlanEntry> entries_;
+  bool planned_ = false;
+  bool earlyRan_ = false;
+  std::string gameBuildId_;
+  std::uintptr_t gameBase_ = 0;
+  std::deque<LoadedPlugin> loaded_;
+  std::deque<NvrGameContext> contexts_;  // one per plugin that reached its init; a plugin may keep the pointer
+};
+
+}  // namespace nevr_quest::plugin
