@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace nevr_quest::plugin {
@@ -21,14 +22,19 @@ bool IsSharedObjectFor(const std::uint8_t* bytes, std::size_t size, std::uint16_
 // none or the headers do not hold together. Reads the file as it is on disk, so it works before the object is mapped.
 std::string BuildIdOf(const std::uint8_t* bytes, std::size_t size);
 
+// The libr15 build IDs the plugin declares (NEVR_DECLARE_SUPPORTED_BUILD_IDS, plugin_interface.h): the text of the ELF
+// note owned by "NEVR", type 1, read from the file bytes. nullopt when the file has no such note or the headers do not
+// hold together. Reads data only: nothing of the plugin has run.
+std::optional<std::string> SupportedBuildIdsOf(const std::uint8_t* bytes, std::size_t size);
+
 enum class BuildIdVerdict {
   kSupported,
-  kUndeclared,   // the plugin has no NEVR_GetSupportedBuildIds export (`list` is null)
+  kUndeclared,   // the plugin declares no build IDs (`list` is null)
   kUnsupported,  // the list does not hold the running build
   kUnknownGame,  // the running build ID could not be read: nothing can be proved
 };
 
-// `list` is the NUL-terminated text the plugin's NEVR_GetSupportedBuildIds returned (null: no export): lowercase hex
+// `list` is the NUL-terminated text of the plugin's declared build IDs (null: none declared): lowercase hex
 // build IDs separated by spaces, commas or newlines. `running` is the running libr15's build ID, lowercase hex ("" when
 // it could not be read). The match is the whole ID, never a prefix or a substring.
 BuildIdVerdict DecideBuildId(const char* list, const std::string& running);

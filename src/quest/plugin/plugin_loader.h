@@ -47,6 +47,8 @@ class Platform {
   virtual bool ReadFile(const std::string& file, std::vector<std::uint8_t>* bytes) = 0;
   // dlopen of `file`; null on failure.
   virtual void* Open(const std::string& file) = 0;
+  // dlclose of a handle Open returned, for a plugin that is refused or fails after it was mapped.
+  virtual void Close(void* handle) = 0;
   virtual void* Symbol(void* handle, const char* name) = 0;
   // The running libr15's build ID, lowercase hex; "" when it cannot be read.
   virtual std::string GameBuildId() = 0;

@@ -197,6 +197,13 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
             lib?*.so) ;;
             *) echo "plugin must be named lib<name>.so: $plugin" >&2; exit 1 ;;
         esac
+        # `zip` replaces an entry of the same path: a plugin named like any lib/ entry of the store APK, or like a library
+        # staged below, would take that library's place. Refuse before anything is staged (tools/quest_repack_libs.py).
+        python3 -I tools/quest_repack_libs.py check-plugin-name --apk "$apk" --plugin "$plugin"
+        # ADR 0019 section 1: a plugin runs the same static-init check as the shim, minus the shim's own constructor.
+        llvm_bin="{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+        [ -x "$llvm_bin/llvm-nm" ] || llvm_bin="$(dirname "$(command -v llvm-nm || true)")"
+        tools/check_quest_static_init.sh --plugin "$llvm_bin" "$plugin"
     fi
     # The build's version header sits beside the shim's build tree (build/<tree>/sentinel/ -> build/<tree>/generated/).
     build_info="$(dirname "$(dirname "$shim")")/generated/nevr_build_info.h"
@@ -253,6 +260,9 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     echo "== renamed original  lib/arm64-v8a/libovrplatformloader_orig.so =="
     readelf -d "$work/verify/lib/arm64-v8a/libovrplatformloader_orig.so" | grep -i soname
     echo ""
+    # Every library of the store APK (the loader aside, which the shim replaces) is in the SIGNED apk with its bytes, and
+    # every staged library is there as staged.
+    python3 -I tools/quest_repack_libs.py verify-signed --source "$apk" --signed "$signed" --stage "$work/stage"
     done_ok=1
     echo "Signed sideload APK ready -> $signed"
     echo "Install with: just quest-install"

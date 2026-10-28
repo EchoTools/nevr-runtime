@@ -30,6 +30,7 @@ inline constexpr const char* kDisabled = "disabled";
 inline constexpr const char* kFileOutsideDirectory = "file_outside_directory";
 inline constexpr const char* kDuplicateFile = "duplicate_file";
 inline constexpr const char* kEarlyUnsupported = "early_unsupported";
+inline constexpr const char* kFileUnreadable = "file_unreadable";
 inline constexpr const char* kMachineType = "machine_type";
 inline constexpr const char* kDlopenFailed = "dlopen_failed";
 inline constexpr const char* kNoPluginInfo = "no_plugin_info";

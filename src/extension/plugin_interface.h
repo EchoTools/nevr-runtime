@@ -320,3 +320,28 @@ enum NevrAssetStatus : int32_t {
 typedef int  (*NevrRegisterAsset_fn)(uint64_t type_hash, uint64_t name_hash, const void* data, uint64_t size,
                                     const char* label);
 typedef void (*NevrDeregisterAssets_fn)(const void* data_start, const void* data_end);
+
+/*
+ * Supported libr15 builds, declared where the Quest loader can read them without running the plugin.
+ *
+ * A Quest plugin is a shared object whose addresses hold for particular libr15 builds. The loader must know the
+ * build list BEFORE it maps the object, because mapping runs the object's constructors. So the list is data in the
+ * file, an ELF note (owner "NEVR", type 1, text of lowercase hex build IDs separated by spaces), not a function the
+ * loader would have to call after dlopen. Put this once at global scope of the plugin:
+ *
+ *   NEVR_DECLARE_SUPPORTED_BUILD_IDS("<build id> <build id>");
+ *
+ * A plugin without the note is refused on Quest (`build_ids_undeclared`). The PC loader does not read it. ELF only.
+ */
+#ifdef __ELF__
+  #if defined(__aarch64__) || defined(__arm__)
+    #define NEVR_NOTE_SECTION_TYPE "%note"
+  #else
+    #define NEVR_NOTE_SECTION_TYPE "@note"
+  #endif
+  /* "aR": allocated, and retained by --gc-sections. Note layout: namesz=5 ("NEVR\0"), descsz, type=1. */
+  #define NEVR_DECLARE_SUPPORTED_BUILD_IDS(ids)                                                              \
+      __asm__(".pushsection .note.nevr.build_ids,\"aR\"," NEVR_NOTE_SECTION_TYPE "\n"                       \
+              ".balign 4\n.long 5\n.long 2f-1f\n.long 1\n.asciz \"NEVR\"\n.balign 4\n1:\n.ascii \"" ids "\"\n" \
+              "2:\n.balign 4\n.popsection\n")
+#endif
