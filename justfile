@@ -66,6 +66,25 @@ install-hooks:
 reap-merged *args:
     python3 -I tools/reap_merged.py {{ args }}
 
+# Make the Quest release timer's own checkout (a detached worktree at origin/main under the work root), link its units from there into the user systemd and arm the timer (RELEASING.md, "The Quest half of the train"; #1210). The unit moves that checkout to the fetched origin/main before every run
+install-quest-release-timer:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    CHECKOUT="$HOME/src/nevr-runtime-work/release-timer/checkout"
+    test -f "$HOME/.config/metis/r2-evr-echo-taxi.env" || { echo "install-quest-release-timer: refused: ~/.config/metis/r2-evr-echo-taxi.env is missing" >&2; exit 1; }
+    git -C "{{ justfile_directory() }}" fetch --quiet origin main
+    if [ ! -e "$CHECKOUT/.git" ]; then
+        mkdir -p "$(dirname "$CHECKOUT")"
+        git -C "{{ justfile_directory() }}" worktree add --detach "$CHECKOUT" origin/main
+    fi
+    for unit in nevr-quest-release.service nevr-quest-release-failed.service nevr-quest-release.timer; do
+        test -f "$CHECKOUT/tools/systemd/$unit" || { echo "install-quest-release-timer: refused: $CHECKOUT has no tools/systemd/$unit (origin/main does not carry the units yet)" >&2; exit 1; }
+        systemctl --user link "$CHECKOUT/tools/systemd/$unit"
+    done
+    systemctl --user daemon-reload
+    systemctl --user enable --now nevr-quest-release.timer
+    systemctl --user list-timers nevr-quest-release.timer --no-pager
+
 # Remove one linked worktree: every proof first, then `git worktree remove` without --force and without `git submodule deinit` (tools/remove_worktree.py; --dry-run proves and changes nothing)
 remove-worktree *args:
     python3 -I tools/remove_worktree.py {{ args }}
@@ -433,6 +452,11 @@ quest-install yes="" apk="build/android-arm64/repack/r15_nevr-sentinel_signed.ap
 [positional-arguments]
 test-tools *ARGS:
     python3 tools/run_tool_tests.py "$@"
+
+# The core installer (installer/, ADR 0023): library, CLI and C ABI tests. The build is locked to the committed
+# Cargo.lock; set CARGO_TARGET_DIR to keep the regenerable build tree out of the checkout.
+test-installer *ARGS:
+    cargo test --locked --manifest-path installer/Cargo.toml {{ ARGS }}
 
 # Run all system tests
 test-system:

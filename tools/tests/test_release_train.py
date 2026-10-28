@@ -30,8 +30,10 @@ class TrainWorkflow(unittest.TestCase):
     def setUp(self) -> None:
         self.text = TRAIN.read_text(encoding="utf-8")
 
-    def test_runs_hourly_and_by_hand_only(self) -> None:
-        self.assertIn('cron: "17 * * * *"', self.text)
+    def test_runs_every_three_hours_and_by_hand_only(self) -> None:
+        self.assertIn('cron: "17 */3 * * *"', self.text)
+        self.assertNotIn('cron: "17 * * * *"', self.text)
+        self.assertEqual(self.text.count("- cron:"), 1)
         self.assertIn("workflow_dispatch:", self.text)
         self.assertNotIn("pull_request", self.text)
         self.assertNotIn("\n  push:", self.text)

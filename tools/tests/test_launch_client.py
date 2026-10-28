@@ -256,10 +256,14 @@ class LaunchClientTest(unittest.TestCase):
         self.assertEqual((self.game_root / "echovr/bin/win10/nevr-runtime.dll").read_bytes(), b"LEFTOVER", "not deleted")
         self.assertEqual(self.deployed(), ORIGINAL)
 
-    def test_a_sign_in_cache_in_the_nevr_root_is_the_cached_flow(self):
-        root = self.game_root / "echovr/.wineprefix/drive_c/users" / getpass.getuser() / "AppData/Local/nevr/echovr"
+    def test_a_sign_in_cache_in_the_nevr_root_of_the_real_install_is_the_cached_flow(self):
+        # NEVR_GAME_ROOT unset: the game root is the main checkout and its echovr/ is the real install, which holds
+        # a sign-in. A copy named by NEVR_GAME_ROOT is refused instead (test_copy_credentials_guard.py, #1198).
+        make_game_root(self.checkout)
+        root = self.checkout / "echovr/.wineprefix/drive_c/users" / getpass.getuser() / "AppData/Local/nevr/echovr"
         (root / ".credentials.json").write_text("{}")
-        result = self.run_script("--dll", str(self.dll))
+        env = {k: v for k, v in self.env.items() if k != "NEVR_GAME_ROOT"}
+        result = self.run_script("--dll", str(self.dll), env=env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("cached credentials present", result.stdout)
         self.assertIn("/nevr/echovr/.credentials.json", result.stdout)
