@@ -127,7 +127,7 @@ TreeVerdict VerifyPluginTree(const std::string& pluginDir, HANDLE root, const ne
             if (isDelayLoad) continue;
             seen.insert(name);
             if (SuppliedByTheSystem(name)) {
-              if (system32Only != nullptr && SuppliedBySystem32Only(name)) system32Only->push_back(Lower(name));
+              if (system32Only != nullptr && SuppliedBySystem32Only(name)) system32Only->push_back(name);  // ListDependencies lowercases every name it returns
               continue;
             }
             return Refuse(name, kind.second, Reason::Unreadable,
