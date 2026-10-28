@@ -188,6 +188,15 @@ TEST_F(PluginTree, ASystemLibraryOnlySystem32SuppliesIsReportedOnceInLowerCase) 
   EXPECT_EQ(names[0], "hid.dll");
 }
 
+TEST_F(PluginTree, ASystemLibraryNamedInCapitalsIsReportedInLowerCase) {
+  ASSERT_EQ(GetModuleHandleA("hid.dll"), nullptr) << "hid.dll is loaded: the System32 branch is not under test";
+  std::vector<std::string> names;
+  const TreeVerdict v = Walk("import_system_uppercase", nullptr, &names);
+  EXPECT_TRUE(v.accepted) << v.Describe();
+  ASSERT_EQ(names.size(), 1u);
+  EXPECT_EQ(names[0], "hid.dll");
+}
+
 TEST_F(PluginTree, ADependencyInTheDirectoryIsHeldNotReportedAsSystem) {
   std::vector<std::string> names;
   size_t held = 0;

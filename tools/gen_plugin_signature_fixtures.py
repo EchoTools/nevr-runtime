@@ -267,6 +267,9 @@ def build_corpus(work):
     # The same, naming a library the system supplies: hid.dll is in System32 and is not loaded by the test process.
     data = bytearray(importer)
     put("import_system_without_extension", data.replace(b"dep.dll\0", b"hid\0\0\0\0\0"), True)
+    # The same name in capitals: the loader compares names without regard to case, so the walk reports it in lower case.
+    data = bytearray(importer)
+    put("import_system_uppercase", data.replace(b"dep.dll\0", b"HID.DLL\0"), True)
     return corpus
 
 
@@ -647,6 +650,8 @@ def main():
          "dep.dll", "import", "Unreadable")
     tree("import_system_without_extension", "corpus_import_system_without_extension.dll",
          {"corpus_import_system_without_extension.dll": ("corpus_import_system_without_extension", good)})
+    tree("import_system_uppercase", "corpus_import_system_uppercase.dll",
+         {"corpus_import_system_uppercase.dll": ("corpus_import_system_uppercase", good)})
 
     manifest = {
         "now": now,
