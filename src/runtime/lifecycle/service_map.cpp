@@ -67,6 +67,8 @@ const std::unordered_map<std::string, std::string>& FlatKeyMap() {
       {"nevr_tick_rate_hz", "network.tick_rate_hz"},
       // #708 — which game sockets the PC bridge hands to nevr_session_router: legacy (default), config, all.
       {"nevr_session_router", "network.session_router"},
+      // #1156 — the invite codes for the CREATE GAME / JOIN VIA CODE wizard: on or off (patch/invite_config.h), off when absent.
+      {"nevr_invite_codes", "network.invite_codes"},
       // S4b — nevr_regions: registration metadata appended to the ServerDB dial
       // URI (regions=...), read CSV via LookupFlatCsv. SCHEMA GAP: the plan schema
       // had no regions home; network.regions is the S4b choice (no new top-level
