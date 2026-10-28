@@ -89,6 +89,8 @@ set(PATCHES_SOURCES
     "patch/arena_public_clock.cpp"
     "patch/lobby_full_backoff.cpp"
     "patch/menu_version_label.cpp"
+    # #906, ADR 0017 D4: the main-menu cards (pure logic in menu_page.h and menu_cards.h).
+    "patch/menu_cards.cpp"
     "patch/splash_skip.cpp"
     "patch/ui_texture_mips.cpp"
     "patch/social_facade.cpp"
@@ -181,6 +183,8 @@ set(PATCHES_HEADERS
     "compat/ws_bridge.h"
     "compat/socket_role.h"
     "patch/invite_wizard.h"
+    "patch/menu_page.h"
+    "patch/menu_cards.h"
     "patch/guild_picker.h"
     "compat/evr_codec.h"
     "compat/lobby_frame.h"

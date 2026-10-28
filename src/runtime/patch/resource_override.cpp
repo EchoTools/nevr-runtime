@@ -25,6 +25,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <chrono>
 #include <condition_variable>
 #include <memory>
@@ -59,6 +60,8 @@ struct ResourceOverride {
     std::string label;      /* for logging; owned: a caller's buffer may be gone by the time the game loads the resource (#703) */
     bool applied;           /* set to true after first replacement */
     uint32_t in_flight;     /* game callbacks still using this replacement */
+    ResourceTransformFn transform = nullptr;  /* set: answers every load of the resource instead of one replacement */
+    void* user = nullptr;
 };
 
 static std::unique_ptr<std::vector<std::shared_ptr<ResourceOverride>>> g_overrides;
@@ -109,6 +112,37 @@ struct CallbackLease {
     }
 };
 
+/* Offers the game's buffer to a transform and, when it answers, points the callback at the answer. */
+static void ApplyTransform(ResourceOverride& ovr, uintptr_t cbd, uint64_t type_hash, uint64_t name_hash) {
+    const void* in = *reinterpret_cast<const void**>(cbd + 0x18);
+    const uint64_t inSize = *reinterpret_cast<uint64_t*>(cbd + 0x20);
+    const void* out = nullptr;
+    uint64_t outSize = 0;
+    bool served = false;
+    try {
+        served = ovr.transform(in, inSize, &out, &outSize, ovr.user);
+    } catch (const std::exception& e) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.RESOURCE] transform threw label=%s type=0x%016llx name=0x%016llx what=%s - the game's own buffer is kept",
+            ovr.label.c_str(), static_cast<unsigned long long>(type_hash),
+            static_cast<unsigned long long>(name_hash), e.what());
+        return;
+    }
+    if (!served || out == nullptr || outSize == 0) {
+        Log(EchoVR::LogLevel::Debug,
+            "[NEVR.RESOURCE] transform kept the game's buffer label=%s type=0x%016llx name=0x%016llx bytes=%llu",
+            ovr.label.c_str(), static_cast<unsigned long long>(type_hash),
+            static_cast<unsigned long long>(name_hash), static_cast<unsigned long long>(inSize));
+        return;
+    }
+    *reinterpret_cast<const void**>(cbd + 0x18) = out;
+    *reinterpret_cast<uint64_t*>(cbd + 0x20) = outSize;
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.RESOURCE] transform applied label=%s type=0x%016llx name=0x%016llx orig_bytes=%llu new_bytes=%llu",
+        ovr.label.c_str(), static_cast<unsigned long long>(type_hash), static_cast<unsigned long long>(name_hash),
+        static_cast<unsigned long long>(inSize), static_cast<unsigned long long>(outSize));
+}
+
 static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
     std::shared_ptr<ResourceOverride> selected;
     AsyncIOCallback_fn original;
@@ -127,9 +161,18 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
                 type_hash = *reinterpret_cast<uint64_t*>(res + 0x28);
 
                 for (auto& ovr : *g_overrides) {
-                    if (ovr->applied) continue;
+                    if (ovr->applied && !ovr->transform) continue;
                     if (ovr->name_hash != name_hash) continue;
                     if (ovr->type_hash != 0 && ovr->type_hash != type_hash) continue;
+
+                    if (ovr->transform) {
+                        /* A transform is asked on every load; it runs below, outside the lock. */
+                        ovr->applied = true;
+                        ++ovr->in_flight;
+                        selected = ovr;
+                        g_total_hits++;
+                        break;
+                    }
 
                     /* Match — replace the buffer */
                     orig_size = *reinterpret_cast<uint64_t*>(cbd + 0x20);
@@ -145,7 +188,9 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
         }
     }
     CallbackLease lease(selected);
-    if (selected) {
+    if (selected && selected->transform) {
+        ApplyTransform(*selected, reinterpret_cast<uintptr_t>(callback_data), type_hash, name_hash);
+    } else if (selected) {
         // Resolve both hashes to human names the same way registration does.
         char typeBuf[128], nameBuf[128];
         const char* typeName = EchoVR::LookupSymbolName(type_hash);
@@ -369,6 +414,29 @@ void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
         typeBuf,
         nameBuf,
         static_cast<unsigned long long>(size));
+}
+
+void RegisterResourceTransform(uint64_t type_hash, uint64_t name_hash, ResourceTransformFn transform, void* user,
+                               const char* label) {
+    if (transform == nullptr) return;
+    auto ovr = std::make_shared<ResourceOverride>();
+    ovr->type_hash = type_hash;
+    ovr->name_hash = name_hash;
+    ovr->data = nullptr;
+    ovr->size = 0;
+    ovr->owned = false;
+    ovr->label = label ? label : "(null)";
+    ovr->transform = transform;
+    ovr->user = user;
+    {
+        std::lock_guard<std::mutex> lock(g_overrides_mutex);
+        if (!g_overrides) return;
+        g_overrides->push_back(ovr);
+    }
+    EnsureHookInstalled();
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.RESOURCE] Registered transform: %s (type=0x%016llx name=0x%016llx)", ovr->label.c_str(),
+        static_cast<unsigned long long>(type_hash), static_cast<unsigned long long>(name_hash));
 }
 
 static bool RegisterResourceOverrideFromFileImpl(uint64_t type_hash, uint64_t name_hash,

@@ -87,4 +87,8 @@ inline Result Patch(const uint8_t* data, size_t size, const std::string& sha256H
   return r;
 }
 
+/// Registers the transform that answers every load of mnu_master (menu_cards.cpp). Client only; logs its decision.
+/// Needs the resource override registry (InstallResourceOverride) to exist.
+void Install();
+
 }  // namespace nevr_menu_cards
