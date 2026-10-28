@@ -337,7 +337,7 @@ pub struct RunOpts<'a> {
 }
 
 fn step_log(log: &Log, step: &Step, ok: bool, reason: &str, started: u64) -> Result<()> {
-    log.event(if ok { "INFO" } else { "ERROR" }, "step_end", 9, json!({"step_id": step.name(), "ok": ok, "reason": reason, "elapsed_ms": log.elapsed_ms() - started}))
+    log.event(if ok { "INFO" } else { "ERROR" }, "step_end", 9, json!({"step_id": step.name(), "ok": ok, "reason": reason, "step_ms": log.elapsed_ms() - started}))
 }
 
 /// Runs a `Proceed` plan against the headset. Every step is logged; a failure after nothing was changed is `unchanged`,

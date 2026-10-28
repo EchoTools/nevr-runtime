@@ -94,13 +94,13 @@ impl Session {
     }
 
     pub fn end_with(&self, state: &'static str, reason: &str, failed: bool) -> Result<Ended> {
-        self.log.event(if failed || state == "restored" || state == "needs-user" { "ERROR" } else { "INFO" }, "run_end", 0, json!({"state": state, "reason": reason, "failed": failed, "elapsed_ms": self.log.elapsed_ms()}))?;
+        self.log.event(if failed || state == "restored" || state == "needs-user" { "ERROR" } else { "INFO" }, "run_end", 0, json!({"state": state, "reason": reason, "failed": failed}))?;
         Ok(Ended { state, reason: reason.to_string(), failed })
     }
 
     /// An error ends the run as `unchanged` (nothing was written before the failing check) and says why.
     pub fn fail(&self, e: &Error) -> Ended {
-        let _ = self.log.error("manifest_check", e.step, json!({"step": e.step, "ok": false, "reason": e.to_string()}));
+        let _ = self.log.error("manifest_check", e.step, json!({"ok": false, "reason": e.to_string()}));
         match self.end_with("unchanged", &e.to_string(), true) {
             Ok(end) => end,
             Err(le) => Ended { state: "unchanged", reason: format!("{e}; and the log could not record it: {le}"), failed: true },
@@ -130,7 +130,7 @@ impl Session {
             match manifest::verify(&bytes, &sig, &self.cfg.pins, &state, &now, self.cfg.min_manifest_version) {
                 Ok(v) => {
                     manifest::commit(&self.cfg.state_dir, &v)?;
-                    self.log.info("manifest_check", 6, json!({"step": 6, "ok": true, "key_id": v.key_id, "manifest_version": v.version, "stored_highest": state.highest}))?;
+                    self.log.info("manifest_check", 6, json!({"ok": true, "key_id": v.key_id, "manifest_version": v.version, "stored_highest": state.highest}))?;
                     return Ok(v);
                 }
                 Err(e) if e.step == 2 => last = Some(e),
@@ -146,7 +146,7 @@ impl Session {
         let read = |n: &str| std::fs::read(dir.join(n)).map_err(|e| Error::new(1, format!("{n}: {e}")));
         let v = manifest::verify(&read("manifest.json")?, &read("manifest.json.sig")?, &self.cfg.pins, &state, &clock(&self.cfg)?, self.cfg.min_manifest_version)?;
         manifest::commit(&self.cfg.state_dir, &v)?;
-        self.log.info("manifest_check", 6, json!({"step": 6, "ok": true, "key_id": v.key_id, "manifest_version": v.version, "stored_highest": state.highest}))?;
+        self.log.info("manifest_check", 6, json!({"ok": true, "key_id": v.key_id, "manifest_version": v.version, "stored_highest": state.highest}))?;
         Ok(v)
     }
 
@@ -179,7 +179,7 @@ impl Session {
             None => quest::Observed::default(),
         };
         let plan = quest::plan(&m, &v, &observed, consent_uninstall);
-        self.log.info("plan", 9, json!({"platform": "quest", "steps": plan.steps.iter().map(|s| s.name()).collect::<Vec<_>>(), "installed": observed.installed.as_ref().map(|i| json!({"version_code": i.version_code, "signers": i.signers})), "decision": plan.decision, "reasons": plan.reasons}))?;
+        self.log.info("plan", 9, json!({"steps": plan.steps.iter().map(|s| s.name()).collect::<Vec<_>>(), "installed": observed.installed.as_ref().map(|i| json!({"version_code": i.version_code, "signers": i.signers})), "decision": plan.decision, "reasons": plan.reasons}))?;
         let report = plan.to_json();
         let ended = match plan.outcome {
             quest::Outcome::Unchanged => self.end("unchanged", &plan.reasons.join("; "))?,
@@ -227,7 +227,7 @@ impl Session {
         let pkg = read_package(&zip_path, &art)?;
         let observed = pc::observe(dir, game_running)?;
         let plan = pc::plan(&observed, &pkg);
-        self.log.info("plan", 9, json!({"platform": "pc", "decision": plan.decision, "reasons": plan.reasons, "action": plan.action.map(|a| format!("{a:?}")), "installed": {"host_sha256": observed.target_sha, "runtime_sha256": observed.runtime_sha}}))?;
+        self.log.info("plan", 9, json!({"decision": plan.decision, "reasons": plan.reasons, "action": plan.action.map(|a| format!("{a:?}")), "installed": {"host_sha256": observed.target_sha, "runtime_sha256": observed.runtime_sha}}))?;
         let report = plan.to_json();
         let ended = match plan.outcome {
             pc::Outcome::Unchanged => self.end("unchanged", &plan.reasons.join("; "))?,

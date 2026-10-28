@@ -173,7 +173,7 @@ pub unsafe extern "C" fn NevrManifestVerify(s: *mut NevrSession, manifest: *cons
         };
         let v = manifest::verify(&m, &g, &s.cfg.pins, &state, &now, s.cfg.min_manifest_version)?;
         manifest::commit(&s.cfg.state_dir, &v)?;
-        s.log.info("manifest_check", 6, json!({"step": 6, "ok": true, "key_id": v.key_id, "manifest_version": v.version}))?;
+        s.log.info("manifest_check", 6, json!({"ok": true, "key_id": v.key_id, "manifest_version": v.version}))?;
         Ok(NEVR_OK)
     })
 }
@@ -268,7 +268,7 @@ pub unsafe extern "C" fn NevrPlanBuild(s: *mut NevrSession, version: *const c_ch
         };
         let m = manifest::stored(&s.cfg.state_dir)?;
         let plan = quest::plan(&m, &version, &Observed { installed, data }, o["consent_uninstall"].as_bool().unwrap_or(false));
-        s.log.info("plan", 9, json!({"platform": "quest", "steps": plan.steps.iter().map(|x| x.name()).collect::<Vec<_>>(), "decision": plan.decision, "reasons": plan.reasons}))?;
+        s.log.info("plan", 9, json!({"steps": plan.steps.iter().map(|x| x.name()).collect::<Vec<_>>(), "decision": plan.decision, "reasons": plan.reasons}))?;
         out_string(&plan.to_json(), out).map_err(|e| Error::new(0, e))?;
         Ok(NEVR_OK)
     })
