@@ -13,6 +13,7 @@ const USAGE: &str = "usage: nevr-install <command> [options]
   quest plan|install [--no-device] [--serial S] [--version V] [--yes-uninstall]
   pc plan|install --dir <folder with echovr.exe> [--nevr-root DIR] [--allow-downgrade] [--version V]
   pc launch-check --dir <folder> [--nevr-root DIR] [--bootstrap-log FILE] [--version V]
+  pc stage --root <nevr root> [--current-json JSON] [--version V]
 options: --root DIR  --base URL  --channel NAME  --log FILE  --state-dir DIR  --work-dir DIR  --pins FILE  --now UTC
 exit codes: 0 installed or nothing to do, 1 failed with nothing changed, 2 needs the player, 3 restored";
 
@@ -84,7 +85,7 @@ fn main() -> ExitCode {
     let (platform, cmd) = match words.as_slice() {
         ["manifest", "verify"] => ("pc", "manifest"),
         ["quest", c @ ("plan" | "install")] => ("quest", *c),
-        ["pc", c @ ("plan" | "install" | "launch-check")] => ("pc", *c),
+        ["pc", c @ ("plan" | "install" | "launch-check" | "stage")] => ("pc", *c),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(1);
@@ -101,6 +102,14 @@ fn main() -> ExitCode {
         }
     });
     cfg.allow_downgrade = args.flag("--allow-downgrade");
+    if cmd == "stage" {
+        // `--root` is the nevr root here (ADR 0024), not the installer's: the updater keeps its state, log and downloads in it.
+        if args.val("--root").is_none() {
+            eprintln!("FAIL step 0: pc stage needs --root <the nevr root>");
+            return ExitCode::from(1);
+        }
+        (cfg.state_dir, cfg.log_path, cfg.work_dir) = nevr_install::stage::paths(&root);
+    }
     if let Some(v) = args.val("--base") {
         cfg.base = v;
     }
@@ -181,6 +190,19 @@ fn main() -> ExitCode {
                         Ok((sess.end_with("needs-user", &why, false)?, None))
                     }
                 }
+            }
+            ("pc", "stage") => {
+                let cur = match args.val("--current-json") {
+                    Some(t) => nevr_install::stage::Current::parse(&t)?,
+                    None => nevr_install::stage::Current::default(),
+                };
+                if let Some(d) = args.val("--from-dir") {
+                    sess.manifest_from_dir(std::path::Path::new(&d))?;
+                } else {
+                    sess.manifest()?;
+                }
+                let (end, report) = sess.pc_stage(version.as_deref(), &root, &cur)?;
+                Ok((end, Some(report)))
             }
             ("pc", c) => {
                 let dir = PathBuf::from(args.val("--dir").ok_or_else(|| nevr_install::error::Error::new(9, "--dir is required"))?);
