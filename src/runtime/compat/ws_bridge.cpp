@@ -1560,8 +1560,9 @@ static PreparedRemote PrepareRemote(nevr_socket_role::Role role, int connIdx) {
   // Sending Bearer on top may cause the server to use the JWT session instead
   // of the URL-credential session, breaking matchmaker state.
   bool hasUrlCredentials = remoteUrl.find("discordid=") != std::string::npos;
-  // #1254: the sign-in a refusal is held against: the token, or (URL credentials) the account's own pair.
-  const std::string refusalKey = bearerToken + (hasUrlCredentials ? "|url-credentials" : "");
+  // #1254: the sign-in a refusal is held against: the token the remote presents. A client with none (URL
+  // credentials, or unauthenticated) has the one key "", because its credentials do not change within a run.
+  const std::string refusalKey = bearerToken;
   if (!g_isServer && ClientRefusedAlready(refusalKey)) {
     Log(EchoVR::LogLevel::Debug,
         "[NEVR.WS] conn=%d (%s): this sign-in was refused earlier; not connecting to the service", connIdx,
