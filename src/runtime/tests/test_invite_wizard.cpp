@@ -325,6 +325,14 @@ TEST(InviteLog, ARequestNotSentSaysWhy) {
   EXPECT_EQ(nevr_invite::NotSentLine(Skip::None, 0), "");
 }
 
+TEST(InviteLog, ARequestTheWorkerCannotSendSaysWhy) {
+  EXPECT_EQ(nevr_invite::NotSentLine(Skip::NotConfigured, 0),
+            "[NEVR.INVITE] request not sent reason=not_configured code_len=0");
+  EXPECT_EQ(nevr_invite::NotSentLine(Skip::NoToken, 8), "[NEVR.INVITE] request not sent reason=no_token code_len=8");
+  EXPECT_EQ(nevr_invite::NotSentLine(Skip::Busy, 8), "[NEVR.INVITE] request not sent reason=busy code_len=8");
+  EXPECT_EQ(nevr_invite::NotSentLine(Skip::Stopped, 0), "[NEVR.INVITE] request not sent reason=stopped code_len=0");
+}
+
 TEST(InviteLog, ACreateRequestLineCarriesTheExpiryAndNoCode) {
   const Plan p = nevr_invite::PlanRequest(nevr_invite::ParseMetric(CreateLine("US WEST", "3 HOURS")), ArenaCustom());
   EXPECT_EQ(nevr_invite::SentLine(p, "7bb022a4"), "[NEVR.INVITE] request sent op=create expires_s=10800");
