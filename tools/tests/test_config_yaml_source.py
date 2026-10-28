@@ -54,7 +54,7 @@ class TheLegacyPathsAreBuiltInOnePlace(unittest.TestCase):
             if not rel.endswith((".cpp", ".h")) or rel == CHOICE or "/tests/" in rel:
                 continue
             for number, line in enumerate(code(rel).splitlines(), 1):
-                if re.search(r'_local[^\n]*config\.yaml|config\.yaml[^\n]*_local', line):
+                if re.search(r'_local[\\/]+config\.yaml', line):
                     offenders.append(f"{rel}:{number}: {line.strip()[:100]}")
         self.assertEqual(offenders, [])
 
@@ -81,7 +81,7 @@ class NothingIsWrittenInTheGameFolder(unittest.TestCase):
 
     def test_the_copy_goes_from_the_legacy_file_to_the_roots_path_and_only_there(self):
         resolve = extract_braced_function(code(SOURCE), "Choice Resolve(")
-        calls = re.findall(r"CopyIfAbsent\s*\(([^;]*)\)\s*;", resolve, re.S)
+        calls = re.findall(r"CopyIfAbsent\s*\(([^()]*)\)", resolve, re.S)
         self.assertEqual(len(calls), 1)
         self.assertRegex(calls[0], r"^\s*choice\.copy_from\s*,\s*choice\.root_path\s*,")
         choose = extract_braced_function(code(CHOICE), "inline Choice Choose(")

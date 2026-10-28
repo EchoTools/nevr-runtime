@@ -27,12 +27,15 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgHelpString(pArgSyntax, "-no-console", "[NEVR] Disable console window creation");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-config", 1, 1, FALSE);
-  // Issue #22: this said "custom path to config.yaml", but the path itself is
-  // loaded as the game's native JSON config (LoadLocalConfigHook), and only its
-  // DIRECTORY is searched for config.yaml (service_config.cpp FindNevrConfigYamlPath).
+  // Issue #22: this said "custom path to config.yaml", but the path is loaded as the game's native JSON
+  // config (LoadLocalConfigHook). It does not decide where config.yaml is read (#1255: -config-file).
   EchoVR::AddArgHelpString(pArgSyntax, "-config",
-      "[NEVR] Path to a JSON file the game loads instead of _local/config.json; "
-      "config.yaml is looked for in the same directory");
+      "[NEVR] Path to a JSON file the game loads instead of _local/config.json");
+
+  EchoVR::AddArgSyntax(pArgSyntax, "-config-file", 1, 1, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-config-file",
+      "[NEVR] Path to the config.yaml to read instead of the one in the nevr root (nevr/echovr under LocalAppData). "
+      "A file that does not exist ends the run with exit code 64");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-region", 1, 1, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-region", "[NEVR] Set the matchmaking region");
@@ -74,9 +77,9 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
       "[NEVR] Load only plugins signed through the release pipeline; refuse the rest (default: unsigned plugins load). "
       "Read before the first plugin loads (runtime/lifecycle/boot.cpp, runtime/ext/plugin_trust.cpp)");
 
-  // -config-path is NOT ignored: boot.cpp handles it exactly like -config.
+  // -config-path is registered so the game's parser accepts the token, and refused by the runtime (#1255): boot.cpp
+  // ends the run with exit code 64 and the hint "use -config-file <file>". It has no help line: it is not an option.
   EchoVR::AddArgSyntax(pArgSyntax, "-config-path", 1, 1, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-config-path", "[NEVR] Same as -config");
 
 
   // #697: the names these flags had before they were kebab-case. The game's parser rejects a token with no

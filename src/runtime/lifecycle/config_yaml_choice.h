@@ -64,18 +64,68 @@ struct RejectionText {
 /// The three places an older build looked for config.yaml, from the game module's folder (ending in a separator): `_local` in
 /// that folder, then one and then two folders up. In that order.
 inline std::vector<std::string> LegacyCandidates(const std::string& module_dir) {
-  (void)module_dir;
-  return {};
+  const std::string name = nevr_root::Names<char>::kConfigYaml;
+  return {module_dir + "_local\\" + name, module_dir + "..\\_local\\" + name, module_dir + "..\\..\\_local\\" + name};
 }
 
+/// The decision. `-config-path` and a `-config-file` that names nothing usable are rejections, and nothing is chosen after one.
+/// Otherwise the file is the `-config-file` value, else the root's config.yaml when it exists. A legacy file is never the file:
+/// the first that exists is the one to copy into a root that has none (`copy_from`), or the one ignored beside a root that has one.
 inline Choice Choose(const Inputs& inputs, const Probe& probe) {
-  (void)inputs;
-  (void)probe;
-  return Choice();
+  Choice choice;
+  if (inputs.config_path_flag) {
+    choice.rejection = Rejection::kConfigPathFlag;
+    return choice;
+  }
+  if (inputs.config_file_flag) {
+    if (inputs.config_file.empty()) {
+      choice.rejection = Rejection::kConfigFileNoValue;
+      return choice;
+    }
+    choice.rejected_path = inputs.config_file;
+    if (!probe.exists(inputs.config_file)) {
+      choice.rejection = Rejection::kConfigFileMissing;
+      return choice;
+    }
+    if (!probe.readable(inputs.config_file)) {
+      choice.rejection = Rejection::kConfigFileUnreadable;
+      return choice;
+    }
+    choice.rejected_path.clear();
+    choice.path = inputs.config_file;
+    choice.chosen_by = ChosenBy::kConfigFile;
+  }
+
+  choice.root_path = nevr_root::ConfigYamlPath(inputs.root);
+  const bool root_has = !choice.root_path.empty() && probe.exists(choice.root_path);
+  std::string legacy;
+  for (const std::string& candidate : inputs.legacy) {
+    if (probe.exists(candidate)) {
+      legacy = candidate;
+      break;
+    }
+  }
+  if (root_has) {
+    if (choice.chosen_by == ChosenBy::kNone) {
+      choice.path = choice.root_path;
+      choice.chosen_by = ChosenBy::kNevrRoot;
+    }
+    choice.ignored_legacy = legacy;
+  } else if (!choice.root_path.empty()) {
+    choice.copy_from = legacy;
+  }
+  return choice;
 }
 
 inline RejectionText DescribeRejection(const Choice& choice) {
-  (void)choice;
+  switch (choice.rejection) {
+    case Rejection::kConfigPathFlag: return {"-config-path", "use -config-file <file>"};
+    case Rejection::kConfigFileNoValue: return {"-config-file", "needs a file: -config-file <file>"};
+    case Rejection::kConfigFileMissing: return {"-config-file", choice.rejected_path + ": file does not exist"};
+    case Rejection::kConfigFileUnreadable:
+      return {"-config-file", choice.rejected_path + ": file cannot be opened for reading"};
+    case Rejection::kNone: break;
+  }
   return RejectionText();
 }
 

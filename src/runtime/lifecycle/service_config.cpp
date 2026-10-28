@@ -17,7 +17,9 @@
 #include "runtime/lifecycle/service_map.h"
 #include "runtime/compat/socket_role.h"  // TagBridgeUrl: the config and login services get their own request target (#520)
 #include "runtime/lifecycle/stable_string_pool.h"
-#include "runtime/lifecycle/cli.h"        // g_customConfigPath, g_isServer (drags core/pch.h -> windows.h, now NOMINMAX)
+#include "runtime/lifecycle/cli.h"        // g_configYamlFlags, g_isServer (drags core/pch.h -> windows.h, now NOMINMAX)
+#include "runtime/lifecycle/cli_reject.h"  // RejectCommandLine: a config.yaml choice the run is refused for
+#include "runtime/lifecycle/config_yaml_source.h"  // the config.yaml choice and its copy from an old _local
 #include "runtime/lifecycle/crash_recovery.h"  // ServerFatal (S4a fail-loud)
 #include "runtime/ext/plugin_load_plan.h"        // PluginLoadItem / NevrCfgPluginLoadPlan (N134 S6)
 #include "runtime/ext/plugin_load_plan_build.h"  // BuildLoadPlan (pure builder)
@@ -30,7 +32,6 @@
 #include "runtime/tests/service_config_test_hooks.h"
 #endif
 
-#include <fstream>
 #include <cstdlib>
 #include <exception>
 #include <optional>
@@ -60,83 +61,89 @@ bool IsServerMode() {
   return g_isServer != FALSE;
 }
 
-// --- config.yaml discovery -------------------------------------------------
-// Mirrors LoadEarlyConfig's search for config.json (config.cpp): _local next to
-// the game module, then one and two parents up. Additionally honours an explicit
-// -config/-config-path directory when one was given (LoadEarlyConfig itself does
-// not, but by first-access time g_customConfigPath is parsed, so we can). First
-// existing file wins; "" if none is found.
-std::string FindNevrConfigYamlPath() {
-  CHAR moduleDir[MAX_PATH] = {0};
-  GetModuleFileNameA(reinterpret_cast<HMODULE>(EchoVR::g_GameBaseAddress), moduleDir, MAX_PATH);
-  if (CHAR* lastSlash = strrchr(moduleDir, '\\')) *(lastSlash + 1) = '\0';
+// --- which config.yaml (#1255) ----------------------------------------------
+// The file is `-config-file <file>`, else <nevr root>\config.yaml (core/nevr_root.h); nothing else is searched. The decision,
+// the one-time copy of an old `_local` file into the root and their log lines are config_yaml_source.h. A command line that
+// names no usable file ends the run here, with exit code 64, before anything that needs the config runs (cli_reject.h).
+//
+// The game module's folder, in UTF-8 and ending in a separator: where the old `_local` candidates are counted from.
+std::string GameModuleDirUtf8() {
+  wchar_t module_path[MAX_PATH] = {0};
+  const DWORD length = GetModuleFileNameW(reinterpret_cast<HMODULE>(EchoVR::g_GameBaseAddress), module_path, MAX_PATH);
+  if (length == 0 || length >= MAX_PATH) return std::string();
+  std::wstring dir(module_path, length);
+  const std::size_t slash = dir.find_last_of(L"\\/");
+  if (slash == std::wstring::npos) return std::string();
+  dir.resize(slash + 1);
+  const int needed = WideCharToMultiByte(CP_UTF8, 0, dir.data(), static_cast<int>(dir.size()), nullptr, 0, nullptr, nullptr);
+  if (needed <= 0) return std::string();
+  std::string out(static_cast<std::size_t>(needed), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, dir.data(), static_cast<int>(dir.size()), out.data(), needed, nullptr, nullptr);
+  return out;
+}
 
-  std::vector<std::string> candidates;
-
-  // An explicit -config/-config-path override: look for config.yaml in the same
-  // directory as the named path.
-  if (g_customConfigPath[0] != '\0') {
-    std::string cp(g_customConfigPath);
-    const std::size_t slash = cp.find_last_of("\\/");
-    const std::string dir = (slash == std::string::npos) ? std::string() : cp.substr(0, slash + 1);
-    candidates.push_back(dir + "config.yaml");
-  }
-
-  const char* rel[] = {
-      "%s_local\\config.yaml",
-      "%s..\\_local\\config.yaml",
-      "%s..\\..\\_local\\config.yaml",
-  };
-  for (const char* r : rel) {
-    CHAR p[MAX_PATH] = {0};
-    snprintf(p, MAX_PATH, r, moduleDir);
-    candidates.push_back(p);
-  }
-
-  for (const std::string& c : candidates) {
-    std::ifstream f(c, std::ios::binary);
-    if (f.good()) return c;
-  }
-  return std::string();
+// Decided once per run: the preflight (NevrCfgResolveConfigYaml) and the first config read share this choice, so the copy and
+// its log line happen once.
+const nevr_config_yaml::Choice& ConfigYamlChoice() {
+  static const nevr_config_yaml::Choice choice = []() {
+    nevr_config_yaml::Inputs inputs;
+    inputs.config_path_flag = g_configYamlFlags.config_path_given;
+    inputs.config_file_flag = g_configYamlFlags.config_file_given;
+    inputs.config_file = g_configYamlFlags.config_file;
+    nevr_config_yaml::AddProcessPaths(GameModuleDirUtf8(), &inputs);
+    nevr_config_yaml::Choice decided = nevr_config_yaml::Resolve(inputs, nevr_config_yaml::RealProbe());
+    if (decided.rejection != nevr_config_yaml::Rejection::kNone) {
+      const nevr_config_yaml::RejectionText text = nevr_config_yaml::DescribeRejection(decided);
+      RejectCommandLine(text.argument, text.why);  // does not return
+    }
+    return decided;
+  }();
+  return choice;
 }
 
 // The one parsed config.yaml, loaded lazily on first access. Thread-safe init via
 // the C++11 magic-static rule.
 //
-// Load policy (S4a): a MISSING config.yaml is non-fatal in both modes — warn and
+// Load policy (S4a): a MISSING config.yaml is non-fatal in both modes: warn and
 // yield an empty config (every migrated key then resolves to its hardcoded
 // default; "no config" is a legitimate defaults-only run). But a config.yaml that
 // EXISTS and is malformed OR references an unset required ${VAR:?} secret FAILS
-// LOUD in server mode via ServerFatal -> ForceFatalExit — never a silent degrade
+// LOUD in server mode via ServerFatal -> ForceFatalExit, never a silent degrade
 // to no-login on an empty secret (HARD RISK #3 / N115). ServerFatal warns and
 // returns in client mode, so the client path stays warn+empty as before.
+// A `-config-file` that names nothing usable is not this path: it ends the run
+// with exit code 64 when the choice is made (ConfigYamlChoice).
 //
-// Ordering — why the S3 hazard (a fatal that pre-dates the handler install could
-// block on an invisible MessageBox) does NOT apply here: ServerFatal terminates
-// via ForceFatalExit (TerminateProcess), never MessageBoxA. And by first access
-// the whole install chain is up regardless: first access is boot.cpp
-// PreprocessCommandLineHook, which runs after Initialize() installed every hook,
-// AFTER g_isServer is set (boot.cpp:39) and AFTER InstallFatalErrorHandler()
-// (boot.cpp:53), and the lazy load stays after the CLI loop so -config-path
-// (g_customConfigPath) is honoured. The secret itself is not accessed until ws
-// login, far later still. So an unset ${NEVR_PASSWORD:?} fails loud at first
-// access (the socket_uri read, boot.cpp) instead of ever reaching ws_bridge.
+// Ordering: the first access is the preflight's NevrCfgResolveConfigYaml (boot.cpp),
+// which runs after Initialize() installed every hook, after g_isServer is set and
+// after InstallFatalErrorHandler(). ServerFatal terminates via ForceFatalExit
+// (TerminateProcess), never MessageBoxA, so a fatal here cannot block on an
+// invisible dialog. The secret itself is not accessed until ws login, far later.
 const nevr::NevrConfig& NevrCfg() {
 #ifdef NEVR_TEST_HOOKS
   if (g_testInputsSet && g_testConfig != nullptr) return *g_testConfig;
 #endif
   static const nevr::NevrConfig cfg = []() -> nevr::NevrConfig {
-    const std::string path = FindNevrConfigYamlPath();
-    if (path.empty()) {
+    const nevr_config_yaml::Choice& choice = ConfigYamlChoice();
+    if (choice.path.empty()) {
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.CONFIG] no config.yaml found — NEVR config keys use built-in defaults");
+          "[NEVR.CONFIG] no config.yaml found; searched: %s (NEVR config keys use built-in defaults)",
+          choice.root_path.empty() ? "(no nevr root: %LOCALAPPDATA% is not set)" : choice.root_path.c_str());
       return nevr::NevrConfig();
     }
+    const std::string& path = choice.path;
     try {
-      nevr::NevrConfig c = nevr::NevrConfig::LoadFromFile(path);
+      std::string bytes;
+      unsigned long error = 0;
+      if (!nevr_config_yaml::ReadWholeFile(path, &bytes, &error)) {
+        throw nevr::NevrConfigError("config: cannot open " + path + " (error " + std::to_string(error) + ")",
+                                    nevr::NevrConfigErrorKind::kUnreadable);
+      }
+      nevr::NevrConfig c = nevr::NevrConfig::LoadFromString(bytes);
       nevr::LogUnsetBareVars(c);  // the parser logs nothing (it is shared with the Quest); the PC caller reports
       nevr::LogShapeWarnings(c);
-      Log(EchoVR::LogLevel::Info, "[NEVR.CONFIG] config.yaml loaded from: %s", path.c_str());
+      Log(EchoVR::LogLevel::Info, "[NEVR.CONFIG] config.yaml loaded from: %s chosen_by=%s", path.c_str(),
+          nevr_config_yaml::ChosenByName(choice.chosen_by));
       return c;
     } catch (const nevr::NevrConfigError& e) {
       // Server: fail loud (ServerFatal -> ForceFatalExit). Client: ServerFatal
@@ -283,7 +290,10 @@ const char* AccessorBoundary(const char* accessor, Body body) {
 
 }  // namespace
 
-void NevrCfgResolveConfigYaml() {}
+void NevrCfgResolveConfigYaml() {
+  (void)ConfigYamlChoice();
+  (void)NevrCfg();
+}
 
 // #843: names of the built-in defaults this run uses, so an operator can see which keys a server took
 // from the build rather than from config.yaml. A key counts only when neither config.yaml nor the

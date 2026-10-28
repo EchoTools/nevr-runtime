@@ -443,7 +443,8 @@ TEST_F(ConfigYamlFiles, ConfigFileNamingAMissingFileOrAFolderIsRejectedByTheReal
   in.config_file = base_ + "\\absent.yaml";
   EXPECT_EQ(cy::Resolve(in, cy::RealProbe()).rejection, cy::Rejection::kConfigFileMissing);
 
-  in.config_file = base_ + "\\game";  // exists, cannot be read as a file
+  in.config_file = base_ + "\\folder";  // exists, cannot be read as a file
+  std::filesystem::create_directories(std::filesystem::path(W(in.config_file)));
   ASSERT_TRUE(Exists(in.config_file));
   EXPECT_EQ(cy::Resolve(in, cy::RealProbe()).rejection, cy::Rejection::kConfigFileUnreadable);
 

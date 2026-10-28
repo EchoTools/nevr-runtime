@@ -4,7 +4,8 @@
 // cache in the install's _local folder. The first run that finds those files moves them to %LOCALAPPDATA%\nevr\echovr and
 // leaves MOVED-TO-NEVR-ROOT.txt in each folder it took something from (the plugins folder beside the game executable
 // excepted: nothing of ours is written there), so a player or support can see why the folder is empty.
-// The sign-in cache is the only file taken from _local: config.yaml keeps its resolution (ADR 0012 step 6). The sign-in cache
+// The sign-in cache is the only file taken from _local: config.yaml is not moved (it is read from the root, and an old `_local`
+// copy is copied there once: config_yaml_source.h). The sign-in cache
 // is moved through the protected write it is saved with, so the moved file is as private as a saved one. The move
 // never overwrites a file already in the root, is safe to run twice, leaves a file where it is (with an event saying why) when it
 // cannot move it, and deletes nothing that it did not move. Run() takes every folder as an input and returns what it did, so the
