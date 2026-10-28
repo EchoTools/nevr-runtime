@@ -19,6 +19,7 @@
 #include "runtime/patch/credits_text_install.h"
 #include "runtime/patch/invite_choice_hook.h"
 #include "runtime/patch/menu_cards.h"
+#include "runtime/patch/ui_text_writer.h"
 #include "runtime/patch/invite_wizard_hook.h"
 #include "runtime/patch/arena_public_clock.h"
 #include "runtime/patch/coop_ai_trace.h"
@@ -641,6 +642,14 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   } else {
     Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] wizard observer skipped reason=server_mode");
     Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] choice observer skipped reason=server_mode");
+  }
+
+  // #896, #906: the UI text writer (the first accessor of the UI seam). Client only: a server draws no menu. It pins the
+  // game's functions and logs the result; nothing is written until a request is posted. The SetText hook (menu version label) is already in, which the pin accepts.
+  if (!g_isServer) {
+    nevr_ui_text::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
+  } else {
+    Log(EchoVR::LogLevel::Info, "[NEVR.UI] text writer skipped reason=server_mode (a server draws no menu)");
   }
 
   // N92: start the WebSocket bridge in-process, as part of this DLL rather than
