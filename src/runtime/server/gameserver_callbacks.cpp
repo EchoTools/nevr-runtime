@@ -734,11 +734,10 @@ static void RelayLobbySettingsFrame(GameServerLib* self, const VOID* data, UINT6
       return true;
     };
     // CBroadcaster::Send takes the item and buffer as mutable pointers and only reads them; the relay owns both.
-    sinks.sendToPeer = [broadcaster](const void* item, uint64_t itemSize, const void* body, uint64_t bodySize,
+    sinks.sendToPeer = [broadcaster](void* item, uint64_t itemSize, void* body, uint64_t bodySize,
                                      uint64_t peer) -> int32_t {
-      return EchoVR::BroadcasterSend(broadcaster, Sym::LobbySettingsResponse, 0, const_cast<VOID*>(item), itemSize,
-                                     const_cast<VOID*>(body), bodySize, peer, ~0ULL, 1.0f,
-                                     static_cast<EchoVR::SymbolId>(-1));
+      return EchoVR::BroadcasterSend(broadcaster, Sym::LobbySettingsResponse, 0, item, itemSize, body, bodySize, peer,
+                                     ~0ULL, 1.0f, static_cast<EchoVR::SymbolId>(-1));
     };
   }
 

@@ -525,6 +525,29 @@ inline GotTarget LibR15OSBuildVersion() {
   return {kLibR15, kOSBuildVersionSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ff9b8ULL};
 }
 
+// NRadEngine::CCanvasUICS::SetText(SCompactPoolHandle, CSymbol64, char const*), defined in libr15 at 0x139111c (80
+// bytes, exported; ReVault 0x149111c): `canvas` (x0) is the CCanvasUICS component, `handle` (w1) the canvas actor's pool
+// handle, `item` (x2) the CSymbol64 of the text item and `text` (x3) the C string, copied into the item and never kept; a
+// null `text` returns 0. The versions page's SetText2 script nodes reach it through libr15's own PLT stub (0xf50440:
+// `adrp x16; ldr x17,[x16,#0x908]; add; br x17`, JUMP_SLOT 0x36ff908) from CSetText2Node::Enter (`bl 0xf50440` at pinned
+// 0x2731654; ReVault 0x2831654). Measured on the pinned file: 40 branches to the stub, none to the function, one
+// relocation names it.
+// `readelf -rW`: `R_AARCH64_JUMP_SLOT 0x139111c _ZN10NRadEngine11CCanvasUICS7SetTextENS_18SCompactPoolHandleENS_9CSymbol64EPKc`.
+// The slot is in .got, inside PT_GNU_RELRO, in a RW LOAD (data, never executable): a write needs mprotect(RW) and back to
+// R, not PROT_EXEC, so the execmod rule that stops an inline hook (docs/adr/0021) does not apply. The other overload
+// (`SAssetElement const&`, JUMP_SLOT 0x36c6a00) is not this slot.
+inline constexpr const char* kCanvasSetTextSymbol =
+    "_ZN10NRadEngine11CCanvasUICS7SetTextENS_18SCompactPoolHandleENS_9CSymbol64EPKc";
+inline constexpr std::uint64_t kCanvasSetTextVaddr = 0x139111c;
+inline constexpr std::uint64_t kCanvasSetTextStub = 0xf50440;
+inline constexpr std::size_t kCanvasSetTextStubCallers = 40;  // b/bl to the stub in the executable segments; none to the function
+using CanvasSetTextSig = std::uint64_t(void* canvas, std::uint32_t handle, std::uint64_t item, const char* text);
+struct LibR15CanvasSetTextTag {};
+using LibR15CanvasSetTextThunk = CallbackThunk<LibR15CanvasSetTextTag, CanvasSetTextSig>;
+inline GotTarget LibR15CanvasSetText() {
+  return {kLibR15, kCanvasSetTextSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ff908ULL};
+}
+
 // libr15.so's slot for CR15UIPage2EnablePageNode::Enter, defined in libr15 itself (JUMP_SLOT 0x36c1cf8).
 inline GotTarget LibR15EnablePageNodeEnter() {
   return {kLibR15, kEnablePageNodeEnterSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c1cf8ULL};
