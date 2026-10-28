@@ -20,6 +20,7 @@ SCOPE_AUDIENCE = {
     "ws-bridge": "For server hosts",
     "arena": "For server hosts",
     "plugins": "For plugin developers",
+    "plugin": "For plugin developers",
 }
 # Tooling, CI and the release process itself change no shipped file, so no audience reads them: they are left out.
 EXCLUDED_SCOPES = {"tools", "ci", "build", "test", "docs", "release"}

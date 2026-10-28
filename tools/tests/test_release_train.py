@@ -157,6 +157,16 @@ class AudienceSection(unittest.TestCase):
         self.assertIn("- a real fix", out)
         self.assertEqual(out.count("Nothing for this audience in this release."), 2)
 
+    def test_the_singular_plugin_scope_is_for_plugin_developers_too(self) -> None:
+        out = audience.sections(["feat(plugin): a level field, API v8", "fix(plugin): a loader fix", "fix(quest): a real fix"])
+        players = out.split("### For players", 1)[1].split("### For server hosts", 1)[0]
+        devs = out.split("### For plugin developers", 1)[1].split("## Not tested", 1)[0]
+        self.assertIn("- a level field, API v8", devs)
+        self.assertIn("- a loader fix", devs)
+        self.assertNotIn("a level field", players)
+        self.assertNotIn("a loader fix", players)
+        self.assertIn("- a real fix", players)
+
     def test_an_empty_audience_says_so(self) -> None:
         out = audience.sections(["fix(quest): a thing"])
         self.assertIn("### For plugin developers\n\n- Nothing for this audience in this release.", out)
