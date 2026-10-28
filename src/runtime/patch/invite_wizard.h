@@ -217,7 +217,11 @@ inline Plan PlanRequest(const Metric& metric, const Choices& choices) {
   }
   if (metric.kind == Kind::Create) {
     plan.op = Op::Create;
-    if (choices.experience.empty() || (choices.experience != "lobby" && choices.mode.empty())) {
+    // A combat payload or capture-point game is played on one of two maps, chosen on the map page; without it there is
+    // no level to ask for.
+    const bool needsMap = choices.experience == "combat" && (choices.mode == "payload" || choices.mode == "capture");
+    if (choices.experience.empty() || (choices.experience != "lobby" && choices.mode.empty()) ||
+        (needsMap && choices.map == 0)) {
       plan.skip = Skip::Incomplete;
       return plan;
     }

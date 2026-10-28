@@ -2117,13 +2117,25 @@ void InstallWebSocketBridge() {
                         // The login remote is shared with the matchmaker connections: its frames go
                         // to the live connection SharedRouteLocked picks. Any other remote (config)
                         // belongs to its own game socket.
+                        // pairPtr is not read here either (#752): a login game socket that closed while a matchmaker
+                        // still shares this remote has erased its pair, and the callback stays installed.
                         ix::WebSocket* target = nullptr;
                         {
                           std::lock_guard<std::mutex> lk(g_pairsMutex);
-                          if (pairPtr->remoteWs != nullptr && pairPtr->remoteWs == g_loginRemoteWs)
+                          const auto pit = g_pairs.find(gameWsPtr);
+                          if (pit != g_pairs.end()) {
+                            // The pair is present, so its game socket has not closed and gameWsPtr is alive.
+                            if (pit->second->remoteWs != nullptr && pit->second->remoteWs == g_loginRemoteWs)
+                              SharedRouteLocked(&target);
+                            else
+                              target = gameWsPtr;
+                          } else if (remoteAddress == g_loginRemoteWs.get()) {
+                            // The login game socket closed and its pair is gone, but the shared login remote still
+                            // carries this callback: route to the live matchmaker connection. gameWsPtr is not used.
                             SharedRouteLocked(&target);
-                          else
-                            target = gameWsPtr;
+                          }
+                          // Otherwise the game socket closed and nothing shares this remote: target stays null, and
+                          // the frame is dropped below. gameWsPtr is never used without its pair.
                         }
                         if (target == nullptr) {
                           LogSharedFrameDropped(rmsg->str.size());

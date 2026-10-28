@@ -17,6 +17,8 @@
 #include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/credits_block.h"
 #include "runtime/patch/credits_text_install.h"
+#include "runtime/patch/invite_choice_hook.h"
+#include "runtime/patch/menu_cards.h"
 #include "runtime/patch/invite_wizard_hook.h"
 #include "runtime/patch/arena_public_clock.h"
 #include "runtime/patch/coop_ai_trace.h"
@@ -622,12 +624,23 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] credits_text skipped reason=server_mode (no credits page on a server)");
   }
 
+  // #906, ADR 0017 D4: the CREATE GAME and JOIN VIA CODE cards on the main menu. Client only: a server draws no menu.
+  // The page is the player's own, pinned by sha256 and extended in memory when the loader delivers it; any other
+  // page is served unchanged. Registered after InstallResourceOverride, which created the registry.
+  if (!g_isServer) {
+    nevr_menu_cards::Install();
+  } else {
+    Log(EchoVR::LogLevel::Info, "[NEVR.MENU] main-menu cards skipped reason=server_mode (a server draws no menu)");
+  }
+
   // #906, ADR 0017: observe the CREATE GAME / JOIN VIA CODE wizard's click metric. Client only, and it sends nothing
   // yet (the worker waits for the service RPCs). It forwards every submit unchanged.
   if (!g_isServer) {
+    nevr_invite_choice_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
     nevr_invite_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
   } else {
     Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] wizard observer skipped reason=server_mode");
+    Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] choice observer skipped reason=server_mode");
   }
 
   // N92: start the WebSocket bridge in-process, as part of this DLL rather than

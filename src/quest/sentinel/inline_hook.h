@@ -46,9 +46,14 @@
  *   - There is no Remove. A hook is process-lifetime state, as with GotHook. Restoring the
  *     prologue while threads may be inside the detour is the same hazard as un-hooking a GOT
  *     slot from a destructor.
- *   - A failed restore of page protection after the commit leaves the page writable and not
- *     executable. That status (kRestoreProtectFailed) is fatal to the caller; the code cannot
- *     recover from it. It is reported, not hidden.
+ *   - A failed restore of page protection after the commit would leave the page writable and not
+ *     executable, and the first call into it would fault. The backend therefore takes the patch back
+ *     out while the page is still writable (word 0 first, the commit in reverse), forgets the hook and
+ *     tries the restore again: if that works the status is kRestoreProtectUndone (the hook is skipped,
+ *     the page is r-x with the original bytes). If it still fails the status is kRestoreProtectFailed,
+ *     logged with both errno values: the original bytes are in place but the page is not executable,
+ *     which is fatal to the caller. Every failed protection change logs its errno and the page's
+ *     permissions.
  *
  * Install is reached only through InstallInlineThunk (hook_install.h), the same rule as
  * GotHook: the entry the detour jumps to is a CallbackThunk entry, so the frame sensor walks it.
@@ -75,8 +80,14 @@ enum class InlineStatus : std::uint8_t {
   kTrampolineFailed,       // mmap or mprotect of the trampoline page failed
   kProtectFailed,          // the target's page could not be made writable
   kWriteVerifyFailed,      // a read-back before the commit differs from what was written; rolled back
-  kRestoreProtectFailed,   // the page could not be made executable after the commit; fatal (see above)
+  kRestoreProtectUndone,   // the page could not be made executable after the commit; the patch was taken back out
+                           // and the page is executable again with the original bytes; the hook is skipped
+  kRestoreProtectFailed,   // the page could not be made executable, with or without the patch; the original bytes
+                           // are in place but the page is left writable and not executable; fatal (see above)
 };
+
+// The protection change the backend calls (mprotect's signature). A test replaces it to make one fail.
+using ProtectFn = int (*)(void* addr, std::size_t len, int prot);
 
 // Stable tokens for log lines and tests.
 const char* InlineStatusName(InlineStatus status);
@@ -124,6 +135,9 @@ class InlineHook {
   // entry value on any failure. Returns kOk only when the hook is live and verified.
   static InlineStatus Install(const void* target, const InlinePrologue& expected, void* detour,
                               void** originalOut);
+
+  // Replaces the protection call (nullptr restores mprotect); returns the previous one. Tests only.
+  static ProtectFn SetProtectForTest(ProtectFn fn);
 };
 
 }  // namespace sentinel

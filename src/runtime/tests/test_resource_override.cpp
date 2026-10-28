@@ -9,6 +9,7 @@
 #include <future>
 #include <fstream>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -523,6 +524,140 @@ TEST_F(CachedOverrides, AnEntryWithoutALabelIsNamedAfterItsHash) {
   const std::string sha = Cache(Image(80, 6), kSplashType, kSplashName, "");
   EXPECT_EQ(RegisterCachedResourceOverrides(dir_.c_str()), 1u);
   EXPECT_TRUE(TestLogContains("Registered file override: cache:" + sha.substr(0, 12) + " ("));
+}
+
+// ── Transforms: the game's buffer in, the served bytes out, on every load ────────────────────────────────────
+
+constexpr std::uint64_t kTransformType = 0x75e5993f80940cd0ull;
+constexpr std::uint64_t kTransformName = 0xac360e41e4ede056ull;
+
+struct TransformProbe {
+  int calls = 0;
+  const void* seenIn = nullptr;
+  std::uint64_t seenSize = 0;
+  void* seenUser = nullptr;
+  bool answer = true;
+  bool throws = false;
+  std::vector<std::uint8_t> served = {9, 8, 7, 6, 5};
+};
+TransformProbe g_probe;
+
+bool ProbeTransform(const void* in, std::uint64_t inSize, const void** out, std::uint64_t* outSize, void* user) {
+  ++g_probe.calls;
+  g_probe.seenIn = in;
+  g_probe.seenSize = inSize;
+  g_probe.seenUser = user;
+  if (g_probe.throws) throw std::runtime_error("transform failure");
+  if (!g_probe.answer) return false;
+  *out = g_probe.served.data();
+  *outSize = g_probe.served.size();
+  return true;
+}
+
+// The game finishing buffer `index` of (type, name).
+void GameFinishesBuffer(std::uint64_t type, std::uint64_t name, std::uint32_t index, const void* buffer,
+                        std::uint64_t size) {
+  std::array<std::uint8_t, 0x40> resource{};
+  std::array<std::uint8_t, 0x28> callback{};
+  void* resourcePtr = resource.data();
+  std::memcpy(resource.data() + 0x28, &type, sizeof(type));
+  std::memcpy(resource.data() + 0x38, &name, sizeof(name));
+  std::memcpy(callback.data() + 0x08, &resourcePtr, sizeof(resourcePtr));
+  std::memcpy(callback.data() + 0x10, &index, sizeof(index));
+  std::memcpy(callback.data() + 0x18, &buffer, sizeof(buffer));
+  std::memcpy(callback.data() + 0x20, &size, sizeof(size));
+  g_seenBuffer = nullptr;
+  g_seenSize = 0;
+  TestHook_RunResourceCallback(callback.data());
+}
+
+class ResourceTransforms : public CachedOverrides {
+ protected:
+  void SetUp() override {
+    CachedOverrides::SetUp();
+    g_probe = TransformProbe();
+  }
+};
+
+TEST_F(ResourceTransforms, TheTransformSeesTheGamesBufferAndItsAnswerIsWhatTheGameReads) {
+  int token = 0;
+  RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, &token, "probe");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  EXPECT_EQ(g_probe.calls, 1);
+  EXPECT_EQ(g_probe.seenIn, stock);
+  EXPECT_EQ(g_probe.seenSize, sizeof(stock));
+  EXPECT_EQ(g_probe.seenUser, &token);
+  EXPECT_EQ(g_seenBuffer, g_probe.served.data());
+  EXPECT_EQ(g_seenSize, g_probe.served.size());
+  EXPECT_TRUE(TestLogContains("transform applied label=probe"));
+}
+
+TEST_F(ResourceTransforms, EveryLoadOfTheResourceIsAnswered) {
+  RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "probe");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  for (int load = 1; load <= 3; ++load) {
+    GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+    EXPECT_EQ(g_probe.calls, load);
+    EXPECT_EQ(g_seenBuffer, g_probe.served.data()) << "load " << load;
+  }
+}
+
+TEST_F(ResourceTransforms, ATransformThatDeclinesLeavesTheGamesBufferAlone) {
+  g_probe.answer = false;
+  RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "probe");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  EXPECT_EQ(g_probe.calls, 1);
+  EXPECT_EQ(g_seenBuffer, stock);
+  EXPECT_EQ(g_seenSize, sizeof(stock));
+}
+
+TEST_F(ResourceTransforms, ATransformThatThrowsKeepsTheGamesBufferAndSaysSo) {
+  g_probe.throws = true;
+  RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "probe");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  EXPECT_EQ(g_seenBuffer, stock);
+  EXPECT_EQ(g_seenSize, sizeof(stock));
+  EXPECT_TRUE(TestLogContains("transform threw label=probe"));
+  EXPECT_TRUE(TestLogContains("what=transform failure"));
+}
+
+TEST_F(ResourceTransforms, OnlyThePrimaryBufferOfTheNamedResourceIsOffered) {
+  RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "probe");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  GameFinishesBuffer(kTransformType, kTransformName, 1, stock, sizeof(stock));      // the secondary buffer
+  GameFinishesBuffer(kTransformType, kTransformName + 1, 0, stock, sizeof(stock));  // another name
+  GameFinishesBuffer(kTransformType + 1, kTransformName, 0, stock, sizeof(stock));  // another type
+  EXPECT_EQ(g_probe.calls, 0);
+  EXPECT_EQ(g_seenBuffer, stock);
+}
+
+TEST_F(ResourceTransforms, AnEmptyAnswerIsNotServed) {
+  g_probe.served.clear();
+  RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "probe");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  EXPECT_EQ(g_probe.calls, 1);
+  EXPECT_EQ(g_seenBuffer, stock);
+}
+
+TEST_F(ResourceTransforms, ARequestedTransformIsNotReportedAsNeverApplied) {
+  RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "probe");
+  RegisterResourceTransform(kTransformType, kTransformName + 5, &ProbeTransform, nullptr, "idle");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  ClearTestLogs();
+  const ResourceOverrideShutdownReport report = ShutdownResourceOverride();
+  EXPECT_EQ(report.registered, 2u);
+  EXPECT_EQ(report.never_applied, 1u);
+  EXPECT_TRUE(TestLogContains("override never applied label=idle"));
+}
+
+TEST_F(ResourceTransforms, ANullTransformRegistersNothing) {
+  RegisterResourceTransform(kTransformType, kTransformName, nullptr, nullptr, "none");
+  EXPECT_EQ(ShutdownResourceOverride().registered, 0u);
 }
 
 }  // namespace
