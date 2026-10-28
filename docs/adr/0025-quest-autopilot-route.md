@@ -69,10 +69,13 @@ What the tree and the binary give us (pinned `libr15.so`, build ID `b243509c08ce
 5. **The plugin is `nevr_autopilot` (`libnevr_autopilot.so`), built for Quest only and carried only in an APK built
    for it.** It is off unless `config.yaml` names it, like every plugin (ADR 0019 R2). No recipe that builds a release
    or `package-dev` APK carries it (`android-repack-apk`'s `plugin` argument). `just quest-autopilot-apk` is the one
-   recipe that does.
+   recipe that does. The recipe refuses a plugin whose build-ID note does not list the store APK's own `libr15.so`
+   build ID (`tools/quest_repack_libs.py check-plugin-build-ids`), so an APK whose plugin the loader would refuse is
+   never signed.
 6. **The filter never logs, allocates, locks or calls into the game.** It reads `CLOCK_MONOTONIC`, sets the state,
-   and puts events into a fixed ring with their timestamps taken at the frame they happen. A reporter thread, started
-   in the plugin's init, writes them through `ctx->log`. The thread ends after `route_end`, or at `NvrPluginShutdown`,
+   and puts events into a fixed ring with their timestamps taken at the frame they happen, then wakes the reporter
+   with one non-blocking write to an eventfd. A reporter thread, started in the plugin's init, waits on that eventfd
+   and writes the events through `ctx->log`. The thread ends after `route_end`, or at `NvrPluginShutdown`,
    which wakes and joins it. Events the ring cannot hold are counted, and `route_end` reports the count. The host has
    no way to remove a filter, so the run a registered filter points at is never freed: `NvrPluginShutdown` ends it,
    and from then on the filter changes nothing.
@@ -152,12 +155,13 @@ Through `ctx->log`, so lines are `[NEVR.PLUGIN] plugin=nevr_autopilot <message> 
 | --- | --- | --- | --- |
 | `route_loaded` | Info | init | `route` (the path), `name`, `sha256` of the file bytes, `steps`, `repeat`, `planned_s`, `start_after_s`, `start` (`first_frame` or `start_file`), `drives` (`left`, `right`, `left+right` or `none`) |
 | `route_refused` | Error | init | `route`, `line` (0 for the args, the file or a whole-file limit), `reason` |
-| `input_filter` | Info/Error | init | `result`: `registered`, the host's refusal token (`bad_argument`, `not_dev_build`, `owned`, `hook_refused`), or `no_host_api` (a context without `quest`), `no_semaphore`, `no_memory`, `no_reporter_thread` |
+| `input_filter` | Info/Error | init | `result`: `registered`, the host's refusal token (`bad_argument`, `not_dev_build`, `owned`, `hook_refused`), or `no_host_api` (a context without `quest`), `no_wake_fd` or `no_reporter_thread` (each with `errno`) |
 | `start_file_seen` | Info | the start file exists | `start_file`, `realtime_ms` |
 | `route_start` | Info | first step | `name`, `realtime_ms` (`CLOCK_REALTIME`, Unix ms), `monotonic_ns`, `boottime_ns` |
 | `route_step` | Debug | each step | `index`, `pass`, `realtime_ms`, `monotonic_ns` |
 | `route_end` | Info | end | `name`, `realtime_ms`, `monotonic_ns`, `boottime_ns`, `planned_s`, `measured_s`, `frames_left`, `frames_right`, `frames_unknown_hand`, `frames_driven_left`, `frames_driven_right`, `max_frame_gap_ms`, `events_dropped` |
 | `route_stopped` | Warning | shutdown before the end | `name`, `started`, `realtime_ms`, `frames_driven_left`, `frames_driven_right` |
+| `reporter_end` | Debug | the reporter thread returns | `reason`: `route_end` or `stopped` |
 
 `frames_*` count the polls inside the route, from its first step to its end; a hand the route never names is counted
 and not driven. `measured_s` runs from `route_start` to `route_end`; `max_frame_gap_ms` is the longest time between two

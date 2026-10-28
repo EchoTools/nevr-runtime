@@ -202,6 +202,9 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
         # `zip` replaces an entry of the same path: a plugin named like any lib/ entry of the store APK, or like a library
         # staged below, would take that library's place. Refuse before anything is staged (tools/quest_repack_libs.py).
         python3 -I tools/quest_repack_libs.py check-plugin-name --apk "$apk" --plugin "$plugin"
+        # The loader refuses a plugin whose NEVR note does not list the running libr15's build ID (plugin_image.h): an APK
+        # whose plugin is refused on the headset is refused here, against the store APK's own libr15.so.
+        python3 -I tools/quest_repack_libs.py check-plugin-build-ids --apk "$apk" --plugin "$plugin"
         # ADR 0019 section 1: a plugin runs the same static-init check as the shim, minus the shim's own constructor.
         llvm_bin="{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
         [ -x "$llvm_bin/llvm-nm" ] || llvm_bin="$(dirname "$(command -v llvm-nm || true)")"
