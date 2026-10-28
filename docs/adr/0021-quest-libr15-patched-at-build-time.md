@@ -9,10 +9,16 @@ The sentinel (`libovrplatformloader.so`, our shim) changes libr15's behaviour in
 both write libr15's code at run time:
 
 - inline hooks (`src/quest/sentinel/inline_hook.cpp`): the lobby-full join, failure and success handlers, the texture
-  `CGTextureResource::Attach`, the splash-skip widget update, and the menu version label's `SetText` (#747). Each overwrites the
+  `CGTextureResource::Attach`, and the splash-skip widget update. Each overwrites the
   first 16 bytes of a function (`LDR x16,#8; BR x16; .quad detour`) after `mprotect(page, RW)` and puts the page back with
   `mprotect(page, RX)`;
 - the credits page (`src/quest/sentinel/credits_text.cpp`, `WriteWord`): two `ADRP`+`ADD` pairs are rewritten the same way.
+
+The menu version label (#747) is neither: it hooks `CCanvasUICS::SetText`, which libr15 calls only through its own PLT stub,
+so its call path is one GOT slot (`R_AARCH64_JUMP_SLOT` 0x36ff908, in `.got` inside `PT_GNU_RELRO`, in a writable `LOAD` that is
+not executable; 40 `bl` to the stub, none to the function; `src/quest/tests/got_pinned_test.cpp`). The sentinel redirects that
+slot like its other libr15 GOT hooks (`src/quest/social/menu_version_label.cpp`): a data page is written and no `PROT_EXEC` is
+involved, so the `execmod` rule above does not meet it, it runs today, and it is not a table row.
 
 On a tester's Quest 3 (NEVR 5.10.0, libr15 build ID `b243509c08ce677aeb95fa348016949b3fc45230`, #1127) the second
 `mprotect` is denied by policy: `avc: denied { execmod } ... path=".../libr15.so" scontext=u:r:untrusted_app_29:s0
@@ -49,10 +55,10 @@ A new header, libr15_patch_table.h, in a new directory under src/quest, is the o
   ReVault with `revault_disassemble <revaultVa>`;
 - the kind (`kInlineHook`, `kCreditsPair` or `kWordPatch`, section 11) and the handler's name.
 
-The sentinel's hook files (`lobby_full_hooks.cpp`, `ui_texture_mips.cpp`, `splash_skip_hook.cpp`, `menu_version_label.cpp`) keep
-their handlers and lose their per-file `kXxxVaddr` and prologue constants; they name a table row. The seven rows are:
+The sentinel's hook files (`lobby_full_hooks.cpp`, `ui_texture_mips.cpp`, `splash_skip_hook.cpp`) keep
+their handlers and lose their per-file `kXxxVaddr` and prologue constants; they name a table row. The six rows are:
 `lobby_full.join` (ReVault 0x1340ba8), `lobby_full.failure` (0x1340cc8), `lobby_full.success` (0x134024c), `ui_texture.attach`
-(0x19e75c4), `splash_skip.widget_update` (0x209a7a0; #1128's correct address), `menu_version.set_text` (0x149111c; #1125's), and
+(0x19e75c4), `splash_skip.widget_update` (0x209a7a0; #1128's correct address), and
 `credits.pairs` (ReVault 0x1ea1284/0x1ea1290 and 0x1ea1d84/0x1ea1d88, the two pairs of #970).
 
 ### 2. The patcher: a host tool that reads the stock file and refuses on any doubt
@@ -299,7 +305,8 @@ Each is run once with the line it covers changed and must fail (the mutant disci
    range); the output is identical across two runs; a wrong stock word, a wrong build ID, an already-patched input, a site
    outside the text, and a growth that would overlap the next segment are each refused with the row's `id`.
 3. **Relocator, 3-word window**, on each row's real stock words, with the existing A64 interpreter (original window against the
-   relocated trampoline far away); the `SetText` row's leading `CBZ` is the case that matters.
+   relocated trampoline far away); the leading `CBZ` of `CCanvasUICS::SetText` is the case that matters (`TheQuestSetTextPrologueRelocates`,
+   which stays a relocator case though the label no longer needs the relocator).
 4. **Sentinel `Attach` on a synthetic patched image in memory**: every refusal in the section 7 table and every check of section 4;
    a trampoline-creation failure ends the process with its reason; after `Attach` every slot holds its trampoline; activation
    stores the detour; and a counting seam on `mprotect` sees **no call on any page of the image** (the test that fails if a code
@@ -346,12 +353,12 @@ Written before any run. Lines are from the sentinel's log; "no execmod" means th
 `avc: denied { execmod }` for `libr15.so`.
 
 **Quest 3 (the tester's headset, OS build 52641960030600520).** In the constructor's log, in this order:
-1. `libr15_patch` `status=verified`, `build_id` = the patched ID, `stock_build_id` = `b243509c...`, `rows=7`;
-2. seven `inline_hook`/`credits_text` lines `status=ok` (the six hooks, then the credits slot), each `page_perms":"r-xp"`;
+1. `libr15_patch` `status=verified`, `build_id` = the patched ID, `stock_build_id` = `b243509c...`, `rows=6`;
+2. six `inline_hook`/`credits_text` lines `status=ok` (the five hooks, then the credits slot), each `page_perms":"r-xp"`;
 3. the constructor's summary reads `steps_failed=0` (the capture's `steps_ok=22 steps_failed=1` becomes 23 and 0: its one failed
    step was `credits_text`);
 4. the process stays up past the first minute and reaches the login (`to logged in`); there is no `SIGSEGV`, and no `execmod`
-   anywhere in the capture. The menu's version label shows the build's version and the splash skip runs (their pins are now right).
+   anywhere in the capture. The menu's version label shows the build's version (its GOT hook installs without the patch) and the splash skip runs (its pin is now right).
 5. with the no-op plugin of ADR 0019 slice 1 (it declares the stock ID only) in `plugins:`: one `plugin_load outcome=loaded`
    record with `game_build_id` = the patched ID, `plugin_view_build_id` = `b243509c...`, `libr15_patched` true.
 Falsifiers: any `avc: denied { execmod }` for `libr15.so`; a `SIGSEGV` at a libr15 page; a `libr15_patch` line with a reason;
@@ -402,7 +409,7 @@ the Quest 3 does not show is a defect of the patched file for that OS.
 
 - #1131 (undo of a failed restore): the code-write path it protects is deleted by this change; the errno logging of the
   trampoline's `mmap`/`mprotect` stays.
-- #1125 and #1128 become table rows (`menu_version.set_text`, `splash_skip.widget_update`); neither is merged separately.
+- #1128 becomes a table row (`splash_skip.widget_update`) and #1125 is replaced by the label's GOT hook; neither is merged separately.
 - Work order, one PR because a patched libr15 with the old sentinel crashes and the old libr15 with the new sentinel runs
   unhooked: (1) table, stub codec, patcher, relocator window, tests 1 to 3; (2) repack and `verify-signed`, tests 5 and 7;
   (3) `Attach`, activation, the deletions, credits, tests 4 and 6; (4) the headset rows. A Quest 2 and a Quest 3 run precede any
