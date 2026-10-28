@@ -167,6 +167,19 @@ const char* OnUserGetOculusId(const char* (*original)(const void*), const void* 
 const void* OnMessageGetUserProof(const void* (*original)(const void*), const void* message) noexcept;
 const char* OnUserProofGetNonce(const char* (*original)(const void*), const void* handle) noexcept;
 
+// ovr_GetLoggedInUserID (#944). A nonzero id is returned unchanged. A zero id (the SDK has no logged-in user)
+// would fail RadPluginMain with OVRLoggedInUserFail before any login is attempted; it is answered with the
+// per-process stand-in (StandIn::UserId) only when every reader of the id is covered: local answers are on (the
+// login's org-id requests that pass the id never reach the SDK) and the social facade is installed (CNSOVRSocial,
+// the other reader, is not driven). Otherwise the zero is returned and the game fails as before. The login member
+// "accountid" the game copies from it is rewritten to the NEVR account id, and the send gate refuses a login that
+// still carries the stand-in (WireCheck::account_member_stand_in). One record (event "quest_logged_in_user_id")
+// on the first call; no id value is logged.
+std::uint64_t OnLoggedInUserId(std::uint64_t (*original)()) noexcept;
+// Answers OnLoggedInUserId gave with the stand-in (also for tests).
+std::uint64_t LoggedInUserIdStandIns() noexcept;
+const std::atomic<std::uint64_t>& LoggedInUserIdStandInCounter() noexcept;
+
 // Logs one issued request (capped per window). Called after the real request function returned.
 void NoteRequest(Prerequisite which, std::uint64_t request_id) noexcept;
 
@@ -244,6 +257,13 @@ std::uint64_t Refuse(std::uint64_t site) noexcept;
 std::uint64_t Refused() noexcept;
 const std::atomic<std::uint64_t>& RefusedCounter() noexcept;
 
+// Whether the social facade's Social() hook is installed (#944), set by the social install, which runs before
+// libpnsovr is loaded. The facade is not yet SELECTED then (the game has not called Social()), so this is what
+// OnLoggedInUserId can know when RadPluginMain asks: CNSOVRSocial, which reads the logged-in user id, will not be
+// driven. Default false.
+void SetSocialFacadeInstalled(bool installed) noexcept;
+bool SocialFacadeInstalled() noexcept;
+
 std::uint64_t Requested() noexcept;   // local request ids handed out
 std::uint64_t Delivered() noexcept;   // synthetic messages popped
 std::uint64_t Deferred() noexcept;    // pops that had an answer ready but every handle was still held
@@ -269,6 +289,7 @@ struct PrerequisiteInstall {
   int requests = 0;   // of 4
   int entitlement = 0;  // of 1: the entitlement request answered locally (#411)
   int messages = 0;     // of 4: PopMessage, GetType, GetRequestID, FreeMessage (local answers, #411)
+  int user_id = 0;      // of 1: ovr_GetLoggedInUserID, a zero id stood in (#944)
   bool local = false;   // the four user requests are answered locally
   bool substitute = false;
 };

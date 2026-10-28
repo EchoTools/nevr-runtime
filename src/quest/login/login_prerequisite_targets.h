@@ -111,6 +111,14 @@ inline bool IsLoginOrgRequestCaller(const void* caller, std::uintptr_t base) noe
 // hook answers locally with request id 0, so no request leaves and no message comes back.
 inline constexpr PinnedSlot kEntitlementRequest{"ovr_Entitlement_GetIsViewerEntitled", RelocKind::kJumpSlot, 0x6df638, 0};
 
+// The logged-in user's app-scoped id (#944). RadPluginMain's only call (0x206828) stores it in the global 0x70e3e8
+// (0x206838), logs "[OVR] Logged in user app-scoped id: %llu" and, on 0, fails the plugin with OVRLoggedInUserFail
+// (0x206850 -> 0x206a5c). The other readers of 0x70e3e8: ovr_User_GetOrgScopedID at the login's three sites
+// (0x2069b4, 0x1ec990, 0x1ecf78; kOrgRequestLoginReturns), the login member "accountid" (GotUserProofCB 0x1ed740) and
+// CNSOVRSocial (FollowDeepLink 0x1f2b24, EnsureLocalMember 0x1f2bc0, JoinInternal 0x1f3898, AddMember 0x204a24). No
+// other library of the pinned APK imports ovr_GetLoggedInUserID.
+inline constexpr PinnedSlot kLoggedInUserId{"ovr_GetLoggedInUserID", RelocKind::kJumpSlot, 0x6dc080, 0};
+
 // The message-level imports the local answers hook (#411): the pump pops a message, reads its type and
 // request id, and frees it (Update 0x207534).
 inline constexpr PinnedSlot kPopMessage{"ovr_PopMessage", RelocKind::kJumpSlot, 0x6e02d0, 0};
@@ -132,7 +140,7 @@ inline constexpr PinnedSlot kAll[] = {
     kMessageGetUser,      kUserGetOculusId,      kMessageGetUserProof,  kUserProofGetNonce,
     kGetOrgScopedId,      kGetLoggedInUser,      kGetAccessToken,       kGetUserProof,
     kEntitlementRequest,  kPopMessage,           kMessageGetType,       kMessageGetRequestId,
-    kFreeMessage,
+    kFreeMessage,         kLoggedInUserId,
     kMessageGetError,     kErrorGetCode,         kErrorGetHttpCode,     kErrorGetMessage,
 };
 

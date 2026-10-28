@@ -27,9 +27,14 @@ const char* OrgIdText() noexcept;     // OrgId() as decimal "%llu" (the game's O
 const char* AccessToken() noexcept;   // 40 lowercase hex characters
 const char* Nonce() noexcept;         // 32 lowercase hex characters
 const char* OculusId() noexcept;      // "player-" + 8 hex: shorter than the game's 36-byte buffer
+// The app-scoped user id handed to RadPluginMain when ovr_GetLoggedInUserID returns 0 (#944): neither 0 nor
+// OrgId(), and below 2^63, so the login's "accountid" member (CJson::SetInt, a signed 64-bit value) reads it back
+// unchanged.
+std::uint64_t UserId() noexcept;
 
 bool IsOrgId(std::uint64_t value) noexcept;
 bool IsOrgIdText(const char* value) noexcept;  // value equals OrgIdText()
+bool IsUserId(std::uint64_t value) noexcept;
 bool IsAccessToken(const char* value) noexcept;
 bool IsNonce(const char* value) noexcept;
 // Compares at most `capacity` bytes of a NUL-terminated or full fixed buffer (the game's 0x70e470).
@@ -41,6 +46,8 @@ bool IsOculusId(const char* value, std::size_t capacity = 64) noexcept;
 #if defined(NEVR_QUEST_TESTING)
 // Fixes the stand-ins to known values (any later Generate keeps them).
 void SetForTest(std::uint64_t org, const char* token, const char* nonce, const char* oculus_id) noexcept;
+// Fixes the user-id stand-in (SetForTest leaves it as it was).
+void SetUserIdForTest(std::uint64_t user) noexcept;
 // Back to the unpublished state, so the next Generate draws fresh values.
 void ResetForTest() noexcept;
 #endif
