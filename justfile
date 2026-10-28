@@ -1422,6 +1422,9 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
     # answered locally, and the list the sentinel gates on equals what the library has.
     python3 tools/pinned_ovr_import_walk.py "$out/lib/lib/arm64-v8a/libpnsovr.so" --sites tools/pinned_ovr_sites.txt \
         --header src/quest/login/login_prerequisite_targets.h
+    # #944: every site the community patch repo edits in libpnsovr.so still holds the stock word and sits in the
+    # function tools/quest_patcher_sites.tsv names, so the table's mapping to our hooks is about this library.
+    python3 tools/quest_patcher_sites.py --lib "$out/lib/lib/arm64-v8a/libpnsovr.so"
 
 # Quest social provider on the host (docs/adr/0003, "Social provider"): the ABI pins against the
 # recorded vtable, the facade driven through its vtable, the hook decision through the real callback

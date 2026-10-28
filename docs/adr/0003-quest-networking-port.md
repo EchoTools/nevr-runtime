@@ -1175,6 +1175,18 @@ by the walk: `blr`/`br` and a PLT stub into the library's own exports.
 `UpdateInternal` re-issues `ovr_User_GetUserProof` only on the branch where `LogInInternal` did not, and clears
 its flag first, so one `GotUserProofCB` runs per `LogIn` call.
 
+The community patch repo edits libpnsovr.so in 79 places: its 8 entitlement patches, its 70-site license overlay and
+a per-player id slot that its patcher bot stamps. `tools/quest_patcher_sites.tsv` lists each one (#944) with the
+hook in this tree that covers it, or, where there is none, why none is needed. 64 rows are covered by the hooks above
+or by the social facade and presence hooks. 14 of the other 15 need no hook. Two are the game's own HMD-serial
+check, which passes because nothing here writes the fields it compares. Eight are IAP's success processing, which is
+not a gate. Two are a function with no reference in the library. One is a TLS-handle cache test that is not a gate.
+One is the per-player id slot, which the NEVR login makes unnecessary. One row is open: `RadPluginMain` fails with
+`OVRLoggedInUserFail` when `ovr_GetLoggedInUserID` returns 0. Recorded device runs show it nonzero, but an account
+that never owned the app is not measured. `tools/quest_patcher_sites.py` fails a row
+that has neither a hook nor a reason, or that names a hook not in the tree (`just test-tools`). With the extracted
+library (`just test-quest-hooks-pinned`) it also checks each row's stock word and function.
+
 Each callback logs one `quest_login_prerequisite` record (call, `result` real or synthesized,
 `reason`, `accessor`, `ovr_error`, `error_code`, `http_code`; a locally answered one also carries `ready`, 0 when the
 not-ready reset withdraws the stand-in it gave) and each request one
