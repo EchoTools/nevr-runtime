@@ -49,7 +49,7 @@ public:
     /// Whether the plugin should act in this context: no names configured, or the context's level is one of them.
     bool Allows(const NvrGameContext* ctx) const {
         if (!Configured()) return true;
-        if (!Covers(ctx) || ctx->level_symbol == 0) return false;
+        if (!Covers(ctx)) return false;
         for (const uint64_t symbol : symbols_) {
             if (symbol == ctx->level_symbol) return true;
         }

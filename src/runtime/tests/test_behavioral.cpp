@@ -2157,12 +2157,14 @@ TEST_F(PluginLevelTest, TheHostLogsEachLevelChangeOnceHoweverManyPluginsAndFrame
   TickLoadedPluginsOnce();
   TickLoadedPluginsOnce();
   StateChange(6, 7);
+  EXPECT_EQ(TestLogCount("[NEVR.PLUGIN] main level changed:"), 1) << "one line per change, not one per read";
   EXPECT_EQ(TestLogCount("[NEVR.PLUGIN] main level changed: from=none to=mpl_arena_a"), 1);
   EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] main level changed: from=none to=mpl_arena_a"));
 
   ClearTestLogs();
   SetFakeGameLevel(EchoVR::kNoLevelInGame);
   TickLoadedPluginsOnce();
+  EXPECT_EQ(TestLogCount("[NEVR.PLUGIN] main level changed:"), 1);
   EXPECT_EQ(TestLogCount("[NEVR.PLUGIN] main level changed: from=mpl_arena_a to=none"), 1);
 }
 
