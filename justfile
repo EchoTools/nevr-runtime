@@ -1477,14 +1477,17 @@ test-quest-redirect: _vcpkg-quest-host
 # src/quest/tests/got_pinned_test.cpp. Fail-close, including when the APK is absent:
 # it is a 58 MB artifact that is not in the repository, so this is not part of
 # `just verify`.
-test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk":
+test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
     #!/usr/bin/env bash
     set -euo pipefail
-    apk="{{ apk }}"
+    apk="{{ apk }}"; store_apk="{{ store_apk }}"
     [ -f "$apk" ] || { echo "test-quest-hooks-pinned: pinned APK not found: $apk" >&2; exit 1; }
+    [ -f "$store_apk" ] || { echo "test-quest-hooks-pinned: store APK not found: $store_apk" >&2; exit 1; }
     out="build/quest-hooks-pinned"
     rm -rf "$out"; mkdir -p "$out/lib"
-    unzip -o -q "$apk" lib/arm64-v8a/libr15.so lib/arm64-v8a/libpnsradmatchmaking.so lib/arm64-v8a/libpnsovr.so lib/arm64-v8a/lib7f2363b8976491aa.so -d "$out/lib"
+    unzip -o -q "$apk" lib/arm64-v8a/libpnsradmatchmaking.so lib/arm64-v8a/libpnsovr.so lib/arm64-v8a/lib7f2363b8976491aa.so -d "$out/lib"
+    # libr15.so is the STORE's: the signed APK carries the patched file (docs/adr/0021 section 9), which these pins are not about.
+    unzip -o -q "$store_apk" lib/arm64-v8a/libr15.so -d "$out/lib"
     echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $out/lib/lib/arm64-v8a/libr15.so" | sha256sum -c -
     echo "36236ab1df5783da57c064b0fbccc3a61c0e1d150c208022fbfc9cd6e5ed60ee  $out/lib/lib/arm64-v8a/libpnsradmatchmaking.so" | sha256sum -c -
     echo "26e9a216a710d42a303346a4ca5b84037ff38250ea725dc7112b055fcacada79  $out/lib/lib/arm64-v8a/libpnsovr.so" | sha256sum -c -
@@ -1565,12 +1568,18 @@ test-quest-patcher json_include="": (quest-patcher json_include)
 # differ, stubs and credits words decoded back to their slots, segments, sections and end symbols). The
 # libr15 is the store APK's 58 MB file: pass its path, it is not in the repository and nothing here copies it
 # in. The two patched copies are written under build/quest-patcher/pinned-scratch and removed at the end.
+# `signed_libr15` (docs/adr/0021 test 5): the lib/arm64-v8a/libr15.so extracted from the SIGNED APK of a repack; with it
+# SignedApkLibr15IsThePatchersOutput requires that file to equal the tool's output for the stock file byte for byte and to
+# carry the patched build ID. Without it that test is not run and the run says so by name.
 # Fail-close, including when the file is absent.
-test-quest-patcher-pinned libr15 json_include="": (quest-patcher json_include)
+test-quest-patcher-pinned libr15 json_include="" signed_libr15="": (quest-patcher json_include)
     #!/usr/bin/env bash
     set -euo pipefail
-    libr15="{{ libr15 }}"
+    libr15="{{ libr15 }}"; signed_libr15="{{ signed_libr15 }}"
     [ -f "$libr15" ] || { echo "test-quest-patcher-pinned: libr15.so not found: $libr15" >&2; exit 1; }
+    [ -z "$signed_libr15" ] || [ -f "$signed_libr15" ] || { echo "test-quest-patcher-pinned: signed libr15.so not found: $signed_libr15" >&2; exit 1; }
+    signed_arg=()
+    if [ -n "$signed_libr15" ]; then signed_arg=("--signed-libr15=$signed_libr15"); fi
     out="build/quest-patcher"
     echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $libr15" | sha256sum -c -
     scratch="$out/pinned-scratch"
@@ -1579,7 +1588,7 @@ test-quest-patcher-pinned libr15 json_include="": (quest-patcher json_include)
     g++ -std=c++17 -O1 -Wall -Wextra -Werror -Isrc -pthread \
         src/quest/tests/libr15_patcher_pinned_test.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp \
         -o "$out/libr15_patcher_pinned_test"
-    timeout 600 "$out/libr15_patcher_pinned_test" "$out/quest_patch_libr15" "$libr15" "$scratch"
+    timeout 600 "$out/libr15_patcher_pinned_test" "$out/quest_patch_libr15" "$libr15" "$scratch" ${signed_arg[@]+"${signed_arg[@]}"}
     echo "test-quest-patcher-pinned: the tool's output on the pinned libr15 is as the table says"
 
 # Quest social provider on the host (docs/adr/0003, "Social provider"): the ABI pins against the
@@ -1644,14 +1653,17 @@ test-quest-social:
 # the recorded vtable (src/quest/tests/fixtures/cnsovrsocial_vtable.txt) is what the library holds.
 # Fail-close, including when the APK is absent (58 MB, not in the repository), so it is not part of
 # `just verify`.
-test-quest-social-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk":
+test-quest-social-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
     #!/usr/bin/env bash
     set -euo pipefail
-    apk="{{ apk }}"
+    apk="{{ apk }}"; store_apk="{{ store_apk }}"
     [ -f "$apk" ] || { echo "test-quest-social-pinned: pinned APK not found: $apk" >&2; exit 1; }
+    [ -f "$store_apk" ] || { echo "test-quest-social-pinned: store APK not found: $store_apk" >&2; exit 1; }
     out="build/quest-social-pinned"
     rm -rf "$out"; mkdir -p "$out/lib"
-    unzip -o -q "$apk" lib/arm64-v8a/libr15.so lib/arm64-v8a/libpnsovr.so -d "$out/lib"
+    unzip -o -q "$apk" lib/arm64-v8a/libpnsovr.so -d "$out/lib"
+    # libr15.so is the STORE's: the signed APK carries the patched file (docs/adr/0021 section 9), which these pins are not about.
+    unzip -o -q "$store_apk" lib/arm64-v8a/libr15.so -d "$out/lib"
     lib="$out/lib/lib/arm64-v8a"
     echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $lib/libr15.so" | sha256sum -c -
     echo "26e9a216a710d42a303346a4ca5b84037ff38250ea725dc7112b055fcacada79  $lib/libpnsovr.so" | sha256sum -c -
@@ -1802,14 +1814,16 @@ test-quest-plugins:
 # store APK, checks its SHA-256 and resolves LibR15Dlopen() the way the loader would lay the image out.
 # Fail-close, including when the APK is absent (58 MB, not in the repository), so it is not part of
 # `just verify`.
-test-quest-integration-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk":
+test-quest-integration-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
     #!/usr/bin/env bash
     set -euo pipefail
-    apk="{{ apk }}"
+    apk="{{ apk }}"; store_apk="{{ store_apk }}"
     [ -f "$apk" ] || { echo "test-quest-integration-pinned: pinned APK not found: $apk" >&2; exit 1; }
+    [ -f "$store_apk" ] || { echo "test-quest-integration-pinned: store APK not found: $store_apk" >&2; exit 1; }
     out="build/quest-integration-pinned"
     mkdir -p "$out/lib"
-    unzip -o -q "$apk" lib/arm64-v8a/libr15.so -d "$out/lib"
+    # libr15.so is the STORE's: the signed APK carries the patched file (docs/adr/0021 section 9), which these pins are not about.
+    unzip -o -q "$store_apk" lib/arm64-v8a/libr15.so -d "$out/lib"
     lib="$out/lib/lib/arm64-v8a"
     echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $lib/libr15.so" | sha256sum -c -
     off=(g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isrc/quest/sentinel)
