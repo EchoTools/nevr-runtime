@@ -73,8 +73,9 @@ recipe (`justfile:174-214`) already copies two `.so` files into that directory w
 plugin is one more entry in that list, and each plugin object runs the same static-init check as the shim
 (`tools/check_quest_static_init.sh --plugin`, run by the repack on every plugin it packages: only the two compiler-rt
 entries may run at load time). The repack refuses a plugin whose file name is the name of any `lib/` entry of the store
-APK or of a library it stages itself, and checks in the signed APK that every store library (the loader aside) and every
-staged library has its bytes (`tools/quest_repack_libs.py`).
+APK or of a library it stages itself, and checks in the signed APK that every store library (the loader aside, and
+`libr15.so`, which must be the patcher's output for the store's, ADR 0021 section 9) and every staged library has its
+bytes (`tools/quest_repack_libs.py`).
 
 The loader finds the directory from the sentinel's own mapping, not from JNI. `dladdr` on the constructor
 (`nevr_sentinel_ctor`, `src/quest/sentinel/entry.cpp:151`) returns the path the linker mapped the sentinel from; its
