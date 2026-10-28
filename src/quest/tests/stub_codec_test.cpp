@@ -172,6 +172,9 @@ TEST(ASlotLoadPairIsRefusedWhenItsWordsDisagree) {
   CHECK(!DecodeSlotLoadPair(pair.adrp, other, 0x1da1284, &rd, &slot));
   CHECK(EncodeLdrX(8, 9, 0x568, &other));
   CHECK(!DecodeSlotLoadPair(pair.adrp, other, 0x1da1284, &rd, &slot));
+  // The LDR is self-consistent (x9 through x9) but loads from another register than the ADRP produced.
+  CHECK(EncodeLdrX(9, 9, 0x568, &other));
+  CHECK(!DecodeSlotLoadPair(pair.adrp, other, 0x1da1284, &rd, &slot));
   // Not an ADRP first.
   CHECK(!DecodeSlotLoadPair(0x10000008u, pair.ldr, 0x1da1284, &rd, &slot));
   // An unaligned slot, a register out of range, and a page out of ADRP range are refused by the encoder.

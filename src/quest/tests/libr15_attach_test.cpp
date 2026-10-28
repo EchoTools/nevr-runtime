@@ -784,6 +784,16 @@ TEST(CheckC_ASlotOutsideTheGrownSegmentIsRefused) {
   ExpectRowRefusal(file, "libr15_patch_row_segment", "segment", "lobby_full.join");
 }
 
+TEST(CheckC_TheCreditsSlotBeyondTheGrownSegmentIsRefused) {
+  std::vector<std::uint8_t> file = PatchedBytes();
+  const std::size_t d = DataLoadIndex(file);
+  Elf64_Phdr p = ProgramHeaders(file)[d];
+  // Slots 0 to 4 fit; only the last slot (the credits row's) ends past the segment.
+  p.p_memsz = patch::kSlotAreaVaddr + 5 * 8 - p.p_vaddr;
+  SetProgramHeader(file, d, p);
+  ExpectRowRefusal(file, "libr15_patch_row_segment", "segment", "credits.pairs");
+}
+
 TEST(CheckC_ASlotInTheFileBackedPartIsRefused) {
   std::vector<std::uint8_t> file = PatchedBytes();
   const std::size_t d = DataLoadIndex(file);
