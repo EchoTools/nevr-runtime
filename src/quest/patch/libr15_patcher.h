@@ -58,6 +58,14 @@ struct PatchResult {
 PatchResult PatchLibr15(const std::vector<std::uint8_t>& stock, const PatchSpec& spec,
                         const std::vector<WordPatchRow>& extra, const std::string& extraRowsSha256);
 
+/// Writes `bytes` to `path` through a temporary file beside it (`path` + ".partial") and checks that the file on disk
+/// reads back as `expectedSha256` (lower-case hex). The temporary file is created with O_CREAT | O_EXCL | O_NOFOLLOW: a
+/// name that already exists, a link included, is refused and left alone, so the write can never go through a link. The
+/// bytes are read back through the descriptor that wrote them, before the rename, so a file that does not read back as
+/// the validated bytes never replaces `path`. False, with `why` set, on any failure; `path` then holds what it held before.
+bool WriteOutputFile(const std::string& path, const std::vector<std::uint8_t>& bytes, const std::string& expectedSha256,
+                     std::string* why);
+
 /// The tool: `--stock <file> --out <file> --report <file> [--extra-rows <file>]`. Prints one JSON line per event and
 /// the summary to `out`, a refusal or error as one JSON line to `err`. Exit 0 on success, 1 on a refusal (nothing is
 /// written to --out), 2 on a usage or I/O error.

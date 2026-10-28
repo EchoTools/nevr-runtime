@@ -1891,6 +1891,144 @@ TEST(AnOutputThatIsNotTheStockStillWorksWhateverItsSpelling) {
   }
 }
 
+std::string ShaOf(const std::string& bytes) { return nevr_quest::data::Sha256Hex(bytes.data(), bytes.size()); }
+
+bool IsSymlink(const std::string& path) {
+  struct stat st;
+  return lstat(path.c_str(), &st) == 0 && S_ISLNK(st.st_mode);
+}
+
+// The output is written to <out>.partial first. A name that is already there, a link included, is not ours to open: the
+// run stops before anything is written or read, and what the name leads to is as it was.
+TEST(ATemporaryFileThatAlreadyExistsIsNeverFollowedOrWrittenThrough) {
+  World w;
+  AliasTree t("partial_links");
+  const std::string stock = t.File("stock.so", w.elf.bytes);
+  const std::string precious = t.File("precious.txt", std::vector<std::uint8_t>{'p', 'r', 'e', 'c', 'i', 'o', 'u', 's'});
+  const std::string out = t.real + "/o.so", report = t.real + "/r.json", partial = out + ".partial";
+  t.Track(out);
+  t.Track(report);
+  t.Track(partial);
+  const std::string preciousBefore = ReadText(precious);
+  auto run = [&](const char* label, int expectedExit) {
+    std::ostringstream so, se;
+    const int rc = RunCli({"--stock", stock, "--out", out, "--report", report}, w.spec, so, se);
+    if (rc != expectedExit) std::fprintf(stderr, "  %s: exit %d, not %d; stderr %s\n", label, rc, expectedExit, se.str().c_str());
+    CHECK_EQ(rc, expectedExit);
+    CHECK(so.str().empty());
+    const Json e = OneErrorLine(se, label);
+    const std::string detail = e.value("detail", std::string());
+    if (detail.find(".partial") == std::string::npos) std::fprintf(stderr, "  %s: detail \"%s\" does not name the temporary file\n", label, detail.c_str());
+    CHECK(detail.find(".partial") != std::string::npos);
+    CHECK(!Exists(out));
+    CHECK(!Exists(report));  // the run stopped before it wrote anything
+  };
+  {  // a link to a file that exists: what it leads to keeps its bytes, and the link is still there
+    CHECK_EQ(symlink(precious.c_str(), partial.c_str()), 0);
+    run("a temporary-file name that is a link to an existing file", 2);
+    CHECK(Unchanged(precious, preciousBefore, "the file the link leads to"));
+    CHECK(IsSymlink(partial));
+    CHECK_EQ(unlink(partial.c_str()), 0);
+  }
+  {  // a link to a path that does not exist yet and is the report: the report is not created through it
+    CHECK_EQ(symlink(report.c_str(), partial.c_str()), 0);
+    run("a temporary-file name that is a dangling link to the report", 2);
+    CHECK(!Exists(report));
+    CHECK(IsSymlink(partial));
+    CHECK_EQ(unlink(partial.c_str()), 0);
+  }
+  {  // a link to a path that does not exist yet and is nothing else: it is not created either
+    const std::string victim = t.real + "/victim.txt";
+    t.Track(victim);
+    CHECK_EQ(symlink(victim.c_str(), partial.c_str()), 0);
+    run("a temporary-file name that is a dangling link", 2);
+    CHECK(!Exists(victim));
+    CHECK(IsSymlink(partial));
+    CHECK_EQ(unlink(partial.c_str()), 0);
+  }
+  {  // a file left by an earlier run: refused, not truncated
+    WriteBytes(partial, {7, 7, 7});
+    run("a temporary file left behind", 2);
+    CHECK(ReadText(partial) == std::string("\x07\x07\x07"));
+    CHECK_EQ(unlink(partial.c_str()), 0);
+  }
+}
+
+// The same through the function itself, which the command line's early look does not stand in front of: the file is
+// created with O_EXCL and O_NOFOLLOW, so a link that appears after the look is refused too.
+TEST(TheOutputFileIsCreatedExclusivelyAndNeverThroughALink) {
+  AliasTree t("write_output");
+  const std::string precious = t.File("precious.txt", std::vector<std::uint8_t>{'p', 'r', 'e', 'c', 'i', 'o', 'u', 's'});
+  const std::string out = t.real + "/direct.so", partial = out + ".partial", victim = t.real + "/victim.txt";
+  t.Track(out);
+  t.Track(partial);
+  t.Track(victim);
+  const std::vector<std::uint8_t> bytes = {1, 2, 3, 4, 5, 6, 7, 8};
+  const std::string text(bytes.begin(), bytes.end());
+  const std::string preciousBefore = ReadText(precious);
+  std::string why;
+  CHECK_EQ(symlink(precious.c_str(), partial.c_str()), 0);
+  CHECK(!WriteOutputFile(out, bytes, ShaOf(text), &why));
+  CHECK(why.find(".partial") != std::string::npos);
+  CHECK(why.find("remove it") != std::string::npos);  // it says what to do about a name that is taken
+  CHECK(Unchanged(precious, preciousBefore, "the file the link leads to"));
+  CHECK(!Exists(out));
+  CHECK(IsSymlink(partial));  // not ours, so not removed
+  CHECK_EQ(unlink(partial.c_str()), 0);
+  why.clear();
+  CHECK_EQ(symlink(victim.c_str(), partial.c_str()), 0);
+  CHECK(!WriteOutputFile(out, bytes, ShaOf(text), &why));
+  CHECK(!Exists(victim));
+  CHECK(!Exists(out));
+  CHECK(IsSymlink(partial));
+  CHECK_EQ(unlink(partial.c_str()), 0);
+  why.clear();
+  WriteBytes(partial, {9});
+  CHECK(!WriteOutputFile(out, bytes, ShaOf(text), &why));
+  CHECK(ReadText(partial) == std::string("\x09"));
+  CHECK_EQ(unlink(partial.c_str()), 0);
+  // With the name free the file is written, is the bytes, and leaves no temporary file.
+  why.clear();
+  CHECK(WriteOutputFile(out, bytes, ShaOf(text), &why));
+  CHECK(why.empty());
+  CHECK(ReadText(out) == text);
+  CHECK(!Exists(partial));
+  {  // the mode an ordinary create gives (0666 less the umask), not the 0600 of the exclusive create
+    const mode_t mask = umask(0);
+    umask(mask);
+    struct stat st;
+    CHECK_EQ(stat(out.c_str(), &st), 0);
+    CHECK_EQ(static_cast<unsigned>(st.st_mode & 0777), static_cast<unsigned>(0666 & ~mask));
+  }
+  // A file that does not read back as the validated bytes never replaces the output: the output keeps what it held, and
+  // the temporary file is gone.
+  why.clear();
+  WriteBytes(out, {0x0a, 0x0b});
+  CHECK(!WriteOutputFile(out, bytes, ShaOf("not these bytes"), &why));
+  CHECK(why.find("read back") != std::string::npos);
+  CHECK(ReadText(out) == std::string("\x0a\x0b"));
+  CHECK(!Exists(partial));
+}
+
+// An alias is judged by what the open reaches, a link to a path that is not there yet included.
+TEST(AReportThatIsADanglingLinkToTheOutputIsTheOutput) {
+  World w;
+  AliasTree t("dangling_report");
+  const std::string stock = t.File("stock.so", w.elf.bytes);
+  const std::string stockBefore = ReadText(stock);
+  const std::string out = t.real + "/out.so", link = t.real + "/report_link.json";
+  t.Track(out);
+  t.Track(out + ".partial");
+  t.Track(link);
+  CHECK_EQ(symlink(out.c_str(), link.c_str()), 0);  // out.so does not exist: the link dangles
+  ExpectAliasRefused(w, "--report is a dangling link to --out", {"--stock", stock, "--out", out, "--report", link}, "--report must not be the --out file",
+                     {{stock, stockBefore}}, {out, out + ".partial"});
+  // The same link spelled through a symlinked directory.
+  ExpectAliasRefused(w, "--report is a dangling link to --out, through a symlinked directory",
+                     {"--stock", stock, "--out", t.linkDir + "/out.so", "--report", link}, "--report must not be the --out file", {{stock, stockBefore}},
+                     {out, out + ".partial"});
+}
+
 TEST(AnExtraRowsFileWithoutATrailingNewlineIsTheSameFile) {
   World w;
   const std::string stock = g_scratch + "/nl_stock.so", out = g_scratch + "/nl_out.so", report = g_scratch + "/nl_report.json";
