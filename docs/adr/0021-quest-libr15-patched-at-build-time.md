@@ -68,7 +68,11 @@ table header and `arm64_reloc.h`, so there is no second encoding of anything). `
 3. writes the stubs (below), the slot area (below), the credits pairs, and the new build ID (below). Every byte that differs from
    the stock file is accounted for in the report: `{"event":"libr15_patch_site","id":...,"revault_va":...,"vaddr":...,
    "stock":[...],"stub":[...],"slot":...}` per row, then a summary with the stock and patched sha-256. The output is a pure
-   function of the stock file and the table: the same inputs give the same bytes;
+   function of the stock file and the table: the same inputs give the same bytes. The report's vocabulary is fixed: the `kind` of
+   a `libr15_patch_site` event is `inline_hook` or `credits_pair` (a word patch has its own `libr15_patch_word` event, which has no
+   `kind`); each entry of the summary's list of changed byte ranges has a `what`
+   that is the row id and a suffix, `:stub` (an inline site's three words), `:credits_adrp` and `:credits_ldr` (the two words of a
+   credits pair) or `:word` (a word patch); `end_symbols` lists the six end symbols sorted by name in byte order;
 4. validates its own output as an ELF (PT_LOAD sorted and non-overlapping, `p_filesz <= p_memsz`, the build-ID note intact, the
    section table consistent) and refuses to write a file that fails.
 
@@ -143,6 +147,17 @@ the same value from its compiled-in table (the sha-256 in `src/quest/data/sha256
 generated constant can drift from the patcher's. `kLibR15BuildId` splits: `kLibR15StockBuildId` (patcher, tests) and
 `PatchedBuildId()` (everything that is checked at run time: the `GotTarget`s in `pinned_targets.h`, the hook files, the
 integration, the hardware dump). The tombstone and the sentinel log then say which libr15 ran.
+
+**The canonical serialisation is these bytes.** Its public part is text, every number written as `0x` and lowercase hex without
+leading zeros: the line `layout|bias=<kRevaultBias>|slot_area=<slot area>|slot_bytes=<slot size>` and a newline, then one line
+per table row, in table order, `row|<id>|<kind>|slot=<n>` where `<kind>` is `inline`, `credits` or `word`, followed for each site by
+`|<revault_va>:<word>,<word>,...` (the stock words, in order, each written as a number) and a newline. A build with extra rows
+(section 11) continues with the line `extra|<count>` and a newline and then, with no separator, one binary record per extra
+row, the rows sorted by `revault_va` and then by `id` in byte order: the id length (1 byte), the id, `revault_va` (8 bytes,
+little-endian), the word count (1 byte), and for each word `offset` (2 bytes, little-endian), then `new_bytes` (4 bytes), then
+`stock_bytes` (4 bytes), the word bytes in memory order as in the file. A build without extra rows has no `extra` line, so its ID
+is the public one. The byte widths are fixed here so that every program that derives the ID (the patcher, the sentinel's
+compile) gets the same value from the same rows; a test pins the ID of a fixed set of invented rows.
 
 Refusal, each with one `libr15_patch` line at error level naming the reason:
 
