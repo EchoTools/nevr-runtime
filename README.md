@@ -2,7 +2,7 @@
 
 nEVR Runtime keeps Echo VR (`echovr.exe`) playable on the community game service
 ([echovrce](https://github.com/echotools), Nakama-based). Drop two files,
-`BugSplat64.dll` and `nevr-runtime.dll`, into the game folder and the game signs in with your Discord
+`BugSplat64.dll` into the game folder and `nevr-runtime.dll` into your nEVR folder (`%LOCALAPPDATA%\nevr\echovr`) and the game signs in with your Discord
 account, reaches the social lobby and shows its friends and party. The Quest
 build does the same through a repacked APK. For contributors it is the C++17
 source of those DLLs and of the Quest sentinel, plus the tooling and tests that
@@ -188,8 +188,8 @@ are inside the prefix (`<prefix>/drive_c/users/<user>/AppData/Local`).
 | Path | What it is | Code |
 | --- | --- | --- |
 | `BugSplat64.dll` | The file the game imports: the thin host, with the game's 28 `BugSplat64.dll` exports, the rendezvous detour and the crash capture. It loads `nevr-runtime.dll` and, when that cannot be loaded after attach, stops the game with exit code 78, after one plain-words dialog on a client (a server or headless run gets the `game_stop` record only). | `OUTPUT_NAME "BugSplat64"` of target `nevr_host` in `src/runtime/CMakeLists.txt`; `RuntimeRendezvous::StopGame` in `src/runtime/host/runtime_rendezvous.cpp` |
-| `nevr-runtime.dll` | The runtime: hooks, modes, server, bridge, plugin loader and the statically linked modules. The host's file loader opens it from the directory of `BugSplat64.dll`; `install.ps1` puts it there with the host. | `OUTPUT_NAME "nevr-runtime"` of target `nevr_runtime` in `src/runtime/CMakeLists.txt`; `kRuntimeFileName` and `ResolveRuntimePath` in `src/runtime/host/runtime_load.cpp` |
-| `BugSplat64.dll.original-<timestamp>`, `dbgcore.dll.legacy-<date>`, `nevr-install.txt` | What `install.ps1` leaves: the game's own `BugSplat64.dll`, a legacy `dbgcore.dll` set aside, a pre-existing `nevr-runtime.dll` (`nevr-runtime.dll.original-<timestamp>`; `uninstall.ps1` sets the installed one aside as `nevr-runtime.dll.uninstalled-<timestamp>`), and the state file `uninstall.ps1` reads (renamed `nevr-install.txt.undone-<timestamp>` when it undoes the install, or `nevr-install.txt.stale-<timestamp>` when `install.ps1` finds a record for a DLL that Verify Files has since restored). Both scripts append their runs to `nevr-install.log` beside the script, not in the game folder. | `tools/package-release/install.ps1`, `tools/package-release/uninstall.ps1` |
+| `nevr-runtime.dll` | The runtime: hooks, modes, server, bridge, plugin loader and the statically linked modules. The host verifies it and loads it from the nEVR root (`%LOCALAPPDATA%\nevr\echovr`, ADR 0012), never from beside itself; `install.ps1` puts it there. A dev build also reads `NEVR_ROOT` (an absolute path) for the runtime's location; a release build ignores it and logs that. | `OUTPUT_NAME "nevr-runtime"` of target `nevr_runtime` in `src/runtime/CMakeLists.txt`; `kRuntimeFileName` and `ResolveRuntimePath` in `src/runtime/host/runtime_load.cpp`, `src/core/nevr_root.h` |
+| `BugSplat64.dll.original-<timestamp>`, `dbgcore.dll.legacy-<date>`, `nevr-install.txt` | What `install.ps1` leaves: the game's own `BugSplat64.dll`, a legacy `dbgcore.dll` set aside, a pre-existing `nevr-runtime.dll` in the nEVR root (`nevr-runtime.dll.original-<timestamp>`; `uninstall.ps1` sets the installed one aside as `nevr-runtime.dll.uninstalled-<timestamp>`), and a runtime an earlier release left beside `echovr.exe` (`nevr-runtime.dll.legacy-<timestamp>` in the game folder, put back by `uninstall.ps1`), and the state file `uninstall.ps1` reads (renamed `nevr-install.txt.undone-<timestamp>` when it undoes the install, or `nevr-install.txt.stale-<timestamp>` when `install.ps1` finds a record for a DLL that Verify Files has since restored). Both scripts append their runs to `nevr-install.log` beside the script, not in the game folder. | `tools/package-release/install.ps1`, `tools/package-release/uninstall.ps1` |
 | `plugins\` | Plugin DLLs. A plugin loads only when the ordered `plugins:` list in `config.yaml` names it; a DLL the list does not name is ignored. | `LoadPlugins` (`pluginDir`) in `src/runtime/ext/plugin_loader.cpp` |
 | `_overrides\` | Files registered as resource overrides at start. | `src/runtime/patch/resource_override.cpp` |
 | `logs\nevr-boot.jsonl` | The boot log: one JSON line per event from before the log filter starts, appended across runs; the main log replays this run's lines. Created at start, with the `logs` folder. If the folder cannot be created or the file cannot be opened, the lines go to standard error only. | `nevr_boot_log_tee::Init` in `src/runtime/log/boot_log_tee.cpp` |
@@ -336,7 +336,7 @@ From `build/mingw-release/bin/`:
 | Artifact | Destination |
 | -------- | ----------- |
 | `BugSplat64.dll` | game directory (replaces the crash reporter; the host) |
-| `nevr-runtime.dll` | game directory, beside `BugSplat64.dll` (the runtime) |
+| `nevr-runtime.dll` | the nEVR root, `%LOCALAPPDATA%\nevr\echovr` (the runtime; `BugSplat64.dll` stays in the game directory) |
 | `echovr_server.exe` | game directory, alongside `echovr.exe` |
 | Optional plugin DLLs | `plugins/` next to the game binary |
 
@@ -403,7 +403,8 @@ post-build command can copy the DLL into a game directory:
 
 ```cmake
 set(GAME_DIR "/path/to/echovr/bin/win10")
+set(NEVR_ROOT_DIR "/path/to/the/nevr/root")  # %LOCALAPPDATA%\nevr\echovr of the Windows user (a Wine prefix has its own)
 add_custom_command(TARGET nevr_runtime POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:nevr_runtime> "${GAME_DIR}/nevr-runtime.dll"
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:nevr_runtime> "${NEVR_ROOT_DIR}/nevr-runtime.dll"
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:nevr_host> "${GAME_DIR}/BugSplat64.dll")
 ```

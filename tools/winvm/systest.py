@@ -39,6 +39,10 @@ import work_root  # noqa: E402
 ROOT = "C:\\nevr-systest"          # the rig; never the user's own install
 GAME = "C:\\echovr"                # the user's install, used read-only
 SMB_ROOT = "nevr-systest"
+# The host loads nevr-runtime.dll from the nevr root, %LOCALAPPDATA%\nevr\echovr (ADR 0012), never from beside itself.
+# The rig gives the game its own LOCALAPPDATA so the guest user's own nevr root is never touched.
+RIG_LOCALAPPDATA = ROOT + "\\localappdata"
+SMB_NEVR_ROOT = SMB_ROOT + "/localappdata/nevr/echovr"
 
 OFFLINE_CONFIG = """{
   "apiservice_host": "http://127.0.0.1:1/api",
@@ -147,7 +151,7 @@ def setup_rig(g: Guest, tmp: pathlib.Path, with_legacy_dbgcore: bool = False) ->
     """
     g.ps(r"""
 $src='@GAME@'; $root='@ROOT@'
-New-Item -ItemType Directory -Force -Path "$root\echovr\bin\win10","$root\echovr\_local","$root\run" | Out-Null
+New-Item -ItemType Directory -Force -Path "$root\echovr\bin\win10","$root\echovr\_local","$root\run","$root\localappdata\nevr\echovr" | Out-Null
 # /A-:R drops the ReadOnly attribute the install's files carry; left on, Remove-Item cannot clear them.
 robocopy "$src\bin\win10" "$root\echovr\bin\win10" /E /A-:R /XF dbgcore.dll BugSplat64.dll BugSplat64.dll.stock nevr-runtime.dll /XD logs /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed rc=$LASTEXITCODE" }
@@ -155,6 +159,10 @@ if ($LASTEXITCODE -ge 8) { throw "robocopy failed rc=$LASTEXITCODE" }
 $dbg = "$root\echovr\bin\win10\dbgcore.dll"
 if (Test-Path $dbg) { Remove-Item $dbg -Force }   # -Force: a leftover copy is ReadOnly
 if (Test-Path $dbg) { throw "could not remove stale $dbg from the rig" }
+# The runtime is not beside the host any more: a copy a previous run left there would be a file the host never loads.
+$stale = "$root\echovr\bin\win10\nevr-runtime.dll"
+if (Test-Path $stale) { Remove-Item $stale -Force }
+if (Test-Path $stale) { throw "could not remove stale $stale from the rig" }
 if ('@LEGACY@' -eq 'yes') { Copy-Item "$src\bin\win10\dbgcore.dll" $dbg }
 foreach ($d in '_data','content','sourcedb') {
   $l = "$root\echovr\$d"
@@ -172,11 +180,11 @@ foreach ($d in '_data','content','sourcedb') {
 
 def deploy(g: Guest, dll: pathlib.Path) -> None:
     kill_game(g)
-    # The host (BugSplat64.dll) loads nevr-runtime.dll from its own directory: the pair is one deploy, runtime first.
+    # The host (BugSplat64.dll) loads nevr-runtime.dll from the nevr root: the pair is one deploy, runtime first.
     runtime = dll.with_name("nevr-runtime.dll")
     if not runtime.is_file():
         raise EnvError(f"{runtime} not found beside {dll}; run `just build` first")
-    g.put(runtime, f"{SMB_ROOT}/echovr/bin/win10", "nevr-runtime.dll")
+    g.put(runtime, SMB_NEVR_ROOT, "nevr-runtime.dll")
     g.put(dll, f"{SMB_ROOT}/echovr/bin/win10", "BugSplat64.dll")
 
 
@@ -204,6 +212,7 @@ def launch(g: Guest, game_args: str) -> str:
 Remove-Item '{ROOT}\run\marker.txt','{ROOT}\run\stdout.txt','{ROOT}\run\windows.txt' -ErrorAction SilentlyContinue
 Set-Content -Path '{ROOT}\run\run.cmd' -Encoding ASCII -Value @(
   '@echo off',
+  'set LOCALAPPDATA={RIG_LOCALAPPDATA}',
   'cd /d {ROOT}\echovr\bin\win10',
   'echo {run_id} started > {ROOT}\run\marker.txt',
   'echovr.exe {game_args} > {ROOT}\run\stdout.txt 2>&1',

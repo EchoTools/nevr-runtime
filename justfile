@@ -1367,6 +1367,11 @@ test-quest-hooks:
     "${cxx[@]}" -isystem "$out/jni" -fno-exceptions -pthread src/quest/tests/toast_presenter_test.cpp \
         src/quest/sentinel/toast_presenter.cpp src/quest/sentinel/hook_log.cpp -o "$out/toast_presenter_test" -ldl
     timeout 60 "$out/toast_presenter_test"
+    # The permission request with a defined request code (#947) against the same fake-JNI shape: the array of names,
+    # the method and the int the variadic call carries, and a thrown exception at each JNI call never left pending.
+    "${cxx[@]}" -isystem "$out/jni" -fno-exceptions -pthread src/quest/tests/permission_request_test.cpp \
+        src/quest/sentinel/permission_request.cpp -o "$out/permission_request_test"
+    timeout 60 "$out/permission_request_test"
 
 # Quest config-string redirect on the host. Builds two fixture shared objects that import
 # CJson::TString by its mangled name through a PLT slot (src/quest/redirect/tests), then runs
@@ -1456,6 +1461,12 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
     # #944: every site the community patch repo edits in libpnsovr.so still holds the stock word and sits in the
     # function tools/quest_patcher_sites.tsv names, so the table's mapping to our hooks is about this library.
     python3 tools/quest_patcher_sites.py --lib "$out/lib/lib/arm64-v8a/libpnsovr.so"
+
+# #1187: every change the community patch repo applies to the Quest APK has a row of
+# tools/quest_apk_patch_map.tsv (what our build does instead, the issue that will, or why none is needed), checked
+# against a read-only checkout of that repo at the commit the table pins. `just test-tools` checks the table alone.
+test-quest-apk-patch-map patch_repo:
+    python3 tools/quest_apk_patch_map.py --repo "{{ patch_repo }}"
 
 # Quest social provider on the host (docs/adr/0003, "Social provider"): the ABI pins against the
 # recorded vtable, the facade driven through its vtable, the hook decision through the real callback
@@ -3328,15 +3339,15 @@ verify:
         echo "game-JSON path — add it to the flat map and read through NevrCfgGetFlat." >&2
         exit 1
     fi
-    # S7b — flat-map structural gate: exactly 33 entries. Adding or removing a
+    # S7b — flat-map structural gate: exactly 34 entries. Adding or removing a
     # flat-map entry without updating this number fails the build — a deliberate
     # reminder to also add a test for the new mapping. The 29 entries measured in
     # S0 and migrated through S3-S5b, plus nevr_allow_offline_server (#16) and
     # nevr_empty_server_ttl_s (#58) and
-    # nevr_tick_rate_hz (#595) and nevr_session_router (#708).
+    # nevr_tick_rate_hz (#595), nevr_session_router (#708) and nevr_invite_codes (#1156).
     N133_S7B=$(grep -cE '^\s*\{"' src/runtime/lifecycle/service_map.cpp)
-    if [ "$N133_S7B" -ne 33 ]; then
-        echo "verify: FAIL — N133 S7b: flat map has $N133_S7B entries, expected 33." >&2
+    if [ "$N133_S7B" -ne 34 ]; then
+        echo "verify: FAIL — N133 S7b: flat map has $N133_S7B entries, expected 34." >&2
         echo "A key was added or removed from the cutover map in service_map.cpp." >&2
         echo "If adding: also add a test to test_service_map.cpp and update this count." >&2
         echo "If removing: that key's reader must be deleted first, or it silently" >&2
@@ -3525,7 +3536,7 @@ verify:
     # and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 2095
+    python3 tools/verify_gtest_floor.py --floor 2166
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py

@@ -265,9 +265,10 @@ using LibR15AndroidMainThunk = CallbackThunk<LibR15AndroidMainTag, AndroidMainSi
 // is two words, passed by value in x0 (the element pointer) and x1 (the count), as CR15Game::Initialize loads them
 // (0x11f9cb8-0x11f9ce4: three entries, w1 = 3). It logs "Requesting %llu android permissions", builds a
 // CJavaStringArray and makes one JNI CallVoidMethod("requestPermissions", "([Ljava/lang/String;I)V") on the
-// NativeActivity, then returns. It keeps no state and does not wait for the answer; the boot call in
-// CR15Game::Initialize is followed at once by CncaGame::Initialize, whose package-manifest read needs the storage
-// permissions (#640). The three names it gets there are RECORD_AUDIO, READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE.
+// NativeActivity, then returns. That JNI call passes the array and no request code (#947, permission_request.h): the
+// permission-wait hook makes the request itself instead. It keeps no state and does not wait for the answer; the boot
+// call in CR15Game::Initialize is followed at once by CncaGame::Initialize, whose package-manifest read needs the
+// storage permissions (#640). The three names it gets there are RECORD_AUDIO, READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE.
 using RequestPermissionsSig = void(const char* const* names, std::uint64_t count);
 struct LibR15RequestPermissionsTag {};
 using LibR15RequestPermissionsThunk = CallbackThunk<LibR15RequestPermissionsTag, RequestPermissionsSig>;
