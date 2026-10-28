@@ -100,4 +100,6 @@ void TestHook_SetBetweenResolveAndOpen(void (*hook)(const std::wstring& resolved
 void TestHook_SetBetweenCheckAndLoad(void (*hook)(const std::wstring& staged));
 // Makes the query for the path of the file a staged plugin's check holds fail.
 void TestHook_FailNamingTheHeldFile(bool fail);
+// Runs after a late load's check has passed and before the filter lets the load go on (#1177).
+void TestHook_SetAfterLateLoadAccepted(void (*hook)(const std::wstring& checked));
 #endif

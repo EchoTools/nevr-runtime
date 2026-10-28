@@ -402,6 +402,8 @@ void (*g_betweenResolveAndOpen)(const std::wstring& resolved) = nullptr;
 void (*g_betweenCheckAndLoad)(const std::wstring& staged) = nullptr;
 // Makes the query for a held file's path fail, as the OS can (a handle to a file on a volume that cannot name it).
 bool g_failNamingHeldFile = false;
+// Runs after a late load's check has passed and before the filter returns: where a test points the name somewhere else.
+void (*g_afterLateLoadAccepted)(const std::wstring& checked) = nullptr;
 #endif
 
 // Whether `candidate` names a file in the plugins directory, and which one. False: it names nothing there.
@@ -478,7 +480,12 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
     }
   }
   if (!inDirectory) return false;
-  if (f.verified.count(full) != 0) return false;
+  if (f.verified.count(full) != 0) {
+#ifdef NEVR_TEST_HOOKS
+    if (g_afterLateLoadAccepted != nullptr) g_afterLateLoadAccepted(full);
+#endif
+    return false;
+  }
 
   const std::string file = NarrowName(full);
 #ifdef NEVR_TEST_HOOKS
@@ -521,6 +528,9 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
   }
   if (refusal.empty()) {
     f.verified[full] = std::move(entry);
+#ifdef NEVR_TEST_HOOKS
+    if (g_afterLateLoadAccepted != nullptr) g_afterLateLoadAccepted(full);
+#endif
     return false;
   }
   CloseHandle(h);
@@ -1379,6 +1389,7 @@ void TestHook_SetBetweenResolveAndOpen(void (*hook)(const std::wstring& resolved
 void TestHook_SetBetweenCheckAndLoad(void (*hook)(const std::wstring& staged)) { g_betweenCheckAndLoad = hook; }
 
 void TestHook_FailNamingTheHeldFile(bool fail) { g_failNamingHeldFile = fail; }
+void TestHook_SetAfterLateLoadAccepted(void (*hook)(const std::wstring& checked)) { g_afterLateLoadAccepted = hook; }
 
 void TestHook_ForgetLoadFilterRegistration() { g_filterRegistered = false; }
 
