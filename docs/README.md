@@ -37,6 +37,7 @@ Checks an installer or launcher makes before it puts nEVR on a player's machine.
 | File | Description | Audience |
 | ---- | ----------- | -------- |
 | `reference/verifying-a-release.md` | Verify a release end to end from the signed manifest: signature and pinned keys, version and expiry, every artifact and zip member, the Quest APK, what the PC host checks, what to tell the player, with commands and test vectors (`reference/release-verification/`) | Installer and launcher maintainers |
+| `reference/launcher-install-root.md` | What a launcher or installer puts where (the host in the game folder, the runtime in the nevr root), what the host does when the runtime is missing or refused (exit 78), the host log records a launcher can read, the flags it may pass, and what still writes in the game folder | Launcher and installer developers |
 
 ## Process
 
