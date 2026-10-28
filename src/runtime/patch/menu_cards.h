@@ -23,8 +23,10 @@
 
 namespace nevr_menu_cards {
 
-/// CR15UIPage2CR and the page `mnu_master` (PC build 6323983201049540).
-inline constexpr uint64_t kPageType = 0x4a3fe67c1ff9ccc4ULL;
+/// CR15UIPage2CR and the page `mnu_master` (PC build 6323983201049540). The type is the class symbol the loader
+/// callback reports for the resource; the package manifest row for the same resource carries a different type id
+/// (`0x4a3fe67c1ff9ccc4`), which the callback never shows.
+inline constexpr uint64_t kPageType = EchoVR::CSymbol64Hash("CR15UIPage2CR");
 inline constexpr uint64_t kPageName = 0xac360e41e4ede056ULL;
 /// The page of the main menu inside that resource.
 inline constexpr uint64_t kMainMenuPage = 24;

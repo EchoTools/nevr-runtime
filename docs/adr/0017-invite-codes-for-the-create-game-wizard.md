@@ -155,7 +155,7 @@ is data, it can be turned off or changed once players have used it ("accommodati
 How echovr-modkit (MIT, by Dualgame) ships them, from its `mods/menu-cards/README.md` and `mods/menu-cards/menu_cards.py`
 (facts only; no code is copied here):
 
-- The cards are data, not code. The main-menu page resource (`CR15UIPage2CR`, `0x4a3fe67c1ff9ccc4`, name `mnu_master`,
+- The cards are data, not code. The main-menu page resource (`CR15UIPage2CR`, package manifest type id `0x4a3fe67c1ff9ccc4`, name `mnu_master`,
   `0xac360e41e4ede056`, PC; page 24 inside it) is read from the player's own install, two card elements are inserted
   (CREATE GAME, owner `0xff5375e5a4dee29d`; JOIN VIA CODE, owner `0x097b785350a61c5f`, each with a sprite of the stock card
   canvas), and the result is appended as one row to a copy of the language package (`2b47aab238f60515`) in
@@ -169,8 +169,8 @@ How echovr-modkit (MIT, by Dualgame) ships them, from its `mods/menu-cards/READM
 
 What in this tree carries the page: `RegisterResourceOverrideFromFile` and `RegisterResourceOverride` in
 `src/runtime/patch/resource_override.cpp` replace a resource by its type and name symbols in the game's resource-load
-callback, so a patched page can be served for (`0x4a3fe67c1ff9ccc4`, `0xac360e41e4ede056`) without writing into the
-install.
+callback, so a patched page can be served for (`0x75e5993f80940cd0`, the class symbol of `CR15UIPage2CR` that the callback reports,
+and `0xac360e41e4ede056`) without writing into the install.
 
 **The package never carries Ready At Dawn's data.** The package carries only our work; Ready At Dawn's data stays
 theirs. The main-menu page is therefore built on the player's machine from the player's own install:

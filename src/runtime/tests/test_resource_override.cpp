@@ -528,7 +528,7 @@ TEST_F(CachedOverrides, AnEntryWithoutALabelIsNamedAfterItsHash) {
 
 // ── Transforms: the game's buffer in, the served bytes out, on every load ────────────────────────────────────
 
-constexpr std::uint64_t kTransformType = 0x4a3fe67c1ff9ccc4ull;
+constexpr std::uint64_t kTransformType = 0x75e5993f80940cd0ull;
 constexpr std::uint64_t kTransformName = 0xac360e41e4ede056ull;
 
 struct TransformProbe {

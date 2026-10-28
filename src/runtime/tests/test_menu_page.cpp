@@ -291,6 +291,14 @@ TEST(MenuCards, TheSymbolsAreTheGamesOwn) {
   EXPECT_EQ(EchoVR::CSymbol64Hash("mnu_master"), nevr_menu_cards::kPageName);
 }
 
+// The resource loader's callback names a resource by its class symbol (the word the game keeps at +0x28 of the
+// resource), not by the type id of the package manifest row. A live run logged 0x75e5993f80940cd0 for the page
+// ("CR15UIPage2CR" in the symbol table) while the transform was registered under the manifest's id and never ran.
+TEST(MenuCards, PageIsKnownByTheClassSymbolTheLoaderCallbackReports) {
+  EXPECT_EQ(nevr_menu_cards::kPageType, 0x75e5993f80940cd0ULL);
+  EXPECT_EQ(nevr_menu_cards::kPageType, EchoVR::CSymbol64Hash("CR15UIPage2CR"));
+}
+
 TEST(MenuCards, TheTwoCardsAreCreateAndJoin) {
   const std::vector<Card> cards = nevr_menu_cards::Cards();
   ASSERT_EQ(cards.size(), 2u);
