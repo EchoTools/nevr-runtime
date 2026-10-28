@@ -263,6 +263,15 @@ pub fn find(m: &Value, version: &str, kind: &str, platform: Option<&str>) -> Res
     parse_artifact(version, wanted[0])
 }
 
+/// The `game-data` artifact of the newest release that lists one, with that release's version. Used to decide whether
+/// the data on a device is complete when the chosen release lists none (one copy of the data serves every release).
+pub fn latest_game_data(m: &Value) -> Option<(String, Artifact)> {
+    let key = |v: &str| -> Vec<u64> { v.split('.').filter_map(|p| p.parse().ok()).collect() };
+    let mut versions: Vec<&String> = m["releases"].as_object()?.keys().filter(|v| semver_ok(v)).collect();
+    versions.sort_by_key(|v| key(v));
+    versions.into_iter().rev().find_map(|v| find(m, v, "game-data", Some("android-arm64")).ok().map(|a| (v.clone(), a)))
+}
+
 /// Whether `version` lists an artifact of `kind` (and `platform`), without checking its shape.
 pub fn has(m: &Value, version: &str, kind: &str, platform: Option<&str>) -> bool {
     m["releases"][version]["artifacts"]

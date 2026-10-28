@@ -173,7 +173,9 @@ impl Session {
     /// The Quest command: plan, and with `install` execute. `dev` is `None` for a plan with no headset.
     pub fn quest(&self, version: Option<&str>, dev: Option<&dyn Device>, install: bool, consent_uninstall: bool) -> Result<(Ended, Value)> {
         let (m, v) = self.release(version)?;
-        let data_for_observation = manifest::find(&m, &v, "game-data", Some("android-arm64")).ok();
+        // The chosen release's own game data; failing that, the newest listed one, so a device that already holds
+        // complete data is recognised even when this release lists none.
+        let data_for_observation = manifest::find(&m, &v, "game-data", Some("android-arm64")).ok().or_else(|| manifest::latest_game_data(&m).map(|x| x.1));
         let observed = match dev {
             Some(d) => quest::observe(d, data_for_observation.as_ref(), &self.log)?,
             None => quest::Observed::default(),

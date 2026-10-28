@@ -132,7 +132,8 @@ that backend.
 **Game data counts as present in either root.** The same headset holds a complete `_data` under `/sdcard/readyatdawn` and
 an empty `Android/media/com.readyatdawn.r15`. A plan that required the media root would download 930 MB onto a working
 install on the strength of an unobserved premise, so presence is checked in both roots (every `contents` path with its
-size), and a download happens only when neither holds the data; it goes to the media root.
+size), and a download happens only when neither holds the data; it goes to the media root. When the chosen release lists
+no `game-data`, the check uses the newest `game-data` the manifest lists, because one copy of the data serves every release.
 
 **Game data goes to the media root**, where the community installers already put it, which needs no storage permission
 (ADR 0013), and which a player who moves between installers therefore keeps. The destination is one value of the plan
@@ -343,18 +344,33 @@ Each is run once with the line it covers changed, and must fail (the mutant disc
 
 ## Prediction
 
-Written before the first run. Slice 1's CLI against the live manifest on a scratch directory:
+Written before the first run. Slice 1's CLI against the live manifest, with a scratch state directory:
 
-- `nevr-install manifest verify` reports `ok` with `key_id` 343D0247859CEEC0 (K1), `manifest_version` 4 and release 5.16.1 on
-  `beta`, and writes a state directory holding `manifest.json`, `manifest.json.sig` and `state.json`.
-- `nevr-install quest plan` for 5.16.1 reports `game-data: none in release` and ends `needs-user` or `unchanged`, never
-  `installed`, until release-signer carries game data forward (section 4, item 1). That is the live defect this record finds.
+- `nevr-install manifest verify` reports `ok` with key id `c0ee9c8547023d34` (file order; K1 prints as 343D0247859CEEC0),
+  `manifest_version` 4 and release 5.16.1 on `beta`, and writes a state directory holding `manifest.json`,
+  `manifest.json.sig` and `state.json`.
+- `nevr-install quest plan` for 5.16.1 reports `game-data: none in release` and never ends `installed`, until
+  release-signer carries game data forward (section 4, item 1). That is the live defect this record finds.
 - `nevr-install quest plan` for 5.10.0 reports the APK (versionCode 51000999) and the game data (937395400 bytes).
-- The same plan against the test headset reports the installed versionCode 51602002, the signer as `unknown-until-install`, the
-  game data as present in `/sdcard/readyatdawn` (the media root is empty), and `decision: downgrade-refused` for 5.10.0.
+- The same plan against the test headset reports the installed versionCode, the signer as `unknown-until-install`, the game
+  data as present in `/sdcard/readyatdawn` (the media root is empty), and `decision: downgrade-refused`.
 
 Falsifiers: any `manifest_check ok=false` on the live pair; a plan for 5.16.1 that names game data; a plan that would
 uninstall without consent.
+
+**Result** (run on the build of the pull request that adds this record, `--from-dir` the live pair, plan only, no install):
+
+- `manifest verify`: exit 0, `manifest_check ok=true key_id=c0ee9c8547023d34 manifest_version=4`, state directory with the
+  three files, `channel beta -> 5.16.1`.
+- `quest plan --no-device`, 5.16.1: `needs-user`, `game-data: none in release 5.16.1`, no steps.
+- `quest plan --no-device`, 5.10.0: `proceed`, steps `fetch-apk, check-apk, install-apk, fetch-data, extract-data,
+  verify-installed`, game data `data/echovr-data-fc2eedeacc50.zip` (937395400 bytes).
+- Against the headset (Quest 2, Android 14, installed versionCode 51602006): `device` record with `signers:
+  unknown-until-install`, `data_present {legacy: true, media: false}`; both 5.16.1 (versionCode 51601999) and 5.10.0
+  (51000999) end `needs-user` with `downgrade-refused`; no uninstall step in either plan.
+- One prediction was incomplete, and the run showed it: with no `game-data` in the chosen release there is nothing to check
+  presence against, so the first run called the data absent on a headset that holds it. The core now checks the device
+  against the newest `game-data` the manifest lists when the chosen release lists none (`latest_game_data`), and says so.
 
 ## What is not known
 

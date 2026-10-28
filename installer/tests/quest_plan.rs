@@ -130,3 +130,16 @@ fn badging_and_certificate_output_is_parsed() {
     let c = format!("Signer #1 certificate DN: CN=x\nSigner #1 certificate SHA-256 digest: {SIGNER}\nSigner #1 certificate SHA-256 digest: {SIGNER}\nSigner #1 certificate SHA-256 digest: nothex\n");
     assert_eq!(quest::parse_certs(&c), [SIGNER]);
 }
+
+#[test]
+fn the_newest_listed_game_data_is_found_across_releases() {
+    let art = |code: u64, data: bool| {
+        let mut r = release(data, json!(SIGNER), code);
+        r["releases"]["1.0.0"].take()
+    };
+    let m = json!({"releases": {"5.10.0": art(1, true), "5.16.1": art(2, false), "5.9.0": art(3, true), "junk": art(4, true)}});
+    let (v, a) = nevr_install::manifest::latest_game_data(&m).unwrap();
+    assert_eq!(v, "5.10.0", "5.16.1 lists none; 5.10.0 sorts above 5.9.0 by number, not by text");
+    assert_eq!(a.kind, "game-data");
+    assert!(nevr_install::manifest::latest_game_data(&json!({"releases": {"1.0.0": art(1, false)}})).is_none());
+}
