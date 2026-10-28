@@ -232,6 +232,23 @@ inline constexpr FillCallSite kFillCallSites[] = {
     {0x18e661c, "force_load_all_mips"} // CGTextureResource::BeginForceLoadAllMips
 };
 
+// NRadEngine::CResourceManager::AsyncResourceIOCallback(SIORequestCallbackData&), defined in libr15 at 0x2543448 (484
+// bytes; ReVault lists it at 0x2643448): what the streaming reader calls when the bytes of a resource are in memory
+// (#966). The game never calls it by name: ResourceLoadInternal loads its address from the data slot GLOB_DAT 0x37195b8
+// (`ldr x4, [x4, #0x5b8]` at 0x254391c and 0x25439ac) and passes it to CStreamingIOProcessor::ReadFileAsync, which keeps
+// it in the request context (+0x4b8) and calls it with the context's callback block (+0x478). The slot is read at each
+// ReadFileAsync, so a replacement is used by every later load. The block layout is in menu_cards_swap.h; the function
+// returns its status in x0 (read here as a 64-bit value and passed through untouched).
+using AsyncResourceIOCallbackSig = std::uint64_t(unsigned char* callbackBlock);
+struct LibR15AsyncResourceIOCallbackTag {};
+using LibR15AsyncResourceIOCallbackThunk = CallbackThunk<LibR15AsyncResourceIOCallbackTag, AsyncResourceIOCallbackSig>;
+inline constexpr const char* kAsyncResourceIOCallbackSymbol =
+    "_ZN10NRadEngine16CResourceManager23AsyncResourceIOCallbackERNS_22SIORequestCallbackDataE";
+// NRadEngine::CMemoryContext::context, a data symbol libr15 defines (.dynsym, 8 bytes at 0x37688c0): the pointer to the
+// memory context. FreeResource releases a resource's buffer 0 through the allocator at context + 0x10.
+inline constexpr const char* kMemoryContextSymbol = "_ZN10NRadEngine14CMemoryContext7contextE";
+inline constexpr std::uint64_t kMemoryContextVaddr = 0x37688c0;
+
 // android_main(android_app*), defined in libr15 at 0xf784c4 and called by the native-activity glue's thread entry
 // through libr15's own PLT (`mov x0, x19; bl 0xf27bc0` at 0xf79a4c; the stub loads JUMP_SLOT 0x36eb4c8). The glue
 // ignores the result and then runs its teardown. android_main shuts the engine down after Main returns and, when
@@ -545,6 +562,12 @@ inline GotTarget MatchmakingTString() {
 // 0x191625c (JUMP_SLOT 0x37015e0).
 inline GotTarget LibR15ConfigRequestSend() {
   return {kLibR15, kConfigRequestSendSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x37015e0ULL};
+}
+
+// libr15.so's slot for CResourceManager::AsyncResourceIOCallback, a GLOB_DAT of libr15's own symbol (0x37195b8): the
+// address ResourceLoadInternal hands to ReadFileAsync (#966).
+inline GotTarget LibR15AsyncResourceIOCallback() {
+  return {kLibR15, kAsyncResourceIOCallbackSymbol, RelocKind::kGlobDat, kLibR15BuildId, 0x37195b8ULL};
 }
 
 // Two GLOB_DAT slots in libr15.so (0x3715620 and 0x372b698), used as fixtures

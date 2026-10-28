@@ -34,6 +34,10 @@ inline constexpr uint64_t kMainMenuPage = 24;
 /// SHA-256 of the stock resource, lowercase hex. Any other bytes (another build, an already patched page) are left
 /// alone.
 inline constexpr char kStockPageSha256[] = "af396701cfe27cb5d9fd512943b1ad732477b6399c4df5a2b36971375a6919eb";
+/// SHA-256 of the stock resource in the Quest build (APK 6528386917200980), lowercase hex; empty until a headset run has
+/// logged it (src/quest/sentinel/menu_cards_hook.h): no digest equals the empty string, so the Quest hook serves the stock
+/// page unchanged until it is set.
+inline constexpr char kQuestStockPageSha256[] = "";
 /// SHA-256 of the page the echovr-modkit tool writes from that stock page with these two cards. Logged next to our
 /// own result so a run says whether the two builders agree; it is not a gate.
 inline constexpr char kReferenceResultSha256[] = "ac3a7173bbc78c75ba22fc9ad2f7bf12003d27bdc1b8ff1d215cdd8cae97f8b5";
