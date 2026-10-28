@@ -922,6 +922,56 @@ TEST_F(PluginSystemDependencyTest, AStandInPlantedForASystemImportAfterALaterLoa
   EXPECT_FALSE(TheDecoyRan()) << "the stand-in planted after the filter's check was loaded with the plugin";
 }
 
+// #769: the loader's own load of a staged plugin is not checked twice, because the loader checked the file first. That
+// exemption is for the loader's call. The plugin's DllMain runs inside the same call, with the loader lock held, and
+// a load it makes is the plugin's own: it has to be checked like any other, even by the path being loaded.
+class PluginDllMainLoadTest : public PluginDependencyGateTest {
+ protected:
+  void TearDown() override {
+    SetEnvironmentVariableW(L"NEVR_TEST_DLLMAIN_LOAD", nullptr);
+    // The fixture is not a real plugin, so it is released here: a file that stays mapped cannot be copied over by the
+    // next test.
+    while (HMODULE m = GetModuleHandleA("dllmain_loader.dll")) {
+      if (!FreeLibrary(m)) break;
+    }
+    PluginDependencyGateTest::TearDown();
+  }
+
+  // Runs LoadPlugins with the real LoadLibrary hooks installed, as the game has them; false if they did not install.
+  bool LoadPluginsWithTheRealHooks(size_t* checked = nullptr) {
+    EXPECT_EQ(MH_Initialize(), MH_OK);
+    const int hooked = nevr_dll_load_hook::Install();
+    if (hooked == 4) {
+      LoadPlugins();
+      if (checked != nullptr) *checked = TestHook_LoadFilterVerifiedCount();
+    }
+    nevr_dll_load_hook::Shutdown();  // also clears the registered filters
+    MH_Uninitialize();
+    nevr_hook_guard::ResetForTest();
+    TestHook_ForgetLoadFilterRegistration();
+    EXPECT_EQ(hooked, 4) << "the LoadLibrary hooks did not install";
+    return hooked == 4;
+  }
+};
+
+TEST_F(PluginDllMainLoadTest, ALoadOfThePluginsOwnPathFromItsDllMainIsChecked) {
+  PlanTree("dllmain_load");
+  const std::wstring self = std::wstring(pluginsDir_.begin(), pluginsDir_.end()) + L"dllmain_loader.dll";
+  ASSERT_TRUE(SetEnvironmentVariableW(L"NEVR_TEST_DLLMAIN_LOAD", self.c_str()));
+  size_t checked = 0;
+  ASSERT_TRUE(LoadPluginsWithTheRealHooks(&checked));
+  EXPECT_EQ(checked, 1u) << "a load of the plugin's own path from its DllMain was not checked";
+}
+
+TEST_F(PluginDllMainLoadTest, TheLoadersOwnLoadOfAStagedPluginIsStillNotCheckedTwice) {
+  PlanTree("dllmain_load");  // its DllMain loads nothing: NEVR_TEST_DLLMAIN_LOAD is not set
+  size_t checked = 99;
+  ASSERT_TRUE(LoadPluginsWithTheRealHooks(&checked));
+  EXPECT_EQ(checked, 0u) << "the loader's own load of the plugin it checked was checked again";
+  EXPECT_FALSE(TestLogContains("refused"));
+  EXPECT_FALSE(TestLogContains("LoadLibrary failed")) << "the plugin did not load";
+}
+
 // The path the filter resolved is opened a moment later; a name pointed elsewhere in between must not be verified
 // as the file that was resolved (heldPath != full). The hook turns the resolved name into a link to a signed file.
 std::wstring g_linkTarget;
