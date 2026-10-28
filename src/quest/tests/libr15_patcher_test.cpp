@@ -17,6 +17,7 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -245,8 +246,9 @@ const Json* SiteAt(const PatchResult& r, std::uint64_t vaddr) {
   return nullptr;
 }
 
-// The values in the report that the layout, the table and the file determine (the field names are the ADR's and the
-// code's own; the kind and what labels, and the order of end_symbols, are not asserted here).
+// The values in the report that the layout, the table and the file determine. The vocabulary is ADR 0021 section 2
+// item 3: a libr15_patch_site event's kind is inline_hook or credits_pair, each changed range of a row has a what that
+// is the row id and :stub, :credits_adrp, :credits_ldr or :word, and end_symbols is sorted by name in byte order.
 TEST(TheReportStatesTheFactsTheFileAndTheTableDetermine) {
   World w;
   const PatchResult r = w.Patch();
@@ -265,6 +267,11 @@ TEST(TheReportStatesTheFactsTheFileAndTheTableDetermine) {
   CHECK(s["p_memsz_patched"] == "0x618");    // grown by 0x1403618 - 0x14035f8
   CHECK(s["bss_section"] == ".bss");
   CHECK_EQ(s["extra_rows"].get<int>(), 0);
+  {  // end_symbols: the six names, sorted by name in byte order (the file lists them in another order), each with its value
+    const char* const sorted[] = {"__bss_end__", "__bss_start", "__end__", "_bss_end__", "_edata", "_end"};
+    CHECK_EQ(s["end_symbols"].size(), static_cast<std::size_t>(6));
+    for (std::size_t i = 0; i < 6 && i < s["end_symbols"].size(); ++i) CHECK(s["end_symbols"][i]["name"] == sorted[i]);
+  }
 
   // The site events: the table's address, the file's address and offset, the words, the slot and its address.
   Stub stub{};
@@ -279,6 +286,7 @@ TEST(TheReportStatesTheFactsTheFileAndTheTableDetermine) {
     if (e == nullptr) continue;
     CHECK(EncodeSlotStub(site.vaddr, kSlotArea + 8 * site.slot, &stub));
     CHECK((*e)["id"] == site.id);
+    CHECK((*e)["kind"] == "inline_hook");
     CHECK((*e)["revault_va"] == HexOf(site.vaddr + kRevaultBias));
     CHECK((*e)["file_offset"] == HexOf(SynthElf::FileOffsetOfText(site.vaddr)));
     CHECK((*e)["slot"] == site.slot);
@@ -297,6 +305,7 @@ TEST(TheReportStatesTheFactsTheFileAndTheTableDetermine) {
     CHECK(e != nullptr);
     if (e == nullptr) continue;
     CHECK((*e)["id"] == "s.credits");
+    CHECK((*e)["kind"] == "credits_pair");  // the ADD word's event as well as the ADRP word's
     CHECK((*e)["revault_va"] == HexOf(va + kRevaultBias));
     CHECK((*e)["file_offset"] == HexOf(SynthElf::FileOffsetOfText(va)));
     CHECK((*e)["slot"] == 2);
@@ -310,7 +319,17 @@ TEST(TheReportStatesTheFactsTheFileAndTheTableDetermine) {
       CHECK((*e)["stub"][0] == Hex8Of(written));
     }
   }
-  // Each change is a byte range of the file, with its length.
+  // Each change is a byte range of the file, with its length; a row's ranges are named <row id> and the kind of word.
+  {
+    std::map<std::string, std::string> whatAt;
+    for (const Json& c : r.summary["changes"]) whatAt[c["offset"].get<std::string>()] = c["what"].get<std::string>();
+    CHECK(whatAt[HexOf(SynthElf::FileOffsetOfText(kJoinVa))] == "s.join:stub");
+    CHECK(whatAt[HexOf(SynthElf::FileOffsetOfText(kFailVa))] == "s.fail:stub");
+    CHECK(whatAt[HexOf(SynthElf::FileOffsetOfText(kAdrp0))] == "s.credits:credits_adrp");
+    CHECK(whatAt[HexOf(SynthElf::FileOffsetOfText(kAdd0))] == "s.credits:credits_ldr");
+    CHECK(whatAt[HexOf(SynthElf::FileOffsetOfText(kAdrp1))] == "s.credits:credits_adrp");
+    CHECK(whatAt[HexOf(SynthElf::FileOffsetOfText(kAdd1))] == "s.credits:credits_ldr");
+  }
   std::size_t checked = 0;
   for (const Json& c : r.summary["changes"]) {
     if (c["offset"] == HexOf(SynthElf::FileOffsetOfText(kJoinVa))) { CHECK_EQ(c["length"].get<int>(), 12); ++checked; }
@@ -345,6 +364,7 @@ TEST(TheReportStatesTheWordsOfAnExtraRowWithTheirWidthsAndAddresses) {
   for (const Json& e : r.events) {
     if (e["event"] != "libr15_patch_word") continue;
     ++words;
+    CHECK(!e.contains("kind"));  // a word patch has its own event, which has no kind
     CHECK(e["id"] == "x.zeros");
     CHECK(e["offset"] == 0);
     CHECK(e["revault_va"] == HexOf(kGuardA + kRevaultBias));
@@ -360,6 +380,7 @@ TEST(TheReportStatesTheWordsOfAnExtraRowWithTheirWidthsAndAddresses) {
   std::size_t found = 0;
   for (const Json& c : r.summary["changes"]) {
     if (c["offset"] != HexOf(SynthElf::FileOffsetOfText(kGuardA))) continue;
+    CHECK(c["what"] == "x.zeros:word");
     CHECK_EQ(c["length"].get<int>(), 4);
     ++found;
   }
