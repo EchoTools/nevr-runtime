@@ -283,6 +283,15 @@ int main(int argc, char** argv) {
     QCHECK(false);
   }
 
+  // CR15VRMenuWidgetCS::Update, the entry the splash skip patches inline (#1128): its first four instructions are the
+  // ones the install proves before writing, at the vaddr it patches.
+  if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + pinned::kWidgetUpdateVaddr, pinned::kWidgetUpdateCode,
+                  sizeof(pinned::kWidgetUpdateCode)) != 0) {
+    std::fprintf(stderr, "libr15 CR15VRMenuWidgetCS::Update: first instructions at %#llx differ from the pinned ones\n",
+                 static_cast<unsigned long long>(pinned::kWidgetUpdateVaddr));
+    QCHECK(false);
+  }
+
   // The permission-wait hook (#640, #758): RequestPermissions is defined where the slot's comment says, and
   // CheckPermission, which the hook calls and also hooks (its JUMP_SLOT is checked above), is defined at the pinned
   // address with the first four instructions the install proves before using it.
