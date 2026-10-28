@@ -141,7 +141,7 @@ LobbySettingsReport RelayLobbySettings(const void* data, uint64_t size, const st
       return Dropped(report, LobbySettingsDrop::kNoBroadcaster, 0, sessionId);
     }
 
-    const uint8_t zeroItem[kLobbySettingsItemBytes] = {};
+    uint8_t zeroItem[kLobbySettingsItemBytes] = {};
     report.sendResult = sinks.sendToPeer(zeroItem, sizeof(zeroItem), decoded.json.data(), decoded.json.size(),
                                          kLobbySettingsAllPeers);
   } catch (const std::exception&) {
