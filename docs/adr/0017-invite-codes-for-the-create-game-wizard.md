@@ -121,7 +121,11 @@ the runtime (`src/runtime/patch/`), not a service configuration and not a plugin
   - the component-event send (`echovr.exe` `0x14050fb60`, `CncaGameSpace::SendComponentEvent`) for the wizard's card
     choices (experience, mode, map), which the metric does not carry reliably. It is called from many sites, so the
     hook rejects every event that is not a card or button event on one of the wizard's eight page owners before it
-    does anything else; its call rate under play is measured before the hook ships.
+    does anything else: it reads the event symbol (the first word the game itself reads) and goes on only for the
+    six wizard event symbols, then resolves the sender to an actor name through checked reads
+    (`patch/invite_choices.h`, `patch/invite_choice_hook.cpp`); its call rate under play is measured before the hook
+    ships. Every wizard event on a wizard page logs at Info with the page, the card and the choices so far, and a
+    running count of the hook's calls (`seen=`).
 - **Call the service.** The hook queues a request; a worker thread posts the RPC with the token the runtime already
   holds and libcurl; the answer is applied from the per-frame dispatcher (N86), so no game memory is touched from the
   worker.

@@ -24,6 +24,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/early_quit_lockout.cpp",
     "patch/evrp_package.cpp",
     "patch/headless_graphics.cpp",
+    "patch/invite_choice_hook.cpp",
     "patch/invite_wizard_hook.cpp",
     "patch/lobby_full_backoff.cpp",
     "patch/menu_cards.cpp",
