@@ -16,7 +16,7 @@ Nothing else of ours is put in the game folder by a launcher. The root, `%LOCALA
 launcher if it is missing. The game's own `%LOCALAPPDATA%\EchoVR` is never written by nEVR.
 
 The root also holds what the runtime writes: `logs\`, `crashes\`, `.credentials.json`, `cache\`, `cosmetics\v1\packages\`.
-A launcher does not create or edit those.
+A launcher does not create or edit those. Plugin files go in the root's `plugins\` (`%LOCALAPPDATA%\nevr\echovr\plugins\`); the runtime loads plugins from there and never from beside `echovr.exe`. The first run moves the files of an old `plugins\` folder beside `echovr.exe` into it, leaves no file behind, and logs each move.
 
 ## What the host does at game start
 
@@ -85,7 +85,6 @@ takes `-Dir <...\bin\win10>` and `-Root <nevr folder>` (an absolute path; the ro
 
 These are not yet in the root. Each moves in its own change and this page is updated with it:
 
-- `plugins\` next to `echovr.exe`: plugin DLLs load from there (`src/runtime/ext/plugin_loader.cpp`), #856;
 - `_local\config.yaml`: the runtime still searches `_local` next to the game module (and one and two folders up) for it, and nothing moves it;
 - the game's own logs under `_local\r14logs` (the game writes them);
 - `logs\nevr-boot.jsonl` beside `echovr.exe`: the runtime's start-up log, #1232;
