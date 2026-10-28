@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Put a release's Quest APK and its .sha256 on R2, then fetch both back from the public host and compare (RELEASING.md,
-"The Quest APK"; #1098). Usage: publish_quest_apk.py vX.Y.Z [--dir build/quest-release/vX.Y.Z]
+"The Quest APK"; #1098). Usage: publish_quest_apk.py vX.Y.Z [--dir build/quest-release/vX.Y.Z] [--extra-out FILE]
 
 The files are the ones `just release-quest-apk vX.Y.Z` wrote. The APK goes up through the release signer's
 `put-quest-apk`, which checks that the release is published, that the APK was built from the tag's commit and signed with
 the pinned certificate, writes the object only if absent and reads it back from R2. The sidecar goes up with
 `rclone copyto --ignore-existing`, so a name that is already there is never replaced; the fetch-back is what proves the
-file that is there is the local one.
+file that is there is the local one. `--extra-out FILE` keeps the manifest claim the signer's `put-quest-apk` wrote
+(the `extra_artifacts` input of the manifest publish) in FILE, which must not exist; it is written only after the upload.
 
 Everything that is a host, a URL or a credential comes from the environment and nothing here holds a value:
 R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY (the bucket), RELEASE_PUBLIC_BASE (where the files are
@@ -194,6 +195,19 @@ def check_sidecar(url: str, name: str, sidecar_bytes: bytes) -> None:
         raise Failure(f"{name}.sha256 from the public host differs from the local sidecar")
 
 
+def keep_extra(source: pathlib.Path, target: pathlib.Path) -> None:
+    """Copy the signer's claim to a file that is new; the APK is up by now, so a failure here is loud, not silent."""
+    try:
+        body = source.read_bytes()
+    except OSError as error:
+        raise Failure(f"the signer wrote no manifest claim to keep: {error.strerror}") from error
+    try:
+        with open(target, "xb") as handle:
+            handle.write(body)
+    except OSError as error:
+        raise Failure(f"cannot write --extra-out {target}: {error.strerror}") from error
+
+
 def publish(args: argparse.Namespace, env: dict[str, str], log: Log) -> None:
     refused = missing_env(env)
     if refused:
@@ -206,12 +220,19 @@ def publish(args: argparse.Namespace, env: dict[str, str], log: Log) -> None:
     directory = pathlib.Path(args.dir) if args.dir else pathlib.Path("build") / "quest-release" / args.tag
     name, apk, sidecar, digest, size, sidecar_bytes = local_files(directory.resolve(), args.tag)
     log.event("local_files", apk=name, sha256=digest, size=size)
+    extra_out = pathlib.Path(args.extra_out) if args.extra_out else None
+    if extra_out is not None and os.path.lexists(extra_out):
+        raise Failure(f"refused: --extra-out {extra_out} already exists")
 
     with tempfile.TemporaryDirectory() as scratch:
         extra = os.path.join(scratch, "extra.json")
         result = run_step([env["RELEASE_SIGNER_BIN"], "put-quest-apk", "--tag", args.tag, "--apk", str(apk), "--out", extra],
                           env, "the signer's put-quest-apk", cwd=signer_cwd)
+        if extra_out is not None:
+            keep_extra(pathlib.Path(extra), extra_out)
     log.event("put_apk", object=f"{KEY_PREFIX}/{args.tag}/{name}", signer_line=result.stdout.strip())
+    if extra_out is not None:
+        log.event("extra_out", path=str(extra_out))
 
     rclone_env = {
         **env,
@@ -243,11 +264,12 @@ def main(argv: list[str], env: dict[str, str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("tag", help="the release tag, vX.Y.Z")
     parser.add_argument("--dir", help="where release-quest-apk wrote the files (default build/quest-release/<tag>)")
+    parser.add_argument("--extra-out", help="keep the signer's manifest claim in this new file")
     args = parser.parse_args(argv)
     log = None
     try:
         log = Log(state_log_path(env), args.tag)
-        log.event("start", dir=args.dir or "")
+        log.event("start", dir=args.dir or "", extra_out=args.extra_out or "")
         publish(args, env, log)
     except Failure as failure:
         sys.stderr.write(f"publish-quest-apk: {failure}\n")

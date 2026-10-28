@@ -67,6 +67,7 @@ BRAND_PROSE_SPELLINGS = {
     "docs/adr/0012-static-install-root.md": {"nEVR"},
     "docs/design/2026-09-21-mic-provider-voip-fix.md": {"nEVR"},
     "docs/reference/example-config.yaml": {"nEVR"},
+    "docs/reference/launcher-install-root.md": {"nEVR"},
     "docs/reference/verifying-a-release.md": {"nEVR"},
     "docs/standards/logging.md": {"nEVR"},
     "cmake/nevr_version_info.rc.in": {"nEVR"},  # ProductName and FileDescription are brand prose
@@ -81,6 +82,7 @@ BRAND_PROSE_SPELLINGS = {
     "src/runtime/ext/plugin_refusal_notice.h": {"nEVR"},
     "src/runtime/host/stop_notice.h": {"nEVR"},  # the player's text when the runtime did not load
     "src/runtime/tests/test_host_rendezvous.cpp": {"nEVR"},  # asserts that text
+    "src/quest/tests/menu_version_label_test.cpp": {"nEVR"},  # the label text the Quest menu shows
     "src/runtime/tests/test_menu_version_label.cpp": {"nEVR"},  # the label text the menu shows
     "src/runtime/tests/test_behavioral.cpp": {"nEVR"},  # asserts the refusal dialog's player prose
     "tools/package-release/README.template.txt": {"nEVR"},

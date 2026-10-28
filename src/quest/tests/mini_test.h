@@ -68,6 +68,9 @@ inline int RunAll(int argc, char** argv, std::chrono::seconds per_test_deadline 
   for (const TestCase& t : Registry()) {
     if (!filter.empty() && std::string(t.name).find(filter) == std::string::npos) continue;
     const int before = Failures();
+    // Unbuffered, before the test body: a test that aborts the process (an assert, a signal) loses what stdout
+    // still buffers, so this line is what names it.
+    std::fprintf(stderr, "RUN %s\n", t.name);
     std::promise<void> done;
     std::future<void> finished = done.get_future();
     std::thread runner([&t, &done] {
@@ -92,6 +95,7 @@ inline int RunAll(int argc, char** argv, std::chrono::seconds per_test_deadline 
     }
     runner.join();
     std::printf("%s %s\n", Failures() == before ? "PASS" : "FAIL", t.name);
+    std::fflush(stdout);  // an abort in a later test must not take this result with it
     ++ran;
   }
   std::printf("%d tests, %d failed checks\n", ran, Failures());

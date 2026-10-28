@@ -7,9 +7,9 @@
  * not started yet; the game reports an initialisation error and finishes its own activity (pinned_targets.h,
  * LibR15RequestPermissions, has the call chain and the addresses).
  *
- * One GOT hook on libr15's RequestPermissions slot. The handler calls the original; on the FIRST call only, which is
- * the boot request (the later callers are script nodes that must not block), it then waits, on the same thread, for
- * the storage permissions in the request to be granted:
+ * One GOT hook on libr15's RequestPermissions slot. The handler makes the request ("The request itself", below); on
+ * the FIRST call only, which is the boot request (the later callers are script nodes that must not block), it then
+ * waits, on the same thread, for the storage permissions in the request to be granted:
  *   - it checks each requested name that ends in "_EXTERNAL_STORAGE" with the game's own CSysInfo::CheckPermission
  *     (libr15 base + kCheckPermissionVaddr, used only after the module's build ID and the function's first four
  *     instructions match the pinned build);
@@ -27,6 +27,14 @@
  * outcome is kAlreadyGranted when both storage permissions are granted and kDeniedNotRequested when one is not (nothing
  * will ask for it; the step must not write). A denied microphone leaves the step to the request path. The step runs at
  * most once across both paths.
+ *
+ * The request itself (#947). The game's RequestPermissions passes Activity.requestPermissions no request code: its JNI
+ * call carries the array and nothing in the int's register (permission_request.h has the instructions), so the code is
+ * whatever that register holds, and a negative one aborts the process. The handler does not call it: it makes the
+ * same request through the requester (SetRequester; production: permission_request::Request on the game's activity)
+ * with kRequestCode, and calls the game's function only when the requester could not make the call (the result says why).
+ * One line per request, for the first kMaxLoggedRequests: {"event":"permission_request","result":...,"path":"ours"|
+ * "game","permissions":N[,"request_code":kRequestCode]}.
  *
  * Lines (sentinel log, no counters): {"event":"permission_wait_install",...} at install and
  * {"event":"permission_wait","state":"already_granted"|"waiting"|"granted"|"timeout"|"check_unavailable"|
@@ -47,6 +55,15 @@ using CheckFn = bool (*)(const char* permission) noexcept;
 
 inline constexpr unsigned kPollMs = 500;
 inline constexpr unsigned kTimeoutMs = 30000;
+// The request code of every request the handler makes. Activity.requestPermissions refuses a negative one; the game
+// never reads it back.
+inline constexpr int kRequestCode = 1;
+inline constexpr unsigned kMaxLoggedRequests = 8;
+
+// Makes the request: "requested" when it was made, else a token saying why not (permission_request::Request's).
+using RequestFn = const char* (*)(const char* const* names, std::uint64_t count, int requestCode) noexcept;
+// Sets the requester. Null (the default): every request goes to the game's own function. Set it before the game runs.
+void SetRequester(RequestFn fn) noexcept;
 
 // How the boot request's wait ended. Only kGranted and kAlreadyGranted mean the app may touch shared storage.
 enum class StorageOutcome {
@@ -85,7 +102,7 @@ void ArmForTest(CheckFn check, unsigned pollMs, unsigned timeoutMs) noexcept;
 void ResetForTest() noexcept;
 
 struct Counts {
-  unsigned long long requests, waits, granted, timeouts;
+  unsigned long long requests, waits, granted, timeouts, game_requests;  // game_requests: made by the game's function
 };
 Counts CurrentCounts() noexcept;
 

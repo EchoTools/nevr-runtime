@@ -19,7 +19,7 @@ Bounds, all of which leave the game's call untouched: the key table holds 8192 k
 
 The handler logs after the original has returned, so no logging frame is live while game code runs; `TestHookFramesCarryNoPersonality` (`tests/quest`) checks the thunk's frames in the built library.
 
-Two counters, `resource_request_calls` and `resource_request_thunk_faults` (the reporter's table holds `kMaxReportCounters`, 96; `integration_hooks_test` sums every hook's counters against it). Everything else is a per-event line, not a counter.
+Two counters, `resource_request_calls` and `resource_request_thunk_faults` (the reporter's table holds `kMaxReportCounters`, 128; `integration_hooks_test` sums every hook's counters against it). Everything else is a per-event line, not a counter.
 
 The constructor sequence asks `Steps::ResourceRequestLogWanted` (`nevr_build::kIsDev`). A release build skips `register_resource_request_counters` and `install_resource_request_log` with the reason `release_build`; a development build whose counters were refused skips the install with `counters_refused` and the hook's own rule logs that it installed nothing. The install runs right after the Vulkan extension window, before token auth.
 

@@ -25,6 +25,7 @@ struct State {
   std::mutex mutex;
   Slot login{nullptr, false, nullptr, "login"};
   Slot matchmaking{nullptr, false, nullptr, "matchmaking"};
+  Slot loginTitle{nullptr, false, nullptr, "login_title"};
 };
 State& S() {
   static State* const state = new State();
@@ -84,7 +85,8 @@ void RunPlugins(const char* module) {
 }
 
 bool AnyUnsettled() {
-  return (S().login.fn != nullptr && !S().login.settled) || (S().matchmaking.fn != nullptr && !S().matchmaking.settled);
+  return (S().login.fn != nullptr && !S().login.settled) || (S().matchmaking.fn != nullptr && !S().matchmaking.settled) ||
+         (S().loginTitle.fn != nullptr && !S().loginTitle.settled);
 }
 
 }  // namespace
@@ -93,6 +95,7 @@ void SetPostLoadActions(const PostLoadActions& actions) {
   const std::lock_guard<std::mutex> lock(S().mutex);
   S().login = Slot{actions.login, false, nullptr, "login"};
   S().matchmaking = Slot{actions.matchmaking, false, nullptr, "matchmaking"};
+  S().loginTitle = Slot{actions.loginTitle, false, nullptr, "login_title"};
   g_calls.store(0);
   g_sawPnsovr.store(false);
   g_sawMatchmaking.store(false);
@@ -119,6 +122,7 @@ PostLoadStats PostLoadStatsView() noexcept {
   const std::lock_guard<std::mutex> lock(S().mutex);
   s.loginSettled = S().login.settled ? 1 : 0;
   s.matchmakingSettled = S().matchmaking.settled ? 1 : 0;
+  s.loginTitleSettled = S().loginTitle.settled ? 1 : 0;
   s.pluginsSettled = g_pluginsSettled.load(std::memory_order_acquire) ? 1 : 0;
   return s;
 }
@@ -150,6 +154,7 @@ NEVR_OUTSIDE_GAME_CALL void AfterDlopen(const char* name, void* handle) noexcept
       const std::lock_guard<std::mutex> lock(S().mutex);
       RunSlot(S().login, module);
       RunSlot(S().matchmaking, module);
+      RunSlot(S().loginTitle, module);
       g_pending.store(AnyUnsettled(), std::memory_order_release);
     } catch (const std::exception&) {
       // std::system_error from the lock: leave the game's dlopen result alone; the next call retries.

@@ -1,0 +1,7 @@
+# Pinned manifest public keys: LABEL BASE64KEY. The same three keys as docs/reference/verifying-a-release.md.
+# K1: key id 343D0247859CEEC0 (file order c0ee9c8547023d34)
+K1 RWTA7pyFRwI9NPbeZVbRJxtiA0YsG3jolqhV8mxuCEP0AUb24092wkuy
+# K2: key id 5572A7F345AF723E (file order 3e72af45f3a77255)
+K2 RWQ+cq9F86dyVc7yFNVU+YAVnSl5pJFun+A68lujJ1p3GsMb2v3vrK0F
+# KR: key id 7F97E500E1AC0C41 (file order 410cace100e5977f)
+KR RWRBDKzhAOWXf+lhvvVo22yLwhwmABcky2IkqcvmLWtpG8Pm9/ux8dYx

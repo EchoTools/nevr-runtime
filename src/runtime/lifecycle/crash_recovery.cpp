@@ -34,6 +34,7 @@
 #include "runtime/hook/dll_load_hook.h"
 #include "runtime/hook/export_tracer.h"
 #include "runtime/patch/asset_cdn.h"
+#include "runtime/patch/invite_service.h"
 #include "runtime/patch/binary_bug_fixes.h"
 #include "runtime/patch/resource_override.h"
 
@@ -156,6 +157,7 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
         "[NEVR.PATCH] game loop returned: the client is exiting (no server hold outside server mode)");
     // Stop the CDN fetch thread now: at DLL_PROCESS_DETACH a still-joinable thread is too late (#340).
     nevr_asset_cdn::StopBackgroundFetch();
+    nevr_invite_service::Shutdown();  // aborts a request in flight and joins the worker thread, as the CDN thread above
     nevr_export_tracer::Shutdown();  // the export tracer's last drain and summary (a no-op when it is off)
     nevr_quit_check::OnGameLoopReturned(gameResult);  // self-check "pc_quit" (#392): sent now, nothing runs later
     return gameResult;
@@ -175,6 +177,8 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
 }
 
 INT64 RuntimeGameMain(INT64 arg1) { return GameMainWrapperHook(arg1); }
+
+unsigned long GameLoopThreadId() { return g_gameLoopThreadId.load(std::memory_order_relaxed); }
 
 void ArmGameMain(const NevrHostContext* host) {
   // The host owns the detour on the game's main wrapper (runtime/host) and calls RuntimeGameMain

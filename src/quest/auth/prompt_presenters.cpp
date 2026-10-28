@@ -32,6 +32,8 @@ static_assert(sizeof(kLine4) - 1 <= prompt_board::kMaxLineChars, "line 4 fits th
 static_assert(sizeof(kSignedInText) - 1 <= prompt_board::kCapacity, "the signed-in notice fits the board");
 static_assert(sizeof(kTimedOutText) - 1 <= prompt_board::kCapacity, "the timed-out text fits the board");
 static_assert(sizeof(kNoCodeShownText) - 1 <= prompt_board::kCapacity, "the no-code text fits the board");
+static_assert(sizeof(kSignInTitle) - 1 <= prompt_board::kMaxTitleChars, "the sign-in title fits the board");
+static_assert(sizeof(kSignedInTitle) - 1 <= prompt_board::kMaxTitleChars, "the signed-in title fits the board");
 
 const char* ModeName(prompt_board::Mode mode) {
   return mode == prompt_board::Mode::kNotice ? "notice" : "prompt";
@@ -75,8 +77,8 @@ bool FormatGamePromptText(const LoginPrompt& prompt, std::string& out, std::stri
 
 GameTextPresenter::GameTextPresenter(nevr::auth::LogSink log) : log_(std::move(log)) {}
 
-bool GameTextPresenter::Publish(const std::string& text, prompt_board::Mode mode, const char* what) {
-  if (!prompt_board::Publish(text.data(), text.size(), mode)) {
+bool GameTextPresenter::Publish(const std::string& text, prompt_board::Mode mode, const char* what, const char* title) {
+  if (!prompt_board::Publish(text.data(), text.size(), mode, title)) {
     prompt_board::Withdraw();  // an older code must not stay on screen
     Emit(log_, LogLevel::Error,
          LoginPromptLogLine("game_error_text", "refused",
@@ -86,7 +88,7 @@ bool GameTextPresenter::Publish(const std::string& text, prompt_board::Mode mode
   Emit(log_, LogLevel::Info,
        LoginPromptLogLine("game_error_text", "published",
                           {{"what", what}, {"mode", ModeName(mode)}, {"chars", text.size()},
-                           {"version", prompt_board::Version()}}));
+                           {"title", title != nullptr ? title : "game"}, {"version", prompt_board::Version()}}));
   return true;
 }
 
@@ -98,7 +100,7 @@ intptr_t GameTextPresenter::Present(const LoginPrompt& prompt) {
     Emit(log_, LogLevel::Error, LoginPromptLogLine("game_error_text", "refused", {{"what", "code"}, {"why", why}}));
     return 0;
   }
-  const bool published = Publish(text, prompt_board::Mode::kPrompt, "code");
+  const bool published = Publish(text, prompt_board::Mode::kPrompt, "code", kSignInTitle);
   nevr::auth::WipeSecret(text);  // the board holds the only copy this presenter needs
   return published ? nevr::auth::kBrowserOpenAcceptedAbove + 1 : 0;
 }
@@ -110,12 +112,13 @@ void GameTextPresenter::Clear() {
 void GameTextPresenter::Conclude(LoginOutcome outcome) {
   if (outcome == LoginOutcome::SignedIn) {
     // Only a screen that shows a prompt is changed: a later login failure shows the game's own text.
-    Publish(kSignedInText, prompt_board::Mode::kNotice, "signed_in");
+    Publish(kSignedInText, prompt_board::Mode::kNotice, "signed_in", kSignedInTitle);
   } else if (outcome == LoginOutcome::TimedOut) {
-    // Shown at every later login failure: no code is coming until the game restarts.
-    Publish(kTimedOutText, prompt_board::Mode::kPrompt, "timed_out");
+    // Shown at every later login failure: no code is coming until the game restarts. No title: this is a failure,
+    // and the game's own LOGIN FAILED stays over it.
+    Publish(kTimedOutText, prompt_board::Mode::kPrompt, "timed_out", nullptr);
   } else {
-    Publish(kNoCodeShownText, prompt_board::Mode::kPrompt, "no_code_shown");
+    Publish(kNoCodeShownText, prompt_board::Mode::kPrompt, "no_code_shown", nullptr);
   }
 }
 

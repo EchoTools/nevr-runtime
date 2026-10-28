@@ -19,9 +19,9 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools/quest_keystore.sh"
 JUSTFILE = REPO / "justfile"
 PASSPHRASE = "fixture-pass-7f3a91"
-ALIAS = "nevrdebug"
-KS_ENTRY = "services/echovrce/quest-signing-keystore"
-PASS_ENTRY = "services/echovrce/quest-signing-keystore-pass"
+ALIAS = "nevr"
+KS_ENTRY = "services/echovrce/quest-signing-keystore-v2"
+PASS_ENTRY = "services/echovrce/quest-signing-keystore-v2-pass"
 
 FAKE_PASS = r'''#!/bin/bash
 # A fake `pass`: entries are files under $FAKE_PASS_DIR (the entry path with "/" turned into "__").
@@ -348,6 +348,36 @@ class QuestKeystoreTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, self.fp + "\n")
         self.assertEqual(self.left_behind(), [])
+
+    # ---- check ----------------------------------------------------------------------------------------------
+
+    def test_check_succeeds_silently_when_both_entries_are_stored(self):
+        self.seed()
+        result = self.run_script("check")
+        self.assertEqual((result.returncode, result.stdout), (0, ""), result.stderr)
+        self.assertEqual(self.left_behind(), [])
+
+    def test_check_names_the_missing_entry_and_the_import_command(self):
+        self.seed()
+        self.entry(PASS_ENTRY).unlink()
+        result = self.run_script("check")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(PASS_ENTRY, result.stderr)
+        self.assertIn("import-quest-keystore", result.stderr)
+
+    def test_the_key_is_the_nevr_v2_key_and_the_old_entries_are_not_named(self):
+        text = SCRIPT.read_text()
+        self.assertIn('readonly KS_ENTRY="services/echovrce/quest-signing-keystore-v2"', text)
+        self.assertIn('readonly PASS_ENTRY="services/echovrce/quest-signing-keystore-v2-pass"', text)
+        self.assertIn('readonly ALIAS="nevr"', text)
+        self.assertNotIn("nevrdebug", text)
+        self.assertNotIn("nevrdebug", JUSTFILE.read_text())
+
+    def test_the_package_recipes_ask_the_script_for_the_key_instead_of_naming_its_entry(self):
+        text = JUSTFILE.read_text()
+        self.assertNotIn("pass show services/echovrce", text)
+        for name in ("package-dev", "release-quest-apk"):
+            self.assertIn("tools/quest_keystore.sh check", self.recipe(name), name)
 
     # ---- import ---------------------------------------------------------------------------------------------
 

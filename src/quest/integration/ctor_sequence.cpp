@@ -37,10 +37,12 @@ const char* StepName(StepId id) {
     case StepId::kInstallProcessEnd: return "install_process_end";
     case StepId::kInstallPermissionWait: return "install_permission_wait";
     case StepId::kInstallVkExtWindow: return "install_vk_ext_window";
+    case StepId::kInstallOsBuildGate: return "install_os_build_gate";
     case StepId::kInstallResourceRequestLog: return "install_resource_request_log";
     case StepId::kInstallTextureQuality: return "install_texture_quality";
     case StepId::kInstallRenderConfig: return "install_render_config";
     case StepId::kInstallCreditsText: return "install_credits_text";
+    case StepId::kInstallMenuCards: return "install_menu_cards";
     case StepId::kStartTokenAuth: return "start_token_auth";
     case StepId::kInstallLoginPrompt: return "install_login_prompt";
     case StepId::kStartBridge: return "start_bridge";
@@ -219,6 +221,10 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // counters. libr15 resolves its Vulkan functions when it starts the game, after the constructor.
     r.Run(StepId::kInstallVkExtWindow, [&] { return steps.InstallVkExtWindow(); });
 
+    // The game never refuses a headset for its OS build number (#945): every launch, no feature, no counters.
+    // CR15NetGame::Initialize asks for the number after the constructor.
+    r.Run(StepId::kInstallOsBuildGate, [&] { return steps.InstallOsBuildGate(); });
+
     // The log-only resource request hook (#871): a development build only, and only with its counters. Every libr15 slot
     // it needs exists from the start; the game requests resources after the constructor.
     if (!resourceWanted) {
@@ -254,6 +260,10 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // The project section of the CREDITS page (#970): every launch, no counters; it points two libr15 cursor stores at a
     // buffer the sentinel builds, so it runs before the page can be opened.
     r.Run(StepId::kInstallCreditsText, [&] { return steps.InstallCreditsText(); });
+
+    // The main-menu cards (#966): every launch, no counters. One libr15 data slot; libr15 reads it each time it starts a
+    // resource load, so the hook is in place before the menu page is requested.
+    r.Run(StepId::kInstallMenuCards, [&] { return steps.InstallMenuCards(); });
 
     bool tokenOk = false;
     if (wantTokenAuth) {

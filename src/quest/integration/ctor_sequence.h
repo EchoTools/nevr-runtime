@@ -38,13 +38,17 @@
 //      InstallVkExtWindow            the device extensions libr15 requires stay inside the 128 entries it reads
 //                                    (#868): two libr15 slots (CSysModule::FindMethod, vrapi_GetDeviceExtensionsVulkan),
 //                                    on every launch, right after the permission-wait hook; no counters
+//      InstallOsBuildGate            the game never refuses a headset for its OS build number (#945): one libr15 slot
+//                                    (CSysInfo::OSBuildVersion), on every launch, right after the Vulkan extension
+//                                    window; no counters. CR15NetGame::Initialize, its only caller, runs after the
+//                                    constructor.
 //      InstallResourceRequestLog     the log-only resource request hook (#871): one libr15 slot
 //                                    (CResourceManager::FillResourceFileRequest), in a development build only
 //                                    (Steps::ResourceRequestLogWanted; a release build skips it and registers no
-//                                    counters), right after the Vulkan extension window. Its counters are registered
+//                                    counters), right after the OS build floor hook. Its counters are registered
 //                                    with the others (step 3).
 //      InstallTextureQuality         the eye-buffer size libr15 creates its swap chain with (#943): one libr15 slot
-//                                    (vrapi_GetSystemPropertyInt), on every launch, right after the Vulkan window hook (and the resource request log, when wanted) and
+//                                    (vrapi_GetSystemPropertyInt), on every launch, right after the OS build floor hook (and the resource request log, when wanted) and
 //                                    before the hardware dump (which then shares the slot); the level is the config's
 //                                    graphics.texture_quality, `stock` when the configuration cannot be resolved; `stock`
 //                                    installs nothing. Its counters are registered with the others (step 3), unless `stock`.
@@ -57,6 +61,11 @@
 //                                    CREDITS component's two cursor stores), right after the texture hook; no counters.
 //                                    The production step writes nothing and succeeds: a libr15 code page cannot be
 //                                    written on the current Horizon policy (#1127), so it waits on #1132.
+//      InstallMenuCards              the CREATE GAME and JOIN VIA CODE cards on the main menu (#966): one libr15 data slot
+//                                    (CResourceManager::AsyncResourceIOCallback, the streaming reader's read-finished
+//                                    callback), on every launch, right after the credits step; no counters. A data write:
+//                                    no code page is touched. Without the stock page's digest pinned it serves the page
+//                                    unchanged and logs the digest.
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):
 //   token auth fails        -> the login prompt (token auth is what publishes it), bridge, login, social
@@ -116,10 +125,12 @@ enum class StepId : std::uint8_t {
   kInstallProcessEnd,
   kInstallPermissionWait,
   kInstallVkExtWindow,
+  kInstallOsBuildGate,
   kInstallResourceRequestLog,
   kInstallTextureQuality,
   kInstallRenderConfig,
   kInstallCreditsText,
+  kInstallMenuCards,
   kStartTokenAuth,
   kInstallLoginPrompt,
   kStartBridge,
@@ -193,6 +204,9 @@ class Steps {
   // The device extensions libr15 requires stay inside the 128 entries it reads (#868): two libr15 slots
   // (CSysModule::FindMethod, vrapi_GetDeviceExtensionsVulkan), on every launch.
   virtual bool InstallVkExtWindow() = 0;
+  // The game never refuses a headset for its OS build number (#945): one libr15 slot (CSysInfo::OSBuildVersion), on
+  // every launch.
+  virtual bool InstallOsBuildGate() = 0;
   // `countersRegistered`: the result of RegisterResourceRequestCounters (the hook's own rule: without its counters it logs the
   // skip and installs nothing). True when the FillResourceFileRequest slot holds the thunk.
   virtual bool InstallResourceRequestLog(bool countersRegistered) = 0;
@@ -205,6 +219,9 @@ class Steps {
   virtual bool InstallRenderConfig(const nevr_quest::TextureChoice& choice) = 0;
   // The project section of the CREDITS page (#970): two libr15 ADRP+ADD pairs, on every launch, no counters.
   virtual bool InstallCreditsText() = 0;
+  // The CREATE GAME and JOIN VIA CODE cards on the main menu (#966): one libr15 data slot (the streaming reader's read-finished
+  // callback), on every launch, no counters.
+  virtual bool InstallMenuCards() = 0;
   virtual bool StartTokenAuth() = 0;
   // `countersRegistered`: the result of RegisterLoginPromptCounters. The step applies the hook's own rule
   // (login_prompt::InstallIfCounted): without its counters it logs the skip and installs nothing.

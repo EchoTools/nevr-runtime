@@ -141,6 +141,7 @@ class DllLoadHookIsolation : public testing::Test {
   }
 };
 class DllLoadHookFilter : public DllLoadHookIsolation {};
+class DllLoadHookRewriter : public DllLoadHookIsolation {};
 class DllLoadHookCallbacks : public DllLoadHookIsolation {};
 class DllLoadHookInstall : public DllLoadHookIsolation {};
 class DllLoadHookOnLoad : public DllLoadHookIsolation {};
@@ -892,4 +893,89 @@ TEST_F(DllLoadHookFilter, FlushPendingLinesWritesAHeldLineOutsideTheLockOnly) {
   nevr_dll_load_hook::FlushPendingLines();
   EXPECT_TRUE(ClogHas(EchoVR::LogLevel::Info, "[NEVR.DLLHOOK] load refused by filter 'test-filter': version.dll"))
       << AllClogText();
+}
+
+// #1177: a rewriter names the file a load no filter refused maps. The hook calls the real wide loader with that path and
+// the caller's flags, whichever of the four variants the caller used.
+namespace {
+bool RewriteToWs2(const wchar_t* lower, std::wstring* path) {
+  if (std::wcscmp(lower, L"nevr-rewrite-me.dll") != 0) return false;
+  *path = L"ws2_32.dll";
+  return true;
+}
+bool RewriteToMsimg32(const wchar_t* lower, std::wstring* path) {
+  if (std::wcscmp(lower, L"nevr-rewrite-me.dll") != 0) return false;
+  *path = L"msimg32.dll";
+  return true;
+}
+bool RefuseRewriteMe(const wchar_t* lower) { return std::wcscmp(lower, L"nevr-rewrite-me.dll") == 0; }
+}  // namespace
+
+TEST_F(DllLoadHookRewriter, EveryVariantLoadsThePathTheRewriterNames) {
+  ASSERT_EQ(MH_Initialize(), MH_OK);
+  ASSERT_EQ(nevr_dll_load_hook::Install(), 4);
+  nevr_dll_load_hook::AddLoadRewriter("test-rewriter", &RewriteToWs2);
+  const HMODULE expected = LoadLibraryW(L"ws2_32.dll");
+  ASSERT_NE(expected, nullptr);
+  EXPECT_EQ(LoadLibraryW(L"nevr-rewrite-me.dll"), expected) << "LoadLibraryW";
+  EXPECT_EQ(LoadLibraryExW(L"nevr-rewrite-me.dll", nullptr, 0), expected) << "LoadLibraryExW";
+  EXPECT_EQ(LoadLibraryA("nevr-rewrite-me.dll"), expected) << "LoadLibraryA";
+  EXPECT_EQ(LoadLibraryExA("nevr-rewrite-me.dll", nullptr, 0), expected) << "LoadLibraryExA";
+}
+
+TEST_F(DllLoadHookRewriter, TheCallersFlagsGoToTheRewrittenLoad) {
+  ASSERT_EQ(MH_Initialize(), MH_OK);
+  ASSERT_EQ(nevr_dll_load_hook::Install(), 4);
+  nevr_dll_load_hook::AddLoadRewriter("test-rewriter", &RewriteToMsimg32);
+  ASSERT_EQ(GetModuleHandleW(L"msimg32.dll"), nullptr) << "precondition: the target is not already loaded";
+  // A module mapped as a data file has the low bits of its handle set; one mapped by a load with no flags does not.
+  const HMODULE asData = LoadLibraryExW(L"nevr-rewrite-me.dll", nullptr, LOAD_LIBRARY_AS_DATAFILE);
+  ASSERT_NE(asData, nullptr) << GetLastError();
+  EXPECT_NE(reinterpret_cast<std::uintptr_t>(asData) & 3u, 0u) << "the flags did not reach the loader";
+  FreeLibrary(asData);
+  const HMODULE asDataA = LoadLibraryExA("nevr-rewrite-me.dll", nullptr, LOAD_LIBRARY_AS_DATAFILE);
+  ASSERT_NE(asDataA, nullptr) << GetLastError();
+  EXPECT_NE(reinterpret_cast<std::uintptr_t>(asDataA) & 3u, 0u) << "the ANSI variant dropped the flags";
+  FreeLibrary(asDataA);
+}
+
+TEST_F(DllLoadHookRewriter, ARefusedLoadIsNotRewritten) {
+  ASSERT_EQ(MH_Initialize(), MH_OK);
+  ASSERT_EQ(nevr_dll_load_hook::Install(), 4);
+  nevr_dll_load_hook::AddLoadFilter("test-filter", &RefuseRewriteMe);
+  nevr_dll_load_hook::AddLoadRewriter("test-rewriter", &RewriteToWs2);
+  SetLastError(0);
+  EXPECT_EQ(LoadLibraryW(L"nevr-rewrite-me.dll"), nullptr);
+  EXPECT_EQ(GetLastError(), static_cast<DWORD>(ERROR_MOD_NOT_FOUND));
+}
+
+TEST_F(DllLoadHookRewriter, AShutdownDropsTheRewritersAndANullOneIsIgnored) {
+  nevr_dll_load_hook::AddLoadRewriter("null-rewriter", nullptr);
+  std::wstring path;
+  EXPECT_FALSE(nevr_dll_load_hook::RewriteLoad(L"nevr-rewrite-me.dll", &path));
+  nevr_dll_load_hook::AddLoadRewriter("test-rewriter", &RewriteToWs2);
+  EXPECT_TRUE(nevr_dll_load_hook::RewriteLoad(L"nevr-rewrite-me.dll", &path));
+  EXPECT_EQ(path, L"ws2_32.dll");
+  nevr_dll_load_hook::Shutdown();
+  path.clear();
+  EXPECT_FALSE(nevr_dll_load_hook::RewriteLoad(L"nevr-rewrite-me.dll", &path));
+}
+
+// The wide Ex hook failed to install, so there is no trampoline for it: a load the narrow hooks rewrite goes to the
+// real LoadLibraryExW, which no hook is on.
+TEST_F(DllLoadHookRewriter, ARewrittenLoadStillLoadsWhenTheWideExHookIsNotInstalled) {
+  ASSERT_EQ(MH_Initialize(), MH_OK);
+  const nevr_dll_load_hook::MinHookOps ops{
+      [](LPVOID target, LPVOID detour, LPVOID* original) -> MH_STATUS {
+        if (target == reinterpret_cast<LPVOID>(&LoadLibraryExW)) return MH_ERROR_UNSUPPORTED_FUNCTION;
+        return MH_CreateHook(target, detour, original);
+      },
+      nullptr, nullptr};
+  nevr_dll_load_hook::SetMinHookOpsForTest(&ops);
+  ASSERT_EQ(nevr_dll_load_hook::Install(), 3);
+  ASSERT_EQ(nevr_dll_load_hook::OriginalForTest("LoadLibraryExW"), nullptr);
+  nevr_dll_load_hook::AddLoadRewriter("test-rewriter", &RewriteToWs2);
+  const HMODULE expected = LoadLibraryExW(L"ws2_32.dll", nullptr, 0);
+  ASSERT_NE(expected, nullptr);
+  EXPECT_EQ(LoadLibraryW(L"nevr-rewrite-me.dll"), expected);
 }

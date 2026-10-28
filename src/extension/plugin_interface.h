@@ -69,6 +69,53 @@ struct NevrLogField {
 typedef void (*NevrLogFn)(const char* plugin_id, uint32_t level, const char* message,
                           const NevrLogField* fields, uint32_t field_count);
 
+/* --- Quest host services (#1202, docs/adr/0025-quest-autopilot-route.md; additive, no version bump) --- */
+
+/* Which controller a NevrQuestControllerState is. The host reads it from the device's capabilities (VrApi's
+ * ovrControllerCaps_LeftHand / _RightHand); a device that reports neither is UNKNOWN. */
+enum NevrQuestHand : uint32_t {
+    NEVR_QUEST_HAND_LEFT    = 0,
+    NEVR_QUEST_HAND_RIGHT   = 1,
+    NEVR_QUEST_HAND_UNKNOWN = 2,
+};
+
+/* One tracked controller's input, as the game is about to read it. `buttons` and `touches` carry VrApi's
+ * ovrButton and ovrTouch bits; the triggers are 0..1 and the stick -1..1 on each axis. The host copies these out
+ * of the state VrApi wrote and writes back only the fields a filter changed, so a filter that changes nothing
+ * leaves the game's input exactly as VrApi gave it. `hand` is the host's; a filter's change to it is ignored. */
+struct NevrQuestControllerState {
+    uint32_t hand;          /* NevrQuestHand */
+    uint32_t buttons;
+    uint32_t touches;
+    float    index_trigger;
+    float    grip_trigger;
+    float    stick_x;
+    float    stick_y;
+};
+
+/* An input filter. Called on the thread that polls input, once per tracked controller per poll, after VrApi has
+ * written the state and before the game reads it. It runs inside a hook on the game's call: it must return, and
+ * must not block, take a lock, allocate, log, throw or call into the game. Build the plugin with -fno-exceptions. */
+typedef void (*NevrQuestInputFilterFn)(void* user, NevrQuestControllerState* state);
+
+enum NevrQuestFilterResult : int32_t {
+    NEVR_QUEST_FILTER_OK            = 0,
+    NEVR_QUEST_FILTER_BAD_ARGUMENT  = 1, /* null plugin_id or filter */
+    NEVR_QUEST_FILTER_NOT_DEV_BUILD = 2, /* a release build offers no input filter */
+    NEVR_QUEST_FILTER_OWNED         = 3, /* another plugin's filter holds the input; one per process */
+    NEVR_QUEST_FILTER_HOOK_REFUSED  = 4, /* the host could not hook the game's input call; nothing was installed */
+};
+
+/* The services a Quest host offers a plugin, reached through ctx->quest. Every pointer is process-lifetime. A
+ * plugin checks struct_size covers a member before calling it: the struct grows at its tail. */
+struct NevrQuestHostApi {
+    uint32_t struct_size;
+    /* Puts `filter` on the game's controller input (libr15's vrapi_GetCurrentInputState). Development builds only;
+     * one filter per process, never removed. `plugin_id` is ctx->plugin_id. Returns a NevrQuestFilterResult; the
+     * host logs each outcome. Call from init, not from a filter. */
+    int32_t (*register_input_filter)(const char* plugin_id, NevrQuestInputFilterFn filter, void* user);
+};
+
 /* Game context passed to the plugin by the host.
  *
  * The host fills every field; a pre-v5 plugin compiled without the trailing
@@ -107,6 +154,8 @@ struct NvrGameContext {
     const char* game_build_id;  /* Quest only: the running libr15's build ID in lowercase hex, process-lifetime
                                  *   stable. nullptr on PC, and on a Quest host that could not read it. A plugin
                                  *   checks ctx_size covers it first, and NEVR_HOST_PLATFORM_QUEST is set. */
+    const NevrQuestHostApi* quest; /* Quest only (#1202): the host services above, process-lifetime. nullptr on PC
+                                    *   and on a Quest host that offers none. Check ctx_size covers it first. */
 };
 
 /* Host capability flags */
