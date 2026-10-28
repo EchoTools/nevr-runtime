@@ -30,6 +30,7 @@
 #include "runtime/lifecycle/config.h"
 #include "runtime/patch/party_invite_gate.h"
 #include "runtime/patch/social_facade.h"
+#include "runtime/patch/ui_text_writer.h"
 #include "runtime/scenario/scenario_protocol.h"
 
 namespace nevr_scenario_control {
@@ -388,6 +389,13 @@ std::string PostUserId(void* netGame, void* handler, const std::string& user, st
 // Game thread.
 std::string FireAction(const nevr_scenario_protocol::Command& cmd) {
   std::string error;
+  if (cmd.action == "ui_text") {
+    if (!nevr_ui_text::Ready()) return "the UI text writer is off in this process (see the [NEVR.UI] text writer line)";
+    // Posted, not written here: the writer applies it on the frame pacer's thread, retrying until the page exists.
+    const nevr_ui_text::Check check =
+        nevr_ui_text::Post(nevr_ui_text::Request{{cmd.uiActor, cmd.uiElement}, cmd.value});
+    return check == nevr_ui_text::Check::Ok ? std::string() : std::string("ui_text refused: ") + nevr_ui_text::CheckName(check);
+  }
   void* netGame = NetGame();
   if (netGame == nullptr) return "no NetGame yet";
   std::string user = cmd.user;
