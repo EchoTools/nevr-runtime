@@ -1319,6 +1319,12 @@ void TestHook_SetBetweenResolveAndOpen(void (*hook)(const std::wstring& resolved
 
 void TestHook_ForgetLoadFilterRegistration() { g_filterRegistered = false; }
 
+size_t TestHook_LoadFilterVerifiedCount() {
+  FilterState& f = Filter();
+  std::lock_guard<std::mutex> lock(f.mutex);
+  return f.verified.size();
+}
+
 void TestHook_ResetPluginLoadFilter() {
   FilterState& f = Filter();
   std::lock_guard<std::mutex> lock(f.mutex);

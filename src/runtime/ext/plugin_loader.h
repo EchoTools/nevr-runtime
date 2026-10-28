@@ -94,6 +94,8 @@ void TestHook_RecordRefusal(const std::string& file);
 void TestHook_InstallPluginLoadFilter(const std::string& pluginDir);
 void TestHook_ResetPluginLoadFilter();
 void TestHook_ForgetLoadFilterRegistration();  // after nevr_dll_load_hook::Shutdown() cleared the registered filters
+// How many files the late-load filter has checked and holds (a staged plugin's own load is not one of them).
+size_t TestHook_LoadFilterVerifiedCount();
 // Called by the filter between resolving a late load's path and opening it (null clears it).
 void TestHook_SetBetweenResolveAndOpen(void (*hook)(const std::wstring& resolved));
 #endif
