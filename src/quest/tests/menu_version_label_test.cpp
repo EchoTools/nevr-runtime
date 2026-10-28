@@ -10,6 +10,10 @@
 #include <cstdio>
 #include <cstring>
 
+#include <string>
+#include <vector>
+
+#include "hook_log.h"
 #include "quest/social/menu_version_label.h"
 #include "quest/tests/test_check.h"
 #include "runtime/patch/menu_version_label_rules.h"
@@ -52,6 +56,15 @@ void Reset() {
   g_copied[0] = '\0';
   mv::ResetForTest();
   *mv::Thunk::OriginalOut() = reinterpret_cast<void*>(&StandIn);
+}
+
+std::vector<std::string> g_lines;
+void Capture(sentinel::LogLevel /*level*/, const char* line) { g_lines.emplace_back(line); }
+
+std::size_t Lines(const char* needle) {
+  std::size_t n = 0;
+  for (const std::string& line : g_lines) n += line.find(needle) != std::string::npos ? 1 : 0;
+  return n;
 }
 
 int g_canvasObject = 0;
@@ -146,15 +159,37 @@ void TheLabelIsTheProjectVersion() {
   QCHECK(mv::LabelFor("5.17.0").size() <= nevr_menu_version_label::kMaxLabelChars);
 }
 
-// On a host libr15 is not loaded: the install is refused, says so, and reports 0 so the caller goes on.
+// The first drawn label writes one line naming the item and the label; the calls after it write none (the page sets the item
+// each time it is enabled, and the credits page sets other items every frame).
+void TheFirstDrawnLabelIsLoggedOnce() {
+  Reset();
+  g_lines.clear();
+  mv::ArmForTest(kLabel);
+  Entry()(&g_canvasObject, 1, kLobbyVersion, "a");
+  Entry()(&g_canvasObject, 1, kLobbyVersion, "b");
+  Entry()(&g_canvasObject, 1, kPublisherLock, "c");
+  Entry()(&g_canvasObject, 1, kLobbyVersion, "d");
+  QCHECK(Lines("label_drawn") == 1);
+  QCHECK(Lines("\"item\":\"lobby_version\"") == 1);
+  QCHECK(Lines("\"label\":\"nEVR 5.17.0\"") == 1);
+  QCHECK(g_lines.size() == 1);
+}
+
+// On a host libr15 is not loaded: the install is refused, says so with the status and the symbol, and reports 0 so the
+// caller goes on.
 void TheInstallIsRefusedWhenLibr15IsNotLoaded() {
   Reset();
+  g_lines.clear();
   QCHECK(mv::InstallMenuVersionLabelHook() == 0);
+  QCHECK(Lines("\"event\":\"menu_version\",\"status\":\"module_not_loaded\"") == 1);
+  QCHECK(Lines("CCanvasUICS7SetText") >= 1);
+  QCHECK(Lines("\"status\":\"installed\"") == 0);
 }
 
 }  // namespace
 
 int main() {
+  sentinel::SetLogSink(&Capture);
   WithoutTheHookTheGameDrawsItsText();
   TheLobbyVersionItemIsDrawnAsTheLabel();
   AnEmptyTextStaysEmpty();
@@ -163,6 +198,7 @@ int main() {
   EveryReplacementDrawsTheLabelAndIsCounted();
   AnEmptyLabelLeavesTheCallAlone();
   TheLabelIsTheProjectVersion();
+  TheFirstDrawnLabelIsLoggedOnce();
   TheInstallIsRefusedWhenLibr15IsNotLoaded();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "menu_version_label_test: %d check(s) failed\n", quest_test::Failures());
