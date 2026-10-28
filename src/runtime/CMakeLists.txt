@@ -1120,6 +1120,7 @@ if(BUILD_TESTING)
       lifecycle/nevr_root_move.cpp)
     set_source_files_properties(tests/test_nevr_root.cpp lifecycle/nevr_root_move.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_nevr_root PRIVATE NEVR_TEST_HOOKS)
     target_include_directories(test_nevr_root PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_nevr_root PRIVATE GTest::gtest GTest::gtest_main nevr_core)
     gtest_discover_tests(test_nevr_root DISCOVERY_MODE PRE_TEST)
