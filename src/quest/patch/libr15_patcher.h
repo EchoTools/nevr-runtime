@@ -68,7 +68,9 @@ bool WriteOutputFile(const std::string& path, const std::vector<std::uint8_t>& b
 
 /// The tool: `--stock <file> --out <file> --report <file> [--extra-rows <file>]`. Prints one JSON line per event and
 /// the summary to `out`, a refusal or error as one JSON line to `err`. Exit 0 on success, 1 on a refusal (nothing is
-/// written to --out), 2 on a usage or I/O error.
+/// written to --out), 2 on a usage or I/O error. The report's summary says what is on disk: "patched" only once --out is
+/// in place and has been read back, "refused" for a refusal, "io_error" when --out could not be written, and
+/// "incomplete" while --out is being written (what a run that dies there leaves).
 int RunCli(const std::vector<std::string>& args, const PatchSpec& spec, std::ostream& out, std::ostream& err);
 
 }  // namespace nevr_quest::patch

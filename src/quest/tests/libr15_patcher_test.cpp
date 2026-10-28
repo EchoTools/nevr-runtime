@@ -7,10 +7,12 @@
 // shipped tool, run against the synthetic file (it must refuse: the synthetic file is not the pinned libr15).
 
 #include <fcntl.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
@@ -1665,7 +1667,7 @@ TEST(TheStockFileIsNeverTheOutputAndAFailedWriteLeavesAnExistingOutputAlone) {
     CHECK(ReadText(out) == std::string("\x01\x02\x03"));
     CHECK_EQ(rmdir((out + ".partial").c_str()), 0);
   }
-  {  // --out in a directory that is not there: exit 2, and the report (written first) says what was validated
+  {  // --out in a directory that is not there: exit 2, and the report says the write failed (it does not say patched)
     std::remove(report.c_str());
     std::ostringstream so, se;
     CHECK_EQ(RunCli({"--stock", stock, "--out", g_scratch + "/no_such_dir/out.so", "--report", report}, w.spec, so, se), 2);
@@ -1673,7 +1675,7 @@ TEST(TheStockFileIsNeverTheOutputAndAFailedWriteLeavesAnExistingOutputAlone) {
     CHECK(e["status"] == "io_error");
     CHECK(e["detail"].get<std::string>().find("--out") != std::string::npos);
     CHECK(so.str().empty());
-    CHECK(Json::parse(ReadText(report), nullptr, false)["summary"]["status"] == "patched");
+    CHECK(Json::parse(ReadText(report), nullptr, false)["summary"]["status"] == "io_error");
   }
   {  // --report in a directory that is not there: exit 2 before any output
     std::remove(out.c_str());
@@ -2027,6 +2029,103 @@ TEST(AReportThatIsADanglingLinkToTheOutputIsTheOutput) {
   ExpectAliasRefused(w, "--report is a dangling link to --out, through a symlinked directory",
                      {"--stock", stock, "--out", t.linkDir + "/out.so", "--report", link}, "--report must not be the --out file", {{stock, stockBefore}},
                      {out, out + ".partial"});
+}
+
+// The report is the account of what is on disk. A run whose --out could not be put in place says so in the report: it never
+// leaves one that says "patched", not even the one an earlier good run wrote to the same path.
+TEST(AFailedOutputWriteNeverLeavesAReportThatSaysPatched) {
+  World w;
+  AliasTree t("failed_out");
+  const std::string stock = t.File("stock.so", w.elf.bytes);
+  const std::string stockBefore = ReadText(stock);
+  const std::string report = t.real + "/report.json", goodOut = t.real + "/good.so", outDir = t.real + "/out_is_a_directory";
+  t.Track(report);
+  t.Track(goodOut);
+  t.Track(outDir);
+  t.Track(outDir + ".partial");
+  CHECK_EQ(mkdir(outDir.c_str(), 0755), 0);
+  auto statusOf = [&]() {
+    const Json r = Json::parse(ReadText(report), nullptr, /*allow_exceptions=*/false);
+    return r.is_object() && r.contains("summary") && r["summary"].contains("status") ? r["summary"]["status"].get<std::string>() : std::string("<no report>");
+  };
+  auto fails = [&](const char* label, const std::string& out) {
+    // A good run first, so that a report saying "patched" is on disk when the failing run starts.
+    std::ostringstream so0, se0;
+    CHECK_EQ(RunCli({"--stock", stock, "--out", goodOut, "--report", report}, w.spec, so0, se0), 0);
+    CHECK_EQ(statusOf(), std::string("patched"));
+    std::ostringstream so, se;
+    const int rc = RunCli({"--stock", stock, "--out", out, "--report", report}, w.spec, so, se);
+    if (rc != 2) std::fprintf(stderr, "  %s: exit %d, not 2; stderr %s\n", label, rc, se.str().c_str());
+    CHECK_EQ(rc, 2);
+    CHECK(so.str().empty());
+    const Json e = OneErrorLine(se, label);
+    CHECK(e.value("status", std::string()) == "io_error");
+    CHECK(e.value("detail", std::string()).find("--out") != std::string::npos);
+    const std::string status = statusOf();
+    if (status != "io_error") std::fprintf(stderr, "  %s: the report's summary status is \"%s\", not io_error\n", label, status.c_str());
+    CHECK(status != "patched");
+    CHECK_EQ(status, std::string("io_error"));
+    const Json r = Json::parse(ReadText(report), nullptr, false);
+    CHECK(r["summary"].value("detail", std::string()).find("--out") != std::string::npos);
+    CHECK(Unchanged(stock, stockBefore, label));
+    CHECK(!Exists(out + ".partial"));  // the temporary file is gone
+  };
+  fails("--out is an existing directory", outDir);
+  fails("--out is the stock file with a slash after it", stock + "/");
+  fails("--out is in a directory that is not there", t.real + "/no_such_dir/out.so");
+  {  // the same bytes and the same status after a good run: the report is the good run's again
+    std::ostringstream so, se;
+    CHECK_EQ(RunCli({"--stock", stock, "--out", goodOut, "--report", report}, w.spec, so, se), 0);
+    CHECK_EQ(statusOf(), std::string("patched"));
+  }
+}
+
+// A run that dies while --out is being written leaves the report it started with, which says the run did not finish.
+// The child's file size limit stops it (SIGXFSZ) on the first write past 8000 bytes: the report written before --out is
+// small, the output is 16 KB.
+TEST(AReportDoesNotSayPatchedWhileTheOutputIsStillBeingWritten) {
+  World w;
+  AliasTree t("killed_run");
+  const std::string stock = t.File("stock.so", w.elf.bytes);
+  const std::string out = t.real + "/out.so", report = t.real + "/report.json", partial = out + ".partial";
+  t.Track(out);
+  t.Track(report);
+  t.Track(partial);
+  const pid_t pid = fork();
+  if (pid == 0) {
+    struct rlimit core = {0, 0};
+    struct rlimit fsize = {8000, 8000};
+    if (setrlimit(RLIMIT_CORE, &core) != 0 || setrlimit(RLIMIT_FSIZE, &fsize) != 0) _exit(127);
+    std::ostringstream so, se;
+    RunCli({"--stock", stock, "--out", out, "--report", report}, w.spec, so, se);
+    _exit(0);  // not reached: the write past the limit ends the process
+  }
+  int status = 0;
+  CHECK(pid > 0 && waitpid(pid, &status, 0) == pid);
+  CHECK(WIFSIGNALED(status));
+  CHECK_EQ(WTERMSIG(status), SIGXFSZ);
+  const Json r = Json::parse(ReadText(report), nullptr, /*allow_exceptions=*/false);
+  CHECK(r.is_object() && r.contains("summary"));
+  const std::string reported = r.is_object() && r.contains("summary") ? r["summary"].value("status", std::string()) : std::string("<no report>");
+  if (reported != "incomplete") std::fprintf(stderr, "  the report of the killed run says \"%s\"\n", reported.c_str());
+  CHECK_EQ(reported, std::string("incomplete"));
+  CHECK(r.is_object() && r.contains("events") && r["events"].is_array() && r["events"].empty());  // no event of a patch that is not there
+  CHECK(!Exists(out));
+}
+
+// A --report that cannot take the record is found before --out is touched.
+TEST(AReportThatCannotBeWrittenIsFoundBeforeTheOutputIsWritten) {
+  World w;
+  AliasTree t("full_report");
+  const std::string stock = t.File("stock.so", w.elf.bytes);
+  const std::string out = t.real + "/out.so";
+  t.Track(out);
+  t.Track(out + ".partial");
+  std::ostringstream so, se;
+  CHECK_EQ(RunCli({"--stock", stock, "--out", out, "--report", "/dev/full"}, w.spec, so, se), 2);
+  CHECK(OneErrorLine(se, "report on a full device").value("detail", std::string()).find("--report") != std::string::npos);
+  CHECK(!Exists(out));
+  CHECK(!Exists(out + ".partial"));
 }
 
 TEST(AnExtraRowsFileWithoutATrailingNewlineIsTheSameFile) {

@@ -88,6 +88,14 @@ Json Error(const char* status, const std::string& detail) {
   return {{"event", "libr15_patch"}, {"status", status}, {"detail", detail}};
 }
 
+// The report: the events and the one summary record. False when the file cannot be written.
+bool WriteReport(const std::string& path, const std::vector<Json>& events, const Json& summary) {
+  std::ofstream r(path, std::ios::binary | std::ios::trunc);
+  r << Dump(Json{{"events", Json(events)}, {"summary", summary}}, 2) << "\n";
+  r.flush();
+  return static_cast<bool>(r);
+}
+
 }  // namespace
 
 bool WriteOutputFile(const std::string& path, const std::vector<std::uint8_t>& bytes, const std::string& expectedSha256,
@@ -241,23 +249,34 @@ int RunCli(const std::vector<std::string>& args, const PatchSpec& spec, std::ost
   }
   if (!result.ok && !extraSha.empty()) result.summary["extra_rows_sha256"] = extraSha;
 
-  const Json report = {{"events", Json(result.events)}, {"summary", result.summary}};
-  {
-    std::ofstream r(reportPath, std::ios::binary | std::ios::trunc);
-    r << Dump(report, 2) << "\n";
-    r.flush();
-    if (!r) {
+  // A refusal writes nothing but its report.
+  if (!result.ok) {
+    if (!WriteReport(reportPath, result.events, result.summary)) {
       err << Dump(Error("io_error", "cannot write --report " + reportPath)) << "\n";
       return 2;
     }
-  }
-  if (!result.ok) {
     err << Dump(result.summary) << "\n";
     return 1;
   }
+  // The report says "patched" only once --out is in place and has been read back. Until then it holds a record that says the
+  // run is not finished: that also proves --report can be written before --out is touched, and a run that stops anywhere
+  // in between leaves no "patched" behind (not even the one an earlier run wrote to the same path).
+  if (!WriteReport(reportPath, {}, Error("incomplete", "--out has not been written yet; this record is replaced when the run ends"))) {
+    err << Dump(Error("io_error", "cannot write --report " + reportPath)) << "\n";
+    return 2;
+  }
   std::string why;
   if (!WriteOutputFile(outPath, result.output, result.summary["patched_sha256"].get<std::string>(), &why)) {
-    err << Dump(Error("io_error", "cannot write --out " + outPath + ": " + why)) << "\n";
+    const Json failure = Error("io_error", "cannot write --out " + outPath + ": " + why);
+    if (!WriteReport(reportPath, {}, failure)) {
+      err << Dump(Error("io_error", "cannot write --report " + reportPath + " after --out failed: " + why)) << "\n";
+      return 2;
+    }
+    err << Dump(failure) << "\n";
+    return 2;
+  }
+  if (!WriteReport(reportPath, result.events, result.summary)) {
+    err << Dump(Error("io_error", "cannot write --report " + reportPath + " (--out " + outPath + " is in place, and the report is not the account of it)")) << "\n";
     return 2;
   }
   for (const Json& e : result.events) out << Dump(e) << "\n";
