@@ -1018,6 +1018,36 @@ TEST_F(PluginLateLoadTest, AFileTheFilterCannotNameIsLoadedWhenSignaturesAreNotR
   EXPECT_FALSE(Blocked("late_real.dll"));
 }
 
+// A bare name is left to the OS search: the plugins directory may not be on it, so naming the plugins file would load
+// a file the OS would not have chosen.
+TEST_F(PluginLateLoadTest, ABareNameIsNotRewritten) {
+  ArrangeTheLink();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  ASSERT_FALSE(nevr_dll_load_hook::IsLoadBlocked(L"late_link.dll", nullptr));
+  std::wstring path;
+  EXPECT_FALSE(nevr_dll_load_hook::RewriteLoad(L"late_link.dll", &path)) << "a bare name was given a path";
+}
+
+// What the filter noted is for the one load it just accepted: the text it was asked about, once.
+TEST_F(PluginLateLoadTest, TheNotedFileAnswersOnlyTheTextTheFilterAcceptedAndOnlyOnce) {
+  ArrangeTheLink();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  std::wstring link(link_.begin(), link_.end());
+  for (wchar_t& c : link) c = (c >= L'A' && c <= L'Z') ? static_cast<wchar_t>(c + 32) : c;
+  std::wstring path;
+
+  ASSERT_FALSE(nevr_dll_load_hook::IsLoadBlocked(link.c_str(), nullptr));
+  EXPECT_FALSE(nevr_dll_load_hook::RewriteLoad(L"c:\\other\\late_link.dll", &path)) << "another text was answered";
+  EXPECT_TRUE(nevr_dll_load_hook::RewriteLoad(link.c_str(), &path));
+  EXPECT_FALSE(path.empty());
+  EXPECT_FALSE(nevr_dll_load_hook::RewriteLoad(link.c_str(), &path)) << "the noted file was used twice";
+
+  // A later filter call that notes nothing clears what an earlier one noted.
+  ASSERT_FALSE(nevr_dll_load_hook::IsLoadBlocked(link.c_str(), nullptr));
+  ASSERT_FALSE(nevr_dll_load_hook::IsLoadBlocked(L"c:\\windows\\system32\\kernel32.dll", nullptr));
+  EXPECT_FALSE(nevr_dll_load_hook::RewriteLoad(link.c_str(), &path)) << "a noted file outlived the next filter call";
+}
+
 TEST_F(PluginDependencyGateTest, APluginReachedByItsOwnNameIsNotSaidToBeLoadedFromElsewhere) {
   Plan("staged_plain.dll", "signed");
   LoadPlugins();

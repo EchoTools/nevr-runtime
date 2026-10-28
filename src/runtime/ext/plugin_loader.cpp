@@ -592,7 +592,7 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
 // the text it was given is not already that file's path (#1177).
 bool PluginLoadRewriter(const wchar_t* lowerPath, std::wstring* loadPath) {
   if (lowerPath == nullptr || t_checkedFile.empty() || t_checkedAsked != lowerPath) return false;
-  *loadPath = std::move(t_checkedFile);
+  *loadPath = t_checkedFile;
   t_checkedFile.clear();
   t_checkedAsked.clear();
   return true;
