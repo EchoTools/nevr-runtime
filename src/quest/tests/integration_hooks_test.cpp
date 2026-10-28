@@ -145,6 +145,9 @@ struct RealCounterSteps final : Steps {
   nevr_quest::ResolvedConfig config;
   void ArmCrashReporter() override {}
   const nevr_quest::ResolvedConfig& ResolveConfig() override { return config; }
+  PluginCounts PlanPlugins() override { return {}; }  // the plugin loader registers no reporter counter
+  bool RunEarlyPlugins() override { return true; }
+  void FinishPlugins(const char*) override {}
   bool RegisterClockCounters() override {
     static std::atomic<std::uint64_t> calls{0}, faults{0};
     bool ok = sentinel::RegisterReportCounter("clock_gettime_calls", &calls);
@@ -175,7 +178,7 @@ struct RealCounterSteps final : Steps {
   bool StartBridge() override { return true; }
   bool InstallRedirect() override { return true; }
   bool InstallSocial() override { return true; }
-  bool InstallDlopenHook(bool, bool) override { return true; }
+  bool InstallDlopenHook(bool, bool, bool) override { return true; }
   bool StartHwDump() override { return true; }
   void Note(const char*, const char*, const char*) override {}
 };

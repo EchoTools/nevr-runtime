@@ -8,9 +8,13 @@
 // Order:
 //   1  ArmCrashReporter              breakpad, before anything else can crash
 //   2  ResolveConfig                 InitActivation: embedded defaults + config.yaml, every state logged
+//      PlanPlugins                   the plugin plan (#438, docs/adr/0019): the `plugins:` list read into one record per
+//                                    entry, the entries the plan alone settles written, no plugin code run; every launch
 //   3  RegisterCounters              every counter of every hook that will be installed (clock, redirect,
 //                                    dlopen, login, social, login prompt), BEFORE ...
 //   4  StartReporter                 ... the single StartReporter (the reporter refuses a later register)
+//      RunEarlyPlugins               the `early` plugin entries (#438): after the reporter started, before the clock hook;
+//                                    skipped when the plan has none
 //   5  InstallClockHook              the always-on proof hook
 //   6  StartTokenAuth                needed by the bridge (the remote JWT) and the login rewrite
 //   7  InstallLoginPrompt            the sign-in prompt on the game's login-error screen (#239): two libr15
@@ -20,7 +24,7 @@
 //   9  InstallRedirect               CJson::TString thunks on libr15
 //  10  InstallSocial                 the NEVR social facade on libr15's CNSProvider::Social slot
 //  11  InstallDlopenHook             the post-load installs: login hook (and with it the login
-//                                    prerequisites), matchmaking redirect
+//                                    prerequisites), matchmaking redirect, and the normal plugin pass (#438)
 //      InstallObbSkip                the OBB-mount skip (#319, #866): three libr15 slots (AStorageManager_mountObb,
 //                                    AStorageManager_getMountedObbPath, CSysInfo::GetDataRootDir); on every launch, whatever the
 //                                    configuration says, right after the clock hook so it is in place before
@@ -54,6 +58,8 @@
 //   bridge fails            -> login, social and the redirect-through-the-bridge are not started
 //   redirect counters fail  -> redirect (and the matchmaking install) is not installed
 //   dlopen counters fail    -> the dlopen hook, and so the login and matchmaking installs, are not installed
+//   dlopen hook not live    -> the plugin entries still pending (the normal pass has no moment to run in) end as
+//                              `not_started` with reason post_load_hook_unavailable (Steps::FinishPlugins)
 //   login counters fail     -> the login hook is not installed (the matchmaking install is unaffected)
 //   social counters fail    -> social is not installed
 //   prompt counters fail    -> the login-prompt hook is not installed
@@ -67,6 +73,7 @@
 // Nothing here blocks: no step waits on the network, a thread or a lock held by the game.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include "quest/sentinel/quest_config.h"
@@ -86,6 +93,7 @@ const char* StepStateName(StepState state);
 enum class StepId : std::uint8_t {
   kArmCrashReporter,
   kResolveConfig,
+  kPlanPlugins,
   kRegisterClockCounters,
   kRegisterRedirectCounters,
   kRegisterDlopenCounters,
@@ -96,6 +104,7 @@ enum class StepId : std::uint8_t {
   kRegisterResourceRequestCounters,
   kRegisterTextureQualityCounters,
   kStartReporter,
+  kRunEarlyPlugins,
   kInstallClockHook,
   kInstallObbSkip,
   kInstallProcessEnd,
@@ -128,6 +137,12 @@ struct ConstructorReport {
   const StepOutcome& at(StepId id) const { return steps[static_cast<int>(id)]; }
 };
 
+// How many plugin entries wait for each install moment after the plan (docs/adr/0019, section 3).
+struct PluginCounts {
+  std::size_t early = 0;   // wait for the early pass (after the reporter starts)
+  std::size_t normal = 0;  // wait for the first post-load call
+};
+
 // Every method may throw std::exception (contained by the sequence) or return false.
 class Steps {
  public:
@@ -136,6 +151,8 @@ class Steps {
   virtual void ArmCrashReporter() = 0;
   // InitActivation, then the resolved configuration.
   virtual const nevr_quest::ResolvedConfig& ResolveConfig() = 0;
+  // The plugin plan from the resolved configuration (#438): one record per entry the plan settles, no plugin code run.
+  virtual PluginCounts PlanPlugins() = 0;
 
   virtual bool RegisterClockCounters() = 0;
   virtual bool RegisterRedirectCounters() = 0;
@@ -153,6 +170,10 @@ class Steps {
   // The texture-quality hook's counters (#943), registered when the level is not `stock`.
   virtual bool RegisterTextureQualityCounters() = 0;
   virtual bool StartReporter() = 0;
+  // The early plugin pass (#438); the reporter is running. True when the pass ran.
+  virtual bool RunEarlyPlugins() = 0;
+  // Ends every plugin entry still pending as `not_started` with `reason` (a plugin_plan.h reason token).
+  virtual void FinishPlugins(const char* reason) = 0;
 
   virtual bool InstallClockHook() = 0;
   // `countersRegistered`: the result of RegisterObbSkipCounters (the hook's own rule: without its counters it
@@ -181,8 +202,8 @@ class Steps {
   virtual bool StartBridge() = 0;
   virtual bool InstallRedirect() = 0;
   virtual bool InstallSocial() = 0;
-  // `login` / `matchmaking`: which post-load installs the dlopen hook is for.
-  virtual bool InstallDlopenHook(bool login, bool matchmaking) = 0;
+  // `login` / `matchmaking` / `plugins`: which post-load installs the dlopen hook is for (`plugins`: the normal plugin pass).
+  virtual bool InstallDlopenHook(bool login, bool matchmaking, bool plugins) = 0;
   // The hardware/environment dump (#335): its libr15 hooks and its thread. No reporter counters.
   virtual bool StartHwDump() = 0;
 

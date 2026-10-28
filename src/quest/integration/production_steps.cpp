@@ -33,6 +33,8 @@
 #include "quest/login/login_hook.h"
 #include "quest/net/curl_ws_connector.h"
 #include "quest/net/session_bridge.h"
+#include "quest/plugin/plugin_plan.h"
+#include "quest/plugin/plugin_runtime.h"
 #include "quest/redirect/hook_adapter.h"
 #include "quest/social/lobby_full_hooks.h"
 #include "quest/social/menu_version_label.h"
@@ -327,6 +329,21 @@ ActionResult MatchmakingAction() noexcept {
   }
 }
 
+// The normal plugin pass (#438): the first post-load call is its moment. The loader records every outcome itself and
+// never throws; the pass settles whatever it did.
+ActionResult PluginsAction() noexcept {
+  nevr_quest::plugin::RunNormalPlugins();
+  return {Settle::kDone, "ran"};
+}
+
+// Runs on the process-end hook's helper thread when the game's android_main returns (#621), on every launch: the plugin
+// entries that never got their moment end as `not_started` (#438), then the self-check report goes out (a no-op unless
+// the bridge that carries it enabled the self-checks).
+void OnGameProcessEnd() noexcept {
+  nevr_quest::plugin::FinishPlugins(nevr_quest::plugin::reason::kGameExitedFirst);
+  ReportAndroidMainReturned();
+}
+
 // --- the steps -----------------------------------------------------------------------------------
 
 class ProductionSteps final : public Steps {
@@ -351,6 +368,19 @@ class ProductionSteps final : public Steps {
     R().socialWanted = cfg.effective.social;
     return cfg;
   }
+
+  PluginCounts PlanPlugins() override {
+    const nevr_quest::plugin::PlanCounts counts = nevr_quest::plugin::PlanPlugins(
+        sentinel::ActiveConfig().plugins, nevr_quest::integration::ResourceRequestLogEnabled());
+    return {counts.early, counts.normal};
+  }
+
+  bool RunEarlyPlugins() override {
+    nevr_quest::plugin::RunEarlyPlugins();
+    return true;
+  }
+
+  void FinishPlugins(const char* reason) override { nevr_quest::plugin::FinishPlugins(reason); }
 
   bool RegisterClockCounters() override { return nevr_quest::integration::RegisterClockCounters(); }
   bool RegisterRedirectCounters() override { return nevr_quest::redirect::RegisterRedirectCounters(); }
@@ -425,6 +455,7 @@ class ProductionSteps final : public Steps {
   }
 
   bool InstallProcessEnd() override {
+    nevr_quest::integration::SetProcessEndCallback(&OnGameProcessEnd);  // before the install, as the hook asks
     const bool ok = nevr_quest::integration::InstallProcessEndHook();
     detail_ = ok ? "ok" : "got_hook_refused";
     return ok;
@@ -487,7 +518,6 @@ class ProductionSteps final : public Steps {
       hooks.build = NEVR_QUEST_PROJECT_VERSION;
       ApplySelfCheck(&config.tap, hooks);
       // The process ends when the game's android_main returns (#621): its report goes out first (best effort).
-      nevr_quest::integration::SetProcessEndCallback(&ReportAndroidMainReturned);
       nevr_status_redirect_check::Register(&nevr_status_redirect_check::ProcessProbe);  // #408
       nevr_self_check::Register({"matchmaking_reload_redirect",
                                  "the matchmaking redirect is installed on every libpnsradmatchmaking image the game mapped (installs >= images)",
@@ -570,10 +600,11 @@ class ProductionSteps final : public Steps {
 
   bool StartHwDump() override { return nevr_quest::hwdump::StartHwDump(); }
 
-  bool InstallDlopenHook(bool login, bool matchmaking) override {
+  bool InstallDlopenHook(bool login, bool matchmaking, bool plugins) override {
     PostLoadActions actions;
     if (login) actions.login = &LoginAction;
     if (matchmaking) actions.matchmaking = &MatchmakingAction;
+    if (plugins) actions.plugins = &PluginsAction;
     SetPostLoadActions(actions);
     sentinel::GotStatus status = sentinel::GotStatus::kNotInstalled;
     const bool ok = nevr_quest::integration::InstallDlopenHook(&status) == DlopenInstall::kOk;

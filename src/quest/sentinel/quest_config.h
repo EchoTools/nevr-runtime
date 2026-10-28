@@ -34,6 +34,7 @@
 #include <string>
 #include <vector>
 
+#include "core/nevr_config.h"
 #include "quest/sentinel/texture_quality.h"
 
 namespace nevr_quest {
@@ -105,6 +106,9 @@ struct ResolvedConfig {
   Features requested;  // what the file and the defaults ask for
   Features effective;  // requested, after prerequisite checks
   TextureChoice textureQuality;
+  // The file's `plugins:` list as the PC parser read it (#438); empty when the file is absent or rejected. The plugin loader
+  // plans from it (quest/plugin/plugin_runtime.h).
+  std::vector<nevr::PluginSpec> plugins;
 };
 
 struct LoadResult {

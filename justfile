@@ -176,11 +176,11 @@ android-repack-libovr src="/mnt/games/evr/-src-evr-reconstruction/cache/quest_tr
 # `apk` is required (the store APK path). The signing key is the one persistent Quest key stored in
 # pass (tools/quest_keystore.sh): it is read into a private tmpfs file for the signing command only
 # and is never generated here. Store it once with: just import-quest-keystore <keystore>.
-android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack":
+android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="":
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(pwd)"
-    apk="{{ apk }}"; shim="{{ shim }}"
+    apk="{{ apk }}"; shim="{{ shim }}"; plugin="{{ plugin }}"
     work="$root/{{ workdir }}"
     # An APK from an earlier run never outlives a run that stops: package-dev takes whatever is at this path.
     rm -f "$work/r15-repacked.apk" "$work/r15-repacked-aligned.apk" "$work/r15_nevr-sentinel_signed.apk"
@@ -189,6 +189,15 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     done
     [ -f "$apk" ]  || { echo "APK not found: $apk" >&2; exit 1; }
     [ -f "$shim" ] || { echo "shim not found (build it: just build-android): $shim" >&2; exit 1; }
+    # `plugin` (docs/adr/0019-quest-plugin-loader.md): one plugin library to carry in the APK, for a headset run of the loader.
+    # Empty for every release and package-dev APK. The file is lib<name>.so; `plugins:` in config.yaml names it.
+    if [ -n "$plugin" ]; then
+        [ -f "$plugin" ] || { echo "plugin not found: $plugin" >&2; exit 1; }
+        case "$(basename "$plugin")" in
+            lib?*.so) ;;
+            *) echo "plugin must be named lib<name>.so: $plugin" >&2; exit 1 ;;
+        esac
+    fi
     # The build's version header sits beside the shim's build tree (build/<tree>/sentinel/ -> build/<tree>/generated/).
     build_info="$(dirname "$(dirname "$shim")")/generated/nevr_build_info.h"
     [ -f "$build_info" ] || { echo "build info not found (build it: just build-android): $build_info" >&2; exit 1; }
@@ -202,6 +211,11 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
         "$work/orig/lib/arm64-v8a/libovrplatformloader.so"
     # 3. drop our shim in under the hijacked name
     cp "$shim" "$work/stage/lib/arm64-v8a/libovrplatformloader.so"
+    stage_libs=(lib/arm64-v8a/libovrplatformloader.so lib/arm64-v8a/libovrplatformloader_orig.so)
+    if [ -n "$plugin" ]; then
+        cp "$plugin" "$work/stage/lib/arm64-v8a/$(basename "$plugin")"
+        stage_libs+=("lib/arm64-v8a/$(basename "$plugin")")
+    fi
     # 4. fresh APK copy, strip the store's v1 signature, inject both libs STORED (-0)
     unsigned="$work/r15-repacked.apk"
     aligned="$work/r15-repacked-aligned.apk"
@@ -212,8 +226,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     trap '[ "$done_ok" = 1 ] || rm -f "$signed"' EXIT
     cp -f "$apk" "$unsigned"
     zip -q -d "$unsigned" 'META-INF/*.RSA' 'META-INF/*.SF' 'META-INF/*.MF' || true
-    ( cd "$work/stage" && zip -q -0 -X "$unsigned" \
-        lib/arm64-v8a/libovrplatformloader.so lib/arm64-v8a/libovrplatformloader_orig.so )
+    ( cd "$work/stage" && zip -q -0 -X "$unsigned" "${stage_libs[@]}" )
     # 4b. versionCode: extract the compiled manifest, set the code the build's version gives (the tool refuses
     # unless the field is exactly where Android reads it, and unless the shim carries the header's version),
     # and put the manifest back. A 4-byte write: the entry keeps every other byte.
@@ -1561,6 +1574,52 @@ test-quest-integration: _vcpkg-quest-host
     timeout 300 "$out/session_bridge_test"
     echo "test-quest-integration: all integration tests pass on the host"
 
+# The Quest plugin loader on the host (docs/adr/0019-quest-plugin-loader.md, slice 1): the plan, the ELF and build-ID
+# checks, the loader against real shared objects built from the fixture plugin (one lib<variant>.so per way a plugin can be
+# right or wrong, each with a GNU build ID), the record log, the platform, and the sentinel's binding of it (the counts the
+# constructor sequence acts on, once-only planning, the finish that never waits on a running pass). x86-64 fixtures, so the
+# loader's machine check is told AArch64 or x86-64 explicitly. No NDK, no Android. Fail-close.
+test-quest-plugins:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-plugins-host"
+    mkdir -p "$out"
+    json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
+    if [[ ! -f "$json_src/json.hpp" ]]; then
+        echo "test-quest-plugins: FAIL - $json_src/json.hpp not found; run 'just build' with a mingw-* preset first" >&2
+        exit 1
+    fi
+    json_inc="$out/json_inc"
+    mkdir -p "$json_inc"
+    ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -Isrc/quest/tests/stub -isystem "$json_inc")
+    fixture() { # library-file-stem plugin-name [macros...]
+        local stem="$1" name="$2"; shift 2
+        "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 -DFX_NAME="\"$name\"" "$@" \
+            src/quest/tests/plugin_fixture.cpp -o "$out/lib$stem.so"
+    }
+    fixture fx_ok ok
+    fixture fx_second second
+    fixture fx_noids noids -DFX_NO_IDS
+    fixture fx_otherids otherids -DFX_IDS='"3333333333333333333333333333333333333333"'
+    fixture fx_initfail initfail -DFX_INIT_RC=3
+    fixture fx_noinfo noinfo -DFX_NO_INFO
+    fixture fx_legacy legacy -DFX_LEGACY_INIT
+    # The files that include callback_thunk.h (through pinned_targets.h) are built without exceptions, as on the device.
+    "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/got_hook.cpp -o "$out/got_hook.o"
+    "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/hook_report.cpp -o "$out/hook_report.o"
+    "${cxx[@]}" -fno-exceptions -c src/quest/plugin/plugin_game_image.cpp -o "$out/plugin_game_image.o"
+    loader=(src/quest/plugin/plugin_plan.cpp src/quest/plugin/plugin_image.cpp src/quest/plugin/plugin_loader.cpp
+            src/quest/plugin/plugin_record_log.cpp src/quest/plugin/plugin_platform.cpp src/quest/data/sha256.cpp
+            src/quest/sentinel/hook_log.cpp src/quest/sentinel/sentinel_log.cpp
+            "$out/got_hook.o" "$out/hook_report.o" "$out/plugin_game_image.o")
+    "${cxx[@]}" -pthread src/quest/tests/plugin_loader_test.cpp "${loader[@]}" -o "$out/plugin_loader_test" -ldl
+    timeout -k 5 120 "$out/plugin_loader_test" "$out"
+    "${cxx[@]}" -pthread src/quest/tests/plugin_runtime_test.cpp src/quest/plugin/plugin_runtime.cpp \
+        src/runtime/ext/plugin_load_plan.cpp "${loader[@]}" -o "$out/plugin_runtime_test" -ldl
+    timeout -k 5 120 "$out/plugin_runtime_test" "$out"
+    echo "test-quest-plugins: all plugin loader tests pass on the host"
+
 # The integration's pinned dlopen target against the real libr15.so (docs/adr/0003). Extracts it from the
 # store APK, checks its SHA-256 and resolves LibR15Dlopen() the way the loader would lay the image out.
 # Fail-close, including when the APK is absent (58 MB, not in the repository), so it is not part of
@@ -1709,6 +1768,7 @@ verify:
         test-quest-data \
         test-quest-data-net \
         test-quest-integration \
+        test-quest-plugins \
         test-scripting
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
