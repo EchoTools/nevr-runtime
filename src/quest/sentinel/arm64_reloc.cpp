@@ -52,9 +52,9 @@ class Builder {
   std::size_t poolCount_ = 0;
 };
 
-// True when [addr, addr + size) overlaps the patched bytes at [window, window + 16). A size of 0 is a point.
-bool TouchesWindow(std::uint64_t addr, std::uint64_t size, std::uint64_t window) noexcept {
-  return (addr - window) < kRelocWindowBytes || (size != 0 && (window - addr) < size);
+// True when [addr, addr + size) overlaps the patched bytes at [window, window + windowBytes). A size of 0 is a point.
+bool TouchesWindow(std::uint64_t addr, std::uint64_t size, std::uint64_t window, std::uint64_t windowBytes) noexcept {
+  return (addr - window) < windowBytes || (size != 0 && (window - addr) < size);
 }
 
 bool Refuse(RelocRefusal& r, std::size_t index, std::uint32_t insn, PcRelKind kind, const char* reason) noexcept {
@@ -138,17 +138,21 @@ const char* PcRelName(PcRelKind kind) noexcept {
   return "unknown";
 }
 
-bool BuildTrampoline(std::uint64_t originalPc, const std::uint32_t (&prologue)[kRelocPrologueWords],
-                     Trampoline& out, RelocRefusal& refusal) noexcept {
+bool BuildTrampolineWindow(std::uint64_t originalPc, const std::uint32_t* prologue, std::size_t count,
+                           Trampoline& out, RelocRefusal& refusal) noexcept {
+  if (prologue == nullptr || count < 1 || count > kRelocPrologueWords) {
+    return Refuse(refusal, 0, 0, PcRelKind::kNone, "the window size is not 1 to 4");
+  }
+  const std::uint64_t windowBytes = count * 4;
   // The scratch register. The trampoline ends in a jump through it, so it must not hold a value the window
   // defines for the code after the window: x16, unless a word of the window has Rd/Rt = x16, then x17. A window
   // with a PC-relative word that writes both is refused; one without keeps x16 (the plain copy), as before.
   bool writes16 = false;
   bool writes17 = false;
-  std::size_t firstPcRel = kRelocPrologueWords;
-  for (std::size_t i = 0; i < kRelocPrologueWords; ++i) {
+  std::size_t firstPcRel = count;
+  for (std::size_t i = 0; i < count; ++i) {
     const PcRelKind kind = ClassifyPcRel(prologue[i]);
-    if (kind != PcRelKind::kNone && firstPcRel == kRelocPrologueWords) firstPcRel = i;
+    if (kind != PcRelKind::kNone && firstPcRel == count) firstPcRel = i;
     if (WritesItsRegisterField(kind, prologue[i])) {
       writes16 = writes16 || (prologue[i] & 0x1Fu) == kScratchPrimary;
       writes17 = writes17 || (prologue[i] & 0x1Fu) == kScratchSecondary;
@@ -156,7 +160,7 @@ bool BuildTrampoline(std::uint64_t originalPc, const std::uint32_t (&prologue)[k
   }
   unsigned scratch = kScratchPrimary;
   if (writes16) scratch = kScratchSecondary;
-  if (writes16 && writes17 && firstPcRel != kRelocPrologueWords) {
+  if (writes16 && writes17 && firstPcRel != count) {
     return Refuse(refusal, firstPcRel, prologue[firstPcRel], ClassifyPcRel(prologue[firstPcRel]),
                   "the window writes x16 and x17, which the relocated words need as scratch");
   }
@@ -165,7 +169,7 @@ bool BuildTrampoline(std::uint64_t originalPc, const std::uint32_t (&prologue)[k
   const std::uint32_t blrScratch = kBlrBase | (scratch << 5);
 
   Builder b;
-  for (std::size_t i = 0; i < kRelocPrologueWords; ++i) {
+  for (std::size_t i = 0; i < count; ++i) {
     const std::uint32_t insn = prologue[i];
     const std::uint64_t pc = originalPc + 4 * i;
     const PcRelKind kind = ClassifyPcRel(insn);
@@ -231,7 +235,7 @@ bool BuildTrampoline(std::uint64_t originalPc, const std::uint32_t (&prologue)[k
       case PcRelKind::kLdrswLiteral: {
         const std::uint64_t address = pc + static_cast<std::uint64_t>(SignExtend((insn >> 5) & 0x7FFFFu, 19) * 4);
         const LiteralLoad load = DecodeLiteralLoad(insn);
-        if (TouchesWindow(address, load.size, originalPc)) {
+        if (TouchesWindow(address, load.size, originalPc, windowBytes)) {
           return Refuse(refusal, i, insn, kind, "the literal it loads is inside the patched bytes");
         }
         // A general register that is not XZR holds the address itself; SIMD and XZR need the scratch.
@@ -247,7 +251,7 @@ bool BuildTrampoline(std::uint64_t originalPc, const std::uint32_t (&prologue)[k
     }
 
     if (branch) {
-      if (TouchesWindow(target, 0, originalPc)) {
+      if (TouchesWindow(target, 0, originalPc, windowBytes)) {
         return Refuse(refusal, i, insn, kind, "the branch target is inside the patched bytes");
       }
       if (conditional) b.Code(inverted);
@@ -255,7 +259,7 @@ bool BuildTrampoline(std::uint64_t originalPc, const std::uint32_t (&prologue)[k
       b.Code(call ? blrScratch : brScratch);
     }
   }
-  b.LdrLiteral(scratch, originalPc + kRelocWindowBytes);
+  b.LdrLiteral(scratch, originalPc + windowBytes);
   b.Code(brScratch);
   b.Finish(out);
   return true;

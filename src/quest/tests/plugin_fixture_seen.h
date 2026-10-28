@@ -21,4 +21,6 @@ struct FxSeen {
   char args[256];
   char game_build_id[64];
   std::int32_t covers_game_build_id;
+  const void* quest;
+  std::int32_t covers_quest;
 };

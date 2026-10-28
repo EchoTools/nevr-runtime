@@ -58,8 +58,17 @@ fn config_from_json(text: &str) -> Result<Config, String> {
     if platform != "pc" && platform != "quest" {
         return Err(format!("platform {platform} is not pc or quest"));
     }
-    let root = PathBuf::from(get("root").ok_or("config has no root (the installer's own directory)")?);
+    // "nevr_root" is the self-update's form (ADR 0024): state, log and downloads live under the nevr root, and "root" is not needed.
+    let nevr_root = get("nevr_root").map(PathBuf::from);
+    let root = match (&nevr_root, get("root")) {
+        (_, Some(r)) => PathBuf::from(r),
+        (Some(n), None) => n.clone(),
+        (None, None) => return Err("config has no root (the installer's own directory)".into()),
+    };
     let mut c = Config::new(&platform, &root);
+    if let Some(n) = &nevr_root {
+        (c.state_dir, c.log_path, c.work_dir) = crate::stage::paths(n);
+    }
     if let Some(b) = get("base") {
         c.base = b;
     }
@@ -275,6 +284,30 @@ pub unsafe extern "C" fn NevrPlanBuild(s: *mut NevrSession, version: *const c_ch
         let plan = quest::plan(&m, &version, &Observed { installed, data, free }, o["consent_uninstall"].as_bool().unwrap_or(false));
         s.log.info("plan", 9, json!({"steps": plan.steps.iter().map(|x| x.name()).collect::<Vec<_>>(), "decision": plan.decision, "reasons": plan.reasons}))?;
         out_string(&plan.to_json(), out).map_err(|e| Error::new(0, e))?;
+        Ok(NEVR_OK)
+    })
+}
+
+/// Self-update step (ADR 0024): stages the channel's release into `<root_dir>/update/staging/<version>` unless it is the running
+/// one. `current_json` is `{"version": "...", "runtime_sha256": "...", "quarantine": [{"version", "runtime_sha256"}]}`; the result
+/// is `{"action": "none"|"staged"|"blocked", "version", "direction", "reason", "files": [{path, size, sha256}]}`. Needs a verified
+/// manifest (`NevrManifestFetch`); the caller ends the run with `NevrRunEnd`.
+///
+/// # Safety
+/// String arguments are NUL-terminated UTF-8 and `out` is writable.
+#[no_mangle]
+pub unsafe extern "C" fn NevrPcStage(s: *mut NevrSession, root_dir: *const c_char, current_json: *const c_char, out: *mut *mut c_char) -> i32 {
+    let (root_dir, current) = match (cstr(root_dir), opt_cstr(current_json)) {
+        (Ok(a), Ok(b)) => (a.to_string(), b.map(str::to_string)),
+        _ => return NEVR_BAD_ARGUMENT,
+    };
+    with_session(s, |s| {
+        let cur = match current {
+            Some(t) => crate::stage::Current::parse(&t)?,
+            None => crate::stage::Current::default(),
+        };
+        let (_reason, report) = s.pc_stage_body(None, std::path::Path::new(&root_dir), &cur)?;
+        out_string(&report, out).map_err(|e| Error::new(0, e))?;
         Ok(NEVR_OK)
     })
 }
