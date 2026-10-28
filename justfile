@@ -1362,6 +1362,11 @@ test-quest-hooks:
     "${cxx[@]}" -isystem "$out/jni" -fno-exceptions -pthread src/quest/tests/toast_presenter_test.cpp \
         src/quest/sentinel/toast_presenter.cpp src/quest/sentinel/hook_log.cpp -o "$out/toast_presenter_test" -ldl
     timeout 60 "$out/toast_presenter_test"
+    # The permission request with a defined request code (#947) against the same fake-JNI shape: the array of names,
+    # the method and the int the variadic call carries, and a thrown exception at each JNI call never left pending.
+    "${cxx[@]}" -isystem "$out/jni" -fno-exceptions -pthread src/quest/tests/permission_request_test.cpp \
+        src/quest/sentinel/permission_request.cpp -o "$out/permission_request_test"
+    timeout 60 "$out/permission_request_test"
 
 # Quest config-string redirect on the host. Builds two fixture shared objects that import
 # CJson::TString by its mangled name through a PLT slot (src/quest/redirect/tests), then runs
