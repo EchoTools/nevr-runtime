@@ -119,6 +119,9 @@ the load against the same verifier and refuses (null, `ERROR_MOD_NOT_FOUND`) on 
   trailing dot or space cannot slip past a text compare), with the ANSI path converted through the code page;
 - a relative path with a directory part is refused whatever it leads to: the loader appends it to every directory it searches, each
   through links, so no list of candidates is complete. A plugin that needs such a load passes a full path.
+The loader's own load of a staged plugin is not checked again, because `StageOne` checked the file: the path being loaded is kept per
+thread for the call, and the filter lets that path through only while this thread does not hold the loader lock. The plugin's `DllMain`
+runs inside the same call with the lock held, so a load made there, by that path or another, is checked (`PluginDllMainLoadTest`).
 An unsigned-allowed run logs the line `a plugin loads <file> after its init: <reason>, allowed because plugin signatures are not
 required in this run (plugin trust mode <mode>)` and allows it. Known gaps, recorded and not claimed closed: a load by an absolute path outside the plugins directory (it is
 not a plugin file); under Wine, a unix symbolic link to the plugins directory is not recognised by the final-path compare, so an
@@ -319,6 +322,7 @@ GTest under Wine, in `src/runtime/tests/test_plugin_signature.cpp`, `test_plugin
 | the real signed v5.4.3 `BugSplat64.dll` (`RealSigned.*`, fed by `tools/fetch_real_signed_dll.py` through `just test-auth-unit`) | accepted by the production pins |
 | import with no extension, absent import or forwarder not supplied by the system, absent delay-load | the first two refused, the third left to the late-load filter |
 | late load by a relative path with a directory part, in a signed-only run | refused whatever it leads to |
+| a staged plugin's `DllMain` loads the plugin's own path | checked by the filter (it holds the file); the loader's own load of it is not checked a second time |
 
 Mutants (AGENTS.md "What a PR carries"): drop the root check, drop the status test, compare the EKU by prefix, drop the digest check,
 drop the imprint binding, pass `pTime = now`, drop the denylist test, restore the unrestricted fallback, let the 64-file dependency cap fail open

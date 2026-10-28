@@ -290,8 +290,8 @@ void RecordLateRefusal(const std::string& file) {
 // DllLoadHook runs this predicate before every LoadLibrary* in the process. A path inside the plugins directory
 // has to pass the same check as a staged plugin (and so does everything it names). The loader's own staged loads
 // were checked before they were made and the OS resolves their imports without the hook, so the path of the load
-// in progress is kept per thread and that one path is not checked twice. A load the plugin itself makes from its
-// DllMain is another path and is checked.
+// in progress is kept per thread and that one path is not checked twice, while the loader is the one loading it.
+// A load the plugin itself makes from its DllMain, by that path or another, is checked.
 
 thread_local std::wstring t_stagedPath;
 
@@ -409,7 +409,10 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
   if (f.dirLower.empty()) return false;
   // LoadLibrary appends ".dll" to a name with no extension: the file it maps is the one to check.
   const std::wstring p = nevr_plugin_tree::WithDefaultExtension(NormalizeWide(lowerPath));
-  if (!t_stagedPath.empty() && p == t_stagedPath) return false;  // the loader's own load of a file it checked
+  // The loader's own load of a file it checked. It is exempt only until the loader has taken its lock: the plugin's
+  // DllMain runs inside the same LoadLibrary call with the lock held, and a load made there is the plugin's own, so it
+  // is checked even when it names the path being loaded.
+  if (!t_stagedPath.empty() && p == t_stagedPath && !nevr_dll_load_hook::LoaderLockHeldByThisThread()) return false;
   const bool enforcing = nevr_plugin_trust::ActiveMode() == nevr_plugin_trust::Mode::SignedOnly;
   // Where the OS can find the name. A bare name searches the usual places; if the plugins directory holds that
   // name, it is the one at risk. A relative path with a directory part is tried against the current directory and

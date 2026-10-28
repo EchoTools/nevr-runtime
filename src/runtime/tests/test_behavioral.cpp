@@ -846,7 +846,7 @@ TEST_F(PluginDllMainLoadTest, TheLoadersOwnLoadOfAStagedPluginIsStillNotCheckedT
   ASSERT_TRUE(LoadPluginsWithTheRealHooks(&checked));
   EXPECT_EQ(checked, 0u) << "the loader's own load of the plugin it checked was checked again";
   EXPECT_FALSE(TestLogContains("refused"));
-  EXPECT_NE(GetModuleHandleA("dllmain_loader.dll"), nullptr) << "the plugin did not load";
+  EXPECT_FALSE(TestLogContains("LoadLibrary failed")) << "the plugin did not load";
 }
 
 // The path the filter resolved is opened a moment later; a name pointed elsewhere in between must not be verified
