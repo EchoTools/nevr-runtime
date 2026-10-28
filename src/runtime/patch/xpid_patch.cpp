@@ -4,6 +4,7 @@
 #include "core/logging.h"
 #include "core/globals.h"
 #include "runtime/hook/addresses.h"
+#include "runtime/compat/evr_codec.h"
 // N120. This runs from initialize.cpp BEFORE the built-in log filter is up, and
 // its Log() output reached neither the console log nor nevr-boot.jsonl — so
 // across every captured run the patch reported NOTHING, success or failure, and
@@ -136,13 +137,18 @@ VOID PatchDscProvider() {
 typedef void* (*GetProviderPrefixFn)(uint32_t* providerBits);
 static GetProviderPrefixFn g_RealGetProviderPrefix = nullptr;
 
-static void* GetProviderPrefixHook(uint32_t* /*providerBits*/) {
-  // Always return the OVR-ORG string-table pointer.  The xpids built through
-  // this function — CreateUser, SaveLocalData, LobbyFindSession,
-  // LobbyPlayerSessions, three Send() paths, and 7 more callers — all carry
-  // the same prefix without touching any string table or CNSUser nibble.
-  // GetUserIDString's callers are not affected.
-  return EchoVR::g_GameBaseAddress + nevr_patch_addresses::PROVIDER_STRING_OVR_ORG;
+static void* GetProviderPrefixHook(uint32_t* providerBits) {
+  // The nibble the bridge wrote at login (PatchCnsUserLoginState) picks the
+  // string, as the game's own switch does: 7 (a No VR login) answers the
+  // game's DMO entry, every other value answers the OVR-ORG pointer.  The
+  // xpids built through this function — CreateUser, SaveLocalData,
+  // LobbyFindSession, LobbyPlayerSessions, three Send() paths, and 7 more
+  // callers — then carry the identity the login carried, without touching any
+  // string table.  GetUserIDString (unhooked) reads the same nibble through
+  // its own switch, so it agrees.
+  const bool noVr = providerBits != nullptr && (*providerBits & 0xF) == nevr_evr_codec::kNoVrLoginPlatform;
+  return EchoVR::g_GameBaseAddress + (noVr ? nevr_patch_addresses::PROVIDER_STRING_DMO
+                                           : nevr_patch_addresses::PROVIDER_STRING_OVR_ORG);
 }
 
 VOID PatchProviderPrefixOvrOrg() {

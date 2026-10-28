@@ -44,12 +44,14 @@
 #include "runtime/lifecycle/server_timestep.h"
 #include "runtime/log/builtin_filter.h"
 #include "runtime/patch/pnsrad_enabler.h"
+#include "runtime/patch/ui_text_writer.h"
 
 namespace nevr_frame {
 
 namespace {
 
 volatile LONG g_tickReentry = 0;
+
 uint64_t g_lastTickUs = 0;
 
 constexpr uint64_t kTickIntervalUs = 8000;  // ~125 Hz, the frame-pacer cadence
@@ -154,6 +156,14 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     mctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
     mctx.flags = gctx.flags;
     TickModules(&mctx);
+
+    // #906, #896: the UI text writer touches the game's UI state, so it runs on the thread that runs the game's main
+    // wrapper (crash_recovery.cpp records it) only. This dispatcher is also driven from GetTimeMicroseconds, which any
+    // thread may call. The client's CPrecisionSleep::Wait hook is not a usable site: measured entries=0 on a client.
+    {
+        const unsigned long loop = GameLoopThreadId();
+        if (loop != 0 && loop == GetCurrentThreadId()) nevr_ui_text::OnFrame();
+    }
 
 #ifdef NEVR_SCENARIO_CONTROL
     nevr_scenario_control::OnFrame();  // test builds only: queued scenario actions run on the loop's thread

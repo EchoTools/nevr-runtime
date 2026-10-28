@@ -24,6 +24,18 @@ class ScenarioControlAbsentTest(unittest.TestCase):
             self.assertFalse(ok)
             self.assertIn("carries the scenario control endpoint", message)
 
+    def test_every_named_dll_is_checked_and_one_with_the_endpoint_fails_the_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            host = pathlib.Path(tmp) / "BugSplat64.dll"
+            runtime = pathlib.Path(tmp) / "nevr-runtime.dll"
+            host.write_bytes(b"MZ\x00\x00clean")
+            runtime.write_bytes(b"MZ\x00\x00[NEVR.SCENARIO] control listening\x00")
+            self.assertEqual(checker.main(["x", str(host), str(runtime)]), 1)
+            self.assertEqual(checker.main(["x", str(runtime), str(host)]), 1)
+            runtime.write_bytes(b"MZ\x00\x00clean")
+            self.assertEqual(checker.main(["x", str(host), str(runtime)]), 0)
+            self.assertEqual(checker.main(["x", str(host), str(pathlib.Path(tmp) / "absent.dll")]), 1)
+
     def test_missing_dll_fails(self):
         ok, message = checker.check(pathlib.Path("/nonexistent/BugSplat64.dll"))
         self.assertFalse(ok)

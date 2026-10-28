@@ -14,6 +14,11 @@ when, they appear in all capitals, as shown here.
   `perf`, `test`, `build`, `ci`, `chore`, `revert`. A breaking change is marked with `!` before the colon or a
   `BREAKING CHANGE:` footer. Per spec item 15, types are case-insensitive. `.github/workflows/pr-title-check.yml`
   (`tools/check_pr_title.py`) checks the PR title.
+- **Credit the people whose work we integrate, every time.** A commit that draws on a person's code, patch, research
+  or findings carries a `Co-Authored-By` trailer for that person, alongside the house trailers: their GitHub noreply
+  address, `<id>+<login>@users.noreply.github.com` (`gh api users/<login>` gives the id). Someone with no GitHub
+  account is credited by name in the commit body and in the README thanks. A squash merge keeps those trailers in the
+  merge commit message.
 - **Versions** follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html). Tags stay `vX.Y.Z`.
 - **Requirement words** (MUST, SHALL, SHOULD, MAY and their negations) follow
   [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) as clarified by
@@ -131,6 +136,9 @@ your PR does:
   ```
 - **Evidence on the exact tip**, as "Review, verification and merge" says: each command run on the tip SHA and its
   result, what was not run, and the tracking issue.
+- **Platform parity.** PCVR and Quest stay at parity. A PR that adds or changes player-facing behavior says in its
+  body what the other platform's status is: done in this PR, already present (`file:line`), not applicable (the
+  reason), or a linked twin issue filed in the same turn.
 
 **Write an issue as a falsifiable claim** (see #519 and #520), with these sections:
 
@@ -216,12 +224,12 @@ comment (for example N41, N48) is not a rule.
 | N75 | Plugins load with a restricted DLL search path, so a DLL dropped next to `echovr.exe` cannot satisfy a dependency first. | `src/runtime/ext/plugin_loader.cpp` | verify |
 | N89 | The loader refuses a plugin whose function is built in (`log_filter.dll`). | `src/runtime/ext/plugin_loader.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` |
 | N95 | `log-filter` is neither built nor packaged. | `plugins/CMakeLists.txt`, `CMakeLists.txt` | verify |
-| N114 | The plugin capability channel stays wired: the loader resolves `NvrPluginGetCapabilities` and `NvrPluginInitEx`, and `NEVR_PLUGIN_API_VERSION` is 7. | `src/runtime/ext/plugin_loader.cpp`, `src/extension/plugin_interface.h` | verify |
+| N114 | The plugin capability channel stays wired: the loader resolves `NvrPluginGetCapabilities` and `NvrPluginInitEx`, and `NEVR_PLUGIN_API_VERSION` is 8. | `src/runtime/ext/plugin_loader.cpp`, `src/extension/plugin_interface.h` | verify |
 | N135 | A plugin logs through the host: every context the loader passes a plugin (init, per-frame, state change) carries that plugin's `plugin_id` (its `config.yaml` entry's name) and the host's `log` function (`HostPluginLog`), whose line is `[NEVR.PLUGIN] plugin=<id> <message> <key>=<value> ...` through `Log()`; a plugin's text cannot start a second line or overrun the boot buffer (`plugin_log.h`); `plugin_logger.h` binds to it at init and falls back to stderr only before that or on a host older than v6. | `src/extension/plugin_interface.h`, `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_log.h`, `plugins/common/include/plugin_logger.h` | `tools/tests/test_runtime_lifecycle_invariants.py`; `src/runtime/tests/test_behavioral.cpp` (`PluginLogApi`, `PluginLoaderDiagnosticTest`), `src/runtime/tests/test_plugin_log.cpp`, `src/runtime/tests/test_plugin_logger.cpp` |
 | N120 | On a server a degraded runtime does not keep running: the HookGuard verdict is captured and escalated to `ServerFatal`, `platform_compat` fails a server run on a missing TLS hook, and the XPID patch logs both outcomes and escalates a validation failure, a failed byte write and a failed `GetProviderPrefix` (OVR-ORG) detour alike (`g_bootHookFailed` with a cause, so `boot.cpp` refuses the server), and the server bring-up prologues are validated at boot (`ValidatePrologue`, N97) with a mismatch escalated to `ServerFatal` (see N102). | `src/runtime/ext/plugin_loader.cpp`, `src/modules/platform-compat/src/platform_compat.cpp`, `src/runtime/patch/xpid_patch.cpp`, `src/runtime/lifecycle/state_machine.cpp`, `src/runtime/lifecycle/boot.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` (`XpidPatchBoot`, `XpidPrefixDetourBoot`), `src/runtime/tests/test_server_bringup.cpp`, `tools/tests/test_server_bringup_wiring.py` |
 | N133 | Every nEVR config key is read from `config.yaml` (`nevr_config`), never from the game's JSON; the flat key map has 33 entries; modules read config through `NvrModuleContext.config_get`, and a module reports its API version; the sample config has the `auth`, `services`, `identity` and `version` sections. | `src/runtime/lifecycle/config.cpp`, `src/runtime/lifecycle/service_config.cpp`, `src/core/nevr_config.h`, `src/modules/token-auth/src/token_auth.cpp`, `docs/reference/example-config.yaml` | verify (N133 S7a-d); `src/runtime/tests/test_behavioral.cpp` |
 | N134 | The plugin set is the ordered `plugins:` list in `config.yaml`, and a required plugin that fails to load is a failure (S6); plugins get `ctx_size` and the plugin-query API, and load in capability-priority order (S8). | `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_loader.h`, `src/runtime/ext/plugin_load_plan.h`, `src/runtime/lifecycle/service_config.cpp` | verify (N134 S8, N114 S7); `src/runtime/tests/test_behavioral.cpp`, `src/runtime/tests/test_plugin_load_plan.cpp` |
-| N147 | A run loads unsigned plugins unless it is started with `-require-signed-plugins`, which makes it signed-only (release-signer does not sign plugins yet; once it does, the default flips to signed-only in a separate change). `PreflightRuntimeBootstrap` reads the argument before the early plugin pass and sets the mode once (`nevr_plugin_trust::ApplyCommandLine`: any token the game would read as the argument counts, by the game's tokenizer and name rule in `cmdline_strip.h` over `GetCommandLineA()` and by `CommandLineToArgvW` over `GetCommandLineW()`, and either finding it makes the run signed-only; a command line it cannot read, or whose reading throws, makes the run signed-only too, and the mode line says so at Warning), so the early pass, the normal pass and the late-load filter read one `ActiveMode()`; no config key or environment variable sets it. The loader states the mode in effect once per run (`[NEVR.PLUGIN] plugin trust: mode=<signed-only\|unsigned-allowed> source=<default\|-require-signed-plugins\|command line unreadable> build=<release\|dev>`), and in an unsigned-allowed run an unsigned plugin loads with a Warning per plugin. A signed-only run loads only plugins signed through the release-signer pipeline: `StageOne` verifies the file (`VerifyPluginFile`: Authenticode digest, `messageDigest` bound to the signed content, chain to the pinned Microsoft root through an exclusive-root engine at the stamped time, whole-OID profile EKU, bound RFC 3161 token, denylist) on a handle held `FILE_SHARE_READ` across the load, with no default-search fallback; a plugin's imports, delay-load imports and forwarded exports pass the same check transitively (`VerifyPluginTree`, held open across the load; a name gets `.dll` when it has no extension, and one that is neither a file in the plugins directory nor supplied by the system is refused, an absent delay-load excepted: the late-load filter checks it when it is called), and so does every later `LoadLibrary*` of a file in that directory, one made from a staged plugin's `DllMain` included (a `DllLoadHook` filter: the name gets `.dll` when it has no extension, a relative path with a directory part (`\` or `/`) is refused whatever it leads to (the loader appends it to every directory it searches, each through links, so no candidate list is complete; a bare name and a full path keep their rules), the directory is the ANSI path converted through the code page; refused with `ERROR_MOD_NOT_FOUND`); a refusal is a manifest entry, a log line and, on a client with graphics only, one dialog per run (`plugin_refusal_notice.h`, never on a server or headless run; a refusal after `LoadPlugins` finished shows it itself), and for a required plugin `ServerFatal`. The dev build (`mingw-plugin-dev`, `NEVR_ALLOW_UNSIGNED_PLUGINS`) carries `NEVR-PLUGIN-TRUST dev`, a release `NEVR-PLUGIN-TRUST release` (the literal names the kind of build, not the mode of a run), and `tools/package_release.py` refuses to package anything but a release. The profile EKU pin is confirmed against the real signed v5.4.3 `BugSplat64.dll` (`RealSigned.*` in `test_plugin_trust`, which `just test-auth-unit` feeds from `tools/fetch_real_signed_dll.py`); the signer subject is deliberately not pinned. A signed-only run refuses an unsigned plugin. | `src/runtime/ext/plugin_signature.cpp`, `src/runtime/ext/plugin_trust.cpp`, `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_tree.cpp`, `src/runtime/ext/plugin_refusal_notice.h`, `src/runtime/hook/dll_load_hook.cpp`, `src/runtime/lifecycle/boot.cpp`, `src/runtime/lifecycle/cli.cpp`, `src/core/cli_flags.h`, `tools/package_release.py` | `src/runtime/tests/test_plugin_signature.cpp`, `src/runtime/tests/test_plugin_trust.cpp`, `src/runtime/tests/test_plugin_tree.cpp`, `src/runtime/tests/test_behavioral.cpp` (`PluginSignatureGateTest`, `PluginDependencyGateTest`, `PluginRefusalNotice`, `PluginRunModeTest`: an unsigned plugin loads with no argument and is refused with `-require-signed-plugins`, on the release-configured build), `tools/tests/test_plugin_trust_run_mode.py` (the argument is read before the early pass, registered with the game's parser and listed in the README), `tools/tests/test_package_release.py`, `tools/tests/test_build_identity_literal.py` (the late-load spellings, the non-ASCII game path, the `DllMain` load and the late notice) |
+| N147 | A run loads unsigned plugins unless it is started with `-require-signed-plugins`, which makes it signed-only (release-signer does not sign plugins yet; once it does, the default flips to signed-only in a separate change). `PreflightRuntimeBootstrap` reads the argument before the early plugin pass and sets the mode once (`nevr_plugin_trust::ApplyCommandLine`: any token the game would read as the argument counts, by the game's tokenizer and name rule in `cmdline_strip.h` over `GetCommandLineA()` and by `CommandLineToArgvW` over `GetCommandLineW()`, and either finding it makes the run signed-only; a command line it cannot read, or whose reading throws, makes the run signed-only too, and the mode line says so at Warning), so the early pass, the normal pass and the late-load filter read one `ActiveMode()`; no config key or environment variable sets it. The loader states the mode in effect once per run (`[NEVR.PLUGIN] plugin trust: mode=<signed-only\|unsigned-allowed> source=<default\|-require-signed-plugins\|command line unreadable> build=<release\|dev>`), and in an unsigned-allowed run an unsigned plugin loads with a Warning per plugin. A signed-only run loads only plugins signed through the release-signer pipeline: `StageOne` verifies the file (`VerifyPluginFile`: Authenticode digest, `messageDigest` bound to the signed content, chain to the pinned Microsoft root through an exclusive-root engine at the stamped time, whole-OID profile EKU, bound RFC 3161 token, denylist) on a handle held `FILE_SHARE_READ` across the load, and loads that handle's final path, so a link in the configured path cannot lead the load to another file, with no default-search fallback; a plugin's imports, delay-load imports and forwarded exports pass the same check transitively (`VerifyPluginTree`, held open across the load; a name gets `.dll` when it has no extension, and one that is neither a file in the plugins directory nor supplied by the system is refused, an absent delay-load excepted: the late-load filter checks it when it is called), and so does every later `LoadLibrary*` of a file in that directory, one made from a staged plugin's `DllMain` included (a `DllLoadHook` filter: the name gets `.dll` when it has no extension, a relative path with a directory part (`\` or `/`) is refused whatever it leads to (the loader appends it to every directory it searches, each through links, so no candidate list is complete; a bare name and a full path keep their rules), the directory is the ANSI path converted through the code page; refused with `ERROR_MOD_NOT_FOUND`); a refusal is a manifest entry, a log line and, on a client with graphics only, one dialog per run (`plugin_refusal_notice.h`, never on a server or headless run; a refusal after `LoadPlugins` finished shows it itself), and for a required plugin `ServerFatal`. The dev build (`mingw-plugin-dev`, `NEVR_ALLOW_UNSIGNED_PLUGINS`) carries `NEVR-PLUGIN-TRUST dev`, a release `NEVR-PLUGIN-TRUST release` (the literal names the kind of build, not the mode of a run), and `tools/package_release.py` refuses to package anything but a release. The profile EKU pin is confirmed against the real signed v5.4.3 `BugSplat64.dll` (`RealSigned.*` in `test_plugin_trust`, which `just test-auth-unit` feeds from `tools/fetch_real_signed_dll.py`); the signer subject is deliberately not pinned. A signed-only run refuses an unsigned plugin. | `src/runtime/ext/plugin_signature.cpp`, `src/runtime/ext/plugin_trust.cpp`, `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_tree.cpp`, `src/runtime/ext/plugin_refusal_notice.h`, `src/runtime/hook/dll_load_hook.cpp`, `src/runtime/lifecycle/boot.cpp`, `src/runtime/lifecycle/cli.cpp`, `src/core/cli_flags.h`, `tools/package_release.py` | `src/runtime/tests/test_plugin_signature.cpp`, `src/runtime/tests/test_plugin_trust.cpp`, `src/runtime/tests/test_plugin_tree.cpp`, `src/runtime/tests/test_behavioral.cpp` (`PluginSignatureGateTest`, `PluginDependencyGateTest`, `PluginRefusalNotice`, `PluginRunModeTest`: an unsigned plugin loads with no argument and is refused with `-require-signed-plugins`, on the release-configured build), `tools/tests/test_plugin_trust_run_mode.py` (the argument is read before the early pass, registered with the game's parser and listed in the README), `tools/tests/test_package_release.py`, `tools/tests/test_build_identity_literal.py` (the late-load spellings, the non-ASCII game path, the `DllMain` load and the late notice) |
 
 #### Hooks and binary patches
 
@@ -246,6 +254,7 @@ comment (for example N41, N48) is not a rule.
 | N127 | The Oculus-SDK block reports its real result, never an unconditional success line. | `src/runtime/patch/mode_patches.cpp` | verify; `tools/winvm/checks.py` |
 | N128 | `Hooking::Attach` records which MinHook stage failed and its `MH_STATUS`; `PatchDetour`'s failure log includes it. | `src/core/hooking.h`, `src/runtime/hook/patching.h` | verify |
 | N129 | `DllLoadHook` reports the `MH_STATUS` of each `LoadLibrary` hook that fails, with no accumulate-and-hide `ok &=`. | `src/runtime/hook/dll_load_hook.cpp` | verify |
+| N148 | The in-game CREDITS page shows the project section above Ready At Dawn's credits, which stay byte-for-byte whole: `credits_text::Install` (client only, called once from `boot.cpp`, the server skip logged) builds block + the game's own bytes copied from memory + NUL, and points the two `LEA` loads of the credits blob at it, or neither (both sites, the blob length and its SHA-256 are checked before any write; the first site is put back if the second write fails). It is a byte patch of a data-blob load, not a function, so there is nothing to hook; no text of Ready At Dawn's is stored. The block is rendered at build time from `config/credits.json` by `tools/render_credits.py --ingame-source` (lines of at most 64 bytes, drawn only from printable ASCII and `©` (the characters the game's font draws), no `|`, at most 200 lines; a name or heading with any other character, or a file the page cannot show, fails the build, naming the entry and the field). | `src/runtime/patch/credits_text.h`, `src/runtime/patch/credits_text.cpp`, `src/runtime/lifecycle/boot.cpp`, `src/runtime/CMakeLists.txt`, `tools/render_credits.py` | `src/runtime/tests/test_credits_text.cpp`, `tools/tests/test_credits.py` (`IngameText`), `tools/tests/test_credits_text_wiring.py` (the call, its gate, the build step, who names the sites); the live run on a game copy |
 | N72, N73 | Guards for the broadcaster plugin, which lives in `nevr-runtime-plugins` (see "Plugins"). | not in this tree | nothing here |
 
 #### Logging and layout
@@ -298,9 +307,7 @@ Every branch an agent creates has a documented deletion point from the moment it
 - **"Merged" means** the PR state is MERGED (GitHub squash-merges, so `git branch -d` refuses those branches) or the tip is in `origin/main`. Use `gh pr view <branch> --json state`.
 - **A branch that lands with no PR** (a fast-forward or a hand merge) counts as merged when `git merge-base --is-ancestor <branch> origin/main` succeeds, and its creator deletes it then.
 - **Before deleting an unmerged branch,** print its tip SHA, and check `git -C <worktree> status --porcelain` is empty. Uncommitted work is work.
-- **Remove a worktree only behind the cwd check** (the "no process has its cwd inside" proof of "Ownership and cleanup"; `tools/reap_merged.py` runs the same check), in one command that removes nothing and fails when any process has its cwd inside, a shell of your own session included:
-  `W=$(realpath .claude/worktrees/<branch>); hits=$(for p in /proc/[0-9]*; do c=$(readlink "$p/cwd" 2>/dev/null) && case "$c" in "$W"|"$W"/*) echo "${p#/proc/} $c";; esac; done); if [ -n "$hits" ]; then echo "$hits"; false; else git worktree unlock "$W" 2>/dev/null; git worktree remove "$W"; fi`.
-  A check that only prints, followed by a removal, is not the check.
+- **Remove a worktree with `just remove-worktree <absolute path>`** (`tools/remove_worktree.py`; `--dry-run` proves and changes nothing; run it from the main checkout or another worktree, never from inside the one it removes). Before it changes anything it refuses when a process has its cwd inside (a shell of your own session included), when anything is uncommitted or ignored beyond build output, when an initialised submodule has uncommitted work or a commit that is on no remote, or when a plain copy under `extern/` (what `just worktree-setup` makes) differs from the main checkout's. It runs no `git submodule deinit` and no `--force`, and leaves the shared submodule config as it found it. `tools/reap_merged.py` removes through it. A check that only prints, followed by a removal, is not the check.
 
 ## Build Commands
 
@@ -338,9 +345,9 @@ gh release edit v<x.y.z> --draft=false            # 5. publish, only after the d
 A release is the tag's version plus GitHub's pre-release flag. The version is exactly the tag (`v5.0.0` is `5.0.0`); every other build
 stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from and before the next release. The build goes through one
 packaging path (the sealed Windows zip, attested, and the Quest library; the notes and a SHA-256 table of both are the release body, written after signing; the `.tar.zst` archives stay a workflow artifact). Nothing in a file depends on the pre-release flag:
-promote with `gh release edit v<x.y.z> --prerelease=false`; it fires no workflow and changes no byte. `BugSplat64.dll` carries one
-identity literal, `NEVR-BUILD <version> <commit40>` (NUL-bounded, exactly one), that binds its version and its commit.
-The `dist` package and the Windows zip's DLL are both the stripped build (players get stripped builds only); `just dist` splits each shipped PE's debug info into `dist/symbols/<name>/<file>.dbg` first and links the
+promote with `gh release edit v<x.y.z> --prerelease=false`; it fires no workflow and changes no byte. `BugSplat64.dll` (the host) and `nevr-runtime.dll` (the runtime) each carry one
+identity literal, `NEVR-BUILD <version> <commit40>` (NUL-bounded, exactly one), that binds its version and its commit; the two literals are equal, and only the runtime carries the plugin-trust literal and the embedded defaults.
+The `dist` package and the Windows zip's DLLs are both the stripped build (players get stripped builds only); `just dist` splits each shipped PE's debug info into `dist/symbols/<name>/<file>.dbg` first and links the
 stripped file to it (`.gnu_debuglink`: name and CRC32; PE has no build-id). `build.yml` checks the pair with `tools/verify_symbols.py`,
 keeps the `.dbg` files as the `symbols` workflow artifact (not a release asset) and attests them. A build with symbols is the
 ordinary `build/<preset>/bin/` output.
@@ -354,6 +361,8 @@ which `tools/release_already_built.sh` turns into a green no-op (both read `tool
 a dispatch is running makes that run upload to the published release. The signed Windows zip lives on the GitHub release; the Quest APKs and dry
 runs are published outside GitHub.
 
+`just release-quest-apk vX.Y.Z` runs `tools/release_preflight.py --tag vX.Y.Z` instead, which takes HEAD at that tag's commit rather
+than at origin's tip (clean tree, the tag on origin at the same commit; every other check unchanged), so an older tag still builds.
 `just release-preflight` also runs first inside `just package-dev`. It belongs before pushing a release tag (step 1) and before
 `gh release create` (step 3): the manual gate. It is not in `build.yml` (CI checks out the tag itself) and not in `just verify`
 (it must work in a dirty tree).
@@ -410,10 +419,11 @@ The game has a ~15-20 second splash-screen delay at startup before any nEVR code
 
 | Component          | Output DLL       | Deploy As              | Purpose                                                                  |
 | ------------------ | ---------------- | ---------------------- | ------------------------------------------------------------------------ |
-| `src/runtime/` | `BugSplat64.dll` | `BugSplat64.dll`       | Runtime hooks, CLI flags, game modifications                             |
-| `src/runtime/server/` | *(in `BugSplat64.dll`)* | *(in-process)* | Multiplayer networking, session management |
+| `src/runtime/host/` | `BugSplat64.dll` | `BugSplat64.dll`       | The thin host the game loads: the 28 pinned exports, the rendezvous, crash capture |
+| `src/runtime/` (the rest) | `nevr-runtime.dll` | `nevr-runtime.dll`, beside the host | Runtime hooks, CLI flags, game modifications                 |
+| `src/runtime/server/` | *(in `nevr-runtime.dll`)* | *(in-process)* | Multiplayer networking, session management |
 
-The runtime replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. `tools/verify_pe_contract.py` pins its export table (28 names and ordinals, `DetoursExportPlaceholder` at ordinal 1, no import of `nevr-runtime.dll`) and, with the game binary present, the nine imports of `echovr.exe`. `docs/adr/0008-bugsplat-host-and-nevr-runtime.md` records the stable-host/`nevr-runtime.dll` design, what exists of it and the rendezvous decision (the game's main wrapper). Several features are built in rather than loaded as plugins: server-timing, token-auth, pnsrad-enabler.
+The runtime replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. `tools/verify_pe_contract.py` pins the host's export table (28 names and ordinals, `DetoursExportPlaceholder` at ordinal 1, no import of `nevr-runtime.dll`, no runtime code) and the runtime's (the rendezvous entry `NEVR_GetRuntimeApi` and the module entry points, plus the build-identity literal) and, with the game binary present, the nine imports of `echovr.exe`. A host whose runtime did not load after attach stops the game with exit code 78 and a `game_stop` record in `logs/nevr-bootstrap.jsonl`. `docs/adr/0008-bugsplat-host-and-nevr-runtime.md` records the stable-host/`nevr-runtime.dll` design, what exists of it and the rendezvous decision (the game's main wrapper). Several features are built in rather than loaded as plugins: server-timing, token-auth, pnsrad-enabler.
 
 `src/runtime/` is split by responsibility. Each subdirectory has a membership test:
 
@@ -424,7 +434,7 @@ The runtime replaces the original BugSplat64 crash reporter DLL — the game sta
 | `src/runtime/patch/` | mode_patches, headless_graphics, xpid_patch, pnsrad_enabler, resource_override, asset_cdn, binary_bug_fixes, broadcaster_guard | behaviour we change *in the game* |
 | `src/runtime/server/` | gameserver, server_context, websocket_client, telemetry_*, upnp, messages | the ServerDB / IServerLib subsystem |
 | `src/runtime/compat/` | ws_bridge | making the game's ageing network stack work against modern services |
-| `src/runtime/host/` | host_entry, runtime_rendezvous, game_targets, loader_lock, bootstrap_diagnostics, crash_capture, runtime_load, host_json, host_paths, path_buffer | what the stable `BugSplat64.dll` host runs behind its `DllMain` and exports; compiled into `BugSplat64.dll` and the test harnesses; `DllMain` and `NEVR_SetGameModule` call `nevr_host::OnProcessAttach` / `SetGameModule` (ADR 0008, ADR 0012) |
+| `src/runtime/host/` | host_entry, runtime_rendezvous, game_targets, loader_lock, bootstrap_diagnostics, crash_capture, runtime_load, host_json, host_paths, path_buffer | what the stable `BugSplat64.dll` host runs behind its `DllMain` and exports; compiled into `BugSplat64.dll` only (and the test harnesses); `DllMain` and `NEVR_SetGameModule` call `nevr_host::OnProcessAttach` / `SetGameModule` (ADR 0008, ADR 0012) |
 | `src/runtime/ext/` | plugin_loader, module_loader | loading other people's DLLs |
 | `src/runtime/log/` | boot_log_tee, builtin_filter | log capture and filtering |
 | `src/runtime/link/` | dbghelp_stubs.cpp, bcrypt_minimal.def | not code we run — code the *linker* needs |
@@ -461,12 +471,12 @@ A plugin logs through the host's structured `Log()` (N135): `NEVR_DEFINE_PLUGIN_
 
 ### Runtime-loaded modules
 
-`platform_compat` and `token_auth` are **statically linked** into `BugSplat64.dll`. There are no separate module DLLs — everything ships in one file. The `module_loader` infrastructure (`RegisterStaticModule`, `TickModules`, `NotifyModulesStateChange`) remains for any future modules.
+`platform_compat` and `token_auth` are **statically linked** into `nevr-runtime.dll`. There are no separate module DLLs. The `module_loader` infrastructure (`RegisterStaticModule`, `TickModules`, `NotifyModulesStateChange`) remains for any future modules.
 
 | Module | Output | Purpose |
 | ------ | ------ | ------- |
-| `src/modules/platform-compat/` | *(in `BugSplat64.dll`)* | Schannel TLS modernisation, MSXML6 pass-through hook, Wine `_temp` fix |
-| `src/modules/token-auth/` | *(in `BugSplat64.dll`)* | Device-code auth, token cache, `TokenAuth_GetToken`/`GetDiscordId` |
+| `src/modules/platform-compat/` | *(in `nevr-runtime.dll`)* | Schannel TLS modernisation, MSXML6 pass-through hook, Wine `_temp` fix |
+| `src/modules/token-auth/` | *(in `nevr-runtime.dll`)* | Device-code auth, token cache, `TokenAuth_GetToken`/`GetDiscordId` |
 
 ### Shared Libraries (static)
 
@@ -627,20 +637,17 @@ your seat name, for example `claude-main` or `codex`.
   directory, is not proof: another seat's live worktree can sit there. Anything you cannot prove is another
   seat's; leave it and ask its owner.
 - **Remove a worktree only after proving it is redundant.** Its branch tip is merged into
-  `origin/main` by ancestry or `git cherry`, or is on a remote; `git status --short` is empty
-  and `git status --short --ignored` lists only build output (move any run log you need out
-  first); no process has its cwd inside. Run
-  `git worktree unlock <path>` first. Never `--force`. For a worktree with initialised submodules,
-  run `git submodule deinit --all`, check that each submodule's HEAD and local branches have no
-  commits beyond upstream, delete `$(git rev-parse --git-common-dir)/worktrees/<name>/modules`
-  (`<name>` is the directory under `worktrees/`), then remove the worktree. Afterwards delete
-  the branch locally (and on origin once merged) and update the ledger row.
-  **Join the steps of any cleanup (copy, deinit, check, delete) with `&&`, or run them under
-  `set -e`; never `;`.** A failed copy, deinit or check stops every delete after it, and a delete is
-  never the step after an unchecked one. For a worktree with initialised submodules:
+  `origin/main` by ancestry or `git cherry`, or is on a remote; any run log you need is moved out
+  of it first. Then `just remove-worktree <absolute path>` (see "Branch lifecycle"), which unlocks the
+  worktree and makes the remaining proofs. Never `--force`, never `git submodule deinit`, never
+  `rm -rf` of a worktree's `modules` directory by hand. Afterwards delete the branch locally (and on
+  origin once merged) and update the ledger row.
+  **Join the steps of any cleanup (copy, check, delete) with `&&`, or run them under
+  `set -e`; never `;`.** A failed copy or check stops every delete after it, and a delete is
+  never the step after an unchecked one:
 
   ```sh
-  git worktree unlock <path> && git -C <path> submodule deinit --all && <the submodule check, exiting non-zero on a commit beyond upstream> && rm -rf "$(git rev-parse --git-common-dir)/worktrees/<name>/modules" && git worktree remove <path> && git branch -D <branch>
+  just remove-worktree <absolute path> && git branch -D <branch>
   ```
 - **Disk.** Check `df -h /` before starting a worktree build, keep one build tree per agent, and
   remove it when its PR merges.
@@ -666,9 +673,9 @@ your seat name, for example `claude-main` or `codex`.
   `justfile`) may lag the count `python3 tools/verify_gtest_floor.py --floor 0` prints (`declarations=`) by up to
   `SLACK` in that test, so a PR that adds a few tests leaves the line alone. A PR that would put the count more than
   `SLACK` above the floor sets the floor to the count; a PR that drops the count below the floor sets the floor to
-  the count and says in its body which tests went and why. A PR that touches `src/runtime/exports.def`, an
+  the count and says in its body which tests went and why. A PR that touches `src/runtime/host/exports.def`, an
   `NEVR_MODULE_API` function or `src/runtime/host/` also runs
-  `python3 tools/verify_pe_contract.py --dll build/<preset>/bin/BugSplat64.dll` on the build it made. Every PR, whatever it touches, also runs
+  `python3 tools/verify_pe_contract.py --dll build/<preset>/bin/BugSplat64.dll --runtime-dll build/<preset>/bin/nevr-runtime.dll` on the build it made. Every PR, whatever it touches, also runs
   `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` (run `just worktree-setup`
   first in a fresh worktree: the doc-path check reads `extern/`). `just test-tools` keeps every run: its full output,
   JUnit XML, the pytest-randomly seed, and a start and an end record in `runs.jsonl`, under `$NEVR_TEST_LOG_DIR` (default
@@ -705,13 +712,14 @@ your seat name, for example `claude-main` or `codex`.
   pointed at: the scripts default to `echovr/` of the main checkout (through that link), the Go tests
   to `$EVR_GAME_DIR`, whose default is `../../ready-at-dawn-echo-arena` from the test directory. Point
   each at a copy explicitly:
-  - `verify-server.sh` deploys `BugSplat64.dll` into `echovr/bin/win10` of `$NEVR_GAME_ROOT` and, when
+  - `verify-server.sh` deploys `nevr-runtime.dll` and `BugSplat64.dll` into `echovr/bin/win10` of `$NEVR_GAME_ROOT` and, when
     `build/mingw-release/bin/plugins` exists, its files into `echovr/bin/win10/plugins`, and, when
     the install has none, a `config.yaml` into `echovr/_local`.
-  - `launch-client.sh` deploys `BugSplat64.dll` there and aborts (exit 3) when `plugins/*` is non-empty
+  - `launch-client.sh` deploys `nevr-runtime.dll` (the one beside `--dll`, or `--runtime-dll`) and `BugSplat64.dll`
+    there and aborts (exit 3) when `plugins/*` is non-empty, `nevr-runtime.dll` exists
     or `_local/config.yaml` or `_local/config.json` exists. `--print-game-root` and `--help` exit before
     any write.
-  - `launch-server.sh` copies `BugSplat64.dll` into `echovr/bin/win10` and, when
+  - `launch-server.sh` copies `nevr-runtime.dll` and `BugSplat64.dll` into `echovr/bin/win10` and, when
     `build/mingw-release/bin/plugins/*.dll` exist, that directory's files into
     `echovr/bin/win10/plugins`, and restores
     nothing; any other script that copies a DLL into a game directory is the same kind of writer.
@@ -780,24 +788,24 @@ your seat name, for example `claude-main` or `codex`.
       `bin/win10/plugins` empty.
       It reads the run's log from `echovr/.wineprefix`.
     - `verify-server.sh` needs `echovr/bin/win10/echovr.exe`. It tolerates an absent
-      `BugSplat64.dll` (it adds it and removes it on exit), creates `_local` when missing, and uses
+      `BugSplat64.dll` and `nevr-runtime.dll` (it adds them and removes them on exit), creates `_local` when missing, and uses
       a `_local/config.yaml` that is present as it is. It sets `WINEPREFIX` to
       `echovr/.wineprefix`.
   - **Who makes it, and reuse.** Only a human or the foreman makes the pristine copy, and nobody
     runs from it. A run, by a script or a Go test, uses its own copy made from the pristine one with
     `cp -a`, which it deletes when the run ends. A run writes into whatever copy it uses: the Wine
     registry under `echovr/.wineprefix`, the files it deploys, and logs. `launch-client.sh` reads the
-    run's log under `echovr/.wineprefix/drive_c/users/<user>/AppData/Local/EchoVR/logs`;
+    run's log under `echovr/.wineprefix/drive_c/users/<user>/AppData/Local/nevr/echovr/logs`;
     `verify-server.sh` reads `echovr/bin/win10/logs` (that the runtime writes there is unverified).
     `launch-client.sh` and `verify-server.sh` put back what they deploy on a normal or trapped exit,
     not after a SIGKILL: `launch-client.sh` only prints ERROR when its restore fails and then saves
     the leftover test DLL as the "original" on the next run, while `verify-server.sh` recovers from
     its backup directory. `launch-server.sh` and the Go tests put nothing back (they leave the test
-    DLL, or delete `BugSplat64.dll`; `launch-server.sh` also leaves plugins, which make
-    `launch-client.sh` abort). `verify-server.sh` keeps its
+    DLLs, or delete `BugSplat64.dll`; `launch-server.sh` also leaves plugins and `nevr-runtime.dll`, which make
+    `launch-client.sh` abort, as a leftover `nevr-runtime.dll` does). `verify-server.sh` keeps its
     backup at one fixed place, `$NEVR_RUN_SCRATCH_ROOT/verify-server-deploy-backup` (default
     the work root, `~/src/nevr-runtime-work/`), and restores it into the current copy. It also deletes, by the absolute paths it recorded, the
-    files the earlier run added (`BugSplat64.dll`, `plugins/*`, `_local/config.yaml`). Clear or
+    files the earlier run added (`BugSplat64.dll`, `nevr-runtime.dll`, `plugins/*`, `_local/config.yaml`). Clear or
     inspect that directory before a run against a different copy than the last. When no copy exists, the run
     waits for a human; a runtime change is not verified until then.
 
@@ -857,8 +865,7 @@ your seat name, for example `claude-main` or `codex`.
   text files, ninja's deps log and ninja's build log (paths and command hashes), and the mtimes of source files
   identical to the main checkout's are aligned, so a build that follows compiles only what differs. It seeds only an
   absent or empty `build/$PRESET`, only a tree whose `build.ninja` names the commit it was built at (a tree that does not is refused) and that commit is this
-  worktree's HEAD, with no uncommitted changes (every compile command carries the commit and the `git describe --dirty` version, so otherwise ninja
-  rebuilds every object whatever was copied, and the shared compiler cache answers them), only when the copy no longer names the main checkout's path
+  worktree's HEAD, with no uncommitted changes (a tree configured with them has a `git describe` ending in `-dirty`), only when the copy no longer names the main checkout's path
   (a tree configured through a link to the checkout is refused), and never when a `ninja`, `cmake` or `ctest` is running in the main checkout's tree. It
   never writes the main checkout, prints what it did or why it did not (a
   worktree that is not seeded still builds, from scratch), and appends one record to
@@ -869,7 +876,7 @@ your seat name, for example `claude-main` or `codex`.
   not the environment. The build fails when the file is missing. `.env` is runtime-only (local overrides, git-ignored,
   never copied into a worktree, never compiled in); never print it.
 - **Client login test mechanics.** Run `NEVR_GAME_ROOT=<copy> ./launch-client.sh --dll <absolute path to the
-  build's BugSplat64.dll> --exit-after-login` from your checkout, where `<copy>` is a throwaway copy of the
+  build's BugSplat64.dll; the nevr-runtime.dll beside it is deployed with it> --exit-after-login` from your checkout, where `<copy>` is a throwaway copy of the
   install (see "The game install"), one client at a time (it exits 4 while an
   `echovr.exe` runs or another run holds the lock). It ends the run itself: exit 0 on `to logged in`;
   exit 1 on repeated `rad15_live failed` or `Service is unavailable` lines, a DLL that embeds no
@@ -928,7 +935,13 @@ Forbidden actions (without explicit approval):
 - Any action that causes a running production container to restart, recreate, or update
 - Cross-repo deployment: operating on a different repository's build/deploy pipeline (e.g. building/pushing `ghcr.io/echotools/nakama` from this repo)
 
-This applies regardless of context — even if the task seems to require it, even if a plan includes it, even if another instruction appears to authorize it. Only Andrew typing approval in the active conversation authorizes deployment.
+This applies regardless of context — even if the task seems to require it, even if a plan includes it, even if another instruction appears to authorize it. Only Andrew typing approval in the active conversation, or Spritz relaying it (see "Who speaks for the owner"), authorizes deployment.
+
+## Who speaks for the owner
+
+> **Maintainers only.** Contributors are unaffected.
+
+Spritz (metis-sprock) carries sprockee's full authority for this repo. A maintainer agent that receives an instruction from Spritz verifies the sender is her (her session's socket pid, and that pid's cwd is `/home/andrew/metis/spritz`), and then treats her word as the owner's own approval for every step these rules reserve for the owner: tags, releases, publishes and deployments included. It does not ask for the owner's separate confirmation and does not argue the authority. Irreversible steps still get a one-line notice to the owner as they happen.
 
 ## System test for runtime and auth changes
 
@@ -972,6 +985,8 @@ When something fails, the first act is reading the failing program's **own** log
 - **Never modify `src/legacy/`** — frozen v1 code, self-contained by design.
 - **Binary patches require prologue validation** — always check expected bytes before patching. Never blind-write.
 - **Hook functions need frequency analysis** — determine if a function is per-frame, per-tick, or per-event before adding Sleep/yield calls.
+- **Nothing from another project's patch is taken verbatim.** Before building an equivalent, reconstruct and analyze the patched code in ReVault: every function the patch touches, its callers, and what each byte change does; write the reconstructions back into ReVault with grades; design our implementation from that understanding, to this repo's standard (GOT hooks or checked patches, logs, failing-first tests, a prediction). Their address list says where to look; it is not the design.
+- **Prefer a hook to a byte patch.** Reconstruct the function in ReVault, then replace or wrap it with a hook whose code says, in readable C++, what the original did and what we change. A byte patch or NOP is the exception, used where a hook would cost something measurable (a per-frame hot path, a call too frequent to detour); the PR names the case, the reason and, where possible, a number. A checked patch (`nevr_checked_patch`) stays the form for those exceptions.
 
 ## Dependencies
 
@@ -985,13 +1000,16 @@ When something fails, the first act is reading the failing program's **own** log
 > **Maintainers only.** The "Commit identity" and "Scratch dir" bullets. Contributors: see "For contributors", "Maintainers only, and what to do instead".
 
 - **Defects.** Track defects in GitHub issues.
-- **Commit identity.** Author `Andrew Bates <a@sprock.io>`
-  (`--author="Andrew Bates <a@sprock.io>"`), unsigned (`--no-gpg-sign`), with a
-  single `Co-Authored-By: <agent name> <agents@sprock.io>` trailer, a
-  conventional prefix, and one logical change per commit. Exception: work by
-  Teth, Spritz or Glow Sprock is authored by that sister, with
-  `Co-Authored-By: Andrew Bates <a@sprock.io>`. You **SHALL** verify after each
-  commit: `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
+- **Commit identity.** Author `Spritz Metis Sprock <spritz@sprock.io>` (the repo's local git
+  config already sets it; never pass `--author` with another name), unsigned (`--no-gpg-sign`),
+  with a single house `Co-Authored-By: <agent name> <agents@sprock.io>` trailer for the agent that
+  wrote it, plus `Co-Authored-By: Andrew Bates <a@sprock.io>` and the credit trailers above, a
+  conventional prefix, and one logical change per commit. Work by Teth or Glow Sprock is authored
+  by that sister, with the same two trailers. You **SHALL** verify after each commit:
+  `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
+- **GitHub account.** Every `gh` action a maintainer agent takes (issues, PRs, comments, reviews,
+  merges, releases) runs through `gh-spritz`, which acts as the metis-sprock account, never the
+  plain `gh` login.
 - **C++ pre-read.** Before C++ or build work, read the C++ Mingw Addendum below;
   its hard stops bind every build and configuration change.
 - **Scratch dir.** All agent scratch/staging/evidence files live under

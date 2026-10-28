@@ -33,7 +33,6 @@ ALIASES = {
     "-telemetryrate": "-telemetry-rate",
     "-telemetrydiag": "-telemetry-diag",
     "-traceexports": "-trace-exports",
-    "-allow-dbgcore": "-skip-dbgcore-check",
 }
 
 # Files that implement or pin the aliases, or quote output captured from another program. Every other tracked
@@ -51,7 +50,7 @@ MAY_NAME_PREFIXES = ("src/legacy/", "tools/tests/fixtures/")
 
 
 class FlagTable(unittest.TestCase):
-    def test_the_table_holds_exactly_the_eight_renames(self):
+    def test_the_table_holds_exactly_the_seven_renames(self):
         got = {alias: flag for flag, alias in flag_table() if alias}
         self.assertEqual(got, ALIASES)
 
@@ -100,6 +99,37 @@ class GameParserRegistration(unittest.TestCase):
         arity = dict(re.findall(r'AddArgSyntax\(pArgSyntax, "(-[a-z-]+)", (\d, \d)', self.cli))
         for alias, flag in ALIASES.items():
             self.assertEqual(arity[alias], arity[flag], f"{alias} and {flag} take the same values")
+
+
+class DbgcoreFlagsRemoved(unittest.TestCase):
+    """#875: -skip-dbgcore-check and -allow-dbgcore are gone from the table, the parse and the globals.
+
+    They stay registered in cli.cpp with no help line, so the game's parser accepts them and the unconditional
+    dbgcore.dll check refuses the start on any command line.
+    """
+    REMOVED = ("-skip-dbgcore-check", "-allow-dbgcore")
+
+    def setUp(self):
+        self.cli = read("src/runtime/lifecycle/cli.cpp")
+        self.syntax = set(re.findall(r'AddArgSyntax\(pArgSyntax, "(-[a-z-]+)"', self.cli))
+        self.helped = set(re.findall(r'AddArgHelpString\(pArgSyntax,\s*"(-[a-z-]+)"', self.cli))
+
+    def test_the_table_and_the_parse_do_not_name_them(self):
+        table = {flag for flag, _ in flag_table()} | {alias for _, alias in flag_table() if alias}
+        for name in self.REMOVED:
+            self.assertNotIn(name, table)
+        boot = read("src/runtime/lifecycle/boot.cpp")
+        for name in self.REMOVED:
+            self.assertNotIn(f'L"{name}"', boot)
+
+    def test_no_global_or_skip_branch_in_boot_or_globals(self):
+        for rel in ("src/core/globals.h", "src/core/globals.cpp", "src/runtime/lifecycle/boot.cpp"):
+            self.assertNotIn("g_allowDbgCore", read(rel), rel)
+
+    def test_both_names_stay_registered_without_help(self):
+        for name in self.REMOVED:
+            self.assertIn(name, self.syntax, f"{name}: the game rejects a token with no syntax entry")
+            self.assertNotIn(name, self.helped, f"{name}: --help must not list a removed name")
 
 
 class NoOldNamesElsewhere(unittest.TestCase):

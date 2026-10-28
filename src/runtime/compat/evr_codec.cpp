@@ -166,7 +166,9 @@ const char* PlatformPrefix(uint64_t platformCode) {
   }
 }
 
-uint64_t SelectPlatformCode(bool /*hasUrlCredentials*/, bool /*noOvr*/) { return kBridgeLoginPlatform; }
+uint64_t SelectPlatformCode(bool /*hasUrlCredentials*/, bool noVr) {
+  return noVr ? kNoVrLoginPlatform : kBridgeLoginPlatform;
+}
 
 std::string SelectRemoteBearer(bool hasUrlCredentials, const std::string& jwt, const std::string& serverKey) {
   return hasUrlCredentials ? serverKey : jwt;

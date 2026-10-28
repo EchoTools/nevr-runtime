@@ -30,6 +30,7 @@ See docs/standards/verification.md.
 - [ ] The PR names the issue it resolves (`Closes #N`) or advances (`Refs #N`, with what is still open)
 - [ ] The PR has the same milestone as the issue it resolves
 - [ ] One logical change, with a conventional-prefix commit message (`feat`, `fix`, `docs`, `ci`, ...)
+- [ ] Platform parity: a PR that adds or changes player-facing behavior says here what the other platform's status is (done in this PR, already present at `file:line`, not applicable and why, or a linked twin issue)
 - [ ] `src/legacy/` is untouched, and no generated protobuf (`gen/cpp/*.pb.*`) was edited by hand
 
 <!-- The last non-empty line of the PR body must be this one, with <sha> replaced by the merge-base of

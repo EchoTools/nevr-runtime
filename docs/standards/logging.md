@@ -121,6 +121,11 @@ subsystems that nEVR annotates.
 | `[NEVR.FATAL]`        | Fatal-error path (ServerFatal)               |
 | `[NEVR.SCENARIO]`     | Scenario-test control endpoint (test builds only; never in a release DLL) |
 | `[NEVR.SELFCHECK]`    | Self-checks: one result per run-card check (every build, `compat/self_check.h`) |
+| `[NEVR.MENU]`         | Menu text the runtime sets: the nEVR version on the menu's versions panel (`patch/menu_version_label.h`) |
+| `[NEVR.SPLASH]`       | A button press skips the splash screen: the Continue element going live, each skip with the button id and how long the button was live (`patch/splash_skip.h`) |
+| `[NEVR.UITEXTURE]`    | UI, splash and menu textures at their top mip: one line per UI texture naming the mip requested (`patch/ui_texture_mips.h`) |
+| `[NEVR.UI]`           | The UI text writer (`patch/ui_text.h`, `patch/ui_text_writer.h`, #896): `text writer ready`/`off` with the three pins, one `text written` or `text dropped` line per request with `actor`, `element`, `bytes` and `attempts`, and `text first write` with the writing thread and the game-loop thread. A text is never logged, only its size |
+| `[NEVR.INVITE]`       | Invite codes for the CREATE GAME / JOIN VIA CODE wizard (`patch/invite_wizard.h`, ADR 0017): a code is never logged, only `code_len` and `code_fp` |
 | `[NEVR.HOST]`         | The `BugSplat64.dll` host's own JSONL records (`nevr-bootstrap.jsonl`): attach decisions, runtime load, crash dump. The value of the record's `tag` field; the host writes no `Log()` line |
 | `[server_timing]`     | Server tick-rate / timing patches             |
 
@@ -217,8 +222,13 @@ The platform prefix SHALL be derived from the actual platform code in the
 login payload, not hardcoded. Platform codes are the game's own
 1-indexed numbering (STM=1, DSC=2, XBX=3, OVR_ORG=4, OVR=5, BOT=6, DMO=7);
 code 2 is "PSN" in the game's string table and reads "DSC" after the runtime rewrites it.
-The bridge logs in as OVR_ORG (code 4), so its XPID is `OVR-ORG-<id>`; a
-login as DSC (code 2) would produce `DSC-<id>`.
+The bridge logs in as OVR_ORG (code 4), so its XPID is `OVR-ORG-<id>`, except
+when the game marks the client No VR (bit 20 of the game's flag word, which
+the stock login also reads to send the "N/A" HMD serial): that client logs in
+as DMO (code 7) and its XPID is `DMO-<id>`. A login as DSC (code 2) would
+produce `DSC-<id>`. `login platform=<code> (<prefix>) no_vr=<0|1> game_flags=0x<hex>`
+precedes the `login injected` line and records the flag word the choice was
+made from.
 
 **Where:** the injection site is `InstallWebSocketBridge` in
 `src/runtime/compat/ws_bridge.cpp` (the `login injected xpid=` log line).

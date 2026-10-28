@@ -13,15 +13,22 @@ sys.path.insert(0, str(REPO / "tools"))
 import work_root  # noqa: E402
 VERIFIER = REPO / "tools" / "verify_patch_source_inventory.py"
 EXPECTED_PATCH_SOURCES = (
+    "patch/arena_public_clock.cpp",
     "patch/asset_cache.cpp",
     "patch/asset_cdn.cpp",
     "patch/asset_registry.cpp",
     "patch/binary_bug_fixes.cpp",
     "patch/broadcaster_guard.cpp",
     "patch/coop_ai_trace.cpp",
+    "patch/credits_text.cpp",
     "patch/early_quit_lockout.cpp",
     "patch/evrp_package.cpp",
     "patch/headless_graphics.cpp",
+    "patch/invite_choice_hook.cpp",
+    "patch/invite_wizard_hook.cpp",
+    "patch/lobby_full_backoff.cpp",
+    "patch/menu_cards.cpp",
+    "patch/menu_version_label.cpp",
     "patch/mic_provider.cpp",
     "patch/mode_patches.cpp",
     "patch/plugin_assets.cpp",
@@ -30,6 +37,9 @@ EXPECTED_PATCH_SOURCES = (
     "patch/party_invite_gate.cpp",
     "patch/social_facade.cpp",
     "patch/social_facade_object.cpp",
+    "patch/splash_skip.cpp",
+    "patch/ui_text.cpp",
+    "patch/ui_texture_mips.cpp",
     "patch/xpid_patch.cpp",
 )
 
@@ -76,7 +86,7 @@ class VerifyPatchSourceInventoryTest(unittest.TestCase):
             )
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("patch-source-inventory: OK count=18", result.stdout)
+        self.assertIn("patch-source-inventory: OK count=28", result.stdout)
 
     def test_rejects_missing_duplicate_unexpected_and_missing_disk_entries(self):
         scenarios = (

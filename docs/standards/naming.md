@@ -90,8 +90,10 @@ separate namespace is an open ABI decision, issue #130.
   `Hooking::Attach` and `Hooking::Initialize` through the compat header) and `EchoVR::Symbols` with its
   nested `Social` and `Tcp` (`src/abi/symbols.h`, named after the game's symbol tables).
 - `PROJECT_VERSION`, `GIT_COMMIT_HASH` and `USE_MINHOOK` as macro names: only the frozen `src/legacy` reads
-  them; the root `CMakeLists.txt` defines them for those two targets, and every other target defines
-  `NEVR_PROJECT_VERSION`, `NEVR_GIT_COMMIT_HASH` and `NEVR_USE_MINHOOK`.
+  them; the root `CMakeLists.txt` defines them for the two files that read them, and every other file that reads
+  the build identity gets `NEVR_PROJECT_VERSION`, `NEVR_GIT_COMMIT_HASH`, `NEVR_GIT_COMMIT_FULL` or `NEVR_GIT_DESCRIBE`
+  from `nevr_build_identity_define` (`cmake/nevr_build_identity.cmake`), per source file; `NEVR_USE_MINHOOK` is a
+  target definition.
 - `NEVRProtobufJSONMessageV1` (`src/abi/symbols.h`): its spelling is fixed by the hashed protocol string.
 - `NevrCfg*` functions are global, not in `namespace nevr`; `NevrConfig` and `NevrConfigError` are in it.
 

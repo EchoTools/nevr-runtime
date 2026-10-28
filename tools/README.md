@@ -12,7 +12,7 @@ unit tests in `tests/`; the rest are run by hand or by a `just` recipe.
 | `verify_log_rules.py` | The mechanically checkable rules of `docs/standards/logging.md` (for example, no INFO line in a per-frame path). |
 | `verify_mode_patch_ground_truth.py` | Every plain byte rewrite in `mode_patches.cpp` has binary ground truth in `tests/system/mode_patches_test.go`. |
 | `verify_patch_source_inventory.py` | The `patch/*.cpp` entries of `PATCHES_SOURCES` match the expected inventory (update it deliberately when a patch is added or removed). |
-| `verify_scenario_control_absent.py` | A release `BugSplat64.dll` carries no scenario-test control endpoint. |
+| `verify_scenario_control_absent.py` | A release `BugSplat64.dll` and `nevr-runtime.dll` carry no scenario-test control endpoint. |
 
 `tests/` holds the Python unit tests for these scripts and for the shell and Python tools below, plus
 source-invariant tests over the C++ tree and the release contract
@@ -36,6 +36,6 @@ source-invariant tests over the C++ tree and the release contract
 | `build_distribution.py` | Sign a staged runtime package and atomically publish verified archives. |
 | `gen_symbol_corpus.py`, `symbol_candidates.txt` | Hash candidate symbol names and emit the reverse-lookup tables (CSymbol64 and SNS message hashes). |
 | `symcache/` | Go tool that fetches the pinned `Dualgame/echo-symbols` `echo_vr-pc` and `echo_vr-quest` subsets (`tools/symbols.pin`), merges them (PC name wins a case-only collision), validates, and regenerates `src/runtime/log/symcache_data.cpp` deterministically (`just generate-symcache`). |
-| `render_credits.py` | Render the README's "Built on, and thanks" block from `config/credits.json`, the one list the in-game CREDITS page also reads. `--check` fails when the block is not the rendering, `--write` regenerates it; `ingame_groups` is how a heading is chosen for the in-game half. |
+| `render_credits.py` | Render the README's "Built on, and thanks" block from `config/credits.json`, the one list the in-game CREDITS page also reads. `--check` fails when the block is not the rendering, `--write` regenerates it; `ingame_groups` is how a heading is chosen for the in-game half. `--ingame-source` and `--ingame-text` render that half and refuse, naming the entry and the field, any name or heading the game's font cannot draw (it draws printable ASCII and `©`; `ë` draws as `?`), a line over 64 bytes and a block over 200 lines. The file's `notes` list holds the rules for whoever edits it (never rendered); an unknown key is refused; a source is a github.com URL, an issue number, `named by the project owner`, or one of three exact texts, `echoApkPatch credit strings`, `tested in #nevr-runtime-testing (Discord)` and `echovrce.com website`. |
 | `hook_identity_manifest.json` | The pinned prologues `verify_hook_invariants.py` checks. |
 | `echomod/` | Standalone Echo VR modding scripts; see `echomod/README.md`. |

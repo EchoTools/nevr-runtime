@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Read the VERSIONINFO resource of a Windows PE file, and check the two files this project ships.
+"""Read the VERSIONINFO resource of a Windows PE file, and check the three files this project ships.
 
-BugSplat64.dll and echovr_server.exe carry a VERSIONINFO resource (cmake/nevr_version_info.cmake), so Explorer's
-Details tab names them. This reader parses the PE resource directory and the VS_VERSIONINFO block with the
+BugSplat64.dll (the host), nevr-runtime.dll (the runtime) and echovr_server.exe carry a VERSIONINFO resource
+(cmake/nevr_version_info.cmake), so Explorer's Details tab names them. This reader parses the PE resource directory and the VS_VERSIONINFO block with the
 standard library only: it reads a stripped file, a signed file and a file from a release zip alike, and needs no
 Windows host and no binutils.
 
     pe_version_info.py show FILE
-    pe_version_info.py check --dll BugSplat64.dll --exe echovr_server.exe [--version X.Y.Z[-dev.N+sha]]
+    pe_version_info.py check --dll BugSplat64.dll --runtime-dll nevr-runtime.dll --exe echovr_server.exe
+                             [--version X.Y.Z[-dev.N+sha]]
 
 `check` is fail-closed: a file with no resource, a truncated or duplicated block, a field that is not the pinned
 value, or a version other than the one the DLL's own NEVR-BUILD literal states (or --version) exits 1. Exit 0
@@ -44,7 +45,8 @@ COMPANY_NAME = "Andrew Bates"
 
 # Every string each file carries, by file name, and nothing else: an extra string is an unreviewed field.
 EXPECTED_FILES = {
-    "BugSplat64.dll": {"FileDescription": "nEVR runtime for Echo VR", "file_type": VFT_DLL},
+    "BugSplat64.dll": {"FileDescription": "nEVR host for Echo VR", "file_type": VFT_DLL},
+    "nevr-runtime.dll": {"FileDescription": "nEVR runtime for Echo VR", "file_type": VFT_DLL},
     "echovr_server.exe": {"FileDescription": "nEVR dedicated server launcher", "file_type": VFT_APP},
 }
 
@@ -301,13 +303,20 @@ def identity_version(dll: Path) -> str:
     return found[0][0].decode()
 
 
-def check(dll: Path, exe: Path, version: str | None = None) -> list:
-    """Problems for both shipped files against `version`, or against the DLL's own identity literal."""
+def check(dll: Path, exe: Path, version: str | None = None, runtime: Path | None = None) -> list:
+    """Problems for the shipped files against `version`, or against the host DLL's own identity literal. The
+    runtime (when given) must also state that same version in its own identity literal: the pair is one build."""
     try:
         wanted = version if version is not None else identity_version(dll)
+        runtime_problems = []
+        if runtime is not None:
+            if identity_version(runtime) != identity_version(dll):
+                runtime_problems.append(f"{runtime.name}: its identity version {identity_version(runtime)} is not "
+                                        f"{dll.name}'s {identity_version(dll)}")
+            runtime_problems += problems_for(runtime, wanted)
     except (PeVersionError, OSError) as exc:
         return [f"{dll.name}: {exc}"]
-    return problems_for(dll, wanted) + problems_for(exe, wanted)
+    return problems_for(dll, wanted) + runtime_problems + problems_for(exe, wanted)
 
 
 def main(argv=None) -> int:
@@ -315,8 +324,9 @@ def main(argv=None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     show = sub.add_parser("show", help="print the VERSIONINFO of one file")
     show.add_argument("file", type=Path)
-    verify = sub.add_parser("check", help="check both shipped files against the pins and one version")
+    verify = sub.add_parser("check", help="check the shipped files against the pins and one version")
     verify.add_argument("--dll", type=Path, required=True)
+    verify.add_argument("--runtime-dll", type=Path, help="nevr-runtime.dll, checked at the same version")
     verify.add_argument("--exe", type=Path, required=True)
     verify.add_argument("--version", help="the version to expect; default: the DLL's own NEVR-BUILD literal")
     args = parser.parse_args(argv)
@@ -335,14 +345,15 @@ def main(argv=None) -> int:
                 print(f"{table_key} {name} = {strings[name]}")
         return 0
     try:
-        problems = check(args.dll, args.exe, args.version)
+        problems = check(args.dll, args.exe, args.version, args.runtime_dll)
     except OSError as exc:
         problems = [str(exc)]
     for problem in problems:
         print(f"pe-version-info: FAIL: {problem}", file=sys.stderr)
     if problems:
         return 1
-    print(f"pe-version-info: OK: {args.dll.name} and {args.exe.name} carry the pinned VERSIONINFO "
+    names = [args.dll.name] + ([args.runtime_dll.name] if args.runtime_dll else []) + [args.exe.name]
+    print(f"pe-version-info: OK: {', '.join(names[:-1])} and {names[-1]} carry the pinned VERSIONINFO "
           f"({args.version or identity_version(args.dll)})")
     return 0
 

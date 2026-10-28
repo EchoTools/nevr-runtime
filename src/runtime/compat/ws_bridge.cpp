@@ -12,6 +12,7 @@
 #include "runtime/compat/ws_session_transport.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/patch/asset_registry.h"
+#include "runtime/patch/provider_identity.h"
 
 #include <ixwebsocket/IXNetSystem.h>
 #include <ixwebsocket/IXWebSocket.h>
@@ -214,7 +215,15 @@ static nevr_socket_role::RoleTable g_roles;
 static auto& g_pairs = *new std::unordered_map<ix::WebSocket*, std::unique_ptr<ProxyPair>>();
 
 // Defined after the login-session globals below.
-static bool ForgetLoginSessionLocked(const ix::WebSocket* remote);
+static bool ForgetLoginSessionLocked(const ix::WebSocket* remote, std::shared_ptr<ix::WebSocket>* ended);
+
+// Drops one reference to an ix::WebSocket on a thread of its own (#751). ~WebSocket calls stop(), which joins the
+// socket's thread: released on that thread it joins itself, and released under g_pairsMutex it waits for threads
+// that are blocked on the mutex. Only the handoff happens at the call site; the destructor runs on the new thread.
+static void ReleaseOffThread(std::shared_ptr<ix::WebSocket> ws) {
+  if (!ws) return;
+  std::thread([last = std::move(ws)]() {}).detach();
+}
 
 // The game sockets whose pair forwards to `remote` (the login socket and any matchmaker sockets sharing
 // its session). Caller holds g_pairsMutex.
@@ -250,11 +259,14 @@ struct RemoteSessionEndingScope {
 static void CloseGameSocketsForRemote(const ix::WebSocket* remote, int connIdx, unsigned int code) {
   std::vector<const ix::WebSocket*> games;
   bool wasLoginSession = false;
+  std::shared_ptr<ix::WebSocket> endedLogin;
   {
     std::lock_guard<std::mutex> lk(g_pairsMutex);
     games = GameSocketsBoundToLocked(remote);
-    wasLoginSession = ForgetLoginSessionLocked(remote);
+    wasLoginSession = ForgetLoginSessionLocked(remote, &endedLogin);
   }
+  // This is the remote's own callback thread and the mutex is free: the last reference, if this was it, dies elsewhere.
+  ReleaseOffThread(std::move(endedLogin));
   if (wasLoginSession) {
     RemoteSessionEndingScope ending;  // this is the closing remote's own callback thread: send nothing on it
     nevr_self_check::SetLoggedIn(false);  // no result is sent until the next LoginSuccess; outside g_pairsMutex
@@ -325,10 +337,11 @@ static ix::WebSocket* g_loginGameWs = nullptr;
 // was the login session. The caller ends the self-check session (nevr_self_check::SetLoggedIn(false)) AFTER it
 // releases the mutex: that call flushes the queued results through SendFrameToServer, which takes g_pairsMutex
 // itself, so calling it here deadlocked the remote's thread on its own lock and made WebSocket::stop() wait on
-// that thread forever (#723, #729).
-static bool ForgetLoginSessionLocked(const ix::WebSocket* remote) {
+// that thread forever (#723, #729). The session's reference moves into `ended`, which the caller releases through
+// ReleaseOffThread after it releases the mutex: dropping it here could run ~WebSocket under the lock (#751).
+static bool ForgetLoginSessionLocked(const ix::WebSocket* remote, std::shared_ptr<ix::WebSocket>* ended) {
   if (remote == nullptr || remote != g_loginRemoteWs.get()) return false;
-  g_loginRemoteWs.reset();
+  *ended = std::move(g_loginRemoteWs);
   g_loginGameWs = nullptr;
   g_roles.LoginSessionEnded();
   return true;
@@ -822,6 +835,15 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
             name != nullptr ? name : "<unnamed>", static_cast<unsigned long long>(friendId),
             nevr_social_party::Send(nevr_social_party::Global().RefreshFriends()) ? 1 : 0);
       }
+      // A removed friend leaves the roster now, not when the refresh above lands (social_roster.h).
+      {
+        uint64_t removedId = 0;
+        if (nevr_social_roster::ParseFriendRemoval(sym, payload, static_cast<size_t>(len), &removedId)) {
+          const bool dropped = nevr_social_roster::Global().Remove(removedId);
+          Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] friend removed account=%llu dropped=%d",
+              static_cast<unsigned long long>(removedId), dropped ? 1 : 0);
+        }
+      }
       // Party messages update the facade's party; any requests that were waiting on the reply
       // (invites queued behind the party's creation) go out now. This runs on the remote's
       // callback thread outside g_pairsMutex, and SendFrameToServer takes it itself.
@@ -946,12 +968,47 @@ static void WireSelfChecks() {
 
 // The HMD serial field the stock client sends (#83): relay the game's serial buffer, or its stock "N/A"
 // value in No-VR mode. Outside the game (unit tests) there is nothing to read.
-static nevr_hmd_serial::Choice GameHmdSerial() {
-  if (EchoVR::g_GameBaseAddress == nullptr || g_pGame == nullptr) return nevr_hmd_serial::Select(false, nullptr);
+#ifdef NEVR_TEST_HOOKS
+static std::atomic<int64_t> g_testGameFlagWord{-1};
+#endif
+
+static std::optional<uint32_t> GameFlagWord() {
+  if (EchoVR::g_GameBaseAddress == nullptr || g_pGame == nullptr) return std::nullopt;
   uint32_t flags = 0;
   memcpy(&flags, static_cast<const char*>(g_pGame) + 0x7AE0, sizeof(flags));
+  return flags;
+}
+
+static nevr_hmd_serial::Choice GameHmdSerial() {
+  const std::optional<uint32_t> flags = GameFlagWord();
+  if (!flags) return nevr_hmd_serial::Select(false, nullptr);
   const char* serial = reinterpret_cast<const char*>(EchoVR::g_GameBaseAddress) + 0x20C7834;
-  return nevr_hmd_serial::Select((flags & nevr_hmd_serial::kNoVrFlag) != 0, serial);
+  return nevr_hmd_serial::Select((*flags & nevr_hmd_serial::kNoVrFlag) != 0, serial);
+}
+
+// The flag word the login decision reads. A test can stand in for the game's word; the HMD serial still reads the
+// game's own memory, which a test run does not have.
+static std::optional<uint32_t> LoginFlagWord() {
+#ifdef NEVR_TEST_HOOKS
+  const int64_t forced = g_testGameFlagWord.load();
+  if (forced >= 0) return static_cast<uint32_t>(forced);
+#endif
+  return GameFlagWord();
+}
+
+// The No VR decision, read where the HMD serial reads it (#1082): the game's own flag at login time.
+static bool GameIsNoVr() {
+  const std::optional<uint32_t> flags = LoginFlagWord();
+  return flags && nevr_hmd_serial::LoginIsNoVr(g_isServer != FALSE, *flags);
+}
+
+// What the login chose and from which flag word, for the run's log: the xpid in `login injected` shows the result,
+// this shows the input. Only logged where a login is injected.
+static void LogLoginPlatform(uint64_t platformCode) {
+  const std::optional<uint32_t> flags = LoginFlagWord();
+  Log(EchoVR::LogLevel::Info, "[NEVR.WS] login platform=%d (%s) no_vr=%d game_flags=0x%x is_server=%d",
+      static_cast<int>(platformCode), nevr_evr_codec::PlatformPrefix(platformCode),
+      GameIsNoVr() ? 1 : 0, flags ? *flags : 0u, g_isServer != FALSE ? 1 : 0);
 }
 
 static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode = 2,
@@ -1167,7 +1224,7 @@ static LoginIdentity ReadLoginIdentity(bool verbose) {
 // Sets the CNSUser's login state to "logging in" so CNSUser::LogInSuccessCB processes the server's LoginSuccess
 // (it discards it while the state at +0x90 is 0). Only the actual login connection may do this: a later
 // connection resetting it loses the game's logged-in status during a lobby join.
-static void PatchCnsUserLoginState(uint64_t discordId) {
+static void PatchCnsUserLoginState(uint64_t discordId, uint64_t platformCode) {
   HMODULE hPnsrad = GetModuleHandleA("pnsrad.dll");
   if (hPnsrad) {
     typedef void* (*UsersFn)();
@@ -1188,11 +1245,12 @@ static void PatchCnsUserLoginState(uint64_t discordId) {
           int      beforeProvider = static_cast<int>(beforeState & 0xf);
           // Set the user's XPID: account_id and provider enum.
           // +0x88 = account_id (discord ID from JWT)
-          // +0x90 low nibble = provider enum (2 = PSN in binary,
+          // +0x90 low nibble = provider enum, the platform this login carries
+          //   (4 OVR-ORG, or 7 DMO for a No VR client; 2 = PSN in binary,
           //   patched to DSC by PatchDscProvider string table rewrite)
           // +0x9c = state flags (0x04 = connected/logged in)
           *accountId  = static_cast<int64_t>(discordId);
-          *loginState = (*loginState & ~0xFULL) | nevr_evr_codec::kBridgeLoginPlatform;  // OVR_ORG (game numbering)
+          *loginState = nevr_provider_identity::WithLoginProvider(*loginState, platformCode);  // game numbering
           *stateFlags = 0x04;
           Log(EchoVR::LogLevel::Info,
               "[NEVR.WS] CNSUser login state patched acct=%lld->%lld "
@@ -1314,18 +1372,18 @@ static void HandleRemoteOpen(ProxyPair* pair, int connIdx, uint64_t discordId, c
       // Set CNSUser login state only on the actual login connection.
       // Later connections (matchmaker, etc.) must not reset the state
       // or the game loses its logged-in status during lobby join.
-      PatchCnsUserLoginState(discordId);
-
       std::string cfgPasswordStr;
       {
         const char* cfgDiscordId = NevrCfgGetFlat("nevr_discord_id");
         const char* cfgPassword = NevrCfgGetFlat("nevr_password");
         bool hasUrlCreds = cfgDiscordId && cfgDiscordId[0] && cfgPassword && cfgPassword[0];
-        injectedPlatform = nevr_evr_codec::SelectPlatformCode(hasUrlCreds, g_noOvr);
+        injectedPlatform = nevr_evr_codec::SelectPlatformCode(hasUrlCreds, GameIsNoVr());
         if (cfgPassword) cfgPasswordStr = cfgPassword;
       }
+      LogLoginPlatform(injectedPlatform);
+      PatchCnsUserLoginState(discordId, injectedPlatform);
       g_lastInjectedDiscordId = discordId;
-      nevr_social_party::Global().SetSelf(discordId, accountName);
+      nevr_social_party::Global().SetSelf(discordId, accountName, injectedPlatform);
       std::string loginMsg = BuildLoginRequest(discordId, injectedPlatform, accountName, bearerToken, cfgPasswordStr);
       if (loginMsg.empty()) {
         Log(EchoVR::LogLevel::Error, "[NEVR.WS] login NOT injected conn=%d (%s): the request could not be built",
@@ -1498,12 +1556,12 @@ static std::atomic<int> g_testRouterGate{-1};
 static std::atomic<bool> g_testRefuseRemoteOpens{false};
 #endif
 
-// The platform code a login uses: URL credentials in the config pick the bridge's login platform.
+// The platform code a login uses: the bridge's login platform, or DMO when the game marks this client No VR.
 static uint64_t CurrentPlatformCode() {
   const char* cfgDiscordId = NevrCfgGetFlat("nevr_discord_id");
   const char* cfgPassword = NevrCfgGetFlat("nevr_password");
   const bool hasUrlCreds = cfgDiscordId && cfgDiscordId[0] && cfgPassword && cfgPassword[0];
-  return nevr_evr_codec::SelectPlatformCode(hasUrlCreds, g_noOvr);
+  return nevr_evr_codec::SelectPlatformCode(hasUrlCreds, GameIsNoVr());
 }
 
 // The login the router injects (Options::buildLogin), the same bytes the legacy Open handler injects: the
@@ -1512,12 +1570,13 @@ static uint64_t CurrentPlatformCode() {
 static std::optional<std::string> BuildRouterLogin() {
   constexpr int kLoginConnIdx = 1;  // the login connection's number (ConnLabel names it "login")
   const LoginIdentity identity = ReadLoginIdentity(false);
-  PatchCnsUserLoginState(identity.discordId);
   const uint64_t platformCode = CurrentPlatformCode();
+  LogLoginPlatform(platformCode);
+  PatchCnsUserLoginState(identity.discordId, platformCode);
   const char* cfgPassword = NevrCfgGetFlat("nevr_password");
   const std::string cfgPasswordStr = cfgPassword ? cfgPassword : "";
   g_lastInjectedDiscordId = identity.discordId;
-  nevr_social_party::Global().SetSelf(identity.discordId, identity.accountName);
+  nevr_social_party::Global().SetSelf(identity.discordId, identity.accountName, platformCode);
   std::string loginMsg =
       BuildLoginRequest(identity.discordId, platformCode, identity.accountName, identity.bearerToken, cfgPasswordStr);
   if (loginMsg.empty()) {
@@ -1964,7 +2023,7 @@ void InstallWebSocketBridge() {
                             const char* cfgDiscordId2 = NevrCfgGetFlat("nevr_discord_id");
                             const char* cfgPassword2 = NevrCfgGetFlat("nevr_password");
                             bool hasUrlCreds2 = cfgDiscordId2 && cfgDiscordId2[0] && cfgPassword2 && cfgPassword2[0];
-                            serverPlatformCode = nevr_evr_codec::SelectPlatformCode(hasUrlCreds2, g_noOvr);
+                            serverPlatformCode = nevr_evr_codec::SelectPlatformCode(hasUrlCreds2, GameIsNoVr());
                           }
                           const std::string fakeSuccess =
                               nevr_evr_codec::BuildLoginSuccess(serverPlatformCode, g_lastInjectedDiscordId);
@@ -1983,10 +2042,26 @@ void InstallWebSocketBridge() {
                         {
                           // Payload: 0x20 zero bytes (provider_id + UUID + token); the server ignores it.
                           const std::string subscribeMsg = nevr_evr_codec::BuildFriendListSubscribe();
-                          pairPtr->remoteWs->sendBinary(subscribeMsg);
-                          Log(EchoVR::LogLevel::Debug,
-                              "[NEVR.WS] Injected FriendListSubscribeRequest (%zu bytes)",
-                              subscribeMsg.size());
+                          // pairPtr is not read here: g_pairs owns the pair and a closing game socket erases it under
+                          // g_pairsMutex (#752). The pair is found by its game socket, as ForwardGameFrameToRemote does,
+                          // and the send runs outside the mutex: a failed send runs the remote's Close callback on this
+                          // thread, and that callback takes the mutex (#738).
+                          std::shared_ptr<ix::WebSocket> subscribeRemote;
+                          {
+                            std::lock_guard<std::mutex> lk(g_pairsMutex);
+                            auto it = g_pairs.find(gameWsPtr);
+                            if (it != g_pairs.end()) subscribeRemote = it->second->remoteWs;
+                          }
+                          if (subscribeRemote) {
+                            subscribeRemote->sendBinary(subscribeMsg);
+                            Log(EchoVR::LogLevel::Debug,
+                                "[NEVR.WS] Injected FriendListSubscribeRequest (%zu bytes)",
+                                subscribeMsg.size());
+                          } else {
+                            Log(EchoVR::LogLevel::Debug,
+                                "[NEVR.WS] FriendListSubscribeRequest not sent: game socket %d has no pair",
+                                connIdx);
+                          }
                         }
                       }
                       // STcpConnectionUnrequireEvent is deliberately NOT acted on.
@@ -2042,13 +2117,25 @@ void InstallWebSocketBridge() {
                         // The login remote is shared with the matchmaker connections: its frames go
                         // to the live connection SharedRouteLocked picks. Any other remote (config)
                         // belongs to its own game socket.
+                        // pairPtr is not read here either (#752): a login game socket that closed while a matchmaker
+                        // still shares this remote has erased its pair, and the callback stays installed.
                         ix::WebSocket* target = nullptr;
                         {
                           std::lock_guard<std::mutex> lk(g_pairsMutex);
-                          if (pairPtr->remoteWs != nullptr && pairPtr->remoteWs == g_loginRemoteWs)
+                          const auto pit = g_pairs.find(gameWsPtr);
+                          if (pit != g_pairs.end()) {
+                            // The pair is present, so its game socket has not closed and gameWsPtr is alive.
+                            if (pit->second->remoteWs != nullptr && pit->second->remoteWs == g_loginRemoteWs)
+                              SharedRouteLocked(&target);
+                            else
+                              target = gameWsPtr;
+                          } else if (remoteAddress == g_loginRemoteWs.get()) {
+                            // The login game socket closed and its pair is gone, but the shared login remote still
+                            // carries this callback: route to the live matchmaker connection. gameWsPtr is not used.
                             SharedRouteLocked(&target);
-                          else
-                            target = gameWsPtr;
+                          }
+                          // Otherwise the game socket closed and nothing shares this remote: target stays null, and
+                          // the frame is dropped below. gameWsPtr is never used without its pair.
                         }
                         if (target == nullptr) {
                           LogSharedFrameDropped(rmsg->str.size());
@@ -2097,16 +2184,19 @@ void InstallWebSocketBridge() {
                   }
                 }));
 
+            std::shared_ptr<ix::WebSocket> previousLogin;  // released after g_pairsMutex: see ReleaseOffThread (#751)
             {
               std::lock_guard<std::mutex> lk(g_pairsMutex);
               g_pairs[gameWsPtr] = std::move(pair);
               // Save the login connection for reuse by the sockets that share its session
               if (role == nevr_socket_role::Role::Login) {
+                previousLogin = std::move(g_loginRemoteWs);
                 g_loginRemoteWs = remote;
                 g_activeGameWs = gameWsPtr;
                 g_loginGameWs = gameWsPtr;
               }
             }
+            ReleaseOffThread(std::move(previousLogin));
             // Start after insertion so the remote callback can find the pair in g_pairs
             remote->start();
             Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, %s, ws=%p)", connIdx,
@@ -2337,8 +2427,10 @@ std::string TestHook_SelectRemoteBearer(bool hasUrlCredentials, const std::strin
 
 bool TestHook_IsBearerReplacingPath(const std::string& url) { return nevr_evr_codec::IsBearerReplacingPath(url); }
 
-uint64_t TestHook_SelectPlatformCode(bool hasUrlCredentials, bool noOvr) {
-  return nevr_evr_codec::SelectPlatformCode(hasUrlCredentials, noOvr);
+void TestHook_SetGameFlagWord(int64_t flags) { g_testGameFlagWord = flags; }
+
+uint64_t TestHook_SelectPlatformCode(bool hasUrlCredentials, bool noVr) {
+  return nevr_evr_codec::SelectPlatformCode(hasUrlCredentials, noVr);
 }
 
 const char* TestHook_PlatformPrefix(uint64_t platformCode) {
@@ -2514,13 +2606,18 @@ void* TestHook_N61_RegisterMatchmaker(void* gameWsHandle, bool* callbackFired) {
 // The test hook is the observer; the logic under test is production.
 bool TestHook_ForgetLoginSession(void* remoteHandle, int* nextConnIdx) {
   auto* remotePtr = static_cast<std::shared_ptr<ix::WebSocket>*>(remoteHandle);
-  std::lock_guard<std::mutex> lk(g_pairsMutex);
-  const bool forgot = ForgetLoginSessionLocked(remotePtr->get());
-  if (nextConnIdx != nullptr) {
-    // The slot the game's next /login socket would take, asked of a copy so nothing is claimed.
-    nevr_socket_role::RoleTable next = g_roles;
-    *nextConnIdx = next.Admit(nevr_socket_role::Listener::Service, nevr_socket_role::Role::Login).connIdx;
+  std::shared_ptr<ix::WebSocket> ended;
+  bool forgot = false;
+  {
+    std::lock_guard<std::mutex> lk(g_pairsMutex);
+    forgot = ForgetLoginSessionLocked(remotePtr->get(), &ended);
+    if (nextConnIdx != nullptr) {
+      // The slot the game's next /login socket would take, asked of a copy so nothing is claimed.
+      nevr_socket_role::RoleTable next = g_roles;
+      *nextConnIdx = next.Admit(nevr_socket_role::Listener::Service, nevr_socket_role::Role::Login).connIdx;
+    }
   }
+  ReleaseOffThread(std::move(ended));
   return forgot;
 }
 

@@ -12,6 +12,7 @@
 
 #include "callback_thunk.h"
 #include "got_hook.h"
+#include "inline_hook.h"
 
 namespace sentinel {
 
@@ -33,6 +34,26 @@ GotStatus InstallThunk(GotHook& hook, const GotTarget& target,
   static_assert(IsCallbackThunk<Thunk>::value,
                 "InstallThunk requires a CallbackThunk<Tag, Ret(Args...)> instantiation");
   return ThunkInstaller::Install<Thunk>(hook, target, lookup);
+}
+
+// Befriended by InlineHook so it can reach the private inline Install.
+struct InlineThunkInstaller {
+  template <typename Thunk>
+  static InlineStatus Install(const void* target, const InlinePrologue& prologue) {
+    static_assert(IsCallbackThunk<Thunk>::value,
+                  "InstallInlineThunk requires a CallbackThunk<Tag, Ret(Args...)> instantiation");
+    return InlineHook::Install(target, prologue, Thunk::EntryAddress(), Thunk::OriginalOut());
+  }
+};
+
+// Patches `target` (an arm64 function entry, inline_hook.h) so that it runs `Thunk`'s entry. The
+// thunk's original pointer is the trampoline, which runs the target's displaced prologue. Same rule as
+// InstallThunk: the detour is always a thunk entry, so the frame sensor walks it.
+template <typename Thunk>
+InlineStatus InstallInlineThunk(const void* target, const InlinePrologue& prologue) {
+  static_assert(IsCallbackThunk<Thunk>::value,
+                "InstallInlineThunk requires a CallbackThunk<Tag, Ret(Args...)> instantiation");
+  return InlineThunkInstaller::Install<Thunk>(target, prologue);
 }
 
 }  // namespace sentinel

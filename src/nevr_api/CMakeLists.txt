@@ -15,6 +15,7 @@ set(PROTO_GENERATED_SRCS
   ${GEN_DIR}/telemetry/v1/telemetry.pb.cc
   ${GEN_DIR}/telemetry/v2/capture.pb.cc
   ${GEN_DIR}/telemetry/v2/echo_arena.pb.cc
+  ${GEN_DIR}/telemetry/v2/voice.pb.cc
 )
 
 add_library(nevr_api STATIC ${PROTO_GENERATED_SRCS})

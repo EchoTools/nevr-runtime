@@ -135,6 +135,7 @@ const nevr::NevrConfig& NevrCfg() {
     try {
       nevr::NevrConfig c = nevr::NevrConfig::LoadFromFile(path);
       nevr::LogUnsetBareVars(c);  // the parser logs nothing (it is shared with the Quest); the PC caller reports
+      nevr::LogShapeWarnings(c);
       Log(EchoVR::LogLevel::Info, "[NEVR.CONFIG] config.yaml loaded from: %s", path.c_str());
       return c;
     } catch (const nevr::NevrConfigError& e) {
@@ -158,9 +159,8 @@ const nevr::NevrConfig& NevrCfg() {
 // configure time from config/public-defaults.env (cmake/nevr_builtin_defaults.cmake). Applied
 // at LOOKUP time under the config.yaml value (nevr_cfg::LookupFlatWithDefaults), so a
 // config.yaml can override any of them and a rejected or absent file still leaves them in
-// place. Client mode only: a dedicated server has always been configured explicitly, and
-// must not silently start a bridge or authenticate with an embedded key. Only key NAMES are
-// logged, never values (the two keys are public by design (#76), but socket_uri may carry a token).
+// place. Client and server alike (#843): a server's config.yaml may leave any of them out. Only key
+// NAMES are logged, never values (the two keys are public by design (#76), but socket_uri may carry a token).
 const nevr_cfg::FlatDefaults& BuiltinDefaults() {
 #ifdef NEVR_TEST_HOOKS
   if (g_testInputsSet) {
@@ -170,8 +170,7 @@ const nevr_cfg::FlatDefaults& BuiltinDefaults() {
     if (g_testDefaults != nullptr) {
       for (const auto& kv : *g_testDefaults) entries.push_back({kv.first.c_str(), kv.second.c_str()});
     }
-    gated = nevr_cfg::SelectBuiltinDefaults(g_testServerMode, entries.data(), entries.size(), nullptr,
-                                            nullptr);
+    gated = nevr_cfg::SelectBuiltinDefaults(entries.data(), entries.size(), nullptr, nullptr);
     return gated;
   }
 #endif
@@ -185,12 +184,7 @@ const nevr_cfg::FlatDefaults& BuiltinDefaults() {
     std::string embedded;
     std::string missing;
     nevr_cfg::FlatDefaults d = nevr_cfg::SelectBuiltinDefaults(
-        IsServerMode(), kEmbedded, sizeof(kEmbedded) / sizeof(kEmbedded[0]), &embedded, &missing);
-    if (IsServerMode()) {
-      Log(EchoVR::LogLevel::Info,
-          "[NEVR.CONFIG] built-in defaults are not applied in server mode (config.yaml is required)");
-      return d;
-    }
+        kEmbedded, sizeof(kEmbedded) / sizeof(kEmbedded[0]), &embedded, &missing);
     Log(EchoVR::LogLevel::Info, "[NEVR.CONFIG] built-in defaults embedded in this build: %s",
         embedded.empty() ? "(none)" : embedded.c_str());
     if (!missing.empty()) {
@@ -200,6 +194,19 @@ const nevr_cfg::FlatDefaults& BuiltinDefaults() {
     return d;
   }();
   return defaults;
+}
+
+// #843: the defaults that apply to one key. In server mode an explicit empty value in config.yaml is a
+// decision, not a gap: `socket_uri: ""` gives the server no endpoint and takes no embedded default, so an
+// operator can keep a server off the shipped endpoint (boot's fatal check and allow_offline_server then
+// decide). Client keys keep the "empty is unset" rule. An environment override still sits above both.
+const nevr_cfg::FlatDefaults& DefaultsFor(const nevr::NevrConfig& cfg, const std::string& flatKey) {
+  static const nevr_cfg::FlatDefaults kNone{};
+  if (IsServerMode()) {
+    const std::optional<std::string> fromFile = nevr_cfg::LookupFlat(cfg, flatKey);
+    if (fromFile && fromFile->empty()) return kNone;
+  }
+  return BuiltinDefaults();
 }
 
 // The runtime's environment overrides (#76): NEVR_API_KEY and NEVR_SOCKET_KEY, read once at
@@ -229,10 +236,11 @@ const nevr_cfg::FlatEnvOverrides& EnvOverrides() {
 std::optional<std::string> Flat(const std::string& flatKey) {
 #ifdef NEVR_TEST_HOOKS
   if (g_testInputsSet && g_testConfig != nullptr) {
-    return nevr_cfg::LookupFlatWithDefaults(*g_testConfig, BuiltinDefaults(), flatKey);
+    return nevr_cfg::LookupFlatWithDefaults(*g_testConfig, DefaultsFor(*g_testConfig, flatKey), flatKey);
   }
 #endif
-  return nevr_cfg::LookupFlatLayered(NevrCfg(), EnvOverrides(), BuiltinDefaults(), flatKey);
+  const nevr::NevrConfig& cfg = NevrCfg();
+  return nevr_cfg::LookupFlatLayered(cfg, EnvOverrides(), DefaultsFor(cfg, flatKey), flatKey);
 }
 
 [[noreturn]] void FailAccessor(const char* accessor, const char* status, std::size_t count,
@@ -274,6 +282,28 @@ const char* AccessorBoundary(const char* accessor, Body body) {
 }
 
 }  // namespace
+
+// #843: names of the built-in defaults this run uses, so an operator can see which keys a server took
+// from the build rather than from config.yaml. A key counts only when neither config.yaml nor the
+// environment sets it and a default does. Names only, never values. Boot calls it once, after config.yaml
+// has loaded (it reads the config through NevrCfg()).
+void NevrCfgLogBuiltinDefaultsTaken() {
+  const nevr::NevrConfig& cfg = NevrCfg();
+  std::string taken;
+  for (const auto& kv : BuiltinDefaults()) {
+    const std::optional<std::string> withoutDefault =
+        nevr_cfg::LookupFlatLayered(cfg, EnvOverrides(), nevr_cfg::FlatDefaults{}, kv.first);
+    if (withoutDefault && !withoutDefault->empty()) continue;
+    const std::optional<std::string> withDefault =
+        nevr_cfg::LookupFlatLayered(cfg, EnvOverrides(), DefaultsFor(cfg, kv.first), kv.first);
+    if (!withDefault || withDefault->empty()) continue;
+    if (!taken.empty()) taken += ", ";
+    taken += kv.first;
+  }
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.CONFIG] built-in defaults in use (config.yaml and environment leave these unset): %s",
+      taken.empty() ? "(none)" : taken.c_str());
+}
 
 #ifdef NEVR_TEST_HOOKS
 namespace nevr::lifecycle::test {
@@ -384,6 +414,14 @@ int NevrCfgFrameStatsMode(int* recognised) {
   const nevr_frame_stats::Mode mode = nevr_cfg::FrameStatsMode(NevrCfg(), &known);
   if (recognised != nullptr) *recognised = known ? 1 : 0;
   return static_cast<int>(mode);
+}
+
+const char* NevrCfgCaptureDevice() {
+  return AccessorBoundary("NevrCfgCaptureDevice", [&]() -> const char* {
+    const std::optional<std::string> device = NevrCfg().GetString("audio.capture_device");
+    if (!device || device->empty()) return nullptr;
+    return InternCStr(*device, "NevrCfgCaptureDevice");
+  });
 }
 
 const char* NevrCfgGameNativeConfigJson() {

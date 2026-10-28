@@ -81,9 +81,9 @@ cat {fix}/obj_$base
         path.write_text("o")
         return path
 
-    def run_check(self, *objects: pathlib.Path, bin_dir: pathlib.Path | None = None) -> subprocess.CompletedProcess:
+    def run_check(self, *objects: pathlib.Path, bin_dir: pathlib.Path | None = None, plugin: bool = False) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [str(SCRIPT), str(bin_dir or self.bin), str(self.root / "lib.so"), *map(str, objects)],
+            [str(SCRIPT), *(["--plugin"] if plugin else []), str(bin_dir or self.bin), str(self.root / "lib.so"), *map(str, objects)],
             capture_output=True,
             text=True,
         )
@@ -147,6 +147,37 @@ cat {fix}/obj_$base
                 result = self.run_check(obj)
                 self.assertEqual(result.returncode, 1)
                 self.assertIn(symbol, result.stderr)
+
+    # --- a plugin (--plugin): the same rule without the sentinel's own constructor (docs/adr/0019, section 1) ---
+
+    def test_a_plugin_with_only_the_compiler_rt_entries_passes(self) -> None:
+        (self.fix / "sections").write_text(SECTIONS.replace("000018", "000010"))
+        result = self.run_check(plugin=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("OK (2 .init_array entries", result.stdout)
+
+    def test_a_plugin_with_no_init_array_passes(self) -> None:
+        (self.fix / "sections").write_text("\n".join(l for l in SECTIONS.splitlines() if ".init_array" not in l) + "\n")
+        result = self.run_check(plugin=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("has no .init_array", result.stdout)
+
+    def test_a_plugin_may_not_carry_the_sentinels_constructor(self) -> None:
+        result = self.run_check(plugin=True)  # the default fixture's third slot is nevr_sentinel_ctor
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("_ZL18nevr_sentinel_ctorv", result.stderr)
+        self.assertIn("is not an expected initializer", result.stderr)
+
+    def test_a_plugin_with_a_namespace_scope_constructor_fails(self) -> None:
+        (self.fix / "relocs").write_text(RELOCS.replace("2047c", "21774"))
+        result = self.run_check(plugin=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("_GLOBAL__sub_I_extra.cpp", result.stderr)
+
+    def test_a_plugin_check_still_fails_when_the_tool_cannot_run(self) -> None:
+        result = self.run_check(plugin=True, bin_dir=self.root / "nonexistent")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("OK", result.stdout)
 
     def test_no_objects_is_an_error(self) -> None:
         result = self.run_check()

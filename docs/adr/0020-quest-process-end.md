@@ -1,4 +1,4 @@
-# ADR 0008: the Quest process ends when the game's android_main returns
+# ADR 0020: the Quest process ends when the game's android_main returns
 
 Status: accepted, implemented (`src/quest/sentinel/process_end_hook.{h,cpp}`, #621). On in every Quest build, with no feature
 flag. Not yet observed on a headset: the "Prediction" section is what the first run must show.
@@ -27,7 +27,8 @@ when it returns, for any reason:
    failed first-run data step, which can run when `android_main` has not returned) the line is
    `{"event":"android_main_returned","action":"ending_process","exit_code":1,"reason":"<reason>"}`;
 2. runs the before-exit callback on a helper thread and waits for it at most 500 ms. The integration registers
-   `ReportAndroidMainReturned` there: it reports the self-check `android_main_returned` (its Info line, `self_check` in the
+   `OnGameProcessEnd` there: it ends the plugin entries still pending as `not_started` (ADR 0019), then calls
+   `ReportAndroidMainReturned`, which reports the self-check `android_main_returned` (its Info line, `self_check` in the
    sentinel's log, is the record) and flushes the unit once. The remote string is **best effort**, and the ADR does not promise it:
    `ConnectorRemoteTransport::Send` only queues the frame for the connection's worker (`net/remote_ws.cpp`), the game has usually
    closed the login connection while it shut down (`SessionBridge`'s `Close` clears the login gate, `net/session_bridge.cpp`, so

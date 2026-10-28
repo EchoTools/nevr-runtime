@@ -109,8 +109,29 @@ std::atomic<HANDLE> g_log_mutex{nullptr};
 // there is no per-process budget.
 std::atomic<bool> g_log_lock_unreliable{false};
 
+// Writes that skipped the mutex because it was marked unreliable. Read by the concurrent-append test when a line
+// is missing (#840): with it and the host_log_lock record, a short file says whether the lock path ran.
+std::atomic<unsigned long long> g_log_unlocked_writes{0};
+
 // How long an append waits on the log mutex.
 std::atomic<DWORD> g_log_wait_ms{kBootstrapLogLockWaitMs};
+
+// How many times an append tries to open the log file before it gives up on that destination (#733).
+constexpr int kAppendOpenAttempts = 4;
+
+// Serializes the writes of this process's appenders once the named mutex's wait has ended without it. An append
+// that timed out on the mutex writes unlocked; two such writes from one process to the same FILE_APPEND_DATA
+// handle race in the file system (under Wine a line is reported written and is absent from the file, #997). The
+// critical section is recursive for its owner, so the crash callback on the thread that holds it still writes at
+// once, and it is taken after the mutex's bounded wait, so no path waits on it while it waits on the mutex.
+CRITICAL_SECTION g_log_local_lock;
+// Initialized once, on the first append, by InitOnceExecuteOnce: two threads that log for the first time together
+// run the callback once, and each waits for it to finish. kernel32 only, so it is safe where the loader lock is held.
+INIT_ONCE g_log_local_lock_once = INIT_ONCE_STATIC_INIT;
+BOOL CALLBACK InitLogLocalLock(PINIT_ONCE, PVOID, PVOID*) noexcept {
+  InitializeCriticalSection(&g_log_local_lock);
+  return TRUE;
+}
 
 // The last flush of a process that is ending (FlushAttachJournalAtExit). The log mutex is named, so a live process on
 // the same prefix can hold it. The exit flush waits at most kBootstrapExitLogLockWaitMs for it and, when it does not
@@ -260,6 +281,7 @@ void BootstrapDiagnostics::SetLogMutexNameForTest(const wchar_t* name) {
 }
 
 bool BootstrapDiagnostics::LogLockUnreliableForTest() { return g_log_lock_unreliable.load(); }
+unsigned long long BootstrapDiagnostics::UnlockedWritesForTest() { return g_log_unlocked_writes.load(); }
 std::size_t BootstrapDiagnostics::JournalClaimed() const { return claimed_.load(); }
 #endif
 
@@ -591,6 +613,7 @@ DiagnosticDestination BootstrapDiagnostics::AppendLine(const char* line,
 
 bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const char* line,
                                     std::size_t length) noexcept {
+  if (!InitOnceExecuteOnce(&g_log_local_lock_once, InitLogLocalLock, nullptr, nullptr)) return false;
   wchar_t path[MAX_PATH] = {};
   if (!AppendPath(path, MAX_PATH, dir, kBootstrapLogName)) return false;
 
@@ -604,8 +627,13 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
 
   const bool exiting = g_exit_flush.load();
   if (exiting && g_exit_lock_lost.load() && g_log_mutex.load(std::memory_order_acquire) != nullptr) return false;
-  HANDLE file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  // An open refused while other appenders have the file open (a sharing violation under load) is retried at once,
+  // a bounded number of times: a line whose open fails here is lost from the file.
+  HANDLE file = INVALID_HANDLE_VALUE;
+  for (int attempt = 0; attempt < kAppendOpenAttempts && file == INVALID_HANDLE_VALUE; ++attempt) {
+    file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
+                       FILE_ATTRIBUTE_NORMAL, nullptr);
+  }
   if (file == INVALID_HANDLE_VALUE) return false;
 
   // Serialize the write only, with the mutex Prepare() created (none: the write is unserialized).
@@ -632,10 +660,23 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
     if (waited == WAIT_FAILED) wait_error = GetLastError();
     locked = waited == WAIT_OBJECT_0 || waited == WAIT_ABANDONED;
     if (!locked) marked_unreliable = !g_log_lock_unreliable.exchange(true);
+  } else if (lock != nullptr) {
+    g_log_unlocked_writes.fetch_add(1);
   }
+  // The write is serialized within the process whether or not the mutex was taken: a write that did not get the mutex
+  // must not race another write of this process (#997).
+  EnterCriticalSection(&g_log_local_lock);
+  // A short write is continued from where it stopped, so a line is never left without its tail.
   DWORD written = 0;
-  const BOOL ok = WriteFile(file, line, static_cast<DWORD>(length), &written, nullptr);
+  BOOL ok = TRUE;
+  while (written < length && ok) {
+    DWORD chunk = 0;
+    ok = WriteFile(file, line + written, static_cast<DWORD>(length) - written, &chunk, nullptr);
+    if (chunk == 0) break;
+    written += chunk;
+  }
   FlushFileBuffers(file);
+  LeaveCriticalSection(&g_log_local_lock);
   if (locked) ReleaseMutex(lock);
   if (marked_unreliable) {
     // The one record that says the log is no longer serialized: written to the open file, without the lock,

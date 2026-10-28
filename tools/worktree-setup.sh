@@ -15,9 +15,10 @@
 # What it will and will not do:
 #   - It runs only inside a LINKED worktree (never the main checkout), whatever env or arguments say.
 #   - It writes only where the destination is absent or an empty directory. It never deletes or
-#     replaces anything that has content: an initialised submodule or an existing gen/ is kept
-#     (to refresh gen/, remove it and run this again). A gen/ that has other content but no
-#     generated source is refused, not overwritten.
+#     replaces anything that has content: an initialised submodule is kept. An existing gen/ is kept too, but a
+#     gen/ that is not the generator's output for the justfile's pin is regenerated in place by tools/proto_stamp.py,
+#     which removes only the files its own stamp lists. A gen/ that has other content but no generated source is
+#     refused, not overwritten.
 #   - It copies the main checkout's submodule CONTENT: a worktree on a branch that pins different
 #     submodule commits should run `git submodule update --init` instead.
 #   - It never touches the main checkout and never reads or copies .env. Copies are made in
@@ -26,7 +27,7 @@
 #
 #   tools/worktree-setup.sh          fill in the missing inputs
 #   tools/worktree-setup.sh --check  report what a root-preset build is missing (used by `just
-#                                    configure`): extern/minhook and a generated gen/cpp source
+#                                    configure`): extern/minhook and a gen/ that passes tools/proto_stamp.py check
 #
 # NEVR_MAIN_CHECKOUT names the main checkout when it cannot be derived (a bare repository).
 set -euo pipefail
@@ -45,10 +46,13 @@ is_fillable() { [[ ! -e "$1" && ! -L "$1" ]] || { [[ -d "$1" && ! -L "$1" && -z 
 if [[ "${1-}" == "--check" && $# -eq 1 ]]; then
   missing=()
   has_files extern/minhook || missing+=(extern/minhook)
-  has_gen "$here" || missing+=(gen/cpp)
+  # gen/ must be the generator's output for the pin the justfile names (tools/proto_stamp.py), not merely present.
+  if ! gen_reason=$(python3 -I tools/proto_stamp.py --root "$here" check 2>&1 >/dev/null); then
+    missing+=("gen/ ($gen_reason)")
+  fi
   if [[ ${#missing[@]} -gt 0 ]]; then
     echo "error: build inputs missing: ${missing[*]}" >&2
-    echo "  in a git worktree, run: just worktree-setup (copies them from the main checkout)" >&2
+    echo "  in a git worktree, run: just worktree-setup (copies them from the main checkout, regenerates a stale gen/)" >&2
     echo "  in the main checkout: git submodule update --init, and just proto for gen/" >&2
     exit 1
   fi
@@ -188,6 +192,18 @@ echo "filled from $main: ${filled[*]:-nothing}"
 preset=${PRESET:-mingw-release}
 python3 -I tools/seed_build_tree.py --main "$main" --worktree "$here" --preset "$preset" \
   || refused+=("build/$preset (seeding it from the main checkout failed: see above)")
+# gen/ must be the generator's output for the pin the justfile names. A copy from the main checkout can be stale
+# (#1053): regenerate it here with the protoc of this worktree's build tree, which the seeded tree may have just
+# supplied. With no such protoc, leave it and say so: `just configure` regenerates it after vcpkg has installed protoc.
+protoc_dir="$here/build/$preset/vcpkg_installed/x64-linux/tools/protobuf"
+if ! gen_reason=$(python3 -I tools/proto_stamp.py --root "$here" check 2>&1 >/dev/null); then
+  if [[ -x "$protoc_dir/protoc" ]]; then
+    python3 -I tools/proto_stamp.py --root "$here" ensure --protoc-dir "$protoc_dir" \
+      || refused+=("gen/ (regenerating it at the justfile's pin failed: see above)")
+  else
+    echo "warning: gen/ is not current ($gen_reason); just configure regenerates it once vcpkg has installed protoc" >&2
+  fi
+fi
 if [[ ${#refused[@]} -gt 0 ]]; then
   printf 'error: not touched: %s\n' "${refused[@]}" >&2
   exit 1

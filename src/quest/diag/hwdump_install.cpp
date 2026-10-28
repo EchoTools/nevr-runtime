@@ -7,6 +7,7 @@
 #include "quest/sentinel/got_hook.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/pinned_targets.h"
+#include "quest/sentinel/sysprop_int_share.h"
 
 #include <sys/utsname.h>
 
@@ -68,6 +69,10 @@ GotHook g_hooks[kHookCount];
 bool g_installed[kHookCount];
 GotStatus g_status[kHookCount];
 bool g_ran[kHookCount];
+// Index 7 (vrapi_GetSystemPropertyInt) is shared when the texture-quality hook owns the slot (#943): the dump then
+// observes through sentinel/sysprop_int_share.h instead of installing a second hook GotHook would refuse.
+constexpr std::size_t kSysPropIntIndex = 7;
+bool g_sysPropIntShared = false;
 
 // The JUMP_SLOTs in the pinned libr15 (`llvm-readelf -rW libr15.so`, build b243509c...).
 struct Slot {
@@ -107,6 +112,16 @@ void InstallOne(std::size_t i, const Record& record) noexcept {
   g_ran[i] = true;
 }
 
+// True when the slot's owner is another hook and this dump now observes through it.
+bool ShareSysPropInt() noexcept {
+  if (!sentinel::SysPropIntSlotOwned()) return false;
+  sentinel::SetSysPropIntObserver(&ObserveVrapiGetSystemPropertyInt);
+  g_sysPropIntShared = true;
+  g_installed[kSysPropIntIndex] = true;
+  g_ran[kSysPropIntIndex] = true;
+  return true;
+}
+
 }  // namespace
 
 std::size_t InstallHooks() noexcept {
@@ -117,7 +132,7 @@ std::size_t InstallHooks() noexcept {
   InstallOne<ConfigLanguageThunk>(4, kConfigLanguageHook);
   InstallOne<ConfigCountryThunk>(5, kConfigCountryHook);
   InstallOne<VrapiInitializeThunk>(6, kVrapiInitializeHook);
-  InstallOne<SysPropIntThunk>(7, kSysPropIntHook);
+  if (!ShareSysPropInt()) InstallOne<SysPropIntThunk>(kSysPropIntIndex, kSysPropIntHook);
   InstallOne<SysPropFloatThunk>(8, kSysPropFloatHook);
   InstallOne<SysPropFloatArrayThunk>(9, kSysPropFloatArrayHook);
   InstallOne<SysStatusIntThunk>(10, kSysStatusIntHook);
@@ -132,6 +147,8 @@ std::size_t InstallHooks() noexcept {
   for (bool ok : g_installed) n += ok ? 1U : 0U;
   return n;
 }
+
+bool SysPropIntShared() noexcept { return g_sysPropIntShared; }
 
 void HookStates(HookState (&out)[kHookCount]) noexcept {
   const std::uint64_t calls[kHookCount] = {
@@ -152,8 +169,9 @@ void HookStates(HookState (&out)[kHookCount]) noexcept {
     out[i].symbol = kSlots[i].symbol;
     out[i].slot = kSlots[i].vaddr;
     out[i].installed = g_installed[i];
-    out[i].status = g_ran[i] ? sentinel::GotStatusName(g_status[i]) : "not_run";
-    out[i].calls = calls[i];
+    const bool shared = g_sysPropIntShared && i == kSysPropIntIndex;
+    out[i].status = shared ? "shared" : (g_ran[i] ? sentinel::GotStatusName(g_status[i]) : "not_run");
+    out[i].calls = shared ? ObservedSysPropIntCalls() : calls[i];
     out[i].faults = faults[i];
   }
 }

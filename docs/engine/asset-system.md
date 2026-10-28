@@ -328,13 +328,20 @@ component (`CR15NetPackageDownloadCS`, ctor `0x140c95a70`, type `0x70e1ff2f17b22
 - **The document.** `NetGame+0x63260` is the lobby-settings document, constructed in `ConfigureEngine`
   (`0x1401467cf`) and destroyed in `LogOut` (`0x14014db80`). The only code that assigns it, `0x1401c2a20`,
   logs `"[NETGAME] Lobby settings received: %s"` and move-assigns the parsed JSON. It is fed by the handler
-  for `NSLobbySettingsResponse` (`0x14017de60`) or, on the other branch of `0x140157fb0`, the TCP
-  broadcaster handler for `SNSLobbySettingsResponse` (`0x5b71b22a4483bda5`, `0x14017dee0`, payload
-  zstd-compressed), which also re-broadcasts the document through `0x1401a93e0`. `0x1401a93e0` serialises
-  the document and sends it as `NSLobbySettingsResponse`; its other caller, `0x1401aa750`, handles
-  `NSLobbySendClientLobbySettings`. `src/abi/symbols.h` knows `0x5b71b22a4483bda5` as `Tcp::GameClientMsg1`
-  (#454). The game service's login settings (`SNSLoginSettings`) are a different document
-  (`*(NetGame+0x64770)+0x3a0`), which this lookup does not consult.
+  for `NSLobbySettingsResponse` (`0x14017de60`: parses and stores, nothing more) or, on the other branch of
+  `0x140157fb0`, the TCP broadcaster handler for `SNSLobbySettingsResponse` (`0x5b71b22a4483bda5`,
+  `0x14017dee0`). The TCP payload is a little-endian u64 decompressed length followed by a zlib stream
+  (`Decompress` `0x14152a910`, zlib 1.2.11); the handler stores the document and re-broadcasts it through
+  `0x1401a93e0`. `0x1401a93e0` serialises the document and sends it as `NSLobbySettingsResponse` (an 8-byte
+  zero item, then the JSON text) to the peer it is given (`0xFFFFFFFFFFFFFFFD`, all peers, in the TCP handler).
+  Its other caller, `0x1401aa750`, handles `NSLobbySendClientLobbySettings` and passes the requesting peer.
+  `CNSLobby::AcceptPlayersSuccessCBHost` (`0x140603e20`) raises that request for each peer it accepts, so a
+  client accepted after the document is stored receives it without anyone re-sending. `src/abi/symbols.h`
+  names `0x5b71b22a4483bda5` `Tcp::LobbySettingsResponse`. The nEVR dedicated server takes the local handler
+  set (`PatchEnableServer`), reads the game service's frames through its own ServerDB socket and relays this
+  one itself (`src/runtime/server/lobby_settings_relay.h`). The game service's login settings
+  (`SNSLoginSettings`) are a different document (`*(NetGame+0x64770)+0x3a0`), which this lookup does not
+  consult.
 - **Bit 2** of `*(pGame+0x8a70)`: no instruction in the shipped binary was found to set it. nEVR's
   `PatchEnableServer` (`src/runtime/patch/mode_patches.cpp`) writes `OR QWORD ptr [rax], 0x6` at
   `0x1401580c3`, inside `0x140157fb0`, so it sets the bit only when that function runs; whether it has run
@@ -402,7 +409,7 @@ deserializer running between 2 and 4 on a scheduler thread under a global lock.
 
 Engine lines go through `CLog::PrintfImpl` (`0x1400ebe70`; levels 1 debug, 2 info, 4 warning, 8 error;
 every asset call site uses category 0). nEVR hooks it (`src/runtime/log/builtin_filter.cpp`) and writes
-`%LOCALAPPDATA%\EchoVR\logs\nevr-<ts>.jsonl` with an `[EVR]` prefix and names resolved through the symcache;
+`%LOCALAPPDATA%\nevr\echovr\logs\nevr-<ts>.jsonl` with an `[EVR]` prefix and names resolved through the symcache;
 its default suppressions drop `"Loading global archives"`, `"Loading game archives"`, `"Loading archive 0x"`
 and `"[LEVELLOAD] Allocator used:"`, and it drops a `Loading archive 0x…` line even if the engine prints one,
 so its absence from the JSONL is not evidence. Whether the engine's `Assert` (`0x14151e280`) writes its text
@@ -413,12 +420,12 @@ to the log itself, or only through an `OutputError` further up, is not establish
 - The string behind key `0x80603893591c60ff`. About 10^6 candidates (every string in echovr.exe and the
   game service source, bare, as `a|b` pairs and with common suffixes) did not match.
 - Which of the two lobby-settings handlers a game client registers at run time (`0x140157fb0` chooses by
-  bits 1, 2 and 6 of the game flags), who sends that message to a game client, and when it arrives
-  relative to the lobby level's load.
+  bits 1, 2 and 6 of the game flags), and when the document arrives at a client relative to the lobby
+  level's load.
 - What `Assert` (`0x14151e280`) and `OutputError` (`0x14151ee70`) write to the log, and so the exact text
   of a missing-asset or refused-add failure.
-- Who sends `NSLobbySendClientLobbySettings` / `NSLobbySettingsResponse` to a game client (the host side of
-  `0x1401aa750` and `0x1401a93e0`; `CNSLobby::AcceptPlayersSuccessCBHost` `0x140603e20` references the first).
+- Whether the game service sends `SNSLobbySettingsResponse` to a dedicated server at all: the server-side
+  relay exists, and no sender is in this repository.
 - Whether `0x140157fb0` (and so `PatchEnableServer`'s bit 2) runs on an nEVR game server before a carrying
   level loads.
 - Whether keys of the form `name[i]` were among the brute-forced candidates for `0x80603893591c60ff`.

@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "product": "nevr-runtime",
+  "manifest_version": 1,
+  "generated": "2026-10-24T18:00:00Z",
+  "expires": "2026-11-07T18:00:00Z",
+  "channels": {
+    "beta": "5.5.1"
+  },
+  "releases": {
+    "5.5.1": {
+      "version": "5.5.1",
+      "tag": "v5.5.1",
+      "commit": "839f79c0fb5627121b664d0923677d1d1da9d547",
+      "build_id": "NEVR-BUILD 5.5.1 839f79c0fb5627121b664d0923677d1d1da9d547",
+      "published": "2026-10-24T13:55:15Z",
+      "github_release": "https://github.com/EchoTools/nevr-runtime/releases/tag/v5.5.1",
+      "artifacts": [
+        {
+          "name": "nevr-runtime-v5.5.1-windows.zip",
+          "kind": "windows-zip",
+          "platform": "windows-x86_64",
+          "path": "v5.5.1/nevr-runtime-v5.5.1-windows.zip",
+          "sha256": "cff4dae93855da2098d82027aa29b396d7cdaedc889aa09323b82b11a37bc8a2",
+          "size": 4914229,
+          "contents": [
+            { "path": "BugSplat64.dll", "sha256": "61df6ce92aa017f7f71a9fda3a88cee14798c51b0598dd2cd42bf5dfe2b475c2", "size": 11617584 },
+            { "path": "echovr_server.exe", "sha256": "cb1a6397fe3f86c6123087cc180540fc55357dd489426aa150d32dd17ccbdc3f", "size": 213296 },
+            { "path": "install.ps1", "sha256": "30f87ce3137b42ca69103d1cf4963f334411e69898a22e3cccd5cdd6b7972504", "size": 34727 },
+            { "path": "uninstall.ps1", "sha256": "fdbf139d66ca3f90daba53c19f0c567a106ceb29524e5a800cc6242cb8852c8b", "size": 28182 },
+            { "path": "quest-diagnose.ps1", "sha256": "76d6ef7df081e57db074954e69ce45b3274d792d0dc35065c0a36cc8ea4b4743", "size": 40239 },
+            { "path": "README.txt", "sha256": "dc14909a884569ca2790998ab8e4c927cc8cb8643c2694f299019de2e5f802be", "size": 5120 },
+            { "path": "SIGNING.txt", "sha256": "5a7a4c9f9a844f87ee52cc8c46e1c5e0245596498bf8021833883851e94081b1", "size": 949 },
+            { "path": "SHA256SUMS", "sha256": "1742246b9774434682ba5ee650b69da40c5e41e5f19b8628ce120ff1620ca252", "size": 563 }
+          ]
+        },
+        {
+          "name": "nevr-runtime-v5.5.1-quest-libovrplatformloader.so",
+          "kind": "quest-library",
+          "platform": "android-arm64",
+          "path": "v5.5.1/nevr-runtime-v5.5.1-quest-libovrplatformloader.so",
+          "sha256": "f91fa0e1467bd1f74b2612a34f960ead0ad06f44bae3929181976ea9d9b131a4",
+          "size": 66522401
+        },
+        {
+          "name": "nevr-runtime-v5.5.1-quest.apk",
+          "kind": "quest-apk",
+          "platform": "android-arm64",
+          "path": "v5.5.1/nevr-runtime-v5.5.1-quest.apk",
+          "sha256": "7266b1fbfc8e3c9efc465bba9bf01eeda7efe36751aa86e80a8e06e8447f71f2",
+          "size": 163417084,
+          "android": {
+            "package": "com.readyatdawn.r15",
+            "version_code": 4987566
+          }
+        }
+      ]
+    }
+  }
+}

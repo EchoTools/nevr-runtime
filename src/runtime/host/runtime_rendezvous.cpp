@@ -3,8 +3,11 @@
 #include <MinHook.h>
 
 #include "runtime/host/host_json.h"
+#include "runtime/host/loader_lock.h"
+#include "runtime/host/stop_notice.h"
 
 #include <cstring>
+#include <exception>
 
 namespace nevr_host {
 
@@ -16,6 +19,29 @@ RuntimeRendezvous::TestSeams& RuntimeRendezvous::Seams() {
 #endif
 
 namespace {
+
+// The player's notice. user32 is not an import of the host (tools/verify_pe_contract.py allows kernel32 and the
+// UCRT), so the box is reached by name, here, when it is needed. Nothing is shown if either step fails.
+void ShowStopNotice(const wchar_t* text) noexcept {
+#if defined(NEVR_HOST_TESTING)
+  // A test never opens a dialog: with no seam set, nothing is shown.
+  if (RuntimeRendezvous::Seams().show_stop_notice != nullptr) RuntimeRendezvous::Seams().show_stop_notice(text);
+#else
+  using MessageBoxWFn = int(WINAPI*)(HWND, LPCWSTR, LPCWSTR, UINT);
+  HMODULE user32 = LoadLibraryExW(L"user32.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+  if (user32 == nullptr) return;
+  const auto box = reinterpret_cast<MessageBoxWFn>(GetProcAddress(user32, "MessageBoxW"));
+  if (box == nullptr) return;
+  box(nullptr, text, kStopNoticeTitle, MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+#endif
+}
+
+const char* StopCommandLine() {
+#if defined(NEVR_HOST_TESTING)
+  if (RuntimeRendezvous::Seams().command_line != nullptr) return RuntimeRendezvous::Seams().command_line();
+#endif
+  return GetCommandLineA();
+}
 
 // Production behaviour is the constants; the test targets can change them through the seams.
 bool FailEventCreate() {
@@ -89,16 +115,11 @@ void RuntimeRendezvous::SetInstallEventForTest(HANDLE event) {
 #endif
 
 void RuntimeRendezvous::Prepare(HMODULE host_module, HMODULE game_module,
-                                BootstrapDiagnostics& diagnostics,
-                                NevrGetRuntimeApiFn in_process_runtime) {
+                                BootstrapDiagnostics& diagnostics) {
   host_module_ = host_module;
   game_module_ = game_module;
   diagnostics_ = &diagnostics;
-  if (in_process_runtime != nullptr) {
-    loader_.PrepareInProcess(host_module, in_process_runtime);
-  } else {
-    loader_.Prepare(host_module);
-  }
+  loader_.Prepare(host_module);
   g_active_rendezvous = this;
 }
 
@@ -214,13 +235,46 @@ BOOL CALLBACK RuntimeRendezvous::LoadRuntimeOnce(PINIT_ONCE, PVOID parameter, PV
   return TRUE;
 }
 
+std::int64_t RuntimeRendezvous::StopGame(std::int64_t command_line) {
+  // One thread at a time (the others wait here, and the process ends under the first): every thread that was
+  // waiting on the load arrives here when it fails, one record says why, and a player at the screen is told once.
+  AcquireSRWLockExclusive(&stop_lock_);
+  if (!stop_recorded_.exchange(true, std::memory_order_acq_rel)) {
+    // Quiet when the command line cannot be read: a dialog that might hold a server is worse than none.
+    StopNotice decision = StopNotice::kSuppressedServerOrHeadless;
+    try {
+      decision = DecideStopNotice(StopCommandLine(), LoaderLockHeldByThisThread());
+    } catch (const std::exception&) {
+      // decision stays suppressed
+    }
+    EmitStopDiagnostic(*diagnostics_, loader_.Result(), StopNoticeName(decision));
+    if (decision == StopNotice::kShow) {
+      const RuntimeLoadResult& result = loader_.Result();
+      ShowStopNotice(StopNoticeTextFor(result.outcome, result.verify_reason_code));
+    }
+  }
+#if defined(NEVR_HOST_TESTING)
+  if (Seams().stop_game != nullptr) {
+    Seams().stop_game(kRuntimeStopExitCode);
+    ReleaseSRWLockExclusive(&stop_lock_);  // production never gets here: the process ends holding the lock
+    return original_(command_line);
+  }
+#else
+  static_cast<void>(command_line);
+#endif
+  TerminateProcess(GetCurrentProcess(), kRuntimeStopExitCode);
+  // TerminateProcess on the current process does not return; if it ever did, nothing may run the game.
+  RaiseFailFastException(nullptr, nullptr, 0);
+  __builtin_unreachable();
+}
+
 std::int64_t RuntimeRendezvous::GameMainWrapperDetour(std::int64_t command_line) {
   RuntimeRendezvous* self = g_active_rendezvous;
   // Defensive, unreachable in practice: Install publishes the trampoline before
   // MH_EnableHook, so the detour is never live with a null original_. If a defect
   // ever trips these guards there is no original to fall back to, so returning 0
-  // is the only non-dereferencing option. This is NOT the degrade-to-original
-  // path — that is the api == nullptr branch below, which still calls original_.
+  // is the only non-dereferencing option. This is NOT the stop path — that is the
+  // api == nullptr branch below.
   if (self == nullptr) {
     // No rendezvous, so no journal: a fixed-buffer line on stderr (no allocation, no lock).
     HANDLE err = GetStdHandle(STD_ERROR_HANDLE);
@@ -251,7 +305,7 @@ std::int64_t RuntimeRendezvous::GameMainWrapperDetour(std::int64_t command_line)
   InitOnceExecuteOnce(&self->load_once_, &LoadRuntimeOnce, self, nullptr);
   const NevrRuntimeApi* api = self->api_.load(std::memory_order_acquire);
   if (api != nullptr) return api->game_main(command_line);
-  return self->original_(command_line);
+  return self->StopGame(command_line);
 }
 
 }  // namespace nevr_host

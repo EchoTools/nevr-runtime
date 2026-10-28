@@ -48,6 +48,11 @@
 // so pch.h includes become no-ops via include guards.
 #include "abi/echovr.h"
 #include "abi/echovr_functions.h"
+#include "abi/game_level.h"
+#include "abi/symbol_hash.h"
+#include "runtime/log/symcache.h"
+#include "runtime/patch/ui_texture_mips_rules.h"
+#include "runtime/hook/symbol_corpus.h"
 #include "core/logging.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/compat/login_profile.h"
@@ -115,7 +120,6 @@ BOOL   g_exitOnError        = TRUE;
 BOOL   g_noOvr              = FALSE;
 BOOL   g_telemetryEnabled   = FALSE;
 BOOL   g_timestampLogs      = FALSE;
-BOOL   g_allowDbgCore       = FALSE;
 BOOL   g_upnpEnabled        = FALSE;
 UINT32 g_headlessTickRateHz = 60;
 UINT32 g_telemetryRateHz    = 10;
@@ -233,8 +237,13 @@ void* g_earlyConfigPtr = nullptr;
 // would. The N61 tests drive the Close handler, not login injection.
 // #708: nevr_session_router answers from g_testRouterMode, so a test picks the bridge's routing mode.
 const char* g_testRouterMode = nullptr;
+// #1082: nevr_discord_id answers from g_testDiscordId (the config fallback of the login identity), so a login test
+// has an account that is not 0 (the local user's UUID is the zero UUID for account 0).
+const char* g_testDiscordId = nullptr;
 const char* NevrCfgGetFlat(const char* flatKey) {
-  return std::strcmp(flatKey, "nevr_session_router") == 0 ? g_testRouterMode : nullptr;
+  if (std::strcmp(flatKey, "nevr_session_router") == 0) return g_testRouterMode;
+  if (std::strcmp(flatKey, "nevr_discord_id") == 0) return g_testDiscordId;
+  return nullptr;
 }
 
 // --- plugin_load_plan.h (N134 S6, referenced by plugin_loader.cpp LoadPlugins) ---
@@ -811,6 +820,81 @@ TEST_F(PluginDependencyGateTest, LateLoadOfANameRepointedBetweenResolveAndOpenIs
   TestHook_SetBetweenResolveAndOpen(nullptr);
   EXPECT_TRUE(blocked);
   EXPECT_TRUE(TestLogContains("the file changed between resolving its path and opening it"));
+}
+
+// #767: the staged plugin's path is opened to check it and named again to load it. The held handle stops a write to
+// the file; it does not stop the name, when it goes through a link, from leading somewhere else by the time of the
+// load. The load has to be of the file that was checked. The entry names a link to the signed plugin; between the
+// check and the load the link is pointed at an unsigned file that is no plugin at all.
+std::wstring g_stagedLink;
+std::wstring g_stagedLinkTarget;
+
+void PointTheStagedLinkAtTheUnsignedFile(const std::wstring&) {
+  DeleteFileW(g_stagedLink.c_str());
+  CreateSymbolicLinkW(g_stagedLink.c_str(), g_stagedLinkTarget.c_str(), 0);
+}
+
+TEST_F(PluginDependencyGateTest, ALinkRepointedBetweenTheCheckAndTheLoadDoesNotChangeTheFileThatLoads) {
+  Plan("staged_real.dll", "signed");
+  g_testPluginLoadPlan.clear();
+  const std::string evil = pluginsDir_ + "staged_evil.dll";
+  ASSERT_TRUE(CopyFileA((fixtures_ + "/" + manifest_["files"]["nevr-runtime.unsigned"].get<std::string>()).c_str(),
+                        evil.c_str(), FALSE))
+      << GetLastError();
+  copies_.push_back(evil);
+  const std::string link = pluginsDir_ + "staged_link.dll";
+  g_stagedLink.assign(link.begin(), link.end());
+  g_stagedLinkTarget.assign(pluginsDir_.begin(), pluginsDir_.end());
+  g_stagedLinkTarget += L"staged_real.dll";
+  ASSERT_TRUE(CreateSymbolicLinkW(g_stagedLink.c_str(), g_stagedLinkTarget.c_str(), 0)) << GetLastError();
+  copies_.push_back(link);
+  g_stagedLinkTarget.assign(evil.begin(), evil.end());  // where the hook points the link
+  g_testPluginLoadPlan.push_back({"staged_link.dll", "staged_link.dll", false, "", "{}"});
+
+  TestHook_SetBetweenCheckAndLoad(&PointTheStagedLinkAtTheUnsignedFile);
+  LoadPlugins();
+  TestHook_SetBetweenCheckAndLoad(nullptr);
+
+  EXPECT_EQ(GetModuleHandleA("staged_evil.dll"), nullptr) << "the unsigned file was mapped";
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 1u);
+  EXPECT_TRUE(manifest[0]["loaded"].get<bool>()) << "the plugin that was checked did not load: " << manifest.dump();
+  EXPECT_EQ(GetLoadedPluginCount(), 1) << "the file behind the link at the load was not the file that was checked";
+  EXPECT_TRUE(TestLogContains("plugin=staged_link.dll file=staged_link.dll is loaded from "))
+      << "a path that leads somewhere else than its name is not said";
+}
+
+TEST_F(PluginDependencyGateTest, APluginReachedByItsOwnNameIsNotSaidToBeLoadedFromElsewhere) {
+  Plan("staged_plain.dll", "signed");
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_FALSE(TestLogContains("is loaded from "));
+}
+
+// The OS can fail to name the file behind a handle. A signed-only run then has no path it can tie to the check.
+TEST_F(PluginDependencyGateTest, AHeldFileThatCannotBeNamedIsRefusedInASignedOnlyRun) {
+  Plan("unnamed.dll", "signed");
+  TestHook_FailNamingTheHeldFile(true);
+  LoadPlugins();
+  TestHook_FailNamingTheHeldFile(false);
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(GetModuleHandleA("unnamed.dll"), nullptr) << "a plugin whose checked file has no name was mapped";
+  EXPECT_TRUE(TestLogContains("plugin=unnamed.dll file=unnamed.dll refused: cannot name the file it checked: error 5"));
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 1u);
+  EXPECT_EQ(manifest[0]["error"].get<std::string>(), "refused: cannot name the file it checked: error 5");
+}
+
+TEST_F(PluginDependencyGateTest, AHeldFileThatCannotBeNamedLoadsByItsConfiguredPathWhenSignaturesAreNotRequired) {
+  nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
+  Plan("unnamed_dev.dll", "unsigned");
+  TestHook_FailNamingTheHeldFile(true);
+  LoadPlugins();
+  TestHook_FailNamingTheHeldFile(false);
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "cannot name the file it checked: error 5; loading the configured path, which is "
+                                     "not tied to the file checked (plugin trust mode unsigned-allowed)"));
 }
 
 TEST_F(PluginDependencyGateTest, LateLoadOfASignedFileIsLeftAlone) {
@@ -1922,7 +2006,7 @@ static uint32_t LoggingFixtureBoundAtInit(const char* dll) {
 }
 
 TEST(PluginLogApi, ContextCarriesALogFunctionAndTheVersionSaysSo) {
-  EXPECT_EQ(static_cast<uint32_t>(NEVR_PLUGIN_API_VERSION), 7u);
+  EXPECT_EQ(static_cast<uint32_t>(NEVR_PLUGIN_API_VERSION), 8u);
   NvrGameContext ctx = {};
   ctx.ctx_size = sizeof(NvrGameContext);
   EXPECT_GE(ctx.ctx_size, offsetof(NvrGameContext, log) + sizeof(NevrLogFn));
@@ -1983,6 +2067,219 @@ TEST(PluginLogHost, HostLogFunctionTagsLevelsAndKeepsAPercentSignOutOfTheFormat)
   EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
                                      "[NEVR.PLUGIN] plugin=direct bad level level_invalid=99"));
   ClearTestLogs();
+}
+
+// ----------------------------------------------------------------------------
+// #1094: a plugin sees the level the game holds as its main level, in every context it is handed.
+// The fixture (plugin_level_test_dll.cpp) keeps the last level each kind of context carried. The game object
+// is a zeroed buffer with the level written at the PC offset, so a level change is a store the test makes.
+// ----------------------------------------------------------------------------
+
+namespace evr {
+extern const SymCacheEntry kSymCacheData[];  // the generated symbol cache (symcache_data.cpp)
+extern const int kSymCacheCount;
+}  // namespace evr
+
+namespace {
+
+constexpr uint64_t kArenaA = 0x576ed3f8428ebc4bULL;           // CSymbol64("mpl_arena_a"), in the symbol cache
+constexpr uint64_t kCombatCombustion = 0x42670f2bed45703cULL;  // CSymbol64("mpl_combat_combustion"), in the cache
+
+constexpr uint64_t kLobbyB2 = 0xd09afd15b1c75c04ULL;  // CSymbol64("mpl_lobby_b2"), in the symbol cache
+
+std::vector<unsigned char> g_fakeGame;
+
+void SetFakeGameLevel(uint64_t symbol) {
+  std::memcpy(g_fakeGame.data() + EchoVR::kPcMainLevelSymbolOffset, &symbol, sizeof(symbol));
+}
+
+uint64_t LevelFixtureU64(const char* name, uint32_t which) {
+  const HMODULE plugin = GetModuleHandleA("test_plugin_level.dll");
+  if (plugin == nullptr) return 0xDEADDEADDEADDEADull;
+  const auto fn = reinterpret_cast<uint64_t (*)(uint32_t)>(GetProcAddress(plugin, name));
+  return fn != nullptr ? fn(which) : 0xDEADDEADDEADDEADull;
+}
+
+const char* LevelFixtureName(uint32_t which) {
+  const HMODULE plugin = GetModuleHandleA("test_plugin_level.dll");
+  if (plugin == nullptr) return "<fixture not loaded>";
+  const auto fn = reinterpret_cast<const char* (*)(uint32_t)>(GetProcAddress(plugin, "NevrTestPluginLevelName"));
+  return fn != nullptr ? fn(which) : "<export missing>";
+}
+
+constexpr uint32_t kInitCtx = 0;
+constexpr uint32_t kFrameCtx = 1;
+constexpr uint32_t kStateCtx = 2;
+
+class PluginLevelTest : public PluginLoaderDiagnosticTest {
+ protected:
+  void SetUp() override {
+    PluginLoaderDiagnosticTest::SetUp();
+    g_fakeGame.assign(0x10000, 0);
+    SetFakeGameLevel(EchoVR::kNoLevelInGame);
+    g_pGame = g_fakeGame.data();
+    g_testPluginLoadPlan.push_back({"lvl", "test_plugin_level.dll", false, "", "{}"});
+  }
+  void TearDown() override {
+    g_pGame = nullptr;
+    PluginLoaderDiagnosticTest::TearDown();
+  }
+  static void StateChange(uint32_t from, uint32_t to) {
+    NvrGameContext ctx = {};
+    ctx.ctx_size = sizeof(NvrGameContext);
+    NotifyPluginsStateChange(&ctx, from, to);
+  }
+};
+
+}  // namespace
+
+TEST(GameLevel, TheOffsetsAreTheOnesMeasuredInTheGame) {
+  EXPECT_EQ(EchoVR::kPcMainLevelSymbolOffset, 0x8a48u) << "echovr.exe: CR15Game +0x8a48, accessor 0x140100d90";
+  EXPECT_EQ(EchoVR::kQuestMainLevelSymbolOffset, 0x8a40u) << "libr15.so: CurrentSpawnGameSpace 0x130065c";
+}
+
+TEST(GameLevel, ReadsTheSymbolAtThePcAndTheQuestOffsetAndMapsNoLevelToZero) {
+  std::vector<unsigned char> game(0x10000, 0);
+  EXPECT_EQ(EchoVR::ReadMainLevelSymbol(nullptr, EchoVR::kPcMainLevelSymbolOffset), 0u);
+  const uint64_t none = EchoVR::kNoLevelInGame;
+  std::memcpy(game.data() + EchoVR::kPcMainLevelSymbolOffset, &none, sizeof(none));
+  EXPECT_EQ(EchoVR::ReadMainLevelSymbol(game.data(), EchoVR::kPcMainLevelSymbolOffset), 0u);
+  const uint64_t pc = kArenaA;
+  std::memcpy(game.data() + EchoVR::kPcMainLevelSymbolOffset, &pc, sizeof(pc));
+  EXPECT_EQ(EchoVR::ReadMainLevelSymbol(game.data(), EchoVR::kPcMainLevelSymbolOffset), kArenaA);
+  const uint64_t quest = kCombatCombustion;
+  std::memcpy(game.data() + EchoVR::kQuestMainLevelSymbolOffset, &quest, sizeof(quest));
+  EXPECT_EQ(EchoVR::ReadMainLevelSymbol(game.data(), EchoVR::kQuestMainLevelSymbolOffset), kCombatCombustion);
+}
+
+TEST(GameLevel, TheHashesAreTheGamesAndTheCacheNamesTheLevelsTheFixturesUseAndNotACustomOne) {
+  EXPECT_EQ(EchoVR::CSymbol64Hash("mpl_arena_a"), kArenaA);
+  EXPECT_EQ(EchoVR::CSymbol64Hash("mpl_combat_combustion"), kCombatCombustion);
+  EXPECT_EQ(EchoVR::CSymbol64Hash("mpl_lobby_b2"), kLobbyB2);
+  const auto nameOf = [](uint64_t hash) {
+    return nevr_ui_texture_mips::NameForHash(evr::kSymCacheData, static_cast<size_t>(evr::kSymCacheCount), hash);
+  };
+  ASSERT_NE(nameOf(kArenaA), nullptr);
+  EXPECT_STREQ(nameOf(kArenaA), "mpl_arena_a");
+  ASSERT_NE(nameOf(kLobbyB2), nullptr);
+  EXPECT_STREQ(nameOf(kLobbyB2), "mpl_lobby_b2");
+  EXPECT_EQ(nameOf(EchoVR::CSymbol64Hash("mpl_arena_dodgeball")), nullptr);
+}
+
+TEST_F(PluginLevelTest, InitContextCarriesTheLevelTheGameAlreadyHolds) {
+  SetFakeGameLevel(kArenaA);
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelCovered", kInitCtx), 1u) << "ctx_size does not reach level_name";
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kInitCtx), kArenaA);
+  ASSERT_NE(LevelFixtureName(kInitCtx), nullptr);
+  EXPECT_STREQ(LevelFixtureName(kInitCtx), "mpl_arena_a");
+}
+
+TEST_F(PluginLevelTest, NoLevelAndNoGameObjectBothReadAsNoLevel) {
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kInitCtx), 0u) << "the game holds -1";
+  EXPECT_EQ(LevelFixtureName(kInitCtx), nullptr);
+
+  g_pGame = nullptr;
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelCalls", kFrameCtx), 1u);
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kFrameCtx), 0u);
+  EXPECT_EQ(LevelFixtureName(kFrameCtx), nullptr);
+}
+
+TEST_F(PluginLevelTest, FrameContextSeesALevelChangeWithNoStateTransition) {
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kFrameCtx), 0u);
+
+  SetFakeGameLevel(kArenaA);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kFrameCtx), kArenaA);
+  EXPECT_STREQ(LevelFixtureName(kFrameCtx), "mpl_arena_a");
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelCalls", kStateCtx), 0u) << "no state change was announced";
+
+  SetFakeGameLevel(kCombatCombustion);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kFrameCtx), kCombatCombustion);
+  EXPECT_STREQ(LevelFixtureName(kFrameCtx), "mpl_combat_combustion");
+}
+
+TEST_F(PluginLevelTest, StateChangeContextFollowsTheLevelAcrossLevelChangesAndIsLogged) {
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+
+  SetFakeGameLevel(kArenaA);
+  StateChange(6, 7);
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kStateCtx), kArenaA);
+  EXPECT_STREQ(LevelFixtureName(kStateCtx), "mpl_arena_a");
+
+  ClearTestLogs();
+  SetFakeGameLevel(kCombatCombustion);
+  StateChange(7, 8);
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kStateCtx), kCombatCombustion);
+  EXPECT_STREQ(LevelFixtureName(kStateCtx), "mpl_combat_combustion");
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "[NEVR.PLUGIN] plugin=lvl state change level from=7 to=8 level_symbol=0x42670f2bed45703c "
+      "level=mpl_combat_combustion"));
+}
+
+TEST_F(PluginLevelTest, TheLobbyLevelGetsItsNameInTheContextAndTheLog) {
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+
+  SetFakeGameLevel(kLobbyB2);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kFrameCtx), kLobbyB2);
+  ASSERT_NE(LevelFixtureName(kFrameCtx), nullptr);
+  EXPECT_STREQ(LevelFixtureName(kFrameCtx), "mpl_lobby_b2");
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "[NEVR.PLUGIN] main level changed: from=none to=mpl_lobby_b2 symbol=0xd09afd15b1c75c04"));
+}
+
+TEST_F(PluginLevelTest, ALevelTheSymbolTableDoesNotKnowHasASymbolAndNoName) {
+  const uint64_t custom = EchoVR::CSymbol64Hash("mpl_arena_dodgeball");
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+
+  ClearTestLogs();
+  SetFakeGameLevel(custom);
+  StateChange(6, 7);
+
+  EXPECT_EQ(LevelFixtureU64("NevrTestPluginLevelSymbol", kStateCtx), custom);
+  EXPECT_EQ(LevelFixtureName(kStateCtx), nullptr);
+  char hex[24];
+  snprintf(hex, sizeof(hex), "0x%016llx", static_cast<unsigned long long>(custom));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     std::string("[NEVR.PLUGIN] main level changed: from=none to=") + hex + " symbol=" + hex))
+      << "a level with no name is logged by its hex symbol";
+}
+
+TEST_F(PluginLevelTest, TheHostLogsEachLevelChangeOnceHoweverManyPluginsAndFramesSeeIt) {
+  g_testPluginLoadPlan.push_back({"lvl2", "test_plugin_onframe.dll", false, "", "{}"});
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 2);
+  TickLoadedPluginsOnce();  // settles the observer on "no level"
+
+  ClearTestLogs();
+  SetFakeGameLevel(kArenaA);
+  TickLoadedPluginsOnce();
+  TickLoadedPluginsOnce();
+  StateChange(6, 7);
+  EXPECT_EQ(TestLogCount("[NEVR.PLUGIN] main level changed:"), 1) << "one line per change, not one per read";
+  EXPECT_EQ(TestLogCount("[NEVR.PLUGIN] main level changed: from=none to=mpl_arena_a"), 1);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] main level changed: from=none to=mpl_arena_a"));
+
+  ClearTestLogs();
+  SetFakeGameLevel(EchoVR::kNoLevelInGame);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(TestLogCount("[NEVR.PLUGIN] main level changed:"), 1);
+  EXPECT_EQ(TestLogCount("[NEVR.PLUGIN] main level changed: from=mpl_arena_a to=none"), 1);
 }
 
 // #60: the login reports every configured plugin — the one that loaded, the one
@@ -2628,7 +2925,11 @@ class RemoteService {
               received_.push_back(symbol);
             }
             const bool isLogin = symbol == nevr_evr_codec::kSymLoginRequest;
-            if (isLogin) ++loginRequests_;
+            if (isLogin) {
+              std::lock_guard<std::mutex> lock(urisMutex_);
+              if (loginFrame_.empty()) loginFrame_ = message->str;
+              ++loginRequests_;
+            }
             uint64_t reply = nevr_evr_codec::kSymDocumentSuccess;
             if (isLogin) reply = loginReply_.load();
             if (symbol == nevr_evr_codec::kSymConfigRequest) {
@@ -2686,6 +2987,11 @@ class RemoteService {
   }
   std::string Uri() const { return "ws://127.0.0.1:" + std::to_string(port_) + "/"; }
   int LoginRequests() const { return loginRequests_.load(); }
+  // The first LoginRequest frame the service received, as the game's bridge sent it.
+  std::string LoginFrame() {
+    std::lock_guard<std::mutex> lock(urisMutex_);
+    return loginFrame_;
+  }
   // Connections the bridge has opened to the service.
   int Opens() const { return opens_.load(); }
   // The request target (path and query) of each connection the bridge opened, in order.
@@ -2721,6 +3027,7 @@ class RemoteService {
   std::unique_ptr<ix::WebSocketServer> server_;
   int port_ = 0;
   std::atomic<int> loginRequests_{0};
+  std::string loginFrame_;  // guarded by urisMutex_
   std::atomic<int> opens_{0};
   std::atomic<bool> holdLobbyReplies_{false};
   std::atomic<int> heldLobbyReplies_{0};
@@ -3330,6 +3637,109 @@ TEST_F(RouterAllTest, ANewMatchmakerDoesNotTakeTheAnswerAnotherIsWaitingFor) {
   remote_.ReleaseLobbyReplies();
   ASSERT_TRUE(first.WaitForSymbol(RemoteService::kLobbyReplySymbol)) << "the answer did not reach the asker";
   EXPECT_EQ(second.Count(RemoteService::kLobbyReplySymbol), 0);
+}
+
+// #1082, through the real router: the login the bridge injects follows the game's own No VR flag. The flag word
+// stands in for game+0x7ae0 (the hook is -1 outside these tests).
+// A little-endian u64 at `offset` of a frame (the platform at 40 and the account at 48 of a LoginRequest).
+static uint64_t FrameU64(const std::string& frame, size_t offset) {
+  uint64_t value = 0;
+  for (size_t i = 0; i < 8; ++i) value |= static_cast<uint64_t>(static_cast<unsigned char>(frame[offset + i])) << (8 * i);
+  return value;
+}
+
+// The local user's UUID in the party/friend requests the bridge now builds: V5(<prefix>-<account>) of the login.
+static bool SelfUuidIs(const std::string& xpid) {
+  const auto out = nevr_social_party::Global().RefreshFriends();
+  if (out.size() != 1U || out[0].payload.size() < 24U) return false;
+  const nevr_social_party::Uuid want = nevr_social_party::UuidV5Nil(xpid);
+  return std::memcmp(out[0].payload.data() + 8, want.data(), want.size()) == 0;
+}
+
+class GameFlagScope {
+ public:
+  GameFlagScope(int64_t flags, BOOL isServer) : wasServer_(g_isServer) {
+    g_isServer = isServer;
+    TestHook_SetGameFlagWord(flags);
+    g_testDiscordId = "123456789012345678";
+  }
+  ~GameFlagScope() {
+    g_testDiscordId = nullptr;
+    TestHook_SetGameFlagWord(-1);
+    g_isServer = wasServer_;
+  }
+
+ private:
+  BOOL wasServer_;
+};
+
+TEST_F(RouterAllTest, ANoVrClientsInjectedLoginIsDmoNotTheOvrOrgOfItsVrSelf) {
+  GameFlagScope flags(0x2100000, FALSE);  // -spectatorstream ORs 0x2100000
+  GameSocket login;
+  AdmitLogin(login);
+  const std::string frame = remote_.LoginFrame();
+  ASSERT_GE(frame.size(), 56U);
+  const uint64_t account = FrameU64(frame, 48);
+  EXPECT_EQ(account, 123456789012345678ULL);
+  EXPECT_EQ(FrameU64(frame, 40), 7ULL) << "a No VR client logs in as DMO";
+  EXPECT_FALSE(LogLinesContaining("login injected xpid=DMO-" + std::to_string(account) + " platform=7").empty());
+  EXPECT_TRUE(LogLinesContaining("login injected xpid=OVR-ORG-").empty());
+  EXPECT_FALSE(LogLinesContaining("login platform=7 (DMO) no_vr=1 game_flags=0x2100000 is_server=0").empty());
+  EXPECT_TRUE(SelfUuidIs("DMO-" + std::to_string(account))) << "the party/friend requests name the local user by its login";
+}
+
+TEST_F(RouterAllTest, AVrClientsInjectedLoginStaysOvrOrg) {
+  GameFlagScope flags(0x8000000, FALSE);  // -noovr alone sets bit 27, which is not the flag
+  GameSocket login;
+  AdmitLogin(login);
+  const std::string frame = remote_.LoginFrame();
+  ASSERT_GE(frame.size(), 56U);
+  const uint64_t account = FrameU64(frame, 48);
+  EXPECT_EQ(account, 123456789012345678ULL);
+  EXPECT_EQ(FrameU64(frame, 40), 4ULL);
+  EXPECT_FALSE(LogLinesContaining("login injected xpid=OVR-ORG-" + std::to_string(account) + " platform=4").empty());
+  EXPECT_TRUE(LogLinesContaining("login injected xpid=DMO-").empty());
+  EXPECT_TRUE(SelfUuidIs("OVR-ORG-" + std::to_string(FrameU64(frame, 48))));
+}
+
+TEST_F(RouterAllTest, AServerWithTheNoVrFlagStillLogsInAsOvrOrg) {
+  GameFlagScope flags(0x100000, TRUE);
+  GameSocket login;
+  AdmitLogin(login);
+  const std::string frame = remote_.LoginFrame();
+  ASSERT_GE(frame.size(), 56U);
+  EXPECT_EQ(FrameU64(frame, 40), 4ULL);
+}
+
+// The same decision through the bridge's own rules (network.session_router absent: the legacy Open handler, the
+// default), which inject the login by their own path.
+TEST_F(RolesByPathTest, LegacyNoVrClientsInjectedLoginIsDmoNotTheOvrOrgOfItsVrSelf) {
+  GameFlagScope flags(0x2100000, FALSE);
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings));
+  const std::string frame = remote_.LoginFrame();
+  ASSERT_GE(frame.size(), 56U);
+  const uint64_t account = FrameU64(frame, 48);
+  EXPECT_EQ(account, 123456789012345678ULL);
+  EXPECT_EQ(FrameU64(frame, 40), 7ULL);
+  EXPECT_FALSE(LogLinesContaining("login injected xpid=DMO-" + std::to_string(account) + " platform=7").empty());
+  EXPECT_TRUE(LogLinesContaining("login injected xpid=OVR-ORG-").empty());
+  EXPECT_FALSE(LogLinesContaining("login platform=7 (DMO) no_vr=1 game_flags=0x2100000 is_server=0").empty());
+  EXPECT_TRUE(SelfUuidIs("DMO-" + std::to_string(account))) << "the party/friend requests name the local user by its login";
+}
+
+TEST_F(RolesByPathTest, LegacyVrClientsInjectedLoginStaysOvrOrg) {
+  GameFlagScope flags(0x8000000, FALSE);
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings));
+  const std::string frame = remote_.LoginFrame();
+  ASSERT_GE(frame.size(), 56U);
+  EXPECT_EQ(FrameU64(frame, 40), 4ULL);
+  EXPECT_FALSE(LogLinesContaining("login injected xpid=OVR-ORG-" + std::to_string(FrameU64(frame, 48)) + " platform=4").empty());
+  EXPECT_TRUE(LogLinesContaining("login injected xpid=DMO-").empty());
+  EXPECT_TRUE(SelfUuidIs("OVR-ORG-" + std::to_string(FrameU64(frame, 48))));
 }
 
 // L5: a dedicated server has no login to complete; the service's LoginFailure reaches the game as a LoginSuccess.
@@ -4485,17 +4895,29 @@ TEST(WsBridgeRemoteBearer, OnlyTheWsPathReplacesTheBearer) {
   EXPECT_FALSE(TestHook_IsBearerReplacingPath("wss://g.echovrce.com"));
 }
 
-// SelectPlatformCode: the bridge always logs in as platform 4 (OVR_ORG), the provider it forces
-// into the game's own CNSUser. A login as platform 6 (-noovr) made Nakama answer the game's
-// later LobbyPlayerSessionsRequest (sent as OVR-ORG) with "requesting player not found in
-// match", so the game never reached a lobby host.
-TEST(WsBridgeSelectPlatform, AlwaysOvrOrgToMatchTheGamesOwnIdentity) {
-  EXPECT_EQ(TestHook_SelectPlatformCode(true, true), 4ULL);
+// SelectPlatformCode: the bridge logs in as platform 4 (OVR_ORG), the provider it forces into the game's own
+// CNSUser. A login as platform 6 (-noovr) made Nakama answer the game's later LobbyPlayerSessionsRequest (sent
+// as OVR-ORG) with "requesting player not found in match", so the game never reached a lobby host: the platform
+// the login carries and the CNSUser nibble must be one value. The one exception is a client the game marks No VR
+// (#1082): it logs in as 7 (DMO), and PatchCnsUserLoginState and the provider-prefix detour use the same 7.
+TEST(WsBridgeSelectPlatform, OvrOrgForAVrClientToMatchTheGamesOwnIdentity) {
   EXPECT_EQ(TestHook_SelectPlatformCode(true, false), 4ULL);
-  EXPECT_EQ(TestHook_SelectPlatformCode(false, true), 4ULL);
   EXPECT_EQ(TestHook_SelectPlatformCode(false, false), 4ULL);
   // The code the bridge logs in as is the one labelled OVR-ORG, the provider the game names itself with.
   EXPECT_STREQ(TestHook_PlatformPrefix(TestHook_SelectPlatformCode(false, false)), "OVR-ORG");
+}
+
+TEST(WsBridgeSelectPlatform, DmoForAClientTheGameMarksNoVr) {
+  EXPECT_EQ(TestHook_SelectPlatformCode(true, true), 7ULL);
+  EXPECT_EQ(TestHook_SelectPlatformCode(false, true), 7ULL);
+  EXPECT_STREQ(TestHook_PlatformPrefix(TestHook_SelectPlatformCode(false, true)), "DMO");
+  // Through the bridge's own login builder: the NoVR frame carries platform 7 and the same account as the VR one.
+  const std::string vrRequest = TestHook_BuildLoginRequest(999888777ULL, TestHook_SelectPlatformCode(false, false), "Test", "");
+  const std::string noVrRequest = TestHook_BuildLoginRequest(999888777ULL, TestHook_SelectPlatformCode(false, true), "Test", "");
+  ASSERT_GE(noVrRequest.size(), 56U);
+  EXPECT_EQ(ReadLe64(vrRequest, 40), 4ULL);
+  EXPECT_EQ(ReadLe64(noVrRequest, 40), 7ULL);
+  EXPECT_EQ(ReadLe64(noVrRequest, 48), ReadLe64(vrRequest, 48));
 }
 
 TEST(WsBridgeCallbackGuard, ContainsStdExceptionsAtTheCallbackBoundary) {
@@ -4799,11 +5221,11 @@ TEST(N84_HookGuard, UnreadableTarget_Ignored) {
     VirtualFree(reserved, 0, MEM_RELEASE);
 }
 
-// The table holds every install site the runtime has. 62 is the count of sites in src/ that reach
+// The table holds every install site the runtime has. 63 is the count of sites in src/ that reach
 // nevr_hook_guard::Record (counted in hook_guard.cpp, next to kMaxGuarded); a capacity below it drops
 // guards on a healthy boot. A new site raises that count and this number with it.
 TEST(N84_HookGuard, CapacityCoversEveryInstallSiteTheRuntimeHas) {
-    constexpr int kInstallSitesInSource = 62;
+    constexpr int kInstallSitesInSource = 65;
     EXPECT_GE(nevr_hook_guard::Capacity(), kInstallSitesInSource);
 }
 
@@ -4997,6 +5419,12 @@ TEST(BuildIdentity, IdentityLiteralBindsTheVersionAndTheFullCommit) {
 
 TEST(BuildIdentity, IsCachedNotRemeasured) {
     EXPECT_EQ(&nevr_build_identity::Get(), &nevr_build_identity::Get());
+}
+
+// The text the menu draws (#747): "nEVR " and the project version exactly as CMake set it, so a screenshot names the build.
+TEST(BuildIdentity, MenuVersionLabelIsNevrAndTheProjectVersion) {
+    const nevr_build_identity::Info& id = nevr_build_identity::Get();
+    EXPECT_EQ(nevr_build_identity::MenuVersionLabel(), "nEVR " + id.project_version);
 }
 
 // ============================================================================
@@ -5339,6 +5767,7 @@ TEST(XpidPrefixDetourBoot, AnInstalledDetourReturnsTheOvrOrgPrefixAndBootContinu
     ASSERT_NE(base, nullptr);
     memcpy(base + nevr_patch_addresses::GET_PROVIDER_PREFIX, kStandInPrefixFunction, sizeof(kStandInPrefixFunction));
     memcpy(base + nevr_patch_addresses::PROVIDER_STRING_OVR_ORG, "OVR-ORG", 8);
+    memcpy(base + nevr_patch_addresses::PROVIDER_STRING_DMO, "DMO", 4);
     {
         XpidBaseScope scope(base);
         PatchProviderPrefixOvrOrg();
@@ -5348,6 +5777,16 @@ TEST(XpidPrefixDetourBoot, AnInstalledDetourReturnsTheOvrOrgPrefixAndBootContinu
         uint32_t provider = 2;  // PSN: the detour answers OVR-ORG whatever the game asked for
         const char* prefix = reinterpret_cast<PrefixFn>(base + nevr_patch_addresses::GET_PROVIDER_PREFIX)(&provider);
         EXPECT_STREQ(prefix, "OVR-ORG");
+        // #1082: the nibble 7 a No VR login sets answers the game's own DMO entry; the other bits of the
+        // login-state word are not part of the provider.
+        provider = 7;
+        EXPECT_STREQ(reinterpret_cast<PrefixFn>(base + nevr_patch_addresses::GET_PROVIDER_PREFIX)(&provider), "DMO");
+        provider = 0x17;
+        EXPECT_STREQ(reinterpret_cast<PrefixFn>(base + nevr_patch_addresses::GET_PROVIDER_PREFIX)(&provider), "DMO");
+        provider = 4;
+        EXPECT_STREQ(reinterpret_cast<PrefixFn>(base + nevr_patch_addresses::GET_PROVIDER_PREFIX)(&provider), "OVR-ORG");
+        provider = 0x14;
+        EXPECT_STREQ(reinterpret_cast<PrefixFn>(base + nevr_patch_addresses::GET_PROVIDER_PREFIX)(&provider), "OVR-ORG");
     }
     MH_Uninitialize();
     VirtualFree(base, 0, MEM_RELEASE);

@@ -2,6 +2,7 @@
 #include "runtime/patch/evrp_package.h"
 #include "core/bounded_thread.h"
 #include "core/curl_global.h"
+#include "core/nevr_root.h"
 #include "core/reader_gate.h"
 #include "core/transfer_abort.h"
 
@@ -527,20 +528,12 @@ nevr_asset_cdn::FetchState nevr_asset_cdn::GetFetchState() {
 }
 
 std::string nevr_asset_cdn::GetCacheDir() {
-    wchar_t* localAppDataPath = nullptr;
-    HRESULT hr = SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &localAppDataPath);
-    if (hr != S_OK) {
-        Log(EchoVR::LogLevel::Error,
-            "[NEVR.CDN] SHGetKnownFolderPath failed for LOCALAPPDATA hr=0x%08lX", hr);
+    // %LOCALAPPDATA%\nevr\echovr\cosmetics\v1\packages (core/nevr_root.h, ADR 0012)
+    const std::string path = nevr_root::CosmeticsDir(nevr_root::RootA());
+    if (path.empty()) {
+        Log(EchoVR::LogLevel::Error, "[NEVR.CDN] no nevr root: LOCALAPPDATA is unset or too long; no cosmetic package is stored");
         return "";
     }
-
-    // Convert wchar_t* to std::string (ASCII path assumed)
-    std::wstring widePath(localAppDataPath);
-    CoTaskMemFree(localAppDataPath);
-
-    std::string path(widePath.begin(), widePath.end());
-    path += "\\EchoVR\\cosmetics\\v1\\packages";
 
     // Create directory tree if it doesn't exist
     std::error_code ec;

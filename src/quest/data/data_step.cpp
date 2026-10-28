@@ -1,5 +1,11 @@
 #include "quest/data/data_step.h"
 
+#include <dirent.h>
+
+#include <algorithm>
+#include <cstdio>
+
+#include "quest/data/sha256.h"
 #include "quest/data/staging.h"
 
 namespace nevr_quest::data {
@@ -15,6 +21,78 @@ const char* ActionName(DataAction action) noexcept {
     case DataAction::kReplace: return "replace";
   }
   return "unknown";
+}
+
+// The names in `dir`, or none when it cannot be opened.
+std::vector<std::string> ListDirReal(const std::string& dir) {
+  std::vector<std::string> names;
+  DIR* d = opendir(dir.c_str());
+  if (d == nullptr) return names;
+  while (const dirent* e = readdir(d)) {
+    const std::string name = e->d_name;
+    if (name != "." && name != "..") names.push_back(name);
+  }
+  closedir(d);
+  return names;
+}
+
+constexpr std::size_t kMaxManifestBytes = 16u * 1024u * 1024u;
+
+bool ReadFileReal(const std::string& path, std::string& bytes) {
+  std::FILE* f = std::fopen(path.c_str(), "rb");
+  if (f == nullptr) return false;
+  bytes.clear();
+  char buffer[8192];
+  bool ok = true;
+  for (;;) {
+    const std::size_t n = std::fread(buffer, 1, sizeof(buffer), f);
+    if (n == 0) {
+      ok = std::feof(f) != 0;
+      break;
+    }
+    bytes.append(buffer, n);
+    if (bytes.size() > kMaxManifestBytes) {
+      ok = false;
+      break;
+    }
+  }
+  std::fclose(f);
+  return ok;
+}
+
+// A folder name goes into the log only when it is plain: the data under a root is not ours.
+bool IsPlainName(const std::string& name) noexcept {
+  if (name.empty() || name.size() > 32) return false;
+  return std::all_of(name.begin(), name.end(), [](char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '.' || c == '_' || c == '-';
+  });
+}
+
+struct DataVersion {
+  std::string folder;           // the folder under `_data`; with no match, the folders that are there; "none" for none
+  std::string manifest_sha256;  // the sha256 of the manifest file the game reads; "none" when no folder holds it
+};
+
+// Which data a root holds: the folder under `<root>/_data` that holds the manifest the game reads (the last segment of
+// kManifestPath) and the sha256 of that file. The folder is read from the directory, never taken from the pin, so a
+// root holding another build's data names that build's folder.
+DataVersion FindDataVersion(const StepConfig& config, const std::string& root) {
+  const std::string manifest_id = std::string(kManifestPath).substr(std::string(kManifestPath).rfind('/') + 1);
+  std::vector<std::string> names = config.list_dir ? config.list_dir(root + "/_data") : ListDirReal(root + "/_data");
+  std::sort(names.begin(), names.end());
+  names.erase(std::remove_if(names.begin(), names.end(), [](const std::string& n) { return !IsPlainName(n); }),
+              names.end());
+  for (const std::string& name : names) {
+    const std::string path = root + "/_data/" + name + "/rad15/android/manifests/" + manifest_id;
+    if (!config.exists(path.c_str())) continue;
+    std::string bytes;
+    const bool read = config.read_file ? config.read_file(path, bytes) : ReadFileReal(path, bytes);
+    return {name, read ? Sha256Hex(bytes.data(), bytes.size()) : std::string("unreadable")};
+  }
+  if (names.empty()) return {"none", "none"};
+  std::string folders;
+  for (std::size_t i = 0; i < names.size() && i < 4; ++i) folders += (i == 0 ? "" : ",") + names[i];
+  return {folders, "none"};
 }
 
 }  // namespace
@@ -136,8 +214,13 @@ StepResult RunDataStep(const StepConfig& config, Transport& transport) {
   result.action = decision.action;
   result.root = decision.root;
   if (config.on_step) {
+    const DataVersion held = FindDataVersion(config, decision.root);
     config.on_step({"data_check",
-                    {{"action", ActionName(decision.action)}, {"source", decision.source}, {"root", decision.root}}});
+                    {{"action", ActionName(decision.action)},
+                     {"source", decision.source},
+                     {"root", decision.root},
+                     {"data_version", held.folder},
+                     {"manifest_sha256", held.manifest_sha256}}});
   }
   if (decision.action == DataAction::kUse) {
     if (!config.allow_fetch) {
@@ -165,6 +248,13 @@ StepResult RunDataStep(const StepConfig& config, Transport& transport) {
   result.status = fr.status;
   if (fr.status == FetchStatus::kOk) {
     result.outcome = StepOutcome::kFetched;
+    if (config.on_step) {
+      const DataVersion fetched = FindDataVersion(config, fetch.root);
+      config.on_step({"data_version",
+                      {{"root", fetch.root},
+                       {"data_version", fetched.folder},
+                       {"manifest_sha256", fetched.manifest_sha256}}});
+    }
     return result;
   }
 

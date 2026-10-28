@@ -17,13 +17,25 @@
 // resolves, login when the bridge is on and `auth.server_key` resolves; the social facade is on unless
 // `social.facade` is false (PC's key and default) and still needs login here; its status names ride with it.
 // `social.send_presence_to_meta: false` answers the rich presence locally; `diagnostics.hardware_dump: true`
-// turns the hardware dump on, `diagnostics.ui_event_probe: true` the invite/party UI probe. A feature whose prerequisite is off or missing is forced off with a logged reason.
+// turns the hardware dump on, and `diagnostics.ui_event_probe` (on by default) sets the invite/party tab event (#318).
+// A feature whose prerequisite is off or missing is forced off with a logged reason.
+//
+// `graphics.texture_quality` (#943) is one of stock, very_low, low, medium, high, very_high, ultra (texture_quality.h); absent, it is
+// texture_quality::kDefaultLevel (`stock` for now). It is not a feature and has no prerequisite. Any mistake in it gives
+// `stock`, never the default: a word that is not a level (wrong case, a number, empty), a value that is not a word (a
+// mapping, a list, a key with no value), an unset ${VAR}, a `graphics` section that is not a mapping, or a file that is
+// rejected as a whole. Each is one Warning that names the key (and the word, when it is short printable ASCII). A key under
+// `graphics` other than `texture_quality` (a misspelling, another case) is one Warning that names it, and changes nothing else.
+// `stock` leaves the headset runtime's own eye-buffer size.
 #pragma once
 
 #include <cstddef>
 #include <optional>
 #include <string>
 #include <vector>
+
+#include "core/nevr_config.h"
+#include "quest/sentinel/texture_quality.h"
 
 namespace nevr_quest {
 
@@ -68,15 +80,22 @@ struct Features {
   // fail for this APK's identity anyway). Friends' status comes from the game service, which derives it from
   // the match. `social.send_presence_to_meta: false` turns it on; needs the social facade.
   bool presenceLocal = false;
-  // The invite/party UI probe (#391, #318): the Invite Members and own-id Party slots also post the friends script
-  // event, to see whether the tablet switches to its Friends list. `diagnostics.ui_event_probe: true` turns it on;
-  // never on unless the file asks, and it needs the social facade.
-  bool uiEventProbe = false;
+  // The invite/party tab event (#391, #318): the Invite Members and own-id Party slots also post the friends script
+  // event, which switches the tablet to its Friends list. On by default; `diagnostics.ui_event_probe: false` turns it
+  // off, and it needs the social facade.
+  bool uiEventProbe = true;
+};
+
+// The texture-quality setting (#943), after the file and the default have spoken.
+struct TextureChoice {
+  texture_quality::Level level = texture_quality::kDefaultLevel;
+  Source source = Source::kAbsent;  // kFile: the file gave the level; anything else: the default did, or a mistake fell back
 };
 
 struct LogEvent {
   LogLevel level;
-  std::string message;  // never contains a configured value, only key and feature names
+  std::string message;  // never contains a configured value, only key and feature names; the one exception is a rejected
+                        // graphics.texture_quality word, named when it is at most 32 printable ASCII characters
 };
 
 struct ResolvedConfig {
@@ -86,6 +105,10 @@ struct ResolvedConfig {
   Value serverKey;
   Features requested;  // what the file and the defaults ask for
   Features effective;  // requested, after prerequisite checks
+  TextureChoice textureQuality;
+  // The file's `plugins:` list as the PC parser read it (#438); empty when the file is absent or rejected. The plugin loader
+  // plans from it (quest/plugin/plugin_runtime.h).
+  std::vector<nevr::PluginSpec> plugins;
 };
 
 struct LoadResult {
@@ -106,6 +129,8 @@ std::string LegacyConfigFilePath(const std::string& filesDir);
 bool FeatureEnabled(const ResolvedConfig& config, Feature feature);
 const char* FeatureName(Feature feature);
 const char* SourceName(Source source);
+// "config" when the file gave the texture level, else "default": the words the install log line and the config report use.
+const char* TextureSourceName(const TextureChoice& choice);
 
 // The shared redirect policy (runtime/lifecycle/service_redirect) gated by the redirect and bridge
 // features. nullopt leaves the game's original value untouched.

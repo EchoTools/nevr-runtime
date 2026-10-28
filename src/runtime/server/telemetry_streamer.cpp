@@ -17,6 +17,7 @@
 #include "runtime/log/url_diagnostics.h"
 #include "runtime/log/security_diagnostics.h"
 #include "runtime/server/telemetry_game_status.h"
+#include "runtime/server/telemetry_game_type.h"
 
 extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 
@@ -100,7 +101,7 @@ bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token
   return true;
 }
 
-void TelemetryStreamer::Start(const std::string& sessionId, uint32_t rateHz, bool isPrivateMatch) {
+void TelemetryStreamer::Start(const std::string& sessionId, uint32_t rateHz, const std::string& gameType) {
   std::lock_guard<std::mutex> lifecycleLock(m_lifecycleMutex);
   if (m_active.load(std::memory_order_relaxed) || m_thread.joinable()) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.TELEMETRY] Already streaming, stopping previous session");
@@ -109,7 +110,7 @@ void TelemetryStreamer::Start(const std::string& sessionId, uint32_t rateHz, boo
 
   m_sessionId = sessionId;
   m_rateHz = rateHz > 0 ? rateHz : 30;
-  m_isPrivateMatch = isPrivateMatch;
+  m_gameType = gameType;
   m_frameIndex = 0;
   m_sessionStartTime = std::chrono::steady_clock::now();
   m_lastSnapshotTime = m_sessionStartTime;
@@ -1064,13 +1065,11 @@ bool TelemetryStreamer::SendHeaderWithSnapshot(const TelemetrySnapshot& snap) {
   ts->set_seconds(secs.count());
   ts->set_nanos(static_cast<int32_t>(nanos.count()));
 
+  // The engine's game-type symbol for the session, from the settings JSON (#996).
+  nevr_telemetry_header::SetCaptureGameType(header, m_gameType);
   auto* ah = header->mutable_echo_arena();
   ah->set_session_id(m_sessionId);
   ah->set_client_name("nevr-runtime");
-  ah->set_private_match(m_isPrivateMatch);
-  ah->set_match_type(m_isPrivateMatch
-      ? telemetry::v2::MATCH_TYPE_PRIVATE
-      : telemetry::v2::MATCH_TYPE_ARENA);
   ah->set_map_name("mpl_arena_a");
   ah->set_total_round_count(3);
 

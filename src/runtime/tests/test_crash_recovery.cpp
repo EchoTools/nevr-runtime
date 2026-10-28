@@ -87,6 +87,27 @@ TEST(CrashDumpFormat, ExternalAddressAndKnownExceptionNamesAreFormattedWithoutFl
   EXPECT_EQ(std::string(line).find("%f"), std::string::npos);
 }
 
+// #673: a Proton fault in dxgi.dll must be named from the module snapshot, not reported as an unknown external address.
+TEST(CrashModuleName, FaultAddressIsNamedFromTheSnapshotAndUnknownOutsideIt) {
+  struct Span {
+    uint64_t base;
+    uint64_t end;
+    const char* name;
+  };
+  const Span modules[] = {
+      {0x140000000ULL, 0x142000000ULL, "echovr.exe"},
+      {0x2EDF00000ULL, 0x2EDF40000ULL, "dxgi.dll"},
+  };
+  const int count = 2;
+
+  EXPECT_STREQ(nevr_crash_recovery::ModuleNameForAddress(modules, count, 0x2EDF25ED9ULL), "dxgi.dll");
+  EXPECT_STREQ(nevr_crash_recovery::ModuleNameForAddress(modules, count, 0x140123456ULL), "echovr.exe");
+  EXPECT_EQ(nevr_crash_recovery::ModuleNameForAddress(modules, count, 0x2EDF40000ULL), nullptr)
+      << "end is exclusive";
+  EXPECT_EQ(nevr_crash_recovery::ModuleNameForAddress(modules, count, 0x7fff1234ULL), nullptr);
+  EXPECT_EQ(nevr_crash_recovery::ModuleNameForAddress(modules, 0, 0x2EDF25ED9ULL), nullptr);
+}
+
 // The game's own capacity check in CStackAllocator::DirectAlloc (stack_alloc_check.h, #68): the probe must
 // agree with the game on exactly when it traps, and print the same number the game prints.
 TEST(StackAllocCheck, FitsExactlyAtCapacityAndFailsOneUnitPast) {
@@ -146,6 +167,22 @@ TEST(VehPolicy, BootLineSaysInstalledOnlyWhenInstalled) {
 TEST(VehPolicy, WineClientBootLineNeverClaimsInstalled) {
   EXPECT_EQ(std::string(nevr_veh_policy::BootLine(nevr_veh_policy::InstallResult::DeferredWine))
                 .find("veh installed"), std::string::npos);
+}
+
+// N70: the crash handler attributes a fault to NEVR by the name of the module the faulting address is in. The
+// runtime is two images since the host/runtime split, so both names count, whatever their case, and nothing else.
+TEST(VehPolicy, AttributesFaultsToTheHostAndToTheRuntimeImageAndToNothingElse) {
+  using nevr_veh_policy::IsNevrImageName;
+  EXPECT_TRUE(IsNevrImageName("BugSplat64.dll"));
+  EXPECT_TRUE(IsNevrImageName("nevr-runtime.dll"));
+  EXPECT_TRUE(IsNevrImageName("NEVR-RUNTIME.DLL"));
+  EXPECT_TRUE(IsNevrImageName("bugsplat64.dll"));
+  EXPECT_FALSE(IsNevrImageName(nullptr));
+  EXPECT_FALSE(IsNevrImageName(""));
+  EXPECT_FALSE(IsNevrImageName("echovr.exe"));
+  EXPECT_FALSE(IsNevrImageName("dxgi.dll"));          // Wine and DXVK are in the module cache
+  EXPECT_FALSE(IsNevrImageName("nevr-runtime.dll.bak"));
+  EXPECT_FALSE(IsNevrImageName("nevr_example.dll"));  // a plugin is not NEVR's own image
 }
 
 TEST(VehPolicy, RecoversLowAddressAvOnlyOnTheGameLoopThread) {

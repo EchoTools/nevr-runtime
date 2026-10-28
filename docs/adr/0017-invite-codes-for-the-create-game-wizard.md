@@ -121,7 +121,11 @@ the runtime (`src/runtime/patch/`), not a service configuration and not a plugin
   - the component-event send (`echovr.exe` `0x14050fb60`, `CncaGameSpace::SendComponentEvent`) for the wizard's card
     choices (experience, mode, map), which the metric does not carry reliably. It is called from many sites, so the
     hook rejects every event that is not a card or button event on one of the wizard's eight page owners before it
-    does anything else; its call rate under play is measured before the hook ships.
+    does anything else: it reads the event symbol (the first word the game itself reads) and goes on only for the
+    six wizard event symbols, then resolves the sender to an actor name through checked reads
+    (`patch/invite_choices.h`, `patch/invite_choice_hook.cpp`); its call rate under play is measured before the hook
+    ships. Every wizard event on a wizard page logs at Info with the page, the card and the choices so far, and a
+    running count of the hook's calls (`seen=`).
 - **Call the service.** The hook queues a request; a worker thread posts the RPC with the token the runtime already
   holds and libcurl; the answer is applied from the per-frame dispatcher (N86), so no game memory is touched from the
   worker.
@@ -155,7 +159,7 @@ is data, it can be turned off or changed once players have used it ("accommodati
 How echovr-modkit (MIT, by Dualgame) ships them, from its `mods/menu-cards/README.md` and `mods/menu-cards/menu_cards.py`
 (facts only; no code is copied here):
 
-- The cards are data, not code. The main-menu page resource (`CR15UIPage2CR`, `0x4a3fe67c1ff9ccc4`, name `mnu_master`,
+- The cards are data, not code. The main-menu page resource (`CR15UIPage2CR`, package manifest type id `0x4a3fe67c1ff9ccc4`, name `mnu_master`,
   `0xac360e41e4ede056`, PC; page 24 inside it) is read from the player's own install, two card elements are inserted
   (CREATE GAME, owner `0xff5375e5a4dee29d`; JOIN VIA CODE, owner `0x097b785350a61c5f`, each with a sprite of the stock card
   canvas), and the result is appended as one row to a copy of the language package (`2b47aab238f60515`) in
@@ -169,8 +173,8 @@ How echovr-modkit (MIT, by Dualgame) ships them, from its `mods/menu-cards/READM
 
 What in this tree carries the page: `RegisterResourceOverrideFromFile` and `RegisterResourceOverride` in
 `src/runtime/patch/resource_override.cpp` replace a resource by its type and name symbols in the game's resource-load
-callback, so a patched page can be served for (`0x4a3fe67c1ff9ccc4`, `0xac360e41e4ede056`) without writing into the
-install.
+callback, so a patched page can be served for (`0x75e5993f80940cd0`, the class symbol of `CR15UIPage2CR` that the callback reports,
+and `0xac360e41e4ede056`) without writing into the install.
 
 **The package never carries Ready At Dawn's data.** The package carries only our work; Ready At Dawn's data stays
 theirs. The main-menu page is therefore built on the player's machine from the player's own install:
@@ -249,6 +253,59 @@ this feature carries that requirement.
 - The argument layout of the submit function `0x140113960`. It is measured before the hook is written, and the hook
   validates the prologue bytes it records.
 - Anything on Quest beyond the static reading above.
+
+## Quest measurements and prediction (#966)
+
+Work step 1 of the Quest twin. Measured in ReVault over project `echovr` (1,041 binaries); each search line states its
+scope. Addresses are ReVault VAs. Pinned values are ReVault VA minus `0x100000` (the libr15 image-base offset);
+no pin is written here.
+
+Searches (whole project, `searched all 1,041 binaries in project echovr`):
+
+- `revault_search_strings` `deep_linking`: 3 hits: `echovr.exe` `0x141cbc19d`, `0x141cbc1b8`; `libr15.so` `0x32e157d`.
+- `revault_search_strings` `join_via_code`: 8 hits in the page scripts: `991bbec05cde117f.dll` `0x180011428`,
+  `beaac7bfb1ce12bd.dll` `0x180017550`, `c9cb2299a1b7abe7.dll` `0x180009478`, `0x1800094d0`, `0x180009528`; and the
+  Quest twins `lib991bbec05cde117f.so` `0x127f74`, `libbeaac7bfb1ce12bd.so` `0x134369`, `libc9cb2299a1b7abe7.so`
+  `0x113013`.
+- `revault_search_strings` `create_invite`: 2 hits: `7d6a4f136a16799d.dll` `0x18000e658`; the Quest twin
+  `lib7d6a4f136a16799d.so` `0x11dbc3`.
+- `revault_search_code` `SNSRemoteLogSetv3`: 6 hits, all in `libr15.so`; complete.
+- `revault_search_code` `JsonLog`: truncated at 20 hits (not complete); not used as evidence.
+
+The Quest submit, as ReVault reads it (`revault_function`, `libr15.so` `0x130bf00`, `Send`, 384 bytes, raw tier):
+
+- Signature (ReVault comment): `NRadEngine::SNSRemoteLogSetv3::Send(CTcpBroadcaster&, SNSUserID const&, SUuid const&,
+  char const*, ELogLevel, CStringTable const&, CSymbol64)`.
+- The `char const*` argument is copied into a 16-byte field of the object, its length capped at `0x10` (the decompile
+  sets `uVar7 = 0x10` when the length is 16 or more). STATIC.
+- The metric's key/value text is not a `char*` argument. The `CStringTable` (`param_7`) is written to a memblock by
+  `CStringTable::WriteToMemblock`, and the memblock's string and size go to `CTcpBroadcaster::Send` with the constant
+  `0x244b47685187eae1`. STATIC.
+- Callers in ReVault: `thunk_FUN_0130bf00` `0x1024290` (indirect) and `FUN_0120bfe0` `0x130bfe0` (direct, tail).
+  The ReVault decompilation of `ProcessRemoteLogs` (`0x130b8a4`) calls `SNSRemoteLogSetv3::Send` directly, but the
+  callers list does not show that edge. The call graph is incomplete here; the edge is not used as evidence.
+
+Prediction (written before any Quest run; a run can falsify it):
+
+- The 16-byte `char const*` argument carries the event name. `create_invite` and `join_via_code` are 13 characters
+  and fit the field with their terminator. A name of 16 characters or more (the create metric's
+  `create_game_review_settings`) is copied as 16 bytes with no terminator, per the decompile's `uVar7 = 0x10` branch.
+- Falsifier: a Quest run where the create or join click reaches `Send` and the `char const*` argument is not the
+  event name.
+- The create and join string pairs (`Server_region`, `Expires_after`, `join_code`) are in the `CStringTable`. Their
+  layout is not measured; the hook point for them is not chosen by this record.
+
+Not shown, Quest:
+
+- The argument values at a real click (no capture).
+- Whether `ProcessRemoteLogs` is the only caller of `Send` on the path the wizard uses.
+- The Quest page-building functions and the string-array setting type. The page scripts are the same in name; their
+  Quest functions are not measured here.
+- Whether the Quest `libr15.so` exports `SNSRemoteLogSetv3::Send` to a GOT slot. The PC hook uses a call-site detour;
+  no Quest form of it is chosen.
+
+Blocked, in order: the Quest page writes wait for #896's UI accessors; the Quest hook waits for a measured
+argument layout (above) and a headset run, not for code.
 
 ## Relation to other records
 

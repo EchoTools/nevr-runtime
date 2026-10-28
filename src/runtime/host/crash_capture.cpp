@@ -101,6 +101,20 @@ void CrashCapture::Record(const char* outcome, const char* destination, const ch
   if (length != 0) diagnostics_->AppendLine(buffer, length);
 }
 
+bool CrashCapture::PreloadDbgHelp() noexcept {
+  if (GetModuleHandleW(kDbgHelpModule) != nullptr) return true;
+  if (LoadLibraryExW(kDbgHelpModule, nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32) != nullptr) return true;
+  const DWORD error = GetLastError();
+  if (diagnostics_ != nullptr) {
+    char buffer[256];
+    JsonLine line(buffer, sizeof(buffer), "dbghelp_preload");
+    line.Str("outcome", "failed").UInt("win32_error", error);
+    const std::size_t length = line.Finish();
+    if (length != 0) diagnostics_->AppendLine(buffer, length);
+  }
+  return false;
+}
+
 bool CrashCapture::Capture(PEXCEPTION_POINTERS exception_pointers) noexcept {
   if (!TryEnter()) {
     // A fault while the first report is being written: not a second report.

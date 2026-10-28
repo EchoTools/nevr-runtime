@@ -1,6 +1,6 @@
 # Echo VR community beta: install, sign in, report bugs
 
-This beta replaces one file in your Echo VR install so the game connects to the community servers. It is
+This beta replaces one file in your Echo VR install and adds a second one beside it, so the game connects to the community servers. It is
 for **Echo VR on PC (PCVR) on Windows**. It has only been smoke tested: finding what breaks is why you
 have it, so please report anything odd (see "Report a bug").
 
@@ -8,7 +8,8 @@ have it, so please report anything odd (see "Report a bug").
 
 | File | What to do with it |
 |---|---|
-| `BugSplat64.dll` | The only file you install. |
+| `BugSplat64.dll` | Install it: it replaces the game's file of the same name. |
+| `nevr-runtime.dll` | Install it beside `BugSplat64.dll`: the runtime that `BugSplat64.dll` loads. Without it the game stops at start. |
 | `INSTALL.md` | This page. |
 | `echovr_server.exe`, `README.md` | Ignore them. They are for people running game servers or developing the runtime. |
 
@@ -18,7 +19,7 @@ have it, so please report anything odd (see "Report a bug").
 2. Find your Echo VR folder: the one that contains `bin\win10\echovr.exe`.
 3. In `bin\win10`, rename the existing `BugSplat64.dll` to `BugSplat64.dll.original`. Keep it: it is how
    you uninstall.
-4. Copy `BugSplat64.dll` from the zip into `bin\win10`.
+4. Copy `BugSplat64.dll` and `nevr-runtime.dll` from the zip into `bin\win10`.
 5. Start Echo VR the way you normally do.
 
 ## First start: sign in with Discord
@@ -34,12 +35,12 @@ The first time, the game needs you to sign in:
 - If the 5 minutes run out, close the game and start it again to get a new code.
 
 After that the game logs in by itself on every start. Your sign-in is saved in a file named
-`.credentials.json` in a `_local` folder of your Echo VR install. Do not share that file; delete it if you
+`.credentials.json` in `%LOCALAPPDATA%\nevr\echovr` (older releases kept it in a `_local` folder of your Echo VR install; the game moves it on the first start). Do not share that file; delete it if you
 want to sign in again (for example as a different Discord account).
 
 ## Uninstall
 
-Close Echo VR, delete `bin\win10\BugSplat64.dll`, and rename `BugSplat64.dll.original` back to
+Close Echo VR, delete `bin\win10\BugSplat64.dll` and `bin\win10\nevr-runtime.dll`, and rename `BugSplat64.dll.original` back to
 `BugSplat64.dll`.
 
 ## Known issues
@@ -63,9 +64,9 @@ files. Attach them by dragging them into the form:
 
 | File | Where it is |
 |---|---|
-| The game's log for that session | `%LOCALAPPDATA%\EchoVR\logs\`: the `nevr-<date>T<time>.jsonl` file from that session (newest first if it just happened). Paste `%LOCALAPPDATA%\EchoVR\logs` into the Explorer address bar to get there. |
+| The game's log for that session | `%LOCALAPPDATA%\nevr\echovr\logs\`: the `nevr-<date>T<time>.jsonl` file from that session (newest first if it just happened). Paste `%LOCALAPPDATA%\nevr\echovr\logs` into the Explorer address bar to get there. |
 | The start-up log | `bin\win10\logs\nevr-boot.jsonl` in your Echo VR folder. |
-| If the game crashed | **`nevr-crash-<id>.txt`** in the same `%LOCALAPPDATA%\EchoVR\logs\` folder: the crash record (what failed, where, and what called it). Also the newest files in `_temp\crashes\` and in `bin\win10\_temp\crashes\` in your Echo VR folder (names like `RAD_CRASHDUMP_<you>_echovr_<day>_<time>.log` and `.json`). |
+| If the game crashed | **`nevr-crash-<id>.txt`** in the same `%LOCALAPPDATA%\nevr\echovr\logs\` folder: the crash record (what failed, where, and what called it). Also the newest files in `_temp\crashes\` and in `bin\win10\_temp\crashes\` in your Echo VR folder (names like `RAD_CRASHDUMP_<you>_echovr_<day>_<time>.log` and `.json`). |
 
 **What these files contain:** your Discord account id; the crash files also contain your Windows user
 name and computer name. They do not contain your saved sign-in or its tokens. A

@@ -15,10 +15,18 @@
 #include "runtime/patch/xpid_patch.h"
 #include "runtime/patch/resource_override.h"
 #include "runtime/patch/asset_cdn.h"
+#include "runtime/patch/credits_block.h"
+#include "runtime/patch/credits_text_install.h"
+#include "runtime/patch/invite_choice_hook.h"
+#include "runtime/patch/menu_cards.h"
+#include "runtime/patch/ui_text_writer.h"
+#include "runtime/patch/invite_wizard_hook.h"
+#include "runtime/patch/arena_public_clock.h"
 #include "runtime/patch/coop_ai_trace.h"
 #include "runtime/frame/frame_stats.h"
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/ext/plugin_trust.h"
+#include "runtime/ext/self_provenance.h"
 #include "extension/module_interface.h"
 
 // Statically-linked module entry points (the modules are linked into
@@ -45,6 +53,7 @@ const char* TokenAuth_GetUsername(void);
 #include "runtime/lifecycle/server_timestep.h"
 #include "runtime/lifecycle/cmdline_strip.h"
 #include "runtime/lifecycle/timestep_log.h"
+#include "core/build_identity.h"
 #include "core/cli_flags.h"
 #include "core/cli_option_value.h"
 #include "core/globals.h"
@@ -56,6 +65,7 @@ const char* TokenAuth_GetUsername(void);
 #include <exception>
 #include <new>
 #include <atomic>
+#include <ctime>
 #include <shellapi.h>
 
 namespace {
@@ -93,6 +103,10 @@ void PreflightRuntimeBootstrap() {
       g_isServer = TRUE;
       g_isHeadless = TRUE;
       g_noOvr = TRUE;  // -server implies -noovr unconditionally
+    } else if (nevr_cli::IsFlag(arg, L"-headless")) {
+      // Read here with -server, so g_isHeadless is set before the deferred pass applies the headless gates.
+      // The deferred parse logs the token.
+      g_isHeadless = TRUE;
     } else if (nevr_cli::IsFlag(arg, L"-windowed")) {
       g_isWindowed = TRUE;
       g_noOvr = TRUE;  // -windowed implies -noovr (no VR headset)
@@ -271,6 +285,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // MessageBoxA. In client mode the handler is NOT installed — the user at the
   // screen should see the modal dialog so they know the game fatally failed.
   if (g_isServer) {
+    // #879: the mic provider answers "no device" on a server (mic_provider.cpp), so no capture device is opened.
+    Log(EchoVR::LogLevel::Info, "[NEVR.MIC] server: no capture device; Mic* calls answer no-device");
     InstallFatalErrorHandler();
 
     // Deferred fatal-condition checks — these conditions are detected in
@@ -405,8 +421,6 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       g_timestampLogs = TRUE;
     } else if (lstrcmpW(flag, L"-upnp") == 0) {
       g_upnpEnabled = TRUE;
-    } else if (lstrcmpW(flag, L"-skip-dbgcore-check") == 0) {
-      g_allowDbgCore = TRUE;
     } else if (lstrcmpW(flag, L"-config") == 0 || lstrcmpW(flag, L"-config-path") == 0) {
       if (const wchar_t* value = nevr_cli::OptionValue(argc, argv, i)) {
         WideCharToMultiByte(CP_UTF8, 0, value, -1, g_customConfigPath, MAX_PATH, NULL, NULL);
@@ -446,15 +460,13 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     } else if (lstrcmpW(flag, L"-headless") == 0) {
       // N99: -headless is never "redundant", and the log must not tell the
       // operator to remove it: removing the flag opens a window.
-      // -headless is a NATIVE echovr.exe token; the game's
-      // own arg handler applies pGame+0x1D4 &= 0xFFFEFEFE only when it is
-      // present. NEVR now applies that same mask for -server
-      // (PatchEnableHeadless), and AND-masking is idempotent, so the token is
-      // harmless either way. Say only what was measured, and instruct the
-      // operator to remove nothing.
+      // -headless is a NATIVE echovr.exe token; the game's own arg handler applies
+      // pGame+0x1D4 &= 0xFFFEFEFE when it is present. The preflight pass set
+      // g_isHeadless from it, so PatchEnableHeadless runs the same gate set as -server.
+      // Without those gates a client run reaches the game's D3D12 device init with no
+      // GPU path and aborts ("Unknown error while loading the game"; addresses.h).
       Log(EchoVR::LogLevel::Info,
-          "[NEVR.PATCH] -headless: native echovr.exe flag; -server applies the same "
-          "engine-flags mask, so this token is a harmless no-op here.");
+          "[NEVR.PATCH] -headless: native echovr.exe flag; headless gates applied, the same set -server runs.");
     } else if (lstrcmpW(flag, L"-noovr") == 0) {
       // Native token, and the game handles it itself: a single flag write,
       // orq $0x8000000, 0x7ae0(%rdi) at 0x1401168BA. NOT pGame+0x178 — that is
@@ -464,7 +476,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       // g_noOvr is not "only a global": it drives NEVR_MODULE_HOST_IS_NOOVR
       // (:75) the NEVR_MODULE_HOST_IS_NOOVR flag the modules read, which is the
       // behaviour -noovr exists to produce (the login platform code does not depend on it:
-      // SelectPlatformCode always returns OVR_ORG, 4). The game's own
+      // SelectPlatformCode follows the game's own No VR flag, bit 20, which -noovr does not set). The game's own
       // -noovr-requires--spectatorstream assert is bypassed by
       // PatchNoOvrRequiresSpectatorStream, inert unless the token is present.
       g_noOvr = TRUE;
@@ -475,9 +487,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
 
   LogTimestepArgs();
 
-  // -server forces -headless unconditionally (set in the -server branch above).
+  // -server forces -headless unconditionally (set in the preflight pass above, with -headless).
   // The OR here is a safety net: if g_isHeadless was set to TRUE for any other
-  // reason, -noovr is also applied. In practice, g_isHeadless is only set by -server.
+  // reason, -noovr is also applied. g_isHeadless is set by -server or -headless.
   g_isHeadless = g_isHeadless || g_isServer;
   // -server implies -noovr unconditionally.
   g_noOvr = g_noOvr || g_isServer;
@@ -503,8 +515,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // In the launcher path, BugSplat64.dll is loaded by echovr_game.dll. If a
   // leftover dbgcore.dll is also present in the game directory, the OS loader
   // resolves it during import resolution BEFORE the launcher can intervene,
-  // causing a double-load condition. The -skip-dbgcore-check flag permits this
-  // intentionally for the legacy injection path.
+  // causing a double-load condition. No command-line flag skips this check: a
+  // legacy dbgcore.dll is an older runtime, and the player is told to rename it.
   {
     char exePath[MAX_PATH];
     DWORD len = GetModuleFileNameA(NULL, exePath, MAX_PATH);
@@ -517,20 +529,23 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
         int written = snprintf(dbgcorePath, MAX_PATH, "%sdbgcore.dll", exePath);
         if (written > 0 && written < MAX_PATH) {
           if (GetFileAttributesA(dbgcorePath) != INVALID_FILE_ATTRIBUTES) {
-            if (g_allowDbgCore) {
-              Log(EchoVR::LogLevel::Info,
-                  "[NEVR.PATCH] dbgcore.dll present in game directory — "
-                  "legacy injection permitted (-skip-dbgcore-check)");
-            } else if (g_isServer) {
+            if (g_isServer) {
+              // The refusal is logged before FatalError: on a client FatalError only shows a dialog (#726).
+              Log(EchoVR::LogLevel::Error,
+                  "[NEVR.PATCH] dbgcore.dll present in game directory — refusing to start "
+                  "(rename it to dbgcore.dll.legacy-<date> or remove it)");
               FatalError(
-                  "dbgcore.dll detected in game directory — legacy DLL hijack artifact; remove "
-                  "it or pass -skip-dbgcore-check",
+                  "dbgcore.dll detected in game directory — legacy DLL hijack artifact; rename it "
+                  "(dbgcore.dll.legacy-<date>) or remove it",
                   "dbgcore.dll hijack detected");
             } else {
+              Log(EchoVR::LogLevel::Error,
+                  "[NEVR.PATCH] dbgcore.dll present in game directory — refusing to start "
+                  "(rename it to dbgcore.dll.legacy-<date> or remove it)");
               FatalError(
                   "dbgcore.dll detected in the game directory.\n\n"
-                  "This file is a legacy DLL hijack artifact. If you are intentionally using "
-                  "the legacy injection path, add -skip-dbgcore-check to your command line.\n\n"
+                  "This file is a legacy DLL hijack artifact, and the runtime will not start beside "
+                  "it. Rename it (for example to dbgcore.dll.legacy-<date>) or remove it.\n\n"
                   "If you are using the NEVR launcher, remove dbgcore.dll from the game "
                   "directory and use BugSplat64.dll instead.",
                   "dbgcore.dll hijack detected");
@@ -580,6 +595,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     PatchLogServerProfile();
     // Issue #63: co-op AI bots stand still on community servers; log what gates them.
     nevr_coop_ai_trace::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress));
+    // #982: a public Arena match's clock keeps counting through goals, like a private match (arena_public_clock_rules.h).
+    nevr_arena_public_clock::Install();
 
     // Server frame pacing (CPrecisionSleep::BusyWait) is patched only by
     // patch/binary_bug_fixes.cpp, which validates the address and saves the
@@ -599,6 +616,43 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     nevr_asset_cdn::Initialize();
   }
 
+  // N148 (#938): the project section of the in-game CREDITS page. Client only: a server has no page, and the
+  // decision is logged either way (N122/N124). Post-CLI-parse for the same reason as the CDN above. The
+  // runtime owns two byte-patch sites here (a data-blob load, not a function, so there is nothing to hook);
+  // Install validates both and the blob before writing and leaves the game's credits alone on any mismatch.
+  if (!g_isServer) {
+    nevr_credits_text::Install(nevr_credits_block::kText, nevr_credits_block::kSize);
+  } else {
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] credits_text skipped reason=server_mode (no credits page on a server)");
+  }
+
+  // #906, ADR 0017 D4: the CREATE GAME and JOIN VIA CODE cards on the main menu. Client only: a server draws no menu.
+  // The page is the player's own, pinned by sha256 and extended in memory when the loader delivers it; any other
+  // page is served unchanged. Registered after InstallResourceOverride, which created the registry.
+  if (!g_isServer) {
+    nevr_menu_cards::Install();
+  } else {
+    Log(EchoVR::LogLevel::Info, "[NEVR.MENU] main-menu cards skipped reason=server_mode (a server draws no menu)");
+  }
+
+  // #906, ADR 0017: observe the CREATE GAME / JOIN VIA CODE wizard's click metric. Client only, and it sends nothing
+  // yet (the worker waits for the service RPCs). It forwards every submit unchanged.
+  if (!g_isServer) {
+    nevr_invite_choice_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
+    nevr_invite_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
+  } else {
+    Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] wizard observer skipped reason=server_mode");
+    Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] choice observer skipped reason=server_mode");
+  }
+
+  // #896, #906: the UI text writer (the first accessor of the UI seam). Client only: a server draws no menu. It pins the
+  // game's functions and logs the result; nothing is written until a request is posted. The SetText hook (menu version label) is already in, which the pin accepts.
+  if (!g_isServer) {
+    nevr_ui_text::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
+  } else {
+    Log(EchoVR::LogLevel::Info, "[NEVR.UI] text writer skipped reason=server_mode (a server draws no menu)");
+  }
+
   // N92: start the WebSocket bridge in-process, as part of this DLL rather than
   // a separate module DLL, so there is one copy of the bridge and no second,
   // divergent one (session sharing and the fake-LoginSuccess path live in the
@@ -614,6 +668,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // honoured), after g_isServer/InstallFatalErrorHandler — a bad config.yaml or
   // an unset required secret fails loud at this point in server mode.
   {
+    // #843: a server takes the same built-in defaults as a client; this line names the ones it uses.
+    NevrCfgLogBuiltinDefaultsTaken();
     const char* socketUri = NevrCfgGetFlat("nevr_socket_uri");
     const bool hasSocketUri = socketUri && socketUri[0] != '\0';
     const char* allowOffline = NevrCfgGetFlat("nevr_allow_offline_server");
@@ -671,6 +727,19 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
         static_cast<nevr_frame_stats::Mode>(NevrCfgFrameStatsMode(&recognised));
     nevr_frame_stats::Configure(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress), g_isServer != FALSE,
                                 frameStats, recognised != 0);
+  }
+
+  // The runtime's own signature (#842, ADR 0010): one line says whether this is the signed release or a self-built or dev
+  // build. The word is what the server registration carries (nevr_build_identity::Provenance). Reads the file, so it runs
+  // here, after the original PreprocessCommandLine call (N146), not in the preflight.
+  {
+    const nevr_build_identity::Info& buildId = nevr_build_identity::Get();
+    const nevr_self_provenance::Result provenance = nevr_self_provenance::CheckOwnModule(
+        buildId.project_version, nevr_plugin_trust::IsDevBuild(), nevr_plugin_trust::ProductionPolicy(),
+        static_cast<int64_t>(std::time(nullptr)));
+    nevr_build_identity::SetProvenance(provenance.word);
+    Log(EchoVR::LogLevel::Info, "[NEVR.BOOT] runtime provenance=%s version=%s reason=\"%s\"", provenance.word,
+        provenance.version.c_str(), provenance.reason.c_str());
   }
 
   // Load external plugins from plugins/ subdirectory

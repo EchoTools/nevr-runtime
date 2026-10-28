@@ -1,6 +1,8 @@
 #include "data_wiring.h"
 
+#include <sys/syscall.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <atomic>
 #include <cstdio>
@@ -14,6 +16,7 @@
 #include "obb_skip_hook.h"
 #include "permission_wait_hook.h"
 #include "pinned_targets.h"
+#include "probe_command.h"
 #include "process_end_hook.h"
 #include "quest/data/curl_transport.h"
 #include "quest/data/data_step.h"
@@ -83,8 +86,10 @@ void Present(const std::string& text, const char* what) noexcept {
   }
   bool prepared = false;
   const char* result = Opts().show(CurrentApp(), text.c_str(), &prepared);
-  // "requested": Toast.show() returned. Whether the headset drew it is ADR 0011 measurement 1, so no line says "shown".
-  sentinel::LogFields(std::strcmp(result, "requested") == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn,
+  // "requested": Toast.show() returned on this thread. "posted": queued to the UI thread (ShowPreferUiThread, #829), whose
+  // Toast result follows as a ui_post line. Whether the headset drew it is ADR 0011 measurement 1, so no line says "shown".
+  const bool accepted = std::strcmp(result, "requested") == 0 || std::strcmp(result, "posted") == 0;
+  sentinel::LogFields(accepted ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn,
                       "data_present",
                       {{"what", what}, {"result", result}, {"looper_prepared", prepared ? "true" : "false"}});
 }
@@ -95,7 +100,32 @@ std::unique_ptr<data::CurlTransport> MakeProductionTransport() {
                                                kMinBytesPerSecond);
 }
 
-// The measurement probe: `toast <text>` or `block <seconds>`, once.
+// One probe line for a presenter that is not the floor's (`ui-toast`, `ui-post`, `dialog`, #829): what the presenter answered, on which
+// thread it was asked, and whether a looper was made for it. Only the tester can say whether anything was drawn.
+void ProbeShow(const char* kind, ShowFn presenter, const char* text) noexcept {
+  const long long tid = static_cast<long long>(::syscall(SYS_gettid));
+  const bool mainThread = tid == static_cast<long long>(::getpid());  // the UI thread's id is the process id
+  bool prepared = false;
+  const char* result = "empty_text";
+  if (*text == '\0') {
+    // nothing to show: the presenter is not asked
+  } else if (presenter == nullptr) {
+    result = "no_presenter";
+  } else {
+    result = presenter(CurrentApp(), text, &prepared);
+  }
+  const bool asked = std::strcmp(result, "requested") == 0 || std::strcmp(result, "posted") == 0;
+  sentinel::LogFields(asked ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn,
+                      "data_probe",
+                      {{"kind", kind},
+                       {"state", "end"},
+                       {"result", result},
+                       {"tid", tid},
+                       {"main_thread", mainThread ? "true" : "false"},
+                       {"looper_prepared", prepared ? "true" : "false"}});
+}
+
+// The measurement probe: `toast <text>`, `ui-toast <text>`, `ui-post <text>`, `dialog <text>` or `block <seconds>` (probe_command.h), once.
 void RunProbe() noexcept {
   const std::string path = !Opts().probe_path.empty()
                                ? Opts().probe_path
@@ -113,12 +143,19 @@ void RunProbe() noexcept {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "data_probe", {{"result", "rename_failed"}});
     return;  // a probe that cannot be consumed would act on every launch
   }
-  if (std::strncmp(buf, "toast ", 6) == 0) {
+  const ProbeCommand command = ParseProbeCommand(buf);
+  if (command.kind == ProbeKind::kToast) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "data_probe", {{"kind", "toast"}, {"state", "start"}});
-    Present(buf + 6, "probe");
+    Present(command.arg, "probe");
     sentinel::LogFields(sentinel::LogLevel::kInfo, "data_probe", {{"kind", "toast"}, {"state", "end"}});
-  } else if (std::strncmp(buf, "block ", 6) == 0) {
-    unsigned long seconds = std::strtoul(buf + 6, nullptr, 10);
+  } else if (command.kind == ProbeKind::kUiToast) {
+    ProbeShow("ui-toast", Opts().show_ui, command.arg);
+  } else if (command.kind == ProbeKind::kUiPost) {
+    ProbeShow("ui-post", Opts().show_post, command.arg);
+  } else if (command.kind == ProbeKind::kDialog) {
+    ProbeShow("dialog", Opts().show_dialog, command.arg);
+  } else if (command.kind == ProbeKind::kBlock) {
+    unsigned long seconds = std::strtoul(command.arg, nullptr, 10);
     if (seconds > kMaxProbeBlockSeconds) seconds = kMaxProbeBlockSeconds;
     sentinel::LogFields(sentinel::LogLevel::kInfo, "data_probe",
                         {{"kind", "block"}, {"state", "start"}, {"seconds", static_cast<long long>(seconds)}});
@@ -150,21 +187,30 @@ void HoldMessage(const std::string& message) noexcept {
 
 }  // namespace
 
-// The one root the engine reads this launch. With an OBB file the game's OBB callback records what the OBB skip served
-// (obb_skip::CurrentRoot, after a skipped mount); without one CSysFile::Init returns before the mount, the skip never
-// runs, and GetDataRootDir answers the legacy root (docs/adr/0007, 0013).
-std::string EngineRoot() {
-  return obb_skip::CurrentCounts().mountSkipped > 0 ? std::string(obb_skip::CurrentRoot())
-                                                    : std::string(data_root::kLegacyRoot);
+// The one root the engine reads this launch, and why. With an OBB file the game's OBB callback records what the OBB skip
+// served (obb_skip::CurrentRoot, after a skipped mount); without one CSysFile::Init returns before the mount and the
+// engine asks GetDataRootDir, which our hook answers with the media root when that holds the data and the hook took
+// (obb_skip::DataRootRedirect, #866) and which otherwise answers the legacy root (docs/adr/0007, 0013).
+struct EngineRootChoice {
+  std::string root;
+  const char* source;
+};
+EngineRootChoice EngineRoot() {
+  if (obb_skip::CurrentCounts().mountSkipped > 0) return {obb_skip::CurrentRoot(), "obb_skip"};
+  if (const char* redirect = obb_skip::DataRootRedirect()) return {redirect, "data_root_hook"};
+  return {data_root::kLegacyRoot, "engine_default"};
 }
 
 void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
+  const EngineRootChoice choice = EngineRoot();
+  const std::string& engineRoot = choice.root;
   sentinel::LogFields(sentinel::LogLevel::kInfo, "data_step_start",
-                      {{"storage", permission_wait::StorageOutcomeName(outcome)}});
+                      {{"storage", permission_wait::StorageOutcomeName(outcome)},
+                       {"engine_root", engineRoot.c_str()},
+                       {"engine_root_source", choice.source}});
   // The legacy root is shared storage: reading it needs the grant. Without it nothing is looked at, fetched or
   // written, the player is told how to allow Storage, and the process ends.
   const bool granted = permission_wait::StorageGranted(outcome);
-  const std::string engineRoot = EngineRoot();
   if (!granted && engineRoot == data_root::kLegacyRoot) {
     sentinel::LogFields(sentinel::LogLevel::kError, "data_step",
                         {{"outcome", "no_storage_grant"}, {"storage", permission_wait::StorageOutcomeName(outcome)},

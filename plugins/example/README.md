@@ -13,7 +13,7 @@ do I...", the answer is in `plugins/example/src/plugin.cpp`.
 | Concept                             | Implementation                                                                   |
 | ----------------------------------- | -------------------------------------------------------------------------------- |
 | Plugin metadata (REQUIRED)          | `NvrPluginGetInfo()` -- name, description, semver                                |
-| API versioning (optional, v1+)      | `NvrPluginGetApiVersion()` -- returns `NEVR_PLUGIN_API_VERSION` (currently 7)   |
+| API versioning (optional, v1+)      | `NvrPluginGetApiVersion()` -- returns `NEVR_PLUGIN_API_VERSION` (currently 8)   |
 | Capability declaration (optional, v3+) | `NvrPluginGetCapabilities()` -- bitmask of what this plugin DOES               |
 | v4 args-aware init (optional)       | `NvrPluginInitEx(ctx, args_json)` -- with ctx_size check and args parsing       |
 | v3 legacy init (optional)           | `NvrPluginInit(ctx)` -- fallback when InitEx absent                             |
@@ -43,7 +43,7 @@ DLL load
      (string literals or global buffers -- not stack variables).
 
 2. NvrPluginGetApiVersion()         OPTIONAL (v1+)
-     Returns NEVR_PLUGIN_API_VERSION (currently 7). Absent = v1
+     Returns NEVR_PLUGIN_API_VERSION (currently 8). Absent = v1
      (pre-versioning). The host uses this to decide whether the
      plugin understands newer context fields.
 
@@ -117,6 +117,8 @@ Passed to init, on-frame, and on-state-change callbacks.
 | `get_plugin_info`  | `const NvrLoadedPluginInfo* (*)(int)` | v5+ | Plugin at index n. Process-lifetime stable pointer. nullptr if out of range. |
 | `plugin_id`    | `const char*` | v6+ | The host's name for this plugin: the `name` of its config.yaml entry. Process-lifetime stable. |
 | `log`          | `NevrLogFn`  | v6+     | The host's structured log: `log(plugin_id, level, message, fields, field_count)`. Use it through `plugin_logger.h`. |
+| `level_symbol` | `uint64_t`   | v8+     | CSymbol64 of the level the game holds as its main level; 0 while it holds none. Filled in every context. |
+| `level_name`   | `const char*` | v8+    | The level's name when the host's symbol table resolves it, else nullptr. A level a plugin registered is not in the table: compare `level_symbol`. Process-lifetime stable. |
 
 ### Host capability flags (NvrHostFlags)
 
@@ -234,9 +236,29 @@ callback on, from any thread, including `NvrPluginShutdown`; it does not exist b
 `<prefix> <LEVEL> <message>`, which the host does not collect. The host provides no per-plugin log
 file and no rate limiting: a plugin that logs per frame keeps its own cap.
 
+## Switching on per level (v8)
+
+A plugin that is for particular levels (a custom physics set for one map, say) names them in its own
+`config.yaml` entry and gates itself on the level the host reports:
+
+```yaml
+plugins:
+  - name: my_physics
+    args:
+      levels: "mpl_arena_dodgeball,mpl_arena_a"   # args are flat strings: comma-separated
+```
+
+`plugins/common/include/level_gate.h` is the whole pattern: `LevelGate::Set` hashes the names once (CSymbol64,
+case-insensitive, the game's own hash), `LevelGate::Allows(ctx)` is true when the context's `level_symbol` is
+one of them, or when no names were given (every level). Call it from `NvrPluginOnFrame` **and**
+`NvrPluginOnGameStateChange`: a level can load with no game-state transition, so a plugin that decides only in
+the state-change callback can miss it. On a host older than v8 the context holds no level (`ctx_size` stops
+before `level_name`), and a gate with names stays closed. `plugins/example/src/plugin.cpp` shows the calls and
+logs each time its gate opens or closes. docs/reference/game-level.md says where the game keeps the level.
+
 ## API version compatibility
 
-NEVR_PLUGIN_API_VERSION is currently **7** (#432).
+NEVR_PLUGIN_API_VERSION is currently **8** (#1094).
 
 | Version | Added                                                          | Breaking? |
 | ------- | -------------------------------------------------------------- | --------- |
@@ -247,6 +269,7 @@ NEVR_PLUGIN_API_VERSION is currently **7** (#432).
 | v5      | `ctx_size` + `get_plugin_count` / `get_plugin_info` query API (N134 S8) | No       |
 | v6      | `plugin_id` + `log`: the host's structured log (N135)          | No        |
 | v7      | `NEVR_RegisterAsset` / `NEVR_DeregisterAssets`: plugin-carried levels and resources (#432); see docs/reference/plugin-assets.md | No |
+| v8      | `level_symbol` + `level_name`: the game's main level, in every context (#1094); see "Switching on per level" below | No |
 
 All additions are tail-extensions -- a plugin compiled against an older version
 loads unchanged on a newer host, and a plugin compiled against a newer version

@@ -15,6 +15,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <mutex>
@@ -530,6 +531,7 @@ struct AppendJob {
   int thread;
   int lines;
   const char* prefix;
+  std::atomic<int>* dropped;
 };
 
 DWORD WINAPI AppendLines(void* raw) {
@@ -537,21 +539,27 @@ DWORD WINAPI AppendLines(void* raw) {
   for (int at = 0; at < job->lines; ++at) {
     char line[48];
     const int length = std::snprintf(line, sizeof(line), "%s-T%02d-L%05d\n", job->prefix, job->thread, at);
-    job->diagnostics->AppendLine(line, static_cast<std::size_t>(length));
+    const nevr_host::DiagnosticDestination where =
+        job->diagnostics->AppendLine(line, static_cast<std::size_t>(length));
+    if (where == nevr_host::DiagnosticDestination::kDropped) job->dropped->fetch_add(1);
   }
   return 0;
 }
 
-// Runs `threads` appenders of `lines` lines each; returns the number of complete lines in the file and
-// how many of them are distinct.
-void AppendConcurrently(BootstrapDiagnostics& diagnostics, int threads, int lines, const char* prefix) {
+// Runs `threads` appenders of `lines` lines each. `dropped`, when given, counts the appends that reported
+// kDropped (no destination took the line).
+void AppendConcurrently(BootstrapDiagnostics& diagnostics, int threads, int lines, const char* prefix,
+                        std::atomic<int>* dropped = nullptr) {
+  std::atomic<int> none{0};
+  std::atomic<int>* counter = dropped != nullptr ? dropped : &none;
   std::vector<AppendJob> jobs(static_cast<std::size_t>(threads));
   std::vector<HANDLE> handles;
   for (int t = 0; t < threads; ++t) {
-    jobs[static_cast<std::size_t>(t)] = AppendJob{&diagnostics, t, lines, prefix};
+    jobs[static_cast<std::size_t>(t)] = AppendJob{&diagnostics, t, lines, prefix, counter};
     handles.push_back(CreateThread(nullptr, 0, &AppendLines, &jobs[static_cast<std::size_t>(t)], 0, nullptr));
   }
-  WaitForMultipleObjects(static_cast<DWORD>(handles.size()), handles.data(), TRUE, 120000);
+  // A wait that times out would read a file that is still being written: the result is checked, not ignored.
+  EXPECT_EQ(WaitForMultipleObjects(static_cast<DWORD>(handles.size()), handles.data(), TRUE, 120000), WAIT_OBJECT_0);
   for (HANDLE handle : handles) CloseHandle(handle);
 }
 
@@ -577,16 +585,41 @@ LineCount CountLines(const std::string& text) {
 
 }  // namespace
 
+// The lock records the file holds and the process's lock state, printed when a line is missing (#840): a short
+// file with no host_log_lock record and no unlocked writes points at the append itself, not at the mutex.
+std::string LockDiagnosis(const std::string& text) {
+  std::string records;
+  std::size_t start = 0;
+  while (start < text.size()) {
+    const std::size_t end = text.find('\n', start);
+    if (end == std::string::npos) break;
+    const std::string line = text.substr(start, end - start);
+    if (line.find("host_log_lock") != std::string::npos) records += line + "\n";
+    start = end + 1;
+  }
+  const bool unreliable = BootstrapDiagnostics::LogLockUnreliableForTest();
+  std::string summary = std::string("lock_unreliable=") + (unreliable ? "true" : "false") +
+                        " unlocked_writes=" + std::to_string(BootstrapDiagnostics::UnlockedWritesForTest()) +
+                        "\nhost_log_lock records in the file:\n";
+  return summary + (records.empty() ? std::string("(none)\n") : records);
+}
+
 TEST(BootstrapDiagnostics, ConcurrentAppendersToOneFileLoseNoLine) {
   for (const int threads : {1, 2, 4, 8}) {
     const std::wstring local = MakeTempDir(L"local");
     BootstrapDiagnostics diagnostics;
     diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
     constexpr int kLines = 300;
-    AppendConcurrently(diagnostics, threads, kLines, "A");
-    const LineCount count = CountLines(ReadAll(local + kLogsFile));
-    EXPECT_EQ(count.lines, static_cast<std::size_t>(threads * kLines)) << threads << " threads";
-    EXPECT_EQ(count.distinct, static_cast<std::size_t>(threads * kLines)) << threads << " threads";
+    std::atomic<int> dropped{0};
+    AppendConcurrently(diagnostics, threads, kLines, "A", &dropped);
+    const std::string text = ReadAll(local + kLogsFile);
+    const LineCount count = CountLines(text);
+    const std::size_t expected = static_cast<std::size_t>(threads * kLines);
+    // The record of a short file: the lock state at the end, the dropped appends, and the lock records.
+    EXPECT_EQ(count.lines, expected) << threads << " threads, dropped=" << dropped.load() << "\n"
+                                     << LockDiagnosis(text);
+    EXPECT_EQ(count.distinct, expected) << threads << " threads, dropped=" << dropped.load() << "\n"
+                                        << LockDiagnosis(text);
   }
 }
 
@@ -680,6 +713,107 @@ bool MutexExists(const wchar_t* name) {
 }
 
 }  // namespace
+
+namespace {
+
+struct HoldFor {
+  HANDLE ready;
+  DWORD milliseconds;
+};
+
+// Takes the log mutex, says so, and keeps it for the given time: longer than an append's bounded wait.
+DWORD WINAPI HoldLogLockFor(void* raw) {
+  const auto* hold = static_cast<const HoldFor*>(raw);
+  HANDLE mutex = OpenMutexW(SYNCHRONIZE | MUTEX_MODIFY_STATE, FALSE, g_holder_mutex_name.c_str());
+  if (mutex == nullptr) return 1;
+  WaitForSingleObject(mutex, 5000);
+  SetEvent(hold->ready);
+  Sleep(hold->milliseconds);
+  ReleaseMutex(mutex);
+  CloseHandle(mutex);
+  return 0;
+}
+
+// The distinct lines of `text` that start with `prefix`.
+std::size_t DistinctLinesWithPrefix(const std::string& text, char prefix) {
+  std::set<std::string> distinct;
+  std::size_t start = 0;
+  while (start < text.size()) {
+    const std::size_t end = text.find('\n', start);
+    if (end == std::string::npos) break;
+    if (end > start && text[start] == prefix) distinct.insert(text.substr(start, end - start));
+    start = end + 1;
+  }
+  return distinct.size();
+}
+
+}  // namespace
+
+// The lock is held for longer than an append's bounded wait while the appenders run. The wait times out, and the
+// appends that follow write without the lock. Every appended line must still be in the file.
+TEST(BootstrapDiagnostics, ConcurrentAppendersKeepEveryLineWhileTheLockIsHeldPastItsWait) {
+  g_holder_mutex_name = UniqueMutexName(L"held-past-wait");
+  ScopedLogMutexName scoped(g_holder_mutex_name);
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  HoldFor hold{ready, 3000};
+  HANDLE holder = CreateThread(nullptr, 0, &HoldLogLockFor, &hold, 0, nullptr);
+  ASSERT_NE(holder, nullptr);
+  ASSERT_EQ(WaitForSingleObject(ready, 5000), WAIT_OBJECT_0);
+
+  constexpr int kThreads = 8;
+  constexpr int kLines = 300;
+  AppendConcurrently(diagnostics, kThreads, kLines, "H");
+  WaitForSingleObject(holder, 10000);
+  CloseHandle(holder);
+  CloseHandle(ready);
+
+  EXPECT_TRUE(BootstrapDiagnostics::LogLockUnreliableForTest())
+      << "the appends did not time out on the lock; the test forces nothing";
+  EXPECT_EQ(DistinctLinesWithPrefix(ReadAll(local + kLogsFile), 'H'), static_cast<std::size_t>(kThreads * kLines));
+}
+
+// The first appends of a process run the one-time initialization of the local lock. This helper is that first use:
+// it is the only test the child process runs, and eight threads log for the first time at once.
+TEST(BootstrapDiagnostics, FirstAppendsHelperInAFreshProcess) {
+  wchar_t dir[MAX_PATH] = {};
+  wchar_t name[128] = {};
+  if (GetEnvironmentVariableW(L"NEVR_TEST_FIRST_USE_DIR", dir, MAX_PATH) == 0) GTEST_SKIP() << "helper process only";
+  GetEnvironmentVariableW(L"NEVR_TEST_FIRST_USE_MUTEX", name, 128);
+  BootstrapDiagnostics::SetLogMutexNameForTest(name);
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(dir, nullptr, nullptr);
+  AppendConcurrently(diagnostics, 8, 300, "F");
+}
+
+// Eight threads log for the first time at once, in a process of their own, so the one-time initialization of the
+// local lock is raced, not run by an earlier test. Every line must be in the file.
+TEST(BootstrapDiagnostics, FirstConcurrentAppendsInAFreshProcessLoseNoLine) {
+  const std::wstring local = MakeTempDir(L"first");
+  const std::wstring name = UniqueMutexName(L"first");
+  SetEnvironmentVariableW(L"NEVR_TEST_FIRST_USE_DIR", local.c_str());
+  SetEnvironmentVariableW(L"NEVR_TEST_FIRST_USE_MUTEX", name.c_str());
+  wchar_t self[MAX_PATH] = {};
+  ASSERT_GT(GetModuleFileNameW(nullptr, self, MAX_PATH), 0u);
+  std::wstring command = L"\"" + std::wstring(self) +
+                         L"\" --gtest_filter=BootstrapDiagnostics.FirstAppendsHelperInAFreshProcess";
+  STARTUPINFOW startup = {};
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION process = {};
+  ASSERT_NE(CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &process),
+            FALSE);
+  CloseHandle(process.hThread);
+  EXPECT_EQ(WaitForSingleObject(process.hProcess, 120000), WAIT_OBJECT_0);
+  DWORD code = 1;
+  GetExitCodeProcess(process.hProcess, &code);
+  CloseHandle(process.hProcess);
+  SetEnvironmentVariableW(L"NEVR_TEST_FIRST_USE_DIR", nullptr);
+  SetEnvironmentVariableW(L"NEVR_TEST_FIRST_USE_MUTEX", nullptr);
+  EXPECT_EQ(code, 0u) << "the helper process failed";
+  EXPECT_EQ(DistinctLinesWithPrefix(ReadAll(local + kLogsFile), 'F'), static_cast<std::size_t>(8 * 300));
+}
 
 // A holder that never lets go must delay an append by the bounded wait at most; the line is still written.
 TEST(BootstrapDiagnostics, AnAppendIsNotBlockedForeverByAnotherThreadHoldingTheLogLock) {

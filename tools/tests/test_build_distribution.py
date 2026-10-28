@@ -63,6 +63,7 @@ class BuildDistributionTest(unittest.TestCase):
         self.stage = self.root / "stage"
         self.stage.mkdir()
         (self.stage / "BugSplat64.dll").write_bytes(valid_pe())
+        (self.stage / "nevr-runtime.dll").write_bytes(valid_pe())
         (self.stage / "echovr_server.exe").write_bytes(valid_pe())
         self.destination = self.root / "dist" / "runtime"
         self.tar_path = self.root / "dist" / "runtime.tar.zst"
@@ -221,7 +222,7 @@ class BuildDistributionTest(unittest.TestCase):
         build_distribution.verify_archives(self.tar_path, self.zip_path, self.destination, None)
 
     def test_missing_required_runtime_pe_is_rejected(self):
-        for missing in ("echovr_server.exe", "BugSplat64.dll"):
+        for missing in ("echovr_server.exe", "BugSplat64.dll", "nevr-runtime.dll"):
             with self.subTest(missing=missing):
                 artifact = self.stage / missing
                 content = artifact.read_bytes()
@@ -232,6 +233,7 @@ class BuildDistributionTest(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("osslsigncode") and
                          (REPO / "build/mingw-release/bin/BugSplat64.dll").is_file() and
+                         (REPO / "build/mingw-release/bin/nevr-runtime.dll").is_file() and
                          (REPO / "build/mingw-release/bin/echovr_server.exe").is_file(),
                          "real signer and built runtime binaries are required")
     def test_throwaway_certificate_signs_and_verifies_real_runtime_binaries(self):
@@ -273,6 +275,8 @@ class BuildDistributionTest(unittest.TestCase):
         signer_pin = hashlib.sha256(leaf_der).hexdigest().upper()
         (self.stage / "BugSplat64.dll").write_bytes(
             (REPO / "build/mingw-release/bin/BugSplat64.dll").read_bytes())
+        (self.stage / "nevr-runtime.dll").write_bytes(
+            (REPO / "build/mingw-release/bin/nevr-runtime.dll").read_bytes())
         (self.stage / "echovr_server.exe").write_bytes(
             (REPO / "build/mingw-release/bin/echovr_server.exe").read_bytes())
         before = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()

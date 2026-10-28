@@ -193,6 +193,14 @@ bool ApplyServerMessage(const Ports& ports, std::uint64_t sym, const std::uint8_
                {"error", error}, {"reason", reason}});
     consumed = true;
   }
+  // A removed friend leaves the roster now; the list refresh below only rebuilds it.
+  std::uint64_t removedId = 0;
+  if (nevr_social_roster::ParseFriendRemoval(sym, payload, len, &removedId)) {
+    const bool dropped = ports.friends->Remove(removedId);
+    LogFields(LogLevel::kInfo, "social_friend",
+              {{"result", "removed"}, {"account", static_cast<long long>(removedId)}, {"dropped", dropped ? 1LL : 0LL}});
+    consumed = true;
+  }
   // A friend added, accepted, removed or withdrawn carries no presence: ask for the list again.
   if (nevr_social_roster::IsFriendChangeSymbol(sym)) {
     Send(ports, "friend list refresh", ports.party->RefreshFriends());

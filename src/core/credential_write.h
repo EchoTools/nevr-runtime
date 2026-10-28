@@ -13,6 +13,7 @@
 //                   process launch, and the host mode is read back with stat. Not 600 => nothing written.
 //   POSIX           open(2) with 0600 at creation, written, fsync'd, closed, renamed.
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -25,7 +26,6 @@
 #endif
 #include <windows.h>
 #include <aclapi.h>
-#include <atomic>
 #include <fstream>
 #include <vector>
 #else
@@ -55,6 +55,26 @@ inline std::string g_forcedHostMode;
 constexpr std::size_t kChunkBytes = 16;
 
 inline std::string TempPathFor(const std::string& finalPath) { return finalPath + ".tmp"; }
+
+// A temp name only this call uses: the process id and a counter between the cache's path and ".tmp". TempPathFor is one
+// name per cache, right for the cache's own save; a one-time move into the same cache, possibly in a second process, must
+// not meet, remove or reuse the temp file a save has in flight.
+inline std::string UniqueTempPathFor(const std::string& finalPath) {
+  static std::atomic<unsigned> sequence{0};
+#ifdef _WIN32
+  const unsigned long pid = GetCurrentProcessId();
+#else
+  const unsigned long pid = static_cast<unsigned long>(::getpid());
+#endif
+  return finalPath + "." + std::to_string(pid) + "." + std::to_string(sequence.fetch_add(1)) + ".tmp";
+}
+
+// What InstallCacheIfAbsent found.
+enum class InstallResult {
+  kInstalled,      // the temp file is now the cache
+  kAlreadyExists,  // a cache was there: it is untouched and the temp file is removed
+  kFailed          // the temp file is removed and `why` says what failed; the cache, if any, is untouched
+};
 
 #ifdef _WIN32
 
@@ -389,6 +409,18 @@ inline bool ReplaceCache(const std::string& tempPath, const std::string& finalPa
   return false;
 }
 
+// Puts the temp file in place as the cache only when there is no cache: a rename that does not replace, so a sign-in
+// another process wrote after the caller looked is never overwritten. The temp file is gone afterwards, whatever the answer.
+inline InstallResult InstallCacheIfAbsent(const std::string& tempPath, const std::string& finalPath, std::string* why) {
+  if (MoveFileExA(tempPath.c_str(), finalPath.c_str(), MOVEFILE_WRITE_THROUGH)) return InstallResult::kInstalled;
+  const DWORD error = GetLastError();
+  DeleteFileA(tempPath.c_str());
+  SetLastError(error);
+  if (error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS) return InstallResult::kAlreadyExists;
+  *why = "cannot install the cache: " + std::to_string(error);
+  return InstallResult::kFailed;
+}
+
 #else  // POSIX
 
 inline bool WriteProtectedTemp(const std::string& tempPath, const std::string& data, bool /*isWine*/,
@@ -464,6 +496,17 @@ inline bool ReplaceCache(const std::string& tempPath, const std::string& finalPa
   *why = std::string("cannot replace the cache: ") + std::to_string(errno);
   ::unlink(tempPath.c_str());
   return false;
+}
+
+inline InstallResult InstallCacheIfAbsent(const std::string& tempPath, const std::string& finalPath, std::string* why) {
+  // link(2) fails with EEXIST where rename(2) would replace: the cache is created or left alone, never overwritten.
+  const int linked = ::link(tempPath.c_str(), finalPath.c_str());
+  const int linkError = errno;
+  ::unlink(tempPath.c_str());
+  if (linked == 0) return InstallResult::kInstalled;
+  if (linkError == EEXIST) return InstallResult::kAlreadyExists;
+  *why = std::string("cannot install the cache: ") + std::to_string(linkError);
+  return InstallResult::kFailed;
 }
 
 #endif

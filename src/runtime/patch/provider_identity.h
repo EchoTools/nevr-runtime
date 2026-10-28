@@ -31,6 +31,13 @@ constexpr std::array<std::uint8_t, 16> kPnsradUserProviderIdExpected = {
 /// GetProviderPrefix (0x14060d640); the string "OVR" belongs to code 5, which CSymbol64 has no symbol for.
 constexpr std::uint64_t kOvrProviderSymbol = 0xc8e8d0b1a89ff4f8ULL;
 
+/// The CNSUser login-state word (user+0x90) with its low nibble, the provider enum the game's own switches read
+/// (GetProviderPrefix, GetUserIDString), set to the platform the login carried: 4 OVR-ORG, or 7 DMO for a client
+/// the game marks No VR.
+constexpr std::uint64_t WithLoginProvider(std::uint64_t loginState, std::uint64_t platformCode) {
+  return (loginState & ~0xFULL) | (platformCode & 0xFULL);
+}
+
 /// mov rax, imm64 ; ret
 inline std::array<std::uint8_t, 11> ReturnConstant(std::uint64_t value) {
   std::array<std::uint8_t, 11> code{0x48, 0xB8};

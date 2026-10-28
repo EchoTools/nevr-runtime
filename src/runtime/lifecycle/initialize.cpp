@@ -2,6 +2,7 @@
 #include "runtime/lifecycle/game_image_guard.h"
 
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "runtime/log/boot_log_tee.h"
@@ -10,6 +11,7 @@
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/config.h"
 #include "runtime/lifecycle/crash_recovery.h"
+#include "runtime/lifecycle/nevr_root_move.h"
 #include "runtime/lifecycle/veh_policy.h"
 #include "runtime/hook/patching.h"
 #include "runtime/hook/hook_guard.h"
@@ -42,7 +44,11 @@
 #include "runtime/patch/mic_provider.h"
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/patch/early_quit_lockout.h"
+#include "runtime/patch/lobby_full_backoff.h"
+#include "runtime/patch/menu_version_label.h"
 #include "runtime/patch/social_facade.h"
+#include "runtime/patch/splash_skip.h"
+#include "runtime/patch/ui_texture_mips.h"
 
 #include <windows.h>
 
@@ -122,6 +128,43 @@ static void* MicProviderSymbolOverride(void* dll_handle, const char* symbol_name
   return nullptr;
 }
 
+// Binds a client's XInput symbol to xinput1_4 (#877). The game's XInput9_1_0 predates Xbox One/Series support and
+// reports every slot as not connected, so a pad never reaches the spectator free cam. xinput1_4 is loaded by its
+// system-directory path, so a DLL beside echovr.exe cannot stand in for it (N75). Returns nullptr when it cannot be
+// bound; the caller then keeps the not-connected stub.
+static void* BindClientXInput(const char* symbol_name) {
+  static HMODULE xinput = nullptr;
+  static bool attempted = false;
+  if (!attempted) {
+    attempted = true;
+    char dir[MAX_PATH] = {};
+    const UINT len = GetSystemDirectoryA(dir, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH - 16) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] xinput: system directory unavailable (%lu); the not-connected stub stays",
+          static_cast<unsigned long>(len));
+      return nullptr;
+    }
+    const std::string path = std::string(dir) + "\\xinput1_4.dll";
+    xinput = LoadLibraryA(path.c_str());
+    if (xinput == nullptr) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] xinput: %s not loadable (error %lu); the not-connected stub stays",
+          path.c_str(), static_cast<unsigned long>(GetLastError()));
+      return nullptr;
+    }
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] xinput bound module=%s (client; the game's XInput9_1_0 stub is not used)",
+        path.c_str());
+  }
+  if (xinput == nullptr) return nullptr;
+  const FARPROC fn = GetProcAddress(xinput, symbol_name);
+  if (fn == nullptr) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] xinput: xinput1_4 has no export %s; the not-connected stub stays",
+        symbol_name);
+    return nullptr;
+  }
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] xinput bound name=%s", symbol_name);
+  return reinterpret_cast<void*>(fn);
+}
+
 static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
   // The export tracer (#20; off unless -trace-exports names a platform DLL) wraps what the game is handed for a
   // symbol of a selected DLL, so the mic provider's overrides are traced as well as pnsrad's own exports.
@@ -164,8 +207,16 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
   }
   void* result = g_original_GetSymbol(dll_handle, symbol_name);
 
-  // XInput stubs (keep these)
+  // XInput. A server or headless run has no pad and keeps the "not connected" stubs (2fe27303). A client gets
+  // xinput1_4's functions, which see Xbox One/Series pads (#877); if they cannot be bound, the stub stays.
   if (symbol_name && result != nullptr) {
+    const bool xinputSymbol = strcmp(symbol_name, "XInputGetState") == 0 ||
+                              strcmp(symbol_name, "XInputSetState") == 0 ||
+                              strcmp(symbol_name, "XInputGetCapabilities") == 0;
+    if (xinputSymbol && !g_isServer && !g_isHeadless) {
+      if (void* bound = BindClientXInput(symbol_name)) return traced(bound);
+    }
+
     static auto xinput_get_state = +[](uint32_t, void*) -> uint32_t { return 0x48F; };
     static auto xinput_set_state = +[](uint32_t, void*) -> uint32_t { return 0x48F; };
     static auto xinput_get_caps  = +[](uint32_t, uint32_t, void*) -> uint32_t { return 0x48F; };
@@ -244,16 +295,19 @@ static void* CSysDLL_LoadHook(void* name_buf, void* plugin_ctx) {
 // ============================================================================
 
 // ============================================================================
-// Cross-DLL exports (called by gameserver.dll via GetProcAddress)
+// Cross-DLL entry points (called by plugins and the launcher by name from BugSplat64.dll)
+//
+// The names are exported by the host, as thunks that call these through the table the runtime's descriptor
+// carries (runtime/lifecycle/runtime_exports.cpp). These definitions are not exported from nevr-runtime.dll.
 // ============================================================================
 
-extern "C" __declspec(dllexport) void NEVR_ScheduleReturnToLobby() {
+extern "C" void NEVR_ScheduleReturnToLobby() {
   if (g_pGame) {
     nevr_return_to_lobby::ScheduleNow(nevr_return_to_lobby_queue::NetGameFromContext(g_pGame), "export");
   }
 }
 
-extern "C" __declspec(dllexport) void NEVR_GetUPnPConfig(NevrUPnPConfig* out) {
+extern "C" void NEVR_GetUPnPConfig(NevrUPnPConfig* out) {
   if (!out) return;
   out->enabled = g_upnpEnabled;
   out->port    = g_upnpPort;
@@ -318,6 +372,9 @@ static VOID InitializeAfterGameImageGuard() {
   // Where this run is hosted (#673): a crash report names the Wine version without a second question.
   // Boot phase (the tee is open, the game's CLog is not): Get() touches only ntdll and kernel32, as at the mic-policy line below.
   nevr_boot_log_tee::TeeFprintf("%s", nevr_host_environment::BootLine(nevr_system_info::Get()).c_str());
+  // The nevr root (ADR 0012, #857): move what an older release left in %LOCALAPPDATA%\EchoVR into it before the
+  // log or any cache is opened. Win32 file calls and Log() (the boot tee while the boot phase lasts) only.
+  nevr_root_move::RunAndLog();
   EchoVR::InitializeFunctionPointers();
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] function pointers resolved\n");
 
@@ -339,6 +396,19 @@ static VOID InitializeAfterGameImageGuard() {
   // The early quit lockout: the shipped client cannot show it from any game service message
   // (early_quit_lockout.h).
   nevr_early_quit_lockout::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+
+  // The lobby-full retry: a party-follow join the lobby refused is held, not re-queued every frame (#1011,
+  // lobby_full_backoff.h).
+  nevr_lobby_full_backoff::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+
+  // The runtime version on the menu's versions panel (menu_version_label.h).
+  nevr_menu_version_label::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+
+  // A button press skips the splash screen (splash_skip.h).
+  nevr_splash_skip::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+
+  // UI, splash and menu textures at their top mip (ui_texture_mips.h).
+  nevr_ui_texture_mips::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
 
   // --- DLL load interceptor (patch DLLs as they load) ---
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing DLL load hooks...\n");
@@ -558,7 +628,7 @@ static VOID InitializeAfterGameImageGuard() {
   // the builtin_log_filter own the rotating JSONL file.  Any remaining
   // TeeFprintf calls after this write to stderr only.
   nevr_boot_log_tee::TeeFprintf(
-      "[NEVR.BOOT] initialization complete; continuing in %%LOCALAPPDATA%%\\EchoVR\\logs\\nevr-<timestamp>.jsonl\n");
+      "[NEVR.BOOT] initialization complete; continuing in %%LOCALAPPDATA%%\\nevr\\echovr\\logs\\nevr-<timestamp>.jsonl\n");
   nevr_boot_log_tee::Close();
   nevr_builtin_log_filter::ReplayBootTail();  // after Close nothing appends: the lines written since the main log opened (#5)
 

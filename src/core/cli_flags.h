@@ -50,7 +50,6 @@ inline constexpr FlagSpec kFlags[] = {
     {L"-telemetry-rate", L"-telemetryrate"},
     {L"-telemetry-diag", L"-telemetrydiag"},
     {L"-trace-exports", L"-traceexports"},
-    {L"-skip-dbgcore-check", L"-allow-dbgcore"},
 };
 
 inline constexpr std::size_t kFlagCount = sizeof(kFlags) / sizeof(kFlags[0]);

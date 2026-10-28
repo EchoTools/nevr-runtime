@@ -4,6 +4,10 @@
 default_preset := if os() == "linux" { "mingw-release" } else { "release" }
 preset := env("PRESET", default_preset)
 
+# The BSR commit gen/ is generated from (tools/proto_stamp.py reads this line). Bump it only with the schema:
+# `buf registry commit list buf.build/echotools/nevr-api --page-size 1`. It matches nevr-stream's Go module revision (N132).
+proto_pin := "259a506a3e1b490ba3482e24e92ba4db"
+
 # Shared compiler cache: used when ccache is installed, ignored when it is not (CI and release builds are unchanged).
 # NEVR_CCACHE= (set, empty) configures a fresh tree without it.
 # CMake reads the launcher variables on a build tree's first configure, so an existing tree keeps the choice it was configured with.
@@ -34,8 +38,12 @@ generate-symcache:
         --if-pin-changed
 
 # Configure CMake (fails early with the fix when a fresh worktree lacks its build inputs)
-configure: generate-symcache _vcpkg-mingw _build-inputs
+configure: generate-symcache _vcpkg-mingw _proto-current _build-inputs
     @unset VCPKG_ROOT && cmake --preset {{ preset }} > /dev/null 2>&1 || (unset VCPKG_ROOT && cmake --preset {{ preset }})
+
+# Regenerate gen/ when it is not the output for the pinned BSR commit (after vcpkg, whose protoc does the work)
+_proto-current:
+    @python3 -I tools/proto_stamp.py --root "{{ justfile_directory() }}" ensure --protoc-dir "{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed/x64-linux/tools/protobuf"
 
 # Stop with the fix when the submodule or gen/ a root-preset build needs is missing (after vcpkg, whose protoc `just proto` uses)
 _build-inputs:
@@ -57,6 +65,10 @@ install-hooks:
 # Remove the worktrees under .claude/worktrees whose work has landed. Dry run unless `--apply` (tools/reap_merged.py)
 reap-merged *args:
     python3 -I tools/reap_merged.py {{ args }}
+
+# Remove one linked worktree: every proof first, then `git worktree remove` without --force and without `git submodule deinit` (tools/remove_worktree.py; --dry-run proves and changes nothing)
+remove-worktree *args:
+    python3 -I tools/remove_worktree.py {{ args }}
 
 # Build all components
 build: configure
@@ -82,14 +94,11 @@ verbose-dist: build
 dist-legacy: build
     cmake --build --preset {{ preset }} --target dist-legacy
 
-# Regenerate C++ protobuf from BSR (buf.build/echotools/nevr-api).
-# Uses vcpkg's host protoc to match the runtime version. Dependencies must be
-# installed first; generate before CMake configure so a clean checkout works.
-# PINNED to a specific BSR commit so the generated code is reproducible and
-# matches nevr-stream's Go module revision (N132). Bump this when the BSR schema
-# changes: `buf registry commit list buf.build/echotools/nevr-api --page-size 1`.
+# Regenerate C++ protobuf from BSR at proto_pin (buf.build/echotools/nevr-api) and stamp gen/ (tools/proto_stamp.py).
+# Uses vcpkg's host protoc to match the runtime version; the protoc must be installed (`just configure` does that).
+# Generate before CMake configure: `configure` regenerates on its own when gen/ is stale, so this recipe is for forcing a refresh.
 proto:
-    PATH="{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed/x64-linux/tools/protobuf:$PATH" buf generate buf.build/echotools/nevr-api:04fc66c864ef47d2b792c4199e4c0ad3
+    python3 -I tools/proto_stamp.py --root "{{ justfile_directory() }}" generate --protoc-dir "{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed/x64-linux/tools/protobuf"
 
 # Remove build and dist directories
 clean:
@@ -159,22 +168,48 @@ android-repack-libovr src="/mnt/games/evr/-src-evr-reconstruction/cache/quest_tr
 # Full sideload repack: hijack an APK's libovrplatformloader.so with our shim,
 # forwarding to the renamed original. Produces a zipaligned, DEBUG-signed APK and
 # verifies both libs' ELF shape from the SIGNED output (no headset needed).
+# It also sets the manifest's versionCode (tools/quest_apk_version.py): the store APK's 4987566 is below the
+# 4987570 build the community installer puts on a headset, which Android refuses to update (a downgrade). The
+# code comes from the build's own version (kVersion in <shim dir>/../generated/nevr_build_info.h), and the signed
+# APK's code is read back with aapt2 before the recipe says it is ready.
 # All work under build/android-arm64/repack — never mutates the source APK or shim.
 # `apk` is required (the store APK path). The signing key is the one persistent Quest key stored in
 # pass (tools/quest_keystore.sh): it is read into a private tmpfs file for the signing command only
 # and is never generated here. Store it once with: just import-quest-keystore <keystore>.
-android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack":
+android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="":
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(pwd)"
-    apk="{{ apk }}"; shim="{{ shim }}"
+    apk="{{ apk }}"; shim="{{ shim }}"; plugin="{{ plugin }}"
     work="$root/{{ workdir }}"
-    for t in unzip patchelf zip zipalign apksigner readelf nm keytool pass; do
+    # An APK from an earlier run never outlives a run that stops: package-dev takes whatever is at this path.
+    rm -f "$work/r15-repacked.apk" "$work/r15-repacked-aligned.apk" "$work/r15_nevr-sentinel_signed.apk"
+    for t in unzip patchelf zip zipalign apksigner aapt2 readelf nm keytool pass python3; do
         command -v "$t" >/dev/null || { echo "MISSING required tool: $t" >&2; exit 1; }
     done
     [ -f "$apk" ]  || { echo "APK not found: $apk" >&2; exit 1; }
     [ -f "$shim" ] || { echo "shim not found (build it: just build-android): $shim" >&2; exit 1; }
-    mkdir -p "$work/stage/lib/arm64-v8a" "$work/orig"
+    # `plugin` (docs/adr/0019-quest-plugin-loader.md): one plugin library to carry in the APK, for a headset run of the loader.
+    # Empty for every release and package-dev APK. The file is lib<name>.so; `plugins:` in config.yaml names it.
+    if [ -n "$plugin" ]; then
+        [ -f "$plugin" ] || { echo "plugin not found: $plugin" >&2; exit 1; }
+        case "$(basename "$plugin")" in
+            lib?*.so) ;;
+            *) echo "plugin must be named lib<name>.so: $plugin" >&2; exit 1 ;;
+        esac
+        # `zip` replaces an entry of the same path: a plugin named like any lib/ entry of the store APK, or like a library
+        # staged below, would take that library's place. Refuse before anything is staged (tools/quest_repack_libs.py).
+        python3 -I tools/quest_repack_libs.py check-plugin-name --apk "$apk" --plugin "$plugin"
+        # ADR 0019 section 1: a plugin runs the same static-init check as the shim, minus the shim's own constructor.
+        llvm_bin="{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+        [ -x "$llvm_bin/llvm-nm" ] || llvm_bin="$(dirname "$(command -v llvm-nm || true)")"
+        tools/check_quest_static_init.sh --plugin "$llvm_bin" "$plugin"
+    fi
+    # The build's version header sits beside the shim's build tree (build/<tree>/sentinel/ -> build/<tree>/generated/).
+    build_info="$(dirname "$(dirname "$shim")")/generated/nevr_build_info.h"
+    [ -f "$build_info" ] || { echo "build info not found (build it: just build-android): $build_info" >&2; exit 1; }
+    rm -rf "$work/stage" "$work/orig" "$work/manifest"
+    mkdir -p "$work/stage/lib/arm64-v8a" "$work/orig" "$work/manifest"
     # 1. extract the real original loader from the store APK
     unzip -o -q "$apk" lib/arm64-v8a/libovrplatformloader.so -d "$work/orig"
     # 2. rename original + patch soname so the NEEDED string matches the file on disk
@@ -183,20 +218,39 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
         "$work/orig/lib/arm64-v8a/libovrplatformloader.so"
     # 3. drop our shim in under the hijacked name
     cp "$shim" "$work/stage/lib/arm64-v8a/libovrplatformloader.so"
+    stage_libs=(lib/arm64-v8a/libovrplatformloader.so lib/arm64-v8a/libovrplatformloader_orig.so)
+    if [ -n "$plugin" ]; then
+        cp "$plugin" "$work/stage/lib/arm64-v8a/$(basename "$plugin")"
+        stage_libs+=("lib/arm64-v8a/$(basename "$plugin")")
+    fi
     # 4. fresh APK copy, strip the store's v1 signature, inject both libs STORED (-0)
     unsigned="$work/r15-repacked.apk"
     aligned="$work/r15-repacked-aligned.apk"
     signed="$work/r15_nevr-sentinel_signed.apk"
+    # Any stop after this point, a failed check included (set -e quits at a failing command), removes the signed APK:
+    # quest-install and the pinned tests take whatever sits at this path.
+    done_ok=0
+    trap '[ "$done_ok" = 1 ] || rm -f "$signed"' EXIT
     cp -f "$apk" "$unsigned"
     zip -q -d "$unsigned" 'META-INF/*.RSA' 'META-INF/*.SF' 'META-INF/*.MF' || true
-    ( cd "$work/stage" && zip -q -0 -X "$unsigned" \
-        lib/arm64-v8a/libovrplatformloader.so lib/arm64-v8a/libovrplatformloader_orig.so )
+    ( cd "$work/stage" && zip -q -0 -X "$unsigned" "${stage_libs[@]}" )
+    # 4b. versionCode: extract the compiled manifest, set the code the build's version gives (the tool refuses
+    # unless the field is exactly where Android reads it, and unless the shim carries the header's version),
+    # and put the manifest back. A 4-byte write: the entry keeps every other byte.
+    unzip -o -q "$unsigned" AndroidManifest.xml -d "$work/manifest"
+    version_code=$(python3 -I tools/quest_apk_version.py patch-manifest "$work/manifest/AndroidManifest.xml" --build-info "$build_info" --shim "$shim")
+    ( cd "$work/manifest" && zip -q -X "$unsigned" AndroidManifest.xml )
     # 5. page-align uncompressed .so, then sign (v2/v3) — align BEFORE sign.
     # The key is a private tmpfs copy for this one command, shredded when it returns; the passphrase
     # reaches apksigner through the environment (`env:`), never through its command line.
     zipalign -p -f 4 "$unsigned" "$aligned"
     tools/quest_keystore.sh with bash -c 'exec apksigner sign --ks "$NEVR_QUEST_KS" --ks-key-alias "$NEVR_QUEST_KS_ALIAS" --ks-pass env:NEVR_QUEST_KS_PASS --key-pass env:NEVR_QUEST_KS_PASS --out "$1" "$2"' _ "$signed" "$aligned"
-    apksigner verify --print-certs "$signed" | head -1
+    verified=$(apksigner verify --print-certs "$signed")
+    printf '%s\n' "$verified" | sed -n 1p
+    # The code Android will compare is read back from the SIGNED APK by aapt2, not taken from what was written.
+    signed_code=$(aapt2 dump badging "$signed" | sed -n "s/^package: .* versionCode='\([0-9]*\)'.*/\1/p")
+    [ "$signed_code" = "$version_code" ] || { echo "signed APK versionCode is '$signed_code', expected $version_code" >&2; exit 1; }
+    echo "versionCode $signed_code (the community installer's build is 4987570)"
     # 6. VERIFY from the SIGNED apk — the headless packaging proof
     rm -rf "$work/verify"; mkdir -p "$work/verify"
     unzip -o -q "$signed" 'lib/arm64-v8a/libovrplatformloader*.so' -d "$work/verify"
@@ -206,6 +260,10 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     echo "== renamed original  lib/arm64-v8a/libovrplatformloader_orig.so =="
     readelf -d "$work/verify/lib/arm64-v8a/libovrplatformloader_orig.so" | grep -i soname
     echo ""
+    # Every library of the store APK (the loader aside, which the shim replaces) is in the SIGNED apk with its bytes, and
+    # every staged library is there as staged.
+    python3 -I tools/quest_repack_libs.py verify-signed --source "$apk" --signed "$signed" --stage "$work/stage"
+    done_ok=1
     echo "Signed sideload APK ready -> $signed"
     echo "Install with: just quest-install"
 
@@ -226,8 +284,11 @@ quest-keystore-fingerprint:
 
 # Refuse (exit 1, one line per problem) unless this clone is exactly origin's release branch: every local
 # tag is on origin and at the same commit, no uncommitted or untracked change, HEAD is origin/<base>'s tip.
+# It also refuses a version part outside the Quest versionCode rule and warns near its limits (development distance N above 900,
+# minor or patch above 90; tools/quest_apk_version.py).
 # Read-only (git ls-remote is the only network call; there is no fetch). Run it before `just package-dev`,
-# before pushing a v<x.y.z> release tag and before `gh release create` (tools/release_preflight.py).
+# before pushing a v<x.y.z> release tag and before `gh release create` (tools/release_preflight.py). To start from a
+# tag's commit instead of origin's tip (release-quest-apk does), run tools/release_preflight.py --tag vX.Y.Z.
 release-preflight base="main":
     tools/release_preflight.py --base {{ quote(base) }}
 
@@ -263,19 +324,67 @@ package-dev store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
         cmake --preset mingw-dev
         cmake --build --preset mingw-dev
     )
-    # Quest sentinel: its own build tree (build/android-dev).
-    (cd src/quest && CMAKE_C_COMPILER_LAUNCHER= CMAKE_CXX_COMPILER_LAUNCHER= ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev)
-    ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
-    objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
-    tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
-    just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so build/android-dev/repack
+    just _quest-apk "{{ store_apk }}"
     python3 tools/package_release.py --commit "$commit" --out "$out" \
         --dll build/mingw-dev/bin/BugSplat64.dll \
+        --runtime-dll build/mingw-dev/bin/nevr-runtime.dll \
         --server-exe build/mingw-dev/bin/echovr_server.exe \
         --apk build/android-dev/repack/r15_nevr-sentinel_signed.apk \
         --pc-header build/mingw-dev/generated/nevr_builtin_defaults.h \
         --quest-header build/android-dev/generated/nevr_builtin_defaults.h \
         --quest-build-info build/android-dev/generated/nevr_build_info.h
+
+# The Quest half of a package: the sentinel built in build/android-dev, checked, and repacked from the store APK.
+# mode "release" reconfigures the tree (--fresh) so the build info is generated again; release-quest-apk sets the
+# CI identity of a tag build in the environment before it calls this. Private: package-dev and release-quest-apk only.
+_quest-apk store_apk mode="dev":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    (cd src/quest && CMAKE_C_COMPILER_LAUNCHER= CMAKE_CXX_COMPILER_LAUNCHER= ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev {{ if mode == "release" { "--fresh" } else { "" } }})
+    ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
+    objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
+    tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
+    just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so build/android-dev/repack
+
+# The Quest APK of a RELEASE: the repack of the store game built from the release tag vX.Y.Z, in the same steps as
+# package-dev, but with the identity of a CI tag build (kVersion = the tag's version, kIsDev = false), so the APK is a
+# release and not a development build. Run it from a clone whose HEAD is the tag's commit and that passes
+# `tools/release_preflight.py --tag <tag>` (HEAD is the tag's commit, which need not be origin's tip: an older tag builds
+# after main has moved on; the tree is clean and origin has the tag at that commit). Writes
+# build/quest-release/<tag>/nevr-runtime-<tag>-quest.apk and its .sha256; it uploads nothing and never tags. The APK is
+# published outside GitHub (RELEASING.md, "Quest APKs never go on GitHub").
+release-quest-apk tag store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag="{{ tag }}"
+    [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "release-quest-apk: not a release tag (vX.Y.Z): $tag" >&2; exit 1; }
+    tools/release_preflight.py --tag "$tag"
+    tag_commit=$(git rev-parse --verify "refs/tags/$tag^{commit}") || { echo "release-quest-apk: tag $tag is not in this clone" >&2; exit 1; }
+    head=$(git rev-parse HEAD)
+    [ "$tag_commit" = "$head" ] || { echo "release-quest-apk: HEAD ${head:0:7} is not the commit of $tag (${tag_commit:0:7}); check out the tag's commit" >&2; exit 1; }
+    [ -f "{{ store_apk }}" ] || { echo "release-quest-apk: store APK not found: {{ store_apk }}" >&2; exit 1; }
+    pass show services/echovrce/quest-signing-keystore >/dev/null 2>&1 || { echo "release-quest-apk: no Quest signing keystore in pass; store one with: just import-quest-keystore <keystore>" >&2; exit 1; }
+    ver="${tag#v}"
+    out="build/quest-release/$tag"
+    echo "release-quest-apk: building $tag from ${head:0:7}" >&2
+    GITHUB_ACTIONS=true GITHUB_REF_TYPE=tag GITHUB_REF_NAME="$tag" just _quest-apk "{{ store_apk }}" release
+    header=build/android-dev/generated/nevr_build_info.h
+    grep -qF "kVersion = \"$ver\"" "$header" || { echo "release-quest-apk: $header does not name version $ver:" >&2; grep -F kVersion "$header" >&2; exit 1; }
+    grep -qF 'kIsDev = false;' "$header" || { echo "release-quest-apk: $header is a development build, not $tag:" >&2; grep -F kIsDev "$header" >&2; exit 1; }
+    mkdir -p "$out"
+    name="nevr-runtime-$tag-quest.apk"
+    cp -f build/android-dev/repack/r15_nevr-sentinel_signed.apk "$out/$name"
+    (cd "$out" && sha256sum "$name" > "$name.sha256")
+    cat "$out/$name.sha256"
+    echo "release-quest-apk: $out/$name is $tag at ${head:0:7}. It is NOT a release asset: publish it outside GitHub (RELEASING.md)." >&2
+
+# Put the Quest APK that `release-quest-apk <tag>` wrote, and its .sha256, on R2 under nevr-runtime/<tag>/, then fetch both
+# back from the public host and compare size and sha256 (tools/publish_quest_apk.py; #1098). Run it from the clone that
+# built the APK. The bucket, the public host, the release-signer executable and a GitHub read token come from the
+# environment only (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, RELEASE_PUBLIC_BASE, RELEASE_SIGNER_DIR,
+# RELEASE_SIGNER_BIN, GH_TOKEN); a missing one is a refusal that names it. Nothing is overwritten.
+publish-quest-apk tag:
+    python3 tools/publish_quest_apk.py "{{ tag }}"
 
 # Install the repacked Quest APK + game data onto the connected headset (sideload).
 # Pass `yes` (`just quest-install yes`) to allow removing the store build when the
@@ -292,12 +401,14 @@ package-dev store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
 # docs/adr/0007-quest-obb-mount-skip.md).
 # The download is cached at build/android-arm64/quest-data/_data.zip (~937 MB; a
 # different data_sha256 gets its own _data-<hash prefix>.zip),
-# written as .part and renamed only after the hash matches. data_sha256
-# is trust-on-first-use: it is the SHA-256 of the file served from data_url when
-# the pin was taken, not a publisher-signed value; a cached file that does not
-# match its own hash is deleted. The download and every long adb call have time
+# written as .part and renamed only after the hash matches. The default data_url is the
+# content-addressed file the signed release manifest (https://evr.echo.taxi/nevr-runtime/manifest.json)
+# lists as its `game-data` artifact, named echovr-data-<first 12 hex of the sha256>.zip, and the
+# default data_sha256 is that artifact's sha256. A data_url or data_sha256 passed by hand is
+# trust-on-first-use: the SHA-256 of whatever the URL served when the pin was taken, not a
+# publisher-signed value. A cached file that does not match its own hash is deleted. The download and every long adb call have time
 # limits. The recipe body is tools/quest-install.sh (tested in tools/tests/test_quest_install.py).
-quest-install yes="" apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" data_url="https://mia.cdn.echo.taxi/_data.zip" data_sha256="fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c":
+quest-install yes="" apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" data_url="https://evr.echo.taxi/nevr-runtime/data/echovr-data-fc2eedeacc50.zip" data_sha256="fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c":
     tools/quest-install.sh {{ quote(yes) }} {{ quote(apk) }} {{ quote(data_url) }} {{ quote(data_sha256) }}
 
 # --- Tests ---
@@ -413,12 +524,13 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_frame_stats --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_lobby_full_backoff --target test_menu_version_label --target test_splash_skip --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_frame_stats --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_invite_wizard --target test_ui_text --target test_invite_choices --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_arena_public_clock --target test_arena_public_clock_hook
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_runtime_abi
+    cmake --build --preset {{ preset }} --target test_runtime_export_guard
     cmake --build --preset {{ preset }} --target test_bootstrap_attach
-    cmake --build --preset {{ preset }} --target test_host_json --target test_bootstrap_diagnostics --target test_host_crash_capture --target test_host_runtime_load --target test_host_minidump --target test_host_rendezvous --target test_host_crash --target test_rendezvous
+    cmake --build --preset {{ preset }} --target test_host_json --target test_bootstrap_diagnostics --target test_host_crash_capture --target test_host_runtime_load --target test_host_minidump --target test_host_rendezvous --target test_host_exports --target test_host_crash --target test_rendezvous --target test_host_runtime_verify
     # The host units carry no test seam when NEVR_HOST_TESTING is not defined: each is compiled again
     # without it with the build's own flags and its object is read with nm (docs/adr/0008). Fail-close.
     python3 tools/verify_host_seams.py "build/{{ preset }}"
@@ -433,7 +545,7 @@ test-auth-unit:
     trap 'rm -rf "$sigfix"' EXIT
     # test_nevr_config writes its fixture files here (a Linux path; Wine reaches it as Z:); removed with sigfix.
     export NEVR_CONFIG_TEST_DIR="$sigfix/nevr-config-tests"
-    python3 tools/gen_plugin_signature_fixtures.py "$sigfix" --plugin-dll "build/{{ preset }}/bin/plugins/test_plugin_onframe.dll"
+    python3 tools/gen_plugin_signature_fixtures.py "$sigfix" --plugin-dll "build/{{ preset }}/bin/plugins/test_plugin_onframe.dll" --plugin-dll "build/{{ preset }}/bin/rendezvous/fixtures/good/nevr-runtime.dll"
     export NEVR_SIGFIX_DIR="$sigfix"
     # The real signed v5.4.3 BugSplat64.dll (#745), fetched by digest once and kept under build/: test_plugin_trust
     # verifies the production pins against it. A failed fetch or a digest that does not match fails the recipe, and
@@ -472,6 +584,12 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
+    bin="build/{{ preset }}/bin/test_runtime_export_guard.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
     # The attach-time MinHook proof gate (not a GTest: its own PASS/FAIL lines are the evidence). The
     # suite runs each scenario in a child process and fails on a hang, a loader-lock inversion or a
     # partially installed detour.
@@ -483,8 +601,8 @@ test-auth-unit:
     run_test "$bin"
     # The stable BugSplat64.dll host (src/runtime/host/): the fixed-buffer JSON writer, the
     # diagnostic recorder, the minidump capture, the runtime load state machine, the rendezvous's prologue
-    # validation and the minidump parser the crash harness trusts.
-    for name in test_host_json test_bootstrap_diagnostics test_host_crash_capture test_host_runtime_load test_host_minidump test_host_rendezvous; do
+    # validation, the export thunks and the minidump parser the crash harness trusts.
+    for name in test_host_json test_bootstrap_diagnostics test_host_crash_capture test_host_runtime_load test_host_minidump test_host_rendezvous test_host_runtime_verify test_host_exports; do
         bin="build/{{ preset }}/bin/$name.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -572,6 +690,30 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
+    bin="build/{{ preset }}/bin/test_lobby_full_backoff.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
+    bin="build/{{ preset }}/bin/test_menu_version_label.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
+    bin="build/{{ preset }}/bin/test_splash_skip.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
+    bin="build/{{ preset }}/bin/test_ui_texture_mips.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_cmdline_strip.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
@@ -609,7 +751,7 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
-    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_frame_stats test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_asset_cache test_session_router test_asset_registry; do
+    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_frame_stats test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_invite_wizard test_ui_text test_invite_choices test_asset_cache test_session_router test_asset_registry test_installed_levels test_telemetry_game_type test_arena_round_time test_nevr_root test_arena_public_clock test_arena_public_clock_hook; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -821,6 +963,11 @@ test-quest-shared: _vcpkg-quest-host
         src/quest/tests/quest_config_test.cpp "$yaml_lib" \
         -o "$out/quest_config_test"
     "$out/quest_config_test"
+    # #970: the CREDITS patch's ADRP/ADD encoding against the pinned libr15 words (header only, no game image).
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/tests \
+        src/quest/tests/credits_text_test.cpp \
+        -o "$out/credits_text_test"
+    "$out/credits_text_test"
     # The hardware dump (#335): field schema, procfs/sysfs readers against a fake root, the os section's
     # never-omitted fields, and the record table (also under ThreadSanitizer: the libr15 hooks write it from
     # game threads while the dump thread reads it).
@@ -1084,6 +1231,22 @@ test-quest-hooks:
         src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp "$out/thunk_exception_fixture.o" \
         -o "$out/got_hook_test" -ldl -pthread
     timeout 300 "$out/got_hook_test" "$out"  # a hang is a failure, not a stuck gate
+    # The inline (trampoline) backend (inline_hook.h): the arm64 encodings, the prologue, page and
+    # registry refusals, the trampoline's bytes and the thunk entry point. Host bytes only; the detour
+    # runs on a device, not here.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/inline_hook_test.cpp \
+        src/quest/sentinel/inline_hook.cpp src/quest/sentinel/arm64_reloc.cpp src/quest/sentinel/got_hook.cpp \
+        src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/inline_hook_test" -ldl -pthread
+    timeout 120 "$out/inline_hook_test"
+    # The PC-relative relocator (arm64_reloc.h): each kind decoded and then run, original window against the
+    # relocated trampoline far away, on a small A64 interpreter. Pure; no device.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/arm64_reloc_test.cpp \
+        src/quest/sentinel/arm64_reloc.cpp -o "$out/arm64_reloc_test" -pthread
+    timeout 120 "$out/arm64_reloc_test"
+    # The lobby-full policy (#1001): the #889 cases on the 16-byte lobby key. Pure; no libr15 here.
+    "${cxx[@]}" -pthread src/quest/tests/lobby_full_test.cpp -o "$out/lobby_full_test"
+    timeout 60 "$out/lobby_full_test"
     # The login-prompt hook (#239): the real handler and prompt board, built as the sentinel builds
     # them (no exceptions), driven through the thunk entry.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/login_prompt_hook_test.cpp \
@@ -1091,6 +1254,13 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/login_prompt_hook_test" -ldl
     timeout 120 "$out/login_prompt_hook_test"
+    # The login-failed page's title (#1137): the real handler and prompt board driven through the thunk entry, against a
+    # stand-in for the script library's string_t constructor.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/login_title_hook_test.cpp \
+        src/quest/sentinel/login_title_hook.cpp src/quest/auth/prompt_board.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/login_title_hook_test" -ldl
+    timeout 120 "$out/login_title_hook_test"
     # The whole no-credentials chain (#581): the real prerequisite handlers and the real prompt hook together,
     # token auth awaiting the player -> the answers delivered -> the game's local failure -> the code written.
     g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -c \
@@ -1135,14 +1305,43 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/vk_ext_window_test" -ldl
     timeout 120 "$out/vk_ext_window_test"
+    # The OS build floor (#945): the real handler through the thunk entry against a stand-in for CSysInfo::OSBuildVersion,
+    # a number below the floor, above it, none, and an unknown floor.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/os_build_gate_hook_test.cpp \
+        src/quest/sentinel/os_build_gate_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/os_build_gate_hook_test" -ldl
+    timeout 120 "$out/os_build_gate_hook_test"
+    # The texture-quality hook (#943): the real handler through the thunk entry against a stand-in for vrapi_GetSystemPropertyInt,
+    # every level's eye size, the pass-through of every other id, the latch, `stock`, and the shared slot's observer.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/texture_quality_hook_test.cpp \
+        src/quest/sentinel/texture_quality_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/texture_quality_hook_test" -ldl
+    timeout 120 "$out/texture_quality_hook_test"
+    # The hardware dump on the shared vrapi_GetSystemPropertyInt slot (#943): owned by the texture-quality hook, the dump
+    # installs nothing there and records the runtime's own answers through the observer.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/hwdump_share_test.cpp \
+        src/quest/sentinel/texture_quality_hook.cpp src/quest/diag/hwdump_install.cpp \
+        src/quest/diag/hwdump_handlers.cpp src/quest/diag/hwdump_records.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/hwdump_share_test" -ldl
+    timeout 120 "$out/hwdump_share_test"
+    # The log-only resource request hook (#871): the real handler through the thunk entry against a stand-in for
+    # FillResourceFileRequest that fills a request the way the pinned function does.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/resource_request_hook_test.cpp \
+        src/quest/sentinel/resource_request_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/resource_request_hook_test" -ldl
+    timeout 120 "$out/resource_request_hook_test"
     # The toast presenter against a fake JNI (#807): a Java exception thrown at each JNI call in turn, null or not, is
     # never left pending. jni.h is the NDK's own; the recipe stops when it is absent.
     jni="{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/jni.h"
     [ -f "$jni" ] || { echo "test-quest-hooks: FAIL: $jni not found (the toast test needs the NDK's jni.h)" >&2; exit 1; }
     mkdir -p "$out/jni"
     cp "$jni" "$out/jni/jni.h"
-    "${cxx[@]}" -isystem "$out/jni" -fno-exceptions src/quest/tests/toast_presenter_test.cpp \
-        src/quest/sentinel/toast_presenter.cpp -o "$out/toast_presenter_test"
+    "${cxx[@]}" -isystem "$out/jni" -fno-exceptions -pthread src/quest/tests/toast_presenter_test.cpp \
+        src/quest/sentinel/toast_presenter.cpp src/quest/sentinel/hook_log.cpp -o "$out/toast_presenter_test" -ldl
     timeout 60 "$out/toast_presenter_test"
 
 # Quest config-string redirect on the host. Builds two fixture shared objects that import
@@ -1213,15 +1412,16 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
     [ -f "$apk" ] || { echo "test-quest-hooks-pinned: pinned APK not found: $apk" >&2; exit 1; }
     out="build/quest-hooks-pinned"
     rm -rf "$out"; mkdir -p "$out/lib"
-    unzip -o -q "$apk" lib/arm64-v8a/libr15.so lib/arm64-v8a/libpnsradmatchmaking.so lib/arm64-v8a/libpnsovr.so -d "$out/lib"
+    unzip -o -q "$apk" lib/arm64-v8a/libr15.so lib/arm64-v8a/libpnsradmatchmaking.so lib/arm64-v8a/libpnsovr.so lib/arm64-v8a/lib7f2363b8976491aa.so -d "$out/lib"
     echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $out/lib/lib/arm64-v8a/libr15.so" | sha256sum -c -
     echo "36236ab1df5783da57c064b0fbccc3a61c0e1d150c208022fbfc9cd6e5ed60ee  $out/lib/lib/arm64-v8a/libpnsradmatchmaking.so" | sha256sum -c -
     echo "26e9a216a710d42a303346a4ca5b84037ff38250ea725dc7112b055fcacada79  $out/lib/lib/arm64-v8a/libpnsovr.so" | sha256sum -c -
+    echo "80c36268dbefd9f20ccae0aa35d3efe6f6480a8179f9f46709e71e33e0f110e4  $out/lib/lib/arm64-v8a/lib7f2363b8976491aa.so" | sha256sum -c -
     g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isrc/quest/sentinel \
         src/quest/tests/got_pinned_test.cpp src/quest/sentinel/got_hook.cpp \
         src/quest/sentinel/hook_log.cpp -o "$out/got_pinned_test" -ldl
     "$out/got_pinned_test" "$out/lib/lib/arm64-v8a/libr15.so" "$out/lib/lib/arm64-v8a/libpnsradmatchmaking.so" \
-        "$out/lib/lib/arm64-v8a/libpnsovr.so"
+        "$out/lib/lib/arm64-v8a/libpnsovr.so" "$out/lib/lib/arm64-v8a/lib7f2363b8976491aa.so"
     # #411: every ovr_* import the message pump and the login callbacks can reach is hooked or guarded, so a
     # synthetic message handle never reaches the SDK (tools/pinned_ovr_imports.txt says how each is treated).
     python3 tools/pinned_ovr_import_walk.py "$out/lib/lib/arm64-v8a/libpnsovr.so" --expect tools/pinned_ovr_imports.txt
@@ -1355,7 +1555,11 @@ test-quest-integration: _vcpkg-quest-host
     "${off[@]}" -c src/quest/integration/dlopen_hook.cpp -o "$out/dlopen_hook.o"
     "${off[@]}" -c src/quest/integration/social_shim.cpp -o "$out/social_shim.o"
     "${off[@]}" -c src/quest/sentinel/login_prompt_hook.cpp -o "$out/login_prompt_hook.o"
+    "${off[@]}" -c src/quest/sentinel/login_title_hook.cpp -o "$out/login_title_hook.o"
     "${off[@]}" -c src/quest/sentinel/obb_skip_hook.cpp -o "$out/obb_skip_hook.o"
+    "${off[@]}" -c src/quest/sentinel/texture_quality_hook.cpp -o "$out/texture_quality_hook.o"
+    "${off[@]}" -c src/quest/sentinel/system_ui_hook.cpp -o "$out/system_ui_hook.o"
+    "${off[@]}" -c src/quest/sentinel/resource_request_hook.cpp -o "$out/resource_request_hook.o"
     "${off[@]}" -c src/quest/login/login_counters.cpp -o "$out/login_counters.o"
     # login_counters.cpp reads the local-answer counters of login_prerequisites.cpp (#411).
     "${off[@]}" -c src/quest/login/login_prerequisites.cpp -o "$out/login_prerequisites.o"
@@ -1381,7 +1585,7 @@ test-quest-integration: _vcpkg-quest-host
         src/runtime/lifecycle/stable_string_pool.cpp \
         "$out/got_hook.o" "$out/hook_report.o" "$out/tstring_thunks.o" "$out/dlopen_hook.o" "$out/social_shim.o" \
         "$out/social_game_calls.o" "$out/social_install.o" "$out/social_invite_gate.o" "$out/social_facade.o" "$out/hook_log.o" "$out/social_names.o" \
-        "$out/login_prompt_hook.o" "$out/obb_skip_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
+        "$out/login_prompt_hook.o" "$out/login_title_hook.o" "$out/obb_skip_hook.o" "$out/resource_request_hook.o" "$out/texture_quality_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
         "$out/login_prerequisites.o" "$out/login_standin.o" \
         "$yaml_lib" -o "$out/integration_hooks_test" -ldl -pthread -lzstd
     timeout 300 "$out/integration_hooks_test"
@@ -1395,6 +1599,52 @@ test-quest-integration: _vcpkg-quest-host
         -o "$out/session_bridge_test" $(pkg-config --libs libcurl) -lssl -lcrypto
     timeout 300 "$out/session_bridge_test"
     echo "test-quest-integration: all integration tests pass on the host"
+
+# The Quest plugin loader on the host (docs/adr/0019-quest-plugin-loader.md, slice 1): the plan, the ELF and build-ID
+# checks, the loader against real shared objects built from the fixture plugin (one lib<variant>.so per way a plugin can be
+# right or wrong, each with a GNU build ID), the record log, the platform, and the sentinel's binding of it (the counts the
+# constructor sequence acts on, once-only planning, the finish that never waits on a running pass). x86-64 fixtures, so the
+# loader's machine check is told AArch64 or x86-64 explicitly. No NDK, no Android. Fail-close.
+test-quest-plugins:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-plugins-host"
+    mkdir -p "$out"
+    json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
+    if [[ ! -f "$json_src/json.hpp" ]]; then
+        echo "test-quest-plugins: FAIL - $json_src/json.hpp not found; run 'just build' with a mingw-* preset first" >&2
+        exit 1
+    fi
+    json_inc="$out/json_inc"
+    mkdir -p "$json_inc"
+    ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -Isrc/quest/tests/stub -isystem "$json_inc")
+    fixture() { # library-file-stem plugin-name [macros...]
+        local stem="$1" name="$2"; shift 2
+        "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 -DFX_NAME="\"$name\"" "$@" \
+            src/quest/tests/plugin_fixture.cpp -o "$out/lib$stem.so"
+    }
+    fixture fx_ok ok
+    fixture fx_second second
+    fixture fx_noids noids -DFX_NO_IDS
+    fixture fx_otherids otherids -DFX_IDS='"3333333333333333333333333333333333333333"'
+    fixture fx_initfail initfail -DFX_INIT_RC=3
+    fixture fx_noinfo noinfo -DFX_NO_INFO
+    fixture fx_legacy legacy -DFX_LEGACY_INIT
+    # The files that include callback_thunk.h (through pinned_targets.h) are built without exceptions, as on the device.
+    "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/got_hook.cpp -o "$out/got_hook.o"
+    "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/hook_report.cpp -o "$out/hook_report.o"
+    "${cxx[@]}" -fno-exceptions -c src/quest/plugin/plugin_game_image.cpp -o "$out/plugin_game_image.o"
+    loader=(src/quest/plugin/plugin_plan.cpp src/quest/plugin/plugin_image.cpp src/quest/plugin/plugin_loader.cpp
+            src/quest/plugin/plugin_record_log.cpp src/quest/plugin/plugin_platform.cpp src/quest/data/sha256.cpp
+            src/quest/sentinel/hook_log.cpp src/quest/sentinel/sentinel_log.cpp
+            "$out/got_hook.o" "$out/hook_report.o" "$out/plugin_game_image.o")
+    "${cxx[@]}" -pthread src/quest/tests/plugin_loader_test.cpp "${loader[@]}" -o "$out/plugin_loader_test" -ldl
+    timeout -k 5 120 "$out/plugin_loader_test" "$out"
+    "${cxx[@]}" -pthread src/quest/tests/plugin_runtime_test.cpp src/quest/plugin/plugin_runtime.cpp \
+        src/runtime/ext/plugin_load_plan.cpp "${loader[@]}" -o "$out/plugin_runtime_test" -ldl
+    timeout -k 5 120 "$out/plugin_runtime_test" "$out"
+    echo "test-quest-plugins: all plugin loader tests pass on the host"
 
 # The integration's pinned dlopen target against the real libr15.so (docs/adr/0003). Extracts it from the
 # store APK, checks its SHA-256 and resolves LibR15Dlopen() the way the loader would lay the image out.
@@ -1523,7 +1773,7 @@ verify:
     # from the compiler/linker itself — a no-op when green, nonzero when truly broken.
     cmake --build --preset {{ preset }}
     # The DLL embeds exactly the public defaults file (the build reads no other source).
-    python3 tools/check_embedded_defaults.py --header build/{{ preset }}/generated/nevr_builtin_defaults.h --binary build/{{ preset }}/bin/BugSplat64.dll
+    python3 tools/check_embedded_defaults.py --header build/{{ preset }}/generated/nevr_builtin_defaults.h --binary build/{{ preset }}/bin/nevr-runtime.dll
     # --- Parallel test block --------------------------------------------------
     # Ten independent suites run concurrently (capped at nproc) instead of one after
     # another: each test-quest-* compiles its own host binary in its own out dir and runs
@@ -1544,6 +1794,7 @@ verify:
         test-quest-data \
         test-quest-data-net \
         test-quest-integration \
+        test-quest-plugins \
         test-scripting
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
@@ -2346,10 +2597,10 @@ verify:
     sensor_nonempty "N114 plugin capability ABI" "non-comment lines of extension/plugin_interface.h" "$N114_ABI"
     # Pinned to the CURRENT ABI version. The pin guards against a silent REGRESSION
     # below the version where the capability channel (v3), the args channel (v4), the
-    # query API (v5), the host log (v6, #598) and the plugin assets (v7, #432) landed — a
-    # deliberate bump updates this line, exactly as this one did.
-    if ! grep -q 'NEVR_PLUGIN_API_VERSION 7' <<<"$N114_ABI"; then
-        echo "verify: FAIL — N114 NEVR_PLUGIN_API_VERSION is not 7; the capability (v3) + args (v4) + query-API (v5) + host-log (v6) + asset (v7) channels must not regress below v7." >&2
+    # query API (v5), the host log (v6, #598), the plugin assets (v7, #432) and the current level (v8, #1094)
+    # landed — a deliberate bump updates this line, exactly as this one did.
+    if ! grep -q 'NEVR_PLUGIN_API_VERSION 8' <<<"$N114_ABI"; then
+        echo "verify: FAIL — N114 NEVR_PLUGIN_API_VERSION is not 8; the capability (v3) + args (v4) + query-API (v5) + host-log (v6) + asset (v7) + level (v8) channels must not regress below v8." >&2
         exit 1
     fi
     # N134 S7: the host must resolve NvrPluginInitEx — the v4 per-plugin-args init
@@ -2494,25 +2745,34 @@ verify:
     # produced the whole broadcaster thread — an address given a name nobody
     # re-derived, then reasoned about by that name forever after.
     # Known bugs warn (and stay visible); anything NEW is a hard failure.
-    timeout -k 10 600 python3 -m unittest discover -s tools/tests -p 'test_*.py'
+    # 1500 s, not 600: the full suite (1737 tests) took 457 s on the developer machine and about 574 s
+    # for 1145 tests on the CI runner (#1004, release build 40454435804, killed at 600 s with exit 124).
+    timeout -k 10 1500 python3 -m unittest discover -s tools/tests -p 'test_*.py'
     python3 tools/verify_hook_invariants.py
     # The scenario-test control endpoint can inject messages into a live session; it exists only in
     # the mingw-scenario preset. The DLL this gate just built must not carry it.
-    python3 tools/verify_scenario_control_absent.py "build/{{ preset }}/bin/BugSplat64.dll"
-    # #575 step 1: the game-facing PE surface of BugSplat64.dll is pinned before any change of which
-    # target owns the code: the exact 28-name export set with its ordinals, DetoursExportPlaceholder at
-    # ordinal 1, no eager nevr-runtime.dll import. The game's own BugSplat64.dll imports are cross-checked when
+    python3 tools/verify_scenario_control_absent.py "build/{{ preset }}/bin/BugSplat64.dll" "build/{{ preset }}/bin/nevr-runtime.dll"
+    # #575, #853: the game-facing PE surface of BugSplat64.dll (the host) is pinned: the exact 28-name export
+    # set with its ordinals, DetoursExportPlaceholder at ordinal 1, no eager nevr-runtime.dll import, no runtime
+    # code in it; nevr-runtime.dll exports the rendezvous entry and the module entry points and carries the
+    # build-identity literal, and the two literals agree. The game's own BugSplat64.dll imports are cross-checked when
     # the game binary is present (it is not in CI or a fresh worktree). Fail-closed: no `|| true`.
     if [ -f echovr/bin/win10/echovr.exe ]; then
-        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll" --game-exe echovr/bin/win10/echovr.exe
+        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll" --runtime-dll "build/{{ preset }}/bin/nevr-runtime.dll" --game-exe echovr/bin/win10/echovr.exe
     else
         echo "pe-contract: NOTE game binary absent (echovr/bin/win10/echovr.exe) - game-import cross-check skipped; host export checks still run"
-        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll"
+        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll" --runtime-dll "build/{{ preset }}/bin/nevr-runtime.dll"
     fi
+    # #853 (ADR 0012 decision 4): the host shares no writable data symbol with the core or ABI library. Run on the
+    # build's own UNSTRIPPED bin/BugSplat64.dll (dist strips a copy later; a stripped host has no symbols to read and
+    # the tool then fails). The tool reads nm itself and fails closed: nm failing, an empty listing or a writable symbol
+    # the host shares with libnevr_core.a or libnevr_abi.a all exit 1 (N93: no stage that can answer "no match" for
+    # "could not look").
+    python3 tools/verify_host_no_core_state.py --host-dll "build/{{ preset }}/bin/BugSplat64.dll" --lib "build/{{ preset }}/src/core/libnevr_core.a" --lib "build/{{ preset }}/src/abi/libnevr_abi.a"
     # #850: both shipped Windows files carry the pinned VERSIONINFO (Details tab), at the version the DLL's
     # own NEVR-BUILD literal states. Fail-closed: a file without the resource, a changed field or a
     # version that is not the build's exits 1.
-    python3 tools/pe_version_info.py check --dll "build/{{ preset }}/bin/BugSplat64.dll" --exe "build/{{ preset }}/bin/echovr_server.exe"
+    python3 tools/pe_version_info.py check --dll "build/{{ preset }}/bin/BugSplat64.dll" --runtime-dll "build/{{ preset }}/bin/nevr-runtime.dll" --exe "build/{{ preset }}/bin/echovr_server.exe"
     # N84 runtime counterpart. The static check above scans source, so it only
     # sees plugins in THIS tree — a third-party plugin is a DLL we never compile.
     # HookGuard detects the effect (our bytes changed) instead of the source.
@@ -3238,7 +3498,7 @@ verify:
     # and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 1673
+    python3 tools/verify_gtest_floor.py --floor 2131
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py

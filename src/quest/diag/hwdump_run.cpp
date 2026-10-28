@@ -139,6 +139,9 @@ bool StartHwDump() noexcept {
     const std::size_t installed = InstallHooks();
     sentinel::Emit(installed == kHookCount ? LogLevel::kInfo : LogLevel::kWarn,
                    "hwdump hooks installed=" + std::to_string(installed) + "/" + std::to_string(kHookCount));
+    if (SysPropIntShared()) {
+      sentinel::Emit(LogLevel::kInfo, "hwdump shares slot=vrapi_GetSystemPropertyInt owner=texture_quality");
+    }
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);

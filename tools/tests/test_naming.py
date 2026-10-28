@@ -67,19 +67,32 @@ BRAND_PROSE_SPELLINGS = {
     "docs/adr/0012-static-install-root.md": {"nEVR"},
     "docs/design/2026-09-21-mic-provider-voip-fix.md": {"nEVR"},
     "docs/reference/example-config.yaml": {"nEVR"},
+    "docs/reference/verifying-a-release.md": {"nEVR"},
     "docs/standards/logging.md": {"nEVR"},
     "cmake/nevr_version_info.rc.in": {"nEVR"},  # ProductName and FileDescription are brand prose
     "docs/standards/verification.md": {"nEVR"},
     "plugins/example/README.md": {"nEVR"},
     "src/launcher/CMakeLists.txt": {"nEVR"},  # the exe's FileDescription
     "src/runtime/CMakeLists.txt": {"nEVR"},  # the DLL's FileDescription
+    "src/core/build_identity.h": {"nEVR"},  # MenuVersionLabel: the text a player sees
+    "src/core/build_identity.cpp": {"nEVR"},  # MenuVersionLabel: the text a player sees
+    "src/quest/social/menu_version_label.h": {"nEVR"},  # the Quest menu label: the text a player sees
+    "src/quest/social/menu_version_label.cpp": {"nEVR"},  # the Quest menu label: the text a player sees
     "src/runtime/ext/plugin_refusal_notice.h": {"nEVR"},
+    "src/runtime/host/stop_notice.h": {"nEVR"},  # the player's text when the runtime did not load
+    "src/runtime/tests/test_host_rendezvous.cpp": {"nEVR"},  # asserts that text
+    "src/runtime/tests/test_menu_version_label.cpp": {"nEVR"},  # the label text the menu shows
     "src/runtime/tests/test_behavioral.cpp": {"nEVR"},  # asserts the refusal dialog's player prose
     "tools/package-release/README.template.txt": {"nEVR"},
     "tools/pe_version_info.py": {"nEVR"},  # the pinned ProductName and FileDescription
     "tools/tests/test_pe_version_info.py": {"nEVR"},  # the same pins, read back from built files
     "tools/package-release/RELEASE-NOTES.template.md": {"nEVR"},
     "tools/winvm/README.md": {"nEVR"},
+    "src/core/nevr_root.h": {"nEVR"},  # comment prose: where nEVR keeps its files
+    "src/runtime/lifecycle/nevr_root_move.h": {"nEVR"},  # comment prose about the one-time move
+    "src/runtime/lifecycle/nevr_root_move.cpp": {"nEVR"},  # comment prose, and the MOVED-TO-NEVR-ROOT.txt text a player reads
+    "src/runtime/tests/test_nevr_root.cpp": {"nEVR"},  # comment prose and a failure message
+    "tools/tests/test_nevr_root_wiring.py": {"nEVR"},  # docstring prose
 }
 
 

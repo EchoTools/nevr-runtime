@@ -67,7 +67,9 @@ void TestHook_SetLobbyFrameClock(uint64_t (*clockMs)());
 bool TestHook_ReadLoginFailureDiagnostic(const std::string& frame, uint64_t* statusCode, size_t* messageBytes);
 bool TestHook_LogLoginFailureDiagnostic(const std::string& frame, bool serverMode);
 bool TestHook_MoveCodeLineFirst(const std::string& frame, std::string* out);
-uint64_t TestHook_SelectPlatformCode(bool hasUrlCredentials, bool noOvr);
+uint64_t TestHook_SelectPlatformCode(bool hasUrlCredentials, bool noVr);
+// Stands in for the game's flag word at game+0x7ae0 (what the login reads): a value >= 0 is the word, -1 reads the game.
+void TestHook_SetGameFlagWord(int64_t flags);
 std::string TestHook_SelectRemoteBearer(bool hasUrlCredentials, const std::string& jwt,
                                         const std::string& serverKey);
 bool TestHook_IsBearerReplacingPath(const std::string& url);

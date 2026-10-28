@@ -3,8 +3,8 @@
 
 Design: docs/design/2026-10-01-social-scenario-harness.md. The client is launched exactly as
 launch-client.sh launches it (nested display :101, pristine install and restore, production login),
-with the mingw-scenario build of BugSplat64.dll, which carries the test-only control endpoint
-(src/runtime/scenario/scenario_control.cpp). Steps come from a YAML file; each one either waits
+with the mingw-scenario build (BugSplat64.dll and the nevr-runtime.dll beside it), whose runtime carries the
+test-only control endpoint (src/runtime/scenario/scenario_control.cpp). Steps come from a YAML file; each one either waits
 for a line in the game's console log, talks to the control endpoint, or expects a line after the
 previous action. The first failing step stops the run and is named. Exit 0 only if every step passed.
 
@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import functools
+import getpass
 import json
 import os
 import pathlib
@@ -33,6 +34,7 @@ import yaml
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
 import work_root  # noqa: E402
+import host_stop_cause  # noqa: E402
 
 DEFAULT_DLL = REPO / "build/mingw-scenario/bin/BugSplat64.dll"
 SCRATCH = work_root.work_root() / "scenario-runs"
@@ -48,6 +50,11 @@ def wineprefix() -> pathlib.Path:
     out = subprocess.run([str(REPO / "launch-client.sh"), "--print-game-root"],
                          capture_output=True, text=True, check=True)
     return pathlib.Path(out.stdout.strip()) / "echovr/.wineprefix"
+
+
+def nevr_root_logs() -> pathlib.Path:
+    """The prefix's nevr root logs folder (src/core/nevr_root.h): where the host writes nevr-bootstrap.jsonl."""
+    return wineprefix() / "drive_c/users" / getpass.getuser() / "AppData/Local/nevr/echovr/logs"
 
 
 MARKER = b"[NEVR.SCENARIO]"
@@ -142,8 +149,11 @@ def load_scenario(path: pathlib.Path) -> dict:
 class ConsoleLog:
     """The game's console output, read fresh on every poll; positions are character offsets."""
 
-    def __init__(self, path: pathlib.Path):
+    def __init__(self, path: pathlib.Path, halted=None):
         self.path = path
+        # Returns the sentence for a stop the host wrote for this run, or None. A host that stops the game leaves
+        # it on a dialog nobody dismisses, so the game stays up and nothing else would end the wait (#1122).
+        self.halted = halted
 
     def text(self) -> str:
         try:
@@ -167,6 +177,9 @@ class ConsoleLog:
             if fatal:
                 line = text[text.rfind("\n", 0, fatal.start()) + 1:text.find("\n", fatal.end())].strip()
                 raise StepFailed(f"the game logged a fatal line before /{pattern}/: {line[:220]}")
+            stopped = self.halted() if self.halted is not None else None
+            if stopped:
+                raise StepFailed(f"{stopped}; before /{pattern}/")
             if alive is not None and not alive():
                 raise StepFailed(f"the game exited before /{pattern}/; {self.summary(start)}")
             if deadline is not None and time.monotonic() >= deadline:
@@ -389,8 +402,14 @@ class Run:
                     raise StepFailed(f"display :101 never accepted a client; see {self.out / 'xephyr.log'}")
                 time.sleep(0.5)
 
+    def host_stopped(self):
+        """The host's own words for a stop it made since this launch, or None (tools/host_stop_cause.py)."""
+        log = nevr_root_logs() / "nevr-bootstrap.jsonl"
+        return host_stop_cause.cause(log, self.launched_at)
+
     def launch(self):
         launcher_out = self.out / "launch-client.out"
+        self.launched_at = time.time()
         # -mp is the game's own multiplayer flag: with -windowed alone a client reaches the menu
         # and waits for a hand on Play, so no scenario waiting for "in game" can ever pass (#674).
         # --require-in-game arms launch-client.sh's own gate so the launcher also fails (in its log
@@ -406,7 +425,7 @@ class Run:
         while time.monotonic() < deadline:
             m = re.search(r"=== Console log: (\S+) ===", launcher_out.read_text())
             if m:
-                self.console = ConsoleLog(pathlib.Path(m.group(1)))
+                self.console = ConsoleLog(pathlib.Path(m.group(1)), halted=self.host_stopped)
                 return
             if self.launcher.poll() is not None:
                 raise StepFailed(f"launch-client.sh exited early (rc={self.launcher.returncode}); see {launcher_out}")
@@ -542,8 +561,10 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     scenario = load_scenario(args.scenario)
-    if not args.dll.is_file() or MARKER not in args.dll.read_bytes():
-        print(f"ERROR: {args.dll} is not a scenario build (missing or no {MARKER.decode()}); "
+    # The control endpoint is compiled into the runtime, which the launcher deploys beside the host.
+    runtime = args.dll.with_name("nevr-runtime.dll")
+    if not args.dll.is_file() or not runtime.is_file() or MARKER not in runtime.read_bytes():
+        print(f"ERROR: {args.dll} is not a scenario build (missing, or its {runtime.name} is missing or has no {MARKER.decode()}); "
               "run `just preset=mingw-scenario build`", file=sys.stderr)
         return 2
     stamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")

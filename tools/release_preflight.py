@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Refuse to start a release from a clone that is not exactly origin's release branch.
+"""Refuse to start a release from a clone that is not exactly origin's release branch (or, with --tag, its release tag).
 
     tools/release_preflight.py [--base main]        (`just release-preflight`)
+    tools/release_preflight.py --tag vX.Y.Z         (`just release-quest-apk vX.Y.Z`)
 
 Run it before building a package or creating any release: before `just package-dev`, before
 pushing a v<x.y.z> release tag and before `gh release create`. It exits 0 and prints
@@ -12,13 +13,27 @@ pushing a v<x.y.z> release tag and before `gh release create`. It exits 0 and pr
   2. there is no uncommitted change (staged or not) and no untracked file (ignored files do not count);
   3. HEAD is on origin's <base> branch (no commit that origin does not have);
   4. this clone is not behind origin's <base> (HEAD is origin's tip exactly);
+     (3 and 4 are how a release is started from the newest code. With `--tag vX.Y.Z` they are replaced by 3t and 4t,
+     so that a release that is not the newest can be built after main has moved past it (#1080):)
+  3t. the tag is in this clone, and HEAD is the commit it points at (peeled, for an annotated tag);
+  4t. the tag is on origin and points at that same commit there. origin's <base> is not consulted: the tag, not the
+      branch tip, names what is built. Without `--tag` nothing about this changes, and no environment variable or other
+      option relaxes 3 and 4. 1, 2, 5 and 6 apply in both forms; 2 is the whole of "the tree is the tag's tree";
   5. origin is reachable, and is the project's repository (github.com EchoTools/nevr-runtime, the ssh and
      https forms; `--expect-origin REGEX` overrides): a clone whose `origin` points elsewhere, or a check
      that cannot run, is a refusal, not a pass. Every git command is checked: a non-zero exit, or git
-     missing from PATH, is a problem line and a log record, never "clean".
+     missing from PATH, is a problem line and a log record, never "clean";
+  6. no part of the version the next build would stamp is outside what the Quest versionCode rule encodes
+     (tools/quest_apk_version.py: major 209, minor 99, patch 99, development distance N 998).
+
+It also WARNS (a `release-preflight: WARNING:` line, exit status unchanged, recorded in the log) when a part of that
+version is close to its limit: development distance N above 900, minor or patch above 90. The version is the one
+cmake/set_project_version_from_git.cmake would write: the nearest release tag when HEAD is on it, else its next
+patch with `-dev.<commits since the tag>`.
 
 It is READ-ONLY. The git commands it runs, and nothing else:
   git rev-parse --show-toplevel          git config --get remote.origin.url   git rev-parse HEAD
+  git describe --tags --long --match "v[0-9]*" --exclude "v*-*"   (the nearest release tag and the distance to it)
   git status --porcelain=v1 --untracked-files=all
   git for-each-ref refs/tags --format=...  (local tags and their peeled commits)
   git ls-remote origin                   (origin's refs: the only network call; it reads, it writes nothing here)
@@ -42,6 +57,9 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import quest_apk_version  # noqa: E402
 
 MAX_PATHS = 20
 # origin must be this repository, in either URL form; the project is public, so this is not a secret.
@@ -121,9 +139,26 @@ def plural(n: int, word: str) -> str:
     return f"{n} {word}" + ("" if n == 1 else "s")
 
 
-def check(root: str, base: str, expect_origin: str = EXPECT_ORIGIN) -> tuple:
-    """Returns (problems, facts). Never raises for a git failure: that is itself a problem."""
-    problems, facts = [], {"base": base}
+def next_build_version(root: str) -> tuple:
+    """(version, None) the next build would stamp (cmake/set_project_version_from_git.cmake), or (None, why not)."""
+    out = git("describe", "--tags", "--long", "--match", "v[0-9]*", "--exclude", "v*-*", cwd=root)
+    if out.returncode != 0:
+        return None, failure(out, "git describe")
+    match = re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-([0-9]+)-g([0-9a-f]+)", out.stdout.strip())
+    if not match:
+        return None, f"git describe printed '{out.stdout.strip()[:60]}', not v<X>.<Y>.<Z>-<distance>-g<sha>"
+    major, minor, patch, distance, sha = match.groups()
+    if int(distance) == 0:
+        return f"{major}.{minor}.{patch}", None
+    return f"{major}.{minor}.{int(patch) + 1}-dev.{distance}+{sha}", None
+
+
+def check(root: str, base: str, expect_origin: str = EXPECT_ORIGIN, tag: str = None) -> tuple:
+    """Returns (problems, facts). Never raises for a git failure: that is itself a problem.
+
+    `tag` (vX.Y.Z) replaces the origin/<base> tip comparison with a comparison against that tag's commit.
+    """
+    problems, facts = [], {"base": base, "tag": tag, "warnings": []}
     head_result = git("rev-parse", "HEAD", cwd=root)
     head = head_result.stdout.strip()
     facts["head"] = head
@@ -141,6 +176,17 @@ def check(root: str, base: str, expect_origin: str = EXPECT_ORIGIN) -> tuple:
             problems.append(f"{label}: {path}")
         if len(paths) > MAX_PATHS:
             problems.append(f"{len(paths) - MAX_PATHS} more {label}s not listed")
+
+    # The versionCode rule's limits, on the version the next build would stamp: a part out of range refuses, a part
+    # near its limit warns (and never blocks).
+    version, why_not = next_build_version(root)
+    facts["build_version"] = version
+    if version is None:
+        facts["warnings"].append(f"cannot work out the version the next build would stamp, so the versionCode limits "
+                                 f"are not checked: {why_not}")
+    else:
+        problems += quest_apk_version.field_problems(version)
+        facts["warnings"] += quest_apk_version.field_warnings(version)
 
     # The URL as configured (not expanded by url.<base>.insteadOf): what the clone says origin is.
     remote = git("config", "--get", "remote.origin.url", cwd=root)
@@ -171,7 +217,19 @@ def check(root: str, base: str, expect_origin: str = EXPECT_ORIGIN) -> tuple:
 
     tip = heads.get(base)
     facts["origin_tip"] = tip
-    if tip is None:
+    if tag is not None:
+        # The tag's own commit is what is built: HEAD must be it, and origin must have the tag at the same commit.
+        # (The loop above already refuses a local tag that differs from origin's; this names the requested one.)
+        if tags_failure:
+            pass  # already a problem line: the tag cannot be looked up
+        elif tag not in tags:
+            problems.append(f"tag {tag} is not in this clone (git fetch --tags, then re-run)")
+        elif head != commit_of(tags[tag]):
+            problems.append(f"HEAD {head[:12]} is not the commit of {tag} ({commit_of(tags[tag])[:12]}); "
+                            f"check out the tag's commit")
+        if tag not in remote_tags:
+            problems.append(f"tag {tag} is not on origin: a release is built only from a tag that origin has")
+    elif tip is None:
         problems.append(f"origin has no branch {base}")
     elif head != tip:
         # `git rev-parse --verify --quiet <tip>^{commit}` exits 1, silently, when the object is absent and
@@ -206,9 +264,19 @@ def check(root: str, base: str, expect_origin: str = EXPECT_ORIGIN) -> tuple:
     return problems, facts
 
 
+def release_tag(text: str) -> str:
+    """argparse type: a release tag name, vX.Y.Z (the form tools/quest_apk_version.py and release-quest-apk accept)."""
+    if not re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", text):
+        raise argparse.ArgumentTypeError(f"'{text[:60]}' is not a release tag (vX.Y.Z)")
+    return text
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--base", default="main", help="origin's release branch (default main)")
+    parser.add_argument("--tag", default=None, metavar="vX.Y.Z", type=release_tag,
+                        help="start from this release tag's commit instead of origin's <base> tip: HEAD must be the "
+                             "tag's commit and origin must have the tag at the same commit (default: HEAD is origin/<base>)")
     parser.add_argument("--expect-origin", default=EXPECT_ORIGIN, metavar="REGEX",
                         help="regular expression origin's URL must match (default: the project's GitHub URL)")
     args = parser.parse_args(argv)
@@ -219,19 +287,23 @@ def main(argv=None) -> int:
             problems = ["not inside a git work tree"]
     else:
         root = top.stdout.strip()
-        problems, facts = check(root, args.base, args.expect_origin)
+        problems, facts = check(root, args.base, args.expect_origin, args.tag)
     record = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-              "user": getpass.getuser(), "cwd": root, "head": facts.get("head"), "base": args.base,
+              "user": getpass.getuser(), "cwd": root, "head": facts.get("head"), "base": args.base, "tag": args.tag,
               "origin_tip": facts.get("origin_tip"), "origin_url": facts.get("origin_url"),
               "expect_origin": args.expect_origin,
+              "build_version": facts.get("build_version"), "warnings": facts.get("warnings", []),
               "result": "refused" if problems else "ok", "problems": problems}
     write_log(record)
+    for warning in facts.get("warnings", []):
+        print(f"release-preflight: WARNING: {warning}")
     for problem in problems:
         print(f"release-preflight: PROBLEM: {problem}")
     if problems:
         print(f"release-preflight: REFUSED: {plural(len(problems), 'problem')}; nothing was changed")
         return 1
-    print(f"release-preflight: OK: HEAD {facts['head'][:12]} is origin/{args.base}, the tree is clean, "
+    is_what = f"tag {args.tag}, which origin has" if args.tag else f"origin/{args.base}"
+    print(f"release-preflight: OK: HEAD {facts['head'][:12]} is {is_what}, the tree is clean, "
           f"{facts['local_tags']} local tags all on origin")
     return 0
 

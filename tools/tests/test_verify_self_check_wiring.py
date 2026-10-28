@@ -153,11 +153,18 @@ class SelfCheckWiringGateTest(unittest.TestCase):
         self.edit(root, "src/runtime/lifecycle/crash_recovery.cpp", "nevr_quit_check::OnGameLoopReturned(gameResult);", "")
         self.assertEqual(run(root).returncode, 1)
 
-    def test_a_process_end_report_that_is_not_registered_fails(self):
+    def test_a_process_end_callback_that_is_not_registered_fails(self):
         root = self.tree()
         self.edit(root, "src/quest/integration/production_steps.cpp",
-                  "nevr_quest::integration::SetProcessEndCallback(&ReportAndroidMainReturned);", "")
+                  "nevr_quest::integration::SetProcessEndCallback(&OnGameProcessEnd);", "")
         self.assertEqual(run(root).returncode, 1)
+
+    def test_a_process_end_callback_that_drops_the_report_or_the_plugin_finish_fails(self):
+        for old in ("nevr_quest::plugin::FinishPlugins(nevr_quest::plugin::reason::kGameExitedFirst);",
+                    "ReportAndroidMainReturned();\n}"):
+            root = self.tree()
+            self.edit(root, "src/quest/integration/production_steps.cpp", old, "}" if old.endswith("}") else "")
+            self.assertEqual(run(root).returncode, 1, old)
     def test_a_credential_cache_check_that_is_not_fed_or_registered_fails(self):
         for rel, old in (
             ("src/runtime/compat/ws_bridge.cpp",

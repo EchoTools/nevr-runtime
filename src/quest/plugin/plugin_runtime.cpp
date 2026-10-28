@@ -1,0 +1,123 @@
+#include "quest/plugin/plugin_runtime.h"
+
+#include <dlfcn.h>
+
+#include <exception>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <utility>
+
+#include "quest/plugin/plugin_loader.h"
+#include "quest/plugin/plugin_platform.h"
+#include "quest/sentinel/hook_log.h"
+#include "runtime/ext/plugin_load_plan_build.h"
+
+namespace nevr_quest::plugin {
+
+namespace {
+
+// The loader and its platform live in one heap object that is never destroyed: a plugin's code stays mapped for the life of
+// the process, and a namespace-scope object with a destructor is what tools/check_quest_static_init.sh rejects.
+struct Runtime {
+  // One pass at a time: the early pass, the normal pass and the end-of-process finish run on three different threads. The
+  // pass holds it through the plugins' own init, so the finish only takes it when no pass is running.
+  std::mutex mutex;
+  SentinelPlatform platform;
+  Loader loader;
+  Runtime(std::string libraryDir, bool devBuild) : platform(std::move(libraryDir), devBuild), loader(platform, Options{}) {}
+};
+
+Runtime*& Instance() {
+  static Runtime* instance = nullptr;
+  return instance;
+}
+
+// The directory this library was mapped from; "" when the loader cannot say (the plan then reads no file and every entry
+// goes to dlopen by name with its hash unavailable).
+std::string OwnDirectory() {
+  Dl_info info{};
+  if (dladdr(reinterpret_cast<const void*>(&PlanPlugins), &info) == 0) return "";
+  return DirectoryOf(info.dli_fname);
+}
+
+PlanCounts CountsOf(const Loader& loader) {
+  PlanCounts counts;
+  for (const PlanEntry& entry : loader.Entries()) {
+    if (!entry.pending) continue;
+    if (entry.item.early) {
+      ++counts.early;
+    } else {
+      ++counts.normal;
+    }
+  }
+  return counts;
+}
+
+void Contained(const char* what, const std::exception& error) noexcept {
+  try {
+    sentinel::LogFields(sentinel::LogLevel::kError, "plugin_runtime", {{"step", what}, {"status", "exception"}});
+    static_cast<void>(error);
+  } catch (const std::exception&) {
+    // A log line that cannot be written changes nothing the game does.
+  }
+}
+
+}  // namespace
+
+PlanCounts PlanPlugins(const std::vector<nevr::PluginSpec>& specs, bool devBuild) noexcept {
+  try {
+    if (Instance() == nullptr) {
+      Instance() = new Runtime(OwnDirectory(), devBuild);
+      Instance()->loader.Plan(nevr_plugincfg::BuildLoadPlanFromSpecs(specs));
+    }
+    const std::lock_guard<std::mutex> lock(Instance()->mutex);
+    return CountsOf(Instance()->loader);
+  } catch (const std::exception& error) {
+    Contained("plan", error);
+    return {};
+  }
+}
+
+void RunEarlyPlugins() noexcept {
+  try {
+    if (Instance() == nullptr) return;
+    const std::lock_guard<std::mutex> lock(Instance()->mutex);
+    Instance()->loader.RunPhase(PluginPhase::Early);
+  } catch (const std::exception& error) {
+    Contained("early", error);
+  }
+}
+
+void RunNormalPlugins() noexcept {
+  try {
+    if (Instance() == nullptr) return;
+    const std::lock_guard<std::mutex> lock(Instance()->mutex);
+    Instance()->loader.RunPhase(PluginPhase::Normal);
+  } catch (const std::exception& error) {
+    Contained("normal", error);
+  }
+}
+
+void FinishPlugins(const char* reasonToken) noexcept {
+  try {
+    if (Instance() == nullptr) return;
+    // A pass is running (a plugin's init is on another thread): it settles its own entry, and the process is ending, so the
+    // finish does not wait for a plugin. Entries still pending then have no record; the log says why.
+    std::unique_lock<std::mutex> lock(Instance()->mutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+      sentinel::LogFields(sentinel::LogLevel::kWarn, "plugin_runtime", {{"step", "finish"}, {"status", "busy"}});
+      return;
+    }
+    Instance()->loader.Finish(reasonToken);
+  } catch (const std::exception& error) {
+    Contained("finish", error);
+  }
+}
+
+void ResetPluginsForTest() noexcept {
+  delete Instance();
+  Instance() = nullptr;
+}
+
+}  // namespace nevr_quest::plugin

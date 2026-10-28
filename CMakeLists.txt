@@ -34,7 +34,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/set_project_version_from_git.cmake")
 # Set PROJECT_VERSION and GIT_COMMIT_HASH based on the current git state.
 set_project_version_from_git()
 
-# BugSplat64.dll and echovr_server.exe carry a VERSIONINFO resource (cmake/nevr_version_info.cmake, #850): the
+# BugSplat64.dll, nevr-runtime.dll and echovr_server.exe carry a VERSIONINFO resource (cmake/nevr_version_info.cmake, #850): the
 # resource compiler is a language, and enable_language cannot be called from a function.
 if(WIN32)
   enable_language(RC)
@@ -44,16 +44,10 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/nevr_version_info.cmake")
 # The version is plain semver from the tags: exactly X.Y.Z for a CI build on the tag vX.Y.Z, otherwise
 # X.Y.(Z+1)-dev.<N>+<sha> (set_project_version_from_git.cmake).
 
-# Define the version and git hash as compile definitions
-add_compile_definitions(
-  NEVR_PROJECT_VERSION_MAJOR="${PROJECT_VERSION_MAJOR}"
-  NEVR_PROJECT_VERSION_MINOR="${PROJECT_VERSION_MINOR}"
-  NEVR_PROJECT_VERSION_PATCH="${PROJECT_VERSION_PATCH}"
-  NEVR_PROJECT_VERSION_TWEAK="${PROJECT_VERSION_TWEAK}"
-  NEVR_PROJECT_VERSION="${PROJECT_VERSION}"
-  NEVR_GIT_COMMIT_HASH="${GIT_COMMIT_HASH}"
-  NEVR_GIT_COMMIT_FULL="${GIT_COMMIT_HASH_FULL}"
-  NEVR_GIT_DESCRIBE="${GIT_DESCRIBE}")
+# The version and the commit are NOT defined for the tree: a definition on every compile command rebuilds every
+# translation unit, and every precompiled header, for each new commit or uncommitted edit. The few files that read
+# them get them (cmake/nevr_build_identity.cmake), where those files are built.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/nevr_build_identity.cmake")
 
 # Print out the version that was set by set_project_version_from_git()
 message(STATUS "Project version: ${PROJECT_VERSION} (${GIT_COMMIT_HASH})")
@@ -248,13 +242,12 @@ endif()
 # echovr-reconstruction; nothing here may symlink into a private repo, which
 # breaks every clean clone.
 add_subdirectory(src/legacy/gameserver)
-# The frozen legacy sources read the unprefixed macro names (PROJECT_VERSION, GIT_COMMIT_HASH, USE_MINHOOK);
-# the shared definitions above carry the NEVR_ spelling, so the two legacy targets get the old names here.
-foreach(_legacy_target gamepatcheslegacy gameserverlegacy)
-  target_compile_definitions(${_legacy_target} PRIVATE
-    PROJECT_VERSION="${PROJECT_VERSION}"
-    GIT_COMMIT_HASH="${GIT_COMMIT_HASH}")
-endforeach()
+# The frozen legacy sources read the unprefixed macro names (PROJECT_VERSION, GIT_COMMIT_HASH, USE_MINHOOK); only these
+# two files do (git grep -nE '\b(PROJECT_VERSION|GIT_COMMIT_HASH)\b' -- src/legacy).
+nevr_build_identity_define(TARGET gamepatcheslegacy LEGACY READS VERSION COMMIT_HASH
+  SOURCES "${CMAKE_SOURCE_DIR}/src/legacy/gamepatches/patches.cpp")
+nevr_build_identity_define(TARGET gameserverlegacy LEGACY READS VERSION COMMIT_HASH
+  SOURCES "${CMAKE_SOURCE_DIR}/src/legacy/gameserver/gameserver.cpp")
 # src/core/hooking.h (shared with the legacy build through src/legacy-compat) selects MinHook on NEVR_USE_MINHOOK.
 target_compile_definitions(gamepatcheslegacy PRIVATE NEVR_USE_MINHOOK)
 # telemetryagent lives in nevr-runtime-plugins (extras/) — it needs a protobuf-lite
@@ -317,8 +310,8 @@ endif()
 # =============================================================================
 # Distribution Package Target (stripped, no debug symbols)
 # =============================================================================
-# Creates the stripped distribution package, nevr-runtime-v<ver>-windows-server: the BugSplat64.dll and
-# echovr_server.exe that tools/package_release.py puts in the one Windows release zip (nevr-runtime-v<ver>-windows.zip),
+# Creates the stripped distribution package, nevr-runtime-v<ver>-windows-server: BugSplat64.dll (the host),
+# nevr-runtime.dll (the runtime) and echovr_server.exe that tools/package_release.py puts in the one Windows release zip (nevr-runtime-v<ver>-windows.zip),
 # and the source of the .tar.zst workflow artifact: binaries run through strip --strip-all.
 # Before stripping, the debug info of each shipped PE is split into dist/symbols/<name>/<file>.dbg and
 # the stripped file gets a .gnu_debuglink to it (name and CRC32), so a crash from the field maps to
@@ -348,6 +341,10 @@ add_custom_target(dist-prepare
   COMMAND ${MINGW_OBJCOPY_TOOL} --only-keep-debug "${DIST_STAGE_DIR}/BugSplat64.dll" "${DIST_SYMBOLS_DIR}/BugSplat64.dll.dbg"
   COMMAND ${MINGW_STRIP_TOOL} --strip-all "${DIST_STAGE_DIR}/BugSplat64.dll"
   COMMAND ${MINGW_OBJCOPY_TOOL} "--add-gnu-debuglink=${DIST_SYMBOLS_DIR}/BugSplat64.dll.dbg" "${DIST_STAGE_DIR}/BugSplat64.dll"
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/nevr-runtime.dll" "${DIST_STAGE_DIR}/nevr-runtime.dll"
+  COMMAND ${MINGW_OBJCOPY_TOOL} --only-keep-debug "${DIST_STAGE_DIR}/nevr-runtime.dll" "${DIST_SYMBOLS_DIR}/nevr-runtime.dll.dbg"
+  COMMAND ${MINGW_STRIP_TOOL} --strip-all "${DIST_STAGE_DIR}/nevr-runtime.dll"
+  COMMAND ${MINGW_OBJCOPY_TOOL} "--add-gnu-debuglink=${DIST_SYMBOLS_DIR}/nevr-runtime.dll.dbg" "${DIST_STAGE_DIR}/nevr-runtime.dll"
   COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:echovr_server>" "${DIST_STAGE_DIR}/echovr_server.exe"
   COMMAND ${MINGW_OBJCOPY_TOOL} --only-keep-debug "${DIST_STAGE_DIR}/echovr_server.exe" "${DIST_SYMBOLS_DIR}/echovr_server.exe.dbg"
   COMMAND ${MINGW_STRIP_TOOL} --strip-all "${DIST_STAGE_DIR}/echovr_server.exe"
@@ -364,6 +361,7 @@ add_custom_target(dist-prepare
   COMMENT "Preparing distribution directory (stripped): ${DIST_DIR}"
   VERBATIM
 )
+add_dependencies(dist-prepare nevr_host)
 add_dependencies(dist-prepare nevr_runtime)
 add_dependencies(dist-prepare echovr_server)
 

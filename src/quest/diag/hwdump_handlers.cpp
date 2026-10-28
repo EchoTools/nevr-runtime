@@ -18,6 +18,7 @@ std::atomic<void*> g_activity{nullptr};
 std::atomic<bool> g_initialize_seen{false};
 std::atomic<int> g_initialize_status{0};
 std::atomic<std::uint64_t> g_initialize_seen_ms{0};
+std::atomic<std::uint64_t> g_observed_sysprop_int{0};
 
 std::uint64_t MonotonicMs() noexcept {
   timespec ts{};
@@ -41,6 +42,12 @@ void Capture(const OvrJava* java) noexcept {
 void Append(char* dst, std::size_t cap, std::size_t* pos, const char* s, std::size_t max) noexcept {
   for (std::size_t i = 0; i < max && s[i] != '\0' && *pos + 1 < cap; ++i) dst[(*pos)++] = s[i];
   dst[*pos] = '\0';
+}
+
+void RecordSysPropInt(int id, int r) noexcept {
+  Answer a;
+  AddInt(&a, r);
+  Records().Record(QueryFn::kVrapiGetSystemPropertyInt, id, nullptr, a);
 }
 
 void RecordTwoChars(QueryFn fn, const char* out) noexcept {
@@ -137,11 +144,17 @@ int HookVrapiInitialize(VrapiInitializeFn original, const OvrInitParms* parms) n
 int HookVrapiGetSystemPropertyInt(VrapiGetIntFn original, const OvrJava* java, int id) noexcept {
   Capture(java);
   const int r = original(java, id);
-  Answer a;
-  AddInt(&a, r);
-  Records().Record(QueryFn::kVrapiGetSystemPropertyInt, id, nullptr, a);
+  RecordSysPropInt(id, r);
   return r;
 }
+
+void ObserveVrapiGetSystemPropertyInt(const void* java, int id, int result) noexcept {
+  Capture(static_cast<const OvrJava*>(java));
+  RecordSysPropInt(id, result);
+  g_observed_sysprop_int.fetch_add(1, std::memory_order_relaxed);
+}
+
+std::uint64_t ObservedSysPropIntCalls() noexcept { return g_observed_sysprop_int.load(std::memory_order_relaxed); }
 
 float HookVrapiGetSystemPropertyFloat(VrapiGetFloatFn original, const OvrJava* java, int id) noexcept {
   Capture(java);
@@ -268,6 +281,7 @@ void ResetCaptureForTest() noexcept {
   g_initialize_seen.store(false);
   g_initialize_status.store(0);
   g_initialize_seen_ms.store(0);
+  g_observed_sysprop_int.store(0);
 }
 
 }  // namespace nevr_quest::hwdump

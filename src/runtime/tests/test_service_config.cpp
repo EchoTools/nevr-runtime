@@ -182,11 +182,9 @@ TEST(StableStringPoolAccessors, AbsentServiceHostPublishesSourceTwoAndAllowsNull
   EXPECT_EQ(NevrCfgServiceHost("serverdb_host", nullptr), nullptr);
 }
 
-// The built-in defaults are a client convenience: a dedicated server is configured explicitly
-// and must not start a bridge or authenticate with an embedded key. The accessors' injected
-// defaults pass through the same SelectBuiltinDefaults gate as the embedded ones, so a
-// server-mode run with only built-in defaults finds nothing. (That production passes
-// IsServerMode() into the gate is pinned by tools/tests/test_builtin_defaults_contract.py.)
+// #843: a dedicated server takes the built-in defaults like a client does, for every key config.yaml
+// leaves unset. The accessors' injected defaults pass through the same SelectBuiltinDefaults gate as the
+// embedded ones.
 TEST(ServerModeDefaultsGate, ClientModeSeesTheEmbeddedDefault) {
   ResetAccessorInputs();
   SetAccessorInputs(&EmptyConfig(), &SocketDefault(), false);
@@ -195,12 +193,31 @@ TEST(ServerModeDefaultsGate, ClientModeSeesTheEmbeddedDefault) {
   EXPECT_NE(NevrCfgAutoRelay(53748), nullptr);
 }
 
-TEST(ServerModeDefaultsGate, ServerModeDoesNotSeeTheEmbeddedDefault) {
+TEST(ServerModeDefaultsGate, ServerModeSeesTheEmbeddedDefaultWhenConfigIsSilent) {
   ResetAccessorInputs();
   SetAccessorInputs(&EmptyConfig(), &SocketDefault(), true);
-  EXPECT_EQ(NevrCfgGetFlat("nevr_socket_uri"), nullptr);
-  EXPECT_EQ(NevrCfgAutoRelay(53748), nullptr);
-  EXPECT_EQ(NevrCfgRedirect("wss://login.readyatdawn.com/rad15", nullptr, 0, 0), nullptr);
+  ASSERT_NE(NevrCfgGetFlat("nevr_socket_uri"), nullptr);
+  EXPECT_STREQ(NevrCfgGetFlat("nevr_socket_uri"), "ws://default.example:80/spr");
+  EXPECT_NE(NevrCfgAutoRelay(53748), nullptr);
+}
+
+// #843: in server mode an explicit empty value is a decision: it takes no embedded default, so a server
+// can opt out of the shipped endpoint. (Boot then refuses the server, or boots it offline when
+// allow_offline_server is set.)
+TEST(ServerModeDefaultsGate, ServerModeExplicitEmptySocketUriTakesNoDefault) {
+  ResetAccessorInputs();
+  static const nevr::NevrConfig optOut = nevr::NevrConfig::LoadFromString("services:\n  socket_uri: \"\"\n");
+  SetAccessorInputs(&optOut, &SocketDefault(), true);
+  const char* socket = NevrCfgGetFlat("nevr_socket_uri");
+  ASSERT_NE(socket, nullptr);
+  EXPECT_STREQ(socket, "");
+}
+
+TEST(ServerModeDefaultsGate, ClientModeExplicitEmptySocketUriTakesTheDefault) {
+  ResetAccessorInputs();
+  static const nevr::NevrConfig empty = nevr::NevrConfig::LoadFromString("services:\n  socket_uri: \"\"\n");
+  SetAccessorInputs(&empty, &SocketDefault(), false);
+  EXPECT_STREQ(NevrCfgGetFlat("nevr_socket_uri"), "ws://default.example:80/spr");
 }
 
 TEST(ServerModeDefaultsGate, ServerModeStillReadsAnExplicitConfigValue) {

@@ -26,7 +26,7 @@ to this design.
 **The failure, confirmed once.** On a Quest 2 with `_data` hidden (the t5-no-game-data run, #758), every launch logged, in order,
 `RAD: Initialization Error: Unknown error while loading the game.`, then
 `Failed to find package manifest file /storage/emulated/0/readyatdawn/_data/5932408047/rad15/android/manifests/48037dc70b0ecab2`,
-then the sentinel's `android_main_returned ... exit_code=0` (ADR 0008, `0008-quest-process-end.md`). The process ended; the player saw Home. The build on the
+then the sentinel's `android_main_returned ... exit_code=0` (ADR 0020, `0020-quest-process-end.md`). The process ended; the player saw Home. The build on the
 headset (`c4b37a28`) predates #755; #755 adds the one `data_root` log line and fails the same way.
 
 **The likely cause for players who already had the data.** The data version is not the cause: the `_data.zip` that
@@ -80,7 +80,7 @@ signed runtime is the trust, so the zip carries no separate signature.
 3. No `_data` at all: fetch, same staging and a single rename into place. This includes the case `data_root::Resolve` reports as
    found with a warning (`android_media_unmarked`: the `Android/media` directory exists without `_data`); the fetch fills that
    directory, and `found` alone is not the test for case 1.
-4. The fetch failed (no network, no space, a digest that does not match): show the visible message (the floor), then end the process cleanly (ADR 0008, `0008-quest-process-end.md`) instead of
+4. The fetch failed (no network, no space, a digest that does not match): show the visible message (the floor), then end the process cleanly (ADR 0020, `0020-quest-process-end.md`) instead of
    letting the game fail its own load.
 
 The floor message names the missing file and what to do, in these cases: `Echo VR data is missing: <path the game wants>. Copy the
@@ -99,6 +99,9 @@ build, what to do) is not optional.
 - **Download, resume, retry.** Into `<root>/_data.zip.part` (a name our code creates), HTTP `Range` from the part's size, a
   bounded number of attempts with backoff (2, 4, 8, 16 s, then 30 s between attempts, slept in 250 ms slices that a cancel ends), then give up to the floor. The whole-file sha256 is verified at the end only (the
   pin is one digest of the zip); a mismatch deletes that `.part` and counts as a failed attempt, never a retry on the same bytes.
+  **Where from (2026-10-27).** `kZipUrl` is `https://evr.echo.taxi/nevr-runtime/data/echovr-data-fc2eedeacc50.zip`: the same bytes under a name made
+  from their own sha256 (first 12 hex), listed as the `game-data` artifact in the signed release manifest. It replaced the bare
+  `https://mia.cdn.echo.taxi/_data.zip`, which names no version. The digest check is unchanged and is what makes the file trusted.
 - **Extract.** Into `<root>/_data.staging-<sha prefix>/`, every entry path checked to stay inside that directory (a zip entry
   with `..` or an absolute path is a failure of the whole fetch), then one `rename` to `<root>/_data`. Every item the step
   creates in the root (the `.part`, the staging directory, a kept `_data.replaced-<utc stamp>`) has a marker file beside it,
@@ -111,8 +114,10 @@ build, what to do) is not optional.
   `_data`. The root is synced after each rename.
 - **After success.** Delete the zip we downloaded (about 937 MB), nothing else.
 - **Logging** (repo rule: every path logs, queryable): one structured sentinel event per step, with the path, bytes, free space and
-  result: `data_check`, `data_fetch` (start, progress at a coarse interval, retry, verified, failed with the reason),
-  `data_extract`, `data_swap`. No URL query strings or credentials in them (there are none).
+  result: `data_check` (with `data_version`, the folder under `_data` that holds the manifest the game reads, and `manifest_sha256`, the
+  sha256 of that file, both read from the root and never from the pins, so a report says which data the player has; `none` when
+  there is none), `data_fetch` (start, progress at a coarse interval, retry, verified, failed with the reason),
+  `data_extract`, `data_swap`, and after a fetch a `data_version` event with the same two fields for the data it placed. No URL query strings or credentials in them (there are none).
 
 ## What the player sees (the open problem)
 

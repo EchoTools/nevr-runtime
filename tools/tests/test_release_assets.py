@@ -70,7 +70,9 @@ class ReleaseAssetsTest(unittest.TestCase):
         text = (REPO / "RELEASING.md").read_text()
         before = text.split("## Before the tag", 1)[1].split("## Cut the draft", 1)[0]
         self.assertIn("just package-dev", before)
-        self.assertIn("`just verify` has run on this tip", before)
+        # The tag's build skips the full suite (#1008), so the section must not ask for a `just verify` of this tip.
+        self.assertNotIn("`just verify` has run on this tip", before)
+        self.assertIn("full suite", " ".join(before.split()))
         self.assertIn("PC login test passes", before)
         self.assertNotIn("gh workflow run", before)
         self.assertNotIn("v0.0.<issue>", before)
