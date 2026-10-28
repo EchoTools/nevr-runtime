@@ -51,6 +51,8 @@ inline constexpr const char* kFindMethodSymbol = "_ZN10NRadEngine10CSysModule10F
 inline constexpr const char* kGetDeviceExtensionsVulkanSymbol = "vrapi_GetDeviceExtensionsVulkan";
 inline constexpr const char* kGetSystemPropertyIntSymbol = "vrapi_GetSystemPropertyInt";
 inline constexpr const char* kShowSystemUISymbol = "vrapi_ShowSystemUI";
+inline constexpr const char* kGetCurrentInputStateSymbol = "vrapi_GetCurrentInputState";
+inline constexpr const char* kGetInputDeviceCapabilitiesSymbol = "vrapi_GetInputDeviceCapabilities";
 inline constexpr const char* kEnablePageNodeEnterSymbol =
     "_ZN10NRadEngine8NRadGame25CR15UIPage2EnablePageNode5EnterERKNS0_29SR15UIPage2EnablePageNodeDataE";
 
@@ -596,6 +598,26 @@ using LibR15ShowSystemUIThunk = CallbackThunk<LibR15ShowSystemUITag, ShowSystemU
 
 inline GotTarget LibR15ShowSystemUI() {
   return {kLibR15, kShowSystemUISymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36d5280ULL};
+}
+
+// VrApi_Input.h: ovrResult vrapi_GetCurrentInputState(ovrMobile* ovr, const ovrDeviceID deviceID,
+// ovrInputStateHeader* inputState). Imported (value 0): JUMP_SLOT 0x36ec0f0 (`readelf -rW` on the pinned image); its PLT
+// stub 0xf29410 (`adrp x16, 0x36ec000; ldr x17, [x16, #0xf0]`) has one caller, CVR::PollTracking at 0x1a71928
+// (`revault_callers 0x1029410`; ReVault VA = pinned VA + 0x100000). The input seam of #1202 (input_seam_hook.h).
+struct OvrMobileOpaque;
+using GetCurrentInputStateSig = int(OvrMobileOpaque* ovr, std::uint32_t device_id, void* input_state);
+struct LibR15GetCurrentInputStateTag {};
+using LibR15GetCurrentInputStateThunk = CallbackThunk<LibR15GetCurrentInputStateTag, GetCurrentInputStateSig>;
+
+inline GotTarget LibR15GetCurrentInputState() {
+  return {kLibR15, kGetCurrentInputStateSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ec0f0ULL};
+}
+
+// libr15.so's slot for vrapi_GetInputDeviceCapabilities (JUMP_SLOT 0x36fc9c8, `readelf -rW` on the pinned image; imported,
+// value 0). Read, never written: the input seam asks a device's hand through the function the game itself calls
+// (CVR::PollTracking, 0x1a718fc).
+inline GotTarget LibR15GetInputDeviceCapabilities() {
+  return {kLibR15, kGetInputDeviceCapabilitiesSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36fc9c8ULL};
 }
 
 // libr15.so's slot for CResourceManager::FillResourceFileRequest, defined in libr15 itself (JUMP_SLOT 0x36efa80,

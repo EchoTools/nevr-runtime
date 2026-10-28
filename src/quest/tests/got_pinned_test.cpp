@@ -181,6 +181,8 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15FindMethod(), "libr15 CSysModule::FindMethod JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetDeviceExtensionsVulkan(), "libr15 vrapi_GetDeviceExtensionsVulkan JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetSystemPropertyInt(), "libr15 vrapi_GetSystemPropertyInt JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15GetCurrentInputState(), "libr15 vrapi_GetCurrentInputState JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15GetInputDeviceCapabilities(), "libr15 vrapi_GetInputDeviceCapabilities JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");
