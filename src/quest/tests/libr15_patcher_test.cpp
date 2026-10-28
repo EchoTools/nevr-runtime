@@ -1093,6 +1093,112 @@ TEST(AWordNextToAClaimedRangeOnEitherSideIsNotAnOverlap) {
   ExpectRefusal(w.Patch({edit(kJoinVa)}), "word_overlap", "x.next", "the stub's first word");
 }
 
+// ---- bytes the file's structure and the tool itself own ---------------------------------------------------------------
+
+// The first PT_LOAD is executable and starts at file offset 0, so the ELF header, the program header table and the build-ID
+// note are inside the file-backed text; a second executable PT_LOAD over the section header table makes that table
+// reachable too (the pinned libr15's tables are not in its text; a different libr15 need not be the same).
+constexpr std::uint64_t kShdrLoadVaddr = 0x1412000;
+
+World ProtectedWorld() {
+  SynthOptions o = World::DefaultOptions();
+  o.execLoads = {ExecLoad{kShdrLoadVaddr, kShdrOffset, 8 * sizeof(Elf64_Shdr)}};
+  return World(o);
+}
+
+std::uint64_t VaOfFileOffset(std::uint64_t fileOffset) {
+  return fileOffset < kShdrOffset ? kLoad0Vaddr + fileOffset : kShdrLoadVaddr + (fileOffset - kShdrOffset);
+}
+
+WordPatchRow WordRowAtFileOffset(const World& w, const std::string& id, std::uint64_t fileOffset) {
+  WordPatchRow r;
+  r.id = id;
+  r.revaultVa = VaOfFileOffset(fileOffset) + kRevaultBias;
+  WordEdit e;
+  std::memcpy(e.stock.data(), w.elf.bytes.data() + fileOffset, 4);
+  e.word = e.stock;
+  e.word[0] = static_cast<std::uint8_t>(e.word[0] ^ 0xff);
+  r.edits.push_back(e);
+  return r;
+}
+
+// Every byte range the tool writes is its own: the words of the rows (the claims against each other), the p_memsz of the
+// grown segment, the sh_size of the section that ends it, and the build ID. The structures around them are the file's.
+// An extra row that reaches any of them is refused, naming the row and the region; without that, the later write (the
+// derived ID, the grown sizes) would silently replace the row's word while the report said the row's word was written.
+TEST(AnExtraRowThatReachesTheElfStructuresOrAByteTheToolWritesItselfIsRefused) {
+  World w = ProtectedWorld();
+  struct Case {
+    const char* what;
+    std::uint64_t fileOffset;
+    const char* region;
+  };
+  const std::uint64_t phnum = Ehdr(w.elf.bytes).e_phnum;  // the three of the synthetic file and the executable segment over the section headers
+  const std::uint64_t memsz = w.elf.PhdrMemszOffset();
+  const std::uint64_t bssSize = w.elf.BssSizeOffset();
+  const Case cases[] = {
+      {"e_flags", 0x30, "ELF header"},
+      {"the last word of the ELF header", sizeof(Elf64_Ehdr) - 4, "ELF header"},
+      {"the first word of the program header table", kPhdrOffset, "program header table"},
+      {"a field of the first program header (p_align)", kPhdrOffset + offsetof(Elf64_Phdr, p_align), "program header table"},
+      {"the last word of the program header table", kPhdrOffset + phnum * sizeof(Elf64_Phdr) - 4, "program header table"},
+      {"the first half of the grown segment's p_memsz", memsz, "p_memsz"},
+      {"the second half of the grown segment's p_memsz", memsz + 4, "p_memsz"},
+      {"the first word of the build-ID note", kNoteOffset, "build-ID note"},
+      {"the build-ID descriptor", kNoteDescOffset, "build-ID note"},
+      {"the last word of the build-ID note", kNoteDescOffset + 16, "build-ID note"},
+      {"the first word of the section header table", kShdrOffset, "section header table"},
+      {"a field of a section header (sh_addr of .text)", kShdrOffset + kSecText * sizeof(Elf64_Shdr) + offsetof(Elf64_Shdr, sh_addr), "section header table"},
+      {"the last word of the section header table", kShdrOffset + 8 * sizeof(Elf64_Shdr) - 4, "section header table"},
+      {"the first half of the .bss section's sh_size", bssSize, "sh_size"},
+      {"the second half of the .bss section's sh_size", bssSize + 4, "sh_size"},
+  };
+  for (const Case& c : cases) {
+    const PatchResult r = w.Patch({WordRowAtFileOffset(w, "x.reach", c.fileOffset)});
+    if (r.ok || r.refusal.code != "protected_region" || r.refusal.detail.find(c.region) == std::string::npos) {
+      std::fprintf(stderr, "  %s: ok=%d code=%s detail=%s (expected protected_region naming %s)\n", c.what, r.ok ? 1 : 0, r.refusal.code.c_str(),
+                   r.refusal.detail.c_str(), c.region);
+    }
+    CHECK(!r.ok);
+    CHECK_EQ(r.refusal.code, std::string("protected_region"));
+    CHECK_EQ(r.refusal.id, std::string("x.reach"));
+    CHECK(r.refusal.detail.find(c.region) != std::string::npos);
+    CHECK(r.output.empty());
+  }
+  // A site of a public row reaches them the same way.
+  {
+    World pub = ProtectedWorld();
+    pub.rows.push_back(pub.Inline("s.in_phdrs", kLoad0Vaddr + kPhdrOffset, 3));
+    pub.Rebind();
+    const PatchResult r = pub.Patch();
+    CHECK(!r.ok);
+    CHECK_EQ(r.refusal.code, std::string("protected_region"));
+    CHECK_EQ(r.refusal.id, std::string("s.in_phdrs"));
+    CHECK(r.refusal.detail.find("program header table") != std::string::npos);
+  }
+  {  // a three-word window whose first word is outside a region and whose last word is inside it
+    World pub = ProtectedWorld();
+    pub.rows.push_back(pub.Inline("s.into_note", kLoad0Vaddr + kNoteOffset - 8, 3));
+    pub.Rebind();
+    const PatchResult r = pub.Patch();
+    CHECK(!r.ok);
+    CHECK_EQ(r.refusal.code, std::string("protected_region"));
+    CHECK_EQ(r.refusal.id, std::string("s.into_note"));
+    CHECK(r.refusal.detail.find("build-ID note") != std::string::npos);
+  }
+  // The words just outside each region are the file's text like any other, and are written.
+  const std::uint64_t outside[] = {
+      kPhdrOffset + phnum * sizeof(Elf64_Phdr),  // the word after the program header table
+      kNoteOffset - 4,                       // the word before the note
+      kNoteOffset + 36,                      // the word after the note (12 + 4 + 20 bytes)
+  };
+  for (const std::uint64_t offset : outside) {
+    const PatchResult r = w.Patch({WordRowAtFileOffset(w, "x.beside", offset)});
+    if (!r.ok) std::fprintf(stderr, "  file offset 0x%llx: refused: %s %s\n", static_cast<unsigned long long>(offset), r.refusal.code.c_str(), r.refusal.detail.c_str());
+    CHECK(r.ok);
+  }
+}
+
 // ---- ADR test 9: word patches and the extra-rows file (format 1) ---------------------------------------------------
 
 bool Parse(const std::string& text, const World& w, std::vector<WordPatchRow>* rows, Refusal* refusal) {

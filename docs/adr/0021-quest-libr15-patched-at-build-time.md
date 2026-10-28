@@ -267,7 +267,10 @@ uses invented values.
   (`stock_bytes` and `stock_word`) for every word, so a reader can compare against a disassembler.
 - A row is refused when any `stock_bytes` differs from the stock file at `revault_va + offset - kRevaultBias` (the message names
   the `id` and the `offset`), when a word lies outside the text segment, when it lies in a byte a public row or another extra row
-  also writes, or when `new_bytes` equals `stock_bytes`.
+  also writes, when it lies in the ELF header, the program header table, the section header table or the build-ID note, or in a
+  byte the patcher writes itself (the `p_memsz` of the grown segment, the `sh_size` of the section that ends it; the build ID is
+  in the note) (the refusal is `protected_region`, naming the `id` and the region), or when `new_bytes` equals `stock_bytes`. A
+  public row's site is held to the same rule.
 - Build identity: the rows are sorted by `revault_va` and serialised as fixed binary (id, `revault_va`, each offset, each
   `new_bytes`, each `stock_bytes`) for the hash of section 7, so the build ID does not depend on the file's key order, spacing or
   the order of its rows. `extra_rows_sha256` in the report is the digest of the file's bytes as given.
@@ -341,7 +344,8 @@ Each is run once with the line it covers changed and must fail (the mutant disci
    row of any kind but `kWordPatch` in the file is refused; each rule of the extra-rows format is refused in its own case (wrong
    `format`, `version` or `stock_build_id`; an unknown field; a duplicate key; a bad, duplicate or public `id`; a `revault_va`
    or `offset` not a multiple of 4; offsets out of order; 65 words in a row; a word written as a little-endian value instead of
-   bytes; a stock mismatch; a word outside the text, overlapping a public row or another extra row, or unchanged); the fixture
+   bytes; a stock mismatch; a word outside the text, overlapping a public row or another extra row, in the ELF header, either
+   header table, the build-ID note or a byte the patcher writes itself, or unchanged); the fixture
    loads, and its report prints each word's `stock_bytes` and `stock_word`; the public table's ID is the one a build without the file computes;
    `Attach` on an image whose live word differs ends with `libr15_patch_row_words`.
 10. **Plugin identity** (section 12), in `plugin_loader_test.cpp` with the fake platform, and `got_hook_test.cpp`:
