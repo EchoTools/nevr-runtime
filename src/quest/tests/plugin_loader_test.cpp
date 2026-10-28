@@ -740,6 +740,23 @@ TEST(LoaderRefusesAStockIdPluginWhenTheDerivedNoteWasNotVerified) {
   CHECK(env.platform.opened.empty());
 }
 
+TEST(LoaderRefusesAStockIdPluginWhenTheStateCarriesTheIdButNotTheVerifiedFlag) {
+  Env env;
+  RunsPatched(env.platform);
+  env.platform.patch.verified = false;  // the ID is there and equals the note; the process did not record `verified`
+  ServeDeclaring(env.platform, "libstock.so", StockId());
+  env.loader->Plan({Item("stock", "libstock.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  const LoadRecord* r = env.platform.Record("stock");
+  CHECK(r != nullptr);
+  if (r == nullptr) return;
+  CHECK(r->outcome == Outcome::kRefused);
+  CHECK_EQ(r->reason, std::string(reason::kBuildIdUnsupported));
+  CHECK_EQ(r->pluginViewBuildId, DerivedId());
+  CHECK(!r->libr15Patched);
+  CHECK(env.platform.opened.empty());
+}
+
 TEST(LoaderRefusesAStockIdPluginWhenTheNoteReadNowIsAnotherId) {
   Env env;
   RunsPatched(env.platform);
