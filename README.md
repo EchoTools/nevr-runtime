@@ -219,7 +219,7 @@ looks there first.
 | `plugins\` | Plugin DLLs, their dependencies and data files. A plugin loads only when the ordered `plugins:` list in `config.yaml` names it; a DLL the list does not name is ignored. Without `LOCALAPPDATA` there is no plugin directory: every configured plugin fails with `the plugin directory cannot be resolved` and nothing is searched in the game folder. The first run moves the files of a `plugins\` folder beside `echovr.exe` here. | `LoadPlugins` in `src/runtime/ext/plugin_loader.cpp`; `PluginsDir` in `src/core/nevr_root.h`; the plugins source in `Run` in `src/runtime/lifecycle/nevr_root_move.cpp` |
 | `cosmetics\v1\packages\` | Downloaded cosmetic packages (client only). The folder is created on demand; without `LOCALAPPDATA`, or if the creation fails, the error is logged and no package is stored. | `GetCacheDir` in `src/runtime/patch/asset_cdn.cpp` |
 
-On the first run the runtime moves files it finds in the old places (the previous log, crash record, cosmetics, plugins and sign-in cache locations) into this folder and leaves `MOVED-TO-NEVR-ROOT.txt` in each old folder it emptied something from.
+On the first run the runtime moves files it finds in the old places (the previous log, crash record, cosmetics, plugins and sign-in cache locations) into this folder and leaves `MOVED-TO-NEVR-ROOT.txt` in each old folder under `%LOCALAPPDATA%` and `_local` it emptied something from. The plugins folder beside `echovr.exe` gets no such file: nothing of ours is written to the game folder.
 
 ## What gets built
 

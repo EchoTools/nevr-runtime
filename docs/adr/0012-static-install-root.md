@@ -145,7 +145,7 @@ On the first run that finds the old layout, the runtime moves, and logs every fi
 - from `%LOCALAPPDATA%\EchoVR\cosmetics\v1\packages`: every file, the downloaded cosmetic packages, moved to the root's `cosmetics\v1\packages`;
 - from the `plugins\` folder next to `echovr.exe`: every file at the top of it (a plugin DLL, its dependencies and its data files), moved to the root's `plugins\`
   before the plugin pass runs. A subfolder is not a plugin file and is left. A plugin placed there is found again in the root, and the log line says where it went.
-  `MOVED-TO-NEVR-ROOT.txt` is left in each of these three folders as well as in `_local`.
+  The plugins move leaves no file behind: the game folder holds nothing of ours but the host.
 
 The credentials move first, so a player who updates keeps their login. The move never overwrites a file already in the root, is
 safe to run twice, and leaves a file in place, with a log line, when it cannot move it. Nothing is deleted that was not moved. When

@@ -26,6 +26,9 @@ struct Item {
 struct Source {
   std::wstring dir;
   std::vector<Item> items;
+  // Whether a move out of `dir` leaves MOVED-TO-NEVR-ROOT.txt in it. The plugins folder is in the game folder, where
+  // nothing of ours is written, so its move says what it did in the log and leaves no file.
+  bool leaves_marker = true;
 };
 
 bool Exists(const std::wstring& path) { return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES; }
@@ -228,10 +231,10 @@ std::vector<Event> Run(const Inputs& inputs) {
 
   {
     // The plugins folder beside the game executable: its files (not its subfolders, which are not plugin files) go to the
-    // root's plugins\. The marker the move leaves behind is not a plugin.
-    Source plugins{inputs.legacy_plugins_dir, {}};
+    // root's plugins\. It is in the game folder, so the move leaves no marker file there.
+    Source plugins{inputs.legacy_plugins_dir, {}, false};
     const std::wstring to_dir = nevr_root::PluginsDir(inputs.root);
-    for (const std::wstring& name : FilesIn(inputs.legacy_plugins_dir, [](const std::wstring& n) { return n != Names::kMovedMarker; })) {
+    for (const std::wstring& name : FilesIn(inputs.legacy_plugins_dir, [](const std::wstring&) { return true; })) {
       plugins.items.push_back({nevr_root::Join(inputs.legacy_plugins_dir, name.c_str()), nevr_root::Join(to_dir, name.c_str())});
     }
     sources.push_back(std::move(plugins));
@@ -275,7 +278,7 @@ std::vector<Event> Run(const Inputs& inputs) {
       events.push_back({Outcome::kMoved, item.from, item.to, 0});
       moved_any = true;
     }
-    if (moved_any) {
+    if (moved_any && source.leaves_marker) {
       std::wstring marker;
       unsigned long error = 0;
       if (WriteMarker(source.dir, inputs.root, &marker, &error)) {
