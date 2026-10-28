@@ -245,6 +245,16 @@ fn stamp() -> String {
     t.replace(['-', ':'], "").replace('T', "-").trim_end_matches('Z').to_string()
 }
 
+/// `dir/name`, or `dir/name-2`, `-3`... when that exists: a set-aside file is never overwritten and a second install in
+/// the same second does not refuse.
+fn fresh(dir: &Path, name: &str) -> PathBuf {
+    let first = dir.join(name);
+    if !first.exists() {
+        return first;
+    }
+    (2..).map(|n| dir.join(format!("{name}-{n}"))).find(|p| !p.exists()).expect("an unused name exists")
+}
+
 fn verify_file(path: &Path, sha: &str) -> std::result::Result<(), String> {
     let b = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     if sha256_hex(&b) != sha {
@@ -272,10 +282,7 @@ pub fn execute(dir: &Path, plan: &Plan, obs: &Observed, pkg: &Package, log: &Log
     let write_log = |path: &Path, sha: &str, replaced: &str, aside: &str| log.info("file_write", 9, json!({"path": path.display().to_string(), "sha256": sha, "replaced_sha256": replaced, "set_aside": aside}));
 
     if plan.stale_record {
-        let aside = dir.join(format!("{STATE_FILE}.stale-{st}"));
-        if aside.exists() {
-            return Ok(End { state: "unchanged", reason: format!("name exists: {}", aside.display()) });
-        }
+        let aside = fresh(dir, &format!("{STATE_FILE}.stale-{st}"));
         fs::rename(&state_path, &aside).map_err(|e| Error::new(9, format!("{}: {e}", aside.display())))?;
         write_log(&state_path, "", "", &aside.display().to_string())?;
     }
@@ -326,10 +333,7 @@ pub fn execute(dir: &Path, plan: &Plan, obs: &Observed, pkg: &Package, log: &Log
             Ok(End { state: "installed", reason: String::new() })
         }
         Action::First => {
-            let backup = dir.join(format!("{HOST}.original-{st}"));
-            if backup.exists() {
-                return Ok(End { state: "unchanged", reason: format!("backup name exists: {}", backup.display()) });
-            }
+            let backup = fresh(dir, &format!("{HOST}.original-{st}"));
             fs::copy(&target, &backup).map_err(|e| Error::new(9, format!("{}: {e}", backup.display())))?;
             if let Err(why) = verify_file(&backup, &orig) {
                 return Ok(End { state: "unchanged", reason: format!("{why} (delete the bad copy by hand)") });
@@ -337,20 +341,14 @@ pub fn execute(dir: &Path, plan: &Plan, obs: &Observed, pkg: &Package, log: &Log
             write_log(&backup, &orig, "", &target.display().to_string())?;
             let mut legacy_aside: Option<PathBuf> = None;
             if obs.dbgcore_present {
-                let aside = dir.join(format!("dbgcore.dll.legacy-{}", &st[..8]));
-                if aside.exists() {
-                    return Ok(End { state: "unchanged", reason: format!("name exists: {}", aside.display()) });
-                }
+                let aside = fresh(dir, &format!("dbgcore.dll.legacy-{}", &st[..8]));
                 fs::rename(dir.join("dbgcore.dll"), &aside).map_err(|e| Error::new(9, format!("{}: {e}", aside.display())))?;
                 write_log(&dir.join("dbgcore.dll"), "", "", &aside.display().to_string())?;
                 legacy_aside = Some(aside);
             }
             let mut runtime_aside: Option<PathBuf> = None;
             if obs.runtime_sha.is_some() {
-                let aside = dir.join(format!("{RUNTIME}.original-{st}"));
-                if aside.exists() {
-                    return Ok(End { state: "unchanged", reason: format!("name exists: {}", aside.display()) });
-                }
+                let aside = fresh(dir, &format!("{RUNTIME}.original-{st}"));
                 fs::rename(&runtime_target, &aside).map_err(|e| Error::new(9, format!("{}: {e}", aside.display())))?;
                 write_log(&runtime_target, "", obs.runtime_sha.as_deref().unwrap_or(""), &aside.display().to_string())?;
                 runtime_aside = Some(aside);
