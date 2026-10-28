@@ -71,6 +71,35 @@ fn a_non_https_url_for_another_machine_is_refused_before_any_connection() {
 }
 
 #[test]
+fn only_the_loopback_host_itself_is_fetched_over_http_not_a_name_that_starts_like_it() {
+    for url in [
+        "http://127.0.0.1.invalid/x",
+        "http://localhost.invalid/x",
+        "http://localhost.example.com:80/x",
+        "http://127.0.0.10/x",
+        "http://127.0.0.1@example.invalid/x",
+        "http://localhost@example.invalid/x",
+        "http://127.0.0.1:80@example.invalid/x",
+        "http://[::2]/x",
+        "http://127.0.0.1%2eexample.invalid/x",
+        "http:// 127.0.0.1/x",
+    ] {
+        let mut sink = Vec::new();
+        assert!(matches!(fetch_capped(url, 0, 5, &mut sink), Err(Failure::Refused(m)) if m.contains("only https")), "{url} must be refused before any connection");
+    }
+}
+
+#[test]
+fn the_loopback_names_are_still_fetched_over_http() {
+    let (base, _) = serve(2, |_| ok(b"hello"));
+    let port = base.rsplit(':').next().unwrap().to_string();
+    for host in ["127.0.0.1", "localhost"] {
+        let mut sink = Vec::new();
+        assert_eq!(fetch_capped(&format!("http://{host}:{port}/x"), 0, 5, &mut sink).ok(), Some(5), "{host}");
+    }
+}
+
+#[test]
 fn download_checks_exact_size_and_sha256_and_deletes_a_bad_file() {
     let d = tempfile::tempdir().unwrap();
     let body = b"the artifact bytes";

@@ -15,13 +15,27 @@ pub enum Failure {
     Refused(String),
 }
 
+/// `http://` is fetched only for the local machine itself: the host, after the scheme and before the port or path, is
+/// exactly `127.0.0.1` or `localhost`. A name that merely starts like one (`127.0.0.1.invalid`), a userinfo
+/// that hides the real host (`127.0.0.1@example.com`) or a stray character is not loopback.
+fn is_loopback_http(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("http://") else { return false };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = match authority.rsplit_once(':') {
+        Some((h, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => h,
+        Some((_, "")) => return false,
+        _ => authority,
+    };
+    matches!(host, "127.0.0.1" | "localhost")
+}
+
 fn open(url: &str, start: u64) -> Result<Box<dyn Read>, Failure> {
     if let Some(path) = url.strip_prefix("file://") {
         let mut f = File::open(path).map_err(|e| Failure::Refused(format!("{url}: {e}")))?;
         f.seek(SeekFrom::Start(start)).map_err(|e| Failure::Refused(format!("{url}: {e}")))?;
         return Ok(Box::new(f));
     }
-    if !(url.starts_with("https://") || url.starts_with("http://127.0.0.1") || url.starts_with("http://localhost")) {
+    if !(url.starts_with("https://") || is_loopback_http(url)) {
         return Err(Failure::Refused(format!("{url}: only https is fetched (http only for the local machine)")));
     }
     let agent = ureq::AgentBuilder::new()
