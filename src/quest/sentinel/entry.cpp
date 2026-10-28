@@ -21,6 +21,7 @@
 #include "data_wiring.h"
 #include "obb_skip_hook.h"
 #include "os_build_gate_hook.h"
+#include "permission_request.h"
 #include "permission_wait_hook.h"
 #include "process_end_hook.h"
 #include "texture_quality_hook.h"
@@ -104,9 +105,17 @@ bool InstallObbSkipHook(bool countersRegistered) noexcept {
 void SetProcessEndCallback(void (*callback)() noexcept) noexcept { nevr_quest::process_end::SetBeforeExit(callback); }
 bool InstallProcessEndHook() noexcept { return nevr_quest::process_end::Install(); }
 
+namespace {
+// The game's permission request on its own activity, with the hook's request code (#947): the activity is the one
+// android_main was given (process_end_hook.h).
+const char* RequestOnGameActivity(const char* const* names, std::uint64_t count, int requestCode) noexcept {
+    return nevr_quest::permission_request::Request(nevr_quest::process_end::CurrentApp(), names, count, requestCode);
+}
+}  // namespace
+
 // The game waits for the storage permission it just asked for (#640). A refused install is logged by GotHook and
 // leaves the game's call intact. The first-run data step (#807, data_wiring.h) runs right after that hook's wait, so it
-// is armed first.
+// is armed first, and so is the requester that makes the request with a defined request code (#947).
 bool InstallPermissionWaitHook() noexcept {
     nevr_quest::data_wiring::Options options;
     options.show = &nevr_quest::toast::ShowPreferUiThread;  // #829: the UI thread's looper runs the Toast, else the caller's
@@ -119,6 +128,7 @@ bool InstallPermissionWaitHook() noexcept {
     // The main-menu QUIT's system UI (#392) is one more GOT hook, installed on every launch from this step. A refused
     // install is logged by GotHook and by the hook's own line.
     nevr_quest::system_ui::Install();
+    nevr_quest::permission_wait::SetRequester(&RequestOnGameActivity);
     return nevr_quest::permission_wait::Install();
 }
 

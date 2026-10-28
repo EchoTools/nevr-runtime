@@ -84,4 +84,9 @@ using EntitlementRequestThunk = sentinel::CallbackThunk<EntitlementRequestTag, s
 // Platform SDK and no answer is ever queued. Never logs (a hook on the game's call path).
 std::uint64_t OnEntitlementRequest(EntitlementRequestThunk::Fn original) noexcept;
 
+// The logged-in user id (#944): takes nothing, returns the app-scoped id (0x206828-0x206838). The handler is
+// OnLoggedInUserId (login_prerequisites.h).
+struct LoggedInUserIdTag {};
+using LoggedInUserIdThunk = sentinel::CallbackThunk<LoggedInUserIdTag, std::uint64_t()>;
+
 }  // namespace nevr_quest_login

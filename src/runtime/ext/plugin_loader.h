@@ -94,6 +94,8 @@ void TestHook_RecordRefusal(const std::string& file);
 void TestHook_InstallPluginLoadFilter(const std::string& pluginDir);
 void TestHook_ResetPluginLoadFilter();
 void TestHook_ForgetLoadFilterRegistration();  // after nevr_dll_load_hook::Shutdown() cleared the registered filters
+// How many files the late-load filter has checked and holds (a staged plugin's own load is not one of them).
+size_t TestHook_LoadFilterVerifiedCount();
 // Called by the filter between resolving a late load's path and opening it (null clears it).
 void TestHook_SetBetweenResolveAndOpen(void (*hook)(const std::wstring& resolved));
 // Called by StageOne between a staged plugin's check and its load, with the path the entry names (null clears it).
@@ -104,4 +106,6 @@ void TestHook_FailNamingTheHeldFile(bool fail);
 void TestHook_SetAfterDependenciesChecked(void (*hook)());
 // Makes every System32 pin of a plugin's dependencies fail with ERROR_ACCESS_DENIED (false restores it).
 void TestHook_FailPinning(bool fail);
+// Runs after a late load's check has passed and before the filter lets the load go on (#1177).
+void TestHook_SetAfterLateLoadAccepted(void (*hook)(const std::wstring& checked));
 #endif

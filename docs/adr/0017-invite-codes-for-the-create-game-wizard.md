@@ -63,8 +63,17 @@ issues a code and never builds a route shaped after the wizard.
 | `invite/revoke` | code | ok |
 
 A refusal is a nakama RPC error whose message is one stable token: `invalid` (no such code), `expired`, `closed` (revoked,
-or its match ended), `denied` (the guild check, decision D2), `limit` (decision D1, live codes per user) or `rate` (too many
-attempts). The runtime maps the token to the wizard's text and logs the token; it never logs or shows any other text of
+or its match ended), `denied` (the guild check, decision D2), `limit` (decision D1, live codes per user), `rate` (too many
+attempts) or `unavailable` (the match could not be allocated: no server was available to the player). The create request's
+`map` is a level name string (the service refuses a number as `invalid`). The runtime names it from the chosen map card:
+the card's level symbol is looked up in the generated symbol cache (`symcache_data.cpp`), giving `mpl_combat_fission` and
+`mpl_combat_gauss` for the payload cards and `mpl_combat_dyson` and `mpl_combat_combustion` for the capture-point cards.
+A card with no level, or a level the cache cannot name, is refused with the `no_level` reason and nothing is sent; the
+runtime never sends a create with no level for a mode that has a map page. A mode with no map page sends an empty `map`.
+The request's `region` is empty: the review
+page's `Server_region` is display text, no generic region code exists, and with none sent the service picks a server by
+the player's stored pings (#1192 makes the row a list of codes the service offers, and the request then sends the chosen
+one). The runtime maps the token to the wizard's text and logs the token; it never logs or shows any other text of
 the answer (`docs/standards/logging.md` Rule 4).
 
 - **Storage.** One object per code in a system-owned collection, key = the code, value = match id, owner user id,
@@ -218,9 +227,11 @@ credential: a line carries `code_len` and a short fingerprint of the code (`code
 | Event | Level | Fields |
 | --- | --- | --- |
 | wizard click seen | Info | `event=create_invite\|join_via_code panel=deep_linking` |
-| request not sent | Info | `reason=empty\|malformed\|too_long\|incomplete\|not_configured\|no_token` and `code_len=<n>` (nothing is sent) |
+| request not sent | Info | `reason=empty\|malformed\|too_long\|incomplete\|not_configured\|no_token\|busy\|stopped` and `code_len=<n>` (nothing is sent) |
 | request sent | Info | `op=create\|resolve\|revoke expires_s=<n> code_len=<n> code_fp=<8 hex>` |
 | answer | Info / Warning | `op status=<http status> latency_ms=<n> result=<ok\|invalid\|expired\|closed\|denied\|limit\|rate>` |
+| worker stopped | Info | `dropped=<n>`: requests still queued when the worker stopped, never sent |
+| answers dropped | Warning | `reason=not_taken kept=<n>`: the oldest answer went because the menu had not taken them |
 | text written | Info | `page=<n> field=<name>`; a failed write at Warning with the cause |
 | join started | Info | `route=stage\|join lobby=<uuid> state_from=<n>`; the state change after it is the game's own `[NETGAME]` line |
 | feature off | Info | `reason=` (a prologue differed, no token, not configured) |

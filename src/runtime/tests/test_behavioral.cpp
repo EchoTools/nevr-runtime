@@ -922,6 +922,56 @@ TEST_F(PluginSystemDependencyTest, AStandInPlantedForASystemImportAfterALaterLoa
   EXPECT_FALSE(TheDecoyRan()) << "the stand-in planted after the filter's check was loaded with the plugin";
 }
 
+// #769: the loader's own load of a staged plugin is not checked twice, because the loader checked the file first. That
+// exemption is for the loader's call. The plugin's DllMain runs inside the same call, with the loader lock held, and
+// a load it makes is the plugin's own: it has to be checked like any other, even by the path being loaded.
+class PluginDllMainLoadTest : public PluginDependencyGateTest {
+ protected:
+  void TearDown() override {
+    SetEnvironmentVariableW(L"NEVR_TEST_DLLMAIN_LOAD", nullptr);
+    // The fixture is not a real plugin, so it is released here: a file that stays mapped cannot be copied over by the
+    // next test.
+    while (HMODULE m = GetModuleHandleA("dllmain_loader.dll")) {
+      if (!FreeLibrary(m)) break;
+    }
+    PluginDependencyGateTest::TearDown();
+  }
+
+  // Runs LoadPlugins with the real LoadLibrary hooks installed, as the game has them; false if they did not install.
+  bool LoadPluginsWithTheRealHooks(size_t* checked = nullptr) {
+    EXPECT_EQ(MH_Initialize(), MH_OK);
+    const int hooked = nevr_dll_load_hook::Install();
+    if (hooked == 4) {
+      LoadPlugins();
+      if (checked != nullptr) *checked = TestHook_LoadFilterVerifiedCount();
+    }
+    nevr_dll_load_hook::Shutdown();  // also clears the registered filters
+    MH_Uninitialize();
+    nevr_hook_guard::ResetForTest();
+    TestHook_ForgetLoadFilterRegistration();
+    EXPECT_EQ(hooked, 4) << "the LoadLibrary hooks did not install";
+    return hooked == 4;
+  }
+};
+
+TEST_F(PluginDllMainLoadTest, ALoadOfThePluginsOwnPathFromItsDllMainIsChecked) {
+  PlanTree("dllmain_load");
+  const std::wstring self = std::wstring(pluginsDir_.begin(), pluginsDir_.end()) + L"dllmain_loader.dll";
+  ASSERT_TRUE(SetEnvironmentVariableW(L"NEVR_TEST_DLLMAIN_LOAD", self.c_str()));
+  size_t checked = 0;
+  ASSERT_TRUE(LoadPluginsWithTheRealHooks(&checked));
+  EXPECT_EQ(checked, 1u) << "a load of the plugin's own path from its DllMain was not checked";
+}
+
+TEST_F(PluginDllMainLoadTest, TheLoadersOwnLoadOfAStagedPluginIsStillNotCheckedTwice) {
+  PlanTree("dllmain_load");  // its DllMain loads nothing: NEVR_TEST_DLLMAIN_LOAD is not set
+  size_t checked = 99;
+  ASSERT_TRUE(LoadPluginsWithTheRealHooks(&checked));
+  EXPECT_EQ(checked, 0u) << "the loader's own load of the plugin it checked was checked again";
+  EXPECT_FALSE(TestLogContains("refused"));
+  EXPECT_FALSE(TestLogContains("LoadLibrary failed")) << "the plugin did not load";
+}
+
 // The path the filter resolved is opened a moment later; a name pointed elsewhere in between must not be verified
 // as the file that was resolved (heldPath != full). The hook turns the resolved name into a link to a signed file.
 std::wstring g_linkTarget;
@@ -985,6 +1035,190 @@ TEST_F(PluginDependencyGateTest, ALinkRepointedBetweenTheCheckAndTheLoadDoesNotC
   EXPECT_EQ(GetLoadedPluginCount(), 1) << "the file behind the link at the load was not the file that was checked";
   EXPECT_TRUE(TestLogContains("plugin=staged_link.dll file=staged_link.dll is loaded from "))
       << "a path that leads somewhere else than its name is not said";
+}
+
+// #1177: a late load the filter accepted is made by the hook with the caller's own text. The filter held the file it
+// checked; a link in that text, pointed somewhere else after the check, leads the real load to a file that was
+// never checked. The load has to be of the file that was checked. late_link.dll names the signed late_real.dll;
+// after the check the link is pointed at the unsigned late_evil.dll, which is no plugin (no NvrPluginGetInfo).
+std::wstring g_lateLink;
+std::wstring g_lateLinkTarget;
+
+void PointTheLateLinkAtTheUnsignedFile(const std::wstring&) {
+  DeleteFileW(g_lateLink.c_str());
+  CreateSymbolicLinkW(g_lateLink.c_str(), g_lateLinkTarget.c_str(), 0);
+}
+
+class PluginLateLoadTest : public PluginDependencyGateTest {
+ protected:
+  void TearDown() override {
+    TestHook_SetAfterLateLoadAccepted(nullptr);
+    TestHook_FailNamingTheHeldFile(false);
+    for (const char* name : {"late_link.dll", "late_real.dll", "late_evil.dll"}) {
+      while (HMODULE m = GetModuleHandleA(name)) {
+        if (!FreeLibrary(m)) break;
+      }
+    }
+    PluginDependencyGateTest::TearDown();
+  }
+
+  // late_link.dll -> late_real.dll (signed plugin); late_evil.dll is the file the seam points the link at.
+  void ArrangeTheLink() {
+    Plan("late_real.dll", "signed");
+    g_testPluginLoadPlan.clear();
+    evil_ = pluginsDir_ + "late_evil.dll";
+    ASSERT_TRUE(CopyFileA((fixtures_ + "/" + manifest_["files"]["nevr-runtime.unsigned"].get<std::string>()).c_str(),
+                          evil_.c_str(), FALSE))
+        << GetLastError();
+    copies_.push_back(evil_);
+    link_ = pluginsDir_ + "late_link.dll";
+    g_lateLink.assign(link_.begin(), link_.end());
+    g_lateLinkTarget.assign(pluginsDir_.begin(), pluginsDir_.end());
+    g_lateLinkTarget += L"late_real.dll";
+    ASSERT_TRUE(CreateSymbolicLinkW(g_lateLink.c_str(), g_lateLinkTarget.c_str(), 0)) << GetLastError();
+    copies_.push_back(link_);
+    g_lateLinkTarget.assign(evil_.begin(), evil_.end());  // where the seam points the link
+  }
+
+  // Runs `body` with the four LoadLibrary hooks and the plugin filter live, then takes them down.
+  template <typename Body>
+  void WithTheRealHooks(Body body) {
+    ASSERT_EQ(MH_Initialize(), MH_OK);
+    const int hooked = nevr_dll_load_hook::Install();
+    if (hooked == 4) {
+      TestHook_InstallPluginLoadFilter(pluginsDir_);
+      body();
+    }
+    nevr_dll_load_hook::Shutdown();  // also clears the registered filters
+    MH_Uninitialize();
+    nevr_hook_guard::ResetForTest();
+    TestHook_ForgetLoadFilterRegistration();
+    ASSERT_EQ(hooked, 4) << "the LoadLibrary hooks did not install";
+  }
+
+  std::string evil_;
+  std::string link_;
+};
+
+TEST_F(PluginLateLoadTest, ALinkRepointedAfterTheLateCheckDoesNotChangeTheFileThatLoads) {
+  ArrangeTheLink();
+  WithTheRealHooks([&] {
+    TestHook_SetAfterLateLoadAccepted(&PointTheLateLinkAtTheUnsignedFile);
+    const HMODULE m = LoadLibraryW(g_lateLink.c_str());
+    TestHook_SetAfterLateLoadAccepted(nullptr);
+    ASSERT_NE(m, nullptr) << GetLastError();
+    EXPECT_NE(GetProcAddress(m, "NvrPluginGetInfo"), nullptr)
+        << "the file behind the link at the load was not the file that was checked";
+    EXPECT_TRUE(TestLogContains("loads the file it checked")) << "a load that leads somewhere else than its name is not said";
+  });
+}
+
+TEST_F(PluginLateLoadTest, AFileAlreadyCheckedIsLoadedAsCheckedWhenItsLinkIsRepointedLater) {
+  ArrangeTheLink();
+  WithTheRealHooks([&] {
+    const HMODULE first = LoadLibraryW(g_lateLink.c_str());  // verifies and remembers the file
+    ASSERT_NE(first, nullptr) << GetLastError();
+    ASSERT_TRUE(FreeLibrary(first));
+    TestHook_SetAfterLateLoadAccepted(&PointTheLateLinkAtTheUnsignedFile);
+    const HMODULE second = LoadLibraryW(g_lateLink.c_str());  // the remembered file is accepted again
+    TestHook_SetAfterLateLoadAccepted(nullptr);
+    ASSERT_NE(second, nullptr) << GetLastError();
+    EXPECT_NE(GetProcAddress(second, "NvrPluginGetInfo"), nullptr)
+        << "a remembered file's second load went to the file behind the link";
+  });
+}
+
+TEST_F(PluginLateLoadTest, TheAnsiLoadsAreLoadedAsCheckedToo) {
+  ArrangeTheLink();
+  WithTheRealHooks([&] {
+    TestHook_SetAfterLateLoadAccepted(&PointTheLateLinkAtTheUnsignedFile);
+    const HMODULE m = LoadLibraryExA(link_.c_str(), nullptr, 0);
+    TestHook_SetAfterLateLoadAccepted(nullptr);
+    ASSERT_NE(m, nullptr) << GetLastError();
+    EXPECT_NE(GetProcAddress(m, "NvrPluginGetInfo"), nullptr) << "LoadLibraryExA loaded the file behind the link";
+    ASSERT_TRUE(FreeLibrary(m));
+    DeleteFileW(g_lateLink.c_str());  // the link is back at the signed file for the next variant
+    g_lateLinkTarget.assign(pluginsDir_.begin(), pluginsDir_.end());
+    g_lateLinkTarget += L"late_real.dll";
+    ASSERT_TRUE(CreateSymbolicLinkW(g_lateLink.c_str(), g_lateLinkTarget.c_str(), 0)) << GetLastError();
+    g_lateLinkTarget.assign(evil_.begin(), evil_.end());
+    TestHook_SetAfterLateLoadAccepted(&PointTheLateLinkAtTheUnsignedFile);
+    const HMODULE a = LoadLibraryA(link_.c_str());
+    TestHook_SetAfterLateLoadAccepted(nullptr);
+    ASSERT_NE(a, nullptr) << GetLastError();
+    EXPECT_NE(GetProcAddress(a, "NvrPluginGetInfo"), nullptr) << "LoadLibraryA loaded the file behind the link";
+  });
+}
+
+TEST_F(PluginLateLoadTest, ASignedLateLoadWithNoLinkLoadsAsBefore) {
+  ArrangeTheLink();
+  WithTheRealHooks([&] {
+    const std::string real = pluginsDir_ + "late_real.dll";
+    const HMODULE m = LoadLibraryA(real.c_str());
+    ASSERT_NE(m, nullptr) << GetLastError();
+    EXPECT_NE(GetProcAddress(m, "NvrPluginGetInfo"), nullptr);
+    EXPECT_FALSE(TestLogContains("loads the file it checked")) << "a load whose name is its file was said to be rewritten";
+  });
+}
+
+TEST_F(PluginLateLoadTest, AnUnsignedAllowedRunLoadsWhatTheCallerNamed) {
+  nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
+  ArrangeTheLink();
+  WithTheRealHooks([&] {
+    TestHook_SetAfterLateLoadAccepted(&PointTheLateLinkAtTheUnsignedFile);
+    const HMODULE m = LoadLibraryW(g_lateLink.c_str());
+    TestHook_SetAfterLateLoadAccepted(nullptr);
+    ASSERT_NE(m, nullptr) << GetLastError();
+    EXPECT_EQ(GetProcAddress(m, "NvrPluginGetInfo"), nullptr) << "a run that allows unsigned plugins rewrote a load";
+  });
+}
+
+TEST_F(PluginLateLoadTest, AFileTheFilterCannotNameIsRefusedInASignedOnlyRun) {
+  Plan("late_real.dll", "signed");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  TestHook_FailNamingTheHeldFile(true);
+  EXPECT_TRUE(Blocked("late_real.dll"));
+  EXPECT_TRUE(TestLogContains("cannot name the file it checked"));
+}
+
+TEST_F(PluginLateLoadTest, AFileTheFilterCannotNameIsLoadedWhenSignaturesAreNotRequired) {
+  nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
+  Plan("late_real.dll", "signed");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  TestHook_FailNamingTheHeldFile(true);
+  EXPECT_FALSE(Blocked("late_real.dll"));
+}
+
+// A bare name is left to the OS search: the plugins directory may not be on it, so naming the plugins file would load
+// a file the OS would not have chosen.
+TEST_F(PluginLateLoadTest, ABareNameIsNotRewritten) {
+  ArrangeTheLink();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  ASSERT_FALSE(nevr_dll_load_hook::IsLoadBlocked(L"late_link.dll", nullptr));
+  std::wstring path;
+  EXPECT_FALSE(nevr_dll_load_hook::RewriteLoad(L"late_link.dll", &path)) << "a bare name was given a path";
+}
+
+// What the filter noted is for the one load it just accepted: the text it was asked about, once.
+TEST_F(PluginLateLoadTest, TheNotedFileAnswersOnlyTheTextTheFilterAcceptedAndOnlyOnce) {
+  ArrangeTheLink();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  std::wstring link(link_.begin(), link_.end());
+  for (wchar_t& c : link) c = (c >= L'A' && c <= L'Z') ? static_cast<wchar_t>(c + 32) : c;
+  std::wstring path;
+
+  ASSERT_FALSE(nevr_dll_load_hook::IsLoadBlocked(link.c_str(), nullptr));
+  EXPECT_FALSE(nevr_dll_load_hook::RewriteLoad(L"c:\\other\\late_link.dll", &path)) << "another text was answered";
+  EXPECT_TRUE(nevr_dll_load_hook::RewriteLoad(link.c_str(), &path));
+  EXPECT_FALSE(path.empty());
+  EXPECT_FALSE(nevr_dll_load_hook::RewriteLoad(link.c_str(), &path)) << "the noted file was used twice";
+
+  // A later filter call that notes nothing clears what an earlier one noted.
+  ASSERT_FALSE(nevr_dll_load_hook::IsLoadBlocked(link.c_str(), nullptr));
+  ASSERT_FALSE(nevr_dll_load_hook::IsLoadBlocked(L"c:\\windows\\system32\\kernel32.dll", nullptr));
+  EXPECT_FALSE(nevr_dll_load_hook::RewriteLoad(link.c_str(), &path)) << "a noted file outlived the next filter call";
 }
 
 TEST_F(PluginDependencyGateTest, APluginReachedByItsOwnNameIsNotSaidToBeLoadedFromElsewhere) {

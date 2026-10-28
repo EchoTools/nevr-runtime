@@ -1,5 +1,7 @@
-#include "quest/social/menu_version_label.h"
+#include "quest/social/menu_version_label_hook.h"
 
+#include <atomic>
+#include <cstdint>
 #include <cstring>
 #include <string>
 
@@ -7,73 +9,78 @@
 #include "generated/nevr_build_info.h"
 #include "hook_install.h"
 #include "hook_log.h"
-#include "inline_hook.h"
-#include "pinned_targets.h"
 #include "runtime/patch/menu_version_label_rules.h"
 
 namespace quest_social::menu_version {
 namespace {
 
-using sentinel::InlinePrologue;
-using sentinel::InlineStatus;
-
-// The first four words of CCanvasUICS::SetText in the pinned libr15 (ReVault 0x149111c; the bytes at the link-time
-// address). Word 0 is `cbz x3, ...`, PC-relative: the inline backend relocates it into the trampoline
-// (sentinel/arm64_reloc.h). The words are the check, not a guess: a build that differs refuses.
-constexpr InlinePrologue kSetTextPrologue{{0xb4000243u, 0xd10083ffu, 0xa9017bf3u, 0xaa0303f3u}};
-
-struct SetTextTag {};
-using SetTextThunk = sentinel::CallbackThunk<SetTextTag, std::uint64_t(void*, std::uint32_t, std::uint64_t, const char*)>;
-
-// Written once, at install, before the hook is live; read-only afterwards. A fixed buffer, so the game's call path
+// Written once, at install, before the hook is armed; read-only afterwards. A fixed buffer, so the game's call path
 // allocates nothing and carries no static destructor.
 char g_label[32] = {};
+sentinel::GotHook g_hook;
+std::atomic<unsigned long long> g_replaced{0};
 
-// Every SetText call passes through here. The common case is one compare, and nothing is logged on this path
-// (callback_thunk.h rule 1). An empty text is the script clearing the item and stays empty.
-std::uint64_t OnSetText(SetTextThunk::Fn original, void* canvas, std::uint32_t handle, std::uint64_t item,
+// Every SetText call passes through here (the credits page sets text each frame). The common case is one compare. An empty
+// text is the script clearing the item when its page is disabled and stays empty. The first replacement writes one line
+// (the same logger the OS-build hook uses from its handler); the rest write none.
+std::uint64_t OnSetText(Thunk::Fn original, void* canvas, std::uint32_t handle, std::uint64_t item,
                         const char* text) noexcept {
   if (item != nevr_menu_version_label::kLobbyVersionItem || text == nullptr || text[0] == '\0' || g_label[0] == '\0') {
     return original(canvas, handle, item, text);
   }
+  if (g_replaced.fetch_add(1, std::memory_order_acq_rel) == 0) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "menu_version",
+                        {{"status", "label_drawn"}, {"item", "lobby_version"}, {"label", g_label}});
+  }
   return original(canvas, handle, item, g_label);
 }
 
-NEVR_HOOK_RECORD(kSetTextRecord, SetTextThunk, &OnSetText);
+NEVR_HOOK_RECORD(kSetTextRecord, Thunk, &OnSetText);
+
+void Arm(const char* label) noexcept {
+  std::strncpy(g_label, label, sizeof g_label - 1);
+  g_label[sizeof g_label - 1] = '\0';
+  g_replaced.store(0, std::memory_order_relaxed);
+  Thunk::Arm(kSetTextRecord);
+}
 
 }  // namespace
 
+void ArmForTest(const char* label) noexcept { Arm(label); }
+
+void ResetForTest() noexcept {
+  g_label[0] = '\0';
+  g_replaced.store(0, std::memory_order_relaxed);
+  Thunk::Reset();
+}
+
+unsigned long long Replaced() noexcept { return g_replaced.load(std::memory_order_acquire); }
+
+bool InstallAt(const sentinel::GotTarget& target, const char* label) noexcept {
+  Arm(label);
+  const sentinel::GotStatus status = sentinel::InstallThunk<Thunk>(g_hook, target);
+  const bool ok = status == sentinel::GotStatus::kOk;
+  sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "menu_version",
+                      {{"status", ok ? "installed" : sentinel::GotStatusName(status)},
+                       {"hook", "got_slot"},
+                       {"symbol", sentinel::pinned::kCanvasSetTextSymbol},
+                       {"label", g_label}});
+  return ok;
+}
+
+std::string LabelFor(const char* version) {
+  return nevr_menu_version_label::FitLabel(std::string("nEVR ") + version);
+}
+
+std::string Label() { return LabelFor(nevr_build::kVersion); }
+
 std::size_t InstallMenuVersionLabelHook() noexcept {
-  sentinel::ElfImage image;
-  if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) {
-    sentinel::LogFields(sentinel::LogLevel::kWarn, "menu_version", {{"status", "libr15_not_loaded"}});
-    return 0;
-  }
-  char buildId[41] = {};
-  if (!sentinel::ReadBuildId(image, buildId, sizeof buildId) ||
-      std::strcmp(buildId, sentinel::pinned::kLibR15BuildId) != 0) {
-    sentinel::LogFields(sentinel::LogLevel::kWarn, "menu_version",
-                        {{"status", "build_id_mismatch"}, {"build_id", buildId}});
-    return 0;
-  }
-  const std::string full = std::string("nEVR ") + nevr_build::kVersion;
-  const std::string fitted = nevr_menu_version_label::FitLabel(full);
+  const std::string fitted = Label();
   if (fitted.empty() || fitted.size() >= sizeof g_label) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "menu_version", {{"status", "label_empty"}});
     return 0;
   }
-  std::memcpy(g_label, fitted.c_str(), fitted.size() + 1);
-
-  SetTextThunk::Arm(kSetTextRecord);
-  char targetText[19];
-  const void* target = reinterpret_cast<const void*>(image.base + kSetTextVaddr);
-  const InlineStatus st = sentinel::InstallInlineThunk<SetTextThunk>(target, kSetTextPrologue);
-  sentinel::LogFields(st == InlineStatus::kOk ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "menu_version",
-                      {{"status", st == InlineStatus::kOk ? "installed" : sentinel::InlineStatusName(st)},
-                       {"hook", "set_text"},
-                       {"label", g_label},
-                       {"target", sentinel::HexString(targetText, reinterpret_cast<std::uintptr_t>(target))}});
-  return st == InlineStatus::kOk ? 1 : 0;
+  return InstallAt(sentinel::pinned::LibR15CanvasSetText(), fitted.c_str()) ? 1 : 0;
 }
 
 }  // namespace quest_social::menu_version

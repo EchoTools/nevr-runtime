@@ -38,6 +38,15 @@ Choices After(std::initializer_list<Event> events) {
   return c;
 }
 
+// The names of the four combat levels, as the symbol cache has them (test_invite_wizard reads the real cache).
+const char* LevelNamer(std::uint64_t symbol) {
+  if (symbol == nevr_invite::kLevelFission) return "mpl_combat_fission";
+  if (symbol == nevr_invite::kLevelGauss) return "mpl_combat_gauss";
+  if (symbol == nevr_invite::kLevelDyson) return "mpl_combat_dyson";
+  if (symbol == nevr_invite::kLevelCombustion) return "mpl_combat_combustion";
+  return nullptr;
+}
+
 Metric CreateMetric() {
   Metric m;
   m.kind = Kind::Create;
@@ -175,15 +184,15 @@ TEST(InviteChoices, TheChoicesTheCardsLeaveBuildAnInviteCreateRequest) {
   state.Observe(Card(kPageExperience, kCardRight));
   state.Observe(Card(kPageCombatMode, kCardMiddle));
   state.Observe(Card(kPageMap, kCardMiddle));
-  const Plan plan = nevr_invite::PlanRequest(CreateMetric(), state.Snapshot());
+  const Plan plan = nevr_invite::PlanRequest(CreateMetric(), state.Snapshot(), LevelNamer);
   ASSERT_EQ(plan.skip, Skip::None);
   ASSERT_TRUE(plan.request.has_value());
   EXPECT_EQ(plan.request->rpc, "invite/create");
   const nlohmann::json body = nlohmann::json::parse(plan.request->body);
   EXPECT_EQ(body["experience"], "combat");
   EXPECT_EQ(body["mode"], "capture");
-  EXPECT_EQ(body["map"], 2);
-  EXPECT_EQ(body["region"], "us-east");
+  EXPECT_EQ(body["map"], "mpl_combat_combustion") << "capture point, the middle card";
+  EXPECT_EQ(body["region"], "") << "the row's text is display text; no region is sent";
 }
 
 TEST(InviteChoices, NoChoicesIsAnIncompleteCreate) {
@@ -211,10 +220,10 @@ TEST(InviteChoices, ACombatPayloadOrCaptureNeedsAMapAndRandomDoesNot) {
   EXPECT_EQ(nevr_invite::PlanRequest(CreateMetric(), After({combat, Card(kPageCombatMode, kCardMiddle)})).skip,
             Skip::Incomplete);
   EXPECT_EQ(nevr_invite::PlanRequest(CreateMetric(),
-                                     After({combat, Card(kPageCombatMode, kCardLeft), Card(kPageMap, kCardLeft)}))
+                                     After({combat, Card(kPageCombatMode, kCardLeft), Card(kPageMap, kCardLeft)}), LevelNamer)
                 .skip,
             Skip::None);
-  EXPECT_EQ(nevr_invite::PlanRequest(CreateMetric(), After({combat, Card(kPageCombatMode, kCardRight)})).skip,
+  EXPECT_EQ(nevr_invite::PlanRequest(CreateMetric(), After({combat, Card(kPageCombatMode, kCardRight)}), LevelNamer).skip,
             Skip::None);
 }
 

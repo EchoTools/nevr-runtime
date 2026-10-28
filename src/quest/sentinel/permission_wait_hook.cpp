@@ -27,6 +27,7 @@ std::atomic<bool> g_micSeen{false};
 std::atomic<CheckFn> g_check{nullptr};
 std::atomic<WaitFn> g_wait{nullptr};
 std::atomic<AfterStorageFn> g_after{nullptr};
+std::atomic<RequestFn> g_request{nullptr};
 std::atomic<bool> g_spent{false};
 std::atomic<unsigned> g_pollMs{kPollMs};
 std::atomic<unsigned> g_timeoutMs{kTimeoutMs};
@@ -34,6 +35,7 @@ std::atomic<unsigned long long> g_requests{0};
 std::atomic<unsigned long long> g_waits{0};
 std::atomic<unsigned long long> g_granted{0};
 std::atomic<unsigned long long> g_timeouts{0};
+std::atomic<unsigned long long> g_gameRequests{0};
 
 bool IsStorage(const char* name) noexcept {
   if (name == nullptr) return false;
@@ -110,10 +112,28 @@ StorageOutcome WaitForStorage(const char* const* names, std::uint64_t count) noe
   }
 }
 
-// RequestPermissions. The handler touches the game only through `original` and reaches the rest through a pointer.
+// RequestPermissions. The handler touches the game only through `original` and reaches the rest through a pointer. The
+// request is made through the requester with kRequestCode; the game's function, which passes no request code (#947),
+// runs only when the requester did not make the call.
 void RequestHandler(RequestThunk::Fn original, const char* const* names, std::uint64_t count) noexcept {
-  original(names, count);
-  g_requests.fetch_add(1, std::memory_order_relaxed);
+  const RequestFn request = g_request.load(std::memory_order_acquire);
+  const char* const result = request != nullptr ? request(names, count, kRequestCode) : "no_requester";
+  const bool ours = std::strcmp(result, "requested") == 0;
+  if (!ours) {
+    original(names, count);
+    g_gameRequests.fetch_add(1, std::memory_order_relaxed);
+  }
+  const unsigned long long n = g_requests.fetch_add(1, std::memory_order_relaxed);
+  if (n < kMaxLoggedRequests) {
+    if (ours) {
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "permission_request",
+                          {{"result", result}, {"path", "ours"}, {"permissions", static_cast<long long>(count)},
+                           {"request_code", kRequestCode}});
+    } else {
+      sentinel::LogFields(sentinel::LogLevel::kWarn, "permission_request",
+                          {{"result", result}, {"path", "game"}, {"permissions", static_cast<long long>(count)}});
+    }
+  }
   if (g_spent.exchange(true, std::memory_order_acq_rel)) return;  // only the boot request waits
   const WaitFn wait = g_wait.load(std::memory_order_acquire);
   // No wait armed: nothing was checked, so nothing is known about the grant.
@@ -197,6 +217,8 @@ const char* StorageOutcomeName(StorageOutcome outcome) noexcept {
 
 void SetAfterStorage(AfterStorageFn fn) noexcept { g_after.store(fn, std::memory_order_release); }
 
+void SetRequester(RequestFn fn) noexcept { g_request.store(fn, std::memory_order_release); }
+
 bool InstallAt(const sentinel::GotTarget& target, const sentinel::GotTarget& checkTarget, CheckFn check) noexcept {
   const char* reason = "injected";
   if (check == nullptr) check = ResolveCheck(&reason);
@@ -243,6 +265,7 @@ void ArmForTest(CheckFn check, unsigned pollMs, unsigned timeoutMs) noexcept {
 void ResetForTest() noexcept {
   g_check.store(nullptr, std::memory_order_relaxed);
   g_after.store(nullptr, std::memory_order_relaxed);
+  g_request.store(nullptr, std::memory_order_relaxed);
   g_wait.store(nullptr, std::memory_order_relaxed);
   g_spent.store(false, std::memory_order_relaxed);
   g_micSeen.store(false, std::memory_order_relaxed);
@@ -252,11 +275,13 @@ void ResetForTest() noexcept {
   g_waits.store(0, std::memory_order_relaxed);
   g_granted.store(0, std::memory_order_relaxed);
   g_timeouts.store(0, std::memory_order_relaxed);
+  g_gameRequests.store(0, std::memory_order_relaxed);
 }
 
 Counts CurrentCounts() noexcept {
   return {g_requests.load(std::memory_order_relaxed), g_waits.load(std::memory_order_relaxed),
-          g_granted.load(std::memory_order_relaxed), g_timeouts.load(std::memory_order_relaxed)};
+          g_granted.load(std::memory_order_relaxed), g_timeouts.load(std::memory_order_relaxed),
+          g_gameRequests.load(std::memory_order_relaxed)};
 }
 
 }  // namespace nevr_quest::permission_wait

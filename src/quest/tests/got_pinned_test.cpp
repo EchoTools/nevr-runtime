@@ -174,6 +174,7 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15RequestPermissions(), "libr15 CSysInfo::RequestPermissions JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15CheckPermission(), "libr15 CSysInfo::CheckPermission JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15OSBuildVersion(), "libr15 CSysInfo::OSBuildVersion JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15CanvasSetText(), "libr15 CCanvasUICS::SetText(char const*) JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15MountObb(), "libr15 AStorageManager_mountObb JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetMountedObbPath(), "libr15 AStorageManager_getMountedObbPath JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetDataRootDir(), "libr15 CSysInfo::GetDataRootDir JUMP_SLOT");
@@ -402,6 +403,62 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "libr15 OSBuildVersion stub has %zu b/bl callers, not the one at %#llx\n", callers.size(),
                    static_cast<unsigned long long>(pinned::kOSBuildVersionCallSite));
       for (const std::uint64_t at : callers) std::fprintf(stderr, "  caller %#llx\n", static_cast<unsigned long long>(at));
+      QCHECK(false);
+    }
+  }
+
+  // The Quest menu version (#747): CCanvasUICS::SetText(char const*) is defined where pinned_targets.h says, the PLT stub loads
+  // the hooked slot, every call in the executable segments reaches the function through that stub (kCanvasSetTextStubCallers
+  // `b`/`bl` to the stub, none to the function itself), and the slot lies in a writable segment that is not executable: the
+  // install writes a data page and never a code page (docs/adr/0021).
+  if (DynamicSymbolValue(r15, pinned::kCanvasSetTextSymbol) != pinned::kCanvasSetTextVaddr) {
+    std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", pinned::kCanvasSetTextSymbol,
+                 static_cast<unsigned long long>(pinned::kCanvasSetTextVaddr));
+    QCHECK(false);
+  }
+  {
+    std::uint32_t stub[4] = {};
+    std::memcpy(stub, static_cast<const unsigned char*>(r15.mem) + pinned::kCanvasSetTextStub, sizeof(stub));
+    const std::uint64_t slot = pinned::LibR15CanvasSetText().slotVaddr.value_or(0);
+    const std::uint64_t page = slot & ~0xFFFULL;
+    const std::uint64_t immlo = (stub[0] >> 29) & 0x3U;
+    const std::uint64_t immhi = (stub[0] >> 5) & 0x7FFFFU;
+    const std::uint64_t adrpPage = (pinned::kCanvasSetTextStub & ~0xFFFULL) + (((immhi << 2) | immlo) << 12);
+    const std::uint64_t ldrOffset = ((stub[1] >> 10) & 0xFFFU) * 8;
+    if ((stub[0] & 0x9F00001FU) != 0x90000010U || adrpPage != page || (stub[1] & 0xFFC003FFU) != 0xF9400211U ||
+        ldrOffset != (slot & 0xFFFU) || stub[3] != 0xD61F0220U) {
+      std::fprintf(stderr, "libr15 CCanvasUICS::SetText PLT stub at %#llx does not load the slot %#llx\n",
+                   static_cast<unsigned long long>(pinned::kCanvasSetTextStub), static_cast<unsigned long long>(slot));
+      QCHECK(false);
+    }
+    std::size_t viaStub = 0;
+    std::size_t direct = 0;
+    for (const Elf64_Phdr& ph : r15.phdrs) {
+      if (ph.p_type != PT_LOAD || (ph.p_flags & PF_X) == 0) continue;
+      for (std::uint64_t at = ph.p_vaddr; at + 4 <= ph.p_vaddr + ph.p_filesz; at += 4) {
+        std::uint32_t word = 0;
+        std::memcpy(&word, static_cast<const unsigned char*>(r15.mem) + at, sizeof(word));
+        if ((word & 0x7c000000U) != 0x14000000U) continue;  // b or bl
+        std::int64_t imm = static_cast<std::int64_t>(word & 0x03ffffffU);
+        if ((imm & 0x02000000) != 0) imm -= 0x04000000;
+        const std::uint64_t target = at + static_cast<std::uint64_t>(imm * 4);
+        if (target == pinned::kCanvasSetTextStub) ++viaStub;
+        if (target == pinned::kCanvasSetTextVaddr) ++direct;
+      }
+    }
+    if (viaStub != pinned::kCanvasSetTextStubCallers || direct != 0) {
+      std::fprintf(stderr, "libr15 CCanvasUICS::SetText: %zu b/bl to the stub (want %zu), %zu to the function (want 0)\n",
+                   viaStub, static_cast<std::size_t>(pinned::kCanvasSetTextStubCallers), direct);
+      QCHECK(false);
+    }
+    bool slotInDataSegment = false;
+    for (const Elf64_Phdr& ph : r15.phdrs) {
+      if (ph.p_type != PT_LOAD || slot < ph.p_vaddr || slot + 8 > ph.p_vaddr + ph.p_memsz) continue;
+      slotInDataSegment = (ph.p_flags & PF_W) != 0 && (ph.p_flags & PF_X) == 0;
+    }
+    if (!slotInDataSegment) {
+      std::fprintf(stderr, "libr15 CCanvasUICS::SetText slot %#llx is not in a writable, non-executable segment\n",
+                   static_cast<unsigned long long>(slot));
       QCHECK(false);
     }
   }

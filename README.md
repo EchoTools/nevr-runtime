@@ -2,7 +2,7 @@
 
 nEVR Runtime keeps Echo VR (`echovr.exe`) playable on the community game service
 ([echovrce](https://github.com/echotools), Nakama-based). Drop two files,
-`BugSplat64.dll` and `nevr-runtime.dll`, into the game folder and the game signs in with your Discord
+`BugSplat64.dll` into the game folder and `nevr-runtime.dll` into your nEVR folder (`%LOCALAPPDATA%\nevr\echovr`) and the game signs in with your Discord
 account, reaches the social lobby and shows its friends and party. The Quest
 build does the same through a repacked APK. For contributors it is the C++17
 source of those DLLs and of the Quest sentinel, plus the tooling and tests that
@@ -80,7 +80,7 @@ says how to check each one and which log line proves it.
 - **New accounts can invite.** The first-match gate reads as passed, so a fresh account can send a party invite. (both)
 
 ### Matchmaking and play
-- **Matchmaker library host.** The matchmaker library's compiled service address is rewritten each time the library loads, because the game unloads and reloads it during a session. The live check that the PUBLIC MATCH terminal screen populates is still open ([#18](https://github.com/EchoTools/nevr-runtime/issues/18)). (PC)
+- **Matchmaker library host.** The matchmaker library's compiled service address is rewritten each time the library loads, because the game unloads and reloads it during a session. The patch is applied on every load ([#18](https://github.com/EchoTools/nevr-runtime/issues/18)). (PC)
 - **Service redirect.** The game's hard-coded service addresses (HTTP and WebSocket) go to the community game service, over modern TLS 1.2/1.3. (PC)
 - **Early-quit lockout.** The lockout countdown shows when the game service sends a penalty. (PC)
 - **Arena rules in `config.yaml`.** Round time, celebration time and mercy score can be set under `arena.*`. (PC)
@@ -111,32 +111,15 @@ says how to check each one and which log line proves it.
 - **Network.** UPnP port mapping, internal and external address overrides, match telemetry streaming. (PC)
 
 ### Quest
-- **A sentinel loaded with the game.** The redirect, the bridge, the login and the social façade follow from the embedded service endpoints and keys, with no switch of their own; `social.facade`, `social.send_presence_to_meta` and `diagnostics.hardware_dump` in `config.yaml` change the façade, the rich presence and the hardware dump (off by default). On every launch the sentinel answers the game's encrypted-OBB mount itself ([`docs/adr/0007-quest-obb-mount-skip.md`](docs/adr/0007-quest-obb-mount-skip.md)); that the game then starts without the ~30 s wait is predicted and not yet shown on a headset ([#572](https://github.com/EchoTools/nevr-runtime/issues/572)). (Quest)
+- **A sentinel loaded with the game.** The redirect, the bridge, the login and the social façade follow from the embedded service endpoints and keys, with no switch of their own; `social.facade`, `social.send_presence_to_meta` and `diagnostics.hardware_dump` in `config.yaml` change the façade, the rich presence and the hardware dump (off by default). On every launch the sentinel answers the game's encrypted-OBB mount itself ([`docs/adr/0007-quest-obb-mount-skip.md`](docs/adr/0007-quest-obb-mount-skip.md)); the game then starts without the ~30 s wait (checked on a headset on 2026-10-16, recorded in [#572](https://github.com/EchoTools/nevr-runtime/issues/572)). (Quest)
 - **Login and social on the headset.** The game's login is rewritten into the NEVR login, and the social facade decodes friends, presence, recently-met and party frames from the game service. (Quest)
 
 ### Known gaps
-The issue tracker is the source of truth. On Quest the main-menu FRIENDS LIST
-([#391](https://github.com/EchoTools/nevr-runtime/issues/391)), QUIT
-([#392](https://github.com/EchoTools/nevr-runtime/issues/392)), the status text under your
-name ([#393](https://github.com/EchoTools/nevr-runtime/issues/393)) and the party tab's
-Invite Members ([#318](https://github.com/EchoTools/nevr-runtime/issues/318)) do not work
-yet. On PC:
-
-- the main menu shows no game service status, because the status request fails
-  ([#408](https://github.com/EchoTools/nevr-runtime/issues/408));
-- the matchmaking screen's time remaining is always 0
-  ([#414](https://github.com/EchoTools/nevr-runtime/issues/414));
-- under Wine and Proton the microphone ring buffer overflows at the start of a capture and
-  whether the game reads it at real time is still being measured
-  ([#95](https://github.com/EchoTools/nevr-runtime/issues/95));
-- the party roster keeps a member who disconnected
-  ([#403](https://github.com/EchoTools/nevr-runtime/issues/403));
-- party data sharing is refused
-  ([#398](https://github.com/EchoTools/nevr-runtime/issues/398));
-- a friend request shows no prompt to the receiver
-  ([#405](https://github.com/EchoTools/nevr-runtime/issues/405));
-- the PUBLIC MATCH terminal screen after a matchmaker library reload has not been checked live
-  ([#18](https://github.com/EchoTools/nevr-runtime/issues/18)).
+The issue tracker is the source of truth. Three things on Quest do not work yet: the main-menu
+FRIENDS LIST ([#391](https://github.com/EchoTools/nevr-runtime/issues/391)), the party tab's
+Invite Members ([#318](https://github.com/EchoTools/nevr-runtime/issues/318)), and the status text under
+your name, which was fixed in code ([#393](https://github.com/EchoTools/nevr-runtime/issues/393)) but is kept
+here until a passing run on a current build is recorded in that issue.
 
 ## Install for testers
 
@@ -149,9 +132,12 @@ yet. On PC:
    `BugSplat64.dll.original-<timestamp>`, renames a legacy `dbgcore.dll` to
    `dbgcore.dll.legacy-<date>` and installs the two new files. It deletes nothing.
 3. **Uninstall:** `uninstall.ps1 -Dir <bin\win10>` restores both and keeps the backups.
-4. **Quest:** a release is the Windows zip only: the APK repacks the store game, so it is not on GitHub. The
-   development build (`nevr-runtime-v<X.Y.Z-dev.N>-<sha7>-quest.apk`, built by `just package-dev`) is published
-   outside GitHub; download it and install it with `adb install`. Uninstall the old version first; this build is signed with the new key.
+4. **Quest:** the Quest APK is not on GitHub: it repacks the store game. When a release has one (its release
+   notes say so), it is at `https://evr.echo.taxi/nevr-runtime/v<X.Y.Z>/nevr-runtime-v<X.Y.Z>-quest.apk`, the
+   address [`docs/reference/verifying-a-release.md`](docs/reference/verifying-a-release.md) gives; install it with
+   `adb install`. A development build (`nevr-runtime-v<X.Y.Z-dev.N>-<sha7>-quest.apk`, built by `just package-dev`)
+   is published outside GitHub, and this repo does not give its address. Uninstall the old version first; this
+   build is signed with the new key.
 5. Windows Defender or SmartScreen may warn about a file that carries no signature. `Get-AuthenticodeSignature .\BugSplat64.dll`
    (PowerShell) says whether a file is signed.
 
@@ -168,7 +154,7 @@ There is one way over:
 This APK's `versionCode` is set when it is built, from its version (`tools/quest_apk_version.py`), and is always above
 4987570, the game build the installer pins. So the installer's own build never replaces this one, and a later build of
 this APK installs over an earlier one. The code is `major*10^7 + minor*10^5 + patch*10^3 + slot`; the slot is
-the development build's distance N from the last release, or 999 for a release (`5.6.0` is 50600999). It carries no
+the development build's distance N from the last release, or 999 for a release (a release `X.Y.Z` has `X*10^7 + Y*10^5 + Z*10^3 + 999`). It carries no
 commit: two development builds from different branches at the same distance N have the same versionCode, so tell them
 apart by the commit in the file name (`-<sha7>-quest.apk`).
 
@@ -202,8 +188,8 @@ are inside the prefix (`<prefix>/drive_c/users/<user>/AppData/Local`).
 | Path | What it is | Code |
 | --- | --- | --- |
 | `BugSplat64.dll` | The file the game imports: the thin host, with the game's 28 `BugSplat64.dll` exports, the rendezvous detour and the crash capture. It loads `nevr-runtime.dll` and, when that cannot be loaded after attach, stops the game with exit code 78, after one plain-words dialog on a client (a server or headless run gets the `game_stop` record only). | `OUTPUT_NAME "BugSplat64"` of target `nevr_host` in `src/runtime/CMakeLists.txt`; `RuntimeRendezvous::StopGame` in `src/runtime/host/runtime_rendezvous.cpp` |
-| `nevr-runtime.dll` | The runtime: hooks, modes, server, bridge, plugin loader and the statically linked modules. The host's file loader opens it from the directory of `BugSplat64.dll`; `install.ps1` puts it there with the host. | `OUTPUT_NAME "nevr-runtime"` of target `nevr_runtime` in `src/runtime/CMakeLists.txt`; `kRuntimeFileName` and `ResolveRuntimePath` in `src/runtime/host/runtime_load.cpp` |
-| `BugSplat64.dll.original-<timestamp>`, `dbgcore.dll.legacy-<date>`, `nevr-install.txt` | What `install.ps1` leaves: the game's own `BugSplat64.dll`, a legacy `dbgcore.dll` set aside, a pre-existing `nevr-runtime.dll` (`nevr-runtime.dll.original-<timestamp>`; `uninstall.ps1` sets the installed one aside as `nevr-runtime.dll.uninstalled-<timestamp>`), and the state file `uninstall.ps1` reads (renamed `nevr-install.txt.undone-<timestamp>` when it undoes the install, or `nevr-install.txt.stale-<timestamp>` when `install.ps1` finds a record for a DLL that Verify Files has since restored). Both scripts append their runs to `nevr-install.log` beside the script, not in the game folder. | `tools/package-release/install.ps1`, `tools/package-release/uninstall.ps1` |
+| `nevr-runtime.dll` | The runtime: hooks, modes, server, bridge, plugin loader and the statically linked modules. The host verifies it and loads it from the nEVR root (`%LOCALAPPDATA%\nevr\echovr`, ADR 0012), never from beside itself; `install.ps1` puts it there. A dev build also reads `NEVR_ROOT` (an absolute path) for the runtime's location; a release build ignores it and logs that. | `OUTPUT_NAME "nevr-runtime"` of target `nevr_runtime` in `src/runtime/CMakeLists.txt`; `kRuntimeFileName` and `ResolveRuntimePath` in `src/runtime/host/runtime_load.cpp`, `src/core/nevr_root.h` |
+| `BugSplat64.dll.original-<timestamp>`, `dbgcore.dll.legacy-<date>`, `nevr-install.txt` | What `install.ps1` leaves: the game's own `BugSplat64.dll`, a legacy `dbgcore.dll` set aside, a pre-existing `nevr-runtime.dll` in the nEVR root (`nevr-runtime.dll.original-<timestamp>`; `uninstall.ps1` sets the installed one aside as `nevr-runtime.dll.uninstalled-<timestamp>`), and a runtime an earlier release left beside `echovr.exe` (`nevr-runtime.dll.legacy-<timestamp>` in the game folder, put back by `uninstall.ps1`), and the state file `uninstall.ps1` reads (renamed `nevr-install.txt.undone-<timestamp>` when it undoes the install, or `nevr-install.txt.stale-<timestamp>` when `install.ps1` finds a record for a DLL that Verify Files has since restored). Both scripts append their runs to `nevr-install.log` beside the script, not in the game folder. | `tools/package-release/install.ps1`, `tools/package-release/uninstall.ps1` |
 | `plugins\` | Plugin DLLs. A plugin loads only when the ordered `plugins:` list in `config.yaml` names it; a DLL the list does not name is ignored. | `LoadPlugins` (`pluginDir`) in `src/runtime/ext/plugin_loader.cpp` |
 | `_overrides\` | Files registered as resource overrides at start. | `src/runtime/patch/resource_override.cpp` |
 | `logs\nevr-boot.jsonl` | The boot log: one JSON line per event from before the log filter starts, appended across runs; the main log replays this run's lines. Created at start, with the `logs` folder. If the folder cannot be created or the file cannot be opened, the lines go to standard error only. | `nevr_boot_log_tee::Init` in `src/runtime/log/boot_log_tee.cpp` |
@@ -255,13 +241,15 @@ Hooking is [MinHook](https://github.com/TsudaKageyu/minhook)-based.
 
 ### Command-line arguments
 
-Arguments the runtime reads from the game's command line (`--name` works as well as `-name`). `--help` lists them.
+Arguments the runtime reads from the game's command line (`--name` works as well as `-name`).
 
 | Argument | Effect |
 | -------- | ------ |
 | `-server` | Run as a dedicated game server (implies headless) |
 | `-offline` | Run the game in offline mode |
 | `-windowed` | Run the game with no headset, in a window |
+| `-headless` | Run with no window: the headless gates are applied, as `-server` applies them |
+| `-noovr` | Run with OVR (the headset runtime) turned off, the game's own flag |
 | `-no-console` | Disable console window creation |
 | `-config`, `-config-path` | Path to a JSON file the game loads instead of `_local/config.json`; `config.yaml` is looked for in the same directory |
 | `-region` | Set the matchmaking region |
@@ -270,7 +258,7 @@ Arguments the runtime reads from the game's command line (`--name` works as well
 | `-exit-on-error` | No effect: exiting on error is the default |
 | `-trace-exports` | Trace the export calls of platform DLLs (`pnsrad`, `pnsovr`, `pnsdemo` or `all`); off by default |
 | `-no-telemetry` | Disable telemetry streaming |
-| `-telemetry-rate` | Set the telemetry rate in Hz |
+| `-telemetry-rate` | Set the telemetry rate in Hz (default 10) |
 | `-telemetry-diag` | Log telemetry diagnostics every second |
 | `-timestamps` | Prefix log lines with timestamps |
 | `-upnp` | Enable UPnP port forwarding |
@@ -348,7 +336,7 @@ From `build/mingw-release/bin/`:
 | Artifact | Destination |
 | -------- | ----------- |
 | `BugSplat64.dll` | game directory (replaces the crash reporter; the host) |
-| `nevr-runtime.dll` | game directory, beside `BugSplat64.dll` (the runtime) |
+| `nevr-runtime.dll` | the nEVR root, `%LOCALAPPDATA%\nevr\echovr` (the runtime; `BugSplat64.dll` stays in the game directory) |
 | `echovr_server.exe` | game directory, alongside `echovr.exe` |
 | Optional plugin DLLs | `plugins/` next to the game binary |
 
@@ -415,7 +403,8 @@ post-build command can copy the DLL into a game directory:
 
 ```cmake
 set(GAME_DIR "/path/to/echovr/bin/win10")
+set(NEVR_ROOT_DIR "/path/to/the/nevr/root")  # %LOCALAPPDATA%\nevr\echovr of the Windows user (a Wine prefix has its own)
 add_custom_command(TARGET nevr_runtime POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:nevr_runtime> "${GAME_DIR}/nevr-runtime.dll"
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:nevr_runtime> "${NEVR_ROOT_DIR}/nevr-runtime.dll"
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:nevr_host> "${GAME_DIR}/BugSplat64.dll")
 ```

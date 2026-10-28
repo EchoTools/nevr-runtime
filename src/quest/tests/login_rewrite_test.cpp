@@ -936,7 +936,7 @@ void TestDecideSendReadsTheWire() {
   QCHECK(DecideSend(w) == SendDecision::FailClosed);
   for (bool WireCheck::*flag : {&WireCheck::account_id_unreadable, &WireCheck::account_id_stand_in,
                                 &WireCheck::account_id_invalid, &WireCheck::access_token_stand_in,
-                                &WireCheck::nonce_stand_in}) {
+                                &WireCheck::nonce_stand_in, &WireCheck::account_member_stand_in}) {
     WireCheck one;
     one.*flag = true;
     QCHECK(one.Unsafe());
@@ -996,6 +996,7 @@ class FakePrereqState final : public nevr_quest_login::PrerequisiteState {
 // stand-ins the game holds so the next attempt asks Oculus again.
 void TestFinishLoginGate() {
   nevr_quest_login::StandIn::SetForTest(0x4242ULL, "standtoken", "standnonce", "player-ab");
+  nevr_quest_login::StandIn::SetUserIdForTest(0x5151ULL);
 
   // Rewritten, clean wire, stood-in user name -> send, and the name is replaced by the NEVR name.
   {
@@ -1083,6 +1084,31 @@ void TestFinishLoginGate() {
         nevr_quest_login::FinishLogin(user, json, st, nevr_quest_login::Outcome::NoIdentity, &CaptureLog);
     QCHECK(r.decision == nevr_quest_login::SendDecision::FailClosed);
     QCHECK(r.wire.nonce_stand_in);
+  }
+  // #944: a declined login whose JSON "accountid" is still the stand-in logged-in user id (GotUserProofCB copied it
+  // from what ovr_GetLoggedInUserID answered) is refused on that member alone; a real id there goes out.
+  {
+    FakeUser user;
+    user.global_account_id = 5551234;
+    FakeJson json;
+    json.SetString("access_token", "OCULUS-TOKEN");
+    json.SetString("nonce", "real-nonce");
+    json.SetInt("accountid", static_cast<std::int64_t>(nevr_quest_login::StandIn::UserId()));
+    FakePrereqState st;
+    g_log.clear();
+    const nevr_quest_login::FinishResult r =
+        nevr_quest_login::FinishLogin(user, json, st, nevr_quest_login::Outcome::NoIdentity, &CaptureLog);
+    QCHECK(r.decision == nevr_quest_login::SendDecision::FailClosed);
+    QCHECK(r.wire.account_member_stand_in);
+    QCHECK(g_log.size() == 1 && g_log[0].find("quest_login_send ") == 0 &&
+           g_log[0].find(" account_member_stand_in=1") != std::string::npos);  // the record says why
+    QCHECK(!r.wire.account_id_stand_in && !r.wire.access_token_stand_in && !r.wire.nonce_stand_in);
+
+    json.SetInt("accountid", 7777777);
+    const nevr_quest_login::FinishResult real =
+        nevr_quest_login::FinishLogin(user, json, st, nevr_quest_login::Outcome::NoIdentity, &CaptureLog);
+    QCHECK(real.decision == nevr_quest_login::SendDecision::SendOriginal);
+    QCHECK(!real.wire.account_member_stand_in);
   }
   // Rewritten with a stood-in OfflineID decimal -> sent, and OfflineID is rewritten to the NEVR id's
   // decimal (so CNSOVRUser::OfflineID() no longer returns the stand-in).
