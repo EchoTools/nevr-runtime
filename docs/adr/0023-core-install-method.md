@@ -121,6 +121,19 @@ signers; both existing Quest scripts and Crafter's installer already do this and
 core's plan lists it (`/data/data/<pkg>`, `/sdcard/Android/data/<pkg>`, the OBB) and states whether `Android/media/<pkg>`
 exists, because whether it survives an uninstall was not measured (#965).
 
+**How the plan learns the installed signer.** On the headset an app reads the package's signing certificates through
+`PackageManager` and reports their SHA-256 digests. Over `adb` it cannot: `dumpsys package com.readyatdawn.r15` on the test
+headset (Quest 2, Android 14) prints `signatures=PackageSignatures{... signatures:[999834e1] ...}`, a hash code of the
+signature set and not the certificate digest the manifest carries. The adb backend therefore checks the APK's own signer on
+the host (`apksigner verify --print-certs`, refused when absent) before installing, installs with `-r`, and reads
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE` as "different signer"; the plan's `observed` says `signer: unknown-until-install` for
+that backend.
+
+**Game data counts as present in either root.** The same headset holds a complete `_data` under `/sdcard/readyatdawn` and
+an empty `Android/media/com.readyatdawn.r15`. A plan that required the media root would download 930 MB onto a working
+install on the strength of an unobserved premise, so presence is checked in both roots (every `contents` path with its
+size), and a download happens only when neither holds the data; it goes to the media root.
+
 **Game data goes to the media root**, where the community installers already put it, which needs no storage permission
 (ADR 0013), and which a player who moves between installers therefore keeps. The destination is one value of the plan
 (`data_root`), so the first headset observation of Premise C can move it to the legacy root without touching any caller.
@@ -337,8 +350,8 @@ Written before the first run. Slice 1's CLI against the live manifest on a scrat
 - `nevr-install quest plan` for 5.16.1 reports `game-data: none in release` and ends `needs-user` or `unchanged`, never
   `installed`, until release-signer carries game data forward (section 4, item 1). That is the live defect this record finds.
 - `nevr-install quest plan` for 5.10.0 reports the APK (versionCode 51000999) and the game data (937395400 bytes).
-- The same plan against the test headset reports `installed` versionCode 51602002, a signer equal to the manifest's, and
-  `decision: downgrade-refused` for 5.10.0.
+- The same plan against the test headset reports the installed versionCode 51602002, the signer as `unknown-until-install`, the
+  game data as present in `/sdcard/readyatdawn` (the media root is empty), and `decision: downgrade-refused` for 5.10.0.
 
 Falsifiers: any `manifest_check ok=false` on the live pair; a plan for 5.16.1 that names game data; a plan that would
 uninstall without consent.
