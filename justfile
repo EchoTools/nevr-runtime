@@ -221,7 +221,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     [ -z "$extra_rows" ] || [ -f "$extra_rows" ] || { echo "extra rows file not found: $extra_rows" >&2; exit 1; }
     if [ -z "$patcher" ]; then
         inc=""
-        json_trees=("build/{{ preset }}/vcpkg_installed/x64-mingw-static/include" build/mingw-dev/vcpkg_installed/x64-mingw-static/include build/android-dev/vcpkg_installed/arm64-android/include build/android-arm64/vcpkg_installed/arm64-android/include)
+        json_trees=("build/{{ preset }}/vcpkg_installed/x64-mingw-static/include" build/mingw-dev/vcpkg_installed/x64-mingw-static/include build/android-dev/vcpkg_installed/arm64-android/include build/android-arm64/vcpkg_installed/arm64-android/include build/quest-host-vcpkg/x64-linux/include)
         if [ -n "$json_include" ]; then
             [ -f "$json_include/nlohmann/json.hpp" ] || { echo "android-repack-apk: FAIL - $json_include/nlohmann/json.hpp not found (json_include)" >&2; exit 1; }
             inc="$json_include"
@@ -862,7 +862,7 @@ test-auth-integration:
 # Run all auth tests
 test-auth: test-auth-groundtruth test-auth-unit
 
-# yaml-cpp for the Quest host tests: installed from the tools/quest-host-deps manifest for the x64-linux triplet into
+# yaml-cpp, zlib and nlohmann-json for the Quest host tests and the libr15 patcher: installed from the tools/quest-host-deps manifest for the x64-linux triplet into
 # build/quest-host-vcpkg (never a system package), with this checkout's own vcpkg root like _vcpkg-mingw. The
 # sentinel parses config.yaml with the PC's nevr_config, so the host tests that compile quest_config.cpp link it.
 _vcpkg-quest-host:
@@ -871,21 +871,23 @@ _vcpkg-quest-host:
     jd="{{ justfile_directory() }}"
     manifest="$jd/tools/quest-host-deps/vcpkg.json"
     lib="$jd/build/quest-host-vcpkg/x64-linux/lib/libyaml-cpp.a"
-    # Idempotent and race-safe. The manifest installs only yaml-cpp, and every consumer
-    # (test-quest-shared/redirect/integration) checks exactly this artifact: when it exists
-    # and is no older than the manifest, there is nothing to install. `just verify` builds
+    json="$jd/build/quest-host-vcpkg/x64-linux/include/nlohmann/json.hpp"
+    # Idempotent and race-safe. Every consumer (test-quest-shared/redirect/integration, quest-patcher)
+    # checks one of the two artifacts below: when both exist and the library is no older than the
+    # manifest, there is nothing to install. The header is part of the test so an install made from
+    # a manifest without nlohmann-json is completed. `just verify` builds
     # it once, serially, before the parallel block, so those workers hit this fast path and
     # never run vcpkg concurrently. When the install is needed it is serialized on a lock
     # file so two concurrent test-quest-* recipes cannot build the shared host install at
     # once (vcpkg would otherwise contend on its own root lock or race in its buildtrees).
-    if [[ -f "$lib" && ! "$lib" -ot "$manifest" ]]; then
+    if [[ -f "$lib" && -f "$json" && ! "$lib" -ot "$manifest" ]]; then
         exit 0
     fi
     mkdir -p "$jd/build"
     lock="$jd/build/quest-host-vcpkg.install.lock"
     exec 9>"$lock"
     flock 9
-    if [[ -f "$lib" && ! "$lib" -ot "$manifest" ]]; then
+    if [[ -f "$lib" && -f "$json" && ! "$lib" -ot "$manifest" ]]; then
         exit 0
     fi
     root="$("$jd/tools/vcpkg_root.sh")"
@@ -1253,7 +1255,7 @@ test-quest-tls:
 # RELRO, BIND_NOW without RELRO, lazy) and runs src/quest/tests/got_hook_test.cpp,
 # which drives the production GotHook, CallbackThunk and core/hook_lifecycle.h
 # against them and against images built in memory. No NDK, no Android. Fail-close.
-test-quest-hooks json_include="":
+test-quest-hooks json_include="": _vcpkg-quest-host
     #!/usr/bin/env bash
     set -euo pipefail
     out="build/quest-hooks-host"
@@ -1311,11 +1313,11 @@ test-quest-hooks json_include="":
     # output for a synthetic stock libr15 at the table's real addresses, laid out in host memory (text pages r-x); every
     # refusal of section 7, each row check, the trampolines, the activation store, and a protection seam that must see no
     # call on the image. The patcher and its identity are built with exceptions (nlohmann::json), the sentinel half and the
-    # test without. nlohmann::json comes from the header the build installed from vcpkg.json (as in quest-patcher); pass
-    # json_include when this worktree has no build of its own.
+    # test without. nlohmann::json comes from the tools/quest-host-deps manifest (as in quest-patcher); pass
+    # json_include to use another header tree.
     attach_json="{{ json_include }}"
-    [ -n "$attach_json" ] || attach_json="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include"
-    [ -f "$attach_json/nlohmann/json.hpp" ] || { echo "test-quest-hooks: FAIL - $attach_json/nlohmann/json.hpp not found; run 'just build' with a mingw-* preset first, or pass json_include" >&2; exit 1; }
+    [ -n "$attach_json" ] || attach_json="build/quest-host-vcpkg/x64-linux/include"
+    [ -f "$attach_json/nlohmann/json.hpp" ] || { echo "test-quest-hooks: FAIL - $attach_json/nlohmann/json.hpp not found; 'just _vcpkg-quest-host' installs it, or pass json_include" >&2; exit 1; }
     mkdir -p "$out/attach_json_inc"
     ln -sfn "$(cd "$attach_json" && pwd)/nlohmann" "$out/attach_json_inc/nlohmann"
     attach=(g++ -std=c++17 -Wall -Wextra -Werror -D_GLIBCXX_ASSERTIONS -Isrc -Isrc/quest/sentinel -isystem "$out/attach_json_inc" -pthread)
@@ -1613,17 +1615,17 @@ test-quest-apk-patch-map patch_repo:
     python3 tools/quest_apk_patch_map.py --repo "{{ patch_repo }}"
 
 # The libr15 build-time patcher (docs/adr/0021): builds the host tool quest_patch_libr15 into
-# build/quest-patcher/ with plain host g++. nlohmann::json comes from the header the build installed from
-# vcpkg.json (as in test-quest-social), never a system package; pass the include directory
-# that holds nlohmann/json.hpp as json_include when this worktree has no build of its own.
-quest-patcher json_include="":
+# build/quest-patcher/ with plain host g++. nlohmann::json comes from the tools/quest-host-deps manifest, which
+# _vcpkg-quest-host installs for the x64-linux triplet (never a system package), so a clean clone builds it with no
+# other build first; pass the include directory that holds nlohmann/json.hpp as json_include to use another tree.
+quest-patcher json_include="": _vcpkg-quest-host
     #!/usr/bin/env bash
     set -euo pipefail
     out="build/quest-patcher"
     inc="{{ json_include }}"
-    [ -n "$inc" ] || inc="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include"
+    [ -n "$inc" ] || inc="build/quest-host-vcpkg/x64-linux/include"
     if [[ ! -f "$inc/nlohmann/json.hpp" ]]; then
-        echo "quest-patcher: FAIL - $inc/nlohmann/json.hpp not found; run 'just build' with a mingw-* preset first, or pass json_include" >&2
+        echo "quest-patcher: FAIL - $inc/nlohmann/json.hpp not found; 'just _vcpkg-quest-host' installs it, or pass json_include" >&2
         exit 1
     fi
     mkdir -p "$out/json_inc"

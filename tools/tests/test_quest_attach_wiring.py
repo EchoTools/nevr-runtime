@@ -123,7 +123,7 @@ class ExtraRowsAreAVariantBuildSwitch(unittest.TestCase):
     def test_no_public_recipe_and_no_preset_passes_a_file(self):
         # Only the host test recipe names it (it configures a harness project with the example fixture).
         text = (ROOT / "justfile").read_text()
-        recipes = re.split(r"(?m)^(?=[A-Za-z_][\w-]*[^\n]*:\s*(?:\(.*\))?\s*$)", text)
+        recipes = re.split(r"(?m)^(?=[A-Za-z_][\w-]*(?: [^\n:]*)?:(?!=)[^\n]*$)", text)
         users = [r.split("\n", 1)[0] for r in recipes if "NEVR_LIBR15_EXTRA_ROWS" in r]
         self.assertEqual(len(users), 1, users)
         self.assertTrue(users[0].startswith("test-quest-hooks"), users)
@@ -139,6 +139,31 @@ class ExtraRowsAreAVariantBuildSwitch(unittest.TestCase):
         unit = code("integration/libr15_attach_step.cpp")
         self.assertIn("options.extraRows = sentinel::pinned::LibR15ExtraRows();", unit)
         self.assertIn("options.extraRowsSha256 = sentinel::pinned::LibR15ExtraRowsSha256();", unit)
+
+
+class PatcherHeaderComesFromTheHostManifest(unittest.TestCase):
+    """A clean clone builds the patcher: nlohmann-json is in the host manifest and the recipe installs it first."""
+
+    def recipe(self, name: str) -> str:
+        text = (ROOT / "justfile").read_text()
+        start = re.search(r"(?m)^" + re.escape(name) + r"[^\n]*:[^\n]*$", text)
+        self.assertIsNotNone(start, name)
+        end = re.search(r"(?m)^(?=[A-Za-z_#])", text[start.end() :])
+        return text[start.start() : start.end() + (end.start() if end else len(text))]
+
+    def test_the_manifest_names_nlohmann_json(self):
+        self.assertIn('"nlohmann-json"', (ROOT / "tools/quest-host-deps/vcpkg.json").read_text())
+
+    def test_quest_patcher_depends_on_the_host_install_and_defaults_to_its_include_tree(self):
+        recipe = self.recipe("quest-patcher")
+        self.assertRegex(recipe.split("\n", 1)[0], r'^quest-patcher json_include="": _vcpkg-quest-host$')
+        self.assertIn('inc="build/quest-host-vcpkg/x64-linux/include"', recipe)
+        self.assertIn('inc="{{ json_include }}"', recipe)  # the override stays
+
+    def test_the_host_install_is_current_only_with_the_header(self):
+        recipe = self.recipe("_vcpkg-quest-host")
+        self.assertIn('json="$jd/build/quest-host-vcpkg/x64-linux/include/nlohmann/json.hpp"', recipe)
+        self.assertEqual(recipe.count('-f "$json"'), 2)  # the fast path and the re-check under the lock
 
 
 if __name__ == "__main__":
