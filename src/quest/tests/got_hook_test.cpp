@@ -49,6 +49,8 @@
 #include "hook_log.h"
 #include "hook_report.h"
 #include "pinned_targets.h"
+#include "quest/patch/libr15_patch_table.h"
+#include "quest/plugin/plugin_identity.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -436,6 +438,167 @@ void NegativeCases() {
   GotHook good;
   QCHECK_STATUS(Install(good, exact, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
   QCHECK_STATUS(good.Remove(), GotStatus::kOk);
+  dlclose(m.handle);
+}
+
+// ---- the plugin identity (ADR 0021 section 12, test 10) -------------------------------------------------------------
+//
+// The module under test stands for the patched libr15: its live note L (the linker's sha1) stands for the derived ID, and
+// the stock ID is the one a plugin's target carries. The alias function is the sentinel's rule in miniature: the same pure
+// ResolvePluginView the loader decides with, over a state the test sets.
+
+struct PatchState {
+  bool verified = false;
+  std::string verifiedId;
+};
+PatchState g_patchState;
+
+const char* StockAlias(const char* liveNote) {
+  const nevr_quest::plugin::PluginView view =
+      nevr_quest::plugin::ResolvePluginView(liveNote, g_patchState.verified, g_patchState.verifiedId.c_str());
+  return view.patched ? view.buildId : nullptr;
+}
+
+const char* const kThirdBuildId = "3333333333333333333333333333333333333333";
+
+struct AliasScope {
+  explicit AliasScope(BuildIdAliasFn fn) : previous(SetBuildIdAlias(fn)) {}
+  ~AliasScope() { SetBuildIdAlias(previous); }
+  AliasScope(const AliasScope&) = delete;
+  AliasScope& operator=(const AliasScope&) = delete;
+  BuildIdAliasFn previous;
+};
+
+std::string LiveNoteOf(const char* soname) {
+  ElfImage image;
+  char id[64] = {};
+  QCHECK(FindLoadedImage(soname, &image));
+  QCHECK(ReadBuildId(image, id, sizeof(id)));
+  return id;
+}
+
+void PluginTargetsResolveByTheStockIdOnlyOnTheVerifiedPatchedImage() {
+  Prepare();
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const std::string live = LiveNoteOf(so);
+  const char* const stock = nevr_quest::patch::kLibR15StockBuildId;
+  QCHECK(live != stock);
+  const AliasScope scope(&StockAlias);
+  AddThunk::Arm(kAddPlus100);
+
+  // Verified, and the note read now is the verified one: a target with the stock ID resolves, and so does one with the live note.
+  g_patchState = {true, live};
+  {
+    GotHook hook;
+    QCHECK_STATUS(Install(hook, GotTarget{so, "fx_add", RelocKind::kJumpSlot, stock}, AddThunk::EntryAddress(),
+                          AddThunk::OriginalOut()),
+                  GotStatus::kOk);
+    QCHECK(m.callAdd(2, 3) == 105);
+    QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
+  }
+  {
+    GotHook hook;
+    QCHECK_STATUS(Install(hook, GotTarget{so, "fx_add", RelocKind::kJumpSlot, live.c_str()}, AddThunk::EntryAddress(),
+                          AddThunk::OriginalOut()),
+                  GotStatus::kOk);
+    QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
+  }
+  // Another ID is not the stock one: refused, and the log names both IDs.
+  {
+    Captured().clear();
+    GotHook hook;
+    void* out = nullptr;
+    QCHECK_STATUS(Install(hook, GotTarget{so, "fx_add", RelocKind::kJumpSlot, kThirdBuildId}, AddThunk::EntryAddress(), &out),
+                  GotStatus::kBuildIdMismatch);
+    QCHECK(!hook.installed());
+    QCHECK(Count(LogLevel::kError, std::string("\"expected_build_id\":\"") + kThirdBuildId + "\",\"actual_build_id\":\"" + live + "\"") == 1);
+  }
+
+  // Not verified: the note alone gives no mapping, so the stock ID is refused (the live note still resolves).
+  g_patchState = {false, ""};
+  {
+    GotHook hook;
+    void* out = nullptr;
+    QCHECK_STATUS(Install(hook, GotTarget{so, "fx_add", RelocKind::kJumpSlot, stock}, AddThunk::EntryAddress(), &out),
+                  GotStatus::kBuildIdMismatch);
+    QCHECK(!hook.installed());
+    QCHECK(m.callAdd(2, 3) == 5);  // the refused claim left the slot alone
+  }
+  {
+    GotHook hook;
+    QCHECK_STATUS(Install(hook, GotTarget{so, "fx_add", RelocKind::kJumpSlot, live.c_str()}, AddThunk::EntryAddress(),
+                          AddThunk::OriginalOut()),
+                  GotStatus::kOk);
+    QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
+  }
+
+  // Verified for another ID than the note read now: no mapping either.
+  g_patchState = {true, kThirdBuildId};
+  {
+    GotHook hook;
+    void* out = nullptr;
+    QCHECK_STATUS(Install(hook, GotTarget{so, "fx_add", RelocKind::kJumpSlot, stock}, AddThunk::EntryAddress(), &out),
+                  GotStatus::kBuildIdMismatch);
+  }
+
+  // No alias function set at all: only the live note resolves.
+  g_patchState = {true, live};
+  SetBuildIdAlias(nullptr);
+  {
+    GotHook hook;
+    void* out = nullptr;
+    QCHECK_STATUS(Install(hook, GotTarget{so, "fx_add", RelocKind::kJumpSlot, stock}, AddThunk::EntryAddress(), &out),
+                  GotStatus::kBuildIdMismatch);
+  }
+  {
+    GotHook hook;
+    QCHECK_STATUS(Install(hook, GotTarget{so, "fx_add", RelocKind::kJumpSlot, live.c_str()}, AddThunk::EntryAddress(),
+                          AddThunk::OriginalOut()),
+                  GotStatus::kOk);
+    QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
+  }
+  QCHECK(m.callAdd(2, 3) == 5);
+  dlclose(m.handle);
+}
+
+void ASentinelClaimThenAPluginClaimOnOneSlotIsRefusedAsOwned() {
+  Prepare();
+  const char* so = "libgotfx_consumer_now.so";
+  Module m = Open(so);
+  const std::string live = LiveNoteOf(so);
+  const char* const stock = nevr_quest::patch::kLibR15StockBuildId;
+  const AliasScope scope(&StockAlias);
+  g_patchState = {true, live};
+  AddThunk::Arm(kAddPlus100);
+
+  // The sentinel's claim carries the derived ID (the live note); the plugin's carries the stock ID. One slot, one key:
+  // the plugin's claim is "already installed", not "build ID mismatch" (its ID was accepted) and not a second owner.
+  GotHook sentinelHook;
+  QCHECK_STATUS(Install(sentinelHook, GotTarget{so, "fx_add", RelocKind::kJumpSlot, live.c_str()},
+                        AddThunk::EntryAddress(), AddThunk::OriginalOut()),
+                GotStatus::kOk);
+  GotHook pluginHook;
+  void* out = nullptr;
+  QCHECK_STATUS(Install(pluginHook, GotTarget{so, "fx_add", RelocKind::kJumpSlot, stock},
+                        reinterpret_cast<void*>(&AddImpl), &out),
+                GotStatus::kAlreadyInstalled);
+  QCHECK(!pluginHook.installed());
+  if (pluginHook.installed()) pluginHook.Remove();
+  QCHECK(m.callAdd(2, 3) == 105);  // the sentinel's hook is unaffected
+  QCHECK_STATUS(sentinelHook.Remove(), GotStatus::kOk);
+
+  // And the other way round: the plugin's claim first, then the sentinel's.
+  GotHook pluginFirst;
+  QCHECK_STATUS(Install(pluginFirst, GotTarget{so, "fx_add", RelocKind::kJumpSlot, stock}, AddThunk::EntryAddress(),
+                        AddThunk::OriginalOut()),
+                GotStatus::kOk);
+  GotHook sentinelSecond;
+  QCHECK_STATUS(Install(sentinelSecond, GotTarget{so, "fx_add", RelocKind::kJumpSlot, live.c_str()},
+                        reinterpret_cast<void*>(&AddImpl), &out),
+                GotStatus::kAlreadyInstalled);
+  if (sentinelSecond.installed()) sentinelSecond.Remove();  // a failed check above must not leave the slot owned for later tests
+  QCHECK_STATUS(pluginFirst.Remove(), GotStatus::kOk);
   dlclose(m.handle);
 }
 
@@ -1651,6 +1814,8 @@ int main(int argc, char** argv) {
   LazyLinkedModuleRefused();
   NegativeCases();
   DuplicateAndChained();
+  PluginTargetsResolveByTheStockIdOnlyOnTheVerifiedPatchedImage();
+  ASentinelClaimThenAPluginClaimOnOneSlotIsRefusedAsOwned();
   ModuleUnloaded();
   ConcurrentCallers();
   SyntheticResolution();
