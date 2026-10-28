@@ -2117,10 +2117,15 @@ void InstallWebSocketBridge() {
                         // The login remote is shared with the matchmaker connections: its frames go
                         // to the live connection SharedRouteLocked picks. Any other remote (config)
                         // belongs to its own game socket.
+                        // pairPtr is not read here either (#752): a login game socket that closed while a matchmaker
+                        // still shares this remote has erased its pair, and the callback stays installed.
                         ix::WebSocket* target = nullptr;
                         {
                           std::lock_guard<std::mutex> lk(g_pairsMutex);
-                          if (pairPtr->remoteWs != nullptr && pairPtr->remoteWs == g_loginRemoteWs)
+                          const auto pit = g_pairs.find(gameWsPtr);
+                          const bool sharedLogin = pit != g_pairs.end() && pit->second->remoteWs != nullptr &&
+                                                   pit->second->remoteWs == g_loginRemoteWs;
+                          if (sharedLogin)
                             SharedRouteLocked(&target);
                           else
                             target = gameWsPtr;
