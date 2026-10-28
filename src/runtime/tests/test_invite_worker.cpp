@@ -20,6 +20,7 @@
 #include <thread>
 #include <vector>
 
+#include "runtime/patch/invite_config.h"
 #include "runtime/patch/invite_wizard.h"
 #include "runtime/patch/invite_worker.h"
 
@@ -426,4 +427,24 @@ TEST(InviteWorker, TakeAnswersHandsEachAnswerOverOnce) {
   ASSERT_EQ(worker.Enqueue(Resolve()), Submit::Queued);
   ASSERT_EQ(WaitForAnswers(worker, 1).size(), 1u);
   EXPECT_TRUE(worker.TakeAnswers().empty());
+}
+
+// ---- network.invite_codes (N133) ----
+
+TEST(InviteConfig, TheFeatureIsOffUnlessTheKeyTurnsItOn) {
+  using nevr_invite::ParseSwitch;
+  using nevr_invite::Switch;
+  EXPECT_EQ(ParseSwitch(nullptr), Switch::Off);
+  EXPECT_EQ(ParseSwitch(""), Switch::Off);
+  for (const char* on : {"true", "TRUE", "True", "on", "On", "yes", "1"}) EXPECT_EQ(ParseSwitch(on), Switch::On) << on;
+  for (const char* off : {"false", "FALSE", "off", "no", "0"}) EXPECT_EQ(ParseSwitch(off), Switch::Off) << off;
+}
+
+TEST(InviteConfig, AValueNobodyMeantIsOffAndSaidToBeUnrecognised) {
+  using nevr_invite::ParseSwitch;
+  using nevr_invite::Switch;
+  for (const char* odd : {"enabled", "2", "tru", " true", "true ", "ture"}) EXPECT_EQ(ParseSwitch(odd), Switch::Unrecognised) << odd;
+  EXPECT_FALSE(nevr_invite::SwitchIsOn(Switch::Unrecognised));
+  EXPECT_TRUE(nevr_invite::SwitchIsOn(Switch::On));
+  EXPECT_FALSE(nevr_invite::SwitchIsOn(Switch::Off));
 }

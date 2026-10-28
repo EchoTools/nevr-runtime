@@ -12,6 +12,7 @@
 #include "nevr_common.h"
 #include "runtime/hook/patching.h"
 #include "runtime/patch/invite_choice_hook.h"
+#include "runtime/patch/invite_service.h"
 #include "runtime/patch/invite_wizard.h"
 
 // The wizard's click metric leaves the game through the remote-log submit (ADR 0017, "Runtime hook"). Its only caller is
@@ -29,7 +30,6 @@ constexpr std::array<std::uint8_t, 16> kSubmitPrologue = {0x48, 0x89, 0x5C, 0x24
 using SubmitFn = std::uint64_t (*)(std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t);
 
 SubmitFn g_originalSubmit = nullptr;
-std::string g_salt;  // per run: a fingerprint in one run's log cannot be matched against another's
 
 // True when every page under [address, address + length) is committed and readable.
 bool ReadableRange(std::uintptr_t address, std::size_t length) {
@@ -66,9 +66,13 @@ void ObserveMetric(std::uint64_t data, std::uint64_t length) {
     Log(EchoVR::LogLevel::Info, "%s", nevr_invite::NotSentLine(plan.skip, plan.code_len).c_str());
     return;
   }
-  const std::string fingerprint =
-      plan.op == nevr_invite::Op::Resolve ? nevr_invite::CodeFingerprint(plan.code, g_salt) : std::string();
-  Log(EchoVR::LogLevel::Info, "%s", nevr_invite::PlannedLine(plan, fingerprint).c_str());
+  if (plan.op == nevr_invite::Op::Resolve) {
+    // A typed code goes to the invite service (D1b). It writes the request line, or the line that says why nothing was sent.
+    nevr_invite_service::Submit(plan);
+    return;
+  }
+  // A create is only planned until the menu can show its result (D2): sending it now would make a code nobody sees.
+  Log(EchoVR::LogLevel::Info, "%s", nevr_invite::PlannedLine(plan, std::string()).c_str());
 }
 
 std::uint64_t SubmitHook(std::uint64_t data, std::uint64_t length, std::uint64_t arg3, std::uint64_t arg4) {
@@ -89,7 +93,6 @@ void Install(std::uintptr_t gameBase) {
         static_cast<unsigned long long>(kSubmitVA));
     return;
   }
-  g_salt = std::to_string(GetTickCount64());
   g_originalSubmit = reinterpret_cast<SubmitFn>(target);
   PatchDetour(&g_originalSubmit, reinterpret_cast<PVOID>(&SubmitHook), "RemoteLogSubmit");
   Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] wizard observer installed va=0x%llx",
