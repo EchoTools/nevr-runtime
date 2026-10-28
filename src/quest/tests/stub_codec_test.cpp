@@ -128,6 +128,58 @@ TEST(DecodeRefusesEveryWordThatIsNotTheStub) {
   CHECK(!DecodeSlotStub(adr, kJoinSite, &slot));
 }
 
+TEST(TheCreditsPairsLoadFromTheirSlotLikeBinutilsReadsThem) {
+  // Disassembled with aarch64-linux-gnu-objdump -D -b binary -m aarch64: the first pair (adrp x8 at 0x1da1284) and the
+  // second (adrp x12 at 0x1da1d84) both name the page 0x37d2000 and the slot 0x37d2568 (offset 1384) of the patched libr15.
+  //   b000d188 adrp x8, 0x37d2000   f942b508 ldr x8, [x8, #1384]
+  //   b000d18c adrp x12, 0x37d2000  f942b58c ldr x12, [x12, #1384]
+  SlotLoadPair a{};
+  CHECK(EncodeSlotLoadPair(0x1da1284, 0x37d2568, 8, &a));
+  CHECK_EQ(a.adrp, 0xb000d188u);
+  CHECK_EQ(a.ldr, 0xf942b508u);
+  SlotLoadPair b{};
+  CHECK(EncodeSlotLoadPair(0x1da1d84, 0x37d2568, 12, &b));
+  CHECK_EQ(b.adrp, 0xb000d18cu);
+  CHECK_EQ(b.ldr, 0xf942b58cu);
+}
+
+TEST(ASlotLoadPairDecodesToItsSlotAndRegister) {
+  const std::uint64_t sites[] = {0x1da1284, 0x1da1d84, 0x200ffc, 0x1000};
+  const std::uint64_t slots[] = {0x37d2540, 0x37d2568, 0x1ff008, 0x3000};
+  for (const std::uint64_t site : sites) {
+    for (const std::uint64_t slot : slots) {
+      SlotLoadPair pair{};
+      CHECK(EncodeSlotLoadPair(site, slot, 12, &pair));
+      unsigned rd = 99;
+      std::uint64_t decoded = 0;
+      CHECK(DecodeSlotLoadPair(pair.adrp, pair.ldr, site, &rd, &decoded));
+      CHECK_EQ(rd, 12u);
+      CHECK_EQ(decoded, slot);
+    }
+  }
+}
+
+TEST(ASlotLoadPairIsRefusedWhenItsWordsDisagree) {
+  SlotLoadPair pair{};
+  CHECK(EncodeSlotLoadPair(0x1da1284, 0x37d2568, 8, &pair));
+  unsigned rd = 0;
+  std::uint64_t slot = 0;
+  // The stock pair: ADRP then ADD, not LDR.
+  CHECK(!DecodeSlotLoadPair(0xd000a008u, 0x91378508u, 0x1da1284, &rd, &slot));
+  // The LDR names another register than the ADRP, or loads through another base.
+  std::uint32_t other = 0;
+  CHECK(EncodeLdrX(9, 8, 0x568, &other));
+  CHECK(!DecodeSlotLoadPair(pair.adrp, other, 0x1da1284, &rd, &slot));
+  CHECK(EncodeLdrX(8, 9, 0x568, &other));
+  CHECK(!DecodeSlotLoadPair(pair.adrp, other, 0x1da1284, &rd, &slot));
+  // Not an ADRP first.
+  CHECK(!DecodeSlotLoadPair(0x10000008u, pair.ldr, 0x1da1284, &rd, &slot));
+  // An unaligned slot, a register out of range, and a page out of ADRP range are refused by the encoder.
+  CHECK(!EncodeSlotLoadPair(0x1da1284, 0x37d2561, 8, &pair));
+  CHECK(!EncodeSlotLoadPair(0x1da1284, 0x37d2568, 32, &pair));
+  CHECK(!EncodeSlotLoadPair(0x1da1284, 0x1da1284 + (std::uint64_t{5} << 30), 8, &pair));
+}
+
 TEST(BrIsOnlyBr) {
   unsigned rn = 99;
   CHECK(DecodeBr(0xd61f0200u, &rn));

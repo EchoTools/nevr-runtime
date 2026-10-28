@@ -589,14 +589,13 @@ PatchResult PatchLibr15(const std::vector<std::uint8_t>& stock, const PatchSpec&
         if (target != blob) {
           return Failed(Refuse("credits_blob_mismatch", id, "pair " + std::to_string(pair) + " loads " + Hex(target) + ", pair 0 loads " + Hex(blob)), stockSha);
         }
-        std::uint32_t newAdrp = 0;
-        std::uint32_t newLdr = 0;
-        if (!EncodeAdrp(adrp.vaddr, slotVaddr, rd, &newAdrp) || !EncodeLdrX(rd, rd, slotVaddr & 0xFFF, &newLdr)) {
+        SlotLoadPair load{};
+        if (!EncodeSlotLoadPair(adrp.vaddr, slotVaddr, rd, &load)) {
           return Failed(Refuse("stub_out_of_range", id, "the credits slot " + Hex(slotVaddr) + " is out of reach of pair " + std::to_string(pair)), stockSha);
         }
         adrp.kind = add.kind = "credits_pair";
-        adrp.patched = {newAdrp};
-        add.patched = {newLdr};
+        adrp.patched = {load.adrp};
+        add.patched = {load.ldr};
         adrp.what = "credits_adrp";
         add.what = "credits_ldr";
       }
