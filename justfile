@@ -1455,7 +1455,9 @@ test-quest-patcher json_include="": (quest-patcher json_include)
     #!/usr/bin/env bash
     set -euo pipefail
     out="build/quest-patcher"
-    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$out/json_inc" -pthread)
+    # _GLIBCXX_ASSERTIONS: an out-of-bounds operator[] or an empty optional dereference in the patcher aborts the
+    # test that reached it, instead of reading past the buffer and passing.
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -D_GLIBCXX_ASSERTIONS -Isrc -isystem "$out/json_inc" -pthread)
     scratch="$out/test-scratch"
     rm -rf "$scratch"; mkdir -p "$scratch"
     trap 'rm -rf "$scratch"' EXIT
