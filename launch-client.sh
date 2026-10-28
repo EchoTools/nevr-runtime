@@ -81,10 +81,12 @@ for f in "$LOCAL_DIR/config.json" "$LOCAL_DIR/config.yaml"; do
   if [[ -e "$f" || -L "$f" ]]; then echo "DRIFT: $f exists (expected absent)" >&2; drift=1; fi
 done
 shopt -s nullglob
-plugin_files=("$GAME_DIR"/plugins/*)
+# Plugins load from the nevr root's plugins\ (ADR 0012). The game folder's plugins\ is not read, but a file in it
+# would be moved into the root by the runtime's one-time move, so it counts as drift too.
+plugin_files=("$GAME_DIR"/plugins/* "$NEVR_ROOT_DIR"/plugins/*)
 shopt -u nullglob
 if [[ ${#plugin_files[@]} -ne 0 ]]; then
-  echo "DRIFT: $GAME_DIR/plugins is not empty: ${plugin_files[*]}" >&2; drift=1
+  echo "DRIFT: a plugins folder is not empty (expected empty: $GAME_DIR/plugins, $NEVR_ROOT_DIR/plugins): ${plugin_files[*]}" >&2; drift=1
 fi
 # The host loads nevr-runtime.dll from the nevr root, never from the game install (ADR 0012). One in either place
 # is a leftover of another run (or a file the host would never load), which the restore step below would delete

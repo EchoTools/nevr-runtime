@@ -440,8 +440,8 @@ arena:
 # ---------------------------------------------------------------------------
 # plugins — plugin loading and configuration
 #
-# Plugins are optional DLLs loaded from the plugins/ subdirectory next to
-# echovr.exe. Each plugin exports the NvrPluginInterface lifecycle:
+# Plugins are optional DLLs loaded from plugins\ in the nEVR root
+# (%LOCALAPPDATA%\nevr\echovr, ADR 0012), never from the game folder. Each plugin exports the NvrPluginInterface lifecycle:
 #
 #   NvrPluginGetInfo()      — returns name, version, description (REQUIRED)
 #   NvrPluginGetApiVersion() — returns API version number (optional; v1 assumed)
@@ -456,10 +456,10 @@ arena:
 # plugin extracts the keys it understands, ignores the rest, and uses sensible
 # defaults for any key that is missing.
 #
-# This list is the only source: a DLL in plugins/ that is not listed here is not loaded.
+# This list is the only source: a DLL in the root's plugins\ that is not listed here is not loaded.
 # Each plugin entry has these keys:
 #   name      — the plugin's name (required); also the default file name
-#   file      — DLL file name inside plugins/ (default: name + ".dll")
+#   file      — DLL file name inside the root's plugins\ (default: name + ".dll")
 #   enabled   — if false, the plugin is not loaded (it is still reported at login)
 #   required  — if true and the plugin fails to load or initialise, a dedicated
 #               server stops with a fatal error; a client logs a warning and

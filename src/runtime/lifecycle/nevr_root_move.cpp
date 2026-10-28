@@ -226,6 +226,17 @@ std::vector<Event> Run(const Inputs& inputs) {
     sources.push_back(std::move(cosmetics));
   }
 
+  {
+    // The plugins folder beside the game executable: its files (not its subfolders, which are not plugin files) go to the
+    // root's plugins\. The marker the move leaves behind is not a plugin.
+    Source plugins{inputs.legacy_plugins_dir, {}};
+    const std::wstring to_dir = nevr_root::PluginsDir(inputs.root);
+    for (const std::wstring& name : FilesIn(inputs.legacy_plugins_dir, [](const std::wstring& n) { return n != Names::kMovedMarker; })) {
+      plugins.items.push_back({nevr_root::Join(inputs.legacy_plugins_dir, name.c_str()), nevr_root::Join(to_dir, name.c_str())});
+    }
+    sources.push_back(std::move(plugins));
+  }
+
   std::size_t pending = 0;
   for (const Source& source : sources) pending += source.items.size();
   if (pending == 0) return events;  // the common case after the first run: nothing to do, nothing created
@@ -298,6 +309,7 @@ Inputs InputsFromEnvironment() {
     if (slash != std::wstring::npos) {
       dir.resize(slash + 1);
       inputs.local_dirs = {dir + L"_local", dir + L"..\\_local", dir + L"..\\..\\_local"};
+      inputs.legacy_plugins_dir = dir + L"plugins";
     }
   }
   return inputs;

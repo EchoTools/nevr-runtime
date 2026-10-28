@@ -43,6 +43,7 @@ struct Inputs {
   std::vector<std::wstring> local_dirs;  // the install's _local folders, nearest first (the sign-in cache's search order)
   std::wstring legacy_logs_dir;          // %LOCALAPPDATA%\EchoVR\logs
   std::wstring legacy_cosmetics_dir;     // %LOCALAPPDATA%\EchoVR\cosmetics\v1\packages
+  std::wstring legacy_plugins_dir;       // the plugins\ folder next to the game executable (where plugins used to load from)
 };
 
 // True for the names nEVR's own writers give a file in the legacy logs folder: the run log (nevr-<timestamp>.jsonl, or .log with

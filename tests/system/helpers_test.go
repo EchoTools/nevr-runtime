@@ -192,7 +192,7 @@ func getPluginPath(dllName string) string {
 	return absPath
 }
 
-// deployPlugin copies a plugin DLL to the game's bin/win10/plugins/ directory
+// deployPlugin copies a plugin DLL to the plugins\ folder of the nevr root (ADR 0012), where the runtime loads plugins from
 // dllPath: full path to the source plugin DLL file
 // gameDir: path to the game root directory
 // Returns: error if copy fails
@@ -206,7 +206,7 @@ func deployPlugin(dllPath, gameDir string) error {
 		return fmt.Errorf("source plugin DLL not found: %w", err)
 	}
 
-	destDir := filepath.Join(absGameDir, "bin", "win10", "plugins")
+	destDir := filepath.Join(nevrRootDir(absGameDir), "plugins")
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return fmt.Errorf("failed to create plugins directory: %w", err)
 	}
@@ -236,7 +236,7 @@ func deployPlugin(dllPath, gameDir string) error {
 	return nil
 }
 
-// cleanupPlugins removes all .dll files from the game's bin/win10/plugins/ directory
+// cleanupPlugins removes all .dll files from the plugins\ folder of the nevr root
 // gameDir: path to the game root directory
 // Returns: error if cleanup fails
 func cleanupPlugins(gameDir string) error {
@@ -245,7 +245,7 @@ func cleanupPlugins(gameDir string) error {
 		return fmt.Errorf("failed to resolve game directory: %w", err)
 	}
 
-	pluginsDir := filepath.Join(absGameDir, "bin", "win10", "plugins")
+	pluginsDir := filepath.Join(nevrRootDir(absGameDir), "plugins")
 
 	entries, err := os.ReadDir(pluginsDir)
 	if err != nil {

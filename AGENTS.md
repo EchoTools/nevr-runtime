@@ -712,16 +712,17 @@ your seat name, for example `claude-main` or `codex`.
   pointed at: the scripts default to `echovr/` of the main checkout (through that link), the Go tests
   to `$EVR_GAME_DIR`, whose default is `../../ready-at-dawn-echo-arena` from the test directory. Point
   each at a copy explicitly:
-  - `verify-server.sh` deploys `nevr-runtime.dll` and `BugSplat64.dll` into `echovr/bin/win10` of `$NEVR_GAME_ROOT` and, when
-    `build/mingw-release/bin/plugins` exists, its files into `echovr/bin/win10/plugins`, and, when
+  - `verify-server.sh` deploys `BugSplat64.dll` into `echovr/bin/win10` of `$NEVR_GAME_ROOT`, `nevr-runtime.dll` into the nevr root of
+    its Wine prefix (`echovr/.wineprefix/drive_c/users/<user>/AppData/Local/nevr/echovr`) and, when
+    `build/mingw-release/bin/plugins` exists, its files into that root's `plugins`, and, when
     the install has none, a `config.yaml` into `echovr/_local`.
   - `launch-client.sh` deploys `nevr-runtime.dll` (the one beside `--dll`, or `--runtime-dll`) and `BugSplat64.dll`
-    there and aborts (exit 3) when `plugins/*` is non-empty, `nevr-runtime.dll` exists
+    there and aborts (exit 3) when `plugins/*` (the game folder's or the nevr root's) is non-empty, `nevr-runtime.dll` exists
     or `_local/config.yaml` or `_local/config.json` exists. `--print-game-root` and `--help` exit before
     any write.
-  - `launch-server.sh` copies `nevr-runtime.dll` and `BugSplat64.dll` into `echovr/bin/win10` and, when
+  - `launch-server.sh` copies `BugSplat64.dll` into `echovr/bin/win10`, `nevr-runtime.dll` into the nevr root of the Wine prefix and, when
     `build/mingw-release/bin/plugins/*.dll` exist, that directory's files into
-    `echovr/bin/win10/plugins`, and restores
+    that root's `plugins`, and restores
     nothing; any other script that copies a DLL into a game directory is the same kind of writer.
   - `just scenario` and `just scenario-all` (`tools/scenario/run_scenario.py` runs `launch-client.sh`).
   - `just test-system` and `just test-system-verbose` (`tests/system/helpers_test.go`: `deployDLL`
@@ -768,6 +769,7 @@ your seat name, for example `claude-main` or `codex`.
     ```sh
     rm -f <copy>/echovr/_local/config.yaml <copy>/echovr/_local/config.json
     if [ -d <copy>/echovr/bin/win10/plugins ]; then find <copy>/echovr/bin/win10/plugins -mindepth 1 -delete; fi
+    for d in <copy>/echovr/.wineprefix/drive_c/users/*/AppData/Local/nevr/echovr/plugins; do if [ -d "$d" ]; then find "$d" -mindepth 1 -delete; fi; done
     COPY=$(readlink -f <copy>) find <copy> -type l -exec sh -c 'for l; do t=$(readlink -f "$l"); case "$t" in "$COPY"/*) ;; *) echo "$l -> $t";; esac; done' sh {} +
     ```
     A Wine prefix has its own device and home links, which this check prints: on the owner's
@@ -785,7 +787,7 @@ your seat name, for example `claude-main` or `codex`.
     - `launch-client.sh` needs `echovr/bin/win10/echovr.exe` and the original
       `echovr/bin/win10/BugSplat64.dll` (it saves and restores it and stops under `set -e` without
       it), no `echovr/_local/config.yaml` or `config.json` (a missing `_local` passes) and
-      `bin/win10/plugins` empty.
+      `bin/win10/plugins` and the nevr root's `plugins` empty.
       It reads the run's log from `echovr/.wineprefix`.
     - `verify-server.sh` needs `echovr/bin/win10/echovr.exe`. It tolerates an absent
       `BugSplat64.dll` and `nevr-runtime.dll` (it adds them and removes them on exit), creates `_local` when missing, and uses

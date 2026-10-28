@@ -190,7 +190,6 @@ are inside the prefix (`<prefix>/drive_c/users/<user>/AppData/Local`).
 | `BugSplat64.dll` | The file the game imports: the thin host, with the game's 28 `BugSplat64.dll` exports, the rendezvous detour and the crash capture. It loads `nevr-runtime.dll` and, when that cannot be loaded after attach, stops the game with exit code 78, after one plain-words dialog on a client (a server or headless run gets the `game_stop` record only). | `OUTPUT_NAME "BugSplat64"` of target `nevr_host` in `src/runtime/CMakeLists.txt`; `RuntimeRendezvous::StopGame` in `src/runtime/host/runtime_rendezvous.cpp` |
 | `nevr-runtime.dll` | The runtime: hooks, modes, server, bridge, plugin loader and the statically linked modules. The host verifies it and loads it from the nEVR root (`%LOCALAPPDATA%\nevr\echovr`, ADR 0012), never from beside itself; `install.ps1` puts it there. A dev build also reads `NEVR_ROOT` (an absolute path) for the runtime's location; a release build ignores it and logs that. | `OUTPUT_NAME "nevr-runtime"` of target `nevr_runtime` in `src/runtime/CMakeLists.txt`; `kRuntimeFileName` and `ResolveRuntimePath` in `src/runtime/host/runtime_load.cpp`, `src/core/nevr_root.h` |
 | `BugSplat64.dll.original-<timestamp>`, `dbgcore.dll.legacy-<date>`, `nevr-install.txt` | What `install.ps1` leaves: the game's own `BugSplat64.dll`, a legacy `dbgcore.dll` set aside, a pre-existing `nevr-runtime.dll` in the nEVR root (`nevr-runtime.dll.original-<timestamp>`; `uninstall.ps1` sets the installed one aside as `nevr-runtime.dll.uninstalled-<timestamp>`), and a runtime an earlier release left beside `echovr.exe` (`nevr-runtime.dll.legacy-<timestamp>` in the game folder, put back by `uninstall.ps1`), and the state file `uninstall.ps1` reads (renamed `nevr-install.txt.undone-<timestamp>` when it undoes the install, or `nevr-install.txt.stale-<timestamp>` when `install.ps1` finds a record for a DLL that Verify Files has since restored). Both scripts append their runs to `nevr-install.log` beside the script, not in the game folder. | `tools/package-release/install.ps1`, `tools/package-release/uninstall.ps1` |
-| `plugins\` | Plugin DLLs. A plugin loads only when the ordered `plugins:` list in `config.yaml` names it; a DLL the list does not name is ignored. | `LoadPlugins` (`pluginDir`) in `src/runtime/ext/plugin_loader.cpp` |
 | `_overrides\` | Files registered as resource overrides at start. | `src/runtime/patch/resource_override.cpp` |
 | `logs\nevr-boot.jsonl` | The boot log: one JSON line per event from before the log filter starts, appended across runs; the main log replays this run's lines. Created at start, with the `logs` folder. If the folder cannot be created or the file cannot be opened, the lines go to standard error only. | `nevr_boot_log_tee::Init` in `src/runtime/log/boot_log_tee.cpp` |
 | `log_filter_config.yml`, `.yaml`, `.jsonc`, `.json` | Optional settings of the built-in log filter (`file_dir`, rotation). The first that exists is used, searched in this order, then in the working directory. | `FindConfigFile` in `src/runtime/log/builtin_filter.cpp` |
@@ -217,9 +216,10 @@ looks there first.
 | `cache\<sha256>.blob`, `cache\index.json` | The content-addressed asset cache: the bytes under their own SHA-256, and the index that says which blob stands in for which resource. A write in progress is `<sha256>.<pid>.<tick>.tmp`. The cache is size-capped and evicts blobs the index does not name. Without `LOCALAPPDATA` there is no cache directory: the cache is disabled and the runtime logs `[NEVR.RESOURCE] cache disabled reason=no cache directory (LOCALAPPDATA unset)`. | `src/runtime/patch/asset_cache.h`, `DefaultDir` in `src/runtime/patch/asset_cache.cpp` |
 | `logs\nevr-<timestamp>.jsonl` | The main run log (the built-in filter's output). Rotated by size and age; the newest `rotate_keep` files are kept. Without `LOCALAPPDATA` it is `logs\` beside the game's executable. The `file_dir` setting of the filter config replaces the folder in both cases. | `GetDefaultLogDir`, `BuildLogFilePath` in `src/runtime/log/builtin_filter.cpp` |
 | `logs\nevr-crash-<run id>.txt` | The crash record: the `[NEVR.CRASH]` lines, written only once a crash path is entered. Without `LOCALAPPDATA` (or when its value is `MAX_PATH` characters or longer) it is `logs\nevr-crash-<run id>.txt` beside the game's executable. Neither case creates the `logs` folder: if it does not exist the file is not written. | `PrepareCrashRecordPath` in `src/runtime/lifecycle/crash_recovery.cpp` |
+| `plugins\` | Plugin DLLs, their dependencies and data files. A plugin loads only when the ordered `plugins:` list in `config.yaml` names it; a DLL the list does not name is ignored. Without `LOCALAPPDATA` there is no plugin directory: every configured plugin fails with `the plugin directory cannot be resolved` and nothing is searched in the game folder. The first run moves the files of a `plugins\` folder beside `echovr.exe` here. | `LoadPlugins` in `src/runtime/ext/plugin_loader.cpp`; `PluginsDir` in `src/core/nevr_root.h`; the plugins source in `Run` in `src/runtime/lifecycle/nevr_root_move.cpp` |
 | `cosmetics\v1\packages\` | Downloaded cosmetic packages (client only). The folder is created on demand; without `LOCALAPPDATA`, or if the creation fails, the error is logged and no package is stored. | `GetCacheDir` in `src/runtime/patch/asset_cdn.cpp` |
 
-On the first run the runtime moves files it finds in the old places (the previous log, crash record, cosmetics and sign-in cache locations) into this folder and leaves `MOVED-TO-NEVR-ROOT.txt` in each old folder it emptied something from.
+On the first run the runtime moves files it finds in the old places (the previous log, crash record, cosmetics, plugins and sign-in cache locations) into this folder and leaves `MOVED-TO-NEVR-ROOT.txt` in each old folder it emptied something from.
 
 ## What gets built
 
@@ -280,8 +280,9 @@ speaks plaintext to a local proxy, and the proxy terminates TLS outbound.
 
 ### Plugins
 
-Optional, discovered from a `plugins/` directory next to the game binary and
-loaded via the `NvrPluginInterface` lifecycle.
+Optional, loaded from `plugins\` in the nEVR root (`%LOCALAPPDATA%\nevr\echovr`, ADR 0012) via the `NvrPluginInterface` lifecycle.
+A plugin loads only when the ordered `plugins:` list in `config.yaml` names it; a DLL the list does not name is ignored
+(`LoadPlugins` in `src/runtime/ext/plugin_loader.cpp`). A `plugins\` folder left beside `echovr.exe` by an earlier release is moved into the root on the first run.
 
 | Plugin | Output | Purpose |
 | ------ | ------ | ------- |
@@ -338,11 +339,11 @@ From `build/mingw-release/bin/`:
 | `BugSplat64.dll` | game directory (replaces the crash reporter; the host) |
 | `nevr-runtime.dll` | the nEVR root, `%LOCALAPPDATA%\nevr\echovr` (the runtime; `BugSplat64.dll` stays in the game directory) |
 | `echovr_server.exe` | game directory, alongside `echovr.exe` |
-| Optional plugin DLLs | `plugins/` next to the game binary |
+| Optional plugin DLLs | `plugins\` in the nEVR root, `%LOCALAPPDATA%\nevr\echovr` |
 
 The staged server package and its `.tar.zst` carry an empty `plugins/` directory
 for optional operator plugins; the Windows zip (`nevr-runtime-v<ver>-windows.zip`)
-has no entry for it, so create `plugins/` next to the game binary. Plugin DLLs are
+has no entry for it, so create `plugins\` in the nEVR root (the `plugins/` of the server package is not read). Plugin DLLs are
 built separately and are not bundled. The community beta install guide covers installing the game client and
 uses `BugSplat64.dll` and `nevr-runtime.dll`.
 

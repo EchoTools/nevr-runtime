@@ -16,6 +16,7 @@
 #include "abi/game_level.h"           // #1094: where the game keeps its main level
 #include "core/globals.h"
 #include "core/logging.h"
+#include "core/nevr_root.h"
 
 #include "runtime/log/symcache.h"             // #1094: the symbol cache, which names the lobby and match levels
 #include "runtime/patch/ui_texture_mips_rules.h"  // #1094: NameForHash, the search of the table sorted by hash
@@ -851,6 +852,10 @@ class PluginLoadRun {
     }
     if (SkipSuperseded(item, itemReport)) return;
     if (SkipDuplicateEntry(planIndex)) return;
+    if (pluginDir.empty()) {
+      FailPluginLoad(item, "the plugin directory cannot be resolved (no LOCALAPPDATA)", itemReport);
+      return;
+    }
     if (!PluginFileStaysInDirectory(item.file)) {
       FailPluginLoad(item, "file is outside plugins directory", itemReport);
       return;
@@ -1376,13 +1381,16 @@ void LoadPlugins(PluginPhase phase) {
   const bool early = phase == PluginPhase::Early;
   StatePluginTrustMode();
 
-  // Resolve plugins/ directory relative to echovr.exe (same dir as pnsradgameserver.dll)
-  CHAR moduleDir[MAX_PATH] = {0};
-  GetModuleFileNameA(reinterpret_cast<HMODULE>(EchoVR::g_GameBaseAddress), moduleDir, MAX_PATH);
-  CHAR* lastSlash = strrchr(moduleDir, '\\');
-  if (lastSlash) *(lastSlash + 1) = '\0';
-
-  std::string pluginDir = std::string(moduleDir) + "plugins\\";
+  // ADR 0012: plugins load from the nEVR root's plugins\ folder, never from beside the game executable. An
+  // unresolved root (no %LOCALAPPDATA%) leaves the directory empty: every configured plugin then fails with the
+  // reason below, and nothing is searched in the game folder.
+  const std::string rootPlugins = nevr_root::PluginsDir(nevr_root::RootA());
+  const std::string pluginDir = rootPlugins.empty() ? std::string() : rootPlugins + "\\";
+  if (pluginDir.empty()) {
+    Log(EchoVR::LogLevel::Error,
+        "[NEVR.PLUGIN] the plugin directory cannot be resolved: %%LOCALAPPDATA%% is not set, so no plugin loads "
+        "(plugins load from <LOCALAPPDATA>\\nevr\\echovr\\plugins\\, never from the game folder)");
+  }
 
   std::unique_ptr<PluginLoadRun> run = std::move(g_earlyRun);
   if (!run) {
