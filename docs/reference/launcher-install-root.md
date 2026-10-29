@@ -16,7 +16,7 @@ Nothing else of ours is put in the game folder by a launcher. The root, `%LOCALA
 launcher if it is missing. The game's own `%LOCALAPPDATA%\EchoVR` is never written by nEVR.
 
 The root also holds what the runtime writes: `logs\`, `crashes\`, `.credentials.json`, `cache\`, `cosmetics\v1\packages\`.
-A launcher does not create or edit those.
+A launcher does not create or edit those. Plugin files go in the root's `plugins\` (`%LOCALAPPDATA%\nevr\echovr\plugins\`); the runtime loads plugins from there and never from beside `echovr.exe`. The first run moves the files of an old `plugins\` folder beside `echovr.exe` into it, leaves no file behind, and logs each move.
 
 ## What the host does at game start
 
@@ -58,7 +58,10 @@ A run that logged in has, in the runtime's log in the same `logs\` folder (`nevr
 
 The runtime reads these from the game's command line (`src/core/cli_flags.h`, `src/runtime/lifecycle/cli.cpp`):
 
-- `-config <file>` or `-config-path <file>`: the folder of that file is where the runtime looks for `config.yaml` first.
+- `-config-file <file>`: the exact `config.yaml` to read. Without it the runtime reads `config.yaml` from the root, and nothing else is
+  searched. A file that is missing or cannot be opened ends the run with exit code 64 and one JSON line on standard error
+  (`"tag":"NEVR.STOP"`, `"reason":"usage"`, `"detail"` naming the argument and why); `-config-path` is refused the same way with
+  `use -config-file <file>`. `-config <file>` is the game's own JSON file and does not affect where `config.yaml` is read.
 - `-require-signed-plugins`: the run loads only signed plugins (ADR 0010). Without it the run loads unsigned plugins and logs a
   warning for each; a launcher that wants the signed-only mode passes it.
 
@@ -75,7 +78,7 @@ takes `-Dir <...\bin\win10>` and `-Root <nevr folder>` (an absolute path; the ro
   (`nevr-install.txt.legacy-<timestamp>`) into the same folder; it deletes nothing of the player's;
 - it writes `nevr-runtime.dll` into the root and `BugSplat64.dll` into the game folder, and records what it did in
   `<root>\installer\nevr-install.txt` (`backup`, `legacy`, `runtime_aside`, `runtime_legacy`, `runtime_root`,
-  `installed_sha256`, `runtime_sha256`, and, once an install has been updated, `previous_sha256`, the hashes of the hosts it replaced);
+  `installed_sha256`, `runtime_sha256`, `owner`, and, once an install has been updated, `previous_sha256`, the hashes of the hosts it replaced);
 - run again from a newer package it updates both files in place.
 
 `uninstall.ps1` takes `-Dir` and, when the install was given one, the same `-Root`. It reads that record (a record an earlier
@@ -87,10 +90,26 @@ of the game folder, and moves the record to `<root>\installer\aside\nevr-install
 
 These are not yet in the root. Each moves in its own change and this page is updated with it:
 
-- `plugins\` next to `echovr.exe`: plugin DLLs load from there (`src/runtime/ext/plugin_loader.cpp`), #856;
-- `_local\config.yaml`: the runtime still searches `_local` next to the game module (and one and two folders up) for it, and nothing moves it;
 - the game's own logs under `_local\r14logs` (the game writes them);
 - `logs\nevr-boot.jsonl` beside `echovr.exe`: the runtime's start-up log, #1232;
+
+## Who owns an install
+
+An install has one owner. Two things say who:
+
+- **The launcher's own state.** Echo VR Launcher keeps `launcher.json` in `%LOCALAPPDATA%\EchoVR_Launcher`; each `versions[]` entry
+  names an install root, and the game's folder is `<root>\ready-at-dawn-echo-arena\bin\win10` (`bin\win7` for the 2017 builds).
+  `nevr-install pc install` (and so `install.ps1`) reads that file, never writes it, and refuses a game folder it lists:
+  "Echo VR Launcher manages this install (nEVR <version> is installed; ...). Update nEVR through the launcher." The run ends
+  `needs-user`, changes nothing and fetches no package. `--launcher-dir <folder>` names the launcher's data folder when it is not
+  the default (the default exists on Windows only). A `launcher.json` that is there and cannot be read is a refusal too, because
+  the check cannot say the launcher is absent; a missing one means no launcher.
+- **The `owner` key of `nevr-install.txt`.** The core writes `owner=nevr-install`. An installer that manages the same folder
+  writes its own name (the launcher: `owner=launcher`); `install.ps1` and `uninstall.ps1` leave a record with any other owner
+  alone and say so. A record with no `owner` key, written before the key existed, is ours.
+
+A folder neither says is owned by anyone: an nEVR host in it with no record is adopted by the install (the game's own file is then
+marked `original=unknown`).
 
 ## What a launcher must not do
 

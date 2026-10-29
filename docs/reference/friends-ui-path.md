@@ -9,7 +9,7 @@ shipped script DLLs); nothing here was observed on a running client except where
 | Fact | Value | Source |
 | --- | --- | --- |
 | Node class name | `R15NetRefreshFriendsNode` | string at `0x141cc7f78` (echovr.exe); the bytes before it, from `0x141cc7f68`, are the hash qword in the next row |
-| Node type hash (CSymbol64) | `0x4f0a3c282e9f3b43` | the qword at `0x141cc7f68`; recomputed from the name with `src/abi/symbol_hash.h` |
+| Node type hash (CSymbol64) | `0x4f0a3c282e9f3b43` | the qword at `0x141cc7f68`; recomputed from the name with `sdk/include/nevr/symbol_hash.h` |
 | Update function | `0x140ddf9a0` (409 bytes) | ReVault `fn show 0x140ddf9a0` |
 | Registered by | `0x140f4c480` (the node-type registration table): `0x140f505f1` loads `0x140ddf9a0` as the node's function and calls `0x1412ec220` | ReVault xrefs to `0x140ddf9a0`: `0x140f505f1`, plus data at `0x141f92f44`, `0x141f92f54`, `0x142180f60` |
 | Direct callers | none | the only call-graph edge into `0x140ddf9a0` is the registration table; so the node runs from the script interpreter, not from C++ (inferred from the call graph; the graph misses 451 of 55267 functions) |

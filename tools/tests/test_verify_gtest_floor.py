@@ -1,9 +1,11 @@
-"""tools/verify_gtest_floor.py: a lost runtime test fails the verify gate (#50, sprint 1).
+"""tools/verify_gtest_floor.py: a lost runtime test fails the gate, against the count git has at the base (#50, #1343).
 
-The floor is only worth anything while it is close to the real count: with the old floor at 183 and
-more than 700 tests, a hundred tests could disappear unnoticed.
+The floor is not stored: it is the count at the merge-base with origin/main (on main, the parent commit), so a
+pull request that adds tests edits nothing to pass, and one that drops tests says so in a GTest-Drop trailer.
 """
 
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -13,12 +15,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools" / "verify_gtest_floor.py"
 JUSTFILE = REPO / "justfile"
-# How far the justfile floor may lag the real count before the change that passes it must raise it.
-SLACK = 25
-
-
-def run(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, cwd=REPO)
+GIT_ENV = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+           "GIT_COMMITTER_EMAIL": "t@t", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 
 
 def declared_by_grep(directory: Path) -> int:
@@ -28,64 +26,118 @@ def declared_by_grep(directory: Path) -> int:
     return len(grep.stdout.splitlines())
 
 
-class GTestFloorTest(unittest.TestCase):
-    def fixture(self, files: dict) -> Path:
-        directory = Path(tempfile.mkdtemp(prefix="gtest-floor-"))
-        self.addCleanup(lambda: [p.unlink() for p in directory.iterdir()] or directory.rmdir())
+class GTestBaseTest(unittest.TestCase):
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp(prefix="gtest-base-"))
+        self.addCleanup(shutil.rmtree, self.repo)
+        self.git("init", "-q", "-b", "main")
+        self.tests = self.repo / "src" / "runtime" / "tests"
+        self.tests.mkdir(parents=True)
+
+    def git(self, *args: str) -> str:
+        return subprocess.run(["git", "-C", str(self.repo), *args], capture_output=True, text=True, check=True,
+                              env=GIT_ENV).stdout
+
+    def commit(self, files: dict, message: str = "c") -> str:
         for name, text in files.items():
-            (directory / name).write_text(text, encoding="utf-8")
-        return directory
+            path = self.tests / name
+            if text is None:
+                path.unlink()
+            else:
+                path.write_text(text, encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", message)
+        return self.git("rev-parse", "HEAD").strip()
+
+    def mark_origin_main(self):
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+
+    def run_gate(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, str(SCRIPT), "--repo", str(self.repo), *args],
+                              capture_output=True, text=True, env=GIT_ENV)
 
     def test_counts_test_and_test_f_declarations_at_line_start_only(self):
-        directory = self.fixture({
-            "a.cpp": "TEST(A, One) {}\nTEST_F(Fx, Two) {}\n  TEST(Indented, Not) {}\n// TEST(Comment, Not)\nTEST_P(P, Not) {}\n",
-            "b.cpp": "TEST(B, Three) {\n}\n",
-            "c.h": "TEST(Header, Not) {}\n",
-        })
-        result = run("--floor", "3", "--dir", str(directory))
+        self.commit({"a.cpp": "TEST(A, One) {}\nTEST_F(Fx, Two) {}\n  TEST(Indented, Not) {}\n// TEST(Comment, Not)\n"
+                              "TEST_P(P, Not) {}\n",
+                     "b.cpp": "TEST(B, Three) {\n}\n", "c.h": "TEST(Header, Not) {}\n"})
+        self.mark_origin_main()
+        self.commit({"d.cpp": "TEST(D, Four) {}\n"})
+        result = self.run_gate()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("declarations=3 (floor 3)", result.stdout)
+        self.assertIn("declarations=4 ", result.stdout)
+        self.assertIn("had 3)", result.stdout)
 
-    def test_fails_when_a_test_is_lost(self):
-        directory = self.fixture({"a.cpp": "TEST(A, One) {}\nTEST(A, Two) {}\n"})
-        result = run("--floor", "3", "--dir", str(directory))
+    def test_a_branch_that_adds_tests_passes_with_no_stored_number(self):
+        self.commit({"a.cpp": "TEST(A, One) {}\n"})
+        self.mark_origin_main()
+        self.commit({"a.cpp": "TEST(A, One) {}\nTEST(A, Two) {}\n"})
+        self.assertEqual(self.run_gate().returncode, 0)
+
+    def test_a_branch_that_loses_a_test_fails_against_the_merge_base(self):
+        self.commit({"a.cpp": "TEST(A, One) {}\nTEST(A, Two) {}\n"})
+        self.mark_origin_main()
+        self.commit({"a.cpp": "TEST(A, One) {}\n"})
+        result = self.run_gate()
         self.assertEqual(result.returncode, 1)
-        self.assertIn("fell to 2 (floor 3)", result.stderr)
+        self.assertIn("fell to 1", result.stderr)
+        self.assertIn("had 2", result.stderr)
 
-    def test_a_floor_above_the_count_by_one_fails_and_at_the_count_passes(self):
-        directory = self.fixture({"a.cpp": "TEST(A, One) {}\nTEST(A, Two) {}\n"})
-        self.assertEqual(run("--floor", "2", "--dir", str(directory)).returncode, 0)
-        self.assertEqual(run("--floor", "3", "--dir", str(directory)).returncode, 1)
+    def test_the_base_is_the_merge_base_not_origin_main_s_tip(self):
+        self.commit({"a.cpp": "TEST(A, One) {}\n"})
+        base = self.git("rev-parse", "HEAD").strip()
+        self.commit({"a.cpp": "TEST(A, One) {}\nTEST(A, Two) {}\nTEST(A, Three) {}\n"})
+        self.mark_origin_main()  # main moved on with more tests
+        self.git("checkout", "-q", "-b", "topic", base)
+        self.commit({"b.cpp": "TEST(B, One) {}\n"})
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"base {base[:12]} had 1", result.stdout)
 
-    def test_an_empty_or_missing_directory_fails_rather_than_counting_zero_against_zero(self):
-        directory = self.fixture({})
-        self.assertEqual(run("--floor", "0", "--dir", str(directory)).returncode, 1)
-        self.assertEqual(run("--floor", "0", "--dir", str(directory / "nope")).returncode, 1)
+    def test_on_main_the_base_is_the_parent_commit(self):
+        self.commit({"a.cpp": "TEST(A, One) {}\nTEST(A, Two) {}\n"})
+        self.commit({"a.cpp": "TEST(A, One) {}\n"})
+        self.mark_origin_main()  # HEAD is origin/main: the merge-base is HEAD itself
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("had 2", result.stderr)
+
+    def test_a_drop_trailer_lets_a_declared_removal_pass_and_is_printed(self):
+        self.commit({"a.cpp": "TEST(A, One) {}\nTEST(A, Two) {}\n"})
+        self.mark_origin_main()
+        self.commit({"a.cpp": "TEST(A, One) {}\n"}, "test: drop a duplicate\n\nGTest-Drop: A.Two duplicated A.One")
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("GTest-Drop: A.Two duplicated A.One", result.stdout)
+
+    def test_a_trailer_before_the_base_does_not_excuse_a_later_drop(self):
+        self.commit({"a.cpp": "TEST(A, One) {}\nTEST(A, Two) {}\n"}, "t\n\nGTest-Drop: old reason")
+        self.mark_origin_main()
+        self.commit({"a.cpp": "TEST(A, One) {}\n"})
+        self.assertEqual(self.run_gate().returncode, 1)
+
+    def test_an_unreadable_base_fails_loudly(self):
+        self.commit({"a.cpp": "TEST(A, One) {}\n"})  # one commit, no origin/main: no merge-base
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("base commit's GTest count cannot be read", result.stderr)
+
+    def test_an_empty_test_directory_fails_rather_than_counting_zero_against_zero(self):
+        self.commit({"a.cpp": "TEST(A, One) {}\n"})
+        self.mark_origin_main()
+        self.commit({"a.cpp": None, "keep.txt": "x"})
+        self.assertEqual(self.run_gate().returncode, 1)
 
     def test_counts_the_real_tree_exactly_as_the_old_grep_did(self):
-        directory = REPO / "src" / "runtime" / "tests"
-        expected = declared_by_grep(directory)
+        expected = declared_by_grep(REPO / "src" / "runtime" / "tests")
         self.assertGreater(expected, 700)
-        result = run("--floor", str(expected), "--dir", str(directory))
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(f"declarations={expected} ", result.stdout)
+        result = subprocess.run([sys.executable, str(SCRIPT), "--base", "HEAD"], capture_output=True, text=True,
+                                cwd=REPO)
+        self.assertIn(f"declarations={expected} ", result.stdout + result.stderr)
 
-    def test_the_floor_in_the_justfile_tracks_the_real_count(self):
-        """The floor is within SLACK of what the gate measures on this tree, never above it.
-
-        Above the count the gate itself fails. More than SLACK below it, a stale floor would let
-        that many tests disappear unnoticed (it sat at 183 with more than 700 tests), so the change
-        that carries the count past floor + SLACK raises the floor. The slack is what keeps every
-        pull request that adds a test from having to touch the same justfile line.
-        """
+    def test_the_justfile_stores_no_floor(self):
         text = JUSTFILE.read_text(encoding="utf-8")
-        marker = "tools/verify_gtest_floor.py --floor "
-        self.assertIn(marker, text)
-        floor = int(text.split(marker, 1)[1].split()[0])
-        count = declared_by_grep(REPO / "src" / "runtime" / "tests")
-        self.assertLessEqual(floor, count, "the floor is above the count: the gate fails")
-        self.assertLessEqual(count - floor, SLACK,
-                             f"raise the floor in the justfile to {count} (it may lag by at most {SLACK} tests)")
+        self.assertIn("python3 tools/verify_gtest_floor.py\n", text)
+        self.assertNotIn("verify_gtest_floor.py --floor", text)
 
 
 if __name__ == "__main__":

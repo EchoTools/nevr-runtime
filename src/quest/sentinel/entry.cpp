@@ -24,8 +24,9 @@
 #include "permission_request.h"
 #include "permission_wait_hook.h"
 #include "process_end_hook.h"
+#include "quit_hook.h"
+#include "render_config.h"
 #include "texture_quality_hook.h"
-#include "system_ui_hook.h"
 #include "resource_request_hook.h"
 #include "toast_presenter.h"
 #include "vk_ext_window.h"
@@ -125,9 +126,9 @@ bool InstallPermissionWaitHook() noexcept {
     options.probe_enabled = nevr_build::kIsDev;  // the headset probe is for development builds only
     if (!nevr_build::kIsDev) options.hold_ms = 0;  // no presenter is known to draw on a headset: a release build holds nothing
     nevr_quest::data_wiring::Install(options);
-    // The main-menu QUIT's system UI (#392) is one more GOT hook, installed on every launch from this step. A refused
-    // install is logged by GotHook and by the hook's own line.
-    nevr_quest::system_ui::Install();
+    // The main-menu QUIT finishes the activity (#1276), installed on every launch from this step. Its quit_install line
+    // says whether it went in; a refused install leaves the game's QUIT as it is.
+    nevr_quest::quit::Install();
     nevr_quest::permission_wait::SetRequester(&RequestOnGameActivity);
     return nevr_quest::permission_wait::Install();
 }
@@ -146,6 +147,12 @@ bool RegisterTextureQualityCounters() noexcept { return nevr_quest::texture_qual
 bool InstallTextureQualityHook(nevr_quest::texture_quality::Level level, bool fromConfig,
                                bool countersRegistered) noexcept {
     return nevr_quest::texture_quality::InstallIfCounted(level, fromConfig, countersRegistered);
+}
+
+// The render-configuration log (#1139): the VrApi slots it reads and the poller thread. A refused install is logged by GotHook
+// and by the hook's own line, and leaves the game's calls intact.
+bool InstallRenderConfigHook(nevr_quest::texture_quality::Level level, bool fromConfig) noexcept {
+    return nevr_quest::render_config::Install(level, fromConfig);
 }
 
 // The log-only resource request hook (#871): development builds only. A refused install is logged by GotHook and leaves the

@@ -30,6 +30,7 @@
 #include <utility>
 #include <atomic>
 #include <iterator>
+#include <filesystem>
 #include <memory>
 #include <random>
 #include <cstdint>
@@ -49,7 +50,7 @@
 #include "abi/echovr.h"
 #include "abi/echovr_functions.h"
 #include "abi/game_level.h"
-#include "abi/symbol_hash.h"
+#include "nevr/symbol_hash.h"
 #include "runtime/log/symcache.h"
 #include "runtime/patch/ui_texture_mips_rules.h"
 #include "runtime/hook/symbol_corpus.h"
@@ -132,10 +133,8 @@ FLOAT  g_arenaRoundTime       = 0.0f;
 FLOAT  g_arenaCelebrationTime = 0.0f;
 FLOAT  g_arenaMercyScore      = 0.0f;
 
-// --- logging.h implementations (not linking logging.cpp to avoid nlohmann-json) ---
-std::string GetISO8601Timestamp() { return "2026-01-01T00:00:00.000Z"; }
+// --- logging.h implementations (logging.cpp is not linked into this test) ---
 const char* GetLogLevelString(EchoVR::LogLevel) { return "info"; }
-std::string FormatJsonLogEntry(EchoVR::LogLevel, const char*, const char*) { return "{}"; }
 
 std::mutex g_testLogMutex;
 std::condition_variable g_testLogCv;  // notified on every line, so a test waits for a line without sleeping
@@ -276,6 +275,7 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 #include "runtime/patch/asset_registry.h"
 #include "runtime/ext/module_loader.h"
 #include "core/hex_dump.h"
+#include "core/nevr_root.h"
 #include "runtime/patch/matchmaker_host_patch.h"
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/compat/self_check.h"
@@ -328,6 +328,57 @@ class N68_PluginTickTest : public ::testing::Test {
 // makes its real OnFrame callback observable.
 // ============================================================================
 
+// The plugin directory of a run is <root>\\plugins, the root under %LOCALAPPDATA% (#856, ADR 0012), never the folder of the game
+// executable. A test gives the process a LOCALAPPDATA of its own, a folder it removes afterwards, and starts that root's
+// plugins\\ with the plugins the build put next to the test executable (the fixture DLLs the loader tests plan by name).
+class TestNevrRoot {
+ public:
+  TestNevrRoot() {
+    char exePath[MAX_PATH] = {};
+    GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+    std::string exeDir(exePath);
+    exeDir.resize(exeDir.find_last_of("\\/") + 1);
+    builtPluginsDir_ = exeDir + "plugins\\";
+    static std::atomic<unsigned> counter{0};
+    localAppData_ = exeDir + "nevr-test-localappdata-" + std::to_string(GetCurrentProcessId()) + "-" +
+                    std::to_string(counter.fetch_add(1));
+    char saved[MAX_PATH * 2] = {};
+    const DWORD n = GetEnvironmentVariableA("LOCALAPPDATA", saved, static_cast<DWORD>(sizeof(saved)));
+    hadLocalAppData_ = n != 0 && n < sizeof(saved);
+    if (hadLocalAppData_) savedLocalAppData_.assign(saved, n);
+    SetEnvironmentVariableA("LOCALAPPDATA", localAppData_.c_str());
+    pluginsDir_ = nevr_root::PluginsDir(nevr_root::RootA()) + "\\";
+    std::error_code ec;
+    std::filesystem::create_directories(pluginsDir_, ec);
+    for (const auto& entry : std::filesystem::directory_iterator(builtPluginsDir_, ec)) {
+      if (entry.is_regular_file(ec)) {
+        std::filesystem::copy_file(entry.path(), std::filesystem::path(pluginsDir_) / entry.path().filename(),
+                                   std::filesystem::copy_options::overwrite_existing, ec);
+      }
+    }
+  }
+  ~TestNevrRoot() {
+    if (hadLocalAppData_) {
+      SetEnvironmentVariableA("LOCALAPPDATA", savedLocalAppData_.c_str());
+    } else {
+      SetEnvironmentVariableA("LOCALAPPDATA", nullptr);
+    }
+    std::error_code ec;
+    std::filesystem::remove_all(localAppData_, ec);
+  }
+  TestNevrRoot(const TestNevrRoot&) = delete;
+  TestNevrRoot& operator=(const TestNevrRoot&) = delete;
+
+  // <root>\\plugins\\, where the loader looks.
+  const std::string& PluginsDir() const { return pluginsDir_; }
+  // <folder of the test executable>\\plugins\\: where the build puts the fixture DLLs, and where the loader used to look.
+  const std::string& BuiltPluginsDir() const { return builtPluginsDir_; }
+
+ private:
+  std::string localAppData_, pluginsDir_, builtPluginsDir_, savedLocalAppData_;
+  bool hadLocalAppData_ = false;
+};
+
 class PluginLoaderDiagnosticTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -336,6 +387,7 @@ class PluginLoaderDiagnosticTest : public ::testing::Test {
     ClearTestLogs();
     EchoVR::g_GameBaseAddress = reinterpret_cast<CHAR*>(GetModuleHandleA(nullptr));
     ASSERT_NE(EchoVR::g_GameBaseAddress, nullptr);
+    nevrRoot_ = std::make_unique<TestNevrRoot>();
     // These tests are about the loader, not the signature gate: their fixture DLLs are unsigned. The gate has
     // its own fixture below (PluginSignatureGateTest), which enforces.
     nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, nullptr);
@@ -346,7 +398,10 @@ class PluginLoaderDiagnosticTest : public ::testing::Test {
     g_testPluginLoadPlan.clear();
     ClearTestLogs();
     nevr_plugin_trust::TestHook_ResetTrust();
+    nevrRoot_.reset();
   }
+
+  std::unique_ptr<TestNevrRoot> nevrRoot_;
 };
 
 // ============================================================================
@@ -373,11 +428,7 @@ class PluginSignatureGateTest : public PluginLoaderDiagnosticTest {
     policy_.profileEkus = {manifest_["profile_eku"].get<std::string>()};
     nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::SignedOnly, &policy_);
 
-    char exePath[MAX_PATH] = {};
-    ASSERT_NE(GetModuleFileNameA(nullptr, exePath, MAX_PATH), 0U);
-    pluginsDir_ = std::string(exePath);
-    pluginsDir_.resize(pluginsDir_.find_last_of("\\/") + 1);
-    pluginsDir_ += "plugins\\";
+    pluginsDir_ = nevrRoot_->PluginsDir();
   }
 
   void TearDown() override {
@@ -446,6 +497,76 @@ TEST_F(PluginSignatureGateTest, RefusalIsPerPluginAndTheSignedOneStillLoads) {
   LoadPlugins();
   EXPECT_EQ(GetLoadedPluginCount(), 1);
   EXPECT_TRUE(TestLogContains("file=gate_a_unsigned.dll refused: unsigned"));
+}
+
+// ---- plugins load from the nevr root (ADR 0012, #856) ------------------------------------------------------------
+
+class PluginsFromTheRootTest : public PluginSignatureGateTest {
+ protected:
+  void TearDown() override {
+    TestHook_ResetPluginLoadFilter();
+    PluginSignatureGateTest::TearDown();
+  }
+
+  // A signed copy of the fixture plugin as `name` in the folder the loader used to read, beside the game executable.
+  std::string PlaceBesideTheGame(const std::string& name, const std::string& kind) {
+    const std::string source = fixtures_ + "/" + manifest_["files"]["test_plugin_onframe." + kind].get<std::string>();
+    std::error_code ec;
+    std::filesystem::create_directories(nevrRoot_->BuiltPluginsDir(), ec);
+    const std::string target = nevrRoot_->BuiltPluginsDir() + name;
+    EXPECT_TRUE(CopyFileA(source.c_str(), target.c_str(), FALSE)) << source << " error " << GetLastError();
+    copies_.push_back(target);
+    return target;
+  }
+
+  static std::wstring LowerWide(const std::string& path) {
+    std::wstring wide;
+    for (char c : path) wide.push_back(static_cast<wchar_t>(std::tolower(static_cast<unsigned char>(c))));
+    return wide;
+  }
+};
+
+TEST_F(PluginsFromTheRootTest, TheLoaderReadsAndNamesThePluginFolderOfTheNevrRoot) {
+  Plan("root_signed.dll", "signed");
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("loading in list order from " + pluginsDir_)) << pluginsDir_;
+  EXPECT_NE(pluginsDir_.find("\\nevr\\echovr\\plugins\\"), std::string::npos) << pluginsDir_;
+}
+
+TEST_F(PluginsFromTheRootTest, ASignedPluginBesideTheGameExecutableIsNotLoaded) {
+  PlaceBesideTheGame("beside_signed.dll", "signed");
+  g_testPluginLoadPlan.push_back({"beside_signed.dll", "beside_signed.dll", false, "", "{}"});
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 0) << "the game folder is not a plugin folder";
+  EXPECT_EQ(GetModuleHandleA("beside_signed.dll"), nullptr);
+  EXPECT_TRUE(TestLogContains("beside_signed.dll")) << "the entry is reported as failed to load";
+}
+
+TEST_F(PluginsFromTheRootTest, TheLateLoadFilterGuardsTheRootsPluginFolderAndNotTheGameFolder) {
+  Plan("filter_signed.dll", "signed");
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  Plan("late_in_root.dll", "unsigned");
+  const std::string beside = PlaceBesideTheGame("late_beside.dll", "unsigned");
+  EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(LowerWide(pluginsDir_ + "late_in_root.dll").c_str(), nullptr))
+      << "an unsigned DLL loaded late from the nevr root's plugin folder is refused";
+  EXPECT_FALSE(nevr_dll_load_hook::IsLoadBlocked(LowerWide(beside).c_str(), nullptr))
+      << "the game folder's plugins\\ is no longer the plugin directory";
+}
+
+TEST_F(PluginsFromTheRootTest, WithoutLocalAppDataNoPluginLoadsAndTheGameFolderIsNeverSearched) {
+  PlaceBesideTheGame("beside_nolocal.dll", "signed");
+  SetEnvironmentVariableA("LOCALAPPDATA", nullptr);
+  g_testPluginLoadPlan.push_back({"beside_nolocal.dll", "beside_nolocal.dll", false, "", "{}"});
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(GetModuleHandleA("beside_nolocal.dll"), nullptr);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Error, "the plugin directory cannot be resolved"));
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 1u);
+  EXPECT_FALSE(manifest[0]["loaded"].get<bool>());
+  EXPECT_NE(manifest[0]["error"].get<std::string>().find("plugin directory cannot be resolved"), std::string::npos);
 }
 
 // ---- the dependency walk, the refusal dialog and the load filter (ADR 0010 sections 1 and 6, #741) -------------
@@ -1440,11 +1561,8 @@ class PluginRunModeTest : public ::testing::Test {
     TestHook_ResetRefusals();
     TestHook_SetRefusalDialogSink(&CaptureRunModeDialog);
     g_serverFatalCalls = 0;
-    char exePath[MAX_PATH] = {};
-    ASSERT_NE(GetModuleFileNameA(nullptr, exePath, MAX_PATH), 0U);
-    pluginsDir_ = std::string(exePath);
-    pluginsDir_.resize(pluginsDir_.find_last_of("\\/") + 1);
-    pluginsDir_ += "plugins\\";
+    nevrRoot_ = std::make_unique<TestNevrRoot>();
+    pluginsDir_ = nevrRoot_->PluginsDir();
   }
 
   void TearDown() override {
@@ -1458,6 +1576,7 @@ class PluginRunModeTest : public ::testing::Test {
     nevr_plugin_trust::TestHook_ResetTrust();
     g_isServer = wasServer_;
     g_isHeadless = wasHeadless_;
+    nevrRoot_.reset();
   }
 
   // The unsigned test plugin, as `name` in plugins/ (a copy, so a late load has a file of its own to ask about).
@@ -1474,6 +1593,7 @@ class PluginRunModeTest : public ::testing::Test {
     return nevr_dll_load_hook::IsLoadBlocked(wide.c_str(), nullptr);
   }
 
+  std::unique_ptr<TestNevrRoot> nevrRoot_;
   std::string pluginsDir_;
   std::vector<std::string> copies_;
   BOOL wasServer_ = FALSE;
@@ -1804,12 +1924,8 @@ TEST_F(PluginLoaderDiagnosticTest, MissingOptionalDllLogsLoadLibraryFailureAndCo
 }
 
 TEST_F(PluginLoaderDiagnosticTest, ConfiguredPluginPathCannotEscapePluginsDirectory) {
-  char exePath[MAX_PATH] = {};
-  ASSERT_NE(GetModuleFileNameA(nullptr, exePath, MAX_PATH), 0U);
-  std::string directory(exePath);
-  directory.resize(directory.find_last_of("\\/") + 1);
-  const std::string source = directory + "plugins\\test_plugin_onframe.dll";
-  const std::string escaped = directory + "test_plugin_escape.dll";
+  const std::string source = nevrRoot_->PluginsDir() + "test_plugin_onframe.dll";
+  const std::string escaped = nevrRoot_->PluginsDir() + "..\\test_plugin_escape.dll";  // in the root, the parent of the plugin folder
   ASSERT_NE(GetFileAttributesA(source.c_str()), INVALID_FILE_ATTRIBUTES);
   ASSERT_TRUE(CopyFileA(source.c_str(), escaped.c_str(), FALSE));
 
@@ -4121,8 +4237,28 @@ TEST_F(RouterAllTest, AnUnrequireNobodyAskedForIsDroppedAndCounted) {
   EXPECT_EQ(login.Count(nevr_evr_codec::kSymConnectionUnrequire), 0);
 }
 
+// #1280: the bridge started in a named run mode. g_isServer is set before the bridge starts, as boot.cpp does; this
+// file's default is a server (g_isServer above), so a test of client behaviour names the client mode.
+template <typename Base, BOOL kIsServer>
+class RunModeFixture : public Base {
+ protected:
+  void SetUp() override {
+    wasServer_ = g_isServer;
+    g_isServer = kIsServer;
+    Base::SetUp();
+  }
+  void TearDown() override {
+    Base::TearDown();
+    g_isServer = wasServer_;
+  }
+  BOOL wasServer_ = FALSE;
+};
+using ServerRolesByPathTest = RunModeFixture<RolesByPathTest, TRUE>;
+using ServerRouterAllTest = RunModeFixture<RouterAllTest, TRUE>;
+using ClientRouterAllTest = RunModeFixture<RouterAllTest, FALSE>;
+
 // A login the service accepted is followed by the friend-list subscription, sent once, on the session.
-TEST_F(RouterAllTest, ALoginSuccessIsFollowedByTheFriendListSubscription) {
+TEST_F(ClientRouterAllTest, ALoginSuccessIsFollowedByTheFriendListSubscription) {
   remote_.SetLoginReply(nevr_evr_codec::kSymLoginSuccess);
   GameSocket login;
   Admit(login, "/login");
@@ -4134,7 +4270,7 @@ TEST_F(RouterAllTest, ALoginSuccessIsFollowedByTheFriendListSubscription) {
 
 // L7: a runtime frame sent before the session exists is refused (and says so); once the login is up it goes to the
 // service, and its reply reaches the login socket.
-TEST_F(RouterAllTest, ARuntimeFrameIsRefusedBeforeTheSessionAndSentAfter) {
+TEST_F(ClientRouterAllTest, ARuntimeFrameIsRefusedBeforeTheSessionAndSentAfter) {
   const nevr_social_party::Sender sender = nevr_social_party::SenderSlot().load();
   ASSERT_NE(sender, nullptr);
   const std::string frame = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymDocumentRequest, "");
@@ -4144,6 +4280,49 @@ TEST_F(RouterAllTest, ARuntimeFrameIsRefusedBeforeTheSessionAndSentAfter) {
   AdmitLogin(login);
   EXPECT_TRUE(sender(frame));
   ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymDocumentSuccess)) << "the reply to the runtime frame was lost";
+}
+
+// A round trip that proves the service has read everything sent on the session before it: the service answers a
+// DocumentRequest in order, on the same connection.
+static void RoundTripOnTheSession(GameSocket& login) {
+  login.Send(nevr_evr_codec::kSymDocumentRequest);
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymDocumentSuccess)) << "the session never answered";
+}
+
+// #1280: a server whose login the service accepts subscribes to no friend list (legacy path, the default).
+TEST_F(ServerRolesByPathTest, AServerSendsNoFriendListSubscriptionAfterTheServiceAcceptsItsLogin) {
+  remote_.SetLoginReply(nevr_evr_codec::kSymLoginSuccess);
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSuccess)) << "the server was left at the login gate";
+  RoundTripOnTheSession(login);
+  EXPECT_EQ(remote_.ReceivedCount(nevr_evr_codec::FirstSymbol(nevr_evr_codec::BuildFriendListSubscribe())), 0);
+}
+
+// #1280: the same through the router.
+TEST_F(ServerRouterAllTest, AServerSendsNoFriendListSubscriptionAfterTheServiceAcceptsItsLogin) {
+  remote_.SetLoginReply(nevr_evr_codec::kSymLoginSuccess);
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSuccess)) << "the server was left at the login gate";
+  RoundTripOnTheSession(login);
+  EXPECT_EQ(remote_.ReceivedCount(nevr_evr_codec::FirstSymbol(nevr_evr_codec::BuildFriendListSubscribe())), 0);
+}
+
+// #1280: on a server the runtime's social sender sends nothing, while the self-check sender (its RemoteLogSet is not
+// social) still reaches the service.
+TEST_F(ServerRolesByPathTest, TheRuntimesSocialSenderSendsNothingOnAServer) {
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings)) << "the login never reached the service";
+  const nevr_social_party::Sender sender = nevr_social_party::SenderSlot().load();
+  ASSERT_NE(sender, nullptr);
+  const nevr_social_party::Message refresh = nevr_social_party::Global().RefreshFriends().at(0);
+  EXPECT_FALSE(sender(nevr_social_party::Frame(refresh)));
+  EXPECT_FALSE(nevr_social_party::Send(nevr_social_party::Global().RefreshFriends()));
+  EXPECT_TRUE(TestHook_SendFrameToServer(nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymDocumentRequest, "")));
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymDocumentSuccess)) << "the self-check sender's frame was lost";
+  EXPECT_EQ(remote_.ReceivedCount(refresh.symbol), 0);
 }
 
 // L8: the ninth matchmaker is closed with 1013, and the first eight share the session's one connection.
@@ -5081,8 +5260,28 @@ TEST(WsBridgeLoginRequest, PlatformCode4AtWireOffset40) {
   for (size_t i = 24; i < 40; ++i) EXPECT_EQ(request[i], '\0');
 }
 
+// #1280: a dedicated server is not a player and declares no social level, so the service sends it none of the
+// newer social messages; a client declares the level it parses.
+TEST(WsBridgeLoginRequest, AServerDeclaresNoSocialLevelAndAClientDeclaresItsOwn) {
+  const auto socialLevel = [](BOOL isServer) {
+    const BOOL wasServer = g_isServer;
+    g_isServer = isServer;
+    const std::string request = TestHook_BuildLoginRequest(77, 4, "name", "");
+    g_isServer = wasServer;
+    const size_t jsonOffset = 56;
+    if (request.size() <= jsonOffset) return -1;
+    return nlohmann::json::parse(request.substr(jsonOffset, request.size() - jsonOffset - 1)).at("nevr_social").get<int>();
+  };
+  EXPECT_EQ(socialLevel(TRUE), 0);
+  EXPECT_EQ(socialLevel(FALSE), nevr_social_party::kSocialLevel);
+  EXPECT_EQ(nevr_social_party::kSocialLevel, 1);
+}
+
 TEST(WsBridgeLoginRequest, JsonCarriesIdentityCredentialsAndMeasuredSystemInfo) {
+  const BOOL wasServer = g_isServer;
+  g_isServer = FALSE;  // a client's login (this file's default is a server)
   const std::string request = TestHook_BuildLoginRequest(77, 3, "A \"quoted\" name", "access-token");
+  g_isServer = wasServer;
   const size_t jsonOffset = 56;
   ASSERT_GT(request.size(), jsonOffset);
   ASSERT_EQ(request.back(), '\0');

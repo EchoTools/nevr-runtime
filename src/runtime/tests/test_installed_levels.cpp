@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-#include "abi/symbol_hash.h"
+#include "nevr/symbol_hash.h"
 #include "gameservice/v1/gameservice.pb.h"
 #include "runtime/patch/asset_registry.h"
 #include "runtime/server/installed_levels.h"

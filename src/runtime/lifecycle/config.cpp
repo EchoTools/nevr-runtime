@@ -193,7 +193,7 @@ void LogServerStepReadBack(long tick) {
 
 /// <summary>
 /// A detour hook for the game's function to load the local config.json for the game instance.
-/// If a custom config path was provided via -config-path, it loads that file directly using
+/// If a custom config path was provided via -config, it loads that file directly using
 /// the game's internal JSON loading function, bypassing the default _local/config.json.
 /// </summary>
 /// <param name="pGame">A pointer to the game struct to load the config for.</param>

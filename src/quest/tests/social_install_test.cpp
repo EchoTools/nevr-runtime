@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include "nevr/symbol_hash.h"
 #include "hook_install.h"
 #include "pinned_targets.h"
 #include "hook_log.h"
@@ -646,6 +647,74 @@ void TestPresenceLocalAnswersWithoutTheGamesFunctions() {
   SetPresenceLocal(false);
 }
 
+// #396: with presence_local each changed document the game sets is published to the NEVR session as one
+// SNSPresenceUpdateRequest: the 0x20 header of the local member, JsonLen(4), the document. Off, nothing leaves;
+// the same document again is not a change; no local account means nothing to publish, and it is said once.
+int g_publishCalls = 0;
+std::vector<nevr_social_party::Message> g_published;
+bool FakePublish(const std::vector<nevr_social_party::Message>& messages) {
+  ++g_publishCalls;
+  g_published = messages;
+  return true;
+}
+
+void TestPresenceLocalPublishesTheDocument() {
+  ResetPresenceForTest();
+  g_lines.clear();
+  FakeObject object;
+  BuildFakePresence(&object);
+  SetPresenceSeamsForTest(false, &FakeEncodeJson);
+  QCHECK(SelectRichPresenceObject(&object, &PresenceLoaded) == &object);
+  using SetFn = void (*)(void*, const void*);
+  SetFn set = nullptr;
+  const std::uintptr_t setWord = SlotOf(object, kRichPresenceSlotSet);
+  std::memcpy(&set, &setWord, sizeof(setWord));
+  const int document = 0;
+  nevr_social_party::Global().SetSelf(77, "tester");
+  SetPresenceSendForTest(&FakePublish);
+  g_publishCalls = 0;
+
+  // Off (the default): the document is set and nothing is published.
+  g_encodeText = "{\"game_type\":\"echo_arena\",\"joinable\":false}";
+  set(&object, &document);
+  QCHECK(g_publishCalls == 0);
+  QCHECK(CountLines("\"event\":\"rich_presence_publish\"") == 0);
+
+  // On: a changed document is published once, as the local member's SNSPresenceUpdateRequest.
+  SetPresenceLocal(true);
+  g_encodeText = "{\"game_type\":\"echo_arena\",\"joinable\":true}";
+  set(&object, &document);
+  QCHECK(g_publishCalls == 1);
+  QCHECK(g_published.size() == 1);
+  if (g_published.size() == 1) {
+    const std::string& payload = g_published[0].payload;
+    const std::string text = g_encodeText;
+    QCHECK(g_published[0].symbol == EchoVR::CSymbol64Hash("SNSPresenceUpdateRequest"));
+    QCHECK(payload.size() == 0x20 + 4 + text.size());
+    QCHECK(std::memcmp(payload.data() + 8, nevr_social_party::MemberUuid(77).data(), 16) == 0);
+    QCHECK(static_cast<unsigned char>(payload[0x20]) == text.size() && payload[0x21] == 0);
+    QCHECK(payload.compare(0x24, std::string::npos, text) == 0);
+  }
+  QCHECK(CountLines("\"event\":\"rich_presence_publish\",\"result\":\"sent\"") == 1);
+
+  // The same document again: not a change, nothing new leaves.
+  set(&object, &document);
+  QCHECK(g_publishCalls == 1);
+
+  // No local account yet: nothing is sent, said once.
+  nevr_social_party::Global().SetSelf(0, "");
+  g_encodeText = "{\"game_type\":\"echo_combat\"}";
+  set(&object, &document);
+  set(&object, &document);
+  QCHECK(g_publishCalls == 1);
+  QCHECK(CountLines("\"result\":\"no_local_account\"") == 1);
+
+  SetPresenceSendForTest(nullptr);
+  SetPresenceLocal(false);
+  nevr_social_party::Global().SetSelf(0, "");
+  g_encodeText = "{\"game_type\":\"Social_2.0\",\"joinable\":true}";
+}
+
 NEVR_HOOK_RECORD(kTestPresenceHook, PresenceThunk, &OnPresenceHandler);
 
 void TestPresenceThroughThunk() {
@@ -807,6 +876,7 @@ int main() {
   TestPresenceNameTable();
   TestPresenceNamesAnswerOnlyWhenEnabledAndOnlyWhenTheGameFoundNone();
   TestPresenceLocalAnswersWithoutTheGamesFunctions();
+  TestPresenceLocalPublishesTheDocument();
   sentinel::SetLogSink(previous);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "social_install_test: %d check(s) failed\n", quest_test::Failures());

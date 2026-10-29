@@ -858,3 +858,184 @@ fn adb_is_never_given_the_terminal_or_the_callers_stdin() {
     assert!(seen.len() >= 10, "adb devices, the observations, install, push, extract and the read-back: {seen:?}");
     assert!(seen.iter().all(|s| s == "stdin=/dev/null"), "{seen:?}");
 }
+
+// ---- #1285: a game folder an Echo VR Launcher manages is not installed over -------------------------------------------
+
+/// A host as the launcher-era release shipped it: the identity stamp and the CDN agent string inside an MZ blob.
+const LAUNCHER_ERA_HOST: &[u8] = b"MZ\0\0 NEVR-BUILD 5.4.3 bb87761815ca2ac574d60626ccb139d18c3681e5 \0 nevr-runtime/1.0 \0";
+
+/// `<launcher library>/<id>/ready-at-dawn-echo-arena/bin/win10`, holding the launcher-era host and an echovr.exe.
+struct LauncherInstall {
+    library: tempfile::TempDir,
+    data: tempfile::TempDir,
+    game: std::path::PathBuf,
+}
+
+fn launcher_install() -> LauncherInstall {
+    let library = tempfile::tempdir().unwrap();
+    let game = library.path().join("pc-latest").join("ready-at-dawn-echo-arena").join("bin").join("win10");
+    std::fs::create_dir_all(&game).unwrap();
+    std::fs::write(game.join("echovr.exe"), b"exe").unwrap();
+    std::fs::write(game.join("BugSplat64.dll"), LAUNCHER_ERA_HOST).unwrap();
+    LauncherInstall { library, data: tempfile::tempdir().unwrap(), game }
+}
+
+impl LauncherInstall {
+    /// launcher.json as the launcher writes it, listing the install at `root`.
+    fn list(&self, root: &str) {
+        let text = json!({"schema": 3, "library": self.library.path().to_str().unwrap(), "versions": [{"id": "pc-latest", "name": "PC", "root": root, "external": false}]});
+        std::fs::write(self.data.path().join("launcher.json"), serde_json::to_vec_pretty(&text).unwrap()).unwrap();
+    }
+
+    fn listed_root(&self) -> String {
+        self.library.path().join("pc-latest").to_str().unwrap().to_string()
+    }
+
+    fn install(&self, w: &World) -> (i32, Value, String) {
+        run(w, &["pc", "install", "--dir", self.game.to_str().unwrap(), "--launcher-dir", self.data.path().to_str().unwrap()])
+    }
+}
+
+fn tree_of(dir: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                out.push((p.strip_prefix(dir).unwrap().to_string_lossy().into_owned(), std::fs::read(&p).unwrap()));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+fn assert_launcher_refused(w: &World, l: &LauncherInstall, before: &[(String, Vec<u8>)], out: &Value, code: i32) {
+    assert_eq!((code, out["state"].as_str()), (2, Some("needs-user")), "{out}");
+    let why = out["reason"].as_str().unwrap();
+    assert!(why.contains("Echo VR Launcher") && why.contains("5.4.3") && why.contains("through the launcher"), "{why}");
+    assert_eq!(tree_of(&l.game), before, "the launcher's game folder is untouched");
+    assert!(tree_of(w.nevr.path()).is_empty(), "nothing is written to the nevr root");
+    let ev = events(w);
+    assert!(!ev.contains(&"artifact_fetch".to_string()), "no package is downloaded for a refusal: {ev:?}");
+}
+
+#[test]
+fn a_game_folder_the_launcher_lists_is_refused_naming_the_launcher_and_the_version_and_nothing_changes() {
+    let w = world(false);
+    let l = launcher_install();
+    l.list(&l.listed_root());
+    let before = tree_of(&l.game);
+    let (code, out, err) = l.install(&w);
+    assert_launcher_refused(&w, &l, &before, &out, code);
+    assert!(records(&w).iter().any(|r| r["event"] == "plan" && r["decision"] == "needs-user"), "{err}");
+}
+
+#[test]
+fn the_launchers_own_spelling_of_the_folder_still_matches() {
+    let w = world(false);
+    for spelling in ["with a trailing separator", "with a byte order mark", "a root written with backslashes"] {
+        let l = launcher_install();
+        let root = l.listed_root();
+        let listed = if spelling.contains("backslashes") { root.replace('/', "\\") } else { format!("{root}/") };
+        l.list(&listed);
+        if spelling.contains("byte order mark") {
+            let text = std::fs::read(l.data.path().join("launcher.json")).unwrap();
+            std::fs::write(l.data.path().join("launcher.json"), [&b"\xEF\xBB\xBF"[..], &text].concat()).unwrap();
+        }
+        let before = tree_of(&l.game);
+        let (code, out, _) = l.install(&w);
+        assert!(code == 2, "{spelling}: {out}");
+        assert_launcher_refused(&w, &l, &before, &out, code);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_launcher_root_that_is_a_link_to_the_game_folder_matches() {
+    let w = world(false);
+    let l = launcher_install();
+    let alias = l.library.path().join("alias");
+    std::os::unix::fs::symlink(l.library.path().join("pc-latest"), &alias).unwrap();
+    l.list(alias.to_str().unwrap());
+    let before = tree_of(&l.game);
+    let (code, out, _) = l.install(&w);
+    assert_launcher_refused(&w, &l, &before, &out, code);
+}
+
+#[test]
+fn a_launcher_that_lists_another_folder_or_none_does_not_stop_an_install_that_adopts_the_old_host() {
+    let w = world(false);
+    let l = launcher_install();
+    l.list(l.library.path().join("some-other-version").to_str().unwrap());
+    let (code, out, err) = l.install(&w);
+    assert_eq!((code, out["state"].as_str()), (0, Some("installed")), "{out} {err}");
+    assert_eq!(out["plan"]["action"], "Adopt");
+    assert_eq!(std::fs::read(l.game.join("BugSplat64.dll")).unwrap(), HOST);
+    // No launcher.json at all is the same: the launcher is not there.
+    let w2 = world(false);
+    let l2 = launcher_install();
+    let (code, out, err) = l2.install(&w2);
+    assert_eq!((code, out["state"].as_str()), (0, Some("installed")), "{out} {err}");
+}
+
+#[test]
+fn a_launcher_json_that_cannot_be_read_stops_the_run_and_says_so() {
+    let w = world(false);
+    let l = launcher_install();
+    std::fs::write(l.data.path().join("launcher.json"), b"{ not json").unwrap();
+    let before = tree_of(&l.game);
+    let (code, out, _) = l.install(&w);
+    assert_eq!((code, out["state"].as_str()), (2, Some("needs-user")), "{out}");
+    assert!(out["reason"].as_str().unwrap().contains("cannot tell whether a launcher manages"), "{out}");
+    assert_eq!(tree_of(&l.game), before);
+    assert!(tree_of(w.nevr.path()).is_empty());
+}
+
+#[test]
+fn the_record_names_its_owner_and_a_record_owned_by_another_installer_is_refused() {
+    let w = world(false);
+    let dir = w.game.path().to_str().unwrap();
+    let (code, out, err) = run(&w, &["pc", "install", "--dir", dir]);
+    assert_eq!(code, 0, "{out} {err}");
+    let record = w.nevr.path().join("installer").join("nevr-install.txt");
+    let text = std::fs::read_to_string(&record).unwrap();
+    assert!(text.lines().any(|l| l == "owner=nevr-install"), "{text}");
+    std::fs::write(&record, text.replace("owner=nevr-install", "owner=launcher")).unwrap();
+    let before = tree_of(w.game.path());
+    let (code, out, _) = run(&w, &["pc", "install", "--dir", dir, "--version", "1.0.0"]);
+    assert_eq!((code, out["state"].as_str()), (2, Some("needs-user")), "{out}");
+    let why = out["reason"].as_str().unwrap();
+    assert!(why.contains("owned by launcher") && why.contains("its own installer"), "{why}");
+    assert_eq!(tree_of(w.game.path()), before);
+}
+
+#[test]
+fn the_2017_builds_win7_folder_is_matched_too() {
+    let w = world(false);
+    let l = launcher_install();
+    let win7 = l.library.path().join("pc-latest").join("ready-at-dawn-echo-arena").join("bin").join("win7");
+    std::fs::create_dir_all(&win7).unwrap();
+    std::fs::write(win7.join("echovr.exe"), b"exe").unwrap();
+    std::fs::write(win7.join("BugSplat64.dll"), LAUNCHER_ERA_HOST).unwrap();
+    l.list(&l.listed_root());
+    let before = tree_of(&win7);
+    let (code, out, _) = run(&w, &["pc", "install", "--dir", win7.to_str().unwrap(), "--launcher-dir", l.data.path().to_str().unwrap()]);
+    assert_eq!((code, out["state"].as_str()), (2, Some("needs-user")), "{out}");
+    assert_eq!(tree_of(&win7), before);
+}
+
+#[test]
+fn a_launcher_json_that_is_there_but_unreadable_is_not_taken_for_no_launcher() {
+    let w = world(false);
+    let l = launcher_install();
+    std::fs::create_dir(l.data.path().join("launcher.json")).unwrap(); // reading it fails with something other than NotFound
+    let before = tree_of(&l.game);
+    let (code, out, _) = l.install(&w);
+    assert_eq!((code, out["state"].as_str()), (2, Some("needs-user")), "{out}");
+    assert!(out["reason"].as_str().unwrap().contains("cannot tell whether a launcher manages"), "{out}");
+    assert_eq!(tree_of(&l.game), before);
+}

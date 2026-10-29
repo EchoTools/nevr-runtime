@@ -6,7 +6,7 @@
 // One `plugin_load` record ends every plan entry, whatever its outcome (loaded, refused, disabled, not_started, failed). The
 // loader never throws and never ends the process: `required` on a client is recorded and the game goes on.
 //
-// What a plugin sees is the existing C ABI (extension/plugin_interface.h): the same NvrGameContext as on PC, with
+// What a plugin sees is the existing C ABI (nevr/plugin_interface.h): the same NvrGameContext as on PC, with
 // base_addr the libr15 load base, net_game null, game_state 0, flags IS_CLIENT | PLATFORM_QUEST, the level fields empty (no
 // Quest source for the game object exists before the host tick, ADR 0019 slice 4), and game_build_id the plugin identity
 // (plugin_identity.h: the stock libr15 ID when the running libr15 is our verified patched file, else the live note, ADR
@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-#include "extension/plugin_interface.h"
+#include "nevr/plugin_interface.h"
 #include "quest/plugin/plugin_identity.h"
 #include "quest/plugin/plugin_image.h"
 #include "quest/plugin/plugin_plan.h"

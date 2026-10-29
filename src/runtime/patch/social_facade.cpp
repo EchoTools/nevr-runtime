@@ -11,8 +11,9 @@
 
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
-#include "nevr_common.h"
+#include "nevr/pc/nevr_common.h"
 #include "runtime/hook/patching.h"
+#include "runtime/lifecycle/cli.h"  // g_isServer
 #include "runtime/lifecycle/config.h"
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/patch/party_invite_gate.h"
@@ -106,7 +107,7 @@ void* AccessorHook(void* provider) {
   char providerName[512] = "<unresolved>";
   if (provider != nullptr && g_providerName != nullptr) g_providerName(provider, providerName);
   providerName[sizeof(providerName) - 1] = '\0';
-  const bool enabled = NevrCfgSocialFacadeEnabled();
+  const bool enabled = Wanted(NevrCfgSocialFacadeEnabled(), g_isServer != FALSE);
   void* returned = Select(enabled, result);
   if (enabled && returned != result) {
     EnsureJsonHooksInstalled(returned);

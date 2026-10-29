@@ -30,7 +30,7 @@ import subprocess
 import sys
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-ROOTS = ("src/", "plugins/", "tools/", "docs/", "extern/", "gen/", "tests/", "cmake/")
+ROOTS = ("src/", "sdk/", "tools/", "docs/", "extern/", "gen/", "tests/", "cmake/")
 
 # Paths that are deliberately referenced but shall not exist on disk.
 ALLOWED_ABSENT = {

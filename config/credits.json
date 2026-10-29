@@ -18,10 +18,9 @@
       "section": "projects",
       "headings": ["code-contributions"],
       "link": "https://github.com/Xenomega",
-      "what": "[EchoRelay](https://github.com/Xenomega/EchoRelay), a reimplementation of Echo VR's web services and dedicated game servers. The frozen v1 game server code in `src/legacy/` was written for its ServerDB, and the legacy message translation in `docs/reference/legacy-translator.md` is read from its documentation.",
+      "what": "[EchoRelay](https://github.com/Xenomega/EchoRelay), a reimplementation of Echo VR's web services and dedicated game servers. The legacy message translation in `docs/reference/legacy-translator.md` is read from its documentation.",
       "sources": [
         "https://github.com/Xenomega/EchoRelay",
-        "src/legacy/gameserver/gameserver.h",
         "docs/reference/legacy-translator.md"
       ]
     },

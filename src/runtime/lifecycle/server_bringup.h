@@ -12,7 +12,7 @@
 #include <cstdint>
 
 #include "abi/echovr.h"
-#include "nevr_common.h"  // N97: the one ValidatePrologue
+#include "nevr/pc/nevr_common.h"  // N97: the one ValidatePrologue
 
 namespace nevr_server_bringup {
 

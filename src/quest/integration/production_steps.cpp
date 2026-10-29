@@ -516,6 +516,12 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
+  bool InstallRenderConfig(const nevr_quest::TextureChoice& choice) override {
+    const bool ok = nevr_quest::integration::InstallRenderConfigHook(choice.level, choice.source == nevr_quest::Source::kFile);
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
   bool InstallCreditsText() override {
     // A data store into the patched libr15's credits slot (ADR 0021 section 8). The install logs its own `credits_text` line,
     // with the reason when it refuses (libr15_not_patched on the stock file, not_verified, a block the build did not render).

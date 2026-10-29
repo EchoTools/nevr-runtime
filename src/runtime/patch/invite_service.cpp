@@ -1,5 +1,6 @@
 #include "runtime/patch/invite_service.h"
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -16,6 +17,7 @@ std::unique_ptr<nevr_invite::Worker> g_worker;
 std::function<void(nevr_invite::LogLevel, const std::string&)> g_log;
 bool g_started = false;
 bool g_shutdown = false;  // Shutdown ran and no Start since
+std::atomic<bool> g_active{false};  // on and not shut down; read without the lock by the per-frame applier
 
 void Say(nevr_invite::LogLevel level, const std::string& line) {
   if (g_log) g_log(level, line);
@@ -67,12 +69,15 @@ void Start(Settings settings) {
           std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
     };
     parts.configured = true;
+    g_active.store(true, std::memory_order_release);
     Say(nevr_invite::LogLevel::Info, "[NEVR.INVITE] service on");
   } else if (off[0] != '\0') {
     Say(offLevel, std::string("[NEVR.INVITE] feature off reason=") + off);
   }
   g_worker = std::make_unique<nevr_invite::Worker>(std::move(parts));
 }
+
+bool Active() { return g_active.load(std::memory_order_acquire); }
 
 nevr_invite::Submit Submit(const nevr_invite::Plan& plan) {
   std::lock_guard<std::mutex> lock(g_m);
@@ -103,6 +108,7 @@ void Shutdown() {
   std::unique_ptr<nevr_invite::CurlTransport> transport;
   {
     std::lock_guard<std::mutex> lock(g_m);
+    g_active.store(false, std::memory_order_release);
     if (g_transport) g_transport->Abort();  // a request in flight returns at once instead of waiting out its timeout
     worker = std::move(g_worker);
     transport = std::move(g_transport);

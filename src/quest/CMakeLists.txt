@@ -36,6 +36,10 @@ message(STATUS "nevr_quest: ABI=${ANDROID_ABI} platform=${ANDROID_PLATFORM} STL=
 # (cmake/libr15_extra_rows.cmake). The file is supplied by whoever builds the variant; it is never committed.
 set(NEVR_LIBR15_EXTRA_ROWS "" CACHE FILEPATH "Word-patch rows for a variant build (empty: the public build)")
 
+# The plugin SDK (sdk/CMakeLists.txt): nevr::plugin_sdk, the plugin C ABI and the CSymbol64 hash. The Quest loader and
+# its plugins build against the target a plugin outside this repository links.
+add_subdirectory("${NEVR_REPO_ROOT}/sdk" "${CMAKE_BINARY_DIR}/nevr_plugin_sdk")
+
 # ── Toolchain probe ─────────────────────────────────────────────────────
 # Trivial .so that compiles + links green, proving the NDK path works before
 # any breakpad/sentinel code is involved (task #1 acceptance).
@@ -54,6 +58,7 @@ target_link_libraries(nevr_quest_login_profile PRIVATE nlohmann_json::nlohmann_j
 add_library(nevr_quest_evr_codec STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/evr_codec.cpp")
 target_include_directories(nevr_quest_evr_codec PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(nevr_quest_evr_codec PUBLIC nevr::plugin_sdk)
 target_compile_options(nevr_quest_evr_codec PRIVATE -Wall -Wextra -Werror)
 
 # The self-check unit (runtime/compat/self_check.cpp): the registry and the remote log frame a run-card check's

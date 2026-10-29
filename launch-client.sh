@@ -13,7 +13,8 @@ GAME_ROOT=$(resolve_game_root) || exit $?
 # --dll PATH deploys that BugSplat64.dll instead of the release build (the scenario runner passes
 # the mingw-scenario build; see tools/scenario/run_scenario.py). The runtime is the nevr-runtime.dll beside it,
 # or --runtime-dll PATH: the host loads it from the game's own directory, so a run deploys both. --config PATH starts the game with
-# `-config PATH` (a JSON file; the runtime reads config.yaml from the same directory), so a run can
+# `-config PATH` (the game's JSON file) and, when a config.yaml sits in the same directory, `-config-file` naming
+# it (the runtime reads config.yaml only from the file `-config-file` names, else from the nevr root), so a run can
 # use its own config without touching the game directory. --require-in-game fails the run unless the
 # client also reaches "in game" (multiplayer entry), not just "logged in" -- the scenario runner
 # passes it with `--game-arg -mp`. --exit-after-login stops the game itself:
@@ -25,10 +26,11 @@ RUNTIME_DLL=""
 CONFIG=""
 TRACE_EXPORTS=""
 EXTRA_GAME_ARGS=()
+PLUGINS=()
 REQUIRE_IN_GAME=0
 EXIT_AFTER_LOGIN=0
 LOGIN_TIMEOUT=120
-USAGE="launch-client.sh [--dll PATH] [--runtime-dll PATH] [--config PATH] [--trace-exports LIST] [--game-arg ARG]... [--require-in-game] [--exit-after-login [--login-timeout SECONDS]] [--print-game-root]"
+USAGE="launch-client.sh [--dll PATH] [--runtime-dll PATH] [--config PATH] [--trace-exports LIST] [--game-arg ARG]... [--plugin PATH]... [--require-in-game] [--exit-after-login [--login-timeout SECONDS]] [--print-game-root]"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dll) DLL="${2:?--dll needs a path}"; shift 2 ;;
@@ -36,6 +38,7 @@ while [[ $# -gt 0 ]]; do
     --config) CONFIG="${2:?--config needs a path}"; shift 2 ;;
     --trace-exports) TRACE_EXPORTS="${2:?--trace-exports needs a list (pnsrad, pnsovr, pnsdemo, all; comma separated)}"; shift 2 ;;
     --game-arg) EXTRA_GAME_ARGS+=("${2:?--game-arg needs one game argument}"); shift 2 ;;
+    --plugin) PLUGINS+=("${2:?--plugin needs a path}"); shift 2 ;;
     --require-in-game) REQUIRE_IN_GAME=1; shift ;;
     --exit-after-login) EXIT_AFTER_LOGIN=1; shift ;;
     --login-timeout) LOGIN_TIMEOUT="${2:?--login-timeout needs seconds}"; shift 2 ;;
@@ -46,6 +49,9 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -f "$DLL" ]] || { echo "ERROR: $DLL does not exist; build it first" >&2; exit 2; }
 [[ -n "$RUNTIME_DLL" ]] || RUNTIME_DLL="$(dirname "$DLL")/nevr-runtime.dll"
+for plugin in "${PLUGINS[@]}"; do
+  [[ -f "$plugin" ]] || { echo "ERROR: --plugin $plugin does not exist" >&2; exit 2; }
+done
 [[ -f "$RUNTIME_DLL" ]] || { echo "ERROR: $RUNTIME_DLL does not exist; the host loads it from the game directory, build it first" >&2; exit 2; }
 # 45 s is the minimum patience from process start (AGENTS.md "Startup Timing"): the splash alone is 15-20 s.
 # NEVR_LOGIN_MIN_SECONDS lowers it for the script's own tests only.
@@ -74,17 +80,19 @@ export DISPLAY=:101
 export WINEPREFIX
 
 # Pristine state. A run is only meaningful against known files, so any drift aborts
-# before anything is deployed. The runtime reads config.yaml and ignores config.json;
-# with neither present it must start on its built-in defaults.
+# before anything is deployed. The runtime reads config.yaml (from the nevr root unless -config-file names one) and
+# ignores config.json; with no config.yaml in the root and none in _local it must start on its built-in defaults.
 drift=0
-for f in "$LOCAL_DIR/config.json" "$LOCAL_DIR/config.yaml"; do
+for f in "$LOCAL_DIR/config.json" "$LOCAL_DIR/config.yaml" "$NEVR_ROOT_DIR/config.yaml"; do
   if [[ -e "$f" || -L "$f" ]]; then echo "DRIFT: $f exists (expected absent)" >&2; drift=1; fi
 done
 shopt -s nullglob
-plugin_files=("$GAME_DIR"/plugins/*)
+# Plugins load from the nevr root's plugins\ (ADR 0012). The game folder's plugins\ is not read, but a file in it
+# would be moved into the root by the runtime's one-time move, so it counts as drift too.
+plugin_files=("$GAME_DIR"/plugins/* "$NEVR_ROOT_DIR"/plugins/*)
 shopt -u nullglob
 if [[ ${#plugin_files[@]} -ne 0 ]]; then
-  echo "DRIFT: $GAME_DIR/plugins is not empty: ${plugin_files[*]}" >&2; drift=1
+  echo "DRIFT: a plugins folder is not empty (expected empty: $GAME_DIR/plugins, $NEVR_ROOT_DIR/plugins): ${plugin_files[*]}" >&2; drift=1
 fi
 # The host loads nevr-runtime.dll from the nevr root, never from the game install (ADR 0012). One in either place
 # is a leftover of another run (or a file the host would never load), which the restore step below would delete
@@ -117,6 +125,7 @@ restore() {
   trap - EXIT
   cp -p "$SCRATCH/BugSplat64.dll.orig" "$GAME_DIR/BugSplat64.dll"
   rm -f "$NEVR_ROOT_DIR/nevr-runtime.dll"
+  for plugin in "${PLUGINS[@]}"; do rm -f "$NEVR_ROOT_DIR/plugins/$(basename "$plugin")"; done
   if cmp -s "$SCRATCH/BugSplat64.dll.orig" "$GAME_DIR/BugSplat64.dll" && [[ ! -e "$NEVR_ROOT_DIR/nevr-runtime.dll" ]]; then
     echo "=== original BugSplat64.dll restored and verified, nevr-runtime.dll removed from the nevr root ==="
   else
@@ -137,6 +146,12 @@ cp -v "$RUNTIME_DLL" "$NEVR_ROOT_DIR/nevr-runtime.dll"
 cmp -s "$RUNTIME_DLL" "$NEVR_ROOT_DIR/nevr-runtime.dll"
 cp -v "$DLL" "$GAME_DIR/BugSplat64.dll"
 cmp -s "$DLL" "$GAME_DIR/BugSplat64.dll"
+# --plugin files go into the nevr root's plugins folder, where the runtime loads plugins from (ADR 0012); the restore removes them.
+for plugin in "${PLUGINS[@]}"; do
+  mkdir -p "$NEVR_ROOT_DIR/plugins"
+  cp -v "$plugin" "$NEVR_ROOT_DIR/plugins/"
+  cmp -s "$plugin" "$NEVR_ROOT_DIR/plugins/$(basename "$plugin")"
+done
 sha256sum "$GAME_DIR/BugSplat64.dll" "$NEVR_ROOT_DIR/nevr-runtime.dll"
 
 echo "=== Starting echovr.exe -windowed (DISPLAY=$DISPLAY, WAYLAND_DISPLAY unset) ==="
@@ -166,7 +181,13 @@ fi
 if [[ -n "$CONFIG" ]]; then
   [[ -f "$CONFIG" ]] || { echo "ERROR: --config $CONFIG does not exist" >&2; exit 2; }
   game_args+=(-config "Z:${CONFIG//\//\\}")
-  echo "=== game config: $CONFIG (config.yaml from its directory) ==="
+  CONFIG_YAML="$(dirname "$CONFIG")/config.yaml"
+  if [[ -f "$CONFIG_YAML" ]]; then
+    game_args+=(-config-file "Z:${CONFIG_YAML//\//\\}")
+    echo "=== game config: $CONFIG, config.yaml: $CONFIG_YAML (-config-file) ==="
+  else
+    echo "=== game config: $CONFIG (no config.yaml beside it: the run reads the nevr root's, else the built-in defaults) ==="
+  fi
 fi
 if [[ -n "$TRACE_EXPORTS" ]]; then
   [[ "$TRACE_EXPORTS" =~ ^[A-Za-z,.]+$ ]] || { echo "ERROR: --trace-exports takes a comma separated list of pnsrad, pnsovr, pnsdemo, all" >&2; exit 2; }
