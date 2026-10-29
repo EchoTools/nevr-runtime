@@ -138,6 +138,16 @@ class Fake:
         return [c["step"] for c in self.calls]
 
 
+def bonk_calls(fake: Fake) -> list[list[str]]:
+    """Every command whose program is `bonk`, whatever step it was mapped to: the owner is never bonked (#1410)."""
+    return [c["argv"] for c in fake.calls if c["argv"][0] == "bonk"]
+
+
+def couriers(fake: Fake, to: str) -> list[list[str]]:
+    """The `courier send --to <to>` commands the run made, in order."""
+    return [c["argv"] for c in fake.calls if c["step"] == "courier" and c["argv"][:4] == ["courier", "send", "--to", to]]
+
+
 class TimerCase(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -275,8 +285,9 @@ class ConfigureBeforeTheBuild(TimerCase):
         fake = Fake(self.root)
         self.assertEqual(self.run_timer(fake), 0)
         self.assertIn("skipped_after_failures", self.names())
-        bonk = next(c["argv"] for c in fake.calls if c["step"] == "bonk")
-        self.assertIn("configure", bonk[-1])
+        self.assertEqual(bonk_calls(fake), [])
+        [spritz] = couriers(fake, "spritz")
+        self.assertIn("configure", spritz[-1])
         self.assertNotIn("build_apk", fake.steps())
 
     def test_a_failing_configure_stops_before_the_build_and_names_itself(self) -> None:
@@ -562,37 +573,39 @@ class GameDataSurvives(TimerCase):
 
 
 class NotifiesOnPublish(TimerCase):
-    def test_a_live_publish_bonks_sprockee_and_couriers_teth_before_it_is_done(self) -> None:
+    def test_a_live_publish_couriers_teth_and_spritz_before_it_is_done_and_never_bonks(self) -> None:
         fake = Fake(self.root)
         self.assertEqual(self.run_timer(fake), 0)
+        self.assertEqual(bonk_calls(fake), [], "the owner is never bonked for a publish (#1410)")
         steps = fake.steps()
-        self.assertLess(steps.index("verify"), steps.index("bonk"))
-        bonk = next(c["argv"] for c in fake.calls if c["step"] == "bonk")
-        self.assertEqual(bonk[:3], ["bonk", "--from", "quest-release-timer"])
-        self.assertIn(TAG, bonk[-1])
-        courier = next(c["argv"] for c in fake.calls if c["step"] == "courier")
-        self.assertEqual(courier[:6], ["courier", "send", "--to", "teth", "--from", "quest-release-timer"])
-        self.assertIn(TAG, courier[-1])
+        self.assertLess(max(i for i, s in enumerate(steps) if s == "verify"), steps.index("courier"))
+        [teth] = couriers(fake, "teth")
+        [spritz] = couriers(fake, "spritz")
+        self.assertEqual(teth[:6], ["courier", "send", "--to", "teth", "--from", "quest-release-timer"])
+        self.assertEqual(spritz[:6], ["courier", "send", "--to", "spritz", "--from", "quest-release-timer"])
+        self.assertIn(TAG, teth[-1])
+        self.assertIn(TAG, spritz[-1])
+        self.assertEqual(spritz[-1], teth[-1], "Spritz gets the same text Teth does")
+        self.assertTrue(spritz[-1].endswith(f". Log: {self.log}"))
         for secret in [*SECRETS.values(), TOKEN]:
-            self.assertNotIn(secret, " ".join(bonk + courier))
+            self.assertNotIn(secret, " ".join(teth + spritz))
         self.assertEqual(self.names()[-1], "done")
 
     def test_a_notice_that_fails_is_a_failure_and_the_tag_is_not_done(self) -> None:
-        for step in ("bonk", "courier"):
-            with self.subTest(step=step):
-                self.log.unlink(missing_ok=True)
-                fake = Fake(self.root, fail=step)
-                self.assertEqual(self.run_timer(fake), 1)
-                self.assertEqual(next(e for e in self.events() if e["event"] == "failed")["step"], "notify")
-                self.assertNotIn("done", self.names())
+        fake = Fake(self.root, fail="courier")
+        self.assertEqual(self.run_timer(fake), 1)
+        self.assertEqual(next(e for e in self.events() if e["event"] == "failed")["step"], "notify")
+        self.assertNotIn("done", self.names())
+        self.assertEqual(bonk_calls(fake), [])
 
     def test_a_live_tag_whose_notice_was_never_sent_is_noticed_on_the_next_run(self) -> None:
         self.write_log({"event": "step_ok", "tag": TAG, "step": "verify_live"})
         fake = Fake(self.root)
         fake.beta = TAG[1:]
         self.assertEqual(self.run_timer(fake), 0)
-        self.assertIn("bonk", fake.steps())
-        self.assertIn("courier", fake.steps())
+        self.assertEqual(bonk_calls(fake), [])
+        self.assertEqual(len(couriers(fake, "teth")), 1)
+        self.assertEqual(len(couriers(fake, "spritz")), 1)
         self.assertNotIn("worktree.add", fake.steps())
         self.assertEqual(self.names()[-1], "done")
 
@@ -612,16 +625,17 @@ class NotifiesOnPublish(TimerCase):
 
 
 class FinalFailureIsNotSilent(TimerCase):
-    def test_the_third_failure_skip_bonks_and_couriers_before_it_exits_0(self) -> None:
+    def test_the_third_failure_skip_couriers_spritz_once_and_never_bonks_before_it_exits_0(self) -> None:
         self.write_log(*({"event": "failed", "tag": TAG, "step": "build_apk", "error": "x"} for _ in range(3)))
         fake = Fake(self.root)
         self.assertEqual(self.run_timer(fake), 0)
         self.assertIn("skipped_after_failures", self.names())
-        bonk = next(c["argv"] for c in fake.calls if c["step"] == "bonk")
-        self.assertIn(TAG, bonk[-1])
-        courier = next(c["argv"] for c in fake.calls if c["step"] == "courier")
+        self.assertEqual(bonk_calls(fake), [], "the third failure is couriered to Spritz, never bonked (#1410)")
+        [courier] = couriers(fake, "spritz")
         self.assertEqual(courier[:6], ["courier", "send", "--to", "spritz", "--from", "quest-release-timer"])
+        self.assertIn(TAG, courier[-1])
         self.assertIn("build_apk", courier[-1])
+        self.assertEqual(couriers(fake, "teth"), [])
         self.assertLess(self.names().index("skip_notified"), self.names().index("skipped_after_failures"))
 
     def test_the_skip_is_announced_once_not_every_run(self) -> None:
@@ -691,9 +705,10 @@ class RefusalIsNotAFailure(TimerCase):
         fake = Fake(self.root)
         self.assertEqual(self.run_timer(fake), 0)
         self.assertIn("skipped_after_failures", self.names())
-        bonk = next(c["argv"] for c in fake.calls if c["step"] == "bonk")
-        self.assertIn("gave up", bonk[-1])
-        self.assertIn("build_apk", bonk[-1])
+        self.assertEqual(bonk_calls(fake), [])
+        [spritz] = couriers(fake, "spritz")
+        self.assertIn("gave up", spritz[-1])
+        self.assertIn("build_apk", spritz[-1])
 
     def test_refusals_between_real_failures_do_not_hide_the_third_failure(self) -> None:
         self.write_log({"event": "failed", "tag": TAG, "step": "build_apk", "error": "x"},

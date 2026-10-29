@@ -16,12 +16,12 @@ The train (release-train.yml) publishes the GitHub release; this tool sees the n
   dispatch, watch  the beta manifest publish, live, in the release-signer repository
   check_jobs       the jobs that publish all succeeded (a green run with a skipped job is a failure)
   verify_live      `verify-manifest --live` lists the tag on beta, and the manifest it verified lists the carried game data
-  notify           bonk the owner and courier Teth to verify the live publish
+  notify           courier Teth to verify the live publish, and Spritz (the owner is never bonked, #1410)
   cleanup          the worktree and the signer snapshot, by exact path
 
 Every step appends a JSON line to $XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl; a log that cannot be written is
-a failure. A failed step exits 1 and names itself. A tag that has failed three times is not retried, and says so once (bonk and
-courier) before the run exits 0. The R2 credential goes only to publish_apk, and the GitHub token only to publish_apk and
+a failure. A failed step exits 1 and names itself. A tag that has failed three times is not retried, and says so once (a
+courier to Spritz) before the run exits 0. The R2 credential goes only to publish_apk, and the GitHub token only to publish_apk and
 the dispatch: every other command gets an environment without them. The environment is
 the R2 credential (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY) and RELEASE_PUBLIC_BASE; a missing one
 is a refusal that names it. No value is printed or logged: every value read from the environment, and the GitHub token, is
@@ -186,12 +186,11 @@ class Timer:
         self.ok(step, head=head)
 
     def notify_published(self, tag: str) -> None:
-        """A live publish bonks the owner and asks Teth to verify it (the standing word for a live publish)."""
+        """A live publish couriers Teth to verify it and Spritz the same text. The owner is never bonked for it (#1410)."""
         step = "notify"
         text = f"{tag} is live on the beta manifest (built and published by the Quest release timer); verify it through the installer"
-        self.cmd(step, ["bonk", "--from", SENDER, text])
-        self.cmd(step, ["courier", "send", "--to", "teth", "--from", SENDER, "--msg",
-                        f"{text}. Log: {self.log.path}"])
+        self.cmd(step, ["courier", "send", "--to", "teth", "--from", SENDER, "--msg", f"{text}. Log: {self.log.path}"])
+        self.cmd(step, ["courier", "send", "--to", "spritz", "--from", SENDER, "--msg", f"{text}. Log: {self.log.path}"])
         self.ok(step)
 
     def build_signer(self, signer_dir: pathlib.Path, tarball: pathlib.Path) -> pathlib.Path:
@@ -227,11 +226,10 @@ class Timer:
         self.ok("check_jobs", run=run_id)
 
     def notify_skip(self, tag: str, last: dict) -> None:
-        """The third failure ends the retries: the owner hears it once, before the run exits 0."""
+        """The third failure ends the retries: Spritz hears it once by courier, before the run exits 0 (never a bonk, #1410)."""
         step = "notify"
         text = (f"quest release timer gave up on {tag} after {MAX_FAILURES} failures; last: step "
                 f"{last.get('step', 'unknown')}: {str(last.get('error', ''))[:200]}")
-        self.cmd(step, ["bonk", "--from", SENDER, text])
         self.cmd(step, ["courier", "send", "--to", "spritz", "--from", SENDER, "--msg", f"{text}. Log: {self.log.path}"])
 
     def notice_owed(self, tag: str) -> bool:
