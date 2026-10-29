@@ -249,11 +249,13 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   `0x11fb5cc`). So the Update hook runs up to four times per loop iteration. That the login-failure callbacks run inside those provider and
   broadcaster updates is inferred from the call chain, not traced instruction by instruction; the
   hooks' writer flag does not rely on it.
-- No hook logs or takes a lock. Their sixteen counters are `login_prompt_text_shown`,
-  `_text_refreshed`, `_text_kept`, `_text_not_local`, `_board_busy`, `_block_not_ours`, the three
-  thunks' fault counters, `_error_page_dropped`, `_logging_in_page_dropped`, `_page_passed_armed`,
-  `_error_resent`, `_error_resend_unavailable`, `_login_restarted` and `_login_restart_unavailable`; installing logs one `login_prompt_install` line (or `skipped` when the
-  counters were refused).
+- No hook takes a lock. It logs only at a decision or a change (`login_prompt_select`,
+  `login_prompt_fallback`, `login_prompt_netgame_state`) and at the page-enter line, which is
+  rate-limited. Its seventeen counters are `login_prompt_text_shown`, `_text_refreshed`, `_text_kept`,
+  `_text_not_local`, `_board_busy`, `_block_not_ours`, the three thunks' fault counters,
+  `_error_page_dropped`, `_logging_in_page_dropped`, `_page_passed_armed`, `_error_resent`,
+  `_error_resend_unavailable`, `_login_restarted`, `_login_restart_unavailable` and `_select_sent`;
+  installing logs one `login_prompt_install` line (or `skipped` when the counters were refused).
 - The title over the text. The login-failed page is titled `LOGIN FAILED` by a literal in the page's script library
   (`lib7f2363b8976491aa.so`, no build ID, no SONAME): one script node (`execute_node_cfa11df1`, ReVault `0x10d0e8`)
   builds `string_t("LOGIN FAILED")` and passes it to `EXTERNALFUNCTIONNODE::setparam`. The prompt board carries a title

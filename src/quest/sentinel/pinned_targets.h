@@ -514,18 +514,21 @@ using BeginLogInSig = void(CR15NetGameOpaque* self);
 // NRadEngine::CncaGameSpace::SendComponentEvent(CSymbol64 event, SActor actor, CSymbol64 key, uint flag), defined
 // in libr15 at 0x17fb0f8 (`this` = the game space in x0, event in x1, actor in x2, key in x3, flag in w4; no
 // return value; ReVault lists it at 0x18fb0f8, its addresses for this module being 0x100000 above the loaded
-// ones). QuitOnError calls it as (space, 0x60ba106e8f93f286, 0xffffffffffff, ~0, 1). The RETRY button of the
-// login-failed page sends the graph event 0x8f0094c7bb02681c with the key 0x34f99a282ce78d72 (the third handler
-// of script graph 7f2363b8976491aa's event_handler, which forks the BeginLogin and screen-tint timeline); the
-// login prompt hook sends the same event once it has called BeginLogIn, so the page script that would run for
-// the player's select runs (#672). Reached like QuitOnError: build ID, first four instructions, base + address.
+// ones). QuitOnError calls it as (space, 0x60ba106e8f93f286, 0xffffffffffff, ~0, 1). The login prompt hook sends
+// evt_btn_clicked (kRetrySelectEvent) with the key of the login-failed page's btn_exit branch (kLoginPageExitKey) and
+// the actor kAllActors, once it has called BeginLogIn. That key is not RETRY's (issue #1391, follow-up RE: the
+// branch's thread body is empty). Whether the send reaches the page script is not established (#1391). Reached like
+// QuitOnError: build ID, first four instructions, base + address.
 // sub sp, sp, #0x40; mov x8, #-1; stp x8, x30, [sp, #0x28]; ldr x8, [x0, #0x58].
 inline constexpr std::uint64_t kSendComponentEventVaddr = 0x17fb0f8;
 inline constexpr std::uint32_t kSendComponentEventCode[4] = {0xd10103ff, 0x92800008, 0xa902fbe8, 0xf9402c08};
 using SendComponentEventSig = void(void* space, std::uint64_t event, std::uint64_t actor, std::uint64_t key,
                                    std::uint32_t flag);
+// evt_btn_clicked: the event the login-failed page's script handler accepts (issue #1391, follow-up RE).
 inline constexpr std::uint64_t kRetrySelectEvent = 0x8f0094c7bb02681cULL;
-inline constexpr std::uint64_t kRetrySelectKey = 0x34f99a282ce78d72ULL;
+// CSymbol64("btn_exit"): the key of the login-failed page's btn_exit branch, not RETRY's. Its handler starts a thread
+// whose body returns at once (issue #1391, follow-up RE).
+inline constexpr std::uint64_t kLoginPageExitKey = 0x34f99a282ce78d72ULL;
 inline constexpr std::uint64_t kAllActors = 0xffffffffffffULL;  // as QuitOnError passes it
 
 // CR15NetGame fields the login-prompt hook reads and writes, measured on the pinned libr15:
