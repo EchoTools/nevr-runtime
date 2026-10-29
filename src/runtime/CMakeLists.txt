@@ -88,6 +88,9 @@ set(PATCHES_SOURCES
     "patch/invite_wizard_hook.cpp"
     "patch/invite_transport_curl.cpp"
     "patch/invite_service.cpp"
+    # #1139, docs/adr/0022: the render configuration as one log line (pure model, and the two observer hooks).
+    "patch/render_config.cpp"
+    "patch/render_config_hook.cpp"
     "patch/early_quit_lockout.cpp"
     "patch/arena_public_clock.cpp"
     "patch/lobby_full_backoff.cpp"
@@ -157,6 +160,8 @@ set(PATCHES_HEADERS
     "patch/coop_ai_trace_rules.h"
     "patch/arena_public_clock.h"
     "patch/arena_public_clock_rules.h"
+    "patch/render_config.h"
+    "patch/render_config_hook.h"
     "lifecycle/crash_recovery.h"
     "lifecycle/return_to_lobby.h"
     "lifecycle/return_to_lobby_hold.h"
@@ -917,6 +922,25 @@ if(BUILD_TESTING)
     target_include_directories(test_arena_public_clock_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_arena_public_clock_hook PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_arena_public_clock_hook DISCOVERY_MODE PRE_TEST)
+
+    # #1139: the render_config model against a fake game image (patch/render_config.h; no Windows call).
+    add_executable(test_render_config tests/test_render_config.cpp patch/render_config.cpp)
+    set_source_files_properties(tests/test_render_config.cpp patch/render_config.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_render_config PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_render_config PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_render_config DISCOVERY_MODE PRE_TEST)
+
+    # #1139: the two observer hooks and Poll under MinHook, against a fake image with the real prologues at their RVAs.
+    add_executable(test_render_config_hook tests/test_render_config_hook.cpp patch/render_config.cpp
+      patch/render_config_hook.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_render_config_hook.cpp patch/render_config.cpp
+      patch/render_config_hook.cpp hook/hook_guard.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_render_config_hook PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS
+      NEVR_RENDER_CONFIG_TESTING)
+    target_include_directories(test_render_config_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_render_config_hook PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_render_config_hook DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_callback_unregistration
       tests/test_callback_unregistration.cpp

@@ -7,6 +7,7 @@
 #include "quest/sentinel/got_hook.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/pinned_targets.h"
+#include "quest/sentinel/render_config_share.h"
 #include "quest/sentinel/sysprop_int_share.h"
 
 #include <sys/utsname.h>
@@ -73,6 +74,9 @@ bool g_ran[kHookCount];
 // observes through sentinel/sysprop_int_share.h instead of installing a second hook GotHook would refuse.
 constexpr std::size_t kSysPropIntIndex = 7;
 bool g_sysPropIntShared = false;
+// Four more slots (indices 8, 12, 13 and 14) belong to the render-configuration log when it installed first
+// (sentinel/render_config_share.h): the dump installs nothing on them and reports them owned_by_render_config.
+bool g_ownedByRenderConfig[kHookCount];
 
 // The JUMP_SLOTs in the pinned libr15 (`llvm-readelf -rW libr15.so`, build b243509c...).
 struct Slot {
@@ -122,6 +126,15 @@ bool ShareSysPropInt() noexcept {
   return true;
 }
 
+// True when the render-configuration log owns slot `i`, and the dump therefore leaves it alone.
+bool LeaveToRenderConfig(std::size_t i, sentinel::RenderConfigSlot slot) noexcept {
+  g_ownedByRenderConfig[i] = sentinel::RenderConfigSlotOwned(slot);
+  if (!g_ownedByRenderConfig[i]) return false;
+  g_installed[i] = true;
+  g_ran[i] = true;
+  return true;
+}
+
 }  // namespace
 
 std::size_t InstallHooks() noexcept {
@@ -133,13 +146,13 @@ std::size_t InstallHooks() noexcept {
   InstallOne<ConfigCountryThunk>(5, kConfigCountryHook);
   InstallOne<VrapiInitializeThunk>(6, kVrapiInitializeHook);
   if (!ShareSysPropInt()) InstallOne<SysPropIntThunk>(kSysPropIntIndex, kSysPropIntHook);
-  InstallOne<SysPropFloatThunk>(8, kSysPropFloatHook);
+  if (!LeaveToRenderConfig(8, sentinel::RenderConfigSlot::kGetSystemPropertyFloat)) InstallOne<SysPropFloatThunk>(8, kSysPropFloatHook);
   InstallOne<SysPropFloatArrayThunk>(9, kSysPropFloatArrayHook);
   InstallOne<SysStatusIntThunk>(10, kSysStatusIntHook);
   InstallOne<PropIntThunk>(11, kPropIntHook);
-  InstallOne<SetPropIntThunk>(12, kSetPropIntHook);
-  InstallOne<SetRefreshRateThunk>(13, kSetRefreshRateHook);
-  InstallOne<SetClockLevelsThunk>(14, kSetClockLevelsHook);
+  if (!LeaveToRenderConfig(12, sentinel::RenderConfigSlot::kSetPropertyInt)) InstallOne<SetPropIntThunk>(12, kSetPropIntHook);
+  if (!LeaveToRenderConfig(13, sentinel::RenderConfigSlot::kSetDisplayRefreshRate)) InstallOne<SetRefreshRateThunk>(13, kSetRefreshRateHook);
+  if (!LeaveToRenderConfig(14, sentinel::RenderConfigSlot::kSetClockLevels)) InstallOne<SetClockLevelsThunk>(14, kSetClockLevelsHook);
   InstallOne<SetLatencyModeThunk>(15, kSetLatencyModeHook);
   InstallOne<InstanceExtsThunk>(16, kInstanceExtsHook);
   InstallOne<DeviceExtsThunk>(17, kDeviceExtsHook);
@@ -170,7 +183,9 @@ void HookStates(HookState (&out)[kHookCount]) noexcept {
     out[i].slot = kSlots[i].vaddr;
     out[i].installed = g_installed[i];
     const bool shared = g_sysPropIntShared && i == kSysPropIntIndex;
-    out[i].status = shared ? "shared" : (g_ran[i] ? sentinel::GotStatusName(g_status[i]) : "not_run");
+    out[i].status = shared                ? "shared"
+                    : g_ownedByRenderConfig[i] ? "owned_by_render_config"
+                                               : (g_ran[i] ? sentinel::GotStatusName(g_status[i]) : "not_run");
     out[i].calls = shared ? ObservedSysPropIntCalls() : calls[i];
     out[i].faults = faults[i];
   }

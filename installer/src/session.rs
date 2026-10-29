@@ -28,6 +28,9 @@ pub struct Config {
     /// The nevr root (ADR 0012): where the PC plan puts the runtime, the record and every set-aside file. `None` when the
     /// player's profile folder is unknown; a PC install then asks for `--nevr-root` and changes nothing.
     pub nevr_root: Option<PathBuf>,
+    /// Echo VR Launcher's data folder (#1285): a PC install into a game folder its `launcher.json` lists is refused. `None`
+    /// when the profile folder is unknown (no launcher is looked for).
+    pub launcher_dir: Option<PathBuf>,
     /// Install an older release over a newer one (a PC install refuses by default).
     pub allow_downgrade: bool,
     /// Seconds between the two retries of a failed signature check (the pair may have been caught between two writes).
@@ -47,6 +50,7 @@ impl Config {
             min_manifest_version: MIN_MANIFEST_VERSION,
             now: None,
             nevr_root: None,
+            launcher_dir: None,
             allow_downgrade: false,
             retry_delay_secs: 3,
         }
@@ -126,13 +130,40 @@ impl Session {
     fn get(&self, name: &str, max: u64) -> std::result::Result<Vec<u8>, Failure> {
         let url = format!("{}/{name}", self.cfg.base);
         let mut body = Vec::new();
-        fetch_capped(&url, 0, max, &mut body)?;
+        if let Err(f) = fetch_capped(&url, 0, max, &mut body) {
+            let (Failure::Interrupted(m) | Failure::Refused(m)) = &f;
+            let _ = self.log.event("WARN", "manifest_fetch", 1, json!({"url": url, "ok": false, "reason": m}));
+            return Err(f);
+        }
         let _ = self.log.info("manifest_fetch", 1, json!({"url": url, "bytes": body.len(), "status": 200}));
         Ok(body)
     }
 
-    /// Steps 1 to 6: fetch the pair, verify it, store it. A signature failure fetches the pair again, twice.
+    /// Steps 1 to 6: fetch the pair, verify it, store it. A signature failure fetches the pair again, twice. When the
+    /// pair cannot be fetched at all (step 1), the pair an earlier run stored is verified again, against the pins and
+    /// the clock, and used if it still passes (`manifest_check source=stored`); a stored pair that is stale, damaged
+    /// or absent fails the run with the fetch error.
     pub fn manifest(&self) -> Result<Verified> {
+        match self.manifest_online() {
+            Err(e) if e.step == 1 => self.manifest_stored(&e),
+            r => r,
+        }
+    }
+
+    fn manifest_stored(&self, fetch_error: &Error) -> Result<Verified> {
+        let again = |why: String| Error::new(1, format!("{}; the manifest stored by an earlier run cannot be used: {why}", fetch_error.msg));
+        let dir = &self.cfg.state_dir;
+        let state = manifest::read_state(dir).map_err(|e| again(e.msg))?;
+        let read = |n: &str| std::fs::read(dir.join(n)).map_err(|e| again(format!("{n}: {e}")));
+        let v = manifest::verify(&read("manifest.json")?, &read("manifest.json.sig")?, &self.cfg.pins, &state, &clock(&self.cfg)?, self.cfg.min_manifest_version).map_err(|e| again(e.to_string()))?;
+        if v.sha256 != state.last_sha256 {
+            return Err(again("it is not the pair state.json names".into()));
+        }
+        self.log.info("manifest_check", 6, json!({"ok": true, "source": "stored", "key_id": v.key_id, "manifest_version": v.version, "stored_highest": state.highest}))?;
+        Ok(v)
+    }
+
+    fn manifest_online(&self) -> Result<Verified> {
         let state = manifest::read_state(&self.cfg.state_dir)?;
         let now = clock(&self.cfg)?;
         let mut last: Option<Error> = None;
@@ -146,7 +177,7 @@ impl Session {
             match manifest::verify(&bytes, &sig, &self.cfg.pins, &state, &now, self.cfg.min_manifest_version) {
                 Ok(v) => {
                     manifest::commit(&self.cfg.state_dir, &v)?;
-                    self.log.info("manifest_check", 6, json!({"ok": true, "key_id": v.key_id, "manifest_version": v.version, "stored_highest": state.highest}))?;
+                    self.log.info("manifest_check", 6, json!({"ok": true, "source": "network", "key_id": v.key_id, "manifest_version": v.version, "stored_highest": state.highest}))?;
                     return Ok(v);
                 }
                 Err(e) if e.step == 2 => last = Some(e),
@@ -162,7 +193,7 @@ impl Session {
         let read = |n: &str| std::fs::read(dir.join(n)).map_err(|e| Error::new(1, format!("{n}: {e}")));
         let v = manifest::verify(&read("manifest.json")?, &read("manifest.json.sig")?, &self.cfg.pins, &state, &clock(&self.cfg)?, self.cfg.min_manifest_version)?;
         manifest::commit(&self.cfg.state_dir, &v)?;
-        self.log.info("manifest_check", 6, json!({"ok": true, "key_id": v.key_id, "manifest_version": v.version, "stored_highest": state.highest}))?;
+        self.log.info("manifest_check", 6, json!({"ok": true, "source": "dir", "key_id": v.key_id, "manifest_version": v.version, "stored_highest": state.highest}))?;
         Ok(v)
     }
 
@@ -187,8 +218,14 @@ impl Session {
     }
 
     /// The Quest command: plan, and with `install` execute. `dev` is `None` for a plan with no headset.
-    pub fn quest(&self, version: Option<&str>, dev: Option<&dyn Device>, install: bool, consent_uninstall: bool) -> Result<(Ended, Value)> {
+    ///
+    /// `dev_apk` is a local tester APK (`--artifact-dir`, ADR 0023 section 3a): it is checked on its own terms, takes the
+    /// place of the manifest's `quest-apk`, and marks every record the run writes `trust: "unverified dev artifact"`.
+    pub fn quest(&self, version: Option<&str>, dev: Option<&dyn Device>, install: bool, consent_uninstall: bool, dev_apk: Option<&quest::DevApk>) -> Result<(Ended, Value)> {
         let (m, v) = self.release(version)?;
+        if let Some(d) = dev_apk {
+            self.log.event("WARN", "dev_artifact", 8, quest::with_trust(json!({"kind": "quest-apk", "path": d.path.display().to_string(), "size": d.size, "sha256": d.sha256, "package": d.android.package, "version_code": d.android.version_code, "signers": d.android.signer_cert_sha256, "ok": true}), true))?;
+        }
         // The chosen release's own game data; failing that, the newest listed one, so a device that already holds
         // complete data is recognised even when this release lists none.
         let data_for_observation = manifest::find(&m, &v, "game-data", Some("android-arm64")).ok().or_else(|| manifest::latest_game_data(&m).map(|x| x.1));
@@ -196,11 +233,12 @@ impl Session {
             Some(d) => quest::observe(d, data_for_observation.as_ref(), &self.log)?,
             None => quest::Observed::default(),
         };
-        let plan = quest::plan(&m, &v, &observed, consent_uninstall);
-        self.log.info("plan", 9, json!({"steps": plan.steps.iter().map(|s| s.name()).collect::<Vec<_>>(), "installed": observed.installed.as_ref().map(|i| json!({"version_code": i.version_code, "signers": i.signers})), "decision": plan.decision, "reasons": plan.reasons}))?;
+        let plan = quest::plan_with(&m, &v, &observed, consent_uninstall, dev_apk);
+        self.log.info("plan", 9, quest::with_trust(json!({"steps": plan.steps.iter().map(|s| s.name()).collect::<Vec<_>>(), "installed": observed.installed.as_ref().map(|i| json!({"version_code": i.version_code, "signers": i.signers})), "decision": plan.decision, "reasons": plan.reasons}), dev_apk.is_some()))?;
         let report = plan.to_json();
         let ended = match plan.outcome {
-            quest::Outcome::Unchanged => self.end("unchanged", &plan.reasons.join("; "))?,
+            // A refused plan under `install` is a failed request: nothing was installed, and a caller must not read exit 0.
+            quest::Outcome::Unchanged => self.end_with("unchanged", &plan.reasons.join("; "), install && plan.decision == "refused")?,
             quest::Outcome::NeedsUser => self.end("needs-user", &plan.reasons.join("; "))?,
             quest::Outcome::Proceed if !install => self.end("unchanged", "plan only: nothing was changed")?,
             quest::Outcome::Proceed => {
@@ -208,7 +246,7 @@ impl Session {
                 let opts = quest::RunOpts { work_dir: self.cfg.work_dir.clone(), base: &self.cfg.base, consent_uninstall };
                 let end = quest::execute(dev, &m, &v, &plan, &opts, &self.log)?;
                 if end.state == "installed" {
-                    self.write_record(&v, &m, &plan.apk, &plan.data)?;
+                    self.write_record(&v, &m, &plan.apk, &plan.data, dev_apk.is_some())?;
                 }
                 self.end_with(end.state, &end.reason, end.state == "unchanged")?
             }
@@ -217,7 +255,7 @@ impl Session {
     }
 
     /// The install record: written last, by a temporary file and a rename.
-    fn write_record(&self, version: &str, m: &Value, a: &Option<Artifact>, b: &Option<Artifact>) -> Result<()> {
+    fn write_record(&self, version: &str, m: &Value, a: &Option<Artifact>, b: &Option<Artifact>, dev_artifact: bool) -> Result<()> {
         let state = manifest::read_state(&self.cfg.state_dir)?;
         let arts: Vec<Value> = [a, b].iter().filter_map(|x| x.as_ref()).map(|x| json!({"kind": x.kind, "path": x.path, "sha256": x.sha256})).collect();
         let rec = json!({
@@ -225,6 +263,7 @@ impl Session {
             "manifest_version": m["manifest_version"],
             "last_manifest_sha256": state.last_sha256,
             "artifacts": arts,
+            "dev_artifact": dev_artifact,
             "layout": if self.cfg.platform == "quest" { quest::MEDIA_ROOT } else { "host in the game folder, everything else in the nevr root" },
             "time": crate::util::now_utc().unwrap_or_default(),
         });
@@ -232,7 +271,26 @@ impl Session {
     }
 
     /// The PC command: verify the zip, plan against `dir` (the game folder) and the nevr root, and with `install` execute.
-    pub fn pc(&self, version: Option<&str>, dir: &Path, install: bool, game_running: bool) -> Result<(Ended, Value)> {
+    ///
+    /// `package_dir` is the folder an installer script ships in (the Windows zip, unpacked): when its two DLLs are
+    /// exactly the manifest's entries for the release (size and sha256), they are installed and nothing is downloaded;
+    /// when either is missing or differs, the package the manifest names is downloaded as usual.
+    pub fn pc(&self, version: Option<&str>, dir: &Path, install: bool, game_running: bool, package_dir: Option<&Path>) -> Result<(Ended, Value)> {
+        // A launcher-managed folder is refused before anything is fetched or changed (#1285).
+        match crate::launcher::owner_of(self.cfg.launcher_dir.as_deref(), dir) {
+            crate::launcher::Owner::Nobody => {}
+            crate::launcher::Owner::Launcher { id } => {
+                let found = std::fs::read(dir.join(pc::HOST)).ok().and_then(|b| crate::launcher::host_version(&b));
+                let installed = match &found {
+                    Some(v) => format!("nEVR {v} is installed"),
+                    None => "its nEVR is installed".to_string(),
+                };
+                return self.pc_stop(&format!("{} manages this install ({installed}; launcher entry '{id}'). Update nEVR through the launcher.", crate::launcher::NAME));
+            }
+            crate::launcher::Owner::Unknown(why) => {
+                return self.pc_stop(&format!("cannot tell whether a launcher manages this install ({why}); nothing was changed"));
+            }
+        }
         let (m, v) = self.release(version)?;
         let art = manifest::find(&m, &v, "windows-zip", None)?;
         // The root is settled before anything is fetched or changed.
@@ -242,15 +300,24 @@ impl Session {
             None => return self.pc_stop("the nevr root is unknown (LOCALAPPDATA is not set); pass --nevr-root"),
         };
         let layout = pc::Layout::new(dir, root);
-        let zip_path = self.cfg.work_dir.join(art.path.rsplit('/').next().unwrap_or("windows.zip"));
-        std::fs::create_dir_all(&self.cfg.work_dir).map_err(|e| Error::new(8, format!("{}: {e}", self.cfg.work_dir.display())))?;
-        let url = format!("{}/{}", self.cfg.base, art.path);
-        let f = artifact::download(&url, &art, &zip_path)?;
-        self.log.info("artifact_fetch", 8, json!({"kind": "windows-zip", "url": url, "size": art.size, "bytes": f.bytes, "sha256": f.sha256, "ok": true, "resumed_from": f.resumed_from}))?;
-        let n = artifact::verify_zip(&zip_path, &art, false)?;
-        self.log.info("verify_installed", 8, json!({"ok": true, "what": "zip-members", "expected": art.contents.len(), "observed": n}))?;
-        // The bytes that are planned and installed are the bytes just checked against the manifest, not a second read.
-        let pkg = read_package(&zip_path, &art, &v)?;
+        let local = match package_dir {
+            Some(d) => self.local_package(d, &art, &v)?,
+            None => None,
+        };
+        let pkg = match local {
+            Some(p) => p,
+            None => {
+                let zip_path = self.cfg.work_dir.join(art.path.rsplit('/').next().unwrap_or("windows.zip"));
+                std::fs::create_dir_all(&self.cfg.work_dir).map_err(|e| Error::new(8, format!("{}: {e}", self.cfg.work_dir.display())))?;
+                let url = format!("{}/{}", self.cfg.base, art.path);
+                let f = artifact::download(&url, &art, &zip_path)?;
+                self.log.info("artifact_fetch", 8, json!({"kind": "windows-zip", "url": url, "size": art.size, "bytes": f.bytes, "sha256": f.sha256, "ok": true, "resumed_from": f.resumed_from}))?;
+                let n = artifact::verify_zip(&zip_path, &art, false)?;
+                self.log.info("verify_installed", 8, json!({"ok": true, "what": "zip-members", "expected": art.contents.len(), "observed": n}))?;
+                // The bytes that are planned and installed are the bytes just checked against the manifest, not a second read.
+                read_package(&zip_path, &art, &v)?
+            }
+        };
         let observed = pc::observe(&layout, game_running)?;
         let plan = pc::plan(&observed, &pkg, self.cfg.allow_downgrade);
         self.log.info("plan", 9, json!({"decision": plan.decision, "reasons": plan.reasons, "action": plan.action.map(|a| format!("{a:?}")), "installed": {"host_sha256": observed.target_sha, "runtime_sha256": observed.runtime_sha}, "nevr_root": layout.root.display().to_string()}))?;
@@ -266,7 +333,7 @@ impl Session {
                 if end.state == "installed" {
                     // The files are installed and read back; the installer's own record of it is informational, so a
                     // failure to write it is reported, not turned into a failed install.
-                    match self.write_record(&v, &m, &Some(art.clone()), &None) {
+                    match self.write_record(&v, &m, &Some(art.clone()), &None, false) {
                         Ok(()) => self.end_after_change(end.state, &end.reason, false),
                         Err(e) => {
                             let lost = self.log.error("install_record", 9, json!({"ok": false, "reason": e.to_string()})).err();
@@ -287,6 +354,36 @@ impl Session {
         self.log.error("plan", 9, json!({"decision": "needs-user", "reasons": [why]}))?;
         let report = json!({"outcome": "needs-user", "decision": "needs-user", "reasons": [why], "action": null, "stale_record": false});
         Ok((self.end("needs-user", why)?, report))
+    }
+}
+
+impl Session {
+    /// The package folder's two DLLs against the manifest's entries (`package_local`). `None` says why in the log and
+    /// sends the run to the download; the bytes returned were read once, hashed, and are the ones the plan installs.
+    fn local_package(&self, dir: &Path, art: &Artifact, version: &str) -> Result<Option<pc::Package>> {
+        let miss = |why: String| -> Result<Option<pc::Package>> {
+            self.log.event("WARN", "package_local", 8, json!({"dir": dir.display().to_string(), "ok": false, "reason": why}))?;
+            Ok(None)
+        };
+        let mut files = Vec::new();
+        for name in [pc::HOST, pc::RUNTIME] {
+            let Some(c) = art.contents.iter().find(|c| c.path == name) else {
+                return miss(format!("the manifest lists no {name}"));
+            };
+            let bytes = match std::fs::read(dir.join(name)) {
+                Ok(b) => b,
+                Err(e) => return miss(format!("{name}: {e}")),
+            };
+            let sha = crate::util::sha256_hex(&bytes);
+            if bytes.len() as u64 != c.size || sha != c.sha256 {
+                return miss(format!("{name} is {} bytes with sha256 {sha}, the manifest lists {} bytes with sha256 {}", bytes.len(), c.size, c.sha256));
+            }
+            files.push(bytes);
+        }
+        let runtime = files.pop().expect("two files");
+        let host = files.pop().expect("two files");
+        self.log.info("package_local", 8, json!({"dir": dir.display().to_string(), "ok": true, "files": [pc::HOST, pc::RUNTIME]}))?;
+        Ok(Some(pc::Package { host, runtime, version: version.to_string() }))
     }
 }
 

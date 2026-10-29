@@ -85,14 +85,9 @@ separate namespace is an open ABI decision, issue #130.
   users write in their config file.
 - Log tags outside `[NEVR.<AREA>]`: `[NETGAME]`, `[NSLOBBY]`, `[RBX]`, `[SAVE_LOADOUT]`, `[SAVE_SUCCESS]`,
   `[CURRENT_LOADOUT]`, `[TELEMETRY.DIAG]` and a bare `[NEVR]`: scripts and the score log grep the text.
-- Two PascalCase namespaces: `Hooking` (`src/core/hooking.h`; the frozen `src/legacy` calls
-  `Hooking::Attach` and `Hooking::Initialize` through the compat header) and `EchoVR::Symbols` with its
-  nested `Social` and `Tcp` (`src/abi/symbols.h`, named after the game's symbol tables).
-- `PROJECT_VERSION`, `GIT_COMMIT_HASH` and `USE_MINHOOK` as macro names: only the frozen `src/legacy` reads
-  them; the root `CMakeLists.txt` defines them for the two files that read them, and every other file that reads
-  the build identity gets `NEVR_PROJECT_VERSION`, `NEVR_GIT_COMMIT_HASH`, `NEVR_GIT_COMMIT_FULL` or `NEVR_GIT_DESCRIBE`
-  from `nevr_build_identity_define` (`cmake/nevr_build_identity.cmake`), per source file; `NEVR_USE_MINHOOK` is a
-  target definition.
+- Two PascalCase namespaces: `Hooking` (`src/core/hooking.h`, the hooking abstraction every patch calls; it
+  predates the rule) and `EchoVR::Symbols` with its nested `Social` and `Tcp` (`src/abi/symbols.h`, named after
+  the game's symbol tables).
 - `NEVRProtobufJSONMessageV1` (`src/abi/symbols.h`): its spelling is fixed by the hashed protocol string.
 - `NevrCfg*` functions are global, not in `namespace nevr`; `NevrConfig` and `NevrConfigError` are in it.
 
