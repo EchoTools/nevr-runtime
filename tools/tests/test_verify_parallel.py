@@ -114,6 +114,8 @@ class VcpkgQuestHostGuardTest(unittest.TestCase):
         self.manifest.write_text("{}")
         self.lib = self.root / "build/quest-host-vcpkg/x64-linux/lib/libyaml-cpp.a"
         self.lib.parent.mkdir(parents=True)
+        self.header = self.root / "build/quest-host-vcpkg/x64-linux/include/nlohmann/json.hpp"
+        self.header.parent.mkdir(parents=True)
         self.calls = self.root / "vcpkg-calls"
         vcpkg_dir = self.root / "fake-vcpkg-root"
         vcpkg_dir.mkdir()
@@ -131,6 +133,7 @@ class VcpkgQuestHostGuardTest(unittest.TestCase):
 
     def test_a_current_install_runs_no_vcpkg(self):
         self.lib.write_text("lib")
+        self.header.write_text("json")
         os.utime(self.manifest, (1_000_000, 1_000_000))
         result = self.run_recipe()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -142,8 +145,17 @@ class VcpkgQuestHostGuardTest(unittest.TestCase):
         self.assertEqual(self.calls_made(), 1)
         self.assertIn("--x-install-root=" + str(self.root / "build/quest-host-vcpkg"), self.calls.read_text())
 
+    def test_an_install_without_nlohmann_json_is_completed(self):
+        # An install made from a manifest that did not name nlohmann-json has the library and not the header.
+        self.lib.write_text("lib")
+        os.utime(self.manifest, (1_000_000, 1_000_000))
+        result = self.run_recipe()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.calls_made(), 1)
+
     def test_an_install_older_than_the_manifest_is_redone(self):
         self.lib.write_text("lib")
+        self.header.write_text("json")
         os.utime(self.lib, (1_000_000, 1_000_000))
         result = self.run_recipe()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -160,6 +172,7 @@ class VcpkgQuestHostGuardTest(unittest.TestCase):
             self.assertEqual(self.calls_made(), 0)
             # The first install finishes: its artifact appears, newer than the manifest, then it unlocks.
             self.lib.write_text("lib")
+            self.header.write_text("json")
             fcntl.flock(held, fcntl.LOCK_UN)
             out, err = proc.communicate(timeout=30)
         self.assertEqual(proc.returncode, 0, out + err)

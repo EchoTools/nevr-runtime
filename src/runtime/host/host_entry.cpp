@@ -1,5 +1,6 @@
 #include "runtime/host/host_entry.h"
 
+#include "runtime/host/stop_line.h"
 #include "runtime/lifecycle/game_image_guard.h"
 
 #include <atomic>
@@ -13,11 +14,20 @@ CrashCapture g_capture;
 HMODULE g_host_module = nullptr;
 std::atomic<bool> g_set_game_module_called{false};
 std::atomic<bool> g_attached_at_dll_main{false};
+std::atomic<bool> g_not_attached_reported{false};
 std::atomic<HANDLE> g_failure_flush_thread{nullptr};
 std::atomic<HANDLE> g_dbghelp_preload_thread{nullptr};
 
+// The one stop line of an attach that left the game without the runtime (stop_line.h), written once per run, after the
+// journal is flushed and never under the loader lock: every caller is a thread or a launcher call, not DllMain.
+void ReportNotAttachedOnce() noexcept {
+  if (g_not_attached_reported.exchange(true)) return;
+  ReportNotAttached(g_diagnostics);
+}
+
 DWORD WINAPI FlushAfterAttachFailure(LPVOID) {
   g_diagnostics.FlushAttachJournal();
+  ReportNotAttachedOnce();
   return 0;
 }
 
@@ -122,11 +132,13 @@ void SetGameModule(HMODULE game_module) noexcept {
   if (!nevr_game_image_guard::IsSupportedGameModule(game_module)) {
     g_diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kRejected);
     g_diagnostics.FlushAttachJournal();
+    ReportUnsupportedImage(g_diagnostics, nevr_game_image_guard::kUnsupportedImageExitCode);
     nevr_game_image_guard::RequireSupportedGameModule(game_module);  // ends the process
     return;
   }
   InstallRendezvous(game_module);
   g_diagnostics.FlushAttachJournal();
+  if (!g_rendezvous.Installed()) ReportNotAttachedOnce();  // a prologue or a hook that failed: the game runs without it
 }
 
 void CreateReport(PEXCEPTION_POINTERS exception_pointers) noexcept {

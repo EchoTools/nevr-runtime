@@ -87,13 +87,13 @@ sentinel::GotStatus InstallPinned() noexcept {
   return sentinel::InstallThunk<InputStateThunk>(g_hook, sentinel::pinned::LibR15GetCurrentInputState());
 }
 
-// The function libr15's vrapi_GetInputDeviceCapabilities slot holds: the build ID must be the pinned one and the pinned
-// slot must resolve. nullptr otherwise.
+// The function libr15's vrapi_GetInputDeviceCapabilities slot holds: the build ID must be the patched one (ADR 0021) and
+// the pinned slot must resolve. nullptr otherwise.
 CapsFn ResolvePinnedCaps() noexcept {
   sentinel::ElfImage image;
   if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) return nullptr;
   char id[80] = {};
-  if (!sentinel::ReadBuildId(image, id, sizeof(id)) || std::strcmp(id, sentinel::pinned::kLibR15BuildId) != 0) {
+  if (!sentinel::ReadBuildId(image, id, sizeof(id)) || std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) {
     return nullptr;
   }
   const sentinel::SlotResolution slot =

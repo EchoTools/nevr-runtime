@@ -7,7 +7,7 @@
 #include "got_hook.h"
 #include "hook_install.h"
 #include "hook_log.h"
-#include "inline_hook.h"
+#include "libr15_attach.h"
 #include "pinned_targets.h"
 #include "runtime/log/symcache.h"
 #include "runtime/patch/ui_texture_mips_rules.h"
@@ -21,18 +21,17 @@ namespace nevr_quest::ui_texture_mips {
 namespace {
 
 // NRadEngine::CGTextureResource::Attach (libr15 0x18e75c4 pinned; ReVault 0x19e75c4 = pinned + 0x100000): this (x0),
-// stream (x1); returns 0 on success (w0). Reached through the resource's vtable, so there is no GOT slot: an inline
-// detour (inline_hook.h). Its first four words are the prologue the backend compares before it writes a byte.
-//   sub sp,sp,#0xf0; stp x21,x20,[sp,#0xd0]; stp x19,x30,[sp,#0xe0]; ldr x8,[x0,#0x78].
-constexpr std::uint64_t kAttachVaddr = 0x18e75c4;
-constexpr sentinel::InlinePrologue kAttachPrologue{{0xD103C3FFu, 0xA90D53F5u, 0xA90E7BF3u, 0xF9403C08u}};
+// stream (x1); returns 0 on success (w0). Reached through the resource's vtable, so there is no GOT slot: it is the row
+// `ui_texture.attach` of the build-time patch table (quest/patch/libr15_patch_table.h; docs/adr/0021), whose address and
+// stock words the patcher checks against the store file. The hook is one atomic store into the row's slot.
+constexpr const char* kAttachRow = "ui_texture.attach";
 
 // NRadEngine::CGTextureResource::ForceLoadAllMips (libr15 0x18e674c pinned; ReVault 0x19e674c): this (x0), returns 0 on
 // success. It returns at once when the resident level (this+0xe0) already equals the mip count (info+0xcc) or the
 // texture owns its full data stream (info+0xc0 != 0). It is called directly, not hooked.
 //   sub sp,sp,#0xd0; str x20,[sp,#0xb0]; stp x19,x30,[sp,#0xc0]; ldr x8,[x0,#0x70].
-constexpr std::uint64_t kForceLoadAllMipsVaddr = 0x18e674c;
-constexpr sentinel::InlinePrologue kForceLoadAllMipsPrologue{{0xD10343FFu, 0xF9005BF4u, 0xA90C7BF3u, 0xF9403808u}};
+// Its address and first four words are sentinel::pinned::kForceLoadAllMipsVaddr/Code (pinned_targets.h; got_pinned_test
+// reads them in the store file): the patch does not touch it, so the install proves them before calling it.
 using ForceLoadAllMipsFn = std::uint64_t (*)(void* texture);
 
 // CGTextureResource fields on Quest, measured from the two functions above (the PC offsets differ: resident +0xc0).
@@ -92,7 +91,7 @@ void ForceIfUi(void* texture) noexcept {
                        {"requested_mip", state.mipCount}});
 }
 
-// The detour. The thunk's original is the trampoline: it runs the displaced prologue and continues in Attach.
+// The detour. The thunk's original is the row's trampoline: it runs the displaced words and continues in Attach.
 std::uint64_t OnAttach(AttachThunk::Fn original, void* texture, void* stream) noexcept {
   const std::uint64_t result = original(texture, stream);
   if (static_cast<std::uint32_t>(result) == 0) ForceIfUi(texture);
@@ -103,41 +102,42 @@ NEVR_HOOK_RECORD(kAttachRecord, AttachThunk, &OnAttach);
 
 }  // namespace
 
-std::size_t InstallUiTextureMips() noexcept {
+std::size_t InstallUiTextureMips(sentinel::ImageLookup lookup) noexcept {
   sentinel::ElfImage image;
-  if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) {
+  if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "ui_texture", {{"status", "libr15_not_loaded"}});
     return 0;
   }
-  char buildId[41] = {};
-  if (!sentinel::ReadBuildId(image, buildId, sizeof buildId) ||
-      std::strcmp(buildId, sentinel::pinned::kLibR15BuildId) != 0) {
-    sentinel::LogFields(sentinel::LogLevel::kWarn, "ui_texture",
-                        {{"status", "build_id_mismatch"}, {"build_id", buildId}});
+  char targetText[19];
+  // Nothing is read from libr15 before Attach has verified it (the live ID is then the patched file's).
+  if (!nevr_quest::libr15_patch::Verified()) {
+    sentinel::LogFields(sentinel::LogLevel::kError, "ui_texture",
+                        {{"status", nevr_quest::libr15_patch::ActivateStatusName(nevr_quest::libr15_patch::ActivateStatus::kNotVerified)},
+                         {"hook", "CGTextureResource::Attach"},
+                         {"row", kAttachRow},
+                         {"target", sentinel::HexString(targetText, 0)}});
     return 0;
   }
 
-  char targetText[19];
-  const void* force = reinterpret_cast<const void*>(image.base + kForceLoadAllMipsVaddr);
-  const sentinel::InlineStatus forceStatus = sentinel::CheckInlineTarget(force, kForceLoadAllMipsPrologue);
-  if (forceStatus != sentinel::InlineStatus::kOk) {
+  const unsigned char* const force = reinterpret_cast<const unsigned char*>(image.base) + sentinel::pinned::kForceLoadAllMipsVaddr;
+  if (std::memcmp(force, sentinel::pinned::kForceLoadAllMipsCode, sizeof(sentinel::pinned::kForceLoadAllMipsCode)) != 0) {
     sentinel::LogFields(sentinel::LogLevel::kError, "ui_texture",
-                        {{"status", sentinel::InlineStatusName(forceStatus)},
+                        {{"status", "prologue_mismatch"},
                          {"hook", "ForceLoadAllMips"},
                          {"target", sentinel::HexString(targetText, reinterpret_cast<std::uintptr_t>(force))}});
     return 0;
   }
-  g_forceLoadAllMips = reinterpret_cast<ForceLoadAllMipsFn>(const_cast<void*>(force));
+  g_forceLoadAllMips = reinterpret_cast<ForceLoadAllMipsFn>(const_cast<unsigned char*>(force));
 
-  const void* attach = reinterpret_cast<const void*>(image.base + kAttachVaddr);
   AttachThunk::Arm(kAttachRecord);
-  const sentinel::InlineStatus st = sentinel::InstallInlineThunk<AttachThunk>(attach, kAttachPrologue);
-  sentinel::LogFields(st == sentinel::InlineStatus::kOk ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError,
-                      "ui_texture",
-                      {{"status", st == sentinel::InlineStatus::kOk ? "installed" : sentinel::InlineStatusName(st)},
+  const nevr_quest::libr15_patch::ActivateStatus st = sentinel::InstallRowThunk<AttachThunk>(kAttachRow);
+  const bool ok = st == nevr_quest::libr15_patch::ActivateStatus::kOk;
+  sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "ui_texture",
+                      {{"status", ok ? "installed" : nevr_quest::libr15_patch::ActivateStatusName(st)},
                        {"hook", "CGTextureResource::Attach"},
-                       {"target", sentinel::HexString(targetText, reinterpret_cast<std::uintptr_t>(attach))}});
-  return st == sentinel::InlineStatus::kOk ? 1 : 0;
+                       {"row", kAttachRow},
+                       {"target", sentinel::HexString(targetText, nevr_quest::libr15_patch::RowSiteAddress(kAttachRow))}});
+  return ok ? 1 : 0;
 }
 
 }  // namespace nevr_quest::ui_texture_mips

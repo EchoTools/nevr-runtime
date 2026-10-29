@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -29,6 +30,9 @@
 #include <nlohmann/json.hpp>
 
 #include "quest/data/sha256.h"
+#include "quest/patch/libr15_patch_identity.h"
+#include "quest/patch/libr15_patch_table.h"
+#include "quest/plugin/plugin_identity.h"
 #include "quest/plugin/input_seam_hook.h"
 #include "quest/plugin/plugin_loader.h"
 #include "quest/plugin/plugin_platform.h"
@@ -85,7 +89,8 @@ class FakePlatform final : public Platform {
   }
   void* Open(const std::string& file) override {
     opened.push_back(file);
-    void* handle = ::dlopen((g_dir + "/" + file).c_str(), RTLD_NOW | RTLD_LOCAL);
+    const auto alias = openAs.find(file);
+    void* handle = ::dlopen((g_dir + "/" + (alias != openAs.end() ? alias->second : file)).c_str(), RTLD_NOW | RTLD_LOCAL);
     if (handle != nullptr) handles[file] = handle;
     return handle;
   }
@@ -93,7 +98,11 @@ class FakePlatform final : public Platform {
     if (!throwOnSymbol.empty() && throwOnSymbol == name) throw std::runtime_error("symbol");
     return ::dlsym(handle, name);
   }
-  std::string GameBuildId() override { return gameBuild; }
+  std::string GameBuildId() override {
+    ++buildIdReads;
+    return gameBuild;
+  }
+  Libr15PatchState Libr15Patch() override { return patch; }
   std::uintptr_t GameBase() override { return base; }
   void Emit(const LoadRecord& record) override { records.push_back(record); }
   void EmitPlan(std::size_t entries, std::size_t early, std::size_t normal, std::size_t refused,
@@ -139,6 +148,9 @@ class FakePlatform final : public Platform {
   }
 
   std::string gameBuild = kGameBuild;
+  Libr15PatchState patch;                          // what Attach recorded: not verified unless a test says so
+  std::size_t buildIdReads = 0;
+  std::map<std::string, std::string> openAs;       // file served from `memory` -> the fixture object that is mapped for it
   std::uintptr_t base = 0x7000000000;
   const NevrQuestHostApi* questApi = &kFakeQuestApi;
   bool readFromDisk = true;
@@ -453,6 +465,8 @@ TEST(LoaderLoadsANoopPluginWithOneRecord) {
   CHECK(r->phase == PluginPhase::Normal);
   CHECK_EQ(r->file, std::string("libfx_ok.so"));
   CHECK_EQ(r->gameBuildId, std::string(kGameBuild));
+  CHECK_EQ(r->pluginViewBuildId, std::string(kGameBuild));  // not our patched file: the live note is the plugin identity
+  CHECK(!r->libr15Patched);
   const std::vector<std::uint8_t> bytes = Slurp(g_dir + "/libfx_ok.so");
   CHECK(!bytes.empty());
   CHECK_EQ(r->sha256, nevr_quest::data::Sha256Hex(bytes.data(), bytes.size()));
@@ -613,6 +627,265 @@ TEST(LoaderReadsTheRunningBuildAgainOnALaterPass) {
   env.loader->RunPhase(PluginPhase::Normal);
   CHECK(env.platform.Record("ok")->outcome == Outcome::kLoaded);
   CHECK_EQ(env.platform.Record("ok")->gameBuildId, std::string(kGameBuild));
+}
+
+// ---- the plugin identity (ADR 0021 section 12, test 10) ------------------------------------------------------------
+
+const std::string& StockId() {
+  static const std::string id = nevr_quest::patch::kLibR15StockBuildId;
+  return id;
+}
+// The live note of our patched libr15: what the running file carries once the patcher has written it.
+const std::string& DerivedId() {
+  static const std::string id = nevr_quest::patch::PatchedBuildId();
+  return id;
+}
+const char* const kThirdId = "3333333333333333333333333333333333333333";
+
+// Serves libfx_ok.so's bytes as `file` with the declared-IDs note rewritten to `ids` (the note keeps its size: the text is
+// padded with spaces), and maps libfx_ok.so itself when the loader opens it. The declared list is what the loader decides
+// from, so this is a plugin that declares exactly `ids`.
+void ServeDeclaring(FakePlatform& platform, const std::string& file, const std::string& ids) {
+  std::vector<std::uint8_t> bytes = Slurp(g_dir + "/libfx_ok.so");
+  const std::string original =
+      "1111111111111111111111111111111111111111 2222222222222222222222222222222222222222";
+  const auto at = std::search(bytes.begin(), bytes.end(), original.begin(), original.end());
+  CHECK(at != bytes.end());
+  if (at == bytes.end()) return;
+  std::string text = ids;
+  CHECK(text.size() <= original.size());
+  text.resize(original.size(), ' ');
+  std::copy(text.begin(), text.end(), at);
+  platform.memory[file] = bytes;
+  platform.openAs[file] = "libfx_ok.so";
+}
+
+// Our patched libr15 as the loader meets it: the live note is the derived ID and Attach recorded it verified.
+void RunsPatched(FakePlatform& platform) {
+  platform.gameBuild = DerivedId();
+  platform.patch.verified = true;
+  platform.patch.verifiedBuildId = DerivedId();
+}
+
+TEST(PluginViewIsTheStockIdOnlyForTheVerifiedPatchedFile) {
+  const std::string derived = DerivedId();
+  const PluginView patched = ResolvePluginView(derived.c_str(), true, derived.c_str());
+  CHECK(patched.patched);
+  CHECK_EQ(std::string(patched.buildId), StockId());
+  // Anything missing leaves the live note as the identity.
+  const PluginView unverified = ResolvePluginView(derived.c_str(), false, derived.c_str());
+  CHECK(!unverified.patched);
+  CHECK_EQ(std::string(unverified.buildId), derived);
+  const PluginView moved = ResolvePluginView(kThirdId, true, derived.c_str());  // verified, but the note now read is another ID
+  CHECK(!moved.patched);
+  CHECK_EQ(std::string(moved.buildId), std::string(kThirdId));
+  const PluginView other = ResolvePluginView(derived.c_str(), true, kThirdId);  // the verification covered another ID
+  CHECK(!other.patched);
+  CHECK_EQ(std::string(other.buildId), derived);
+  const PluginView noId = ResolvePluginView(derived.c_str(), true, nullptr);
+  CHECK(!noId.patched);
+  const PluginView stock = ResolvePluginView(StockId().c_str(), false, nullptr);
+  CHECK(!stock.patched);
+  CHECK_EQ(std::string(stock.buildId), StockId());
+  // An unreadable live note is never mapped, whatever was verified.
+  CHECK(!ResolvePluginView("", true, "").patched);
+  CHECK(!ResolvePluginView(nullptr, true, nullptr).patched);
+  CHECK_EQ(std::string(ResolvePluginView(nullptr, false, nullptr).buildId), std::string(""));
+}
+
+TEST(BuildIdVerdictForAViewAcceptsTheViewOrTheLiveNote) {
+  const std::string derived = DerivedId();
+  const PluginView patched = ResolvePluginView(derived.c_str(), true, derived.c_str());
+  CHECK(DecideBuildIdForView(StockId().c_str(), derived, patched) == BuildIdVerdict::kSupported);
+  CHECK(DecideBuildIdForView(derived.c_str(), derived, patched) == BuildIdVerdict::kSupported);
+  CHECK(DecideBuildIdForView(kThirdId, derived, patched) == BuildIdVerdict::kUnsupported);
+  CHECK(DecideBuildIdForView(nullptr, derived, patched) == BuildIdVerdict::kUndeclared);
+  // Not patched: the view is the live note, and only the live note decides.
+  const PluginView live = ResolvePluginView(derived.c_str(), false, nullptr);
+  CHECK(DecideBuildIdForView(derived.c_str(), derived, live) == BuildIdVerdict::kSupported);
+  CHECK(DecideBuildIdForView(StockId().c_str(), derived, live) == BuildIdVerdict::kUnsupported);
+  const PluginView unknown = ResolvePluginView("", false, nullptr);
+  CHECK(DecideBuildIdForView(StockId().c_str(), "", unknown) == BuildIdVerdict::kUnknownGame);
+}
+
+TEST(LoaderLoadsAStockIdPluginOnTheVerifiedPatchedFile) {
+  Env env;
+  RunsPatched(env.platform);
+  ServeDeclaring(env.platform, "libstock.so", StockId());
+  env.loader->Plan({Item("stock", "libstock.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  const LoadRecord* r = env.platform.Record("stock");
+  CHECK(r != nullptr);
+  if (r == nullptr) return;
+  CHECK(r->outcome == Outcome::kLoaded);
+  CHECK_EQ(r->reason, std::string(""));
+  CHECK_EQ(r->gameBuildId, DerivedId());       // the log still says which file ran
+  CHECK_EQ(r->pluginViewBuildId, StockId());   // and which ID decided
+  CHECK(r->libr15Patched);
+  const FxSeen* seen = env.platform.Seen("libstock.so");
+  CHECK(seen != nullptr);
+  if (seen == nullptr) return;
+  CHECK_EQ(seen->init_count, 1u);
+  CHECK_EQ(seen->covers_game_build_id, 1);
+  CHECK_EQ(std::string(seen->game_build_id), StockId());  // a plugin that copies it into its targets works on both files
+}
+
+TEST(LoaderRefusesAStockIdPluginWhenTheDerivedNoteWasNotVerified) {
+  Env env;
+  env.platform.gameBuild = DerivedId();  // the note alone: Attach did not record `verified`
+  ServeDeclaring(env.platform, "libstock.so", StockId());
+  env.loader->Plan({Item("stock", "libstock.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  const LoadRecord* r = env.platform.Record("stock");
+  CHECK(r != nullptr);
+  if (r == nullptr) return;
+  CHECK(r->outcome == Outcome::kRefused);
+  CHECK_EQ(r->reason, std::string(reason::kBuildIdUnsupported));
+  CHECK_EQ(r->gameBuildId, DerivedId());
+  CHECK_EQ(r->pluginViewBuildId, DerivedId());
+  CHECK(!r->libr15Patched);
+  CHECK(env.platform.opened.empty());
+}
+
+TEST(LoaderRefusesAStockIdPluginWhenTheStateCarriesTheIdButNotTheVerifiedFlag) {
+  Env env;
+  RunsPatched(env.platform);
+  env.platform.patch.verified = false;  // the ID is there and equals the note; the process did not record `verified`
+  ServeDeclaring(env.platform, "libstock.so", StockId());
+  env.loader->Plan({Item("stock", "libstock.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  const LoadRecord* r = env.platform.Record("stock");
+  CHECK(r != nullptr);
+  if (r == nullptr) return;
+  CHECK(r->outcome == Outcome::kRefused);
+  CHECK_EQ(r->reason, std::string(reason::kBuildIdUnsupported));
+  CHECK_EQ(r->pluginViewBuildId, DerivedId());
+  CHECK(!r->libr15Patched);
+  CHECK(env.platform.opened.empty());
+}
+
+TEST(LoaderRefusesAStockIdPluginWhenTheNoteReadNowIsAnotherId) {
+  Env env;
+  RunsPatched(env.platform);
+  env.platform.gameBuild = kThirdId;  // verified earlier, but the note the loader reads at the decision is another ID
+  ServeDeclaring(env.platform, "libstock.so", StockId());
+  env.loader->Plan({Item("stock", "libstock.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  const LoadRecord* r = env.platform.Record("stock");
+  CHECK(r != nullptr);
+  if (r == nullptr) return;
+  CHECK(r->outcome == Outcome::kRefused);
+  CHECK_EQ(r->reason, std::string(reason::kBuildIdUnsupported));
+  CHECK_EQ(r->gameBuildId, std::string(kThirdId));
+  CHECK_EQ(r->pluginViewBuildId, std::string(kThirdId));
+  CHECK(!r->libr15Patched);
+  CHECK(env.platform.opened.empty());
+}
+
+TEST(LoaderRefusesAStockIdPluginWhenTheVerificationCoveredAnotherId) {
+  Env env;
+  env.platform.gameBuild = DerivedId();
+  env.platform.patch.verified = true;
+  env.platform.patch.verifiedBuildId = kThirdId;
+  ServeDeclaring(env.platform, "libstock.so", StockId());
+  env.loader->Plan({Item("stock", "libstock.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  CHECK(env.platform.Record("stock")->outcome == Outcome::kRefused);
+  CHECK_EQ(env.platform.Record("stock")->reason, std::string(reason::kBuildIdUnsupported));
+  CHECK(!env.platform.Record("stock")->libr15Patched);
+}
+
+TEST(LoaderRefusesAStockIdPluginOnAThirdLibr15) {
+  Env env;
+  env.platform.gameBuild = kThirdId;
+  ServeDeclaring(env.platform, "libstock.so", StockId());
+  env.loader->Plan({Item("stock", "libstock.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  const LoadRecord* r = env.platform.Record("stock");
+  CHECK(r->outcome == Outcome::kRefused);
+  CHECK_EQ(r->reason, std::string(reason::kBuildIdUnsupported));
+  CHECK_EQ(r->gameBuildId, std::string(kThirdId));
+  CHECK(!r->libr15Patched);
+  CHECK(env.platform.opened.empty());
+}
+
+TEST(LoaderDecidesASecondPluginOnTheNoteReadForIt) {
+  Env env;
+  RunsPatched(env.platform);
+  ServeDeclaring(env.platform, "libfirst.so", StockId());
+  ServeDeclaring(env.platform, "libsecond.so", StockId());
+  env.loader->Plan({Item("first", "libfirst.so", true), Item("second", "libsecond.so")});
+  env.loader->RunPhase(PluginPhase::Early);  // loads "first" on the patched file
+  const LoadRecord* first = env.platform.Record("first");
+  CHECK(first != nullptr && first->outcome == Outcome::kLoaded);
+  env.platform.gameBuild = kThirdId;         // the note read for the next decision
+  env.loader->RunPhase(PluginPhase::Normal);
+  const LoadRecord* second = env.platform.Record("second");
+  CHECK(second != nullptr);
+  if (second != nullptr) {
+    CHECK(second->outcome == Outcome::kRefused);
+    CHECK_EQ(second->reason, std::string(reason::kBuildIdUnsupported));
+    CHECK_EQ(second->gameBuildId, std::string(kThirdId));
+  }
+  // The first plugin's context still names the stock ID: the string it was handed is not the loader's current note.
+  const FxSeen* seen = env.platform.Seen("libfirst.so");
+  CHECK(seen != nullptr);
+  if (seen != nullptr) CHECK_EQ(std::string(seen->game_build_id), StockId());
+}
+
+TEST(LoaderLoadsADerivedIdPluginOnThePatchedFileAndRefusesItOnAStockOne) {
+  {
+    Env env;
+    RunsPatched(env.platform);
+    ServeDeclaring(env.platform, "libderived.so", DerivedId());
+    env.loader->Plan({Item("derived", "libderived.so")});
+    env.loader->RunPhase(PluginPhase::Normal);
+    const LoadRecord* r = env.platform.Record("derived");
+    CHECK(r->outcome == Outcome::kLoaded);
+    CHECK(r->libr15Patched);
+    CHECK_EQ(r->gameBuildId, DerivedId());
+    CHECK_EQ(r->pluginViewBuildId, StockId());
+  }
+  {
+    Env env;
+    env.platform.gameBuild = StockId();  // the stock file: no patch recorded
+    ServeDeclaring(env.platform, "libderived.so", DerivedId());
+    env.loader->Plan({Item("derived", "libderived.so")});
+    env.loader->RunPhase(PluginPhase::Normal);
+    const LoadRecord* r = env.platform.Record("derived");
+    CHECK(r->outcome == Outcome::kRefused);
+    CHECK_EQ(r->reason, std::string(reason::kBuildIdUnsupported));
+    CHECK(!r->libr15Patched);
+    CHECK(env.platform.opened.empty());
+  }
+}
+
+TEST(LoaderLoadsAStockIdPluginOnTheStockFileWithoutTheMapping) {
+  Env env;
+  env.platform.gameBuild = StockId();
+  ServeDeclaring(env.platform, "libstock.so", StockId());
+  env.loader->Plan({Item("stock", "libstock.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  const LoadRecord* r = env.platform.Record("stock");
+  CHECK(r->outcome == Outcome::kLoaded);
+  CHECK_EQ(r->gameBuildId, StockId());
+  CHECK_EQ(r->pluginViewBuildId, StockId());
+  CHECK(!r->libr15Patched);
+  const FxSeen* seen = env.platform.Seen("libstock.so");
+  CHECK(seen != nullptr);
+  if (seen != nullptr) CHECK_EQ(std::string(seen->game_build_id), StockId());
+}
+
+TEST(LoaderGivesAnUnreadableLiveNoteNoPluginView) {
+  Env env;
+  env.platform.gameBuild = "";
+  env.platform.patch.verified = true;  // verified, but there is no note to compare: no mapping, no view
+  env.platform.patch.verifiedBuildId = DerivedId();
+  env.loader->Plan({Item("ok", "libfx_ok.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  CHECK_EQ(env.platform.Record("ok")->reason, std::string(reason::kGameBuildIdUnavailable));
+  CHECK_EQ(env.platform.Record("ok")->pluginViewBuildId, std::string("none"));
+  CHECK(!env.platform.Record("ok")->libr15Patched);
 }
 
 TEST(LoaderRefusesAFileThatIsNotForThisMachineWithoutMappingIt) {
@@ -817,6 +1090,8 @@ TEST(RecordLogCarriesEveryFieldAndNoValue) {
   record.sha256 = std::string(64, 'a');
   record.pluginBuildId = "bb";
   record.gameBuildId = "cc";
+  record.pluginViewBuildId = "dd";
+  record.libr15Patched = true;
   record.phase = PluginPhase::Early;
   record.outcome = Outcome::kRefused;
   record.reason = reason::kBuildIdUnsupported;
@@ -833,6 +1108,8 @@ TEST(RecordLogCarriesEveryFieldAndNoValue) {
   CHECK_EQ(line.value("sha256", ""), std::string(64, 'a'));
   CHECK_EQ(line.value("plugin_build_id", ""), std::string("bb"));
   CHECK_EQ(line.value("game_build_id", ""), std::string("cc"));
+  CHECK_EQ(line.value("plugin_view_build_id", ""), std::string("dd"));
+  CHECK_EQ(line.value("libr15_patched", -1), 1);
   CHECK_EQ(line.value("phase", ""), std::string("early"));
   CHECK_EQ(line.value("outcome", ""), std::string("refused"));
   CHECK_EQ(line.value("reason", ""), std::string("build_id_unsupported"));
@@ -851,6 +1128,9 @@ TEST(RecordLogNamesALoadedPluginOkAtInfo) {
   CHECK_EQ(line.value("level", ""), std::string("info"));
   CHECK_EQ(line.value("outcome", ""), std::string("loaded"));
   CHECK_EQ(line.value("reason", ""), std::string("ok"));
+  // A record that never saw the game says so in fixed tokens: no view, not patched.
+  CHECK_EQ(line.value("plugin_view_build_id", ""), std::string("none"));
+  CHECK_EQ(line.value("libr15_patched", -1), 0);
 }
 
 TEST(PlanSummaryLogCarriesTheCounts) {
@@ -954,6 +1234,17 @@ TEST(PlatformWritesAPluginLineToTheSentinelLog) {
   }
   CHECK(hello);
   CHECK(!chatter);
+}
+
+TEST(PlatformReadsThePatchStateFromItsSourceAndFailsClosedWithout) {
+  SentinelPlatform platform("", false);
+  const Libr15PatchSource previous = SetLibr15PatchSource(nullptr);
+  CHECK(!platform.Libr15Patch().verified);  // no source: not verified
+  CHECK_EQ(platform.Libr15Patch().verifiedBuildId, std::string(""));
+  CHECK(SetLibr15PatchSource(+[]() { return Libr15PatchState{true, std::string("abcd")}; }) == nullptr);
+  CHECK(platform.Libr15Patch().verified);
+  CHECK_EQ(platform.Libr15Patch().verifiedBuildId, std::string("abcd"));
+  CHECK(SetLibr15PatchSource(previous) != nullptr);
 }
 
 TEST(PlatformOffersTheInputSeamOfItsKindOfBuild) {

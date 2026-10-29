@@ -1411,8 +1411,11 @@ file, `nevr-runtime.dll`, that the host loads. What a player's machine does befo
   (`kRuntimeStopExitCode`, `RuntimeRendezvous::StopGame`). On a client with a screen it first shows one dialog that says
   the cause in plain words (`StopNoticeTextFor` in `src/runtime/host/stop_notice.h`: missing, not signed by the nEVR
   release process, changed after it was signed, unreadable, signature not accepted, or missing or damaged for any other
-  cause). On a dedicated server, a headless run, a command line the host cannot read, or a thread that holds the loader
-  lock, there is no dialog and the record is all there is.
+  cause), then the version of the host and the path of the host log. On a dedicated server, a headless run, a command
+  line the host cannot read, or a thread that holds the loader lock, there is no dialog. Every stop, with or without a
+  dialog, also writes one `NEVR.STOP` line to standard error and puts the same facts (`stopped`, `host_version`,
+  `runtime_version`, `detail`, `log`) in the `game_stop` record; the line's fields and the exit codes are in
+  `docs/standards/logging.md`, "The `NEVR.STOP` line".
 - In a run started with `-require-signed-plugins`, the runtime verifies each **plugin**, and every DLL it imports,
   with the same verifier before `LoadLibrary` (ADR 0010, `docs/adr/0010-signed-plugins-only.md`;
   `src/runtime/ext/plugin_signature.cpp`, pins in `src/runtime/ext/plugin_trust.cpp`). Without that argument unsigned

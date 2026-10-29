@@ -80,6 +80,10 @@ BRAND_PROSE_SPELLINGS = {
     "src/quest/social/menu_version_label.cpp": {"nEVR"},  # the Quest menu label: the text a player sees
     "src/runtime/ext/plugin_refusal_notice.h": {"nEVR"},
     "src/runtime/host/stop_notice.h": {"nEVR"},  # the player's text when the runtime did not load
+    "src/runtime/host/stop_line.cpp": {"nEVR"},  # the detail an operator reads: "no nEVR root"
+    "src/runtime/tests/test_host_stop_line.cpp": {"nEVR"},  # the dialog text the tests check
+    "src/runtime/tests/test_host_runtime_verify.cpp": {"nEVR"},  # the dialog's version line
+    "src/runtime/tests/rendezvous/rendezvous_test.cpp": {"nEVR"},  # the dialog text the harness reads
     "src/runtime/tests/test_host_rendezvous.cpp": {"nEVR"},  # asserts that text
     "src/quest/tests/menu_version_label_test.cpp": {"nEVR"},  # the label text the Quest menu shows
     "src/runtime/tests/test_menu_version_label.cpp": {"nEVR"},  # the label text the menu shows

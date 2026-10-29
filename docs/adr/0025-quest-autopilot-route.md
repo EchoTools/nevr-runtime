@@ -15,7 +15,7 @@ time. It is started through adb and ends when the route ends. It logs the route'
 the OVR Metrics CSV can be cut to exactly that window.
 
 What the tree and the binary give us (pinned `libr15.so`, build ID `b243509c08ce677aeb95fa348016949b3fc45230`,
-`src/quest/sentinel/pinned_targets.h`, `kLibR15BuildId`):
+`src/quest/sentinel/pinned_targets.h`, `kLibR15StockBuildId`):
 
 - **The game reads controller input through one import.** `readelf -rW` lists `vrapi_GetCurrentInputState` as
   `R_AARCH64_JUMP_SLOT` at 0x36ec0f0. Its PLT stub (0xf29410) has one caller (`revault_callers 0x1029410`, ReVault VA =
