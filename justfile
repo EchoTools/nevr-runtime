@@ -85,6 +85,24 @@ install-quest-release-timer:
     systemctl --user enable --now nevr-quest-release.timer
     systemctl --user list-timers nevr-quest-release.timer --no-pager
 
+# Arm the release train guard as a user timer (hourly at :07) from the same dedicated checkout as the Quest timer; the units are linked from origin/main, and the guard runs there (RELEASING.md, "When to release"; #1409)
+install-train-guard-timer:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    CHECKOUT="$HOME/src/nevr-runtime-work/release-timer/checkout"
+    git -C "{{ justfile_directory() }}" fetch --quiet origin main
+    if [ ! -e "$CHECKOUT/.git" ]; then
+        mkdir -p "$(dirname "$CHECKOUT")"
+        git -C "{{ justfile_directory() }}" worktree add --detach "$CHECKOUT" origin/main
+    fi
+    for unit in nevr-train-guard.service nevr-train-guard-failed.service nevr-train-guard.timer; do
+        test -f "$CHECKOUT/tools/systemd/$unit" || { echo "install-train-guard-timer: refused: $CHECKOUT has no tools/systemd/$unit (origin/main does not carry the units yet)" >&2; exit 1; }
+        systemctl --user link "$CHECKOUT/tools/systemd/$unit"
+    done
+    systemctl --user daemon-reload
+    systemctl --user enable --now nevr-train-guard.timer
+    systemctl --user list-timers nevr-train-guard.timer --no-pager
+
 # Remove one linked worktree: every proof first, then `git worktree remove` without --force and without `git submodule deinit` (tools/remove_worktree.py; --dry-run proves and changes nothing)
 remove-worktree *args:
     python3 -I tools/remove_worktree.py {{ args }}
