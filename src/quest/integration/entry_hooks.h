@@ -64,6 +64,12 @@ bool ResourceRequestLogEnabled() noexcept;          // nevr_build::kIsDev
 bool RegisterResourceRequestCounters() noexcept;    // 2 counters
 // resource_request::InstallIfCounted(countersRegistered): true when the slot holds the thunk.
 bool InstallResourceRequestLogHook(bool countersRegistered) noexcept;
+// The #928 clock-level override (sentinel/clock_levels_hook.h), through this seam for the same reason: the CPU and GPU levels
+// libr15 asks VrApi for. It owns no slot; the render-configuration hook's handler asks it which levels to call with.
+bool RegisterClockLevelsCounters() noexcept;  // 2 counters
+// clock_levels::ArmIfCounted(countersRegistered, overrideOn): sets the switch only with its counters registered; true when
+// armed. `overrideOn` is the switch (diagnostics.clock_levels_override).
+bool ArmClockLevelsHook(bool countersRegistered, bool overrideOn) noexcept;
 
 // The #966 main-menu cards (sentinel/menu_cards_hook.h), through this seam for the same reason: it includes
 // callback_thunk.h. No counters. True when the callback slot holds the thunk.

@@ -73,6 +73,7 @@ add_custom_command(
 
 add_library(ovrplatformloader SHARED
   entry.cpp
+  clock_levels_hook.cpp
   login_prompt_hook.cpp
   login_title_hook.cpp
   obb_skip_hook.cpp

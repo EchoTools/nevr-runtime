@@ -20,6 +20,7 @@
 #include <thread>
 #include <vector>
 
+#include "clock_levels_hook.h"
 #include "hook_log.h"
 #include "pinned_targets.h"
 #include "quest/tests/test_check.h"
@@ -30,6 +31,7 @@
 namespace {
 
 namespace rc = nevr_quest::render_config;
+namespace cl = nevr_quest::clock_levels;
 namespace tq = nevr_quest::texture_quality;
 namespace pinned = sentinel::pinned;
 using pinned::OvrJavaOpaque;
@@ -40,6 +42,8 @@ using pinned::OvrSubmitFrameDescriptionOpaque;
 
 int g_refreshResult = 0;
 int g_clockResult = 0;
+int g_clockCpuSeen = -1;  // what the stand-in for vrapi_SetClockLevels was called with
+int g_clockGpuSeen = -1;
 float g_reportedHertz = 90.0f;
 int g_calls = 0;
 int g_lastPropertyCall = -1;
@@ -49,8 +53,10 @@ int FakeSetRefreshRate(OvrMobileOpaque*, float) {
   ++g_calls;
   return g_refreshResult;
 }
-int FakeSetClockLevels(OvrMobileOpaque*, int, int) {
+int FakeSetClockLevels(OvrMobileOpaque*, int cpu, int gpu) {
   ++g_calls;
+  g_clockCpuSeen = cpu;
+  g_clockGpuSeen = gpu;
   return g_clockResult;
 }
 int FakeSetPropertyInt(const OvrJavaOpaque*, int property, int value) {
@@ -162,6 +168,7 @@ const rc::Source kFake{&ReadFakeGlobals, &ReadFakeDevice};
 
 void ResetAll() {
   rc::ResetForTest();
+  cl::ResetForTest();
   tq::ResetForTest();
   tq::SystemPropertyIntThunk::Reset();
   g_globals = rc::Globals{};
@@ -173,6 +180,8 @@ void ResetAll() {
   g_globalsReadable = true;
   g_refreshResult = 0;
   g_clockResult = 0;
+  g_clockCpuSeen = -1;
+  g_clockGpuSeen = -1;
   g_reportedHertz = 90.0f;
   g_calls = 0;
   WireThunks();
@@ -204,6 +213,44 @@ void EveryHookReturnsTheOriginalsResultAndPassesTheArgumentsOn() {
   QCHECK(Entry<SubmitT>()(kOvr, nullptr) == 0);
   QCHECK(g_calls == 7);
   QCHECK(g_lines.empty());  // a hook never logs
+}
+
+// ---- the clock-level override (#928) ----------------------------------------------------------------------------------------
+
+// The override owns no slot: the render-configuration hook's handler asks it. With the switch off the game's (2, 2) reaches
+// VrApi as it is; with it on, (4, 4) does, the line reports the levels applied and VrApi's answer, and any other pair passes.
+void TheClockOverrideRewritesTheGamesStockPairAndTheLineSaysSo() {
+  Capture capture;
+  ResetAll();
+  QCHECK(Entry<ClockT>()(kOvr, 2, 2) == 0);
+  QCHECK(g_clockCpuSeen == 2 && g_clockGpuSeen == 2);  // the switch is off by default
+  QCHECK(cl::CurrentCounts().calls == 1 && cl::CurrentCounts().overridden == 0);
+
+  ResetAll();
+  cl::ArmForTest(true);
+  g_clockResult = -7;
+  QCHECK(Entry<ClockT>()(kOvr, 2, 2) == -7);  // the original's answer comes back
+  QCHECK(g_clockCpuSeen == 4 && g_clockGpuSeen == 4);
+  QCHECK(cl::CurrentCounts().calls == 1 && cl::CurrentCounts().overridden == 1);
+  QCHECK(Entry<SubmitT>()(kOvr, nullptr) == 0);
+  QCHECK(rc::PollOnce(kFake));
+  const std::vector<std::string> lines = Lines("render_config");
+  QCHECK(lines.size() == 1);
+  if (lines.size() == 1) {
+    QCHECK(Field(lines[0], "cpu_level") == "4" && Field(lines[0], "gpu_level") == "4" &&
+           Field(lines[0], "clock_result") == "-7");
+  }
+
+  // Any other pair is the game's own, switch on or not.
+  struct Pair { int cpu, gpu; };
+  for (const Pair p : {Pair{5, 5}, Pair{2, 3}, Pair{3, 2}, Pair{4, 4}, Pair{0, 0}}) {
+    ResetAll();
+    cl::ArmForTest(true);
+    Entry<ClockT>()(kOvr, p.cpu, p.gpu);
+    QCHECK(g_clockCpuSeen == p.cpu && g_clockGpuSeen == p.gpu);
+    QCHECK(cl::CurrentCounts().calls == 1 && cl::CurrentCounts().overridden == 0);
+  }
+  cl::ResetForTest();
 }
 
 // ---- the line at the first frame and on a change ---------------------------------------------------------------------------
@@ -611,6 +658,7 @@ void AnInstallStartsThePollerOnlyWhenASlotHoldsItsThunk() {
 
 int main() {
   EveryHookReturnsTheOriginalsResultAndPassesTheArgumentsOn();
+  TheClockOverrideRewritesTheGamesStockPairAndTheLineSaysSo();
   NothingIsLoggedBeforeTheFirstFrame();
   TheFirstFrameWritesOneLineWithTheConfiguration();
   ANewFrameWithNothingChangedWritesNothing();

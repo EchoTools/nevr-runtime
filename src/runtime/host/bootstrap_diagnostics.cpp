@@ -288,6 +288,26 @@ std::size_t BootstrapDiagnostics::JournalClaimed() const { return claimed_.load(
 void BootstrapDiagnostics::RecordAttach(AttachStep step, AttachOutcome outcome,
                                         std::uint32_t detail, const unsigned char* actual,
                                         HookStage stage, AttachNote note) noexcept {
+  // The first step that left the game without the runtime, kept for the stop line (stop_line.h). Stored before the slot
+  // is reserved, so a journal that is full cannot lose it. An atomic and nothing else: this runs under the loader lock.
+  if (outcome != AttachOutcome::kAccepted) {
+    AttachFailure failure = AttachFailure::kNone;
+    switch (step) {
+      case AttachStep::kImageCheck: failure = AttachFailure::kImageCheck; break;
+      case AttachStep::kPrologueCheck: failure = AttachFailure::kPrologueCheck; break;
+      case AttachStep::kHookInstall: failure = AttachFailure::kHookInstall; break;
+      case AttachStep::kInstallWait:
+      case AttachStep::kDetourEntry:
+      case AttachStep::kSetGameModule:
+      case AttachStep::kJournal:
+      case AttachStep::kLogMutex:
+        break;
+    }
+    if (failure != AttachFailure::kNone) {
+      std::uint32_t none = 0;
+      first_failure_.compare_exchange_strong(none, static_cast<std::uint32_t>(failure));
+    }
+  }
   const std::size_t slot = journal_count_.fetch_add(1);
   if (slot >= kJournalCapacity) {
     journal_count_.store(kJournalCapacity);  // saturate: the first entries are the ones kept
@@ -306,6 +326,29 @@ void BootstrapDiagnostics::RecordAttach(AttachStep step, AttachOutcome outcome,
   entry.has_actual = actual != nullptr;
   if (actual != nullptr) std::memcpy(entry.actual, actual, kGameMainWrapperPrologueSize);
   entry.ready.store(1, std::memory_order_release);
+}
+
+AttachFailure BootstrapDiagnostics::FirstAttachFailure() const noexcept {
+  return static_cast<AttachFailure>(first_failure_.load());
+}
+
+bool BootstrapDiagnostics::LogFilePath(wchar_t* out, std::size_t size) const noexcept {
+  if (out == nullptr || size == 0) return false;
+  out[0] = L'\0';
+  const wchar_t* dir = nullptr;
+  const int last = last_destination_.load();
+  if (last == -1) {
+    // Nothing written yet: the first directory an append will try.
+    dir = primary_ready_ ? primary_dir_ : (fallback_ready_ ? fallback_dir_ : (host_dir_ready_ ? host_dir_ : nullptr));
+  } else if (last == static_cast<int>(DiagnosticDestination::kPrimary)) {
+    dir = primary_dir_;
+  } else if (last == static_cast<int>(DiagnosticDestination::kFallback)) {
+    dir = fallback_dir_;
+  } else if (last == static_cast<int>(DiagnosticDestination::kHostDirectory)) {
+    dir = host_dir_;
+  }  // kDropped: the last record reached no file
+  if (dir == nullptr) return false;
+  return AppendPath(out, size, dir, kBootstrapLogName);
 }
 
 bool BootstrapDiagnostics::AttachDegraded() const noexcept {
@@ -558,6 +601,37 @@ DiagnosticDestination BootstrapDiagnostics::Emit(const nlohmann::json& record) n
   }
 }
 
+namespace {
+
+std::string PathToUtf8(const wchar_t* path) {
+  const int needed = WideCharToMultiByte(CP_UTF8, 0, path, -1, nullptr, 0, nullptr, nullptr);
+  if (needed <= 1) return {};
+  std::string out(static_cast<std::size_t>(needed), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, path, -1, out.data(), needed, nullptr, nullptr);
+  out.resize(static_cast<std::size_t>(needed) - 1);
+  return out;
+}
+
+// One record as one line: invalid UTF-8 (a path from the file system) is written as U+FFFD instead of throwing out of
+// the host, and a record over the limit is replaced by a marker that keeps its identity.
+std::string SerializeRecord(const nlohmann::json& stamped) {
+  std::string line = stamped.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+  if (line.size() + 1 > BootstrapDiagnostics::kMaxRecordBytes) {
+    nlohmann::json marker = {{"tag", "NEVR.HOST"},
+                             {"ts", stamped.at("ts")},
+                             {"pid", stamped.at("pid")},
+                             {"run", stamped.at("run")},
+                             {"event", stamped.value("event", "unknown")},
+                             {"error", "record_too_large"},
+                             {"record_bytes", line.size()}};
+    line = marker.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+  }
+  line.push_back('\n');
+  return line;
+}
+
+}  // namespace
+
 DiagnosticDestination BootstrapDiagnostics::EmitChecked(const nlohmann::json& record) {
   nlohmann::json stamped = record;
   char timestamp[kTimestampSize] = {};
@@ -572,35 +646,62 @@ DiagnosticDestination BootstrapDiagnostics::EmitChecked(const nlohmann::json& re
     stamped["run"] = run;
   }
 
-  // error_handler_t::replace: a record with invalid UTF-8 (a path from the file system) is
-  // written with U+FFFD instead of throwing out of the host.
-  std::string line = stamped.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
-  if (line.size() + 1 > kMaxRecordBytes) {
-    nlohmann::json marker = {{"tag", "NEVR.HOST"},
-                             {"ts", stamped.at("ts")},
-                             {"pid", stamped.at("pid")},
-                             {"run", stamped.at("run")},
-                             {"event", record.value("event", "unknown")},
-                             {"error", "record_too_large"},
-                             {"record_bytes", line.size()}};
-    line = marker.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
-  }
-  line.push_back('\n');
+  // A record that carries a string `log` (the stop facts, stop_line.h) names the file it is written to: the field is
+  // set per directory tried, so a record that fell back to %TEMP% does not name the primary directory.
+  if (stamped.contains("log") && stamped.at("log").is_string()) return AppendRecordNamingLog(stamped);
+
+  const std::string line = SerializeRecord(stamped);
   return AppendLine(line.data(), line.size());
+}
+
+DiagnosticDestination BootstrapDiagnostics::AppendRecordNamingLog(nlohmann::json& stamped) {
+  struct Candidate {
+    const wchar_t* dir;
+    bool create_dir;
+    bool ready;
+    DiagnosticDestination destination;
+  };
+  const Candidate candidates[] = {
+      {primary_dir_, true, primary_ready_, DiagnosticDestination::kPrimary},
+      {fallback_dir_, true, fallback_ready_, DiagnosticDestination::kFallback},
+      {host_dir_, false, host_dir_ready_, DiagnosticDestination::kHostDirectory},
+  };
+  for (const Candidate& candidate : candidates) {
+    if (!candidate.ready) continue;
+    wchar_t path[MAX_PATH] = {};
+    if (!AppendPath(path, MAX_PATH, candidate.dir, kBootstrapLogName)) continue;
+    stamped["log"] = PathToUtf8(path);
+    const std::string line = SerializeRecord(stamped);
+    if (AppendTo(candidate.dir, candidate.create_dir, line.data(), line.size())) {
+      last_destination_.store(static_cast<int>(candidate.destination));
+      return candidate.destination;
+    }
+  }
+  stamped["log"] = "";
+  const std::string line = SerializeRecord(stamped);
+  return ReportDropped(line.data(), line.size());
 }
 
 DiagnosticDestination BootstrapDiagnostics::AppendLine(const char* line,
                                                        std::size_t length) noexcept {
   if (primary_ready_ && AppendTo(primary_dir_, true, line, length)) {
+    last_destination_.store(static_cast<int>(DiagnosticDestination::kPrimary));
     return DiagnosticDestination::kPrimary;
   }
   if (fallback_ready_ && AppendTo(fallback_dir_, true, line, length)) {
+    last_destination_.store(static_cast<int>(DiagnosticDestination::kFallback));
     return DiagnosticDestination::kFallback;
   }
   // The host's own directory exists already; it is not created.
   if (host_dir_ready_ && AppendTo(host_dir_, false, line, length)) {
+    last_destination_.store(static_cast<int>(DiagnosticDestination::kHostDirectory));
     return DiagnosticDestination::kHostDirectory;
   }
+  return ReportDropped(line, length);
+}
+
+DiagnosticDestination BootstrapDiagnostics::ReportDropped(const char* line, std::size_t length) noexcept {
+  last_destination_.store(static_cast<int>(DiagnosticDestination::kDropped));
 
   // Loud: a diagnostic that could not be persisted still reaches the console.
   HANDLE stderr_handle = GetStdHandle(STD_ERROR_HANDLE);
