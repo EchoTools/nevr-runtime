@@ -8,7 +8,8 @@ Every proof below is made before the first change. Any failed proof prints its r
 worktree exactly as it was.
   1. linked:    <worktree> is a linked worktree, not the main checkout;
   2. idle:      no process has its cwd inside it;
-  3. clean:     `git status --short` is empty and `git status --short --ignored` lists only build output;
+  3. clean:     `git status --short` is empty and `git status --short --ignored` lists only build output (a path
+              IGNORED_OK names, a file under __pycache__/, or a file under a directory holding a CACHEDIR.TAG);
   4. submodules, one proof per gitlink in the index:
      - initialised (a `.git` file in the submodule directory): the file points into THIS worktree's own
        `modules/` directory, the submodule's working tree is clean, and its repository holds no commit that
@@ -50,6 +51,9 @@ IGNORED_OK = (
     ".mcp.json", ".claude/settings.local.json", "config/public-defaults.env", ".pytest_cache/",
 )
 IGNORED_OK_PARTS = ("__pycache__/",)
+# A directory whose CACHEDIR.TAG starts with this line is a cache, by the Cache Directory Tagging specification
+# (cargo writes one into its target directory). Its contents are build output as a whole.
+CACHEDIR_SIGNATURE = b"Signature: 8a477f597d28d172789f06886806bc55"
 
 # Git reads these before it looks at -C: a stray one would send every call to another repository.
 STRIPPED_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
@@ -120,6 +124,40 @@ def ignored_entries(path):
 
 def is_build_output(entry):
     return entry.startswith(IGNORED_OK) or any(p in entry for p in IGNORED_OK_PARTS)
+
+
+def is_cache_dir(directory):
+    """True when `directory` holds a CACHEDIR.TAG whose first line is the signature."""
+    tag = os.path.join(directory, "CACHEDIR.TAG")
+    if not os.path.isfile(tag):
+        return False
+    with open(tag, "rb") as f:
+        return f.readline(len(CACHEDIR_SIGNATURE) + 2).rstrip(b"\r\n") == CACHEDIR_SIGNATURE
+
+
+def under_cache_dir(root, rel):
+    """True when the file `rel` (relative to `root`) lies under a directory that is a cache (is_cache_dir)."""
+    parts = rel.split("/")
+    return any(is_cache_dir(os.path.join(root, *parts[:i])) for i in range(1, len(parts)))
+
+
+def ignored_files_under(path, entry):
+    """The ignored files under a collapsed directory entry: git prints a directory of ignored files as one entry."""
+    out = git("ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", entry, cwd=path).stdout
+    return [f for f in out.split("\0") if f]
+
+
+def odd_ignored(path, ign):
+    """The ignored paths that are not build output. A collapsed directory is expanded and each file in it is judged
+    on its own, so a directory holding only __pycache__/ is build output and a run log beside it is not."""
+    odd = []
+    for entry in ign:
+        if is_build_output(entry):
+            continue
+        # A collapsed directory that git lists no file under cannot be shown harmless: it is refused as one entry.
+        files = (ignored_files_under(path, entry) or [entry]) if entry.endswith("/") else [entry]
+        odd.extend(f for f in files if not is_build_output(f) and not under_cache_dir(path, f))
+    return odd
 
 
 def diff_trees(a, b, limit=5):
@@ -216,7 +254,7 @@ def plan(path):
     plain_status, ign = ignored_entries(path)
     if plain_status:
         reasons.append("uncommitted or untracked work: " + "; ".join(plain_status[:8]) + (" ..." if len(plain_status) > 8 else ""))
-    odd = [e for e in ign if not is_build_output(e)]
+    odd = odd_ignored(path, ign)
     if odd:
         reasons.append("ignored files that are not build output (move any run log out first): " + ", ".join(odd[:8]))
 
