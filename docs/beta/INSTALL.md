@@ -16,6 +16,9 @@ have it, so please report anything odd (see "Report a bug").
 
 ## Install
 
+If Echo VR Launcher manages your nEVR, update nEVR through the launcher. `install.ps1` stops and says so when the folder
+is one the launcher lists, and changes nothing.
+
 1. Close Echo VR.
 2. Find your Echo VR folder: the one that contains `bin\win10\echovr.exe`.
 3. Copy (do not rename) the existing `bin\win10\BugSplat64.dll` to `%LOCALAPPDATA%\nevr\echovr\installer\aside\BugSplat64.dll.original`

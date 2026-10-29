@@ -75,7 +75,7 @@ takes `-Dir <...\bin\win10>` and `-Root <nevr folder>` (an absolute path; the ro
   (`nevr-install.txt.legacy-<timestamp>`) into the same folder; it deletes nothing of the player's;
 - it writes `nevr-runtime.dll` into the root and `BugSplat64.dll` into the game folder, and records what it did in
   `<root>\installer\nevr-install.txt` (`backup`, `legacy`, `runtime_aside`, `runtime_legacy`, `runtime_root`,
-  `installed_sha256`, `runtime_sha256`, and, once an install has been updated, `previous_sha256`, the hashes of the hosts it replaced);
+  `installed_sha256`, `runtime_sha256`, `owner`, and, once an install has been updated, `previous_sha256`, the hashes of the hosts it replaced);
 - run again from a newer package it updates both files in place.
 
 `uninstall.ps1` takes `-Dir` and, when the install was given one, the same `-Root`. It reads that record (a record an earlier
@@ -91,6 +91,24 @@ These are not yet in the root. Each moves in its own change and this page is upd
 - `_local\config.yaml`: the runtime still searches `_local` next to the game module (and one and two folders up) for it, and nothing moves it;
 - the game's own logs under `_local\r14logs` (the game writes them);
 - `logs\nevr-boot.jsonl` beside `echovr.exe`: the runtime's start-up log, #1232;
+
+## Who owns an install
+
+An install has one owner. Two things say who:
+
+- **The launcher's own state.** Echo VR Launcher keeps `launcher.json` in `%LOCALAPPDATA%\EchoVR_Launcher`; each `versions[]` entry
+  names an install root, and the game's folder is `<root>\ready-at-dawn-echo-arena\bin\win10` (`bin\win7` for the 2017 builds).
+  `nevr-install pc install` (and so `install.ps1`) reads that file, never writes it, and refuses a game folder it lists:
+  "Echo VR Launcher manages this install (nEVR <version> is installed; ...). Update nEVR through the launcher." The run ends
+  `needs-user`, changes nothing and fetches no package. `--launcher-dir <folder>` names the launcher's data folder when it is not
+  the default (the default exists on Windows only). A `launcher.json` that is there and cannot be read is a refusal too, because
+  the check cannot say the launcher is absent; a missing one means no launcher.
+- **The `owner` key of `nevr-install.txt`.** The core writes `owner=nevr-install`. An installer that manages the same folder
+  writes its own name (the launcher: `owner=launcher`); `install.ps1` and `uninstall.ps1` leave a record with any other owner
+  alone and say so. A record with no `owner` key, written before the key existed, is ours.
+
+A folder neither says is owned by anyone: an nEVR host in it with no record is adopted by the install (the game's own file is then
+marked `original=unknown`).
 
 ## What a launcher must not do
 
