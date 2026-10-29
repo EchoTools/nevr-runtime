@@ -439,17 +439,17 @@ TEST(ServerBotsMemory, TheHostingFlagsAreTheLobbysAt0x18Plus0x1C) {
   EXPECT_EQ(reinterpret_cast<uint8_t*>(HostingFlags(holder.data())), holder.data() + 0x34);
 }
 
-TEST(ServerBotsMemory, TheOfflineBitIsSetForTheCallAndEveryBitPutBack) {
+TEST(ServerBotsMemory, TheOfflineBitIsSetForTheCallAndOnlyItIsPutBack) {
   for (const uint32_t before : {0x0u, 0x6u, 0x7u, 0xFFFFFFFEu, 0x80000000u}) {
     uint32_t flags = before;
     uint32_t seen = 0;
     const bool result = WithOfflineBit(&flags, [&] {
       seen = flags;
-      flags ^= 0x100;  // what the call does to the flags is overwritten: the flags are as they were before it
+      flags ^= 0x100;  // another bit changed during the call (another thread, or the call) is kept
       return before % 2 == 0;
     });
     EXPECT_EQ(seen, before | 1u) << before;
-    EXPECT_EQ(flags, before) << before;
+    EXPECT_EQ(flags, before ^ 0x100u) << before << ": bit 0 as it was, every other bit as the call left it";
     EXPECT_EQ(result, before % 2 == 0) << "the call's answer is returned";
   }
 }

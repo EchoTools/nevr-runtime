@@ -409,13 +409,13 @@ inline uint32_t* HostingFlags(uint8_t* lobbyHolder) {
   return reinterpret_cast<uint32_t*>(lobbyHolder + kLobbyFromHolderOffset + kLobbyHostingFlagsOffset);
 }
 
-/// Runs `call` with the offline bit set and puts every bit back as it was after it.
+/// Runs `call` with the offline bit set, and clears it after unless it was set before. Only bit 0 is touched, with an
+/// atomic or and and, so a bit another thread or the call changes meanwhile is kept.
 template <typename Call>
 bool WithOfflineBit(uint32_t* flags, Call call) {
-  const uint32_t saved = *flags;
-  *flags = saved | kHostingFlagOffline;
+  const uint32_t before = __atomic_fetch_or(flags, kHostingFlagOffline, __ATOMIC_SEQ_CST);
   const bool result = call();
-  *flags = saved;
+  if ((before & kHostingFlagOffline) == 0) __atomic_fetch_and(flags, ~kHostingFlagOffline, __ATOMIC_SEQ_CST);
   return result;
 }
 
