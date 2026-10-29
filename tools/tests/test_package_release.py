@@ -380,7 +380,7 @@ class ReleaseStagesTest(PackageFixture):
         self.assertEqual(body.splitlines(), [
             "# nEVR 5.0.0",
             "",
-            "A player feature.",
+            "Fixes and internal changes.",
             "",
             "- `nevr-runtime-v5.0.0-windows.zip`: install on PC (unzip, close the game, run `install.ps1`); also the "
             "dedicated server (`echovr_server.exe`) and `uninstall.ps1`.",
@@ -401,17 +401,17 @@ class ReleaseStagesTest(PackageFixture):
         self.assertNotRegex(body, r"@[A-Z_]+@", "every placeholder is filled")
         self.assertNotIn("No Quest APK", body)
 
-    def test_the_player_line_is_read_from_the_range_the_body_is_given(self):
+    def test_the_player_line_is_the_fixed_sentence_whatever_feat_commits_the_range_holds(self):
         sealed = self.seal_to(self.make_tree())
         many = ("feat(runtime): one", "fix(quest): two", "feat(runtime): three", "feat(runtime): four",
                 "fix(quest): five")
         self.assertEqual(self.notes_for(sealed, "many", changes=many).read_text().splitlines()[2],
-                         "One; three and 1 more.")
+                         "Fixes and internal changes.")
         none = ("fix(arena): a host fix", "feat(plugin): an api", "chore: tidy")
         self.assertEqual(self.notes_for(sealed, "none", changes=none).read_text().splitlines()[2],
                          "Fixes and internal changes.")
 
-    AUTO_LINE = "A player feature."
+    AUTO_LINE = "Fixes and internal changes."  # the default change below is a player feat; it must not show
     HEADLINE = "release-headline.txt"
 
     def headline_repo(self, base_files, rev_files, changes=("feat(runtime): a player feature",)):

@@ -14,6 +14,8 @@
 #include <utility>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "quest/integration/bridge_uri.h"
 #include "quest/integration/ctor_sequence.h"
 #include "quest/integration/drop_report.h"
@@ -1886,9 +1888,41 @@ void TestRouterLinesClassify() {
   QCHECK(!c("[router] game=1 conn=0 (config)"));
 }
 
+// The constructor's begin record names the build (#1391): the version and the commit, as fields of one sentinel_ctor line.
+std::vector<std::string> g_beginLines;
+void CaptureBeginLine(sentinel::LogLevel, const char* line) { g_beginLines.emplace_back(line); }
+
+std::size_t CountEventKeys(const std::string& text) {
+  const std::string needle = "\"event\":";
+  std::size_t count = 0;
+  for (std::size_t at = text.find(needle); at != std::string::npos; at = text.find(needle, at + needle.size())) {
+    ++count;
+  }
+  return count;
+}
+
+void TestConstructorBeginNamesTheBuild() {
+  constexpr const char* kVersion = "6.0.1-dev.2+0123456789abcdef0123456789abcdef01234567";
+  constexpr const char* kCommit = "0123456789abcdef0123456789abcdef01234567";
+  g_beginLines.clear();
+  const sentinel::LogSink previous = sentinel::SetLogSink(&CaptureBeginLine);
+  nevr_quest::integration::LogConstructorBegin(kVersion, kCommit);
+  sentinel::SetLogSink(previous);
+  QCHECK(g_beginLines.size() == 1U);
+  if (g_beginLines.size() != 1U) return;
+  const std::string& line = g_beginLines[0];
+  const nlohmann::json j = nlohmann::json::parse(line);
+  QCHECK(j.value("event", "") == "sentinel_ctor");
+  QCHECK(j.value("action", "") == "begin");
+  QCHECK(j.value("version", "") == std::string(kVersion));
+  QCHECK(j.value("commit", "") == std::string(kCommit));
+  QCHECK(CountEventKeys(line) == 1U);
+}
+
 }  // namespace
 
 int main() {
+  TestConstructorBeginNamesTheBuild();
   TestBareBridgeUriBecomesTheTokenedOne();
   TestStageNamesAreStable();
   TestAttachRunsOnceOnEveryLaunchBeforeEveryLibr15Step();

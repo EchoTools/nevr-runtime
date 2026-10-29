@@ -3,8 +3,15 @@
 #include <exception>
 
 #include "quest/plugin/plugin_plan.h"
+#include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::integration {
+
+// The begin record (#1391): the build's version and commit are fields of the line, so a log names the build that ran.
+void LogConstructorBegin(const char* version, const char* commit) noexcept {
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "sentinel_ctor",
+                      {{"action", "begin"}, {"version", version}, {"commit", commit}});
+}
 
 const char* StepStateName(StepState state) {
   switch (state) {

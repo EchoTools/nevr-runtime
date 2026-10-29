@@ -248,6 +248,16 @@ class TheToastClearsEveryException(unittest.TestCase):
         self.assertIn("ExceptionClear", text)
 
 
+class TheConstructorBeginNamesTheBuild(unittest.TestCase):
+    # #1391: the begin record carries this build's version and commit. The record is written by LogConstructorBegin
+    # (src/quest/integration/ctor_sequence.cpp, pinned on the host by integration_sequence_test); this pins that the
+    # constructor hands it the build's own identity from the generated header, not a literal.
+    def test_the_constructor_passes_the_generated_build_identity(self):
+        text = re.sub(r"//[^\n]*", "", read("entry.cpp"))
+        ctor = extract_braced_function(text, "static void nevr_sentinel_ctor() {")
+        self.assertIn("nevr_quest::integration::LogConstructorBegin(nevr_build::kVersion, nevr_build::kCommit);", ctor)
+
+
 class NoLoadTimeInitializer(unittest.TestCase):
     def test_the_wiring_holds_no_global_with_a_constructor(self):
         text = re.sub(r"//[^\n]*", "", read("data_wiring.cpp"))
