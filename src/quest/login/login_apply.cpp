@@ -12,6 +12,7 @@
 
 #include "quest/login/login_rewrite.h"
 #include "quest/login/login_standin.h"
+#include "quest/sentinel/hook_log.h"
 
 #if defined(__cpp_exceptions)
 #error "login_apply.cpp must be built with -fno-exceptions (it runs while game code is live)"
@@ -375,6 +376,39 @@ HeldReset ResetHeldStandIns(PrerequisiteState& state) noexcept {
   return reset;
 }
 
-
+void SentinelLog(Level level, const char* event, const LogKv* fields, std::size_t count) {
+  const sentinel::LogLevel mapped = level == Level::Error     ? sentinel::LogLevel::kError
+                                    : level == Level::Warning ? sentinel::LogLevel::kWarn
+                                                              : sentinel::LogLevel::kInfo;
+  using sentinel::LogField;
+  auto field = [&](std::size_t i) {
+    return fields[i].text != nullptr ? LogField(fields[i].key, fields[i].text)
+                                     : LogField(fields[i].key, fields[i].number);
+  };
+  if (count > 8) {
+    // The switch below carries eight fields; say so instead of dropping the rest silently.
+    sentinel::LogFields(sentinel::LogLevel::kError, "quest_login_log_overflow",
+                        {LogField("overflowed_event", event), LogField("fields", count)});
+  }
+  switch (count) {
+    case 0: sentinel::LogFields(mapped, event, {}); break;
+    case 1: sentinel::LogFields(mapped, event, {field(0)}); break;
+    case 2: sentinel::LogFields(mapped, event, {field(0), field(1)}); break;
+    case 3: sentinel::LogFields(mapped, event, {field(0), field(1), field(2)}); break;
+    case 4: sentinel::LogFields(mapped, event, {field(0), field(1), field(2), field(3)}); break;
+    case 5: sentinel::LogFields(mapped, event, {field(0), field(1), field(2), field(3), field(4)}); break;
+    case 6:
+      sentinel::LogFields(mapped, event, {field(0), field(1), field(2), field(3), field(4), field(5)});
+      break;
+    case 7:
+      sentinel::LogFields(mapped, event,
+                          {field(0), field(1), field(2), field(3), field(4), field(5), field(6)});
+      break;
+    default:
+      sentinel::LogFields(mapped, event,
+                          {field(0), field(1), field(2), field(3), field(4), field(5), field(6), field(7)});
+      break;
+  }
+}
 
 }  // namespace nevr_quest_login

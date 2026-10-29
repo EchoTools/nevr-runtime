@@ -33,6 +33,7 @@
 #include "toast_presenter.h"
 #include "vk_ext_window.h"
 #include "pinned_targets.h"
+#include "quest/integration/ctor_sequence.h"
 #include "quest/integration/entry_hooks.h"
 
 #include <jni.h>
@@ -205,7 +206,7 @@ const char* nevr_sentinel_marker() {
 // DT_NEEDED closure, before libr15's JNI_OnLoad / ANativeActivity_onCreate.
 __attribute__((constructor))
 static void nevr_sentinel_ctor() {
-    sentinel::LogFields(sentinel::LogLevel::kInfo, "sentinel_ctor", {{"action", "begin"}});
+    nevr_quest::integration::LogConstructorBegin(nevr_build::kVersion, nevr_build::kCommit);
     // #829: the thread that loads the library takes the UI looper for the floor message's presenter (it logs what it found).
     nevr_quest::toast::CaptureUiLooper();
     // Everything the constructor does is one sequence (integration/ctor_sequence.h): crash reporter,
