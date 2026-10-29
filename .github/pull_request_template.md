@@ -17,9 +17,10 @@ body that names none (docs/standards/planning.md, "PRs").
 
 <!--
 The quick check is the gate for a PR (see AGENTS.md, "Builds"): the build, the test recipe(s) that cover the changed code,
-and the PC login test when the change touches runtime or auth. `just verify` runs only on main, when prepping a release.
+`just test-tools` and `python3 tools/verify_doc_paths.py`. The PC login test and `just verify` run on main after the
+release cut, not on a PR.
 Paste the relevant output, and say what it does not cover: it does not catch wire-format bugs, login failures or
-rendering regressions. For runtime changes, quote the program's own log from the login test.
+rendering regressions.
 See docs/standards/verification.md.
 -->
 

@@ -73,7 +73,8 @@ class ReleaseAssetsTest(unittest.TestCase):
         # The tag's build skips the full suite (#1008), so the section must not ask for a `just verify` of this tip.
         self.assertNotIn("`just verify` has run on this tip", before)
         self.assertIn("full suite", " ".join(before.split()))
-        self.assertIn("PC login test passes", before)
+        self.assertNotIn("PC login test passes", before)
+        self.assertIn("run on main after the release cut", " ".join(before.split()))
         self.assertNotIn("gh workflow run", before)
         self.assertNotIn("v0.0.<issue>", before)
         dispatches = [l for l in text.splitlines() if l.startswith("gh workflow run build.yml")]
