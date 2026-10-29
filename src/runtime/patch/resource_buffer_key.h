@@ -7,10 +7,16 @@
  * the key follows from the logical type the callback reads at CResource + 0x28 alone, with no call into the game.
  *
  * An entry's type names its buffer:
- *   - 0, the logical type, or Make(<logical>, "Win10"): buffer 0, which is all an entry could name before #1421;
+ *   - 0, the logical type, or Make(<logical>, "Win10"): buffer 0;
  *   - Make(<logical>, "Win10GPU"): buffer 1.
- * So an entry written for an older runtime still names buffer 0 only, and a buffer-1 entry is one an older runtime never
- * matches (it compares an entry's type with the logical type).
+ * Before #1421 the callback matched an entry by 0 or the logical type, on buffer 0 only: those entries still name buffer
+ * 0. An entry keyed by either on-disk type matched nothing then; it now names the buffer that type is read by. A runtime
+ * from before #1421 never matches a buffer-1 entry, so it cannot serve a payload as a descriptor.
+ *
+ * A texture's descriptor and payload are two entries, each served on its own, and the game finishes the two buffers in
+ * either order (#1421 step 1). The descriptor is the header the payload is read with, so a payload of another size
+ * needs its descriptor entry too, and a payload that is not served leaves a served descriptor entry without it:
+ * resource_override.cpp says either in a Warning that names the texture.
  *
  * Pure: src/runtime/tests/test_resource_override.cpp drives it through the resource callback.
  */

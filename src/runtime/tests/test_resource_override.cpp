@@ -1087,6 +1087,63 @@ TEST_F(TexturePayloads, ACachedEntryForAnotherBufferDoesNotSuppressTheBuiltInSpl
   EXPECT_FALSE(TestLogContains("not registered reason"));
 }
 
+// A texture's descriptor and payload are two entries (resource_buffer_key.h): a Warning says when they end up unpaired.
+TEST_F(TexturePayloads, ARefusedPayloadSaysItsTexturesDescriptorEntryIsServedWithoutIt) {
+  static const std::uint8_t descriptor[] = {1, 2, 3, 4};
+  static const std::uint8_t payload[12] = {};
+  RegisterResourceOverride(kTextureDescriptorKey, kPosterName, descriptor, sizeof(descriptor), "poster_desc");
+  RegisterResourceOverride(kTexturePayloadKey, kPosterName, payload, sizeof(payload), "poster");
+  static const std::uint8_t stock[] = {9, 9, 9};
+  GameFinishesBuffer(kTextureType, kPosterName, 0, stock, sizeof(stock));
+  ExpectGameCopy(descriptor, sizeof(descriptor));
+  std::uint8_t small[8] = {};
+  GameFinishesBuffer(kTextureType, kPosterName, 1, small, sizeof(small));
+  EXPECT_EQ(g_seenSize, sizeof(small));
+  EXPECT_TRUE(TestLogContains("reason=larger_than_the_game_buffer descriptor_entry=yes "));
+  EXPECT_TRUE(TestLogContains("this texture's descriptor entry is served without it"));
+}
+
+TEST_F(TexturePayloads, ARefusedPayloadWithNoDescriptorEntrySaysSo) {
+  static const std::uint8_t payload[12] = {};
+  RegisterResourceOverride(kTexturePayloadKey, kPosterName, payload, sizeof(payload), "poster");
+  RegisterResourceOverride(kTextureDescriptorKey, kPosterName + 1, payload, 4, "other_texture_desc");
+  std::uint8_t small[8] = {};
+  GameFinishesBuffer(kTextureType, kPosterName, 1, small, sizeof(small));
+  EXPECT_TRUE(TestLogContains("reason=larger_than_the_game_buffer descriptor_entry=no "));
+  EXPECT_FALSE(TestLogContains("served without it"));
+}
+
+TEST_F(TexturePayloads, ASmallerPayloadWithNoDescriptorEntryIsWrittenAndTheWarningSaysSo) {
+  static const std::uint8_t payload[6] = {1, 2, 3, 4, 5, 6};
+  RegisterResourceOverride(kTexturePayloadKey, kPosterName, payload, sizeof(payload), "poster");
+  RegisterResourceTransform(kTextureType, kPosterName, &ProbeTransform, nullptr, "probe");
+  std::uint8_t gameBuffer[8] = {};
+  GameFinishesBuffer(kTextureType, kPosterName, 1, gameBuffer, sizeof(gameBuffer));
+  EXPECT_EQ(g_seenSize, sizeof(payload));
+  EXPECT_TRUE(TestLogContains("payload smaller than the game's label=poster buffer=1 "));
+  EXPECT_TRUE(TestLogContains("game_bytes=8 new_bytes=6 descriptor_entry=no "));
+}
+
+TEST_F(TexturePayloads, ASmallerPayloadWithItsDescriptorEntryIsWrittenWithNoWarning) {
+  static const std::uint8_t descriptor[] = {1, 2, 3, 4};
+  static const std::uint8_t payload[6] = {1, 2, 3, 4, 5, 6};
+  RegisterResourceOverride(kTexturePayloadKey, kPosterName, payload, sizeof(payload), "poster");
+  RegisterResourceOverride(kTextureType, kPosterName, descriptor, sizeof(descriptor), "poster_desc");
+  std::uint8_t gameBuffer[8] = {};
+  GameFinishesBuffer(kTextureType, kPosterName, 1, gameBuffer, sizeof(gameBuffer));
+  EXPECT_EQ(g_seenSize, sizeof(payload));
+  EXPECT_FALSE(TestLogContains("payload smaller than"));
+}
+
+TEST_F(TexturePayloads, APayloadOfTheGamesSizeWithNoDescriptorEntryIsWrittenWithNoWarning) {
+  static const std::uint8_t payload[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+  RegisterResourceOverride(kTexturePayloadKey, kPosterName, payload, sizeof(payload), "poster");
+  std::uint8_t gameBuffer[8] = {};
+  GameFinishesBuffer(kTextureType, kPosterName, 1, gameBuffer, sizeof(gameBuffer));
+  EXPECT_EQ(std::memcmp(gameBuffer, payload, sizeof(payload)), 0);
+  EXPECT_FALSE(TestLogContains("payload smaller than"));
+}
+
 TEST_F(TexturePayloads, TheCacheCapHoldsTheShippedPosterSet) {
   Cache(Image(100, 1), kTexturePayloadKey, kPosterName, "cache_poster");
   RegisterCachedResourceOverrides(dir_.c_str());

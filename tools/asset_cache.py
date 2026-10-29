@@ -8,7 +8,9 @@
   asset_cache.py verify --dir DIR
 
 The type names the buffer the blob replaces (src/runtime/patch/resource_buffer_key.h): a texture's payload is
-`--type 0xbeac1969cb7b8861` (Make(CGTextureResource, "Win10GPU"), buffer 1); its logical type or 0 names buffer 0.
+`--type 0xbeac1969cb7b8861` (Make(CGTextureResource, "Win10GPU"), buffer 1); `0x4a4c32c49300b8a0` (Make(CGTextureResource,
+"Win10")), its logical type or 0 name buffer 0, the descriptor. A payload of another size than the game's needs its
+descriptor entry too.
 
 DIR is `%LOCALAPPDATA%\\nevr\\echovr\\cache` of the Windows user (under Wine: `<prefix>/drive_c/users/<user>/AppData/Local/nevr/echovr/cache`).
 A blob is written to a temp file, flushed and renamed into place; index.json the same way. A damaged index.json is

@@ -149,22 +149,46 @@ static bool GiveGameACopy(uintptr_t cbd, const void* bytes, uint64_t size, const
     return true;
 }
 
+/* Whether the registry holds an entry that replaces buffer 0 of (type_hash, name_hash): for a texture, its descriptor. */
+static bool HasDescriptorEntryFor(uint64_t type_hash, uint64_t name_hash) {
+    std::lock_guard<std::mutex> lock(g_overrides_mutex);
+    if (!g_overrides) return false;
+    for (const auto& ovr : *g_overrides) {
+        if (ovr->transform || ovr->name_hash != name_hash) continue;
+        if (nevr_resource_key::NamesBuffer(ovr->type_hash, type_hash, 0)) return true;
+    }
+    return false;
+}
+
 /* Writes a payload (buffer 1) over the game's own buffer, when it fits: no payload-sized copy is made in the game's
  * heap, and the buffer the game frees is still the one its reader allocated (#1421). Returns false, and leaves the
- * block alone, when it does not fit. */
+ * block alone, when it does not fit. A texture's descriptor is a separate entry (resource_buffer_key.h), so either
+ * outcome that leaves the two unpaired is a Warning that says which. */
 static bool WritePayloadInPlace(uintptr_t cbd, const ResourceOverride& ovr, uint64_t type_hash, uint64_t name_hash,
                                 uint64_t game_bytes) {
     const nevr_game_buffer::InPlace result =
         nevr_game_buffer::WriteInPlace(reinterpret_cast<unsigned char*>(cbd), ovr.data, ovr.size);
+    const bool descriptorEntry = HasDescriptorEntryFor(type_hash, name_hash);
     if (result != nevr_game_buffer::InPlace::Written) {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.RESOURCE] payload not replaced label=%s buffer=1 type=0x%016llx name=0x%016llx game_bytes=%llu "
-            "new_bytes=%llu reason=%s - the game's own payload is kept, and the replacement is offered again on the "
-            "next load",
+            "new_bytes=%llu reason=%s descriptor_entry=%s - the game's own payload is kept, and the replacement is "
+            "offered again on the next load%s",
             ovr.label.c_str(), static_cast<unsigned long long>(type_hash), static_cast<unsigned long long>(name_hash),
             static_cast<unsigned long long>(game_bytes), static_cast<unsigned long long>(ovr.size),
-            nevr_game_buffer::InPlaceName(result));
+            nevr_game_buffer::InPlaceName(result), descriptorEntry ? "yes" : "no",
+            descriptorEntry ? "; this texture's descriptor entry is served without it, so the game reads its own "
+                              "payload with that descriptor"
+                            : "");
         return false;
+    }
+    if (ovr.size < game_bytes && !descriptorEntry) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.RESOURCE] payload smaller than the game's label=%s buffer=1 type=0x%016llx name=0x%016llx "
+            "game_bytes=%llu new_bytes=%llu descriptor_entry=no - the payload is written, but the game reads it with "
+            "its own descriptor, made for its own payload; a payload of another size needs its descriptor entry too",
+            ovr.label.c_str(), static_cast<unsigned long long>(type_hash), static_cast<unsigned long long>(name_hash),
+            static_cast<unsigned long long>(game_bytes), static_cast<unsigned long long>(ovr.size));
     }
     return true;
 }

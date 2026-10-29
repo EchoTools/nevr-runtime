@@ -40,6 +40,8 @@ void InstallResourceOverride();
 /// (resource_buffer_key.h): 0, the logical type or Make(<logical>, "Win10") name buffer 0, which the game gets a copy of
 /// in its own heap; Make(<logical>, "Win10GPU") names buffer 1 (a texture's payload), which is written over the game's
 /// own buffer when it is no larger and is otherwise not served, with a Warning. The cache and `_overrides/` key the same.
+/// A texture's descriptor (buffer 0) and payload (buffer 1) are two entries: a payload of another size than the game's
+/// needs its descriptor entry too. Before #1421 an entry keyed by either on-disk type matched nothing.
 void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
                               const void* data, uint64_t size,
                               const char* label);
