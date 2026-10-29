@@ -50,10 +50,16 @@ fetches the files back only after it has put them there.
 A release is a train, not an event. The train (`release-train.yml`) runs every three hours and cuts a pre-release when `main` has a
 commit that `tools/next_release_version.py` counts (feat, fix, perf or a breaking change) since the newest tag.
 
-The guard (`release-train-guard.yml`, `tools/release_train_guard.py`) runs hourly and covers a dropped scheduled train run.
-When `main` is releasable and no train run was created in the last 3 h 15 min, it dispatches the train and logs the decision
-to the job log and the step summary. It does nothing while a train run is queued, in progress, waiting or pending, when `RELEASE_TRAIN` is not
-`true`, or when nothing on `main` is releasable.
+The guard covers a dropped scheduled train run. It is a systemd user timer on the publisher's machine
+(`tools/systemd/nevr-train-guard.timer`, hourly at :07), which runs `tools/release_train_guard.py` from the Quest timer's dedicated
+checkout with the publisher's `gh-spritz` (`--gh`, else `GH_BIN`). It runs only while that machine is on: a machine that is off delays
+the guard, and the timer's `Persistent=true` catches up when the machine comes back. When `main` is releasable and no train run was
+created in the last 3 h 15 min, it dispatches the train. It does nothing while a train run is queued, in progress, waiting or pending,
+when `RELEASE_TRAIN` is not `true`, or when nothing on `main` is releasable. Each decision is one line in the journal
+(`journalctl --user -u nevr-train-guard.service`) and in `~/.local/state/nevr-runtime/release-train-guard.jsonl`; a run whose log cannot
+be written fails before it decides anything. A failed run couriers the release lead (`nevr-train-guard-failed.service`); it never bonks.
+It is not a GitHub schedule: GitHub drops or delays scheduled runs, and a job's token cannot read repository variables (`gh variable
+list` answers HTTP 403 to it), so the job could not read `RELEASE_TRAIN`. `just install-train-guard-timer` installs the timer.
 
 1. **Switch.** The train does nothing until the repository variable `RELEASE_TRAIN` is `true`. Merging the workflow cuts
    nothing.
