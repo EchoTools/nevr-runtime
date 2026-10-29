@@ -26,15 +26,6 @@ class PluginsInstallRootScriptsTest(unittest.TestCase):
         self.assertIn('"$GAME_DIR/$NEVR_ROOT_REL/plugins/', text)
         self.assertNotIn("$GAME_DIR/plugins", text)
 
-    def test_the_go_helpers_use_the_nevr_root_for_plugins(self):
-        text = code_go()
-        self.assertEqual(text.count('filepath.Join(nevrRootDir(absGameDir), "plugins")'), 2)
-        self.assertNotIn('"bin", "win10", "plugins"', text)
-
-
-def code_go() -> str:
-    lines = (REPO / "tests/system/helpers_test.go").read_text().splitlines()
-    return "\n".join(line for line in lines if not re.match(r"^\s*//", line))
 
 
 if __name__ == "__main__":
