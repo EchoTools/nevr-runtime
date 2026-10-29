@@ -175,6 +175,7 @@ void RemoteSockets::OnEvent(RemoteId remote, const ix::WebSocketMessagePtr& mess
                        " http_status=" + std::to_string(message->errorInfo.http_status) +
                        " retries=" + std::to_string(message->errorInfo.retries));
       }
+      if (hooks_.refused) hooks_.refused(request, message->errorInfo.http_status);
       Retire(remote);
       router_->OnRemoteError(remote, message->errorInfo.http_status, "remote error");
       break;
