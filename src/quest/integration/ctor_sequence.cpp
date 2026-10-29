@@ -30,6 +30,7 @@ const char* StepName(StepId id) {
     case StepId::kRegisterObbSkipCounters: return "register_obb_skip_counters";
     case StepId::kRegisterResourceRequestCounters: return "register_resource_request_counters";
     case StepId::kRegisterTextureQualityCounters: return "register_texture_quality_counters";
+    case StepId::kRegisterClockLevelsCounters: return "register_clock_levels_counters";
     case StepId::kStartReporter: return "start_reporter";
     case StepId::kRunEarlyPlugins: return "run_early_plugins";
     case StepId::kInstallClockHook: return "install_clock_hook";
@@ -43,6 +44,7 @@ const char* StepName(StepId id) {
     case StepId::kInstallRenderConfig: return "install_render_config";
     case StepId::kInstallCreditsText: return "install_credits_text";
     case StepId::kInstallMenuCards: return "install_menu_cards";
+    case StepId::kArmClockLevels: return "arm_clock_levels";
     case StepId::kStartTokenAuth: return "start_token_auth";
     case StepId::kInstallLoginPrompt: return "install_login_prompt";
     case StepId::kStartBridge: return "start_bridge";
@@ -187,6 +189,10 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     } else {
       r.Skip(StepId::kRegisterTextureQualityCounters, "stock");
     }
+    // The clock-level override (#928) is armed on every launch (the switch decides only whether it rewrites), so its counters
+    // are registered on every launch too.
+    const bool clockLevelsCounters =
+        r.Run(StepId::kRegisterClockLevelsCounters, [&] { return steps.RegisterClockLevelsCounters(); });
     r.Run(StepId::kStartReporter, [&] { return steps.StartReporter(); });
 
     // The early plugin pass (#438): the reporter is running, so a plugin's first line reaches the same sinks, and the clock
@@ -265,6 +271,20 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // The main-menu cards (#966): every launch, no counters. One libr15 data slot; libr15 reads it each time it starts a
     // resource load, so the hook is in place before the menu page is requested.
     r.Run(StepId::kInstallMenuCards, [&] { return steps.InstallMenuCards(); });
+
+    // The clock-level override (#928): every launch. libr15 makes the call when it enters VR mode, long after the constructor,
+    // through the render-configuration hook installed above, which asks the override which levels to use. The switch is the
+    // resolved `diagnostics.clock_levels_override`; it is off when the configuration could not be resolved.
+    if (!clockLevelsCounters) {
+      try {
+        steps.ArmClockLevels(false, want.clockLevels);  // the override's own rule logs the skip and leaves the switch off
+      } catch (const std::exception&) {
+        // Contained like every step; the outcome is the skip below either way.
+      }
+      r.Skip(StepId::kArmClockLevels, "counters_refused");
+    } else {
+      r.Run(StepId::kArmClockLevels, [&] { return steps.ArmClockLevels(true, want.clockLevels); });
+    }
 
     bool tokenOk = false;
     if (wantTokenAuth) {

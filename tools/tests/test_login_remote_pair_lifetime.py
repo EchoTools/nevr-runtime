@@ -35,8 +35,13 @@ def bridge_code() -> str:
 
 
 def routing_block(code: str) -> str:
-    """The routing decision in the login remote's Message branch: from the pair lookup to the drop check."""
-    start = code.index("const auto pit = g_pairs.find(gameWsPtr);")
+    """The routing decision in the login remote's Message branch: from the pair lookup to the drop check.
+
+    The lookup is the one that sits right before the found-pair branch: another lookup of the same pair
+    (the login-failure send) comes earlier in the callback and is not the routing decision.
+    """
+    found = code.index(FOUND_BRANCH)
+    start = code.rindex("const auto pit = g_pairs.find(gameWsPtr);", 0, found)
     return code[start:code.index("if (target == nullptr)", start)]
 
 
@@ -71,7 +76,8 @@ class LoginRemotePairLifetime(unittest.TestCase):
         block = routing_block(bridge_code())
         erased = block[block.index(ERASED_BRANCH):]
         # Erased pair, remote still the login remote: the matchmaker route, and nothing else in that branch.
-        self.assertRegex(erased, r"^\} else if \(remoteAddress == g_loginRemoteWs\.get\(\)\) \{\s*SharedRouteLocked\(&target\);\s*\}")
+        self.assertRegex(erased, r"^\} else if \(remoteAddress == g_loginRemoteWs\.get\(\)\) \{\s*"
+                                 r"if \(const ProxyPair\* route = SharedRouteLocked\(&target\)\) keep = route->gameWs\.lock\(\);\s*\}")
         # Erased pair, any other remote: the chain has no else after the login-remote case, so nothing sets target
         # and it stays null into the drop check.
         self.assertNotIn("else", erased[len(ERASED_BRANCH):])
