@@ -67,10 +67,11 @@ std::size_t CountLevel(const LoadResult& r, LogLevel level) {
   return n;
 }
 
-// Everything the file does not switch: redirect, bridge, login, social and the names on, the diagnostics, the local presence
-// and the clock-level override (#928) off.
+// Everything the file does not switch: redirect, bridge, login, social and the names on, the diagnostics, the local presence,
+// the clock-level override (#928) and the invite codes (#966) off.
 bool DefaultsOnly(const nevr_quest::Features& f) {
-  return f.redirect && f.bridge && f.login && f.social && f.presenceNames && !f.clockLevels && !f.hwdump && !f.presenceLocal;
+  return f.redirect && f.bridge && f.login && f.social && f.presenceNames && !f.clockLevels && !f.hwdump && !f.presenceLocal &&
+         !f.inviteCodes;
 }
 
 // Index of the first event whose message contains `needle`, or -1.
@@ -987,7 +988,95 @@ void ARejectedFileGivesNoPlugins() {
   CHECK(r.config.plugins.empty());
 }
 
+// network.invite_codes (#966, docs/adr/0017): the PC's key and switch words (nevr_invite::ParseSwitch). Off unless the file says
+// on; absent and empty are off on Quest, whatever the PC's default is. A value that is no switch word is off with a Warning that
+// names the key and never the value.
+void InviteCodesIsOffUnlessTheFileSaysOnWithThePcSwitchWords() {
+  // Absent: off, the feature report says so, and nothing is a Warning.
+  LoadResult r = nevr_quest::ResolveConfig(Full(), nullptr);
+  CHECK(!r.config.requested.inviteCodes && !r.config.effective.inviteCodes);
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kInviteCodes));
+  CHECK(EventsContain(r, "feature=invite_codes requested=off effective=off"));
+  CHECK(!HasLevel(r, LogLevel::kWarn));
+
+  // Empty is unset, not a mistake: off, with no line about the key.
+  r = Load(Full(), "network:\n  invite_codes: \"\"\n");
+  CHECK(!r.fileRejected && !r.config.effective.inviteCodes);
+  CHECK(!EventsContain(r, "key=network.invite_codes"));
+
+  // The PC's words: true, on, yes and 1 (in any case) are on; false, off, no and 0 are off.
+  for (const char* word : {"true", "on", "yes", "1", "TRUE", "On"}) {
+    r = Load(Full(), std::string("network:\n  invite_codes: ") + word + "\n");
+    CHECK(r.config.requested.inviteCodes && r.config.effective.inviteCodes);
+    CHECK(EventsContain(r, "feature=invite_codes requested=on effective=on"));
+  }
+  for (const char* word : {"false", "off", "no", "0"}) {
+    r = Load(Full(), std::string("network:\n  invite_codes: ") + word + "\n");
+    CHECK(!r.config.requested.inviteCodes && !r.config.effective.inviteCodes);
+    CHECK(!HasLevel(r, LogLevel::kWarn));
+  }
+
+  // Anything else is off, and the Warning names the key, never the value.
+  r = Load(Full(), "network:\n  invite_codes: bananas\n");
+  CHECK(!r.config.requested.inviteCodes && !r.config.effective.inviteCodes);
+  CHECK(EventsWithAreAtLevel(r, "config file key=network.invite_codes rejected reason=unrecognised_value", LogLevel::kWarn));
+  CHECK(!EventsContain(r, "bananas"));
+  // A NUL inside the word is not a switch word, whatever the text before it says (ParseSwitch reads a C string).
+  r = Load(Full(), "network:\n  invite_codes: \"true\\0x\"\n");
+  CHECK(!r.config.effective.inviteCodes);
+  CHECK(EventsWithAreAtLevel(r, "config file key=network.invite_codes rejected reason=unrecognised_value", LogLevel::kWarn));
+  // A list under the key is not a word: off with a Warning.
+  r = Load(Full(), "network:\n  invite_codes: [true]\n");
+  CHECK(!r.config.effective.inviteCodes);
+  CHECK(EventsWithAreAtLevel(r, "config file key=network.invite_codes rejected reason=not_a_word", LogLevel::kWarn));
+  // An unset variable is off, rejected by key.
+  ::unsetenv("NEVR_QUEST_TEST_UNSET_VAR_INVITE");
+  r = Load(Full(), "network:\n  invite_codes: \"${NEVR_QUEST_TEST_UNSET_VAR_INVITE}\"\n");
+  CHECK(!r.config.effective.inviteCodes);
+  CHECK(EventsWithAreAtLevel(r, "config file key=network.invite_codes rejected reason=unset_variable", LogLevel::kWarn));
+  CHECK(!EventsContain(r, "NEVR_QUEST_TEST_UNSET_VAR_INVITE"));
+}
+
+// On needs the login that holds the token and auth.http_uri, where the token goes. A missing prerequisite forces it off, named in
+// the log, and the requested switch stays on. A file rejected as a whole leaves it off.
+void InviteCodesNeedsLoginAndAServiceAddress() {
+  LoadResult r = Load(Full(), "network:\n  invite_codes: true\n");
+  CHECK(r.config.effective.login && r.config.effective.inviteCodes);
+  CHECK(!EventsContain(r, "feature=invite_codes forced off"));
+
+  // No server key: login is off, so the invite is forced off after it, in that order.
+  EmbeddedDefaults noKey = Full();
+  noKey.serverKey = "";
+  r = Load(noKey, "network:\n  invite_codes: true\n");
+  CHECK(!r.config.effective.login && !r.config.effective.inviteCodes && r.config.requested.inviteCodes);
+  CHECK(EventsWithAreAtLevel(r, "feature=invite_codes forced off reason=login_not_enabled", LogLevel::kWarn));
+  const int loginOff = EventIndex(r, "feature=login forced off reason=no_server_key");
+  const int inviteOff = EventIndex(r, "feature=invite_codes forced off reason=login_not_enabled");
+  CHECK(loginOff >= 0 && inviteOff > loginOff);
+
+  // No auth.http_uri (none embedded, none in the file): forced off by name. The file's own address turns it back on.
+  EmbeddedDefaults noHttp = Full();
+  noHttp.httpUri = "";
+  r = Load(noHttp, "network:\n  invite_codes: true\n");
+  CHECK(r.config.effective.login && !r.config.effective.inviteCodes);
+  CHECK(EventsWithAreAtLevel(r, "feature=invite_codes forced off reason=no_service_address", LogLevel::kWarn));
+  r = Load(noHttp, "auth:\n  http_uri: https://file.example:7350\nnetwork:\n  invite_codes: true\n");
+  CHECK(r.config.effective.inviteCodes);
+  CHECK(!EventsContain(r, "feature=invite_codes forced off"));
+
+  // Off in the file: no forced-off line, whatever else is missing.
+  r = Load(noKey, "network:\n  invite_codes: false\n");
+  CHECK(!r.config.requested.inviteCodes && !r.config.effective.inviteCodes);
+  CHECK(!EventsContain(r, "feature=invite_codes forced off"));
+
+  // A file rejected as a whole gives the embedded defaults, so the switch it held does not survive.
+  r = Load(Full(), "network:\n  invite_codes: true\nnot_a_known_section: 1\n");
+  CHECK(r.fileRejected && !r.config.requested.inviteCodes && !r.config.effective.inviteCodes);
+}
+
 int main() {
+  InviteCodesIsOffUnlessTheFileSaysOnWithThePcSwitchWords();
+  InviteCodesNeedsLoginAndAServiceAddress();
   DefaultsWithoutFile();
   NothingEmbeddedAndNoFileTurnsTheNetworkFeaturesOff();
   InvalidEmbeddedIsRejectedWithoutValue();
