@@ -71,6 +71,21 @@ std::string Join(size_t declaredCount, const std::vector<uint64_t>& accounts) {
   return out;
 }
 
+// A failure frame as the service sends it: mode(8), group(16), code(4), pad(4), message(64), expiry(8). The message
+// is cut to its field's 64 bytes and the field is NUL-filled after the text.
+std::string Failure(uint32_t code, const std::string& message, char expiryByte = '\0') {
+  std::string out;
+  PutLe(out, 7, 8);
+  out += GuidBytes(0x06);
+  PutLe(out, code, 4);
+  PutLe(out, 0, 4);
+  std::string field = message.substr(0, 64);
+  field.resize(64, '\0');
+  out += field;
+  out.append(8, expiryByte);
+  return out;
+}
+
 }  // namespace
 
 TEST(LobbyFrameSymbols, EveryConstantIsTheCSymbol64OfItsGameName) {
@@ -160,6 +175,49 @@ TEST(LobbyFrameDecode, ASuccessNamesItsLobbyAndAFailureItsCode) {
   ASSERT_TRUE(lf::Decode(lf::Kind::Failure, Bytes(failure), failure.size(), &d));
   EXPECT_EQ(d.code, 0x01020308U);
   EXPECT_FALSE(lf::Decode(lf::Kind::Failure, Bytes(failure), failure.size() - 1, &d));
+}
+
+TEST(LobbyFrameDecode, AFailureNamesItsCodeAndCountsTheBytesOfItsMessage) {
+  const std::string payload = Failure(8, "lobby is full");
+  lf::Decoded d;
+  ASSERT_TRUE(lf::Decode(lf::Kind::Failure, Bytes(payload), payload.size(), &d));
+  EXPECT_EQ(d.mode, 7U);
+  EXPECT_EQ(d.code, 8U);
+  EXPECT_EQ(lf::FormatGuid(d.group), "44332211-6655-8877-99AA-BBCCDDEEFF06");
+  EXPECT_EQ(d.messageBytes, 13U);
+}
+
+TEST(LobbyFrameDecode, AnEmptyFailureMessageCountsZero) {
+  const std::string payload = Failure(9, "");
+  lf::Decoded d;
+  ASSERT_TRUE(lf::Decode(lf::Kind::Failure, Bytes(payload), payload.size(), &d));
+  EXPECT_EQ(d.code, 9U);
+  EXPECT_EQ(d.messageBytes, 0U);
+}
+
+TEST(LobbyFrameDecode, AMessageThatFillsItsFieldCountsTheFieldAndNotTheExpiryAfterIt) {
+  // 64 bytes with no NUL, then an expiry that is not zero: the count stops at the end of the field.
+  const std::string payload = Failure(8, std::string(64, 'x'), '\x5a');
+  lf::Decoded d;
+  ASSERT_TRUE(lf::Decode(lf::Kind::Failure, Bytes(payload), payload.size(), &d));
+  EXPECT_EQ(d.messageBytes, 64U);
+  EXPECT_EQ(d.code, 8U);
+}
+
+TEST(LobbyFrameDecode, AFailureThatEndsInsideItsMessageCountsOnlyWhatItHolds) {
+  const std::string cut = Failure(8, "ab").substr(0, 34);  // two message bytes, no NUL, no expiry
+  lf::Decoded d;
+  ASSERT_TRUE(lf::Decode(lf::Kind::Failure, Bytes(cut), cut.size(), &d));
+  EXPECT_EQ(d.messageBytes, 2U);
+  EXPECT_EQ(d.code, 8U);
+}
+
+TEST(LobbyFrameDecode, AFailureWithoutAMessageFieldCountsZero) {
+  const std::string cut = Failure(8, "ab").substr(0, 28);  // mode, group and code only
+  lf::Decoded d;
+  ASSERT_TRUE(lf::Decode(lf::Kind::Failure, Bytes(cut), cut.size(), &d));
+  EXPECT_EQ(d.code, 8U);
+  EXPECT_EQ(d.messageBytes, 0U);
 }
 
 TEST(LobbyFrameText, AGuidIsUpperCaseInTheWindowsLayoutAndTheNilGuidIsNone) {

@@ -7,11 +7,13 @@
 #include <cstddef>
 #include <cstring>
 #include <exception>
+#include <string>
 
 #include "core/logging.h"
 #include "nevr/pc/nevr_common.h"
 #include "runtime/hook/patching.h"
 #include "runtime/lifecycle/readable_memory.h"
+#include "runtime/patch/invite_wizard.h"
 
 // CncaGameSpace::SendComponentEvent (ReVault echovr.exe 0x14050fb60): RCX = the game space, RDX = the SComponentEvent,
 // R8D = flags. The game's own code reads the event at once (word 0 on entry, word 2 as the sender), so the observer
@@ -78,17 +80,25 @@ std::uint64_t SendComponentEventHook(std::uint64_t space, std::uint64_t event, s
 
 nevr_invite_choices::State& Choices() { return g_choices; }
 
-void Install(std::uintptr_t gameBase) {
+bool Install(std::uintptr_t gameBase) {
   void* target = nevr::ResolveVA_Checked(gameBase, kSendComponentEventVA);
   if (!nevr::ValidatePrologue(target, kSendComponentEventPrologue.data(), kSendComponentEventPrologue.size())) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.INVITE] choice observer off reason=prologue_mismatch va=0x%llx",
-        static_cast<unsigned long long>(kSendComponentEventVA));
-    return;
+    // Rule 6: the hook's name, its address, the pinned bytes and the bytes found there. An unreadable target is not read.
+    const std::string expected = nevr_invite::HexBytes(kSendComponentEventPrologue.data(), kSendComponentEventPrologue.size());
+    const std::string actual = nevr_crash_recovery::IsReadableMemory(target, kSendComponentEventPrologue.size())
+                                   ? nevr_invite::HexBytes(static_cast<const std::uint8_t*>(target),
+                                                           kSendComponentEventPrologue.size())
+                                   : std::string("unreadable");
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.INVITE] choice observer off reason=prologue_mismatch name=SendComponentEvent va=0x%llx expected=%s actual=%s",
+        static_cast<unsigned long long>(kSendComponentEventVA), expected.c_str(), actual.c_str());
+    return false;
   }
   g_original = reinterpret_cast<SendComponentEventFn>(target);
   PatchDetour(&g_original, reinterpret_cast<PVOID>(&SendComponentEventHook), "SendComponentEvent");
   Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] choice observer installed va=0x%llx",
       static_cast<unsigned long long>(kSendComponentEventVA));
+  return true;
 }
 
 }  // namespace nevr_invite_choice_hook

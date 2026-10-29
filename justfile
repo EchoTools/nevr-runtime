@@ -658,6 +658,15 @@ test-auth-unit:
         NEVR_REAL_SIGNED_DLL="$(python3 tools/fetch_real_signed_dll.py build/real-signed-cache)"
         export NEVR_REAL_SIGNED_DLL
     fi
+    # #1414: the invite service's host tests (patch/invite_service.cpp against a loopback server). Built and run here
+    # because no other line of this recipe names them.
+    cmake --build --preset {{ preset }} --target test_invite_service
+    bin="build/{{ preset }}/bin/test_invite_service.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2

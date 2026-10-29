@@ -33,6 +33,18 @@ inline constexpr std::int64_t kExpiryMaxSeconds = 7 * 24 * 60 * 60;
 // A metric line longer than this is not looked at: the wizard's lines are a few hundred bytes.
 inline constexpr std::size_t kMetricMaxBytes = 4096;
 
+// The bytes as two lower-case hex digits each, in order, with no separator: how a hook's Warning writes the prologue it
+// expected and the bytes it found (docs/standards/logging.md, Rule 6).
+inline std::string HexBytes(const std::uint8_t* bytes, std::size_t length) {
+  static constexpr char kDigits[] = "0123456789abcdef";
+  std::string out;
+  for (std::size_t i = 0; bytes != nullptr && i < length; ++i) {
+    out.push_back(kDigits[bytes[i] >> 4]);
+    out.push_back(kDigits[bytes[i] & 0x0f]);
+  }
+  return out;
+}
+
 // ---- the wizard's click metric ----
 
 enum class Kind { NotWizard, Create, Join };

@@ -642,7 +642,7 @@ the tag `[NEVR.WS]` and the connection index (Rule 9):
 [NEVR.WS] lobby find requested conn=2 mode=<name or 0x..> entrants=3 accounts=OVR-ORG-1,OVR-ORG-2,OVR-ORG-3 current_lobby=<GUID or none> group=<GUID>
 [NEVR.WS] lobby join requested conn=3 lobby=<GUID> entrants=1 accounts=OVR-ORG-1
 [NEVR.WS] lobby session success conn=3 lobby=<GUID> group=<GUID>
-[NEVR.WS] lobby session failure conn=3 code=8 reason=lobby_full group=<GUID>
+[NEVR.WS] lobby session failure conn=3 code=8 reason=lobby_full group=<GUID> message_bytes=<n>
 ```
 
 - **Ids, not names.** A lobby or group is its GUID in upper case and the Windows layout, the text the service
@@ -652,7 +652,8 @@ the tag `[NEVR.WS]` and the connection index (Rule 9):
   outside 0 to 13 reads `unknown`. A failure frame carries no lobby id: pair it with the request before it on
   the same `conn`.
 - **Remote text is not a field** (Rule 4). The settings JSON of a request and the message of a failure are
-  never read out.
+  never read out. A failure's message is counted instead: `message_bytes=<n>` is the number of its bytes before
+  the NUL, at most the field's 64, and `0` when the message is empty or absent.
 - **A frame the decode cannot read** is a Warning, `lobby <find request|join request|session success|session
   failure> could not be read conn=<n> payload_bytes=<n>`. Nothing is read past the frame's end.
 - **A client only, until `LogFrameMessages` moves to Debug.** On a dedicated server `LogFrameMessages` in
