@@ -601,6 +601,37 @@ DiagnosticDestination BootstrapDiagnostics::Emit(const nlohmann::json& record) n
   }
 }
 
+namespace {
+
+std::string PathToUtf8(const wchar_t* path) {
+  const int needed = WideCharToMultiByte(CP_UTF8, 0, path, -1, nullptr, 0, nullptr, nullptr);
+  if (needed <= 1) return {};
+  std::string out(static_cast<std::size_t>(needed), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, path, -1, out.data(), needed, nullptr, nullptr);
+  out.resize(static_cast<std::size_t>(needed) - 1);
+  return out;
+}
+
+// One record as one line: invalid UTF-8 (a path from the file system) is written as U+FFFD instead of throwing out of
+// the host, and a record over the limit is replaced by a marker that keeps its identity.
+std::string SerializeRecord(const nlohmann::json& stamped) {
+  std::string line = stamped.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+  if (line.size() + 1 > BootstrapDiagnostics::kMaxRecordBytes) {
+    nlohmann::json marker = {{"tag", "NEVR.HOST"},
+                             {"ts", stamped.at("ts")},
+                             {"pid", stamped.at("pid")},
+                             {"run", stamped.at("run")},
+                             {"event", stamped.value("event", "unknown")},
+                             {"error", "record_too_large"},
+                             {"record_bytes", line.size()}};
+    line = marker.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+  }
+  line.push_back('\n');
+  return line;
+}
+
+}  // namespace
+
 DiagnosticDestination BootstrapDiagnostics::EmitChecked(const nlohmann::json& record) {
   nlohmann::json stamped = record;
   char timestamp[kTimestampSize] = {};
@@ -615,21 +646,40 @@ DiagnosticDestination BootstrapDiagnostics::EmitChecked(const nlohmann::json& re
     stamped["run"] = run;
   }
 
-  // error_handler_t::replace: a record with invalid UTF-8 (a path from the file system) is
-  // written with U+FFFD instead of throwing out of the host.
-  std::string line = stamped.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
-  if (line.size() + 1 > kMaxRecordBytes) {
-    nlohmann::json marker = {{"tag", "NEVR.HOST"},
-                             {"ts", stamped.at("ts")},
-                             {"pid", stamped.at("pid")},
-                             {"run", stamped.at("run")},
-                             {"event", record.value("event", "unknown")},
-                             {"error", "record_too_large"},
-                             {"record_bytes", line.size()}};
-    line = marker.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
-  }
-  line.push_back('\n');
+  // A record that carries a string `log` (the stop facts, stop_line.h) names the file it is written to: the field is
+  // set per directory tried, so a record that fell back to %TEMP% does not name the primary directory.
+  if (stamped.contains("log") && stamped.at("log").is_string()) return AppendRecordNamingLog(stamped);
+
+  const std::string line = SerializeRecord(stamped);
   return AppendLine(line.data(), line.size());
+}
+
+DiagnosticDestination BootstrapDiagnostics::AppendRecordNamingLog(nlohmann::json& stamped) {
+  struct Candidate {
+    const wchar_t* dir;
+    bool create_dir;
+    bool ready;
+    DiagnosticDestination destination;
+  };
+  const Candidate candidates[] = {
+      {primary_dir_, true, primary_ready_, DiagnosticDestination::kPrimary},
+      {fallback_dir_, true, fallback_ready_, DiagnosticDestination::kFallback},
+      {host_dir_, false, host_dir_ready_, DiagnosticDestination::kHostDirectory},
+  };
+  for (const Candidate& candidate : candidates) {
+    if (!candidate.ready) continue;
+    wchar_t path[MAX_PATH] = {};
+    if (!AppendPath(path, MAX_PATH, candidate.dir, kBootstrapLogName)) continue;
+    stamped["log"] = PathToUtf8(path);
+    const std::string line = SerializeRecord(stamped);
+    if (AppendTo(candidate.dir, candidate.create_dir, line.data(), line.size())) {
+      last_destination_.store(static_cast<int>(candidate.destination));
+      return candidate.destination;
+    }
+  }
+  stamped["log"] = "";
+  const std::string line = SerializeRecord(stamped);
+  return ReportDropped(line.data(), line.size());
 }
 
 DiagnosticDestination BootstrapDiagnostics::AppendLine(const char* line,
@@ -647,6 +697,10 @@ DiagnosticDestination BootstrapDiagnostics::AppendLine(const char* line,
     last_destination_.store(static_cast<int>(DiagnosticDestination::kHostDirectory));
     return DiagnosticDestination::kHostDirectory;
   }
+  return ReportDropped(line, length);
+}
+
+DiagnosticDestination BootstrapDiagnostics::ReportDropped(const char* line, std::size_t length) noexcept {
   last_destination_.store(static_cast<int>(DiagnosticDestination::kDropped));
 
   // Loud: a diagnostic that could not be persisted still reaches the console.

@@ -2,8 +2,10 @@
 
 #include <MinHook.h>
 
+#include "runtime/host/host_identity.h"
 #include "runtime/host/host_json.h"
 #include "runtime/host/loader_lock.h"
+#include "runtime/host/stop_line.h"
 #include "runtime/host/stop_notice.h"
 
 #include <cstring>
@@ -248,9 +250,20 @@ std::int64_t RuntimeRendezvous::StopGame(std::int64_t command_line) {
       // decision stays suppressed
     }
     EmitStopDiagnostic(*diagnostics_, loader_.Result(), StopNoticeName(decision));
+    // The one console line (#1252), after the record so its `log` names the file that took the record.
+    WriteRuntimeStopLine(*diagnostics_, loader_.Result());
     if (decision == StopNotice::kShow) {
       const RuntimeLoadResult& result = loader_.Result();
-      ShowStopNotice(StopNoticeTextFor(result.outcome, result.verify_reason_code));
+      wchar_t log[MAX_PATH] = {};
+      const bool has_log = diagnostics_->LogFilePath(log, MAX_PATH);
+      const wchar_t* sentence = StopNoticeTextFor(result.outcome, result.verify_reason_code);
+      // The sentence, then the host version and the log the record is in (stop_notice.h); the bare sentence when the
+      // longer text cannot be built.
+      try {
+        ShowStopNotice(StopNoticeBody(sentence, Version(), has_log ? log : nullptr).c_str());
+      } catch (const std::exception&) {
+        ShowStopNotice(sentence);
+      }
     }
   }
 #if defined(NEVR_HOST_TESTING)

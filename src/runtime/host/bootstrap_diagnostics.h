@@ -159,6 +159,8 @@ class BootstrapDiagnostics {
   /// than truncated.
   /// Never throws: a failure to build the record is reported on stderr and returned as
   /// kDropped.
+  /// A record whose `log` member is a string names the file it was written to: the member is replaced with the full path
+  /// of the log file that accepted the record (empty when none did), so a fallback to %TEMP% is not reported as the primary.
   DiagnosticDestination Emit(const nlohmann::json& record) noexcept;
 
   /// Append an already-formatted line (ends in '\n'), also from the crash callback. It creates no
@@ -166,7 +168,7 @@ class BootstrapDiagnostics {
   /// owned makes later appends skip the wait (see the file comment).
   DiagnosticDestination AppendLine(const char* line, std::size_t length) noexcept;
 
-  static constexpr std::size_t kMaxRecordBytes = 4096;
+  static constexpr std::size_t kMaxRecordBytes = 8192;
   static constexpr std::uint32_t kEntryClaimed = 1;  // a flush took the entry and may not have finished its write
   static constexpr std::uint32_t kEntryWritten = 2;
   static constexpr std::size_t kJournalCapacity = 8;
@@ -251,6 +253,8 @@ class BootstrapDiagnostics {
   bool EntryIsInLog(std::size_t seq) const noexcept;
   void NoteFlushCaller() noexcept;
   DiagnosticDestination EmitChecked(const nlohmann::json& record);
+  DiagnosticDestination AppendRecordNamingLog(nlohmann::json& stamped);
+  DiagnosticDestination ReportDropped(const char* line, std::size_t length) noexcept;
   void EnsureLogMutex() noexcept;
   bool AppendTo(const wchar_t* dir, bool create_dir, const char* line, std::size_t length) noexcept;
 

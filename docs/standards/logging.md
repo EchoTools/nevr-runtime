@@ -161,8 +161,8 @@ process, and in a `host_not_attached` record when the game keeps running. The li
 | `reason`          | One token from the table below                                                                       |
 | `host_version`    | The version in the host's own `NEVR-BUILD <version> <commit40>` literal                              |
 | `runtime_version` | The version in `nevr-runtime.dll`'s literal when the host read the file, else `not loaded`           |
-| `detail`          | What is wrong and where, in words: the path searched, the verifier's own words, the Win32 error or the ABI status. When the runtime is absent from the nEVR root and a `nevr-runtime.dll` sits beside `BugSplat64.dll`, it names that folder, says the host does not load that file and names the root to move it to |
-| `log`             | The full path of the host log that took the same facts; empty when no log file did                   |
+| `detail`          | What is wrong and where, in words: the path searched, the verifier's own words, the Win32 error or the ABI status. When the runtime is absent from the nEVR root and a `nevr-runtime.dll` sits beside `BugSplat64.dll`, it names that folder, says the host does not load that file and names the root to move it to. A piece that does not fit the detail's buffer is left out whole and the detail ends with `[detail incomplete: a path did not fit]` |
+| `log`             | The full path of the host log file that accepted the record (the %TEMP% copy when the primary folder refused it); the record and the line name the same file. Empty when no log file did |
 
 | `reason`                 | `stopped` | `code`                    | Meaning                                                                         |
 | ------------------------ | --------- | ------------------------- | ------------------------------------------------------------------------------- |

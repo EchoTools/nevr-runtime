@@ -17,14 +17,25 @@
 namespace nevr_host {
 namespace {
 
+constexpr char kDetailIncomplete[] = " [detail incomplete: a path did not fit]";
+
 const char* OrEmpty(const char* text) noexcept { return text == nullptr ? "" : text; }
 
-// A detail under construction in a caller's fixed buffer: no heap. A piece that does not fit is left out whole and
-// remembered, so the text never ends in the middle of a UTF-8 sequence.
+// A detail under construction in a caller's fixed buffer: no heap. A piece that does not fit is left out whole, so the
+// text never ends in the middle of a UTF-8 sequence, and the detail then ends with kDetailIncomplete (Finish), so a
+// reader is told that something is missing rather than reading a sentence that stops early.
 class Text {
  public:
-  Text(char* out, std::size_t size) noexcept : out_(out), size_(size) {
-    if (size_ != 0) out_[0] = '\0';
+  Text(char* out, std::size_t size) noexcept
+      : out_(out), size_(size > sizeof(kDetailIncomplete) ? size - sizeof(kDetailIncomplete) : 0), room_(size) {
+    if (room_ != 0) out_[0] = '\0';
+  }
+
+  // Ends the detail: when a piece was left out, the marker takes the room kept for it.
+  void Finish() noexcept {
+    if (truncated_ && room_ >= used_ + sizeof(kDetailIncomplete)) {
+      std::memcpy(out_ + used_, kDetailIncomplete, sizeof(kDetailIncomplete));
+    }
   }
 
   Text& Add(const char* piece) noexcept {
@@ -74,7 +85,8 @@ class Text {
 
  private:
   char* out_;
-  std::size_t size_;
+  std::size_t size_;   // room for pieces; the marker's room is kept beyond it
+  std::size_t room_;   // the whole buffer
   std::size_t used_ = 0;
   bool truncated_ = false;
 };
@@ -218,7 +230,7 @@ std::size_t BuildStopLine(char* buffer, std::size_t capacity, const StopLineFact
   return line.Finish();
 }
 
-bool WriteStopLine(const StopLineFacts& facts) noexcept {
+bool PutStopLine(const StopLineFacts& facts) noexcept {
   char buffer[kStopLineBytes];
   const std::size_t length = BuildStopLine(buffer, sizeof(buffer), facts);
   if (length == 0) return false;
@@ -242,6 +254,7 @@ void DescribeRuntimeStop(const BootstrapDiagnostics& diagnostics, const RuntimeL
   Text text(out.detail, sizeof(out.detail));
   DescribeOutcome(result, text);
   DescribeLegacyRuntime(diagnostics, result, text);
+  text.Finish();
   out.facts.stopped = true;
   out.facts.code = kRuntimeStopExitCode;
   out.facts.reason = result.OutcomeName();
@@ -249,6 +262,12 @@ void DescribeRuntimeStop(const BootstrapDiagnostics& diagnostics, const RuntimeL
   out.facts.runtime_version = result.runtime_version.c_str();
   out.facts.detail = out.detail;
   out.facts.log = diagnostics.LogFilePath(out.log, MAX_PATH) ? out.log : nullptr;
+}
+
+bool WriteRuntimeStopLine(const BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result) noexcept {
+  RuntimeStopText text;
+  DescribeRuntimeStop(diagnostics, result, text);
+  return PutStopLine(text.facts);
 }
 
 void AddStopFacts(nlohmann::json& record, const StopLineFacts& facts) {
@@ -285,7 +304,7 @@ void ReportUnsupportedImage(BootstrapDiagnostics& diagnostics, std::uint32_t exi
   EmitFactsRecord(diagnostics, "game_stop", text.facts);
   // The log the record reached, now that it has been written.
   text.facts.log = diagnostics.LogFilePath(text.log, MAX_PATH) ? text.log : nullptr;
-  WriteStopLine(text.facts);
+  PutStopLine(text.facts);
 }
 
 void ReportNotAttached(BootstrapDiagnostics& diagnostics) noexcept {
@@ -295,7 +314,7 @@ void ReportNotAttached(BootstrapDiagnostics& diagnostics) noexcept {
   FillHostFacts(diagnostics, false, kReasonHostNotAttached, AttachFailureDetail(failure), text);
   EmitFactsRecord(diagnostics, "host_not_attached", text.facts);
   text.facts.log = diagnostics.LogFilePath(text.log, MAX_PATH) ? text.log : nullptr;
-  WriteStopLine(text.facts);
+  PutStopLine(text.facts);
 }
 
 }  // namespace nevr_host

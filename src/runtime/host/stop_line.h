@@ -38,11 +38,16 @@ inline constexpr char kRuntimeNotLoaded[] = "not loaded";
 inline constexpr char kReasonUnsupportedImage[] = "unsupported_image";
 inline constexpr char kReasonHostNotAttached[] = "host_not_attached";
 
-/// The room a line has. A detail and a path that do not fit are never truncated: JsonLine replaces the whole record
-/// with a marker line (`record_too_large`). A path of MAX_PATH characters is at most 780 bytes in UTF-8, twice that
-/// when every character is a backslash and the line escapes it; a detail holds at most two paths.
-inline constexpr std::size_t kStopLineBytes = 4096;
-inline constexpr std::size_t kStopDetailBytes = 1536;
+/// The room a line has. A path of MAX_PATH characters is at most 780 bytes in UTF-8; the longest detail holds three of
+/// them (the path searched, the directory of the host and the directory to move a legacy runtime to) and its words, so
+/// it has 2944 bytes. A piece of detail that does not fit is left out whole and the detail ends with `[detail
+/// incomplete: a path did not fit]`. The line holds the detail and the log path, each escaped (a backslash is two bytes),
+/// and a line that still does not fit is replaced whole by JsonLine with a marker line (`record_too_large`).
+inline constexpr std::size_t kStopLineBytes = 8192;
+inline constexpr std::size_t kStopDetailBytes = 2944;
+
+/// The closing text of a detail from which a piece was left out.
+inline constexpr char kStopDetailIncompleteSuffix[] = "[detail incomplete: a path did not fit]";
 
 struct StopLineFacts {
   bool stopped = true;
@@ -59,7 +64,7 @@ std::size_t BuildStopLine(char* buffer, std::size_t capacity, const StopLineFact
 
 /// BuildStopLine into a stack buffer, then one WriteFile to the standard error handle. False when no line could be
 /// built or there is no standard error handle to write to.
-bool WriteStopLine(const StopLineFacts& facts) noexcept;
+bool PutStopLine(const StopLineFacts& facts) noexcept;
 
 /// The facts of a runtime that did not load, with the text they point into. Not copyable: `facts` points into `detail`
 /// and `log`.
@@ -78,6 +83,10 @@ struct RuntimeStopText {
 /// the host's directory and the log path. No heap.
 void DescribeRuntimeStop(const BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result,
                          RuntimeStopText& out) noexcept;
+
+/// DescribeRuntimeStop, then PutStopLine: the line for a runtime that did not load. Call it after the `game_stop`
+/// record is written, so the `log` field names the file that took the record. False when no line could be written.
+bool WriteRuntimeStopLine(const BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result) noexcept;
 
 /// Add the facts a record of the host log shares with the line: `stopped`, `host_version`, `runtime_version`, `detail`
 /// and `log`. The record keeps its own `event`, `reason` and `exit_code`.

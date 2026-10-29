@@ -510,8 +510,10 @@ TEST(HostStopNotice, EveryStopWritesOneStopLineToStandardErrorHoweverOftenTheDet
     EXPECT_EQ(record.at("host_version"), nevr_host::Version());
     EXPECT_EQ(record.at("runtime_version"), "not loaded");
     EXPECT_NE(std::string(record.at("detail")).find("nevr-runtime.dll is missing; path="), std::string::npos);
-    std::string expected_log;
-    for (const wchar_t c : g_log_path) expected_log += static_cast<char>(c);
+    // UTF-8, not one narrowed code unit per character: a temp path with a non-ASCII user name must still match.
+    std::string expected_log(static_cast<std::size_t>(WideCharToMultiByte(CP_UTF8, 0, g_log_path.c_str(), -1, nullptr, 0, nullptr, nullptr)), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, g_log_path.c_str(), -1, expected_log.data(), static_cast<int>(expected_log.size()), nullptr, nullptr);
+    expected_log.resize(expected_log.size() - 1);
     EXPECT_EQ(record.at("log"), expected_log);
   }
 }
