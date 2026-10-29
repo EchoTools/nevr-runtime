@@ -361,8 +361,16 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // The rad provider in pnsovr's place (#1220). Last, after the dlopen hook: it needs the login that hook installs,
     // because the rad provider sends no login of its own. Its slots are libr15's, and Create runs in CR15Game::Initialize,
     // long after the constructor.
+    bool pnsAllowed = false;
+    try {
+      pnsAllowed = steps.PnsProviderAllowed();
+    } catch (const std::exception&) {
+      pnsAllowed = false;  // cannot tell: not allowed
+    }
     if (!want.pnsradProvider) {
       r.Skip(StepId::kInstallPnsProvider, "pnsrad_provider_off");
+    } else if (!pnsAllowed) {
+      r.Skip(StepId::kInstallPnsProvider, "release_build");
     } else if (!(loginWanted && dlopenLive)) {
       r.Skip(StepId::kInstallPnsProvider, "login_unavailable");
     } else {

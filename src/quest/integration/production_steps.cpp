@@ -19,7 +19,6 @@
 #include "sentinel_log.h"
 
 #include "quest/diag/hwdump_run.h"
-#include "quest/sentinel/pns_provider_hook.h"
 #include "quest/auth/quest_token_auth.h"
 #include "quest/integration/bridge_uri.h"
 #include "quest/integration/ctor_sequence.h"
@@ -637,7 +636,8 @@ class ProductionSteps final : public Steps {
 
   bool StartHwDump() override { return nevr_quest::hwdump::StartHwDump(); }
 
-  bool InstallPnsProvider() override { return nevr_quest::pns_provider::Install(); }
+  bool InstallPnsProvider() override { return nevr_quest::integration::InstallPnsProviderHook(); }
+  bool PnsProviderAllowed() override { return nevr_quest::integration::PnsProviderEnabled(); }
 
   bool InstallDlopenHook(bool login, bool matchmaking, bool plugins) override {
     PostLoadActions actions;
