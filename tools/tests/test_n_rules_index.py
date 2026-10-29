@@ -20,20 +20,26 @@ def index_section(text: str) -> str:
     return text[start:end]
 
 
+def table_headers(section: str) -> list[str]:
+    """The header line of every table in the index: the line above each `| ---` separator row."""
+    lines = section.splitlines()
+    return [lines[i - 1] for i, line in enumerate(lines) if line.startswith("| ---") and i > 0]
+
+
 def rows(section: str) -> list[list[str]]:
-    """Every row of every table in the index, as its cells. A `|` escaped as `\\|` stays inside its cell."""
+    """Every row of every table in the index, as its cells. A table is whatever sits under a `| ---` separator, so a
+    table whose header was renamed is still parsed (and its header fails test_every_table_has_the_kind_column).
+    A `|` escaped as `\\|` stays inside its cell."""
     found = []
     in_table = False
     for line in section.splitlines():
-        if line.startswith("| Rule "):
+        if line.startswith("| ---"):
             in_table = True
             continue
         if not in_table:
             continue
         if not line.startswith("|"):
             in_table = False
-            continue
-        if line.startswith("| ---"):
             continue
         cells = [c.strip().replace("\\|", "|") for c in re.split(r"(?<!\\)\|", line.strip())[1:-1]]
         found.append(cells)
@@ -65,7 +71,7 @@ class NRulesIndex(unittest.TestCase):
         self.rows = rows(self.section)
 
     def test_every_table_has_the_kind_column(self):
-        headers = [l for l in self.section.splitlines() if l.startswith("| Rule ")]
+        headers = table_headers(self.section)
         self.assertGreater(len(headers), 0)
         for header in headers:
             self.assertEqual(header, HEADER)
@@ -81,7 +87,9 @@ class NRulesIndex(unittest.TestCase):
             with self.subTest(rule=cells[0]):
                 self.assertEqual(len(cells), 5, cells)
                 self.assertIn(cells[1], KINDS)
-                for item in items(cells[4]):
+                checks = items(cells[4])
+                self.assertTrue(checks, "Checked by is empty: say how it is checked, or `none`")
+                for item in checks:
                     self.assertRegex(item, ITEM)
 
     def test_a_run_rule_is_driven_or_says_unchecked(self):
