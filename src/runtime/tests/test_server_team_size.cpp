@@ -383,9 +383,14 @@ TEST_F(ServerTeamSize, AFailureIsOnlyASizeThatWasAskedForAndNotPutInEffect) {
 
 // --- what Install logs -------------------------------------------------------------------------------
 
-std::vector<nevr_server_team_size::Line> Install(bool isServer, const char* text, Image& img) {
-  return nevr_server_team_size::InstallLines(isServer, text, img.cap.data(), img.slot.data(), CopyWriter, 0x1401AB8C2,
-                                             0x1401ABC8A);
+// The error the writer reports for a failed write, as LastWriteError does in server_team_size.cpp.
+uint32_t g_writeError = 0;
+uint32_t TestWriteError() { return g_writeError; }
+
+std::vector<nevr_server_team_size::Line> Install(bool isServer, const char* text, Image& img,
+                                                 nevr_checked_patch::WriteFn write = CopyWriter) {
+  return nevr_server_team_size::InstallLines(isServer, text, img.cap.data(), img.slot.data(), write, TestWriteError,
+                                             0x1401AB8C2, 0x1401ABC8A);
 }
 
 TEST_F(ServerTeamSize, AClientLogsOneInfoSkipLineAndTouchesNothing) {
@@ -405,6 +410,7 @@ TEST_F(ServerTeamSize, AServerLogsTheRecordWithItsSource) {
   EXPECT_FALSE(lines[0].warning);
   EXPECT_EQ(lines[0].text.rfind("[NEVR.PATCH] server team size size=6 in_effect=6 ", 0), 0u) << lines[0].text;
   EXPECT_NE(lines[0].text.find(" source=config.yaml"), std::string::npos) << lines[0].text;
+  EXPECT_EQ(lines[0].text.find("write_error="), std::string::npos) << "no write failed: " << lines[0].text;
   EXPECT_EQ(fromConfig.cap, CapFor(6));
   Image absent;
   lines = Install(true, nullptr, absent);
@@ -437,6 +443,37 @@ TEST_F(ServerTeamSize, ASizeNotPutInEffectIsAWarningWithEachSitesBytes) {
   EXPECT_TRUE(lines[0].warning);
   EXPECT_NE(lines[0].text.find("cap_addr=0x1401ab8c2"), std::string::npos) << lines[0].text;
   EXPECT_NE(lines[0].text.find("slot_actual="), std::string::npos) << lines[0].text;
+}
+
+TEST_F(ServerTeamSize, AFailedWriteCarriesTheWritersError) {
+  g_writeError = 5;  // ERROR_ACCESS_DENIED
+  Image slotRefused;
+  g_refuseAt = slotRefused.slot.data();
+  auto lines = Install(true, "6", slotRefused, RefuseOneSiteWriter);
+  ASSERT_EQ(lines.size(), 1u);
+  EXPECT_TRUE(lines[0].warning);
+  EXPECT_NE(lines[0].text.find(" slot=write_failed write_error=5 source=config.yaml"), std::string::npos)
+      << lines[0].text;
+  g_writeError = 487;  // ERROR_INVALID_ADDRESS
+  Image capRefused;
+  g_refuseAt = capRefused.cap.data();
+  lines = Install(true, "6", capRefused, RefuseOneSiteWriter);
+  ASSERT_EQ(lines.size(), 1u);
+  EXPECT_NE(lines[0].text.find("cap=write_failed"), std::string::npos) << lines[0].text;
+  EXPECT_NE(lines[0].text.find(" write_error=487 source=config.yaml"), std::string::npos) << lines[0].text;
+  g_writeError = 0;
+}
+
+TEST(ServerTeamSizeWriteErrors, TheLastFailedWritesErrorIsKept) {
+  nevr_server_team_size::WriteErrors e;
+  EXPECT_TRUE(e.Note(true, 7));
+  EXPECT_EQ(e.last, 0u) << "a write that succeeded leaves no error";
+  EXPECT_FALSE(e.Note(false, 5));
+  EXPECT_EQ(e.last, 5u);
+  EXPECT_TRUE(e.Note(true, 9));
+  EXPECT_EQ(e.last, 5u) << "a later success keeps the failure";
+  EXPECT_FALSE(e.Note(false, 6));
+  EXPECT_EQ(e.last, 6u) << "the last failure wins";
 }
 
 // --- the slot site's code, run --------------------------------------------------------------------------

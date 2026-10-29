@@ -169,7 +169,7 @@ inline Outcome Apply(uint8_t* capSite, uint8_t* slotSite, uint32_t size, nevr_ch
 
   o.capTried = true;
   o.cap = nevr_checked_patch::Apply(capSite, capSpec, write);
-  if (!Took(o.cap) && o.slotTried && o.slot == Result::Applied) {
+  if (!Took(o.cap) && o.slot == Result::Applied) {  // `slot` stays Mismatch unless it was tried
     o.slotRestored = write(slotSite, kSlotExpected, sizeof(kSlotExpected)) &&
                      std::memcmp(slotSite, kSlotExpected, sizeof(kSlotExpected)) == 0;
   }
@@ -236,11 +236,26 @@ struct Line {
   std::string text;
 };
 
+/// The Win32 error of the last write that failed (logging Rule 10). 0 when no write failed: then a write_failed site's
+/// writer reported success and its read-back is not the replacement.
+using WriteErrorFn = uint32_t (*)();
+
+/// Remembers the error of a failed write for WriteErrorFn: the last failure wins, a success changes nothing.
+struct WriteErrors {
+  uint32_t last = 0;
+  bool Note(bool ok, uint32_t error) {
+    if (!ok) last = error;
+    return ok;
+  }
+};
+
 /// Everything Install does, but the log and the process: a client's skip line; on a server, the config value's
-/// problem (if any), then Apply on the two sites and its record with the value's source. `text` is the config value
-/// (null when absent); a client never reads the sites.
+/// problem (if any), then Apply on the two sites and its record with the value's source. A site that is write_failed
+/// adds the writer's error (`writeError`). `text` is the config value (null when absent); a client never reads the
+/// sites.
 inline std::vector<Line> InstallLines(bool isServer, const char* text, uint8_t* capSite, uint8_t* slotSite,
-                                      nevr_checked_patch::WriteFn write, uintptr_t capAddr, uintptr_t slotAddr) {
+                                      nevr_checked_patch::WriteFn write, WriteErrorFn writeError, uintptr_t capAddr,
+                                      uintptr_t slotAddr) {
   std::vector<Line> lines;
   if (!isServer) {
     lines.push_back({false, "[NEVR.PATCH] server team size not applied: this is a client (the server assigns teams)"});
@@ -256,8 +271,13 @@ inline std::vector<Line> InstallLines(bool isServer, const char* text, uint8_t* 
   const Outcome outcome = Apply(capSite, slotSite, size, write);
   char record[640];
   FormatRecord(record, sizeof(record), outcome, capAddr, slotAddr);
-  lines.push_back({IsFailure(outcome), std::string(record) + " source=" +
-                                           (text != nullptr && text[0] != '\0' ? "config.yaml" : "default")});
+  std::string line(record);
+  using nevr_checked_patch::Result;
+  if (outcome.cap == Result::WriteFailed || outcome.slot == Result::WriteFailed) {
+    line += " write_error=" + std::to_string(writeError());
+  }
+  line += std::string(" source=") + (text != nullptr && text[0] != '\0' ? "config.yaml" : "default");
+  lines.push_back({IsFailure(outcome), line});
   return lines;
 }
 

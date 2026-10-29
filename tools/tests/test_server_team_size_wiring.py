@@ -59,10 +59,15 @@ def install_problems(install: str) -> list[str]:
         if not re.search(rf"base\s*\+\s*nevr_patch_addresses::{name}\b", code):
             problems.append(f"{name} is not the site handed to InstallLines")
     if not re.search(r"InstallLines\(\s*isServer\s*,\s*text\s*,\s*capSite\s*,\s*slotSite\s*,\s*ProcessWrite\s*,"
+                     r"\s*LastWriteError\s*,"
                      r"\s*reinterpret_cast<uintptr_t>\(\s*capSite\s*\)\s*,\s*reinterpret_cast<uintptr_t>\(\s*slotSite\s*\)\s*\)", code):
-        problems.append("InstallLines is not called with the mode, the value, the two sites, ProcessWrite and their addresses")
-    if not re.search(r"return\s+ProcessMemcpy\(\s*dest\s*,\s*src\s*,\s*n\s*\)", code):
-        problems.append("ProcessWrite does not write through ProcessMemcpy")
+        problems.append("InstallLines is not called with the mode, the value, the two sites, ProcessWrite, "
+                        "LastWriteError and their addresses")
+    if not re.search(r"return\s+g_writeErrors\.Note\(\s*ProcessMemcpy\(\s*dest\s*,\s*src\s*,\s*n\s*,\s*&error\s*\)\s*,"
+                     r"\s*error\s*\)", code):
+        problems.append("ProcessWrite does not write through ProcessMemcpy and note its error")
+    if not re.search(r"uint32_t\s+LastWriteError\(\)\s*\{\s*return\s+g_writeErrors\.last\s*;\s*\}", code):
+        problems.append("LastWriteError does not return the error ProcessWrite noted")
     if not re.search(r"Log\(\s*line\.warning\s*\?\s*EchoVR::LogLevel::Warning\s*:\s*EchoVR::LogLevel::Info\s*,\s*\"%s\"\s*,"
                      r"\s*line\.text\.c_str\(\)\s*\)", code):
         problems.append("each line is not logged as text at its own level")
@@ -104,7 +109,10 @@ class ServerTeamSizeWiring(unittest.TestCase):
             ("nevr_patch_addresses::SERVER_ASSIGN_TEAM_SLOT", "nevr_patch_addresses::SERVER_ASSIGN_TEAM_CAP"),
             ("slotSite, ProcessWrite,", "slotSite, nullptr,"),
             ("reinterpret_cast<uintptr_t>(slotSite))", "reinterpret_cast<uintptr_t>(capSite))"),
-            ("return ProcessMemcpy(dest, src, n);", "return true;"),
+            ("ProcessMemcpy(dest, src, n, &error)", "ProcessMemcpy(dest, src, n)"),
+            ("g_writeErrors.Note(ProcessMemcpy(dest, src, n, &error), error)", "ProcessMemcpy(dest, src, n, &error)"),
+            ("return g_writeErrors.last;", "return 0;"),
+            ("ProcessWrite, LastWriteError,", "ProcessWrite, nullptr,"),
             ("EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info", "EchoVR::LogLevel::Info : EchoVR::LogLevel::Info"),
         ]
         for old, new in breaks:
