@@ -31,9 +31,17 @@
 // the service's encoder (GameServerSessionStart.Stream: two GUIDs, player limit, entrant count, lobby type, a pad
 // byte), then the NUL-terminated JSON, then the entrants.
 //
-// What is here: the decisions, the lines, and the reads and calls on memory a test hands in (ReadNetGame,
-// ReadBodyPools, WithOfflineBit). server_bots.cpp is the glue: it hands them the game's addresses, calls the
-// game's functions and logs the lines.
+// Which sessions: an arena or combat match only, by the settings' `gametype`, which the service writes as the
+// CSymbol64Hash of the mode's name (a JSON integer; a name is read too). A social lobby, a session whose game type is
+// absent or not one of the matches, and a session start the rewrite could not read get no bots and keep their
+// settings as they came.
+//
+// Where it runs: from GameServerLib::Update, which the game calls from its loop between its own updates, as the net
+// game's return to lobby there is; on the game-loop thread only.
+//
+// What is here: the decisions, the lines, and the reads and calls on memory a test hands in (Drive, ReadNetGame,
+// ReadBodyPools, WithOfflineBit, SessionIdOf). server_bots.cpp is the glue: it hands them the game's addresses and
+// functions, the clock, the session and the thread, and logs the lines.
 
 #include <cstddef>
 #include <cstdint>
@@ -45,6 +53,7 @@
 #include <nlohmann/json.hpp>
 
 #include "nevr/symbol_hash.h"
+#include "runtime/compat/lobby_frame.h"
 
 namespace nevr_server_bots {
 
@@ -81,8 +90,56 @@ constexpr int kNumTeams = 2;
 /// The game's own team cap (ServerAssignTeam, #1422): what a team holds without a configured size.
 constexpr int kPlayersPerTeam = 5;
 
+// ---- The session's game type ------------------------------------------------------------------------------------
+
+struct GameType {
+  const char* name;
+  uint64_t symbol;
+  bool bots;  // a match that gets bots
+};
+
+/// The service's game types (its ModeArena* / ModeCombat* / ModeSocial* symbols): the arena and combat matches get
+/// bots, the social lobbies none.
+inline constexpr GameType kGameTypes[] = {
+    {"echo_arena", EchoVR::CSymbol64Hash("echo_arena"), true},
+    {"echo_arena_private", EchoVR::CSymbol64Hash("echo_arena_private"), true},
+    {"echo_arena_tournament", EchoVR::CSymbol64Hash("echo_arena_tournament"), true},
+    {"echo_arena_public_ai", EchoVR::CSymbol64Hash("echo_arena_public_ai"), true},
+    {"echo_combat", EchoVR::CSymbol64Hash("echo_combat"), true},
+    {"echo_combat_private", EchoVR::CSymbol64Hash("echo_combat_private"), true},
+    {"echo_combat_tournament", EchoVR::CSymbol64Hash("echo_combat_tournament"), true},
+    {"social_2.0", EchoVR::CSymbol64Hash("social_2.0"), false},
+    {"social_2.0_private", EchoVR::CSymbol64Hash("social_2.0_private"), false},
+    {"social_2.0_npe", EchoVR::CSymbol64Hash("social_2.0_npe"), false},
+};
+
+/// The settings' game type: one of kGameTypes, by its symbol (a JSON integer, signed or not) or its name; "none" when
+/// the key is absent, "unknown" for any other value. Only a match gets bots.
+struct SessionGameType {
+  std::string name = "none";
+  bool bots = false;
+};
+inline SessionGameType ReadGameType(const nlohmann::ordered_json& settings) {
+  SessionGameType out;
+  const auto it = settings.find("gametype");
+  if (it == settings.end()) return out;
+  out.name = "unknown";
+  for (const GameType& t : kGameTypes) {
+    const bool same = it->is_number_unsigned()  ? it->get<uint64_t>() == t.symbol
+                      : it->is_number_integer() ? static_cast<uint64_t>(it->get<int64_t>()) == t.symbol
+                      : it->is_string()         ? it->get<std::string>() == t.name
+                                                : false;
+    if (same) {
+      out.name = t.name;
+      out.bots = t.bots;
+    }
+  }
+  return out;
+}
+
 enum class SettingsResult {
   kNotWanted,       // no bots: the frame is forwarded as it came
+  kNotAMatch,       // the game type is not an arena or combat match: forwarded as it came, no bots this session
   kAlreadyPresent,  // both keys are there: kept as they are
   kRewritten,       // the missing key or keys were added
   kTooShort,        // no room for the header and a settings string
@@ -94,6 +151,7 @@ enum class SettingsResult {
 inline const char* SettingsResultName(SettingsResult r) {
   switch (r) {
     case SettingsResult::kNotWanted: return "not_wanted";
+    case SettingsResult::kNotAMatch: return "not_a_match";
     case SettingsResult::kAlreadyPresent: return "already_present";
     case SettingsResult::kRewritten: return "rewritten";
     case SettingsResult::kTooShort: return "too_short";
@@ -110,8 +168,14 @@ inline bool IsSettingsFailure(SettingsResult r) {
          r == SettingsResult::kNotObject;
 }
 
+/// Whether the session the settings start gets bots: a match whose settings carry both keys.
+inline bool BotsThisSession(SettingsResult r) {
+  return r == SettingsResult::kRewritten || r == SettingsResult::kAlreadyPresent;
+}
+
 struct SettingsRewrite {
   SettingsResult result = SettingsResult::kNotWanted;
+  std::string gameType = "none";  // ReadGameType's name, once the settings parsed to an object
   std::vector<uint8_t> frame;  // the frame to forward when result is kRewritten; empty otherwise
   size_t settingsBytes = 0;    // the settings string's length as it came (no NUL)
   size_t rewrittenBytes = 0;   // its length after the rewrite
@@ -119,8 +183,9 @@ struct SettingsRewrite {
   bool addedPlayersPerTeam = false;
 };
 
-/// Adds `numteams` and `players_per_team` to a session start's settings when bots are wanted and either is absent.
-/// A value already there is kept. The header and every byte after the settings' NUL are copied unchanged.
+/// Adds `numteams` and `players_per_team` to a session start's settings when bots are wanted, the game type is a match
+/// and either key is absent. A value already there is kept. The header and every byte after the settings' NUL are
+/// copied unchanged.
 inline SettingsRewrite RewriteSessionSettings(const uint8_t* frame, size_t size, uint32_t bots, int playersPerTeam) {
   SettingsRewrite out;
   if (bots == 0) return out;
@@ -144,6 +209,12 @@ inline SettingsRewrite RewriteSessionSettings(const uint8_t* frame, size_t size,
     out.result = SettingsResult::kNotObject;
     return out;
   }
+  const SessionGameType gameType = ReadGameType(doc);
+  out.gameType = gameType.name;
+  if (!gameType.bots) {
+    out.result = SettingsResult::kNotAMatch;
+    return out;
+  }
   out.addedNumTeams = !doc.contains("numteams");
   out.addedPlayersPerTeam = !doc.contains("players_per_team");
   if (!out.addedNumTeams && !out.addedPlayersPerTeam) {
@@ -161,6 +232,12 @@ inline SettingsRewrite RewriteSessionSettings(const uint8_t* frame, size_t size,
   out.frame.insert(out.frame.end(), frame + tailAt, frame + size);
   out.result = SettingsResult::kRewritten;
   return out;
+}
+
+/// The session id the lines carry: the session start's match id, its first 16 bytes; "none" when it is shorter.
+inline std::string SessionIdOf(const uint8_t* frame, uint64_t size) {
+  return size >= nevr_lobby_frame::kGuidSize ? nevr_lobby_frame::FormatGuid(nevr_lobby_frame::detail::ReadGuid(frame))
+                                             : std::string("none");
 }
 
 // ---- The request --------------------------------------------------------------------------------------------------
@@ -516,11 +593,71 @@ inline Line RequestLine(bool accepted, const std::string& session, uint32_t requ
 inline Line SettingsLine(const SettingsRewrite& r, const std::string& session, uint64_t frameBytes) {
   return {IsSettingsFailure(r.result),
           std::string("[NEVR.GAMESERVER] server bots session settings ") + SettingsResultName(r.result) +
-              " session=" + session + " numteams=" + (r.addedNumTeams ? std::to_string(kNumTeams) : "kept") +
+              " session=" + session + " game_type=" + r.gameType +
+              " numteams=" + (r.addedNumTeams ? std::to_string(kNumTeams) : "kept") +
               " players_per_team=" + (r.addedPlayersPerTeam ? std::to_string(kPlayersPerTeam) : "kept") +
               " settings_bytes=" + std::to_string(r.settingsBytes) + " rewritten_bytes=" +
               std::to_string(r.rewrittenBytes) + " frame_bytes=" + std::to_string(frameBytes) +
-              (IsSettingsFailure(r.result) ? " (forwarded as it came; bot team placement may fail)" : "")};
+              (IsSettingsFailure(r.result) ? " (forwarded as it came; no bots this session)"
+               : r.result == SettingsResult::kNotAMatch
+                   ? " (forwarded as it came; bots join arena and combat matches only)"
+                   : "")};
+}
+
+// ---- One server update ---------------------------------------------------------------------------------------------
+
+/// The session the driver adds bots to: its id for the lines, and whether its settings made it a bot session.
+struct SessionView {
+  std::string id = "none";
+  bool bots = false;
+};
+
+struct DriverState {
+  Schedule schedule;
+  bool runningLogged = false;  // the first update's line is written
+};
+
+/// One update of the driver: the schedule over the net game's fields, then, when a request is due and the level has a
+/// free bot body, one RequestAddBot with the offline bit set. `netGame` is the game's net game (null before it
+/// exists), `noPosition` the 12 bytes the request carries at +0x20, `findPool` and `requestAddBot` the game's
+/// functions. Returns the lines to log.
+template <typename FindPoolCall, typename AddBotCall>
+std::vector<Line> Drive(DriverState& d, uint32_t wanted, void* netGame, const uint8_t* noPosition, uint64_t nowMs,
+                        const SessionView& session, unsigned long thread, FindPoolCall findPool,
+                        AddBotCall requestAddBot) {
+  std::vector<Line> lines;
+  if (!d.runningLogged) {
+    d.runningLogged = true;
+    lines.push_back({false, "[NEVR.GAMESERVER] server bots driver running thread=" + std::to_string(thread) +
+                                " (bots join a match from its session start on)"});
+  }
+  if (netGame == nullptr) return lines;
+  if (!session.bots) {
+    d.schedule = Schedule{};
+    return lines;
+  }
+  const NetGameView view = ReadNetGame(netGame);
+  const Gate gate = Decide(d.schedule, wanted, view.inGame, view.entrants, view.pending, nowMs);
+  if (PendingWarningDue(d.schedule, gate == Gate::kPending, nowMs)) {
+    lines.push_back(PendingLine(session.id, d.schedule.requested, wanted));
+  }
+  if (gate != Gate::kAsk) return lines;
+  BodyPool body[2];
+  ReadBodyPools(findPool, ReadAt<void*>(netGame, kNetGamePoolsOffset), body);
+  if (!BodyFree(body, 2)) {
+    if (NoBodyWarningDue(d.schedule, nowMs)) {
+      lines.push_back(NoBodyLine(session.id, d.schedule.requested, wanted, view.entrants, body));
+    }
+    return lines;
+  }
+  uint8_t* const lobby = ReadAt<uint8_t*>(netGame, kNetGameLobbyOffset);
+  if (lobby == nullptr) return lines;
+  const Request request = BuildRequest(noPosition);
+  const bool accepted =
+      WithOfflineBit(HostingFlags(lobby), [&] { return requestAddBot(netGame, request.bytes) != 0; });
+  Requested(d.schedule, accepted);
+  lines.push_back(RequestLine(accepted, session.id, d.schedule.requested, wanted, view.entrants));
+  return lines;
 }
 
 }  // namespace nevr_server_bots

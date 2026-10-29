@@ -5,13 +5,11 @@
 #include <atomic>
 #include <mutex>
 #include <cstdint>
-#include <cstring>
 #include <string>
 #include <vector>
 
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
-#include "runtime/compat/lobby_frame.h"
 #include "runtime/hook/addresses.h"
 #include "runtime/lifecycle/config.h"
 #include "runtime/lifecycle/return_to_lobby_queue.h"
@@ -29,13 +27,12 @@ using RequestAddBotFn = int(__fastcall*)(void* netGame, const uint8_t* request);
 using FindPoolFn = int(__fastcall*)(void* pools, uint64_t body, void** owner, uint64_t* index);
 
 std::atomic<uint32_t> g_armed{0};
-Schedule g_schedule;  // the game-loop thread only
-bool g_firstFrameLogged = false;
+DriverState g_driver;                   // the game-loop thread only
 std::vector<uint8_t> g_rewrittenFrame;  // the last rewritten session start; ServerDB's handler runs one at a time
-std::mutex g_sessionMutex;              // the session id is written by ServerDB's handler, read on the game loop
-std::string g_session = "none";        // the last session start's match id
+std::mutex g_sessionMutex;              // the session is written by ServerDB's handler, read on the game loop
+SessionView g_session;                  // the last session start's id, and whether it gets bots
 
-std::string CurrentSession() {
+SessionView CurrentSession() {
   std::lock_guard<std::mutex> lock(g_sessionMutex);
   return g_session;
 }
@@ -55,63 +52,31 @@ void Install(bool isServer) {
   for (const Line& line : r.lines) LogLine(line);
 }
 
-void OnFrame() {
+void OnServerUpdate() {
   const uint32_t wanted = ArmedBots();
   if (wanted == 0) return;
-  if (!g_firstFrameLogged) {
-    g_firstFrameLogged = true;
-    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] server bots driver running thread=%lu",
-        static_cast<unsigned long>(GetCurrentThreadId()));
-  }
-  void* netGame = nevr_return_to_lobby_queue::NetGameFromContext(g_pGame);
-  if (netGame == nullptr) return;
-  const NetGameView view = ReadNetGame(netGame);
-  const uint16_t entrants = view.entrants;
-  const uint64_t now = GetTickCount64();
-  const Gate gate = Decide(g_schedule, wanted, view.inGame, entrants, view.pending, now);
-  if (PendingWarningDue(g_schedule, gate == Gate::kPending, now)) {
-    LogLine(PendingLine(CurrentSession(), g_schedule.requested, wanted));
-  }
-  if (gate != Gate::kAsk) return;
-
   uint8_t* const base = reinterpret_cast<uint8_t*>(EchoVR::g_GameBaseAddress);
-  void* pools = ReadAt<void*>(netGame, kNetGamePoolsOffset);
-  BodyPool body[2];
-  ReadBodyPools(reinterpret_cast<FindPoolFn>(base + nevr_patch_addresses::FIND_POOL), pools, body);
-  if (!BodyFree(body, 2)) {
-    if (NoBodyWarningDue(g_schedule, now)) {
-      LogLine(NoBodyLine(CurrentSession(), g_schedule.requested, wanted, entrants, body));
-    }
-    return;
-  }
-
-  uint8_t noPosition[kNoPositionSize];
-  std::memcpy(noPosition, base + nevr_patch_addresses::NO_SPAWN_POSITION, kNoPositionSize);
-  const Request request = BuildRequest(noPosition);
-  // AddBot adds the entrant itself only with the lobby's offline bit set; it is set for this call and put back.
-  uint8_t* lobby = ReadAt<uint8_t*>(netGame, kNetGameLobbyOffset);
-  if (lobby == nullptr) return;
+  const auto findPool = reinterpret_cast<FindPoolFn>(base + nevr_patch_addresses::FIND_POOL);
   const auto requestAddBot = reinterpret_cast<RequestAddBotFn>(base + nevr_patch_addresses::REQUEST_ADD_BOT);
-  const bool accepted =
-      WithOfflineBit(HostingFlags(lobby), [&] { return requestAddBot(netGame, request.bytes) != 0; });
-  Requested(g_schedule, accepted);
-  LogLine(RequestLine(accepted, CurrentSession(), g_schedule.requested, wanted, entrants));
+  const std::vector<Line> lines =
+      Drive(g_driver, wanted, nevr_return_to_lobby_queue::NetGameFromContext(g_pGame),
+            base + nevr_patch_addresses::NO_SPAWN_POSITION, GetTickCount64(), CurrentSession(),
+            static_cast<unsigned long>(GetCurrentThreadId()), findPool, requestAddBot);
+  for (const Line& line : lines) LogLine(line);
 }
 
 void SessionSettings(void** frame, uint64_t* size) {
   const uint32_t wanted = ArmedBots();
   if (wanted == 0) return;
   const uint8_t* bytes = static_cast<const uint8_t*>(*frame);
-  const std::string session = *size >= nevr_lobby_frame::kGuidSize
-                                  ? nevr_lobby_frame::FormatGuid(nevr_lobby_frame::detail::ReadGuid(bytes))
-                                  : std::string("none");
+  SettingsRewrite r = RewriteSessionSettings(bytes, static_cast<size_t>(*size), wanted, kPlayersPerTeam);
+  const SessionView session{SessionIdOf(bytes, *size), BotsThisSession(r.result)};
   {
     std::lock_guard<std::mutex> lock(g_sessionMutex);
     g_session = session;
   }
-  SettingsRewrite r = RewriteSessionSettings(bytes, static_cast<size_t>(*size), wanted, kPlayersPerTeam);
   UseRewrite(r, g_rewrittenFrame, frame, size);
-  LogLine(SettingsLine(r, session, *size));
+  LogLine(SettingsLine(r, session.id, *size));
 }
 
 }  // namespace nevr_server_bots

@@ -45,7 +45,6 @@
 #include "runtime/patch/invite_answer_apply.h"
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/render_config_hook.h"
-#include "runtime/patch/server_bots_install.h"
 #include "runtime/patch/ui_text_writer.h"
 
 namespace nevr_frame {
@@ -169,8 +168,6 @@ void DispatchPerFrameWork(uint64_t nowUs) {
         // #1278: the invite answers become texts first, so the writer below can write them in the same frame.
         if (loop != 0 && loop == GetCurrentThreadId()) nevr_invite_apply::OnFrame();
         if (loop != 0 && loop == GetCurrentThreadId()) nevr_ui_text::OnFrame();
-        // #1423: AI bots call the game's add-bot request, so on the game-loop thread only, and on a server.
-        if (nevr_server_bots::DriverRuns(g_isServer != FALSE, loop, GetCurrentThreadId())) nevr_server_bots::OnFrame();
     }
 
 #ifdef NEVR_SCENARIO_CONTROL

@@ -120,7 +120,7 @@ TEST(ServerBotsSettings, PlayersPerTeamIsTheValueGiven) {
 }
 
 TEST(ServerBotsSettings, AValueAlreadyThereIsKept) {
-  const std::vector<uint8_t> f = Frame(R"({"appid":"a","numteams":3})", kEntrants);
+  const std::vector<uint8_t> f = Frame(R"({"appid":"a","gametype":-3791849610740453517,"numteams":3})", kEntrants);
   const SettingsRewrite r = RewriteSessionSettings(f.data(), f.size(), 2, 5);
   ASSERT_EQ(r.result, SettingsResult::kRewritten);
   EXPECT_FALSE(r.addedNumTeams);
@@ -132,7 +132,7 @@ TEST(ServerBotsSettings, AValueAlreadyThereIsKept) {
 }
 
 TEST(ServerBotsSettings, BothAlreadyThereLeavesTheFrameAlone) {
-  const std::vector<uint8_t> f = Frame(R"({"numteams":2,"players_per_team":4})", kEntrants);
+  const std::vector<uint8_t> f = Frame(R"({"gametype":-3791849610740453517,"numteams":2,"players_per_team":4})", kEntrants);
   const SettingsRewrite r = RewriteSessionSettings(f.data(), f.size(), 2, 5);
   EXPECT_EQ(r.result, SettingsResult::kAlreadyPresent);
   EXPECT_TRUE(r.frame.empty());
@@ -183,8 +183,82 @@ TEST(ServerBotsSettings, OnlyARewrittenFrameReplacesTheOneTheGameGets) {
   }
 }
 
+TEST(ServerBotsGameType, TheSymbolsAreTheServicesHashes) {
+  // The service's own table (EchoTools/nakama server/evr/core_hash_lookup.go), not a hash computed here.
+  const std::pair<const char*, uint64_t> service[] = {
+      {"echo_arena", 0xcb60a4de7e1caf73ULL},          {"echo_arena_private", 0x09990965f4db8c03ULL},
+      {"echo_arena_tournament", 0xd53a9c73b8b2c760ULL}, {"echo_arena_public_ai", 0xd54d62c40852c2f9ULL},
+      {"echo_combat", 0x3d5c3976578a321aULL},         {"echo_combat_private", 0x33bbf6842df97a3fULL},
+      {"echo_combat_tournament", 0x6b44ed1ad5234fbcULL}, {"social_2.0", 0x042d9cf9cfddcf76ULL},
+      {"social_2.0_private", 0x305d6e37c1589c45ULL},  {"social_2.0_npe", 0x163956e6e431e617ULL},
+  };
+  ASSERT_EQ(sizeof(kGameTypes) / sizeof(kGameTypes[0]), 10u);
+  for (size_t i = 0; i < 10; ++i) {
+    EXPECT_STREQ(kGameTypes[i].name, service[i].first);
+    EXPECT_EQ(kGameTypes[i].symbol, service[i].second) << service[i].first;
+    EXPECT_EQ(kGameTypes[i].bots, std::string(service[i].first).rfind("social", 0) != 0) << service[i].first;
+  }
+}
+
+TEST(ServerBotsGameType, ReadAsTheServiceWritesItOrByName) {
+  const auto read = [](const char* json) { return ReadGameType(nlohmann::ordered_json::parse(json)); };
+  SessionGameType t = read(R"({"gametype":-3791849610740453517})");  // echo_arena as the service's signed int64
+  EXPECT_EQ(t.name, "echo_arena");
+  EXPECT_TRUE(t.bots);
+  t = read(R"({"gametype":14654894462969098099})");  // the same symbol, unsigned
+  EXPECT_EQ(t.name, "echo_arena");
+  t = read(R"({"gametype":301069346851901302})");  // social_2.0
+  EXPECT_EQ(t.name, "social_2.0");
+  EXPECT_FALSE(t.bots);
+  t = read(R"({"gametype":"echo_combat_private"})");
+  EXPECT_EQ(t.name, "echo_combat_private");
+  EXPECT_TRUE(t.bots);
+  t = read(R"({"appid":"1"})");
+  EXPECT_EQ(t.name, "none");
+  EXPECT_FALSE(t.bots);
+  for (const char* other : {R"({"gametype":7})", R"({"gametype":"echo"})", R"({"gametype":1.5})",
+                            R"({"gametype":true})", R"({"gametype":null})"}) {
+    t = read(other);
+    EXPECT_EQ(t.name, "unknown") << other;
+    EXPECT_FALSE(t.bots) << other;
+  }
+}
+
+TEST(ServerBotsSettings, ASocialLobbyIsNotRewrittenAndGetsNoBots) {
+  const std::string social = R"({"appid":"1369078409873402","gametype":301069346851901302,"level":1})";
+  const std::vector<uint8_t> f = Frame(social, kEntrants);
+  const SettingsRewrite r = RewriteSessionSettings(f.data(), f.size(), 2, 5);
+  EXPECT_EQ(r.result, SettingsResult::kNotAMatch);
+  EXPECT_EQ(r.gameType, "social_2.0");
+  EXPECT_TRUE(r.frame.empty());
+  EXPECT_FALSE(r.addedNumTeams);
+  const std::vector<uint8_t> none = Frame(R"({"appid":"1"})", kEntrants);
+  EXPECT_EQ(RewriteSessionSettings(none.data(), none.size(), 2, 5).result, SettingsResult::kNotAMatch);
+  const SettingsRewrite arena = RewriteSessionSettings(Frame(kServiceSettings, kEntrants).data(),
+                                                       Frame(kServiceSettings, kEntrants).size(), 2, 5);
+  EXPECT_EQ(arena.gameType, "echo_arena");
+}
+
+TEST(ServerBotsSettings, OnlyAMatchWithBothKeysGetsBots) {
+  EXPECT_TRUE(BotsThisSession(SettingsResult::kRewritten));
+  EXPECT_TRUE(BotsThisSession(SettingsResult::kAlreadyPresent));
+  for (SettingsResult r : {SettingsResult::kNotWanted, SettingsResult::kNotAMatch, SettingsResult::kTooShort,
+                           SettingsResult::kNoTerminator, SettingsResult::kNotJson, SettingsResult::kNotObject}) {
+    EXPECT_FALSE(BotsThisSession(r)) << SettingsResultName(r);
+  }
+}
+
+TEST(ServerBotsSettings, TheSessionIdIsTheMatchIdTheFrameStartsWith) {
+  // Frame() writes the match id 0x10..0x1F first, then the group id 0x30..0x3F; a GUID is shown in the Windows layout.
+  const std::vector<uint8_t> f = Frame(kServiceSettings, kEntrants);
+  EXPECT_EQ(SessionIdOf(f.data(), f.size()), "13121110-1514-1716-1819-1A1B1C1D1E1F");
+  EXPECT_EQ(SessionIdOf(f.data(), 16), "13121110-1514-1716-1819-1A1B1C1D1E1F");
+  EXPECT_EQ(SessionIdOf(f.data(), 15), "none");
+}
+
 TEST(ServerBotsSettings, ResultNames) {
   EXPECT_STREQ(SettingsResultName(SettingsResult::kNotWanted), "not_wanted");
+  EXPECT_STREQ(SettingsResultName(SettingsResult::kNotAMatch), "not_a_match");
   EXPECT_STREQ(SettingsResultName(SettingsResult::kAlreadyPresent), "already_present");
   EXPECT_STREQ(SettingsResultName(SettingsResult::kRewritten), "rewritten");
   EXPECT_STREQ(SettingsResultName(SettingsResult::kTooShort), "too_short");
@@ -192,6 +266,7 @@ TEST(ServerBotsSettings, ResultNames) {
   EXPECT_STREQ(SettingsResultName(SettingsResult::kNotJson), "not_json");
   EXPECT_STREQ(SettingsResultName(SettingsResult::kNotObject), "not_object");
   EXPECT_FALSE(IsSettingsFailure(SettingsResult::kNotWanted));
+  EXPECT_FALSE(IsSettingsFailure(SettingsResult::kNotAMatch));
   EXPECT_FALSE(IsSettingsFailure(SettingsResult::kRewritten));
 }
 
@@ -454,6 +529,150 @@ TEST(ServerBotsMemory, TheOfflineBitIsSetForTheCallAndOnlyItIsPutBack) {
   }
 }
 
+// --- one server update (Drive) ------------------------------------------------------------------------------------
+
+// A net game, its lobby holder and its body pools, laid out as Drive reads them; RequestAddBot is a recorder.
+struct FakeGame {
+  std::vector<uint8_t> netGame = std::vector<uint8_t>(0x2B10, 0);
+  std::vector<uint8_t> lobby = std::vector<uint8_t>(0x40, 0);
+  FakePools pools;
+  uint8_t noPosition[kNoPositionSize] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+  int answer = 1;  // what RequestAddBot returns
+  std::vector<std::vector<uint8_t>> requests;
+  std::vector<uint32_t> flagsSeen;
+  DriverState state;
+  FakeGame() {
+    Put<int32_t>(netGame, 0, 9);  // in game
+    Put<uint16_t>(netGame, 0xE2, 3);
+    void* p = &pools;
+    std::memcpy(netGame.data() + 0x2B08, &p, sizeof(p));
+    uint8_t* l = lobby.data();
+    std::memcpy(netGame.data() + 0x40, &l, sizeof(l));
+    Put<uint32_t>(lobby, 0x34, 0x6);  // hostingFlags, bit 0 clear
+    Put<int64_t>(pools.entries[0], 1 * 0x88 + 0x30, 4);
+    Put<int64_t>(pools.entries[1], 3 * 0x88 + 0x30, 4);
+  }
+  std::vector<Line> Update(uint64_t nowMs, bool bots = true, bool noNetGame = false) {
+    return Drive(
+        state, 2, noNetGame ? nullptr : netGame.data(), noPosition, nowMs, SessionView{"AAAA", bots}, 36,
+        [&](void* pl, uint64_t b, void** o, uint64_t* i) { return pools.Find(pl, b, o, i); },
+        [&](void* ng, const uint8_t* request) {
+          EXPECT_EQ(ng, static_cast<void*>(netGame.data()));
+          requests.emplace_back(request, request + kRequestSize);
+          uint32_t flags;
+          std::memcpy(&flags, lobby.data() + 0x34, sizeof(flags));
+          flagsSeen.push_back(flags);
+          return answer;
+        });
+  }
+};
+
+TEST(ServerBotsDrive, TheFirstUpdateSaysTheDriverRunsOnce) {
+  FakeGame g;
+  std::vector<Line> lines = g.Update(1000, true, true);
+  ASSERT_EQ(lines.size(), 1u);
+  EXPECT_FALSE(lines[0].warning);
+  EXPECT_EQ(lines[0].text,
+            "[NEVR.GAMESERVER] server bots driver running thread=36 (bots join a match from its session start on)");
+  EXPECT_TRUE(g.Update(1000, true, true).empty()) << "once";
+  EXPECT_TRUE(g.requests.empty()) << "no net game: nothing is asked";
+}
+
+TEST(ServerBotsDrive, AMatchGetsARequestWithTheOfflineBitAndTheRequestsBytes) {
+  FakeGame g;
+  g.state.runningLogged = true;
+  const std::vector<Line> lines = g.Update(5000);
+  ASSERT_EQ(g.requests.size(), 1u);
+  const Request want = BuildRequest(g.noPosition);
+  EXPECT_EQ(g.requests[0], std::vector<uint8_t>(want.bytes, want.bytes + kRequestSize));
+  EXPECT_EQ(g.flagsSeen[0], 0x7u) << "the offline bit is set for the call";
+  uint32_t after;
+  std::memcpy(&after, g.lobby.data() + 0x34, sizeof(after));
+  EXPECT_EQ(after, 0x6u) << "and cleared after it";
+  ASSERT_EQ(lines.size(), 1u);
+  EXPECT_EQ(lines[0].text, "[NEVR.GAMESERVER] server bot requested session=AAAA n=1 of 2 entrants=3");
+  EXPECT_EQ(g.state.schedule.requested, 1u);
+}
+
+TEST(ServerBotsDrive, OneRequestASecondUntilTheCount) {
+  FakeGame g;
+  g.state.runningLogged = true;
+  g.Update(5000);
+  EXPECT_TRUE(g.Update(5999).empty());
+  EXPECT_EQ(g.requests.size(), 1u) << "less than a second later";
+  g.Update(6000);
+  EXPECT_EQ(g.requests.size(), 2u);
+  g.Update(9000);
+  EXPECT_EQ(g.requests.size(), 2u) << "two wanted, two requested";
+}
+
+TEST(ServerBotsDrive, ASessionWithoutBotsAsksNothingAndStartsTheCountAgain) {
+  FakeGame g;
+  g.state.runningLogged = true;
+  g.Update(5000);
+  g.Update(6000);
+  ASSERT_EQ(g.state.schedule.requested, 2u);
+  EXPECT_TRUE(g.Update(7000, false).empty());
+  EXPECT_EQ(g.requests.size(), 2u) << "a session that is not a match gets no request";
+  EXPECT_EQ(g.state.schedule.requested, 0u);
+  g.Update(8000);
+  EXPECT_EQ(g.requests.size(), 3u) << "the next match starts from 0, without a frame out of game between";
+}
+
+TEST(ServerBotsDrive, NoFreeBodyIsAWarningAndNoRequest) {
+  FakeGame g;
+  g.state.runningLogged = true;
+  Put<int64_t>(g.pools.entries[1], 3 * 0x88 + 0x30, 0);
+  const std::vector<Line> lines = g.Update(5000);
+  EXPECT_TRUE(g.requests.empty());
+  ASSERT_EQ(lines.size(), 1u);
+  EXPECT_TRUE(lines[0].warning);
+  EXPECT_EQ(lines[0].text,
+            "[NEVR.GAMESERVER] server bots: no free bot body in this level session=AAAA requested=0 wanted=2 "
+            "entrants=3 bot_arena_pool=4 bot_combat_pool=0 (no more bots this session until one frees)");
+}
+
+TEST(ServerBotsDrive, NoLobbyNoRequest) {
+  FakeGame g;
+  g.state.runningLogged = true;
+  std::memset(g.netGame.data() + 0x40, 0, sizeof(void*));
+  EXPECT_TRUE(g.Update(5000).empty());
+  EXPECT_TRUE(g.requests.empty());
+}
+
+TEST(ServerBotsDrive, ARefusalIsAWarningAndNotCounted) {
+  FakeGame g;
+  g.state.runningLogged = true;
+  g.answer = 0;
+  const std::vector<Line> lines = g.Update(5000);
+  ASSERT_EQ(lines.size(), 1u);
+  EXPECT_TRUE(lines[0].warning);
+  EXPECT_EQ(lines[0].text, "[NEVR.GAMESERVER] server bot request refused by the game session=AAAA n=0 of 2 entrants=3");
+  EXPECT_EQ(g.state.schedule.requested, 0u);
+}
+
+TEST(ServerBotsDrive, ARequestTheGameHasNotAnsweredIsSaidAfterTenSeconds) {
+  FakeGame g;
+  g.state.runningLogged = true;
+  Put<int32_t>(g.netGame, 0x27D8, 1);
+  EXPECT_TRUE(g.Update(5000).empty());
+  EXPECT_TRUE(g.Update(14999).empty());
+  const std::vector<Line> lines = g.Update(15000);
+  EXPECT_TRUE(g.requests.empty());
+  ASSERT_EQ(lines.size(), 1u);
+  EXPECT_EQ(lines[0].text,
+            "[NEVR.GAMESERVER] server bots: the game has not answered the last bot request for 10 s session=AAAA "
+            "requested=0 wanted=2 (no more bots this session until it does)");
+}
+
+TEST(ServerBotsDrive, OutOfGameNothingIsAsked) {
+  FakeGame g;
+  g.state.runningLogged = true;
+  Put<int32_t>(g.netGame, 0, 8);
+  EXPECT_TRUE(g.Update(5000).empty());
+  EXPECT_TRUE(g.requests.empty());
+}
+
 // --- Install's decision and the lines it logs -------------------------------------------------------------------
 
 TEST(ServerBotsInstall, AClientLogsOneInfoSkipLineAndReadsNothing) {
@@ -540,13 +759,15 @@ TEST(ServerBotsLines, ARequestIsInfoAndARefusalAWarning) {
 TEST(ServerBotsLines, TheSettingsResultIsInfoAndAFailureAWarning) {
   SettingsRewrite r;
   r.result = SettingsResult::kRewritten;
+  r.gameType = "echo_arena";
   r.addedNumTeams = true;
   r.settingsBytes = 50;
   r.rewrittenBytes = 85;
   Line l = SettingsLine(r, "AAAA", 171);
   EXPECT_FALSE(l.warning);
   EXPECT_EQ(l.text,
-            "[NEVR.GAMESERVER] server bots session settings rewritten session=AAAA numteams=2 players_per_team=kept "
+            "[NEVR.GAMESERVER] server bots session settings rewritten session=AAAA game_type=echo_arena numteams=2 "
+            "players_per_team=kept "
             "settings_bytes=50 rewritten_bytes=85 frame_bytes=171");
   r = SettingsRewrite{};
   r.result = SettingsResult::kNotJson;
@@ -554,8 +775,18 @@ TEST(ServerBotsLines, TheSettingsResultIsInfoAndAFailureAWarning) {
   l = SettingsLine(r, "AAAA", 40);
   EXPECT_TRUE(l.warning);
   EXPECT_EQ(l.text,
-            "[NEVR.GAMESERVER] server bots session settings not_json session=AAAA numteams=kept players_per_team=5 "
-            "settings_bytes=0 rewritten_bytes=0 frame_bytes=40 (forwarded as it came; bot team placement may fail)");
+            "[NEVR.GAMESERVER] server bots session settings not_json session=AAAA game_type=none numteams=kept "
+            "players_per_team=5 settings_bytes=0 rewritten_bytes=0 frame_bytes=40 (forwarded as it came; no bots this "
+            "session)");
+  r = SettingsRewrite{};
+  r.result = SettingsResult::kNotAMatch;
+  r.gameType = "social_2.0";
+  l = SettingsLine(r, "AAAA", 140);
+  EXPECT_FALSE(l.warning) << "a social lobby without bots is expected";
+  EXPECT_EQ(l.text,
+            "[NEVR.GAMESERVER] server bots session settings not_a_match session=AAAA game_type=social_2.0 "
+            "numteams=kept players_per_team=kept settings_bytes=0 rewritten_bytes=0 frame_bytes=140 (forwarded as it "
+            "came; bots join arena and combat matches only)");
 }
 
 // --- the sites ---------------------------------------------------------------------------------------------------
