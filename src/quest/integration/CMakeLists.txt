@@ -36,7 +36,7 @@ set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_game_i
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 target_include_directories(nevr_quest_plugin PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 target_include_directories(nevr_quest_plugin PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel")
-target_link_libraries(nevr_quest_plugin PUBLIC nevr_quest_config nevr_quest_got_hook nevr_quest_data nlohmann_json::nlohmann_json)
+target_link_libraries(nevr_quest_plugin PUBLIC nevr::plugin_sdk nevr_quest_config nevr_quest_got_hook nevr_quest_data nlohmann_json::nlohmann_json)
 # Hidden visibility: linked into the sentinel, nothing here may become an export (tests/quest TestExportAllowlist).
 target_compile_options(nevr_quest_plugin PRIVATE -Wall -Wextra -Werror -fvisibility=hidden -fvisibility-inlines-hidden)
 
@@ -118,6 +118,7 @@ add_library(nevr_noop_plugin SHARED "${CMAKE_CURRENT_SOURCE_DIR}/../tests/plugin
 set_target_properties(nevr_noop_plugin PROPERTIES OUTPUT_NAME nevr_noop)
 target_compile_definitions(nevr_noop_plugin PRIVATE FX_NAME="nevr_noop" FX_IDS="${nevr_pinned_build_id}" FX_NO_CTOR)
 target_include_directories(nevr_noop_plugin PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+target_link_libraries(nevr_noop_plugin PRIVATE nevr::plugin_sdk)
 target_compile_options(nevr_noop_plugin PRIVATE -Wall -Wextra -Werror)
 target_link_options(nevr_noop_plugin PRIVATE -Wl,--build-id=sha1)
 
@@ -134,7 +135,7 @@ add_library(nevr_autopilot_plugin SHARED
 set_target_properties(nevr_autopilot_plugin PROPERTIES OUTPUT_NAME nevr_autopilot)
 target_compile_definitions(nevr_autopilot_plugin PRIVATE NEVR_AUTOPILOT_BUILD_IDS="${nevr_pinned_build_id}")
 target_include_directories(nevr_autopilot_plugin PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../..")
-target_link_libraries(nevr_autopilot_plugin PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(nevr_autopilot_plugin PRIVATE nevr::plugin_sdk nlohmann_json::nlohmann_json)
 target_compile_options(nevr_autopilot_plugin PRIVATE -Wall -Wextra -Werror -fno-exceptions -fvisibility=hidden
                        -fvisibility-inlines-hidden)
 # --exclude-libs: the static libc++ archive keeps its symbols out of the export set, as the sentinel does.

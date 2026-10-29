@@ -6,13 +6,13 @@ This test holds the name string of every constant and recomputes the hash:
 
   - `EchoVR::Symbols` (top level): CMatSym::Hash of the game's message-type string. The 184 strings are the
     registry of rad-protocol/src/message_registry.rs in nevr-server-rs (`REGISTRY` below).
-  - `EchoVR::Symbols::Social` and `EchoVR::Symbols::Tcp`: CSymbol64 (src/abi/symbol_hash.h) of the string.
+  - `EchoVR::Symbols::Social` and `EchoVR::Symbols::Tcp`: CSymbol64 (sdk/include/nevr/symbol_hash.h) of the string.
   - `NEVRProtobufJSONMessageV1`, at top level, is the one CSymbol64 constant outside those two namespaces.
   - `ProtobufMsg` and `ProtobufJson` have no known source string: no registry or corpus name reproduces them
     under either hash, so they are pinned by value and nothing else.
 
 The hash implementations are the ones in tools/gen_symbol_corpus.py. `test_hash_known_answers` ties them to
-values the game binary produced (rad-protocol/src/symbol/tests.rs, src/abi/symbol_hash.h).
+values the game binary produced (rad-protocol/src/symbol/tests.rs, sdk/include/nevr/symbol_hash.h).
 """
 import importlib.util
 import pathlib
@@ -388,7 +388,7 @@ class CSymbol64InputTest(unittest.TestCase):
 
     def test_the_hash_stops_at_the_first_nul_as_the_game_and_symbol_hash_h_do(self):
         g = self.gen
-        # `for (p = str; *p != '\0'; p++)` in src/abi/symbol_hash.h: bytes after a NUL are never read.
+        # `for (p = str; *p != '\0'; p++)` in sdk/include/nevr/symbol_hash.h: bytes after a NUL are never read.
         self.assertEqual(g.csymbol64_hash(b"ab\x00cd"), g.csymbol64_hash(b"ab"))
         self.assertEqual(g.csymbol64_hash("ab\x00cd"), g.csymbol64_hash("ab"))
         self.assertEqual(g.csymbol64_hash(b"\x00ab"), 0xFFFFFFFFFFFFFFFF)

@@ -11,7 +11,7 @@
 #include <system_error>
 #include <utility>
 
-#include "abi/symbol_hash.h"
+#include "nevr/symbol_hash.h"
 
 namespace nevr_game_server {
 namespace {

@@ -237,7 +237,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
 
     def test_early_boot_never_reads_config(self):
         # service_config.cpp NevrCfg() loads config.yaml on first access and documents that first
-        # access is after the CLI is parsed (g_isServer, -config-path). 3d4a994 called
+        # access is after the CLI is parsed (g_isServer, -config-file). 3d4a994 called
         # NevrCfgSocialFacadeEnabled() from the boot sequence and a real server with a config.yaml
         # died silently right after "minhook initialized".
         source = (ROOT / "src/runtime/lifecycle/initialize.cpp").read_text()
@@ -458,15 +458,10 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         install = extract_braced_function(source, "void InstallConsoleCtrlHandler(")
         self.assertRegex(install, r"\bInstallGameConsoleHandlerRearmHook\s*\(\s*\)")
 
-    def test_plugins_log_through_the_shared_leveled_logger(self):
-        # Issue #34: each plugin hand-rolled a stderr wrapper (one named Log(), shadowing the host's
-        # structured Log()) or used a levelless PluginLog. All plugins use NEVR_DEFINE_PLUGIN_LOG.
-        for rel in sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "plugins").glob("*/src/*.cpp")):
-            text = strip_comments((ROOT / rel).read_text())
-            if "fprintf(stderr" in text.replace("std::", ""):
-                self.assertIn("NEVR_DEFINE_PLUGIN_LOG", text, f"{rel} writes to stderr without the shared logger")
-            self.assertNotRegex(text, r"static\s+void\s+(Log|PluginLog)\s*\(", f"{rel} hand-rolls a logger")
-        header = (ROOT / "plugins/common/include/plugin_logger.h").read_text()
+    def test_the_shared_plugin_logger_is_leveled(self):
+        # Issue #34: each plugin hand-rolled a stderr wrapper or used a levelless PluginLog. The SDK's
+        # NEVR_DEFINE_PLUGIN_LOG writes one leveled line per call.
+        header = (ROOT / "sdk/include/nevr/plugin_logger.h").read_text()
         for level in ("INFO", "WARNING", "ERROR"):
             self.assertIn(f'"{level}"', header)
 
@@ -474,7 +469,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # Issue #598: a plugin had no way into the host's structured Log(). The context carries the
         # plugin's id and the host's log function, the loader fills both into every context it passes a
         # plugin (init, per-frame, state change), and the shared plugin logger binds to them at init.
-        iface = strip_comments((ROOT / "src/extension/plugin_interface.h").read_text())
+        iface = strip_comments((ROOT / "sdk/include/nevr/plugin_interface.h").read_text())
         self.assertRegex(iface, r"const char\*\s+plugin_id;")
         self.assertRegex(iface, r"NevrLogFn\s+log;")
         loader = strip_comments((ROOT / "src/runtime/ext/plugin_loader.cpp").read_text())
@@ -482,11 +477,8 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertRegex(loader, r"ctx\.plugin_id\s*=")
         self.assertEqual(len(re.findall(r"\bContextFor\(\s*\*?\w+\s*,", loader)), 3,
                          "init, TickPlugins and NotifyPluginsStateChange each pass the plugin its own context")
-        logger = strip_comments((ROOT / "plugins/common/include/plugin_logger.h").read_text())
+        logger = strip_comments((ROOT / "sdk/include/nevr/plugin_logger.h").read_text())
         self.assertRegex(logger, r"binding\.log\s*\(\s*binding\.id\s*,")
-        for rel in ("plugins/example/src/plugin.cpp", "plugins/debug-lockout/src/plugin.cpp"):
-            text = strip_comments((ROOT / rel).read_text())
-            self.assertRegex(text, r"\bPluginLogBind\s*\(\s*ctx\s*\)", f"{rel} never binds to the host log")
 
     def test_broadcaster_hook_entries_are_counted_only_by_hook_liveness(self):
         # Issue #33: mode_patches.cpp kept its own entry counters and a periodic log line that
@@ -561,12 +553,13 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
     def test_verify_server_supplies_a_config_when_the_install_has_none(self):
         # Issue #245: a server with no config.yaml gets no embedded defaults and refuses to boot without a
         # login bridge (#16), so every verify-server.sh flag set died at boot. The script deploys the
-        # offline-boot config the Windows-VM rig uses, only when the install has none.
+        # offline-boot config the Windows-VM rig uses, only when the install has none. The runtime reads config.yaml
+        # from the nevr root (#1255), so that is where it goes; an install with an old _local/config.yaml is left alone.
         script = (ROOT / "verify-server.sh").read_text()
-        self.assertRegex(script, r'if \[ ! -e "\$GAME_ROOT/echovr/_local/config\.yaml" \]')
+        self.assertRegex(script, r'if \[ ! -e "\$GAME_ROOT/echovr/_local/config\.yaml" \] && \[ ! -e "\$GAME_DIR/\$NEVR_ROOT_REL/config\.yaml" \]')
         self.assertIn("allow_offline_server: true", script)
         self.assertIn('socket_uri: ""', script)  # #843: an explicit empty socket_uri takes no embedded default
-        self.assertRegex(script, r'deploy "\$OUT/offline-config\.yaml" "\$GAME_DIR/\.\./\.\./_local/config\.yaml"')
+        self.assertRegex(script, r'deploy "\$OUT/offline-config\.yaml" "\$GAME_DIR/\$NEVR_ROOT_REL/config\.yaml"')
 
     def test_token_mints_are_serialized(self):
         # Issue #246: the ServerDB refresher, the telemetry refresher and RequestRegistration all

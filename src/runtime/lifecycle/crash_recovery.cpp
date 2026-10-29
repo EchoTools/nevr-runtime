@@ -204,7 +204,6 @@ void ArmGameMain(const NevrHostContext* host) {
 // BreakpointVEH on the faulting thread. Plain `bool` gives no ordering guarantee and
 // permits the compiler to sink or reorder the stores, so the VEH can observe a stale
 // value and either skip an int3 it should have taken or take one it should not.
-// The copies in plugins/crash-handler/ are not built; this is the path that ships.
 static std::atomic<bool> g_crashReporterSuppressed{false};
 static std::atomic<bool> g_justSuppressedCrash{false};
 

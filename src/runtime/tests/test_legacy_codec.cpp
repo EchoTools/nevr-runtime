@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-#include "abi/symbol_hash.h"
+#include "nevr/symbol_hash.h"
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/legacy_codec.h"
 #include "runtime/tests/legacy_wire_writer.h"

@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-#include "plugin_logger.h"
+#include "nevr/plugin_logger.h"
 
 namespace {
 

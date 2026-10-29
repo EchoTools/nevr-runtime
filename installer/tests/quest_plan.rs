@@ -21,6 +21,7 @@ fn obs(code: Option<u64>, signers: Option<Vec<&str>>, data: Option<(bool, bool)>
     Observed {
         installed: code.map(|c| Installed { version_code: c, signers: signers.map(|s| s.into_iter().map(String::from).collect()) }),
         data: data.map(|(legacy, media)| DataRoots { legacy, media }),
+        free: None,
     }
 }
 
@@ -142,4 +143,40 @@ fn the_newest_listed_game_data_is_found_across_releases() {
     assert_eq!(v, "5.10.0", "5.16.1 lists none; 5.10.0 sorts above 5.9.0 by number, not by text");
     assert_eq!(a.kind, "game-data");
     assert!(nevr_install::manifest::latest_game_data(&json!({"releases": {"1.0.0": art(1, false)}})).is_none());
+}
+
+fn with_free(sdcard_kb: Option<u64>, tmp_kb: Option<u64>) -> Observed {
+    Observed { free: Some(quest::FreeSpace { sdcard_kb, tmp_kb }), ..obs(None, None, Some((false, false))) }
+}
+
+#[test]
+fn the_game_data_needs_exactly_2_2_gib_free_in_both_places() {
+    let m = release(true, json!(SIGNER), 5);
+    let ok = quest::plan(&m, "1.0.0", &with_free(Some(quest::MIN_FREE_KB), Some(quest::MIN_FREE_KB)), false);
+    assert_eq!((ok.outcome, ok.decision.as_str()), (Outcome::Proceed, "install"), "{:?}", ok.reasons);
+    assert_eq!(quest::MIN_FREE_KB, 2_306_867);
+    for (s, t, place) in [(quest::MIN_FREE_KB - 1, quest::MIN_FREE_KB, "/sdcard"), (quest::MIN_FREE_KB, quest::MIN_FREE_KB - 1, "/data/local/tmp")] {
+        let p = quest::plan(&m, "1.0.0", &with_free(Some(s), Some(t)), false);
+        assert_eq!((p.outcome, p.decision.as_str()), (Outcome::Unchanged, "refused"), "{place}");
+        assert!(p.reasons[0].starts_with(place) && p.reasons[0].contains("need 2306867 KiB"), "{:?}", p.reasons);
+        assert!(p.steps.is_empty());
+    }
+}
+
+#[test]
+fn free_space_that_cannot_be_read_is_a_refusal_and_no_device_means_no_check() {
+    let m = release(true, json!(SIGNER), 5);
+    let p = quest::plan(&m, "1.0.0", &with_free(Some(quest::MIN_FREE_KB), None), false);
+    assert_eq!(p.decision, "refused");
+    assert!(p.reasons[0].contains("/data/local/tmp could not be read") || p.reasons[0].contains("free space on /data/local/tmp could not be read"), "{:?}", p.reasons);
+    let none = quest::plan(&m, "1.0.0", &obs(None, None, Some((false, false))), false);
+    assert_eq!(none.outcome, Outcome::Proceed, "free space not observed: no check");
+}
+
+#[test]
+fn free_space_is_not_needed_when_the_data_is_already_there() {
+    let m = release(true, json!(SIGNER), 5);
+    let o = Observed { free: Some(quest::FreeSpace { sdcard_kb: Some(10), tmp_kb: Some(10) }), ..obs(Some(4), Some(vec![SIGNER]), Some((false, true))) };
+    let p = quest::plan(&m, "1.0.0", &o, false);
+    assert_eq!((p.outcome, p.decision.as_str()), (Outcome::Proceed, "update"));
 }

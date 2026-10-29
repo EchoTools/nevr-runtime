@@ -84,20 +84,10 @@ when the OS rejects the restricted flags. In a signed-only run it does not exist
 load is a refusal with its own reason (`restricted search unsupported`), because a load the check did not shape is a load the check
 did not cover. An unsigned-allowed run keeps the fallback.
 
-**The legacy loader is a second load site, and it has no check.** `src/legacy/gamepatches/plugin_loader.cpp` calls `LoadLibraryA`
-on every `*.dll` in `plugins\` next to `echovr.exe` and runs `NvrPluginInit`. It is built (`add_subdirectory(src/legacy/gamepatches)`
-in `CMakeLists.txt`, target `gamepatcheslegacy`) and packaged by the `dist-legacy` target.
-
-No workflow, release package script, document or install script references it: the release build builds `--target dist` only
-(`.github/workflows/build.yml`), the v5.4.3 release carries five assets and none holds a legacy DLL, and `release-signer`'s declared
-file set names none. `src/legacy/` is frozen (AGENTS.md "Guardrails"), so the gate cannot be added there.
-
-Decision: **the legacy build is not part of any package target and is never in a release package.** `dist-all` depends on `dist`
-only (`CMakeLists.txt`), the `justfile` keeps `dist-legacy` as an explicit developer recipe, and `tools/tests/test_release_contract.py`
-asserts that no release workflow, `package_release.py` input or `sources.yml` entry names `gamepatcheslegacy` or `gameserverlegacy`.
-Why not "give it the same gate": the directory is frozen by rule, and it would mean a second verifier compiled against a different
-include layout, for code nobody ships. Not shown: whether anyone outside the release flow (a player, a hosting setup) runs a locally
-built `dist-legacy` package; the threat model puts anyone who installs their own runtime DLL outside the gate.
+**There is one load site.** The v1 legacy runtime (`gamepatcheslegacy`), whose loader called `LoadLibraryA` on every `*.dll` in
+`plugins\` with no check, is not in the tree (#1264). `tools/tests/test_release_contract.py` asserts that no release workflow,
+`package_release.py` input or `sources.yml` entry names `gamepatcheslegacy` or `gameserverlegacy`, so it cannot come back into a
+release package unnoticed. The threat model puts anyone who installs their own runtime DLL outside the gate.
 
 **Dependencies, delay loads, forwarders.** N75 restricts a plugin's imports to its own directory and System32 (`LoadModule`). An
 unsigned DLL in the plugins directory that a signed plugin imports would load without a check. `VerifyPluginTree`
@@ -131,14 +121,14 @@ the load against the same verifier and refuses (null, `ERROR_MOD_NOT_FOUND`) on 
   left to the OS search (the plugins directory may not be on it), and a file the filter cannot name is refused (#1177);
 The loader's own load of a staged plugin is not checked again, because `StageOne` checked the file: the path being loaded is kept per
 thread for the call, and the filter lets that path through only while this thread does not hold the loader lock. The plugin's `DllMain`
-runs inside the same call with the lock held, so a load made there, by that path or another, is checked (`PluginDllMainLoadTest`).
+runs inside the same call with the lock held, so a load made there, by that path or another, is checked (`PluginDllMainLoadTest`). The export and API-version checks run after the load, so a plugin's `DllMain` runs before its `NvrPluginGetInfo` export and API version are checked: signed-only, not those checks, is what keeps unknown code out.
 An unsigned-allowed run logs the line `a plugin loads <file> after its init: <reason>, allowed because plugin signatures are not
 required in this run (plugin trust mode <mode>)` and allows it. Known gaps, recorded and not claimed closed: a load by an absolute path outside the plugins directory (it is
 not a plugin file); under Wine, a unix symbolic link to the plugins directory is not recognised by the final-path compare, so an
 unsigned file reached through it loads (#788, open); the lock order of the late-load filter against a load made from a plugin's
 `DllMain` is not proven (#784, open); a direct `LdrLoadDll` or a manual map by a plugin (code that is already signed by us and running in the process can do
-anything); a plugin's own build flags. Plugins built from `plugins/common` get `/DEPENDENTLOADFLAG:0x800` as a template default so
-their own implicit imports resolve the way N75 does; that flag lives in the plugin's repo and the runtime cannot enforce it. The
+anything); a plugin's own build flags. `/DEPENDENTLOADFLAG:0x800` makes a plugin's own implicit imports
+resolve the way N75 does; that flag lives in the plugin's repo and the runtime cannot enforce it. The
 race on a dependency that the system names (a file in `plugins\` that replaces a system DLL between the check and the load) was
 filed as #783 and is closed.
 
@@ -401,7 +391,7 @@ Release-notes line (`RELEASE-NOTES.md`, which the release pipeline builds):
   to a run that asks for it, until the default flips.
 - A stolen signing profile is the single point of trust, as it already is for `BugSplat64.dll`; the denylist is the response, and it
   moves at the speed of a runtime release.
-- The legacy build is no longer part of `dist-all`.
+- No legacy runtime is built or packaged (#1264).
 
 ## Open items
 

@@ -138,9 +138,12 @@ the runtime (`src/runtime/patch/`), not a service configuration and not a plugin
 - **Call the service.** The hook queues a request; a worker thread posts the RPC with the token the runtime already
   holds and libcurl; the answer is applied from the per-frame dispatcher (N86), so no game memory is touched from the
   worker.
-- **Show the result.** On a created code, the dispatcher writes the code, `EXPIRES: HH:MM UTC` and the share text into
-  the share page's actors; on a refusal it writes the reason into the entry field's title. This needs the UI
-  accessors of #896 (a typed set of a text actor); until they exist the first release shows the result in the log only.
+- **Show the result.** Each frame, on the game-loop thread, `nevr_invite_apply::OnFrame` takes the answers the worker holds
+  and posts their texts to the UI text writer (#896; `patch/invite_answer_text.h` is the rule). A created code: the code and
+  `EXPIRES: HH:MM UTC` in the share page's code and expiry elements. A refused create, or an `ok` whose body holds no code
+  the client may show: the reason where the code would be, the expiry cleared. A refused resolve: the reason in the entry
+  page's title. A resolved code writes nothing; the join below does the rest. No link text is written: the service answers
+  a match id, and a join is by code. The texts are never logged, only the field and the size.
 - **Join.** On a resolved code, from the main menu the dispatcher stages the `-lobbyid` block and runs
   `BeginMultiplayerLobby`; from a lobby or match it calls `CR15NetClientLobby::Join`. Both prologues are validated
   at boot (N97); on a mismatch the feature turns itself off and says why. It is a client feature: on a dedicated
@@ -232,7 +235,7 @@ credential: a line carries `code_len` and a short fingerprint of the code (`code
 | answer | Info / Warning | `op status=<http status> latency_ms=<n> result=<ok\|invalid\|expired\|closed\|denied\|limit\|rate>` |
 | worker stopped | Info | `dropped=<n>`: requests still queued when the worker stopped, never sent |
 | answers dropped | Warning | `reason=not_taken kept=<n>`: the oldest answer went because the menu had not taken them |
-| text written | Info | `page=<n> field=<name>`; a failed write at Warning with the cause |
+| text posted | Info | `field=code\|expires\|entry_title bytes=<n>`; a post the writer refused, or a writer that is off, is `text not posted` at Warning with `reason=`; the writer's own `[NEVR.UI] text written` / `text dropped` line follows |
 | join started | Info | `route=stage\|join lobby=<uuid> state_from=<n>`; the state change after it is the game's own `[NETGAME]` line |
 | feature off | Info | `reason=` (a prologue differed, no token, not configured) |
 
@@ -263,6 +266,8 @@ this feature carries that requirement.
   connection (`SelectRemoteBearer`); the RPC call with it is not measured.
 - The argument layout of the submit function `0x140113960`. It is measured before the hook is written, and the hook
   validates the prologue bytes it records.
+- That the share page's code and expiry actors and elements (the modkit author's findings) are the ones the shipped build
+  draws, from a write made by this tree: a wrong id is a request the writer drops with `reason=no_actor` or `no_canvas`.
 - Anything on Quest beyond the static reading above.
 
 ## Quest measurements and prediction (#966)
