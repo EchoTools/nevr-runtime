@@ -17,13 +17,16 @@
 #include "hook_report.h"
 #include "login_prompt_hook.h"
 #include "login_title_hook.h"
+#include "menu_cards_hook.h"
 #include "data_wiring.h"
 #include "obb_skip_hook.h"
 #include "os_build_gate_hook.h"
+#include "permission_request.h"
 #include "permission_wait_hook.h"
 #include "process_end_hook.h"
+#include "quit_hook.h"
+#include "render_config.h"
 #include "texture_quality_hook.h"
-#include "system_ui_hook.h"
 #include "resource_request_hook.h"
 #include "toast_presenter.h"
 #include "vk_ext_window.h"
@@ -103,9 +106,17 @@ bool InstallObbSkipHook(bool countersRegistered) noexcept {
 void SetProcessEndCallback(void (*callback)() noexcept) noexcept { nevr_quest::process_end::SetBeforeExit(callback); }
 bool InstallProcessEndHook() noexcept { return nevr_quest::process_end::Install(); }
 
+namespace {
+// The game's permission request on its own activity, with the hook's request code (#947): the activity is the one
+// android_main was given (process_end_hook.h).
+const char* RequestOnGameActivity(const char* const* names, std::uint64_t count, int requestCode) noexcept {
+    return nevr_quest::permission_request::Request(nevr_quest::process_end::CurrentApp(), names, count, requestCode);
+}
+}  // namespace
+
 // The game waits for the storage permission it just asked for (#640). A refused install is logged by GotHook and
 // leaves the game's call intact. The first-run data step (#807, data_wiring.h) runs right after that hook's wait, so it
-// is armed first.
+// is armed first, and so is the requester that makes the request with a defined request code (#947).
 bool InstallPermissionWaitHook() noexcept {
     nevr_quest::data_wiring::Options options;
     options.show = &nevr_quest::toast::ShowPreferUiThread;  // #829: the UI thread's looper runs the Toast, else the caller's
@@ -115,9 +126,10 @@ bool InstallPermissionWaitHook() noexcept {
     options.probe_enabled = nevr_build::kIsDev;  // the headset probe is for development builds only
     if (!nevr_build::kIsDev) options.hold_ms = 0;  // no presenter is known to draw on a headset: a release build holds nothing
     nevr_quest::data_wiring::Install(options);
-    // The main-menu QUIT's system UI (#392) is one more GOT hook, installed on every launch from this step. A refused
-    // install is logged by GotHook and by the hook's own line.
-    nevr_quest::system_ui::Install();
+    // The main-menu QUIT finishes the activity (#1276), installed on every launch from this step. Its quit_install line
+    // says whether it went in; a refused install leaves the game's QUIT as it is.
+    nevr_quest::quit::Install();
+    nevr_quest::permission_wait::SetRequester(&RequestOnGameActivity);
     return nevr_quest::permission_wait::Install();
 }
 
@@ -137,6 +149,12 @@ bool InstallTextureQualityHook(nevr_quest::texture_quality::Level level, bool fr
     return nevr_quest::texture_quality::InstallIfCounted(level, fromConfig, countersRegistered);
 }
 
+// The render-configuration log (#1139): the VrApi slots it reads and the poller thread. A refused install is logged by GotHook
+// and by the hook's own line, and leaves the game's calls intact.
+bool InstallRenderConfigHook(nevr_quest::texture_quality::Level level, bool fromConfig) noexcept {
+    return nevr_quest::render_config::Install(level, fromConfig);
+}
+
 // The log-only resource request hook (#871): development builds only. A refused install is logged by GotHook and leaves the
 // game's call intact.
 bool ResourceRequestLogEnabled() noexcept { return nevr_build::kIsDev; }
@@ -144,6 +162,10 @@ bool RegisterResourceRequestCounters() noexcept { return nevr_quest::resource_re
 bool InstallResourceRequestLogHook(bool countersRegistered) noexcept {
     return nevr_quest::resource_request::InstallIfCounted(countersRegistered);
 }
+
+// The CREATE GAME and JOIN VIA CODE cards (#966): a data-slot hook on the streaming reader's read-finished callback. A
+// refused install is logged by GotHook and by the hook's own line, and leaves the game's calls intact.
+bool InstallMenuCardsHook() noexcept { return nevr_quest::menu_cards::Install(); }
 
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
 // token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.

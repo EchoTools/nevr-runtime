@@ -44,11 +44,12 @@ bytes and nowhere else.
 
   quest_apk_version.py code <version>                       print the versionCode for a version
   quest_apk_version.py read <apk>                           print the versionCode in an APK's manifest
-  quest_apk_version.py patch-manifest <AndroidManifest.xml> --build-info <nevr_build_info.h> --shim <so>
+  quest_apk_version.py patch-manifest <AndroidManifest.xml> (--build-info <nevr_build_info.h> | --version <v>) --shim <so>
                                                             set the versionCode in an extracted manifest, in place;
-                                                            print it. The version is the build info's, and the shim
-                                                            must carry the same version string (a stale header
-                                                            cannot stamp a different build's shim)
+                                                            print it. The version is the build info's (or the one
+                                                            given, for a loader built elsewhere: a release asset),
+                                                            and the shim must carry the same version string (a stale
+                                                            header cannot stamp a different build's shim)
 
 One JSON line per action goes to stderr; a refusal is one JSON line and exit 1.
 """
@@ -375,7 +376,9 @@ def main(argv=None) -> int:
     read.add_argument("apk", type=Path)
     patch = sub.add_parser("patch-manifest")
     patch.add_argument("manifest", type=Path)
-    patch.add_argument("--build-info", required=True, type=Path)
+    source = patch.add_mutually_exclusive_group(required=True)
+    source.add_argument("--build-info", type=Path)
+    source.add_argument("--version")
     patch.add_argument("--shim", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
@@ -384,7 +387,8 @@ def main(argv=None) -> int:
         elif args.command == "read":
             print(version_code_of_apk(args.apk))
         else:
-            version = read_build_version(args.build_info)
+            version = args.version if args.version is not None else read_build_version(args.build_info)
+            source_name = "--version" if args.version is not None else args.build_info.name
             new_code = version_code_for(version)
             try:
                 shim = args.shim.read_bytes()
@@ -392,7 +396,7 @@ def main(argv=None) -> int:
                 raise VersionError(f"cannot read the shim {args.shim}: {error.strerror}") from None
             if not shim_carries_version(shim, version):
                 raise VersionError(f"the shim {args.shim.name} does not carry the version string '{version}' that "
-                                   f"{args.build_info.name} names: the header and the shim are from different builds")
+                                   f"{source_name} names: the version and the shim are from different builds")
             original = args.manifest.read_bytes()
             old_code = parse_manifest(original).version_code
             patched = patch_manifest(original, new_code)

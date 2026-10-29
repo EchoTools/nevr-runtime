@@ -74,3 +74,9 @@ void NevrCfgLogBuiltinDefaultsTaken();
 /// when there is nothing to supply (server mode, or those keys are not configured). The pointer
 /// is stable for the process lifetime. Contains the server key: never log it.
 const char* NevrCfgGameNativeConfigJson();
+
+/// Chooses the config.yaml of this run, once (#1255): `-config-file`, else the nevr root's. Copies a legacy
+/// `_local\config.yaml` into the root when the root has none, logs what it did, and for a command line it refuses
+/// (RejectCommandLine, exit code 64) does not return. Boot calls it once the flags are read, before the first read of
+/// config.yaml. The accessors call it themselves, so a caller that skips it still gets the same decision.
+void NevrCfgResolveConfigYaml();

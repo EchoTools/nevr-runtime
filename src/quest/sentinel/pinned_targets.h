@@ -50,7 +50,13 @@ inline constexpr const char* kAndroidMainSymbol = "android_main";
 inline constexpr const char* kFindMethodSymbol = "_ZN10NRadEngine10CSysModule10FindMethodEmPKc";
 inline constexpr const char* kGetDeviceExtensionsVulkanSymbol = "vrapi_GetDeviceExtensionsVulkan";
 inline constexpr const char* kGetSystemPropertyIntSymbol = "vrapi_GetSystemPropertyInt";
-inline constexpr const char* kShowSystemUISymbol = "vrapi_ShowSystemUI";
+inline constexpr const char* kSetDisplayRefreshRateSymbol = "vrapi_SetDisplayRefreshRate";
+inline constexpr const char* kSetClockLevelsSymbol = "vrapi_SetClockLevels";
+inline constexpr const char* kSetPropertyIntSymbol = "vrapi_SetPropertyInt";
+inline constexpr const char* kGetSystemPropertyFloatSymbol = "vrapi_GetSystemPropertyFloat";
+inline constexpr const char* kSubmitFrame2Symbol = "vrapi_SubmitFrame2";
+inline constexpr const char* kGetCurrentInputStateSymbol = "vrapi_GetCurrentInputState";
+inline constexpr const char* kGetInputDeviceCapabilitiesSymbol = "vrapi_GetInputDeviceCapabilities";
 inline constexpr const char* kEnablePageNodeEnterSymbol =
     "_ZN10NRadEngine8NRadGame25CR15UIPage2EnablePageNode5EnterERKNS0_29SR15UIPage2EnablePageNodeDataE";
 
@@ -232,6 +238,23 @@ inline constexpr FillCallSite kFillCallSites[] = {
     {0x18e661c, "force_load_all_mips"} // CGTextureResource::BeginForceLoadAllMips
 };
 
+// NRadEngine::CResourceManager::AsyncResourceIOCallback(SIORequestCallbackData&), defined in libr15 at 0x2543448 (484
+// bytes; ReVault lists it at 0x2643448): what the streaming reader calls when the bytes of a resource are in memory
+// (#966). The game never calls it by name: ResourceLoadInternal loads its address from the data slot GLOB_DAT 0x37195b8
+// (`ldr x4, [x4, #0x5b8]` at 0x254391c and 0x25439ac) and passes it to CStreamingIOProcessor::ReadFileAsync, which keeps
+// it in the request context (+0x4b8) and calls it with the context's callback block (+0x478). The slot is read at each
+// ReadFileAsync, so a replacement is used by every later load. The block layout is in menu_cards_swap.h; the function
+// returns its status in x0 (read here as a 64-bit value and passed through untouched).
+using AsyncResourceIOCallbackSig = std::uint64_t(unsigned char* callbackBlock);
+struct LibR15AsyncResourceIOCallbackTag {};
+using LibR15AsyncResourceIOCallbackThunk = CallbackThunk<LibR15AsyncResourceIOCallbackTag, AsyncResourceIOCallbackSig>;
+inline constexpr const char* kAsyncResourceIOCallbackSymbol =
+    "_ZN10NRadEngine16CResourceManager23AsyncResourceIOCallbackERNS_22SIORequestCallbackDataE";
+// NRadEngine::CMemoryContext::context, a data symbol libr15 defines (.dynsym, 8 bytes at 0x37688c0): the pointer to the
+// memory context. FreeResource releases a resource's buffer 0 through the allocator at context + 0x10.
+inline constexpr const char* kMemoryContextSymbol = "_ZN10NRadEngine14CMemoryContext7contextE";
+inline constexpr std::uint64_t kMemoryContextVaddr = 0x37688c0;
+
 // android_main(android_app*), defined in libr15 at 0xf784c4 and called by the native-activity glue's thread entry
 // through libr15's own PLT (`mov x0, x19; bl 0xf27bc0` at 0xf79a4c; the stub loads JUMP_SLOT 0x36eb4c8). The glue
 // ignores the result and then runs its teardown. android_main shuts the engine down after Main returns and, when
@@ -248,9 +271,10 @@ using LibR15AndroidMainThunk = CallbackThunk<LibR15AndroidMainTag, AndroidMainSi
 // is two words, passed by value in x0 (the element pointer) and x1 (the count), as CR15Game::Initialize loads them
 // (0x11f9cb8-0x11f9ce4: three entries, w1 = 3). It logs "Requesting %llu android permissions", builds a
 // CJavaStringArray and makes one JNI CallVoidMethod("requestPermissions", "([Ljava/lang/String;I)V") on the
-// NativeActivity, then returns. It keeps no state and does not wait for the answer; the boot call in
-// CR15Game::Initialize is followed at once by CncaGame::Initialize, whose package-manifest read needs the storage
-// permissions (#640). The three names it gets there are RECORD_AUDIO, READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE.
+// NativeActivity, then returns. That JNI call passes the array and no request code (#947, permission_request.h): the
+// permission-wait hook makes the request itself instead. It keeps no state and does not wait for the answer; the boot
+// call in CR15Game::Initialize is followed at once by CncaGame::Initialize, whose package-manifest read needs the
+// storage permissions (#640). The three names it gets there are RECORD_AUDIO, READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE.
 using RequestPermissionsSig = void(const char* const* names, std::uint64_t count);
 struct LibR15RequestPermissionsTag {};
 using LibR15RequestPermissionsThunk = CallbackThunk<LibR15RequestPermissionsTag, RequestPermissionsSig>;
@@ -273,6 +297,18 @@ struct LibR15CheckPermissionTag {};
 using LibR15CheckPermissionThunk = CallbackThunk<LibR15CheckPermissionTag, CheckPermissionSig>;
 inline constexpr const char* kRequestPermissionsSymbol =
     "_ZN10NRadEngine8CSysInfo18RequestPermissionsENS_10CArrayViewIPKcLy0EEE";
+
+// NRadEngine::CVR::ShowSystemUI(), defined in libr15 at 0x1a73990 (exported; ReVault 0x1b73990): `mov w1, #1` and a tail
+// call of vrapi_ShowSystemUI(&java, 1). libr15 calls it through its own PLT (stub 0xf47880, JUMP_SLOT 0x36fb328) from
+// exactly one place, state 0 of CR15VRMenuWidgetCS::UpdateExclusive (bl at 0x1f99ca0), the menu's QUIT; state 1 of that
+// switch calls CR15Game::QuitToMain. No other library in the APK imports it (`readelf -rW` over all 483).
+inline constexpr const char* kShowSystemUISymbol = "_ZN10NRadEngine3CVR12ShowSystemUIEv";
+inline constexpr std::uint64_t kShowSystemUIVaddr = 0x1a73990;
+inline constexpr std::uint64_t kShowSystemUIStub = 0xf47880;
+inline constexpr std::uint64_t kShowSystemUICallSite = 0x1f99ca0;  // CR15VRMenuWidgetCS::UpdateExclusive, state 0
+using ShowSystemUISig = void();
+struct LibR15ShowSystemUITag {};
+using LibR15ShowSystemUIThunk = CallbackThunk<LibR15ShowSystemUITag, ShowSystemUISig>;
 
 // NRadEngine::CSysInfo::OSBuildVersion(unsigned long long&), defined in libr15 at 0xf875c4 (184 bytes, exported; ReVault
 // 0x10875c4): reads the system property ro.build.version.incremental, and when it is at most 20 characters of decimal
@@ -501,10 +537,39 @@ inline GotTarget LibR15CheckPermission() {
   return {kLibR15, kCheckPermissionSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c37c8ULL};
 }
 
+// libr15.so's slot for CVR::ShowSystemUI, defined in libr15 itself (JUMP_SLOT 0x36fb328, `readelf -rW` on the pinned
+// image: `R_AARCH64_JUMP_SLOT 0x1a73990 _ZN10NRadEngine3CVR12ShowSystemUIEv`).
+inline GotTarget LibR15ShowSystemUI() {
+  return {kLibR15, kShowSystemUISymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36fb328ULL};
+}
+
 // libr15.so's slot for CSysInfo::OSBuildVersion, defined in libr15 itself (JUMP_SLOT 0x36ff9b8, `readelf -rW` on the
 // pinned image: `R_AARCH64_JUMP_SLOT 0xf875c4 _ZN10NRadEngine8CSysInfo14OSBuildVersionERy`).
 inline GotTarget LibR15OSBuildVersion() {
   return {kLibR15, kOSBuildVersionSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ff9b8ULL};
+}
+
+// NRadEngine::CCanvasUICS::SetText(SCompactPoolHandle, CSymbol64, char const*), defined in libr15 at 0x139111c (80
+// bytes, exported; ReVault 0x149111c): `canvas` (x0) is the CCanvasUICS component, `handle` (w1) the canvas actor's pool
+// handle, `item` (x2) the CSymbol64 of the text item and `text` (x3) the C string, copied into the item and never kept; a
+// null `text` returns 0. The versions page's SetText2 script nodes reach it through libr15's own PLT stub (0xf50440:
+// `adrp x16; ldr x17,[x16,#0x908]; add; br x17`, JUMP_SLOT 0x36ff908) from CSetText2Node::Enter (`bl 0xf50440` at pinned
+// 0x2731654; ReVault 0x2831654). Measured on the pinned file: 40 branches to the stub, none to the function, one
+// relocation names it.
+// `readelf -rW`: `R_AARCH64_JUMP_SLOT 0x139111c _ZN10NRadEngine11CCanvasUICS7SetTextENS_18SCompactPoolHandleENS_9CSymbol64EPKc`.
+// The slot is in .got, inside PT_GNU_RELRO, in a RW LOAD (data, never executable): a write needs mprotect(RW) and back to
+// R, not PROT_EXEC, so the execmod rule that stops an inline hook (docs/adr/0021) does not apply. The other overload
+// (`SAssetElement const&`, JUMP_SLOT 0x36c6a00) is not this slot.
+inline constexpr const char* kCanvasSetTextSymbol =
+    "_ZN10NRadEngine11CCanvasUICS7SetTextENS_18SCompactPoolHandleENS_9CSymbol64EPKc";
+inline constexpr std::uint64_t kCanvasSetTextVaddr = 0x139111c;
+inline constexpr std::uint64_t kCanvasSetTextStub = 0xf50440;
+inline constexpr std::size_t kCanvasSetTextStubCallers = 40;  // b/bl to the stub in the executable segments; none to the function
+using CanvasSetTextSig = std::uint64_t(void* canvas, std::uint32_t handle, std::uint64_t item, const char* text);
+struct LibR15CanvasSetTextTag {};
+using LibR15CanvasSetTextThunk = CallbackThunk<LibR15CanvasSetTextTag, CanvasSetTextSig>;
+inline GotTarget LibR15CanvasSetText() {
+  return {kLibR15, kCanvasSetTextSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ff908ULL};
 }
 
 // libr15.so's slot for CR15UIPage2EnablePageNode::Enter, defined in libr15 itself (JUMP_SLOT 0x36c1cf8).
@@ -545,16 +610,69 @@ inline GotTarget LibR15GetSystemPropertyInt() {
   return {kLibR15, kGetSystemPropertyIntSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36fa728ULL};
 }
 
-// VrApi.h: int vrapi_ShowSystemUI(const ovrJava* java, const ovrSystemUiType type). Called only from CVR::ShowSystemUI
-// (ReVault 0x1b73990; ReVault VA = pinned VA + 0x100000), which always passes type 1. The PLT thunk at ReVault 0xffb730
-// has one direct caller, 0x1b7399c (`revault_xrefs 0xffb730`). The JUMP_SLOT is ReVault 0x37d5280 (`revault_imports`),
-// pinned 0x36d5280. Pin unverified until `just test-quest-hooks-pinned` runs on the real libr15.
-using ShowSystemUISig = int(const OvrJavaOpaque* java, int type);
-struct LibR15ShowSystemUITag {};
-using LibR15ShowSystemUIThunk = CallbackThunk<LibR15ShowSystemUITag, ShowSystemUISig>;
+// The five VrApi imports the render-configuration log reads (docs/adr/0022-render-config-log.md). Each is an imported JUMP_SLOT
+// (value 0) in the pinned libr15 (`readelf -rW`; ReVault shows every slot 0x100000 higher, `revault_imports`). None of the
+// handlers changes an argument or a result.
+//   vrapi_SetDisplayRefreshRate(ovrMobile*, float): one call site, CVR::UpdateTracking. JUMP_SLOT 0x36ec5f0.
+//   vrapi_SetClockLevels(ovrMobile*, int cpu, int gpu): UpdateTracking, once per VR-mode entry. JUMP_SLOT 0x36c75f0.
+//   vrapi_SetPropertyInt(const ovrJava*, ovrProperty, int): CVR::SetFoveationLevel (property 0xf) and
+//     CVR::SetEnableDynamicFoveation (property 0x1e). JUMP_SLOT 0x36ffcf0.
+//   vrapi_GetSystemPropertyFloat(const ovrJava*, ovrSystemProperty): property 4 is the refresh rate the runtime reports.
+//     JUMP_SLOT 0x36c06f8.
+//   vrapi_SubmitFrame2(ovrMobile*, const ovrSubmitFrameDescription2*): one call per rendered frame. ReVault slot 0x37e7010
+//     (`revault_imports`), pinned 0x36e7010.
+struct OvrMobileOpaque;
+struct OvrSubmitFrameDescriptionOpaque;
+using SetDisplayRefreshRateSig = int(OvrMobileOpaque* ovr, float rate);
+struct LibR15SetDisplayRefreshRateTag {};
+using LibR15SetDisplayRefreshRateThunk = CallbackThunk<LibR15SetDisplayRefreshRateTag, SetDisplayRefreshRateSig>;
+using SetClockLevelsSig = int(OvrMobileOpaque* ovr, int cpuLevel, int gpuLevel);
+struct LibR15SetClockLevelsTag {};
+using LibR15SetClockLevelsThunk = CallbackThunk<LibR15SetClockLevelsTag, SetClockLevelsSig>;
+using SetPropertyIntSig = int(const OvrJavaOpaque* java, int property, int value);
+struct LibR15SetPropertyIntTag {};
+using LibR15SetPropertyIntThunk = CallbackThunk<LibR15SetPropertyIntTag, SetPropertyIntSig>;
+using GetSystemPropertyFloatSig = float(const OvrJavaOpaque* java, int property);
+struct LibR15GetSystemPropertyFloatTag {};
+using LibR15GetSystemPropertyFloatThunk = CallbackThunk<LibR15GetSystemPropertyFloatTag, GetSystemPropertyFloatSig>;
+using SubmitFrame2Sig = int(OvrMobileOpaque* ovr, const OvrSubmitFrameDescriptionOpaque* description);
+struct LibR15SubmitFrame2Tag {};
+using LibR15SubmitFrame2Thunk = CallbackThunk<LibR15SubmitFrame2Tag, SubmitFrame2Sig>;
 
-inline GotTarget LibR15ShowSystemUI() {
-  return {kLibR15, kShowSystemUISymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36d5280ULL};
+inline GotTarget LibR15SetDisplayRefreshRate() {
+  return {kLibR15, kSetDisplayRefreshRateSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ec5f0ULL};
+}
+inline GotTarget LibR15SetClockLevels() {
+  return {kLibR15, kSetClockLevelsSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c75f0ULL};
+}
+inline GotTarget LibR15SetPropertyInt() {
+  return {kLibR15, kSetPropertyIntSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ffcf0ULL};
+}
+inline GotTarget LibR15GetSystemPropertyFloat() {
+  return {kLibR15, kGetSystemPropertyFloatSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c06f8ULL};
+}
+inline GotTarget LibR15SubmitFrame2() {
+  return {kLibR15, kSubmitFrame2Symbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36e7010ULL};
+}
+
+// VrApi_Input.h: ovrResult vrapi_GetCurrentInputState(ovrMobile* ovr, const ovrDeviceID deviceID,
+// ovrInputStateHeader* inputState). Imported (value 0): JUMP_SLOT 0x36ec0f0 (`readelf -rW` on the pinned image); its PLT
+// stub 0xf29410 (`adrp x16, 0x36ec000; ldr x17, [x16, #0xf0]`) has one caller, CVR::PollTracking at 0x1a71928
+// (`revault_callers 0x1029410`; ReVault VA = pinned VA + 0x100000). The input seam of #1202 (input_seam_hook.h).
+struct OvrMobileOpaque;
+using GetCurrentInputStateSig = int(OvrMobileOpaque* ovr, std::uint32_t device_id, void* input_state);
+struct LibR15GetCurrentInputStateTag {};
+using LibR15GetCurrentInputStateThunk = CallbackThunk<LibR15GetCurrentInputStateTag, GetCurrentInputStateSig>;
+
+inline GotTarget LibR15GetCurrentInputState() {
+  return {kLibR15, kGetCurrentInputStateSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ec0f0ULL};
+}
+
+// libr15.so's slot for vrapi_GetInputDeviceCapabilities (JUMP_SLOT 0x36fc9c8, `readelf -rW` on the pinned image; imported,
+// value 0). Read, never written: the input seam asks a device's hand through the function the game itself calls
+// (CVR::PollTracking, 0x1a718fc).
+inline GotTarget LibR15GetInputDeviceCapabilities() {
+  return {kLibR15, kGetInputDeviceCapabilitiesSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36fc9c8ULL};
 }
 
 // libr15.so's slot for CResourceManager::FillResourceFileRequest, defined in libr15 itself (JUMP_SLOT 0x36efa80,
@@ -573,6 +691,12 @@ inline GotTarget MatchmakingTString() {
 // 0x191625c (JUMP_SLOT 0x37015e0).
 inline GotTarget LibR15ConfigRequestSend() {
   return {kLibR15, kConfigRequestSendSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x37015e0ULL};
+}
+
+// libr15.so's slot for CResourceManager::AsyncResourceIOCallback, a GLOB_DAT of libr15's own symbol (0x37195b8): the
+// address ResourceLoadInternal hands to ReadFileAsync (#966).
+inline GotTarget LibR15AsyncResourceIOCallback() {
+  return {kLibR15, kAsyncResourceIOCallbackSymbol, RelocKind::kGlobDat, kLibR15BuildId, 0x37195b8ULL};
 }
 
 // Two GLOB_DAT slots in libr15.so (0x3715620 and 0x372b698), used as fixtures

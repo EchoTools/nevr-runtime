@@ -14,12 +14,32 @@ process-end hook (#621, ADR 0020) makes the relaunch after the grant start clean
 
 ## Decision
 
-One GOT hook on libr15's `RequestPermissions` slot (`JUMP_SLOT 0x36e4320`). The handler calls the original; on the first call only
+One GOT hook on libr15's `RequestPermissions` slot (`JUMP_SLOT 0x36e4320`). The handler makes the request (see "The request
+code" below); on the first call only
 (the boot request: later callers are script nodes that must not block) it then waits, on the same thread, until each storage
 permission in the request is granted. The check is the game's own `CSysInfo::CheckPermission` (`0xf87298`), reached as libr15 base
 plus that address after the module's build ID and the function's first four instructions match the pinned build; a mismatch logs
 `check_unavailable` and leaves the game's call alone. The poll is 500 ms; the wait ends at the grant or after 30 s, and a timeout
 leaves the game exactly where it is without the hook. The wait does not pump the looper. A denial cannot be told from "not answered yet" here: `CheckPermission` returns the same "not granted" for both, and the answer reaches only Java (`onRequestPermissionsResult`), so telling them apart needs a JNI call from the blocked thread. The cap is therefore 30 s, about what a player waits: a player who taps Deny sees a blank screen for the cap and then today's initialization error, with a `timeout` line carrying `waited_ms`.
+
+## The request code (#947)
+
+The game's request is not made by the game's function. `CSysInfo::RequestPermissions` calls
+`CJavaObject::CallVoidMethod("requestPermissions", "([Ljava/lang/String;I)V", array)` (`0xf7d6e4`), and that wrapper calls
+JNI's variadic `CallVoidMethod` with one argument after the method id: `0xf7d84c-0xf7d858` load the activity into x1, the
+method id into x2 and the `String[]` into x3, and nothing sets x4. The signature's `int`, the request code, is therefore
+whatever x4 holds when the call is made. `Activity.requestPermissions` throws `IllegalArgumentException` for a negative
+code, and the uncaught exception aborts the process. The community patch repo's fix is to skip the request altogether (its
+permission patch, `ret` at `0xf873ec`), which also removes the grant this decision waits for.
+
+The handler makes the same call itself instead (`permission_request.cpp`): the activity and the VM from the glue (the
+`android_app` that `android_main` was given, kept by the process-end hook), a `String[]` of the game's names, and
+`requestPermissions(names, 1)`. Every JNI call is checked for a pending exception, which is described and cleared. When
+that call cannot be made (no `android_app`, no VM, a JNI step that throws) the game's own function runs, as before, and the
+line says why. Each request logs `{"event":"permission_request","result":...,"path":"ours"|"game","permissions":N}`, with
+`"request_code":1` on our path, for the first eight requests. The game no longer logs `Requesting %llu android permissions`
+for a request we make. The script-node requests take the same path. The names are the game's: the microphone is still
+asked for, since voice needs it.
 
 ## Prediction (written before the code)
 
@@ -44,7 +64,7 @@ Install line at start: `{"event":"permission_wait_install","result":"installed"}
 - `permission_wait` lines for a second request (a script node) means the one-shot did not hold.
 
 **Server change needed:** none.
-**Not established:** that the grant is visible to `checkSelfPermission` while the app thread is blocked; whether the glue's onPause waits on this thread; how `requestCode` is filled inside `CallVoidMethod`; whether `FileExists` fails for the permission rather than for another reason; the case where RECORD_AUDIO is granted and storage is not (no request is made at all; handled by the `CheckPermission` hook, ADR 0013). A headset run on a fresh install (uninstall, install, first launch) decides it.
+**Not established:** that the grant is visible to `checkSelfPermission` while the app thread is blocked; whether the glue's onPause waits on this thread; whether `FileExists` fails for the permission rather than for another reason; the case where RECORD_AUDIO is granted and storage is not (no request is made at all; handled by the `CheckPermission` hook, ADR 0013). A headset run on a fresh install (uninstall, install, first launch) decides it.
 
 ## Not claimed
 

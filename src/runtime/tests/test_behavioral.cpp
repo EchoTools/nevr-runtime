@@ -30,6 +30,7 @@
 #include <utility>
 #include <atomic>
 #include <iterator>
+#include <filesystem>
 #include <memory>
 #include <random>
 #include <cstdint>
@@ -49,7 +50,7 @@
 #include "abi/echovr.h"
 #include "abi/echovr_functions.h"
 #include "abi/game_level.h"
-#include "abi/symbol_hash.h"
+#include "nevr/symbol_hash.h"
 #include "runtime/log/symcache.h"
 #include "runtime/patch/ui_texture_mips_rules.h"
 #include "runtime/hook/symbol_corpus.h"
@@ -132,10 +133,8 @@ FLOAT  g_arenaRoundTime       = 0.0f;
 FLOAT  g_arenaCelebrationTime = 0.0f;
 FLOAT  g_arenaMercyScore      = 0.0f;
 
-// --- logging.h implementations (not linking logging.cpp to avoid nlohmann-json) ---
-std::string GetISO8601Timestamp() { return "2026-01-01T00:00:00.000Z"; }
+// --- logging.h implementations (logging.cpp is not linked into this test) ---
 const char* GetLogLevelString(EchoVR::LogLevel) { return "info"; }
-std::string FormatJsonLogEntry(EchoVR::LogLevel, const char*, const char*) { return "{}"; }
 
 std::mutex g_testLogMutex;
 std::condition_variable g_testLogCv;  // notified on every line, so a test waits for a line without sleeping
@@ -240,6 +239,10 @@ const char* g_testRouterMode = nullptr;
 // #1082: nevr_discord_id answers from g_testDiscordId (the config fallback of the login identity), so a login test
 // has an account that is not 0 (the local user's UUID is the zero UUID for account 0).
 const char* g_testDiscordId = nullptr;
+// The synthetic account the login tests feed through the config fallback; its decimal text is made from the number
+// so the source holds no 18-digit string (the N20 sensor in `just verify` reads one as an account id).
+constexpr uint64_t kTestAccountId = 123456789012345678ULL;
+const std::string kTestAccountIdText = std::to_string(kTestAccountId);
 const char* NevrCfgGetFlat(const char* flatKey) {
   if (std::strcmp(flatKey, "nevr_session_router") == 0) return g_testRouterMode;
   if (std::strcmp(flatKey, "nevr_discord_id") == 0) return g_testDiscordId;
@@ -272,6 +275,7 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 #include "runtime/patch/asset_registry.h"
 #include "runtime/ext/module_loader.h"
 #include "core/hex_dump.h"
+#include "core/nevr_root.h"
 #include "runtime/patch/matchmaker_host_patch.h"
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/compat/self_check.h"
@@ -324,6 +328,57 @@ class N68_PluginTickTest : public ::testing::Test {
 // makes its real OnFrame callback observable.
 // ============================================================================
 
+// The plugin directory of a run is <root>\\plugins, the root under %LOCALAPPDATA% (#856, ADR 0012), never the folder of the game
+// executable. A test gives the process a LOCALAPPDATA of its own, a folder it removes afterwards, and starts that root's
+// plugins\\ with the plugins the build put next to the test executable (the fixture DLLs the loader tests plan by name).
+class TestNevrRoot {
+ public:
+  TestNevrRoot() {
+    char exePath[MAX_PATH] = {};
+    GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+    std::string exeDir(exePath);
+    exeDir.resize(exeDir.find_last_of("\\/") + 1);
+    builtPluginsDir_ = exeDir + "plugins\\";
+    static std::atomic<unsigned> counter{0};
+    localAppData_ = exeDir + "nevr-test-localappdata-" + std::to_string(GetCurrentProcessId()) + "-" +
+                    std::to_string(counter.fetch_add(1));
+    char saved[MAX_PATH * 2] = {};
+    const DWORD n = GetEnvironmentVariableA("LOCALAPPDATA", saved, static_cast<DWORD>(sizeof(saved)));
+    hadLocalAppData_ = n != 0 && n < sizeof(saved);
+    if (hadLocalAppData_) savedLocalAppData_.assign(saved, n);
+    SetEnvironmentVariableA("LOCALAPPDATA", localAppData_.c_str());
+    pluginsDir_ = nevr_root::PluginsDir(nevr_root::RootA()) + "\\";
+    std::error_code ec;
+    std::filesystem::create_directories(pluginsDir_, ec);
+    for (const auto& entry : std::filesystem::directory_iterator(builtPluginsDir_, ec)) {
+      if (entry.is_regular_file(ec)) {
+        std::filesystem::copy_file(entry.path(), std::filesystem::path(pluginsDir_) / entry.path().filename(),
+                                   std::filesystem::copy_options::overwrite_existing, ec);
+      }
+    }
+  }
+  ~TestNevrRoot() {
+    if (hadLocalAppData_) {
+      SetEnvironmentVariableA("LOCALAPPDATA", savedLocalAppData_.c_str());
+    } else {
+      SetEnvironmentVariableA("LOCALAPPDATA", nullptr);
+    }
+    std::error_code ec;
+    std::filesystem::remove_all(localAppData_, ec);
+  }
+  TestNevrRoot(const TestNevrRoot&) = delete;
+  TestNevrRoot& operator=(const TestNevrRoot&) = delete;
+
+  // <root>\\plugins\\, where the loader looks.
+  const std::string& PluginsDir() const { return pluginsDir_; }
+  // <folder of the test executable>\\plugins\\: where the build puts the fixture DLLs, and where the loader used to look.
+  const std::string& BuiltPluginsDir() const { return builtPluginsDir_; }
+
+ private:
+  std::string localAppData_, pluginsDir_, builtPluginsDir_, savedLocalAppData_;
+  bool hadLocalAppData_ = false;
+};
+
 class PluginLoaderDiagnosticTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -332,6 +387,7 @@ class PluginLoaderDiagnosticTest : public ::testing::Test {
     ClearTestLogs();
     EchoVR::g_GameBaseAddress = reinterpret_cast<CHAR*>(GetModuleHandleA(nullptr));
     ASSERT_NE(EchoVR::g_GameBaseAddress, nullptr);
+    nevrRoot_ = std::make_unique<TestNevrRoot>();
     // These tests are about the loader, not the signature gate: their fixture DLLs are unsigned. The gate has
     // its own fixture below (PluginSignatureGateTest), which enforces.
     nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, nullptr);
@@ -342,7 +398,10 @@ class PluginLoaderDiagnosticTest : public ::testing::Test {
     g_testPluginLoadPlan.clear();
     ClearTestLogs();
     nevr_plugin_trust::TestHook_ResetTrust();
+    nevrRoot_.reset();
   }
+
+  std::unique_ptr<TestNevrRoot> nevrRoot_;
 };
 
 // ============================================================================
@@ -369,11 +428,7 @@ class PluginSignatureGateTest : public PluginLoaderDiagnosticTest {
     policy_.profileEkus = {manifest_["profile_eku"].get<std::string>()};
     nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::SignedOnly, &policy_);
 
-    char exePath[MAX_PATH] = {};
-    ASSERT_NE(GetModuleFileNameA(nullptr, exePath, MAX_PATH), 0U);
-    pluginsDir_ = std::string(exePath);
-    pluginsDir_.resize(pluginsDir_.find_last_of("\\/") + 1);
-    pluginsDir_ += "plugins\\";
+    pluginsDir_ = nevrRoot_->PluginsDir();
   }
 
   void TearDown() override {
@@ -442,6 +497,76 @@ TEST_F(PluginSignatureGateTest, RefusalIsPerPluginAndTheSignedOneStillLoads) {
   LoadPlugins();
   EXPECT_EQ(GetLoadedPluginCount(), 1);
   EXPECT_TRUE(TestLogContains("file=gate_a_unsigned.dll refused: unsigned"));
+}
+
+// ---- plugins load from the nevr root (ADR 0012, #856) ------------------------------------------------------------
+
+class PluginsFromTheRootTest : public PluginSignatureGateTest {
+ protected:
+  void TearDown() override {
+    TestHook_ResetPluginLoadFilter();
+    PluginSignatureGateTest::TearDown();
+  }
+
+  // A signed copy of the fixture plugin as `name` in the folder the loader used to read, beside the game executable.
+  std::string PlaceBesideTheGame(const std::string& name, const std::string& kind) {
+    const std::string source = fixtures_ + "/" + manifest_["files"]["test_plugin_onframe." + kind].get<std::string>();
+    std::error_code ec;
+    std::filesystem::create_directories(nevrRoot_->BuiltPluginsDir(), ec);
+    const std::string target = nevrRoot_->BuiltPluginsDir() + name;
+    EXPECT_TRUE(CopyFileA(source.c_str(), target.c_str(), FALSE)) << source << " error " << GetLastError();
+    copies_.push_back(target);
+    return target;
+  }
+
+  static std::wstring LowerWide(const std::string& path) {
+    std::wstring wide;
+    for (char c : path) wide.push_back(static_cast<wchar_t>(std::tolower(static_cast<unsigned char>(c))));
+    return wide;
+  }
+};
+
+TEST_F(PluginsFromTheRootTest, TheLoaderReadsAndNamesThePluginFolderOfTheNevrRoot) {
+  Plan("root_signed.dll", "signed");
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("loading in list order from " + pluginsDir_)) << pluginsDir_;
+  EXPECT_NE(pluginsDir_.find("\\nevr\\echovr\\plugins\\"), std::string::npos) << pluginsDir_;
+}
+
+TEST_F(PluginsFromTheRootTest, ASignedPluginBesideTheGameExecutableIsNotLoaded) {
+  PlaceBesideTheGame("beside_signed.dll", "signed");
+  g_testPluginLoadPlan.push_back({"beside_signed.dll", "beside_signed.dll", false, "", "{}"});
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 0) << "the game folder is not a plugin folder";
+  EXPECT_EQ(GetModuleHandleA("beside_signed.dll"), nullptr);
+  EXPECT_TRUE(TestLogContains("beside_signed.dll")) << "the entry is reported as failed to load";
+}
+
+TEST_F(PluginsFromTheRootTest, TheLateLoadFilterGuardsTheRootsPluginFolderAndNotTheGameFolder) {
+  Plan("filter_signed.dll", "signed");
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  Plan("late_in_root.dll", "unsigned");
+  const std::string beside = PlaceBesideTheGame("late_beside.dll", "unsigned");
+  EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(LowerWide(pluginsDir_ + "late_in_root.dll").c_str(), nullptr))
+      << "an unsigned DLL loaded late from the nevr root's plugin folder is refused";
+  EXPECT_FALSE(nevr_dll_load_hook::IsLoadBlocked(LowerWide(beside).c_str(), nullptr))
+      << "the game folder's plugins\\ is no longer the plugin directory";
+}
+
+TEST_F(PluginsFromTheRootTest, WithoutLocalAppDataNoPluginLoadsAndTheGameFolderIsNeverSearched) {
+  PlaceBesideTheGame("beside_nolocal.dll", "signed");
+  SetEnvironmentVariableA("LOCALAPPDATA", nullptr);
+  g_testPluginLoadPlan.push_back({"beside_nolocal.dll", "beside_nolocal.dll", false, "", "{}"});
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(GetModuleHandleA("beside_nolocal.dll"), nullptr);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Error, "the plugin directory cannot be resolved"));
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 1u);
+  EXPECT_FALSE(manifest[0]["loaded"].get<bool>());
+  EXPECT_NE(manifest[0]["error"].get<std::string>().find("plugin directory cannot be resolved"), std::string::npos);
 }
 
 // ---- the dependency walk, the refusal dialog and the load filter (ADR 0010 sections 1 and 6, #741) -------------
@@ -799,6 +924,179 @@ TEST_F(PluginDependencyGateTest, ALoadMadeFromAStagedPluginsDllMainIsChecked) {
   EXPECT_NE(g_refusalDialogs[0].find("dllmain_victim.dll"), std::string::npos);
 }
 
+// #768: a signed plugin whose one import is a System32 library (hid.dll). Nothing in the plugins directory names it,
+// so the check accepts the tree; the loader searches the plugin's own directory before System32 for a name that is
+// not already loaded, so an unsigned stand-in put there after the check is the one that maps. The stand-in says it
+// was loaded by setting NEVR_TEST_DECOY_LOADED.
+std::string g_decoyFrom;
+std::string g_decoyTo;
+
+void PlantTheDecoyInThePluginsDirectory() { CopyFileA(g_decoyFrom.c_str(), g_decoyTo.c_str(), FALSE); }
+
+class PluginSystemDependencyTest : public PluginDependencyGateTest {
+ protected:
+  void SetUp() override {
+    PluginDependencyGateTest::SetUp();
+    ReleaseTheFixtureModules();
+    ASSERT_EQ(GetModuleHandleA("hid.dll"), nullptr) << "hid.dll is already loaded in this process: nothing to plant against";
+    const nlohmann::json& t = manifest_["trees"]["import_system"];
+    g_decoyFrom = fixtures_ + "/" + t["decoy"].get<std::string>();
+    g_decoyTo = pluginsDir_ + "hid.dll";
+    SetEnvironmentVariableA("NEVR_TEST_DECOY_LOADED", nullptr);
+  }
+
+  void TearDown() override {
+    TestHook_SetAfterDependenciesChecked(nullptr);
+    ReleaseTheFixtureModules();
+    SetEnvironmentVariableA("NEVR_TEST_DECOY_LOADED", nullptr);
+    PluginDependencyGateTest::TearDown();
+  }
+
+  static void ReleaseTheFixtureModules() {
+    for (const char* name : {"sysimporter.dll", "hid.dll"}) {
+      while (HMODULE m = GetModuleHandleA(name)) {
+        if (!FreeLibrary(m)) break;
+      }
+    }
+  }
+
+  static bool TheDecoyRan() { return GetEnvironmentVariableA("NEVR_TEST_DECOY_LOADED", nullptr, 0) != 0; }
+};
+
+TEST_F(PluginSystemDependencyTest, AStandInPlantedForASystemImportAfterTheCheckIsNotTheOneThatLoads) {
+  PlanTree("import_system");
+  TestHook_SetAfterDependenciesChecked(&PlantTheDecoyInThePluginsDirectory);
+  LoadPlugins();
+  TestHook_SetAfterDependenciesChecked(nullptr);
+  copies_.push_back(g_decoyTo);  // removed at teardown, unless it was mapped
+  EXPECT_FALSE(TheDecoyRan()) << "the stand-in planted after the check was loaded with the plugin";
+  EXPECT_FALSE(TestLogContains("LoadLibrary failed")) << "the plugin did not load";
+  EXPECT_FALSE(TestLogContains("refused"));
+  EXPECT_TRUE(TestLogContains("plugin=sysimporter.dll file=sysimporter.dll 1 system dependencies loaded from the system directory first"));
+  // The fixture is not a real plugin, so it is unloaded for lacking the plugin exports; the pin goes with it.
+  EXPECT_EQ(GetModuleHandleA("sysimporter.dll"), nullptr);
+  EXPECT_EQ(GetModuleHandleA("hid.dll"), nullptr) << "the pin outlived the plugin it was taken for";
+}
+
+TEST_F(PluginSystemDependencyTest, ASystemLibraryThatCannotBePinnedRefusesTheStagedPlugin) {
+  PlanTree("import_system");
+  TestHook_FailPinning(true);
+  LoadPlugins();
+  TestHook_FailPinning(false);
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(GetModuleHandleA("sysimporter.dll"), nullptr) << "the plugin was mapped";
+  const std::string expected = "refused: dependency hid.dll cannot be loaded from the system directory to pin it: error 5";
+  EXPECT_TRUE(TestLogContains(expected));
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 1u);
+  EXPECT_EQ(manifest[0]["error"].get<std::string>(), expected);
+  EXPECT_FALSE(g_refusalDialogs.empty());
+}
+
+TEST_F(PluginSystemDependencyTest, ASystemLibraryThatCannotBePinnedRefusesALaterLoad) {
+  Copy("import_system");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  TestHook_FailPinning(true);
+  const bool blocked = Blocked("sysimporter.dll");
+  TestHook_FailPinning(false);
+  EXPECT_TRUE(blocked);
+  EXPECT_TRUE(TestLogContains("refused a later load of sysimporter.dll: dependency hid.dll cannot be loaded from the system directory to pin it: error 5"));
+}
+
+TEST_F(PluginSystemDependencyTest, ALaterLoadsPinStaysLoadedAfterTheFilterIsReset) {
+  Copy("import_system");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_FALSE(Blocked("sysimporter.dll"));
+  EXPECT_NE(GetModuleHandleA("hid.dll"), nullptr) << "the filter did not pin hid.dll";
+  TestHook_ResetPluginLoadFilter();  // drops the filter's verified entries
+  EXPECT_NE(GetModuleHandleA("hid.dll"), nullptr) << "the pin was released with the entry, before the load it protects";
+}
+
+TEST_F(PluginSystemDependencyTest, AnUnsignedAllowedRunPinsNothing) {
+  nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
+  Copy("import_system");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_FALSE(Blocked("sysimporter.dll"));
+  EXPECT_EQ(GetModuleHandleA("hid.dll"), nullptr) << "a run that does not require signatures loaded a library for the check";
+}
+
+TEST_F(PluginSystemDependencyTest, AStandInPlantedForASystemImportAfterALaterLoadsCheckIsNotTheOneThatLoads) {
+  Copy("import_system");
+  g_testPluginLoadPlan.clear();
+  const std::string plugin = pluginsDir_ + "sysimporter.dll";
+  // The plugin's own LoadLibrary reaches the filter only through the real hooks.
+  ASSERT_EQ(MH_Initialize(), MH_OK);
+  const int hooked = nevr_dll_load_hook::Install();
+  if (hooked == 4) {
+    TestHook_InstallPluginLoadFilter(pluginsDir_);
+    TestHook_SetAfterDependenciesChecked(&PlantTheDecoyInThePluginsDirectory);
+    SetLastError(0);
+    HMODULE loaded = LoadLibraryExA(plugin.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    TestHook_SetAfterDependenciesChecked(nullptr);
+    EXPECT_NE(loaded, nullptr) << "the checked plugin did not load: error " << GetLastError();
+  }
+  nevr_dll_load_hook::Shutdown();  // also clears the registered filters
+  MH_Uninitialize();
+  nevr_hook_guard::ResetForTest();
+  TestHook_ForgetLoadFilterRegistration();
+  ASSERT_EQ(hooked, 4) << "the LoadLibrary hooks did not install";
+  copies_.push_back(g_decoyTo);
+  EXPECT_FALSE(TheDecoyRan()) << "the stand-in planted after the filter's check was loaded with the plugin";
+}
+
+// #769: the loader's own load of a staged plugin is not checked twice, because the loader checked the file first. That
+// exemption is for the loader's call. The plugin's DllMain runs inside the same call, with the loader lock held, and
+// a load it makes is the plugin's own: it has to be checked like any other, even by the path being loaded.
+class PluginDllMainLoadTest : public PluginDependencyGateTest {
+ protected:
+  void TearDown() override {
+    SetEnvironmentVariableW(L"NEVR_TEST_DLLMAIN_LOAD", nullptr);
+    // The fixture is not a real plugin, so it is released here: a file that stays mapped cannot be copied over by the
+    // next test.
+    while (HMODULE m = GetModuleHandleA("dllmain_loader.dll")) {
+      if (!FreeLibrary(m)) break;
+    }
+    PluginDependencyGateTest::TearDown();
+  }
+
+  // Runs LoadPlugins with the real LoadLibrary hooks installed, as the game has them; false if they did not install.
+  bool LoadPluginsWithTheRealHooks(size_t* checked = nullptr) {
+    EXPECT_EQ(MH_Initialize(), MH_OK);
+    const int hooked = nevr_dll_load_hook::Install();
+    if (hooked == 4) {
+      LoadPlugins();
+      if (checked != nullptr) *checked = TestHook_LoadFilterVerifiedCount();
+    }
+    nevr_dll_load_hook::Shutdown();  // also clears the registered filters
+    MH_Uninitialize();
+    nevr_hook_guard::ResetForTest();
+    TestHook_ForgetLoadFilterRegistration();
+    EXPECT_EQ(hooked, 4) << "the LoadLibrary hooks did not install";
+    return hooked == 4;
+  }
+};
+
+TEST_F(PluginDllMainLoadTest, ALoadOfThePluginsOwnPathFromItsDllMainIsChecked) {
+  PlanTree("dllmain_load");
+  const std::wstring self = std::wstring(pluginsDir_.begin(), pluginsDir_.end()) + L"dllmain_loader.dll";
+  ASSERT_TRUE(SetEnvironmentVariableW(L"NEVR_TEST_DLLMAIN_LOAD", self.c_str()));
+  size_t checked = 0;
+  ASSERT_TRUE(LoadPluginsWithTheRealHooks(&checked));
+  EXPECT_EQ(checked, 1u) << "a load of the plugin's own path from its DllMain was not checked";
+}
+
+TEST_F(PluginDllMainLoadTest, TheLoadersOwnLoadOfAStagedPluginIsStillNotCheckedTwice) {
+  PlanTree("dllmain_load");  // its DllMain loads nothing: NEVR_TEST_DLLMAIN_LOAD is not set
+  size_t checked = 99;
+  ASSERT_TRUE(LoadPluginsWithTheRealHooks(&checked));
+  EXPECT_EQ(checked, 0u) << "the loader's own load of the plugin it checked was checked again";
+  EXPECT_FALSE(TestLogContains("refused"));
+  EXPECT_FALSE(TestLogContains("LoadLibrary failed")) << "the plugin did not load";
+}
+
 // The path the filter resolved is opened a moment later; a name pointed elsewhere in between must not be verified
 // as the file that was resolved (heldPath != full). The hook turns the resolved name into a link to a signed file.
 std::wstring g_linkTarget;
@@ -862,6 +1160,190 @@ TEST_F(PluginDependencyGateTest, ALinkRepointedBetweenTheCheckAndTheLoadDoesNotC
   EXPECT_EQ(GetLoadedPluginCount(), 1) << "the file behind the link at the load was not the file that was checked";
   EXPECT_TRUE(TestLogContains("plugin=staged_link.dll file=staged_link.dll is loaded from "))
       << "a path that leads somewhere else than its name is not said";
+}
+
+// #1177: a late load the filter accepted is made by the hook with the caller's own text. The filter held the file it
+// checked; a link in that text, pointed somewhere else after the check, leads the real load to a file that was
+// never checked. The load has to be of the file that was checked. late_link.dll names the signed late_real.dll;
+// after the check the link is pointed at the unsigned late_evil.dll, which is no plugin (no NvrPluginGetInfo).
+std::wstring g_lateLink;
+std::wstring g_lateLinkTarget;
+
+void PointTheLateLinkAtTheUnsignedFile(const std::wstring&) {
+  DeleteFileW(g_lateLink.c_str());
+  CreateSymbolicLinkW(g_lateLink.c_str(), g_lateLinkTarget.c_str(), 0);
+}
+
+class PluginLateLoadTest : public PluginDependencyGateTest {
+ protected:
+  void TearDown() override {
+    TestHook_SetAfterLateLoadAccepted(nullptr);
+    TestHook_FailNamingTheHeldFile(false);
+    for (const char* name : {"late_link.dll", "late_real.dll", "late_evil.dll"}) {
+      while (HMODULE m = GetModuleHandleA(name)) {
+        if (!FreeLibrary(m)) break;
+      }
+    }
+    PluginDependencyGateTest::TearDown();
+  }
+
+  // late_link.dll -> late_real.dll (signed plugin); late_evil.dll is the file the seam points the link at.
+  void ArrangeTheLink() {
+    Plan("late_real.dll", "signed");
+    g_testPluginLoadPlan.clear();
+    evil_ = pluginsDir_ + "late_evil.dll";
+    ASSERT_TRUE(CopyFileA((fixtures_ + "/" + manifest_["files"]["nevr-runtime.unsigned"].get<std::string>()).c_str(),
+                          evil_.c_str(), FALSE))
+        << GetLastError();
+    copies_.push_back(evil_);
+    link_ = pluginsDir_ + "late_link.dll";
+    g_lateLink.assign(link_.begin(), link_.end());
+    g_lateLinkTarget.assign(pluginsDir_.begin(), pluginsDir_.end());
+    g_lateLinkTarget += L"late_real.dll";
+    ASSERT_TRUE(CreateSymbolicLinkW(g_lateLink.c_str(), g_lateLinkTarget.c_str(), 0)) << GetLastError();
+    copies_.push_back(link_);
+    g_lateLinkTarget.assign(evil_.begin(), evil_.end());  // where the seam points the link
+  }
+
+  // Runs `body` with the four LoadLibrary hooks and the plugin filter live, then takes them down.
+  template <typename Body>
+  void WithTheRealHooks(Body body) {
+    ASSERT_EQ(MH_Initialize(), MH_OK);
+    const int hooked = nevr_dll_load_hook::Install();
+    if (hooked == 4) {
+      TestHook_InstallPluginLoadFilter(pluginsDir_);
+      body();
+    }
+    nevr_dll_load_hook::Shutdown();  // also clears the registered filters
+    MH_Uninitialize();
+    nevr_hook_guard::ResetForTest();
+    TestHook_ForgetLoadFilterRegistration();
+    ASSERT_EQ(hooked, 4) << "the LoadLibrary hooks did not install";
+  }
+
+  std::string evil_;
+  std::string link_;
+};
+
+TEST_F(PluginLateLoadTest, ALinkRepointedAfterTheLateCheckDoesNotChangeTheFileThatLoads) {
+  ArrangeTheLink();
+  WithTheRealHooks([&] {
+    TestHook_SetAfterLateLoadAccepted(&PointTheLateLinkAtTheUnsignedFile);
+    const HMODULE m = LoadLibraryW(g_lateLink.c_str());
+    TestHook_SetAfterLateLoadAccepted(nullptr);
+    ASSERT_NE(m, nullptr) << GetLastError();
+    EXPECT_NE(GetProcAddress(m, "NvrPluginGetInfo"), nullptr)
+        << "the file behind the link at the load was not the file that was checked";
+    EXPECT_TRUE(TestLogContains("loads the file it checked")) << "a load that leads somewhere else than its name is not said";
+  });
+}
+
+TEST_F(PluginLateLoadTest, AFileAlreadyCheckedIsLoadedAsCheckedWhenItsLinkIsRepointedLater) {
+  ArrangeTheLink();
+  WithTheRealHooks([&] {
+    const HMODULE first = LoadLibraryW(g_lateLink.c_str());  // verifies and remembers the file
+    ASSERT_NE(first, nullptr) << GetLastError();
+    ASSERT_TRUE(FreeLibrary(first));
+    TestHook_SetAfterLateLoadAccepted(&PointTheLateLinkAtTheUnsignedFile);
+    const HMODULE second = LoadLibraryW(g_lateLink.c_str());  // the remembered file is accepted again
+    TestHook_SetAfterLateLoadAccepted(nullptr);
+    ASSERT_NE(second, nullptr) << GetLastError();
+    EXPECT_NE(GetProcAddress(second, "NvrPluginGetInfo"), nullptr)
+        << "a remembered file's second load went to the file behind the link";
+  });
+}
+
+TEST_F(PluginLateLoadTest, TheAnsiLoadsAreLoadedAsCheckedToo) {
+  ArrangeTheLink();
+  WithTheRealHooks([&] {
+    TestHook_SetAfterLateLoadAccepted(&PointTheLateLinkAtTheUnsignedFile);
+    const HMODULE m = LoadLibraryExA(link_.c_str(), nullptr, 0);
+    TestHook_SetAfterLateLoadAccepted(nullptr);
+    ASSERT_NE(m, nullptr) << GetLastError();
+    EXPECT_NE(GetProcAddress(m, "NvrPluginGetInfo"), nullptr) << "LoadLibraryExA loaded the file behind the link";
+    ASSERT_TRUE(FreeLibrary(m));
+    DeleteFileW(g_lateLink.c_str());  // the link is back at the signed file for the next variant
+    g_lateLinkTarget.assign(pluginsDir_.begin(), pluginsDir_.end());
+    g_lateLinkTarget += L"late_real.dll";
+    ASSERT_TRUE(CreateSymbolicLinkW(g_lateLink.c_str(), g_lateLinkTarget.c_str(), 0)) << GetLastError();
+    g_lateLinkTarget.assign(evil_.begin(), evil_.end());
+    TestHook_SetAfterLateLoadAccepted(&PointTheLateLinkAtTheUnsignedFile);
+    const HMODULE a = LoadLibraryA(link_.c_str());
+    TestHook_SetAfterLateLoadAccepted(nullptr);
+    ASSERT_NE(a, nullptr) << GetLastError();
+    EXPECT_NE(GetProcAddress(a, "NvrPluginGetInfo"), nullptr) << "LoadLibraryA loaded the file behind the link";
+  });
+}
+
+TEST_F(PluginLateLoadTest, ASignedLateLoadWithNoLinkLoadsAsBefore) {
+  ArrangeTheLink();
+  WithTheRealHooks([&] {
+    const std::string real = pluginsDir_ + "late_real.dll";
+    const HMODULE m = LoadLibraryA(real.c_str());
+    ASSERT_NE(m, nullptr) << GetLastError();
+    EXPECT_NE(GetProcAddress(m, "NvrPluginGetInfo"), nullptr);
+    EXPECT_FALSE(TestLogContains("loads the file it checked")) << "a load whose name is its file was said to be rewritten";
+  });
+}
+
+TEST_F(PluginLateLoadTest, AnUnsignedAllowedRunLoadsWhatTheCallerNamed) {
+  nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
+  ArrangeTheLink();
+  WithTheRealHooks([&] {
+    TestHook_SetAfterLateLoadAccepted(&PointTheLateLinkAtTheUnsignedFile);
+    const HMODULE m = LoadLibraryW(g_lateLink.c_str());
+    TestHook_SetAfterLateLoadAccepted(nullptr);
+    ASSERT_NE(m, nullptr) << GetLastError();
+    EXPECT_EQ(GetProcAddress(m, "NvrPluginGetInfo"), nullptr) << "a run that allows unsigned plugins rewrote a load";
+  });
+}
+
+TEST_F(PluginLateLoadTest, AFileTheFilterCannotNameIsRefusedInASignedOnlyRun) {
+  Plan("late_real.dll", "signed");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  TestHook_FailNamingTheHeldFile(true);
+  EXPECT_TRUE(Blocked("late_real.dll"));
+  EXPECT_TRUE(TestLogContains("cannot name the file it checked"));
+}
+
+TEST_F(PluginLateLoadTest, AFileTheFilterCannotNameIsLoadedWhenSignaturesAreNotRequired) {
+  nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
+  Plan("late_real.dll", "signed");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  TestHook_FailNamingTheHeldFile(true);
+  EXPECT_FALSE(Blocked("late_real.dll"));
+}
+
+// A bare name is left to the OS search: the plugins directory may not be on it, so naming the plugins file would load
+// a file the OS would not have chosen.
+TEST_F(PluginLateLoadTest, ABareNameIsNotRewritten) {
+  ArrangeTheLink();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  ASSERT_FALSE(nevr_dll_load_hook::IsLoadBlocked(L"late_link.dll", nullptr));
+  std::wstring path;
+  EXPECT_FALSE(nevr_dll_load_hook::RewriteLoad(L"late_link.dll", &path)) << "a bare name was given a path";
+}
+
+// What the filter noted is for the one load it just accepted: the text it was asked about, once.
+TEST_F(PluginLateLoadTest, TheNotedFileAnswersOnlyTheTextTheFilterAcceptedAndOnlyOnce) {
+  ArrangeTheLink();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  std::wstring link(link_.begin(), link_.end());
+  for (wchar_t& c : link) c = (c >= L'A' && c <= L'Z') ? static_cast<wchar_t>(c + 32) : c;
+  std::wstring path;
+
+  ASSERT_FALSE(nevr_dll_load_hook::IsLoadBlocked(link.c_str(), nullptr));
+  EXPECT_FALSE(nevr_dll_load_hook::RewriteLoad(L"c:\\other\\late_link.dll", &path)) << "another text was answered";
+  EXPECT_TRUE(nevr_dll_load_hook::RewriteLoad(link.c_str(), &path));
+  EXPECT_FALSE(path.empty());
+  EXPECT_FALSE(nevr_dll_load_hook::RewriteLoad(link.c_str(), &path)) << "the noted file was used twice";
+
+  // A later filter call that notes nothing clears what an earlier one noted.
+  ASSERT_FALSE(nevr_dll_load_hook::IsLoadBlocked(link.c_str(), nullptr));
+  ASSERT_FALSE(nevr_dll_load_hook::IsLoadBlocked(L"c:\\windows\\system32\\kernel32.dll", nullptr));
+  EXPECT_FALSE(nevr_dll_load_hook::RewriteLoad(link.c_str(), &path)) << "a noted file outlived the next filter call";
 }
 
 TEST_F(PluginDependencyGateTest, APluginReachedByItsOwnNameIsNotSaidToBeLoadedFromElsewhere) {
@@ -1079,11 +1561,8 @@ class PluginRunModeTest : public ::testing::Test {
     TestHook_ResetRefusals();
     TestHook_SetRefusalDialogSink(&CaptureRunModeDialog);
     g_serverFatalCalls = 0;
-    char exePath[MAX_PATH] = {};
-    ASSERT_NE(GetModuleFileNameA(nullptr, exePath, MAX_PATH), 0U);
-    pluginsDir_ = std::string(exePath);
-    pluginsDir_.resize(pluginsDir_.find_last_of("\\/") + 1);
-    pluginsDir_ += "plugins\\";
+    nevrRoot_ = std::make_unique<TestNevrRoot>();
+    pluginsDir_ = nevrRoot_->PluginsDir();
   }
 
   void TearDown() override {
@@ -1097,6 +1576,7 @@ class PluginRunModeTest : public ::testing::Test {
     nevr_plugin_trust::TestHook_ResetTrust();
     g_isServer = wasServer_;
     g_isHeadless = wasHeadless_;
+    nevrRoot_.reset();
   }
 
   // The unsigned test plugin, as `name` in plugins/ (a copy, so a late load has a file of its own to ask about).
@@ -1113,6 +1593,7 @@ class PluginRunModeTest : public ::testing::Test {
     return nevr_dll_load_hook::IsLoadBlocked(wide.c_str(), nullptr);
   }
 
+  std::unique_ptr<TestNevrRoot> nevrRoot_;
   std::string pluginsDir_;
   std::vector<std::string> copies_;
   BOOL wasServer_ = FALSE;
@@ -1443,12 +1924,8 @@ TEST_F(PluginLoaderDiagnosticTest, MissingOptionalDllLogsLoadLibraryFailureAndCo
 }
 
 TEST_F(PluginLoaderDiagnosticTest, ConfiguredPluginPathCannotEscapePluginsDirectory) {
-  char exePath[MAX_PATH] = {};
-  ASSERT_NE(GetModuleFileNameA(nullptr, exePath, MAX_PATH), 0U);
-  std::string directory(exePath);
-  directory.resize(directory.find_last_of("\\/") + 1);
-  const std::string source = directory + "plugins\\test_plugin_onframe.dll";
-  const std::string escaped = directory + "test_plugin_escape.dll";
+  const std::string source = nevrRoot_->PluginsDir() + "test_plugin_onframe.dll";
+  const std::string escaped = nevrRoot_->PluginsDir() + "..\\test_plugin_escape.dll";  // in the root, the parent of the plugin folder
   ASSERT_NE(GetFileAttributesA(source.c_str()), INVALID_FILE_ATTRIBUTES);
   ASSERT_TRUE(CopyFileA(source.c_str(), escaped.c_str(), FALSE));
 
@@ -3661,7 +4138,7 @@ class GameFlagScope {
   GameFlagScope(int64_t flags, BOOL isServer) : wasServer_(g_isServer) {
     g_isServer = isServer;
     TestHook_SetGameFlagWord(flags);
-    g_testDiscordId = "123456789012345678";
+    g_testDiscordId = kTestAccountIdText.c_str();
   }
   ~GameFlagScope() {
     g_testDiscordId = nullptr;
@@ -3680,7 +4157,7 @@ TEST_F(RouterAllTest, ANoVrClientsInjectedLoginIsDmoNotTheOvrOrgOfItsVrSelf) {
   const std::string frame = remote_.LoginFrame();
   ASSERT_GE(frame.size(), 56U);
   const uint64_t account = FrameU64(frame, 48);
-  EXPECT_EQ(account, 123456789012345678ULL);
+  EXPECT_EQ(account, kTestAccountId);
   EXPECT_EQ(FrameU64(frame, 40), 7ULL) << "a No VR client logs in as DMO";
   EXPECT_FALSE(LogLinesContaining("login injected xpid=DMO-" + std::to_string(account) + " platform=7").empty());
   EXPECT_TRUE(LogLinesContaining("login injected xpid=OVR-ORG-").empty());
@@ -3695,7 +4172,7 @@ TEST_F(RouterAllTest, AVrClientsInjectedLoginStaysOvrOrg) {
   const std::string frame = remote_.LoginFrame();
   ASSERT_GE(frame.size(), 56U);
   const uint64_t account = FrameU64(frame, 48);
-  EXPECT_EQ(account, 123456789012345678ULL);
+  EXPECT_EQ(account, kTestAccountId);
   EXPECT_EQ(FrameU64(frame, 40), 4ULL);
   EXPECT_FALSE(LogLinesContaining("login injected xpid=OVR-ORG-" + std::to_string(account) + " platform=4").empty());
   EXPECT_TRUE(LogLinesContaining("login injected xpid=DMO-").empty());
@@ -3721,7 +4198,7 @@ TEST_F(RolesByPathTest, LegacyNoVrClientsInjectedLoginIsDmoNotTheOvrOrgOfItsVrSe
   const std::string frame = remote_.LoginFrame();
   ASSERT_GE(frame.size(), 56U);
   const uint64_t account = FrameU64(frame, 48);
-  EXPECT_EQ(account, 123456789012345678ULL);
+  EXPECT_EQ(account, kTestAccountId);
   EXPECT_EQ(FrameU64(frame, 40), 7ULL);
   EXPECT_FALSE(LogLinesContaining("login injected xpid=DMO-" + std::to_string(account) + " platform=7").empty());
   EXPECT_TRUE(LogLinesContaining("login injected xpid=OVR-ORG-").empty());
@@ -3760,8 +4237,28 @@ TEST_F(RouterAllTest, AnUnrequireNobodyAskedForIsDroppedAndCounted) {
   EXPECT_EQ(login.Count(nevr_evr_codec::kSymConnectionUnrequire), 0);
 }
 
+// #1280: the bridge started in a named run mode. g_isServer is set before the bridge starts, as boot.cpp does; this
+// file's default is a server (g_isServer above), so a test of client behaviour names the client mode.
+template <typename Base, BOOL kIsServer>
+class RunModeFixture : public Base {
+ protected:
+  void SetUp() override {
+    wasServer_ = g_isServer;
+    g_isServer = kIsServer;
+    Base::SetUp();
+  }
+  void TearDown() override {
+    Base::TearDown();
+    g_isServer = wasServer_;
+  }
+  BOOL wasServer_ = FALSE;
+};
+using ServerRolesByPathTest = RunModeFixture<RolesByPathTest, TRUE>;
+using ServerRouterAllTest = RunModeFixture<RouterAllTest, TRUE>;
+using ClientRouterAllTest = RunModeFixture<RouterAllTest, FALSE>;
+
 // A login the service accepted is followed by the friend-list subscription, sent once, on the session.
-TEST_F(RouterAllTest, ALoginSuccessIsFollowedByTheFriendListSubscription) {
+TEST_F(ClientRouterAllTest, ALoginSuccessIsFollowedByTheFriendListSubscription) {
   remote_.SetLoginReply(nevr_evr_codec::kSymLoginSuccess);
   GameSocket login;
   Admit(login, "/login");
@@ -3773,7 +4270,7 @@ TEST_F(RouterAllTest, ALoginSuccessIsFollowedByTheFriendListSubscription) {
 
 // L7: a runtime frame sent before the session exists is refused (and says so); once the login is up it goes to the
 // service, and its reply reaches the login socket.
-TEST_F(RouterAllTest, ARuntimeFrameIsRefusedBeforeTheSessionAndSentAfter) {
+TEST_F(ClientRouterAllTest, ARuntimeFrameIsRefusedBeforeTheSessionAndSentAfter) {
   const nevr_social_party::Sender sender = nevr_social_party::SenderSlot().load();
   ASSERT_NE(sender, nullptr);
   const std::string frame = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymDocumentRequest, "");
@@ -3783,6 +4280,49 @@ TEST_F(RouterAllTest, ARuntimeFrameIsRefusedBeforeTheSessionAndSentAfter) {
   AdmitLogin(login);
   EXPECT_TRUE(sender(frame));
   ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymDocumentSuccess)) << "the reply to the runtime frame was lost";
+}
+
+// A round trip that proves the service has read everything sent on the session before it: the service answers a
+// DocumentRequest in order, on the same connection.
+static void RoundTripOnTheSession(GameSocket& login) {
+  login.Send(nevr_evr_codec::kSymDocumentRequest);
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymDocumentSuccess)) << "the session never answered";
+}
+
+// #1280: a server whose login the service accepts subscribes to no friend list (legacy path, the default).
+TEST_F(ServerRolesByPathTest, AServerSendsNoFriendListSubscriptionAfterTheServiceAcceptsItsLogin) {
+  remote_.SetLoginReply(nevr_evr_codec::kSymLoginSuccess);
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSuccess)) << "the server was left at the login gate";
+  RoundTripOnTheSession(login);
+  EXPECT_EQ(remote_.ReceivedCount(nevr_evr_codec::FirstSymbol(nevr_evr_codec::BuildFriendListSubscribe())), 0);
+}
+
+// #1280: the same through the router.
+TEST_F(ServerRouterAllTest, AServerSendsNoFriendListSubscriptionAfterTheServiceAcceptsItsLogin) {
+  remote_.SetLoginReply(nevr_evr_codec::kSymLoginSuccess);
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSuccess)) << "the server was left at the login gate";
+  RoundTripOnTheSession(login);
+  EXPECT_EQ(remote_.ReceivedCount(nevr_evr_codec::FirstSymbol(nevr_evr_codec::BuildFriendListSubscribe())), 0);
+}
+
+// #1280: on a server the runtime's social sender sends nothing, while the self-check sender (its RemoteLogSet is not
+// social) still reaches the service.
+TEST_F(ServerRolesByPathTest, TheRuntimesSocialSenderSendsNothingOnAServer) {
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings)) << "the login never reached the service";
+  const nevr_social_party::Sender sender = nevr_social_party::SenderSlot().load();
+  ASSERT_NE(sender, nullptr);
+  const nevr_social_party::Message refresh = nevr_social_party::Global().RefreshFriends().at(0);
+  EXPECT_FALSE(sender(nevr_social_party::Frame(refresh)));
+  EXPECT_FALSE(nevr_social_party::Send(nevr_social_party::Global().RefreshFriends()));
+  EXPECT_TRUE(TestHook_SendFrameToServer(nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymDocumentRequest, "")));
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymDocumentSuccess)) << "the self-check sender's frame was lost";
+  EXPECT_EQ(remote_.ReceivedCount(refresh.symbol), 0);
 }
 
 // L8: the ninth matchmaker is closed with 1013, and the first eight share the session's one connection.
@@ -4720,8 +5260,28 @@ TEST(WsBridgeLoginRequest, PlatformCode4AtWireOffset40) {
   for (size_t i = 24; i < 40; ++i) EXPECT_EQ(request[i], '\0');
 }
 
+// #1280: a dedicated server is not a player and declares no social level, so the service sends it none of the
+// newer social messages; a client declares the level it parses.
+TEST(WsBridgeLoginRequest, AServerDeclaresNoSocialLevelAndAClientDeclaresItsOwn) {
+  const auto socialLevel = [](BOOL isServer) {
+    const BOOL wasServer = g_isServer;
+    g_isServer = isServer;
+    const std::string request = TestHook_BuildLoginRequest(77, 4, "name", "");
+    g_isServer = wasServer;
+    const size_t jsonOffset = 56;
+    if (request.size() <= jsonOffset) return -1;
+    return nlohmann::json::parse(request.substr(jsonOffset, request.size() - jsonOffset - 1)).at("nevr_social").get<int>();
+  };
+  EXPECT_EQ(socialLevel(TRUE), 0);
+  EXPECT_EQ(socialLevel(FALSE), nevr_social_party::kSocialLevel);
+  EXPECT_EQ(nevr_social_party::kSocialLevel, 1);
+}
+
 TEST(WsBridgeLoginRequest, JsonCarriesIdentityCredentialsAndMeasuredSystemInfo) {
+  const BOOL wasServer = g_isServer;
+  g_isServer = FALSE;  // a client's login (this file's default is a server)
   const std::string request = TestHook_BuildLoginRequest(77, 3, "A \"quoted\" name", "access-token");
+  g_isServer = wasServer;
   const size_t jsonOffset = 56;
   ASSERT_GT(request.size(), jsonOffset);
   ASSERT_EQ(request.back(), '\0');

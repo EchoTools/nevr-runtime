@@ -1,7 +1,10 @@
 # ADR 0021: libr15.so is patched at build time; no code page is written at run time
 
-Status: proposed (#1132). Not implemented. The "Prediction" section is what the first headset runs must show; the
-"What this does not know" section lists what no measurement in this tree covers.
+Status: proposed (#1132). The patcher (`quest_patch_libr15`), the patch table, the patched build ID and the stub codec are
+implemented and tested on the host (`just test-quest-patcher`, and `just test-quest-patcher-pinned` on the store libr15). The APK
+repack step, the sentinel's `Attach`, the activation and the plugin identity (section 12) are not in the tree yet; they are a
+later change of the same issue. The "Prediction" section is what the first headset runs must show; the "What this does not
+know" section lists what no measurement in this tree covers.
 
 ## Context
 
@@ -9,10 +12,16 @@ The sentinel (`libovrplatformloader.so`, our shim) changes libr15's behaviour in
 both write libr15's code at run time:
 
 - inline hooks (`src/quest/sentinel/inline_hook.cpp`): the lobby-full join, failure and success handlers, the texture
-  `CGTextureResource::Attach`, the splash-skip widget update, and the menu version label's `SetText` (#747). Each overwrites the
+  `CGTextureResource::Attach`, and the splash-skip widget update. Each overwrites the
   first 16 bytes of a function (`LDR x16,#8; BR x16; .quad detour`) after `mprotect(page, RW)` and puts the page back with
   `mprotect(page, RX)`;
 - the credits page (`src/quest/sentinel/credits_text.cpp`, `WriteWord`): two `ADRP`+`ADD` pairs are rewritten the same way.
+
+The menu version label (#747) is neither: it hooks `CCanvasUICS::SetText`, which libr15 calls only through its own PLT stub,
+so its call path is one GOT slot (`R_AARCH64_JUMP_SLOT` 0x36ff908, in `.got` inside `PT_GNU_RELRO`, in a writable `LOAD` that is
+not executable; 40 `bl` to the stub, none to the function; `src/quest/tests/got_pinned_test.cpp`). The sentinel redirects that
+slot like its other libr15 GOT hooks (`src/quest/social/menu_version_label.cpp`): a data page is written and no `PROT_EXEC` is
+involved, so the `execmod` rule above does not meet it, it runs today, and it is not a table row.
 
 On a tester's Quest 3 (NEVR 5.10.0, libr15 build ID `b243509c08ce677aeb95fa348016949b3fc45230`, #1127) the second
 `mprotect` is denied by policy: `avc: denied { execmod } ... path=".../libr15.so" scontext=u:r:untrusted_app_29:s0
@@ -49,10 +58,10 @@ A new header, libr15_patch_table.h, in a new directory under src/quest, is the o
   ReVault with `revault_disassemble <revaultVa>`;
 - the kind (`kInlineHook`, `kCreditsPair` or `kWordPatch`, section 11) and the handler's name.
 
-The sentinel's hook files (`lobby_full_hooks.cpp`, `ui_texture_mips.cpp`, `splash_skip_hook.cpp`, `menu_version_label.cpp`) keep
-their handlers and lose their per-file `kXxxVaddr` and prologue constants; they name a table row. The seven rows are:
+The sentinel's hook files (`lobby_full_hooks.cpp`, `ui_texture_mips.cpp`, `splash_skip_hook.cpp`) keep
+their handlers and lose their per-file `kXxxVaddr` and prologue constants; they name a table row. The six rows are:
 `lobby_full.join` (ReVault 0x1340ba8), `lobby_full.failure` (0x1340cc8), `lobby_full.success` (0x134024c), `ui_texture.attach`
-(0x19e75c4), `splash_skip.widget_update` (0x209a7a0; #1128's correct address), `menu_version.set_text` (0x149111c; #1125's), and
+(0x19e75c4), `splash_skip.widget_update` (0x209a7a0; #1128's correct address), and
 `credits.pairs` (ReVault 0x1ea1284/0x1ea1290 and 0x1ea1d84/0x1ea1d88, the two pairs of #970).
 
 ### 2. The patcher: a host tool that reads the stock file and refuses on any doubt
@@ -68,7 +77,15 @@ table header and `arm64_reloc.h`, so there is no second encoding of anything). `
 3. writes the stubs (below), the slot area (below), the credits pairs, and the new build ID (below). Every byte that differs from
    the stock file is accounted for in the report: `{"event":"libr15_patch_site","id":...,"revault_va":...,"vaddr":...,
    "stock":[...],"stub":[...],"slot":...}` per row, then a summary with the stock and patched sha-256. The output is a pure
-   function of the stock file and the table: the same inputs give the same bytes;
+   function of the stock file and the table: the same inputs give the same bytes. The report's vocabulary is fixed: the `kind` of
+   a `libr15_patch_site` event is `inline_hook` or `credits_pair` (a word patch has its own `libr15_patch_word` event, which has no
+   `kind`); each entry of the summary's list of changed byte ranges has a `what`
+   that is the row id and a suffix, `:stub` (an inline site's three words), `:credits_adrp` and `:credits_ldr` (the two words of a
+   credits pair) or `:word` (a word patch); `end_symbols` lists the six end symbols sorted by name in byte order. The summary's
+   `status` says what is on disk: `patched` only once `--out` is in place and has been read back, `refused` for a refusal (exit 1,
+   nothing written to `--out`), `io_error` when `--out` could not be written (exit 2), and `incomplete` in the record written
+   before `--out` is touched, which a run that dies while writing leaves behind. The temporary file beside `--out` is created
+   exclusively and never opened through a link; a name that is already taken stops the run;
 4. validates its own output as an ELF (PT_LOAD sorted and non-overlapping, `p_filesz <= p_memsz`, the build-ID note intact, the
    section table consistent) and refuses to write a file that fails.
 
@@ -92,7 +109,7 @@ no caller may branch to site+4..site+11 (the same obligation as today, over fewe
 
 libr15's writable `PT_LOAD` (vaddr 0x35f9eb0, `p_memsz` 0x1d8688 in the pinned file) ends at 0x37d2538, inside a page the
 linker already maps; nothing follows it. The patcher raises that segment's `p_memsz` (and `.bss`'s `sh_size`) so it ends at
-`roundup(0x37d2538, 64) + 8 * rows = 0x37d2578` (`p_memsz` 0x1d86c8; `p_filesz` and every file offset unchanged). The slot area is
+`roundup(0x37d2538, 64) + 8 * rows = 0x37d2570` (`p_memsz` 0x1d86c0; `p_filesz` and every file offset unchanged). The slot area is
 zero-initialised memory outside `GNU_RELRO` (which ends at 0x372c000), so a store to a slot needs no `mprotect` at all. Slot *i*
 is at `0x37d2540 + 8 * i`. A row's stub names its own slot; the credits pairs share one slot.
 
@@ -144,6 +161,17 @@ generated constant can drift from the patcher's. `kLibR15BuildId` splits: `kLibR
 `PatchedBuildId()` (everything that is checked at run time: the `GotTarget`s in `pinned_targets.h`, the hook files, the
 integration, the hardware dump). The tombstone and the sentinel log then say which libr15 ran.
 
+**The canonical serialisation is these bytes.** Its public part is text, every number written as `0x` and lowercase hex without
+leading zeros: the line `layout|bias=<kRevaultBias>|slot_area=<slot area>|slot_bytes=<slot size>` and a newline, then one line
+per table row, in table order, `row|<id>|<kind>|slot=<n>` where `<kind>` is `inline`, `credits` or `word`, followed for each site by
+`|<revault_va>:<word>,<word>,...` (the stock words, in order, each written as a number) and a newline. A build with extra rows
+(section 11) continues with the line `extra|<count>` and a newline and then, with no separator, one binary record per extra
+row, the rows sorted by `revault_va` and then by `id` in byte order: the id length (1 byte), the id, `revault_va` (8 bytes,
+little-endian), the word count (1 byte), and for each word `offset` (2 bytes, little-endian), then `new_bytes` (4 bytes), then
+`stock_bytes` (4 bytes), the word bytes in memory order as in the file. A build without extra rows has no `extra` line, so its ID
+is the public one. The byte widths are fixed here so that every program that derives the ID (the patcher, the sentinel's
+compile) gets the same value from the same rows; a test pins the ID of a fixed set of invented rows.
+
 Refusal, each with one `libr15_patch` line at error level naming the reason:
 
 | Live libr15 | Result |
@@ -176,7 +204,7 @@ the public recipes pass none.
 ### 10. Logging
 
 The patcher's per-row JSON (section 2) goes to the build log and `--report`. The sentinel writes, to logcat and its on-disk log:
-`{"event":"libr15_patch","status":"verified","build_id":"<patched>","stock_build_id":"b243509c...","rows":7,"slot_area":"0x...."}`
+`{"event":"libr15_patch","status":"verified","build_id":"<patched>","stock_build_id":"b243509c...","rows":6,"slot_area":"0x...."}`
 once, then per row `{"event":"inline_hook","status":"ok","id":...,"target":...,"slot":...,"trampoline":...,"page_perms":"r-xp"}`
 (`page_perms` is read from `/proc/self/maps` after the activation: it is the evidence that no protection changed), and
 `credits_text` as today with the slot. The `mmap`/`mprotect` errno logging of the trampoline step (#1131) stays.
@@ -246,10 +274,13 @@ uses invented values.
   (`stock_bytes` and `stock_word`) for every word, so a reader can compare against a disassembler.
 - A row is refused when any `stock_bytes` differs from the stock file at `revault_va + offset - kRevaultBias` (the message names
   the `id` and the `offset`), when a word lies outside the text segment, when it lies in a byte a public row or another extra row
-  also writes, or when `new_bytes` equals `stock_bytes`.
-- Build identity: the rows are sorted by `revault_va` and serialised as fixed binary (id, `revault_va`, each offset, each
-  `new_bytes`, each `stock_bytes`) for the hash of section 7, so the build ID does not depend on the file's key order, spacing or
-  the order of its rows. `extra_rows_sha256` in the report is the digest of the file's bytes as given.
+  also writes, when it lies in the ELF header, the program header table, the section header table or the build-ID note, or in a
+  byte the patcher writes itself (the `p_memsz` of the grown segment, the `sh_size` of the section that ends it; the build ID is
+  in the note) (the refusal is `protected_region`, naming the `id` and the region), or when `new_bytes` equals `stock_bytes`. A
+  public row's site is held to the same rule.
+- Build identity: the extra rows are part of the canonical serialisation of section 7, which defines the bytes (the `extra` line,
+  then one binary record per row, rows sorted by `revault_va` and then by `id`), so the build ID does not depend on the file's
+  key order, spacing or the order of its rows. `extra_rows_sha256` in the report is the digest of the file's bytes as given.
 - Public prose and the file: the file is supplied at build time by whoever builds the variant. It is not committed, and the
   tests use only invented addresses, in a fixture file beside the patcher tests that is the example above made into a file
   for the synthetic ELF of test 9.
@@ -299,7 +330,8 @@ Each is run once with the line it covers changed and must fail (the mutant disci
    range); the output is identical across two runs; a wrong stock word, a wrong build ID, an already-patched input, a site
    outside the text, and a growth that would overlap the next segment are each refused with the row's `id`.
 3. **Relocator, 3-word window**, on each row's real stock words, with the existing A64 interpreter (original window against the
-   relocated trampoline far away); the `SetText` row's leading `CBZ` is the case that matters.
+   relocated trampoline far away); the leading `CBZ` of `CCanvasUICS::SetText` is the case that matters (`TheQuestSetTextPrologueRelocates`,
+   which stays a relocator case though the label no longer needs the relocator).
 4. **Sentinel `Attach` on a synthetic patched image in memory**: every refusal in the section 7 table and every check of section 4;
    a trampoline-creation failure ends the process with its reason; after `Attach` every slot holds its trampoline; activation
    stores the detour; and a counting seam on `mprotect` sees **no call on any page of the image** (the test that fails if a code
@@ -319,7 +351,8 @@ Each is run once with the line it covers changed and must fail (the mutant disci
    row of any kind but `kWordPatch` in the file is refused; each rule of the extra-rows format is refused in its own case (wrong
    `format`, `version` or `stock_build_id`; an unknown field; a duplicate key; a bad, duplicate or public `id`; a `revault_va`
    or `offset` not a multiple of 4; offsets out of order; 65 words in a row; a word written as a little-endian value instead of
-   bytes; a stock mismatch; a word outside the text, overlapping a public row or another extra row, or unchanged); the fixture
+   bytes; a stock mismatch; a word outside the text, overlapping a public row or another extra row, in the ELF header, either
+   header table, the build-ID note or a byte the patcher writes itself, or unchanged); the fixture
    loads, and its report prints each word's `stock_bytes` and `stock_word`; the public table's ID is the one a build without the file computes;
    `Attach` on an image whose live word differs ends with `libr15_patch_row_words`.
 10. **Plugin identity** (section 12), in `plugin_loader_test.cpp` with the fake platform, and `got_hook_test.cpp`:
@@ -346,12 +379,12 @@ Written before any run. Lines are from the sentinel's log; "no execmod" means th
 `avc: denied { execmod }` for `libr15.so`.
 
 **Quest 3 (the tester's headset, OS build 52641960030600520).** In the constructor's log, in this order:
-1. `libr15_patch` `status=verified`, `build_id` = the patched ID, `stock_build_id` = `b243509c...`, `rows=7`;
-2. seven `inline_hook`/`credits_text` lines `status=ok` (the six hooks, then the credits slot), each `page_perms":"r-xp"`;
+1. `libr15_patch` `status=verified`, `build_id` = the patched ID, `stock_build_id` = `b243509c...`, `rows=6`;
+2. six `inline_hook`/`credits_text` lines `status=ok` (the five hooks, then the credits slot), each `page_perms":"r-xp"`;
 3. the constructor's summary reads `steps_failed=0` (the capture's `steps_ok=22 steps_failed=1` becomes 23 and 0: its one failed
    step was `credits_text`);
 4. the process stays up past the first minute and reaches the login (`to logged in`); there is no `SIGSEGV`, and no `execmod`
-   anywhere in the capture. The menu's version label shows the build's version and the splash skip runs (their pins are now right).
+   anywhere in the capture. The menu's version label shows the build's version (its GOT hook installs without the patch) and the splash skip runs (its pin is now right).
 5. with the no-op plugin of ADR 0019 slice 1 (it declares the stock ID only) in `plugins:`: one `plugin_load outcome=loaded`
    record with `game_build_id` = the patched ID, `plugin_view_build_id` = `b243509c...`, `libr15_patched` true.
 Falsifiers: any `avc: denied { execmod }` for `libr15.so`; a `SIGSEGV` at a libr15 page; a `libr15_patch` line with a reason;
@@ -402,7 +435,7 @@ the Quest 3 does not show is a defect of the patched file for that OS.
 
 - #1131 (undo of a failed restore): the code-write path it protects is deleted by this change; the errno logging of the
   trampoline's `mmap`/`mprotect` stays.
-- #1125 and #1128 become table rows (`menu_version.set_text`, `splash_skip.widget_update`); neither is merged separately.
+- #1128 becomes a table row (`splash_skip.widget_update`) and #1125 is replaced by the label's GOT hook; neither is merged separately.
 - Work order, one PR because a patched libr15 with the old sentinel crashes and the old libr15 with the new sentinel runs
   unhooked: (1) table, stub codec, patcher, relocator window, tests 1 to 3; (2) repack and `verify-signed`, tests 5 and 7;
   (3) `Attach`, activation, the deletions, credits, tests 4 and 6; (4) the headset rows. A Quest 2 and a Quest 3 run precede any

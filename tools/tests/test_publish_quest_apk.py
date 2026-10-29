@@ -34,6 +34,8 @@ FAKE_SIGNER = """#!{python}
 import json, os, sys
 open(os.environ["FAKE_CALLS"], "a").write(json.dumps({{"who": "signer", "argv": sys.argv[1:],
     "cwd": os.getcwd(), "has_r2_secret": "R2_SECRET_ACCESS_KEY" in os.environ, "has_gh_token": "GH_TOKEN" in os.environ}}) + "\\n")
+if "--out" in sys.argv and not int(os.environ.get("FAKE_SIGNER_EXIT", "0")):
+    open(sys.argv[sys.argv.index("--out") + 1], "x").write(os.environ.get("FAKE_EXTRA_BODY", "[]"))
 sys.exit(int(os.environ.get("FAKE_SIGNER_EXIT", "0")))
 """
 # Records its arguments and the rclone config the caller built, then copies the file into the served directory.
@@ -289,6 +291,35 @@ class PublishQuestApk(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("log", result.stderr)
         self.assertEqual(self.recorded(), [])
+
+    def test_extra_out_keeps_the_signers_manifest_claim_in_a_new_file(self) -> None:
+        self.serve_apk()
+        claim = json.dumps([{"name": APK_NAME, "sha256": self.sum, "size": len(APK_BYTES)}])
+        target = pathlib.Path(self.tmp.name) / "claim.json"
+        result = self.run_tool(TAG, "--extra-out", str(target), FAKE_EXTRA_BODY=claim)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(target.read_text(), claim)
+
+    def test_extra_out_is_not_written_unless_asked(self) -> None:
+        self.serve_apk()
+        result = self.run_tool(TAG, FAKE_EXTRA_BODY="[1]")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(list(pathlib.Path(self.tmp.name).glob("claim*.json")), [])
+
+    def test_an_extra_out_that_exists_is_refused_before_any_upload(self) -> None:
+        target = pathlib.Path(self.tmp.name) / "claim.json"
+        target.write_text("kept")
+        result = self.run_tool(TAG, "--extra-out", str(target))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("claim.json", result.stderr)
+        self.assertEqual(target.read_text(), "kept")
+        self.assertEqual(self.recorded(), [])
+
+    def test_a_failed_publish_writes_no_extra_out(self) -> None:
+        target = pathlib.Path(self.tmp.name) / "claim.json"
+        result = self.run_tool(TAG, "--extra-out", str(target), FAKE_SIGNER_EXIT="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(target.exists())
 
 
 class Wiring(unittest.TestCase):

@@ -22,9 +22,10 @@ UPPERCASE_BRAND_IN_DOCS = re.compile(
 )
 # These files define the anti-patterns themselves.
 SELF = frozenset({"docs/standards/naming.md", "tools/tests/test_naming.py"})
-EXCLUDED_PREFIXES = ("src/legacy/", "extern/", "gen/", "docs/audits/")
+EXCLUDED_PREFIXES = ("extern/", "gen/", "docs/audits/")
 
-# The published plugin/module C ABI (src/extension/) and everything that names it. Nothing is added.
+# The published plugin/module C ABI (sdk/include/nevr/plugin_interface.h, src/extension/module_interface.h) and
+# everything that names it. Nothing is added.
 FROZEN_NVR = frozenset({
     "NvrGameContext", "NvrHostFlags", "NvrLoadedPluginInfo", "NvrModuleApiVersion",
     "NvrModuleApiVersionSupported", "NvrModuleContext", "NvrModuleGetApiVersion", "NvrModuleHostFlags",
@@ -51,7 +52,6 @@ LEGACY_SPELLINGS = {
     "certs/intermediate-ca.conf": {"nEVR"},
     "certs/root-ca.conf": {"nEVR"},
     "cmake/codesign/sign.sh": {"nEVR"},
-    "plugins/example/src/plugin.cpp": {"nEVR"},
 }
 # Documents and comments whose prose spells the brand `nEVR`, per file and exact token.
 BRAND_PROSE_SPELLINGS = {
@@ -67,11 +67,11 @@ BRAND_PROSE_SPELLINGS = {
     "docs/adr/0012-static-install-root.md": {"nEVR"},
     "docs/design/2026-09-21-mic-provider-voip-fix.md": {"nEVR"},
     "docs/reference/example-config.yaml": {"nEVR"},
+    "docs/reference/launcher-install-root.md": {"nEVR"},
     "docs/reference/verifying-a-release.md": {"nEVR"},
     "docs/standards/logging.md": {"nEVR"},
     "cmake/nevr_version_info.rc.in": {"nEVR"},  # ProductName and FileDescription are brand prose
     "docs/standards/verification.md": {"nEVR"},
-    "plugins/example/README.md": {"nEVR"},
     "src/launcher/CMakeLists.txt": {"nEVR"},  # the exe's FileDescription
     "src/runtime/CMakeLists.txt": {"nEVR"},  # the DLL's FileDescription
     "src/core/build_identity.h": {"nEVR"},  # MenuVersionLabel: the text a player sees
@@ -81,6 +81,7 @@ BRAND_PROSE_SPELLINGS = {
     "src/runtime/ext/plugin_refusal_notice.h": {"nEVR"},
     "src/runtime/host/stop_notice.h": {"nEVR"},  # the player's text when the runtime did not load
     "src/runtime/tests/test_host_rendezvous.cpp": {"nEVR"},  # asserts that text
+    "src/quest/tests/menu_version_label_test.cpp": {"nEVR"},  # the label text the Quest menu shows
     "src/runtime/tests/test_menu_version_label.cpp": {"nEVR"},  # the label text the menu shows
     "src/runtime/tests/test_behavioral.cpp": {"nEVR"},  # asserts the refusal dialog's player prose
     "tools/package-release/README.template.txt": {"nEVR"},
@@ -93,6 +94,9 @@ BRAND_PROSE_SPELLINGS = {
     "src/runtime/lifecycle/nevr_root_move.cpp": {"nEVR"},  # comment prose, and the MOVED-TO-NEVR-ROOT.txt text a player reads
     "src/runtime/tests/test_nevr_root.cpp": {"nEVR"},  # comment prose and a failure message
     "tools/tests/test_nevr_root_wiring.py": {"nEVR"},  # docstring prose
+    "docs/beta/INSTALL.md": {"nEVR"},  # prose: update nEVR through the launcher
+    "installer/src/launcher.rs": {"nEVR"},  # comment prose, and the version text the refusal line shows
+    "installer/src/session.rs": {"nEVR"},  # the refusal line a player reads: "nEVR 5.4.3 is installed"
 }
 
 
@@ -117,7 +121,7 @@ class NamingTest(unittest.TestCase):
     def test_the_scan_sees_the_tree(self):
         files = dict(project_files())
         self.assertGreater(len(files), 300, "the sensor is reading almost nothing")
-        self.assertIn("src/extension/plugin_interface.h", files)
+        self.assertIn("sdk/include/nevr/plugin_interface.h", files)
 
     def test_no_nvr_identifier_outside_the_frozen_set(self):
         stray = {}
@@ -165,8 +169,7 @@ class NamingTest(unittest.TestCase):
 
     def test_project_macros_carry_the_prefix(self):
         # The build identity and the hook selector are NEVR_ macros (#131). CMake VARIABLES of the same name
-        # (`${PROJECT_VERSION}`, `set(GIT_DESCRIBE ...)`) are CMake's own and stay. src/legacy is frozen and
-        # reads the old names: the root CMakeLists gives those two targets the unprefixed definitions.
+        # (`${PROJECT_VERSION}`, `set(GIT_DESCRIBE ...)`) are CMake's own and stay.
         macro = re.compile(r"(?<![A-Za-z0-9_${])(USE_MINHOOK|PROJECT_VERSION|GIT_COMMIT_HASH|GIT_DESCRIBE)(?![A-Za-z0-9_}])")
         stray = {}
         for path, text in project_files():
@@ -207,7 +210,7 @@ class NamingTest(unittest.TestCase):
         # The rule is `nevr` or `nevr_<area>` (#131). The two PascalCase namespaces left are named here with
         # the reason; a new one fails this test, and an entry whose namespace is gone fails it too.
         exceptions = {
-            # The frozen src/legacy calls Hooking::Attach and Hooking::Initialize through the compat header.
+            # The hooking abstraction every patch calls; the name predates the rule.
             "src/core/hooking.h": {"Hooking"},
             # Nested in the game's EchoVR namespace and named after the game's own symbol tables.
             "src/abi/symbols.h": {"EchoVR::Symbols", "Social", "Tcp"},

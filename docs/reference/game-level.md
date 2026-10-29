@@ -1,6 +1,6 @@
 # Where the game keeps its main level
 
-`NvrGameContext.level_symbol` and `level_name` (plugin API v8, `src/extension/plugin_interface.h`) carry the level the
+`NvrGameContext.level_symbol` and `level_name` (plugin API v8, `sdk/include/nevr/plugin_interface.h`) carry the level the
 game holds as its main level. This pins where the loader reads it, what proves that field, what a client run showed, and
 what the evidence does not cover. Evidence is ReVault (project `echovr`, `echovr.exe` and `libr15.so`; Quest VAs are
 ReVault's, pinned vaddr + `0x100000`) and client runs of a build with a test plugin.
@@ -59,7 +59,7 @@ every level above, so it does not follow the main level. `GameSaveLoad` serialis
   context carries the level as well, so a plugin that reads it in `OnFrame` misses nothing if a build does it.
 - **Custom levels.** A level the symbol cache (`src/runtime/log/symcache.h`, generated data) does not name, such as a
   plugin's `mpl_arena_dodgeball`, has `level_symbol` set and `level_name == nullptr`. A plugin compares `level_symbol`
-  with the CSymbol64 of the name its config gives it (`plugins/common/include/level_gate.h`).
+  with the CSymbol64 of the name its config gives it (`sdk/include/nevr/level_gate.h`).
 
 ## Not shown
 

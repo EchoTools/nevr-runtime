@@ -35,6 +35,22 @@ enum class RuntimeLoadOutcome : std::uint32_t {
   kRuntimeRefused = 9,       // the verifier refused nevr-runtime.dll, or it could not be read: never loaded (#854)
 };
 
+/// Where the root of the runtime came from (docs/adr/0012-static-install-root.md, "Where state resolves").
+enum class RuntimeRootSource : std::uint8_t {
+  kUnresolved,    ///< no root: neither %LOCALAPPDATA% nor an honoured NEVR_ROOT gave one that fits
+  kLocalAppData,  ///< %LOCALAPPDATA%\nevr\echovr (nevr_root::Names<wchar_t>::kRoot)
+  kOverride,      ///< NEVR_ROOT, honoured only in the plugin developers' build
+};
+
+/// The word the runtime_load record carries for a root source.
+const char* RuntimeRootSourceName(RuntimeRootSource source) noexcept;
+
+struct RuntimePathChoice {
+  RuntimeRootSource source = RuntimeRootSource::kUnresolved;
+  /// NEVR_ROOT was set and not honoured (a release build, or a value that is not an absolute path). The record says so.
+  bool override_ignored = false;
+};
+
 struct RuntimeLoadResult {
   RuntimeLoadOutcome outcome = RuntimeLoadOutcome::kNoPath;
   std::uint32_t win32_error = 0;
@@ -51,6 +67,9 @@ struct RuntimeLoadResult {
   HMODULE module = nullptr;
   wchar_t path[MAX_PATH] = {};
   bool path_ok = false;
+  // Where the root of `path` came from, and whether a NEVR_ROOT that was set was ignored (a release build).
+  RuntimeRootSource root_source = RuntimeRootSource::kUnresolved;
+  bool root_override_ignored = false;
   // Whether the loading thread owned the process loader lock when the load began (measured
   // by Load, from the PEB). False at the rendezvous; the record says so.
   bool loader_lock_held = false;
@@ -63,6 +82,9 @@ struct RuntimeLoadResult {
   // The same verdict as a code, for the words the player reads (stop_notice.h). Meaningful when `verify` is "refused"
   // or "unsigned_allowed"; Reason::Unreadable for a file that could not be opened for reading.
   nevr_plugin_signature::Reason verify_reason_code = nevr_plugin_signature::Reason::Accepted;
+  // The CERT_CHAIN_ENGINE_CONFIG cbSize the verifier made its chain engine with: 88, or 80 on a Wine before 11.5 (#1262).
+  // 0 when the file was not accepted by a check.
+  std::uint32_t verify_engine_cbsize = 0;
 
   bool Loaded() const { return outcome == RuntimeLoadOutcome::kLoaded; }
   const char* OutcomeName() const;
@@ -98,11 +120,17 @@ inline constexpr std::uint32_t kRuntimeStopExitCode = 78;
 /// The init_code recorded when initialize() threw (INT32_MIN: not a value a runtime returns on purpose).
 inline constexpr std::int32_t kInitThrewCode = INT32_MIN;
 
-/// The one place that decides which file is the runtime: `nevr-runtime.dll` in the
-/// directory of `host_module`. Fixed buffer, no heap, no I/O, so it is safe under
-/// the loader lock. Returns false when the host path cannot be formed or does not
-/// fit `out_size` wide characters.
-bool ResolveRuntimePath(HMODULE host_module, wchar_t* out, std::size_t out_size) noexcept;
+/// The one place that decides which file is the runtime: `nevr-runtime.dll` in the nevr root of the Windows user,
+/// `%LOCALAPPDATA%\nevr\echovr`, never beside `BugSplat64.dll`. The inputs are the two environment values (null or
+/// empty when unset), so a test supplies its own. `nevr_root_override` (NEVR_ROOT, an absolute path) replaces the root
+/// when `dev_build` is true and is ignored otherwise, with `override_ignored` set. Fixed buffer, no heap, no I/O, so it is
+/// safe under the loader lock. The result's `source` is kUnresolved, with `out` emptied, when no root was formed or the
+/// path does not fit `out_size` wide characters.
+RuntimePathChoice ResolveRuntimePathFrom(const wchar_t* local_app_data, const wchar_t* nevr_root_override,
+                                         bool dev_build, wchar_t* out, std::size_t out_size) noexcept;
+
+/// ResolveRuntimePathFrom over this process's %LOCALAPPDATA% and NEVR_ROOT, with the build's own dev flag.
+RuntimePathChoice ResolveRuntimePath(wchar_t* out, std::size_t out_size) noexcept;
 
 // Pure decision core: map raw load/validate/init facts to an outcome. No Win32
 // calls, no allocation, no locks. Mutation-checked in test_host_runtime_load.
@@ -136,12 +164,15 @@ void SetVerifyPolicyForTest(const nevr_plugin_signature::Policy* policy) noexcep
 void SetDevBuildForTest(int mode) noexcept;
 // Test seam: called once with the path just before the load, while the verified file is still held.
 void SetBeforeLoadHookForTest(void (*hook)(const wchar_t* path)) noexcept;
+// Test seam: the folder the runtime is looked for in, instead of the nevr root. Null: the production rule. The string
+// must outlive the loads; a harness that stages a runtime beside its host stand-in passes that folder.
+void SetRuntimeDirForTest(const wchar_t* directory) noexcept;
 #endif
 
 class RuntimeLoader {
  public:
   // Resolve the runtime path (ResolveRuntimePath) into a fixed buffer. No allocation, no I/O.
-  void Prepare(HMODULE host_module);
+  void Prepare();
 
   // Run the state machine against the prepared path. Emits a diagnostic on every
   // outcome. The failed runtime is left mapped (it may already have
@@ -159,6 +190,7 @@ class RuntimeLoader {
   RuntimeLoadResult result_{};
   wchar_t path_[MAX_PATH] = {};
   bool path_ok_ = false;
+  RuntimePathChoice choice_{};
 };
 
 }  // namespace nevr_host

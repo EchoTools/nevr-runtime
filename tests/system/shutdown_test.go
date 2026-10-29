@@ -28,7 +28,7 @@ func TestCtrlC_ClientHandlerReArmed(t *testing.T) {
 	}
 	require.NoError(t, err)
 
-	// The host (BugSplat64.dll) loads nevr-runtime.dll from the same directory.
+	// The host (BugSplat64.dll) loads nevr-runtime.dll from the nevr root of the Wine prefix below (deployDLL puts it there).
 	err = deployDLL(getDLLPath("nevr-runtime.dll"), gameDir)
 	require.NoError(t, err)
 	err = deployDLL(dllPath, gameDir)
@@ -94,7 +94,7 @@ func TestWindowedImpliesNoOvr(t *testing.T) {
 	}
 	require.NoError(t, err)
 
-	// The host (BugSplat64.dll) loads nevr-runtime.dll from the same directory.
+	// The host (BugSplat64.dll) loads nevr-runtime.dll from the nevr root of the Wine prefix below (deployDLL puts it there).
 	err = deployDLL(getDLLPath("nevr-runtime.dll"), gameDir)
 	require.NoError(t, err)
 	err = deployDLL(dllPath, gameDir)

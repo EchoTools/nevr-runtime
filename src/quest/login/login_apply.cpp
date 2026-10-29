@@ -303,6 +303,9 @@ FinishResult FinishLogin(UserAccess& user, const JsonAccess& json, PrerequisiteS
   if (json.TypeOf("nonce") == JsonType::String) {
     result.wire.nonce_stand_in = StandIn::IsNonce(json.GetString("nonce").c_str());
   }
+  if (json.TypeOf("accountid") == JsonType::Int) {
+    result.wire.account_member_stand_in = StandIn::IsUserId(static_cast<std::uint64_t>(json.GetInt("accountid")));
+  }
   result.decision = DecideSend(result.wire);
 
   const bool nevr_login = outcome == Outcome::Rewritten && result.decision == SendDecision::SendOriginal;
@@ -345,6 +348,7 @@ FinishResult FinishLogin(UserAccess& user, const JsonAccess& json, PrerequisiteS
         Num("account_id_invalid", result.wire.account_id_invalid ? 1 : 0),
         Num("access_token_stand_in", result.wire.access_token_stand_in ? 1 : 0),
         Num("nonce_stand_in", result.wire.nonce_stand_in ? 1 : 0),
+        Num("account_member_stand_in", result.wire.account_member_stand_in ? 1 : 0),
         Num("reset", (result.reset_org_id ? 1 : 0) | (result.reset_user_name ? 2 : 0) | (result.renamed_user ? 4 : 0) |
                          (result.reset_offline_id ? 8 : 0) | (result.renamed_offline_id ? 16 : 0)),
     };

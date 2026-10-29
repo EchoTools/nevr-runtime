@@ -149,22 +149,27 @@ trap 'exit 143' INT TERM
 trap restore EXIT
 
 echo "=== Deploying from build/mingw-release/bin/ ===" | tee -a "$LOG"
-# The runtime first: the host loads nevr-runtime.dll from the game directory and stops the game without it.
-deploy build/mingw-release/bin/nevr-runtime.dll "$GAME_DIR/nevr-runtime.dll"
+# The runtime first: the host loads nevr-runtime.dll from the nevr root of the prefix's Windows user (ADR 0012,
+# src/core/nevr_root.h), never from the game directory, and stops the game without it. The path is spelled from
+# GAME_DIR so the save and restore above reach it like any other deployed file.
+NEVR_ROOT_REL="../../.wineprefix/drive_c/users/$(id -un)/AppData/Local/nevr/echovr"
+deploy build/mingw-release/bin/nevr-runtime.dll "$GAME_DIR/$NEVR_ROOT_REL/nevr-runtime.dll"
 deploy build/mingw-release/bin/BugSplat64.dll "$GAME_DIR/BugSplat64.dll"
+# Plugins load from the nevr root's plugins\ too (ADR 0012), so they are deployed beside the runtime.
 if [ -d build/mingw-release/bin/plugins ]; then
-  while IFS= read -r f; do deploy "$f" "$GAME_DIR/plugins/${f#build/mingw-release/bin/plugins/}"; done \
+  while IFS= read -r f; do deploy "$f" "$GAME_DIR/$NEVR_ROOT_REL/plugins/${f#build/mingw-release/bin/plugins/}"; done \
     < <(find build/mingw-release/bin/plugins -type f)
 fi
 # A server with no config.yaml takes the embedded defaults (service_config.cpp BuiltinDefaults, #843), so
 # it would start a login bridge against the shipped endpoint. When the install has none, deploy the
 # offline-boot config the Windows-VM rig uses (tools/winvm/systest.py OFFLINE_CONFIG_YAML): an explicit
 # empty socket_uri, which takes no default, and allow_offline_server. The flag sets reach what they test;
-# an install's own config.yaml is used as it is. The runtime finds it at exe-dir/../../_local
-# (service_config.cpp), and the restore trap removes it afterwards.
-if [ ! -e "$GAME_ROOT/echovr/_local/config.yaml" ]; then
+# an install's own config.yaml is used as it is. The runtime reads config.yaml from the nevr root (#1255), so the
+# offline config goes there, beside nevr-runtime.dll, and the restore trap removes it afterwards. An install that
+# has a _local/config.yaml is left alone: the runtime copies that one into the root and reads the copy.
+if [ ! -e "$GAME_ROOT/echovr/_local/config.yaml" ] && [ ! -e "$GAME_DIR/$NEVR_ROOT_REL/config.yaml" ]; then
   printf 'services:\n  socket_uri: ""\n  allow_offline_server: true\n' > "$OUT/offline-config.yaml"
-  deploy "$OUT/offline-config.yaml" "$GAME_DIR/../../_local/config.yaml"
+  deploy "$OUT/offline-config.yaml" "$GAME_DIR/$NEVR_ROOT_REL/config.yaml"
 fi
 
 export WINEPREFIX="$GAME_ROOT/echovr/.wineprefix"

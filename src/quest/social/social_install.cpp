@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstring>
 
+#include "nevr/symbol_hash.h"
 #include "hook_install.h"
 #include "hook_log.h"
 #include "hook_report.h"
@@ -156,6 +157,10 @@ std::atomic<bool> g_presenceNames{false};
 // Clear are answered locally. Read per call, so the wrappers are always in the copy and a disabled feature runs
 // the game's own functions.
 std::atomic<bool> g_presenceLocal{false};
+// The publish of a changed document (#396): SNSPresenceUpdateRequest, the server's half is in nakama. The sender
+// is the production one unless a test sets its own.
+constexpr std::uint64_t kPresenceUpdateRequest = EchoVR::CSymbol64Hash("SNSPresenceUpdateRequest");
+std::atomic<PresenceSendFn> g_presenceSend{nullptr};
 std::atomic<std::uint64_t> g_localShare{0};
 std::atomic<std::uint64_t> g_localRefresh{0};
 std::atomic<std::uint64_t> g_localClear{0};
@@ -279,6 +284,22 @@ const char* TracedName(const void* self, unsigned index) noexcept {
   return name;
 }
 
+// The publish (#396, presence_local): the document the game set goes to the NEVR session as
+// SNSPresenceUpdateRequest, not to Meta. Called once per changed document, on the game's thread. Logs its outcome.
+void PublishPresence(const char* text) noexcept {
+  PresenceSendFn send = g_presenceSend.load(std::memory_order_relaxed);
+  if (send == nullptr) send = ProductionPorts().send;
+  const std::vector<nevr_social_party::Message> messages =
+      nevr_social_party::Global().PresenceUpdate(kPresenceUpdateRequest, text);
+  if (messages.empty()) {
+    LogFields(LogLevel::kWarn, "rich_presence_publish", {{"result", "no_local_account"}});
+    return;
+  }
+  const bool sent = send != nullptr && send(messages);
+  LogFields(sent ? LogLevel::kInfo : LogLevel::kWarn, "rich_presence_publish",
+            {{"result", sent ? "sent" : "NOT_sent"}, {"bytes", static_cast<long long>(std::strlen(text))}});
+}
+
 // Slot 15: the presence document the game set (game_type, lobby_id, party_id, capacities, joinable). The
 // original copies it into the object; the line carries the document's compact text.
 void TracedSet(void* self, const void* json) noexcept {
@@ -313,6 +334,7 @@ void TracedSet(void* self, const void* json) noexcept {
   const std::uint64_t key = Fnv(text, 7);
   if (g_lastSetKey.exchange(key, std::memory_order_relaxed) != key) {
     LogFields(LogLevel::kInfo, "rich_presence_set", {{"json", text}});
+    if (g_presenceLocal.load(std::memory_order_relaxed)) PublishPresence(text);
   }
 }
 
@@ -481,6 +503,8 @@ void SetPresenceSeamsForTest(bool slotCheck, CJsonEncodeToCompactFn encode) noex
   g_presenceEncode.store(encode, std::memory_order_relaxed);
   g_presenceEncodeResolved.store(encode != nullptr, std::memory_order_release);
 }
+
+void SetPresenceSendForTest(PresenceSendFn send) noexcept { g_presenceSend.store(send, std::memory_order_relaxed); }
 
 sentinel::GotStatus InstallPresenceTrace() {
   static sentinel::GotHook hook;

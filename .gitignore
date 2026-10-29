@@ -47,7 +47,6 @@ build-ninja/
 pkg/
 FileContentIndex/
 
-cmake/local.cmake
 nevr-server.code-workspace
 
 vendor/
@@ -157,3 +156,8 @@ dump.rdb
 !.claude/agents/
 .claude/agents/*
 !.claude/agents/nevr-runtime-engineer.md
+
+# installer/ (Rust): the build tree is regenerable
+/installer/target/
+# the lock file is committed so a build never resolves a crate nobody reviewed (docs/reference/verifying-a-release.md)
+!/installer/Cargo.lock

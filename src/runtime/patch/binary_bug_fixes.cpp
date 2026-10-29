@@ -49,7 +49,7 @@
 #include "core/logging.h"
 #include "runtime/ext/plugin_loader.h"    // N68: TickPlugins
 #include "runtime/ext/module_loader.h"    // N68: TickModules
-#include "nevr_common.h"      // N96: ResolveVA_Checked / ResolveVA_Unchecked
+#include "nevr/pc/nevr_common.h"      // N96: ResolveVA_Checked / ResolveVA_Unchecked
 
 #include <atomic>
 

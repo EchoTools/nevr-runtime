@@ -23,7 +23,7 @@ class VerifyHookInvariantsTest(unittest.TestCase):
         ) as temp_dir:
             fixture = pathlib.Path(temp_dir)
             shutil.copytree(REPO / "src", fixture / "src")
-            shutil.copytree(REPO / "plugins", fixture / "plugins")
+            shutil.copytree(REPO / "sdk", fixture / "sdk")
             (fixture / "tools").mkdir()
             shutil.copy2(VERIFIER, fixture / "tools" / VERIFIER.name)
 
@@ -52,7 +52,7 @@ class VerifyHookInvariantsTest(unittest.TestCase):
         ) as temp_dir:
             fixture = pathlib.Path(temp_dir)
             shutil.copytree(REPO / "src", fixture / "src")
-            shutil.copytree(REPO / "plugins", fixture / "plugins")
+            shutil.copytree(REPO / "sdk", fixture / "sdk")
             (fixture / "tools").mkdir()
             shutil.copy2(VERIFIER, fixture / "tools" / VERIFIER.name)
             if extra_runtime_source is not None:
@@ -99,7 +99,7 @@ class VerifyHookInvariantsTest(unittest.TestCase):
         ) as temp_dir:
             fixture = pathlib.Path(temp_dir)
             shutil.copytree(REPO / "src", fixture / "src")
-            shutil.copytree(REPO / "plugins", fixture / "plugins")
+            shutil.copytree(REPO / "sdk", fixture / "sdk")
             (fixture / "tools").mkdir()
             shutil.copy2(VERIFIER, fixture / "tools" / VERIFIER.name)
             functions = fixture / "src" / "abi" / "echovr_functions.cpp"

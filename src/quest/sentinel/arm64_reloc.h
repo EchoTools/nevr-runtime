@@ -1,7 +1,8 @@
 /* Relocation of PC-relative arm64 instructions into the inline hook's trampoline.
  *
  * inline_hook.h overwrites the first four instructions of a function and runs those four, displaced, from a
- * trampoline in a fresh page. A word that depends on its own address (B, BL, B.cond, CBZ/CBNZ, TBZ/TBNZ, ADR,
+ * trampoline in a fresh page. The window is a parameter: the build-time patch (src/quest/patch, ADR 0021)
+ * overwrites three words, so BuildTrampoline takes one to four. A word that depends on its own address (B, BL, B.cond, CBZ/CBNZ, TBZ/TBNZ, ADR,
  * ADRP, LDR literal) would read a different address there, and the trampoline can be anywhere in the address
  * space, farther from the target than a B (+-128 MiB) or a CBZ/LDR literal (+-1 MiB) reaches. So each such word is
  * rewritten, from the address it had in the target, into a sequence that holds the absolute address it meant in
@@ -21,12 +22,12 @@
  *   LDR St/Dt/Qt       LDR S, =a ; LDR St/Dt/Qt, [S]
  *   PRFM               NOP                            (a hint with no architectural effect)
  *
- * After the four words the trampoline continues at original+16: LDR S, =original+16 ; BR S. Words that are
- * not PC-relative are copied unchanged.
+ * After the window's words the trampoline continues at original+4*count (16 for four words, 12 for three):
+ * LDR S, =original+4*count ; BR S. Words that are not PC-relative are copied unchanged.
  *
  * What is refused, with the instruction named (RelocRefusal):
- *   - a branch whose target is inside the 16 patched bytes (it would run the detour, not the original word),
- *   - a literal load that reads inside the 16 patched bytes (it would read the detour's bytes),
+ *   - a branch whose target is inside the patched bytes (it would run the detour, not the original word),
+ *   - a literal load that reads inside the patched bytes (it would read the detour's bytes),
  *   - a window with a PC-relative word whose words have both x16 and x17 as Rd/Rt: neither is free as scratch.
  *     The check reads bits 4..0 of every word that is not a branch, so it also fires on a store of x16 and of
  *     x17; an LDP second register or a write-back base is not seen. A window with no PC-relative word is copied as
@@ -70,7 +71,8 @@ PcRelKind ClassifyPcRel(std::uint32_t insn) noexcept;
 // "none" for kNone.
 const char* PcRelName(PcRelKind kind) noexcept;
 
-// The bytes the inline patch overwrites and the trampoline displaces: four words.
+// The bytes the run-time inline patch overwrites and the trampoline displaces: four words. This is the default
+// window and the largest one; BuildTrampoline accepts any count from 1 to kRelocPrologueWords.
 inline constexpr std::size_t kRelocPrologueWords = 4;
 inline constexpr std::size_t kRelocWindowBytes = kRelocPrologueWords * 4;
 // The most words a trampoline holds: 4 x 3 for the sequences, 2 for the return jump, 1 of padding, then at most
@@ -83,17 +85,25 @@ struct Trampoline {
 };
 
 struct RelocRefusal {
-  std::size_t index;  // which of the four words
+  std::size_t index;  // which word of the window
   std::uint32_t insn;
   PcRelKind kind;
   const char* reason;  // a static string
 };
 
-// Builds the trampoline for `prologue`, the four words that sit at `originalPc` (and are about to be
-// overwritten). True on success: out.words[0..out.count) is the code and then the pool, a multiple of 8 bytes,
-// and the first word is the first relocated word. False on a refusal, with `refusal` set; `out` is then
-// unspecified.
-bool BuildTrampoline(std::uint64_t originalPc, const std::uint32_t (&prologue)[kRelocPrologueWords],
-                     Trampoline& out, RelocRefusal& refusal) noexcept;
+// Builds the trampoline for the `count` words (1 to kRelocPrologueWords) that sit at `originalPc` (and are about
+// to be overwritten). True on success: out.words[0..out.count) is the code and then the pool, a multiple of 8
+// bytes, and the first word is the first relocated word. False on a refusal, with `refusal` set; `out` is then
+// unspecified. A count outside 1..kRelocPrologueWords is a refusal too (reason "the window size is not 1 to 4").
+bool BuildTrampolineWindow(std::uint64_t originalPc, const std::uint32_t* prologue, std::size_t count,
+                           Trampoline& out, RelocRefusal& refusal) noexcept;
+
+// The same for a window held in an array: four words (the run-time inline hook) or three (the build-time stub).
+template <std::size_t N>
+bool BuildTrampoline(std::uint64_t originalPc, const std::uint32_t (&prologue)[N], Trampoline& out,
+                     RelocRefusal& refusal) noexcept {
+  static_assert(N >= 1 && N <= kRelocPrologueWords, "the relocation window is one to four words");
+  return BuildTrampolineWindow(originalPc, prologue, N, out, refusal);
+}
 
 }  // namespace sentinel

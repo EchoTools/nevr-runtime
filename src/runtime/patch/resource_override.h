@@ -11,6 +11,8 @@ void TestHook_SetDeregisterWaitMs(unsigned ms);
 unsigned long long TestHook_DeregisterTimeouts();
 void TestHook_RunResourceCallback(void* callback_data);
 void TestHook_CloseResourceOverrides();
+/// The address of the 8-byte slot that holds the memory-context pointer of the game (nullptr: the game has none).
+void TestHook_SetMemoryContextSlot(void* const* slot);
 #endif
 
 /// Where the fail-closed path (a callback deregistering its own replacement) leaves its one line before it

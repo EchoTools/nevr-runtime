@@ -3,9 +3,9 @@
 // CREATE GAME / JOIN VIA CODE wizard, as pure logic. What the wizard's click metric asks for, which request is sent
 // and which is not, the [NEVR.INVITE] line each step writes, and what the service's answer means.
 //
-// No game, no socket, no hook and no clock in here: the hooks that feed it a metric line and write its answer back
-// into the wizard are a later change (ADR 0017, "Order of work"), and src/runtime/tests/test_invite_wizard.cpp pins
-// everything below on the host.
+// No game, no socket, no hook and no clock in here: invite_wizard_hook.cpp feeds it a metric line, invite_worker.h posts
+// the request, and invite_answer_text.h / invite_answer_apply.cpp write the answer back into the wizard (ADR 0017, "Order
+// of work"). src/runtime/tests/test_invite_wizard.cpp pins everything below on the host.
 //
 // The metric field names follow the shape echovr-modkit (rad-links, MIT, by Dualgame) reports for the final PC build.
 // No packet has been captured, so they are an input assumption (ADR 0017, "Not shown").
@@ -175,7 +175,9 @@ struct Choices {
 };
 
 enum class Op { Create, Resolve };
-enum class Skip { None, Empty, Malformed, TooLong, Incomplete };
+enum class Skip { None, Empty, Malformed, TooLong, Incomplete, NoLevel, NotConfigured, NoToken, Busy, Stopped };
+// The first five are the plan's own (NoLevel: the chosen map card has no level name); the last four are the worker's
+// (invite_worker.h): the feature is off, no token is held, the queue is full, the worker has stopped.
 
 struct Request {
   std::string rpc;
@@ -191,7 +193,41 @@ struct Plan {
   std::string code;           // Resolve: the normalised code, only when a request is sent; never logged
 };
 
-inline Plan PlanRequest(const Metric& metric, const Choices& choices) {
+// ---- the map page: which level a card is ----
+
+// The levels of the two combat map pages (page 39 of mnu_master), as CSymbol64 of the level name. The game's own page script
+// (a38aa87473ea079a) builds one card slot per handler with a payload label and a capture label: slot 1 FISSION / DYSON, slot 2
+// SURGE / COMBUSTION, and SURGE is the level `gauss` (the label table of accde4944e61e68f maps the short symbol gauss to
+// SURGE). The names are the generated symbol cache's (log/symcache_data.cpp), which is where a symbol becomes a name.
+inline constexpr std::uint64_t kLevelFission = 0xdf5ca7b7dfa383d4ULL;     // mpl_combat_fission
+inline constexpr std::uint64_t kLevelGauss = 0x43e2da7a0c623a19ULL;       // mpl_combat_gauss (the card says SURGE)
+inline constexpr std::uint64_t kLevelDyson = 0x43e2da7914642604ULL;       // mpl_combat_dyson
+inline constexpr std::uint64_t kLevelCombustion = 0x42670f2bed45703cULL;  // mpl_combat_combustion
+
+/// The level symbol a map card leads to, 0 when the choices name no map card: a mode with no map page, or a card the page does
+/// not have. Payload: card 1 FISSION, card 2 SURGE. Capture point: card 1 DYSON, card 2 COMBUSTION.
+inline std::uint64_t MapLevelSymbol(const Choices& choices) {
+  if (choices.experience != "combat") return 0;
+  if (choices.mode == "payload") return choices.map == 1 ? kLevelFission : choices.map == 2 ? kLevelGauss : 0;
+  if (choices.mode == "capture") return choices.map == 1 ? kLevelDyson : choices.map == 2 ? kLevelCombustion : 0;
+  return 0;
+}
+
+/// A level symbol's name, nullptr when unknown. The runtime passes the symbol cache's lookup; with none, no level has a name.
+using LevelNamer = const char* (*)(std::uint64_t);
+
+/// The region the service reads. The review page's `Server_region` is display text ("US WEST"), not a code, and no generic
+/// region code exists: the service picks a server by the player's stored pings when none is sent. So none is sent, until
+/// the row carries a code the service itself offered (#1192).
+inline std::string RegionCode(const Metric& metric) {
+  (void)metric;
+  return std::string();
+}
+
+/// `level_name` resolves a map card's symbol to the level name the service reads in `map` (a string: a number makes it refuse
+/// the request as `invalid`). A mode with no map page sends "", which the service reads as any level of the mode; a map card
+/// whose symbol has no name is not sent (Skip::NoLevel), never sent as any level.
+inline Plan PlanRequest(const Metric& metric, const Choices& choices, LevelNamer level_name = nullptr) {
   Plan plan;
   if (metric.kind == Kind::Join) {
     plan.op = Op::Resolve;
@@ -225,11 +261,21 @@ inline Plan PlanRequest(const Metric& metric, const Choices& choices) {
       plan.skip = Skip::Incomplete;
       return plan;
     }
+    std::string map;
+    if (needsMap) {
+      const std::uint64_t symbol = MapLevelSymbol(choices);
+      const char* name = symbol != 0 && level_name != nullptr ? level_name(symbol) : nullptr;
+      if (name == nullptr || *name == '\0') {
+        plan.skip = Skip::NoLevel;
+        return plan;
+      }
+      map = name;
+    }
     plan.expires_s = ExpirySeconds(metric.expires_text);
     const nlohmann::json body = {{"experience", choices.experience},
                                  {"mode", choices.mode},
-                                 {"map", choices.map},
-                                 {"region", metric.region},
+                                 {"map", map},
+                                 {"region", RegionCode(metric)},
                                  {"expires_s", plan.expires_s}};
     plan.request = Request{"invite/create", body.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace)};
   }
@@ -286,6 +332,21 @@ inline std::string NotSentLine(Skip skip, std::size_t code_len) {
     case Skip::Incomplete:
       reason = "incomplete";
       break;
+    case Skip::NoLevel:
+      reason = "no_level";
+      break;
+    case Skip::NotConfigured:
+      reason = "not_configured";
+      break;
+    case Skip::NoToken:
+      reason = "no_token";
+      break;
+    case Skip::Busy:
+      reason = "busy";
+      break;
+    case Skip::Stopped:
+      reason = "stopped";
+      break;
     case Skip::None:
       return "";
   }
@@ -301,42 +362,67 @@ inline std::string SentLine(const Plan& plan, std::string_view fingerprint) {
          " code_fp=" + std::string(fingerprint);
 }
 
-// Until the worker that posts the request exists, a planned request is logged as planned, never as sent.
-inline std::string PlannedLine(const Plan& plan, std::string_view fingerprint) {
-  if (!plan.request.has_value()) return "";
-  if (plan.op == Op::Create) {
-    return "[NEVR.INVITE] request planned op=create expires_s=" + std::to_string(plan.expires_s);
-  }
-  return "[NEVR.INVITE] request planned op=resolve code_len=" + std::to_string(plan.code_len) +
-         " code_fp=" + std::string(fingerprint);
-}
-
 // ---- the answer ----
 
-enum class Result { Ok, Invalid, Expired, Closed, Denied, Limit, Rate, Unavailable, ServerError };
+// NoServer is the service's `unavailable` token (the match could not be allocated); Unavailable is the client's own: no answer.
+enum class Result { Ok, Invalid, Expired, Closed, Denied, Limit, Rate, Unavailable, ServerError, NoServer };
 
 // The service's RPC error carries one exact token in its message (ADR 0017, "Service"); nothing else in the body is
 // interpreted or logged. Without a token the HTTP status decides; status 0 is no answer at all.
+namespace detail {
+
+inline std::optional<Result> TokenResult(std::string_view body) {
+  const nlohmann::json doc = nlohmann::json::parse(body.begin(), body.end(), nullptr, false);
+  if (!doc.is_object()) return std::nullopt;
+  const nlohmann::json* message = StringField(doc, "message");
+  if (message == nullptr) return std::nullopt;
+  const std::string token = message->get<std::string>();
+  if (token == "invalid") return Result::Invalid;
+  if (token == "expired") return Result::Expired;
+  if (token == "closed") return Result::Closed;
+  if (token == "denied") return Result::Denied;
+  if (token == "limit") return Result::Limit;
+  if (token == "rate") return Result::Rate;
+  if (token == "unavailable") return Result::NoServer;
+  return std::nullopt;
+}
+
+}  // namespace detail
+
 inline Result ResultFromAnswer(int http_status, std::string_view body) {
   if (http_status == 200) return Result::Ok;
   if (http_status <= 0) return Result::Unavailable;
-  const nlohmann::json doc = nlohmann::json::parse(body.begin(), body.end(), nullptr, false);
-  if (doc.is_object()) {
-    const nlohmann::json* message = detail::StringField(doc, "message");
-    if (message != nullptr) {
-      const std::string token = message->get<std::string>();
-      if (token == "invalid") return Result::Invalid;
-      if (token == "expired") return Result::Expired;
-      if (token == "closed") return Result::Closed;
-      if (token == "denied") return Result::Denied;
-      if (token == "limit") return Result::Limit;
-      if (token == "rate") return Result::Rate;
-    }
-  }
+  if (const std::optional<Result> named = detail::TokenResult(body)) return *named;
   if (http_status == 404) return Result::Invalid;
   if (http_status == 403) return Result::Denied;
   if (http_status == 429) return Result::Rate;
   return Result::ServerError;
+}
+
+inline constexpr std::size_t kRefusalMessageMax = 96;
+
+/// The message of an error body, printable ASCII only (anything else becomes '?') and at most kRefusalMessageMax bytes.
+/// For the scenario endpoint, which tells a missing route from a failed allocation; the log and the menu never carry it.
+inline std::string RefusalMessage(std::string_view body) {
+  const nlohmann::json doc = nlohmann::json::parse(body.begin(), body.end(), nullptr, false);
+  if (!doc.is_object()) return std::string();
+  const nlohmann::json* message = detail::StringField(doc, "message");
+  if (message == nullptr) return std::string();
+  std::string out;
+  for (const char raw : message->get<std::string>()) {
+    if (out.size() >= kRefusalMessageMax) break;
+    const auto u = static_cast<unsigned char>(raw);
+    out.push_back(u >= 0x20 && u <= 0x7e ? raw : '?');
+  }
+  return out;
+}
+
+/// True when the message is one of the service's seven tokens. A refusal that is not one (a route that is not registered
+/// answers 404 with another message; a rejected token answers 401) is mapped from the HTTP status alone, and the answer
+/// line says so (`via=status`), because `invalid` from a missing route is not `invalid` from the service.
+inline bool AnswerNamesResult(int http_status, std::string_view body) {
+  if (http_status == 200 || http_status <= 0) return false;
+  return detail::TokenResult(body).has_value();
 }
 
 inline const char* ResultName(Result result) {
@@ -359,6 +445,8 @@ inline const char* ResultName(Result result) {
       return "unavailable";
     case Result::ServerError:
       return "server_error";
+    case Result::NoServer:
+      return "unavailable";
   }
   return "server_error";
 }
@@ -384,16 +472,18 @@ inline const char* WizardText(Result result) {
       return "NO CONNECTION";
     case Result::ServerError:
       return "SERVER ERROR";
+    case Result::NoServer:
+      return "NO SERVER AVAILABLE";
   }
   return "SERVER ERROR";
 }
 
 inline bool IsFailure(Result result) { return result != Result::Ok; }
 
-inline std::string AnswerLine(Op op, int http_status, long latency_ms, Result result) {
+inline std::string AnswerLine(Op op, int http_status, long latency_ms, Result result, bool via_status = false) {
   return std::string("[NEVR.INVITE] answer op=") + (op == Op::Create ? "create" : "resolve") +
          " status=" + std::to_string(http_status) + " latency_ms=" + std::to_string(latency_ms) +
-         " result=" + ResultName(result);
+         " result=" + ResultName(result) + (via_status ? " via=status" : "");
 }
 
 namespace detail {

@@ -33,6 +33,8 @@ class SentinelPlatform final : public Platform {
   void EmitPlan(std::size_t entries, std::size_t early, std::size_t normal, std::size_t refused,
                 std::size_t disabled) override;
   void PluginLine(std::uint32_t level, const std::string& line) override;
+  // The input seam (input_seam_hook.h): a development build's API registers, a release build's refuses.
+  const NevrQuestHostApi* QuestHostApi() override;
 
  private:
   std::string libraryDir_;

@@ -134,9 +134,12 @@ def norm_va(value: int) -> int:
 
 FN_POINTER_SRC = "src/abi/echovr_functions.cpp"
 PATCH_ADDR_HDR = "src/runtime/hook/addresses.h"
-ADDR_REGISTRY_HDR = "plugins/common/include/address_registry.h"
+ADDR_REGISTRY_HDR = "sdk/include/nevr/pc/address_registry.h"
 DETOUR_SCAN_ROOT = "src/runtime"
-PLUGIN_SCAN_ROOT = "plugins"
+# Directories of PC plugin SOURCE in this tree, each scanned for hooks a plugin installs. None: this repository
+# publishes the plugin SDK (sdk/) and builds no PC plugin, so the double-detour check has no plugin side here and
+# says so on every run (the VACUOUS notice in check_registers_observed).
+PLUGIN_SCAN_ROOTS: tuple = ()
 
 
 class InputMissing(Exception):
@@ -343,14 +346,15 @@ def plugin_hooked_vas() -> dict:
     """VA -> (plugin, registry-constant) for address_registry constants used in plugins."""
     reg = registry_constants()
     found = {}
-    for path in scan_cpp(PLUGIN_SCAN_ROOT):
-        text = path.read_text(errors="replace")
-        if "CreateAndEnable" not in text and "MH_CreateHook" not in text:
-            continue
-        plugin = path.relative_to(REPO / "plugins").parts[0]
-        for name in re.findall(r"nevr::addresses::(VA_\w+)", text):
-            if name in reg:
-                found[reg[name]] = (plugin, name)
+    for root in PLUGIN_SCAN_ROOTS:
+        for path in scan_cpp(root):
+            text = path.read_text(errors="replace")
+            if "CreateAndEnable" not in text and "MH_CreateHook" not in text:
+                continue
+            plugin = path.relative_to(REPO / root).parts[0]
+            for name in re.findall(r"nevr::addresses::(VA_\w+)", text):
+                if name in reg:
+                    found[reg[name]] = (plugin, name)
     return found
 
 
@@ -427,8 +431,9 @@ def check_registers_observed(failures, notices, seen_self, seen_double, plugin_s
     # empty rather than reporting a pass it did not earn.
     if not plugin_side:
         notices.append(
-            f"double-detour check is VACUOUS: no plugin under {PLUGIN_SCAN_ROOT}/ "
-            f"installs a hook, so there is no second owner to collide with.")
+            f"double-detour check is VACUOUS: no plugin source in this tree "
+            f"(PLUGIN_SCAN_ROOTS={list(PLUGIN_SCAN_ROOTS)}) installs a hook, so there is no "
+            f"second owner to collide with.")
 
 
 def check_self_collision(failures, warnings, seen):
@@ -561,14 +566,6 @@ def write_manifest():
 # handler must return EXCEPTION_CONTINUE_SEARCH for it.
 VEH_BREAKPOINT_OWNER = "src/runtime/lifecycle/crash_recovery.cpp"
 
-# Not built: plugins/CMakeLists.txt add_subdirectory()s only log-filter and
-# example. (broadcaster-bridge and anim-debugger live in nevr-runtime-plugins,
-# because this repo is PUBLIC.) This file ships
-# nowhere, so it cannot be a second live owner. If it is ever added to the build
-# it MUST be reworked first — hence it is excluded by path, not by pretending it
-# is clean.
-VEH_UNBUILT = {"plugins/crash-handler/src/plugin.cpp"}
-
 
 def check_veh_ownership(failures, warnings):
     """
@@ -585,9 +582,9 @@ def check_veh_ownership(failures, warnings):
             rel = path.relative_to(REPO).as_posix()
         except ValueError:
             continue
-        if not (rel.startswith("src/") or rel.startswith("plugins/")):
+        if not (rel.startswith("src/") or rel.startswith("sdk/")):
             continue
-        if "legacy" in rel or rel in VEH_UNBUILT or rel == VEH_BREAKPOINT_OWNER:
+        if "legacy" in rel or rel == VEH_BREAKPOINT_OWNER:
             continue
         text = path.read_text(errors="replace")
         if "AddVectoredExceptionHandler" not in text:

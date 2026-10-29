@@ -14,7 +14,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/auth_token.h"
-#include "auth_token_refresh.h"
+#include "core/auth_token_refresh.h"
 #include "runtime/lifecycle/return_to_lobby.h"
 #include "runtime/lifecycle/return_to_lobby_queue.h"
 #include "runtime/server/constants.h"
@@ -40,7 +40,7 @@
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/lifecycle/crash_recovery.h"
 #include "runtime/hook/patching.h"
-#include "nevr_curl.h"
+#include "core/nevr_curl.h"
 #include "core/pch.h"
 #include "runtime/server/upnp.h"
 #include "runtime/server/gameserver_internal.h"

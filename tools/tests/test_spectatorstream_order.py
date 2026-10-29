@@ -35,10 +35,10 @@ SPECTATOR_BITS = re.compile(r"\b0x0*2[01]00000\b|<<\s*25\b", re.IGNORECASE)
 
 
 def runtime_sources():
-    """The shipped C++ sources under src/, comments stripped: no src/legacy, no tests."""
+    """The shipped C++ sources under src/, comments stripped: no tests."""
     for path in sorted((ROOT / "src").rglob("*.cpp")):
         parts = path.relative_to(ROOT / "src").parts
-        if "legacy" in parts or "tests" in parts:
+        if "tests" in parts:
             continue
         yield path.relative_to(ROOT).as_posix(), strip_comments(path.read_text(errors="replace"))
 
@@ -121,8 +121,6 @@ class SpectatorStreamOrder(unittest.TestCase):
     def test_the_one_write_is_patchenableserver_after_the_original_call(self):
         callers = []
         for path in sorted((ROOT / "src").rglob("*.cpp")):
-            if "legacy" in path.relative_to(ROOT / "src").parts:
-                continue
             code = strip_comments(path.read_text(errors="replace"))
             calls = len(re.findall(r"\b" + re.escape(ROUTINE), code)) - code.count(ROUTINE_SIGNATURE)
             if calls:

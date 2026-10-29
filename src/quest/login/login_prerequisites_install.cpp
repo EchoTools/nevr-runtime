@@ -79,6 +79,7 @@ std::uint64_t HandleProofRequest(ProofRequestThunk::Fn original) noexcept {
   return request;
 }
 NEVR_HOOK_RECORD(kEntitlementRequestHook, EntitlementRequestThunk, &OnEntitlementRequest);
+NEVR_HOOK_RECORD(kLoggedInUserIdHook, LoggedInUserIdThunk, &OnLoggedInUserId);
 NEVR_HOOK_RECORD(kPopMessageHook, PopMessageThunk, &local::OnPopMessage);
 NEVR_HOOK_RECORD(kMessageGetTypeHook, MessageGetTypeThunk, &local::OnMessageGetType);
 NEVR_HOOK_RECORD(kMessageGetRequestIdHook, MessageGetRequestIdThunk, &local::OnMessageGetRequestId);
@@ -97,6 +98,7 @@ struct Hooks {
   sentinel::GotHook requests[4];
   sentinel::GotHook entitlement;
   sentinel::GotHook messages[4];
+  sentinel::GotHook user_id;
 };
 Hooks& H() {
   static Hooks* const hooks = new Hooks();
@@ -210,12 +212,16 @@ PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, R
   result.messages += Install(hooks.messages[1], kMessageGetTypeHook, T::kMessageGetType, base) ? 1 : 0;
   result.messages += Install(hooks.messages[2], kMessageGetRequestIdHook, T::kMessageGetRequestId, base) ? 1 : 0;
   result.messages += Install(hooks.messages[3], kFreeMessageHook, T::kFreeMessage, base) ? 1 : 0;
+  // After SetEnabled below decides local answers, which the handler reads on each call; RadPluginMain, its only
+  // caller, runs after this install (#944).
+  result.user_id += Install(hooks.user_id, kLoggedInUserIdHook, T::kLoggedInUserId, base) ? 1 : 0;
+
   result.local = result.substitute && result.callbacks == 4 && result.accessors == 8 && result.requests == 4 &&
                  result.messages == 4;
   local::SetEnabled(result.local);
 
   const bool complete = result.callbacks == 4 && result.accessors == 8 && result.requests == 4 &&
-                        result.entitlement == 1 && result.messages == 4;
+                        result.entitlement == 1 && result.messages == 4 && result.user_id == 1;
   sentinel::LogFields(complete ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError,
                       "quest_login_prerequisites_install",
                       {{"status", complete ? "installed" : "partial"},
@@ -224,6 +230,8 @@ PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, R
                        {"requests", result.requests},
                        {"entitlement_local", result.entitlement},
                        {"messages", result.messages},
+                       {"logged_in_user_id", result.user_id},
+                       {"social_facade", local::SocialFacadeInstalled() ? "installed" : "not_installed"},
                        {"local_answers", result.local ? "on" : "off"},
                        {"substitution", result.substitute ? "on" : "off"},
                        {"ready_gated", ready != nullptr ? 1 : 0},

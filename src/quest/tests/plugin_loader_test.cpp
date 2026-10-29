@@ -29,6 +29,7 @@
 #include <nlohmann/json.hpp>
 
 #include "quest/data/sha256.h"
+#include "quest/plugin/input_seam_hook.h"
 #include "quest/plugin/plugin_loader.h"
 #include "quest/plugin/plugin_platform.h"
 #include "quest/plugin/plugin_record_log.h"
@@ -57,6 +58,7 @@ constexpr std::uint16_t kOtherMachine = kMachineAarch64;
 
 // The running libr15 build the fake platform reports: the second ID the fixture lists.
 const char* const kGameBuild = "2222222222222222222222222222222222222222";
+const NevrQuestHostApi kFakeQuestApi{sizeof(NevrQuestHostApi), nullptr};
 
 std::vector<std::uint8_t> Slurp(const std::string& path) {
   std::ifstream in(path, std::ios::binary);
@@ -99,6 +101,7 @@ class FakePlatform final : public Platform {
     plans.push_back({entries, early, normal, refused, disabled});
   }
   void PluginLine(std::uint32_t level, const std::string& line) override { lines.push_back({level, line}); }
+  const NevrQuestHostApi* QuestHostApi() override { return questApi; }
 
   // Unloads the object for real (the next test sees a fresh library) after keeping a copy of what it recorded.
   void Close(void* handle) override {
@@ -137,6 +140,7 @@ class FakePlatform final : public Platform {
 
   std::string gameBuild = kGameBuild;
   std::uintptr_t base = 0x7000000000;
+  const NevrQuestHostApi* questApi = &kFakeQuestApi;
   bool readFromDisk = true;
   std::string throwOnRead;
   std::string throwOnSymbol;
@@ -474,6 +478,9 @@ TEST(LoaderGivesThePluginTheQuestContext) {
   CHECK_EQ(std::string(seen->args), std::string(R"({"k":"v"})"));
   CHECK_EQ(seen->covers_game_build_id, 1);
   CHECK_EQ(std::string(seen->game_build_id), std::string(kGameBuild));
+  // The platform's Quest host services (#1202) reach the plugin as they are.
+  CHECK_EQ(seen->covers_quest, 1);
+  CHECK(seen->quest == env.platform.questApi);
   // No source for the main level exists on Quest before the host tick: the fields are empty, not wrong.
   CHECK_EQ(seen->level_symbol, std::uint64_t{0});
   CHECK(seen->level_name == nullptr);
@@ -947,6 +954,14 @@ TEST(PlatformWritesAPluginLineToTheSentinelLog) {
   }
   CHECK(hello);
   CHECK(!chatter);
+}
+
+TEST(PlatformOffersTheInputSeamOfItsKindOfBuild) {
+  SentinelPlatform dev("", true);
+  SentinelPlatform release("", false);
+  CHECK(dev.QuestHostApi() == nevr_quest::input_seam::HostApi(true));
+  CHECK(release.QuestHostApi() == nevr_quest::input_seam::HostApi(false));
+  CHECK(dev.QuestHostApi() != release.QuestHostApi());
 }
 
 TEST(PlatformSeesNoGameOnTheHost) {

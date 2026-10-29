@@ -62,6 +62,7 @@ network:
   upnp: true
   upnp_port: 6789
   tick_rate_hz: 60
+  invite_codes: true
 assets:
   cdn_url: "https://cdn.example/assets"
 arena:
@@ -101,6 +102,7 @@ TEST(ServiceMap, FlatKeyToYamlPath_EveryMigratedKey) {
   EXPECT_EQ(FlatKeyToYamlPath("nevr_regions"), "network.regions");  // S4b schema-gap home
   EXPECT_EQ(FlatKeyToYamlPath("nevr_tick_rate_hz"), "network.tick_rate_hz");  // #595
   EXPECT_EQ(FlatKeyToYamlPath("nevr_session_router"), "network.session_router");  // #708
+  EXPECT_EQ(FlatKeyToYamlPath("nevr_invite_codes"), "network.invite_codes");  // #1156
   // assets / arena / misc
   EXPECT_EQ(FlatKeyToYamlPath("asset_cdn_url"), "assets.cdn_url");
   EXPECT_EQ(FlatKeyToYamlPath("arena_round_time"), "arena.round_time");
@@ -153,6 +155,7 @@ TEST(ServiceMap, LookupFlat_PresentKeysResolve) {
   EXPECT_EQ(LookupFlat(cfg, "upnp").value_or(""), "true");
   EXPECT_EQ(LookupFlat(cfg, "upnp_port").value_or(""), "6789");
   EXPECT_EQ(LookupFlat(cfg, "nevr_tick_rate_hz").value_or(""), "60");  // #595
+  EXPECT_EQ(LookupFlat(cfg, "nevr_invite_codes").value_or(""), "true");  // #1156
   EXPECT_EQ(LookupFlat(cfg, "arena_round_time").value_or(""), "240");
   EXPECT_EQ(LookupFlat(cfg, "exitonerror").value_or(""), "true");
   // nevr_server_key is mapped (S5) but kFullYaml has no auth block, so it resolves

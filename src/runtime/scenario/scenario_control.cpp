@@ -21,13 +21,17 @@
 
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
-#include "nevr_common.h"
+#include "nevr/pc/nevr_common.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/hook/process_memory.h"
 #include "runtime/lifecycle/config.h"
+#include "runtime/patch/invite_answer_apply.h"
+#include "runtime/patch/invite_service.h"
+#include "runtime/patch/invite_wizard.h"
+#include "runtime/patch/invite_wizard_hook.h"
 #include "runtime/patch/party_invite_gate.h"
 #include "runtime/patch/social_facade.h"
 #include "runtime/patch/ui_text_writer.h"
@@ -396,6 +400,29 @@ std::string FireAction(const nevr_scenario_protocol::Command& cmd) {
         nevr_ui_text::Post(nevr_ui_text::Request{{cmd.uiActor, cmd.uiElement}, cmd.value});
     return check == nevr_ui_text::Check::Ok ? std::string() : std::string("ui_text refused: ") + nevr_ui_text::CheckName(check);
   }
+  if (cmd.action == "invite_resolve" || cmd.action == "invite_create") {
+    // The invite service, driven without the wizard (#1156): the plan is built the way the wizard hook builds it, from the
+    // same metric and choices, and submitted to the service the runtime started (network.invite_codes must be on).
+    // The code, the token and the body stay out of the log; the answers are read with {"op":"invite_answers"}.
+    nevr_invite::Metric metric;
+    nevr_invite::Choices choices;
+    if (cmd.action == "invite_resolve") {
+      metric.kind = nevr_invite::Kind::Join;
+      metric.join_code = cmd.value;
+    } else {
+      metric.kind = nevr_invite::Kind::Create;
+      metric.expires_text = cmd.key;
+      choices.experience = cmd.inviteExperience;
+      choices.mode = cmd.inviteMode;
+      choices.map = static_cast<int>(cmd.number);
+    }
+    const nevr_invite::Plan plan = nevr_invite::PlanRequest(metric, choices, nevr_invite_hook::LevelName);
+    if (plan.skip != nevr_invite::Skip::None) {
+      return std::string("the invite plan was not made: ") + nevr_invite::NotSentLine(plan.skip, plan.code_len);
+    }
+    const nevr_invite::Submit submitted = nevr_invite_service::Submit(plan);
+    return submitted == nevr_invite::Submit::Queued ? std::string() : std::string("the invite service refused the request (see the [NEVR.INVITE] lines)");
+  }
   void* netGame = NetGame();
   if (netGame == nullptr) return "no NetGame yet";
   std::string user = cmd.user;
@@ -649,6 +676,34 @@ nlohmann::json StateJson() {
 
 nlohmann::json Fail(const std::string& why) { return {{"ok", false}, {"error", why}}; }
 
+// The invite answers the menu applier has taken, each handed over once; an answer is here from the frame after it arrived. This
+// is the test endpoint's own channel, never the log: a created code is the product of the call, so it is in the reply (the log
+// carries only its length and fingerprint). The applier is the service's one reader, so the endpoint reads its record.
+nlohmann::json InviteAnswersJson() {
+  nlohmann::json answers = nlohmann::json::array();
+  for (const nevr_invite::Answer& answer : nevr_invite_apply::TakeKeptForTest()) {
+    nlohmann::json row = {{"op", answer.op == nevr_invite::Op::Create ? "create" : "resolve"},
+                          {"sent", answer.sent},
+                          {"status", answer.status},
+                          {"result", nevr_invite::ResultName(answer.result)},
+                          {"via_status", answer.via_status}};
+    if (!answer.refusal_message.empty()) row["message"] = answer.refusal_message;
+    if (answer.result == nevr_invite::Result::Ok) {
+      if (const auto created = nevr_invite::ParseCreated(answer.body)) {
+        row["code"] = created->code;
+        row["match_id"] = created->match_id;
+        row["expires"] = created->expires_text;
+      } else if (const auto resolved = nevr_invite::ParseResolved(answer.body)) {
+        row["match_id"] = resolved->match_id;
+      } else {
+        row["unparsed_body_bytes"] = answer.body.size();
+      }
+    }
+    answers.push_back(std::move(row));
+  }
+  return {{"ok", true}, {"answers", answers}};
+}
+
 nlohmann::json Handle(const std::string& line) {
   nevr_scenario_protocol::Command cmd;
   std::string error;
@@ -656,6 +711,8 @@ nlohmann::json Handle(const std::string& line) {
   switch (cmd.op) {
     case nevr_scenario_protocol::Op::kState:
       return StateJson();
+    case nevr_scenario_protocol::Op::kInviteAnswers:
+      return InviteAnswersJson();
     case nevr_scenario_protocol::Op::kInjectFriendStatus: {
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject FriendStatusNotify id=%llu status=%u",
           static_cast<unsigned long long>(cmd.friendId), static_cast<unsigned>(cmd.status));
@@ -803,6 +860,7 @@ void AcceptLoop() {
 }  // namespace
 
 void Start() {
+  nevr_invite_apply::KeepForTest(true);  // the applier keeps the answers this endpoint reports (a release build never does)
   WSADATA wsa{};
   if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
     Log(EchoVR::LogLevel::Error, "[NEVR.SCENARIO] control endpoint not started: WSAStartup failed");

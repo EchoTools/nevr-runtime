@@ -36,6 +36,9 @@ bool RegisterTextureQualityCounters() noexcept;  // 4 counters
 // asked for none.
 bool InstallTextureQualityHook(nevr_quest::texture_quality::Level level, bool fromConfig,
                                bool countersRegistered) noexcept;
+// The #1139 render-configuration log (sentinel/render_config.h), through this seam for the same reason: five VrApi slots
+// and a poller thread. No counters. `fromConfig`: whether the file gave the texture-quality level.
+bool InstallRenderConfigHook(nevr_quest::texture_quality::Level level, bool fromConfig) noexcept;  // true when all five hold their thunks
 // The #621 process-end hook (sentinel/process_end_hook.h), through this seam for the same reason: the process ends
 // when the game's android_main returns. No counters. `SetProcessEndCallback` registers what runs on the hook's
 // helper thread just before the process ends (the self-check report and flush); call it before the install.
@@ -61,6 +64,10 @@ bool ResourceRequestLogEnabled() noexcept;          // nevr_build::kIsDev
 bool RegisterResourceRequestCounters() noexcept;    // 2 counters
 // resource_request::InstallIfCounted(countersRegistered): true when the slot holds the thunk.
 bool InstallResourceRequestLogHook(bool countersRegistered) noexcept;
+
+// The #966 main-menu cards (sentinel/menu_cards_hook.h), through this seam for the same reason: it includes
+// callback_thunk.h. No counters. True when the callback slot holds the thunk.
+bool InstallMenuCardsHook() noexcept;
 
 // Defined in production_steps.cpp: the whole constructor sequence (ctor_sequence.h) over the real
 // libraries. Never throws and never blocks.

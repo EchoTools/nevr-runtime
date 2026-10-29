@@ -18,6 +18,9 @@
 #include "runtime/patch/credits_block.h"
 #include "runtime/patch/credits_text_install.h"
 #include "runtime/patch/invite_choice_hook.h"
+#include "runtime/patch/render_config_hook.h"
+#include "runtime/patch/invite_config.h"
+#include "runtime/patch/invite_service.h"
 #include "runtime/patch/menu_cards.h"
 #include "runtime/patch/ui_text_writer.h"
 #include "runtime/patch/invite_wizard_hook.h"
@@ -32,6 +35,10 @@
 // Statically-linked module entry points (the modules are linked into
 // BugSplat64.dll). Each module's symbols are prefixed to avoid
 // collisions — both define NvrModuleInit/NvrModuleApiVersion/etc.
+namespace nevr_token_auth {
+std::string GetToken();  // token_auth.h: thread-safe; statically linked, so called directly
+}
+
 extern "C" {
 // platform_compat
 int platform_compat_Init(const NvrModuleContext* ctx);
@@ -74,14 +81,25 @@ namespace {
 nevr_server_timestep::FlagRecord g_flagRecord;
 
 
+// A command-line value as UTF-8, for the paths the config.yaml choice works in.
+std::string WideToUtf8(const wchar_t* wide) {
+  const int needed = WideCharToMultiByte(CP_UTF8, 0, wide, -1, nullptr, 0, nullptr, nullptr);
+  if (needed <= 1) return std::string();
+  std::string out(static_cast<std::size_t>(needed), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, wide, -1, out.data(), needed, nullptr, nullptr);
+  out.resize(static_cast<std::size_t>(needed) - 1);
+  return out;
+}
+
 // N146: only this minimal state is needed before the original command-line
 // preprocessing.  In particular, do not start modules, plugins, file I/O, or
 // the bridge here: client D3D initialization is still in the original call.
 // The one exception is the plugins config.yaml marks `early: true` (#496), which
 // PreprocessCommandLineHook loads right after this: they serve game data the
 // original call reads, and must stay off the graphics path.
-// -server is needed for the config loader's fail-loud policy. -config-path is
-// needed by LoadLocalConfigHook while the original is running. -require-signed-plugins
+// -server is needed for the config loader's fail-loud policy. -config is
+// needed by LoadLocalConfigHook while the original is running. -config-file and
+// -config-path decide which config.yaml the early plugin pass reads (#1255). -require-signed-plugins
 // is needed by the early plugin pass (#924): it sets the plugin trust mode every pass and
 // the late-load filter read.
 void PreflightRuntimeBootstrap() {
@@ -110,20 +128,35 @@ void PreflightRuntimeBootstrap() {
     } else if (nevr_cli::IsFlag(arg, L"-windowed")) {
       g_isWindowed = TRUE;
       g_noOvr = TRUE;  // -windowed implies -noovr (no VR headset)
-    } else if (nevr_cli::IsFlag(arg, L"-config") || nevr_cli::IsFlag(arg, L"-config-path")) {
+    } else if (nevr_cli::IsFlag(arg, L"-config")) {
       // #587: `-config -server` gives -config no value; -server is still read. The main parse below
       // logs the missing value; this early pass runs before the log exists.
       if (const wchar_t* value = nevr_cli::OptionValue(argc, argv, i)) {
         WideCharToMultiByte(CP_UTF8, 0, value, -1, g_customConfigPath, MAX_PATH, NULL, NULL);
         ++i;
       }
+    } else if (nevr_cli::IsFlag(arg, L"-config-file")) {
+      // #1255: the one flag that names config.yaml. A flag with no value is kept as given, with an empty value, and
+      // the choice below refuses it.
+      g_configYamlFlags.config_file_given = true;
+      if (const wchar_t* value = nevr_cli::OptionValue(argc, argv, i)) {
+        g_configYamlFlags.config_file = WideToUtf8(value);
+        ++i;
+      }
+    } else if (nevr_cli::IsFlag(arg, L"-config-path")) {
+      // #1255: registered for the game's parser, refused by the choice below. Its value is skipped, not used.
+      g_configYamlFlags.config_path_given = true;
+      if (nevr_cli::OptionValue(argc, argv, i) != nullptr) ++i;
     }
   }
   LocalFree(argv);
 
-  // -windowed implies no VR (never spectator-stream).  The legacy code
-  // (src/legacy/gamepatches/patches.cpp) sets the windowed-mode
-  // flag directly on the game instance at offset 31456 (0x7AE0) with bit
+  // #1255: which config.yaml this run reads, decided now (the first read is the early plugin pass below). A
+  // command line that names no usable file ends the run here with exit code 64; nothing has started yet.
+  NevrCfgResolveConfigYaml();
+
+  // -windowed implies no VR (never spectator-stream).  The windowed-mode
+  // flag is set directly on the game instance at offset 31456 (0x7AE0) with bit
   // 0x0100000.  Spectator stream would set 0x2100000 (bit 0x0100000 +
   // 0x2000000), which is what PatchSpectatorStreamCheck does by NOPping
   // the CLI check — but that also forces the spectator flow.  Setting
@@ -421,13 +454,16 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       g_timestampLogs = TRUE;
     } else if (lstrcmpW(flag, L"-upnp") == 0) {
       g_upnpEnabled = TRUE;
-    } else if (lstrcmpW(flag, L"-config") == 0 || lstrcmpW(flag, L"-config-path") == 0) {
+    } else if (lstrcmpW(flag, L"-config") == 0) {
       if (const wchar_t* value = nevr_cli::OptionValue(argc, argv, i)) {
         WideCharToMultiByte(CP_UTF8, 0, value, -1, g_customConfigPath, MAX_PATH, NULL, NULL);
         ++i;
       } else {
         LogOptionWithoutValue("-config");
       }
+    } else if (lstrcmpW(flag, L"-config-file") == 0 || lstrcmpW(flag, L"-config-path") == 0) {
+      // Read and acted on by PreflightRuntimeBootstrap (#1255); here the value is only consumed.
+      if (nevr_cli::OptionValue(argc, argv, i) != nullptr) ++i;
     } else if (lstrcmpW(flag, L"-region") == 0 || lstrcmpW(flag, L"-serverregion") == 0) {
       if (const wchar_t* value = nevr_cli::OptionValue(argc, argv, i)) {
         WideCharToMultiByte(CP_UTF8, 0, value, -1, g_regionOverride, sizeof(g_regionOverride), NULL, NULL);
@@ -635,15 +671,31 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     Log(EchoVR::LogLevel::Info, "[NEVR.MENU] main-menu cards skipped reason=server_mode (a server draws no menu)");
   }
 
-  // #906, ADR 0017: observe the CREATE GAME / JOIN VIA CODE wizard's click metric. Client only, and it sends nothing
-  // yet (the worker waits for the service RPCs). It forwards every submit unchanged.
+  // #906, #1156, ADR 0017: observe the CREATE GAME / JOIN VIA CODE wizard's click metric. Client only. A typed code is
+  // posted to the game service when network.invite_codes is on (the service below), and so is a create; the answer is
+  // written into the menu by nevr_invite_apply::OnFrame (frame/tick.cpp). The hook forwards every submit unchanged.
   if (!g_isServer) {
+    nevr_invite_service::Settings invite;
+    invite.invite_codes = nevr_invite::ParseSwitch(NevrCfgGetFlat("nevr_invite_codes"));
+    const char* httpUri = NevrCfgGetFlat("nevr_http_uri");
+    invite.http_uri = httpUri != nullptr ? httpUri : "";
+    invite.token = [] { return nevr_token_auth::GetToken(); };  // thread-safe; the export TokenAuth_GetToken is not
+    invite.log = [](nevr_invite::LogLevel level, const std::string& line) {
+      Log(level == nevr_invite::LogLevel::Warning ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info, "%s", line.c_str());
+    };
+    invite.salt = std::to_string(GetTickCount64());
+    nevr_invite_service::Start(std::move(invite));
     nevr_invite_choice_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
     nevr_invite_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
   } else {
+    Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] service skipped reason=server_mode");
     Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] wizard observer skipped reason=server_mode");
     Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] choice observer skipped reason=server_mode");
   }
+
+  // #1139, ADR 0022: the render_config line. The two observers on the game's graphics-settings code go in on a client
+  // only; Install logs the server-mode skip itself, so the decision is in one tested place.
+  nevr_render_config_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)), g_isServer != FALSE);
 
   // #896, #906: the UI text writer (the first accessor of the UI seam). Client only: a server draws no menu. It pins the
   // game's functions and logs the result; nothing is written until a request is posted. The SetText hook (menu version label) is already in, which the pin accepts.
@@ -664,8 +716,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // services.socket_uri via nevr_config, not the game JSON. No g_earlyConfigPtr
   // guard here — the value does not live in the early game config; the bridge
   // starts iff socket_uri is configured (absent -> no bridge, unchanged). First
-  // NevrCfg() access happens here, after the CLI loop (so -config-path is
-  // honoured), after g_isServer/InstallFatalErrorHandler — a bad config.yaml or
+  // NevrCfg() access happens here, after the CLI loop and after the preflight's
+  // choice of config.yaml (#1255), after g_isServer/InstallFatalErrorHandler — a bad config.yaml or
   // an unset required secret fails loud at this point in server mode.
   {
     // #843: a server takes the same built-in defaults as a client; this line names the ones it uses.

@@ -1,0 +1,13 @@
+autopilot-route 1
+# A loop in the social lobby for profiling (#1202, docs/adr/0025-quest-autopilot-route.md): walk, turn, walk back,
+# turn, with the triggers and grips held part of the way. 10 s a pass, 12 passes, 120 s after a 5 s settle.
+# What each control does in the game is prediction P6: if one does something else, rewrite this file, not the plugin.
+name lobby_loop
+start_after 5
+repeat 12
+
+step 3.0 left.stick=0,1                       # walk forward
+step 1.5 right.stick=1,0                      # turn right
+step 3.0 left.stick=0,1 right.trigger=1       # walk forward, right trigger held
+step 1.5 right.stick=-1,0 left.grip=1         # turn left, left grip held
+step 1.0                                      # every control at rest
