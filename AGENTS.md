@@ -692,13 +692,10 @@ your seat name, for example `claude-main` or `codex`.
 - **A PR runs the quick check, not `just verify`.** The quick check is: the build (`just build`), the test
   recipe(s) that cover the changed code (`just --list` names them: `test-auth-unit`, `test-quest-shared`,
   `test-quest-*`, `test-android` for a change under `src/quest`, and so on), and the PC login test (see "System
-  test for runtime and auth changes") when the change touches runtime or auth code. A PR that adds or removes
-  GTest declarations in `src/runtime/tests/*.cpp` (`TEST(` / `TEST_F(` at the start of a line) runs
-  `python3 -m pytest tools/tests/test_verify_gtest_floor.py`. The floor (`verify_gtest_floor.py --floor` in
-  `justfile`) may lag the count `python3 tools/verify_gtest_floor.py --floor 0` prints (`declarations=`) by up to
-  `SLACK` in that test, so a PR that adds a few tests leaves the line alone. A PR that would put the count more than
-  `SLACK` above the floor sets the floor to the count; a PR that drops the count below the floor sets the floor to
-  the count and says in its body which tests went and why. A PR that touches `src/runtime/host/exports.def`, an
+  test for runtime and auth changes") when the change touches runtime or auth code. The GTest floor is not stored:
+  `python3 tools/verify_gtest_floor.py` counts `TEST(` / `TEST_F(` declarations in `src/runtime/tests/*.cpp` at HEAD
+  and at the merge-base with `origin/main` (on main, the parent commit) and fails when HEAD has fewer. A PR that
+  removes tests on purpose puts a `GTest-Drop: <reason>` trailer on the commit that removes them. A PR that touches `src/runtime/host/exports.def`, an
   `NEVR_MODULE_API` function or `src/runtime/host/` also runs
   `python3 tools/verify_pe_contract.py --dll build/<preset>/bin/BugSplat64.dll --runtime-dll build/<preset>/bin/nevr-runtime.dll` on the build it made. Every PR, whatever it touches, also runs
   `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` (run `just worktree-setup`

@@ -62,9 +62,9 @@ feels risky":
 > **A PR runs the quick check, not `just verify`.** The quick check is: the build (`just build`), the test
 > recipe(s) that cover the changed code (`just --list` names them: `test-auth-unit`, `test-quest-shared`,
 > `test-quest-*`, `test-android` for a change under `src/quest`, and so on), and the PC login test (see "System
-> test for runtime and auth changes") when the change touches runtime or auth code. A PR that adds or removes
-> GTest declarations in `src/runtime/tests/*.cpp` [...] runs
-> `python3 -m pytest tools/tests/test_verify_gtest_floor.py`. [...] Every PR, whatever it touches, also runs
+> test for runtime and auth changes") when the change touches runtime or auth code. The GTest floor is not stored:
+> `python3 tools/verify_gtest_floor.py` counts [...] at HEAD and at the merge-base with `origin/main` [...] and fails
+> when HEAD has fewer. [...] Every PR, whatever it touches, also runs
 > `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` [...]. Run the quick check on the PR's tip, in the build slice, and report each item with its result; an item
 > not run is named as not run.
 
