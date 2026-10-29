@@ -35,6 +35,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/menu_version_label.cpp",
     "patch/mic_provider.cpp",
     "patch/mode_patches.cpp",
+    "patch/netgun_bullets.cpp",
     "patch/plugin_assets.cpp",
     "patch/pnsrad_enabler.cpp",
     "patch/render_config.cpp",
@@ -92,7 +93,7 @@ class VerifyPatchSourceInventoryTest(unittest.TestCase):
             )
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("patch-source-inventory: OK count=34", result.stdout)
+        self.assertIn("patch-source-inventory: OK count=35", result.stdout)
 
     def test_rejects_missing_duplicate_unexpected_and_missing_disk_entries(self):
         scenarios = (

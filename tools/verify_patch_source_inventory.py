@@ -42,6 +42,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/menu_version_label.cpp",
     "patch/mic_provider.cpp",
     "patch/mode_patches.cpp",
+    "patch/netgun_bullets.cpp",
     "patch/plugin_assets.cpp",
     "patch/pnsrad_enabler.cpp",
     "patch/render_config.cpp",
@@ -55,7 +56,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/ui_texture_mips.cpp",
     "patch/xpid_patch.cpp",
 )
-EXPECTED_PATCH_SOURCE_COUNT = 34
+EXPECTED_PATCH_SOURCE_COUNT = 35
 
 
 class InventoryError(Exception):
