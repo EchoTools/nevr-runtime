@@ -236,24 +236,34 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     [ -x "$patcher" ] || { echo "android-repack-apk: the libr15 patcher is not an executable file: $patcher" >&2; exit 1; }
     extra=()
     if [ -n "$extra_rows" ]; then extra=(--extra-rows "$extra_rows"); fi
-    # `plugin` (docs/adr/0019-quest-plugin-loader.md): one plugin library to carry in the APK, for a headset run of the loader.
-    # Empty for every release and package-dev APK. The file is lib<name>.so; `plugins:` in config.yaml names it.
+    # `plugin` (docs/adr/0019-quest-plugin-loader.md): the plugin libraries to carry in the APK, for a headset run of the loader:
+    # one path, or several separated by colons (a path may hold spaces). Empty for every release and package-dev APK. Each file is lib<name>.so; `plugins:`
+    # in config.yaml names it. Every file gets every check, and no two may share a name.
+    plugins=()
     if [ -n "$plugin" ]; then
-        [ -f "$plugin" ] || { echo "plugin not found: $plugin" >&2; exit 1; }
-        case "$(basename "$plugin")" in
-            lib?*.so) ;;
-            *) echo "plugin must be named lib<name>.so: $plugin" >&2; exit 1 ;;
-        esac
-        # `zip` replaces an entry of the same path: a plugin named like any lib/ entry of the store APK, or like a library
-        # staged below, would take that library's place. Refuse before anything is staged (tools/quest_repack_libs.py).
-        python3 -I tools/quest_repack_libs.py check-plugin-name --apk "$apk" --plugin "$plugin"
-        # The loader refuses a plugin whose NEVR note does not list the running libr15's build ID (plugin_image.h): an APK
-        # whose plugin is refused on the headset is refused here, against the store APK's own libr15.so.
-        python3 -I tools/quest_repack_libs.py check-plugin-build-ids --apk "$apk" --plugin "$plugin"
-        # ADR 0019 section 1: a plugin runs the same static-init check as the shim, minus the shim's own constructor.
+        IFS=: read -r -a plugins <<<"$plugin"
         llvm_bin="{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
         [ -x "$llvm_bin/llvm-nm" ] || llvm_bin="$(dirname "$(command -v llvm-nm || true)")"
-        tools/check_quest_static_init.sh --plugin "$llvm_bin" "$plugin"
+        seen_names=" "
+        for p in "${plugins[@]}"; do
+            [ -f "$p" ] || { echo "plugin not found: $p" >&2; exit 1; }
+            case "$(basename "$p")" in
+                lib?*.so) ;;
+                *) echo "plugin must be named lib<name>.so: $p" >&2; exit 1 ;;
+            esac
+            case "$seen_names" in
+                *" $(basename "$p") "*) echo "two plugins are named $(basename "$p")" >&2; exit 1 ;;
+            esac
+            seen_names="$seen_names$(basename "$p") "
+            # `zip` replaces an entry of the same path: a plugin named like any lib/ entry of the store APK, or like a library
+            # staged below, would take that library's place. Refuse before anything is staged (tools/quest_repack_libs.py).
+            python3 -I tools/quest_repack_libs.py check-plugin-name --apk "$apk" --plugin "$p"
+            # The loader refuses a plugin whose NEVR note does not list the running libr15's build ID (plugin_image.h): an APK
+            # whose plugin is refused on the headset is refused here, against the store APK's own libr15.so.
+            python3 -I tools/quest_repack_libs.py check-plugin-build-ids --apk "$apk" --plugin "$p"
+            # ADR 0019 section 1: a plugin runs the same static-init check as the shim, minus the shim's own constructor.
+            tools/check_quest_static_init.sh --plugin "$llvm_bin" "$p"
+        done
     fi
     # The version the versionCode comes from: `version` when the shim was built elsewhere (a release's CI-built loader has no
     # build tree here), else the build's version header, which sits beside the shim's build tree (build/<tree>/sentinel/ ->
@@ -283,10 +293,10 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     "$patcher" --stock "$work/orig/lib/arm64-v8a/libr15.so" --out "$work/stage/lib/arm64-v8a/libr15.so" \
         --report "$work/libr15-patch-report.json" ${extra[@]+"${extra[@]}"}
     [ -s "$work/stage/lib/arm64-v8a/libr15.so" ] || { echo "the libr15 patcher wrote no libr15.so: $patcher" >&2; exit 1; }
-    if [ -n "$plugin" ]; then
-        cp "$plugin" "$work/stage/lib/arm64-v8a/$(basename "$plugin")"
-        stage_libs+=("lib/arm64-v8a/$(basename "$plugin")")
-    fi
+    for p in ${plugins[@]+"${plugins[@]}"}; do
+        cp "$p" "$work/stage/lib/arm64-v8a/$(basename "$p")"
+        stage_libs+=("lib/arm64-v8a/$(basename "$p")")
+    done
     # 4. fresh APK copy, strip the store's v1 signature, inject both libs STORED (-0)
     unsigned="$work/r15-repacked.apk"
     aligned="$work/r15-repacked-aligned.apk"
