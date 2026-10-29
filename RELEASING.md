@@ -112,7 +112,7 @@ second dispatch never overwrites files.
    the step fails red before any dispatch.
 6. **Check the signed draft**: `tools/release_check_draft.sh --signed vX.Y.Z` runs "Check the signed draft" below.
 7. **Body**: `tools/package_release.py notes --base <previous tag> --rev vX.Y.Z` renders the body from the signed files. Its
-   player line is read from the feat commits since the base tag (`tools/release_audience_section.py`).
+   player line is `release-headline.txt` when it changed since the base tag, else "Fixes and internal changes.".
 8. **Publish**: `gh release edit vX.Y.Z --draft=false`, last. The `published` event does not rebuild: `build.yml`'s guard
    sees the two names and skips.
 
