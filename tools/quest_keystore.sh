@@ -22,13 +22,26 @@ readonly PASS_ENTRY="services/echovrce/quest-signing-keystore-v2-pass"
 readonly ALIAS="nevr"
 readonly IMPORT_HINT="just import-quest-keystore <keystore>"
 
-# Set by materialize_key(); the EXIT trap cleans up whichever of them exists.
+# Set by materialize_key() and main(); the EXIT trap cleans up whichever of them exists.
 key=""
 keydir=""
+pass_err=""
 child=0
 
 log() { printf '[quest-keystore] %s\n' "$*" >&2; }
 err() { printf 'ERROR: %s\n' "$*" >&2; }
+
+# After a failed `pass` call, print the gpg lines of its stderr (where gpg says why, e.g. "No secret key") to stderr.
+# Only lines starting with "gpg:" are printed: pass's stdout is the key and is never read here.
+pass_gpg_lines() {
+    local line
+    [[ -s "$pass_err" ]] || return 0
+    while IFS= read -r line; do
+        if [[ "$line" == gpg:* ]]; then
+            printf '  %s\n' "$line" >&2
+        fi
+    done < "$pass_err"
+}
 
 usage() {
     cat >&2 <<EOF
@@ -50,6 +63,9 @@ cleanup() {
     fi
     if [[ -n "$keydir" && -d "$keydir" ]]; then
         rm -rf -- "$keydir" 2>/dev/null || true
+    fi
+    if [[ -n "$pass_err" && -e "$pass_err" ]]; then
+        rm -f -- "$pass_err" || err "could not remove the pass stderr file $pass_err"
     fi
     exit "$rc"
 }
@@ -77,12 +93,14 @@ materialize_key() {
 
     command -v pass >/dev/null 2>&1 || { err "pass is not installed"; exit 1; }
 
-    if ! b64="$(pass show "$KS_ENTRY" 2>/dev/null)"; then
+    if ! b64="$(pass show "$KS_ENTRY" 2>"$pass_err")"; then
         err "no Quest signing keystore in pass at $KS_ENTRY; store one with: $IMPORT_HINT"
+        pass_gpg_lines
         exit 1
     fi
-    if ! passphrase="$(pass show "$PASS_ENTRY" 2>/dev/null)"; then
+    if ! passphrase="$(pass show "$PASS_ENTRY" 2>"$pass_err")"; then
         err "no Quest signing keystore passphrase in pass at $PASS_ENTRY; store one with: $IMPORT_HINT"
+        pass_gpg_lines
         exit 1
     fi
     [[ -n "$b64" ]] || { err "the stored Quest signing keystore is empty; re-import it with: $IMPORT_HINT"; exit 1; }
@@ -157,8 +175,8 @@ cmd_check() {
     command -v pass >/dev/null 2>&1 || { err "pass is not installed"; exit 1; }
     local entry
     for entry in "$KS_ENTRY" "$PASS_ENTRY"; do
-        pass show "$entry" >/dev/null 2>&1 \
-            || { err "no Quest signing key material in pass at $entry; store it with: $IMPORT_HINT"; exit 1; }
+        pass show "$entry" >/dev/null 2>"$pass_err" \
+            || { err "no Quest signing key material in pass at $entry; store it with: $IMPORT_HINT"; pass_gpg_lines; exit 1; }
     done
 }
 
@@ -181,10 +199,12 @@ cmd_import() {
     command -v base64 >/dev/null 2>&1 || { err "base64 is required"; exit 1; }
 
     # A different key forces an uninstall on the headset, so never replace one silently.
-    if pass show "$KS_ENTRY" >/dev/null 2>&1; then
+    if pass show "$KS_ENTRY" >/dev/null 2>"$pass_err"; then
         err "a Quest signing keystore is already stored at $KS_ENTRY; refusing to replace it (a different key forces an uninstall on the headset)"
         exit 1
     fi
+    # Not stored is the normal case here and prints nothing; a gpg failure reads as "not stored" without this.
+    pass_gpg_lines
 
     passphrase="${NEVR_QUEST_KS_IMPORT_PASS:-}"
     [[ -n "$passphrase" ]] || { err "set NEVR_QUEST_KS_IMPORT_PASS to the keystore passphrase"; exit 1; }
@@ -213,6 +233,9 @@ cmd_import() {
 
 main() {
     [[ "$#" -ge 1 ]] || usage
+    # stderr of every pass call lands here (gpg's diagnostics, never the key); cleanup removes it on exit.
+    pass_err="$(mktemp /dev/shm/nevr-quest-pass-err.XXXXXXXX)" \
+        || { err "cannot create a temporary file for the stderr of pass under /dev/shm"; exit 1; }
     case "$1" in
         with)
             shift

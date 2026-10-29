@@ -286,7 +286,7 @@ build included, gets an environment without them. Every step appends a JSON line
 cannot be written fails the run. A failing step exits 1 naming itself, and the unit's `OnFailure=` runs
 `quest_release_timer.py --notify-failure`, which couriers the last failure to Spritz. The credential is the file
 `~/.config/metis/r2-evr-echo-taxi.env` (`R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`), loaded by
-the unit and never written into it. Install, from any clone of the repository:
+the unit and never written into it. The unit also sets `GNUPGHOME` to the XDG gnupg home (`~/.config/gnupg`) so `pass` finds the key, and a `pass` failure prints gpg's own `gpg:` lines after the `ERROR` line. Install, from any clone of the repository:
 
 ```sh
 just install-quest-release-timer   # the dedicated checkout, systemctl --user link of the three units, daemon-reload, enable --now the timer
