@@ -52,6 +52,11 @@
 //                                    before the hardware dump (which then shares the slot); the level is the config's
 //                                    graphics.texture_quality, `stock` when the configuration cannot be resolved; `stock`
 //                                    installs nothing. Its counters are registered with the others (step 3), unless `stock`.
+//      InstallRenderConfig           the render-configuration log line (#1139, docs/adr/0022-render-config-log.md): five libr15
+//                                    VrApi slots (refresh rate, clock levels, property set, system property float, frame
+//                                    submit) and a poller thread, on every launch, right after the texture-quality hook (it
+//                                    reports that hook's level and source) and before the hardware dump (which then leaves
+//                                    the slots both hook to this step); no counters.
 //      InstallCreditsText            the project section of the CREDITS page (#970): two ADRP+ADD pairs in libr15 (the
 //                                    CREDITS component's two cursor stores), right after the texture hook; no counters.
 //                                    The production step writes nothing and succeeds: a libr15 code page cannot be
@@ -124,6 +129,7 @@ enum class StepId : std::uint8_t {
   kInstallOsBuildGate,
   kInstallResourceRequestLog,
   kInstallTextureQuality,
+  kInstallRenderConfig,
   kInstallCreditsText,
   kInstallMenuCards,
   kStartTokenAuth,
@@ -210,6 +216,9 @@ class Steps {
   // `countersRegistered` is the result of RegisterTextureQualityCounters (a `stock` level needs none). The step applies the
   // hook's own rule (texture_quality::InstallIfCounted): without its counters it logs the skip and installs nothing.
   virtual bool InstallTextureQuality(const nevr_quest::TextureChoice& choice, bool countersRegistered) = 0;
+  // The render-configuration log (#1139): five libr15 slots and the poller thread, on every launch, no counters. `choice` is
+  // the texture-quality level and where it came from (the line says what set the eye size).
+  virtual bool InstallRenderConfig(const nevr_quest::TextureChoice& choice) = 0;
   // The project section of the CREDITS page (#970): two libr15 ADRP+ADD pairs, on every launch, no counters.
   virtual bool InstallCreditsText() = 0;
   // The CREATE GAME and JOIN VIA CODE cards on the main menu (#966): one libr15 data slot (the streaming reader's read-finished

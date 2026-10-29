@@ -115,4 +115,26 @@ std::string RemoveQueryParam(std::string_view uri, std::string_view param) {
   return result;
 }
 
+ServerDbRoute ChooseServerDbRoute(std::string_view explicitUri, std::string_view tokenUri, bool haveToken,
+                                  std::string_view socketUri, std::string_view discordId) {
+  if (!explicitUri.empty()) return ServerDbRoute::kExplicitUri;
+  if (!tokenUri.empty() && haveToken) return ServerDbRoute::kTokenRoute;
+  if (!socketUri.empty() && !discordId.empty()) return ServerDbRoute::kUrlParams;
+  return ServerDbRoute::kNone;
+}
+
+const char* ServerDbRouteName(ServerDbRoute route) {
+  switch (route) {
+    case ServerDbRoute::kExplicitUri:
+      return "explicit";
+    case ServerDbRoute::kTokenRoute:
+      return "token";
+    case ServerDbRoute::kUrlParams:
+      return "url_params";
+    case ServerDbRoute::kNone:
+      return "none";
+  }
+  return "none";
+}
+
 }  // namespace nevr_serverdb_uri

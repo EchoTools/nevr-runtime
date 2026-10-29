@@ -22,8 +22,9 @@ cp -v build/mingw-release/bin/nevr-runtime.dll "$NEVR_ROOT_DIR/"
 cp -v build/mingw-release/bin/BugSplat64.dll "$GAME_DIR/"
 # platform_compat and token_auth are statically linked into nevr-runtime.dll.
 if ls build/mingw-release/bin/plugins/*.dll >/dev/null 2>&1; then
-  mkdir -p "$GAME_DIR/plugins"
-  cp -rv build/mingw-release/bin/plugins/* "$GAME_DIR/plugins/"
+  # Plugins load from the nevr root's plugins\, never from the game directory (ADR 0012).
+  mkdir -p "$NEVR_ROOT_DIR/plugins"
+  cp -rv build/mingw-release/bin/plugins/* "$NEVR_ROOT_DIR/plugins/"
 fi
 
 export WINEPREFIX="$GAME_ROOT/echovr/.wineprefix"

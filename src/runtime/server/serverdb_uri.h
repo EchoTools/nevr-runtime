@@ -58,4 +58,20 @@ std::optional<std::string> BuildBridgeCredentialUri(std::string_view remoteUri, 
 // Removes only the first match; these query strings never repeat a key.
 std::string RemoveQueryParam(std::string_view uri, std::string_view param);
 
+// The route RequestRegistration dials ServerDB through (#1266), first match wins:
+//   - kExplicitUri: services.serverdb (serverdb_host) is set; it is dialed as given;
+//   - kTokenRoute: services.serverdb_uri is set and a token was acquired (ADR 0001);
+//   - kUrlParams: services.socket_uri and identity.discord_id are set (BuildLegacyUri);
+//   - kNone: none of these. The server stops with kNoServerDbUriCause; there is no default address.
+enum class ServerDbRoute { kExplicitUri, kTokenRoute, kUrlParams, kNone };
+
+ServerDbRoute ChooseServerDbRoute(std::string_view explicitUri, std::string_view tokenUri, bool haveToken,
+                                  std::string_view socketUri, std::string_view discordId);
+
+// The route's name in the `serverdb route=` log line.
+const char* ServerDbRouteName(ServerDbRoute route);
+
+// What a server with no route stops with (ServerFatal).
+inline constexpr char kNoServerDbUriCause[] = "no ServerDB URI: set services.serverdb_uri";
+
 }  // namespace nevr_serverdb_uri

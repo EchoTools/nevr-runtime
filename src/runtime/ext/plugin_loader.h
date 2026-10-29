@@ -2,7 +2,7 @@
 
 #include <string>
 
-#include "extension/plugin_interface.h"
+#include "nevr/plugin_interface.h"
 #include "runtime/ext/plugin_load_plan.h"  // PluginPhase
 
 // Load the plugins config.yaml lists for `phase` from the plugins/ subdirectory:

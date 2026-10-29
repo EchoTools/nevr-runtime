@@ -50,6 +50,7 @@ unsigned Count(const std::vector<move::Event>& events, Outcome outcome) {
 //   <base>\game\bin\win10\_local   the install's nearest _local        (local_[0], install_local_)
 //   <base>\game\bin\_local         one parent up                       (local_[1])
 //   <base>\game\_local             two parents up                      (local_[2])
+//   <base>\game\bin\win10\plugins  where plugins used to be loaded from    (legacy_plugins_)
 //   <base>\appdata\EchoVR\...      the original game's folder, where nEVR used to write logs and cosmetic packages
 //   <base>\appdata\nevr\echovr     the nevr root
 class NevrRootMove : public ::testing::Test {
@@ -65,6 +66,7 @@ class NevrRootMove : public ::testing::Test {
     local_ = {install_local_, base_ + L"\\game\\bin\\_local", base_ + L"\\game\\_local"};
     legacy_logs_ = base_ + L"\\appdata\\EchoVR\\logs";
     legacy_cosmetics_ = base_ + L"\\appdata\\EchoVR\\cosmetics\\v1\\packages";
+    legacy_plugins_ = base_ + L"\\game\\bin\\win10\\plugins";
     root_ = nevr_root::RootUnder(base_ + L"\\appdata");
   }
   void TearDown() override { Wipe(); }
@@ -82,6 +84,7 @@ class NevrRootMove : public ::testing::Test {
     in.local_dirs = local_;
     in.legacy_logs_dir = legacy_logs_;
     in.legacy_cosmetics_dir = legacy_cosmetics_;
+    in.legacy_plugins_dir = legacy_plugins_;
     return in;
   }
 
@@ -94,7 +97,7 @@ class NevrRootMove : public ::testing::Test {
     Write(legacy_cosmetics_ + L"\\hat.evrp", "package bytes");
   }
 
-  std::wstring base_, root_, install_local_, legacy_logs_, legacy_cosmetics_;
+  std::wstring base_, root_, install_local_, legacy_logs_, legacy_cosmetics_, legacy_plugins_;
   std::vector<std::wstring> local_;
 };
 
@@ -105,6 +108,8 @@ TEST(NevrRootPaths, EveryFolderIsUnderTheRootUnderLocalAppData) {
   EXPECT_EQ(nevr_root::CrashesDir(root), root + L"\\crashes");
   EXPECT_EQ(nevr_root::CacheDir(root), root + L"\\cache");
   EXPECT_EQ(nevr_root::CosmeticsDir(root), root + L"\\cosmetics\\v1\\packages");
+  EXPECT_EQ(nevr_root::PluginsDir(root), root + L"\\plugins");
+  EXPECT_EQ(nevr_root::PluginsDir(std::string("C:\\L\\nevr\\echovr")), "C:\\L\\nevr\\echovr\\plugins");
   EXPECT_EQ(nevr_root::RootUnder(std::string("C:\\L\\")), "C:\\L\\nevr\\echovr") << "one separator, however the base ends";
 }
 
@@ -113,6 +118,7 @@ TEST(NevrRootPaths, AnUnresolvedRootStaysUnresolvedAllTheWayDown) {
   EXPECT_TRUE(none.empty());
   EXPECT_TRUE(nevr_root::LogsDir(none).empty());
   EXPECT_TRUE(nevr_root::CosmeticsDir(none).empty());
+  EXPECT_TRUE(nevr_root::PluginsDir(none).empty());
 }
 
 TEST(NevrRootPaths, RootWReadsLocalAppDataAndNothingElse) {
@@ -240,6 +246,61 @@ TEST_F(NevrRootMove, WithoutARootTheMoveDoesNothing) {
   in.root.clear();
   EXPECT_TRUE(move::Run(in).empty());
   EXPECT_TRUE(Exists(legacy_logs_ + L"\\nevr-crash-abc123.txt"));
+}
+
+// #856: the plugins folder beside echovr.exe moves into the root's plugins\ (ADR 0012).
+TEST_F(NevrRootMove, ThePluginsFolderBesideTheGameMovesIntoTheRootsPluginsAndSaysWhy) {
+  Write(legacy_plugins_ + L"\\alpha.dll", "alpha bytes");
+  Write(legacy_plugins_ + L"\\beta.dll", "beta bytes");
+  Write(legacy_plugins_ + L"\\beta.yaml", "beta data");
+  Write(legacy_plugins_ + L"\\sub\\gamma.dll", "in a subfolder");
+  const std::vector<move::Event> events = move::Run(Inputs());
+
+  EXPECT_EQ(Count(events, Outcome::kMoved), 3u) << "the three files at the top of the folder";
+  EXPECT_EQ(Count(events, Outcome::kMarkerWritten), 0u) << "nothing of ours is written to the game folder";
+  EXPECT_EQ(ReadAll(root_ + L"\\plugins\\alpha.dll"), "alpha bytes");
+  EXPECT_EQ(ReadAll(root_ + L"\\plugins\\beta.dll"), "beta bytes");
+  EXPECT_EQ(ReadAll(root_ + L"\\plugins\\beta.yaml"), "beta data");
+  EXPECT_FALSE(Exists(legacy_plugins_ + L"\\alpha.dll")) << "the old copy is gone: nothing loads from there any more";
+  EXPECT_FALSE(Exists(legacy_plugins_ + L"\\beta.dll"));
+  EXPECT_EQ(ReadAll(legacy_plugins_ + L"\\sub\\gamma.dll"), "in a subfolder") << "a folder is not a plugin file and is left alone";
+  EXPECT_FALSE(Exists(root_ + L"\\plugins\\sub"));
+  EXPECT_FALSE(Exists(legacy_plugins_ + L"\\MOVED-TO-NEVR-ROOT.txt")) << "no note is left in the game folder";
+}
+
+TEST_F(NevrRootMove, APluginAlreadyInTheRootIsNeverOverwritten) {
+  Write(root_ + L"\\plugins\\alpha.dll", "root copy");
+  Write(legacy_plugins_ + L"\\alpha.dll", "old copy");
+  Write(legacy_plugins_ + L"\\beta.dll", "beta bytes");
+  const std::vector<move::Event> events = move::Run(Inputs());
+
+  EXPECT_EQ(Count(events, Outcome::kLeftRootHasIt), 1u);
+  EXPECT_EQ(Count(events, Outcome::kMoved), 1u);
+  EXPECT_EQ(ReadAll(root_ + L"\\plugins\\alpha.dll"), "root copy");
+  EXPECT_EQ(ReadAll(legacy_plugins_ + L"\\alpha.dll"), "old copy") << "nothing is deleted that was not moved";
+  EXPECT_EQ(ReadAll(root_ + L"\\plugins\\beta.dll"), "beta bytes");
+}
+
+TEST_F(NevrRootMove, ASecondPluginsRunMovesNothingAndLeavesNothingBehind) {
+  Write(legacy_plugins_ + L"\\alpha.dll", "alpha bytes");
+  ASSERT_EQ(Count(move::Run(Inputs()), Outcome::kMoved), 1u);
+  EXPECT_FALSE(Exists(legacy_plugins_ + L"\\MOVED-TO-NEVR-ROOT.txt")) << "the first run left no note in the game folder";
+  EXPECT_TRUE(move::Run(Inputs()).empty()) << "nothing is left to move";
+  EXPECT_FALSE(Exists(root_ + L"\\plugins\\MOVED-TO-NEVR-ROOT.txt"));
+  Write(legacy_plugins_ + L"\\delta.dll", "a later plugin");
+  EXPECT_EQ(Count(move::Run(Inputs()), Outcome::kMoved), 1u) << "a plugin dropped there later is moved too";
+  EXPECT_EQ(ReadAll(root_ + L"\\plugins\\delta.dll"), "a later plugin");
+}
+
+TEST_F(NevrRootMove, PluginsStayWhenTheRootsPluginsFolderCannotBeMade) {
+  Write(root_ + L"\\plugins", "a file where the plugins folder belongs");
+  Write(legacy_plugins_ + L"\\alpha.dll", "alpha bytes");
+  const std::vector<move::Event> events = move::Run(Inputs());
+
+  EXPECT_EQ(Count(events, Outcome::kLeftMoveFailed), 1u);
+  EXPECT_EQ(Count(events, Outcome::kMoved), 0u);
+  EXPECT_EQ(ReadAll(legacy_plugins_ + L"\\alpha.dll"), "alpha bytes");
+  EXPECT_FALSE(Exists(legacy_plugins_ + L"\\MOVED-TO-NEVR-ROOT.txt")) << "nothing moved, so no marker";
 }
 
 // The sign-in cache moves through the protected write, whose paths are ANSI: these run under a plain ASCII folder name.
@@ -504,6 +565,12 @@ TEST(NevrRootMoveEnvironment, TheInputsComeFromLocalAppData) {
   EXPECT_EQ(in.root, L"C:\\Users\\u\\AppData\\Local\\nevr\\echovr");
   EXPECT_EQ(in.legacy_logs_dir, L"C:\\Users\\u\\AppData\\Local\\EchoVR\\logs");
   EXPECT_EQ(in.legacy_cosmetics_dir, L"C:\\Users\\u\\AppData\\Local\\EchoVR\\cosmetics\\v1\\packages");
+  wchar_t exe[MAX_PATH * 2] = {};
+  const DWORD exe_len = GetModuleFileNameW(nullptr, exe, static_cast<DWORD>(sizeof(exe) / sizeof(exe[0])));
+  ASSERT_NE(exe_len, 0u);
+  std::wstring exe_dir(exe, exe_len);
+  exe_dir.resize(exe_dir.find_last_of(L"\\/") + 1);
+  EXPECT_EQ(in.legacy_plugins_dir, exe_dir + L"plugins") << "the plugins folder next to the game executable";
   ASSERT_EQ(in.local_dirs.size(), 3u);
   EXPECT_NE(in.local_dirs[0].find(L"\\_local"), std::wstring::npos);
   EXPECT_NE(in.local_dirs[1].find(L"..\\_local"), std::wstring::npos);
