@@ -20,7 +20,7 @@
 #include <thread>
 #include <vector>
 
-#include "abi/symbol_hash.h"
+#include "nevr/symbol_hash.h"
 #include "quest/tests/test_check.h"
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/session_router.h"

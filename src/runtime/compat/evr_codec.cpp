@@ -4,7 +4,7 @@
 #include <cstring>
 #include <limits>
 
-#include "abi/symbol_hash.h"
+#include "nevr/symbol_hash.h"
 
 namespace nevr_evr_codec {
 
@@ -207,7 +207,7 @@ uint64_t ConfigSymbol(std::string_view text) {
     if (static_cast<uint8_t>(byte - 'A') <= 25) byte = static_cast<uint8_t>(byte + 32);
     // The game reads the name byte with MOVSX (echovr.exe CSymbol64::Lookup) and the service with int64(int8(ch)):
     // a byte >= 0x80 enters the hash sign-extended (nakama#710). The xor-and-subtract spelling is the one in
-    // abi/symbol_hash.h; a uint8_t to int8_t conversion is implementation-defined before C++20.
+    // nevr/symbol_hash.h; a uint8_t to int8_t conversion is implementation-defined before C++20.
     hash = static_cast<uint64_t>(static_cast<int64_t>(byte ^ 0x80) - 0x80) ^ EchoVR::kCSymbol64Table[(hash >> 56) & 0xFF] ^ (hash << 8);
   }
   return hash;

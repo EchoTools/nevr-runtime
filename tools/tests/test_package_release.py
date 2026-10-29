@@ -545,8 +545,7 @@ class ReleaseStagesTest(PackageFixture):
             readme = z.read("README.txt").decode()
         section = readme.split("Running a dedicated server\n", 1)[1].split("\nUpdate\n", 1)[0]
         prose = " ".join(section.split())  # the README wraps lines; a phrase may break across one
-        # KNOWN-WRONG #1255: the README sends a host to _local\config.yaml because the runtime does not read the nevr folder.
-        for needle in (r".\echovr_server.exe", "-server -headless -no-console", r"_local\config.yaml",
+        for needle in (r".\echovr_server.exe", "-server -headless -no-console", r"%LOCALAPPDATA%\nevr\echovr\config.yaml",
                        "services.socket_uri", "issue #843", "auth.password", "The password goes in auth.password",
                        "refresh token", "requested game server registration", "Received registration success",
                        "Graceful shutdown initiated",
@@ -1055,6 +1054,22 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in self.game.iterdir()), ["BugSplat64.dll", "echovr.exe"],
                          "the standing rule: nothing of ours but the host is in the game folder")
 
+    def test_install_makes_the_roots_plugins_folder_and_uninstall_leaves_what_is_in_it(self):
+        (self.root / "plugins").mkdir(parents=True)
+        (self.root / "plugins" / "mine.dll").write_bytes(b"A-PLUGIN")
+        installed = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertEqual(installed.returncode, 0, self.output(installed))
+        self.assertTrue((self.root / "plugins").is_dir(), "plugins load from the root's plugins folder")
+        self.assertEqual((self.root / "plugins" / "mine.dll").read_bytes(), b"A-PLUGIN", "a plugin already there is untouched")
+        undone = self.ps("uninstall.ps1", "-Dir", str(self.game))
+        self.assertEqual(undone.returncode, 0, self.output(undone))
+        self.assertEqual((self.root / "plugins" / "mine.dll").read_bytes(), b"A-PLUGIN", "uninstall deletes no plugin")
+
+    def test_a_fresh_install_makes_an_empty_plugins_folder_in_the_root(self):
+        installed = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertEqual(installed.returncode, 0, self.output(installed))
+        self.assertEqual(list((self.root / "plugins").iterdir()), [])
+
     def test_install_without_a_local_app_data_and_no_root_refuses_and_changes_nothing(self):
         env = {k: v for k, v in os.environ.items() if k != "LOCALAPPDATA"}
         result = subprocess.run(["pwsh", "-NoProfile", "-File", str(self.pkg / "install.ps1"), "-Dir", str(self.game)],
@@ -1340,6 +1355,20 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual(backup.read_bytes(), self.runtime("5.0.0"))
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), self.plain("5.4.3"), "nothing was changed")
         self.assertTrue((self.root / "installer" / "nevr-install.txt").exists(), "the record is kept")
+
+    # #1285: the record names its owner; one another installer owns (the launcher writes owner=launcher) is not ours to undo.
+    def test_uninstall_leaves_a_record_another_installer_owns_untouched(self):
+        self.set_package(self.plain("5.4.3"))
+        self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
+        record = self.root / "installer" / "nevr-install.txt"
+        self.assertIn("owner=nevr-install", record.read_text().splitlines(), "the install writes its owner")
+        record.write_text(record.read_text().replace("owner=nevr-install", "owner=launcher"))
+        before = {p.name: p.read_bytes() for p in self.game.iterdir()}
+        undone = self.ps("uninstall.ps1", "-Dir", str(self.game))
+        self.assertNotEqual(undone.returncode, 0, self.output(undone))
+        self.assertIn("owned by launcher", self.output(undone))
+        self.assertEqual({p.name: p.read_bytes() for p in self.game.iterdir()}, before, "the game folder is untouched")
+        self.assertTrue(record.exists(), "the record stays")
 
     def test_uninstall_refuses_a_backup_that_is_a_runtime(self):
         backup = self.poison_the_backup()

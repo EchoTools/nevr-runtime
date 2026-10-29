@@ -25,8 +25,7 @@ party behavior. Android supplies its own loader, game ABI, hook installation, lo
 configuration discovery and socket adapter, and the original Oculus loader stays available to
 the game.
 
-Scope is the client. The dedicated server, `src/legacy/` and production server deployment are
-out of scope.
+Scope is the client. The dedicated server and production server deployment are out of scope.
 
 ## What the Quest target is today
 

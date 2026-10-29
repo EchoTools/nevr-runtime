@@ -1,7 +1,7 @@
 // #1094 fixture: a plugin that reads the level from its init, per-frame and state-change contexts, keeps the
 // last one it saw in each, and logs the level on every state change through the host log.
 
-#include "extension/plugin_interface.h"
+#include "nevr/plugin_interface.h"
 
 #include <cstddef>
 #include <cstdio>

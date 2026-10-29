@@ -1,6 +1,6 @@
 # ADR 0012: the install folder is static; nEVR's runtime, plugins and state live in `%LOCALAPPDATA%\nevr\echovr`
 
-Status: proposed (#575, tracking issue #799). Of the "Order of work", step 2 (the target split) is built, and of step 5 the root, the one-time move and the resolution of the sign-in cache, `logs\`, `crashes\` and the caches (`core/nevr_root.h`, `lifecycle/nevr_root_move.cpp`); nothing else in the "Decision" section is. ADR 0010 and ADR 0011 are accepted and
+Status: proposed (#575, tracking issue #799). Of the "Order of work", steps 2 (the target split), 3 (the host verifies the runtime and stops the game without it) and 4 (the runtime and the plugins load from the root; the installer and `NEVR_ROOT`) are built, and of step 5 the root, the one-time move (of the sign-in cache, the nEVR logs, the cosmetic packages and the plugins) and the resolution of the sign-in cache, `logs\`, `crashes\` and the caches (`core/nevr_root.h`, `lifecycle/nevr_root_move.cpp`); nothing else in the "Decision" section is. ADR 0010 and ADR 0011 are accepted and
 neither is superseded by this record. **It amends ADR 0008 (`0008-bugsplat-host-and-nevr-runtime.md`) in three places:** `nevr-runtime.dll`
 loads from the root, not from the directory of `BugSplat64.dll`; a refused or missing `nevr-runtime.dll` stops the game, where ADR 0008
 lets it run without the runtime; and the host's log gains a `versions` event. "Relation to other records" says which text of ADR 0008 each replaces. What exists today is named
@@ -14,9 +14,9 @@ The game's install folder holds things that change and things that are secret, n
 
 - the runtime is `nevr-runtime.dll`, loaded by the host `BugSplat64.dll` from the directory of `BugSplat64.dll` (ADR 0008 in `0008-bugsplat-host-and-nevr-runtime.md`, "The tree today"),
   so a runtime fix replaces a file in the install folder;
-- plugins load from a `plugins/` directory next to the game binary (`src/runtime/ext/plugin_loader.cpp`);
-- `config.yaml` is found in `_local` next to the game module and one and two parents up, or beside the `-config`/`-config-path` file
-  (`FindNevrConfigYamlPath` in `src/runtime/lifecycle/service_config.cpp`);
+- plugins load from `plugins\` in the root (`LoadPlugins` in `src/runtime/ext/plugin_loader.cpp`); they used to load from a `plugins/` directory next to the game binary;
+- `config.yaml` is read from the nEVR root, or from the file `-config-file` names; the `_local` copies beside the game module are
+  never read (`nevr_config_yaml::Choose` in `src/runtime/lifecycle/config_yaml_choice.h`);
 - the sign-in cache `.credentials.json` is chosen among the same `_local` directories (`SelectCredentialCacheLocation` in
   `src/core/auth_token.h`);
 - the log and crash record are written under `%LOCALAPPDATA%\EchoVR\logs`, the original game's own folder
@@ -113,8 +113,13 @@ before a signed `nevr-runtime.dll` exists (step 3's prerequisite).
 
 ### Where state resolves
 
-- `nevr-runtime.dll` and `plugins\` resolve under the root. The plugin directory filter of ADR 0010 follows the plugin directory.
-- `config.yaml` is the one in the folder of the `-config` or `-config-path` file when one is given, and otherwise the root's.
+- `nevr-runtime.dll` and `plugins\` resolve under the root. The plugin directory filter of ADR 0010 follows the plugin directory. With no
+  `%LOCALAPPDATA%` there is no plugin directory: every configured plugin fails with that reason (an `[NEVR.PLUGIN]` Error line and the entry's `error` in the
+  login's plugin report) and the game folder is never searched.
+- `config.yaml` is the file `-config-file <file>` names when it is given, and otherwise the root's. Nothing else is searched. A
+  `-config-file` that names no readable file ends the run with exit code 64. A `_local\config.yaml` beside the game module is never
+  read: the first one found is copied into the root when the root has none, and ignored with a warning when it has one; the old file
+  is left as it is and nothing is written in the game folder.
 - **Clients and servers:** one `.credentials.json` at the root (#574's decision), the sign-in cache of the account on that machine;
   a client or a server launched with a `-config` elsewhere keeps its login at the root as well. A dedicated server signs in the way a
   client does, by token, from the same cache (`SelectCredentialCacheLocation` takes only the executable's directory); there is no server-only cache
@@ -134,16 +139,18 @@ says when an override was ignored. The runtime's own state paths (`core/nevr_roo
 On the first run that finds the old layout, the runtime moves, and logs every file it moves or leaves:
 
 - from the install's `_local` directories: `.credentials.json`, nearest first, through the protected write the cache is saved with
-  (`core/credential_write.h`), read back before the old file is removed. `config.yaml` is not moved (KNOWN-WRONG #1255: the root is not
-  among the places it is read), and a `-config` folder's own `config.yaml` never is: it stays where it is, and the rule of "Where state resolves"
+  (`core/credential_write.h`), read back before the old file is removed. `config.yaml` is not moved by this step (the config choice copies a
+  `_local` one into the root once, `nevr_config_yaml::Resolve`), and a `-config` folder's own `config.yaml` never is: it stays where it is, and the rule of "Where state resolves"
   finds it there. A cache the move could not take (or whose root path does not fit the ANSI code page) is still read, and written back where it is,
   until a later run moves it;
 - from `%LOCALAPPDATA%\EchoVR\logs`: nEVR's own files, which are the run logs the built-in filter writes (`BuildLogFilePath` in
   `builtin_filter.cpp`, whose prefix is configurable) and `nevr-crash-<run id>.txt` (`PrepareCrashRecordPath`), never the game's own.
   The move recognises them by the names those writers use. That list is `nevr-*.jsonl` and `nevr-*.log` (the run log) and `nevr-crash-*.txt` (the crash
   record), moved to the root's `logs\`;
-- from `%LOCALAPPDATA%\EchoVR\cosmetics\v1\packages`: every file, the downloaded cosmetic packages, moved to the root's `cosmetics\v1\packages`.
-  `MOVED-TO-NEVR-ROOT.txt` is left in each of these two folders as well as in `_local`.
+- from `%LOCALAPPDATA%\EchoVR\cosmetics\v1\packages`: every file, the downloaded cosmetic packages, moved to the root's `cosmetics\v1\packages`;
+- from the `plugins\` folder next to `echovr.exe`: every file at the top of it (a plugin DLL, its dependencies and its data files), moved to the root's `plugins\`
+  before the plugin pass runs. A subfolder is not a plugin file and is left. A plugin placed there is found again in the root, and the log line says where it went.
+  The plugins move leaves no file behind: the game folder holds nothing of ours but the host.
 
 The credentials move first, so a player who updates keeps their login. The move never overwrites a file already in the root, is
 safe to run twice, and leaves a file in place, with a log line, when it cannot move it. Nothing is deleted that was not moved. When
@@ -151,7 +158,8 @@ it has moved anything out of a `_local` directory, it writes `MOVED-TO-NEVR-ROOT
 can see why that folder is empty.
 
 The uninstaller puts back what the move took: it copies `.credentials.json` from the root into the `_local` folder that holds a marker (never over a file there) and sets
-`MOVED-TO-NEVR-ROOT.txt` aside as `MOVED-TO-NEVR-ROOT.txt.undone-<timestamp>`, and leaves the root as it is, so uninstalling and then installing a pre-split release keeps the login.
+`MOVED-TO-NEVR-ROOT.txt` aside as `MOVED-TO-NEVR-ROOT.txt.undone-<timestamp>`, and leaves the root as it is, so uninstalling and then installing a pre-split release keeps the login. It does not put plugins back: they stay in the root's `plugins\`, and a pre-split
+release, which reads only `plugins\` beside `echovr.exe`, finds none until they are copied there.
 
 ### Updating only the host, and going back
 

@@ -9,7 +9,7 @@
 #include <string_view>
 
 #include "core/logging.h"
-#include "nevr_common.h"
+#include "nevr/pc/nevr_common.h"
 #include "runtime/hook/patching.h"
 #include "runtime/log/symcache.h"
 #include "runtime/patch/invite_choice_hook.h"
@@ -78,13 +78,9 @@ void ObserveMetric(std::uint64_t data, std::uint64_t length) {
     Log(EchoVR::LogLevel::Info, "%s", nevr_invite::NotSentLine(plan.skip, plan.code_len).c_str());
     return;
   }
-  if (plan.op == nevr_invite::Op::Resolve) {
-    // A typed code goes to the invite service (D1b). It writes the request line, or the line that says why nothing was sent.
-    nevr_invite_service::Submit(plan);
-    return;
-  }
-  // A create is only planned until the menu can show its result (D2): sending it now would make a code nobody sees.
-  Log(EchoVR::LogLevel::Info, "%s", nevr_invite::PlannedLine(plan, std::string()).c_str());
+  // A typed code or a create goes to the invite service (D1b). It writes the request line, or the line that says why nothing
+  // was sent; the answer is written into the menu by nevr_invite_apply::OnFrame (D2).
+  nevr_invite_service::Submit(plan);
 }
 
 std::uint64_t SubmitHook(std::uint64_t data, std::uint64_t length, std::uint64_t arg3, std::uint64_t arg4) {

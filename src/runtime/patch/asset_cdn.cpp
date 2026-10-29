@@ -28,7 +28,7 @@
 #include "core/hooking.h"
 #include "core/logging.h"
 #include "runtime/log/security_diagnostics.h"
-#include "nevr_common.h"      // N97: the one ValidatePrologue
+#include "nevr/pc/nevr_common.h"      // N97: the one ValidatePrologue
 #include "runtime/hook/addresses.h"
 
 using json = nlohmann::json;

@@ -28,7 +28,7 @@ and their ordinals, `DetoursExportPlaceholder` at ordinal 1, and no import of
 are exported. `just verify` runs it on the built DLL. A PE export table carries no
 types, so signatures and calling conventions are not covered.
 
-Export ownership, from the callers in the repository, `plugins/` and `src/extension/`:
+Export ownership, from the callers in the repository, `sdk/` and `src/extension/`:
 
 | Export | Caller | Owner |
 | --- | --- | --- |
@@ -36,7 +36,7 @@ Export ownership, from the callers in the repository, `plugins/` and `src/extens
 | `DetoursExportPlaceholder` | suspended-process loaders | host |
 | `MiniDumpWriteDump` | none in the game binary; compatibility export | host |
 | `NEVR_SetGameModule` | an external launcher | host |
-| `NEVR_RegisterResourceOverride`, `NEVR_ResetResourceOverrides`, `NEVR_DeregisterResourceOverrides` | plugins, through `plugins/common/include/resource_registry.h` | runtime; the host forwards |
+| `NEVR_RegisterResourceOverride`, `NEVR_ResetResourceOverrides`, `NEVR_DeregisterResourceOverrides` | plugins, through `sdk/include/nevr/pc/resource_registry.h` | runtime; the host forwards |
 | `NEVR_GetUPnPConfig`, `NEVR_ScheduleReturnToLobby` | no caller in the repository | runtime; the host forwards |
 | `platform_compat_*`, `token_auth_*`, `TokenAuth_*` | `src/runtime/lifecycle/boot.cpp` and `test_token_auth` inside one image | runtime |
 
@@ -225,7 +225,7 @@ What the rendezvous leaves outside the runtime:
 - On native Windows the runtime's vectored handler and console handler register at the
   wrapper's entry. A fault before it is handled by the game's filter and the host's
   minidump. N82 says only that no handler other than the one in `crash_recovery.cpp` acts
-  on `EXCEPTION_BREAKPOINT`; other vectored handlers exist (`plugins/common/include/safe_memory.h`
+  on `EXCEPTION_BREAKPOINT`; other vectored handlers exist (`sdk/include/nevr/pc/safe_memory.h`
   adds one) and return `EXCEPTION_CONTINUE_SEARCH` for it. The host registers none.
 
 ### The tree today
@@ -255,7 +255,7 @@ outcome shares exit code 78. A rejection at attach (a bad image, a changed
 prologue, a failed hook install) installs nothing and the game runs unmodified.
 
 Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
-(`src/extension/plugin_interface.h`) "host" is the runtime.
+(`sdk/include/nevr/plugin_interface.h`) "host" is the runtime.
 
 ## Consequences
 

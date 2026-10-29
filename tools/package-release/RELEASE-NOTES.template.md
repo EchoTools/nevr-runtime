@@ -32,7 +32,7 @@ Commit `@COMMIT@`.
   (the core installer), which checks the signed release manifest, backs up
   the original `BugSplat64.dll` with a timestamp, renames a legacy `dbgcore.dll` aside and puts both new DLLs in; `uninstall.ps1`
   restores both. Nothing is deleted.
-@IF_NOAPK@- **Dedicated server:** copy `echovr_server.exe` next to `echovr.exe` and write `_local\config.yaml`; the zip's
+@IF_NOAPK@- **Dedicated server:** copy `echovr_server.exe` next to `echovr.exe` and write `%LOCALAPPDATA%\nevr\echovr\config.yaml`; the zip's
 @IF_NOAPK@  `README.txt` has the command and the smallest working config.
 @IF_APK@- **Quest:** uninstall the old version first; this build is signed with the new key. Then `adb install @APK@`.
 

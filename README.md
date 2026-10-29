@@ -20,7 +20,7 @@ nEVR is a community project, built on other people's work and tested by the peop
 
 ### Projects
 
-- **[Xenomega](https://github.com/Xenomega)**: [EchoRelay](https://github.com/Xenomega/EchoRelay), a reimplementation of Echo VR's web services and dedicated game servers. The frozen v1 game server code in `src/legacy/` was written for its ServerDB, and the legacy message translation in `docs/reference/legacy-translator.md` is read from its documentation.
+- **[Xenomega](https://github.com/Xenomega)**: [EchoRelay](https://github.com/Xenomega/EchoRelay), a reimplementation of Echo VR's web services and dedicated game servers. The legacy message translation in `docs/reference/legacy-translator.md` is read from its documentation.
 - **kfc**: Helped write a lot of EchoRelay.
 - **[Dualgame](https://github.com/Dualgame)**: [echo-symbols](https://github.com/Dualgame/echo-symbols), the recovered symbol names this repo pulls at a pinned commit for its log symbol cache, and [echovr-modkit](https://github.com/Dualgame/echovr-modkit) with its [EchoRelay fork](https://github.com/Dualgame/EchoRelay), which back invite codes and the early-quit lockout and which `docs/engine/early-quit.md` and the invite-code design (#906) draw on.
 - **[marshmallow-mia](https://github.com/marshmallow-mia)**: The Echo VR Linux port, the [Echo VR installer](https://github.com/marshmallow-mia/Echo-VR-Installer) (PC and Quest) and [EchoVR_Launcher](https://github.com/marshmallow-mia/EchoVR_Launcher) (Windows and Linux). Reported #133 to #137, #495, #496, #511 to #513 and #719, and wrote the merged fixes #138 to #141, #500, #502, #514 to #516 and #721. Tested nevr-runtime in #nevr-runtime-testing.
@@ -202,12 +202,10 @@ are inside the prefix (`<prefix>/drive_c/users/<user>/AppData/Local`).
 ### In `_local`
 
 `_local` is searched as `<game folder>\_local`, then `<game folder>\..\_local`, then `<game folder>\..\..\_local` (the
-stock install keeps it beside `bin`). Only `config.yaml` also looks in the directory of a path named by `-config` or `-config-path`, and
-looks there first.
+stock install keeps it beside `bin`). A `config.yaml` there is never read; see `config.yaml` in the nEVR root below.
 
 | Path | What it is | Code |
 | --- | --- | --- |
-| `_local\config.yaml` | Every nEVR setting: service addresses and keys, the `plugins:` list, arena rules. A missing file is a warning and a defaults-only run (KNOWN-WRONG #1254: a server with no file and no cached sign-in never stops); a malformed one stops a dedicated server. | `FindNevrConfigYamlPath` in `src/runtime/lifecycle/service_config.cpp` |
 | `_local\config.json` | Optional. Only the keys the stock engine reads. | `LoadEarlyConfig` in `src/runtime/lifecycle/config.cpp` |
 | `_local\r14logs\*.log` | The game's own log. The runtime only reads the newest, relative to the working directory. | `src/runtime/lifecycle/state_machine.cpp` |
 
@@ -217,13 +215,15 @@ looks there first.
 | --- | --- | --- |
 | `logs\nevr-bootstrap.jsonl` | The host's own log: what it decided at attach, and its crash-dump records. Falls back to `%TEMP%\nevr\echovr\logs`, then the directory of `BugSplat64.dll`. | `kLogsSubdirectory`, `kBootstrapLogName` in `src/runtime/host/host_paths.h` |
 | `crashes\nevr-<pid>-<n>.dmp` | A minidump written by the host's crash capture, with the same fallbacks (`%TEMP%\nevr\echovr\crashes`, then the directory of `BugSplat64.dll`). The game's crash handler reaches it through the exported `BugSplat_createReport` in `src/runtime/host/minidmp_sender_exports.cpp`. | `kCrashesSubdirectory` in `src/runtime/host/host_paths.h`; `CrashCapture::Capture` in `src/runtime/host/crash_capture.cpp` |
+| `config.yaml` | Every nEVR setting: service addresses and keys, the `plugins:` list, arena rules. Read from the file `-config-file <file>` names, else from this folder; nothing else is searched. A `-config-file` that names no readable file ends the run with exit code 64 and one line on standard error. With no file the run uses the built-in defaults and logs `no config.yaml found; searched: <path>` (KNOWN-WRONG #1254: a server with no file and no cached sign-in never stops); a malformed file stops a dedicated server. A `config.yaml` in `<game folder>\_local`, `..\_local` or `..\..\_local` is never read: when this folder has none, the first of those is copied here once and the old file is left as it is; when this folder has one, the old file is ignored with a warning. | `nevr_config_yaml::Choose` in `src/runtime/lifecycle/config_yaml_choice.h`; `nevr_config_yaml::Resolve` in `src/runtime/lifecycle/config_yaml_source.cpp`; `NevrCfg` in `src/runtime/lifecycle/service_config.cpp` |
 | `.credentials.json` | The cached refresh token and identity (the access token is never written), one per machine for clients and servers alike. A write goes to `.credentials.json.tmp` first, then replaces the cache. The first run moves a cache out of `<game folder>\_local`, `..\_local` or `..\..\_local` (the nearest wins) through the same protected write, into a temp file of its own, and installs it only when the root has no cache (a cache already there is never replaced or deleted); a cache the move could not take is still read, and written back where it is, until a later run moves it. Without `LOCALAPPDATA`, or when the root's path does not fit the ANSI code page, the cache stays in the first of those three that holds a `.credentials.json`, else the first that holds a `config.yaml`, else `<game folder>\_local`. | `SelectCredentialCacheLocation` in `src/core/auth_token.h`; `TempPathFor`, `UniqueTempPathFor` and `InstallCacheIfAbsent` in `src/core/credential_write.h`; `MoveCredentials` in `src/runtime/lifecycle/nevr_root_move.cpp` |
 | `cache\<sha256>.blob`, `cache\index.json` | The content-addressed asset cache: the bytes under their own SHA-256, and the index that says which blob stands in for which resource. A write in progress is `<sha256>.<pid>.<tick>.tmp`. The cache is size-capped and evicts blobs the index does not name. Without `LOCALAPPDATA` there is no cache directory: the cache is disabled and the runtime logs `[NEVR.RESOURCE] cache disabled reason=no cache directory (LOCALAPPDATA unset)`. | `src/runtime/patch/asset_cache.h`, `DefaultDir` in `src/runtime/patch/asset_cache.cpp` |
 | `logs\nevr-<timestamp>.jsonl` | The main run log (the built-in filter's output). Rotated by size and age; the newest `rotate_keep` files are kept. Without `LOCALAPPDATA` it is `logs\` beside the game's executable. The `file_dir` setting of the filter config replaces the folder in both cases. | `GetDefaultLogDir`, `BuildLogFilePath` in `src/runtime/log/builtin_filter.cpp` |
 | `logs\nevr-crash-<run id>.txt` | The crash record: the `[NEVR.CRASH]` lines, written only once a crash path is entered. Without `LOCALAPPDATA` (or when its value is `MAX_PATH` characters or longer) it is `logs\nevr-crash-<run id>.txt` beside the game's executable. Neither case creates the `logs` folder: if it does not exist the file is not written. | `PrepareCrashRecordPath` in `src/runtime/lifecycle/crash_recovery.cpp` |
+| `plugins\` | Plugin DLLs, their dependencies and data files. A plugin loads only when the ordered `plugins:` list in `config.yaml` names it; a DLL the list does not name is ignored. Without `LOCALAPPDATA` there is no plugin directory: every configured plugin fails with `the plugin directory cannot be resolved` and nothing is searched in the game folder. The first run moves the files of a `plugins\` folder beside `echovr.exe` here. | `LoadPlugins` in `src/runtime/ext/plugin_loader.cpp`; `PluginsDir` in `src/core/nevr_root.h`; the plugins source in `Run` in `src/runtime/lifecycle/nevr_root_move.cpp` |
 | `cosmetics\v1\packages\` | Downloaded cosmetic packages (client only). The folder is created on demand; without `LOCALAPPDATA`, or if the creation fails, the error is logged and no package is stored. | `GetCacheDir` in `src/runtime/patch/asset_cdn.cpp` |
 
-On the first run the runtime moves files it finds in the old places (the previous log, crash record, cosmetics and sign-in cache locations) into this folder and leaves `MOVED-TO-NEVR-ROOT.txt` in each old folder it emptied something from.
+On the first run the runtime moves files it finds in the old places (the previous log, crash record, cosmetics, plugins and sign-in cache locations) into this folder and leaves `MOVED-TO-NEVR-ROOT.txt` in each old folder under `%LOCALAPPDATA%` and `_local` it emptied something from. The plugins folder beside `echovr.exe` gets no such file: nothing of ours is written to the game folder.
 
 ## What gets built
 
@@ -255,7 +255,8 @@ Arguments the runtime reads from the game's command line (`--name` works as well
 | `-headless` | Run with no window: the headless gates are applied, as `-server` applies them |
 | `-noovr` | Run with OVR (the headset runtime) turned off, the game's own flag |
 | `-no-console` | Disable console window creation |
-| `-config`, `-config-path` | Path to a JSON file the game loads instead of `_local/config.json`; `config.yaml` is looked for in the same directory |
+| `-config` | Path to a JSON file the game loads instead of `_local/config.json`; it has no effect on where `config.yaml` is read |
+| `-config-file` | Path to the `config.yaml` to read instead of the one in the nEVR root; a file that is missing or cannot be opened ends the run with exit code 64 |
 | `-region` | Set the matchmaking region |
 | `-serverregion` | Set the server fleet region |
 | `-no-exit-on-error` | Keep a server running after a game service disconnect (default: exit) |
@@ -284,33 +285,36 @@ speaks plaintext to a local proxy, and the proxy terminates TLS outbound.
 
 ### Plugins
 
-Optional, discovered from a `plugins/` directory next to the game binary and
-loaded via the `NvrPluginInterface` lifecycle.
+Optional, loaded from `plugins\` in the nEVR root (`%LOCALAPPDATA%\nevr\echovr`, ADR 0012) via the `NvrPluginInterface` lifecycle.
+A plugin loads only when the ordered `plugins:` list in `config.yaml` names it; a DLL the list does not name is ignored
+(`LoadPlugins` in `src/runtime/ext/plugin_loader.cpp`). A `plugins\` folder left beside `echovr.exe` by an earlier release is moved into the root on the first run.
 
-| Plugin | Output | Purpose |
-| ------ | ------ | ------- |
-| `example` | `nevr_example.dll` | Reference implementation for new plugin authors |
-| `debug-lockout` | `nevr_debug_lockout.dll` | Debug instrumentation for early-quit lockout state |
+A plugin builds against the plugin SDK in `sdk/`: the header-only CMake target
+`nevr::plugin_sdk`, with the plugin C ABI (`nevr/plugin_interface.h`) and the
+plugin-side helpers. `cmake -S sdk -B <dir> && cmake --install <dir> --prefix <prefix>`
+installs it for `find_package(NevrPluginSdk <api> CONFIG)`; FetchContent with
+`SOURCE_SUBDIR sdk` adds it from a source tree. `nevr/*.h` builds for PC and Quest;
+`nevr/pc/*.h` is Windows only.
 
 Gameplay and tooling plugins live in the separate `nevr-runtime-plugins`
-repository. `log-filter` source remains in `plugins/log-filter/`, but it is not
-built or packaged; the loader rejects `log_filter.dll` because its filter is
-already built into the runtime.
+repository. The loader rejects `log_filter.dll`, because its filter is built
+into the runtime.
 
 ### Other targets
 
 - `src/nevr_api/` — protobuf, generated into `gen/cpp/` (`just proto`)
 - `src/abi/` → `libnevr_abi.a` — the echovr.exe ABI surface: game types, function
-  pointers, symbol IDs, CSymbol64 hashing
+  pointers, symbol IDs
 - `src/core/` → `libnevr_core.a` — our own primitives: logging, globals, base64,
   hooking, auth-token model, `pch.h` (links `nevr_abi`)
-- `src/extension/` — header-only published C ABI for third-party plugins/modules
+- `sdk/` → `nevr::plugin_sdk` — the plugin SDK: the plugin C ABI, the CSymbol64 hash
+  and the plugin-side helpers, header-only
+- `src/extension/` — header-only published C ABI for the static modules and the scripting host
 - `src/launcher/` → `echovr_server.exe`, a `CreateProcess` wrapper spawning
   `echovr.exe -server -headless -no-console` (a dedicated game server)
 - `src/libovr-stub/` → `LibOVRPlatform64_1.dll` — Oculus platform stub, built
   separately from the community beta package
 - `src/quest/` — separate Android/Quest arm64 target
-- `src/legacy/` — **frozen** v1 implementations, self-contained; do not modify
 
 ## Building
 
@@ -342,11 +346,11 @@ From `build/mingw-release/bin/`:
 | `BugSplat64.dll` | game directory (replaces the crash reporter; the host) |
 | `nevr-runtime.dll` | the nEVR root, `%LOCALAPPDATA%\nevr\echovr` (the runtime; `BugSplat64.dll` stays in the game directory) |
 | `echovr_server.exe` | game directory, alongside `echovr.exe` |
-| Optional plugin DLLs | `plugins/` next to the game binary |
+| Optional plugin DLLs | `plugins\` in the nEVR root, `%LOCALAPPDATA%\nevr\echovr` |
 
 The staged server package and its `.tar.zst` carry an empty `plugins/` directory
 for optional operator plugins; the Windows zip (`nevr-runtime-v<ver>-windows.zip`)
-has no entry for it, so create `plugins/` next to the game binary. Plugin DLLs are
+has no entry for it, so create `plugins\` in the nEVR root (the `plugins/` of the server package is not read). Plugin DLLs are
 built separately and are not bundled. The community beta install guide covers installing the game client and
 uses `BugSplat64.dll` and `nevr-runtime.dll`.
 
@@ -359,11 +363,9 @@ src/runtime/   nevr-runtime.dll — hooks, modes, crash recovery, gameserver; sr
 src/modules/       statically linked module implementations (platform-compat, token-auth)
 src/abi/           libnevr_abi.a  — the echovr.exe ABI surface
 src/core/          libnevr_core.a — our own primitives (links nevr_abi)
-src/extension/     header-only C ABI published to third-party DLLs
+src/extension/     header-only C ABI of the static modules and the scripting host
 src/nevr_api/      protobuf target
-src/legacy/        FROZEN v1
-src/legacy-compat/ two forwarding headers; frozen legacy needs them
-plugins/           optional plugins
+sdk/               the plugin SDK (nevr::plugin_sdk), header-only
 tools/             build and verify tooling
 tests/             Go system suites (not part of `just verify`)
 extern/            submodules: minhook, breakpad, lss
@@ -398,17 +400,3 @@ Submodules in `extern/`: `minhook`, `breakpad`, `lss`.
 | **nevr-runtime-plugins** | Gameplay and tooling plugins |
 | **nakama** | The community game service (echovrce) |
 | **revault** | Reverse-engineering data warehouse for the game binaries |
-
-## Local configuration
-
-The root `CMakeLists.txt` does not include `cmake/local.cmake` automatically.
-To use that file, enable its include in `CMakeLists.txt`; then a local
-post-build command can copy the DLL into a game directory:
-
-```cmake
-set(GAME_DIR "/path/to/echovr/bin/win10")
-set(NEVR_ROOT_DIR "/path/to/the/nevr/root")  # %LOCALAPPDATA%\nevr\echovr of the Windows user (a Wine prefix has its own)
-add_custom_command(TARGET nevr_runtime POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:nevr_runtime> "${NEVR_ROOT_DIR}/nevr-runtime.dll"
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:nevr_host> "${GAME_DIR}/BugSplat64.dll")
-```

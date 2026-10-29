@@ -19,9 +19,9 @@
 #include "core/device_auth_flow.h"
 #include "core/signin_dialog_text.h"
 #include "core/signin_dialog_lifecycle.h"
-#include "auth_token_refresh.h"
+#include "core/auth_token_refresh.h"
 #include "core/bounded_retry.h"
-#include "nevr_curl.h"
+#include "core/nevr_curl.h"
 #include "runtime/log/url_diagnostics.h"
 #include "runtime/log/security_diagnostics.h"
 
@@ -259,9 +259,6 @@ std::string DeviceAuth::HttpPostPublic(const std::string& url, const std::string
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, nevr::CurlWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
-#ifdef NEVR_INSECURE_SKIP_TLS_VERIFY
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-#endif
 
     CURLcode res = curl_easy_perform(curl);
     if (httpCode != nullptr && res == CURLE_OK) curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, httpCode);

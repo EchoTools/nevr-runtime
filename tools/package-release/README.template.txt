@@ -39,8 +39,7 @@ Running a dedicated server
   It starts echovr.exe -server -headless -no-console from its own folder and passes any arguments on. A server
   takes the game service's addresses and public API key from the build, as a player's game does (issue #843),
   so its config file needs only its own account.
-  Create ...\ready-at-dawn-echo-arena\_local\config.yaml (KNOWN-WRONG #1255: the runtime does not read it from
-  the nevr folder). The smallest one that works:
+  Create %LOCALAPPDATA%\nevr\echovr\config.yaml (the nEVR folder install.ps1 uses). The smallest one that works:
 
        auth:
          password: "<the password of your server account>"

@@ -33,7 +33,7 @@ Each claim carries a grade:
   on the other by shape.
 - **L**: inferred, not read.
 
-CSymbol64 hashes (`src/abi/symbol_hash.h`) were recomputed from the names; each one given here matched the
+CSymbol64 hashes (`sdk/include/nevr/symbol_hash.h`) were recomputed from the names; each one given here matched the
 constant in the binary.
 
 ## 1. The three messages
