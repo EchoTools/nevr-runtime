@@ -37,6 +37,14 @@ std::string Float(float value) {
   return buffer;
 }
 
+/// Nine significant digits: the GPU score sits next to the selector's thresholds (4.5, 6, 8, 10), and "%g"'s six would
+/// print a score just below one (4.4999999) as the threshold itself.
+std::string Double(double value) {
+  char buffer[32];
+  std::snprintf(buffer, sizeof(buffer), "%.9g", value);
+  return buffer;
+}
+
 const char* Bool(bool value) { return value ? "true" : "false"; }
 
 constexpr const char* kUnavailable = "unavailable";
@@ -140,6 +148,7 @@ Snapshot ReadSnapshot(const MemoryReader& reader, std::uintptr_t imageBase, cons
     }
   }
   s.gpuVendor.ok = ReadValue(reader, Resolve(imageBase, kGpuVendorVa), &s.gpuVendor.value);
+  s.gpuScore.ok = ReadValue(reader, Resolve(imageBase, kGpuScoreVa), &s.gpuScore.value);
   std::uint64_t vramBytes = 0;
   if (ReadValue(reader, Resolve(imageBase, kGpuVramVa), &vramBytes)) {
     s.vramMb.ok = true;
@@ -195,6 +204,7 @@ std::vector<std::pair<std::string, std::string>> Fields(const Snapshot& s) {
 
   text("gpu", s.gpu);
   integer("gpu_vendor", s.gpuVendor.ok, s.gpuVendor.value);
+  f.emplace_back("gpu_score", s.gpuScore.ok ? Double(s.gpuScore.value) : std::string(kUnavailable));
   integer("vram_mb", s.vramMb.ok, static_cast<long long>(s.vramMb.value));
   f.emplace_back("gpu_driver", Token(s.gpuDriver));
   text("headset", s.headset);
