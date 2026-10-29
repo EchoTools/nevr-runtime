@@ -152,11 +152,13 @@ class ServerTeamSizeWiring(unittest.TestCase):
         boot = BOOT.read_text(encoding="utf-8")
         without = boot.replace(CALL, "")
         trigger = without.index(";", without.index("runtime bootstrap trigger=%s")) + 1
-        self.assertTrue(order_problems_of(without[:trigger] + "\n  " + CALL + without[trigger:]))
         config = without.index("NevrCfgLogBuiltinDefaultsTaken();")
-        self.assertTrue(order_problems_of(without[:config] + CALL + "\n    " + without[config:]))
         plugins = without.index("LoadPlugins();") + len("LoadPlugins();")
-        self.assertTrue(order_problems_of(without[:plugins] + "\n  " + CALL + without[plugins:]))
+        for moved in (without[:trigger] + "\n  " + CALL + without[trigger:],
+                      without[:config] + CALL + "\n    " + without[config:],
+                      without[:plugins] + "\n  " + CALL + without[plugins:]):
+            self.assertTrue(order_problems_of(moved))
+            self.assertTrue(boot_problems(moved), "boot_problems reports a moved call")
 
     def test_a_lambdas_return_or_a_return_on_another_condition_is_not_a_mode_return(self) -> None:
         self.assertFalse(mode_return("if (!g_isServer) {\n  auto f = [] { return 1; };\n  f();\n}\n"))

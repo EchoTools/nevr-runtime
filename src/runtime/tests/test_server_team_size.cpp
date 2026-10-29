@@ -340,9 +340,22 @@ TEST_F(ServerTeamSize, NothingAskedButAnotherWritersCapIsAFailure) {
   EXPECT_NE(std::string(line).find("in_effect=7 (nothing written; the cap site holds another writer's bytes)"),
             std::string::npos)
       << line;
+  // Not only a cap above 5 without the slot rule: any cap but the game's five, when nothing was asked.
+  Image three;
+  three.cap = CapFor(3);
+  EXPECT_TRUE(nevr_server_team_size::IsFailure(Run(three, 5)));
+  Image sevenWithTheRule;
+  sevenWithTheRule.cap = CapFor(7);
+  sevenWithTheRule.slot = kSlotWrapped;
+  EXPECT_TRUE(nevr_server_team_size::IsFailure(Run(sevenWithTheRule, 5)));
+  Image unknown;
+  unknown.cap[0] ^= 0xFF;
+  const Outcome u = Run(unknown, 5);
+  EXPECT_EQ(u.inEffect, 0u);
+  EXPECT_TRUE(nevr_server_team_size::IsFailure(u));
 }
 
-TEST(ServerTeamSizeCap, TheSizeInEffectIsReadFromTheBytes) {
+TEST(ServerTeamSizeCap,TheSizeInEffectIsReadFromTheBytes) {
   for (uint8_t s = 1; s <= 8; ++s) EXPECT_EQ(nevr_server_team_size::CapInEffect(CapFor(s).data()), uint32_t{s});
   std::vector<uint8_t> uneven = CapFor(6);
   uneven[1] = 7;  // the two immediates disagree
