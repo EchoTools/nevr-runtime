@@ -286,11 +286,6 @@ else()
   message(STATUS "[nevr_runtime] no modules to link (empty)")
 endif()
 
-# Include a local cmake script if it exists
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/local.cmake")
-  # include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/local.cmake")
-endif()
-
 # =============================================================================
 # Code Signing
 # =============================================================================

@@ -549,7 +549,6 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 - **Protobuf**: Generated from BSR (`buf.build/echotools/nevr-api`) via `just proto`. Never edit `.pb.cc`/`.pb.h` in `gen/` directly.
 - **Global state**: CLI flags as globals in `src/core/globals.h`, set in `src/runtime/lifecycle/cli.cpp`.
 - **Naming**: spellings of the project name, log tags, exports, namespaces, config keys and the frozen `Nvr*` plugin ABI are in `docs/standards/naming.md`; `tools/tests/test_naming.py` enforces the `Nvr` freeze and the project-name spellings.
-- **Local overrides**: `cmake/local.cmake` (include currently commented out in root CMakeLists.txt).
 
 ## ReVault — Reverse Engineering Data Warehouse
 
@@ -732,9 +731,8 @@ your seat name, for example `claude-main` or `codex`.
     nothing; any other script that copies a DLL into a game directory is the same kind of writer.
   - `just scenario` and `just scenario-all` (`tools/scenario/run_scenario.py` runs `launch-client.sh`).
   - `just test-system` and `just test-system-verbose` (`tests/system/helpers_test.go`: `deployDLL`
-    writes and `cleanupDLLs` does `os.Remove` under `$EVR_GAME_DIR/bin/win10`; `deployPlugin` is
-    defined and not called). They also start the game: `shutdown_test.go` runs `wine` in
-    `$EVR_GAME_DIR/bin/win10` with `WINEPREFIX=$EVR_GAME_DIR/.wineprefix`. `test-system-short` and
+    writes and `cleanupDLLs` does `os.Remove` under `$EVR_GAME_DIR/bin/win10`). They also start the game:
+    `shutdown_test.go` runs `wine` in `$EVR_GAME_DIR/bin/win10` with `WINEPREFIX=$EVR_GAME_DIR/.wineprefix`. `test-system-short` and
     `test-system-dll` pass `-short`, which skips every test that deploys or starts the game.
     `tests/system/login_test.go` also writes (with
     `NEVR_LIVE_TESTS=1` it runs `wine ./echovr.exe` in `$EVR_GAME_DIR/bin/win10` with `$WINEPREFIX`
@@ -742,10 +740,8 @@ your seat name, for example `claude-main` or `codex`.
     `<copy>/echovr/.wineprefix` for a Go test run).
   - `just generate-combat-overrides` (writes `echovr/bin/win10/_overrides/combat`).
 
-  Not writers: `just test-plugins`, `just test-plugins-verbose` and `just test-plugins-short`
-  (`tests/plugins/plugin_helpers_test.go` defines deploy and cleanup helpers for DLLs and plugin
-  config files, but no test calls them; the plugin tests only read
-  `$EVR_GAME_DIR/bin/win10/_overrides/combat`), `just test-plugins-groundtruth` and
+  Not writers: `just test-plugins`, `just test-plugins-verbose` and `just test-plugins-short` (the plugin
+  tests only read `$EVR_GAME_DIR/bin/win10/_overrides/combat`), `just test-plugins-groundtruth` and
   `just test-auth-groundtruth` (they need no game binary and name no game directory).
   `just test-winvm` deploys into a throwaway rig on the guest VM (`tools/winvm/systest.py`:
   `C:\nevr-systest`) and reads the guest's install (`C:\echovr`) through junctions it makes in the
@@ -1032,9 +1028,8 @@ When something fails, the first act is reading the failing program's **own** log
   repo.
 - **Verify entry point.** `just verify` is the single closed-loop gate, run on main when prepping a release (a PR
   runs the quick check, see "Builds"):
-  `just build`, then a second `cmake --build` whose exit code is read directly (`just build` fails on a
-  failed build, so the second pass confirms the artifact), then `test-auth-unit` and `test-quest-shared`,
-  the Python test suite and source-invariant checks. The Go system suites are
+  `just build` (a plain `cmake --build`, so it exits nonzero when the build fails), then `test-auth-unit` and
+  `test-quest-shared`, the Python test suite and source-invariant checks. The Go system suites are
   separate recipes and are not part of `just verify`.
 
 ---
