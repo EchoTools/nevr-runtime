@@ -458,15 +458,10 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         install = extract_braced_function(source, "void InstallConsoleCtrlHandler(")
         self.assertRegex(install, r"\bInstallGameConsoleHandlerRearmHook\s*\(\s*\)")
 
-    def test_plugins_log_through_the_shared_leveled_logger(self):
-        # Issue #34: each plugin hand-rolled a stderr wrapper (one named Log(), shadowing the host's
-        # structured Log()) or used a levelless PluginLog. All plugins use NEVR_DEFINE_PLUGIN_LOG.
-        for rel in sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "plugins").glob("*/src/*.cpp")):
-            text = strip_comments((ROOT / rel).read_text())
-            if "fprintf(stderr" in text.replace("std::", ""):
-                self.assertIn("NEVR_DEFINE_PLUGIN_LOG", text, f"{rel} writes to stderr without the shared logger")
-            self.assertNotRegex(text, r"static\s+void\s+(Log|PluginLog)\s*\(", f"{rel} hand-rolls a logger")
-        header = (ROOT / "plugins/common/include/plugin_logger.h").read_text()
+    def test_the_shared_plugin_logger_is_leveled(self):
+        # Issue #34: each plugin hand-rolled a stderr wrapper or used a levelless PluginLog. The SDK's
+        # NEVR_DEFINE_PLUGIN_LOG writes one leveled line per call.
+        header = (ROOT / "sdk/include/nevr/plugin_logger.h").read_text()
         for level in ("INFO", "WARNING", "ERROR"):
             self.assertIn(f'"{level}"', header)
 
@@ -474,7 +469,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # Issue #598: a plugin had no way into the host's structured Log(). The context carries the
         # plugin's id and the host's log function, the loader fills both into every context it passes a
         # plugin (init, per-frame, state change), and the shared plugin logger binds to them at init.
-        iface = strip_comments((ROOT / "src/extension/plugin_interface.h").read_text())
+        iface = strip_comments((ROOT / "sdk/include/nevr/plugin_interface.h").read_text())
         self.assertRegex(iface, r"const char\*\s+plugin_id;")
         self.assertRegex(iface, r"NevrLogFn\s+log;")
         loader = strip_comments((ROOT / "src/runtime/ext/plugin_loader.cpp").read_text())
@@ -482,11 +477,8 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertRegex(loader, r"ctx\.plugin_id\s*=")
         self.assertEqual(len(re.findall(r"\bContextFor\(\s*\*?\w+\s*,", loader)), 3,
                          "init, TickPlugins and NotifyPluginsStateChange each pass the plugin its own context")
-        logger = strip_comments((ROOT / "plugins/common/include/plugin_logger.h").read_text())
+        logger = strip_comments((ROOT / "sdk/include/nevr/plugin_logger.h").read_text())
         self.assertRegex(logger, r"binding\.log\s*\(\s*binding\.id\s*,")
-        for rel in ("plugins/example/src/plugin.cpp", "plugins/debug-lockout/src/plugin.cpp"):
-            text = strip_comments((ROOT / rel).read_text())
-            self.assertRegex(text, r"\bPluginLogBind\s*\(\s*ctx\s*\)", f"{rel} never binds to the host log")
 
     def test_broadcaster_hook_entries_are_counted_only_by_hook_liveness(self):
         # Issue #33: mode_patches.cpp kept its own entry counters and a periodic log line that

@@ -14,7 +14,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "abi/symbol_hash.h"
+#include "nevr/symbol_hash.h"
 #include "runtime/patch/invite_choices.h"
 #include "runtime/patch/invite_wizard.h"
 

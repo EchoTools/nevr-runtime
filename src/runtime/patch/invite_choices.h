@@ -19,7 +19,7 @@
 #include <mutex>
 #include <string>
 
-#include "abi/symbol_hash.h"
+#include "nevr/symbol_hash.h"
 #include "runtime/patch/invite_wizard.h"
 
 namespace nevr_invite_choices {

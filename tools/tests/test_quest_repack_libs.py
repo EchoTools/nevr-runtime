@@ -33,7 +33,7 @@ OTHER_ID = "0123456789abcdef0123456789abcdef01234567"
 def note_macro() -> str:
     """The NEVR_DECLARE_SUPPORTED_BUILD_IDS definition, lifted from plugin_interface.h as it is: the header is C++ and
     the bare AArch64 target here has no C++ library to include it with."""
-    lines = (REPO / "src" / "extension" / "plugin_interface.h").read_text().splitlines()
+    lines = (REPO / "sdk" / "include" / "nevr" / "plugin_interface.h").read_text().splitlines()
     start = next(i for i, l in enumerate(lines) if "#define NEVR_DECLARE_SUPPORTED_BUILD_IDS(" in l)
     end = start
     while lines[end].rstrip().endswith("\\"):

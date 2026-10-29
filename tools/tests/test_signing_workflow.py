@@ -371,7 +371,7 @@ class WorkflowStructureTest(unittest.TestCase):
 
     def test_a_tag_that_is_not_vx_y_z_fails_with_one_line(self):
         for tag in ("v5.0", "v5.0.0-beta.1", "v4.0.0-rc.1", "5.0.0", "release-5", "v5.0.0.1", "vx.y.z",
-                    "v05.0.0", "v5.00.0", "v5.0.00", "v5.0.0+x", "v5.0.0-rc.1", "V5.0.0", "v5.0.0 "):
+                    "v05.0.0", "v5.00.0", "v5.0.00", "v5.0.0+x", "v5.0.0-rc.0", "V5.0.0", "v5.0.0 "):
             with self.subTest(tag=tag):
                 rc, out, _, err = self.run_step("build", "release", EVENT="release", TAG=tag,
                                                 GITHUB_REF_TYPE="tag", GITHUB_REF_NAME=tag)

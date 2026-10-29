@@ -537,6 +537,21 @@ TEST(SocialParty, RequestsHaveTheLengthsAndFieldsNakamaReads) {
   EXPECT_EQ(static_cast<std::uint8_t>(frame[16]), 40);
 }
 
+// #396 (presence_local): the publish is the local member's 0x20 header, the JSON length and the game's document.
+TEST(SocialParty, PresenceUpdateIsTheLocalMemberHeaderThenTheDocument) {
+  nevr_social_party::State state;
+  EXPECT_TRUE(state.PresenceUpdate(0x1234, "{}").empty());  // no local account yet: nothing to publish
+  state.SetSelf(1, "");
+  const std::string json = "{\"game_type\":\"echo_arena\",\"joinable\":true}";
+  const auto out = state.PresenceUpdate(0x1234, json);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].symbol, 0x1234u);
+  ASSERT_EQ(out[0].payload.size(), 0x20 + 4 + json.size());
+  EXPECT_EQ(std::memcmp(out[0].payload.data() + 8, nevr_social_party::MemberUuid(1).data(), 16), 0);
+  EXPECT_EQ(static_cast<std::uint8_t>(out[0].payload[0x20]), json.size());
+  EXPECT_EQ(out[0].payload.substr(0x24), json);
+}
+
 TEST(SocialParty, InvitingWithoutAPartyCreatesItFirstThenInvites) {
   nevr_social_party::State state;
   state.SetSelf(100);

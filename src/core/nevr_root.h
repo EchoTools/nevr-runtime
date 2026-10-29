@@ -32,6 +32,7 @@ struct Names<char> {
   static constexpr const char* kCrashes = "crashes";
   static constexpr const char* kCache = "cache";
   static constexpr const char* kCosmetics = "cosmetics\\v1\\packages";
+  static constexpr const char* kPlugins = "plugins";
   static constexpr const char* kCredentials = ".credentials.json";
   static constexpr const char* kMovedMarker = "MOVED-TO-NEVR-ROOT.txt";
   static constexpr const char* kSeparators = "\\/";
@@ -44,6 +45,7 @@ struct Names<wchar_t> {
   static constexpr const wchar_t* kCrashes = L"crashes";
   static constexpr const wchar_t* kCache = L"cache";
   static constexpr const wchar_t* kCosmetics = L"cosmetics\\v1\\packages";
+  static constexpr const wchar_t* kPlugins = L"plugins";
   static constexpr const wchar_t* kCredentials = L".credentials.json";
   static constexpr const wchar_t* kMovedMarker = L"MOVED-TO-NEVR-ROOT.txt";
   static constexpr const wchar_t* kSeparators = L"\\/";
@@ -84,6 +86,11 @@ std::basic_string<C> CacheDir(const std::basic_string<C>& root) {
 template <typename C>
 std::basic_string<C> CosmeticsDir(const std::basic_string<C>& root) {
   return Join(root, Names<C>::kCosmetics);
+}
+
+template <typename C>
+std::basic_string<C> PluginsDir(const std::basic_string<C>& root) {
+  return Join(root, Names<C>::kPlugins);
 }
 
 template <typename C>

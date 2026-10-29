@@ -221,9 +221,10 @@ looks there first.
 | `cache\<sha256>.blob`, `cache\index.json` | The content-addressed asset cache: the bytes under their own SHA-256, and the index that says which blob stands in for which resource. A write in progress is `<sha256>.<pid>.<tick>.tmp`. The cache is size-capped and evicts blobs the index does not name. Without `LOCALAPPDATA` there is no cache directory: the cache is disabled and the runtime logs `[NEVR.RESOURCE] cache disabled reason=no cache directory (LOCALAPPDATA unset)`. | `src/runtime/patch/asset_cache.h`, `DefaultDir` in `src/runtime/patch/asset_cache.cpp` |
 | `logs\nevr-<timestamp>.jsonl` | The main run log (the built-in filter's output). Rotated by size and age; the newest `rotate_keep` files are kept. Without `LOCALAPPDATA` it is `logs\` beside the game's executable. The `file_dir` setting of the filter config replaces the folder in both cases. | `GetDefaultLogDir`, `BuildLogFilePath` in `src/runtime/log/builtin_filter.cpp` |
 | `logs\nevr-crash-<run id>.txt` | The crash record: the `[NEVR.CRASH]` lines, written only once a crash path is entered. Without `LOCALAPPDATA` (or when its value is `MAX_PATH` characters or longer) it is `logs\nevr-crash-<run id>.txt` beside the game's executable. Neither case creates the `logs` folder: if it does not exist the file is not written. | `PrepareCrashRecordPath` in `src/runtime/lifecycle/crash_recovery.cpp` |
+| `plugins\` | Plugin DLLs, their dependencies and data files. A plugin loads only when the ordered `plugins:` list in `config.yaml` names it; a DLL the list does not name is ignored. Without `LOCALAPPDATA` there is no plugin directory: every configured plugin fails with `the plugin directory cannot be resolved` and nothing is searched in the game folder. The first run moves the files of a `plugins\` folder beside `echovr.exe` here. | `LoadPlugins` in `src/runtime/ext/plugin_loader.cpp`; `PluginsDir` in `src/core/nevr_root.h`; the plugins source in `Run` in `src/runtime/lifecycle/nevr_root_move.cpp` |
 | `cosmetics\v1\packages\` | Downloaded cosmetic packages (client only). The folder is created on demand; without `LOCALAPPDATA`, or if the creation fails, the error is logged and no package is stored. | `GetCacheDir` in `src/runtime/patch/asset_cdn.cpp` |
 
-On the first run the runtime moves files it finds in the old places (the previous log, crash record, cosmetics and sign-in cache locations) into this folder and leaves `MOVED-TO-NEVR-ROOT.txt` in each old folder it emptied something from.
+On the first run the runtime moves files it finds in the old places (the previous log, crash record, cosmetics, plugins and sign-in cache locations) into this folder and leaves `MOVED-TO-NEVR-ROOT.txt` in each old folder under `%LOCALAPPDATA%` and `_local` it emptied something from. The plugins folder beside `echovr.exe` gets no such file: nothing of ours is written to the game folder.
 
 ## What gets built
 
@@ -284,27 +285,31 @@ speaks plaintext to a local proxy, and the proxy terminates TLS outbound.
 
 ### Plugins
 
-Optional, discovered from a `plugins/` directory next to the game binary and
-loaded via the `NvrPluginInterface` lifecycle.
+Optional, loaded from `plugins\` in the nEVR root (`%LOCALAPPDATA%\nevr\echovr`, ADR 0012) via the `NvrPluginInterface` lifecycle.
+A plugin loads only when the ordered `plugins:` list in `config.yaml` names it; a DLL the list does not name is ignored
+(`LoadPlugins` in `src/runtime/ext/plugin_loader.cpp`). A `plugins\` folder left beside `echovr.exe` by an earlier release is moved into the root on the first run.
 
-| Plugin | Output | Purpose |
-| ------ | ------ | ------- |
-| `example` | `nevr_example.dll` | Reference implementation for new plugin authors |
-| `debug-lockout` | `nevr_debug_lockout.dll` | Debug instrumentation for early-quit lockout state |
+A plugin builds against the plugin SDK in `sdk/`: the header-only CMake target
+`nevr::plugin_sdk`, with the plugin C ABI (`nevr/plugin_interface.h`) and the
+plugin-side helpers. `cmake -S sdk -B <dir> && cmake --install <dir> --prefix <prefix>`
+installs it for `find_package(NevrPluginSdk <api> CONFIG)`; FetchContent with
+`SOURCE_SUBDIR sdk` adds it from a source tree. `nevr/*.h` builds for PC and Quest;
+`nevr/pc/*.h` is Windows only.
 
 Gameplay and tooling plugins live in the separate `nevr-runtime-plugins`
-repository. `log-filter` source remains in `plugins/log-filter/`, but it is not
-built or packaged; the loader rejects `log_filter.dll` because its filter is
-already built into the runtime.
+repository. The loader rejects `log_filter.dll`, because its filter is built
+into the runtime.
 
 ### Other targets
 
 - `src/nevr_api/` — protobuf, generated into `gen/cpp/` (`just proto`)
 - `src/abi/` → `libnevr_abi.a` — the echovr.exe ABI surface: game types, function
-  pointers, symbol IDs, CSymbol64 hashing
+  pointers, symbol IDs
 - `src/core/` → `libnevr_core.a` — our own primitives: logging, globals, base64,
   hooking, auth-token model, `pch.h` (links `nevr_abi`)
-- `src/extension/` — header-only published C ABI for third-party plugins/modules
+- `sdk/` → `nevr::plugin_sdk` — the plugin SDK: the plugin C ABI, the CSymbol64 hash
+  and the plugin-side helpers, header-only
+- `src/extension/` — header-only published C ABI for the static modules and the scripting host
 - `src/launcher/` → `echovr_server.exe`, a `CreateProcess` wrapper spawning
   `echovr.exe -server -headless -no-console` (a dedicated game server)
 - `src/libovr-stub/` → `LibOVRPlatform64_1.dll` — Oculus platform stub, built
@@ -341,11 +346,11 @@ From `build/mingw-release/bin/`:
 | `BugSplat64.dll` | game directory (replaces the crash reporter; the host) |
 | `nevr-runtime.dll` | the nEVR root, `%LOCALAPPDATA%\nevr\echovr` (the runtime; `BugSplat64.dll` stays in the game directory) |
 | `echovr_server.exe` | game directory, alongside `echovr.exe` |
-| Optional plugin DLLs | `plugins/` next to the game binary |
+| Optional plugin DLLs | `plugins\` in the nEVR root, `%LOCALAPPDATA%\nevr\echovr` |
 
 The staged server package and its `.tar.zst` carry an empty `plugins/` directory
 for optional operator plugins; the Windows zip (`nevr-runtime-v<ver>-windows.zip`)
-has no entry for it, so create `plugins/` next to the game binary. Plugin DLLs are
+has no entry for it, so create `plugins\` in the nEVR root (the `plugins/` of the server package is not read). Plugin DLLs are
 built separately and are not bundled. The community beta install guide covers installing the game client and
 uses `BugSplat64.dll` and `nevr-runtime.dll`.
 
@@ -358,9 +363,9 @@ src/runtime/   nevr-runtime.dll — hooks, modes, crash recovery, gameserver; sr
 src/modules/       statically linked module implementations (platform-compat, token-auth)
 src/abi/           libnevr_abi.a  — the echovr.exe ABI surface
 src/core/          libnevr_core.a — our own primitives (links nevr_abi)
-src/extension/     header-only C ABI published to third-party DLLs
+src/extension/     header-only C ABI of the static modules and the scripting host
 src/nevr_api/      protobuf target
-plugins/           optional plugins
+sdk/               the plugin SDK (nevr::plugin_sdk), header-only
 tools/             build and verify tooling
 tests/             Go system suites (not part of `just verify`)
 extern/            submodules: minhook, breakpad, lss

@@ -24,7 +24,7 @@ how an agent triangulates a correct log line.
 
 ### This IS
 
-- A binding ruleset for every `Log()` call in `src/`, `plugins/`,
+- A binding ruleset for every `Log()` call in `src/`, `sdk/`,
   `modules/`, and any future component that links `libcommon.a`.
 - A review gate: the "Hard Stops" table at the end of this document is
   enforced. A log line that fails any check is rejected in review.
@@ -563,9 +563,9 @@ the same commit. The sensor exists to prevent *drift*, not to prevent
 ### Rule 15: Plugins log through the host
 
 A plugin's lines go to the host's `Log()` through `ctx->log` (`NevrLogFn` in
-`src/extension/plugin_interface.h`, API v6), so they reach the same file, the same filter and the
+`sdk/include/nevr/plugin_interface.h`, API v6), so they reach the same file, the same filter and the
 same level control as the host's own lines. A plugin does not write to stderr, which the host does not
-collect, and does not open its own log file. `plugins/common/include/plugin_logger.h` is the way to
+collect, and does not open its own log file. `sdk/include/nevr/plugin_logger.h` is the way to
 call it (`PluginLogBind(ctx)` in init, then `PluginLog`, `PluginLogWarning`, `PluginLogError`,
 `PluginLogDebug` or `PluginLogFields`).
 

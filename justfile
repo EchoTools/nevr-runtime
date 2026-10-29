@@ -157,7 +157,7 @@ test-android: check-android-static-init
     # CSymbol64Hash sign-extends a byte >= 0x80 under the NDK's AArch64 clang, where plain char is unsigned (#657).
     # The vectors are static_asserts, so compiling the file is the check; the NDK's static bionic binary does not
     # start under qemu-user (TLS segment alignment), so nothing is run here.
-    "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++" -std=c++17 -Wall -Wextra -Werror -Isrc -fsyntax-only src/quest/tests/symbol_hash_test.cpp
+    "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++" -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -fsyntax-only src/quest/tests/symbol_hash_test.cpp
     cd tests/quest && go test -count=1 -v ./...
 
 # Black-box crash-ingest contract gate. Requires a non-production staging sink;
@@ -880,18 +880,18 @@ test-quest-data: _vcpkg-quest-host
     host="{{ justfile_directory() }}/build/quest-host-vcpkg/x64-linux"
     [[ -f "$host/lib/libz.a" ]] || { echo "test-quest-data: FAIL — $host/lib/libz.a not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
     for f in sha256 zip staging fetch data_step; do
-        g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -isystem "$host/include" -c \
+        g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isdk/include -isystem "$host/include" -c \
             "src/quest/data/$f.cpp" -o "$out/$f.o"
     done
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$host/include" \
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -isystem "$host/include" \
         "$out/sha256.o" "$out/zip.o" "$out/staging.o" src/quest/tests/data_test.cpp "$host/lib/libz.a" \
         -o "$out/data_test"
     timeout -k 5 300 "$out/data_test"
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$host/include" \
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -isystem "$host/include" \
         "$out/sha256.o" "$out/zip.o" "$out/staging.o" "$out/fetch.o" src/quest/tests/fetch_test.cpp "$host/lib/libz.a" \
         -o "$out/fetch_test"
     timeout -k 5 300 "$out/fetch_test"
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$host/include" \
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -isystem "$host/include" \
         "$out/sha256.o" "$out/zip.o" "$out/staging.o" "$out/fetch.o" "$out/data_step.o" src/quest/tests/data_step_test.cpp "$host/lib/libz.a" \
         -o "$out/data_step_test"
     timeout -k 5 300 "$out/data_step_test"
@@ -912,7 +912,7 @@ test-quest-data-net: _vcpkg-quest-host
     mkdir -p "$out"
     host="{{ justfile_directory() }}/build/quest-host-vcpkg/x64-linux"
     [[ -f "$host/lib/libz.a" ]] || { echo "test-quest-data-net: FAIL — $host/lib/libz.a not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
-    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -isystem "$host/include" $(pkg-config --cflags libcurl) \
+    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -Isdk/include -isystem "$host/include" $(pkg-config --cflags libcurl) \
         src/quest/data/sha256.cpp src/quest/data/zip.cpp src/quest/data/staging.cpp src/quest/data/fetch.cpp \
         src/quest/data/curl_transport.cpp src/quest/data/data_host_roots.cpp src/quest/tests/curl_transport_test.cpp \
         "$host/lib/libz.a" -o "$out/curl_transport_test" $(pkg-config --libs libcurl) -lssl -lcrypto
@@ -956,7 +956,7 @@ test-quest-data-net: _vcpkg-quest-host
     OPENSSL_CONF="$PWD/lax-openssl.cnf" timeout -k 5 300 ./curl_transport_test "$(cat plain.port)" plain.log trust.pem "$PWD"
     # The step as the game reaches it: through the permission-wait handler's thunk entry (src/quest/sentinel/data_wiring.cpp).
     cd "{{ justfile_directory() }}"
-    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -pthread -Isrc -Isrc/quest/sentinel -isystem "$host/include" \
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -pthread -Isrc -Isdk/include -Isrc/quest/sentinel -isystem "$host/include" \
         $(pkg-config --cflags libcurl) src/quest/tests/data_wiring_test.cpp src/quest/sentinel/data_wiring.cpp \
         src/quest/sentinel/obb_skip_hook.cpp src/quest/sentinel/permission_wait_hook.cpp src/quest/sentinel/process_end_hook.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
@@ -982,7 +982,7 @@ test-quest-shared: _vcpkg-quest-host
     yaml_lib="$yaml_host/lib/libyaml-cpp.a"
     [[ -f "$yaml_lib" ]] || { echo "test-quest-shared: FAIL — $yaml_lib not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
     yaml_inc=(-isystem "$yaml_host/include")
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc \
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include \
         src/runtime/lifecycle/service_redirect.cpp \
         src/quest/tests/service_redirect_test.cpp \
         -o "$out/service_redirect_test"
@@ -999,20 +999,20 @@ test-quest-shared: _vcpkg-quest-host
     json_inc="$out/json_inc"
     mkdir -p "$json_inc"
     ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" \
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -isystem "$json_inc" \
         src/runtime/compat/evr_codec.cpp \
         src/runtime/compat/login_profile.cpp \
         src/quest/tests/evr_codec_test.cpp \
         -o "$out/evr_codec_test"
     timeout -k 5 120 "$out/evr_codec_test"
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" "${yaml_inc[@]}" \
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -isystem "$json_inc" "${yaml_inc[@]}" \
         src/runtime/lifecycle/service_redirect.cpp \
         src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp \
         src/quest/tests/quest_config_test.cpp "$yaml_lib" \
         -o "$out/quest_config_test"
     "$out/quest_config_test"
     # #970: the CREDITS patch's ADRP/ADD encoding against the pinned libr15 words (header only, no game image).
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/tests \
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -Isrc/quest/tests \
         src/quest/tests/credits_text_test.cpp \
         -o "$out/credits_text_test"
     "$out/credits_text_test"
@@ -1021,21 +1021,21 @@ test-quest-shared: _vcpkg-quest-host
     # game threads while the dump thread reads it).
     hwdump_core=(src/quest/diag/hwdump_field.cpp src/quest/diag/hwdump_fs.cpp src/quest/diag/hwdump_os.cpp \
         src/quest/diag/hwdump_records.cpp src/quest/diag/hwdump_report.cpp src/quest/tests/hwdump_core_test.cpp)
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" "${hwdump_core[@]}" -pthread -o "$out/hwdump_core_test"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -isystem "$json_inc" "${hwdump_core[@]}" -pthread -o "$out/hwdump_core_test"
     timeout -k 5 120 "$out/hwdump_core_test"
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" -fsanitize=thread -g -O1 "${hwdump_core[@]}" \
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -isystem "$json_inc" -fsanitize=thread -g -O1 "${hwdump_core[@]}" \
         -pthread -o "$out/hwdump_core_test_tsan"
     timeout -k 5 300 "$out/hwdump_core_test_tsan"
     # The libr15 hook handlers, built like the sentinel's copy (-fno-exceptions): arguments pass through bit
     # for bit, results come back unchanged, nothing is read past the game's buffers.
-    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc src/quest/diag/hwdump_records.cpp \
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isdk/include src/quest/diag/hwdump_records.cpp \
         src/quest/diag/hwdump_handlers.cpp src/quest/tests/hwdump_handlers_test.cpp -o "$out/hwdump_handlers_test"
     timeout -k 5 120 "$out/hwdump_handlers_test"
     # Sentinel activation + logging against a stand-in liblog. The test's constructor has priority
     # 102, so it runs before activation.cpp's static initializers whatever the link order.
     files="$out/sentinel-files"
     rm -rf "$files"
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" "${yaml_inc[@]}" -Isrc/quest/tests/stub -Isrc/quest/sentinel \
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -isystem "$json_inc" "${yaml_inc[@]}" -Isrc/quest/tests/stub -Isrc/quest/sentinel \
         -DNEVR_QUEST_FILES_DIR="\"$files\"" \
         src/quest/tests/sentinel_host_test.cpp \
         src/quest/sentinel/activation.cpp \
@@ -1046,7 +1046,7 @@ test-quest-shared: _vcpkg-quest-host
     "$out/sentinel_host_test"
     # The platform-neutral token-auth core and the Quest session, under a fake HTTP
     # server and a fake clock. Same sources the NDK build compiles (src/quest/CMakeLists.txt).
-    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -isystem "$json_inc" \
+    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -Isdk/include -isystem "$json_inc" \
         src/core/auth_refresh.cpp src/core/device_auth_flow.cpp src/core/device_poll_response.cpp \
         src/quest/auth/session.cpp src/quest/auth/atomic_write.cpp src/quest/auth/file_store.cpp \
         src/quest/auth/prompt_presenters.cpp src/quest/auth/prompt_board.cpp \
@@ -1056,7 +1056,7 @@ test-quest-shared: _vcpkg-quest-host
     echo "test-quest-shared: token-auth core and Quest session tests pass on the host"
     # CurlHttpClient's trust handling against real TLS peers on loopback (test CA, Android-style
     # old-hash CA directory). Host libcurl with an OpenSSL backend, libssl and libcrypto.
-    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -isystem "$json_inc" \
+    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -Isdk/include -isystem "$json_inc" \
         src/core/auth_refresh.cpp src/core/device_auth_flow.cpp src/core/device_poll_response.cpp \
         src/quest/auth/session.cpp src/quest/auth/atomic_write.cpp src/quest/auth/file_store.cpp src/quest/auth/quest_token_auth.cpp \
         src/quest/auth/prompt_presenters.cpp src/quest/auth/prompt_board.cpp \
@@ -1071,12 +1071,12 @@ test-quest-shared: _vcpkg-quest-host
     # also link the prerequisite handlers and the stand-ins (both -fno-exceptions as on the device),
     # because the send gate and the end-to-end flow test drive them together with the rewrite.
     for f in login/login_apply login/login_prerequisites login/login_standin; do
-        g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -c \
+        g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -Isdk/include -c \
             "src/quest/$f.cpp" -o "$out/$(basename "$f").o"
     done
-    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -c \
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isdk/include -c \
         src/quest/sentinel/hook_log.cpp -o "$out/hook_log.o"
-    g++ -std=c++17 -Wall -Wextra -Werror -DNEVR_QUEST_TESTING -Isrc -isystem "$json_inc" \
+    g++ -std=c++17 -Wall -Wextra -Werror -DNEVR_QUEST_TESTING -Isrc -Isdk/include -isystem "$json_inc" \
         "$out/login_apply.o" "$out/login_prerequisites.o" "$out/login_standin.o" "$out/hook_log.o" \
         src/quest/login/login_rewrite.cpp \
         src/runtime/compat/login_profile.cpp \
@@ -1086,20 +1086,20 @@ test-quest-shared: _vcpkg-quest-host
     # Quest login prerequisites: the handler bodies driven through a fake Platform SDK and the game's
     # four callbacks. The install (login_prerequisites_install.cpp) needs libpnsovr.so for real slots;
     # build-android compiles it and test-quest-hooks-pinned resolves its slots in the real library.
-    g++ -std=c++17 -Wall -Wextra -Werror -DNEVR_QUEST_TESTING -Isrc -isystem "$json_inc" \
+    g++ -std=c++17 -Wall -Wextra -Werror -DNEVR_QUEST_TESTING -Isrc -Isdk/include -isystem "$json_inc" \
         "$out/login_prerequisites.o" "$out/login_standin.o" "$out/hook_log.o" \
         src/quest/tests/login_prerequisites_test.cpp \
         -o "$out/login_prerequisites_test"
     "$out/login_prerequisites_test"
     # The install against a host with no libpnsovr.so loaded: fully partial, fail-safe, idempotent.
     # The thunk-defining TU and the backend are -fno-exceptions (callback_thunk.h); the test too.
-    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isrc/quest/sentinel -c \
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isdk/include -Isrc/quest/sentinel -c \
         src/quest/login/login_prerequisites_install.cpp -o "$out/login_prerequisites_install.o"
     for f in got_hook hook_report; do
-        g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isrc/quest/sentinel -c \
+        g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isdk/include -Isrc/quest/sentinel -c \
             "src/quest/sentinel/$f.cpp" -o "$out/$f.o"
     done
-    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isrc/quest/sentinel \
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isdk/include -Isrc/quest/sentinel \
         "$out/login_prerequisites.o" "$out/login_prerequisites_install.o" "$out/login_standin.o" \
         "$out/got_hook.o" "$out/hook_log.o" "$out/hook_report.o" \
         src/quest/tests/login_prerequisites_install_test.cpp \
@@ -1107,16 +1107,16 @@ test-quest-shared: _vcpkg-quest-host
     "$out/login_prerequisites_install_test"
     # The per-process stand-ins and their predicates. NEVR_QUEST_TESTING exposes SetForTest/ResetForTest,
     # which exist only in the test build.
-    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc \
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -Isdk/include \
         "$out/login_standin.o" src/quest/tests/login_standin_test.cpp -o "$out/login_standin_test"
     "$out/login_standin_test"
     # CSymbol64Hash on bytes >= 0x80 (#657): the vectors are static_asserts and a run-time loop. The NDK compile
     # of the same file is in test-android (plain char is unsigned there).
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc src/quest/tests/symbol_hash_test.cpp -o "$out/symbol_hash_test"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include src/quest/tests/symbol_hash_test.cpp -o "$out/symbol_hash_test"
     "$out/symbol_hash_test"
     # The same file with plain char unsigned, as under the NDK: it runs the loop with an unsigned char, which the
     # NDK compile in test-android only parses. A bare static_cast<uint64_t>(c) fails to compile here.
-    g++ -std=c++17 -funsigned-char -Wall -Wextra -Werror -Isrc src/quest/tests/symbol_hash_test.cpp -o "$out/symbol_hash_test_uchar"
+    g++ -std=c++17 -funsigned-char -Wall -Wextra -Werror -Isrc -Isdk/include src/quest/tests/symbol_hash_test.cpp -o "$out/symbol_hash_test_uchar"
     "$out/symbol_hash_test_uchar"
     echo "test-quest-shared: all redirect and EVR codec vectors pass on the host"
 
@@ -1143,7 +1143,7 @@ test-quest-router:
     json_inc="$out/json_inc"
     mkdir -p "$json_inc"
     ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
-    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -isystem "$json_inc")
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -Isdk/include -isystem "$json_inc")
     "${cxx[@]}" src/runtime/compat/session_router.cpp src/runtime/compat/evr_codec.cpp \
         src/quest/tests/session_router_test.cpp -o "$out/session_router_test"
     "$out/session_router_test"
@@ -1165,7 +1165,7 @@ test-quest-router:
     # the concurrent-Start test, so a data race on listenFd_/port_/token_ or an unsynchronised
     # Start/Stop would be reported. -O1 also exercises warnings -O0 hides. halt_on_error makes any
     # race fail the recipe.
-    tsan=(g++ -std=c++17 -Wall -Wextra -Werror -pthread -fsanitize=thread -O1 -g -Isrc -isystem "$json_inc")
+    tsan=(g++ -std=c++17 -Wall -Wextra -Werror -pthread -fsanitize=thread -O1 -g -Isrc -Isdk/include -isystem "$json_inc")
     "${tsan[@]}" src/quest/net/ws_wire.cpp src/quest/net/loopback_game_server.cpp \
         src/runtime/compat/session_router.cpp src/runtime/compat/evr_codec.cpp \
         src/quest/tests/loopback_game_server_test.cpp -o "$out/loopback_game_server_test_tsan"
@@ -1188,7 +1188,7 @@ test-quest-tls:
     out="build/quest-tls-host"
     rm -rf "$out"
     mkdir -p "$out"
-    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc $(pkg-config --cflags libcurl) \
+    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -Isdk/include $(pkg-config --cflags libcurl) \
         src/quest/net/curl_ws_connector.cpp src/quest/net/remote_ws.cpp src/quest/auth/ca_bundle.cpp \
         src/runtime/compat/session_router.cpp src/runtime/compat/evr_codec.cpp src/quest/tests/curl_ws_tls_test.cpp \
         -o "$out/curl_ws_tls_test" $(pkg-config --libs libcurl) -lssl -lcrypto
@@ -1237,7 +1237,7 @@ test-quest-hooks:
     set -euo pipefail
     out="build/quest-hooks-host"
     mkdir -p "$out"
-    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -Isrc/quest/sentinel)
     # Type-level gates: the control compiles; each snippet that breaks one rule must fail to
     # compile, with the message that names the rule (not for some unrelated reason).
     snip=src/quest/tests/compile_fail
@@ -1311,9 +1311,9 @@ test-quest-hooks:
     timeout 120 "$out/login_title_hook_test"
     # The whole no-credentials chain (#581): the real prerequisite handlers and the real prompt hook together,
     # token auth awaiting the player -> the answers delivered -> the game's local failure -> the code written.
-    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -c \
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -Isdk/include -c \
         src/quest/login/login_prerequisites.cpp -o "$out/chain_login_prerequisites.o"
-    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -c \
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -Isdk/include -c \
         src/quest/login/login_standin.cpp -o "$out/chain_login_standin.o"
     "${cxx[@]}" -fno-exceptions -DNEVR_QUEST_TESTING -pthread src/quest/tests/login_signin_code_chain_test.cpp \
         src/quest/sentinel/login_prompt_hook.cpp src/quest/auth/prompt_board.cpp \
@@ -1360,6 +1360,13 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/os_build_gate_hook_test" -ldl
     timeout 120 "$out/os_build_gate_hook_test"
+    # The main-menu QUIT (#1276): the real handler through the thunk entry against stand-ins for CVR::ShowSystemUI and
+    # ANativeActivity_finish (the activity finished; no app, no activity or no finisher leaves the game's call).
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/quit_hook_test.cpp \
+        src/quest/sentinel/quit_hook.cpp src/quest/sentinel/process_end_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/quit_hook_test" -ldl
+    timeout 120 "$out/quit_hook_test"
     # The Quest main menu shows the runtime version (#747): the real handler through the thunk entry against a stand-in for
     # CCanvasUICS::SetText (the lobby_version item replaced, every other item, an empty text and a null text left alone).
     # The handler includes the build-tree header generated/nevr_build_info.h; a stub stands in for it here.
@@ -1450,7 +1457,7 @@ test-quest-redirect: _vcpkg-quest-host
     json_inc="$out/json_inc"
     mkdir -p "$json_inc"
     ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
-    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -isystem "$json_inc" -isystem "$yaml_host/include")
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -Isrc/quest/sentinel -isystem "$json_inc" -isystem "$yaml_host/include")
     fx=src/quest/redirect/tests
     "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 "$fx/tstring_fixture_provider.cpp" \
         -o "$out/libredirfx_provider.so"
@@ -1501,7 +1508,7 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
     echo "36236ab1df5783da57c064b0fbccc3a61c0e1d150c208022fbfc9cd6e5ed60ee  $out/lib/lib/arm64-v8a/libpnsradmatchmaking.so" | sha256sum -c -
     echo "26e9a216a710d42a303346a4ca5b84037ff38250ea725dc7112b055fcacada79  $out/lib/lib/arm64-v8a/libpnsovr.so" | sha256sum -c -
     echo "80c36268dbefd9f20ccae0aa35d3efe6f6480a8179f9f46709e71e33e0f110e4  $out/lib/lib/arm64-v8a/lib7f2363b8976491aa.so" | sha256sum -c -
-    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isrc/quest/sentinel \
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isdk/include -Isrc/quest/sentinel \
         src/quest/tests/got_pinned_test.cpp src/quest/sentinel/got_hook.cpp \
         src/quest/sentinel/hook_log.cpp -o "$out/got_pinned_test" -ldl
     "$out/got_pinned_test" "$out/lib/lib/arm64-v8a/libr15.so" "$out/lib/lib/arm64-v8a/libpnsradmatchmaking.so" \
@@ -1539,7 +1546,7 @@ quest-patcher json_include="":
     fi
     mkdir -p "$out/json_inc"
     ln -sfn "$(cd "$inc" && pwd)/nlohmann" "$out/json_inc/nlohmann"
-    g++ -std=c++17 -O2 -Wall -Wextra -Werror -Isrc -isystem "$out/json_inc" \
+    g++ -std=c++17 -O2 -Wall -Wextra -Werror -Isrc -Isdk/include -isystem "$out/json_inc" \
         src/quest/patch/quest_patch_libr15.cpp src/quest/patch/libr15_patcher.cpp src/quest/patch/libr15_patcher_cli.cpp \
         src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp src/quest/sentinel/arm64_reloc.cpp \
         -o "$out/quest_patch_libr15"
@@ -1557,7 +1564,7 @@ test-quest-patcher json_include="": (quest-patcher json_include)
     out="build/quest-patcher"
     # _GLIBCXX_ASSERTIONS: an out-of-bounds operator[] or an empty optional dereference in the patcher aborts the
     # test that reached it, instead of reading past the buffer and passing.
-    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -D_GLIBCXX_ASSERTIONS -Isrc -isystem "$out/json_inc" -pthread)
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -D_GLIBCXX_ASSERTIONS -Isrc -Isdk/include -isystem "$out/json_inc" -pthread)
     scratch="$out/test-scratch"
     rm -rf "$scratch"; mkdir -p "$scratch"
     trap 'rm -rf "$scratch"' EXIT
@@ -1588,7 +1595,7 @@ test-quest-patcher-pinned libr15 json_include="": (quest-patcher json_include)
     scratch="$out/pinned-scratch"
     rm -rf "$scratch"; mkdir -p "$scratch"
     trap 'rm -rf "$scratch"' EXIT
-    g++ -std=c++17 -O1 -Wall -Wextra -Werror -Isrc -pthread \
+    g++ -std=c++17 -O1 -Wall -Wextra -Werror -Isrc -Isdk/include -pthread \
         src/quest/tests/libr15_patcher_pinned_test.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp \
         -o "$out/libr15_patcher_pinned_test"
     timeout 600 "$out/libr15_patcher_pinned_test" "$out/quest_patch_libr15" "$libr15" "$scratch"
@@ -1616,7 +1623,7 @@ test-quest-social:
     json_inc="$out/json_inc"
     mkdir -p "$json_inc"
     ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
-    on=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -isystem "$json_inc")
+    on=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -Isrc/quest/sentinel -isystem "$json_inc")
     off=("${on[@]}" -fno-exceptions)
     "${on[@]}" src/quest/tests/social_abi_test.cpp -o "$out/social_abi_test"
     "$out/social_abi_test" src/quest/tests/fixtures/cnsovrsocial_vtable.txt
@@ -1667,11 +1674,11 @@ test-quest-social-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signe
     lib="$out/lib/lib/arm64-v8a"
     echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $lib/libr15.so" | sha256sum -c -
     echo "26e9a216a710d42a303346a4ca5b84037ff38250ea725dc7112b055fcacada79  $lib/libpnsovr.so" | sha256sum -c -
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -c src/quest/social/social_facade.cpp \
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -Isrc/quest/sentinel -c src/quest/social/social_facade.cpp \
         -o "$out/social_facade.o"
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -DNEVR_SOCIAL_NAMES_NO_STATIC_REGISTRATION -c \
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -DNEVR_SOCIAL_NAMES_NO_STATIC_REGISTRATION -c \
         src/runtime/compat/social_names.cpp -o "$out/social_names.o"
-    g++ -std=c++17 -fno-exceptions -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel \
+    g++ -std=c++17 -fno-exceptions -Wall -Wextra -Werror -Isrc -Isdk/include -Isrc/quest/sentinel \
         src/quest/tests/social_pinned_test.cpp src/quest/social/social_install.cpp src/quest/social/social_invite_gate.cpp \
         src/quest/social/social_game_calls.cpp "$out/social_facade.o" "$out/social_names.o" \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
@@ -1702,7 +1709,7 @@ test-quest-integration: _vcpkg-quest-host
     json_inc="$out/json_inc"
     mkdir -p "$json_inc"
     ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
-    on=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -isystem "$json_inc" -isystem "$yaml_host/include")
+    on=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -Isrc/quest/sentinel -isystem "$json_inc" -isystem "$yaml_host/include")
     off=("${on[@]}" -fno-exceptions)
     # 1. sequence, post-load policy, identity, social switch, frame tap
     "${on[@]}" src/quest/tests/integration_sequence_test.cpp \
@@ -1722,7 +1729,7 @@ test-quest-integration: _vcpkg-quest-host
     "${off[@]}" -c src/quest/sentinel/login_title_hook.cpp -o "$out/login_title_hook.o"
     "${off[@]}" -c src/quest/sentinel/obb_skip_hook.cpp -o "$out/obb_skip_hook.o"
     "${off[@]}" -c src/quest/sentinel/texture_quality_hook.cpp -o "$out/texture_quality_hook.o"
-    "${off[@]}" -c src/quest/sentinel/system_ui_hook.cpp -o "$out/system_ui_hook.o"
+    "${off[@]}" -c src/quest/sentinel/quit_hook.cpp -o "$out/quit_hook.o"
     "${off[@]}" -c src/quest/sentinel/resource_request_hook.cpp -o "$out/resource_request_hook.o"
     "${off[@]}" -c src/quest/login/login_counters.cpp -o "$out/login_counters.o"
     # login_counters.cpp reads the local-answer counters of login_prerequisites.cpp (#411).
@@ -1782,7 +1789,7 @@ test-quest-plugins:
     json_inc="$out/json_inc"
     mkdir -p "$json_inc"
     ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
-    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -Isrc/quest/tests/stub -isystem "$json_inc")
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -Isrc/quest/sentinel -Isrc/quest/tests/stub -isystem "$json_inc")
     fixture() { # library-file-stem plugin-name [macros...]
         local stem="$1" name="$2"; shift 2
         "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 -DFX_NAME="\"$name\"" "$@" \
@@ -1821,7 +1828,7 @@ test-quest-autopilot:
     set -euo pipefail
     out="build/quest-autopilot-host"
     mkdir -p "$out/scratch"
-    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -pthread -Isrc)
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -pthread -Isrc -Isdk/include)
     "${cxx[@]}" src/quest/tests/autopilot_route_test.cpp src/quest/plugins/autopilot/route.cpp \
         -o "$out/autopilot_route_test"
     routes=(tools/quest_autopilot_routes/*.txt)
@@ -1852,9 +1859,9 @@ test-quest-integration-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_
     unzip -o -q "$apk" lib/arm64-v8a/libr15.so -d "$out/lib"
     lib="$out/lib/lib/arm64-v8a"
     echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $lib/libr15.so" | sha256sum -c -
-    off=(g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isrc/quest/sentinel)
+    off=(g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isdk/include -Isrc/quest/sentinel)
     "${off[@]}" -c src/quest/integration/dlopen_hook.cpp -o "$out/dlopen_hook.o"
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -c src/quest/integration/post_load.cpp -o "$out/post_load.o"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -Isrc/quest/sentinel -c src/quest/integration/post_load.cpp -o "$out/post_load.o"
     "${off[@]}" src/quest/tests/integration_pinned_test.cpp "$out/dlopen_hook.o" "$out/post_load.o" \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/integration_pinned_test" -ldl -pthread
@@ -1937,7 +1944,7 @@ test-scripting:
     # The author-side checker: the definitions come from a host build of the stubs generator.
     host="$PWD/build/scripting-host"
     mkdir -p "$host"
-    g++ -std=c++17 -O1 -Wall -Wextra -Werror -pthread -Isrc -isystem "$json" \
+    g++ -std=c++17 -O1 -Wall -Wextra -Werror -pthread -Isrc -Isdk/include -isystem "$json" \
         src/scripting/host_registry.cpp src/scripting/script_stubs.cpp src/scripting/tests/script_stubs_test.cpp \
         -o "$host/script_stubs_test"
     cmake -S src/scripting/check -B "$PWD/build/script-check" -G Ninja -DCMAKE_BUILD_TYPE=Release > /dev/null
@@ -2260,8 +2267,8 @@ verify:
     fi
     # N67: the crash flags are written from any thread and read from the faulting
     # thread. VERIFIED-BY-TYPE only binds the artifact that ships — this grep asserts
-    # the type is on THIS file, the one the linker consumes (the earlier fix landed
-    # in plugins/crash-handler/, which CMake does not build).
+    # the type is on THIS file, the one the linker consumes (an earlier fix landed
+    # in a copy CMake did not build).
     if ! grep -q 'std::atomic<bool> g_crashReporterSuppressed' src/runtime/lifecycle/crash_recovery.cpp; then
         echo "verify: FAIL — N67 g_crashReporterSuppressed is not std::atomic<bool> in the SHIPPING path." >&2
         exit 1
@@ -2781,9 +2788,9 @@ verify:
         echo "The ABI would still declare the export while every plugin read as UNDECLARED. A server cannot judge a session it cannot ask about." >&2
         exit 1
     fi
-    N114_RC2=0; N114_ABI=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/extension/plugin_interface.h) || N114_RC2=$?
-    sensor_stage1 "N114 plugin capability ABI" "src/extension/plugin_interface.h" "$N114_RC2"
-    sensor_nonempty "N114 plugin capability ABI" "non-comment lines of extension/plugin_interface.h" "$N114_ABI"
+    N114_RC2=0; N114_ABI=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' sdk/include/nevr/plugin_interface.h) || N114_RC2=$?
+    sensor_stage1 "N114 plugin capability ABI" "sdk/include/nevr/plugin_interface.h" "$N114_RC2"
+    sensor_nonempty "N114 plugin capability ABI" "non-comment lines of nevr/plugin_interface.h" "$N114_ABI"
     # Pinned to the CURRENT ABI version. The pin guards against a silent REGRESSION
     # below the version where the capability channel (v3), the args channel (v4), the
     # query API (v5), the host log (v6, #598), the plugin assets (v7, #432) and the current level (v8, #1094)
@@ -2916,12 +2923,12 @@ verify:
     # No "do these directories still exist" loop here on purpose: it would be
     # unfalsifiable, because emptying any of the three fails EARLIER than
     # this point and for a different reason, so the loop could never be shown to
-    # be the thing that caught it. Measured 2026-07-29 — emptying src/extension/
-    # dies at configure with `No SOURCES given to target: nevr_core`, because the
-    # headers are listed in src/core/CMakeLists.txt. What actually fail-closes:
+    # be the thing that caught it. Emptying src/extension/ dies at configure with
+    # `No SOURCES given to target: nevr_core`, because module_interface.h is listed
+    # in src/core/CMakeLists.txt. What actually fail-closes:
     #   src/abi      -> sensor_stage1 above (grep rc>=2 on a missing subject)
     #   src/core     -> the same, via the N81/N85/N20 path sets
-    #   src/extension-> CMake, since its headers are in nevr_core's source list
+    #   src/extension-> CMake, since its header is in nevr_core's source list
     N81_RC=0; N81_HITS=$(grep -rn '"\[NEVR\] ' src/runtime src/abi src/core) || N81_RC=$?
     sensor_stage1 "N81 bare [NEVR] tag" "src/runtime src/abi src/core" "$N81_RC"
     if [ "$N81_RC" -eq 0 ] && printf '%s\n' "$N81_HITS" \
@@ -3182,14 +3189,17 @@ verify:
     fi
     # N95: and we shall not PRODUCE the DLL the loader above refuses. Two
     # independent sensors, because either alone is satisfiable by the bug:
-    # re-adding the build target ships it again the moment any dist rule
+    # re-adding a build target ships it again the moment any dist rule
     # globs plugins/, and re-adding a dist rule ships whatever a stale build
-    # tree still holds. Comment lines are stripped before matching so the
-    # prose forbidding the thing cannot satisfy its own check.
-    N95_TGT_RC=0; N95_TGT=$(grep -vE '^\s*#' plugins/CMakeLists.txt) || N95_TGT_RC=$?
-    sensor_stage1 "N95 log-filter build target" "plugins/CMakeLists.txt" "$N95_TGT_RC"
-    sensor_nonempty "N95 log-filter build target" "non-comment lines of plugins/CMakeLists.txt" "$N95_TGT"
-    if grep -q 'add_subdirectory(log-filter)' <<<"$N95_TGT"; then
+    # tree still holds. The target sensor reads every tracked CMake file, since
+    # a target can come back in any of them. Comment lines are stripped before
+    # matching so the prose forbidding the thing cannot satisfy its own check.
+    N95_CMAKE=$(git ls-files -- 'CMakeLists.txt' '*/CMakeLists.txt' '*.cmake')
+    sensor_nonempty "N95 log-filter build target" "tracked CMake files (git ls-files)" "$N95_CMAKE"
+    N95_TGT_RC=0; N95_TGT=$(grep -vhE '^\s*#' $N95_CMAKE) || N95_TGT_RC=$?
+    sensor_stage1 "N95 log-filter build target" "tracked CMake files" "$N95_TGT_RC"
+    sensor_nonempty "N95 log-filter build target" "non-comment lines of the tracked CMake files" "$N95_TGT"
+    if grep -qE 'log[-_]filter' <<<"$N95_TGT"; then
         echo "verify: FAIL — N95 log-filter is a build target again; plugin_loader.cpp refuses" >&2
         echo "log_filter.dll by name, so building it produces a DLL our own loader rejects (N89)." >&2
         exit 1
@@ -3226,7 +3236,7 @@ verify:
             exit 1
         fi
     done
-    # Doc paths: every src/, plugins/, extern/, docs/, tools/ or gen/ path claimed
+    # Doc paths: every src/, sdk/, extern/, docs/, tools/, tests/, cmake/ or gen/ path claimed
     # in a root document shall resolve. Four phantom paths (src/protobufnevr,
     # extern/nevr-proto, src/server, gamepatches/patches.cpp) survived for months
     # in README.md and CLAUDE.md because nothing checked. A fact about the tree
@@ -3376,7 +3386,7 @@ verify:
     # The core logs through its own level enum; the Windows side maps it to EchoVR::LogLevel
     # in ToEchoLogLevel. Without a pin on that mapping, a swapped case would move the N94
     # Debug lines to Info while every per-line check above still passes.
-    N94_MAP_FILE=plugins/common/include/auth_token_refresh.h
+    N94_MAP_FILE=src/core/auth_token_refresh.h
     for pair in 'Debug' 'Info' 'Warning' 'Error'; do
         N94_RC=0; N94_MAP=$(grep -F "case LogLevel::${pair}: return EchoVR::LogLevel::${pair};" "$N94_MAP_FILE") || N94_RC=$?
         sensor_stage1 "N94 level mapping" "$N94_MAP_FILE" "$N94_RC"
@@ -3438,8 +3448,8 @@ verify:
     # excluded by the negative lookahead (grep -P, not -E: `-E` silently
     # overrides `-P` when both are passed and \s is not ERE syntax, which
     # produces a sensor that matches nothing and looks like it passes).
-    N96_RC=0; N96_HITS=$(grep -rn --include='*.cpp' --include='*.h' -P 'ResolveVA(?!_Checked|_Unchecked)' src plugins) || N96_RC=$?
-    sensor_stage1 "N96 bare ResolveVA" "src plugins" "$N96_RC"
+    N96_RC=0; N96_HITS=$(grep -rn --include='*.cpp' --include='*.h' -P 'ResolveVA(?!_Checked|_Unchecked)' src sdk) || N96_RC=$?
+    sensor_stage1 "N96 bare ResolveVA" "src sdk" "$N96_RC"
     if [ "$N96_RC" -eq 0 ] && printf '%s\n' "$N96_HITS" \
          | grep -v legacy | grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' | grep .; then
         echo "verify: FAIL — N96 a bare 'ResolveVA' spelling is back. Use" >&2
@@ -3454,12 +3464,12 @@ verify:
     # for a comparison of nothing, to a function whose next statement writes
     # NOPs into the target, directly under the invariant that a binary patch
     # validates before it writes. Same -P (not -PE) reasoning as N96.
-    N97_RC=0; N97_HITS=$(grep -rn --include='*.cpp' --include='*.h' -P '^\s*(static\s+)?(inline\s+)?bool\s+ValidatePrologue\s*\(' src plugins) || N97_RC=$?
-    sensor_stage1 "N97 ValidatePrologue definitions" "src plugins" "$N97_RC"
+    N97_RC=0; N97_HITS=$(grep -rn --include='*.cpp' --include='*.h' -P '^\s*(static\s+)?(inline\s+)?bool\s+ValidatePrologue\s*\(' src sdk) || N97_RC=$?
+    sensor_stage1 "N97 ValidatePrologue definitions" "src sdk" "$N97_RC"
     N97_DEFS=$(printf '%s\n' "$N97_HITS" | grep -c 'ValidatePrologue' || true)
     if [ "$N97_RC" -ne 0 ] || [ "$N97_DEFS" -ne 1 ]; then
         echo "verify: FAIL — N97 found $N97_DEFS definitions of ValidatePrologue (want exactly 1," >&2
-        echo "nevr::ValidatePrologue in plugins/common/include/nevr_common.h). A second copy is how" >&2
+        echo "nevr::ValidatePrologue in sdk/include/nevr/pc/nevr_common.h). A second copy is how" >&2
         echo "a bare-memcmp version returned TRUE for a zero-length check (N97)." >&2
         printf '%s\n' "$N97_HITS" >&2
         exit 1

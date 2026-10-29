@@ -155,8 +155,9 @@ echo "=== Deploying from build/mingw-release/bin/ ===" | tee -a "$LOG"
 NEVR_ROOT_REL="../../.wineprefix/drive_c/users/$(id -un)/AppData/Local/nevr/echovr"
 deploy build/mingw-release/bin/nevr-runtime.dll "$GAME_DIR/$NEVR_ROOT_REL/nevr-runtime.dll"
 deploy build/mingw-release/bin/BugSplat64.dll "$GAME_DIR/BugSplat64.dll"
+# Plugins load from the nevr root's plugins\ too (ADR 0012), so they are deployed beside the runtime.
 if [ -d build/mingw-release/bin/plugins ]; then
-  while IFS= read -r f; do deploy "$f" "$GAME_DIR/plugins/${f#build/mingw-release/bin/plugins/}"; done \
+  while IFS= read -r f; do deploy "$f" "$GAME_DIR/$NEVR_ROOT_REL/plugins/${f#build/mingw-release/bin/plugins/}"; done \
     < <(find build/mingw-release/bin/plugins -type f)
 fi
 # A server with no config.yaml takes the embedded defaults (service_config.cpp BuiltinDefaults, #843), so

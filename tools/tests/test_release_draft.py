@@ -138,7 +138,7 @@ class ReleaseDraftTest(unittest.TestCase):
             self.assertIn(line, self.run_script(releases).stderr)
 
     def test_a_tag_that_is_not_vx_y_z_is_refused_before_any_call(self):
-        for tag in ("v5.0.0-rc.1", "v5.0", "main", 'v5.0.0"] | .x'):
+        for tag in ("v5.0.0-rc.01", "v5.0", "main", 'v5.0.0"] | .x'):
             result = self.run_script([release(True)], tag=tag)
             self.assertEqual(result.returncode, 2, tag)
             self.assertIn("not a vX.Y.Z tag", result.stderr)
