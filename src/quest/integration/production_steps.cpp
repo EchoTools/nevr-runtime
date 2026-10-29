@@ -411,6 +411,7 @@ class ProductionSteps final : public Steps {
   bool ResourceRequestLogWanted() override { return nevr_quest::integration::ResourceRequestLogEnabled(); }
   bool RegisterResourceRequestCounters() override { return nevr_quest::integration::RegisterResourceRequestCounters(); }
   bool RegisterTextureQualityCounters() override { return nevr_quest::integration::RegisterTextureQualityCounters(); }
+  bool RegisterClockLevelsCounters() override { return nevr_quest::integration::RegisterClockLevelsCounters(); }
   bool StartReporter() override { return sentinel::StartReporter(/*firstMs=*/1000, /*graceMs=*/10000, /*steadyMs=*/60000); }
 
   bool InstallClockHook() override {
@@ -526,6 +527,12 @@ class ProductionSteps final : public Steps {
   bool InstallMenuCards() override {
     const bool ok = nevr_quest::integration::InstallMenuCardsHook();
     detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
+  bool ArmClockLevels(bool countersRegistered, bool overrideOn) override {
+    const bool ok = nevr_quest::integration::ArmClockLevelsHook(countersRegistered, overrideOn);
+    detail_ = ok ? "ok" : "counters_refused";
     return ok;
   }
 

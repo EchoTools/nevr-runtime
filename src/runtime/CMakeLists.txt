@@ -1292,6 +1292,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_socket_role PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_socket_role DISCOVERY_MODE PRE_TEST)
 
+    # #1254: what a refused login does (compat/login_refusal.h): header only, pure.
+    add_executable(test_login_refusal tests/test_login_refusal.cpp)
+    set_source_files_properties(tests/test_login_refusal.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_login_refusal PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_login_refusal PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_login_refusal DISCOVERY_MODE PRE_TEST)
+
     # #906, docs/adr/0017: the client half of the invite codes (patch/invite_wizard.h): header only, pure.
     # It links the generated symbol cache: the map cards' level names are the cache's, and the test reads them from it.
     add_executable(test_invite_wizard tests/test_invite_wizard.cpp log/symcache_data.cpp)

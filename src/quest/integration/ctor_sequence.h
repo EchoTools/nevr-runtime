@@ -66,6 +66,11 @@
 //                                    callback), on every launch, right after the credits step; no counters. A data write:
 //                                    no code page is touched. Without the stock page's digest pinned it serves the page
 //                                    unchanged and logs the digest.
+//      ArmClockLevels                the clock-level override (#928): no slot of its own (the render-configuration
+//                                    hook owns vrapi_SetClockLevels and asks the override which levels to call with),
+//                                    on every launch, right after the credits step; its counters are registered with the
+//                                    others (step 3). The switch (`diagnostics.clock_levels_override`, default off)
+//                                    decides whether the (2, 2) the game asks for is rewritten to (4, 4).
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):
 //   token auth fails        -> the login prompt (token auth is what publishes it), bridge, login, social
@@ -83,6 +88,7 @@
 //   obb counters fail       -> the OBB-mount skip is not installed
 //   resource request counters fail -> the resource request log is not installed
 //   texture counters fail   -> the texture-quality hook is not installed (not asked of `stock`)
+//   clock-levels counters fail -> the clock-level override is not armed (it stays off)
 // "redirect-through-the-bridge" is the redirect when the bridge feature is effective: a redirect that
 // points the game at a loopback port nobody listens on, or straight at a TLS endpoint the game cannot
 // speak, is worse than leaving the game's own hosts.
@@ -120,6 +126,7 @@ enum class StepId : std::uint8_t {
   kRegisterObbSkipCounters,
   kRegisterResourceRequestCounters,
   kRegisterTextureQualityCounters,
+  kRegisterClockLevelsCounters,
   kStartReporter,
   kRunEarlyPlugins,
   kInstallClockHook,
@@ -133,6 +140,7 @@ enum class StepId : std::uint8_t {
   kInstallRenderConfig,
   kInstallCreditsText,
   kInstallMenuCards,
+  kArmClockLevels,
   kStartTokenAuth,
   kInstallLoginPrompt,
   kStartBridge,
@@ -190,6 +198,8 @@ class Steps {
   virtual bool RegisterResourceRequestCounters() = 0;
   // The texture-quality hook's counters (#943), registered when the level is not `stock`.
   virtual bool RegisterTextureQualityCounters() = 0;
+  // The clock-level hook's counters (#928), registered on every launch.
+  virtual bool RegisterClockLevelsCounters() = 0;
   virtual bool StartReporter() = 0;
   // The early plugin pass (#438); the reporter is running. True when the pass ran.
   virtual bool RunEarlyPlugins() = 0;
@@ -225,6 +235,10 @@ class Steps {
   // The CREATE GAME and JOIN VIA CODE cards on the main menu (#966): one libr15 data slot (the streaming reader's read-finished
   // callback), on every launch, no counters.
   virtual bool InstallMenuCards() = 0;
+  // The clock-level override (#928): the switch the render-configuration hook's handler reads, on every launch.
+  // `countersRegistered`: the result of RegisterClockLevelsCounters (the override's own rule: without its counters it logs
+  // the skip and leaves the switch off). `overrideOn`: the resolved switch, Features::clockLevels.
+  virtual bool ArmClockLevels(bool countersRegistered, bool overrideOn) = 0;
   virtual bool StartTokenAuth() = 0;
   // `countersRegistered`: the result of RegisterLoginPromptCounters. The step applies the hook's own rule
   // (login_prompt::InstallIfCounted): without its counters it logs the skip and installs nothing.
