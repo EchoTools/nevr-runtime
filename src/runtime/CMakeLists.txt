@@ -20,6 +20,7 @@ set(NEVR_HOST_UNITS
     "host/runtime_exports.cpp"
     "host/runtime_load.cpp"
     "host/runtime_rendezvous.cpp"
+    "host/stop_line.cpp"
     # The signature verifier and the pins it checks against (ADR 0012: the host verifies nevr-runtime.dll before it loads it).
     "ext/plugin_pins.cpp"
     "ext/plugin_signature.cpp"
@@ -614,6 +615,12 @@ if(BUILD_TESTING)
     target_compile_options(test_host_json PRIVATE -Werror)
     target_link_libraries(test_host_json PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_host_json DISCOVERY_MODE PRE_TEST)
+
+    # The one console line the host writes when it stops the game or leaves it running without the runtime (#1252).
+    add_executable(test_host_stop_line tests/test_host_stop_line.cpp)
+    target_compile_options(test_host_stop_line PRIVATE -Werror)
+    target_link_libraries(test_host_stop_line PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_stop_line DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_bootstrap_diagnostics tests/test_bootstrap_diagnostics.cpp)
     target_compile_options(test_bootstrap_diagnostics PRIVATE -Werror)

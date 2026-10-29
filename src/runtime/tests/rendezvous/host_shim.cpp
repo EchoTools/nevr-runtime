@@ -25,6 +25,8 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <cwchar>
+#include <string>
 
 namespace {
 
@@ -48,6 +50,29 @@ bool VerifyRuntime() {
   HMODULE exe = GetModuleHandleW(nullptr);
   const auto fn = exe == nullptr ? nullptr : reinterpret_cast<VerifyRuntimeFn>(GetProcAddress(exe, kVerifyRuntimeExport));
   return fn != nullptr && fn() != 0;
+}
+
+const wchar_t* RuntimeDirOverride() {
+  HMODULE exe = GetModuleHandleW(nullptr);
+  const auto fn = exe == nullptr ? nullptr : reinterpret_cast<RuntimeDirFn>(GetProcAddress(exe, kRuntimeDirExport));
+  return fn == nullptr ? nullptr : fn();
+}
+
+// The harness never opens a dialog: the notice a client would be shown is written, as UTF-8, to
+// %LOCALAPPDATA%\stop-notice.txt, where the parent reads it. A child that is not shown one leaves no file.
+void WriteStopNotice(const wchar_t* text) {
+  wchar_t local[MAX_PATH] = {};
+  const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH);
+  if (length == 0 || length >= MAX_PATH) return;
+  const std::wstring path = std::wstring(local, length) + L"\\stop-notice.txt";
+  char utf8[2048] = {};
+  const int bytes = WideCharToMultiByte(CP_UTF8, 0, text, -1, utf8, static_cast<int>(sizeof(utf8)), nullptr, nullptr);
+  if (bytes <= 1) return;
+  HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return;
+  DWORD written = 0;
+  WriteFile(file, utf8, static_cast<DWORD>(bytes - 1), &written, nullptr);
+  CloseHandle(file);
 }
 
 bool LauncherMode() {
@@ -97,12 +122,18 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
     nevr_host::RuntimeRendezvous::Seams().fail_hook_create = true;
   }
   if (!RealStop()) nevr_host::RuntimeRendezvous::Seams().stop_game = &RecordStop;
+  nevr_host::RuntimeRendezvous::Seams().show_stop_notice = &WriteStopNotice;
   // The test targets load the fixture runtime without a check; a scenario can turn the host's own check on, with the
   // production pins, to watch the refusal of that unsigned file.
   if (VerifyRuntime()) nevr_host::SetVerifyRuntimeForTest(true);
   // The fixture runtime is staged beside this shim; the production rule (the nevr root) is the subject of test_host_runtime_load.
   static wchar_t runtime_dir[MAX_PATH];
-  if (nevr_host::DirOfModule(runtime_dir, MAX_PATH, module)) nevr_host::SetRuntimeDirForTest(runtime_dir);
+  if (const wchar_t* elsewhere = RuntimeDirOverride()) {
+    wcsncpy(runtime_dir, elsewhere, MAX_PATH - 1);
+    nevr_host::SetRuntimeDirForTest(runtime_dir);
+  } else if (nevr_host::DirOfModule(runtime_dir, MAX_PATH, module)) {
+    nevr_host::SetRuntimeDirForTest(runtime_dir);
+  }
   nevr_host::OnProcessAttach(module, game, launcher);
 
   if (!launcher) {
