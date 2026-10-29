@@ -37,7 +37,7 @@ def mode_return(code: str) -> bool:
         tok = m.group()
         if tok == "{":
             head = code[head_start:m.start()].strip()
-            if re.match(r"else\b(?!\s*if\b)", head):
+            if re.match(r"else\b", head):  # an `else` or `else if` runs only when the `if` before it did not
                 head = head + " " + closed.get(len(stack), "")
             stack.append((head, bool(LAMBDA_HEAD.search(head))))
         elif tok == "}":
@@ -135,6 +135,8 @@ class ServerTeamSizeWiring(unittest.TestCase):
         self.assertFalse(mode_return("if (g_isServer) {\n  (void)0;\n}\nif (trigger) {\n  (void)0;\n} else {\n  return;\n}\n"))
         self.assertTrue(mode_return("if (g_isServer) {\n  auto f = [] { return 1; };\n  return;\n}\n"))
         self.assertTrue(mode_return("if (!g_isServer) {\n  if (trigger) {\n    return;\n  }\n}\n"))
+        self.assertTrue(mode_return("if (g_isServer) {\n  (void)0;\n} else if (trigger) {\n  return;\n}\n"))
+        self.assertTrue(mode_return("if (g_isServer) {\n} else if (a) {\n} else {\n  return;\n}\n"))
 
     def test_a_broken_install_is_found(self) -> None:
         install = INSTALL.read_text(encoding="utf-8")
