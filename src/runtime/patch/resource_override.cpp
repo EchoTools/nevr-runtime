@@ -53,6 +53,7 @@
 
 /* Embedded assets */
 #include "runtime/patch/splash_texture.h"
+#include "runtime/lifecycle/cli.h"
 
 namespace {
 
@@ -692,7 +693,13 @@ size_t RegisterCachedResourceOverrides(const wchar_t* cache_dir, uint64_t cap_by
  * applied. */
 static void RegisterInitialOverrides(const wchar_t* cache_dir) {
     RegisterCachedResourceOverrides(cache_dir);
-    RegisterBuiltInSplash();
+    /* The splash is drawn by the client's main menu only; a dedicated server has no menu, so it registers nothing. */
+    if (!g_isServer) {
+        RegisterBuiltInSplash();
+    } else {
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.RESOURCE] built-in splash skipped on a dedicated server (no menu is drawn)");
+    }
 }
 
 void InstallResourceOverride() {

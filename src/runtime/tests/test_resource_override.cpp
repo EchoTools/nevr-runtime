@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <winsock2.h>  // before windows.h (tools/tests/test_header_include_order.py)
 
 #include <array>
 #include <chrono>
@@ -18,6 +19,7 @@
 
 #include "runtime/patch/asset_cache.h"
 #include "runtime/patch/resource_override.h"
+#include "runtime/lifecycle/cli.h"
 
 bool TestLogContains(const std::string& needle);
 void ClearTestLogs();
@@ -400,6 +402,9 @@ void GameFinishesReading(std::uint64_t type, std::uint64_t name, const void* ori
 class CachedOverrides : public ::testing::Test {
  protected:
   void SetUp() override {
+    // test_behavioral.cpp defaults g_isServer to TRUE for its binary; the splash is a client's, so these tests run as one.
+    wasServer_ = g_isServer;
+    g_isServer = FALSE;
     wchar_t tmp[MAX_PATH];
     ASSERT_NE(GetTempPathW(MAX_PATH, tmp), 0u);
     const std::string test = ::testing::UnitTest::GetInstance()->current_test_info()->name();
@@ -414,6 +419,7 @@ class CachedOverrides : public ::testing::Test {
     TestHook_CloseResourceOverrides();
     RemoveFakeHeap();
     Wipe();
+    g_isServer = wasServer_;
   }
   void Wipe() {
     WIN32_FIND_DATAW fd;
@@ -440,6 +446,7 @@ class CachedOverrides : public ::testing::Test {
     return v;
   }
   std::wstring dir_;
+  BOOL wasServer_ = FALSE;
 };
 
 TEST_F(CachedOverrides, ACachedFileIsDeliveredForItsTypeAndNameAndLogged) {
@@ -1080,6 +1087,30 @@ TEST_F(TexturePayloads, TheBuiltInSplashIsWrittenOverTheMenuTexturesPayload) {
   EXPECT_EQ(std::memcmp(gameBuffer.data(), "DDS ", 4), 0);
   EXPECT_TRUE(TestLogContains("override applied label=splash_texture buffer=1 "));
   EXPECT_TRUE(TestLogContains("orig_bytes=1050548 new_bytes=1050548 copy=in_place"));
+}
+
+// A dedicated server has no menu: with g_isServer set, the built-in splash is not registered and the game's buffer is kept.
+TEST_F(TexturePayloads, AServerRegistersNoBuiltInSplashAndKeepsTheGamesMenuPayload) {
+  g_isServer = TRUE;
+  TestHook_RegisterInitialOverrides(dir_.c_str());
+  EXPECT_TRUE(TestLogContains("built-in splash skipped on a dedicated server (no menu is drawn)"));
+  EXPECT_FALSE(TestLogContains("Registered embedded override: splash_texture"));
+  std::vector<std::uint8_t> gameBuffer(1050548, 0x5A);
+  GameFinishesBuffer(kTextureType, kSplashName, 1, gameBuffer.data(), gameBuffer.size());
+  EXPECT_EQ(g_seenBuffer, gameBuffer.data());
+  EXPECT_EQ(g_seenSize, 1050548u);
+  EXPECT_FALSE(TestLogContains("override applied label=splash_texture"));
+}
+
+// The client counterpart: with g_isServer clear, the same call registers the splash and writes it over buffer one.
+TEST_F(TexturePayloads, AClientRegistersTheBuiltInSplashAndWritesItOverBufferOne) {
+  g_isServer = FALSE;
+  TestHook_RegisterInitialOverrides(dir_.c_str());
+  EXPECT_TRUE(TestLogContains("Registered embedded override: splash_texture"));
+  EXPECT_FALSE(TestLogContains("built-in splash skipped"));
+  std::vector<std::uint8_t> gameBuffer(1050548, 0);
+  GameFinishesBuffer(kTextureType, kSplashName, 1, gameBuffer.data(), gameBuffer.size());
+  EXPECT_TRUE(TestLogContains("override applied label=splash_texture buffer=1 "));
 }
 
 // A cached entry covers the built-in splash only when it names the same buffer: one keyed by 0 names buffer 0.
