@@ -96,8 +96,9 @@ The layout is ADR 0012's. The only file the plan writes beside `echovr.exe` is `
 legacy `dbgcore.dll`, an earlier `nevr-runtime.dll` beside the game, a stale record, a runtime that was already in the root)
 go to `<nevr root>\installer\` and `<nevr root>\installer\aside\`. Nothing is deleted: a file that leaves the game
 folder is copied, read back, and only then removed. The host is replaced by a temporary file in the game folder renamed over
-it, so a reader sees the old host or the new one. The nevr root is `--nevr-root`, else `%LOCALAPPDATA%\nevr\echovr`; when
-neither is known the plan stops with `needs-user` before it fetches or changes anything. A record an earlier installer left
+it, so a reader sees the old host or the new one. The nevr root is `--nevr-root`, else `%LOCALAPPDATA%\nevr\echovr`; a `--nevr-root`
+that is not that folder is refused unless the run passes `--dev-nevr-root` (the host loads from no other folder outside dev
+builds, #1353); when neither is known the plan stops with `needs-user` before it fetches or changes anything. A record an earlier installer left
 beside the game is read like the root's and is moved into the aside folder by the next successful install.
 
 The record and the copy of the game's own `BugSplat64.dll` live only in the nevr root; there is no second copy in the game

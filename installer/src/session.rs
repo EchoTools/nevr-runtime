@@ -35,6 +35,10 @@ pub struct Config {
     pub allow_downgrade: bool,
     /// Seconds between the two retries of a failed signature check (the pair may have been caught between two writes).
     pub retry_delay_secs: u64,
+    /// The folder the host loads nEVR from outside dev builds (`canonical_nevr_root`); `None` off Windows.
+    pub canonical_nevr_root: Option<PathBuf>,
+    /// A dev or test run (`--dev-nevr-root`): `nevr_root` may then be any absolute folder, and the record says so.
+    pub dev_nevr_root: bool,
 }
 
 impl Config {
@@ -53,8 +57,42 @@ impl Config {
             launcher_dir: None,
             allow_downgrade: false,
             retry_delay_secs: 3,
+            canonical_nevr_root: canonical_nevr_root(),
+            dev_nevr_root: false,
         }
     }
+}
+
+/// The folder the host loads the nEVR runtime from outside dev builds: `%LOCALAPPDATA%\nevr\echovr` (`src/core/nevr_root.h`,
+/// `src/runtime/host/runtime_load.cpp`). `None` off Windows and when LOCALAPPDATA is unset.
+pub fn canonical_nevr_root() -> Option<PathBuf> {
+    if !cfg!(windows) {
+        return None;
+    }
+    std::env::var("LOCALAPPDATA").ok().filter(|p| !p.is_empty()).map(|p| canonical_under(Path::new(&p)))
+}
+
+/// The canonical folder under a LOCALAPPDATA folder (the arithmetic of `canonical_nevr_root`, testable on any platform).
+pub fn canonical_under(local_app_data: &Path) -> PathBuf {
+    local_app_data.join("nevr").join("echovr")
+}
+
+/// Two folders name the same place when their components match. Case counts only when `ignore_case` is set, which is
+/// the rule on Windows, where the spelling of a profile folder is the user's own.
+fn same_folder(a: &Path, b: &Path, ignore_case: bool) -> bool {
+    let parts = |p: &Path| -> Vec<String> {
+        p.components()
+            .map(|c| {
+                let s = c.as_os_str().to_string_lossy().into_owned();
+                if ignore_case {
+                    s.to_ascii_lowercase()
+                } else {
+                    s
+                }
+            })
+            .collect()
+    };
+    parts(a) == parts(b)
 }
 
 /// How a run ended: one of the four states of ADR 0023.
@@ -95,7 +133,7 @@ impl Session {
     /// Opens the log (refusing the run when it cannot) and writes `run_start`.
     pub fn open(cfg: Config, mode: &str) -> Result<Session> {
         let log = Log::open(&cfg.log_path, &cfg.platform)?;
-        log.info("run_start", 0, json!({"channel": cfg.channel, "manifest_base": cfg.base, "core_version": CORE_VERSION, "min_manifest_version": cfg.min_manifest_version, "mode": mode, "pins": cfg.pins.ids()}))?;
+        log.info("run_start", 0, json!({"channel": cfg.channel, "manifest_base": crate::util::redact_url(&cfg.base), "core_version": CORE_VERSION, "min_manifest_version": cfg.min_manifest_version, "mode": mode, "pins": cfg.pins.ids()}))?;
         Ok(Session { cfg, log })
     }
 
@@ -129,13 +167,14 @@ impl Session {
 
     fn get(&self, name: &str, max: u64) -> std::result::Result<Vec<u8>, Failure> {
         let url = format!("{}/{name}", self.cfg.base);
+        let shown = crate::util::redact_url(&url);
         let mut body = Vec::new();
         if let Err(f) = fetch_capped(&url, 0, max, &mut body) {
             let (Failure::Interrupted(m) | Failure::Refused(m)) = &f;
-            let _ = self.log.event("WARN", "manifest_fetch", 1, json!({"url": url, "ok": false, "reason": m}));
+            let _ = self.log.event("WARN", "manifest_fetch", 1, json!({"url": shown, "ok": false, "reason": m}));
             return Err(f);
         }
-        let _ = self.log.info("manifest_fetch", 1, json!({"url": url, "bytes": body.len(), "status": 200}));
+        let _ = self.log.info("manifest_fetch", 1, json!({"url": shown, "bytes": body.len(), "status": 200}));
         Ok(body)
     }
 
@@ -153,6 +192,8 @@ impl Session {
     fn manifest_stored(&self, fetch_error: &Error) -> Result<Verified> {
         let again = |why: String| Error::new(1, format!("{}; the manifest stored by an earlier run cannot be used: {why}", fetch_error.msg));
         let dir = &self.cfg.state_dir;
+        // The pair is read under the state lock: another run may be committing it now (#1353).
+        let _lock = manifest::lock_state(dir).map_err(|e| again(e.msg))?;
         let state = manifest::read_state(dir).map_err(|e| again(e.msg))?;
         let read = |n: &str| std::fs::read(dir.join(n)).map_err(|e| again(format!("{n}: {e}")));
         let v = manifest::verify(&read("manifest.json")?, &read("manifest.json.sig")?, &self.cfg.pins, &state, &clock(&self.cfg)?, self.cfg.min_manifest_version).map_err(|e| again(e.to_string()))?;
@@ -164,6 +205,8 @@ impl Session {
     }
 
     fn manifest_online(&self) -> Result<Verified> {
+        // Held from the read of the state to the commit of the pair (#1353): a second run waits for this one to finish.
+        let _lock = manifest::lock_state(&self.cfg.state_dir)?;
         let state = manifest::read_state(&self.cfg.state_dir)?;
         let now = clock(&self.cfg)?;
         let mut last: Option<Error> = None;
@@ -189,6 +232,8 @@ impl Session {
 
     /// Reads the manifest from a directory instead of the network (an offline mirror, or a test).
     pub fn manifest_from_dir(&self, dir: &Path) -> Result<Verified> {
+        // Held from the read of the state to the commit of the pair (#1353), as for a download.
+        let _lock = manifest::lock_state(&self.cfg.state_dir)?;
         let state = manifest::read_state(&self.cfg.state_dir)?;
         let read = |n: &str| std::fs::read(dir.join(n)).map_err(|e| Error::new(1, format!("{n}: {e}")));
         let v = manifest::verify(&read("manifest.json")?, &read("manifest.json.sig")?, &self.cfg.pins, &state, &clock(&self.cfg)?, self.cfg.min_manifest_version)?;
@@ -237,8 +282,9 @@ impl Session {
         self.log.info("plan", 9, quest::with_trust(json!({"steps": plan.steps.iter().map(|s| s.name()).collect::<Vec<_>>(), "installed": observed.installed.as_ref().map(|i| json!({"version_code": i.version_code, "signers": i.signers})), "decision": plan.decision, "reasons": plan.reasons}), dev_apk.is_some()))?;
         let report = plan.to_json();
         let ended = match plan.outcome {
-            // A refused plan under `install` is a failed request: nothing was installed, and a caller must not read exit 0.
-            quest::Outcome::Unchanged => self.end_with("unchanged", &plan.reasons.join("; "), install && plan.decision == "refused")?,
+            // A refused plan is a failed request whether it only plans or installs (#1353): nothing was installed, and a caller
+            // must not read exit 0.
+            quest::Outcome::Unchanged => self.end_with("unchanged", &plan.reasons.join("; "), plan.decision == "refused")?,
             quest::Outcome::NeedsUser => self.end("needs-user", &plan.reasons.join("; "))?,
             quest::Outcome::Proceed if !install => self.end("unchanged", "plan only: nothing was changed")?,
             quest::Outcome::Proceed => {
@@ -299,6 +345,9 @@ impl Session {
             Some(r) => return self.pc_stop(&format!("--nevr-root {} is not an absolute path", r.display())),
             None => return self.pc_stop("the nevr root is unknown (LOCALAPPDATA is not set); pass --nevr-root"),
         };
+        if let Err(why) = self.check_nevr_root(&root) {
+            return self.pc_stop(&why.msg);
+        }
         let layout = pc::Layout::new(dir, root);
         let local = match package_dir {
             Some(d) => self.local_package(d, &art, &v)?,
@@ -311,7 +360,7 @@ impl Session {
                 std::fs::create_dir_all(&self.cfg.work_dir).map_err(|e| Error::new(8, format!("{}: {e}", self.cfg.work_dir.display())))?;
                 let url = format!("{}/{}", self.cfg.base, art.path);
                 let f = artifact::download(&url, &art, &zip_path)?;
-                self.log.info("artifact_fetch", 8, json!({"kind": "windows-zip", "url": url, "size": art.size, "bytes": f.bytes, "sha256": f.sha256, "ok": true, "resumed_from": f.resumed_from}))?;
+                self.log.info("artifact_fetch", 8, json!({"kind": "windows-zip", "url": crate::util::redact_url(&url), "size": art.size, "bytes": f.bytes, "sha256": f.sha256, "ok": true, "resumed_from": f.resumed_from}))?;
                 let n = artifact::verify_zip(&zip_path, &art, false)?;
                 self.log.info("verify_installed", 8, json!({"ok": true, "what": "zip-members", "expected": art.contents.len(), "observed": n}))?;
                 // The bytes that are planned and installed are the bytes just checked against the manifest, not a second read.
@@ -347,6 +396,30 @@ impl Session {
             }
         };
         Ok((ended, report))
+    }
+
+    /// The nevr root a PC run acts on is the folder the host loads from. Any other root is refused, with the reason in the
+    /// log, unless the run is a dev or test run (`--dev-nevr-root`), and then the log says that instead.
+    pub fn check_nevr_root(&self, root: &Path) -> Result<()> {
+        let shown = root.display().to_string();
+        let canonical = self.cfg.canonical_nevr_root.as_deref();
+        if canonical.is_some_and(|c| same_folder(c, root, cfg!(windows))) {
+            self.log.info("nevr_root", 9, json!({"ok": true, "root": shown, "canonical": true}))?;
+            return Ok(());
+        }
+        if self.cfg.dev_nevr_root {
+            self.log.event("WARN", "nevr_root", 9, json!({"ok": true, "root": shown, "canonical": false, "dev": true, "reason": "--dev-nevr-root: this run may use a nevr root the host does not load from"}))?;
+            return Ok(());
+        }
+        let why = match canonical {
+            Some(c) => format!(
+                "--nevr-root {shown} is not the folder the game loads nEVR from ({}). The host loads only from there outside dev builds; a dev or test run passes --dev-nevr-root.",
+                c.display()
+            ),
+            None => format!("--nevr-root {shown} is refused: this platform has no folder the game loads nEVR from. A dev or test run passes --dev-nevr-root."),
+        };
+        self.log.error("nevr_root", 9, json!({"ok": false, "root": shown, "canonical": canonical.map(|c| c.display().to_string()), "reason": why}))?;
+        Err(Error::new(9, why))
     }
 
     /// A PC run that stops before it fetches or changes anything: the player has to give the root.
@@ -408,4 +481,56 @@ pub fn read_package(zip_path: &Path, art: &Artifact, version: &str) -> Result<pc
         Ok(b)
     };
     Ok(pc::Package { host: take(pc::HOST)?, runtime: take(pc::RUNTIME)?, version: version.to_string() })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_folder_is_the_same_by_components_and_by_case_only_where_the_rule_says_so() {
+        assert!(same_folder(Path::new("C:/u/nevr/echovr"), Path::new("C:/u/nevr/echovr/"), false));
+        assert!(same_folder(Path::new("/a/b/./c"), Path::new("/a/b/c"), false));
+        assert!(!same_folder(Path::new("/a/b/c"), Path::new("/a/b/C"), false), "case counts without the Windows rule");
+        assert!(same_folder(Path::new("/a/b/c"), Path::new("/A/B/C"), true), "the Windows rule ignores case");
+        assert!(!same_folder(Path::new("/a/b/c"), Path::new("/a/b/d"), true));
+        assert!(!same_folder(Path::new("/a/b/c"), Path::new("/a/b"), true));
+    }
+
+    #[test]
+    fn the_canonical_folder_is_nevr_echovr_under_local_app_data() {
+        let local = Path::new("C:").join("Users").join("p").join("AppData").join("Local");
+        assert_eq!(canonical_under(&local), local.join("nevr").join("echovr"));
+        assert_ne!(canonical_under(&local), local.join("nevr"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn off_windows_there_is_no_canonical_folder_whatever_local_app_data_says() {
+        std::env::set_var("LOCALAPPDATA", "/not-a-profile/AppData/Local");
+        let got = canonical_nevr_root();
+        std::env::remove_var("LOCALAPPDATA");
+        assert_eq!(got, None);
+    }
+
+    #[test]
+    fn the_stored_fallback_takes_the_state_lock_before_it_reads_the_pair() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("root");
+        let state = root.join("state");
+        std::fs::create_dir_all(&state).unwrap();
+        let holder = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(state.join("state.lock")).unwrap();
+        holder.lock().unwrap();
+        let cfg = Config::new("pc", &root);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let r = Session::open(cfg, "test").and_then(|s| s.manifest_stored(&Error::new(1, "unreachable"))).map(|_| ()).map_err(|e| e.msg);
+            let _ = tx.send(r);
+        });
+        assert!(rx.recv_timeout(Duration::from_millis(800)).is_err(), "the stored pair was read while another run held the state lock");
+        drop(holder);
+        assert!(rx.recv_timeout(Duration::from_secs(60)).unwrap().is_err(), "no pair is stored, so the fallback fails");
+    }
 }
