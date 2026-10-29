@@ -79,6 +79,17 @@ def is_dist(outputs: str, rule: str) -> bool:
     return rule == "CUSTOM_COMMAND" and "CMakeFiles/dist" in outputs
 
 
+def is_reader_scan(outputs: str, rule: str, first: str, block: str) -> bool:
+    """CMake's dyndep scan of a source file (`<source>.obj.ddi`, rule CXX_SCAN__*) preprocesses that file with the
+    compile command's definitions, so the scan edge of a reader carries exactly what the reader's own compile edge
+    carries. That is the same reader, not another place the commit reaches; a scan of a file that names no macro, or
+    that carries other macros than its source names, is not allowed."""
+    if not (outputs.endswith(".ddi") and "SCAN" in rule and first.endswith(SOURCE_SUFFIXES)):
+        return False
+    have = defined_on(block)
+    return bool(have) and have == named_in(source_path(first))
+
+
 def defined_on(block: str) -> set[str]:
     return set(DEFINED_ON_COMMAND_LINE.findall(block))
 
@@ -145,7 +156,8 @@ class IdentityScope(unittest.TestCase):
         stray = [outputs for outputs, rule, first, block in edges()
                  if any(v in block for v in values)
                  and not (("COMPILER" in rule) and first.endswith(SOURCE_SUFFIXES) and defined_on(block))
-                 and not is_dist(outputs, rule)]
+                 and not is_dist(outputs, rule)
+                 and not is_reader_scan(outputs, rule, first, block)]
         self.assertEqual(stray[:5], [], f"{len(stray)} edges other than the readers' compile edges carry the commit")
 
 

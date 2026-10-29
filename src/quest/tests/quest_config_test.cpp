@@ -309,6 +309,42 @@ void HardwareDumpIsOnlyEverOnByTheDiagnosticsKey() {
   }
 }
 
+// The rad provider (#1220) is off unless diagnostics.pnsrad_provider asks for it, and it follows login: the rad provider
+// sends no login of its own.
+void PnsradProviderIsOnlyEverOnByItsKeyAndNeedsLogin() {
+  {
+    const LoadResult r = nevr_quest::ResolveConfig(Full(), nullptr);
+    CHECK(!r.config.requested.pnsradProvider && !r.config.effective.pnsradProvider);
+    CHECK(EventsContain(r, "feature=pnsrad_provider requested=off effective=off"));
+  }
+  {
+    const LoadResult r = Load(Full(), "diagnostics:\n  pnsrad_provider: true\n");
+    CHECK(r.config.requested.pnsradProvider && r.config.effective.pnsradProvider);
+    CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kPnsradProvider));
+    CHECK(r.config.effective.login);
+    CHECK(EventsContain(r, "feature=pnsrad_provider requested=on effective=on"));
+    CHECK(!HasLevel(r, LogLevel::kWarn));
+  }
+  // No service target: no login, so the provider stays pnsovr and the reason is logged.
+  {
+    const LoadResult r = Load(EmbeddedDefaults(), "diagnostics:\n  pnsrad_provider: true\n");
+    CHECK(r.config.requested.pnsradProvider && !r.config.effective.pnsradProvider);
+    CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kPnsradProvider));
+    CHECK(EventsContain(r, "pnsrad_provider"));
+    CHECK(EventsContain(r, "login_not_enabled"));
+  }
+  {
+    const LoadResult r = Load(Full(), "diagnostics:\n  pnsrad_provider: sure\n");
+    CHECK(!r.config.effective.pnsradProvider);
+    CHECK(EventsContain(r, "config file key=diagnostics.pnsrad_provider rejected reason=not_a_boolean"));
+  }
+  for (const char* text : {"diagnostics:\n  pnsrad_provider: false\n", "social:\n  pnsrad_provider: true\n",
+                           "pnsrad_provider: true\n", "x-pnsrad_provider: true\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.config.effective.pnsradProvider);
+  }
+}
+
 void MalformedFileFallsBackToDefaults() {
   struct Case {
     const char* text;
@@ -964,6 +1000,7 @@ int main() {
   ABooleanThatIsNotOneKeepsItsDefaultAndIsRejectedByName();
   SendPresenceToMetaFalseIsTheLocalPresencePath();
   HardwareDumpIsOnlyEverOnByTheDiagnosticsKey();
+  PnsradProviderIsOnlyEverOnByItsKeyAndNeedsLogin();
   UiEventProbeIsOnByDefaultOffOnlyByTheDiagnosticsKeyAndNeedsSocial();
   TextureQualityIsTheDefaultUnlessTheFileNamesAnotherLevel();
   ATextureQualityThatIsNotALevelFallsBackToStockAndNamesTheWord();

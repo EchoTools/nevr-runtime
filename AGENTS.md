@@ -181,122 +181,131 @@ checked by a GTest or a Python check, some only by a live run, and some by nothi
 below, read the rule's comment at the site and keep the rule. If a change must break one, say so in the PR and why.
 
 The index was built from `git grep -nE '\bN[0-9]+\b'` over `src/`, `sdk/` and `tools/`, the `verify` recipe in
-`justfile`, and the Python checks it runs. In the "Checked by" column, "verify" means a `just verify` sensor whose
-FAIL line names the rule, and "nothing" means no check names it. An ID cited only as history inside another rule's
-comment (for example N41, N48) is not a rule.
+`justfile`, and the Python checks it runs. An ID cited only as history inside another rule's comment (for example N41,
+N48) is not a rule.
+
+**Kind** says what a rule promises: `run`, what a running process does (it exits, logs, refuses, loads, never
+blocks); `source`, what the tree is (where code lives, what it calls, how a name is spelled, what is built). Each
+**Checked by** item carries its rank on the evidence ladder in `docs/standards/verification.md`: `rank 1:` a live
+run; `rank 2:` a test that drives the code that ships (not a copy of it); `rank 3:` a check that reads the source,
+either a `just verify` sensor whose FAIL line names the rule (written `verify`) or a Python check over source text.
+A rule whose Kind is `run` is checked at rank 1 or rank 2, or its cell has an `unchecked:` item naming the part
+nothing drives: a sensor that finds the call site does not show what the run does. A `source` rule may rest on
+rank 3, and `none` means nothing checks it. `tools/tests/test_n_rules_index.py` checks this form; the review checks
+that each Kind and rank is true.
 
 #### Boot, shutdown and crash path
 
-| Rule | Statement | Guards | Checked by |
-| --- | --- | --- | --- |
-| N4 | A server whose config fails to load, or whose shutdown hangs, exits; it never blocks forever (`ForceFatalExit` through the registered fatal handler; a teardown watchdog). | `src/core/nevr_config.h`, `src/core/nevr_config_policy.cpp`, `src/runtime/lifecycle/crash_recovery.cpp` | nothing |
-| N36 | Guarded initialization (`InitializeAfterGameImageGuard`) runs from the runtime's `initialize` (`runtime_entry.cpp`), which the host's detour on the game's main wrapper calls once, outside the loader lock, in the boot phase: it calls `nevr_boot_log_tee::Init()` before `InitializeFunctionPointers()`, and every return passes `nevr_boot_log_tee::Close()`. In the boot phase `Log()` reports through the boot tee (the sink `Init()` sets with `SetBootLogSink`), never the game's CLog, so code shared with later phases calls `Log()` and never branches on the phase. | `src/runtime/lifecycle/initialize.cpp`, `src/core/logging.cpp`, `src/runtime/log/boot_log_tee.cpp` | verify (the call order); `src/runtime/tests/test_boot_log_routing.cpp` (the routing); `tools/tests/test_patch_detour_logging.py` (the sink, the early return, no caller branching) |
-| (unnamed) | `DllMain` never runs plugin shutdown or unload (it holds the loader lock). | `src/runtime/lifecycle/dllmain.cpp` | verify (sensor "Plugin detach teardown boundary", which names no rule) |
-| N43 | The boot log tee (`nevr_boot_log_tee`) deliberately opens and writes its file during initialization, through kernel32 calls only (no CRT locks), so it stays safe if a caller ever holds the loader lock; initialization runs from the host's wrapper detour, not from `DllMain`, so the addendum's no-file-I/O-from-DllMain rule does not reach it. | `src/runtime/log/boot_log_tee.h`, `src/runtime/log/boot_log_tee.cpp`, `src/runtime/lifecycle/initialize.cpp` | nothing names it |
-| N59 | Initialization calls `PatchDscProvider()` (the PSN/??? to DSC provider-string rewrite). | `src/runtime/lifecycle/initialize.cpp` | verify |
-| N62 | The signal-delivered shutdown never takes the loader lock: its dependencies are resolved once at init (`ResolveShutdownDependencies`), nothing is resolved at shutdown, and the signal-context flag is `volatile sig_atomic_t`. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/boot.cpp` | verify |
-| N63 | A second signal during shutdown calls `ForceFatalExit`; it never sleeps and returns. | `src/runtime/lifecycle/crash_recovery.cpp` | verify |
-| N38, N64, N105 | Graceful shutdown releases the bridge listener by a direct call to `StopWebSocketBridgeListener()` before `ForceFatalExit`, so the listening socket does not outlive the process as a zombie. | `src/runtime/server/gameserver.cpp`, `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/crash_recovery.h`, `src/runtime/compat/ws_bridge.cpp` | verify |
-| N67 | The crash flags `g_crashReporterSuppressed` and `g_justSuppressedCrash` are `std::atomic<bool>`: written from any thread, read from the faulting one. | `src/runtime/lifecycle/crash_recovery.cpp` | verify |
-| N69 | The stack-overflow handler has room to run: `SetThreadStackGuarantee` at VEH install and `EnsureStackReserve()` on the thread that runs each frame. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/frame/tick.cpp` | verify |
-| N70 | The crash path (`BreakpointVEH`, `WriteCrashDump`) never calls `Log()` and never enumerates modules: it writes with `VehPrintf` (raw `WriteFile`) and reads the module table cached at init by `CacheModuleTable()`. | `src/runtime/lifecycle/crash_recovery.cpp` | verify |
-| N71 | `BreakpointVEH` has a generic null-pointer access-violation branch and a table of at least 25 known session-flags null-dereference sites; those game functions are deliberately not hooked. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/crash_recovery_sites.h` | verify; `src/runtime/tests/test_crash_recovery.cpp` |
-| N82 | Only the vectored handler in `crash_recovery.cpp` acts on `EXCEPTION_BREAKPOINT`; every other one returns `EXCEPTION_CONTINUE_SEARCH` for it. | `src/runtime/lifecycle/crash_recovery.cpp` | `tools/verify_hook_invariants.py` |
-| N87 | Under Wine, CTRL+C arrives as `CTRL_C_EVENT` at console control handlers, not at the CRT `SIGINT` handler; the runtime keeps its handler at the front of the chain and re-arms it after the game installs its own. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/crash_recovery.h`, `src/runtime/server/gameserver.cpp` | `tools/tests/test_runtime_lifecycle_invariants.py`; `src/runtime/tests/test_crash_recovery.cpp` |
-| N125 | The game-loop `setjmp` on `g_gameLoopJmpBuf` and its `longjmp` both live in `crash_recovery.cpp`; the host owns the one hook on the game's main wrapper, the runtime hands the host `RuntimeGameMain` as its `game_main`, and its `initialize` calls `ArmGameMain` (HookGuard records the host's hook from the bytes the host wrote). | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/patch/mode_patches.cpp`, `src/runtime/lifecycle/runtime_entry.cpp` | verify |
-| N146 | Before the original `PreprocessCommandLine` call only minimal state is set up (no modules, file I/O or bridge), because the client's D3D initialization runs inside that call. The one exception is the early plugin pass: `LoadPlugins(PluginPhase::Early)` runs once, before the original call, and loads only the `config.yaml` entries marked `early: true` (none marked: it loads nothing), so a plugin that serves game data from elsewhere is in place before the game reads its manifests and packages; the normal pass loads the rest after the graphics device exists, and a pointer from `get_plugin_info` stays valid across both passes (`g_plugins` has stable element addresses). The spectator-stream check inside `PreprocessCommandLine` is patched by `PatchSpectatorStreamCheck`, prologue-validated and logged; on a server it is written once, by `PatchEnableServer` in the deferred bootstrap after the first original call, never before that call (written before it, the check sets the spectator flow, in which the game begins multiplayer a second time, after the state machine's begin). `BugSplat64.dll` links at the stock image base `0x180000000`, so the game's graphics DLLs load. The matchmaker bridge port is chosen at run time and patched into `pnsradmatchmaking.dll`'s compiled-in host (`ApplyMatchmakingLoad`), never a fixed port. | `src/runtime/lifecycle/boot.cpp`, `src/runtime/patch/mode_patches.cpp`, `src/runtime/CMakeLists.txt`, `src/runtime/compat/ws_bridge.cpp`, `src/runtime/patch/pnsrad_enabler.cpp`, `src/runtime/ext/plugin_loader.cpp` | `tools/tests/test_spectatorstream_order.py`, `tools/tests/test_plugin_loader_storage.py` (the early-pass latch, the N146 text, the storage), `src/runtime/tests/test_behavioral.cpp` (`InfoPointerStaysValidWhilePluginsAreAddedWithoutAPlan`, `InfoPointerKeptInTheEarlyPassStaysValidAfterTheNormalPass`), `src/runtime/tests/test_checked_patch.cpp` (the spectator-stream patch); `tools/tests/test_pnsrad_load_boundary.py` (the host patch runs on every load, at the module's `LoadLibrary` return); nothing for the boot-state limit or the image base |
-| N13 | CTRL+C from a terminal must reach the game's process group (Wine started with `WINEDEBUG=-all`, not behind a pipeline), and the signal and console handlers call `PerformGracefulShutdown` directly, never through a flag checked per frame (the frame loop stops before the flag is read, and the listening socket survives as a zombie; see N38). | the launch scripts, `src/runtime/lifecycle/crash_recovery.cpp` | nothing (manual run; noted in `src/runtime/tests/test_xpid_patch.cpp`) |
+| Rule | Kind | Statement | Guards | Checked by |
+| --- | --- | --- | --- | --- |
+| N4 | run | A server whose config fails to load, or whose shutdown hangs, exits; it never blocks forever (`ForceFatalExit` through the registered fatal handler; a teardown watchdog). | `src/core/nevr_config.h`, `src/core/nevr_config_policy.cpp`, `src/runtime/lifecycle/crash_recovery.cpp` | unchecked: nothing drives a failed config load or a hung shutdown |
+| N36 | run | Guarded initialization (`InitializeAfterGameImageGuard`) runs from the runtime's `initialize` (`runtime_entry.cpp`), which the host's detour on the game's main wrapper calls once, outside the loader lock, in the boot phase: it calls `nevr_boot_log_tee::Init()` before `InitializeFunctionPointers()`, and every return passes `nevr_boot_log_tee::Close()`. In the boot phase `Log()` reports through the boot tee (the sink `Init()` sets with `SetBootLogSink`), never the game's CLog, so code shared with later phases calls `Log()` and never branches on the phase. | `src/runtime/lifecycle/initialize.cpp`, `src/core/logging.cpp`, `src/runtime/log/boot_log_tee.cpp` | rank 2: `src/runtime/tests/test_boot_log_routing.cpp` (the routing); rank 3: verify (the call order), `tools/tests/test_patch_detour_logging.py` (the sink, the early return, no caller branching) |
+| (unnamed) | source | `DllMain` never runs plugin shutdown or unload (it holds the loader lock). | `src/runtime/lifecycle/dllmain.cpp` | rank 3: verify (sensor "Plugin detach teardown boundary", which names no rule) |
+| N43 | source | The boot log tee (`nevr_boot_log_tee`) deliberately opens and writes its file during initialization, through kernel32 calls only (no CRT locks), so it stays safe if a caller ever holds the loader lock; initialization runs from the host's wrapper detour, not from `DllMain`, so the addendum's no-file-I/O-from-DllMain rule does not reach it. | `src/runtime/log/boot_log_tee.h`, `src/runtime/log/boot_log_tee.cpp`, `src/runtime/lifecycle/initialize.cpp` | none |
+| N59 | source | Initialization calls `PatchDscProvider()` (the PSN/??? to DSC provider-string rewrite). | `src/runtime/lifecycle/initialize.cpp` | rank 3: verify |
+| N62 | source | The signal-delivered shutdown never takes the loader lock: its dependencies are resolved once at init (`ResolveShutdownDependencies`), nothing is resolved at shutdown, and the signal-context flag is `volatile sig_atomic_t`. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/boot.cpp` | rank 3: verify |
+| N63 | run | A second signal during shutdown calls `ForceFatalExit`; it never sleeps and returns. | `src/runtime/lifecycle/crash_recovery.cpp` | unchecked: nothing sends a second signal; rank 3: verify |
+| N38, N64, N105 | run | Graceful shutdown releases the bridge listener by a direct call to `StopWebSocketBridgeListener()` before `ForceFatalExit`, so the listening socket does not outlive the process as a zombie. | `src/runtime/server/gameserver.cpp`, `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/crash_recovery.h`, `src/runtime/compat/ws_bridge.cpp` | unchecked: nothing observes the listening socket released at shutdown; rank 3: verify |
+| N67 | source | The crash flags `g_crashReporterSuppressed` and `g_justSuppressedCrash` are `std::atomic<bool>`: written from any thread, read from the faulting one. | `src/runtime/lifecycle/crash_recovery.cpp` | rank 3: verify |
+| N69 | source | The stack-overflow handler has room to run: `SetThreadStackGuarantee` at VEH install and `EnsureStackReserve()` on the thread that runs each frame. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/frame/tick.cpp` | rank 3: verify |
+| N70 | source | The crash path (`BreakpointVEH`, `WriteCrashDump`) never calls `Log()` and never enumerates modules: it writes with `VehPrintf` (raw `WriteFile`) and reads the module table cached at init by `CacheModuleTable()`. | `src/runtime/lifecycle/crash_recovery.cpp` | rank 3: verify |
+| N71 | source | `BreakpointVEH` has a generic null-pointer access-violation branch and a table of at least 25 known session-flags null-dereference sites; those game functions are deliberately not hooked. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/crash_recovery_sites.h` | rank 2: `src/runtime/tests/test_crash_recovery.cpp` (the site table and its lookup); rank 3: verify |
+| N82 | source | Only the vectored handler in `crash_recovery.cpp` acts on `EXCEPTION_BREAKPOINT`; every other one returns `EXCEPTION_CONTINUE_SEARCH` for it. | `src/runtime/lifecycle/crash_recovery.cpp` | rank 3: `tools/verify_hook_invariants.py` |
+| N87 | run | Under Wine, CTRL+C arrives as `CTRL_C_EVENT` at console control handlers, not at the CRT `SIGINT` handler; the runtime keeps its handler at the front of the chain and re-arms it after the game installs its own. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/crash_recovery.h`, `src/runtime/server/gameserver.cpp` | rank 2: `src/runtime/tests/test_crash_recovery.cpp` (`ConsoleCtrlPolicy`: when the handler defers); rank 3: `tools/tests/test_runtime_lifecycle_invariants.py`; unchecked: the re-arm in a run under Wine |
+| N125 | source | The game-loop `setjmp` on `g_gameLoopJmpBuf` and its `longjmp` both live in `crash_recovery.cpp`; the host owns the one hook on the game's main wrapper, the runtime hands the host `RuntimeGameMain` as its `game_main`, and its `initialize` calls `ArmGameMain` (HookGuard records the host's hook from the bytes the host wrote). | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/patch/mode_patches.cpp`, `src/runtime/lifecycle/runtime_entry.cpp` | rank 3: verify |
+| N146 | run | Before the original `PreprocessCommandLine` call only minimal state is set up (no modules, file I/O or bridge), because the client's D3D initialization runs inside that call. The one exception is the early plugin pass: `LoadPlugins(PluginPhase::Early)` runs once, before the original call, and loads only the `config.yaml` entries marked `early: true` (none marked: it loads nothing), so a plugin that serves game data from elsewhere is in place before the game reads its manifests and packages; the normal pass loads the rest after the graphics device exists, and a pointer from `get_plugin_info` stays valid across both passes (`g_plugins` has stable element addresses). The spectator-stream check inside `PreprocessCommandLine` is patched by `PatchSpectatorStreamCheck`, prologue-validated and logged; on a server it is written once, by `PatchEnableServer` in the deferred bootstrap after the first original call, never before that call (written before it, the check sets the spectator flow, in which the game begins multiplayer a second time, after the state machine's begin). `BugSplat64.dll` links at the stock image base `0x180000000`, so the game's graphics DLLs load. The matchmaker bridge port is chosen at run time and patched into `pnsradmatchmaking.dll`'s compiled-in host (`ApplyMatchmakingLoad`), never a fixed port. | `src/runtime/lifecycle/boot.cpp`, `src/runtime/patch/mode_patches.cpp`, `src/runtime/CMakeLists.txt`, `src/runtime/compat/ws_bridge.cpp`, `src/runtime/patch/pnsrad_enabler.cpp`, `src/runtime/ext/plugin_loader.cpp` | rank 2: `src/runtime/tests/test_behavioral.cpp` (`InfoPointerStaysValidWhilePluginsAreAddedWithoutAPlan`, `InfoPointerKeptInTheEarlyPassStaysValidAfterTheNormalPass`), `src/runtime/tests/test_checked_patch.cpp` (the spectator-stream patch); rank 3: `tools/tests/test_spectatorstream_order.py`, `tools/tests/test_plugin_loader_storage.py` (the early-pass latch, the N146 text, the storage), `tools/tests/test_pnsrad_load_boundary.py` (the host patch runs on every load, at the module's `LoadLibrary` return); unchecked: the boot-state limit, the image base |
+| N13 | run | CTRL+C from a terminal must reach the game's process group (Wine started with `WINEDEBUG=-all`, not behind a pipeline), and the signal and console handlers call `PerformGracefulShutdown` directly, never through a flag checked per frame (the frame loop stops before the flag is read, and the listening socket survives as a zombie; see N38). | the launch scripts, `src/runtime/lifecycle/crash_recovery.cpp` | unchecked: a manual run (noted in `src/runtime/tests/test_xpid_patch.cpp`) |
 
 #### Server, bridge and login
 
-| Rule | Statement | Guards | Checked by |
-| --- | --- | --- | --- |
-| N1 | `ParseEndpoint` never throws on malformed input: it parses with `strtoul`, range-checks to `UINT16_MAX` and logs a warning. | `src/runtime/server/messages.cpp` | `src/runtime/tests/test_parse_endpoint.cpp` |
-| N2 | Packet-encoder settings from the server are validated (`ValidatePacketEncoderSettings`) before they are forwarded to the game. | `src/runtime/server/messages.cpp` | nothing names it |
-| N14 | A `???-` platform prefix must not reach an XPID: the game caches EULA acceptance per platform prefix, so `???-` breaks the cache lookup (`XPID_PLATFORM_FALLBACK_PREFIX`). | `src/runtime/hook/addresses.h`, `src/runtime/patch/xpid_patch.cpp` | nothing names it |
-| N20 | No account or Discord ID literal is compiled in. Identity comes from the presented credential, or from the `config.yaml` Discord-ID fallback, which applies in client mode too (not gated on `g_isServer`). | `src/runtime/compat/ws_bridge.cpp`; `src/runtime`, `src/modules`, `src/abi`, `src/core` for literals | verify |
-| N34, N103 | `src/gameserver/` does not exist and must not come back; the server code is `src/runtime/server/`. | the tree | verify; `tools/verify_doc_paths.py` |
-| N37, N39 | ixwebsocket cannot set `SO_REUSEADDR`, so the bridge listener picks a random ephemeral port and retries the bind. | `src/runtime/compat/ws_bridge.cpp` | verify |
-| N51 | An access token read from disk is clamped to a short lifetime; a freshly issued token keeps its own `exp`. | `src/core/auth_token_model.h` | nothing names it |
-| N54 | When the login connection disconnects, its callback is cleared, so nothing calls into a freed `ProxyPair`. | `src/runtime/compat/ws_bridge.cpp` | `src/runtime/tests/test_behavioral.cpp` |
-| N60 | The bridge collects connections under `g_pairsMutex` and calls `stop()` outside it (`stop()` joins callback threads). | `src/runtime/compat/ws_bridge.cpp` | verify |
-| N61 | Each matchmaker connection (index 2 and up) registers its own callback on the shared remote; closing the login pair clears only its own. | `src/runtime/compat/ws_bridge.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` |
-| N85 | Never hand ixwebsocket an empty callback (`setOnMessageCallback(nullptr)`); use a no-op lambda. Callbacks have an exception boundary. | `src/runtime/compat/ws_bridge.cpp` | verify |
-| N91 | One login per login session, and a game socket's role is what it asked for, not when it connected. The socket that takes the login slot injects the LoginRequest; a further socket that asks for `/login` while a login session exists shares that session and injects nothing. The redirect gives the config and login services the request targets `/config` and `/login` on the bridge address; the Open handler reads the target of every socket (`openInfo.uri`), then the listener (the matchmaker listener makes a matchmaker), then the connect order over the slots no tagged socket is expected to take; a first frame that contradicts the role is logged. The login-injection line is logged at Info with the XPID (`docs/standards/logging.md` Rule 2). | `src/runtime/compat/ws_bridge.cpp`, `src/runtime/compat/socket_role.h`, `src/runtime/lifecycle/service_config.cpp`, `src/runtime/lifecycle/config.cpp` | verify (the Open handler admits by request target; the injection log line); `src/runtime/tests/test_socket_role.cpp`, `src/runtime/tests/test_behavioral.cpp` (`RolesByPathTest`, through the real bridge), `src/runtime/tests/test_service_config.cpp` (the redirect's request targets), `tools/tests/test_bridge_role_wiring.py` |
-| N92 | The WebSocket bridge is compiled into `BugSplat64.dll` and started in-process from `boot.cpp`; no ws-bridge module is built or loaded. | `src/runtime/lifecycle/boot.cpp`, `CMakeLists.txt` | verify |
-| N102 | A dedicated server that ServerDB refused, that has no token, or that cannot begin multiplayer (a changed prologue of `QueueGameThreadCall` or `BeginMultiplayerLobby`, checked once at boot by `ValidateServerBringup`; a net game not logged in when the queued begin runs) exits with a cause through `ServerFatal` (mode-gated), not `FatalError`. | `src/runtime/server/gameserver_callbacks.cpp`, `src/runtime/server/gameserver_serverdb.cpp`, `src/runtime/lifecycle/state_machine.cpp`, `src/runtime/lifecycle/server_bringup.h` | verify; `src/runtime/tests/test_server_bringup.cpp`, `tools/tests/test_server_bringup_wiring.py` |
-| N106 | A server exchanges its refresh token for an access token (`HasValidRefreshToken()` then `RefreshAuthToken`); without it every registration falls back to password auth. | `src/runtime/server/gameserver_serverdb.cpp` | verify |
-| N112 | The client login and the server registration carry the build identity (`nevr_identity`, from `nevr_build_identity::Get()`) and the plugin manifest (`nevr_plugins`, from `BuildPluginManifestJson()`). | `src/core/build_identity.h`, `src/core/build_identity.cpp`, `src/runtime/compat/login_profile.cpp`, `src/runtime/server/gameserver_callbacks.cpp`, `src/runtime/ext/plugin_loader.cpp` | verify (N112a-d); `src/runtime/tests/test_behavioral.cpp` |
-| N115 | The login's `system_info` block is measured (`nevr_system_info::Get`), never a literal. | `src/runtime/compat/ws_bridge.cpp` | verify |
-| N123 | The login display name is the token-auth username (`TokenAuth_GetUsername`), falling back to the account id; never a placeholder. | `src/runtime/compat/ws_bridge.cpp`, `src/runtime/compat/login_profile.cpp`, `src/modules/token-auth/src/token_auth.cpp` | verify |
-| N131 | The asset CDN starts only on a client: in `boot.cpp` inside `if (!g_isServer)`, never in `initialize.cpp` (where `g_isServer` is not yet set). | `src/runtime/lifecycle/boot.cpp`, `src/runtime/lifecycle/initialize.cpp` | verify |
-| N132 | `just proto` generates from one pinned BSR commit, matching nevr-stream's Go module revision (as `justfile` says); bump it only with the schema. | `justfile` (`proto`) | nothing |
+| Rule | Kind | Statement | Guards | Checked by |
+| --- | --- | --- | --- | --- |
+| N1 | run | `ParseEndpoint` never throws on malformed input: it parses with `strtoul`, range-checks to `UINT16_MAX` and logs a warning. | `src/runtime/server/messages.cpp` | unchecked: `src/runtime/tests/test_parse_endpoint.cpp` tests a copy of `ParseEndpoint` defined in the test, not the function in `src/runtime/server/messages.cpp` |
+| N2 | run | Packet-encoder settings from the server are validated (`ValidatePacketEncoderSettings`) before they are forwarded to the game. | `src/runtime/server/messages.cpp` | unchecked: nothing names it |
+| N14 | run | A `???-` platform prefix must not reach an XPID: the game caches EULA acceptance per platform prefix, so `???-` breaks the cache lookup (`XPID_PLATFORM_FALLBACK_PREFIX`). | `src/runtime/hook/addresses.h`, `src/runtime/patch/xpid_patch.cpp` | unchecked: nothing names it |
+| N20 | source | No account or Discord ID literal is compiled in. Identity comes from the presented credential, or from the `config.yaml` Discord-ID fallback, which applies in client mode too (not gated on `g_isServer`). | `src/runtime/compat/ws_bridge.cpp`; `src/runtime`, `src/modules`, `src/abi`, `src/core` for literals | rank 3: verify |
+| N34, N103 | source | `src/gameserver/` does not exist and must not come back; the server code is `src/runtime/server/`. | the tree | rank 3: verify, `tools/verify_doc_paths.py` |
+| N37, N39 | run | ixwebsocket cannot set `SO_REUSEADDR`, so the bridge listener picks a random ephemeral port and retries the bind. | `src/runtime/compat/ws_bridge.cpp` | unchecked: nothing drives a failed bind; rank 3: verify |
+| N51 | run | An access token read from disk is clamped to a short lifetime; a freshly issued token keeps its own `exp`. | `src/core/auth_token_model.h` | unchecked: nothing names it |
+| N54 | run | When the login connection disconnects, its callback is cleared, so nothing calls into a freed `ProxyPair`. | `src/runtime/compat/ws_bridge.cpp` | rank 2: `src/runtime/tests/test_behavioral.cpp` |
+| N60 | source | The bridge collects connections under `g_pairsMutex` and calls `stop()` outside it (`stop()` joins callback threads). | `src/runtime/compat/ws_bridge.cpp` | rank 3: verify |
+| N61 | run | Each matchmaker connection (index 2 and up) registers its own callback on the shared remote; closing the login pair clears only its own. | `src/runtime/compat/ws_bridge.cpp` | rank 2: `src/runtime/tests/test_behavioral.cpp`; rank 3: verify |
+| N85 | source | Never hand ixwebsocket an empty callback (`setOnMessageCallback(nullptr)`); use a no-op lambda. Callbacks have an exception boundary. | `src/runtime/compat/ws_bridge.cpp` | rank 3: verify |
+| N91 | run | One login per login session, and a game socket's role is what it asked for, not when it connected. The socket that takes the login slot injects the LoginRequest; a further socket that asks for `/login` while a login session exists shares that session and injects nothing. The redirect gives the config and login services the request targets `/config` and `/login` on the bridge address; the Open handler reads the target of every socket (`openInfo.uri`), then the listener (the matchmaker listener makes a matchmaker), then the connect order over the slots no tagged socket is expected to take; a first frame that contradicts the role is logged. The login-injection line is logged at Info with the XPID (`docs/standards/logging.md` Rule 2). | `src/runtime/compat/ws_bridge.cpp`, `src/runtime/compat/socket_role.h`, `src/runtime/lifecycle/service_config.cpp`, `src/runtime/lifecycle/config.cpp` | rank 2: `src/runtime/tests/test_socket_role.cpp`, `src/runtime/tests/test_behavioral.cpp` (`RolesByPathTest`, through the real bridge), `src/runtime/tests/test_service_config.cpp` (the redirect's request targets); rank 3: verify (the Open handler admits by request target; the injection log line), `tools/tests/test_bridge_role_wiring.py` |
+| N92 | source | The WebSocket bridge is compiled into `BugSplat64.dll` and started in-process from `boot.cpp`; no ws-bridge module is built or loaded. | `src/runtime/lifecycle/boot.cpp`, `CMakeLists.txt` | rank 3: verify |
+| N102 | run | A dedicated server that ServerDB refused, that has no token, or that cannot begin multiplayer (a changed prologue of `QueueGameThreadCall` or `BeginMultiplayerLobby`, checked once at boot by `ValidateServerBringup`; a net game not logged in when the queued begin runs) exits with a cause through `ServerFatal` (mode-gated), not `FatalError`. | `src/runtime/server/gameserver_callbacks.cpp`, `src/runtime/server/gameserver_serverdb.cpp`, `src/runtime/lifecycle/state_machine.cpp`, `src/runtime/lifecycle/server_bringup.h` | rank 2: `src/runtime/tests/test_server_bringup.cpp` (the prologue check; a queued begin in any state but logged in); rank 3: verify, `tools/tests/test_server_bringup_wiring.py`; unchecked: a server that ServerDB refused, or that has no token, exits (verify finds the `ServerFatal` call sites; nothing drives such a server) |
+| N106 | run | A server exchanges its refresh token for an access token (`HasValidRefreshToken()` then `RefreshAuthToken`); without it every registration falls back to password auth. | `src/runtime/server/gameserver_serverdb.cpp` | unchecked: nothing drives a server's exchange (`src/runtime/tests/test_token_auth.cpp` drives the token module's refresh, not the server's call); rank 3: verify |
+| N112 | run | The client login and the server registration carry the build identity (`nevr_identity`, from `nevr_build_identity::Get()`) and the plugin manifest (`nevr_plugins`, from `BuildPluginManifestJson()`). | `src/core/build_identity.h`, `src/core/build_identity.cpp`, `src/runtime/compat/login_profile.cpp`, `src/runtime/server/gameserver_callbacks.cpp`, `src/runtime/ext/plugin_loader.cpp` | rank 2: `src/runtime/tests/test_behavioral.cpp` (the client login profile: `nevr_identity`, `nevr_plugins`); rank 3: verify (N112a-d); unchecked: the server registration payload (`server/gameserver_callbacks.cpp` is not compiled into `test_behavioral`) |
+| N115 | source | The login's `system_info` block is measured (`nevr_system_info::Get`), never a literal. | `src/runtime/compat/ws_bridge.cpp` | rank 3: verify |
+| N123 | run | The login display name is the token-auth username (`TokenAuth_GetUsername`), falling back to the account id; never a placeholder. | `src/runtime/compat/ws_bridge.cpp`, `src/runtime/compat/login_profile.cpp`, `src/modules/token-auth/src/token_auth.cpp` | rank 2: `src/runtime/tests/test_behavioral.cpp` (`LoginProfile.EmptyDisplayNameFallsBackToTheAccountId`); rank 3: verify |
+| N131 | source | The asset CDN starts only on a client: in `boot.cpp` inside `if (!g_isServer)`, never in `initialize.cpp` (where `g_isServer` is not yet set). | `src/runtime/lifecycle/boot.cpp`, `src/runtime/lifecycle/initialize.cpp` | rank 3: verify |
+| N132 | source | `just proto` generates from one pinned BSR commit, matching nevr-stream's Go module revision (as `justfile` says); bump it only with the schema. | `justfile` (`proto`) | none |
 
 #### Config and plugins
 
-| Rule | Statement | Guards | Checked by |
-| --- | --- | --- | --- |
-| N68 | Plugins and modules tick every frame (`TickPlugins`, `TickModules`) and hear every state change (`NotifyModulesStateChange`). | `src/runtime/frame/tick.cpp`, `src/runtime/lifecycle/state_machine.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` |
-| N75 | Plugins load with a restricted DLL search path, so a DLL dropped next to `echovr.exe` cannot satisfy a dependency first. | `src/runtime/ext/plugin_loader.cpp` | verify |
-| N89 | The loader refuses a plugin whose function is built in (`log_filter.dll`). | `src/runtime/ext/plugin_loader.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` |
-| N95 | `log-filter` is neither built nor packaged. | every tracked CMake file, `CMakeLists.txt` | verify |
-| N114 | The plugin capability channel stays wired: the loader resolves `NvrPluginGetCapabilities` and `NvrPluginInitEx`, and `NEVR_PLUGIN_API_VERSION` is 8. | `src/runtime/ext/plugin_loader.cpp`, `sdk/include/nevr/plugin_interface.h` | verify |
-| N135 | A plugin logs through the host: every context the loader passes a plugin (init, per-frame, state change) carries that plugin's `plugin_id` (its `config.yaml` entry's name) and the host's `log` function (`HostPluginLog`), whose line is `[NEVR.PLUGIN] plugin=<id> <message> <key>=<value> ...` through `Log()`; a plugin's text cannot start a second line or overrun the boot buffer (`plugin_log.h`); `plugin_logger.h` binds to it at init and falls back to stderr only before that or on a host older than v6. | `sdk/include/nevr/plugin_interface.h`, `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_log.h`, `sdk/include/nevr/plugin_logger.h` | `tools/tests/test_runtime_lifecycle_invariants.py`; `src/runtime/tests/test_behavioral.cpp` (`PluginLogApi`, `PluginLoaderDiagnosticTest`), `src/runtime/tests/test_plugin_log.cpp`, `src/runtime/tests/test_plugin_logger.cpp` |
-| N120 | On a server a degraded runtime does not keep running: the HookGuard verdict is captured and escalated to `ServerFatal`, `platform_compat` fails a server run on a missing TLS hook, and the XPID patch logs both outcomes and escalates a validation failure, a failed byte write and a failed `GetProviderPrefix` (OVR-ORG) detour alike (`g_bootHookFailed` with a cause, so `boot.cpp` refuses the server), and the server bring-up prologues are validated at boot (`ValidatePrologue`, N97) with a mismatch escalated to `ServerFatal` (see N102). | `src/runtime/ext/plugin_loader.cpp`, `src/modules/platform-compat/src/platform_compat.cpp`, `src/runtime/patch/xpid_patch.cpp`, `src/runtime/lifecycle/state_machine.cpp`, `src/runtime/lifecycle/boot.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` (`XpidPatchBoot`, `XpidPrefixDetourBoot`), `src/runtime/tests/test_server_bringup.cpp`, `tools/tests/test_server_bringup_wiring.py` |
-| N133 | Every nEVR config key is read from `config.yaml` (`nevr_config`), never from the game's JSON; the flat key map has 34 entries; modules read config through `NvrModuleContext.config_get`, and a module reports its API version; the sample config has the `auth`, `services`, `identity` and `version` sections. | `src/runtime/lifecycle/config.cpp`, `src/runtime/lifecycle/service_config.cpp`, `src/core/nevr_config.h`, `src/modules/token-auth/src/token_auth.cpp`, `docs/reference/example-config.yaml` | verify (N133 S7a-d); `src/runtime/tests/test_behavioral.cpp` |
-| N134 | The plugin set is the ordered `plugins:` list in `config.yaml`, and a required plugin that fails to load is a failure (S6); plugins get `ctx_size` and the plugin-query API, and load in capability-priority order (S8). | `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_loader.h`, `src/runtime/ext/plugin_load_plan.h`, `src/runtime/lifecycle/service_config.cpp` | verify (N134 S8, N114 S7); `src/runtime/tests/test_behavioral.cpp`, `src/runtime/tests/test_plugin_load_plan.cpp` |
-| N147 | A run loads unsigned plugins unless it is started with `-require-signed-plugins`, which makes it signed-only (release-signer does not sign plugins yet; once it does, the default flips to signed-only in a separate change). `PreflightRuntimeBootstrap` reads the argument before the early plugin pass and sets the mode once (`nevr_plugin_trust::ApplyCommandLine`: any token the game would read as the argument counts, by the game's tokenizer and name rule in `cmdline_strip.h` over `GetCommandLineA()` and by `CommandLineToArgvW` over `GetCommandLineW()`, and either finding it makes the run signed-only; a command line it cannot read, or whose reading throws, makes the run signed-only too, and the mode line says so at Warning), so the early pass, the normal pass and the late-load filter read one `ActiveMode()`; no config key or environment variable sets it. The loader states the mode in effect once per run (`[NEVR.PLUGIN] plugin trust: mode=<signed-only\|unsigned-allowed> source=<default\|-require-signed-plugins\|command line unreadable> build=<release\|dev>`), and in an unsigned-allowed run an unsigned plugin loads with a Warning per plugin. A signed-only run loads only plugins signed through the release-signer pipeline: `StageOne` verifies the file (`VerifyPluginFile`: Authenticode digest, `messageDigest` bound to the signed content, chain to the pinned Microsoft root through an exclusive-root engine at the stamped time, whole-OID profile EKU, bound RFC 3161 token, denylist) on a handle held `FILE_SHARE_READ` across the load, and loads that handle's final path, so a link in the configured path cannot lead the load to another file, with no default-search fallback; a plugin's imports, delay-load imports and forwarded exports pass the same check transitively (`VerifyPluginTree`, held open across the load; a name gets `.dll` when it has no extension, and one that is neither a file in the plugins directory nor supplied by the system is refused, an absent delay-load excepted: the late-load filter checks it when it is called; a name only System32 supplies is loaded from System32 by its full path before the plugin, so a file planted in the plugins directory after the check cannot take its place), and so does every later `LoadLibrary*` of a file in that directory, one made from a staged plugin's `DllMain` included, even by the path being loaded (the loader's own load of the plugin it checked is the one load not checked twice, and only while the loader lock is not held) (a `DllLoadHook` filter: the name gets `.dll` when it has no extension, a relative path with a directory part (`\` or `/`) is refused whatever it leads to (the loader appends it to every directory it searches, each through links, so no candidate list is complete; a bare name and a full path keep their rules), the directory is the ANSI path converted through the code page; refused with `ERROR_MOD_NOT_FOUND`; a path it accepted is loaded by the final path of the file it checked and holds, through a rewriter the hook asks right after the filters (`AddLoadRewriter`), not by the caller's text, so a link repointed after the check cannot lead the load to another file; a bare name is left to the OS search and an unsigned-allowed run loads what the caller named); a refusal is a manifest entry, a log line and, on a client with graphics only, one dialog per run (`plugin_refusal_notice.h`, never on a server or headless run; a refusal after `LoadPlugins` finished shows it itself), and for a required plugin `ServerFatal`. The dev build (`mingw-plugin-dev`, `NEVR_ALLOW_UNSIGNED_PLUGINS`) carries `NEVR-PLUGIN-TRUST dev`, a release `NEVR-PLUGIN-TRUST release` (the literal names the kind of build, not the mode of a run), and `tools/package_release.py` refuses to package anything but a release. The profile EKU pin is confirmed against the real signed v5.4.3 `BugSplat64.dll` (`RealSigned.*` in `test_plugin_trust`, which `just test-auth-unit` feeds from `tools/fetch_real_signed_dll.py`); the signer subject is deliberately not pinned. A signed-only run refuses an unsigned plugin. | `src/runtime/ext/plugin_signature.cpp`, `src/runtime/ext/plugin_trust.cpp`, `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_tree.cpp`, `src/runtime/ext/plugin_refusal_notice.h`, `src/runtime/hook/dll_load_hook.cpp`, `src/runtime/lifecycle/boot.cpp`, `src/runtime/lifecycle/cli.cpp`, `src/core/cli_flags.h`, `tools/package_release.py` | `src/runtime/tests/test_plugin_signature.cpp`, `src/runtime/tests/test_plugin_trust.cpp`, `src/runtime/tests/test_plugin_tree.cpp`, `src/runtime/tests/test_behavioral.cpp` (`PluginSignatureGateTest`, `PluginDependencyGateTest`, `PluginRefusalNotice`, `PluginRunModeTest`: an unsigned plugin loads with no argument and is refused with `-require-signed-plugins`, on the release-configured build), `tools/tests/test_plugin_trust_run_mode.py` (the argument is read before the early pass, registered with the game's parser and listed in the README), `tools/tests/test_package_release.py`, `tools/tests/test_build_identity_literal.py` (the late-load spellings, the non-ASCII game path, the `DllMain` load and the late notice) |
-| N150 | The verifier's chain engine trusts the pinned root alone, at either struct size: `CreatePinnedChainEngine` makes it with `CERT_CHAIN_ENGINE_CONFIG.cbSize = sizeof` (88 on x64) and, only when that fails with `E_INVALIDARG` (Wine before 11.5 knows the struct without `dwExclusiveFlags` and refuses 88), once more at `offsetof(dwExclusiveFlags)` with the same `hExclusiveRoot`; `dwExclusiveFlags` stays 0, so the pin uses nothing the shorter struct lacks. Any other error, or a second failure, is a refusal that names both errors; a retry is never "skip the check". `runtime_load` records `verify_engine_cbsize` for an accepted file. | `src/runtime/ext/plugin_signature.cpp` | `src/runtime/tests/test_plugin_signature.cpp` (`PluginSignatureEngine`: the retry is taken once on `E_INVALIDARG` only; 14 wrongly signed fixtures are refused for the same reason on both paths); the suite run under a Wine 11.0 (Proton Experimental), where the retry is the real path |
+| Rule | Kind | Statement | Guards | Checked by |
+| --- | --- | --- | --- | --- |
+| N68 | run | Plugins and modules tick every frame (`TickPlugins`, `TickModules`) and hear every state change (`NotifyModulesStateChange`). | `src/runtime/frame/tick.cpp`, `src/runtime/lifecycle/state_machine.cpp` | rank 2: `src/runtime/tests/test_behavioral.cpp` (`N68_PluginTickTest`, `N68_ModuleTickTest`); rank 3: verify |
+| N75 | run | Plugins load with a restricted DLL search path, so a DLL dropped next to `echovr.exe` cannot satisfy a dependency first. | `src/runtime/ext/plugin_loader.cpp` | rank 3: verify; unchecked: how a plugin's dependencies resolve (no check loads a plugin with a planted dependency, and an unsigned-allowed run falls back to the default search order when the OS rejects the flags) |
+| N89 | run | The loader refuses a plugin whose function is built in (`log_filter.dll`). | `src/runtime/ext/plugin_loader.cpp` | rank 2: `src/runtime/tests/test_behavioral.cpp`; rank 3: verify |
+| N95 | source | `log-filter` is neither built nor packaged. | every tracked CMake file, `CMakeLists.txt` | rank 3: verify |
+| N114 | source | The plugin capability channel stays wired: the loader resolves `NvrPluginGetCapabilities` and `NvrPluginInitEx`, and `NEVR_PLUGIN_API_VERSION` is 8. | `src/runtime/ext/plugin_loader.cpp`, `sdk/include/nevr/plugin_interface.h` | rank 3: verify |
+| N135 | run | A plugin logs through the host: every context the loader passes a plugin (init, per-frame, state change) carries that plugin's `plugin_id` (its `config.yaml` entry's name) and the host's `log` function (`HostPluginLog`), whose line is `[NEVR.PLUGIN] plugin=<id> <message> <key>=<value> ...` through `Log()`; a plugin's text cannot start a second line or overrun the boot buffer (`plugin_log.h`); `plugin_logger.h` binds to it at init and falls back to stderr only before that or on a host older than v6. | `sdk/include/nevr/plugin_interface.h`, `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_log.h`, `sdk/include/nevr/plugin_logger.h` | rank 2: `src/runtime/tests/test_behavioral.cpp` (`PluginLogApi`, `PluginLoaderDiagnosticTest`), `src/runtime/tests/test_plugin_log.cpp`, `src/runtime/tests/test_plugin_logger.cpp`; rank 3: `tools/tests/test_runtime_lifecycle_invariants.py` |
+| N120 | run | On a server a degraded runtime does not keep running: the HookGuard verdict is captured and escalated to `ServerFatal`, `platform_compat` fails a server run on a missing TLS hook, and the XPID patch logs both outcomes and escalates a validation failure, a failed byte write and a failed `GetProviderPrefix` (OVR-ORG) detour alike (`g_bootHookFailed` with a cause, so `boot.cpp` refuses the server), and the server bring-up prologues are validated at boot (`ValidatePrologue`, N97) with a mismatch escalated to `ServerFatal` (see N102). | `src/runtime/ext/plugin_loader.cpp`, `src/modules/platform-compat/src/platform_compat.cpp`, `src/runtime/patch/xpid_patch.cpp`, `src/runtime/lifecycle/state_machine.cpp`, `src/runtime/lifecycle/boot.cpp` | rank 2: `src/runtime/tests/test_behavioral.cpp` (`XpidPatchBoot`, `XpidPrefixDetourBoot`), `src/runtime/tests/test_server_bringup.cpp`; rank 3: verify, `tools/tests/test_server_bringup_wiring.py`; unchecked: the HookGuard verdict's escalation and `platform_compat`'s TLS-hook failure on a server (verify only) |
+| N133 | source | Every nEVR config key is read from `config.yaml` (`nevr_config`), never from the game's JSON; the flat key map has 34 entries; modules read config through `NvrModuleContext.config_get`, and a module reports its API version; the sample config has the `auth`, `services`, `identity` and `version` sections. | `src/runtime/lifecycle/config.cpp`, `src/runtime/lifecycle/service_config.cpp`, `src/core/nevr_config.h`, `src/modules/token-auth/src/token_auth.cpp`, `docs/reference/example-config.yaml` | rank 2: `src/runtime/tests/test_behavioral.cpp`; rank 3: verify (N133 S7a-d) |
+| N134 | run | The plugin set is the ordered `plugins:` list in `config.yaml`, and a required plugin that fails to load is a failure (S6); plugins get `ctx_size` and the plugin-query API, and load in capability-priority order (S8). | `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_loader.h`, `src/runtime/ext/plugin_load_plan.h`, `src/runtime/lifecycle/service_config.cpp` | rank 2: `src/runtime/tests/test_behavioral.cpp`, `src/runtime/tests/test_plugin_load_plan.cpp`; rank 3: verify (N134 S8, N114 S7) |
+| N147 | run | A run loads unsigned plugins unless it is started with `-require-signed-plugins`, which makes it signed-only (release-signer does not sign plugins yet; once it does, the default flips to signed-only in a separate change). `PreflightRuntimeBootstrap` reads the argument before the early plugin pass and sets the mode once (`nevr_plugin_trust::ApplyCommandLine`: any token the game would read as the argument counts, by the game's tokenizer and name rule in `cmdline_strip.h` over `GetCommandLineA()` and by `CommandLineToArgvW` over `GetCommandLineW()`, and either finding it makes the run signed-only; a command line it cannot read, or whose reading throws, makes the run signed-only too, and the mode line says so at Warning), so the early pass, the normal pass and the late-load filter read one `ActiveMode()`; no config key or environment variable sets it. The loader states the mode in effect once per run (`[NEVR.PLUGIN] plugin trust: mode=<signed-only\|unsigned-allowed> source=<default\|-require-signed-plugins\|command line unreadable> build=<release\|dev>`), and in an unsigned-allowed run an unsigned plugin loads with a Warning per plugin. A signed-only run loads only plugins signed through the release-signer pipeline: `StageOne` verifies the file (`VerifyPluginFile`: Authenticode digest, `messageDigest` bound to the signed content, chain to the pinned Microsoft root through an exclusive-root engine at the stamped time, whole-OID profile EKU, bound RFC 3161 token, denylist) on a handle held `FILE_SHARE_READ` across the load, and loads that handle's final path, so a link in the configured path cannot lead the load to another file, with no default-search fallback; a plugin's imports, delay-load imports and forwarded exports pass the same check transitively (`VerifyPluginTree`, held open across the load; a name gets `.dll` when it has no extension, and one that is neither a file in the plugins directory nor supplied by the system is refused, an absent delay-load excepted: the late-load filter checks it when it is called; a name only System32 supplies is loaded from System32 by its full path before the plugin, so a file planted in the plugins directory after the check cannot take its place), and so does every later `LoadLibrary*` of a file in that directory, one made from a staged plugin's `DllMain` included, even by the path being loaded (the loader's own load of the plugin it checked is the one load not checked twice, and only while the loader lock is not held) (a `DllLoadHook` filter: the name gets `.dll` when it has no extension, a relative path with a directory part (`\` or `/`) is refused whatever it leads to (the loader appends it to every directory it searches, each through links, so no candidate list is complete; a bare name and a full path keep their rules), the directory is the ANSI path converted through the code page; refused with `ERROR_MOD_NOT_FOUND`; a path it accepted is loaded by the final path of the file it checked and holds, through a rewriter the hook asks right after the filters (`AddLoadRewriter`), not by the caller's text, so a link repointed after the check cannot lead the load to another file; a bare name is left to the OS search and an unsigned-allowed run loads what the caller named); a refusal is a manifest entry, a log line and, on a client with graphics only, one dialog per run (`plugin_refusal_notice.h`, never on a server or headless run; a refusal after `LoadPlugins` finished shows it itself), and for a required plugin `ServerFatal`. The dev build (`mingw-plugin-dev`, `NEVR_ALLOW_UNSIGNED_PLUGINS`) carries `NEVR-PLUGIN-TRUST dev`, a release `NEVR-PLUGIN-TRUST release` (the literal names the kind of build, not the mode of a run), and `tools/package_release.py` refuses to package anything but a release. The profile EKU pin is confirmed against the real signed v5.4.3 `BugSplat64.dll` (`RealSigned.*` in `test_plugin_trust`, which `just test-auth-unit` feeds from `tools/fetch_real_signed_dll.py`); the signer subject is deliberately not pinned. A signed-only run refuses an unsigned plugin. | `src/runtime/ext/plugin_signature.cpp`, `src/runtime/ext/plugin_trust.cpp`, `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_tree.cpp`, `src/runtime/ext/plugin_refusal_notice.h`, `src/runtime/hook/dll_load_hook.cpp`, `src/runtime/lifecycle/boot.cpp`, `src/runtime/lifecycle/cli.cpp`, `src/core/cli_flags.h`, `tools/package_release.py` | rank 2: `src/runtime/tests/test_plugin_signature.cpp`, `src/runtime/tests/test_plugin_trust.cpp`, `src/runtime/tests/test_plugin_tree.cpp`, `src/runtime/tests/test_behavioral.cpp` (`PluginSignatureGateTest`, `PluginDependencyGateTest`, `PluginRefusalNotice`, `PluginRunModeTest`: an unsigned plugin loads with no argument and is refused with `-require-signed-plugins`, on the release-configured build; `PluginLateLoadTest` and `PluginLateLoadAliasTest`: the late-load spellings; `PluginDependencyGateTest.ALateLoadUnderANonAsciiGamePathIsRefused`: the non-ASCII game path; `PluginDllMainLoadTest`: the `DllMain` load; `PluginDependencyGateTest.ALateRefusalAfterLoadPluginsShowsTheNoticeItself`: the late notice), `tools/tests/test_package_release.py`; rank 3: `tools/tests/test_plugin_trust_run_mode.py` (the argument is read before the early pass, registered with the game's parser and listed in the README), `tools/tests/test_build_identity_literal.py` (the plugin-trust literal in the built runtime) |
+| N150 | run | The verifier's chain engine trusts the pinned root alone, at either struct size: `CreatePinnedChainEngine` makes it with `CERT_CHAIN_ENGINE_CONFIG.cbSize = sizeof` (88 on x64) and, only when that fails with `E_INVALIDARG` (Wine before 11.5 knows the struct without `dwExclusiveFlags` and refuses 88), once more at `offsetof(dwExclusiveFlags)` with the same `hExclusiveRoot`; `dwExclusiveFlags` stays 0, so the pin uses nothing the shorter struct lacks. Any other error, or a second failure, is a refusal that names both errors; a retry is never "skip the check". `runtime_load` records `verify_engine_cbsize` for an accepted file. | `src/runtime/ext/plugin_signature.cpp` | rank 2: `src/runtime/tests/test_plugin_signature.cpp` (`PluginSignatureEngine`: the retry is taken once on `E_INVALIDARG` only; 14 wrongly signed fixtures are refused for the same reason on both paths), and the suite run under a Wine 11.0 (Proton Experimental), where the retry is the real path |
 
 #### Hooks and binary patches
 
-| Rule | Statement | Guards | Checked by |
-| --- | --- | --- | --- |
-| N6, N65 | Headless mode patches the game's own gates (the D3D12 init gate is forced to the game's graphics-disabled branch, prologue-validated). `HEADLESS_GATE_TABLE` is the single list of gates; the install loop reads it. | `src/runtime/hook/addresses.h`, `src/runtime/patch/mode_patches.cpp` | `src/runtime/tests/test_xpid_patch.cpp`, `src/runtime/tests/test_behavioral.cpp`; `tools/verify_mode_patch_ground_truth.py` |
-| N7, N8, N9, N10 | N8 and N9 are two of the headless gates (`HEADLESS_RENDER_SUBMIT_INIT`, `HEADLESS_RENDER_SETUP`); `Finished initializing engine` is the witness that a headless boot completed. | `src/runtime/hook/addresses.h` | `src/runtime/tests/test_xpid_patch.cpp`; N77 keeps the witness line |
-| N22 | The peer-timeout bug in the game (unsigned subtraction of a wrapped timestamp) is fixed by the overflow-safe `GetTimeMilliseconds` replacement. | `src/runtime/hook/addresses.h`, `src/runtime/patch/binary_bug_fixes.cpp` | nothing names it |
-| N25, N28 | A hook in `binary_bug_fixes.cpp` validates the expected bytes before it hooks. | `src/runtime/patch/binary_bug_fixes.cpp` | nothing names it (the Guardrails rule) |
-| N26 | The `CPrecisionSleep::Wait` hook is that function's only owner; nothing chains on it. | `src/runtime/patch/binary_bug_fixes.cpp` | nothing names it |
-| N31 | A value read from a fixed game global (the spin-wait limit, the server's step slot) is bounds-checked, to catch a misread after the binary changes version; the server tick rate is range-checked before the step is written, and the write is read back. | `src/runtime/patch/binary_bug_fixes.cpp`, `src/runtime/lifecycle/config.cpp`, `src/runtime/lifecycle/server_timestep.h` | `src/runtime/tests/test_server_timestep.cpp` (the step slot; the spin-wait limit has none) |
-| N32 | A caller count in `addresses.h` is a dated snapshot with the command that refreshes it; refresh it before relying on it. | `src/runtime/hook/addresses.h` | nothing names it |
-| N33, N113 | Exactly one writer patches `CPrecisionSleep::BusyWait`; it validates the prologue, saves the original byte and restores it at shutdown. | `src/runtime/patch/binary_bug_fixes.cpp` | verify |
-| N66 | `FormatSymbolId` returns 0 for a non-positive length or a null buffer. | `src/runtime/hook/symbol_corpus.cpp`, `tools/gen_symbol_corpus.py` | `src/runtime/tests/test_behavioral.cpp`; `tools/tests/test_symbol_corpus_template.py` |
-| N83 | A hooked address is named for what the binary says it is (`0x140F80ED0` is `CBroadcaster::Listen`); an address called through a live function pointer is not also detoured (self-collision); the bytes at each hooked address match the identity manifest. | `src/runtime/patch/mode_patches.cpp`, `src/runtime/hook/addresses.h`, `tools/hook_identity_manifest.json` | `tools/verify_hook_invariants.py` |
-| N84 | `PatchDetour` records each hooked address with HookGuard and its `name` parameter is required; the loader re-verifies hooked addresses after each plugin's init (`VerifyAll`). | `src/runtime/hook/patching.h`, `src/runtime/hook/hook_guard.h`, `src/runtime/ext/plugin_loader.cpp` | verify (N84, C2); `tools/verify_hook_invariants.py`; `src/runtime/tests/test_behavioral.cpp` |
-| N86, N110 | Per-frame work runs through exactly one dispatcher, `DispatchPerFrameWork`, called from a hook that is live in server mode, with a re-entrancy gate and the host flag taken from `g_isServer`; it holds the only two production `Tick*` call sites. Every declared HookLiveness id is marked somewhere. | `src/runtime/frame/tick.cpp`, `src/runtime/patch/binary_bug_fixes.cpp`, `src/runtime/hook/hook_liveness.h` | verify |
-| N96 | No symbol is spelled plain `ResolveVA`; use `ResolveVA_Checked` or `ResolveVA_Unchecked`. | `sdk/include/nevr/pc/nevr_common.h`, `src` | verify |
-| N97 | There is exactly one `ValidatePrologue`, in `nevr_common.h`. | `sdk/include/nevr/pc/nevr_common.h` | verify |
-| N99 | `-server` applies the game's own headless mask (`ENGINE_FLAGS_HEADLESS_MASK`, `0xFFFEFEFE`), and boot never tells the operator a flag is redundant. | `src/runtime/patch/mode_patches.cpp`, `src/runtime/lifecycle/boot.cpp` | verify |
-| N126 | `PatchDetour` logs a failed hook at Warning; a failed hook is never silent. | `src/runtime/hook/patching.h` | verify |
-| N127 | The Oculus-SDK block reports its real result, never an unconditional success line. | `src/runtime/patch/mode_patches.cpp` | verify; `tools/winvm/checks.py` |
-| N128 | `Hooking::Attach` records which MinHook stage failed and its `MH_STATUS`; `PatchDetour`'s failure log includes it. | `src/core/hooking.h`, `src/runtime/hook/patching.h` | verify |
-| N129 | `DllLoadHook` reports the `MH_STATUS` of each `LoadLibrary` hook that fails, with no accumulate-and-hide `ok &=`. | `src/runtime/hook/dll_load_hook.cpp` | verify |
-| N148 | The in-game CREDITS page shows the project section above Ready At Dawn's credits, which stay byte-for-byte whole: `credits_text::Install` (client only, called once from `boot.cpp`, the server skip logged) builds block + the game's own bytes copied from memory + NUL, and points the two `LEA` loads of the credits blob at it, or neither (both sites, the blob length and its SHA-256 are checked before any write; the first site is put back if the second write fails). It is a byte patch of a data-blob load, not a function, so there is nothing to hook; no text of Ready At Dawn's is stored. The block is rendered at build time from `config/credits.json` by `tools/render_credits.py --ingame-source` (lines of at most 64 bytes, drawn only from printable ASCII and `©` (the characters the game's font draws), no `|`, at most 200 lines; a name or heading with any other character, or a file the page cannot show, fails the build, naming the entry and the field). | `src/runtime/patch/credits_text.h`, `src/runtime/patch/credits_text.cpp`, `src/runtime/lifecycle/boot.cpp`, `src/runtime/CMakeLists.txt`, `tools/render_credits.py` | `src/runtime/tests/test_credits_text.cpp`, `tools/tests/test_credits.py` (`IngameText`), `tools/tests/test_credits_text_wiring.py` (the call, its gate, the build step, who names the sites); the live run on a game copy |
-| N72, N73 | Guards for the broadcaster plugin, which lives in `nevr-runtime-plugins` (see "Plugins"). | not in this tree | nothing here |
+| Rule | Kind | Statement | Guards | Checked by |
+| --- | --- | --- | --- | --- |
+| N6, N65 | source | Headless mode patches the game's own gates (the D3D12 init gate is forced to the game's graphics-disabled branch, prologue-validated). `HEADLESS_GATE_TABLE` is the single list of gates; the install loop reads it. | `src/runtime/hook/addresses.h`, `src/runtime/patch/mode_patches.cpp` | rank 2: `src/runtime/tests/test_xpid_patch.cpp`, `src/runtime/tests/test_behavioral.cpp`; rank 3: `tools/verify_mode_patch_ground_truth.py` |
+| N7, N8, N9, N10 | source | N8 and N9 are two of the headless gates (`HEADLESS_RENDER_SUBMIT_INIT`, `HEADLESS_RENDER_SETUP`); `Finished initializing engine` is the witness that a headless boot completed. | `src/runtime/hook/addresses.h` | rank 2: `src/runtime/tests/test_xpid_patch.cpp`; rank 3: verify (N77 keeps the witness line) |
+| N22 | run | The peer-timeout bug in the game (unsigned subtraction of a wrapped timestamp) is fixed by the overflow-safe `GetTimeMilliseconds` replacement. | `src/runtime/hook/addresses.h`, `src/runtime/patch/binary_bug_fixes.cpp` | unchecked: nothing names it |
+| N25, N28 | source | A hook in `binary_bug_fixes.cpp` validates the expected bytes before it hooks. | `src/runtime/patch/binary_bug_fixes.cpp` | none (the Guardrails rule) |
+| N26 | source | The `CPrecisionSleep::Wait` hook is that function's only owner; nothing chains on it. | `src/runtime/patch/binary_bug_fixes.cpp` | none |
+| N31 | run | A value read from a fixed game global (the spin-wait limit, the server's step slot) is bounds-checked, to catch a misread after the binary changes version; the server tick rate is range-checked before the step is written, and the write is read back. | `src/runtime/patch/binary_bug_fixes.cpp`, `src/runtime/lifecycle/config.cpp`, `src/runtime/lifecycle/server_timestep.h` | rank 2: `src/runtime/tests/test_server_timestep.cpp` (the step slot); unchecked: the spin-wait limit |
+| N32 | source | A caller count in `addresses.h` is a dated snapshot with the command that refreshes it; refresh it before relying on it. | `src/runtime/hook/addresses.h` | none |
+| N33, N113 | run | Exactly one writer patches `CPrecisionSleep::BusyWait`; it validates the prologue, saves the original byte and restores it at shutdown. | `src/runtime/patch/binary_bug_fixes.cpp` | rank 3: verify; unchecked: the restore at shutdown |
+| N66 | run | `FormatSymbolId` returns 0 for a non-positive length or a null buffer. | `src/runtime/hook/symbol_corpus.cpp`, `tools/gen_symbol_corpus.py` | rank 2: `src/runtime/tests/test_behavioral.cpp`; rank 3: `tools/tests/test_symbol_corpus_template.py` |
+| N83 | source | A hooked address is named for what the binary says it is (`0x140F80ED0` is `CBroadcaster::Listen`); an address called through a live function pointer is not also detoured (self-collision); the bytes at each hooked address match the identity manifest. | `src/runtime/patch/mode_patches.cpp`, `src/runtime/hook/addresses.h`, `tools/hook_identity_manifest.json` | rank 3: `tools/verify_hook_invariants.py` |
+| N84 | source | `PatchDetour` records each hooked address with HookGuard and its `name` parameter is required; the loader re-verifies hooked addresses after each plugin's init (`VerifyAll`). | `src/runtime/hook/patching.h`, `src/runtime/hook/hook_guard.h`, `src/runtime/ext/plugin_loader.cpp` | rank 2: `src/runtime/tests/test_behavioral.cpp` (`N84_HookGuard`); rank 3: verify (N84, C2), `tools/verify_hook_invariants.py` |
+| N86, N110 | run | Per-frame work runs through exactly one dispatcher, `DispatchPerFrameWork`, called from a hook that is live in server mode, with a re-entrancy gate and the host flag taken from `g_isServer`; it holds the only two production `Tick*` call sites. Every declared HookLiveness id is marked somewhere. | `src/runtime/frame/tick.cpp`, `src/runtime/patch/binary_bug_fixes.cpp`, `src/runtime/hook/hook_liveness.h` | rank 3: verify; unchecked: that the hook fires in a server run |
+| N96 | source | No symbol is spelled plain `ResolveVA`; use `ResolveVA_Checked` or `ResolveVA_Unchecked`. | `sdk/include/nevr/pc/nevr_common.h`, `src` | rank 3: verify |
+| N97 | source | There is exactly one `ValidatePrologue`, in `nevr_common.h`. | `sdk/include/nevr/pc/nevr_common.h` | rank 3: verify |
+| N99 | run | `-server` applies the game's own headless mask (`ENGINE_FLAGS_HEADLESS_MASK`, `0xFFFEFEFE`), and boot never tells the operator a flag is redundant. | `src/runtime/patch/mode_patches.cpp`, `src/runtime/lifecycle/boot.cpp` | unchecked: nothing drives `-server` or reads boot's lines; rank 3: verify |
+| N126 | run | `PatchDetour` logs a failed hook at Warning; a failed hook is never silent. | `src/runtime/hook/patching.h` | unchecked: nothing drives a failed `PatchDetour`; rank 3: verify |
+| N127 | run | The Oculus-SDK block reports its real result, never an unconditional success line. | `src/runtime/patch/mode_patches.cpp` | rank 3: verify; unchecked: the result line in a run (`tools/winvm/checks.py` matches `blocking hooks: LoadLibraryW=...`, which `PatchBlockOculusSDK` no longer logs) |
+| N128 | run | `Hooking::Attach` records which MinHook stage failed and its `MH_STATUS`; `PatchDetour`'s failure log includes it. | `src/core/hooking.h`, `src/runtime/hook/patching.h` | rank 2: `src/runtime/tests/test_hooking.cpp` (the failed stage and its name); rank 3: verify; unchecked: `PatchDetour`'s failure line |
+| N129 | run | `DllLoadHook` reports the `MH_STATUS` of each `LoadLibrary` hook that fails, with no accumulate-and-hide `ok &=`. | `src/runtime/hook/dll_load_hook.cpp` | rank 2: `src/runtime/tests/test_dll_load_hook.cpp` (`DllLoadHookInstall`); rank 3: verify |
+| N148 | run | The in-game CREDITS page shows the project section above Ready At Dawn's credits, which stay byte-for-byte whole: `credits_text::Install` (client only, called once from `boot.cpp`, the server skip logged) builds block + the game's own bytes copied from memory + NUL, and points the two `LEA` loads of the credits blob at it, or neither (both sites, the blob length and its SHA-256 are checked before any write; the first site is put back if the second write fails). It is a byte patch of a data-blob load, not a function, so there is nothing to hook; no text of Ready At Dawn's is stored. The block is rendered at build time from `config/credits.json` by `tools/render_credits.py --ingame-source` (lines of at most 64 bytes, drawn only from printable ASCII and `©` (the characters the game's font draws), no `\|`, at most 200 lines; a name or heading with any other character, or a file the page cannot show, fails the build, naming the entry and the field). | `src/runtime/patch/credits_text.h`, `src/runtime/patch/credits_text.cpp`, `src/runtime/lifecycle/boot.cpp`, `src/runtime/CMakeLists.txt`, `tools/render_credits.py` | rank 1: the live run on a game copy; rank 2: `src/runtime/tests/test_credits_text.cpp`, `tools/tests/test_credits.py` (`IngameText`); rank 3: `tools/tests/test_credits_text_wiring.py` (the call, its gate, the build step, who names the sites) |
+| N72, N73 | source | Guards for the broadcaster plugin, which lives in `nevr-runtime-plugins` (see "Plugins"). | not in this tree | none here |
 
 #### Logging and layout
 
-| Rule | Statement | Guards | Checked by |
-| --- | --- | --- | --- |
-| N17 | A component that installs several hooks reports each outcome by name, plus one aggregate line at Info. | `src/modules/platform-compat/src/platform_compat.cpp`, `src/runtime/patch/pnsrad_enabler.cpp` | nothing names it |
-| N18 | The built-in filter is validated by a measured suppression ratio (`docs/standards/logging.md` Rule 4); see N79. | `src/runtime/log/builtin_filter.cpp` | verify (through N79) |
-| N45, N81 | No bare `[NEVR]` tag on a log line; use a subsystem tag from `docs/standards/logging.md` (`--help` strings in `cli.cpp` are not log lines). | `src/runtime`, `src/abi`, `src/core` | verify |
-| N47, N94 | The `[NEVR.AUTH]` per-step detail lines are Debug, pinned by their text, and the level mapping that carries them is pinned too. | `src/modules/token-auth/src/token_auth.cpp`, `src/core/device_auth_flow.cpp`, `src/core/auth_token_refresh.h` | verify |
-| N77 | nEVR's own lines are exempt from game-noise suppression, and `Finished initializing engine` and `ExitProcess(` are never on the blanket suppress list. | `src/runtime/log/builtin_filter.cpp` | verify |
-| N78 | A frequent line is collapsed into a counted summary, never deleted; there is exactly one strong definition of `::Log`. | `src/runtime/log/builtin_filter.cpp`, `src/core/logging.cpp` | verify (N78, D1) |
-| N79 | Filter health is emitted periodically while the process runs, not only at shutdown. | `src/runtime/log/builtin_filter.cpp`, `src/runtime/frame/tick.cpp` | verify |
-| N88 | A monitor does not depend on the thing it monitors: filter health is driven from the per-frame tick, not only from the hook it watches (`docs/standards/verification.md`, "A Monitor Must Not Depend On What It Monitors"). | `src/runtime/log/builtin_filter.cpp`, `src/runtime/frame/tick.cpp` | verify (through N79) |
-| N80 | Both log writers stamp the same per-process run ID. | `src/core/logging.cpp`, `src/runtime/log/boot_log_tee.cpp` | verify |
-| N90 | pnsrad.dll's own `CLog::PrintfImpl` is hooked, so its output goes through the filter; the hook is installed from the live tick. | `src/runtime/log/builtin_filter.h`, `src/runtime/log/builtin_filter.cpp`, `src/runtime/frame/tick.cpp` | verify |
-| N108 | `src/abi/` never includes `src/core/`. | `src/abi` | verify |
-| N109 | `src/runtime/CMakeLists.txt` does not put its own source directory on the include path. | `src/runtime/CMakeLists.txt` | verify |
-| N122, N124 | A config or mode decision logs its outcome at Info even when nothing happens (UPnP key and mapping, telemetry disabled, the server bring-up prologue check). | `src/runtime/lifecycle/config.cpp`, `src/runtime/server/upnp.cpp`, `src/runtime/server/gameserver_serverdb.cpp`, `src/runtime/server/gameserver_telemetry.cpp`, `src/runtime/lifecycle/state_machine.cpp` | nothing in verify; a run scored by `tests/smoke/score-log.sh` |
+| Rule | Kind | Statement | Guards | Checked by |
+| --- | --- | --- | --- | --- |
+| N17 | run | A component that installs several hooks reports each outcome by name, plus one aggregate line at Info. | `src/modules/platform-compat/src/platform_compat.cpp`, `src/runtime/patch/pnsrad_enabler.cpp` | unchecked: nothing names it |
+| N18 | run | The built-in filter is validated by a measured suppression ratio (`docs/standards/logging.md` Rule 4); see N79. | `src/runtime/log/builtin_filter.cpp` | unchecked: verify (through N79) finds the summary code, not a measured ratio |
+| N45, N81 | source | No bare `[NEVR]` tag on a log line; use a subsystem tag from `docs/standards/logging.md` (`--help` strings in `cli.cpp` are not log lines). | `src/runtime`, `src/abi`, `src/core` | rank 3: verify |
+| N47, N94 | source | The `[NEVR.AUTH]` per-step detail lines are Debug, pinned by their text, and the level mapping that carries them is pinned too. | `src/modules/token-auth/src/token_auth.cpp`, `src/core/device_auth_flow.cpp`, `src/core/auth_token_refresh.h` | rank 3: verify |
+| N77 | run | nEVR's own lines are exempt from game-noise suppression, and `Finished initializing engine` and `ExitProcess(` are never on the blanket suppress list. | `src/runtime/log/builtin_filter.cpp` | unchecked: nothing drives a nEVR line through the filter; rank 3: verify (the suppress list) |
+| N78 | run | A frequent line is collapsed into a counted summary, never deleted; there is exactly one strong definition of `::Log`. | `src/runtime/log/builtin_filter.cpp`, `src/core/logging.cpp` | rank 2: `src/runtime/tests/test_rate_limiter.cpp` (the collapse and its count); rank 3: verify (N78, D1) |
+| N79 | run | Filter health is emitted periodically while the process runs, not only at shutdown. | `src/runtime/log/builtin_filter.cpp`, `src/runtime/frame/tick.cpp` | unchecked: nothing runs the filter over time; rank 3: verify |
+| N88 | source | A monitor does not depend on the thing it monitors: filter health is driven from the per-frame tick, not only from the hook it watches (`docs/standards/verification.md`, "A Monitor Must Not Depend On What It Monitors"). | `src/runtime/log/builtin_filter.cpp`, `src/runtime/frame/tick.cpp` | rank 3: verify (through N79) |
+| N80 | run | Both log writers stamp the same per-process run ID. | `src/core/logging.cpp`, `src/runtime/log/boot_log_tee.cpp` | unchecked: nothing compares the two writers' records; rank 3: verify |
+| N90 | run | pnsrad.dll's own `CLog::PrintfImpl` is hooked, so its output goes through the filter; the hook is installed from the live tick. | `src/runtime/log/builtin_filter.h`, `src/runtime/log/builtin_filter.cpp`, `src/runtime/frame/tick.cpp` | rank 3: verify; unchecked: that the hook installs and routes pnsrad output in a run |
+| N108 | source | `src/abi/` never includes `src/core/`. | `src/abi` | rank 3: verify |
+| N109 | source | `src/runtime/CMakeLists.txt` does not put its own source directory on the include path. | `src/runtime/CMakeLists.txt` | rank 3: verify |
+| N122, N124 | run | A config or mode decision logs its outcome at Info even when nothing happens (UPnP key and mapping, telemetry disabled, the server bring-up prologue check). | `src/runtime/lifecycle/config.cpp`, `src/runtime/server/upnp.cpp`, `src/runtime/server/gameserver_serverdb.cpp`, `src/runtime/server/gameserver_telemetry.cpp`, `src/runtime/lifecycle/state_machine.cpp` | rank 1: a run scored by `tests/smoke/score-log.sh`, by hand (nothing in verify) |
 
 #### The game folder
 
-| Rule | Statement | Guards | Checked by |
-| --- | --- | --- | --- |
-| (standing rule) | Nothing of ours is written to the game install except `bin\win10\BugSplat64.dll`, the host the game loads: no `config.yaml`, `_local`, `_temp`, logs, install record, set-aside or backup file (`.original`, `.legacy`, `.migrated`), `plugins` folder or MOVED-TO note. All of it lives under `%LOCALAPPDATA%\nevr\echovr` (the install record at `installer\nevr-install.txt`, every set-aside file in `installer\aside`). A snapshot of the install root taken before and after install, an update, a client run, a `-server` run and uninstall may differ only in the content of the host, and after uninstall not at all. | `installer/src/pc.rs`, `tools/package-release/install.ps1`, `tools/package-release/uninstall.ps1`, and every write the runtime makes at run time | `tools/tests/test_installer_scripts.py` (`GameFolderInvariantTest`: install, update and uninstall through the real core, in the Python suite verify runs); `tools/tests/test_game_folder_invariant.py` (the snapshot library). The client-run and `-server`-run steps are filled in with the commands in `NEVR_INVARIANT_CLIENT_RUN` and `NEVR_INVARIANT_SERVER_RUN` (`tools/game_folder_invariant.py`) and print NOT RUN until they are, so nothing checks the runtime's own writes yet (`docs/reference/launcher-install-root.md` lists what still writes there) |
+| Rule | Kind | Statement | Guards | Checked by |
+| --- | --- | --- | --- | --- |
+| (standing rule) | run | Nothing of ours is written to the game install except `bin\win10\BugSplat64.dll`, the host the game loads: no `config.yaml`, `_local`, `_temp`, logs, install record, set-aside or backup file (`.original`, `.legacy`, `.migrated`), `plugins` folder or MOVED-TO note. All of it lives under `%LOCALAPPDATA%\nevr\echovr` (the install record at `installer\nevr-install.txt`, every set-aside file in `installer\aside`). A snapshot of the install root taken before and after install, an update, a client run, a `-server` run and uninstall may differ only in the content of the host, and after uninstall not at all. | `installer/src/pc.rs`, `tools/package-release/install.ps1`, `tools/package-release/uninstall.ps1`, and every write the runtime makes at run time | rank 2: `tools/tests/test_installer_scripts.py` (`GameFolderInvariantTest`: install, update and uninstall through the real core, in the Python suite verify runs); rank 3: `tools/tests/test_game_folder_invariant.py` (the snapshot library); unchecked: the client-run and `-server`-run steps, which are filled in with the commands in `NEVR_INVARIANT_CLIENT_RUN` and `NEVR_INVARIANT_SERVER_RUN` (`tools/game_folder_invariant.py`) and print NOT RUN until they are, so nothing checks the runtime's own writes yet (`docs/reference/launcher-install-root.md` lists what still writes there) |
 
 #### Writing a sensor (N93, N99, N101, N111)
 
@@ -1079,7 +1088,7 @@ how an agent triangulates the correct path.
   mingw-w64, CMake, and Ninja.
 - A guide to the toolchain decisions that make builds reproducible:
   vcpkg for dependencies, CMakePresets for configuration, justfile for
-  orchestration, osslsigncode for Authenticode signing.
+  orchestration.
 - A code-review gate: the "Code Review Hard Stops" table is enforced.
 - Required context for every agent working on Windows-DLL compatibility or
   interception layers cross-compiled from Linux (game-compatibility shims,
@@ -1106,11 +1115,9 @@ how an agent triangulates the correct path.
 - Manage all dependencies via vcpkg manifest (`vcpkg.json`). Never
   system-installed libraries.
 - Run `just configure && just build` before declaring work done.
-- Sign all release DLLs with osslsigncode. Test signing via `just sign`.
 - Test cross-compiled DLLs under Wine before merging.
 - Embed a PE VERSIONINFO resource in every DLL.
 - Derive version from git at build time (no manual version bumps).
-- Ship ring-buffer flight recorder telemetry in every DLL by default.
 - Use structured logging with level control. No printf, no ad-hoc logging.
 
 ### You must NEVER
@@ -1136,100 +1143,10 @@ how an agent triangulates the correct path.
 
 ---
 
-## Observability (Not Optional)
-
-Every DLL in an adopting project ships with built-in telemetry. This is
-not a debug feature you add later — it is part of the architecture.
-
-### Flight Recorder (Ring Buffer)
-
-A lock-free ring buffer of the last N operations (default 1024). Each
-entry captures:
-
-- Function name (string or enum)
-- Entry timestamp (monotonic clock, nanoseconds)
-- Duration (nanoseconds)
-- Key argument hashes (not full arguments — hashes are enough to identify
-  call sites)
-- Return value / error code
-
-```cpp
-struct TraceEvent {
-    uint64_t timestamp_ns;
-    uint32_t duration_ns;
-    uint16_t function_id;
-    uint16_t result_code;
-    uint64_t arg_hash;
-};
-```
-
-The ring buffer is always-on, zero-heap-alloc, fixed-size. When a crash
-occurs, a dump handler writes the buffer to disk via
-`WriteFile`/`MapViewOfFile`. The dump is available in the
-`%TEMP%/dxgi_dump/` directory or alongside the DLL.
-
-### Fidelity Monitors
-
-For every translation layer (Oculus→OpenXR, Winsock→epoll, etc.), log
-both input parameters and output results side-by-side. If the translation
-returns wrong data (bad poses, wrong swap chain format, misaligned
-struct), the trace captures the divergence before it causes visible
-breakage.
-
-### Session State Journal
-
-Log every state transition on both sides:
-
-- Oculus: Initialize → Create → Destroy → SessionStatus changes
-- OpenXR: InstanceCreate → Session lifecycle → SessionState changes →
-  Event polling
-- If `ovr_GetSessionStatus` returns `IsVisible=false` and the game enters
-  a headless render loop, the trace shows exactly when and why the states
-  diverged.
-
-### Frame Pacing Telemetry
-
-Log the `WaitFrame`/`BeginFrame`/`EndFrame` cycle with timestamps and
-`predictedDisplayTime`. Frame timing drift is insidious — it accumulates
-over frames and causes judder long before a crash. Catch it early by
-emitting a warning when drift exceeds 2ms.
-
-### Runtime Toggle
-
-- **Flight recorder mode**: always-on, last N events, no I/O during
-  capture. Zero allocation after initialization.
-- **Verbose mode**: full logging to a named pipe or file, toggled via
-  environment variable at startup or a control pipe at runtime.
-- Post-mortem dump triggers on DLL unload, process exit, or abnormal
-  termination (captured by the crash handler plugin).
-
----
-
 ## Logging (Structured, Always)
 
-No printf. No `OutputDebugString`. No cerr. Every project uses a
-structured logger with:
-
-- **Levels**: TRACE < DEBUG < INFO < WARN < ERROR < FATAL
-- **Categories**: per-module or per-system enable/disable
-- **Format**: machine-parseable (JSON or key=value pairs)
-- **Output**: configurable — file, debugger, named pipe, ring buffer
-
-```cpp
-// Good
-LOG_INFO("session", "Session created: id={}", session_id);
-LOG_WARN("network", "Reconnect attempt {}/{}", attempt, max_attempts);
-
-// Bad — never do this
-printf("session created %d\n", session_id);
-fprintf(stderr, "reconnect %d\n", attempt);
-```
-
-The logger itself must be:
-
-- Zero allocation after initialization (preallocated buffers).
-- Lock-free for the hot path (per-thread buffers).
-- Safe to call from DllMain (no heap, no synchronization primitives).
+Logging follows `docs/standards/logging.md`: its levels, tags,
+volume budget and the `Log()` call are the rules. No `printf`, no `OutputDebugString`, no `cerr`.
 
 ---
 
@@ -1259,18 +1176,6 @@ Every mingw-w64 cross-compilation project MUST define these CMake presets:
 | `release` | Ninja     | vcpkg default triplet | Release    | Native Windows |
 
 **Build output** lands in `build/<preset>/bin/`.
-
-The presets file MUST define a `base` hidden preset:
-
-```json
-{
-  "name": "base",
-  "hidden": true,
-  "generator": "Ninja",
-  "binaryDir": "${sourceDir}/build/${presetName}",
-  "toolchainFile": "${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
-}
-```
 
 ---
 
@@ -1302,36 +1207,6 @@ All dependencies declared in one file at the project root:
 - The OpenXR loader is a system dependency or vendored, not from vcpkg.
 - Oculus SDK headers are replicated from the target binary — not a
   vcpkg dependency.
-
----
-
-## Project Layout
-
-```
-project/
-├── src/
-│   ├── gamepatches/       # Main patch DLL
-│   ├── gameserver/        # Network services DLL
-│   ├── common/            # Shared utilities (logging, trace ring buffer, globals)
-│   └── launcher/          # Entry point / bootstrapper
-├── plugins/
-│   ├── common/            # Plugin interface headers
-│   ├── log-filter/        # Example plugin
-│   └── crash-handler/     # Ring buffer dump on crash
-├── cmake/
-│   ├── toolchain-msvc-wine.cmake
-│   └── set_project_version_from_git.cmake
-├── tests/
-│   ├── system/            # Go integration tests
-│   └── plugins/           # Plugin ground truth tests
-├── extern/                # Git submodules
-├── certs/                 # Code signing certificates
-├── CMakeLists.txt
-├── CMakePresets.json
-├── vcpkg.json
-├── justfile
-└── CLAUDE.md
-```
 
 ---
 
@@ -1375,29 +1250,9 @@ _vcpkg-mingw:
 
 ## Code Signing
 
-All release DLLs MUST be Authenticode-signed.
-
-```
-certs/
-├── root-ca.crt              # Self-signed root CA
-├── intermediate-ca.crt      # Intermediate CA
-├── code-signing.key         # Private key
-├── chain.pem                # Full cert chain
-└── generate-ca.sh           # CA generation script
-```
-
-```sh
-osslsigncode sign \
-    -certs certs/chain.pem \
-    -key certs/code-signing.key \
-    -n "Product Name" \
-    -t http://timestamp.digicert.com \
-    -in unsigned.dll \
-    -out signed.dll
-```
-
-In CI, signing material comes from GitHub secrets
-(`CODESIGN_PFX_BASE64`, `CODESIGN_PFX_PASSWORD`).
+Release files are signed outside the build, by the signer pipeline `RELEASING.md` describes; the release build signs
+nothing (`build.yml` configures `-DNEVR_CODESIGN_REQUIRED=OFF`). `just sign` signs a local `dist/` with the private CA
+in `certs/`, for development builds only.
 
 ---
 
@@ -1433,7 +1288,7 @@ cd tests/plugins && go test -v -run "TestGroundTruth" ./...
 
 ```cpp
 // Good
-constexpr auto kMaxRetries = 3uz;
+constexpr std::size_t kMaxRetries = 3;
 using Result = std::variant<Success, Error>;
 
 // Bad
@@ -1446,13 +1301,12 @@ typedef struct _Result Result;
 - `std::unique_ptr` for sole ownership. Never raw `new`/`delete`.
 - `std::shared_ptr` only when ownership is genuinely shared — not as a
   default.
-- `std::span` for non-owning array views. Never pointer + size pairs.
 - `std::string_view` for non-owning string references. Never
   `const char*` + strlen.
 
 ### Error handling
 
-- Return `std::expected<T, E>` or `std::optional` instead of out-params.
+- Return `std::optional` instead of an out-parameter.
 - Use `HRESULT` at API boundaries (DLL exports), convert to internal
   types internally.
 - Never throw exceptions across DLL boundaries. Catch at the export
@@ -1466,7 +1320,7 @@ typedef struct _Result Result;
 - No spinlocks in user code. Use `std::mutex`, SRWLOCK, or slim
   read/writer locks.
 - No thread pools implemented from scratch. Use the Windows thread pool
-  API or `std::thread_pool` (C++23) when available.
+  API.
 - No manual memory management. Use `std::vector`, `std::array`,
   `std::string`. If you need a custom allocator, prove it with a
   benchmark.
@@ -1480,11 +1334,9 @@ typedef struct _Result Result;
 | DLL uses system include path for mingw dep | Breaks on other machines          | Add to vcpkg.json                  |
 | No CMakePresets.json                       | Every dev configures differently  | Add the standard preset matrix     |
 | Hardcoded toolchain path in CMakeLists.txt | Not portable                      | Use toolchain file from preset     |
-| DLL is not signed in dist/                 | Release can't be used             | Add `just sign` to release process |
 | Missing `.rc` version resource             | No PE version info                | Add VERSIONINFO resource           |
 | Plugin doesn't implement interface         | Won't load at runtime             | Follow plugin lifecycle            |
 | No Wine test step in CI                    | Cross-compiled DLL may not run    | Add Wine test job                  |
-| No ring-buffer trace in DLL                | First crash is blind              | Add flight recorder                |
 | Using printf for debug output              | Not structured, can't filter      | Use project logger                 |
 | C-style cast                               | Wrong in C++ world                | Use static_cast/reinterpret_cast   |
 | Suppressed warning without justification   | Hides real bugs                   | Fix the warning or justify inline  |
@@ -1500,8 +1352,6 @@ typedef struct _Result Result;
 - Do NOT mix MSVC and mingw object files. Pick one toolchain per build.
 - Do NOT use vcpkg ports that haven't been validated with
   `x64-mingw-static`. Test before adding.
-- Do NOT ship a DLL that crashes under Wine without a trace dump.
-  The crash handler plugin exists for this reason.
 - Do NOT write new platform abstraction layers. Use existing `common/`
   patterns. If none exist yet, surface it — don't write ad-hoc `#ifdef`
   blocks.

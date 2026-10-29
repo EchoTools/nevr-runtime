@@ -24,6 +24,7 @@
 #include "os_build_gate_hook.h"
 #include "permission_request.h"
 #include "permission_wait_hook.h"
+#include "pns_provider_hook.h"
 #include "process_end_hook.h"
 #include "quit_hook.h"
 #include "render_config.h"
@@ -170,6 +171,10 @@ bool RegisterClockLevelsCounters() noexcept { return nevr_quest::clock_levels::R
 bool ArmClockLevelsHook(bool countersRegistered, bool overrideOn) noexcept {
     return nevr_quest::clock_levels::ArmIfCounted(countersRegistered, overrideOn);
 }
+// The rad provider in pnsovr's place (#1220): development builds only. A refused install is logged by GotHook and by the
+// hook's own line, and leaves the game's provider in place.
+bool PnsProviderEnabled() noexcept { return nevr_build::kIsDev; }
+bool InstallPnsProviderHook() noexcept { return nevr_quest::pns_provider::Install(); }
 
 // The CREATE GAME and JOIN VIA CODE cards (#966): a data-slot hook on the streaming reader's read-finished callback. A
 // refused install is logged by GotHook and by the hook's own line, and leaves the game's calls intact.

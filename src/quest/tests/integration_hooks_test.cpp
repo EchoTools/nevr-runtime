@@ -200,6 +200,8 @@ struct RealCounterSteps final : Steps {
   bool InstallSocial() override { return true; }
   bool InstallDlopenHook(bool, bool, bool) override { return true; }
   bool StartHwDump() override { return true; }
+  bool InstallPnsProvider() override { return true; }
+  bool PnsProviderAllowed() override { return true; }
   void Note(const char*, const char*, const char*) override {}
 };
 
