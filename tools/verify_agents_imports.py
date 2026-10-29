@@ -4,9 +4,12 @@
 A standard AGENTS.md only names is read when an agent remembers to read it. An
 `@<path>` line is expanded into the instructions of a session that loads
 AGENTS.md, so the standard is in context from the first turn. This check keeps
-each import where it works: on a line of its own, unindented, outside a code
-fence, before the first `##` section, naming a file that exists, with the
-sentence that makes it binding for a reader that does not expand imports.
+each import where it works: on a line of its own, unindented and outside a code
+fence (a fenced or indented line is not expanded), naming a file that exists,
+with the sentence that makes it binding for a reader that does not expand
+imports. It also keeps the import in the preamble, before the first `##`
+section: an import further down is expanded too, but the contract puts what it
+makes binding first.
 
 Exit 0 = every import is in place. Exit 1 = one is missing or misplaced.
 """
