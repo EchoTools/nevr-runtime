@@ -3,7 +3,8 @@ and every log line are tested by src/runtime/tests/test_server_bots.cpp and the 
 tests/system/mode_patches_test.go (TestServerBotsSites); these are source sensors for what neither can see: the one
 Install call in boot.cpp, the one OnFrame call in the per-frame dispatcher (a server, the game-loop thread), the one
 session-start rewrite before the forward to the game, that server_bots.cpp calls those tested pieces and logs what they
-give, and the three addresses. Each check takes the text it reads, so a test can hand it a broken copy and see it
+give, the three addresses, and that each site the driver checks at boot is, byte for byte, a row of the Go test
+that reads the pinned echovr.exe. Each check takes the text it reads, so a test can hand it a broken copy and see it
 fail."""
 from __future__ import annotations
 
@@ -17,6 +18,8 @@ TICK = ROOT / "src/runtime/frame/tick.cpp"
 CALLBACKS = ROOT / "src/runtime/server/gameserver_callbacks.cpp"
 DRIVER = ROOT / "src/runtime/patch/server_bots.cpp"
 ADDRESSES = ROOT / "src/runtime/hook/addresses.h"
+HEADER = ROOT / "src/runtime/patch/server_bots.h"
+GO_SITES = ROOT / "tests/system/mode_patches_test.go"
 
 INSTALL_CALL = "nevr_server_bots::Install(g_isServer != FALSE);"
 FRAME_CALL = "nevr_server_bots::OnFrame();"
@@ -159,6 +162,59 @@ def address_problems(addresses: str) -> list[str]:
     ]
 
 
+def header_witnesses(header: str) -> dict[str, tuple[int, bytes]] | str:
+    """kWitnesses of server_bots.h: name -> (rva, bytes), each array and RVA constant read from the header itself."""
+    code = strip_comments(header)
+    arrays = {m.group(1): bytes(int(b, 16) for b in re.findall(r"0x([0-9a-fA-F]{2})\b", m.group(2)))
+              for m in re.finditer(r"inline\s+constexpr\s+uint8_t\s+(k\w+Bytes)\[\]\s*=\s*\{([^}]*)\}", code)}
+    rvas = {m.group(1): int(m.group(2), 16)
+            for m in re.finditer(r"constexpr\s+uintptr_t\s+(k\w+Rva)\s*=\s*0x([0-9a-fA-F]+)\s*;", code)}
+    table = re.search(r"kWitnesses\[\]\s*=\s*\{(.*?)\n\};", code, flags=re.S)
+    if not table:
+        return "no kWitnesses table in server_bots.h"
+    out: dict[str, tuple[int, bytes]] = {}
+    for m in re.finditer(r'\{"([^"]+)",\s*(\w+),\s*(k\w+Bytes),\s*sizeof\((k\w+Bytes)\)\}', table.group(1)):
+        name, rva, array, sized = m.groups()
+        if array != sized or array not in arrays:
+            return f"witness {name} does not name one array for its bytes and its size"
+        value = int(rva, 16) if rva.startswith("0x") else rvas.get(rva)
+        if value is None:
+            return f"witness {name}: RVA {rva} is not a constant of the header"
+        out[name] = (value, arrays[array])
+    return out
+
+
+def go_sites(go: str) -> dict[str, tuple[int, bytes]]:
+    body = go[go.index("func TestServerBotsSites("):]
+    body = body[:body.index("\n}\n")]
+    return {m.group(1): (int(m.group(2), 16), bytes(int(b, 16) for b in re.findall(r"0x([0-9a-fA-F]{2})", m.group(3))))
+            for m in re.finditer(r'\{"([^"]+)",\s*0x([0-9a-fA-F]+),\s*\[\]byte\{([^}]*)\}\}', body)}
+
+
+def witness_problems(header: str, go: str, addresses: str) -> list[str]:
+    """Every witness the driver checks at boot is a row of the Go test that reads the pinned echovr.exe, with the same
+    RVA and bytes, so a byte of the header that is not the game's fails a test; and the Go rows of the addresses the
+    driver reads are the addresses.h values."""
+    witnesses = header_witnesses(header)
+    if isinstance(witnesses, str):
+        return [witnesses]
+    if len(witnesses) != 7:
+        return [f"expected the 7 witnesses, read {len(witnesses)}"]
+    rows = go_sites(go)
+    problems = []
+    for name, (rva, data) in witnesses.items():
+        if name not in rows:
+            problems.append(f"witness {name} is not a row of TestServerBotsSites")
+        elif rows[name] != (rva, data):
+            problems.append(f"witness {name} differs from its TestServerBotsSites row (RVA or bytes)")
+    code = strip_comments(addresses)
+    for name, row in (("REQUEST_ADD_BOT", "RequestAddBot"), ("FIND_POOL", "FindPool"), ("NO_SPAWN_POSITION", "no spawn position")):
+        m = re.search(rf"constexpr\s+uintptr_t\s+{name}\s*=\s*0x([0-9a-fA-F]+)\s*;", code)
+        if not m or row not in rows or rows[row][0] != int(m.group(1), 16):
+            problems.append(f"{name} is not the RVA of the {row} row of TestServerBotsSites")
+    return problems
+
+
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
@@ -170,6 +226,22 @@ class ServerBotsWiring(unittest.TestCase):
         self.assertEqual(callbacks_problems(read(CALLBACKS)), [])
         self.assertEqual(driver_problems(read(DRIVER)), [])
         self.assertEqual(address_problems(read(ADDRESSES)), [])
+        self.assertEqual(witness_problems(read(HEADER), read(GO_SITES), read(ADDRESSES)), [])
+
+    def test_a_witness_byte_or_rva_that_is_not_the_games_is_found(self) -> None:
+        header, go, addresses = read(HEADER), read(GO_SITES), read(ADDRESSES)
+        breaks = [
+            (header, "0x8b, 0x47, 0x1c, 0xf7, 0xd0, 0xa8, 0x01};", "0x8b, 0x47, 0x1c, 0xf7, 0xd0, 0xa8, 0x02};"),
+            (header, "{\"bot body pools\", 0x1523DF,", "{\"bot body pools\", 0x1523E0,"),
+            (header, "constexpr uintptr_t kFindPoolRva = 0x502D80;", "constexpr uintptr_t kFindPoolRva = 0x502D81;"),
+            (header, "    {\"bot body pools\", 0x1523DF, kBotPoolsBytes, sizeof(kBotPoolsBytes)},\n", ""),
+        ]
+        for text, old, new in breaks:
+            with self.subTest(old=old):
+                self.assertEqual(text.count(old), 1)
+                self.assertTrue(witness_problems(header.replace(old, new), go, addresses))
+        self.assertTrue(witness_problems(header, go, addresses.replace("= 0x201D338;", "= 0x201D33C;")))
+        self.assertTrue(witness_problems(header, go.replace('{"FindPool", 0x502D80,', '{"FindPool", 0x502D84,'), addresses))
 
     def test_a_missing_doubled_or_gated_install_is_found(self) -> None:
         boot = read(BOOT)
