@@ -560,8 +560,9 @@ inline InstallResult InstallLines(bool isServer, const char* text, const uint8_t
   }
   out.armed = wanted;
   out.lines.push_back({false, "[NEVR.GAMESERVER] server bots armed bots_per_session=" + std::to_string(wanted) +
-                                  " sites=" + std::to_string(kWitnessCount) + " (each in-game session gets up to " +
-                                  std::to_string(wanted) + " AI bots, one a second)"});
+                                  " sites=" + std::to_string(kWitnessCount) +
+                                  " (each arena or combat match in game gets up to " + std::to_string(wanted) +
+                                  " AI bots, one a second)"});
   return out;
 }
 

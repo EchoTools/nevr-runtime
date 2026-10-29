@@ -714,8 +714,8 @@ TEST(ServerBotsInstall, AllSitesHoldingArmsTheCount) {
   ASSERT_EQ(r.lines.size(), 1u);
   EXPECT_FALSE(r.lines[0].warning);
   EXPECT_EQ(r.lines[0].text,
-            "[NEVR.GAMESERVER] server bots armed bots_per_session=3 sites=7 (each in-game session gets up to 3 AI "
-            "bots, one a second)");
+            "[NEVR.GAMESERVER] server bots armed bots_per_session=3 sites=7 (each arena or combat match in game gets "
+            "up to 3 AI bots, one a second)");
 }
 
 TEST(ServerBotsInstall, ASiteThatDiffersIsAWarningWithItsBytesAndLeavesTheDriverOff) {

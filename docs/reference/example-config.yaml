@@ -280,11 +280,11 @@ network:
   # Not a secret.
   # tick_rate_hz: 120
 
-  # AI bots a dedicated server adds to each session once it is in game, one a second, through the game's own add-bot
-  # request (what the spawn-bot script node uses), so every client sees them. The session's settings get numteams and
-  # players_per_team when the service did not send them. A level stops taking bots when its bot bodies run out (a
-  # warning says so), and a session never passes the game's 16 entrants. Valid: 0-16. Out of range or not a whole
-  # number: 0, with a warning in the log. Ignored by a client.
+  # AI bots a dedicated server adds to each arena or combat match once it is in game (a social lobby gets none), one a
+  # second, through the game's own add-bot request (what the spawn-bot script node uses), so every client sees them.
+  # The match's settings get numteams and players_per_team when the service did not send them. A level stops taking
+  # bots when its bot bodies run out (a warning says so), and a match never passes the game's 16 entrants. Valid:
+  # 0-16. Out of range or not a whole number: 0, with a warning in the log. Ignored by a client.
   # Absent: 0 (no bots).
   # Not a secret.
   # bots_per_session: 0
