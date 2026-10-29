@@ -60,7 +60,7 @@
  *     "loading global". Skipping is a plain return.
  *
  * It logs on the game's call path only at a decision or a change, never per frame: the RETRY select
- * (login_prompt_select, once per notice), the fallback decision (login_prompt_fallback) and a change of the NetGame
+ * (login_prompt_select: once per notice, and once more when the fallback's login reaches "logged in"), the fallback decision (login_prompt_fallback) and a change of the NetGame
  * state (login_prompt_netgame_state). The page-enter line is on that path too, rate-limited to one per page symbol
  * per second. Its seventeen counters (hook_report.h), registered by RegisterCounters():
  *   login_prompt_text_shown         a login failure's message was replaced by the prompt
@@ -86,7 +86,7 @@
  *                                   the login could proceed: the game's own BeginLogIn (what RETRY runs) was
  *                                   called once for that notice, so the player need not select RETRY (#672)
  *   login_prompt_login_restart_unavailable  that call was due and BeginLogIn was not resolved
- *   login_prompt_select_sent        the RETRY select (SendRetrySelect) was sent for a notice's restart (#1391)
+ *   login_prompt_select_sent        the RETRY select (SendRetrySelect) was sent: for a notice's restart, or once more after its fallback login reached "logged in" (#1391)
  *
  * Integration surface. The sentinel's own entry.cpp installs the hooks, but nothing in it creates
  * QuestTokenAuth, so there the board stays empty and the game's text always passes through. A
@@ -173,6 +173,11 @@ struct Counts {
       logging_in_page_dropped, page_passed_armed, login_restarted, login_restart_unavailable, select_sent;
 };
 Counts CurrentCounts() noexcept;
+
+// Writes each of the seventeen counters' current value once, as one hook_counter line with why "exit" (#1391). The
+// process-end callback calls it (OnGameProcessEnd, the android_main_returned point). The reporter writes a counter only
+// when it changes, so without this a run that ends before the steady pass loses the final values.
+void FlushCountersAtExit() noexcept;
 
 // Whether `message` is exactly one of quest/game_login_failures.h's texts.
 bool IsLocalLoginFailure(const char* message) noexcept;

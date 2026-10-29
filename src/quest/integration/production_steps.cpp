@@ -355,10 +355,11 @@ ActionResult PluginsAction() noexcept {
 }
 
 // Runs on the process-end hook's helper thread when the game's android_main returns (#621), on every launch: the plugin
-// entries that never got their moment end as `not_started` (#438), then the self-check report goes out (a no-op unless
-// the bridge that carries it enabled the self-checks).
+// entries that never got their moment end as `not_started` (#438), the login prompt's counters are written once (#1391),
+// then the self-check report goes out (a no-op unless the bridge that carries it enabled the self-checks).
 void OnGameProcessEnd() noexcept {
   nevr_quest::plugin::FinishPlugins(nevr_quest::plugin::reason::kGameExitedFirst);
+  nevr_quest::integration::FlushLoginPromptCountersAtExit();
   ReportAndroidMainReturned();
 }
 

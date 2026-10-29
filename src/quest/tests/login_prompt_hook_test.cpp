@@ -1427,6 +1427,7 @@ void TheRetrySelectLogsWhatItSends() {
   QCHECK(CountLines(kSelectLine) == linesBefore + 1);
   const std::string line = LastLine(kSelectLine);
   QCHECK(Holds(line, "\"outcome\":\"sent\""));
+  QCHECK(Holds(line, "\"trigger\":\"after_sign_in\""));
   QCHECK(Holds(line, "\"send_event\":\"0x8f0094c7bb02681c\""));
   QCHECK(Holds(line, "\"send_event_name\":\"evt_btn_clicked\""));
   QCHECK(Holds(line, "\"key\":\"0x34f99a282ce78d72\"") && Holds(line, "\"key_name\":\"btn_exit\""));
@@ -1704,6 +1705,261 @@ void TheCountersAreAllInTheReporterTable() {
   sentinel::StopReporter();
 }
 
+// ---- the select after the fallback's login (#1391) ---------------------------------------------------------------
+// A select that does nothing is followed by the fallback's BeginLogIn: the game logs in but the page stays on LOGGING
+// IN. When the login the fallback started goes 2 (logging in) -> 3 (logged in) on the same NetGame instance, the same
+// select is sent once more, with trigger after_fallback_login. The select, the 2 -> 3 change and the instance are the
+// only conditions; no timer.
+
+// Common setup: the select is the real one (sent through the fake send), BeginLogIn is the fake, the game object is linked.
+void SetUpFallbackCase() {
+  g_lines.clear();  // each case counts only its own lines
+  lp::ResetLatchForTest();
+  gate::SetReady(true);
+  lp::SetClockForTest(&FakeClock);
+  lp::SetBeginLogInForTest(&FakeBeginLogIn);
+  lp::SetSendEventForTest(&FakeSend);
+  lp::UseRetrySelectForTest();
+  g_beginCalls = 0;
+  g_sendCalls = 0;
+  g_now = 1'000'000'000;
+  board::Withdraw();
+  LinkGameObject(g_game, &g_gameObject);
+  SetSpaceOf(g_gameObject, &g_spaceMarker);
+}
+
+void TearDownFallbackCase() {
+  LinkGameObject(g_game, nullptr);
+  lp::SetSendEventForTest(nullptr);
+  lp::SetRetryEventForTest(nullptr);
+  lp::SetBeginLogInForTest(nullptr);
+  lp::SetClockForTest(nullptr);
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::ResetLatchForTest();
+}
+
+// The notice's select is sent; 2.1 s later the game is still in "login failed", so the fallback runs BeginLogIn.
+void NoticeWhoseSelectDidNothingFallsBack() {
+  RestartFromNotice();  // the select (trigger after_sign_in) is sent
+  g_now += 2'100'000'000;
+  UpdateEntry()(Obj(g_game), 16);  // the fallback: BeginLogIn, which sets "logging in" in the fake
+}
+
+// Fallback, then the login is observed going 2 -> 3: the same select goes out once more, with the fallback's trigger.
+void TheFallbackLoginReachingLoggedInSendsTheSelectOnceWithItsTrigger() {
+  SetUpFallbackCase();
+  NoticeWhoseSelectDidNothingFallsBack();
+  QCHECK(g_beginCalls == 1);
+  QCHECK(g_sendCalls == 1);  // the post-sign-in select only
+  UpdateEntry()(Obj(g_game), 16);  // observes "logging in"
+  QCHECK(g_sendCalls == 1);
+  SetState(g_game, 3);  // logged in
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 2);
+  QCHECK(g_sendSpace == &g_spaceMarker);
+  QCHECK(g_sendEventArg == sentinel::pinned::kRetrySelectEvent);
+  QCHECK(g_sendKeyArg == sentinel::pinned::kLoginPageExitKey && g_sendActorArg == sentinel::pinned::kAllActors);
+  QCHECK(g_sendFlagArg == 1);
+  QCHECK(Holds(LastLine(kSelectLine), "\"trigger\":\"after_fallback_login\""));
+  QCHECK(Holds(LastLine(kSelectLine), "\"outcome\":\"sent\""));
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 1);
+  QCHECK(CountLines("\"trigger\":\"after_sign_in\"") == 1);
+  // A second 2 -> 3 of the same attempt sends nothing.
+  SetState(g_game, 2);
+  UpdateEntry()(Obj(g_game), 16);
+  SetState(g_game, 3);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 2);
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 1);
+  TearDownFallbackCase();
+}
+
+// The select starts the login (the page script's BeginLogin node moves the game to "logging in"): no fallback, so the
+// later 2 -> 3 sends nothing more.
+void ASelectThatStartsTheLoginSendsNothingMoreWhenItReachesLoggedIn() {
+  SetUpFallbackCase();
+  const int fallbacks = CountLines(kFallbackLine);
+  RestartFromNotice();  // the select, sent
+  QCHECK(g_sendCalls == 1);
+  SetState(g_game, 2);  // what the script's BeginLogin node does on the select
+  UpdateEntry()(Obj(g_game), 16);
+  SetState(g_game, 3);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 1);
+  QCHECK(g_beginCalls == 0);
+  QCHECK(CountLines(kFallbackLine) == fallbacks);
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 0);
+  TearDownFallbackCase();
+}
+
+// The fallback's login goes back to "login failed" before it logs in: that attempt is over, and a later 2 -> 3 is not
+// the fallback's, so nothing is sent for it.
+void AFallbackLoginThatGoesBackToLoginFailedSendsNothing() {
+  SetUpFallbackCase();
+  NoticeWhoseSelectDidNothingFallsBack();
+  UpdateEntry()(Obj(g_game), 16);  // observes "logging in"
+  SetState(g_game, layout::kStateLoginFailed);
+  UpdateEntry()(Obj(g_game), 16);
+  SetState(g_game, 2);  // a later login, not the fallback's
+  UpdateEntry()(Obj(g_game), 16);
+  SetState(g_game, 3);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 1);  // the post-sign-in select only
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 0);
+  TearDownFallbackCase();
+}
+
+// The fallback's login is not seen in "logging in" before it reaches "logged in": the change is -94 -> 3, not 2 -> 3,
+// so nothing is sent.
+void TheFallbackLoginMustBeSeenLoggingInBeforeItSendsForLoggedIn() {
+  SetUpFallbackCase();
+  NoticeWhoseSelectDidNothingFallsBack();  // BeginLogIn ran, but no Update has seen "logging in" yet
+  SetState(g_game, 3);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 1);
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 0);
+  TearDownFallbackCase();
+}
+
+// Another NetGame instance going 2 -> 3 while the fallback is armed for g_game: not the instance the fallback started.
+void AnotherNetGameReachingLoggedInSendsNothing() {
+  SetUpFallbackCase();
+  NoticeWhoseSelectDidNothingFallsBack();
+  UpdateEntry()(Obj(g_game), 16);  // observes "logging in" on the fallback's instance
+  SetState(g_other, 2);
+  UpdateEntry()(Obj(g_other), 16);  // g_other's baseline
+  SetState(g_other, 3);
+  UpdateEntry()(Obj(g_other), 16);  // 2 -> 3 on another instance
+  QCHECK(g_sendCalls == 1);
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 0);
+  TearDownFallbackCase();
+}
+
+// A fallback whose BeginLogIn is not resolved starts no login, so it arms nothing: a later 2 -> 3 is not its.
+void AnUnresolvedBeginLogInArmsNothing() {
+  SetUpFallbackCase();
+  lp::SetBeginLogInForTest(nullptr);
+  const lp::Counts before = lp::CurrentCounts();
+  NoticeWhoseSelectDidNothingFallsBack();  // the select, then the fallback, which is counted as unavailable
+  QCHECK(lp::CurrentCounts().login_restart_unavailable == before.login_restart_unavailable + 1);
+  QCHECK(g_beginCalls == 0);
+  SetState(g_game, 2);
+  UpdateEntry()(Obj(g_game), 16);
+  SetState(g_game, 3);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 1);  // the post-sign-in select only
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 0);
+  TearDownFallbackCase();
+}
+
+// The select cannot be sent (no RETRY seam), so the fallback starts the login at once; the login's 2 -> 3 then sends the
+// select once, with the fallback's trigger, as after a select that had no effect.
+void TheUnavailableSelectsFallbackAlsoSendsOnceAfterItsLogin() {
+  SetUpFallbackCase();
+  lp::SetRetryEventForTest(nullptr);
+  RestartFromNotice();  // no select: the fallback runs now
+  QCHECK(g_beginCalls == 1);
+  QCHECK(g_sendCalls == 0);
+  UpdateEntry()(Obj(g_game), 16);  // observes "logging in"
+  QCHECK(g_sendCalls == 0);
+  SetState(g_game, 3);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 1);
+  QCHECK(Holds(LastLine(kSelectLine), "\"trigger\":\"after_fallback_login\""));
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 1);
+  TearDownFallbackCase();
+}
+
+// The fallback's BeginLogIn did not take the game out of "login failed": the first Update after it is not "logging in", so
+// the attempt is over, and a later "logging in" -> "logged in" is not the fallback's.
+void AFallbackThatDidNotStartTheLoginSendsNothingLater() {
+  SetUpFallbackCase();
+  NoticeWhoseSelectDidNothingFallsBack();       // BeginLogIn ran, and the fake moved the game to "logging in"
+  SetState(g_game, layout::kStateLoginFailed);  // the test puts the game back: the login did not start
+  UpdateEntry()(Obj(g_game), 16);
+  SetState(g_game, 2);
+  UpdateEntry()(Obj(g_game), 16);
+  SetState(g_game, 3);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 1);  // the post-sign-in select only
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 0);
+  TearDownFallbackCase();
+}
+
+// A second fallback (a new notice) is seen "logging in" on its own: the first attempt's "logging in" does not count for it.
+void ASecondFallbackMustBeSeenLoggingInOnItsOwn() {
+  SetUpFallbackCase();
+  NoticeWhoseSelectDidNothingFallsBack();       // the first fallback
+  UpdateEntry()(Obj(g_game), 16);               // seen "logging in"
+  SetState(g_game, layout::kStateLoginFailed);  // the first attempt ends
+  UpdateEntry()(Obj(g_game), 16);
+  RestartFromNotice();  // a new notice: its select
+  g_now += 2'100'000'000;
+  UpdateEntry()(Obj(g_game), 16);  // the second fallback: BeginLogIn, which the fake answers with "logging in"
+  QCHECK(g_beginCalls == 2);
+  SetState(g_game, 3);  // the second attempt's first observation is "logged in"
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 2);  // the two notices' selects only
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 0);
+  TearDownFallbackCase();
+}
+
+// The test seam forgets an armed fallback: a case that starts after one does not inherit its login, so the next "logged in"
+// of that instance sends nothing.
+void SettingBeginLogInForgetsAnArmedFallback() {
+  SetUpFallbackCase();
+  NoticeWhoseSelectDidNothingFallsBack();  // the fallback runs, and is armed for g_game
+  lp::SetBeginLogInForTest(&FakeBeginLogIn);  // the next case begins: the armed fallback is forgotten
+  UpdateEntry()(Obj(g_game), 16);  // observes "logging in"
+  SetState(g_game, 3);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 1);  // the post-sign-in select only
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 0);
+  TearDownFallbackCase();
+}
+
+// #1391: the counters are written once at process exit, every one of them. The reporter writes a counter only when it
+// changes, so a short run would otherwise end without its final values. The expected values are read before the flush;
+// nothing in the flush changes them.
+void TheExitFlushWritesEachCounterOnce() {
+  const lp::Counts c = lp::CurrentCounts();
+  struct Expect {
+    const char* name;
+    std::uint64_t value;
+  };
+  const Expect want[] = {
+      {"login_prompt_text_shown", c.shown},
+      {"login_prompt_text_refreshed", c.refreshed},
+      {"login_prompt_text_kept", c.kept},
+      {"login_prompt_text_not_local", c.not_local},
+      {"login_prompt_board_busy", c.busy},
+      {"login_prompt_block_not_ours", c.not_ours},
+      {"login_prompt_error_thunk_faults", static_cast<std::uint64_t>(lp::ErrorThunk::Faults())},
+      {"login_prompt_update_thunk_faults", static_cast<std::uint64_t>(lp::UpdateThunk::Faults())},
+      {"login_prompt_enable_thunk_faults", static_cast<std::uint64_t>(lp::EnablePageThunk::Faults())},
+      {"login_prompt_error_page_dropped", c.error_page_dropped},
+      {"login_prompt_logging_in_page_dropped", c.logging_in_page_dropped},
+      {"login_prompt_page_passed_armed", c.page_passed_armed},
+      {"login_prompt_error_resent", c.resent},
+      {"login_prompt_error_resend_unavailable", c.resend_unavailable},
+      {"login_prompt_login_restarted", c.login_restarted},
+      {"login_prompt_login_restart_unavailable", c.login_restart_unavailable},
+      {"login_prompt_select_sent", c.select_sent},
+  };
+  static_assert(sizeof(want) / sizeof(want[0]) == static_cast<std::size_t>(lp::kCounterCount),
+                "one expectation per counter");
+  g_lines.clear();
+  lp::FlushCountersAtExit();
+  for (const Expect& e : want) {
+    char needle[192];
+    std::snprintf(needle, sizeof(needle), "\"counter\":\"%s\",\"value\":%llu,\"why\":\"exit\"", e.name,
+                  static_cast<unsigned long long>(e.value));
+    QCHECK(CountLines(needle) == 1);
+  }
+  QCHECK(CountLines("\"why\":\"exit\"") == lp::kCounterCount);
+}
+
 }  // namespace
 
 int main() {
@@ -1753,6 +2009,16 @@ int main() {
   TheSelectsKeyAndEventAreTheirSymbolNames();
   TheSelectNamesAnUnsetSelfAndSendsNothing();
   TheFallbackNamesTheSelectsOutcomeAndTheNextNoticeNamesNone();
+  TheFallbackLoginReachingLoggedInSendsTheSelectOnceWithItsTrigger();
+  ASelectThatStartsTheLoginSendsNothingMoreWhenItReachesLoggedIn();
+  AFallbackLoginThatGoesBackToLoginFailedSendsNothing();
+  TheFallbackLoginMustBeSeenLoggingInBeforeItSendsForLoggedIn();
+  AnotherNetGameReachingLoggedInSendsNothing();
+  AnUnresolvedBeginLogInArmsNothing();
+  TheUnavailableSelectsFallbackAlsoSendsOnceAfterItsLogin();
+  AFallbackThatDidNotStartTheLoginSendsNothingLater();
+  ASecondFallbackMustBeSeenLoggingInOnItsOwn();
+  SettingBeginLogInForgetsAnArmedFallback();
   TheFirstStateOfAnInstanceIsABaseline();
   TheCountersAreAllInTheReporterTable();
   ASkippedLoggingInPagePoisonsTheAttemptUntilItEnds();
@@ -1766,6 +2032,7 @@ int main() {
   AWithdrawnBoardKeepsNoCode();
   TheBoardRefusesWhatTheGameCouldNotShow();
   ConcurrentReadsAreNeverTorn();
+  TheExitFlushWritesEachCounterOnce();
   QCHECK(lp::ErrorThunk::Faults() == 0 && lp::UpdateThunk::Faults() == 0 && lp::EnablePageThunk::Faults() == 0);
   CounterRefusalIsLoudAndInstallReportsBothSlots();
 
