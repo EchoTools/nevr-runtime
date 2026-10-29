@@ -348,25 +348,70 @@ class ReleaseStagesTest(PackageFixture):
             (assets / f"nevr-runtime-v{version}-quest-libovrplatformloader.so").write_bytes(self.QUEST)
         return assets
 
-    def notes_for(self, sealed, name="notes", **kw):
+    CHANGES = ("feat(runtime): a player feature", "fix(quest): a player fix", "fix(arena): a host fix", "docs: a note")
+
+    def range_args(self, changes=None):
+        """A git range holding `changes` (newest first, as git log prints them) above a base tag: what the body's player
+        line is read from. Returns the --repo, --base and --rev arguments of `notes`."""
+        repo = Path(tempfile.mkdtemp(prefix="range-", dir=self.tmp))
+        git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false",
+               "-c", "tag.gpgSign=false"]
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(git + ["commit", "-q", "--allow-empty", "-m", "chore: base"], check=True)
+        subprocess.run(git + ["tag", "base"], check=True)
+        for message in reversed(self.CHANGES if changes is None else changes):
+            subprocess.run(git + ["commit", "-q", "--allow-empty", "-m", message], check=True)
+        subprocess.run(git + ["tag", "rev"], check=True)
+        return ["--repo", str(repo), "--base", "base", "--rev", "rev"]
+
+    def run_notes(self, *args, changes=None):
+        return self.run_stage("notes", *args, *self.range_args(changes))
+
+    def notes_for(self, sealed, name="notes", changes=None, **kw):
         out = Path(tempfile.mkdtemp(prefix=name + "-", dir=self.tmp)) / "notes.md"
-        result = self.run_stage("notes", "--assets", str(self.release_dir(sealed, name + "-assets", **kw)), "--out", str(out))
+        result = self.run_notes("--assets", str(self.release_dir(sealed, name + "-assets", **kw)), "--out", str(out),
+                                changes=changes)
         self.assertEqual(result.returncode, 0, result.stderr)
         return out
 
-    def test_the_release_body_is_the_notes_and_a_sha256_table_of_both_assets(self):
+    def test_the_release_body_is_a_header_a_player_line_and_one_line_per_file(self):
         sealed = self.seal_to(self.make_tree())
-        notes = self.notes_for(sealed).read_text()
-        zip_path = sealed / "nevr-runtime-v5.0.0-windows.zip"
-        quest = "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"
-        self.assertIn(f"| `{zip_path.name}` | `{hashlib.sha256(zip_path.read_bytes()).hexdigest()}` |", notes)
-        self.assertIn(f"| `{quest}` | `{hashlib.sha256(self.QUEST).hexdigest()}` |", notes)
-        self.assertIn(f"Commit `{COMMIT}`", notes)
-        self.assertRegex(notes, r"\A# \w+ runtime 5\.0\.0\n")
-        self.assertNotRegex(notes, r"@[A-Z_]+@", "every placeholder is filled")
-        self.assertNotIn("SHA256SUMS` | SHA-256 of", notes, "the APK table is not the release's")
+        body = self.notes_for(sealed).read_text()
+        self.assertEqual(body.splitlines(), [
+            "# nEVR 5.0.0",
+            "",
+            "A player feature.",
+            "",
+            "- `nevr-runtime-v5.0.0-windows.zip`: install on PC (unzip, close the game, run `install.ps1`); also the "
+            "dedicated server (`echovr_server.exe`) and `uninstall.ps1`.",
+            "- `nevr-runtime-v5.0.0-quest.apk`: install on Quest (published on the release host, not on this page).",
+            "- `nevr-runtime-v5.0.0-quest-libovrplatformloader.so`: for the Quest patcher; players do not need it.",
+            "- `nevr-install.exe` (inside the zip): the core installer the scripts run.",
+        ])
 
-    def test_the_body_hashes_the_asset_bytes_as_they_are_so_a_resigned_zip_changes_it(self):
+    def test_the_release_body_has_no_hash_no_commit_and_no_table(self):
+        sealed = self.seal_to(self.make_tree())
+        zip_path = sealed / "nevr-runtime-v5.0.0-windows.zip"
+        body = self.notes_for(sealed).read_text()
+        self.assertNotRegex(body, r"[0-9a-f]{64}", "no SHA-256")
+        self.assertNotRegex(body, r"[0-9a-f]{40}", "no commit")
+        self.assertNotIn(hashlib.sha256(zip_path.read_bytes()).hexdigest(), body)
+        self.assertNotIn("Commit", body)
+        self.assertNotRegex(body, r"(?m)^\|", "no table row")
+        self.assertNotRegex(body, r"@[A-Z_]+@", "every placeholder is filled")
+        self.assertNotIn("No Quest APK", body)
+
+    def test_the_player_line_is_read_from_the_range_the_body_is_given(self):
+        sealed = self.seal_to(self.make_tree())
+        many = ("feat(runtime): one", "fix(quest): two", "feat(runtime): three", "feat(runtime): four",
+                "fix(quest): five")
+        self.assertEqual(self.notes_for(sealed, "many", changes=many).read_text().splitlines()[2],
+                         "One; three and 1 more.")
+        none = ("fix(arena): a host fix", "feat(plugin): an api", "chore: tidy")
+        self.assertEqual(self.notes_for(sealed, "none", changes=none).read_text().splitlines()[2],
+                         "Fixes and internal changes.")
+
+    def test_the_body_does_not_depend_on_the_zip_bytes(self):
         tree = self.make_tree()
         first = self.notes_for(self.seal_to(tree, "one")).read_text()
         for dll in ("BugSplat64.dll", "nevr-runtime.dll"):
@@ -375,7 +420,7 @@ class ReleaseStagesTest(PackageFixture):
         (tree / "nevr-install.exe").write_bytes(fake_pe(0x100, b"i"))
         self.sign_scripts(tree)
         second = self.notes_for(self.seal_to(tree, "two", "--require-signed")).read_text()
-        self.assertNotEqual(first, second)
+        self.assertEqual(first, second, "the body names files and says what they are for; it holds no hash")
 
     def test_the_body_takes_version_and_commit_from_the_dll_inside_the_zip(self):
         sealed = self.seal_to(self.make_tree())
@@ -384,7 +429,7 @@ class ReleaseStagesTest(PackageFixture):
         (assets / "nevr-runtime-v5.0.0-windows.zip").rename(renamed)
         (assets / "nevr-runtime-v5.0.1-quest-libovrplatformloader.so").write_bytes(self.QUEST)
         (assets / "nevr-runtime-v5.0.0-quest-libovrplatformloader.so").unlink()
-        result = self.run_stage("notes", "--assets", str(assets), "--out", str(self.tmp / "n.md"))
+        result = self.run_notes("--assets", str(assets), "--out", str(self.tmp / "n.md"))
         self.assertEqual(result.returncode, 1)
         self.assertIn("carries version '5.0.0', not '5.0.1'", result.stderr)
         self.assertFalse((self.tmp / "n.md").exists())
@@ -392,18 +437,18 @@ class ReleaseStagesTest(PackageFixture):
     def test_the_body_refuses_a_missing_quest_library_a_stray_file_and_an_existing_output(self):
         sealed = self.seal_to(self.make_tree())
         assets = self.release_dir(sealed, "a1", quest=False)
-        result = self.run_stage("notes", "--assets", str(assets), "--out", str(self.tmp / "n1.md"))
+        result = self.run_notes("--assets", str(assets), "--out", str(self.tmp / "n1.md"))
         self.assertEqual(result.returncode, 1)
         self.assertIn("no nevr-runtime-v5.0.0-quest-libovrplatformloader.so", result.stderr)
         assets = self.release_dir(sealed, "a2")
         (assets / "SHA256SUMS").write_text("x")
-        result = self.run_stage("notes", "--assets", str(assets), "--out", str(self.tmp / "n2.md"))
+        result = self.run_notes("--assets", str(assets), "--out", str(self.tmp / "n2.md"))
         self.assertEqual(result.returncode, 1)
         self.assertIn("files that are not release assets: SHA256SUMS", result.stderr)
         (assets / "SHA256SUMS").unlink()
         out = self.tmp / "n3.md"
         out.write_text("kept")
-        result = self.run_stage("notes", "--assets", str(assets), "--out", str(out))
+        result = self.run_notes("--assets", str(assets), "--out", str(out))
         self.assertEqual(result.returncode, 1)
         self.assertIn("exists; not overwritten", result.stderr)
         self.assertEqual(out.read_text(), "kept")
@@ -411,14 +456,14 @@ class ReleaseStagesTest(PackageFixture):
     def test_the_body_refuses_no_zip_two_zips_and_a_zip_without_the_dll(self):
         empty = self.tmp / "empty"
         empty.mkdir()
-        result = self.run_stage("notes", "--assets", str(empty), "--out", str(self.tmp / "n.md"))
+        result = self.run_notes("--assets", str(empty), "--out", str(self.tmp / "n.md"))
         self.assertEqual(result.returncode, 1)
         self.assertIn("expected exactly one nevr-runtime-v<X.Y.Z>-windows.zip, found 0", result.stderr)
         hollow = self.tmp / "hollow"
         hollow.mkdir()
         with zipfile.ZipFile(hollow / "nevr-runtime-v5.0.0-windows.zip", "w") as z:
             z.writestr("README.txt", "x")
-        result = self.run_stage("notes", "--assets", str(hollow), "--out", str(self.tmp / "n.md"))
+        result = self.run_notes("--assets", str(hollow), "--out", str(self.tmp / "n.md"))
         self.assertEqual(result.returncode, 1)
         self.assertIn("has no BugSplat64.dll", result.stderr)
 
@@ -520,7 +565,7 @@ class ReleaseStagesTest(PackageFixture):
             self.assertIn(needle, texts["README.txt"], needle)
         # No sentence may be false in a package built anywhere: not "built by CI", not "UNSIGNED".
         self.assertNotIn("built by CI", package_release.SIGNING_TEXT)
-        self.assertIn("No Quest APK in this release", texts["RELEASE-NOTES.md"])
+        self.assertNotIn("No Quest APK", texts["RELEASE-NOTES.md"])
         self.assertNotIn("adb install", texts["RELEASE-NOTES.md"])
         self.assertNotIn("windows-server", texts["RELEASE-NOTES.md"])
         self.assertNotRegex(texts["RELEASE-NOTES.md"], r"-(lite|debug)\.zip")
@@ -528,8 +573,9 @@ class ReleaseStagesTest(PackageFixture):
     def test_the_notes_signing_section_states_the_default_policy_and_the_flag_that_enforces_it(self):
         # Since #933 a run loads unsigned plugins unless -require-signed-plugins is given. The notes must say that,
         # and the source must still say it: kDefaultMode (plugin_trust.cpp) and the flag's registration (cli.cpp).
-        sealed = self.seal_to(self.make_tree())
-        notes = self.notes_for(sealed).read_text()
+        # The release body is short and says none of it; the tester notes of a local package (rendered from this
+        # template, LocalDevPackageTest) do.
+        notes = (PACKAGE / "RELEASE-NOTES.template.md").read_text(encoding="utf-8")
         self.assertIn("loads unsigned plugins by default", notes)
         self.assertIn("`-require-signed-plugins`", notes)
         self.assertNotIn("loads only plugins signed", notes)
@@ -596,10 +642,8 @@ class ReleaseStagesTest(PackageFixture):
             for name in z.namelist():
                 if name != "SHA256SUMS":
                     self.assertEqual(sums[name], hashlib.sha256(z.read(name)).hexdigest(), name)
-        self.assertEqual(self.notes_for(sealed, "n-after").read_text().replace(hashlib.sha256(zip_path.read_bytes()).hexdigest(), "ZIP"),
-                         self.notes_for(before, "n-before").read_text().replace(
-                             hashlib.sha256((before / zip_path.name).read_bytes()).hexdigest(), "ZIP"),
-                         "the notes differ only in the zip's SHA-256")
+        self.assertEqual(self.notes_for(sealed, "n-after").read_text(), self.notes_for(before, "n-before").read_text(),
+                         "the body is the same before and after signing: it holds no hash")
 
     def test_require_signed_is_a_gate_only_and_changes_no_text(self):
         tree = self.make_tree()

@@ -60,6 +60,8 @@ BRAND_PROSE_SPELLINGS = {
     "README.md": {"nEVR"},
     "docs/README.md": {"nEVR"},
     "RELEASING.md": {"nEVR"},
+    "tools/package-release/RELEASE-BODY.template.md": {"nEVR"},
+    "tools/tests/test_package_release.py": {"nEVR"},
     "docs/engine/asset-system.md": {"nEVR"},
     "docs/adr/0003-quest-networking-port.md": {"nEVR"},
     "docs/adr/0004-quest-verification-regime.md": {"nEVR"},

@@ -148,16 +148,15 @@ jobs:
     - name: Check the signed draft
       run: tools/release_check_draft.sh --signed "v$VERSION"
 
-    # 7. The body: the notes and the SHA-256 table from the signed files, then the per-audience section generated from
-    #    the feat and fix commits since the base tag (tools/release_audience_section.py).
+    # 7. The body: a header, the player line from the feat commits since the base tag, and one line per file, rendered from
+    #    the signed files by package_release.py notes. The output path must not exist yet (the stage refuses one that does).
     - name: Write the release body
       run: |
         set -euo pipefail
         assets=$(mktemp -d)
         gh release download "v$VERSION" -D "$assets"
-        notes=$(mktemp)
-        python3 tools/package_release.py notes --assets "$assets" --out "$notes"
-        python3 tools/release_audience_section.py --repo . --base "$BASE" --rev "v$VERSION" >> "$notes"
+        notes=$(mktemp -d)/RELEASE-BODY.md
+        python3 tools/package_release.py notes --assets "$assets" --out "$notes" --repo . --base "$BASE" --rev "v$VERSION"
         gh release edit "v$VERSION" --notes-file "$notes"
         gh release view "v$VERSION" --json body --jq .body
 
