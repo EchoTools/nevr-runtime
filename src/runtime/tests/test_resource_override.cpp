@@ -918,4 +918,173 @@ TEST_F(GameHeapCopies, AnAlignmentBelowTheAllocatorsMinimumIsRaisedToIt) {
   EXPECT_EQ(block->alignment, 16u);
 }
 
+
+// ── #1421: a texture's payload (buffer 1), named by its on-disk type ─────────────────────────────────────────────
+// A CGTextureResource reaches the game as two reads under one (type, name): buffer 0, a 256-byte descriptor read by the
+// on-disk type Make(CGTextureResource, "Win10"), and buffer 1, the pixel payload, read by Make(CGTextureResource,
+// "Win10GPU") (docs/engine/asset-system.md; both observed for the lobby posters in #1421's step 1). An entry keyed by
+// an on-disk type names that buffer. The payload is written over the game's own buffer when it fits, so no payload-sized
+// allocation is made in the game's heap; a payload larger than the game's buffer is not served, and a Warning says so.
+
+constexpr std::uint64_t kTextureType = 0xb3ebe9e0bf0eb81full;         // CGTextureResource, at CResource + 0x28
+constexpr std::uint64_t kTextureDescriptorKey = 0x4a4c32c49300b8a0ull;  // Make(CGTextureResource, "Win10"): buffer 0
+constexpr std::uint64_t kTexturePayloadKey = 0xbeac1969cb7b8861ull;     // Make(CGTextureResource, "Win10GPU"): buffer 1
+constexpr std::uint64_t kPosterName = 0xa240a2bc051b2f23ull;            // lobby_poster_array_4k_emi
+
+class TexturePayloads : public ResourceTransforms {};
+
+TEST_F(TexturePayloads, ABufferOneEntryIsWrittenOverTheGamesPayloadAndBufferZeroIsLeftAlone) {
+  static const std::uint8_t payload[] = {'D', 'D', 'S', ' ', 1, 2};
+  RegisterResourceOverride(kTexturePayloadKey, kPosterName, payload, sizeof(payload), "poster");
+  std::uint8_t descriptor[4] = {7, 7, 7, 7};
+  GameFinishesBuffer(kTextureType, kPosterName, 0, descriptor, sizeof(descriptor));
+  EXPECT_EQ(g_seenBuffer, descriptor) << "buffer 0 was replaced by an entry that names buffer 1";
+  EXPECT_EQ(g_seenSize, sizeof(descriptor));
+  EXPECT_EQ(descriptor[0], 7);
+  EXPECT_FALSE(TestLogContains("override applied"));
+
+  std::uint8_t gameBuffer[8] = {0, 0, 0, 0, 0, 0, 0xAA, 0xAA};
+  GameFinishesBuffer(kTextureType, kPosterName, 1, gameBuffer, sizeof(gameBuffer));
+  EXPECT_EQ(g_seenBuffer, gameBuffer) << "the payload is written in place: the game keeps its own buffer";
+  EXPECT_EQ(g_seenSize, sizeof(payload));
+  EXPECT_EQ(std::memcmp(gameBuffer, payload, sizeof(payload)), 0);
+  EXPECT_TRUE(g_heap.blocks.empty()) << "no payload-sized allocation in the game's heap";
+  EXPECT_TRUE(TestLogContains("override applied label=poster buffer=1 "));
+  EXPECT_TRUE(TestLogContains("orig_bytes=8 new_bytes=6 copy=in_place"));
+}
+
+TEST_F(TexturePayloads, APayloadLargerThanTheGamesBufferIsNotServedAndTheWarningSaysWhy) {
+  static const std::uint8_t payload[10] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+  RegisterResourceOverride(kTexturePayloadKey, kPosterName, payload, sizeof(payload), "poster");
+  std::uint8_t small[8] = {0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA};
+  GameFinishesBuffer(kTextureType, kPosterName, 1, small, sizeof(small));
+  EXPECT_EQ(g_seenBuffer, small);
+  EXPECT_EQ(g_seenSize, sizeof(small));
+  EXPECT_EQ(small[0], 0xAA) << "nothing is written into a buffer the payload does not fit";
+  EXPECT_TRUE(TestLogContains("payload not replaced label=poster buffer=1 "));
+  EXPECT_TRUE(TestLogContains("game_bytes=8 new_bytes=10 reason=larger_than_the_game_buffer"));
+  EXPECT_FALSE(TestLogContains("override applied"));
+
+  std::uint8_t large[16] = {};
+  GameFinishesBuffer(kTextureType, kPosterName, 1, large, sizeof(large));
+  EXPECT_EQ(g_seenSize, sizeof(payload)) << "a payload not served is offered again on the next load";
+  EXPECT_EQ(std::memcmp(large, payload, sizeof(payload)), 0);
+}
+
+TEST_F(TexturePayloads, AnEntryKeyedByTheBufferZeroOnDiskTypeReplacesTheDescriptorOnly) {
+  static const std::uint8_t descriptor[] = {1, 2, 3, 4, 5};
+  RegisterResourceOverride(kTextureDescriptorKey, kPosterName, descriptor, sizeof(descriptor), "poster_desc");
+  std::uint8_t gameBuffer[8] = {};
+  GameFinishesBuffer(kTextureType, kPosterName, 1, gameBuffer, sizeof(gameBuffer));
+  EXPECT_EQ(g_seenSize, sizeof(gameBuffer));
+  static const std::uint8_t stock[] = {9, 9, 9};
+  GameFinishesBuffer(kTextureType, kPosterName, 0, stock, sizeof(stock));
+  ExpectGameCopy(descriptor, sizeof(descriptor));
+  EXPECT_TRUE(TestLogContains("override applied label=poster_desc buffer=0 "));
+  EXPECT_TRUE(TestLogContains("copy=game_heap"));
+}
+
+// Regression guards (they pass before the change too): an entry keyed as before #1421, by the logical type or by 0,
+// still names buffer 0 and never reaches the payload, so an entry written for an older runtime replaces what it did.
+TEST_F(TexturePayloads, AnEntryKeyedByTheLogicalTypeNeverReachesThePayload) {
+  static const std::uint8_t bytes[] = {1, 2, 3};
+  RegisterResourceOverride(kTextureType, kPosterName, bytes, sizeof(bytes), "logical");
+  std::uint8_t gameBuffer[8] = {};
+  GameFinishesBuffer(kTextureType, kPosterName, 1, gameBuffer, sizeof(gameBuffer));
+  EXPECT_EQ(g_seenBuffer, gameBuffer);
+  EXPECT_EQ(g_seenSize, sizeof(gameBuffer));
+  EXPECT_EQ(gameBuffer[0], 0);
+  static const std::uint8_t stock[] = {9, 9, 9, 9};
+  GameFinishesBuffer(kTextureType, kPosterName, 0, stock, sizeof(stock));
+  ExpectGameCopy(bytes, sizeof(bytes));
+}
+
+TEST_F(TexturePayloads, AnEntryKeyedByZeroNeverReachesThePayload) {
+  static const std::uint8_t bytes[] = {4, 5, 6};
+  RegisterResourceOverride(0, kPosterName, bytes, sizeof(bytes), "any_type");
+  std::uint8_t gameBuffer[8] = {};
+  GameFinishesBuffer(kTextureType, kPosterName, 1, gameBuffer, sizeof(gameBuffer));
+  EXPECT_EQ(g_seenSize, sizeof(gameBuffer));
+  EXPECT_EQ(gameBuffer[0], 0);
+  static const std::uint8_t stock[] = {9, 9, 9, 9};
+  GameFinishesBuffer(kTextureType, kPosterName, 0, stock, sizeof(stock));
+  ExpectGameCopy(bytes, sizeof(bytes));
+}
+
+TEST_F(TexturePayloads, NoEntryNamesABufferPastTheSecond) {
+  static const std::uint8_t bytes[] = {1, 2, 3};
+  RegisterResourceOverride(0, kPosterName, bytes, sizeof(bytes), "any_type");
+  RegisterResourceOverride(kTexturePayloadKey, kPosterName, bytes, sizeof(bytes), "poster");
+  std::uint8_t gameBuffer[8] = {};
+  GameFinishesBuffer(kTextureType, kPosterName, 2, gameBuffer, sizeof(gameBuffer));
+  EXPECT_EQ(g_seenBuffer, gameBuffer);
+  EXPECT_EQ(g_seenSize, sizeof(gameBuffer));
+  EXPECT_EQ(gameBuffer[0], 0);
+  EXPECT_FALSE(TestLogContains("override applied"));
+}
+
+TEST_F(TexturePayloads, AnEmptyPayloadIsNotWrittenAndTheWarningSaysWhy) {
+  RegisterResourceOverride(kTexturePayloadKey, kPosterName, nullptr, 0, "empty");
+  std::uint8_t gameBuffer[8] = {5, 5, 5, 5, 5, 5, 5, 5};
+  GameFinishesBuffer(kTextureType, kPosterName, 1, gameBuffer, sizeof(gameBuffer));
+  EXPECT_EQ(g_seenSize, sizeof(gameBuffer)) << "the game's payload keeps its size";
+  EXPECT_TRUE(TestLogContains("payload not replaced label=empty buffer=1 "));
+  EXPECT_TRUE(TestLogContains("reason=no_bytes"));
+}
+
+TEST_F(TexturePayloads, ABlockWithNoGameBufferIsNotWrittenAndTheWarningSaysWhy) {
+  static const std::uint8_t payload[] = {1, 2, 3};
+  RegisterResourceOverride(kTexturePayloadKey, kPosterName, payload, sizeof(payload), "poster");
+  GameFinishesBuffer(kTextureType, kPosterName, 1, nullptr, 8);
+  EXPECT_EQ(g_seenBuffer, nullptr);
+  EXPECT_EQ(g_seenSize, 8u);
+  EXPECT_TRUE(TestLogContains("reason=no_game_buffer"));
+}
+
+TEST_F(TexturePayloads, ATransformIsNeverOfferedThePayload) {
+  RegisterResourceTransform(kTexturePayloadKey, kPosterName, &ProbeTransform, nullptr, "probe");
+  std::uint8_t gameBuffer[8] = {};
+  GameFinishesBuffer(kTextureType, kPosterName, 1, gameBuffer, sizeof(gameBuffer));
+  EXPECT_EQ(g_probe.calls, 0);
+  EXPECT_EQ(g_seenSize, sizeof(gameBuffer));
+}
+
+TEST_F(TexturePayloads, ACachedPayloadIsWrittenOverBufferOne) {
+  const std::vector<std::uint8_t> image = Image(3000, 5);
+  Cache(image, kTexturePayloadKey, kPosterName, "cache_poster");
+  ASSERT_EQ(RegisterCachedResourceOverrides(dir_.c_str()), 1u);
+  std::vector<std::uint8_t> gameBuffer(4096, 0xAA);
+  GameFinishesBuffer(kTextureType, kPosterName, 1, gameBuffer.data(), gameBuffer.size());
+  EXPECT_EQ(g_seenBuffer, gameBuffer.data());
+  EXPECT_EQ(g_seenSize, image.size());
+  EXPECT_EQ(std::memcmp(gameBuffer.data(), image.data(), image.size()), 0);
+  EXPECT_TRUE(TestLogContains("override applied label=cache_poster buffer=1 "));
+}
+
+// The built-in splash has always been registered under Make(CGTextureResource, "Win10GPU") with a payload of
+// ui_menu_frontend's buffer-1 size (#1130); matched against the logical type it never applied.
+TEST_F(TexturePayloads, TheBuiltInSplashIsWrittenOverTheMenuTexturesPayload) {
+  TestHook_RegisterInitialOverrides(dir_.c_str());
+  ASSERT_TRUE(TestLogContains("Registered embedded override: splash_texture"));
+  std::uint8_t descriptor[256] = {};
+  GameFinishesBuffer(kTextureType, kSplashName, 0, descriptor, sizeof(descriptor));
+  EXPECT_EQ(g_seenBuffer, descriptor);
+  EXPECT_EQ(g_seenSize, sizeof(descriptor));
+  std::vector<std::uint8_t> gameBuffer(1050548, 0);
+  GameFinishesBuffer(kTextureType, kSplashName, 1, gameBuffer.data(), gameBuffer.size());
+  EXPECT_EQ(g_seenBuffer, gameBuffer.data());
+  EXPECT_EQ(g_seenSize, 1050548u);
+  EXPECT_EQ(std::memcmp(gameBuffer.data(), "DDS ", 4), 0);
+  EXPECT_TRUE(TestLogContains("override applied label=splash_texture buffer=1 "));
+  EXPECT_TRUE(TestLogContains("orig_bytes=1050548 new_bytes=1050548 copy=in_place"));
+}
+
+// A cached entry covers the built-in splash only when it names the same buffer: one keyed by 0 names buffer 0.
+TEST_F(TexturePayloads, ACachedEntryForAnotherBufferDoesNotSuppressTheBuiltInSplash) {
+  Cache(Image(90, 3), 0, kSplashName, "any_type");
+  TestHook_RegisterInitialOverrides(dir_.c_str());
+  EXPECT_TRUE(TestLogContains("Registered embedded override: splash_texture"));
+  EXPECT_FALSE(TestLogContains("not registered reason"));
+}
+
 }  // namespace

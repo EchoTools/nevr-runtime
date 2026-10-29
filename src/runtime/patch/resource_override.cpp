@@ -9,13 +9,17 @@
  * The callback receives SIORequestCallbackData:
  *   +0x00: status (4 = success)
  *   +0x08: CResource* pointer
- *   +0x10: buffer index (0 = primary, 1 = secondary)
+ *   +0x10: buffer index (0 = primary, 1 = secondary; for a texture, the descriptor and the pixel payload)
  *   +0x18: data buffer pointer
  *   +0x20: data size
  *
  * CResource struct layout:
- *   +0x28: type_symbol  (uint64 hash)
+ *   +0x28: type_symbol  (uint64 hash, the logical type)
  *   +0x38: name_symbol  (uint64 hash)
+ *
+ * An entry's type names the buffer it replaces (resource_buffer_key.h, #1421): 0, the logical type or the buffer-0
+ * on-disk type name buffer 0, which gets a copy in the game's heap; the buffer-1 on-disk type names buffer 1, which is
+ * written over the game's own buffer when it fits and is otherwise not served.
  */
 
 #include "runtime/patch/resource_override.h"
@@ -45,6 +49,7 @@
 #include "core/globals.h"
 #include "core/logging.h"
 #include "runtime/patch/game_buffer.h"
+#include "runtime/patch/resource_buffer_key.h"
 
 /* Embedded assets */
 #include "runtime/patch/splash_texture.h"
@@ -92,8 +97,11 @@ static std::atomic<void* const*> g_memory_context_slot{nullptr};
 
 /* ── Known asset hashes ───────────────────────────────────────────── */
 
+/* Make(CGTextureResource, "Win10GPU"): a texture's payload, buffer 1. The splash is ui_menu_frontend's payload. */
 constexpr uint64_t TYPE_DDS_TEXTURE     = 0xbeac1969cb7b8861ULL;
 constexpr uint64_t NAME_SPLASH_TEXTURE  = 0x1f72c5e0fc9fc8c0ULL;
+static_assert(TYPE_DDS_TEXTURE == nevr_resource_key::OnDiskType(nevr_resource_key::kTextureResourceType, 1),
+              "the splash is keyed for a texture's buffer 1");
 
 /* ── Hook ─────────────────────────────────────────────────────────── */
 
@@ -141,6 +149,26 @@ static bool GiveGameACopy(uintptr_t cbd, const void* bytes, uint64_t size, const
     return true;
 }
 
+/* Writes a payload (buffer 1) over the game's own buffer, when it fits: no payload-sized copy is made in the game's
+ * heap, and the buffer the game frees is still the one its reader allocated (#1421). Returns false, and leaves the
+ * block alone, when it does not fit. */
+static bool WritePayloadInPlace(uintptr_t cbd, const ResourceOverride& ovr, uint64_t type_hash, uint64_t name_hash,
+                                uint64_t game_bytes) {
+    const nevr_game_buffer::InPlace result =
+        nevr_game_buffer::WriteInPlace(reinterpret_cast<unsigned char*>(cbd), ovr.data, ovr.size);
+    if (result != nevr_game_buffer::InPlace::Written) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.RESOURCE] payload not replaced label=%s buffer=1 type=0x%016llx name=0x%016llx game_bytes=%llu "
+            "new_bytes=%llu reason=%s - the game's own payload is kept, and the replacement is offered again on the "
+            "next load",
+            ovr.label.c_str(), static_cast<unsigned long long>(type_hash), static_cast<unsigned long long>(name_hash),
+            static_cast<unsigned long long>(game_bytes), static_cast<unsigned long long>(ovr.size),
+            nevr_game_buffer::InPlaceName(result));
+        return false;
+    }
+    return true;
+}
+
 /* Offers the game's buffer to a transform and, when it answers, points the callback at a copy of the answer. */
 static void ApplyTransform(ResourceOverride& ovr, uintptr_t cbd, uint64_t type_hash, uint64_t name_hash) {
     const void* in = *reinterpret_cast<const void**>(cbd + 0x18);
@@ -175,15 +203,16 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
     std::shared_ptr<ResourceOverride> selected;
     AsyncIOCallback_fn original;
     uint64_t type_hash = 0, name_hash = 0, orig_size = 0;
+    uint32_t buf_index = 0;
     {
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
         original = g_orig;
         if (callback_data && g_overrides && !g_overrides->empty()) {
             auto cbd = reinterpret_cast<uintptr_t>(callback_data);
             void* resource = *reinterpret_cast<void**>(cbd + 0x08);
-            uint32_t buf_index = *reinterpret_cast<uint32_t*>(cbd + 0x10);
+            buf_index = *reinterpret_cast<uint32_t*>(cbd + 0x10);
 
-            if (resource && buf_index == 0) {
+            if (resource) {
                 auto res = reinterpret_cast<uintptr_t>(resource);
                 name_hash = *reinterpret_cast<uint64_t*>(res + 0x38);
                 type_hash = *reinterpret_cast<uint64_t*>(res + 0x28);
@@ -191,7 +220,8 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
                 for (auto& ovr : *g_overrides) {
                     if (ovr->applied && !ovr->transform) continue;
                     if (ovr->name_hash != name_hash) continue;
-                    if (ovr->type_hash != 0 && ovr->type_hash != type_hash) continue;
+                    if (!nevr_resource_key::NamesBuffer(ovr->type_hash, type_hash, buf_index)) continue;
+                    if (ovr->transform && buf_index != 0) continue;  /* a transform is offered buffer 0 only */
 
                     if (ovr->transform) {
                         /* A transform is asked on every load; it runs below, outside the lock. */
@@ -214,10 +244,14 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
         }
     }
     CallbackLease lease(selected);
+    const bool inPlace = buf_index == 1;
     if (selected && selected->transform) {
         ApplyTransform(*selected, reinterpret_cast<uintptr_t>(callback_data), type_hash, name_hash);
-    } else if (selected && !GiveGameACopy(reinterpret_cast<uintptr_t>(callback_data), selected->data, selected->size,
-                                          selected->label.c_str(), type_hash, name_hash)) {
+    } else if (selected &&
+               !(inPlace ? WritePayloadInPlace(reinterpret_cast<uintptr_t>(callback_data), *selected, type_hash,
+                                               name_hash, orig_size)
+                         : GiveGameACopy(reinterpret_cast<uintptr_t>(callback_data), selected->data, selected->size,
+                                         selected->label.c_str(), type_hash, name_hash))) {
         /* Not applied: the game keeps its own buffer, and the replacement is offered again on the next load. */
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
         selected->applied = false;
@@ -235,11 +269,11 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
                  resName ? " (" : "", resName ? resName : "");
         if (resName) strncat(nameBuf, ")", sizeof(nameBuf) - strlen(nameBuf) - 1);
         Log(EchoVR::LogLevel::Info,
-            "[NEVR.RESOURCE] override applied label=%s type=%s name=%s orig_bytes=%llu "
-            "new_bytes=%llu",
-            selected->label.c_str(), typeBuf, nameBuf,
+            "[NEVR.RESOURCE] override applied label=%s buffer=%u type=%s name=%s orig_bytes=%llu "
+            "new_bytes=%llu copy=%s",
+            selected->label.c_str(), buf_index, typeBuf, nameBuf,
             static_cast<unsigned long long>(orig_size),
-            static_cast<unsigned long long>(selected->size));
+            static_cast<unsigned long long>(selected->size), inPlace ? "in_place" : "game_heap");
     }
     original(callback_data);
 }
@@ -327,7 +361,8 @@ static bool HasOverrideFor(uint64_t type_hash, uint64_t name_hash) {
     std::lock_guard<std::mutex> lock(g_overrides_mutex);
     if (!g_overrides) return false;
     for (const auto& ovr : *g_overrides) {
-        if (ovr->name_hash == name_hash && (ovr->type_hash == 0 || ovr->type_hash == type_hash)) return true;
+        /* Only an entry for the same buffer covers it (resource_buffer_key.h): one keyed by 0 names buffer 0. */
+        if (ovr->name_hash == name_hash && ovr->type_hash == type_hash) return true;
     }
     return false;
 }

@@ -82,6 +82,10 @@ inline void ResolveResourceExports() {
 
 } // namespace detail
 
+/// `type_hash` names the buffer of the resource that is replaced: 0, the resource's class symbol or its on-disk type
+/// Make(<class>, "Win10") name buffer 0, and Make(<class>, "Win10GPU") names buffer 1 (for a texture, the 256-byte
+/// descriptor and the pixel payload). A buffer-1 replacement is written over the game's own buffer when it is no
+/// larger, and is otherwise not served (the host logs a Warning).
 inline bool RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
                                      const void* data, uint64_t size,
                                      const char* label) {
