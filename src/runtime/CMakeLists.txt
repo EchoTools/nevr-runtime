@@ -70,7 +70,7 @@ set(PATCHES_SOURCES
     "patch/asset_cache.cpp"
     # #938: the nEVR section of the in-game CREDITS page (pure logic in credits_text.h).
     "patch/credits_text.cpp"
-    # #1422: a server's private-match team size (pure logic in server_team_size.h).
+    # #1422: a server's match team size (pure logic in server_team_size.h).
     "patch/server_team_size.cpp"
     "patch/asset_registry.cpp"
     "patch/plugin_assets.cpp"
@@ -924,7 +924,7 @@ if(BUILD_TESTING)
     target_link_libraries(test_arena_round_time PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_arena_round_time DISCOVERY_MODE PRE_TEST)
 
-    # #1422: a server's private-match team size, its two checked-patch sites driven on buffers (server_team_size.h).
+    # #1422: a server's match team size, its two checked-patch sites driven on buffers (server_team_size.h).
     add_executable(test_server_team_size tests/test_server_team_size.cpp)
     set_source_files_properties(tests/test_server_team_size.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_server_team_size PRIVATE ${CMAKE_SOURCE_DIR}/src)
