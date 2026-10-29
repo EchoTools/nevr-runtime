@@ -349,6 +349,9 @@ TEST(ServerBotsMemory, TheNetGameFieldsAreReadAtTheirOffsets) {
   v = ReadNetGame(netGame.data());
   EXPECT_FALSE(v.inGame) << "state 8 is not in game";
   EXPECT_FALSE(v.pending);
+  // RequestAddBot's `cmpxchg dword [rcx+0x27d8], esi` (0x1401A0D9F) wants 0: any other dword makes it refuse.
+  Put<int32_t>(netGame, 0x27D8, 0x100);
+  EXPECT_TRUE(ReadNetGame(netGame.data()).pending) << "any nonzero dword is pending";
   Put<int32_t>(netGame, 0, 0x109);
   EXPECT_FALSE(ReadNetGame(netGame.data()).inGame) << "the whole word is the state";
 }
@@ -380,10 +383,10 @@ struct FakePools {
     EXPECT_EQ(pools, static_cast<void*>(this));
     asked.push_back(body);
     const int i = body == kBotBodies[0] ? 0 : 1;
-    if (!found[i]) return 0;
+    // The out values are written even on a miss, so a reader that ignores FindPool's 0 reads a pool it was not given.
     *ownerOut = ownerNull[i] ? nullptr : owner[i].data();
     *indexOut = index[i];
-    return 1;
+    return found[i] ? 1 : 0;
   }
 };
 
