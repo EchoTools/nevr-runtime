@@ -278,10 +278,10 @@ TEST(RenderConfigGpuScore, AFailedRatingReadsZeroOnTheLineThatCarriesTheQualityL
 }
 
 TEST(RenderConfigGpuScore, AScoreJustBelowAThresholdIsNotRoundedOntoIt) {
-  // The largest double below the selector's 4.5 (quality level 1, not 2), and a value the game's formula can give just
-  // below it: cores x kHz = 2,249,999,998 (both factors are whole numbers), then x 2 x 1e-9. A fixed nine significant
-  // digits print both as 4.5.
-  for (const double score : {std::nextafter(4.5, 0.0), 4.499999996}) {
+  // The largest double below the selector's 4.5 (quality level 1, not 2), and a score in the game's own arithmetic just
+  // below it: the integer 2 x cores x kHz converted to a double, then x 1e-9 (fcn.14058e7f0, 0x14058f9d4..0x14058f9fc),
+  // for cores x kHz = 2,249,999,998. A fixed nine significant digits print both as 4.5.
+  for (const double score : {std::nextafter(4.5, 0.0), static_cast<double>(4499999996LL) * 1e-9}) {
     World w;
     w.image.PokeValue<double>(At(kGpuScoreVa), score);
     BootApplyWithSelector(w);

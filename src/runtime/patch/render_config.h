@@ -36,9 +36,9 @@ inline constexpr std::uint64_t kGpuVendorVa = 0x14209cff8ULL;
 /// double, the GPU score the auto-selector picks the quality level from; getter fcn.1400df7a0 (read back:
 /// MOVSD XMM0,[0x14209d000]; RET), setter fcn.1400dfeb0. In echovr.exe its only two writers are in the cgs_dx12 device
 /// init fcn.14058e7f0 (the script DLLs were not searched): NVIDIA cores x base clock (kHz) x 2 x 1e-9 through NVAPI
-/// (0x14058fa04), AMD's AGS teraFlops (0x14058ecb3). When that rating fails it stays 0. The selector reads it at
-/// 0x140c31e21 against 8.0 and 4.5 (vendor 1) or 10.0 and 6.0 (vendor 2); below the lower one it picks quality level 1
-/// (#1419, read back).
+/// (0x14058fa04); AMD's AGS teraFlops, or 5.095 when AGS gives 0 and the adapter name contains "Radeon RX 570 Series"
+/// (0x14058ecb3). When the rating fails otherwise it stays 0. The selector reads it at 0x140c31e21 against 8.0 and 4.5
+/// (vendor 1) or 10.0 and 6.0 (vendor 2); below the lower one it picks quality level 1 (#1419, read back).
 inline constexpr std::uint64_t kGpuScoreVa = 0x14209d000ULL;
 
 /// The ovrHmdDesc copy CVR init makes (FUN_14072be80 copies 0x108 bytes to 0x1420c77a8). The layout is the LibOVR SDK's:
