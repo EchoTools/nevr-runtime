@@ -764,7 +764,7 @@ void TestPresenceTarget() {
   QCHECK(std::strcmp(t.module, "libr15.so") == 0);
   QCHECK(std::strcmp(t.symbol, "_ZN10NRadEngine11CNSProvider12RichPresenceEm") == 0);
   QCHECK(t.kind == sentinel::RelocKind::kJumpSlot);
-  QCHECK(t.buildId != nullptr && std::strcmp(t.buildId, "b243509c08ce677aeb95fa348016949b3fc45230") == 0);
+  QCHECK(t.buildId != nullptr && std::strcmp(t.buildId, sentinel::pinned::LibR15PatchedBuildId()) == 0);
   QCHECK(t.slotVaddr.has_value() && *t.slotVaddr == 0x36d2710ULL);
   QCHECK(kOvrRichPresenceVptrVaddr == 0x6a13e0ULL && kOvrRichPresenceSlotCount == 17);
 }
@@ -790,7 +790,7 @@ bool PinnedBuildIdImage(const char*, sentinel::ElfImage* out) {
   const Elf64_Nhdr note{4, 20, NT_GNU_BUILD_ID};
   std::memcpy(g_pinnedBytes + 16, &note, sizeof(note));
   std::memcpy(g_pinnedBytes + 16 + sizeof(note), "GNU", 4);
-  const char* id = sentinel::pinned::kLibR15BuildId;
+  const char* id = sentinel::pinned::LibR15PatchedBuildId();
   for (int i = 0; i < 20; ++i) {
     const char pair[3] = {id[2 * i], id[2 * i + 1], 0};
     g_pinnedBytes[16 + sizeof(note) + 4 + i] = static_cast<unsigned char>(std::strtoul(pair, nullptr, 16));
@@ -814,6 +814,10 @@ void TestResolveGameJson() {
     const GameJson json = ResolveGameJson(lookup);
     QCHECK(json.reset == nullptr && json.decode == nullptr && json.encode == nullptr);
   }
+  {  // the patched file's ID is the pinned build for this lookup; the stock file's is not (it is not what runs)
+    const GameJson json = ResolveGameJson(&PinnedBuildIdImage);
+    QCHECK(json.reset != nullptr && json.decode != nullptr && json.encode != nullptr);
+  }
   QCHECK(kLibR15CJsonResetVaddr == 0xfa227cULL);
   QCHECK(kLibR15CJsonDecodeFromVaddr == 0xfa7e8cULL);
   QCHECK(kLibR15CJsonEncodeToCompactVaddr == 0xfa7e64ULL);
@@ -836,8 +840,16 @@ void TestTarget() {
   QCHECK(std::strcmp(t.module, "libr15.so") == 0);
   QCHECK(std::strcmp(t.symbol, "_ZN10NRadEngine11CNSProvider6SocialEm") == 0);
   QCHECK(t.kind == sentinel::RelocKind::kJumpSlot);
-  QCHECK(t.buildId != nullptr && std::strcmp(t.buildId, "b243509c08ce677aeb95fa348016949b3fc45230") == 0);
+  QCHECK(t.buildId != nullptr && std::strcmp(t.buildId, sentinel::pinned::LibR15PatchedBuildId()) == 0);
   QCHECK(t.slotVaddr.has_value() && *t.slotVaddr == 0x36ef528ULL);
+}
+
+void TestInviteGateTarget() {
+  const sentinel::GotTarget t = LibR15Boolean();
+  QCHECK(std::strcmp(t.module, "libr15.so") == 0);
+  QCHECK(t.kind == sentinel::RelocKind::kJumpSlot);
+  QCHECK(t.buildId != nullptr && std::strcmp(t.buildId, sentinel::pinned::LibR15PatchedBuildId()) == 0);
+  QCHECK(t.slotVaddr.has_value());
 }
 
 }  // namespace
@@ -854,6 +866,7 @@ int main() {
   TestResolveGameEvents();
   TestProbeOffMeansNoPostFunction();
   TestTarget();
+  TestInviteGateTarget();
   TestPresenceSelection();
   TestPresenceSlotCheckAcceptsTheRealAddresses();
   TestPresenceWrappersPassThroughAndLogOnChange();

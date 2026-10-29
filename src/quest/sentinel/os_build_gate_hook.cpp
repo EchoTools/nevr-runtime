@@ -51,7 +51,7 @@ std::uint64_t ReadPinnedFloor(const char** source) noexcept {
     *source = "no_build_id";
     return 0;
   }
-  if (std::strcmp(id, sentinel::pinned::kLibR15BuildId) != 0) {
+  if (std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) {
     *source = "build_id_mismatch";
     return 0;
   }

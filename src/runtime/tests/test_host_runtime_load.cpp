@@ -78,6 +78,14 @@ std::string ReadAll(const wchar_t* path) {
   return out;
 }
 
+std::string Utf8(const std::wstring& wide) {
+  if (wide.empty()) return {};
+  const int size = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+  std::string out(static_cast<std::size_t>(size), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), out.data(), size, nullptr, nullptr);
+  return out;
+}
+
 }  // namespace
 
 TEST(HostRuntimeLoad, NoPathYieldsNoPath) {
@@ -703,9 +711,32 @@ TEST(HostRuntimeLoad, TheStopRecordNamesTheCauseTheCodeTheHostAndThePathSearched
   EXPECT_EQ(record.at("exit_code"), 78);
   EXPECT_EQ(record.at("runtime_path"), "C:\\games\\echovr\\bin\\win10\\nevr-runtime.dll");
   EXPECT_EQ(record.at("win32_error"), ERROR_FILE_NOT_FOUND);
+  // The facts the console line carries (#1252), so the log and the console agree.
+  EXPECT_EQ(record.at("stopped"), true);
+  EXPECT_EQ(record.at("host_version"), std::string(nevr_host::Version()));
+  EXPECT_EQ(record.at("runtime_version"), "not loaded");
+  EXPECT_EQ(record.at("detail"), "nevr-runtime.dll is missing; path=C:\\games\\echovr\\bin\\win10\\nevr-runtime.dll");
+  EXPECT_EQ(record.at("log"), Utf8(local) + "\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl");
   // The host's identity: the literal the packager reads from this file, so the log names exactly what ran.
   EXPECT_EQ(record.at("host_identity"), std::string(nevr_host::IdentityLiteral()));
   EXPECT_EQ(std::string(nevr_host::IdentityLiteral()).rfind("NEVR-BUILD ", 0), 0u);
+}
+
+TEST(HostRuntimeLoad, TheStopRecordStatesTheVersionOfARuntimeTheHostRead) {
+  const std::wstring local = MakeTempDir(L"stopver");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  RuntimeLoadResult result;
+  result.outcome = RuntimeLoadOutcome::kInitFailed;
+  result.runtime_version = "5.8.1";
+  result.init_code = 3;
+  nevr_host::EmitStopDiagnostic(diagnostics, result);
+  const std::string text = ReadAll((local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl").c_str());
+  ASSERT_FALSE(text.empty());
+  const nlohmann::json record = nlohmann::json::parse(text.substr(0, text.find('\n')));
+  EXPECT_EQ(record.at("runtime_version"), "5.8.1");
+  EXPECT_EQ(record.at("reason"), "init_failed");
+  EXPECT_EQ(record.at("stopped"), true);
 }
 
 // #1122: the host carries no plugin-trust literal, so this is the mark the release path reads to refuse a dev host. It

@@ -194,7 +194,7 @@ GameFunctions ResolvePinned(const char** why) noexcept {
     *why = "no_build_id";
     return functions;
   }
-  if (std::strcmp(id, pinned::kLibR15BuildId) != 0) {
+  if (std::strcmp(id, pinned::LibR15PatchedBuildId()) != 0) {
     *why = "build_id_mismatch";
     return functions;
   }

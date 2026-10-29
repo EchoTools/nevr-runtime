@@ -107,4 +107,10 @@ BuildIdVerdict DecideBuildId(const char* list, const std::string& running) {
   return BuildIdVerdict::kUnsupported;
 }
 
+BuildIdVerdict DecideBuildIdForView(const char* list, const std::string& live, const PluginView& view) {
+  const BuildIdVerdict verdict = DecideBuildId(list, std::string(view.buildId));
+  if (verdict == BuildIdVerdict::kUnsupported && view.patched) return DecideBuildId(list, live);
+  return verdict;
+}
+
 }  // namespace nevr_quest::plugin

@@ -118,6 +118,7 @@ struct FakeSteps final : Steps {
   bool RegisterTextureQualityCounters() override { return Step("reg_texture"); }
   bool RegisterClockLevelsCounters() override { return Step("reg_clock_levels"); }
   bool StartReporter() override { return Step("reporter"); }
+  bool AttachLibR15() override { return Step("attach"); }
   bool InstallClockHook() override { return Step("clock"); }
   bool InstallObbSkip(bool counted) override { return Step(counted ? "obb" : "obb_uncounted"); }
   bool InstallProcessEnd() override { return Step("process_end"); }
@@ -185,7 +186,7 @@ struct FakeSteps final : Steps {
 void TestEverythingOffInstallsOnlyTheProofHookAndTheObbSkip() {
   FakeSteps s = FakeSteps::WithTexture(false, false, false, false);
   const ConstructorReport r = RunConstructorSequence(s);
-  const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_texture", "reg_clock_levels", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
+  const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_texture", "reg_clock_levels", "reporter", "attach", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
   QCHECK(s.calls == want);
   QCHECK(r.at(StepId::kStartTokenAuth).state == StepState::kSkipped);
   QCHECK(r.at(StepId::kInstallRedirect).state == StepState::kSkipped);
@@ -208,7 +209,7 @@ void TestFullStackOrder() {
   const ConstructorReport r = RunConstructorSequence(s);
   QCHECK(s.clockLevelsArgSeen && s.clockLevelsOverrideArg);
   const std::vector<std::string> want = {"arm",       "config",     "plugins_plan", "reg_clock",  "reg_redirect", "reg_dlopen",
-                                         "reg_login", "reg_social", "reg_prompt", "reg_obb",      "reg_resource", "reg_texture", "reg_clock_levels", "reporter",
+                                         "reg_login", "reg_social", "reg_prompt", "reg_obb",      "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "attach",
                                          "plugins_early", "clock",     "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels", "token",      "prompt",       "bridge",
                                          "redirect",  "social",     "dlopen",     "hwdump",     "pns_provider"};
   QCHECK(s.calls == want);
@@ -271,7 +272,7 @@ void TestHwDumpIsIndependentAndContained() {
     FakeSteps s = FakeSteps::With(false, false, false, false);
     s.config.effective.hwdump = true;
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_clock_levels", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels", "hwdump"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_clock_levels", "reporter", "attach", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels", "hwdump"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kInstallHwDump).state == StepState::kOk);
   }
@@ -548,7 +549,7 @@ void TestResourceRequestLogIsDevelopmentOnlyOrderedAndContained() {
   {  // release: nothing runs, both steps say why, and the other steps are exactly as before
     FakeSteps s = FakeSteps::With(false, false, false, false);
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_clock_levels", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_clock_levels", "reporter", "attach", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
     QCHECK(s.calls == want);
     QCHECK(s.devAsked == 1);
     QCHECK(r.at(StepId::kRegisterResourceRequestCounters).state == StepState::kSkipped);
@@ -562,7 +563,7 @@ void TestResourceRequestLogIsDevelopmentOnlyOrderedAndContained() {
     FakeSteps s = FakeSteps::With(false, false, false, false);
     s.devBuild = true;
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_clock_levels", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_clock_levels", "reporter", "attach", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kRegisterResourceRequestCounters).state == StepState::kOk);
     QCHECK(r.at(StepId::kInstallResourceRequestLog).state == StepState::kOk);
@@ -703,7 +704,7 @@ void TestObbSkipIsUnconditionalIndependentAndContained() {
   {
     FakeSteps s = FakeSteps::WithTexture(false, false, false, false);
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_texture", "reg_clock_levels", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_texture", "reg_clock_levels", "reporter", "attach", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kRegisterObbSkipCounters).state == StepState::kOk);
     QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
@@ -715,7 +716,7 @@ void TestObbSkipIsUnconditionalIndependentAndContained() {
     const ConstructorReport r = RunConstructorSequence(s);
     QCHECK(r.at(StepId::kResolveConfig).state == StepState::kThrew);
     // The unresolved configuration is a mistake, so the level is `stock`: no texture counters, and the step still runs.
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_clock_levels", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_clock_levels", "reporter", "attach", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
   }
@@ -905,7 +906,7 @@ void TestCounterRefusalDisablesOnlyThatPiece() {
 
 void TestEveryStepThrowingIsContained() {
   for (const char* name : {"arm", "config", "reg_clock", "reg_redirect", "reg_dlopen", "reg_social", "reg_prompt",
-                           "reg_obb", "reg_texture", "reg_clock_levels", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels", "token", "prompt", "bridge", "redirect", "social",
+                           "reg_obb", "reg_texture", "reg_clock_levels", "reporter", "attach", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels", "token", "prompt", "bridge", "redirect", "social",
                            "dlopen"}) {
     FakeSteps s = FakeSteps::With(true, true, true, true);
     s.throwing = {name};
@@ -1661,12 +1662,48 @@ void TestStageNamesAreStable() {
   QCHECK(std::strcmp(StageForStep("start_token_auth"), "token_auth_state") == 0);
   QCHECK(std::strcmp(StageForStep("install_social"), "social_hook_installed") == 0);
   QCHECK(std::strcmp(StageForStep("install_login_prompt"), "login_prompt_hook_installed") == 0);
+  QCHECK(std::strcmp(StageForStep("attach_libr15"), "libr15_attach") == 0);
+  QCHECK(std::strcmp(StepName(StepId::kAttachLibR15), "attach_libr15") == 0);
   QCHECK(StageForStep("arm_crash_reporter") == nullptr);
   // Every step the sequence names that has a stage is mapped by its real name.
   for (int i = 0; i < static_cast<int>(StepId::kCount); ++i) {
     const char* step = StepName(static_cast<StepId>(i));
     const char* stage = StageForStep(step);
     if (stage != nullptr) QCHECK(std::strlen(stage) > 0);
+  }
+}
+
+
+// ---- the libr15 attach step (docs/adr/0021 sections 6, 7, 10) -----------------------------------------------
+
+// Attach runs on every launch, once, after the one reporter start and before the early plugin pass, the clock hook and every
+// other libr15 step; a launch that wants nothing else still attaches.
+void TestAttachRunsOnceOnEveryLaunchBeforeEveryLibr15Step() {
+  for (const bool wanted : {false, true}) {
+    FakeSteps s = FakeSteps::With(wanted, wanted, wanted, wanted);
+    const ConstructorReport r = RunConstructorSequence(s);
+    int attaches = 0;
+    for (const std::string& c : s.calls) if (c == "attach") ++attaches;
+    QCHECK(attaches == 1);
+    QCHECK(r.at(StepId::kAttachLibR15).state == StepState::kOk);
+    QCHECK(s.Index("attach") == s.Index("reporter") + 1);
+    for (const char* later : {"plugins_early", "clock", "obb", "texture", "credits", "menu_cards"}) {
+      if (s.Ran(later)) QCHECK(s.Index("attach") < s.Index(later));
+    }
+  }
+}
+
+// A refused attach (a stock libr15, a mismatched file) or a throwing one fails only its own step: every later step still
+// runs, because the GOT-only hooks refuse on the stock file by themselves and the inline rows and credits refuse as
+// not_verified; the sequence adds no gating of its own.
+void TestAFailingAttachNeverMovesAnotherStep() {
+  for (const bool throws : {false, true}) {
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    if (throws) s.throwing = {"attach"}; else s.failing = {"attach"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kAttachLibR15).state == (throws ? StepState::kThrew : StepState::kFailed));
+    QCHECK(s.Ran("clock") && s.Ran("obb") && s.Ran("texture") && s.Ran("credits") && s.Ran("menu_cards"));
+    QCHECK(s.Ran("token") && s.Ran("social") && s.Ran("redirect") && s.Ran("dlopen"));
   }
 }
 
@@ -1697,7 +1734,8 @@ void TestTheEarlyPluginPassRunsAfterTheReporterAndBeforeTheClockHook() {
   const ConstructorReport r = RunConstructorSequence(s);
   QCHECK(r.at(StepId::kRunEarlyPlugins).state == StepState::kOk);
   QCHECK(std::strcmp(StepName(StepId::kRunEarlyPlugins), "run_early_plugins") == 0);
-  QCHECK(s.Index("plugins_early") == s.Index("reporter") + 1);
+  QCHECK(s.Index("attach") == s.Index("reporter") + 1);
+  QCHECK(s.Index("plugins_early") == s.Index("attach") + 1);
   QCHECK(s.Index("clock") == s.Index("plugins_early") + 1);
   // An early entry asks for no dlopen hook: the early pass is the whole of it.
   QCHECK(!s.Ran("reg_dlopen") && !s.Ran("dlopen"));
@@ -1853,6 +1891,8 @@ void TestRouterLinesClassify() {
 int main() {
   TestBareBridgeUriBecomesTheTokenedOne();
   TestStageNamesAreStable();
+  TestAttachRunsOnceOnEveryLaunchBeforeEveryLibr15Step();
+  TestAFailingAttachNeverMovesAnotherStep();
   TestRouterLinesClassify();
   TestStepLogLevels();
   TestEverythingOffInstallsOnlyTheProofHookAndTheObbSkip();

@@ -14,36 +14,11 @@
 #include <string>
 #include <vector>
 
+#include "quest/patch/libr15_extra_rows.h"
 #include "quest/patch/libr15_patch_identity.h"
 #include "quest/patch/libr15_patch_table.h"
 
 namespace nevr_quest::patch {
-
-/// What a patch is checked against. PublicSpec() is the shipped one; the host tests build their own around a
-/// synthetic ELF (a table at their own addresses, a pin of their own image end).
-struct PatchSpec {
-  const Row* rows = nullptr;
-  std::size_t rowCount = 0;
-  BuildIdBytes stockBuildId{};
-  std::string stockSha256;                        // empty: the file's digest is not checked
-  std::optional<std::uint64_t> expectedImageEnd;  // the pinned end of the writable PT_LOAD; empty: not checked
-};
-
-/// The compiled-in public table with the pinned stock build ID, SHA-256 and image end.
-PatchSpec PublicSpec();
-
-/// One refusal: a stable `code`, the row `id` it concerns (empty for the file as a whole) and a human `detail`.
-struct Refusal {
-  std::string code;
-  std::string id;
-  std::string detail;
-  nlohmann::json ToJson() const;
-};
-
-/// Reads an extra-rows file (format 1, ADR section 11). False, with `refusal` set, on any rule broken. `rows` is
-/// then unspecified. The pinned stock ID and the public row ids come from `spec`.
-bool ParseExtraRows(const std::string& fileBytes, const PatchSpec& spec, std::vector<WordPatchRow>* rows,
-                    Refusal* refusal);
 
 struct PatchResult {
   bool ok = false;

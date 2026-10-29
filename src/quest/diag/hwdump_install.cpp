@@ -105,7 +105,7 @@ constexpr Slot kSlots[kHookCount] = {
 };
 
 GotTarget TargetFor(std::size_t i) {
-  return {pinned::kLibR15, kSlots[i].symbol, RelocKind::kJumpSlot, pinned::kLibR15BuildId, kSlots[i].vaddr};
+  return {pinned::kLibR15, kSlots[i].symbol, RelocKind::kJumpSlot, pinned::LibR15PatchedBuildId(), kSlots[i].vaddr};
 }
 
 template <typename Thunk, typename Record>

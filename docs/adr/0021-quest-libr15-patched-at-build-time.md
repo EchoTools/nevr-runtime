@@ -1,17 +1,20 @@
 # ADR 0021: libr15.so is patched at build time; no code page is written at run time
 
-Status: proposed (#1132). The patcher (`quest_patch_libr15`), the patch table, the patched build ID and the stub codec are
-implemented and tested on the host (`just test-quest-patcher`, and `just test-quest-patcher-pinned` on the store libr15). The APK
-repack step, the sentinel's `Attach`, the activation and the plugin identity (section 12) are not in the tree yet; they are a
-later change of the same issue. The "Prediction" section is what the first headset runs must show; the "What this does not
-know" section lists what no measurement in this tree covers.
+Status: proposed (#1132). In the tree and tested on the host: the patcher (`quest_patch_libr15`), the patch table, the patched
+build ID and the stub codec (`just test-quest-patcher`, and `just test-quest-patcher-pinned` on the store libr15); the APK repack
+step (`just android-repack-apk`); the sentinel's `Attach` and the activation (`libr15_attach.cpp`, run by the constructor's
+`attach_libr15` step, `just test-quest-hooks` and `just test-quest-integration`); the credits slot; the plugin identity of
+section 12 (`plugin_identity.h`, the loader's `plugin_view_build_id` and `libr15_patched` fields, the GOT backend's build-ID
+alias); and the extra-rows variant build of section 11 (`-DNEVR_LIBR15_EXTRA_ROWS=<file>`). The source rule of test 6 is N151
+in `AGENTS.md`. No headset run of the patched build has been made: the "Prediction" section is what the first runs must show,
+and the "What this does not know" section lists what no measurement in this tree covers.
 
 ## Context
 
 The sentinel (`libovrplatformloader.so`, our shim) changes libr15's behaviour in two ways that GOT hooks cannot reach, and
 both write libr15's code at run time:
 
-- inline hooks (`src/quest/sentinel/inline_hook.cpp`): the lobby-full join, failure and success handlers, the texture
+- inline hooks (`git show 9c7c29fccfc38858f797bb0f8da29e32c1844735:src/quest/sentinel/inline_hook.cpp`): the lobby-full join, failure and success handlers, the texture
   `CGTextureResource::Attach`, and the splash-skip widget update. Each overwrites the
   first 16 bytes of a function (`LDR x16,#8; BR x16; .quad detour`) after `mprotect(page, RW)` and puts the page back with
   `mprotect(page, RX)`;
@@ -146,7 +149,7 @@ The trampoline's address is `*originalOut` of the row's `CallbackThunk`, as now.
 `Attach(image)` is the sentinel's first libr15 step. It verifies the image (section 7), builds every row's trampoline, and
 stores each trampoline's address in its row's slot. From that moment every patched function behaves exactly as stock. A hook's
 install (`InstallInlineThunk`) is reduced to `__atomic_store_n(slot, detour, __ATOMIC_RELEASE)`: no `mprotect`, no page write.
-A hook that is refused, or not wanted, stays pass-through. `inline_hook.cpp`'s write, rollback and restore code is deleted.
+A hook that is refused, or not wanted, stays pass-through. The old inline hook's write, rollback and restore code (`git show 9c7c29fccfc38858f797bb0f8da29e32c1844735:src/quest/sentinel/inline_hook.cpp`) is deleted.
 
 If a trampoline cannot be made, the slot would stay null and the first call would fault, so the sentinel ends the process
 with a named reason (`libr15_patch_trampoline_failed`) through the existing `EndWithExitCode` path (ADR 0020), after logging
@@ -233,7 +236,13 @@ none, and the repo holds no address or word of a row that came this way. The row
 serialisation of section 7, so a build with extra rows has its own patched build ID. The sentinel of such a build is compiled
 with the same file, so it computes that ID; a public sentinel meeting such a libr15 reports `build_id_mismatch`, and a variant
 sentinel meeting a public libr15 reports the same, so neither can pass as the other. The patcher's summary and the sentinel's
-`libr15_patch` line carry `extra_rows` (a count) and `extra_rows_sha256` (the file's digest), never the rows.
+`libr15_patch` line carry `extra_rows` (a count) and `extra_rows_sha256` (the file's digest), never the rows. A variant sentinel is
+built with `-DNEVR_LIBR15_EXTRA_ROWS=<file>` (an empty cache variable by default; configure parses the file with the patcher's
+parser and fails on a malformed one) and its APK repacked with `just android-repack-apk ... extra_rows=<file>`, the same file.
+`android-repack-apk` ties the two before it stages anything (`tools/quest_repack_libs.py check-shim-rows`): with `extra_rows` the shim must
+carry that file's sha-256, and without it the shim must not be a variant build. A pair that does not match is refused there, because on
+the device the sentinel would report `build_id_mismatch` and install nothing while the patched library's stubs branch through slots
+only an attached sentinel fills.
 
 **The extra-rows file, format 1.** One UTF-8 JSON object. Every field below is required, an unknown field at any level is a
 refusal, and so is a duplicate key in one object (the patcher reads the file with a parser that sees duplicates). The example
@@ -288,10 +297,10 @@ uses invented values.
 ### 12. Plugins keep the stock identity
 
 ADR 0019 compares each plugin's declared build-ID list (`NEVR_DECLARE_SUPPORTED_BUILD_IDS`) with the running libr15's live note
-(`SentinelPlatform::GameBuildId` into `DecideBuildId`, `plugin_loader.cpp`), and its host API compares a plugin target's `buildId`
-with the live note (`Prepare` in `got_hook.cpp`) and keys the slot registry by build ID and slot. After section 7 the live note is
-the derived ID, which no plugin lists: every plugin would be refused `build_id_unsupported`, and every plugin target
-`kBuildIdMismatch`. The patched file differs from the stock one only in the bytes the patcher reports (stubs, credits pairs, word
+(`SentinelPlatform::GameBuildId` into `DecideBuildId`, `plugin_loader.cpp`), and the GOT backend compares a target's `buildId`
+with the live note (`Prepare` in `got_hook.cpp`). The GOT backend's slot registry is keyed by slot address (`g_slots` in
+`got_hook.cpp`), not by build ID. After section 7 the live note is the derived ID, which no plugin lists: every plugin would be
+refused `build_id_unsupported`, and every target that carries the stock ID `kBuildIdMismatch`. The patched file differs from the stock one only in the bytes the patcher reports (stubs, credits pairs, word
 patches, the slot area, the note and the `p_memsz` fields), so a plugin's addresses are properties of the stock file and hold.
 
 **Decision.** The loader hands plugins the **plugin identity**:
@@ -304,10 +313,13 @@ patches, the slot area, the note and the `p_memsz` fields), so a plugin's addres
   as today. A file that only carries the derived ID in its note, without the verified stubs, gets no mapping;
 - it is used in three places: `DecideBuildId` accepts a plugin whose list names the plugin identity (a list that names the live
   note is accepted as before); `ctx.game_build_id` is the plugin identity, so a plugin that copies it into its targets works on
-  both files; and the host API accepts a plugin target whose `buildId` equals the live note or the plugin identity, and keys the
-  slot registry by the plugin identity for every target, the sentinel's (which carry the derived ID, section 7) and the
-  plugin's. Keyed by the live note, a plugin's stock-ID claim and the sentinel's derived-ID claim on one slot would be two keys
-  and both would succeed;
+  both files; and the GOT backend accepts a target whose `buildId` equals the live note or the alias that
+  `sentinel::SetBuildIdAlias` gives that note. The alias function the constructor registers answers with the stock ID when the
+  plugin identity is the stock ID and with nothing otherwise. The registry is keyed by slot address, so the sentinel's claim on a
+  slot (its target carries the derived ID, section 7) and a plugin's claim on the same slot (its target carries the stock ID)
+  are one key, and the second claim is refused as already owned;
+- the plugin host API of ADR 0019 slice 2, which would pass a plugin's targets to the GOT backend, is not in the tree. What
+  exists of this decision on that side is the alias function; the first plugin that installs a hook finds it in place;
 - the `plugin_load` record keeps `game_build_id` as the live note and gains `plugin_view_build_id` (the ID compared) and
   `libr15_patched` (true or false), so the log says which file ran and which ID decided.
 
@@ -367,11 +379,12 @@ Each is run once with the line it covers changed and must fail (the mutant disci
     - a plugin target carrying the stock ID resolves on the patched image and is refused (`kBuildIdMismatch`) on the same image
       when the patch is not verified; a target carrying the derived ID resolves on the patched image;
     - the sentinel's claim on a slot with the derived ID, then a plugin's claim on the same slot with the stock ID, is refused
-      as already owned (one key);
+      as already owned (one key: the slot address);
     - pinned, on the real files (test 5): the `plugin_load` decision for a fixture declaring the stock ID, given the note of
       the patcher's output for the store APK's libr15, is `loaded`.
     Mutants: map to the stock ID without the `verified` record; map without re-reading the note; compare the list with the live
-    note only; `ctx.game_build_id` set to the live note; key the registry by the live note. Each must fail one of the cases above.
+    note only; `ctx.game_build_id` set to the live note; an alias function that answers the stock ID whatever it is asked. Each
+    must fail one of the cases above.
 
 ## Prediction
 
@@ -380,9 +393,11 @@ Written before any run. Lines are from the sentinel's log; "no execmod" means th
 
 **Quest 3 (the tester's headset, OS build 52641960030600520).** In the constructor's log, in this order:
 1. `libr15_patch` `status=verified`, `build_id` = the patched ID, `stock_build_id` = `b243509c...`, `rows=6`;
-2. six `inline_hook`/`credits_text` lines `status=ok` (the five hooks, then the credits slot), each `page_perms":"r-xp"`;
-3. the constructor's summary reads `steps_failed=0` (the capture's `steps_ok=22 steps_failed=1` becomes 23 and 0: its one failed
-   step was `credits_text`);
+2. five `inline_hook` lines `status=ok`, each `page_perms":"r-xp"` (one per inline row of the table), and one `credits_text`
+   line `status=applied` (the credits slot);
+3. the constructor's summary reads `steps_failed=0`, and `steps_ok + steps_failed + steps_skipped` is the number of constructor
+   steps (32 in this tree: the `StepId` values before `kCount` in `ctor_sequence.h`, including `attach_libr15`). The earlier
+   capture's one failed step was `credits_text`, which is now an `ok` step;
 4. the process stays up past the first minute and reaches the login (`to logged in`); there is no `SIGSEGV`, and no `execmod`
    anywhere in the capture. The menu's version label shows the build's version (its GOT hook installs without the patch) and the splash skip runs (its pin is now right).
 5. with the no-op plugin of ADR 0019 slice 1 (it declares the stock ID only) in `plugins:`: one `plugin_load outcome=loaded`
@@ -390,7 +405,7 @@ Written before any run. Lines are from the sentinel's log; "no execmod" means th
 Falsifiers: any `avc: denied { execmod }` for `libr15.so`; a `SIGSEGV` at a libr15 page; a `libr15_patch` line with a reason;
 the process dying inside `dlopen` (the linker refused the patched ELF); the plugin record with `build_id_unsupported`.
 
-**Quest 2 (Horizon v207, build 52242990035800150).** The same four points as the Quest 3, and the same falsifiers.
+**Quest 2 (Horizon v207, build 52242990035800150).** The same five points as the Quest 3, and the same falsifiers.
 Both headsets deny `execmod` today, so a Quest 2 run is a second device on the
 same policy, and it is also the evidence that the patched ELF loads on the Quest 2's linker: a `dlopen` failure here that
 the Quest 3 does not show is a defect of the patched file for that OS.
@@ -401,7 +416,7 @@ the Quest 3 does not show is a defect of the patched file for that OS.
   descriptor is rewritten. Both edits keep every offset and the segment order; neither has been measured here.
 - That anonymous executable pages stay allowed, and that code runs from them. What the captures show is the creation: the
   sentinel maps a page `PROT_READ|PROT_WRITE`, copies the displaced words in, and `mprotect`s it `PROT_READ|PROT_EXEC`
-  (`inline_hook.cpp`: the `mmap`, the `mprotect` with the `trampoline_rx` failure path, then the page write that fails); the
+  (`git show 9c7c29fccfc38858f797bb0f8da29e32c1844735:src/quest/sentinel/inline_hook.cpp`: the `mmap`, the `mprotect` with the `trampoline_rx` failure path, then the page write that fails); the
   `trampoline` field of the `restore_protect_failed` line is logged only when both succeeded.
   Quest 3: `trampoline` `0x0000007b8d527000` (Context).
   Quest 2 (the run of 2026-10-28, v5.16.1 first launch, 07:09 to 07:41 local time): the sentinel log holds six launches between
@@ -418,7 +433,7 @@ the Quest 3 does not show is a defect of the patched file for that OS.
 - Whether shipping a modified copy of the game's library changes anything about distributing the APK, which already carries the
   unmodified copy. That is not an engineering question and is flagged for the owner.
 - The sentinel's constructor runs before libr15's initialisers (a dependency's constructors run first), so `Attach` fills the slots
-  before the game can call a patched function. That is the obligation `inline_hook.h` states today, and it is not measured here.
+  before the game can call a patched function. That is the obligation `git show 9c7c29fccfc38858f797bb0f8da29e32c1844735:src/quest/sentinel/inline_hook.h` stated, and it is not measured here.
 
 ## Alternatives considered
 

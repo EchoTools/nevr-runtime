@@ -165,7 +165,7 @@ class RepoTest(unittest.TestCase):
         self.commit()
         headers = {
             "src/quest/sentinel/pinned_targets.h":
-                f'inline constexpr const char* kLibR15BuildId = "{R15_ID}";\n'
+                f'inline constexpr const char* kLibR15StockBuildId = "{R15_ID}";\n'
                 f'inline constexpr const char* kMatchmakingBuildId = "{MM_ID}";\n',
             "src/quest/login/login_prerequisite_targets.h":
                 f'inline constexpr const char* kPnsovrBuildId = "{OVR_ID}";\n',
