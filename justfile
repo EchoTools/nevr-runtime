@@ -1972,11 +1972,13 @@ test-quest-plugins:
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/hook_report.cpp -o "$out/hook_report.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/plugin/plugin_game_image.cpp -o "$out/plugin_game_image.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/plugin/input_seam_hook.cpp -o "$out/input_seam_hook.o"
+    "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/libr15_identity.cpp -o "$out/libr15_identity.o"
     loader=(src/quest/plugin/plugin_plan.cpp src/quest/plugin/plugin_image.cpp src/quest/plugin/plugin_loader.cpp
             src/quest/plugin/plugin_record_log.cpp src/quest/plugin/plugin_platform.cpp src/quest/data/sha256.cpp
             src/quest/sentinel/hook_log.cpp src/quest/sentinel/sentinel_log.cpp
+            "$out/libr15_identity.o" src/quest/patch/libr15_patch_identity.cpp
             "$out/got_hook.o" "$out/hook_report.o" "$out/plugin_game_image.o" "$out/input_seam_hook.o")
-    "${cxx[@]}" -pthread src/quest/tests/plugin_loader_test.cpp src/quest/patch/libr15_patch_identity.cpp "${loader[@]}" \
+    "${cxx[@]}" -pthread src/quest/tests/plugin_loader_test.cpp "${loader[@]}" \
         -o "$out/plugin_loader_test" -ldl
     timeout -k 5 120 "$out/plugin_loader_test" "$out"
     "${cxx[@]}" -pthread src/quest/tests/plugin_runtime_test.cpp src/quest/plugin/plugin_runtime.cpp \
@@ -1984,17 +1986,16 @@ test-quest-plugins:
     timeout -k 5 120 "$out/plugin_runtime_test" "$out"
     # The constructor's attach step (docs/adr/0021 sections 6, 7, 10, 12): the real Attach on the shipped patcher's output laid
     # out in host memory, and the plugin identity and build-ID alias it registers. The patcher and its identity are built with
-    # exceptions (nlohmann::json); the sentinel half is built without, as on the device.
-    for src in src/quest/patch/libr15_patcher.cpp src/quest/patch/libr15_extra_rows.cpp src/quest/patch/libr15_patch_identity.cpp; do
+    # exceptions (nlohmann::json); the sentinel half is built without, as on the device. The identity objects are the loader's.
+    for src in src/quest/patch/libr15_patcher.cpp src/quest/patch/libr15_extra_rows.cpp; do
         "${cxx[@]}" -D_GLIBCXX_ASSERTIONS -c "$src" -o "$out/step_$(basename "$src" .cpp).o"
     done
-    "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/libr15_identity.cpp -o "$out/step_libr15_identity.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/integration/libr15_attach_step.cpp -o "$out/step_libr15_attach_step.o"
     for src in libr15_attach process_end_hook arm64_reloc; do
         "${cxx[@]}" -fno-exceptions -D_GLIBCXX_ASSERTIONS -c "src/quest/sentinel/$src.cpp" -o "$out/step_$src.o"
     done
     "${cxx[@]}" -pthread -Isrc/quest/tests -D_GLIBCXX_ASSERTIONS src/quest/tests/libr15_attach_step_test.cpp \
-        "$out/step_libr15_attach_step.o" "$out/step_libr15_patcher.o" "$out/step_libr15_extra_rows.o" "$out/step_libr15_patch_identity.o" "$out/step_libr15_identity.o" \
+        "$out/step_libr15_attach_step.o" "$out/step_libr15_patcher.o" "$out/step_libr15_extra_rows.o" \
         "$out/step_libr15_attach.o" "$out/step_process_end_hook.o" "$out/step_arm64_reloc.o" \
         "${loader[@]}" -o "$out/libr15_attach_step_test" -ldl
     timeout -k 5 120 "$out/libr15_attach_step_test" src/quest/tests/fixtures
