@@ -94,17 +94,24 @@ std::uint64_t SubmitHook(std::uint64_t data, std::uint64_t length, std::uint64_t
 
 }  // namespace
 
-void Install(std::uintptr_t gameBase) {
+bool Install(std::uintptr_t gameBase) {
   void* target = nevr::ResolveVA_Checked(gameBase, kSubmitVA);
   if (!nevr::ValidatePrologue(target, kSubmitPrologue.data(), kSubmitPrologue.size())) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.INVITE] feature off reason=prologue_mismatch va=0x%llx",
-        static_cast<unsigned long long>(kSubmitVA));
-    return;
+    // Rule 6: the hook's name, its address, the pinned bytes and the bytes found there. An unreadable target is not read.
+    const std::string expected = nevr_invite::HexBytes(kSubmitPrologue.data(), kSubmitPrologue.size());
+    const std::string actual = ReadableRange(reinterpret_cast<std::uintptr_t>(target), kSubmitPrologue.size())
+                                   ? nevr_invite::HexBytes(static_cast<const std::uint8_t*>(target), kSubmitPrologue.size())
+                                   : std::string("unreadable");
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.INVITE] wizard observer off reason=prologue_mismatch name=RemoteLogSubmit va=0x%llx expected=%s actual=%s",
+        static_cast<unsigned long long>(kSubmitVA), expected.c_str(), actual.c_str());
+    return false;
   }
   g_originalSubmit = reinterpret_cast<SubmitFn>(target);
   PatchDetour(&g_originalSubmit, reinterpret_cast<PVOID>(&SubmitHook), "RemoteLogSubmit");
   Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] wizard observer installed va=0x%llx",
       static_cast<unsigned long long>(kSubmitVA));
+  return true;
 }
 
 }  // namespace nevr_invite_hook

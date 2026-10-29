@@ -11,8 +11,9 @@ namespace nevr_invite_hook {
 /// plan names a map card's level through it (nevr_invite::LevelNamer).
 const char* LevelName(std::uint64_t symbol);
 
-/// Installs the observer on the remote-log submit. Client only; the caller decides. A prologue mismatch leaves the
-/// game untouched and logs why.
-void Install(std::uintptr_t gameBase);
+/// Installs the observer on the remote-log submit. Client only; the caller decides. Returns true when it is installed. A
+/// prologue mismatch leaves the game untouched, logs a Warning with the name, the address and the expected and actual
+/// bytes, and returns false; boot then keeps the invite service off.
+bool Install(std::uintptr_t gameBase);
 
 }  // namespace nevr_invite_hook
