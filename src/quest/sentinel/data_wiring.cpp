@@ -229,7 +229,7 @@ void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
   config.engine_root = engineRoot;
   // Without the grant an unwritable media root is reported once, with the Storage advice, not twice.
   if (!granted) config.bad_root_message = data::kNeedsStoragePermission;
-  config.build_id = sentinel::pinned::kLibR15BuildId;
+  config.build_id = sentinel::pinned::kLibR15StockBuildId;
   config.fetch_root_override = Opts().fetch_root_override;
   config.recovery_roots = Opts().recovery_roots;
   config.fetch.utc_stamp = UtcStamp();

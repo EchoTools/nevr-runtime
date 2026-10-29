@@ -10,7 +10,7 @@
  * This reaches only calls a module makes through a dynamic relocation that names
  * a symbol, whether that symbol is defined in another library or in the module
  * itself. It cannot reach a direct call, an inlined call, or a call through a
- * vtable. An internal hook is an inline detour, inline_hook.h (docs/adr/0003).
+ * vtable. An internal hook is a row of the build-time libr15 patch (libr15_attach.h, docs/adr/0021).
  *
  * A target is one slot, named by module, symbol and relocation type
  * (R_AARCH64_JUMP_SLOT or R_AARCH64_GLOB_DAT). Nothing is patched unless
@@ -109,6 +109,16 @@ enum class GotStatus : std::uint8_t {
 
 // Stable tokens for log lines and tests.
 const char* GotStatusName(GotStatus status);
+
+// A second build ID a target may carry for a module (ADR 0021 section 12). The libr15 the game runs is a patched copy of the
+// stock file whose live GNU note is a derived ID, while a plugin's addresses are properties of the stock file: the caller
+// that knows which is which sets this function, and `Prepare` accepts a target whose `buildId` equals the live note OR
+// the alias of the live note. The function gets the module's live note (lowercase hex) at every install and returns the
+// alias, or nullptr for none; it must be fast, must not throw and must return a string that outlives the call (the
+// backend knows nothing about libr15: this is the only place the identity rule enters). Unset: only the live note is
+// accepted. Returns the previous function.
+using BuildIdAliasFn = const char* (*)(const char* liveNote);
+BuildIdAliasFn SetBuildIdAlias(BuildIdAliasFn fn);
 
 // What to hook. Every string must outlive the handle (string literals).
 struct GotTarget {

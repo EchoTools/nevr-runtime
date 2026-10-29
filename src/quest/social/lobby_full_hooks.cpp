@@ -11,21 +11,13 @@
 #include "got_hook.h"
 #include "hook_log.h"
 #include "hook_install.h"
-#include "inline_hook.h"
-#include "pinned_targets.h"
+#include "libr15_attach.h"
 
 namespace quest_social::lobby_full {
 namespace {
 
-using sentinel::InlinePrologue;
-using sentinel::InlineStatus;
+using nevr_quest::libr15_patch::ActivateStatus;
 using Verdict = FullLobbyBackoff::Verdict;
-
-// The first four words of each pinned function (the prologue CheckInlineTarget compares, read from the pinned
-// build at the addresses above). A libr15 build that differs refuses the hook; it does not patch a guess.
-constexpr InlinePrologue kJoinPrologue{{0xD10183FFu, 0xF9001BF6u, 0xA90453F5u, 0xA9057BF3u}};
-constexpr InlinePrologue kFailurePrologue{{0xF81D0FFCu, 0xA90153F5u, 0xA9027BF3u, 0xD10883FFu}};
-constexpr InlinePrologue kSuccessPrologue{{0xD10183FFu, 0xA9035BF7u, 0xA90453F5u, 0xA9057BF3u}};
 
 // The message offsets the game reads (CR15NetClientLobby::LobbySessionFailureCB, pinned 0x1240cc8). The join's key is the
 // 16 bytes RequestJoin is given (Join, pinned 0x1240ba8: `CNSLobby::RequestJoin(param_1 + 0x18, param_2)`).
@@ -142,42 +134,31 @@ NEVR_HOOK_RECORD(kJoinRecord, JoinThunk, &OnJoin);
 NEVR_HOOK_RECORD(kFailureRecord, FailureThunk, &OnFailure);
 NEVR_HOOK_RECORD(kSuccessRecord, SuccessThunk, &OnSuccess);
 
+// Activates one table row. The line keeps its event and fields: `hook` names the function, `target` is the patched
+// function's run-time address (0x0 when the row is not verified), and `status` is "installed" or the activation status.
 template <typename Thunk>
-bool InstallOne(const sentinel::ElfImage& image, std::uint64_t vaddr, const InlinePrologue& prologue,
-                const char* name) noexcept {
-  const void* target = reinterpret_cast<const void*>(image.base + vaddr);
+bool InstallOne(const char* rowId, const char* name) noexcept {
+  const ActivateStatus st = sentinel::InstallRowThunk<Thunk>(rowId);
+  const bool ok = st == ActivateStatus::kOk;
   char targetText[19];
-  const InlineStatus st = sentinel::InstallInlineThunk<Thunk>(target, prologue);
-  sentinel::LogFields(st == InlineStatus::kOk ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError,
-                      "lobby_full",
-                      {{"status", st == InlineStatus::kOk ? "installed" : sentinel::InlineStatusName(st)},
+  sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "lobby_full",
+                      {{"status", ok ? "installed" : nevr_quest::libr15_patch::ActivateStatusName(st)},
                        {"hook", name},
-                       {"target", sentinel::HexString(targetText, reinterpret_cast<std::uintptr_t>(target))}});
-  return st == InlineStatus::kOk;
+                       {"row", rowId},
+                       {"target", sentinel::HexString(targetText, nevr_quest::libr15_patch::RowSiteAddress(rowId))}});
+  return ok;
 }
 
 }  // namespace
 
 std::size_t InstallLobbyFullHooks() noexcept {
-  sentinel::ElfImage image;
-  if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) {
-    sentinel::LogFields(sentinel::LogLevel::kWarn, "lobby_full", {{"status", "libr15_not_loaded"}});
-    return 0;
-  }
-  char buildId[41] = {};
-  if (!sentinel::ReadBuildId(image, buildId, sizeof buildId) ||
-      std::strcmp(buildId, sentinel::pinned::kLibR15BuildId) != 0) {
-    sentinel::LogFields(sentinel::LogLevel::kWarn, "lobby_full",
-                        {{"status", "build_id_mismatch"}, {"build_id", buildId}});
-    return 0;
-  }
   JoinThunk::Arm(kJoinRecord);
   FailureThunk::Arm(kFailureRecord);
   SuccessThunk::Arm(kSuccessRecord);
   std::size_t installed = 0;
-  installed += InstallOne<JoinThunk>(image, kJoinVaddr, kJoinPrologue, "join") ? 1 : 0;
-  installed += InstallOne<FailureThunk>(image, kFailureVaddr, kFailurePrologue, "failure") ? 1 : 0;
-  installed += InstallOne<SuccessThunk>(image, kSuccessVaddr, kSuccessPrologue, "success") ? 1 : 0;
+  installed += InstallOne<JoinThunk>("lobby_full.join", "join") ? 1 : 0;
+  installed += InstallOne<FailureThunk>("lobby_full.failure", "failure") ? 1 : 0;
+  installed += InstallOne<SuccessThunk>("lobby_full.success", "success") ? 1 : 0;
   return installed;
 }
 

@@ -1,33 +1,30 @@
-// The Quest side of #970: the project section of the CREDITS page (see credits_text.h for the sites and the
-// encodings). Install runs once, at the boot step after libr15 is loaded, before the game opens the page.
+// The Quest side of #970: the project section of the CREDITS page (see credits_text.h). Install runs once, at the boot
+// step after libr15 is loaded and Attach has verified it, before the game opens the page.
 //
-// Order, each step refusing the whole patch on failure so the game never runs with one pair retargeted and
-// the other not (the page would then start on one text and reset to the other):
-//   1. libr15 is loaded, its build ID is the pinned one;
+// Order, each step refusing the whole install on failure (the slot then keeps the game's own text):
+//   1. libr15 is loaded and Attach verified it (the credits slot exists): otherwise `libr15_not_patched` when the live
+//      build ID is the stock one, `not_verified` for anything else;
 //   2. the block the build rendered passes ValidateBlock (the runtime's second guard, as on PC);
-//   3. the four pinned words are at the two pairs (nothing else is written on a mismatch);
-//   4. the buffer (block, then libr15's own blob bytes up to NUL, then NUL) is built in a page within ADRP
-//      reach of both pairs;
-//   5. the four words are written, each read back, and all of them are put back if one write fails.
+//   3. the buffer (block, then libr15's own blob bytes up to NUL, then NUL) is built in anonymous memory and made read-only;
+//   4. the buffer's address is stored in the credits slot with one atomic store. The two patched ADRP+LDR pairs read it
+//      from there. No code page is written and no protection of the image changes.
 //
-// Log: one `credits_text` line per outcome (sentinel log, LogFields). The line names the game bytes' SHA-256,
-// so a headset run can be compared with the PC blob (src/runtime/patch/credits_text.h kBlobSha256).
+// Log: one `credits_text` line per outcome (sentinel log, LogFields). The line names the game bytes' SHA-256, so a headset
+// run can be compared with the PC blob (src/runtime/patch/credits_text.h kBlobSha256).
 
 #include "credits_text.h"
 
 #include <sys/mman.h>
-#include <unistd.h>
 
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
 
-#include "quest/data/sha256.h"
-#include "got_hook.h"
 #include "hook_log.h"
 #include "pinned_targets.h"
+#include "quest/data/sha256.h"
+#include "quest/patch/libr15_patch_table.h"
 #include "runtime/patch/credits_block.h"
 #include "runtime/patch/credits_text.h"
 
@@ -37,71 +34,16 @@ namespace {
 // The blob is read up to its NUL and no further. The PC blob is 30091 bytes; this bound only keeps a missing NUL
 // from reading to the end of a mapping.
 constexpr std::size_t kMaxBlobBytes = 64 * 1024;
-// ADRP reaches +-4 GiB from the instruction; the buffer must be placed inside that.
-constexpr std::uint64_t kReachBytes = std::uint64_t{1} << 32;
-constexpr std::uint64_t kHintStepBytes = std::uint64_t{16} << 20;
-
-const char* SiteName(const PairSite& site) {
-  return &site == &kInitSite ? "init" : "disabled";
-}
 
 void Refuse(sentinel::LogLevel level, const char* reason) {
   sentinel::LogFields(level, "credits_text", {{"status", "skipped"}, {"reason", reason}});
 }
 
-// A page within ADRP reach of both pairs, or nullptr. Asks the kernel for addresses near the image and keeps the
-// first one the encoder accepts; the kernel may place the mapping elsewhere, in which case it is released.
-void* AllocateInReach(std::uintptr_t base, std::size_t size) {
-  for (std::uint64_t step = kHintStepBytes; step < kReachBytes; step += kHintStepBytes) {
-    for (int dir = 0; dir < 2; ++dir) {
-      if (dir == 1 && step > base) continue;
-      const std::uintptr_t hint = dir == 0 ? base + step : base - step;
-      void* const p = mmap(reinterpret_cast<void*>(hint), size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-      if (p == MAP_FAILED) continue;
-      const auto addr = reinterpret_cast<std::uintptr_t>(p);
-      PairWords init{};
-      PairWords disabled{};
-      if (PlanPair(kInitSite, base, addr, &init) && PlanPair(kDisabledSite, base, addr, &disabled)) return p;
-      munmap(p, size);
-    }
-  }
-  return nullptr;
-}
-
-struct Word {
-  std::uintptr_t addr;
-  std::uint32_t before;
-  std::uint32_t after;
-};
-
-// Writes one 4-byte instruction in a page the patch makes writable for the write and executable again after it.
-bool WriteWord(std::uintptr_t addr, std::uint32_t word) {
-  const auto page = static_cast<std::uintptr_t>(sysconf(_SC_PAGESIZE));
-  void* const pageStart = reinterpret_cast<void*>(addr & ~(page - 1));
-  if (mprotect(pageStart, page, PROT_READ | PROT_WRITE) != 0) return false;
-  std::memcpy(reinterpret_cast<void*>(addr), &word, sizeof(word));
-  const bool restored = mprotect(pageStart, page, PROT_READ | PROT_EXEC) == 0;
-  __builtin___clear_cache(reinterpret_cast<char*>(addr), reinterpret_cast<char*>(addr + sizeof(word)));
-  return restored;
-}
-
-std::uint32_t ReadWord(std::uintptr_t addr) {
-  std::uint32_t word = 0;
-  std::memcpy(&word, reinterpret_cast<const void*>(addr), sizeof(word));
-  return word;
-}
-
-std::string Hex(std::uint64_t value) {
-  char text[32];
-  std::snprintf(text, sizeof(text), "0x%llx", static_cast<unsigned long long>(value));
-  return text;
-}
-
 }  // namespace
 
-bool InstallCreditsText() {
+bool InstallCreditsText(const InstallOptions& options) {
   sentinel::ElfImage image;
-  if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) {
+  if (options.lookup == nullptr || !options.lookup(sentinel::pinned::kLibR15, &image)) {
     Refuse(sentinel::LogLevel::kWarn, "module_not_loaded");
     return false;
   }
@@ -110,14 +52,17 @@ bool InstallCreditsText() {
     Refuse(sentinel::LogLevel::kError, "no_build_id");
     return false;
   }
-  if (std::strcmp(id, sentinel::pinned::kLibR15BuildId) != 0) {
-    Refuse(sentinel::LogLevel::kError, "build_id_mismatch");
+  void** const slot = libr15_patch::CreditsSlot();
+  if (slot == nullptr) {
+    Refuse(sentinel::LogLevel::kError,
+           std::strcmp(id, patch::kLibR15StockBuildId) == 0 ? libr15_patch::kReasonNotPatched : "not_verified");
     return false;
   }
 
-  const char* const block = nevr_credits_block::kText;
+  const char* const block = options.block != nullptr ? options.block : nevr_credits_block::kText;
+  const std::size_t blockSize = options.block != nullptr ? options.blockSize : nevr_credits_block::kSize;
   nevr_credits_text::BlockStats stats;
-  const nevr_credits_text::BlockStatus status = nevr_credits_text::ValidateBlock(block, nevr_credits_block::kSize, &stats);
+  const nevr_credits_text::BlockStatus status = nevr_credits_text::ValidateBlock(block, blockSize, &stats);
   if (status != nevr_credits_text::BlockStatus::Ok) {
     Refuse(sentinel::LogLevel::kWarn, nevr_credits_text::BlockStatusName(status));
     return false;
@@ -132,83 +77,39 @@ bool InstallCreditsText() {
   const std::size_t gameLen = static_cast<std::size_t>(static_cast<const std::uint8_t*>(nul) - blob);
   const std::string gameSha = nevr_quest::data::Sha256Hex(blob, gameLen);
 
-  for (const PairSite* site : {&kInitSite, &kDisabledSite}) {
-    const std::uintptr_t adrpAddr = image.base + site->adrpVaddr;
-    const std::uintptr_t addAddr = image.base + site->addVaddr;
-    const std::uint32_t adrp = ReadWord(adrpAddr);
-    const std::uint32_t add = ReadWord(addAddr);
-    if (!PairHoldsPinned(*site, adrp, add)) {
-      sentinel::LogFields(sentinel::LogLevel::kError, "credits_text",
-                          {{"status", "refused"},
-                           {"reason", "prologue_mismatch"},
-                           {"site", SiteName(*site)},
-                           {"adrp", Hex(adrp).c_str()},
-                           {"add", Hex(add).c_str()}});
-      return false;
-    }
-  }
-
-  const std::vector<std::uint8_t> buffer = nevr_credits_text::BuildBuffer(block, nevr_credits_block::kSize, blob, gameLen);
-  void* const memory = AllocateInReach(image.base, buffer.size());
-  if (memory == nullptr) {
-    Refuse(sentinel::LogLevel::kError, "no_buffer_in_range");
+  const std::vector<std::uint8_t> buffer = nevr_credits_text::BuildBuffer(block, blockSize, blob, gameLen);
+  const libr15_patch::MapFn map = options.map != nullptr ? options.map : &mmap;
+  const libr15_patch::ProtectFn protect = options.protect != nullptr ? options.protect : &mprotect;
+  void* const memory = map(nullptr, buffer.size(), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (memory == MAP_FAILED) {
+    Refuse(sentinel::LogLevel::kError, "buffer_map_failed");
     return false;
   }
   std::memcpy(memory, buffer.data(), buffer.size());
-  if (mprotect(memory, buffer.size(), PROT_READ) != 0) {
+  // The one protection change this file makes, and on its own anonymous buffer: never on a page of the image.
+  if (protect(memory, buffer.size(), PROT_READ) != 0) {
     munmap(memory, buffer.size());
     Refuse(sentinel::LogLevel::kError, "buffer_protect_failed");
     return false;
   }
 
-  const auto bufferVa = reinterpret_cast<std::uintptr_t>(memory);
-  std::vector<Word> words;
-  for (const PairSite* site : {&kInitSite, &kDisabledSite}) {
-    PairWords plan{};
-    if (!PlanPair(*site, image.base, bufferVa, &plan)) {
-      munmap(memory, buffer.size());
-      Refuse(sentinel::LogLevel::kError, "out_of_range");
-      return false;
-    }
-    words.push_back({image.base + site->adrpVaddr, site->adrpExpected, plan.adr});
-    words.push_back({image.base + site->addVaddr, site->addExpected, plan.add});
-  }
+  __atomic_store_n(slot, memory, __ATOMIC_RELEASE);
 
-  std::size_t written = 0;
-  bool ok = true;
-  for (; written < words.size(); ++written) {
-    if (!WriteWord(words[written].addr, words[written].after)) {
-      ok = false;
-      break;
-    }
-  }
-  if (ok) {
-    for (const Word& w : words) {
-      if (ReadWord(w.addr) != w.after) {
-        ok = false;
-        break;
-      }
-    }
-  }
-  if (!ok) {
-    // Put back every word that was written, the failing one included (a partly written word cannot be told
-    // apart from one that was not, so both are restored to the pinned value).
-    for (std::size_t i = 0; i <= written && i < words.size(); ++i) WriteWord(words[i].addr, words[i].before);
-    munmap(memory, buffer.size());
-    Refuse(sentinel::LogLevel::kError, "write_failed");
-    return false;
-  }
-
+  char bufferText[19];
+  char slotText[19];
   sentinel::LogFields(sentinel::LogLevel::kInfo, "credits_text",
                       {{"status", "applied"},
                        {"sites", "init,disabled"},
                        {"block_lines", stats.lines},
-                       {"block_bytes", nevr_credits_block::kSize},
+                       {"block_bytes", blockSize},
                        {"game_bytes", gameLen},
                        {"total_bytes", buffer.size()},
                        {"game_sha256", gameSha.c_str()},
-                       {"buffer", Hex(bufferVa).c_str()}});
+                       {"buffer", sentinel::HexString(bufferText, reinterpret_cast<std::uintptr_t>(memory))},
+                       {"slot", sentinel::HexString(slotText, reinterpret_cast<std::uintptr_t>(slot))}});
   return true;
 }
+
+bool InstallCreditsText() { return InstallCreditsText(InstallOptions{}); }
 
 }  // namespace nevr_quest::credits_text

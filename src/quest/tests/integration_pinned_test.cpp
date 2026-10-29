@@ -81,7 +81,7 @@ int main(int argc, char** argv) {
   }
   char buildId[64] = {};
   QCHECK(ReadBuildId(r15.image, buildId, sizeof(buildId)));
-  QCHECK(std::strcmp(buildId, pinned::kLibR15BuildId) == 0);
+  QCHECK(std::strcmp(buildId, pinned::kLibR15StockBuildId) == 0);
 
   const GotTarget target = nevr_quest::integration::LibR15Dlopen();
   const SlotResolution pinnedRes = ResolveSlot(r15.image, target, kAarch64Relocs);

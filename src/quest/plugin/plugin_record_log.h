@@ -9,7 +9,8 @@
 
 namespace nevr_quest::plugin {
 
-// Fields: name, file, sha256, plugin_build_id, game_build_id, phase, outcome, reason (`ok` for a loaded plugin), required
+// Fields: name, file, sha256, plugin_build_id, game_build_id (the live libr15 note), plugin_view_build_id (the ID the
+// plugin's list was compared with), libr15_patched (0 or 1), phase, outcome, reason (`ok` for a loaded plugin), required
 // (0 or 1), arg_keys. Info for loaded and disabled, Warn for everything that did not load.
 void LogLoadRecord(const LoadRecord& record);
 

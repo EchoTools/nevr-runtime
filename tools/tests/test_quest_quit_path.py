@@ -55,7 +55,7 @@ class TheQuitHookIsWired(unittest.TestCase):
         text = read("src/quest/sentinel/pinned_targets.h")
         self.assertIn('kShowSystemUISymbol = "_ZN10NRadEngine3CVR12ShowSystemUIEv"', text)
         body = extract_braced_function(text, "inline GotTarget LibR15ShowSystemUI() {")
-        self.assertRegex(body, r"kLibR15,\s*kShowSystemUISymbol,\s*RelocKind::kJumpSlot,\s*kLibR15BuildId,\s*0x36fb328ULL")
+        self.assertRegex(body, r"kLibR15,\s*kShowSystemUISymbol,\s*RelocKind::kJumpSlot,\s*LibR15PatchedBuildId\(\),\s*0x36fb328ULL")
 
     def test_the_hook_is_built_without_exceptions_into_the_sentinel(self):
         cmake = read("src/quest/sentinel/CMakeLists.txt")

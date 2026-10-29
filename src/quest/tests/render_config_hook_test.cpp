@@ -533,35 +533,35 @@ struct FakeImage {
 };
 
 void TheGlobalsAreReadOnlyFromTheProvedImage() {
-  FakeImage ok(pinned::kLibR15BuildId);
+  FakeImage ok(pinned::LibR15PatchedBuildId());
   ok.Put32(kEyeAt, 1440);
   ok.Put32(kEyeAt + 4, 1584);
   ok.Put32(kOverrideAt, 0);
   ok.Put32(kOverrideAt + 4, 0);
   ok.Put32(kMsaaAt, 1);
   rc::Globals g;
-  QCHECK(rc::ReadGlobalsFrom(ok.image, pinned::kLibR15BuildId, &g));
+  QCHECK(rc::ReadGlobalsFrom(ok.image, pinned::LibR15PatchedBuildId(), &g));
   QCHECK(g.eyeW == 1440 && g.eyeH == 1584 && g.overrideW == 0 && g.overrideH == 0 && g.msaaMode == 1);
 
   // Another build of the library: its addresses mean something else, so nothing is read.
   FakeImage other("00112233445566778899aabbccddeeff00112233");
   rc::Globals untouched;
-  QCHECK(!rc::ReadGlobalsFrom(other.image, pinned::kLibR15BuildId, &untouched));
+  QCHECK(!rc::ReadGlobalsFrom(other.image, pinned::LibR15PatchedBuildId(), &untouched));
   QCHECK(untouched.eyeW == rc::kUnset && untouched.msaaMode == rc::kUnset);
 
   // An address outside every PT_LOAD is never dereferenced.
-  FakeImage small(pinned::kLibR15BuildId, 0x100);
-  QCHECK(!rc::ReadGlobalsFrom(small.image, pinned::kLibR15BuildId, &untouched));
+  FakeImage small(pinned::LibR15PatchedBuildId(), 0x100);
+  QCHECK(!rc::ReadGlobalsFrom(small.image, pinned::LibR15PatchedBuildId(), &untouched));
 }
 
 void ASizeOutsideTheRangeOfAnEyeBufferIsNotReported() {
   for (const std::int32_t bad : {0, -1, 16385, 0x3f800000}) {  // the last is the bit pattern of the float 1.0
-    FakeImage image(pinned::kLibR15BuildId);
+    FakeImage image(pinned::LibR15PatchedBuildId());
     image.Put32(kEyeAt, bad);
     image.Put32(kEyeAt + 4, 1584);
     image.Put32(kMsaaAt, 1);
     rc::Globals g;
-    QCHECK(rc::ReadGlobalsFrom(image.image, pinned::kLibR15BuildId, &g));
+    QCHECK(rc::ReadGlobalsFrom(image.image, pinned::LibR15PatchedBuildId(), &g));
     QCHECK(g.eyeW == rc::kUnset && g.eyeH == rc::kUnset);
     QCHECK(g.msaaMode == 1);
   }

@@ -3,8 +3,11 @@
 // as a process. Every fact below is read back from the files, with readelf and a small independent ELF reader, not
 // from the patcher's own code.
 //
-// Run: libr15_patcher_pinned_test <quest_patch_libr15> <stock libr15.so> <scratch dir> [name-filter]
+// Run: libr15_patcher_pinned_test <quest_patch_libr15> <stock libr15.so> <scratch dir> [--signed-libr15=<file>] [name-filter]
 // The recipe removes the scratch dir's files afterwards; the patched copies are written there.
+// --signed-libr15=<file> is the lib/arm64-v8a/libr15.so taken out of the signed APK of a repack (ADR 0021 test 5): with it
+// SignedApkLibr15IsThePatchersOutput runs; without it that test is dropped from the run and the run prints a SKIP line
+// naming it (it is never left out silently).
 #include <elf.h>
 #include <fcntl.h>
 #include <sys/wait.h>
@@ -28,7 +31,9 @@ namespace {
 
 using namespace nevr_quest::patch;
 
-std::string g_tool, g_stock, g_scratch;
+std::string g_tool, g_stock, g_scratch, g_signed;
+constexpr const char* kSignedFlag = "--signed-libr15=";
+constexpr const char* kSignedTest = "SignedApkLibr15IsThePatchersOutput";
 
 std::vector<std::uint8_t> ReadAll(const std::string& path) {
   std::ifstream in(path, std::ios::binary);
@@ -395,15 +400,47 @@ TEST(TheToolRefusesItsOwnOutputAsAnAlreadyPatchedInput) {
   CHECK(access(out.c_str(), F_OK) != 0);
 }
 
+// ADR 0021 test 5: the libr15.so a repack put into its signed APK is the tool's output for the store file, byte for byte,
+// and its build-ID note is the one PatchedBuildId() computes. Only registered into the run when --signed-libr15 is given.
+TEST(SignedApkLibr15IsThePatchersOutput) {
+  const Run1& r = First();
+  // A tool that failed leaves no (or an empty) output file, which cannot equal the signed file's bytes.
+  CHECK(ReadAll(g_signed) == ReadAll(r.outFile));
+  CHECK(Readelf("-n", g_signed, "signed_note").find("Build ID: " + PatchedBuildId()) != std::string::npos);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   if (argc < 4) {
-    std::fprintf(stderr, "usage: libr15_patcher_pinned_test <quest_patch_libr15> <stock libr15.so> <scratch dir> [name-filter]\n");
+    std::fprintf(stderr,
+                 "usage: libr15_patcher_pinned_test <quest_patch_libr15> <stock libr15.so> <scratch dir> [--signed-libr15=<file>] [name-filter]\n");
     return 2;
   }
   g_tool = argv[1];
   g_stock = argv[2];
   g_scratch = argv[3];
-  return mini_test::RunAll(argc - 3, argv + 3);
+  // The arguments after the scratch dir: the optional --signed-libr15=<file>, then the optional name filter. RunAll reads
+  // its filter from its argv[1], so argv[3] stays as its program name and the flag is taken out.
+  std::vector<char*> rest = {argv[3]};
+  for (int i = 4; i < argc; ++i) {
+    if (std::strncmp(argv[i], kSignedFlag, std::strlen(kSignedFlag)) == 0) {
+      g_signed = argv[i] + std::strlen(kSignedFlag);
+    } else {
+      rest.push_back(argv[i]);
+    }
+  }
+  if (g_signed.empty()) {
+    // The test needs a file; without one it is dropped from the registry, and the run names it.
+    auto& registry = mini_test::Registry();
+    for (auto it = registry.begin(); it != registry.end(); ++it) {
+      if (std::strcmp(it->name, kSignedTest) == 0) {
+        registry.erase(it);
+        break;
+      }
+    }
+    std::printf("SKIP %s (no %s<file> given: the signed APK's libr15.so was not checked)\n", kSignedTest, kSignedFlag);
+    std::fflush(stdout);
+  }
+  return mini_test::RunAll(static_cast<int>(rest.size()), rest.data());
 }

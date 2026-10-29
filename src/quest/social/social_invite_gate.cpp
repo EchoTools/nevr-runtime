@@ -29,7 +29,7 @@ bool IsGatePath(const char* path) noexcept {
 }  // namespace
 
 sentinel::GotTarget LibR15Boolean() {
-  return {sentinel::pinned::kLibR15, kBooleanSymbol, sentinel::RelocKind::kJumpSlot, sentinel::pinned::kLibR15BuildId,
+  return {sentinel::pinned::kLibR15, kBooleanSymbol, sentinel::RelocKind::kJumpSlot, sentinel::pinned::LibR15PatchedBuildId(),
           kBooleanSlotVaddr};
 }
 

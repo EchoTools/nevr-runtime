@@ -10,6 +10,8 @@
 //   redirect_installed       the CJson::TString thunk on libr15
 //   social_hook_installed    the social facade on libr15's CNSProvider::Social slot
 //   dlopen_hook_installed    the hook on libr15's dlopen slot
+//   libr15_attach            the build-time libr15 patch (ADR 0021): status ok, or failed with the class that names why
+//                            (libr15_not_patched, build_id_mismatch, module_not_loaded, no_build_id)
 //   libpnsovr_loaded         the game's dlopen returned libpnsovr.so
 //   login_hook_installed     the login hook on libpnsovr
 //   login_title_hook_installed  the title hook on the login-failed page's script library (#1137)

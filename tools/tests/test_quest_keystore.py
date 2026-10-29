@@ -38,6 +38,19 @@ esac
 '''
 
 
+GPG_FAILING_PASS = r'''#!/bin/bash
+# A `pass` that fails for one entry the way pass does when gpg has no secret key; other entries go to the fake store.
+if [[ "$1" == show && "$2" == "$GPG_FAIL_ENTRY" ]]; then
+  readlink /proc/$$/fd/2 > "$FAKE_ERRPATH_LOG"
+  echo "pass: noise that is not gpg" >&2
+  echo "gpg: decryption failed: No secret key" >&2
+  echo "STDOUT-MARKER"
+  exit 2
+fi
+exec "$FAKE_PASS_REAL" "$@"
+'''
+
+
 FAKE_SHRED = r'''#!/bin/bash
 # A fake `shred`: record the full argument list where the test can see it, then do the real work.
 printf '%s\n' "$*" >> "$FAKE_SHRED_LOG"
@@ -110,6 +123,7 @@ class QuestKeystoreTest(unittest.TestCase):
         (self.bin / "keytool").chmod(0o755)
         self.keytool_log = self.tmp / "keytool.log"
         self.shred_log = self.tmp / "shred.log"
+        self.errpath_log = self.tmp / "errpath.log"
         self.store = self.tmp / "store"
         self.store.mkdir()
         self.run_dir = self.tmp / "run"
@@ -276,6 +290,82 @@ class QuestKeystoreTest(unittest.TestCase):
         self.assertFalse(marker.exists())
         self.assertEqual(self.left_behind(), [])
 
+    # ---- pass failures --------------------------------------------------------------------------------------------
+
+    def gpg_failing_pass(self, entry: str) -> dict:
+        """An environment whose `pass show <entry>` fails the way pass does when gpg has no secret key: gpg's line, a
+        line that is not gpg's, and a stdout marker, then exit 2. Other entries come from the fake store. The stub
+        records the path of its stderr file, so a test can check the tool removed it."""
+        stub_dir = self.tmp / "gpg-failing-pass"
+        stub_dir.mkdir(exist_ok=True)
+        stub = stub_dir / "pass"
+        stub.write_text(GPG_FAILING_PASS)
+        stub.chmod(0o755)
+        return dict(self.env, PATH=f"{stub_dir}:{self.env['PATH']}", GPG_FAIL_ENTRY=entry,
+                    FAKE_PASS_REAL=str(self.bin / "pass"), FAKE_ERRPATH_LOG=str(self.errpath_log))
+
+    def assert_gpg_failure_reported(self, result):
+        self.assertIn("ERROR", result.stderr)
+        self.assertRegex(result.stderr, r"(?m)^  gpg: decryption failed: No secret key$")
+        self.assertNotIn("pass: noise", result.stderr)
+        self.assertNotIn("STDOUT-MARKER", result.stdout + result.stderr)
+
+    def assert_pass_stderr_file_removed(self):
+        path = self.errpath_log.read_text().strip() if self.errpath_log.exists() else ""
+        self.assertTrue(path.startswith("/dev/shm/nevr-quest-pass-err."), f"the stub recorded no stderr file: {path!r}")
+        self.assertFalse(pathlib.Path(path).exists(), f"{path} was left behind")
+
+    def test_a_pass_failure_on_the_keystore_entry_prints_gpg_and_not_stdout(self):
+        env = self.gpg_failing_pass(KS_ENTRY)
+        marker = self.tmp / "ran"
+        result = subprocess.run([str(SCRIPT), "with", "bash", "-c", f"touch {marker}"], capture_output=True, text=True,
+                                env=env, timeout=60)
+        self.assertEqual(result.returncode, 1)
+        self.assert_gpg_failure_reported(result)
+        self.assertFalse(marker.exists())
+        self.assertEqual(self.left_behind(), [])
+        self.assert_pass_stderr_file_removed()
+
+    def test_a_pass_failure_on_the_passphrase_entry_names_it_and_prints_gpg(self):
+        self.seed()
+        env = self.gpg_failing_pass(PASS_ENTRY)
+        result = subprocess.run([str(SCRIPT), "with", "true"], capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(PASS_ENTRY, result.stderr)
+        self.assert_gpg_failure_reported(result)
+        self.assert_pass_stderr_file_removed()
+
+    def test_check_prints_gpg_when_an_entry_cannot_be_read(self):
+        self.seed()
+        env = self.gpg_failing_pass(KS_ENTRY)
+        result = subprocess.run([str(SCRIPT), "check"], capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("import-quest-keystore", result.stderr)
+        self.assert_gpg_failure_reported(result)
+        self.assert_pass_stderr_file_removed()
+
+    def test_a_failed_temporary_file_stops_the_tool_before_any_pass_call(self):
+        stub_dir = self.tmp / "no-mktemp"
+        stub_dir.mkdir()
+        (stub_dir / "mktemp").write_text("#!/bin/bash\nexit 1\n")
+        (stub_dir / "mktemp").chmod(0o755)
+        env = dict(self.env, PATH=f"{stub_dir}:{self.env['PATH']}")
+        marker = self.tmp / "ran"
+        result = subprocess.run([str(SCRIPT), "with", "bash", "-c", f"touch {marker}"], capture_output=True, text=True,
+                                env=env, timeout=60)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("cannot create a temporary file", result.stderr)
+        self.assertFalse(marker.exists())
+
+    def test_import_prints_gpg_when_the_existence_check_cannot_read_the_entry(self):
+        env = self.gpg_failing_pass(KS_ENTRY)
+        result = subprocess.run([str(SCRIPT), "import", str(self.ks)], capture_output=True, text=True, env=env,
+                                timeout=60)
+        self.assertRegex(result.stderr, r"(?m)^  gpg: decryption failed: No secret key$")
+        self.assertNotIn("STDOUT-MARKER", result.stdout + result.stderr)
+        self.assertNotIn(PASSPHRASE, result.stdout + result.stderr)
+        self.assert_pass_stderr_file_removed()
+
     # ---- shred ----------------------------------------------------------------------------------------------
 
     def shred_lines(self):
@@ -420,6 +510,12 @@ class QuestKeystoreTest(unittest.TestCase):
         self.assertNotIn("genkeypair", JUSTFILE.read_text())
         self.assertIn("tools/quest_keystore.sh", body)
         self.assertIn("--ks-pass env:", body)
+
+    def test_the_release_unit_points_pass_at_the_xdg_gnupg_home(self):
+        # A user unit without GNUPGHOME makes gpg read ~/.gnupg, which has no secret key; pass then says the key is missing.
+        unit = REPO / "tools/systemd/nevr-quest-release.service"
+        lines = [line.strip() for line in unit.read_text().splitlines()]
+        self.assertIn("Environment=GNUPGHOME=%h/.config/gnupg", lines)
 
     def test_the_recipes_to_import_and_to_read_the_fingerprint_exist(self):
         text = JUSTFILE.read_text()

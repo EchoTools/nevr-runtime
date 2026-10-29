@@ -52,6 +52,7 @@ std::size_t g_slotCount = 0;
 
 std::atomic<StoreObserver> g_storeObserver{nullptr};
 std::atomic<ProtectFn> g_protect{nullptr};
+std::atomic<BuildIdAliasFn> g_buildIdAlias{nullptr};
 
 int Protect(void* addr, std::size_t length, int prot) {
   const ProtectFn fn = g_protect.load(std::memory_order_acquire);
@@ -636,12 +637,23 @@ void LogFailure(const char* op, const GotTarget& t, GotStatus status, const char
              {"symbol", symbol}, {"reloc", RelocKindName(t.kind)}, {"errno", err}});
 }
 
+// A target's build ID is accepted when it equals the module's live note, or the alias the registered function gives
+// that note (SetBuildIdAlias). The alias is asked at every install, with the note read for it, so what it maps can
+// change only with what it reads.
+bool BuildIdAccepted(const char* liveNote, const char* targetBuildId) {
+  if (std::strcmp(liveNote, targetBuildId) == 0) return true;
+  const BuildIdAliasFn alias = g_buildIdAlias.load(std::memory_order_acquire);
+  if (alias == nullptr) return false;
+  const char* const mapped = alias(liveNote);
+  return mapped != nullptr && mapped[0] != '\0' && std::strcmp(mapped, targetBuildId) == 0;
+}
+
 // Everything that can be checked without writing. On kOk the slot is reserved.
 GotStatus Prepare(const GotTarget& target, void* hookFn, ImageLookup lookup, Prepared* out) {
   if (!lookup(target.module, &out->image)) return GotStatus::kModuleNotLoaded;
   if (target.buildId != nullptr) {
     if (!ReadBuildId(out->image, out->actualBuildId, sizeof(out->actualBuildId)) ||
-        std::strcmp(out->actualBuildId, target.buildId) != 0) {
+        !BuildIdAccepted(out->actualBuildId, target.buildId)) {
       return GotStatus::kBuildIdMismatch;
     }
   }
@@ -662,6 +674,10 @@ GotStatus Prepare(const GotTarget& target, void* hookFn, ImageLookup lookup, Pre
 }
 
 }  // namespace
+
+BuildIdAliasFn SetBuildIdAlias(BuildIdAliasFn fn) {
+  return g_buildIdAlias.exchange(fn, std::memory_order_acq_rel);
+}
 
 ProtectFn SetProtectFunction(ProtectFn fn) {
   return g_protect.exchange(fn, std::memory_order_acq_rel);

@@ -23,8 +23,9 @@ NUMBERING RULE (the same on every machine, derived from the version string alone
   distance N 0..998. The largest code, 209.99.99, is 2,090,000,000 + 9,900,000 + 99,000 + 999 = 2,099,999,999,
   inside Android's int32 (2,147,483,647) and under the 2,100,000,000 that the Play Store documents as its ceiling.
   `field_warnings` (used by tools/release_preflight.py) warns early: development distance N above 900, minor or
-  patch above 90. A version below the last published release's major (LAST_RELEASE, 5.6.0) is refused: a build
-  with no git reports 1.0.0, and building it would be a downgrade. From major 5 up every code is at least
+  patch above 90. The rule has no floor. A stamp (`patch-manifest`, through stamp_code_for) is refused below the
+  major of the newest release tag git lists (newest_release): a build with no git reports 1.0.0, and a stamp below
+  the newest release's major is a downgrade for a headset on that release. From major 5 up every code is at least
   50,000,000, ten times the installer's 4987570 (5.0.0-dev.0 is the smallest accepted).
 
   Two development builds from different branches at the same distance N have the same versionCode (the code
@@ -42,14 +43,16 @@ versionCodeMajor is present (it would change the code Android reports), and ever
 accounted for. After the write the manifest is parsed again and must differ from the original in those 4
 bytes and nowhere else.
 
-  quest_apk_version.py code <version>                       print the versionCode for a version
+  quest_apk_version.py code <version>                       print the versionCode the rule gives a version; one JSON line
+                                                            on stderr says whether a stamp of it would be refused
   quest_apk_version.py read <apk>                           print the versionCode in an APK's manifest
   quest_apk_version.py patch-manifest <AndroidManifest.xml> (--build-info <nevr_build_info.h> | --version <v>) --shim <so>
                                                             set the versionCode in an extracted manifest, in place;
                                                             print it. The version is the build info's (or the one
                                                             given, for a loader built elsewhere: a release asset),
                                                             and the shim must carry the same version string (a stale
-                                                            header cannot stamp a different build's shim)
+                                                            header cannot stamp a different build's shim). A version
+                                                            below the newest release tag's major is refused
 
 One JSON line per action goes to stderr; a refusal is one JSON line and exit 1.
 """
@@ -61,19 +64,18 @@ import hashlib
 import json
 import re
 import struct
+import subprocess
 import sys
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+REPO = Path(__file__).resolve().parents[1]
 # The game build the community installer pins (Quest-EchoVR-Installer, Download.cs EvrVersion).
 INSTALLER_VERSION_CODE = 4987570
-# The last published release's version, pinned here because a build with no git cannot ask (tools/tests pins it to the
-# repository's newest release tag). A version below its major is refused: with no git the build reports 1.0.0
-# (cmake/set_project_version_from_git.cmake), which is a well-formed release version whose code, 10,000,999, is far
-# below every published build's. Every code from major 5 up is at least 50,000,000, above INSTALLER_VERSION_CODE.
-LAST_RELEASE = "5.6.0"
-MIN_MAJOR = int(LAST_RELEASE.split(".")[0])
+# A release tag is `vX.Y.Z` only: a pre-release (v4.0.0-rc.1) and a malformed tag (vv6.0.0) are not releases. The newest
+# release is read from git by newest_release, never stored here: a stored value goes stale at each major.
+RELEASE_TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 # Android's manifest versionCode is an int32; the Play Store documents 2,100,000,000 as the ceiling.
 MAX_VERSION_CODE = 2_100_000_000
 
@@ -160,20 +162,56 @@ def field_warnings(version: str) -> list:
 
 
 def version_code_for(version: str) -> int:
+    """The numbering rule's code for a version: its arithmetic and its field limits, and no floor. A stamp goes through
+    stamp_code_for, which also refuses a version below the newest release's major."""
     parts = _parts(version)
     if parts is None:
         raise VersionError(f"version '{version}' is neither X.Y.Z nor X.Y.Z-dev.N+<sha> (a release tag, or a development build)")
     major, minor, patch, n = parts
-    if major < MIN_MAJOR:
-        raise VersionError(f"version '{version}' is below major {MIN_MAJOR}, the major of the last published release "
-                           f"(v{LAST_RELEASE}): a version that low is not a release line of this project (a build with no git "
-                           f"reports 1.0.0, cmake/set_project_version_from_git.cmake) and its code would be a downgrade")
     problems = field_problems(version)
     if problems:
         raise VersionError("; ".join(problems))
     slot = RELEASE_SLOT if n is None else n
     # at most 209*10^7 + 99*10^5 + 99*10^3 + 999 = 2,099,999,999 < MAX_VERSION_CODE, by the limits above
     return major * 10**7 + minor * 10**5 + patch * 10**3 + slot
+
+
+def newest_release(repo: Path = REPO) -> tuple:
+    """(tag, major) of the newest `vX.Y.Z` tag git lists in `repo`. Every release tag the clone knows counts, whether or
+    not HEAD descends from it: the floor guards the installed release, and that does not depend on what HEAD is cut
+    from. VersionError when git cannot list the tags or none is a release tag: a default would be a guess."""
+    try:
+        done = subprocess.run(["git", "-C", str(repo), "tag", "--list", "v*"], capture_output=True, text=True)
+    except OSError as error:
+        raise VersionError(f"cannot run git to list the release tags of {repo}: {error.strerror}") from None
+    if done.returncode != 0:
+        raise VersionError(f"git cannot list the tags of {repo} (exit {done.returncode}): {done.stderr.strip()}")
+    best = None
+    for name in done.stdout.split():
+        match = RELEASE_TAG.fullmatch(name)
+        if match is None:
+            continue
+        version = tuple(int(part) for part in match.groups())
+        if best is None or version > best[1]:
+            best = (name, version)
+    if best is None:
+        raise VersionError(f"no release tag (vX.Y.Z) in {repo}: fetch the tags (git fetch --tags; CI checks out with "
+                           f"fetch-depth: 0)")
+    return best[0], best[1][0]
+
+
+def stamp_code_for(version: str, repo: Path = REPO) -> int:
+    """The versionCode a stamp writes: version_code_for, refused when the version's major is below the newest release
+    tag's. A build with no git reports 1.0.0 (cmake/set_project_version_from_git.cmake), and a stamp below the newest
+    release's major is a downgrade for a headset on that release: Android refuses a lower versionCode. Each new major
+    raises this floor with it."""
+    code = version_code_for(version)
+    tag, floor = newest_release(repo)
+    major = _parts(version)[0]
+    if major < floor:
+        raise VersionError(f"version '{version}' is below major {floor}, the major of the newest release tag {tag}: a "
+                           f"stamp that low would be a downgrade for a headset on {tag} (Android refuses a lower versionCode)")
+    return code
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -383,13 +421,17 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "code":
-            print(version_code_for(args.version))
+            code_value = version_code_for(args.version)
+            tag, floor = newest_release()
+            _log("version_code", version=args.version, version_code=code_value, newest_release=tag, floor_major=floor,
+                 stampable=_parts(args.version)[0] >= floor)
+            print(code_value)
         elif args.command == "read":
             print(version_code_of_apk(args.apk))
         else:
             version = args.version if args.version is not None else read_build_version(args.build_info)
             source_name = "--version" if args.version is not None else args.build_info.name
-            new_code = version_code_for(version)
+            new_code = stamp_code_for(version)
             try:
                 shim = args.shim.read_bytes()
             except OSError as error:
