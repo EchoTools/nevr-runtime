@@ -14,7 +14,8 @@
 //   success  mode(8) lobby(16) group(16) endpoint, flags and keys (not read here)
 //   failure  mode(8) group(16) code(4) pad(4) message(64) expiry(8); the game reads the code as a byte at +0x18
 //            (echovr.exe 0x14017d380 CR15NetClientLobby::LobbySessionFailureCB)
-// The settings JSON and the failure message are remote text and are never read out (logging.md Rule 4).
+// The settings JSON and the failure message are remote text and are never read out (logging.md Rule 4): a failure's
+// message is counted (messageBytes), never copied.
 
 #include <array>
 #include <cstddef>
@@ -40,6 +41,9 @@ inline constexpr uint64_t kSymSessionFailure = 0x4ae8365ebc45f96cULL;
 constexpr std::size_t kMaxEntrants = 16;
 constexpr std::size_t kGuidSize = 16;
 constexpr std::size_t kEntrantSize = 16;
+// A failure's message field: after mode(8), group(16), code(4) and pad(4), 64 bytes.
+constexpr std::size_t kFailureMessageAt = 8 + kGuidSize + 4 + 4;
+constexpr std::size_t kFailureMessageSize = 64;
 
 // The lobby message a symbol is when heard in a direction: requests only from the game, answers only from the
 // service. nullopt for every other symbol, and for a lobby symbol heard the wrong way round.
@@ -91,6 +95,7 @@ struct Decoded {
   Guid group{};                    // find, success, failure
   std::vector<Entrant> entrants;   // find, join
   uint32_t code = 0;               // failure
+  uint32_t messageBytes = 0;       // failure: bytes before the message's NUL, at most its field; never the text
 };
 
 namespace detail {
@@ -120,6 +125,16 @@ inline bool ReadEntrants(const uint8_t* payload, std::size_t len, std::size_t se
     out->push_back(Entrant{nevr_evr_codec::ReadLE64(at), nevr_evr_codec::ReadLE64(at + 8)});
   }
   return true;
+}
+
+// The bytes before the first NUL in the `size`-byte field at `at`, counted over the bytes the frame holds: the whole
+// field when none of it is NUL, zero when the frame ends before the field. Nothing is read past `len`.
+inline uint32_t FieldTextBytes(const uint8_t* payload, std::size_t len, std::size_t at, std::size_t size) {
+  if (at >= len) return 0;
+  const std::size_t held = len - at < size ? len - at : size;
+  const void* nul = std::memchr(payload + at, 0, held);
+  if (nul == nullptr) return static_cast<uint32_t>(held);
+  return static_cast<uint32_t>(static_cast<const uint8_t*>(nul) - (payload + at));
 }
 
 }  // namespace detail
@@ -158,6 +173,7 @@ inline bool Decode(Kind kind, const uint8_t* payload, std::size_t len, Decoded* 
       out->mode = nevr_evr_codec::ReadLE64(payload);
       out->group = detail::ReadGuid(payload + 8);
       out->code = detail::ReadLE32(payload + 8 + kGuidSize);
+      out->messageBytes = detail::FieldTextBytes(payload, len, kFailureMessageAt, kFailureMessageSize);
       return true;
     }
   }

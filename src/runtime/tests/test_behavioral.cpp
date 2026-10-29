@@ -5044,6 +5044,20 @@ std::string FailurePayload(uint32_t code) {
   return out;
 }
 
+// A failure payload whose message field holds `message` at its start, cut to the field's 64 bytes, NUL-filled after it.
+std::string FailureWithMessage(uint32_t code, const std::string& message) {
+  std::string out;
+  PutLe(out, kMode, 8);
+  out += Guid(0xb0);                                // group
+  PutLe(out, code, 4);
+  PutLe(out, 0, 4);
+  std::string field = message.substr(0, 64);
+  field.resize(64, '\0');
+  out += field;                                     // message(64)
+  out.append(8, '\0');                              // expiry(8)
+  return out;
+}
+
 uint64_t g_fakeNowMs = 0;
 uint64_t FakeNowMs() { return g_fakeNowMs; }
 
@@ -5201,6 +5215,27 @@ TEST(WsBridgeLobbyFrameLog, EveryMessageOfABatchedFrameGetsItsOwnRecord) {
                                    BuildMarkedMessage(kSuccessSym, SuccessPayload()));
   EXPECT_TRUE(TestLogContains("lobby session failure conn=3 code=8"));
   EXPECT_TRUE(TestLogContains("lobby session success conn=3 lobby="));
+}
+
+// The failure record gives the count of its message's bytes and never the text (logging.md Rule 4 and Rule 16).
+TEST(WsBridgeLobbyFrameLog, AFailureRecordCountsItsMessageAndNeverWritesItsText) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("server->game", 3,
+                               BuildMarkedMessage(kFailureSym, FailureWithMessage(8, "sentinel-remote-message")));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "lobby session failure conn=3 code=8 reason=lobby_full "
+                                     "group=44332211-6655-8877-99AA-BBCCDDEEFFB0 message_bytes=23"));
+  EXPECT_FALSE(TestLogContains("sentinel-remote-message"));
+  ClearTestLogs();
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kFailureSym, FailureWithMessage(8, "")));
+  EXPECT_TRUE(TestLogContains("lobby session failure conn=3 code=8 reason=lobby_full "
+                              "group=44332211-6655-8877-99AA-BBCCDDEEFFB0 message_bytes=0"));
+  ClearTestLogs();
+  TestHook_ObserveSocialFrames("server->game", 3,
+                               BuildMarkedMessage(kFailureSym, FailureWithMessage(8, std::string(80, 'y'))));
+  EXPECT_TRUE(TestLogContains("group=44332211-6655-8877-99AA-BBCCDDEEFFB0 message_bytes=64"));
+  EXPECT_FALSE(TestLogContains("yyyy"));
 }
 
 TEST(WsBridgeLobbyFrameLog, NoRecordCarriesSettingsTextOrTheServersMessage) {

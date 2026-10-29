@@ -590,9 +590,9 @@ static int LogGameToServerFrame(const std::string& frame, const std::string& wsC
 // #929: a client's Info record of each lobby find and join request the game sends and each session success and
 // failure the service answers with. A dedicated server already logs every message of every frame at Info
 // (LogFrameMessages), so this runs on a client only. The fields are the operation, the lobby ids (GUIDs, never
-// names), the entrants as XPIDs and the failure code; the settings JSON of a request and the message of a
-// failure are remote text and are not read out (logging.md Rule 4). A failure frame carries no lobby id: pair it
-// with the request before it on the same conn.
+// names), the entrants as XPIDs and the failure code; the settings JSON of a request is remote text and is not read
+// out, and a failure's message is counted (message_bytes) and never copied (logging.md Rule 4). A failure frame
+// carries no lobby id: pair it with the request before it on the same conn.
 static uint64_t RealLobbyClockMs() { return GetTickCount64(); }
 static std::mutex g_lobbyLimiterMutex;
 static nevr_lobby_frame::RecordLimiter g_lobbyLimiter;
@@ -651,8 +651,9 @@ static void LogClientLobbyMessage(int connIdx, bool fromServer, uint64_t symbol,
           nevr_lobby_frame::FormatGuid(d.lobby).c_str(), nevr_lobby_frame::FormatGuid(d.group).c_str());
       break;
     case nevr_lobby_frame::Kind::Failure:
-      Log(EchoVR::LogLevel::Info, "[NEVR.WS] lobby session failure conn=%d code=%u reason=%s group=%s", connIdx, d.code,
-          nevr_lobby_frame::FailureReason(d.code), nevr_lobby_frame::FormatGuid(d.group).c_str());
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.WS] lobby session failure conn=%d code=%u reason=%s group=%s message_bytes=%u", connIdx, d.code,
+          nevr_lobby_frame::FailureReason(d.code), nevr_lobby_frame::FormatGuid(d.group).c_str(), d.messageBytes);
       break;
   }
 }
