@@ -42,6 +42,7 @@ const char* StepName(StepId id) {
     case StepId::kAttachLibR15: return "attach_libr15";
     case StepId::kRunEarlyPlugins: return "run_early_plugins";
     case StepId::kInstallClockHook: return "install_clock_hook";
+    case StepId::kInstallFrameDispatch: return "install_frame_dispatch";
     case StepId::kInstallObbSkip: return "install_obb_skip";
     case StepId::kInstallProcessEnd: return "install_process_end";
     case StepId::kInstallPermissionWait: return "install_permission_wait";
@@ -218,6 +219,10 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     }
 
     r.Run(StepId::kInstallClockHook, [&] { return steps.InstallClockHook(); });
+
+    // The frame dispatcher (#966 S7): the Update slot, on every launch, so the dispatcher runs whether or not the login prompt is
+    // on. Before the login prompt, which switches its own Update logic on through the same slot.
+    r.Run(StepId::kInstallFrameDispatch, [&] { return steps.InstallFrameDispatch(); });
 
     // Before token auth and the bridge: those take time, and libr15's CSysFile::Init is what this beats.
     if (!obbCounters) {

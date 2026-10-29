@@ -23,6 +23,9 @@
 //      RunEarlyPlugins               the `early` plugin entries (#438): after Attach, before the clock hook;
 //                                    skipped when the plan has none
 //   5  InstallClockHook              the always-on proof hook
+//      InstallFrameDispatch          the frame dispatcher (#966 S7): the Update slot (CR15NetGame::Update), on every launch,
+//                                    right after the clock hook; no counters. The login prompt's own Update logic is switched
+//                                    on later, by InstallLoginPrompt (step 7), through the same slot.
 //   6  StartTokenAuth                needed by the bridge (the remote JWT) and the login rewrite
 //   7  InstallLoginPrompt            the sign-in prompt on the game's login-error screen (#239): two libr15
 //                                    slots (SetDelimitedErrorMessage, CR15NetGame::Update); wherever token
@@ -146,6 +149,7 @@ enum class StepId : std::uint8_t {
   kAttachLibR15,
   kRunEarlyPlugins,
   kInstallClockHook,
+  kInstallFrameDispatch,
   kInstallObbSkip,
   kInstallProcessEnd,
   kInstallPermissionWait,
@@ -227,6 +231,9 @@ class Steps {
   virtual void FinishPlugins(const char* reason) = 0;
 
   virtual bool InstallClockHook() = 0;
+  // The frame dispatcher (#966 S7): the Update slot, on every launch, whatever the login prompt does. True when the slot
+  // holds its thunk.
+  virtual bool InstallFrameDispatch() = 0;
   // `countersRegistered`: the result of RegisterObbSkipCounters (the hook's own rule: without its counters it
   // logs the skip and installs nothing). True when all three slots hold their thunks.
   virtual bool InstallObbSkip(bool countersRegistered) = 0;

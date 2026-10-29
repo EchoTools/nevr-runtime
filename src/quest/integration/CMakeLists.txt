@@ -87,6 +87,10 @@ endforeach()
 target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/login_prompt_hook.cpp")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/login_prompt_hook.cpp"
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# The frame dispatcher (#966 S7) the Update handler calls: the same hook path, so built without exceptions too.
+target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../invite/frame_dispatch.cpp")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../invite/frame_dispatch.cpp"
+  PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 target_link_libraries(integration_hooks_test PRIVATE nevr_quest_prompt_board)
 # And the #1137 login title hook's (registered with the login prompt's, in the same step).
 target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/login_title_hook.cpp")

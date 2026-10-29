@@ -13,6 +13,9 @@ namespace nevr_quest::integration {
 // Defined in entry.cpp.
 bool RegisterClockCounters() noexcept;  // 2 counters
 bool InstallClockHook() noexcept;       // false when GotHook refused the slot (logged by GotHook)
+// The #966 S7 frame dispatcher (quest/invite/frame_dispatch.h): the Update slot (login_prompt::InstallNetGameUpdate), taken on
+// every launch whatever the login prompt does. Logs the one install line. True when the slot holds its thunk.
+bool InstallFrameDispatchHook() noexcept;
 // The #239 login-prompt hook (sentinel/login_prompt_hook.h): its counters and its install, through this
 // seam because login_prompt_hook.h includes callback_thunk.h, which only -fno-exceptions units may.
 bool RegisterLoginPromptCounters() noexcept;  // 16 counters, and the title hook's 5 (#1137)

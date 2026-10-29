@@ -26,6 +26,7 @@
 #include "hook_report.h"
 #include "login_prompt_hook.h"
 #include "quest/auth/prompt_board.h"
+#include "quest/invite/frame_dispatch.h"
 #include "quest/login/login_attempt_gate.h"
 #include "quest/game_login_failures.h"
 #include "quest/tests/test_check.h"
@@ -1704,6 +1705,155 @@ void TheCountersAreAllInTheReporterTable() {
   sentinel::StopReporter();
 }
 
+
+// The Update slot runs the frame dispatcher and the game's Update on every call (#966 S7). The prompt's own logic is
+// gated off in these cases; the dispatcher's work and the original run regardless.
+namespace fd = nevr_quest::invite::frame;
+
+bool CountPosted(void* context) noexcept {
+  ++*static_cast<int*>(context);
+  return true;
+}
+bool FailPosted(void* context) noexcept {
+  ++*static_cast<int*>(context);
+  return false;
+}
+
+void TheUpdateSlotRunsPostedWorkAndTheGameUpdateWithThePromptOff() {
+  lp::ArmForTest();                   // the prompt is on first, so the off state below is the one the call sets
+  lp::ArmNetGameUpdateOnlyForTest();  // the Update handler is armed; the prompt's logic is not wanted
+  fd::ResetForTest();
+  static int posted = 0;
+  posted = 0;
+  QCHECK(fd::PostFrameWork(&CountPosted, &posted));
+  const int updatesBefore = g_updateCalls;
+  const int errorsBefore = g_errorCalls;
+  const lp::Counts before = lp::CurrentCounts();
+  // A fresh instance: its first state is a baseline, so a second state is the change the prompt logic would log.
+  static FakeGame off;
+  std::memset(&off, 0, sizeof(off));
+  SetState(off, layout::kStateLoggingIn);
+  UpdateEntry()(Obj(off), 16);
+  SetState(off, layout::kStateLoginFailed);
+  g_lines.clear();
+  UpdateEntry()(Obj(off), 16);
+  QCHECK(g_updateCalls == updatesBefore + 2);  // the game's Update ran on both calls
+  QCHECK(posted == 1);                         // the posted unit ran once, on the first call
+  QCHECK(g_errorCalls == errorsBefore);
+  QCHECK(CountLines("login_prompt_netgame_state") == 0);  // the prompt logic is off: no state line
+  QCHECK(lp::CurrentCounts().refreshed == before.refreshed);
+  fd::ResetForTest();
+  lp::ArmForTest();  // the prompt is wanted again for the cases after this one
+}
+
+// The same change with the prompt wanted logs its state line, so the check above is not vacuous.
+void TheSameStateChangeWithThePromptWantedIsLogged() {
+  lp::ArmForTest();
+  static FakeGame on;
+  std::memset(&on, 0, sizeof(on));
+  SetState(on, layout::kStateLoggingIn);
+  UpdateEntry()(Obj(on), 16);
+  SetState(on, layout::kStateLoginFailed);
+  g_lines.clear();
+  UpdateEntry()(Obj(on), 16);
+  QCHECK(CountLines("login_prompt_netgame_state") >= 1);
+}
+
+// A posted unit that fails does not stop the game's Update: the original runs once per call, with the prompt on too.
+void TheOriginalRunsOnEveryUpdateEvenWhenAPostedUnitFails() {
+  lp::ArmForTest();
+  fd::ResetForTest();
+  static int failed = 0;
+  failed = 0;
+  QCHECK(fd::PostFrameWork(&FailPosted, &failed));
+  const int before = g_updateCalls;
+  for (int i = 0; i < 3; ++i) UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_updateCalls == before + 3);
+  QCHECK(failed == 1);
+  QCHECK(fd::CurrentStats().failed == 1);
+  fd::ResetForTest();
+}
+
+// The posted unit runs before the game's Update, so the dispatcher's work is part of the frame, not what follows it.
+int g_seenUpdates = -1;
+bool RecordUpdates(void*) noexcept {
+  g_seenUpdates = g_updateCalls;
+  return true;
+}
+
+void ThePostedWorkRunsBeforeTheGameUpdate() {
+  lp::ArmForTest();
+  fd::ResetForTest();
+  QCHECK(fd::PostFrameWork(&RecordUpdates, nullptr));
+  const int before = g_updateCalls;
+  g_seenUpdates = -1;
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_seenUpdates == before);  // the posted unit saw the game's Update not yet run
+  QCHECK(g_updateCalls == before + 1);
+  fd::ResetForTest();
+}
+
+// The prompt's Update logic is on exactly when the Update slot holds its thunk: Install() takes the slot's status.
+void ThePromptFollowsTheUpdateSlotsStatus() {
+  lp::ArmNetGameUpdateOnlyForTest();
+  lp::SetNetGameUpdateInstallForTest(true, sentinel::GotStatus::kModuleNotLoaded);  // the slot is not held
+  lp::Install();
+  static FakeGame refused;
+  std::memset(&refused, 0, sizeof(refused));
+  SetState(refused, layout::kStateLoggingIn);
+  UpdateEntry()(Obj(refused), 16);
+  SetState(refused, layout::kStateLoginFailed);
+  g_lines.clear();
+  UpdateEntry()(Obj(refused), 16);
+  QCHECK(CountLines("login_prompt_netgame_state") == 0);
+
+  lp::SetNetGameUpdateInstallForTest(true, sentinel::GotStatus::kOk);  // the slot holds its thunk
+  lp::Install();
+  static FakeGame held;
+  std::memset(&held, 0, sizeof(held));
+  SetState(held, layout::kStateLoggingIn);
+  UpdateEntry()(Obj(held), 16);
+  SetState(held, layout::kStateLoginFailed);
+  g_lines.clear();
+  UpdateEntry()(Obj(held), 16);
+  QCHECK(CountLines("login_prompt_netgame_state") >= 1);
+  lp::SetNetGameUpdateInstallForTest(false, sentinel::GotStatus::kBadArgument);
+  lp::ArmForTest();
+}
+
+// The Update slot is taken once: a second InstallNetGameUpdate() returns the first status and does not reach the GOT.
+// On the host every real attempt is refused and logged once (op=install), so one such line means one attempt.
+void TheUpdateSlotIsTakenOnce() {
+  lp::SetNetGameUpdateInstallForTest(false, sentinel::GotStatus::kBadArgument);
+  g_lines.clear();
+  const sentinel::GotStatus first = lp::InstallNetGameUpdate();
+  const sentinel::GotStatus second = lp::InstallNetGameUpdate();
+  QCHECK(first == second);
+  QCHECK(first == sentinel::GotStatus::kModuleNotLoaded);  // no libr15.so on the host
+  QCHECK(CountLines("\"op\":\"install\"") == 1);
+  lp::SetNetGameUpdateInstallForTest(false, sentinel::GotStatus::kBadArgument);
+}
+
+// The install arms the Update handler before it takes the slot: disarmed, the game's calls pass straight through, so
+// the posted unit runs only once InstallNetGameUpdate() has armed the handler.
+void TheInstallArmsTheUpdateHandler() {
+  lp::ArmForTest();
+  lp::UpdateThunk::Disarm();
+  lp::SetNetGameUpdateInstallForTest(false, sentinel::GotStatus::kBadArgument);
+  fd::ResetForTest();
+  static int ran = 0;
+  ran = 0;
+  QCHECK(fd::PostFrameWork(&CountPosted, &ran));
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(ran == 0);  // disarmed: the handler did not run, so nothing was drained
+  lp::InstallNetGameUpdate();  // refused on the host, but it arms the handler before it takes the slot
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(ran == 1);
+  fd::ResetForTest();
+  lp::SetNetGameUpdateInstallForTest(false, sentinel::GotStatus::kBadArgument);
+  lp::ArmForTest();
+}
+
 }  // namespace
 
 int main() {
@@ -1768,6 +1918,13 @@ int main() {
   ConcurrentReadsAreNeverTorn();
   QCHECK(lp::ErrorThunk::Faults() == 0 && lp::UpdateThunk::Faults() == 0 && lp::EnablePageThunk::Faults() == 0);
   CounterRefusalIsLoudAndInstallReportsBothSlots();
+  TheUpdateSlotRunsPostedWorkAndTheGameUpdateWithThePromptOff();
+  TheSameStateChangeWithThePromptWantedIsLogged();
+  TheOriginalRunsOnEveryUpdateEvenWhenAPostedUnitFails();
+  ThePostedWorkRunsBeforeTheGameUpdate();
+  ThePromptFollowsTheUpdateSlotsStatus();
+  TheUpdateSlotIsTakenOnce();
+  TheInstallArmsTheUpdateHandler();
 
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "login_prompt_hook_test: %d check(s) failed\n", quest_test::Failures());

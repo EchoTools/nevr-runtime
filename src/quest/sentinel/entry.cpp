@@ -18,6 +18,7 @@
 #include "hook_report.h"
 #include "login_prompt_hook.h"
 #include "login_title_hook.h"
+#include "quest/invite/frame_dispatch.h"
 #include "menu_cards_hook.h"
 #include "data_wiring.h"
 #include "obb_skip_hook.h"
@@ -87,6 +88,14 @@ bool InstallClockHook() noexcept {
     ClockThunk::Arm(kClockHook);
     return sentinel::InstallThunk<ClockThunk>(g_clockHook, sentinel::pinned::LibR15ClockGettime()) ==
            sentinel::GotStatus::kOk;
+}
+
+// The frame dispatcher (#966 S7): the Update slot is taken on every launch, so the dispatcher runs whether or not the
+// login prompt is on. LogInstall writes the one line that says which (installed, or off with the GOT status).
+bool InstallFrameDispatchHook() noexcept {
+    const sentinel::GotStatus status = nevr_quest::login_prompt::InstallNetGameUpdate();
+    nevr_quest::invite::frame::LogInstall(status == sentinel::GotStatus::kOk, sentinel::GotStatusName(status));
+    return status == sentinel::GotStatus::kOk;
 }
 
 // The login-failed page's title hook (#1137) is the prompt's second half: its counters register in the same step, so the

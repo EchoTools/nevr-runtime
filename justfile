@@ -1482,10 +1482,16 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     # The lobby-full policy (#1001): the #889 cases on the 16-byte lobby key. Pure; no libr15 here.
     "${cxx[@]}" -pthread src/quest/tests/lobby_full_test.cpp -o "$out/lobby_full_test"
     timeout 60 "$out/lobby_full_test"
+    # The frame dispatcher (#966 S7): posted work runs only on Tick, once, in order; posting from another thread;
+    # try-lock contention skips without blocking. Built as the sentinel builds it (no exceptions).
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/frame_dispatch_test.cpp \
+        src/quest/invite/frame_dispatch.cpp src/quest/sentinel/hook_log.cpp \
+        -o "$out/frame_dispatch_test"
+    timeout 60 "$out/frame_dispatch_test"
     # The login-prompt hook (#239): the real handler and prompt board, built as the sentinel builds
     # them (no exceptions), driven through the thunk entry.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/login_prompt_hook_test.cpp \
-        src/quest/sentinel/login_prompt_hook.cpp src/quest/auth/prompt_board.cpp \
+        src/quest/sentinel/login_prompt_hook.cpp src/quest/invite/frame_dispatch.cpp src/quest/auth/prompt_board.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/login_prompt_hook_test" -ldl
     timeout 120 "$out/login_prompt_hook_test"
@@ -1503,7 +1509,7 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -Isdk/include -c \
         src/quest/login/login_standin.cpp -o "$out/chain_login_standin.o"
     "${cxx[@]}" -fno-exceptions -DNEVR_QUEST_TESTING -pthread src/quest/tests/login_signin_code_chain_test.cpp \
-        src/quest/sentinel/login_prompt_hook.cpp src/quest/auth/prompt_board.cpp \
+        src/quest/sentinel/login_prompt_hook.cpp src/quest/invite/frame_dispatch.cpp src/quest/auth/prompt_board.cpp \
         "$out/chain_login_prerequisites.o" "$out/chain_login_standin.o" \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/login_signin_code_chain_test" -ldl
@@ -1959,6 +1965,7 @@ test-quest-integration: _vcpkg-quest-host
     "${off[@]}" -c src/quest/integration/dlopen_hook.cpp -o "$out/dlopen_hook.o"
     "${off[@]}" -c src/quest/integration/social_shim.cpp -o "$out/social_shim.o"
     "${off[@]}" -c src/quest/sentinel/login_prompt_hook.cpp -o "$out/login_prompt_hook.o"
+    "${off[@]}" -c src/quest/invite/frame_dispatch.cpp -o "$out/frame_dispatch.o"
     "${off[@]}" -c src/quest/sentinel/login_title_hook.cpp -o "$out/login_title_hook.o"
     "${off[@]}" -c src/quest/sentinel/obb_skip_hook.cpp -o "$out/obb_skip_hook.o"
     "${off[@]}" -c src/quest/sentinel/texture_quality_hook.cpp -o "$out/texture_quality_hook.o"
@@ -1996,7 +2003,7 @@ test-quest-integration: _vcpkg-quest-host
         src/runtime/lifecycle/stable_string_pool.cpp \
         "$out/got_hook.o" "$out/hook_report.o" "$out/tstring_thunks.o" "$out/dlopen_hook.o" "$out/social_shim.o" \
         "$out/social_game_calls.o" "$out/social_install.o" "$out/social_invite_gate.o" "$out/social_facade.o" "$out/hook_log.o" "$out/social_names.o" \
-        "$out/login_prompt_hook.o" "$out/login_title_hook.o" "$out/obb_skip_hook.o" "$out/resource_request_hook.o" "$out/texture_quality_hook.o" "$out/clock_levels_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
+        "$out/login_prompt_hook.o" "$out/frame_dispatch.o" "$out/login_title_hook.o" "$out/obb_skip_hook.o" "$out/resource_request_hook.o" "$out/texture_quality_hook.o" "$out/clock_levels_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
         "$out/login_prerequisites.o" "$out/login_standin.o" \
         "${ident[@]}" "$yaml_lib" -o "$out/integration_hooks_test" -ldl -pthread -lzstd
     timeout 300 "$out/integration_hooks_test"

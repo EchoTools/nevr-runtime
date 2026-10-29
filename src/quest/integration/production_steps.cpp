@@ -425,6 +425,12 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
+  bool InstallFrameDispatch() override {
+    const bool ok = nevr_quest::integration::InstallFrameDispatchHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
   bool StartTokenAuth() override {
     const nevr_quest::ResolvedConfig& cfg = sentinel::ActiveConfig();
     if (cfg.httpUri.text.empty() || cfg.httpKey.text.empty()) {
