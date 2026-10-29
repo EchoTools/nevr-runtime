@@ -44,7 +44,7 @@ Three writers in the tree already write fields as keys, each with a header of it
 
 ### Measured
 
-Counts exclude `src/legacy/` (frozen) and count call sites, not comments, declarations or definitions.
+Counts cover the live sources and count call sites, not comments, declarations or definitions.
 
 | What | Count |
 | --- | --- |
@@ -66,7 +66,7 @@ The level split is reproduced exactly by:
 
 ```sh
 rg --pcre2 -U -o --no-filename '(?<![A-Za-z0-9_.>:])Log\(\s*EchoVR::LogLevel::(Debug|Info|Warning|Error)\b' -r '$1' \
-  -g '!src/legacy/**' -g '!src/quest/**' -g '!src/runtime/tests/**' -g '!src/runtime/compat/session_router.cpp' \
+  -g '!src/quest/**' -g '!src/runtime/tests/**' -g '!src/runtime/compat/session_router.cpp' \
   src plugins | sort | uniq -c
 ```
 
@@ -372,7 +372,7 @@ Each stage is pull requests with their own issues; a call site and every reader 
    `AServerGetsNoLobbyRecordFromTheSocialObserver` change in that pull request.
 4. **The end state.** No printf `Log()` and no `TeeFprintf` remain, and both are deleted; a game line's `msg` drops the
    `[EVR] ` prefix, which `tag` carries. The ceiling check becomes the sensor that forbids the old form: no
-   `Log(EchoVR::LogLevel` call outside `src/legacy/`, no `TeeFprintf`, and no `fprintf` or `vfprintf` to stderr in
+   `Log(EchoVR::LogLevel` call, no `TeeFprintf`, and no `fprintf` or `vfprintf` to stderr in
    `src/runtime`, `src/core` and `src/modules` outside tests, the console renderer and the crash path. It runs in
    `tools/tests/`, so every pull request runs it, and a `just verify` sensor names it under the next free N-number, built as N93, N99 and
    N111 require (two stages, comments stripped). D1 is re-pointed at the one definition of the structured `Log`.
