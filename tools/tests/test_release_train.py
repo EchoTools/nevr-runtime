@@ -321,100 +321,14 @@ class AudienceSection(unittest.TestCase):
 
 
 class PlayerLine(unittest.TestCase):
-    """The one line of the release body that says what is new for players: built only from feat commits whose audience
-    is players (a fix, perf or other type never contributes); with none it says so."""
+    """The release body's player line is the author's `release-headline.txt` or one fixed sentence; the commits never
+    write it (#1444)."""
 
-    def test_only_player_feats_are_listed_and_fixes_are_left_out(self) -> None:
-        # (1) fixes for players do not appear in the line; only the two feats do.
-        line = audience.player_line([
-            "fix(bridge): hold the game socket across the login-failure LoginSuccess send",
-            "fix(login): clear the slot when a socket retires",
-            "feat(quest): load libpnsrad behind diagnostics.pnsrad_provider (refs #1220) (#1340)",
-            "feat(runtime): keep the clock running",
-        ])
-        self.assertEqual(line, "Load libpnsrad behind diagnostics.pnsrad_provider; keep the clock running.")
+    def test_the_fixed_sentence_is_the_fallback(self) -> None:
+        self.assertEqual(audience.FALLBACK_PLAYER_LINE, "Fixes and internal changes.")
 
-    def test_a_reference_listing_several_numbers_is_stripped(self) -> None:
-        line = audience.player_line(["feat(runtime): show the created code on the share page (refs #1278, #906)"])
-        self.assertEqual(line, "Show the created code on the share page.")
-
-    def test_a_range_with_only_fixes_says_so(self) -> None:
-        # (2) no player feat: the fallback, whatever fixes the range holds.
-        self.assertEqual(audience.player_line(["fix(bridge): a fix", "fix(quest): another", "perf(quest): faster"]),
-                         "Fixes and internal changes.")
-
-    def test_three_feats_show_two_and_count_the_third(self) -> None:
-        # (3)
-        self.assertEqual(audience.player_line(["feat(runtime): first", "feat(quest): second", "feat(runtime): third"]),
-                         "First; second and 1 more.")
-
-    def test_the_count_is_of_player_feats_only(self) -> None:
-        # Three player feats beside three fixes: two shown, one more. Counting every listed change would say "3 more".
-        self.assertEqual(audience.player_line([
-            "fix(a): a fix", "feat(first): first", "fix(b): another fix", "feat(second): second",
-            "feat(third): third", "fix(c): a last fix",
-        ]), "First; second and 1 more.")
-
-    def test_a_breaking_feat_counts_as_a_feat(self) -> None:
-        # (4) feat! is a feat: it is listed, with its mark; the fix beside it is not.
-        self.assertEqual(audience.player_line(["feat(runtime)!: drop the old flag", "fix(quest): a fix"]),
-                         "BREAKING: drop the old flag.")
-
-    def test_a_feat_for_server_hosts_does_not_count(self) -> None:
-        # (5) feat(server) and feat(ws-bridge) are for server hosts (SCOPE_AUDIENCE): not in the player line.
-        self.assertEqual(audience.player_line(["feat(server): a host thing", "feat(ws-bridge): a bridge thing",
-                                               "feat(runtime): a player thing"]),
-                         "A player thing.")
-        self.assertEqual(audience.player_line(["feat(server): only for hosts"]), "Fixes and internal changes.")
-
-    def test_the_first_two_player_feats_are_joined_and_the_rest_counted(self) -> None:
-        self.assertEqual(audience.player_line(["feat(runtime): first", "fix(quest): second",
-                                               "fix(arena): a host thing", "feat(runtime): third"]),
-                         "First; third.")
-
-    def test_one_player_feat_is_the_line(self) -> None:
-        self.assertEqual(audience.player_line(["feat(quest): a fix"]), "A fix.")
-
-    def test_two_player_feats_are_joined_with_no_count(self) -> None:
-        self.assertEqual(audience.player_line(["feat(runtime): a feature", "feat(quest): a second feature"]),
-                         "A feature; a second feature.")
-
-    def test_no_player_feat_says_so(self) -> None:
-        self.assertEqual(audience.player_line(["fix(arena): a host thing", "feat(plugin): an api"]),
-                         "Fixes and internal changes.")
-        self.assertEqual(audience.player_line([]), "Fixes and internal changes.")
-
-    def test_a_release_note_is_the_text_the_player_line_shows(self) -> None:
-        self.assertEqual(audience.player_line(["feat(runtime): a subject\n\nRelease-note: what a player sees"]),
-                         "What a player sees.")
-
-    def test_the_example_renders_without_its_references_and_capitalised(self) -> None:
-        # The feat from the v6.0.0 range, its references stripped, the fixes beside it not listed.
-        messages = [
-            "fix(bridge): hold the game socket across the login-failure LoginSuccess send",
-            "feat(quest): load libpnsrad as the platform provider behind diagnostics.pnsrad_provider (refs #1220) (#1340)",
-        ] + [f"feat(quest): change {n}" for n in range(11)]
-        self.assertEqual(
-            audience.player_line(messages),
-            "Load libpnsrad as the platform provider behind diagnostics.pnsrad_provider; change 0 and 10 more.")
-
-    def test_a_text_with_no_reference_is_only_capitalised(self) -> None:
-        self.assertEqual(audience.player_line(["feat(runtime): a plain change"]), "A plain change.")
-
-    def test_every_trailing_reference_is_stripped_and_only_trailing_ones(self) -> None:
-        # Repeated trailing references go; a parenthesis that is not an issue or PR number stays, and so does an
-        # issue number in the middle of the text.
-        self.assertEqual(audience.player_line(["feat(quest): keep (refs #1) text (closes #2) (#3)"]),
-                         "Keep (refs #1) text.")
-        self.assertEqual(audience.player_line(["feat(quest): handle (version 2) and (see notes)"]),
-                         "Handle (version 2) and (see notes).")
-
-    def test_a_reference_word_other_than_the_listed_ones_is_kept(self) -> None:
-        self.assertEqual(audience.player_line(["feat(quest): a fix (see #12)"]), "A fix (see #12).")
-
-    def test_the_line_ends_with_a_full_stop(self) -> None:
-        self.assertEqual(audience.player_line(["feat(quest): a fix (#9)", "feat(quest): another"]),
-                         "A fix; another.")
+    def test_the_commits_no_longer_build_a_player_line(self) -> None:
+        self.assertFalse(hasattr(audience, "player_line"), "a guess from feat subjects misled players twice")
 
 
 class ReleaseBodyWorkflow(unittest.TestCase):

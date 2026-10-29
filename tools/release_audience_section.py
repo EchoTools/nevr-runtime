@@ -2,10 +2,9 @@
 """The per-audience section of a release notes, from the feat, fix and perf commits between two refs (RELEASING.md,
 "Write the release body"). Usage: release_audience_section.py --repo <dir> --base vX.Y.Z --rev vX.Y.Z
 
-The release body is short and carries only its player line, `player_line()`, which `package_release.py notes` calls
-over the same commits. The line is built only from feat commits whose audience is players; this script's section is for a
-reader of the commits, not for the body. A `release-headline.txt` at the repository root, changed in base..rev, replaces
-that line in the body (`package_release.headline_line`); this script does not read it.
+The release body is short and carries only its player line, which the commits never write: it is the author's
+`release-headline.txt` when that file changed in base..rev (`package_release.headline_line`), else FALLBACK_PLAYER_LINE.
+This script's section is for a reader of the commits, not for the body.
 
 A commit's audience is its conventional scope: `plugins` is for plugin developers, `server`, `ws-bridge` and `arena` for
 server hosts, and every other scope, or none, is for players. A commit is listed by its subject, or by the text of a
@@ -34,9 +33,6 @@ CONVENTIONAL = re.compile(r"^(?P<type>feat|fix|perf)(?:\((?P<scope>[^)]*)\))?(?P
 BREAKING_FOOTER = re.compile(r"^BREAKING[ -]CHANGE:[ \t]", re.M)
 RELEASE_NOTE = re.compile(r"^Release-note:[ \t]*(?P<text>\S.*?)[ \t]*$", re.M)
 RECORD_END = "\x1e"
-# The issue or PR references that end a subject: "(#1340)", "(refs #1220) (#1340)", "(closes #1285)". Only at the end,
-# only a parenthesis holding `#<digits>` with an optional listed word first.
-ISSUE_REFERENCE = re.compile(r"(?:\s*\((?:(?:refs|closes|fixes|resolves|completes|part of)\s+)?#\d+(?:\s*,\s*#\d+)*\))+\s*$", re.I)
 
 NOT_TESTED = (
     "Each pull request ran the quick check its body names: the build and the tests that cover the changed code. "
@@ -89,21 +85,6 @@ def classify(messages: list[str]) -> dict[str, list[str]]:
     for audience, _kind, text in listed(messages):
         by_audience[audience].append(text)
     return by_audience
-
-
-def player_line(messages: list[str]) -> str:
-    """The one line of the release body for players, built only from feat commits whose audience is players: the first
-    two such texts joined by "; ", then "and N more" for the rest of the player feats, ended by a period. Each shown text
-    loses its trailing issue or PR references (ISSUE_REFERENCE), and the first letter of the line is capitalised. A fix,
-    perf or any other type never contributes; with no player feat the line is FALLBACK_PLAYER_LINE."""
-    texts = [text for audience, kind, text in listed(messages) if audience == "For players" and kind == "feat"]
-    if not texts:
-        return FALLBACK_PLAYER_LINE
-    line = "; ".join(ISSUE_REFERENCE.sub("", text).strip() for text in texts[:2])
-    line = line[:1].upper() + line[1:]
-    if len(texts) > 2:
-        line += f" and {len(texts) - 2} more"
-    return line.rstrip(".") + "."
 
 
 def sections(messages: list[str]) -> str:
