@@ -537,9 +537,9 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
-  // The invite switch (ADR 0017 slice S1) is not on main, so the observer is never wanted in a production launch. Its step
-  // is then skipped and nothing is hooked.
-  bool WizardMetricWanted() override { return false; }
+  // The observer is wanted when the invite switch is on (network.invite_codes, ADR 0017 slice S1: off by default, and it needs
+  // login and a service address). Off, the step is skipped and nothing is hooked.
+  bool WizardMetricWanted() override { return sentinel::FeatureEnabled(nevr_quest::Feature::kInviteCodes); }
 
   bool InstallWizardMetric() override {
     const bool ok = nevr_quest::integration::InstallWizardMetricHook();
