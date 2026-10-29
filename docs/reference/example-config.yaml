@@ -17,7 +17,8 @@
 # builds read it ("both", "PC only", "Quest only"), its default, and the file that reads it.
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
-# social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe and graphics.texture_quality. Every other key below is PC only: the
+# social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
+# diagnostics.pnsrad_provider and graphics.texture_quality. Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -100,6 +101,12 @@ diagnostics:
   # tablet to switch to its Friends list, where the "+" sends the invite. Needs social.facade.
   # Default (absent): true. Set false to turn the event off.
   # ui_event_probe: false
+
+  # Quest only. Load the game's own libpnsrad as its platform provider instead of libpnsovr, as the PC does
+  # (docs/adr/0026-quest-without-pnsovr.md). For development only: nothing sends the login on it yet (#1220), so the
+  # game does not log in with it on. Needs the login.
+  # Default (absent): false.
+  # pnsrad_provider: true
 
 # ---------------------------------------------------------------------------
 # graphics — render quality

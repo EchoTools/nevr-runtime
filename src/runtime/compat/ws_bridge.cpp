@@ -187,6 +187,7 @@ struct ProxyPair {
   nevr_socket_role::Role role = nevr_socket_role::Role::Config;
   nevr_socket_role::Listener listener = nevr_socket_role::Listener::Service;
   bool firstFrameChecked = false;  // the first frame the game sent has been compared with `role`
+  std::weak_ptr<ix::WebSocket> gameWs;  // the game socket this pair serves; owned by the game server's client set
 };
 
 // Human-readable label for connIdx, for log lines — this is the ONLY place
@@ -416,6 +417,7 @@ static std::shared_ptr<ix::WebSocket> RetireGameWsLocked(ix::WebSocket* gameWs, 
       }
     }
     g_pairs.erase(it);
+    if (gameWs == g_loginGameWs) g_loginGameWs = nullptr;  // the login slot never keeps a retired socket
   }
   if (g_activeGameWs == gameWs) {
     g_activeGameWs = nullptr;
@@ -1002,6 +1004,15 @@ static void WireSelfChecks() {
 // value in No-VR mode. Outside the game (unit tests) there is nothing to read.
 #ifdef NEVR_TEST_HOOKS
 static std::atomic<int64_t> g_testGameFlagWord{-1};
+#endif
+
+// Test seam: runs just before a shared-route frame is sent to its target, so a test can hold the send open while
+// the target's last owner lets go. Production builds compile the call to nothing.
+#ifdef NEVR_TEST_HOOKS
+static std::atomic<void (*)(ix::WebSocket*)> g_testBeforeSharedSend{nullptr};
+#define NEVR_BEFORE_SHARED_SEND(t) do { if (auto h_ = g_testBeforeSharedSend.load()) h_(t); } while (0)
+#else
+#define NEVR_BEFORE_SHARED_SEND(t) ((void)0)
 #endif
 
 static std::optional<uint32_t> GameFlagWord() {
@@ -2030,6 +2041,7 @@ void InstallWebSocketBridge() {
               pair->connIdx = connIdx;
               pair->role = role;
               pair->listener = listener;
+              pair->gameWs = FindGameSocket(&gameWs);
 
               auto* pairPtr = pair.get();
               ix::WebSocket* gameWsPtr = &gameWs;
@@ -2045,21 +2057,28 @@ void InstallWebSocketBridge() {
                     switch (rmsg->type) {
                       case ix::WebSocketMessageType::Message: {
                         ix::WebSocket* target = nullptr;
+                        std::shared_ptr<ix::WebSocket> keep;  // holds the target alive across the send
                         int targetConn = -1;
                         {
                           std::lock_guard<std::mutex> lk(g_pairsMutex);
-                          if (const ProxyPair* route = SharedRouteLocked(&target)) targetConn = route->connIdx;
+                          if (const ProxyPair* route = SharedRouteLocked(&target)) {
+                            targetConn = route->connIdx;
+                            keep = route->gameWs.lock();
+                          }
                         }
                         ObserveSocialFrames("server->game", targetConn, rmsg->str);
+                        if (!keep) target = nullptr;  // the server already erased this game socket
                         if (target == nullptr) {
                           LogSharedFrameDropped(rmsg->str.size());
                           break;
                         }
+                        NEVR_BEFORE_SHARED_SEND(target);
                         if (rmsg->binary) {
-                          target->sendBinary(rmsg->str);
+                          keep->sendBinary(rmsg->str);
                         } else {
-                          target->sendText(rmsg->str);
+                          keep->sendText(rmsg->str);
                         }
+                        if (keep && keep.use_count() == 1) { ReleaseOffThread(std::move(keep)); }
                         break;
                       }
                       case ix::WebSocketMessageType::Close:
@@ -2099,6 +2118,7 @@ void InstallWebSocketBridge() {
             pair->connIdx = connIdx;
             pair->role = role;
             pair->listener = listener;
+            pair->gameWs = FindGameSocket(&gameWs);
 
             auto* pairPtr = pair.get();
             ix::WebSocket* gameWsPtr = &gameWs;
@@ -2150,7 +2170,19 @@ void InstallWebSocketBridge() {
                           }
                           const std::string fakeSuccess =
                               nevr_evr_codec::BuildLoginSuccess(serverPlatformCode, g_lastInjectedDiscordId);
-                          gameWsPtr->sendBinary(fakeSuccess);
+                          std::shared_ptr<ix::WebSocket> keep;  // holds the game socket alive across the send
+                          {
+                            std::lock_guard<std::mutex> lk(g_pairsMutex);
+                            const auto pit = g_pairs.find(gameWsPtr);
+                            if (pit != g_pairs.end()) keep = pit->second->gameWs.lock();
+                          }
+                          if (!keep) {
+                            LogSharedFrameDropped(fakeSuccess.size());
+                            break;
+                          }
+                          NEVR_BEFORE_SHARED_SEND(keep.get());
+                          keep->sendBinary(fakeSuccess);
+                          if (keep.use_count() == 1) { ReleaseOffThread(std::move(keep)); }
                           break;  // failure is not forwarded to the game
                         }
                       }
@@ -2244,23 +2276,27 @@ void InstallWebSocketBridge() {
                         // pairPtr is not read here either (#752): a login game socket that closed while a matchmaker
                         // still shares this remote has erased its pair, and the callback stays installed.
                         ix::WebSocket* target = nullptr;
+                        std::shared_ptr<ix::WebSocket> keep;  // holds the target alive across the send
                         {
                           std::lock_guard<std::mutex> lk(g_pairsMutex);
                           const auto pit = g_pairs.find(gameWsPtr);
                           if (pit != g_pairs.end()) {
                             // The pair is present, so its game socket has not closed and gameWsPtr is alive.
-                            if (pit->second->remoteWs != nullptr && pit->second->remoteWs == g_loginRemoteWs)
-                              SharedRouteLocked(&target);
-                            else
+                            if (pit->second->remoteWs != nullptr && pit->second->remoteWs == g_loginRemoteWs) {
+                              if (const ProxyPair* route = SharedRouteLocked(&target)) keep = route->gameWs.lock();
+                            } else {
                               target = gameWsPtr;
+                              keep = pit->second->gameWs.lock();
+                            }
                           } else if (remoteAddress == g_loginRemoteWs.get()) {
                             // The login game socket closed and its pair is gone, but the shared login remote still
                             // carries this callback: route to the live matchmaker connection. gameWsPtr is not used.
-                            SharedRouteLocked(&target);
+                            if (const ProxyPair* route = SharedRouteLocked(&target)) keep = route->gameWs.lock();
                           }
                           // Otherwise the game socket closed and nothing shares this remote: target stays null, and
                           // the frame is dropped below. gameWsPtr is never used without its pair.
                         }
+                        if (!keep) target = nullptr;  // the server already erased this game socket
                         if (target == nullptr) {
                           LogSharedFrameDropped(rmsg->str.size());
                           break;
@@ -2275,11 +2311,13 @@ void InstallWebSocketBridge() {
                           }
                         }
                         const std::string& outFrame = reordered.has_value() ? *reordered : rmsg->str;
+                        NEVR_BEFORE_SHARED_SEND(target);
                         if (rmsg->binary) {
-                          target->sendBinary(outFrame);
+                          keep->sendBinary(outFrame);
                         } else {
-                          target->sendText(outFrame);
+                          keep->sendText(outFrame);
                         }
+                        if (keep && keep.use_count() == 1) { ReleaseOffThread(std::move(keep)); }
                       }
                       break;
                     }
@@ -3092,6 +3130,22 @@ size_t TestHook_ConnectedGameSockets() {
   if (g_server) connected += g_server->getClients().size();
   if (g_matchServer) connected += g_matchServer->getClients().size();
   return connected;
+}
+
+void* TestHook_LoginGameWsPtr() {
+  std::lock_guard<std::mutex> lk(g_pairsMutex);
+  return static_cast<void*>(g_loginGameWs);
+}
+
+void TestHook_SharedRoute_SetBeforeSend(void (*fn)(void* target)) {
+  g_testBeforeSharedSend = reinterpret_cast<void (*)(ix::WebSocket*)>(fn);
+}
+
+// A weak handle on the first game-side socket the service listener holds; empty when there is none.
+std::weak_ptr<void> TestHook_FirstServiceClientWeak() {
+  if (!g_server) return {};
+  for (const auto& c : g_server->getClients()) return std::weak_ptr<void>(c);
+  return {};
 }
 
 // Reset all internal bridge state for the next test.
