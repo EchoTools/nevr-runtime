@@ -149,7 +149,7 @@ class InstallPs1Test(ScriptTestBase):
         self.assertEqual(record.get("previous_sha256"), sha(old_host))
         self.assertEqual(world.game_files(), ["BugSplat64.dll", "echovr.exe"])
 
-    # An earlier nEVR put in place by another installer leaves a runtime host and no install record. Shaped like the shipped
+    # An earlier NEVR put in place by another installer leaves a runtime host and no install record. Shaped like the shipped
     # hosts: the stamp `NEVR-BUILD <version> <commit40>` inside an MZ blob (all 26 shipped hosts, v5.1.0 to v5.18.0, carry it
     # once), with the CDN agent string too on the monolithic ones (v5.1.0 to v5.6.0) and without it on the thin ones (v5.7.2 on).
     # install.ps1 used to end on "nevr-install.txt is missing; the file was left as it is" for these.
