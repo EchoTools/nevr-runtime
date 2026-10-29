@@ -23,10 +23,13 @@
 // Both sites are checked patches (checked_patch.h), not a hook: the bound is an immediate in the middle of a
 // 0x71B-byte function, and MinHook replaces whole functions, so a hook would restate all of it to change two
 // values. What is pure: everything here; Apply writes only through the writer it is handed, so a test drives it on
-// buffers, and the slot rule's bytes run natively in the test. Above 5 the slot rule is written before the cap and
-// taken out again if the cap write fails, so a server is never left with a cap above 5 and the game's slot rule. The
-// size in effect is read back from the cap site's bytes: a site that holds neither the game's shape nor ours is
-// left as found and reported as unknown.
+// buffers, and the slot rule's bytes run natively in the test. Above 5 the slot rule is written before the cap. Apply
+// decides what to take out by the bytes at the two sites, not by what the writer said: a writer can report a failure
+// after the bytes went in (ProcessMemcpy does when the protection restore fails). A slot site Apply changed is put
+// back only when the cap site holds what it held before, and kept when the cap site changed, so a server is never
+// left with a cap above 5 and the game's slot rule. The size in effect is read back from the cap site's bytes, and
+// above 5 it is a success only with the slot rule in; a cap site that holds neither the game's shape nor ours is left
+// as found and reported as unknown.
 
 #include <cstddef>
 #include <cstdint>
@@ -129,8 +132,9 @@ struct Outcome {
   bool slotTried = false;
   nevr_checked_patch::Result slot = nevr_checked_patch::Result::Mismatch;
   uint8_t slotBefore[sizeof(kSlotExpected)] = {};
-  bool slotRestored = false;  // the slot rule was taken out again after the cap failed
+  bool slotRestored = false;  // the slot site was put back as found, and read back so, after the cap did not go in
   uint32_t inEffect = kGameTeamSize;  // read from the cap site's bytes when Apply returns; 0 is unknown
+  bool slotRule = false;  // the slot site holds the rule written above 5 when Apply returns
 };
 
 inline bool Took(nevr_checked_patch::Result r) {
@@ -139,14 +143,20 @@ inline bool Took(nevr_checked_patch::Result r) {
 
 /// Puts `size` in effect at the two sites, through `write`. See the file comment for the order and the rules.
 inline Outcome Apply(uint8_t* capSite, uint8_t* slotSite, uint32_t size, nevr_checked_patch::WriteFn write) {
-  using nevr_checked_patch::Result;
   Outcome o;
   o.size = size;
   o.plan = PlanFor(size);
   std::memcpy(o.capBefore, capSite, sizeof(o.capBefore));
   std::memcpy(o.slotBefore, slotSite, sizeof(o.slotBefore));
   const auto done = [&]() {
+    // By the bytes, not the writer's word (file comment): a slot site changed here goes back only with the cap as found.
+    if (std::memcmp(slotSite, o.slotBefore, sizeof(o.slotBefore)) != 0 &&
+        std::memcmp(capSite, o.capBefore, sizeof(o.capBefore)) == 0) {
+      o.slotRestored = write(slotSite, o.slotBefore, sizeof(o.slotBefore)) &&
+                       std::memcmp(slotSite, o.slotBefore, sizeof(o.slotBefore)) == 0;
+    }
     o.inEffect = CapInEffect(capSite);
+    o.slotRule = std::memcmp(slotSite, kSlotPatched, sizeof(kSlotPatched)) == 0;
     return o;
   };
   if (o.plan == Plan::KeepGame) return done();
@@ -169,17 +179,22 @@ inline Outcome Apply(uint8_t* capSite, uint8_t* slotSite, uint32_t size, nevr_ch
 
   o.capTried = true;
   o.cap = nevr_checked_patch::Apply(capSite, capSpec, write);
-  if (!Took(o.cap) && o.slot == Result::Applied) {  // `slot` stays Mismatch unless it was tried
-    o.slotRestored = write(slotSite, kSlotExpected, sizeof(kSlotExpected)) &&
-                     std::memcmp(slotSite, kSlotExpected, sizeof(kSlotExpected)) == 0;
-  }
   return done();
 }
 
-/// The size wanted is not the size in effect: a size asked for that did not go in, or, with nothing asked, a cap site
-/// that does not hold the game's 5 (another writer changed it).
+/// A writer reported a failure at a site (`cap` and `slot` stay Mismatch unless tried).
+inline bool AWriteFailed(const Outcome& o) {
+  return o.cap == nevr_checked_patch::Result::WriteFailed || o.slot == nevr_checked_patch::Result::WriteFailed;
+}
+
+/// The cap runs above 5 with the game's slot rule, which gives a sixth member slot 5.
+inline bool CapWithoutSlotRule(const Outcome& o) { return o.inEffect > kGameTeamSize && !o.slotRule; }
+
+/// The size wanted is not the size in effect (a size asked for that did not go in, or, with nothing asked, a cap site
+/// that does not hold the game's 5: another writer changed it), a cap above 5 runs without the slot rule, or a write
+/// reported a failure, which the operator hears with its error even when the bytes went in.
 inline bool IsFailure(const Outcome& o) {
-  return o.inEffect != (o.plan == Plan::KeepGame ? kGameTeamSize : o.size);
+  return AWriteFailed(o) || CapWithoutSlotRule(o) || o.inEffect != (o.plan == Plan::KeepGame ? kGameTeamSize : o.size);
 }
 
 inline const char* SiteResultName(bool tried, nevr_checked_patch::Result r) {
@@ -221,7 +236,9 @@ inline int FormatRecord(char* out, size_t cap, const Outcome& o, uintptr_t capAd
   Hex(slotActual, o.slotBefore, sizeof(kSlotExpected));
   const char* what = o.plan == Plan::KeepGame ? "nothing written; the cap site holds another writer's bytes"
                      : o.slotRestored         ? "not in effect, the slot rule was put back"
-                                              : "not in effect";
+                     : o.inEffect != o.size   ? "not in effect"
+                     : CapWithoutSlotRule(o)  ? "the cap is in without the slot rule, so a sixth member takes slot 5"
+                                              : "in effect, but a write reported an error";
   return std::snprintf(out, cap,
                        "[NEVR.PATCH] server team size size=%u in_effect=%s (%s) cap_addr=0x%llx cap_expected=%s "
                        "cap_actual=%s cap=%s slot_addr=0x%llx slot_expected=%s slot_actual=%s slot=%s%s",
@@ -272,10 +289,7 @@ inline std::vector<Line> InstallLines(bool isServer, const char* text, uint8_t* 
   char record[640];
   FormatRecord(record, sizeof(record), outcome, capAddr, slotAddr);
   std::string line(record);
-  using nevr_checked_patch::Result;
-  if (outcome.cap == Result::WriteFailed || outcome.slot == Result::WriteFailed) {
-    line += " write_error=" + std::to_string(writeError());
-  }
+  if (AWriteFailed(outcome)) line += " write_error=" + std::to_string(writeError());
   line += std::string(" source=") + (text != nullptr && text[0] != '\0' ? "config.yaml" : "default");
   lines.push_back({IsFailure(outcome), line});
   return lines;

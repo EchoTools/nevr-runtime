@@ -77,6 +77,16 @@ bool RefuseOneThenDropWriter(void* dest, const void* src, size_t n) {
   return RefuseOneSiteWriter(dest, src, n);
 }
 
+// Writes every site, but reports its first write to g_refuseAt as failed, as ProcessMemcpy does when the bytes went
+// in and the protection restore then failed.
+bool WritesButFailsFirstWriter(void* dest, const void* src, size_t n) {
+  bool first = true;
+  for (const void* earlier : g_writes) first = first && earlier != dest;
+  g_writes.push_back(dest);
+  std::memcpy(dest, src, n);
+  return !(first && dest == g_refuseAt);
+}
+
 class ServerTeamSize : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -240,6 +250,71 @@ TEST_F(ServerTeamSize, ASlotThatWasAlreadyWrappedIsNotPutBackWhenTheCapFails) {
   EXPECT_EQ(o.cap, Result::WriteFailed);
   EXPECT_FALSE(o.slotRestored);
   EXPECT_EQ(img.slot, kSlotWrapped);
+}
+
+TEST_F(ServerTeamSize, ACapWriteThatReportsAFailureAfterWritingKeepsTheSlotRule) {
+  Image img;
+  g_refuseAt = img.cap.data();
+  const Outcome o = Run(img, 6, WritesButFailsFirstWriter);
+  EXPECT_EQ(o.slot, Result::Applied);
+  EXPECT_EQ(o.cap, Result::WriteFailed);
+  EXPECT_EQ(img.cap, CapFor(6));
+  EXPECT_FALSE(o.slotRestored);
+  EXPECT_EQ(img.slot, kSlotWrapped) << "a cap of six with the game's slot rule gives a sixth member slot 5";
+  EXPECT_EQ(o.inEffect, 6u);
+  EXPECT_TRUE(nevr_server_team_size::IsFailure(o)) << "the write's error is the operator's to hear";
+  char line[640];
+  nevr_server_team_size::FormatRecord(line, sizeof(line), o, 0x1401AB8C2, 0x1401ABC8A);
+  EXPECT_NE(std::string(line).find("in_effect=6 (in effect, but a write reported an error)"), std::string::npos)
+      << line;
+}
+
+TEST_F(ServerTeamSize, ASlotWriteThatReportsAFailureAfterWritingIsPutBack) {
+  Image img;
+  g_refuseAt = img.slot.data();
+  const Outcome o = Run(img, 6, WritesButFailsFirstWriter);
+  EXPECT_EQ(o.slot, Result::WriteFailed);
+  EXPECT_FALSE(o.capTried);
+  EXPECT_TRUE(o.slotRestored);
+  EXPECT_EQ(img.slot, kSlotStock) << "the cap stayed five, so the slot rule goes back out";
+  EXPECT_EQ(img.cap, kCapStock);
+  EXPECT_EQ(o.inEffect, 5u);
+}
+
+TEST_F(ServerTeamSize, AnotherWritersSixWithARefusedSlotWriteIsAFailure) {
+  Image img;
+  img.cap = CapFor(6);
+  const Outcome o = Run(img, 6, RefusingWriter);
+  EXPECT_EQ(o.slot, Result::WriteFailed);
+  EXPECT_EQ(o.inEffect, 6u);
+  EXPECT_FALSE(o.slotRule);
+  EXPECT_TRUE(nevr_server_team_size::IsFailure(o));
+}
+
+TEST_F(ServerTeamSize, AnotherWritersSixWithoutTheSlotRuleIsAFailure) {
+  Image img;
+  img.cap = CapFor(6);
+  img.slot[4] = 0xcc;  // neither the game's slot bytes nor the rule
+  const Outcome o = Run(img, 6);
+  EXPECT_EQ(o.slot, Result::Mismatch);
+  EXPECT_EQ(o.inEffect, 6u);
+  EXPECT_FALSE(o.slotRule);
+  EXPECT_TRUE(nevr_server_team_size::IsFailure(o)) << "six is in at the cap, but a sixth member would take slot 5";
+  char line[640];
+  nevr_server_team_size::FormatRecord(line, sizeof(line), o, 0x1401AB8C2, 0x1401ABC8A);
+  EXPECT_NE(std::string(line).find("in_effect=6 (the cap is in without the slot rule, so a sixth member takes slot 5)"),
+            std::string::npos)
+      << line;
+}
+
+TEST_F(ServerTeamSize, BelowSixTheSlotRuleIsNotNeeded) {
+  Image img;
+  const Outcome o = Run(img, 4);
+  EXPECT_FALSE(o.slotRule);
+  EXPECT_FALSE(nevr_server_team_size::IsFailure(o));
+  Image wrapped;
+  wrapped.slot = kSlotWrapped;  // another writer's rule, harmless below 6
+  EXPECT_FALSE(nevr_server_team_size::IsFailure(Run(wrapped, 4)));
 }
 
 TEST_F(ServerTeamSize, ASizeOutsideOneToEightWritesNothing) {
