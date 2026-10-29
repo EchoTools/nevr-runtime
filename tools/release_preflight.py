@@ -141,18 +141,15 @@ def plural(n: int, word: str) -> str:
 
 def next_build_version(root: str) -> tuple:
     """(version, None) the next build would stamp (cmake/set_project_version_from_git.cmake), or (None, why not)."""
-    out = git("describe", "--tags", "--long", "--match", "v[0-9]*", "--exclude", "v*-[!r]*", "--exclude", "v*-r[!c]*", cwd=root)
+    out = git("describe", "--tags", "--long", "--match", "v[0-9]*", "--exclude", "v*-*", cwd=root)
     if out.returncode != 0:
         return None, failure(out, "git describe")
-    match = re.fullmatch(r"v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?)-([0-9]+)-g([0-9a-f]+)",
-                         out.stdout.strip())
+    match = re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-([0-9]+)-g([0-9a-f]+)", out.stdout.strip())
     if not match:
-        return None, f"git describe printed '{out.stdout.strip()[:60]}', not v<X>.<Y>.<Z>[-rc.<N>]-<distance>-g<sha>"
-    tag, major, minor, patch, rc, distance, sha = match.groups()
+        return None, f"git describe printed '{out.stdout.strip()[:60]}', not v<X>.<Y>.<Z>-<distance>-g<sha>"
+    major, minor, patch, distance, sha = match.groups()
     if int(distance) == 0:
-        return tag.removeprefix("v"), None
-    if rc:
-        return f"{major}.{minor}.{patch}{rc}.dev.{distance}+{sha}", None
+        return f"{major}.{minor}.{patch}", None
     return f"{major}.{minor}.{int(patch) + 1}-dev.{distance}+{sha}", None
 
 

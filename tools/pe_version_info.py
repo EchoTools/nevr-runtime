@@ -51,11 +51,7 @@ EXPECTED_FILES = {
 }
 
 # A release (X.Y.Z) or a development build (X.Y.(Z+1)-dev.N+sha), as set_project_version_from_git.cmake writes it.
-# A release X.Y.Z, an rc X.Y.Z-rc.N (#714), a development build X.Y.(Z+1)-dev.N+sha, or X.Y.Z-rc.K.dev.N+sha after an rc.
-# Group 4 is N of an rc development build X.Y.Z-rc.K.dev.N+sha; group 5 is N of a development build X.Y.(Z+1)-dev.N+sha.
-VERSION = re.compile(
-    r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
-    r"(?:-rc\.[1-9][0-9]*(?:\.dev\.(0|[1-9][0-9]*)\+[0-9a-f]{7,40})?|-dev\.(0|[1-9][0-9]*)\+[0-9a-f]{7,40})?$")
+VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-dev\.(0|[1-9][0-9]*)\+[0-9a-f]{7,40})?$")
 IDENTITY = re.compile(rb"(?<=\x00)NEVR-BUILD ([0-9A-Za-z.+-]+) ([0-9a-f]{40})(?=\x00)")
 
 
@@ -237,21 +233,17 @@ def read_version_info(path) -> VersionInfo:
 
 
 def numeric_version(version: str) -> tuple:
-    """The 4-part number for a version string: X.Y.Z and X.Y.Z-rc.K -> (X, Y, Z, 0); X.Y.(Z+1)-dev.N+sha -> (X, Y, Z, N);
-    X.Y.Z-rc.K.dev.N+sha -> (X, Y, Z, N). A 4-part number cannot order an rc below its release, so an rc and its release
-    share (X, Y, Z, 0); the identity literal, not the PE version, names the pre-release."""
+    """The 4-part number for a version string: X.Y.Z -> (X, Y, Z, 0); X.Y.(Z+1)-dev.N+sha -> (X, Y, Z, N)."""
     match = VERSION.match(version)
     if not match:
-        raise PeVersionError(f"'{version}' is neither X.Y.Z, X.Y.Z-rc.N nor a development version (+sha)")
+        raise PeVersionError(f"'{version}' is neither X.Y.Z nor X.Y.Z-dev.N+sha")
     major, minor, patch = int(match[1]), int(match[2]), int(match[3])
-    if match[4] is not None:
-        parts = (major, minor, patch, int(match[4]))
-    elif match[5] is not None:
+    if match[4] is None:
+        parts = (major, minor, patch, 0)
+    else:
         if patch < 1:
             raise PeVersionError(f"development version '{version}': the patch of X.Y.(Z+1) is at least 1")
-        parts = (major, minor, patch - 1, int(match[5]))
-    else:
-        parts = (major, minor, patch, 0)
+        parts = (major, minor, patch - 1, int(match[4]))
     if max(parts) > 0xFFFF:
         raise PeVersionError(f"version '{version}' has a part above 65535, which a Windows version cannot hold")
     return parts

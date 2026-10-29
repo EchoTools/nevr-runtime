@@ -182,7 +182,7 @@ jobs:
         TAG: ${{ github.event.release.tag_name }}
       run: |
         set -euo pipefail
-        re='^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?)$'
+        re='^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$'
         echo "ref: type=${GITHUB_REF_TYPE:-} name=${GITHUB_REF_NAME:-} event=${EVENT}"
         version=""
         if [ "$EVENT" = release ]; then
@@ -577,7 +577,7 @@ jobs:
         TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref_name }}
       run: |
         set -euo pipefail
-        [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?)$ ]] || { echo "not a vX.Y.Z or vX.Y.Z-rc.N tag: $TAG" >&2; exit 1; }
+        [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]] || { echo "not a vX.Y.Z tag: $TAG" >&2; exit 1; }
         version=${BASH_REMATCH[1]}
         so=build/android-arm64/sentinel/libovrplatformloader.so
         test -s "$so"

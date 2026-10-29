@@ -88,7 +88,7 @@ class ReleaseAlreadyBuiltTest(unittest.TestCase):
         self.assertNotIn("false", result.stdout)
 
     def test_a_tag_that_is_not_vx_y_z_is_an_error_and_gh_is_not_called(self):
-        for tag in ("v5.0.0-beta.1", "v5.0.0-rc.01", "v05.0.0", "v5.00.0", "v5.0.0+x", "v5.0", "5.0.0", "v5.0.0.1"):
+        for tag in ("v5.0.0-beta.1", "v4.0.0-rc.1", "v05.0.0", "v5.00.0", "v5.0.0+x", "v5.0", "5.0.0", "v5.0.0.1"):
             with self.subTest(tag=tag):
                 result = self.run_script(tag=tag, FAKE_ASSETS=self.names())
                 self.assertEqual(result.returncode, 1)

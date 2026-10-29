@@ -12,15 +12,7 @@ NUMBERING RULE (the same on every machine, derived from the version string alone
     versionCode = major * 10^7 + minor * 10^5 + patch * 10^3 + slot
 
     a release       X.Y.Z                  slot 999
-    an rc (#714)    X.Y.Z-rc.K             slot 0      (every rc of a line shares slot 0: see below)
     a development   X.Y.Z-dev.N+<sha>      slot N      (N = commits since the nearest release tag, 0..998)
-    an rc dev       X.Y.Z-rc.K.dev.N+<sha> slot N+1    (N = commits since the rc, 0..997)
-
-  The rc slots sit below the release's 999 and above every development build of the release before it. Two rcs of one
-  line (rc.1, rc.2) share slot 0, and their development builds share slots by distance N, so the code does not order
-  rc.1 before rc.2: moving from a development build of rc.1 (slot N+1) to rc.2 (slot 0) is a downgrade the installer
-  refuses until the older build is removed. Every rc slot is below the release's 999, so moving from an rc to its
-  release is always an upgrade.
 
   The version is the one cmake/set_project_version_from_git.cmake writes into the build (kVersion in
   nevr_build_info.h). That makes the codes follow semantic-version precedence: a development build of X.Y.Z sits
@@ -88,18 +80,12 @@ MAX_VERSION_CODE = 2_100_000_000
 MAX_MAJOR, MAX_MINOR, MAX_PATCH = 209, 99, 99
 RELEASE_SLOT = 999
 MAX_DEV_N = RELEASE_SLOT - 1  # so that slot 999 is only ever a release
-RC_SLOT = 0
-MAX_RC_DEV_N = MAX_DEV_N - 1  # an rc development build takes slot N+1, so its N stops one below a development build's
 # The early warning of field_warnings: development distance N above this, minor or patch above the other.
 WARN_DEV_N = 900
 WARN_MINOR_PATCH = 90
 
-_NUM = r"(?:0|[1-9][0-9]*)"
-_SHA = r"[0-9a-f]{7,40}"
-# X.Y.Z, X.Y.Z-rc.K, X.Y.Z-rc.K.dev.N+sha, X.Y.Z-dev.N+sha (the forms set_project_version_from_git.cmake writes)
-VERSION = re.compile(
-    rf"(?P<major>{_NUM})\.(?P<minor>{_NUM})\.(?P<patch>{_NUM})"
-    rf"(?:-rc\.[1-9][0-9]*(?:\.dev\.(?P<rcdev>{_NUM})\+{_SHA})?|-dev\.(?P<dev>{_NUM})\+{_SHA})?")
+_NUM = r"(0|[1-9][0-9]*)"
+VERSION = re.compile(rf"{_NUM}\.{_NUM}\.{_NUM}(?:-dev\.{_NUM}\+[0-9a-f]{{7,40}})?")
 
 ANDROID_NS = "http://schemas.android.com/apk/res/android"
 RES_ID_VERSION_CODE = 0x0101021B
@@ -133,17 +119,12 @@ class ManifestError(Exception):
 # ---------------------------------------------------------------------------------------------------------------
 
 def _parts(version: str):
-    """(major, minor, patch, kind, N), kind one of release, rc, dev, rcdev; N is the development distance (None for a
-    release or an rc). None when the string is none of the forms above."""
+    """(major, minor, patch, N or None for a release), or None when the string is neither X.Y.Z nor X.Y.Z-dev.N+sha."""
     match = VERSION.fullmatch(version)
     if not match:
         return None
-    major, minor, patch = int(match["major"]), int(match["minor"]), int(match["patch"])
-    if match["rcdev"] is not None:
-        return major, minor, patch, "rcdev", int(match["rcdev"])
-    if match["dev"] is not None:
-        return major, minor, patch, "dev", int(match["dev"])
-    return major, minor, patch, ("rc" if "-rc." in version else "release"), None
+    major, minor, patch = (int(match.group(i)) for i in (1, 2, 3))
+    return major, minor, patch, (None if match.group(4) is None else int(match.group(4)))
 
 
 def field_problems(version: str) -> list:
@@ -152,10 +133,10 @@ def field_problems(version: str) -> list:
     parts = _parts(version)
     if parts is None:
         return []
-    major, minor, patch, kind, n = parts
+    major, minor, patch, n = parts
     fields = [("major", major, MAX_MAJOR), ("minor", minor, MAX_MINOR), ("patch", patch, MAX_PATCH)]
     if n is not None:
-        fields.append(("development distance N", n, MAX_RC_DEV_N if kind == "rcdev" else MAX_DEV_N))
+        fields.append(("development distance N", n, MAX_DEV_N))
     return [f"version '{version}': {name} {value} is above {limit}, the largest the versionCode rule encodes"
             for name, value, limit in fields if value > limit]
 
@@ -166,12 +147,11 @@ def field_warnings(version: str) -> list:
     parts = _parts(version)
     if parts is None:
         return []
-    major, minor, patch, kind, n = parts
+    major, minor, patch, n = parts
     out = []
-    dev_limit = MAX_RC_DEV_N if kind == "rcdev" else MAX_DEV_N
-    if n is not None and WARN_DEV_N < n <= dev_limit:
+    if n is not None and WARN_DEV_N < n <= MAX_DEV_N:
         out.append(f"version '{version}': development distance N {n} is above {WARN_DEV_N}; the versionCode rule "
-                   f"refuses above {dev_limit}")
+                   f"refuses above {MAX_DEV_N}")
     for name, value, limit in (("minor", minor, MAX_MINOR), ("patch", patch, MAX_PATCH)):
         if WARN_MINOR_PATCH < value <= limit:
             out.append(f"version '{version}': {name} {value} is above {WARN_MINOR_PATCH}; the versionCode rule "
@@ -182,9 +162,8 @@ def field_warnings(version: str) -> list:
 def version_code_for(version: str) -> int:
     parts = _parts(version)
     if parts is None:
-        raise VersionError(f"version '{version}' is neither X.Y.Z, X.Y.Z-rc.K, X.Y.Z-dev.N+<sha> nor X.Y.Z-rc.K.dev.N+<sha> "
-                           f"(a release tag, an rc tag, or a development build)")
-    major, minor, patch, kind, n = parts
+        raise VersionError(f"version '{version}' is neither X.Y.Z nor X.Y.Z-dev.N+<sha> (a release tag, or a development build)")
+    major, minor, patch, n = parts
     if major < MIN_MAJOR:
         raise VersionError(f"version '{version}' is below major {MIN_MAJOR}, the major of the last published release "
                            f"(v{LAST_RELEASE}): a version that low is not a release line of this project (a build with no git "
@@ -192,7 +171,7 @@ def version_code_for(version: str) -> int:
     problems = field_problems(version)
     if problems:
         raise VersionError("; ".join(problems))
-    slot = {"release": RELEASE_SLOT, "rc": RC_SLOT, "dev": n, "rcdev": n + 1}[kind]
+    slot = RELEASE_SLOT if n is None else n
     # at most 209*10^7 + 99*10^5 + 99*10^3 + 999 = 2,099,999,999 < MAX_VERSION_CODE, by the limits above
     return major * 10**7 + minor * 10**5 + patch * 10**3 + slot
 

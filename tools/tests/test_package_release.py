@@ -316,7 +316,7 @@ class ReleaseStagesTest(PackageFixture):
         self.assertFalse(self.out.exists())
 
     def test_the_tree_stage_refuses_a_version_that_is_not_x_y_z(self):
-        for bad in ("v5.0.0", "5.0", "5.0.0-rc.01", "5.0.0-dev.1+abc1234", "05.0.0", "5.00.0", "5.0.00", "5.0.0+x"):
+        for bad in ("v5.0.0", "5.0", "5.0.0-rc.1", "5.0.0-dev.1+abc1234", "05.0.0", "5.00.0", "5.0.00", "5.0.0+x"):
             with self.subTest(version=bad):
                 result = self.run_stage("tree", *self.tree_args(**{"--version": bad}))
                 self.assertEqual(result.returncode, 1)

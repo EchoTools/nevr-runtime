@@ -17,12 +17,7 @@ function(nevr_generate_build_info root)
   #     one tag when several sit on a commit (and ignores every rc tag), so a build of the other tag's ref, or of an
   #     rc tag, gets a "-dev." version although it is a release; the tag the CI ref names settles it here.
   # Everything else, including a tag ref that does not point at HEAD, is a development build.
-  # A development version is X.Y.(Z+1)-dev.N+sha, or X.Y.Z-rc.K.dev.N+sha after an rc (set_project_version_from_git.cmake).
-  if(NEVR_BUILD_VERSION MATCHES "-dev\\.|\\.dev\\.")
-    set(_nevr_dev_at 0)
-  else()
-    set(_nevr_dev_at -1)
-  endif()
+  string(FIND "${NEVR_BUILD_VERSION}" "-dev." _nevr_dev_at)
   set(_nevr_release_tag_build FALSE)
   find_package(Git QUIET)
   if(GIT_FOUND AND "$ENV{GITHUB_ACTIONS}" STREQUAL "true" AND "$ENV{GITHUB_REF_TYPE}" STREQUAL "tag"
