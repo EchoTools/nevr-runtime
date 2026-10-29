@@ -239,6 +239,10 @@ sentinel meeting a public libr15 reports the same, so neither can pass as the ot
 `libr15_patch` line carry `extra_rows` (a count) and `extra_rows_sha256` (the file's digest), never the rows. A variant sentinel is
 built with `-DNEVR_LIBR15_EXTRA_ROWS=<file>` (an empty cache variable by default; configure parses the file with the patcher's
 parser and fails on a malformed one) and its APK repacked with `just android-repack-apk ... extra_rows=<file>`, the same file.
+`android-repack-apk` ties the two before it stages anything (`tools/quest_repack_libs.py check-shim-rows`): with `extra_rows` the shim must
+carry that file's sha-256, and without it the shim must not be a variant build. A pair that does not match is refused there, because on
+the device the sentinel would report `build_id_mismatch` and install nothing while the patched library's stubs branch through slots
+only an attached sentinel fills.
 
 **The extra-rows file, format 1.** One UTF-8 JSON object. Every field below is required, an unknown field at any level is a
 refusal, and so is a duplicate key in one object (the patcher reads the file with a parser that sees duplicates). The example

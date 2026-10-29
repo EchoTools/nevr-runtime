@@ -215,6 +215,9 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     # `extra_rows` (docs/adr/0021 section 11) is a file of word-patch rows for a variant build: the patcher and verify-signed
     # both get it. The public recipes (package-dev, release-quest-apk) pass none.
     [ -z "$extra_rows" ] || [ -f "$extra_rows" ] || { echo "extra rows file not found: $extra_rows" >&2; exit 1; }
+    # The shim must be the build for those rows: the patched libr15's ID depends on them, and a shim built for others refuses
+    # the library while its stubs still branch through slots only an attached shim fills (tools/quest_repack_libs.py).
+    python3 -I tools/quest_repack_libs.py check-shim-rows --shim "$shim" ${extra_rows:+--extra-rows "$extra_rows"}
     if [ -z "$patcher" ]; then
         inc=""
         json_trees=("build/{{ preset }}/vcpkg_installed/x64-mingw-static/include" build/mingw-dev/vcpkg_installed/x64-mingw-static/include build/android-dev/vcpkg_installed/arm64-android/include build/android-arm64/vcpkg_installed/arm64-android/include build/quest-host-vcpkg/x64-linux/include)

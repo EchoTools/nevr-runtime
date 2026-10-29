@@ -21,6 +21,14 @@ named like a game library would silently take that library's place and the signe
       entry are printed. A signed libr15 that is the store's bytes, a patcher run on another input, a missing entry, a
       patcher that fails or writes no file, and a patcher whose output is the store file are each a named problem.
 
+  check-shim-rows --shim SHIM [--extra-rows FILE]
+      Refuses (exit 1) a shim that was not built for the rows the library is patched with (docs/adr/0021 section 11). The
+      patched libr15's build ID depends on the extra rows; a shim built for other rows reports `build_id_mismatch` and
+      installs nothing, while the patched library's stubs branch through slots that only an attached shim fills, so the
+      game would fault on the first patched call. With --extra-rows the shim must carry the file's sha-256 (the
+      `kSha256` string the variant build embeds); without it the shim must not be a variant build (it must not carry the
+      variant's `libr15_extra_rows` log event name).
+
   check-plugin-build-ids --apk STORE_APK --plugin PLUGIN_FILE
       Refuses (exit 1) a plugin the Quest loader would refuse for its build IDs (src/quest/plugin/plugin_image.h):
       one with no NEVR_DECLARE_SUPPORTED_BUILD_IDS note, or whose list does not hold the GNU build ID of the store
@@ -91,6 +99,29 @@ def check_plugin_name(apk: pathlib.Path, plugin: pathlib.Path) -> list[str]:
         return plugin_name_collisions(lib_entries(archive), plugin.name)
 
 
+# The event name only a variant build (NEVR_LIBR15_EXTRA_ROWS) compiles in: sentinel/libr15_identity.cpp logs it when the
+# embedded rows are unparsable. A NUL-bounded string in the shim's read-only data.
+VARIANT_MARKER = b"\0libr15_extra_rows\0"
+
+
+def shim_rows_problems(shim: pathlib.Path, extra_rows: pathlib.Path | None) -> list[str]:
+    """The reasons `shim` was not built for the rows the library is patched with; empty when it was."""
+    try:
+        data = shim.read_bytes()
+    except OSError as error:
+        return [f"{shim}: cannot be read: {error}"]
+    if extra_rows is None:
+        if VARIANT_MARKER in data:
+            return [f"{shim.name} is a variant build (it carries extra rows) but no extra_rows file was given, so the library "
+                    "would be patched without them and the shim would refuse it (build_id_mismatch)"]
+        return []
+    digest = file_digest(extra_rows)
+    if digest.encode("ascii") + b"\0" not in data:
+        return [f"{shim.name} was not built with {extra_rows.name} (sha-256 {digest}): rebuild it with "
+                "-DNEVR_LIBR15_EXTRA_ROWS=<the same file>, else it refuses the patched library (build_id_mismatch)"]
+    return []
+
+
 def patched_digest(archive: zipfile.ZipFile, patcher: pathlib.Path, extra_rows: pathlib.Path | None,
                    scratch: pathlib.Path | None, digests: dict[str, str], problems: list[str]) -> str | None:
     """The sha-256 of the patcher's output for the store APK's libr15.so, or None with the reason in `problems`.
@@ -104,7 +135,7 @@ def patched_digest(archive: zipfile.ZipFile, patcher: pathlib.Path, extra_rows: 
             while chunk := source.read(_CHUNK):
                 sink.write(chunk)
         digests["store"] = file_digest(stock)
-        command = [str(patcher), "--stock", str(stock), "--out", str(out), "--report", str(report)]
+        command = [str(patcher.resolve()), "--stock", str(stock), "--out", str(out), "--report", str(report)]
         if extra_rows is not None:
             command += ["--extra-rows", str(extra_rows)]
         try:
@@ -223,6 +254,9 @@ def main(argv: list[str]) -> int:
     name = sub.add_parser("check-plugin-name")
     name.add_argument("--apk", type=pathlib.Path, required=True)
     name.add_argument("--plugin", type=pathlib.Path, required=True)
+    rows = sub.add_parser("check-shim-rows")
+    rows.add_argument("--shim", type=pathlib.Path, required=True)
+    rows.add_argument("--extra-rows", type=pathlib.Path, default=None)
     ids = sub.add_parser("check-plugin-build-ids")
     ids.add_argument("--apk", type=pathlib.Path, required=True)
     ids.add_argument("--plugin", type=pathlib.Path, required=True)
@@ -236,6 +270,8 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     if args.command == "check-plugin-name":
         problems = [f"plugin {args.plugin.name} would replace {c}" for c in check_plugin_name(args.apk, args.plugin)]
+    elif args.command == "check-shim-rows":
+        problems = shim_rows_problems(args.shim, args.extra_rows)
     elif args.command == "check-plugin-build-ids":
         problems = check_plugin_build_ids(args.apk, args.plugin)
     else:

@@ -510,6 +510,83 @@ class VerifySignedTest(unittest.TestCase):
         self.assertIn("does not hold the patcher's output", problem)
 
 
+    def test_a_patcher_given_as_a_dot_slash_path_is_run_as_that_file_not_looked_up_on_path(self):
+        # pathlib drops the leading "./" when it turns the argument back into text, and a name with no slash is searched on
+        # PATH: the file named must be the file run, from any directory the command is started in
+        here = pathlib.Path.cwd()
+        os.chdir(self.patcher.parent)
+        self.addCleanup(os.chdir, here)
+        self.patcher = pathlib.Path("./" + self.patcher.name)
+        self.assertEqual(self.run_verify(), [])
+        self.assertEqual(len(recorded_runs(self.patcher.resolve())), 1)
+
+
+class ShimRowsTest(unittest.TestCase):
+    """`check-shim-rows`: the shim is the build for the rows the library is patched with (ADR 0021 section 11)."""
+
+    ROWS = b'{"format": 1}\n'
+    OTHER_ROWS = b'{"format": 2}\n'
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="quest-repack-shim-rows-", dir=work_root.test_scratch())
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = pathlib.Path(self._tmp.name)
+        self.rows = self.tmp / "rows.json"
+        self.rows.write_bytes(self.ROWS)
+        self.other = self.tmp / "other.json"
+        self.other.write_bytes(self.OTHER_ROWS)
+
+    def shim(self, *parts: bytes) -> pathlib.Path:
+        path = self.tmp / "libovrplatformloader.so"
+        path.write_bytes(b"\x7fELF public rodata\0" + b"".join(parts))
+        return path
+
+    @staticmethod
+    def sha(data: bytes) -> bytes:
+        return hashlib.sha256(data).hexdigest().encode() + b"\0"
+
+    def run_cli(self, shim: pathlib.Path, rows: pathlib.Path | None):
+        command = [sys.executable, "-I", str(REPO / "tools" / "quest_repack_libs.py"), "check-shim-rows", "--shim", str(shim)]
+        if rows is not None:
+            command += ["--extra-rows", str(rows)]
+        return subprocess.run(command, capture_output=True, text=True)
+
+    def test_a_public_shim_with_no_rows_passes(self):
+        self.assertEqual(libs.shim_rows_problems(self.shim(), None), [])
+        self.assertEqual(self.run_cli(self.shim(), None).returncode, 0)
+
+    def test_a_variant_shim_with_no_rows_is_refused(self):
+        shim = self.shim(b"\0libr15_extra_rows\0", self.sha(self.ROWS))
+        [problem] = libs.shim_rows_problems(shim, None)
+        self.assertIn("variant build", problem)
+        result = self.run_cli(shim, None)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("build_id_mismatch", result.stderr)
+
+    def test_a_shim_built_with_the_rows_file_passes(self):
+        shim = self.shim(b"\0libr15_extra_rows\0", self.sha(self.ROWS))
+        self.assertEqual(libs.shim_rows_problems(shim, self.rows), [])
+        self.assertEqual(self.run_cli(shim, self.rows).returncode, 0)
+
+    def test_a_public_shim_with_a_rows_file_is_refused(self):
+        [problem] = libs.shim_rows_problems(self.shim(), self.rows)
+        self.assertIn("was not built with rows.json", problem)
+        self.assertIn(hashlib.sha256(self.ROWS).hexdigest(), problem)
+        self.assertEqual(self.run_cli(self.shim(), self.rows).returncode, 1)
+
+    def test_a_shim_built_with_other_rows_is_refused(self):
+        shim = self.shim(b"\0libr15_extra_rows\0", self.sha(self.OTHER_ROWS))
+        self.assertEqual(len(libs.shim_rows_problems(shim, self.rows)), 1)
+
+    def test_only_the_whole_digest_counts(self):
+        # a digest cut short (no terminating NUL where the string ends) is not the embedded kSha256
+        shim = self.shim(hashlib.sha256(self.ROWS).hexdigest().encode()[:-1] + b"\0")
+        self.assertEqual(len(libs.shim_rows_problems(shim, self.rows)), 1)
+
+    def test_a_shim_that_cannot_be_read_is_refused(self):
+        self.assertEqual(self.run_cli(self.tmp / "missing.so", None).returncode, 1)
+
+
 @unittest.skipIf(MISSING or AARCH64_MISSING, f"needs {', '.join(MISSING + AARCH64_MISSING)}")
 class RepackWithAPluginTest(RepackFixture):
     """`just android-repack-apk` with plugin=, end to end."""
@@ -650,12 +727,34 @@ class RepackPatchesLibr15Test(RepackFixture):
         self.make_inputs(DEV_VERSION)
         rows = self.tmp / "rows.json"
         rows.write_text("{}")
+        with self.shim.open("ab") as shim:  # the variant build embeds the file's digest (kSha256)
+            shim.write(b"\0libr15_extra_rows\0" + hashlib.sha256(rows.read_bytes()).hexdigest().encode() + b"\0")
         result = self.run_recipe("", "", str(rows), str(self.patcher))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         runs = recorded_runs(self.patcher)
         self.assertEqual(len(runs), 2)
         for argv in runs:
             self.assertEqual(argv[argv.index("--extra-rows") + 1], str(rows))
+
+    def test_a_shim_not_built_for_the_extra_rows_is_refused_before_anything_is_staged(self):
+        self.make_inputs(DEV_VERSION)
+        rows = self.tmp / "rows.json"
+        rows.write_text("{}")  # make_inputs' shim carries no digest of it
+        result = self.run_recipe("", "", str(rows), str(self.patcher))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("was not built with rows.json", result.stderr)
+        self.assertEqual(recorded_runs(self.patcher), [])
+        self.assertFalse(self.signed.exists())
+
+    def test_a_variant_shim_without_an_extra_rows_file_is_refused_before_anything_is_staged(self):
+        self.make_inputs(DEV_VERSION)
+        with self.shim.open("ab") as shim:
+            shim.write(b"\0libr15_extra_rows\0")
+        result = self.run_recipe("", "", "", str(self.patcher))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("is a variant build", result.stderr)
+        self.assertEqual(recorded_runs(self.patcher), [])
+        self.assertFalse(self.signed.exists())
 
     def test_an_extra_rows_file_that_is_not_there_is_refused_before_anything_is_staged(self):
         self.make_inputs(DEV_VERSION)
