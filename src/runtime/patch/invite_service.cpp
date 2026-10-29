@@ -1,6 +1,7 @@
 #include "runtime/patch/invite_service.h"
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -18,15 +19,23 @@ std::function<void(nevr_invite::LogLevel, const std::string&)> g_log;
 bool g_started = false;
 bool g_shutdown = false;  // Shutdown ran and no Start since
 std::atomic<bool> g_active{false};  // on and not shut down; read without the lock by the per-frame applier
+std::atomic<bool> g_answers_pending{false};  // an answer waits in the worker (AnswersPending); read without the lock
+std::atomic<std::uint64_t> g_lock_takes{0};  // every take of g_m, counted for the host tests (ServiceLockTakesForTest)
 
 void Say(nevr_invite::LogLevel level, const std::string& line) {
   if (g_log) g_log(level, line);
 }
 
+// Every take of g_m goes through here, so the count is the number of times the service lock was taken.
+std::lock_guard<std::mutex> LockService() {
+  g_lock_takes.fetch_add(1, std::memory_order_relaxed);
+  return std::lock_guard<std::mutex>(g_m);
+}
+
 }  // namespace
 
 void Start(Settings settings) {
-  std::lock_guard<std::mutex> lock(g_m);
+  auto lock = LockService();
   g_log = settings.log;
   if (g_started) {
     Say(nevr_invite::LogLevel::Warning, "[NEVR.INVITE] service start ignored reason=already_started");
@@ -80,7 +89,7 @@ void Start(Settings settings) {
 bool Active() { return g_active.load(std::memory_order_acquire); }
 
 nevr_invite::Submit Submit(const nevr_invite::Plan& plan) {
-  std::lock_guard<std::mutex> lock(g_m);
+  auto lock = LockService();
   if (!g_worker) {
     if (!g_shutdown) return nevr_invite::Submit::NotConfigured;  // Start has not run: there is no log to write to either
     Say(nevr_invite::LogLevel::Info, nevr_invite::NotSentLine(nevr_invite::Skip::Stopped, plan.code_len));
@@ -90,14 +99,14 @@ nevr_invite::Submit Submit(const nevr_invite::Plan& plan) {
 }
 
 std::vector<nevr_invite::Answer> TakeAnswers() {
-  std::lock_guard<std::mutex> lock(g_m);
+  auto lock = LockService();
   return g_worker ? g_worker->TakeAnswers() : std::vector<nevr_invite::Answer>();
 }
 
 std::vector<nevr_invite::Answer> WaitForAnswers(std::chrono::milliseconds timeout) {
   nevr_invite::Worker* worker = nullptr;
   {
-    std::lock_guard<std::mutex> lock(g_m);
+    auto lock = LockService();
     worker = g_worker.get();
   }
   return worker != nullptr ? worker->WaitForAnswers(timeout) : std::vector<nevr_invite::Answer>();
@@ -107,7 +116,7 @@ void Shutdown() {
   std::unique_ptr<nevr_invite::Worker> worker;
   std::unique_ptr<nevr_invite::CurlTransport> transport;
   {
-    std::lock_guard<std::mutex> lock(g_m);
+    auto lock = LockService();
     g_active.store(false, std::memory_order_release);
     if (g_transport) g_transport->Abort();  // a request in flight returns at once instead of waiting out its timeout
     worker = std::move(g_worker);
@@ -117,5 +126,18 @@ void Shutdown() {
   }
   if (worker) worker->Stop();  // joins; the transport outlives it
 }
+
+bool AnswersPending() { return g_answers_pending.load(std::memory_order_acquire); }
+
+bool WaitForAnswerPendingForTest(std::chrono::milliseconds timeout) {
+  nevr_invite::Worker* worker = nullptr;
+  {
+    auto lock = LockService();
+    worker = g_worker.get();
+  }
+  return worker != nullptr && worker->WaitPendingForTest(timeout);
+}
+
+std::uint64_t ServiceLockTakesForTest() { return g_lock_takes.load(std::memory_order_relaxed); }
 
 }  // namespace nevr_invite_service
