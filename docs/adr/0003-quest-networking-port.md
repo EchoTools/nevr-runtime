@@ -249,9 +249,11 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   `0x11fb5cc`). So the Update hook runs up to four times per loop iteration. That the login-failure callbacks run inside those provider and
   broadcaster updates is inferred from the call chain, not traced instruction by instruction; the
   hooks' writer flag does not rely on it.
-- No hook takes a lock. It logs only at a decision or a change (`login_prompt_select`,
+- The hook's own code takes no lock. It logs only at a decision or a change (`login_prompt_select`,
   `login_prompt_fallback`, `login_prompt_netgame_state`) and at the page-enter line, which is
-  rate-limited. Its seventeen counters are `login_prompt_text_shown`, `_text_refreshed`, `_text_kept`,
+  rate-limited. Each of those lines goes through `sentinel::Emit`, which takes `g_mutex` and writes the
+  disk record synchronously (`src/quest/sentinel/sentinel_log.cpp:274`, the lock; `:285`, the write).
+  Its seventeen counters are `login_prompt_text_shown`, `_text_refreshed`, `_text_kept`,
   `_text_not_local`, `_board_busy`, `_block_not_ours`, the three thunks' fault counters,
   `_error_page_dropped`, `_logging_in_page_dropped`, `_page_passed_armed`, `_error_resent`,
   `_error_resend_unavailable`, `_login_restarted`, `_login_restart_unavailable` and `_select_sent`;

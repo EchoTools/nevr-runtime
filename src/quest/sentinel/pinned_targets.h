@@ -516,9 +516,10 @@ using BeginLogInSig = void(CR15NetGameOpaque* self);
 // return value; ReVault lists it at 0x18fb0f8, its addresses for this module being 0x100000 above the loaded
 // ones). QuitOnError calls it as (space, 0x60ba106e8f93f286, 0xffffffffffff, ~0, 1). The login prompt hook sends
 // evt_btn_clicked (kRetrySelectEvent) with the key of the login-failed page's btn_exit branch (kLoginPageExitKey) and
-// the actor kAllActors, once it has called BeginLogIn. That key is not RETRY's (issue #1391, follow-up RE: the
-// branch's thread body is empty). Whether the send reaches the page script is not established (#1391). Reached like
-// QuitOnError: build ID, first four instructions, base + address.
+// the actor kAllActors. It sends this select alone: BeginLogIn runs only in the hook's fallback, when the select is
+// unavailable or has no effect 2 s after it (kRetryFallbackNs, login_prompt_hook.cpp). That key is not RETRY's (issue
+// #1391, follow-up RE: the branch's thread body is empty). Whether the send reaches the page script is not established
+// (#1391). Reached like QuitOnError: build ID, first four instructions, base + address.
 // sub sp, sp, #0x40; mov x8, #-1; stp x8, x30, [sp, #0x28]; ldr x8, [x0, #0x58].
 inline constexpr std::uint64_t kSendComponentEventVaddr = 0x17fb0f8;
 inline constexpr std::uint32_t kSendComponentEventCode[4] = {0xd10103ff, 0x92800008, 0xa902fbe8, 0xf9402c08};
