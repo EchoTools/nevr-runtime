@@ -44,7 +44,7 @@ Three writers in the tree already write fields as keys, each with a header of it
 
 ### Measured
 
-Counts exclude the frozen legacy tree (deleted in #1270) and count call sites, not comments, declarations or definitions.
+Counts cover the live sources and count call sites, not comments, declarations or definitions.
 
 | What | Count |
 | --- | --- |
@@ -60,13 +60,13 @@ Counts exclude the frozen legacy tree (deleted in #1270) and count call sites, n
 | exception text in a record | 3 calls pass `what()` (`src/runtime/patch/resource_override.cpp`, `src/runtime/patch/invite_wizard_hook.cpp`, `src/runtime/patch/invite_choice_hook.cpp`); Rule 4 names callback exception text |
 | plugins | `PluginLog`, `PluginLogWarning`, `PluginLogError`, `PluginLogDebug`, `PluginLogFields`: 88 calls |
 | Quest | `LogFields`/`LogFieldList` 235 calls in 40 files; 74 calls to local `Log` functions: members that forward a text line to the sink they are given (`src/quest/auth/session.cpp` 35, `src/quest/net/loopback_game_server.cpp` 19, `src/quest/net/remote_ws.cpp` 6) and the autopilot plugin's helper that calls the host's plugin log (`src/quest/plugins/autopilot/plugin.cpp` 14); 9 `__android_log_*` calls outside tests and stubs |
-| tests | 256 uses of text-search helpers (`TestLogContains` 165, `LogLinesContaining` 38, `TestLogContainsAtLevel` 29, `LogContains` 15, `WaitForLogLines` 9) in 3 files; 5 test files link a `Log` of their own; a test stub defines `FormatJsonLogEntry` |
+| tests | 256 uses of text-search helpers (`TestLogContains` 165, `LogLinesContaining` 38, `TestLogContainsAtLevel` 29, `LogContains` 15, `WaitForLogLines` 9) in 3 files; 5 test files link a `Log` of their own |
 
 The level split is reproduced exactly by:
 
 ```sh
 rg --pcre2 -U -o --no-filename '(?<![A-Za-z0-9_.>:])Log\(\s*EchoVR::LogLevel::(Debug|Info|Warning|Error)\b' -r '$1' \
-  -g '!src/legacy/**' -g '!src/quest/**' -g '!src/runtime/tests/**' -g '!src/runtime/compat/session_router.cpp' \
+  -g '!src/quest/**' -g '!src/runtime/tests/**' -g '!src/runtime/compat/session_router.cpp' \
   src plugins | sort | uniq -c
 ```
 
@@ -335,7 +335,7 @@ statements come from reading the code; neither the mojibake nor the fix has been
 
 ### 8. Plugins
 
-The ABI does not change (`NevrLogFn`, `NevrLogField` in `sdk/include/nevr/plugin_interface.h`; `NEVR_PLUGIN_API_VERSION` 8).
+The ABI does not change (`NevrLogFn`, `NevrLogField` in `src/extension/plugin_interface.h`; `NEVR_PLUGIN_API_VERSION` 8).
 `HostPluginLog` (`src/runtime/ext/plugin_loader.cpp`) writes a record with `tag` `NEVR.PLUGIN`, `plugin` (set by the host,
 so one plugin cannot write as another, Rule 15), `event` `plugin_line`, the plugin's message as `msg`, and each
 `NevrLogField` as its own key with a string value: the ABI carries strings, and reading `"5"` as a number would let one key
@@ -351,9 +351,7 @@ Each stage is pull requests with their own issues; a call site and every reader 
    code page. The printf `Log()` is routed into it: its formatted text is `msg` byte for byte, `tag` is read from the text,
    `event` is `text`, `msg` stays the last key. Every reader of section "Who reads a record" keeps working, because the
    text it matches is unchanged and still on one line. The shadow `Log` in `src/runtime/server/messages.cpp` goes (its 10
-   calls use the global one, so they reach the boot sink). `FormatJsonLogEntry` (`src/core/logging.h`,
-   `src/core/logging.cpp`), which no production code calls, is deleted with the test stub that defines it in
-   `src/runtime/tests/test_behavioral.cpp`; the structured sink replaces it. The printf form gains the format attribute.
+   calls use the global one, so they reach the boot sink). The structured sink is the only JSON writer. The printf form gains the format attribute.
    A ceiling check in `tools/tests/` holds the printf call count and fails a pull request that raises it, so new code uses
    the structured form; each migration lowers it.
 2. **Boot, bridge and login, config, fatal**, in that order. Boot: `src/runtime/lifecycle/initialize.cpp` and the other
@@ -372,7 +370,7 @@ Each stage is pull requests with their own issues; a call site and every reader 
    `AServerGetsNoLobbyRecordFromTheSocialObserver` change in that pull request.
 4. **The end state.** No printf `Log()` and no `TeeFprintf` remain, and both are deleted; a game line's `msg` drops the
    `[EVR] ` prefix, which `tag` carries. The ceiling check becomes the sensor that forbids the old form: no
-   `Log(EchoVR::LogLevel` call outside the legacy tree (deleted in #1270), no `TeeFprintf`, and no `fprintf` or `vfprintf` to stderr in
+   `Log(EchoVR::LogLevel` call, no `TeeFprintf`, and no `fprintf` or `vfprintf` to stderr in
    `src/runtime`, `src/core` and `src/modules` outside tests, the console renderer and the crash path. It runs in
    `tools/tests/`, so every pull request runs it, and a `just verify` sensor names it under the next free N-number, built as N93, N99 and
    N111 require (two stages, comments stripped). D1 is re-pointed at the one definition of the structured `Log`.

@@ -413,9 +413,7 @@ and put the whole line in `msg`, and our lines reach that file through the
 game's logger (`EchoVR::WriteLog`, captured by the filter's `CLog::PrintfImpl`
 hook). ADR 0027's first stage adds the header keys and writes our records
 without the game's logger; each migration then moves a call's fields out of
-`msg`. `FormatJsonLogEntry` (`src/core/logging.h`, `src/core/logging.cpp`),
-which no production code calls, is not this format, and it is deleted when the
-structured sink lands.
+`msg`.
 
 ### Rule 8: State transitions log FROM -> TO
 

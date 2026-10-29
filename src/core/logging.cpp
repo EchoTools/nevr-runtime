@@ -1,33 +1,10 @@
 #include "logging.h"
 
-#include <nlohmann/json.hpp>
-
 #include <atomic>
-#include <iomanip>
-#include <sstream>
 
 #include "abi/echovr.h"
 #include "abi/echovr_functions.h"
 #include "globals.h"
-
-// Get ISO8601 timestamp in UTC
-std::string GetISO8601Timestamp() {
-  auto now = std::chrono::system_clock::now();
-  auto now_time_t = std::chrono::system_clock::to_time_t(now);
-  auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
-
-  std::tm tm_utc;
-#ifdef _WIN32
-  gmtime_s(&tm_utc, &now_time_t);
-#else
-  gmtime_r(&now_time_t, &tm_utc);
-#endif
-
-  std::ostringstream oss;
-  oss << std::put_time(&tm_utc, "%Y-%m-%dT%H:%M:%S") << '.' << std::setfill('0') << std::setw(3) << now_ms.count()
-      << 'Z';
-  return oss.str();
-}
 
 // N80: per-process run ID = PID + process creation time, so every writer in the
 // process derives the same value independently. Computed once; the benign race on
@@ -67,22 +44,8 @@ const char* GetLogLevelString(EchoVR::LogLevel level) {
   }
 }
 
-// Format a JSON log entry similar to zap.Logger
-std::string FormatJsonLogEntry(EchoVR::LogLevel level, const char* message, const char* caller) {
-  nlohmann::json root;
-  root["ts"] = GetISO8601Timestamp();
-  root["level"] = GetLogLevelString(level);
-  root["msg"] = message;
-
-  if (caller != nullptr) {
-    root["caller"] = caller;
-  }
-
-  return root.dump();
-}
-
 // Log filtering, timestamps, and noise suppression are handled by the
-// log_filter plugin via the CLog::PrintfImpl hook, not here.
+// built-in filter (runtime/log/builtin_filter.cpp) via the CLog::PrintfImpl hook, not here.
 
 // Set from nevr_boot_log_tee::Init() to Close(); read by every Log() call on any thread.
 static std::atomic<BootLogSink> g_bootLogSink{nullptr};

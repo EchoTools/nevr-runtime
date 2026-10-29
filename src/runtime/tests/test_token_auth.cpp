@@ -411,8 +411,8 @@ TEST(DevicePollResponse, PrefersRfcAccessTokenOverDeprecatedToken) {
   EXPECT_EQ(*response.refresh_token_expires_in, 2592000U);
 }
 
-// Production nakama is the pre-f945f631d build until it is redeployed, and it
-// sends neither access_token nor refresh_token_expires_in. A client that reads
+// A nakama older than 80578f3eb (EchoTools/nakama) sends neither access_token
+// nor refresh_token_expires_in. A client that reads
 // only the RFC names authenticates against nothing there.
 TEST(DevicePollResponse, LegacyServerWithoutRfcFieldsStillAuthenticates) {
   const nevr_token_auth::DevicePollResponse response = nevr_token_auth::ParseDevicePollResponse(
@@ -475,14 +475,12 @@ TEST(RefreshTokenExpiry, ServerValueWinsAndFallbackOnlyFillsSilence) {
             ResolveRefreshTokenExpirySec(kNow, std::nullopt));
 }
 
-// The refresh request body is built by nevr::auth::BuildRefreshBody (core/auth_refresh.h);
-// both field names carry one value. A refresh_token-only body is rejected by a
-// pre-f945f631d nakama with "invalid payload: token required".
-TEST(RefreshRequestBody, CarriesBothFieldNamesWithTheSameValue) {
+// The refresh request body is built by nevr::auth::BuildRefreshBody (core/auth_refresh.h):
+// the RFC 6749 field alone (EchoTools/nakama 80578f3eb reads it).
+TEST(RefreshRequestBody, CarriesOnlyTheRfcFieldName) {
   const nlohmann::json body = nlohmann::json::parse(nevr::auth::BuildRefreshBody("rt"));
 
-  EXPECT_EQ(body.value("refresh_token", ""), "rt");
-  EXPECT_EQ(body.value("token", ""), "rt");
+  EXPECT_EQ(body, nlohmann::json({{"refresh_token", "rt"}}));
 }
 
 // Both ways of obtaining an access token must agree about when it dies. The

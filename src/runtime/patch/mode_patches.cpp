@@ -160,7 +160,7 @@ VOID PatchEnableHeadless(PVOID pGame) {
         "The engine-flags offset or mask no longer matches this build of echovr.exe.");
   }
 
-  // No WriteLog hook here — the log_filter plugin owns CLog::PrintfImpl.
+  // No WriteLog hook here — the built-in filter (runtime/log/builtin_filter.cpp) hooks CLog::PrintfImpl.
 
   // Skip renderer initialization
   const BYTE rendererPatch[] = {0xA8, 0x00};  // TEST al, 0 (always false)
