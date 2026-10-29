@@ -13,7 +13,14 @@
 //   3  RegisterCounters              every counter of every hook that will be installed (clock, redirect,
 //                                    dlopen, login, social, login prompt), BEFORE ...
 //   4  StartReporter                 ... the single StartReporter (the reporter refuses a later register)
-//      RunEarlyPlugins               the `early` plugin entries (#438): after the reporter started, before the clock hook;
+//      AttachLibR15                  the build-time libr15 patch (docs/adr/0021): checks the live libr15 against the patch
+//                                    table, builds the trampolines, fills every slot and registers the plugin identity and
+//                                    the GOT backend's build-ID alias (integration/libr15_attach_step.h). The first libr15
+//                                    step: right after the reporter started (so its lines reach the same sinks) and BEFORE
+//                                    the early plugin pass (a plugin's build ID is decided at Load time, from what Attach
+//                                    recorded), the clock hook and every other libr15 hook. Every launch, no feature, no
+//                                    counters
+//      RunEarlyPlugins               the `early` plugin entries (#438): after Attach, before the clock hook;
 //                                    skipped when the plan has none
 //   5  InstallClockHook              the always-on proof hook
 //   6  StartTokenAuth                needed by the bridge (the remote JWT) and the login rewrite
@@ -57,10 +64,10 @@
 //                                    submit) and a poller thread, on every launch, right after the texture-quality hook (it
 //                                    reports that hook's level and source) and before the hardware dump (which then leaves
 //                                    the slots both hook to this step); no counters.
-//      InstallCreditsText            the project section of the CREDITS page (#970): two ADRP+ADD pairs in libr15 (the
-//                                    CREDITS component's two cursor stores), right after the texture hook; no counters.
-//                                    The production step writes nothing and succeeds: a libr15 code page cannot be
-//                                    written on the current Horizon policy (#1127), so it waits on #1132.
+//      InstallCreditsText            the project section of the CREDITS page (#970): the credits slot of the patched libr15
+//                                    (ADR 0021 section 8) gets a buffer of the build's block and the game's own text, right
+//                                    after the texture hook; no counters. A data store: no code page is written. Refused
+//                                    (the step reports failure) unless Attach verified libr15; the game then shows its own text.
 //      InstallMenuCards              the CREATE GAME and JOIN VIA CODE cards on the main menu (#966): one libr15 data slot
 //                                    (CResourceManager::AsyncResourceIOCallback, the streaming reader's read-finished
 //                                    callback), on every launch, right after the credits step; no counters. A data write:
@@ -73,6 +80,14 @@
 //                                    decides whether the (2, 2) the game asks for is rewritten to (4, 4).
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):
+//   Attach not verified     -> NOTHING is gated on it by the sequence: AttachLibR15 reports failure with the reason token
+//                              (libr15_not_patched for the stock file, build_id_mismatch for any other, module_not_loaded,
+//                              no_build_id) and every later step runs. What each libr15 consumer then does is its own rule:
+//                              the GOT-only hooks carry the patched build ID in their target (pinned_targets.h), so on a
+//                              stock libr15 each refuses by itself (kBuildIdMismatch) and the game runs unmodified; the five
+//                              inline rows (lobby_full x3, ui_texture, splash_skip) and the credits slot refuse as
+//                              not_verified (RowActivation and CreditsSlot read Attach's record). A row or trampoline
+//                              failure inside Attach ends the process itself (ADR 0021 sections 6 and 7); it does not come back.
 //   token auth fails        -> the login prompt (token auth is what publishes it), bridge, login, social
 //                              and the redirect-through-the-bridge are not started
 //   bridge fails            -> login, social and the redirect-through-the-bridge are not started
@@ -128,6 +143,7 @@ enum class StepId : std::uint8_t {
   kRegisterTextureQualityCounters,
   kRegisterClockLevelsCounters,
   kStartReporter,
+  kAttachLibR15,
   kRunEarlyPlugins,
   kInstallClockHook,
   kInstallObbSkip,
@@ -201,6 +217,10 @@ class Steps {
   // The clock-level hook's counters (#928), registered on every launch.
   virtual bool RegisterClockLevelsCounters() = 0;
   virtual bool StartReporter() = 0;
+  // The build-time libr15 patch (ADR 0021): Attach, then the plugin identity and the build-ID alias. True when Attach verified
+  // libr15; false, with the reason token as the step's detail, for any other result. It is the first libr15 step and runs
+  // every launch.
+  virtual bool AttachLibR15() = 0;
   // The early plugin pass (#438); the reporter is running. True when the pass ran.
   virtual bool RunEarlyPlugins() = 0;
   // Ends every plugin entry still pending as `not_started` with `reason` (a plugin_plan.h reason token).
@@ -230,7 +250,8 @@ class Steps {
   // The render-configuration log (#1139): five libr15 slots and the poller thread, on every launch, no counters. `choice` is
   // the texture-quality level and where it came from (the line says what set the eye size).
   virtual bool InstallRenderConfig(const nevr_quest::TextureChoice& choice) = 0;
-  // The project section of the CREDITS page (#970): two libr15 ADRP+ADD pairs, on every launch, no counters.
+  // The project section of the CREDITS page (#970): the patched libr15's credits slot, on every launch, no counters. True when
+  // the slot holds the buffer.
   virtual bool InstallCreditsText() = 0;
   // The CREATE GAME and JOIN VIA CODE cards on the main menu (#966): one libr15 data slot (the streaming reader's read-finished
   // callback), on every launch, no counters.

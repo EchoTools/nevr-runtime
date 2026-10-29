@@ -224,7 +224,7 @@ bool ReadInt32Pair(const sentinel::ElfImage& image, std::uint64_t vaddr, std::in
 bool ReadGlobalsProduction(Globals* out) noexcept {
   sentinel::ElfImage image;
   if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) return false;
-  return ReadGlobalsFrom(image, sentinel::pinned::kLibR15BuildId, out);
+  return ReadGlobalsFrom(image, sentinel::pinned::LibR15PatchedBuildId(), out);
 }
 
 void ReadDeviceProduction(Device* out) noexcept {

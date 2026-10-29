@@ -11,6 +11,7 @@ const char* StageForStep(const char* step) noexcept {
       {"start_token_auth", "token_auth_state"},  {"start_bridge", "router_listening"},
       {"install_redirect", "redirect_installed"}, {"install_social", "social_hook_installed"},
       {"install_dlopen_hook", "dlopen_hook_installed"},  {"install_login_prompt", "login_prompt_hook_installed"},
+      {"attach_libr15", "libr15_attach"},
   };
   for (const Map& m : kMap) {
     if (std::strcmp(m.step, step) == 0) return m.stage;

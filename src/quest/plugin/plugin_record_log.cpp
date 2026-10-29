@@ -11,6 +11,8 @@ void LogLoadRecord(const LoadRecord& record) {
       {"sha256", record.sha256.c_str()},
       {"plugin_build_id", record.pluginBuildId.c_str()},
       {"game_build_id", record.gameBuildId.c_str()},
+      {"plugin_view_build_id", record.pluginViewBuildId.c_str()},
+      {"libr15_patched", record.libr15Patched ? 1 : 0},
       {"phase", PhaseName(record.phase)},
       {"outcome", OutcomeName(record.outcome)},
       {"reason", record.reason.empty() ? "ok" : record.reason.c_str()},

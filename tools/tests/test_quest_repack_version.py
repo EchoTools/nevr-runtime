@@ -28,6 +28,7 @@ sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "tools" / "tests"))
 import work_root  # noqa: E402
 import axml_fixtures as fx  # noqa: E402
+from quest_patcher_standin import MARKER, make_standin  # noqa: E402
 from test_quest_keystore import ALIAS, FAKE_PASS, KS_ENTRY, PASSPHRASE, PASS_ENTRY  # noqa: E402
 
 JUSTFILE = REPO / "justfile"
@@ -95,6 +96,9 @@ class RepackFixture(unittest.TestCase):
         (store / PASS_ENTRY.replace("/", "__")).write_text(PASSPHRASE + "\n")
         self.env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", FAKE_PASS_DIR=str(store),
                         XDG_RUNTIME_DIR=str(run))
+        # The real libr15 patcher refuses any file but the store's, so the recipe is given a stand-in that appends a marker
+        # (docs/adr/0021 section 9: quest_patcher_standin.py); the recipe's `patcher` parameter is for this.
+        self.patcher = make_standin(self.tmp / "patcher")
 
     def make_inputs(self, version: str, *, manifest: bytes = None, header: bool = True, shim_version: str = None):
         """A store-like APK (versionCode 4987566, as the store's), the shim and its build info."""
@@ -125,7 +129,7 @@ class RepackFixture(unittest.TestCase):
         work = self.tmp / "work"
         result = subprocess.run(
             ["just", "--justfile", str(JUSTFILE), "--working-directory", str(REPO), "android-repack-apk",
-             str(self.apk), str(self.shim), os.path.relpath(work, REPO)],
+             str(self.apk), str(self.shim), os.path.relpath(work, REPO), "", "", "", str(self.patcher)],
             capture_output=True, text=True, env=self.env, timeout=300)
         self.signed = work / "r15_nevr-sentinel_signed.apk"
         return result
@@ -189,7 +193,9 @@ class RepackedVersionCodeTest(RepackFixture):
                     if not n.startswith("META-INF/") and n not in ("AndroidManifest.xml", "lib/arm64-v8a/libovrplatformloader.so")]
             self.assertEqual(sorted(kept), ["assets/data.bin", "lib/arm64-v8a/libr15.so"])
             for name in kept:
-                self.assertEqual(out.read(name), src.read(name), name)
+                # libr15.so is the one entry the repack changes on purpose: it is the patcher's output (here the stand-in's)
+                expected = src.read(name) + MARKER if name == "lib/arm64-v8a/libr15.so" else src.read(name)
+                self.assertEqual(out.read(name), expected, name)
             self.assertIn("lib/arm64-v8a/libovrplatformloader_orig.so", out.namelist())
 
     def test_the_recipe_says_what_it_stamped(self):

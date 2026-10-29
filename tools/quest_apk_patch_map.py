@@ -35,7 +35,7 @@ PIN = re.compile(r"^#@ echoApkPatch ([0-9a-f]{40})$")
 PATCHER_SITE_YAMLS = ("configs/libpnsovr.so.yaml", "patcher/license_patch.yaml")
 # Each stock library and the header constant holding our pinned build ID for it.
 BUILD_IDS = (
-    ("binary/source/libr15.so", "src/quest/sentinel/pinned_targets.h", "kLibR15BuildId"),
+    ("binary/source/libr15.so", "src/quest/sentinel/pinned_targets.h", "kLibR15StockBuildId"),
     ("binary/source/libpnsradmatchmaking.so", "src/quest/sentinel/pinned_targets.h", "kMatchmakingBuildId"),
     ("binary/source/libpnsovr.so", "src/quest/login/login_prerequisite_targets.h", "kPnsovrBuildId"),
 )
