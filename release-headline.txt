@@ -1,0 +1,1 @@
+On PC the main menu loads nEVR's own splash image, and a texture mod can now replace a texture's image.
