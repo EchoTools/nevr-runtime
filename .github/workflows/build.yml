@@ -367,6 +367,27 @@ jobs:
           [[ "$tar_entries" == *echovr_server.exe* ]]
         done
 
+    # The builder image holds Arch's MinGW GCC and no Rust, so the installer's toolchain is installed here, on the
+    # same condition as the build that needs it (#1309): rustup-init at a pinned version, checked against its SHA-256
+    # before it runs, a pinned toolchain and the Windows target. Cargo and rustup live under the runner's temp
+    # directory (HOME in this container belongs to the runner user, not to root, which rustup-init would call a sudo
+    # mistake; RUSTUP_INIT_SKIP_SUDO_CHECK says it is not) and reach the steps after this one
+    # through GITHUB_PATH.
+    - name: Install the Rust toolchain for the core installer
+      if: steps.release.outputs.version != ''
+      shell: bash
+      run: |
+        set -euo pipefail
+        export RUSTUP_HOME="$RUNNER_TEMP/rustup" CARGO_HOME="$RUNNER_TEMP/cargo" RUSTUP_INIT_SKIP_SUDO_CHECK=yes
+        curl --proto '=https' --tlsv1.2 -fsSL -o rustup-init https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init
+        echo "20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c  rustup-init" | sha256sum -c -
+        chmod +x rustup-init
+        ./rustup-init -y --no-modify-path --profile minimal --default-toolchain 1.99.1 --target x86_64-pc-windows-gnu
+        rm rustup-init
+        echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+        echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"
+        echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
+
     # The core installer (installer/, ADR 0023) that install.ps1 runs: built locked from the committed Cargo.lock for
     # Windows with the same mingw the DLLs use, then put through the dist target's sequence: debug info split into
     # dist/symbols/<package>/nevr-install.exe.dbg, stripped, linked to it. A release build has no DWARF unless asked,
@@ -384,7 +405,6 @@ jobs:
         test "${#packages[@]}" -eq 1
         name=$(basename "${packages[0]%/}")
         exe=build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe
-        rustup target add x86_64-pc-windows-gnu
         cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path installer/Cargo.toml --bin nevr-install --target-dir build/installer
         x86_64-w64-mingw32-objcopy --only-keep-debug "$exe" "dist/symbols/$name/nevr-install.exe.dbg"
         x86_64-w64-mingw32-strip --strip-all "$exe"
