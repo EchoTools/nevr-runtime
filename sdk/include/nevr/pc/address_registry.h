@@ -193,9 +193,13 @@ static constexpr uint64_t VA_SET_WEAPON_ENTITIES = 0x140D42E00;
 
 // --- Combat Mod: Script/DLL Loading ---
 
-// Source: scriptpatch.h in echovr_combat_mod / PC binary analysis
-// Engine script DLL loader — loads .dll script modules by path.
-// Signature: int64_t __fastcall (const char* path)
+// Source: scriptpatch.h in echovr_combat_mod; the arguments read from the PC binary's disassembly (#1424)
+// Engine module loader: loads a DLL by path. CScriptResource's deserializer (0x1412EBB50) loads every script DLL
+// with it, as (path, nullptr, 0, 0), and keeps the module it returns. With `reuse` set it first returns
+// GetModuleHandleA(path) when that module is already loaded; otherwise it widens the path and calls LoadLibraryW.
+// With `call_main` set it then calls the module's RadPluginMain(arg). Returns the module, or null when the load
+// failed.
+// Signature: HMODULE __fastcall (const char* path, void* arg, int call_main, int reuse)
 static constexpr uint64_t VA_LOAD_SCRIPT_DLL = 0x1400EB0F0;
 
 // --- Combat Mod: Network/Events ---
