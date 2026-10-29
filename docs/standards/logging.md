@@ -641,16 +641,24 @@ the tag `[NEVR.WS]` and the connection index (Rule 9):
 ```
 [NEVR.WS] lobby find requested conn=2 mode=<name or 0x..> entrants=3 accounts=OVR-ORG-1,OVR-ORG-2,OVR-ORG-3 current_lobby=<GUID or none> group=<GUID>
 [NEVR.WS] lobby join requested conn=3 lobby=<GUID> entrants=1 accounts=OVR-ORG-1
-[NEVR.WS] lobby session success conn=3 lobby=<GUID> group=<GUID>
-[NEVR.WS] lobby session failure conn=3 code=8 reason=lobby_full group=<GUID> message_bytes=<n>
+[NEVR.WS] lobby session success conn=3 lobby=<GUID> group=<GUID> party_id=<n|none> party_size=<n> party_leader=<yes|no|unknown> last_request=<find|join|none> last_request_age_ms=<n|none> request_outstanding=<yes|no>
+[NEVR.WS] lobby session failure conn=3 code=8 reason=lobby_full group=<GUID> message_bytes=<n> party_id=<n|none> party_size=<n> party_leader=<yes|no|unknown> last_request=<find|join|none> last_request_age_ms=<n|none> request_outstanding=<yes|no>
 ```
 
 - **Ids, not names.** A lobby or group is its GUID in upper case and the Windows layout, the text the service
   writes as the party data's `lobbyid`; an entrant is its XPID. `current_lobby=none` is a find from no lobby.
 - **The outcome is the code.** `code` is the number in the frame and `reason` is the game's own name for it
   (echovr.exe 0x14017d380, `CR15NetClientLobby::LobbySessionFailureCB`: 0 to 13, `lobby_full` is 8); a number
-  outside 0 to 13 reads `unknown`. A failure frame carries no lobby id: pair it with the request before it on
-  the same `conn`.
+  outside 0 to 13 reads `unknown`. A failure frame carries no lobby id, so a session record names the request it
+  answers through `last_request` (below), not through its `conn`.
+- **The party and the request a session record names.** `party_id`, `party_size` and `party_leader` are the party
+  state when the record is written: `party_id=none party_size=0 party_leader=no` outside a party; `party_leader` is
+  `yes` when the owner is the local account, `no` when another account owns the party, and `unknown` while either
+  id is still zero. `last_request` is the last find or join the game sent on this client, on any connection, and
+  `last_request_age_ms` is the time from that request to this answer (`0` when the clock went backwards).
+  `request_outstanding=yes` only for the first answer to that request, so a second answer reads `no`. With no
+  request sent since the process started, the three request fields read `none`, `none` and `no`. An answer whose
+  record the rate limit suppresses still takes its request (see Rate), so the next written record is correct.
 - **Remote text is not a field** (Rule 4). The settings JSON of a request and the message of a failure are
   never read out. A failure's message is counted instead: `message_bytes=<n>` is the number of its bytes before
   the NUL, at most the field's 64, and `0` when the message is empty or absent.
@@ -668,10 +676,12 @@ the tag `[NEVR.WS]` and the connection index (Rule 9):
   the exact number of records the window did not write, so requests per second are `(10 + count) / 10` for a
   full window.
 - **Not covered.** The create request, the legacy-family symbols (`compat/legacy_codec.h`) and the Quest
-  target (`src/quest`).
+  target (`src/quest`). The Quest target writes no `lobby session` record and does not include
+  `compat/lobby_frame.h`, so no line on Quest carries the party or the request fields.
 
-**Where:** `src/runtime/compat/lobby_frame.h` (decode, text, limiter) and `LogClientLobbyMessage` in
-`src/runtime/compat/ws_bridge.cpp`; tests `WsBridgeLobbyFrameLog` in `src/runtime/tests/test_behavioral.cpp` and
+**Where:** `src/runtime/compat/lobby_frame.h` (decode, text, limiter, request tracker, party fields) and
+`LogClientLobbyMessage` in `src/runtime/compat/ws_bridge.cpp`; tests `WsBridgeLobbyFrameLog` in
+`src/runtime/tests/test_behavioral.cpp`, and `LobbyFrameLimiter`, `LobbyFrameRequests` and `LobbyFrameText` in
 `src/runtime/tests/test_lobby_frame.cpp`.
 
 ---
