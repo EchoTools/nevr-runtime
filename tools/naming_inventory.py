@@ -7,7 +7,7 @@
 
 It is the work list for the rename pass and the way to see what is left: a category that prints nothing is
 done. It reads tracked and untracked-but-not-ignored files, and skips what test_naming.py skips
-(src/legacy, extern, gen, docs/audits). The frozen `Nvr*` plugin/module ABI is not a finding (it is
+(extern, gen, docs/audits). The frozen `Nvr*` plugin/module ABI is not a finding (it is
 FROZEN_NVR in tools/tests/test_naming.py). A name that is public (a config key, a log line, a DLL export,
 a file name users touch) is listed here too, tagged `public`: it is not renamed without a decision, and the
 rename PRs list each one as a deliberate exception.
@@ -22,7 +22,7 @@ import subprocess
 import sys
 
 REPO = pathlib.Path(os.environ.get("NEVR_NAMING_ROOT") or pathlib.Path(__file__).resolve().parents[1])
-EXCLUDED_PREFIXES = ("src/legacy/", "extern/", "gen/", "docs/audits/", "build/")
+EXCLUDED_PREFIXES = ("extern/", "gen/", "docs/audits/", "build/")
 SELF = frozenset({"docs/standards/naming.md", "tools/tests/test_naming.py", "tools/naming_inventory.py"})
 
 CODE_EXT = (".h", ".hpp", ".cpp", ".cc", ".inc")
@@ -82,7 +82,7 @@ def pascal_namespaces(files):
 
 
 # Files that name the GAME's own log tags (to filter or match them), help text, and tests: not the project's tags.
-GAME_TAG_FILES = ("src/runtime/log/builtin_filter.", "plugins/log-filter/", "src/runtime/hook/addresses.h",
+GAME_TAG_FILES = ("src/runtime/log/builtin_filter.", "src/runtime/hook/addresses.h",
                   "src/quest/sentinel/pinned_targets.h", "src/quest/social/social_abi.h", "src/runtime/log/symcache.",
                   "src/runtime/lifecycle/cli.cpp", "src/core/logging.cpp")
 
@@ -123,9 +123,6 @@ def macros_without_prefix(files):
         if not (path.endswith("CMakeLists.txt") or path.endswith(".cmake")):
             continue
         for m in COMPILE_DEF.finditer(text):
-            # The frozen legacy targets read the unprefixed names (src/legacy may not be edited).
-            if re.match(r"target_compile_definitions\(\s*(?:\$\{_legacy_target\}|(?:gamepatcheslegacy|gameserverlegacy)\b)", m.group()):
-                continue
             for d in re.finditer(r"\b([A-Z][A-Z0-9_]+)(?==|\s|\))", m.group()):
                 name = d.group(1)
                 if name.startswith("NEVR_") or name in {"PRIVATE", "PUBLIC", "INTERFACE"} or name.startswith("TARGET"):

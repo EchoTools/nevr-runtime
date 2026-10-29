@@ -118,8 +118,8 @@ class RouterReportsTheStatusToTheBridge(unittest.TestCase):
 class TheConfigLineNamesTheConfigTheLoaderFound(unittest.TestCase):
     def test_the_loader_records_where_it_looked(self):
         code = strip_comments(read("src/runtime/lifecycle/service_config.cpp"))
-        self.assertIn("ConfigSourceStore() = nevr_login_refusal::DescribeConfigSource(path, searched);", code)
-        self.assertIn("if (searched != nullptr) *searched = candidates;", code)
+        self.assertIn("ConfigSourceStore() = nevr_login_refusal::DescribeConfigSource(choice.path, searched);", code)
+        self.assertIn("searched.push_back(choice.root_path);", code)
 
     def test_a_rejected_config_is_said_to_be_rejected(self):
         code = strip_comments(read("src/runtime/lifecycle/service_config.cpp"))

@@ -275,3 +275,47 @@ TEST(ServerDbUri, RemoveQueryParamDoesNotMatchSubstring) {
   EXPECT_EQ(nevr_serverdb_uri::RemoveQueryParam("wss://g.example/ws?xformat=evrx=1", "format=evr"),
             "wss://g.example/ws?xformat=evrx=1");
 }
+
+// #1266: RequestRegistration dials the route ChooseServerDbRoute picks, and a server with none stops with a cause
+// instead of dialing an address nothing serves.
+namespace {
+using nevr_serverdb_uri::ChooseServerDbRoute;
+using nevr_serverdb_uri::ServerDbRoute;
+constexpr bool kToken = true;
+constexpr bool kNoToken = false;
+}  // namespace
+
+TEST(ServerDbRoute, AnExplicitServerDbUriIsDialedAsGiven) {
+  EXPECT_EQ(ChooseServerDbRoute("wss://s.example/serverdb", "wss://s.example/nevr", kToken, "wss://g.example/ws", "1"),
+            ServerDbRoute::kExplicitUri);
+  EXPECT_EQ(ChooseServerDbRoute("wss://s.example/serverdb", "", kNoToken, "", ""), ServerDbRoute::kExplicitUri);
+}
+
+TEST(ServerDbRoute, TheTokenRouteNeedsItsUriAndAToken) {
+  EXPECT_EQ(ChooseServerDbRoute("", "wss://s.example/nevr", kToken, "wss://g.example/ws", "1"),
+            ServerDbRoute::kTokenRoute);
+  EXPECT_EQ(ChooseServerDbRoute("", "wss://s.example/nevr", kNoToken, "wss://g.example/ws", "1"),
+            ServerDbRoute::kUrlParams);
+}
+
+TEST(ServerDbRoute, TheUrlParameterRouteNeedsTheSocketUriAndTheDiscordId) {
+  EXPECT_EQ(ChooseServerDbRoute("", "", kToken, "wss://g.example/ws", "1"), ServerDbRoute::kUrlParams);
+  EXPECT_EQ(ChooseServerDbRoute("", "", kToken, "wss://g.example/ws", ""), ServerDbRoute::kNone);
+  EXPECT_EQ(ChooseServerDbRoute("", "", kToken, "", "1"), ServerDbRoute::kNone);
+}
+
+TEST(ServerDbRoute, NoUriAtAllIsNoRoute) {
+  EXPECT_EQ(ChooseServerDbRoute("", "", kToken, "", ""), ServerDbRoute::kNone);
+  EXPECT_EQ(ChooseServerDbRoute("", "wss://s.example/nevr", kNoToken, "", ""), ServerDbRoute::kNone);
+}
+
+TEST(ServerDbRoute, EachRouteHasTheNameItsLogLineCarries) {
+  EXPECT_STREQ(nevr_serverdb_uri::ServerDbRouteName(ServerDbRoute::kExplicitUri), "explicit");
+  EXPECT_STREQ(nevr_serverdb_uri::ServerDbRouteName(ServerDbRoute::kTokenRoute), "token");
+  EXPECT_STREQ(nevr_serverdb_uri::ServerDbRouteName(ServerDbRoute::kUrlParams), "url_params");
+  EXPECT_STREQ(nevr_serverdb_uri::ServerDbRouteName(ServerDbRoute::kNone), "none");
+}
+
+TEST(ServerDbRoute, TheStopCauseNamesTheKeyToSet) {
+  EXPECT_STREQ(nevr_serverdb_uri::kNoServerDbUriCause, "no ServerDB URI: set services.serverdb_uri");
+}

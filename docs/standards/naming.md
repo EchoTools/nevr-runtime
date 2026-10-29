@@ -32,7 +32,7 @@ One family, three cases:
   a log line carries.
 - A DLL export is `NEVR_` followed by a PascalCase verb phrase (`NEVR_GetUPnPConfig`). An export is
   never renamed in place: another DLL may resolve it by name (three are, in
-  `plugins/common/include/resource_registry.h`).
+  `sdk/include/nevr/pc/resource_registry.h`).
 - A flat config key the runtime owns carries the `nevr_` prefix (`nevr_http_uri`, `nevr_server_key`).
 
 | Surface | New names |
@@ -59,7 +59,7 @@ sentence case, as in `docs/standards/` and `docs/adr/` (an ADR's H1 is `ADR NNNN
 
 ## The frozen exception: the `Nvr*` plugin and module C ABI
 
-`src/extension/plugin_interface.h` and `src/extension/module_interface.h` publish the C ABI that
+`sdk/include/nevr/plugin_interface.h` and `src/extension/module_interface.h` publish the C ABI that
 third-party DLLs compile against, and the names there spell the prefix `Nvr`: `NvrPluginInfo`,
 `NvrGameContext`, `NvrPluginInit`, `NvrPluginInitEx`, `NvrModuleContext`, and the rest. The host
 resolves the eight plugin entry points with `GetProcAddress` (`src/runtime/ext/plugin_loader.cpp`), so
@@ -73,9 +73,8 @@ separate namespace is an open ABI decision, issue #130.
 
 ## Names in the tree that are not models
 
-- The brand spelling `nEVR` outside prose: the `-n` program name in `cmake/codesign/sign.sh`, the certificate
-  subjects under `certs/` (a certificate subject is a trust identity, so changing one is the owner's call), and
-  the reference plugin's reported description (`plugins/example/src/plugin.cpp`, a string that reaches logs).
+- The brand spelling `nEVR` outside prose: the `-n` program name in `cmake/codesign/sign.sh` and the certificate
+  subjects under `certs/` (a certificate subject is a trust identity, so changing one is the owner's call).
   `LEGACY_SPELLINGS` in `tools/tests/test_naming.py` lists each file and token; the list only shrinks.
 - Exports without the `NEVR_` prefix: `TokenAuth_GetToken`, `token_auth_Init`, `platform_compat_Init`
   and their siblings (declared with `NEVR_MODULE_API`).
@@ -86,14 +85,9 @@ separate namespace is an open ABI decision, issue #130.
   users write in their config file.
 - Log tags outside `[NEVR.<AREA>]`: `[NETGAME]`, `[NSLOBBY]`, `[RBX]`, `[SAVE_LOADOUT]`, `[SAVE_SUCCESS]`,
   `[CURRENT_LOADOUT]`, `[TELEMETRY.DIAG]` and a bare `[NEVR]`: scripts and the score log grep the text.
-- Two PascalCase namespaces: `Hooking` (`src/core/hooking.h`; the frozen `src/legacy` calls
-  `Hooking::Attach` and `Hooking::Initialize` through the compat header) and `EchoVR::Symbols` with its
-  nested `Social` and `Tcp` (`src/abi/symbols.h`, named after the game's symbol tables).
-- `PROJECT_VERSION`, `GIT_COMMIT_HASH` and `USE_MINHOOK` as macro names: only the frozen `src/legacy` reads
-  them; the root `CMakeLists.txt` defines them for the two files that read them, and every other file that reads
-  the build identity gets `NEVR_PROJECT_VERSION`, `NEVR_GIT_COMMIT_HASH`, `NEVR_GIT_COMMIT_FULL` or `NEVR_GIT_DESCRIBE`
-  from `nevr_build_identity_define` (`cmake/nevr_build_identity.cmake`), per source file; `NEVR_USE_MINHOOK` is a
-  target definition.
+- Two PascalCase namespaces: `Hooking` (`src/core/hooking.h`, the hooking abstraction every patch calls; it
+  predates the rule) and `EchoVR::Symbols` with its nested `Social` and `Tcp` (`src/abi/symbols.h`, named after
+  the game's symbol tables).
 - `NEVRProtobufJSONMessageV1` (`src/abi/symbols.h`): its spelling is fixed by the hashed protocol string.
 - `NevrCfg*` functions are global, not in `namespace nevr`; `NevrConfig` and `NevrConfigError` are in it.
 

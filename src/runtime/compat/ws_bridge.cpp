@@ -966,8 +966,16 @@ bool InjectServerFrameForTest(const std::string& frame, std::string* error) {
 }
 #endif
 
-// Registers SendFrameToServer as the party requests' sender when the bridge is loaded.
-static const bool g_partySenderRegistered = (nevr_social_party::SetSender(&SendFrameToServer), true);
+// The sender of the runtime's own social requests (party, friend list, profile name lookups). A dedicated server is
+// not a player and sends none (#1280); each caller's own line reports the refusal as sent=0. Self-checks keep
+// SendFrameToServer: their RemoteLogSet is not social.
+static bool SendSocialFrameToServer(const std::string& frame) {
+  if (g_isServer) return false;
+  return SendFrameToServer(frame);
+}
+
+// Registers SendSocialFrameToServer as the party requests' sender when the bridge is loaded.
+static const bool g_partySenderRegistered = (nevr_social_party::SetSender(&SendSocialFrameToServer), true);
 
 // Self-checks (compat/self_check.h): a result goes out on the login connection through SendFrameToServer once
 // LoginSuccess has been seen, and into the nevr log at the moment it happens. Wired from InstallWebSocketBridge
@@ -1106,7 +1114,7 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
   profileInputs.git_commit = buildId.git_commit;
   profileInputs.git_describe = buildId.git_describe;
   profileInputs.build_type = buildId.build_type;
-  profileInputs.social_level = nevr_social_party::kSocialLevel;
+  profileInputs.social_level = nevr_social_party::DeclaredSocialLevel(g_isServer != FALSE);
   profileInputs.plugins = std::move(plugins);
   // Assets the loaded plugins registered (#432). The report is built by the registry's own nlohmann output, so
   // the non-throwing parse only guards a future change to it.
@@ -1799,7 +1807,9 @@ struct RouterPath {
       };
 #endif
       options.buildLogin = &BuildRouterLogin;
-      options.subscribeFriendList = true;
+      // A dedicated server is not a player: it keeps no friend list (#1280). g_isServer is set before the bridge
+      // starts (boot.cpp).
+      options.subscribeFriendList = g_isServer == FALSE;
       options.replaceLoginFailure = &ServerModeLoginSuccess;
       options.onSessionEnded = [self]() {
         bool wasLoginSession;
@@ -2148,7 +2158,8 @@ void InstallWebSocketBridge() {
                         // echovr.exe doesn't provide one for the pnsrad platform
                         // provider, so pnsrad can't send SNS messages itself. Send
                         // the subscribe request through the WS bridge instead.
-                        {
+                        // A dedicated server is not a player: it keeps no friend list (#1280).
+                        if (!g_isServer) {
                           // Payload: 0x20 zero bytes (provider_id + UUID + token); the server ignores it.
                           const std::string subscribeMsg = nevr_evr_codec::BuildFriendListSubscribe();
                           // pairPtr is not read here: g_pairs owns the pair and a closing game socket erases it under

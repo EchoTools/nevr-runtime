@@ -16,6 +16,9 @@ use std::path::{Path, PathBuf};
 pub const HOST: &str = "BugSplat64.dll";
 pub const RUNTIME: &str = "nevr-runtime.dll";
 pub const STATE_FILE: &str = "nevr-install.txt";
+/// What this installer writes as `owner` in the record. Another installer that manages the same folder writes its own
+/// name (the launcher writes `launcher`); a record with any other owner is not ours to change (#1285).
+pub const OWNER: &str = "nevr-install";
 
 /// The SHA-256 of the game's own `BugSplat64.dll` (build 34.4.631547.1, 630,288 bytes), so a copy can be checked by hand.
 pub const VANILLA_HOST_SHA256: &str = "618e34d3bfde69846c0202d42951366bff5e03cd2885b6825f55e09fb2cf160b";
@@ -45,6 +48,10 @@ impl Layout {
     }
     pub fn runtime(&self) -> PathBuf {
         self.root.join(RUNTIME)
+    }
+    /// Where the runtime loads plugins from (ADR 0012). The install makes it and puts nothing in it.
+    pub fn plugins(&self) -> PathBuf {
+        self.root.join("plugins")
     }
     /// An earlier layout put the runtime beside the game.
     pub fn legacy_runtime(&self) -> PathBuf {
@@ -155,6 +162,7 @@ impl Record {
         if f.original_unknown {
             lines.push("original=unknown".to_string());
         }
+        lines.push(format!("owner={OWNER}"));
         lines.join("\n") + "\n"
     }
 }
@@ -301,6 +309,9 @@ pub fn plan(obs: &Observed, pkg: &Package, allow_downgrade: bool) -> Plan {
     }
     match record {
         Some(r) => {
+            if let Some(owner) = r.get("owner").filter(|o| *o != OWNER) {
+                return needs(&format!("this install is owned by {owner}: update it with its own installer; nothing was changed"));
+            }
             for key in ["backup", "legacy", "installed_sha256"] {
                 if r.get(key).is_none() {
                     return needs(&format!("nevr-install.txt has no {key}"));
@@ -590,6 +601,9 @@ fn apply(l: &Layout, plan: &Plan, obs: &Observed, pkg: &Package, log: &Log, seam
     let prior_runtime = fs::read(&runtime).ok();
     if writes_host || obs.runtime_sha.as_deref() != Some(ours_rt.as_str()) {
         fs::create_dir_all(&l.root).map_err(|e| io(&l.root, e))?;
+        // An empty plugins folder for the runtime to load from; anything already in it stays as it is.
+        let plugins = l.plugins();
+        fs::create_dir_all(&plugins).map_err(|e| io(&plugins, e))?;
         if prior_runtime.is_some() && action == Action::First {
             let to = fresh(&aside, &format!("{RUNTIME}.original-{st}"));
             fs::rename(&runtime, &to).map_err(|e| io(&to, e))?;

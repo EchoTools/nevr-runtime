@@ -24,7 +24,7 @@
 
 #include <cstdint>
 
-#include "extension/plugin_interface.h"
+#include "nevr/plugin_interface.h"
 #include "quest/plugin/input_seam.h"
 #include "quest/sentinel/got_hook.h"
 

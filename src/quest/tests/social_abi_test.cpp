@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-#include "abi/symbol_hash.h"
+#include "nevr/symbol_hash.h"
 #include "quest/social/social_abi.h"
 #include "quest/social/social_frames.h"
 #include "quest/tests/test_check.h"

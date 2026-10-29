@@ -1,8 +1,8 @@
 #include "logging.h"
 
-#include <nlohmann/json.hpp>
-
 #include <atomic>
+#include <chrono>
+#include <ctime>
 #include <iomanip>
 #include <sstream>
 
@@ -10,7 +10,7 @@
 #include "abi/echovr_functions.h"
 #include "globals.h"
 
-// Get ISO8601 timestamp in UTC
+// ISO 8601 timestamp in UTC, with milliseconds (the NEVR.STOP line in runtime/lifecycle/cli_reject.cpp carries it).
 std::string GetISO8601Timestamp() {
   auto now = std::chrono::system_clock::now();
   auto now_time_t = std::chrono::system_clock::to_time_t(now);
@@ -67,22 +67,8 @@ const char* GetLogLevelString(EchoVR::LogLevel level) {
   }
 }
 
-// Format a JSON log entry similar to zap.Logger
-std::string FormatJsonLogEntry(EchoVR::LogLevel level, const char* message, const char* caller) {
-  nlohmann::json root;
-  root["ts"] = GetISO8601Timestamp();
-  root["level"] = GetLogLevelString(level);
-  root["msg"] = message;
-
-  if (caller != nullptr) {
-    root["caller"] = caller;
-  }
-
-  return root.dump();
-}
-
 // Log filtering, timestamps, and noise suppression are handled by the
-// log_filter plugin via the CLog::PrintfImpl hook, not here.
+// built-in filter (runtime/log/builtin_filter.cpp) via the CLog::PrintfImpl hook, not here.
 
 // Set from nevr_boot_log_tee::Init() to Close(); read by every Log() call on any thread.
 static std::atomic<BootLogSink> g_bootLogSink{nullptr};

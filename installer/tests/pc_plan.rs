@@ -93,6 +93,21 @@ fn the_only_file_written_beside_the_game_is_the_host_and_everything_else_goes_to
 }
 
 #[test]
+fn the_install_makes_the_roots_plugins_folder_empty_and_touches_nothing_in_it() {
+    let w = world();
+    let (_, end) = run(&w, &pkg(HOST_A, RT_A));
+    assert_eq!(end.state, "installed");
+    assert!(w.layout().plugins().is_dir(), "the folder the runtime loads plugins from exists after an install");
+    assert!(listing(&w.layout().plugins()).is_empty(), "and holds nothing: the install ships no plugin");
+    fs::write(w.layout().plugins().join("mine.dll"), b"a plugin the player put there").unwrap();
+    let (_, end) = run(&w, &pkg(HOST_B, RT_B));
+    assert_eq!(end.state, "installed");
+    assert_eq!(listing(&w.layout().plugins()), vec!["mine.dll"], "an update leaves what is in the folder where it is");
+    assert_eq!(fs::read(w.layout().plugins().join("mine.dll")).unwrap(), b"a plugin the player put there");
+    assert_eq!(listing(w.game.path()), vec!["BugSplat64.dll", "echovr.exe"], "no plugins folder beside echovr.exe");
+}
+
+#[test]
 fn first_install_sets_the_original_aside_in_the_root_and_records_for_uninstall() {
     let w = world();
     run(&w, &pkg(HOST_A, RT_A));

@@ -9,7 +9,7 @@ document.
 
 | Step | Address | What it does |
 | --- | --- | --- |
-| Message id | `0x244b47685187eae1` | `CSymbol64("SNSRemoteLogSetv3")`, recomputed with `src/abi/symbol_hash.h`; the name string is at `0x1416d4fa3` |
+| Message id | `0x244b47685187eae1` | `CSymbol64("SNSRemoteLogSetv3")`, recomputed with `sdk/include/nevr/symbol_hash.h`; the name string is at `0x1416d4fa3` |
 | Periodic trigger | `0x1401c4170`, called from `CR15NetGame::Update`, `LogOut` and `EndMultiplayer` | Flushes remote logs; the senders below are throttled to one flush per 15 s unless the caller forces it (`15.0 <= now - last`) |
 | Client sender | `0x140118d50` | When the mode bit that selects the server variant is clear and `NetGame+0x28d0` is non-null, calls `0x1401206c0` once per log buffer (four buffers at `FUN_1401110a0()+0`, `+0x8090`, `+0x10120`, `+0x181b0`) |
 | Server sender | `0x140119070` -> `0x1401207c0` | Used when the mode bit is set; fills the first 8 bytes of the id with `config server_id`; the second 8 bytes are left unwritten in the caller's stack buffer (`local_58[16]` is not zeroed) |

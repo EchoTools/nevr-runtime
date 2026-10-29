@@ -24,7 +24,7 @@ how an agent triangulates a correct log line.
 
 ### This IS
 
-- A binding ruleset for every `Log()` call in `src/`, `plugins/`,
+- A binding ruleset for every `Log()` call in `src/`, `sdk/`,
   `modules/`, and any future component that links `libcommon.a`.
 - A review gate: the "Hard Stops" table at the end of this document is
   enforced. A log line that fails any check is rejected in review.
@@ -116,6 +116,7 @@ for row.
 | `[NEVR.TELEMETRY]`    | Telemetry streamer (WebSocket, snapshots)     |
 | `[NEVR.XPID]`         | Platform-identity patches (DSC provider)      |
 | `[NEVR.CONFIG]`       | Config loading, service redirects             |
+| `[NEVR.STOP]`         | A command line the run is refused for: the stop line (JSON), exit code 64 |
 | `[NEVR.CRASH]`        | Crash recovery, dump, longjmp                 |
 | `[NEVR.AUTH]`         | Token acquisition, device-code flow, refresh  |
 | `[NEVR.CDN]`          | Asset CDN download and override              |
@@ -132,6 +133,7 @@ for row.
 | `[NEVR.UITEXTURE]`    | UI, splash and menu textures at their top mip: one line per UI texture naming the mip requested (`patch/ui_texture_mips.h`) |
 | `[NEVR.UI]`           | The UI text writer (`patch/ui_text.h`, `patch/ui_text_writer.h`, #896): `text writer ready`/`off` with the three pins, one `text written` or `text dropped` line per request with `actor`, `element`, `bytes` and `attempts`, and `text first write` with the writing thread and the game-loop thread. A text is never logged, only its size |
 | `[NEVR.INVITE]`       | Invite codes for the CREATE GAME / JOIN VIA CODE wizard (`patch/invite_wizard.h`, ADR 0017): a code is never logged, only `code_len` and `code_fp` |
+| `[NEVR.RENDER]`       | The render configuration of a PC client: one `render_config` line at the first rendered frame and one for every change, with the GPU, headset, refresh rate, render target and the game's graphics settings, plus the hooks' own install lines and a one-time `settings_trace` line (`patch/render_config.h`, `patch/render_config_hook.h`, ADR 0022) |
 | `[NEVR.HOST]`         | The `BugSplat64.dll` host's own JSONL records (`nevr-bootstrap.jsonl`): attach decisions, runtime load, crash dump. The value of the record's `tag` field; the host writes no `Log()` line |
 | `[NEVR.INSTALL]`      | The core installer's own JSONL run log (`installer/`, ADR 0023): one record per event, appended, never truncated; the value of the record's `tag` field. Never carries a token or a response body |
 | `[server_timing]`     | Server tick-rate / timing patches             |
@@ -412,9 +414,7 @@ and put the whole line in `msg`, and our lines reach that file through the
 game's logger (`EchoVR::WriteLog`, captured by the filter's `CLog::PrintfImpl`
 hook). ADR 0027's first stage adds the header keys and writes our records
 without the game's logger; each migration then moves a call's fields out of
-`msg`. `FormatJsonLogEntry` (`src/core/logging.h`, `src/core/logging.cpp`),
-which no production code calls, is not this format, and it is deleted when the
-structured sink lands.
+`msg`.
 
 ### Rule 8: State transitions log FROM -> TO
 
@@ -564,9 +564,9 @@ the same commit. The sensor exists to prevent *drift*, not to prevent
 ### Rule 15: Plugins log through the host
 
 A plugin's lines go to the host's `Log()` through `ctx->log` (`NevrLogFn` in
-`src/extension/plugin_interface.h`, API v6), so they reach the same file, the same filter and the
+`sdk/include/nevr/plugin_interface.h`, API v6), so they reach the same file, the same filter and the
 same level control as the host's own lines. A plugin does not write to stderr, which the host does not
-collect, and does not open its own log file. `plugins/common/include/plugin_logger.h` is the way to
+collect, and does not open its own log file. `sdk/include/nevr/plugin_logger.h` is the way to
 call it (`PluginLogBind(ctx)` in init, then `PluginLog`, `PluginLogWarning`, `PluginLogError`,
 `PluginLogDebug` or `PluginLogFields`).
 

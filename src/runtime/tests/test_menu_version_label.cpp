@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <string>
 
-#include "abi/symbol_hash.h"
+#include "nevr/symbol_hash.h"
 #include "runtime/patch/menu_version_label_rules.h"
 
 namespace {
