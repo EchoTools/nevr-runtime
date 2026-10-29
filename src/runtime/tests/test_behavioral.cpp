@@ -3644,7 +3644,7 @@ class RolesByPathTest : public ::testing::Test {
     // A client run unless a test says otherwise: a server with no credential stops (#1254), and these tests are
     // about the roles, not the server's login. Without this they took the mode a test before them left behind.
     wasServerBase_ = g_isServer;
-    g_isServer = FALSE;
+    g_isServer = ServerMode() ? TRUE : FALSE;
     fatalBefore_ = g_fatalErrorCalls;
     ASSERT_TRUE(remote_.Start());
     SetWebSocketBridgeTarget(remote_.Uri().c_str());
@@ -3671,6 +3671,8 @@ class RolesByPathTest : public ::testing::Test {
   // The value network.session_router has for this test: null is the key being absent.
   virtual const char* RouterMode() const { return nullptr; }
   virtual bool BridgeExpected() const { return true; }
+  // The run mode the bridge starts in (#1280): g_isServer is set before it starts, as boot.cpp does.
+  virtual bool ServerMode() const { return false; }
   int fatalBefore_ = 0;
   BOOL wasServerBase_ = TRUE;
   // Connects `socket` at `target` and returns once the bridge has finished its Open handler for it.
@@ -4290,16 +4292,7 @@ TEST_F(RouterAllTest, AnUnrequireNobodyAskedForIsDroppedAndCounted) {
 template <typename Base, BOOL kIsServer>
 class RunModeFixture : public Base {
  protected:
-  void SetUp() override {
-    wasServer_ = g_isServer;
-    g_isServer = kIsServer;
-    Base::SetUp();
-  }
-  void TearDown() override {
-    Base::TearDown();
-    g_isServer = wasServer_;
-  }
-  BOOL wasServer_ = FALSE;
+  bool ServerMode() const override { return kIsServer != FALSE; }
 };
 using ServerRolesByPathTest = RunModeFixture<RolesByPathTest, TRUE>;
 using ServerRouterAllTest = RunModeFixture<RouterAllTest, TRUE>;
@@ -4339,6 +4332,7 @@ static void RoundTripOnTheSession(GameSocket& login) {
 
 // #1280: a server whose login the service accepts subscribes to no friend list (legacy path, the default).
 TEST_F(ServerRolesByPathTest, AServerSendsNoFriendListSubscriptionAfterTheServiceAcceptsItsLogin) {
+  GameFlagScope server(-1, TRUE);  // a server with a credential: without one it stops (#1254)
   remote_.SetLoginReply(nevr_evr_codec::kSymLoginSuccess);
   GameSocket login;
   Admit(login, "/login");
@@ -4349,6 +4343,7 @@ TEST_F(ServerRolesByPathTest, AServerSendsNoFriendListSubscriptionAfterTheServic
 
 // #1280: the same through the router.
 TEST_F(ServerRouterAllTest, AServerSendsNoFriendListSubscriptionAfterTheServiceAcceptsItsLogin) {
+  GameFlagScope server(-1, TRUE);  // a server with a credential: without one it stops (#1254)
   remote_.SetLoginReply(nevr_evr_codec::kSymLoginSuccess);
   GameSocket login;
   Admit(login, "/login");
@@ -4360,6 +4355,7 @@ TEST_F(ServerRouterAllTest, AServerSendsNoFriendListSubscriptionAfterTheServiceA
 // #1280: on a server the runtime's social sender sends nothing, while the self-check sender (its RemoteLogSet is not
 // social) still reaches the service.
 TEST_F(ServerRolesByPathTest, TheRuntimesSocialSenderSendsNothingOnAServer) {
+  GameFlagScope server(-1, TRUE);  // a server with a credential: without one it stops (#1254)
   GameSocket login;
   Admit(login, "/login");
   ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings)) << "the login never reached the service";
