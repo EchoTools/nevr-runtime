@@ -180,6 +180,24 @@ TEST(InviteService, ShutdownDoesNotWaitOutARequestTheServerHolds) {
   EXPECT_LT(took, std::chrono::seconds(5)) << "the transport timeout is 20 s";
 }
 
+// The per-frame applier (patch/invite_answer_apply.cpp) reads Active() first: off costs it one atomic load, on takes the answers.
+TEST(InviteService, ActiveIsTrueOnlyWhileTheFeatureIsOnAndNotShutDown) {
+  Guard guard;
+  EXPECT_FALSE(nevr_invite_service::Active());  // before any Start
+  LoopbackServer server({Script{}});
+  Rig rig;
+  nevr_invite_service::Start(rig.Settings(Switch::Off, server.Base()));
+  EXPECT_FALSE(nevr_invite_service::Active());  // started, but the key is absent
+  nevr_invite_service::Shutdown();
+  nevr_invite_service::Start(rig.Settings(Switch::On, ""));
+  EXPECT_FALSE(nevr_invite_service::Active());  // on, with no address to send to
+  nevr_invite_service::Shutdown();
+  nevr_invite_service::Start(rig.Settings(Switch::On, server.Base()));
+  EXPECT_TRUE(nevr_invite_service::Active());
+  nevr_invite_service::Shutdown();
+  EXPECT_FALSE(nevr_invite_service::Active());
+}
+
 TEST(InviteService, ASubmitAfterShutdownIsRefusedWithALine) {
   Guard guard;
   LoopbackServer server({Script{}});

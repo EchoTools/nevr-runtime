@@ -42,6 +42,7 @@
 #include "runtime/lifecycle/crash_recovery.h"  // EnsureStackReserve
 #include "runtime/lifecycle/server_timestep.h"
 #include "runtime/log/builtin_filter.h"
+#include "runtime/patch/invite_answer_apply.h"
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/render_config_hook.h"
 #include "runtime/patch/ui_text_writer.h"
@@ -164,6 +165,8 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     // thread may call. The client's CPrecisionSleep::Wait hook is not a usable site: measured entries=0 on a client.
     {
         const unsigned long loop = GameLoopThreadId();
+        // #1278: the invite answers become texts first, so the writer below can write them in the same frame.
+        if (loop != 0 && loop == GetCurrentThreadId()) nevr_invite_apply::OnFrame();
         if (loop != 0 && loop == GetCurrentThreadId()) nevr_ui_text::OnFrame();
     }
 
