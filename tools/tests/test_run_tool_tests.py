@@ -1191,5 +1191,51 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertEqual(module.failing_ids(self.root), ([], "unreadable"))  # a directory
 
 
+# These launch `python3 -m pytest` through tools/run_tool_tests.py. The verify suite also runs under unittest on an
+# image with no pytest (#820), where they cannot run: they skip with that reason and run wherever pytest exists.
+NEEDS_PYTEST = (
+    "test_a_process_out_of_reach_of_the_kill_is_recorded_as_incomplete_output",
+    "test_an_end_record_that_cannot_be_appended_is_loud_and_never_green",
+    "test_a_closed_stdout_at_launch_loses_the_echo_not_the_record",
+    "test_a_closed_stdout_loses_the_echo_not_the_record",
+    "test_a_collection_error_is_named_by_its_file",
+    "test_a_failing_run_keeps_its_output_names_the_failure_and_keeps_pytests_exit_code",
+    "test_a_failure_line_still_queued_at_exit_is_written_before_the_run_ends",
+    "test_a_hangup_is_passed_on_and_recorded",
+    "test_a_log_that_cannot_be_written_is_loud_and_never_green",
+    "test_a_log_whose_short_lines_cannot_be_written_still_gets_its_end_record",
+    "test_a_process_left_holding_the_output_is_killed_and_recorded",
+    "test_a_reader_that_goes_away_after_the_end_record_does_not_change_the_exit_code",
+    "test_a_run_with_no_tests_keeps_its_summary",
+    "test_a_second_signal_kills_pytest_and_is_still_recorded",
+    "test_a_signal_after_pytest_exits_still_leaves_the_end_record",
+    "test_a_signal_after_pytest_exits_while_its_output_drains_does_not_change_the_outcome",
+    "test_a_stderr_nobody_reads_holds_up_no_failure_line_nor_the_record",
+    "test_a_stdout_nobody_reads_holds_up_the_echo_not_the_run",
+    "test_a_terminate_is_passed_on_as_an_interrupt_and_recorded",
+    "test_an_errored_test_is_named_like_a_failed_one",
+    "test_an_inherited_ignored_hangup_stays_ignored",
+    "test_an_interrupt_is_passed_on_and_still_recorded",
+    "test_an_unparseable_junit_file_is_recorded_not_a_crash",
+    "test_an_xfail_run_keeps_its_summary",
+    "test_output_stdout_cannot_encode_is_replaced_in_the_echo_and_kept_in_the_log",
+    "test_output_that_could_not_be_read_is_loud_and_never_green",
+    "test_output_that_is_not_utf8_is_kept_not_a_crash",
+    "test_output_written_shortly_after_pytest_exits_is_kept",
+    "test_pytest_dies_with_the_script",
+    "test_pytest_is_killed_when_it_outlives_the_grace_period",
+    "test_pytest_killed_by_a_signal_the_runner_did_not_send_exits_128_plus_it",
+    "test_pytests_output_is_echoed_to_stdout",
+    "test_the_exit_code_names_the_first_of_two_different_signals",
+    "test_the_grace_period_runs_from_the_first_signal_not_the_last",
+    "test_the_recipe_passes_each_argument_through_whole",
+    "test_the_same_signal_twice_at_once_is_one_interrupt",
+    "test_with_no_arguments_it_runs_tools_tests_quietly",
+)
+for _name in NEEDS_PYTEST:
+    setattr(RunToolTestsRecord, _name, unittest.skipIf(importlib.util.find_spec("pytest") is None,
+                                                       "pytest is not installed")(getattr(RunToolTestsRecord, _name)))
+
+
 if __name__ == "__main__":
     unittest.main()
