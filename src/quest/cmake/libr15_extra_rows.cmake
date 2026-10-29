@@ -13,8 +13,8 @@
 #    logged or printed here, never a row.
 #
 # <src-root> is the repository's src/ directory; <json-include> the directory that holds nlohmann/json.hpp.
-# Also callable as a script: cmake -DNEVR_EXTRA_ROWS_FILE=<file> -DNEVR_EXTRA_ROWS_OUT=<cpp> [-DNEVR_EXTRA_ROWS_NO_CHECK=ON] -P
-#   cmake/generate_libr15_extra_rows.cmake  (the generation alone, for the host tests).
+# Also callable as a script: cmake -DNEVR_EXTRA_ROWS_FILE=<file> -DNEVR_EXTRA_ROWS_OUT=<cpp> -P
+#   cmake/generate_libr15_extra_rows.cmake  (the generation alone, no check, for the host tests).
 
 function(nevr_libr15_generate_extra_rows_source rows_file out_cpp)
   if(NOT EXISTS "${rows_file}")

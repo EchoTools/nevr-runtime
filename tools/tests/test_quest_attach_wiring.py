@@ -84,6 +84,8 @@ class AttachIsWired(unittest.TestCase):
         steps = code("integration/production_steps.cpp")
         credits = body(steps, "bool InstallCreditsText() override")
         self.assertIn("nevr_quest::credits_text::InstallCreditsText()", credits)
+        self.assertIn('detail_ = ok ? "ok" : "refused";', credits)
+        self.assertIn("return ok;", credits)
         social = body(steps, "bool InstallSocial() override")
         self.assertIn("quest_social::lobby_full::InstallLobbyFullHooks()", social)
         self.assertIn("nevr_quest::ui_texture_mips::InstallUiTextureMips()", social)

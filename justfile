@@ -1401,6 +1401,12 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     sed 's/"kind": "word_patch"/"kind": "word_patch", "extra": 1/' src/quest/tests/fixtures/libr15_extra_rows_example.json > "$extra/unknown_field.json"
     configure_extra "$PWD/$extra/unknown_field.json" "extra_rows_unknown_field"
     configure_extra "$PWD/$extra/does_not_exist.json" "the file does not exist"
+    : > "$extra/empty.json"
+    configure_extra "$PWD/$extra/empty.json" "extra_rows_json"
+    # The generator alone refuses an empty file too (a build must not embed nothing and call it a variant).
+    empty_rc=0
+    cmake -DNEVR_EXTRA_ROWS_FILE="$PWD/$extra/empty.json" -DNEVR_EXTRA_ROWS_OUT="$extra/empty_data.cpp" -P src/quest/cmake/generate_libr15_extra_rows.cmake > "$extra/empty.log" 2>&1 || empty_rc=$?
+    [ "$empty_rc" -ne 0 ] && grep -qF "the file is empty" "$extra/empty.log" || { echo "test-quest-hooks: FAIL - the generator did not refuse an empty extra-rows file" >&2; cat "$extra/empty.log" >&2; exit 1; }
     # The PC-relative relocator (arm64_reloc.h): each kind decoded and then run, original window against the
     # relocated trampoline far away, on a small A64 interpreter. Pure; no device.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/arm64_reloc_test.cpp \
