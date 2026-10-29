@@ -849,6 +849,54 @@ class ReleaseStagesTest(PackageFixture):
         self.assertIn("install-nevr-runtime.exe", signing)
         self.assertIn("nevr-install.exe", signing)
 
+    def test_seal_of_a_normal_tree_lists_exactly_the_windows_zip_members(self):
+        sealed = self.seal_to(self.make_tree())
+        with zipfile.ZipFile(sealed / "nevr-runtime-v5.0.0-windows.zip") as z:
+            names = set(z.namelist())
+        self.assertEqual(names, {"BugSplat64.dll", "nevr-runtime.dll", "echovr_server.exe", "install-nevr-runtime.exe",
+                                  "nevr-install.exe",
+                                 "install.ps1", "uninstall.ps1", "quest-diagnose.ps1", "README.txt",
+                                 "SHA256SUMS", "SIGNING.txt"})
+
+    def test_seal_refuses_a_directory_in_the_tree_and_writes_nothing(self):
+        tree = self.make_tree()
+        (tree / "content" / "echocombat").mkdir(parents=True)
+        (tree / "content" / "echocombat" / "pack.bin").write_bytes(b"game data")
+        result = self.run_stage("seal", "--tree", str(tree), "--out", str(self.tmp / "s"))
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("content is not a regular file", result.stderr)
+        self.assertFalse((self.tmp / "s").exists())
+
+    def test_seal_refuses_a_stray_file_that_is_not_a_zip_member_and_names_it(self):
+        tree = self.make_tree()
+        (tree / "echocombat.zip").write_bytes(b"PK\x05\x06" + b"\0" * 18)
+        result = self.run_stage("seal", "--tree", str(tree), "--out", str(self.tmp / "s"))
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("echocombat.zip is not a Windows zip member", result.stderr)
+        self.assertIn("allowed:", result.stderr)
+        self.assertIn("install.ps1", result.stderr)
+        self.assertFalse((self.tmp / "s").exists())
+
+    def test_seal_refuses_a_link_even_when_it_has_a_zip_member_name(self):
+        tree = self.make_tree()
+        target = self.tmp / "elsewhere.txt"
+        target.write_text("a file outside the tree", encoding="utf-8")
+        (tree / "README.txt").unlink()
+        (tree / "README.txt").symlink_to(target)
+        result = self.run_stage("seal", "--tree", str(tree), "--out", str(self.tmp / "s"))
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("README.txt is not a regular file", result.stderr)
+        self.assertFalse((self.tmp / "s").exists())
+
+    def test_seal_refuses_a_stray_plugins_directory_and_names_it(self):
+        tree = self.make_tree()
+        (tree / "plugins").mkdir()
+        (tree / "plugins" / "broadcaster.dll").write_bytes(b"MZ")
+        result = self.run_stage("seal", "--tree", str(tree), "--out", str(self.tmp / "s"))
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("plugins is not a regular file", result.stderr)
+        self.assertFalse((self.tmp / "s").exists())
+
     def test_the_texts_state_facts_that_hold_before_and_after_signing_and_use_no_old_model_words(self):
         tree = self.make_tree()
         sealed = self.seal_to(tree)
