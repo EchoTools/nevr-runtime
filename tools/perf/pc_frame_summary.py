@@ -11,14 +11,16 @@ The runtime (src/runtime/frame/frame_stats.h) writes one Info line per 10 s wind
 and one `[NEVR.PERF] frame_stats start mode=... build=...` line at boot. This tool reads the
 `nevr-*.jsonl` files of ONE run (every record carries the process's run id, N80), keeps that run's
 frame_stats lines, and writes summary.json with the fields the Quest exporter's summary has:
-version, median_us, p95_us, fps, dropped (and frames, windows).
+version, median_us_est, p95_us_est, fps, dropped (and frames, windows). The two percentile
+fields carry the suffix _est because they are estimates built from window summaries, not pooled run percentiles
+(percentile_basis says so in the file).
 
 The log carries window summaries, not frames, so the run-level figures are built from them:
 
   frames      sum of the windows' frames (loop-head intervals kept).
   fps         frames / (sum of elapsed_ms / 1000). A window without elapsed_ms counts window_s seconds.
-  median_us   the frame-weighted 50th percentile of the windows' median_us.
-  p95_us      the frame-weighted 95th percentile of the windows' p95_us. An approximation of the pooled p95:
+  median_us_est  the frame-weighted 50th percentile of the windows' median_us.
+  p95_us_est  the frame-weighted 95th percentile of the windows' p95_us. An approximation of the pooled p95:
               the pooled value cannot be recovered from window summaries. max_us (the largest window max)
               and worst_p95_us (the largest window p95) bound it from above.
   dropped     app_dropped + compositor_dropped summed over the windows, or null when no window had a VR
@@ -154,8 +156,9 @@ def summarise(records, run=None, since=None, until=None):
         "run": run,
         "mode": start_line["fields"].get("mode") if start_line else None,
         "host": start_line["fields"].get("host") if start_line else None,
-        "median_us": weighted_percentile([(w["median_us"], w["frames"]) for w in complete], 50),
-        "p95_us": weighted_percentile([(w["p95_us"], w["frames"]) for w in complete], 95),
+        "median_us_est": weighted_percentile([(w["median_us"], w["frames"]) for w in complete], 50),
+        "p95_us_est": weighted_percentile([(w["p95_us"], w["frames"]) for w in complete], 95),
+        "percentile_basis": "window_summaries",
         "max_us": max(w["max_us"] for w in complete),
         "worst_p95_us": max(w["p95_us"] for w in complete),
         "fps": round(frames / seconds, 2) if seconds > 0 and frames > 0 else None,

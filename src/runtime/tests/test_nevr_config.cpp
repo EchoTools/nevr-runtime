@@ -452,6 +452,16 @@ TEST(NevrConfig, AcceptsDiagnosticsSection) {
   EXPECT_FALSE(cfg.Empty());
 }
 
+// #954: `diagnostics.frame_stats` is read by the PC frame-time probe (service_map.cpp, FrameStatsMode), so it is on the
+// schema and a config that sets it has no unknown key.
+TEST(NevrConfig, DiagnosticsFrameStatsIsAKnownKey) {
+  const auto cfg = nevr::NevrConfig::LoadFromString("diagnostics:\n  frame_stats: perf\n");
+  ASSERT_TRUE(cfg.GetString("diagnostics.frame_stats").has_value());
+  EXPECT_EQ(cfg.UnknownKeyCount(), 0u);
+  const std::vector<std::string> known = nevr::KnownConfigKeyPaths();
+  EXPECT_NE(std::find(known.begin(), known.end(), "diagnostics.frame_stats"), known.end());
+}
+
 // `graphics` is a top-level section (the Quest's texture quality is `graphics.texture_quality`, #943). The PC accepts it and
 // reads nothing from it, so one config.yaml can serve both builds; an unknown section is still refused.
 TEST(NevrConfig, AcceptsGraphicsSection) {

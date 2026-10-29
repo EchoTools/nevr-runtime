@@ -114,8 +114,8 @@ class SummariseTest(unittest.TestCase):
         self.assertEqual(summary["version"], "v5.6.0-3-gabc1234")
         self.assertEqual(summary["frames"], 900)
         self.assertEqual(summary["windows"], 2)
-        self.assertEqual(summary["median_us"], 16000)  # 600 of 900 frames are in the first window
-        self.assertEqual(summary["p95_us"], 25000)     # the 95th percentile of the frames reaches the second
+        self.assertEqual(summary["median_us_est"], 16000)  # 600 of 900 frames are in the first window
+        self.assertEqual(summary["p95_us_est"], 25000)     # the 95th percentile of the frames reaches the second
         self.assertEqual(summary["max_us"], 90000)
         self.assertEqual(summary["worst_p95_us"], 25000)
         self.assertEqual(summary["over_1p5x"], 5)
@@ -149,10 +149,26 @@ class SummariseTest(unittest.TestCase):
         summary, _ = pfs.summarise(self.records([rec(window_msg(vr=(0, 0)))]))
         self.assertEqual(summary["dropped"], 0)
 
+    def test_percentiles_are_named_as_estimates_of_window_summaries(self):
+        # Two 1000-frame windows: 940 x 1000 us + 60 x 151000 us (median 1000, p95 151000) and 1000 x 10000 us
+        # (median 10000, p95 10000). Both pooled percentiles are 10000, which window summaries cannot recover, so
+        # the file must not present these figures as run percentiles.
+        records = self.records([
+            rec(window_msg(frames=1000, median=1000, p95=151000, mx=151000, elapsed=10000)),
+            rec(window_msg(frames=1000, median=10000, p95=10000, mx=10000, elapsed=10000)),
+        ])
+        summary, error = pfs.summarise(records)
+        self.assertIsNone(error)
+        self.assertNotIn("median_us", summary)
+        self.assertNotIn("p95_us", summary)
+        self.assertEqual(summary["percentile_basis"], "window_summaries")
+        self.assertEqual(summary["median_us_est"], 1000)
+        self.assertEqual(summary["p95_us_est"], 151000)
+
     def test_windows_with_no_frames_leave_the_percentiles_null(self):
         records = self.records([rec(window_msg(frames=0, median=0, p95=0, mx=0, vr=(1, 0)))])
         summary, _ = pfs.summarise(records)
-        self.assertIsNone(summary["median_us"])
+        self.assertIsNone(summary["median_us_est"])
         self.assertIsNone(summary["fps"])
         self.assertEqual(summary["dropped"], 1)
 
@@ -209,7 +225,7 @@ class MainTest(unittest.TestCase):
             out = pathlib.Path(tmp) / "summary.json"
             self.assertEqual(pfs.main([tmp, "--out", str(out)]), 0)
             summary = json.loads(out.read_text())
-        for key in ("version", "median_us", "p95_us", "fps", "dropped", "frames", "windows"):
+        for key in ("version", "median_us_est", "p95_us_est", "fps", "dropped", "frames", "windows"):
             self.assertIn(key, summary)
         self.assertEqual(summary["frames"], 600)
         self.assertEqual(summary["dropped"], 4)
