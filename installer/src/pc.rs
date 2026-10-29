@@ -46,6 +46,10 @@ impl Layout {
     pub fn runtime(&self) -> PathBuf {
         self.root.join(RUNTIME)
     }
+    /// Where the runtime loads plugins from (ADR 0012). The install makes it and puts nothing in it.
+    pub fn plugins(&self) -> PathBuf {
+        self.root.join("plugins")
+    }
     /// An earlier layout put the runtime beside the game.
     pub fn legacy_runtime(&self) -> PathBuf {
         self.game.join(RUNTIME)
@@ -590,6 +594,9 @@ fn apply(l: &Layout, plan: &Plan, obs: &Observed, pkg: &Package, log: &Log, seam
     let prior_runtime = fs::read(&runtime).ok();
     if writes_host || obs.runtime_sha.as_deref() != Some(ours_rt.as_str()) {
         fs::create_dir_all(&l.root).map_err(|e| io(&l.root, e))?;
+        // An empty plugins folder for the runtime to load from; anything already in it stays as it is.
+        let plugins = l.plugins();
+        fs::create_dir_all(&plugins).map_err(|e| io(&plugins, e))?;
         if prior_runtime.is_some() && action == Action::First {
             let to = fresh(&aside, &format!("{RUNTIME}.original-{st}"));
             fs::rename(&runtime, &to).map_err(|e| io(&to, e))?;
