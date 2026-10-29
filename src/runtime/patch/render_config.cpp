@@ -39,8 +39,8 @@ std::string Float(float value) {
 }
 
 /// The shortest text that reads back as the same double. The GPU score sits next to the selector's thresholds (4.5, 6,
-/// 8, 10), which it compares exactly; any fixed precision prints a score close enough below one as the threshold
-/// itself, while the selector picks the level below.
+/// 8, 10), which it compares exactly; a precision under 17 significant digits prints a score close enough below one as
+/// the threshold itself, while the selector picks the level below. The longest such text is 24 characters.
 std::string Double(double value) {
   char buffer[32];
   const std::to_chars_result result = std::to_chars(buffer, buffer + sizeof(buffer), value);
