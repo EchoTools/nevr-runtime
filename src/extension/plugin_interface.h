@@ -1,13 +1,9 @@
 /*
  * nevr_plugin_interface.h - Plugin interface for NEVR game patches
  *
- * This header defines the interface that gamepatches and legacy
- * use to load and manage plugins. Plugins export a set of C functions
- * that the host calls at defined lifecycle points.
- *
- * Drop this header into:
- *   nevr-runtime/src/runtime/nevr_plugin_interface.h
- *   nevr-runtime/src/legacy/nevr_plugin_interface.h
+ * This header defines the interface the runtime uses to load and manage
+ * plugins. Plugins export a set of C functions that the host calls at
+ * defined lifecycle points.
  */
 
 #pragma once

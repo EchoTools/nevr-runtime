@@ -793,6 +793,9 @@ static int ApplyTruncation(const char* message, int len) {
             if (len > rule.max_length) return rule.max_length;
         }
     }
+    // A `[NEVR.` line is ours and bounded by the Log buffer, and a record cut at 500 bytes loses its last fields (#1139: the
+    // render_config line was cut inside adaptive_min). The cap is for game lines.
+    if (IsNevrLine(message)) return len;
     if (g_config.max_line_length > 0 && len > g_config.max_line_length) {
         return g_config.max_line_length;
     }

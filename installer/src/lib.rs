@@ -9,6 +9,7 @@ pub mod device;
 pub mod error;
 pub mod fetch;
 pub mod ffi;
+pub mod launcher;
 pub mod log;
 pub mod manifest;
 pub mod pc;

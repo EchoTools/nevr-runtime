@@ -109,10 +109,6 @@ dist: build
 verbose-dist: build
     cmake --build --preset {{ preset }} --target dist
 
-# Create legacy distribution package (v1 DLLs only)
-dist-legacy: build
-    cmake --build --preset {{ preset }} --target dist-legacy
-
 # Regenerate C++ protobuf from BSR at proto_pin (buf.build/echotools/nevr-api) and stamp gen/ (tools/proto_stamp.py).
 # Uses vcpkg's host protoc to match the runtime version; the protoc must be installed (`just configure` does that).
 # Generate before CMake configure: `configure` regenerates on its own when gen/ is stale, so this recipe is for forcing a refresh.
@@ -355,11 +351,16 @@ package-dev store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
         cmake --preset mingw-dev
         cmake --build --preset mingw-dev
     )
+    # The core installer install.ps1 runs (installer/, ADR 0023), for Windows, locked and stripped.
+    CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc cargo build --locked --release --target x86_64-pc-windows-gnu \
+        --manifest-path installer/Cargo.toml --bin nevr-install --target-dir build/installer
+    x86_64-w64-mingw32-strip build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe
     just _quest-apk "{{ store_apk }}"
     python3 tools/package_release.py --commit "$commit" --out "$out" \
         --dll build/mingw-dev/bin/BugSplat64.dll \
         --runtime-dll build/mingw-dev/bin/nevr-runtime.dll \
         --server-exe build/mingw-dev/bin/echovr_server.exe \
+        --installer-exe build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe \
         --apk build/android-dev/repack/r15_nevr-sentinel_signed.apk \
         --pc-header build/mingw-dev/generated/nevr_builtin_defaults.h \
         --quest-header build/android-dev/generated/nevr_builtin_defaults.h \
@@ -433,30 +434,25 @@ release-quest-apk tag store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
 publish-quest-apk tag:
     python3 tools/publish_quest_apk.py "{{ tag }}"
 
-# Install the repacked Quest APK + game data onto the connected headset (sideload).
-# Pass `yes` (`just quest-install yes`) to allow removing the store build when the
-# headset refuses an in-place update because the signer differs; that
-# uninstall deletes the app's data on the headset. Without `yes` the recipe stops
-# and prints what would be deleted. Order: check host tools and the APK, require
-# exactly one authorized headset with ~2.2 GiB free on /sdcard and /data/local/tmp,
-# fetch and SHA-256-verify the game data, `adb install -r -g` the APK
-# (uninstalling first only on INSTALL_FAILED_UPDATE_INCOMPATIBLE and only with
-# `yes`), then push the data zip and extract it to the legacy path the unpatched
-# APK reads (/sdcard/readyatdawn/_data). The store OBB is a keyed (encrypted) OBB;
-# Horizon OS, like Android 11 and later, refuses every keyed mount whatever the
-# APK's signer, so it is never used (the sentinel answers the game's mount itself:
-# docs/adr/0007-quest-obb-mount-skip.md).
-# The download is cached at build/android-arm64/quest-data/_data.zip (~937 MB; a
-# different data_sha256 gets its own _data-<hash prefix>.zip),
-# written as .part and renamed only after the hash matches. The default data_url is the
-# content-addressed file the signed release manifest (https://evr.echo.taxi/nevr-runtime/manifest.json)
-# lists as its `game-data` artifact, named echovr-data-<first 12 hex of the sha256>.zip, and the
-# default data_sha256 is that artifact's sha256. A data_url or data_sha256 passed by hand is
-# trust-on-first-use: the SHA-256 of whatever the URL served when the pin was taken, not a
-# publisher-signed value. A cached file that does not match its own hash is deleted. The download and every long adb call have time
-# limits. The recipe body is tools/quest-install.sh (tested in tools/tests/test_quest_install.py).
-quest-install yes="" apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" data_url="https://evr.echo.taxi/nevr-runtime/data/echovr-data-fc2eedeacc50.zip" data_sha256="fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c":
-    tools/quest-install.sh {{ quote(yes) }} {{ quote(apk) }} {{ quote(data_url) }} {{ quote(data_sha256) }}
+# Build the core installer CLI (installer/, ADR 0023) for this machine: installer/target/release/nevr-install.
+# Locked to the committed Cargo.lock; set CARGO_TARGET_DIR to keep the regenerable build tree out of the checkout.
+build-installer:
+    cargo build --locked --release --manifest-path installer/Cargo.toml --bin nevr-install
+
+# Install the NEVR Quest APK + game data onto the connected headset (sideload) through the core installer
+# (tools/quest-install.sh calls `nevr-install quest install`). The core fetches the signed release manifest, takes the
+# APK and the game data the channel's release names, checks both, plans from what the headset holds and installs;
+# every run writes a [NEVR.INSTALL] log (the path is in its output). The recipe holds no hash, URL or version.
+# Pass `--yes-uninstall` (`just quest-install --yes-uninstall`) to let the core remove a differently signed install
+# when the headset refuses an in-place update; that uninstall deletes the app's data on the headset. Without it the run
+# ends `needs-user` and says what it would delete. `--version V` installs release V instead of the channel's.
+# Needs adb, aapt2 and apksigner on PATH. A locally built tester APK is installed by giving the recipe its path
+# (`just quest-install build/android-dev/repack/r15_nevr-sentinel_signed.apk`), or a directory that holds exactly one
+# .apk and its <name>.apk.sha256: the core checks the file itself, logs every step as an unverified dev artifact, and
+# still takes the game data from the signed manifest.
+[positional-arguments]
+quest-install *args: build-installer
+    NEVR_INSTALL="${CARGO_TARGET_DIR:-installer/target}/release/nevr-install" tools/quest-install.sh "$@"
 
 # --- Tests ---
 
@@ -576,7 +572,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_lobby_full_backoff --target test_menu_version_label --target test_splash_skip --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_invite_wizard --target test_ui_text --target test_invite_choices --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_arena_public_clock --target test_arena_public_clock_hook
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_lobby_full_backoff --target test_menu_version_label --target test_splash_skip --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_invite_wizard --target test_ui_text --target test_invite_choices --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_arena_public_clock --target test_arena_public_clock_hook --target test_render_config --target test_render_config_hook
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_runtime_abi
@@ -803,7 +799,7 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
-    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_invite_wizard test_ui_text test_invite_choices test_asset_cache test_session_router test_asset_registry test_installed_levels test_telemetry_game_type test_arena_round_time test_nevr_root test_arena_public_clock test_arena_public_clock_hook; do
+    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_invite_wizard test_ui_text test_invite_choices test_asset_cache test_session_router test_asset_registry test_installed_levels test_telemetry_game_type test_arena_round_time test_nevr_root test_arena_public_clock test_arena_public_clock_hook test_render_config test_render_config_hook; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -1396,6 +1392,13 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/hwdump_share_test" -ldl
     timeout 120 "$out/hwdump_share_test"
+    # The render-configuration log (#1139): the five real handlers through the thunk entries against stand-ins for the VrApi
+    # functions, the line at the first frame and on each forced change, the globals read only from the proved image, the poller.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/render_config_hook_test.cpp \
+        src/quest/sentinel/render_config_hook.cpp src/quest/sentinel/texture_quality_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/render_config_hook_test" -ldl
+    timeout 120 "$out/render_config_hook_test"
     # The log-only resource request hook (#871): the real handler through the thunk entry against a stand-in for
     # FillResourceFileRequest that fills a request the way the pinned function does.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/resource_request_hook_test.cpp \
@@ -1964,10 +1967,6 @@ verify:
     # A dirty tree names its files, so the log says what differs from the commit it names (#844).
     if [ -n "$dirty" ]; then printf '%s\n' "$dirty" | sed 's/^/verify: dirty /'; fi
     just build
-    # `just build` filters its output through grep and always exits 0, so its exit
-    # code is a proxy, not a pass/fail signal. Re-run the real build to derive success
-    # from the compiler/linker itself — a no-op when green, nonzero when truly broken.
-    cmake --build --preset {{ preset }}
     # The DLL embeds exactly the public defaults file (the build reads no other source).
     python3 tools/check_embedded_defaults.py --header build/{{ preset }}/generated/nevr_builtin_defaults.h --binary build/{{ preset }}/bin/nevr-runtime.dll
     # --- Parallel test block --------------------------------------------------
@@ -3240,6 +3239,10 @@ verify:
     # in README.md and CLAUDE.md because nothing checked. A fact about the tree
     # asserted in prose drifts silently; this is the cheapest possible enforcement.
     python3 tools/verify_doc_paths.py
+    # AGENTS.md imports the standards it makes part of its contract (#1277): an import
+    # line that is lost, fenced or indented is no longer expanded; one moved below the
+    # first section is no longer the first thing the contract says.
+    python3 tools/verify_agents_imports.py
     # N92/N105: exactly one ws_bridge. Two divergent copies would let a fix land in
     # the one that does not run (N61's matchmaker fix did). The bridge is
     # in-process (StopWebSocketBridgeListener); this guard keeps a separate
@@ -3695,7 +3698,7 @@ verify:
     # and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 2166
+    python3 tools/verify_gtest_floor.py --floor 2234
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py
@@ -3764,7 +3767,7 @@ vcpkg-pin-check:
     # Linux is case-sensitive. CI creates the link; a development machine needs it too (#294).
     lib=${NEVR_MINGW_LIB:-/usr/x86_64-w64-mingw32/lib}
     if [ ! -e "$lib/libCrypt32.a" ]; then
-        echo "vcpkg-pin-check: FAIL — $lib/libCrypt32.a is missing; the legacy gameserver will not link (cannot find -lCrypt32)." >&2
+        echo "vcpkg-pin-check: FAIL — $lib/libCrypt32.a is missing; nevr-runtime.dll will not link ixwebsocket (cannot find -lCrypt32)." >&2
         echo "Fix: sudo ln -s libcrypt32.a $lib/libCrypt32.a   (CI does the same, see .github/workflows/build.yml)" >&2
         exit 1
     fi
