@@ -285,4 +285,8 @@ class Steps {
 // Runs the sequence. Never throws, never blocks.
 ConstructorReport RunConstructorSequence(Steps& steps) noexcept;
 
+// The begin record of the constructor (#1391): one sentinel_ctor line, action=begin, with the version and the commit of this
+// build. entry.cpp passes nevr_build::kVersion and nevr_build::kCommit from its generated build header. Never throws.
+void LogConstructorBegin(const char* version, const char* commit) noexcept;
+
 }  // namespace nevr_quest::integration

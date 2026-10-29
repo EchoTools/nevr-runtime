@@ -2,7 +2,9 @@
 """Dispatch the release train when a scheduled run was dropped (#1409).
 
 release-train.yml runs every three hours (cron "17 */3 * * *"), and GitHub has dropped a scheduled slot. This guard runs
-hourly (release-train-guard.yml) and decides from the train's own run list whether the train is due:
+hourly as a systemd user timer on the publisher's machine (tools/systemd/nevr-train-guard.timer, at :07), not as a GitHub
+schedule: GitHub drops scheduled runs, and a job's token cannot read repository variables. It decides from the train's
+own run list whether the train is due:
 
 - switch off (repository variable RELEASE_TRAIN is not "true")        -> none, switch_off
 - nothing releasable on origin/main (next_release_version.py exit 1)   -> none, no_releasable_change
@@ -10,9 +12,12 @@ hourly (release-train-guard.yml) and decides from the train's own run list wheth
 - the newest train run created within 195 minutes of now                -> none, recent_run
 - otherwise (also no run at all)                                        -> dispatch, no_run_in_window
 
-Every decision is one JSON line on stdout and is appended to $GITHUB_STEP_SUMMARY. A dispatch is `gh workflow run
-release-train.yml --ref main`, followed by a second line {"event": "dispatched"}. Any failed gh or tool call exits non-zero
-and names the call. Standard library only; the fakes in tools/tests/test_release_train_guard.py drive main() end to end.
+Every decision is one JSON line on stdout and is appended to the log file (--log-file, default
+$XDG_STATE_HOME/nevr-runtime/release-train-guard.jsonl, else ~/.local/state/nevr-runtime/...). It is also appended to
+$GITHUB_STEP_SUMMARY when that variable is set. A dispatch is `<gh> workflow run release-train.yml --ref main`, followed by
+a {"event": "dispatched"} line. <gh> is --gh, else $GH_BIN, else gh-spritz. A log that cannot be written before the run
+starts fails the run before any gh call; any failed gh or tool call exits non-zero and names the call. Standard library
+only; the fakes in tools/tests/test_release_train_guard.py drive main() end to end.
 """
 from __future__ import annotations
 
@@ -28,6 +33,8 @@ WORKFLOW = "release-train.yml"
 WINDOW_MINUTES = 195
 ACTIVE = frozenset({"queued", "in_progress", "waiting", "pending"})
 TOOL = "release_train_guard"
+DEFAULT_GH = "gh-spritz"
+LOG_NAME = "release-train-guard.jsonl"
 VERSION_TOOL = pathlib.Path(__file__).resolve().with_name("next_release_version.py")
 
 
@@ -68,17 +75,32 @@ def decide(now: dt.datetime, runs: list[dict], releasable: bool, switch_on: bool
     return result("dispatch", "no_run_in_window")
 
 
+def gh_binary(env: dict[str, str]) -> str:
+    """The gh the guard calls when --gh is not given: $GH_BIN, else the publisher's gh-spritz (as the Quest timer)."""
+    return env.get("GH_BIN") or DEFAULT_GH
+
+
+def default_log_path(env: dict[str, str]) -> pathlib.Path:
+    state = env.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    return pathlib.Path(state) / "nevr-runtime" / LOG_NAME
+
+
 class Call:
     """One gh call, run with the token from the environment. A failure is named, never swallowed."""
 
-    def __init__(self, args: list[str]) -> None:
+    def __init__(self, gh: str, args: list[str]) -> None:
+        self.gh = gh
         self.args = args
         self.what = " ".join(args[:3])
 
     def stdout(self) -> str:
-        proc = subprocess.run(["gh", *self.args], capture_output=True, text=True)
+        name = pathlib.Path(self.gh).name
+        try:
+            proc = subprocess.run([self.gh, *self.args], capture_output=True, text=True)
+        except OSError as error:
+            raise GuardFailure(f"{name} {self.what} could not run: {error.strerror or error}") from error
         if proc.returncode != 0:
-            raise GuardFailure(f"gh {self.what} failed with exit {proc.returncode}: {proc.stderr.strip()}")
+            raise GuardFailure(f"{name} {self.what} failed with exit {proc.returncode}: {proc.stderr.strip()}")
         return proc.stdout
 
 
@@ -96,13 +118,13 @@ def releasable_tag(repo: str, version_tool: pathlib.Path) -> str | None:
     raise GuardFailure(f"next_release_version.py failed with exit {proc.returncode} on {repo}")
 
 
-def switch_is_on(repo: str) -> bool:
-    variables = json.loads(Call(["variable", "list", "--repo", repo, "--json", "name,value"]).stdout())
+def switch_is_on(repo: str, gh: str) -> bool:
+    variables = json.loads(Call(gh, ["variable", "list", "--repo", repo, "--json", "name,value"]).stdout())
     return any(v["name"] == "RELEASE_TRAIN" and v["value"] == "true" for v in variables)
 
 
-def train_runs(repo: str) -> list[dict]:
-    listed = Call([
+def train_runs(repo: str, gh: str) -> list[dict]:
+    listed = Call(gh, [
         "run", "list", "--workflow", WORKFLOW, "--repo", repo, "--limit", "20",
         "--json", "databaseId,status,event,createdAt",
     ]).stdout()
@@ -112,8 +134,29 @@ def train_runs(repo: str) -> list[dict]:
     ]
 
 
-def emit(record: dict) -> None:
-    print(json.dumps({"tool": TOOL, **record}), flush=True)
+def ensure_log(path: pathlib.Path) -> None:
+    """Create the log and its folder now, so a run that cannot record its decision stops before it decides anything."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8"):
+            pass
+    except OSError as error:
+        raise GuardFailure(f"cannot write the log {path}: {error.strerror or error}") from error
+
+
+def append_log(path: pathlib.Path, record: dict) -> None:
+    try:
+        with open(path, "a", encoding="utf-8") as log:
+            log.write(json.dumps(record) + "\n")
+    except OSError as error:
+        raise GuardFailure(f"cannot write the log {path}: {error.strerror or error}") from error
+
+
+def emit(record: dict, log_path: pathlib.Path) -> None:
+    """Append to the log first: a line is printed only once it is on record."""
+    line = {"tool": TOOL, **record}
+    append_log(log_path, line)
+    print(json.dumps(line), flush=True)
 
 
 def append_summary(line: str) -> None:
@@ -124,21 +167,40 @@ def append_summary(line: str) -> None:
         summary.write(line + "\n")
 
 
+def report_failure(reason: str, log_path: pathlib.Path) -> int:
+    fail = {"tool": TOOL, "event": "fail", "reason": reason}
+    sys.stderr.write(json.dumps(fail) + "\n")
+    try:
+        append_log(log_path, fail)
+    except GuardFailure as log_failure:
+        sys.stderr.write(f"release_train_guard: {log_failure}\n")
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[1])
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""), help="owner/name")
     parser.add_argument("--dry-run", action="store_true", help="print the decision and do not dispatch")
     parser.add_argument("--version-tool", type=pathlib.Path, default=VERSION_TOOL,
                         help="next_release_version.py (default: the one beside this file)")
+    parser.add_argument("--gh", default=None, help="the gh binary (default: $GH_BIN, else gh-spritz)")
+    parser.add_argument("--log-file", type=pathlib.Path, default=None,
+                        help="the JSONL decision log (default: $XDG_STATE_HOME/nevr-runtime/release-train-guard.jsonl)")
     args = parser.parse_args(argv)
     if not args.repo:
         sys.stderr.write("release_train_guard: no repository: pass --repo owner/name or set GITHUB_REPOSITORY\n")
         return 1
+    gh = args.gh or gh_binary(os.environ)
+    log_path = args.log_file or default_log_path(os.environ)
+    try:
+        ensure_log(log_path)
+    except GuardFailure as failure:
+        return report_failure(str(failure), log_path)
     now = dt.datetime.now(dt.timezone.utc)
     try:
         tag = releasable_tag(args.repo, args.version_tool)
-        switch_on = switch_is_on(args.repo)
-        runs = train_runs(args.repo)
+        switch_on = switch_is_on(args.repo, gh)
+        runs = train_runs(args.repo, gh)
         decision = decide(now, runs, tag is not None, switch_on)
         record = {
             "event": "decision",
@@ -150,14 +212,13 @@ def main(argv: list[str] | None = None) -> int:
             "dry_run": args.dry_run,
             "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
-        emit(record)
+        emit(record, log_path)
         append_summary(json.dumps({"tool": TOOL, **record}))
         if decision["action"] == "dispatch" and not args.dry_run:
-            Call(["workflow", "run", WORKFLOW, "--repo", args.repo, "--ref", "main"]).stdout()
-            emit({"event": "dispatched"})
+            Call(gh, ["workflow", "run", WORKFLOW, "--repo", args.repo, "--ref", "main"]).stdout()
+            emit({"event": "dispatched"}, log_path)
     except GuardFailure as failure:
-        sys.stderr.write(json.dumps({"tool": TOOL, "event": "fail", "reason": str(failure)}) + "\n")
-        return 1
+        return report_failure(str(failure), log_path)
     return 0
 
 
