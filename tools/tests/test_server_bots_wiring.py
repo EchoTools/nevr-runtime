@@ -134,6 +134,11 @@ DRIVER_NEEDS = [
      r"\s*const\s+Request\s+request\s*=\s*BuildRequest\(\s*noPosition\s*\)", "the request does not carry the game's no-position"),
     (r"NoBodyWarningDue\(\s*g_schedule\s*,\s*now\s*\)", "the no-body warning is not rate limited"),
     (r"server bots driver running thread=", "the driver's first frame is not said"),
+    # DriverRuns gates on the mode and the thread only: an unarmed server reaches OnFrame and every session start.
+    (r"void\s+OnFrame\(\)\s*\{\s*const\s+uint32_t\s+wanted\s*=\s*ArmedBots\(\)\s*;\s*if\s*\(\s*wanted\s*==\s*0\s*\)\s*return\s*;",
+     "OnFrame does not stop first when no bots are armed"),
+    (r"void\s+SessionSettings\([^)]*\)\s*\{\s*const\s+uint32_t\s+wanted\s*=\s*ArmedBots\(\)\s*;\s*"
+     r"if\s*\(\s*wanted\s*==\s*0\s*\)\s*return\s*;", "an unarmed server's session start is rewritten"),
 ]
 
 
@@ -274,6 +279,8 @@ class ServerBotsWiring(unittest.TestCase):
             ("isServer ? NevrCfgGetFlat", "true ? NevrCfgGetFlat"),
             ("InstallLines(isServer, text,", "InstallLines(true, text,"),
             ("g_armed.store(r.armed,", "g_armed.store(1,"),
+            ("  if (wanted == 0) return;\n  if (!g_firstFrameLogged)", "  if (!g_firstFrameLogged)"),
+            ("  if (wanted == 0) return;\n  const uint8_t* bytes", "  const uint8_t* bytes"),
             ("for (const Line& line : r.lines) LogLine(line);", "LogLine(r.lines[0]);"),
             ("EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info", "EchoVR::LogLevel::Info : EchoVR::LogLevel::Info"),
             ("ReadNetGame(netGame)", "NetGameView{}"),
