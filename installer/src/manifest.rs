@@ -87,6 +87,21 @@ pub fn read_state(dir: &Path) -> Result<State> {
     Ok(State { highest, revoked, last_sha256 })
 }
 
+/// The lock a run holds from its read of the stored state to the end of its commit (`commit`), so two runs that share a
+/// state directory never interleave a read with another run's write. Released when dropped. A second run waits for it.
+#[derive(Debug)]
+pub struct StateLock(#[allow(dead_code)] fs::File); // the open file is the lock: it is held, never read, until the drop
+
+/// Takes the exclusive state lock (`state.lock` in `dir`), blocking until the run holding it releases it. Never take it
+/// twice in one process: the second call would wait on the first. Callers take it, `commit` does not.
+pub fn lock_state(dir: &Path) -> Result<StateLock> {
+    let fail = |e: std::io::Error| Error::new(6, format!("{}: {e}", dir.join("state.lock").display()));
+    fs::create_dir_all(dir).map_err(fail)?;
+    let f = fs::OpenOptions::new().create(true).write(true).truncate(false).open(dir.join("state.lock")).map_err(fail)?;
+    f.lock().map_err(fail)?;
+    Ok(StateLock(f))
+}
+
 /// The result of steps 2 to 5 (and the state step 6 will store). Nothing is written until `commit`.
 #[derive(Debug, Clone)]
 pub struct Verified {
@@ -175,23 +190,41 @@ pub fn verify(bytes: &[u8], sig: &[u8], pins: &Pins, state: &State, now: &str, m
     })
 }
 
-/// Step 6: the manifest and its signature, then the state last, each a temporary file renamed over the old one.
+/// Step 6: the manifest and its signature, then the state last, each a temporary file renamed over the old one. The caller
+/// holds the state lock (`lock_state`) from its read of the state to this call. The stored version floor is re-read here
+/// and only ever raised: a verified manifest older than the stored one leaves the stored pair as it is, so the floor and
+/// the pair on disk always agree (the next run's step 4 would refuse a pair below its own floor).
 pub fn commit(dir: &Path, v: &Verified) -> Result<()> {
     let fail = |what: &str, e: std::io::Error| Error::new(6, format!("{what}: {e}"));
     fs::create_dir_all(dir).map_err(|e| fail(&dir.display().to_string(), e))?;
-    write_atomic(&dir.join("manifest.json"), &v.bytes).map_err(|e| fail("manifest.json", e))?;
-    write_atomic(&dir.join("manifest.json.sig"), v.sig_text.as_bytes()).map_err(|e| fail("manifest.json.sig", e))?;
+    let stored = read_state(dir)?;
+    let mut revoked = stored.revoked.clone();
+    for k in &v.new_state.revoked {
+        if !revoked.contains(k) {
+            revoked.push(k.clone());
+        }
+    }
+    revoked.sort();
+    let (highest, last_sha256) = if v.version >= stored.highest {
+        write_atomic(&dir.join("manifest.json"), &v.bytes).map_err(|e| fail("manifest.json", e))?;
+        write_atomic(&dir.join("manifest.json.sig"), v.sig_text.as_bytes()).map_err(|e| fail("manifest.json.sig", e))?;
+        (v.version, v.new_state.last_sha256.clone())
+    } else {
+        (stored.highest, stored.last_sha256.clone())
+    };
     let state = json!({
-        "highest_manifest_version": v.new_state.highest,
-        "revoked_keys": v.new_state.revoked,
-        "last_manifest_sha256": v.new_state.last_sha256,
+        "highest_manifest_version": highest,
+        "revoked_keys": revoked,
+        "last_manifest_sha256": last_sha256,
     });
     write_atomic(&dir.join("state.json"), &serde_json::to_vec_pretty(&state).expect("state serializes")).map_err(|e| fail("state.json", e))
 }
 
 /// Step 8, first half: the manifest that passed step 2, read back from the state directory. It has to be the one
-/// `state.json` names. No caller passes a manifest path.
+/// `state.json` names. No caller passes a manifest path. The pair is read under the state lock, so a run committing it
+/// at the same moment cannot make this read a half-written pair.
 pub fn stored(dir: &Path) -> Result<Value> {
+    let _lock = lock_state(dir).map_err(|e| Error::new(8, e.msg))?;
     let state = read_state(dir).map_err(|e| Error::new(8, e.msg))?;
     let bytes = fs::read(dir.join("manifest.json")).map_err(|e| Error::new(8, format!("no verified manifest in {}: {e}", dir.display())))?;
     if state.last_sha256.is_empty() || sha256_hex(&bytes) != state.last_sha256 {

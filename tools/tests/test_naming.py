@@ -101,6 +101,9 @@ BRAND_PROSE_SPELLINGS = {
     "docs/beta/INSTALL.md": {"nEVR"},  # prose: update nEVR through the launcher
     "installer/src/launcher.rs": {"nEVR"},  # comment prose, and the version text the refusal line shows
     "installer/src/session.rs": {"nEVR"},  # the refusal line a player reads: "nEVR 5.4.3 is installed"
+    "installer/src/main.rs": {"nEVR"},  # the usage line and the root refusal an operator reads (#1353)
+    "installer/tests/nevr_root.rs": {"nEVR"},  # the refusal reason the test asserts (#1353)
+    "tools/package-release/install.ps1": {"nEVR"},  # the header comment on -Root (#1353)
 }
 
 

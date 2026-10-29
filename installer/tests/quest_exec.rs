@@ -422,3 +422,55 @@ fn a_push_that_fails_leaves_no_temp_zip_on_the_headset() {
     assert!(dev.shell_cmds().iter().any(|(c, _)| c == &format!("rm -f '{REMOTE_ZIP}'")), "a partial copy of the zip stays: {:?}", dev.shell_cmds());
     assert!(!dev.shell_cmds().iter().any(|(c, _)| c.contains("unzip")), "nothing is unpacked after a failed push");
 }
+
+/// A `file://` base whose folder name carries a query (#1353): `bytes` sit at `rel` under that folder.
+fn file_base_with_query(d: &Path, rel: &str, bytes: &[u8]) -> String {
+    let folder = d.join("base?token=tok-9f3ab1");
+    let file = folder.join(rel);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, bytes).unwrap();
+    format!("file://{}", folder.display())
+}
+
+#[test]
+fn an_apk_fetched_from_a_base_with_a_query_is_logged_without_it() {
+    let d = tempfile::tempdir().unwrap();
+    let apk = b"quest-apk-bytes".to_vec();
+    let art = apk_art(&apk);
+    let base = file_base_with_query(d.path(), &art.path, &apk);
+    let log = Log::open(&d.path().join("l.jsonl"), "quest").unwrap();
+    let dev = Fake::new(&[]);
+    let plan = plan_with(vec![Step::FetchApk], Some(art), None);
+    quest::execute(&dev, &serde_json::json!({}), "1.0.0", &plan, &opts(d.path(), &base, true), &log).unwrap();
+    let text = std::fs::read_to_string(d.path().join("l.jsonl")).unwrap();
+    let fetched = records(&d.path().join("l.jsonl")).into_iter().find(|r| r["event"] == "artifact_fetch" && r["kind"] == "quest-apk").expect("the APK fetch is logged");
+    assert_eq!(fetched["ok"], true, "the success line is the one under test: {fetched}");
+    assert!(!text.contains("tok-9f3ab1"), "the base's query was written down: {text}");
+}
+
+#[test]
+fn game_data_fetched_from_a_base_with_a_query_is_logged_without_it() {
+    let d = tempfile::tempdir().unwrap();
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut z = zip::ZipWriter::new(&mut buf);
+        z.start_file("_data/1/rad15/android/manifests/aa", zip::write::SimpleFileOptions::default()).unwrap();
+        z.write_all(b"AAA").unwrap();
+        z.finish().unwrap();
+    }
+    let zip_bytes = buf.into_inner();
+    let data = Artifact {
+        kind: "game-data".into(), platform: Some("android-arm64".into()), path: "data/echovr-data-aaaaaaaaaaaa.zip".into(),
+        size: zip_bytes.len() as u64, sha256: sha256_hex(&zip_bytes), android: None, game_data: None,
+        contents: vec![Content { path: "_data/1/rad15/android/manifests/aa".into(), sha256: sha256_hex(b"AAA"), size: 3 }],
+    };
+    let base = file_base_with_query(d.path(), &data.path, &zip_bytes);
+    let log = Log::open(&d.path().join("l.jsonl"), "quest").unwrap();
+    let dev = Fake::new(&[]);
+    let plan = plan_with(vec![Step::FetchData], None, Some(data));
+    quest::execute(&dev, &serde_json::json!({}), "1.0.0", &plan, &opts(d.path(), &base, false), &log).unwrap();
+    let text = std::fs::read_to_string(d.path().join("l.jsonl")).unwrap();
+    let fetched = records(&d.path().join("l.jsonl")).into_iter().find(|r| r["event"] == "artifact_fetch" && r["kind"] == "game-data").expect("the game-data fetch is logged");
+    assert_eq!(fetched["ok"], true, "the success line is the one under test: {fetched}");
+    assert!(!text.contains("tok-9f3ab1"), "the base's query was written down: {text}");
+}

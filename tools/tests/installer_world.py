@@ -105,7 +105,8 @@ class World:
         (self.game / "BugSplat64.dll").write_bytes(GAME)
 
     def core_args(self) -> list[str]:
-        return ["--root", str(self.root), "--base", self.server.base, "--pins", str(self.pins)]
+        # The nevr folder is a temporary one, not %LOCALAPPDATA%\nevr\echovr: a dev run says so (#1353).
+        return ["--root", str(self.root), "--base", self.server.base, "--pins", str(self.pins), "--dev-nevr-root"]
 
     def game_files(self) -> list[str]:
         """What the game folder holds, by name: the standing rule is that only BugSplat64.dll of ours is ever in it."""

@@ -138,12 +138,12 @@ impl Session {
         let fetched = match artifact::download(&url, &art, &zip_path) {
             Ok(f) => f,
             Err(e) => {
-                self.log.error("artifact_fetch", 8, json!({"kind": "windows-zip", "url": url, "size": art.size, "ok": false, "reason": e.msg}))?;
+                self.log.error("artifact_fetch", 8, json!({"kind": "windows-zip", "url": crate::util::redact_url(&url), "size": art.size, "ok": false, "reason": e.msg}))?;
                 self.log.error("stage_end", 8, json!({"version": v, "ok": false, "reason": e.msg, "direction": dir}))?;
                 return Err(e);
             }
         };
-        self.log.info("artifact_fetch", 8, json!({"kind": "windows-zip", "url": url, "size": art.size, "bytes": fetched.bytes, "sha256": fetched.sha256, "ok": true, "resumed_from": fetched.resumed_from}))?;
+        self.log.info("artifact_fetch", 8, json!({"kind": "windows-zip", "url": crate::util::redact_url(&url), "size": art.size, "bytes": fetched.bytes, "sha256": fetched.sha256, "ok": true, "resumed_from": fetched.resumed_from}))?;
         let staged = (|| -> Result<()> {
             artifact::verify_zip(&zip_path, &art, false)?;
             let partial = stage_root.join(format!("{v}.partial-{}", std::process::id()));

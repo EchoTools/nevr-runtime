@@ -471,7 +471,7 @@ pub fn execute(dev: &dyn Device, m: &Value, version: &str, plan: &Plan, opts: &R
                 let out = opts.work_dir.join(a.path.rsplit('/').next().unwrap_or("quest.apk"));
                 let url = format!("{}/{}", opts.base, a.path);
                 let f = artifact::download(&url, a, &out).map_err(|e| e.to_string())?;
-                log.info("artifact_fetch", 8, json!({"kind": "quest-apk", "url": url, "size": a.size, "bytes": f.bytes, "sha256": f.sha256, "ok": true, "resumed_from": f.resumed_from})).map_err(|e| e.to_string())?;
+                log.info("artifact_fetch", 8, json!({"kind": "quest-apk", "url": crate::util::redact_url(&url), "size": a.size, "bytes": f.bytes, "sha256": f.sha256, "ok": true, "resumed_from": f.resumed_from})).map_err(|e| e.to_string())?;
                 apk_path = Some(out);
                 Ok(())
             }
@@ -518,7 +518,7 @@ pub fn execute(dev: &dyn Device, m: &Value, version: &str, plan: &Plan, opts: &R
                 let out = opts.work_dir.join(a.path.rsplit('/').next().unwrap_or("data.zip"));
                 let url = format!("{}/{}", opts.base, a.path);
                 let f = artifact::download(&url, a, &out).map_err(|e| e.to_string())?;
-                log.info("artifact_fetch", 8, json!({"kind": "game-data", "url": url, "size": a.size, "bytes": f.bytes, "sha256": f.sha256, "ok": true, "resumed_from": f.resumed_from})).map_err(|e| e.to_string())?;
+                log.info("artifact_fetch", 8, json!({"kind": "game-data", "url": crate::util::redact_url(&url), "size": a.size, "bytes": f.bytes, "sha256": f.sha256, "ok": true, "resumed_from": f.resumed_from})).map_err(|e| e.to_string())?;
                 artifact::verify_zip(&out, a, true).map_err(|e| e.to_string())?;
                 data_zip = Some(out);
                 Ok(())
