@@ -774,7 +774,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     }
   }
 
-  // #1422: a server's private-match team size (network.max_team_size, absent = the game's 5), at ServerAssignTeam's
+  // #1422: a server's match team size (network.max_team_size, absent = the game's 5), at ServerAssignTeam's
   // two checked-patch sites; a client logs that it does not apply (N122/N124).
   nevr_server_team_size::Install(g_isServer != FALSE);
 

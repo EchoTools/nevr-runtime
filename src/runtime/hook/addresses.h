@@ -744,9 +744,10 @@ constexpr uintptr_t GET_TIME_OVERRIDE_VALUE = 0x209CB00;
 /// The team cap: `mov eax, 5; shr rsi, 1; cmp rsi, 5` (VA 0x1401AB8C2), min(Lobby::maxEntrants / 2, 5).
 constexpr uintptr_t SERVER_ASSIGN_TEAM_CAP = 0x1AB8C2;
 constexpr size_t SERVER_ASSIGN_TEAM_CAP_SIZE = 12;
-/// The team slot: the team's count into the member's 5-bit slot field (VA 0x1401ABC8A).
+/// The team slot: the team's count into the member's 5-bit slot field, and the two copies of the word after it
+/// (VA 0x1401ABC8A to 0x1401ABCA3).
 constexpr uintptr_t SERVER_ASSIGN_TEAM_SLOT = 0x1ABC8A;
-constexpr size_t SERVER_ASSIGN_TEAM_SLOT_SIZE = 18;
+constexpr size_t SERVER_ASSIGN_TEAM_SLOT_SIZE = 26;
 
 // ============================================================================
 // Future Wave 1 Hook Targets (validated, not yet hooked)

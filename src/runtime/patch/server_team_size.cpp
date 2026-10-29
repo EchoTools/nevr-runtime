@@ -22,28 +22,14 @@ bool ProcessWrite(void* dest, const void* src, size_t n) { return ProcessMemcpy(
 }  // namespace
 
 void Install(bool isServer) {
-  if (!isServer) {
-    Log(EchoVR::LogLevel::Info,
-        "[NEVR.PATCH] server team size not applied: this is a client (the server assigns teams)");
-    return;
-  }
-  const char* text = NevrCfgGetFlat("nevr_max_team_size");
-  std::string problem;
-  const uint32_t size = ParseMaxTeamSize(text, &problem);
-  if (!problem.empty()) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] network.max_team_size=%s is %s (allowed %u..%u); using %u", text,
-        problem.c_str(), static_cast<unsigned>(kMinTeamSize), static_cast<unsigned>(kMaxTeamSize),
-        static_cast<unsigned>(size));
-  }
   uint8_t* const base = reinterpret_cast<uint8_t*>(EchoVR::g_GameBaseAddress);
   uint8_t* const capSite = base + nevr_patch_addresses::SERVER_ASSIGN_TEAM_CAP;
   uint8_t* const slotSite = base + nevr_patch_addresses::SERVER_ASSIGN_TEAM_SLOT;
-  const Outcome outcome = Apply(capSite, slotSite, size, ProcessWrite);
-  char record[512];
-  FormatRecord(record, sizeof(record), outcome, reinterpret_cast<uintptr_t>(capSite),
-               reinterpret_cast<uintptr_t>(slotSite));
-  Log(IsFailure(outcome) ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info, "%s source=%s", record,
-      text != nullptr && text[0] != '\0' ? "config.yaml" : "default");
+  const char* const text = isServer ? NevrCfgGetFlat("nevr_max_team_size") : nullptr;
+  for (const Line& line : InstallLines(isServer, text, capSite, slotSite, ProcessWrite,
+                                       reinterpret_cast<uintptr_t>(capSite), reinterpret_cast<uintptr_t>(slotSite))) {
+    Log(line.warning ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info, "%s", line.text.c_str());
+  }
 }
 
 }  // namespace nevr_server_team_size

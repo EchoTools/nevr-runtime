@@ -1,31 +1,39 @@
 #pragma once
 
-// #1422: a dedicated server's private-match team size (network.max_team_size, flat key nevr_max_team_size).
+// #1422: a dedicated server's match team size (network.max_team_size, flat key nevr_max_team_size).
 //
 // The game's own team assignment, ServerAssignTeam (echovr.exe 0x1401AB730, by its "[NETGAME] \tServerAssignTeam:"
-// lines), holds a team to min(Lobby::maxEntrants / 2, 5) outside the AI modes: 0x1401AB8B2 reads maxEntrants
-// (0x1400d3420 on [this+0x40]+0x18 is `mov eax, [rcx+0x18]; ret`), and the 5 is an immediate at the cap site,
-// 0x1401AB8C2, twice: `mov eax, 5; shr rsi, 1; cmp rsi, 5; cmova rsi, rax`. Every "Too many team members" test
-// compares a team's count with that register. The AI modes take a cap of 3 on a branch before it and are not touched.
-// A private match on the community service admits up to 16 a team, so this immediate is what holds a team to five.
+// lines), holds a team to min(Lobby::maxEntrants / 2, 5) in every mode but the AI and social modes: 0x1401AB8B2
+// reads maxEntrants (0x1400d3420 on [this+0x40]+0x18 is `mov eax, [rcx+0x18]; ret`), and the 5 is an immediate at
+// the cap site, 0x1401AB8C2, twice: `mov eax, 5; shr rsi, 1; cmp rsi, 5; cmova rsi, rax`. Every "Too many team
+// members" test compares a team's count with that register. The AI modes take a cap of 3 on a branch before it, and
+// the social modes skip the cap block; neither is touched. A lobby's own limit still bounds a team: a public match
+// whose lobby holds 8 keeps teams of 4 at any size here, and a size of 1 to 4 lowers every lobby's teams.
 //
-// The team slot site, 0x1401ABC8A (the "Grabbing last teamslot" branch), stores the team's count as the member's
-// 5-bit slot, so a sixth member would get slot 5. Above 5, heisthecat31's EchoRelay rule (d2d1a86) is written there
-// first: a count of 5 or more takes slot count - 5. Its 18 bytes replace the game's 18; the register and flag
-// effects after the site are the game's (the next instruction reads ax only, and ecx is reloaded before it is read).
+// The team slot site, 0x1401ABC8A (the "Grabbing last teamslot" branch, taken when the team's free-slot heap is
+// empty), stores the team's count as the member's 5-bit slot, then copies the word to r9d and eax. A sixth member of
+// a match team would get slot 5. Every team reaches this site, the social lobby's team (3) and the spectators
+// included, so the rule written there above 5 (from the reading here, after heisthecat31's EchoRelay found the site)
+// applies to the two match teams only: team 0 or 1 with a count of 5 or more takes slot count - 5; every other team
+// keeps slot = count. Its 26 bytes replace the game's 26 (the site and the two `movzx` copies after it) and leave
+// r9d and eax as those copies do; no jump lands inside the range, ecx is reloaded and no flag is read before the
+// next write. A count of 10 or more on a match team (the join check 0x140616920 can admit one past the cap) takes
+// slot count - 5, which is 5 or more, as the game's own rule would give it 10 or more.
 //
 // Both sites are checked patches (checked_patch.h), not a hook: the bound is an immediate in the middle of a
-// 0x71B-byte function, and a hook would have to restate the whole function to change two bytes. What is pure:
-// everything here; Apply writes only through the writer it is handed, so a test drives it on buffers. Above 5 the
-// slot rule is written before the cap and taken out again if the cap write fails, so a server is never left with
-// a cap above 5 and the game's slot rule. A site that holds neither the game's bytes nor ours is left as found and
-// the team stays at 5 (another writer was there first; the image guard pins the build).
+// 0x71B-byte function, and MinHook replaces whole functions, so a hook would restate all of it to change two
+// values. What is pure: everything here; Apply writes only through the writer it is handed, so a test drives it on
+// buffers, and the slot rule's bytes run natively in the test. Above 5 the slot rule is written before the cap and
+// taken out again if the cap write fails, so a server is never left with a cap above 5 and the game's slot rule. The
+// size in effect is read back from the cap site's bytes: a site that holds neither the game's shape nor ours is
+// left as found and reported as unknown.
 
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "runtime/patch/checked_patch.h"
 
@@ -66,12 +74,16 @@ inline constexpr uint8_t kCapExpected[12] = {0xb8, 0x05, 0x00, 0x00, 0x00, 0x48,
 constexpr size_t kCapImmediate32 = 1;
 constexpr size_t kCapImmediate8 = 11;
 
-/// SERVER_ASSIGN_TEAM_SLOT: the game's `shl ax, 5; mov ecx, 0x3e0; xor ax, si; and ax, cx; xor ax, si`, and the
-/// rule written above 5: `cmp al, 5; jb +2; sub al, 5; shl eax, 5; xor eax, esi; and ax, 0x3e0; xor eax, esi; nop`.
-inline constexpr uint8_t kSlotExpected[18] = {0x66, 0xc1, 0xe0, 0x05, 0xb9, 0xe0, 0x03, 0x00, 0x00,
-                                              0x66, 0x33, 0xc6, 0x66, 0x23, 0xc1, 0x66, 0x33, 0xc6};
-inline constexpr uint8_t kSlotPatched[18] = {0x3c, 0x05, 0x72, 0x02, 0x2c, 0x05, 0xc1, 0xe0, 0x05,
-                                             0x31, 0xf0, 0x66, 0x25, 0xe0, 0x03, 0x31, 0xf0, 0x90};
+/// SERVER_ASSIGN_TEAM_SLOT: the game's `shl ax, 5; mov ecx, 0x3e0; xor ax, si; and ax, cx; xor ax, si;
+/// movzx r9d, ax; movzx eax, r9w` (ax is the team's count, si the member's word, bl the team), and the rule written
+/// above 5: `cmp bl, 1; ja +6; cmp al, 5; jb +2; sub al, 5; shl eax, 5; xor eax, esi; and eax, 0x3e0;
+/// xor eax, esi; mov r9d, eax`.
+inline constexpr uint8_t kSlotExpected[26] = {0x66, 0xc1, 0xe0, 0x05, 0xb9, 0xe0, 0x03, 0x00, 0x00,
+                                              0x66, 0x33, 0xc6, 0x66, 0x23, 0xc1, 0x66, 0x33, 0xc6,
+                                              0x44, 0x0f, 0xb7, 0xc8, 0x41, 0x0f, 0xb7, 0xc1};
+inline constexpr uint8_t kSlotPatched[26] = {0x80, 0xfb, 0x01, 0x77, 0x06, 0x3c, 0x05, 0x72, 0x02,
+                                             0x2c, 0x05, 0xc1, 0xe0, 0x05, 0x31, 0xf0, 0x25, 0xe0,
+                                             0x03, 0x00, 0x00, 0x31, 0xf0, 0x41, 0x89, 0xc1};
 
 /// The cap site's bytes for `size`: the game's with both immediates set to it.
 struct CapBytes {
@@ -83,6 +95,13 @@ inline CapBytes CapBytesFor(uint32_t size) {
   out.bytes[kCapImmediate32] = static_cast<uint8_t>(size);
   out.bytes[kCapImmediate8] = static_cast<uint8_t>(size);
   return out;
+}
+
+/// The size the cap site's bytes put in effect: the game's shape with both immediates equal, or 0 (unknown) for any
+/// other bytes.
+inline uint32_t CapInEffect(const uint8_t* cap) {
+  CapBytes shape = CapBytesFor(cap[kCapImmediate8]);
+  return std::memcmp(cap, shape.bytes, sizeof(kCapExpected)) == 0 ? cap[kCapImmediate8] : 0;
 }
 
 inline nevr_checked_patch::Site SlotSite() {
@@ -111,7 +130,7 @@ struct Outcome {
   nevr_checked_patch::Result slot = nevr_checked_patch::Result::Mismatch;
   uint8_t slotBefore[sizeof(kSlotExpected)] = {};
   bool slotRestored = false;  // the slot rule was taken out again after the cap failed
-  uint32_t inEffect = kGameTeamSize;
+  uint32_t inEffect = kGameTeamSize;  // read from the cap site's bytes when Apply returns; 0 is unknown
 };
 
 inline bool Took(nevr_checked_patch::Result r) {
@@ -126,7 +145,11 @@ inline Outcome Apply(uint8_t* capSite, uint8_t* slotSite, uint32_t size, nevr_ch
   o.plan = PlanFor(size);
   std::memcpy(o.capBefore, capSite, sizeof(o.capBefore));
   std::memcpy(o.slotBefore, slotSite, sizeof(o.slotBefore));
-  if (o.plan == Plan::KeepGame) return o;
+  const auto done = [&]() {
+    o.inEffect = CapInEffect(capSite);
+    return o;
+  };
+  if (o.plan == Plan::KeepGame) return done();
 
   const CapBytes capWanted = CapBytesFor(size);
   const nevr_checked_patch::Site capSpec{kCapExpected, capWanted.bytes, sizeof(kCapExpected)};
@@ -137,28 +160,27 @@ inline Outcome Apply(uint8_t* capSite, uint8_t* slotSite, uint32_t size, nevr_ch
                           std::memcmp(capSite, capWanted.bytes, sizeof(kCapExpected)) == 0;
     if (!capReady) {
       o.capTried = true;  // `cap` keeps its Mismatch
-      return o;
+      return done();
     }
     o.slotTried = true;
     o.slot = nevr_checked_patch::Apply(slotSite, SlotSite(), write);
-    if (!Took(o.slot)) return o;
+    if (!Took(o.slot)) return done();
   }
 
   o.capTried = true;
   o.cap = nevr_checked_patch::Apply(capSite, capSpec, write);
-  if (Took(o.cap)) {
-    o.inEffect = size;
-    return o;
-  }
-  if (o.slotTried && o.slot == Result::Applied) {
+  if (!Took(o.cap) && o.slotTried && o.slot == Result::Applied) {
     o.slotRestored = write(slotSite, kSlotExpected, sizeof(kSlotExpected)) &&
                      std::memcmp(slotSite, kSlotExpected, sizeof(kSlotExpected)) == 0;
   }
-  return o;
+  return done();
 }
 
-/// A size was asked for and is not in effect.
-inline bool IsFailure(const Outcome& o) { return o.plan != Plan::KeepGame && o.inEffect != o.size; }
+/// The size wanted is not the size in effect: a size asked for that did not go in, or, with nothing asked, a cap site
+/// that does not hold the game's 5 (another writer changed it).
+inline bool IsFailure(const Outcome& o) {
+  return o.inEffect != (o.plan == Plan::KeepGame ? kGameTeamSize : o.size);
+}
 
 inline const char* SiteResultName(bool tried, nevr_checked_patch::Result r) {
   return tried ? nevr_checked_patch::ResultName(r) : "not_tried";
@@ -169,9 +191,26 @@ inline void Hex(char* out, const uint8_t* bytes, size_t n) {
   out[2 * n] = '\0';
 }
 
-/// The one record for the outcome: the size asked for and the size in effect, then each site's address, the bytes
-/// the game holds there, the bytes found and its result (logging Rule 6). Written to `out`, NUL-terminated.
+inline std::string InEffectText(uint32_t inEffect) {
+  return inEffect == 0 ? std::string("unknown") : std::to_string(inEffect);
+}
+
+/// The one record for the outcome. A success says the size asked for, the size in effect and each site's result,
+/// with no bytes (logging: no hex at Info). A failure is the Warning of logging Rule 6: each site's address, the
+/// bytes the game holds there, the bytes found and its result. Written to `out`, NUL-terminated.
 inline int FormatRecord(char* out, size_t cap, const Outcome& o, uintptr_t capAddr, uintptr_t slotAddr) {
+  const std::string inEffect = InEffectText(o.inEffect);
+  const char* const capResult = SiteResultName(o.capTried, o.cap);
+  const char* const slotResult = SiteResultName(o.slotTried, o.slot);
+  if (!IsFailure(o)) {
+    const char* what = o.plan == Plan::KeepGame ? "the game's own cap, nothing written"
+                       : o.size > kGameTeamSize
+                           ? "a match team holds up to the size, within its lobby's limit; unmeasured: more than 10 "
+                             "players in a match may stop the server in an arena level"
+                           : "a match team holds up to the size";
+    return std::snprintf(out, cap, "[NEVR.PATCH] server team size size=%u in_effect=%s (%s) cap=%s slot=%s",
+                         static_cast<unsigned>(o.size), inEffect.c_str(), what, capResult, slotResult);
+  }
   char capExpected[2 * sizeof(kCapExpected) + 1];
   char capActual[2 * sizeof(kCapExpected) + 1];
   char slotExpected[2 * sizeof(kSlotExpected) + 1];
@@ -180,17 +219,46 @@ inline int FormatRecord(char* out, size_t cap, const Outcome& o, uintptr_t capAd
   Hex(capActual, o.capBefore, sizeof(kCapExpected));
   Hex(slotExpected, kSlotExpected, sizeof(kSlotExpected));
   Hex(slotActual, o.slotBefore, sizeof(kSlotExpected));
-  const char* what = o.plan == Plan::KeepGame ? "the game's own cap, nothing written"
-                     : !IsFailure(o)          ? "a private-match team holds up to the size"
-                     : o.slotRestored         ? "not in effect, the slot rule was put back and a team stays at 5"
-                                              : "not in effect, a team stays at 5";
+  const char* what = o.plan == Plan::KeepGame ? "nothing written; the cap site holds another writer's bytes"
+                     : o.slotRestored         ? "not in effect, the slot rule was put back"
+                                              : "not in effect";
   return std::snprintf(out, cap,
-                       "[NEVR.PATCH] server team size size=%u in_effect=%u (%s) cap_addr=0x%llx cap_expected=%s "
+                       "[NEVR.PATCH] server team size size=%u in_effect=%s (%s) cap_addr=0x%llx cap_expected=%s "
                        "cap_actual=%s cap=%s slot_addr=0x%llx slot_expected=%s slot_actual=%s slot=%s%s",
-                       static_cast<unsigned>(o.size), static_cast<unsigned>(o.inEffect), what,
-                       static_cast<unsigned long long>(capAddr), capExpected, capActual,
-                       SiteResultName(o.capTried, o.cap), static_cast<unsigned long long>(slotAddr), slotExpected,
-                       slotActual, SiteResultName(o.slotTried, o.slot), o.slotRestored ? " slot_restored=true" : "");
+                       static_cast<unsigned>(o.size), inEffect.c_str(), what, static_cast<unsigned long long>(capAddr),
+                       capExpected, capActual, capResult, static_cast<unsigned long long>(slotAddr), slotExpected,
+                       slotActual, slotResult, o.slotRestored ? " slot_restored=true" : "");
+}
+
+/// One line Install logs.
+struct Line {
+  bool warning = false;
+  std::string text;
+};
+
+/// Everything Install does, but the log and the process: a client's skip line; on a server, the config value's
+/// problem (if any), then Apply on the two sites and its record with the value's source. `text` is the config value
+/// (null when absent); a client never reads the sites.
+inline std::vector<Line> InstallLines(bool isServer, const char* text, uint8_t* capSite, uint8_t* slotSite,
+                                      nevr_checked_patch::WriteFn write, uintptr_t capAddr, uintptr_t slotAddr) {
+  std::vector<Line> lines;
+  if (!isServer) {
+    lines.push_back({false, "[NEVR.PATCH] server team size not applied: this is a client (the server assigns teams)"});
+    return lines;
+  }
+  std::string problem;
+  const uint32_t size = ParseMaxTeamSize(text, &problem);
+  if (!problem.empty()) {
+    lines.push_back({true, "[NEVR.PATCH] network.max_team_size=" + std::string(text) + " is " + problem +
+                               " (allowed " + std::to_string(kMinTeamSize) + ".." + std::to_string(kMaxTeamSize) +
+                               "); using the game's " + std::to_string(kGameTeamSize)});
+  }
+  const Outcome outcome = Apply(capSite, slotSite, size, write);
+  char record[640];
+  FormatRecord(record, sizeof(record), outcome, capAddr, slotAddr);
+  lines.push_back({IsFailure(outcome), std::string(record) + " source=" +
+                                           (text != nullptr && text[0] != '\0' ? "config.yaml" : "default")});
+  return lines;
 }
 
 }  // namespace nevr_server_team_size
