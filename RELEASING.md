@@ -29,11 +29,10 @@ from the build.
 | `nevr-runtime-vX.Y.Z-windows.zip` | players on Windows and people running a dedicated server | `BugSplat64.dll` (the host), `nevr-runtime.dll` (the runtime), `echovr_server.exe`, `nevr-install.exe` (all stripped, debug info split off), `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt` (the install steps and the dedicated-server steps), `SIGNING.txt`, `SHA256SUMS` (the files inside the zip: `install.ps1` checks `nevr-install.exe` against it, and the core checks both DLLs against the signed manifest). The zip has no `plugins/` entry: a zip holds no empty directory |
 | `nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so` | Quest packagers | the Quest sentinel library, a loose ELF (attested; not Authenticode) |
 
-There is no top-level `SHA256SUMS` and no `RELEASE-NOTES.md` asset. The **release body** carries the notes and a table
-of the SHA-256 of each of the two assets, rendered by `python3 tools/package_release.py notes` from
-`tools/package-release/RELEASE-NOTES.template.md` and the asset files as they are after signing, followed by the
-per-audience section from `tools/release_audience_section.py` ("The release body"). The attestation stays the
-machine-checkable proof of the CI bytes.
+There is no top-level `SHA256SUMS` and no `RELEASE-NOTES.md` asset. The **release body** is short: a header, one line on
+what is new for players, and one line per file. `python3 tools/package_release.py notes` renders it from
+`tools/package-release/RELEASE-BODY.template.md` ("Write the release body"). It holds no hash: the zip's own `SHA256SUMS`
+(which `install.ps1` checks `nevr-install.exe` against), the signature and the attestation carry integrity.
 
 Not release assets: the `.tar.zst` archives and the `.dbg` symbol files (workflow artifacts, 7 and 90 days), and any Quest APK.
 
@@ -104,8 +103,8 @@ second dispatch never overwrites files.
    repository secret `RELEASE_SIGNER_TOKEN`, a token with `actions: write` on `thesprockee/release-signer`; without it
    the step fails red before any dispatch.
 6. **Check the signed draft**: `tools/release_check_draft.sh --signed vX.Y.Z` runs "Check the signed draft" below.
-7. **Body**: `tools/package_release.py notes` renders the notes and the SHA-256 table from the signed files, and
-   `tools/release_audience_section.py` appends the per-audience section from the feat and fix commits since the base tag.
+7. **Body**: `tools/package_release.py notes --base <previous tag> --rev vX.Y.Z` renders the body from the signed files. Its
+   player line is read from the commits since the base tag (`tools/release_audience_section.py`).
 8. **Publish**: `gh release edit vX.Y.Z --draft=false`, last. The `published` event does not rebuild: `build.yml`'s guard
    sees the two names and skips.
 
@@ -169,26 +168,26 @@ After the signer has replaced the assets, `tools/release_check_draft.sh --signed
 
 ## Write the release body
 
-The release body is the notes and a SHA-256 table of the two assets as they are on the draft after signing, then the
-per-audience section. CI writes it (step 7 above). By hand:
+The release body is a header (`# nEVR X.Y.Z`), one line for players, and one line per file in the release. CI writes it
+(step 7 above). By hand, after the last signing pass:
 
 ```sh
-mkdir -p "$S" && gh release download vX.Y.Z -D "$S"                  # a new, empty directory
-python3 tools/package_release.py notes --assets "$S" --out "$N"      # $N: a new file outside $S; refuses unless $S holds exactly the two assets
-python3 tools/release_audience_section.py --base <previous tag> --rev vX.Y.Z >> "$N"
+S="$(mktemp -d)" && gh release download vX.Y.Z -D "$S"                # a new, empty directory
+N="$(mktemp -d)/RELEASE-BODY.md"                                      # a new file outside $S
+python3 tools/package_release.py notes --assets "$S" --out "$N" --base <previous tag> --rev vX.Y.Z
 gh release edit vX.Y.Z --notes-file "$N"
-gh release view vX.Y.Z --json body --jq .body                         # the table's two SHA-256 values
-(cd "$S" && sha256sum nevr-runtime-vX.Y.Z-*)                          # the same two values
+gh release view vX.Y.Z --json body --jq .body
 ```
 
-`notes` takes the version and the commit from the `BugSplat64.dll` and `nevr-runtime.dll` inside the zip (they must agree),
-so the body cannot describe another build. The table must be written after the last signing pass: each pass signs with a
-fresh timestamp and changes the zip's bytes. The per-audience section lists each feat, fix and perf commit under the
-audience of its scope (players, server hosts, plugin developers; `arena`, `server` and `ws-bridge` are server hosts), and
-ends with what was not tested in the build. A commit is listed by its subject unless its message has a line
-`Release-note: <text>`, which is listed in its place: write one when the subject misstates what a player or a host sees.
-Read the section against the pull request bodies before publishing. The body
-of a published release stays editable ("Immutable releases"); the assets do not.
+`notes` refuses unless `$S` holds exactly the two assets. It takes the version and the commit from the `BugSplat64.dll`
+and `nevr-runtime.dll` inside the zip (they must agree), so the body cannot describe another build.
+
+The player line is built from the feat, fix and perf commits between `--base` and `--rev`, by the audience of each
+commit's scope (`arena`, `server` and `ws-bridge` are server hosts; `plugins` is plugin developers; the rest is players).
+It is the first two player texts joined by "; ", then "and N more" when there are more. A commit's text is its subject
+unless its message has a line `Release-note: <text>`, which is used in its place: write one when the subject misstates
+what a player sees. With no player change the line reads "Fixes and internal changes.". Read the line against the pull
+request bodies before publishing. The body of a published release stays editable ("Immutable releases"); the assets do not.
 
 ## Publish
 
@@ -242,8 +241,8 @@ The release notes for a build signed with a new key carry one line for Quest pla
 build is signed with the new key (Android refuses an update from a different signer). `put-quest-apk` pins the signer
 certificate in the release-signer's `config/`; a new key needs that pin changed there before the publish.
 
-Then post the SHA-256 and the commit the APK was built from, saying it is not a release asset, and replace the line in the
-release body that says there is no Quest APK with its address and SHA-256 (the body of a published release stays editable).
+The release body already has a line for the APK that names the file and says it is published on the release host, so it
+needs no edit. The APK's SHA-256 is the `.sha256` file beside it on the host (`docs/reference/verifying-a-release.md`, "Quest APKs").
 
 ## The Quest half of the train
 

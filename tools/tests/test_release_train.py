@@ -250,5 +250,82 @@ class AudienceSection(unittest.TestCase):
         self.assertNotIn("- one", result.stdout)
 
 
+class PlayerLine(unittest.TestCase):
+    """The one line of the release body that says what is new for players (the body is the notes renderer's)."""
+
+    def test_the_first_two_player_bullets_are_joined_and_the_rest_counted(self) -> None:
+        line = audience.player_line(["feat(runtime): first", "fix(quest): second", "fix(arena): a host thing",
+                                     "feat(runtime): third"])
+        self.assertEqual(line, "First; second and 1 more.")
+
+    def test_one_player_bullet_is_the_line(self) -> None:
+        self.assertEqual(audience.player_line(["fix(quest): a fix"]), "A fix.")
+
+    def test_two_player_bullets_are_joined_with_no_count(self) -> None:
+        self.assertEqual(audience.player_line(["feat(runtime): a feature", "fix(quest): a fix"]), "A feature; a fix.")
+
+    def test_no_player_bullet_says_so(self) -> None:
+        self.assertEqual(audience.player_line(["fix(arena): a host thing", "feat(plugin): an api"]),
+                         "Fixes and internal changes.")
+        self.assertEqual(audience.player_line([]), "Fixes and internal changes.")
+
+    def test_a_breaking_player_change_keeps_its_mark(self) -> None:
+        self.assertEqual(audience.player_line(["feat(runtime)!: drop the old flag"]), "BREAKING: drop the old flag.")
+
+    def test_a_release_note_is_the_text_the_player_line_shows(self) -> None:
+        self.assertEqual(audience.player_line(["feat(runtime): a subject\n\nRelease-note: what a player sees"]),
+                         "What a player sees.")
+
+    def test_the_example_renders_without_its_references_and_capitalised(self) -> None:
+        # The v6.0.0 body as it rendered before this rule: the first text lowercase, the references kept.
+        messages = [
+            "fix(bridge): hold the game socket across the login-failure LoginSuccess send",
+            "feat(quest): load libpnsrad as the platform provider behind diagnostics.pnsrad_provider (refs #1220) (#1340)",
+        ] + [f"fix(quest): change {n}" for n in range(11)]
+        self.assertEqual(
+            audience.player_line(messages),
+            "Hold the game socket across the login-failure LoginSuccess send; load libpnsrad as the platform provider "
+            "behind diagnostics.pnsrad_provider and 11 more.")
+
+    def test_a_text_with_no_reference_is_only_capitalised(self) -> None:
+        self.assertEqual(audience.player_line(["feat(runtime): a plain change"]), "A plain change.")
+
+    def test_every_trailing_reference_is_stripped_and_only_trailing_ones(self) -> None:
+        # Repeated trailing references go; a parenthesis that is not an issue or PR number stays, and so does an
+        # issue number in the middle of the text.
+        self.assertEqual(audience.player_line(["fix(quest): keep (refs #1) text (closes #2) (#3)"]),
+                         "Keep (refs #1) text.")
+        self.assertEqual(audience.player_line(["fix(quest): handle (version 2) and (see notes)"]),
+                         "Handle (version 2) and (see notes).")
+
+    def test_a_reference_word_other_than_the_listed_ones_is_kept(self) -> None:
+        self.assertEqual(audience.player_line(["fix(quest): a fix (see #12)"]), "A fix (see #12).")
+
+    def test_the_line_ends_with_a_full_stop(self) -> None:
+        self.assertEqual(audience.player_line(["fix(quest): a fix (#9)", "fix(quest): another"]),
+                         "A fix; another.")
+
+
+class ReleaseBodyWorkflow(unittest.TestCase):
+    """Step 7 of release-train.yml: the body is `package_release.py notes` alone, over the range the tag was cut from."""
+
+    def setUp(self) -> None:
+        text = TRAIN.read_text(encoding="utf-8")
+        self.step = text.split("    - name: Write the release body\n", 1)[1].split("    # 8. Publish", 1)[0]
+
+    def test_the_body_is_rendered_by_the_notes_stage_over_the_base_and_the_tag(self) -> None:
+        self.assertIn('python3 tools/package_release.py notes --assets "$assets" --out "$notes" --repo . '
+                      '--base "$BASE" --rev "v$VERSION"', self.step)
+
+    def test_the_audience_section_is_no_longer_appended_to_the_body(self) -> None:
+        self.assertNotIn("release_audience_section.py", self.step)
+        self.assertNotIn(">> \"$notes\"", self.step)
+
+    def test_the_output_file_is_not_created_before_the_notes_stage_writes_it(self) -> None:
+        # The stage refuses an existing output (exit 1, "exists; not overwritten"), so the step must not pre-create it.
+        self.assertNotIn("notes=$(mktemp)", self.step)
+        self.assertIn("notes=$(mktemp -d)/RELEASE-BODY.md", self.step)
+
+
 if __name__ == "__main__":
     unittest.main()

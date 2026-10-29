@@ -11,9 +11,10 @@ file depends on that flag, so promoting a release changes no byte: this tool has
       CI: zip the (signed or unsigned) tree with a SHA256SUMS regenerated from the files as they are now.
       The release is that one zip (the Quest library is built by its own job); it carries no Quest APK, and
       no top-level SHA256SUMS or RELEASE-NOTES.md.
-  package_release.py notes --assets DIR --out FILE
-      the release body: the notes plus a SHA-256 table of the release's two assets (the zip and the Quest
-      library) as they are in DIR, written after signing, from the final bytes
+  package_release.py notes --assets DIR --out FILE --base vX.Y.Z --rev vX.Y.Z [--repo DIR]
+      the release body (tools/package-release/RELEASE-BODY.template.md): a header, one line for players (from the
+      commits in base..rev, tools/release_audience_section.py), and one line per file. It holds no hash: the zip's
+      own SHA256SUMS and the attestation carry integrity. Read the zip's identity literals from DIR's zip.
   package_release.py stamp --dll BugSplat64.dll [--version X.Y.Z] [--commit <sha40>]
       CI: assert a DLL's one identity literal agrees with what the workflow computed (run on each of the two)
   package_release.py quest-library --lib libovrplatformloader.so --version X.Y.Z --commit <sha40>
@@ -40,6 +41,7 @@ import hashlib
 import json
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -50,8 +52,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_embedded_defaults as defaults_check  # noqa: E402
 import pe_version_info  # noqa: E402
 import quest_apk_version  # noqa: E402
+import release_audience_section  # noqa: E402
 
 PACKAGE_DIR = REPO / "tools" / "package-release"
+BODY_TEMPLATE = PACKAGE_DIR / "RELEASE-BODY.template.md"
 SENTINEL_IN_APK = "lib/arm64-v8a/libovrplatformloader.so"
 # The two DLLs of the package: the host the game loads, and the runtime the host loads at the rendezvous.
 HOST_DLL = "BugSplat64.dll"
@@ -413,10 +417,11 @@ def quest_asset_name(version: str) -> str:
     return f"nevr-runtime-v{version}-quest-libovrplatformloader.so"
 
 
-def release_notes(assets: Path) -> str:
-    """The release body: the notes plus a SHA-256 table of the release's two assets as they are in `assets`.
-    The version and commit are the ones the zip's own BugSplat64.dll and nevr-runtime.dll carry (their identity
-    literals, which must agree), so the table cannot describe a zip that is not this release's."""
+def release_notes(assets: Path, repo: Path, base: str, rev: str) -> str:
+    """The release body for the two assets in `assets`: a header, the player line from the commits in base..rev, and
+    one line per file. The version and commit are the ones the zip's own BugSplat64.dll and nevr-runtime.dll carry
+    (their identity literals, which must agree), so the body cannot describe a zip that is not this release's. It
+    holds no hash: the zip's SHA256SUMS and the attestation carry integrity."""
     zips = sorted(assets.glob("nevr-runtime-v*-windows.zip"))
     if len(zips) != 1:
         raise GateFailure(f"{assets}: expected exactly one nevr-runtime-v<X.Y.Z>-windows.zip, found {len(zips)}")
@@ -444,9 +449,13 @@ def release_notes(assets: Path) -> str:
     extra = sorted(p.name for p in assets.iterdir() if p.name not in (zip_path.name, quest.name))
     if extra:
         raise GateFailure(f"{assets}: files that are not release assets: {', '.join(extra)}")
-    values = {"VERSION": version, "COMMIT": commit, "ZIP": zip_path.name, "QUEST": quest.name,
-              "SHA_ZIP": sha256(zip_path), "SHA_QUEST": sha256(quest)}
-    return render(PACKAGE_DIR / "RELEASE-NOTES.template.md", values, apk=False)
+    try:
+        messages = release_audience_section.messages_between(str(repo), base, rev)
+    except subprocess.CalledProcessError as error:
+        raise GateFailure(f"git log {base}..{rev} in {repo} failed: {error.stderr.strip()}")
+    values = {"VERSION": version, "PLAYER_LINE": release_audience_section.player_line(messages),
+              "ZIP": zip_path.name, "APK": f"{package_base(version, commit)}-quest.apk", "QUEST": quest.name}
+    return render(BODY_TEMPLATE, values)
 
 
 def run_all(args) -> list:
@@ -471,6 +480,9 @@ def main(argv=None) -> int:
     elif mode == "notes":
         parser.add_argument("--assets", required=True, type=Path)
         parser.add_argument("--out", required=True, type=Path)
+        parser.add_argument("--repo", default=".", type=Path, help="the repository the range is read from")
+        parser.add_argument("--base", required=True, help="the older ref of the player line, excluded")
+        parser.add_argument("--rev", required=True, help="the newer ref of the player line, included")
     elif mode == "quest-library":
         parser.add_argument("--lib", required=True, type=Path)
         parser.add_argument("--version", required=True)
@@ -516,7 +528,7 @@ def main(argv=None) -> int:
         if mode == "notes":
             if args.out.exists():
                 raise GateFailure(f"{args.out} exists; not overwritten")
-            body = release_notes(args.assets)
+            body = release_notes(args.assets, args.repo, args.base, args.rev)
             args.out.write_text(body, encoding="utf-8")
             written = [args.out]
         elif mode == "seal":
