@@ -998,11 +998,14 @@ test-quest-data-net: _vcpkg-quest-host
     printf 'openssl_conf = nevr_lax\n[nevr_lax]\nssl_conf = nevr_ssl\n[nevr_ssl]\nsystem_default = nevr_sys\n[nevr_sys]\nMinProtocol = TLSv1\nCipherString = ALL:@SECLEVEL=0\n' > lax-openssl.cnf
     OPENSSL_CONF="$PWD/lax-openssl.cnf" timeout -k 5 300 ./curl_transport_test "$(cat plain.port)" plain.log trust.pem "$PWD"
     # The step as the game reaches it: through the permission-wait handler's thunk entry (src/quest/sentinel/data_wiring.cpp).
+    # The hooks it links call the pinned factories, which take the patched libr15's identity (sentinel::pinned::LibR15PatchedBuildId,
+    # docs/adr/0021 section 7): libr15_identity.cpp and libr15_patch_identity.cpp below. sha256.cpp is already in this link.
     cd "{{ justfile_directory() }}"
     g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -pthread -Isrc -Isdk/include -Isrc/quest/sentinel -isystem "$host/include" \
         $(pkg-config --cflags libcurl) src/quest/tests/data_wiring_test.cpp src/quest/sentinel/data_wiring.cpp \
         src/quest/sentinel/obb_skip_hook.cpp src/quest/sentinel/permission_wait_hook.cpp src/quest/sentinel/process_end_hook.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        src/quest/sentinel/libr15_identity.cpp src/quest/patch/libr15_patch_identity.cpp \
         src/quest/data/sha256.cpp src/quest/data/zip.cpp src/quest/data/staging.cpp src/quest/data/fetch.cpp \
         src/quest/data/data_step.cpp src/quest/data/curl_transport.cpp src/quest/data/data_host_roots.cpp \
         "$host/lib/libz.a" -o "$out/data_wiring_test" $(pkg-config --libs libcurl) -lssl -lcrypto -ldl
@@ -1621,6 +1624,11 @@ test-quest-redirect: _vcpkg-quest-host
     for f in got_hook hook_log hook_report; do
         "${cxx[@]}" -fno-exceptions -c "src/quest/sentinel/$f.cpp" -o "$out/$f.o"
     done
+    # The patched libr15's identity (sentinel::pinned::LibR15PatchedBuildId, docs/adr/0021 section 7): tstring_thunks.cpp
+    # calls the pinned factories, so the link takes the three objects test-quest-hooks takes, built as on the device.
+    for src in sentinel/libr15_identity.cpp patch/libr15_patch_identity.cpp data/sha256.cpp; do
+        "${cxx[@]}" -fno-exceptions -c "src/quest/$src" -o "$out/id_$(basename "$src" .cpp).o"
+    done
     # The thunk's frames must sit under the personality-free CIE: no "zPLR" augmentation, at least one "zR".
     frames="$out/tstring_thunks.frames.txt"
     readelf --debug-dump=frames "$out/tstring_thunks.o" > "$frames"
@@ -1632,7 +1640,8 @@ test-quest-redirect: _vcpkg-quest-host
     srcs=("$fx/redirect_test.cpp" src/quest/redirect/service_redirector.cpp src/quest/redirect/hook_adapter.cpp
         src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp src/runtime/lifecycle/service_redirect.cpp
         src/runtime/lifecycle/stable_string_pool.cpp)
-    objs=("$out/tstring_thunks.o" "$out/got_hook.o" "$out/hook_log.o" "$out/hook_report.o")
+    objs=("$out/tstring_thunks.o" "$out/got_hook.o" "$out/hook_log.o" "$out/hook_report.o"
+        "$out/id_libr15_identity.o" "$out/id_libr15_patch_identity.o" "$out/id_sha256.o")
     "${cxx[@]}" "${srcs[@]}" "${objs[@]}" "$yaml_lib" -o "$out/redirect_test" -ldl -pthread
     "$out/redirect_test" "$out"
     # The same test under ThreadSanitizer at -O1: the cache lock is only observable as a data race, and
