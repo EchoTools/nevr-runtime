@@ -1239,6 +1239,21 @@ TEST(TokenAuthModule, ClientWithoutRequiredConfigDisablesCleanly) {
   token_auth_Shutdown();
 }
 
+// #1446: the real function, driven through each published readiness. Only Failed means a sign-in ended without a token.
+TEST(SignInEndedWithoutTokenState, OnlyAFailedSnapshotMeansASignInEndedWithoutAToken) {
+  using nevr_token_auth::AuthReadiness;
+  const AuthReadiness others[] = {AuthReadiness::Starting,     AuthReadiness::Disabled,      AuthReadiness::Refreshing,
+                                  AuthReadiness::AwaitingUser, AuthReadiness::Ready,         AuthReadiness::Expired,
+                                  AuthReadiness::Stopping};
+  for (const AuthReadiness readiness : others) {
+    nevr_token_auth::test_hook::PublishReadinessForTest(readiness);
+    EXPECT_FALSE(nevr_token_auth::SignInEndedWithoutToken()) << "readiness " << static_cast<int>(readiness);
+  }
+  nevr_token_auth::test_hook::PublishReadinessForTest(AuthReadiness::Failed);
+  EXPECT_TRUE(nevr_token_auth::SignInEndedWithoutToken());
+  nevr_token_auth::test_hook::PublishReadinessForTest(AuthReadiness::Disabled);  // the snapshot the module ends in
+}
+
 TEST(TokenAuthModule, ReportsThePublishedModuleApiVersion) {
   EXPECT_EQ(token_auth_ApiVersion(), NEVR_MODULE_API_VERSION);
 }

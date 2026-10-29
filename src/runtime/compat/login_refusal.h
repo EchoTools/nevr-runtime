@@ -15,6 +15,7 @@
 // and holds its own lock around it.
 
 #include <cstddef>
+#include <cstdint>
 #include <set>
 #include <string>
 #include <string_view>
@@ -87,6 +88,55 @@ class ClientRefusalLatch {
 
  private:
   std::set<std::string> refused_;
+};
+
+// #1446: a client whose sign-in ended without a token answers the game's login itself. The game gets a LoginFailure
+// and the service is not asked, because no later login of this run can carry a credential the service accepts.
+//   status: 7, the status the legacy translator gives a 401 (docs/reference/legacy-translator.md).
+inline constexpr uint64_t kNoSignInLoginFailureStatus = 7;
+inline constexpr std::string_view kNoSignInLoginFailureText = "Sign-in did not finish.\nRestart Echo VR to sign in again.";
+
+// True for the one case the bridge answers: a client's login socket that presents no token and no URL credentials,
+// once the sign-in has ended without a token. A server, a config or matchmaker socket, a sign-in that is still
+// running or a sign-in that presents a credential keeps the path that asks the service.
+inline bool AnswersLoginLocally(bool isServer, bool isLoginSocket, bool bearerPresent, bool urlCredentials,
+                                bool signInEnded) {
+  return !isServer && isLoginSocket && !bearerPresent && !urlCredentials && signInEnded;
+}
+
+// The log of the answers the bridge gives locally (#1446). The first answer is written at once. Later answers are
+// counted, and the first answer after each window writes one line with the answers since the last line, this one
+// included, so a game that reconnects every few seconds writes a line per window, not one per attempt.
+class LocalAnswerCounter {
+ public:
+  static constexpr int64_t kWindowMs = 60000;
+
+  struct Verdict {
+    bool write = false;   // a line is due now
+    bool first = false;   // the line is the first answer, not a window's summary
+    uint64_t count = 0;   // answers the line stands for
+  };
+
+  Verdict Record(int64_t nowMs) {
+    ++total_;
+    if (!started_) {
+      started_ = true;
+      windowStartMs_ = nowMs;
+      reported_ = total_;
+      return Verdict{true, true, 1};
+    }
+    if (nowMs - windowStartMs_ < kWindowMs) return Verdict{};
+    windowStartMs_ = nowMs;
+    const uint64_t since = total_ - reported_;
+    reported_ = total_;
+    return Verdict{true, false, since};
+  }
+
+ private:
+  uint64_t total_ = 0;
+  uint64_t reported_ = 0;
+  int64_t windowStartMs_ = 0;
+  bool started_ = false;
 };
 
 }  // namespace nevr_login_refusal
