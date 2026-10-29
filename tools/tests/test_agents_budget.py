@@ -9,21 +9,21 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-LINE_BUDGET = 1380
+LINE_BUDGET = 1381
 
 # Names from the C++ addendum's former text that describe machinery this repo does not have, or a C++ standard above
 # the one CMakeLists.txt sets (17). The removed text is kept in #1314.
 ABSENT = {
     "flight recorder": "the flight recorder does not exist",
     "TraceEvent": "the flight recorder does not exist",
-    "Sign all release DLLs": "release files are signed outside the build (RELEASING.md)",
+    "Sign all release DLLs": "release files are signed by the signer pipeline (RELEASING.md)",
     "${VCPKG_ROOT}/scripts/buildsystems": "CMakePresets.json reads vcpkg from $env{HOME}/.vcpkg",
     "trace dump": "no DLL writes one",
-    "osslsigncode for Authenticode signing": "release files are signed outside the build (RELEASING.md)",
-    "`just sign` to release process": "release files are signed outside the build (RELEASING.md)",
+    "osslsigncode for Authenticode signing": "release files are signed by the signer pipeline (RELEASING.md)",
+    "`just sign` to release process": "release files are signed by the signer pipeline (RELEASING.md)",
     "dxgi_dump": "the flight recorder does not exist",
     "LOG_INFO(": "logging is Log() under docs/standards/logging.md",
-    "CODESIGN_PFX": "the build signs nothing (RELEASING.md)",
+    "CODESIGN_PFX": "the release build reads no signing secret (RELEASING.md)",
     "├── gamepatches/": "the layout of another project: src/ has no gamepatches/, gameserver/ or common/",
     "3uz": "a C++23 literal",
     "std::expected": "C++23",
@@ -57,7 +57,8 @@ class AgentsBudget(unittest.TestCase):
     def test_logging_and_signing_point_at_their_documents(self):
         flat = " ".join(self.text.split())
         self.assertIn("Logging follows `docs/standards/logging.md`", flat)
-        self.assertIn("as `RELEASING.md` describes; the build signs nothing", flat)
+        self.assertIn("by the signer pipeline `RELEASING.md` describes; the release build signs nothing", flat)
+        self.assertIn("`just sign` signs a local `dist/` with the private CA in `certs/`, for development builds only", flat)
 
 
 if __name__ == "__main__":

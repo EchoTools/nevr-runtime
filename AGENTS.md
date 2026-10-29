@@ -1231,7 +1231,9 @@ _vcpkg-mingw:
 
 ## Code Signing
 
-Release files are signed outside the build, as `RELEASING.md` describes; the build signs nothing.
+Release files are signed outside the build, by the signer pipeline `RELEASING.md` describes; the release build signs
+nothing (`build.yml` configures `-DNEVR_CODESIGN_REQUIRED=OFF`). `just sign` signs a local `dist/` with the private CA
+in `certs/`, for development builds only.
 
 ---
 
