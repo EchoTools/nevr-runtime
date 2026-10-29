@@ -365,8 +365,10 @@ gh workflow run build.yml --ref v<x.y.z>          # 4. builds, attests and attac
 gh release edit v<x.y.z> --draft=false            # 5. publish, only after the draft's files are checked and signed (RELEASING.md)
 ```
 
-A release is the tag's version plus GitHub's pre-release flag. The version is exactly the tag (`v5.0.0` is `5.0.0`); every other build
-stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from and before the next release. The build goes through one
+A release is the tag's version plus GitHub's pre-release flag. The version is exactly the tag (`v5.0.0` is `5.0.0`; a release
+candidate is the tag `v5.4.0-rc.1`, version `5.4.0-rc.1`); every other build stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts
+after the tag it descends from and before the next release, or `5.4.0-rc.1.dev.<N>+<sha>` after an rc, which sorts after the
+rc and before `5.4.0`. The build goes through one
 packaging path (the sealed Windows zip, attested, and the Quest library; the notes and a SHA-256 table of both are the release body, written after signing; the `.tar.zst` archives stay a workflow artifact). Nothing in a file depends on the pre-release flag:
 promote with `gh release edit v<x.y.z> --prerelease=false`; it fires no workflow and changes no byte. `BugSplat64.dll` (the host) and `nevr-runtime.dll` (the runtime) each carry one
 identity literal, `NEVR-BUILD <version> <commit40>` (NUL-bounded, exactly one), that binds its version and its commit; the two literals are equal, and only the runtime carries the plugin-trust literal and the embedded defaults.
