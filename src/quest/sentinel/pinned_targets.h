@@ -51,6 +51,11 @@ inline constexpr const char* kFindMethodSymbol = "_ZN10NRadEngine10CSysModule10F
 inline constexpr const char* kGetDeviceExtensionsVulkanSymbol = "vrapi_GetDeviceExtensionsVulkan";
 inline constexpr const char* kGetSystemPropertyIntSymbol = "vrapi_GetSystemPropertyInt";
 inline constexpr const char* kShowSystemUISymbol = "vrapi_ShowSystemUI";
+inline constexpr const char* kSetDisplayRefreshRateSymbol = "vrapi_SetDisplayRefreshRate";
+inline constexpr const char* kSetClockLevelsSymbol = "vrapi_SetClockLevels";
+inline constexpr const char* kSetPropertyIntSymbol = "vrapi_SetPropertyInt";
+inline constexpr const char* kGetSystemPropertyFloatSymbol = "vrapi_GetSystemPropertyFloat";
+inline constexpr const char* kSubmitFrame2Symbol = "vrapi_SubmitFrame2";
 inline constexpr const char* kGetCurrentInputStateSymbol = "vrapi_GetCurrentInputState";
 inline constexpr const char* kGetInputDeviceCapabilitiesSymbol = "vrapi_GetInputDeviceCapabilities";
 inline constexpr const char* kEnablePageNodeEnterSymbol =
@@ -598,6 +603,51 @@ using LibR15ShowSystemUIThunk = CallbackThunk<LibR15ShowSystemUITag, ShowSystemU
 
 inline GotTarget LibR15ShowSystemUI() {
   return {kLibR15, kShowSystemUISymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36d5280ULL};
+}
+
+// The five VrApi imports the render-configuration log reads (docs/adr/0022-render-config-log.md). Each is an imported JUMP_SLOT
+// (value 0) in the pinned libr15 (`readelf -rW`; ReVault shows every slot 0x100000 higher, `revault_imports`). None of the
+// handlers changes an argument or a result.
+//   vrapi_SetDisplayRefreshRate(ovrMobile*, float): one call site, CVR::UpdateTracking. JUMP_SLOT 0x36ec5f0.
+//   vrapi_SetClockLevels(ovrMobile*, int cpu, int gpu): UpdateTracking, once per VR-mode entry. JUMP_SLOT 0x36c75f0.
+//   vrapi_SetPropertyInt(const ovrJava*, ovrProperty, int): CVR::SetFoveationLevel (property 0xf) and
+//     CVR::SetEnableDynamicFoveation (property 0x1e). JUMP_SLOT 0x36ffcf0.
+//   vrapi_GetSystemPropertyFloat(const ovrJava*, ovrSystemProperty): property 4 is the refresh rate the runtime reports.
+//     JUMP_SLOT 0x36c06f8.
+//   vrapi_SubmitFrame2(ovrMobile*, const ovrSubmitFrameDescription2*): one call per rendered frame. ReVault slot 0x37e7010
+//     (`revault_imports`), pinned 0x36e7010.
+struct OvrMobileOpaque;
+struct OvrSubmitFrameDescriptionOpaque;
+using SetDisplayRefreshRateSig = int(OvrMobileOpaque* ovr, float rate);
+struct LibR15SetDisplayRefreshRateTag {};
+using LibR15SetDisplayRefreshRateThunk = CallbackThunk<LibR15SetDisplayRefreshRateTag, SetDisplayRefreshRateSig>;
+using SetClockLevelsSig = int(OvrMobileOpaque* ovr, int cpuLevel, int gpuLevel);
+struct LibR15SetClockLevelsTag {};
+using LibR15SetClockLevelsThunk = CallbackThunk<LibR15SetClockLevelsTag, SetClockLevelsSig>;
+using SetPropertyIntSig = int(const OvrJavaOpaque* java, int property, int value);
+struct LibR15SetPropertyIntTag {};
+using LibR15SetPropertyIntThunk = CallbackThunk<LibR15SetPropertyIntTag, SetPropertyIntSig>;
+using GetSystemPropertyFloatSig = float(const OvrJavaOpaque* java, int property);
+struct LibR15GetSystemPropertyFloatTag {};
+using LibR15GetSystemPropertyFloatThunk = CallbackThunk<LibR15GetSystemPropertyFloatTag, GetSystemPropertyFloatSig>;
+using SubmitFrame2Sig = int(OvrMobileOpaque* ovr, const OvrSubmitFrameDescriptionOpaque* description);
+struct LibR15SubmitFrame2Tag {};
+using LibR15SubmitFrame2Thunk = CallbackThunk<LibR15SubmitFrame2Tag, SubmitFrame2Sig>;
+
+inline GotTarget LibR15SetDisplayRefreshRate() {
+  return {kLibR15, kSetDisplayRefreshRateSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ec5f0ULL};
+}
+inline GotTarget LibR15SetClockLevels() {
+  return {kLibR15, kSetClockLevelsSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c75f0ULL};
+}
+inline GotTarget LibR15SetPropertyInt() {
+  return {kLibR15, kSetPropertyIntSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ffcf0ULL};
+}
+inline GotTarget LibR15GetSystemPropertyFloat() {
+  return {kLibR15, kGetSystemPropertyFloatSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c06f8ULL};
+}
+inline GotTarget LibR15SubmitFrame2() {
+  return {kLibR15, kSubmitFrame2Symbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36e7010ULL};
 }
 
 // VrApi_Input.h: ovrResult vrapi_GetCurrentInputState(ovrMobile* ovr, const ovrDeviceID deviceID,

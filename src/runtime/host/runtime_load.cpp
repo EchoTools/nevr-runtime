@@ -373,6 +373,7 @@ void EmitLoadDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResu
     if (result.init_threw) record["init_threw"] = true;
     if (result.verify != nullptr) record["verify"] = result.verify;
     if (!result.verify_reason.empty()) record["verify_reason"] = result.verify_reason;
+    if (result.verify_engine_cbsize != 0) record["verify_engine_cbsize"] = result.verify_engine_cbsize;
     diagnostics.Emit(record);
   } catch (const std::exception& error) {
     // Fixed buffer, no allocation: the record the load would have written, reduced to what
@@ -587,6 +588,7 @@ RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host,
   std::string verify_reason;
   std::string verdict_text;
   nevr_plugin_signature::Reason verify_reason_code = nevr_plugin_signature::Reason::Accepted;
+  std::uint32_t verify_engine_cbsize = 0;
   FileFacts runtime_facts;
   HANDLE file = INVALID_HANDLE_VALUE;
 
@@ -614,6 +616,7 @@ RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host,
           accepted = verdict.accepted();
           verify_reason_code = verdict.reason;
           verdict_text = verdict.Describe();
+          verify_engine_cbsize = verdict.engineCbSize;
         }
         decision = DecideVerify(RuntimeFile::kReadable, VerifyEnabled(), accepted, DevBuild());
         if (decision.reason_is_verdict) verify_reason = verdict_text;
@@ -659,6 +662,7 @@ RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host,
   result_.verify = verify;
   result_.verify_reason = verify_reason;
   result_.verify_reason_code = verify_reason_code;
+  result_.verify_engine_cbsize = verify_engine_cbsize;
   result_.loader_lock_held = loader_lock_held;
   result_.init_threw = init_threw;
   EmitLoadDiagnostic(diagnostics, result_);

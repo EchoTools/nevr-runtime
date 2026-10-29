@@ -4119,8 +4119,28 @@ TEST_F(RouterAllTest, AnUnrequireNobodyAskedForIsDroppedAndCounted) {
   EXPECT_EQ(login.Count(nevr_evr_codec::kSymConnectionUnrequire), 0);
 }
 
+// #1280: the bridge started in a named run mode. g_isServer is set before the bridge starts, as boot.cpp does; this
+// file's default is a server (g_isServer above), so a test of client behaviour names the client mode.
+template <typename Base, BOOL kIsServer>
+class RunModeFixture : public Base {
+ protected:
+  void SetUp() override {
+    wasServer_ = g_isServer;
+    g_isServer = kIsServer;
+    Base::SetUp();
+  }
+  void TearDown() override {
+    Base::TearDown();
+    g_isServer = wasServer_;
+  }
+  BOOL wasServer_ = FALSE;
+};
+using ServerRolesByPathTest = RunModeFixture<RolesByPathTest, TRUE>;
+using ServerRouterAllTest = RunModeFixture<RouterAllTest, TRUE>;
+using ClientRouterAllTest = RunModeFixture<RouterAllTest, FALSE>;
+
 // A login the service accepted is followed by the friend-list subscription, sent once, on the session.
-TEST_F(RouterAllTest, ALoginSuccessIsFollowedByTheFriendListSubscription) {
+TEST_F(ClientRouterAllTest, ALoginSuccessIsFollowedByTheFriendListSubscription) {
   remote_.SetLoginReply(nevr_evr_codec::kSymLoginSuccess);
   GameSocket login;
   Admit(login, "/login");
@@ -4132,7 +4152,7 @@ TEST_F(RouterAllTest, ALoginSuccessIsFollowedByTheFriendListSubscription) {
 
 // L7: a runtime frame sent before the session exists is refused (and says so); once the login is up it goes to the
 // service, and its reply reaches the login socket.
-TEST_F(RouterAllTest, ARuntimeFrameIsRefusedBeforeTheSessionAndSentAfter) {
+TEST_F(ClientRouterAllTest, ARuntimeFrameIsRefusedBeforeTheSessionAndSentAfter) {
   const nevr_social_party::Sender sender = nevr_social_party::SenderSlot().load();
   ASSERT_NE(sender, nullptr);
   const std::string frame = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymDocumentRequest, "");
@@ -4142,6 +4162,49 @@ TEST_F(RouterAllTest, ARuntimeFrameIsRefusedBeforeTheSessionAndSentAfter) {
   AdmitLogin(login);
   EXPECT_TRUE(sender(frame));
   ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymDocumentSuccess)) << "the reply to the runtime frame was lost";
+}
+
+// A round trip that proves the service has read everything sent on the session before it: the service answers a
+// DocumentRequest in order, on the same connection.
+static void RoundTripOnTheSession(GameSocket& login) {
+  login.Send(nevr_evr_codec::kSymDocumentRequest);
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymDocumentSuccess)) << "the session never answered";
+}
+
+// #1280: a server whose login the service accepts subscribes to no friend list (legacy path, the default).
+TEST_F(ServerRolesByPathTest, AServerSendsNoFriendListSubscriptionAfterTheServiceAcceptsItsLogin) {
+  remote_.SetLoginReply(nevr_evr_codec::kSymLoginSuccess);
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSuccess)) << "the server was left at the login gate";
+  RoundTripOnTheSession(login);
+  EXPECT_EQ(remote_.ReceivedCount(nevr_evr_codec::FirstSymbol(nevr_evr_codec::BuildFriendListSubscribe())), 0);
+}
+
+// #1280: the same through the router.
+TEST_F(ServerRouterAllTest, AServerSendsNoFriendListSubscriptionAfterTheServiceAcceptsItsLogin) {
+  remote_.SetLoginReply(nevr_evr_codec::kSymLoginSuccess);
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSuccess)) << "the server was left at the login gate";
+  RoundTripOnTheSession(login);
+  EXPECT_EQ(remote_.ReceivedCount(nevr_evr_codec::FirstSymbol(nevr_evr_codec::BuildFriendListSubscribe())), 0);
+}
+
+// #1280: on a server the runtime's social sender sends nothing, while the self-check sender (its RemoteLogSet is not
+// social) still reaches the service.
+TEST_F(ServerRolesByPathTest, TheRuntimesSocialSenderSendsNothingOnAServer) {
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings)) << "the login never reached the service";
+  const nevr_social_party::Sender sender = nevr_social_party::SenderSlot().load();
+  ASSERT_NE(sender, nullptr);
+  const nevr_social_party::Message refresh = nevr_social_party::Global().RefreshFriends().at(0);
+  EXPECT_FALSE(sender(nevr_social_party::Frame(refresh)));
+  EXPECT_FALSE(nevr_social_party::Send(nevr_social_party::Global().RefreshFriends()));
+  EXPECT_TRUE(TestHook_SendFrameToServer(nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymDocumentRequest, "")));
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymDocumentSuccess)) << "the self-check sender's frame was lost";
+  EXPECT_EQ(remote_.ReceivedCount(refresh.symbol), 0);
 }
 
 // L8: the ninth matchmaker is closed with 1013, and the first eight share the session's one connection.
@@ -5079,8 +5142,28 @@ TEST(WsBridgeLoginRequest, PlatformCode4AtWireOffset40) {
   for (size_t i = 24; i < 40; ++i) EXPECT_EQ(request[i], '\0');
 }
 
+// #1280: a dedicated server is not a player and declares no social level, so the service sends it none of the
+// newer social messages; a client declares the level it parses.
+TEST(WsBridgeLoginRequest, AServerDeclaresNoSocialLevelAndAClientDeclaresItsOwn) {
+  const auto socialLevel = [](BOOL isServer) {
+    const BOOL wasServer = g_isServer;
+    g_isServer = isServer;
+    const std::string request = TestHook_BuildLoginRequest(77, 4, "name", "");
+    g_isServer = wasServer;
+    const size_t jsonOffset = 56;
+    if (request.size() <= jsonOffset) return -1;
+    return nlohmann::json::parse(request.substr(jsonOffset, request.size() - jsonOffset - 1)).at("nevr_social").get<int>();
+  };
+  EXPECT_EQ(socialLevel(TRUE), 0);
+  EXPECT_EQ(socialLevel(FALSE), nevr_social_party::kSocialLevel);
+  EXPECT_EQ(nevr_social_party::kSocialLevel, 1);
+}
+
 TEST(WsBridgeLoginRequest, JsonCarriesIdentityCredentialsAndMeasuredSystemInfo) {
+  const BOOL wasServer = g_isServer;
+  g_isServer = FALSE;  // a client's login (this file's default is a server)
   const std::string request = TestHook_BuildLoginRequest(77, 3, "A \"quoted\" name", "access-token");
+  g_isServer = wasServer;
   const size_t jsonOffset = 56;
   ASSERT_GT(request.size(), jsonOffset);
   ASSERT_EQ(request.back(), '\0');

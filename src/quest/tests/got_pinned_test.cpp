@@ -181,6 +181,11 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15FindMethod(), "libr15 CSysModule::FindMethod JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetDeviceExtensionsVulkan(), "libr15 vrapi_GetDeviceExtensionsVulkan JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetSystemPropertyInt(), "libr15 vrapi_GetSystemPropertyInt JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15SetDisplayRefreshRate(), "libr15 vrapi_SetDisplayRefreshRate JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15SetClockLevels(), "libr15 vrapi_SetClockLevels JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15SetPropertyInt(), "libr15 vrapi_SetPropertyInt JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15GetSystemPropertyFloat(), "libr15 vrapi_GetSystemPropertyFloat JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15SubmitFrame2(), "libr15 vrapi_SubmitFrame2 JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetCurrentInputState(), "libr15 vrapi_GetCurrentInputState JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetInputDeviceCapabilities(), "libr15 vrapi_GetInputDeviceCapabilities JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");
