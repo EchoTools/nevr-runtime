@@ -673,10 +673,31 @@ TEST(SignInDialogText, EveryEndingSaysWhichOneAndDropsTheCode) {
     EXPECT_EQ(c.closes_by_itself, end == FlowEnd::Verified || end == FlowEnd::Cancelled);
   }
   std::sort(seen.begin(), seen.end());
-  // Expired and timed out read the same on purpose: both are "get a new code".
-  EXPECT_EQ(std::unique(seen.begin(), seen.end()) - seen.begin(), 6);
+  // Every ending reads differently: a timeout names itself, and an expired code names the code.
+  EXPECT_EQ(std::unique(seen.begin(), seen.end()) - seen.begin(), 7);
   EXPECT_EQ(nevr::auth::SignInEndedContent(FlowEnd::Verified).instruction, "Signed in. Starting Echo VR.");
   EXPECT_NE(nevr::auth::SignInEndedContent(FlowEnd::CodeExpired).instruction.find("expired"), std::string::npos);
+}
+
+// #1446: a timeout is what the player must act on, so the window says it in one line.
+TEST(SignInDialogText, ATimedOutSignInSaysSoInOneLine) {
+  EXPECT_EQ(nevr::auth::SignInEndedContent(nevr::auth::FlowEnd::TimedOut).instruction,
+            "Sign-in timed out. Restart Echo VR to get a new code.");
+}
+
+// #1446: a failure stays on screen until the player closes it; only a success or a cancel closes after a moment.
+TEST(SignInDialogText, AFailedEndingStaysUntilThePlayerClosesIt) {
+  using nevr::auth::FlowEnd;
+  for (const FlowEnd end : {FlowEnd::CodeExpired, FlowEnd::TimedOut, FlowEnd::PollErrors, FlowEnd::NoCode,
+                            FlowEnd::BrowserFailed}) {
+    EXPECT_EQ(nevr::auth::SignInEndedLingerMs(nevr::auth::SignInEndedContent(end)), 0u)
+        << "ending " << static_cast<int>(end) << " must not close itself";
+  }
+  EXPECT_EQ(nevr::auth::SignInEndedLingerMs(nevr::auth::SignInEndedContent(FlowEnd::Verified)), 1500u);
+  EXPECT_EQ(nevr::auth::SignInEndedLingerMs(nevr::auth::SignInEndedContent(FlowEnd::Cancelled)), 1500u);
+  EXPECT_EQ(nevr::auth::SignInEndedLingerMs(nevr::auth::SignInWaitingContent("https://echovrce.com/device", "K7RX")),
+            0u)
+      << "the waiting dialog has no end to close after";
 }
 
 TEST(DeviceAuthFlow, TheCodeAndPageAreHandedToTheUiBeforeTheBrowserAndTheEndIsReportedOnce) {
@@ -1213,6 +1234,8 @@ TEST(TokenAuthModule, ClientWithoutRequiredConfigDisablesCleanly) {
   EXPECT_TRUE(nevr_token_auth::GetToken().empty());
   EXPECT_EQ(nevr_token_auth::GetDiscordId(), 0U);
   EXPECT_TRUE(nevr_token_auth::GetUsername().empty());
+  // #1446: a client that never ran sign-in has not ended it, so the bridge keeps asking the service as before.
+  EXPECT_FALSE(nevr_token_auth::SignInEndedWithoutToken());
   token_auth_Shutdown();
 }
 
