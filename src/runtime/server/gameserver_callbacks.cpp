@@ -38,6 +38,7 @@
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat / NevrCfgGetFlatCsv (N133 S4b: config.yaml reads)
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/lifecycle/crash_recovery.h"
+#include "runtime/patch/server_bots_install.h"
 #include "runtime/hook/patching.h"
 #include "core/nevr_curl.h"
 #include "core/pch.h"
@@ -796,6 +797,8 @@ void GameServerLib::RegisterTcpCallbacks() {
       // this passthrough goes away — the protobuf should carry everything.
       auto* broadcaster = GetContext().GetBroadcaster();
       if (broadcaster) {
+        // #1423: with bots armed, the settings get numteams and players_per_team, which bot team placement reads.
+        nevr_server_bots::SessionSettings(&data, &size);
         EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyStartSessionV4,
                                              "SNSLobbyStartSessionv4", data, size);
         Log(EchoVR::LogLevel::Info,

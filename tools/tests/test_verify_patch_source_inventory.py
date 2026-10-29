@@ -40,6 +40,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/render_config.cpp",
     "patch/render_config_hook.cpp",
     "patch/resource_override.cpp",
+    "patch/server_bots.cpp",
     "patch/party_invite_gate.cpp",
     "patch/social_facade.cpp",
     "patch/social_facade_object.cpp",
@@ -92,7 +93,7 @@ class VerifyPatchSourceInventoryTest(unittest.TestCase):
             )
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("patch-source-inventory: OK count=34", result.stdout)
+        self.assertIn("patch-source-inventory: OK count=35", result.stdout)
 
     def test_rejects_missing_duplicate_unexpected_and_missing_disk_entries(self):
         scenarios = (
