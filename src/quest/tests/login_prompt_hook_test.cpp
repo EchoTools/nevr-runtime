@@ -426,7 +426,7 @@ void ConcurrentReadsAreNeverTorn() {
 }
 
 void CounterRefusalIsLoudAndInstallReportsBothSlots() {
-  // A nearly full reporter table (two slots left, the hook needs sixteen): the counters are refused,
+  // A nearly full reporter table (two slots left, the hook needs seventeen): the counters are refused,
   // RegisterCounters says so in one line. Sized from the reporter's capacity, not a literal.
   sentinel::StopReporter();
   constexpr unsigned kFill = sentinel::kMaxReportCounters - 2;
@@ -1350,6 +1350,360 @@ void AnUnresolvedBeginLogInIsCountedAndNotCalled() {
   lp::ResetLatchForTest();
 }
 
+// ---- the RETRY select, the fallback decision and the NetGame state (#1391) -------------------------------------
+// Each line is read back from the captured log, so a line that is not written, or written with another outcome,
+// fails here. The select is the real SendRetrySelect (UseRetrySelectForTest), sent through a fake.
+
+int g_sendCalls = 0;
+void* g_sendSpace = nullptr;
+std::uint64_t g_sendEventArg = 0;
+std::uint64_t g_sendKeyArg = 0;
+std::uint64_t g_sendActorArg = 0;
+std::uint32_t g_sendFlagArg = 0;
+void FakeSend(void* space, std::uint64_t event, std::uint64_t actor, std::uint64_t key, std::uint32_t flag) {
+  ++g_sendCalls;
+  g_sendSpace = space;
+  g_sendEventArg = event;
+  g_sendActorArg = actor;
+  g_sendKeyArg = key;
+  g_sendFlagArg = flag;
+}
+
+// The object CR15NetGame+0x8 points to, with the game space at +0x7af0 (SendRetrySelect reads both).
+struct alignas(16) FakeGameObject {
+  unsigned char bytes[layout::kGameSpaceOffset + 16];
+};
+FakeGameObject g_gameObject;
+int g_spaceMarker = 0;  // stands for the game space: only its address is handed on
+
+void LinkGameObject(FakeGame& g, const void* object) { std::memcpy(g.bytes + layout::kGameOffset, &object, sizeof(object)); }
+void SetSpaceOf(FakeGameObject& o, const void* space) {
+  std::memcpy(o.bytes + layout::kGameSpaceOffset, &space, sizeof(space));
+}
+
+// The last captured line that holds `needle`, or "" when none does.
+std::string LastLine(const char* needle) {
+  for (auto it = g_lines.rbegin(); it != g_lines.rend(); ++it) {
+    if (it->find(needle) != std::string::npos) return *it;
+  }
+  return std::string();
+}
+bool Holds(const std::string& line, const char* text) { return line.find(text) != std::string::npos; }
+
+// A new attempt: the notice goes on the board, the attempt fails with the game's local text, and the Update that
+// restarts the login runs.
+void RestartFromNotice() {
+  board::Withdraw();
+  Publish(kNotice, board::Mode::kNotice);
+  FailLocally(g_game);
+  UpdateEntry()(Obj(g_game), 16);
+}
+
+constexpr const char* kSelectLine = "\"event\":\"login_prompt_select\"";
+constexpr const char* kFallbackLine = "\"event\":\"login_prompt_fallback\"";
+constexpr const char* kStateLine = "\"event\":\"login_prompt_netgame_state\"";
+
+// The select that is sent says what it sends: the outcome, the event (evt_btn_clicked), the key (btn_exit's branch,
+// not RETRY's), the actor, and the flag. The counter counts the send.
+void TheRetrySelectLogsWhatItSends() {
+  lp::ResetLatchForTest();
+  gate::SetReady(true);
+  lp::SetClockForTest(&FakeClock);
+  lp::SetBeginLogInForTest(&FakeBeginLogIn);
+  lp::SetSendEventForTest(&FakeSend);
+  lp::UseRetrySelectForTest();
+  g_beginCalls = 0;
+  g_sendCalls = 0;
+  g_now = 1'000'000'000;
+  LinkGameObject(g_game, &g_gameObject);
+  SetSpaceOf(g_gameObject, &g_spaceMarker);
+  const lp::Counts before = lp::CurrentCounts();
+  const int linesBefore = CountLines(kSelectLine);
+  RestartFromNotice();
+  QCHECK(g_sendCalls == 1 && g_sendSpace == &g_spaceMarker);
+  QCHECK(g_sendEventArg == sentinel::pinned::kRetrySelectEvent);
+  QCHECK(g_sendKeyArg == sentinel::pinned::kLoginPageExitKey && g_sendActorArg == sentinel::pinned::kAllActors);
+  QCHECK(g_sendFlagArg == 1);
+  QCHECK(CountLines(kSelectLine) == linesBefore + 1);
+  const std::string line = LastLine(kSelectLine);
+  QCHECK(Holds(line, "\"outcome\":\"sent\""));
+  QCHECK(Holds(line, "\"send_event\":\"0x8f0094c7bb02681c\""));
+  QCHECK(Holds(line, "\"send_event_name\":\"evt_btn_clicked\""));
+  QCHECK(Holds(line, "\"key\":\"0x34f99a282ce78d72\"") && Holds(line, "\"key_name\":\"btn_exit\""));
+  QCHECK(Holds(line, "\"actor\":\"0x0000ffffffffffff\"") && Holds(line, "\"actor_name\":\"all_actors\""));
+  QCHECK(lp::CurrentCounts().select_sent == before.select_sent + 1);
+
+  LinkGameObject(g_game, nullptr);
+  lp::SetSendEventForTest(nullptr);
+  lp::SetRetryEventForTest(nullptr);
+  lp::SetBeginLogInForTest(nullptr);
+  lp::SetClockForTest(nullptr);
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::ResetLatchForTest();
+}
+
+// A select that is not sent says why, is logged with that outcome, and is not counted. Each early return of
+// SendRetrySelect has its own outcome.
+void TheRetrySelectSaysWhyItWasNotSent() {
+  lp::ResetLatchForTest();
+  gate::SetReady(true);
+  lp::SetClockForTest(&FakeClock);
+  lp::SetBeginLogInForTest(&FakeBeginLogIn);
+  lp::UseRetrySelectForTest();
+  g_beginCalls = 0;
+  g_sendCalls = 0;
+  g_now = 1'000'000'000;
+  const lp::Counts before = lp::CurrentCounts();
+  const int linesBefore = CountLines(kSelectLine);
+
+  lp::SetSendEventForTest(nullptr);  // the send function is not resolved
+  LinkGameObject(g_game, &g_gameObject);
+  SetSpaceOf(g_gameObject, &g_spaceMarker);
+  RestartFromNotice();
+  QCHECK(Holds(LastLine(kSelectLine), "\"outcome\":\"send_unresolved\""));
+
+  lp::SetSendEventForTest(&FakeSend);
+  LinkGameObject(g_game, nullptr);  // the game object is missing
+  RestartFromNotice();
+  QCHECK(Holds(LastLine(kSelectLine), "\"outcome\":\"game_null\""));
+
+  LinkGameObject(g_game, &g_gameObject);
+  SetSpaceOf(g_gameObject, nullptr);  // the game space is missing
+  RestartFromNotice();
+  QCHECK(Holds(LastLine(kSelectLine), "\"outcome\":\"space_null\""));
+
+  QCHECK(CountLines(kSelectLine) == linesBefore + 3);  // one line per restart, none of them a send
+  QCHECK(g_sendCalls == 0);
+  QCHECK(lp::CurrentCounts().select_sent == before.select_sent);
+
+  LinkGameObject(g_game, nullptr);
+  lp::SetSendEventForTest(nullptr);
+  lp::SetRetryEventForTest(nullptr);
+  lp::SetBeginLogInForTest(nullptr);
+  lp::SetClockForTest(nullptr);
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::ResetLatchForTest();
+}
+
+// The fallback line is written when the direct BeginLogIn call is made: its reason, the time since the select in
+// nanoseconds, the NetGame state it saw, and the outcome of the select.
+void TheFallbackLogsItsDecisionTimeAndState() {
+  lp::ResetLatchForTest();
+  gate::SetReady(true);
+  lp::SetClockForTest(&FakeClock);
+  lp::SetBeginLogInForTest(&FakeBeginLogIn);
+  lp::SetRetryEventForTest(&FakeRetry);
+  g_beginCalls = 0;
+  g_retryCalls = 0;
+  g_now = 1'000'000'000;
+  board::Withdraw();
+  Publish(Prompt("FBK1-CODE"));
+  FailLocally(g_game);
+  UpdateEntry()(Obj(g_game), 16);
+  const int fallbacksBefore = CountLines(kFallbackLine);
+  Publish(kNotice, board::Mode::kNotice);
+  UpdateEntry()(Obj(g_game), 16);  // the select, at g_now
+  QCHECK(g_retryCalls == 1 && g_beginCalls == 0);
+  g_now += 1'900'000'000;
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(CountLines(kFallbackLine) == fallbacksBefore);  // inside the window: no decision yet
+  g_now += 200'000'000;
+  UpdateEntry()(Obj(g_game), 16);  // 2.1 s after the select: the direct call
+  QCHECK(g_beginCalls == 1);
+  QCHECK(CountLines(kFallbackLine) == fallbacksBefore + 1);
+  const std::string line = LastLine(kFallbackLine);
+  QCHECK(Holds(line, "\"reason\":\"select_no_effect\""));
+  QCHECK(Holds(line, "\"elapsed_ns\":2100000000"));
+  QCHECK(Holds(line, "\"state\":-94,\"state_name\":\"login_failed\""));
+  QCHECK(Holds(line, "\"select_outcome\":\"none\""));  // FakeRetry is not SendRetrySelect: no outcome was set
+
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::SetRetryEventForTest(nullptr);
+  lp::SetBeginLogInForTest(nullptr);
+  lp::SetClockForTest(nullptr);
+  lp::ResetLatchForTest();
+}
+
+// Without a select the fallback is the direct call at once, with reason select_unavailable and elapsed_ns 0. When
+// the select starts the login (the game leaves "login failed") no fallback line is written.
+void TheFallbackSaysWhyItCallsAndIsSilentWhenTheSelectStartsTheLogin() {
+  lp::ResetLatchForTest();
+  gate::SetReady(true);
+  lp::SetClockForTest(&FakeClock);
+  lp::SetBeginLogInForTest(&FakeBeginLogIn);
+  lp::SetRetryEventForTest(nullptr);
+  g_beginCalls = 0;
+  g_now = 1'000'000'000;
+  const int fallbacksBefore = CountLines(kFallbackLine);
+  RestartFromNotice();
+  QCHECK(g_beginCalls == 1);
+  QCHECK(CountLines(kFallbackLine) == fallbacksBefore + 1);
+  const std::string line = LastLine(kFallbackLine);
+  QCHECK(Holds(line, "\"reason\":\"select_unavailable\""));
+  QCHECK(Holds(line, "\"elapsed_ns\":0"));
+  QCHECK(Holds(line, "\"state\":-94,\"state_name\":\"login_failed\""));
+
+  lp::SetRetryEventForTest(&FakeRetry);
+  g_beginCalls = 0;
+  g_retryCalls = 0;
+  RestartFromNotice();  // the select is sent, and the game starts the login on it
+  QCHECK(g_retryCalls == 1);
+  SetState(g_game, layout::kStateLoggingIn);
+  g_now += 10'000'000'000;
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_beginCalls == 0);
+  QCHECK(CountLines(kFallbackLine) == fallbacksBefore + 1);  // unchanged: the select started the login
+
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::SetRetryEventForTest(nullptr);
+  lp::SetBeginLogInForTest(nullptr);
+  lp::SetClockForTest(nullptr);
+  lp::ResetLatchForTest();
+}
+
+// The NetGame state is logged once per change, from the Update that sees it, with the state as a number and a name.
+// The first state this hook sees is the baseline and is not a change.
+void TheNetGameStateIsLoggedOncePerChange() {
+  constexpr std::int32_t kLoggedIn = 3;
+  lp::ResetLatchForTest();
+  gate::SetReady(true);
+  board::Withdraw();
+  SetState(g_game, layout::kStateLoginFailed);
+  UpdateEntry()(Obj(g_game), 16);  // the baseline, whatever the state was before
+  const int before = CountLines(kStateLine);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(CountLines(kStateLine) == before);  // the same state again: nothing
+
+  SetState(g_game, layout::kStateLoggingIn);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(CountLines(kStateLine) == before + 1);
+  QCHECK(Holds(LastLine(kStateLine), "\"from\":-94,\"from_name\":\"login_failed\",\"to\":2,\"to_name\":\"logging_in\""));
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(CountLines(kStateLine) == before + 1);  // still logging in
+
+  SetState(g_game, kLoggedIn);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(CountLines(kStateLine) == before + 2);
+  QCHECK(Holds(LastLine(kStateLine), "\"from\":2,\"from_name\":\"logging_in\",\"to\":3,\"to_name\":\"logged_in\""));
+
+  SetState(g_game, layout::kStateLoadingGlobal);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(CountLines(kStateLine) == before + 3);
+  QCHECK(Holds(LastLine(kStateLine), "\"from\":3,\"from_name\":\"logged_in\",\"to\":4,\"to_name\":\"loading_global\""));
+
+  SetState(g_game, 0);  // logged out
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(CountLines(kStateLine) == before + 4);
+  QCHECK(Holds(LastLine(kStateLine), "\"from\":4,\"from_name\":\"loading_global\",\"to\":0,\"to_name\":\"logged_out\""));
+
+  SetState(g_game, 7);  // a state this file does not name
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(CountLines(kStateLine) == before + 5);
+  QCHECK(Holds(LastLine(kStateLine), "\"from\":0,\"from_name\":\"logged_out\",\"to\":7,\"to_name\":\"unnamed\""));
+  lp::ResetLatchForTest();  // "loading global" ends the latch for good; the next case starts clean
+}
+
+// The key and the event are the names the log gives them: CSymbol64 of "btn_exit" and of "evt_btn_clicked".
+void TheSelectsKeyAndEventAreTheirSymbolNames() {
+  QCHECK(EchoVR::CSymbol64Hash("btn_exit") == sentinel::pinned::kLoginPageExitKey);
+  QCHECK(EchoVR::CSymbol64Hash("evt_btn_clicked") == sentinel::pinned::kRetrySelectEvent);
+  QCHECK(sentinel::pinned::kLoginPageExitKey == 0x34f99a282ce78d72ULL);  // the rename keeps the value
+}
+
+// A select for an unset game object says so: the outcome is self_null, nothing is sent and the counter stays put.
+void TheSelectNamesAnUnsetSelfAndSendsNothing() {
+  lp::SetSendEventForTest(&FakeSend);
+  g_sendCalls = 0;
+  const lp::Counts before = lp::CurrentCounts();
+  const int linesBefore = CountLines(kSelectLine);
+  lp::SendRetrySelectForTest(nullptr);
+  QCHECK(CountLines(kSelectLine) == linesBefore + 1);
+  QCHECK(Holds(LastLine(kSelectLine), "\"outcome\":\"self_null\""));
+  QCHECK(g_sendCalls == 0);
+  QCHECK(lp::CurrentCounts().select_sent == before.select_sent);
+  lp::SetSendEventForTest(nullptr);
+}
+
+// The fallback line names the select's outcome. A notice that gets no select names "none": the outcome is reset for
+// each notice, so it is never the outcome of the notice before.
+void TheFallbackNamesTheSelectsOutcomeAndTheNextNoticeNamesNone() {
+  lp::ResetLatchForTest();
+  gate::SetReady(true);
+  lp::SetClockForTest(&FakeClock);
+  lp::SetBeginLogInForTest(&FakeBeginLogIn);
+  lp::SetSendEventForTest(&FakeSend);
+  lp::UseRetrySelectForTest();
+  g_beginCalls = 0;
+  g_sendCalls = 0;
+  g_now = 1'000'000'000;
+  LinkGameObject(g_game, &g_gameObject);
+  SetSpaceOf(g_gameObject, &g_spaceMarker);
+  const int fallbacksBefore = CountLines(kFallbackLine);
+  RestartFromNotice();  // the select is sent
+  QCHECK(g_sendCalls == 1);
+  g_now += 2'100'000'000;
+  UpdateEntry()(Obj(g_game), 16);  // 2.1 s after the select: the direct call, which names the select
+  QCHECK(g_beginCalls == 1);
+  QCHECK(CountLines(kFallbackLine) == fallbacksBefore + 1);
+  QCHECK(Holds(LastLine(kFallbackLine), "\"reason\":\"select_no_effect\""));
+  QCHECK(Holds(LastLine(kFallbackLine), "\"select_outcome\":\"sent\""));
+
+  lp::SetRetryEventForTest(nullptr);  // the next notice gets no select
+  g_beginCalls = 0;
+  RestartFromNotice();
+  QCHECK(CountLines(kFallbackLine) == fallbacksBefore + 2);
+  QCHECK(Holds(LastLine(kFallbackLine), "\"reason\":\"select_unavailable\""));
+  QCHECK(Holds(LastLine(kFallbackLine), "\"select_outcome\":\"none\""));
+
+  LinkGameObject(g_game, nullptr);
+  lp::SetSendEventForTest(nullptr);
+  lp::SetRetryEventForTest(nullptr);
+  lp::SetBeginLogInForTest(nullptr);
+  lp::SetClockForTest(nullptr);
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::ResetLatchForTest();
+}
+
+// The first state the hook sees for an instance is its baseline, whatever state it last saw on another instance:
+// a change is logged only between two states of the same instance.
+void TheFirstStateOfAnInstanceIsABaseline() {
+  static FakeGame fresh;  // an object the hook has never seen
+  lp::ResetLatchForTest();
+  gate::SetReady(true);
+  board::Withdraw();
+  SetState(g_game, 3);  // the hook last saw g_game in "logged in"
+  UpdateEntry()(Obj(g_game), 16);
+  const int before = CountLines(kStateLine);
+  SetState(fresh, layout::kStateLoginFailed);
+  UpdateEntry()(Obj(fresh), 16);  // its baseline: not logged, although the state seen last was 3
+  QCHECK(CountLines(kStateLine) == before);
+  SetState(fresh, layout::kStateLoggingIn);
+  UpdateEntry()(Obj(fresh), 16);
+  QCHECK(CountLines(kStateLine) == before + 1);
+  QCHECK(Holds(LastLine(kStateLine), "\"from\":-94,\"from_name\":\"login_failed\",\"to\":2,\"to_name\":\"logging_in\""));
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::ResetLatchForTest();
+}
+
+// The reporter's table holds the hook's counters: after RegisterCounters() it has room for exactly the rest of its
+// capacity, so a counter that was not registered shows as one slot too many.
+void TheCountersAreAllInTheReporterTable() {
+  sentinel::StopReporter();  // forgets the table
+  QCHECK(lp::RegisterCounters());
+  constexpr unsigned kFill = sentinel::kMaxReportCounters;
+  static std::atomic<std::uint64_t> filler[kFill];
+  unsigned room = 0;
+  for (unsigned i = 0; i < kFill; ++i) room += sentinel::RegisterReportCounter("filler", &filler[i]) ? 1 : 0;
+  QCHECK(room == sentinel::kMaxReportCounters - static_cast<unsigned>(lp::kCounterCount));
+  sentinel::StopReporter();
+}
+
 }  // namespace
 
 int main() {
@@ -1391,6 +1745,16 @@ int main() {
   AnUnresolvedBeginLogInIsCountedAndNotCalled();
   TheRestartSendsTheRetrySelectAloneAndFallsBackToBeginLogIn();
   ASelectThatStartsTheLoginIsNotFollowedByBeginLogIn();
+  TheRetrySelectLogsWhatItSends();
+  TheRetrySelectSaysWhyItWasNotSent();
+  TheFallbackLogsItsDecisionTimeAndState();
+  TheFallbackSaysWhyItCallsAndIsSilentWhenTheSelectStartsTheLogin();
+  TheNetGameStateIsLoggedOncePerChange();
+  TheSelectsKeyAndEventAreTheirSymbolNames();
+  TheSelectNamesAnUnsetSelfAndSendsNothing();
+  TheFallbackNamesTheSelectsOutcomeAndTheNextNoticeNamesNone();
+  TheFirstStateOfAnInstanceIsABaseline();
+  TheCountersAreAllInTheReporterTable();
   ASkippedLoggingInPagePoisonsTheAttemptUntilItEnds();
   ALoggingInPageIsNotSkippedWhenTheGateTurnsReadyBeforeThePoison();
   TheHoldBitIsPublishedWithReadyAndReadsBackOnlyWhenNothingElseDecides();

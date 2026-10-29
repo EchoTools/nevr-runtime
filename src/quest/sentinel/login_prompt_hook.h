@@ -59,8 +59,10 @@
  *     block holds anything else, so a genuine error is shown, and dies for good when the game reaches
  *     "loading global". Skipping is a plain return.
  *
- * It never logs on the game's call path. Its sixteen counters (hook_report.h), registered by
- * RegisterCounters():
+ * It logs on the game's call path only at a decision or a change, never per frame: the RETRY select
+ * (login_prompt_select, once per notice), the fallback decision (login_prompt_fallback) and a change of the NetGame
+ * state (login_prompt_netgame_state). The page-enter line is on that path too, rate-limited to one per page symbol
+ * per second. Its seventeen counters (hook_report.h), registered by RegisterCounters():
  *   login_prompt_text_shown         a login failure's message was replaced by the prompt
  *   login_prompt_text_refreshed     the followed block was rewritten or restored after a change
  *   login_prompt_text_kept          a local login failure kept the game's text for now: nothing was
@@ -84,13 +86,14 @@
  *                                   the login could proceed: the game's own BeginLogIn (what RETRY runs) was
  *                                   called once for that notice, so the player need not select RETRY (#672)
  *   login_prompt_login_restart_unavailable  that call was due and BeginLogIn was not resolved
+ *   login_prompt_select_sent        the RETRY select (SendRetrySelect) was sent for a notice's restart (#1391)
  *
  * Integration surface. The sentinel's own entry.cpp installs the hooks, but nothing in it creates
  * QuestTokenAuth, so there the board stays empty and the game's text always passes through. A
  * startup sequence that links token auth into the same shared object and creates it
  * (QuestTokenAuth::Create, whose presenters publish to the board) calls, in this order:
  *   1. RegisterCounters()  before sentinel::StartReporter. Returns false, after one JSON line, when
- *                          the reporter refused any of the sixteen.
+ *                          the reporter refused any of the seventeen.
  *   2. InstallIfCounted(<result of 1>)  after QuestTokenAuth::Create; nothing else needs
  *                          attaching. Skips, with one JSON line, when the counters were refused;
  *                          otherwise Install(). Both slots are in
@@ -116,7 +119,7 @@ using EnablePageThunk = sentinel::pinned::LibR15EnablePageNodeEnterThunk;
 using QuitFn = void (*)(sentinel::pinned::CR15NetGameOpaque*) noexcept;
 using BeginLogInFn = void (*)(sentinel::pinned::CR15NetGameOpaque*) noexcept;
 
-inline constexpr int kCounterCount = 16;
+inline constexpr int kCounterCount = 17;
 
 // Registers the counters. Call before sentinel::StartReporter. Returns false, having logged one
 // line {"event":"login_prompt_counters","result":"refused",...}, when any was refused.
@@ -147,6 +150,13 @@ void SetQuitOnErrorForTest(QuitFn quit) noexcept;
 void SetBeginLogInForTest(BeginLogInFn begin) noexcept;
 // The function the hook calls after BeginLogIn to send the RETRY select (null: none); a test's fake replaces it.
 void SetRetryEventForTest(BeginLogInFn retry) noexcept;
+// Test support: the function SendRetrySelect calls to send the select (null: unresolved). UseRetrySelectForTest makes
+// the restart use SendRetrySelect itself, which ResolveSendEvent installs in production.
+void SetSendEventForTest(sentinel::pinned::SendComponentEventSig* send) noexcept;
+void UseRetrySelectForTest() noexcept;
+// Test support: runs SendRetrySelect for `self` directly, so a test reaches each of its early returns (the hook never
+// passes a null `self`).
+void SendRetrySelectForTest(sentinel::pinned::CR15NetGameOpaque* self) noexcept;
 void SetClockForTest(std::int64_t (*clock)() noexcept) noexcept;
 
 // Test support: forgets which pages the page-enter log has seen (each is logged again at its next enable).
@@ -160,7 +170,7 @@ void ReleaseBlockWriterForTest() noexcept;
 // The counters' current values, in the order of the comment above.
 struct Counts {
   std::uint64_t shown, refreshed, kept, not_local, busy, not_ours, resent, resend_unavailable, error_page_dropped,
-      logging_in_page_dropped, page_passed_armed, login_restarted, login_restart_unavailable;
+      logging_in_page_dropped, page_passed_armed, login_restarted, login_restart_unavailable, select_sent;
 };
 Counts CurrentCounts() noexcept;
 

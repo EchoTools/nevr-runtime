@@ -43,6 +43,7 @@ std::atomic<sentinel::pinned::SendComponentEventSig*> g_sendEvent{nullptr};
 std::atomic<BeginLogInFn> g_retryEvent{nullptr};  // sends the RETRY button's event (null: unavailable)
 std::atomic<std::uint64_t> g_loginRestarted{0};
 std::atomic<std::uint64_t> g_loginRestartUnavailable{0};
+std::atomic<std::uint64_t> g_selectSent{0};
 
 // The error event: CR15NetGame::QuitOnError, resolved by Install() (null until then, and on a host).
 std::atomic<QuitFn> g_quit{nullptr};
@@ -54,6 +55,12 @@ std::int64_t g_retrySentNs = 0;  // when the RETRY select was sent for that noti
 bool g_retrySent = false;       // the RETRY select was sent for that notice; game thread only
 bool g_fallbackDone = false;     // BeginLogIn was called directly for that notice; game thread only
 constexpr std::int64_t kRetryFallbackNs = 2'000'000'000;
+// What SendRetrySelect did for the notice's select, for the fallback line: "sent", the early return that stopped
+// it, or "none" when no select was attempted for that notice. Game thread only.
+const char* g_retrySelectOutcome = "none";
+// The NetGame state HookedNetGameUpdate last saw and the instance it saw it on; a change is logged once. Game thread only.
+CR15NetGameOpaque* g_seenSelf = nullptr;
+std::int32_t g_seenState = 0;
 // A rewrite of the block while the game sits in "login failed" is followed by one error event, so the
 // UI status script copies the new text again; pending until it is sent. Events are spaced by at least
 // kResendSpacingNs, which is longer than a game-loop iteration (CR15NetGame::Update runs up to four
@@ -465,10 +472,54 @@ void StartLogin(CR15NetGameOpaque* self) noexcept {
   begin(self);
 }
 
-// BeginLogIn alone moves the game to "logged in" but leaves the page the player sees on LOGGING IN: the page
-// script that enters the next pages is the RETRY select's (#672), and its BeginLogin node starts the login
-// itself. So the select is sent alone when it can be; BeginLogIn is called directly only when it cannot, or
-// when the game is still in "login failed" kRetryFallbackNs after the select (the select did nothing).
+// The name of a NetGame state for the log; "unnamed" for a value this file does not know. -94, 2 and 4 take the names
+// of the game's GameStateString table (pinned_targets.h, game_layout). 0 is "logged out" (CR15NetGame::LogOut). 3 is
+// "logged in" by the note on LoginRemovedCB in pinned_targets.h; no constant pins it.
+const char* StateName(std::int32_t state) noexcept {
+  switch (state) {
+    case 0: return "logged_out";
+    case layout::kStateLoggingIn: return "logging_in";
+    case 3: return "logged_in";
+    case layout::kStateLoadingGlobal: return "loading_global";
+    case layout::kStateLoginFailed: return "login_failed";
+    default: return "unnamed";
+  }
+}
+
+// The fallback decision: the direct BeginLogIn call, with its reason, the time since the select (0 when no select was
+// sent), the NetGame state it saw and the select's outcome.
+void LogFallback(CR15NetGameOpaque* self, const char* reason, std::int64_t elapsedNs) noexcept {
+  const std::int32_t state = State(self);
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "login_prompt_fallback",
+                      {{"reason", reason},
+                       {"elapsed_ns", elapsedNs},
+                       {"state", state},
+                       {"state_name", StateName(state)},
+                       {"select_outcome", g_retrySelectOutcome}});
+}
+
+// The NetGame state changed: one line from the old state to the new one, from the Update call that sees it. The
+// first state seen for an instance is the baseline, not a change.
+void LogStateChange(CR15NetGameOpaque* self) noexcept {
+  const std::int32_t state = State(self);
+  if (self != g_seenSelf) {
+    g_seenSelf = self;
+    g_seenState = state;
+    return;
+  }
+  if (state == g_seenState) return;
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "login_prompt_netgame_state",
+                      {{"from", g_seenState},
+                       {"from_name", StateName(g_seenState)},
+                       {"to", state},
+                       {"to_name", StateName(state)}});
+  g_seenState = state;
+}
+
+// BeginLogIn alone moves the game to "logged in" but leaves the page the player sees on LOGGING IN. The select is
+// sent alone when it can be (#672; whether the select's page script enters the next pages is not established,
+// #1391). BeginLogIn is called directly only when the select cannot be sent, or when the game is still in
+// "login failed" kRetryFallbackNs after the select. Each decision is logged (login_prompt_fallback).
 void RestartLoginAfterSignIn(CR15NetGameOpaque* self) noexcept {
   if (g_kind != Kind::kNotice || State(self) != layout::kStateLoginFailed) return;
   if (!gate::IsReady()) return;  // the caller has checked that `self` is the followed instance
@@ -479,8 +530,10 @@ void RestartLoginAfterSignIn(CR15NetGameOpaque* self) noexcept {
     g_restartedVersion = applied;
     g_retrySent = false;
     g_fallbackDone = false;
+    g_retrySelectOutcome = "none";
     if (retry == nullptr) {
       g_fallbackDone = true;
+      LogFallback(self, "select_unavailable", 0);
       StartLogin(self);
       return;
     }
@@ -490,28 +543,53 @@ void RestartLoginAfterSignIn(CR15NetGameOpaque* self) noexcept {
     return;
   }
   if (!g_retrySent || g_fallbackDone) return;
-  if (g_clock.load(std::memory_order_relaxed)() - g_retrySentNs < kRetryFallbackNs) return;
+  const std::int64_t elapsed = g_clock.load(std::memory_order_relaxed)() - g_retrySentNs;
+  if (elapsed < kRetryFallbackNs) return;
   g_fallbackDone = true;
+  LogFallback(self, "select_no_effect", elapsed);
   StartLogin(self);
 }
 
-// Sends the event the RETRY button sends. On the game's thread, inside the Update hook.
+// Sends the select the login-failed page's button sends: evt_btn_clicked, with the key of the page's btn_exit branch
+// and the actor kAllActors (pinned_targets.h; issue #1391). On the game's thread, inside the Update hook. Every call
+// logs its outcome: "sent", or the early return that stopped it.
 void SendRetrySelect(CR15NetGameOpaque* self) noexcept {
   const auto send = g_sendEvent.load(std::memory_order_acquire);
-  if (send == nullptr || self == nullptr) return;
-  const unsigned char* const bytes = reinterpret_cast<const unsigned char*>(self);
   const unsigned char* game = nullptr;
-  std::memcpy(&game, bytes + sentinel::pinned::game_layout::kGameOffset, sizeof(game));
-  if (game == nullptr) return;
   void* space = nullptr;
-  std::memcpy(&space, game + sentinel::pinned::game_layout::kGameSpaceOffset, sizeof(space));
-  if (space == nullptr) return;
+  const char* outcome = "send_unresolved";
+  if (send != nullptr) {
+    outcome = "self_null";
+    if (self != nullptr) {
+      std::memcpy(&game, reinterpret_cast<const unsigned char*>(self) + layout::kGameOffset, sizeof(game));
+      outcome = "game_null";
+      if (game != nullptr) {
+        std::memcpy(&space, game + layout::kGameSpaceOffset, sizeof(space));
+        outcome = space != nullptr ? "sent" : "space_null";
+      }
+    }
+  }
+  g_retrySelectOutcome = outcome;
+  char sendEvent[19];
+  char key[19];
+  char actor[19];
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "login_prompt_select",
+                      {{"outcome", outcome},
+                       {"send_event", sentinel::HexString(sendEvent, sentinel::pinned::kRetrySelectEvent)},
+                       {"send_event_name", "evt_btn_clicked"},
+                       {"key", sentinel::HexString(key, sentinel::pinned::kLoginPageExitKey)},
+                       {"key_name", "btn_exit"},
+                       {"actor", sentinel::HexString(actor, sentinel::pinned::kAllActors)},
+                       {"actor_name", "all_actors"}});
+  if (send == nullptr || space == nullptr) return;
+  g_selectSent.fetch_add(1, std::memory_order_relaxed);
   send(space, sentinel::pinned::kRetrySelectEvent, sentinel::pinned::kAllActors,
-       sentinel::pinned::kRetrySelectKey, 1);
+       sentinel::pinned::kLoginPageExitKey, 1);
 }
 
 void HookedNetGameUpdate(UpdateThunk::Fn original, CR15NetGameOpaque* self, std::uint64_t arg) noexcept {
   RecheckLatch(self);
+  if (self != nullptr) LogStateChange(self);
   // A poisoned attempt ends when the game leaves "logging in" (its prerequisites failed): the next one is clean.
   if (self != nullptr && State(self) != layout::kStateLoggingIn) gate::ClearPoison();
   if (self != nullptr && self == g_object.load(std::memory_order_acquire)) {
@@ -652,6 +730,7 @@ bool RegisterCounters() noexcept {
       {"login_prompt_error_resend_unavailable", &g_resendUnavailable, sentinel::ReportKind::kFaults},
       {"login_prompt_login_restarted", &g_loginRestarted, sentinel::ReportKind::kCalls},
       {"login_prompt_login_restart_unavailable", &g_loginRestartUnavailable, sentinel::ReportKind::kFaults},
+      {"login_prompt_select_sent", &g_selectSent, sentinel::ReportKind::kCalls},
   };
   int registered = 0;
   for (const Entry& e : entries) registered += sentinel::RegisterReportCounter(e.name, e.value, e.kind) ? 1 : 0;
@@ -787,6 +866,11 @@ void SetBeginLogInForTest(BeginLogInFn begin) noexcept {
   g_fallbackDone = false;
 }
 void SetRetryEventForTest(BeginLogInFn retry) noexcept { g_retryEvent.store(retry, std::memory_order_release); }
+void SetSendEventForTest(sentinel::pinned::SendComponentEventSig* send) noexcept {
+  g_sendEvent.store(send, std::memory_order_release);
+}
+void UseRetrySelectForTest() noexcept { g_retryEvent.store(&SendRetrySelect, std::memory_order_release); }
+void SendRetrySelectForTest(CR15NetGameOpaque* self) noexcept { SendRetrySelect(self); }
 void ResetPageLogForTest() noexcept {
   for (PageLogSlot& slot : g_pageLog) {
     slot.key.store(0, std::memory_order_relaxed);
@@ -809,7 +893,8 @@ Counts CurrentCounts() noexcept {
           g_resent.load(std::memory_order_relaxed),   g_resendUnavailable.load(std::memory_order_relaxed),
           g_errorPageDropped.load(std::memory_order_relaxed), g_loggingInPageDropped.load(std::memory_order_relaxed),
           g_pagePassedArmed.load(std::memory_order_relaxed),
-          g_loginRestarted.load(std::memory_order_relaxed), g_loginRestartUnavailable.load(std::memory_order_relaxed)};
+          g_loginRestarted.load(std::memory_order_relaxed), g_loginRestartUnavailable.load(std::memory_order_relaxed),
+          g_selectSent.load(std::memory_order_relaxed)};
 }
 
 }  // namespace nevr_quest::login_prompt
