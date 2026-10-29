@@ -149,7 +149,8 @@ static bool GiveGameACopy(uintptr_t cbd, const void* bytes, uint64_t size, const
     return true;
 }
 
-/* Whether the registry holds an entry that replaces buffer 0 of (type_hash, name_hash): for a texture, its descriptor. */
+/* Whether the registry holds an entry that replaces buffer 0 of (type_hash, name_hash): for a texture, its descriptor.
+ * It says nothing of whether that entry was or will be served on this load: the two buffers finish in either order. */
 static bool HasDescriptorEntryFor(uint64_t type_hash, uint64_t name_hash) {
     std::lock_guard<std::mutex> lock(g_overrides_mutex);
     if (!g_overrides) return false;
@@ -177,8 +178,8 @@ static bool WritePayloadInPlace(uintptr_t cbd, const ResourceOverride& ovr, uint
             ovr.label.c_str(), static_cast<unsigned long long>(type_hash), static_cast<unsigned long long>(name_hash),
             static_cast<unsigned long long>(game_bytes), static_cast<unsigned long long>(ovr.size),
             nevr_game_buffer::InPlaceName(result), descriptorEntry ? "yes" : "no",
-            descriptorEntry ? "; this texture's descriptor entry is served without it, so the game reads its own "
-                              "payload with that descriptor"
+            descriptorEntry ? "; this texture has a descriptor entry, which is served on its own, so the game may "
+                              "read its own payload with that descriptor"
                             : "");
         return false;
     }

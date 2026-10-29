@@ -1091,7 +1091,7 @@ TEST_F(TexturePayloads, ACachedEntryForAnotherBufferDoesNotSuppressTheBuiltInSpl
 }
 
 // A texture's descriptor and payload are two entries (resource_buffer_key.h): a Warning says when they end up unpaired.
-TEST_F(TexturePayloads, ARefusedPayloadSaysItsTexturesDescriptorEntryIsServedWithoutIt) {
+TEST_F(TexturePayloads, ARefusedPayloadSaysItsTextureHasADescriptorEntry) {
   static const std::uint8_t descriptor[] = {1, 2, 3, 4};
   static const std::uint8_t payload[12] = {};
   RegisterResourceOverride(kTextureDescriptorKey, kPosterName, descriptor, sizeof(descriptor), "poster_desc");
@@ -1103,7 +1103,7 @@ TEST_F(TexturePayloads, ARefusedPayloadSaysItsTexturesDescriptorEntryIsServedWit
   GameFinishesBuffer(kTextureType, kPosterName, 1, small, sizeof(small));
   EXPECT_EQ(g_seenSize, sizeof(small));
   EXPECT_TRUE(TestLogContains("reason=larger_than_the_game_buffer descriptor_entry=yes "));
-  EXPECT_TRUE(TestLogContains("this texture's descriptor entry is served without it"));
+  EXPECT_TRUE(TestLogContains("this texture has a descriptor entry, which is served on its own"));
 }
 
 TEST_F(TexturePayloads, ARefusedPayloadWithNoDescriptorEntrySaysSo) {
@@ -1113,7 +1113,7 @@ TEST_F(TexturePayloads, ARefusedPayloadWithNoDescriptorEntrySaysSo) {
   std::uint8_t small[8] = {};
   GameFinishesBuffer(kTextureType, kPosterName, 1, small, sizeof(small));
   EXPECT_TRUE(TestLogContains("reason=larger_than_the_game_buffer descriptor_entry=no "));
-  EXPECT_FALSE(TestLogContains("served without it"));
+  EXPECT_FALSE(TestLogContains("served on its own"));
 }
 
 TEST_F(TexturePayloads, ASmallerPayloadWithNoDescriptorEntryIsWrittenAndTheWarningSaysSo) {
