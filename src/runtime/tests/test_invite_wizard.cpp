@@ -55,6 +55,15 @@ Choices ArenaCustom() { return Choices{"arena", "custom", 1}; }
 
 constexpr const char* kUuid = "0f8fad5b-d9cb-469f-a165-70867728950e";
 
+// ---- the prologue bytes a hook's Warning carries (docs/standards/logging.md, Rule 6) ----
+
+TEST(InviteWizard, HexBytesWritesEachByteAsTwoDigitsInOrderWithNoSeparator) {
+  const std::uint8_t bytes[] = {0x00, 0x0f, 0xa0, 0xff, 0x48};
+  EXPECT_EQ(nevr_invite::HexBytes(bytes, sizeof(bytes)), "000fa0ff48");
+  EXPECT_EQ(nevr_invite::HexBytes(bytes, 0), "");
+  EXPECT_EQ(nevr_invite::HexBytes(nullptr, 3), "");  // no pointer, no bytes: HexBytes is total (the hooks pass only readable memory)
+}
+
 // ---- the metric ----
 
 TEST(InviteMetric, TheJoinClickIsAJoinWithTheTypedCode) {

@@ -42,6 +42,10 @@ void Start(Settings settings) {
     offLevel = nevr_invite::LogLevel::Warning;
   } else if (settings.invite_codes == nevr_invite::Switch::Off) {
     off = "not_configured";
+  } else if (settings.hooks_refused) {
+    // An observer this service serves did not install. That observer's own Warning carries the address and the bytes (Rule 6).
+    off = "hook_prologue_mismatch";
+    offLevel = nevr_invite::LogLevel::Warning;
   } else if (settings.http_uri.empty()) {
     off = "no_service_address";
     offLevel = nevr_invite::LogLevel::Warning;
