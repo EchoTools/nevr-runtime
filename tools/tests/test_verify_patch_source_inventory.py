@@ -26,6 +26,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/headless_graphics.cpp",
     "patch/invite_answer_apply.cpp",
     "patch/invite_choice_hook.cpp",
+    "patch/invite_join_game.cpp",
     "patch/invite_service.cpp",
     "patch/invite_transport_curl.cpp",
     "patch/invite_wizard_hook.cpp",
@@ -91,7 +92,7 @@ class VerifyPatchSourceInventoryTest(unittest.TestCase):
             )
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("patch-source-inventory: OK count=33", result.stdout)
+        self.assertIn("patch-source-inventory: OK count=34", result.stdout)
 
     def test_rejects_missing_duplicate_unexpected_and_missing_disk_entries(self):
         scenarios = (
