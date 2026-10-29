@@ -116,6 +116,18 @@ your PR does:
   ```
 
   "Nothing found" counts only with the pattern and the scope it ran over.
+- **Siblings, for a fix.** The search statement looks for copies of what you add; this looks for other instances of
+  what you fix. A PR that fixes a defect names the shape it fixed, gives the `git grep` that finds every instance of
+  that shape (the pattern and the scope it ran over), and says for each hit: fixed in this PR, filed (`#N`), or not
+  the same shape (the reason). A fix that lands for one instance and leaves its siblings is half a fix:
+
+  ```
+  ## Siblings
+  Shape: a socket that mints a new token on every HTTP 401, with no time gate.
+  - `git grep -l "rejected the bearer token (HTTP 401)" -- src/runtime/server` (2 files):
+    websocket_client.cpp: fixed in this PR (the ServerDB socket now mints through BearerReconnectAuth);
+    bearer_reconnect_auth.cpp: not the same shape (it mints at most once per 30 s).
+  ```
 - **A Symbols list.** List the symbols you edited, and separately the ones nearby that you read but did not edit, so
   the reviewer knows what you looked at and what you left alone:
 
