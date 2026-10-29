@@ -2,6 +2,7 @@
 import fcntl
 import os
 import pathlib
+import re
 import time
 import shutil
 import subprocess
@@ -177,6 +178,41 @@ class VcpkgQuestHostGuardTest(unittest.TestCase):
             out, err = proc.communicate(timeout=30)
         self.assertEqual(proc.returncode, 0, out + err)
         self.assertEqual(self.calls_made(), 0, "the waiter ran vcpkg again after the first install finished")
+
+
+class PreRunBeforeFanOutTest(unittest.TestCase):
+    """`just verify` runs `just _vcpkg-quest-host` serially before tools/verify-parallel.sh starts the suites, so the
+    first quest-host install is never one of the parallel workers (#1408). Pins the order; the recipe already had it."""
+
+    QUEST_CONSUMERS = ("test-quest-data", "test-quest-data-net", "test-quest-shared", "test-quest-hooks",
+                       "test-quest-redirect", "test-quest-integration")
+
+    def verify_recipe(self):
+        justfile = (REPO / "justfile").read_text()
+        match = re.search(r"^verify:\n((?:[ \t]+.*\n|\n)*)", justfile, re.M)
+        self.assertIsNotNone(match, "justfile no longer has a verify recipe")
+        return match.group(1)
+
+    def test_the_quest_host_install_runs_before_the_parallel_block(self):
+        body = self.verify_recipe()
+        pre = body.find("    just _vcpkg-quest-host\n")
+        fan = body.find("bash tools/verify-parallel.sh")
+        self.assertNotEqual(pre, -1, "verify no longer runs _vcpkg-quest-host before the parallel block")
+        self.assertNotEqual(fan, -1, "verify no longer runs tools/verify-parallel.sh")
+        self.assertLess(pre, fan, "_vcpkg-quest-host must run before the parallel suites start")
+
+    def test_every_quest_host_consumer_is_in_the_parallel_block(self):
+        # The fan-out is one command whose suite names continue with a trailing backslash; the first line
+        # without one ends it. Compare whole tokens, so test-quest-data does not match test-quest-data-net.
+        lines = self.verify_recipe().splitlines()
+        start = next(i for i, line in enumerate(lines) if "bash tools/verify-parallel.sh" in line)
+        end = start
+        while lines[end].rstrip().endswith("\\"):
+            end += 1
+        tokens = " ".join(lines[start:end + 1]).replace("\\", " ").split()
+        for suite in self.QUEST_CONSUMERS:
+            self.assertIn(suite, tokens, f"{suite} is not in the verify fan-out, so it runs before or outside the pre-run")
+
 
 if __name__ == "__main__":
     unittest.main()

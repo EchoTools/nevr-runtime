@@ -888,8 +888,10 @@ test-auth-integration:
 test-auth: test-auth-groundtruth test-auth-unit
 
 # yaml-cpp, zlib and nlohmann-json for the Quest host tests and the libr15 patcher: installed from the tools/quest-host-deps manifest for the x64-linux triplet into
-# build/quest-host-vcpkg (never a system package), with this checkout's own vcpkg root like _vcpkg-mingw. The
-# sentinel parses config.yaml with the PC's nevr_config, so the host tests that compile quest_config.cpp link it.
+# build/quest-host-vcpkg (never a system package). Its vcpkg root is build/vcpkg-root-quest-host, not _vcpkg-mingw's
+# build/vcpkg-root: vcpkg holds flock(2) on <root>/.vcpkg-root for a whole install, and a child it started can keep
+# that lock after it exits, which can make this install fail with EBUSY on the mingw install's root (#1408). The sentinel parses
+# config.yaml with the PC's nevr_config, so the host tests that compile quest_config.cpp link it.
 _vcpkg-quest-host:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -915,7 +917,7 @@ _vcpkg-quest-host:
     if [[ -f "$lib" && -f "$json" && ! "$lib" -ot "$manifest" ]]; then
         exit 0
     fi
-    root="$("$jd/tools/vcpkg_root.sh")"
+    root="$("$jd/tools/vcpkg_root.sh" vcpkg-root-quest-host)"
     cd "$root"
     unset VCPKG_ROOT
     ./vcpkg install --triplet=x64-linux --host-triplet=x64-linux \

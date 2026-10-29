@@ -12,13 +12,20 @@
 # (build/<preset>/vcpkg_installed).
 #
 #   tools/vcpkg_root.sh            print the root, creating it when missing or on another revision
+#   tools/vcpkg_root.sh NAME       the same for build/NAME, a second root for an install that must not wait on
+#                                  the default root's lock: vcpkg keeps flock(2) on <root>/.vcpkg-root while a
+#                                  child it started can outlive it (#1408)
 #
 # NEVR_VCPKG_SOURCE overrides the clone source (default ~/.vcpkg).
 set -euo pipefail
 unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE
 cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.."
 here=$(pwd -P)
-root="$here/build/vcpkg-root"
+name="${1:-vcpkg-root}"
+case "$name" in
+  .|..|*/*) echo "vcpkg_root: $name is not a vcpkg root name (one path element, under build/)" >&2; exit 2 ;;
+esac
+root="$here/build/$name"
 source_root="${NEVR_VCPKG_SOURCE:-$HOME/.vcpkg}"
 want=$(tr -d '[:space:]' < "$here/.vcpkg-commit")
 
