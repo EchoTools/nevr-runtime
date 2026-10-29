@@ -98,10 +98,11 @@ inline constexpr std::string_view kNoSignInLoginFailureText = "Sign-in did not f
 
 // True for the one case the bridge answers: a client's login socket that presents no token and no URL credentials,
 // once the sign-in has ended without a token. A server, a config or matchmaker socket, a sign-in that is still
-// running or a sign-in that presents a credential keeps the path that asks the service.
+// running or a sign-in that presents a credential keeps the path that asks the service. A live login session is never
+// answered here (#1446): answering frees the login slot, and the session still holds it with its remote open.
 inline bool AnswersLoginLocally(bool isServer, bool isLoginSocket, bool bearerPresent, bool urlCredentials,
-                                bool signInEnded) {
-  return !isServer && isLoginSocket && !bearerPresent && !urlCredentials && signInEnded;
+                                bool signInEnded, bool loginSessionLive) {
+  return !isServer && isLoginSocket && !bearerPresent && !urlCredentials && signInEnded && !loginSessionLive;
 }
 
 // The log of the answers the bridge gives locally (#1446). The first answer is written at once. Later answers are

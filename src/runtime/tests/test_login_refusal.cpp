@@ -138,12 +138,24 @@ TEST(LoginRefusalLatch, AnUnauthenticatedClientIsLatchedLikeAnyOther) {
 // keeps the path that asks the service.
 TEST(LoginRefusalLocalAnswer, OnlyAClientLoginAfterTheSignInEndedWithoutATokenIsAnsweredHere) {
   EXPECT_TRUE(AnswersLoginLocally(/*isServer=*/false, /*isLoginSocket=*/true, /*bearerPresent=*/false,
-                                  /*urlCredentials=*/false, /*signInEnded=*/true));
-  EXPECT_FALSE(AnswersLoginLocally(true, true, false, false, true)) << "a server has its own rule";
-  EXPECT_FALSE(AnswersLoginLocally(false, false, false, false, true)) << "a config or matchmaker socket";
-  EXPECT_FALSE(AnswersLoginLocally(false, true, true, false, true)) << "a token is presented";
-  EXPECT_FALSE(AnswersLoginLocally(false, true, false, true, true)) << "URL credentials are presented";
-  EXPECT_FALSE(AnswersLoginLocally(false, true, false, false, false)) << "the sign-in has not ended";
+                                  /*urlCredentials=*/false, /*signInEnded=*/true, /*loginSessionLive=*/false));
+  EXPECT_FALSE(AnswersLoginLocally(true, true, false, false, true, false)) << "a server has its own rule";
+  EXPECT_FALSE(AnswersLoginLocally(false, false, false, false, true, false)) << "a config or matchmaker socket";
+  EXPECT_FALSE(AnswersLoginLocally(false, true, true, false, true, false)) << "a token is presented";
+  EXPECT_FALSE(AnswersLoginLocally(false, true, false, true, true, false)) << "URL credentials are presented";
+  EXPECT_FALSE(AnswersLoginLocally(false, true, false, false, false, false)) << "the sign-in has not ended";
+}
+
+// #1446: a live login session holds the slot and its remote. Answering the login frees the slot, so a
+// login is never answered locally while a session is live, even when the sign-in ended without a token. The
+// control: with no live session the same login is answered.
+TEST(LoginRefusalLocalAnswer, ALiveLoginSessionIsNeverAnsweredLocallyEvenWhenTheSignInEnded) {
+  EXPECT_FALSE(AnswersLoginLocally(/*isServer=*/false, /*isLoginSocket=*/true, /*bearerPresent=*/false,
+                                   /*urlCredentials=*/false, /*signInEnded=*/true, /*loginSessionLive=*/true))
+      << "a live login session keeps its slot and its remote";
+  EXPECT_TRUE(AnswersLoginLocally(/*isServer=*/false, /*isLoginSocket=*/true, /*bearerPresent=*/false,
+                                  /*urlCredentials=*/false, /*signInEnded=*/true, /*loginSessionLive=*/false))
+      << "with no live session the same login is answered";
 }
 
 // #1446: the first answer is written at once; the answers after it are counted and written once per window.

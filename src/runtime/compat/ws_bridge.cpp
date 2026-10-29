@@ -1675,9 +1675,16 @@ static PreparedRemote PrepareRemote(nevr_socket_role::Role role, int connIdx) {
   // with none has the one key "", because its credentials do not change within a run.
   const std::string refusalKey = remoteBearer;
   // #1446: a client login whose sign-in ended without a token is answered here (AnswerLoginLocally); the service is not
-  // asked, and no remote is made.
+  // asked, and no remote is made. A live login session is never answered, because answering frees the slot it holds.
+  // No caller holds g_pairsMutex here: the legacy Open call and the router's RemoteSockets::Open both run outside it.
+  bool loginSessionLive = false;
+  {
+    std::lock_guard<std::mutex> lk(g_pairsMutex);
+    loginSessionLive = g_loginRemoteWs != nullptr;
+  }
   if (nevr_login_refusal::AnswersLoginLocally(g_isServer != FALSE, role == nevr_socket_role::Role::Login,
-                                              !remoteBearer.empty(), hasUrlCredentials, SignInEndedWithoutTokenNow())) {
+                                              !remoteBearer.empty(), hasUrlCredentials, SignInEndedWithoutTokenNow(),
+                                              loginSessionLive)) {
     PreparedRemote answered;
     answered.answerLocally = true;
     return answered;
