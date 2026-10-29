@@ -25,6 +25,7 @@ ABSENT = {
     "LOG_INFO(": "logging is Log() under docs/standards/logging.md",
     "CODESIGN_PFX": "the release build reads no signing secret (RELEASING.md)",
     "├── gamepatches/": "the layout of another project: src/ has no gamepatches/, gameserver/ or common/",
+    "src/gamepatches/": "src/ has no gamepatches/; the runtime is src/runtime/",
     "3uz": "a C++23 literal",
     "std::expected": "C++23",
     "std::span": "C++20",
