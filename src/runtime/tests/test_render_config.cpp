@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "runtime/patch/render_config.h"
@@ -277,9 +278,10 @@ TEST(RenderConfigGpuScore, AFailedRatingReadsZeroOnTheLineThatCarriesTheQualityL
 }
 
 TEST(RenderConfigGpuScore, AScoreJustBelowAThresholdIsNotRoundedOntoIt) {
-  // The largest double below the selector's 4.5 (quality level 1, not 2), and a real NVIDIA product just below it:
-  // cores x kHz = 2,249,999,999, then x 2 x 1e-9.
-  for (const double score : {std::nextafter(4.5, 0.0), 4.499999998}) {
+  // The largest double below the selector's 4.5 (quality level 1, not 2), and a value the game's formula can give just
+  // below it: cores x kHz = 2,249,999,998 (both factors are whole numbers), then x 2 x 1e-9. A fixed nine significant
+  // digits print both as 4.5.
+  for (const double score : {std::nextafter(4.5, 0.0), 4.499999996}) {
     World w;
     w.image.PokeValue<double>(At(kGpuScoreVa), score);
     BootApplyWithSelector(w);
@@ -289,6 +291,20 @@ TEST(RenderConfigGpuScore, AScoreJustBelowAThresholdIsNotRoundedOntoIt) {
     ASSERT_NE(at, std::string::npos) << line;
     const std::string text = line.substr(at + 11, line.find(' ', at + 1) - (at + 11));
     EXPECT_EQ(std::strtod(text.c_str(), nullptr), score) << line;
+  }
+}
+
+// A score the game never computes (a misread, a garbage rating) still prints as one short token, so the fields after it
+// stay intact.
+TEST(RenderConfigGpuScore, AnAbsurdScoreStillPrintsAsOneShortToken) {
+  for (const auto& [score, text] : {std::pair<double, const char*>{1e300, " gpu_score=1e+300 vram_mb=4096 "},
+                                    std::pair<double, const char*>{std::nan(""), " gpu_score=nan vram_mb=4096 "}}) {
+    World w;
+    w.image.PokeValue<double>(At(kGpuScoreVa), score);
+    BootApplyWithSelector(w);
+    Collector c(w.image, kBase, w.observer, w.Ext());
+    const std::string line = c.Poll(0);
+    EXPECT_NE(line.find(text), std::string::npos) << line;
   }
 }
 
