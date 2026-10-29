@@ -840,6 +840,13 @@ const char* ResolveBeginLogIn() noexcept {
   return "resolved";
 }
 
+// Publishes the send function and the restart's select: the store ResolveSendEvent makes after it has proved the function,
+// and the one PublishSendEventForTest runs in a test (#1391).
+void PublishSendEvent(sentinel::pinned::SendComponentEventSig* send) noexcept {
+  g_sendEvent.store(send, std::memory_order_release);
+  g_retryEvent.store(&SendSelectAfterSignIn, std::memory_order_release);
+}
+
 // The same proof for SendComponentEvent, which carries the RETRY select. Optional too.
 const char* ResolveSendEvent() noexcept {
   sentinel::ElfImage image;
@@ -856,8 +863,7 @@ const char* ResolveSendEvent() noexcept {
   sentinel::pinned::SendComponentEventSig* send = nullptr;
   static_assert(sizeof(send) == sizeof(fn), "function pointer size");
   std::memcpy(&send, &fn, sizeof(send));
-  g_sendEvent.store(send, std::memory_order_release);
-  g_retryEvent.store(&SendSelectAfterSignIn, std::memory_order_release);
+  PublishSendEvent(send);
   return "resolved";
 }
 
@@ -931,6 +937,7 @@ void SetSendEventForTest(sentinel::pinned::SendComponentEventSig* send) noexcept
   g_sendEvent.store(send, std::memory_order_release);
 }
 void UseRetrySelectForTest() noexcept { g_retryEvent.store(&SendSelectAfterSignIn, std::memory_order_release); }
+void PublishSendEventForTest(sentinel::pinned::SendComponentEventSig* send) noexcept { PublishSendEvent(send); }
 void SendRetrySelectForTest(CR15NetGameOpaque* self) noexcept { SendRetrySelect(self, kTriggerAfterSignIn); }
 void ResetPageLogForTest() noexcept {
   for (PageLogSlot& slot : g_pageLog) {

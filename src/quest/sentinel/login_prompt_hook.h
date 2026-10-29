@@ -154,6 +154,9 @@ void SetRetryEventForTest(BeginLogInFn retry) noexcept;
 // the restart use SendRetrySelect itself, which ResolveSendEvent installs in production.
 void SetSendEventForTest(sentinel::pinned::SendComponentEventSig* send) noexcept;
 void UseRetrySelectForTest() noexcept;
+// Test support: runs the store ResolveSendEvent makes after it proves the send function, with `send` as the function, so a
+// restart uses the select after sign-in exactly as it does in production.
+void PublishSendEventForTest(sentinel::pinned::SendComponentEventSig* send) noexcept;
 // Test support: runs SendRetrySelect for `self` directly, so a test reaches each of its early returns (the hook never
 // passes a null `self`).
 void SendRetrySelectForTest(sentinel::pinned::CR15NetGameOpaque* self) noexcept;

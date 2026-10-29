@@ -1403,6 +1403,37 @@ constexpr const char* kSelectLine = "\"event\":\"login_prompt_select\"";
 constexpr const char* kFallbackLine = "\"event\":\"login_prompt_fallback\"";
 constexpr const char* kStateLine = "\"event\":\"login_prompt_netgame_state\"";
 
+// The restart's select comes from the store ResolveSendEvent makes in production (PublishSendEvent), not from a test's
+// shortcut. Published through that store, the restart sends the select after sign-in once, with its trigger. A store
+// that leaves the select unset falls back to BeginLogIn, and nothing is sent.
+void ThePublishedSendEventSendsTheSelectAfterSignIn() {
+  lp::ResetLatchForTest();
+  gate::SetReady(true);
+  lp::SetClockForTest(&FakeClock);
+  lp::SetBeginLogInForTest(&FakeBeginLogIn);
+  lp::PublishSendEventForTest(&FakeSend);
+  g_beginCalls = 0;
+  g_sendCalls = 0;
+  g_now = 1'000'000'000;
+  LinkGameObject(g_game, &g_gameObject);
+  SetSpaceOf(g_gameObject, &g_spaceMarker);
+  const int linesBefore = CountLines(kSelectLine);
+  RestartFromNotice();
+  QCHECK(g_sendCalls == 1);
+  QCHECK(g_beginCalls == 0);
+  QCHECK(CountLines(kSelectLine) == linesBefore + 1);
+  QCHECK(Holds(LastLine(kSelectLine), "\"trigger\":\"after_sign_in\""));
+
+  LinkGameObject(g_game, nullptr);
+  lp::SetSendEventForTest(nullptr);
+  lp::SetRetryEventForTest(nullptr);
+  lp::SetBeginLogInForTest(nullptr);
+  lp::SetClockForTest(nullptr);
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::ResetLatchForTest();
+}
+
 // The select that is sent says what it sends: the outcome, the event (evt_btn_clicked), the key (btn_exit's branch,
 // not RETRY's), the actor, and the flag. The counter counts the send.
 void TheRetrySelectLogsWhatItSends() {
@@ -2002,6 +2033,7 @@ int main() {
   TheRestartSendsTheRetrySelectAloneAndFallsBackToBeginLogIn();
   ASelectThatStartsTheLoginIsNotFollowedByBeginLogIn();
   TheRetrySelectLogsWhatItSends();
+  ThePublishedSendEventSendsTheSelectAfterSignIn();
   TheRetrySelectSaysWhyItWasNotSent();
   TheFallbackLogsItsDecisionTimeAndState();
   TheFallbackSaysWhyItCallsAndIsSilentWhenTheSelectStartsTheLogin();
