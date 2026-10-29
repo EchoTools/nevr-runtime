@@ -17,7 +17,8 @@
 // resolves, login when the bridge is on and `auth.server_key` resolves; the social facade is on unless
 // `social.facade` is false (PC's key and default) and still needs login here; its status names ride with it.
 // `social.send_presence_to_meta: false` answers the rich presence locally; `diagnostics.hardware_dump: true`
-// turns the hardware dump on, and `diagnostics.ui_event_probe` (on by default) sets the invite/party tab event (#318).
+// turns the hardware dump on, `diagnostics.ui_event_probe` (on by default) sets the invite/party tab event (#318), and
+// `diagnostics.pnsrad_provider: true` loads libpnsrad as the platform provider instead of libpnsovr (#1220; needs login).
 // A feature whose prerequisite is off or missing is forced off with a logged reason.
 //
 // `graphics.texture_quality` (#943) is one of stock, very_low, low, medium, high, very_high, ultra (texture_quality.h); absent, it is
@@ -44,7 +45,17 @@ inline constexpr const char* kConfigFileName = "config.yaml";
 inline constexpr const char* kLegacyConfigFileName = "nevr-quest.json";
 inline constexpr std::size_t kMaxConfigBytes = 64 * 1024;
 
-enum class Feature { kRedirect, kBridge, kLogin, kSocial, kHwDump, kPresenceNames, kPresenceLocal, kUiEventProbe };
+enum class Feature {
+  kRedirect,
+  kBridge,
+  kLogin,
+  kSocial,
+  kHwDump,
+  kPresenceNames,
+  kPresenceLocal,
+  kUiEventProbe,
+  kPnsradProvider,
+};
 
 enum class Source { kAbsent, kEmbedded, kFile };
 
@@ -84,6 +95,9 @@ struct Features {
   // event, which switches the tablet to its Friends list. On by default; `diagnostics.ui_event_probe: false` turns it
   // off, and it needs the social facade.
   bool uiEventProbe = true;
+  // The game's platform provider is its own libpnsrad, never libpnsovr (#1220, docs/adr/0026): `diagnostics.pnsrad_provider: true`.
+  // Off by default: nothing sends the login on the rad provider yet (#1220). Needs login.
+  bool pnsradProvider = false;
 };
 
 // The texture-quality setting (#943), after the file and the default have spoken.

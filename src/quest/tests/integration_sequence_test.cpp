@@ -141,6 +141,7 @@ struct FakeSteps final : Steps {
     return Step("dlopen");
   }
   bool StartHwDump() override { return Step("hwdump"); }
+  bool InstallPnsProvider() override { return Step("pns_provider"); }
   void Note(const char*, const char*, const char*) override {}
 
   static FakeSteps With(bool redirect, bool bridge, bool login, bool socialOn) {

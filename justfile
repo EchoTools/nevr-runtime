@@ -1364,6 +1364,14 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/os_build_gate_hook_test" -ldl
     timeout 120 "$out/os_build_gate_hook_test"
+    # The platform provider is libpnsrad (#1220): the four real handlers through their thunk entries against stand-ins for
+    # CNSProvider::Create, Destroy, ProviderID and UserProviderID, CSysModule::Unload and CJson::TString: the name rule,
+    # the appid kept, the OVR answer after a rename, and ShutdownEngine's three Destroys shutting libpnsrad down once.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/pns_provider_hook_test.cpp \
+        src/quest/sentinel/pns_provider_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/pns_provider_hook_test" -ldl
+    timeout 120 "$out/pns_provider_hook_test"
     # The Quest main menu shows the runtime version (#747): the real handler through the thunk entry against a stand-in for
     # CCanvasUICS::SetText (the lobby_version item replaced, every other item, an empty text and a null text left alone).
     # The handler includes the build-tree header generated/nevr_build_info.h; a stub stands in for it here.
