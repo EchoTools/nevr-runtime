@@ -175,6 +175,8 @@ pub unsafe extern "C" fn NevrManifestVerify(s: *mut NevrSession, manifest: *cons
     }
     let (m, g) = (std::slice::from_raw_parts(manifest, manifest_len).to_vec(), std::slice::from_raw_parts(sig, sig_len).to_vec());
     with_session(s, |s| {
+        // Held from the read of the state to the commit (#1353), as the installer's own runs hold it.
+        let _lock = manifest::lock_state(&s.cfg.state_dir)?;
         let state = manifest::read_state(&s.cfg.state_dir)?;
         let now = match &s.cfg.now {
             Some(n) => n.clone(),
@@ -223,7 +225,7 @@ pub unsafe extern "C" fn NevrArtifactFetch(s: *mut NevrSession, version: *const 
         let art = manifest::find(&m, &version, &kind, platform.as_deref())?;
         let url = format!("{}/{}", s.cfg.base, art.path);
         let f = crate::artifact::download(&url, &art, std::path::Path::new(&out_path))?;
-        s.log.info("artifact_fetch", 8, json!({"kind": kind, "url": url, "size": art.size, "bytes": f.bytes, "sha256": f.sha256, "ok": true, "resumed_from": f.resumed_from}))?;
+        s.log.info("artifact_fetch", 8, json!({"kind": kind, "url": crate::util::redact_url(&url), "size": art.size, "bytes": f.bytes, "sha256": f.sha256, "ok": true, "resumed_from": f.resumed_from}))?;
         Ok(NEVR_OK)
     })
 }

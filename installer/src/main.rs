@@ -18,6 +18,8 @@ options: --root DIR  --base URL  --channel NAME  --log FILE  --state-dir DIR  --
 --artifact-dir installs a local tester APK (one .apk and its .sha256 sidecar) in place of the release's, and logs every step
   as an unverified dev artifact; no installer a player runs passes it.
 --package-dir installs the DLLs in DIR when they match the signed manifest's entries, and downloads only when they do not.
+--nevr-root must be the folder the game loads nEVR from (%LOCALAPPDATA%\\nevr\\echovr); any other is refused, unless --dev-nevr-root
+  is given for a dev or test run.
 exit codes: 0 installed or nothing to do, 1 failed with nothing changed, 2 needs the player, 3 restored";
 
 fn default_root() -> PathBuf {
@@ -42,7 +44,7 @@ struct Args {
 
 impl Args {
     fn parse(argv: Vec<String>) -> Args {
-        let flags = ["--no-device", "--yes-uninstall", "--allow-downgrade"];
+        let flags = ["--no-device", "--yes-uninstall", "--allow-downgrade", "--dev-nevr-root"];
         let (mut rest, mut opts) = (vec![], vec![]);
         let mut it = argv.into_iter();
         while let Some(a) = it.next() {
@@ -96,14 +98,10 @@ fn main() -> ExitCode {
     };
     let root = args.val("--root").map(PathBuf::from).unwrap_or_else(default_root);
     let mut cfg = Config::new(platform, &root);
-    // The nevr root (ADR 0012): `--nevr-root`, else %LOCALAPPDATA%\nevr\echovr on Windows, else unknown.
-    cfg.nevr_root = args.val("--nevr-root").map(PathBuf::from).or_else(|| {
-        if cfg!(windows) {
-            std::env::var("LOCALAPPDATA").ok().filter(|p| !p.is_empty()).map(|p| PathBuf::from(p).join("nevr").join("echovr"))
-        } else {
-            None
-        }
-    });
+    // The nevr root (ADR 0012): `--nevr-root`, else %LOCALAPPDATA%\nevr\echovr on Windows, else unknown. A root other than
+    // the canonical one is refused where the PC plan uses it (`Session::check_nevr_root`), unless `--dev-nevr-root` is given.
+    cfg.nevr_root = args.val("--nevr-root").map(PathBuf::from).or_else(|| cfg.canonical_nevr_root.clone());
+    cfg.dev_nevr_root = args.flag("--dev-nevr-root");
     // Echo VR Launcher's data folder (#1285): `--launcher-dir`, else %LOCALAPPDATA%\EchoVR_Launcher on Windows, else none.
     cfg.launcher_dir = args.val("--launcher-dir").map(PathBuf::from).or_else(|| {
         if cfg!(windows) {
@@ -198,6 +196,12 @@ fn main() -> ExitCode {
                 let (m, v) = sess.release(version.as_deref())?;
                 let art = nevr_install::manifest::find(&m, &v, "windows-zip", None)?;
                 let sha = |n: &str| art.contents.iter().find(|c| c.path == n).map(|c| c.sha256.clone()).unwrap_or_default();
+                // The host's log is read from the nevr root, so that root gets the same check as a PC install (#1353).
+                if let Some(root) = sess.cfg.nevr_root.clone() {
+                    if let Err(why) = sess.check_nevr_root(&root) {
+                        return Ok((sess.end("needs-user", &why.msg)?, None));
+                    }
+                }
                 // The host writes its log under the nevr root (ADR 0012); the game folder is the fallback for an older host.
                 let log_path = args.val("--bootstrap-log").map(PathBuf::from).unwrap_or_else(|| sess.cfg.nevr_root.as_ref().map(|r| r.join("logs")).unwrap_or_else(|| dir.join("logs")).join("nevr-bootstrap.jsonl"));
                 let text = std::fs::read_to_string(&log_path).map_err(|e| nevr_install::error::Error::new(11, format!("{}: {e}", log_path.display())))?;

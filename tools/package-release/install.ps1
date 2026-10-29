@@ -14,9 +14,10 @@
 #
 # usage:  powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-Dir <...\ready-at-dawn-echo-arena\bin\win10>] [-Root <nevr folder>] [-Version <release>] [-AllowDowngrade] [-CoreArgs <extra nevr-install options>] [-Pause | -NoPause]
 # Without -Dir the usual Meta Horizon / Oculus library locations are searched; with more than one
-# install found, pass -Dir. -Root names the nevr folder when %LOCALAPPDATA% is not the player's (an administrator's
-# prompt). Without -Version the release the signed manifest names for the channel is installed; an older release over a
-# newer one is refused unless -AllowDowngrade is given.
+# install found, pass -Dir. -Root names the nevr folder; the core accepts only the folder the game loads nEVR from
+# (%LOCALAPPDATA%\nevr\echovr, the default) and refuses any other (#1353). A dev or test run passes --dev-nevr-root in
+# -CoreArgs. Without -Version the release the signed manifest names for the channel is installed; an older release over
+# a newer one is refused unless -AllowDowngrade is given.
 param([string]$Dir = '', [string]$Root = '', [string]$Version = '', [switch]$AllowDowngrade, [string[]]$CoreArgs = @(), [switch]$Pause, [switch]$NoPause)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
