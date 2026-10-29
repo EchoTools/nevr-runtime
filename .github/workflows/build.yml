@@ -16,7 +16,9 @@ name: Build
 # release body, a player line and one line per file, is written after signing). No file or text
 # depends on the pre-release flag, and no step reads it: the uploads leave the `prerelease` input unset so the
 # release keeps whatever the human set. The whole workflow runs on
-# ubuntu-latest: no Windows runner, no cloud login. A `workflow_dispatch` started on a vX.Y.Z tag ref runs
+# ubuntu-latest: no Windows runner, no cloud login. The only Windows runners in this repository are in two other,
+# hand-started workflows: echocombat-plugins.yml (the EchoCombat plugins, which need MSVC's SEH and Microsoft Detours) and
+# defender-scan.yml (a Defender measurement). A `workflow_dispatch` started on a vX.Y.Z tag ref runs
 # the same path as a dry run without the Verify step (#1008), and publishes nothing, unless the tag's release is a
 # DRAFT carrying none of the built files: then the two files are attached to that draft, which stays a draft (see `drafts`).
 on:
