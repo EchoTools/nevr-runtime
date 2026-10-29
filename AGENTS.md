@@ -155,6 +155,11 @@ your PR does:
 - **Platform parity.** PCVR and Quest stay at parity. A PR that adds or changes player-facing behavior says in its
   body what the other platform's status is: done in this PR, already present (`file:line`), not applicable (the
   reason), or a linked twin issue filed in the same turn.
+- **A headline, when players see a change.** A PR that changes what players see updates `release-headline.txt` at the
+  repository root with one plain sentence a player would understand, written by the PR's author (`RELEASING.md`, "Write
+  the release body"). The release body's player line is that file, or "Fixes and internal changes." when it did not
+  change since the previous release; the commits never write it. A change behind a setting that is off, or internal, leaves
+  the file alone.
 
 **Write an issue as a falsifiable claim** (see #519 and #520), with these sections:
 
