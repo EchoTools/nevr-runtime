@@ -7,6 +7,10 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 ([RFC 2119](https://www.rfc-editor.org/rfc/rfc2119), [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174)) when, and only
 when, they appear in all capitals, as shown here.
 
+The logging standard below is part of this contract:
+
+@docs/standards/logging.md
+
 ## Commits, versions and requirement words
 
 - **Commits and PR titles** follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/):
@@ -112,6 +116,18 @@ your PR does:
   ```
 
   "Nothing found" counts only with the pattern and the scope it ran over.
+- **Siblings, for a fix.** The search statement looks for copies of what you add; this looks for other instances of
+  what you fix. A PR that fixes a defect names the shape it fixed, gives the `git grep` that finds every instance of
+  that shape (the pattern and the scope it ran over), and says for each hit: fixed in this PR, filed (`#N`), or not
+  the same shape (the reason). A fix that lands for one instance and leaves its siblings is half a fix:
+
+  ```
+  ## Siblings
+  Shape: a socket that mints a new token on every HTTP 401, with no time gate.
+  - `git grep -l "rejected the bearer token (HTTP 401)" -- src/runtime/server` (2 files):
+    websocket_client.cpp: fixed in this PR (the ServerDB socket now mints through BearerReconnectAuth);
+    bearer_reconnect_auth.cpp: not the same shape (it mints at most once per 30 s).
+  ```
 - **A Symbols list.** List the symbols you edited, and separately the ones nearby that you read but did not edit, so
   the reviewer knows what you looked at and what you left alone:
 
@@ -509,13 +525,6 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 `#include "echovr.h"`. `src/` is on the global include path (root
 `CMakeLists.txt`), so the spelling states which layer a dependency crosses.
 
-- **`src/legacy-compat/`** — two forwarding headers, existing solely because
-  `src/legacy/gamepatches` is frozen yet includes `common/hooking.h` and
-  `common/nevr_plugin_interface.h`, which these headers provide from
-  `src/legacy-compat/common/`.
-  Scoped to that
-  one target. Delete with `src/legacy/`.
-
 ### Key Source Files
 
 - `src/runtime/lifecycle/dllmain.cpp` — DLL entry point
@@ -539,7 +548,6 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
   The older PE-conversion launcher is gone — Wine could not load the game DLL at
   the required base address.
 - Android/Quest standalone target lives in `src/quest/` (separate CMake project).
-- **`src/legacy/`** — Frozen v1 implementations (self-contained, do not modify)
 
 ## Conventions
 
@@ -549,7 +557,6 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 - **Protobuf**: Generated from BSR (`buf.build/echotools/nevr-api`) via `just proto`. Never edit `.pb.cc`/`.pb.h` in `gen/` directly.
 - **Global state**: CLI flags as globals in `src/core/globals.h`, set in `src/runtime/lifecycle/cli.cpp`.
 - **Naming**: spellings of the project name, log tags, exports, namespaces, config keys and the frozen `Nvr*` plugin ABI are in `docs/standards/naming.md`; `tools/tests/test_naming.py` enforces the `Nvr` freeze and the project-name spellings.
-- **Local overrides**: `cmake/local.cmake` (include currently commented out in root CMakeLists.txt).
 
 ## ReVault — Reverse Engineering Data Warehouse
 
@@ -733,9 +740,8 @@ your seat name, for example `claude-main` or `codex`.
     nothing; any other script that copies a DLL into a game directory is the same kind of writer.
   - `just scenario` and `just scenario-all` (`tools/scenario/run_scenario.py` runs `launch-client.sh`).
   - `just test-system` and `just test-system-verbose` (`tests/system/helpers_test.go`: `deployDLL`
-    writes and `cleanupDLLs` does `os.Remove` under `$EVR_GAME_DIR/bin/win10`; `deployPlugin` is
-    defined and not called). They also start the game: `shutdown_test.go` runs `wine` in
-    `$EVR_GAME_DIR/bin/win10` with `WINEPREFIX=$EVR_GAME_DIR/.wineprefix`. `test-system-short` and
+    writes and `cleanupDLLs` does `os.Remove` under `$EVR_GAME_DIR/bin/win10`). They also start the game:
+    `shutdown_test.go` runs `wine` in `$EVR_GAME_DIR/bin/win10` with `WINEPREFIX=$EVR_GAME_DIR/.wineprefix`. `test-system-short` and
     `test-system-dll` pass `-short`, which skips every test that deploys or starts the game.
     `tests/system/login_test.go` also writes (with
     `NEVR_LIVE_TESTS=1` it runs `wine ./echovr.exe` in `$EVR_GAME_DIR/bin/win10` with `$WINEPREFIX`
@@ -743,10 +749,8 @@ your seat name, for example `claude-main` or `codex`.
     `<copy>/echovr/.wineprefix` for a Go test run).
   - `just generate-combat-overrides` (writes `echovr/bin/win10/_overrides/combat`).
 
-  Not writers: `just test-plugins`, `just test-plugins-verbose` and `just test-plugins-short`
-  (`tests/plugins/plugin_helpers_test.go` defines deploy and cleanup helpers for DLLs and plugin
-  config files, but no test calls them; the plugin tests only read
-  `$EVR_GAME_DIR/bin/win10/_overrides/combat`), `just test-plugins-groundtruth` and
+  Not writers: `just test-plugins`, `just test-plugins-verbose` and `just test-plugins-short` (the plugin
+  tests only read `$EVR_GAME_DIR/bin/win10/_overrides/combat`), `just test-plugins-groundtruth` and
   `just test-auth-groundtruth` (they need no game binary and name no game directory).
   `just test-winvm` deploys into a throwaway rig on the guest VM (`tools/winvm/systest.py`:
   `C:\nevr-systest`) and reads the guest's install (`C:\echovr`) through junctions it makes in the
@@ -999,7 +1003,6 @@ When something fails, the first act is reading the failing program's **own** log
 ## Guardrails
 
 - **Never commit generated protobuf** (`gen/cpp/*.pb.cc`, `gen/cpp/*.pb.h`) without regenerating from BSR first.
-- **Never modify `src/legacy/`** — frozen v1 code, self-contained by design.
 - **Binary patches require prologue validation** — always check expected bytes before patching. Never blind-write.
 - **Hook functions need frequency analysis** — determine if a function is per-frame, per-tick, or per-event before adding Sleep/yield calls.
 - **Nothing from another project's patch is taken verbatim.** Before building an equivalent, reconstruct and analyze the patched code in ReVault: every function the patch touches, its callers, and what each byte change does; write the reconstructions back into ReVault with grades; design our implementation from that understanding, to this repo's standard (GOT hooks or checked patches, logs, failing-first tests, a prediction). Their address list says where to look; it is not the design.
@@ -1034,9 +1037,8 @@ When something fails, the first act is reading the failing program's **own** log
   repo.
 - **Verify entry point.** `just verify` is the single closed-loop gate, run on main when prepping a release (a PR
   runs the quick check, see "Builds"):
-  `just build`, then a second `cmake --build` whose exit code is read directly (`just build` fails on a
-  failed build, so the second pass confirms the artifact), then `test-auth-unit` and `test-quest-shared`,
-  the Python test suite and source-invariant checks. The Go system suites are
+  `just build` (a plain `cmake --build`, so it exits nonzero when the build fails), then `test-auth-unit` and
+  `test-quest-shared`, the Python test suite and source-invariant checks. The Go system suites are
   separate recipes and are not part of `just verify`.
 
 ---

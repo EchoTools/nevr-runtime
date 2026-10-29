@@ -20,7 +20,7 @@ nEVR is a community project, built on other people's work and tested by the peop
 
 ### Projects
 
-- **[Xenomega](https://github.com/Xenomega)**: [EchoRelay](https://github.com/Xenomega/EchoRelay), a reimplementation of Echo VR's web services and dedicated game servers. The frozen v1 game server code in `src/legacy/` was written for its ServerDB, and the legacy message translation in `docs/reference/legacy-translator.md` is read from its documentation.
+- **[Xenomega](https://github.com/Xenomega)**: [EchoRelay](https://github.com/Xenomega/EchoRelay), a reimplementation of Echo VR's web services and dedicated game servers. The legacy message translation in `docs/reference/legacy-translator.md` is read from its documentation.
 - **kfc**: Helped write a lot of EchoRelay.
 - **[Dualgame](https://github.com/Dualgame)**: [echo-symbols](https://github.com/Dualgame/echo-symbols), the recovered symbol names this repo pulls at a pinned commit for its log symbol cache, and [echovr-modkit](https://github.com/Dualgame/echovr-modkit) with its [EchoRelay fork](https://github.com/Dualgame/EchoRelay), which back invite codes and the early-quit lockout and which `docs/engine/early-quit.md` and the invite-code design (#906) draw on.
 - **[marshmallow-mia](https://github.com/marshmallow-mia)**: The Echo VR Linux port, the [Echo VR installer](https://github.com/marshmallow-mia/Echo-VR-Installer) (PC and Quest) and [EchoVR_Launcher](https://github.com/marshmallow-mia/EchoVR_Launcher) (Windows and Linux). Reported #133 to #137, #495, #496, #511 to #513 and #719, and wrote the merged fixes #138 to #141, #500, #502, #514 to #516 and #721. Tested nevr-runtime in #nevr-runtime-testing.
@@ -312,7 +312,6 @@ already built into the runtime.
 - `src/libovr-stub/` → `LibOVRPlatform64_1.dll` — Oculus platform stub, built
   separately from the community beta package
 - `src/quest/` — separate Android/Quest arm64 target
-- `src/legacy/` — **frozen** v1 implementations, self-contained; do not modify
 
 ## Building
 
@@ -363,8 +362,6 @@ src/abi/           libnevr_abi.a  — the echovr.exe ABI surface
 src/core/          libnevr_core.a — our own primitives (links nevr_abi)
 src/extension/     header-only C ABI published to third-party DLLs
 src/nevr_api/      protobuf target
-src/legacy/        FROZEN v1
-src/legacy-compat/ two forwarding headers; frozen legacy needs them
 plugins/           optional plugins
 tools/             build and verify tooling
 tests/             Go system suites (not part of `just verify`)
@@ -400,17 +397,3 @@ Submodules in `extern/`: `minhook`, `breakpad`, `lss`.
 | **nevr-runtime-plugins** | Gameplay and tooling plugins |
 | **nakama** | The community game service (echovrce) |
 | **revault** | Reverse-engineering data warehouse for the game binaries |
-
-## Local configuration
-
-The root `CMakeLists.txt` does not include `cmake/local.cmake` automatically.
-To use that file, enable its include in `CMakeLists.txt`; then a local
-post-build command can copy the DLL into a game directory:
-
-```cmake
-set(GAME_DIR "/path/to/echovr/bin/win10")
-set(NEVR_ROOT_DIR "/path/to/the/nevr/root")  # %LOCALAPPDATA%\nevr\echovr of the Windows user (a Wine prefix has its own)
-add_custom_command(TARGET nevr_runtime POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:nevr_runtime> "${NEVR_ROOT_DIR}/nevr-runtime.dll"
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:nevr_host> "${GAME_DIR}/BugSplat64.dll")
-```

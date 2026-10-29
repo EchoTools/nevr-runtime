@@ -16,6 +16,9 @@ have it, so please report anything odd (see "Report a bug").
 
 ## Install
 
+If Echo VR Launcher manages your nEVR, update nEVR through the launcher. `install.ps1` stops and says so when the folder
+is one the launcher lists, and changes nothing.
+
 1. Close Echo VR.
 2. Find your Echo VR folder: the one that contains `bin\win10\echovr.exe`.
 3. Copy (do not rename) the existing `bin\win10\BugSplat64.dll` to `%LOCALAPPDATA%\nevr\echovr\installer\aside\BugSplat64.dll.original`
@@ -69,9 +72,15 @@ files. Attach them by dragging them into the form:
 
 | File | Where it is |
 |---|---|
-| The game's log for that session | `%LOCALAPPDATA%\nevr\echovr\logs\`: the `nevr-<date>T<time>.jsonl` file from that session (newest first if it just happened). Paste `%LOCALAPPDATA%\nevr\echovr\logs` into the Explorer address bar to get there. |
+| The game's log for that session (**always attach it**) | `%LOCALAPPDATA%\nevr\echovr\logs\`: the `nevr-<date>T<time>.jsonl` file from that session (newest first if it just happened). Paste `%LOCALAPPDATA%\nevr\echovr\logs` into the Explorer address bar to get there. |
 | The start-up log | `bin\win10\logs\nevr-boot.jsonl` in your Echo VR folder. |
 | If the game crashed | **`nevr-crash-<id>.txt`** in the same `%LOCALAPPDATA%\nevr\echovr\logs\` folder: the crash record (what failed, where, and what called it). |
+
+**The line we read first.** The game's log holds a `render_config` line from the first rendered frame of the session, and another each time
+the picture setup changes: your graphics card and driver, the headset and its refresh rate, the render resolution and scale, and the game's
+graphics settings with what set them. A report about stutter, a low frame rate or a blurry picture is read against that line, so attach the log
+even when the problem does not look like a crash. On a Quest headset the same line is in `nevr-sentinel.log`, in the game's folder on the
+headset (`/sdcard/Android/data/com.readyatdawn.r15/files/`).
 
 **What these files contain:** your Discord account id, and file paths, which can include your Windows user
 name. They do not contain your saved sign-in or its tokens. A

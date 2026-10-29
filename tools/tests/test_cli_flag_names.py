@@ -46,7 +46,7 @@ MAY_NAME_ALIASES = {
     "tools/tests/test_cli_flag_names.py",
     "tools/tests/test_winvm_checks.py",
 }
-MAY_NAME_PREFIXES = ("src/legacy/", "tools/tests/fixtures/")
+MAY_NAME_PREFIXES = ("tools/tests/fixtures/",)
 
 
 class FlagTable(unittest.TestCase):

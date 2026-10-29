@@ -37,7 +37,7 @@ binary. See "Testing" in `AGENTS.md`.
 ## Before you change code
 
 - Read `AGENTS.md`, in particular the Guardrails: do not edit generated protobuf in `gen/` (regenerate with
-  `just proto`), do not modify `src/legacy/`, and validate the expected bytes before any binary patch.
+  `just proto`), and validate the expected bytes before any binary patch.
 - A non-trivial change starts with a written plan that says how it will be tested.
 - Build and test after each logical step, not only at the end.
 - Put new defects and ideas in GitHub issues. Beta testers have a bug-report form under "New issue".

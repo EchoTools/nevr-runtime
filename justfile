@@ -109,10 +109,6 @@ dist: build
 verbose-dist: build
     cmake --build --preset {{ preset }} --target dist
 
-# Create legacy distribution package (v1 DLLs only)
-dist-legacy: build
-    cmake --build --preset {{ preset }} --target dist-legacy
-
 # Regenerate C++ protobuf from BSR at proto_pin (buf.build/echotools/nevr-api) and stamp gen/ (tools/proto_stamp.py).
 # Uses vcpkg's host protoc to match the runtime version; the protoc must be installed (`just configure` does that).
 # Generate before CMake configure: `configure` regenerates on its own when gen/ is stale, so this recipe is for forcing a refresh.
@@ -576,7 +572,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_lobby_full_backoff --target test_menu_version_label --target test_splash_skip --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_invite_wizard --target test_ui_text --target test_invite_choices --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_arena_public_clock --target test_arena_public_clock_hook
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_lobby_full_backoff --target test_menu_version_label --target test_splash_skip --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_invite_wizard --target test_ui_text --target test_invite_choices --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_arena_public_clock --target test_arena_public_clock_hook --target test_render_config --target test_render_config_hook
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_runtime_abi
@@ -803,7 +799,7 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
-    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_invite_wizard test_ui_text test_invite_choices test_asset_cache test_session_router test_asset_registry test_installed_levels test_telemetry_game_type test_arena_round_time test_nevr_root test_arena_public_clock test_arena_public_clock_hook; do
+    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_invite_wizard test_ui_text test_invite_choices test_asset_cache test_session_router test_asset_registry test_installed_levels test_telemetry_game_type test_arena_round_time test_nevr_root test_arena_public_clock test_arena_public_clock_hook test_render_config test_render_config_hook; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -1389,6 +1385,13 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/hwdump_share_test" -ldl
     timeout 120 "$out/hwdump_share_test"
+    # The render-configuration log (#1139): the five real handlers through the thunk entries against stand-ins for the VrApi
+    # functions, the line at the first frame and on each forced change, the globals read only from the proved image, the poller.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/render_config_hook_test.cpp \
+        src/quest/sentinel/render_config_hook.cpp src/quest/sentinel/texture_quality_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/render_config_hook_test" -ldl
+    timeout 120 "$out/render_config_hook_test"
     # The log-only resource request hook (#871): the real handler through the thunk entry against a stand-in for
     # FillResourceFileRequest that fills a request the way the pinned function does.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/resource_request_hook_test.cpp \
@@ -1957,10 +1960,6 @@ verify:
     # A dirty tree names its files, so the log says what differs from the commit it names (#844).
     if [ -n "$dirty" ]; then printf '%s\n' "$dirty" | sed 's/^/verify: dirty /'; fi
     just build
-    # `just build` filters its output through grep and always exits 0, so its exit
-    # code is a proxy, not a pass/fail signal. Re-run the real build to derive success
-    # from the compiler/linker itself — a no-op when green, nonzero when truly broken.
-    cmake --build --preset {{ preset }}
     # The DLL embeds exactly the public defaults file (the build reads no other source).
     python3 tools/check_embedded_defaults.py --header build/{{ preset }}/generated/nevr_builtin_defaults.h --binary build/{{ preset }}/bin/nevr-runtime.dll
     # --- Parallel test block --------------------------------------------------
@@ -3233,6 +3232,10 @@ verify:
     # in README.md and CLAUDE.md because nothing checked. A fact about the tree
     # asserted in prose drifts silently; this is the cheapest possible enforcement.
     python3 tools/verify_doc_paths.py
+    # AGENTS.md imports the standards it makes part of its contract (#1277): an import
+    # line that is lost, fenced or indented is no longer expanded; one moved below the
+    # first section is no longer the first thing the contract says.
+    python3 tools/verify_agents_imports.py
     # N92/N105: exactly one ws_bridge. Two divergent copies would let a fix land in
     # the one that does not run (N61's matchmaker fix did). The bridge is
     # in-process (StopWebSocketBridgeListener); this guard keeps a separate
@@ -3688,7 +3691,7 @@ verify:
     # and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 2198
+    python3 tools/verify_gtest_floor.py --floor 2234
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py
@@ -3757,7 +3760,7 @@ vcpkg-pin-check:
     # Linux is case-sensitive. CI creates the link; a development machine needs it too (#294).
     lib=${NEVR_MINGW_LIB:-/usr/x86_64-w64-mingw32/lib}
     if [ ! -e "$lib/libCrypt32.a" ]; then
-        echo "vcpkg-pin-check: FAIL — $lib/libCrypt32.a is missing; the legacy gameserver will not link (cannot find -lCrypt32)." >&2
+        echo "vcpkg-pin-check: FAIL — $lib/libCrypt32.a is missing; nevr-runtime.dll will not link ixwebsocket (cannot find -lCrypt32)." >&2
         echo "Fix: sudo ln -s libcrypt32.a $lib/libCrypt32.a   (CI does the same, see .github/workflows/build.yml)" >&2
         exit 1
     fi

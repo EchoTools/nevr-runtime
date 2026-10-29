@@ -183,6 +183,7 @@ struct RealCounterSteps final : Steps {
   bool InstallOsBuildGate() override { return true; }
   bool InstallResourceRequestLog(bool counted) override { return counted; }
   bool InstallTextureQuality(const nevr_quest::TextureChoice&, bool counted) override { return counted; }
+  bool InstallRenderConfig(const nevr_quest::TextureChoice&) override { return true; }
   bool InstallCreditsText() override { return true; }
   bool InstallMenuCards() override { return true; }
   bool StartTokenAuth() override { return true; }

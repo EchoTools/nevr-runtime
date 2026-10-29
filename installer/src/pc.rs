@@ -16,6 +16,9 @@ use std::path::{Path, PathBuf};
 pub const HOST: &str = "BugSplat64.dll";
 pub const RUNTIME: &str = "nevr-runtime.dll";
 pub const STATE_FILE: &str = "nevr-install.txt";
+/// What this installer writes as `owner` in the record. Another installer that manages the same folder writes its own
+/// name (the launcher writes `launcher`); a record with any other owner is not ours to change (#1285).
+pub const OWNER: &str = "nevr-install";
 
 /// The SHA-256 of the game's own `BugSplat64.dll` (build 34.4.631547.1, 630,288 bytes), so a copy can be checked by hand.
 pub const VANILLA_HOST_SHA256: &str = "618e34d3bfde69846c0202d42951366bff5e03cd2885b6825f55e09fb2cf160b";
@@ -159,6 +162,7 @@ impl Record {
         if f.original_unknown {
             lines.push("original=unknown".to_string());
         }
+        lines.push(format!("owner={OWNER}"));
         lines.join("\n") + "\n"
     }
 }
@@ -305,6 +309,9 @@ pub fn plan(obs: &Observed, pkg: &Package, allow_downgrade: bool) -> Plan {
     }
     match record {
         Some(r) => {
+            if let Some(owner) = r.get("owner").filter(|o| *o != OWNER) {
+                return needs(&format!("this install is owned by {owner}: update it with its own installer; nothing was changed"));
+            }
             for key in ["backup", "legacy", "installed_sha256"] {
                 if r.get(key).is_none() {
                     return needs(&format!("nevr-install.txt has no {key}"));
