@@ -3,7 +3,8 @@
 "Write the release body"). Usage: release_audience_section.py --repo <dir> --base vX.Y.Z --rev vX.Y.Z
 
 The release body is short and carries only its player line, `player_line()`, which `package_release.py notes` calls
-over the same commits; this script's section is for a reader of the commits, not for the body.
+over the same commits. The line is built only from feat commits whose audience is players; this script's section is for a
+reader of the commits, not for the body.
 
 A commit's audience is its conventional scope: `plugins` is for plugin developers, `server`, `ws-bridge` and `arena` for
 server hosts, and every other scope, or none, is for players. A commit is listed by its subject, or by the text of a
@@ -34,7 +35,7 @@ RELEASE_NOTE = re.compile(r"^Release-note:[ \t]*(?P<text>\S.*?)[ \t]*$", re.M)
 RECORD_END = "\x1e"
 # The issue or PR references that end a subject: "(#1340)", "(refs #1220) (#1340)", "(closes #1285)". Only at the end,
 # only a parenthesis holding `#<digits>` with an optional listed word first.
-ISSUE_REFERENCE = re.compile(r"(?:\s*\((?:(?:refs|closes|fixes|resolves|completes|part of)\s+)?#\d+\))+\s*$", re.I)
+ISSUE_REFERENCE = re.compile(r"(?:\s*\((?:(?:refs|closes|fixes|resolves|completes|part of)\s+)?#\d+(?:\s*,\s*#\d+)*\))+\s*$", re.I)
 
 NOT_TESTED = (
     "Each pull request ran the quick check its body names: the build and the tests that cover the changed code. "
@@ -59,11 +60,11 @@ def messages_between(repo: str, base: str, rev: str) -> list[str]:
     return [record.strip() for record in log.split(RECORD_END) if record.strip()]
 
 
-def classify(messages: list[str]) -> dict[str, list[str]]:
-    """Each listed change's text, under its audience. The subject gives the type, scope and `!`, and a `BREAKING
-    CHANGE:` footer marks a break too; the text is the message's `Release-note:` line when it has one, else the
-    subject's text. A breaking change's text starts with "BREAKING: ". The one place a commit is classified."""
-    by_audience: dict[str, list[str]] = {name: [] for name in AUDIENCES}
+def listed(messages: list[str]) -> list[tuple[str, str, str]]:
+    """Each listed change as (audience, type, text), in the order given. The subject gives the type, scope and `!`, and
+    a `BREAKING CHANGE:` footer marks a break too; the text is the message's `Release-note:` line when it has one, else
+    the subject's text, and a breaking change's text starts with "BREAKING: ". The one place a commit is classified."""
+    out = []
     for message in messages:
         subject = message.split("\n", 1)[0]
         match = CONVENTIONAL.match(subject)
@@ -77,15 +78,24 @@ def classify(messages: list[str]) -> dict[str, list[str]]:
         body = message.split("\n", 1)[1] if "\n" in message else ""
         breaking = match.group("bang") or BREAKING_FOOTER.search(body)
         prefix = "BREAKING: " if breaking else ""
-        by_audience[audience_of(scope)].append(f"{prefix}{text}")
+        out.append((audience_of(scope), match.group("type").lower(), f"{prefix}{text}"))
+    return out
+
+
+def classify(messages: list[str]) -> dict[str, list[str]]:
+    """Each listed change's text, under its audience."""
+    by_audience: dict[str, list[str]] = {name: [] for name in AUDIENCES}
+    for audience, _kind, text in listed(messages):
+        by_audience[audience].append(text)
     return by_audience
 
 
 def player_line(messages: list[str]) -> str:
-    """The one line of the release body for players: the first two "For players" changes joined by "; ", then
-    "and N more" when there are more, ended by a period. Each shown change loses its trailing issue or PR references
-    (ISSUE_REFERENCE), the first letter of the line is capitalised. Fallback when no change is for players."""
-    texts = classify(messages)["For players"]
+    """The one line of the release body for players, built only from feat commits whose audience is players: the first
+    two such texts joined by "; ", then "and N more" for the rest of the player feats, ended by a period. Each shown text
+    loses its trailing issue or PR references (ISSUE_REFERENCE), and the first letter of the line is capitalised. A fix,
+    perf or any other type never contributes; with no player feat the line is FALLBACK_PLAYER_LINE."""
+    texts = [text for audience, kind, text in listed(messages) if audience == "For players" and kind == "feat"]
     if not texts:
         return FALLBACK_PLAYER_LINE
     line = "; ".join(ISSUE_REFERENCE.sub("", text).strip() for text in texts[:2])

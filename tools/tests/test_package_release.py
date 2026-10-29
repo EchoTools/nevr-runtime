@@ -380,7 +380,7 @@ class ReleaseStagesTest(PackageFixture):
         self.assertEqual(body.splitlines(), [
             "# nEVR 5.0.0",
             "",
-            "A player feature; a player fix.",
+            "A player feature.",
             "",
             "- `nevr-runtime-v5.0.0-windows.zip`: install on PC (unzip, close the game, run `install.ps1`); also the "
             "dedicated server (`echovr_server.exe`) and `uninstall.ps1`.",
@@ -403,9 +403,10 @@ class ReleaseStagesTest(PackageFixture):
 
     def test_the_player_line_is_read_from_the_range_the_body_is_given(self):
         sealed = self.seal_to(self.make_tree())
-        many = ("feat(runtime): one", "fix(quest): two", "feat(runtime): three", "fix(quest): four")
+        many = ("feat(runtime): one", "fix(quest): two", "feat(runtime): three", "feat(runtime): four",
+                "fix(quest): five")
         self.assertEqual(self.notes_for(sealed, "many", changes=many).read_text().splitlines()[2],
-                         "One; two and 2 more.")
+                         "One; three and 1 more.")
         none = ("fix(arena): a host fix", "feat(plugin): an api", "chore: tidy")
         self.assertEqual(self.notes_for(sealed, "none", changes=none).read_text().splitlines()[2],
                          "Fixes and internal changes.")

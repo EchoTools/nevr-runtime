@@ -104,7 +104,7 @@ second dispatch never overwrites files.
    the step fails red before any dispatch.
 6. **Check the signed draft**: `tools/release_check_draft.sh --signed vX.Y.Z` runs "Check the signed draft" below.
 7. **Body**: `tools/package_release.py notes --base <previous tag> --rev vX.Y.Z` renders the body from the signed files. Its
-   player line is read from the commits since the base tag (`tools/release_audience_section.py`).
+   player line is read from the feat commits since the base tag (`tools/release_audience_section.py`).
 8. **Publish**: `gh release edit vX.Y.Z --draft=false`, last. The `published` event does not rebuild: `build.yml`'s guard
    sees the two names and skips.
 
@@ -182,11 +182,12 @@ gh release view vX.Y.Z --json body --jq .body
 `notes` refuses unless `$S` holds exactly the two assets. It takes the version and the commit from the `BugSplat64.dll`
 and `nevr-runtime.dll` inside the zip (they must agree), so the body cannot describe another build.
 
-The player line is built from the feat, fix and perf commits between `--base` and `--rev`, by the audience of each
-commit's scope (`arena`, `server` and `ws-bridge` are server hosts; `plugins` is plugin developers; the rest is players).
-It is the first two player texts joined by "; ", then "and N more" when there are more. A commit's text is its subject
+The player line is built only from the feat commits between `--base` and `--rev` whose audience is players: a commit's
+scope decides the audience (`arena`, `server` and `ws-bridge` are server hosts; `plugins` is plugin developers; the rest is
+players). A fix, perf or other type never contributes. It is the first two player feat texts joined by "; ", then "and N more"
+for the rest of them, with trailing issue and PR references removed, the first letter capitalised and a full stop at the end. A commit's text is its subject
 unless its message has a line `Release-note: <text>`, which is used in its place: write one when the subject misstates
-what a player sees. With no player change the line reads "Fixes and internal changes.". Read the line against the pull
+what a player sees. With no player feat the line reads "Fixes and internal changes.". Read the line against the pull
 request bodies before publishing. The body of a published release stays editable ("Immutable releases"); the assets do not.
 
 ## Publish

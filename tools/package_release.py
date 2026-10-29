@@ -418,7 +418,7 @@ def quest_asset_name(version: str) -> str:
 
 
 def release_notes(assets: Path, repo: Path, base: str, rev: str) -> str:
-    """The release body for the two assets in `assets`: a header, the player line from the commits in base..rev, and
+    """The release body for the two assets in `assets`: a header, the player line from the feat commits in base..rev, and
     one line per file. The version and commit are the ones the zip's own BugSplat64.dll and nevr-runtime.dll carry
     (their identity literals, which must agree), so the body cannot describe a zip that is not this release's. It
     holds no hash: the zip's SHA256SUMS and the attestation carry integrity."""
