@@ -18,7 +18,7 @@
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
-# diagnostics.pnsrad_provider and graphics.texture_quality. Every other key below is PC only: the
+# diagnostics.pnsrad_provider, diagnostics.clock_levels_override and graphics.texture_quality. Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -107,6 +107,13 @@ diagnostics:
   # game does not log in with it on. Needs the login.
   # Default (absent): false.
   # pnsrad_provider: true
+
+  # Quest only. The clock-level override (#928): the game asks VrApi for CPU and GPU clock level 2/2 once per entry into VR
+  # mode, and with this on the sentinel asks for 4/4 instead; any other pair the game asks for is passed through
+  # unchanged. The render_config line reports the levels applied (cpu_level, gpu_level) and VrApi's answer
+  # (clock_result); the resolved value is logged at start-up even when off. Needs no other feature.
+  # Default (absent): false. Set true to turn the override on.
+  # clock_levels_override: true
 
 # ---------------------------------------------------------------------------
 # graphics — render quality
