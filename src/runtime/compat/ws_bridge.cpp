@@ -2057,7 +2057,19 @@ void InstallWebSocketBridge() {
                           }
                           const std::string fakeSuccess =
                               nevr_evr_codec::BuildLoginSuccess(serverPlatformCode, g_lastInjectedDiscordId);
-                          gameWsPtr->sendBinary(fakeSuccess);
+                          std::shared_ptr<ix::WebSocket> keep;  // holds the game socket alive across the send
+                          {
+                            std::lock_guard<std::mutex> lk(g_pairsMutex);
+                            const auto pit = g_pairs.find(gameWsPtr);
+                            if (pit != g_pairs.end()) keep = pit->second->gameWs.lock();
+                          }
+                          if (!keep) {
+                            LogSharedFrameDropped(fakeSuccess.size());
+                            break;
+                          }
+                          NEVR_BEFORE_SHARED_SEND(keep.get());
+                          keep->sendBinary(fakeSuccess);
+                          if (keep.use_count() == 1) { ReleaseOffThread(std::move(keep)); }
                           break;  // failure is not forwarded to the game
                         }
                       }

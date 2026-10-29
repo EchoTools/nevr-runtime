@@ -4541,6 +4541,26 @@ std::string BuildLoginFailureFrame(uint64_t declaredPayloadSize, uint64_t status
 
 }  // namespace
 
+TEST_F(SharedRouteLifetimeTest, LoginFailureSendHoldsTheGameSocketAcrossTheSend) {
+  remote_.SetLoginReplyFrame(BuildLoginFailureFrame(24 + 64, 400, std::string(64, 'x')));
+  GameSocket login;
+  Admit(login, "/login");
+  g_weak = TestHook_FirstServiceClientWeak();
+  ASSERT_FALSE(g_weak.expired()) << "the login game socket is not on the service listener";
+
+  SeamGuard guard;
+  TestHook_SharedRoute_SetBeforeSend(&Seam);
+  ASSERT_EQ(g_inSeamFuture.wait_for(kSeamReady), std::future_status::ready)
+      << "the login-failure send never reached the seam";
+
+  login.Disconnect();
+  g_gameClosing.set_value();
+  ASSERT_EQ(g_expiredAtSendFuture.wait_for(kSeamReady), std::future_status::ready) << "the seam never reported";
+  const bool expired = g_expiredAtSendFuture.get();
+  TestHook_SharedRoute_SetBeforeSend(nullptr);
+  EXPECT_FALSE(expired) << "the game socket was freed before the login-failure send";
+}
+
 TEST(SecurityDiagnostics, CapturedResponseSummaryExcludesBodySentinel) {
   ClearTestLogs();
   constexpr char kSecret[] = "auth-response-secret-sentinel";
