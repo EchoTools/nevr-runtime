@@ -55,7 +55,7 @@ fn zip_artifact(entries: &[(&str, &[u8])]) -> Artifact {
         size: 0,
         sha256: String::new(),
         android: None,
-        game_data: None,
+        game_data: None, content_pack: None,
         contents: entries.iter().map(|(p, b)| Content { path: p.to_string(), sha256: sha256_hex(b), size: b.len() as u64 }).collect(),
     }
 }

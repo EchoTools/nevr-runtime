@@ -3,7 +3,10 @@
 //! it returns `Error { step, msg }` where the reference prints `FAIL step N: msg`, and reads each input once.
 
 use crate::error::{Error, Result};
-use crate::util::{data_path_ok, hex, is_sha256_hex, path_ok, rel_path_ok, semver_ok, sha256_hex, utc_ok, write_atomic};
+use crate::util::{
+    data_path_ok, hex, is_sha256_hex, pack_id_ok, pack_member_path_ok, pack_path_ok, pack_version_ok, path_ok, plugin_name_ok,
+    rel_path_ok, semver_ok, sha256_hex, stock_data_version_ok, utc_ok, write_atomic,
+};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use minisign_verify::{PublicKey, Signature};
 use serde_json::{json, Value};
@@ -268,6 +271,17 @@ pub struct GameData {
     pub echo_build: String,
 }
 
+/// The `content_pack` object of a `content-pack` artifact. `requires_stock_manifest_sha256` is a claim the manifest
+/// cannot verify: the consumer compares it with the player's own stock manifests before it applies anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentPack {
+    pub id: String,
+    pub version: String,
+    pub requires_stock_manifest_sha256: Vec<String>,
+    pub stock_data_version: String,
+    pub plugins: Vec<String>,
+}
+
 /// One artifact entry with every field checked for shape (step 8).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Artifact {
@@ -279,6 +293,8 @@ pub struct Artifact {
     pub android: Option<Android>,
     pub game_data: Option<GameData>,
     pub contents: Vec<Content>,
+    /// Set only on a `content-pack` artifact, where it is required; `None` on every other kind.
+    pub content_pack: Option<ContentPack>,
 }
 
 /// The one artifact of `kind` (and `platform`, when given) in `version`. Zero or two is a failure naming the release.
@@ -292,6 +308,25 @@ pub fn find(m: &Value, version: &str, kind: &str, platform: Option<&str>) -> Res
         .unwrap_or_default();
     if wanted.len() != 1 {
         return Err(Error::new(8, format!("release {version} has no {kind} artifact, or lists it twice")));
+    }
+    parse_artifact(version, wanted[0])
+}
+
+/// The one `content-pack` artifact of `id` in `version`. Zero or two is a failure naming the release and the id. A
+/// release may list packs of other ids beside it.
+pub fn find_content_pack(m: &Value, version: &str, id: &str) -> Result<Artifact> {
+    if !semver_ok(version) {
+        return Err(Error::new(8, format!("{version} is not X.Y.Z")));
+    }
+    if !pack_id_ok(id) {
+        return Err(Error::new(8, format!("{id} is not a content pack id")));
+    }
+    let wanted: Vec<&Value> = m["releases"][version]["artifacts"]
+        .as_array()
+        .map(|a| a.iter().filter(|x| x["kind"] == "content-pack" && x["content_pack"]["id"] == id).collect())
+        .unwrap_or_default();
+    if wanted.len() != 1 {
+        return Err(Error::new(8, format!("release {version} has no content-pack artifact for id {id}, or lists it twice")));
     }
     parse_artifact(version, wanted[0])
 }
@@ -315,9 +350,12 @@ pub fn has(m: &Value, version: &str, kind: &str, platform: Option<&str>) -> bool
 fn parse_artifact(version: &str, e: &Value) -> Result<Artifact> {
     let kind = e["kind"].as_str().unwrap_or("").to_string();
     let path = e["path"].as_str().unwrap_or("");
-    let shape_ok = if kind == "game-data" { data_path_ok(path) } else { path_ok(version, path) };
+    let (shape_ok, want) = match kind.as_str() {
+        "game-data" => (data_path_ok(path), "data/<name>.zip"),
+        "content-pack" => (pack_path_ok(path), "packs/<name>.zip"),
+        _ => (path_ok(version, path), "v<version>/nevr-runtime-v<version>-<name>"),
+    };
     if !shape_ok {
-        let want = if kind == "game-data" { "data/<name>.zip" } else { "v<version>/nevr-runtime-v<version>-<name>" };
         return Err(Error::new(8, format!("path in the manifest is not {want}")));
     }
     let size = e["size"].as_u64().ok_or_else(|| Error::new(8, "size in the manifest is not a whole number"))?;
@@ -358,14 +396,81 @@ fn parse_artifact(version: &str, e: &Value) -> Result<Artifact> {
             contents.push(Content { path: cpath.to_string(), sha256: csha.to_string(), size: csize });
         }
     }
+    let platform = e["platform"].as_str().map(str::to_string);
+    let content_pack = if kind == "content-pack" { Some(parse_content_pack(e, path, &sha256, platform.as_deref(), &contents)?) } else { None };
     Ok(Artifact {
         kind,
-        platform: e["platform"].as_str().map(str::to_string),
+        platform,
         path: path.to_string(),
         size,
         sha256,
         android,
         game_data,
         contents,
+        content_pack,
+    })
+}
+
+/// The `content-pack` checks that need the whole entry: the `content_pack` object, the platform, the contents, the name
+/// (`<id>-<first 12 hex of sha256>.zip`) and the path (`packs/` plus that name). A pack has one id and one hash, so the
+/// name and the path are both derived from them.
+fn parse_content_pack(e: &Value, path: &str, sha256: &str, platform: Option<&str>, contents: &[Content]) -> Result<ContentPack> {
+    let p = e.get("content_pack").filter(|p| p.is_object()).ok_or_else(|| Error::new(8, "a content-pack artifact has no content_pack object"))?;
+    if platform != Some("windows-x86_64") {
+        return Err(Error::new(8, "a content-pack artifact's platform is not windows-x86_64"));
+    }
+    if contents.is_empty() {
+        return Err(Error::new(8, "a content-pack artifact lists no contents"));
+    }
+    for c in contents {
+        if !pack_member_path_ok(&c.path) {
+            return Err(Error::new(8, format!("a content-pack contents path is not made of a-z A-Z 0-9 . _ - segments: {}", c.path)));
+        }
+    }
+    let id = p["id"].as_str().filter(|s| pack_id_ok(s)).ok_or_else(|| Error::new(8, "content_pack.id is not a-z then 1 to 31 of a-z 0-9"))?;
+    if id == "echovr" {
+        return Err(Error::new(8, "content_pack.id echovr is reserved"));
+    }
+    let name = format!("{id}-{}.zip", &sha256[..12]);
+    if e["name"].as_str() != Some(name.as_str()) {
+        return Err(Error::new(8, format!("name in the manifest is not {name} (<id>-<first 12 hex of sha256>.zip)")));
+    }
+    if path != format!("packs/{name}") {
+        return Err(Error::new(8, format!("path in the manifest is not packs/{name}")));
+    }
+    let version = p["version"].as_str().filter(|v| pack_version_ok(v)).ok_or_else(|| Error::new(8, "content_pack.version is not X.Y.Z"))?;
+    let requires: Vec<String> = p["requires_stock_manifest_sha256"]
+        .as_array()
+        .and_then(|a| a.iter().map(|s| s.as_str().map(str::to_string)).collect::<Option<Vec<_>>>())
+        .ok_or_else(|| Error::new(8, "content_pack.requires_stock_manifest_sha256 is not a list of strings"))?;
+    if !(1..=2).contains(&requires.len()) {
+        return Err(Error::new(8, "content_pack.requires_stock_manifest_sha256 holds 1 or 2 hashes"));
+    }
+    if requires.iter().any(|s| !is_sha256_hex(s)) {
+        return Err(Error::new(8, "content_pack.requires_stock_manifest_sha256 holds a value that is not 64 lower-case hex digits"));
+    }
+    if requires.windows(2).any(|w| w[0] == w[1]) {
+        return Err(Error::new(8, "content_pack.requires_stock_manifest_sha256 lists a hash twice"));
+    }
+    if requires.windows(2).any(|w| w[0] > w[1]) {
+        return Err(Error::new(8, "content_pack.requires_stock_manifest_sha256 is not sorted ascending"));
+    }
+    let stock_data_version = p["stock_data_version"].as_str().filter(|v| stock_data_version_ok(v)).ok_or_else(|| Error::new(8, "content_pack.stock_data_version is not 1 to 20 digits"))?;
+    let plugins: Vec<String> = p["plugins"]
+        .as_array()
+        .and_then(|a| a.iter().map(|s| s.as_str().map(str::to_string)).collect::<Option<Vec<_>>>())
+        .ok_or_else(|| Error::new(8, "content_pack.plugins is not a list of strings"))?;
+    if plugins.iter().any(|n| !plugin_name_ok(n)) {
+        return Err(Error::new(8, "content_pack.plugins holds a name that is not 1 to 64 of A-Z a-z 0-9 _ -"));
+    }
+    if (0..plugins.len()).any(|i| plugins[i + 1..].contains(&plugins[i])) {
+        return Err(Error::new(8, "content_pack.plugins lists a name twice"));
+    }
+    Ok(ContentPack {
+        id: id.to_string(),
+        version: version.to_string(),
+        requires_stock_manifest_sha256: requires,
+        stock_data_version: stock_data_version.to_string(),
+        plugins,
     })
 }
