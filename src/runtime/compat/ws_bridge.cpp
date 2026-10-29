@@ -592,21 +592,44 @@ static int LogGameToServerFrame(const std::string& frame, const std::string& wsC
 // (LogFrameMessages), so this runs on a client only. The fields are the operation, the lobby ids (GUIDs, never
 // names), the entrants as XPIDs and the failure code; the settings JSON of a request is remote text and is not read
 // out, and a failure's message is counted (message_bytes) and never copied (logging.md Rule 4). A failure frame
-// carries no lobby id: pair it with the request before it on the same conn.
+// carries no lobby id, so a session record names the last request the game sent on this client, on any connection
+// (last_request), and the party it is in (party_id), not a request or a party it could pair with on its own conn
+// (#1413).
 static uint64_t RealLobbyClockMs() { return GetTickCount64(); }
 static std::mutex g_lobbyLimiterMutex;
 static nevr_lobby_frame::RecordLimiter g_lobbyLimiter;
+static nevr_lobby_frame::RequestTracker g_lobbyRequests;  // the last find or join the game sent (#1413)
 static uint64_t (*g_lobbyClockMs)() = &RealLobbyClockMs;
+// The party a session record names: the process-wide party state, read when the record is written (#1413).
+static nevr_social_party::View RealLobbyPartyView() { return nevr_social_party::Global().Snapshot(); }
+static nevr_social_party::View (*g_lobbyPartyView)() = &RealLobbyPartyView;
+
+// The party fields of a session record: the party the view names when the record is written (#1413).
+static std::string LobbyPartyFields(nevr_social_party::View (*partyView)()) {
+  const nevr_social_party::View view = partyView();
+  return nevr_lobby_frame::FormatPartyFields(view.partyId, view.members.size(), view.ownerId, view.selfId);
+}
 
 static void LogClientLobbyMessage(int connIdx, bool fromServer, uint64_t symbol, const uint8_t* payload, uint64_t len) {
   const std::optional<nevr_lobby_frame::Kind> kind = nevr_lobby_frame::KindOf(symbol, fromServer);
   if (!kind) return;
   // The game's party-follow loop can send a request every update, so a kind writes a burst per window and the
   // rest are counted; an ended window's count is written by the next lobby frame of any kind, before its record.
+  // The request tracker takes every request and every answer, also those the limiter suppresses, so an answer takes
+  // the request it answers whether or not its record is written (#1413).
   nevr_lobby_frame::RecordLimiter::Verdict verdict;
+  nevr_lobby_frame::RequestContext request;
+  nevr_social_party::View (*partyView)() = nullptr;
   {
     std::lock_guard<std::mutex> lock(g_lobbyLimiterMutex);
-    verdict = g_lobbyLimiter.Admit(*kind, g_lobbyClockMs());
+    const uint64_t now = g_lobbyClockMs();
+    verdict = g_lobbyLimiter.Admit(*kind, now);
+    if (*kind == nevr_lobby_frame::Kind::Find || *kind == nevr_lobby_frame::Kind::Join) {
+      g_lobbyRequests.Sent(*kind, now);
+    } else {
+      request = g_lobbyRequests.Answer(now);
+    }
+    partyView = g_lobbyPartyView;
   }
   for (size_t i = 0; i < nevr_lobby_frame::kKindCount; ++i) {
     if (verdict.flushed[i] == 0) continue;
@@ -647,13 +670,15 @@ static void LogClientLobbyMessage(int connIdx, bool fromServer, uint64_t symbol,
           nevr_lobby_frame::FormatAccounts(d.entrants).c_str());
       break;
     case nevr_lobby_frame::Kind::Success:
-      Log(EchoVR::LogLevel::Info, "[NEVR.WS] lobby session success conn=%d lobby=%s group=%s", connIdx,
-          nevr_lobby_frame::FormatGuid(d.lobby).c_str(), nevr_lobby_frame::FormatGuid(d.group).c_str());
+      Log(EchoVR::LogLevel::Info, "[NEVR.WS] lobby session success conn=%d lobby=%s group=%s %s %s", connIdx,
+          nevr_lobby_frame::FormatGuid(d.lobby).c_str(), nevr_lobby_frame::FormatGuid(d.group).c_str(),
+          LobbyPartyFields(partyView).c_str(), nevr_lobby_frame::FormatRequestFields(request).c_str());
       break;
     case nevr_lobby_frame::Kind::Failure:
       Log(EchoVR::LogLevel::Info,
-          "[NEVR.WS] lobby session failure conn=%d code=%u reason=%s group=%s message_bytes=%u", connIdx, d.code,
-          nevr_lobby_frame::FailureReason(d.code), nevr_lobby_frame::FormatGuid(d.group).c_str(), d.messageBytes);
+          "[NEVR.WS] lobby session failure conn=%d code=%u reason=%s group=%s message_bytes=%u %s %s", connIdx, d.code,
+          nevr_lobby_frame::FailureReason(d.code), nevr_lobby_frame::FormatGuid(d.group).c_str(), d.messageBytes,
+          LobbyPartyFields(partyView).c_str(), nevr_lobby_frame::FormatRequestFields(request).c_str());
       break;
   }
 }
@@ -2634,11 +2659,17 @@ void TestHook_ObserveSocialFrames(const char* direction, int connIdx, const std:
 void TestHook_ResetLobbyFrameLimiter() {
   std::lock_guard<std::mutex> lock(g_lobbyLimiterMutex);
   g_lobbyLimiter.Reset();
+  g_lobbyRequests.Reset();
 }
 
 void TestHook_SetLobbyFrameClock(uint64_t (*clockMs)()) {
   std::lock_guard<std::mutex> lock(g_lobbyLimiterMutex);
   g_lobbyClockMs = clockMs != nullptr ? clockMs : &RealLobbyClockMs;
+}
+
+void TestHook_SetLobbyPartySource(nevr_social_party::View (*view)()) {
+  std::lock_guard<std::mutex> lock(g_lobbyLimiterMutex);
+  g_lobbyPartyView = view != nullptr ? view : &RealLobbyPartyView;
 }
 
 bool TestHook_ReadLoginFailureDiagnostic(const std::string& frame, uint64_t* statusCode, size_t* messageBytes) {
