@@ -24,6 +24,30 @@ def strip_comments(text: str) -> str:
 
 
 MODE_RETURN = re.compile(r"if\s*\(\s*!?\s*g_isServer\b[^)]*\)\s*(?:\{[^{}]*?)?\breturn\b")
+LAMBDA_HEAD = re.compile(r"\]\s*(?:\([^()]*\))?\s*(?:mutable\s*|noexcept\s*|->\s*[\w:<>]+\s*)*$")
+
+
+def mode_return(code: str) -> bool:
+    """A `return` inside a block, or the `else` of an `if`, whose condition names g_isServer, at any depth; a return in
+    a lambda's body is the lambda's own and does not count."""
+    stack: list[tuple[str, bool]] = []  # (the block's head, is a lambda)
+    closed: dict[int, str] = {}  # the head of the block that last closed at each depth, for an `else`
+    head_start = 0
+    for m in re.finditer(r"[{};]|\breturn\b", code):
+        tok = m.group()
+        if tok == "{":
+            head = code[head_start:m.start()].strip()
+            if re.match(r"else\b(?!\s*if\b)", head):
+                head = head + " " + closed.get(len(stack), "")
+            stack.append((head, bool(LAMBDA_HEAD.search(head))))
+        elif tok == "}":
+            head, _ = stack.pop()
+            closed[len(stack)] = head
+        elif tok == "return" and not any(is_lambda for _, is_lambda in stack):
+            if any(re.search(r"\bg_isServer\b", head) for head, _ in stack):
+                return True
+        head_start = m.end()
+    return False
 
 
 def boot_problems(boot: str) -> list[str]:
@@ -45,7 +69,7 @@ def boot_problems(boot: str) -> list[str]:
     before = code[:start].rstrip()
     if not before.endswith((";", "{", "}")):
         return ["the Install call is the body of an `if` or a loop without braces"]
-    if MODE_RETURN.search(code[body:start]):
+    if MODE_RETURN.search(code[body:start]) or mode_return(code[code.index("{", body) + 1:start]):
         return ["RunDeferredRuntimeBootstrap returns on the mode before the Install call"]
     return []
 
@@ -100,6 +124,17 @@ class ServerTeamSizeWiring(unittest.TestCase):
         self.assertTrue(boot_problems(boot.replace(CALL, "if (g_isServer) " + CALL)))
         self.assertTrue(boot_problems(boot.replace(CALL, "if (!g_isServer) return;\n  " + CALL)))
         self.assertTrue(boot_problems(boot.replace(CALL, "if (!g_isServer) {\n    return;\n  }\n  " + CALL)))
+        self.assertTrue(boot_problems(boot.replace(CALL, "if (g_isServer) {\n    (void)0;\n  } else {\n    return;\n  }\n  " + CALL)))
+        self.assertTrue(boot_problems(boot.replace(
+            CALL, "if (!g_isServer) {\n    if (trigger) {\n      (void)0;\n    }\n    return;\n  }\n  " + CALL)))
+
+    def test_a_lambdas_return_or_a_return_on_another_condition_is_not_a_mode_return(self) -> None:
+        self.assertFalse(mode_return("if (!g_isServer) {\n  auto f = [] { return 1; };\n  f();\n}\n"))
+        self.assertFalse(mode_return("if (!g_isServer) {\n  auto f = [&](int x) -> int { return x; };\n}\n"))
+        self.assertFalse(mode_return("if (trigger) {\n  return;\n}\nif (g_isServer) {\n  (void)0;\n}\n"))
+        self.assertFalse(mode_return("if (g_isServer) {\n  (void)0;\n}\nif (trigger) {\n  (void)0;\n} else {\n  return;\n}\n"))
+        self.assertTrue(mode_return("if (g_isServer) {\n  auto f = [] { return 1; };\n  return;\n}\n"))
+        self.assertTrue(mode_return("if (!g_isServer) {\n  if (trigger) {\n    return;\n  }\n}\n"))
 
     def test_a_broken_install_is_found(self) -> None:
         install = INSTALL.read_text(encoding="utf-8")
