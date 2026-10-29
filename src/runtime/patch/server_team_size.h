@@ -104,7 +104,7 @@ inline Plan PlanFor(uint32_t size) {
 struct Outcome {
   uint32_t size = kGameTeamSize;
   Plan plan = Plan::KeepGame;
-  bool capTried = false;
+  bool capTried = false;  // a site not tried is "not_tried" in the record, whatever its result field holds
   nevr_checked_patch::Result cap = nevr_checked_patch::Result::Mismatch;
   uint8_t capBefore[sizeof(kCapExpected)] = {};
   bool slotTried = false;
@@ -136,8 +136,7 @@ inline Outcome Apply(uint8_t* capSite, uint8_t* slotSite, uint32_t size, nevr_ch
     const bool capReady = std::memcmp(capSite, kCapExpected, sizeof(kCapExpected)) == 0 ||
                           std::memcmp(capSite, capWanted.bytes, sizeof(kCapExpected)) == 0;
     if (!capReady) {
-      o.capTried = true;
-      o.cap = Result::Mismatch;
+      o.capTried = true;  // `cap` keeps its Mismatch
       return o;
     }
     o.slotTried = true;

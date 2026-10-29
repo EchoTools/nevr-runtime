@@ -62,6 +62,16 @@ bool RefuseOneSiteWriter(void* dest, const void* src, size_t n) {
   std::memcpy(dest, src, n);
   return true;
 }
+// As RefuseOneSiteWriter, but a later write to a site already written says it succeeded and writes nothing.
+bool RefuseOneThenDropWriter(void* dest, const void* src, size_t n) {
+  for (const void* earlier : g_writes) {
+    if (earlier == dest) {
+      g_writes.push_back(dest);
+      return true;
+    }
+  }
+  return RefuseOneSiteWriter(dest, src, n);
+}
 
 class ServerTeamSize : public ::testing::Test {
  protected:
@@ -149,6 +159,7 @@ TEST_F(ServerTeamSize, ACapMismatchLeavesBothSitesAsFoundAndKeepsFive) {
   EXPECT_TRUE(g_writes.empty()) << "the slot rule must not go in when the cap cannot follow it";
   EXPECT_EQ(img.cap, capFound);
   EXPECT_EQ(img.slot, kSlotStock);
+  EXPECT_TRUE(o.capTried);
   EXPECT_EQ(o.cap, Result::Mismatch);
   EXPECT_FALSE(o.slotTried);
   EXPECT_EQ(std::memcmp(o.capBefore, capFound.data(), capFound.size()), 0);
@@ -195,8 +206,24 @@ TEST_F(ServerTeamSize, ACapWriteThatFailsAfterTheSlotAppliedPutsTheSlotBack) {
   EXPECT_EQ(o.cap, Result::WriteFailed);
   EXPECT_TRUE(o.slotRestored);
   EXPECT_EQ(img.slot, kSlotStock) << "a server left with the slot rule and a cap of five is not the game's own";
+  char line[512];
+  nevr_server_team_size::FormatRecord(line, sizeof(line), o, 0x1401AB8C2, 0x1401ABC8A);
+  EXPECT_NE(std::string(line).find("the slot rule was put back"), std::string::npos) << line;
+  EXPECT_NE(std::string(line).find("slot_restored=true"), std::string::npos) << line;
   EXPECT_EQ(img.cap, kCapStock);
   EXPECT_EQ(o.inEffect, 5u);
+}
+
+TEST_F(ServerTeamSize, ARestoreThatDoesNotReadBackIsNotCalledRestored) {
+  Image img;
+  g_refuseAt = img.cap.data();
+  const Outcome o = Run(img, 6, RefuseOneThenDropWriter);
+  EXPECT_EQ(o.cap, Result::WriteFailed);
+  EXPECT_FALSE(o.slotRestored);
+  EXPECT_EQ(img.slot, kSlotWrapped);
+  char line[512];
+  nevr_server_team_size::FormatRecord(line, sizeof(line), o, 0x1401AB8C2, 0x1401ABC8A);
+  EXPECT_EQ(std::string(line).find("slot_restored"), std::string::npos) << line;
 }
 
 TEST_F(ServerTeamSize, ASlotThatWasAlreadyWrappedIsNotPutBackWhenTheCapFails) {
