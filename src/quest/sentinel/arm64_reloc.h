@@ -1,8 +1,8 @@
 /* Relocation of PC-relative arm64 instructions into the inline hook's trampoline.
  *
- * The build-time patch (src/quest/patch, docs/adr/0021) overwrites the first three instructions of a function with a
- * stub through a slot; libr15_attach.h runs those three, displaced, from a trampoline in a fresh anonymous page. The
- * window is a parameter, so BuildTrampoline takes one to four words. A word that depends on its own address (B, BL, B.cond, CBZ/CBNZ, TBZ/TBNZ, ADR,
+ * inline_hook.h overwrites the first four instructions of a function and runs those four, displaced, from a
+ * trampoline in a fresh page. The window is a parameter: the build-time patch (src/quest/patch, ADR 0021)
+ * overwrites three words, so BuildTrampoline takes one to four. A word that depends on its own address (B, BL, B.cond, CBZ/CBNZ, TBZ/TBNZ, ADR,
  * ADRP, LDR literal) would read a different address there, and the trampoline can be anywhere in the address
  * space, farther from the target than a B (+-128 MiB) or a CBZ/LDR literal (+-1 MiB) reaches. So each such word is
  * rewritten, from the address it had in the target, into a sequence that holds the absolute address it meant in
@@ -37,7 +37,7 @@
  * A relocated BL makes the callee return into the trampoline, not to original+4 (which is patched). The callee
  * sees a different link register value; code that inspects its own return address is not equivalent.
  *
- * Pure: no memory is mapped and no log is written here; libr15_attach.cpp does both.
+ * Pure: no memory is mapped and no log is written here; inline_hook.cpp does both.
  */
 #pragma once
 
@@ -71,9 +71,10 @@ PcRelKind ClassifyPcRel(std::uint32_t insn) noexcept;
 // "none" for kNone.
 const char* PcRelName(PcRelKind kind) noexcept;
 
-// The largest window the relocator accepts: four words. The libr15 patch uses three (quest/patch/stub_codec.h kStubWords);
-// BuildTrampoline accepts any count from 1 to kRelocPrologueWords.
+// The bytes the run-time inline patch overwrites and the trampoline displaces: four words. This is the default
+// window and the largest one; BuildTrampoline accepts any count from 1 to kRelocPrologueWords.
 inline constexpr std::size_t kRelocPrologueWords = 4;
+inline constexpr std::size_t kRelocWindowBytes = kRelocPrologueWords * 4;
 // The most words a trampoline holds: 4 x 3 for the sequences, 2 for the return jump, 1 of padding, then at most
 // 5 pool entries of 2 words.
 inline constexpr std::size_t kMaxTrampolineWords = 32;

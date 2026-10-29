@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cerrno>
 
+#include "quest/plugin/input_seam_hook.h"
 #include "quest/plugin/plugin_game_image.h"
 #include "quest/plugin/plugin_record_log.h"
 #include "quest/sentinel/sentinel_log.h"
@@ -112,5 +113,7 @@ void SentinelPlatform::PluginLine(std::uint32_t level, const std::string& line) 
   const std::optional<nevr_quest::LogLevel> sink = SinkLevel(level, emitDebug_);
   if (sink) sentinel::Emit(*sink, line);
 }
+
+const NevrQuestHostApi* SentinelPlatform::QuestHostApi() { return input_seam::HostApi(emitDebug_); }
 
 }  // namespace nevr_quest::plugin

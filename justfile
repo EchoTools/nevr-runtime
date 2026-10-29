@@ -248,6 +248,9 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
         # `zip` replaces an entry of the same path: a plugin named like any lib/ entry of the store APK, or like a library
         # staged below, would take that library's place. Refuse before anything is staged (tools/quest_repack_libs.py).
         python3 -I tools/quest_repack_libs.py check-plugin-name --apk "$apk" --plugin "$plugin"
+        # The loader refuses a plugin whose NEVR note does not list the running libr15's build ID (plugin_image.h): an APK
+        # whose plugin is refused on the headset is refused here, against the store APK's own libr15.so.
+        python3 -I tools/quest_repack_libs.py check-plugin-build-ids --apk "$apk" --plugin "$plugin"
         # ADR 0019 section 1: a plugin runs the same static-init check as the shim, minus the shim's own constructor.
         llvm_bin="{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
         [ -x "$llvm_bin/llvm-nm" ] || llvm_bin="$(dirname "$(command -v llvm-nm || true)")"
@@ -389,11 +392,16 @@ package-dev store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
         cmake --preset mingw-dev
         cmake --build --preset mingw-dev
     )
+    # The core installer install.ps1 runs (installer/, ADR 0023), for Windows, locked and stripped.
+    CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc cargo build --locked --release --target x86_64-pc-windows-gnu \
+        --manifest-path installer/Cargo.toml --bin nevr-install --target-dir build/installer
+    x86_64-w64-mingw32-strip build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe
     just _quest-apk "{{ store_apk }}"
     python3 tools/package_release.py --commit "$commit" --out "$out" \
         --dll build/mingw-dev/bin/BugSplat64.dll \
         --runtime-dll build/mingw-dev/bin/nevr-runtime.dll \
         --server-exe build/mingw-dev/bin/echovr_server.exe \
+        --installer-exe build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe \
         --apk build/android-dev/repack/r15_nevr-sentinel_signed.apk \
         --pc-header build/mingw-dev/generated/nevr_builtin_defaults.h \
         --quest-header build/android-dev/generated/nevr_builtin_defaults.h \
@@ -409,6 +417,19 @@ _quest-apk store_apk:
     objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
     tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
     just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so build/android-dev/repack
+
+# The development APK for an autopilot run on a Quest (#1202, docs/adr/0025-quest-autopilot-route.md): the local
+# android-arm64 sentinel (a development build: the input seam refuses a release) with libnevr_autopilot.so beside it,
+# repacked from the store APK. The plugin is off unless the headset's config.yaml names nevr_autopilot. Writes
+# build/android-arm64/repack/r15_nevr-sentinel_signed.apk, the path test-quest-hooks-pinned reads. No release or
+# package-dev APK carries the plugin.
+quest-autopilot-apk store_apk="/mnt/games/cache/r15_goldmaster_store.apk": build-android
+    just android-repack-apk "{{ store_apk }}" build/android-arm64/sentinel/libovrplatformloader.so build/android-arm64/repack build/android-arm64/integration/libnevr_autopilot.so
+
+# One unattended autopilot run on the attached Quest (tools/quest_autopilot_run.py --help): pushes the route, starts the
+# game with the proximity sensor overridden, waits for route_end, and records the run under the work root.
+quest-autopilot-run route *args:
+    python3 tools/quest_autopilot_run.py --route "{{ route }}" {{ args }}
 
 # The Quest APK of a RELEASE: the repack of the store game with the loader CI built from the release tag. That loader is
 # the release's own asset (nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so): it is downloaded (tools/quest_release_loader.py
@@ -455,30 +476,25 @@ release-quest-apk tag store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
 publish-quest-apk tag:
     python3 tools/publish_quest_apk.py "{{ tag }}"
 
-# Install the repacked Quest APK + game data onto the connected headset (sideload).
-# Pass `yes` (`just quest-install yes`) to allow removing the store build when the
-# headset refuses an in-place update because the signer differs; that
-# uninstall deletes the app's data on the headset. Without `yes` the recipe stops
-# and prints what would be deleted. Order: check host tools and the APK, require
-# exactly one authorized headset with ~2.2 GiB free on /sdcard and /data/local/tmp,
-# fetch and SHA-256-verify the game data, `adb install -r -g` the APK
-# (uninstalling first only on INSTALL_FAILED_UPDATE_INCOMPATIBLE and only with
-# `yes`), then push the data zip and extract it to the legacy path the unpatched
-# APK reads (/sdcard/readyatdawn/_data). The store OBB is a keyed (encrypted) OBB;
-# Horizon OS, like Android 11 and later, refuses every keyed mount whatever the
-# APK's signer, so it is never used (the sentinel answers the game's mount itself:
-# docs/adr/0007-quest-obb-mount-skip.md).
-# The download is cached at build/android-arm64/quest-data/_data.zip (~937 MB; a
-# different data_sha256 gets its own _data-<hash prefix>.zip),
-# written as .part and renamed only after the hash matches. The default data_url is the
-# content-addressed file the signed release manifest (https://evr.echo.taxi/nevr-runtime/manifest.json)
-# lists as its `game-data` artifact, named echovr-data-<first 12 hex of the sha256>.zip, and the
-# default data_sha256 is that artifact's sha256. A data_url or data_sha256 passed by hand is
-# trust-on-first-use: the SHA-256 of whatever the URL served when the pin was taken, not a
-# publisher-signed value. A cached file that does not match its own hash is deleted. The download and every long adb call have time
-# limits. The recipe body is tools/quest-install.sh (tested in tools/tests/test_quest_install.py).
-quest-install yes="" apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" data_url="https://evr.echo.taxi/nevr-runtime/data/echovr-data-fc2eedeacc50.zip" data_sha256="fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c":
-    tools/quest-install.sh {{ quote(yes) }} {{ quote(apk) }} {{ quote(data_url) }} {{ quote(data_sha256) }}
+# Build the core installer CLI (installer/, ADR 0023) for this machine: installer/target/release/nevr-install.
+# Locked to the committed Cargo.lock; set CARGO_TARGET_DIR to keep the regenerable build tree out of the checkout.
+build-installer:
+    cargo build --locked --release --manifest-path installer/Cargo.toml --bin nevr-install
+
+# Install the NEVR Quest APK + game data onto the connected headset (sideload) through the core installer
+# (tools/quest-install.sh calls `nevr-install quest install`). The core fetches the signed release manifest, takes the
+# APK and the game data the channel's release names, checks both, plans from what the headset holds and installs;
+# every run writes a [NEVR.INSTALL] log (the path is in its output). The recipe holds no hash, URL or version.
+# Pass `--yes-uninstall` (`just quest-install --yes-uninstall`) to let the core remove a differently signed install
+# when the headset refuses an in-place update; that uninstall deletes the app's data on the headset. Without it the run
+# ends `needs-user` and says what it would delete. `--version V` installs release V instead of the channel's.
+# Needs adb, aapt2 and apksigner on PATH. A locally built tester APK is installed by giving the recipe its path
+# (`just quest-install build/android-dev/repack/r15_nevr-sentinel_signed.apk`), or a directory that holds exactly one
+# .apk and its <name>.apk.sha256: the core checks the file itself, logs every step as an unverified dev artifact, and
+# still takes the game data from the signed manifest.
+[positional-arguments]
+quest-install *args: build-installer
+    NEVR_INSTALL="${CARGO_TARGET_DIR:-installer/target}/release/nevr-install" tools/quest-install.sh "$@"
 
 # --- Tests ---
 
@@ -1519,6 +1535,13 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]:0:2}" -o "$out/menu_cards_hook_test" -ldl
     timeout 120 "$out/menu_cards_hook_test"
+    # The controller-input seam (#1202): the VrApi layout rules, the registration's every refusal and its one owner, and
+    # the real handler through the thunk entry against stand-ins for vrapi_GetCurrentInputState and
+    # vrapi_GetInputDeviceCapabilities. got_pinned_test resolves both slots in the real libr15.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/input_seam_test.cpp src/quest/plugin/input_seam_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/input_seam_test" -ldl
+    timeout 120 "$out/input_seam_test"
     # The toast presenter against a fake JNI (#807): a Java exception thrown at each JNI call in turn, null or not, is
     # never left pending. jni.h is the NDK's own; the recipe stops when it is absent.
     jni="{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/jni.h"
@@ -1935,10 +1958,11 @@ test-quest-plugins:
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/got_hook.cpp -o "$out/got_hook.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/hook_report.cpp -o "$out/hook_report.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/plugin/plugin_game_image.cpp -o "$out/plugin_game_image.o"
+    "${cxx[@]}" -fno-exceptions -c src/quest/plugin/input_seam_hook.cpp -o "$out/input_seam_hook.o"
     loader=(src/quest/plugin/plugin_plan.cpp src/quest/plugin/plugin_image.cpp src/quest/plugin/plugin_loader.cpp
             src/quest/plugin/plugin_record_log.cpp src/quest/plugin/plugin_platform.cpp src/quest/data/sha256.cpp
             src/quest/sentinel/hook_log.cpp src/quest/sentinel/sentinel_log.cpp
-            "$out/got_hook.o" "$out/hook_report.o" "$out/plugin_game_image.o")
+            "$out/got_hook.o" "$out/hook_report.o" "$out/plugin_game_image.o" "$out/input_seam_hook.o")
     "${cxx[@]}" -pthread src/quest/tests/plugin_loader_test.cpp src/quest/patch/libr15_patch_identity.cpp "${loader[@]}" \
         -o "$out/plugin_loader_test" -ldl
     timeout -k 5 120 "$out/plugin_loader_test" "$out"
@@ -1962,6 +1986,33 @@ test-quest-plugins:
         "${loader[@]}" -o "$out/libr15_attach_step_test" -ldl
     timeout -k 5 120 "$out/libr15_attach_step_test" src/quest/tests/fixtures
     echo "test-quest-plugins: all plugin loader tests pass on the host"
+
+# The Quest autopilot plugin on the host (#1202, docs/adr/0025-quest-autopilot-route.md): the route grammar, every
+# derived bit and limit, the clock, the filter against a fake clock, the event ring (two producers), and the plugin's
+# exports against a fake host with a real route file and its real reporter thread; and every shipped route file
+# (tools/quest_autopilot_routes/) parses. The start-file case and the two stopped-run cases each run in their own process
+# (the plugin keeps one run per process). Built as the device builds it, without exceptions. Fail-close.
+test-quest-autopilot:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-autopilot-host"
+    mkdir -p "$out/scratch"
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -pthread -Isrc)
+    "${cxx[@]}" src/quest/tests/autopilot_route_test.cpp src/quest/plugins/autopilot/route.cpp \
+        -o "$out/autopilot_route_test"
+    routes=(tools/quest_autopilot_routes/*.txt)
+    [ -f "${routes[0]}" ] || { echo "test-quest-autopilot: no shipped route file" >&2; exit 1; }
+    timeout 60 "$out/autopilot_route_test" "${routes[@]}"
+    "${cxx[@]}" -DNEVR_AUTOPILOT_BUILD_IDS='"0000000000000000000000000000000000000000"' \
+        src/quest/tests/autopilot_run_test.cpp src/quest/plugins/autopilot/route.cpp \
+        src/quest/plugins/autopilot/autopilot.cpp src/quest/plugins/autopilot/plugin.cpp src/quest/data/sha256.cpp \
+        -o "$out/autopilot_run_test"
+    timeout 120 "$out/autopilot_run_test" "$out/scratch"
+    timeout 60 "$out/autopilot_run_test" "$out/scratch" start_file
+    timeout 60 "$out/autopilot_run_test" "$out/scratch" stopped
+    timeout 60 "$out/autopilot_run_test" "$out/scratch" stopped_waiting
+    timeout 60 "$out/autopilot_run_test" "$out/scratch" fd_zero
+    echo "test-quest-autopilot: all autopilot tests pass on the host"
 
 # The integration's pinned dlopen target against the real libr15.so (docs/adr/0003). Extracts it from the
 # store APK, checks its SHA-256 and resolves LibR15Dlopen() the way the loader would lay the image out.
@@ -2115,6 +2166,7 @@ verify:
         test-quest-data-net \
         test-quest-integration \
         test-quest-plugins \
+        test-quest-autopilot \
         test-scripting
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
@@ -3865,7 +3917,7 @@ verify:
     # and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 2166
+    python3 tools/verify_gtest_floor.py --floor 2198
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py

@@ -7,9 +7,6 @@
 //   ldr  x16, [x16, #<slot offset in page>]   EncodeLdrX   (unsigned immediate, scaled by 8)
 //   br   x16                                  EncodeBr
 //
-// A credits ADRP+ADD pair becomes `adrp xN, <page of the slot>` + `ldr xN, [xN, #<slot offset in page>]` (EncodeSlotLoadPair,
-// DecodeSlotLoadPair): the same two sites, the same register.
-//
 // The stub is position independent: both the ADRP and the LDR use only the site's own address and the slot's page, so
 // a load bias moves site and slot together and changes nothing. Addresses here are link-time vaddrs.
 #pragma once
@@ -103,36 +100,6 @@ inline bool DecodeSlotStub(const std::uint32_t (&words)[kStubWords], std::uint64
   if (!DecodeLdrX(words[1], &rt, &rn, &offset)) return false;
   if (!DecodeBr(words[2], &brRn)) return false;
   if (adrpRd != kStubRegister || rt != kStubRegister || rn != kStubRegister || brRn != kStubRegister) return false;
-  *slotVa = page + offset;
-  return true;
-}
-
-/// The two words that replace a credits ADRP+ADD pair (ADR 0021 section 8): the ADRP at adrpVa to the slot's page and
-/// `ldr xRd, [xRd, #<slot offset in its page>]`, on the register the pair already used.
-struct SlotLoadPair {
-  std::uint32_t adrp;
-  std::uint32_t ldr;
-};
-
-/// The pair for a slot at slotVa, for an ADRP that sits at adrpVa and defines xRd. False when the slot is not 8-byte
-/// aligned, rd is not a register, or the slot's page is out of ADRP range of adrpVa.
-inline bool EncodeSlotLoadPair(std::uint64_t adrpVa, std::uint64_t slotVa, unsigned rd, SlotLoadPair* pair) noexcept {
-  return EncodeAdrp(adrpVa, slotVa, rd, &pair->adrp) && EncodeLdrX(rd, rd, slotVa & 0xFFF, &pair->ldr);
-}
-
-/// The slot address the pair loads from, for an ADRP that sits at adrpVa, and its register. False unless the first word
-/// is an ADRP, the second is `ldr xRt, [xRn, #imm]`, and Rd of the ADRP, Rt and Rn are one register.
-inline bool DecodeSlotLoadPair(std::uint32_t adrpWord, std::uint32_t ldrWord, std::uint64_t adrpVa, unsigned* rd,
-                               std::uint64_t* slotVa) noexcept {
-  unsigned adrpRd = 0;
-  std::uint64_t page = 0;
-  unsigned rt = 0;
-  unsigned rn = 0;
-  std::uint64_t offset = 0;
-  if (!DecodeAdrp(adrpWord, adrpVa, &adrpRd, &page)) return false;
-  if (!DecodeLdrX(ldrWord, &rt, &rn, &offset)) return false;
-  if (adrpRd != rt || rt != rn) return false;
-  *rd = adrpRd;
   *slotVa = page + offset;
   return true;
 }

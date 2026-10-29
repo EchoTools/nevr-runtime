@@ -118,6 +118,7 @@ NvrGameContext Loader::ContextFor(const PlanEntry& entry, const char* pluginView
   ctx.level_symbol = 0;
   ctx.level_name = nullptr;
   ctx.game_build_id = pluginViewBuildId;
+  ctx.quest = platform_.QuestHostApi();
   return ctx;
 }
 
