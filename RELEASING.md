@@ -266,8 +266,9 @@ freshly fetched `origin/main`.
 2. Builds the release-signer from a snapshot of its `main`, and reads `verify-manifest --live`. A tag that beta already
    lists is done. Otherwise the beta release must list a `game-data` artifact (the zip the new release carries), whose
    name and size are noted; without one the run fails before it builds.
-3. Makes a clean worktree at the tag, waits while two or more `ninja` processes run, and runs `just release-quest-apk` in
-   `nevr-builds.slice` (8G).
+3. Makes a clean worktree at the tag and waits while two or more `ninja` processes run. Then, in `nevr-builds.slice` (8G), the
+   `configure` step runs `just configure` (the vcpkg install that the new worktree lacks), and `just release-quest-apk` runs
+   after it.
 4. Runs `tools/publish_quest_apk.py` with `--extra-out`: the APK and its sidecar go to R2 and are fetched back from the
    public host, and the signer's claim is kept for the manifest.
 5. Dispatches `sign-manifest.yml` in the release-signer repository with `action=publish`, `channel=beta`, that claim as
