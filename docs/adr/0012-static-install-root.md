@@ -42,6 +42,7 @@ One root per game: `%LOCALAPPDATA%\nevr\echovr\`. The install folder keeps the g
 | --- | --- |
 | `nevr-runtime.dll` | the changing runtime |
 | `plugins\` | plugin DLLs and their dependencies |
+| `content\` | content packs: `content\<id>\` is one pack's folder, which only the plugin that serves it reads (ADR 0028) |
 | `config.yaml` | the nEVR configuration, when no `-config` folder is given |
 | `.credentials.json` | the sign-in cache, one per machine, for clients and servers alike |
 | `logs\`, `crashes\` | the run log and the crash record (`nevr-crash-<run id>.txt`) the runtime writes, the host's log and minidumps |
@@ -189,7 +190,7 @@ Each step is its own pull request with its own issue under #575, mergeable and t
 ## Names this record fixes
 
 - **The runtime DLL's name:** `nevr-runtime.dll`, in the root, signed by the release signer.
-- **The root layout and file names:** `%LOCALAPPDATA%\nevr\echovr\` holding `nevr-runtime.dll`, `plugins\`, `config.yaml`,
+- **The root layout and file names:** `%LOCALAPPDATA%\nevr\echovr\` holding `nevr-runtime.dll`, `plugins\`, `content\`, `config.yaml`,
   `.credentials.json`, `logs\` and `crashes\`, as in the table. `nevr-bootstrap.jsonl` stays the host's log file name.
 - **`NEVR_ROOT`**, honoured only in a dev build, replaces `%LOCALAPPDATA%\nevr\echovr`; it lands in step 4.
 - **The `versions` record:** written by the host's detour on the game's main wrapper right after the verdict on `nevr-runtime.dll`: the first

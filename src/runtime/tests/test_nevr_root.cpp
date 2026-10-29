@@ -109,6 +109,8 @@ TEST(NevrRootPaths, EveryFolderIsUnderTheRootUnderLocalAppData) {
   EXPECT_EQ(nevr_root::CacheDir(root), root + L"\\cache");
   EXPECT_EQ(nevr_root::CosmeticsDir(root), root + L"\\cosmetics\\v1\\packages");
   EXPECT_EQ(nevr_root::PluginsDir(root), root + L"\\plugins");
+  EXPECT_EQ(nevr_root::ContentDir(root), root + L"\\content");
+  EXPECT_EQ(nevr_root::ContentDir(std::string("C:\\L\\nevr\\echovr")), "C:\\L\\nevr\\echovr\\content");
   EXPECT_EQ(nevr_root::PluginsDir(std::string("C:\\L\\nevr\\echovr")), "C:\\L\\nevr\\echovr\\plugins");
   EXPECT_EQ(nevr_root::RootUnder(std::string("C:\\L\\")), "C:\\L\\nevr\\echovr") << "one separator, however the base ends";
 }
@@ -119,6 +121,7 @@ TEST(NevrRootPaths, AnUnresolvedRootStaysUnresolvedAllTheWayDown) {
   EXPECT_TRUE(nevr_root::LogsDir(none).empty());
   EXPECT_TRUE(nevr_root::CosmeticsDir(none).empty());
   EXPECT_TRUE(nevr_root::PluginsDir(none).empty());
+  EXPECT_TRUE(nevr_root::ContentDir(none).empty());
 }
 
 TEST(NevrRootPaths, RootWReadsLocalAppDataAndNothingElse) {

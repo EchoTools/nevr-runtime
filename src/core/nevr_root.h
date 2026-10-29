@@ -33,6 +33,7 @@ struct Names<char> {
   static constexpr const char* kCache = "cache";
   static constexpr const char* kCosmetics = "cosmetics\\v1\\packages";
   static constexpr const char* kPlugins = "plugins";
+  static constexpr const char* kContent = "content";
   static constexpr const char* kCredentials = ".credentials.json";
   static constexpr const char* kConfigYaml = "config.yaml";
   static constexpr const char* kMovedMarker = "MOVED-TO-NEVR-ROOT.txt";
@@ -47,6 +48,7 @@ struct Names<wchar_t> {
   static constexpr const wchar_t* kCache = L"cache";
   static constexpr const wchar_t* kCosmetics = L"cosmetics\\v1\\packages";
   static constexpr const wchar_t* kPlugins = L"plugins";
+  static constexpr const wchar_t* kContent = L"content";
   static constexpr const wchar_t* kCredentials = L".credentials.json";
   static constexpr const wchar_t* kConfigYaml = L"config.yaml";
   static constexpr const wchar_t* kMovedMarker = L"MOVED-TO-NEVR-ROOT.txt";
@@ -93,6 +95,12 @@ std::basic_string<C> CosmeticsDir(const std::basic_string<C>& root) {
 template <typename C>
 std::basic_string<C> PluginsDir(const std::basic_string<C>& root) {
   return Join(root, Names<C>::kPlugins);
+}
+
+// Content packs (docs/reference/content-packs.md): <root>\content\<id>\ is one pack's folder, and the serving plugin's own.
+template <typename C>
+std::basic_string<C> ContentDir(const std::basic_string<C>& root) {
+  return Join(root, Names<C>::kContent);
 }
 
 template <typename C>
