@@ -195,10 +195,11 @@ static constexpr uint64_t VA_SET_WEAPON_ENTITIES = 0x140D42E00;
 
 // Source: scriptpatch.h in echovr_combat_mod; the arguments read from the PC binary's disassembly (#1424)
 // Engine module loader: loads a DLL by path. CScriptResource's deserializer (0x1412EBB50) loads every script DLL
-// with it, as (path, nullptr, 0, 0), and keeps the module it returns. With `reuse` set it first returns
+// with it, as (path, nullptr, 0, 0), and keeps the module it returns; the engine also loads pnsrad.dll,
+// pnsradmatchmaking.dll and XInput through it, with `reuse` set. With `reuse` set it first returns
 // GetModuleHandleA(path) when that module is already loaded; otherwise it widens the path and calls LoadLibraryW.
 // With `call_main` set it then calls the module's RadPluginMain(arg). Returns the module, or null when the load
-// failed.
+// failed. docs/reference/content-packs.md says how a plugin serves a script DLL through it.
 // Signature: HMODULE __fastcall (const char* path, void* arg, int call_main, int reuse)
 static constexpr uint64_t VA_LOAD_SCRIPT_DLL = 0x1400EB0F0;
 
