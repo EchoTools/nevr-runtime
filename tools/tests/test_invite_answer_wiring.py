@@ -45,6 +45,9 @@ def applier_problems(apply: str) -> list[str]:
         problems.append("OnFrame does not return first when the service is off")
     if body.count("nevr_invite_service::TakeAnswers()") != 1:
         problems.append("OnFrame does not take the answers exactly once")
+    gate = "if (!nevr_invite_service::AnswersPending()) return;"
+    if gate not in body or body.index(gate) > body.index("nevr_invite_service::TakeAnswers()"):
+        problems.append("OnFrame takes the service lock before it checks the pending flag")
     if "nevr_ui_text::Ready()" not in body or "nevr_ui_text::Post(" not in body:
         problems.append("OnFrame does not post through the text writer")
     if re.search(r"Log\([^;]*(\.text|request)", body):
@@ -103,6 +106,12 @@ class TheApplierIsCheapWhenOffAndNeverLogsATextLine(unittest.TestCase):
         apply = code("src/runtime/patch/invite_answer_apply.cpp")
         self.assertTrue(applier_problems(apply.replace("if (!nevr_invite_service::Active()) return;", "")))
         self.assertTrue(applier_problems(apply.replace('"%s", line.c_str()', '"%s", request.text.c_str()')))
+        gate = "if (!nevr_invite_service::AnswersPending()) return;"
+        self.assertTrue(applier_problems(apply.replace(gate, "")))
+        moved = apply.replace(gate, "").replace(
+            "nevr_invite_service::TakeAnswers();", "nevr_invite_service::TakeAnswers();\n  " + gate
+        )
+        self.assertTrue(applier_problems(moved))
 
     def test_the_rule_logs_fields_and_sizes_only(self):
         rule = code("src/runtime/patch/invite_answer_text.h")
@@ -129,6 +138,93 @@ class TheScenarioEndpointReadsTheAppliersRecord(unittest.TestCase):
         )
         self.assertTrue(scenario_problems(scenario.replace("nevr_invite_apply::KeepForTest(true);", ""), {}))
         self.assertTrue(scenario_problems(scenario, {"src/runtime/lifecycle/boot.cpp": "nevr_invite_apply::KeepForTest(true);"}))
+
+
+def matching_close(text: str, open_at: int) -> int:
+    depth = 0
+    for i in range(open_at, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
+
+def function_span(text: str, signature: str) -> tuple[int, int]:
+    """The (open, close) indices of the body of the function with this signature, braces included."""
+    open_at = text.index("{", text.index(signature))
+    return open_at, matching_close(text, open_at)
+
+
+def enclosing_block(text: str, at: int) -> tuple[int, int]:
+    """The (open, close) indices of the innermost block that holds index `at`."""
+    depth = 0
+    for i in range(at, -1, -1):
+        if text[i] == "}":
+            depth += 1
+        elif text[i] == "{":
+            if depth == 0:
+                return i, matching_close(text, i)
+            depth -= 1
+    return -1, -1
+
+
+LOCK_TAKEN = "lock(m_)"
+FLAG_SET = "answers_pending->store(true, std::memory_order_release)"
+FLAG_CLEAR = "answers_pending->store(false, std::memory_order_release)"
+
+
+def worker_flag_problems(worker: str) -> list[str]:
+    """#1415: the worker sets the pending flag under its lock after the push, and clears it under the lock when it empties the list."""
+    problems = []
+    open_at, close_at = function_span(worker, "void Deliver(Answer answer)")
+    deliver = worker[open_at : close_at + 1]
+    lock_at = deliver.find("std::lock_guard<std::mutex> lock(m_);")
+    if lock_at < 0:
+        problems.append("Deliver takes no lock on m_")
+    else:
+        block_open, block_close = enclosing_block(deliver, lock_at)
+        block = deliver[block_open : block_close + 1]
+        set_at = block.find(FLAG_SET)
+        push_at = block.find("answers_.push_back(")
+        if set_at < 0:
+            problems.append("Deliver does not set the pending flag inside its lock block")
+        elif push_at < 0 or push_at > set_at:
+            problems.append("Deliver sets the pending flag before it pushes the answer")
+    open_at, close_at = function_span(worker, "std::vector<Answer> DrainLocked()")
+    drain = worker[open_at : close_at + 1]
+    clear_at = drain.find(FLAG_CLEAR)
+    if clear_at < 0:
+        problems.append("DrainLocked does not clear the pending flag")
+    elif clear_at < drain.find("answers_.clear();"):
+        problems.append("DrainLocked clears the pending flag before it empties the list")
+    for name, lock in (("TakeAnswers", "std::lock_guard<std::mutex> lock(m_);"), ("WaitForAnswers", "std::unique_lock<std::mutex> lock(m_);")):
+        open_at, close_at = function_span(worker, f"std::vector<Answer> {name}(")
+        if lock not in worker[open_at : close_at + 1]:
+            problems.append(f"{name} calls DrainLocked without taking m_")
+    return problems
+
+
+class TheWorkerSetsThePendingFlagUnderItsLock(unittest.TestCase):
+    def test_the_flag_moves_with_the_answers_under_the_lock(self):
+        worker = code("src/runtime/patch/invite_worker.h")
+        self.assertGreater(len(worker), 2000)  # a sensor that reads nothing watches nothing
+        self.assertEqual(worker_flag_problems(worker), [])
+
+    def test_a_broken_worker_is_caught(self):
+        worker = code("src/runtime/patch/invite_worker.h")
+        set_line = f"if (parts_.answers_pending != nullptr) parts_.{FLAG_SET};"
+        clear_line = f"if (parts_.answers_pending != nullptr) parts_.{FLAG_CLEAR};"
+        push = "answers_.push_back(std::move(answer));"
+        for needle in (set_line, clear_line, push, "answered_.notify_all();", "answers_.clear();"):
+            self.assertEqual(worker.count(needle), 1, needle)  # each mutation below must change the text it is aimed at
+        self.assertTrue(worker_flag_problems(worker.replace(set_line, "")))
+        self.assertTrue(worker_flag_problems(worker.replace(set_line, "").replace("answered_.notify_all();", set_line + "\n    answered_.notify_all();")))
+        self.assertTrue(worker_flag_problems(worker.replace(set_line, "").replace(push, set_line + "\n      " + push)))
+        self.assertTrue(worker_flag_problems(worker.replace(clear_line, "")))
+        self.assertTrue(worker_flag_problems(worker.replace(clear_line, "").replace("answers_.clear();", clear_line + "\n    answers_.clear();")))
 
 
 if __name__ == "__main__":
