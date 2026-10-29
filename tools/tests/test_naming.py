@@ -95,6 +95,9 @@ BRAND_PROSE_SPELLINGS = {
     "src/runtime/lifecycle/nevr_root_move.cpp": {"nEVR"},  # comment prose, and the MOVED-TO-NEVR-ROOT.txt text a player reads
     "src/runtime/tests/test_nevr_root.cpp": {"nEVR"},  # comment prose and a failure message
     "tools/tests/test_nevr_root_wiring.py": {"nEVR"},  # docstring prose
+    "docs/beta/INSTALL.md": {"nEVR"},  # prose: update nEVR through the launcher
+    "installer/src/launcher.rs": {"nEVR"},  # comment prose, and the version text the refusal line shows
+    "installer/src/session.rs": {"nEVR"},  # the refusal line a player reads: "nEVR 5.4.3 is installed"
 }
 
 

@@ -11,7 +11,7 @@ use std::process::ExitCode;
 const USAGE: &str = "usage: nevr-install <command> [options]
   manifest verify [--from-dir DIR]          steps 1 to 7: fetch (or read DIR), verify, store, pick the channel's release
   quest plan|install [--no-device] [--serial S] [--version V] [--yes-uninstall] [--artifact-dir DIR]
-  pc plan|install --dir <folder with echovr.exe> [--nevr-root DIR] [--allow-downgrade] [--version V] [--package-dir DIR]
+  pc plan|install --dir <folder with echovr.exe> [--nevr-root DIR] [--launcher-dir DIR] [--allow-downgrade] [--version V] [--package-dir DIR]
   pc launch-check --dir <folder> [--nevr-root DIR] [--bootstrap-log FILE] [--version V]
   pc stage --root <nevr root> [--current-json JSON] [--version V]
 options: --root DIR  --base URL  --channel NAME  --log FILE  --state-dir DIR  --work-dir DIR  --pins FILE  --now UTC
@@ -100,6 +100,14 @@ fn main() -> ExitCode {
     cfg.nevr_root = args.val("--nevr-root").map(PathBuf::from).or_else(|| {
         if cfg!(windows) {
             std::env::var("LOCALAPPDATA").ok().filter(|p| !p.is_empty()).map(|p| PathBuf::from(p).join("nevr").join("echovr"))
+        } else {
+            None
+        }
+    });
+    // Echo VR Launcher's data folder (#1285): `--launcher-dir`, else %LOCALAPPDATA%\EchoVR_Launcher on Windows, else none.
+    cfg.launcher_dir = args.val("--launcher-dir").map(PathBuf::from).or_else(|| {
+        if cfg!(windows) {
+            std::env::var("LOCALAPPDATA").ok().filter(|p| !p.is_empty()).map(|p| PathBuf::from(p).join("EchoVR_Launcher"))
         } else {
             None
         }

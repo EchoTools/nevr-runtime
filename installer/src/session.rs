@@ -28,6 +28,9 @@ pub struct Config {
     /// The nevr root (ADR 0012): where the PC plan puts the runtime, the record and every set-aside file. `None` when the
     /// player's profile folder is unknown; a PC install then asks for `--nevr-root` and changes nothing.
     pub nevr_root: Option<PathBuf>,
+    /// Echo VR Launcher's data folder (#1285): a PC install into a game folder its `launcher.json` lists is refused. `None`
+    /// when the profile folder is unknown (no launcher is looked for).
+    pub launcher_dir: Option<PathBuf>,
     /// Install an older release over a newer one (a PC install refuses by default).
     pub allow_downgrade: bool,
     /// Seconds between the two retries of a failed signature check (the pair may have been caught between two writes).
@@ -47,6 +50,7 @@ impl Config {
             min_manifest_version: MIN_MANIFEST_VERSION,
             now: None,
             nevr_root: None,
+            launcher_dir: None,
             allow_downgrade: false,
             retry_delay_secs: 3,
         }
@@ -272,6 +276,21 @@ impl Session {
     /// exactly the manifest's entries for the release (size and sha256), they are installed and nothing is downloaded;
     /// when either is missing or differs, the package the manifest names is downloaded as usual.
     pub fn pc(&self, version: Option<&str>, dir: &Path, install: bool, game_running: bool, package_dir: Option<&Path>) -> Result<(Ended, Value)> {
+        // A launcher-managed folder is refused before anything is fetched or changed (#1285).
+        match crate::launcher::owner_of(self.cfg.launcher_dir.as_deref(), dir) {
+            crate::launcher::Owner::Nobody => {}
+            crate::launcher::Owner::Launcher { id } => {
+                let found = std::fs::read(dir.join(pc::HOST)).ok().and_then(|b| crate::launcher::host_version(&b));
+                let installed = match &found {
+                    Some(v) => format!("nEVR {v} is installed"),
+                    None => "its nEVR is installed".to_string(),
+                };
+                return self.pc_stop(&format!("{} manages this install ({installed}; launcher entry '{id}'). Update nEVR through the launcher.", crate::launcher::NAME));
+            }
+            crate::launcher::Owner::Unknown(why) => {
+                return self.pc_stop(&format!("cannot tell whether a launcher manages this install ({why}); nothing was changed"));
+            }
+        }
         let (m, v) = self.release(version)?;
         let art = manifest::find(&m, &v, "windows-zip", None)?;
         // The root is settled before anything is fetched or changed.

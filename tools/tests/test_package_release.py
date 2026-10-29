@@ -1340,6 +1340,20 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), self.plain("5.4.3"), "nothing was changed")
         self.assertTrue((self.root / "installer" / "nevr-install.txt").exists(), "the record is kept")
 
+    # #1285: the record names its owner; one another installer owns (the launcher writes owner=launcher) is not ours to undo.
+    def test_uninstall_leaves_a_record_another_installer_owns_untouched(self):
+        self.set_package(self.plain("5.4.3"))
+        self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
+        record = self.root / "installer" / "nevr-install.txt"
+        self.assertIn("owner=nevr-install", record.read_text().splitlines(), "the install writes its owner")
+        record.write_text(record.read_text().replace("owner=nevr-install", "owner=launcher"))
+        before = {p.name: p.read_bytes() for p in self.game.iterdir()}
+        undone = self.ps("uninstall.ps1", "-Dir", str(self.game))
+        self.assertNotEqual(undone.returncode, 0, self.output(undone))
+        self.assertIn("owned by launcher", self.output(undone))
+        self.assertEqual({p.name: p.read_bytes() for p in self.game.iterdir()}, before, "the game folder is untouched")
+        self.assertTrue(record.exists(), "the record stays")
+
     def test_uninstall_refuses_a_backup_that_is_a_runtime(self):
         backup = self.poison_the_backup()
         self.assert_refused_over_a_runtime_backup(self.ps("uninstall.ps1", "-Dir", str(self.game)), backup)
