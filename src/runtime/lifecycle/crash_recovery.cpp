@@ -357,11 +357,9 @@ VOID WINAPI ExitProcessHook(UINT uExitCode) {
 // mutex — the dump becomes the hang.
 //
 // This is NOT the "no printf, use the structured logger" case the CPP addendum
-// forbids. The addendum's own Flight Recorder section prescribes exactly this
-// mechanism for the crash path ("a dump handler writes the buffer to disk via
-// WriteFile/MapViewOfFile") and requires the logger be "safe to call from DllMain
-// (no heap, no synchronization primitives)" — which Log() is not and this is.
-// Output stays structured key=value; only the transport changes.
+// forbids: the crash path needs a writer that takes no heap and no lock, which
+// Log() is not and a raw WriteFile is. Output stays structured key=value; only
+// the transport changes.
 //
 // vsnprintf into a fixed stack buffer is the standard crash-handler primitive: for
 // the %s/%d/%u/%llX conversions used here MinGW's implementation performs no

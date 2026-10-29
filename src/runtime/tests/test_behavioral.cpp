@@ -3519,6 +3519,8 @@ class RemoteService {
 class GameSocket {
  public:
   ~GameSocket() { socket_.stop(); }
+  // Closes the socket from the game's side, as a game that quits would.
+  void Disconnect() { socket_.stop(); }
   bool Connect(uint16_t bridgePort, const std::string& target) {
     socket_.setUrl("ws://127.0.0.1:" + std::to_string(bridgePort) + target);
     socket_.disableAutomaticReconnection();
@@ -3814,6 +3816,100 @@ TEST_F(RolesByPathTest, SocketsWithoutATargetKeepTheConnectOrder) {
   EXPECT_NE(AdmittedLine(0).find("(conn=0, config"), std::string::npos) << AdmittedLine(0);
   EXPECT_NE(AdmittedLine(1).find("(conn=1, login"), std::string::npos) << AdmittedLine(1);
   EXPECT_TRUE(second.WaitForFrames(1));
+}
+
+// ============================================================================
+// Shared-route lifetime: the target a shared login frame is routed to must still be alive when the frame is sent.
+// The seam runs on the remote's thread between SharedRouteLocked and sendBinary; the test holds it there and lets
+// the game socket close first.
+// ============================================================================
+
+namespace {
+
+constexpr auto kSeamPoll = std::chrono::milliseconds(10);
+constexpr int kSeamPolls = 200;  // 2 seconds of bounded polling for the target to expire
+constexpr auto kSeamHeld = std::chrono::seconds(5);  // the longest the seam waits to be released
+constexpr auto kSeamReady = std::chrono::seconds(10);  // the longest the test waits for the seam or its result
+
+std::weak_ptr<void> g_weak;
+std::promise<void> g_inSeam;
+std::future<void> g_inSeamFuture;
+std::promise<void> g_gameClosing;
+std::future<void> g_gameClosingFuture;
+std::promise<bool> g_expiredAtSend;
+std::future<bool> g_expiredAtSendFuture;
+
+void ResetSeamState() {
+  g_weak.reset();
+  g_inSeam = std::promise<void>();
+  g_inSeamFuture = g_inSeam.get_future();
+  g_gameClosing = std::promise<void>();
+  g_gameClosingFuture = g_gameClosing.get_future();
+  g_expiredAtSend = std::promise<bool>();
+  g_expiredAtSendFuture = g_expiredAtSend.get_future();
+}
+
+void Seam(void*) {
+  g_inSeam.set_value();
+  g_gameClosingFuture.wait_for(kSeamHeld);  // bounded: a test that fails before releasing does not hang the remote
+  for (int poll = 0; poll < kSeamPolls && !g_weak.expired(); ++poll) std::this_thread::sleep_for(kSeamPoll);
+  g_expiredAtSend.set_value(g_weak.expired());
+}
+
+// Clears the seam on every exit path, including a failed ASSERT.
+struct SeamGuard {
+  ~SeamGuard() { TestHook_SharedRoute_SetBeforeSend(nullptr); }
+};
+
+class SharedRouteLifetimeTest : public RolesByPathTest {
+ protected:
+  void SetUp() override {
+    ResetSeamState();
+    RolesByPathTest::SetUp();
+  }
+};
+
+}  // namespace
+
+TEST_F(SharedRouteLifetimeTest, TargetIsStillAliveAtTheSend) {
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForFrames(1)) << "the /login socket never received the reply to the LoginRequest";
+  g_weak = TestHook_FirstServiceClientWeak();
+  ASSERT_FALSE(g_weak.expired()) << "the login game socket is not on the service listener";
+
+  SeamGuard guard;
+  TestHook_SharedRoute_SetBeforeSend(&Seam);
+  remote_.PushToClients(nevr_evr_codec::kSymLoginSettings);
+  ASSERT_EQ(g_inSeamFuture.wait_for(kSeamReady), std::future_status::ready)
+      << "the shared-route send never reached the seam";
+
+  login.Disconnect();
+  g_gameClosing.set_value();
+  ASSERT_EQ(g_expiredAtSendFuture.wait_for(kSeamReady), std::future_status::ready) << "the seam never reported";
+  const bool expired = g_expiredAtSendFuture.get();
+  TestHook_SharedRoute_SetBeforeSend(nullptr);
+  EXPECT_FALSE(expired) << "target was freed between SharedRouteLocked and sendBinary";
+}
+
+TEST_F(SharedRouteLifetimeTest, HeldTargetIsNotExpiredAtTheSend) {
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForFrames(1)) << "the /login socket never received the reply to the LoginRequest";
+  g_weak = TestHook_FirstServiceClientWeak();
+  ASSERT_FALSE(g_weak.expired()) << "the login game socket is not on the service listener";
+
+  SeamGuard guard;
+  TestHook_SharedRoute_SetBeforeSend(&Seam);
+  remote_.PushToClients(nevr_evr_codec::kSymLoginSettings);
+  ASSERT_EQ(g_inSeamFuture.wait_for(kSeamReady), std::future_status::ready)
+      << "the shared-route send never reached the seam";
+
+  g_gameClosing.set_value();  // release the seam without closing the login socket
+  ASSERT_EQ(g_expiredAtSendFuture.wait_for(kSeamReady), std::future_status::ready) << "the seam never reported";
+  const bool expired = g_expiredAtSendFuture.get();
+  TestHook_SharedRoute_SetBeforeSend(nullptr);
+  EXPECT_FALSE(expired) << "a held target expired before the send";
 }
 
 // ============================================================================
