@@ -2,7 +2,7 @@
 
 // #1423: a dedicated server adds AI bots to its sessions (network.bots_per_session, flat key nevr_bots_per_session).
 //
-// heisthecat31's EchoRelay (d2d1a86) adds them through the game's own add-bot request; this is the same route, read
+// heisthecat31's EchoRelay adds them through the game's own add-bot request; this is the same route, read
 // again in our disassembly of the pinned echovr.exe:
 // - The request is RequestAddBot (0x1401A0D70). Its one caller is R15NetSpawnBotNode (0x140DE4CC0, by its
 //   "R15NetSpawnBotNode used before getting in game" / "... while the lobby is full" / "RequestAddBot called more than
@@ -35,6 +35,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -193,12 +194,16 @@ inline Request BuildRequest(const uint8_t noPosition[kNoPositionSize]) {
 constexpr uint16_t kMaxEntrants = 16;
 constexpr uint64_t kRequestIntervalMs = 1000;
 constexpr uint64_t kNoBodyWarningIntervalMs = 60000;
+constexpr uint64_t kPendingWarningMs = 10000;
 
 struct Schedule {
   uint32_t added = 0;         // requests accepted in this session
   uint64_t nextAskMs = 0;     // no request before this
   uint64_t lastNoBodyMs = 0;  // the last "no free body" warning
   bool warnedNoBody = false;
+  bool pendingSeen = false;      // the pending flag is set, since pendingSinceMs
+  uint64_t pendingSinceMs = 0;
+  bool warnedPending = false;    // said once per stretch of the flag being set
 };
 
 enum class Gate {
@@ -234,6 +239,24 @@ inline bool NoBodyWarningDue(Schedule& s, uint64_t nowMs) {
   if (s.warnedNoBody && nowMs - s.lastNoBodyMs < kNoBodyWarningIntervalMs) return false;
   s.warnedNoBody = true;
   s.lastNoBodyMs = nowMs;
+  return true;
+}
+
+/// Whether a "the game has not answered" warning is due: once, when the pending flag has stayed set for
+/// kPendingWarningMs; a cleared flag starts the wait again.
+inline bool PendingWarningDue(Schedule& s, bool pending, uint64_t nowMs) {
+  if (!pending) {
+    s.pendingSeen = false;
+    s.warnedPending = false;
+    return false;
+  }
+  if (!s.pendingSeen) {
+    s.pendingSeen = true;
+    s.pendingSinceMs = nowMs;
+    return false;
+  }
+  if (s.warnedPending || nowMs - s.pendingSinceMs < kPendingWarningMs) return false;
+  s.warnedPending = true;
   return true;
 }
 
@@ -332,5 +355,142 @@ constexpr size_t kPoolOwnerEntriesOffset = 0x3E8;
 constexpr size_t kPoolEntrySize = 0x88;
 constexpr size_t kPoolEntryFreeOffset = 0x30;
 constexpr int32_t kNetGameInGame = 9;
+
+// ---- Reading the game's memory ------------------------------------------------------------------------------------
+
+template <typename T>
+T ReadAt(const void* base, size_t offset) {
+  T value{};
+  std::memcpy(&value, static_cast<const uint8_t*>(base) + offset, sizeof(value));
+  return value;
+}
+
+/// The three net game fields the schedule reads.
+struct NetGameView {
+  bool inGame = false;
+  uint16_t entrants = 0;
+  bool pending = false;
+};
+inline NetGameView ReadNetGame(const void* netGame) {
+  NetGameView v;
+  v.inGame = ReadAt<int32_t>(netGame, 0) == kNetGameInGame;
+  v.entrants = ReadAt<uint16_t>(netGame, kNetGameEntrantsOffset);
+  v.pending = ReadAt<int32_t>(netGame, kNetGamePendingOffset) != 0;
+  return v;
+}
+
+/// The free count of the pool entry FindPool named: entry (index & 0xFFFF) of the owner's entries, at +0x30.
+inline int64_t PoolEntryFree(const void* entries, uint64_t index) {
+  return ReadAt<int64_t>(entries, (index & 0xFFFF) * kPoolEntrySize + kPoolEntryFreeOffset);
+}
+
+/// Lobby::hostingFlags of the lobby AddBot is called on ([netGame+0x40] + 0x18).
+inline uint32_t* HostingFlags(uint8_t* lobbyHolder) {
+  return reinterpret_cast<uint32_t*>(lobbyHolder + kLobbyFromHolderOffset + kLobbyHostingFlagsOffset);
+}
+
+/// Runs `call` with the offline bit set and puts every bit back as it was after it.
+template <typename Call>
+bool WithOfflineBit(uint32_t* flags, Call call) {
+  const uint32_t saved = *flags;
+  *flags = saved | kHostingFlagOffline;
+  const bool result = call();
+  *flags = saved;
+  return result;
+}
+
+// ---- What is logged -----------------------------------------------------------------------------------------------
+
+struct Line {
+  bool warning = false;
+  std::string text;
+};
+
+inline std::string Hex(const uint8_t* bytes, size_t n) {
+  std::string s;
+  char two[3];
+  for (size_t i = 0; i < n; ++i) {
+    std::snprintf(two, sizeof(two), "%02x", bytes[i]);
+    s += two;
+  }
+  return s;
+}
+
+/// Install's decision without the process: `armed` is the count the driver runs with (0 is off), and the lines
+/// Install logs. `text` is the config value (null when absent); `base` is the game image, read only on a server
+/// with a count above 0.
+struct InstallResult {
+  uint32_t armed = 0;
+  std::vector<Line> lines;
+};
+inline InstallResult InstallLines(bool isServer, const char* text, const uint8_t* base) {
+  InstallResult out;
+  if (!isServer) {
+    out.lines.push_back({false, "[NEVR.GAMESERVER] server bots not applied: this is a client (the server adds bots)"});
+    return out;
+  }
+  std::string problem;
+  const uint32_t wanted = ParseBotsPerSession(text, &problem);
+  if (!problem.empty()) {
+    out.lines.push_back({true, "[NEVR.GAMESERVER] network.bots_per_session=" + std::string(text) + " is " + problem +
+                                   " (allowed 0.." + std::to_string(kMaxBots) + "); no bots"});
+  }
+  if (wanted == 0) {
+    out.lines.push_back({false, std::string("[NEVR.GAMESERVER] server bots off bots_per_session=0 source=") +
+                                    (text != nullptr && text[0] != '\0' ? "config.yaml" : "default")});
+    return out;
+  }
+  const size_t bad = FirstMismatch(base);
+  if (bad != kWitnessCount) {
+    const Witness& w = kWitnesses[bad];
+    char va[24];
+    std::snprintf(va, sizeof(va), "0x%llx", static_cast<unsigned long long>(0x140000000ULL + w.rva));
+    out.lines.push_back({true, "[NEVR.GAMESERVER] server bots off bots_per_session=" + std::to_string(wanted) +
+                                   ": the game's " + w.name + " at " + va +
+                                   " is not the build this was read from expected=" + Hex(w.bytes, w.size) +
+                                   " actual=" + Hex(base + w.rva, w.size)});
+    return out;
+  }
+  out.armed = wanted;
+  out.lines.push_back({false, "[NEVR.GAMESERVER] server bots armed bots_per_session=" + std::to_string(wanted) +
+                                  " sites=" + std::to_string(kWitnessCount) + " (each in-game session gets up to " +
+                                  std::to_string(wanted) + " AI bots, one a second)"});
+  return out;
+}
+
+inline std::string PoolText(const BodyPool& p) { return p.found ? std::to_string(p.free) : std::string("none"); }
+
+inline Line NoBodyLine(const std::string& session, uint32_t added, uint32_t wanted, uint16_t entrants,
+                       const BodyPool body[2]) {
+  return {true, "[NEVR.GAMESERVER] server bots: no free bot body in this level session=" + session +
+                    " added=" + std::to_string(added) + " wanted=" + std::to_string(wanted) +
+                    " entrants=" + std::to_string(entrants) + " bot_arena_pool=" + PoolText(body[0]) +
+                    " bot_combat_pool=" + PoolText(body[1]) + " (no more bots this session until one frees)"};
+}
+
+inline Line PendingLine(const std::string& session, uint32_t added, uint32_t wanted) {
+  return {true, "[NEVR.GAMESERVER] server bots: the game has not answered the last bot request for " +
+                    std::to_string(kPendingWarningMs / 1000) + " s session=" + session + " added=" +
+                    std::to_string(added) + " wanted=" + std::to_string(wanted) +
+                    " (no more bots this session until it does)"};
+}
+
+inline Line RequestLine(bool accepted, const std::string& session, uint32_t added, uint32_t wanted,
+                        uint16_t entrants) {
+  return {!accepted, std::string("[NEVR.GAMESERVER] server bot ") +
+                         (accepted ? "requested" : "request refused by the game") + " session=" + session +
+                         " n=" + std::to_string(added) + " of " + std::to_string(wanted) +
+                         " entrants=" + std::to_string(entrants)};
+}
+
+inline Line SettingsLine(const SettingsRewrite& r, const std::string& session, uint64_t frameBytes) {
+  return {IsSettingsFailure(r.result),
+          std::string("[NEVR.GAMESERVER] server bots session settings ") + SettingsResultName(r.result) +
+              " session=" + session + " numteams=" + (r.addedNumTeams ? std::to_string(kNumTeams) : "kept") +
+              " players_per_team=" + (r.addedPlayersPerTeam ? std::to_string(kPlayersPerTeam) : "kept") +
+              " settings_bytes=" + std::to_string(r.settingsBytes) + " rewritten_bytes=" +
+              std::to_string(r.rewrittenBytes) + " frame_bytes=" + std::to_string(frameBytes) +
+              (IsSettingsFailure(r.result) ? " (forwarded as it came; bot team placement may fail)" : "")};
+}
 
 }  // namespace nevr_server_bots

@@ -1,5 +1,6 @@
 // #1423: AI bots on a dedicated server (patch/server_bots.h): the config value, the session settings rewrite, the
-// request, the schedule, the body check and the site witnesses. Pure: no game image.
+// request, the schedule, the body check, the reads of the game's memory (on buffers), Install's decision, the log
+// lines and the site witnesses. Pure: no game image.
 
 #include "runtime/patch/server_bots.h"
 #include "runtime/patch/server_bots_install.h"
@@ -239,6 +240,18 @@ TEST(ServerBotsSchedule, LeavingTheGameStartsTheCountAgain) {
   EXPECT_EQ(Decide(s, 1, true, 4, false, 4001), Gate::kAsk) << "the next session gets its bot at once";
 }
 
+TEST(ServerBotsSchedule, TheGameNotAnsweringIsSaidOnceAfterTenSeconds) {
+  Schedule s;
+  EXPECT_FALSE(PendingWarningDue(s, true, 1000)) << "the flag was just seen";
+  EXPECT_FALSE(PendingWarningDue(s, true, 10999));
+  EXPECT_TRUE(PendingWarningDue(s, true, 11000));
+  EXPECT_FALSE(PendingWarningDue(s, true, 40000)) << "once per stretch";
+  EXPECT_FALSE(PendingWarningDue(s, false, 40001)) << "the game answered";
+  EXPECT_FALSE(PendingWarningDue(s, true, 40002));
+  EXPECT_FALSE(PendingWarningDue(s, true, 50001)) << "a new stretch waits its own ten seconds";
+  EXPECT_TRUE(PendingWarningDue(s, true, 50002));
+}
+
 TEST(ServerBotsSchedule, TheNoBodyWarningIsOnceAMinute) {
   Schedule s;
   EXPECT_TRUE(NoBodyWarningDue(s, 1000));
@@ -289,6 +302,164 @@ TEST(ServerBotsBodies, EveryPoolTheLevelHasNeedsAFreeBody) {
     const BodyPool p[2] = {none, none};
     EXPECT_FALSE(BodyFree(p, 2)) << "a level with no bot bodies takes no bots";
   }
+}
+
+// --- the game's memory, on buffers laid out as the game lays it out ----------------------------------------------
+
+template <typename T>
+void Put(std::vector<uint8_t>& buf, size_t offset, T value) {
+  std::memcpy(buf.data() + offset, &value, sizeof(value));
+}
+
+TEST(ServerBotsMemory, TheNetGameFieldsAreReadAtTheirOffsets) {
+  std::vector<uint8_t> netGame(0x2800, 0xEE);
+  Put<int32_t>(netGame, 0, 9);
+  Put<uint16_t>(netGame, 0xE2, 7);
+  Put<int32_t>(netGame, 0x27D8, 1);
+  NetGameView v = ReadNetGame(netGame.data());
+  EXPECT_TRUE(v.inGame);
+  EXPECT_EQ(v.entrants, 7u) << "two bytes, not the 0xEE after them";
+  EXPECT_TRUE(v.pending);
+  Put<int32_t>(netGame, 0, 8);
+  Put<int32_t>(netGame, 0x27D8, 0);
+  v = ReadNetGame(netGame.data());
+  EXPECT_FALSE(v.inGame) << "state 8 is not in game";
+  EXPECT_FALSE(v.pending);
+  Put<int32_t>(netGame, 0, 0x109);
+  EXPECT_FALSE(ReadNetGame(netGame.data()).inGame) << "the whole word is the state";
+}
+
+TEST(ServerBotsMemory, APoolsFreeCountIsItsEntrysAtPlus0x30) {
+  std::vector<uint8_t> entries(3 * 0x88, 0xEE);
+  Put<int64_t>(entries, 0 * 0x88 + 0x30, -1);
+  Put<int64_t>(entries, 2 * 0x88 + 0x30, 5);
+  EXPECT_EQ(PoolEntryFree(entries.data(), 2), 5);
+  EXPECT_EQ(PoolEntryFree(entries.data(), 0), -1);
+  EXPECT_EQ(PoolEntryFree(entries.data(), 0xABCD0002), 5) << "FindPool's index is the low 16 bits";
+}
+
+TEST(ServerBotsMemory, TheHostingFlagsAreTheLobbysAt0x18Plus0x1C) {
+  std::vector<uint8_t> holder(0x40, 0);
+  EXPECT_EQ(reinterpret_cast<uint8_t*>(HostingFlags(holder.data())), holder.data() + 0x34);
+}
+
+TEST(ServerBotsMemory, TheOfflineBitIsSetForTheCallAndEveryBitPutBack) {
+  for (const uint32_t before : {0x0u, 0x6u, 0x7u, 0xFFFFFFFEu, 0x80000000u}) {
+    uint32_t flags = before;
+    uint32_t seen = 0;
+    const bool result = WithOfflineBit(&flags, [&] {
+      seen = flags;
+      flags ^= 0x100;  // what the call does to the flags is overwritten: the flags are as they were before it
+      return before % 2 == 0;
+    });
+    EXPECT_EQ(seen, before | 1u) << before;
+    EXPECT_EQ(flags, before) << before;
+    EXPECT_EQ(result, before % 2 == 0) << "the call's answer is returned";
+  }
+}
+
+// --- Install's decision and the lines it logs -------------------------------------------------------------------
+
+TEST(ServerBotsInstall, AClientLogsOneInfoSkipLineAndReadsNothing) {
+  const InstallResult r = InstallLines(false, "4", nullptr);
+  EXPECT_EQ(r.armed, 0u);
+  ASSERT_EQ(r.lines.size(), 1u);
+  EXPECT_FALSE(r.lines[0].warning);
+  EXPECT_EQ(r.lines[0].text, "[NEVR.GAMESERVER] server bots not applied: this is a client (the server adds bots)");
+}
+
+TEST(ServerBotsInstall, NoValueOrZeroIsOffWithItsSourceAndReadsNoImage) {
+  for (const char* text : {static_cast<const char*>(nullptr), "", "0"}) {
+    const InstallResult r = InstallLines(true, text, nullptr);
+    EXPECT_EQ(r.armed, 0u);
+    ASSERT_EQ(r.lines.size(), 1u);
+    EXPECT_FALSE(r.lines[0].warning);
+    EXPECT_EQ(r.lines[0].text, std::string("[NEVR.GAMESERVER] server bots off bots_per_session=0 source=") +
+                                   (text != nullptr && text[0] != '\0' ? "config.yaml" : "default"));
+  }
+}
+
+TEST(ServerBotsInstall, ABadValueIsAWarningThenOff) {
+  const InstallResult r = InstallLines(true, "17", nullptr);
+  EXPECT_EQ(r.armed, 0u);
+  ASSERT_EQ(r.lines.size(), 2u);
+  EXPECT_TRUE(r.lines[0].warning);
+  EXPECT_EQ(r.lines[0].text,
+            "[NEVR.GAMESERVER] network.bots_per_session=17 is above the limit of 16 (allowed 0..16); no bots");
+  EXPECT_FALSE(r.lines[1].warning);
+  EXPECT_EQ(r.lines[1].text, "[NEVR.GAMESERVER] server bots off bots_per_session=0 source=config.yaml");
+}
+
+std::vector<uint8_t> ImageWithWitnesses();
+
+TEST(ServerBotsInstall, AllSitesHoldingArmsTheCount) {
+  const std::vector<uint8_t> image = ImageWithWitnesses();
+  const InstallResult r = InstallLines(true, "3", image.data());
+  EXPECT_EQ(r.armed, 3u);
+  ASSERT_EQ(r.lines.size(), 1u);
+  EXPECT_FALSE(r.lines[0].warning);
+  EXPECT_EQ(r.lines[0].text,
+            "[NEVR.GAMESERVER] server bots armed bots_per_session=3 sites=7 (each in-game session gets up to 3 AI "
+            "bots, one a second)");
+}
+
+TEST(ServerBotsInstall, ASiteThatDiffersIsAWarningWithItsBytesAndLeavesTheDriverOff) {
+  std::vector<uint8_t> image = ImageWithWitnesses();
+  image[0x611096 + 6] = 0x02;  // AddBot offline test: test al, 2
+  const InstallResult r = InstallLines(true, "3", image.data());
+  EXPECT_EQ(r.armed, 0u);
+  ASSERT_EQ(r.lines.size(), 1u);
+  EXPECT_TRUE(r.lines[0].warning);
+  EXPECT_EQ(r.lines[0].text,
+            "[NEVR.GAMESERVER] server bots off bots_per_session=3: the game's AddBot offline test at 0x140611096 is "
+            "not the build this was read from expected=8b471cf7d0a801 actual=8b471cf7d0a802");
+}
+
+TEST(ServerBotsLines, NoFreeBodyNamesEachPool) {
+  const BodyPool body[2] = {{true, 0}, {}};
+  const Line l = NoBodyLine("AAAA", 2, 4, 6, body);
+  EXPECT_TRUE(l.warning);
+  EXPECT_EQ(l.text,
+            "[NEVR.GAMESERVER] server bots: no free bot body in this level session=AAAA added=2 wanted=4 entrants=6 "
+            "bot_arena_pool=0 bot_combat_pool=none (no more bots this session until one frees)");
+}
+
+TEST(ServerBotsLines, TheGameNotAnsweringIsAWarning) {
+  const Line l = PendingLine("AAAA", 1, 4);
+  EXPECT_TRUE(l.warning);
+  EXPECT_EQ(l.text,
+            "[NEVR.GAMESERVER] server bots: the game has not answered the last bot request for 10 s session=AAAA "
+            "added=1 wanted=4 (no more bots this session until it does)");
+}
+
+TEST(ServerBotsLines, ARequestIsInfoAndARefusalAWarning) {
+  const Line ok = RequestLine(true, "AAAA", 2, 4, 6);
+  EXPECT_FALSE(ok.warning);
+  EXPECT_EQ(ok.text, "[NEVR.GAMESERVER] server bot requested session=AAAA n=2 of 4 entrants=6");
+  const Line refused = RequestLine(false, "AAAA", 1, 4, 6);
+  EXPECT_TRUE(refused.warning);
+  EXPECT_EQ(refused.text, "[NEVR.GAMESERVER] server bot request refused by the game session=AAAA n=1 of 4 entrants=6");
+}
+
+TEST(ServerBotsLines, TheSettingsResultIsInfoAndAFailureAWarning) {
+  SettingsRewrite r;
+  r.result = SettingsResult::kRewritten;
+  r.addedNumTeams = true;
+  r.settingsBytes = 50;
+  r.rewrittenBytes = 85;
+  Line l = SettingsLine(r, "AAAA", 171);
+  EXPECT_FALSE(l.warning);
+  EXPECT_EQ(l.text,
+            "[NEVR.GAMESERVER] server bots session settings rewritten session=AAAA numteams=2 players_per_team=kept "
+            "settings_bytes=50 rewritten_bytes=85 frame_bytes=171");
+  r = SettingsRewrite{};
+  r.result = SettingsResult::kNotJson;
+  r.addedPlayersPerTeam = true;
+  l = SettingsLine(r, "AAAA", 40);
+  EXPECT_TRUE(l.warning);
+  EXPECT_EQ(l.text,
+            "[NEVR.GAMESERVER] server bots session settings not_json session=AAAA numteams=kept players_per_team=5 "
+            "settings_bytes=0 rewritten_bytes=0 frame_bytes=40 (forwarded as it came; bot team placement may fail)");
 }
 
 // --- the sites ---------------------------------------------------------------------------------------------------

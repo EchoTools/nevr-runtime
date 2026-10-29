@@ -1,10 +1,10 @@
-"""#1423: AI bots on a dedicated server are wired once. The pure logic is tested by
-src/runtime/tests/test_server_bots.cpp and the sites' bytes against the game by tests/system/mode_patches_test.go
-(TestServerBotsSites); these are source sensors for what neither can see: the one Install call in boot.cpp, the one
-OnFrame call in the per-frame dispatcher (a server, the game-loop thread), the one session-start rewrite before the
-forward to the game, the client's skip line, the config key, the witness check before arming, the offline bit put back
-after the call, and the three addresses. Each check takes the text it reads, so a test can hand it a broken copy and
-see it fail."""
+"""#1423: AI bots on a dedicated server are wired once. The decisions, the reads of the game's memory, the offline bit
+and every log line are tested by src/runtime/tests/test_server_bots.cpp and the sites' bytes against the game by
+tests/system/mode_patches_test.go (TestServerBotsSites); these are source sensors for what neither can see: the one
+Install call in boot.cpp, the one OnFrame call in the per-frame dispatcher (a server, the game-loop thread), the one
+session-start rewrite before the forward to the game, that server_bots.cpp calls those tested pieces and logs what they
+give, and the three addresses. Each check takes the text it reads, so a test can hand it a broken copy and see it
+fail."""
 from __future__ import annotations
 
 import re
@@ -44,16 +44,25 @@ def depth_in(code: str, function: str, at: int) -> int | None:
     return depth
 
 
+MODE_RETURN = re.compile(r"if\s*\(\s*!?\s*g_isServer\b[^)]*\)\s*(?:\{[^{}]*?)?\breturn\b")
+
+
 def boot_problems(boot: str) -> list[str]:
-    """One call, in RunDeferredRuntimeBootstrap, outside any `if`, so both modes reach it and a client logs."""
+    """One call, in RunDeferredRuntimeBootstrap, outside any `if`, with no return on the mode before it, so both
+    modes reach it and a client logs."""
     code = strip_comments(boot)
     if code.count(INSTALL_CALL) != 1:
         return [f"expected exactly one `{INSTALL_CALL}` in boot.cpp, found {code.count(INSTALL_CALL)}"]
-    depth = depth_in(code, "void RunDeferredRuntimeBootstrap(", code.index(INSTALL_CALL))
+    at = code.index(INSTALL_CALL)
+    depth = depth_in(code, "void RunDeferredRuntimeBootstrap(", at)
     if depth is None:
         return ["the Install call is not in RunDeferredRuntimeBootstrap"]
     if depth != 1:
         return [f"the Install call is nested {depth - 1} blocks deep; a client would not log its skip line"]
+    if not code[:at].rstrip().endswith((";", "{", "}")):
+        return ["the Install call is the body of an `if` or a loop without braces"]
+    if MODE_RETURN.search(code[code.find("void RunDeferredRuntimeBootstrap("):at]):
+        return ["RunDeferredRuntimeBootstrap returns on the mode before the Install call"]
     return []
 
 
@@ -85,32 +94,40 @@ def callbacks_problems(callbacks: str) -> list[str]:
     return []
 
 
+DRIVER_NEEDS = [
+    (r'text\s*=\s*isServer\s*\?\s*NevrCfgGetFlat\("nevr_bots_per_session"\)\s*:\s*nullptr\s*;',
+     "the count is not read from nevr_bots_per_session on a server only"),
+    (r"InstallLines\(\s*isServer\s*,\s*text\s*,", "Install does not decide through InstallLines"),
+    (r"g_armed\.store\(\s*r\.armed\b", "the driver is not armed with InstallLines' count"),
+    (r"for\s*\(\s*const\s+Line&\s+line\s*:\s*r\.lines\s*\)\s*LogLine\(\s*line\s*\)\s*;",
+     "Install does not log every line InstallLines gives"),
+    (r"line\.warning\s*\?\s*EchoVR::LogLevel::Warning\s*:\s*EchoVR::LogLevel::Info",
+     "a warning line is not logged at Warning"),
+    (r"ReadNetGame\(\s*netGame\s*\)", "the net game is not read through ReadNetGame"),
+    (r"PendingWarningDue\(\s*g_schedule\s*,\s*gate\s*==\s*Gate::kPending\s*,\s*now\s*\)\s*\)\s*\{\s*"
+     r"LogLine\(\s*PendingLine\(", "a request the game does not answer is not said"),
+    (r"PoolEntryFree\(\s*entries\s*,\s*index\s*\)", "a pool's free count is not read through PoolEntryFree"),
+    (r"LogLine\(\s*NoBodyLine\(", "no free body is not said"),
+    (r"WithOfflineBit\(\s*HostingFlags\(\s*lobby\s*\)\s*,\s*\[&\]\s*\{\s*return\s+"
+     r"requestAddBot\(\s*netGame\s*,\s*request\.bytes\s*\)\s*!=\s*0\s*;\s*\}\s*\)",
+     "the offline bit is not set around the RequestAddBot call and put back after it"),
+    (r"LogLine\(\s*RequestLine\(\s*accepted\b", "the request's answer is not said"),
+    (r"LogLine\(\s*SettingsLine\(", "the session-settings result is not said"),
+]
+
+
 def driver_problems(driver: str) -> list[str]:
+    """server_bots.cpp only: the pure decisions are in server_bots.h and its GTests; this is what calls them."""
     code = strip_comments(driver)
-    problems = []
-    skip = re.search(r"if\s*\(\s*!isServer\s*\)\s*\{(.*?)\breturn;\s*\}", code, flags=re.S)
-    if not skip or "[NEVR.GAMESERVER] server bots not applied: this is a client" not in skip.group(1):
-        problems.append("a client does not log the skip line and return")
-    if 'NevrCfgGetFlat("nevr_bots_per_session")' not in code:
-        problems.append("the count is not read from nevr_bots_per_session")
-    check = re.search(r"FirstMismatch\(\s*base\s*\)", code)
-    arm = code.find("g_armed.store(wanted")
-    if not check or arm < 0 or check.start() > arm:
-        problems.append("the sites are not checked before the driver is armed")
-    elif not re.search(r"if\s*\(\s*bad\s*!=\s*kWitnessCount\s*\)\s*\{[^}]*?return;", code[check.start():arm], flags=re.S):
-        problems.append("a site mismatch does not leave the driver off")
+    problems = [why for pattern, why in DRIVER_NEEDS if not re.search(pattern, code)]
     for name in ("REQUEST_ADD_BOT", "FIND_POOL", "NO_SPAWN_POSITION"):
         if not re.search(rf"base\s*\+\s*nevr_patch_addresses::{name}\b", code):
             problems.append(f"{name} is not read from the game image")
     call = code.find("requestAddBot(netGame, request.bytes)")
-    set_bit = code.find("*hostingFlags = saved | kHostingFlagOffline;")
-    put_back = code.find("*hostingFlags = saved;")
-    if not (0 <= set_bit < call < put_back):
-        problems.append("the offline bit is not set around the RequestAddBot call and put back after it")
     if not re.search(r"BodyFree\(\s*body\s*,\s*2\s*\)", code) or code.find("BodyFree(") > call:
         problems.append("the body pools are not checked before the request")
-    if not re.search(r"IsSettingsFailure\(\s*r\.result\s*\)\s*\?\s*EchoVR::LogLevel::Warning\s*:\s*EchoVR::LogLevel::Info", code):
-        problems.append("a session start that cannot be read is not a Warning")
+    if re.search(r"\*\s*hostingFlags\s*=|kHostingFlagOffline", code):
+        problems.append("the driver writes the hosting flags itself, outside WithOfflineBit")
     return problems
 
 
@@ -142,6 +159,9 @@ class ServerBotsWiring(unittest.TestCase):
         self.assertTrue(boot_problems(boot.replace(INSTALL_CALL, INSTALL_CALL + "\n  " + INSTALL_CALL)))
         self.assertTrue(boot_problems(boot.replace(INSTALL_CALL, "if (g_isServer) { " + INSTALL_CALL + " }")))
         self.assertTrue(boot_problems(boot.replace(INSTALL_CALL, "// " + INSTALL_CALL)))
+        self.assertTrue(boot_problems(boot.replace(INSTALL_CALL, "if (g_isServer) " + INSTALL_CALL)))
+        self.assertTrue(boot_problems(boot.replace(INSTALL_CALL, "if (!g_isServer) return;\n  " + INSTALL_CALL)))
+        self.assertTrue(boot_problems(boot.replace(INSTALL_CALL, "if (!g_isServer) {\n    return;\n  }\n  " + INSTALL_CALL)))
 
     def test_an_ungated_or_moved_frame_call_is_found(self) -> None:
         tick = read(TICK)
@@ -160,14 +180,23 @@ class ServerBotsWiring(unittest.TestCase):
     def test_a_broken_driver_is_found(self) -> None:
         driver = read(DRIVER)
         breaks = [
-            ("this is a client", "this is a server"),
             ('"nevr_bots_per_session"', '"nevr_bots"'),
-            ("if (bad != kWitnessCount) {", "if (false) {"),
+            ("isServer ? NevrCfgGetFlat", "true ? NevrCfgGetFlat"),
+            ("InstallLines(isServer, text,", "InstallLines(true, text,"),
+            ("g_armed.store(r.armed,", "g_armed.store(1,"),
+            ("for (const Line& line : r.lines) LogLine(line);", "LogLine(r.lines[0]);"),
+            ("EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info", "EchoVR::LogLevel::Info : EchoVR::LogLevel::Info"),
+            ("ReadNetGame(netGame)", "NetGameView{}"),
+            ("gate == Gate::kPending", "false"),
+            ("LogLine(PendingLine(", "(void)(PendingLine("),
+            ("PoolEntryFree(entries, index)", "1"),
+            ("LogLine(NoBodyLine(", "(void)(NoBodyLine("),
             ("nevr_patch_addresses::NO_SPAWN_POSITION", "nevr_patch_addresses::FIND_POOL"),
-            ("*hostingFlags = saved;", "(void)saved;"),
+            ("WithOfflineBit(HostingFlags(lobby), [&] { return requestAddBot(netGame, request.bytes) != 0; })",
+             "requestAddBot(netGame, request.bytes) != 0"),
             ("if (!BodyFree(body, 2)) {", "if (false) {"),
-            ("EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,\n      \"[NEVR.GAMESERVER] server bots session",
-             "EchoVR::LogLevel::Info : EchoVR::LogLevel::Info,\n      \"[NEVR.GAMESERVER] server bots session"),
+            ("LogLine(RequestLine(accepted", "(void)(RequestLine(accepted"),
+            ("LogLine(SettingsLine(", "(void)(SettingsLine("),
         ]
         for old, new in breaks:
             with self.subTest(old=old):
