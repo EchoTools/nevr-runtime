@@ -184,6 +184,7 @@ struct RealCounterSteps final : Steps {
   bool StartReporter() override { return true; }
   bool AttachLibR15() override { return true; }
   bool InstallClockHook() override { return true; }
+  bool InstallFrameDispatch() override { return true; }
   bool InstallObbSkip(bool counted) override { return counted; }
   bool InstallProcessEnd() override { return true; }
   bool InstallPermissionWait() override { return true; }

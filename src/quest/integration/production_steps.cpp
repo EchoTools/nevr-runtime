@@ -468,6 +468,12 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
+  bool InstallFrameDispatch() override {
+    const bool ok = nevr_quest::integration::InstallFrameDispatchHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
   bool StartTokenAuth() override {
     const nevr_quest::ResolvedConfig& cfg = sentinel::ActiveConfig();
     StartInviteService(cfg);  // before the early return: the service's own line (off, or on) is logged on every start
