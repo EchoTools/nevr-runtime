@@ -31,16 +31,24 @@ using nevr_host::AttachStep;
 using nevr_host::BootstrapDiagnostics;
 using nevr_host::RuntimeRendezvous;
 
-std::wstring MakeTempDir() {
+// The directory name is built from a tick the caller passes, so a test can hold the tick fixed. A process-wide
+// sequence in the name keeps two calls made in one tick on two directories.
+std::wstring MakeTempDirWithTick(ULONGLONG tick) {
+  static LONG sequence = 0;
   wchar_t base[MAX_PATH] = {};
   EXPECT_GT(GetTempPathW(MAX_PATH, base), 0u);
+  const LONG n = InterlockedIncrement(&sequence);
   wchar_t dir[MAX_PATH] = {};
-  swprintf(dir, MAX_PATH, L"%ls\\nevr-rdv-%lu-%llu", base,
+  swprintf(dir, MAX_PATH, L"%ls\\nevr-rdv-%lu-%llu-%ld", base,
            static_cast<unsigned long>(GetCurrentProcessId()),
-           static_cast<unsigned long long>(GetTickCount64()));
-  EXPECT_NE(CreateDirectoryW(dir, nullptr), FALSE);
+           static_cast<unsigned long long>(tick), n);
+  const BOOL created = CreateDirectoryW(dir, nullptr);
+  const DWORD error = GetLastError();
+  EXPECT_NE(created, FALSE) << "CreateDirectoryW failed, GetLastError=" << error;
   return std::wstring(dir);
 }
+
+std::wstring MakeTempDir() { return MakeTempDirWithTick(GetTickCount64()); }
 
 std::string ReadAll(const std::wstring& path) {
   HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
@@ -83,6 +91,18 @@ class EmptyRuntimeFolder : public ::testing::Environment {
 const ::testing::Environment* const g_empty_runtime_folder = ::testing::AddGlobalTestEnvironment(new EmptyRuntimeFolder);
 
 }  // namespace
+
+// Directories made inside one GetTickCount64 tick must not share a name: three calls with one fixed tick,
+// the case two calls in the same tick produce.
+TEST(HostRendezvous, TempDirsMadeInOneTickAreDistinctAndAllCreated) {
+  const ULONGLONG tick = GetTickCount64();
+  std::vector<std::wstring> dirs;
+  for (int i = 0; i < 3; ++i) dirs.push_back(MakeTempDirWithTick(tick));
+  EXPECT_NE(dirs[0], dirs[1]);
+  EXPECT_NE(dirs[0], dirs[2]);
+  EXPECT_NE(dirs[1], dirs[2]);
+  for (const std::wstring& dir : dirs) RemoveDirectoryW(dir.c_str());
+}
 
 TEST(HostRendezvous, ThePinnedPrologueMatchesAndEveryChangedByteDoesNot) {
   const Target pinned;
