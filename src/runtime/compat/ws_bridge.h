@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 
 /// Set the remote wss:// URI that the proxy will connect to.
@@ -95,6 +96,11 @@ int   TestHook_SharedRouteConn();  // the conn frames from the shared login sess
 void  TestHook_N61_ResetState();
 bool  TestHook_N60_IsMutexFree();
 size_t TestHook_ConnectedGameSockets();  // game sockets the bridge's two listeners still hold
+void* TestHook_LoginGameWsPtr();
+// Shared-route test seam: fn (nullptr clears it) runs with the target socket just before the frame is sent to it.
+void TestHook_SharedRoute_SetBeforeSend(void (*fn)(void* target));
+// A weak handle on the first game socket the service listener holds (empty when none).
+std::weak_ptr<void> TestHook_FirstServiceClientWeak();
 // #708 S2b: the router's account gate and remote-open policy, for a test (production wires neither).
 // gate: -1 none (the account is always available), 0 awaiting, 1 ready, 2 refused. Read on every decision; call
 // TestHook_ReevaluateRouterGate after changing it to release or end a held session.

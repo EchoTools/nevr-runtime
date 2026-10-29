@@ -146,6 +146,8 @@ struct FakeSteps final : Steps {
     return Step("dlopen");
   }
   bool StartHwDump() override { return Step("hwdump"); }
+  bool InstallPnsProvider() override { return Step("pns_provider"); }
+  bool PnsProviderAllowed() override { return devBuild; }
   void Note(const char*, const char*, const char*) override {}
 
   static FakeSteps With(bool redirect, bool bridge, bool login, bool socialOn) {
@@ -190,16 +192,65 @@ void TestEverythingOffInstallsOnlyTheProofHookAndTheObbSkip() {
 void TestFullStackOrder() {
   FakeSteps s = FakeSteps::WithTexture(true, true, true, true);
   s.config.effective.hwdump = true;
+  s.config.effective.pnsradProvider = true;
   s.devBuild = true;
   s.plugins = {1, 1};
   const ConstructorReport r = RunConstructorSequence(s);
   const std::vector<std::string> want = {"arm",       "config",     "plugins_plan", "reg_clock",  "reg_redirect", "reg_dlopen",
                                          "reg_login", "reg_social", "reg_prompt", "reg_obb",      "reg_resource", "reg_texture", "reporter",
                                          "plugins_early", "clock",     "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards",       "token",      "prompt",       "bridge",
-                                         "redirect",  "social",     "dlopen",     "hwdump"};
+                                         "redirect",  "social",     "dlopen",     "hwdump",     "pns_provider"};
   QCHECK(s.calls == want);
   QCHECK(s.loginArg && s.mmArg && s.pluginsArg);
   for (int i = 0; i < static_cast<int>(StepId::kCount); ++i) QCHECK(r.steps[i].state == StepState::kOk);
+}
+
+// The rad provider (#1220): off by default, development builds only, and only with the login and the dlopen hook that
+// sends it; a failing or throwing install leaves every other step as it was.
+void TestPnsProviderGates() {
+  {  // the default: off, and the step says so
+    FakeSteps s = FakeSteps::WithTexture(true, true, true, true);
+    s.devBuild = true;
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(!s.Ran("pns_provider"));
+    QCHECK(r.at(StepId::kInstallPnsProvider).state == StepState::kSkipped);
+    QCHECK(std::strcmp(r.at(StepId::kInstallPnsProvider).reason, "pnsrad_provider_off") == 0);
+  }
+  {  // asked for in a release build: not installed, and the step says why
+    FakeSteps s = FakeSteps::WithTexture(true, true, true, true);
+    s.config.effective.pnsradProvider = true;
+    s.devBuild = false;
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(!s.Ran("pns_provider"));
+    QCHECK(r.at(StepId::kInstallPnsProvider).state == StepState::kSkipped);
+    QCHECK(std::strcmp(r.at(StepId::kInstallPnsProvider).reason, "release_build") == 0);
+  }
+  {  // asked for in a development build, with no login: not installed
+    FakeSteps s = FakeSteps::WithTexture(false, false, false, false);
+    s.config.effective.pnsradProvider = true;
+    s.devBuild = true;
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(!s.Ran("pns_provider"));
+    QCHECK(std::strcmp(r.at(StepId::kInstallPnsProvider).reason, "login_unavailable") == 0);
+  }
+  {  // asked for in a development build, with the login: installed, last
+    FakeSteps s = FakeSteps::WithTexture(true, true, true, true);
+    s.config.effective.pnsradProvider = true;
+    s.devBuild = true;
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(s.Ran("pns_provider"));
+    QCHECK(s.Index("dlopen") < s.Index("pns_provider"));
+    QCHECK(r.at(StepId::kInstallPnsProvider).state == StepState::kOk);
+  }
+  for (const char* mode : {"fail", "throw"}) {
+    FakeSteps s = FakeSteps::WithTexture(true, true, true, true);
+    s.config.effective.pnsradProvider = true;
+    s.devBuild = true;
+    if (std::strcmp(mode, "fail") == 0) s.failing = {"pns_provider"}; else s.throwing = {"pns_provider"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallPnsProvider).state != StepState::kOk);
+    QCHECK(s.Ran("dlopen") && s.Ran("social"));
+  }
 }
 
 // The hardware dump needs no other feature, and a failing or throwing dump step leaves every other step as
@@ -1746,6 +1797,7 @@ int main() {
   TestNormalEntriesEndWhenTheDlopenHookCannotBeLive();
   TestFullStackOrder();
   TestHwDumpIsIndependentAndContained();
+  TestPnsProviderGates();
   TestObbSkipIsUnconditionalIndependentAndContained();
   TestProcessEndIsUnconditionalIndependentAndContained();
   TestPermissionWaitIsUnconditionalIndependentAndContained();

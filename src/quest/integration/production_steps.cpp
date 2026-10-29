@@ -636,6 +636,9 @@ class ProductionSteps final : public Steps {
 
   bool StartHwDump() override { return nevr_quest::hwdump::StartHwDump(); }
 
+  bool InstallPnsProvider() override { return nevr_quest::integration::InstallPnsProviderHook(); }
+  bool PnsProviderAllowed() override { return nevr_quest::integration::PnsProviderEnabled(); }
+
   bool InstallDlopenHook(bool login, bool matchmaking, bool plugins) override {
     PostLoadActions actions;
     if (login) actions.login = &LoginAction;
