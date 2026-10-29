@@ -50,7 +50,6 @@ inline constexpr const char* kAndroidMainSymbol = "android_main";
 inline constexpr const char* kFindMethodSymbol = "_ZN10NRadEngine10CSysModule10FindMethodEmPKc";
 inline constexpr const char* kGetDeviceExtensionsVulkanSymbol = "vrapi_GetDeviceExtensionsVulkan";
 inline constexpr const char* kGetSystemPropertyIntSymbol = "vrapi_GetSystemPropertyInt";
-inline constexpr const char* kShowSystemUISymbol = "vrapi_ShowSystemUI";
 inline constexpr const char* kSetDisplayRefreshRateSymbol = "vrapi_SetDisplayRefreshRate";
 inline constexpr const char* kSetClockLevelsSymbol = "vrapi_SetClockLevels";
 inline constexpr const char* kSetPropertyIntSymbol = "vrapi_SetPropertyInt";
@@ -299,6 +298,18 @@ using LibR15CheckPermissionThunk = CallbackThunk<LibR15CheckPermissionTag, Check
 inline constexpr const char* kRequestPermissionsSymbol =
     "_ZN10NRadEngine8CSysInfo18RequestPermissionsENS_10CArrayViewIPKcLy0EEE";
 
+// NRadEngine::CVR::ShowSystemUI(), defined in libr15 at 0x1a73990 (exported; ReVault 0x1b73990): `mov w1, #1` and a tail
+// call of vrapi_ShowSystemUI(&java, 1). libr15 calls it through its own PLT (stub 0xf47880, JUMP_SLOT 0x36fb328) from
+// exactly one place, state 0 of CR15VRMenuWidgetCS::UpdateExclusive (bl at 0x1f99ca0), the menu's QUIT; state 1 of that
+// switch calls CR15Game::QuitToMain. No other library in the APK imports it (`readelf -rW` over all 483).
+inline constexpr const char* kShowSystemUISymbol = "_ZN10NRadEngine3CVR12ShowSystemUIEv";
+inline constexpr std::uint64_t kShowSystemUIVaddr = 0x1a73990;
+inline constexpr std::uint64_t kShowSystemUIStub = 0xf47880;
+inline constexpr std::uint64_t kShowSystemUICallSite = 0x1f99ca0;  // CR15VRMenuWidgetCS::UpdateExclusive, state 0
+using ShowSystemUISig = void();
+struct LibR15ShowSystemUITag {};
+using LibR15ShowSystemUIThunk = CallbackThunk<LibR15ShowSystemUITag, ShowSystemUISig>;
+
 // NRadEngine::CSysInfo::OSBuildVersion(unsigned long long&), defined in libr15 at 0xf875c4 (184 bytes, exported; ReVault
 // 0x10875c4): reads the system property ro.build.version.incremental, and when it is at most 20 characters of decimal
 // digits stores the number through its argument and returns 1; otherwise it returns 0 and stores nothing. The return is
@@ -526,6 +537,12 @@ inline GotTarget LibR15CheckPermission() {
   return {kLibR15, kCheckPermissionSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c37c8ULL};
 }
 
+// libr15.so's slot for CVR::ShowSystemUI, defined in libr15 itself (JUMP_SLOT 0x36fb328, `readelf -rW` on the pinned
+// image: `R_AARCH64_JUMP_SLOT 0x1a73990 _ZN10NRadEngine3CVR12ShowSystemUIEv`).
+inline GotTarget LibR15ShowSystemUI() {
+  return {kLibR15, kShowSystemUISymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36fb328ULL};
+}
+
 // libr15.so's slot for CSysInfo::OSBuildVersion, defined in libr15 itself (JUMP_SLOT 0x36ff9b8, `readelf -rW` on the
 // pinned image: `R_AARCH64_JUMP_SLOT 0xf875c4 _ZN10NRadEngine8CSysInfo14OSBuildVersionERy`).
 inline GotTarget LibR15OSBuildVersion() {
@@ -591,18 +608,6 @@ inline GotTarget LibR15GetDeviceExtensionsVulkan() {
 // value 0).
 inline GotTarget LibR15GetSystemPropertyInt() {
   return {kLibR15, kGetSystemPropertyIntSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36fa728ULL};
-}
-
-// VrApi.h: int vrapi_ShowSystemUI(const ovrJava* java, const ovrSystemUiType type). Called only from CVR::ShowSystemUI
-// (ReVault 0x1b73990; ReVault VA = pinned VA + 0x100000), which always passes type 1. The PLT thunk at ReVault 0xffb730
-// has one direct caller, 0x1b7399c (`revault_xrefs 0xffb730`). The JUMP_SLOT is ReVault 0x37d5280 (`revault_imports`),
-// pinned 0x36d5280. Pin unverified until `just test-quest-hooks-pinned` runs on the real libr15.
-using ShowSystemUISig = int(const OvrJavaOpaque* java, int type);
-struct LibR15ShowSystemUITag {};
-using LibR15ShowSystemUIThunk = CallbackThunk<LibR15ShowSystemUITag, ShowSystemUISig>;
-
-inline GotTarget LibR15ShowSystemUI() {
-  return {kLibR15, kShowSystemUISymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36d5280ULL};
 }
 
 // The five VrApi imports the render-configuration log reads (docs/adr/0022-render-config-log.md). Each is an imported JUMP_SLOT

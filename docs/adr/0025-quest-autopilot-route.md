@@ -40,7 +40,7 @@ What the tree and the binary give us (pinned `libr15.so`, build ID `b243509c08ce
   in the host. Its slice 2, a general GOT install for plugins, is not built.
 - **No code page is written at run time** (#1127, #1132: `avc: denied { execmod }` on current Horizon OS). A GOT slot is a
   data word: `.got` (0x36bf480) lies inside `PT_GNU_RELRO` (0x35f9eb0, size 0x132150). The sentinel already writes such
-  slots through `GotHook`, for example the `vrapi_ShowSystemUI` slot at 0x36d5280.
+  slots through `GotHook`, for example the `vrapi_GetSystemPropertyInt` slot at 0x36fa728.
 - **No hook owns the input slots.** `git grep` for `GetCurrentInputState`, `GetInputDeviceCapabilities`, `0x36ec0f0`
   and `0x36fc9c8` finds nothing.
 
