@@ -8,7 +8,7 @@
 #include <ctime>
 
 #include "core/logging.h"
-#include "nevr_common.h"
+#include "nevr/pc/nevr_common.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/hook/patching.h"
 #include "runtime/hook/process_memory.h"

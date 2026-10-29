@@ -3,9 +3,9 @@
 // CREATE GAME / JOIN VIA CODE wizard, as pure logic. What the wizard's click metric asks for, which request is sent
 // and which is not, the [NEVR.INVITE] line each step writes, and what the service's answer means.
 //
-// No game, no socket, no hook and no clock in here: the hooks that feed it a metric line and write its answer back
-// into the wizard are a later change (ADR 0017, "Order of work"), and src/runtime/tests/test_invite_wizard.cpp pins
-// everything below on the host.
+// No game, no socket, no hook and no clock in here: invite_wizard_hook.cpp feeds it a metric line, invite_worker.h posts
+// the request, and invite_answer_text.h / invite_answer_apply.cpp write the answer back into the wizard (ADR 0017, "Order
+// of work"). src/runtime/tests/test_invite_wizard.cpp pins everything below on the host.
 //
 // The metric field names follow the shape echovr-modkit (rad-links, MIT, by Dualgame) reports for the final PC build.
 // No packet has been captured, so they are an input assumption (ADR 0017, "Not shown").
@@ -359,16 +359,6 @@ inline std::string SentLine(const Plan& plan, std::string_view fingerprint) {
     return "[NEVR.INVITE] request sent op=create expires_s=" + std::to_string(plan.expires_s);
   }
   return "[NEVR.INVITE] request sent op=resolve code_len=" + std::to_string(plan.code_len) +
-         " code_fp=" + std::string(fingerprint);
-}
-
-// Until the worker that posts the request exists, a planned request is logged as planned, never as sent.
-inline std::string PlannedLine(const Plan& plan, std::string_view fingerprint) {
-  if (!plan.request.has_value()) return "";
-  if (plan.op == Op::Create) {
-    return "[NEVR.INVITE] request planned op=create expires_s=" + std::to_string(plan.expires_s);
-  }
-  return "[NEVR.INVITE] request planned op=resolve code_len=" + std::to_string(plan.code_len) +
          " code_fp=" + std::string(fingerprint);
 }
 

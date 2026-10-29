@@ -14,4 +14,8 @@ namespace nevr_social_party {
 
 constexpr int kSocialLevel = 1;
 
+// The level a login declares. A dedicated server is not a player and declares none (#1280), so the service
+// sends it none of the messages above.
+constexpr int DeclaredSocialLevel(bool isServer) { return isServer ? 0 : kSocialLevel; }
+
 }  // namespace nevr_social_party

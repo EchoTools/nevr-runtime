@@ -15,7 +15,7 @@
 #include <cstdint>
 #include <string>
 
-#include "extension/plugin_interface.h"
+#include "nevr/plugin_interface.h"
 
 namespace nevr_plugin_log {
 

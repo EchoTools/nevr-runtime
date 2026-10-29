@@ -18,7 +18,7 @@ namespace quest_social {
 
 enum class Direction : std::uint8_t { kServerToGame, kGameToServer };
 
-// CSymbol64 of the SNS names (abi/symbol_hash.h; social_frames_test recomputes them).
+// CSymbol64 of the SNS names (nevr/symbol_hash.h; social_frames_test recomputes them).
 inline constexpr std::uint64_t kSymFriendStatusNotify = 0x26a19dc4d2d5579dULL;  // SNSFriendStatusNotify
 inline constexpr std::uint64_t kSymFriendListResponse = 0xa78aeb2a4e89b10bULL;  // SNSFriendListResponse
 

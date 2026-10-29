@@ -1,10 +1,10 @@
-// #1094: plugins/common/include/level_gate.h, the plugin side of the per-level pattern.
+// #1094: sdk/include/nevr/level_gate.h, the plugin side of the per-level pattern.
 
 #include <gtest/gtest.h>
 
 #include <cstddef>
 
-#include "level_gate.h"
+#include "nevr/level_gate.h"
 
 namespace {
 

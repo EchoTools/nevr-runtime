@@ -31,6 +31,7 @@ inline constexpr FlagSpec kFlags[] = {
     {L"-offline", nullptr},
     {L"-windowed", nullptr},
     {L"-config", nullptr},
+    {L"-config-file", nullptr},
     {L"-config-path", nullptr},
     {L"-timestamps", nullptr},
     {L"-upnp", nullptr},

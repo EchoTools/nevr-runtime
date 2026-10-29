@@ -511,6 +511,12 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
+  bool InstallRenderConfig(const nevr_quest::TextureChoice& choice) override {
+    const bool ok = nevr_quest::integration::InstallRenderConfigHook(choice.level, choice.source == nevr_quest::Source::kFile);
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
   bool InstallCreditsText() override {
     LogCodeWriteSkipped("credits_text");
     detail_ = "skipped_waits_on_1132";

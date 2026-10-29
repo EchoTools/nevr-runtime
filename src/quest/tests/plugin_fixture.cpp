@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <cstring>
 
-#include "extension/plugin_interface.h"
+#include "nevr/plugin_interface.h"
 #include "quest/tests/plugin_fixture_seen.h"
 
 #ifndef FX_NAME

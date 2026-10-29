@@ -26,6 +26,9 @@ struct Item {
 struct Source {
   std::wstring dir;
   std::vector<Item> items;
+  // Whether a move out of `dir` leaves MOVED-TO-NEVR-ROOT.txt in it. The plugins folder is in the game folder, where
+  // nothing of ours is written, so its move says what it did in the log and leaves no file.
+  bool leaves_marker = true;
 };
 
 bool Exists(const std::wstring& path) { return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES; }
@@ -226,6 +229,17 @@ std::vector<Event> Run(const Inputs& inputs) {
     sources.push_back(std::move(cosmetics));
   }
 
+  {
+    // The plugins folder beside the game executable: its files (not its subfolders, which are not plugin files) go to the
+    // root's plugins\. It is in the game folder, so the move leaves no marker file there.
+    Source plugins{inputs.legacy_plugins_dir, {}, false};
+    const std::wstring to_dir = nevr_root::PluginsDir(inputs.root);
+    for (const std::wstring& name : FilesIn(inputs.legacy_plugins_dir, [](const std::wstring&) { return true; })) {
+      plugins.items.push_back({nevr_root::Join(inputs.legacy_plugins_dir, name.c_str()), nevr_root::Join(to_dir, name.c_str())});
+    }
+    sources.push_back(std::move(plugins));
+  }
+
   std::size_t pending = 0;
   for (const Source& source : sources) pending += source.items.size();
   if (pending == 0) return events;  // the common case after the first run: nothing to do, nothing created
@@ -264,7 +278,7 @@ std::vector<Event> Run(const Inputs& inputs) {
       events.push_back({Outcome::kMoved, item.from, item.to, 0});
       moved_any = true;
     }
-    if (moved_any) {
+    if (moved_any && source.leaves_marker) {
       std::wstring marker;
       unsigned long error = 0;
       if (WriteMarker(source.dir, inputs.root, &marker, &error)) {
@@ -298,6 +312,7 @@ Inputs InputsFromEnvironment() {
     if (slash != std::wstring::npos) {
       dir.resize(slash + 1);
       inputs.local_dirs = {dir + L"_local", dir + L"..\\_local", dir + L"..\\..\\_local"};
+      inputs.legacy_plugins_dir = dir + L"plugins";
     }
   }
   return inputs;

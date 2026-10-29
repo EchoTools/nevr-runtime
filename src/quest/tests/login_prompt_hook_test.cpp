@@ -21,7 +21,7 @@
 #include <thread>
 #include <vector>
 
-#include "abi/symbol_hash.h"
+#include "nevr/symbol_hash.h"
 #include "hook_log.h"
 #include "hook_report.h"
 #include "login_prompt_hook.h"

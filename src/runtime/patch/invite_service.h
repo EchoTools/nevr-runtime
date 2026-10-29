@@ -33,7 +33,11 @@ void Start(Settings settings);
 /// Hands a plan's request to the worker. Before Start, or with the feature off, nothing is sent and the worker's line says so.
 nevr_invite::Submit Submit(const nevr_invite::Plan& plan);
 
-/// The answers that have arrived; D2 applies them to the menu. Non-blocking.
+/// True while the service is on for this run: the feature is configured and the worker can send. The per-frame applier reads
+/// it first, so a run with the feature off costs one atomic load a frame.
+bool Active();
+
+/// The answers that have arrived; the menu applier (patch/invite_answer_apply.h) is the one reader. Non-blocking.
 std::vector<nevr_invite::Answer> TakeAnswers();
 /// As TakeAnswers, waiting up to `timeout` for the first (the host tests).
 std::vector<nevr_invite::Answer> WaitForAnswers(std::chrono::milliseconds timeout);

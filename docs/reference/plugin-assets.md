@@ -4,9 +4,9 @@ A plugin carries its own levels and resources inside its own DLL and registers t
 runtime hands the engine a pointer into the plugin's mapped image, so there is no extraction step, no sidecar
 file and no copy. One plugin, one file.
 
-This page is the contract for plugin authors. The declarations are in `src/extension/plugin_interface.h`
+This page is the contract for plugin authors. The declarations are in `sdk/include/nevr/plugin_interface.h`
 (`NEVR_PLUGIN_API_VERSION` 7, `NevrAssetStatus`, `NevrRegisterAsset_fn`, `NevrDeregisterAssets_fn`), and
-`plugins/common/include/plugin_assets.h` wraps the lookup.
+`sdk/include/nevr/pc/plugin_assets.h` wraps the lookup.
 
 ## The two exports
 
