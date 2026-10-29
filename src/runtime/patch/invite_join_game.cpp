@@ -17,6 +17,7 @@
 #include "nevr/pc/nevr_common.h"  // N97: the one ValidatePrologue
 #include "runtime/hook/addresses.h"
 #include "runtime/lifecycle/config.h"                 // g_pGame
+#include "runtime/lifecycle/cli.h"                    // g_isServer
 #include "runtime/lifecycle/crash_recovery.h"         // GameLoopThreadId
 #include "runtime/lifecycle/readable_memory.h"        // IsReadableMemory
 #include "runtime/lifecycle/return_to_lobby_queue.h"  // NetGameFromContext, ReadPointer
@@ -33,7 +34,10 @@ namespace nevr_invite_join_game {
 namespace {
 
 void Say(nevr_invite::LogLevel level, const std::string& line) {
-  Log(level == nevr_invite::LogLevel::Warning ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info, "%s", line.c_str());
+  EchoVR::LogLevel mapped = EchoVR::LogLevel::Info;
+  if (level == nevr_invite::LogLevel::Warning) mapped = EchoVR::LogLevel::Warning;
+  if (level == nevr_invite::LogLevel::Error) mapped = EchoVR::LogLevel::Error;
+  Log(mapped, "%s", line.c_str());
 }
 
 bool IsWritableProtection(DWORD protection) {
@@ -168,20 +172,47 @@ bool ProloguesValid() {
   return true;
 }
 
-bool StageLobby(const nevr_invite_join::LobbyBytes& lobby, std::uint16_t team) {
-  void* game = GameObject();
-  if (game == nullptr) return false;
-  GameObjectMemory memory(game);
-  return nevr_invite_join::StageAndVerify(memory, lobby, team);
-}
+// The game object and the prior bytes of the last verified stage, for the undo when the begin cannot run.
+void* g_stagedGame = nullptr;
+nevr_invite_join::PriorStage g_stagedPrior;
 
-void Begin() {
+bool IsServer() { return g_isServer != FALSE; }
+
+nevr_invite_join::StageOutcome StageLobby(const nevr_invite_join::LobbyBytes& lobby, std::uint16_t team) {
   void* game = GameObject();
   if (game == nullptr) {
-    Say(nevr_invite::LogLevel::Warning, "[NEVR.INVITE] join begin not called reason=no_game_object");
-    return;
+    nevr_invite_join::StageOutcome outcome;
+    outcome.step = nevr_invite_join::StageStep::Read;
+    outcome.field = nevr_invite_join::StageField::Lobby;
+    return outcome;
+  }
+  GameObjectMemory memory(game);
+  nevr_invite_join::StageOutcome outcome = nevr_invite_join::StageAndVerify(memory, lobby, team, Say);
+  if (outcome.ok()) {
+    g_stagedGame = game;
+    g_stagedPrior = outcome.prior;
+  }
+  return outcome;
+}
+
+// False when there is no game object to begin on; nothing is called then.
+bool Begin() {
+  void* game = GameObject();
+  if (game == nullptr) {
+    Say(nevr_invite::LogLevel::Warning, "[NEVR.INVITE] join begin not called, no game object after the stage");
+    return false;
   }
   EchoVR::BeginMultiplayerLobby(game);
+  return true;
+}
+
+// Puts the last stage back through the game object it was staged in, when that memory is still writable.
+bool Unstage() {
+  if (g_stagedGame == nullptr) return false;
+  GameObjectMemory memory(g_stagedGame);
+  const bool restored = nevr_invite_join::Unstage(memory, g_stagedPrior, Say);
+  g_stagedGame = nullptr;
+  return restored;
 }
 
 std::int64_t NowMs() {
@@ -191,8 +222,8 @@ std::int64_t NowMs() {
 
 // One join window for the run: it is the join's own state, so it lives with the one seam.
 nevr_invite_join::Joiner& TheJoiner() {
-  static nevr_invite_join::Joiner joiner(nevr_invite_join::Seam{OnGameThread, ProloguesValid, NetState, StageLobby, Begin,
-                                                                NowMs, Say});
+  static nevr_invite_join::Joiner joiner(nevr_invite_join::Seam{IsServer, OnGameThread, ProloguesValid, NetState,
+                                                                StageLobby, Begin, Unstage, NowMs, Say});
   return joiner;
 }
 
