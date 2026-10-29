@@ -61,6 +61,10 @@ using ResourceTransformFn = bool (*)(const void* original, uint64_t original_siz
 void RegisterResourceTransform(uint64_t type_hash, uint64_t name_hash, ResourceTransformFn transform, void* user,
                                const char* label);
 
+/// Reads an `_overrides/` file name: `0xTYPE.0xNAME` (the type names the buffer, as for RegisterResourceOverride) or
+/// `0xNAME` (type 0, buffer 0). True, with both hashes set, when the name is one of those with a non-zero name hash.
+bool ParseOverrideFileName(const char* file_name, uint64_t* type_hash, uint64_t* name_hash);
+
 /// Register a file-based override (loaded from disk, memory owned by the registry).
 void RegisterResourceOverrideFromFile(uint64_t type_hash, uint64_t name_hash,
                                       const char* file_path,

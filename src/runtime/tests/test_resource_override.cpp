@@ -353,6 +353,9 @@ TEST(ResourceOverride, DeregistrationGivesUpOnABlockedCallbackAndSaysSo) {
 
 // ── #703: overrides from the asset cache, and the label that outlives its caller ──────────────────────────────
 
+// These cache tests give the resource this key as its type at CResource + 0x28 and finish buffer 0: an entry equal to
+// the logical type names buffer 0 (resource_buffer_key.h), so they drive the cache path, not a texture's payload.
+// The payload path, with the real logical type, is TexturePayloads below.
 constexpr std::uint64_t kSplashType = 0xbeac1969cb7b8861ull;
 constexpr std::uint64_t kSplashName = 0x1f72c5e0fc9fc8c0ull;
 
@@ -1142,6 +1145,59 @@ TEST_F(TexturePayloads, APayloadOfTheGamesSizeWithNoDescriptorEntryIsWrittenWith
   GameFinishesBuffer(kTextureType, kPosterName, 1, gameBuffer, sizeof(gameBuffer));
   EXPECT_EQ(std::memcmp(gameBuffer, payload, sizeof(payload)), 0);
   EXPECT_FALSE(TestLogContains("payload smaller than"));
+}
+
+// _overrides/ (#1421 Work step 3): a file named for the buffer-1 type replaces the payload, and a file named the old
+// way (by name only) stays buffer 0. The scan in InstallResourceOverride reads each name with ParseOverrideFileName and
+// registers the file with RegisterResourceOverrideFromFile, as here.
+TEST_F(TexturePayloads, AnOverridesFileNamedForBufferOneReplacesThePayloadAndAnOldFormFileStaysBufferZero) {
+  std::uint64_t payloadType = 1, payloadName = 0, oldType = 1, oldName = 0, unused = 0;
+  ASSERT_TRUE(ParseOverrideFileName("0xbeac1969cb7b8861.0xa240a2bc051b2f23", &payloadType, &payloadName));
+  EXPECT_EQ(payloadType, kTexturePayloadKey);
+  EXPECT_EQ(payloadName, kPosterName);
+  ASSERT_TRUE(ParseOverrideFileName("0Xa240a2bc051b2f23", &oldType, &oldName));
+  EXPECT_EQ(oldType, 0u);
+  EXPECT_EQ(oldName, kPosterName);
+  std::uint64_t dottedType = 1, dottedName = 0;
+  ASSERT_TRUE(ParseOverrideFileName("0xa240a2bc051b2f23.dds", &dottedType, &dottedName));
+  EXPECT_EQ(dottedType, 0u);
+  EXPECT_EQ(dottedName, kPosterName);
+  for (const char* oldForm : {"0xa240a2bc051b2f23.0", "0xa240a2bc051b2f23.xx5"}) {
+    std::uint64_t t = 1, n = 0;
+    ASSERT_TRUE(ParseOverrideFileName(oldForm, &t, &n)) << oldForm;
+    EXPECT_EQ(t, 0u) << oldForm;
+    EXPECT_EQ(n, kPosterName) << oldForm;
+  }
+  EXPECT_FALSE(ParseOverrideFileName("poster.dds", &unused, &unused));
+  EXPECT_FALSE(ParseOverrideFileName("0x0", &unused, &unused));
+  EXPECT_FALSE(ParseOverrideFileName("0xbeac1969cb7b8861.0x0", &unused, &unused));
+
+  char tmp[MAX_PATH];
+  ASSERT_NE(GetTempPathA(MAX_PATH, tmp), 0u);
+  const std::string stem = std::string(tmp) + "nevr-overrides-" + std::to_string(GetCurrentProcessId());
+  const std::string payloadPath = stem + "-0xbeac1969cb7b8861.0xa240a2bc051b2f23";
+  const std::string oldPath = stem + "-0xa240a2bc051b2f23";
+  const std::vector<std::uint8_t> payload = Image(8, 3);
+  const std::vector<std::uint8_t> descriptor = Image(5, 11);
+  for (const auto& [path, bytes] : {std::pair{payloadPath, payload}, std::pair{oldPath, descriptor}}) {
+    FILE* f = std::fopen(path.c_str(), "wb");
+    ASSERT_NE(f, nullptr);
+    ASSERT_EQ(std::fwrite(bytes.data(), 1, bytes.size(), f), bytes.size());
+    std::fclose(f);
+  }
+  RegisterResourceOverrideFromFile(payloadType, payloadName, payloadPath.c_str(), "file_payload");
+  RegisterResourceOverrideFromFile(oldType, oldName, oldPath.c_str(), "file_old_form");
+  std::remove(payloadPath.c_str());
+  std::remove(oldPath.c_str());
+
+  std::vector<std::uint8_t> gameBuffer(8, 0);
+  GameFinishesBuffer(kTextureType, kPosterName, 1, gameBuffer.data(), gameBuffer.size());
+  EXPECT_EQ(gameBuffer, payload);
+  EXPECT_TRUE(TestLogContains("override applied label=file_payload buffer=1 "));
+  static const std::uint8_t stock[] = {9, 9, 9};
+  GameFinishesBuffer(kTextureType, kPosterName, 0, stock, sizeof(stock));
+  ExpectGameCopy(descriptor.data(), descriptor.size());
+  EXPECT_TRUE(TestLogContains("override applied label=file_old_form buffer=0 "));
 }
 
 TEST_F(TexturePayloads, TheCacheCapHoldsTheShippedPosterSet) {

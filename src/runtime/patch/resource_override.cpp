@@ -575,6 +575,23 @@ void RegisterResourceOverrideFromFile(uint64_t type_hash, uint64_t name_hash,
     RegisterResourceOverrideFromFileImpl(type_hash, name_hash, file_path, label);
 }
 
+bool ParseOverrideFileName(const char* file_name, uint64_t* type_hash, uint64_t* name_hash) {
+    uint64_t type_h = 0, name_h = 0;
+    if (file_name[0] == '0' && (file_name[1] == 'x' || file_name[1] == 'X')) {
+        const char* dot = strchr(file_name, '.');
+        if (dot && dot[1] == '0' && (dot[2] == 'x' || dot[2] == 'X')) {
+            type_h = strtoull(file_name + 2, nullptr, 16);
+            name_h = strtoull(dot + 3, nullptr, 16);
+        } else {
+            name_h = strtoull(file_name + 2, nullptr, 16);
+        }
+    }
+    if (name_h == 0) return false;
+    *type_hash = type_h;
+    *name_hash = name_h;
+    return true;
+}
+
 /* The EchoVRCE splash texture, unless the cache already supplies that resource. */
 static void RegisterBuiltInSplash() {
     if (HasOverrideFor(TYPE_DDS_TEXTURE, NAME_SPLASH_TEXTURE)) {
@@ -708,19 +725,8 @@ void InstallResourceOverride() {
             if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
             const char* name = fd.cFileName;
 
-            /* Parse "0xTYPE.0xNAME" or "0xNAME" filename format */
             uint64_t type_h = 0, name_h = 0;
-            if (name[0] == '0' && (name[1] == 'x' || name[1] == 'X')) {
-                const char* dot = strchr(name, '.');
-                if (dot && dot[1] == '0' && (dot[2] == 'x' || dot[2] == 'X')) {
-                    type_h = strtoull(name + 2, nullptr, 16);
-                    name_h = strtoull(dot + 3, nullptr, 16);
-                } else {
-                    name_h = strtoull(name + 2, nullptr, 16);
-                }
-            }
-
-            if (name_h == 0) continue;
+            if (!ParseOverrideFileName(name, &type_h, &name_h)) continue;
 
             char filePath[MAX_PATH];
             snprintf(filePath, sizeof(filePath), "%s\\%s", overrideDir, name);
