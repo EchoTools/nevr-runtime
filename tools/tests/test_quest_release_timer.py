@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Callable
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
@@ -434,18 +435,20 @@ class CheckoutGuard(TimerCase):
         fake = Fake(self.root)
         fake.dirty = " M tools/quest_release_timer.py\n"
         self.assertEqual(self.run_timer(fake), 1)
-        failed = [e for e in self.events() if e["event"] == "failed"]
-        self.assertEqual([e["step"] for e in failed], ["checkout"])
-        self.assertIn("not clean", failed[0]["error"])
+        refused = [e for e in self.events() if e["event"] == "refused"]
+        self.assertEqual([e["step"] for e in refused], ["checkout"])
+        self.assertIn("not clean", refused[0]["error"])
+        self.assertEqual([e for e in self.events() if e["event"] == "failed"], [])
         self.assertEqual({c["step"] for c in fake.calls}, {"checkout.fetch", "checkout.status"})
 
     def test_a_head_that_is_not_the_fetched_origin_main_is_refused(self) -> None:
         fake = Fake(self.root)
         fake.main = "deadbeef" + "0" * 32
         self.assertEqual(self.run_timer(fake), 1)
-        failed = [e for e in self.events() if e["event"] == "failed"]
-        self.assertEqual([e["step"] for e in failed], ["checkout"])
-        self.assertIn("origin/main", failed[0]["error"])
+        refused = [e for e in self.events() if e["event"] == "refused"]
+        self.assertEqual([e["step"] for e in refused], ["checkout"])
+        self.assertIn("origin/main", refused[0]["error"])
+        self.assertEqual([e for e in self.events() if e["event"] == "failed"], [])
         self.assertNotIn("token", fake.steps())
 
     def test_a_checkout_at_origin_main_that_is_clean_proceeds(self) -> None:
@@ -584,6 +587,108 @@ class FinalFailureIsNotSilent(TimerCase):
         fake = Fake(self.root, fail="courier")
         self.assertEqual(self.run_timer(fake), 1)
         self.assertNotIn("skip_notified", self.names())
+
+
+class RefusalIsNotAFailure(TimerCase):
+    """A checkout precondition (dirty, or not at origin/main) is a refusal: logged, exit 1, never one of the three failures."""
+
+    def run_refused(self, make_fake: Callable[[], Fake], want: str) -> None:
+        for _ in range(3):
+            fake = make_fake()
+            self.assertEqual(self.run_timer(fake), 1)
+            self.assertNotIn("bonk", fake.steps())
+            self.assertNotIn("courier", fake.steps())
+        refused = [e for e in self.events() if e["event"] == "refused"]
+        self.assertEqual(len(refused), 3)
+        self.assertEqual({e["step"] for e in refused}, {"checkout"})
+        self.assertIn(want, refused[-1]["error"])
+        self.assertEqual([e for e in self.events() if e["event"] == "failed"], [])
+
+    def assert_fourth_run_proceeds(self) -> None:
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertIn("token", fake.steps())
+        self.assertNotIn("skipped_after_failures", self.names())
+        self.assertNotIn("skip_notified", self.names())
+        self.assertEqual(self.names()[-1], "done")
+        for call in fake.calls:
+            if call["step"] in ("bonk", "courier"):
+                self.assertNotIn("gave up", " ".join(call["argv"]), "the skip notice was sent")
+
+    def test_three_dirty_checkouts_leave_refusals_and_the_clean_fourth_run_proceeds(self) -> None:
+        def dirty() -> Fake:
+            fake = Fake(self.root)
+            fake.dirty = " M tools/quest_release_timer.py\n"
+            return fake
+
+        self.run_refused(dirty, "not clean")
+        self.assert_fourth_run_proceeds()
+
+    def test_three_stale_checkouts_leave_refusals_and_the_clean_fourth_run_proceeds(self) -> None:
+        def stale() -> Fake:
+            fake = Fake(self.root)
+            fake.main = "deadbeef" + "0" * 32
+            return fake
+
+        self.run_refused(stale, "origin/main")
+        self.assert_fourth_run_proceeds()
+
+    def test_a_failing_build_still_counts_and_the_third_sends_the_skip(self) -> None:
+        for _ in range(3):
+            self.assertEqual(self.run_timer(Fake(self.root, fail="build_apk")), 1)
+        self.assertEqual([e["step"] for e in self.events() if e["event"] == "failed"], ["build_apk"] * 3)
+        self.assertEqual([e for e in self.events() if e["event"] == "refused"], [])
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertIn("skipped_after_failures", self.names())
+        bonk = next(c["argv"] for c in fake.calls if c["step"] == "bonk")
+        self.assertIn("gave up", bonk[-1])
+        self.assertIn("build_apk", bonk[-1])
+
+    def test_refusals_between_real_failures_do_not_hide_the_third_failure(self) -> None:
+        self.write_log({"event": "failed", "tag": TAG, "step": "build_apk", "error": "x"},
+                       {"event": "failed", "tag": TAG, "step": "build_apk", "error": "x"},
+                       {"event": "refused", "tag": "", "step": "checkout", "error": "not clean"})
+        self.assertEqual(self.run_timer(Fake(self.root, fail="build_apk")), 1)
+        self.assertEqual(len([e for e in self.events() if e["event"] == "failed"]), 3)
+        self.assertEqual(self.run_timer(Fake(self.root)), 0)
+        self.assertIn("skipped_after_failures", self.names())
+
+
+class NotifiesOnRefusal(TimerCase):
+    def notify(self) -> list[list[str]]:
+        sent: list[list[str]] = []
+
+        def courier(argv: list[str], cwd: str | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
+            sent.append(argv)
+            return completed(argv)
+
+        self.assertEqual(timer.main(["--notify-failure"], self.env, runner=courier, sleep=self.sleeps.append), 0)
+        return sent
+
+    def test_the_notice_after_a_refusal_couriers_the_refusal(self) -> None:
+        self.write_log({"event": "failed", "tag": TAG, "step": "build_apk", "error": "old build failure"},
+                       {"event": "refused", "tag": "", "step": "checkout",
+                        "error": "the checkout the timer runs from is not clean: ' M x'"})
+        body = self.notify()[0][-1]
+        self.assertIn("checkout", body)
+        self.assertIn("not clean", body)
+        self.assertNotIn("old build failure", body)
+
+    def test_a_failure_after_a_refusal_is_the_one_couriered(self) -> None:
+        self.write_log({"event": "refused", "tag": "", "step": "checkout", "error": "not clean"},
+                       {"event": "failed", "tag": TAG, "step": "build_apk", "error": "build broke"})
+        body = self.notify()[0][-1]
+        self.assertIn("build_apk", body)
+        self.assertIn("build broke", body)
+        self.assertNotIn("not clean", body)
+
+    def test_a_missing_credential_refusal_names_what_is_missing_and_a_tag_not_chosen_yet(self) -> None:
+        self.write_log({"event": "refused", "tag": "", "missing": ["R2_BUCKET", "RELEASE_PUBLIC_BASE"]})
+        body = self.notify()[0][-1]
+        self.assertIn("R2_BUCKET, RELEASE_PUBLIC_BASE", body)
+        self.assertIn("not chosen yet", body)
+        self.assertNotIn("no failed event recorded", body)
 
 
 class RealProcess(TimerCase):

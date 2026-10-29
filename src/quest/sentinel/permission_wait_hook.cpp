@@ -184,7 +184,7 @@ CheckFn ResolveCheck(const char** reason) noexcept {
     *reason = "no_build_id";
     return nullptr;
   }
-  if (!Equal(id, sentinel::pinned::kLibR15BuildId)) {
+  if (!Equal(id, sentinel::pinned::LibR15PatchedBuildId())) {
     *reason = "build_id_mismatch";
     return nullptr;
   }

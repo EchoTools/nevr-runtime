@@ -81,7 +81,7 @@ Only when the train is off or its run is red. A draft fires no workflow, so the 
 
 ```sh
 just release-preflight                                    # 1. refuses unless this clone is exactly origin/main
-git tag -a vX.Y.Z -m "X.Y.Z" && git push origin vX.Y.Z   # 2. tag origin's tip with the version `python3 tools/next_release_version.py` prints, push the tag
+git tag -a vX.Y.Z -m "X.Y.Z" && git push origin vX.Y.Z   # 2. tag origin's tip with the tag `python3 tools/next_release_version.py` prints (it prints `vX.Y.Z`, with the v: `vX.Y.Z` here is that output, `X.Y.Z` the message), push the tag
 just release-preflight && gh release create vX.Y.Z --title vX.Y.Z --draft --prerelease --verify-tag   # 3. the draft
 gh workflow run build.yml --ref vX.Y.Z                    # 4. build, attest, attach the two files; it stays a draft
 ```
@@ -257,11 +257,12 @@ built, because a later tag supersedes it. That is intended. A tag is built by ha
 
 It runs from its own **dedicated checkout** (`~/src/nevr-runtime-work/release-timer/checkout`, a detached worktree that
 `just install-quest-release-timer` makes). The unit fetches and moves that checkout to `origin/main` before every run,
-and the tool refuses, as a failed `checkout` step that couriers the owner, unless the checkout is clean and HEAD is the
+and the tool refuses, as a refused `checkout` step that couriers the owner, unless the checkout is clean and HEAD is the
 freshly fetched `origin/main`.
 
 1. Lists the newest published `vX.Y.Z` release. A tag that has a `done` record in the log is left alone. A tag that has
    failed three times is not retried; the third failure bonks the owner and couriers Spritz once, before the run exits 0.
+   A dirty or stale checkout, or a missing credential, is a refusal that is logged and never counts toward the three failures.
 2. Builds the release-signer from a snapshot of its `main`, and reads `verify-manifest --live`. A tag that beta already
    lists is done. Otherwise the beta release must list a `game-data` artifact (the zip the new release carries), whose
    name and size are noted; without one the run fails before it builds.
@@ -286,7 +287,7 @@ build included, gets an environment without them. Every step appends a JSON line
 cannot be written fails the run. A failing step exits 1 naming itself, and the unit's `OnFailure=` runs
 `quest_release_timer.py --notify-failure`, which couriers the last failure to Spritz. The credential is the file
 `~/.config/metis/r2-evr-echo-taxi.env` (`R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`), loaded by
-the unit and never written into it. Install, from any clone of the repository:
+the unit and never written into it. The unit also sets `GNUPGHOME` to the XDG gnupg home (`~/.config/gnupg`) so `pass` finds the key, and a `pass` failure prints gpg's own `gpg:` lines after the `ERROR` line. Install, from any clone of the repository:
 
 ```sh
 just install-quest-release-timer   # the dedicated checkout, systemctl --user link of the three units, daemon-reload, enable --now the timer

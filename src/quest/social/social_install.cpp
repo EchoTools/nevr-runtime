@@ -60,7 +60,7 @@ const char* InstallStatusName(InstallStatus status) {
 
 sentinel::GotTarget LibR15Social() {
   return {sentinel::pinned::kLibR15, kSocialSymbol, sentinel::RelocKind::kJumpSlot,
-          sentinel::pinned::kLibR15BuildId, kSocialSlotVaddr};
+          sentinel::pinned::LibR15PatchedBuildId(), kSocialSlotVaddr};
 }
 
 PnsovrView FindPnsovr() noexcept {
@@ -79,7 +79,7 @@ GameJson ResolveGameJson(sentinel::ImageLookup lookup) noexcept {
   sentinel::ElfImage image;
   if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) return json;
   char id[64] = {};
-  if (!sentinel::ReadBuildId(image, id, sizeof(id)) || std::strcmp(id, sentinel::pinned::kLibR15BuildId) != 0) return json;
+  if (!sentinel::ReadBuildId(image, id, sizeof(id)) || std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return json;
   const auto at = [&image](std::uint64_t vaddr) { return image.base + static_cast<std::uintptr_t>(vaddr); };
   const std::uintptr_t reset = at(kLibR15CJsonResetVaddr);
   const std::uintptr_t decode = at(kLibR15CJsonDecodeFromVaddr);
@@ -96,7 +96,7 @@ GameEvents ResolveGameEvents(sentinel::ImageLookup lookup) noexcept {
   sentinel::ElfImage image;
   if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) return events;
   char id[64] = {};
-  if (!sentinel::ReadBuildId(image, id, sizeof(id)) || std::strcmp(id, sentinel::pinned::kLibR15BuildId) != 0) return events;
+  if (!sentinel::ReadBuildId(image, id, sizeof(id)) || std::strcmp(id, sentinel::pinned::LibR15PatchedBuildId()) != 0) return events;
   const std::uintptr_t send = image.base + static_cast<std::uintptr_t>(kLibR15SendComponentEventVaddr);
   static_assert(sizeof(events.send) == sizeof(send), "function pointer size");
   std::memcpy(&events.send, &send, sizeof(events.send));
@@ -416,7 +416,7 @@ NEVR_HOOK_RECORD(kPresenceHook, PresenceThunk, &OnPresenceHandler);
 
 sentinel::GotTarget LibR15RichPresence() {
   return {sentinel::pinned::kLibR15, kRichPresenceSymbol, sentinel::RelocKind::kJumpSlot,
-          sentinel::pinned::kLibR15BuildId, kRichPresenceSlotVaddr};
+          sentinel::pinned::LibR15PatchedBuildId(), kRichPresenceSlotVaddr};
 }
 
 void* SelectRichPresenceObject(void* original, PnsovrLookup lookup) noexcept {

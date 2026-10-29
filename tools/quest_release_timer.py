@@ -67,6 +67,10 @@ class StepFailure(Failure):
         self.step = step
 
 
+class Refusal(StepFailure):
+    """A precondition that is not met (a dirty checkout, a checkout not at origin/main): logged as `refused`, never counted."""
+
+
 def subprocess_runner(argv: list[str], cwd: str | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True, check=False)
@@ -174,11 +178,11 @@ class Timer:
         self.cmd(step, ["git", "-C", repo, "fetch", "--quiet", "origin", "main"])
         dirty = self.cmd(step, ["git", "-C", repo, "status", "--porcelain"]).stdout.strip()
         if dirty:
-            raise StepFailure(step, f"the checkout the timer runs from is not clean: {dirty.splitlines()[0]}")
+            raise Refusal(step, f"the checkout the timer runs from is not clean: {dirty.splitlines()[0]}")
         head = self.cmd(step, ["git", "-C", repo, "rev-parse", "HEAD"]).stdout.strip()
         main = self.cmd(step, ["git", "-C", repo, "rev-parse", "origin/main"]).stdout.strip()
         if head != main:
-            raise StepFailure(step, f"the checkout the timer runs from is at {head[:12]}, not the fetched origin/main {main[:12]}")
+            raise Refusal(step, f"the checkout the timer runs from is at {head[:12]}, not the fetched origin/main {main[:12]}")
         self.ok(step, head=head)
 
     def notify_published(self, tag: str) -> None:
@@ -345,11 +349,11 @@ class Timer:
 
 
 def notify_failure(env: dict[str, str], runner: Runner, log_path: pathlib.Path) -> int:
-    failed = [e for e in read_events(log_path) if e.get("event") == "failed"]
-    last = failed[-1] if failed else {}
+    recorded = [e for e in read_events(log_path) if e.get("event") in ("failed", "refused")]
+    last = recorded[-1] if recorded else {}
+    what = last.get("error") or ("missing credentials: " + ", ".join(last["missing"]) if last.get("missing") else "no failed event recorded")
     body = "quest-release-timer failed: tag %s at step %s: %s (log: %s)" % (
-        last.get("tag", "unknown"), last.get("step", "unknown"), str(last.get("error", "no failed event recorded"))[:300],
-        log_path)
+        last.get("tag") or "not chosen yet", last.get("step", "start"), str(what)[:300], log_path)
     result = runner(["courier", "send", "--to", "spritz", "--from", "quest-release-timer", "--msg", body], cwd=None, env=env)
     if result.returncode != 0:
         sys.stderr.write("quest-release-timer: the failure notice could not be sent\n")
@@ -405,24 +409,29 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
         timer.release(tag)
         log.event("done")
         return 0
+    except Refusal as refusal:
+        sys.stderr.write(f"quest-release-timer: {refusal.step}: {refusal}\n")
+        if log is not None:
+            _record(log, "refused", refusal.step, str(refusal))
+        return 1
     except StepFailure as failure:
         sys.stderr.write(f"quest-release-timer: {failure.step}: {failure}\n")
         if log is not None:
-            _record_failure(log, failure.step, str(failure))
+            _record(log, "failed", failure.step, str(failure))
         return 1
     except Failure as failure:
         sys.stderr.write(f"quest-release-timer: {failure}\n")
         if log is not None and not str(failure).startswith("refused"):
-            _record_failure(log, "start", str(failure))
+            _record(log, "failed", "start", str(failure))
         return 1
     finally:
         if log is not None:
             log.close()
 
 
-def _record_failure(log: Log, step: str, error: str) -> None:
+def _record(log: Log, event: str, step: str, error: str) -> None:
     try:
-        log.event("failed", step=step, error=error)
+        log.event(event, step=step, error=error)
     except Failure as log_failure:
         sys.stderr.write(f"quest-release-timer: {log_failure}\n")
 

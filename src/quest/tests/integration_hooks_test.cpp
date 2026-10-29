@@ -12,6 +12,7 @@
 
 #include "got_hook.h"
 #include "hook_report.h"
+#include "libr15_identity.h"
 #include "quest/integration/ctor_sequence.h"
 #include "quest/integration/dlopen_hook.h"
 #include "quest/integration/post_load.h"
@@ -45,6 +46,10 @@ bool RegisterCounters() noexcept;
 namespace nevr_quest::texture_quality {
 bool RegisterCounters() noexcept;
 }  // namespace nevr_quest::texture_quality
+// The same for sentinel/clock_levels_hook.h (#928).
+namespace nevr_quest::clock_levels {
+bool RegisterCounters() noexcept;
+}  // namespace nevr_quest::clock_levels
 
 namespace {
 
@@ -119,7 +124,7 @@ void TestPinnedDlopenTarget() {
   QCHECK(std::strcmp(t.module, "libr15.so") == 0);
   QCHECK(std::strcmp(t.symbol, "dlopen") == 0);
   QCHECK(t.kind == sentinel::RelocKind::kJumpSlot);
-  QCHECK(t.buildId != nullptr && std::strcmp(t.buildId, "b243509c08ce677aeb95fa348016949b3fc45230") == 0);
+  QCHECK(t.buildId != nullptr && std::strcmp(t.buildId, sentinel::pinned::LibR15PatchedBuildId()) == 0);
   QCHECK(t.slotVaddr.has_value() && *t.slotVaddr == 0x36c6380ULL);
 }
 
@@ -141,10 +146,11 @@ void TestInstallWithoutTheModuleFailsCleanly() {
 // one calls counter per hook), social 26 (the facade's, the invite gate's, the rich presence trace's four, its three local answers), login prompt 16 (#239, #672, login_prompt_hook.h kCounterCount), login title 5 (#1137, login_title_hook.h kCounterCount;
 // registered with the login prompt's, through the same step), OBB-mount
 // skip 6 (#319, #866: the mount, the path and the data-root question, obb_skip_hook.h kCounterCount), texture quality 4 (#943,
-// texture_quality_hook.h kCounterCount), resource request log 2 (#871, resource_request_hook.h kCounterCount; development
+// texture_quality_hook.h kCounterCount), clock levels 2 (#928, clock_levels_hook.h kCounterCount; no slot of its own), resource request log 2 (#871, resource_request_hook.h kCounterCount; development
 // builds only, so a release build registers 2 fewer). 91 on main before #943, 95 with it, which filled the 96 the table held
-// then; the table holds 128 since #1137.
-constexpr int kSentinelCounters = 2 + 14 + 1 + 2 + 24 + 26 + 16 + 5 + 6 + 4 + 2;
+// then; the table holds 128 since #1137. The resource request term stays last: tools/tests/test_quest_resource_request_wiring.py
+// reads it there.
+constexpr int kSentinelCounters = 2 + 14 + 1 + 2 + 24 + 26 + 16 + 5 + 6 + 4 + 2 + 2;
 static_assert(kSentinelCounters <= static_cast<int>(sentinel::kMaxReportCounters),
               "the sentinel's hooks register more counters than the reporter holds");
 
@@ -173,8 +179,10 @@ struct RealCounterSteps final : Steps {
   bool ResourceRequestLogWanted() override { return true; }  // the budget is the development build's, the larger one
   bool RegisterResourceRequestCounters() override { return nevr_quest::resource_request::RegisterCounters(); }
   bool RegisterTextureQualityCounters() override { return nevr_quest::texture_quality::RegisterCounters(); }
+  bool RegisterClockLevelsCounters() override { return nevr_quest::clock_levels::RegisterCounters(); }
   // The reporter is started after the budget is measured (below), so a refused registration shows here.
   bool StartReporter() override { return true; }
+  bool AttachLibR15() override { return true; }
   bool InstallClockHook() override { return true; }
   bool InstallObbSkip(bool counted) override { return counted; }
   bool InstallProcessEnd() override { return true; }
@@ -186,6 +194,7 @@ struct RealCounterSteps final : Steps {
   bool InstallRenderConfig(const nevr_quest::TextureChoice&) override { return true; }
   bool InstallCreditsText() override { return true; }
   bool InstallMenuCards() override { return true; }
+  bool ArmClockLevels(bool counted, bool) override { return counted; }
   bool StartTokenAuth() override { return true; }
   bool InstallLoginPrompt(bool counted) override { return counted; }
   bool StartBridge() override { return true; }
@@ -209,13 +218,14 @@ void TestCounterBudget() {
   for (StepId id : {StepId::kRegisterClockCounters, StepId::kRegisterRedirectCounters, StepId::kRegisterDlopenCounters,
                     StepId::kRegisterLoginCounters, StepId::kRegisterSocialCounters,
                     StepId::kRegisterLoginPromptCounters, StepId::kRegisterObbSkipCounters,
-                    StepId::kRegisterResourceRequestCounters, StepId::kRegisterTextureQualityCounters}) {
+                    StepId::kRegisterResourceRequestCounters, StepId::kRegisterTextureQualityCounters,
+                    StepId::kRegisterClockLevelsCounters}) {
     QCHECK(r.at(id).state == StepState::kOk);
   }
   // No hook was left out for want of a counter slot.
   for (StepId id : {StepId::kInstallRedirect, StepId::kInstallSocial, StepId::kInstallLoginPrompt,
                     StepId::kInstallDlopenHook, StepId::kInstallObbSkip, StepId::kInstallResourceRequestLog,
-                    StepId::kInstallTextureQuality}) {
+                    StepId::kInstallTextureQuality, StepId::kArmClockLevels}) {
     QCHECK(r.at(id).state == StepState::kOk);
   }
 

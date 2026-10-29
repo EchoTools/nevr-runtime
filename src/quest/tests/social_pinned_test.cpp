@@ -78,6 +78,24 @@ bool Load(const char* path, LoadedElf* out) {
   return true;
 }
 
+// Rewrites the 20-byte GNU build ID in the in-memory copy of an image (hex text of 40 characters).
+void SetNoteBuildId(const LoadedElf& elf, const char* hex) {
+  for (const Elf64_Phdr& ph : elf.phdrs) {
+    if (ph.p_type != PT_NOTE) continue;
+    std::uint8_t* const note = static_cast<std::uint8_t*>(elf.mem) + ph.p_vaddr;
+    Elf64_Nhdr header;
+    std::memcpy(&header, note, sizeof(header));
+    if (header.n_type != NT_GNU_BUILD_ID || header.n_descsz != 20) continue;
+    std::uint8_t* const desc = note + sizeof(header) + ((header.n_namesz + 3u) & ~3u);
+    for (int i = 0; i < 20; ++i) {
+      const char pair[3] = {hex[2 * i], hex[2 * i + 1], 0};
+      desc[i] = static_cast<std::uint8_t>(std::strtoul(pair, nullptr, 16));
+    }
+    return;
+  }
+  QCHECK(false);  // no GNU build-ID note to rewrite
+}
+
 // The dynamic tables of an image, by link-time address.
 struct Dynamic {
   const Elf64_Rela* rela = nullptr;
@@ -223,7 +241,10 @@ void CheckGameFunctions(const LoadedElf& r15) {
     else QCHECK(value != quest_social::kProviderSymbolOvr);
   }
   QCHECK(quest_social::kProviderConstants[3].platformCode == 4 && quest_social::kProviderConstants[3].libr15Vaddr == 0x2ba11c0ULL);
-  // The production resolver, on the real image, lands on those addresses.
+  // The production resolver, on the real image, lands on those addresses. The resolver accepts the patched libr15 (its build ID
+  // is the patcher's, docs/adr/0021 section 7); the store file in this test holds the stock ID, so the in-memory copy's note
+  // is set to the patched one first. The build-time patch changes no address these resolvers use.
+  SetNoteBuildId(r15, sentinel::pinned::LibR15PatchedBuildId());
   g_lookupImage = &r15.image;
   const quest_social::GameJson json = quest_social::ResolveGameJson(&LookupFixed);
   g_lookupImage = nullptr;
@@ -360,7 +381,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "social_pinned_test: cannot load an AArch64 ELF64 from the given paths\n");
     return 2;
   }
-  CheckBuildId(r15, pinned::kLibR15BuildId);
+  CheckBuildId(r15, pinned::kLibR15StockBuildId);
   CheckBuildId(ovr, quest_social::kLibPnsovrBuildId);
   CheckGameFunctions(r15);
   CheckPnsovrProvider(ovr);

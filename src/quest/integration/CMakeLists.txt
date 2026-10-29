@@ -42,6 +42,7 @@ target_compile_options(nevr_quest_plugin PRIVATE -Wall -Wextra -Werror -fvisibil
 
 add_library(nevr_quest_integration STATIC
   ctor_sequence.cpp
+  libr15_attach_step.cpp
   post_load.cpp
   identity_source.cpp
   stage_log.cpp
@@ -103,16 +104,20 @@ set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/resource_re
 target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_quality_hook.cpp")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_quality_hook.cpp"
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# And the #928 clock-level override's counters (also without exceptions).
+target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/clock_levels_hook.cpp")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/clock_levels_hook.cpp"
+  PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
 # A no-op plugin for a headset run of the loader (docs/adr/0019, slice 1): the host test's fixture, named `nevr_noop` and
 # declaring the libr15 build the sentinel is pinned to. It is not part of the sentinel or of any APK the recipes build; a
 # development APK gets it from `just android-repack-apk ... plugin=<this file>`.
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/pinned_targets.h" nevr_pinned_build_id_line
-     REGEX "kLibR15BuildId = \"[0-9a-f]+\"")
+     REGEX "kLibR15StockBuildId = \"[0-9a-f]+\"")
 string(REGEX MATCH "\"([0-9a-f]+)\"" nevr_pinned_build_id_match "${nevr_pinned_build_id_line}")
 set(nevr_pinned_build_id "${CMAKE_MATCH_1}")
 if(NOT nevr_pinned_build_id)
-  message(FATAL_ERROR "src/quest/sentinel/pinned_targets.h has no kLibR15BuildId literal")
+  message(FATAL_ERROR "src/quest/sentinel/pinned_targets.h has no kLibR15StockBuildId literal")
 endif()
 add_library(nevr_noop_plugin SHARED "${CMAKE_CURRENT_SOURCE_DIR}/../tests/plugin_fixture.cpp")
 set_target_properties(nevr_noop_plugin PROPERTIES OUTPUT_NAME nevr_noop)

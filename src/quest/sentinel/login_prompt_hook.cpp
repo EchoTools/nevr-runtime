@@ -671,7 +671,7 @@ const char* ResolveQuitOnError() noexcept {
   if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) return "module_not_loaded";
   char id[64] = {};
   if (!sentinel::ReadBuildId(image, id, sizeof(id))) return "no_build_id";
-  if (!Equal(id, sentinel::pinned::kLibR15BuildId)) return "build_id_mismatch";
+  if (!Equal(id, sentinel::pinned::LibR15PatchedBuildId())) return "build_id_mismatch";
   const unsigned char* fn = reinterpret_cast<const unsigned char*>(image.base) + sentinel::pinned::kQuitOnErrorVaddr;
   if (std::memcmp(fn, sentinel::pinned::kQuitOnErrorCode, sizeof(sentinel::pinned::kQuitOnErrorCode)) != 0) {
     return "prologue_mismatch";
@@ -689,7 +689,7 @@ const char* ResolveBeginLogIn() noexcept {
   if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) return "module_not_loaded";
   char id[64] = {};
   if (!sentinel::ReadBuildId(image, id, sizeof(id))) return "no_build_id";
-  if (!Equal(id, sentinel::pinned::kLibR15BuildId)) return "build_id_mismatch";
+  if (!Equal(id, sentinel::pinned::LibR15PatchedBuildId())) return "build_id_mismatch";
   const unsigned char* fn = reinterpret_cast<const unsigned char*>(image.base) + sentinel::pinned::kBeginLogInVaddr;
   if (std::memcmp(fn, sentinel::pinned::kBeginLogInCode, sizeof(sentinel::pinned::kBeginLogInCode)) != 0) {
     return "prologue_mismatch";
@@ -707,7 +707,7 @@ const char* ResolveSendEvent() noexcept {
   if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) return "module_not_loaded";
   char id[64] = {};
   if (!sentinel::ReadBuildId(image, id, sizeof(id))) return "no_build_id";
-  if (!Equal(id, sentinel::pinned::kLibR15BuildId)) return "build_id_mismatch";
+  if (!Equal(id, sentinel::pinned::LibR15PatchedBuildId())) return "build_id_mismatch";
   const unsigned char* fn =
       reinterpret_cast<const unsigned char*>(image.base) + sentinel::pinned::kSendComponentEventVaddr;
   if (std::memcmp(fn, sentinel::pinned::kSendComponentEventCode,

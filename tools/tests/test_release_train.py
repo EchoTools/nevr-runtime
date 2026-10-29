@@ -1,11 +1,14 @@
 """The release train (#1010): the workflow's gates, the order of its steps, the draft checks it runs, and the audience
 section of the release body. The workflow cannot run here (it publishes), so these read the file and its order."""
 
+import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -119,6 +122,73 @@ class DraftCheck(unittest.TestCase):
     def test_the_script_parses(self) -> None:
         result = subprocess.run(["bash", "-n", str(CHECK)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+def plan_step_script(text: str) -> str:
+    """The `run:` script of the step named "Plan the release", dedented."""
+    lines = text.splitlines()
+    start = lines.index("    - name: Plan the release")
+    run = next(i for i in range(start, len(lines)) if lines[i] == "      run: |")
+    body = []
+    for line in lines[run + 1 :]:
+        if line.strip() and not line.startswith("        "):
+            break
+        body.append(line)
+    return textwrap.dedent("\n".join(body)) + "\n"
+
+
+class PlanStepVersion(unittest.TestCase):
+    """The decide job's "Plan the release" step, run for real against a stub of tools/next_release_version.py. The
+    tool prints the tag with its leading v (v6.0.0); the step's outputs carry the bare version, since the cut job writes
+    "v$VERSION" everywhere."""
+
+    def setUp(self) -> None:
+        if shutil.which("jq") is None:
+            self.skipTest("jq is not on PATH: the plan step reads the base with jq")
+        self.script = plan_step_script(TRAIN.read_text(encoding="utf-8"))
+
+    def run_plan(self, stub_stdout: str, stub_exit: int) -> tuple[subprocess.CompletedProcess, list[str]]:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as scripts:
+            git = ["git", "-C", tmp, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
+            subprocess.run(["git", "init", "-q", tmp], check=True)
+            subprocess.run(git + ["commit", "-q", "--allow-empty", "-m", "chore: base"], check=True)
+            subprocess.run(git + ["update-ref", "refs/remotes/origin/main", "HEAD"], check=True)
+            (pathlib.Path(tmp) / "tools").mkdir()
+            prints = f"print({stub_stdout!r})\n" if stub_stdout else ""
+            stub = (
+                "import json, sys\n"
+                f"{prints}"
+                'print(json.dumps({"event": "base", "base": "v5.20.0"}), file=sys.stderr)\n'
+                f"sys.exit({stub_exit})\n"
+            )
+            (pathlib.Path(tmp) / "tools" / "next_release_version.py").write_text(stub, encoding="utf-8")
+            script = pathlib.Path(scripts) / "plan.sh"
+            script.write_text(self.script, encoding="utf-8")
+            output = pathlib.Path(scripts) / "github_output"
+            output.write_text("", encoding="utf-8")
+            result = subprocess.run(
+                ["bash", str(script)],
+                cwd=tmp,
+                env={**os.environ, "GITHUB_OUTPUT": str(output)},
+                capture_output=True,
+                text=True,
+            )
+            lines = output.read_text(encoding="utf-8").splitlines()
+        return result, lines
+
+    def test_the_output_carries_the_bare_version_not_the_tag(self) -> None:
+        result, lines = self.run_plan("v6.0.0", 0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("version=6.0.0", lines, lines)
+        self.assertIn("base=v5.20.0", lines, lines)
+        self.assertIn("cut=true", lines, lines)
+        self.assertFalse(any(line.startswith("version=v") for line in lines), lines)
+
+    def test_nothing_to_release_writes_cut_false_and_no_version(self) -> None:
+        result, lines = self.run_plan("", 1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("cut=false", lines, lines)
+        self.assertFalse(any(line.startswith("version=") for line in lines), lines)
 
 
 class AudienceSection(unittest.TestCase):

@@ -20,6 +20,7 @@ set(NEVR_HOST_UNITS
     "host/runtime_exports.cpp"
     "host/runtime_load.cpp"
     "host/runtime_rendezvous.cpp"
+    "host/stop_line.cpp"
     # The signature verifier and the pins it checks against (ADR 0012: the host verifies nevr-runtime.dll before it loads it).
     "ext/plugin_pins.cpp"
     "ext/plugin_signature.cpp"
@@ -614,6 +615,12 @@ if(BUILD_TESTING)
     target_compile_options(test_host_json PRIVATE -Werror)
     target_link_libraries(test_host_json PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_host_json DISCOVERY_MODE PRE_TEST)
+
+    # The one console line the host writes when it stops the game or leaves it running without the runtime (#1252).
+    add_executable(test_host_stop_line tests/test_host_stop_line.cpp)
+    target_compile_options(test_host_stop_line PRIVATE -Werror)
+    target_link_libraries(test_host_stop_line PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_stop_line DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_bootstrap_diagnostics tests/test_bootstrap_diagnostics.cpp)
     target_compile_options(test_bootstrap_diagnostics PRIVATE -Werror)
@@ -1291,6 +1298,13 @@ if(BUILD_TESTING)
     target_include_directories(test_socket_role PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_socket_role PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_socket_role DISCOVERY_MODE PRE_TEST)
+
+    # #1254: what a refused login does (compat/login_refusal.h): header only, pure.
+    add_executable(test_login_refusal tests/test_login_refusal.cpp)
+    set_source_files_properties(tests/test_login_refusal.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_login_refusal PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_login_refusal PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_login_refusal DISCOVERY_MODE PRE_TEST)
 
     # #906, docs/adr/0017: the client half of the invite codes (patch/invite_wizard.h): header only, pure.
     # It links the generated symbol cache: the map cards' level names are the cache's, and the test reads them from it.

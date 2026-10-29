@@ -4,9 +4,14 @@ The expected numbers are written out here by hand from the rule (major*10^7 + mi
 slot = dev distance 0..998, or 999 for a release), not computed by the tool. The manifests are built by
 axml_fixtures.py; the real store APK's manifest (when the file is present) is parsed too, so a builder that
 mirrors a misreading of the format is caught, and aapt2, a reader that is not ours, confirms every write.
+
+The stamp floor is the major of the newest release tag git lists (#1371). Nothing here pins that major: the tests
+that stamp read it from git, and the floor's own tests use throwaway repositories or a mocked newest release.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import pathlib
 import re
@@ -25,10 +30,17 @@ sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "tools" / "tests"))
 import axml_fixtures as fx  # noqa: E402
 import quest_apk_version as qv  # noqa: E402
+import work_root  # noqa: E402
 
 TOOL = REPO / "tools" / "quest_apk_version.py"
 STORE_APK = pathlib.Path("/mnt/games/cache/r15_goldmaster_store.apk")
 INSTALLER = 4987570
+
+
+def current_major() -> int:
+    """The major of the newest release tag this clone lists: the stamp floor. Read, not pinned, so a new major does not
+    stale the fixtures that must stamp at or above it."""
+    return qv.newest_release()[1]
 
 
 class NumberingTest(unittest.TestCase):
@@ -138,32 +150,114 @@ class NumberingTest(unittest.TestCase):
             self.assertTrue(any(field in p for p in problems), field)
         self.assertEqual(qv.field_problems("209.99.99-dev.998+abcdef0"), [])
 
-    def test_a_version_below_the_last_releases_major_is_refused(self):
-        # "1.0.0" is what a build with no git reports (cmake/set_project_version_from_git.cmake)
-        for low in ("1.0.0", "0.1.0", "0.0.0-dev.1+abcdef0", "4.99.99", "4.99.98-dev.998+abcdef0"):
-            with self.subTest(version=low):
-                with self.assertRaisesRegex(qv.VersionError, "below major 5"):
-                    qv.version_code_for(low)
+    def test_the_rule_alone_has_no_floor(self):
+        # the numbering rule is arithmetic; the floor (the newest release tag's major) applies at a stamp (FloorTest)
+        self.assertEqual(qv.version_code_for("1.0.0"), 10_000_999)  # the code a build with no git reports
+        self.assertEqual(qv.version_code_for("0.1.0"), 100_999)
 
-    def test_the_floor_is_the_last_release_and_every_accepted_code_beats_the_installer(self):
-        self.assertEqual((qv.LAST_RELEASE, qv.MIN_MAJOR), ("5.6.0", 5))  # raise both, and this line, with a new release line
+    def test_every_accepted_code_beats_the_installer(self):
         smallest = qv.version_code_for("5.0.0-dev.1+abcdef0")
         self.assertEqual(smallest, 50_000_001)
         self.assertGreater(smallest, INSTALLER)
-        self.assertEqual(qv.version_code_for(qv.LAST_RELEASE), 50_600_999)
-        self.assertEqual(qv.version_code_for("5.0.0-dev.0+abcdef0"), 50_000_000)  # the smallest accepted code
+        self.assertEqual(qv.version_code_for("5.0.0-dev.0+abcdef0"), 50_000_000)  # the smallest code of major 5
         self.assertGreater(50_000_000, INSTALLER)
 
-    def test_the_pinned_last_release_is_not_above_the_newest_release_tag_the_repo_knows(self):
-        listed = subprocess.run(["git", "-C", str(REPO), "tag", "--list", "v[0-9]*", "--sort=-v:refname"],
-                                capture_output=True, text=True, check=True).stdout.split()
-        tags = [t for t in listed if re.fullmatch(r"v\d+\.\d+\.\d+", t)]  # `git tag` has no --exclude: drop the pre-releases here
-        if not tags:
-            self.skipTest("no release tags in this clone (a shallow checkout)")
-        newest = tuple(int(n) for n in tags[0][1:].split("."))
-        pinned = tuple(int(n) for n in qv.LAST_RELEASE.split("."))
-        self.assertLessEqual(pinned, newest, "LAST_RELEASE names a release the repo has no tag for")
-        self.assertEqual(pinned[0], newest[0], f"newest tag {tags[0]} is on another major: raise LAST_RELEASE and MIN_MAJOR")
+
+class NewestReleaseTest(unittest.TestCase):
+    """newest_release(): the newest vX.Y.Z tag git lists, read from throwaway repositories so no release is pinned here."""
+
+    def git(self, repo, *args):
+        return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                               "-c", "commit.gpgSign=false", *args], capture_output=True, text=True, check=True)
+
+    def make_repo(self, tmp, tags):
+        repo = pathlib.Path(tmp) / "repo"
+        repo.mkdir()
+        self.git(repo, "init", "-q")
+        self.git(repo, "commit", "-q", "--allow-empty", "-m", "root")
+        for name in tags:
+            # a lightweight tag by ref: `git tag <name>` opens an editor when tag.gpgSign is set, as it is on this machine
+            self.git(repo, "update-ref", f"refs/tags/{name}", "HEAD")
+        return repo
+
+    def test_the_newest_release_is_the_highest_by_number_ignoring_pre_and_malformed_tags(self):
+        with tempfile.TemporaryDirectory(dir=work_root.test_scratch()) as tmp:
+            repo = self.make_repo(tmp, ["v5.20.0", "v6.0.0", "vv7.0.0", "v7.0.0-rc.1", "v9.9.9", "v10.0.0", "v11.0.0-rc.1"])
+            # "v9.9.9" sorts after "v10.0.0" as a string; the number decides, and a pre-release never does
+            self.assertEqual(qv.newest_release(repo), ("v10.0.0", 10))
+
+    def test_a_release_tag_HEAD_does_not_descend_from_still_counts(self):
+        # every release tag the clone knows is the floor's input, not only those reachable from HEAD
+        with tempfile.TemporaryDirectory(dir=work_root.test_scratch()) as tmp:
+            repo = self.make_repo(tmp, ["v6.0.0"])
+            self.git(repo, "checkout", "-q", "-b", "elsewhere")
+            self.git(repo, "commit", "-q", "--allow-empty", "-m", "later")
+            self.git(repo, "update-ref", "refs/tags/v12.0.0", "HEAD")
+            self.git(repo, "checkout", "-q", "-")  # back on the root commit: v12.0.0 is not reachable from HEAD
+            self.assertEqual(self.git(repo, "tag", "--merged", "HEAD", "--list", "v12.0.0").stdout.strip(), "")
+            self.assertEqual(qv.newest_release(repo), ("v12.0.0", 12))
+
+    def test_no_release_tag_is_refused_and_names_the_fetch(self):
+        with tempfile.TemporaryDirectory(dir=work_root.test_scratch()) as tmp:
+            repo = self.make_repo(tmp, ["v5.0.0-rc.1", "vv6.0.0", "release-6"])
+            with self.assertRaisesRegex(qv.VersionError, "no release tag .*fetch"):
+                qv.newest_release(repo)
+
+    def test_a_path_git_cannot_read_is_refused_not_defaulted(self):
+        # a missing path, not a plain directory: the work root above a scratch directory is itself a git repository,
+        # so git would walk up from a plain directory and list that repository's tags
+        with tempfile.TemporaryDirectory(dir=work_root.test_scratch()) as tmp:
+            with self.assertRaisesRegex(qv.VersionError, "git cannot list the tags"):
+                qv.newest_release(pathlib.Path(tmp) / "not-there")
+
+    def test_this_clone_reads_the_same_newest_tag_as_git_lists_it(self):
+        listed = subprocess.run(["git", "-C", str(REPO), "tag", "--list", "v*"], capture_output=True, text=True,
+                                check=True).stdout.split()
+        releases = [tuple(int(n) for n in t[1:].split(".")) for t in listed if re.fullmatch(r"v\d+\.\d+\.\d+", t)]
+        if not releases:
+            self.skipTest("this clone lists no release tag (a shallow checkout); the refusal is tested in the throwaway repositories")
+        newest = max(releases)
+        self.assertEqual(qv.newest_release(), ("v" + ".".join(str(n) for n in newest), newest[0]))
+
+
+class FloorTest(unittest.TestCase):
+    """stamp_code_for(): the rule, refused below the newest release tag's major. The newest release is fixed per test."""
+
+    def newest_is(self, tag, major):
+        patcher = mock.patch.object(qv, "newest_release", return_value=(tag, major))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_version_below_the_newest_major_is_refused_and_names_the_tag(self):
+        # "1.0.0" is what a build with no git reports (cmake/set_project_version_from_git.cmake)
+        self.newest_is("v6.0.0", 6)
+        for low in ("1.0.0", "0.1.0", "5.20.0", "5.6.1-dev.37+3a35e0b", "5.99.99"):
+            with self.subTest(version=low):
+                with self.assertRaisesRegex(qv.VersionError, "below major 6, the major of the newest release tag v6.0.0"):
+                    qv.stamp_code_for(low)
+
+    def test_the_newest_major_is_accepted_with_the_rules_code(self):
+        self.newest_is("v6.0.0", 6)
+        self.assertEqual(qv.stamp_code_for("6.0.0"), 60_000_999)
+        self.assertEqual(qv.stamp_code_for("6.0.1-dev.37+3a35e0b"), 60_001_037)
+
+    def test_the_floor_follows_the_newest_release_when_it_moves(self):
+        # a new major raises the floor with it: the major is counted from the tags, never stored
+        self.newest_is("v7.0.0", 7)
+        with self.assertRaisesRegex(qv.VersionError, "below major 7"):
+            qv.stamp_code_for("6.0.1-dev.1+abcdef0")
+        self.assertEqual(qv.stamp_code_for("7.0.0"), 70_000_999)
+
+    def test_a_malformed_version_is_refused_by_the_rule_not_the_floor(self):
+        self.newest_is("v6.0.0", 6)
+        with self.assertRaisesRegex(qv.VersionError, "neither X.Y.Z"):
+            qv.stamp_code_for("v6.0.0")
+
+    def test_no_release_tag_means_no_stamp(self):
+        with mock.patch.object(qv, "newest_release", side_effect=qv.VersionError("no release tag (vX.Y.Z) in repo")):
+            with self.assertRaisesRegex(qv.VersionError, "no release tag"):
+                qv.stamp_code_for("6.0.0")
+
 
 class ParseTest(unittest.TestCase):
     def test_reads_the_code_and_its_offset(self):
@@ -311,17 +405,47 @@ class CommandLineTest(unittest.TestCase):
     def test_code(self):
         done = self.run_tool("code", "5.6.1-dev.37+3a35e0b")
         self.assertEqual((done.returncode, done.stdout.strip()), (0, "50601037"))
+        record = json.loads(done.stderr)
+        self.assertEqual((record["tag"], record["event"], record["version_code"]), ("NEVR.QUEST.APK", "version_code", 50601037))
+        self.assertEqual(record["stampable"], 5 >= current_major())  # a major 5 version is below any newer major
+
+    def test_the_bar_v6_0_0_is_strictly_above_v5_20_0_by_the_tool(self):
+        # a headset on 5.20.0 updates in place to 6.0.0 only if 6.0.0's code is the higher: Android refuses a lower one
+        six = self.run_tool("code", "6.0.0")
+        five = self.run_tool("code", "5.20.0")
+        self.assertEqual((six.returncode, six.stdout.strip()), (0, "60000999"), six.stderr)
+        self.assertEqual((five.returncode, five.stdout.strip()), (0, "52000999"), five.stderr)
+        self.assertGreater(int(six.stdout), int(five.stdout))
+
+    def test_code_below_the_newest_major_prints_the_rules_number_and_says_it_is_not_stampable(self):
+        done = self.run_tool("code", "0.1.0")
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, "100999"), done.stderr)
+        record = json.loads(done.stderr)
+        self.assertEqual((record["event"], record["version_code"], record["stampable"]), ("version_code", 100999, False))
 
     def test_code_refusal_is_one_json_line_and_exit_1(self):
-        done = self.run_tool("code", "0.1.0")
+        done = self.run_tool("code", "210.0.0")
         self.assertEqual(done.returncode, 1)
         self.assertEqual(done.stdout, "")
         record = json.loads(done.stderr)
         self.assertEqual((record["tag"], record["event"]), ("NEVR.QUEST.APK", "refused"))
-        self.assertIn("below major 5", record["reason"])
+        self.assertIn("major 210 is above 209", record["reason"])
+
+    def test_code_with_no_release_tag_is_refused_and_prints_no_code(self):
+        # the rule alone would print a code; the CLI also reads the newest release tag, so with none readable it refuses
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(qv, "newest_release", side_effect=qv.VersionError("no release tag (vX.Y.Z) in repo")):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = qv.main(["code", "6.0.0"])
+        self.assertEqual((code, out.getvalue()), (1, ""))
+        record = json.loads(err.getvalue())
+        self.assertEqual((record["tag"], record["event"]), ("NEVR.QUEST.APK", "refused"))
+        self.assertIn("no release tag", record["reason"])
 
     def test_patch_manifest_writes_in_place_and_logs_before_and_after(self):
-        version = "5.6.1-dev.37+3a35e0b"
+        major = current_major()
+        version = f"{major}.6.1-dev.37+3a35e0b"
+        code = major * 10**7 + 6 * 10**5 + 1 * 10**3 + 37
         with tempfile.TemporaryDirectory() as tmp:
             tmp = pathlib.Path(tmp)
             manifest = tmp / "AndroidManifest.xml"
@@ -331,22 +455,23 @@ class CommandLineTest(unittest.TestCase):
             shim = tmp / "shim.so"
             shim.write_bytes(b"\x7fELF\0" + version.encode() + b"\0")
             done = self.run_tool("patch-manifest", str(manifest), "--build-info", str(header), "--shim", str(shim))
-            self.assertEqual((done.returncode, done.stdout.strip()), (0, "50601037"), done.stderr)
+            self.assertEqual((done.returncode, done.stdout.strip()), (0, str(code)), done.stderr)
             record = json.loads(done.stderr)
             self.assertEqual((record["version_code_before"], record["version_code_after"], record["bytes_changed"]),
-                             (4987566, 50601037, 4))
-            self.assertEqual(manifest.read_bytes(), fx.build_manifest(50_601_037))
+                             (4987566, code, 4))
+            self.assertEqual(manifest.read_bytes(), fx.build_manifest(code))
 
     def test_patch_manifest_refuses_a_shim_from_another_build_and_leaves_the_manifest_alone(self):
+        major = current_major()
         with tempfile.TemporaryDirectory() as tmp:
             tmp = pathlib.Path(tmp)
             original = fx.build_manifest(4987566)
             manifest = tmp / "AndroidManifest.xml"
             manifest.write_bytes(original)
             header = tmp / "nevr_build_info.h"
-            header.write_text('constexpr const char* kVersion = "5.6.1-dev.37+3a35e0b";\n')
+            header.write_text(f'constexpr const char* kVersion = "{major}.6.1-dev.37+3a35e0b";\n')
             shim = tmp / "shim.so"
-            shim.write_bytes(b"\0" + b"5.6.1-dev.36+3a35e0b" + b"\0")
+            shim.write_bytes(b"\0" + f"{major}.6.1-dev.36+3a35e0b".encode() + b"\0")
             done = self.run_tool("patch-manifest", str(manifest), "--build-info", str(header), "--shim", str(shim))
             self.assertEqual(done.returncode, 1)
             self.assertIn("different builds", json.loads(done.stderr)["reason"])
@@ -354,28 +479,50 @@ class CommandLineTest(unittest.TestCase):
 
     def test_patch_manifest_takes_the_version_directly_where_no_build_info_exists(self):
         """A release APK packages CI's loader and has no build tree: the tag's version is the version (#1135)."""
+        major = current_major()
+        version = f"{major}.16.2"
+        code = major * 10**7 + 16 * 10**5 + 2 * 10**3 + 999
         with tempfile.TemporaryDirectory() as tmp:
             tmp = pathlib.Path(tmp)
             manifest = tmp / "AndroidManifest.xml"
             manifest.write_bytes(fx.build_manifest(4987566))
             shim = tmp / "shim.so"
-            shim.write_bytes(b"\x7fELF\0" + b"5.16.2" + b"\0")
-            done = self.run_tool("patch-manifest", str(manifest), "--version", "5.16.2", "--shim", str(shim))
-            self.assertEqual((done.returncode, done.stdout.strip()), (0, "51602999"), done.stderr)
-            self.assertEqual(manifest.read_bytes(), fx.build_manifest(51_602_999))
+            shim.write_bytes(b"\x7fELF\0" + version.encode() + b"\0")
+            done = self.run_tool("patch-manifest", str(manifest), "--version", version, "--shim", str(shim))
+            self.assertEqual((done.returncode, done.stdout.strip()), (0, str(code)), done.stderr)
+            self.assertEqual(manifest.read_bytes(), fx.build_manifest(code))
 
     def test_patch_manifest_with_a_version_still_refuses_a_shim_that_does_not_carry_it(self):
+        major = current_major()
+        version = f"{major}.16.2"
         with tempfile.TemporaryDirectory() as tmp:
             tmp = pathlib.Path(tmp)
             original = fx.build_manifest(4987566)
             manifest = tmp / "AndroidManifest.xml"
             manifest.write_bytes(original)
             shim = tmp / "shim.so"
-            shim.write_bytes(b"\0" + b"5.16.1" + b"\0")
-            done = self.run_tool("patch-manifest", str(manifest), "--version", "5.16.2", "--shim", str(shim))
+            shim.write_bytes(b"\0" + f"{major}.16.1".encode() + b"\0")
+            done = self.run_tool("patch-manifest", str(manifest), "--version", version, "--shim", str(shim))
             self.assertEqual(done.returncode, 1)
-            self.assertIn("5.16.2", json.loads(done.stderr)["reason"])
+            self.assertIn(version, json.loads(done.stderr)["reason"])
             self.assertEqual(manifest.read_bytes(), original)
+
+    def test_patch_manifest_refuses_a_version_below_the_newest_major_and_writes_nothing(self):
+        # the shim carries the version, so only the floor can refuse: the previous major, and "1.0.0" (a build with no git)
+        major = current_major()
+        for low in (f"{major - 1}.20.0", "1.0.0"):
+            with self.subTest(version=low):
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp = pathlib.Path(tmp)
+                    original = fx.build_manifest(4987566)
+                    manifest = tmp / "AndroidManifest.xml"
+                    manifest.write_bytes(original)
+                    shim = tmp / "shim.so"
+                    shim.write_bytes(b"\0" + low.encode() + b"\0")
+                    done = self.run_tool("patch-manifest", str(manifest), "--version", low, "--shim", str(shim))
+                    self.assertEqual((done.returncode, done.stdout), (1, ""), done.stderr)
+                    self.assertIn(f"below major {major}", json.loads(done.stderr)["reason"])
+                    self.assertEqual(manifest.read_bytes(), original)
 
     def test_patch_manifest_needs_exactly_one_source_of_the_version(self):
         with tempfile.TemporaryDirectory() as tmp:

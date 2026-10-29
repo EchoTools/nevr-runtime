@@ -13,10 +13,13 @@
 #include <thread>
 
 #include "activation.h"
+#include "credits_text.h"
 #include "hook_log.h"
 #include "hook_report.h"
 #include "sentinel.h"
 #include "sentinel_log.h"
+#include "splash_skip_hook.h"
+#include "ui_texture_mips.h"
 
 #include "quest/diag/hwdump_run.h"
 #include "quest/auth/quest_token_auth.h"
@@ -26,6 +29,7 @@
 #include "quest/integration/entry_hooks.h"
 #include "quest/integration/drop_report.h"
 #include "quest/integration/identity_source.h"
+#include "quest/integration/libr15_attach_step.h"
 #include "quest/integration/post_load.h"
 #include "quest/integration/self_check_wiring.h"
 #include "quest/integration/stage_log.h"
@@ -36,6 +40,7 @@
 #include "quest/plugin/plugin_plan.h"
 #include "quest/plugin/plugin_runtime.h"
 #include "quest/redirect/hook_adapter.h"
+#include "quest/social/lobby_full_hooks.h"
 #include "quest/social/menu_version_label.h"
 #include "quest/social/social_facade.h"
 #include "quest/social/social_frames.h"
@@ -250,12 +255,6 @@ void LoginLog(nevr_quest_login::Level level, const char* event, const nevr_quest
 }
 
 // A stage line for a post-load install once it is settled (a retry is not a result).
-// A feature that would write a libr15 code page: one line names it and the issue it waits on.
-void LogCodeWriteSkipped(const char* feature) {
-  sentinel::LogFields(sentinel::LogLevel::kInfo, "code_write_skipped",
-                      {{"feature", feature}, {"reason", "execmod_denied_on_libr15"}, {"waits_on", "#1132"}});
-}
-
 ActionResult Staged(const char* stage, ActionResult result) {
   if (result.settle != Settle::kRetryLater) {
     const bool ok = result.settle == Settle::kDone;
@@ -411,7 +410,14 @@ class ProductionSteps final : public Steps {
   bool ResourceRequestLogWanted() override { return nevr_quest::integration::ResourceRequestLogEnabled(); }
   bool RegisterResourceRequestCounters() override { return nevr_quest::integration::RegisterResourceRequestCounters(); }
   bool RegisterTextureQualityCounters() override { return nevr_quest::integration::RegisterTextureQualityCounters(); }
+  bool RegisterClockLevelsCounters() override { return nevr_quest::integration::RegisterClockLevelsCounters(); }
   bool StartReporter() override { return sentinel::StartReporter(/*firstMs=*/1000, /*graceMs=*/10000, /*steadyMs=*/60000); }
+
+  bool AttachLibR15() override {
+    const AttachStepOutcome outcome = RunAttachStep(BuildAttachOptions());
+    detail_ = outcome.detail;
+    return outcome.verified;
+  }
 
   bool InstallClockHook() override {
     const bool ok = nevr_quest::integration::InstallClockHook();
@@ -518,14 +524,22 @@ class ProductionSteps final : public Steps {
   }
 
   bool InstallCreditsText() override {
-    LogCodeWriteSkipped("credits_text");
-    detail_ = "skipped_waits_on_1132";
-    return true;  // a step that is deliberately not run did not fail
+    // A data store into the patched libr15's credits slot (ADR 0021 section 8). The install logs its own `credits_text` line,
+    // with the reason when it refuses (libr15_not_patched on the stock file, not_verified, a block the build did not render).
+    const bool ok = nevr_quest::credits_text::InstallCreditsText();
+    detail_ = ok ? "ok" : "refused";
+    return ok;
   }
 
   bool InstallMenuCards() override {
     const bool ok = nevr_quest::integration::InstallMenuCardsHook();
     detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
+  bool ArmClockLevels(bool countersRegistered, bool overrideOn) override {
+    const bool ok = nevr_quest::integration::ArmClockLevelsHook(countersRegistered, overrideOn);
+    detail_ = ok ? "ok" : "counters_refused";
     return ok;
   }
 
@@ -624,13 +638,15 @@ class ProductionSteps final : public Steps {
     // The menu version label (#747) rides this step: one GOT hook on libr15's SetText slot, a data page, so it writes no code
     // page. The hook logs its own outcome; a refusal does not fail social.
     if (ok) quest_social::menu_version::InstallMenuVersionLabelHook();
-    // Four libr15 features write a code page (three inline-hook features here, the credits pairs in their own step) and
-    // are not installed: the current
-    // Horizon policy denies execmod on a written libr15 page, and the first call into it faults (#1127). Each waits on
-    // the build-time patch (#1132), which writes no code page at run time.
-    LogCodeWriteSkipped("lobby_full");
-    LogCodeWriteSkipped("ui_texture");
-    LogCodeWriteSkipped("splash_skip");
+    // The three libr15 features that were inline hooks are rows of the build-time patch (ADR 0021): each is activated with one
+    // atomic store into its row's slot once AttachLibR15 verified the file, and logs its own outcome. A row that is refused
+    // (an unverified libr15, a mismatched helper) stays pass-through; none of them fails social.
+    // The lobby-full policy (#1001) needs the facade in place (three rows: join, failure, success).
+    if (ok) quest_social::lobby_full::InstallLobbyFullHooks();
+    // The UI texture top mip (#961): one row, and the helper it calls is checked against its pinned prologue.
+    nevr_quest::ui_texture_mips::InstallUiTextureMips();
+    // The button-press splash skip (#962): one row on the menu widget's update.
+    if (ok) nevr_quest::splash_skip::Install();
     return ok;
   }
 

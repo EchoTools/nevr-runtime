@@ -16,7 +16,9 @@
 #include "runtime/host/host_identity.h"
 #include "runtime/host/runtime_load.h"
 #include "runtime/host/runtime_rendezvous.h"
+#include "runtime/host/stop_line.h"
 #include "runtime/host/stop_notice.h"
+#include "runtime/tests/stderr_capture.h"
 
 #include <gtest/gtest.h>
 
@@ -284,7 +286,23 @@ struct Outcome {
   std::int64_t result = 0;
   std::vector<nlohmann::json> records;
   bool runtime_mapped = false;
+  std::string stderr_text;  // what the host wrote to the standard error handle (the NEVR.STOP line)
 };
+
+// The one NEVR.STOP line of a run that stopped the game, parsed; fails the test when there is not exactly one.
+nlohmann::json OneStopLine(const Outcome& outcome) {
+  EXPECT_FALSE(outcome.stderr_text.empty());
+  EXPECT_EQ(outcome.stderr_text.find('\n'), outcome.stderr_text.size() - 1) << outcome.stderr_text;
+  return outcome.stderr_text.empty() ? nlohmann::json() : nlohmann::json::parse(outcome.stderr_text);
+}
+
+std::string Utf8(const std::wstring& wide) {
+  if (wide.empty()) return {};
+  const int size = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+  std::string out(static_cast<std::size_t>(size), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), out.data(), size, nullptr, nullptr);
+  return out;
+}
 
 // The one record of an event, which must be there exactly once.
 nlohmann::json Only(const Outcome& outcome, const char* event) {
@@ -408,7 +426,10 @@ class HostRuntimeVerify : public ::testing::Test {
     RuntimeRendezvous::Seams().show_stop_notice = &RecordNotice;
     RuntimeRendezvous::Seams().command_line = &CommandLine;
     BootstrapDiagnostics diagnostics;
-    diagnostics.PrepareForTest(local_.c_str(), nullptr, nullptr);
+    // The host stand-in sits in install_: its directory is where an old-layout runtime would be found.
+    const std::wstring host_dir = install_ + L"\\";
+    diagnostics.PrepareForTest(local_.c_str(), nullptr, host_dir.c_str());
+    nevr_test::StderrCapture capture;
     {
       ReturningTarget target;
       EXPECT_NE(target.code(), nullptr);
@@ -420,6 +441,7 @@ class HostRuntimeVerify : public ::testing::Test {
       outcome.records = ParseRecords(ReadAll(local_ + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl"));
       RuntimeRendezvous::ResetActiveForTest();
     }
+    outcome.stderr_text = capture.Text();
     const HMODULE mapped = GetModuleHandleW(runtime_path_.c_str());
     outcome.runtime_mapped = mapped != nullptr;
     // The stand-in is unloaded again so the next test maps its own file.
@@ -460,6 +482,7 @@ TEST_F(HostRuntimeVerify, ASignedRuntimeIsAcceptedLoadedAndNamedInTheVersionsRec
   EXPECT_LT(IndexOf(outcome.records, "versions"), IndexOf(outcome.records, "runtime_load"))
       << "the versions record is written after the verdict and before the load's own record";
   EXPECT_EQ(IndexOf(outcome.records, "game_stop"), -1);
+  EXPECT_EQ(outcome.stderr_text, "") << "a run that loaded the runtime writes no NEVR.STOP line";
 }
 
 // The old layout (ADR 0012, "The one-time move" and "Updating only the host"): a runtime left beside the host in the
@@ -485,6 +508,15 @@ TEST_F(HostRuntimeVerify, ARuntimeLeftBesideTheHostIsNotFoundAndTheGameStopsNami
   EXPECT_NE(searched.find("nevr-root\\nevr-runtime.dll"), std::string::npos) << searched;
   EXPECT_EQ(searched.find("\\install\\"), std::string::npos) << "the game's folder is not where it looked: " << searched;
   EXPECT_EQ(Only(outcome, "versions").at("runtime_sha256"), "unavailable");
+
+  // The console line names the old file and where to move it (#1252).
+  const nlohmann::json line = OneStopLine(outcome);
+  EXPECT_EQ(line.at("reason"), "runtime_absent");
+  const std::string detail = line.at("detail");
+  EXPECT_NE(detail.find("a nevr-runtime.dll is beside BugSplat64.dll in " + Utf8(install_) + ", which the host does not load"),
+            std::string::npos) << detail;
+  EXPECT_NE(detail.find("move it to " + Utf8(nevr_root_)), std::string::npos) << detail;
+  EXPECT_EQ(stop.at("detail"), line.at("detail")) << "the log and the console say the same";
 }
 
 TEST_F(HostRuntimeVerify, AMissingRuntimeStopsTheGameWithCode78AndSaysWhichPathWasSearched) {
@@ -510,6 +542,26 @@ TEST_F(HostRuntimeVerify, AMissingRuntimeStopsTheGameWithCode78AndSaysWhichPathW
   EXPECT_EQ(stop.at("exit_code"), 78);
   EXPECT_EQ(stop.at("notice"), "shown");
   EXPECT_EQ(stop.at("runtime_path"), versions.at("runtime_path"));
+
+  // The console line (#1252): once, with the exit code, both versions, the path searched and the log.
+  const nlohmann::json line = OneStopLine(outcome);
+  EXPECT_EQ(line.at("tag"), "NEVR.STOP");
+  EXPECT_EQ(line.at("stopped"), true);
+  EXPECT_EQ(line.at("code"), 78);
+  EXPECT_EQ(line.at("reason"), "runtime_absent");
+  EXPECT_EQ(line.at("host_version"), nevr_host::Version());
+  EXPECT_EQ(line.at("runtime_version"), "not loaded");
+  EXPECT_EQ(line.at("detail"), "nevr-runtime.dll is missing; path=" + versions.at("runtime_path").get<std::string>());
+  EXPECT_EQ(std::string(line.at("detail")).find("beside"), std::string::npos) << "nothing is beside the host";
+  EXPECT_EQ(line.at("log"), Utf8(g_log_path));
+  // The record carries the same facts, and the dialog the version and the log.
+  EXPECT_EQ(stop.at("stopped"), true);
+  EXPECT_EQ(stop.at("host_version"), line.at("host_version"));
+  EXPECT_EQ(stop.at("runtime_version"), line.at("runtime_version"));
+  EXPECT_EQ(stop.at("detail"), line.at("detail"));
+  EXPECT_EQ(stop.at("log"), line.at("log"));
+  EXPECT_NE(g_notices[0].find(L"\nLog: " + g_log_path), std::wstring::npos);
+  EXPECT_NE(g_notices[0].find(Widen(std::string("nEVR ") + nevr_host::Version())), std::wstring::npos);
 }
 
 // What a refusal does, whatever the cause: the file is never mapped, the one dialog, code 78, and the records in order.
@@ -537,6 +589,16 @@ void ExpectRefused(const Outcome& outcome, const std::string& host_sha256, const
   EXPECT_EQ(stop.at("exit_code"), 78);
   EXPECT_LT(IndexOf(outcome.records, "versions"), IndexOf(outcome.records, "runtime_load"));
   EXPECT_LT(IndexOf(outcome.records, "runtime_load"), IndexOf(outcome.records, "game_stop"));
+
+  // The console line (#1252): the verifier's own words first, and no version for a file that was never read.
+  const nlohmann::json line = OneStopLine(outcome);
+  EXPECT_EQ(line.at("stopped"), true);
+  EXPECT_EQ(line.at("code"), 78);
+  EXPECT_EQ(line.at("reason"), "runtime_refused");
+  EXPECT_EQ(line.at("runtime_version"), "not loaded");
+  EXPECT_EQ(line.at("host_version"), nevr_host::Version());
+  EXPECT_EQ(line.value("detail", "").rfind(reason_prefix, 0), 0u) << line.value("detail", "");
+  EXPECT_EQ(stop.at("detail"), line.at("detail"));
 }
 
 TEST_F(HostRuntimeVerify, AnUnsignedRuntimeIsRefusedNeverMappedAndStopsTheGame) {
@@ -590,6 +652,27 @@ TEST_F(HostRuntimeVerify, ADevBuildLoadsAnUnsignedRuntimeAndSaysSoInTheRecord) {
   EXPECT_EQ(versions.at("runtime_sha256"), Sha256Hex(ReadBytes(runtime_path_))) << "a loaded runtime is named";
 }
 
+// A runtime the host read but could not start carries its version into the stop facts: the zero host context fails the
+// fixture's own validation, so initialize returns 1 after the file was read and mapped.
+TEST_F(HostRuntimeVerify, ARuntimeThatLoadsAndFailsToInitializeStatesItsVersionInTheStopFacts) {
+  StageCopy("nevr-runtime.signed");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local_.c_str(), nullptr, nullptr);
+  nevr_host::RuntimeLoader loader;
+  loader.Prepare();
+  NevrHostContext host{};
+  const nevr_host::RuntimeLoadResult result = loader.Load(host, diagnostics);
+  const HMODULE mapped = GetModuleHandleW(runtime_path_.c_str());
+  for (int i = 0; mapped != nullptr && i < 8 && GetModuleHandleW(runtime_path_.c_str()) != nullptr; ++i) FreeLibrary(mapped);
+
+  EXPECT_EQ(result.outcome, RuntimeLoadOutcome::kInitFailed);
+  EXPECT_EQ(result.runtime_version, "7.7.7") << "the version is the one the file's NEVR-BUILD literal carries";
+  nevr_host::RuntimeStopText text;
+  nevr_host::DescribeRuntimeStop(diagnostics, result, text);
+  EXPECT_STREQ(text.facts.reason, "init_failed");
+  EXPECT_STREQ(text.facts.runtime_version, "7.7.7");
+}
+
 TEST_F(HostRuntimeVerify, ADevBuildStillRefusesAFileItCannotRead) {
   nevr_host::SetDevBuildForTest(1);
   StageCopy("nevr-runtime.signed");
@@ -624,6 +707,10 @@ TEST_F(HostRuntimeVerify, AServerIsRefusedTheSameWayWithTheRecordsAndNoDialog) {
   EXPECT_EQ(Only(outcome, "game_stop").at("notice"), "suppressed_server_or_headless");
   EXPECT_EQ(Only(outcome, "runtime_load").at("outcome"), "runtime_refused");
   EXPECT_EQ(Only(outcome, "versions").at("runtime_sha256"), "unavailable");
+  // A server has no dialog; the console line is what its operator reads.
+  const nlohmann::json line = OneStopLine(outcome);
+  EXPECT_EQ(line.at("reason"), "runtime_refused");
+  EXPECT_EQ(line.at("code"), 78);
 }
 
 }  // namespace
