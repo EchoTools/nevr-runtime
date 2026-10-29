@@ -1,10 +1,33 @@
 #include "logging.h"
 
 #include <atomic>
+#include <chrono>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 
 #include "abi/echovr.h"
 #include "abi/echovr_functions.h"
 #include "globals.h"
+
+// ISO 8601 timestamp in UTC, with milliseconds (the NEVR.STOP line in runtime/lifecycle/cli_reject.cpp carries it).
+std::string GetISO8601Timestamp() {
+  auto now = std::chrono::system_clock::now();
+  auto now_time_t = std::chrono::system_clock::to_time_t(now);
+  auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+
+  std::tm tm_utc;
+#ifdef _WIN32
+  gmtime_s(&tm_utc, &now_time_t);
+#else
+  gmtime_r(&now_time_t, &tm_utc);
+#endif
+
+  std::ostringstream oss;
+  oss << std::put_time(&tm_utc, "%Y-%m-%dT%H:%M:%S") << '.' << std::setfill('0') << std::setw(3) << now_ms.count()
+      << 'Z';
+  return oss.str();
+}
 
 // N80: per-process run ID = PID + process creation time, so every writer in the
 // process derives the same value independently. Computed once; the benign race on
