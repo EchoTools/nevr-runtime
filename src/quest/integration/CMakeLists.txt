@@ -103,6 +103,10 @@ set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/resource_re
 target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_quality_hook.cpp")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_quality_hook.cpp"
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# And the #928 clock-level override's counters (also without exceptions).
+target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/clock_levels_hook.cpp")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/clock_levels_hook.cpp"
+  PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
 # A no-op plugin for a headset run of the loader (docs/adr/0019, slice 1): the host test's fixture, named `nevr_noop` and
 # declaring the libr15 build the sentinel is pinned to. It is not part of the sentinel or of any APK the recipes build; a

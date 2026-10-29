@@ -135,12 +135,48 @@ for row.
 | `[NEVR.INVITE]`       | Invite codes for the CREATE GAME / JOIN VIA CODE wizard (`patch/invite_wizard.h`, ADR 0017): a code is never logged, only `code_len` and `code_fp` |
 | `[NEVR.RENDER]`       | The render configuration of a PC client: one `render_config` line at the first rendered frame and one for every change, with the GPU, headset, refresh rate, render target and the game's graphics settings, plus the hooks' own install lines and a one-time `settings_trace` line (`patch/render_config.h`, `patch/render_config_hook.h`, ADR 0022) |
 | `[NEVR.HOST]`         | The `BugSplat64.dll` host's own JSONL records (`nevr-bootstrap.jsonl`): attach decisions, runtime load, crash dump. The value of the record's `tag` field; the host writes no `Log()` line |
+| `[NEVR.STOP]`         | The one line the `BugSplat64.dll` host writes to standard error when it stops the game or leaves it running without `nevr-runtime.dll` (`runtime/host/stop_line.h`, #1252), with the same facts in the host log. The value of the line's `tag` field; fields and exit codes in "The `NEVR.STOP` line" below |
 | `[NEVR.INSTALL]`      | The core installer's own JSONL run log (`installer/`, ADR 0023): one record per event, appended, never truncated; the value of the record's `tag` field. Never carries a token or a response body |
 | `[server_timing]`     | Server tick-rate / timing patches             |
 
 **Rule:** If you add a new component, add its tag to this table. If you
 are unsure which tag to use, use the nearest existing tag and note it
 for review.
+
+### The `NEVR.STOP` line
+
+Every way the host stops the game, and every attach that leaves the game running without the runtime, writes one JSON
+object on one line to standard error, once per run. A `-server` operator has a console and no dialog; this is what they
+read. The host log (`nevr-bootstrap.jsonl`) carries the same facts: in the `game_stop` record when the host ends the
+process, and in a `host_not_attached` record when the game keeps running. The line is built in a fixed buffer
+(`JsonLine`, no heap, no lock) and written with one `WriteFile`. The exit codes do not change.
+
+| Field             | Meaning                                                                                              |
+| ----------------- | ---------------------------------------------------------------------------------------------------- |
+| `tag`             | `NEVR.STOP`                                                                                          |
+| `ts`, `pid`       | UTC millisecond stamp and process id, as in every host record                                        |
+| `event`           | `stop`                                                                                               |
+| `stopped`         | `true` when the host ends the process; `false` when the game keeps running without the runtime       |
+| `code`            | The exit code, as a number. Absent when `stopped` is `false`                                         |
+| `reason`          | One token from the table below                                                                       |
+| `host_version`    | The version in the host's own `NEVR-BUILD <version> <commit40>` literal                              |
+| `runtime_version` | The version in `nevr-runtime.dll`'s literal when the host read the file, else `not loaded`           |
+| `detail`          | What is wrong and where, in words: the path searched, the verifier's own words, the Win32 error or the ABI status. When the runtime is absent from the nEVR root and a `nevr-runtime.dll` sits beside `BugSplat64.dll`, it names that folder, says the host does not load that file and names the root to move it to. A piece that does not fit the detail's buffer is left out whole and the detail ends with `[detail incomplete: a path did not fit]` |
+| `log`             | The full path of the host log file that accepted the record (the %TEMP% copy when the primary folder refused it); the record and the line name the same file. Empty when no log file did |
+
+| `reason`                 | `stopped` | `code`                    | Meaning                                                                         |
+| ------------------------ | --------- | ------------------------- | ------------------------------------------------------------------------------- |
+| `runtime_absent`         | `true`    | 78                        | No `nevr-runtime.dll` in the nEVR root                                          |
+| `runtime_refused`        | `true`    | 78                        | The signature check refused the file, or it could not be read; it is never loaded |
+| `dependency_load_failed` | `true`    | 78                        | A DLL that `nevr-runtime.dll` imports could not be loaded                       |
+| `load_failed`            | `true`    | 78                        | `LoadLibrary` failed for another cause                                          |
+| `missing_entry`          | `true`    | 78                        | The file has no `NEVR_GetRuntimeApi` export                                     |
+| `null_descriptor`        | `true`    | 78                        | `NEVR_GetRuntimeApi` returned no descriptor                                     |
+| `abi_rejected`           | `true`    | 78                        | The descriptor's ABI version or size was rejected                               |
+| `init_failed`            | `true`    | 78                        | `initialize` returned non-zero or threw                                         |
+| `no_path`                | `true`    | 78                        | No nEVR root could be formed (no `%LOCALAPPDATA%` that fits)                    |
+| `unsupported_image`      | `true`    | 3762421763 (`0xE0420003`) | The process image is not the supported `echovr.exe` build (the image guard)     |
+| `host_not_attached`      | `false`   | none                      | The image check, the prologue check or the hook install failed: no detour was installed and the game runs without the runtime. `detail` names the step |
 
 ---
 

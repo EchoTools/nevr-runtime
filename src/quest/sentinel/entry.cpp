@@ -12,6 +12,7 @@
 #include "sentinel.h"
 #include "generated/nevr_build_info.h"
 #include "got_hook.h"
+#include "clock_levels_hook.h"
 #include "hook_install.h"
 #include "hook_log.h"
 #include "hook_report.h"
@@ -164,6 +165,12 @@ bool InstallResourceRequestLogHook(bool countersRegistered) noexcept {
     return nevr_quest::resource_request::InstallIfCounted(countersRegistered);
 }
 
+// The clock-level override (#928). It owns no slot: the render-configuration hook owns vrapi_SetClockLevels and asks the
+// override which levels to call with. The counters are registered with the others, before the single StartReporter.
+bool RegisterClockLevelsCounters() noexcept { return nevr_quest::clock_levels::RegisterCounters(); }
+bool ArmClockLevelsHook(bool countersRegistered, bool overrideOn) noexcept {
+    return nevr_quest::clock_levels::ArmIfCounted(countersRegistered, overrideOn);
+}
 // The rad provider in pnsovr's place (#1220): development builds only. A refused install is logged by GotHook and by the
 // hook's own line, and leaves the game's provider in place.
 bool PnsProviderEnabled() noexcept { return nevr_build::kIsDev; }

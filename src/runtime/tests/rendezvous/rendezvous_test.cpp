@@ -17,6 +17,9 @@
 //   - missing: the host stopped the game once with exit code 78 (its test seam records the stop and lets the
 //     original wrapper run, once, with its exact result) and wrote the game_stop record;
 //   - missing-real-stop: the same without the seam: the process ends with exit code 78 inside the call;
+//   - every way the host stops the game, or leaves it running without the runtime, writes ONE NEVR.STOP line to the
+//     child's standard error (#1252): the parent reads it from a file and checks the fields, their order, the version
+//     against the host file's own NEVR-BUILD literal, and the log path against the host log it names;
 //   - reenter: a same-thread re-entry during initialize bypassed to the original
 //     (one lone original) and the call that followed was dispatched;
 //   - the host context carried the wrapper's trampoline and the hook record: the
@@ -61,6 +64,7 @@ bool g_wrong_image = false;       // an image the host refuses: not the supporte
 bool g_fail_hook_create = false;  // MH_CreateHook "fails" in the host
 bool g_real_stop = false;         // the host really ends the process when the runtime did not load
 bool g_verify_runtime = false;    // the host verifies nevr-runtime.dll with the production pins (the fixture is unsigned)
+std::wstring g_runtime_dir;       // the folder the host looks for the runtime in; empty: the shim's own folder
 int g_launcher_mode = 0;
 // A value that needs all 64 bits: a truncated argument or result changes it.
 constexpr std::int64_t kCommandLine = 0x1234'5678'9ABC'DEF0;
@@ -160,6 +164,10 @@ extern "C" __declspec(dllexport) int RendezvousProbeRealStop() {
 
 extern "C" __declspec(dllexport) int RendezvousProbeVerifyRuntime() {
   return g_verify_runtime ? 1 : 0;
+}
+
+extern "C" __declspec(dllexport) const wchar_t* RendezvousProbeRuntimeDir() {
+  return g_runtime_dir.empty() ? nullptr : g_runtime_dir.c_str();
 }
 
 namespace {
@@ -345,11 +353,20 @@ void RunChildScenario(const std::string& scenario) {
     g_fail_hook_create = scenario == "hook-create-fails";
     expect_hooked = false;
     dispatched = false;
-  } else if (scenario == "missing" || scenario == "missing-real-stop" || scenario == "refused-real-stop") {
+  } else if (scenario == "missing" || scenario == "missing-real-stop" || scenario == "missing-real-stop-server" ||
+             scenario == "refused-real-stop" || scenario == "legacy-real-stop") {
     dispatched = false;
     expect_stop = true;
     g_real_stop = scenario != "missing";
     g_verify_runtime = scenario == "refused-real-stop";
+    if (scenario == "legacy-real-stop") {
+      // The runtime is looked for in an empty folder of its own; the one the parent staged beside the host is the
+      // old layout, which the host does not load.
+      wchar_t local[MAX_PATH] = {};
+      const DWORD local_length = GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH);
+      Require(local_length != 0 && local_length < MAX_PATH, "the scenario's LOCALAPPDATA is not set");
+      g_runtime_dir = std::wstring(local, local_length) + L"\\root";
+    }
   } else if (scenario != "valid" && scenario != "reenter") {
     Fail("unknown child scenario");
   }
@@ -415,7 +432,9 @@ void StageRuntimeFixture(const std::wstring& root, const wchar_t* fixture) {
   Require(CopyFileW(source.c_str(), runtime.c_str(), FALSE) != FALSE, "could not stage runtime fixture");
 }
 
-void RunChild(const std::wstring& command_line, const char* label, DWORD expected_exit = 0) {
+// `stderr_file`, when not empty, is the file the child's standard error goes to (the NEVR.STOP line is read from it).
+void RunChild(const std::wstring& command_line, const char* label, DWORD expected_exit = 0,
+              const std::wstring& stderr_file = std::wstring()) {
   std::wstring command = command_line;  // CreateProcessW may mutate the buffer
   STARTUPINFOW startup = {};
   startup.cb = sizeof(startup);
@@ -423,6 +442,14 @@ void RunChild(const std::wstring& command_line, const char* label, DWORD expecte
   startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
   startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
   startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+  HANDLE captured = INVALID_HANDLE_VALUE;
+  if (!stderr_file.empty()) {
+    SECURITY_ATTRIBUTES inheritable = {sizeof(inheritable), nullptr, TRUE};
+    captured = CreateFileW(stderr_file.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable,
+                           CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    Require(captured != INVALID_HANDLE_VALUE, "could not create the file for the child's standard error");
+    startup.hStdError = captured;
+  }
   for (HANDLE handle : {startup.hStdOutput, startup.hStdError}) {
     if (handle != nullptr && handle != INVALID_HANDLE_VALUE) {
       SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
@@ -434,6 +461,7 @@ void RunChild(const std::wstring& command_line, const char* label, DWORD expecte
   Require(CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr,
                          &startup, &process) != FALSE,
           "could not launch scenario child");
+  if (captured != INVALID_HANDLE_VALUE) CloseHandle(captured);  // the child holds its own copy
   CloseHandle(process.hThread);
   if (WaitForSingleObject(process.hProcess, 30000) != WAIT_OBJECT_0) {
     TerminateProcess(process.hProcess, 2);
@@ -556,6 +584,143 @@ void ExpectHookedRecords(const std::vector<nlohmann::json>& records, const char*
   Require(records[static_cast<std::size_t>(load)].contains("loader_lock_held") &&
               records[static_cast<std::size_t>(load)].at("loader_lock_held") == false,
           "the runtime-load record does not say the loader lock was not held");
+}
+
+// --- the NEVR.STOP line (#1252) --------------------------------------------------------------------------------------
+
+std::string WideToUtf8(const std::wstring& wide) {
+  if (wide.empty()) return {};
+  const int size = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+  std::string out(static_cast<std::size_t>(size), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), out.data(), size, nullptr, nullptr);
+  return out;
+}
+
+// The version part of the host file's own `NEVR-BUILD <version> <commit40>` literal, read from the bytes of the file the
+// child loaded, not from anything the code under test computes.
+std::string HostVersionOfFile(const std::wstring& dll_path) {
+  const std::string bytes = ReadAll(dll_path.c_str());
+  const std::string marker("\0NEVR-BUILD ", 12);
+  const std::size_t at = bytes.find(marker);
+  Require(at != std::string::npos, "the host file carries no NEVR-BUILD literal");
+  const std::size_t start = at + marker.size();
+  const std::size_t end = bytes.find(' ', start);
+  Require(end != std::string::npos && end > start, "the host's NEVR-BUILD literal has no version");
+  return bytes.substr(start, end - start);
+}
+
+struct StopText {
+  std::string text;
+  nlohmann::json json;
+};
+
+// The NEVR.STOP lines of a child's standard error. Anything else in the file (a runtime's own output) is not a line of
+// this tag and is left alone; a NEVR.STOP line that does not parse, or that is not newline-terminated, fails the harness.
+std::vector<StopText> StopLines(const std::wstring& stderr_file) {
+  const std::string text = ReadAll(stderr_file.c_str());
+  std::vector<StopText> lines;
+  std::size_t start = 0;
+  while (start < text.size()) {
+    const std::size_t end = text.find('\n', start);
+    const std::string line = text.substr(start, end == std::string::npos ? std::string::npos : end - start);
+    start = end == std::string::npos ? text.size() : end + 1;
+    if (line.rfind("{\"tag\":\"NEVR.STOP\"", 0) != 0) continue;
+    Require(end != std::string::npos, "a NEVR.STOP line is missing its terminating newline");
+    nlohmann::json parsed = nlohmann::json::parse(line, nullptr, false);
+    Require(!parsed.is_discarded(), "a NEVR.STOP line does not parse as JSON");
+    lines.push_back(StopText{line, std::move(parsed)});
+  }
+  return lines;
+}
+
+struct StopExpectation {
+  bool stopped;
+  long long code;                // -1: the line carries no code
+  const char* reason;
+  const char* detail_prefix;     // the detail starts with this (empty: any)
+  const char* record_event;      // the host-log record that carries the same facts
+};
+
+// `local` is the child's %LOCALAPPDATA%: the host log is `<local>\nevr\echovr\logs\nevr-bootstrap.jsonl`.
+nlohmann::json ExpectStopLine(const std::wstring& stderr_file, const std::wstring& local, const std::wstring& root,
+                              const StopExpectation& expected, const char* label) {
+  const std::vector<StopText> lines = StopLines(stderr_file);
+  if (lines.size() != 1) {
+    std::fprintf(stderr, "scenario %s wrote %zu NEVR.STOP lines to standard error\n", label, lines.size());
+    Fail("a stop must write exactly one NEVR.STOP line");
+  }
+  const StopText& line = lines[0];
+  const nlohmann::json& json = line.json;
+
+  // The fields in their documented order.
+  std::size_t at = 0;
+  const char* keys_with_code[] = {"tag", "ts", "pid", "event", "stopped", "code", "reason",
+                                  "host_version", "runtime_version", "detail", "log"};
+  const char* keys_without_code[] = {"tag", "ts", "pid", "event", "stopped", "reason",
+                                     "host_version", "runtime_version", "detail", "log"};
+  const char* const* keys = expected.code >= 0 ? keys_with_code : keys_without_code;
+  const std::size_t key_count = expected.code >= 0 ? sizeof(keys_with_code) / sizeof(keys_with_code[0])
+                                                   : sizeof(keys_without_code) / sizeof(keys_without_code[0]);
+  for (std::size_t index = 0; index < key_count; ++index) {
+    const std::size_t found = line.text.find(std::string("\"") + keys[index] + "\":", at);
+    if (found == std::string::npos) {
+      std::fprintf(stderr, "scenario %s: key %s is missing or out of order in: %s\n", label, keys[index], line.text.c_str());
+      Fail("the NEVR.STOP line's fields are not the documented ones in the documented order");
+    }
+    at = found + 1;
+  }
+  Require(json.size() == key_count, "the NEVR.STOP line carries a field the document does not list");
+
+  Require(json.at("tag") == "NEVR.STOP" && json.at("event") == "stop", "the NEVR.STOP line has the wrong tag or event");
+  Require(json.at("ts").is_string() && json.at("ts").get<std::string>().size() == 24, "the NEVR.STOP line has no UTC millisecond stamp");
+  Require(json.at("pid").is_number_unsigned() && json.at("pid").get<std::uint64_t>() != 0, "the NEVR.STOP line has no pid");
+  Require(json.at("stopped").is_boolean() && json.at("stopped").get<bool>() == expected.stopped,
+          "the NEVR.STOP line says the wrong thing about whether the game stopped");
+  if (expected.code >= 0) {
+    Require(json.at("code").is_number_unsigned() &&
+                json.at("code").get<std::uint64_t>() == static_cast<std::uint64_t>(expected.code),
+            "the NEVR.STOP line's code is not the exit code, as a number");
+  }
+  Require(json.at("reason") == expected.reason, "the NEVR.STOP line names the wrong reason");
+  Require(json.at("host_version") == HostVersionOfFile(root + L"BugSplat64.dll"),
+          "the NEVR.STOP line's host_version is not the version in the host file's NEVR-BUILD literal");
+  Require(json.at("runtime_version") == "not loaded", "the NEVR.STOP line states a runtime version for a runtime that was not read");
+  const std::string detail = json.at("detail").get<std::string>();
+  Require(!detail.empty() && detail.rfind(expected.detail_prefix, 0) == 0, "the NEVR.STOP line's detail is empty or does not say what was expected");
+  const std::wstring log_path = local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl";
+  Require(json.at("log") == WideToUtf8(log_path), "the NEVR.STOP line's log is not the host log the facts went to");
+  Require(GetFileAttributesW(log_path.c_str()) != INVALID_FILE_ATTRIBUTES, "the host log the line names does not exist");
+
+  // The same facts are in the host log, from the same process.
+  const std::vector<nlohmann::json> records = ReadHostRecords(local);
+  const nlohmann::json* record = nullptr;
+  for (const nlohmann::json& candidate : records) {
+    if (candidate.value("event", "") == expected.record_event) record = &candidate;
+  }
+  Require(record != nullptr, "the host log has no record that carries the facts of the NEVR.STOP line");
+  Require(record->value("reason", "") == expected.reason && record->value("detail", "") == detail &&
+              record->value("log", "") == json.at("log").get<std::string>() &&
+              record->value("host_version", "") == json.at("host_version").get<std::string>() &&
+              record->value("runtime_version", "") == "not loaded" && record->contains("stopped") &&
+              record->at("stopped").get<bool>() == expected.stopped,
+          "the host log record and the NEVR.STOP line disagree");
+  Require(record->contains("pid") && record->at("pid") == json.at("pid"), "the log record and the line come from different processes");
+  if (expected.code >= 0) {
+    Require(record->value("exit_code", 0ll) == expected.code, "the host log record carries another exit code than the line");
+  } else {
+    Require(!record->contains("exit_code"), "a record of a game that kept running carries an exit code");
+  }
+  return json;
+}
+
+// What a client would have been shown, as the shim wrote it; empty when the child was shown nothing.
+std::string StopNoticeOf(const std::wstring& local) { return ReadAll((local + L"\\stop-notice.txt").c_str()); }
+
+void ExpectNoStopLine(const std::wstring& stderr_file, const char* label) {
+  if (!StopLines(stderr_file).empty()) {
+    std::fprintf(stderr, "scenario %s wrote a NEVR.STOP line though the runtime loaded\n", label);
+    Fail("a run that loaded the runtime must write no NEVR.STOP line");
+  }
 }
 
 int RunSetGameModuleUnsupported() {
@@ -686,14 +851,15 @@ int RunSuite() {
 
     const std::wstring command = L"\"" + std::wstring(self, length) + L"\" --child " +
                                  Utf8ToWide(scenario.name);
-    RunChild(command, scenario.name);
+    const std::wstring stderr_file = scenario_dir + L"\\stderr.txt";
+    RunChild(command, scenario.name, 0, stderr_file);
 
     const std::vector<nlohmann::json> records = ReadHostRecords(scenario_dir);
     if (std::strcmp(scenario.name, "bad-prologue") == 0) {
       // No detour exists, so the report came from the crash-reporter-constructor
       // trigger (nevr_host_test_FlushDeferred): the image was accepted, the prologue was
       // not, and the bytes found are in the record.
-      Require(records.size() == 2, "bad-prologue recorded other than image_check and prologue_check");
+      Require(records.size() == 3, "bad-prologue recorded other than image_check, prologue_check and host_not_attached");
       const int mismatch = Find(records, "host_attach", "prologue_check", "mismatch");
       Require(Find(records, "host_attach", "image_check", "accepted") == 0 && mismatch == 1,
               "bad-prologue did not record an accepted image then a prologue mismatch");
@@ -703,20 +869,39 @@ int RunSuite() {
       Require(record.at("expected_prologue") == "4883ec3848c744242000000000" &&
                   record.at("actual_prologue") == "4883ec3848c744242800000000",
               "the mismatch record does not carry the expected and the actual bytes");
+      // The game keeps running without the runtime: the line says which step failed, and carries no exit code.
+      ExpectStopLine(stderr_file, scenario_dir, root,
+                     {false, -1, "host_not_attached", "prologue_check rejected", "host_not_attached"}, scenario.name);
     } else if (std::strcmp(scenario.name, "bad-image") == 0) {
-      Require(records.size() == 1 && Find(records, "host_attach", "image_check", "rejected") == 0,
-              "a refused image was not on disk as the one image_check rejected record");
+      Require(records.size() == 2 && Find(records, "host_attach", "image_check", "rejected") == 0,
+              "a refused image was not on disk as the image_check rejected record, then host_not_attached");
+      ExpectStopLine(stderr_file, scenario_dir, root,
+                     {false, -1, "host_not_attached", "image_check rejected", "host_not_attached"}, scenario.name);
     } else if (std::strcmp(scenario.name, "hook-create-fails") == 0) {
-      Require(records.size() == 3, "a refused hook recorded other than image_check, prologue_check, hook_install");
+      Require(records.size() == 4, "a refused hook recorded other than image_check, prologue_check, hook_install, host_not_attached");
       const int failed = Find(records, "host_attach", "hook_install", "failed");
       Require(Find(records, "host_attach", "image_check", "accepted") == 0 &&
                   Find(records, "host_attach", "prologue_check", "accepted") == 1 && failed == 2,
               "a failed MH_CreateHook was not on disk as a hook_install failed record after the two accepted checks");
       Require(records[2].at("stage") == "create", "the hook_install failure does not name the create stage");
+      ExpectStopLine(stderr_file, scenario_dir, root,
+                     {false, -1, "host_not_attached", "hook_install failed", "host_not_attached"}, scenario.name);
     } else if (std::strcmp(scenario.name, "missing") == 0) {
       ExpectHookedRecords(records, "runtime_absent", true);
+      // The host's stop seam lets the child go on, so the child's own standard error holds the one line.
+      ExpectStopLine(stderr_file, scenario_dir, root,
+                     {true, 78, "runtime_absent", "nevr-runtime.dll is missing; path=", "game_stop"}, scenario.name);
+      // A client is shown the sentence, then the version and the log (the shim writes the text instead of a dialog).
+      const std::string notice = StopNoticeOf(scenario_dir);
+      const std::string expected_tail = "\n\nnEVR " + HostVersionOfFile(root + L"BugSplat64.dll") + "\nLog: " +
+                                        WideToUtf8(scenario_dir + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl");
+      Require(notice.rfind("nEVR couldn't start: nevr-runtime.dll is missing.", 0) == 0 &&
+                  notice.size() > expected_tail.size() &&
+                  notice.compare(notice.size() - expected_tail.size(), expected_tail.size(), expected_tail) == 0,
+              "the client's notice is not the sentence followed by the version and the log path");
     } else {
       ExpectHookedRecords(records, "loaded");
+      ExpectNoStopLine(stderr_file, scenario.name);
     }
     std::printf("rendezvous test: [%s] %zu host records parsed and ordered\n", scenario.name,
                 records.size());
@@ -730,9 +915,60 @@ int RunSuite() {
     CreateDirectoryW(dir.c_str(), nullptr);
     SetEnvironmentVariableW(L"LOCALAPPDATA", dir.c_str());
     SetEnvironmentVariableW(L"TEMP", dir.c_str());
-    RunChild(L"\"" + std::wstring(self, length) + L"\" --child missing-real-stop", "missing-real-stop", 78);
+    const std::wstring stderr_file = dir + L"\\stderr.txt";
+    RunChild(L"\"" + std::wstring(self, length) + L"\" --child missing-real-stop", "missing-real-stop", 78, stderr_file);
     ExpectHookedRecords(ReadHostRecords(dir), "runtime_absent", true);
-    std::printf("rendezvous test: [missing-real-stop] the host ended the game with exit code 78\n");
+    ExpectStopLine(stderr_file, dir, root, {true, 78, "runtime_absent", "nevr-runtime.dll is missing; path=", "game_stop"},
+                   "missing-real-stop");
+    Require(!StopNoticeOf(dir).empty() && ReadHostRecords(dir).back().value("notice", "") == "shown",
+            "a client was not shown the notice before the host ended the game");
+    std::printf("rendezvous test: [missing-real-stop] the host ended the game with exit code 78 and wrote one NEVR.STOP line\n");
+  }
+
+  // The same for a dedicated server: no dialog (nobody is there), the console line is what its operator reads.
+  {
+    StageRuntimeFixture(root, nullptr);
+    const std::wstring dir = base + L"\\missing-real-stop-server";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    SetEnvironmentVariableW(L"LOCALAPPDATA", dir.c_str());
+    SetEnvironmentVariableW(L"TEMP", dir.c_str());
+    const std::wstring stderr_file = dir + L"\\stderr.txt";
+    RunChild(L"\"" + std::wstring(self, length) + L"\" --child missing-real-stop-server -server",
+             "missing-real-stop-server", 78, stderr_file);
+    const std::vector<nlohmann::json> records = ReadHostRecords(dir);
+    ExpectHookedRecords(records, "runtime_absent", true);
+    ExpectStopLine(stderr_file, dir, root, {true, 78, "runtime_absent", "nevr-runtime.dll is missing; path=", "game_stop"},
+                   "missing-real-stop-server");
+    Require(StopNoticeOf(dir).empty() && records.back().value("notice", "") == "suppressed_server_or_headless",
+            "a -server run was shown a notice");
+    std::printf("rendezvous test: [missing-real-stop-server] exit code 78, one NEVR.STOP line, no dialog\n");
+  }
+
+  // The old layout: a nevr-runtime.dll beside BugSplat64.dll and none in the root. The host does not load it, and the
+  // line says where it is and where to move it.
+  {
+    StageRuntimeFixture(root, L"good");
+    const std::wstring dir = base + L"\\legacy-real-stop";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    CreateDirectoryW((dir + L"\\root").c_str(), nullptr);
+    SetEnvironmentVariableW(L"LOCALAPPDATA", dir.c_str());
+    SetEnvironmentVariableW(L"TEMP", dir.c_str());
+    const std::wstring stderr_file = dir + L"\\stderr.txt";
+    RunChild(L"\"" + std::wstring(self, length) + L"\" --child legacy-real-stop -server", "legacy-real-stop", 78,
+             stderr_file);
+    ExpectHookedRecords(ReadHostRecords(dir), "runtime_absent", true);
+    const nlohmann::json line = ExpectStopLine(stderr_file, dir, root,
+                                               {true, 78, "runtime_absent", "nevr-runtime.dll is missing; path=", "game_stop"},
+                                               "legacy-real-stop");
+    const std::string host_dir = WideToUtf8(root.substr(0, root.size() - 1));
+    const std::string expected = "nevr-runtime.dll is missing; path=" + WideToUtf8(dir) + "\\root\\nevr-runtime.dll; " +
+                                 "a nevr-runtime.dll is beside BugSplat64.dll in " + host_dir +
+                                 ", which the host does not load: move it to " + WideToUtf8(dir) + "\\root";
+    if (line.at("detail") != expected) {
+      std::fprintf(stderr, "legacy detail: %s\nexpected:      %s\n", line.at("detail").get<std::string>().c_str(), expected.c_str());
+      Fail("the stop line does not name the old-layout runtime beside the host and where to move it");
+    }
+    std::printf("rendezvous test: [legacy-real-stop] the old-layout runtime beside the host is named\n");
   }
 
   // A refused runtime, for real: the host verifies the (unsigned) fixture with the production pins, never maps it, and
@@ -744,9 +980,11 @@ int RunSuite() {
     CreateDirectoryW(dir.c_str(), nullptr);
     SetEnvironmentVariableW(L"LOCALAPPDATA", dir.c_str());
     SetEnvironmentVariableW(L"TEMP", dir.c_str());
-    RunChild(L"\"" + std::wstring(self, length) + L"\" --child refused-real-stop", "refused-real-stop", 78);
+    const std::wstring stderr_file = dir + L"\\stderr.txt";
+    RunChild(L"\"" + std::wstring(self, length) + L"\" --child refused-real-stop", "refused-real-stop", 78, stderr_file);
     const std::vector<nlohmann::json> records = ReadHostRecords(dir);
     ExpectHookedRecords(records, "runtime_refused", true);
+    ExpectStopLine(stderr_file, dir, root, {true, 78, "runtime_refused", "unsigned", "game_stop"}, "refused-real-stop");
     const int load = Find(records, "runtime_load", "", "runtime_refused");
     Require(load >= 0 && records[static_cast<std::size_t>(load)].value("verify", "") == "refused" &&
                 records[static_cast<std::size_t>(load)].value("verify_reason", "").rfind("unsigned", 0) == 0,
@@ -764,13 +1002,19 @@ int RunSuite() {
     CreateDirectoryW(dir.c_str(), nullptr);
     SetEnvironmentVariableW(L"LOCALAPPDATA", dir.c_str());
     SetEnvironmentVariableW(L"TEMP", dir.c_str());
+    const std::wstring stderr_file = dir + L"\\stderr.txt";
     RunChild(L"\"" + std::wstring(self, length) + L"\" --set-game-module-unsupported",
-             "set-game-module-unsupported", 0xE0420003);
-    // The refusal is recorded before the process ends, after the direct-import decisions.
+             "set-game-module-unsupported", 0xE0420003, stderr_file);
+    // The refusal is recorded before the process ends, after the direct-import decisions, and the stop that follows
+    // it is the last record.
     const std::vector<nlohmann::json> records = ReadHostRecords(dir);
-    Require(!records.empty() && records.back().at("step") == "image_check" &&
-                records.back().at("outcome") == "rejected",
+    Require(records.size() >= 2 && records[records.size() - 2].at("step") == "image_check" &&
+                records[records.size() - 2].at("outcome") == "rejected",
             "the unsupported module was not recorded as rejected before the process ended");
+    Require(records.back().value("event", "") == "game_stop" && records.back().value("reason", "") == "unsupported_image",
+            "the unsupported image's stop was not the last record");
+    ExpectStopLine(stderr_file, dir, root, {true, 0xE0420003ll, "unsupported_image", "the game image is not the supported echovr.exe build", "game_stop"},
+                   "set-game-module-unsupported");
   }
 
   // External NEVR_SetGameModule contract, success path: the
