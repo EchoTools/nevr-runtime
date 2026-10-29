@@ -96,6 +96,7 @@ int   TestHook_SharedRouteConn();  // the conn frames from the shared login sess
 void  TestHook_N61_ResetState();
 bool  TestHook_N60_IsMutexFree();
 size_t TestHook_ConnectedGameSockets();  // game sockets the bridge's two listeners still hold
+void* TestHook_LoginGameWsPtr();
 // Shared-route test seam: fn (nullptr clears it) runs with the target socket just before the frame is sent to it.
 void TestHook_SharedRoute_SetBeforeSend(void (*fn)(void* target));
 // A weak handle on the first game socket the service listener holds (empty when none).
