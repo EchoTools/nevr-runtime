@@ -4,6 +4,7 @@
 #include "runtime/host/host_json.h"
 #include "runtime/host/loader_lock.h"
 #include "runtime/host/path_buffer.h"
+#include "runtime/host/stop_line.h"
 #include "core/nevr_root.h"
 
 #include "runtime/ext/plugin_pins.h"
@@ -400,6 +401,10 @@ void EmitStopDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResu
     record["reason"] = result.OutcomeName();
     record["exit_code"] = kRuntimeStopExitCode;
     record["host_identity"] = IdentityLiteral();
+    // The facts the NEVR.STOP line carries (stop_line.h), so the log and the console agree.
+    RuntimeStopText text;
+    DescribeRuntimeStop(diagnostics, result, text);
+    AddStopFacts(record, text.facts);
     if (notice != nullptr) record["notice"] = notice;
     // The path searched: the one thing a player or support needs for a missing file.
     if (result.path_ok) record["runtime_path"] = ToUtf8(result.path);
@@ -499,8 +504,12 @@ const char* RuntimeRootSourceName(RuntimeRootSource source) noexcept {
   return "unresolved";
 }
 
-bool RuntimeFileBeside(const wchar_t*) noexcept {
-  return false;  // scaffold
+bool RuntimeFileBeside(const wchar_t* directory) noexcept {
+  if (directory == nullptr || directory[0] == L'\0') return false;
+  wchar_t path[MAX_PATH] = {};
+  if (!AppendPath(path, MAX_PATH, directory, kRuntimeFileName)) return false;
+  const DWORD attributes = GetFileAttributesW(path);
+  return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
 RuntimePathChoice ResolveRuntimePathFrom(const wchar_t* local_app_data, const wchar_t* nevr_root_override,
@@ -663,6 +672,7 @@ RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host,
   result_.verify = verify;
   result_.verify_reason = verify_reason;
   result_.verify_reason_code = verify_reason_code;
+  result_.runtime_version = runtime_facts.version;
   result_.loader_lock_held = loader_lock_held;
   result_.init_threw = init_threw;
   EmitLoadDiagnostic(diagnostics, result_);

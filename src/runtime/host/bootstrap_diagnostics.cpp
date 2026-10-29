@@ -288,6 +288,26 @@ std::size_t BootstrapDiagnostics::JournalClaimed() const { return claimed_.load(
 void BootstrapDiagnostics::RecordAttach(AttachStep step, AttachOutcome outcome,
                                         std::uint32_t detail, const unsigned char* actual,
                                         HookStage stage, AttachNote note) noexcept {
+  // The first step that left the game without the runtime, kept for the stop line (stop_line.h). Stored before the slot
+  // is reserved, so a journal that is full cannot lose it. An atomic and nothing else: this runs under the loader lock.
+  if (outcome != AttachOutcome::kAccepted) {
+    AttachFailure failure = AttachFailure::kNone;
+    switch (step) {
+      case AttachStep::kImageCheck: failure = AttachFailure::kImageCheck; break;
+      case AttachStep::kPrologueCheck: failure = AttachFailure::kPrologueCheck; break;
+      case AttachStep::kHookInstall: failure = AttachFailure::kHookInstall; break;
+      case AttachStep::kInstallWait:
+      case AttachStep::kDetourEntry:
+      case AttachStep::kSetGameModule:
+      case AttachStep::kJournal:
+      case AttachStep::kLogMutex:
+        break;
+    }
+    if (failure != AttachFailure::kNone) {
+      std::uint32_t none = 0;
+      first_failure_.compare_exchange_strong(none, static_cast<std::uint32_t>(failure));
+    }
+  }
   const std::size_t slot = journal_count_.fetch_add(1);
   if (slot >= kJournalCapacity) {
     journal_count_.store(kJournalCapacity);  // saturate: the first entries are the ones kept
@@ -309,12 +329,26 @@ void BootstrapDiagnostics::RecordAttach(AttachStep step, AttachOutcome outcome,
 }
 
 AttachFailure BootstrapDiagnostics::FirstAttachFailure() const noexcept {
-  return AttachFailure::kNone;  // scaffold
+  return static_cast<AttachFailure>(first_failure_.load());
 }
 
 bool BootstrapDiagnostics::LogFilePath(wchar_t* out, std::size_t size) const noexcept {
-  if (out != nullptr && size != 0) out[0] = L'\0';  // scaffold
-  return false;
+  if (out == nullptr || size == 0) return false;
+  out[0] = L'\0';
+  const wchar_t* dir = nullptr;
+  const int last = last_destination_.load();
+  if (last == -1) {
+    // Nothing written yet: the first directory an append will try.
+    dir = primary_ready_ ? primary_dir_ : (fallback_ready_ ? fallback_dir_ : (host_dir_ready_ ? host_dir_ : nullptr));
+  } else if (last == static_cast<int>(DiagnosticDestination::kPrimary)) {
+    dir = primary_dir_;
+  } else if (last == static_cast<int>(DiagnosticDestination::kFallback)) {
+    dir = fallback_dir_;
+  } else if (last == static_cast<int>(DiagnosticDestination::kHostDirectory)) {
+    dir = host_dir_;
+  }  // kDropped: the last record reached no file
+  if (dir == nullptr) return false;
+  return AppendPath(out, size, dir, kBootstrapLogName);
 }
 
 bool BootstrapDiagnostics::AttachDegraded() const noexcept {
@@ -601,15 +635,19 @@ DiagnosticDestination BootstrapDiagnostics::EmitChecked(const nlohmann::json& re
 DiagnosticDestination BootstrapDiagnostics::AppendLine(const char* line,
                                                        std::size_t length) noexcept {
   if (primary_ready_ && AppendTo(primary_dir_, true, line, length)) {
+    last_destination_.store(static_cast<int>(DiagnosticDestination::kPrimary));
     return DiagnosticDestination::kPrimary;
   }
   if (fallback_ready_ && AppendTo(fallback_dir_, true, line, length)) {
+    last_destination_.store(static_cast<int>(DiagnosticDestination::kFallback));
     return DiagnosticDestination::kFallback;
   }
   // The host's own directory exists already; it is not created.
   if (host_dir_ready_ && AppendTo(host_dir_, false, line, length)) {
+    last_destination_.store(static_cast<int>(DiagnosticDestination::kHostDirectory));
     return DiagnosticDestination::kHostDirectory;
   }
+  last_destination_.store(static_cast<int>(DiagnosticDestination::kDropped));
 
   // Loud: a diagnostic that could not be persisted still reaches the console.
   HANDLE stderr_handle = GetStdHandle(STD_ERROR_HANDLE);

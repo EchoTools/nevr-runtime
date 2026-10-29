@@ -29,6 +29,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <nlohmann/json_fwd.hpp>
+
 namespace nevr_host {
 
 inline constexpr char kStopTag[] = "NEVR.STOP";
@@ -37,9 +39,10 @@ inline constexpr char kReasonUnsupportedImage[] = "unsupported_image";
 inline constexpr char kReasonHostNotAttached[] = "host_not_attached";
 
 /// The room a line has. A detail and a path that do not fit are never truncated: JsonLine replaces the whole record
-/// with a marker line (`record_too_large`).
-inline constexpr std::size_t kStopLineBytes = 2048;
-inline constexpr std::size_t kStopDetailBytes = 768;
+/// with a marker line (`record_too_large`). A path of MAX_PATH characters is at most 780 bytes in UTF-8, twice that
+/// when every character is a backslash and the line escapes it; a detail holds at most two paths.
+inline constexpr std::size_t kStopLineBytes = 4096;
+inline constexpr std::size_t kStopDetailBytes = 1536;
 
 struct StopLineFacts {
   bool stopped = true;
@@ -76,8 +79,9 @@ struct RuntimeStopText {
 void DescribeRuntimeStop(const BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result,
                          RuntimeStopText& out) noexcept;
 
-/// DescribeRuntimeStop, then WriteStopLine.
-bool WriteRuntimeStopLine(const BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result) noexcept;
+/// Add the facts a record of the host log shares with the line: `stopped`, `host_version`, `runtime_version`, `detail`
+/// and `log`. The record keeps its own `event`, `reason` and `exit_code`.
+void AddStopFacts(nlohmann::json& record, const StopLineFacts& facts);
 
 /// The detail a failed attach step carries on the stop line and in the host log.
 const char* AttachFailureDetail(AttachFailure failure) noexcept;

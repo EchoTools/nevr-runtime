@@ -269,7 +269,7 @@ class BootstrapDiagnostics {
   std::atomic<std::size_t> claimed_{0};
 #endif
   std::atomic<std::uint32_t> first_failure_{0};   // AttachFailure of the first failed target step
-  std::atomic<int> last_destination_{static_cast<int>(DiagnosticDestination::kDropped)};  // where the last append landed
+  std::atomic<int> last_destination_{-1};         // DiagnosticDestination of the last append; -1: none yet
   std::atomic<std::size_t> dropped_{0};           // entries the full journal had no room for
   std::atomic<std::size_t> dropped_reported_{0};  // the total the last overflow record carried
 };

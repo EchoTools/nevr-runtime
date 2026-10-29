@@ -52,10 +52,9 @@ class JsonLine {
   // A line of another tag (the stop line is `NEVR.STOP`, stop_line.h): the header is the same four fields.
   JsonLine(char* buffer, std::size_t capacity, const char* tag, const char* event) noexcept
       : buffer_(buffer), capacity_(capacity) {
-    static_cast<void>(tag);  // scaffold: the tag is not used yet
     Raw('{');
     Key("tag");
-    Quoted("NEVR.HOST");
+    Quoted(tag);
     Key("ts");
     Timestamp();
     Key("pid");
