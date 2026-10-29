@@ -7,6 +7,10 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 ([RFC 2119](https://www.rfc-editor.org/rfc/rfc2119), [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174)) when, and only
 when, they appear in all capitals, as shown here.
 
+The logging standard below is part of this contract:
+
+@docs/standards/logging.md
+
 ## Commits, versions and requirement words
 
 - **Commits and PR titles** follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/):
