@@ -36,6 +36,7 @@ constexpr const char* kSocialFacadeKey = "social.facade";                      /
 constexpr const char* kSendPresenceToMetaKey = "social.send_presence_to_meta";  // Quest only (default true)
 constexpr const char* kHardwareDumpKey = "diagnostics.hardware_dump";          // Quest only (default false)
 constexpr const char* kUiEventProbeKey = "diagnostics.ui_event_probe";          // Quest only (default on with social, #318)
+constexpr const char* kPnsradProviderKey = "diagnostics.pnsrad_provider";        // Quest only (default false, #1220)
 constexpr const char* kTextureQualityKey = "graphics.texture_quality";          // Quest only (default stock)
 constexpr const char* kTextureQualitySection = "graphics";
 constexpr const char* kTextureQualityName = "texture_quality";  // the one key `graphics` has
@@ -47,7 +48,7 @@ struct FeatureSpec {
   bool Features::*flag;
 };
 
-constexpr std::array<FeatureSpec, 8> kFeatures = {{
+constexpr std::array<FeatureSpec, 9> kFeatures = {{
     {"redirect", Feature::kRedirect, &Features::redirect},
     {"bridge", Feature::kBridge, &Features::bridge},
     {"login", Feature::kLogin, &Features::login},
@@ -56,6 +57,7 @@ constexpr std::array<FeatureSpec, 8> kFeatures = {{
     {"presence_names", Feature::kPresenceNames, &Features::presenceNames},
     {"presence_local", Feature::kPresenceLocal, &Features::presenceLocal},
     {"ui_event_probe", Feature::kUiEventProbe, &Features::uiEventProbe},
+    {"pnsrad_provider", Feature::kPnsradProvider, &Features::pnsradProvider},
 }};
 
 bool HasControlOrSpace(std::string_view s) {
@@ -125,6 +127,7 @@ void SetDefaultRequests(ResolvedConfig& config) {
   config.requested.presenceLocal = false;
   config.requested.hwdump = false;
   config.requested.uiEventProbe = true;
+  config.requested.pnsradProvider = false;
 }
 
 // A boolean key: absent keeps `fallback`; an unusable value keeps it too and is rejected by key, never by value.
@@ -259,6 +262,7 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   // gets no forced-off warning for a key it never asked for.
   want.uiEventProbe = ReadBool(cfg, kUiEventProbeKey, want.social, r);
   want.presenceLocal = !ReadBool(cfg, kSendPresenceToMetaKey, true, r);
+  want.pnsradProvider = ReadBool(cfg, kPnsradProviderKey, false, r);
   ReadTextureQuality(cfg, r);
   r.config.plugins = cfg.Plugins();
 }
@@ -334,6 +338,11 @@ void Derive(LoadResult& r) {
   if (c.effective.uiEventProbe && !c.effective.social) {
     c.effective.uiEventProbe = false;
     force_off("ui_event_probe", "social_not_enabled");
+  }
+  // The rad provider sends no login of its own: the login goes through NEVR's (#1220), so it follows login.
+  if (c.effective.pnsradProvider && !c.effective.login) {
+    c.effective.pnsradProvider = false;
+    force_off("pnsrad_provider", "login_not_enabled");
   }
 }
 
