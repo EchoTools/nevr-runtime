@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -296,9 +297,13 @@ TEST(RenderConfigGpuScore, AScoreJustBelowAThresholdIsNotRoundedOntoIt) {
 
 // A score the game never computes (a misread, a garbage rating) still prints as one short token, so the fields after it
 // stay intact.
+// The lowest double's text, 24 characters, is as long as a double's shortest text gets.
 TEST(RenderConfigGpuScore, AnAbsurdScoreStillPrintsAsOneShortToken) {
-  for (const auto& [score, text] : {std::pair<double, const char*>{1e300, " gpu_score=1e+300 vram_mb=4096 "},
-                                    std::pair<double, const char*>{std::nan(""), " gpu_score=nan vram_mb=4096 "}}) {
+  for (const auto& [score, text] :
+       {std::pair<double, const char*>{1e300, " gpu_score=1e+300 vram_mb=4096 "},
+        std::pair<double, const char*>{std::nan(""), " gpu_score=nan vram_mb=4096 "},
+        std::pair<double, const char*>{std::numeric_limits<double>::lowest(),
+                                       " gpu_score=-1.7976931348623157e+308 vram_mb=4096 "}}) {
     World w;
     w.image.PokeValue<double>(At(kGpuScoreVa), score);
     BootApplyWithSelector(w);
