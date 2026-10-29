@@ -80,7 +80,7 @@ struct World {
 
   World() {
     image.Region(At(kGpuNameVa), 0x90);  // name buffer, vram at +0x80, vendor at +0x88
-    image.Region(At(kGpuScoreVa), 8);    // the score at +0x90, its own region so a test can take it away alone
+    image.Region(At(0x14209d000ULL), 8);    // the score at +0x90, its own region so a test can take it away alone
     image.Region(At(kHmdDescVa), kHmdDescBytes);
     image.Region(At(kRenderTargetVa), 8);
     image.Region(At(kResolutionScaleVa), 16);
@@ -90,7 +90,7 @@ struct World {
     image.PokeText(At(kGpuNameVa), "NVIDIA GeForce GTX 970");
     image.PokeValue<std::uint64_t>(At(kGpuVramVa), 4ULL << 30);  // 4096 MB
     image.PokeValue<std::uint32_t>(At(kGpuVendorVa), 1);
-    image.PokeValue<double>(At(kGpuScoreVa), 3.4944);  // a GTX 970's rating: 1664 cores x 1050 MHz x 2, in TFLOPS
+    image.PokeValue<double>(At(0x14209d000ULL), 3.4944);  // a GTX 970's rating: 1664 cores x 1050 MHz x 2, in TFLOPS
     image.PokeValue<std::int32_t>(At(kHmdDescVa) + kHmdTypeOffset, 16);
     image.PokeText(At(kHmdDescVa) + kHmdProductNameOffset, "Oculus Rift S");
     image.PokeValue<std::int32_t>(At(kHmdDescVa) + kHmdResolutionOffset, 1280);
@@ -244,7 +244,7 @@ TEST(RenderConfigCollector, ARenderTargetThatAppearsInsideTheGraceWritesTheNorma
 TEST(RenderConfigCollector, UnreadableMemoryReadsUnavailableAndTheSettingsBeforeAnyApplyReadUnknown) {
   World w;  // no Apply seen
   w.image.DropRegionAt(At(kGpuNameVa));
-  w.image.DropRegionAt(At(kGpuScoreVa));
+  w.image.DropRegionAt(At(0x14209d000ULL));
   w.image.DropRegionAt(At(kHmdDescVa));
   Collector c(w.image, kBase, w.observer, w.Ext());
   const std::string line = c.Poll(0);
@@ -260,7 +260,7 @@ TEST(RenderConfigCollector, UnreadableMemoryReadsUnavailableAndTheSettingsBefore
 // the selector reads as Low whatever the GPU; the line carries the 0 and the quality level side by side.
 TEST(RenderConfigGpuScore, TheScoreIsTheDoubleTheGameHoldsForTheSelector) {
   World w;
-  w.image.PokeValue<double>(At(kGpuScoreVa), 11.7504);  // an RTX 2080 Ti: 4352 cores x 1350000 kHz x 2 x 1e-9
+  w.image.PokeValue<double>(At(0x14209d000ULL), 11.7504);  // an RTX 2080 Ti: 4352 cores x 1350000 kHz x 2 x 1e-9
   BootApplyWithSelector(w);
   Collector c(w.image, kBase, w.observer, w.Ext());
   const std::string line = c.Poll(0);
@@ -269,7 +269,7 @@ TEST(RenderConfigGpuScore, TheScoreIsTheDoubleTheGameHoldsForTheSelector) {
 
 TEST(RenderConfigGpuScore, AFailedRatingReadsZeroOnTheLineThatCarriesTheQualityLevel) {
   World w;
-  w.image.PokeValue<double>(At(kGpuScoreVa), 0.0);
+  w.image.PokeValue<double>(At(0x14209d000ULL), 0.0);
   w.WriteSettings(kSettings, /*msaa=*/1, /*quality=*/1);
   BootApplyWithSelector(w);
   Collector c(w.image, kBase, w.observer, w.Ext());
@@ -284,7 +284,7 @@ TEST(RenderConfigGpuScore, AScoreJustBelowAThresholdIsNotRoundedOntoIt) {
   // for cores x kHz = 2,249,999,998. A fixed nine significant digits print both as 4.5.
   for (const double score : {std::nextafter(4.5, 0.0), static_cast<double>(4499999996LL) * 1e-9}) {
     World w;
-    w.image.PokeValue<double>(At(kGpuScoreVa), score);
+    w.image.PokeValue<double>(At(0x14209d000ULL), score);
     BootApplyWithSelector(w);
     Collector c(w.image, kBase, w.observer, w.Ext());
     const std::string line = c.Poll(0);
@@ -305,7 +305,7 @@ TEST(RenderConfigGpuScore, AnAbsurdScoreStillPrintsAsOneShortToken) {
         std::pair<double, const char*>{std::numeric_limits<double>::lowest(),
                                        " gpu_score=-1.7976931348623157e+308 vram_mb=4096 "}}) {
     World w;
-    w.image.PokeValue<double>(At(kGpuScoreVa), score);
+    w.image.PokeValue<double>(At(0x14209d000ULL), score);
     BootApplyWithSelector(w);
     Collector c(w.image, kBase, w.observer, w.Ext());
     const std::string line = c.Poll(0);
@@ -315,7 +315,7 @@ TEST(RenderConfigGpuScore, AnAbsurdScoreStillPrintsAsOneShortToken) {
 
 TEST(RenderConfigGpuScore, AnUnreadableScoreReadsUnavailableAndTheRestOfTheGpuGroupStays) {
   World w;
-  w.image.DropRegionAt(At(kGpuScoreVa));
+  w.image.DropRegionAt(At(0x14209d000ULL));
   BootApplyWithSelector(w);
   Collector c(w.image, kBase, w.observer, w.Ext());
   const std::string line = c.Poll(0);
@@ -329,7 +329,7 @@ TEST(RenderConfigGpuScore, ANewScoreIsAChangeLineNamingIt) {
   BootApplyWithSelector(w);
   Collector c(w.image, kBase, w.observer, w.Ext());
   ASSERT_FALSE(c.Poll(0).empty());
-  w.image.PokeValue<double>(At(kGpuScoreVa), 9.8);
+  w.image.PokeValue<double>(At(0x14209d000ULL), 9.8);
   const std::string line = c.Poll(Collector::kIntervalMs);
   EXPECT_NE(line.find(" reason=change changed=gpu_score "), std::string::npos) << line;
   EXPECT_NE(line.find(" gpu_score=9.8 "), std::string::npos) << line;
