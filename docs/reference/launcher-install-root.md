@@ -58,7 +58,10 @@ A run that logged in has, in the runtime's log in the same `logs\` folder (`nevr
 
 The runtime reads these from the game's command line (`src/core/cli_flags.h`, `src/runtime/lifecycle/cli.cpp`):
 
-- `-config <file>` or `-config-path <file>`: the folder of that file is where the runtime looks for `config.yaml` first.
+- `-config-file <file>`: the exact `config.yaml` to read. Without it the runtime reads `config.yaml` from the root, and nothing else is
+  searched. A file that is missing or cannot be opened ends the run with exit code 64 and one JSON line on standard error
+  (`"tag":"NEVR.STOP"`, `"reason":"usage"`, `"detail"` naming the argument and why); `-config-path` is refused the same way with
+  `use -config-file <file>`. `-config <file>` is the game's own JSON file and does not affect where `config.yaml` is read.
 - `-require-signed-plugins`: the run loads only signed plugins (ADR 0010). Without it the run loads unsigned plugins and logs a
   warning for each; a launcher that wants the signed-only mode passes it.
 
@@ -87,7 +90,6 @@ of the game folder, and moves the record to `<root>\installer\aside\nevr-install
 
 These are not yet in the root. Each moves in its own change and this page is updated with it:
 
-- `_local\config.yaml`: the runtime still searches `_local` next to the game module (and one and two folders up) for it, and nothing moves it;
 - the game's own logs under `_local\r14logs` (the game writes them);
 - `logs\nevr-boot.jsonl` beside `echovr.exe`: the runtime's start-up log, #1232;
 

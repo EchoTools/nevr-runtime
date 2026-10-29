@@ -164,11 +164,12 @@ fi
 # it would start a login bridge against the shipped endpoint. When the install has none, deploy the
 # offline-boot config the Windows-VM rig uses (tools/winvm/systest.py OFFLINE_CONFIG_YAML): an explicit
 # empty socket_uri, which takes no default, and allow_offline_server. The flag sets reach what they test;
-# an install's own config.yaml is used as it is. The runtime finds it at exe-dir/../../_local
-# (service_config.cpp), and the restore trap removes it afterwards.
-if [ ! -e "$GAME_ROOT/echovr/_local/config.yaml" ]; then
+# an install's own config.yaml is used as it is. The runtime reads config.yaml from the nevr root (#1255), so the
+# offline config goes there, beside nevr-runtime.dll, and the restore trap removes it afterwards. An install that
+# has a _local/config.yaml is left alone: the runtime copies that one into the root and reads the copy.
+if [ ! -e "$GAME_ROOT/echovr/_local/config.yaml" ] && [ ! -e "$GAME_DIR/$NEVR_ROOT_REL/config.yaml" ]; then
   printf 'services:\n  socket_uri: ""\n  allow_offline_server: true\n' > "$OUT/offline-config.yaml"
-  deploy "$OUT/offline-config.yaml" "$GAME_DIR/../../_local/config.yaml"
+  deploy "$OUT/offline-config.yaml" "$GAME_DIR/$NEVR_ROOT_REL/config.yaml"
 fi
 
 export WINEPREFIX="$GAME_ROOT/echovr/.wineprefix"

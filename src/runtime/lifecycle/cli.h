@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 #include "core/pch.h"
 
 /// A CLI argument flag indicating whether the game is booting as a dedicated server.
@@ -14,6 +16,15 @@ extern BOOL g_isWindowed;
 
 /// Custom config path provided via -config. If empty, the default path is used.
 extern CHAR g_customConfigPath[MAX_PATH];
+
+/// What the command line said about config.yaml (#1255): `-config-file <file>` names the exact file to read, and
+/// `-config-path` is refused (use -config-file). `-config` is the game's JSON file and has nothing to do with config.yaml.
+struct ConfigYamlFlags {
+  bool config_file_given = false;
+  std::string config_file;  ///< the value of `-config-file`, UTF-8; empty when the flag had none
+  bool config_path_given = false;
+};
+extern ConfigYamlFlags g_configYamlFlags;
 
 /// Region override from -region or -serverregion CLI args. Empty = default.
 extern CHAR g_regionOverride[64];

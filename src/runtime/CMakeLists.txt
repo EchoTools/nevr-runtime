@@ -43,6 +43,8 @@ set(PATCHES_SOURCES
     "lifecycle/stable_string_pool.cpp"
     "lifecycle/service_config.cpp"
     "lifecycle/nevr_root_move.cpp"
+    "lifecycle/cli_reject.cpp"
+    "lifecycle/config_yaml_source.cpp"
     "lifecycle/login_redirect_override.cpp"
     "patch/mode_patches.cpp"
     "patch/coop_ai_trace.cpp"
@@ -323,6 +325,8 @@ set_source_files_properties(
   lifecycle/stable_string_pool.cpp
   lifecycle/service_config.cpp
   lifecycle/nevr_root_move.cpp
+  lifecycle/cli_reject.cpp
+  lifecycle/config_yaml_source.cpp
   lifecycle/login_redirect_override.cpp
   PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N134 S6: plugin_load_plan.cpp is the pure builder — nevr_config + nlohmann-json,
@@ -1102,6 +1106,9 @@ if(BUILD_TESTING)
     add_executable(test_service_config
       tests/test_service_config.cpp
       tests/test_stable_string_pool.cpp
+      tests/test_config_yaml_choice.cpp
+      lifecycle/cli_reject.cpp
+      lifecycle/config_yaml_source.cpp
       lifecycle/service_config.cpp
       lifecycle/service_map.cpp
       lifecycle/service_redirect.cpp
@@ -1111,6 +1118,9 @@ if(BUILD_TESTING)
     set_source_files_properties(
       tests/test_service_config.cpp
       tests/test_stable_string_pool.cpp
+      tests/test_config_yaml_choice.cpp
+      lifecycle/cli_reject.cpp
+      lifecycle/config_yaml_source.cpp
       lifecycle/service_config.cpp
       lifecycle/service_map.cpp
       lifecycle/service_redirect.cpp

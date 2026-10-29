@@ -265,7 +265,8 @@ parser in `src/runtime/lifecycle/cli.cpp`.
 
 - **Handled by that loop:** `-server`, `-offline`, `-no-console`, `-windowed`,
   `-no-exit-on-error`, `-no-telemetry`, `-telemetry-rate N`, `-telemetry-diag`, `-timestamps`,
-  `-upnp`, `-config` / `-config-path PATH`, `-region` /
+  `-upnp`, `-config PATH` (the game's JSON file), `-config-file PATH` (the exact `config.yaml`;
+  `-config-path` is refused with exit code 64), `-region` /
   `-serverregion S`, `-trace-exports` (consumes a value; the tracer reads its own).
 - **`-exit-on-error`** is accepted and logs that it has no effect (it is the default).
 - **`-timestep` / `-fixedtimestep`:** on a server `GameMainWrapperHook`
@@ -285,10 +286,11 @@ parser in `src/runtime/lifecycle/cli.cpp`.
 ## Config and service redirects
 
 - **NEVR keys come from `config.yaml`, not the game's JSON** (AGENTS.md N133; typed
-  reader `src/core/nevr_config.h`). `FindNevrConfigYamlPath`
-  (`src/runtime/lifecycle/service_config.cpp`) looks for `_local/config.yaml` next to the
-  game module, then one and two parent directories up, and first honours the directory
-  of an explicit `-config` / `-config-path`. A MISSING `config.yaml` is a warning and a
+  reader `src/core/nevr_config.h`). `nevr_config_yaml::Choose`
+  (`src/runtime/lifecycle/config_yaml_choice.h`, resolved by `NevrCfgResolveConfigYaml` in
+  `src/runtime/lifecycle/service_config.cpp`) reads `-config-file <file>`, else
+  `<nevr root>\config.yaml`, and nothing else; a `_local\config.yaml` is copied into the
+  root once, never read. A MISSING `config.yaml` is a warning and a
   defaults-only run; one that EXISTS but is malformed or references an unset required
   `${VAR:?}` secret fails loud in server mode via `ServerFatal`.
 - The game's own `_local/config.json` is still loaded by `LoadEarlyConfig`

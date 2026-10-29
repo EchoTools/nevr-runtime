@@ -545,7 +545,7 @@ class ReleaseStagesTest(PackageFixture):
             readme = z.read("README.txt").decode()
         section = readme.split("Running a dedicated server\n", 1)[1].split("\nUpdate\n", 1)[0]
         prose = " ".join(section.split())  # the README wraps lines; a phrase may break across one
-        for needle in (r".\echovr_server.exe", "-server -headless -no-console", r"_local\config.yaml",
+        for needle in (r".\echovr_server.exe", "-server -headless -no-console", r"%LOCALAPPDATA%\nevr\echovr\config.yaml",
                        "services.socket_uri", "issue #843", "auth.password", "The password goes in auth.password",
                        "refresh token", "requested game server registration", "Received registration success",
                        "Graceful shutdown initiated",
