@@ -285,3 +285,78 @@ TEST(LobbyFrameLimiter, ResetForgetsEveryWindow) {
   EXPECT_TRUE(v.log);
   EXPECT_EQ(v.flushed[static_cast<size_t>(lf::Kind::Find)], 0U);
 }
+
+// #1413: the request a session record names is the last find or join the game sent on this client, its age is
+// measured at the answer, and an answer is outstanding only for the first answer to that request.
+TEST(LobbyFrameRequests, NoRequestSentMeansNoContextAndNoneInTheLine) {
+  lf::RequestTracker tracker;
+  const lf::RequestContext answer = tracker.Answer(5000);
+  EXPECT_FALSE(answer.sent);
+  EXPECT_FALSE(answer.outstanding);
+  EXPECT_EQ(lf::FormatRequestFields(answer), "last_request=none last_request_age_ms=none request_outstanding=no");
+}
+
+TEST(LobbyFrameRequests, AnAnswerTakesTheAgeOfTheRequestItAnswers) {
+  lf::RequestTracker tracker;
+  tracker.Sent(lf::Kind::Find, 1000);
+  const lf::RequestContext answer = tracker.Answer(1250);
+  EXPECT_TRUE(answer.sent);
+  EXPECT_EQ(answer.kind, lf::Kind::Find);
+  EXPECT_EQ(answer.ageMs, 250U);
+  EXPECT_TRUE(answer.outstanding);
+  EXPECT_EQ(lf::FormatRequestFields(answer), "last_request=find last_request_age_ms=250 request_outstanding=yes");
+}
+
+TEST(LobbyFrameRequests, ASecondAnswerToTheSameRequestIsNotOutstanding) {
+  lf::RequestTracker tracker;
+  tracker.Sent(lf::Kind::Join, 1000);
+  EXPECT_TRUE(tracker.Answer(1100).outstanding);
+  const lf::RequestContext again = tracker.Answer(1200);
+  EXPECT_TRUE(again.sent);
+  EXPECT_EQ(again.kind, lf::Kind::Join);
+  EXPECT_EQ(again.ageMs, 200U);
+  EXPECT_FALSE(again.outstanding);
+}
+
+TEST(LobbyFrameRequests, TheLastRequestWinsAndANewRequestIsOutstandingAgain) {
+  lf::RequestTracker tracker;
+  tracker.Sent(lf::Kind::Find, 1000);
+  EXPECT_TRUE(tracker.Answer(1010).outstanding);
+  tracker.Sent(lf::Kind::Join, 1500);
+  const lf::RequestContext answer = tracker.Answer(1600);
+  EXPECT_EQ(answer.kind, lf::Kind::Join);
+  EXPECT_EQ(answer.ageMs, 100U);
+  EXPECT_TRUE(answer.outstanding);
+}
+
+TEST(LobbyFrameRequests, AClockThatGoesBackwardsGivesAZeroAge) {
+  lf::RequestTracker tracker;
+  tracker.Sent(lf::Kind::Find, 2000);
+  const lf::RequestContext answer = tracker.Answer(1000);
+  EXPECT_TRUE(answer.sent);
+  EXPECT_EQ(answer.ageMs, 0U);
+}
+
+TEST(LobbyFrameRequests, ResetForgetsTheLastRequest) {
+  lf::RequestTracker tracker;
+  tracker.Sent(lf::Kind::Find, 1000);
+  tracker.Reset();
+  EXPECT_FALSE(tracker.Answer(1100).sent);
+}
+
+TEST(LobbyFrameText, PartyFieldsOutsideAnyPartyAreNoneZeroAndNotLeader) {
+  EXPECT_EQ(lf::FormatPartyFields(0, 0, 0, 100), "party_id=none party_size=0 party_leader=no");
+}
+
+TEST(LobbyFrameText, PartyFieldsOfAPartyTheLocalAccountLeads) {
+  EXPECT_EQ(lf::FormatPartyFields(100, 3, 100, 100), "party_id=100 party_size=3 party_leader=yes");
+}
+
+TEST(LobbyFrameText, PartyFieldsOfAPartyLedByAnotherAccountAreNotLeader) {
+  EXPECT_EQ(lf::FormatPartyFields(7, 2, 77, 100), "party_id=7 party_size=2 party_leader=no");
+}
+
+TEST(LobbyFrameText, TheLeaderIsUnknownUntilTheLocalAccountAndTheOwnerAreBothKnown) {
+  EXPECT_EQ(lf::FormatPartyFields(7, 1, 100, 0), "party_id=7 party_size=1 party_leader=unknown");
+  EXPECT_EQ(lf::FormatPartyFields(7, 1, 0, 100), "party_id=7 party_size=1 party_leader=unknown");
+}

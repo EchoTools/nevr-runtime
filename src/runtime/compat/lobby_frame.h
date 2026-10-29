@@ -274,4 +274,67 @@ class RecordLimiter {
   std::array<Slot, kKindCount> slots_{};
 };
 
+/// The request a session record names: the find or join the game sent last on this client, its age when it was
+/// answered, and whether that answer is the first one to it. `sent` is false until a request is sent after a Reset.
+struct RequestContext {
+  bool sent = false;
+  Kind kind = Kind::Find;
+  uint64_t ageMs = 0;
+  bool outstanding = false;
+};
+
+/// The last find or join the game sent. An answer takes the request it answers: outstanding for the first answer
+/// after that request, not for any later one. Process-wide, not per connection: the tracker keeps no connection index,
+/// so an answer on one connection can name a request sent on another. The caller passes the time and serializes
+/// calls, as RecordLimiter.
+class RequestTracker {
+ public:
+  void Sent(Kind kind, uint64_t nowMs) {
+    sent_ = true;
+    answered_ = false;
+    kind_ = kind;
+    sentAtMs_ = nowMs;
+  }
+
+  RequestContext Answer(uint64_t nowMs) {
+    RequestContext context;
+    if (!sent_) return context;
+    context.sent = true;
+    context.kind = kind_;
+    context.ageMs = nowMs >= sentAtMs_ ? nowMs - sentAtMs_ : 0;
+    context.outstanding = !answered_;
+    answered_ = true;
+    return context;
+  }
+
+  void Reset() { *this = RequestTracker{}; }
+
+ private:
+  bool sent_ = false;
+  bool answered_ = false;
+  Kind kind_ = Kind::Find;
+  uint64_t sentAtMs_ = 0;
+};
+
+/// The request as the record's fields: `last_request=find last_request_age_ms=250 request_outstanding=yes`, or `none`
+/// in the first two and `no` in the third when no request was sent since the last Reset.
+inline std::string FormatRequestFields(const RequestContext& request) {
+  if (!request.sent) return "last_request=none last_request_age_ms=none request_outstanding=no";
+  return std::string("last_request=") + KindToken(request.kind) +
+         " last_request_age_ms=" + std::to_string(request.ageMs) +
+         " request_outstanding=" + (request.outstanding ? "yes" : "no");
+}
+
+/// The party as the record's fields: `party_id=7 party_size=3 party_leader=yes`. Outside a party it is
+/// `party_id=none party_size=0 party_leader=no`. The leader is `yes` when the owner is the local account, `no` when
+/// another account owns the party, and `unknown` while either id is still zero: a value never stands in for an id
+/// the client does not have yet.
+inline std::string FormatPartyFields(uint64_t partyId, uint64_t memberCount, uint64_t ownerId, uint64_t selfId) {
+  if (partyId == 0) return "party_id=none party_size=0 party_leader=no";
+  const char* leader = "unknown";
+  if (ownerId != 0 && selfId != 0) leader = ownerId == selfId ? "yes" : "no";
+  return "party_id=" + std::to_string(partyId) + " party_size=" + std::to_string(memberCount) +
+         " party_leader=" + leader;
+}
+
 }  // namespace nevr_lobby_frame
