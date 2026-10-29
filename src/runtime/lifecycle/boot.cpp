@@ -18,6 +18,7 @@
 #include "runtime/patch/credits_block.h"
 #include "runtime/patch/credits_text_install.h"
 #include "runtime/patch/invite_choice_hook.h"
+#include "runtime/patch/render_config_hook.h"
 #include "runtime/patch/invite_config.h"
 #include "runtime/patch/invite_service.h"
 #include "runtime/patch/menu_cards.h"
@@ -660,6 +661,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] wizard observer skipped reason=server_mode");
     Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] choice observer skipped reason=server_mode");
   }
+
+  // #1139, ADR 0022: the render_config line. The two observers on the game's graphics-settings code go in on a client
+  // only; Install logs the server-mode skip itself, so the decision is in one tested place.
+  nevr_render_config_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)), g_isServer != FALSE);
 
   // #896, #906: the UI text writer (the first accessor of the UI seam). Client only: a server draws no menu. It pins the
   // game's functions and logs the result; nothing is written until a request is posted. The SetText hook (menu version label) is already in, which the pin accepts.

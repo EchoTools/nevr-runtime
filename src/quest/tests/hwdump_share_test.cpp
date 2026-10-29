@@ -14,6 +14,7 @@
 #include "quest/diag/hwdump_install.h"
 #include "quest/diag/hwdump_records.h"
 #include "quest/tests/test_check.h"
+#include "render_config_share.h"
 #include "sysprop_int_share.h"
 #include "texture_quality_hook.h"
 
@@ -102,11 +103,56 @@ void WithTheSlotOwnedTheDumpSharesItAndSeesTheRuntimesAnswerNotTheOverride() {
   tq::ResetForTest();
 }
 
+// The render-configuration log (#1139) owns four of the dump's slots when it installed first: the dump installs nothing on them
+// and reports them owned_by_render_config; its other fourteen hooks are untouched.
+void WithTheRenderConfigSlotsOwnedTheDumpLeavesThemAlone() {
+  struct Owned {
+    std::size_t index;
+    const char* symbol;
+    sentinel::RenderConfigSlot slot;
+  };
+  const Owned owned[] = {
+      {8, "vrapi_GetSystemPropertyFloat", sentinel::RenderConfigSlot::kGetSystemPropertyFloat},
+      {12, "vrapi_SetPropertyInt", sentinel::RenderConfigSlot::kSetPropertyInt},
+      {13, "vrapi_SetDisplayRefreshRate", sentinel::RenderConfigSlot::kSetDisplayRefreshRate},
+      {14, "vrapi_SetClockLevels", sentinel::RenderConfigSlot::kSetClockLevels},
+  };
+  tq::ResetForTest();
+  hw::ResetCaptureForTest();
+  for (const Owned& o : owned) sentinel::MarkRenderConfigSlotOwned(o.slot, true);
+  hw::InstallHooks();
+  hw::HookState states[hw::kHookCount];
+  hw::HookStates(states);
+  for (const Owned& o : owned) {
+    QCHECK(std::string_view(states[o.index].symbol) == o.symbol);
+    QCHECK(std::string_view(states[o.index].status) == "owned_by_render_config");
+    QCHECK(states[o.index].installed);
+  }
+  // Every other hook is the dump's own: a host has no libr15, so each of its installs is refused and says so.
+  std::size_t own = 0;
+  for (std::size_t i = 0; i < hw::kHookCount; ++i) {
+    bool isOwned = false;
+    for (const Owned& o : owned) isOwned = isOwned || o.index == i;
+    if (isOwned) continue;
+    QCHECK(std::string_view(states[i].status) != "owned_by_render_config");
+    QCHECK(!states[i].installed);
+    ++own;
+  }
+  QCHECK(own == hw::kHookCount - 4);
+  for (const Owned& o : owned) sentinel::MarkRenderConfigSlotOwned(o.slot, false);
+
+  // Nothing owned: the dump tries all four itself.
+  hw::InstallHooks();
+  hw::HookStates(states);
+  for (const Owned& o : owned) QCHECK(std::string_view(states[o.index].status) != "owned_by_render_config");
+}
+
 }  // namespace
 
 int main() {
   WithTheSlotUnownedTheDumpInstallsItsOwnHookAndObservesNothing();
   WithTheSlotOwnedTheDumpSharesItAndSeesTheRuntimesAnswerNotTheOverride();
+  WithTheRenderConfigSlotsOwnedTheDumpLeavesThemAlone();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "hwdump_share_test: %d failure(s)\n", quest_test::Failures());
     return 1;
