@@ -197,6 +197,17 @@ services:
   # Not a secret.
   # serverdb: "wss://serverdb.echovrce.com"
 
+  # Dedicated server only: the ServerDB token route the server registers through, dialed with the server's
+  # access token as `Authorization: Bearer` (docs/adr/0001-serverdb-token-auth.md); guilds and regions are added
+  # as query parameters. Without it the server registers through socket_uri with identity.discord_id and
+  # auth.password in the query. A server with none of serverdb, serverdb_uri, or socket_uri plus
+  # identity.discord_id stops at registration: `no ServerDB URI: set services.serverdb_uri`.
+  # The route taken is logged: `[NEVR.GAMESERVER] serverdb route=<explicit|token|url_params|none> ...`.
+  # Default (absent): none.
+  # Not a secret.
+  # Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration, flat key nevr_serverdb_uri)
+  # serverdb_uri: "ws://g.echovrce.com:80/nevr"
+
   # Oculus Graph API. Only relevant if the game still queries Oculus services.
   # Legacy key "graphservice_host" is also checked.
   # Default (absent): https://graph.oculus.com
@@ -283,7 +294,7 @@ network:
 identity:
   # Discord user ID of the server owner. Sent as a query parameter in the
   # ServerDB WebSocket URI. Required for server registration.
-  # Absent: ServerDB connection uses ws://localhost:777/serverdb (fallback)
+  # Absent: the server registers through services.serverdb_uri, and with neither it stops at registration.
   # Not a secret, but personally identifying — do not commit to public repos.
   # discord_id: "${NEVR_DISCORD_ID:?discord_id is required for server registration}"
 
