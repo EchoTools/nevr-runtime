@@ -28,7 +28,7 @@ class CurlTransport final : public Transport {
  public:
   CurlTransport(std::string base_url, TransportOptions options);
   HttpAnswer Post(std::string_view rpc, std::string_view body, std::string_view bearer) override;
-  void Abort() { aborted_.store(true, std::memory_order_release); }
+  void Abort() override { aborted_.store(true, std::memory_order_release); }
 
  private:
   void Say(LogLevel level, const std::string& line) const {
