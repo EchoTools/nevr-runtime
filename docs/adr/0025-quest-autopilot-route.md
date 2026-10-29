@@ -36,7 +36,7 @@ What the tree and the binary give us (pinned `libr15.so`, build ID `b243509c08ce
   recorder (`CR15NetDebugInputRecorderCS::StartInputPlaybackCB`, 0x21409c8) calls the setter, and nothing consumes what
   it sets.
 - **A plugin cannot hook today.** The Quest plugin loader (ADR 0019 slice 1, #1112) gives a plugin `base_addr` and
-  `game_build_id`, and no hook service (`src/extension/plugin_interface.h`). ADR 0019 section 5 keeps the hook machinery
+  `game_build_id`, and no hook service (`sdk/include/nevr/plugin_interface.h`). ADR 0019 section 5 keeps the hook machinery
   in the host. Its slice 2, a general GOT install for plugins, is not built.
 - **No code page is written at run time** (#1127, #1132: `avc: denied { execmod }` on current Horizon OS). A GOT slot is a
   data word: `.got` (0x36bf480) lies inside `PT_GNU_RELRO` (0x35f9eb0, size 0x132150). The sentinel already writes such

@@ -12,7 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "extension/plugin_interface.h"
+#include "nevr/plugin_interface.h"
 #include "quest/plugins/autopilot/route.h"
 
 namespace nevr_autopilot {

@@ -40,7 +40,7 @@
 #include "runtime/compat/self_check.h"
 #include "runtime/patch/matchmaker_host_patch.h"
 #include "core/logging.h"
-#include "nevr_common.h"      // N97: the one ValidatePrologue
+#include "nevr/pc/nevr_common.h"      // N97: the one ValidatePrologue
 
 #include <cstdio>
 #include <cstring>

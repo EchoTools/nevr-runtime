@@ -1,9 +1,13 @@
 /*
- * nevr_plugin_interface.h - Plugin interface for NEVR game patches
+ * nevr/plugin_interface.h - Plugin interface for NEVR game patches
  *
  * This header defines the interface the runtime uses to load and manage
  * plugins. Plugins export a set of C functions that the host calls at
  * defined lifecycle points.
+ *
+ * Part of the plugin SDK (sdk/ in nevr-runtime). A plugin gets it by linking
+ * the CMake target nevr::plugin_sdk (find_package(NevrPluginSdk) or
+ * FetchContent with SOURCE_SUBDIR sdk), not by copying it.
  */
 
 #pragma once

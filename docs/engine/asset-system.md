@@ -36,7 +36,7 @@ Scope and evidence:
 ## Names
 
 Every name in the engine is a `CSymbol64`: a 64-bit CRC-style hash of a lower-cased string, implemented by
-`CSymbol64::Lookup` (`0x1400ce120`) and reproduced in `src/abi/symbol_hash.h`. Hashing continues from a seed,
+`CSymbol64::Lookup` (`0x1400ce120`) and reproduced in `sdk/include/nevr/symbol_hash.h`. Hashing continues from a seed,
 so `Make(seed, "b")` (`CSymbol64::Make`, `0x1400ce0c0`) equals the hash of the concatenated string.
 
 An asset is identified by a pair **(type, name)**:

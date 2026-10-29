@@ -156,7 +156,7 @@ class HeadersDoNotRead(unittest.TestCase):
     def test_only_globals_h_names_an_identity_macro_outside_a_comment_and_only_to_default_it(self):
         offenders = {}
         for suffix in ("*.h", "*.hpp"):
-            for path in sorted((REPO / "src").rglob(suffix)) + sorted((REPO / "plugins").rglob(suffix)):
+            for path in sorted((REPO / "src").rglob(suffix)) + sorted((REPO / "sdk").rglob(suffix)):
                 rel = path.relative_to(REPO).as_posix()
                 if rel.startswith("src/quest/"):
                     continue

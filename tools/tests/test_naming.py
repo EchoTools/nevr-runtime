@@ -24,7 +24,8 @@ UPPERCASE_BRAND_IN_DOCS = re.compile(
 SELF = frozenset({"docs/standards/naming.md", "tools/tests/test_naming.py"})
 EXCLUDED_PREFIXES = ("extern/", "gen/", "docs/audits/")
 
-# The published plugin/module C ABI (src/extension/) and everything that names it. Nothing is added.
+# The published plugin/module C ABI (sdk/include/nevr/plugin_interface.h, src/extension/module_interface.h) and
+# everything that names it. Nothing is added.
 FROZEN_NVR = frozenset({
     "NvrGameContext", "NvrHostFlags", "NvrLoadedPluginInfo", "NvrModuleApiVersion",
     "NvrModuleApiVersionSupported", "NvrModuleContext", "NvrModuleGetApiVersion", "NvrModuleHostFlags",
@@ -51,7 +52,6 @@ LEGACY_SPELLINGS = {
     "certs/intermediate-ca.conf": {"nEVR"},
     "certs/root-ca.conf": {"nEVR"},
     "cmake/codesign/sign.sh": {"nEVR"},
-    "plugins/example/src/plugin.cpp": {"nEVR"},
 }
 # Documents and comments whose prose spells the brand `nEVR`, per file and exact token.
 BRAND_PROSE_SPELLINGS = {
@@ -72,7 +72,6 @@ BRAND_PROSE_SPELLINGS = {
     "docs/standards/logging.md": {"nEVR"},
     "cmake/nevr_version_info.rc.in": {"nEVR"},  # ProductName and FileDescription are brand prose
     "docs/standards/verification.md": {"nEVR"},
-    "plugins/example/README.md": {"nEVR"},
     "src/launcher/CMakeLists.txt": {"nEVR"},  # the exe's FileDescription
     "src/runtime/CMakeLists.txt": {"nEVR"},  # the DLL's FileDescription
     "src/core/build_identity.h": {"nEVR"},  # MenuVersionLabel: the text a player sees
@@ -122,7 +121,7 @@ class NamingTest(unittest.TestCase):
     def test_the_scan_sees_the_tree(self):
         files = dict(project_files())
         self.assertGreater(len(files), 300, "the sensor is reading almost nothing")
-        self.assertIn("src/extension/plugin_interface.h", files)
+        self.assertIn("sdk/include/nevr/plugin_interface.h", files)
 
     def test_no_nvr_identifier_outside_the_frozen_set(self):
         stray = {}

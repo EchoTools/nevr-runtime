@@ -83,7 +83,7 @@ target_include_directories(ovrplatformloader PRIVATE
   ${CMAKE_BINARY_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/breakpad/src)
 
-target_link_libraries(ovrplatformloader PRIVATE nevr_quest_got_hook nevr_quest_config nlohmann_json::nlohmann_json nevr_quest_prompt_board nevr_quest_data_wiring nevr_quest_data_net nevr_quest_data nevr_quest_symcache breakpad_client log dl)
+target_link_libraries(ovrplatformloader PRIVATE nevr::plugin_sdk nevr_quest_got_hook nevr_quest_config nlohmann_json::nlohmann_json nevr_quest_prompt_board nevr_quest_data_wiring nevr_quest_data_net nevr_quest_data nevr_quest_symcache breakpad_client log dl)
 
 # The hook path (entry.cpp and login_prompt_hook.cpp: the thunk entries and the handlers they
 # call; the prompt board the login-prompt handler reads is built the same way, see

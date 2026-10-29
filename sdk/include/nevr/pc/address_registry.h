@@ -44,7 +44,7 @@ static constexpr uint64_t VA_VOIP_ROUTER = 0x140132dc0;
 static constexpr uint64_t VA_HTTP_EXPORT_GAME_STATE = 0x140155c80;
 
 // CMatSym::Hash (ReVault): seed 0x8040201008040201 and MATSYM_CHAR_TABLE. It is not CSymbol64, a
-// CRC-64 seeded with all ones (src/abi/symbol_hash.h).
+// CRC-64 seeded with all ones (sdk/include/nevr/symbol_hash.h).
 static constexpr uint64_t VA_CMATSYM_HASH = 0x140107F80;
 
 // Source: src/NRadEngine/Game/CR15NetWeaponTypeChange.cpp in echovr-reconstruction

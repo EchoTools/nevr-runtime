@@ -12,7 +12,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "abi/symbol_hash.h"
+#include "nevr/symbol_hash.h"
 #include "runtime/log/symcache.h"
 #include "runtime/patch/invite_wizard.h"
 #include "runtime/patch/ui_texture_mips_rules.h"

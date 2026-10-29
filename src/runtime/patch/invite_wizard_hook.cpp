@@ -9,7 +9,7 @@
 #include <string_view>
 
 #include "core/logging.h"
-#include "nevr_common.h"
+#include "nevr/pc/nevr_common.h"
 #include "runtime/hook/patching.h"
 #include "runtime/log/symcache.h"
 #include "runtime/patch/invite_choice_hook.h"

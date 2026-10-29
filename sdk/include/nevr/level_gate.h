@@ -24,8 +24,8 @@
 #include <string>
 #include <vector>
 
-#include "abi/symbol_hash.h"
-#include "extension/plugin_interface.h"
+#include "nevr/symbol_hash.h"
+#include "nevr/plugin_interface.h"
 
 class LevelGate {
 public:

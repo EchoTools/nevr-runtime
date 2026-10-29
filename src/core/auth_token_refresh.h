@@ -4,7 +4,7 @@
 
 #include "core/auth_refresh.h"
 #include "core/auth_token.h"
-#include "nevr_curl.h"
+#include "core/nevr_curl.h"
 #include "runtime/log/security_diagnostics.h"
 
 #include <nlohmann/json.hpp>

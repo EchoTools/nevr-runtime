@@ -14,7 +14,7 @@
 #include <utility>
 
 #include "core/logging.h"
-#include "nevr_common.h"
+#include "nevr/pc/nevr_common.h"
 #include "runtime/hook/patching.h"
 
 namespace nevr_render_config_hook {

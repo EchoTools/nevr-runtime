@@ -50,7 +50,7 @@
 #include "abi/echovr.h"
 #include "abi/echovr_functions.h"
 #include "abi/game_level.h"
-#include "abi/symbol_hash.h"
+#include "nevr/symbol_hash.h"
 #include "runtime/log/symcache.h"
 #include "runtime/patch/ui_texture_mips_rules.h"
 #include "runtime/hook/symbol_corpus.h"
