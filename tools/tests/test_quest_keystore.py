@@ -99,6 +99,15 @@ def process_tree(root: int) -> list:
     return members
 
 
+def alive(pid: int) -> bool:
+    """True while `pid` is a process that is running or stopped; a zombie, or a pid that is gone, is not alive."""
+    try:
+        stat = pathlib.Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return False
+    return stat[stat.rindex(")") + 2] not in "ZX"
+
+
 def fingerprint(keystore: pathlib.Path) -> str:
     out = subprocess.run(
         ["keytool", "-list", "-keystore", str(keystore), "-alias", ALIAS, "-storepass", PASSPHRASE],
@@ -107,6 +116,27 @@ def fingerprint(keystore: pathlib.Path) -> str:
         if "SHA-256" in line or "SHA256" in line:
             return line.split(":", 1)[1].strip().replace(":", "").lower()
     raise AssertionError(out)
+
+
+def stop_tool(proc: subprocess.Popen, tool_log: pathlib.Path, bound_s: float) -> None:
+    """Stop the tool under test, and everything it started, by its process group: passphrase_holders starts the tool
+    in a session of its own, so the group id is the tool's pid. SIGTERM goes to the tool alone, so its trap shreds the
+    key. Its exit is waited for without reaping it, so its pid still names the group when the group is signalled. A
+    tool still running after `bound_s` seconds is stopped the same way, and the check fails with a message that names
+    the wait and carries the tool's log."""
+    os.kill(proc.pid, signal.SIGTERM)
+    deadline = time.time() + bound_s
+    expired = False
+    while os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is None:
+        if time.time() > deadline:
+            expired = True
+            break
+        time.sleep(0.05)
+    os.killpg(proc.pid, signal.SIGKILL)
+    proc.wait(timeout=20)
+    if expired:
+        raise AssertionError(f"the tool (pid {proc.pid}) did not exit within {bound_s} s of SIGTERM; "
+                             f"its log: {tool_log.read_text()!r}")
 
 
 class QuestKeystoreTest(unittest.TestCase):
@@ -189,14 +219,21 @@ class QuestKeystoreTest(unittest.TestCase):
         proc.communicate(timeout=20)
         self.assertEqual(self.left_behind(), [])
 
-    def passphrase_holders(self, script=SCRIPT):
+    def passphrase_holders(self, script=SCRIPT, stop_bound_s=20):
         """Lines `<pid> <ppid> <command line>` of the processes that carry the passphrase and belong to the tool under
         test: the tool itself, everything it starts while the wrapped command runs, and every `keytool` call it makes
         (the fake `keytool` records those, because they are over before the wrapped command starts). A failure
         therefore names its holder. Processes that are not the tool's are not looked at: other runs of this file, on
-        the same host, put the passphrase on the command line of their own `keytool`."""
-        proc = subprocess.Popen([str(script), "with", "sleep", "30"], env=self.env,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        the same host, put the passphrase on the command line of their own `keytool`.
+
+        Its waits are bounded: the wrapped command must start within 30 s, and the tool must exit within stop_bound_s of
+        SIGTERM, or the check fails and names that wait. The tool runs in a session of its own, so everything it starts
+        is in its process group, and stop_tool stops the group, including a child started after the look. The tool's
+        output goes to a file, so no wait depends on a pipe that a process the tool started may hold open."""
+        tool_log = self.tmp / "holders-tool.log"
+        with tool_log.open("w") as sink:
+            proc = subprocess.Popen([str(script), "with", "sleep", "30"], env=self.env, stdout=sink,
+                                    stderr=subprocess.STDOUT, start_new_session=True)
         self.addCleanup(lambda: proc.poll() is None and proc.kill())
         found = []
         tree = []
@@ -212,18 +249,8 @@ class QuestKeystoreTest(unittest.TestCase):
             found += [f"{pid} {table[pid][0] if pid in table else '?'} {' '.join(argv)}"
                       for pid, argv in tree if PASSPHRASE in " ".join(argv)]
         finally:
-            # The tool first, so its trap shreds the key; then whatever it left running, which would hold the pipes
-            # open for `communicate`.
-            proc.send_signal(signal.SIGTERM)
-            try:
-                proc.wait(timeout=20)
-            finally:
-                for pid, _ in tree:
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                proc.communicate(timeout=20)
+            self.tool_pid = proc.pid
+            stop_tool(proc, tool_log, stop_bound_s)
         calls = self.keytool_log.read_text().splitlines() if self.keytool_log.exists() else []
         self.assertTrue(calls, "the tool never called keytool, so there was nothing to check")
         found += [line for line in calls if PASSPHRASE in line]
@@ -250,11 +277,14 @@ class QuestKeystoreTest(unittest.TestCase):
                         "the unrelated process is not in the process table, so this test proves nothing")
         self.assertEqual(self.passphrase_holders(), [])
 
-    def leaking_copy(self, old: str, new: str) -> pathlib.Path:
+    def leaking_copy(self, *edits: str) -> pathlib.Path:
+        """A copy of the tool with each (old, new) pair of `edits` replaced once: the leaks the checks must catch."""
         text = SCRIPT.read_text()
-        self.assertEqual(text.count(old), 1, f"{old!r} is not in the script exactly once")
+        for old, new in zip(edits[::2], edits[1::2]):
+            self.assertEqual(text.count(old), 1, f"{old!r} is not in the script exactly once")
+            text = text.replace(old, new)
         copy = self.tmp / "leaky_quest_keystore.sh"
-        copy.write_text(text.replace(old, new))
+        copy.write_text(text)
         copy.chmod(0o755)
         return copy
 
@@ -271,6 +301,45 @@ class QuestKeystoreTest(unittest.TestCase):
                                   '    bash -c "sleep 30; :" "$passphrase" &\n    log "keystore ready entry=$KS_ENTRY alias=$ALIAS"')
         found = self.passphrase_holders(leaky)
         self.assertTrue(any(re.match(r"^[0-9]+ [0-9]+ bash -c sleep 30; : ", line) for line in found), found)
+
+    def test_a_process_the_tool_starts_after_the_check_looked_is_stopped_before_the_check_returns(self):
+        self.seed()
+        ready = self.tmp / "late-ready"
+        pidfile = self.tmp / "late-child.pid"
+        # The holder waits for the tool's key (the flag), then starts a child a second later that holds the tool's
+        # output. The check has taken its look by then, and the tool sleeps 3 s in its cleanup, so the child starts
+        # before the check stops the tool. A stop that signals only what the look saw, or a wait on the output, waits
+        # out the child's 30 s.
+        holder = (f"    bash -c 'until [ -e {ready} ]; do sleep 0.05; done; sleep 1; sleep 30 & echo $! > {pidfile}; "
+                  "wait' \"$passphrase\" &\n"
+                  f"    : > {ready}\n"
+                  '    log "keystore ready entry=$KS_ENTRY alias=$ALIAS"')
+        leaky = self.leaking_copy('    log "keystore ready entry=$KS_ENTRY alias=$ALIAS"', holder,
+                                  "    local rc=$?", "    local rc=$?\n    sleep 3")
+        self.passphrase_holders(leaky)
+        self.assertTrue(pidfile.exists(), "the holder never started its child")
+        late = int(pidfile.read_text())
+        self.assertFalse(alive(late), f"the child started after the check looked (pid {late}) outlived the check")
+        self.assertFalse(pathlib.Path(f"/proc/{self.tool_pid}").exists(),
+                         f"the tool (pid {self.tool_pid}) was not reaped before the check returned")
+
+    def test_alive_is_false_for_a_zombie_and_true_for_a_running_process(self):
+        zombie = subprocess.Popen(["true"])
+        os.waitid(os.P_PID, zombie.pid, os.WEXITED | os.WNOWAIT)  # exited, not reaped: its /proc entry says Z
+        self.assertFalse(alive(zombie.pid), "a zombie counted as alive")
+        zombie.wait()
+        runner = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(lambda: (runner.kill(), runner.wait()))
+        self.assertTrue(alive(runner.pid), "a running process counted as dead")
+
+    def test_a_tool_that_ignores_sigterm_fails_the_check_and_names_the_wait(self):
+        self.seed()
+        leaky = self.leaking_copy("trap 'handle_signal 143' TERM", "trap '' TERM")
+        with self.assertRaises(AssertionError) as caught:
+            self.passphrase_holders(leaky, stop_bound_s=1)
+        message = str(caught.exception)
+        self.assertIn("did not exit within 1 s of SIGTERM", message)
+        self.assertIn("keystore ready", message)  # the tool's own log is part of the message
 
     def test_a_missing_key_is_an_error_that_names_the_import_and_the_command_never_runs(self):
         marker = self.tmp / "ran"
