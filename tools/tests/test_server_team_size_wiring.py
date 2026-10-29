@@ -1,9 +1,9 @@
-"""#1422: a server's private-match team size is wired once. The byte logic is tested by
-src/runtime/tests/test_server_team_size.cpp and the two sites' bytes against the game by
+"""#1422: a server's match team size is wired once. The byte logic and the lines Install logs (InstallLines) are
+tested by src/runtime/tests/test_server_team_size.cpp and the two sites' bytes against the game by
 tests/system/mode_patches_test.go (TestServerTeamSizeSites); these are source sensors for what neither can see:
-the one call in boot.cpp, the client's skip line, the config key, the two addresses and the production writer, and
-the level of the outcome line. Each check takes the text it reads, so a test can hand it a broken copy and see it
-fail."""
+the one call in boot.cpp, reached in both modes, the config key, the two addresses, the production writer, the level
+each line is logged at, and that test-auth-unit builds and runs the GTest. Each check takes the text it reads, so a
+test can hand it a broken copy and see it fail."""
 from __future__ import annotations
 
 import re
@@ -23,8 +23,12 @@ def strip_comments(text: str) -> str:
     return re.sub(r"//[^\n]*", "", text)
 
 
+MODE_RETURN = re.compile(r"if\s*\(\s*!?\s*g_isServer\b[^)]*\)\s*(?:\{[^{}]*?)?\breturn\b")
+
+
 def boot_problems(boot: str) -> list[str]:
-    """One call, in RunDeferredRuntimeBootstrap, outside any `if`, so both modes reach it and a client logs."""
+    """One call, in RunDeferredRuntimeBootstrap, outside any `if`, with no return on the mode before it, so both
+    modes reach it and a client logs."""
     code = strip_comments(boot)
     if code.count(CALL) != 1:
         return [f"expected exactly one `{CALL}` in boot.cpp, found {code.count(CALL)}"]
@@ -38,35 +42,40 @@ def boot_problems(boot: str) -> list[str]:
         depth -= ch == "}"
     if depth != 1:
         return [f"the Install call is nested {depth - 1} blocks deep; a client would not log its skip line"]
+    before = code[:start].rstrip()
+    if not before.endswith((";", "{", "}")):
+        return ["the Install call is the body of an `if` or a loop without braces"]
+    if MODE_RETURN.search(code[body:start]):
+        return ["RunDeferredRuntimeBootstrap returns on the mode before the Install call"]
     return []
 
 
 def install_problems(install: str) -> list[str]:
     code = strip_comments(install)
     problems = []
-    skip = re.search(r"if\s*\(\s*!isServer\s*\)\s*\{(.*?)\breturn;\s*\}", code, flags=re.S)
-    if not skip or "[NEVR.PATCH] server team size not applied: this is a client" not in skip.group(1):
-        problems.append("a client does not log the skip line and return before touching the sites")
-    if 'NevrCfgGetFlat("nevr_max_team_size")' not in code:
-        problems.append("the size is not read from nevr_max_team_size")
+    if not re.search(r"isServer\s*\?\s*NevrCfgGetFlat\(\s*\"nevr_max_team_size\"\s*\)\s*:\s*nullptr", code):
+        problems.append("a server's size is not read from nevr_max_team_size")
     for name in ("SERVER_ASSIGN_TEAM_CAP", "SERVER_ASSIGN_TEAM_SLOT"):
         if not re.search(rf"base\s*\+\s*nevr_patch_addresses::{name}\b", code):
-            problems.append(f"{name} is not the site handed to Apply")
-    if not re.search(r"Apply\(\s*capSite\s*,\s*slotSite\s*,\s*size\s*,\s*ProcessWrite\s*\)", code):
-        problems.append("Apply is not called with the cap site, the slot site, the size and ProcessWrite")
+            problems.append(f"{name} is not the site handed to InstallLines")
+    if not re.search(r"InstallLines\(\s*isServer\s*,\s*text\s*,\s*capSite\s*,\s*slotSite\s*,\s*ProcessWrite\s*,"
+                     r"\s*reinterpret_cast<uintptr_t>\(\s*capSite\s*\)\s*,\s*reinterpret_cast<uintptr_t>\(\s*slotSite\s*\)\s*\)", code):
+        problems.append("InstallLines is not called with the mode, the value, the two sites, ProcessWrite and their addresses")
     if not re.search(r"return\s+ProcessMemcpy\(\s*dest\s*,\s*src\s*,\s*n\s*\)", code):
         problems.append("ProcessWrite does not write through ProcessMemcpy")
-    if not re.search(r"IsFailure\(\s*outcome\s*\)\s*\?\s*EchoVR::LogLevel::Warning\s*:\s*EchoVR::LogLevel::Info", code):
-        problems.append("the outcome line is not a Warning when the size asked for is not in effect")
+    if not re.search(r"Log\(\s*line\.warning\s*\?\s*EchoVR::LogLevel::Warning\s*:\s*EchoVR::LogLevel::Info\s*,\s*\"%s\"\s*,"
+                     r"\s*line\.text\.c_str\(\)\s*\)", code):
+        problems.append("each line is not logged as text at its own level")
     return problems
 
 
 def address_problems(addresses: str) -> list[str]:
     code = strip_comments(addresses)
-    want = {"SERVER_ASSIGN_TEAM_CAP": "0x1AB8C2", "SERVER_ASSIGN_TEAM_SLOT": "0x1ABC8A"}
+    want = {"SERVER_ASSIGN_TEAM_CAP": "0x1AB8C2", "SERVER_ASSIGN_TEAM_SLOT": "0x1ABC8A",
+            "SERVER_ASSIGN_TEAM_CAP_SIZE": "12", "SERVER_ASSIGN_TEAM_SLOT_SIZE": "26"}
     problems = []
     for name, rva in want.items():
-        if not re.search(rf"constexpr\s+uintptr_t\s+{name}\s*=\s*{rva}\s*;", code):
+        if not re.search(rf"constexpr\s+(?:uintptr_t|size_t)\s+{name}\s*=\s*{rva}\s*;", code):
             problems.append(f"{name} is not {rva} (ServerAssignTeam, echovr.exe 0x140000000 + RVA)")
     return problems
 
@@ -83,14 +92,18 @@ class ServerTeamSizeWiring(unittest.TestCase):
         self.assertTrue(boot_problems(boot.replace(CALL, CALL + "\n  " + CALL)))
         self.assertTrue(boot_problems(boot.replace(CALL, "if (g_isServer) { " + CALL + " }")))
         self.assertTrue(boot_problems(boot.replace(CALL, "// " + CALL)))
+        self.assertTrue(boot_problems(boot.replace(CALL, "if (g_isServer) " + CALL)))
+        self.assertTrue(boot_problems(boot.replace(CALL, "if (!g_isServer) return;\n  " + CALL)))
+        self.assertTrue(boot_problems(boot.replace(CALL, "if (!g_isServer) {\n    return;\n  }\n  " + CALL)))
 
     def test_a_broken_install_is_found(self) -> None:
         install = INSTALL.read_text(encoding="utf-8")
         breaks = [
-            ("this is a client", "this is a server"),
+            ('isServer ? NevrCfgGetFlat("nevr_max_team_size") : nullptr', 'NevrCfgGetFlat("nevr_max_team_size")'),
             ('"nevr_max_team_size"', '"nevr_team_size"'),
             ("nevr_patch_addresses::SERVER_ASSIGN_TEAM_SLOT", "nevr_patch_addresses::SERVER_ASSIGN_TEAM_CAP"),
-            ("size, ProcessWrite)", "size, nullptr)"),
+            ("slotSite, ProcessWrite,", "slotSite, nullptr,"),
+            ("reinterpret_cast<uintptr_t>(slotSite))", "reinterpret_cast<uintptr_t>(capSite))"),
             ("return ProcessMemcpy(dest, src, n);", "return true;"),
             ("EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info", "EchoVR::LogLevel::Info : EchoVR::LogLevel::Info"),
         ]
@@ -103,6 +116,21 @@ class ServerTeamSizeWiring(unittest.TestCase):
         addresses = ADDRESSES.read_text(encoding="utf-8")
         self.assertTrue(address_problems(addresses.replace("= 0x1AB8C2;", "= 0x1AB8C3;")))
         self.assertTrue(address_problems(addresses.replace("= 0x1ABC8A;", "= 0x1ABC8B;")))
+        self.assertTrue(address_problems(addresses.replace("SERVER_ASSIGN_TEAM_SLOT_SIZE = 26;", "SERVER_ASSIGN_TEAM_SLOT_SIZE = 18;")))
+
+
+class TheTestIsBuiltAndRun(unittest.TestCase):
+    """test-auth-unit builds and runs test_server_team_size, so the GTests are part of the quick check."""
+
+    def test_cmake_builds_it(self) -> None:
+        cmake = strip_comments((ROOT / "src/runtime/CMakeLists.txt").read_text(encoding="utf-8").replace("#", "//"))
+        self.assertIn("add_executable(test_server_team_size tests/test_server_team_size.cpp)", cmake)
+        self.assertIn("gtest_discover_tests(test_server_team_size", cmake)
+
+    def test_the_unit_recipe_builds_and_runs_it(self) -> None:
+        justfile = (ROOT / "justfile").read_text(encoding="utf-8")
+        self.assertRegex(justfile, r"--target test_server_team_size\b")
+        self.assertRegex(justfile, r"for test_name in [^\n]*\btest_server_team_size\b")
 
 
 if __name__ == "__main__":
