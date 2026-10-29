@@ -267,7 +267,7 @@ and the tool refuses, as a refused `checkout` step that couriers the owner, unle
 freshly fetched `origin/main`.
 
 1. Lists the newest published `vX.Y.Z` release. A tag that has a `done` record in the log is left alone. A tag that has
-   failed three times is not retried; the third failure bonks the owner and couriers Spritz once, before the run exits 0.
+   failed three times is not retried; the third failure couriers Spritz once, before the run exits 0. Nothing bonks the owner.
    A dirty or stale checkout, or a missing credential, is a refusal that is logged and never counts toward the three failures.
 2. Builds the release-signer from a snapshot of its `main`, and reads `verify-manifest --live`. A tag that beta already
    lists is done. Otherwise the beta release must list a `game-data` artifact (the zip the new release carries), whose
@@ -284,8 +284,8 @@ freshly fetched `origin/main`.
 6. Requires `verify-manifest --live` to list the tag on beta, and requires the manifest the public host serves (held to the
    sha256 the signer verified) to list, in the new release, the same `game-data` artifact by name and size. A missing or
    changed entry is a failure, never `done`.
-7. Bonks the owner and couriers Teth to verify the live publish, then removes the worktree and the signer snapshot by exact
-   path. A tag whose notice was never sent is noticed on the next run.
+7. Couriers Teth to verify the live publish and Spritz the same text (no bonk), then removes the worktree and the signer
+   snapshot by exact path. A tag whose notice was never sent is noticed on the next run.
 
 Stable stays an owner step (`approve-stable`); the timer only publishes beta. **Credentials go only where they are used:**
 the R2 credential to `publish_apk`, and the GitHub token to `publish_apk` and the dispatch. Every other command, the
