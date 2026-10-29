@@ -1061,6 +1061,25 @@ test-quest-data-net: _vcpkg-quest-host
     NEVR_TEST_TMP="$out" timeout -k 5 300 "$out/data_wiring_test"
     echo "test-quest-data-net: the fetch passes over real HTTP on the host"
 
+# The shared invite service for the Quest, on the host (docs/adr/0017, #966, S1): src/runtime/patch/invite_service.cpp and its libcurl
+# transport, compiled with the host g++ against the system libcurl (pkg-config, as test-quest-tls does) and nlohmann-json from the
+# quest-host install, then run: the link and the off path (src/quest/tests/invite_service_link_test.cpp). Fail-close.
+test-quest-invite: _vcpkg-quest-host
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v g++ >/dev/null || { echo "test-quest-invite: missing tool: g++" >&2; exit 1; }
+    pkg-config --exists libcurl || { echo "test-quest-invite: libcurl development files not found (pkg-config libcurl)" >&2; exit 1; }
+    out="build/quest-invite-host"
+    rm -rf "$out"
+    mkdir -p "$out"
+    json_inc="{{ justfile_directory() }}/build/quest-host-vcpkg/x64-linux/include"
+    [[ -f "$json_inc/nlohmann/json.hpp" ]] || { echo "test-quest-invite: FAIL — $json_inc/nlohmann/json.hpp not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
+    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -Isdk/include -isystem "$json_inc" $(pkg-config --cflags libcurl) \
+        src/runtime/patch/invite_service.cpp src/runtime/patch/invite_transport_curl.cpp \
+        src/quest/tests/invite_service_link_test.cpp -o "$out/invite_service_link_test" $(pkg-config --libs libcurl)
+    timeout -k 5 120 "$out/invite_service_link_test"
+    echo "test-quest-invite: invite service link and off path pass on the host"
+
 # Run the Quest redirect test on the host. src/quest/tests/service_redirect_test.cpp is
 # compiled for Android by src/quest/CMakeLists.txt but cannot execute there; this
 # compiles the same test, the same vectors (service_redirect_vectors.h) and the same
@@ -1268,6 +1287,36 @@ test-quest-router:
 # name, a self-signed leaf, an empty trust store and a non-TLS server each fail; ws:// is refused; the
 # plaintext server never sees an upgrade request. Needs openssl, python3 and libcurl development files
 # (pkg-config libcurl) and libssl/libcrypto on the host. Fail-close: a missing tool exits nonzero.
+#
+# The Quest invite transport and the service seam it plugs into (#966, docs/adr/0017): the transport over a loopback HTTP server
+# on the host (plain http only where the test asks for it), the production client's fail-closed case, the shared service with the
+# Quest transport, and the run's switch (the network.invite_codes feature). The link test of the shared service is test-quest-invite
+# above. Needs libcurl development files (pkg-config libcurl) and the nlohmann header from `just build` with a mingw-* preset.
+# Fail-close: a missing tool or header exits nonzero.
+test-quest-invite-transport:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pkg-config --exists libcurl || { echo "test-quest-invite-transport: libcurl development files not found (pkg-config libcurl)" >&2; exit 1; }
+    out="build/quest-invite-transport-host"
+    rm -rf "$out"
+    mkdir -p "$out"
+    json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
+    if [[ ! -f "$json_src/json.hpp" ]]; then
+        echo "test-quest-invite-transport: FAIL — $json_src/json.hpp not found; run 'just build' with a mingw-* preset first" >&2
+        exit 1
+    fi
+    json_inc="$out/json_inc"
+    mkdir -p "$json_inc"
+    ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
+    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -Isdk/include -isystem "$json_inc" $(pkg-config --cflags libcurl) \
+        src/quest/tests/invite_transport_quest_test.cpp \
+        src/quest/invite/invite_transport_quest.cpp src/quest/invite/invite_run.cpp \
+        src/quest/auth/curl_http.cpp src/quest/auth/ca_bundle.cpp \
+        src/runtime/patch/invite_service.cpp src/runtime/patch/invite_transport_curl.cpp \
+        -o "$out/invite_transport_quest_test" $(pkg-config --libs libcurl) -lssl -lcrypto
+    timeout -k 5 300 "$out/invite_transport_quest_test"
+    echo "test-quest-invite-transport: Quest invite transport and service seam tests pass on the host"
+
 test-quest-tls:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1616,6 +1665,14 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]:0:2}" -o "$out/menu_cards_hook_test" -ldl
     timeout 120 "$out/menu_cards_hook_test"
+    # The CREATE GAME / JOIN VIA CODE observer on libr15's MetricLog (#966, ADR 0017 slice S2): the real observer through the
+    # thunk entry, built without exceptions, against a stand-in for the game's MetricLog. The shared parse needs nlohmann::json,
+    # so the header this recipe installed (attach_json_inc, above) is on the include path.
+    "${cxx[@]}" -fno-exceptions -pthread -isystem "$out/attach_json_inc" src/quest/tests/wizard_metric_hook_test.cpp \
+        src/quest/invite/wizard_metric_hook.cpp src/quest/data/sha256.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        "${ident[@]:0:2}" -o "$out/wizard_metric_hook_test" -ldl
+    timeout 120 "$out/wizard_metric_hook_test"
     # The controller-input seam (#1202): the VrApi layout rules, the registration's every refusal and its one owner, and
     # the real handler through the thunk entry against stand-ins for vrapi_GetCurrentInputState and
     # vrapi_GetInputDeviceCapabilities. got_pinned_test resolves both slots in the real libr15.
@@ -2260,6 +2317,7 @@ verify:
         test-quest-data \
         test-quest-data-net \
         test-quest-integration \
+        test-quest-invite \
         test-quest-plugins \
         test-quest-autopilot \
         test-scripting

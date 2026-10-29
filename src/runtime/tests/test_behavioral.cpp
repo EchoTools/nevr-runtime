@@ -3575,6 +3575,11 @@ class GameSocket {
     std::unique_lock<std::mutex> lock(mutex_);
     return changed_.wait_for(lock, kRoleWait, [this] { return closed_; });
   }
+  // Whether the bridge has closed the socket now; it does not wait.
+  bool Closed() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return closed_;
+  }
   bool WaitForFrames(int count) {
     std::unique_lock<std::mutex> lock(mutex_);
     return changed_.wait_for(lock, kRoleWait, [&] { return frames_ >= count; });
@@ -7065,4 +7070,68 @@ TEST_F(RefusedLoginClientTest, ALoginAfterARefusedOneIsStillALoginNotAShareOfNot
 TEST_F(RefusedLoginRouterClientTest, AClientSaysARefusalOnceAndDoesNotGoBackForTheSameSignIn) {
   StartRefusing(401);
   ExpectClientSaysRefusalOnce(refusing_, port_);
+}
+
+// #1446: once a client's sign-in has ended without a token, nothing the service says can change it, so the bridge
+// answers the game's login itself: the game gets a LoginFailure, the service is not asked and the socket stays open.
+namespace {
+bool g_testSignInEndedWithoutToken = false;
+bool TestSignInEndedWithoutToken() { return g_testSignInEndedWithoutToken; }
+
+// The sign-in state for one test. Cleared when the test ends, so no later test sees an ended sign-in.
+class SignInEndedForTest {
+ public:
+  SignInEndedForTest() {
+    RegisterModuleProc("TokenAuth_SignInEndedWithoutToken", reinterpret_cast<void*>(&TestSignInEndedWithoutToken));
+    g_testSignInEndedWithoutToken = true;
+  }
+  ~SignInEndedForTest() { g_testSignInEndedWithoutToken = false; }
+  SignInEndedForTest(const SignInEndedForTest&) = delete;
+  SignInEndedForTest& operator=(const SignInEndedForTest&) = delete;
+};
+}  // namespace
+
+TEST_F(RefusedLoginClientTest, AClientWhoseSignInEndedWithoutATokenGetsALoginFailureAndTheServiceIsNotAsked) {
+  StartRefusing(401);
+  SignInEndedForTest ended;
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port_, "/login"));
+  ASSERT_TRUE(login.WaitForFrames(1)) << "the game got no answer to its login";
+  const std::optional<nevr_evr_codec::LoginFailure> failure =
+      nevr_evr_codec::ParseLoginFailure(login.FrameWith(nevr_evr_codec::kSymLoginFailure));
+  ASSERT_TRUE(failure.has_value()) << "the answer is not a LoginFailure";
+  EXPECT_EQ(failure->statusCode, 7u);
+  EXPECT_EQ(refusing_.Requests(), 0) << "the service was asked about a sign-in that had ended";
+  std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+  EXPECT_FALSE(login.Closed()) << "the bridge closed the login socket, and the game's reconnects are the loop";
+}
+
+TEST_F(RefusedLoginClientTest, ALaterLoginAfterAnEndedSignInIsAnsweredTheSameWayAndSaidOnce) {
+  StartRefusing(401);
+  SignInEndedForTest ended;
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    GameSocket login;
+    ASSERT_TRUE(login.Connect(port_, "/login")) << "attempt " << attempt;
+    ASSERT_TRUE(login.WaitForFrames(1)) << "attempt " << attempt;
+  }
+  EXPECT_EQ(refusing_.Requests(), 0);
+  EXPECT_EQ(LogLinesContaining("login answered locally").size(), 1u) << "the decision was said more than once";
+  EXPECT_EQ(LogLinesContaining("login attempts answered locally").size(), 0u)
+      << "a later attempt inside the window is counted, not written";
+  EXPECT_LE(LogLinesContaining("No discord ID").size(), 1u) << "the discord id line repeats on every attempt";
+  const std::vector<std::string> admitted = LogLinesContaining("game socket admitted");
+  ASSERT_EQ(admitted.size(), 3u);
+  for (const std::string& line : admitted) {
+    EXPECT_NE(line.find("role=login"), std::string::npos) << line;
+    EXPECT_EQ(line.find("login-claimed"), std::string::npos) << line;
+  }
+}
+
+TEST_F(RefusedLoginClientTest, AConfigSocketIsNotAnsweredHereAndStillGoesToTheService) {
+  StartRefusing(401);
+  SignInEndedForTest ended;
+  GameSocket config;
+  ASSERT_TRUE(config.Connect(port_, "/config"));
+  ASSERT_TRUE(config.WaitForClose()) << "the refused config socket was left open";
+  EXPECT_EQ(refusing_.Requests(), 1) << "the config socket was not sent to the service";
 }
