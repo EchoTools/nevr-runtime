@@ -119,7 +119,7 @@ void RuntimeRendezvous::Prepare(HMODULE host_module, HMODULE game_module,
   host_module_ = host_module;
   game_module_ = game_module;
   diagnostics_ = &diagnostics;
-  loader_.Prepare(host_module);
+  loader_.Prepare();
   g_active_rendezvous = this;
 }
 
@@ -248,7 +248,10 @@ std::int64_t RuntimeRendezvous::StopGame(std::int64_t command_line) {
       // decision stays suppressed
     }
     EmitStopDiagnostic(*diagnostics_, loader_.Result(), StopNoticeName(decision));
-    if (decision == StopNotice::kShow) ShowStopNotice(kStopNoticeText);
+    if (decision == StopNotice::kShow) {
+      const RuntimeLoadResult& result = loader_.Result();
+      ShowStopNotice(StopNoticeTextFor(result.outcome, result.verify_reason_code));
+    }
   }
 #if defined(NEVR_HOST_TESTING)
   if (Seams().stop_game != nullptr) {

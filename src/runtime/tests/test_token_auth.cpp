@@ -411,8 +411,8 @@ TEST(DevicePollResponse, PrefersRfcAccessTokenOverDeprecatedToken) {
   EXPECT_EQ(*response.refresh_token_expires_in, 2592000U);
 }
 
-// Production nakama is the pre-f945f631d build until it is redeployed, and it
-// sends neither access_token nor refresh_token_expires_in. A client that reads
+// A nakama older than 80578f3eb (EchoTools/nakama) sends neither access_token
+// nor refresh_token_expires_in. A client that reads
 // only the RFC names authenticates against nothing there.
 TEST(DevicePollResponse, LegacyServerWithoutRfcFieldsStillAuthenticates) {
   const nevr_token_auth::DevicePollResponse response = nevr_token_auth::ParseDevicePollResponse(
@@ -475,14 +475,12 @@ TEST(RefreshTokenExpiry, ServerValueWinsAndFallbackOnlyFillsSilence) {
             ResolveRefreshTokenExpirySec(kNow, std::nullopt));
 }
 
-// The refresh request body is built by nevr::auth::BuildRefreshBody (core/auth_refresh.h);
-// both field names carry one value. A refresh_token-only body is rejected by a
-// pre-f945f631d nakama with "invalid payload: token required".
-TEST(RefreshRequestBody, CarriesBothFieldNamesWithTheSameValue) {
+// The refresh request body is built by nevr::auth::BuildRefreshBody (core/auth_refresh.h):
+// the RFC 6749 field alone (EchoTools/nakama 80578f3eb reads it).
+TEST(RefreshRequestBody, CarriesOnlyTheRfcFieldName) {
   const nlohmann::json body = nlohmann::json::parse(nevr::auth::BuildRefreshBody("rt"));
 
-  EXPECT_EQ(body.value("refresh_token", ""), "rt");
-  EXPECT_EQ(body.value("token", ""), "rt");
+  EXPECT_EQ(body, nlohmann::json({{"refresh_token", "rt"}}));
 }
 
 // Both ways of obtaining an access token must agree about when it dies. The
@@ -1314,6 +1312,37 @@ TEST(AuthCancellation, StopRequestWakesWaitersAndRemainsObservable) {
   EXPECT_TRUE(cancellation.WaitFor(std::chrono::milliseconds(0)));
 }
 
+namespace {
+
+// The sign-in cache is the nevr root's (ADR 0012), and the root comes from %LOCALAPPDATA%. The tests below that exercise the
+// older search (the install's _local folders) run without one, so they never read or write the cache of whoever runs them.
+class NoLocalAppDataEnvironment : public ::testing::Environment {
+ public:
+  void SetUp() override {
+    wchar_t saved[MAX_PATH * 2] = {};
+    const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", saved, static_cast<DWORD>(sizeof(saved) / sizeof(saved[0])));
+    if (n != 0 && n < sizeof(saved) / sizeof(saved[0])) saved_.assign(saved, n);
+    SetEnvironmentVariableW(L"LOCALAPPDATA", nullptr);
+  }
+  void TearDown() override {
+    if (!saved_.empty()) SetEnvironmentVariableW(L"LOCALAPPDATA", saved_.c_str());
+  }
+
+ private:
+  std::wstring saved_;
+};
+
+[[maybe_unused]] const ::testing::Environment* const kNoLocalAppData = ::testing::AddGlobalTestEnvironment(new NoLocalAppDataEnvironment);
+
+// Sets %LOCALAPPDATA% for one test and puts it back.
+class ScopedLocalAppData {
+ public:
+  explicit ScopedLocalAppData(const std::wstring& value) { SetEnvironmentVariableW(L"LOCALAPPDATA", value.c_str()); }
+  ~ScopedLocalAppData() { SetEnvironmentVariableW(L"LOCALAPPDATA", nullptr); }
+};
+
+}  // namespace
+
 // Issue #23: Load and Save must select the same credentials directory. Existing
 // credentials take precedence over configs so refreshes do not move a cache.
 class CredentialsDirFixture : public ::testing::Test {
@@ -1702,6 +1731,72 @@ TEST_F(CredentialsDirFixture, NoCredentialsOrYamlFallsBackBesideExecutable) {
   EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "fallback-refresh");
   EXPECT_TRUE(std::filesystem::exists(fallback));
 }
+
+// ADR 0012 / #857: the sign-in cache is one file in the nevr root.
+TEST_F(CredentialsDirFixture, TheRootsCacheIsSelectedAndOutranksALegacyOne) {
+  const std::string nevrRoot = (root_ / "appdata" / "nevr" / "echovr").string();
+  Write(root_ / "appdata" / "nevr" / "echovr" / ".credentials.json", Credentials("in-root").dump());
+  Write(root_ / "bin" / "win10" / "_local" / ".credentials.json", Credentials("in-local").dump());
+
+  const CredentialCacheLocation location = SelectCredentialCacheLocation(exe_dir_, nevrRoot);
+  EXPECT_EQ(std::filesystem::path(location.credentialsPath).lexically_normal(),
+            (std::filesystem::path(nevrRoot) / ".credentials.json").lexically_normal());
+  EXPECT_EQ(LoadCachedAuthToken(exe_dir_, nevrRoot).refresh_token, "in-root");
+}
+
+TEST_F(CredentialsDirFixture, ALegacyCacheTheMoveLeftIsStillReadAndWrittenBackWhereItIs) {
+  const std::string nevrRoot = (root_ / "appdata" / "nevr" / "echovr").string();
+  const auto legacy = root_ / "bin" / "_local" / ".credentials.json";
+  Write(legacy, Credentials("left-behind").dump());
+
+  EXPECT_EQ(LoadCachedAuthToken(exe_dir_, nevrRoot).refresh_token, "left-behind") << "the login is not lost while the move cannot run";
+  CachedAuthToken auth;
+  auth.refresh_token = "rotated";
+  auth.refresh_token_expiry = 2100000000U;
+  ASSERT_TRUE(SaveAuthToken(auth, exe_dir_, nevrRoot));
+  EXPECT_EQ(LoadCachedAuthToken(exe_dir_, nevrRoot).refresh_token, "rotated");
+  EXPECT_NE(Read(legacy).find("rotated"), std::string::npos) << "written where it was found, so one cache exists until the move";
+  EXPECT_FALSE(std::filesystem::exists(root_ / "appdata"));
+}
+
+TEST_F(CredentialsDirFixture, WithNoCacheAnywhereTheRootIsCreatedAndLocalIsNot) {
+  const std::string nevrRoot = (root_ / "appdata" / "nevr" / "echovr").string();
+  CachedAuthToken auth;
+  auth.refresh_token = "first-login";
+  auth.refresh_token_expiry = 2100000000U;
+  ASSERT_TRUE(SaveAuthToken(auth, exe_dir_, nevrRoot));
+  EXPECT_TRUE(std::filesystem::exists(root_ / "appdata" / "nevr" / "echovr" / ".credentials.json"));
+  EXPECT_FALSE(std::filesystem::exists(root_ / "bin" / "win10" / "_local"));
+  EXPECT_EQ(LoadCachedAuthToken(exe_dir_, nevrRoot).refresh_token, "first-login");
+}
+
+TEST_F(CredentialsDirFixture, WithoutARootTheOlderSearchDecides) {
+  Write(root_ / "bin" / "_local" / ".credentials.json", Credentials("legacy").dump());
+  EXPECT_EQ(LoadCachedAuthToken(exe_dir_, std::string()).refresh_token, "legacy");
+  EXPECT_EQ(SelectCredentialCacheLocation(exe_dir_, std::string()).credentialsPath,
+            SelectCredentialCacheLocation(exe_dir_).credentialsPath) << "no %LOCALAPPDATA% in these tests";
+}
+
+TEST_F(CredentialsDirFixture, TheOneArgumentFormsUseLocalAppData) {
+  const std::wstring appdata = (root_ / "appdata").wstring();
+  ScopedLocalAppData scoped(appdata);
+  CachedAuthToken auth;
+  auth.refresh_token = "via-env";
+  auth.refresh_token_expiry = 2100000000U;
+  ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
+  EXPECT_TRUE(std::filesystem::exists(root_ / "appdata" / "nevr" / "echovr" / ".credentials.json"));
+  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "via-env");
+  EXPECT_EQ(std::filesystem::path(DefaultCredentialRoot()).lexically_normal(),
+            (root_ / "appdata" / "nevr" / "echovr").lexically_normal());
+}
+
+TEST_F(CredentialsDirFixture, ARootThatIsNotAnsiGivesNoRootSoTheCacheStaysWhereItWorks) {
+  if (GetACP() == CP_UTF8) GTEST_SKIP() << "the ANSI code page is UTF-8 here, so every path converts";
+  ScopedLocalAppData scoped(L"C:\\Users\\\U0001F600\\AppData\\Local");
+  EXPECT_TRUE(DefaultCredentialRoot().empty());
+}
+
+TEST_F(CredentialsDirFixture, NoLocalAppDataGivesNoRoot) { EXPECT_TRUE(DefaultCredentialRoot().empty()); }
 
 TEST(CredentialCachePath, JoinHandlesTrailingAndMissingSeparators) {
   EXPECT_EQ(JoinCredentialPath("C:\\games\\bin\\", "_local"), "C:\\games\\bin\\_local");

@@ -3,9 +3,11 @@
 # One file, one parser: nEVR's own config reader (src/core/nevr_config.cpp, yaml-cpp). It is not the game's JSON
 # config; the game's JSON parser never sees this file.
 #
-#   PC     the first of these that exists: config.yaml in the directory of -config-path (when given);
-#          <exe dir>\_local\config.yaml; <exe dir>\..\_local\config.yaml; <exe dir>\..\..\_local\config.yaml
-#          (<exe dir> is the directory of echovr.exe). Read by src/runtime/lifecycle/service_config.cpp.
+#   PC     the file named by -config-file <file>, else %LOCALAPPDATA%\nevr\echovr\config.yaml (the nEVR root).
+#          Nothing else is searched. A -config-file that names no readable file ends the run with exit code 64.
+#          A config.yaml in <exe dir>\_local (or one or two folders up) is never read: when the root has none, the
+#          first one found is copied there once and the old file is left as it is. Read by
+#          src/runtime/lifecycle/service_config.cpp.
 #   Quest  /sdcard/Android/data/com.readyatdawn.r15/files/config.yaml. Read by src/quest/sentinel/activation.cpp
 #          and src/quest/sentinel/quest_config.cpp. A nevr-quest.json in that directory is not read; the sentinel
 #          logs once that it is present and ignored.
@@ -99,6 +101,13 @@ diagnostics:
   # Default (absent): true. Set false to turn the event off.
   # ui_event_probe: false
 
+  # Quest only. The clock-level override (#928): the game asks VrApi for CPU and GPU clock level 2/2 once per entry into VR
+  # mode, and with this on the sentinel asks for 4/4 instead; any other pair the game asks for is passed through
+  # unchanged. The render_config line reports the levels applied (cpu_level, gpu_level) and VrApi's answer
+  # (clock_result); the resolved value is logged at start-up even when off. Needs no other feature.
+  # Default (absent): false. Set true to turn the override on.
+  # clock_levels_override: true
+
 # ---------------------------------------------------------------------------
 # graphics — render quality
 #
@@ -120,13 +129,6 @@ graphics:
   # `graphics` (a misspelling such as `texture_qualty`, or `Texture_Quality`) is ignored with a warning that names it.
   # Default (absent): stock. The log line `texture_quality` in the sentinel log names the level, its source and the size.
   # texture_quality: high
-
-  # Quest only. The clock-level override (#928, perf-test builds): the game asks VrApi for CPU and GPU clock level 2/2
-  # once per entry into VR mode, and with this on the sentinel asks for 4/4 instead; any other pair the game asks for
-  # is passed through unchanged. Each call logs one `clock_levels` line with the levels asked for, the levels applied
-  # and VrApi's answer; the resolved value is logged at start-up even when off. Needs no other feature.
-  # Default (absent): true in this build.
-  # clock_levels_override: false
 
 # ---------------------------------------------------------------------------
 # services — URL overrides for game service endpoints
@@ -204,6 +206,17 @@ services:
   # Not a secret.
   # serverdb: "wss://serverdb.echovrce.com"
 
+  # Dedicated server only: the ServerDB token route the server registers through, dialed with the server's
+  # access token as `Authorization: Bearer` (docs/adr/0001-serverdb-token-auth.md); guilds and regions are added
+  # as query parameters. Without it the server registers through socket_uri with identity.discord_id and
+  # auth.password in the query. A server with none of serverdb, serverdb_uri, or socket_uri plus
+  # identity.discord_id stops at registration: `no ServerDB URI: set services.serverdb_uri`.
+  # The route taken is logged: `[NEVR.GAMESERVER] serverdb route=<explicit|token|url_params|none> ...`.
+  # Default (absent): none.
+  # Not a secret.
+  # Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration, flat key nevr_serverdb_uri)
+  # serverdb_uri: "ws://g.echovrce.com:80/nevr"
+
   # Oculus Graph API. Only relevant if the game still queries Oculus services.
   # Legacy key "graphservice_host" is also checked.
   # Default (absent): https://graph.oculus.com
@@ -269,6 +282,14 @@ network:
   # Not a secret.
   # session_router: legacy
 
+  # The invite codes for the CREATE GAME / JOIN VIA CODE wizard: when on, a code typed into JOIN VIA CODE is sent to the
+  # game service (auth.http_uri, with the token this client already holds) to find the match it names. Create is not sent yet.
+  # true/on/yes/1 turns it on; false/off/no/0 or absent leaves it off. Any other value leaves it off, with a warning in
+  # the log. Ignored by a dedicated server.
+  # Absent: off.
+  # Not a secret.
+  # invite_codes: false
+
 # ---------------------------------------------------------------------------
 # identity — server identity fields sent during ServerDB registration
 #
@@ -282,7 +303,7 @@ network:
 identity:
   # Discord user ID of the server owner. Sent as a query parameter in the
   # ServerDB WebSocket URI. Required for server registration.
-  # Absent: ServerDB connection uses ws://localhost:777/serverdb (fallback)
+  # Absent: the server registers through services.serverdb_uri, and with neither it stops at registration.
   # Not a secret, but personally identifying — do not commit to public repos.
   # discord_id: "${NEVR_DISCORD_ID:?discord_id is required for server registration}"
 
@@ -393,7 +414,9 @@ telemetry:
 
 arena:
   # Round time in seconds. Overrides the game's "round_time" config value.
-  # Absent: game default (typically 180.0).
+  # Absent: game default (typically 180.0), except on a server, where a public Arena
+  # session uses 480.0 (8:00). Other game types, private Arena and reads before any
+  # session keep the game default (#982).
   # Not a secret.
   # round_time: 300.0
 
@@ -437,8 +460,8 @@ arena:
 # ---------------------------------------------------------------------------
 # plugins — plugin loading and configuration
 #
-# Plugins are optional DLLs loaded from the plugins/ subdirectory next to
-# echovr.exe. Each plugin exports the NvrPluginInterface lifecycle:
+# Plugins are optional DLLs loaded from plugins\ in the nEVR root
+# (%LOCALAPPDATA%\nevr\echovr, ADR 0012), never from the game folder. Each plugin exports the NvrPluginInterface lifecycle:
 #
 #   NvrPluginGetInfo()      — returns name, version, description (REQUIRED)
 #   NvrPluginGetApiVersion() — returns API version number (optional; v1 assumed)
@@ -453,10 +476,10 @@ arena:
 # plugin extracts the keys it understands, ignores the rest, and uses sensible
 # defaults for any key that is missing.
 #
-# This list is the only source: a DLL in plugins/ that is not listed here is not loaded.
+# This list is the only source: a DLL in the root's plugins\ that is not listed here is not loaded.
 # Each plugin entry has these keys:
 #   name      — the plugin's name (required); also the default file name
-#   file      — DLL file name inside plugins/ (default: name + ".dll")
+#   file      — DLL file name inside the root's plugins\ (default: name + ".dll")
 #   enabled   — if false, the plugin is not loaded (it is still reported at login)
 #   required  — if true and the plugin fails to load or initialise, a dedicated
 #               server stops with a fatal error; a client logs a warning and

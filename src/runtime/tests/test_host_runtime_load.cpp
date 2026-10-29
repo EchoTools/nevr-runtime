@@ -8,6 +8,7 @@
 #include "core/runtime_abi.h"
 #include "runtime/host/bootstrap_diagnostics.h"
 #include "runtime/host/host_identity.h"
+#include "runtime/ext/plugin_pins.h"
 #include "runtime/host/loader_lock.h"
 
 #include <gtest/gtest.h>
@@ -275,52 +276,175 @@ TEST(HostRuntimeLoad, ALoadedRuntimeIsRecordedToo) {
   EXPECT_FALSE(record.contains("win32_error"));
 }
 
-TEST(HostRuntimeLoad, TheRuntimeIsTheNevrRuntimeDllNextToTheHostModule) {
+// ADR 0012, "The root": nevr-runtime.dll resolves under %LOCALAPPDATA%\nevr\echovr, not beside BugSplat64.dll.
+TEST(HostRuntimeLoad, TheRuntimeIsTheNevrRuntimeDllInTheNevrRootUnderLocalAppData) {
   wchar_t path[MAX_PATH] = {};
-  ASSERT_TRUE(ResolveRuntimePath(GetModuleHandleW(nullptr), path, MAX_PATH));
-  wchar_t exe[MAX_PATH] = {};
-  ASSERT_GT(GetModuleFileNameW(nullptr, exe, MAX_PATH), 0u);
-  std::wstring expected(exe);
-  expected.resize(expected.find_last_of(L'\\') + 1);
-  expected += L"nevr-runtime.dll";
-  EXPECT_EQ(std::wstring(path), expected);
+  const nevr_host::RuntimePathChoice choice =
+      nevr_host::ResolveRuntimePathFrom(L"C:\\Users\\u\\AppData\\Local", nullptr, false, path, MAX_PATH);
+  EXPECT_EQ(choice.source, nevr_host::RuntimeRootSource::kLocalAppData);
+  EXPECT_FALSE(choice.override_ignored);
+  EXPECT_EQ(std::wstring(path), L"C:\\Users\\u\\AppData\\Local\\nevr\\echovr\\nevr-runtime.dll");
+  EXPECT_STREQ(nevr_host::RuntimeRootSourceName(choice.source), "local_appdata");
 }
 
-// The buffer arithmetic of ResolveRuntimePath sizes the name from the file name itself: a buffer of exactly the
-// directory plus the name and its NUL fits, and one wide character fewer yields no path, an empty buffer and no
-// write past the size it was given. kernel32.dll is the host module because its own file name (12 characters) is
-// shorter than the runtime's (16), so the module path itself fits the one-short buffer.
-TEST(HostRuntimeLoad, ABufferOfExactlyTheDirectoryAndTheNameFitsAndOneFewerDoesNot) {
-  HMODULE host = GetModuleHandleW(L"kernel32.dll");
-  ASSERT_NE(host, nullptr);
-  wchar_t module_path[MAX_PATH] = {};
-  ASSERT_GT(GetModuleFileNameW(host, module_path, MAX_PATH), 0u);
-  std::wstring directory(module_path);
-  directory.resize(directory.find_last_of(L'\\') + 1);
-  const std::wstring name = L"nevr-runtime.dll";
-  const std::size_t exact = directory.size() + name.size() + 1;
+TEST(HostRuntimeLoad, ALocalAppDataThatEndsInASeparatorGetsNoSecondOne) {
+  wchar_t path[MAX_PATH] = {};
+  ASSERT_EQ(nevr_host::ResolveRuntimePathFrom(L"D:\\L\\", nullptr, false, path, MAX_PATH).source,
+            nevr_host::RuntimeRootSource::kLocalAppData);
+  EXPECT_EQ(std::wstring(path), L"D:\\L\\nevr\\echovr\\nevr-runtime.dll");
+}
 
+TEST(HostRuntimeLoad, TheRuntimeIsNeverFoundBesideTheHostModule) {
+  wchar_t path[MAX_PATH] = {};
+  ASSERT_EQ(nevr_host::ResolveRuntimePathFrom(L"C:\\Users\\u\\AppData\\Local", nullptr, false, path, MAX_PATH).source,
+            nevr_host::RuntimeRootSource::kLocalAppData);
+  wchar_t exe[MAX_PATH] = {};
+  ASSERT_GT(GetModuleFileNameW(nullptr, exe, MAX_PATH), 0u);
+  std::wstring exe_dir(exe);
+  exe_dir.resize(exe_dir.find_last_of(L'\\') + 1);
+  EXPECT_NE(std::wstring(path).rfind(exe_dir, 0), 0u) << "the path is not in the host's own folder";
+}
+
+TEST(HostRuntimeLoad, NevrRootReplacesTheRootInTheDeveloperBuildOnly) {
+  wchar_t path[MAX_PATH] = {};
+  const nevr_host::RuntimePathChoice dev =
+      nevr_host::ResolveRuntimePathFrom(L"C:\\L", L"D:\\dev\\root", true, path, MAX_PATH);
+  EXPECT_EQ(dev.source, nevr_host::RuntimeRootSource::kOverride);
+  EXPECT_FALSE(dev.override_ignored);
+  EXPECT_EQ(std::wstring(path), L"D:\\dev\\root\\nevr-runtime.dll");
+  EXPECT_STREQ(nevr_host::RuntimeRootSourceName(dev.source), "nevr_root_override");
+
+  const nevr_host::RuntimePathChoice release =
+      nevr_host::ResolveRuntimePathFrom(L"C:\\L", L"D:\\dev\\root", false, path, MAX_PATH);
+  EXPECT_EQ(release.source, nevr_host::RuntimeRootSource::kLocalAppData) << "a release build ignores NEVR_ROOT";
+  EXPECT_TRUE(release.override_ignored) << "and says it did";
+  EXPECT_EQ(std::wstring(path), L"C:\\L\\nevr\\echovr\\nevr-runtime.dll");
+}
+
+TEST(HostRuntimeLoad, ARelativeNevrRootIsIgnoredEvenInTheDeveloperBuild) {
+  wchar_t path[MAX_PATH] = {};
+  const nevr_host::RuntimePathChoice choice =
+      nevr_host::ResolveRuntimePathFrom(L"C:\\L", L"dev\\root", true, path, MAX_PATH);
+  EXPECT_EQ(choice.source, nevr_host::RuntimeRootSource::kLocalAppData);
+  EXPECT_TRUE(choice.override_ignored) << "a path that depends on the working directory is not a root";
+  EXPECT_EQ(std::wstring(path), L"C:\\L\\nevr\\echovr\\nevr-runtime.dll");
+}
+
+TEST(HostRuntimeLoad, NoRootMeansNoPathAndAnEmptyBuffer) {
+  wchar_t path[MAX_PATH] = {L'x'};
+  EXPECT_EQ(nevr_host::ResolveRuntimePathFrom(nullptr, nullptr, false, path, MAX_PATH).source,
+            nevr_host::RuntimeRootSource::kUnresolved);
+  EXPECT_EQ(path[0], L'\0');
+  path[0] = L'x';
+  EXPECT_EQ(nevr_host::ResolveRuntimePathFrom(L"", L"", true, path, MAX_PATH).source,
+            nevr_host::RuntimeRootSource::kUnresolved);
+  EXPECT_EQ(path[0], L'\0');
+  EXPECT_STREQ(nevr_host::RuntimeRootSourceName(nevr_host::RuntimeRootSource::kUnresolved), "unresolved");
+}
+
+// The production resolver reads this process's environment and the build's own dev flag.
+TEST(HostRuntimeLoad, TheProductionResolverReadsLocalAppDataAndNevrRoot) {
+  wchar_t saved_local[MAX_PATH] = {};
+  wchar_t saved_root[MAX_PATH] = {};
+  const bool had_local = GetEnvironmentVariableW(L"LOCALAPPDATA", saved_local, MAX_PATH) != 0;
+  const bool had_root = GetEnvironmentVariableW(L"NEVR_ROOT", saved_root, MAX_PATH) != 0;
+  ASSERT_TRUE(SetEnvironmentVariableW(L"LOCALAPPDATA", L"C:\\Users\\e\\AppData\\Local"));
+  ASSERT_TRUE(SetEnvironmentVariableW(L"NEVR_ROOT", L"E:\\harness"));
+  wchar_t path[MAX_PATH] = {};
+
+  nevr_host::SetDevBuildForTest(0);
+  nevr_host::RuntimePathChoice release = nevr_host::ResolveRuntimePath(path, MAX_PATH);
+  const std::wstring release_path = path;
+  nevr_host::SetDevBuildForTest(1);
+  nevr_host::RuntimePathChoice dev = nevr_host::ResolveRuntimePath(path, MAX_PATH);
+  const std::wstring dev_path = path;
+  nevr_host::SetDevBuildForTest(-1);
+
+  SetEnvironmentVariableW(L"LOCALAPPDATA", had_local ? saved_local : nullptr);
+  SetEnvironmentVariableW(L"NEVR_ROOT", had_root ? saved_root : nullptr);
+
+  EXPECT_EQ(release.source, nevr_host::RuntimeRootSource::kLocalAppData);
+  EXPECT_TRUE(release.override_ignored);
+  EXPECT_EQ(release_path, L"C:\\Users\\e\\AppData\\Local\\nevr\\echovr\\nevr-runtime.dll");
+  EXPECT_EQ(dev.source, nevr_host::RuntimeRootSource::kOverride);
+  EXPECT_EQ(dev_path, L"E:\\harness\\nevr-runtime.dll");
+}
+
+// The buffer arithmetic sizes the name from the file name itself: a buffer of exactly the root plus the name and its NUL
+// fits, and one wide character fewer yields no path, an empty buffer and no write past the size it was given.
+TEST(HostRuntimeLoad, ABufferOfExactlyTheRootAndTheNameFitsAndOneFewerDoesNot) {
+  const std::wstring expected = L"C:\\L\\nevr\\echovr\\nevr-runtime.dll";
+  const std::size_t exact = expected.size() + 1;
   constexpr wchar_t kCanary = L'\x7e7e';
   constexpr std::size_t kSpare = 8;
+
   std::wstring fits(exact + kSpare, kCanary);
-  ASSERT_TRUE(ResolveRuntimePath(host, fits.data(), exact));
-  EXPECT_EQ(std::wstring(fits.c_str()), directory + name);
+  ASSERT_EQ(nevr_host::ResolveRuntimePathFrom(L"C:\\L", nullptr, false, fits.data(), exact).source,
+            nevr_host::RuntimeRootSource::kLocalAppData);
+  EXPECT_EQ(std::wstring(fits.c_str()), expected);
   for (std::size_t i = exact; i < fits.size(); ++i) EXPECT_EQ(fits[i], kCanary) << "wrote past the size at " << i;
 
   std::wstring short_by_one(exact + kSpare, kCanary);
-  EXPECT_FALSE(ResolveRuntimePath(host, short_by_one.data(), exact - 1));
+  EXPECT_EQ(nevr_host::ResolveRuntimePathFrom(L"C:\\L", nullptr, false, short_by_one.data(), exact - 1).source,
+            nevr_host::RuntimeRootSource::kUnresolved);
   EXPECT_EQ(short_by_one[0], L'\0');
   for (std::size_t i = exact - 1; i < short_by_one.size(); ++i) {
     EXPECT_EQ(short_by_one[i], kCanary) << "wrote past the size at " << i;
   }
+
+  std::wstring override_fits(32, kCanary);
+  const std::wstring override_expected = L"D:\\r\\nevr-runtime.dll";
+  EXPECT_EQ(nevr_host::ResolveRuntimePathFrom(L"C:\\L", L"D:\\r", true, override_fits.data(), override_expected.size() + 1).source,
+            nevr_host::RuntimeRootSource::kOverride);
+  EXPECT_EQ(std::wstring(override_fits.c_str()), override_expected);
+  std::wstring override_short(32, kCanary);
+  EXPECT_EQ(nevr_host::ResolveRuntimePathFrom(L"C:\\L", L"D:\\r", true, override_short.data(), override_expected.size()).source,
+            nevr_host::RuntimeRootSource::kUnresolved);
+  EXPECT_EQ(override_short[0], L'\0');
 }
 
 TEST(HostRuntimeLoad, APathThatDoesNotFitYieldsNoPathAndAnEmptyBuffer) {
   wchar_t path[8] = {L'x'};
-  EXPECT_FALSE(ResolveRuntimePath(GetModuleHandleW(nullptr), path, 8));
+  EXPECT_EQ(nevr_host::ResolveRuntimePathFrom(L"C:\\L", nullptr, false, path, 8).source,
+            nevr_host::RuntimeRootSource::kUnresolved);
   EXPECT_EQ(path[0], L'\0');
-  EXPECT_FALSE(ResolveRuntimePath(GetModuleHandleW(nullptr), nullptr, 8));
-  EXPECT_FALSE(ResolveRuntimePath(GetModuleHandleW(nullptr), path, 0));
+  EXPECT_EQ(nevr_host::ResolveRuntimePathFrom(L"C:\\L", nullptr, false, nullptr, 8).source,
+            nevr_host::RuntimeRootSource::kUnresolved);
+  EXPECT_EQ(nevr_host::ResolveRuntimePathFrom(L"C:\\L", nullptr, false, path, 0).source,
+            nevr_host::RuntimeRootSource::kUnresolved);
+}
+
+// The runtime_load record says which root the runtime was looked for in, and when a NEVR_ROOT that was set was not honoured.
+TEST(HostRuntimeLoad, TheLoadRecordNamesTheRootAndSaysWhenNevrRootWasIgnored) {
+  const std::wstring local = MakeTempDir(L"local");
+  SetEnvironmentVariableW(L"LOCALAPPDATA", local.c_str());
+  SetEnvironmentVariableW(L"TEMP", MakeTempDir(L"temp").c_str());
+  const std::wstring log = local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl";
+
+  BootstrapDiagnostics diagnostics;
+  diagnostics.Prepare(GetModuleHandleW(nullptr));
+  ASSERT_TRUE(diagnostics.PrimaryReady());
+
+  RuntimeLoadResult result;
+  result.outcome = RuntimeLoadOutcome::kRuntimeAbsent;
+  result.path_ok = true;
+  const wchar_t path[] = L"C:\\L\\nevr\\echovr\\nevr-runtime.dll";
+  std::memcpy(result.path, path, sizeof(path));
+  result.root_source = nevr_host::RuntimeRootSource::kLocalAppData;
+  result.root_override_ignored = true;
+  EmitLoadDiagnostic(diagnostics, result);
+  const nlohmann::json ignored = nlohmann::json::parse(ReadAll(log.c_str()));
+  EXPECT_EQ(ignored.at("root"), "local_appdata");
+  EXPECT_EQ(ignored.at("root_override"), "ignored");
+  EXPECT_EQ(ignored.at("path"), "C:\\L\\nevr\\echovr\\nevr-runtime.dll");
+
+  DeleteFileW(log.c_str());
+  result.root_override_ignored = false;
+  result.root_source = nevr_host::RuntimeRootSource::kOverride;
+  EmitLoadDiagnostic(diagnostics, result);
+  const nlohmann::json plain = nlohmann::json::parse(ReadAll(log.c_str()));
+  EXPECT_EQ(plain.at("root"), "nevr_root_override");
+  EXPECT_FALSE(plain.contains("root_override"));
 }
 
 // --- loader_lock_held: the PEB loader-lock owner, measured by the host itself ---------------
@@ -432,10 +556,11 @@ TEST(HostLoaderLock, AnotherThreadHoldingTheLockIsNotThisThreadHoldingIt) {
 // The runtime_load record says whether the runtime was loaded under the loader lock, so a
 // log shows the rendezvous ran outside it. Measured by Load itself, not passed in.
 TEST(HostRuntimeLoad, LoadRecordsWhetherTheLoaderLockWasHeld) {
-  // kernel32's directory has no nevr-runtime.dll: the load ends at "runtime absent" without a LoadLibrary.
-  HMODULE not_the_host = GetModuleHandleW(L"kernel32.dll");
+  // A folder with no nevr-runtime.dll: the load ends at "runtime absent" without a LoadLibrary.
+  static const std::wstring empty_root = MakeTempDir(L"empty-root");
+  nevr_host::SetRuntimeDirForTest(empty_root.c_str());
   nevr_host::RuntimeLoader loader;
-  loader.Prepare(not_the_host);
+  loader.Prepare();
   BootstrapDiagnostics diagnostics;
   diagnostics.PrepareForTest(L"", L"", L"");
   NevrHostContext host{};
@@ -449,11 +574,44 @@ TEST(HostRuntimeLoad, LoadRecordsWhetherTheLoaderLockWasHeld) {
     acquired = lock.Held();
     inside = loader.Load(host, diagnostics);
   }
+  nevr_host::SetRuntimeDirForTest(nullptr);
   EXPECT_EQ(outside.outcome, RuntimeLoadOutcome::kRuntimeAbsent);
   EXPECT_FALSE(outside.loader_lock_held);
   ASSERT_TRUE(acquired);
   EXPECT_EQ(inside.outcome, RuntimeLoadOutcome::kRuntimeAbsent);
   EXPECT_TRUE(inside.loader_lock_held);
+}
+
+// Prepare and Load run the production rule end to end: the file looked for is in the nevr root of this process's
+// %LOCALAPPDATA%, a NEVR_ROOT that is set is not honoured by a release build, and the result says both.
+TEST(HostRuntimeLoad, LoadLooksInTheNevrRootAndTheResultSaysWhichRootAndWhetherNevrRootWasIgnored) {
+  wchar_t saved_local[MAX_PATH] = {};
+  wchar_t saved_root[MAX_PATH] = {};
+  const bool had_local = GetEnvironmentVariableW(L"LOCALAPPDATA", saved_local, MAX_PATH) != 0;
+  const bool had_root = GetEnvironmentVariableW(L"NEVR_ROOT", saved_root, MAX_PATH) != 0;
+  const std::wstring local = MakeTempDir(L"local-root");
+  const std::wstring elsewhere = MakeTempDir(L"nevr-root-elsewhere");
+  SetEnvironmentVariableW(L"LOCALAPPDATA", local.c_str());
+  SetEnvironmentVariableW(L"NEVR_ROOT", elsewhere.c_str());
+  nevr_host::SetRuntimeDirForTest(nullptr);
+  nevr_host::SetDevBuildForTest(0);
+
+  nevr_host::RuntimeLoader loader;
+  loader.Prepare();
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(L"", L"", L"");
+  NevrHostContext host{};
+  const RuntimeLoadResult result = loader.Load(host, diagnostics);
+
+  nevr_host::SetDevBuildForTest(-1);
+  SetEnvironmentVariableW(L"LOCALAPPDATA", had_local ? saved_local : nullptr);
+  SetEnvironmentVariableW(L"NEVR_ROOT", had_root ? saved_root : nullptr);
+
+  EXPECT_EQ(result.outcome, RuntimeLoadOutcome::kRuntimeAbsent);
+  EXPECT_TRUE(result.path_ok);
+  EXPECT_EQ(std::wstring(result.path), local + L"\\nevr\\echovr\\nevr-runtime.dll");
+  EXPECT_EQ(result.root_source, nevr_host::RuntimeRootSource::kLocalAppData);
+  EXPECT_TRUE(result.root_override_ignored);
 }
 
 TEST(HostRuntimeLoad, TheLoadRecordCarriesLoaderLockHeld) {
@@ -548,6 +706,15 @@ TEST(HostRuntimeLoad, TheStopRecordNamesTheCauseTheCodeTheHostAndThePathSearched
   // The host's identity: the literal the packager reads from this file, so the log names exactly what ran.
   EXPECT_EQ(record.at("host_identity"), std::string(nevr_host::IdentityLiteral()));
   EXPECT_EQ(std::string(nevr_host::IdentityLiteral()).rfind("NEVR-BUILD ", 0), 0u);
+}
+
+// #1122: the host carries no plugin-trust literal, so this is the mark the release path reads to refuse a dev host. It
+// must say what DecideVerify acts on: the pins' dev-build answer, from the same compile definition.
+TEST(HostRuntimeLoad, TheHostBuildLiteralSaysWhetherThisHostLoadsAnUnsignedRuntime) {
+  const std::string literal = nevr_host::BuildLiteral();
+  EXPECT_EQ(literal.rfind("NEVR-HOST-BUILD ", 0), 0u) << literal;
+  EXPECT_EQ(literal, std::string("NEVR-HOST-BUILD ") + nevr_host::BuildWord());
+  EXPECT_STREQ(nevr_host::BuildWord(), nevr_plugin_pins::IsDevBuild() ? "dev" : "release");
 }
 
 TEST(HostRuntimeLoad, AStopRecordThatCannotBeBuiltBecomesAMarkerLineNotAnException) {

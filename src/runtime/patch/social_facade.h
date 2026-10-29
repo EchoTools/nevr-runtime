@@ -44,6 +44,10 @@ void* Object();
 /// Select the façade only for the opt-in/null-provider case.
 void* Select(bool enabled, void* original);
 
+/// Whether the façade is offered at all: `social.facade` on, and not a dedicated server. A server is not a player
+/// (#1280): the game keeps its null provider, so no party, friend list or party data is ever asked for.
+inline bool Wanted(bool configEnabled, bool isServer) { return configEnabled && !isServer; }
+
 /// Best-effort lock-free producer handoff from hooks running inside game JSON
 /// code to Facade::Update. A busy/overwritten slot may drop a diagnostic record.
 void QueueJsonTrace(JsonTraceKind kind, std::uint32_t callCount, const char* path,

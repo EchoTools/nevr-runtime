@@ -17,6 +17,7 @@ int main() {
   QCHECK(SI::AccessToken()[0] == '\0');
   QCHECK(!SI::IsOrgId(0) && !SI::IsOrgId(~std::uint64_t{0}));
   QCHECK(!SI::IsAccessToken(""));
+  QCHECK(SI::UserId() == 0 && !SI::IsUserId(0));
 
   // Generated values are never 0 or -1, are the documented shapes, and are recognised again.
   SI::Generate();
@@ -24,6 +25,14 @@ int main() {
   QCHECK(org != 0 && org != ~std::uint64_t{0});
   QCHECK(SI::IsOrgId(org));
   QCHECK(!SI::IsOrgId(org ^ 1));  // a different id is not recognised
+
+  // The logged-in user id stand-in (#944): nonzero, not the org id, a non-negative signed 64-bit value (the login's
+  // "accountid" is a CJson integer), and recognised again.
+  const std::uint64_t user = SI::UserId();
+  QCHECK(user != 0 && user != org);
+  QCHECK((user >> 63) == 0);
+  QCHECK(SI::IsUserId(user) && !SI::IsUserId(user ^ 1) && !SI::IsUserId(org));
+  QCHECK(!SI::IsOrgId(user));
 
   const char* token = SI::AccessToken();
   const char* nonce = SI::Nonce();
@@ -49,12 +58,23 @@ int main() {
   const std::uint64_t org_again = SI::OrgId();
   SI::Generate();
   QCHECK(SI::OrgId() == org_again);
+  QCHECK(SI::UserId() == user);
 
   // Two independent generations differ: the values are not a shared constant. Collisions are
   // astronomically unlikely, so an equal draw is a bug.
   SI::ResetForTest();
   SI::Generate();
   QCHECK(SI::OrgId() != org);
+  QCHECK(SI::UserId() != user);
+  QCHECK(!SI::IsUserId(user));
+
+  // The top bit is cleared on every draw, not by luck: 64 fresh draws, each with a random top bit before the mask
+  // (a missing mask fails this with probability 1 - 2^-64).
+  for (int i = 0; i < 64; ++i) {
+    SI::ResetForTest();
+    SI::Generate();
+    QCHECK((SI::UserId() >> 63) == 0 && SI::UserId() != 0 && SI::UserId() != SI::OrgId());
+  }
 
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "login_standin_test: %d check(s) failed\n", quest_test::Failures());

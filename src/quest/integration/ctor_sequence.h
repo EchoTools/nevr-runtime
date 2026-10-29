@@ -8,9 +8,13 @@
 // Order:
 //   1  ArmCrashReporter              breakpad, before anything else can crash
 //   2  ResolveConfig                 InitActivation: embedded defaults + config.yaml, every state logged
+//      PlanPlugins                   the plugin plan (#438, docs/adr/0019): the `plugins:` list read into one record per
+//                                    entry, the entries the plan alone settles written, no plugin code run; every launch
 //   3  RegisterCounters              every counter of every hook that will be installed (clock, redirect,
 //                                    dlopen, login, social, login prompt), BEFORE ...
 //   4  StartReporter                 ... the single StartReporter (the reporter refuses a later register)
+//      RunEarlyPlugins               the `early` plugin entries (#438): after the reporter started, before the clock hook;
+//                                    skipped when the plan has none
 //   5  InstallClockHook              the always-on proof hook
 //   6  StartTokenAuth                needed by the bridge (the remote JWT) and the login rewrite
 //   7  InstallLoginPrompt            the sign-in prompt on the game's login-error screen (#239): two libr15
@@ -20,7 +24,7 @@
 //   9  InstallRedirect               CJson::TString thunks on libr15
 //  10  InstallSocial                 the NEVR social facade on libr15's CNSProvider::Social slot
 //  11  InstallDlopenHook             the post-load installs: login hook (and with it the login
-//                                    prerequisites), matchmaking redirect
+//                                    prerequisites), matchmaking redirect, and the normal plugin pass (#438)
 //      InstallObbSkip                the OBB-mount skip (#319, #866): three libr15 slots (AStorageManager_mountObb,
 //                                    AStorageManager_getMountedObbPath, CSysInfo::GetDataRootDir); on every launch, whatever the
 //                                    configuration says, right after the clock hook so it is in place before
@@ -34,24 +38,39 @@
 //      InstallVkExtWindow            the device extensions libr15 requires stay inside the 128 entries it reads
 //                                    (#868): two libr15 slots (CSysModule::FindMethod, vrapi_GetDeviceExtensionsVulkan),
 //                                    on every launch, right after the permission-wait hook; no counters
+//      InstallOsBuildGate            the game never refuses a headset for its OS build number (#945): one libr15 slot
+//                                    (CSysInfo::OSBuildVersion), on every launch, right after the Vulkan extension
+//                                    window; no counters. CR15NetGame::Initialize, its only caller, runs after the
+//                                    constructor.
 //      InstallResourceRequestLog     the log-only resource request hook (#871): one libr15 slot
 //                                    (CResourceManager::FillResourceFileRequest), in a development build only
 //                                    (Steps::ResourceRequestLogWanted; a release build skips it and registers no
-//                                    counters), right after the Vulkan extension window. Its counters are registered
+//                                    counters), right after the OS build floor hook. Its counters are registered
 //                                    with the others (step 3).
 //      InstallTextureQuality         the eye-buffer size libr15 creates its swap chain with (#943): one libr15 slot
-//                                    (vrapi_GetSystemPropertyInt), on every launch, right after the Vulkan window hook (and the resource request log, when wanted) and
+//                                    (vrapi_GetSystemPropertyInt), on every launch, right after the OS build floor hook (and the resource request log, when wanted) and
 //                                    before the hardware dump (which then shares the slot); the level is the config's
 //                                    graphics.texture_quality, `stock` when the configuration cannot be resolved; `stock`
 //                                    installs nothing. Its counters are registered with the others (step 3), unless `stock`.
+//      InstallRenderConfig           the render-configuration log line (#1139, docs/adr/0022-render-config-log.md): five libr15
+//                                    VrApi slots (refresh rate, clock levels, property set, system property float, frame
+//                                    submit) and a poller thread, on every launch, right after the texture-quality hook (it
+//                                    reports that hook's level and source) and before the hardware dump (which then leaves
+//                                    the slots both hook to this step); no counters.
 //      InstallCreditsText            the project section of the CREDITS page (#970): two ADRP+ADD pairs in libr15 (the
-//                                    CREDITS component's two cursor stores), on every launch, right after the texture
-//                                    hook; no counters. Refused unless the libr15 build ID and the pinned words match.
-//      InstallClockLevels            the CPU and GPU clock levels libr15 asks VrApi for (#928): one libr15 slot
-//                                    (vrapi_SetClockLevels), on every launch, right after the Vulkan hook; its counters are
-//                                    registered with the others (step 3). The hook is installed whatever the switch says
-//                                    and logs each call; the switch (`diagnostics.clock_levels_override`) decides whether
-//                                    the (2, 2) the game asks for is rewritten.
+//                                    CREDITS component's two cursor stores), right after the texture hook; no counters.
+//                                    The production step writes nothing and succeeds: a libr15 code page cannot be
+//                                    written on the current Horizon policy (#1127), so it waits on #1132.
+//      InstallMenuCards              the CREATE GAME and JOIN VIA CODE cards on the main menu (#966): one libr15 data slot
+//                                    (CResourceManager::AsyncResourceIOCallback, the streaming reader's read-finished
+//                                    callback), on every launch, right after the credits step; no counters. A data write:
+//                                    no code page is touched. Without the stock page's digest pinned it serves the page
+//                                    unchanged and logs the digest.
+//      ArmClockLevels                the clock-level override (#928): no slot of its own (the render-configuration
+//                                    hook owns vrapi_SetClockLevels and asks the override which levels to call with),
+//                                    on every launch, right after the credits step; its counters are registered with the
+//                                    others (step 3). The switch (`diagnostics.clock_levels_override`, default off)
+//                                    decides whether the (2, 2) the game asks for is rewritten to (4, 4).
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):
 //   token auth fails        -> the login prompt (token auth is what publishes it), bridge, login, social
@@ -59,13 +78,15 @@
 //   bridge fails            -> login, social and the redirect-through-the-bridge are not started
 //   redirect counters fail  -> redirect (and the matchmaking install) is not installed
 //   dlopen counters fail    -> the dlopen hook, and so the login and matchmaking installs, are not installed
+//   dlopen hook not live    -> the plugin entries still pending (the normal pass has no moment to run in) end as
+//                              `not_started` with reason post_load_hook_unavailable (Steps::FinishPlugins)
 //   login counters fail     -> the login hook is not installed (the matchmaking install is unaffected)
 //   social counters fail    -> social is not installed
 //   prompt counters fail    -> the login-prompt hook is not installed
 //   obb counters fail       -> the OBB-mount skip is not installed
 //   resource request counters fail -> the resource request log is not installed
 //   texture counters fail   -> the texture-quality hook is not installed (not asked of `stock`)
-//   clock-levels counters fail -> the clock-level hook is not installed
+//   clock-levels counters fail -> the clock-level override is not armed (it stays off)
 // "redirect-through-the-bridge" is the redirect when the bridge feature is effective: a redirect that
 // points the game at a loopback port nobody listens on, or straight at a TLS endpoint the game cannot
 // speak, is worse than leaving the game's own hosts.
@@ -73,6 +94,7 @@
 // Nothing here blocks: no step waits on the network, a thread or a lock held by the game.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include "quest/sentinel/quest_config.h"
@@ -92,6 +114,7 @@ const char* StepStateName(StepState state);
 enum class StepId : std::uint8_t {
   kArmCrashReporter,
   kResolveConfig,
+  kPlanPlugins,
   kRegisterClockCounters,
   kRegisterRedirectCounters,
   kRegisterDlopenCounters,
@@ -103,15 +126,19 @@ enum class StepId : std::uint8_t {
   kRegisterTextureQualityCounters,
   kRegisterClockLevelsCounters,
   kStartReporter,
+  kRunEarlyPlugins,
   kInstallClockHook,
   kInstallObbSkip,
   kInstallProcessEnd,
   kInstallPermissionWait,
   kInstallVkExtWindow,
+  kInstallOsBuildGate,
   kInstallResourceRequestLog,
   kInstallTextureQuality,
+  kInstallRenderConfig,
   kInstallCreditsText,
-  kInstallClockLevels,
+  kInstallMenuCards,
+  kArmClockLevels,
   kStartTokenAuth,
   kInstallLoginPrompt,
   kStartBridge,
@@ -136,6 +163,12 @@ struct ConstructorReport {
   const StepOutcome& at(StepId id) const { return steps[static_cast<int>(id)]; }
 };
 
+// How many plugin entries wait for each install moment after the plan (docs/adr/0019, section 3).
+struct PluginCounts {
+  std::size_t early = 0;   // wait for the early pass (after the reporter starts)
+  std::size_t normal = 0;  // wait for the first post-load call
+};
+
 // Every method may throw std::exception (contained by the sequence) or return false.
 class Steps {
  public:
@@ -144,6 +177,8 @@ class Steps {
   virtual void ArmCrashReporter() = 0;
   // InitActivation, then the resolved configuration.
   virtual const nevr_quest::ResolvedConfig& ResolveConfig() = 0;
+  // The plugin plan from the resolved configuration (#438): one record per entry the plan settles, no plugin code run.
+  virtual PluginCounts PlanPlugins() = 0;
 
   virtual bool RegisterClockCounters() = 0;
   virtual bool RegisterRedirectCounters() = 0;
@@ -163,6 +198,10 @@ class Steps {
   // The clock-level hook's counters (#928), registered on every launch.
   virtual bool RegisterClockLevelsCounters() = 0;
   virtual bool StartReporter() = 0;
+  // The early plugin pass (#438); the reporter is running. True when the pass ran.
+  virtual bool RunEarlyPlugins() = 0;
+  // Ends every plugin entry still pending as `not_started` with `reason` (a plugin_plan.h reason token).
+  virtual void FinishPlugins(const char* reason) = 0;
 
   virtual bool InstallClockHook() = 0;
   // `countersRegistered`: the result of RegisterObbSkipCounters (the hook's own rule: without its counters it
@@ -175,6 +214,9 @@ class Steps {
   // The device extensions libr15 requires stay inside the 128 entries it reads (#868): two libr15 slots
   // (CSysModule::FindMethod, vrapi_GetDeviceExtensionsVulkan), on every launch.
   virtual bool InstallVkExtWindow() = 0;
+  // The game never refuses a headset for its OS build number (#945): one libr15 slot (CSysInfo::OSBuildVersion), on
+  // every launch.
+  virtual bool InstallOsBuildGate() = 0;
   // `countersRegistered`: the result of RegisterResourceRequestCounters (the hook's own rule: without its counters it logs the
   // skip and installs nothing). True when the FillResourceFileRequest slot holds the thunk.
   virtual bool InstallResourceRequestLog(bool countersRegistered) = 0;
@@ -182,12 +224,18 @@ class Steps {
   // `countersRegistered` is the result of RegisterTextureQualityCounters (a `stock` level needs none). The step applies the
   // hook's own rule (texture_quality::InstallIfCounted): without its counters it logs the skip and installs nothing.
   virtual bool InstallTextureQuality(const nevr_quest::TextureChoice& choice, bool countersRegistered) = 0;
+  // The render-configuration log (#1139): five libr15 slots and the poller thread, on every launch, no counters. `choice` is
+  // the texture-quality level and where it came from (the line says what set the eye size).
+  virtual bool InstallRenderConfig(const nevr_quest::TextureChoice& choice) = 0;
   // The project section of the CREDITS page (#970): two libr15 ADRP+ADD pairs, on every launch, no counters.
   virtual bool InstallCreditsText() = 0;
-  // The CPU and GPU clock levels libr15 asks VrApi for (#928): one libr15 slot (vrapi_SetClockLevels), on every launch.
-  // `countersRegistered`: the result of RegisterClockLevelsCounters (the hook's own rule: without its counters it logs the
-  // skip and installs nothing). `overrideOn`: the resolved switch, Features::clockLevels.
-  virtual bool InstallClockLevels(bool countersRegistered, bool overrideOn) = 0;
+  // The CREATE GAME and JOIN VIA CODE cards on the main menu (#966): one libr15 data slot (the streaming reader's read-finished
+  // callback), on every launch, no counters.
+  virtual bool InstallMenuCards() = 0;
+  // The clock-level override (#928): the switch the render-configuration hook's handler reads, on every launch.
+  // `countersRegistered`: the result of RegisterClockLevelsCounters (the override's own rule: without its counters it logs
+  // the skip and leaves the switch off). `overrideOn`: the resolved switch, Features::clockLevels.
+  virtual bool ArmClockLevels(bool countersRegistered, bool overrideOn) = 0;
   virtual bool StartTokenAuth() = 0;
   // `countersRegistered`: the result of RegisterLoginPromptCounters. The step applies the hook's own rule
   // (login_prompt::InstallIfCounted): without its counters it logs the skip and installs nothing.
@@ -195,8 +243,8 @@ class Steps {
   virtual bool StartBridge() = 0;
   virtual bool InstallRedirect() = 0;
   virtual bool InstallSocial() = 0;
-  // `login` / `matchmaking`: which post-load installs the dlopen hook is for.
-  virtual bool InstallDlopenHook(bool login, bool matchmaking) = 0;
+  // `login` / `matchmaking` / `plugins`: which post-load installs the dlopen hook is for (`plugins`: the normal plugin pass).
+  virtual bool InstallDlopenHook(bool login, bool matchmaking, bool plugins) = 0;
   // The hardware/environment dump (#335): its libr15 hooks and its thread. No reporter counters.
   virtual bool StartHwDump() = 0;
 

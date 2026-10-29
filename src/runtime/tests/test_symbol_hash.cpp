@@ -7,7 +7,7 @@
 #include <climits>
 #include <cstdint>
 
-#include "abi/symbol_hash.h"
+#include "nevr/symbol_hash.h"
 
 static_assert(CHAR_MIN == 0, "this test must be built with -funsigned-char");
 

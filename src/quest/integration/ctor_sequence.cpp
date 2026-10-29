@@ -2,6 +2,8 @@
 
 #include <exception>
 
+#include "quest/plugin/plugin_plan.h"
+
 namespace nevr_quest::integration {
 
 const char* StepStateName(StepState state) {
@@ -18,6 +20,7 @@ const char* StepName(StepId id) {
   switch (id) {
     case StepId::kArmCrashReporter: return "arm_crash_reporter";
     case StepId::kResolveConfig: return "resolve_config";
+    case StepId::kPlanPlugins: return "plan_plugins";
     case StepId::kRegisterClockCounters: return "register_clock_counters";
     case StepId::kRegisterRedirectCounters: return "register_redirect_counters";
     case StepId::kRegisterDlopenCounters: return "register_dlopen_counters";
@@ -29,15 +32,19 @@ const char* StepName(StepId id) {
     case StepId::kRegisterTextureQualityCounters: return "register_texture_quality_counters";
     case StepId::kRegisterClockLevelsCounters: return "register_clock_levels_counters";
     case StepId::kStartReporter: return "start_reporter";
+    case StepId::kRunEarlyPlugins: return "run_early_plugins";
     case StepId::kInstallClockHook: return "install_clock_hook";
     case StepId::kInstallObbSkip: return "install_obb_skip";
     case StepId::kInstallProcessEnd: return "install_process_end";
     case StepId::kInstallPermissionWait: return "install_permission_wait";
     case StepId::kInstallVkExtWindow: return "install_vk_ext_window";
+    case StepId::kInstallOsBuildGate: return "install_os_build_gate";
     case StepId::kInstallResourceRequestLog: return "install_resource_request_log";
     case StepId::kInstallTextureQuality: return "install_texture_quality";
+    case StepId::kInstallRenderConfig: return "install_render_config";
     case StepId::kInstallCreditsText: return "install_credits_text";
-    case StepId::kInstallClockLevels: return "install_clock_levels";
+    case StepId::kInstallMenuCards: return "install_menu_cards";
+    case StepId::kArmClockLevels: return "arm_clock_levels";
     case StepId::kStartTokenAuth: return "start_token_auth";
     case StepId::kInstallLoginPrompt: return "install_login_prompt";
     case StepId::kStartBridge: return "start_bridge";
@@ -107,12 +114,21 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
       return true;
     });
 
+    // The plugin plan (#438) reads the list the configuration kept and writes the records the plan alone settles. Every
+    // launch; a plan that fails or throws leaves no entry waiting for any moment.
+    PluginCounts plugins;
+    r.Run(StepId::kPlanPlugins, [&] {
+      plugins = steps.PlanPlugins();
+      return true;
+    });
+    const bool pluginsNormal = plugins.normal > 0;
+
     const bool wantRedirect = want.redirect;
     const bool wantBridge = want.bridge;
     const bool wantLogin = want.login;
     const bool wantSocial = want.social;  // the config package already requires login for it
     const bool wantTokenAuth = wantBridge || wantLogin;
-    const bool wantDlopen = wantLogin || wantRedirect;
+    const bool wantDlopen = wantLogin || wantRedirect || pluginsNormal;
 
     // 3: every counter, before the one StartReporter. A refused registration turns off only the piece
     // whose counters those are.
@@ -172,11 +188,19 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     } else {
       r.Skip(StepId::kRegisterTextureQualityCounters, "stock");
     }
-    // The clock-level hook (#928) is installed on every launch (the switch decides only whether it rewrites), so its counters
+    // The clock-level override (#928) is armed on every launch (the switch decides only whether it rewrites), so its counters
     // are registered on every launch too.
     const bool clockLevelsCounters =
         r.Run(StepId::kRegisterClockLevelsCounters, [&] { return steps.RegisterClockLevelsCounters(); });
     r.Run(StepId::kStartReporter, [&] { return steps.StartReporter(); });
+
+    // The early plugin pass (#438): the reporter is running, so a plugin's first line reaches the same sinks, and the clock
+    // hook is not armed yet.
+    if (plugins.early > 0) {
+      r.Run(StepId::kRunEarlyPlugins, [&] { return steps.RunEarlyPlugins(); });
+    } else {
+      r.Skip(StepId::kRunEarlyPlugins, "early_plugins_off");
+    }
 
     r.Run(StepId::kInstallClockHook, [&] { return steps.InstallClockHook(); });
 
@@ -202,6 +226,10 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // The device extensions libr15 requires stay inside the 128 entries it reads (#868): every launch, no feature, no
     // counters. libr15 resolves its Vulkan functions when it starts the game, after the constructor.
     r.Run(StepId::kInstallVkExtWindow, [&] { return steps.InstallVkExtWindow(); });
+
+    // The game never refuses a headset for its OS build number (#945): every launch, no feature, no counters.
+    // CR15NetGame::Initialize asks for the number after the constructor.
+    r.Run(StepId::kInstallOsBuildGate, [&] { return steps.InstallOsBuildGate(); });
 
     // The log-only resource request hook (#871): a development build only, and only with its counters. Every libr15 slot
     // it needs exists from the start; the game requests resources after the constructor.
@@ -231,22 +259,30 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
       r.Run(StepId::kInstallTextureQuality, [&] { return steps.InstallTextureQuality(texture, textureCounters); });
     }
 
+    // The render-configuration log (#1139): every launch, no counters. After the texture-quality hook, whose level and source
+    // it reports, and before the hardware dump, which leaves the slots both hook to this step.
+    r.Run(StepId::kInstallRenderConfig, [&] { return steps.InstallRenderConfig(texture); });
+
     // The project section of the CREDITS page (#970): every launch, no counters; it points two libr15 cursor stores at a
     // buffer the sentinel builds, so it runs before the page can be opened.
     r.Run(StepId::kInstallCreditsText, [&] { return steps.InstallCreditsText(); });
 
-    // The CPU and GPU clock levels libr15 asks VrApi for (#928): every launch. libr15 makes the call when it enters VR mode,
-    // long after the constructor. The switch is the resolved `diagnostics.clock_levels_override`; it is off when the
-    // configuration could not be resolved.
+    // The main-menu cards (#966): every launch, no counters. One libr15 data slot; libr15 reads it each time it starts a
+    // resource load, so the hook is in place before the menu page is requested.
+    r.Run(StepId::kInstallMenuCards, [&] { return steps.InstallMenuCards(); });
+
+    // The clock-level override (#928): every launch. libr15 makes the call when it enters VR mode, long after the constructor,
+    // through the render-configuration hook installed above, which asks the override which levels to use. The switch is the
+    // resolved `diagnostics.clock_levels_override`; it is off when the configuration could not be resolved.
     if (!clockLevelsCounters) {
       try {
-        steps.InstallClockLevels(false, want.clockLevels);  // the hook's own rule logs that it installs nothing
+        steps.ArmClockLevels(false, want.clockLevels);  // the override's own rule logs the skip and leaves the switch off
       } catch (const std::exception&) {
         // Contained like every step; the outcome is the skip below either way.
       }
-      r.Skip(StepId::kInstallClockLevels, "counters_refused");
+      r.Skip(StepId::kArmClockLevels, "counters_refused");
     } else {
-      r.Run(StepId::kInstallClockLevels, [&] { return steps.InstallClockLevels(true, want.clockLevels); });
+      r.Run(StepId::kArmClockLevels, [&] { return steps.ArmClockLevels(true, want.clockLevels); });
     }
 
     bool tokenOk = false;
@@ -311,14 +347,25 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // bridge reaches) and token auth; the matchmaking redirect needs the redirect installed.
     const bool loginWanted = wantLogin && loginCounters && bridgeOk && tokenOk;
     const bool matchmakingWanted = redirectOk;
+    // The normal plugin pass has no moment but the first post-load call: when the hook that makes it cannot be live, the
+    // entries still waiting end as `not_started` now (#438), not at the end of the process.
+    bool dlopenLive = false;
     if (!wantDlopen) {
       r.Skip(StepId::kInstallDlopenHook, "login_and_redirect_off");
     } else if (!dlopenCounters) {
       r.Skip(StepId::kInstallDlopenHook, "counters_refused");
-    } else if (!loginWanted && !matchmakingWanted) {
+    } else if (!loginWanted && !matchmakingWanted && !pluginsNormal) {
       r.Skip(StepId::kInstallDlopenHook, "nothing_to_install_after_load");
     } else {
-      r.Run(StepId::kInstallDlopenHook, [&] { return steps.InstallDlopenHook(loginWanted, matchmakingWanted); });
+      dlopenLive = r.Run(StepId::kInstallDlopenHook,
+                         [&] { return steps.InstallDlopenHook(loginWanted, matchmakingWanted, pluginsNormal); });
+    }
+    if (pluginsNormal && !dlopenLive) {
+      try {
+        steps.FinishPlugins(nevr_quest::plugin::reason::kPostLoadHookUnavailable);
+      } catch (const std::exception&) {
+        // Contained like every step: the entries are ended again when the process does.
+      }
     }
 
     // The hardware dump (#335) is independent of every feature above. Still in the constructor, so its

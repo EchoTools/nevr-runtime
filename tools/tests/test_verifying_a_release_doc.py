@@ -318,6 +318,15 @@ class PageContent(unittest.TestCase):
             self.assertTrue(names(text, needle), f"the host section lacks {needle!r}")
 
 
+    def test_the_host_section_states_that_the_host_verifies_the_runtime_before_it_loads_it(self):
+        text = doc_text()
+        section = text.split("## What the PC host checks", 1)[1].split("## What to tell the player when a check fails", 1)[0]
+        for needle in ("DecideVerify", "VerifyPluginFile", "exit code 78", "`versions` record", "FILE_SHARE_READ"):
+            self.assertTrue(names(section, needle), f"the host section lacks {needle!r}")
+        for stale in ("does no signature or hash check", "no separate runtime file", "compiled into `BugSplat64.dll` together with the runtime"):
+            self.assertFalse(names(section, stale), f"the host section still says {stale!r}")
+
+
 NEEDED_TOOLS = ("minisign", "jq", "sha256sum", "base64", "curl", "dd", "date", "od", "sed")
 
 

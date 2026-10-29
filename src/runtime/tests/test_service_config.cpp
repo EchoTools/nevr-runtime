@@ -1,3 +1,5 @@
+#include <winsock2.h>  // before windows.h: runtime/lifecycle/cli.h reaches core/pch.h, which includes it
+
 #include "runtime/tests/service_config_test_hooks.h"
 
 #include <gtest/gtest.h>
@@ -11,12 +13,14 @@
 
 #include "extension/module_interface.h"
 #include "runtime/compat/socket_role.h"
+#include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/lifecycle/stable_string_pool.h"
 #include "runtime/lifecycle/config_redirect_result.h"
 
 BOOL g_isServer = FALSE;
 CHAR g_customConfigPath[MAX_PATH] = {};
+ConfigYamlFlags g_configYamlFlags;
 
 namespace {
 
@@ -238,10 +242,16 @@ TEST(ServerModeDefaultsGate, ServerModeSuppliesNoGameNativeConfig) {
 
 // The no-config gate (the release packages): a client with no config.yaml anywhere reaches the service from the
 // embedded public defaults alone. The production path runs here: the real embedded values and the real
-// config.yaml discovery, with nothing injected.
+// config.yaml choice, with nothing injected. The nevr root is an empty folder of the test's own, so a config.yaml
+// in the real root of whoever runs the test cannot reach it.
 TEST(NoConfigGate, EveryLoginKeyComesFromTheEmbeddedDefaultsWhenThereIsNoConfigYaml) {
   ResetAccessorInputs();
-  ASSERT_EQ(g_customConfigPath[0], '\0') << "no -config-path: discovery looks only beside the module";
+  char tmp[MAX_PATH] = {};
+  ASSERT_NE(GetTempPathA(MAX_PATH, tmp), 0u);
+  const std::string emptyAppData = std::string(tmp) + "nevr-1255-no-config-gate";
+  ASSERT_TRUE(CreateDirectoryA(emptyAppData.c_str(), nullptr) || GetLastError() == ERROR_ALREADY_EXISTS);
+  ASSERT_TRUE(SetEnvironmentVariableA("LOCALAPPDATA", emptyAppData.c_str()));
+  ASSERT_FALSE(g_configYamlFlags.config_file_given);
   ASSERT_FALSE(g_isServer);
   for (const char* key : {"nevr_socket_uri", "nevr_http_uri", "nevr_http_key", "nevr_server_key"}) {
     const char* value = NevrCfgGetFlat(key);

@@ -21,7 +21,6 @@ target_compile_definitions(nevr_token_auth PRIVATE NEVR_MODULE_EXPORTS)
 target_include_directories(nevr_token_auth PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/runtime
-    ${CMAKE_SOURCE_DIR}/plugins/common/include
 )
 
 target_link_libraries(nevr_token_auth PRIVATE nevr_core CURL::libcurl nlohmann_json::nlohmann_json ole32)
@@ -45,7 +44,6 @@ if(BUILD_TESTING)
     target_include_directories(nevr_token_auth_test_hooks PRIVATE
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/src/runtime
-        ${CMAKE_SOURCE_DIR}/plugins/common/include
     )
 
     set_source_files_properties("${CMAKE_SOURCE_DIR}/src/runtime/log/url_diagnostics.cpp"

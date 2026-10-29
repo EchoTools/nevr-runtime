@@ -63,6 +63,23 @@ struct Target {
   }
 };
 
+
+// No test in this file has a runtime to load: the folder the host looks in is an empty one, so every load ends at
+// runtime_absent whatever the Wine prefix's own nEVR root holds. The production rule is tested in test_host_runtime_load.
+class EmptyRuntimeFolder : public ::testing::Environment {
+ public:
+  void SetUp() override {
+    folder_ = MakeTempDir();
+    nevr_host::SetRuntimeDirForTest(folder_.c_str());
+  }
+  void TearDown() override { nevr_host::SetRuntimeDirForTest(nullptr); }
+
+ private:
+  std::wstring folder_;
+};
+
+const ::testing::Environment* const g_empty_runtime_folder = ::testing::AddGlobalTestEnvironment(new EmptyRuntimeFolder);
+
 }  // namespace
 
 TEST(HostRendezvous, ThePinnedPrologueMatchesAndEveryChangedByteDoesNot) {
@@ -386,7 +403,7 @@ TEST(HostRendezvousStop, ARuntimeThatDidNotLoadStopsTheGameWithCode78AndOneRecor
   ReturningTarget target;
   ASSERT_NE(target.code(), nullptr);
   RuntimeRendezvous rendezvous;
-  // kernel32's directory has no nevr-runtime.dll: the load ends at runtime_absent.
+  // The runtime folder is empty (EmptyRuntimeFolder): the load ends at runtime_absent.
   rendezvous.Prepare(GetModuleHandleW(L"kernel32.dll"), GetModuleHandleW(nullptr), diagnostics);
   ASSERT_NE(rendezvous.Install(target.code()), nullptr);
 
@@ -459,8 +476,9 @@ TEST(HostStopNotice, AClientWithGraphicsIsToldOnceBeforeTheProcessEndsHoweverOft
   EXPECT_EQ(RunStopWith("\"C:\\Games\\echovr.exe\" -windowed"), "shown");
   EXPECT_EQ(g_notice_texts.size(), 1u);
   ASSERT_FALSE(g_notice_texts.empty());
-  EXPECT_EQ(g_notice_texts[0],
-            L"nEVR couldn't start: nevr-runtime.dll is missing or damaged. Please reinstall with the installer.");
+  // The runtime folder is empty (EmptyRuntimeFolder): the notice says it is missing (test_host_runtime_verify holds the
+  // words for each other cause).
+  EXPECT_EQ(g_notice_texts[0], L"nEVR couldn't start: nevr-runtime.dll is missing. Please run the installer.");
   ASSERT_GE(g_events.size(), 2u);
   EXPECT_EQ(g_events[0], "notice") << "the player is told before the process is ended";
   EXPECT_EQ(g_events[1], "stop");

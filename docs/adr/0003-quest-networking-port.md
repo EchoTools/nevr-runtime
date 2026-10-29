@@ -25,8 +25,7 @@ party behavior. Android supplies its own loader, game ABI, hook installation, lo
 configuration discovery and socket adapter, and the original Oculus loader stays available to
 the game.
 
-Scope is the client. The dedicated server, `src/legacy/` and production server deployment are
-out of scope.
+Scope is the client. The dedicated server and production server deployment are out of scope.
 
 ## What the Quest target is today
 
@@ -255,6 +254,23 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   thunks' fault counters, `_error_page_dropped`, `_logging_in_page_dropped`, `_page_passed_armed`,
   `_error_resent`, `_error_resend_unavailable`, `_login_restarted` and `_login_restart_unavailable`; installing logs one `login_prompt_install` line (or `skipped` when the
   counters were refused).
+- The title over the text. The login-failed page is titled `LOGIN FAILED` by a literal in the page's script library
+  (`lib7f2363b8976491aa.so`, no build ID, no SONAME): one script node (`execute_node_cfa11df1`, ReVault `0x10d0e8`)
+  builds `string_t("LOGIN FAILED")` and passes it to `EXTERNALFUNCTIONNODE::setparam`. The prompt board carries a title
+  with the text (`prompt_board::Publish(..., title)`): `SIGN IN` with the code, `SIGNED IN` with the notice, none with the
+  timed-out and no-code texts (`prompt_presenters.h`, `kSignInTitle`, `kSignedInTitle`). A GOT hook
+  (`sentinel/login_title_hook.h`) on that library's `string_t::string_t(char const*)` slot (JUMP_SLOT `0x12dd0`, BIND_NOW;
+  the constructor is defined in the library, ReVault `0x10df98`, and copies at most 63 characters into the string's own
+  64-byte buffer) hands the original the board's title in place of exactly the literal `LOGIN FAILED`, and the
+  game's own text in every other case, so a failure with no title on the board keeps the game's title. The slot's one
+  caller is that node (`revault_callers` on `0x10df98` and the PLT stub `0x104a90`: one edge), so the thunk runs once each
+  time the page's title is built; the alternative seam, `setparam`, is a GLOB_DAT function-pointer variable
+  (`0x12ea0`) that every script node in the library calls through and takes a `string_t` whose layout we would write. The
+  library loads after the sentinel's constructor, so the install is a post-load action (`PostLoadActions::loginTitle`),
+  tried after each dlopen until the library is mapped. The PC twin (`7f2363b8976491aa.dll`) holds the same literal,
+  but the PC client shows its code in its own sign-in window (`SignInDialog`, `token_auth.cpp`), never on the game's
+  login-failed page, so the PC has no title to change. Five counters: `login_title_string_calls`, `_replaced`, `_kept`,
+  `_other_text` and `_thunk_faults`; installing logs one `login_title_install` line.
 
 Exposure of the device code. It is shown to the player by design and is written to
 `device_login.txt` on `/sdcard`, readable by apps with storage access, until the login ends (or,
@@ -1109,6 +1125,19 @@ on an error message of type `0x186b58b1`. The JUMP_SLOT (`0x6df638`) is hooked (
 no message of that type is ever queued. It needs no identity, so it is independent of `IdentitySource::Ready`
 and of substitution; `prereq_entitlement_local_calls` counts the requests that did not reach Meta.
 
+The logged-in user id is answered when the SDK has none (#944). `RadPluginMain` calls `ovr_GetLoggedInUserID`
+once (`0x206828`), stores the result in `0x70e3e8`, logs "[OVR] Logged in user app-scoped id: %llu" and, on 0,
+fails the plugin with `OVRLoggedInUserFail` ("There's a problem with the logged in user...", `0x206850` ->
+`0x206a5c`), before any login. The other readers of `0x70e3e8` are `ovr_User_GetOrgScopedID` at the login's three
+sites, the login member `accountid` (`GotUserProofCB`, `0x1ed740`) and four `CNSOVRSocial` functions. The JUMP_SLOT
+(`0x6dc080`) is hooked (`kLoggedInUserId`, `OnLoggedInUserId`): a nonzero id is returned unchanged; a zero is
+answered with a per-process stand-in (`StandIn::UserId`) only while local answers are on (the org-id requests that
+pass it never reach the SDK) and the social facade's hook is installed (`CNSOVRSocial` is not driven); otherwise the
+zero stays and the game fails as before. The rewrite replaces `accountid` with the NEVR account id, and the send
+gate refuses a login that still carries the stand-in there (`WireCheck::account_member_stand_in`). One record,
+`quest_logged_in_user_id`, says which answer was given and why; `prereq_user_id_calls` and
+`prereq_user_id_stand_ins` count the calls and the stand-ins.
+
 The four user requests are answered without Meta either (local answers, `login_prerequisites.h` namespace
 `local`). Once every hook they depend on is in (all four callbacks, eight accessors with `ovr_Message_IsError`,
 the four request imports and `ovr_PopMessage`, `ovr_Message_GetType`, `ovr_Message_GetRequestID`,
@@ -1157,6 +1186,30 @@ and with the header, so a new caller fails `just test-quest-hooks-pinned` until 
 by the walk: `blr`/`br` and a PLT stub into the library's own exports.
 `UpdateInternal` re-issues `ovr_User_GetUserProof` only on the branch where `LogInInternal` did not, and clears
 its flag first, so one `GotUserProofCB` runs per `LogIn` call.
+
+The community patch repo edits libpnsovr.so in 79 places: its 8 entitlement patches, its 70-site license overlay and
+a per-player id slot that its patcher bot stamps. `tools/quest_patcher_sites.tsv` lists each one (#944) with the
+hook in this tree that covers it, or, where there is none, why none is needed. 66 rows are covered by the hooks above
+(the per-player id stamp and the zero test after `ovr_GetLoggedInUserID` by `OnLoggedInUserId`) or by the social
+facade and presence hooks. The other 13 need no hook. Two are the game's own HMD-serial check, which passes because
+nothing here writes the fields it compares. Eight are IAP's success processing, which is not a gate. Two are a
+function with no reference in the library. One is a TLS-handle cache test that is not a gate.
+`tools/quest_patcher_sites.py` fails a row
+that has neither a hook nor a reason, or that names a hook not in the tree (`just test-tools`). With the extracted
+library (`just test-quest-hooks-pinned`) it also checks each row's stock word and function.
+
+The rest of what the patch repo applies to the APK is in `tools/quest_apk_patch_map.tsv` (#1187): every address of
+its libr15.so and libpnsradmatchmaking.so YAMLs, the build string its patch.py writes, the steps of its packaging
+script, its texture and asset libraries, and each of its other tracked files, one row each. A row is `done` (our code
+that does the same job, named `<path>:<symbol>`), `open` (the issue that will do it), `not_needed` (why our build needs
+no counterpart) or `table` (the libpnsovr.so files, whose sites are the rows above). The open rows are the storage path
+and the local config file (#1185), the data path helpers (#948), the permission request (#947), the live texture
+resize and its menu control (#1012, #1186) and the general asset override (#871); #1188 tracks them. The patch repo does not
+edit the manifest; ours changes only its versionCode. `tools/quest_apk_patch_map.py` fails a row whose status lacks what it
+needs or names code not in this tree (`just test-tools`). `just test-quest-apk-patch-map <checkout>` checks the table
+against a checkout of the patch repo at the commit the table pins: each tracked file has a row, each applied address
+has a row with its feature, no row names an address the repo does not apply, the libpnsovr addresses are rows of
+`tools/quest_patcher_sites.tsv`, and the stock libraries carry our pinned build IDs.
 
 Each callback logs one `quest_login_prerequisite` record (call, `result` real or synthesized,
 `reason`, `accessor`, `ovr_error`, `error_code`, `http_code`; a locally answered one also carries `ready`, 0 when the
@@ -1650,7 +1703,7 @@ What the integration commit calls, and when:
 
 1. **Install, in the sentinel constructor** (`nevr_sentinel_ctor`, after `InitActivation()`, next to the
    existing GOT hooks): `quest_social::RegisterSocialReportCounters()` before `StartReporter` (it takes 19
-   of the reporter's 96 counters; the clock hook takes 2 more, leaving room for the login, redirect and router hooks), then
+   of the reporter's 128 counters; the clock hook takes 2 more, leaving room for the login, redirect and router hooks), then
    `quest_social::InstallSocialHook(sentinel::FeatureEnabled(Feature::kSocial))` after it.
    The target is libr15's own BIND_NOW slot, so libr15 only has to be mapped, which it is when its
    `DT_NEEDED` dependencies' constructors run (the `clock_gettime` hook installs there today); libpnsovr

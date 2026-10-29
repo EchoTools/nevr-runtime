@@ -583,6 +583,25 @@ LineCount CountLines(const std::string& text) {
   return count;
 }
 
+// The lines of `text` that start with `prefix`. A test counts its own appends: once the log lock has degraded the
+// file also holds one host_log_lock record, and that record is not a line the test appended (#1219).
+LineCount CountLinesWithPrefix(const std::string& text, char prefix) {
+  LineCount count;
+  std::set<std::string> distinct;
+  std::size_t start = 0;
+  while (start < text.size()) {
+    const std::size_t end = text.find('\n', start);
+    if (end == std::string::npos) break;
+    if (end > start && text[start] == prefix) {
+      ++count.lines;
+      distinct.insert(text.substr(start, end - start));
+    }
+    start = end + 1;
+  }
+  count.distinct = distinct.size();
+  return count;
+}
+
 }  // namespace
 
 // The lock records the file holds and the process's lock state, printed when a line is missing (#840): a short
@@ -613,7 +632,7 @@ TEST(BootstrapDiagnostics, ConcurrentAppendersToOneFileLoseNoLine) {
     std::atomic<int> dropped{0};
     AppendConcurrently(diagnostics, threads, kLines, "A", &dropped);
     const std::string text = ReadAll(local + kLogsFile);
-    const LineCount count = CountLines(text);
+    const LineCount count = CountLinesWithPrefix(text, 'A');
     const std::size_t expected = static_cast<std::size_t>(threads * kLines);
     // The record of a short file: the lock state at the end, the dropped appends, and the lock records.
     EXPECT_EQ(count.lines, expected) << threads << " threads, dropped=" << dropped.load() << "\n"
@@ -734,19 +753,6 @@ DWORD WINAPI HoldLogLockFor(void* raw) {
   return 0;
 }
 
-// The distinct lines of `text` that start with `prefix`.
-std::size_t DistinctLinesWithPrefix(const std::string& text, char prefix) {
-  std::set<std::string> distinct;
-  std::size_t start = 0;
-  while (start < text.size()) {
-    const std::size_t end = text.find('\n', start);
-    if (end == std::string::npos) break;
-    if (end > start && text[start] == prefix) distinct.insert(text.substr(start, end - start));
-    start = end + 1;
-  }
-  return distinct.size();
-}
-
 }  // namespace
 
 // The lock is held for longer than an append's bounded wait while the appenders run. The wait times out, and the
@@ -772,7 +778,13 @@ TEST(BootstrapDiagnostics, ConcurrentAppendersKeepEveryLineWhileTheLockIsHeldPas
 
   EXPECT_TRUE(BootstrapDiagnostics::LogLockUnreliableForTest())
       << "the appends did not time out on the lock; the test forces nothing";
-  EXPECT_EQ(DistinctLinesWithPrefix(ReadAll(local + kLogsFile), 'H'), static_cast<std::size_t>(kThreads * kLines));
+  const std::string text = ReadAll(local + kLogsFile);
+  const std::size_t expected = static_cast<std::size_t>(kThreads * kLines);
+  const LineCount own = CountLinesWithPrefix(text, 'H');
+  EXPECT_EQ(own.lines, expected);
+  EXPECT_EQ(own.distinct, expected);
+  // The degraded lock leaves one record in the file, which a count of every line would add to the appended ones.
+  EXPECT_EQ(CountLines(text).lines, expected + 1) << LockDiagnosis(text);
 }
 
 // The first appends of a process run the one-time initialization of the local lock. This helper is that first use:
@@ -812,7 +824,7 @@ TEST(BootstrapDiagnostics, FirstConcurrentAppendsInAFreshProcessLoseNoLine) {
   SetEnvironmentVariableW(L"NEVR_TEST_FIRST_USE_DIR", nullptr);
   SetEnvironmentVariableW(L"NEVR_TEST_FIRST_USE_MUTEX", nullptr);
   EXPECT_EQ(code, 0u) << "the helper process failed";
-  EXPECT_EQ(DistinctLinesWithPrefix(ReadAll(local + kLogsFile), 'F'), static_cast<std::size_t>(8 * 300));
+  EXPECT_EQ(CountLinesWithPrefix(ReadAll(local + kLogsFile), 'F').distinct, static_cast<std::size_t>(8 * 300));
 }
 
 // A holder that never lets go must delay an append by the bounded wait at most; the line is still written.

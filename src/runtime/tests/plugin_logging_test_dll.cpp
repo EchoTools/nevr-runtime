@@ -1,7 +1,7 @@
 // #598 fixture: a plugin that logs through the host (ctx->log) from init, per-frame, state change and
 // shutdown. Built twice (TEST_PLUGIN_NAME differs) so a test can tell two plugins' identities apart.
 
-#include "extension/plugin_interface.h"
+#include "nevr/plugin_interface.h"
 
 #include <cstddef>
 #include <cstdio>

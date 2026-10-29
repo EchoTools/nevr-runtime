@@ -104,8 +104,8 @@ int main(int argc, char* argv[]) {
 
   // -headless is required when -no-console is passed on native Windows.
   // Build command line: echovr.exe -server -headless -no-console [user args...]
-  // Each argument is Windows-quoted so paths with spaces (e.g. -config-path
-  // "C:\Program Files\Echo VR") are not split by CommandLineToArgvW.
+  // Each argument is Windows-quoted so paths with spaces (e.g. -config-file
+  // "C:\Program Files\Echo VR\config.yaml") are not split by CommandLineToArgvW.
   std::string cmd_line = "echovr.exe -server -headless -no-console";
   for (int i = 1; i < argc; ++i) {
     cmd_line += " ";

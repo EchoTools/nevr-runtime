@@ -18,6 +18,8 @@
 // for the crash-reporter constructor, the trigger that reports it when no detour exists.
 
 #include "runtime/host/host_entry.h"
+#include "runtime/host/path_buffer.h"
+#include "runtime/host/runtime_load.h"
 #include "runtime/tests/rendezvous/abi.h"
 
 #include <windows.h>
@@ -39,6 +41,12 @@ void RecordStop(std::uint32_t exit_code) { Record(kHostStopGame, exit_code); }
 bool RealStop() {
   HMODULE exe = GetModuleHandleW(nullptr);
   const auto fn = exe == nullptr ? nullptr : reinterpret_cast<RealStopFn>(GetProcAddress(exe, kRealStopExport));
+  return fn != nullptr && fn() != 0;
+}
+
+bool VerifyRuntime() {
+  HMODULE exe = GetModuleHandleW(nullptr);
+  const auto fn = exe == nullptr ? nullptr : reinterpret_cast<VerifyRuntimeFn>(GetProcAddress(exe, kVerifyRuntimeExport));
   return fn != nullptr && fn() != 0;
 }
 
@@ -89,6 +97,12 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
     nevr_host::RuntimeRendezvous::Seams().fail_hook_create = true;
   }
   if (!RealStop()) nevr_host::RuntimeRendezvous::Seams().stop_game = &RecordStop;
+  // The test targets load the fixture runtime without a check; a scenario can turn the host's own check on, with the
+  // production pins, to watch the refusal of that unsigned file.
+  if (VerifyRuntime()) nevr_host::SetVerifyRuntimeForTest(true);
+  // The fixture runtime is staged beside this shim; the production rule (the nevr root) is the subject of test_host_runtime_load.
+  static wchar_t runtime_dir[MAX_PATH];
+  if (nevr_host::DirOfModule(runtime_dir, MAX_PATH, module)) nevr_host::SetRuntimeDirForTest(runtime_dir);
   nevr_host::OnProcessAttach(module, game, launcher);
 
   if (!launcher) {

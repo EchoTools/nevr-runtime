@@ -97,7 +97,8 @@
             "displayName": "MinGW Release + scenario control endpoint (test only, never ship)",
             "inherits": "mingw-release",
             "cacheVariables": {
-                "NEVR_SCENARIO_CONTROL": "ON"
+                "NEVR_SCENARIO_CONTROL": "ON",
+                "NEVR_ALLOW_UNSIGNED_PLUGINS": "ON"
             }
         },
         {

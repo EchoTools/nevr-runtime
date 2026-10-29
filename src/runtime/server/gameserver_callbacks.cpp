@@ -13,7 +13,8 @@
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 #include "core/auth_token.h"
-#include "auth_token_refresh.h"
+#include "core/auth_token_refresh.h"
+#include "runtime/lifecycle/arena_round_time.h"
 #include "runtime/lifecycle/return_to_lobby.h"
 #include "runtime/server/constants.h"
 #include "runtime/server/failure_detail.h"
@@ -38,7 +39,7 @@
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/lifecycle/crash_recovery.h"
 #include "runtime/hook/patching.h"
-#include "nevr_curl.h"
+#include "core/nevr_curl.h"
 #include "core/pch.h"
 #include "runtime/server/upnp.h"
 #include "gameservice/v1/gameservice.pb.h"
@@ -129,14 +130,17 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
             static_cast<int>(self->GetContext().GetState()), static_cast<int>(ServerState::Registered));
       }
 
+      // The game type is the engine's symbol from the settings JSON; the lobby type is only the fallback (#996).
+      // It is stored for every session, telemetry or not: the public Arena round default reads it (#982).
+      const auto gameType = nevr_telemetry_header::GameTypeForSession(sessionCreate.settings_json(),
+                                                                      sessionCreate.lobby_type() == 1);
+      nevr_arena_round_time::SetSessionGameType(gameType.gameType);
+
       // Start telemetry streaming for this session
       if (g_telemetryEnabled) {
         // Access telemetry via the GameServerLib* — we need to add an accessor
         // This is called via OnTcpMsgProtobuf which has `self` as GameServerLib*
         if (self->GetTelemetry().IsConnected()) {
-          // The game type is the engine's symbol from the settings JSON; the lobby type is only the fallback (#996).
-          const auto gameType = nevr_telemetry_header::GameTypeForSession(sessionCreate.settings_json(),
-                                                                          sessionCreate.lobby_type() == 1);
           Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] session=%s game_type=%s source=%s",
               sessionCreate.lobby_session_id().c_str(), gameType.gameType.c_str(),
               gameType.fromSettings ? "settings" : "lobby_type");
@@ -730,11 +734,10 @@ static void RelayLobbySettingsFrame(GameServerLib* self, const VOID* data, UINT6
       return true;
     };
     // CBroadcaster::Send takes the item and buffer as mutable pointers and only reads them; the relay owns both.
-    sinks.sendToPeer = [broadcaster](const void* item, uint64_t itemSize, const void* body, uint64_t bodySize,
+    sinks.sendToPeer = [broadcaster](void* item, uint64_t itemSize, void* body, uint64_t bodySize,
                                      uint64_t peer) -> int32_t {
-      return EchoVR::BroadcasterSend(broadcaster, Sym::LobbySettingsResponse, 0, const_cast<VOID*>(item), itemSize,
-                                     const_cast<VOID*>(body), bodySize, peer, ~0ULL, 1.0f,
-                                     static_cast<EchoVR::SymbolId>(-1));
+      return EchoVR::BroadcasterSend(broadcaster, Sym::LobbySettingsResponse, 0, item, itemSize, body, bodySize, peer,
+                                     ~0ULL, 1.0f, static_cast<EchoVR::SymbolId>(-1));
     };
   }
 

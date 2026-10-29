@@ -55,6 +55,12 @@ struct Filter {
 };
 static std::vector<Filter> g_filters;
 
+struct Rewriter {
+    char name[48];
+    LoadRewriter rewrite;
+};
+static std::vector<Rewriter> g_rewriters;
+
 static std::vector<PostLoadObserver> g_observers;
 
 /* #654: the hook's own lines reach the durable log. Boot phase: Log() goes through the boot tee (N36),
@@ -253,6 +259,14 @@ static bool RefuseLoad(const std::wstring& lower) {
     return true;
 }
 
+/* The real loader call for a load a rewriter redirected: always the wide Ex entry point, with the caller's flags
+ * (LoadLibraryA/W are LoadLibraryExA/W with no handle and no flags). When the Ex trampoline is gone (a partial
+ * install) the hook on it is not live either, so the plain entry point is the real one. */
+static HMODULE LoadRewritten(const std::wstring& path, HANDLE hFile, DWORD dwFlags) {
+    const auto real = g_origLoadLibraryExW ? g_origLoadLibraryExW : &LoadLibraryExW;
+    return real(path.c_str(), hFile, dwFlags);
+}
+
 /* Fire registered callbacks for a loaded DLL (each fires at most once) */
 static void FireCallbacks(const char* lower_name, HMODULE module) {
     std::vector<Registration> pending;
@@ -292,7 +306,10 @@ static void RunPostLoadObservers() {
 /* Hook implementations */
 static HMODULE WINAPI HookedLoadLibraryA(LPCSTR lpFileName) {
     if (lpFileName && RefuseLoad(LowerWide(lpFileName))) return nullptr;
-    HMODULE result = g_origLoadLibraryA(lpFileName);
+    std::wstring rewritten;
+    HMODULE result = lpFileName && RewriteLoad(LowerWide(lpFileName).c_str(), &rewritten)
+                         ? LoadRewritten(rewritten, nullptr, 0)
+                         : g_origLoadLibraryA(lpFileName);
     RunPostLoadObservers();
     if (result && lpFileName) {
         char lower[64];
@@ -304,7 +321,10 @@ static HMODULE WINAPI HookedLoadLibraryA(LPCSTR lpFileName) {
 
 static HMODULE WINAPI HookedLoadLibraryW(LPCWSTR lpFileName) {
     if (lpFileName && RefuseLoad(LowerWide(lpFileName))) return nullptr;
-    HMODULE result = g_origLoadLibraryW(lpFileName);
+    std::wstring rewritten;
+    HMODULE result = lpFileName && RewriteLoad(LowerWide(lpFileName).c_str(), &rewritten)
+                         ? LoadRewritten(rewritten, nullptr, 0)
+                         : g_origLoadLibraryW(lpFileName);
     RunPostLoadObservers();
     if (result && lpFileName) {
         char lower[64];
@@ -316,7 +336,10 @@ static HMODULE WINAPI HookedLoadLibraryW(LPCWSTR lpFileName) {
 
 static HMODULE WINAPI HookedLoadLibraryExA(LPCSTR lpFileName, HANDLE hFile, DWORD dwFlags) {
     if (lpFileName && RefuseLoad(LowerWide(lpFileName))) return nullptr;
-    HMODULE result = g_origLoadLibraryExA(lpFileName, hFile, dwFlags);
+    std::wstring rewritten;
+    HMODULE result = lpFileName && RewriteLoad(LowerWide(lpFileName).c_str(), &rewritten)
+                         ? LoadRewritten(rewritten, hFile, dwFlags)
+                         : g_origLoadLibraryExA(lpFileName, hFile, dwFlags);
     RunPostLoadObservers();
     if (result && lpFileName && !(dwFlags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE))) {
         char lower[64];
@@ -328,7 +351,10 @@ static HMODULE WINAPI HookedLoadLibraryExA(LPCSTR lpFileName, HANDLE hFile, DWOR
 
 static HMODULE WINAPI HookedLoadLibraryExW(LPCWSTR lpFileName, HANDLE hFile, DWORD dwFlags) {
     if (lpFileName && RefuseLoad(LowerWide(lpFileName))) return nullptr;
-    HMODULE result = g_origLoadLibraryExW(lpFileName, hFile, dwFlags);
+    std::wstring rewritten;
+    HMODULE result = lpFileName && RewriteLoad(LowerWide(lpFileName).c_str(), &rewritten)
+                         ? LoadRewritten(rewritten, hFile, dwFlags)
+                         : g_origLoadLibraryExW(lpFileName, hFile, dwFlags);
     RunPostLoadObservers();
     if (result && lpFileName && !(dwFlags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE))) {
         char lower[64];
@@ -352,6 +378,28 @@ void AddLoadFilter(const char* name, LoadFilter filter) {
     f.predicate = filter;
     std::lock_guard<std::mutex> lock(g_registryMutex);
     g_filters.push_back(f);
+}
+
+void AddLoadRewriter(const char* name, LoadRewriter rewriter) {
+    if (!rewriter) return;
+    Rewriter r{};
+    snprintf(r.name, sizeof(r.name), "%s", name ? name : "?");
+    r.rewrite = rewriter;
+    std::lock_guard<std::mutex> lock(g_registryMutex);
+    g_rewriters.push_back(r);
+}
+
+bool RewriteLoad(const wchar_t* lower_path, std::wstring* load_path) {
+    if (!lower_path || !load_path) return false;
+    std::vector<Rewriter> rewriters;
+    {
+        std::lock_guard<std::mutex> lock(g_registryMutex);
+        rewriters = g_rewriters;
+    }
+    for (const auto& r : rewriters) {
+        if (r.rewrite(lower_path, load_path)) return true;
+    }
+    return false;
 }
 
 bool IsOculusPlatformPath(const wchar_t* lower_path) {
@@ -486,6 +534,7 @@ void Shutdown() {
     std::lock_guard<std::mutex> lock(g_registryMutex);
     g_registrations.clear();
     g_filters.clear();
+    g_rewriters.clear();
     g_observers.clear();
 }
 

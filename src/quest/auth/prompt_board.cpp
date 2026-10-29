@@ -19,6 +19,8 @@ std::atomic<std::uint64_t> g_sequence{0};
 std::atomic<std::uint32_t> g_length{0};  // 0: nothing published
 std::atomic<std::uint8_t> g_mode{0};
 std::atomic<char> g_text[kCapacity];
+std::atomic<std::uint32_t> g_titleLength{0};  // 0: no title
+std::atomic<char> g_title[kMaxTitleChars];
 pthread_mutex_t g_writer = PTHREAD_MUTEX_INITIALIZER;
 
 inline void CpuRelax() noexcept {
@@ -43,12 +45,20 @@ void Exclusive(Write write) noexcept {
 
 }  // namespace
 
-bool Publish(const char* text, std::size_t len, Mode mode) noexcept {
+bool Publish(const char* text, std::size_t len, Mode mode, const char* title) noexcept {
   if (text == nullptr || len == 0 || len > kCapacity) return false;
   for (std::size_t i = 0; i < len; ++i) {
     if (text[i] == '\0') return false;
   }
-  Exclusive([text, len, mode] {
+  std::size_t titleLen = 0;
+  if (title != nullptr) {
+    while (titleLen <= kMaxTitleChars && title[titleLen] != '\0') ++titleLen;
+    if (titleLen == 0 || titleLen > kMaxTitleChars) return false;
+  }
+  Exclusive([text, len, mode, title, titleLen] {
+    // The title is rewritten whole as well: a title of an earlier publish must not stay under a text that has none.
+    for (std::size_t i = 0; i < kMaxTitleChars; ++i) g_title[i].store(i < titleLen ? title[i] : '\0', std::memory_order_relaxed);
+    g_titleLength.store(static_cast<std::uint32_t>(titleLen), std::memory_order_relaxed);
     // The whole buffer is rewritten, so nothing of a longer earlier text (an older code) stays.
     for (std::size_t i = 0; i < kCapacity; ++i) g_text[i].store(i < len ? text[i] : '\0', std::memory_order_relaxed);
     g_length.store(static_cast<std::uint32_t>(len), std::memory_order_relaxed);
@@ -64,7 +74,9 @@ bool Withdraw() noexcept {
     // The text may hold a device code: overwrite it, not just forget its length (atomic stores are
     // not removed as dead stores).
     for (std::size_t i = 0; i < kCapacity; ++i) g_text[i].store('\0', std::memory_order_relaxed);
+    for (std::size_t i = 0; i < kMaxTitleChars; ++i) g_title[i].store('\0', std::memory_order_relaxed);
     g_length.store(0, std::memory_order_relaxed);
+    g_titleLength.store(0, std::memory_order_relaxed);
     g_mode.store(0, std::memory_order_relaxed);
   });
   return had;
@@ -94,11 +106,32 @@ ReadResult Read(char* out, std::size_t cap, Mode* mode, std::uint64_t* version) 
   return ReadResult::kBusy;
 }
 
+bool ReadTitle(char* out, std::size_t cap) noexcept {
+  if (out == nullptr || cap == 0) return false;
+  out[0] = '\0';
+  if (cap < kMaxTitleChars + 1) return false;
+  for (int attempt = 0; attempt < kReadAttempts; ++attempt) {
+    if (attempt != 0) CpuRelax();
+    const std::uint64_t before = g_sequence.load(std::memory_order_acquire);
+    if ((before & 1U) != 0) continue;  // a writer is inside
+    const std::uint32_t len = g_titleLength.load(std::memory_order_relaxed);
+    if (len > kMaxTitleChars) continue;  // cannot happen with a stable sequence; read again
+    for (std::uint32_t i = 0; i < len; ++i) out[i] = g_title[i].load(std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_acquire);
+    if (g_sequence.load(std::memory_order_relaxed) != before) continue;
+    out[len] = '\0';
+    return len != 0;
+  }
+  out[0] = '\0';
+  return false;
+}
+
 std::uint64_t Version() noexcept { return g_sequence.load(std::memory_order_acquire) / 2; }
 
 std::size_t NonZeroTextBytesForTest() noexcept {
   std::size_t n = 0;
   for (std::size_t i = 0; i < kCapacity; ++i) n += g_text[i].load(std::memory_order_relaxed) != '\0' ? 1 : 0;
+  for (std::size_t i = 0; i < kMaxTitleChars; ++i) n += g_title[i].load(std::memory_order_relaxed) != '\0' ? 1 : 0;
   return n;
 }
 

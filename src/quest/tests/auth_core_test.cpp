@@ -318,8 +318,7 @@ TEST(refresh_url_and_body_match_the_server_contract) {
   CHECK_EQ(BuildDeviceAuthUrl("https://h", "k", "refresh"),
            std::string("https://h/v2/rpc/device/auth/refresh?http_key=k&unwrap"));
   const nlohmann::json body = nlohmann::json::parse(BuildRefreshBody("rt"));
-  CHECK_EQ(body.value("refresh_token", ""), std::string("rt"));
-  CHECK_EQ(body.value("token", ""), std::string("rt"));
+  CHECK(body == nlohmann::json({{"refresh_token", "rt"}}));
 }
 
 TEST(refresh_success_takes_expiry_from_the_jwt_and_rotates_the_refresh_token) {
@@ -1040,6 +1039,43 @@ std::string BoardText(prompt_board::Mode* mode = nullptr) {
                                                                                                   : std::string();
 }
 
+// The title the login-failed page carries (#1137). "<none>" when the board holds none, so the game's own title
+// stays; it is not the empty string, which a title length left over from an earlier publish would also read as.
+constexpr const char* kNoTitle = "<none>";
+std::string BoardTitle() {
+  char out[prompt_board::kMaxTitleChars + 1];
+  return prompt_board::ReadTitle(out, sizeof(out)) ? std::string(out) : std::string(kNoTitle);
+}
+
+TEST(the_prompt_board_carries_a_title_with_its_text_and_drops_it_with_the_text) {
+  prompt_board::Withdraw();
+  CHECK_EQ(BoardTitle(), std::string(kNoTitle));
+  CHECK(prompt_board::Publish("abc", 3, prompt_board::Mode::kPrompt, "SIGN IN"));
+  CHECK_EQ(BoardTitle(), std::string("SIGN IN"));
+  // A publish with no title takes the old title off the board; the text is the new one.
+  CHECK(prompt_board::Publish("def", 3, prompt_board::Mode::kPrompt));
+  CHECK_EQ(BoardTitle(), std::string(kNoTitle));
+  CHECK_EQ(BoardText(), std::string("def"));
+  CHECK(prompt_board::Publish("abc", 3, prompt_board::Mode::kNotice, "SIGNED IN"));
+  CHECK_EQ(BoardTitle(), std::string("SIGNED IN"));
+  // A title that does not fit is refused whole and the board stays as it was.
+  CHECK(!prompt_board::Publish("xyz", 3, prompt_board::Mode::kPrompt, ""));
+  CHECK(!prompt_board::Publish("xyz", 3, prompt_board::Mode::kPrompt,
+                               std::string(prompt_board::kMaxTitleChars + 1, 'T').c_str()));
+  CHECK_EQ(BoardText(), std::string("abc"));
+  CHECK_EQ(BoardTitle(), std::string("SIGNED IN"));
+  // The longest title fits; a read buffer too small for it reads nothing.
+  const std::string longest(prompt_board::kMaxTitleChars, 'T');
+  CHECK(prompt_board::Publish("abc", 3, prompt_board::Mode::kPrompt, longest.c_str()));
+  CHECK_EQ(BoardTitle(), longest);
+  char tiny[prompt_board::kMaxTitleChars];
+  CHECK(!prompt_board::ReadTitle(tiny, sizeof(tiny)));
+  // Withdraw zeroes the title bytes with the text's.
+  CHECK(prompt_board::Withdraw());
+  CHECK_EQ(BoardTitle(), std::string(kNoTitle));
+  CHECK_EQ(prompt_board::NonZeroTextBytesForTest(), size_t(0));
+}
+
 TEST(the_game_prompt_is_four_lines_the_game_can_hold_with_the_url_and_the_code) {
   LoginPrompt p = SamplePrompt();
   p.url = "https://echovrce.com/device";
@@ -1130,6 +1166,33 @@ TEST(the_game_text_presenter_publishes_the_prompt_and_withdraws_it_logging_json_
   CHECK_EQ(log.Count(LogLevel::Info, R"("result":"withdrawn")"), size_t(1));
 }
 
+TEST(the_game_text_presenter_titles_the_code_as_a_sign_in_and_the_notice_as_signed_in_and_a_failure_not_at_all) {
+  prompt_board::Withdraw();
+  LogCapture log;
+  GameTextPresenter p(log.Sink());
+  CHECK(p.Present(SamplePrompt()) > kBrowserOpenAcceptedAbove);
+  CHECK_EQ(BoardTitle(), std::string(kSignInTitle));  // the same place the code text is published from
+  CHECK_EQ(BoardTitle(), std::string("SIGN IN"));
+  CHECK_EQ(log.Count(LogLevel::Info, R"("what":"code")"), size_t(1));
+  CHECK_EQ(log.Count(LogLevel::Info, R"("title":"SIGN IN")"), size_t(1));
+  p.Conclude(LoginOutcome::SignedIn);
+  CHECK_EQ(BoardTitle(), std::string(kSignedInTitle));
+  CHECK_EQ(BoardTitle(), std::string("SIGNED IN"));
+  // A failure keeps the game's title: the timed-out and the no-code texts publish text and no title.
+  p.Conclude(LoginOutcome::TimedOut);
+  CHECK_EQ(BoardText(), std::string(kTimedOutText));
+  CHECK_EQ(BoardTitle(), std::string(kNoTitle));
+  CHECK(p.Present(SamplePrompt()) > kBrowserOpenAcceptedAbove);
+  CHECK_EQ(BoardTitle(), std::string(kSignInTitle));
+  p.Conclude(LoginOutcome::NoCodeShown);
+  CHECK_EQ(BoardText(), std::string(kNoCodeShownText));
+  CHECK_EQ(BoardTitle(), std::string(kNoTitle));
+  CHECK_EQ(log.Count(LogLevel::Info, R"("title":"game")"), size_t(2));
+  p.Clear();
+  CHECK_EQ(BoardTitle(), std::string(kNoTitle));
+  prompt_board::Withdraw();
+}
+
 TEST(a_prompt_the_game_cannot_show_is_refused_and_takes_any_older_code_off_the_board) {
   prompt_board::Withdraw();
   LogCapture log;
@@ -1194,6 +1257,7 @@ TEST(while_the_player_is_asked_to_sign_in_the_game_text_holds_the_current_code_a
   s.Start();
   CHECK(WaitUntil([&] { return BoardText().find("FIRSTCODE") != std::string::npos; }));
   CHECK(s.Get().readiness == Readiness::AwaitingUser);
+  CHECK_EQ(BoardTitle(), std::string(kSignInTitle));  // #1137: the first sign-in is titled as one
   clock.Allow(2);  // the poll that hears "expired", then the wait before the next code
   CHECK(WaitUntil([&] { return BoardText().find("SECONDCODE") != std::string::npos; }));
   CHECK(s.Get().readiness == Readiness::AwaitingUser);
@@ -1204,6 +1268,7 @@ TEST(while_the_player_is_asked_to_sign_in_the_game_text_holds_the_current_code_a
   prompt_board::Mode mode = prompt_board::Mode::kPrompt;
   CHECK_EQ(BoardText(&mode), std::string(kSignedInText));
   CHECK(mode == prompt_board::Mode::kNotice);
+  CHECK_EQ(BoardTitle(), std::string(kSignedInTitle));
   CHECK(!std::filesystem::exists(JoinPath(dir, "device_login.txt")));
   CHECK(log.All().find("FIRSTCODE") == std::string::npos);
   CHECK(log.All().find("SECONDCODE") == std::string::npos);
@@ -1235,6 +1300,7 @@ TEST(when_no_code_is_entered_the_login_stops_after_six_codes_and_tells_the_playe
   prompt_board::Mode mode = prompt_board::Mode::kNotice;
   CHECK_EQ(BoardText(&mode), std::string(kTimedOutText));  // shown at every later login failure
   CHECK(mode == prompt_board::Mode::kPrompt);
+  CHECK_EQ(BoardTitle(), std::string(kNoTitle));  // #1137: nothing is coming, so this is a failure and the game's title stays
   clock.Allow(10);  // the recovery period passes: a final login does not come back
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   CHECK_EQ(http.Count("request"), static_cast<int>(Session::kMaxUnansweredCodes));

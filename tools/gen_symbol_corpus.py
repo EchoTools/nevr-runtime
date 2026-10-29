@@ -62,12 +62,12 @@ CS64_TABLE = gen_cs64_table()
 
 
 def csymbol64_hash(s: Union[str, bytes], seed: int = 0xFFFFFFFFFFFFFFFF) -> int:
-    """CSymbol64 of a byte string (src/abi/symbol_hash.h).
+    """CSymbol64 of a byte string (sdk/include/nevr/symbol_hash.h).
 
     The game hashes bytes and sign-extends each one to 64 bits before the table XOR (echovr.exe 0x1400ce199
     MOVSX; libr15.so 0x11cc760 sxtb). A str is hashed as its UTF-8 bytes; it used to be hashed per code point
     with no sign extension, which gave the service's value, not the game's, for any non-ASCII name (#657).
-    The game and src/abi/symbol_hash.h read a NUL-terminated string, so the hash stops at the first NUL byte.
+    The game and sdk/include/nevr/symbol_hash.h read a NUL-terminated string, so the hash stops at the first NUL byte.
     Anything but str and bytes raises TypeError (bytes(3) would be three NULs).
     """
     if isinstance(s, str):

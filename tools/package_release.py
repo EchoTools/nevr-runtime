@@ -5,7 +5,7 @@ A release is a version (plain semver, taken from the tag) plus GitHub's pre-rele
 file depends on that flag, so promoting a release changes no byte: this tool has no flag input.
 
   package_release.py tree  --version X.Y.Z --commit <sha40> --out DIR --dll BugSplat64.dll --runtime-dll nevr-runtime.dll
-                           --server-exe echovr_server.exe --pc-header H
+                           --server-exe echovr_server.exe --installer-exe nevr-install.exe --pc-header H
       CI: gate the two DLLs and write the package tree (what the signing step signs) + release.json
   package_release.py seal  --tree DIR --out DIR [--require-signed]
       CI: zip the (signed or unsigned) tree with a SHA256SUMS regenerated from the files as they are now.
@@ -20,7 +20,7 @@ file depends on that flag, so promoting a release changes no byte: this tool has
       CI: assert the Quest library carries exactly this version and this commit. It has no identity literal:
       kVersion and the short kCommit (cmake/nevr_build_info.h.in) and the full commit of the sentinel's build
       record are separate NUL-bounded strings, so each is matched whole.
-  package_release.py --commit <sha40> --out DIR --dll ... --runtime-dll ... --server-exe ... --apk ... --pc-header ...
+  package_release.py --commit <sha40> --out DIR --dll ... --runtime-dll ... --server-exe ... --installer-exe ... --apk ... --pc-header ...
                      --quest-header ... --quest-build-info ...        (`just package-dev`, a LOCAL build)
       the full gate for a local development build (its version is X.Y.(Z+1)-dev.N+sha, never a release),
       then the same tree + seal, with the tester Quest APK, its SHA256SUMS and notes. Never attached to a
@@ -58,6 +58,9 @@ HOST_DLL = "BugSplat64.dll"
 RUNTIME_DLL = "nevr-runtime.dll"
 # The dedicated-server launcher that rides in the Windows zip next to BugSplat64.dll.
 SERVER_EXE = "echovr_server.exe"
+# The core installer (installer/, ADR 0023) that install.ps1 and quest-install.ps1 call. It rides in the zip as its own
+# file, so the signed manifest's `contents` for the zip covers it.
+INSTALLER_EXE = "nevr-install.exe"
 
 # The one identity literal: NUL-bounded "NEVR-BUILD <version> <commit40>".
 IDENTITY = re.compile(rb"(?<=\x00)NEVR-BUILD ([0-9A-Za-z.+-]+) ([0-9a-f]{40})(?=\x00)")
@@ -66,6 +69,9 @@ IDENTITY = re.compile(rb"(?<=\x00)NEVR-BUILD ([0-9A-Za-z.+-]+) ([0-9a-f]{40})(?=
 # enforces (a run's mode comes from -require-signed-plugins, #924). A packaged DLL carries exactly one, and it says
 # release; dev is the mingw-plugin-dev preset and is never packaged.
 PLUGIN_TRUST = re.compile(rb"(?<=\x00)NEVR-PLUGIN-TRUST ([a-z-]+)(?=\x00)")
+# The host's counterpart (#1122): "NEVR-HOST-BUILD <build>". The host carries no plugin-trust literal, yet a host built
+# as the plugin developers' build loads an unsigned nevr-runtime.dll, so a package needs to know which host it holds.
+HOST_BUILD = re.compile(rb"(?<=\x00)NEVR-HOST-BUILD ([a-z-]+)(?=\x00)")
 _NUM = r"(?:0|[1-9]\d*)"  # semver: no leading zeros
 RELEASE_VERSION = re.compile(rf"^{_NUM}\.{_NUM}\.{_NUM}$")
 DEV_VERSION = re.compile(rf"^{_NUM}\.{_NUM}\.{_NUM}-dev\.{_NUM}\+[0-9a-f]{{7,40}}$")
@@ -111,10 +117,18 @@ def plugin_trust_problems(label: str, blob: bytes) -> list:
 
 
 def host_trust_problems(label: str, blob: bytes) -> list:
-    """The host loads no plugin, so a plugin-trust literal in it means runtime code moved into the host."""
+    """The host loads no plugin, so a plugin-trust literal in it means runtime code moved into the host. It must say it
+    is a release host: a dev host (the plugin-developer preset) loads an unsigned nevr-runtime.dll."""
+    problems = []
     if PLUGIN_TRUST.search(blob):
-        return [f"{label}: carries a NEVR-PLUGIN-TRUST literal; the plugin loader is the runtime's, not the host's"]
-    return []
+        problems.append(f"{label}: carries a NEVR-PLUGIN-TRUST literal; the plugin loader is the runtime's, not the host's")
+    found = HOST_BUILD.findall(blob)
+    if len(found) != 1:
+        problems.append(f"{label}: expected exactly one 'NEVR-HOST-BUILD <build>' literal, found {len(found)}")
+    elif found[0] != b"release":
+        problems.append(f"{label}: NEVR-HOST-BUILD is '{found[0].decode('ascii')}', not 'release': a dev host (the "
+                        f"plugin-developer or scenario preset) loads an unsigned nevr-runtime.dll and is never packaged")
+    return problems
 
 
 def expected_identity_problems(label: str, blob: bytes, version, commit: str, runtime: bool = True) -> list:
@@ -202,6 +216,9 @@ def windows_problems(args, dll: Path, runtime: Path) -> list:
     server = Path(args.server_exe)
     if not server.is_file() or server.read_bytes()[:2] != b"MZ":
         problems.append(f"windows: {SERVER_EXE} is missing or not a PE file: {server}")
+    installer = Path(args.installer_exe)
+    if not installer.is_file() or installer.read_bytes()[:2] != b"MZ":
+        problems.append(f"windows: {INSTALLER_EXE} is missing or not a PE file: {installer}")
     problems += [f"windows: {p}" for p in pe_version_info.check(dll, server, args.version or None, runtime)]
     return problems
 
@@ -308,6 +325,7 @@ def write_tree(args, out: Path, version: str) -> Path:
     shutil.copyfile(args.dll, tree / HOST_DLL)
     shutil.copyfile(args.runtime_dll, tree / RUNTIME_DLL)
     shutil.copyfile(args.server_exe, tree / SERVER_EXE)
+    shutil.copyfile(args.installer_exe, tree / INSTALLER_EXE)
     shutil.copyfile(PACKAGE_DIR / "install.ps1", tree / "install.ps1")
     shutil.copyfile(PACKAGE_DIR / "uninstall.ps1", tree / "uninstall.ps1")
     shutil.copyfile(PACKAGE_DIR / "quest-diagnose.ps1", tree / "quest-diagnose.ps1")
@@ -322,11 +340,11 @@ def write_tree(args, out: Path, version: str) -> Path:
 SIGNING_TEXT = """Signing
 
 The build itself signs nothing. A separate signing step may sign BugSplat64.dll, nevr-runtime.dll,
-echovr_server.exe, install.ps1, uninstall.ps1 and quest-diagnose.ps1 afterwards and replace this zip under the same name. This
+echovr_server.exe, nevr-install.exe, install.ps1, uninstall.ps1 and quest-diagnose.ps1 afterwards and replace this zip under the same name. This
 text is the same either way: it says how to check, not which state your copy is in.
 
 A file is signed when it carries a signature:
-  BugSplat64.dll, nevr-runtime.dll, echovr_server.exe
+  BugSplat64.dll, nevr-runtime.dll, echovr_server.exe, nevr-install.exe
                               an Authenticode signature
                               (PowerShell: Get-AuthenticodeSignature .\\BugSplat64.dll)
   install.ps1, uninstall.ps1, quest-diagnose.ps1
@@ -349,7 +367,7 @@ def seal(tree: Path, out: Path, apk: Path = None, require_signed: bool = False) 
     if apk is not None:  # before anything is written: a foreign APK never rides a package
         check_apk_version(apk, version, commit)
     files = sorted(p for p in tree.iterdir() if p.is_file() and p.name != "SHA256SUMS")
-    for required in (HOST_DLL, RUNTIME_DLL, SERVER_EXE):
+    for required in (HOST_DLL, RUNTIME_DLL, SERVER_EXE, INSTALLER_EXE):
         if required not in {p.name for p in files}:
             raise GateFailure(f"{tree} has no {required}")
     if require_signed:
@@ -469,6 +487,7 @@ def main(argv=None) -> int:
         parser.add_argument("--dll", required=True, help="BugSplat64.dll, the host")
         parser.add_argument("--runtime-dll", required=True, help="nevr-runtime.dll, the runtime")
         parser.add_argument("--server-exe", required=True)
+        parser.add_argument("--installer-exe", required=True, help="nevr-install.exe, the core installer (installer/)")
         parser.add_argument("--pc-header", required=True)
         parser.add_argument("--defaults", default=str(REPO / "config" / "public-defaults.env"))
         if mode == "all":

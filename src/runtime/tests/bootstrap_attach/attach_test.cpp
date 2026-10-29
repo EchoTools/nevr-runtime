@@ -452,10 +452,11 @@ void ValidateHostRecords(const Expectation& expect) {
   }
   // A hooked run whose runtime did not load stops the game: one more record, the game_stop, however many calls arrived.
   const bool stops = !expect.dispatched;
-  Require(records.size() == (stops ? 6u : 5u),
-          "a hooked run recorded something other than its five decisions (and the stop, when it stopped)");
+  Require(CountRecords(records, "versions", "") == 1, "a hooked run did not record exactly one versions record");
+  Require(records.size() == (stops ? 7u : 6u),
+          "a hooked run recorded something other than its six decisions (and the stop, when it stopped)");
   if (expect.no_install_event) {
-    // The load did not wait for the install, so the install record can land after the load's: all five
+    // The load did not wait for the install, so the install record can land after the load's: all of them
     // must still be there (the load flushes the journal again), in whatever order the race gave.
     Require(CountRecords(records, "host_attach", "image_check") == 1 &&
                 CountRecords(records, "host_attach", "prologue_check") == 1 &&
@@ -482,22 +483,22 @@ void ValidateHostRecords(const Expectation& expect) {
               records[1].value("outcome", "") == "accepted" &&
               records[2].value("step", "") == "hook_install" && records[2].value("outcome", "") == "enabled" &&
               records[3].value("step", "") == "install_wait" && records[3].value("outcome", "") == "signalled" &&
-              records[4].value("event", "") == "runtime_load",
-          "the host's decisions were not recorded in order");
+              records[4].value("event", "") == "versions" && records[5].value("event", "") == "runtime_load",
+          "the host's decisions were not recorded in order (the versions record sits between the install wait and the load)");
   Require(!records[2].contains("hook_bytes"), "the install record says the hook bytes were unread");
   Require(records[2].at("rva") == "0xcd510" && records[2].at("stage") == "enable" &&
               records[2].at("mh_status") == 0 &&
               records[2].at("actual_prologue") == records[2].at("expected_prologue"),
           "the install record lacks the rva, the enable stage, MH_OK or the matching bytes");
-  Require(records[4].value("outcome", "") == expect.load_record,
+  Require(records[5].value("outcome", "") == expect.load_record,
           "the runtime_load record has an unexpected outcome");
-  Require(records[4].contains("loader_lock_held") && records[4].at("loader_lock_held") == false,
+  Require(records[5].contains("loader_lock_held") && records[5].at("loader_lock_held") == false,
           "the runtime_load record does not say the loader lock was not held");
-  Require(records[4].value("degraded_action", "") == (stops ? "stop_game" : "dispatch"),
+  Require(records[5].value("degraded_action", "") == (stops ? "stop_game" : "dispatch"),
           "the runtime_load record names the wrong action");
   if (stops) {
-    Require(records[5].value("event", "") == "game_stop" && records[5].value("reason", "") == expect.load_record &&
-                records[5].value("exit_code", 0) == 78,
+    Require(records[6].value("event", "") == "game_stop" && records[6].value("reason", "") == expect.load_record &&
+                records[6].value("exit_code", 0) == 78,
             "the game_stop record does not follow the load and name its cause and exit code 78");
   }
 }

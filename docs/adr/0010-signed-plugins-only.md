@@ -67,8 +67,10 @@ There are two plugin loaders in the tree, not one.
   entry in the phase.
 - `StageOne` is the only caller of `LoadModule`. It refuses a disabled entry, a superseded one, a duplicate and a file outside the
   plugins directory (`PluginFileStaysInDirectory`), then verifies the file, before that call.
-- `LoadModule` is the only place a plugin file is mapped: `LoadLibraryExA(path, nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
-  LOAD_LIBRARY_SEARCH_SYSTEM32)`. In an unsigned-allowed run, on `ERROR_INVALID_PARAMETER`, an unrestricted `LoadLibraryA(path)` follows.
+- `LoadModule` is the only place a plugin file is mapped: `LoadLibraryExW(held path, nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+  LOAD_LIBRARY_SEARCH_SYSTEM32)`, where the held path is the final path of the handle the check holds (below). With no handle held
+  (an unsigned-allowed run that could not open the file) it is `LoadLibraryExA(path, ...)` as the entry spells it. In an
+  unsigned-allowed run, on `ERROR_INVALID_PARAMETER`, an unrestricted `LoadLibraryW(held path)` (or `LoadLibraryA(path)`) follows.
 - The early pass (N146) and the normal pass both go through `StageOne`. `module_loader.cpp` and the statically linked modules load no
   DLL files of ours (`platform_compat.cpp` loads the system's `Secur32.dll` and `ole32.dll`).
 
@@ -82,20 +84,10 @@ when the OS rejects the restricted flags. In a signed-only run it does not exist
 load is a refusal with its own reason (`restricted search unsupported`), because a load the check did not shape is a load the check
 did not cover. An unsigned-allowed run keeps the fallback.
 
-**The legacy loader is a second load site, and it has no check.** `src/legacy/gamepatches/plugin_loader.cpp` calls `LoadLibraryA`
-on every `*.dll` in `plugins\` next to `echovr.exe` and runs `NvrPluginInit`. It is built (`add_subdirectory(src/legacy/gamepatches)`
-in `CMakeLists.txt`, target `gamepatcheslegacy`) and packaged by the `dist-legacy` target.
-
-No workflow, release package script, document or install script references it: the release build builds `--target dist` only
-(`.github/workflows/build.yml`), the v5.4.3 release carries five assets and none holds a legacy DLL, and `release-signer`'s declared
-file set names none. `src/legacy/` is frozen (AGENTS.md "Guardrails"), so the gate cannot be added there.
-
-Decision: **the legacy build is not part of any package target and is never in a release package.** `dist-all` depends on `dist`
-only (`CMakeLists.txt`), the `justfile` keeps `dist-legacy` as an explicit developer recipe, and `tools/tests/test_release_contract.py`
-asserts that no release workflow, `package_release.py` input or `sources.yml` entry names `gamepatcheslegacy` or `gameserverlegacy`.
-Why not "give it the same gate": the directory is frozen by rule, and it would mean a second verifier compiled against a different
-include layout, for code nobody ships. Not shown: whether anyone outside the release flow (a player, a hosting setup) runs a locally
-built `dist-legacy` package; the threat model puts anyone who installs their own runtime DLL outside the gate.
+**There is one load site.** The v1 legacy runtime (`gamepatcheslegacy`), whose loader called `LoadLibraryA` on every `*.dll` in
+`plugins\` with no check, is not in the tree (#1264). `tools/tests/test_release_contract.py` asserts that no release workflow,
+`package_release.py` input or `sources.yml` entry names `gamepatcheslegacy` or `gameserverlegacy`, so it cannot come back into a
+release package unnoticed. The threat model puts anyone who installs their own runtime DLL outside the gate.
 
 **Dependencies, delay loads, forwarders.** N75 restricts a plugin's imports to its own directory and System32 (`LoadModule`). An
 unsigned DLL in the plugins directory that a signed plugin imports would load without a check. `VerifyPluginTree`
@@ -108,7 +100,11 @@ exports (an export whose RVA lies inside the export directory and names `dll.sym
   file, or a module already loaded in the process: `SuppliedByTheSystem`) is refused: a file put there before the load would be mapped unchecked.
 - An absent delay-load is not refused: it is resolved when first called, by a `LoadLibrary` the late-load filter checks then, and an
   optional one (`nvapi64.dll` on a machine without it) must not refuse a plugin that loads without it.
-System32 imports are the OS's.
+- A name that only System32 supplies (not an API set, not a module already loaded: `SuppliedBySystem32Only`) is loaded from System32 by its
+  full path before the plugin, and kept loaded until the plugin is staged. The loader searches the plugin's directory before System32
+  for a name that is not already loaded, and the check cannot hold a file that is not there, so a file put in the directory after the
+  check would otherwise map with the plugin; a module already loaded under the name is taken first. A staged plugin (`PinSystemDependencies`)
+  and a later load the filter accepts both pin, and a name that cannot be pinned refuses the plugin.
 
 **Plugin-initiated loads.** A plugin that calls `LoadLibrary` after its init, or from its `DllMain`, is not on the staged path.
 `DllLoadHook` (`src/runtime/hook/dll_load_hook.cpp`) hooks all four LoadLibrary variants; its filter in `plugin_loader.cpp` checks
@@ -119,19 +115,32 @@ the load against the same verifier and refuses (null, `ERROR_MOD_NOT_FOUND`) on 
   trailing dot or space cannot slip past a text compare), with the ANSI path converted through the code page;
 - a relative path with a directory part is refused whatever it leads to: the loader appends it to every directory it searches, each
   through links, so no list of candidates is complete. A plugin that needs such a load passes a full path.
+- a full path the filter accepts is loaded by the final path of the file it checked and holds, not by the caller's text: the hook
+  asks a rewriter (`AddLoadRewriter`) right after the filters and calls the real `LoadLibraryExW` with that path and the caller's flags,
+  so a link in the text that is pointed elsewhere after the check cannot lead the load to a file that was not checked. A bare name is
+  left to the OS search (the plugins directory may not be on it), and a file the filter cannot name is refused (#1177);
+The loader's own load of a staged plugin is not checked again, because `StageOne` checked the file: the path being loaded is kept per
+thread for the call, and the filter lets that path through only while this thread does not hold the loader lock. The plugin's `DllMain`
+runs inside the same call with the lock held, so a load made there, by that path or another, is checked (`PluginDllMainLoadTest`). The export and API-version checks run after the load, so a plugin's `DllMain` runs before its `NvrPluginGetInfo` export and API version are checked: signed-only, not those checks, is what keeps unknown code out.
 An unsigned-allowed run logs the line `a plugin loads <file> after its init: <reason>, allowed because plugin signatures are not
 required in this run (plugin trust mode <mode>)` and allows it. Known gaps, recorded and not claimed closed: a load by an absolute path outside the plugins directory (it is
 not a plugin file); under Wine, a unix symbolic link to the plugins directory is not recognised by the final-path compare, so an
 unsigned file reached through it loads (#788, open); the lock order of the late-load filter against a load made from a plugin's
 `DllMain` is not proven (#784, open); a direct `LdrLoadDll` or a manual map by a plugin (code that is already signed by us and running in the process can do
-anything); a plugin's own build flags. Plugins built from `plugins/common` get `/DEPENDENTLOADFLAG:0x800` as a template default so
-their own implicit imports resolve the way N75 does; that flag lives in the plugin's repo and the runtime cannot enforce it. The
+anything); a plugin's own build flags. `/DEPENDENTLOADFLAG:0x800` makes a plugin's own implicit imports
+resolve the way N75 does; that flag lives in the plugin's repo and the runtime cannot enforce it. The
 race on a dependency that the system names (a file in `plugins\` that replaces a system DLL between the check and the load) was
 filed as #783 and is closed.
 
 **Check and load are separate steps.** A file can change between them.
 - `StageOne` opens the file with `FILE_SHARE_READ` only (no write or delete sharing), passes that handle to `VerifyPluginFile` and
   keeps it open across `LoadModule`, so a Windows process cannot write or replace the file in between.
+- The load names the file the handle holds, not the path the entry spells. `CheckSignature` takes the handle's final path
+  (`GetFinalPathNameByHandleW`: no link, no junction, no 8.3 name, no prefix) and `LoadModule` loads that path, so a link, a
+  junction or a directory someone can rename in the configured path cannot make the load map another file than the one checked. A
+  signed-only run that cannot name the held file refuses the plugin (`cannot name the file it checked`); an unsigned-allowed run
+  loads the configured path and says so at Warning. The tests drive the file-link form under Wine (`ALinkRepointedBetweenTheCheckAndTheLoad...`); the
+  directory-link form rests on Windows's own final path for a handle and is not run here.
 - Known gap: under Wine and Proton a Linux process of the same user can write the underlying file without the Windows sharing rules.
   The test in section 5 measures whether Wine honours the sharing mode against another Wine process; it cannot cover a native Linux
   writer, and the threat model puts a same-user native writer out of scope. The mitigation that would cover it (copy the verified bytes
@@ -234,7 +243,7 @@ Testing a plugin's signed-only behaviour needs no special build: start any build
 **The literal names the build, not the run.** Every build embeds a NUL-bounded literal, `\0NEVR-PLUGIN-TRUST <build>\0`, with `<build>`
 either `release` or `dev` (`kModeArray` in `src/runtime/ext/plugin_trust.cpp`). It is a fact of the file, so it cannot say which mode a
 run had; the log line above does. `-DNEVR_ALLOW_UNSIGNED_PLUGINS=ON` (the `mingw-plugin-dev` preset, which inherits `mingw-release` the
-way `mingw-scenario` does for `NEVR_SCENARIO_CONTROL`) makes the DLL say `dev`, and `tools/package_release.py` finds exactly one such
+way `mingw-scenario` does for `NEVR_SCENARIO_CONTROL`; `mingw-scenario` sets this option too, because the host must load its unsigned `nevr-runtime.dll`) makes the DLL say `dev`, and `tools/package_release.py` finds exactly one such
 literal in each packaged `BugSplat64.dll`, requires that it says `release`, and fails the package otherwise. `tools/tests/test_package_release.py` pins that check. The identity literal
 (`\0NEVR-BUILD <version> <commit40>\0`) is a cross-repo contract (`tools/package_release.py`, the `binary:` entries of
 `release-signer/config/sources.yml`, rule 2.3) and gets no new field. `release-signer` is unchanged by this ADR; a stage there that reads the
@@ -312,6 +321,8 @@ GTest under Wine, in `src/runtime/tests/test_plugin_signature.cpp`, `test_plugin
 | plugin calls `LoadLibrary` on an unsigned file in the plugins directory after init | refused by the `DllLoadHook` filter |
 | restricted-search load rejected with `ERROR_INVALID_PARAMETER` | refused, no fallback load |
 | file written while the verify handle is held, from another Wine process | the write fails, or the loaded bytes equal the verified bytes |
+| the entry's path is a link, pointed at an unsigned file between the check and the load | the file that was checked loads; the unsigned file is not mapped |
+| the held file's path cannot be had | signed-only: refused, `cannot name the file it checked`; otherwise the configured path loads, with a Warning |
 | release-configured build, no argument, unsigned plugin (`PluginRunModeTest`) | loaded, with the mode line and the Warning line |
 | the same build and plugin with `-require-signed-plugins` | refused, `refused: unsigned`, one dialog on a client, `ServerFatal` for a required plugin on a server |
 | the early pass and a later load under each mode | both follow the run's mode; the mode line is written once |
@@ -319,11 +330,14 @@ GTest under Wine, in `src/runtime/tests/test_plugin_signature.cpp`, `test_plugin
 | the real signed v5.4.3 `BugSplat64.dll` (`RealSigned.*`, fed by `tools/fetch_real_signed_dll.py` through `just test-auth-unit`) | accepted by the production pins |
 | import with no extension, absent import or forwarder not supplied by the system, absent delay-load | the first two refused, the third left to the late-load filter |
 | late load by a relative path with a directory part, in a signed-only run | refused whatever it leads to |
+| a signed plugin imports a System32 library; an unsigned file of that name is put in the plugins directory after the check (a staged plugin, and a later load) | the plugin loads and the planted file does not (`PluginSystemDependencyTest`) |
+| a staged plugin's `DllMain` loads the plugin's own path | checked by the filter (it holds the file); the loader's own load of it is not checked a second time |
+| late load by a full path, a link in it repointed after the check, signed-only run | the checked file loads; an unsigned-allowed run loads what the caller named |
 
 Mutants (AGENTS.md "What a PR carries"): drop the root check, drop the status test, compare the EKU by prefix, drop the digest check,
 drop the imprint binding, pass `pTime = now`, drop the denylist test, restore the unrestricted fallback, let the 64-file dependency cap fail open
 (a 65th dependency is then accepted), compare the late-load path as text instead of its final path (an 8.3 name, a `\\?\` prefix or a trailing dot
-or space then loads unchecked); each makes its row fail.
+or space then loads unchecked), let a late load go by the caller's text after the check, rewrite in an unsigned-allowed run, rewrite a bare name; each makes its row fail.
 
 Integration: a game copy with one signed fixture plugin and one unsigned, on the nested display; the run's log must contain the load
 line of the first and the refusal line of the second, and the login's `nevr_plugins` must list the second as failed.
@@ -377,7 +391,7 @@ Release-notes line (`RELEASE-NOTES.md`, which the release pipeline builds):
   to a run that asks for it, until the default flips.
 - A stolen signing profile is the single point of trust, as it already is for `BugSplat64.dll`; the denylist is the response, and it
   moves at the speed of a runtime release.
-- The legacy build is no longer part of `dist-all`.
+- No legacy runtime is built or packaged (#1264).
 
 ## Open items
 

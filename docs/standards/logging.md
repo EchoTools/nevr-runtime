@@ -24,7 +24,7 @@ how an agent triangulates a correct log line.
 
 ### This IS
 
-- A binding ruleset for every `Log()` call in `src/`, `plugins/`,
+- A binding ruleset for every `Log()` call in `src/`, `sdk/`,
   `modules/`, and any future component that links `libcommon.a`.
 - A review gate: the "Hard Stops" table at the end of this document is
   enforced. A log line that fails any check is rejected in review.
@@ -37,7 +37,9 @@ how an agent triangulates a correct log line.
 
 - A tutorial on the `Log()` function signature. That is in
   `src/core/logging.h` and `AGENTS.md`. This document defines WHAT
-  goes in the format string, not how to call the function.
+  a record carries (its tag, event, fields and message), not how to call
+  the function. The record's shape and the structured call are ADR 0027
+  (`docs/adr/0027-structured-logging.md`).
 - A style preference. The "Hard Stops" are not negotiable; they are the
   mechanical difference between a log that diagnoses a problem and one
   that wastes the operator's time.
@@ -47,9 +49,11 @@ how an agent triangulates a correct log line.
 
 ### You SHALL
 
-- You **SHALL** use `Log(EchoVR::LogLevel::level, "format", ...)` as the single entry
-  point. No `printf`, no `fprintf`, no `cerr`, no `OutputDebugString`,
-  no `std::cout`. See `src/core/logging.h` and the C++ Mingw Addendum in `AGENTS.md`.
+- You **SHALL** use `Log()` as the single entry point. Its structured form,
+  `Log(level, tag, event, {fields})`, is specified by ADR 0027 and is not built yet; until it
+  is, and for a call site the migration has not reached, the entry point is the printf form
+  `Log(EchoVR::LogLevel::level, "format", ...)`. No `printf`, no `fprintf`, no `cerr`, no
+  `OutputDebugString`, no `std::cout`. See `src/core/logging.h` and the C++ Mingw Addendum in `AGENTS.md`.
   A plugin is a separate DLL and cannot call `Log()`; its single entry point is the host's
   log function in its context, reached through `plugin_logger.h` (Rule 15).
 - You **SHALL** include a subsystem tag on EVERY log line. The tag identifies which
@@ -93,10 +97,13 @@ how an agent triangulates a correct log line.
 
 ## Subsystem Tags
 
-Every log line begins with a bracketed tag identifying the emitting
-component. Tags are hierarchical: `[NEVR.COMPONENT]` for nEVR-authored
+Every record carries a tag identifying the emitting component: the value
+of its `tag` key, written without brackets (`NEVR.WS`), and shown in
+brackets at the start of its console line and of a printf call's text.
+Tags are hierarchical: `[NEVR.COMPONENT]` for nEVR-authored
 code, `[COMPONENT]` (no NEVR prefix) for third-party or game-native
-subsystems that nEVR annotates.
+subsystems that nEVR annotates. ADR 0027's `Tag` enum is this table, row
+for row.
 
 | Tag                   | Component                                     |
 | --------------------- | --------------------------------------------- |
@@ -109,6 +116,7 @@ subsystems that nEVR annotates.
 | `[NEVR.TELEMETRY]`    | Telemetry streamer (WebSocket, snapshots)     |
 | `[NEVR.XPID]`         | Platform-identity patches (DSC provider)      |
 | `[NEVR.CONFIG]`       | Config loading, service redirects             |
+| `[NEVR.STOP]`         | A command line the run is refused for: the stop line (JSON), exit code 64 |
 | `[NEVR.CRASH]`        | Crash recovery, dump, longjmp                 |
 | `[NEVR.AUTH]`         | Token acquisition, device-code flow, refresh  |
 | `[NEVR.CDN]`          | Asset CDN download and override              |
@@ -123,8 +131,11 @@ subsystems that nEVR annotates.
 | `[NEVR.MENU]`         | Menu text the runtime sets: the nEVR version on the menu's versions panel (`patch/menu_version_label.h`) |
 | `[NEVR.SPLASH]`       | A button press skips the splash screen: the Continue element going live, each skip with the button id and how long the button was live (`patch/splash_skip.h`) |
 | `[NEVR.UITEXTURE]`    | UI, splash and menu textures at their top mip: one line per UI texture naming the mip requested (`patch/ui_texture_mips.h`) |
+| `[NEVR.UI]`           | The UI text writer (`patch/ui_text.h`, `patch/ui_text_writer.h`, #896): `text writer ready`/`off` with the three pins, one `text written` or `text dropped` line per request with `actor`, `element`, `bytes` and `attempts`, and `text first write` with the writing thread and the game-loop thread. A text is never logged, only its size |
 | `[NEVR.INVITE]`       | Invite codes for the CREATE GAME / JOIN VIA CODE wizard (`patch/invite_wizard.h`, ADR 0017): a code is never logged, only `code_len` and `code_fp` |
+| `[NEVR.RENDER]`       | The render configuration of a PC client: one `render_config` line at the first rendered frame and one for every change, with the GPU, headset, refresh rate, render target and the game's graphics settings, plus the hooks' own install lines and a one-time `settings_trace` line (`patch/render_config.h`, `patch/render_config_hook.h`, ADR 0022) |
 | `[NEVR.HOST]`         | The `BugSplat64.dll` host's own JSONL records (`nevr-bootstrap.jsonl`): attach decisions, runtime load, crash dump. The value of the record's `tag` field; the host writes no `Log()` line |
+| `[NEVR.INSTALL]`      | The core installer's own JSONL run log (`installer/`, ADR 0023): one record per event, appended, never truncated; the value of the record's `tag` field. Never carries a token or a response body |
 | `[server_timing]`     | Server tick-rate / timing patches             |
 
 **Rule:** If you add a new component, add its tag to this table. If you
@@ -172,18 +183,23 @@ for review.
 
 ## Rules
 
+The printf examples in these rules show what a record carries, in the form
+the code uses today. Each `key=value` token in them is a field, which the
+structured call (ADR 0027) writes as its own JSON key with its own type,
+and the leading tag is the record's `tag` key.
+
 ### Rule 1: Every log line is a structured claim
 
-Every log line carries four fields. A log line missing any of these is
+Every record carries four things. A record missing any of these is
 **naked** and is noise.
 
 1. **WHAT** — the event that occurred (connected, disconnected, failed,
-   registered, injected, redirected, loaded, crashed).
-2. **WHERE** — the subsystem tag (see Subsystem Tags table).
+   registered, injected, redirected, loaded, crashed): the record's `event`.
+2. **WHERE** — the subsystem tag (see Subsystem Tags table): the record's `tag`.
 3. **IDENTIFIER** — the traceable entity (connection index, session ID,
-   XPID, server ID, request ID, module name, URI).
+   XPID, server ID, request ID, module name, URI): a field.
 4. **OUTCOME** — the result (success/error code, bytes transferred, old
-   state -> new state, duration, count).
+   state -> new state, duration, count): a field.
 
 ```cpp
 // BEFORE (naked — no identifier, no outcome)
@@ -192,6 +208,10 @@ Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Connected to server");
 // AFTER (carries WHAT=connected, WHERE=[NEVR.GAMESERVER], ID=uri, OUTCOME=success)
 Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] websocket connected uri=%s conn_id=%d",
     uri, connIndex);
+
+// AFTER, structured (ADR 0027): the event, the tag and each field are JSON keys
+Log(Level::Info, Tag::GameServer, "websocket_connected",
+    {Str("uri", RedactUrlForDiagnostics(uri)), Int("conn_id", connIndex)});
 ```
 
 **Where:** This rule applies to every `Log()` call site.
@@ -347,16 +367,20 @@ just started failing" without a baseline.
 
 ### Rule 7: The Log() function is the single entry point
 
-`Log(EchoVR::LogLevel::level, "format %d", val)` from
-`src/core/logging.h` declares the mechanism. This standard defines WHAT
-goes in the format string and what level to use. No other output
-mechanism is permitted.
+`Log()` in `src/core/logging.h` is the mechanism: the structured form of
+ADR 0027, and the printf form `Log(EchoVR::LogLevel::level, "format %d", val)`
+for a call site not yet migrated. This standard defines what a record
+carries and what level to use. No other output mechanism is permitted.
 
 ```cpp
 // Good — uses Log(), carries all four fields
 Log(EchoVR::LogLevel::Info,
     "[NEVR.GAMESERVER] registration response server_id=%llu ip=%s",
     (unsigned long long)serverId, ipAddress.c_str());
+
+// Good — the same record, structured (ADR 0027); a 64-bit id is a string
+Log(Level::Info, Tag::GameServer, "registration_response",
+    {Id("server_id", serverId), Str("ip", ipAddress)});
 
 // Good — uses FatalError for unrecoverable termination
 FatalError("Required module missing", "ws_bridge");
@@ -368,24 +392,29 @@ OutputDebugStringA("got here");
 std::cerr << "failed" << std::endl;
 ```
 
-### `Log()` does not emit JSON, and that is a decision — not an omission
+### A record's fields are JSON keys (ADR 0027)
 
-`FormatJsonLogEntry` is declared in `src/core/logging.h` and defined in
-`src/core/logging.cpp`. It is called from
-nowhere in production (the only other reference is a test stub). `Log()` routes
-by boot phase: during the boot phase (Rule 12) it reports through the boot tee;
-after it, to the game's own `EchoVR::WriteLog`, falling back to
-`vfprintf(stderr)` only before the game logger exists.
+A record SHALL be one JSON object on one line: the header keys `schema`, `ts`,
+`run` (N80), `level`, `tag` and `event`, an optional `msg`, then each field as
+its own key with its own JSON type. A field SHALL NOT be written as text, as
+`key=value` text or as JSON inside `msg`; `msg` is a literal sentence that
+states the consequence (Category G), never data. The run log is the one file
+stream (the built-in filter, `src/runtime/log/builtin_filter.cpp`); the console
+line is a rendering of the record, not a second log.
 
-So nEVR lines go through the game's logger and appear in its stream, rather than
-being emitted as a second, parallel JSON format. Do not wire `FormatJsonLogEntry`
-into `Log()` on the assumption it was left half-done: it would double every log
-line.
+The reason: a record whose subsystem, event and identifiers are prose inside
+`msg` can be read only by a regex, and its values have no types. journald's
+field list says its `MESSAGE=` "is not supposed to be parsed for metadata", and
+the OpenTelemetry log data model keeps a record's Body apart from its
+Attributes. ADR 0027 gives the schema, the call, the console rendering, the
+migration of every `Log()` call and the prior art.
 
-**Structured JSONL does ship, from a different place**: the built-in filter writes
-a per-run JSONL file (`src/runtime/log/builtin_filter.cpp`), and its schema is NOT
-the one `FormatJsonLogEntry` produces — it carries a `run` field and has no
-`caller` field.
+Today the run log's records (`WriteFileRecord`) carry `ts`, `run` and `level`
+and put the whole line in `msg`, and our lines reach that file through the
+game's logger (`EchoVR::WriteLog`, captured by the filter's `CLog::PrintfImpl`
+hook). ADR 0027's first stage adds the header keys and writes our records
+without the game's logger; each migration then moves a call's fields out of
+`msg`.
 
 ### Rule 8: State transitions log FROM -> TO
 
@@ -490,7 +519,9 @@ nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] info; installing crash recovery hooks
 
 The level prefix (`debug;`, `info;`, `warn;`, `error;`) bridges the gap
 until the game logger is usable. After the boot phase, all output SHALL use
-`Log()`: `TeeFprintf` is a bootstrap mechanism only.
+`Log()`: `TeeFprintf` is a bootstrap mechanism only. A structured record
+(ADR 0027) carries its level in its `level` key and has no prefix; the prefix
+belongs to printf text only, and goes with it.
 
 ### Rule 13: INFO is summary, DEBUG is narrative
 
@@ -533,15 +564,19 @@ the same commit. The sensor exists to prevent *drift*, not to prevent
 ### Rule 15: Plugins log through the host
 
 A plugin's lines go to the host's `Log()` through `ctx->log` (`NevrLogFn` in
-`src/extension/plugin_interface.h`, API v6), so they reach the same file, the same filter and the
+`sdk/include/nevr/plugin_interface.h`, API v6), so they reach the same file, the same filter and the
 same level control as the host's own lines. A plugin does not write to stderr, which the host does not
-collect, and does not open its own log file. `plugins/common/include/plugin_logger.h` is the way to
+collect, and does not open its own log file. `sdk/include/nevr/plugin_logger.h` is the way to
 call it (`PluginLogBind(ctx)` in init, then `PluginLog`, `PluginLogWarning`, `PluginLogError`,
 `PluginLogDebug` or `PluginLogFields`).
 
 - **Tag and identity.** The host writes `[NEVR.PLUGIN] plugin=<id> <message> <key>=<value> ...`. `<id>`
   is the host's name for the plugin (the `name` of its `config.yaml` entry), not text the plugin
   chooses, so one plugin cannot write as another and an operator can filter on `plugin=`.
+- **In the file.** Today that line is one `Log()` text. Under ADR 0027 the record carries `tag`
+  `NEVR.PLUGIN`, `plugin` (the id, set by the host), `event` `plugin_line`, the message as `msg` and
+  each field as its own key with a string value; the console line stays as shown above, and the
+  plugin ABI does not change.
 - **Level.** The plugin names one of `NEVR_LOG_DEBUG`, `NEVR_LOG_INFO`, `NEVR_LOG_WARNING`,
   `NEVR_LOG_ERROR`; the Level Guidelines apply to a plugin as they do to the host. A level outside the
   range is logged as a warning that says so (`level_invalid=<n>`).
@@ -584,8 +619,11 @@ the tag `[NEVR.WS]` and the connection index (Rule 9):
   never read out.
 - **A frame the decode cannot read** is a Warning, `lobby <find request|join request|session success|session
   failure> could not be read conn=<n> payload_bytes=<n>`. Nothing is read past the frame's end.
-- **A client only.** A dedicated server logs every message of every frame at Info (`LogFrameMessages`), so these
-  lines are not written there.
+- **A client only, until `LogFrameMessages` moves to Debug.** On a dedicated server `LogFrameMessages` in
+  `src/runtime/compat/ws_bridge.cpp` logs every message of every frame at Info, and these records are not written
+  there. That Info is on a per-connection path, which "You SHALL NOT" forbids, and the reason its comment gives (a
+  server's message traffic is sparse) is stated without a measurement. The hot-path rule governs: ADR 0027's migration moves
+  `LogFrameMessages` to Debug on a server as on a client, and these records are then written on a server too.
 - **Rate.** The bridge cannot bound how often the game sends a request: its party-follow loop runs from the
   game's own update. Each kind (find, join, success, failure) writes at most 10 records per 10 s window and
   counts the rest. The next lobby frame of any kind after the window ends writes
@@ -605,7 +643,8 @@ the tag `[NEVR.WS]` and the connection index (Rule 9):
 
 These examples are drawn from actual code in the repository. The BEFORE
 column shows the current log line; the AFTER column shows the corrected
-form.
+form, in the printf form; each `key=value` token in an AFTER is a field the
+structured call (ADR 0027) writes as its own key.
 
 | Context | BEFORE | AFTER |
 | ------- | ------ | ----- |
@@ -655,17 +694,17 @@ failing any of these checks is rejected until the violation is fixed.
 
 | Problem                                      | Why It's a Stop                   | Fix                                                   |
 | -------------------------------------------- | --------------------------------- | ----------------------------------------------------- |
-| No subsystem tag                             | Can't trace to component          | Add `[NEVR.COMPONENT]` prefix                         |
-| No identifier                                | Can't correlate events            | Add conn=%d, xpid=%s, session_id=%s, or equivalent    |
+| No subsystem tag                             | Can't trace to component          | Give the call its tag (a printf call: the `[NEVR.COMPONENT]` prefix) |
+| No identifier                                | Can't correlate events            | Add a field: `conn`, `xpid`, `session_id`, or equivalent |
 | No outcome                                   | Can't tell if it worked           | Add success/error code, state transition, or count    |
 | XPID not logged at login                     | Can't identify connecting user    | Log the full XPID string                              |
 | Hook failure at DEBUG or not logged          | Silent regression in coverage     | Log at WARNING with VA + expected + actual            |
 | State transition without FROM state          | Can't diagnose stuck state        | Log old_state -> new_state                            |
 | Error without error code                     | Not actionable                    | Add GetLastError(), HRESULT, or status code           |
 | INFO in any hot path or per-item detail       | Floods the log                    | Demote to DEBUG; emit one INFO summary line instead.  |
-| printf/fprintf/cerr instead of Log()         | Bypasses structured logging       | Use Log() from logging.h.  Exception: `nevr_boot_log_tee::TeeFprintf` before the game logger exists (Rule 11). |
+| printf/fprintf/cerr instead of Log()         | Bypasses structured logging       | Use Log() from logging.h.  Exception: `nevr_boot_log_tee::TeeFprintf` before the game logger exists (Rule 12). |
 | Game-native line without an nEVR annotation  | Noise                             | Suppress or wrap with structured fields               |
-| Free-text message with no key=value fields   | Not machine-parseable             | Use key=value format for identifiers and outcomes     |
+| Identifiers or outcomes only as message text, or JSON or `key=value` text inside `msg` | A reader must regex them out; no types | Pass each as a typed field (ADR 0027); until the call is migrated, a `key=value` token |
 | Config value not logged at load              | Configuration is invisible        | Log at INFO with key + value                          |
 | Event with no consequence stated (G)         | Reader can't tell why it matters  | State the "so what," not just the "what"               |
 | Field name doesn't match its type (H)        | Misleads at a glance, invites bugs | Rename the field or fix the representation             |
@@ -724,6 +763,9 @@ Log(EchoVR::LogLevel::Debug, "[NEVR.WS] frame forwarded success=%d", ok);
 
 // AFTER — the name and the representation agree
 Log(EchoVR::LogLevel::Debug, "[NEVR.WS] frame forwarded success=%s", ok ? "true" : "false");
+
+// AFTER, structured (ADR 0027) — a JSON true or false
+Log(Level::Debug, Tag::Ws, "frame_forwarded", {Bool("success", ok)});
 ```
 
 Watch especially for the same field NAME used for two different semantic
@@ -846,4 +888,6 @@ Log(EchoVR::LogLevel::Warning,
 - **`AGENTS.md`** — project conventions, `Log()` usage, subsystem architecture,
   and the C++ Mingw Addendum's structured-output rule.
 - **`src/core/logging.h`** — `Log()` and `FatalError()` declarations.
-- **`src/core/logging.cpp`** — `Log()` implementation, `FormatJsonLogEntry`.
+- **`src/core/logging.cpp`** — `Log()` implementation.
+- **`docs/adr/0027-structured-logging.md`** — the record schema, the structured `Log()` call, the console
+  rendering and the migration of every `Log()` call.

@@ -15,7 +15,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "abi/symbol_hash.h"
+#include "nevr/symbol_hash.h"
 #include "runtime/server/telemetry_game_status.h"
 #include "runtime/server/telemetry_snapshot.h"
 

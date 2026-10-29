@@ -1,11 +1,11 @@
 /* SYNTHESIS -- custom tool code, not from binary */
 /*
- * Built-in log filter — adapted from plugins/log-filter for direct compilation
- * into gamepatches.dll. Hooks CLog::PrintfImpl to provide structured, filtered
- * log output with suppression, truncation, ANSI color, JSONL file output, and
- * file rotation.
+ * Built-in log filter, compiled into the runtime. Hooks CLog::PrintfImpl to
+ * provide structured, filtered log output with suppression, truncation, ANSI
+ * color, JSONL file output, and file rotation. The loader refuses the old
+ * log_filter.dll plugin by name (N89).
  *
- * Differences from the plugin version:
+ * Unlike a plugin:
  *   - No NvrPlugin* exports (built-in, not dynamically loaded)
  *   - No MH_Initialize/MH_Uninitialize (gamepatches core owns MinHook lifecycle)
  *   - No MH_DisableHook(MH_ALL_HOOKS) (would kill all hooks process-wide)
@@ -15,12 +15,14 @@
 #include "runtime/log/builtin_filter.h"
 #include "runtime/log/symcache.h"
 #include "core/json_escape.h"
+#include "core/nevr_root.h"
 #include "core/logging.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/log/boot_log_tee.h"
 #include "runtime/log/boot_replay.h"
 #include "runtime/log/game_line_format.h"
 #include "runtime/log/gpu_hung_notice.h"
+#include "runtime/log/rate_limiter.h"
 #include "core/globals.h"
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/crash_recovery.h"
@@ -47,9 +49,9 @@
 #include <sys/stat.h>
 #endif
 
-#include "address_registry.h"
-#include "nevr_common.h"
-#include "yaml_config.h"
+#include "nevr/pc/address_registry.h"
+#include "nevr/pc/nevr_common.h"
+#include "nevr/yaml_config.h"
 
 /* ------------------------------------------------------------------ */
 /* Log levels (from CLog.h ELogLevel)                                  */
@@ -395,7 +397,7 @@ static LogFilterConfig MakeDefaultConfig() {
         // of a REAL, allowed process exit. A rule that cannot tell a suppressed exit
         // from a real one is not a noise rule. NEVR lines are now exempt from these
         // patterns (ShouldSuppress/N77) and the volume is handled by rate-limited
-        // summarisation (RateCheck/N78), which collapses the run into a counted line
+        // summarisation (RateLimiter/N78), which collapses the run into a counted line
         // instead of erasing the event.
 
         // Graphics settings block — irrelevant for headless server, repeated at
@@ -601,16 +603,12 @@ static void RotateIfNeeded() {
 
 static std::string GetDefaultLogDir() {
 #ifdef _WIN32
-    // %LOCALAPPDATA%\EchoVR\logs — proper var directory, not application dir
-    char buf[MAX_PATH];
-    DWORD len = GetEnvironmentVariableA("LOCALAPPDATA", buf, MAX_PATH);
-    if (len > 0 && len < MAX_PATH) {
-        std::string dir(buf, len);
-        dir += "\\EchoVR";
-        CreateDirectoryA(dir.c_str(), nullptr);
-        dir += "\\logs";
-        CreateDirectoryA(dir.c_str(), nullptr);
-        return dir;
+    // %LOCALAPPDATA%\nevr\echovr\logs (core/nevr_root.h, ADR 0012): the nevr root, never the original game's EchoVR folder
+    const std::string root = nevr_root::RootA();
+    if (!root.empty()) {
+        const std::string dir = nevr_root::LogsDir(root);
+        if (nevr_root::EnsureDirectoryTree(dir)) return dir;
+        BlfLog("could not create the log folder %s; falling back to the game folder", dir.c_str());
     }
     // Fallback: module directory (shouldn't happen but be safe)
     char mod_path[MAX_PATH];
@@ -786,79 +784,8 @@ static bool ShouldSuppress(const char* message, uint32_t level) {
  * would deadlock the crash path, see N70).
  */
 
-static constexpr uint32_t kRateWindowSec = 5;
-static constexpr uint32_t kRateThreshold = 3;   /* allow this many per window, then collapse */
-static constexpr size_t   kRateTableSize = 128;
-
-struct RateEntry {
-    uint64_t hash = 0;
-    uint64_t window_start = 0;
-    uint32_t seen = 0;        /* total occurrences this window */
-    uint32_t emitted = 0;     /* how many we let through this window */
-    char     sample[128] = {};
-};
-
-static RateEntry g_rate[kRateTableSize];
-static std::mutex g_rate_mutex;
-
-/* FNV-1a over the message with digit runs folded to a single 0x01 sentinel, so
- * lines differing only in counters/IDs share an identity. */
-static uint64_t NormalizedHash(const char* s, int len) {
-    uint64_t h = 1469598103934665603ULL;
-    bool in_digits = false;
-    for (int i = 0; i < len; i++) {
-        unsigned char c = static_cast<unsigned char>(s[i]);
-        if (c >= '0' && c <= '9') {
-            if (in_digits) continue;
-            in_digits = true;
-            c = 0x01;
-        } else {
-            in_digits = false;
-        }
-        h ^= c;
-        h *= 1099511628211ULL;
-    }
-    return h;
-}
-
-enum class RateVerdict { Emit, Collapse };
-
-/* Decides whether this line is emitted or folded into a counter. When a window
- * closes with folded lines, `out_summary` is filled with the summary to emit. */
-static RateVerdict RateCheck(const char* msg, int len, char* out_summary, size_t summary_cap) {
-    out_summary[0] = '\0';
-    const uint64_t h = NormalizedHash(msg, len);
-    const uint64_t now = GetEpochSeconds();
-
-    std::lock_guard<std::mutex> lock(g_rate_mutex);
-    RateEntry& e = g_rate[h % kRateTableSize];
-
-    /* Different line hashing to this slot, or the window has expired: close out the
-     * previous occupant first (emitting its summary if it collapsed anything). */
-    if (e.hash != h || now - e.window_start >= kRateWindowSec) {
-        if (e.hash != 0 && e.seen > e.emitted) {
-            snprintf(out_summary, summary_cap,
-                     "[NEVR.LOGFILTER] repeated count=%u window_s=%llu msg=\"%s\"",
-                     e.seen - e.emitted,
-                     static_cast<unsigned long long>(now - e.window_start),
-                     e.sample);
-        }
-        e.hash = h;
-        e.window_start = now;
-        e.seen = 0;
-        e.emitted = 0;
-        int copy = len < static_cast<int>(sizeof(e.sample)) - 1 ? len : static_cast<int>(sizeof(e.sample)) - 1;
-        memcpy(e.sample, msg, static_cast<size_t>(copy));
-        e.sample[copy] = '\0';
-    }
-
-    e.seen++;
-    if (e.emitted < kRateThreshold) {
-        e.emitted++;
-        return RateVerdict::Emit;
-    }
-    return RateVerdict::Collapse;
-}
+using nevr_rate_limiter::RateVerdict;
+static nevr_rate_limiter::RateLimiter g_rate;
 
 static int ApplyTruncation(const char* message, int len) {
     for (const auto& rule : g_config.truncate_rules) {
@@ -866,6 +793,9 @@ static int ApplyTruncation(const char* message, int len) {
             if (len > rule.max_length) return rule.max_length;
         }
     }
+    // A `[NEVR.` line is ours and bounded by the Log buffer, and a record cut at 500 bytes loses its last fields (#1139: the
+    // render_config line was cut inside adaptive_min). The cap is for game lines.
+    if (IsNevrLine(message)) return len;
     if (g_config.max_line_length > 0 && len > g_config.max_line_length) {
         return g_config.max_line_length;
     }
@@ -936,33 +866,6 @@ static void EmitLine(uint32_t level, const char* message, int len) {
     g_emitted_count++;
 }
 
-/* Emits the `repeated count=` summary of every rate slot that folded lines and whose
- * window has closed (`all` false), or of every such slot (`all` true, shutdown), then
- * clears the slot's counts. RateCheck only closes a window when a later line lands on
- * the same slot, so a run that goes quiet would otherwise never report its count (#894).
- * Each summary is built under g_rate_mutex and written after it is released, because
- * EmitLine takes g_file_mutex. */
-static void FlushRateSummaries(bool all) {
-    const uint64_t now = GetEpochSeconds();
-    for (size_t i = 0; i < kRateTableSize; i++) {
-        char summary[256];
-        {
-            std::lock_guard<std::mutex> lock(g_rate_mutex);
-            RateEntry& e = g_rate[i];
-            if (e.hash == 0 || e.seen <= e.emitted) continue;
-            if (!all && now - e.window_start < kRateWindowSec) continue;
-            snprintf(summary, sizeof(summary),
-                     "[NEVR.LOGFILTER] repeated count=%u window_s=%llu msg=\"%s\"",
-                     e.seen - e.emitted,
-                     static_cast<unsigned long long>(now - e.window_start),
-                     e.sample);
-            e.seen = 0;
-            e.emitted = 0;
-        }
-        EmitLine(LOG_LEVEL_INFO, summary, static_cast<int>(std::strlen(summary)));
-    }
-}
-
 /* ------------------------------------------------------------------ */
 /* N79 — filter health, emitted while the process is alive             */
 /* ------------------------------------------------------------------ */
@@ -993,6 +896,17 @@ static std::atomic<uint64_t> g_last_health_report{0};
 
 static void EmitLine(uint32_t level, const char* message, int len);  /* fwd */
 
+/* N78: a burst that goes quiet is reported by the same summary line a later repeat would have produced.
+ * Nothing else reads a slot once no line lands on it, so the health tick (`all` false: the windows that
+ * expired) and Shutdown (`all` true: the windows still open) close them out. Each summary is emitted
+ * outside the limiter's lock, so EmitLine's file lock never nests inside it. */
+static void FlushRateSummaries(bool all) {
+    char summary[256];
+    while (g_rate.TakePending(GetEpochSeconds(), all, summary, sizeof(summary))) {
+        EmitLine(LOG_LEVEL_INFO, summary, static_cast<int>(std::strlen(summary)));
+    }
+}
+
 /* N89 follow-up, second defect: this was called ONLY from inside the CLog hook.
  * When another module takes the CLog hook, our handler stops running — so the
  * health check stopped running too, and could never report the one failure it
@@ -1020,6 +934,8 @@ static void MaybeEmitHealth() {
 
     g_first_health_done.store(true, std::memory_order_relaxed);
 
+    FlushRateSummaries(false);  /* N78 */
+
     const uint64_t emitted = g_emitted_count.load(std::memory_order_relaxed);
     const uint64_t suppressed = g_suppressed_count.load(std::memory_order_relaxed);
     const uint64_t total = emitted + suppressed;
@@ -1036,10 +952,6 @@ static void MaybeEmitHealth() {
                            static_cast<unsigned long long>(gameLines),
                            kHealthIntervalSec);
     if (n > 0) EmitLine(LOG_LEVEL_INFO, line, n);
-
-    /* #894: a collapsed run that went quiet reports its count here, not only when a
-     * later line reuses its slot. */
-    FlushRateSummaries(/*all=*/false);
 
     /* Must be a RATE, not a total. Falsified: with the superseded plugin allowed
      * to load, the cumulative count sat at 13 — lines captured in the seconds
@@ -1171,7 +1083,7 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
     /* N78: collapse repeats instead of deleting them. A closing window emits its
      * summary first so the count appears adjacent to the run it describes. */
     char summary[256];
-    const RateVerdict verdict = RateCheck(buf, emit_len, summary, sizeof(summary));
+    const RateVerdict verdict = g_rate.Check(buf, emit_len, GetEpochSeconds(), summary, sizeof(summary));
     if (summary[0] != '\0') {
         EmitLine(LOG_LEVEL_INFO, summary, static_cast<int>(std::strlen(summary)));
     }
@@ -1340,6 +1252,6 @@ void nevr_builtin_log_filter::Shutdown() {
                static_cast<unsigned long long>(g_suppressed_count.load()));
     }
 
-    FlushRateSummaries(/*all=*/true);
+    FlushRateSummaries(true);  /* N78: before the file closes */
     ShutdownFileLogging();
 }

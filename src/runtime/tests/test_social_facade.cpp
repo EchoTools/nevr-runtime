@@ -36,6 +36,16 @@ TEST(SocialFacade, FlagOffRequestsOnlyTheAccessorHook) {
   EXPECT_EQ(nevr_social_facade::Select(true, &providerObject), &providerObject);
 }
 
+// #1280: a dedicated server is not a player; it keeps the game's null provider whatever social.facade says.
+TEST(SocialFacade, AServerIsNeverOfferedTheFacade) {
+  EXPECT_FALSE(nevr_social_facade::Wanted(true, true));
+  EXPECT_FALSE(nevr_social_facade::Wanted(false, true));
+  EXPECT_TRUE(nevr_social_facade::Wanted(true, false));
+  EXPECT_FALSE(nevr_social_facade::Wanted(false, false));
+  EXPECT_EQ(nevr_social_facade::Select(nevr_social_facade::Wanted(true, true), nullptr), nullptr)
+      << "a server's accessor returns the game's null provider";
+}
+
 TEST(SocialFacade, EnabledInstallPublishesEachTrampolineBeforeEnable) {
   std::vector<nevr_social_facade::Probe> requests;
   const auto fakeInstall = [&requests](nevr_social_facade::Probe probe) { requests.push_back(probe); };
@@ -525,6 +535,21 @@ TEST(SocialParty, RequestsHaveTheLengthsAndFieldsNakamaReads) {
   ASSERT_EQ(frame.size(), 24u + 40u);
   EXPECT_EQ(static_cast<std::uint8_t>(frame[0]), 0xf6);
   EXPECT_EQ(static_cast<std::uint8_t>(frame[16]), 40);
+}
+
+// #396 (presence_local): the publish is the local member's 0x20 header, the JSON length and the game's document.
+TEST(SocialParty, PresenceUpdateIsTheLocalMemberHeaderThenTheDocument) {
+  nevr_social_party::State state;
+  EXPECT_TRUE(state.PresenceUpdate(0x1234, "{}").empty());  // no local account yet: nothing to publish
+  state.SetSelf(1, "");
+  const std::string json = "{\"game_type\":\"echo_arena\",\"joinable\":true}";
+  const auto out = state.PresenceUpdate(0x1234, json);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].symbol, 0x1234u);
+  ASSERT_EQ(out[0].payload.size(), 0x20 + 4 + json.size());
+  EXPECT_EQ(std::memcmp(out[0].payload.data() + 8, nevr_social_party::MemberUuid(1).data(), 16), 0);
+  EXPECT_EQ(static_cast<std::uint8_t>(out[0].payload[0x20]), json.size());
+  EXPECT_EQ(out[0].payload.substr(0x24), json);
 }
 
 TEST(SocialParty, InvitingWithoutAPartyCreatesItFirstThenInvites) {
@@ -1430,6 +1455,29 @@ TEST(SocialFriends, FriendChangesAreRecognisedAndTheRefreshRepliesAreNot) {
   EXPECT_TRUE(nevr_social_roster::IsFriendChangeSymbol(0xc237c84c31d3ae05ULL));   // FriendAcceptNotify
   EXPECT_FALSE(nevr_social_roster::IsFriendChangeSymbol(0x26a19dc4d2d5579dULL));  // FriendStatusNotify
   EXPECT_FALSE(nevr_social_roster::IsFriendChangeSymbol(0xa78aeb2a4e89b10bULL));  // FriendListResponse
+}
+
+// A removed friend must leave the roster at once: until it does, the tablet hides the add-friend button for them.
+TEST(SocialRoster, ARemovedFriendLeavesTheRosterAtOnce) {
+  nevr_social_roster::Roster roster;
+  roster.BeginList(2);
+  roster.Notify(5, nevr_social_roster::kStatusOnline);
+  roster.Notify(6, nevr_social_roster::kStatusOffline);
+  ASSERT_EQ(roster.Count(), 2u);
+
+  const auto removal = StatusNotifyPayload(5, nevr_social_roster::kStatusOnline);
+  std::uint64_t id = 0;
+  EXPECT_FALSE(nevr_social_roster::ParseFriendRemoval(0x26a19dc4d2d5579dULL, removal.data(), removal.size(), &id));
+  EXPECT_FALSE(nevr_social_roster::ParseFriendRemoval(0xe06972f49cd72265ULL, removal.data(), 15, &id));
+  ASSERT_TRUE(nevr_social_roster::ParseFriendRemoval(0xe06972f49cd72265ULL, removal.data(), removal.size(), &id));
+  EXPECT_EQ(id, 5u);
+
+  EXPECT_TRUE(roster.Remove(5));
+  EXPECT_FALSE(roster.Remove(5));
+  EXPECT_EQ(roster.Count(), 1u);
+  std::uint64_t left = 0;
+  ASSERT_TRUE(roster.IdAt(0, &left));
+  EXPECT_EQ(left, 6u);
 }
 
 TEST(ScenarioProtocol, InjectsFriendNotifiesAndFiresAddFriend) {

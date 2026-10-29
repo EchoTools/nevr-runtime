@@ -712,6 +712,13 @@ TEST(NevrConfig, UnknownKeysUnderKnownSectionsAreCounted) {
   EXPECT_EQ(cfg.DuplicateKeyCount(), 0u);
 }
 
+// #1156: network.invite_codes is on the schema, so the key that turns the invite feature on is never flagged as unknown.
+TEST(NevrConfig, TheInviteCodesKeyIsOnTheSchema) {
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString("network:\n  invite_codes: true\n");
+  EXPECT_EQ(cfg.UnknownKeyCount(), 0u);
+  EXPECT_EQ(cfg.GetBool("network.invite_codes").value_or(false), true);
+}
+
 TEST(NevrConfig, ACleanFileCountsNothing) {
   const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
       "version: 1\nauth:\n  password: \"x\"\nnetwork:\n  regions: \"us-west\"\n");

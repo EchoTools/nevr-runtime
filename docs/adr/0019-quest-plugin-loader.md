@@ -7,7 +7,7 @@ Not yet observed on a headset: every behaviour below that depends on the Android
 ## Context
 
 The PC runtime has a plugin host. `LoadPlugins` (`src/runtime/ext/plugin_loader.cpp:1100`) loads each DLL the ordered
-`plugins:` list of `config.yaml` names, resolves the C ABI in `src/extension/plugin_interface.h` (API version 7), and
+`plugins:` list of `config.yaml` names, resolves the C ABI in `sdk/include/nevr/plugin_interface.h` (API version 7), and
 runs the plugin's init inside the game process. Plugins on PC are gated by the signature mode in ADR 0010.
 
 The Quest build has no plugin host:
@@ -26,7 +26,7 @@ The Quest build has no plugin host:
 The question this record answers: how a separately built artifact can load into the Quest process and hook the game
 under the same rules the sentinel already follows (build-ID pins, checked writes, one owner per slot, loud failure),
 without each plugin carrying its own hook engine. The PC ABI already names that failure mode: `NEVR_PLUGIN_CAP_HOOKS_ENGINE`
-exists because a second copy of a hook engine does not share the host's table (`src/extension/plugin_interface.h:259-260`).
+exists because a second copy of a hook engine does not share the host's table (`sdk/include/nevr/plugin_interface.h:259-260`).
 
 ## Decision
 
@@ -48,7 +48,7 @@ Summary of the recommendations. Each has alternatives and a reason in its sectio
    only, never code), and (iv) an inline backend, not in v1. One owner per slot, no chaining in v1, one process-wide lock.
 6. **Helpers.** The host offers the three things that need host state: a fault-tolerant read, a game-thread tick
    (multiplexed over the one `CR15NetGame::Update` hook the sentinel already holds), and a module-base resolver. Pure
-   helpers live in a header-only `plugins/`-style library that the host does not need to run.
+   helpers live in the header-only plugin SDK (`sdk/`), which the host does not need to run.
 7. **Version pinning.** A plugin declares the libr15 build IDs it supports through a new optional export. The loader
    refuses every other build with one line, before init. The host refuses a plugin hook target that carries no build ID.
 8. **Content.** Plugins carry no game-derived bytes. Game-derived data is generated on the device from the owner's own
@@ -71,7 +71,10 @@ Summary of the recommendations. Each has alternatives and a reason in its sectio
 **Recommendation (R1).** Plugins are shared objects in the APK's `lib/arm64-v8a`, named `lib<name>.so`. The repack
 recipe (`justfile:174-214`) already copies two `.so` files into that directory with `zip -q -0`, then signs the APK. A
 plugin is one more entry in that list, and each plugin object runs the same static-init check as the shim
-(`justfile:124-131` runs `tools/check_quest_static_init.sh` on the shim today; the plugin list would run it too).
+(`tools/check_quest_static_init.sh --plugin`, run by the repack on every plugin it packages: only the two compiler-rt
+entries may run at load time). The repack refuses a plugin whose file name is the name of any `lib/` entry of the store
+APK or of a library it stages itself, and checks in the signed APK that every store library (the loader aside) and every
+staged library has its bytes (`tools/quest_repack_libs.py`).
 
 The loader finds the directory from the sentinel's own mapping, not from JNI. `dladdr` on the constructor
 (`nevr_sentinel_ctor`, `src/quest/sentinel/entry.cpp:151`) returns the path the linker mapped the sentinel from; its
@@ -115,8 +118,9 @@ else is not loaded in v1.
 (`src/core/nevr_config.cpp:264-281`): `name` (required), `file`, `enabled`, `required`, `early`, `target` (recorded,
 not acted on), `args` (flattened to dotted keys, string values). The Quest loader differs in three ways:
 
-- `file` is a basename only. A path separator in `file` is a refusal with reason `file_outside_directory`. This mirrors
-  the PC check `PluginFileStaysInDirectory` (`src/runtime/ext/plugin_loader.cpp`, `StageOne`).
+- `file` is a basename only. A path separator, a NUL, an empty value, `.` or `..` in `file` is a refusal with reason
+  `file_outside_directory`. This mirrors the PC check `PluginFileStaysInDirectory` (`src/runtime/ext/plugin_loader.cpp`,
+  `StageOne`).
 - The default `file` is `lib<name>.so`, not `<name>.dll`. The parser's default (`nevr_config.cpp:265`) is a PC name,
   so the Quest plan computes its own default. The shared parser is not changed for this.
 - `required` on a client logs and continues. This is already the client rule in the reference config
@@ -180,7 +184,7 @@ on the game's `dlopen` slot.
 ## 4. The ABI
 
 **Recommendation (R4).** The existing C ABI is the base, with no changes to any existing signature or struct layout
-(`src/extension/plugin_interface.h:28-106`, `:108-176`). The exports a Quest plugin may provide are the optional set
+(`sdk/include/nevr/plugin_interface.h:28-106`, `:108-176`). The exports a Quest plugin may provide are the optional set
 the PC plugin already uses: `NvrPluginGetInfo` (required), `NvrPluginGetApiVersion`, `NvrPluginGetCapabilities`,
 `NvrPluginInitEx` or `NvrPluginInit`, `NvrPluginOnFrame`, `NvrPluginOnGameStateChange`, `NvrPluginShutdown`.
 `NvrPluginShutdown` is not relied on: Quest processes end by `_exit` at the end of `android_main` (ADR 0020), and the
@@ -286,7 +290,7 @@ The host offers what needs host state. A plugin-side library offers what does no
   game's thread, per the comments at `src/quest/sentinel/login_prompt_hook.cpp:99` and `:456`. The host does not add a
   second hook on that slot. Taking the slot over changes the login prompt code: Decision Q7 (section 13) moves the login prompt hook behind this tick, so the host owns the Update slot and dispatches.
 - **Module-base resolver (host).** `ModuleBase(soname)` through the existing loaded-image lookup (`got_hook.h:142`).
-- **Plugin-side library (no host state).** A header-only set, in the style of the PC `plugins/common` headers: bounded
+- **Plugin-side library (no host state).** A header-only set, in the plugin SDK (`sdk/include/nevr/`) beside the PC headers: bounded
   byte comparison, a fixed-width pointer read on a checked copy, string and key builders. No byte-signature scanner in
   v1. There is none in `src/quest` today (Evidence), and a scanner would be a second way to find an address, which
   the build-ID pin exists to prevent.
@@ -296,18 +300,23 @@ The host offers what needs host state. A plugin-side library offers what does no
 
 ## 7. Version pinning
 
-**Recommendation (R7).** A plugin declares the libr15 build IDs it supports through a new optional export,
-`NEVR_GetSupportedBuildIds`, returning a NUL-terminated list of lowercase hex IDs. The export lives in the plugin
-binary, so it is inside the APK signature. The loader compares the list with the running libr15's build ID, read from
-its ELF note (`ReadBuildId`, `src/quest/sentinel/got_hook.h:149`). The pinned value is `kLibR15BuildId`
-(`src/quest/sentinel/pinned_targets.h:29`).
+**Recommendation (R7).** A plugin declares the libr15 build IDs it supports as an ELF note in its own file
+(`NEVR_DECLARE_SUPPORTED_BUILD_IDS("<id> <id>")`, `sdk/include/nevr/plugin_interface.h`): owner `NEVR`, type 1, the text of
+lowercase hex IDs separated by spaces. It is data, not a function, because the loader must know the list before it maps
+the object: mapping runs the object's constructors, and a plugin must not run any of its code for a build it does not
+support. The loader reads the note from the file bytes it has already read and hashed (`SupportedBuildIdsOf`), inside the
+APK signature, and compares it with the running libr15's build ID, read from its ELF note (`ReadBuildId`,
+`src/quest/sentinel/got_hook.h:149`). The pinned value is `kLibR15BuildId` (`src/quest/sentinel/pinned_targets.h:29`). When libr15 is patched at build time, the loader compares the plugin's list with the plugin identity, not the live note (`docs/adr/0021-quest-libr15-patched-at-build-time.md`, section 12).
+The same file-bytes pass decides everything else that precedes `dlopen`: the file is readable (`file_unreadable`, no
+unchecked mapping), is an AArch64 shared object (`machine_type`) and declares the running build. A plugin that is
+mapped and then fails (`no_plugin_info`, `init_failed`, an exception) is `dlclose`d.
 
-- A plugin with no such export is refused on Quest with reason `build_ids_undeclared`. This is stricter than PC, where
+- A plugin with no such note is refused on Quest with reason `build_ids_undeclared`. This is stricter than PC, where
   an absent capability declaration means UNDECLARED and still loads (`plugin_interface.h:250-263`). Quest is stricter
   because a plugin's addresses are only valid for the build it names.
 - A mismatch is refused before init, with one line: `plugin_load outcome=refused reason=build_id_unsupported`, the game
   build ID, and the plugin's list. The game still starts (client rule, R2).
-- Adding an optional export needs no bump (`plugin_interface.h:183`).
+- The note is additive and Quest-only (the PC loader does not read it), so it needs no bump (`plugin_interface.h:183`).
 
 **Rules that hold regardless.** No address is used without a pin: a `GotTarget` with a null build ID is refused in the host
 API. A plugin's `SwapWord` or `CheckedWrite` target needs the same pin. This is the ADR 0003 identity gate (`docs/adr/0003-quest-networking-port.md:1276-1281`)
@@ -365,7 +374,7 @@ even if the sentinel has not installed it yet. From the file (`src/quest/sentine
 
 Shaped by AGENTS.md (logging is part of the work) and `docs/standards/logging.md` Rule 15 (`:525-555`).
 
-- **Plugin lines.** Through `ctx->log` (`src/extension/plugin_interface.h:69-70`) into the sentinel logger. Format
+- **Plugin lines.** Through `ctx->log` (`sdk/include/nevr/plugin_interface.h:69-70`) into the sentinel logger. Format
   `[NEVR.PLUGIN] plugin=<id> <message> <key>=<value> ...` (Rule 15, `logging.md:534-536`), so one filter works on every
   platform. The `plugin=` value is the host's name for the plugin (`ctx->plugin_id`), not text the plugin chooses.
   Lines reach logcat (tag `NEVR-Sentinel`) and `nevr-sentinel.log` (`docs/adr/0003-quest-networking-port.md:1801-1806`).
@@ -475,7 +484,7 @@ Any change to the PC loader or the ADR 0010 gate. The design of any game-data ge
   **Decision:** `SafeRead` validates the address against the loaded image's mapped segments before reading, and never
   installs a signal handler, because the crash reporter owns the fault path.
 - **Q9.** The bump policy in section 4: is "additive tail plus flag, no bump" the rule the maintainers want for Quest?
-  **Decision:** yes. An additive tail plus a flag with no bump, the same rule as PC (`src/extension/plugin_interface.h:183`).
+  **Decision:** yes. An additive tail plus a flag with no bump, the same rule as PC (`sdk/include/nevr/plugin_interface.h:183`).
 
 ## Consequences
 
@@ -501,7 +510,7 @@ Paths are repo-relative to the nevr-runtime tree. Line numbers were checked agai
 line moves, the symbol named beside it is the anchor.
 
 - Plugin host on PC and its ABI: `src/runtime/ext/plugin_loader.cpp:79` (`HostPluginLog`), `:123` (`BuildPluginManifestJson`), `:1100` (`LoadPlugins`);
-  `src/extension/plugin_interface.h:17-25` (export macro), `:28-34` (`NvrPluginInfo`), `:49-70` (log levels, `NevrLogFn`),
+  `sdk/include/nevr/plugin_interface.h:17-25` (export macro), `:28-34` (`NvrPluginInfo`), `:49-70` (log levels, `NevrLogFn`),
   `:78-97` (`NvrGameContext`, v5 and v6 tails), `:99-106` (host flags), `:108-128` (lifecycle, shutdown not guaranteed),
   `:141-176` (exports), `:178-220` (versioning, v5 to v7 notes), `:183` (additive exports need no bump), `:190-196` (no log before init),
   `:236-241` (capabilities are a declaration), `:249-264` (capability flags), `:259-260` (`HOOKS_ENGINE`), `:266-299` (assets).

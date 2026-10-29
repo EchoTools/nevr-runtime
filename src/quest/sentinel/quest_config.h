@@ -17,7 +17,7 @@
 // resolves, login when the bridge is on and `auth.server_key` resolves; the social facade is on unless
 // `social.facade` is false (PC's key and default) and still needs login here; its status names ride with it.
 // `social.send_presence_to_meta: false` answers the rich presence locally; `diagnostics.hardware_dump: true`
-// turns the hardware dump on, and `diagnostics.ui_event_probe` (on by default) sets the invite/party tab event (#318), and `diagnostics.clock_levels_override` (default true in this build) decides whether
+// turns the hardware dump on, and `diagnostics.ui_event_probe` (on by default) sets the invite/party tab event (#318), and `diagnostics.clock_levels_override` (default false) decides whether
 // the CPU and GPU clock levels libr15 asks VrApi for are raised from (2, 2) to (4, 4) (#928).
 // A feature whose prerequisite is off or missing is forced off with a logged reason.
 //
@@ -35,6 +35,7 @@
 #include <string>
 #include <vector>
 
+#include "core/nevr_config.h"
 #include "quest/sentinel/texture_quality.h"
 
 namespace nevr_quest {
@@ -77,16 +78,17 @@ struct Features {
   bool presenceNames = false;
   // Rich presence is not sent to Meta's platform service (#396, option b of #393): the presence object's
   // ShareData, RefreshDestinations and Clear are answered locally, so no group_presence request leaves (they
-  // fail for this APK's identity anyway). Friends' status comes from the game service, which derives it from
-  // the match. `social.send_presence_to_meta: false` turns it on; needs the social facade.
+  // fail for this APK's identity anyway). Each changed presence document the game sets is published to the NEVR
+  // session as SNSPresenceUpdateRequest instead (the server half is in nakama; a server without it drops the frame).
+  // `social.send_presence_to_meta: false` turns it on; needs the social facade.
   bool presenceLocal = false;
   // The invite/party tab event (#391, #318): the Invite Members and own-id Party slots also post the friends script
   // event, which switches the tablet to its Friends list. On by default; `diagnostics.ui_event_probe: false` turns it
   // off, and it needs the social facade.
   bool uiEventProbe = true;
-  // Raise the clock levels libr15 asks VrApi for from (2, 2) to (4, 4) (#928): `diagnostics.clock_levels_override`. The hook is
-  // installed and logs each call whatever this says; this decides whether it rewrites. No prerequisite. The struct's own
-  // default is off (an unresolved configuration rewrites nothing); the configuration's default is on.
+  // Raise the clock levels libr15 asks VrApi for from (2, 2) to (4, 4) (#928): `diagnostics.clock_levels_override`. The
+  // render-configuration hook's handler reports the levels whatever this says; this decides whether it rewrites them. No
+  // prerequisite. Off by default, in the struct and in the configuration: it stays off until a headset A/B shows a benefit.
   bool clockLevels = false;
 };
 
@@ -110,6 +112,9 @@ struct ResolvedConfig {
   Features requested;  // what the file and the defaults ask for
   Features effective;  // requested, after prerequisite checks
   TextureChoice textureQuality;
+  // The file's `plugins:` list as the PC parser read it (#438); empty when the file is absent or rejected. The plugin loader
+  // plans from it (quest/plugin/plugin_runtime.h).
+  std::vector<nevr::PluginSpec> plugins;
 };
 
 struct LoadResult {

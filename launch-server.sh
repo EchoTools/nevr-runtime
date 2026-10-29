@@ -14,14 +14,17 @@ acquire_game_run_lock
 
 # Deploy the current build (not dist/ — dist/ goes stale; build/ is always fresh).
 echo "=== Deploying from build/mingw-release/bin/ to $GAME_DIR ==="
-# The runtime first: the host (BugSplat64.dll) loads nevr-runtime.dll from this directory and stops the game
-# when it is not there.
-cp -v build/mingw-release/bin/nevr-runtime.dll "$GAME_DIR/"
+# The runtime first: the host (BugSplat64.dll) loads nevr-runtime.dll from the nevr root of the prefix's Windows
+# user (ADR 0012, src/core/nevr_root.h), not from this directory, and stops the game when it is not there.
+NEVR_ROOT_DIR="$GAME_ROOT/echovr/.wineprefix/drive_c/users/$(id -un)/AppData/Local/nevr/echovr"
+mkdir -p "$NEVR_ROOT_DIR"
+cp -v build/mingw-release/bin/nevr-runtime.dll "$NEVR_ROOT_DIR/"
 cp -v build/mingw-release/bin/BugSplat64.dll "$GAME_DIR/"
 # platform_compat and token_auth are statically linked into nevr-runtime.dll.
 if ls build/mingw-release/bin/plugins/*.dll >/dev/null 2>&1; then
-  mkdir -p "$GAME_DIR/plugins"
-  cp -rv build/mingw-release/bin/plugins/* "$GAME_DIR/plugins/"
+  # Plugins load from the nevr root's plugins\, never from the game directory (ADR 0012).
+  mkdir -p "$NEVR_ROOT_DIR/plugins"
+  cp -rv build/mingw-release/bin/plugins/* "$NEVR_ROOT_DIR/plugins/"
 fi
 
 export WINEPREFIX="$GAME_ROOT/echovr/.wineprefix"

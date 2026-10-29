@@ -11,6 +11,8 @@ void TestHook_SetDeregisterWaitMs(unsigned ms);
 unsigned long long TestHook_DeregisterTimeouts();
 void TestHook_RunResourceCallback(void* callback_data);
 void TestHook_CloseResourceOverrides();
+/// The address of the 8-byte slot that holds the memory-context pointer of the game (nullptr: the game has none).
+void TestHook_SetMemoryContextSlot(void* const* slot);
 #endif
 
 /// Where the fail-closed path (a callback deregistering its own replacement) leaves its one line before it
@@ -38,6 +40,20 @@ void InstallResourceOverride();
 void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
                               const void* data, uint64_t size,
                               const char* label);
+
+/// What a transform returns for a resource: `original` and `original_size` are the buffer the game delivered, and a
+/// transform that wants to serve other bytes sets `*out` and `*out_size` and returns true. The bytes it returns
+/// must stay valid and unchanged for the rest of the process (the game keeps reading them after the callback).
+/// Returning false leaves the game's own buffer in place. It runs on the game's resource thread, outside the
+/// registry lock; it must not throw.
+using ResourceTransformFn = bool (*)(const void* original, uint64_t original_size, const void** out,
+                                     uint64_t* out_size, void* user);
+
+/// Register a transform for a resource (type 0 = any type): unlike an override, which replaces the buffer once, a
+/// transform sees the game's buffer on every load of that resource, so it can build its answer from the player's
+/// own data and serve it again when the resource loads again. Only the primary buffer (index 0) is offered.
+void RegisterResourceTransform(uint64_t type_hash, uint64_t name_hash, ResourceTransformFn transform, void* user,
+                               const char* label);
 
 /// Register a file-based override (loaded from disk, memory owned by the registry).
 void RegisterResourceOverrideFromFile(uint64_t type_hash, uint64_t name_hash,

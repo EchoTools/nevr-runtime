@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <exception>
@@ -705,10 +706,52 @@ std::string SerialHex(const CRYPT_INTEGER_BLOB& serial) {
   return first == std::string::npos ? "0" : hex.substr(first);
 }
 
+#if defined(NEVR_HOST_TESTING)
+std::atomic<EngineCreateFn> g_engineCreateForTest{nullptr};
+#endif
+
+BOOL CallEngineCreate(CERT_CHAIN_ENGINE_CONFIG* config, HCERTCHAINENGINE* engine) {
+#if defined(NEVR_HOST_TESTING)
+  if (const EngineCreateFn create = g_engineCreateForTest.load()) return create(config, engine);
+#endif
+  return CertCreateCertificateChainEngine(config, engine);
+}
+
+// The chain engine whose only trust anchor is `rootStore` (hExclusiveRoot; dwExclusiveFlags stays 0, so the pin
+// does not depend on the field that follows it). Windows' struct is 88 bytes on x64. Wine before 11.5 knows the
+// struct without dwExclusiveFlags (64 bytes, or 80 with the trailing members) and refuses any other cbSize with
+// E_INVALIDARG (WineHQ bug 59600), which refused the signed runtime on every Proton. On that one error the engine
+// is made once more at the size up to dwExclusiveFlags; that call carries the same hExclusiveRoot, so the engine
+// still trusts the pinned root alone. Any other error, or a second failure, is a refusal as before.
+// `cbSizeUsed` is the cbSize of the call that made the engine, for the log.
+bool CreatePinnedChainEngine(HCERTSTORE rootStore, HCERTCHAINENGINE* engine, uint32_t* cbSizeUsed, std::string* error) {
+  CERT_CHAIN_ENGINE_CONFIG config{};
+  config.cbSize = sizeof(config);
+  config.hExclusiveRoot = rootStore;
+  if (CallEngineCreate(&config, engine)) {
+    *cbSizeUsed = config.cbSize;
+    return true;
+  }
+  const DWORD firstError = GetLastError();
+  if (firstError != static_cast<DWORD>(E_INVALIDARG)) {
+    *error = "cannot make the chain engine: error " + std::to_string(firstError);
+    return false;
+  }
+  config.cbSize = static_cast<DWORD>(offsetof(CERT_CHAIN_ENGINE_CONFIG, dwExclusiveFlags));
+  if (CallEngineCreate(&config, engine)) {
+    *cbSizeUsed = config.cbSize;
+    return true;
+  }
+  *error = "cannot make the chain engine: error " + std::to_string(firstError) + ", and at " +
+           std::to_string(config.cbSize) + " bytes error " + std::to_string(GetLastError());
+  return false;
+}
+
 // Builds the chain of `cert` to the pinned root alone: the machine's root store is not consulted. `status` is
-// dwErrorStatus; the chain must also end in the pinned root certificate.
+// dwErrorStatus; the chain must also end in the pinned root certificate. `engineCbSize` is the struct size the
+// chain engine was made with.
 bool BuildChainToPinnedRoot(const CERT_CONTEXT* cert, HCERTSTORE additional, const Bytes& rootDer, int64_t atUnix,
-                            uint32_t* status, std::string* error) {
+                            uint32_t* status, std::string* error, uint32_t* engineCbSize) {
   Cert root(CertCreateCertificateContext(kEncoding, rootDer.data(), static_cast<DWORD>(rootDer.size())));
   if (!root) {
     *error = "the pinned root does not parse: error " + std::to_string(GetLastError());
@@ -719,14 +762,8 @@ bool BuildChainToPinnedRoot(const CERT_CONTEXT* cert, HCERTSTORE additional, con
     *error = "cannot make the root store: error " + std::to_string(GetLastError());
     return false;
   }
-  CERT_CHAIN_ENGINE_CONFIG config{};
-  config.cbSize = sizeof(config);
-  config.hExclusiveRoot = rootStore.get();
   HCERTCHAINENGINE rawEngine = nullptr;
-  if (!CertCreateCertificateChainEngine(&config, &rawEngine)) {
-    *error = "cannot make the chain engine: error " + std::to_string(GetLastError());
-    return false;
-  }
+  if (!CreatePinnedChainEngine(rootStore.get(), &rawEngine, engineCbSize, error)) return false;
   Engine engine(rawEngine);
   CERT_CHAIN_PARA para{};
   para.cbSize = sizeof(para);
@@ -853,8 +890,10 @@ TimestampResult CheckTimestamp(const Decoded& sig, const Bytes& pkcs7, const Pol
   }
   if (!KeyIsStrongEnough(ts.signer.get())) return fail(Reason::TimestampInvalid, "the time-stamp key is too weak");
   uint32_t status = 0;
+  uint32_t stampEngineCbSize = 0;
   std::string error;
-  if (!BuildChainToPinnedRoot(ts.signer.get(), ts.store.get(), policy.rootDer, result.genTime, &status, &error)) {
+  if (!BuildChainToPinnedRoot(ts.signer.get(), ts.store.get(), policy.rootDer, result.genTime, &status, &error,
+                              &stampEngineCbSize)) {
     return fail(Reason::TimestampInvalid, error);
   }
   if (status != 0) {
@@ -930,10 +969,14 @@ std::string ChainStatusNames(uint32_t status) {
 }
 
 namespace {
-std::atomic<bool> g_throwInVerify{false};
+#if defined(NEVR_HOST_TESTING)
+std::atomic<bool> g_throwInVerifyForTest{false};
+#endif
 
 Verdict VerifyImpl(HANDLE file, const Policy& policy, int64_t nowUnix) {
-  if (g_throwInVerify.load()) throw std::bad_alloc();
+#if defined(NEVR_HOST_TESTING)
+  if (g_throwInVerifyForTest.load()) throw std::bad_alloc();
+#endif
   Bytes data;
   std::string error;
   if (!ReadWholeFile(file, &data, &error)) return Refuse(Reason::Unreadable, error);
@@ -984,7 +1027,9 @@ Verdict VerifyImpl(HANDLE file, const Policy& policy, int64_t nowUnix) {
   const int64_t signedAt = stamp.present ? stamp.genTime : nowUnix;
 
   uint32_t status = 0;
-  if (!BuildChainToPinnedRoot(sig.signer.get(), sig.store.get(), policy.rootDer, signedAt, &status, &error)) {
+  uint32_t engineCbSize = 0;
+  if (!BuildChainToPinnedRoot(sig.signer.get(), sig.store.get(), policy.rootDer, signedAt, &status, &error,
+                              &engineCbSize)) {
     return Refuse(Reason::ChainStatus, error);
   }
   if (status != 0) {
@@ -1031,6 +1076,7 @@ Verdict VerifyImpl(HANDLE file, const Policy& policy, int64_t nowUnix) {
   Verdict ok;
   ok.reason = Reason::Accepted;
   ok.signingTime = stamp.present ? stamp.genTime : 0;
+  ok.engineCbSize = engineCbSize;
   return ok;
 }
 }  // namespace
@@ -1152,6 +1198,9 @@ bool ListDependencies(HANDLE file, Dependencies* out, std::string* error) {
   }
 }
 
-void TestHook_ThrowInVerify(bool enable) { g_throwInVerify.store(enable); }
+#if defined(NEVR_HOST_TESTING)
+void TestHook_ThrowInVerify(bool enable) { g_throwInVerifyForTest.store(enable); }
+void TestHook_SetEngineCreate(EngineCreateFn create) { g_engineCreateForTest.store(create); }
+#endif
 
 }  // namespace nevr_plugin_signature

@@ -144,6 +144,24 @@ The Rust program and the C# harness below do the same step as `fetch <base-url> 
 If step 2 fails on a pair you just fetched, fetch the pair again, twice, 3 seconds apart, before you report the failure:
 the two files are separate objects and a reader can catch them between two writes.
 
+## Quest APKs
+
+A release's Quest APK is not a GitHub asset. It is served from the same host and base as the manifest, in the release's
+version directory, with its SHA-256 beside it:
+
+```
+https://evr.echo.taxi/nevr-runtime/v<version>/nevr-runtime-v<version>-quest.apk
+https://evr.echo.taxi/nevr-runtime/v<version>/nevr-runtime-v<version>-quest.apk.sha256
+```
+
+The only host is `evr.echo.taxi`. A request for the APK under any other directory of that host (for example
+`nevr-runtime/quest/`) is a 404, and bare `echo.taxi` is not the host: it answers 200 with HTML for any path, so a 200
+from it proves nothing. A fetch counts only when it comes from `evr.echo.taxi`, is not a redirect, is not `text/html`, and
+has the size and SHA-256 you expected (the `.sha256` file holds one `sha256sum` line for the APK's name).
+
+`just publish-quest-apk vX.Y.Z` puts both files there and makes this check against the public host before it exits 0
+(RELEASING.md, "The Quest APK"). Nothing else writes to that location, and a published name is never overwritten.
+
 ## Step 2: the signature
 
 The signature is a minisign signature in the hashed mode (`ED`): Ed25519 over the BLAKE2b-512 hash of the file, plus a
@@ -1359,38 +1377,59 @@ its own: the size and sha256 are the whole check.
 
 ## What the PC host checks
 
-The host is `BugSplat64.dll`, the file the game imports. Its source is `src/runtime/host/`. What a player's
-machine does before it runs the runtime, as of this tree:
+The host is `BugSplat64.dll`, the file the game imports. Its source is `src/runtime/host/`. The runtime is a second
+file, `nevr-runtime.dll`, that the host loads. What a player's machine does before it runs the runtime, as of this tree:
 
 **Built**
 
-- The host (`src/runtime/host/`) is compiled into `BugSplat64.dll` together with the runtime
-  (`src/runtime/lifecycle/dllmain.cpp` passes the in-process runtime entry point to `nevr_host::OnProcessAttach`). There
-  is no separate runtime file to load today, so the host has nothing of that kind to verify.
+- The host is thin (`src/runtime/host/host_dllmain.cpp`): it carries the exports the game imports and hooks the game's
+  main wrapper, and the runtime is not linked into it. The runtime is a separate DLL whose entry point is
+  `src/runtime/lifecycle/dllmain.cpp`; the host loads it on the wrapper's first call (`nevr_host::OnProcessAttach`).
 - The host checks the game image before it hooks the game's main wrapper
   (`nevr_game_image_guard::IsSupportedGameModule`, called from `src/runtime/host/host_entry.cpp`) and validates the
   wrapper's prologue bytes before it writes the hook (`RuntimeRendezvous::Install` in
   `src/runtime/host/runtime_rendezvous.cpp`).
-- The host's file-load path (`nevr_host::RuntimeLoader::Load`, `src/runtime/host/runtime_load.cpp`) loads a runtime
-  DLL from the host's own directory, validates the runtime's ABI descriptor (`src/core/runtime_abi.h`, ABI major
-  `kMajor` = 1; a major mismatch is rejected) and then calls it. It does no signature or hash check, and the shipped
-  `BugSplat64.dll` does not use this path.
-- The runtime verifies **plugins**, not itself, before `LoadLibrary` (ADR 0010, `docs/adr/0010-signed-plugins-only.md`;
-  `src/runtime/ext/plugin_signature.cpp`, pins in `src/runtime/ext/plugin_trust.cpp`): an embedded Authenticode
-  signature whose digest matches, a chain to the pinned Microsoft Identity Verification Root CA 2020, the pinned
-  signing-profile EKU, a bound RFC 3161 timestamp, and a denylist, for the plugin and every DLL it imports.
+- The host takes the runtime from its own directory (`ResolveRuntimePath` in `src/runtime/host/runtime_load.cpp`:
+  `nevr-runtime.dll` beside `BugSplat64.dll`). `nevr_host::RuntimeLoader::Load` opens that file for reading with
+  `FILE_SHARE_READ` and holds the handle through the load and the runtime's `initialize`, so nothing can write the file
+  between the check and the load. It checks the file with the verifier of ADR 0010
+  (`nevr_plugin_signature::VerifyPluginFile`, with the pinned policy of `src/runtime/ext/plugin_pins.cpp`): an embedded
+  Authenticode signature whose digest matches, a chain to the pinned Microsoft Identity Verification Root CA 2020, the
+  pinned signing-profile EKU, a bound RFC 3161 timestamp, and a denylist.
+- `DecideVerify` in the same file holds the whole decision: a file that is absent is not loaded; one that cannot be
+  opened for reading is refused in every build; a readable file the verifier accepted is loaded; a readable file it did
+  not accept is refused in a release build. The build for plugin developers (`nevr_plugin_pins::IsDevBuild`) loads such a
+  file and records `unsigned_allowed`, and never loads one it could not read. The shipped files are the release build.
+- After the verdict and before the runtime is mapped, the host writes a `versions` record: its own version and SHA-256,
+  and the runtime's, or `unavailable` for a runtime that is absent or refused (a refused file is never read out). The
+  `runtime_load` record that follows carries `verify` (`accepted`, `unsigned_allowed` or `refused`) and, for a refusal,
+  `verify_reason`, in the verifier's own words. Both go to `%LOCALAPPDATA%\nevr\echovr\logs\nevr-bootstrap.jsonl`.
+- The host then validates the runtime's ABI descriptor (`src/core/runtime_abi.h`, ABI major `kMajor` = 1; a major
+  mismatch is rejected) and calls it.
+- When the runtime does not load (absent, refused, unreadable, a missing dependency, a rejected descriptor or a failed
+  `initialize`), the host writes one `game_stop` record and ends the process with exit code 78
+  (`kRuntimeStopExitCode`, `RuntimeRendezvous::StopGame`). On a client with a screen it first shows one dialog that says
+  the cause in plain words (`StopNoticeTextFor` in `src/runtime/host/stop_notice.h`: missing, not signed by the nEVR
+  release process, changed after it was signed, unreadable, signature not accepted, or missing or damaged for any other
+  cause). On a dedicated server, a headless run, a command line the host cannot read, or a thread that holds the loader
+  lock, there is no dialog and the record is all there is.
+- In a run started with `-require-signed-plugins`, the runtime verifies each **plugin**, and every DLL it imports,
+  with the same verifier before `LoadLibrary` (ADR 0010, `docs/adr/0010-signed-plugins-only.md`;
+  `src/runtime/ext/plugin_signature.cpp`, pins in `src/runtime/ext/plugin_trust.cpp`). Without that argument unsigned
+  plugins load, with a warning for each one (`kDefaultMode` in `src/runtime/ext/plugin_trust.cpp`).
 
 **Not built (proposed in ADR 0012, `docs/adr/0012-static-install-root.md`, status proposed)**
 
-- A runtime DLL separate from `BugSplat64.dll`, named `nevr-runtime.dll`, loaded from `%LOCALAPPDATA%\nevr\echovr\`.
-- The host verifying that file with the ADR 0010 verifier before it maps it, held open with `FILE_SHARE_READ` across the
-  load, then the `versions` record, and one refusal dialog followed by exit code 78 on a refusal or a missing file.
-- Any host check of the runtime against `manifest.json`. No ADR in the tree decides it. Do not rely on the host to
-  compare the runtime with the manifest: on PC the installer is the only party that checks the manifest today.
+- Loading `nevr-runtime.dll` from the nevr root, `%LOCALAPPDATA%\nevr\echovr\`, instead of the directory of
+  `BugSplat64.dll`.
+- Any host check of the runtime against `manifest.json`: nothing in `src/runtime/host/` reads it. No ADR in the tree
+  decides it. Do not rely on the host to compare the runtime with the manifest: on PC the installer is the only party
+  that checks the manifest today.
 
 What this means for an installer on PC: verify steps 1 to 8 yourself, including every zip member, before you copy a
-file into the player's folders. When the runtime moves to `nevr-runtime.dll`, the host's check will be an Authenticode
-check, which does not replace the hash check against the manifest.
+file into the player's folders. The host's check is an Authenticode check of `nevr-runtime.dll` at every start. It does
+not replace the hash check against the manifest, and it does not cover `BugSplat64.dll`, which the game loads before any
+nEVR code runs.
 
 ## What to tell the player when a check fails
 

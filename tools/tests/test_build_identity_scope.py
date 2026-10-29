@@ -33,9 +33,6 @@ IDENTITY_MACROS = (
     "NEVR_GIT_COMMIT_HASH",
     "NEVR_GIT_COMMIT_FULL",
     "NEVR_GIT_DESCRIBE",
-    # the unprefixed spellings the frozen src/legacy sources read
-    "PROJECT_VERSION",
-    "GIT_COMMIT_HASH",
 )
 MACRO = re.compile(r"\b(" + "|".join(IDENTITY_MACROS) + r")\b")
 DEFINED_ON_COMMAND_LINE = re.compile(r"-D(" + "|".join(IDENTITY_MACROS) + r")=")
@@ -110,12 +107,9 @@ class IdentityScope(unittest.TestCase):
                          {"NEVR_PROJECT_VERSION", "NEVR_GIT_COMMIT_HASH", "NEVR_GIT_COMMIT_FULL", "NEVR_GIT_DESCRIBE"})
         self.assertEqual(carried.get("ws_bridge.cpp"), {"NEVR_PROJECT_VERSION"})
         self.assertEqual(carried.get("initialize.cpp"), {"NEVR_PROJECT_VERSION"})
-        self.assertEqual(carried.get("patches.cpp"), {"PROJECT_VERSION", "GIT_COMMIT_HASH"})
-        self.assertEqual(carried.get("gameserver.cpp"), {"PROJECT_VERSION", "GIT_COMMIT_HASH"})
         # The host states the build identity in a literal of its own, equal to the runtime's (#853).
         self.assertEqual(carried.get("host_identity.cpp"), {"NEVR_PROJECT_VERSION", "NEVR_GIT_COMMIT_FULL"})
-        self.assertEqual(set(carried), {"build_identity.cpp", "ws_bridge.cpp", "initialize.cpp", "patches.cpp", "gameserver.cpp",
-                                        "host_identity.cpp"},
+        self.assertEqual(set(carried), {"build_identity.cpp", "ws_bridge.cpp", "initialize.cpp", "host_identity.cpp"},
                          "another file now reads the identity: give it its definition in its CMakeLists.txt")
 
     def test_every_edge_that_defines_a_macro_gives_it_the_same_value_and_the_values_belong_together(self):
@@ -130,9 +124,6 @@ class IdentityScope(unittest.TestCase):
         self.assertRegex(full, r"^[0-9a-f]{40}$")
         self.assertRegex(short, r"^[0-9a-f]{7,39}$", "NEVR_GIT_COMMIT_HASH is the abbreviated commit")
         self.assertTrue(full.startswith(short), f"the short commit {short} is not the start of {full}")
-        # the legacy spellings are the same values as the NEVR_ ones
-        self.assertEqual(one["GIT_COMMIT_HASH"], short)
-        self.assertEqual(one["PROJECT_VERSION"], one["NEVR_PROJECT_VERSION"])
         self.assertRegex(one["NEVR_PROJECT_VERSION"], r"^\d+\.\d+\.\d+(-dev\.\d+\+[0-9a-f]{7,40})?$")
         # `git describe --tags --always --dirty`: a tag, or <tag>-<N>-g<abbreviated commit>, or the abbreviated commit
         # alone; "-dirty" may follow. Never the full commit and never a version.
@@ -165,9 +156,9 @@ class HeadersDoNotRead(unittest.TestCase):
     def test_only_globals_h_names_an_identity_macro_outside_a_comment_and_only_to_default_it(self):
         offenders = {}
         for suffix in ("*.h", "*.hpp"):
-            for path in sorted((REPO / "src").rglob(suffix)) + sorted((REPO / "plugins").rglob(suffix)):
+            for path in sorted((REPO / "src").rglob(suffix)) + sorted((REPO / "sdk").rglob(suffix)):
                 rel = path.relative_to(REPO).as_posix()
-                if rel.startswith("src/legacy/") or rel.startswith("src/quest/"):
+                if rel.startswith("src/quest/"):
                     continue
                 names = named_in(path)
                 if names:

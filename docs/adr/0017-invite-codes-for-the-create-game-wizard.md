@@ -63,8 +63,17 @@ issues a code and never builds a route shaped after the wizard.
 | `invite/revoke` | code | ok |
 
 A refusal is a nakama RPC error whose message is one stable token: `invalid` (no such code), `expired`, `closed` (revoked,
-or its match ended), `denied` (the guild check, decision D2), `limit` (decision D1, live codes per user) or `rate` (too many
-attempts). The runtime maps the token to the wizard's text and logs the token; it never logs or shows any other text of
+or its match ended), `denied` (the guild check, decision D2), `limit` (decision D1, live codes per user), `rate` (too many
+attempts) or `unavailable` (the match could not be allocated: no server was available to the player). The create request's
+`map` is a level name string (the service refuses a number as `invalid`). The runtime names it from the chosen map card:
+the card's level symbol is looked up in the generated symbol cache (`symcache_data.cpp`), giving `mpl_combat_fission` and
+`mpl_combat_gauss` for the payload cards and `mpl_combat_dyson` and `mpl_combat_combustion` for the capture-point cards.
+A card with no level, or a level the cache cannot name, is refused with the `no_level` reason and nothing is sent; the
+runtime never sends a create with no level for a mode that has a map page. A mode with no map page sends an empty `map`.
+The request's `region` is empty: the review
+page's `Server_region` is display text, no generic region code exists, and with none sent the service picks a server by
+the player's stored pings (#1192 makes the row a list of codes the service offers, and the request then sends the chosen
+one). The runtime maps the token to the wizard's text and logs the token; it never logs or shows any other text of
 the answer (`docs/standards/logging.md` Rule 4).
 
 - **Storage.** One object per code in a system-owned collection, key = the code, value = match id, owner user id,
@@ -121,13 +130,20 @@ the runtime (`src/runtime/patch/`), not a service configuration and not a plugin
   - the component-event send (`echovr.exe` `0x14050fb60`, `CncaGameSpace::SendComponentEvent`) for the wizard's card
     choices (experience, mode, map), which the metric does not carry reliably. It is called from many sites, so the
     hook rejects every event that is not a card or button event on one of the wizard's eight page owners before it
-    does anything else; its call rate under play is measured before the hook ships.
+    does anything else: it reads the event symbol (the first word the game itself reads) and goes on only for the
+    six wizard event symbols, then resolves the sender to an actor name through checked reads
+    (`patch/invite_choices.h`, `patch/invite_choice_hook.cpp`); its call rate under play is measured before the hook
+    ships. Every wizard event on a wizard page logs at Info with the page, the card and the choices so far, and a
+    running count of the hook's calls (`seen=`).
 - **Call the service.** The hook queues a request; a worker thread posts the RPC with the token the runtime already
   holds and libcurl; the answer is applied from the per-frame dispatcher (N86), so no game memory is touched from the
   worker.
-- **Show the result.** On a created code, the dispatcher writes the code, `EXPIRES: HH:MM UTC` and the share text into
-  the share page's actors; on a refusal it writes the reason into the entry field's title. This needs the UI
-  accessors of #896 (a typed set of a text actor); until they exist the first release shows the result in the log only.
+- **Show the result.** Each frame, on the game-loop thread, `nevr_invite_apply::OnFrame` takes the answers the worker holds
+  and posts their texts to the UI text writer (#896; `patch/invite_answer_text.h` is the rule). A created code: the code and
+  `EXPIRES: HH:MM UTC` in the share page's code and expiry elements. A refused create, or an `ok` whose body holds no code
+  the client may show: the reason where the code would be, the expiry cleared. A refused resolve: the reason in the entry
+  page's title. A resolved code writes nothing; the join below does the rest. No link text is written: the service answers
+  a match id, and a join is by code. The texts are never logged, only the field and the size.
 - **Join.** On a resolved code, from the main menu the dispatcher stages the `-lobbyid` block and runs
   `BeginMultiplayerLobby`; from a lobby or match it calls `CR15NetClientLobby::Join`. Both prologues are validated
   at boot (N97); on a mismatch the feature turns itself off and says why. It is a client feature: on a dedicated
@@ -155,7 +171,7 @@ is data, it can be turned off or changed once players have used it ("accommodati
 How echovr-modkit (MIT, by Dualgame) ships them, from its `mods/menu-cards/README.md` and `mods/menu-cards/menu_cards.py`
 (facts only; no code is copied here):
 
-- The cards are data, not code. The main-menu page resource (`CR15UIPage2CR`, `0x4a3fe67c1ff9ccc4`, name `mnu_master`,
+- The cards are data, not code. The main-menu page resource (`CR15UIPage2CR`, package manifest type id `0x4a3fe67c1ff9ccc4`, name `mnu_master`,
   `0xac360e41e4ede056`, PC; page 24 inside it) is read from the player's own install, two card elements are inserted
   (CREATE GAME, owner `0xff5375e5a4dee29d`; JOIN VIA CODE, owner `0x097b785350a61c5f`, each with a sprite of the stock card
   canvas), and the result is appended as one row to a copy of the language package (`2b47aab238f60515`) in
@@ -169,8 +185,8 @@ How echovr-modkit (MIT, by Dualgame) ships them, from its `mods/menu-cards/READM
 
 What in this tree carries the page: `RegisterResourceOverrideFromFile` and `RegisterResourceOverride` in
 `src/runtime/patch/resource_override.cpp` replace a resource by its type and name symbols in the game's resource-load
-callback, so a patched page can be served for (`0x4a3fe67c1ff9ccc4`, `0xac360e41e4ede056`) without writing into the
-install.
+callback, so a patched page can be served for (`0x75e5993f80940cd0`, the class symbol of `CR15UIPage2CR` that the callback reports,
+and `0xac360e41e4ede056`) without writing into the install.
 
 **The package never carries Ready At Dawn's data.** The package carries only our work; Ready At Dawn's data stays
 theirs. The main-menu page is therefore built on the player's machine from the player's own install:
@@ -214,10 +230,12 @@ credential: a line carries `code_len` and a short fingerprint of the code (`code
 | Event | Level | Fields |
 | --- | --- | --- |
 | wizard click seen | Info | `event=create_invite\|join_via_code panel=deep_linking` |
-| request not sent | Info | `reason=empty\|malformed\|too_long\|incomplete\|not_configured\|no_token` and `code_len=<n>` (nothing is sent) |
+| request not sent | Info | `reason=empty\|malformed\|too_long\|incomplete\|not_configured\|no_token\|busy\|stopped` and `code_len=<n>` (nothing is sent) |
 | request sent | Info | `op=create\|resolve\|revoke expires_s=<n> code_len=<n> code_fp=<8 hex>` |
 | answer | Info / Warning | `op status=<http status> latency_ms=<n> result=<ok\|invalid\|expired\|closed\|denied\|limit\|rate>` |
-| text written | Info | `page=<n> field=<name>`; a failed write at Warning with the cause |
+| worker stopped | Info | `dropped=<n>`: requests still queued when the worker stopped, never sent |
+| answers dropped | Warning | `reason=not_taken kept=<n>`: the oldest answer went because the menu had not taken them |
+| text posted | Info | `field=code\|expires\|entry_title bytes=<n>`; a post the writer refused, or a writer that is off, is `text not posted` at Warning with `reason=`; the writer's own `[NEVR.UI] text written` / `text dropped` line follows |
 | join started | Info | `route=stage\|join lobby=<uuid> state_from=<n>`; the state change after it is the game's own `[NETGAME]` line |
 | feature off | Info | `reason=` (a prologue differed, no token, not configured) |
 
@@ -248,6 +266,8 @@ this feature carries that requirement.
   connection (`SelectRemoteBearer`); the RPC call with it is not measured.
 - The argument layout of the submit function `0x140113960`. It is measured before the hook is written, and the hook
   validates the prologue bytes it records.
+- That the share page's code and expiry actors and elements (the modkit author's findings) are the ones the shipped build
+  draws, from a write made by this tree: a wrong id is a request the writer drops with `reason=no_actor` or `no_canvas`.
 - Anything on Quest beyond the static reading above.
 
 ## Quest measurements and prediction (#966)

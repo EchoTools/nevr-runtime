@@ -1,0 +1,29 @@
+# The UI text writer (patch/ui_text.h, #896, #906). The JOIN VIA CODE page's actors (the modkit's p34 title_text among
+# them) exist in the main menu from the moment the client is logged in, whether or not the page is shown, so a write
+# to one lands at once; an actor no gamespace holds is retried and then dropped with its cause. Pass = the three game
+# functions pinned, the write reached the game's SetText for an existing element on the game-loop thread, the text
+# never appears in the log, and the request for the missing actor names its cause (every gamespace probed) and is
+# dropped. That the heading is drawn is shown by a screenshot of the open page, taken by hand in the PR.
+name: ui_text
+description: write a text into the menu through the UI text writer; a request for a missing actor is dropped with its cause
+steps:
+  - name: client reached the main menu (logged in)
+    wait_log: {pattern: 'NetGame switching state \(from logging in, to logged in\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: the writer pinned the three game functions
+    wait_log: {pattern: '\[NEVR\.UI\] text writer ready game_space=ok find_canvas=ok set_text=ok(_detoured)?', timeout: 5}
+  - name: write the ENTER CODE heading
+    fire: {action: ui_text, actor: '0xad97e58a7b13425f', element: '0xa8452de53657bd6e', text: 'PR-C TEST'}
+  - name: the game accepted it
+    expect_log: {pattern: '\[NEVR\.UI\] text written actor=0xad97e58a7b13425f element=0xa8452de53657bd6e bytes=9 attempts=\d+', timeout: 30}
+  - name: it was written on the game-loop thread
+    expect_log: {pattern: '\[NEVR\.UI\] text first write thread=(\d+) game_loop_thread=\1', timeout: 5}
+  - name: ask for an actor that is in no gamespace
+    fire: {action: ui_text, actor: '0x00000000deadbeef', element: '0xa8452de53657bd6e', text: 'NOBODY'}
+  - name: the first miss names the cause
+    expect_log: {pattern: '\[NEVR\.UI\] text waiting actor=0x00000000deadbeef element=0xa8452de53657bd6e bytes=6 attempts=1 outcome=no_actor', timeout: 10}
+  - name: every gamespace's actor table was readable
+    expect_log: {pattern: '\[NEVR\.UI\] text probe space=0 gs=0x[0-9a-f]+ table=0x[0-9a-f]+ names=0x[0-9a-f]+ count=\d+ read=1', timeout: 5}
+  - name: it is dropped with its cause after the give-up time
+    expect_log: {pattern: '\[NEVR\.UI\] text dropped actor=0x00000000deadbeef element=0xa8452de53657bd6e bytes=6 attempts=\d+ reason=no_actor', timeout: 45}
