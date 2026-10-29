@@ -619,16 +619,16 @@ inline GotTarget LibR15OSBuildVersion() {
 //   R_AARCH64_JUMP_SLOT 0x36ed158 -> 0x192f27c CNSProvider::ProviderID
 //   R_AARCH64_JUMP_SLOT 0x36f1c28 -> 0x192f330 CNSProvider::UserProviderID
 inline GotTarget LibR15ProviderCreate() {
-  return {kLibR15, kProviderCreateSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36f01a8ULL};
+  return {kLibR15, kProviderCreateSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36f01a8ULL};
 }
 inline GotTarget LibR15ProviderDestroy() {
-  return {kLibR15, kProviderDestroySymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x37012d8ULL};
+  return {kLibR15, kProviderDestroySymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x37012d8ULL};
 }
 inline GotTarget LibR15ProviderId() {
-  return {kLibR15, kProviderIdSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ed158ULL};
+  return {kLibR15, kProviderIdSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36ed158ULL};
 }
 inline GotTarget LibR15UserProviderId() {
-  return {kLibR15, kUserProviderIdSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36f1c28ULL};
+  return {kLibR15, kUserProviderIdSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36f1c28ULL};
 }
 
 // NRadEngine::CCanvasUICS::SetText(SCompactPoolHandle, CSymbol64, char const*), defined in libr15 at 0x139111c (80
