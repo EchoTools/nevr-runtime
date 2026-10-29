@@ -44,7 +44,7 @@ Three writers in the tree already write fields as keys, each with a header of it
 
 ### Measured
 
-Counts exclude `src/legacy/` (frozen) and count call sites, not comments, declarations or definitions.
+Counts exclude the frozen legacy tree (deleted in #1270) and count call sites, not comments, declarations or definitions.
 
 | What | Count |
 | --- | --- |
@@ -335,7 +335,7 @@ statements come from reading the code; neither the mojibake nor the fix has been
 
 ### 8. Plugins
 
-The ABI does not change (`NevrLogFn`, `NevrLogField` in `src/extension/plugin_interface.h`; `NEVR_PLUGIN_API_VERSION` 8).
+The ABI does not change (`NevrLogFn`, `NevrLogField` in `sdk/include/nevr/plugin_interface.h`; `NEVR_PLUGIN_API_VERSION` 8).
 `HostPluginLog` (`src/runtime/ext/plugin_loader.cpp`) writes a record with `tag` `NEVR.PLUGIN`, `plugin` (set by the host,
 so one plugin cannot write as another, Rule 15), `event` `plugin_line`, the plugin's message as `msg`, and each
 `NevrLogField` as its own key with a string value: the ABI carries strings, and reading `"5"` as a number would let one key
@@ -372,7 +372,7 @@ Each stage is pull requests with their own issues; a call site and every reader 
    `AServerGetsNoLobbyRecordFromTheSocialObserver` change in that pull request.
 4. **The end state.** No printf `Log()` and no `TeeFprintf` remain, and both are deleted; a game line's `msg` drops the
    `[EVR] ` prefix, which `tag` carries. The ceiling check becomes the sensor that forbids the old form: no
-   `Log(EchoVR::LogLevel` call outside `src/legacy/`, no `TeeFprintf`, and no `fprintf` or `vfprintf` to stderr in
+   `Log(EchoVR::LogLevel` call outside the legacy tree (deleted in #1270), no `TeeFprintf`, and no `fprintf` or `vfprintf` to stderr in
    `src/runtime`, `src/core` and `src/modules` outside tests, the console renderer and the crash path. It runs in
    `tools/tests/`, so every pull request runs it, and a `just verify` sensor names it under the next free N-number, built as N93, N99 and
    N111 require (two stages, comments stripped). D1 is re-pointed at the one definition of the structured `Log`.
