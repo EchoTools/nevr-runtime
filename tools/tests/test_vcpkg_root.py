@@ -74,6 +74,41 @@ class VcpkgRootTest(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("not a vcpkg checkout", r.stderr)
 
+    def run_named(self, checkout, *args):
+        env = dict(os.environ, NEVR_VCPKG_SOURCE=str(self.source))
+        return subprocess.run([str(checkout / "tools/vcpkg_root.sh"), *args], env=env, capture_output=True, text=True)
+
+    def test_a_named_root_is_its_own_directory_and_leaves_the_default_root_alone(self):
+        a = self.checkout("a")
+        r = self.run_named(a, "vcpkg-root-quest-host")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        root = pathlib.Path(r.stdout.strip())
+        self.assertEqual(root, a.resolve() / "build/vcpkg-root-quest-host")
+        self.assertTrue(os.access(root / "vcpkg", os.X_OK))
+        self.assertFalse((a / "build/vcpkg-root").exists())
+
+    def test_a_root_name_that_leaves_the_build_directory_is_refused(self):
+        a = self.checkout("a")
+        for bad in ("../escape", "a/b", ".."):
+            r = self.run_named(a, bad)
+            self.assertNotEqual(r.returncode, 0, bad)
+            self.assertIn("vcpkg root name", r.stderr, bad)
+        self.assertFalse((a / "build").exists())
+
+    def test_the_quest_host_install_has_its_own_root_so_the_mingw_root_lock_cannot_delay_it(self):
+        # #1408: vcpkg takes flock(2) on <root>/.vcpkg-root for a whole install, and a child it started can hold
+        # that lock after it exits. The quest-host install must not share the mingw install's root.
+        justfile = (REPO / "justfile").read_text()
+        mingw = re.search(r"^_vcpkg-mingw:\n((?:[ \t]+.*\n|\n)*)", justfile, re.M)
+        quest = re.search(r"^_vcpkg-quest-host:\n((?:[ \t]+.*\n|\n)*)", justfile, re.M)
+        self.assertIsNotNone(mingw, "justfile no longer has a _vcpkg-mingw recipe")
+        self.assertIsNotNone(quest, "justfile no longer has a _vcpkg-quest-host recipe")
+        self.assertRegex(mingw.group(1), r'vcpkg_root\.sh"\)', "_vcpkg-mingw is the default root (no argument)")
+        named = re.search(r'vcpkg_root\.sh" ([A-Za-z0-9._-]+)\)', quest.group(1))
+        self.assertIsNotNone(named, "_vcpkg-quest-host must name its own vcpkg root")
+        self.assertNotEqual(named.group(1), "vcpkg-root")
+        self.assertIn('./vcpkg install', quest.group(1))
+
     def test_the_install_recipe_uses_the_checkout_root_and_configure_does_not_reinstall(self):
         justfile = (REPO / "justfile").read_text()
         recipe = justfile[justfile.index("_vcpkg-mingw:"):]
