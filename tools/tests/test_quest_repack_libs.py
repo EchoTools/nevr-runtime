@@ -606,11 +606,12 @@ class RepackWithAPluginTest(RepackFixture):
         """A plugin from `source`, declaring `ids` in its NEVR note (None: no note)."""
         return build_aarch64(self.tmp / "plugins" / name, (nevr_note(ids) if ids is not None else "") + source)
 
-    def repack_with(self, plugin: pathlib.Path):
+    def repack_with(self, *plugins: pathlib.Path):
         work = self.tmp / "work"
         result = subprocess.run(
             ["just", "--justfile", str(JUSTFILE), "--working-directory", str(REPO), "android-repack-apk",
-             str(self.apk), str(self.shim), os.path.relpath(work, REPO), str(plugin), "", "", str(self.patcher)],
+             str(self.apk), str(self.shim), os.path.relpath(work, REPO), ":".join(str(p) for p in plugins), "", "",
+             str(self.patcher)],
             capture_output=True, text=True, env=self.env, timeout=300)
         self.signed = work / "r15_nevr-sentinel_signed.apk"
         return result
@@ -629,6 +630,44 @@ class RepackWithAPluginTest(RepackFixture):
             self.assertEqual(z.read("lib/arm64-v8a/libgood.so"), plugin.read_bytes())
             self.assertEqual(z.read("lib/arm64-v8a/libr15.so"), self.libr15 + MARKER)
             self.assertEqual(z.read("lib/arm64-v8a/libovrplatformloader_orig.so")[:4], b"\x7fELF")
+
+    def test_several_plugins_are_all_packaged(self):
+        self.make_inputs(DEV_VERSION)
+        first, second = self.plugin("libfirst.so"), self.plugin("libsecond.so", "int plugin_marker = 2;\n")
+        result = self.repack_with(first, second)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("verify-signed OK", result.stdout)
+        with zipfile.ZipFile(self.signed) as z:
+            self.assertEqual(z.read("lib/arm64-v8a/libfirst.so"), first.read_bytes())
+            self.assertEqual(z.read("lib/arm64-v8a/libsecond.so"), second.read_bytes())
+            self.assertEqual(z.read("lib/arm64-v8a/libr15.so"), self.libr15 + MARKER)
+
+    def test_a_plugin_path_with_a_space_is_packaged(self):
+        self.make_inputs(DEV_VERSION)
+        plugin = self.plugin("libspaced.so")
+        spaced = self.tmp / "with space" / "libspaced.so"
+        spaced.parent.mkdir()
+        spaced.write_bytes(plugin.read_bytes())
+        result = self.repack_with(spaced)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with zipfile.ZipFile(self.signed) as z:
+            self.assertEqual(z.read("lib/arm64-v8a/libspaced.so"), plugin.read_bytes())
+
+    def test_every_plugin_is_checked_not_only_the_first(self):
+        self.make_inputs(DEV_VERSION)
+        result = self.repack_with(self.plugin("libgood.so"), self.plugin("libother.so", ids=OTHER_ID))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("build_id_unsupported", result.stderr)
+        self.assertFalse(self.signed.exists())
+
+    def test_two_plugins_with_one_file_name_are_refused(self):
+        self.make_inputs(DEV_VERSION)
+        (self.tmp / "plugins" / "other").mkdir(parents=True)
+        same = build_aarch64(self.tmp / "plugins" / "other" / "libgood.so", nevr_note(GAME_ID) + "int plugin_marker = 3;\n")
+        result = self.repack_with(self.plugin("libgood.so"), same)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("two plugins are named libgood.so", result.stderr)
+        self.assertFalse(self.signed.exists())
 
     def test_a_plugin_named_like_a_game_library_is_refused_before_anything_is_signed(self):
         self.make_inputs(DEV_VERSION)
