@@ -287,6 +287,11 @@ class Timer:
         self.wait_for_build_slot()
         self.ok("build_slot")
         build_env = {"VCPKG_MAX_CONCURRENCY": "6", "CMAKE_BUILD_PARALLEL_LEVEL": "6", "GH_BIN": self.gh}
+        # A new tag's worktree has no vcpkg install yet (worktree-setup seeds the build tree only at a commit the main
+        # checkout built), and release-quest-apk needs the nlohmann/json headers that install provides.
+        self.cmd("configure", ["systemd-run", "--user", "--scope", "--slice=nevr-builds.slice", "-p", "MemoryMax=8G",
+                               "just", "configure"], worktree, build_env)
+        self.ok("configure")
         self.cmd("build_apk", ["systemd-run", "--user", "--scope", "--slice=nevr-builds.slice", "-p", "MemoryMax=8G",
                                "just", "release-quest-apk", tag], worktree, build_env)
         self.ok("build_apk")

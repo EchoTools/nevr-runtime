@@ -26,8 +26,8 @@ SECRETS = {
     "R2_SECRET_ACCESS_KEY": "sentinel-secret-access-key",
 }
 TOKEN = "sentinel-gh-token"
-STEPS = ["checkout", "token", "list", "build_signer", "check_listed", "worktree", "build_slot", "build_apk", "publish_apk",
-         "dispatch", "watch", "check_jobs", "verify_live", "notify", "cleanup"]
+STEPS = ["checkout", "token", "list", "build_signer", "check_listed", "worktree", "build_slot", "configure", "build_apk",
+         "publish_apk", "dispatch", "watch", "check_jobs", "verify_live", "notify", "cleanup"]
 CARRIED = {"name": "echovr-data-fc2eedeacc50.zip", "kind": "game-data", "size": 937395400}
 HEAD = "c0ffee" + "0" * 34
 PUBLISHING_JOBS = ["Commit the manifest record", "Publish to R2", "A run that published nothing is red"]
@@ -63,7 +63,8 @@ class Fake:
             ("rev-parse origin/main", "build_signer.rev"), (" archive ", "build_signer.archive"), ("tar -xf", "build_signer.tar"),
             ("go build", "build_signer.go"), ("verify-manifest", "verify"), (" fetch origin tag ", "worktree.fetch"),
             ("^{commit}", "worktree.rev"), ("worktree add", "worktree.add"), ("worktree-setup", "worktree.setup"),
-            ("pgrep", "build_slot"), ("release-quest-apk", "build_apk"), ("publish_quest_apk.py", "publish_apk"),
+            ("pgrep", "build_slot"), ("just configure", "configure"), ("release-quest-apk", "build_apk"),
+            ("publish_quest_apk.py", "publish_apk"),
             ("workflow run", "dispatch"), ("run watch", "watch"), ("run view", "check_jobs"),
             ("remove-worktree", "cleanup.worktree"),
         ]
@@ -238,6 +239,54 @@ class RunsInOrder(TimerCase):
         self.assertEqual(sorted(p.name for p in (self.root / "work").glob("*release-signer-*")), [], "the signer snapshot is gone")
 
 
+class ConfigureBeforeTheBuild(TimerCase):
+    """A new tag's worktree has no vcpkg install, so `just configure` (the vcpkg install) runs before the APK build."""
+
+    def configure_call(self, fake: Fake) -> dict:
+        return next(c for c in fake.calls if c["step"] == "configure")
+
+    def test_just_configure_runs_before_the_build_in_the_same_worktree_with_no_secret(self) -> None:
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake), 0)
+        steps = fake.steps()
+        self.assertLess(steps.index("configure"), steps.index("build_apk"))
+        configure, build = self.configure_call(fake), next(c for c in fake.calls if c["step"] == "build_apk")
+        self.assertEqual(configure["argv"][-2:], ["just", "configure"])
+        self.assertEqual(configure["cwd"], build["cwd"], "configure runs in the worktree the build runs in")
+        self.assertIsNotNone(configure["cwd"])
+        self.assertEqual(sorted(set(SECRETS) & set(configure["env"])), [], "configure was given R2 credentials")
+        self.assertNotIn("GH_TOKEN", configure["env"], "configure was given the GitHub token")
+
+    def test_configure_runs_in_the_build_slice_with_the_build_env(self) -> None:
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake), 0)
+        configure = self.configure_call(fake)
+        self.assertEqual(configure["argv"][:6], ["systemd-run", "--user", "--scope", "--slice=nevr-builds.slice", "-p",
+                                                 "MemoryMax=8G"])
+        self.assertEqual(configure["env"]["VCPKG_MAX_CONCURRENCY"], "6")
+        self.assertEqual(configure["env"]["CMAKE_BUILD_PARALLEL_LEVEL"], "6")
+        self.assertEqual(configure["env"]["GH_BIN"], "gh-fake")
+
+    def test_a_failing_configure_fails_at_configure_and_counts_as_a_failed_try(self) -> None:
+        for _ in range(3):
+            self.assertEqual(self.run_timer(Fake(self.root, fail="configure")), 1)
+        self.assertEqual([e["step"] for e in self.events() if e["event"] == "failed"], ["configure"] * 3)
+        self.assertEqual([e for e in self.events() if e["event"] == "refused"], [], "a failed configure is not a refusal")
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertIn("skipped_after_failures", self.names())
+        bonk = next(c["argv"] for c in fake.calls if c["step"] == "bonk")
+        self.assertIn("configure", bonk[-1])
+        self.assertNotIn("build_apk", fake.steps())
+
+    def test_a_failing_configure_stops_before_the_build_and_names_itself(self) -> None:
+        fake = Fake(self.root, fail="configure")
+        self.assertEqual(self.run_timer(fake), 1)
+        self.assertEqual([e["step"] for e in self.events() if e["event"] == "failed"], ["configure"])
+        self.assertNotIn("build_apk", fake.steps())
+        self.assertNotIn("publish_apk", fake.steps())
+
+
 class NoSecretInTheLog(TimerCase):
     def test_no_secret_reaches_the_log_even_when_a_command_prints_one(self) -> None:
         leak = {"publish_apk": lambda argv: completed(argv, 1, "", f"boom {SECRETS['R2_SECRET_ACCESS_KEY']} {TOKEN}")}
@@ -252,7 +301,8 @@ class NoSecretInTheLog(TimerCase):
 class FailsLoud(TimerCase):
     def test_each_failing_step_exits_1_names_itself_and_stops_the_rest(self) -> None:
         later = {step: [s for s in STEPS[STEPS.index(step) + 1:] if s != "cleanup"]
-                 for step in ("build_signer", "worktree", "build_slot", "build_apk", "publish_apk", "dispatch", "watch")}
+                 for step in ("build_signer", "worktree", "build_slot", "configure", "build_apk", "publish_apk", "dispatch",
+                              "watch")}
         for step, after in later.items():
             with self.subTest(step=step):
                 self.log.unlink(missing_ok=True)
