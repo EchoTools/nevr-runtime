@@ -39,7 +39,7 @@ inline constexpr std::size_t kMaxQueued = 4;
 inline constexpr std::size_t kMaxAnswers = 8;
 static_assert(kMaxAnswers > kMaxQueued, "every queued request must still have room for its answer");
 
-enum class LogLevel { Info, Warning };
+enum class LogLevel { Info, Warning, Error };
 
 struct HttpAnswer {
   int status = 0;  // 0: no answer at all (the connection failed, timed out, or the body was refused)
