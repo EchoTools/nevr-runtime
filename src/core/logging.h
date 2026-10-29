@@ -6,6 +6,9 @@
 
 #include "abi/echovr_functions.h"
 
+// ISO 8601 UTC timestamp with milliseconds.
+extern std::string GetISO8601Timestamp();
+
 /// N80: stable per-process run identifier, shared by every log writer in the
 /// process so lines from different files can be correlated to one run.
 ///
