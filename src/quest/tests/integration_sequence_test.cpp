@@ -1536,7 +1536,13 @@ void TestTheHoldDecisionIsLoggedOnEachChange() {
     QCHECK(has(g_holdLines[2], "\"mode\":\"held\""));
   }
   for (const std::string& line : g_holdLines) {  // no token, nonce, user name or id
-    QCHECK(line.find("secret") == std::string::npos && line.find("4242") == std::string::npos);
+    // Each record opens with the wall-clock {"ts_ms":N, so the check reads only from ,"level": on: the
+    // digits of the clock must not decide it (#1461).
+    const std::string::size_type fields = line.find(",\"level\":");
+    QCHECK(fields != std::string::npos);
+    if (fields == std::string::npos) continue;
+    const std::string body = line.substr(fields);
+    QCHECK(body.find("secret") == std::string::npos && body.find("4242") == std::string::npos);
   }
 }
 
