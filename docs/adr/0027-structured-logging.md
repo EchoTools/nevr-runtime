@@ -60,7 +60,7 @@ Counts cover the live sources and count call sites, not comments, declarations o
 | exception text in a record | 3 calls pass `what()` (`src/runtime/patch/resource_override.cpp`, `src/runtime/patch/invite_wizard_hook.cpp`, `src/runtime/patch/invite_choice_hook.cpp`); Rule 4 names callback exception text |
 | plugins | `PluginLog`, `PluginLogWarning`, `PluginLogError`, `PluginLogDebug`, `PluginLogFields`: 88 calls |
 | Quest | `LogFields`/`LogFieldList` 235 calls in 40 files; 74 calls to local `Log` functions: members that forward a text line to the sink they are given (`src/quest/auth/session.cpp` 35, `src/quest/net/loopback_game_server.cpp` 19, `src/quest/net/remote_ws.cpp` 6) and the autopilot plugin's helper that calls the host's plugin log (`src/quest/plugins/autopilot/plugin.cpp` 14); 9 `__android_log_*` calls outside tests and stubs |
-| tests | 256 uses of text-search helpers (`TestLogContains` 165, `LogLinesContaining` 38, `TestLogContainsAtLevel` 29, `LogContains` 15, `WaitForLogLines` 9) in 3 files; 5 test files link a `Log` of their own; a test stub defines `FormatJsonLogEntry` |
+| tests | 256 uses of text-search helpers (`TestLogContains` 165, `LogLinesContaining` 38, `TestLogContainsAtLevel` 29, `LogContains` 15, `WaitForLogLines` 9) in 3 files; 5 test files link a `Log` of their own |
 
 The level split is reproduced exactly by:
 
@@ -351,9 +351,7 @@ Each stage is pull requests with their own issues; a call site and every reader 
    code page. The printf `Log()` is routed into it: its formatted text is `msg` byte for byte, `tag` is read from the text,
    `event` is `text`, `msg` stays the last key. Every reader of section "Who reads a record" keeps working, because the
    text it matches is unchanged and still on one line. The shadow `Log` in `src/runtime/server/messages.cpp` goes (its 10
-   calls use the global one, so they reach the boot sink). `FormatJsonLogEntry` (`src/core/logging.h`,
-   `src/core/logging.cpp`), which no production code calls, is deleted with the test stub that defines it in
-   `src/runtime/tests/test_behavioral.cpp`; the structured sink replaces it. The printf form gains the format attribute.
+   calls use the global one, so they reach the boot sink). The structured sink is the only JSON writer. The printf form gains the format attribute.
    A ceiling check in `tools/tests/` holds the printf call count and fails a pull request that raises it, so new code uses
    the structured form; each migration lowers it.
 2. **Boot, bridge and login, config, fatal**, in that order. Boot: `src/runtime/lifecycle/initialize.cpp` and the other
