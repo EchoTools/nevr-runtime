@@ -11,15 +11,14 @@
 #include "got_hook.h"
 #include "hook_install.h"
 #include "hook_log.h"
-#include "inline_hook.h"
+#include "libr15_attach.h"
 #include "pinned_targets.h"
 #include "runtime/patch/splash_skip_rules.h"
 
 namespace nevr_quest::splash_skip {
 namespace {
 
-using sentinel::InlinePrologue;
-using sentinel::InlineStatus;
+using nevr_quest::libr15_patch::ActivateStatus;
 using sentinel::pinned::InputPressedSig;
 using sentinel::pinned::SendComponentEventSig;
 
@@ -38,6 +37,10 @@ constexpr std::size_t kLinkStride = 0x10;
 constexpr std::size_t kDefStride = 0x60;
 constexpr std::size_t kDefClickSymbolOffset = 0x58;  // -1 when the element has none
 constexpr std::size_t kMaxDenseElements = 4096;      // a bound larger than this is not a bound
+
+// CR15VRMenuWidgetCS::Update is the row `splash_skip.widget_update` of the build-time patch table
+// (quest/patch/libr15_patch_table.h; docs/adr/0021): the engine registers its address, so no GOT slot names it.
+constexpr const char* kWidgetUpdateRow = "splash_skip.widget_update";
 
 struct WidgetUpdateTag {};
 using WidgetUpdateThunk = sentinel::CallbackThunk<WidgetUpdateTag, void(void*)>;
@@ -137,8 +140,8 @@ void WidgetUpdateHook(WidgetUpdateThunk::Fn original, void* widget) noexcept {
 
 NEVR_HOOK_RECORD(kWidgetUpdateRecord, WidgetUpdateThunk, &WidgetUpdateHook);
 
-// Proves a pinned libr15 function is the pinned build's (build ID, then its first four words) and returns its address.
-// nullptr with `reason` set when it is not.
+// Proves a function the hook CALLS is the pinned build's (its first four words) and returns its address. nullptr with
+// `reason` set when it is not. The patched function itself is not checked here: it is a table row.
 void* ResolvePinned(const sentinel::ElfImage& image, std::uint64_t vaddr, const std::uint32_t (&code)[4],
                     const char*& reason) noexcept {
   const unsigned char* fn = reinterpret_cast<const unsigned char*>(image.base) + vaddr;
@@ -151,17 +154,16 @@ void* ResolvePinned(const sentinel::ElfImage& image, std::uint64_t vaddr, const 
 
 }  // namespace
 
-bool Install() noexcept {
+bool Install(sentinel::ImageLookup lookup) noexcept {
   sentinel::ElfImage image;
-  if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) {
+  if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "splash_skip", {{"result", "refused"}, {"reason", "module_not_loaded"}});
     return false;
   }
-  char buildId[64] = {};
-  if (!sentinel::ReadBuildId(image, buildId, sizeof(buildId)) ||
-      std::strcmp(buildId, sentinel::pinned::kLibR15BuildId) != 0) {
+  // Nothing is read from libr15 before Attach has verified it (the live ID is then the patched file's).
+  if (!nevr_quest::libr15_patch::Verified()) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "splash_skip",
-                        {{"result", "refused"}, {"reason", "build_id_mismatch"}, {"build_id", buildId}});
+                        {{"result", "refused"}, {"reason", nevr_quest::libr15_patch::ActivateStatusName(ActivateStatus::kNotVerified)}});
     return false;
   }
   const char* reason = "";
@@ -175,18 +177,16 @@ bool Install() noexcept {
   std::memcpy(&g_sendEvent, &send, sizeof(g_sendEvent));
   std::memcpy(&g_pressed, &pressed, sizeof(g_pressed));
 
-  // The four words the inline patch displaces, from the pinned build (InstallInlineThunk checks them again before a write).
-  InlinePrologue prologue{};
-  std::memcpy(prologue.words, sentinel::pinned::kWidgetUpdateCode, sizeof(prologue.words));
   WidgetUpdateThunk::Arm(kWidgetUpdateRecord);
-  const void* const target = reinterpret_cast<const void*>(image.base + sentinel::pinned::kWidgetUpdateVaddr);
+  const ActivateStatus st = sentinel::InstallRowThunk<WidgetUpdateThunk>(kWidgetUpdateRow);
+  const bool ok = st == ActivateStatus::kOk;
   char targetText[19];
-  const InlineStatus st = sentinel::InstallInlineThunk<WidgetUpdateThunk>(target, prologue);
-  sentinel::LogFields(st == InlineStatus::kOk ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "splash_skip",
-                      {{"result", st == InlineStatus::kOk ? "installed" : sentinel::InlineStatusName(st)},
-                       {"target", sentinel::HexString(targetText, reinterpret_cast<std::uintptr_t>(target))},
+  sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "splash_skip",
+                      {{"result", ok ? "installed" : nevr_quest::libr15_patch::ActivateStatusName(st)},
+                       {"row", kWidgetUpdateRow},
+                       {"target", sentinel::HexString(targetText, nevr_quest::libr15_patch::RowSiteAddress(kWidgetUpdateRow))},
                        {"min_live_ms", static_cast<long long>(nevr_splash_skip::kMinPresentMs)}});
-  return st == InlineStatus::kOk;
+  return ok;
 }
 
 }  // namespace nevr_quest::splash_skip

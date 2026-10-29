@@ -133,3 +133,34 @@ TEST(HostJson, KeysKeepTheirOrderAndSeparators) {
   const std::string text(buffer, length);
   EXPECT_NE(text.find("\"a\":1,\"b\":2,\"c\":3}"), std::string::npos) << text;
 }
+
+// The stop line (runtime/host/stop_line.h) is the host's one record of another tag: same four header fields, in the
+// same order, under the tag the caller names.
+TEST(HostJson, ALineOfAnotherTagCarriesTheSameHeaderUnderThatTag) {
+  char buffer[512];
+  JsonLine line(buffer, sizeof(buffer), "NEVR.STOP", "stop");
+  line.Bool("stopped", true);
+  const std::size_t length = line.Finish();
+  const std::string text(buffer, length);
+  EXPECT_EQ(text.rfind("{\"tag\":\"NEVR.STOP\",\"ts\":\"", 0), 0u) << text;
+  const nlohmann::json record = Parse(buffer, length);
+  EXPECT_EQ(record.at("tag"), "NEVR.STOP");
+  EXPECT_EQ(record.at("event"), "stop");
+  EXPECT_EQ(record.at("pid"), GetCurrentProcessId());
+  EXPECT_EQ(record.at("stopped"), true);
+  const std::size_t event_at = text.find("\"event\":\"stop\"");
+  const std::size_t pid_at = text.find("\"pid\":");
+  const std::size_t ts_at = text.find("\"ts\":");
+  EXPECT_LT(ts_at, pid_at);
+  EXPECT_LT(pid_at, event_at);
+}
+
+TEST(HostJson, ARecordTooLargeForItsBufferKeepsTheTagItWasGiven) {
+  char buffer[200];
+  JsonLine line(buffer, sizeof(buffer), "NEVR.STOP", "stop");
+  const std::string long_value(400, 'x');
+  line.Str("detail", long_value.c_str());
+  const nlohmann::json record = Parse(buffer, line.Finish());
+  EXPECT_EQ(record.at("tag"), "NEVR.STOP");
+  EXPECT_EQ(record.at("error"), "record_too_large");
+}

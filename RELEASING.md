@@ -81,7 +81,7 @@ Only when the train is off or its run is red. A draft fires no workflow, so the 
 
 ```sh
 just release-preflight                                    # 1. refuses unless this clone is exactly origin/main
-git tag -a vX.Y.Z -m "X.Y.Z" && git push origin vX.Y.Z   # 2. tag origin's tip with the version `python3 tools/next_release_version.py` prints, push the tag
+git tag -a vX.Y.Z -m "X.Y.Z" && git push origin vX.Y.Z   # 2. tag origin's tip with the tag `python3 tools/next_release_version.py` prints (it prints `vX.Y.Z`, with the v: `vX.Y.Z` here is that output, `X.Y.Z` the message), push the tag
 just release-preflight && gh release create vX.Y.Z --title vX.Y.Z --draft --prerelease --verify-tag   # 3. the draft
 gh workflow run build.yml --ref vX.Y.Z                    # 4. build, attest, attach the two files; it stays a draft
 ```

@@ -8,6 +8,8 @@
 #include <optional>
 #include <string>
 
+#include "quest/plugin/plugin_identity.h"
+
 namespace nevr_quest::plugin {
 
 inline constexpr std::uint16_t kMachineAarch64 = 183;  // EM_AARCH64
@@ -38,5 +40,11 @@ enum class BuildIdVerdict {
 // build IDs separated by spaces, commas or newlines. `running` is the running libr15's build ID, lowercase hex ("" when
 // it could not be read). The match is the whole ID, never a prefix or a substring.
 BuildIdVerdict DecideBuildId(const char* list, const std::string& running);
+
+// The loader's decision (ADR 0021 section 12): the list is checked against the plugin identity `view` (the stock ID when
+// the running libr15 is our verified patched file), and, when `view` stands for a patched file, against the live note
+// `live` as well, so a plugin built for the derived ID still loads on the file that carries it. On a file that is not
+// patched `view` is the live note and this is DecideBuildId(list, live).
+BuildIdVerdict DecideBuildIdForView(const char* list, const std::string& live, const PluginView& view);
 
 }  // namespace nevr_quest::plugin

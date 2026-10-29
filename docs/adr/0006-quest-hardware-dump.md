@@ -106,7 +106,7 @@ Every leaf is a field:
 - `{"ok":false,"source":"<api>","error":"…"}` for one that failed.
 
 A failed read is never an omitted field. `FixedOsFieldPaths` lists the paths the `os` section always writes. Top-level keys:
-- `schema`, `stage`, `trigger`, `written_unix_ms`, `libr15_build_id`, `notice`
+- `schema`, `stage`, `trigger`, `written_unix_ms`, `libr15_build_id` (the stock libr15's ID, the game build), `libr15_live_build_id` (the note of the libr15 mapped in the process, which is the build-time patcher's output, docs/adr/0021), `libr15_patched_build_id` (the ID this build expects that file to have), `notice`
 - `jni`, `os`, `ndk`, `gpu.vulkan`, `gpu.gl`, `vrapi`, `openxr`, `libr15_queries`
 
 ### The log

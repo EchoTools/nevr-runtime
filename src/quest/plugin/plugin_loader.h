@@ -8,8 +8,9 @@
 //
 // What a plugin sees is the existing C ABI (nevr/plugin_interface.h): the same NvrGameContext as on PC, with
 // base_addr the libr15 load base, net_game null, game_state 0, flags IS_CLIENT | PLATFORM_QUEST, the level fields empty (no
-// Quest source for the game object exists before the host tick, ADR 0019 slice 4), and game_build_id the running libr15's
-// build ID. The per-frame and state-change exports are not called in slice 1: nothing ticks them yet.
+// Quest source for the game object exists before the host tick, ADR 0019 slice 4), and game_build_id the plugin identity
+// (plugin_identity.h: the stock libr15 ID when the running libr15 is our verified patched file, else the live note, ADR
+// 0021 section 12). The per-frame and state-change exports are not called in slice 1: nothing ticks them yet.
 #pragma once
 
 #include <cstddef>
@@ -19,6 +20,7 @@
 #include <vector>
 
 #include "nevr/plugin_interface.h"
+#include "quest/plugin/plugin_identity.h"
 #include "quest/plugin/plugin_image.h"
 #include "quest/plugin/plugin_plan.h"
 
@@ -31,7 +33,9 @@ struct LoadRecord {
   std::string file;
   std::string sha256 = "none";           // of the bytes the loader read
   std::string pluginBuildId = "none";    // the plugin file's GNU build ID
-  std::string gameBuildId = "none";      // the running libr15's
+  std::string gameBuildId = "none";      // the running libr15's live note
+  std::string pluginViewBuildId = "none";  // the ID the plugin's list was compared with (the plugin identity)
+  bool libr15Patched = false;            // the running libr15 is our verified patched file
   PluginPhase phase = PluginPhase::Normal;
   Outcome outcome = Outcome::kNotStarted;
   std::string reason;                    // a reason:: token; empty for `loaded`
@@ -52,6 +56,9 @@ class Platform {
   virtual void* Symbol(void* handle, const char* name) = 0;
   // The running libr15's build ID, lowercase hex; "" when it cannot be read.
   virtual std::string GameBuildId() = 0;
+  // What the process recorded about the libr15 patch (ADR 0021 section 12): whether `Attach` verified it, and the ID it
+  // verified. The loader reads it with the live note at every decision.
+  virtual Libr15PatchState Libr15Patch() = 0;
   virtual std::uintptr_t GameBase() = 0;
   virtual void Emit(const LoadRecord& record) = 0;
   // One line of the plan: how many entries, and how each stands at the end of the plan step.
@@ -105,7 +112,7 @@ class Loader {
   // Ends `entry` with `record`'s outcome and writes the record. A platform that throws while writing it does not stop
   // the loader.
   void Settle(PlanEntry& entry, const LoadRecord& record);
-  NvrGameContext ContextFor(const PlanEntry& entry) const;
+  NvrGameContext ContextFor(const PlanEntry& entry, const char* pluginViewBuildId) const;
 
   static int GetLoadedPluginCount();
   static const NvrLoadedPluginInfo* GetLoadedPluginInfo(int index);
@@ -117,9 +124,9 @@ class Loader {
   std::vector<PlanEntry> entries_;
   bool planned_ = false;
   bool earlyRan_ = false;
-  std::string gameBuildId_;
   std::uintptr_t gameBase_ = 0;
   std::deque<LoadedPlugin> loaded_;
+  std::deque<std::string> viewIds_;      // the plugin identity each context points at (ctx.game_build_id)
   std::deque<NvrGameContext> contexts_;  // one per plugin that reached its init; a plugin may keep the pointer
 };
 
