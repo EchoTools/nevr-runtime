@@ -145,7 +145,7 @@ def tag_problems(doc: str) -> list[str]:
 
 
 def line_cap_problems(filter_source: str) -> list[str]:
-    """The built-in filter's 500-byte line cap must not reach an nEVR line: the render_config line is longer than 500
+    """The built-in filter's 500-byte line cap must not reach a [NEVR.] line: the render_config line is longer than 500
     bytes and a cap loses its last fields. ApplyTruncation returns the full length for a `[NEVR.` line before it applies
     max_line_length."""
     code = strip_comments(filter_source)
@@ -155,9 +155,9 @@ def line_cap_problems(filter_source: str) -> list[str]:
     exempt = body.find("if (IsNevrLine(message)) return len;")
     cap = body.find("g_config.max_line_length")
     if exempt < 0:
-        return ["ApplyTruncation does not return an nEVR line whole"]
+        return ["ApplyTruncation does not return a [NEVR.] line whole"]
     if cap < 0 or exempt > cap:
-        return ["the nEVR-line exemption must come before the max_line_length cap"]
+        return ["the [NEVR.]-line exemption must come before the max_line_length cap"]
     return []
 
 
