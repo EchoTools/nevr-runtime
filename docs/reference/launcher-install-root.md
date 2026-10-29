@@ -69,17 +69,19 @@ takes `-Dir <...\bin\win10>` and `-Root <nevr folder>` (an absolute path; the ro
 
 - it refuses while `echovr.exe` runs, when the package's `SHA256SUMS` does not match, and when `BugSplat64.dll` in the game folder is a
   nEVR runtime it has no record of;
-- it copies the game's own `BugSplat64.dll` to `BugSplat64.dll.original-<timestamp>` before it writes the host, renames a legacy
-  `dbgcore.dll` to `dbgcore.dll.legacy-<date>`, and renames a `nevr-runtime.dll` left beside `echovr.exe` to
-  `nevr-runtime.dll.legacy-<timestamp>`; it deletes nothing;
+- it copies the game's own `BugSplat64.dll` to `<root>\installer\aside\BugSplat64.dll.original-<timestamp>` before it writes the host,
+  and moves a legacy `dbgcore.dll` (`dbgcore.dll.legacy-<date>`), a `nevr-runtime.dll` left beside `echovr.exe`
+  (`nevr-runtime.dll.legacy-<timestamp>`) and an `nevr-install.txt` left beside `echovr.exe` by an earlier installer
+  (`nevr-install.txt.legacy-<timestamp>`) into the same folder; it deletes nothing of the player's;
 - it writes `nevr-runtime.dll` into the root and `BugSplat64.dll` into the game folder, and records what it did in
-  `nevr-install.txt` in the game's `bin\win10` (`backup`, `legacy`, `runtime_aside`, `runtime_legacy`, `runtime_root`,
+  `<root>\installer\nevr-install.txt` (`backup`, `legacy`, `runtime_aside`, `runtime_legacy`, `runtime_root`,
   `installed_sha256`, `runtime_sha256`, and, once an install has been updated, `previous_sha256`, the hashes of the hosts it replaced);
 - run again from a newer package it updates both files in place.
 
-`uninstall.ps1` reads that record, restores the game's `BugSplat64.dll`, sets the root's `nevr-runtime.dll` aside as
-`nevr-runtime.dll.uninstalled-<timestamp>`, puts back a runtime it moved out of the game folder, and renames the record to
-`nevr-install.txt.undone-<timestamp>`.
+`uninstall.ps1` takes `-Dir` and, when the install was given one, the same `-Root`. It reads that record (a record an earlier
+installer left beside `echovr.exe` is read when the root has none), restores the game's `BugSplat64.dll`, sets the root's
+`nevr-runtime.dll` aside as `<root>\installer\aside\nevr-runtime.dll.uninstalled-<timestamp>`, puts back a runtime it moved out
+of the game folder, and moves the record to `<root>\installer\aside\nevr-install.txt.undone-<timestamp>`.
 
 ## What still writes in the game folder
 
@@ -89,7 +91,6 @@ These are not yet in the root. Each moves in its own change and this page is upd
 - `_local\config.yaml`: the runtime still searches `_local` next to the game module (and one and two folders up) for it, and nothing moves it;
 - the game's own logs under `_local\r14logs` (the game writes them);
 - `logs\nevr-boot.jsonl` beside `echovr.exe`: the runtime's start-up log, #1232;
-- the files `install.ps1` leaves for `uninstall.ps1`: the `.original`, `.legacy` and `.uninstalled` set-asides and `nevr-install.txt`.
 
 ## What a launcher must not do
 

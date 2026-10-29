@@ -73,7 +73,7 @@ impl AdbDevice {
         let rows: Vec<(String, String)> = out
             .text
             .lines()
-            .filter(|l| !l.starts_with('*') && !l.starts_with("List"))
+            .filter(|l| !l.starts_with('*') && !l.starts_with("List") && !l.starts_with("adb "))
             .filter_map(|l| {
                 let mut p = l.split_whitespace();
                 Some((p.next()?.to_string(), p.collect::<Vec<_>>().join(" ")))

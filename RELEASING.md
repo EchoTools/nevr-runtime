@@ -26,7 +26,7 @@ from the build.
 
 | file | audience | holds |
 |---|---|---|
-| `nevr-runtime-vX.Y.Z-windows.zip` | players on Windows and people running a dedicated server | `BugSplat64.dll` (the host), `nevr-runtime.dll` (the runtime), `echovr_server.exe` (all stripped, debug info split off), `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt` (the install steps and the dedicated-server steps), `SIGNING.txt`, `SHA256SUMS` (the files inside the zip: `install.ps1` and `uninstall.ps1` check both DLLs against it). The zip has no `plugins/` entry: a zip holds no empty directory |
+| `nevr-runtime-vX.Y.Z-windows.zip` | players on Windows and people running a dedicated server | `BugSplat64.dll` (the host), `nevr-runtime.dll` (the runtime), `echovr_server.exe`, `nevr-install.exe` (all stripped, debug info split off), `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt` (the install steps and the dedicated-server steps), `SIGNING.txt`, `SHA256SUMS` (the files inside the zip: `install.ps1` checks `nevr-install.exe` against it, and the core checks both DLLs against the signed manifest). The zip has no `plugins/` entry: a zip holds no empty directory |
 | `nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so` | Quest packagers | the Quest sentinel library, a loose ELF (attested; not Authenticode) |
 
 There is no top-level `SHA256SUMS` and no `RELEASE-NOTES.md` asset. The **release body** carries the notes and a table

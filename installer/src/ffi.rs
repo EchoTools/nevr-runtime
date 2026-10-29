@@ -275,8 +275,13 @@ pub unsafe extern "C" fn NevrPlanBuild(s: *mut NevrSession, version: *const c_ch
             Value::Null => None,
             d => Some(DataRoots { legacy: d["legacy"].as_bool().unwrap_or(false), media: d["media"].as_bool().unwrap_or(false) }),
         };
+        // Optional, so a caller written before the check keeps working: both keys absent means not observed.
+        let free = match (o.get("free_kb_sdcard"), o.get("free_kb_tmp")) {
+            (None, None) => None,
+            (a, b) => Some(quest::FreeSpace { sdcard_kb: a.and_then(Value::as_u64), tmp_kb: b.and_then(Value::as_u64) }),
+        };
         let m = manifest::stored(&s.cfg.state_dir)?;
-        let plan = quest::plan(&m, &version, &Observed { installed, data }, o["consent_uninstall"].as_bool().unwrap_or(false));
+        let plan = quest::plan(&m, &version, &Observed { installed, data, free }, o["consent_uninstall"].as_bool().unwrap_or(false));
         s.log.info("plan", 9, json!({"steps": plan.steps.iter().map(|x| x.name()).collect::<Vec<_>>(), "decision": plan.decision, "reasons": plan.reasons}))?;
         out_string(&plan.to_json(), out).map_err(|e| Error::new(0, e))?;
         Ok(NEVR_OK)
