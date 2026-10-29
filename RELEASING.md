@@ -50,6 +50,11 @@ fetches the files back only after it has put them there.
 A release is a train, not an event. The train (`release-train.yml`) runs every three hours and cuts a pre-release when `main` has a
 commit that `tools/next_release_version.py` counts (feat, fix, perf or a breaking change) since the newest tag.
 
+The guard (`release-train-guard.yml`, `tools/release_train_guard.py`) runs hourly and covers a dropped scheduled train run.
+When `main` is releasable and no train run was created in the last 3 h 15 min, it dispatches the train and logs the decision
+to the job log and the step summary. It does nothing while a train run is queued, in progress, waiting or pending, when `RELEASE_TRAIN` is not
+`true`, or when nothing on `main` is releasable.
+
 1. **Switch.** The train does nothing until the repository variable `RELEASE_TRAIN` is `true`. Merging the workflow cuts
    nothing.
 2. **No build gate.** The train does not wait for a green `build.yml` run on `main`: nothing runs CI on a push to `main`,

@@ -1,0 +1,32 @@
+name: Release train guard
+
+# GitHub drops or delays scheduled runs, and release-train.yml (cron "17 */3 * * *") lost a slot to that. This guard runs
+# hourly, reads the train's own run list, and dispatches release-train.yml on main when a releasable main has had no train
+# run for the last 195 minutes, with the train's switch on and no train run in progress (tools/release_train_guard.py,
+# RELEASING.md "When to release"). It logs each decision to the job log and the step summary.
+#
+# Credentials: GH_TOKEN is this run's token; `actions: write` is what `gh workflow run` needs. No pull_request trigger.
+on:
+  schedule:
+    - cron: "47 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        ref: main
+        fetch-depth: 0
+
+    - name: Decide and dispatch the train
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+      run: python3 tools/release_train_guard.py
