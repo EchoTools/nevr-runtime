@@ -40,7 +40,7 @@ below.
 | Slot | Value |
 |------|-------|
 | `{REPO}` | `~/src/nevr-runtime` (maintainers only; work in a worktree under `.claude/worktrees/`, AGENTS.md "Branch lifecycle") |
-| `{PR_GATE_CMD}` | The quick check, on the PR's tip, in the build slice (maintainers only): `just build` plus a raw `cmake --build --preset <preset>` (because `just build` always exits 0); the covering test recipes (`just --list`: `test-auth-unit`, `test-quest-shared`, `test-quest-*`, `test-android` for a change under `src/quest`, ...); the PC login test for runtime or auth changes; `python3 -m pytest tools/tests/test_verify_gtest_floor.py` when `TEST(`/`TEST_F(` declarations in `src/runtime/tests/*.cpp` change; on every PR `just test-tools` (kept: output, JUnit XML, `runs.jsonl`) and `python3 tools/verify_doc_paths.py` (run `just worktree-setup` first in a fresh worktree). Each item reported with its result; an item not run named as not run. `just verify` is NOT this gate: it runs only on main when prepping a release (AGENTS.md "Builds"). |
+| `{PR_GATE_CMD}` | The quick check, on the PR's tip, in the build slice (maintainers only): `just build` (it exits nonzero when the build fails); the covering test recipes (`just --list`: `test-auth-unit`, `test-quest-shared`, `test-quest-*`, `test-android` for a change under `src/quest`, ...); the PC login test for runtime or auth changes; `python3 -m pytest tools/tests/test_verify_gtest_floor.py` when `TEST(`/`TEST_F(` declarations in `src/runtime/tests/*.cpp` change; on every PR `just test-tools` (kept: output, JUnit XML, `runs.jsonl`) and `python3 tools/verify_doc_paths.py` (run `just worktree-setup` first in a fresh worktree). Each item reported with its result; an item not run named as not run. `just verify` is NOT this gate: it runs only on main when prepping a release (AGENTS.md "Builds"). |
 | `{FINDINGS}` | GitHub issues, not a ledger file (there is no `BUGS.md`: `git ls-tree origin/main BUGS.md` returns nothing). A defect you do not fix in the same turn gets an issue (AGENTS.md "Documentation, plans and findings", "Fix it or file it, in the same turn") written as a falsifiable claim with Evidence at `<sha>`, Not shown, Falsifier, Work (AGENTS.md "What a PR carries"). A security-sensitive finding is reported to the owner, not filed. The `N<number>` tags are the code's own rule tags, indexed in AGENTS.md "The N-rules index"; the highest in `src`, `tools` and `justfile` is N146 (`git grep -ohE '\bN[0-9]+\b' origin/main -- src tools justfile | sort -V | uniq`). |
 | `{INVARIANTS}` | Never commit generated protobuf; prologue-validate before any binary patch; hook frequency analysis before sleeps; production deploy forbidden without per-instance approval; no agent writes into the owner's game install (runs use a throwaway copy); CPP addendum hard-stops (no C-style casts, no `catch(...)`, never throw across a DLL boundary, no I/O from DllMain, Ninja-only, vcpkg-manifest deps only; `-Werror` is on every MinGW target, see the engineer primer's "Compiler warnings"). Source: AGENTS.md "Guardrails", "Production Deployment", "The game install", and the inlined addendum. |
 | `{EXPERTISE_PREREADS}` | The C++ MinGW Addendum inlined in AGENTS.md (after its `CPP-MINGW-ADDENDUM` separator) — mandatory pre-read gate before any C++/build work. A maintainer-only copy also exists elsewhere; AGENTS.md wins on conflict. |
@@ -175,10 +175,9 @@ what you are building. Return to Gate 3.
   nonzero (N4, N102, N120 in AGENTS.md "The N-rules index"). Note
   `FatalError()` does not reliably terminate in server mode — see the engineer
   primer's fatal-error section before relying on it.
-- **Success derives from the artifact, never a proxy.** `just build` greps its
-  own output and always exits 0 — its exit code is a proxy. Derive success from
-  the real compiler/linker exit (a raw `cmake --build --preset <preset>`) and the
-  produced binary (AGENTS.md "Commit and verification conventions").
+- **Success derives from the artifact, never a proxy.** Read `just build`'s own
+  exit code (a plain `cmake --build`: nonzero when the compiler or linker fails)
+  and check the produced binary (AGENTS.md "Commit and verification conventions").
 - Modern C++ per the addendum: `static_cast`/`reinterpret_cast`/`std::bit_cast`,
   never C-style casts; named catch types, never `catch(...)`; no throw across a
   DLL boundary (convert to `HRESULT` at exports); no I/O from `DllMain`;
@@ -191,8 +190,8 @@ what you are building. Return to Gate 3.
 (`VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 systemd-run --user --scope
 --slice=nevr-builds.slice -p MemoryMax=8G <cmd>`; wait while 2 or more `ninja` run; maintainers only), and
 report each item with its result.
-1. **The build:** `just build`, then a raw `cmake --build --preset <preset>` whose exit
-   code you read (`just build` always exits 0). Quote the tail and exit code, read from a
+1. **The build:** `just build`, whose exit code you read (nonzero when the build
+   fails). Quote the tail and exit code, read from a
    file under `~/src/nevr-runtime-work/<agent>/` (maintainers only), never `$?` after a pipe.
 2. **The covering test recipes** (`just --list`; `test-auth-unit`, `test-quest-shared`,
    `test-quest-*`, `test-android` for a change under `src/quest`, ...). If the change
@@ -273,8 +272,8 @@ not fake a green.
 
 ## Common mistakes
 
-- Reporting `just build` exit 0 as "build passed" — it greps its output and
-  always exits 0. Use a raw `cmake --build --preset <preset>` and read its exit code.
+- Reading `$?` after a pipe (`just build | tail`) as the build's exit code — it is
+  the last stage's. Write the output to a file and read the recipe's own exit code.
 - Treating `just verify` as the PR gate, asking a reviewer to run it, or substituting a
   `ninja -t inputs` proof for the PC login on a runtime or auth change.
 - Reading a server hang as a deadlock when it is `FatalError` blocked on an

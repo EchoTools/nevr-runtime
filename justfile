@@ -1960,10 +1960,6 @@ verify:
     # A dirty tree names its files, so the log says what differs from the commit it names (#844).
     if [ -n "$dirty" ]; then printf '%s\n' "$dirty" | sed 's/^/verify: dirty /'; fi
     just build
-    # `just build` filters its output through grep and always exits 0, so its exit
-    # code is a proxy, not a pass/fail signal. Re-run the real build to derive success
-    # from the compiler/linker itself — a no-op when green, nonzero when truly broken.
-    cmake --build --preset {{ preset }}
     # The DLL embeds exactly the public defaults file (the build reads no other source).
     python3 tools/check_embedded_defaults.py --header build/{{ preset }}/generated/nevr_builtin_defaults.h --binary build/{{ preset }}/bin/nevr-runtime.dll
     # --- Parallel test block --------------------------------------------------

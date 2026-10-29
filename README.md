@@ -395,17 +395,3 @@ Submodules in `extern/`: `minhook`, `breakpad`, `lss`.
 | **nevr-runtime-plugins** | Gameplay and tooling plugins |
 | **nakama** | The community game service (echovrce) |
 | **revault** | Reverse-engineering data warehouse for the game binaries |
-
-## Local configuration
-
-The root `CMakeLists.txt` does not include `cmake/local.cmake` automatically.
-To use that file, enable its include in `CMakeLists.txt`; then a local
-post-build command can copy the DLL into a game directory:
-
-```cmake
-set(GAME_DIR "/path/to/echovr/bin/win10")
-set(NEVR_ROOT_DIR "/path/to/the/nevr/root")  # %LOCALAPPDATA%\nevr\echovr of the Windows user (a Wine prefix has its own)
-add_custom_command(TARGET nevr_runtime POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:nevr_runtime> "${NEVR_ROOT_DIR}/nevr-runtime.dll"
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:nevr_host> "${GAME_DIR}/BugSplat64.dll")
-```

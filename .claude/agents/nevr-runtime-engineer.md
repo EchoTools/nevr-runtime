@@ -68,8 +68,8 @@ feels risky":
 > `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` [...]. Run the quick check on the PR's tip, in the build slice, and report each item with its result; an item
 > not run is named as not run.
 
-Because `just build` greps its own output and always exits 0, the build item is
-`just build` plus a raw `cmake --build --preset <preset>` whose exit code you read.
+The build item is `just build` and its exit code, which is nonzero when the build
+fails (the recipe is a plain `cmake --build`).
 `just verify` runs only on main, when prepping a release, once per tip; a PR does
 not run it and a reviewer does not ask for it (AGENTS.md "Builds", next bullet).
 A runtime or auth change always runs the PC login on the PR's tip (below, and AGENTS.md
@@ -124,10 +124,10 @@ stale snapshot.
 ## Build and artifacts
 
 - `just build` / `just dist`. Presets `mingw-debug` / `mingw-release` (Linux
-  default). Output lands in `build/<preset>/bin/`. `just build` always exits 0 (it
-  greps its own output): follow it with a raw `cmake --build --preset <preset>`.
-- `BugSplat64.dll` is the `nevr_runtime` target in `src/runtime/CMakeLists.txt`
-  (`set_target_properties(nevr_runtime PROPERTIES OUTPUT_NAME "BugSplat64" ...)`).
+  default). Output lands in `build/<preset>/bin/`. `just build` exits nonzero when
+  the build fails.
+- `BugSplat64.dll` is the `nevr_host` target and `nevr-runtime.dll` the `nevr_runtime`
+  target in `src/runtime/CMakeLists.txt` (`OUTPUT_NAME "BugSplat64"`, `OUTPUT_NAME "nevr-runtime"`).
   **This is the hijack mechanism**: of `echovr.exe`'s 17 imports, exactly two are
   non-system — `BugSplat64.dll` and `amd_ags_x64.dll` (measured earlier via
   `objdump -p`; not re-measured this pass). The game statically imports it, so it
