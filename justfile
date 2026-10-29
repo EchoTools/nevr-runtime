@@ -1828,7 +1828,17 @@ test-quest-autopilot:
     set -euo pipefail
     out="build/quest-autopilot-host"
     mkdir -p "$out/scratch"
-    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -pthread -Isrc -Isdk/include)
+    # nlohmann::json (plugin.cpp) comes from the header the build installed from vcpkg.json, never a system package:
+    # the CI builder image has none.
+    json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
+    if [[ ! -f "$json_src/json.hpp" ]]; then
+        echo "test-quest-autopilot: FAIL - $json_src/json.hpp not found; run 'just build' with a mingw-* preset first" >&2
+        exit 1
+    fi
+    json_inc="$out/json_inc"
+    mkdir -p "$json_inc"
+    ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -pthread -Isrc -Isdk/include -isystem "$json_inc")
     "${cxx[@]}" src/quest/tests/autopilot_route_test.cpp src/quest/plugins/autopilot/route.cpp \
         -o "$out/autopilot_route_test"
     routes=(tools/quest_autopilot_routes/*.txt)

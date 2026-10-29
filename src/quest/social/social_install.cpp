@@ -7,7 +7,7 @@
 #include <atomic>
 #include <cstring>
 
-#include "abi/symbol_hash.h"
+#include "nevr/symbol_hash.h"
 #include "hook_install.h"
 #include "hook_log.h"
 #include "hook_report.h"

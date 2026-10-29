@@ -17,7 +17,7 @@
 #include <string>
 #include <vector>
 
-#include "abi/symbol_hash.h"
+#include "nevr/symbol_hash.h"
 #include "hook_install.h"
 #include "pinned_targets.h"
 #include "hook_log.h"
