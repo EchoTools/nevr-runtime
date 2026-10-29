@@ -393,6 +393,7 @@ static std::shared_ptr<ix::WebSocket> RetireGameWsLocked(ix::WebSocket* gameWs, 
       }
     }
     g_pairs.erase(it);
+    if (gameWs == g_loginGameWs) g_loginGameWs = nullptr;  // the login slot never keeps a retired socket
   }
   if (g_activeGameWs == gameWs) {
     g_activeGameWs = nullptr;
@@ -3003,6 +3004,11 @@ size_t TestHook_ConnectedGameSockets() {
   if (g_server) connected += g_server->getClients().size();
   if (g_matchServer) connected += g_matchServer->getClients().size();
   return connected;
+}
+
+void* TestHook_LoginGameWsPtr() {
+  std::lock_guard<std::mutex> lk(g_pairsMutex);
+  return static_cast<void*>(g_loginGameWs);
 }
 
 void TestHook_SharedRoute_SetBeforeSend(void (*fn)(void* target)) {

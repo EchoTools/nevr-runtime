@@ -3912,6 +3912,16 @@ TEST_F(SharedRouteLifetimeTest, HeldTargetIsNotExpiredAtTheSend) {
   EXPECT_FALSE(expired) << "a held target expired before the send";
 }
 
+TEST_F(RolesByPathTest, LoginSlotIsEmptyOnceTheLoginSocketIsRetired) {
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForFrames(1)) << "the /login socket never received the reply to the LoginRequest";
+  ASSERT_NE(TestHook_LoginGameWsPtr(), nullptr) << "precondition: the login slot was not set";
+  login.Disconnect();
+  ASSERT_TRUE(YieldUntil([] { return TestHook_ConnectedGameSockets() == 0; })) << "the login socket never closed on the bridge";
+  EXPECT_EQ(TestHook_LoginGameWsPtr(), nullptr) << "the login slot still holds the retired socket";
+}
+
 // ============================================================================
 // #708 S1: network.session_router. The same real bridge, with the /config sockets handed to
 // nevr_session_router. Login and matchmaker sockets keep the bridge's own rules in this mode.
