@@ -335,7 +335,7 @@ statements come from reading the code; neither the mojibake nor the fix has been
 
 ### 8. Plugins
 
-The ABI does not change (`NevrLogFn`, `NevrLogField` in `src/extension/plugin_interface.h`; `NEVR_PLUGIN_API_VERSION` 8).
+The ABI does not change (`NevrLogFn`, `NevrLogField` in `sdk/include/nevr/plugin_interface.h`; `NEVR_PLUGIN_API_VERSION` 8).
 `HostPluginLog` (`src/runtime/ext/plugin_loader.cpp`) writes a record with `tag` `NEVR.PLUGIN`, `plugin` (set by the host,
 so one plugin cannot write as another, Rule 15), `event` `plugin_line`, the plugin's message as `msg`, and each
 `NevrLogField` as its own key with a string value: the ABI carries strings, and reading `"5"` as a number would let one key
