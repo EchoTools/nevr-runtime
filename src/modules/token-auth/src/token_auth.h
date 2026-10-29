@@ -36,6 +36,10 @@ std::string GetUsername();
 // agree. The returned snapshot remains valid across later publication.
 std::shared_ptr<const AuthSnapshot> GetAuthSnapshot();
 
+// True once the sign-in has ended without a token (the readiness is Failed): no token comes in this run, so a login has
+// nothing to present (#1446). False before that, and when token auth never ran.
+bool SignInEndedWithoutToken();
+
 #ifdef NEVR_TEST_HOOKS
 // In-memory DeviceAuth observations for the token-auth unit test target.  These
 // hooks intentionally construct a short-lived DeviceAuth instance: they do not
@@ -89,6 +93,10 @@ DeviceAuthState InspectDeviceAuthFromCache();
 // so the two sources can be made to disagree and it is observable which one the
 // guard consults. Returns the guard's decision: true = refresh now.
 bool InspectRefreshDecision(const ::CachedAuthToken& live, uint64_t now);
+
+// Publishes `readiness` as the module's current snapshot, with no token, so SignInEndedWithoutToken can be driven through
+// each readiness. The snapshot is process-wide: a caller publishes Disabled again when it returns (#1446).
+void PublishReadinessForTest(AuthReadiness readiness);
 }  // namespace test_hook
 #endif  // NEVR_TEST_HOOKS
 }

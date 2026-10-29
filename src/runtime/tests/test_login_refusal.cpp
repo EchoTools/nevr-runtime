@@ -11,7 +11,9 @@
 
 namespace {
 
+using nevr_login_refusal::AnswersLoginLocally;
 using nevr_login_refusal::ClientRefusalLatch;
+using nevr_login_refusal::LocalAnswerCounter;
 using nevr_login_refusal::DescribeConfigSource;
 using nevr_login_refusal::MissingServerCredentialKeys;
 using nevr_login_refusal::NoCredentialCause;
@@ -129,6 +131,50 @@ TEST(LoginRefusalLatch, AnUnauthenticatedClientIsLatchedLikeAnyOther) {
   EXPECT_FALSE(latch.ShouldSay(""));
   EXPECT_TRUE(latch.IsRefused(""));
   EXPECT_TRUE(latch.ShouldSay("token-A"));
+}
+
+// #1446: a client whose sign-in ended without a token answers the game's login itself. Only that case: a server,
+// a config or matchmaker socket, a sign-in that still carries a token or URL credentials, or a sign-in still running
+// keeps the path that asks the service.
+TEST(LoginRefusalLocalAnswer, OnlyAClientLoginAfterTheSignInEndedWithoutATokenIsAnsweredHere) {
+  EXPECT_TRUE(AnswersLoginLocally(/*isServer=*/false, /*isLoginSocket=*/true, /*bearerPresent=*/false,
+                                  /*urlCredentials=*/false, /*signInEnded=*/true, /*loginSessionLive=*/false));
+  EXPECT_FALSE(AnswersLoginLocally(true, true, false, false, true, false)) << "a server has its own rule";
+  EXPECT_FALSE(AnswersLoginLocally(false, false, false, false, true, false)) << "a config or matchmaker socket";
+  EXPECT_FALSE(AnswersLoginLocally(false, true, true, false, true, false)) << "a token is presented";
+  EXPECT_FALSE(AnswersLoginLocally(false, true, false, true, true, false)) << "URL credentials are presented";
+  EXPECT_FALSE(AnswersLoginLocally(false, true, false, false, false, false)) << "the sign-in has not ended";
+}
+
+// #1446: a live login session holds the slot and its remote. Answering the login frees the slot, so a
+// login is never answered locally while a session is live, even when the sign-in ended without a token. The
+// control: with no live session the same login is answered.
+TEST(LoginRefusalLocalAnswer, ALiveLoginSessionIsNeverAnsweredLocallyEvenWhenTheSignInEnded) {
+  EXPECT_FALSE(AnswersLoginLocally(/*isServer=*/false, /*isLoginSocket=*/true, /*bearerPresent=*/false,
+                                   /*urlCredentials=*/false, /*signInEnded=*/true, /*loginSessionLive=*/true))
+      << "a live login session keeps its slot and its remote";
+  EXPECT_TRUE(AnswersLoginLocally(/*isServer=*/false, /*isLoginSocket=*/true, /*bearerPresent=*/false,
+                                  /*urlCredentials=*/false, /*signInEnded=*/true, /*loginSessionLive=*/false))
+      << "with no live session the same login is answered";
+}
+
+// #1446: the first answer is written at once; the answers after it are counted and written once per window.
+TEST(LoginRefusalLocalAnswer, TheFirstAnswerIsWrittenAndLaterOnesAreCountedOncePerWindow) {
+  LocalAnswerCounter counter;
+  const LocalAnswerCounter::Verdict first = counter.Record(0);
+  EXPECT_TRUE(first.write);
+  EXPECT_TRUE(first.first);
+  EXPECT_EQ(first.count, 1u);
+  EXPECT_FALSE(counter.Record(1000).write);
+  EXPECT_FALSE(counter.Record(59999).write) << "inside the window nothing is written";
+  const LocalAnswerCounter::Verdict summary = counter.Record(60000);
+  EXPECT_TRUE(summary.write);
+  EXPECT_FALSE(summary.first);
+  EXPECT_EQ(summary.count, 3u) << "the answers since the last line, this one included";
+  EXPECT_FALSE(counter.Record(60001).write);
+  const LocalAnswerCounter::Verdict next = counter.Record(120000);
+  EXPECT_TRUE(next.write);
+  EXPECT_EQ(next.count, 2u);
 }
 
 }  // namespace
