@@ -504,6 +504,15 @@ class ReleaseStagesTest(PackageFixture):
         self.assertEqual(self.headline_line({self.HEADLINE: None}, {self.HEADLINE: "Quest: asks for clocks\n"}),
                          "Quest: asks for clocks.")
 
+    def test_a_byte_order_mark_is_not_part_of_the_headline(self):
+        self.assertEqual(self.headline_line({self.HEADLINE: None}, {self.HEADLINE: "\ufeffWith a BOM\n"}), "With a BOM.")
+
+    def test_a_placeholder_in_the_player_line_is_not_expanded_by_the_template(self):
+        template = Path(self.tmp) / "t.md"
+        template.write_text("@PLAYER_LINE@\n@ZIP@ @QUEST@\n", encoding="utf-8")
+        body = package_release.render(template, {"PLAYER_LINE": "@ZIP@ and @QUEST@", "ZIP": "z.zip", "QUEST": "q.so"})
+        self.assertEqual(body, "@ZIP@ and @QUEST@\nz.zip q.so\n")
+
     def test_leading_blank_lines_and_surrounding_spaces_are_dropped_from_the_headline(self):
         self.assertEqual(self.headline_line({self.HEADLINE: None},
                                             {self.HEADLINE: "\n\n   \n  Real headline  \nsecond line is ignored\n"}),

@@ -186,9 +186,8 @@ def render(template: Path, values: dict, apk: bool = False) -> str:
         else:
             out.append(line)
     text = "".join(out)
-    for key, value in values.items():
-        text = text.replace(f"@{key}@", value)
-    return text
+    # One pass over the template, so a value (a headline holding "@ZIP@") is never expanded a second time.
+    return re.sub(r"@([A-Z_]+)@", lambda found: values.get(found.group(1), found.group(0)), text)
 
 
 def pe_has_certificate_table(path: Path) -> bool:
@@ -446,7 +445,7 @@ def headline_line(repo: Path, base: str, rev: str) -> str | None:
     except subprocess.CalledProcessError as error:
         raise GateFailure(f"reading {HEADLINE_FILE} at {base}..{rev} in {repo} failed: {error.stderr.strip()}")
     try:
-        text = at_rev.decode("utf-8")
+        text = at_rev.decode("utf-8-sig")
     except UnicodeDecodeError:
         raise GateFailure(f"{HEADLINE_FILE} at {rev} is not UTF-8 text")
     lines = [line.strip() for line in text.splitlines() if line.strip()]
