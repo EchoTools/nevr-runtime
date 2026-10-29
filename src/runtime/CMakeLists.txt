@@ -70,6 +70,8 @@ set(PATCHES_SOURCES
     "patch/asset_cache.cpp"
     # #938: the nEVR section of the in-game CREDITS page (pure logic in credits_text.h).
     "patch/credits_text.cpp"
+    # #1422: a server's private-match team size (pure logic in server_team_size.h).
+    "patch/server_team_size.cpp"
     "patch/asset_registry.cpp"
     "patch/plugin_assets.cpp"
     "compat/ws_bridge.cpp"
@@ -181,6 +183,8 @@ set(PATCHES_HEADERS
     "lifecycle/boot_hook_policy.h"
     "lifecycle/crash_recovery_sites.h"
     "patch/resource_override.h"
+    "patch/server_team_size.h"
+    "patch/server_team_size_install.h"
     "patch/asset_cache.h"
     "patch/asset_registry.h"
     "patch/plugin_assets.h"
@@ -919,6 +923,13 @@ if(BUILD_TESTING)
     target_include_directories(test_arena_round_time PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_arena_round_time PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_arena_round_time DISCOVERY_MODE PRE_TEST)
+
+    # #1422: a server's private-match team size, its two checked-patch sites driven on buffers (server_team_size.h).
+    add_executable(test_server_team_size tests/test_server_team_size.cpp)
+    set_source_files_properties(tests/test_server_team_size.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_server_team_size PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_server_team_size PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_server_team_size DISCOVERY_MODE PRE_TEST)
 
     # #982: the public Arena match clock keeps counting through goals (patch/arena_public_clock_rules.h).
     add_executable(test_arena_public_clock tests/test_arena_public_clock.cpp lifecycle/arena_round_time.cpp)

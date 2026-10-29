@@ -736,6 +736,19 @@ constexpr uintptr_t GET_TIME_OVERRIDE_FLAG = 0x2099038;
 constexpr uintptr_t GET_TIME_OVERRIDE_VALUE = 0x209CB00;
 
 // ============================================================================
+// Server Team Size (nevr_server_team_size, #1422)
+// ============================================================================
+
+/// Two checked-patch sites inside ServerAssignTeam (0x1401AB730; `.pdata` chained to 0x1401ABE4B; named by its own
+/// "[NETGAME] \tServerAssignTeam:" lines). The bytes and the rule are in runtime/patch/server_team_size.h.
+/// The team cap: `mov eax, 5; shr rsi, 1; cmp rsi, 5` (VA 0x1401AB8C2), min(Lobby::maxEntrants / 2, 5).
+constexpr uintptr_t SERVER_ASSIGN_TEAM_CAP = 0x1AB8C2;
+constexpr size_t SERVER_ASSIGN_TEAM_CAP_SIZE = 12;
+/// The team slot: the team's count into the member's 5-bit slot field (VA 0x1401ABC8A).
+constexpr uintptr_t SERVER_ASSIGN_TEAM_SLOT = 0x1ABC8A;
+constexpr size_t SERVER_ASSIGN_TEAM_SLOT_SIZE = 18;
+
+// ============================================================================
 // Future Wave 1 Hook Targets (validated, not yet hooked)
 // ============================================================================
 
