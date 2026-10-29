@@ -386,11 +386,21 @@ ActionResult PluginsAction() noexcept {
   return {Settle::kDone, "ran"};
 }
 
+// The invite service's stop, for the noexcept teardown paths below: an exception escaping a noexcept function ends the
+// process, so a failure is logged here and the teardown goes on.
+void InviteShutdown() noexcept {
+  try {
+    nevr_quest_invite::Shutdown();
+  } catch (const std::exception&) {
+    sentinel::EmitFixed(nevr_quest::LogLevel::kError, "[NEVR.INVITE] invite service shutdown failed");
+  }
+}
+
 // Runs on the process-end hook's helper thread when the game's android_main returns (#621), on every launch: the plugin
 // entries that never got their moment end as `not_started` (#438), then the self-check report goes out (a no-op unless
 // the bridge that carries it enabled the self-checks).
 void OnGameProcessEnd() noexcept {
-  nevr_quest_invite::Shutdown();  // a request in flight returns at once; the worker is joined before the report
+  InviteShutdown();  // a request in flight returns at once; the worker is joined before the report
   nevr_quest::plugin::FinishPlugins(nevr_quest::plugin::reason::kGameExitedFirst);
   ReportAndroidMainReturned();
 }
@@ -768,7 +778,7 @@ void ShutdownIntegration() noexcept {
       delete bridge;
     }
     // The invite worker reads its token from the auth session and posts through it: it is stopped before the session is deleted.
-    nevr_quest_invite::Shutdown();
+    InviteShutdown();
     if (nevr::quest_auth::QuestTokenAuth* const auth = rt.auth.exchange(nullptr)) {
       auth->Stop();
       delete auth;
