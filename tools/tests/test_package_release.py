@@ -1054,6 +1054,22 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in self.game.iterdir()), ["BugSplat64.dll", "echovr.exe"],
                          "the standing rule: nothing of ours but the host is in the game folder")
 
+    def test_install_makes_the_roots_plugins_folder_and_uninstall_leaves_what_is_in_it(self):
+        (self.root / "plugins").mkdir(parents=True)
+        (self.root / "plugins" / "mine.dll").write_bytes(b"A-PLUGIN")
+        installed = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertEqual(installed.returncode, 0, self.output(installed))
+        self.assertTrue((self.root / "plugins").is_dir(), "plugins load from the root's plugins folder")
+        self.assertEqual((self.root / "plugins" / "mine.dll").read_bytes(), b"A-PLUGIN", "a plugin already there is untouched")
+        undone = self.ps("uninstall.ps1", "-Dir", str(self.game))
+        self.assertEqual(undone.returncode, 0, self.output(undone))
+        self.assertEqual((self.root / "plugins" / "mine.dll").read_bytes(), b"A-PLUGIN", "uninstall deletes no plugin")
+
+    def test_a_fresh_install_makes_an_empty_plugins_folder_in_the_root(self):
+        installed = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertEqual(installed.returncode, 0, self.output(installed))
+        self.assertEqual(list((self.root / "plugins").iterdir()), [])
+
     def test_install_without_a_local_app_data_and_no_root_refuses_and_changes_nothing(self):
         env = {k: v for k, v in os.environ.items() if k != "LOCALAPPDATA"}
         result = subprocess.run(["pwsh", "-NoProfile", "-File", str(self.pkg / "install.ps1"), "-Dir", str(self.game)],

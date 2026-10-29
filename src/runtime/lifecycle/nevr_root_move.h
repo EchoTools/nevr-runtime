@@ -2,7 +2,8 @@
 //
 // Before this change nEVR wrote its run log, crash record and cosmetic packages under %LOCALAPPDATA%\EchoVR and kept the sign-in
 // cache in the install's _local folder. The first run that finds those files moves them to %LOCALAPPDATA%\nevr\echovr and
-// leaves MOVED-TO-NEVR-ROOT.txt in each folder it took something from, so a player or support can see why the folder is empty.
+// leaves MOVED-TO-NEVR-ROOT.txt in each folder it took something from (the plugins folder beside the game executable
+// excepted: nothing of ours is written there), so a player or support can see why the folder is empty.
 // The sign-in cache is the only file taken from _local: config.yaml keeps its resolution (ADR 0012 step 6). The sign-in cache
 // is moved through the protected write it is saved with, so the moved file is as private as a saved one. The move
 // never overwrites a file already in the root, is safe to run twice, leaves a file where it is (with an event saying why) when it
@@ -43,6 +44,7 @@ struct Inputs {
   std::vector<std::wstring> local_dirs;  // the install's _local folders, nearest first (the sign-in cache's search order)
   std::wstring legacy_logs_dir;          // %LOCALAPPDATA%\EchoVR\logs
   std::wstring legacy_cosmetics_dir;     // %LOCALAPPDATA%\EchoVR\cosmetics\v1\packages
+  std::wstring legacy_plugins_dir;       // the plugins\ folder next to the game executable (where plugins used to load from)
 };
 
 // True for the names nEVR's own writers give a file in the legacy logs folder: the run log (nevr-<timestamp>.jsonl, or .log with

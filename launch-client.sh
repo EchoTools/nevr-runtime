@@ -25,10 +25,11 @@ RUNTIME_DLL=""
 CONFIG=""
 TRACE_EXPORTS=""
 EXTRA_GAME_ARGS=()
+PLUGINS=()
 REQUIRE_IN_GAME=0
 EXIT_AFTER_LOGIN=0
 LOGIN_TIMEOUT=120
-USAGE="launch-client.sh [--dll PATH] [--runtime-dll PATH] [--config PATH] [--trace-exports LIST] [--game-arg ARG]... [--require-in-game] [--exit-after-login [--login-timeout SECONDS]] [--print-game-root]"
+USAGE="launch-client.sh [--dll PATH] [--runtime-dll PATH] [--config PATH] [--trace-exports LIST] [--game-arg ARG]... [--plugin PATH]... [--require-in-game] [--exit-after-login [--login-timeout SECONDS]] [--print-game-root]"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dll) DLL="${2:?--dll needs a path}"; shift 2 ;;
@@ -36,6 +37,7 @@ while [[ $# -gt 0 ]]; do
     --config) CONFIG="${2:?--config needs a path}"; shift 2 ;;
     --trace-exports) TRACE_EXPORTS="${2:?--trace-exports needs a list (pnsrad, pnsovr, pnsdemo, all; comma separated)}"; shift 2 ;;
     --game-arg) EXTRA_GAME_ARGS+=("${2:?--game-arg needs one game argument}"); shift 2 ;;
+    --plugin) PLUGINS+=("${2:?--plugin needs a path}"); shift 2 ;;
     --require-in-game) REQUIRE_IN_GAME=1; shift ;;
     --exit-after-login) EXIT_AFTER_LOGIN=1; shift ;;
     --login-timeout) LOGIN_TIMEOUT="${2:?--login-timeout needs seconds}"; shift 2 ;;
@@ -46,6 +48,9 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -f "$DLL" ]] || { echo "ERROR: $DLL does not exist; build it first" >&2; exit 2; }
 [[ -n "$RUNTIME_DLL" ]] || RUNTIME_DLL="$(dirname "$DLL")/nevr-runtime.dll"
+for plugin in "${PLUGINS[@]}"; do
+  [[ -f "$plugin" ]] || { echo "ERROR: --plugin $plugin does not exist" >&2; exit 2; }
+done
 [[ -f "$RUNTIME_DLL" ]] || { echo "ERROR: $RUNTIME_DLL does not exist; the host loads it from the game directory, build it first" >&2; exit 2; }
 # 45 s is the minimum patience from process start (AGENTS.md "Startup Timing"): the splash alone is 15-20 s.
 # NEVR_LOGIN_MIN_SECONDS lowers it for the script's own tests only.
@@ -81,10 +86,12 @@ for f in "$LOCAL_DIR/config.json" "$LOCAL_DIR/config.yaml"; do
   if [[ -e "$f" || -L "$f" ]]; then echo "DRIFT: $f exists (expected absent)" >&2; drift=1; fi
 done
 shopt -s nullglob
-plugin_files=("$GAME_DIR"/plugins/*)
+# Plugins load from the nevr root's plugins\ (ADR 0012). The game folder's plugins\ is not read, but a file in it
+# would be moved into the root by the runtime's one-time move, so it counts as drift too.
+plugin_files=("$GAME_DIR"/plugins/* "$NEVR_ROOT_DIR"/plugins/*)
 shopt -u nullglob
 if [[ ${#plugin_files[@]} -ne 0 ]]; then
-  echo "DRIFT: $GAME_DIR/plugins is not empty: ${plugin_files[*]}" >&2; drift=1
+  echo "DRIFT: a plugins folder is not empty (expected empty: $GAME_DIR/plugins, $NEVR_ROOT_DIR/plugins): ${plugin_files[*]}" >&2; drift=1
 fi
 # The host loads nevr-runtime.dll from the nevr root, never from the game install (ADR 0012). One in either place
 # is a leftover of another run (or a file the host would never load), which the restore step below would delete
@@ -117,6 +124,7 @@ restore() {
   trap - EXIT
   cp -p "$SCRATCH/BugSplat64.dll.orig" "$GAME_DIR/BugSplat64.dll"
   rm -f "$NEVR_ROOT_DIR/nevr-runtime.dll"
+  for plugin in "${PLUGINS[@]}"; do rm -f "$NEVR_ROOT_DIR/plugins/$(basename "$plugin")"; done
   if cmp -s "$SCRATCH/BugSplat64.dll.orig" "$GAME_DIR/BugSplat64.dll" && [[ ! -e "$NEVR_ROOT_DIR/nevr-runtime.dll" ]]; then
     echo "=== original BugSplat64.dll restored and verified, nevr-runtime.dll removed from the nevr root ==="
   else
@@ -137,6 +145,12 @@ cp -v "$RUNTIME_DLL" "$NEVR_ROOT_DIR/nevr-runtime.dll"
 cmp -s "$RUNTIME_DLL" "$NEVR_ROOT_DIR/nevr-runtime.dll"
 cp -v "$DLL" "$GAME_DIR/BugSplat64.dll"
 cmp -s "$DLL" "$GAME_DIR/BugSplat64.dll"
+# --plugin files go into the nevr root's plugins folder, where the runtime loads plugins from (ADR 0012); the restore removes them.
+for plugin in "${PLUGINS[@]}"; do
+  mkdir -p "$NEVR_ROOT_DIR/plugins"
+  cp -v "$plugin" "$NEVR_ROOT_DIR/plugins/"
+  cmp -s "$plugin" "$NEVR_ROOT_DIR/plugins/$(basename "$plugin")"
+done
 sha256sum "$GAME_DIR/BugSplat64.dll" "$NEVR_ROOT_DIR/nevr-runtime.dll"
 
 echo "=== Starting echovr.exe -windowed (DISPLAY=$DISPLAY, WAYLAND_DISPLAY unset) ==="
