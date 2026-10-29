@@ -124,9 +124,9 @@ TEST_F(ServerTeamSize, OneToFourWriteTheCapsTwoFivesAndLeaveTheSlotAlone) {
     Image img;
     g_writes.clear();
     const Outcome o = Run(img, s);
-    EXPECT_EQ(img.cap, CapFor(s)) << int(s);
-    EXPECT_EQ(img.slot, kSlotStock) << int(s);
-    ASSERT_EQ(g_writes.size(), 1u) << int(s);
+    EXPECT_EQ(img.cap, CapFor(s)) << static_cast<int>(s);
+    EXPECT_EQ(img.slot, kSlotStock) << static_cast<int>(s);
+    ASSERT_EQ(g_writes.size(), 1u) << static_cast<int>(s);
     EXPECT_EQ(g_writes[0], img.cap.data());
     EXPECT_TRUE(o.capTried);
     EXPECT_EQ(o.cap, Result::Applied);
@@ -140,9 +140,9 @@ TEST_F(ServerTeamSize, SixToEightWriteTheSlotRuleFirstThenTheCap) {
     Image img;
     g_writes.clear();
     const Outcome o = Run(img, s);
-    EXPECT_EQ(img.slot, kSlotWrapped) << int(s);
-    EXPECT_EQ(img.cap, CapFor(s)) << int(s);
-    ASSERT_EQ(g_writes.size(), 2u) << int(s);
+    EXPECT_EQ(img.slot, kSlotWrapped) << static_cast<int>(s);
+    EXPECT_EQ(img.cap, CapFor(s)) << static_cast<int>(s);
+    ASSERT_EQ(g_writes.size(), 2u) << static_cast<int>(s);
     EXPECT_EQ(g_writes[0], img.slot.data()) << "the slot rule goes in before the cap lets a sixth member in";
     EXPECT_EQ(g_writes[1], img.cap.data());
     EXPECT_EQ(o.slot, Result::Applied);
@@ -288,7 +288,27 @@ TEST_F(ServerTeamSize, AnotherWritersSixWithARefusedSlotWriteIsAFailure) {
   EXPECT_EQ(o.slot, Result::WriteFailed);
   EXPECT_EQ(o.inEffect, 6u);
   EXPECT_FALSE(o.slotRule);
+  EXPECT_TRUE(o.slotGame);
   EXPECT_TRUE(nevr_server_team_size::IsFailure(o));
+  char line[640];
+  nevr_server_team_size::FormatRecord(line, sizeof(line), o, 0x1401AB8C2, 0x1401ABC8A);
+  EXPECT_NE(std::string(line).find("in_effect=6 (the cap is in without the slot rule, so a sixth member takes slot 5)"),
+            std::string::npos)
+      << line;
+}
+
+TEST_F(ServerTeamSize, AnotherWritersCapOfTheSizeAskedGetsTheSlotRuleAndKeepsIt) {
+  Image img;
+  img.cap = CapFor(6);  // a writer before us put only the cap in
+  const Outcome o = Run(img, 6);
+  EXPECT_EQ(o.slot, Result::Applied);
+  EXPECT_EQ(o.cap, Result::AlreadyApplied);
+  EXPECT_FALSE(o.slotRestored) << "the cap is above 5, so the slot rule stays";
+  EXPECT_EQ(img.slot, kSlotWrapped);
+  EXPECT_EQ(img.cap, CapFor(6));
+  EXPECT_EQ(o.inEffect, 6u);
+  EXPECT_TRUE(o.slotRule);
+  EXPECT_FALSE(nevr_server_team_size::IsFailure(o));
 }
 
 TEST_F(ServerTeamSize, AnotherWritersSixWithoutTheSlotRuleIsAFailure) {
@@ -299,10 +319,12 @@ TEST_F(ServerTeamSize, AnotherWritersSixWithoutTheSlotRuleIsAFailure) {
   EXPECT_EQ(o.slot, Result::Mismatch);
   EXPECT_EQ(o.inEffect, 6u);
   EXPECT_FALSE(o.slotRule);
-  EXPECT_TRUE(nevr_server_team_size::IsFailure(o)) << "six is in at the cap, but a sixth member would take slot 5";
+  EXPECT_FALSE(o.slotGame);
+  EXPECT_TRUE(nevr_server_team_size::IsFailure(o)) << "six is in at the cap; where a sixth member goes is not known";
   char line[640];
   nevr_server_team_size::FormatRecord(line, sizeof(line), o, 0x1401AB8C2, 0x1401ABC8A);
-  EXPECT_NE(std::string(line).find("in_effect=6 (the cap is in without the slot rule, so a sixth member takes slot 5)"),
+  EXPECT_NE(std::string(line).find("in_effect=6 (the cap is in without our slot rule, and the slot site holds another "
+                                   "writer's bytes)"),
             std::string::npos)
       << line;
 }
@@ -392,7 +414,7 @@ TEST(ServerTeamSizeParse, AnythingElseIsFiveWithTheReason) {
   const Case cases[] = {{"0", "below"}, {"9", "above"},       {"16", "above"},
                         {"-1", "whole"}, {"x", "whole"},       {"5.5", "whole"},
                         {" 6", "whole"}, {"99999999999", "above"}, {":", "whole"},
-                        {"/", "whole"}};
+                        {"/", "whole"}, {"4294967302", "above"}};  // 2^32 + 6: read past the limit, not wrapped to 6
   for (const Case& c : cases) {
     std::string problem;
     EXPECT_EQ(ParseMaxTeamSize(c.text, &problem), 5u) << c.text;

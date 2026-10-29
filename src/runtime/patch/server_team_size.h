@@ -26,10 +26,10 @@
 // buffers, and the slot rule's bytes run natively in the test. Above 5 the slot rule is written before the cap. Apply
 // decides what to take out by the bytes at the two sites, not by what the writer said: a writer can report a failure
 // after the bytes went in (ProcessMemcpy does when the protection restore fails). A slot site Apply changed is put
-// back only when the cap site holds what it held before, and kept when the cap site changed, so a server is never
-// left with a cap above 5 and the game's slot rule. The size in effect is read back from the cap site's bytes, and
-// above 5 it is a success only with the slot rule in; a cap site that holds neither the game's shape nor ours is left
-// as found and reported as unknown.
+// back only when the cap site does not put a size above 5 in effect, whoever wrote it, and kept when it does, so a
+// server is never left with a cap above 5 and the game's slot rule. The size in effect is read back from the cap
+// site's bytes, and above 5 it is a success only with the slot rule in; a cap site that holds neither the game's shape
+// nor ours is left as found and reported as unknown.
 
 #include <cstddef>
 #include <cstdint>
@@ -135,6 +135,7 @@ struct Outcome {
   bool slotRestored = false;  // the slot site was put back as found, and read back so, after the cap did not go in
   uint32_t inEffect = kGameTeamSize;  // read from the cap site's bytes when Apply returns; 0 is unknown
   bool slotRule = false;  // the slot site holds the rule written above 5 when Apply returns
+  bool slotGame = false;  // the slot site holds the game's own bytes when Apply returns
 };
 
 inline bool Took(nevr_checked_patch::Result r) {
@@ -149,14 +150,15 @@ inline Outcome Apply(uint8_t* capSite, uint8_t* slotSite, uint32_t size, nevr_ch
   std::memcpy(o.capBefore, capSite, sizeof(o.capBefore));
   std::memcpy(o.slotBefore, slotSite, sizeof(o.slotBefore));
   const auto done = [&]() {
-    // By the bytes, not the writer's word (file comment): a slot site changed here goes back only with the cap as found.
-    if (std::memcmp(slotSite, o.slotBefore, sizeof(o.slotBefore)) != 0 &&
-        std::memcmp(capSite, o.capBefore, sizeof(o.capBefore)) == 0) {
+    // By the bytes, not the writer's word (file comment): a slot site changed here goes back only while the cap site
+    // puts no size above 5 in effect.
+    if (std::memcmp(slotSite, o.slotBefore, sizeof(o.slotBefore)) != 0 && CapInEffect(capSite) <= kGameTeamSize) {
       o.slotRestored = write(slotSite, o.slotBefore, sizeof(o.slotBefore)) &&
                        std::memcmp(slotSite, o.slotBefore, sizeof(o.slotBefore)) == 0;
     }
     o.inEffect = CapInEffect(capSite);
     o.slotRule = std::memcmp(slotSite, kSlotPatched, sizeof(kSlotPatched)) == 0;
+    o.slotGame = std::memcmp(slotSite, kSlotExpected, sizeof(kSlotExpected)) == 0;
     return o;
   };
   if (o.plan == Plan::KeepGame) return done();
@@ -237,8 +239,11 @@ inline int FormatRecord(char* out, size_t cap, const Outcome& o, uintptr_t capAd
   const char* what = o.plan == Plan::KeepGame ? "nothing written; the cap site holds another writer's bytes"
                      : o.slotRestored         ? "not in effect, the slot rule was put back"
                      : o.inEffect != o.size   ? "not in effect"
-                     : CapWithoutSlotRule(o)  ? "the cap is in without the slot rule, so a sixth member takes slot 5"
-                                              : "in effect, but a write reported an error";
+                     : CapWithoutSlotRule(o) && o.slotGame
+                         ? "the cap is in without the slot rule, so a sixth member takes slot 5"
+                     : CapWithoutSlotRule(o)
+                         ? "the cap is in without our slot rule, and the slot site holds another writer's bytes"
+                         : "in effect, but a write reported an error";
   return std::snprintf(out, cap,
                        "[NEVR.PATCH] server team size size=%u in_effect=%s (%s) cap_addr=0x%llx cap_expected=%s "
                        "cap_actual=%s cap=%s slot_addr=0x%llx slot_expected=%s slot_actual=%s slot=%s%s",
