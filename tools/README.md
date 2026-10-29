@@ -25,7 +25,7 @@ source-invariant tests over the C++ tree and the release contract
 | `../launch-client.sh` (repo root) | Client login test on the nested display; see AGENTS.md. Sources `lib/game_install.sh`. |
 | `../verify-server.sh` (repo root) | Instrumented dedicated-server run that restores what it deployed. Sources `lib/game_install.sh`. |
 | `lib/game_install.sh` | Shared by those two: game-root resolution, the one-run-at-a-time lock, the running-game check. |
-| `quest-install.sh` | Sideload the repacked Quest APK and the game data (run by `just quest-install`). |
+| `quest-install.sh` | Front end over `nevr-install quest install`: installs the signed release's APK and game data, or a local tester APK with `--artifact-dir` (run by `just quest-install`). |
 | `scenario/` | One-client social scenarios and their runner (`just scenario NAME`). |
 | `winvm/` | Run the built runtime on a native Windows VM; see `winvm/README.md`. |
 
