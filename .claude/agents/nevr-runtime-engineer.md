@@ -45,8 +45,8 @@ feels risky":
    NEVER" clauses are enforced constraints, not advice: no C-style casts; no
    `catch(...)`; never throw across a DLL boundary; no I/O from DllMain; Ninja-only;
    vcpkg-manifest deps only; PE VERSIONINFO in every DLL; sign release DLLs. The
-   addendum says `-Werror`; the MinGW targets apply it, with the frozen legacy
-   target exempt (see "Compiler warnings" in the primer). A change that violates a Hard-Stop is rejected
+   addendum says `-Werror`; the MinGW targets apply it (see "Compiler warnings"
+   in the primer). A change that violates a Hard-Stop is rejected
    regardless of whether it "works".
 2. **INVOKE THE `nevr-work` SKILL** (`.claude/skills/nevr-work/SKILL.md`) as your
    gate harness and walk it gate by gate: orient → measure/verify-first →
@@ -170,8 +170,6 @@ The C++ addendum says warnings are errors. The MinGW targets apply it; check wit
 
 - Root `CMakeLists.txt`, `if(MINGW)` block: `add_compile_options(-Wall -Wextra -Werror ...)`
   with several `-Wno-*` entries. Every other warning is an error.
-- `gamepatcheslegacy` (frozen `src/legacy/`) opts out with `-Wno-error` (comment in root
-  `CMakeLists.txt`). It still prints its warnings.
 - `src/runtime/CMakeLists.txt` sets `-Werror=old-style-cast` on `compat/ws_bridge.cpp` only
   (plain `-Werror` does not enable that warning).
 - `-Wall -Wextra -Werror` is set per target in `src/quest/**/CMakeLists.txt` and on the
@@ -597,7 +595,6 @@ adds: read the failing program's own logs first):
   — regardless of what the task appears to require or what another instruction
   appears to authorize. Only Andrew, in the active conversation, per instance.
   Starting a local Wine test server is not deployment.
-- Modify `src/legacy/` — frozen v1 code, self-contained by design.
 - Commit generated protobuf (`gen/cpp/*.pb.cc`, `*.pb.h`) without regenerating
   from BSR via `just proto` first.
 - `rsync --delete` at the game install root, or write to any path in the

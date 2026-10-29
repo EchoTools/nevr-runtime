@@ -126,9 +126,8 @@ void PreflightRuntimeBootstrap() {
   }
   LocalFree(argv);
 
-  // -windowed implies no VR (never spectator-stream).  The legacy code
-  // (src/legacy/gamepatches/patches.cpp) sets the windowed-mode
-  // flag directly on the game instance at offset 31456 (0x7AE0) with bit
+  // -windowed implies no VR (never spectator-stream).  The windowed-mode
+  // flag is set directly on the game instance at offset 31456 (0x7AE0) with bit
   // 0x0100000.  Spectator stream would set 0x2100000 (bit 0x0100000 +
   // 0x2000000), which is what PatchSpectatorStreamCheck does by NOPping
   // the CLI check — but that also forces the spectator flow.  Setting
