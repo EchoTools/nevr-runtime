@@ -4,6 +4,14 @@
 // on this host. Plain http is allowed only where a test asks for it (the allow_plain_http argument, the same test-only switch
 // CurlHttpClient's loopback tests use). The production client is https only and needs trust anchors: a Linux host has none,
 // so the production cases below check the fail-closed answer, which is also what a device without its CA store gets.
+// One case loads a self-signed anchor, so the trust gate passes and the plain-http refusal is what stops the request
+// (the request count at the loopback server is the check).
+#include <curl/curl.h>
+#include <openssl/bio.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/x509.h>
+
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -17,6 +25,8 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -27,6 +37,7 @@
 #include <vector>
 
 #include "quest/auth/ca_bundle.h"
+#include "quest/auth/curl_http.h"
 #include "quest/invite/invite_run.h"
 #include "quest/invite/invite_transport_quest.h"
 #include "quest/tests/mini_test.h"
@@ -319,6 +330,52 @@ TEST(InviteQuestTransport_TheProductionFactoryRefusesPlainHttpToLoopback) {
     const nevr_invite::HttpAnswer answer = transport->Post("invite/resolve", "{}", "tok");
     CHECK_EQ(answer.status, 0);
   }
+  CHECK_EQ(server.Requests().size(), static_cast<std::size_t>(0));
+}
+
+// A self-signed certificate in PEM, built the way tls_ca_test.cpp builds its test CA.
+struct EvpKeyFree {
+  void operator()(EVP_PKEY* key) const { EVP_PKEY_free(key); }
+};
+struct X509Free {
+  void operator()(X509* cert) const { X509_free(cert); }
+};
+std::string SelfSignedPem() {
+  std::unique_ptr<EVP_PKEY, EvpKeyFree> key(EVP_EC_gen("P-256"));
+  std::unique_ptr<X509, X509Free> cert(X509_new());
+  CHECK(key != nullptr);
+  CHECK(cert != nullptr);
+  X509* x = cert.get();
+  X509_set_version(x, 2);
+  ASN1_INTEGER_set(X509_get_serialNumber(x), 1);
+  X509_gmtime_adj(X509_getm_notBefore(x), -3600);
+  X509_gmtime_adj(X509_getm_notAfter(x), 3600L * 24);
+  X509_set_pubkey(x, key.get());
+  X509_NAME* name = X509_get_subject_name(x);
+  X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>("invite-one-anchor"), -1, -1, 0);
+  X509_set_issuer_name(x, name);
+  X509_sign(x, key.get(), EVP_sha256());
+  BIO* bio = BIO_new(BIO_s_mem());
+  PEM_write_bio_X509(bio, x);
+  char* data = nullptr;
+  const long len = BIO_get_mem_data(bio, &data);
+  std::string out(data, static_cast<std::size_t>(len));
+  BIO_free(bio);
+  return out;
+}
+
+// One trust anchor loaded, so the production client's trust gate passes and the request reaches libcurl's protocol
+// restriction. Without an anchor the gate answers first (kNoTrustAnchors) and the restriction is never exercised.
+TEST(InviteQuestTransport_AnchoredProductionClientRefusesPlainHttpToLoopback) {
+  const std::string dir = "build/quest-invite-transport-host/scratch/one-anchor";
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  std::ofstream(dir + "/anchor.pem", std::ios::binary) << SelfSignedPem();
+  Loopback server({{Response(200, "OK", "", "{}"), false}});
+  nevr::quest_auth::CurlHttpClient client({dir});
+  const nevr::auth::HttpResponse response = client.PostJson(server.Url() + "/v2/rpc/invite/resolve?unwrap", "{}");
+  CHECK(!response.transport_ok);
+  CHECK_EQ(response.transport_code, static_cast<int>(CURLE_UNSUPPORTED_PROTOCOL));
   CHECK_EQ(server.Requests().size(), static_cast<std::size_t>(0));
 }
 
