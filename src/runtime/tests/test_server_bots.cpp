@@ -234,7 +234,7 @@ TEST(ServerBotsSchedule, AsksOnceASecondUntilTheCount) {
   EXPECT_EQ(Decide(s, 2, true, 5, false, 1999), Gate::kWaiting);
   EXPECT_EQ(Decide(s, 2, true, 5, false, 2000), Gate::kAsk);
   Requested(s, true);
-  EXPECT_EQ(s.added, 2u);
+  EXPECT_EQ(s.requested, 2u);
   EXPECT_EQ(Decide(s, 2, true, 6, false, 5000), Gate::kDone);
 }
 
@@ -242,7 +242,7 @@ TEST(ServerBotsSchedule, ARefusedRequestIsNotCountedAndWaitsASecond) {
   Schedule s;
   EXPECT_EQ(Decide(s, 1, true, 4, false, 1000), Gate::kAsk);
   Requested(s, false);
-  EXPECT_EQ(s.added, 0u);
+  EXPECT_EQ(s.requested, 0u);
   EXPECT_EQ(Decide(s, 1, true, 4, false, 1500), Gate::kWaiting);
   EXPECT_EQ(Decide(s, 1, true, 4, false, 2000), Gate::kAsk);
 }
@@ -260,7 +260,7 @@ TEST(ServerBotsSchedule, LeavingTheGameStartsTheCountAgain) {
   Requested(s, true);
   EXPECT_EQ(Decide(s, 1, true, 5, false, 3000), Gate::kDone);
   EXPECT_EQ(Decide(s, 1, false, 0, false, 4000), Gate::kNotInGame);
-  EXPECT_EQ(s.added, 0u);
+  EXPECT_EQ(s.requested, 0u);
   EXPECT_EQ(Decide(s, 1, true, 4, false, 4001), Gate::kAsk) << "the next session gets its bot at once";
 }
 
@@ -516,7 +516,7 @@ TEST(ServerBotsLines, NoFreeBodyNamesEachPool) {
   const Line l = NoBodyLine("AAAA", 2, 4, 6, body);
   EXPECT_TRUE(l.warning);
   EXPECT_EQ(l.text,
-            "[NEVR.GAMESERVER] server bots: no free bot body in this level session=AAAA added=2 wanted=4 entrants=6 "
+            "[NEVR.GAMESERVER] server bots: no free bot body in this level session=AAAA requested=2 wanted=4 entrants=6 "
             "bot_arena_pool=0 bot_combat_pool=none (no more bots this session until one frees)");
 }
 
@@ -525,7 +525,7 @@ TEST(ServerBotsLines, TheGameNotAnsweringIsAWarning) {
   EXPECT_TRUE(l.warning);
   EXPECT_EQ(l.text,
             "[NEVR.GAMESERVER] server bots: the game has not answered the last bot request for 10 s session=AAAA "
-            "added=1 wanted=4 (no more bots this session until it does)");
+            "requested=1 wanted=4 (no more bots this session until it does)");
 }
 
 TEST(ServerBotsLines, ARequestIsInfoAndARefusalAWarning) {

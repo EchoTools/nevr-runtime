@@ -70,7 +70,7 @@ void OnFrame() {
   const uint64_t now = GetTickCount64();
   const Gate gate = Decide(g_schedule, wanted, view.inGame, entrants, view.pending, now);
   if (PendingWarningDue(g_schedule, gate == Gate::kPending, now)) {
-    LogLine(PendingLine(CurrentSession(), g_schedule.added, wanted));
+    LogLine(PendingLine(CurrentSession(), g_schedule.requested, wanted));
   }
   if (gate != Gate::kAsk) return;
 
@@ -80,7 +80,7 @@ void OnFrame() {
   ReadBodyPools(reinterpret_cast<FindPoolFn>(base + nevr_patch_addresses::FIND_POOL), pools, body);
   if (!BodyFree(body, 2)) {
     if (NoBodyWarningDue(g_schedule, now)) {
-      LogLine(NoBodyLine(CurrentSession(), g_schedule.added, wanted, entrants, body));
+      LogLine(NoBodyLine(CurrentSession(), g_schedule.requested, wanted, entrants, body));
     }
     return;
   }
@@ -95,7 +95,7 @@ void OnFrame() {
   const bool accepted =
       WithOfflineBit(HostingFlags(lobby), [&] { return requestAddBot(netGame, request.bytes) != 0; });
   Requested(g_schedule, accepted);
-  LogLine(RequestLine(accepted, CurrentSession(), g_schedule.added, wanted, entrants));
+  LogLine(RequestLine(accepted, CurrentSession(), g_schedule.requested, wanted, entrants));
 }
 
 void SessionSettings(void** frame, uint64_t* size) {

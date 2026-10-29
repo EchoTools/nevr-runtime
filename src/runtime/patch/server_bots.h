@@ -199,7 +199,7 @@ constexpr uint64_t kNoBodyWarningIntervalMs = 60000;
 constexpr uint64_t kPendingWarningMs = 10000;
 
 struct Schedule {
-  uint32_t added = 0;         // requests accepted in this session
+  uint32_t requested = 0;     // requests RequestAddBot accepted in this session (not bots seen to join)
   uint64_t nextAskMs = 0;     // no request before this
   uint64_t lastNoBodyMs = 0;  // the last "no free body" warning
   bool warnedNoBody = false;
@@ -223,7 +223,7 @@ inline Gate Decide(Schedule& s, uint32_t wanted, bool inGame, uint16_t entrants,
     s = Schedule{};
     return Gate::kNotInGame;
   }
-  if (s.added >= wanted) return Gate::kDone;
+  if (s.requested >= wanted) return Gate::kDone;
   if (nowMs < s.nextAskMs) return Gate::kWaiting;
   if (entrants >= kMaxEntrants) return Gate::kLobbyFull;
   if (pending) return Gate::kPending;
@@ -233,7 +233,7 @@ inline Gate Decide(Schedule& s, uint32_t wanted, bool inGame, uint16_t entrants,
 
 /// RequestAddBot's answer to a kAsk.
 inline void Requested(Schedule& s, bool accepted) {
-  if (accepted) ++s.added;
+  if (accepted) ++s.requested;
 }
 
 /// Whether a "no free body" warning is due: the first one, then at most one a minute.
@@ -490,26 +490,26 @@ inline InstallResult InstallLines(bool isServer, const char* text, const uint8_t
 
 inline std::string PoolText(const BodyPool& p) { return p.found ? std::to_string(p.free) : std::string("none"); }
 
-inline Line NoBodyLine(const std::string& session, uint32_t added, uint32_t wanted, uint16_t entrants,
+inline Line NoBodyLine(const std::string& session, uint32_t requested, uint32_t wanted, uint16_t entrants,
                        const BodyPool body[2]) {
   return {true, "[NEVR.GAMESERVER] server bots: no free bot body in this level session=" + session +
-                    " added=" + std::to_string(added) + " wanted=" + std::to_string(wanted) +
+                    " requested=" + std::to_string(requested) + " wanted=" + std::to_string(wanted) +
                     " entrants=" + std::to_string(entrants) + " bot_arena_pool=" + PoolText(body[0]) +
                     " bot_combat_pool=" + PoolText(body[1]) + " (no more bots this session until one frees)"};
 }
 
-inline Line PendingLine(const std::string& session, uint32_t added, uint32_t wanted) {
+inline Line PendingLine(const std::string& session, uint32_t requested, uint32_t wanted) {
   return {true, "[NEVR.GAMESERVER] server bots: the game has not answered the last bot request for " +
-                    std::to_string(kPendingWarningMs / 1000) + " s session=" + session + " added=" +
-                    std::to_string(added) + " wanted=" + std::to_string(wanted) +
+                    std::to_string(kPendingWarningMs / 1000) + " s session=" + session + " requested=" +
+                    std::to_string(requested) + " wanted=" + std::to_string(wanted) +
                     " (no more bots this session until it does)"};
 }
 
-inline Line RequestLine(bool accepted, const std::string& session, uint32_t added, uint32_t wanted,
+inline Line RequestLine(bool accepted, const std::string& session, uint32_t requested, uint32_t wanted,
                         uint16_t entrants) {
   return {!accepted, std::string("[NEVR.GAMESERVER] server bot ") +
                          (accepted ? "requested" : "request refused by the game") + " session=" + session +
-                         " n=" + std::to_string(added) + " of " + std::to_string(wanted) +
+                         " n=" + std::to_string(requested) + " of " + std::to_string(wanted) +
                          " entrants=" + std::to_string(entrants)};
 }
 
