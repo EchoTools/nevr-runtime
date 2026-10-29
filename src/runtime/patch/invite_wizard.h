@@ -175,7 +175,7 @@ struct Choices {
 };
 
 enum class Op { Create, Resolve };
-enum class Skip { None, Empty, Malformed, TooLong, Incomplete, NoLevel, NotConfigured, NoToken, Busy, Stopped };
+enum class Skip { None, Empty, Malformed, TooLong, Incomplete, NoLevel, FeatureOff, NoToken, Busy, Stopped };
 // The first five are the plan's own (NoLevel: the chosen map card has no level name); the last four are the worker's
 // (invite_worker.h): the feature is off, no token is held, the queue is full, the worker has stopped.
 
@@ -335,8 +335,8 @@ inline std::string NotSentLine(Skip skip, std::size_t code_len) {
     case Skip::NoLevel:
       reason = "no_level";
       break;
-    case Skip::NotConfigured:
-      reason = "not_configured";
+    case Skip::FeatureOff:
+      reason = "feature_off";
       break;
     case Skip::NoToken:
       reason = "no_token";

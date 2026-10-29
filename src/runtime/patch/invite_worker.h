@@ -64,7 +64,7 @@ struct Answer {
   std::string body;  // a success only
 };
 
-enum class Submit { Queued, NoRequest, NotConfigured, Busy, Stopped };
+enum class Submit { Queued, NoRequest, FeatureOff, Busy, Stopped };
 
 struct WorkerParts {
   Transport* transport = nullptr;
@@ -88,8 +88,8 @@ class Worker {
   Submit Enqueue(const Plan& plan) {
     if (!plan.request.has_value()) return Submit::NoRequest;
     if (!parts_.configured || parts_.transport == nullptr) {
-      Say(LogLevel::Info, NotSentLine(Skip::NotConfigured, plan.code_len));
-      return Submit::NotConfigured;
+      Say(LogLevel::Info, NotSentLine(Skip::FeatureOff, plan.code_len));
+      return Submit::FeatureOff;
     }
     Job job;
     job.plan = plan;

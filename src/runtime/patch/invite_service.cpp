@@ -35,13 +35,14 @@ void Start(Settings settings) {
   g_started = true;
   g_shutdown = false;
 
+  const std::string source = std::string(" source=") + nevr_invite::SourceName(settings.invite_source);
   const char* off = nullptr;
   nevr_invite::LogLevel offLevel = nevr_invite::LogLevel::Info;
   if (settings.invite_codes == nevr_invite::Switch::Unrecognised) {
     off = "unrecognised_value";
     offLevel = nevr_invite::LogLevel::Warning;
   } else if (settings.invite_codes == nevr_invite::Switch::Off) {
-    off = "not_configured";
+    off = "turned_off";
   } else if (settings.http_uri.empty()) {
     off = "no_service_address";
     offLevel = nevr_invite::LogLevel::Warning;
@@ -50,7 +51,8 @@ void Start(Settings settings) {
     const nevr_invite::Endpoint probe = nevr_invite::BuildRpcUrl(settings.http_uri, "invite/resolve");
     if (probe.check != nevr_invite::UrlCheck::Ok) {
       Say(nevr_invite::LogLevel::Warning,
-          std::string("[NEVR.INVITE] feature off reason=service_address_refused detail=") + nevr_invite::UrlCheckName(probe.check));
+          std::string("[NEVR.INVITE] feature off reason=service_address_refused detail=") + nevr_invite::UrlCheckName(probe.check) +
+              source);
       off = "";
     }
   }
@@ -70,9 +72,9 @@ void Start(Settings settings) {
     };
     parts.configured = true;
     g_active.store(true, std::memory_order_release);
-    Say(nevr_invite::LogLevel::Info, "[NEVR.INVITE] service on");
+    Say(nevr_invite::LogLevel::Info, "[NEVR.INVITE] service on" + source);
   } else if (off[0] != '\0') {
-    Say(offLevel, std::string("[NEVR.INVITE] feature off reason=") + off);
+    Say(offLevel, std::string("[NEVR.INVITE] feature off reason=") + off + source);
   }
   g_worker = std::make_unique<nevr_invite::Worker>(std::move(parts));
 }
@@ -82,7 +84,7 @@ bool Active() { return g_active.load(std::memory_order_acquire); }
 nevr_invite::Submit Submit(const nevr_invite::Plan& plan) {
   std::lock_guard<std::mutex> lock(g_m);
   if (!g_worker) {
-    if (!g_shutdown) return nevr_invite::Submit::NotConfigured;  // Start has not run: there is no log to write to either
+    if (!g_shutdown) return nevr_invite::Submit::FeatureOff;  // Start has not run: there is no log to write to either
     Say(nevr_invite::LogLevel::Info, nevr_invite::NotSentLine(nevr_invite::Skip::Stopped, plan.code_len));
     return nevr_invite::Submit::Stopped;
   }

@@ -671,11 +671,15 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   }
 
   // #906, #1156, ADR 0017: observe the CREATE GAME / JOIN VIA CODE wizard's click metric. Client only. A typed code is
-  // posted to the game service when network.invite_codes is on (the service below), and so is a create; the answer is
-  // written into the menu by nevr_invite_apply::OnFrame (frame/tick.cpp). The hook forwards every submit unchanged.
+  // posted to the game service when network.invite_codes is on (the service below; on unless the config says off), and so is
+  // a create; the answer is written into the menu by nevr_invite_apply::OnFrame (frame/tick.cpp). The hook forwards every
+  // submit unchanged.
   if (!g_isServer) {
     nevr_invite_service::Settings invite;
-    invite.invite_codes = nevr_invite::ParseSwitch(NevrCfgGetFlat("nevr_invite_codes"));
+    const char* inviteText = NevrCfgGetFlat("nevr_invite_codes");  // null when absent; the service says which in its start line
+    const bool inviteStructured = NevrCfgGetFlatIsStructured("nevr_invite_codes");  // a list or a map is not a value (#1156)
+    invite.invite_codes = nevr_invite::ParseSwitch(inviteText, inviteStructured);
+    invite.invite_source = nevr_invite::SourceOf(inviteText, inviteStructured);
     const char* httpUri = NevrCfgGetFlat("nevr_http_uri");
     invite.http_uri = httpUri != nullptr ? httpUri : "";
     invite.token = [] { return nevr_token_auth::GetToken(); };  // thread-safe; the export TokenAuth_GetToken is not

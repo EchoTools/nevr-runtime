@@ -27,9 +27,22 @@ def code(path: str) -> str:
 class BootStartsTheService(unittest.TestCase):
     def test_the_service_starts_from_the_config_key_and_the_service_address(self):
         boot = code("src/runtime/lifecycle/boot.cpp")
-        self.assertRegex(boot, r'ParseSwitch\(\s*NevrCfgGetFlat\(\s*"nevr_invite_codes"\s*\)\s*\)')
+        self.assertIn('NevrCfgGetFlat("nevr_invite_codes")', boot)
+        # A list or a map under the key is read as unrecognised, never as the absent key that takes the default (#1156).
+        self.assertIn('NevrCfgGetFlatIsStructured("nevr_invite_codes")', boot)
+        self.assertRegex(boot, r"invite\.invite_codes\s*=\s*nevr_invite::ParseSwitch\(\s*inviteText\s*,\s*inviteStructured\s*\)")
+        self.assertRegex(boot, r"invite\.invite_source\s*=\s*nevr_invite::SourceOf\(\s*inviteText\s*,\s*inviteStructured\s*\)")
         self.assertIn('NevrCfgGetFlat("nevr_http_uri")', boot)
         self.assertIn("nevr_invite_service::Start(std::move(invite))", boot)
+
+    def test_the_start_is_in_the_client_branch_so_a_server_never_starts_it(self):
+        boot = code("src/runtime/lifecycle/boot.cpp")
+        settings = boot.index("nevr_invite_service::Settings invite;")
+        start = boot.index("nevr_invite_service::Start(std::move(invite))")
+        # The block opens right before its settings. A search further back would find the menu-cards guard above it.
+        self.assertIn("if (!g_isServer) {", boot[settings - 40:settings])
+        self.assertLess(settings, start)
+        self.assertLess(start, boot.index("} else {", start))  # the server branch comes after the client's start
 
     def test_the_service_starts_before_the_observer_is_installed(self):
         boot = code("src/runtime/lifecycle/boot.cpp")
@@ -75,6 +88,40 @@ class ShutdownStopsTheService(unittest.TestCase):
 
     def test_the_dll_unload_stops_it(self):
         self.assertIn("nevr_invite_service::Shutdown()", code("src/runtime/lifecycle/dllmain.cpp"))
+
+
+class TheDocsStateTheDefault(unittest.TestCase):
+    """ADR 0017 and the example config say the key is on when absent, so a reader of either gets the default right."""
+
+    def test_the_example_config_says_absent_is_on(self):
+        text = (ROOT / "docs/reference/example-config.yaml").read_text()
+        block = text[text.index("The invite codes for the CREATE GAME"):text.index("# invite_codes: false")]
+        self.assertIn("# Absent: on.", block)
+        self.assertNotIn("Absent: off.", block)
+
+    def test_the_adr_says_the_feature_is_on_by_default(self):
+        adr = (ROOT / "docs/adr/0017-invite-codes-for-the-create-game-wizard.md").read_text()
+        self.assertIn("is on by default for a client", adr)
+        self.assertNotIn("turns it on (N133)", adr)
+
+    def test_the_adr_log_table_names_the_source(self):
+        adr = (ROOT / "docs/adr/0017-invite-codes-for-the-create-game-wizard.md").read_text()
+        self.assertIn("| service on | Info | `source=default\\|config`", adr)
+        self.assertIn("| feature off | Info / Warning | `reason=turned_off`", adr)
+        self.assertIn("`source=default\\|config`", adr.split("| feature off |", 1)[1].split("\n", 1)[0])
+
+
+class TheQuickCheckRunsTheInviteTests(unittest.TestCase):
+    """The GTests are built by CMake; only the recipe that names them runs them. test-auth-unit builds and runs both."""
+
+    def test_test_auth_unit_builds_and_runs_the_service_and_the_worker(self):
+        text = (ROOT / "justfile").read_text()
+        recipe = text[text.index("test-auth-unit:"):text.index("test-auth-integration:")]
+        loop = [line for line in recipe.splitlines() if "for test_name in" in line]
+        self.assertEqual(len(loop), 1)
+        for name in ("test_invite_service", "test_invite_worker"):
+            self.assertIn(f"--target {name}", recipe)
+            self.assertIn(name, loop[0].split())
 
 
 if __name__ == "__main__":

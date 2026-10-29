@@ -5,9 +5,12 @@
 //   Start writes `[NEVR.INVITE] service on`; a Resolve of the typed code "ABCD2345" writes `request sent op=resolve code_len=8
 //   code_fp=<8 hex>` then `answer op=resolve status=404 ... result=invalid`, and the server sees exactly one request:
 //   POST /v2/rpc/invite/resolve?unwrap with `Authorization: Bearer <token>`. No line carries the code or the token.
-//   With the key absent: `feature off reason=not_configured` at Info, and the server never sees a connection. A misspelt value:
-//   `feature off reason=unrecognised_value` at Warning. An address that may not receive a token (plain http to a remote host):
-//   `feature off reason=service_address_refused detail=plain_http_to_remote` at Warning, nothing sent.
+//   With the key absent (the default, ADR 0017): `service on source=default` at Info, and a resolve goes out as above.
+//   With the key `false`: `feature off reason=turned_off source=config` at Info, `request not sent reason=feature_off` for a
+//   Submit, and the server never sees a connection.
+//   A misspelt value: `feature off reason=unrecognised_value source=config` at Warning. An address that may not receive a
+//   token (plain http to a remote host): `feature off reason=service_address_refused detail=plain_http_to_remote` at Warning,
+//   nothing sent.
 //   Shutdown with a request held by the server returns in far less than the transport timeout, and a Submit after it is
 //   `request not sent reason=stopped`.
 // Falsifier: a connection with the key off or the address refused, a token or code in a line, a Shutdown that waits out the
@@ -41,9 +44,10 @@ struct Line {
 struct Rig {
   std::mutex m;
   std::vector<Line> lines;
-  nevr_invite_service::Settings Settings(Switch sw, const std::string& uri) {
+  nevr_invite_service::Settings Settings(Switch sw, const std::string& uri, nevr_invite::Source source = nevr_invite::Source::Config) {
     nevr_invite_service::Settings s;
     s.invite_codes = sw;
+    s.invite_source = source;
     s.http_uri = uri;
     s.token = [] { return std::string("tok-secret-1"); };
     s.log = [this](LogLevel level, const std::string& text) {
@@ -82,8 +86,8 @@ struct Guard {
 }  // namespace
 
 // Declared first on purpose: the service is a process-wide singleton and this is the state before any Start of the process.
-TEST(InviteService, ASubmitBeforeAnyStartIsNotConfigured) {
-  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::NotConfigured);
+TEST(InviteService, ASubmitBeforeAnyStartIsFeatureOff) {
+  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::FeatureOff);
   EXPECT_TRUE(nevr_invite_service::TakeAnswers().empty());
 }
 
@@ -106,7 +110,7 @@ TEST(InviteService, WithTheKeyOnAResolveGoesToTheServerWithTheBearerAndTheAnswer
   EXPECT_EQ(seen[0].authorization, "Bearer tok-secret-1");
 
   const auto lines = rig.Lines();
-  EXPECT_TRUE(Has(lines, LogLevel::Info, "[NEVR.INVITE] service on"));
+  EXPECT_TRUE(Has(lines, LogLevel::Info, "[NEVR.INVITE] service on source=config"));
   EXPECT_TRUE(Has(lines, LogLevel::Info, "request sent op=resolve code_len=8 code_fp=" +
                                               nevr_invite::CodeFingerprint(seenCode, "run-salt")));  // the run's salt, not none
   EXPECT_TRUE(Has(lines, LogLevel::Warning, "answer op=resolve status=404"));
@@ -117,24 +121,49 @@ TEST(InviteService, WithTheKeyOnAResolveGoesToTheServerWithTheBearerAndTheAnswer
   }
 }
 
-TEST(InviteService, WithTheKeyAbsentNothingIsSentAndTheStartSaysWhy) {
+// The default (ADR 0017): an absent key is on. boot.cpp takes the value from nevr_invite::ParseSwitch and the source from
+// nevr_invite::SourceOf, read from the same NevrCfgGetFlat value; this is that pair with the key absent.
+TEST(InviteService, WithTheKeyAbsentTheServiceStartsAndTheStartSaysDefault) {
+  Guard guard;
+  LoopbackServer server({Script{Script::Kind::Reply, 404, R"({"message":"invalid"})", ""}});
+  Rig rig;
+  nevr_invite_service::Start(rig.Settings(nevr_invite::ParseSwitch(nullptr), server.Base(), nevr_invite::SourceOf(nullptr)));
+
+  EXPECT_TRUE(nevr_invite_service::Active());
+  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::Queued);
+  ASSERT_EQ(nevr_invite_service::WaitForAnswers(std::chrono::seconds(10)).size(), 1u);
+  EXPECT_EQ(server.Requests().size(), 1u);
+  EXPECT_TRUE(Has(rig.Lines(), LogLevel::Info, "[NEVR.INVITE] service on source=default"));
+}
+
+// `false` is the operator's own choice: nothing goes out, and the line says the config made it.
+TEST(InviteService, WithTheKeyFalseNothingIsSentAndTheStartSaysItIsConfigured) {
   Guard guard;
   LoopbackServer server({Script{}});
   Rig rig;
-  nevr_invite_service::Start(rig.Settings(Switch::Off, server.Base()));
+  nevr_invite_service::Start(rig.Settings(nevr_invite::ParseSwitch("false"), server.Base(), nevr_invite::SourceOf("false")));
 
-  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::NotConfigured);
-  EXPECT_TRUE(Has(rig.Lines(), LogLevel::Info, "[NEVR.INVITE] feature off reason=not_configured"));
-  EXPECT_TRUE(Has(rig.Lines(), LogLevel::Info, "request not sent reason=not_configured code_len=8"));
+  EXPECT_FALSE(nevr_invite_service::Active());
+  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::FeatureOff);
+  EXPECT_TRUE(Has(rig.Lines(), LogLevel::Info, "[NEVR.INVITE] feature off reason=turned_off source=config"));
+  EXPECT_TRUE(Has(rig.Lines(), LogLevel::Info, "request not sent reason=feature_off code_len=8"));
   EXPECT_TRUE(server.Requests().empty());
+}
+
+// The struct's own default is the feature's default, so a caller that sets nothing gets the same answer as an absent key.
+TEST(InviteService, ASettingsStructWithNothingSetIsOnFromTheDefault) {
+  nevr_invite_service::Settings s;
+  EXPECT_EQ(s.invite_codes, nevr_invite::kDefault);
+  EXPECT_EQ(s.invite_codes, Switch::On);
+  EXPECT_EQ(s.invite_source, nevr_invite::Source::Default);
 }
 
 TEST(InviteService, AValueNobodyMeantIsOffAndWarned) {
   Guard guard;
   Rig rig;
   nevr_invite_service::Start(rig.Settings(Switch::Unrecognised, "https://svc.example"));
-  EXPECT_TRUE(Has(rig.Lines(), LogLevel::Warning, "[NEVR.INVITE] feature off reason=unrecognised_value"));
-  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::NotConfigured);
+  EXPECT_TRUE(Has(rig.Lines(), LogLevel::Warning, "[NEVR.INVITE] feature off reason=unrecognised_value source=config"));
+  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::FeatureOff);
 }
 
 TEST(InviteService, NoServiceAddressIsOffAndWarned) {
@@ -142,7 +171,7 @@ TEST(InviteService, NoServiceAddressIsOffAndWarned) {
   Rig rig;
   nevr_invite_service::Start(rig.Settings(Switch::On, ""));
   EXPECT_TRUE(Has(rig.Lines(), LogLevel::Warning, "[NEVR.INVITE] feature off reason=no_service_address"));
-  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::NotConfigured);
+  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::FeatureOff);
 }
 
 TEST(InviteService, AnAddressThatMayNotReceiveTheTokenIsRefusedAtStart) {
@@ -150,8 +179,8 @@ TEST(InviteService, AnAddressThatMayNotReceiveTheTokenIsRefusedAtStart) {
   Rig rig;
   nevr_invite_service::Start(rig.Settings(Switch::On, "http://svc.example"));
   EXPECT_TRUE(Has(rig.Lines(), LogLevel::Warning,
-                  "[NEVR.INVITE] feature off reason=service_address_refused detail=plain_http_to_remote"));
-  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::NotConfigured);
+                  "[NEVR.INVITE] feature off reason=service_address_refused detail=plain_http_to_remote source=config"));
+  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::FeatureOff);
 }
 
 TEST(InviteService, ASecondStartChangesNothing) {
@@ -187,7 +216,7 @@ TEST(InviteService, ActiveIsTrueOnlyWhileTheFeatureIsOnAndNotShutDown) {
   LoopbackServer server({Script{}});
   Rig rig;
   nevr_invite_service::Start(rig.Settings(Switch::Off, server.Base()));
-  EXPECT_FALSE(nevr_invite_service::Active());  // started, but the key is absent
+  EXPECT_FALSE(nevr_invite_service::Active());  // started with the key false, so off
   nevr_invite_service::Shutdown();
   nevr_invite_service::Start(rig.Settings(Switch::On, ""));
   EXPECT_FALSE(nevr_invite_service::Active());  // on, with no address to send to

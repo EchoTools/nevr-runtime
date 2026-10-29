@@ -463,8 +463,8 @@ TEST(InviteLog, ARequestNotSentSaysWhy) {
 }
 
 TEST(InviteLog, ARequestTheWorkerCannotSendSaysWhy) {
-  EXPECT_EQ(nevr_invite::NotSentLine(Skip::NotConfigured, 0),
-            "[NEVR.INVITE] request not sent reason=not_configured code_len=0");
+  EXPECT_EQ(nevr_invite::NotSentLine(Skip::FeatureOff, 0),
+            "[NEVR.INVITE] request not sent reason=feature_off code_len=0");
   EXPECT_EQ(nevr_invite::NotSentLine(Skip::NoToken, 8), "[NEVR.INVITE] request not sent reason=no_token code_len=8");
   EXPECT_EQ(nevr_invite::NotSentLine(Skip::Busy, 8), "[NEVR.INVITE] request not sent reason=busy code_len=8");
   EXPECT_EQ(nevr_invite::NotSentLine(Skip::Stopped, 0), "[NEVR.INVITE] request not sent reason=stopped code_len=0");
