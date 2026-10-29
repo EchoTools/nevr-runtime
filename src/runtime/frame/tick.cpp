@@ -44,6 +44,7 @@
 #include "runtime/log/builtin_filter.h"
 #include "runtime/patch/invite_answer_apply.h"
 #include "runtime/patch/pnsrad_enabler.h"
+#include "runtime/patch/render_config_hook.h"
 #include "runtime/patch/ui_text_writer.h"
 
 namespace nevr_frame {
@@ -76,6 +77,9 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     nevr_builtin_log_filter::InstallPnsradHook();  // N90: idempotent; installs once pnsrad.dll loads
     nevr_builtin_log_filter::PollHealth();         // N89: health must not depend on the hook it watches
     nevr_window_watch::Poll(nowUs / 1000);         // #341: a client whose X window vanished quits (Wine only; a no-op on a server)
+    // #1139, ADR 0022: the render_config line. A no-op until Install ran on a client; then one evaluation a second.
+    // No new dispatcher, thread or Tick* site (N86): it runs inside this function like the calls around it.
+    nevr_render_config_hook::Poll(nowUs);
 
     // Self-checks: run the probes and send what is queued, a few times a second (a no-op when off).
     {

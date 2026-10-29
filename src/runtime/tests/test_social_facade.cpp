@@ -36,6 +36,16 @@ TEST(SocialFacade, FlagOffRequestsOnlyTheAccessorHook) {
   EXPECT_EQ(nevr_social_facade::Select(true, &providerObject), &providerObject);
 }
 
+// #1280: a dedicated server is not a player; it keeps the game's null provider whatever social.facade says.
+TEST(SocialFacade, AServerIsNeverOfferedTheFacade) {
+  EXPECT_FALSE(nevr_social_facade::Wanted(true, true));
+  EXPECT_FALSE(nevr_social_facade::Wanted(false, true));
+  EXPECT_TRUE(nevr_social_facade::Wanted(true, false));
+  EXPECT_FALSE(nevr_social_facade::Wanted(false, false));
+  EXPECT_EQ(nevr_social_facade::Select(nevr_social_facade::Wanted(true, true), nullptr), nullptr)
+      << "a server's accessor returns the game's null provider";
+}
+
 TEST(SocialFacade, EnabledInstallPublishesEachTrampolineBeforeEnable) {
   std::vector<nevr_social_facade::Probe> requests;
   const auto fakeInstall = [&requests](nevr_social_facade::Probe probe) { requests.push_back(probe); };

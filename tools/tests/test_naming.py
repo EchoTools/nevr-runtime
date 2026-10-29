@@ -22,7 +22,7 @@ UPPERCASE_BRAND_IN_DOCS = re.compile(
 )
 # These files define the anti-patterns themselves.
 SELF = frozenset({"docs/standards/naming.md", "tools/tests/test_naming.py"})
-EXCLUDED_PREFIXES = ("src/legacy/", "extern/", "gen/", "docs/audits/")
+EXCLUDED_PREFIXES = ("extern/", "gen/", "docs/audits/")
 
 # The published plugin/module C ABI (src/extension/) and everything that names it. Nothing is added.
 FROZEN_NVR = frozenset({
@@ -95,6 +95,9 @@ BRAND_PROSE_SPELLINGS = {
     "src/runtime/lifecycle/nevr_root_move.cpp": {"nEVR"},  # comment prose, and the MOVED-TO-NEVR-ROOT.txt text a player reads
     "src/runtime/tests/test_nevr_root.cpp": {"nEVR"},  # comment prose and a failure message
     "tools/tests/test_nevr_root_wiring.py": {"nEVR"},  # docstring prose
+    "docs/beta/INSTALL.md": {"nEVR"},  # prose: update nEVR through the launcher
+    "installer/src/launcher.rs": {"nEVR"},  # comment prose, and the version text the refusal line shows
+    "installer/src/session.rs": {"nEVR"},  # the refusal line a player reads: "nEVR 5.4.3 is installed"
 }
 
 
@@ -167,8 +170,7 @@ class NamingTest(unittest.TestCase):
 
     def test_project_macros_carry_the_prefix(self):
         # The build identity and the hook selector are NEVR_ macros (#131). CMake VARIABLES of the same name
-        # (`${PROJECT_VERSION}`, `set(GIT_DESCRIBE ...)`) are CMake's own and stay. src/legacy is frozen and
-        # reads the old names: the root CMakeLists gives those two targets the unprefixed definitions.
+        # (`${PROJECT_VERSION}`, `set(GIT_DESCRIBE ...)`) are CMake's own and stay.
         macro = re.compile(r"(?<![A-Za-z0-9_${])(USE_MINHOOK|PROJECT_VERSION|GIT_COMMIT_HASH|GIT_DESCRIBE)(?![A-Za-z0-9_}])")
         stray = {}
         for path, text in project_files():
@@ -209,7 +211,7 @@ class NamingTest(unittest.TestCase):
         # The rule is `nevr` or `nevr_<area>` (#131). The two PascalCase namespaces left are named here with
         # the reason; a new one fails this test, and an entry whose namespace is gone fails it too.
         exceptions = {
-            # The frozen src/legacy calls Hooking::Attach and Hooking::Initialize through the compat header.
+            # The hooking abstraction every patch calls; the name predates the rule.
             "src/core/hooking.h": {"Hooking"},
             # Nested in the game's EchoVR namespace and named after the game's own symbol tables.
             "src/abi/symbols.h": {"EchoVR::Symbols", "Social", "Tcp"},

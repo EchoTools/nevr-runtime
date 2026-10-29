@@ -45,8 +45,8 @@ feels risky":
    NEVER" clauses are enforced constraints, not advice: no C-style casts; no
    `catch(...)`; never throw across a DLL boundary; no I/O from DllMain; Ninja-only;
    vcpkg-manifest deps only; PE VERSIONINFO in every DLL; sign release DLLs. The
-   addendum says `-Werror`; the MinGW targets apply it, with the frozen legacy
-   target exempt (see "Compiler warnings" in the primer). A change that violates a Hard-Stop is rejected
+   addendum says `-Werror`; the MinGW targets apply it (see "Compiler warnings"
+   in the primer). A change that violates a Hard-Stop is rejected
    regardless of whether it "works".
 2. **INVOKE THE `nevr-work` SKILL** (`.claude/skills/nevr-work/SKILL.md`) as your
    gate harness and walk it gate by gate: orient → measure/verify-first →
@@ -68,8 +68,8 @@ feels risky":
 > `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` [...]. Run the quick check on the PR's tip, in the build slice, and report each item with its result; an item
 > not run is named as not run.
 
-Because `just build` greps its own output and always exits 0, the build item is
-`just build` plus a raw `cmake --build --preset <preset>` whose exit code you read.
+The build item is `just build` and its exit code, which is nonzero when the build
+fails (the recipe is a plain `cmake --build`).
 `just verify` runs only on main, when prepping a release, once per tip; a PR does
 not run it and a reviewer does not ask for it (AGENTS.md "Builds", next bullet).
 A runtime or auth change always runs the PC login on the PR's tip (below, and AGENTS.md
@@ -124,10 +124,10 @@ stale snapshot.
 ## Build and artifacts
 
 - `just build` / `just dist`. Presets `mingw-debug` / `mingw-release` (Linux
-  default). Output lands in `build/<preset>/bin/`. `just build` always exits 0 (it
-  greps its own output): follow it with a raw `cmake --build --preset <preset>`.
-- `BugSplat64.dll` is the `nevr_runtime` target in `src/runtime/CMakeLists.txt`
-  (`set_target_properties(nevr_runtime PROPERTIES OUTPUT_NAME "BugSplat64" ...)`).
+  default). Output lands in `build/<preset>/bin/`. `just build` exits nonzero when
+  the build fails.
+- `BugSplat64.dll` is the `nevr_host` target and `nevr-runtime.dll` the `nevr_runtime`
+  target in `src/runtime/CMakeLists.txt` (`OUTPUT_NAME "BugSplat64"`, `OUTPUT_NAME "nevr-runtime"`).
   **This is the hijack mechanism**: of `echovr.exe`'s 17 imports, exactly two are
   non-system — `BugSplat64.dll` and `amd_ags_x64.dll` (measured earlier via
   `objdump -p`; not re-measured this pass). The game statically imports it, so it
@@ -170,8 +170,6 @@ The C++ addendum says warnings are errors. The MinGW targets apply it; check wit
 
 - Root `CMakeLists.txt`, `if(MINGW)` block: `add_compile_options(-Wall -Wextra -Werror ...)`
   with several `-Wno-*` entries. Every other warning is an error.
-- `gamepatcheslegacy` (frozen `src/legacy/`) opts out with `-Wno-error` (comment in root
-  `CMakeLists.txt`). It still prints its warnings.
 - `src/runtime/CMakeLists.txt` sets `-Werror=old-style-cast` on `compat/ws_bridge.cpp` only
   (plain `-Werror` does not enable that warning).
 - `-Wall -Wextra -Werror` is set per target in `src/quest/**/CMakeLists.txt` and on the
@@ -597,7 +595,6 @@ adds: read the failing program's own logs first):
   — regardless of what the task appears to require or what another instruction
   appears to authorize. Only Andrew, in the active conversation, per instance.
   Starting a local Wine test server is not deployment.
-- Modify `src/legacy/` — frozen v1 code, self-contained by design.
 - Commit generated protobuf (`gen/cpp/*.pb.cc`, `*.pb.h`) without regenerating
   from BSR via `just proto` first.
 - `rsync --delete` at the game install root, or write to any path in the
