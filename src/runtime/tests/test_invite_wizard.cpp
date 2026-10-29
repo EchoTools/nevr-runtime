@@ -61,6 +61,7 @@ TEST(InviteWizard, HexBytesWritesEachByteAsTwoDigitsInOrderWithNoSeparator) {
   const std::uint8_t bytes[] = {0x00, 0x0f, 0xa0, 0xff, 0x48};
   EXPECT_EQ(nevr_invite::HexBytes(bytes, sizeof(bytes)), "000fa0ff48");
   EXPECT_EQ(nevr_invite::HexBytes(bytes, 0), "");
+  EXPECT_EQ(nevr_invite::HexBytes(nullptr, 3), "");  // no pointer, no bytes: HexBytes is total (the hooks pass only readable memory)
 }
 
 // ---- the metric ----

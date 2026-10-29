@@ -237,7 +237,7 @@ TEST(InviteService, TakeAnswersHandsOverAnAnswerOnceWithoutWaiting) {
 }
 
 // #1414: a hook this service serves refused to install (its prologue did not match). The hook's own Warning names the address
-// and the bytes; the service stays off, says why at Info, refuses each request with a line, and contacts no server.
+// and the bytes; the service stays off, says why in one Warning, refuses each request with a line, and contacts no server.
 TEST(InviteService, AHookThatRefusedToInstallKeepsTheServiceOffAndSaysWhy) {
   Guard guard;
   LoopbackServer server({Script{}});
@@ -247,7 +247,12 @@ TEST(InviteService, AHookThatRefusedToInstallKeepsTheServiceOffAndSaysWhy) {
   nevr_invite_service::Start(std::move(settings));
 
   EXPECT_FALSE(nevr_invite_service::Active());
-  EXPECT_TRUE(Has(rig.Lines(), LogLevel::Info, "[NEVR.INVITE] feature off reason=hook_prologue_mismatch"));
+  EXPECT_TRUE(Has(rig.Lines(), LogLevel::Warning, "[NEVR.INVITE] feature off reason=hook_prologue_mismatch"));
+  int offWarnings = 0;
+  for (const Line& l : rig.Lines()) {
+    if (l.level == LogLevel::Warning && l.text.find("feature off") != std::string::npos) ++offWarnings;
+  }
+  EXPECT_EQ(offWarnings, 1);
   EXPECT_FALSE(Has(rig.Lines(), LogLevel::Info, "[NEVR.INVITE] service on"));
   EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::NotConfigured);
   EXPECT_TRUE(Has(rig.Lines(), LogLevel::Info, "request not sent reason=not_configured code_len=8"));

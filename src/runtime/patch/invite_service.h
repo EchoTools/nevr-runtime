@@ -25,7 +25,7 @@ struct Settings {
   std::function<void(nevr_invite::LogLevel, const std::string&)> log;
   std::string salt;                                             // per run, for the code fingerprint
   nevr_invite::TransportOptions transport;                      // timeouts and the answer cap; its log is replaced
-  bool hooks_refused = false;                                   // a hook this service serves refused to install (its Warning says why)
+  bool hooks_refused = false;  // an observer this service serves refused to install: the service stays off, its Warning says why
 };
 
 /// Starts the service for this run. A second call changes nothing and says so. Never throws.
