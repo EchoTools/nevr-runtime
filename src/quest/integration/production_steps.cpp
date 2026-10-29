@@ -537,6 +537,16 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
+  // The observer is wanted when the invite switch is on (network.invite_codes, ADR 0017 slice S1: off by default, and it needs
+  // login and a service address). Off, the step is skipped and nothing is hooked.
+  bool WizardMetricWanted() override { return sentinel::FeatureEnabled(nevr_quest::Feature::kInviteCodes); }
+
+  bool InstallWizardMetric() override {
+    const bool ok = nevr_quest::integration::InstallWizardMetricHook();
+    detail_ = ok ? "ok" : "wizard_observer_refused";
+    return ok;
+  }
+
   bool ArmClockLevels(bool countersRegistered, bool overrideOn) override {
     const bool ok = nevr_quest::integration::ArmClockLevelsHook(countersRegistered, overrideOn);
     detail_ = ok ? "ok" : "counters_refused";
