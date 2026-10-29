@@ -162,6 +162,14 @@ class PatcherHeaderComesFromTheHostManifest(unittest.TestCase):
         self.assertIn('inc="build/quest-host-vcpkg/x64-linux/include"', recipe)
         self.assertIn('inc="{{ json_include }}"', recipe)  # the override stays
 
+    def test_the_hooks_recipe_and_the_repack_recipe_use_the_same_tree(self):
+        hooks = self.recipe("test-quest-hooks")
+        self.assertRegex(hooks.split("\n", 1)[0], r'^test-quest-hooks json_include="": _vcpkg-quest-host$')
+        self.assertIn('attach_json="build/quest-host-vcpkg/x64-linux/include"', hooks)
+        # android-repack-apk looks for a header tree in a list; the host manifest's is the last entry.
+        repack = self.recipe("android-repack-apk")
+        self.assertIn("build/quest-host-vcpkg/x64-linux/include)", repack)
+
     def test_the_host_install_is_current_only_with_the_header(self):
         recipe = self.recipe("_vcpkg-quest-host")
         self.assertIn('json="$jd/build/quest-host-vcpkg/x64-linux/include/nlohmann/json.hpp"', recipe)
