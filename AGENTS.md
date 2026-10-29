@@ -1069,7 +1069,7 @@ how an agent triangulates the correct path.
   mingw-w64, CMake, and Ninja.
 - A guide to the toolchain decisions that make builds reproducible:
   vcpkg for dependencies, CMakePresets for configuration, justfile for
-  orchestration, osslsigncode for Authenticode signing.
+  orchestration.
 - A code-review gate: the "Code Review Hard Stops" table is enforced.
 - Required context for every agent working on Windows-DLL compatibility or
   interception layers cross-compiled from Linux (game-compatibility shims,
@@ -1096,11 +1096,9 @@ how an agent triangulates the correct path.
 - Manage all dependencies via vcpkg manifest (`vcpkg.json`). Never
   system-installed libraries.
 - Run `just configure && just build` before declaring work done.
-- Sign all release DLLs with osslsigncode. Test signing via `just sign`.
 - Test cross-compiled DLLs under Wine before merging.
 - Embed a PE VERSIONINFO resource in every DLL.
 - Derive version from git at build time (no manual version bumps).
-- Ship ring-buffer flight recorder telemetry in every DLL by default.
 - Use structured logging with level control. No printf, no ad-hoc logging.
 
 ### You must NEVER
@@ -1126,100 +1124,10 @@ how an agent triangulates the correct path.
 
 ---
 
-## Observability (Not Optional)
-
-Every DLL in an adopting project ships with built-in telemetry. This is
-not a debug feature you add later — it is part of the architecture.
-
-### Flight Recorder (Ring Buffer)
-
-A lock-free ring buffer of the last N operations (default 1024). Each
-entry captures:
-
-- Function name (string or enum)
-- Entry timestamp (monotonic clock, nanoseconds)
-- Duration (nanoseconds)
-- Key argument hashes (not full arguments — hashes are enough to identify
-  call sites)
-- Return value / error code
-
-```cpp
-struct TraceEvent {
-    uint64_t timestamp_ns;
-    uint32_t duration_ns;
-    uint16_t function_id;
-    uint16_t result_code;
-    uint64_t arg_hash;
-};
-```
-
-The ring buffer is always-on, zero-heap-alloc, fixed-size. When a crash
-occurs, a dump handler writes the buffer to disk via
-`WriteFile`/`MapViewOfFile`. The dump is available in the
-`%TEMP%/dxgi_dump/` directory or alongside the DLL.
-
-### Fidelity Monitors
-
-For every translation layer (Oculus→OpenXR, Winsock→epoll, etc.), log
-both input parameters and output results side-by-side. If the translation
-returns wrong data (bad poses, wrong swap chain format, misaligned
-struct), the trace captures the divergence before it causes visible
-breakage.
-
-### Session State Journal
-
-Log every state transition on both sides:
-
-- Oculus: Initialize → Create → Destroy → SessionStatus changes
-- OpenXR: InstanceCreate → Session lifecycle → SessionState changes →
-  Event polling
-- If `ovr_GetSessionStatus` returns `IsVisible=false` and the game enters
-  a headless render loop, the trace shows exactly when and why the states
-  diverged.
-
-### Frame Pacing Telemetry
-
-Log the `WaitFrame`/`BeginFrame`/`EndFrame` cycle with timestamps and
-`predictedDisplayTime`. Frame timing drift is insidious — it accumulates
-over frames and causes judder long before a crash. Catch it early by
-emitting a warning when drift exceeds 2ms.
-
-### Runtime Toggle
-
-- **Flight recorder mode**: always-on, last N events, no I/O during
-  capture. Zero allocation after initialization.
-- **Verbose mode**: full logging to a named pipe or file, toggled via
-  environment variable at startup or a control pipe at runtime.
-- Post-mortem dump triggers on DLL unload, process exit, or abnormal
-  termination (captured by the crash handler plugin).
-
----
-
 ## Logging (Structured, Always)
 
-No printf. No `OutputDebugString`. No cerr. Every project uses a
-structured logger with:
-
-- **Levels**: TRACE < DEBUG < INFO < WARN < ERROR < FATAL
-- **Categories**: per-module or per-system enable/disable
-- **Format**: machine-parseable (JSON or key=value pairs)
-- **Output**: configurable — file, debugger, named pipe, ring buffer
-
-```cpp
-// Good
-LOG_INFO("session", "Session created: id={}", session_id);
-LOG_WARN("network", "Reconnect attempt {}/{}", attempt, max_attempts);
-
-// Bad — never do this
-printf("session created %d\n", session_id);
-fprintf(stderr, "reconnect %d\n", attempt);
-```
-
-The logger itself must be:
-
-- Zero allocation after initialization (preallocated buffers).
-- Lock-free for the hot path (per-thread buffers).
-- Safe to call from DllMain (no heap, no synchronization primitives).
+Logging follows `docs/standards/logging.md`: its levels, tags,
+volume budget and the `Log()` call are the rules. No `printf`, no `OutputDebugString`, no `cerr`.
 
 ---
 
@@ -1249,18 +1157,6 @@ Every mingw-w64 cross-compilation project MUST define these CMake presets:
 | `release` | Ninja     | vcpkg default triplet | Release    | Native Windows |
 
 **Build output** lands in `build/<preset>/bin/`.
-
-The presets file MUST define a `base` hidden preset:
-
-```json
-{
-  "name": "base",
-  "hidden": true,
-  "generator": "Ninja",
-  "binaryDir": "${sourceDir}/build/${presetName}",
-  "toolchainFile": "${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
-}
-```
 
 ---
 
@@ -1292,36 +1188,6 @@ All dependencies declared in one file at the project root:
 - The OpenXR loader is a system dependency or vendored, not from vcpkg.
 - Oculus SDK headers are replicated from the target binary — not a
   vcpkg dependency.
-
----
-
-## Project Layout
-
-```
-project/
-├── src/
-│   ├── gamepatches/       # Main patch DLL
-│   ├── gameserver/        # Network services DLL
-│   ├── common/            # Shared utilities (logging, trace ring buffer, globals)
-│   └── launcher/          # Entry point / bootstrapper
-├── plugins/
-│   ├── common/            # Plugin interface headers
-│   ├── log-filter/        # Example plugin
-│   └── crash-handler/     # Ring buffer dump on crash
-├── cmake/
-│   ├── toolchain-msvc-wine.cmake
-│   └── set_project_version_from_git.cmake
-├── tests/
-│   ├── system/            # Go integration tests
-│   └── plugins/           # Plugin ground truth tests
-├── extern/                # Git submodules
-├── certs/                 # Code signing certificates
-├── CMakeLists.txt
-├── CMakePresets.json
-├── vcpkg.json
-├── justfile
-└── CLAUDE.md
-```
 
 ---
 
@@ -1365,29 +1231,7 @@ _vcpkg-mingw:
 
 ## Code Signing
 
-All release DLLs MUST be Authenticode-signed.
-
-```
-certs/
-├── root-ca.crt              # Self-signed root CA
-├── intermediate-ca.crt      # Intermediate CA
-├── code-signing.key         # Private key
-├── chain.pem                # Full cert chain
-└── generate-ca.sh           # CA generation script
-```
-
-```sh
-osslsigncode sign \
-    -certs certs/chain.pem \
-    -key certs/code-signing.key \
-    -n "Product Name" \
-    -t http://timestamp.digicert.com \
-    -in unsigned.dll \
-    -out signed.dll
-```
-
-In CI, signing material comes from GitHub secrets
-(`CODESIGN_PFX_BASE64`, `CODESIGN_PFX_PASSWORD`).
+Release files are signed outside the build, as `RELEASING.md` describes; the build signs nothing.
 
 ---
 
@@ -1423,7 +1267,7 @@ cd tests/plugins && go test -v -run "TestGroundTruth" ./...
 
 ```cpp
 // Good
-constexpr auto kMaxRetries = 3uz;
+constexpr std::size_t kMaxRetries = 3;
 using Result = std::variant<Success, Error>;
 
 // Bad
@@ -1436,13 +1280,12 @@ typedef struct _Result Result;
 - `std::unique_ptr` for sole ownership. Never raw `new`/`delete`.
 - `std::shared_ptr` only when ownership is genuinely shared — not as a
   default.
-- `std::span` for non-owning array views. Never pointer + size pairs.
 - `std::string_view` for non-owning string references. Never
   `const char*` + strlen.
 
 ### Error handling
 
-- Return `std::expected<T, E>` or `std::optional` instead of out-params.
+- Return `std::optional` instead of an out-parameter.
 - Use `HRESULT` at API boundaries (DLL exports), convert to internal
   types internally.
 - Never throw exceptions across DLL boundaries. Catch at the export
@@ -1456,7 +1299,7 @@ typedef struct _Result Result;
 - No spinlocks in user code. Use `std::mutex`, SRWLOCK, or slim
   read/writer locks.
 - No thread pools implemented from scratch. Use the Windows thread pool
-  API or `std::thread_pool` (C++23) when available.
+  API.
 - No manual memory management. Use `std::vector`, `std::array`,
   `std::string`. If you need a custom allocator, prove it with a
   benchmark.
@@ -1470,11 +1313,9 @@ typedef struct _Result Result;
 | DLL uses system include path for mingw dep | Breaks on other machines          | Add to vcpkg.json                  |
 | No CMakePresets.json                       | Every dev configures differently  | Add the standard preset matrix     |
 | Hardcoded toolchain path in CMakeLists.txt | Not portable                      | Use toolchain file from preset     |
-| DLL is not signed in dist/                 | Release can't be used             | Add `just sign` to release process |
 | Missing `.rc` version resource             | No PE version info                | Add VERSIONINFO resource           |
 | Plugin doesn't implement interface         | Won't load at runtime             | Follow plugin lifecycle            |
 | No Wine test step in CI                    | Cross-compiled DLL may not run    | Add Wine test job                  |
-| No ring-buffer trace in DLL                | First crash is blind              | Add flight recorder                |
 | Using printf for debug output              | Not structured, can't filter      | Use project logger                 |
 | C-style cast                               | Wrong in C++ world                | Use static_cast/reinterpret_cast   |
 | Suppressed warning without justification   | Hides real bugs                   | Fix the warning or justify inline  |
@@ -1490,8 +1331,6 @@ typedef struct _Result Result;
 - Do NOT mix MSVC and mingw object files. Pick one toolchain per build.
 - Do NOT use vcpkg ports that haven't been validated with
   `x64-mingw-static`. Test before adding.
-- Do NOT ship a DLL that crashes under Wine without a trace dump.
-  The crash handler plugin exists for this reason.
 - Do NOT write new platform abstraction layers. Use existing `common/`
   patterns. If none exist yet, surface it — don't write ad-hoc `#ifdef`
   blocks.
