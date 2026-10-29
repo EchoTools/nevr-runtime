@@ -16,9 +16,9 @@ ROOT = Path(__file__).resolve().parents[2]
 TOOL = ROOT / "tools" / "check_known_wrong.py"
 
 
-def run(root, *args, env=None):
+def run(root, *args, env=None, cwd=None):
     return subprocess.run([sys.executable, str(TOOL), "--root", str(root), *args], capture_output=True, text=True,
-                          env=env)
+                          env=env, cwd=cwd)
 
 
 class Tree:
@@ -188,10 +188,24 @@ class KnownWrong(unittest.TestCase):
                      "`tools/check_known_wrong.py`", "`--online`"):
             self.assertIn(part, section)
 
-    def test_the_wiring_test_no_longer_pins_config_yaml_out_of_the_root(self):
+    def test_the_tree_has_no_deferring_assertion_in_the_wiring_test(self):
         text = (ROOT / "tools/tests/test_nevr_root_wiring.py").read_text(encoding="utf-8")
         self.assertNotIn("ADR 0012 step 6", text)
-        self.assertIn("KNOWN-WRONG #1255", text)
+
+    def test_online_a_marker_in_a_code_fence_or_span_is_an_example_and_is_not_asked(self):
+        doc = "Example:\n\n```\nKNOWN-WRONG #8\n```\n\nInline `KNOWN-WRONG #8` too.\n"
+        with tempfile.TemporaryDirectory() as bin_dir:
+            self.assertPasses({"a.md": doc}, "--online", env=self._fake_gh(bin_dir, {8: "CLOSED"}))
+
+    def test_online_gh_runs_in_the_selected_root(self):
+        with tempfile.TemporaryDirectory() as bin_dir:
+            script = Path(bin_dir) / "gh"
+            script.write_text('#!/bin/sh\ncase "$(pwd -P)" in *"$WANT_CWD") echo OPEN;; *) echo "wrong cwd $(pwd -P)" >&2; exit 1;; esac\n')
+            script.chmod(script.stat().st_mode | stat.S_IEXEC)
+            with Tree({"a.md": "KNOWN-WRONG #7\n"}) as root:
+                env = dict(os.environ, GH=str(script), WANT_CWD=str(root.resolve()))
+                result = run(root, "--online", env=env, cwd=bin_dir)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

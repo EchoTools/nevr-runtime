@@ -157,6 +157,7 @@ def unnumbered_markers(root: Path, files: list[str]) -> list[str]:
 
 
 def marked_issues(root: Path, files: list[str]) -> set[int]:
+    """Issues named by a live marker: markdown fences and backtick spans are examples, as in unnumbered_markers."""
     issues: set[int] = set()
     for rel in files:
         if rel in ("tools/check_known_wrong.py", "tools/tests/test_known_wrong.py"):
@@ -165,15 +166,17 @@ def marked_issues(root: Path, files: list[str]) -> set[int]:
             text = (root / rel).read_text(encoding="utf-8")
         except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
             continue
+        if rel.endswith(".md"):
+            text = "\n".join(CODE_SPAN.sub("", unit) for _, unit in units(text))
         issues.update(int(n) for n in MARKED.findall(text))
     return issues
 
 
-def closed_issues(issues: set[int], gh: str) -> list[str]:
+def closed_issues(issues: set[int], gh: str, root: Path) -> list[str]:
     problems = []
     for number in sorted(issues):
         result = subprocess.run([gh, "issue", "view", str(number), "--json", "state", "-q", ".state"],
-                                capture_output=True, text=True)
+                                capture_output=True, text=True, cwd=root)  # gh names the repo from its cwd
         state = result.stdout.strip()
         if result.returncode != 0:
             problems.append(f"#{number}: gh could not read the issue: {result.stderr.strip()}")
@@ -188,7 +191,7 @@ def check(root: Path, online: bool = False, gh: str = "gh") -> list[str]:
     problems = (deferring_assertions(root, files) + untracked_deferrals(root, files)
                 + expect_none_rows(root, files) + unnumbered_markers(root, files))
     if online:
-        problems += closed_issues(marked_issues(root, files), gh)
+        problems += closed_issues(marked_issues(root, files), gh, root)
     return problems
 
 
