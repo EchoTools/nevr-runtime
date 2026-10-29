@@ -1,7 +1,8 @@
 """#1422: a server's match team size is wired once. The byte logic and the lines Install logs (InstallLines) are
 tested by src/runtime/tests/test_server_team_size.cpp and the two sites' bytes against the game by
 tests/system/mode_patches_test.go (TestServerTeamSizeSites); these are source sensors for what neither can see:
-the one call in boot.cpp, reached in both modes, the config key, the two addresses, the production writer, the level
+the one call in boot.cpp, reached in both modes, after the config is read and before the plugins load, the image
+base, the config key, the two addresses, the production writer, the level
 each line is logged at, and that test-auth-unit builds and runs the GTest. Each check takes the text it reads, so a
 test can hand it a broken copy and see it fail."""
 from __future__ import annotations
@@ -71,12 +72,26 @@ def boot_problems(boot: str) -> list[str]:
         return ["the Install call is the body of an `if` or a loop without braces"]
     if MODE_RETURN.search(code[body:start]) or mode_return(code[code.index("{", body) + 1:start]):
         return ["RunDeferredRuntimeBootstrap returns on the mode before the Install call"]
-    return []
+    return order_problems(code, body, start)
+
+
+def order_problems(code: str, body: int, start: int) -> list[str]:
+    """After the first config.yaml read in RunDeferredRuntimeBootstrap (NevrCfgLogBuiltinDefaultsTaken, which boot.cpp
+    makes after the command line has set the mode), and before LoadPlugins (a plugin finds the sites as the size left
+    them)."""
+    problems = []
+    if "NevrCfgLogBuiltinDefaultsTaken();" not in code[body:start]:
+        problems.append("the Install call is not after the first config.yaml read (NevrCfgLogBuiltinDefaultsTaken)")
+    if "LoadPlugins();" not in code[start:]:
+        problems.append("the Install call is not before LoadPlugins()")
+    return problems
 
 
 def install_problems(install: str) -> list[str]:
     code = strip_comments(install)
     problems = []
+    if not re.search(r"uint8_t\*\s*const\s+base\s*=\s*reinterpret_cast<uint8_t\*>\(\s*EchoVR::g_GameBaseAddress\s*\)\s*;", code):
+        problems.append("the sites are not read from the game image's base (EchoVR::g_GameBaseAddress)")
     if not re.search(r"isServer\s*\?\s*NevrCfgGetFlat\(\s*\"nevr_max_team_size\"\s*\)\s*:\s*nullptr", code):
         problems.append("a server's size is not read from nevr_max_team_size")
     for name in ("SERVER_ASSIGN_TEAM_CAP", "SERVER_ASSIGN_TEAM_SLOT"):
@@ -109,6 +124,11 @@ def address_problems(addresses: str) -> list[str]:
     return problems
 
 
+def order_problems_of(boot: str) -> list[str]:
+    code = strip_comments(boot)
+    return order_problems(code, code.find("void RunDeferredRuntimeBootstrap("), code.index(CALL))
+
+
 class ServerTeamSizeWiring(unittest.TestCase):
     def test_the_tree(self) -> None:
         self.assertEqual(boot_problems(BOOT.read_text(encoding="utf-8")), [])
@@ -128,6 +148,16 @@ class ServerTeamSizeWiring(unittest.TestCase):
         self.assertTrue(boot_problems(boot.replace(
             CALL, "if (!g_isServer) {\n    if (trigger) {\n      (void)0;\n    }\n    return;\n  }\n  " + CALL)))
 
+    def test_a_call_moved_before_the_mode_or_the_config_or_after_the_plugins_is_found(self) -> None:
+        boot = BOOT.read_text(encoding="utf-8")
+        without = boot.replace(CALL, "")
+        trigger = without.index(";", without.index("runtime bootstrap trigger=%s")) + 1
+        self.assertTrue(order_problems_of(without[:trigger] + "\n  " + CALL + without[trigger:]))
+        config = without.index("NevrCfgLogBuiltinDefaultsTaken();")
+        self.assertTrue(order_problems_of(without[:config] + CALL + "\n    " + without[config:]))
+        plugins = without.index("LoadPlugins();") + len("LoadPlugins();")
+        self.assertTrue(order_problems_of(without[:plugins] + "\n  " + CALL + without[plugins:]))
+
     def test_a_lambdas_return_or_a_return_on_another_condition_is_not_a_mode_return(self) -> None:
         self.assertFalse(mode_return("if (!g_isServer) {\n  auto f = [] { return 1; };\n  f();\n}\n"))
         self.assertFalse(mode_return("if (!g_isServer) {\n  auto f = [&](int x) -> int { return x; };\n}\n"))
@@ -141,6 +171,8 @@ class ServerTeamSizeWiring(unittest.TestCase):
     def test_a_broken_install_is_found(self) -> None:
         install = INSTALL.read_text(encoding="utf-8")
         breaks = [
+            ("reinterpret_cast<uint8_t*>(EchoVR::g_GameBaseAddress);",
+             "reinterpret_cast<uint8_t*>(EchoVR::g_GameBaseAddress) + 0x1000;"),
             ('isServer ? NevrCfgGetFlat("nevr_max_team_size") : nullptr', 'NevrCfgGetFlat("nevr_max_team_size")'),
             ('"nevr_max_team_size"', '"nevr_team_size"'),
             ("nevr_patch_addresses::SERVER_ASSIGN_TEAM_SLOT", "nevr_patch_addresses::SERVER_ASSIGN_TEAM_CAP"),
