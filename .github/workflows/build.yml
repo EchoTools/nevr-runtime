@@ -13,7 +13,7 @@ name: Build
 # the DLL's identity literal (tools/package_release.py stamp), gates it and assembles the package tree
 # (tools/package_release.py tree), and seals it (seal): the Windows
 # zip, attested and published with the Quest library (the .tar.zst archives stay a workflow artifact; the
-# notes and the SHA-256 table are the release body, written after signing). No file or text
+# release body, a player line and one line per file, is written after signing). No file or text
 # depends on the pre-release flag, and no step reads it: the uploads leave the `prerelease` input unset so the
 # release keeps whatever the human set. The whole workflow runs on
 # ubuntu-latest: no Windows runner, no cloud login. A `workflow_dispatch` started on a vX.Y.Z tag ref runs
@@ -610,7 +610,7 @@ jobs:
 
   # Seal the release: the zip with its SHA256SUMS regenerated from the files as they are (the unzipped zip is
   # checked with sha256sum -c). The release is that zip and the Quest library: no top-level SHA256SUMS and no
-  # RELEASE-NOTES.md (the body carries the notes and a SHA-256 table). A release carries no Quest APK. The
+  # RELEASE-NOTES.md (the body is a player line and one line per file, no hash table). A release carries no Quest APK. The
   # texts state facts that hold before and after a signer has run, and nothing here reads the pre-release
   # flag: sealing the same tree twice gives the same bytes. A dry run (a dispatch on a tag with no draft)
   # ends here: the sealed files are a workflow artifact.
