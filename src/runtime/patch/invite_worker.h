@@ -165,6 +165,8 @@ class Worker {
   std::vector<Answer> DrainLocked() {
     std::vector<Answer> out(std::make_move_iterator(answers_.begin()), std::make_move_iterator(answers_.end()));
     answers_.clear();
+    // #1415: every caller holds m_, so the flag is clear exactly when no answer waits.
+    if (parts_.answers_pending != nullptr) parts_.answers_pending->store(false, std::memory_order_release);
     return out;
   }
 
@@ -220,6 +222,8 @@ class Worker {
         dropped = true;
       }
       answers_.push_back(std::move(answer));
+      // #1415: the flag says an answer waits. Set here, under the lock and after the push: a reader that sees it set finds the answer.
+      if (parts_.answers_pending != nullptr) parts_.answers_pending->store(true, std::memory_order_release);
     }
     answered_.notify_all();
     if (dropped) Say(LogLevel::Warning, "[NEVR.INVITE] answers dropped reason=not_taken kept=" + std::to_string(kMaxAnswers));

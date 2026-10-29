@@ -19,6 +19,8 @@ nevr_invite_text::Kept g_kept;
 
 void OnFrame() {
   if (!nevr_invite_service::Active()) return;
+  // #1415: nothing waits, so this frame costs one atomic load and takes no service lock.
+  if (!nevr_invite_service::AnswersPending()) return;
   const std::vector<nevr_invite::Answer> answers = nevr_invite_service::TakeAnswers();
   if (answers.empty()) return;
   g_kept.Add(answers);

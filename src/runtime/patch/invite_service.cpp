@@ -68,6 +68,7 @@ void Start(Settings settings) {
   parts.token = std::move(settings.token);
   parts.log = settings.log;
   parts.salt = std::move(settings.salt);
+  parts.answers_pending = &g_answers_pending;
   if (off == nullptr) {
     nevr_invite::TransportOptions options = std::move(settings.transport);
     options.log = settings.log;
@@ -125,6 +126,7 @@ void Shutdown() {
     g_shutdown = true;
   }
   if (worker) worker->Stop();  // joins; the transport outlives it
+  g_answers_pending.store(false, std::memory_order_release);  // the stopped worker's dropped answers are not waiting for anyone
 }
 
 bool AnswersPending() { return g_answers_pending.load(std::memory_order_acquire); }

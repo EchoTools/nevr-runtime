@@ -89,6 +89,18 @@ TEST(InviteAnswerApply, AnswersPendingReadsWithoutTheServiceLockAndSeesAWaitingA
   EXPECT_FALSE(nevr_invite_service::AnswersPending());
 }
 
+TEST(InviteAnswerApply, ShutdownLeavesNothingPending) {
+  Guard guard;
+  nevr_invite_apply_test::Reset();
+  LoopbackServer server({Script{Script::Kind::Reply, 404, R"({"message":"invalid"})", ""}});
+  nevr_invite_service::Start(Settings(server.Base()));
+  ASSERT_EQ(nevr_invite_service::Submit(Resolve()), Submit::Queued);
+  ASSERT_TRUE(nevr_invite_service::WaitForAnswerPendingForTest(kWait));  // an answer waits and nobody takes it
+
+  nevr_invite_service::Shutdown();
+  EXPECT_FALSE(nevr_invite_service::AnswersPending());  // the stopped worker's answer is not waiting for anyone
+}
+
 TEST(InviteAnswerApply, AnAnswerPushedBetweenFramesIsAppliedByTheNextFrameOnce) {
   Guard guard;
   nevr_invite_apply_test::Reset();
