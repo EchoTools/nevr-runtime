@@ -51,6 +51,8 @@ jobs:
           1) echo "cut=false" >> "$GITHUB_OUTPUT"; echo "nothing to release on origin/main"; exit 0 ;;
           *) echo "next_release_version.py failed with exit $rc" >&2; exit "$rc" ;;
         esac
+        # tools/next_release_version.py prints the tag with its leading v (v6.0.0). The cut job writes "v$VERSION", so strip it once here.
+        version="${version#v}"
         base=$(jq -r 'select(.event == "base") | .base' plan.jsonl)
         sha=$(git rev-parse origin/main)
         # No build gate here: nothing runs CI on a push to main, so main never has a build.yml run to wait for. Each PR
