@@ -630,6 +630,17 @@ TEST(ServerBotsDrive, NoFreeBodyIsAWarningAndNoRequest) {
   EXPECT_EQ(lines[0].text,
             "[NEVR.GAMESERVER] server bots: no free bot body in this level session=AAAA requested=0 wanted=2 "
             "entrants=3 bot_arena_pool=4 bot_combat_pool=0 (no more bots this session until one frees)");
+  EXPECT_TRUE(g.Update(6000).empty()) << "the warning is said at most once a minute";
+  EXPECT_EQ(g.Update(5000 + 60000).size(), 1u);
+  EXPECT_TRUE(g.requests.empty());
+}
+
+TEST(ServerBotsDrive, AFullLobbyGetsNoRequest) {
+  FakeGame g;
+  g.state.runningLogged = true;
+  Put<uint16_t>(g.netGame, 0xE2, 16);  // the game's 16 entrants
+  EXPECT_TRUE(g.Update(5000).empty());
+  EXPECT_TRUE(g.requests.empty());
 }
 
 TEST(ServerBotsDrive, NoLobbyNoRequest) {

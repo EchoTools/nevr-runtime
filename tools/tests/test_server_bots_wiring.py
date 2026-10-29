@@ -270,6 +270,9 @@ class ServerBotsWiring(unittest.TestCase):
         gameserver, tick = read(GAMESERVER), read(TICK)
         call = "    " + UPDATE_CALL + "\n"
         self.assertTrue(update_problems(gameserver.replace(UPDATE_CALL, ""), tick))
+        self.assertTrue(update_problems(gameserver.replace(call, call + call), tick), "a doubled call")
+        self.assertTrue(update_problems(gameserver.replace(UPDATE_GATE, UPDATE_GATE + "\n    if (m_reconnectPending) return;"),
+                                        tick), "a statement between the gate and the call")
         self.assertTrue(update_problems(gameserver.replace(UPDATE_GATE, "if (true) {"), tick))
         self.assertTrue(update_problems(gameserver.replace("DriverRuns(g_isServer != FALSE,", "DriverRuns(true,"), tick))
         self.assertTrue(update_problems(gameserver.replace("GameLoopThreadId(), GetCurrentThreadId()))", "1, 1))"), tick))
@@ -330,6 +333,10 @@ class ServerBotsWiring(unittest.TestCase):
             with self.subTest(old=old):
                 self.assertEqual(driver.count(old), 1, old)
                 self.assertTrue(driver_problems(driver.replace(old, new)))
+        for added in ("\nvoid X(uint32_t* hostingFlags) { *hostingFlags = 1; }\n",
+                      "\nvoid Y(uint32_t* f) { *f |= kHostingFlagOffline; }\n"):
+            with self.subTest(added=added):
+                self.assertTrue(driver_problems(driver + added), "a driver that writes the hosting flags itself")
 
     def test_a_moved_address_is_found(self) -> None:
         addresses = read(ADDRESSES)
