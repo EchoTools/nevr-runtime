@@ -190,6 +190,12 @@ unless its message has a line `Release-note: <text>`, which is used in its place
 what a player sees. With no player feat the line reads "Fixes and internal changes.". Read the line against the pull
 request bodies before publishing. The body of a published release stays editable ("Immutable releases"); the assets do not.
 
+**Headline override.** When a change is worth a sentence to players and the generated line would not read well, its author
+writes `release-headline.txt` at the repository root in the same PR: one line, 1 to 200 characters, a full stop added if it
+has none (or `!` or `?`). `notes` uses it as the player line only when the file exists at `--rev` and differs from its content
+at `--base`, so a headline left unchanged since the base tag is stale and the generated line is used. A file that is empty or
+has a line over 200 characters fails `notes` and names the file; it never falls back silently.
+
 ## Publish
 
 Only from the checked draft. The tag and the publish cannot be undone.

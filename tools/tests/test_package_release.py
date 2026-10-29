@@ -411,6 +411,104 @@ class ReleaseStagesTest(PackageFixture):
         self.assertEqual(self.notes_for(sealed, "none", changes=none).read_text().splitlines()[2],
                          "Fixes and internal changes.")
 
+    AUTO_LINE = "A player feature."
+    HEADLINE = "release-headline.txt"
+
+    def headline_repo(self, base_files, rev_files, changes=("feat(runtime): a player feature",)):
+        """A repository with a base tag and a rev tag over `changes`. `base_files` is the tree at the base, `rev_files` the
+        tree at the rev; each maps a file name to its text, or to None for a file that is absent at that ref."""
+        repo = Path(tempfile.mkdtemp(prefix="headline-", dir=self.tmp))
+        git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false",
+               "-c", "tag.gpgSign=false"]
+
+        def tree(files):
+            for name, text in files.items():
+                path = repo / name
+                if text is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_text(text, encoding="utf-8")
+            subprocess.run(git + ["add", "-A"], check=True)
+
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        tree(base_files)
+        subprocess.run(git + ["commit", "-q", "--allow-empty", "-m", "chore: base"], check=True)
+        subprocess.run(git + ["tag", "base"], check=True)
+        for message in changes:
+            subprocess.run(git + ["commit", "-q", "--allow-empty", "-m", message], check=True)
+        tree(rev_files)
+        subprocess.run(git + ["commit", "-q", "--allow-empty", "-m", "chore: headline"], check=True)
+        subprocess.run(git + ["tag", "rev"], check=True)
+        return repo
+
+    def headline_notes(self, base_files, rev_files, changes=("feat(runtime): a player feature",)):
+        """Runs `notes` over a headline repository. Returns (the process, the body path)."""
+        if not hasattr(self, "_headline_sealed"):
+            self._headline_sealed = self.seal_to(self.make_tree(), "headline-sealed")
+        sealed = self._headline_sealed
+        repo = self.headline_repo(base_files, rev_files, changes)
+        out = Path(tempfile.mkdtemp(prefix="headline-notes-", dir=self.tmp)) / "notes.md"
+        result = self.run_stage("notes", "--assets", str(self.release_dir(sealed, "headline-assets")), "--out", str(out),
+                                "--repo", str(repo), "--base", "base", "--rev", "rev")
+        return result, out
+
+    def headline_line(self, base_files, rev_files, changes=("feat(runtime): a player feature",)):
+        result, out = self.headline_notes(base_files, rev_files, changes)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return out.read_text().splitlines()[2]
+
+    def test_a_headline_changed_since_the_base_replaces_the_player_line_and_nothing_else(self):
+        result, changed = self.headline_notes({self.HEADLINE: "Old headline.\n"}, {self.HEADLINE: "New headline.\n"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result, auto = self.headline_notes({self.HEADLINE: None}, {self.HEADLINE: None})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        changed_lines, auto_lines = changed.read_text().splitlines(), auto.read_text().splitlines()
+        self.assertEqual(changed_lines[2], "New headline.")
+        self.assertEqual(auto_lines[2], self.AUTO_LINE)
+        self.assertEqual(changed_lines[:2] + changed_lines[3:], auto_lines[:2] + auto_lines[3:])
+
+    def test_a_headline_identical_at_base_and_rev_is_stale_and_the_auto_line_is_used(self):
+        self.assertEqual(self.headline_line({self.HEADLINE: "Same headline.\n"}, {self.HEADLINE: "Same headline.\n"}),
+                         self.AUTO_LINE)
+
+    def test_an_absent_headline_gives_the_auto_line(self):
+        self.assertEqual(self.headline_line({self.HEADLINE: None}, {self.HEADLINE: None}), self.AUTO_LINE)
+
+    def test_a_headline_deleted_before_the_rev_gives_the_auto_line(self):
+        self.assertEqual(self.headline_line({self.HEADLINE: "Old headline.\n"}, {self.HEADLINE: None}), self.AUTO_LINE)
+
+    def test_a_headline_added_after_the_base_is_used(self):
+        self.assertEqual(self.headline_line({self.HEADLINE: None}, {self.HEADLINE: "Added late\n"}), "Added late.")
+
+    def test_an_empty_headline_fails_loudly_and_names_the_file(self):
+        result, _ = self.headline_notes({self.HEADLINE: None}, {self.HEADLINE: "  \n\t\n"})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(self.HEADLINE, result.stderr)
+        self.assertIn("non-empty", result.stderr)
+
+    def test_an_over_long_headline_fails_loudly_and_names_the_file(self):
+        result, out = self.headline_notes({self.HEADLINE: None}, {self.HEADLINE: "x" * 201 + "\n"})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(self.HEADLINE, result.stderr)
+        self.assertIn("200", result.stderr)
+        self.assertFalse(out.exists(), "no body is written for a bad headline")
+
+    def test_a_headline_of_exactly_200_characters_is_used(self):
+        text = "y" * 199 + "!"
+        self.assertEqual(self.headline_line({self.HEADLINE: None}, {self.HEADLINE: text + "\n"}), text)
+
+    def test_a_full_stop_is_added_only_when_the_line_has_no_terminal_punctuation(self):
+        self.assertEqual(self.headline_line({self.HEADLINE: None}, {self.HEADLINE: "Ships it!\n"}), "Ships it!")
+        self.assertEqual(self.headline_line({self.HEADLINE: None}, {self.HEADLINE: "Is it?\n"}), "Is it?")
+        self.assertEqual(self.headline_line({self.HEADLINE: None}, {self.HEADLINE: "Ends here.\n"}), "Ends here.")
+        self.assertEqual(self.headline_line({self.HEADLINE: None}, {self.HEADLINE: "Quest: asks for clocks\n"}),
+                         "Quest: asks for clocks.")
+
+    def test_leading_blank_lines_and_surrounding_spaces_are_dropped_from_the_headline(self):
+        self.assertEqual(self.headline_line({self.HEADLINE: None},
+                                            {self.HEADLINE: "\n\n   \n  Real headline  \nsecond line is ignored\n"}),
+                         "Real headline.")
+
     def test_the_body_does_not_depend_on_the_zip_bytes(self):
         tree = self.make_tree()
         first = self.notes_for(self.seal_to(tree, "one")).read_text()

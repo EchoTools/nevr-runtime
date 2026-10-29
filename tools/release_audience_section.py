@@ -4,7 +4,8 @@
 
 The release body is short and carries only its player line, `player_line()`, which `package_release.py notes` calls
 over the same commits. The line is built only from feat commits whose audience is players; this script's section is for a
-reader of the commits, not for the body.
+reader of the commits, not for the body. A `release-headline.txt` at the repository root, changed in base..rev, replaces
+that line in the body (`package_release.headline_line`); this script does not read it.
 
 A commit's audience is its conventional scope: `plugins` is for plugin developers, `server`, `ws-bridge` and `arena` for
 server hosts, and every other scope, or none, is for players. A commit is listed by its subject, or by the text of a
