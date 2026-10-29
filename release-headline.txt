@@ -1,0 +1,1 @@
+On Quest, the game no longer hangs at login when it falls back to the sign-in prompt.
