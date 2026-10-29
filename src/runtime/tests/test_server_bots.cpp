@@ -159,6 +159,30 @@ TEST(ServerBotsSettings, AFrameThatCannotBeReadIsLeftAloneAndCalledAFailure) {
   EXPECT_EQ(RewriteSessionSettings(nullptr, 100, 2, 5).result, SettingsResult::kTooShort);
 }
 
+TEST(ServerBotsSettings, OnlyARewrittenFrameReplacesTheOneTheGameGets) {
+  const std::vector<uint8_t> in = Frame(kServiceSettings, kEntrants);
+  std::vector<uint8_t> storage;
+  void* frame = const_cast<uint8_t*>(in.data());
+  uint64_t size = in.size();
+  SettingsRewrite r = RewriteSessionSettings(in.data(), in.size(), 2, 5);
+  const std::vector<uint8_t> rewritten = r.frame;
+  ASSERT_EQ(r.result, SettingsResult::kRewritten);
+  EXPECT_TRUE(UseRewrite(r, storage, &frame, &size));
+  EXPECT_EQ(frame, static_cast<void*>(storage.data()));
+  EXPECT_EQ(size, rewritten.size());
+  EXPECT_EQ(storage, rewritten);
+  for (SettingsResult other : {SettingsResult::kNotWanted, SettingsResult::kAlreadyPresent, SettingsResult::kNotJson}) {
+    SettingsRewrite o;
+    o.result = other;
+    o.frame = {1, 2, 3};
+    void* f = const_cast<uint8_t*>(in.data());
+    uint64_t s = in.size();
+    EXPECT_FALSE(UseRewrite(o, storage, &f, &s)) << SettingsResultName(other);
+    EXPECT_EQ(f, static_cast<const void*>(in.data()));
+    EXPECT_EQ(s, in.size());
+  }
+}
+
 TEST(ServerBotsSettings, ResultNames) {
   EXPECT_STREQ(SettingsResultName(SettingsResult::kNotWanted), "not_wanted");
   EXPECT_STREQ(SettingsResultName(SettingsResult::kAlreadyPresent), "already_present");
@@ -336,6 +360,75 @@ TEST(ServerBotsMemory, APoolsFreeCountIsItsEntrysAtPlus0x30) {
   EXPECT_EQ(PoolEntryFree(entries.data(), 2), 5);
   EXPECT_EQ(PoolEntryFree(entries.data(), 0), -1);
   EXPECT_EQ(PoolEntryFree(entries.data(), 0xABCD0002), 5) << "FindPool's index is the low 16 bits";
+}
+
+struct FakePools {
+  // owner per body; an owner holds its entries pointer at +0x3E8
+  std::vector<uint8_t> owner[2] = {std::vector<uint8_t>(0x3F0, 0), std::vector<uint8_t>(0x3F0, 0)};
+  std::vector<uint8_t> entries[2] = {std::vector<uint8_t>(4 * 0x88, 0), std::vector<uint8_t>(4 * 0x88, 0)};
+  bool found[2] = {true, true};
+  bool ownerNull[2] = {false, false};
+  uint64_t index[2] = {1, 3};
+  std::vector<uint64_t> asked;
+  FakePools() {
+    for (int i = 0; i < 2; ++i) {
+      const uint8_t* e = entries[i].data();
+      std::memcpy(owner[i].data() + 0x3E8, &e, sizeof(e));
+    }
+  }
+  int Find(void* pools, uint64_t body, void** ownerOut, uint64_t* indexOut) {
+    EXPECT_EQ(pools, static_cast<void*>(this));
+    asked.push_back(body);
+    const int i = body == kBotBodies[0] ? 0 : 1;
+    if (!found[i]) return 0;
+    *ownerOut = ownerNull[i] ? nullptr : owner[i].data();
+    *indexOut = index[i];
+    return 1;
+  }
+};
+
+TEST(ServerBotsMemory, EachBodysPoolIsFoundAndItsEntryRead) {
+  FakePools f;
+  Put<int64_t>(f.entries[0], 1 * 0x88 + 0x30, 4);
+  Put<int64_t>(f.entries[1], 3 * 0x88 + 0x30, 0);
+  BodyPool body[2] = {{true, 99}, {true, 99}};
+  ReadBodyPools([&](void* p, uint64_t b, void** o, uint64_t* i) { return f.Find(p, b, o, i); }, &f, body);
+  EXPECT_EQ(f.asked, (std::vector<uint64_t>{kBotBodies[0], kBotBodies[1]}));
+  EXPECT_TRUE(body[0].found);
+  EXPECT_EQ(body[0].free, 4);
+  EXPECT_TRUE(body[1].found);
+  EXPECT_EQ(body[1].free, 0);
+}
+
+TEST(ServerBotsMemory, APoolThatIsNotThereIsNotFound) {
+  const auto read = [](FakePools& f, BodyPool body[2], void* pools) {
+    ReadBodyPools([&](void* p, uint64_t b, void** o, uint64_t* i) { return f.Find(p, b, o, i); }, pools, body);
+  };
+  {
+    FakePools f;
+    f.found[0] = false;
+    f.ownerNull[1] = true;
+    BodyPool body[2] = {{true, 9}, {true, 9}};
+    read(f, body, &f);
+    EXPECT_FALSE(body[0].found) << "FindPool did not find it";
+    EXPECT_FALSE(body[1].found) << "FindPool gave no owner";
+  }
+  {
+    FakePools f;
+    std::memset(f.owner[0].data() + 0x3E8, 0, sizeof(void*));
+    BodyPool body[2];
+    read(f, body, &f);
+    EXPECT_FALSE(body[0].found) << "an owner without entries";
+    EXPECT_TRUE(body[1].found);
+  }
+  {
+    FakePools f;
+    BodyPool body[2] = {{true, 9}, {true, 9}};
+    read(f, body, nullptr);
+    EXPECT_TRUE(f.asked.empty()) << "no pools: FindPool is not called";
+    EXPECT_FALSE(body[0].found);
+    EXPECT_FALSE(body[1].found);
+  }
 }
 
 TEST(ServerBotsMemory, TheHostingFlagsAreTheLobbysAt0x18Plus0x1C) {

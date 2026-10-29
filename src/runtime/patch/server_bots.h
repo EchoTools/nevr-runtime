@@ -384,6 +384,24 @@ inline int64_t PoolEntryFree(const void* entries, uint64_t index) {
   return ReadAt<int64_t>(entries, (index & 0xFFFF) * kPoolEntrySize + kPoolEntryFreeOffset);
 }
 
+/// The two bot-body pools of the level, as the game's body allocation reads them: FindPool (`findPool(pools, body,
+/// &owner, &index)`, non-zero when found), then the entry `index` of [owner+0x3E8] and its free count. No pools, a
+/// pool FindPool does not find, or an owner without entries leaves that body `found = false`.
+template <typename FindPoolCall>
+void ReadBodyPools(FindPoolCall findPool, void* pools, BodyPool body[2]) {
+  for (size_t i = 0; i < 2; ++i) body[i] = BodyPool{};
+  if (pools == nullptr) return;
+  for (size_t i = 0; i < 2; ++i) {
+    void* owner = nullptr;
+    uint64_t index = 0;
+    if (findPool(pools, kBotBodies[i], &owner, &index) == 0 || owner == nullptr) continue;
+    const uint8_t* entries = ReadAt<const uint8_t*>(owner, kPoolOwnerEntriesOffset);
+    if (entries == nullptr) continue;
+    body[i].found = true;
+    body[i].free = PoolEntryFree(entries, index);
+  }
+}
+
 /// Lobby::hostingFlags of the lobby AddBot is called on ([netGame+0x40] + 0x18).
 inline uint32_t* HostingFlags(uint8_t* lobbyHolder) {
   return reinterpret_cast<uint32_t*>(lobbyHolder + kLobbyFromHolderOffset + kLobbyHostingFlagsOffset);
@@ -397,6 +415,16 @@ bool WithOfflineBit(uint32_t* flags, Call call) {
   const bool result = call();
   *flags = saved;
   return result;
+}
+
+/// Points the frame the game is given at the rewritten one, kept in `storage`, when the rewrite made one; any other
+/// result leaves the frame as it came. Returns whether it was swapped.
+inline bool UseRewrite(SettingsRewrite& r, std::vector<uint8_t>& storage, void** frame, uint64_t* size) {
+  if (r.result != SettingsResult::kRewritten) return false;
+  storage = std::move(r.frame);
+  *frame = storage.data();
+  *size = storage.size();
+  return true;
 }
 
 // ---- What is logged -----------------------------------------------------------------------------------------------

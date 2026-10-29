@@ -77,18 +77,7 @@ void OnFrame() {
   uint8_t* const base = reinterpret_cast<uint8_t*>(EchoVR::g_GameBaseAddress);
   void* pools = ReadAt<void*>(netGame, kNetGamePoolsOffset);
   BodyPool body[2];
-  if (pools != nullptr) {
-    const auto findPool = reinterpret_cast<FindPoolFn>(base + nevr_patch_addresses::FIND_POOL);
-    for (size_t i = 0; i < 2; ++i) {
-      void* owner = nullptr;
-      uint64_t index = 0;
-      body[i].found = findPool(pools, kBotBodies[i], &owner, &index) != 0 && owner != nullptr;
-      if (!body[i].found) continue;
-      const uint8_t* entries = ReadAt<const uint8_t*>(owner, kPoolOwnerEntriesOffset);
-      body[i].found = entries != nullptr;
-      if (body[i].found) body[i].free = PoolEntryFree(entries, index);
-    }
-  }
+  ReadBodyPools(reinterpret_cast<FindPoolFn>(base + nevr_patch_addresses::FIND_POOL), pools, body);
   if (!BodyFree(body, 2)) {
     if (NoBodyWarningDue(g_schedule, now)) {
       LogLine(NoBodyLine(CurrentSession(), g_schedule.added, wanted, entrants, body));
@@ -121,11 +110,7 @@ void SessionSettings(void** frame, uint64_t* size) {
     g_session = session;
   }
   SettingsRewrite r = RewriteSessionSettings(bytes, static_cast<size_t>(*size), wanted, kPlayersPerTeam);
-  if (r.result == SettingsResult::kRewritten) {
-    g_rewrittenFrame = std::move(r.frame);
-    *frame = g_rewrittenFrame.data();
-    *size = g_rewrittenFrame.size();
-  }
+  UseRewrite(r, g_rewrittenFrame, frame, size);
   LogLine(SettingsLine(r, session, *size));
 }
 

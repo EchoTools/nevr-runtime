@@ -106,13 +106,31 @@ DRIVER_NEEDS = [
     (r"ReadNetGame\(\s*netGame\s*\)", "the net game is not read through ReadNetGame"),
     (r"PendingWarningDue\(\s*g_schedule\s*,\s*gate\s*==\s*Gate::kPending\s*,\s*now\s*\)\s*\)\s*\{\s*"
      r"LogLine\(\s*PendingLine\(", "a request the game does not answer is not said"),
-    (r"PoolEntryFree\(\s*entries\s*,\s*index\s*\)", "a pool's free count is not read through PoolEntryFree"),
+    (r"ReadBodyPools\(\s*reinterpret_cast<FindPoolFn>\(\s*base\s*\+\s*nevr_patch_addresses::FIND_POOL\s*\)\s*,\s*"
+     r"pools\s*,\s*body\s*\)", "the body pools are not read through ReadBodyPools with the game's FindPool"),
+    (r"pools\s*=\s*ReadAt<void\*>\(\s*netGame\s*,\s*kNetGamePoolsOffset\s*\)", "the pools are not the net game's"),
     (r"LogLine\(\s*NoBodyLine\(", "no free body is not said"),
     (r"WithOfflineBit\(\s*HostingFlags\(\s*lobby\s*\)\s*,\s*\[&\]\s*\{\s*return\s+"
      r"requestAddBot\(\s*netGame\s*,\s*request\.bytes\s*\)\s*!=\s*0\s*;\s*\}\s*\)",
      "the offline bit is not set around the RequestAddBot call and put back after it"),
     (r"LogLine\(\s*RequestLine\(\s*accepted\b", "the request's answer is not said"),
     (r"LogLine\(\s*SettingsLine\(", "the session-settings result is not said"),
+    (r"UseRewrite\(\s*r\s*,\s*g_rewrittenFrame\s*,\s*frame\s*,\s*size\s*\)",
+     "the rewritten session start is not the frame the game gets"),
+    (r"RewriteSessionSettings\(\s*bytes\s*,\s*static_cast<size_t>\(\s*\*size\s*\)\s*,\s*wanted\s*,\s*"
+     r"kPlayersPerTeam\s*\)", "the settings are not rewritten for the armed count"),
+    (r"g_session\s*=\s*session\s*;", "the session id the lines carry is not the session start's"),
+    (r"if\s*\(\s*netGame\s*==\s*nullptr\s*\)\s*return\s*;", "a missing net game is read"),
+    (r"lobby\s*=\s*ReadAt<uint8_t\*>\(\s*netGame\s*,\s*kNetGameLobbyOffset\s*\)\s*;\s*"
+     r"if\s*\(\s*lobby\s*==\s*nullptr\s*\)\s*return\s*;", "the lobby is not the net game's, or a missing one is written"),
+    (r"Decide\(\s*g_schedule\s*,\s*wanted\s*,\s*view\.inGame\s*,\s*entrants\s*,\s*view\.pending\s*,\s*now\s*\)",
+     "the schedule does not decide on the net game's fields"),
+    (r"if\s*\(\s*gate\s*!=\s*Gate::kAsk\s*\)\s*return\s*;", "a request is made when the schedule says no"),
+    (r"Requested\(\s*g_schedule\s*,\s*accepted\s*\)", "an accepted request is not counted"),
+    (r"memcpy\(\s*noPosition\s*,\s*base\s*\+\s*nevr_patch_addresses::NO_SPAWN_POSITION\s*,\s*kNoPositionSize\s*\)\s*;"
+     r"\s*const\s+Request\s+request\s*=\s*BuildRequest\(\s*noPosition\s*\)", "the request does not carry the game's no-position"),
+    (r"NoBodyWarningDue\(\s*g_schedule\s*,\s*now\s*\)", "the no-body warning is not rate limited"),
+    (r"server bots driver running thread=", "the driver's first frame is not said"),
 ]
 
 
@@ -189,7 +207,14 @@ class ServerBotsWiring(unittest.TestCase):
             ("ReadNetGame(netGame)", "NetGameView{}"),
             ("gate == Gate::kPending", "false"),
             ("LogLine(PendingLine(", "(void)(PendingLine("),
-            ("PoolEntryFree(entries, index)", "1"),
+            ("pools, body);", "nullptr, body);"),
+            ("UseRewrite(r, g_rewrittenFrame, frame, size);", ""),
+            ("g_session = session;", ""),
+            ("if (netGame == nullptr) return;", ""),
+            ("if (lobby == nullptr) return;", ""),
+            ("if (gate != Gate::kAsk) return;", ""),
+            ("Requested(g_schedule, accepted);", ""),
+            ("BuildRequest(noPosition)", "BuildRequest(kZero)"),
             ("LogLine(NoBodyLine(", "(void)(NoBodyLine("),
             ("nevr_patch_addresses::NO_SPAWN_POSITION", "nevr_patch_addresses::FIND_POOL"),
             ("WithOfflineBit(HostingFlags(lobby), [&] { return requestAddBot(netGame, request.bytes) != 0; })",
