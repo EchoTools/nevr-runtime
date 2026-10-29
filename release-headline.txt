@@ -1,0 +1,1 @@
+A sign-in that times out now stays on screen and says to restart Echo VR, instead of closing after 30 seconds.
