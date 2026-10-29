@@ -285,8 +285,8 @@ network:
   # player limit, in every mode but the AI and social modes (the AI modes keep the game's 3). Valid: 1-8. 1 to 4
   # lowers every match's teams, public matches included; above 5 only a lobby whose limit is 12 or more (a private
   # match) gets bigger teams, and a member past a team's fifth takes a team slot from the start again (a sixth member
-  # takes the first slot). Not measured here: EchoRelay reports that more than 10 players in a match, or an 11th
-  # player on one team, stop the server in an arena level; keep such a match at 10 players in all (6v4, for example).
+  # takes the first slot). Not measured here: EchoRelay reports that an 11th player in a match stops the server in
+  # an arena level; keep such a match at 10 players in all (6v4, for example).
   # Out of range or not a whole number: 5, with a warning in the log. Ignored by a client.
   # Absent: 5 (the game's own).
   # Not a secret.
