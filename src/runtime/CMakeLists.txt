@@ -92,6 +92,7 @@ set(PATCHES_SOURCES
     "patch/invite_transport_curl.cpp"
     "patch/invite_service.cpp"
     "patch/invite_answer_apply.cpp"
+    "patch/invite_join_game.cpp"
     # #1139, docs/adr/0022: the render configuration as one log line (pure model, and the two observer hooks).
     "patch/render_config.cpp"
     "patch/render_config_hook.cpp"
@@ -199,6 +200,8 @@ set(PATCHES_HEADERS
     "patch/invite_wizard.h"
     "patch/invite_worker.h"
     "patch/invite_answer_apply.h"
+    "patch/invite_join.h"
+    "patch/invite_join_game.h"
     "patch/invite_answer_text.h"
     "patch/invite_transport.h"
     "patch/invite_transport_curl.h"
@@ -1327,6 +1330,13 @@ if(BUILD_TESTING)
     target_include_directories(test_invite_answer_text PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_invite_answer_text PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_invite_answer_text DISCOVERY_MODE PRE_TEST)
+
+    # #1401, docs/adr/0017 ("Join"): the join of a resolved code (patch/invite_join.h): header only, pure, a fake game seam.
+    add_executable(test_invite_join tests/test_invite_join.cpp)
+    set_source_files_properties(tests/test_invite_join.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_invite_join PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_invite_join PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_invite_join DISCOVERY_MODE PRE_TEST)
 
     # #1156, docs/adr/0017: the invite transport (patch/invite_transport.h, patch/invite_transport_curl.cpp): libcurl against a
     # scripted loopback server.
