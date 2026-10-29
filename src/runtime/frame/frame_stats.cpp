@@ -9,7 +9,7 @@
 
 #include "core/build_identity.h"
 #include "core/logging.h"
-#include "nevr_common.h"
+#include "nevr/pc/nevr_common.h"
 #include "runtime/hook/hook_liveness.h"
 #include "runtime/hook/patching.h"
 
