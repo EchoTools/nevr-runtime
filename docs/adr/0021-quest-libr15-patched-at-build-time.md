@@ -5,7 +5,7 @@ build ID and the stub codec (`just test-quest-patcher`, and `just test-quest-pat
 step (`just android-repack-apk`); the sentinel's `Attach` and the activation (`libr15_attach.cpp`, run by the constructor's
 `attach_libr15` step, `just test-quest-hooks` and `just test-quest-integration`); the credits slot; the plugin identity of
 section 12 (`plugin_identity.h`, the loader's `plugin_view_build_id` and `libr15_patched` fields, the GOT backend's build-ID
-alias); and the extra-rows variant build of section 11 (`-DNEVR_LIBR15_EXTRA_ROWS=<file>`). The source rule of test 6 is N149
+alias); and the extra-rows variant build of section 11 (`-DNEVR_LIBR15_EXTRA_ROWS=<file>`). The source rule of test 6 is N151
 in `AGENTS.md`. No headset run of the patched build has been made: the "Prediction" section is what the first runs must show,
 and the "What this does not know" section lists what no measurement in this tree covers.
 

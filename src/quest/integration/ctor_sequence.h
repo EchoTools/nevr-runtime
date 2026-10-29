@@ -93,6 +93,8 @@
 //   login counters fail     -> the login hook is not installed (the matchmaking install is unaffected)
 //   social counters fail    -> social is not installed
 //   prompt counters fail    -> the login-prompt hook is not installed
+//   login not installed     -> the rad provider (#1220) is not installed: it sends no login of its own
+//   release build           -> the rad provider (#1220) is not installed, whatever the configuration asks
 //   obb counters fail       -> the OBB-mount skip is not installed
 //   resource request counters fail -> the resource request log is not installed
 //   texture counters fail   -> the texture-quality hook is not installed (not asked of `stock`)
@@ -154,6 +156,7 @@ enum class StepId : std::uint8_t {
   kInstallSocial,
   kInstallDlopenHook,
   kInstallHwDump,
+  kInstallPnsProvider,
   kCount,
 };
 
@@ -254,6 +257,12 @@ class Steps {
   virtual bool InstallDlopenHook(bool login, bool matchmaking, bool plugins) = 0;
   // The hardware/environment dump (#335): its libr15 hooks and its thread. No reporter counters.
   virtual bool StartHwDump() = 0;
+  // The rad provider in pnsovr's place (#1220): four libr15 slots (CNSProvider::Create, Destroy, ProviderID,
+  // UserProviderID), when `diagnostics.pnsrad_provider` is on and the login it needs was installed. No counters.
+  virtual bool InstallPnsProvider() = 0;
+  // Whether this build may install the rad provider (#1220): a development build (nevr_build::kIsDev). A release build
+  // never installs it, whatever the configuration asks, because the login that goes with it is not there yet.
+  virtual bool PnsProviderAllowed() = 0;
 
   // One line per step outcome and per decision. `step` and `reason` are fixed tokens.
   virtual void Note(const char* step, const char* state, const char* reason) = 0;

@@ -40,7 +40,7 @@ class N146Row(unittest.TestCase):
     def test_n146_describes_the_early_plugin_pass(self):
         rows = [l for l in (ROOT / "AGENTS.md").read_text().splitlines() if l.startswith("| N146 |")]
         self.assertEqual(len(rows), 1)
-        rule = rows[0].split("|")[2]
+        rule = rows[0].split("|")[3]  # | Rule | Kind | Statement | Guards | Checked by |
         self.assertRegex(rule, r"early")
         self.assertIn("PluginPhase::Early", rule)
         self.assertNotRegex(rule, r"only minimal state is set up \(no modules, plugins")

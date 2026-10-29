@@ -133,6 +133,38 @@ class InstallPs1Test(ScriptTestBase):
         self.assertEqual(len(list((world.nevr / "installer/aside").glob("nevr-runtime.dll.uninstalled-*"))), 1)
         self.assertEqual(world.game_files(), ["BugSplat64.dll", "echovr.exe"], "uninstall leaves nothing of ours in the game folder")
 
+    def assert_a_record_less_nevr_host_is_adopted(self, old_host: bytes):
+        world, pkg = self.world(), self.package()
+        (world.game / "BugSplat64.dll").write_bytes(old_host)
+        result = self.run_install(pkg, world)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        plan = next(r for r in world.records() if r["event"] == "plan")
+        self.assertEqual((plan["action"], plan["decision"]), ("Adopt", "adopt"), plan)
+        end = world.records()[-1]
+        self.assertEqual((end["event"], end["state"]), ("run_end", "installed"))
+        self.assertEqual((world.game / "BugSplat64.dll").read_bytes(), HOST)
+        self.assertEqual((world.nevr / "nevr-runtime.dll").read_bytes(), RUNTIME)
+        record = dict(line.split("=", 1) for line in (world.nevr / "installer/nevr-install.txt").read_text().splitlines() if "=" in line)
+        self.assertEqual(record.get("original"), "unknown", "the game's own host was never kept")
+        self.assertEqual(record.get("previous_sha256"), sha(old_host))
+        self.assertEqual(world.game_files(), ["BugSplat64.dll", "echovr.exe"])
+
+    # An earlier NEVR put in place by another installer leaves a runtime host and no install record. Shaped like the shipped
+    # hosts: the stamp `NEVR-BUILD <version> <commit40>` inside an MZ blob (all 26 shipped hosts, v5.1.0 to v5.18.0, carry it
+    # once), with the CDN agent string too on the monolithic ones (v5.1.0 to v5.6.0) and without it on the thin ones (v5.7.2 on).
+    # install.ps1 used to end on "nevr-install.txt is missing; the file was left as it is" for these.
+    STAMP = b"NEVR-BUILD 5.4.3 " + b"b" * 40 + b"\0"
+
+    def test_a_thin_nevr_host_with_no_record_is_adopted_not_refused(self):
+        self.assert_a_record_less_nevr_host_is_adopted(b"MZ\0" + self.STAMP + b"\xcc" * 64)
+
+    def test_a_monolithic_nevr_host_with_no_record_is_adopted_not_refused(self):
+        self.assert_a_record_less_nevr_host_is_adopted(b"MZ\0" + self.STAMP + b"\xcc" * 64 + b"nevr-runtime/1.0\0")
+
+    def test_a_nevr_host_older_than_the_stamp_with_no_record_is_adopted_not_refused(self):
+        # #785: a runtime built before the NEVR-BUILD literal carries only the CDN agent string.
+        self.assert_a_record_less_nevr_host_is_adopted(b"MZ\0" + b"\xcc" * 64 + b"nevr-runtime/1.0\0")
+
     def test_a_damaged_core_is_named_before_it_runs(self):
         world, pkg = self.world(), self.package()
         (pkg / "SHA256SUMS").write_text(f"{'0' * 64}  nevr-install.exe\n")

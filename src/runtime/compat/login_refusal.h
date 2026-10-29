@@ -1,0 +1,92 @@
+#pragma once
+// What a refused login does (#1254).
+//
+// A server that has no credential for the community service, or whose login the service refuses, can do
+// nothing useful: ServerDB registration needs the same account, and the HTTP listener binds only after the
+// game has logged in. It used to connect without credentials (or send account 0) and retry the refusal every
+// few seconds forever, while a supervisor watching the port saw nothing. So the bridge stops it with the
+// cause (ServerFatal), and the cause names what is missing and which config was loaded.
+//
+// A client cannot stop. The game reconnects a closed login socket on its own, so a refusal that is acted on
+// every time becomes a network loop. The client says it once per refused sign-in and answers the later sockets
+// of that sign-in without a network trip (ClientRefusalLatch).
+//
+// Platform neutral and pure: no sockets, no logging, no game state. The caller (ws_bridge.cpp) owns the latch
+// and holds its own lock around it.
+
+#include <cstddef>
+#include <set>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace nevr_login_refusal {
+
+// The config.yaml keys a server's bridge login needs (N133 S4a). The order is the order they are named in.
+inline constexpr std::string_view kDiscordIdKey = "identity.discord_id";
+inline constexpr std::string_view kPasswordKey = "auth.password";
+
+// The keys of the server credential that are unset or empty. Empty result: the server has a credential.
+inline std::vector<std::string> MissingServerCredentialKeys(std::string_view discordId, std::string_view password) {
+  std::vector<std::string> missing;
+  if (discordId.empty()) missing.emplace_back(kDiscordIdKey);
+  if (password.empty()) missing.emplace_back(kPasswordKey);
+  return missing;
+}
+
+// The statuses of an upgrade the community service refuses for the account presented: unauthenticated or
+// forbidden. A 5xx, a 404 or a transport failure is the service being down or misaddressed, not a refusal.
+inline bool IsLoginRefusalStatus(int httpStatus) { return httpStatus == 401 || httpStatus == 403; }
+
+// What to tell an operator about the config: the path that was loaded, or where the search looked.
+inline std::string DescribeConfigSource(std::string_view loadedPath, const std::vector<std::string>& searched) {
+  if (!loadedPath.empty()) return std::string(loadedPath);
+  std::string text = "none found";
+  for (std::size_t i = 0; i < searched.size(); ++i) text += (i == 0 ? ", searched " : ", ") + searched[i];
+  return text;
+}
+
+// Where the config came from, for the stop line. The caller passes the loaded path, or "none found, searched
+// <dirs>"; an empty description reads "none found".
+inline std::string ConfigSourceText(std::string_view configSource) {
+  return configSource.empty() ? std::string("none found") : std::string(configSource);
+}
+
+inline std::string JoinKeys(const std::vector<std::string>& keys) {
+  std::string joined;
+  for (const std::string& key : keys) {
+    if (!joined.empty()) joined += ", ";
+    joined += key;
+  }
+  return joined;
+}
+
+// The one stop line of a server with no credential. It is the cause handed to ServerFatal, so it is also the
+// line the operator reads: the cause, the config that was loaded, and the keys to set.
+inline std::string NoCredentialCause(const std::vector<std::string>& missing, std::string_view configSource) {
+  const std::string keys = JoinKeys(missing);
+  return "server login refused: no credential configured (missing " + keys + "); config: " +
+         ConfigSourceText(configSource) + "; set " + keys + " in config.yaml";
+}
+
+// The one stop line of a server whose credential the community service refused.
+inline std::string RefusedLoginCause(int httpStatus, std::string_view configSource) {
+  return "server login refused: the service refused the credential (HTTP " + std::to_string(httpStatus) +
+         "); config: " + ConfigSourceText(configSource) + "; check " + std::string(kDiscordIdKey) + " and " +
+         std::string(kPasswordKey) + " in config.yaml";
+}
+
+// A client says a refusal once per sign-in. The key is the bearer the refused socket presented (empty: a
+// client with no sign-in), so a different sign-in is a new refusal and says it again.
+class ClientRefusalLatch {
+ public:
+  // True the first time `bearer` is refused, false for every later refusal of it.
+  bool ShouldSay(const std::string& bearer) { return refused_.insert(bearer).second; }
+  // True once `bearer` has been refused: the caller answers without opening the remote.
+  bool IsRefused(const std::string& bearer) const { return refused_.count(bearer) != 0; }
+
+ private:
+  std::set<std::string> refused_;
+};
+
+}  // namespace nevr_login_refusal

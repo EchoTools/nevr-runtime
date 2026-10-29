@@ -1,4 +1,4 @@
-"""N149 (docs/adr/0021 test 6): the Quest sentinel changes no code page at run time.
+"""N151 (docs/adr/0021 test 6): the Quest sentinel changes no code page at run time.
 
 Horizon denies execmod on a written libr15 page, so libr15 is patched on the host at build time and the sentinel only stores
 DATA into it (atomic stores into the slots of its tail, one anonymous credits buffer, anonymous trampoline pages). This
@@ -10,7 +10,7 @@ test pins that by source shape, over src/quest outside the tests, comments strip
   * the STOCK build ID constant (kLibR15StockBuildId) is named only by the files that need the stock file's identity, so a
     hook target that carries it where it means the patched ID (the mutant class of M16-M19) is caught by name.
 
-The `just verify` sensor N149 runs the same scans in bash. Its allowlists are parsed out of the justfile here and must equal
+The `just verify` sensor N151 runs the same scans in bash. Its allowlists are parsed out of the justfile here and must equal
 the lists below, and the sensor block itself is extracted and run against copies of the tree: it must pass on the real tree
 and fail on each planted violation.
 """
@@ -72,12 +72,12 @@ def justfile_list(name: str) -> set:
 
 
 def sensor_script() -> str:
-    """The `just verify` N149 block with the two plumbing helpers it calls, as a standalone bash script."""
+    """The `just verify` N151 block with the two plumbing helpers it calls, as a standalone bash script."""
     text = JUSTFILE.read_text()
     helpers = text[text.index("    sensor_stage1() {") : text.index("    # Same class, different shape")]
     nonempty = text[text.index("    sensor_nonempty() {") : text.index("    # SIGPIPE + pipefail")]
-    block = text[text.index("    # BEGIN N149") : text.index("    # END N149")]
-    return "set -euo pipefail\n" + helpers + nonempty + block + "echo N149-OK\n"
+    block = text[text.index("    # BEGIN N151") : text.index("    # END N151")]
+    return "set -euo pipefail\n" + helpers + nonempty + block + "echo N151-OK\n"
 
 
 class NoQuestCodeWrites(unittest.TestCase):
@@ -118,8 +118,8 @@ class NoQuestCodeWrites(unittest.TestCase):
 
 class TheSensorMatchesThisTest(unittest.TestCase):
     def test_the_justfile_allowlists_equal_this_files(self):
-        self.assertEqual(justfile_list("N149_PROT_OK"), PROTECTION_ALLOWLIST)
-        self.assertEqual(justfile_list("N149_ID_OK"), STOCK_ID_ALLOWLIST)
+        self.assertEqual(justfile_list("N151_PROT_OK"), PROTECTION_ALLOWLIST)
+        self.assertEqual(justfile_list("N151_ID_OK"), STOCK_ID_ALLOWLIST)
 
     def run_sensor(self, mutate=None):
         """Runs the extracted sensor in a copy of src/quest; `mutate(copy_root)` plants a violation first."""
@@ -142,7 +142,7 @@ class TheSensorMatchesThisTest(unittest.TestCase):
     def test_it_passes_on_the_real_tree(self):
         r = self.run_sensor()
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("N149-OK", r.stdout)
+        self.assertIn("N151-OK", r.stdout)
 
     def test_it_fails_on_each_planted_violation(self):
         cases = {
@@ -176,7 +176,7 @@ class TheSensorMatchesThisTest(unittest.TestCase):
             with self.subTest(name):
                 r = self.run_sensor(mutate)
                 self.assertNotEqual(r.returncode, 0, f"the sensor passed on: {name}")
-                self.assertIn("N149", r.stderr)
+                self.assertIn("N151", r.stderr)
 
     def test_it_ignores_prose_and_the_allowlisted_files_own_calls(self):
         r = self.run_sensor(

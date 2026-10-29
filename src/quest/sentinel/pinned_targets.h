@@ -337,6 +337,62 @@ inline constexpr const char* kMinOSBuildVersionSymbol = "_ZN10NRadEngine18kMinOS
 inline constexpr std::uint64_t kMinOSBuildVersionVaddr = 0x2b9ca88;
 inline constexpr std::uint64_t kMinOSBuildVersionValue = 6023800249000000ULL;
 
+// The platform provider (#1220, docs/adr/0026). libr15 reaches a provider only through its own JUMP_SLOTs; each function
+// below is defined in libr15 and called through libr15's PLT stub, from the call sites listed (got_pinned_test.cpp proves
+// the stub loads the slot and that these are its only `b`/`bl` callers).
+//
+// NRadEngine::CNSProvider::Create(unsigned long& handle, char const* name, void const* json, SNSProviderCallbacks const&)
+// (0x192f3e4): unloads a nonzero `handle`, loads the module `name` (CModuleLoader::Load, which keeps a module already
+// loaded without running its RadPlugin* entries again) and stores its handle; `json` is a CJson* the module's RadPluginMain
+// reads. Returns 0 on success (w0). CR15Game::Initialize calls it twice: the platform provider at 0x11f9f80 (`pnsovr`, or
+// `pnsdemo` under -noovr, with a json of appid, lobbyversion, headsettype, activity and javaenv) and `pnsrad` at 0x11f9fdc
+// with a null json.
+inline constexpr const char* kProviderCreateSymbol =
+    "_ZN10NRadEngine11CNSProvider6CreateERmPKcPKvRKNS_20SNSProviderCallbacksE";
+inline constexpr std::uint64_t kProviderCreateVaddr = 0x192f3e4;
+inline constexpr std::uint64_t kProviderCreateStub = 0xf31580;
+inline constexpr std::uint64_t kProviderCreateCallSites[] = {0x11f9f80, 0x11f9fdc};  // CR15Game::Initialize
+using ProviderCreateSig = int(unsigned long* handle, const char* name, const void* json, const void* callbacks);
+struct LibR15ProviderCreateTag {};
+using LibR15ProviderCreateThunk = CallbackThunk<LibR15ProviderCreateTag, ProviderCreateSig>;
+// NRadEngine::CNSProvider::Destroy(unsigned long handle) (0x192f5c0): `cbz x0; b CModuleLoader::Unload`, which calls the
+// module's RadPluginShutdown and then CSysModule::Unload(handle, 0), the dlclose (0x281a084-0x281a0c0). CR15Game::
+// ShutdownEngine calls it on the pnsdemo, pnsrad and pnsovr handles in that order (0x11f500c, 0x11f5014, 0x11f501c).
+inline constexpr const char* kProviderDestroySymbol = "_ZN10NRadEngine11CNSProvider7DestroyEm";
+inline constexpr std::uint64_t kProviderDestroyVaddr = 0x192f5c0;
+inline constexpr std::uint64_t kProviderDestroyStub = 0xf537e0;
+inline constexpr std::uint64_t kProviderDestroyCallSites[] = {0x11f500c, 0x11f5014, 0x11f501c};  // ShutdownEngine
+using ProviderDestroySig = void(unsigned long handle);
+struct LibR15ProviderDestroyTag {};
+using LibR15ProviderDestroyThunk = CallbackThunk<LibR15ProviderDestroyTag, ProviderDestroySig>;
+// NRadEngine::CSysModule::Unload(unsigned long handle, unsigned int) (0x2a9e4a0, exported): with 0 as the second argument
+// it is the dlclose alone. The Destroy hook calls it for a handle whose module was already shut down.
+inline constexpr const char* kSysModuleUnloadSymbol = "_ZN10NRadEngine10CSysModule6UnloadEmj";
+inline constexpr std::uint64_t kSysModuleUnloadVaddr = 0x2a9e4a0;
+using SysModuleUnloadFn = void (*)(unsigned long handle, unsigned int how);
+// NRadEngine::CJson::TString(char const* path, char const* fallback, unsigned int) const (0xfa2e7c, exported): the string
+// at `path`, else `fallback`. The Create hook reads the platform json's appid with it before it drops that json.
+inline constexpr const char* kCJsonTStringSymbol = "_ZNK10NRadEngine5CJson7TStringEPKcS2_j";
+inline constexpr std::uint64_t kCJsonTStringVaddr = 0xfa2e7c;
+using CJsonTStringFn = const char* (*)(const void* json, const char* path, const char* fallback, unsigned int flags);
+// NRadEngine::CNSProvider::ProviderID(unsigned long) (0x192f27c) and UserProviderID(unsigned long) (0x192f330): the
+// module's `ProviderID`/`UserProviderID` export, called with no argument, or -1 when the handle is 0 or the module has none.
+// The return is the provider's CSymbol64 in x0. ProviderID is called from 9 places (lobby Find/Join, PartyAddDemoMember),
+// UserProviderID from 19 (party, invite, friend-request UI); none is a hook target by itself, so no call site is pinned.
+inline constexpr const char* kProviderIdSymbol = "_ZN10NRadEngine11CNSProvider10ProviderIDEm";
+inline constexpr std::uint64_t kProviderIdVaddr = 0x192f27c;
+inline constexpr std::uint64_t kProviderIdStub = 0xf2b4e0;
+inline constexpr std::size_t kProviderIdCallers = 9;
+inline constexpr const char* kUserProviderIdSymbol = "_ZN10NRadEngine11CNSProvider14UserProviderIDEm";
+inline constexpr std::uint64_t kUserProviderIdVaddr = 0x192f330;
+inline constexpr std::uint64_t kUserProviderIdStub = 0xf34a80;
+inline constexpr std::size_t kUserProviderIdCallers = 19;
+using ProviderIdSig = std::uint64_t(unsigned long handle);
+struct LibR15ProviderIdTag {};
+struct LibR15UserProviderIdTag {};
+using LibR15ProviderIdThunk = CallbackThunk<LibR15ProviderIdTag, ProviderIdSig>;
+using LibR15UserProviderIdThunk = CallbackThunk<LibR15UserProviderIdTag, ProviderIdSig>;
+
 // NRadEngine::NRadGame::CR15UIPage2EnablePageNode::Enter(SR15UIPage2EnablePageNodeData const&), defined in
 // libr15 at 0x1fc210c: the UI script node that enables a page. `node` (x0) is the node object, which is the
 // data record plus 0x20 (`node == data + 0x20`, checked by the hook), and `data` (x1) is the record. It
@@ -555,6 +611,24 @@ inline GotTarget LibR15ShowSystemUI() {
 // pinned image: `R_AARCH64_JUMP_SLOT 0xf875c4 _ZN10NRadEngine8CSysInfo14OSBuildVersionERy`).
 inline GotTarget LibR15OSBuildVersion() {
   return {kLibR15, kOSBuildVersionSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36ff9b8ULL};
+}
+
+// libr15.so's provider slots (#1220), each defined in libr15 itself (`readelf -rW` on the pinned image):
+//   R_AARCH64_JUMP_SLOT 0x36f01a8 -> 0x192f3e4 CNSProvider::Create
+//   R_AARCH64_JUMP_SLOT 0x37012d8 -> 0x192f5c0 CNSProvider::Destroy
+//   R_AARCH64_JUMP_SLOT 0x36ed158 -> 0x192f27c CNSProvider::ProviderID
+//   R_AARCH64_JUMP_SLOT 0x36f1c28 -> 0x192f330 CNSProvider::UserProviderID
+inline GotTarget LibR15ProviderCreate() {
+  return {kLibR15, kProviderCreateSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36f01a8ULL};
+}
+inline GotTarget LibR15ProviderDestroy() {
+  return {kLibR15, kProviderDestroySymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x37012d8ULL};
+}
+inline GotTarget LibR15ProviderId() {
+  return {kLibR15, kProviderIdSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ed158ULL};
+}
+inline GotTarget LibR15UserProviderId() {
+  return {kLibR15, kUserProviderIdSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36f1c28ULL};
 }
 
 // NRadEngine::CCanvasUICS::SetText(SCompactPoolHandle, CSymbol64, char const*), defined in libr15 at 0x139111c (80

@@ -613,7 +613,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_lobby_full_backoff --target test_menu_version_label --target test_splash_skip --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_invite_wizard --target test_ui_text --target test_invite_choices --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_arena_public_clock --target test_arena_public_clock_hook --target test_render_config --target test_render_config_hook
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_lobby_full_backoff --target test_menu_version_label --target test_splash_skip --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_login_refusal --target test_invite_wizard --target test_ui_text --target test_invite_choices --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_arena_public_clock --target test_arena_public_clock_hook --target test_render_config --target test_render_config_hook
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_runtime_abi
@@ -840,7 +840,7 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
-    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_invite_wizard test_ui_text test_invite_choices test_asset_cache test_session_router test_asset_registry test_installed_levels test_telemetry_game_type test_arena_round_time test_nevr_root test_arena_public_clock test_arena_public_clock_hook test_render_config test_render_config_hook; do
+    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_login_refusal test_invite_wizard test_ui_text test_invite_choices test_asset_cache test_session_router test_asset_registry test_installed_levels test_telemetry_game_type test_arena_round_time test_nevr_root test_arena_public_clock test_arena_public_clock_hook test_render_config test_render_config_hook; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -1495,6 +1495,14 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/os_build_gate_hook_test" -ldl
     timeout 120 "$out/os_build_gate_hook_test"
+    # The platform provider is libpnsrad (#1220): the four real handlers through their thunk entries against stand-ins for
+    # CNSProvider::Create, Destroy, ProviderID and UserProviderID, CSysModule::Unload and CJson::TString: the name rule,
+    # the appid kept, the OVR answer after a rename, and ShutdownEngine's three Destroys shutting libpnsrad down once.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/pns_provider_hook_test.cpp \
+        src/quest/sentinel/pns_provider_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/pns_provider_hook_test" -ldl
+    timeout 120 "$out/pns_provider_hook_test"
     # The main-menu QUIT (#1276): the real handler through the thunk entry against stand-ins for CVR::ShowSystemUI and
     # ANativeActivity_finish (the activity finished; no app, no activity or no finisher leaves the game's call).
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/quit_hook_test.cpp \
@@ -3125,7 +3133,7 @@ verify:
     #   src/abi      -> sensor_stage1 above (grep rc>=2 on a missing subject)
     #   src/core     -> the same, via the N81/N85/N20 path sets
     #   src/extension-> CMake, since its header is in nevr_core's source list
-    # --- N149: the Quest sentinel changes no code page (docs/adr/0021) ------------
+    # --- N151: the Quest sentinel changes no code page (docs/adr/0021) ------------
     # Horizon denies execmod on a written libr15 page, so the libr15 is patched on the host at build time and the sentinel
     # stores only DATA at run time. Four things keep it so, each a scan of src/quest outside the tests:
     #   (1) a protection or mapping call (mprotect, mmap, mremap, PROT_EXEC, PROT_WRITE) appears only in the files that need
@@ -3136,42 +3144,42 @@ verify:
     #   (4) the STOCK build ID constant is named only by the files that need the stock file's identity. A hook that compares the
     #       stock ID where it means the patched one is a no-op on the patched libr15 that no unit test of the hook's own logic sees.
     # The allowlists are repeated in tools/tests/test_quest_no_code_writes.py, which fails when they differ.
-    # BEGIN N149
-    N149_PROT_OK=" sentinel/got_hook.cpp sentinel/libr15_attach.cpp sentinel/libr15_attach.h sentinel/credits_text.cpp sentinel/credits_text.h "
-    N149_ID_OK=" diag/hwdump_run.cpp patch/libr15_patch_identity.cpp patch/libr15_extra_rows.cpp patch/libr15_patch_table.h plugin/plugin_identity.h sentinel/credits_text.cpp sentinel/data_wiring.cpp sentinel/libr15_attach.cpp sentinel/libr15_identity.cpp sentinel/pinned_targets.h "
-    n149_fail() { echo "verify: FAIL — N149 $1 (docs/adr/0021: the sentinel changes no code page at run time)." >&2; exit 1; }
-    N149_RC=0; N149_PROT=$(grep -rnE '\b(mprotect|mmap|mremap|pkey_mprotect)\b|PROT_(EXEC|WRITE)' src/quest --include='*.cpp' --include='*.h' --exclude-dir=tests) || N149_RC=$?
-    sensor_stage1 "N149 protection calls" "src/quest" "$N149_RC"
-    sensor_nonempty "N149 protection calls" "the protection calls of got_hook.cpp, libr15_attach.cpp and credits_text.cpp" "$N149_PROT"
-    N149_PROT_CODE=$(grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' <<<"$N149_PROT" || true)
-    while IFS= read -r n149_hit; do
-        [ -n "$n149_hit" ] || continue
-        n149_rel="${n149_hit%%:*}"; n149_rel="${n149_rel#src/quest/}"
-        case "$N149_PROT_OK" in *" $n149_rel "*) ;; *) n149_fail "$n149_rel changes or maps memory protection: $n149_hit" ;; esac
-    done <<<"$N149_PROT_CODE"
-    N149_RC=0; N149_BAD=$(grep -rnE 'InstallInlineThunk|\bWriteWord\b|AllocateInReach' src/quest --include='*.cpp' --include='*.h' --exclude-dir=tests) || N149_RC=$?
-    sensor_stage1 "N149 run-time code writers" "src/quest" "$N149_RC"
-    N149_BAD_CODE=$(grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' <<<"$N149_BAD" || true)
-    [ -z "$N149_BAD_CODE" ] || n149_fail "a run-time code writer is back: $N149_BAD_CODE"
-    N149_RC=0; N149_CRED=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/quest/sentinel/credits_text.cpp) || N149_RC=$?
-    sensor_stage1 "N149 credits install" "src/quest/sentinel/credits_text.cpp" "$N149_RC"
-    sensor_nonempty "N149 credits install" "non-comment lines of src/quest/sentinel/credits_text.cpp" "$N149_CRED"
-    N149_CALLS=$(grep -cE '\bprotect\(' <<<"$N149_CRED" || true)
-    N149_OWN=$(grep -cE '\bprotect\(memory,' <<<"$N149_CRED" || true)
-    { [ "$N149_CALLS" = "1" ] && [ "$N149_OWN" = "1" ]; } || n149_fail "credits_text.cpp makes $N149_CALLS protection call(s), $N149_OWN on its own buffer; it must make exactly one, on its buffer"
-    N149_MP=$(grep -cE '\bmprotect\b' <<<"$N149_CRED" || true)
-    N149_MP_DEFAULT=$(grep -cE ': &mprotect;' <<<"$N149_CRED" || true)
-    [ "$N149_MP" = "$N149_MP_DEFAULT" ] || n149_fail "credits_text.cpp names mprotect other than as the default of its protection seam"
-    N149_RC=0; N149_ID=$(grep -rn 'kLibR15StockBuildId' src/quest --include='*.cpp' --include='*.h' --exclude-dir=tests) || N149_RC=$?
-    sensor_stage1 "N149 stock build ID users" "src/quest" "$N149_RC"
-    sensor_nonempty "N149 stock build ID users" "the stock build ID's users" "$N149_ID"
-    N149_ID_CODE=$(grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' <<<"$N149_ID" || true)
-    while IFS= read -r n149_hit; do
-        [ -n "$n149_hit" ] || continue
-        n149_rel="${n149_hit%%:*}"; n149_rel="${n149_rel#src/quest/}"
-        case "$N149_ID_OK" in *" $n149_rel "*) ;; *) n149_fail "$n149_rel names kLibR15StockBuildId; a hook target carries sentinel::pinned::LibR15PatchedBuildId(): $n149_hit" ;; esac
-    done <<<"$N149_ID_CODE"
-    # END N149
+    # BEGIN N151
+    N151_PROT_OK=" sentinel/got_hook.cpp sentinel/libr15_attach.cpp sentinel/libr15_attach.h sentinel/credits_text.cpp sentinel/credits_text.h "
+    N151_ID_OK=" diag/hwdump_run.cpp patch/libr15_patch_identity.cpp patch/libr15_extra_rows.cpp patch/libr15_patch_table.h plugin/plugin_identity.h sentinel/credits_text.cpp sentinel/data_wiring.cpp sentinel/libr15_attach.cpp sentinel/libr15_identity.cpp sentinel/pinned_targets.h "
+    n151_fail() { echo "verify: FAIL — N151 $1 (docs/adr/0021: the sentinel changes no code page at run time)." >&2; exit 1; }
+    N151_RC=0; N151_PROT=$(grep -rnE '\b(mprotect|mmap|mremap|pkey_mprotect)\b|PROT_(EXEC|WRITE)' src/quest --include='*.cpp' --include='*.h' --exclude-dir=tests) || N151_RC=$?
+    sensor_stage1 "N151 protection calls" "src/quest" "$N151_RC"
+    sensor_nonempty "N151 protection calls" "the protection calls of got_hook.cpp, libr15_attach.cpp and credits_text.cpp" "$N151_PROT"
+    N151_PROT_CODE=$(grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' <<<"$N151_PROT" || true)
+    while IFS= read -r n151_hit; do
+        [ -n "$n151_hit" ] || continue
+        n151_rel="${n151_hit%%:*}"; n151_rel="${n151_rel#src/quest/}"
+        case "$N151_PROT_OK" in *" $n151_rel "*) ;; *) n151_fail "$n151_rel changes or maps memory protection: $n151_hit" ;; esac
+    done <<<"$N151_PROT_CODE"
+    N151_RC=0; N151_BAD=$(grep -rnE 'InstallInlineThunk|\bWriteWord\b|AllocateInReach' src/quest --include='*.cpp' --include='*.h' --exclude-dir=tests) || N151_RC=$?
+    sensor_stage1 "N151 run-time code writers" "src/quest" "$N151_RC"
+    N151_BAD_CODE=$(grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' <<<"$N151_BAD" || true)
+    [ -z "$N151_BAD_CODE" ] || n151_fail "a run-time code writer is back: $N151_BAD_CODE"
+    N151_RC=0; N151_CRED=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/quest/sentinel/credits_text.cpp) || N151_RC=$?
+    sensor_stage1 "N151 credits install" "src/quest/sentinel/credits_text.cpp" "$N151_RC"
+    sensor_nonempty "N151 credits install" "non-comment lines of src/quest/sentinel/credits_text.cpp" "$N151_CRED"
+    N151_CALLS=$(grep -cE '\bprotect\(' <<<"$N151_CRED" || true)
+    N151_OWN=$(grep -cE '\bprotect\(memory,' <<<"$N151_CRED" || true)
+    { [ "$N151_CALLS" = "1" ] && [ "$N151_OWN" = "1" ]; } || n151_fail "credits_text.cpp makes $N151_CALLS protection call(s), $N151_OWN on its own buffer; it must make exactly one, on its buffer"
+    N151_MP=$(grep -cE '\bmprotect\b' <<<"$N151_CRED" || true)
+    N151_MP_DEFAULT=$(grep -cE ': &mprotect;' <<<"$N151_CRED" || true)
+    [ "$N151_MP" = "$N151_MP_DEFAULT" ] || n151_fail "credits_text.cpp names mprotect other than as the default of its protection seam"
+    N151_RC=0; N151_ID=$(grep -rn 'kLibR15StockBuildId' src/quest --include='*.cpp' --include='*.h' --exclude-dir=tests) || N151_RC=$?
+    sensor_stage1 "N151 stock build ID users" "src/quest" "$N151_RC"
+    sensor_nonempty "N151 stock build ID users" "the stock build ID's users" "$N151_ID"
+    N151_ID_CODE=$(grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' <<<"$N151_ID" || true)
+    while IFS= read -r n151_hit; do
+        [ -n "$n151_hit" ] || continue
+        n151_rel="${n151_hit%%:*}"; n151_rel="${n151_rel#src/quest/}"
+        case "$N151_ID_OK" in *" $n151_rel "*) ;; *) n151_fail "$n151_rel names kLibR15StockBuildId; a hook target carries sentinel::pinned::LibR15PatchedBuildId(): $n151_hit" ;; esac
+    done <<<"$N151_ID_CODE"
+    # END N151
     N81_RC=0; N81_HITS=$(grep -rn '"\[NEVR\] ' src/runtime src/abi src/core) || N81_RC=$?
     sensor_stage1 "N81 bare [NEVR] tag" "src/runtime src/abi src/core" "$N81_RC"
     if [ "$N81_RC" -eq 0 ] && printf '%s\n' "$N81_HITS" \

@@ -73,6 +73,8 @@ struct RemoteHooks {
   std::function<std::function<void(const ix::WebSocketMessagePtr&)>(std::function<void(const ix::WebSocketMessagePtr&)>)>
       guard;
   std::function<void(nevr_session_router::LogLevel, const std::string&)> log;
+  // A remote's upgrade came back with this HTTP status (#1254): the bridge decides whether it is a refused login.
+  std::function<void(const nevr_session_router::RemoteOpenRequest&, int httpStatus)> refused;
 };
 
 class RemoteSockets final : public nevr_session_router::RemoteTransport {
