@@ -162,6 +162,9 @@ class TheSensorMatchesThisTest(unittest.TestCase):
             "a direct mprotect of an image page in credits_text.cpp": self.append(
                 "sentinel/credits_text.cpp", "\nvoid Bad(void* image) { mprotect(image, 4096, 7); }\n"
             ),
+            "an mremap in an integration file": self.append(
+                "integration/production_steps.cpp", "\nvoid* Bad(void* a) { return mremap(a, 4096, 8192, 0); }\n"
+            ),
             "the stock ID in a social hook file": self.append(
                 "social/social_install.cpp", "\nconst char* Bad() { return nevr_quest::patch::kLibR15StockBuildId; }\n"
             ),
