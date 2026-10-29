@@ -207,7 +207,7 @@ looks there first.
 
 | Path | What it is | Code |
 | --- | --- | --- |
-| `_local\config.yaml` | Every nEVR setting: service addresses and keys, the `plugins:` list, arena rules. A missing file is a warning and a defaults-only run; a malformed one stops a dedicated server. | `FindNevrConfigYamlPath` in `src/runtime/lifecycle/service_config.cpp` |
+| `_local\config.yaml` | Every nEVR setting: service addresses and keys, the `plugins:` list, arena rules. A missing file is a warning and a defaults-only run (KNOWN-WRONG #1254: a server with no file and no cached sign-in never stops); a malformed one stops a dedicated server. | `FindNevrConfigYamlPath` in `src/runtime/lifecycle/service_config.cpp` |
 | `_local\config.json` | Optional. Only the keys the stock engine reads. | `LoadEarlyConfig` in `src/runtime/lifecycle/config.cpp` |
 | `_local\r14logs\*.log` | The game's own log. The runtime only reads the newest, relative to the working directory. | `src/runtime/lifecycle/state_machine.cpp` |
 

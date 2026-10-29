@@ -41,6 +41,7 @@ inline std::string FormatCallbackFailureDiagnostic(std::string_view callback) {
          " failure=1 — server continues (an escape here reaches the game's unhandled-exception filter and kills it)";
 }
 
+// KNOWN-WRONG #1306: in server mode the text calls every refusal expected, whatever its status.
 inline std::string FormatLoginFailureDiagnostic(bool valid, uint64_t statusCode, size_t messageBytes,
                                                 bool serverMode) {
   const std::string mode = serverMode

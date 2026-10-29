@@ -1105,8 +1105,9 @@ Limits that remain (all cleared by restarting the game, which draws fresh stand-
   `FollowDeepLink` needs a launch-intent deep link, so they do not run in the pre-login window in the
   normal flow. The durable fix is the NEVR social facade (separate package): once its hook is
   installed it hands the game a facade instead of libpnsovr's `CNSOVRSocial` on libr15's
-  `CNSProvider::Social` slot (`0x36ef528`), so the Oculus `AddMember` path never runs; as of this
-  writing that hook is not yet wired into startup, so the real object is used and this window exists.
+  `CNSProvider::Social` slot (`0x36ef528`), so the Oculus `AddMember` path never runs. The constructor
+  sequence installs that hook (`InstallSocial`, `src/quest/integration/ctor_sequence.cpp`); a run that skips
+  the step (`social_off`, `counters_refused`, `bridge_unavailable`) uses the real object, and this window exists.
 - `CNSOVRUser::OfflineID()` (`0x70e458`) is consumed only by `CNSUser::LoadLocalData` / `SaveLocalData`
   / `DeleteLocalData` as one field of a local-storage key and in a log line; it is not sent to the
   server. It is rewritten/reset as above, so it holds a stand-in only in the same in-flight window.

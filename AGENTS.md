@@ -908,6 +908,13 @@ your seat name, for example `claude-main` or `codex`.
   design the owner has approved. A plan is a tracking issue plus ADRs. In docs and comments cite
   files and symbols, not line ranges; reports and findings use `file:line`. Deleting a doc needs
   the owner's confirmation; move its load-bearing facts first and say where.
+- **A known-wrong state is marked, never written as the spec.** A doc, comment or test that records a state the design
+  calls wrong says so at the site: `KNOWN-WRONG #<open issue>`, the issue that tracks the fix. A defect with no issue
+  gets one first. No test asserts the absence of a fix: no `assertNotIn` of the fix's symbol with a message that defers
+  it ("ADR 0012 step 6", "not yet"), and no smoke row that passes on "Expect none". A doc that defers a build (`not
+  yet implemented`, `until ... lands`) names the issue that tracks it. When the fix lands, the marker goes with it.
+  `tools/check_known_wrong.py` checks all four in `just test-tools`; run it with `--online` when you add or remove a
+  marker, so a marker never names a closed issue.
 - **Public prose carries no hosting URLs, no chat quotes and no local paths.** A seat never publishes on its own: it
   drafts every public post (issue, PR body or edit, comment, review, release note) and sends the text to Spritz; it
   posts only after her approval. The reason: seats post on the owner's account, so their words are public in his name,

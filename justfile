@@ -3519,6 +3519,7 @@ verify:
     # keys a server needs to boot (auth, services, identity, version sections).
     # Check the canonical fixture, not echovr/_local/config.yaml: that ignored
     # machine-local destination is created by setup and absent in fresh worktrees.
+    # KNOWN-WRONG #1305: this counts headings and never parses the sample, which the parser rejects.
     N133_S7D_RC=0
     N133_S7D=$(grep -cE '^\s*(auth:|services:|identity:|version:)' \
         docs/reference/example-config.yaml) || N133_S7D_RC=$?

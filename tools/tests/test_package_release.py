@@ -545,6 +545,7 @@ class ReleaseStagesTest(PackageFixture):
             readme = z.read("README.txt").decode()
         section = readme.split("Running a dedicated server\n", 1)[1].split("\nUpdate\n", 1)[0]
         prose = " ".join(section.split())  # the README wraps lines; a phrase may break across one
+        # KNOWN-WRONG #1255: the README sends a host to _local\config.yaml because the runtime does not read the nevr folder.
         for needle in (r".\echovr_server.exe", "-server -headless -no-console", r"_local\config.yaml",
                        "services.socket_uri", "issue #843", "auth.password", "The password goes in auth.password",
                        "refresh token", "requested game server registration", "Received registration success",

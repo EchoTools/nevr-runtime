@@ -587,7 +587,7 @@ the tag `[NEVR.WS]` and the connection index (Rule 9):
 - **A frame the decode cannot read** is a Warning, `lobby <find request|join request|session success|session
   failure> could not be read conn=<n> payload_bytes=<n>`. Nothing is read past the frame's end.
 - **A client only.** A dedicated server logs every message of every frame at Info (`LogFrameMessages`), so these
-  lines are not written there.
+  lines are not written there. KNOWN-WRONG #1307: that contradicts the hot-path rule of this standard.
 - **Rate.** The bridge cannot bound how often the game sends a request: its party-follow loop runs from the
   game's own update. Each kind (find, join, success, failure) writes at most 10 records per 10 s window and
   counts the rest. The next lobby frame of any kind after the window ends writes

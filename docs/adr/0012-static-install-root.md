@@ -134,8 +134,8 @@ says when an override was ignored. The runtime's own state paths (`core/nevr_roo
 On the first run that finds the old layout, the runtime moves, and logs every file it moves or leaves:
 
 - from the install's `_local` directories: `.credentials.json`, nearest first, through the protected write the cache is saved with
-  (`core/credential_write.h`), read back before the old file is removed. `config.yaml` is not moved until step 6 decides where server and
-  client config live, and a `-config` folder's own `config.yaml` never is: it stays where it is, and the rule of "Where state resolves"
+  (`core/credential_write.h`), read back before the old file is removed. `config.yaml` is not moved (KNOWN-WRONG #1255: the root is not
+  among the places it is read), and a `-config` folder's own `config.yaml` never is: it stays where it is, and the rule of "Where state resolves"
   finds it there. A cache the move could not take (or whose root path does not fit the ANSI code page) is still read, and written back where it is,
   until a later run moves it;
 - from `%LOCALAPPDATA%\EchoVR\logs`: nEVR's own files, which are the run logs the built-in filter writes (`BuildLogFilePath` in

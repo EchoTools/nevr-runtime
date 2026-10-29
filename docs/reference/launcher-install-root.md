@@ -85,12 +85,12 @@ of the game folder, and moves the record to `<root>\installer\aside\nevr-install
 
 ## What still writes in the game folder
 
-These are not yet in the root. Each moves in its own change and this page is updated with it:
+These are not yet in the root (#575). Each moves in its own change and this page is updated with it:
 
-- `plugins\` next to `echovr.exe`: plugin DLLs load from there (`src/runtime/ext/plugin_loader.cpp`), #856;
-- `_local\config.yaml`: the runtime still searches `_local` next to the game module (and one and two folders up) for it, and nothing moves it;
+- `plugins\` next to `echovr.exe`: plugin DLLs load from there (`src/runtime/ext/plugin_loader.cpp`), KNOWN-WRONG #856;
+- `_local\config.yaml`: the runtime still searches `_local` next to the game module (and one and two folders up) for it, and nothing moves it, KNOWN-WRONG #1255;
 - the game's own logs under `_local\r14logs` (the game writes them);
-- `logs\nevr-boot.jsonl` beside `echovr.exe`: the runtime's start-up log, #1232;
+- `logs\nevr-boot.jsonl` beside `echovr.exe`: the runtime's start-up log, KNOWN-WRONG #1232;
 
 ## What a launcher must not do
 
