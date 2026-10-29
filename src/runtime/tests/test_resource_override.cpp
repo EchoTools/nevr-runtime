@@ -1087,4 +1087,10 @@ TEST_F(TexturePayloads, ACachedEntryForAnotherBufferDoesNotSuppressTheBuiltInSpl
   EXPECT_FALSE(TestLogContains("not registered reason"));
 }
 
+TEST_F(TexturePayloads, TheCacheCapHoldsTheShippedPosterSet) {
+  Cache(Image(100, 1), kTexturePayloadKey, kPosterName, "cache_poster");
+  RegisterCachedResourceOverrides(dir_.c_str());
+  EXPECT_TRUE(TestLogContains(" cap=536870912 "));
+}
+
 }  // namespace

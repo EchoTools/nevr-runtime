@@ -34,10 +34,12 @@
 
 namespace nevr_asset_cache {
 
-/// Blob bytes a cache keeps in total before Evict() starts removing unreferenced ones.
-inline constexpr std::uint64_t kDefaultCapBytes = 256ull * 1024 * 1024;
-/// A single blob larger than this is refused on read and on store: a texture override is a few MiB.
-inline constexpr std::uint64_t kMaxBlobBytes = 64ull * 1024 * 1024;
+/// Blob bytes a cache keeps in total before Evict() starts removing unreferenced ones: room for a set of texture
+/// payloads (#1421: one set of four lobby posters is about 130 MiB) with a new version stored beside the old.
+inline constexpr std::uint64_t kDefaultCapBytes = 512ull * 1024 * 1024;
+/// A single blob larger than this is refused on read and on store: a texture's payload (buffer 1) is up to 78,294,084
+/// bytes for the largest lobby poster (#1421).
+inline constexpr std::uint64_t kMaxBlobBytes = 128ull * 1024 * 1024;
 /// A .tmp older than this is a leftover of a killed write and is removed by Evict().
 inline constexpr std::uint64_t kStaleTempSeconds = 24ull * 60 * 60;
 

@@ -7,6 +7,9 @@
   asset_cache.py put    --dir DIR --type 0xTYPE --name 0xNAME [--label L] FILE
   asset_cache.py verify --dir DIR
 
+The type names the buffer the blob replaces (src/runtime/patch/resource_buffer_key.h): a texture's payload is
+`--type 0xbeac1969cb7b8861` (Make(CGTextureResource, "Win10GPU"), buffer 1); its logical type or 0 names buffer 0.
+
 DIR is `%LOCALAPPDATA%\\nevr\\echovr\\cache` of the Windows user (under Wine: `<prefix>/drive_c/users/<user>/AppData/Local/nevr/echovr/cache`).
 A blob is written to a temp file, flushed and renamed into place; index.json the same way. A damaged index.json is
 never overwritten. Exit 0 and `ok:` lines on success; exit 1 and a `FAIL:` line on stderr otherwise. Standard library only.
@@ -23,7 +26,7 @@ import time
 
 BLOB_SUFFIX = ".blob"
 INDEX_NAME = "index.json"
-MAX_BLOB_BYTES = 64 * 1024 * 1024
+MAX_BLOB_BYTES = 128 * 1024 * 1024
 SHA = re.compile(r"^[0-9a-f]{64}$")
 HASH = re.compile(r"^0[xX][0-9a-fA-F]{1,16}$")
 
