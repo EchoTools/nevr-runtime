@@ -31,7 +31,9 @@
 // the service's encoder (GameServerSessionStart.Stream: two GUIDs, player limit, entrant count, lobby type, a pad
 // byte), then the NUL-terminated JSON, then the entrants.
 //
-// What is pure: everything here. The process side (the game's memory, the call, the log) is server_bots.cpp.
+// What is here: the decisions, the lines, and the reads and calls on memory a test hands in (ReadNetGame,
+// ReadBodyPools, WithOfflineBit). server_bots.cpp is the glue: it hands them the game's addresses, calls the
+// game's functions and logs the lines.
 
 #include <cstddef>
 #include <cstdint>
