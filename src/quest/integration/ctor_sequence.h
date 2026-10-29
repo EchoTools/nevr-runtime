@@ -73,6 +73,9 @@
 //                                    callback), on every launch, right after the credits step; no counters. A data write:
 //                                    no code page is touched. Without the stock page's digest pinned it serves the page
 //                                    unchanged and logs the digest.
+//      InstallWizardMetric           the CREATE GAME and JOIN VIA CODE observer on libr15's MetricLog (#966, ADR 0017
+//                                    slice S2): one JUMP_SLOT, on every launch right after the menu cards, when
+//                                    WizardMetricWanted (production answers false until the invite switch lands); no counters.
 //      ArmClockLevels                the clock-level override (#928): no slot of its own (the render-configuration
 //                                    hook owns vrapi_SetClockLevels and asks the override which levels to call with),
 //                                    on every launch, right after the credits step; its counters are registered with the
@@ -156,6 +159,7 @@ enum class StepId : std::uint8_t {
   kInstallRenderConfig,
   kInstallCreditsText,
   kInstallMenuCards,
+  kInstallWizardMetric,
   kArmClockLevels,
   kStartTokenAuth,
   kInstallLoginPrompt,
@@ -256,6 +260,9 @@ class Steps {
   // The CREATE GAME and JOIN VIA CODE cards on the main menu (#966): one libr15 data slot (the streaming reader's read-finished
   // callback), on every launch, no counters.
   virtual bool InstallMenuCards() = 0;
+  // The CREATE GAME / JOIN VIA CODE observer (#966, ADR 0017 S2). Asked before its step runs; the step is skipped when false.
+  virtual bool WizardMetricWanted() = 0;
+  virtual bool InstallWizardMetric() = 0;
   // The clock-level override (#928): the switch the render-configuration hook's handler reads, on every launch.
   // `countersRegistered`: the result of RegisterClockLevelsCounters (the override's own rule: without its counters it logs
   // the skip and leaves the switch off). `overrideOn`: the resolved switch, Features::clockLevels.
