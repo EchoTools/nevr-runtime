@@ -18,7 +18,7 @@ FILES = {
     "src/runtime/CMakeLists.txt": ('add_library(platform_compat STATIC a.cpp)\nadd_library(nevr_core STATIC b.cpp)\n'
                                    'add_executable(thing_test t.cpp)\n'
                                    'target_compile_definitions(x PRIVATE GIT_COMMIT_HASH="a" NEVR_OK=1 NOMINMAX)\n'),
-    "src/legacy/old.h": "namespace OldThing {\n}\n",
+    "extern/old.h": "namespace OldThing {\n}\n",
 }
 
 

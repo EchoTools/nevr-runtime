@@ -1,7 +1,7 @@
 name: Release train
 
 # Cuts a pre-release by itself when main carries a feat, fix, perf or breaking change that the newest tag does not
-# (RELEASING.md, "When to release"). It runs hourly and does nothing until the repository variable RELEASE_TRAIN is
+# (RELEASING.md, "When to release"). It runs every three hours and does nothing until the repository variable RELEASE_TRAIN is
 # "true": merging this file cuts no release. Every step that could leave a bad release fails the run red and leaves
 # the draft unpublished (RELEASING.md, "A draft that fails its checks"). Nothing here reads the pre-release flag.
 #
@@ -9,7 +9,7 @@ name: Release train
 # thesprockee/release-signer. Without it the sign step fails red and nothing is published.
 on:
   schedule:
-    - cron: "17 * * * *"
+    - cron: "17 */3 * * *"
   workflow_dispatch:
 
 # actions: write is for `gh workflow run build.yml` with this run's token (step 3 of the cut job).

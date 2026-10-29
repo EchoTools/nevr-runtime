@@ -301,7 +301,7 @@ inline constexpr std::array<const char*, kSlotCount> kSlotNames = {
 
 // The game turns the social provider's symbol into the platform code its friend and user ids carry
 // (CR15NetGame::FriendId, libr15 0x129b6f8: `CNSProvider::UserProviderID(netGame + 0x10)` compared in turn with seven
-// CSymbol64 constants; the match picks the code, no match gives 0). The constants are CSymbol64 hashes (abi/symbol_hash.h)
+// CSymbol64 constants; the match picks the code, no match gives 0). The constants are CSymbol64 hashes (nevr/symbol_hash.h)
 // stored in libr15's rodata: "OVR" at 0x2ba11c0 -> code 4, "PSN" at 0x2ba2428 -> 2, "DMO" at 0x2ba1260 -> 7, and
 // 0x2ba2418 -> 1, 0x2ba2440 -> 3, 0x2ba2450 -> 16, 0x2ba2468 -> 6 (social_pinned_test reads them). pnsovr's own
 // SNSUserID constructor and OpenFriendRequestUI compare the same "OVR" constant (libpnsovr 0x5568e0) and make code 4.

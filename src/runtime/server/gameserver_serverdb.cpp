@@ -11,7 +11,7 @@
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 #include "core/auth_token.h"
-#include "auth_token_refresh.h"
+#include "core/auth_token_refresh.h"
 #include "runtime/lifecycle/return_to_lobby.h"
 #include "runtime/server/constants.h"
 #include "runtime/server/failure_detail.h"
@@ -36,7 +36,7 @@
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/lifecycle/crash_recovery.h"
 #include "runtime/hook/patching.h"
-#include "nevr_curl.h"
+#include "core/nevr_curl.h"
 #include "core/pch.h"
 #include "runtime/server/upnp.h"
 #include "gameservice/v1/gameservice.pb.h"
@@ -105,9 +105,6 @@ static std::string AuthenticateServer(std::string& reason) {
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, nevr::CurlWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
-#ifdef NEVR_INSECURE_SKIP_TLS_VERIFY
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-#endif
 
     CURLcode res = curl_easy_perform(curl);
     long http_code = 0;
@@ -218,8 +215,8 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       static_cast<long long>(serverId), static_cast<unsigned long long>(regionId),
       static_cast<unsigned long long>(versionLock));
 
-  // Get serverdb URI from config. If not explicitly set, construct from
-  // nevr_socket_uri + nevr_discord_id + nevr_password (the common config pattern).
+  // An explicit ServerDB URI (services.serverdb) is dialed as given; without one, ChooseServerDbRoute
+  // below builds the token-route or URL-parameter URI.
   const char* serverDbUri = NevrCfgGetFlat("serverdb_host");
 
   // Acquire a session JWT for the operator's server-host account (token auth, BAC-1).
@@ -238,18 +235,32 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   // Owns the constructed URI for the rest of this call; Connect() copies it
   // (websocket_client.cpp setUrl(std::string(uri))).
   std::string constructedUri;
-  if (!serverDbUri || serverDbUri[0] == '\0') {
-    const auto orEmpty = [](const char* value) { return value ? std::string_view(value) : std::string_view(); };
+  const auto orEmpty = [](const char* value) { return value ? std::string_view(value) : std::string_view(); };
+  // #1266: the route is chosen once, from what config.yaml sets, and logged; a server with no route stops here
+  // instead of dialing an address nothing serves. The token route is opt-in (docs/adr/0001-serverdb-token-auth.md).
+  const char* tokenUri = NevrCfgGetFlat("nevr_serverdb_uri");
+  const char* socketUri = NevrCfgGetFlat("nevr_socket_uri");
+  const char* discordId = NevrCfgGetFlat("nevr_discord_id");
+  const nevr_serverdb_uri::ServerDbRoute route = nevr_serverdb_uri::ChooseServerDbRoute(
+      orEmpty(serverDbUri), orEmpty(tokenUri), !wsToken.empty(), orEmpty(socketUri), orEmpty(discordId));
+  const auto presence = [](const char* value) { return (value && value[0] != '\0') ? "present" : "absent"; };
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.GAMESERVER] serverdb route=%s services.serverdb=%s services.serverdb_uri=%s token=%s "
+      "services.socket_uri=%s identity.discord_id=%s",
+      nevr_serverdb_uri::ServerDbRouteName(route), presence(serverDbUri), presence(tokenUri),
+      wsToken.empty() ? "absent" : "present", presence(socketUri), presence(discordId));
+
+  if (route == nevr_serverdb_uri::ServerDbRoute::kNone) {
+    ServerFatal("%s", nevr_serverdb_uri::kNoServerDbUriCause);
+    return;
+  }
+  if (route != nevr_serverdb_uri::ServerDbRoute::kExplicitUri) {
     // guilds/regions are list-shaped registration metadata; read CSV so a yaml
     // list `[a, b]` and a scalar CSV both build the same guilds=/regions= param.
     const char* guilds = NevrCfgGetFlatCsv("nevr_guilds");
     const char* regions = NevrCfgGetFlatCsv("nevr_regions");
-    // Token auth is opt-in: only when nevr_serverdb_uri (the token route, e.g. /nevr) is
-    // configured AND a token was acquired. Otherwise fall back to the legacy url-param
-    // path so a deploy that hasn't set nevr_serverdb_uri keeps working (no footgun).
-    const char* tokenUri = NevrCfgGetFlat("nevr_serverdb_uri");
 
-    if (tokenUri && tokenUri[0] != '\0' && !wsToken.empty()) {
+    if (route == nevr_serverdb_uri::ServerDbRoute::kTokenRoute) {
       // Token auth (BAC-2): identity via the Bearer JWT (sent by Connect()); discord_id/
       // password dropped; guilds/regions stay as registration metadata. nevr_serverdb_uri
       // points at the token route that forwards the real Authorization header
@@ -268,35 +279,26 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
           "[NEVR.GAMESERVER] constructed serverdb URI for token auth: ", constructedUri);
       Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
     } else {
-      // Legacy url-param auth (no nevr_serverdb_uri configured): connect via
-      // nevr_socket_uri with discord_id+password — the pre-token-auth behavior.
-      const char* socketUri = NevrCfgGetFlat("nevr_socket_uri");
-      const char* discordId = NevrCfgGetFlat("nevr_discord_id");
+      // URL-parameter auth (no nevr_serverdb_uri configured): connect via
+      // nevr_socket_uri with discord_id+password.
       const char* password = NevrCfgGetFlat("nevr_password");
-      if (socketUri && socketUri[0] != '\0' && discordId && discordId[0] != '\0') {
-        // Issue #41: every value is percent-encoded, so a password containing
-        // '&', '=', '#', '%', '+' or whitespace can no longer rewrite the query.
-        std::optional<std::string> built = nevr_serverdb_uri::BuildLegacyUri(
-            socketUri, discordId, orEmpty(password), orEmpty(guilds), orEmpty(regions));
-        if (!built) {
-          Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] could not percent-encode the legacy serverdb URI");
-          ServerFatal("Could not build the ServerDB URI (legacy url-param auth)");
-          return;
-        }
-        constructedUri = std::move(*built);
-        serverDbUri = constructedUri.c_str();
-        // Do NOT log constructedUri here — this branch embeds the operator's
-        // password in the query string. Presence only, never the value.
-        Log(EchoVR::LogLevel::Debug,
-            "[NEVR.GAMESERVER] constructed serverdb URI (legacy url-param auth, percent-encoded): "
-            "discord_id=%s password=%s",
-            discordId, (password && password[0] != '\0') ? "present (redacted)" : "absent");
-      } else {
-        serverDbUri = "ws://localhost:777/serverdb";
-        const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
-            "[NEVR.GAMESERVER] No nevr_serverdb_uri/nevr_socket_uri — using default serverdb URI: ", serverDbUri);
-        Log(EchoVR::LogLevel::Warning, "%s", diagnostic.c_str());
+      // Issue #41: every value is percent-encoded, so a password containing
+      // '&', '=', '#', '%', '+' or whitespace can no longer rewrite the query.
+      std::optional<std::string> built = nevr_serverdb_uri::BuildLegacyUri(
+          socketUri, discordId, orEmpty(password), orEmpty(guilds), orEmpty(regions));
+      if (!built) {
+        Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] could not percent-encode the legacy serverdb URI");
+        ServerFatal("Could not build the ServerDB URI (legacy url-param auth)");
+        return;
       }
+      constructedUri = std::move(*built);
+      serverDbUri = constructedUri.c_str();
+      // Do NOT log constructedUri here — this branch embeds the operator's
+      // password in the query string. Presence only, never the value.
+      Log(EchoVR::LogLevel::Debug,
+          "[NEVR.GAMESERVER] constructed serverdb URI (legacy url-param auth, percent-encoded): "
+          "discord_id=%s password=%s",
+          discordId, (password && password[0] != '\0') ? "present (redacted)" : "absent");
     }
   }
 

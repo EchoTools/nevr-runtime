@@ -45,8 +45,8 @@ feels risky":
    NEVER" clauses are enforced constraints, not advice: no C-style casts; no
    `catch(...)`; never throw across a DLL boundary; no I/O from DllMain; Ninja-only;
    vcpkg-manifest deps only; PE VERSIONINFO in every DLL; sign release DLLs. The
-   addendum says `-Werror`; the MinGW targets apply it, with the frozen legacy
-   target exempt (see "Compiler warnings" in the primer). A change that violates a Hard-Stop is rejected
+   addendum says `-Werror`; the MinGW targets apply it (see "Compiler warnings"
+   in the primer). A change that violates a Hard-Stop is rejected
    regardless of whether it "works".
 2. **INVOKE THE `nevr-work` SKILL** (`.claude/skills/nevr-work/SKILL.md`) as your
    gate harness and walk it gate by gate: orient → measure/verify-first →
@@ -62,14 +62,14 @@ feels risky":
 > **A PR runs the quick check, not `just verify`.** The quick check is: the build (`just build`), the test
 > recipe(s) that cover the changed code (`just --list` names them: `test-auth-unit`, `test-quest-shared`,
 > `test-quest-*`, `test-android` for a change under `src/quest`, and so on), and the PC login test (see "System
-> test for runtime and auth changes") when the change touches runtime or auth code. A PR that adds or removes
-> GTest declarations in `src/runtime/tests/*.cpp` [...] runs
-> `python3 -m pytest tools/tests/test_verify_gtest_floor.py`. [...] Every PR, whatever it touches, also runs
+> test for runtime and auth changes") when the change touches runtime or auth code. The GTest floor is not stored:
+> `python3 tools/verify_gtest_floor.py` counts [...] at HEAD and at the merge-base with `origin/main` [...] and fails
+> when HEAD has fewer. [...] Every PR, whatever it touches, also runs
 > `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` [...]. Run the quick check on the PR's tip, in the build slice, and report each item with its result; an item
 > not run is named as not run.
 
-Because `just build` greps its own output and always exits 0, the build item is
-`just build` plus a raw `cmake --build --preset <preset>` whose exit code you read.
+The build item is `just build` and its exit code, which is nonzero when the build
+fails (the recipe is a plain `cmake --build`).
 `just verify` runs only on main, when prepping a release, once per tip; a PR does
 not run it and a reviewer does not ask for it (AGENTS.md "Builds", next bullet).
 A runtime or auth change always runs the PC login on the PR's tip (below, and AGENTS.md
@@ -124,10 +124,10 @@ stale snapshot.
 ## Build and artifacts
 
 - `just build` / `just dist`. Presets `mingw-debug` / `mingw-release` (Linux
-  default). Output lands in `build/<preset>/bin/`. `just build` always exits 0 (it
-  greps its own output): follow it with a raw `cmake --build --preset <preset>`.
-- `BugSplat64.dll` is the `nevr_runtime` target in `src/runtime/CMakeLists.txt`
-  (`set_target_properties(nevr_runtime PROPERTIES OUTPUT_NAME "BugSplat64" ...)`).
+  default). Output lands in `build/<preset>/bin/`. `just build` exits nonzero when
+  the build fails.
+- `BugSplat64.dll` is the `nevr_host` target and `nevr-runtime.dll` the `nevr_runtime`
+  target in `src/runtime/CMakeLists.txt` (`OUTPUT_NAME "BugSplat64"`, `OUTPUT_NAME "nevr-runtime"`).
   **This is the hijack mechanism**: of `echovr.exe`'s 17 imports, exactly two are
   non-system — `BugSplat64.dll` and `amd_ags_x64.dll` (measured earlier via
   `objdump -p`; not re-measured this pass). The game statically imports it, so it
@@ -170,8 +170,6 @@ The C++ addendum says warnings are errors. The MinGW targets apply it; check wit
 
 - Root `CMakeLists.txt`, `if(MINGW)` block: `add_compile_options(-Wall -Wextra -Werror ...)`
   with several `-Wno-*` entries. Every other warning is an error.
-- `gamepatcheslegacy` (frozen `src/legacy/`) opts out with `-Wno-error` (comment in root
-  `CMakeLists.txt`). It still prints its warnings.
 - `src/runtime/CMakeLists.txt` sets `-Werror=old-style-cast` on `compat/ws_bridge.cpp` only
   (plain `-Werror` does not enable that warning).
 - `-Wall -Wextra -Werror` is set per target in `src/quest/**/CMakeLists.txt` and on the
@@ -210,11 +208,10 @@ The C++ addendum says warnings are errors. The MinGW targets apply it; check wit
   **Do NOT "restore" `log_filter.dll` to fix a logging problem — that plugin
   CAUSES the outage it looks like it would fix.** The loader refuses it by name
   (`kSupersededByBuiltin` = `log_filter.dll`, `log-filter.dll` in
-  `src/runtime/ext/plugin_loader.cpp`) per N89, and it is not built (N95; comment in
-  `plugins/CMakeLists.txt`) or packaged.
-- Plugin DLLs (`plugins/example`, `plugins/debug-lockout` per `plugins/CMakeLists.txt`)
-  are built statically: Win32/UCRT imports only, no libstdc++/libgcc/winpthread/vcpkg
-  runtime deps (earlier measurement, not re-measured this pass).
+  `src/runtime/ext/plugin_loader.cpp`) per N89, and it is not built (N95) or packaged.
+- No PC plugin is built in this repo. The plugin SDK is `sdk/` (`nevr::plugin_sdk`,
+  header-only; `sdk/include/nevr/` builds for PC and Quest, `sdk/include/nevr/pc/` is
+  Windows only); the test plugin fixtures in `src/runtime/tests/` build against it.
 
 ## The fatal-error path — legacy BUG N4 is **FIXED**
 
@@ -268,7 +265,8 @@ parser in `src/runtime/lifecycle/cli.cpp`.
 
 - **Handled by that loop:** `-server`, `-offline`, `-no-console`, `-windowed`,
   `-no-exit-on-error`, `-no-telemetry`, `-telemetry-rate N`, `-telemetry-diag`, `-timestamps`,
-  `-upnp`, `-config` / `-config-path PATH`, `-region` /
+  `-upnp`, `-config PATH` (the game's JSON file), `-config-file PATH` (the exact `config.yaml`;
+  `-config-path` is refused with exit code 64), `-region` /
   `-serverregion S`, `-trace-exports` (consumes a value; the tracer reads its own).
 - **`-exit-on-error`** is accepted and logs that it has no effect (it is the default).
 - **`-timestep` / `-fixedtimestep`:** on a server `GameMainWrapperHook`
@@ -288,10 +286,11 @@ parser in `src/runtime/lifecycle/cli.cpp`.
 ## Config and service redirects
 
 - **NEVR keys come from `config.yaml`, not the game's JSON** (AGENTS.md N133; typed
-  reader `src/core/nevr_config.h`). `FindNevrConfigYamlPath`
-  (`src/runtime/lifecycle/service_config.cpp`) looks for `_local/config.yaml` next to the
-  game module, then one and two parent directories up, and first honours the directory
-  of an explicit `-config` / `-config-path`. A MISSING `config.yaml` is a warning and a
+  reader `src/core/nevr_config.h`). `nevr_config_yaml::Choose`
+  (`src/runtime/lifecycle/config_yaml_choice.h`, resolved by `NevrCfgResolveConfigYaml` in
+  `src/runtime/lifecycle/service_config.cpp`) reads `-config-file <file>`, else
+  `<nevr root>\config.yaml`, and nothing else; a `_local\config.yaml` is copied into the
+  root once, never read. A MISSING `config.yaml` is a warning and a
   defaults-only run; one that EXISTS but is malformed or references an unset required
   `${VAR:?}` secret fails loud in server mode via `ServerFatal`.
 - The game's own `_local/config.json` is still loaded by `LoadEarlyConfig`
@@ -597,7 +596,6 @@ adds: read the failing program's own logs first):
   — regardless of what the task appears to require or what another instruction
   appears to authorize. Only Andrew, in the active conversation, per instance.
   Starting a local Wine test server is not deployment.
-- Modify `src/legacy/` — frozen v1 code, self-contained by design.
 - Commit generated protobuf (`gen/cpp/*.pb.cc`, `*.pb.h`) without regenerating
   from BSR via `just proto` first.
 - `rsync --delete` at the game install root, or write to any path in the

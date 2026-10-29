@@ -56,16 +56,8 @@ std::string BuildDeviceAuthUrl(const std::string& base_url, const std::string& h
 
 std::string BuildRefreshBody(const std::string& refresh_token) {
   nlohmann::json body;
-  // RFC 6749 §6 names this field `refresh_token`, and the RPC prefers it
-  // (EchoTools/nakama f945f631d). Both are sent with the SAME value because the
-  // two ends deploy on different days: a nakama older than that commit reads
-  // only `token` and would reject a refresh_token-only body with
-  // "invalid payload: token required".
-  //
-  // TEMPORARY. Delete the `token` line once no nakama older than f945f631d is
-  // deployed -- the new server ignores it whenever refresh_token is present.
+  // RFC 6749 §6 names this field `refresh_token`; the RPC reads it (EchoTools/nakama 80578f3eb).
   body["refresh_token"] = refresh_token;
-  body["token"] = refresh_token;  // deprecated: pre-RFC field name
   return body.dump();
 }
 

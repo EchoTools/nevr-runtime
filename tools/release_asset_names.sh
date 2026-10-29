@@ -4,7 +4,7 @@
 # what "already built" means. Sourced, not run.
 #
 #   release_asset_names <X.Y.Z>   prints the two names, one per line (RELEASING.md, "Assets"):
-#     nevr-runtime-vX.Y.Z-windows.zip   the Windows package, sealed (BugSplat64.dll, nevr-runtime.dll, echovr_server.exe, install.ps1,
+#     nevr-runtime-vX.Y.Z-windows.zip   the Windows package, sealed (BugSplat64.dll, nevr-runtime.dll, echovr_server.exe, nevr-install.exe, install.ps1,
 #                                       uninstall.ps1, quest-diagnose.ps1, README.txt, SIGNING.txt, SHA256SUMS)
 #     nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so   the Quest library (a loose ELF: attested and not
 #                                       signed; declared in the signer's config/sources.yml)

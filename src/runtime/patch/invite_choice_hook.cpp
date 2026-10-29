@@ -9,7 +9,7 @@
 #include <exception>
 
 #include "core/logging.h"
-#include "nevr_common.h"
+#include "nevr/pc/nevr_common.h"
 #include "runtime/hook/patching.h"
 #include "runtime/lifecycle/readable_memory.h"
 

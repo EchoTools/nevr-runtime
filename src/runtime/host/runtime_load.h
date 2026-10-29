@@ -85,6 +85,9 @@ struct RuntimeLoadResult {
   // The same verdict as a code, for the words the player reads (stop_notice.h). Meaningful when `verify` is "refused"
   // or "unsigned_allowed"; Reason::Unreadable for a file that could not be opened for reading.
   nevr_plugin_signature::Reason verify_reason_code = nevr_plugin_signature::Reason::Accepted;
+  // The CERT_CHAIN_ENGINE_CONFIG cbSize the verifier made its chain engine with: 88, or 80 on a Wine before 11.5 (#1262).
+  // 0 when the file was not accepted by a check.
+  std::uint32_t verify_engine_cbsize = 0;
 
   bool Loaded() const { return outcome == RuntimeLoadOutcome::kLoaded; }
   const char* OutcomeName() const;

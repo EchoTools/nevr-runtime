@@ -93,6 +93,21 @@ fn the_only_file_written_beside_the_game_is_the_host_and_everything_else_goes_to
 }
 
 #[test]
+fn the_install_makes_the_roots_plugins_folder_empty_and_touches_nothing_in_it() {
+    let w = world();
+    let (_, end) = run(&w, &pkg(HOST_A, RT_A));
+    assert_eq!(end.state, "installed");
+    assert!(w.layout().plugins().is_dir(), "the folder the runtime loads plugins from exists after an install");
+    assert!(listing(&w.layout().plugins()).is_empty(), "and holds nothing: the install ships no plugin");
+    fs::write(w.layout().plugins().join("mine.dll"), b"a plugin the player put there").unwrap();
+    let (_, end) = run(&w, &pkg(HOST_B, RT_B));
+    assert_eq!(end.state, "installed");
+    assert_eq!(listing(&w.layout().plugins()), vec!["mine.dll"], "an update leaves what is in the folder where it is");
+    assert_eq!(fs::read(w.layout().plugins().join("mine.dll")).unwrap(), b"a plugin the player put there");
+    assert_eq!(listing(w.game.path()), vec!["BugSplat64.dll", "echovr.exe"], "no plugins folder beside echovr.exe");
+}
+
+#[test]
 fn first_install_sets_the_original_aside_in_the_root_and_records_for_uninstall() {
     let w = world();
     run(&w, &pkg(HOST_A, RT_A));
@@ -107,6 +122,7 @@ fn first_install_sets_the_original_aside_in_the_root_and_records_for_uninstall()
     assert_eq!(rec.get("release"), Some("1.0.0"));
     assert_eq!(rec.get("runtime_root"), Some(w.root.path().to_str().unwrap()));
     assert_eq!(rec.get("game_dir"), Some(w.game.path().to_str().unwrap()));
+    assert_eq!(rec.get("runtime_aside"), Some(""), "an install that set no runtime aside records the empty name");
 }
 
 #[test]
@@ -141,6 +157,7 @@ fn a_stranger_already_in_the_root_is_set_aside_not_overwritten() {
     assert_eq!(end.state, "installed");
     assert_eq!(fs::read(aside_named(&w, "nevr-runtime.dll.original-")).unwrap(), b"stranger");
     assert_eq!(fs::read(w.root.path().join(pc::RUNTIME)).unwrap(), RT_A);
+    assert_eq!(w.record().get("runtime_aside"), Some(aside_named(&w, "nevr-runtime.dll.original-").to_str().unwrap()), "uninstall finds the file by this name");
 }
 
 #[test]
@@ -550,4 +567,128 @@ fn a_failure_after_the_record_was_written_takes_the_record_back_too() {
     let end = pc::execute_with(&w.layout(), &plan, &obs, &pkg_v("2.0.0", HOST_B, RT_B), &w.log(), &seam).unwrap();
     assert_eq!(end.state, "restored", "{}", end.reason);
     assert_eq!(fs::read(w.layout().record()).unwrap(), before);
+}
+
+// The refusals the shell installers pinned before the core replaced them (#1149): each one is a plan that asks the player
+// and changes nothing.
+
+const A_RUNTIME_MARKER: &[u8] = b"MZ\0NEVR-BUILD 5.0.0 aaaaaaaa";
+const PRE_MARKER_RUNTIME: &[u8] = b"MZ\0nevr-runtime/1.0\0aaaaaaaa";
+
+fn installed_a() -> World {
+    let w = world();
+    run(&w, &pkg(HOST_A, RT_A));
+    w
+}
+
+fn backup_of(w: &World) -> PathBuf {
+    PathBuf::from(w.record().get("backup").unwrap())
+}
+
+/// The game folder and the record, to compare a refusal against.
+fn snapshot(w: &World) -> (Vec<(String, Vec<u8>)>, Vec<u8>) {
+    let files = listing(w.game.path()).into_iter().map(|n| (n.clone(), fs::read(w.game.path().join(&n)).unwrap())).collect();
+    (files, fs::read(w.layout().record()).unwrap())
+}
+
+fn needs_user(w: &World, p: &Package) -> String {
+    let (_, plan) = plan_of(w, p, false);
+    assert_eq!(plan.outcome, Outcome::NeedsUser, "{plan:?}");
+    plan.reasons.join("; ")
+}
+
+#[test]
+fn a_backup_that_carries_the_runtime_marker_is_refused_for_an_update_and_for_recording_a_hand_copy() {
+    for payload in [A_RUNTIME_MARKER, PRE_MARKER_RUNTIME] {
+        let w = installed_a();
+        fs::write(backup_of(&w), payload).unwrap();
+        let before = snapshot(&w);
+        let why = needs_user(&w, &pkg_v("2.0.0", HOST_B, RT_B));
+        assert!(why.contains("NEVR runtime") && why.contains("Verify Files"), "{why}");
+        // This package's own host copied in by hand would only be recorded; the poisoned backup refuses that too.
+        fs::write(w.game.path().join(pc::HOST), HOST_B).unwrap();
+        let why = needs_user(&w, &pkg_v("2.0.0", HOST_B, RT_B));
+        assert!(why.contains("NEVR runtime"), "{why}");
+        fs::write(w.game.path().join(pc::HOST), HOST_A).unwrap();
+        assert_eq!(snapshot(&w), before, "a refusal changes nothing");
+    }
+}
+
+#[test]
+fn a_backup_that_only_resembles_the_marker_is_the_games_own_file() {
+    // The marker is "NEVR-BUILD " (trailing space, upper case) or the CDN user agent; these are neither.
+    for payload in [&b"MZ\0NEVR-BUILD\0aaaaaaaa"[..], &b"MZ\0nevr-build 5.0.0 aaaaaaaa"[..]] {
+        let w = installed_a();
+        fs::write(backup_of(&w), payload).unwrap();
+        let (plan, end) = run(&w, &pkg_v("2.0.0", HOST_B, RT_B));
+        assert_eq!((plan.action, end.state), (Some(Action::Update), "installed"), "{}", end.reason);
+        assert_eq!(fs::read(backup_of(&w)).unwrap(), payload, "the backup is kept as it was");
+        // A first install over a host with those bytes sets it aside instead of refusing it as a runtime.
+        let fresh = world();
+        fs::write(fresh.game.path().join(pc::HOST), payload).unwrap();
+        let (plan, end) = run(&fresh, &pkg(HOST_A, RT_A));
+        assert_eq!((plan.action, end.state), (Some(Action::First), "installed"), "{}", end.reason);
+        assert_eq!(fs::read(backup_of(&fresh)).unwrap(), payload);
+    }
+}
+
+#[test]
+fn a_host_with_the_cdn_user_agent_and_no_record_is_adopted_never_saved_as_the_original() {
+    let w = world();
+    fs::write(w.game.path().join(pc::HOST), PRE_MARKER_RUNTIME).unwrap();
+    let (plan, end) = run(&w, &pkg(HOST_A, RT_A));
+    assert_eq!((plan.action, end.state), (Some(Action::Adopt), "installed"), "{}", end.reason);
+    assert!(listing(&aside(&w)).iter().all(|n| !n.starts_with("BugSplat64.dll.original-")), "{:?}", listing(&aside(&w)));
+    assert_eq!(w.record().get("original"), Some("unknown"));
+    assert_eq!(w.record().get("previous_sha256").unwrap(), nevr_install::util::sha256_hex(PRE_MARKER_RUNTIME));
+}
+
+#[test]
+fn a_deleted_backup_refuses_an_update_and_a_hand_copy_and_changes_nothing() {
+    let w = installed_a();
+    fs::remove_file(backup_of(&w)).unwrap();
+    let before = snapshot(&w);
+    let why = needs_user(&w, &pkg_v("2.0.0", HOST_B, RT_B));
+    assert!(why.contains("is gone"), "{why}");
+    fs::write(w.game.path().join(pc::HOST), HOST_B).unwrap();
+    let why = needs_user(&w, &pkg_v("2.0.0", HOST_B, RT_B));
+    assert!(why.contains("is gone"), "{why}");
+    fs::write(w.game.path().join(pc::HOST), HOST_A).unwrap();
+    assert_eq!(snapshot(&w), before);
+}
+
+#[test]
+fn a_dbgcore_that_is_back_refuses_a_hand_copy_and_changes_nothing() {
+    let w = installed_a();
+    fs::write(w.game.path().join(pc::HOST), HOST_B).unwrap();
+    fs::write(w.game.path().join("dbgcore.dll"), b"legacy dbgcore").unwrap();
+    let before = snapshot(&w);
+    let why = needs_user(&w, &pkg_v("2.0.0", HOST_B, RT_B));
+    assert!(why.contains("a dbgcore.dll exists again"), "{why}");
+    assert_eq!(snapshot(&w), before);
+}
+
+#[test]
+fn a_folder_with_a_non_ascii_name_round_trips_through_the_record() {
+    let parent = tempfile::tempdir().unwrap();
+    let game = parent.path().join("Zoë").join("bin").join("win10");
+    fs::create_dir_all(&game).unwrap();
+    fs::write(game.join("echovr.exe"), b"exe").unwrap();
+    fs::write(game.join(pc::HOST), GAME).unwrap();
+    // The backup is kept under the root, so the root's name is non-ASCII too: the record has to carry it intact.
+    let root = parent.path().join("Zoë root");
+    let scratch = tempfile::tempdir().unwrap();
+    let layout = Layout::new(&game, &root);
+    let package = pkg(HOST_A, RT_A);
+    let obs = pc::observe(&layout, false).unwrap();
+    let plan = pc::plan(&obs, &package, false);
+    let log = Log::open(&scratch.path().join("log.jsonl"), "pc").unwrap();
+    let end = pc::execute(&layout, &plan, &obs, &package, &log).unwrap();
+    assert_eq!(end.state, "installed", "{}", end.reason);
+    let raw = fs::read(layout.record()).unwrap();
+    assert!(!raw.starts_with(b"\xef\xbb\xbf"), "the record is written without a BOM");
+    assert!(String::from_utf8(raw).unwrap().contains("Zoë"), "the folder name is kept as UTF-8");
+    let again = pc::observe(&layout, false).unwrap();
+    assert!(again.backup_exists, "the backup path in the record resolves");
+    assert_eq!(again.record.unwrap().get("game_dir"), Some(game.to_str().unwrap()));
 }

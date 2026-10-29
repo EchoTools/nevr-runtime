@@ -68,7 +68,7 @@ func grepFiles(t *testing.T, files []string, pattern string) []string {
 // has been replaced with nlohmann-json.
 func TestGroundTruth_NoExtractJsonString(t *testing.T) {
 	root := repoRoot(t)
-	files := scanSourceFiles(t, root, "plugins", "src")
+	files := scanSourceFiles(t, root, "sdk", "src")
 
 	patterns := []string{
 		"ExtractJsonString",
@@ -83,31 +83,10 @@ func TestGroundTruth_NoExtractJsonString(t *testing.T) {
 	}
 }
 
-// TestGroundTruth_NoExtractLogFilterHelpers verifies log-filter's hand-rolled
-// JSON helpers have been replaced.
-func TestGroundTruth_NoExtractLogFilterHelpers(t *testing.T) {
-	root := repoRoot(t)
-	files := scanSourceFiles(t, root, "plugins/log-filter")
-
-	patterns := []string{
-		"ExtractUint32",
-		"ExtractInt(",       // avoid matching ExtractJsonInt
-		"ExtractBool(",      // avoid matching ExtractJsonBool
-		"ExtractString(",    // avoid matching ExtractJsonString
-		"ExtractStringArray",
-		"ExtractTruncateRules",
-	}
-
-	for _, pat := range patterns {
-		matches := grepFiles(t, files, pat)
-		assert.Empty(t, matches, "Found %s in: %v", pat, matches)
-	}
-}
-
 // TestGroundTruth_NoLocalWriteCallback verifies no duplicate curl WriteCallback.
 func TestGroundTruth_NoLocalWriteCallback(t *testing.T) {
 	root := repoRoot(t)
-	files := scanSourceFiles(t, root, "plugins")
+	files := scanSourceFiles(t, root, "sdk")
 
 	matches := grepFiles(t, files, "static size_t WriteCallback")
 	assert.Empty(t, matches, "Found local WriteCallback in: %v", matches)
@@ -117,7 +96,7 @@ func TestGroundTruth_NoLocalWriteCallback(t *testing.T) {
 // RunDeviceAuthFlow.
 func TestGroundTruth_NoDuplicateDeviceAuth(t *testing.T) {
 	root := repoRoot(t)
-	files := scanSourceFiles(t, root, "plugins")
+	files := scanSourceFiles(t, root, "sdk")
 
 	matches := grepFiles(t, files, "RunDeviceAuthFlow")
 	for _, m := range matches {

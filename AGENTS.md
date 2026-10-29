@@ -7,6 +7,10 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 ([RFC 2119](https://www.rfc-editor.org/rfc/rfc2119), [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174)) when, and only
 when, they appear in all capitals, as shown here.
 
+The logging standard below is part of this contract:
+
+@docs/standards/logging.md
+
 ## Commits, versions and requirement words
 
 - **Commits and PR titles** follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/):
@@ -112,6 +116,18 @@ your PR does:
   ```
 
   "Nothing found" counts only with the pattern and the scope it ran over.
+- **Siblings, for a fix.** The search statement looks for copies of what you add; this looks for other instances of
+  what you fix. A PR that fixes a defect names the shape it fixed, gives the `git grep` that finds every instance of
+  that shape (the pattern and the scope it ran over), and says for each hit: fixed in this PR, filed (`#N`), or not
+  the same shape (the reason). A fix that lands for one instance and leaves its siblings is half a fix:
+
+  ```
+  ## Siblings
+  Shape: a socket that mints a new token on every HTTP 401, with no time gate.
+  - `git grep -l "rejected the bearer token (HTTP 401)" -- src/runtime/server` (2 files):
+    websocket_client.cpp: fixed in this PR (the ServerDB socket now mints through BearerReconnectAuth);
+    bearer_reconnect_auth.cpp: not the same shape (it mints at most once per 30 s).
+  ```
 - **A Symbols list.** List the symbols you edited, and separately the ones nearby that you read but did not edit, so
   the reviewer knows what you looked at and what you left alone:
 
@@ -164,7 +180,7 @@ name the rule they guard in their FAIL line. A green `just verify` does **not** 
 checked by a GTest or a Python check, some only by a live run, and some by nothing. Before you change a file named
 below, read the rule's comment at the site and keep the rule. If a change must break one, say so in the PR and why.
 
-The index was built from `git grep -nE '\bN[0-9]+\b'` over `src/`, `plugins/` and `tools/`, the `verify` recipe in
+The index was built from `git grep -nE '\bN[0-9]+\b'` over `src/`, `sdk/` and `tools/`, the `verify` recipe in
 `justfile`, and the Python checks it runs. In the "Checked by" column, "verify" means a `just verify` sensor whose
 FAIL line names the rule, and "nothing" means no check names it. An ID cited only as history inside another rule's
 comment (for example N41, N48) is not a rule.
@@ -181,7 +197,7 @@ comment (for example N41, N48) is not a rule.
 | N62 | The signal-delivered shutdown never takes the loader lock: its dependencies are resolved once at init (`ResolveShutdownDependencies`), nothing is resolved at shutdown, and the signal-context flag is `volatile sig_atomic_t`. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/boot.cpp` | verify |
 | N63 | A second signal during shutdown calls `ForceFatalExit`; it never sleeps and returns. | `src/runtime/lifecycle/crash_recovery.cpp` | verify |
 | N38, N64, N105 | Graceful shutdown releases the bridge listener by a direct call to `StopWebSocketBridgeListener()` before `ForceFatalExit`, so the listening socket does not outlive the process as a zombie. | `src/runtime/server/gameserver.cpp`, `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/crash_recovery.h`, `src/runtime/compat/ws_bridge.cpp` | verify |
-| N67 | The crash flags `g_crashReporterSuppressed` and `g_justSuppressedCrash` are `std::atomic<bool>`: written from any thread, read from the faulting one. | `src/runtime/lifecycle/crash_recovery.cpp` (and the unbuilt `plugins/crash-handler/src/plugin.cpp`) | verify |
+| N67 | The crash flags `g_crashReporterSuppressed` and `g_justSuppressedCrash` are `std::atomic<bool>`: written from any thread, read from the faulting one. | `src/runtime/lifecycle/crash_recovery.cpp` | verify |
 | N69 | The stack-overflow handler has room to run: `SetThreadStackGuarantee` at VEH install and `EnsureStackReserve()` on the thread that runs each frame. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/frame/tick.cpp` | verify |
 | N70 | The crash path (`BreakpointVEH`, `WriteCrashDump`) never calls `Log()` and never enumerates modules: it writes with `VehPrintf` (raw `WriteFile`) and reads the module table cached at init by `CacheModuleTable()`. | `src/runtime/lifecycle/crash_recovery.cpp` | verify |
 | N71 | `BreakpointVEH` has a generic null-pointer access-violation branch and a table of at least 25 known session-flags null-dereference sites; those game functions are deliberately not hooked. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/crash_recovery_sites.h` | verify; `src/runtime/tests/test_crash_recovery.cpp` |
@@ -223,13 +239,14 @@ comment (for example N41, N48) is not a rule.
 | N68 | Plugins and modules tick every frame (`TickPlugins`, `TickModules`) and hear every state change (`NotifyModulesStateChange`). | `src/runtime/frame/tick.cpp`, `src/runtime/lifecycle/state_machine.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` |
 | N75 | Plugins load with a restricted DLL search path, so a DLL dropped next to `echovr.exe` cannot satisfy a dependency first. | `src/runtime/ext/plugin_loader.cpp` | verify |
 | N89 | The loader refuses a plugin whose function is built in (`log_filter.dll`). | `src/runtime/ext/plugin_loader.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` |
-| N95 | `log-filter` is neither built nor packaged. | `plugins/CMakeLists.txt`, `CMakeLists.txt` | verify |
-| N114 | The plugin capability channel stays wired: the loader resolves `NvrPluginGetCapabilities` and `NvrPluginInitEx`, and `NEVR_PLUGIN_API_VERSION` is 8. | `src/runtime/ext/plugin_loader.cpp`, `src/extension/plugin_interface.h` | verify |
-| N135 | A plugin logs through the host: every context the loader passes a plugin (init, per-frame, state change) carries that plugin's `plugin_id` (its `config.yaml` entry's name) and the host's `log` function (`HostPluginLog`), whose line is `[NEVR.PLUGIN] plugin=<id> <message> <key>=<value> ...` through `Log()`; a plugin's text cannot start a second line or overrun the boot buffer (`plugin_log.h`); `plugin_logger.h` binds to it at init and falls back to stderr only before that or on a host older than v6. | `src/extension/plugin_interface.h`, `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_log.h`, `plugins/common/include/plugin_logger.h` | `tools/tests/test_runtime_lifecycle_invariants.py`; `src/runtime/tests/test_behavioral.cpp` (`PluginLogApi`, `PluginLoaderDiagnosticTest`), `src/runtime/tests/test_plugin_log.cpp`, `src/runtime/tests/test_plugin_logger.cpp` |
+| N95 | `log-filter` is neither built nor packaged. | every tracked CMake file, `CMakeLists.txt` | verify |
+| N114 | The plugin capability channel stays wired: the loader resolves `NvrPluginGetCapabilities` and `NvrPluginInitEx`, and `NEVR_PLUGIN_API_VERSION` is 8. | `src/runtime/ext/plugin_loader.cpp`, `sdk/include/nevr/plugin_interface.h` | verify |
+| N135 | A plugin logs through the host: every context the loader passes a plugin (init, per-frame, state change) carries that plugin's `plugin_id` (its `config.yaml` entry's name) and the host's `log` function (`HostPluginLog`), whose line is `[NEVR.PLUGIN] plugin=<id> <message> <key>=<value> ...` through `Log()`; a plugin's text cannot start a second line or overrun the boot buffer (`plugin_log.h`); `plugin_logger.h` binds to it at init and falls back to stderr only before that or on a host older than v6. | `sdk/include/nevr/plugin_interface.h`, `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_log.h`, `sdk/include/nevr/plugin_logger.h` | `tools/tests/test_runtime_lifecycle_invariants.py`; `src/runtime/tests/test_behavioral.cpp` (`PluginLogApi`, `PluginLoaderDiagnosticTest`), `src/runtime/tests/test_plugin_log.cpp`, `src/runtime/tests/test_plugin_logger.cpp` |
 | N120 | On a server a degraded runtime does not keep running: the HookGuard verdict is captured and escalated to `ServerFatal`, `platform_compat` fails a server run on a missing TLS hook, and the XPID patch logs both outcomes and escalates a validation failure, a failed byte write and a failed `GetProviderPrefix` (OVR-ORG) detour alike (`g_bootHookFailed` with a cause, so `boot.cpp` refuses the server), and the server bring-up prologues are validated at boot (`ValidatePrologue`, N97) with a mismatch escalated to `ServerFatal` (see N102). | `src/runtime/ext/plugin_loader.cpp`, `src/modules/platform-compat/src/platform_compat.cpp`, `src/runtime/patch/xpid_patch.cpp`, `src/runtime/lifecycle/state_machine.cpp`, `src/runtime/lifecycle/boot.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` (`XpidPatchBoot`, `XpidPrefixDetourBoot`), `src/runtime/tests/test_server_bringup.cpp`, `tools/tests/test_server_bringup_wiring.py` |
 | N133 | Every nEVR config key is read from `config.yaml` (`nevr_config`), never from the game's JSON; the flat key map has 34 entries; modules read config through `NvrModuleContext.config_get`, and a module reports its API version; the sample config has the `auth`, `services`, `identity` and `version` sections. | `src/runtime/lifecycle/config.cpp`, `src/runtime/lifecycle/service_config.cpp`, `src/core/nevr_config.h`, `src/modules/token-auth/src/token_auth.cpp`, `docs/reference/example-config.yaml` | verify (N133 S7a-d); `src/runtime/tests/test_behavioral.cpp` |
 | N134 | The plugin set is the ordered `plugins:` list in `config.yaml`, and a required plugin that fails to load is a failure (S6); plugins get `ctx_size` and the plugin-query API, and load in capability-priority order (S8). | `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_loader.h`, `src/runtime/ext/plugin_load_plan.h`, `src/runtime/lifecycle/service_config.cpp` | verify (N134 S8, N114 S7); `src/runtime/tests/test_behavioral.cpp`, `src/runtime/tests/test_plugin_load_plan.cpp` |
 | N147 | A run loads unsigned plugins unless it is started with `-require-signed-plugins`, which makes it signed-only (release-signer does not sign plugins yet; once it does, the default flips to signed-only in a separate change). `PreflightRuntimeBootstrap` reads the argument before the early plugin pass and sets the mode once (`nevr_plugin_trust::ApplyCommandLine`: any token the game would read as the argument counts, by the game's tokenizer and name rule in `cmdline_strip.h` over `GetCommandLineA()` and by `CommandLineToArgvW` over `GetCommandLineW()`, and either finding it makes the run signed-only; a command line it cannot read, or whose reading throws, makes the run signed-only too, and the mode line says so at Warning), so the early pass, the normal pass and the late-load filter read one `ActiveMode()`; no config key or environment variable sets it. The loader states the mode in effect once per run (`[NEVR.PLUGIN] plugin trust: mode=<signed-only\|unsigned-allowed> source=<default\|-require-signed-plugins\|command line unreadable> build=<release\|dev>`), and in an unsigned-allowed run an unsigned plugin loads with a Warning per plugin. A signed-only run loads only plugins signed through the release-signer pipeline: `StageOne` verifies the file (`VerifyPluginFile`: Authenticode digest, `messageDigest` bound to the signed content, chain to the pinned Microsoft root through an exclusive-root engine at the stamped time, whole-OID profile EKU, bound RFC 3161 token, denylist) on a handle held `FILE_SHARE_READ` across the load, and loads that handle's final path, so a link in the configured path cannot lead the load to another file, with no default-search fallback; a plugin's imports, delay-load imports and forwarded exports pass the same check transitively (`VerifyPluginTree`, held open across the load; a name gets `.dll` when it has no extension, and one that is neither a file in the plugins directory nor supplied by the system is refused, an absent delay-load excepted: the late-load filter checks it when it is called; a name only System32 supplies is loaded from System32 by its full path before the plugin, so a file planted in the plugins directory after the check cannot take its place), and so does every later `LoadLibrary*` of a file in that directory, one made from a staged plugin's `DllMain` included, even by the path being loaded (the loader's own load of the plugin it checked is the one load not checked twice, and only while the loader lock is not held) (a `DllLoadHook` filter: the name gets `.dll` when it has no extension, a relative path with a directory part (`\` or `/`) is refused whatever it leads to (the loader appends it to every directory it searches, each through links, so no candidate list is complete; a bare name and a full path keep their rules), the directory is the ANSI path converted through the code page; refused with `ERROR_MOD_NOT_FOUND`; a path it accepted is loaded by the final path of the file it checked and holds, through a rewriter the hook asks right after the filters (`AddLoadRewriter`), not by the caller's text, so a link repointed after the check cannot lead the load to another file; a bare name is left to the OS search and an unsigned-allowed run loads what the caller named); a refusal is a manifest entry, a log line and, on a client with graphics only, one dialog per run (`plugin_refusal_notice.h`, never on a server or headless run; a refusal after `LoadPlugins` finished shows it itself), and for a required plugin `ServerFatal`. The dev build (`mingw-plugin-dev`, `NEVR_ALLOW_UNSIGNED_PLUGINS`) carries `NEVR-PLUGIN-TRUST dev`, a release `NEVR-PLUGIN-TRUST release` (the literal names the kind of build, not the mode of a run), and `tools/package_release.py` refuses to package anything but a release. The profile EKU pin is confirmed against the real signed v5.4.3 `BugSplat64.dll` (`RealSigned.*` in `test_plugin_trust`, which `just test-auth-unit` feeds from `tools/fetch_real_signed_dll.py`); the signer subject is deliberately not pinned. A signed-only run refuses an unsigned plugin. | `src/runtime/ext/plugin_signature.cpp`, `src/runtime/ext/plugin_trust.cpp`, `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_tree.cpp`, `src/runtime/ext/plugin_refusal_notice.h`, `src/runtime/hook/dll_load_hook.cpp`, `src/runtime/lifecycle/boot.cpp`, `src/runtime/lifecycle/cli.cpp`, `src/core/cli_flags.h`, `tools/package_release.py` | `src/runtime/tests/test_plugin_signature.cpp`, `src/runtime/tests/test_plugin_trust.cpp`, `src/runtime/tests/test_plugin_tree.cpp`, `src/runtime/tests/test_behavioral.cpp` (`PluginSignatureGateTest`, `PluginDependencyGateTest`, `PluginRefusalNotice`, `PluginRunModeTest`: an unsigned plugin loads with no argument and is refused with `-require-signed-plugins`, on the release-configured build), `tools/tests/test_plugin_trust_run_mode.py` (the argument is read before the early pass, registered with the game's parser and listed in the README), `tools/tests/test_package_release.py`, `tools/tests/test_build_identity_literal.py` (the late-load spellings, the non-ASCII game path, the `DllMain` load and the late notice) |
+| N150 | The verifier's chain engine trusts the pinned root alone, at either struct size: `CreatePinnedChainEngine` makes it with `CERT_CHAIN_ENGINE_CONFIG.cbSize = sizeof` (88 on x64) and, only when that fails with `E_INVALIDARG` (Wine before 11.5 knows the struct without `dwExclusiveFlags` and refuses 88), once more at `offsetof(dwExclusiveFlags)` with the same `hExclusiveRoot`; `dwExclusiveFlags` stays 0, so the pin uses nothing the shorter struct lacks. Any other error, or a second failure, is a refusal that names both errors; a retry is never "skip the check". `runtime_load` records `verify_engine_cbsize` for an accepted file. | `src/runtime/ext/plugin_signature.cpp` | `src/runtime/tests/test_plugin_signature.cpp` (`PluginSignatureEngine`: the retry is taken once on `E_INVALIDARG` only; 14 wrongly signed fixtures are refused for the same reason on both paths); the suite run under a Wine 11.0 (Proton Experimental), where the retry is the real path |
 
 #### Hooks and binary patches
 
@@ -247,8 +264,8 @@ comment (for example N41, N48) is not a rule.
 | N83 | A hooked address is named for what the binary says it is (`0x140F80ED0` is `CBroadcaster::Listen`); an address called through a live function pointer is not also detoured (self-collision); the bytes at each hooked address match the identity manifest. | `src/runtime/patch/mode_patches.cpp`, `src/runtime/hook/addresses.h`, `tools/hook_identity_manifest.json` | `tools/verify_hook_invariants.py` |
 | N84 | `PatchDetour` records each hooked address with HookGuard and its `name` parameter is required; the loader re-verifies hooked addresses after each plugin's init (`VerifyAll`). | `src/runtime/hook/patching.h`, `src/runtime/hook/hook_guard.h`, `src/runtime/ext/plugin_loader.cpp` | verify (N84, C2); `tools/verify_hook_invariants.py`; `src/runtime/tests/test_behavioral.cpp` |
 | N86, N110 | Per-frame work runs through exactly one dispatcher, `DispatchPerFrameWork`, called from a hook that is live in server mode, with a re-entrancy gate and the host flag taken from `g_isServer`; it holds the only two production `Tick*` call sites. Every declared HookLiveness id is marked somewhere. | `src/runtime/frame/tick.cpp`, `src/runtime/patch/binary_bug_fixes.cpp`, `src/runtime/hook/hook_liveness.h` | verify |
-| N96 | No symbol is spelled plain `ResolveVA`; use `ResolveVA_Checked` or `ResolveVA_Unchecked`. | `plugins/common/include/nevr_common.h`, `src` | verify |
-| N97 | There is exactly one `ValidatePrologue`, in `nevr_common.h`. | `plugins/common/include/nevr_common.h` | verify |
+| N96 | No symbol is spelled plain `ResolveVA`; use `ResolveVA_Checked` or `ResolveVA_Unchecked`. | `sdk/include/nevr/pc/nevr_common.h`, `src` | verify |
+| N97 | There is exactly one `ValidatePrologue`, in `nevr_common.h`. | `sdk/include/nevr/pc/nevr_common.h` | verify |
 | N99 | `-server` applies the game's own headless mask (`ENGINE_FLAGS_HEADLESS_MASK`, `0xFFFEFEFE`), and boot never tells the operator a flag is redundant. | `src/runtime/patch/mode_patches.cpp`, `src/runtime/lifecycle/boot.cpp` | verify |
 | N126 | `PatchDetour` logs a failed hook at Warning; a failed hook is never silent. | `src/runtime/hook/patching.h` | verify |
 | N127 | The Oculus-SDK block reports its real result, never an unconditional success line. | `src/runtime/patch/mode_patches.cpp` | verify; `tools/winvm/checks.py` |
@@ -264,7 +281,7 @@ comment (for example N41, N48) is not a rule.
 | N17 | A component that installs several hooks reports each outcome by name, plus one aggregate line at Info. | `src/modules/platform-compat/src/platform_compat.cpp`, `src/runtime/patch/pnsrad_enabler.cpp` | nothing names it |
 | N18 | The built-in filter is validated by a measured suppression ratio (`docs/standards/logging.md` Rule 4); see N79. | `src/runtime/log/builtin_filter.cpp` | verify (through N79) |
 | N45, N81 | No bare `[NEVR]` tag on a log line; use a subsystem tag from `docs/standards/logging.md` (`--help` strings in `cli.cpp` are not log lines). | `src/runtime`, `src/abi`, `src/core` | verify |
-| N47, N94 | The `[NEVR.AUTH]` per-step detail lines are Debug, pinned by their text, and the level mapping that carries them is pinned too. | `src/modules/token-auth/src/token_auth.cpp`, `src/core/device_auth_flow.cpp`, `plugins/common/include/auth_token_refresh.h` | verify |
+| N47, N94 | The `[NEVR.AUTH]` per-step detail lines are Debug, pinned by their text, and the level mapping that carries them is pinned too. | `src/modules/token-auth/src/token_auth.cpp`, `src/core/device_auth_flow.cpp`, `src/core/auth_token_refresh.h` | verify |
 | N77 | nEVR's own lines are exempt from game-noise suppression, and `Finished initializing engine` and `ExitProcess(` are never on the blanket suppress list. | `src/runtime/log/builtin_filter.cpp` | verify |
 | N78 | A frequent line is collapsed into a counted summary, never deleted; there is exactly one strong definition of `::Log`. | `src/runtime/log/builtin_filter.cpp`, `src/core/logging.cpp` | verify (N78, D1) |
 | N79 | Filter health is emitted periodically while the process runs, not only at shutdown. | `src/runtime/log/builtin_filter.cpp`, `src/runtime/frame/tick.cpp` | verify |
@@ -274,6 +291,12 @@ comment (for example N41, N48) is not a rule.
 | N108 | `src/abi/` never includes `src/core/`. | `src/abi` | verify |
 | N109 | `src/runtime/CMakeLists.txt` does not put its own source directory on the include path. | `src/runtime/CMakeLists.txt` | verify |
 | N122, N124 | A config or mode decision logs its outcome at Info even when nothing happens (UPnP key and mapping, telemetry disabled, the server bring-up prologue check). | `src/runtime/lifecycle/config.cpp`, `src/runtime/server/upnp.cpp`, `src/runtime/server/gameserver_serverdb.cpp`, `src/runtime/server/gameserver_telemetry.cpp`, `src/runtime/lifecycle/state_machine.cpp` | nothing in verify; a run scored by `tests/smoke/score-log.sh` |
+
+#### The game folder
+
+| Rule | Statement | Guards | Checked by |
+| --- | --- | --- | --- |
+| (standing rule) | Nothing of ours is written to the game install except `bin\win10\BugSplat64.dll`, the host the game loads: no `config.yaml`, `_local`, `_temp`, logs, install record, set-aside or backup file (`.original`, `.legacy`, `.migrated`), `plugins` folder or MOVED-TO note. All of it lives under `%LOCALAPPDATA%\nevr\echovr` (the install record at `installer\nevr-install.txt`, every set-aside file in `installer\aside`). A snapshot of the install root taken before and after install, an update, a client run, a `-server` run and uninstall may differ only in the content of the host, and after uninstall not at all. | `installer/src/pc.rs`, `tools/package-release/install.ps1`, `tools/package-release/uninstall.ps1`, and every write the runtime makes at run time | `tools/tests/test_installer_scripts.py` (`GameFolderInvariantTest`: install, update and uninstall through the real core, in the Python suite verify runs); `tools/tests/test_game_folder_invariant.py` (the snapshot library). The client-run and `-server`-run steps are filled in with the commands in `NEVR_INVARIANT_CLIENT_RUN` and `NEVR_INVARIANT_SERVER_RUN` (`tools/game_folder_invariant.py`) and print NOT RUN until they are, so nothing checks the runtime's own writes yet (`docs/reference/launcher-install-root.md` lists what still writes there) |
 
 #### Writing a sensor (N93, N99, N101, N111)
 
@@ -449,23 +472,29 @@ GameServer communicates with ServerDB via WebSocket (ixwebsocket) and uses proto
 
 ### Plugins
 
-Optional DLLs loaded by the runtime from a `plugins/` subdirectory next to the game binary. Each plugin implements the `NvrPluginInterface` lifecycle (see `src/extension/plugin_interface.h`). Source lives in `plugins/<name>/`.
+Optional DLLs loaded by the runtime from a `plugins/` subdirectory next to the game binary. Each plugin implements the `NvrPluginInterface` lifecycle (see `sdk/include/nevr/plugin_interface.h`). This repository builds no PC plugin; it publishes the SDK plugins build against.
 
-| Plugin               | Output DLL               | Purpose                                              |
-| -------------------- | ------------------------ | ---------------------------------------------------- |
-| `log-filter`         | `log_filter.dll`         | Structured log filtering, suppression, file rotation |
-| `example`            | `example.dll`            | Reference implementation for new plugin authors      |
+**The plugin SDK** is `sdk/`: a header-only CMake target `nevr::plugin_sdk` (`sdk/CMakeLists.txt`). Configured on its own it installs the headers and a `NevrPluginSdk` package (`find_package(NevrPluginSdk <api> CONFIG)`; the package's major version is `NEVR_PLUGIN_API_VERSION`, `SameMajorVersion`); added as a subdirectory (this build, `src/quest`, or FetchContent with `SOURCE_SUBDIR sdk`) it defines the same target. It names nothing under `src/` and no vcpkg package. The runtime, the Quest loader and the test plugins build against it. Headers are included as `"nevr/<file>"`:
 
-`broadcaster-bridge` lives in `nevr-runtime-plugins`, not here — this repo is
-public and it is a broadcaster injection tool. `anim-debugger` lives there for the
-same reason: it is RE instrumentation that hooks three engine
-animation entry points and publishes a map of animation internals, and it does
-nothing on a dedicated server. `log_filter.dll` is superseded by the built-in
-filter and the loader refuses to load it. Other plugins (audio-intercom,
-game-rules-override, session-unlocker, combat-mod, combat-2d) live in
-`nevr-runtime-plugins`.
+| Header | Platform | Provides |
+| --- | --- | --- |
+| `nevr/plugin_interface.h` | PC and Quest | the plugin C ABI, `NEVR_PLUGIN_API_VERSION` |
+| `nevr/plugin_logger.h` | PC and Quest | `NEVR_DEFINE_PLUGIN_LOG`, logging through the host (N135) |
+| `nevr/level_gate.h` | PC and Quest | `LevelGate`, act only on the levels a plugin's config names |
+| `nevr/symbol_hash.h` | PC and Quest | `EchoVR::CSymbol64Hash` |
+| `nevr/yaml_config.h` | PC and Quest | `ParseYamlConfig`, a YAML subset parser |
+| `nevr/pc/nevr_common.h` | PC (`<windows.h>`) | `ResolveVA_Checked`, `ResolveVA_Unchecked`, `ValidatePrologue` (N96, N97), `LoadConfigFile` |
+| `nevr/pc/address_registry.h` | PC (echovr.exe addresses) | verified virtual addresses for plugin hooks |
+| `nevr/pc/plugin_assets.h` | PC (`<windows.h>`, the host's exports) | `NEVR_RegisterAsset` and `NEVR_DeregisterAssets` wrappers |
+| `nevr/pc/resource_registry.h` | PC (`<windows.h>`, the host's exports) | the resource-override export wrappers |
+| `nevr/pc/safe_memory.h` | PC (`<windows.h>`) | VEH-guarded memory reads |
+| `nevr/pc/hook_manager.h` | PC (`<MinHook.h>`, which the plugin supplies) | `nevr::HookManager`, scoped MinHook lifecycle |
 
-Plugins have their own shared headers in `plugins/common/include/` (`nevr_common.h`, `address_registry.h`, `yaml_config.h`, `plugin_logger.h`) providing address resolution, prologue validation, config loading and logging utilities.
+Plugins live in `nevr-runtime-plugins`, not here: `broadcaster-bridge` because this repo is public and it is a
+broadcaster injection tool; `anim-debugger` for the same reason: it is RE instrumentation that hooks three engine
+animation entry points and publishes a map of animation internals, and it does nothing on a dedicated server; and
+audio-intercom, game-rules-override, session-unlocker, combat-mod, combat-2d. `log_filter.dll` is superseded by the
+built-in filter and the loader refuses to load it (N89).
 
 A plugin logs through the host's structured `Log()` (N135): `NEVR_DEFINE_PLUGIN_LOG` in `plugin_logger.h` generates `PluginLogBind(ctx)`, `PluginLog`/`PluginLogWarning`/`PluginLogError`/`PluginLogDebug` and `PluginLogFields(level, message, {{key, value}})`. Call `PluginLogBind(ctx)` first thing in `NvrPluginInit` or `NvrPluginInitEx`; the host log exists from the init callback on (not in `DllMain`, not before init). Lines land in the host's log as `[NEVR.PLUGIN] plugin=<name> ...` (rules: `docs/standards/logging.md`, Rule 15). Per-plugin log files and rate limiting are not provided.
 
@@ -485,14 +514,17 @@ Split by **what the knowledge is**, not by who uses it. A single directory named
 
 - **`src/abi/`** → `libnevr_abi.a` — the echovr.exe ABI surface: game types
   (`echovr.h`), the function pointers we call through (`echovr_functions.cpp`),
-  symbol IDs (`symbols.h`), CSymbol64 hashing (`symbol_hash.h`). Membership test:
-  *the binary told us this*. If a fact here is wrong, the reconstruction is wrong.
+  symbol IDs (`symbols.h`). Membership test: *the binary told us this*. If a fact
+  here is wrong, the reconstruction is wrong. CSymbol64 hashing is in the plugin SDK
+  (`sdk/include/nevr/symbol_hash.h`), which plugins need too; `nevr_abi` links
+  `nevr::plugin_sdk` PUBLIC.
 - **`src/core/`** → `libnevr_core.a` — nEVR's own primitives: logging, CLI-flag
   globals, base64, the hooking abstraction, the auth-token model, `pch.h`.
   Membership test: *we wrote this*. Links `nevr_abi` PUBLIC.
-- **`src/extension/`** — header-only published C ABI for third-party DLLs
-  (`plugin_interface.h`, `module_interface.h`). Membership test: *someone else
-  compiles against this*, so changing it is a breaking change.
+- **`src/extension/`** — header-only published C ABI for the static modules
+  (`module_interface.h`) and the scripting host (`host_api.h`). Membership test:
+  *someone else compiles against this*, so changing it is a breaking change. The
+  plugin ABI is in `sdk/` (see "Plugins").
 - **`src/nevr_api/`** → protobuf target, generated into `gen/cpp/` (see `just proto`)
 
 **The dependency runs `core` → `abi`, never the reverse** (`EchoVR::LogLevel` is a
@@ -501,13 +533,6 @@ game enum, so logging genuinely sits on the ABI layer). `just verify` enforces i
 Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 `#include "echovr.h"`. `src/` is on the global include path (root
 `CMakeLists.txt`), so the spelling states which layer a dependency crosses.
-
-- **`src/legacy-compat/`** — two forwarding headers, existing solely because
-  `src/legacy/gamepatches` is frozen yet includes `common/hooking.h` and
-  `common/nevr_plugin_interface.h`, which these headers provide from
-  `src/legacy-compat/common/`.
-  Scoped to that
-  one target. Delete with `src/legacy/`.
 
 ### Key Source Files
 
@@ -522,7 +547,7 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 - `src/runtime/server/messages.h` — Protocol message symbol IDs (uint64)
 - `src/core/globals.h` — Cross-DLL globals (`isServer`, `isHeadless`, `exitOnError`, etc.)
 - `src/core/logging.h` — `Log(level, format, ...)` and `FatalError()`
-- `plugins/common/include/address_registry.h` — Verified virtual addresses for all plugin hooks
+- `sdk/include/nevr/pc/address_registry.h` — Verified virtual addresses for all plugin hooks
 
 ### Other Components
 
@@ -532,7 +557,6 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
   The older PE-conversion launcher is gone — Wine could not load the game DLL at
   the required base address.
 - Android/Quest standalone target lives in `src/quest/` (separate CMake project).
-- **`src/legacy/`** — Frozen v1 implementations (self-contained, do not modify)
 
 ## Conventions
 
@@ -542,7 +566,6 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 - **Protobuf**: Generated from BSR (`buf.build/echotools/nevr-api`) via `just proto`. Never edit `.pb.cc`/`.pb.h` in `gen/` directly.
 - **Global state**: CLI flags as globals in `src/core/globals.h`, set in `src/runtime/lifecycle/cli.cpp`.
 - **Naming**: spellings of the project name, log tags, exports, namespaces, config keys and the frozen `Nvr*` plugin ABI are in `docs/standards/naming.md`; `tools/tests/test_naming.py` enforces the `Nvr` freeze and the project-name spellings.
-- **Local overrides**: `cmake/local.cmake` (include currently commented out in root CMakeLists.txt).
 
 ## ReVault — Reverse Engineering Data Warehouse
 
@@ -667,13 +690,10 @@ your seat name, for example `claude-main` or `codex`.
 - **A PR runs the quick check, not `just verify`.** The quick check is: the build (`just build`), the test
   recipe(s) that cover the changed code (`just --list` names them: `test-auth-unit`, `test-quest-shared`,
   `test-quest-*`, `test-android` for a change under `src/quest`, and so on), and the PC login test (see "System
-  test for runtime and auth changes") when the change touches runtime or auth code. A PR that adds or removes
-  GTest declarations in `src/runtime/tests/*.cpp` (`TEST(` / `TEST_F(` at the start of a line) runs
-  `python3 -m pytest tools/tests/test_verify_gtest_floor.py`. The floor (`verify_gtest_floor.py --floor` in
-  `justfile`) may lag the count `python3 tools/verify_gtest_floor.py --floor 0` prints (`declarations=`) by up to
-  `SLACK` in that test, so a PR that adds a few tests leaves the line alone. A PR that would put the count more than
-  `SLACK` above the floor sets the floor to the count; a PR that drops the count below the floor sets the floor to
-  the count and says in its body which tests went and why. A PR that touches `src/runtime/host/exports.def`, an
+  test for runtime and auth changes") when the change touches runtime or auth code. The GTest floor is not stored:
+  `python3 tools/verify_gtest_floor.py` counts `TEST(` / `TEST_F(` declarations in `src/runtime/tests/*.cpp` at HEAD
+  and at the merge-base with `origin/main` (on main, the parent commit) and fails when HEAD has fewer. A PR that
+  removes tests on purpose puts a `GTest-Drop: <reason>` trailer on the commit that removes them. A PR that touches `src/runtime/host/exports.def`, an
   `NEVR_MODULE_API` function or `src/runtime/host/` also runs
   `python3 tools/verify_pe_contract.py --dll build/<preset>/bin/BugSplat64.dll --runtime-dll build/<preset>/bin/nevr-runtime.dll` on the build it made. Every PR, whatever it touches, also runs
   `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` (run `just worktree-setup`
@@ -712,22 +732,22 @@ your seat name, for example `claude-main` or `codex`.
   pointed at: the scripts default to `echovr/` of the main checkout (through that link), the Go tests
   to `$EVR_GAME_DIR`, whose default is `../../ready-at-dawn-echo-arena` from the test directory. Point
   each at a copy explicitly:
-  - `verify-server.sh` deploys `nevr-runtime.dll` and `BugSplat64.dll` into `echovr/bin/win10` of `$NEVR_GAME_ROOT` and, when
-    `build/mingw-release/bin/plugins` exists, its files into `echovr/bin/win10/plugins`, and, when
-    the install has none, a `config.yaml` into `echovr/_local`.
+  - `verify-server.sh` deploys `BugSplat64.dll` into `echovr/bin/win10` of `$NEVR_GAME_ROOT`, `nevr-runtime.dll` into the nevr root of
+    its Wine prefix (`echovr/.wineprefix/drive_c/users/<user>/AppData/Local/nevr/echovr`) and, when
+    `build/mingw-release/bin/plugins` exists, its files into that root's `plugins`, and, when
+    the install has none, a `config.yaml` into that root.
   - `launch-client.sh` deploys `nevr-runtime.dll` (the one beside `--dll`, or `--runtime-dll`) and `BugSplat64.dll`
-    there and aborts (exit 3) when `plugins/*` is non-empty, `nevr-runtime.dll` exists,
-    `_local/config.yaml` or `_local/config.json` exists, or (with `NEVR_GAME_ROOT` set) any `.credentials.json*`
+    there and aborts (exit 3) when `plugins/*` (the game folder's or the nevr root's) is non-empty, `nevr-runtime.dll` exists,
+    `_local/config.yaml`, `_local/config.json` or the nevr root's `config.yaml` exists, or (with `NEVR_GAME_ROOT` set) any `.credentials.json*`
     exists under `echovr/`. `--print-game-root` and `--help` exit before any write.
-  - `launch-server.sh` copies `nevr-runtime.dll` and `BugSplat64.dll` into `echovr/bin/win10` and, when
+  - `launch-server.sh` copies `BugSplat64.dll` into `echovr/bin/win10`, `nevr-runtime.dll` into the nevr root of the Wine prefix and, when
     `build/mingw-release/bin/plugins/*.dll` exist, that directory's files into
-    `echovr/bin/win10/plugins`, and restores
+    that root's `plugins`, and restores
     nothing; any other script that copies a DLL into a game directory is the same kind of writer.
   - `just scenario` and `just scenario-all` (`tools/scenario/run_scenario.py` runs `launch-client.sh`).
   - `just test-system` and `just test-system-verbose` (`tests/system/helpers_test.go`: `deployDLL`
-    writes and `cleanupDLLs` does `os.Remove` under `$EVR_GAME_DIR/bin/win10`; `deployPlugin` is
-    defined and not called). They also start the game: `shutdown_test.go` runs `wine` in
-    `$EVR_GAME_DIR/bin/win10` with `WINEPREFIX=$EVR_GAME_DIR/.wineprefix`. `test-system-short` and
+    writes and `cleanupDLLs` does `os.Remove` under `$EVR_GAME_DIR/bin/win10`). They also start the game:
+    `shutdown_test.go` runs `wine` in `$EVR_GAME_DIR/bin/win10` with `WINEPREFIX=$EVR_GAME_DIR/.wineprefix`. `test-system-short` and
     `test-system-dll` pass `-short`, which skips every test that deploys or starts the game.
     `tests/system/login_test.go` also writes (with
     `NEVR_LIVE_TESTS=1` it runs `wine ./echovr.exe` in `$EVR_GAME_DIR/bin/win10` with `$WINEPREFIX`
@@ -735,10 +755,8 @@ your seat name, for example `claude-main` or `codex`.
     `<copy>/echovr/.wineprefix` for a Go test run).
   - `just generate-combat-overrides` (writes `echovr/bin/win10/_overrides/combat`).
 
-  Not writers: `just test-plugins`, `just test-plugins-verbose` and `just test-plugins-short`
-  (`tests/plugins/plugin_helpers_test.go` defines deploy and cleanup helpers for DLLs and plugin
-  config files, but no test calls them; the plugin tests only read
-  `$EVR_GAME_DIR/bin/win10/_overrides/combat`), `just test-plugins-groundtruth` and
+  Not writers: `just test-plugins`, `just test-plugins-verbose` and `just test-plugins-short` (the plugin
+  tests only read `$EVR_GAME_DIR/bin/win10/_overrides/combat`), `just test-plugins-groundtruth` and
   `just test-auth-groundtruth` (they need no game binary and name no game directory).
   `just test-winvm` deploys into a throwaway rig on the guest VM (`tools/winvm/systest.py`:
   `C:\nevr-systest`) and reads the guest's install (`C:\echovr`) through junctions it makes in the
@@ -768,6 +786,7 @@ your seat name, for example `claude-main` or `codex`.
     ```sh
     rm -f <copy>/echovr/_local/config.yaml <copy>/echovr/_local/config.json
     if [ -d <copy>/echovr/bin/win10/plugins ]; then find <copy>/echovr/bin/win10/plugins -mindepth 1 -delete; fi
+    for d in <copy>/echovr/.wineprefix/drive_c/users/*/AppData/Local/nevr/echovr/plugins; do if [ -d "$d" ]; then find "$d" -mindepth 1 -delete; fi; done
     find <copy>/echovr -name '.credentials.json*' ! -type d -print
     find <copy>/echovr -name '.credentials.json*' ! -type d -delete
     find <copy>/echovr -name '.credentials.json*' ! -type d -print
@@ -791,13 +810,13 @@ your seat name, for example `claude-main` or `codex`.
   - **Shape.** The scripts differ:
     - `launch-client.sh` needs `echovr/bin/win10/echovr.exe` and the original
       `echovr/bin/win10/BugSplat64.dll` (it saves and restores it and stops under `set -e` without
-      it), no `echovr/_local/config.yaml` or `config.json` (a missing `_local` passes), no `.credentials.json*`
-      anywhere under `echovr/` and `bin/win10/plugins` empty.
+      it), no `echovr/_local/config.yaml` or `config.json` (a missing `_local` passes), no `config.yaml` in the nevr root, no `.credentials.json*`
+      anywhere under `echovr/` and `bin/win10/plugins` and the nevr root's `plugins` empty.
       It reads the run's log from `echovr/.wineprefix`.
     - `verify-server.sh` needs `echovr/bin/win10/echovr.exe`. It tolerates an absent
       `BugSplat64.dll` and `nevr-runtime.dll` (it adds them and removes them on exit), needs no `.credentials.json*`
-      anywhere under `echovr/`, creates `_local` when missing, and uses
-      a `_local/config.yaml` that is present as it is. It sets `WINEPREFIX` to
+      anywhere under `echovr/`, and uses a `_local/config.yaml` or a nevr-root `config.yaml` that is present as it is. It sets
+      `WINEPREFIX` to
       `echovr/.wineprefix`.
   - **Who makes it, and reuse.** Only a human or the foreman makes the pristine copy, and nobody
     runs from it. A run, by a script or a Go test, uses its own copy made from the pristine one with
@@ -813,7 +832,7 @@ your seat name, for example `claude-main` or `codex`.
     `launch-client.sh` abort, as a leftover `nevr-runtime.dll` does). `verify-server.sh` keeps its
     backup at one fixed place, `$NEVR_RUN_SCRATCH_ROOT/verify-server-deploy-backup` (default
     the work root, `~/src/nevr-runtime-work/`), and restores it into the current copy. It also deletes, by the absolute paths it recorded, the
-    files the earlier run added (`BugSplat64.dll`, `nevr-runtime.dll`, `plugins/*`, `_local/config.yaml`). Clear or
+    files the earlier run added (`BugSplat64.dll`, `nevr-runtime.dll`, `plugins/*`, the nevr root's `config.yaml`). Clear or
     inspect that directory before a run against a different copy than the last. When no copy exists, the run
     waits for a human; a runtime change is not verified until then.
 
@@ -990,7 +1009,6 @@ When something fails, the first act is reading the failing program's **own** log
 ## Guardrails
 
 - **Never commit generated protobuf** (`gen/cpp/*.pb.cc`, `gen/cpp/*.pb.h`) without regenerating from BSR first.
-- **Never modify `src/legacy/`** — frozen v1 code, self-contained by design.
 - **Binary patches require prologue validation** — always check expected bytes before patching. Never blind-write.
 - **Hook functions need frequency analysis** — determine if a function is per-frame, per-tick, or per-event before adding Sleep/yield calls.
 - **Nothing from another project's patch is taken verbatim.** Before building an equivalent, reconstruct and analyze the patched code in ReVault: every function the patch touches, its callers, and what each byte change does; write the reconstructions back into ReVault with grades; design our implementation from that understanding, to this repo's standard (GOT hooks or checked patches, logs, failing-first tests, a prediction). Their address list says where to look; it is not the design.
@@ -1025,9 +1043,8 @@ When something fails, the first act is reading the failing program's **own** log
   repo.
 - **Verify entry point.** `just verify` is the single closed-loop gate, run on main when prepping a release (a PR
   runs the quick check, see "Builds"):
-  `just build`, then a second `cmake --build` whose exit code is read directly (`just build` fails on a
-  failed build, so the second pass confirms the artifact), then `test-auth-unit` and `test-quest-shared`,
-  the Python test suite and source-invariant checks. The Go system suites are
+  `just build` (a plain `cmake --build`, so it exits nonzero when the build fails), then `test-auth-unit` and
+  `test-quest-shared`, the Python test suite and source-invariant checks. The Go system suites are
   separate recipes and are not part of `just verify`.
 
 ---

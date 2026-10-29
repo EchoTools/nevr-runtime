@@ -6,7 +6,7 @@
 // One `plugin_load` record ends every plan entry, whatever its outcome (loaded, refused, disabled, not_started, failed). The
 // loader never throws and never ends the process: `required` on a client is recorded and the game goes on.
 //
-// What a plugin sees is the existing C ABI (extension/plugin_interface.h): the same NvrGameContext as on PC, with
+// What a plugin sees is the existing C ABI (nevr/plugin_interface.h): the same NvrGameContext as on PC, with
 // base_addr the libr15 load base, net_game null, game_state 0, flags IS_CLIENT | PLATFORM_QUEST, the level fields empty (no
 // Quest source for the game object exists before the host tick, ADR 0019 slice 4), and game_build_id the running libr15's
 // build ID. The per-frame and state-change exports are not called in slice 1: nothing ticks them yet.
@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 
-#include "extension/plugin_interface.h"
+#include "nevr/plugin_interface.h"
 #include "quest/plugin/plugin_image.h"
 #include "quest/plugin/plugin_plan.h"
 
@@ -60,6 +60,8 @@ class Platform {
   // A line a plugin logged through ctx->log, already in the `[NEVR.PLUGIN] plugin=<id> ...` shape. `level` is an
   // NevrLogLevel value. May be called from any thread.
   virtual void PluginLine(std::uint32_t level, const std::string& line) = 0;
+  // The Quest host services a plugin reaches through ctx->quest (#1202, ADR 0025).
+  virtual const NevrQuestHostApi* QuestHostApi() = 0;
 };
 
 struct Options {

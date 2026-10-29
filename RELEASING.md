@@ -2,8 +2,9 @@
 
 A release is a tag, a draft, two files attached to it, the signer's replacement of those files, the checks on the
 result, and one publish. CI does all of it, in `.github/workflows/release-train.yml` (the train) and `build.yml` (the
-build). A person does the same steps by hand only when the train is off or a run has gone red. Nothing about a published
-release is edited afterwards: a wrong release is fixed by the next version.
+build). The Quest APK is the one part CI does not do: a user timer on the publisher's machine finishes the release ("The Quest
+half of the train"). A person does the same steps by hand only when the train is off or a run has gone red. Nothing about a
+published release is edited afterwards: a wrong release is fixed by the next version.
 
 ## Names
 
@@ -25,7 +26,7 @@ from the build.
 
 | file | audience | holds |
 |---|---|---|
-| `nevr-runtime-vX.Y.Z-windows.zip` | players on Windows and people running a dedicated server | `BugSplat64.dll` (the host), `nevr-runtime.dll` (the runtime), `echovr_server.exe` (all stripped, debug info split off), `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt` (the install steps and the dedicated-server steps), `SIGNING.txt`, `SHA256SUMS` (the files inside the zip: `install.ps1` and `uninstall.ps1` check both DLLs against it). The zip has no `plugins/` entry: a zip holds no empty directory |
+| `nevr-runtime-vX.Y.Z-windows.zip` | players on Windows and people running a dedicated server | `BugSplat64.dll` (the host), `nevr-runtime.dll` (the runtime), `echovr_server.exe`, `nevr-install.exe` (all stripped, debug info split off), `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt` (the install steps and the dedicated-server steps), `SIGNING.txt`, `SHA256SUMS` (the files inside the zip: `install.ps1` checks `nevr-install.exe` against it, and the core checks both DLLs against the signed manifest). The zip has no `plugins/` entry: a zip holds no empty directory |
 | `nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so` | Quest packagers | the Quest sentinel library, a loose ELF (attested; not Authenticode) |
 
 There is no top-level `SHA256SUMS` and no `RELEASE-NOTES.md` asset. The **release body** carries the notes and a table
@@ -47,7 +48,7 @@ fetches the files back only after it has put them there.
 
 ## When to release
 
-A release is a train, not an event. The train (`release-train.yml`) runs hourly and cuts a pre-release when `main` has a
+A release is a train, not an event. The train (`release-train.yml`) runs every three hours and cuts a pre-release when `main` has a
 commit that `tools/next_release_version.py` counts (feat, fix, perf or a breaking change) since the newest tag.
 
 1. **Switch.** The train does nothing until the repository variable `RELEASE_TRAIN` is `true`. Merging the workflow cuts
@@ -243,6 +244,54 @@ certificate in the release-signer's `config/`; a new key needs that pin changed 
 
 Then post the SHA-256 and the commit the APK was built from, saying it is not a release asset, and replace the line in the
 release body that says there is no Quest APK with its address and SHA-256 (the body of a published release stays editable).
+
+## The Quest half of the train
+
+The Quest APK is built from the store game and signed with a key in `pass`, and the R2 credential is the publisher's, so no
+workflow can build or upload it and there is no self-hosted runner. The train publishes the GitHub release; a systemd user
+timer on the publisher's machine (`tools/systemd/nevr-quest-release.timer`, every 30 minutes, `Persistent=true` so a
+missed run is made up) runs `tools/quest_release_timer.py`, which finishes the release with no step by hand.
+
+The timer takes the **newest published tag only**: a release that is not the newest when the timer first sees it is never
+built, because a later tag supersedes it. That is intended. A tag is built by hand (`--tag vX.Y.Z`) when it must be.
+
+It runs from its own **dedicated checkout** (`~/src/nevr-runtime-work/release-timer/checkout`, a detached worktree that
+`just install-quest-release-timer` makes). The unit fetches and moves that checkout to `origin/main` before every run,
+and the tool refuses, as a failed `checkout` step that couriers the owner, unless the checkout is clean and HEAD is the
+freshly fetched `origin/main`.
+
+1. Lists the newest published `vX.Y.Z` release. A tag that has a `done` record in the log is left alone. A tag that has
+   failed three times is not retried; the third failure bonks the owner and couriers Spritz once, before the run exits 0.
+2. Builds the release-signer from a snapshot of its `main`, and reads `verify-manifest --live`. A tag that beta already
+   lists is done. Otherwise the beta release must list a `game-data` artifact (the zip the new release carries), whose
+   name and size are noted; without one the run fails before it builds.
+3. Makes a clean worktree at the tag, waits while two or more `ninja` processes run, and runs `just release-quest-apk` in
+   `nevr-builds.slice` (8G).
+4. Runs `tools/publish_quest_apk.py` with `--extra-out`: the APK and its sidecar go to R2 and are fetched back from the
+   public host, and the signer's claim is kept for the manifest.
+5. Dispatches `sign-manifest.yml` in the release-signer repository with `action=publish`, `channel=beta`, that claim as
+   `extra_artifacts` and `dry_run=false` (a live publish with no dry run, on the owner's standing word), and watches it.
+   A run is accepted only when the jobs that publish (`Commit the manifest record`, `Publish to R2`, `A run that
+   published nothing is red`) all concluded `success`; a green run with a skipped one is a failure.
+6. Requires `verify-manifest --live` to list the tag on beta, and requires the manifest the public host serves (held to the
+   sha256 the signer verified) to list, in the new release, the same `game-data` artifact by name and size. A missing or
+   changed entry is a failure, never `done`.
+7. Bonks the owner and couriers Teth to verify the live publish, then removes the worktree and the signer snapshot by exact
+   path. A tag whose notice was never sent is noticed on the next run.
+
+Stable stays an owner step (`approve-stable`); the timer only publishes beta. **Credentials go only where they are used:**
+the R2 credential to `publish_apk`, and the GitHub token to `publish_apk` and the dispatch. Every other command, the
+build included, gets an environment without them. Every step appends a JSON line to
+`$XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl`, with each credential value replaced by `<redacted>`; a log that
+cannot be written fails the run. A failing step exits 1 naming itself, and the unit's `OnFailure=` runs
+`quest_release_timer.py --notify-failure`, which couriers the last failure to Spritz. The credential is the file
+`~/.config/metis/r2-evr-echo-taxi.env` (`R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`), loaded by
+the unit and never written into it. Install, from any clone of the repository:
+
+```sh
+just install-quest-release-timer   # the dedicated checkout, systemctl --user link of the three units, daemon-reload, enable --now the timer
+python3 tools/quest_release_timer.py --tag vX.Y.Z   # the same run by hand, for one tag
+```
 
 ## Immutable releases
 

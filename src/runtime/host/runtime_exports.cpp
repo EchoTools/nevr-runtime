@@ -60,7 +60,7 @@ void NEVR_DeregisterResourceOverrides(const void* data_start, const void* data_e
   }
 }
 
-// Failure value -1: the plugins' NEVR_ASSET_UNAVAILABLE (plugins/common/include/plugin_assets.h), the value a
+// Failure value -1: the plugins' NEVR_ASSET_UNAVAILABLE (sdk/include/nevr/pc/plugin_assets.h), the value a
 // plugin already gets from a host with no asset exports, and no NevrAssetStatus.
 int NEVR_RegisterAsset(std::uint64_t type_hash, std::uint64_t name_hash, const void* data, std::uint64_t size,
                        const char* label) {

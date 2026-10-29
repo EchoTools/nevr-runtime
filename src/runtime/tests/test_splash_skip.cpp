@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "abi/symbol_hash.h"
+#include "nevr/symbol_hash.h"
 #include "runtime/patch/splash_skip_rules.h"
 
 namespace {
