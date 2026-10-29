@@ -88,7 +88,14 @@ class RefusalIsReportedBeforeTheSocketsAreClosed(unittest.TestCase):
 
     def test_the_refusal_key_is_the_sign_in_not_the_connection(self):
         body = prepare_remote()
-        self.assertIn("const std::string refusalKey = bearerToken;", body)
+        self.assertIn("const std::string refusalKey = remoteBearer;", body)
+        self.assertLess(body.index("SelectRemoteBearer("), body.index("ClientRefusedAlready(refusalKey)"))
+
+    def test_the_key_is_held_per_remote_not_per_connection_index(self):
+        code = strip_comments(bridge())
+        self.assertIn("g_routerRefusalKeys[request.remote] = prepared.refusalKey;", code)
+        self.assertIn("g_routerRefusalKeys.find(request.remote)", code)
+        self.assertNotIn("g_routerRefusalKeys[request.connIdx]", code)
 
     def test_only_an_auth_status_is_a_refusal(self):
         body = extract_braced_function(bridge(), "static void OnRemoteLoginRefused(")

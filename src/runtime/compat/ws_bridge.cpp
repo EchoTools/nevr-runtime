@@ -1462,7 +1462,7 @@ static std::mutex g_refusalMutex;
 static nevr_login_refusal::ClientRefusalLatch& g_refusalLatch = *new nevr_login_refusal::ClientRefusalLatch();
 
 // The sign-in each router remote presents, by connection index, for the refused hook.
-static std::map<int, std::string> g_routerRefusalKeys;
+static std::map<nevr_session_router::RemoteId, std::string> g_routerRefusalKeys;  // by remote: connIdx is reused across sessions
 
 static bool ClientRefusedAlready(const std::string& key) {
   std::lock_guard<std::mutex> lk(g_refusalMutex);
@@ -1568,21 +1568,22 @@ static PreparedRemote PrepareRemote(nevr_socket_role::Role role, int connIdx) {
   // Sending Bearer on top may cause the server to use the JWT session instead
   // of the URL-credential session, breaking matchmaker state.
   bool hasUrlCredentials = remoteUrl.find("discordid=") != std::string::npos;
-  // #1254: the sign-in a refusal is held against: the token the remote presents. A client with none (URL
-  // credentials, or unauthenticated) has the one key "", because its credentials do not change within a run.
-  const std::string refusalKey = bearerToken;
-  if (!g_isServer && ClientRefusedAlready(refusalKey)) {
-    Log(EchoVR::LogLevel::Debug,
-        "[NEVR.WS] conn=%d (%s): this sign-in was refused earlier; not connecting to the service", connIdx,
-        ConnLabel(connIdx));
-    return PreparedRemote{};
-  }
   std::string serverKey;
   if (hasUrlCredentials) {
     const char* cfgServerKey = NevrCfgGetFlat("nevr_server_key");
     if (cfgServerKey) serverKey = cfgServerKey;
   }
   const std::string remoteBearer = nevr_evr_codec::SelectRemoteBearer(hasUrlCredentials, bearerToken, serverKey);
+  // #1254: the sign-in a refusal is held against: the credential the remote presents (the server key with URL
+  // credentials, else the token-auth JWT), so a changed JWT the remote never sees does not lift the latch. A client
+  // with none has the one key "", because its credentials do not change within a run.
+  const std::string refusalKey = remoteBearer;
+  if (!g_isServer && ClientRefusedAlready(refusalKey)) {
+    Log(EchoVR::LogLevel::Debug,
+        "[NEVR.WS] conn=%d (%s): this sign-in was refused earlier; not connecting to the service", connIdx,
+        ConnLabel(connIdx));
+    return PreparedRemote{};
+  }
   if (!remoteBearer.empty()) {
     ix::WebSocketHttpHeaders headers;
     headers["Authorization"] = "Bearer " + remoteBearer;
@@ -1753,7 +1754,7 @@ static nevr_ws_transport::RemoteHooks MakeRemoteHooks() {
     PreparedRemote prepared = PrepareRemote(request.role, request.connIdx);
     if (prepared.remote) {
       std::lock_guard<std::mutex> lk(g_refusalMutex);
-      g_routerRefusalKeys[request.connIdx] = prepared.refusalKey;
+      g_routerRefusalKeys[request.remote] = prepared.refusalKey;
     }
     return prepared.remote;
   };
@@ -1761,8 +1762,11 @@ static nevr_ws_transport::RemoteHooks MakeRemoteHooks() {
     std::string key;
     {
       std::lock_guard<std::mutex> lk(g_refusalMutex);
-      const auto it = g_routerRefusalKeys.find(request.connIdx);
-      if (it != g_routerRefusalKeys.end()) key = it->second;
+      const auto it = g_routerRefusalKeys.find(request.remote);
+      if (it != g_routerRefusalKeys.end()) {
+        key = it->second;
+        g_routerRefusalKeys.erase(it);  // a refused remote retires; its key is not needed again
+      }
     }
     OnRemoteLoginRefused(httpStatus, key, request.connIdx);
   };

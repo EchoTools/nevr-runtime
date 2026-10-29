@@ -211,16 +211,35 @@ void FatalError(const char* msg, const char* title) {
 // Record the call instead of terminating, so the seam that makes the link work
 // also makes the new behaviour observable: a test can assert that a condition
 // DID reach ServerFatal, which a void stub could not.
-int g_serverFatalCalls = 0;
-std::string g_lastServerFatal;
+// A WebSocket worker thread can reach ServerFatal while the test thread waits on the count, so the count and the
+// cause are written together under one mutex and read as a snapshot.
+std::mutex g_serverFatalMutex;
+int g_serverFatalCallsValue = 0;
+std::string g_lastServerFatalValue;
+int ServerFatalCalls() {
+  std::lock_guard<std::mutex> lock(g_serverFatalMutex);
+  return g_serverFatalCallsValue;
+}
+std::string LastServerFatal() {
+  std::lock_guard<std::mutex> lock(g_serverFatalMutex);
+  return g_lastServerFatalValue;
+}
+void ResetServerFatal() {
+  std::lock_guard<std::mutex> lock(g_serverFatalMutex);
+  g_serverFatalCallsValue = 0;
+  g_lastServerFatalValue.clear();
+}
 void ServerFatal(const CHAR* format, ...) {
   char buf[1024];
   va_list args;
   va_start(args, format);
   vsnprintf(buf, sizeof(buf), format, args);
   va_end(args);
-  g_serverFatalCalls++;
-  g_lastServerFatal = buf;
+  {
+    std::lock_guard<std::mutex> lock(g_serverFatalMutex);
+    g_lastServerFatalValue = buf;
+    g_serverFatalCallsValue++;
+  }
   fprintf(stderr, "[TEST] ServerFatal: %s\n", buf);
 }
 
@@ -1568,7 +1587,7 @@ class PluginRunModeTest : public ::testing::Test {
     g_runModeDialogs.clear();
     TestHook_ResetRefusals();
     TestHook_SetRefusalDialogSink(&CaptureRunModeDialog);
-    g_serverFatalCalls = 0;
+    ResetServerFatal();
     nevrRoot_ = std::make_unique<TestNevrRoot>();
     pluginsDir_ = nevrRoot_->PluginsDir();
   }
@@ -1666,8 +1685,8 @@ TEST_F(PluginRunModeTest, ARefusedRequiredPluginIsFatalOnAServerAndShowsNoDialog
   LoadPlugins();
 
   EXPECT_EQ(GetLoadedPluginCount(), 0);
-  EXPECT_EQ(g_serverFatalCalls, 1) << g_lastServerFatal;
-  EXPECT_NE(g_lastServerFatal.find("refused: unsigned"), std::string::npos) << g_lastServerFatal;
+  EXPECT_EQ(ServerFatalCalls(), 1) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("refused: unsigned"), std::string::npos) << LastServerFatal();
   EXPECT_TRUE(g_runModeDialogs.empty());
 }
 
@@ -1679,7 +1698,7 @@ TEST_F(PluginRunModeTest, ARequiredPluginThatIsUnsignedIsNotFatalWhenSignaturesA
   LoadPlugins();
 
   EXPECT_EQ(GetLoadedPluginCount(), 1);
-  EXPECT_EQ(g_serverFatalCalls, 0) << g_lastServerFatal;
+  EXPECT_EQ(ServerFatalCalls(), 0) << LastServerFatal();
 }
 
 TEST_F(PluginRunModeTest, TheEarlyPassAndTheNormalPassReadTheSameMode) {
@@ -2001,13 +2020,13 @@ TEST_F(PluginLoaderDiagnosticTest, FailedInitStillVerifiesHookedAddresses) {
   std::array<unsigned char, 16> target{};
   nevr_hook_guard::Record(target.data(), "failed-init-target");
   target[0] = 0xE9;
-  const int fatalCallsBefore = g_serverFatalCalls;
+  const int fatalCallsBefore = ServerFatalCalls();
   g_testPluginLoadPlan.push_back({"partial", "test_plugin_init_fail.dll", false, "", "{}"});
 
   LoadPlugins();
 
   EXPECT_EQ(GetLoadedPluginCount(), 0);
-  EXPECT_EQ(g_serverFatalCalls, fatalCallsBefore + 1);
+  EXPECT_EQ(ServerFatalCalls(), fatalCallsBefore + 1);
   EXPECT_TRUE(TestLogContains("failed-init-target"));
   nevr_hook_guard::ResetForTest();
 }
@@ -2170,14 +2189,14 @@ TEST_F(PluginLoaderDiagnosticTest, PluginListedUnderAnotherPathSpellingLoadsOnce
 // A required repeat of an optional entry that failed to load: the plugin the
 // config declared required is missing, so that is fatal, not a skipped duplicate.
 TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfFailedOptionalEntryIsFatal) {
-  g_serverFatalCalls = 0;
+  ResetServerFatal();
   g_testPluginLoadPlan.push_back({"gone", "plugin_that_does_not_exist.dll", false, "", "{}"});
   g_testPluginLoadPlan.push_back({"gone-again", "plugin_that_does_not_exist.dll", true, "", "{}"});
 
   LoadPlugins();
 
-  EXPECT_EQ(g_serverFatalCalls, 1);
-  EXPECT_NE(g_lastServerFatal.find("gone"), std::string::npos) << g_lastServerFatal;
+  EXPECT_EQ(ServerFatalCalls(), 1);
+  EXPECT_NE(LastServerFatal().find("gone"), std::string::npos) << LastServerFatal();
   const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
   ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
   EXPECT_EQ(manifest[0].at("required"), true);
@@ -2186,26 +2205,26 @@ TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfFailedOptionalEntryIsFatal) {
 // The same, for a plugin that loads but whose init fails: the failure surfaces
 // later (pass 2), and must still be fatal because a repeat required it.
 TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfInitFailingOptionalEntryIsFatal) {
-  g_serverFatalCalls = 0;
+  ResetServerFatal();
   g_testPluginLoadPlan.push_back({"flaky", "test_plugin_init_fail.dll", false, "", "{}"});
   g_testPluginLoadPlan.push_back({"flaky-again", "TEST_PLUGIN_INIT_FAIL.DLL", true, "", "{}"});
 
   LoadPlugins();
 
-  EXPECT_EQ(g_serverFatalCalls, 1);
-  EXPECT_NE(g_lastServerFatal.find("flaky"), std::string::npos) << g_lastServerFatal;
+  EXPECT_EQ(ServerFatalCalls(), 1);
+  EXPECT_NE(LastServerFatal().find("flaky"), std::string::npos) << LastServerFatal();
   EXPECT_EQ(GetLoadedPluginCount(), 0);
 }
 
 // Same, when the repeat is only caught by the same-module check.
 TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatUnderAnotherSpellingOfInitFailingEntryIsFatal) {
-  g_serverFatalCalls = 0;
+  ResetServerFatal();
   g_testPluginLoadPlan.push_back({"flaky", "test_plugin_init_fail.dll", false, "", "{}"});
   g_testPluginLoadPlan.push_back({"flaky-dotted", ".\\test_plugin_init_fail.dll", true, "", "{}"});
 
   LoadPlugins();
 
-  EXPECT_EQ(g_serverFatalCalls, 1);
+  EXPECT_EQ(ServerFatalCalls(), 1);
   EXPECT_EQ(GetLoadedPluginCount(), 0);
 }
 
@@ -2213,14 +2232,14 @@ TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatUnderAnotherSpellingOfInitFaili
 // requirement reaches the entry that holds the module, not the skipped one. The
 // holder loaded fine, so nothing is fatal.
 TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfSkippedSpellingOfLoadedEntryIsNotFatal) {
-  g_serverFatalCalls = 0;
+  ResetServerFatal();
   g_testPluginLoadPlan.push_back({"first", "test_plugin_onframe.dll", false, "", "{}"});
   g_testPluginLoadPlan.push_back({"second", ".\\test_plugin_onframe.dll", false, "", "{}"});
   g_testPluginLoadPlan.push_back({"third", ".\\test_plugin_onframe.dll", true, "", "{}"});
 
   LoadPlugins();
 
-  EXPECT_EQ(g_serverFatalCalls, 0) << g_lastServerFatal;
+  EXPECT_EQ(ServerFatalCalls(), 0) << LastServerFatal();
   EXPECT_EQ(GetLoadedPluginCount(), 1);
   const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
   ASSERT_EQ(manifest.size(), 3u) << manifest.dump();
@@ -2230,40 +2249,40 @@ TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfSkippedSpellingOfLoadedEntryI
 // The same chain when the holder's init fails: the fatal names the holder (the
 // first entry), the entry that really holds the module.
 TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfSkippedSpellingOfInitFailingEntryNamesHolder) {
-  g_serverFatalCalls = 0;
+  ResetServerFatal();
   g_testPluginLoadPlan.push_back({"first", "test_plugin_init_fail.dll", false, "", "{}"});
   g_testPluginLoadPlan.push_back({"second", ".\\test_plugin_init_fail.dll", false, "", "{}"});
   g_testPluginLoadPlan.push_back({"third", ".\\test_plugin_init_fail.dll", true, "", "{}"});
 
   LoadPlugins();
 
-  EXPECT_EQ(g_serverFatalCalls, 1) << g_lastServerFatal;
-  EXPECT_NE(g_lastServerFatal.find("first"), std::string::npos) << g_lastServerFatal;
-  EXPECT_EQ(g_lastServerFatal.find("second"), std::string::npos) << g_lastServerFatal;
+  EXPECT_EQ(ServerFatalCalls(), 1) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("first"), std::string::npos) << LastServerFatal();
+  EXPECT_EQ(LastServerFatal().find("second"), std::string::npos) << LastServerFatal();
   EXPECT_EQ(GetLoadedPluginCount(), 0);
 }
 
 // An optional first entry that loads, then a required repeat of the same spelling.
 TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfSameSpellingOfLoadedEntryIsNotFatal) {
-  g_serverFatalCalls = 0;
+  ResetServerFatal();
   g_testPluginLoadPlan.push_back({"first", "test_plugin_onframe.dll", false, "", "{}"});
   g_testPluginLoadPlan.push_back({"again", "test_plugin_onframe.dll", true, "", "{}"});
 
   LoadPlugins();
 
-  EXPECT_EQ(g_serverFatalCalls, 0) << g_lastServerFatal;
+  EXPECT_EQ(ServerFatalCalls(), 0) << LastServerFatal();
   EXPECT_EQ(GetLoadedPluginCount(), 1);
 }
 
 // Control: an optional repeat of an optional entry stays non-fatal.
 TEST_F(PluginLoaderDiagnosticTest, OptionalRepeatOfInitFailingOptionalEntryIsNotFatal) {
-  g_serverFatalCalls = 0;
+  ResetServerFatal();
   g_testPluginLoadPlan.push_back({"flaky", "test_plugin_init_fail.dll", false, "", "{}"});
   g_testPluginLoadPlan.push_back({"flaky-again", "test_plugin_init_fail.dll", false, "", "{}"});
 
   LoadPlugins();
 
-  EXPECT_EQ(g_serverFatalCalls, 0);
+  EXPECT_EQ(ServerFatalCalls(), 0);
   EXPECT_EQ(GetLoadedPluginCount(), 0);
 }
 
@@ -6192,7 +6211,7 @@ struct XpidBaseScope {
         EchoVR::g_GameBaseAddress = base;
         g_bootHookFailed = false;
         g_bootHookFailedCause[0] = '\0';
-        g_serverFatalCalls = 0;
+        ResetServerFatal();
     }
     ~XpidBaseScope() {
         EchoVR::g_GameBaseAddress = saved;
@@ -6232,7 +6251,7 @@ TEST(XpidPatchBoot, ARecognisedImageIsPatchedAndBootContinues) {
         PatchDscProvider();
         EXPECT_FALSE(g_bootHookFailed) << "a healthy image must not mark the boot failed";
         EXPECT_STREQ(g_bootHookFailedCause, "") << "a healthy image records no failure cause";
-        EXPECT_EQ(g_serverFatalCalls, 0);
+        EXPECT_EQ(ServerFatalCalls(), 0);
     }
     for (const auto& site : kXpidSites) {
         EXPECT_EQ(memcmp(base + site.rva, site.patched, 4), 0) << "site rva=0x" << std::hex << site.rva;
@@ -6249,7 +6268,7 @@ TEST(XpidPatchBoot, AnImageWithUnexpectedBytesFailsTheBootThroughTheFlagNotServe
         XpidBaseScope scope(base);
         PatchDscProvider();
         EXPECT_TRUE(g_bootHookFailed) << "a validation failure must reach boot.cpp's server check";
-        EXPECT_EQ(g_serverFatalCalls, 0)
+        EXPECT_EQ(ServerFatalCalls(), 0)
             << "ServerFatal runs before the CLI is parsed, where it only warns; the flag is the signal";
     }
     // Nothing is half-patched: validation happens before any write.
@@ -6274,7 +6293,7 @@ TEST(XpidPatchBoot, AFailedWriteFailsTheBootThroughTheFlagNotServerFatal) {
         PatchDscProvider();
         EXPECT_TRUE(g_bootHookFailed) << "a failed patch write must reach boot.cpp's server check";
         EXPECT_STREQ(g_bootHookFailedCause, "XPID provider-string patch write failed");
-        EXPECT_EQ(g_serverFatalCalls, 0);
+        EXPECT_EQ(ServerFatalCalls(), 0);
     }
     EXPECT_EQ(memcmp(readOnly + nevr_patch_addresses::XPID_PLATFORM_SHORT_NAME, "PSN", 4), 0);
     UnmapViewOfFile(readOnly);
@@ -6353,7 +6372,7 @@ TEST(XpidPrefixDetourBoot, AFailedDetourFailsTheBootThroughTheFlagAndNamesItself
         EXPECT_TRUE(g_bootHookFailed) << "a failed OVR-ORG detour must reach boot.cpp's server check";
         EXPECT_EQ(std::string(g_bootHookFailedCause).rfind("XPID GetProviderPrefix detour failed", 0), 0u)
             << "boot.cpp's ServerFatal prints this: it must name the detour, was '" << g_bootHookFailedCause << "'";
-        EXPECT_EQ(g_serverFatalCalls, 0)
+        EXPECT_EQ(ServerFatalCalls(), 0)
             << "ServerFatal runs before the CLI is parsed, where it only warns; the flag is the signal";
         written = tee.Output();
     }
@@ -6506,8 +6525,8 @@ class RefusedLoginTest : public ::testing::Test {
     g_testRouterMode = RouterMode();
     wasServer_ = g_isServer;
     g_isServer = ServerRun() ? TRUE : FALSE;
-    g_serverFatalCalls = 0;
-    g_lastServerFatal.clear();
+    ResetServerFatal();
+    LastServerFatal().clear();
     g_testDiscordId = nullptr;
     g_testPassword = nullptr;
   }
@@ -6552,7 +6571,7 @@ class RefusedLoginTest : public ::testing::Test {
     g_testDiscordId = kTestAccountIdText.c_str();
     g_testPassword = "test-password";
   }
-  static bool WaitForServerFatal() { return YieldUntil([] { return g_serverFatalCalls >= 1; }); }
+  static bool WaitForServerFatal() { return YieldUntil([] { return ServerFatalCalls() >= 1; }); }
 
   RemoteService accepting_;
   RefusingService refusing_;
@@ -6586,12 +6605,12 @@ class RefusedLoginRouterClientTest : public RefusedLoginTest {
 void ExpectNoCredentialServerStops(RemoteService& service, uint16_t port) {
   GameSocket login;
   ASSERT_TRUE(login.Connect(port, "/login"));
-  ASSERT_TRUE(YieldUntil([] { return g_serverFatalCalls >= 1; })) << "the server did not stop";
-  EXPECT_EQ(g_serverFatalCalls, 1) << g_lastServerFatal;
-  EXPECT_NE(g_lastServerFatal.find("server login refused"), std::string::npos) << g_lastServerFatal;
-  EXPECT_NE(g_lastServerFatal.find("identity.discord_id"), std::string::npos) << g_lastServerFatal;
-  EXPECT_NE(g_lastServerFatal.find("auth.password"), std::string::npos) << g_lastServerFatal;
-  EXPECT_NE(g_lastServerFatal.find("test config"), std::string::npos) << g_lastServerFatal;
+  ASSERT_TRUE(YieldUntil([] { return ServerFatalCalls() >= 1; })) << "the server did not stop";
+  EXPECT_EQ(ServerFatalCalls(), 1) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("server login refused"), std::string::npos) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("identity.discord_id"), std::string::npos) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("auth.password"), std::string::npos) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("test config"), std::string::npos) << LastServerFatal();
   EXPECT_TRUE(login.WaitForClose()) << "the game's login socket was left open";
   EXPECT_EQ(service.Opens(), 0) << "the server connected to the service without a credential";
   EXPECT_EQ(service.LoginRequests(), 0) << "the server sent a LoginRequest without a credential";
@@ -6601,11 +6620,11 @@ void ExpectNoCredentialServerStops(RemoteService& service, uint16_t port) {
 void ExpectRefusedServerStops(RefusingService& service, uint16_t port, int status) {
   GameSocket login;
   ASSERT_TRUE(login.Connect(port, "/login"));
-  ASSERT_TRUE(YieldUntil([] { return g_serverFatalCalls >= 1; })) << "the server did not stop";
-  EXPECT_EQ(g_serverFatalCalls, 1) << g_lastServerFatal;
-  EXPECT_NE(g_lastServerFatal.find("server login refused"), std::string::npos) << g_lastServerFatal;
-  EXPECT_NE(g_lastServerFatal.find("HTTP " + std::to_string(status)), std::string::npos) << g_lastServerFatal;
-  EXPECT_NE(g_lastServerFatal.find("test config"), std::string::npos) << g_lastServerFatal;
+  ASSERT_TRUE(YieldUntil([] { return ServerFatalCalls() >= 1; })) << "the server did not stop";
+  EXPECT_EQ(ServerFatalCalls(), 1) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("server login refused"), std::string::npos) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("HTTP " + std::to_string(status)), std::string::npos) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("test config"), std::string::npos) << LastServerFatal();
   EXPECT_GE(service.Requests(), 1);
 }
 
@@ -6621,7 +6640,7 @@ void ExpectClientSaysRefusalOnce(RefusingService& service, uint16_t port) {
   ASSERT_TRUE(second.WaitForClose()) << "the next login socket was left open";
   EXPECT_EQ(service.Requests(), 1) << "the client went back to the service with a sign-in it was refused for";
   EXPECT_EQ(LogLinesContaining("login refused (HTTP").size(), 1u) << "the refusal was said more than once";
-  EXPECT_EQ(g_serverFatalCalls, 0) << "a client must not stop";
+  EXPECT_EQ(ServerFatalCalls(), 0) << "a client must not stop";
 }
 
 }  // namespace
@@ -6641,9 +6660,9 @@ TEST_F(RefusedLoginTest, AServerWithOnlyADiscordIdNamesJustThePassword) {
   g_testDiscordId = kTestAccountIdText.c_str();
   GameSocket login;
   ASSERT_TRUE(login.Connect(port_, "/login"));
-  ASSERT_TRUE(YieldUntil([] { return g_serverFatalCalls >= 1; }));
-  EXPECT_NE(g_lastServerFatal.find("missing auth.password)"), std::string::npos) << g_lastServerFatal;
-  EXPECT_EQ(g_lastServerFatal.find("missing identity.discord_id"), std::string::npos) << g_lastServerFatal;
+  ASSERT_TRUE(YieldUntil([] { return ServerFatalCalls() >= 1; }));
+  EXPECT_NE(LastServerFatal().find("missing auth.password)"), std::string::npos) << LastServerFatal();
+  EXPECT_EQ(LastServerFatal().find("missing identity.discord_id"), std::string::npos) << LastServerFatal();
   EXPECT_EQ(accepting_.Opens(), 0);
 }
 
@@ -6653,7 +6672,7 @@ TEST_F(RefusedLoginTest, AServerWithACredentialConnectsAndIsNotStopped) {
   GameSocket login;
   ASSERT_TRUE(login.Connect(port_, "/login"));
   ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings));
-  EXPECT_EQ(g_serverFatalCalls, 0) << g_lastServerFatal;
+  EXPECT_EQ(ServerFatalCalls(), 0) << LastServerFatal();
   EXPECT_EQ(accepting_.LoginRequests(), 1);
 }
 
@@ -6662,7 +6681,7 @@ TEST_F(RefusedLoginClientTest, AClientWithNoCredentialIsNotStoppedByTheServerRul
   GameSocket login;
   ASSERT_TRUE(login.Connect(port_, "/login"));
   ASSERT_TRUE(YieldUntil([&] { return accepting_.Opens() >= 1; })) << "a client was kept from connecting";
-  EXPECT_EQ(g_serverFatalCalls, 0) << g_lastServerFatal;
+  EXPECT_EQ(ServerFatalCalls(), 0) << LastServerFatal();
 }
 
 TEST_F(RefusedLoginTest, AServerWhoseCredentialTheServiceRefusesStopsWithTheStatus) {
@@ -6684,7 +6703,7 @@ TEST_F(RefusedLoginTest, AnOutageIsNotARefusalAndDoesNotStopTheServer) {
   ASSERT_TRUE(login.Connect(port_, "/login"));
   ASSERT_TRUE(login.WaitForClose());
   EXPECT_GE(refusing_.Requests(), 1);
-  EXPECT_EQ(g_serverFatalCalls, 0) << g_lastServerFatal;
+  EXPECT_EQ(ServerFatalCalls(), 0) << LastServerFatal();
 }
 
 TEST_F(RefusedLoginClientTest, AClientSaysARefusalOnceAndDoesNotGoBackForTheSameSignIn) {
