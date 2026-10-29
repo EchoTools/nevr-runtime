@@ -410,12 +410,11 @@ TEST(InviteQuestService_ShutdownDoesNotWaitOutARequestInFlight) {
 
 // --- the run: the feature gate and the start and stop the sentinel calls ---------------------------
 
-TEST(InviteQuestRun_TheStubGateIsOffAndSendsNothing) {
-  // S1 replaces this with the network.invite_codes feature; this check then fails on purpose and is updated with it.
-  CHECK(nevr_quest_invite::InviteCodesSwitch() == nevr_invite::Switch::Off);
+TEST(InviteQuestRun_AnOffFeatureSendsNothing) {
   Loopback server({{Response(200, "OK", "", "{}"), false}});
   LogBox log;
   nevr_quest_invite::RunInputs inputs;
+  inputs.invite_codes = nevr_invite::Switch::Off;
   inputs.http_uri = server.Url();
   inputs.token = [] { return std::string("tok"); };
   inputs.log = log.Sink();
@@ -425,6 +424,28 @@ TEST(InviteQuestRun_TheStubGateIsOffAndSendsNothing) {
   CHECK(log.Has("[NEVR.INVITE] request not sent reason=not_configured"));
   nevr_quest_invite::Shutdown();
   CHECK_EQ(server.Requests().size(), static_cast<std::size_t>(0));
+}
+
+TEST(InviteQuestRun_AnOnFeatureReachesTheProductionTransport) {
+  // The run's transport is the production client: https only, and no request without trust anchors. This host has none, so an
+  // on feature starts the service and its request is refused before anything is sent.
+  CHECK_EQ(nevr::quest_auth::LoadCaBundle(nevr::quest_auth::AndroidCaDirs(), nullptr).certificates,
+           static_cast<std::size_t>(0));
+  Loopback server({{Response(200, "OK", "", "{}"), false}});
+  LogBox log;
+  nevr_quest_invite::RunInputs inputs;
+  inputs.invite_codes = nevr_invite::Switch::On;
+  inputs.http_uri = server.Url();
+  inputs.token = [] { return std::string("Run-Token-Z9"); };
+  inputs.log = log.Sink();
+  nevr_quest_invite::Start(inputs);
+  CHECK(log.Has("[NEVR.INVITE] service on"));
+  CHECK(nevr_invite_service::Submit(ResolvePlan()) == nevr_invite::Submit::Queued);
+  CHECK_EQ(nevr_invite_service::WaitForAnswers(std::chrono::seconds(5)).size(), static_cast<std::size_t>(1));
+  nevr_quest_invite::Shutdown();
+  CHECK(log.Has("[NEVR.INVITE] transport refused reason=no_trust_anchors"));
+  CHECK_EQ(server.Requests().size(), static_cast<std::size_t>(0));
+  CHECK(!log.Has("Run-Token-Z9"));
 }
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }

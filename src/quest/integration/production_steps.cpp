@@ -256,6 +256,7 @@ std::string InviteToken() {
 void StartInviteService(const nevr_quest::ResolvedConfig& cfg) {
   nevr_quest_invite::RunInputs inputs;
   inputs.http_uri = cfg.httpUri.text;
+  inputs.invite_codes = cfg.effective.inviteCodes ? nevr_invite::Switch::On : nevr_invite::Switch::Off;
   inputs.token = &InviteToken;
   inputs.log = &InviteLog;
   nevr_quest_invite::Start(std::move(inputs));

@@ -289,12 +289,14 @@ endif()
 # Kept in its own subdirectory so it merges cleanly alongside the other Quest packages.
 add_subdirectory(net)
 
+# ── Invite service (docs/adr/0017, #966): the PC's invite_service.cpp for the Quest, linked by the sentinel integration and the link test ──
+add_subdirectory(invite)
+
 # ── Sentinel integration (ADR 0003, "Integration") ───────────────────────
 # Wires every package above into the sentinel entry point. After net/, login, social and the redirect,
 # because it links all of them.
 if(TARGET ovrplatformloader)
   # The hardware/environment dump (#335), linked through the integration.
   add_subdirectory(diag)
-  add_subdirectory(invite)
   add_subdirectory(integration)
 endif()

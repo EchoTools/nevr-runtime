@@ -11,11 +11,8 @@
 
 namespace nevr_quest_invite {
 
-/// The network.invite_codes switch of this build. A STUB until slice S1 adds the feature to src/quest/sentinel/quest_config.h: it
-/// returns Off, so this build starts the service, logs that it is off and sends nothing. Remove it when S1 lands.
-nevr_invite::Switch InviteCodesSwitch();
-
 struct RunInputs {
+  nevr_invite::Switch invite_codes = nevr_invite::Switch::Off;  // the network.invite_codes feature: the sentinel's effective flag
   std::string http_uri;                    // auth.http_uri: the game service's HTTP address
   std::function<std::string()> token;      // the Quest token, read per request; "" when there is none yet
   std::function<void(nevr_invite::LogLevel, const std::string&)> log;

@@ -11,9 +11,6 @@
 
 namespace nevr_quest_invite {
 
-// STUB (slice S1 replaces it with Feature::kInviteCodes). Off in every build until then.
-nevr_invite::Switch InviteCodesSwitch() { return nevr_invite::Switch::Off; }
-
 namespace {
 
 // A code's fingerprint is comparable within one run only. The steady clock is not a wall time and is never logged.
@@ -25,7 +22,7 @@ void Start(RunInputs inputs) {
   const std::function<void(nevr_invite::LogLevel, const std::string&)> log = inputs.log;
   try {
     nevr_invite_service::Settings settings;
-    settings.invite_codes = InviteCodesSwitch();
+    settings.invite_codes = inputs.invite_codes;
     settings.http_uri = std::move(inputs.http_uri);
     settings.token = std::move(inputs.token);
     settings.log = std::move(inputs.log);
