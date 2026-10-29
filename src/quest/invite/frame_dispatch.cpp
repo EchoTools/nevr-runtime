@@ -2,8 +2,9 @@
 
 #include <pthread.h>
 
+#include <time.h>
+
 #include <atomic>
-#include <chrono>
 
 #include "quest/sentinel/hook_log.h"
 
@@ -70,9 +71,13 @@ bool g_windowOpen = false;
 std::uint64_t g_windowStartNs = 0;
 Stats g_reported{0, 0, 0, 0, 0};
 
+// clock_gettime, not std::chrono::steady_clock: a function a hook can reach may not carry a personality, and libc++'s
+// steady_clock::now does (tests/quest TestHookFramesCarryNoPersonality). It reads the monotonic clock the sentinel's
+// other hook-path timers read (sentinel_log.cpp MonotonicMs).
 std::uint64_t SteadyNowNs() noexcept {
-  const auto since = std::chrono::steady_clock::now().time_since_epoch();
-  return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(since).count());
+  timespec ts{};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<std::uint64_t>(ts.tv_sec) * 1000000000U + static_cast<std::uint64_t>(ts.tv_nsec);
 }
 
 std::uint64_t NowNs() noexcept {

@@ -1,7 +1,8 @@
 #include "login_prompt_hook.h"
 
+#include <time.h>
+
 #include <atomic>
-#include <chrono>
 #include <climits>
 #include <cstddef>
 #include <cstdint>
@@ -76,9 +77,11 @@ std::int32_t g_seenState = 0;
 constexpr std::int64_t kResendSpacingNs = 50'000'000;
 std::atomic<bool> g_resendPending{false};
 std::atomic<std::int64_t> g_lastResendNs{0};
+// clock_gettime, not std::chrono::steady_clock: see frame_dispatch.cpp SteadyNowNs (the personality rule).
 std::int64_t SteadyNs() noexcept {
-  return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
-      .count();
+  timespec ts{};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<std::int64_t>(ts.tv_sec) * 1000000000 + static_cast<std::int64_t>(ts.tv_nsec);
 }
 using ClockFn = std::int64_t (*)() noexcept;
 std::atomic<ClockFn> g_clock{&SteadyNs};
