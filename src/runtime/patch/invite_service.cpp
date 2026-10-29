@@ -13,7 +13,7 @@ namespace nevr_invite_service {
 namespace {
 
 std::mutex g_m;
-std::unique_ptr<nevr_invite::CurlTransport> g_transport;
+std::unique_ptr<nevr_invite::Transport> g_transport;
 std::unique_ptr<nevr_invite::Worker> g_worker;
 std::function<void(nevr_invite::LogLevel, const std::string&)> g_log;
 bool g_started = false;
@@ -76,7 +76,17 @@ void Start(Settings settings) {
   if (off == nullptr) {
     nevr_invite::TransportOptions options = std::move(settings.transport);
     options.log = settings.log;
-    g_transport = std::make_unique<nevr_invite::CurlTransport>(settings.http_uri, std::move(options));
+    if (settings.transport_factory) {
+      g_transport = settings.transport_factory(settings.http_uri, options);
+    } else {
+      g_transport = std::make_unique<nevr_invite::CurlTransport>(settings.http_uri, std::move(options));
+    }
+    if (!g_transport) {
+      off = "transport_unavailable";
+      offLevel = nevr_invite::LogLevel::Warning;
+    }
+  }
+  if (off == nullptr) {
     parts.transport = g_transport.get();
     parts.clock_ms = [] {
       return static_cast<std::int64_t>(
@@ -119,7 +129,7 @@ std::vector<nevr_invite::Answer> WaitForAnswers(std::chrono::milliseconds timeou
 
 void Shutdown() {
   std::unique_ptr<nevr_invite::Worker> worker;
-  std::unique_ptr<nevr_invite::CurlTransport> transport;
+  std::unique_ptr<nevr_invite::Transport> transport;
   {
     auto lock = LockService();
     g_active.store(false, std::memory_order_release);

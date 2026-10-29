@@ -34,6 +34,7 @@
 #include "quest/integration/self_check_wiring.h"
 #include "quest/integration/stage_log.h"
 #include "quest/integration/social_shim.h"
+#include "quest/invite/invite_run.h"
 #include "quest/login/login_hook.h"
 #include "quest/net/curl_ws_connector.h"
 #include "quest/net/session_bridge.h"
@@ -230,6 +231,36 @@ nevr_quest::redirect::BridgeState BridgeProbe() {
   return {port != 0, port};
 }
 
+// --- invite codes (#966, docs/adr/0017) ----------------------------------------------------------
+
+// The invite service's lines go to the disk log with every other sentinel line, at the level the service gave them.
+void InviteLog(nevr_invite::LogLevel level, const std::string& line) {
+  nevr_quest::LogLevel mapped = nevr_quest::LogLevel::kInfo;
+  if (level == nevr_invite::LogLevel::Warning) mapped = nevr_quest::LogLevel::kWarn;
+  if (level == nevr_invite::LogLevel::Error) mapped = nevr_quest::LogLevel::kError;
+  try {
+    sentinel::Emit(mapped, line);
+  } catch (const std::exception&) {
+    sentinel::EmitFixed(nevr_quest::LogLevel::kError, "invite log line could not be written");
+  }
+}
+
+// The Quest token, read at each request: "" until the token auth session exists, and after it is torn down.
+std::string InviteToken() {
+  nevr::quest_auth::QuestTokenAuth* const auth = R().auth.load(std::memory_order_acquire);
+  return auth != nullptr ? auth->Token() : std::string();
+}
+
+// Starts the invite service with the token auth it reads its token from. Its requests wait for the session (reason=no_token)
+// rather than the sentinel waiting for them.
+void StartInviteService(const nevr_quest::ResolvedConfig& cfg) {
+  nevr_quest_invite::RunInputs inputs;
+  inputs.http_uri = cfg.httpUri.text;
+  inputs.token = &InviteToken;
+  inputs.log = &InviteLog;
+  nevr_quest_invite::Start(std::move(inputs));
+}
+
 // --- post-load actions ---------------------------------------------------------------------------
 
 nevr_quest_login::BuildInfo ThisBuild() {
@@ -358,6 +389,7 @@ ActionResult PluginsAction() noexcept {
 // entries that never got their moment end as `not_started` (#438), then the self-check report goes out (a no-op unless
 // the bridge that carries it enabled the self-checks).
 void OnGameProcessEnd() noexcept {
+  nevr_quest_invite::Shutdown();  // a request in flight returns at once; the worker is joined before the report
   nevr_quest::plugin::FinishPlugins(nevr_quest::plugin::reason::kGameExitedFirst);
   ReportAndroidMainReturned();
 }
@@ -427,6 +459,7 @@ class ProductionSteps final : public Steps {
 
   bool StartTokenAuth() override {
     const nevr_quest::ResolvedConfig& cfg = sentinel::ActiveConfig();
+    StartInviteService(cfg);  // before the early return: the service's own line (off, or on) is logged on every start
     if (cfg.httpUri.text.empty() || cfg.httpKey.text.empty()) {
       detail_ = "http_uri_or_key_absent";
       return false;
@@ -733,6 +766,8 @@ void ShutdownIntegration() noexcept {
       bridge->Stop();
       delete bridge;
     }
+    // The invite worker reads its token from the auth session and posts through it: it is stopped before the session is deleted.
+    nevr_quest_invite::Shutdown();
     if (nevr::quest_auth::QuestTokenAuth* const auth = rt.auth.exchange(nullptr)) {
       auth->Stop();
       delete auth;

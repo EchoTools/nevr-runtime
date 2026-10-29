@@ -295,5 +295,6 @@ add_subdirectory(net)
 if(TARGET ovrplatformloader)
   # The hardware/environment dump (#335), linked through the integration.
   add_subdirectory(diag)
+  add_subdirectory(invite)
   add_subdirectory(integration)
 endif()
