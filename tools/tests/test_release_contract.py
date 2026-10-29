@@ -184,7 +184,7 @@ class ReleaseContractTest(unittest.TestCase):
     def test_a_release_carries_one_stripped_dist_package_and_no_lite_or_debug_one(self):
         cmake = (REPO / "CMakeLists.txt").read_text()
         self.assertIn('set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}-windows-server")', cmake)
-        dist = cmake.split("# Distribution Package Target", 1)[1].split("# Legacy Distribution Package Target", 1)[0]
+        dist = cmake.split("# Distribution Package Target", 1)[1].split("# Combined dist-all target", 1)[0]
         self.assertIn("--strip-all", dist)
         self.assertIn("add_custom_target(dist\n", dist)
         dist_all = cmake.split("add_custom_target(dist-all", 1)[1].split(")", 1)[0]
@@ -196,8 +196,8 @@ class ReleaseContractTest(unittest.TestCase):
             self.assertNotRegex(text, r"(?i)dist[-_](lite|debug)|DIST_(LITE|DEBUG)|PROJECT_VERSION}-(lite|debug)", name)
 
     def test_no_release_input_names_the_legacy_build(self):
-        """#741: the legacy plugin loader loads every DLL in plugins\\ unchecked and src/legacy/ is frozen, so no
-        release workflow, packaging script or build target a release uses may name or build it."""
+        """#741, #1264: the v1 legacy DLLs loaded every DLL in plugins\\ unchecked; no release workflow, packaging
+        script or build target a release uses may name or build them."""
         inputs = {path.name: path.read_text() for path in (REPO / ".github/workflows").glob("*.yml")}
         inputs["package_release.py"] = (REPO / "tools/package_release.py").read_text()
         inputs["build_distribution.py"] = (REPO / "tools/build_distribution.py").read_text()
@@ -221,7 +221,7 @@ class ReleaseContractTest(unittest.TestCase):
         validator = (REPO / "cmake/VerifyDistribution.cmake").read_text()
         self.assertIn("echovr_server.exe", validator)
         self.assertIn("ITEMS BugSplat64.dll nevr-runtime.dll echovr_server.exe", validator)
-        distribution = cmake.split("# Distribution Package Target", 1)[1].split("# Legacy Distribution Package Target", 1)[0]
+        distribution = cmake.split("# Distribution Package Target", 1)[1].split("# Combined dist-all target", 1)[0]
         executable_lines = re.sub(r"(?m)^\s*#.*$", "", distribution)
         self.assertNotRegex(executable_lines, r"\|\|\s*(true|\$\{CMAKE_COMMAND\}\s+-E\s+true)")
 

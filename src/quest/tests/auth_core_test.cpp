@@ -318,8 +318,7 @@ TEST(refresh_url_and_body_match_the_server_contract) {
   CHECK_EQ(BuildDeviceAuthUrl("https://h", "k", "refresh"),
            std::string("https://h/v2/rpc/device/auth/refresh?http_key=k&unwrap"));
   const nlohmann::json body = nlohmann::json::parse(BuildRefreshBody("rt"));
-  CHECK_EQ(body.value("refresh_token", ""), std::string("rt"));
-  CHECK_EQ(body.value("token", ""), std::string("rt"));
+  CHECK(body == nlohmann::json({{"refresh_token", "rt"}}));
 }
 
 TEST(refresh_success_takes_expiry_from_the_jwt_and_rotates_the_refresh_token) {

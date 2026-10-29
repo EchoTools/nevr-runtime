@@ -8,7 +8,7 @@
 
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
-#include "nevr_common.h"
+#include "nevr/pc/nevr_common.h"
 #include "runtime/hook/patching.h"
 #include "runtime/compat/social_roster.h"
 #include "runtime/hook/symbol_corpus.h"

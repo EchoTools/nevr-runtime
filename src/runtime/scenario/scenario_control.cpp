@@ -21,13 +21,14 @@
 
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
-#include "nevr_common.h"
+#include "nevr/pc/nevr_common.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/hook/process_memory.h"
 #include "runtime/lifecycle/config.h"
+#include "runtime/patch/invite_answer_apply.h"
 #include "runtime/patch/invite_service.h"
 #include "runtime/patch/invite_wizard.h"
 #include "runtime/patch/invite_wizard_hook.h"
@@ -675,11 +676,12 @@ nlohmann::json StateJson() {
 
 nlohmann::json Fail(const std::string& why) { return {{"ok", false}, {"error", why}}; }
 
-// The invite answers that have arrived, each handed over once. This is the test endpoint's own channel, never the log: a
-// created code is the product of the call, so it is in the reply (the log carries only its length and fingerprint).
+// The invite answers the menu applier has taken, each handed over once; an answer is here from the frame after it arrived. This
+// is the test endpoint's own channel, never the log: a created code is the product of the call, so it is in the reply (the log
+// carries only its length and fingerprint). The applier is the service's one reader, so the endpoint reads its record.
 nlohmann::json InviteAnswersJson() {
   nlohmann::json answers = nlohmann::json::array();
-  for (const nevr_invite::Answer& answer : nevr_invite_service::TakeAnswers()) {
+  for (const nevr_invite::Answer& answer : nevr_invite_apply::TakeKeptForTest()) {
     nlohmann::json row = {{"op", answer.op == nevr_invite::Op::Create ? "create" : "resolve"},
                           {"sent", answer.sent},
                           {"status", answer.status},
@@ -858,6 +860,7 @@ void AcceptLoop() {
 }  // namespace
 
 void Start() {
+  nevr_invite_apply::KeepForTest(true);  // the applier keeps the answers this endpoint reports (a release build never does)
   WSADATA wsa{};
   if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
     Log(EchoVR::LogLevel::Error, "[NEVR.SCENARIO] control endpoint not started: WSAStartup failed");

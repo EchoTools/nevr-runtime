@@ -1,0 +1,98 @@
+# ADR 0022: the nevr log records the render configuration
+
+Status: proposed (#1139). Written before any code; the "Prediction" section is what the first runs must show.
+
+## Context
+
+A report of stutter or low frame rate arrives with a log that does not say what the game was rendering, so the player's setup cannot be reproduced from the log alone. On a Quest 2 the Meta OVR Metrics CSV showed 120 Hz, 1440x1584 eye buffers, render scale 101 and foveation level 0; nothing in the nevr log said so, and nobody knew which game setting picked those values.
+
+Wanted: one `render_config` line at the first rendered frame and again on every change, on both platforms, built only from data the game or its runtime already holds (an import the game calls, an exported function, a game global at a pinned address). No Quest code page is written (ADR 0021).
+
+## What the Quest game does (pinned libr15, build `b243509c08ce677aeb95fa348016949b3fc45230`)
+
+Addresses are pinned link-time addresses (ReVault shows each 0x100000 higher; `docs/adr/0021-quest-libr15-patched-at-build-time.md`).
+
+| Fact | Where the game holds it | Evidence (ReVault, libr15.so) |
+| --- | --- | --- |
+| Refresh rate the game asks for | `vrapi_SetDisplayRefreshRate(ovr, rate)`, JUMP_SLOT `0x36ec5f0`, one call site in `CVR::UpdateTracking` (`0x1b71de8` in ReVault), after the game picks the highest supported rate not above 90 from `vrapi_GetSystemPropertyFloatArray` id `0x41`; logs `Device type '%s' is setting refresh rate to %2.1f` on success, `vrapi_SetDisplayRefreshRate failed: %i - current refresh rate is %2.2f` otherwise | `UpdateTracking @ 0x1b71b60` decompilation, strings at `0x327aae7`..`0x327ab9b` |
+| Refresh rate the runtime reports | `vrapi_GetSystemPropertyFloat(java, 4)`, JUMP_SLOT `0x36c06f8`; the game's own failure log prints it as "current refresh rate" | same function; ADR 0006 (id 4, per frame) |
+| CPU and GPU level | `vrapi_SetClockLevels(ovr, cpu, gpu)`, JUMP_SLOT `0x36c75f0`: `(2,2)` when `CGRenderConfig::StablePowerState()` is 0, `(5,5)` otherwise, once per VR-mode entry | `UpdateTracking`: `uVar16 = 2` / `5` before the call at `0x1b71cc8` |
+| Headset type | `vrapi_GetSystemPropertyInt(java, 0)`, JUMP_SLOT `0x36fa728`; the game labels `0x140` "Quest 2" and anything else "quest" | `UpdateTracking`, `pcVar4 = "Quest 2"` |
+| Foveation level | `CVR::SetFoveationLevel(n)` stores `n` at `0x37a3398` and calls `vrapi_SetPropertyInt(java, 0xf, n)` (JUMP_SLOT `0x36ffcf0`). Callers set 0 on pause and on net-game state 9, 4 on unpause | `SetFoveationLevel @ 0x1b71294`; search "Foveation" over libr15 |
+| Dynamic foveation | `CVR::SetEnableDynamicFoveation(b)` stores `b` at `0x37a339c` and calls `vrapi_SetPropertyInt(java, 0x1e, b != 0)`; `ApplyRuntimeGfxSettings` always passes 1 | `SetEnableDynamicFoveation @ 0x1b72edc`, `ApplyRuntimeGfxSettings @ 0x21e8e0c` |
+| Eye buffer size | `CVR::RefreshRTSize` stores the per-eye pair `{int32 w, int32 h}` at `0x37a33e0` = `vrapi_GetSystemPropertyInt` ids 5 and 6 times `CustomViewportScale`, or the override pair at `0x37a33e8` when it is non-zero; `CVR::Resize` creates the swap chain from it once | `RefreshRTSize @ 0x1b709a0` (reconstructed); ADR 0015 |
+| Render scale | `CustomViewportScale(0)` = `kR15Quest1ResolutionScale` / `kR15Quest2ResolutionScale`, both measured 1.0 in the store build, chosen by `CVR::QuestHeadsetType()` (`0x37a3374`) | `ApplyRuntimeGfxSettings` |
+| MSAA | `CGRenderConfig::MSAAMode()` is the global at `0x379c080`; `ApplyRuntimeGfxSettings` sets mode 1 (2 samples) from `kR15Quest*MSAALevel` = 2. The settings struct's own `msaa` field is only logged | `MSAAMode @ 0x198c894`, `ApplyRuntimeGfxSettings` comment |
+| The game's graphics settings | `ApplyRuntimeGfxSettings(SR15GfxSettings&, ...)` is called from `CR15Game::InitEngine` (boot) and the settings translator (menu). On a Quest it sets eye size, MSAA and dynamic foveation from constants, not from the struct; the struct feeds shadows, TAA, bloom, mesh quality and the like | `ApplyRuntimeGfxSettings` |
+| Frames | `vrapi_SubmitFrame2`, JUMP_SLOT `0x36e7010`: one call per rendered frame | libr15 imports |
+| Device model, OS build | Android system properties `ro.product.model`, `ro.build.display.id`; libr15 reads the same properties through `__system_property_get` | ADR 0006 table |
+
+The answer to "which setting picked 1440x1584 at scale 1.0": none of the player-facing graphics settings. The eye size is what the headset runtime suggests, times a constant 1.0, unless nevr's `graphics.texture_quality` (ADR 0015) or the game's RT-size override replaces it.
+
+## Decision (Quest)
+
+A development-free, always-on module `render_config` in the sentinel (`src/quest/sentinel/render_config*.{h,cpp}`):
+
+- **Five GOT hooks**, each a `CallbackThunk` handler that calls the original with the game's arguments, stores the arguments and result in atomics and returns the original's result: `vrapi_SetDisplayRefreshRate`, `vrapi_SetClockLevels`, `vrapi_SetPropertyInt`, `vrapi_GetSystemPropertyFloat`, `vrapi_SubmitFrame2`. None logs, allocates or throws on the game's call path.
+- **A poller thread** (`nevr-renderconfig`, created once, ends with the process) wakes once a second on a condition variable, reads the atomics and three game globals (the eye-size pair, the RT-size override pair and the MSAA mode; after proving libr15's build id and that each address lies inside a PT_LOAD of the image, then `base + pinned vaddr`; reads only), builds a snapshot and logs `render_config` through the sentinel log: once when the first frame has been submitted and a size exists, then once for each poll whose snapshot differs from the last logged one, with `changed` naming the fields.
+- The hardware dump (ADR 0006) hooks four of the same slots. A slot owned by `render_config` is skipped by the dump and reported with status `owned_by_render_config`; the dump's other 14 hooks and its file are unchanged. The shared-slot state is header-only, like `sysprop_int_share.h`.
+- Device model and OS build come from `__system_property_get`, called by the poller.
+
+Fields of the line: `platform`, `reason` (`first_frame` | `change`), `changed`, `device_model`, `os_build`, `refresh_requested_hz`, `refresh_request_result`, `refresh_reported_hz`, `eye_w`, `eye_h`, `eye_source` (`nevr_texture_quality` | `game_rt_size_override` | `runtime_suggested`), `texture_quality`, `texture_quality_source` (`config` | `default`), `foveation_level`, `foveation_dynamic`, `cpu_level`, `gpu_level`, `clock_result`, `msaa_mode`, `spacewarp`, `frames`. The foveation, clock and refresh-request fields are what the game last told the runtime (the arguments of the hooked calls), `unset` until the game makes the call; `native_eye_w` and `native_eye_h` (the runtime's own answer) are added only when a `texture_quality` level other than `stock` replaces the size.
+
+## Prediction (Quest)
+
+On a headset, the first `render_config` line lands within a second of the first submitted frame. With the default config: `eye_source=runtime_suggested`, `texture_quality=stock`, `texture_quality_source=default`, `eye_w`/`eye_h` equal to the game's own `Creating OVR swap chain with size W x H` line, `foveation_dynamic=1`, `msaa_mode=1`, `cpu_level=gpu_level=2`, `refresh_requested_hz` the highest supported rate not above 90, and `refresh_reported_hz` the rate the runtime reports (a value above the request is the 120 Hz case). Pausing the game then produces a second line with `changed=foveation_level` and `foveation_level=0`; unpausing produces a third with 4. With `graphics.texture_quality: high`, `eye_source=nevr_texture_quality` and the size is the level's.
+
+What would prove it wrong: no line (hooks refused: the install lines name the status); `eye_w`/`eye_h` different from the swap-chain line (the game creates the swap chain from a path other than `g_rtSize`); `foveation_level` never changing across a pause (the game sets foveation through a path other than `CVR::SetFoveationLevel`); `refresh_reported_hz` of 0 (id 4 is not the refresh rate in this runtime).
+
+## Not available yet (Quest)
+
+- **Spacewarp on or off.** It is a flag on the layers libr15 passes to `vrapi_SubmitFrame2` (`ovrSubmitFrameDescription2`). The struct layout is the SDK's and is not in this tree or in ReVault's types, so this ADR does not read it. The line carries `spacewarp=unknown`; reading the layer flags is tracked as a follow-up once the layout is sourced.
+- **The game's `SR15GfxSettings` values** (graphics quality name, shadows, TAA) and what set them (saved profile or menu). The struct's address is not pinned. They do not drive eye size, MSAA or foveation on a Quest, so the fields that explain a frame-rate report are covered without them.
+- **The native eye size** when `texture_quality` is `stock`: the final size and `eye_source` are logged; the runtime's untouched answer is only counted when the texture-quality hook is installed (ADR 0015).
+- **Actual GPU clock, thermal state and achieved FPS** are not render configuration; the runtime's once-a-second stats line carries them.
+
+## PCVR
+
+echovr.exe has no LibOVR import: it loads `LibOVRRT64_1.dll` itself and resolves the `ovr_*` names with `GetProcAddress` (loader `fcn.141360790`). Every address below is a ReVault VA in echovr.exe (image base `0x140000000`, the same VAs `src/runtime/hook/addresses.h` uses). The ones marked *checked* were read back from the disassembly while writing this ADR; the rest are the survey's observations and are what the first run must confirm.
+
+| Fact | Where the game holds it | Evidence |
+| --- | --- | --- |
+| GPU name | 128-byte NUL-terminated buffer `0x14209cf70` (getter `fcn.1400df2d0` trims it) | survey; `FUN_140c31e00` calls the getter and compares it with `"NVIDIA GeForce GTX 970"` (*checked*) |
+| GPU vendor, VRAM | dword `0x14209cff8` (getter `fcn.1400df7b0`), qword `0x14209cff0` (getter `fcn.1400df770`) | `FUN_140c31e00` reads vendor with `CMP EDI,1` / `CMP EDI,2` and VRAM against `0x177000000` / `0xfa000000` (*checked*) |
+| GPU driver | not held in a global that was traced; the game logs `Nvidia driver version: %s` / `AMD driver version: %s` once. Read it from DXGI: `IDXGIAdapter::CheckInterfaceSupport(IDXGIDevice)` on the adapter whose description equals the GPU name | survey; no NVAPI import |
+| Headset type, product name | the `ovrHmdDesc` copy at `0x1420c77a8` (size `0x108`): `Type` at +0, `ProductName[64]` at +8 | survey; the layout is the LibOVR SDK's `ovrHmdDesc` (the SDK header is not in this tree), consistent with the 0x108 copy size and with the refresh-rate getter below. The HMD resolution (`hmd_w`, `hmd_h`) is the SDK's `Resolution` at +0xF8; no function that reads it was traced, so it is the layout, not a read |
+| Headset refresh rate | float `0x1420c78a8` (+0x100 of the same copy); `fcn_14072af50` returns it | *checked* (`MOVSS XMM0,[0x1420c78a8]; RET`) |
+| Runtime | LibOVR (the only PC VR path the game has). Version string: `ovr_GetVersionString` through `GetProcAddress` on the loaded `LibOVRRT64_1.dll`, the way `mic_provider.cpp` resolves `ovr_GetAudioDeviceInGuidStr` | survey; SteamVR and Link are not visible to the game, so the field says `libovr` and nothing about the platform behind it |
+| Per-eye render target | packed `w | (h << 32)` stored by `CVRSystem::UpdateDisplay` at `0x1420bb568` (and `0x1420bb9e8`) | survey; the first search found no read xref, a later ReVault read shows one at `0x14072d3f6`. The line reads the global from memory either way |
+| Resolution scale (supersampling) | `CGRenderConfig` table `0x1420afac0`, two `{float x, float y}` entries; `Apply` stores `settings.resolutionscale` at index 0 or 1 by `word[settings+0x62]` | `ApplyRuntimeGfxSettings` calls `fcn_1405c3d70` with `[RBX+8]` (*checked*) |
+| The game's graphics settings | `ApplyRuntimeGfxSettings(settings*, game*, logFlag)` at `0x140c31870`. The `SR15GfxSettings` it receives: flags@0 (bit0 fullscreen, bit1 adaptive resolution, bit2 TAA, bit3 multires), `resolutionscale`@8, adaptive min/max/target fps@0xc/0x10/0x14, `msaa`@0x1c, `qualitylevel`@0x24, custom quality fields@0x28..0x54 | *checked*: the function reads these offsets and logs them (`Graphics quality`, `MSAA mode`, `TAA`, `Multi-Res`, `Adaptive Res`, `Resolution Scale`, `Fullscreen`) |
+| What set them | callers of `Apply`: boot `FUN_1401090c0` (`CALL` at `0x140109209`, return `0x14010920e`, `settings = game+0x8dd0`) and the menu/JSON path `fcn.140a26be0` (`0x140a26ca1`). Before the boot call, `FUN_1401090c0` runs the auto-selector `FUN_140c31e00(settings, game)` (`CALL` at `0x1401091e4`) only when bit 26 of `[game+0x7ae0]` is set, then clears the bit. The selector can run on `game+0x8e34` while Apply is given `game+0x8dd0`, so the observer compares the selector's struct pointer with Apply's. At boot `logFlag` is 0, so the game does not log the settings itself | *checked* (both call sites, the bit test, the clear) |
+
+Why a hook and not a poll: the `CR15Game` singleton that owns `game+0x8dd0` has no known global, so the settings cannot be read from memory by address. `Apply` is the one place every change passes through, and it runs at boot and when a setting changes, never per frame.
+
+### Decision (PCVR)
+
+- **Two detours, both observers** (they call the original first and return its result): `ApplyRuntimeGfxSettings` copies the `SR15GfxSettings` fields above into a snapshot guarded by a mutex (the hook is not on a per-frame path) and records whether the caller was the boot site (return address `0x14010920e`); `FUN_140c31e00` sets a flag that the auto-selector ran. Both are prologue-validated (`nevr::ValidatePrologue`) and installed with `PatchDetour` with a name, on a client only. Settings source, from those two facts: boot call after the selector ran, `auto_selected`; boot call without it, `saved_or_default`; any other caller, `menu_or_json`; no call seen yet, `unknown`.
+- **No thread.** The check runs inside `DispatchPerFrameWork` (N86), on the game thread, throttled to once a second by the monotonic clock. Everything else is a read of game memory at the addresses above, after the bytes at the function addresses validated, so a game build other than the pinned one reads nothing and the line says `unavailable` for the fields it could not trust.
+- **First frame**: the first dispatcher pass on a client at which the render-target size at `0x1420bb568` is non-zero; if it is still zero after 5 seconds, the line is written anyway with `render_target=unavailable`, so a broken read still leaves a record.
+- **Change**: any field of the snapshot differing from the last logged one (the refresh rate and the render target included), logged with `changed=<field,field>`.
+- The line is one `Log()` at Info under a new tag `[NEVR.RENDER]` (registered in `docs/standards/logging.md`): `[NEVR.RENDER] render_config reason=first_frame changed=- platform=pcvr gpu="..." gpu_vendor=... vram_mb=... gpu_driver=... headset="..." hmd_type=... runtime=libovr runtime_version="..." refresh_hz=... hmd_w=... hmd_h=... render_w=... render_h=... resolution_scale=... settings_source=... quality_level=... msaa=... settings_resolution_scale=... adaptive_res=... taa=... multires=... fullscreen=... adaptive_min=... adaptive_max=... adaptive_target=... display=...`. `adaptive_min` and `adaptive_max` are floats at +0xC and +0x10, `adaptive_target` an int at +0x14 and `display` an int at +0x4 of the settings struct. Strings are quoted and cleaned of quotes and control bytes.
+- The line is about 620 bytes, so `ApplyTruncation` in the built-in filter returns a `[NEVR.` line whole: its 500-byte cap is for game lines, and a live run showed the cap cutting the line inside `adaptive_min`.
+- One `[NEVR.RENDER] render_config settings_trace apply_calls=<n> read_failures=<n> last_apply_return=0x<va> boot_return=0x<va>` line follows the first line, once. It says what the observers saw, so a `settings_source` of `unknown` or `menu_or_json` can be told apart: no `Apply` call seen at all (`apply_calls=0`, observers installed late), or calls from an address that is not `boot_return`.
+- A server (`-server`, headless) installs nothing and logs `render_config skipped reason=server_mode` once.
+
+### Prediction (PCVR)
+
+On a PC client with a Rift S or Quest over Link: one `render_config reason=first_frame` line within a second of the first dispatcher pass after the swap chain exists, `headset` the HMD's product name, `refresh_hz` the headset's rate (80 for a Rift S, 72/90/120 for a Quest over Link), `render_w`/`render_h` equal to what `ovr_GetFovTextureSize` returned for the scale in `resolution_scale`, `settings_source=auto_selected` on a first run with no saved graphics settings and `saved_or_default` on later runs, `gpu` equal to the `Creating D3D12 device on adapter` line. Opening the in-game graphics menu and changing MSAA produces a second line with `changed=msaa,settings_source` and `settings_source=menu_or_json`.
+
+What would prove it wrong: `render_w=0` after the first frame (the packed store at `0x1420bb568` is not what `UpdateDisplay` publishes); `headset` empty or garbage (the `ovrHmdDesc` layout is not the SDK's); `refresh_hz=0` (the getter's global is not filled on this path); no line after changing a graphics setting in the menu (the menu does not reach `Apply`); `settings_source` never `auto_selected` on a fresh profile (the selector is not on the boot path). A `settings_source` of `unknown` with every settings field `unavailable` is a different failure: the observers were installed after the game's boot call to `Apply` (the boot handler `FUN_1401090c0` is reached through a pointer table, so its time against the deferred bootstrap is not settled statically), and it is not evidence about the selector.
+
+### Not available yet (PCVR)
+
+- **Frame limiter and achieved FPS.** The target frame period double at `0x1420c60a0` is a guess from constants and was not traced to the limiter; no frame-rate field is logged.
+- **The NVIDIA driver string as the game formats it.** The DXGI value is the user-mode driver version in the form DXGI reports it, which can differ from the vendor's marketing number.
+- **What is behind LibOVR** (Oculus app, Link, SteamVR): the game cannot tell and neither can the line.
+- **The settings file the game loaded** (path and format feeding `game+0x8dd0` before boot): not traced.
+- **The custom quality sub-struct** (`shadowresolution` and the rest): logged by the game itself only when `qualitylevel` is Custom; not part of this line.

@@ -12,7 +12,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "abi/symbol_hash.h"
+#include "nevr/symbol_hash.h"
 #include "runtime/log/symcache.h"
 #include "runtime/patch/invite_wizard.h"
 #include "runtime/patch/ui_texture_mips_rules.h"
@@ -668,20 +668,12 @@ TEST(InviteHook, OnlyALineThatNamesTheWizardPanelMayBeAMetric) {
   EXPECT_FALSE(nevr_invite::MayBeWizardMetric(""));
 }
 
-// A planned request is logged as planned, never as sent: nothing is posted until the worker exists.
-TEST(InviteHook, APlannedRequestIsLoggedAsPlannedNotSent) {
-  nevr_invite::Metric join;
-  join.kind = nevr_invite::Kind::Join;
-  join.join_code = "ABCD-2345";
-  const nevr_invite::Plan plan = nevr_invite::PlanRequest(join, nevr_invite::Choices{});
-  const std::string line = nevr_invite::PlannedLine(plan, "0a1b2c3d");
-  EXPECT_EQ(line, "[NEVR.INVITE] request planned op=resolve code_len=8 code_fp=0a1b2c3d");
-  EXPECT_EQ(line.find("request sent"), std::string::npos);
-
+// A create with no card choices is not sent, and the line says why.
+TEST(InviteHook, ACreateWithNoCardChoicesIsNotSentAndSaysWhy) {
   nevr_invite::Metric create;
   create.kind = nevr_invite::Kind::Create;
   const nevr_invite::Plan incomplete = nevr_invite::PlanRequest(create, nevr_invite::Choices{});
-  EXPECT_EQ(nevr_invite::PlannedLine(incomplete, ""), "");
+  EXPECT_EQ(incomplete.skip, nevr_invite::Skip::Incomplete);
   EXPECT_EQ(nevr_invite::NotSentLine(incomplete.skip, incomplete.code_len),
             "[NEVR.INVITE] request not sent reason=incomplete code_len=0");
 }

@@ -92,6 +92,10 @@ foreach ($line in Get-Content -LiteralPath $state -Encoding UTF8) {
 foreach ($key in 'backup', 'legacy', 'installed_sha256') {
   if (-not $values.ContainsKey($key)) { throw "$state has no $key" }
 }
+# A record another installer owns (the launcher writes owner=launcher) is that installer's to undo (#1285).
+if ($values.ContainsKey('owner') -and $values['owner'] -ne 'nevr-install') {
+  throw ('this install is owned by ' + $values['owner'] + ': undo it with its own installer; nothing was changed')
+}
 if ($nevrRoot -eq '' -and $values.ContainsKey('runtime_root') -and $values['runtime_root'] -ne '') { $nevrRoot = $values['runtime_root'] }
 if ($nevrRoot -eq '') { throw 'the nevr folder is unknown (LOCALAPPDATA is not set); pass -Root <nevr folder>' }
 # Every file this script sets aside lands here, never in the game folder.
