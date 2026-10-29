@@ -14,6 +14,7 @@
 // What a line may carry (docs/standards/logging.md, [NEVR.INVITE]): op, code_len, a salted fingerprint, the status, the
 // latency and the result token. Never the code, the token, the request body or the answer's text. The answer's body is given
 // back to the caller only when the call succeeded (ParseCreated / ParseResolved read it), and is never logged.
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -73,6 +74,7 @@ struct WorkerParts {
   std::function<std::int64_t()> clock_ms;                     // monotonic milliseconds; the worker thread
   std::string salt;                                           // per run: see CodeFingerprint
   bool configured = false;                                    // the config.yaml key (N133); false: the worker never starts
+  std::atomic<bool>* answers_pending = nullptr;               // #1415: true while an answer waits (see invite_service.h)
 };
 
 class Worker {
@@ -126,6 +128,12 @@ class Worker {
     return DrainLocked();
   }
 
+  /// The host tests: waits up to `timeout` for an answer without taking it. True when one is waiting.
+  bool WaitPendingForTest(std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lock(m_);
+    return answered_.wait_for(lock, timeout, [&] { return !answers_.empty(); });
+  }
+
   /// Waits for the request in flight, drops the queued ones with a line and joins the thread. One caller; a second call
   /// does nothing.
   void Stop() {
@@ -157,6 +165,8 @@ class Worker {
   std::vector<Answer> DrainLocked() {
     std::vector<Answer> out(std::make_move_iterator(answers_.begin()), std::make_move_iterator(answers_.end()));
     answers_.clear();
+    // #1415: every caller holds m_, so the flag is clear exactly when no answer waits.
+    if (parts_.answers_pending != nullptr) parts_.answers_pending->store(false, std::memory_order_release);
     return out;
   }
 
@@ -212,6 +222,8 @@ class Worker {
         dropped = true;
       }
       answers_.push_back(std::move(answer));
+      // #1415: the flag says an answer waits. Set here, under the lock and after the push: a reader that sees it set finds the answer.
+      if (parts_.answers_pending != nullptr) parts_.answers_pending->store(true, std::memory_order_release);
     }
     answered_.notify_all();
     if (dropped) Say(LogLevel::Warning, "[NEVR.INVITE] answers dropped reason=not_taken kept=" + std::to_string(kMaxAnswers));

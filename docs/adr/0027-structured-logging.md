@@ -431,7 +431,7 @@ retires the sentinel's own writer, as #841 requires; it is the platform twin of 
    `TestLogContains` and the link-time `Log` stubs as files migrate. One test drives the same call through the PC and the
    Quest builds and compares the records (#841).
 3. **The real binary** (AGENTS.md, Logging, rule 6). A GTest executable under Wine links the real sink, makes one call and
-   reads the run-log file it wrote. The stage's live run on a game copy (the PC login test runtime changes require) then
+   reads the run-log file it wrote. The stage's live run on a game copy (the PC login test, which runs on main after the release cut) then
    shows, by key, a record with `event` `text`, `tag` `NEVR.WS` and the `LOGIN SUCCESS` text in stage 1, and the
    `login_injected` and `login_success` events from stage 2.
 4. **Source checks** in `tools/tests/`: the tag table equals the enum; events and keys are literal snake_case ASCII; no

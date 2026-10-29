@@ -251,7 +251,7 @@ this feature carries that requirement.
 3. A host test of the client half: the metric parser, the code normaliser and alphabet check, the expiry mapping,
    the request builder, the answer-token mapping and the log lines, written to fail first, with a mutant for each
    changed line. No game and no network. The module is not yet wired into the runtime.
-4. The hook, the worker and the dispatcher step behind the config key, with the PC login test on the tip.
+4. The hook, the worker and the dispatcher step behind the config key, with the PC login test run on main after the release cut.
 5. A live run on a copy of the install: create a code on one client, join with it from another.
 6. The Quest hook, after the UI accessors of #896.
 

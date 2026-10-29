@@ -1,6 +1,6 @@
 #!/bin/bash
-# Client system test on the NESTED display only (AGENTS.md "System test after every
-# commit"). Verifies the game directory is pristine, deploys the current BugSplat64.dll (the host) and nevr-runtime.dll (the runtime),
+# Client system test on the NESTED display only (AGENTS.md "System test for runtime and auth changes").
+# Verifies the game directory is pristine, deploys the current BugSplat64.dll (the host) and nevr-runtime.dll (the runtime),
 # runs the client on display :101 (headless Xvfb; Xephyr when the owner watches), judges the run from the game's own JSONL log, and
 # restores the original DLL and removes the runtime it put there.
 set -euo pipefail

@@ -885,6 +885,16 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
+    # #1415 (docs/adr/0017): the invite worker and the per-frame applier, built and run here. No recipe named them before, so
+    # they never ran in test-auth-unit; the applier's test drives the real invite service on a loopback server.
+    cmake --build --preset {{ preset }} --target test_invite_worker --target test_invite_answer_apply
+    for bin in "build/{{ preset }}/bin/test_invite_worker.exe" "build/{{ preset }}/bin/test_invite_answer_apply.exe"; do
+        if [[ ! -f "$bin" ]]; then
+            echo "ERROR: GTest binary not found: $bin" >&2
+            exit 1
+        fi
+        run_test "$bin"
+    done
     # test_broadcaster_bridge / test_broadcaster_guards live in
     # ~/src/nevr-runtime-plugins with the broadcaster-bridge plugin, which
     # holds and tests the N72/N73 guards.

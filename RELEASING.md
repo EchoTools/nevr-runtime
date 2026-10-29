@@ -71,14 +71,11 @@ These run by hand once per release, before the train's first step, from a clone 
 
 1. `git fetch origin` and `just release-preflight` pass: this clone is exactly `origin/main`, no local-only tag, nothing
    unpushed, no uncommitted change.
-2. Every PR merged since the last release passed its own checks before it merged. The full suite is not run again: the
-   tag's build skips it (#1008).
+2. Every PR merged since the last release was tested by its author before it was marked ready. The full suite is not run
+   here: the tag's build skips it (#1008), and the full suite and the PC login test run on main after the release cut
+   (AGENTS.md, "Verification before merge").
 3. `just package-dev` reads to the end. It fails on a Windows or Quest build that does not package. It needs the Quest
    signing keystore in `pass`, the store APK and the NDK, as its recipe says.
-4. The PC login test passes with this tip's `BugSplat64.dll` and `nevr-runtime.dll` on a throwaway copy of the install,
-   against production (`AGENTS.md`, "Client login test mechanics"): the run's log shows the four keys on the
-   `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in`.
-
 ## Cut the draft by hand
 
 Only when the train is off or its run is red. A draft fires no workflow, so the build is started by hand on the tag ref.
