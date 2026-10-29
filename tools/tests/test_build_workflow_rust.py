@@ -2,8 +2,10 @@
 
 The builder image holds Arch's MinGW GCC and no Rust, so `rustup` in the installer step exited 127 on the
 v5.19.0 tag build (run 40790413315). The toolchain is installed by a step in build.yml: a pinned rustup-init,
-checked against its SHA-256 before it runs, a pinned toolchain and the Windows target, with the tools put on PATH
-for the steps after it. It sits before the step that builds the installer and runs on the same condition.
+checked against its SHA-256 before it runs, a pinned toolchain and the Windows target. The tools are handed to the
+later steps through GITHUB_ENV, never PATH (a job that installs vcpkg must not edit PATH, #816), and the installer
+step calls cargo by its absolute path. It sits before the step that builds the installer and runs on the same
+condition.
 """
 
 import pathlib
@@ -49,13 +51,19 @@ class RustToolchainStep(unittest.TestCase):
         self.assertRegex(self.install, r"--default-toolchain \d+\.\d+\.\d+\b")
         self.assertIn("--target x86_64-pc-windows-gnu", self.install)
 
-    def test_the_tools_reach_the_later_steps(self) -> None:
-        self.assertIn('>> "$GITHUB_PATH"', self.install)
-        self.assertIn("/bin", self.install[self.install.index('>> "$GITHUB_PATH"') - 80:self.install.index('>> "$GITHUB_PATH"')])
+    def test_the_tool_homes_reach_the_later_steps_through_github_env(self) -> None:
+        self.assertIn('echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"', self.install)
+        self.assertIn('echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"', self.install)
+
+    def test_path_is_not_edited(self) -> None:
+        self.assertNotIn("GITHUB_PATH", self.install)
+        self.assertNotIn("export PATH=", self.install)
+
+    def test_the_installer_step_calls_cargo_by_absolute_path(self) -> None:
+        self.assertIn('"$CARGO_HOME/bin/cargo" build --locked --release --target x86_64-pc-windows-gnu', self.build)
 
     def test_the_installer_step_does_not_install_anything_itself(self) -> None:
         self.assertNotIn("rustup ", self.build)
-        self.assertIn("cargo build --locked --release --target x86_64-pc-windows-gnu", self.build)
 
 
 if __name__ == "__main__":

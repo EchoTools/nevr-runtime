@@ -372,7 +372,8 @@ jobs:
     # before it runs, a pinned toolchain and the Windows target. Cargo and rustup live under the runner's temp
     # directory (HOME in this container belongs to the runner user, not to root, which rustup-init would call a sudo
     # mistake; RUSTUP_INIT_SKIP_SUDO_CHECK says it is not) and reach the steps after this one
-    # through GITHUB_PATH.
+    # through GITHUB_ENV. PATH is not edited: a job that installs vcpkg keeps the PATH its binary cache was keyed
+    # on (#816, #819), so the installer step calls cargo by its absolute path.
     - name: Install the Rust toolchain for the core installer
       if: steps.release.outputs.version != ''
       shell: bash
@@ -384,7 +385,6 @@ jobs:
         chmod +x rustup-init
         ./rustup-init -y --no-modify-path --profile minimal --default-toolchain 1.99.1 --target x86_64-pc-windows-gnu
         rm rustup-init
-        echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
         echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"
         echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
 
@@ -405,7 +405,7 @@ jobs:
         test "${#packages[@]}" -eq 1
         name=$(basename "${packages[0]%/}")
         exe=build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe
-        cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path installer/Cargo.toml --bin nevr-install --target-dir build/installer
+        "$CARGO_HOME/bin/cargo" build --locked --release --target x86_64-pc-windows-gnu --manifest-path installer/Cargo.toml --bin nevr-install --target-dir build/installer
         x86_64-w64-mingw32-objcopy --only-keep-debug "$exe" "dist/symbols/$name/nevr-install.exe.dbg"
         x86_64-w64-mingw32-strip --strip-all "$exe"
         x86_64-w64-mingw32-objcopy "--add-gnu-debuglink=dist/symbols/$name/nevr-install.exe.dbg" "$exe"
