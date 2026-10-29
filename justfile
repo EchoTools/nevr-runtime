@@ -1539,7 +1539,7 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     # the real handler through the thunk entry against stand-ins for vrapi_GetCurrentInputState and
     # vrapi_GetInputDeviceCapabilities. got_pinned_test resolves both slots in the real libr15.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/input_seam_test.cpp src/quest/plugin/input_seam_hook.cpp \
-        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp "${ident[@]}" \
         -o "$out/input_seam_test" -ldl
     timeout 120 "$out/input_seam_test"
     # The toast presenter against a fake JNI (#807): a Java exception thrown at each JNI call in turn, null or not, is
