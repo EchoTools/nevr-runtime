@@ -1,6 +1,7 @@
 #include "runtime/patch/render_config.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cstdio>
 #include <cstring>
 
@@ -37,12 +38,13 @@ std::string Float(float value) {
   return buffer;
 }
 
-/// Nine significant digits: the GPU score sits next to the selector's thresholds (4.5, 6, 8, 10), and "%g"'s six would
-/// print a score just below one (4.4999999) as the threshold itself.
+/// The shortest text that reads back as the same double. The GPU score sits next to the selector's thresholds (4.5, 6,
+/// 8, 10), which it compares exactly; any fixed precision prints a score close enough below one as the threshold
+/// itself, while the selector picks the level below.
 std::string Double(double value) {
   char buffer[32];
-  std::snprintf(buffer, sizeof(buffer), "%.9g", value);
-  return buffer;
+  const std::to_chars_result result = std::to_chars(buffer, buffer + sizeof(buffer), value);
+  return std::string(buffer, result.ptr);
 }
 
 const char* Bool(bool value) { return value ? "true" : "false"; }

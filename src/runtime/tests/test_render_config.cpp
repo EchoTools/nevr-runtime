@@ -5,7 +5,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -253,17 +255,17 @@ TEST(RenderConfigCollector, UnreadableMemoryReadsUnavailableAndTheSettingsBefore
 }
 
 // #1419: the score the auto-selector decides from. Under Proton the game's own rating can fail and leave it 0, which
-// the selector reads as Low whatever the GPU; the line shows the 0 next to the quality level it led to.
+// the selector reads as Low whatever the GPU; the line carries the 0 and the quality level side by side.
 TEST(RenderConfigGpuScore, TheScoreIsTheDoubleTheGameHoldsForTheSelector) {
   World w;
-  w.image.PokeValue<double>(At(kGpuScoreVa), 11.75);  // an RTX 2080 Ti: 4352 cores x 1350 MHz x 2
+  w.image.PokeValue<double>(At(kGpuScoreVa), 11.7504);  // an RTX 2080 Ti: 4352 cores x 1350000 kHz x 2 x 1e-9
   BootApplyWithSelector(w);
   Collector c(w.image, kBase, w.observer, w.Ext());
   const std::string line = c.Poll(0);
-  EXPECT_NE(line.find(" gpu_vendor=1 gpu_score=11.75 vram_mb=4096 "), std::string::npos) << line;
+  EXPECT_NE(line.find(" gpu_vendor=1 gpu_score=11.7504 vram_mb=4096 "), std::string::npos) << line;
 }
 
-TEST(RenderConfigGpuScore, AFailedRatingReadsZeroNextToTheLowItLedTo) {
+TEST(RenderConfigGpuScore, AFailedRatingReadsZeroOnTheLineThatCarriesTheQualityLevel) {
   World w;
   w.image.PokeValue<double>(At(kGpuScoreVa), 0.0);
   w.WriteSettings(kSettings, /*msaa=*/1, /*quality=*/1);
@@ -275,12 +277,19 @@ TEST(RenderConfigGpuScore, AFailedRatingReadsZeroNextToTheLowItLedTo) {
 }
 
 TEST(RenderConfigGpuScore, AScoreJustBelowAThresholdIsNotRoundedOntoIt) {
-  World w;
-  w.image.PokeValue<double>(At(kGpuScoreVa), 4.4999999);  // below the selector's 4.5: quality level 1, not 2
-  BootApplyWithSelector(w);
-  Collector c(w.image, kBase, w.observer, w.Ext());
-  const std::string line = c.Poll(0);
-  EXPECT_NE(line.find(" gpu_score=4.4999999 "), std::string::npos) << line;
+  // The largest double below the selector's 4.5 (quality level 1, not 2), and a real NVIDIA product just below it:
+  // cores x kHz = 2,249,999,999, then x 2 x 1e-9.
+  for (const double score : {std::nextafter(4.5, 0.0), 4.499999998}) {
+    World w;
+    w.image.PokeValue<double>(At(kGpuScoreVa), score);
+    BootApplyWithSelector(w);
+    Collector c(w.image, kBase, w.observer, w.Ext());
+    const std::string line = c.Poll(0);
+    const std::size_t at = line.find(" gpu_score=");
+    ASSERT_NE(at, std::string::npos) << line;
+    const std::string text = line.substr(at + 11, line.find(' ', at + 1) - (at + 11));
+    EXPECT_EQ(std::strtod(text.c_str(), nullptr), score) << line;
+  }
 }
 
 TEST(RenderConfigGpuScore, AnUnreadableScoreReadsUnavailableAndTheRestOfTheGpuGroupStays) {
