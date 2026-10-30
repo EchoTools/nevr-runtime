@@ -488,7 +488,7 @@ class PcUninstallTest(ScriptTestBase):
         # The core beside a SHA256SUMS that names the hand-copied host: that list is the package's, as uninstall.ps1 reads it.
         pkg = self.package()
         (pkg / "SHA256SUMS").write_text(f"{sha(hand)}  BugSplat64.dll\n")
-        done = subprocess.run([str(pkg / "nevr-install.exe"), "pc", "uninstall", "--dir", str(world.game), "--nevr-root", str(world.nevr),
+        done = subprocess.run([str(pkg / "install-nevr-runtime.exe"), "pc", "uninstall", "--dir", str(world.game), "--nevr-root", str(world.nevr),
                                *world.core_args()], capture_output=True, text=True, timeout=600,
                               env=dict(os.environ, DISPLAY="", WAYLAND_DISPLAY=""))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
