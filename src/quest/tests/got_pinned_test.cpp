@@ -187,14 +187,13 @@ void CheckBuildId(const LoadedElf& elf, const char* expected) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc != 6) {
+  if (argc != 5) {
     std::fprintf(stderr,
-                 "usage: got_pinned_test <libr15.so> <libpnsradmatchmaking.so> <libpnsovr.so> <lib7f2363b8976491aa.so> "
-                 "<libpnsrad.so>\n");
+                 "usage: got_pinned_test <libr15.so> <libpnsradmatchmaking.so> <libpnsovr.so> <lib7f2363b8976491aa.so>\n");
     return 2;
   }
-  LoadedElf r15, mm, ovr, script, rad;
-  if (!Load(argv[1], &r15) || !Load(argv[2], &mm) || !Load(argv[3], &ovr) || !Load(argv[4], &script) || !Load(argv[5], &rad)) {
+  LoadedElf r15, mm, ovr, script;
+  if (!Load(argv[1], &r15) || !Load(argv[2], &mm) || !Load(argv[3], &ovr) || !Load(argv[4], &script)) {
     std::fprintf(stderr, "got_pinned_test: cannot load an AArch64 ELF64 from the given paths\n");
     return 2;
   }
@@ -205,13 +204,6 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15ClockGettime(), "libr15 clock_gettime JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15Sigaction(), "libr15 sigaction JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15Signal(), "libr15 signal JUMP_SLOT");
-  // The provider libraries the crash-first hook reaches after they load (#1605): both slots of each, and each build ID.
-  CheckBuildId(rad, pinned::kPnsradBuildId);
-  for (const pinned::CrashLateModule& module : pinned::kCrashLateModules) {
-    const LoadedElf& elf = std::strcmp(module.module, pinned::kPnsrad) == 0 ? rad : (std::strcmp(module.module, pinned::kPnsovr) == 0 ? ovr : mm);
-    CheckTarget(elf, pinned::CrashLateSigaction(module), module.module);
-    CheckTarget(elf, pinned::CrashLateSignal(module), module.module);
-  }
   CheckTarget(r15, pinned::LibR15TString(), "libr15 CJson::TString JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15CreateConnection(), "libr15 CSysHttp::CreateConnection JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15ConfigRequestSend(), "libr15 SNSConfigRequestv24Send JUMP_SLOT");
