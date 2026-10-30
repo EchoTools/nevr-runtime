@@ -332,18 +332,52 @@ with the full object id, for each tag it lists.
 6. Requires `verify-manifest --live` to list the tag on beta, and requires the manifest the public host serves (held to the
    sha256 the signer verified) to list, in the new release, the same `game-data` artifact by name and size. A missing or
    changed entry is a failure, never `done`.
-7. Couriers Teth to verify the live publish and Spritz the same text (no bonk), then removes the worktree and the signer
-   snapshot by exact path. A tag whose notice was never sent is noticed on the next run.
+7. Couriers Teth to verify the live publish and Spritz the same text (no bonk). A tag whose notice was never sent is
+   noticed on the next run.
+8. Builds and publishes the variant APK, when it is configured (below).
+9. Removes the worktree, the signer snapshot and the variant scratch by exact path.
 
 Stable stays an owner step (`approve-stable`); the timer only publishes beta. To stop the timer and the train from moving beta forward behind a rollback, see "Emergency: roll beta back". **Credentials go only where they are used:**
-the R2 credential to `publish_apk`, and the GitHub token to `publish_apk` and the dispatch. Every other command, the
+the R2 credential to `publish_apk` and `variant_publish`, and the GitHub token to `publish_apk` and the dispatch. Every other command, the
 build included, gets an environment without them. Every step appends a JSON line to
 `$XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl`, with each credential value replaced by `<redacted>`; a log that
 cannot be written fails the run. A failing step exits 1 naming itself, with the redacted tail of the failing command's stderr and stdout (the stdout of `curl`, `gh` and the signer is remote content and is left out), and the unit's `OnFailure=` runs
 `quest_release_timer.py --notify-failure`, which couriers the last failure to Spritz, at most once in six hours for the same step and
 error (a standing refusal repeats on every run). The credential is the file
 `~/.config/metis/r2-evr-echo-taxi.env` (`R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`), loaded by
-the unit and never written into it. The unit also sets `GNUPGHOME` to the XDG gnupg home (`~/.config/gnupg`) so `pass` finds the key, and a `pass` failure prints gpg's own `gpg:` lines after the `ERROR` line. Install, from any clone of the repository:
+the unit and never written into it. The unit also sets `GNUPGHOME` to the XDG gnupg home (`~/.config/gnupg`) so `pass` finds the key, and a `pass` failure prints gpg's own `gpg:` lines after the `ERROR` line.
+
+**The variant APK.** Each release also gets an unlisted second APK, `nevr-runtime-vX.Y.Z-q15t-quest.apk` with its `.sha256`,
+published under the same `nevr-runtime/vX.Y.Z/` prefix and never listed in the manifest. It is the same repack as the main APK
+(step 3) from the release's own loader asset, signed with the same key, plus two plugin libraries (`libq15t.so` and `libq15t_early.so`) from a
+private build that stays outside this repository, so the two APKs of one version can always be compared. The timer builds it
+in the same run as the main APK, after the main release is complete (published, listed, verified live and announced):
+
+- `variant_pins` copies each library into a private scratch directory (mode 0700, files 0600), hashes the copy, holds it to
+  its pin and packages the copies, so a file that changes afterwards is not what is built;
+- `variant_build` runs `just release-quest-variant-apk vX.Y.Z <libq15t.so>:<libq15t_early.so>` in the same worktree, after
+  the same configure, in the same slice as the main build (it writes `build/quest-release/vX.Y.Z/variant/`);
+- `variant_publish` runs `tools/publish_quest_apk.py vX.Y.Z --variant q15t`: `rclone copyto --ignore-existing` for the APK and
+  its `.sha256`, then the same fetch-back by size and sha256 from the public host. There is no signer call and no manifest
+  claim, an object already on the host is never replaced, and only the R2 credential is in its environment.
+
+It is optional. The unit loads `EnvironmentFile=-%h/.config/metis/quest-variant.env` (the dash makes the file optional),
+which sets `NEVR_VARIANT_DIR` (the directory holding the two libraries) and `NEVR_VARIANT_PINS` (a `sha256sum`-format file
+with exactly one `<64 hex>  <name>` line per library); neither is in this repository. Neither value is logged or given to
+a command, and each is replaced by `<redacted>` in anything written; the records name the two files, their sizes and their
+pinned sha256 only. With both unset the run logs `variant_not_configured` once and does nothing else. Exactly one set, a pins
+file with a missing, extra, duplicate or malformed line, a missing library, or a sha256 that differs from its pin is a failure
+that names the file, never a skip.
+
+A failing variant step never blocks or undoes the main release, which is complete by then. It is recorded as `failed` with the
+step `variant_pins`, `variant_build` or `variant_publish`, the run exits 1 so the failure notice fires, and it counts toward the
+same three tries; the notice that the timer gave up says whether the variant or the main release did. `done` is written only
+when the variant is done, so the next run finds the tag listed and asks the host for the variant APK (`variant_exists`: a GET
+that follows no redirect; 200 with a file that is not HTML means it is there, 404 means it is absent, anything else is a
+failure). A variant that is there is logged as `variant_listed` and nothing is built; one that is absent is built and
+published alone, in a worktree of its own that the run removes, with no second manifest publish.
+
+Install, from any clone of the repository:
 
 ```sh
 just install-quest-release-timer   # the dedicated checkout, systemctl --user link of the three units, daemon-reload, enable --now the timer
