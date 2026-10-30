@@ -540,6 +540,12 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
+  bool InstallCrashFirst() override {
+    const bool ok = nevr_quest::integration::InstallCrashFirstHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
   bool InstallPermissionWait() override {
     const bool ok = nevr_quest::integration::InstallPermissionWaitHook();
     detail_ = ok ? "ok" : "got_hook_refused";

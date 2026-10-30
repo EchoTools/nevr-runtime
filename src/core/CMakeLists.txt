@@ -11,7 +11,7 @@ set(CORE_SOURCES "logging.cpp" "globals.cpp" "base64.cpp" "system_info.cpp" "nev
 set(CORE_HEADERS
   "logging.h" "globals.h" "base64.h" "system_info.h" "build_identity.h"
   "hooking.h" "auth_token.h" "auth_token_model.h" "auth_types.h" "auth_refresh.h" "device_auth_flow.h" "device_poll_response.h" "pch.h" "nevr_config.h" "mic_dsp.h" "mic_lifecycle.h" "mic_capture_drain.h" "mic_owner_thread.h"
-  "auth_token_refresh.h" "nevr_curl.h"
+  "auth_token_refresh.h" "nevr_curl.h" "crash_first.h"
   # Header-only published C ABI for the static modules. Listed here so it appears
   # in IDE/target views; it has no compiled sources of its own. The plugin ABI is in sdk/.
   "${CMAKE_SOURCE_DIR}/src/extension/module_interface.h")

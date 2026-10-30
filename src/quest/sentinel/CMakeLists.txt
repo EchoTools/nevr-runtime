@@ -79,6 +79,7 @@ add_library(ovrplatformloader SHARED
   login_title_hook.cpp
   obb_skip_hook.cpp
   process_end_hook.cpp
+  crash_first_hook.cpp
   permission_request.cpp
   permission_wait_hook.cpp
   vk_ext_window.cpp
@@ -117,7 +118,7 @@ target_link_libraries(ovrplatformloader PRIVATE nevr::plugin_sdk nevr_quest_got_
 # src/quest/CMakeLists.txt) is compiled without exception support so its frames carry no
 # personality or LSDA; see the contract in callback_thunk.h. tests/quest
 # TestHookFramesCarryNoPersonality pins it.
-set_source_files_properties(entry.cpp login_prompt_hook.cpp ../invite/frame_dispatch.cpp login_title_hook.cpp obb_skip_hook.cpp process_end_hook.cpp permission_request.cpp permission_wait_hook.cpp vk_ext_window.cpp os_build_gate_hook.cpp resource_request_hook.cpp render_config_hook.cpp menu_cards_hook.cpp ../invite/wizard_metric_hook.cpp texture_quality_hook.cpp texture_menu_hook.cpp ui_texture_mips.cpp quit_hook.cpp pns_provider_hook.cpp toast_presenter.cpp credits_text.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+set_source_files_properties(entry.cpp login_prompt_hook.cpp ../invite/frame_dispatch.cpp login_title_hook.cpp obb_skip_hook.cpp process_end_hook.cpp crash_first_hook.cpp permission_request.cpp permission_wait_hook.cpp vk_ext_window.cpp os_build_gate_hook.cpp resource_request_hook.cpp render_config_hook.cpp menu_cards_hook.cpp ../invite/wizard_metric_hook.cpp texture_quality_hook.cpp texture_menu_hook.cpp ui_texture_mips.cpp quit_hook.cpp pns_provider_hook.cpp toast_presenter.cpp credits_text.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
 # The Quest join on a resolved invite code (#966, S4). Its std::function<bool()> and std::function<std::int64_t()>
 # come through the shared invite_join.h; libc++ marks those templates' type info default-visibility, so an object

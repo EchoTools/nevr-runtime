@@ -1658,6 +1658,15 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/process_end_hook_test" -ldl
     timeout 300 "$out/process_end_hook_test" "$out"
+    # Our crash handler stays first (#1605): the real handler and the sigaction/signal hooks, driven by real signals and a
+    # fixture library that calls libc's sigaction and signal through PLT slots as libr15 does.
+    "${cxx[@]}" -fPIC -shared -Wl,--build-id=sha1 -Wl,-z,now src/quest/tests/crash_first_fixture_consumer.cpp \
+        -o "$out/libcffx_consumer.so"
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/crash_first_hook_test.cpp \
+        src/quest/sentinel/crash_first_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        "${ident[@]}" -o "$out/crash_first_hook_test" -ldl
+    timeout 120 "$out/crash_first_hook_test" "$out"
     # The game waits for the storage permission it just asked for (#640): the real handler through the thunk entry,
     # against a stand-in for RequestPermissions and a model of CheckPermission.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/permission_wait_hook_test.cpp \
