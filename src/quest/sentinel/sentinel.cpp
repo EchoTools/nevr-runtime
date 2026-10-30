@@ -9,6 +9,8 @@
 
 #include "sentinel.h"
 
+#include "quest/sentinel/crash_report_quest.h"
+
 #include "client/linux/handler/exception_handler.h"
 #include "client/linux/handler/minidump_descriptor.h"
 
@@ -99,9 +101,13 @@ bool DumpCallback(const google_breakpad::MinidumpDescriptor& descriptor,
                   void* /*context*/, bool succeeded) {
     if (descriptor.path()) {
         SnapshotMaps(descriptor.path());
+        // The readable report (#1605) goes beside the minidump under its stem: moved there when a handler already
+        // wrote it with the faulting thread's registers, written here (without them) when none did.
+        char report[640];
+        const bool have_report = FinishCrashReport(descriptor.path(), report, sizeof(report));
         __android_log_print(succeeded ? ANDROID_LOG_FATAL : ANDROID_LOG_ERROR,
-                            NEVR_TAG, "crash: minidump=%s ok=%d maps written",
-                            descriptor.path(), succeeded ? 1 : 0);
+                            NEVR_TAG, "crash: minidump=%s ok=%d maps written report=%s",
+                            descriptor.path(), succeeded ? 1 : 0, have_report ? report : "none");
     }
     // Returning false lets the OS default handler run afterwards (core/logcat
     // tombstone), which is desirable — we are additive, not a swallow.
@@ -113,6 +119,8 @@ bool DumpCallback(const google_breakpad::MinidumpDescriptor& descriptor,
 void Arm() {
     std::call_once(g_once, [] {
         DumpDirStorage() = ResolveDumpDir();
+        // The shared crash report's Quest platform, registered before any handler can reach it.
+        RegisterCrashReportPlatform();
         google_breakpad::MinidumpDescriptor descriptor(DumpDirStorage());
         // install_handler=true installs breakpad's 6 handlers:
         // SIGSEGV/SIGABRT/SIGBUS/SIGILL/SIGFPE/SIGTRAP.

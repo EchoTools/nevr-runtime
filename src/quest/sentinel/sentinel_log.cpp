@@ -1,5 +1,7 @@
 #include "sentinel_log.h"
 
+#include "core/crash_report.h"
+
 #include <android/log.h>
 
 #include <nlohmann/json.hpp>
@@ -195,6 +197,7 @@ void SetRenameForTest(RenameFn rename) { g_rename = rename; }
 unsigned OpenAttemptsForTest() { return g_openAttempts; }
 
 void EmitFixed(nevr_quest::LogLevel level, const char* literal) noexcept {
+  nevr_crash::RecordLogLine(literal, std::strlen(literal));
   __android_log_write(Priority(level), NEVR_TAG, literal);
 }
 
@@ -269,6 +272,8 @@ std::string FormatDiskLogLine(nevr_quest::LogLevel level, long long unixMs, cons
 }
 
 void Emit(nevr_quest::LogLevel level, const std::string& message) {
+  // The crash report (#1605) prints the last 50 sentinel lines; the ring is lock-free and allocation-free.
+  nevr_crash::RecordLogLine(message.data(), message.size());
   __android_log_write(Priority(level), NEVR_TAG, message.c_str());
 
   Lock lock;

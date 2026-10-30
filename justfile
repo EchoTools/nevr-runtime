@@ -1178,6 +1178,15 @@ test-quest-shared: _vcpkg-quest-host
         src/quest/tests/service_redirect_test.cpp \
         -o "$out/service_redirect_test"
     timeout -k 5 120 "$out/service_redirect_test"
+    # The shared crash report (#1605): what it prints, what it writes and in what order, with the platform seams faked.
+    # The same source builds into the PC runtime (nevr_core) and the Quest sentinel. The ELF reader is the Quest side's
+    # build id, read from a synthetic image.
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include \
+        src/core/crash_report.cpp src/quest/tests/crash_report_test.cpp -o "$out/crash_report_test"
+    timeout -k 5 120 "$out/crash_report_test"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include \
+        src/quest/sentinel/elf_build_id.cpp src/quest/tests/elf_build_id_test.cpp -o "$out/elf_build_id_test"
+    timeout -k 5 120 "$out/elf_build_id_test"
     # The codec, config and sentinel tests parse JSON with nlohmann::json. Use the header the build installed
     # from vcpkg.json for the mingw triplet the mingw-* presets build with, never a system package and
     # never whichever triplet sorts first. Only the nlohmann directory is exposed to the host compiler.
@@ -1225,7 +1234,7 @@ test-quest-shared: _vcpkg-quest-host
         -DNEVR_QUEST_FILES_DIR="\"$files\"" \
         src/quest/tests/sentinel_host_test.cpp \
         src/quest/sentinel/activation.cpp \
-        src/quest/sentinel/sentinel_log.cpp \
+        src/quest/sentinel/sentinel_log.cpp src/core/crash_report.cpp \
         src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp \
         src/runtime/lifecycle/service_redirect.cpp "$yaml_lib" \
         -o "$out/sentinel_host_test"
@@ -2217,7 +2226,7 @@ test-quest-plugins:
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/libr15_identity.cpp -o "$out/libr15_identity.o"
     loader=(src/quest/plugin/packaged_plugins.cpp src/quest/plugin/plugin_plan.cpp src/quest/plugin/plugin_image.cpp src/quest/plugin/plugin_loader.cpp
             src/quest/plugin/plugin_record_log.cpp src/quest/plugin/plugin_platform.cpp src/quest/data/sha256.cpp
-            src/quest/sentinel/hook_log.cpp src/quest/sentinel/sentinel_log.cpp
+            src/quest/sentinel/hook_log.cpp src/quest/sentinel/sentinel_log.cpp src/core/crash_report.cpp
             "$out/libr15_identity.o" src/quest/patch/libr15_patch_identity.cpp
             "$out/got_hook.o" "$out/hook_report.o" "$out/plugin_game_image.o" "$out/input_seam_hook.o")
     "${cxx[@]}" -pthread src/quest/tests/plugin_loader_test.cpp "${loader[@]}" \
