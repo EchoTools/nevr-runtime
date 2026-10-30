@@ -93,3 +93,5 @@ The engine's package manifest format, which a plugin does not need, is in `packa
 - Quest. The PC path is implemented; the Quest build has its own addresses and is a follow-up.
 - Multi-buffer resource types.
 - Texture mip streaming and archive loads of a plugin-carried name.
+- A package set, a resource read from a package file, and script DLLs: a plugin serves those itself
+  (`content-packs.md`).

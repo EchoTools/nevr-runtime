@@ -26,7 +26,9 @@
  *     message, the instance is followed from then on and the game's block is saved; if the prompt
  *     board holds a prompt (Mode::kPrompt), it is written over the block now.
  *   - CR15NetGame::Update (up to four times per game-loop iteration: CR15Game::UpdateGame passes
- *     its argument on): while the followed instance is still in "login
+ *     its argument on). Installed on every launch (InstallNetGameUpdate), where it also runs the frame dispatcher
+ *     (quest/invite/frame_dispatch.h) before the game's Update; the logic below runs only once Install() has
+ *     switched it on. While the followed instance is still in "login
  *     failed" and the board or the block has changed since the block was written (a prompt
  *     published after the failure, a new code, a notice in place of a prompt, the timed-out text,
  *     or withdrawn), the block is rewritten, or the game's saved block restored. A notice later
@@ -60,7 +62,7 @@
  *     "loading global". Skipping is a plain return.
  *
  * It logs on the game's call path only at a decision or a change, never per frame: the RETRY select
- * (login_prompt_select, once per notice), the fallback decision (login_prompt_fallback) and a change of the NetGame
+ * (login_prompt_select: once per notice, and once more when the fallback's login reaches "logged in"), the fallback decision (login_prompt_fallback) and a change of the NetGame
  * state (login_prompt_netgame_state). The page-enter line is on that path too, rate-limited to one per page symbol
  * per second. Its seventeen counters (hook_report.h), registered by RegisterCounters():
  *   login_prompt_text_shown         a login failure's message was replaced by the prompt
@@ -86,7 +88,7 @@
  *                                   the login could proceed: the game's own BeginLogIn (what RETRY runs) was
  *                                   called once for that notice, so the player need not select RETRY (#672)
  *   login_prompt_login_restart_unavailable  that call was due and BeginLogIn was not resolved
- *   login_prompt_select_sent        the RETRY select (SendRetrySelect) was sent for a notice's restart (#1391)
+ *   login_prompt_select_sent        the RETRY select (SendRetrySelect) was sent: for a notice's restart, or once more after its fallback login reached "logged in" (#1391)
  *
  * Integration surface. The sentinel's own entry.cpp installs the hooks, but nothing in it creates
  * QuestTokenAuth, so there the board stays empty and the game's text always passes through. A
@@ -125,17 +127,32 @@ inline constexpr int kCounterCount = 17;
 // line {"event":"login_prompt_counters","result":"refused",...}, when any was refused.
 bool RegisterCounters() noexcept;
 
-// Arms both handlers and installs both thunks in libr15.so. A refused install is logged by GotHook
-// and leaves that game call intact; one line {"event":"login_prompt_install",...} says what was
-// installed. Returns true only when both slots hold their thunks.
+// Arms the error and enable handlers and installs their thunks in libr15.so, and takes the Update slot through
+// InstallNetGameUpdate (idempotent). The Update handler's prompt logic is switched on once that slot holds its thunk.
+// A refused install is logged by GotHook and leaves that game call intact; one line
+// {"event":"login_prompt_install",...} says what was installed. Returns true only when all three slots hold their thunks.
 bool Install() noexcept;
 
 // Install() when `countersRegistered`; otherwise logs {"event":"login_prompt_install","result":
-// "skipped","why":"counters_refused"} and installs nothing. Returns whether both slots hold thunks.
+// "skipped","why":"counters_refused"} and installs nothing. Returns Install()'s result.
 bool InstallIfCounted(bool countersRegistered) noexcept;
 
-// Arms both handlers without touching a GOT slot: for the host test, which publishes originals
-// through the thunks' OriginalOut() and calls their EntryFn() directly.
+// The Update slot (CR15NetGame::Update, #966 S7): installed on every launch by InstallNetGameUpdate, whatever the
+// prompt is configured to do. Its handler runs the frame dispatcher (invite/frame_dispatch.h) and the game's Update;
+// the prompt's own logic runs only once Install() has installed the prompt (and after ArmForTest). Idempotent: a
+// second call returns the first result. Returns the GOT install's status (kOk when the slot holds the thunk).
+sentinel::GotStatus InstallNetGameUpdate() noexcept;
+
+// Arms the Update handler with the prompt's logic off, for the host test: the dispatcher and the original run, and
+// nothing else in the handler does.
+void ArmNetGameUpdateOnlyForTest() noexcept;
+
+// Test support: the Update slot's install as InstallNetGameUpdate() reads it. `tried` false forgets an earlier install,
+// so the next call makes one; `tried` true takes `status` as that install's result, with no GOT write.
+void SetNetGameUpdateInstallForTest(bool tried, sentinel::GotStatus status) noexcept;
+
+// Arms the three handlers and turns the prompt's Update logic on, without touching a GOT slot: for the host test,
+// which publishes originals through the thunks' OriginalOut() and calls their EntryFn() directly.
 void ArmForTest() noexcept;
 
 // Test support: whether the prompt latch is armed, and a reset of the latch and the awaiting flag (the
@@ -154,6 +171,9 @@ void SetRetryEventForTest(BeginLogInFn retry) noexcept;
 // the restart use SendRetrySelect itself, which ResolveSendEvent installs in production.
 void SetSendEventForTest(sentinel::pinned::SendComponentEventSig* send) noexcept;
 void UseRetrySelectForTest() noexcept;
+// Test support: runs the store ResolveSendEvent makes after it proves the send function, with `send` as the function, so a
+// restart uses the select after sign-in exactly as it does in production.
+void PublishSendEventForTest(sentinel::pinned::SendComponentEventSig* send) noexcept;
 // Test support: runs SendRetrySelect for `self` directly, so a test reaches each of its early returns (the hook never
 // passes a null `self`).
 void SendRetrySelectForTest(sentinel::pinned::CR15NetGameOpaque* self) noexcept;
@@ -173,6 +193,11 @@ struct Counts {
       logging_in_page_dropped, page_passed_armed, login_restarted, login_restart_unavailable, select_sent;
 };
 Counts CurrentCounts() noexcept;
+
+// Writes each of the seventeen counters' current value once, as one hook_counter line with why "exit" (#1391). The
+// process-end callback calls it (OnGameProcessEnd, the android_main_returned point). The reporter writes a counter only
+// when it changes, so without this a run that ends before the steady pass loses the final values.
+void FlushCountersAtExit() noexcept;
 
 // Whether `message` is exactly one of quest/game_login_failures.h's texts.
 bool IsLocalLoginFailure(const char* message) noexcept;

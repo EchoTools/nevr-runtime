@@ -1,6 +1,6 @@
 """ADR 0023, test 6: no installer in the tree carries a release hash, an artifact URL or a version of its own.
 
-Every installer takes what to install from the signed release manifest through `nevr-install` (installer/), so a
+Every installer takes what to install from the signed release manifest through `install-nevr-runtime` (installer/), so a
 64-hex digest, a host name that serves artifacts or a release version written into an installer script is a second
 source of truth that the manifest chain never checks.
 """
@@ -63,8 +63,8 @@ class InstallersUseTheCoreTest(unittest.TestCase):
                 self.assertIsNone(VERSION.search(line), f"{name}:{n} carries a version: {line.strip()}")
 
     def test_every_installer_calls_the_core(self):
-        want = {"tools/package-release/install.ps1": "nevr-install.exe", "tools/quest-install.sh": "nevr-install",
-                "tools/quest-install.ps1": "nevr-install.exe", "justfile:quest-install": "nevr-install"}
+        want = {"tools/package-release/install.ps1": "install-nevr-runtime.exe", "tools/quest-install.sh": "install-nevr-runtime",
+                "tools/quest-install.ps1": "install-nevr-runtime.exe", "justfile:quest-install": "install-nevr-runtime"}
         for name, text in sources().items():
             code = "\n".join(line for _, line in code_lines(text))
             self.assertTrue(want[name] in code, f"{name} does not call {want[name]}")

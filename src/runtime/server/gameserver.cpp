@@ -38,7 +38,9 @@
 #include "runtime/lifecycle/config.h"
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat / NevrCfgGetFlatCsv (N133 S4b: config.yaml reads)
 #include "runtime/compat/ws_bridge.h"
-#include "runtime/lifecycle/crash_recovery.h"
+#include "runtime/lifecycle/cli.h"             // g_isServer
+#include "runtime/lifecycle/crash_recovery.h"  // GameLoopThreadId
+#include "runtime/patch/server_bots_install.h"
 #include "runtime/hook/patching.h"
 #include "core/nevr_curl.h"
 #include "core/pch.h"
@@ -284,6 +286,12 @@ VOID GameServerLib::Update() {
   // is unregistered and about to exit; skip the rest of the frame rather than
   // process ServerDB traffic for a server that no longer exists.
   if (m_gameThreadHandoff.Service()) return;
+
+  // #1423: AI bots. The driver calls the game's add-bot request on the net game, so it runs here, between the game's
+  // own updates as the return to lobby above does, and on the game-loop thread only.
+  if (nevr_server_bots::DriverRuns(g_isServer != FALSE, GameLoopThreadId(), GetCurrentThreadId())) {
+    nevr_server_bots::OnServerUpdate();
+  }
 
   if (m_reconnectPending.exchange(false, std::memory_order_acq_rel) &&
       m_reconnectRegistrationEnabled.load(std::memory_order_acquire) &&

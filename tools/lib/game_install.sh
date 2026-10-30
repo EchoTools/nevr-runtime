@@ -61,6 +61,110 @@ acquire_game_run_lock() {
   fi
 }
 
+# block_host_browser: a test launch never opens a browser on the owner's desktop (#1447). Wine opens a URL by running the
+# `xdg-open` it finds on PATH (winebrowser; the registry's WineBrowser setting and $BROWSER are not consulted by the Wine in
+# use), so this puts stubs for xdg-open and xdg-email first on PATH for the launcher and the game it starts. Each stub
+# appends the address without its query (the device code is in the query) to <work root>/browser-stub/blocked.log and
+# opens nothing. Call it after the run lock is held: it rewrites the stubs. Sets BROWSER_BLOCK_LOG and changes PATH.
+block_host_browser() {
+  local dir="$NEVR_WORK_ROOT/browser-stub" name
+  work_dir "$dir" "Stubs for xdg-open and xdg-email that stand in for a host browser while a test launch runs (#1447); blocked.log is the record of each blocked open." \
+    "the stubs are rewritten by every launch; blocked.log is kept as the record of blocked opens." || return 1
+  for name in xdg-open xdg-email; do
+    cat > "$dir/$name" <<'STUB'
+#!/bin/bash
+# Installed by the nevr-runtime launchers (tools/lib/game_install.sh block_host_browser): a test never opens a browser.
+url=${1:-}
+printf '%s blocked %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${url%%[?#]*}" >> "$(dirname "$0")/blocked.log"
+exit 1
+STUB
+    chmod 755 "$dir/$name" || { echo "ERROR: cannot make $dir/$name executable" >&2; return 1; }
+  done
+  # shellcheck disable=SC2034 # read by the launcher that sources this file (its note names the record), not here
+  BROWSER_BLOCK_LOG="$dir/blocked.log"
+  export PATH="$dir:$PATH"
+}
+
+# creds_store_file <account>: where one test account's stored sign-in lives, $NEVR_WORK_ROOT/creds/<account>/.credentials.json.
+# The account is a plain name (letters, digits, _ . -, not starting with a dot), so it cannot name another path. Prints the
+# path; exits 2 for any other name.
+creds_store_file() {
+  local account=$1
+  [[ "$account" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$ ]] || {
+    echo "ERROR: an account name is letters, digits, _ . - (not starting with a dot): got '$account'" >&2; exit 2; }
+  printf '%s\n' "$NEVR_WORK_ROOT/creds/$account/.credentials.json"
+}
+
+# check_stored_sign_in <path> <account>: the stored sign-in must be a plain file that no one but its owner can read (mode
+# 0600 or tighter). Exits 3 and names the path and the reason, never the content. A missing file is the first run of an
+# account: the message says how to make it.
+check_stored_sign_in() {
+  local path=$1 account=$2 mode
+  if [[ ! -e "$path" && ! -L "$path" ]]; then
+    echo "ABORT: no cached credentials for $account: run once with --device-code and --save-creds $account (the sign-in is kept at $path)" >&2
+    exit 3
+  fi
+  if [[ -L "$path" || ! -f "$path" ]]; then
+    echo "ABORT: $path is not a plain file; a stored sign-in is one (AGENTS.md \"Client login test mechanics\")" >&2
+    exit 3
+  fi
+  mode=$(stat -c %a -- "$path") || { echo "ERROR: cannot read the mode of $path" >&2; exit 2; }
+  if (( 8#$mode & 077 )); then
+    echo "ABORT: $path is mode $(printf '%04o' "$((8#$mode))"); a stored sign-in must be 0600 (chmod 600 it)" >&2
+    exit 3
+  fi
+}
+
+# save_stored_sign_in <the runtime's sign-in file> <account's stored path>: keeps a new sign-in once, at mode 0600. The
+# file is made under a temporary name at that mode and given its final name with a hard link, which fails when the path
+# already exists, so a stored sign-in is never replaced. Prints the path, never the content.
+save_stored_sign_in() {
+  local from=$1 path=$2 tmp
+  if [[ ! -f "$from" || -L "$from" || ! -s "$from" ]]; then
+    echo "FAIL: the login wrote no sign-in file to $from; nothing was saved" >&2
+    exit 1
+  fi
+  # The sign-in directories hold credentials: made 0700 here, before work_dir's mkdir -p, which would take the umask (755).
+  install -d -m 700 -- "$(dirname "$(dirname "$path")")" && install -d -m 700 -- "$(dirname "$path")" \
+    || { echo "ERROR: cannot make the sign-in directory for $path" >&2; exit 1; }
+  work_dir "$(dirname "$path")" "Stored sign-ins of test accounts, one directory per account, each .credentials.json at mode 0600; a test client signs in with one (launch-client.sh --creds)." \
+    "by hand: an account's directory is removed when its account is retired; no script removes one." || exit 1
+  tmp="$path.new.$$"
+  (umask 077 && install -m 600 -- "$from" "$tmp") || { echo "ERROR: cannot write $tmp" >&2; rm -f -- "${tmp:?}"; exit 1; }
+  if ln -- "$tmp" "$path" 2>/dev/null; then
+    rm -f -- "${tmp:?}"
+    echo "=== sign-in saved for later runs: $path (mode 0600) ==="
+  else
+    rm -f -- "${tmp:?}"
+    echo "FAIL: $path already exists; a stored sign-in is not replaced" >&2
+    exit 1
+  fi
+}
+
+# save_back_stored_sign_in <the run's sign-in file in the nevr root> <the account's stored path> <where to keep a refreshed
+# sign-in if the save fails>: a runtime that refreshes its token replaces the link to the store with a regular file, and
+# the store keeps the old token (#1469). A regular file that differs from the store is copied over it: a temporary name in
+# the store's folder, mode 0600, then mv over the stored file. A link (nothing refreshed) or an identical file writes
+# nothing. When the save fails the stored file is unchanged and the refreshed file is moved to the keep path (the run's
+# copy is removed by the caller, so this keeps it); returns 1 and names both paths, never the content.
+save_back_stored_sign_in() {
+  local live=$1 path=$2 keep=$3 tmp
+  if [[ -L "$live" || ! -f "$live" ]]; then return 0; fi
+  if cmp -s -- "$live" "$path"; then return 0; fi
+  tmp="$path.saveback.$$"
+  if (umask 077 && cp -- "$live" "$tmp") && chmod 600 -- "$tmp" && mv -f -- "$tmp" "$path"; then
+    echo "=== refreshed sign-in saved back to the store: $path (mode 0600) ==="
+    return 0
+  fi
+  rm -f -- "$tmp"
+  if mv -f -- "$live" "$keep" && chmod 600 -- "$keep"; then
+    echo "ERROR: could not save the refreshed sign-in back to $path; the stored sign-in is unchanged; the refreshed one is kept at $keep" >&2
+  else
+    echo "ERROR: could not save the refreshed sign-in back to $path, and could not keep it at $keep; the refreshed sign-in is lost" >&2
+  fi
+  return 1
+}
+
 # host_stop_cause <the nevr root's logs folder> <the run's start, unix seconds>: when the host stopped the game
 # (nevr-runtime.dll absent or refused), the runtime never ran and wrote no game log; the host's own record says why.
 # Prints one line and returns 0, or prints nothing and returns 3 when the record holds no stop since then (#1122).

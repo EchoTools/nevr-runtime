@@ -6,11 +6,15 @@
  * in front of the pointer. So a buffer from VirtualAlloc, HeapAlloc or the DLL's own heap must never reach a block: the
  * game would free it into its Resource heap.
  *
- * This header is the one way a replacement reaches the game: CopyIntoGameHeap allocates through the same allocator,
+ * This header holds the two ways a replacement reaches the game. CopyIntoGameHeap allocates through the same allocator,
  * slot +0x28 (FUN_1400cdee0(allocator, alignment, size), CElephantAllocator::vslot[5]; the game's own reader allocates
  * the buffer it reads through that slot, SetupReadBuffer 0x141524952), and copies the bytes in. The caller keeps its own
  * bytes and writes the block only when the copy exists in full. The game's original buffer is left alone (the reader may
  * own it), so one buffer per replaced load stays allocated.
+ *
+ * WriteInPlace (#1421) writes over the buffer the game's reader already allocated, when the bytes fit it: no allocation,
+ * and the buffer the game frees is still its own. It serves a texture's payload (buffer 1), which is up to 78 MB, where a
+ * game-heap copy would keep a second payload-sized buffer per load.
  *
  * Pure: raw loads and calls through a table the caller names, so a host test drives it with a fake allocator
  * (src/runtime/tests/test_resource_override.cpp). The Quest twin is src/quest/sentinel/menu_cards_swap.h, which
@@ -34,6 +38,9 @@ inline constexpr uintptr_t kMemoryContextRva = 0x2098f38;
 /// read buffer came from and the alignment it was asked with (SetupReadBuffer 0x141524910 writes both before it allocates).
 inline constexpr size_t kBlockAllocator = 0x28;
 inline constexpr size_t kBlockAlignment = 0x30;
+/// The buffer the game's reader filled and its size (AsyncResourceIOCallback 0x140fa16d0 stores both in the resource).
+inline constexpr size_t kBlockBuffer = 0x18;
+inline constexpr size_t kBlockSize = 0x20;
 /// The allocator rounds anything under this up (0x1400cdf3c).
 inline constexpr uint64_t kMinAlignment = 16;
 
@@ -95,6 +102,39 @@ inline Copy CopyIntoGameHeap(void* const* contextSlot, const unsigned char* bloc
     std::memcpy(copy, bytes, static_cast<size_t>(size));
     *out = copy;
     return Copy::Copied;
+}
+
+enum class InPlace {
+    Written,
+    NoBytes,       // nothing to write
+    NoGameBuffer,  // the block holds no buffer
+    TooLarge,      // the bytes are larger than the buffer the game's reader allocated
+};
+
+inline const char* InPlaceName(InPlace r) {
+    switch (r) {
+        case InPlace::Written: return "written";
+        case InPlace::NoBytes: return "no_bytes";
+        case InPlace::NoGameBuffer: return "no_game_buffer";
+        case InPlace::TooLarge: return "larger_than_the_game_buffer";
+    }
+    return "unknown";
+}
+
+/// Writes `bytes` over the buffer the block `block` holds and sets the block's size to `size`, when `size` is at most
+/// the size the block holds: the buffer stays the one the game's reader allocated. On any other result the block and
+/// its buffer are left alone.
+inline InPlace WriteInPlace(unsigned char* block, const void* bytes, uint64_t size) {
+    if (bytes == nullptr || size == 0) return InPlace::NoBytes;
+    void* buffer = nullptr;
+    uint64_t held = 0;
+    std::memcpy(&buffer, block + kBlockBuffer, sizeof(buffer));
+    std::memcpy(&held, block + kBlockSize, sizeof(held));
+    if (buffer == nullptr) return InPlace::NoGameBuffer;
+    if (size > held) return InPlace::TooLarge;
+    std::memcpy(buffer, bytes, static_cast<size_t>(size));
+    std::memcpy(block + kBlockSize, &size, sizeof(size));
+    return InPlace::Written;
 }
 
 }  // namespace nevr_game_buffer

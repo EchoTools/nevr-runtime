@@ -11,7 +11,7 @@ name = "nevr_install"
 crate-type = ["rlib", "cdylib", "staticlib"]
 
 [[bin]]
-name = "nevr-install"
+name = "install-nevr-runtime"
 path = "src/main.rs"
 
 [dependencies]

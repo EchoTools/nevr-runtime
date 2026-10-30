@@ -38,6 +38,7 @@
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat / NevrCfgGetFlatCsv (N133 S4b: config.yaml reads)
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/lifecycle/crash_recovery.h"
+#include "runtime/patch/server_bots_install.h"
 #include "runtime/hook/patching.h"
 #include "core/nevr_curl.h"
 #include "core/pch.h"
@@ -795,7 +796,11 @@ void GameServerLib::RegisterTcpCallbacks() {
       // message does. Once we move to nevr-server-rs with a proper protobuf protocol,
       // this passthrough goes away — the protobuf should carry everything.
       auto* broadcaster = GetContext().GetBroadcaster();
+      // #1423: a session start with no broadcaster is not forwarded, so it must not keep the last one's bots flag.
+      nevr_server_bots::ForgetSession();
       if (broadcaster) {
+        // #1423: with bots armed, the settings get numteams and players_per_team, which bot team placement reads.
+        nevr_server_bots::SessionSettings(&data, &size);
         EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyStartSessionV4,
                                              "SNSLobbyStartSessionv4", data, size);
         Log(EchoVR::LogLevel::Info,

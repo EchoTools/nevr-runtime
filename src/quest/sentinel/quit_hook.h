@@ -17,7 +17,11 @@
  *
  * Log lines:
  *   install {"event":"quit_install","result":"installed|refused","status":...,"slot":...,"finisher":"found|missing"}
- *   call    {"event":"quit","action":"finish_activity|game_system_ui","reason":"no_activity|no_finisher"}
+ *   call    {"event":"quit","action":"finish_activity|game_system_ui","reason":"no_activity|no_finisher" (game_system_ui only),
+ *            "os_build":<ro.build.display.id>,"os_incremental":<ro.build.version.incremental>,"vr_type":1,
+ *            "vr_type_source":"pinned_constant","calls":<QUITs this run, both paths>}
+ *   One line per QUIT, so the rate is the count of lines. vr_type is the constant libr15 passes (not read at run time);
+ *   nothing in this line says what the OS does with the type (#1276).
  * The call line is written before the activity is finished or the game's function runs, never while game code is on
  * the stack above the handler (callback_thunk.h rule 1).
  *

@@ -53,6 +53,9 @@ class Transport {
  public:
   virtual ~Transport() = default;
   virtual HttpAnswer Post(std::string_view rpc, std::string_view body, std::string_view bearer) = 0;
+  /// Called from any thread at shutdown: a Post in flight returns at once, and a later Post sends nothing. The default has
+  /// nothing to abort.
+  virtual void Abort() {}
 };
 
 struct Answer {

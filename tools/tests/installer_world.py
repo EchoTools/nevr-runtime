@@ -32,10 +32,10 @@ def core_binary() -> pathlib.Path:
         return _CORE[0]
     target = pathlib.Path(os.environ.get("CARGO_TARGET_DIR") or REPO / "installer/target")
     built = subprocess.run(["cargo", "build", "--locked", "--manifest-path", str(REPO / "installer/Cargo.toml"),
-                            "--bin", "nevr-install"], capture_output=True, text=True, timeout=1500)
+                            "--bin", "install-nevr-runtime"], capture_output=True, text=True, timeout=1500)
     if built.returncode != 0:
         raise RuntimeError("cargo build of installer/ failed:\n" + built.stderr[-2000:])
-    _CORE.append(target / "debug/nevr-install")
+    _CORE.append(target / "debug/install-nevr-runtime")
     return _CORE[0]
 
 

@@ -568,3 +568,17 @@ TEST(StableStringPoolAccessors, EveryCAccessorContainsStdExceptionWithRedactedDi
         ::testing::ExitedWithCode(1), expected);
   }
 }
+
+// #1156, ADR 0017: boot reads network.invite_codes through NevrCfgGetFlatIsStructured as well as NevrCfgGetFlat, so a list
+// written under the key reaches the switch as structured (off, the config's), not as the absent key (on, the default).
+TEST(InviteCodesAccessor, AListUnderTheKeyIsStructuredAndAnAbsentKeyIsNot) {
+  const nevr::NevrConfig listed = nevr::NevrConfig::LoadFromString("network:\n  invite_codes: [false]\n");
+  ResetAccessorInputs();
+  SetAccessorInputs(&listed, &NoDefaults(), false);
+  EXPECT_TRUE(NevrCfgGetFlatIsStructured("nevr_invite_codes"));
+  EXPECT_EQ(NevrCfgGetFlat("nevr_invite_codes"), nullptr);  // the scalar read sees no value, which is why the shape is asked too
+  SetEmptyInputs();
+  EXPECT_FALSE(NevrCfgGetFlatIsStructured("nevr_invite_codes"));
+  EXPECT_FALSE(NevrCfgGetFlatIsStructured(nullptr));
+  ResetAccessorInputs();
+}

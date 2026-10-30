@@ -34,7 +34,8 @@ Mia's installer extracts has the same version folder and manifest id (`593240804
 for. The t5 manifest line above came from our own hidden-data test. What differs is where the data sits: the Quest installer at
 quest.echovr.de (Mia / Crafter-1's Quest-EchoVR-Installer) extracts to
 `/storage/emulated/0/Android/media/com.readyatdawn.r15/files`, and builds before #755 look only at `/sdcard/readyatdawn`; #755
-resolves `Android/media` first (`data_root.h`). Not measured: whether `Android/media/<pkg>` survives uninstalling the store app
+resolves `Android/media` first (`data_root.h`). `adb shell pm clear com.readyatdawn.r15` deletes `Android/media/<pkg>/files` with its `_data` (seen on a Quest 3: about 937 MB gone), as well as
+`Android/data/<pkg>`; `/sdcard/readyatdawn` survives it. Not measured: whether `Android/media/<pkg>` survives uninstalling the store app
 (measurement 5). The `adb shell ls` of both roots on an affected headset still separates this cause from a missing `_data`.
 
 ## What can run before the game reads its data

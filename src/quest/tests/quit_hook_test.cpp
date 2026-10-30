@@ -7,8 +7,11 @@
 
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <vector>
 
 #include "android_glue_layout.h"
+#include "hook_log.h"
 #include "quest/tests/test_check.h"
 #include "quit_hook.h"
 
@@ -110,6 +113,56 @@ void WithNoFinisherTheGameKeepsItsQuit() {
   QCHECK(quit::CurrentCounts().game_ui == 1);
 }
 
+// Every QUIT writes one "quit" line before anything else runs: the action taken, the type libr15 sends (the pinned
+// constant, the only type a CVR::ShowSystemUI call has), the Horizon OS build and the call count (#1276).
+std::vector<std::string> g_lines;
+void CaptureLine(sentinel::LogLevel /*level*/, const char* line) { g_lines.emplace_back(line); }
+
+const std::string* QuitLine(const char* action) {
+  for (const std::string& line : g_lines) {
+    if (line.find("\"event\":\"quit\"") != std::string::npos &&
+        line.find(std::string("\"action\":\"") + action + "\"") != std::string::npos) {
+      return &line;
+    }
+  }
+  return nullptr;
+}
+
+void EveryQuitLogsItsTypeOsAndCount() {
+  Reset();
+  g_lines.clear();
+  sentinel::SetLogSink(&CaptureLine);
+  quit::ArmForTest(&StandInFinish, &App);
+  Entry()();
+  Entry()();
+  quit::ArmForTest(&StandInFinish, &NoApp);  // no app: the game's own call, logged with the same fields
+  Entry()();
+  sentinel::SetLogSink(nullptr);
+  const std::string* game = QuitLine("game_system_ui");
+  QCHECK(game != nullptr);
+  if (game != nullptr) {
+    QCHECK(game->find("\"vr_type\":1") != std::string::npos);
+    QCHECK(game->find("\"vr_type_source\":\"pinned_constant\"") != std::string::npos);
+    QCHECK(game->find("\"os_build\":\"") != std::string::npos);
+    QCHECK(game->find("\"os_incremental\":\"") != std::string::npos);
+    QCHECK(game->find("\"calls\":3") != std::string::npos);
+  }
+  const std::string* first = QuitLine("finish_activity");
+  QCHECK(first != nullptr);
+  if (first != nullptr) {
+    QCHECK(first->find("\"vr_type\":1") != std::string::npos);
+    QCHECK(first->find("\"vr_type_source\":\"pinned_constant\"") != std::string::npos);
+    QCHECK(first->find("\"os_build\":\"") != std::string::npos);
+    QCHECK(first->find("\"os_incremental\":\"") != std::string::npos);
+    QCHECK(first->find("\"calls\":1") != std::string::npos);
+  }
+  const std::string* second = nullptr;
+  for (const std::string& line : g_lines) {
+    if (line.find("\"calls\":2") != std::string::npos) second = &line;
+  }
+  QCHECK(second != nullptr);  // the second QUIT's line carries the second count
+}
+
 }  // namespace
 
 int main() {
@@ -118,6 +171,7 @@ int main() {
   WithNoAppTheGameKeepsItsQuit();
   WithNoActivityTheGameKeepsItsQuit();
   WithNoFinisherTheGameKeepsItsQuit();
+  EveryQuitLogsItsTypeOsAndCount();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "quit_hook_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
