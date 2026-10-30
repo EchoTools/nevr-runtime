@@ -6,8 +6,12 @@ file, and the recipe refuses unless their sha256 agree. This test reads the just
 here: it needs the signing key, the store APK and a release).
 """
 
+import hashlib
+import os
 import pathlib
 import re
+import subprocess
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -15,25 +19,27 @@ JUSTFILE = (ROOT / "justfile").read_text()
 
 
 def recipe(name):
-    m = re.search(rf"^{re.escape(name)}\b[^\n]*:\n((?:[ \t]+[^\n]*\n|\n)*)", JUSTFILE, re.M)
+    m = re.search(rf"^{re.escape(name)}\b[^\n]*:[^\n]*\n((?:[ \t]+[^\n]*\n|\n)*)", JUSTFILE, re.M)
     if not m:
         raise AssertionError(f"justfile has no recipe {name}")
     return m.group(0)
 
 
 class ReleaseQuestApk(unittest.TestCase):
+    """The body of `release-quest-apk` is the private recipe `_release-quest-apk`, which `release-quest-variant-apk` runs too."""
+
     def test_the_release_recipe_exists_and_refuses_a_non_release_tag(self):
-        body = recipe("release-quest-apk")
-        self.assertIn("release-quest-apk tag", body.splitlines()[0])
+        self.assertIn("release-quest-apk tag", recipe("release-quest-apk").splitlines()[0])
+        body = recipe("_release-quest-apk")
         self.assertIn(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$", body)
 
     def test_it_compiles_nothing(self):
-        body = recipe("release-quest-apk")
+        body = recipe("_release-quest-apk")
         for forbidden in ("_quest-apk", "cmake", "GITHUB_ACTIONS", "build-android", "android-dev"):
             self.assertNotIn(forbidden, body)
 
     def test_it_packages_the_release_asset_and_refuses_unless_the_apk_carries_it(self):
-        body = recipe("release-quest-apk")
+        body = recipe("_release-quest-apk")
         fetch = body.index("tools/quest_release_loader.py fetch --tag")
         identity = body.index("tools/package_release.py quest-library")
         repack = body.index("just android-repack-apk")
@@ -61,6 +67,180 @@ class ReleaseQuestApk(unittest.TestCase):
     def test_package_dev_and_the_release_share_one_quest_build(self):
         self.assertIn('just _quest-apk "{{ store_apk }}"', recipe("package-dev"))
         self.assertNotIn("just android-repack-apk", recipe("package-dev"))
+
+
+SHA = lambda data: hashlib.sha256(data).hexdigest()  # noqa: E731
+
+# Stand-ins for the tools the release recipes call, which need the signing key, the store APK and a release. Each records
+# its arguments in $CALLS.
+STUB_PREFLIGHT = """#!/usr/bin/env python3
+import os, sys
+open(os.environ["CALLS"], "a").write("preflight " + " ".join(sys.argv[1:]) + "\\n")
+"""
+STUB_KEYSTORE = """#!/bin/sh
+echo "keystore $*" >> "$CALLS"
+"""
+STUB_LOADER = """import hashlib, os, pathlib, sys
+a = sys.argv[1:]
+open(os.environ["CALLS"], "a").write("loader " + " ".join(a) + "\\n")
+if a[0] == "fetch":
+    out = pathlib.Path(a[a.index("--out") + 1]); out.mkdir(parents=True, exist_ok=True)
+    data = b"loader asset of " + a[a.index("--tag") + 1].encode()
+    (out / "libovrplatformloader.so").write_bytes(data)
+    print(hashlib.sha256(data).hexdigest())
+elif a[0] == "verify-apk":
+    sys.exit(0 if a[a.index("--sha256") + 1] == hashlib.sha256(b"loader asset of v1.2.3").hexdigest() else 1)
+"""
+STUB_PACKAGE = """import os, sys
+open(os.environ["CALLS"], "a").write("package " + " ".join(sys.argv[1:]) + "\\n")
+"""
+# The repack recipe with the same parameters as the real one, writing a "signed APK" that shows what it was given.
+STUB_REPACK = """android-repack-apk apk shim="s" workdir="w" plugin="" version="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{ workdir }}"
+    echo "repack apk={{ apk }} shim={{ shim }} workdir={{ workdir }} plugin={{ plugin }} version={{ version }}" >> "$CALLS"
+    printf 'signed plugin=[%s] version=%s' "{{ plugin }}" "{{ version }}" > "{{ workdir }}/r15_nevr-sentinel_signed.apk"
+"""
+PLUGINS = "/priv/libq15t.so:/priv/libq15t_early.so"
+
+
+class RecipesRun(unittest.TestCase):
+    """The recipe texts as they are in the justfile, run by `just` in a throwaway repository with stand-ins for the tools
+    that need the signing key and a release."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = pathlib.Path(self.tmp.name) / "repo"
+        (self.dir / "tools").mkdir(parents=True)
+        self.calls = pathlib.Path(self.tmp.name) / "calls.log"
+        self.store = pathlib.Path(self.tmp.name) / "store.apk"
+        self.store.write_bytes(b"store")
+        texts = [recipe(name) for name in ("release-quest-apk", "release-quest-variant-apk", "_release-quest-apk")]
+        (self.dir / "justfile").write_text("\n".join(texts) + "\n" + STUB_REPACK, encoding="utf-8")
+        for name, text in (("release_preflight.py", STUB_PREFLIGHT), ("quest_release_loader.py", STUB_LOADER),
+                           ("package_release.py", STUB_PACKAGE)):
+            (self.dir / "tools" / name).write_text(text)
+        keystore = self.dir / "tools" / "quest_keystore.sh"
+        keystore.write_text(STUB_KEYSTORE)
+        for executable in (keystore, self.dir / "tools" / "release_preflight.py"):  # the recipe runs these two directly
+            executable.chmod(0o755)
+        git = ["git", "-C", str(self.dir), "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+               "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"]
+        for argv in (["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "x"], ["tag", "v1.2.3"]):
+            subprocess.run([*git, *argv], check=True, capture_output=True)
+        self.head = subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+
+    def just(self, *args):
+        env = {**os.environ, "CALLS": str(self.calls)}
+        return subprocess.run(["just", *args], cwd=self.dir, capture_output=True, text=True, env=env)
+
+    def calls_made(self):
+        return self.calls.read_text().splitlines() if self.calls.exists() else []
+
+    def release(self):
+        return self.just("release-quest-apk", "v1.2.3", str(self.store))
+
+    def variant(self, tag="v1.2.3", plugins=PLUGINS):
+        return self.just("release-quest-variant-apk", tag, plugins, str(self.store))
+
+    def test_the_release_recipe_writes_the_same_files_and_says_the_same_as_before(self):
+        result = self.release()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = self.dir / "build" / "quest-release" / "v1.2.3"
+        name = "nevr-runtime-v1.2.3-quest.apk"
+        apk = (out / name).read_bytes()
+        self.assertEqual(apk, b"signed plugin=[] version=1.2.3", "the release APK carries no plugin")
+        self.assertEqual((out / f"{name}.sha256").read_text(), f"{SHA(apk)}  {name}\n")
+        self.assertEqual(result.stdout, f"{SHA(apk)}  {name}\n")
+        loader_sha = SHA(b"loader asset of v1.2.3")
+        self.assertEqual(result.stderr, (
+            f"release-quest-apk: packaging the v1.2.3 loader asset at {self.head[:7]}\n"
+            f"release-quest-apk: build/quest-release/v1.2.3/{name} is v1.2.3 at {self.head[:7]}, with the release's loader "
+            f"(sha256 {loader_sha}). It is NOT a release asset: publish it outside GitHub (RELEASING.md).\n"))
+        self.assertEqual(self.calls_made(), [
+            "preflight --tag v1.2.3", "keystore check",
+            "loader fetch --tag v1.2.3 --out build/quest-release/v1.2.3/loader",
+            "package quest-library --lib build/quest-release/v1.2.3/loader/libovrplatformloader.so --version 1.2.3 "
+            f"--commit {self.head}",
+            f"repack apk={self.store} shim=build/quest-release/v1.2.3/loader/libovrplatformloader.so "
+            "workdir=build/quest-release/v1.2.3/repack plugin= version=1.2.3",
+            f"loader verify-apk --apk build/quest-release/v1.2.3/repack/r15_nevr-sentinel_signed.apk --sha256 {loader_sha}"])
+
+    def test_the_release_recipe_still_refuses_a_non_release_tag_in_its_own_name(self):
+        result = self.just("release-quest-apk", "v1.2", str(self.store))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("release-quest-apk: not a release tag (vX.Y.Z): v1.2\n", result.stderr)
+        self.assertEqual(self.calls_made(), [])
+
+    def test_the_variant_recipe_writes_its_apk_and_sidecar_under_the_release_build_directory(self):
+        result = self.variant()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = self.dir / "build" / "quest-release" / "v1.2.3" / "variant"
+        name = "nevr-runtime-v1.2.3-q15t-quest.apk"
+        apk = (out / name).read_bytes()
+        self.assertEqual((out / f"{name}.sha256").read_text(), f"{SHA(apk)}  {name}\n", "sha256sum format, of that name")
+        self.assertEqual(result.stdout, f"{SHA(apk)}  {name}\n")
+        self.assertEqual(sorted(p.name for p in out.iterdir()), sorted([name, f"{name}.sha256", "loader", "repack"]))
+        self.assertFalse((self.dir / "build" / "quest-release" / "v1.2.3" / "nevr-runtime-v1.2.3-quest.apk").exists())
+
+    def test_the_variant_recipe_passes_the_libraries_colon_separated_to_the_repack_and_the_release_version(self):
+        self.assertEqual(self.variant().returncode, 0)
+        repack = [c for c in self.calls_made() if c.startswith("repack ")]
+        self.assertEqual(repack, [f"repack apk={self.store} shim=build/quest-release/v1.2.3/variant/loader/"
+                                  "libovrplatformloader.so workdir=build/quest-release/v1.2.3/variant/repack "
+                                  f"plugin={PLUGINS} version=1.2.3"])
+        apk = (self.dir / "build/quest-release/v1.2.3/variant/nevr-runtime-v1.2.3-q15t-quest.apk").read_bytes()
+        self.assertEqual(apk, f"signed plugin=[{PLUGINS}] version=1.2.3".encode())
+
+    def test_the_variants_loader_is_the_releases_asset_and_the_apk_is_checked_against_it(self):
+        self.assertEqual(self.variant().returncode, 0)
+        calls = self.calls_made()
+        loader_sha = SHA(b"loader asset of v1.2.3")
+        self.assertIn("preflight --tag v1.2.3", calls)
+        self.assertIn("keystore check", calls)
+        self.assertIn("loader fetch --tag v1.2.3 --out build/quest-release/v1.2.3/variant/loader", calls)
+        self.assertIn("loader verify-apk --apk build/quest-release/v1.2.3/variant/repack/r15_nevr-sentinel_signed.apk "
+                      f"--sha256 {loader_sha}", calls)
+        self.assertLess([i for i, c in enumerate(calls) if c.startswith("loader fetch")][0],
+                        [i for i, c in enumerate(calls) if c.startswith("repack")][0])
+        self.assertLess([i for i, c in enumerate(calls) if c.startswith("repack")][0],
+                        [i for i, c in enumerate(calls) if c.startswith("loader verify-apk")][0])
+
+    def test_the_variant_recipe_leaves_the_release_apk_where_it_is(self):
+        self.assertEqual(self.release().returncode, 0)
+        main = self.dir / "build/quest-release/v1.2.3/nevr-runtime-v1.2.3-quest.apk"
+        before = main.read_bytes()
+        self.assertEqual(self.variant().returncode, 0)
+        self.assertEqual(main.read_bytes(), before)
+        self.assertTrue((main.parent / f"{main.name}.sha256").exists())
+
+    def test_the_variant_recipe_refuses_a_non_release_tag_and_missing_libraries_in_its_own_name(self):
+        for tag, plugins, want in (("v1.2", PLUGINS, "release-quest-variant-apk: not a release tag (vX.Y.Z): v1.2"),
+                                   ("v1.2.3", "", "release-quest-variant-apk: ")):
+            with self.subTest(tag=tag, plugins=plugins):
+                result = self.variant(tag, plugins)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(want, result.stderr)
+                self.assertNotIn("repack ", "\n".join(self.calls_made()))
+
+    def test_the_release_apk_never_carries_a_plugin(self):
+        result = self.just("_release-quest-apk", "release-quest-apk", "v1.2.3", str(self.store), PLUGINS, "")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("repack ", "\n".join(self.calls_made()))
+
+
+class RecipeText(unittest.TestCase):
+    def test_the_variant_recipe_sits_beside_the_release_recipe_and_takes_a_tag_and_the_plugins(self):
+        self.assertIn("release-quest-variant-apk tag plugins", recipe("release-quest-variant-apk").splitlines()[0])
+        self.assertLess(JUSTFILE.index("\nrelease-quest-apk "), JUSTFILE.index("\nrelease-quest-variant-apk "))
+
+    def test_both_release_recipes_run_the_one_shared_body(self):
+        self.assertIn('_release-quest-apk "release-quest-apk" tag store_apk "" ""', recipe("release-quest-apk"))
+        self.assertIn('_release-quest-apk "release-quest-variant-apk" tag store_apk plugins "q15t"',
+                      recipe("release-quest-variant-apk"))
+        self.assertNotIn("android-repack-apk", recipe("release-quest-variant-apk"))
 
 
 if __name__ == "__main__":
