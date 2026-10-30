@@ -737,7 +737,7 @@ constexpr uintptr_t GET_TIME_OVERRIDE_VALUE = 0x209CB00;
 
 // ============================================================================
 // #954 frame-time probe (runtime/frame/frame_stats.h)
-// =====================================================================// ============================================================================
+// ============================================================================
 
 /// Address: the instruction after CncaGame::RunMainLoop's call to GetTimeMicroseconds (0x14050bd4c).
 /// RunMainLoop (0x14050bd00) loops back to its CALL at 0x14050bd47 (JZ 0x14050bd47 at 0x14050bf62), so a
@@ -754,7 +754,8 @@ constexpr uintptr_t FRAME_LOOP_HEAD_RETURN = 0x50BD4C;
 /// ovrPerfStats* out); a result below 0 is a failure (OVR_SUCCESS(r) is r >= 0).
 /// Keep-current: revault fn callers 0x1413662e0 --binary echovr.exe
 constexpr uintptr_t OVR_GET_PERF_STATS = 0x13662E0;
-=======
+
+// ============================================================================
 // Server Bots (nevr_server_bots, #1423)
 // ============================================================================
 

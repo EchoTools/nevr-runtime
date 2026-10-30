@@ -1,5 +1,5 @@
 /* The Texture Resolution control in the game's own settings menu (#1012), the pure half: the two JSON documents the game
- * reads its settings menu from, rewritten in memory, and the saved value read back.
+ * reads its settings menu from, rewritten in memory, and the player's saved choice read back.
  *
  * The design is marshmallow-mia's (EchoTools/echoApkPatch, tools/patch_menu_json.py); only facts are taken from it.
  *
@@ -28,6 +28,7 @@
  */
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 
@@ -60,8 +61,16 @@ Result RewriteMenuSettings(std::string_view text, int defaultIndex);
 // gamesettings_config.json -> the entries that hide the control and its page removed.
 Result RewriteGameSettings(std::string_view text);
 
-// The value of the first `"msaa"` key in a settings_mp_v2_quest.json text (the saved Texture Resolution), clamped to the menu's
-// range, or -1 when there is none or it is not a whole number. Allocation-free: it runs on the game's first eye-size query.
-int SavedMenuIndex(const char* text, std::size_t size) noexcept;
+// The player's choice, kept in a file of our own beside the game's settings (RAD/LoneEcho/ under the game's local app data
+// directory). The game's own saved slot (`msaa` in settings_mp_v2_quest.json) cannot say whether the player chose: a settings file
+// that never held the setting reads 0, which is the Very Low entry. The marker exists only after the player changed the control.
+inline constexpr char kMarkerFile[] = "nevr_texture_quality.json";
+
+// The text the marker file holds for a menu index (clamped to the menu's range): {"menu_index":N}.
+std::string MarkerText(int menuIndex) noexcept;
+
+// The value of the first `"menu_index"` key in a marker file's text, clamped to the menu's range, or -1 when there is none or it is
+// not a whole number. Allocation-free: it runs on the game's first eye-size query.
+int MarkedMenuIndex(const char* text, std::size_t size) noexcept;
 
 }  // namespace nevr_quest::texture_menu

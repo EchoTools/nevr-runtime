@@ -143,9 +143,16 @@ Result RewriteGameSettings(std::string_view text) {
   return result;
 }
 
-int SavedMenuIndex(const char* text, std::size_t size) noexcept {
+std::string MarkerText(int menuIndex) noexcept {
+  const int last = nevr_quest::texture_quality::kMenuLevelCount - 1;
+  Json doc = Json::object();
+  doc["menu_index"] = menuIndex < 0 ? 0 : (menuIndex > last ? last : menuIndex);
+  return Dump(doc);
+}
+
+int MarkedMenuIndex(const char* text, std::size_t size) noexcept {
   if (text == nullptr) return -1;
-  constexpr char kKey[] = "\"msaa\"";
+  constexpr char kKey[] = "\"menu_index\"";
   constexpr std::size_t kKeyLength = sizeof(kKey) - 1;
   std::size_t at = 0;
   for (; at + kKeyLength <= size; ++at) {
