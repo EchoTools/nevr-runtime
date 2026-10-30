@@ -5,7 +5,9 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdio>
 
+#include "runtime/compat/lobby_frame.h"
 #include "runtime/compat/lobby_join_state.h"
 #include "runtime/patch/party_follow_dedup_rules.h"
 
@@ -15,7 +17,10 @@ using nevr_lobby_join_state::LobbyJoinState;
 using nevr_lobby_join_state::Stamp;
 using nevr_party_follow_dedup::Decide;
 using nevr_party_follow_dedup::kFollowDedupWindowMs;
+using nevr_party_follow_dedup::NoteNoSkip;
+using nevr_party_follow_dedup::NoteSkip;
 using nevr_party_follow_dedup::Skip;
+using nevr_party_follow_dedup::SkipLogState;
 
 using Guid = std::array<uint8_t, 16>;
 
@@ -190,4 +195,94 @@ TEST(PartyFollowDedupDecide, AStampFromTheFutureIsTreatedAsAgeZero) {
   const auto verdict = Decide(kX, future, nilStamp, 1000);
   EXPECT_EQ(verdict.skip, Skip::AlreadyIn);
   EXPECT_EQ(verdict.ageMs, 0u);
+}
+
+// The leader's GUID comes from the game's own text parse (the JSON "lobbyid" path of GetPartyLobbyId, 0x14017c6a0), which
+// scans the text with "%08X-%04hX-%04hX-%02hhX%02hhX-%02hhX...". The lobby on the wire is the SUuid copied byte for byte
+// (RequestJoinSession, 0x140612600). Both must be the Windows binary GUID layout for the skip to match (#1413).
+Guid ParseGameGuidText(const char* text) {
+  unsigned int d1 = 0, d2 = 0, d3 = 0;
+  unsigned int d4[8] = {};
+  const int n = std::sscanf(text, "%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X", &d1, &d2, &d3, &d4[0], &d4[1],
+                            &d4[2], &d4[3], &d4[4], &d4[5], &d4[6], &d4[7]);
+  EXPECT_EQ(n, 11);
+  // The game's struct is native (x86, little endian): Data1, Data2, Data3 little endian, Data4 as bytes.
+  std::array<uint8_t, 16> out{};
+  out[0] = static_cast<uint8_t>(d1);
+  out[1] = static_cast<uint8_t>(d1 >> 8);
+  out[2] = static_cast<uint8_t>(d1 >> 16);
+  out[3] = static_cast<uint8_t>(d1 >> 24);
+  out[4] = static_cast<uint8_t>(d2);
+  out[5] = static_cast<uint8_t>(d2 >> 8);
+  out[6] = static_cast<uint8_t>(d3);
+  out[7] = static_cast<uint8_t>(d3 >> 8);
+  for (std::size_t i = 0; i < 8; ++i) out[8 + i] = static_cast<uint8_t>(d4[i]);
+  return out;
+}
+
+TEST(PartyFollowDedupGuidLayout, TheGamesTextAndTheWireBytesAreTheSameGuid) {
+  const char* text = "3D2C1B0A-5F4E-7160-8293-A4B5C6D7E8F9";
+  const Guid leader = ParseGameGuidText(text);
+  const std::array<uint8_t, 16> expected = {0x0A, 0x1B, 0x2C, 0x3D, 0x4E, 0x5F, 0x60, 0x71,
+                                            0x82, 0x93, 0xA4, 0xB5, 0xC6, 0xD7, 0xE8, 0xF9};
+  EXPECT_EQ(leader, expected);
+  // The wire carries the same 16 bytes; the bridge reads them with ReadGuid and prints them with FormatGuid.
+  const Guid wire = nevr_lobby_frame::detail::ReadGuid(expected.data());
+  EXPECT_EQ(wire, leader);
+  EXPECT_EQ(nevr_lobby_frame::FormatGuid(wire), std::string(text));
+}
+
+TEST(PartyFollowDedupGuidLayout, ASecondKnownGuidReadsTheSameWayOnBothSides) {
+  const char* text = "00112233-4455-6677-8899-AABBCCDDEEFF";
+  const Guid leader = ParseGameGuidText(text);
+  const std::array<uint8_t, 16> expected = {0x33, 0x22, 0x11, 0x00, 0x55, 0x44, 0x77, 0x66,
+                                            0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF};
+  EXPECT_EQ(leader, expected);
+  EXPECT_EQ(nevr_lobby_frame::detail::ReadGuid(expected.data()), leader);
+}
+
+// The layouts agree, so a lobby the bridge recorded from a success frame matches the leader's lobby in the same layout.
+TEST(PartyFollowDedupGuidLayout, ASuccessFrameLobbyMatchesTheLeadersLobbyParsedFromText) {
+  const char* text = "3D2C1B0A-5F4E-7160-8293-A4B5C6D7E8F9";
+  const std::array<uint8_t, 16> wireBytes = {0x0A, 0x1B, 0x2C, 0x3D, 0x4E, 0x5F, 0x60, 0x71,
+                                             0x82, 0x93, 0xA4, 0xB5, 0xC6, 0xD7, 0xE8, 0xF9};
+  LobbyJoinState state(&FakeNowMs);
+  g_fakeNowMs = 70000;
+  state.OnSuccess(nevr_lobby_frame::detail::ReadGuid(wireBytes.data()));
+  Stamp current{}, joining{};
+  state.Snapshot(&current, &joining);
+  EXPECT_EQ(Decide(ParseGameGuidText(text), current, joining, g_fakeNowMs).skip, Skip::AlreadyIn);
+}
+
+// The Info line: one per run of identical skips, with the repeats counted (FollowParty queues the join every tick).
+TEST(PartyFollowDedupLogRun, TwoConsecutiveSkipsOfTheSameLobbyWriteOneInfoLine) {
+  SkipLogState log;
+  EXPECT_TRUE(NoteSkip(log, kX, Skip::AlreadyIn).writeInfo);
+  EXPECT_FALSE(NoteSkip(log, kX, Skip::AlreadyIn).writeInfo);
+}
+
+TEST(PartyFollowDedupLogRun, ADifferentLobbyWritesAgainAndCarriesTheRepeats) {
+  SkipLogState log;
+  NoteSkip(log, kX, Skip::AlreadyIn);
+  NoteSkip(log, kX, Skip::AlreadyIn);
+  NoteSkip(log, kX, Skip::AlreadyIn);
+  const auto decision = NoteSkip(log, kY, Skip::AlreadyIn);
+  EXPECT_TRUE(decision.writeInfo);
+  EXPECT_EQ(decision.repeats, 2u);
+}
+
+TEST(PartyFollowDedupLogRun, ADifferentReasonForTheSameLobbyWritesAgain) {
+  SkipLogState log;
+  NoteSkip(log, kX, Skip::AlreadyIn);
+  EXPECT_TRUE(NoteSkip(log, kX, Skip::AlreadyJoining).writeInfo);
+}
+
+TEST(PartyFollowDedupLogRun, AFollowThatIsNotSkippedEndsTheRunSoTheNextSkipWrites) {
+  SkipLogState log;
+  NoteSkip(log, kX, Skip::AlreadyIn);
+  NoteSkip(log, kX, Skip::AlreadyIn);
+  NoteNoSkip(log);
+  const auto decision = NoteSkip(log, kX, Skip::AlreadyIn);
+  EXPECT_TRUE(decision.writeInfo);
+  EXPECT_EQ(decision.repeats, 1u);
 }

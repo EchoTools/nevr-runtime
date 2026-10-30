@@ -56,9 +56,15 @@ GetPartyLobbyIdFn g_getPartyLobbyId = nullptr;  // null when its prologue does n
 std::mutex g_mutex;
 Policy g_policy;
 
+// The skip log's run state. JoinPartyLobby runs on the game's thread; the mutex keeps the state whole if another thread
+// ever calls it.
+std::mutex g_skipLogMutex;
+nevr_party_follow_dedup::SkipLogState g_skipLog;
+
 // True when the follow was skipped: the leader's lobby is the one this client is in or is joining, and that answer is
-// younger than the window (#1413). The game asks for the follow every update, so the skip is the only record of it, and
-// it is logged once per skipped follow.
+// younger than the window (#1413). FollowParty queues JoinPartyLobby on every CR15NetGame::Update, so a skip repeats each
+// tick for up to the window. The Info line is written once per run of identical skips; the repeats are counted and carried
+// on the next Info line as repeats=<n> (party_follow_dedup_rules.h, NoteSkip).
 bool TrySkipDuplicateFollow(void* netGame) {
   if (g_getPartyLobbyId == nullptr || netGame == nullptr) return false;
   std::uint8_t* game = static_cast<std::uint8_t*>(netGame);
@@ -72,12 +78,25 @@ bool TrySkipDuplicateFollow(void* netGame) {
   ::LobbyJoinSnapshot(&current, &joining);
   const std::uint64_t nowMs = nevr_lobby_join_state::SteadyNowMs();
   const nevr_party_follow_dedup::Verdict verdict = nevr_party_follow_dedup::Decide(leader, current, joining, nowMs);
-  if (verdict.skip == nevr_party_follow_dedup::Skip::None) return false;
-  const std::uint64_t partyId = nevr_social_party::Global().Snapshot().partyId;
-  Log(EchoVR::LogLevel::Info, "[NEVR.WS] party follow skipped lobby=%s reason=%s age_ms=%llu party_id=%llu",
-      nevr_lobby_frame::FormatGuid(leader).c_str(),
-      verdict.skip == nevr_party_follow_dedup::Skip::AlreadyIn ? "already_in" : "already_joining",
-      static_cast<unsigned long long>(verdict.ageMs), static_cast<unsigned long long>(partyId));
+  if (verdict.skip == nevr_party_follow_dedup::Skip::None) {
+    std::lock_guard<std::mutex> lock(g_skipLogMutex);
+    nevr_party_follow_dedup::NoteNoSkip(g_skipLog);
+    return false;
+  }
+  nevr_party_follow_dedup::SkipLogDecision logDecision{};
+  {
+    std::lock_guard<std::mutex> lock(g_skipLogMutex);
+    logDecision = nevr_party_follow_dedup::NoteSkip(g_skipLog, leader, verdict.skip);
+  }
+  if (logDecision.writeInfo) {
+    const std::uint64_t partyId = nevr_social_party::Global().Snapshot().partyId;
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.WS] party follow skipped lobby=%s reason=%s age_ms=%llu repeats=%llu party_id=%llu",
+        nevr_lobby_frame::FormatGuid(leader).c_str(),
+        verdict.skip == nevr_party_follow_dedup::Skip::AlreadyIn ? "already_in" : "already_joining",
+        static_cast<unsigned long long>(verdict.ageMs), static_cast<unsigned long long>(logDecision.repeats),
+        static_cast<unsigned long long>(partyId));
+  }
   return true;
 }
 

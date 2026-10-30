@@ -50,4 +50,38 @@ inline Verdict Decide(const Guid& leader, const Stamp& current, const Stamp& joi
   return Verdict{};
 }
 
+// The Info line for a skip is written once per run of identical skips. JoinPartyLobby is queued by FollowParty on every
+// CR15NetGame::Update, so a skip repeats every tick for up to the window; the repeats are counted, not written. A skip of
+// a different lobby or reason writes again, carrying the count of the repeats it followed (`repeats=`). A follow that is
+// not skipped ends the run, so the next skip of the same lobby writes again.
+struct SkipLogState {
+  Guid lastLobby{};
+  Skip lastSkip = Skip::None;
+  std::uint64_t repeatsSinceInfo = 0;
+};
+
+struct SkipLogDecision {
+  bool writeInfo = false;
+  std::uint64_t repeats = 0;  // on an Info decision: the skips counted since the previous Info line
+};
+
+// Called once for every skip Decide reports.
+inline SkipLogDecision NoteSkip(SkipLogState& state, const Guid& lobby, Skip skip) {
+  if (state.lastSkip == skip && state.lastLobby == lobby) {
+    ++state.repeatsSinceInfo;
+    return SkipLogDecision{false, 0};
+  }
+  SkipLogDecision decision{true, state.repeatsSinceInfo};
+  state.lastLobby = lobby;
+  state.lastSkip = skip;
+  state.repeatsSinceInfo = 0;
+  return decision;
+}
+
+// Called for every follow Decide does not skip: the run of identical skips ends. The count stays pending for the next Info.
+inline void NoteNoSkip(SkipLogState& state) {
+  state.lastLobby = Guid{};
+  state.lastSkip = Skip::None;
+}
+
 }  // namespace nevr_party_follow_dedup
