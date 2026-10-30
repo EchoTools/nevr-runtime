@@ -14,11 +14,12 @@ file depends on that flag, so promoting a release changes no byte: this tool has
   package_release.py notes --assets DIR --out FILE --base vX.Y.Z --rev vX.Y.Z [--repo DIR]
       the release body (tools/package-release/RELEASE-BODY.template.md): a header, one line for players, and one
       line per file. It holds no hash: the zip's own SHA256SUMS and the attestation carry integrity. Read the zip's
-      identity literals from DIR's zip. The player line is the headline file's line when `release-headline.txt` at the
-      repository root exists at --rev and differs from its content at --base (headline_line), else the fixed
-      "Fixes and internal changes." (the commits never write it). The file is written by the author of the change
-      worth a sentence, in the same PR (RELEASING.md, "Write the release body"). A bad file fails `notes`; it never
-      falls back to the fixed sentence.
+      identity literals from DIR's zip. The player line is the sentences of the files under `release-headlines/` that
+      --rev has and --base does not (headline_line), joined in file-name order, else the fixed "Fixes and internal
+      changes." (the commits never write it). Each file is one change's sentence, written by the author of that
+      change in the same PR (RELEASING.md, "Write the release body"). A bad file fails `notes`; it never falls back
+      to the fixed sentence. On success `notes` writes one JSON line to stderr, {"event":"headlines","used":[paths],
+      "line":...,"base":...,"rev":...}, with an empty `used` when the fixed sentence stands.
   package_release.py stamp --dll BugSplat64.dll [--version X.Y.Z] [--commit <sha40>]
       CI: assert a DLL's one identity literal agrees with what the workflow computed (run on each of the two)
   package_release.py quest-library --lib libovrplatformloader.so --version X.Y.Z --commit <sha40>
@@ -69,9 +70,15 @@ SERVER_EXE = "echovr_server.exe"
 # The core installer (installer/, ADR 0023) that install.ps1 and quest-install.ps1 call. It rides in the zip as its own
 # file, so the signed manifest's `contents` for the zip covers it.
 INSTALLER_EXE = "nevr-install.exe"
-# The optional player line of the release body (headline_line), at the repository root, and its length limit.
-HEADLINE_FILE = "release-headline.txt"
+# The player line of the release body (headline_line): one file per change under HEADLINE_DIR, read only when the range
+# adds it. HEADLINE_LEGACY_FILE, the single shared file release-headline.txt, is refused wherever it exists: one file that
+# every change edits carries earlier sentences along. Limits: a sentence, and the joined line.
+HEADLINE_DIR = "release-headlines"
+HEADLINE_README = f"{HEADLINE_DIR}/README.md"
+HEADLINE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.txt")
+HEADLINE_LEGACY_FILE = "release-headline.txt"
 HEADLINE_MAX = 200
+HEADLINE_JOINED_MAX = 600
 
 # The one identity literal: NUL-bounded "NEVR-BUILD <version> <commit40>".
 IDENTITY = re.compile(rb"(?<=\x00)NEVR-BUILD ([0-9A-Za-z.+-]+) ([0-9a-f]{40})(?=\x00)")
@@ -423,40 +430,85 @@ def quest_asset_name(version: str) -> str:
     return f"nevr-runtime-v{version}-quest-libovrplatformloader.so"
 
 
-def headline_line(repo: Path, base: str, rev: str) -> str | None:
-    """The player line the headline file gives, or None when the fixed sentence stands. The file is `release-headline.txt` at
-    the repository root. It is used only when it exists at `rev` and its content at `rev` differs from its content at
-    `base` (absent at `base` counts as different), so a headline left unchanged since the base tag is stale and never
-    used. Its first non-empty line, stripped, is the line; it must be 1 to HEADLINE_MAX characters, and a line without
-    a final ".", "!" or "?" gets a "." appended. A bad file raises GateFailure: it never falls back to the fixed sentence."""
-
-    def at(ref: str) -> bytes | None:
-        listed = subprocess.run(["git", "-C", str(repo), "ls-tree", "--name-only", ref, "--", HEADLINE_FILE],
-                                check=True, capture_output=True, text=True).stdout.strip()
-        if not listed:
-            return None
-        return subprocess.run(["git", "-C", str(repo), "show", f"{ref}:{HEADLINE_FILE}"],
-                              check=True, capture_output=True).stdout
-
+def _git_out(repo: Path, *args: str) -> bytes:
     try:
-        at_rev = at(rev)
-        if at_rev is None or at_rev == at(base):
-            return None
+        return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True).stdout
     except subprocess.CalledProcessError as error:
-        raise GateFailure(f"reading {HEADLINE_FILE} at {base}..{rev} in {repo} failed: {error.stderr.strip()}")
-    try:
-        text = at_rev.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        raise GateFailure(f"{HEADLINE_FILE} at {rev} is not UTF-8 text")
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if not lines:
-        raise GateFailure(f"{HEADLINE_FILE} at {rev} has no non-empty line: write the player line in it "
-                          f"(1 to {HEADLINE_MAX} characters), or delete the file to use the fixed sentence")
-    line = lines[0]
-    if len(line) > HEADLINE_MAX:
-        raise GateFailure(f"{HEADLINE_FILE} at {rev}: its first non-empty line is {len(line)} characters; the rule is "
-                          f"1 to {HEADLINE_MAX}")
-    return line if line.endswith((".", "!", "?")) else line + "."
+        raise GateFailure(f"git {' '.join(args)} in {repo} failed: {error.stderr.decode('utf-8', 'replace').strip()}")
+
+
+def _headline_paths(repo: Path, ref: str) -> set[str]:
+    """The paths under HEADLINE_DIR at `ref` (none when the directory is absent)."""
+    listed = _git_out(repo, "ls-tree", "-r", "--name-only", "-z", ref, "--", HEADLINE_DIR + "/").decode("utf-8", "replace")
+    return {path for path in listed.split("\0") if path}
+
+
+def shared_headline_file_problem(root: Path) -> str | None:
+    """The PR-time check on a working tree: the problem text when `release-headline.txt` exists under `root`, else None.
+    `notes` refuses the same file at the cut, which is too late to fix the tag's tree."""
+    if (root / HEADLINE_LEGACY_FILE).exists():
+        return (f"{HEADLINE_LEGACY_FILE} exists: it is replaced by {HEADLINE_DIR}/<topic>.txt, one file per change; "
+                f"move its sentence into a new file and delete it (see {HEADLINE_README})")
+    return None
+
+
+def headline_sentences(repo: Path, base: str, rev: str) -> list[tuple[str, str]]:
+    """The headline files the range adds, as (path, sentence) in path order. A file is added when its path is under
+    `release-headlines/` at `rev` and not at `base`: a path present at both refs is old by construction, whatever its content,
+    so a sentence already released can never come back. `release-headlines/README.md` is never a headline. A name that is not
+    `<letter or digit, then letters, digits, . _ ->.txt`, a file that is not UTF-8, empty, longer than one non-empty line, or a line outside 1 to
+    HEADLINE_MAX characters raises GateFailure naming the file. A line without a final ".", "!" or "?" gets a "." appended.
+    `release-headline.txt` at `rev` raises GateFailure: the single shared file is refused because every change edits it and
+    earlier sentences ride along, so each change has its own file."""
+    if _git_out(repo, "ls-tree", "--name-only", rev, "--", HEADLINE_LEGACY_FILE).strip():
+        raise GateFailure(f"{HEADLINE_LEGACY_FILE} exists at {rev}: the player line comes from files the range adds under "
+                          f"{HEADLINE_DIR}/, so add {HEADLINE_DIR}/<topic>.txt and delete {HEADLINE_LEGACY_FILE}")
+    sentences = []
+    for path in sorted(_headline_paths(repo, rev) - _headline_paths(repo, base)):
+        if path == HEADLINE_README:
+            continue
+        if not HEADLINE_NAME.fullmatch(path[len(HEADLINE_DIR) + 1:]):
+            raise GateFailure(f"{path} is added in {base}..{rev} but is not a headline file name: a headline is "
+                              f"{HEADLINE_DIR}/<a letter or digit, then letters, digits, '.', '_' or '-'>.txt, and {HEADLINE_README} is the "
+                              f"only other file")
+        try:
+            text = _git_out(repo, "show", f"{rev}:{path}").decode("utf-8-sig")
+        except UnicodeDecodeError:
+            raise GateFailure(f"{path} at {rev} is not UTF-8 text")
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            raise GateFailure(f"{path} at {rev} has no non-empty line: write the player line in it "
+                              f"(1 to {HEADLINE_MAX} characters), or delete the file")
+        if len(lines) > 1:
+            raise GateFailure(f"{path} at {rev} has {len(lines)} non-empty lines; a headline is one line, one sentence "
+                              f"about its change")
+        line = lines[0]
+        if len(line) > HEADLINE_MAX:
+            raise GateFailure(f"{path} at {rev}: its line is {len(line)} characters; the rule is 1 to {HEADLINE_MAX}")
+        sentences.append((path, line if line.endswith((".", "!", "?")) else line + "."))
+    return sentences
+
+
+def headline_line(repo: Path, base: str, rev: str) -> str | None:
+    """The player line, or None when the fixed sentence stands: the sentences of headline_sentences joined with one space
+    (at most HEADLINE_JOINED_MAX characters, else GateFailure naming 'the joined headline'). It never falls back to the
+    fixed sentence for a bad file."""
+    found = headline_sentences(repo, base, rev)
+    if not found:
+        return None
+    line = " ".join(sentence for _, sentence in found)
+    if len(line) > HEADLINE_JOINED_MAX:
+        raise GateFailure(f"the joined headline of {base}..{rev} is {len(line)} characters; the rule is at most "
+                          f"{HEADLINE_JOINED_MAX}: shorten a sentence in one of {', '.join(path for path, _ in found)}")
+    return line
+
+
+def headline_record(repo: Path, base: str, rev: str) -> dict:
+    """What the cut used, for the run's log: the headline files and the player line (the fixed sentence when none)."""
+    line = headline_line(repo, base, rev)
+    return {"tool": "package_release", "event": "headlines",
+            "used": [path for path, _ in headline_sentences(repo, base, rev)],
+            "line": line or release_audience_section.FALLBACK_PLAYER_LINE, "base": base, "rev": rev}
 
 
 def release_notes(assets: Path, repo: Path, base: str, rev: str) -> str:
@@ -568,7 +620,9 @@ def main(argv=None) -> int:
             if args.out.exists():
                 raise GateFailure(f"{args.out} exists; not overwritten")
             body = release_notes(args.assets, args.repo, args.base, args.rev)
+            record = headline_record(args.repo, args.base, args.rev)
             args.out.write_text(body, encoding="utf-8")
+            print(json.dumps(record, separators=(",", ":")), file=sys.stderr)
             written = [args.out]
         elif mode == "seal":
             written = seal(args.tree, args.out, require_signed=args.require_signed)
