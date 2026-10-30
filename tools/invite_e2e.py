@@ -104,12 +104,14 @@ def first_bad_line(lines: list[Line], after: int = 0) -> Line | None:
 RAD_HOST = re.compile(r"(?i)\b(?:[a-z0-9-]+\.)*readyatdawn\.com\b")
 RAD_URL = re.compile(r"(?i)[a-z][a-z0-9+.-]*://[^\s\"'<>,;)]*readyatdawn\.com[^\s\"'<>,;)]*")
 SERVICE_REDIRECT = re.compile(r"\[NEVR\.PATCH\] service redirect key=(?P<key>\S+) from=(?P<src>\S+) to=(?P<dst>\S+)")
+MATCHMAKER_PATCH = re.compile(r'\[NEVR\.PATCH\] pnsradmatchmaking patched matchmaker host default at \+0x[0-9a-f]+: "(?P<src>[^"]+)" -> "(?P<dst>[^"]+)"')
 HTTP_REDIRECT = re.compile(r"\[NEVR\.PATCH\] HTTP\(S\) connection redirected: (?P<src>\S+) → (?P<dst>\S+)")
 
 # Where each kind of line is written, so a URL that slips through is named with its call site.
 CALL_SITES = {
     "service_redirect": "src/runtime/lifecycle/config.cpp:629 (service redirect, the config/login/transaction sockets)",
     "http_redirect": "src/runtime/lifecycle/config.cpp:548,564 (the game's HttpConnect hook; NoteConnect at :571)",
+    "matchmaker_patch": "src/runtime/patch/pnsrad_enabler.cpp:225 (pnsradmatchmaking.dll's compiled-in host, patched at each load)",
     "other": "no redirect line: the log names the host and nothing records a redirect",
 }
 
@@ -137,9 +139,10 @@ def find_rad_urls(lines: list[Line]) -> list[RadHit]:
             continue
         service = SERVICE_REDIRECT.search(line.text)
         http = None if service else HTTP_REDIRECT.search(line.text)
-        if service or http:
-            match = service or http
-            kind = "service_redirect" if service else "http_redirect"
+        matchmaker = None if (service or http) else MATCHMAKER_PATCH.search(line.text)
+        if service or http or matchmaker:
+            match = service or http or matchmaker
+            kind = "service_redirect" if service else ("http_redirect" if http else "matchmaker_patch")
             hits.append(RadHit(line.n, line.ts, kind, match["src"], match["dst"], not RAD_HOST.search(match["dst"])))
             continue
         urls = RAD_URL.findall(line.text) or [m.group(0) for m in RAD_HOST.finditer(line.text)]

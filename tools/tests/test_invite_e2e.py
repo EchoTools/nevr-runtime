@@ -22,6 +22,10 @@ LOG = "\n".join([
     "2026-10-30T02:10:03.000Z info [NEVR.PATCH] service redirect key=login_host from=wss://login.readyatdawn.com/x to=wss://login.readyatdawn.com/x",
     "2026-10-30T02:10:04.000Z info something fetched https://cdn.readyatdawn.com/asset.bin and went on",
     "2026-10-30T02:10:05.000Z info [NEVR.INVITE] answer op=resolve status=200 latency_ms=140 result=ok",
+    '2026-10-30T02:10:06.000Z info [NEVR.PATCH] pnsradmatchmaking patched matchmaker host default at +0x1c84d8: '
+    '"wss://matchmaker.readyatdawn.com/rad/rad15_live" -> "ws://127.0.0.1:54081"',
+    '2026-10-30T02:10:07.000Z info [NEVR.PATCH] pnsradmatchmaking patched matchmaker host default at +0x1c84d8: '
+    '"wss://matchmaker.readyatdawn.com/rad/rad15_live" -> "wss://matchmaker.readyatdawn.com/rad/rad15_live"',
 ])
 
 
@@ -75,14 +79,21 @@ class RadUrlTest(unittest.TestCase):
         self.assertIn("no redirect line", other.call_site)
         self.assertIn("config.cpp:629", self.hits[0].call_site)
 
+    def test_the_matchmaker_host_patch_is_a_redirect_and_a_patch_to_the_same_host_is_not(self):
+        patched, unpatched = self.hits[4], self.hits[5]
+        self.assertEqual((patched.kind, patched.url, patched.final, patched.redirected),
+                         ("matchmaker_patch", "wss://matchmaker.readyatdawn.com/rad/rad15_live", "ws://127.0.0.1:54081", True))
+        self.assertFalse(unpatched.redirected)
+
     def test_a_line_without_the_domain_is_not_a_hit(self):
-        self.assertEqual(len(self.hits), 4)
+        self.assertEqual(len(self.hits), 6)
 
     def test_only_a_slip_after_the_first_invite_request_is_on_the_invite_path(self):
         rad = {"A": self.hits}
         self.assertEqual([h.url for _, h in e2e.slips_on_invite_path(rad, {"A": "2026-10-30T02:10:03.500Z"})],
-                         ["https://cdn.readyatdawn.com/asset.bin"])
-        self.assertEqual(e2e.slips_on_invite_path(rad, {"A": "2026-10-30T02:10:04.500Z"}), [])
+                         ["https://cdn.readyatdawn.com/asset.bin", "wss://matchmaker.readyatdawn.com/rad/rad15_live"])
+        self.assertEqual([h.n for _, h in e2e.slips_on_invite_path(rad, {"A": "2026-10-30T02:10:04.500Z"})], [self.hits[5].n])
+        self.assertEqual(e2e.slips_on_invite_path(rad, {"A": "2026-10-30T02:10:08.500Z"}), [])
         self.assertEqual(e2e.slips_on_invite_path(rad, {"A": None}), [])
 
 
