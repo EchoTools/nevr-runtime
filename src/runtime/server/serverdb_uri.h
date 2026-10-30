@@ -58,6 +58,16 @@ std::optional<std::string> BuildBridgeCredentialUri(std::string_view remoteUri, 
 // Removes only the first match; these query strings never repeat a key.
 std::string RemoveQueryParam(std::string_view uri, std::string_view param);
 
+// #1532: a server with no auth.password signs in by device code and holds only a token. Its token route needs no
+// configuration: with services.serverdb_uri unset it is the socket address the client already uses (the built-in
+// services.socket_uri, whose ingress forwards the Authorization header). A server with a password keeps today's rule:
+// no serverdb_uri means the URL-parameter route. A configured serverdb_uri always wins.
+inline std::string_view TokenRouteUriOrDefault(std::string_view tokenUri, std::string_view socketUri,
+                                               std::string_view password) {
+  if (!tokenUri.empty()) return tokenUri;
+  return password.empty() ? socketUri : tokenUri;
+}
+
 // The route RequestRegistration dials ServerDB through (#1266), first match wins:
 //   - kExplicitUri: services.serverdb (serverdb_host) is set; it is dialed as given;
 //   - kTokenRoute: services.serverdb_uri is set and a token was acquired (ADR 0001);

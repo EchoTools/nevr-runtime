@@ -89,10 +89,25 @@ social:
 # ---------------------------------------------------------------------------
 # diagnostics — build diagnostics
 #
-# Reader: src/quest/sentinel/quest_config.cpp (Quest). The PC accepts the section and reads nothing from it.
+# Readers: src/quest/sentinel/quest_config.cpp (Quest: hardware_dump, ui_event_probe) and
+# src/runtime/lifecycle/service_map.cpp, FrameStatsMode (PC: frame_stats). The PC reads nothing else from the
+# section; the Quest reads nothing from frame_stats.
 # ---------------------------------------------------------------------------
 
 diagnostics:
+  # PC only. The frame-time probe (src/runtime/frame/frame_stats.h): one `[NEVR.PERF] frame_stats` line every 10 s
+  # with the interval between iterations of the game's main loop (frames, median_us, p95_us, max_us, over_1p5x,
+  # overruns) and, in a PCVR session, the compositor's dropped-frame counts and the app's CPU and GPU time.
+  #   true  the loop-interval ring and the line
+  #   perf  the line with the compositor stats only (frames=0), to compare the game's own app CPU time with the
+  #         ring off against the ring on
+  #   false no line
+  # The ovr_GetPerfStats copy is installed on every client whatever this says; it keeps what it reads only while
+  # this is true or perf. The resolved value is logged at start-up (`[NEVR.PERF] frame_stats start`), off included.
+  # tools/perf/pc_frame_summary.py turns one run's lines into summary.json.
+  # Default (absent): false.
+  # frame_stats: true
+
   # Quest only. Write the hardware/environment dump (docs/adr/0006-quest-hardware-dump.md) at start-up.
   # Default (absent): false.
   # hardware_dump: true
@@ -215,11 +230,13 @@ services:
 
   # Dedicated server only: the ServerDB token route the server registers through, dialed with the server's
   # access token as `Authorization: Bearer` (docs/adr/0001-serverdb-token-auth.md); guilds and regions are added
-  # as query parameters. Without it the server registers through socket_uri with identity.discord_id and
-  # auth.password in the query. A server with none of serverdb, serverdb_uri, or socket_uri plus
-  # identity.discord_id stops at registration: `no ServerDB URI: set services.serverdb_uri`.
+  # as query parameters. Without it a server with auth.password registers through socket_uri with
+  # identity.discord_id and auth.password in the query; a server with no auth.password (it signed in by device
+  # code) registers on the token route at socket_uri, so it needs no configuration. A server with none of
+  # serverdb, serverdb_uri, or socket_uri plus identity.discord_id stops at registration:
+  # `no ServerDB URI: set services.serverdb_uri`.
   # The route taken is logged: `[NEVR.GAMESERVER] serverdb route=<explicit|token|url_params|none> ...`.
-  # Default (absent): none.
+  # Default (absent): socket_uri for a server with no auth.password; none for a server with one.
   # Not a secret.
   # Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration, flat key nevr_serverdb_uri)
   # serverdb_uri: "ws://g.echovrce.com:80/nevr"
@@ -379,7 +396,9 @@ auth:
   # server_key: "${NEVR_SOCKET_KEY:?server_key is required for servers}"
 
   # Server password. Sent as a query parameter in the ServerDB WebSocket URI (the key the runtime reads is auth.password).
-  # Optional; absent means no password auth.
+  # Optional; absent means the server signs in by device code like a client: at startup it prints a code and the
+  # page that takes it on the console (standard error), waits for the approval, asks for a new code when one runs
+  # out, and keeps the token in the sign-in cache of the nevr root, so a restart needs no new code.
   # SECRET — use env-var substitution in production.
   # password: "${NEVR_PASSWORD:?password is required}"
 

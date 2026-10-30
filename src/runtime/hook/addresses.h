@@ -736,6 +736,25 @@ constexpr uintptr_t GET_TIME_OVERRIDE_FLAG = 0x2099038;
 constexpr uintptr_t GET_TIME_OVERRIDE_VALUE = 0x209CB00;
 
 // ============================================================================
+// #954 frame-time probe (runtime/frame/frame_stats.h)
+// =====================================================================// ============================================================================
+
+/// Address: the instruction after CncaGame::RunMainLoop's call to GetTimeMicroseconds (0x14050bd4c).
+/// RunMainLoop (0x14050bd00) loops back to its CALL at 0x14050bd47 (JZ 0x14050bd47 at 0x14050bf62), so a
+/// GetTimeMicroseconds call whose return address is this one is one iteration of the game's main loop.
+/// Not a function: a return address, compared with __builtin_return_address(0) in the GetTimeMicroseconds
+/// hook. The bytes before it (E8 74 43 BC FF) are checked at boot (frame_stats.h, LoopHeadCallMatches).
+/// ReVault: revault_disassemble 0x14050bd00 --binary echovr.exe.
+constexpr uintptr_t FRAME_LOOP_HEAD_RETURN = 0x50BD4C;
+
+/// Address: the game's ovr_GetPerfStats wrapper (0x1413662e0, 21 bytes), the only route to the compositor's
+/// per-frame stats. MOV RAX,[0x1420eb788]; TEST RAX,RAX; JNZ +6; MOV EAX,0xfffffc14; RET; JMP RAX.
+/// The global holds the LibOVR export (or null: the wrapper then returns 0xfffffc14, -1004).
+/// One caller (0x14072b0a7, in the function at 0x14072af60). Signature: int32_t __fastcall(ovrSession session,
+/// ovrPerfStats* out); a result below 0 is a failure (OVR_SUCCESS(r) is r >= 0).
+/// Keep-current: revault fn callers 0x1413662e0 --binary echovr.exe
+constexpr uintptr_t OVR_GET_PERF_STATS = 0x13662E0;
+=======
 // Server Bots (nevr_server_bots, #1423)
 // ============================================================================
 

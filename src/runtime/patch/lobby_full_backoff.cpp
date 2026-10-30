@@ -16,6 +16,7 @@
 #include "runtime/hook/hook_guard.h"
 #include "runtime/hook/patching.h"
 #include "runtime/log/boot_log_tee.h"
+#include "runtime/patch/lobby_failure_message_rules.h"
 #include "runtime/patch/lobby_full_backoff_rules.h"
 #include "runtime/patch/party_follow_dedup_rules.h"
 
@@ -43,6 +44,7 @@ using GetPartyLobbyIdFn = void* (*)(void* party, void* out);
 constexpr std::size_t kNetGamePartyOffset = 0x647C8;
 
 constexpr std::size_t kLobbyStatusOffset = 0x448;  // the callback's own gate: status - 4 < 3 (unsigned)
+constexpr std::size_t kLobbyGameOffset = 0x8;      // *(lobbyClient + 8) is the CR15NetGame the error block lives in
 constexpr std::size_t kMsgPayloadOffset = 0x10;
 constexpr std::size_t kFailureCodeOffset = 0x18;
 constexpr std::uint8_t kLobbyFullCode = 8;
@@ -118,17 +120,36 @@ void JoinPartyLobbyHook(void* netGame) {
 void FailureCbHook(void* lobbyClient, void* msg) {
   std::uint8_t code = 0;
   bool gateOpen = false;
+  std::uint8_t* gameBase = nullptr;
+  // The service's message, copied before the original runs: the payload belongs to the game and may be released when
+  // the callback returns (#1443).
+  char message[nevr_lobby_failure_message::kMessageSize] = {};
   if (lobbyClient != nullptr && msg != nullptr) {
     auto* client = static_cast<std::uint8_t*>(lobbyClient);
     std::int32_t status = 0;
     std::memcpy(&status, client + kLobbyStatusOffset, sizeof(status));
     gateOpen = static_cast<std::uint32_t>(status - 4) < 3U;
+    std::memcpy(&gameBase, client + kLobbyGameOffset, sizeof(gameBase));
     void* payload = nullptr;
     std::memcpy(&payload, static_cast<std::uint8_t*>(msg) + kMsgPayloadOffset, sizeof(payload));
-    if (payload != nullptr) code = static_cast<std::uint8_t*>(payload)[kFailureCodeOffset];
+    if (payload != nullptr) {
+      code = static_cast<std::uint8_t*>(payload)[kFailureCodeOffset];
+      std::memcpy(message, static_cast<std::uint8_t*>(payload) + nevr_lobby_failure_message::kMessageOffset,
+                  sizeof(message));
+    }
   }
   g_originalFailureCb(lobbyClient, msg);
   if (!gateOpen) return;
+
+  // The game shows a fixed literal for this code and drops the service's message (#1443). Put the message on the error
+  // page under the code's own name. Codes 11 and 12 already show it, so they are not touched.
+  if (nevr_lobby_failure_message::TakesServiceMessage(code) &&
+      nevr_lobby_failure_message::WriteErrorBlock(gameBase, nevr_lobby_failure_message::Title(code), message,
+                                                  sizeof(message))) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.LOBBY] failure message shown code=%u title=%s message_bytes=%zu",
+        static_cast<unsigned int>(code), nevr_lobby_failure_message::Title(code),
+        nevr_lobby_failure_message::MessageBytes(message, sizeof(message)));
+  }
 
   if (code != kLobbyFullCode) {
     // Another outcome ends a lobby-full run: the next follow starts from the first wait.

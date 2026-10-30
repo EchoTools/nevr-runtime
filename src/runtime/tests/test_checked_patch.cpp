@@ -28,6 +28,12 @@ bool RefusingWriter(void*, const void*, size_t) { return false; }
 
 bool SilentlyDroppingWriter(void*, const void*, size_t) { return true; }
 
+// Copies the bytes, then reports a failure: the protection restore after the write failed (ProcessMemcpy).
+bool CopyThenRefuseWriter(void* dest, const void* src, size_t n) {
+  std::memcpy(dest, src, n);
+  return false;
+}
+
 // Reports success after writing only the first half: the read-back must not accept it.
 bool HalfWriter(void* dest, const void* src, size_t n) {
   std::memcpy(dest, src, n / 2);
@@ -72,6 +78,16 @@ TEST(CheckedPatch, ReportsAWriterFailure) {
   EXPECT_EQ(nevr_checked_patch::Apply(image, SpectatorSite(), RefusingWriter), Result::WriteFailed);
 }
 
+TEST(CheckedPatch, AWriteThatLandedWhileTheWriterReportedAnErrorSaysWhatTheSiteHolds) {
+  // The bytes are in; the writer's failure is kept visible as its own result, not called "nothing written".
+  uint8_t image[6];
+  std::memcpy(image, kJe, sizeof(image));
+  EXPECT_EQ(nevr_checked_patch::Apply(image, SpectatorSite(), CopyThenRefuseWriter), Result::WrittenWithError);
+  EXPECT_EQ(std::memcmp(image, kNop, sizeof(kNop)), 0);
+  // And a second pass sees the replacement, so nothing is written again.
+  EXPECT_EQ(nevr_checked_patch::Apply(image, SpectatorSite(), RefusingWriter), Result::AlreadyApplied);
+}
+
 TEST(CheckedPatch, ReadsBackAndReportsAWriteThatDidNotLand) {
   // The writer says "ok" and changes nothing: only the read-back can tell.
   uint8_t image[6];
@@ -104,6 +120,7 @@ TEST(CheckedPatch, ResultNamesAreStableTokens) {
   EXPECT_STREQ(nevr_checked_patch::ResultName(Result::AlreadyApplied), "already_applied");
   EXPECT_STREQ(nevr_checked_patch::ResultName(Result::Mismatch), "mismatch");
   EXPECT_STREQ(nevr_checked_patch::ResultName(Result::WriteFailed), "write_failed");
+  EXPECT_STREQ(nevr_checked_patch::ResultName(Result::WrittenWithError), "written_with_error");
 }
 
 TEST(CheckedPatch, SpectatorStreamSiteIsExpectedThenPatchedAndSixBytes) {

@@ -161,6 +161,24 @@ class VerifyHookInvariantsTest(unittest.TestCase):
         self.assertIn("DUPLICATE-RUNTIME-DETOUR: 0x1400EAEF0", result.stderr)
         self.assertIn("fixture_duplicate.cpp: MH_CreateHook literal RVA 0xEAEF0", result.stderr)
 
+    def test_names_a_detour_target_assigned_through_a_reinterpret_cast(self):
+        """#954: frame_stats.cpp writes `g_original = reinterpret_cast<Fn>(base + nevr_patch_addresses::X);`
+        and then passes `&g_original` to PatchDetour; the extractor used to see only the C-style cast."""
+        import importlib
+
+        module = importlib.import_module("verify_hook_invariants")
+        targets = module.gamepatches_detour_targets()
+        self.assertEqual(targets.get(0x1413662E0), "OVR_GET_PERF_STATS")
+
+    def test_the_identity_manifest_pins_the_perf_stats_thunk(self):
+        import json
+
+        entries = json.loads((REPO / "tools" / "hook_identity_manifest.json").read_text())["addresses"]
+        pinned = [e for e in entries if int(e["va"], 16) == 0x1413662E0]
+        self.assertEqual(len(pinned), 1)
+        # MOV RAX,[RIP+0xd854a1]: the seven bytes frame_stats.cpp validates before it hooks.
+        self.assertTrue(pinned[0]["prologue"].startswith("488b05a154d800"))
+
     def test_accepts_the_tree_as_it_is(self):
         result = self._run_in_fixture()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

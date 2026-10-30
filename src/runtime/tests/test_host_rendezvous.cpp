@@ -462,7 +462,11 @@ void RecordNotice(const wchar_t* text) {
   g_events.push_back("notice");
   g_notice_texts.emplace_back(text);
 }
-void RecordStop(std::uint32_t) { g_events.push_back("stop"); }
+std::uint32_t g_stop_exit_code = 0;
+void RecordStop(std::uint32_t exit_code) {
+  g_stop_exit_code = exit_code;
+  g_events.push_back("stop");
+}
 const char* CommandLine() { return g_command_line; }
 
 // Runs the detour three times against a runtime that is absent, with the given command line, and returns the
@@ -476,6 +480,7 @@ std::string RunStopWith(const char* command_line, std::vector<nlohmann::json>* r
   RuntimeRendezvous::Seams().stop_game = &RecordStop;
   RuntimeRendezvous::Seams().show_stop_notice = &RecordNotice;
   RuntimeRendezvous::Seams().command_line = &CommandLine;
+  RuntimeRendezvous::Seams().exit_notice_wait_ms = 0;  // the hold for a console reader is not for a unit test
   const std::wstring local = MakeTempDir();
   g_log_path = local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl";
   BootstrapDiagnostics diagnostics;
@@ -588,6 +593,21 @@ TEST(HostStopNotice, ACommandLineThatCannotBeReadMeansNoDialogBecauseItMightHold
 TEST(HostStopNotice, ANullCommandLineFromTheSystemMeansNoDialogAndTheRecordSaysSo) {
   EXPECT_EQ(RunStopWith(nullptr), "suppressed_server_or_headless");
   EXPECT_TRUE(g_notice_texts.empty());
+}
+
+// #1533: a -server whose runtime is absent is told the cause on its console, once, and still exits with 78.
+TEST(HostStopNotice, AServerIsToldThePlainCauseOnItsConsoleOnceAndStillExitsWith78) {
+  EXPECT_EQ(RunStopWith("echovr.exe -server"), "suppressed_server_or_headless");
+  EXPECT_EQ(g_stop_exit_code, 78u);
+  EXPECT_NE(g_stderr.find("nEVR couldn't start: nevr-runtime.dll is missing. Please run the installer. Detail: "),
+            std::string::npos)
+      << g_stderr;
+  std::size_t notices = 0;
+  for (std::size_t at = g_stderr.find("Detail: "); at != std::string::npos; at = g_stderr.find("Detail: ", at + 1)) {
+    ++notices;
+  }
+  EXPECT_EQ(notices, 1u) << "one stop, one notice, however often the detour runs: " << g_stderr;
+  EXPECT_TRUE(g_notice_texts.empty()) << "a server never gets the dialog";
 }
 
 TEST(HostStopNotice, ThePolicyReadsTokensNotSubstrings) {

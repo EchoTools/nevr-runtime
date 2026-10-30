@@ -435,7 +435,8 @@ class ProductionSteps final : public Steps {
 
   PluginCounts PlanPlugins() override {
     const nevr_quest::plugin::PlanCounts counts = nevr_quest::plugin::PlanPlugins(
-        sentinel::ActiveConfig().plugins, nevr_quest::integration::ResourceRequestLogEnabled());
+        sentinel::ActiveConfig().plugins, nevr_quest::integration::ResourceRequestLogEnabled(),
+        sentinel::ActiveConfig().fileRejected);
     return {counts.early, counts.normal};
   }
 
@@ -698,6 +699,8 @@ class ProductionSteps final : public Steps {
     detail_ = detail;
     // The login declares the social level only when the facade is in place (docs/adr/0003, contract 5).
     if (ok) R().socialLevel.store(nevr_social_party::kSocialLevel);
+    // The facade feeds the party state the lobby session records read; without it they say unknown (#1525).
+    if (ok) quest_net::SetLobbyPartySource(true);
     // The menu version label (#747) rides this step: one GOT hook on libr15's SetText slot, a data page, so it writes no code
     // page. The hook logs its own outcome; a refusal does not fail social.
     if (ok) quest_social::menu_version::InstallMenuVersionLabelHook();

@@ -33,6 +33,7 @@ enum Id : int {
   kHttpListenerBringup,
   kBroadcasterListen,
   kBroadcasterReceiveLocal,
+  kOvrGetPerfStats,
   kCount
 };
 

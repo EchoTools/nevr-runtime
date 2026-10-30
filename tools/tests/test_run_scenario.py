@@ -128,14 +128,25 @@ class TeardownRaceTest(unittest.TestCase):
         self.addCleanup(lambda: os.environ.__setitem__("PATH", old))
         return kill_log
 
+    def standin(self) -> int:
+        """A live process whose argv[0] is ./echovr.exe: game_pids counts it on its command line (#1490)."""
+        import pathlib
+        import sys
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+        from test_game_pids import start
+        proc = start(["bash", "-c", "exec -a ./echovr.exe sleep 600"], b"./echovr.exe\0")
+        self.addCleanup(lambda: (proc.kill(), proc.wait()))
+        return proc.pid
+
     def test_waits_for_a_client_that_goes_away_and_never_kills_it(self):
         import tempfile
         import time
+        pid = self.standin()
         with tempfile.TemporaryDirectory() as tmp:
             state = f"{tmp}/count"
             kill_log = self.fake_bin(
                 tmp, f'n=$(cat "{state}" 2>/dev/null || echo 0); echo $((n+1)) > "{state}"\n'
-                     'if [ "$n" -lt 1 ]; then echo 4242; fi\n')
+                     f'if [ "$n" -lt 1 ]; then echo {pid}; fi\n')
             started = time.monotonic()
             self.assertTrue(run_scenario.wait_for_game_exit(timeout=10))
             self.assertLess(time.monotonic() - started, 5)
@@ -170,10 +181,11 @@ class TeardownRaceTest(unittest.TestCase):
 
     def test_kills_a_client_that_never_goes_away(self):
         import tempfile
+        pid = self.standin()
         with tempfile.TemporaryDirectory() as tmp:
-            kill_log = self.fake_bin(tmp, "echo 4242\n")
+            kill_log = self.fake_bin(tmp, f"echo {pid}\n")
             self.assertFalse(run_scenario.wait_for_game_exit(timeout=0.1))
-            self.assertIn("4242", kill_log.read_text())
+            self.assertIn(str(pid), kill_log.read_text())
 
 
 class StateMatchesTest(unittest.TestCase):

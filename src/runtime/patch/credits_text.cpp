@@ -31,6 +31,9 @@ void Skip(const char* reason, bool warn) {
       "[NEVR.PATCH] credits_text skipped reason=%s (the game's own credits are unchanged)", reason);
 }
 
+/// Does the site load the buffer now? Read from the site's bytes, not from what Retarget returned.
+bool LoadsBuffer(const SitePlan& p) { return std::memcmp(p.site, p.patched, kSiteSize) == 0; }
+
 }  // namespace
 
 bool Install(const char* block, size_t blockLen) {
@@ -98,7 +101,16 @@ bool Install(const char* block, size_t blockLen) {
   Log(ok ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning, "%s", record);
 
   if (!ok) {
-    VirtualFree(memory, 0, MEM_RELEASE);
+    // Free the buffer only when no site loads it, read from the sites: a site left pointing at freed
+    // memory is read when the CREDITS page opens. Keeping it costs one small allocation.
+    if (LoadsBuffer(init) || LoadsBuffer(disabled)) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] credits_text buffer kept: a site still loads it, so freeing it would leave a pointer to freed "
+          "memory (one small allocation leaks) result=%s",
+          OutcomeName(outcome));
+    } else {
+      VirtualFree(memory, 0, MEM_RELEASE);
+    }
     Skip(OutcomeName(outcome), true);
     return false;
   }

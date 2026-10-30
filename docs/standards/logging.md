@@ -125,6 +125,7 @@ for row.
 | `[NEVR.LOGFILTER]`    | The log filter's own health and rate summary |
 | `[NEVR.DLLHOOK]`      | LoadLibrary interception                     |
 | `[NEVR.PROFILE]`      | Server profile / memory snapshot             |
+| `[NEVR.PERF]`         | Frame-time probe (`diagnostics.frame_stats`): the start line and one summary line per 10 s window |
 | `[NEVR.FATAL]`        | Fatal-error path (ServerFatal)               |
 | `[NEVR.SCENARIO]`     | Scenario-test control endpoint (test builds only; never in a release DLL) |
 | `[NEVR.SELFCHECK]`    | Self-checks: one result per run-card check (every build, `compat/self_check.h`) |
@@ -133,7 +134,7 @@ for row.
 | `[NEVR.UITEXTURE]`    | UI, splash and menu textures at their top mip: one line per UI texture naming the mip requested (`patch/ui_texture_mips.h`) |
 | `[NEVR.UI]`           | The UI text writer (`patch/ui_text.h`, `patch/ui_text_writer.h`, #896): `text writer ready`/`off` with the three pins, one `text written` or `text dropped` line per request with `actor`, `element`, `bytes` and `attempts`, and `text first write` with the writing thread and the game-loop thread. A text is never logged, only its size |
 | `[NEVR.INVITE]`       | Invite codes for the CREATE GAME / JOIN VIA CODE wizard (`patch/invite_wizard.h`, ADR 0017): a code is never logged, only `code_len` and `code_fp` |
-| `[NEVR.RENDER]`       | The render configuration of a PC client: one `render_config` line at the first rendered frame and one for every change, with the GPU and the rating score the auto-selector reads (`gpu_score`), headset, refresh rate, render target and the game's graphics settings, plus the hooks' own install lines and a one-time `settings_trace` line (`patch/render_config.h`, `patch/render_config_hook.h`, ADR 0022) |
+| `[NEVR.RENDER]`       | The render configuration of a PC client: one `render_config` line at the first rendered frame and one for every change, with the GPU and the rating score the auto-selector reads (`gpu_score`), headset, refresh rate, render target and the game's graphics settings, plus the hooks' own install lines, a one-time `settings_trace` line, and one `gpu_score kept|filled|unrated` line a run, which says the score the selector read and, when unrated, why (`patch/render_config.h`, `patch/render_config_hook.h`, `patch/gpu_score.h`, ADR 0022, #1419) |
 | `[NEVR.HOST]`         | The `BugSplat64.dll` host's own JSONL records (`nevr-bootstrap.jsonl`): attach decisions, runtime load, crash dump. The value of the record's `tag` field; the host writes no `Log()` line |
 | `[NEVR.STOP]`         | The one line the `BugSplat64.dll` host writes to standard error when it stops the game or leaves it running without `nevr-runtime.dll` (`runtime/host/stop_line.h`, #1252), with the same facts in the host log. The value of the line's `tag` field; fields and exit codes in "The `NEVR.STOP` line" below |
 | `[NEVR.INSTALL]`      | The core installer's own JSONL run log (`installer/`, ADR 0023): one record per event, appended, never truncated; the value of the record's `tag` field. Never carries a token or a response body |

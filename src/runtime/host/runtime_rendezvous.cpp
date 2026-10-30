@@ -74,6 +74,13 @@ DWORD InstallWaitMs() {
   return RuntimeRendezvous::kInstallWaitMs;
 #endif
 }
+DWORD ExitNoticeWaitMs() {
+#if defined(NEVR_HOST_TESTING)
+  return RuntimeRendezvous::Seams().exit_notice_wait_ms;
+#else
+  return RuntimeRendezvous::kExitNoticeWaitMs;
+#endif
+}
 
 }  // namespace
 
@@ -252,11 +259,15 @@ std::int64_t RuntimeRendezvous::StopGame(std::int64_t command_line) {
     EmitStopDiagnostic(*diagnostics_, loader_.Result(), StopNoticeName(decision));
     // The one console line (#1252), after the record so its `log` names the file that took the record.
     WriteRuntimeStopLine(*diagnostics_, loader_.Result());
+    const RuntimeLoadResult& result = loader_.Result();
+    // The same cause in plain words (#1533): a -server run gets no dialog, so this line is what its console shows.
+    const wchar_t* sentence = StopNoticeTextFor(result.outcome, result.verify_reason_code);
+    const bool console_took = WriteRuntimeNoticeLine(sentence, *diagnostics_, result);
+    // A person at a console that took the line gets a moment to read it; a dialog already held the process open.
+    if (console_took && decision == StopNotice::kSuppressedServerOrHeadless) Sleep(ExitNoticeWaitMs());
     if (decision == StopNotice::kShow) {
-      const RuntimeLoadResult& result = loader_.Result();
       wchar_t log[MAX_PATH] = {};
       const bool has_log = diagnostics_->LogFilePath(log, MAX_PATH);
-      const wchar_t* sentence = StopNoticeTextFor(result.outcome, result.verify_reason_code);
       // The sentence, then the host version and the log the record is in (stop_notice.h); the bare sentence when the
       // longer text cannot be built.
       try {

@@ -6,7 +6,9 @@
 // "echo_arena_private", "echo_combat"), never an enum. The engine reads that symbol from the session's
 // settings JSON: CR15NetClientLobby::LobbySessionStartingCB (echovr.exe 0x1401AD040) looks up the "gametype"
 // key with OwnerJson_GetSymbol. The runtime forwards the same settings JSON in LobbySessionCreate, so it reads
-// the key from there. When the key is absent or not a symbol, the game type falls back to the lobby type.
+// the key from there. The service sends the key as the mode's CSymbol64Hash, a JSON integer, which is read
+// against the table in server/game_type_table.h. When the key is absent or names no known mode, the game type
+// falls back to the lobby type.
 
 #include <string>
 #include <string_view>

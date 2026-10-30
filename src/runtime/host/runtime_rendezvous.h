@@ -86,6 +86,7 @@ class RuntimeRendezvous {
     bool fail_hook_bytes_read = false;  // the read of the hook's first bytes "fails"
     bool fail_hook_create = false;      // MH_CreateHook "fails" (the hook it made is removed)
     DWORD install_wait_ms = 5000;       // how long AwaitInstall waits (kInstallWaitMs in production)
+    DWORD exit_notice_wait_ms = 2000;   // how long StopGame waits after a console notice (kExitNoticeWaitMs)
     // StopGame calls this instead of ending the process, then the detour runs the original wrapper so a harness
     // can go on observing. Null in production: the process ends and nothing runs after.
     void (*stop_game)(std::uint32_t exit_code) = nullptr;
@@ -104,6 +105,9 @@ class RuntimeRendezvous {
 
   // How long a detour thread waits for the install to finish journalling.
   static constexpr DWORD kInstallWaitMs = 5000;
+  // How long StopGame holds the process after a -server or -headless stop wrote the console notice, so a person at the
+  // console can read it before the process ends (#1533).
+  static constexpr DWORD kExitNoticeWaitMs = 2000;
 
  private:
   // The InitOnce body: load/validate/initialize the runtime exactly once. A

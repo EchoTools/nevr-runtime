@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "runtime/compat/login_refusal.h"
+#include "runtime/lifecycle/host_pause.h"
 
 namespace {
 
@@ -23,23 +24,65 @@ TEST(LoginRefusalMissing, ABothSetServerMissesNothing) {
   EXPECT_TRUE(MissingServerCredentialKeys("1234567890", "hunter2").empty());
 }
 
-TEST(LoginRefusalMissing, ANoDiscordIdNamesTheDiscordIdKey) {
+TEST(LoginRefusalMissing, APasswordWithoutADiscordIdNamesTheDiscordIdKey) {
   const std::vector<std::string> missing = MissingServerCredentialKeys("", "hunter2");
   ASSERT_EQ(missing.size(), 1u);
   EXPECT_EQ(missing[0], "identity.discord_id");
 }
 
-TEST(LoginRefusalMissing, ANoPasswordNamesThePasswordKey) {
-  const std::vector<std::string> missing = MissingServerCredentialKeys("1234567890", "");
-  ASSERT_EQ(missing.size(), 1u);
-  EXPECT_EQ(missing[0], "auth.password");
+// #1532: with no password the server signs in by device code; nothing in config.yaml is missing, with or without a
+// discord id. The bridge asks token-auth for the token instead (NoSignInCause when there is none).
+TEST(LoginRefusalMissing, ANoPasswordServerSignsInByDeviceCodeAndMissesNoKey) {
+  EXPECT_TRUE(nevr_login_refusal::ServerSignsInByDeviceCode(""));
+  EXPECT_FALSE(nevr_login_refusal::ServerSignsInByDeviceCode("hunter2"));
+  EXPECT_TRUE(MissingServerCredentialKeys("1234567890", "").empty());
+  EXPECT_TRUE(MissingServerCredentialKeys("", "").empty());
 }
 
-TEST(LoginRefusalMissing, NeitherSetNamesBothInOrder) {
-  const std::vector<std::string> missing = MissingServerCredentialKeys("", "");
-  ASSERT_EQ(missing.size(), 2u);
-  EXPECT_EQ(missing[0], "identity.discord_id");
-  EXPECT_EQ(missing[1], "auth.password");
+TEST(LoginRefusalCause, TheNoSignInCauseNamesTheConfigAndBothWaysOut) {
+  const std::string cause = nevr_login_refusal::NoSignInCause("C:\\nevr\\config.yaml");
+  EXPECT_NE(cause.find("server login refused"), std::string::npos);
+  EXPECT_NE(cause.find("device sign-in ended without a token"), std::string::npos);
+  EXPECT_NE(cause.find("C:\\nevr\\config.yaml"), std::string::npos);
+  EXPECT_NE(cause.find("approve the code"), std::string::npos);
+  EXPECT_NE(cause.find("auth.password"), std::string::npos);
+}
+
+TEST(LoginRefusalCause, ARefusedDeviceTokenDoesNotSendTheOperatorToTheConfigKeys) {
+  const std::string cause = RefusedLoginCause(401, "C:\\nevr\\config.yaml", true);
+  EXPECT_NE(cause.find("HTTP 401"), std::string::npos);
+  EXPECT_NE(cause.find("device sign-in token"), std::string::npos);
+  EXPECT_NE(cause.find(".credentials.json"), std::string::npos);
+  EXPECT_EQ(cause.find("check identity.discord_id"), std::string::npos);
+}
+
+// #1532: what a server does between printing why it stops and stopping. Interactive: it waits for a key. Not
+// interactive: it waits 2 s, never exits at once and never waits for ever. The reason is printed first in both.
+TEST(HostPause, AnInteractiveConsoleWaitsForAKeyAfterThePrintedReason) {
+  std::vector<std::string> events;
+  nevr_host_pause::Io io;
+  io.write_line = [&](const std::string& line) { events.push_back("write:" + line); };
+  io.stdin_is_console = [] { return true; };
+  io.wait_for_key = [&] { events.push_back("key"); };
+  io.wait_ms = [&](unsigned ms) { events.push_back("ms:" + std::to_string(ms)); };
+  EXPECT_EQ(nevr_host_pause::HoldBeforeExit("no sign-in", io), nevr_host_pause::Held::kForKey);
+  ASSERT_EQ(events.size(), 3u);
+  EXPECT_EQ(events[0], "write:server stopped: no sign-in");
+  EXPECT_EQ(events[1], "write:Press any key to close.");
+  EXPECT_EQ(events[2], "key");
+}
+
+TEST(HostPause, ANonInteractiveRunPrintsTheReasonThenWaitsTwoSecondsAndNeverForAKey) {
+  std::vector<std::string> events;
+  nevr_host_pause::Io io;
+  io.write_line = [&](const std::string& line) { events.push_back("write:" + line); };
+  io.stdin_is_console = [] { return false; };
+  io.wait_for_key = [&] { events.push_back("key"); };
+  io.wait_ms = [&](unsigned ms) { events.push_back("ms:" + std::to_string(ms)); };
+  EXPECT_EQ(nevr_host_pause::HoldBeforeExit("no sign-in", io), nevr_host_pause::Held::kForTime);
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_EQ(events[0], "write:server stopped: no sign-in");
+  EXPECT_EQ(events[1], "ms:2000");
 }
 
 TEST(LoginRefusalCause, TheNoCredentialCauseNamesEveryMissingKeyAndTheConfig) {

@@ -410,6 +410,51 @@ TEST(StopLineRuntime, WriteRuntimeStopLineWritesOneLineWithTheDescribedFacts) {
   EXPECT_EQ(record.at("runtime_version"), "not loaded");
 }
 
+// The records the console notice writes, collected through the emit sink (BootstrapDiagnostics::SetEmitSinkForTest).
+std::vector<nlohmann::json> g_console_records;
+void CollectConsoleRecord(const nlohmann::json& record) { g_console_records.push_back(record); }
+
+// #1533: a -server run that cannot load the runtime gets the cause in plain words on its console: what failed and the
+// fix, then the detail, on one line of text, and the host log says a console took it.
+TEST(StopLineRuntime, TheNoticeLineStatesTheAbsentRuntimeAndTheFixOnOneLineOfText) {
+  StderrCapture capture;
+  g_console_records.clear();
+  BootstrapDiagnostics::SetEmitSinkForTest(&CollectConsoleRecord);
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(nullptr, nullptr, nullptr);
+  const RuntimeLoadResult result = Result(RuntimeLoadOutcome::kRuntimeAbsent, L"C:\\nevr\\nevr-runtime.dll");
+  EXPECT_TRUE(nevr_host::WriteRuntimeNoticeLine(nevr_host::kStopNoticeMissingText, diagnostics, result));
+  BootstrapDiagnostics::SetEmitSinkForTest(nullptr);
+  const std::string text = capture.Text();
+  EXPECT_EQ(std::count(text.begin(), text.end(), '\n'), 1) << text;
+  EXPECT_EQ(text.rfind("nEVR couldn't start: nevr-runtime.dll is missing. Please run the installer. Detail: "
+                       "nevr-runtime.dll is missing",
+                       0),
+            0u)
+      << text;
+  ASSERT_EQ(g_console_records.size(), 1u);
+  EXPECT_EQ(g_console_records[0].at("event"), "console_notice");
+  EXPECT_EQ(g_console_records[0].at("written"), true);
+  EXPECT_EQ(g_console_records[0].at("reason"), "runtime_absent");
+}
+
+// #1533: a clock that puts the runtime's signature in the future is named as the PC's clock, with the verifier's words.
+TEST(StopLineRuntime, ATimestampInTheFutureNamesTheClockAndTheVerifiersWords) {
+  StderrCapture capture;
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(nullptr, nullptr, nullptr);
+  RuntimeLoadResult result = Result(RuntimeLoadOutcome::kRuntimeRefused, L"C:\\nevr\\nevr-runtime.dll");
+  result.verify_reason = "timestamp invalid: the token's time is in the future";
+  result.verify_reason_code = nevr_plugin_signature::Reason::TimestampInvalid;
+  const wchar_t* sentence =
+      nevr_host::StopNoticeTextFor(RuntimeLoadOutcome::kRuntimeRefused, nevr_plugin_signature::Reason::TimestampInvalid);
+  EXPECT_TRUE(nevr_host::WriteRuntimeNoticeLine(sentence, diagnostics, result));
+  const std::string text = capture.Text();
+  EXPECT_NE(text.find("date or time is wrong"), std::string::npos) << text;
+  EXPECT_NE(text.find("Detail: timestamp invalid: the token's time is in the future"), std::string::npos) << text;
+  EXPECT_EQ(text.find("reinstall"), std::string::npos) << "the fix for a clock is the clock, not the install: " << text;
+}
+
 // A first stop record whose primary directory is blocked is written to %TEMP%: the record's `log`, the console line and the
 // dialog all name that file, not the directory the record would have gone to first.
 TEST(StopLineRuntime, TheFirstRecordThatFallsBackToTempNamesTheTempLogOnTheRecordAndOnTheLine) {

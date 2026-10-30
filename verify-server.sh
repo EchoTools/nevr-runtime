@@ -212,7 +212,7 @@ while [ "$elapsed" -lt "$RUN_SECONDS" ]; do
   wait "$sampler" 2>/dev/null
   kill -0 "$WINE_PID" 2>/dev/null || { echo "process exited early at t=$((SECONDS-started_at))s" >> "$OUT/context.txt"; break; }
   elapsed=$((elapsed+POLL_SECONDS))
-  pids=$(pgrep -u "$(id -u)" -f "$ECHOVR_CMDLINE" | tr '\n' ' ')
+  pids=$(game_pids | tr '\n' ' ')
   n=$(count_game_windows "$pids")
   [ "$n" -gt "$MAX_WINDOWS" ] && MAX_WINDOWS="$n"
   echo "t=${elapsed}s game_pids=[$pids] game_windows=$n" >> "$OUT/window-census.txt"
@@ -220,7 +220,7 @@ done
 echo "max_game_windows=$MAX_WINDOWS" >> "$OUT/context.txt"
 
 echo "=== CTRL+C (SIGINT) ===" | tee -a "$LOG"
-for p in $(pgrep -u "$(id -u)" -f "$ECHOVR_CMDLINE"); do kill -INT "$p" 2>/dev/null; done
+for p in $(game_pids); do kill -INT "$p" 2>/dev/null; done
 wait "$WINE_PID"
 RC=$?
 WINE_RUNNING=0

@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <cstdio>
+#include <cstring>
 #include <exception>
 #include <memory>
 #include <string>
@@ -16,6 +17,7 @@
 #include "core/logging.h"
 #include "nevr/pc/nevr_common.h"
 #include "runtime/hook/patching.h"
+#include "runtime/patch/gpu_score.h"
 
 namespace nevr_render_config_hook {
 namespace {
@@ -113,6 +115,97 @@ std::string QueryRuntimeVersion() {
   return clean.empty() ? std::string("unknown") : clean;
 }
 
+// ---- The GPU score, when the game's own rating failed (#1419). The pure rule is patch/gpu_score.h. ----
+
+// NVAPI function IDs, asked of nvapi_QueryInterface. GetGpuCoreCount and GetAllClockFrequencies are the two calls the game
+// makes in its device init (echovr.exe 0x14058f98c..0x14058fa04, the cores and the base-clock query); the others set up
+// the GPU handle the two take.
+constexpr std::uint32_t kNvApiInitialize = 0x0150E828U;
+constexpr std::uint32_t kNvApiEnumPhysicalGpus = 0xE5AC921FU;
+constexpr std::uint32_t kNvApiGetGpuCoreCount = 0xC7026A87U;
+constexpr std::uint32_t kNvApiGetAllClockFrequencies = 0xDCB616C3U;
+constexpr std::size_t kNvApiMaxPhysicalGpus = 64;
+// NV_GPU_CLOCK_FREQUENCIES_V3, as NVAPI's header lays it out: version, then ClockType, then 32 domains of 8 bytes each
+// (bIsPresent in bit 0 of the first word, the frequency in kHz in the second). 8 + 32 x 8 = 0x108 bytes.
+constexpr std::uint32_t kNvClockFrequenciesV3 = 0x30108U;
+constexpr std::size_t kNvClockFrequenciesBytes = 0x108;
+constexpr std::uint32_t kNvClockTypeCurrent = 0;  // dxvk-nvapi answers only the current clock (BASE is refused)
+constexpr std::size_t kNvDomainOffset = 8;
+constexpr std::size_t kNvDomainBytes = 8;
+constexpr std::size_t kNvDomainProcessor = 7;  // NVAPI_GPU_PUBLIC_CLOCK_PROCESSOR: the shader clock the FLOPS are made from
+
+using NvStatus = std::int32_t;
+using NvQueryInterfaceFn = void* (*)(std::uint32_t id);
+using NvInitializeFn = NvStatus (*)();
+using NvEnumPhysicalGpusFn = NvStatus (*)(void** handles, std::uint32_t* count);
+using NvGetGpuCoreCountFn = NvStatus (*)(void* handle, std::uint32_t* count);
+using NvGetAllClockFrequenciesFn = NvStatus (*)(void* handle, unsigned char* frequencies);
+
+// Asks NVAPI for the first GPU's cores and its current shader clock. Each value that answers sets its `have` flag; the first
+// step that does not answer names itself in `failure`. The first GPU is the one the game's device is on on a one-NVIDIA
+// machine; a machine with two NVIDIA cards is not separated here.
+void QueryNvidia(nevr_gpu_score::NvidiaMeasure* out) {
+  HMODULE nvapi = GetModuleHandleW(L"nvapi64.dll");
+  if (nvapi == nullptr) {
+    out->failure = "nvapi_absent";
+    return;
+  }
+  const auto query = reinterpret_cast<NvQueryInterfaceFn>(
+      reinterpret_cast<void*>(GetProcAddress(nvapi, "nvapi_QueryInterface")));
+  if (query == nullptr) {
+    out->failure = "nvapi_no_query_interface";
+    return;
+  }
+  const auto initialize = reinterpret_cast<NvInitializeFn>(query(kNvApiInitialize));
+  const auto enumGpus = reinterpret_cast<NvEnumPhysicalGpusFn>(query(kNvApiEnumPhysicalGpus));
+  const auto coreCount = reinterpret_cast<NvGetGpuCoreCountFn>(query(kNvApiGetGpuCoreCount));
+  const auto clocks = reinterpret_cast<NvGetAllClockFrequenciesFn>(query(kNvApiGetAllClockFrequencies));
+  if (initialize == nullptr || enumGpus == nullptr || coreCount == nullptr || clocks == nullptr) {
+    out->failure = "nvapi_function_missing";
+    return;
+  }
+  if (initialize() != 0) {
+    out->failure = "nvapi_initialize_failed";
+    return;
+  }
+  void* handles[kNvApiMaxPhysicalGpus] = {};
+  std::uint32_t count = 0;
+  if (enumGpus(handles, &count) != 0 || count == 0) {
+    out->failure = "nvapi_enum_gpus_failed";
+    return;
+  }
+  std::uint32_t cores = 0;
+  if (coreCount(handles[0], &cores) != 0 || cores == 0) {
+    out->failure = "nvapi_get_gpu_core_count_failed";
+    return;
+  }
+  out->haveCores = true;
+  out->cores = cores;
+
+  unsigned char frequencies[kNvClockFrequenciesBytes] = {};
+  const std::uint32_t version = kNvClockFrequenciesV3;
+  const std::uint32_t clockType = kNvClockTypeCurrent;
+  std::memcpy(frequencies, &version, sizeof(version));
+  std::memcpy(frequencies + 4, &clockType, sizeof(clockType));
+  if (clocks(handles[0], frequencies) != 0) {
+    out->failure = "nvapi_get_all_clock_frequencies_failed";
+    return;
+  }
+  std::uint32_t present = 0;
+  std::uint32_t khz = 0;
+  const std::size_t domain = kNvDomainOffset + kNvDomainProcessor * kNvDomainBytes;
+  std::memcpy(&present, frequencies + domain, sizeof(present));
+  std::memcpy(&khz, frequencies + domain + 4, sizeof(khz));
+  if ((present & 1U) == 0 || khz == 0) {
+    out->failure = "nvapi_clock_domain_absent";
+    return;
+  }
+  out->haveClockKhz = true;
+  out->clockKhz = khz;
+}
+
+using NvidiaQueryFn = void (*)(nevr_gpu_score::NvidiaMeasure* out);
+
 // ---- State. Written by Install and the hooks, read by Poll. ----
 
 ApplyFn g_originalApply = nullptr;
@@ -121,6 +214,7 @@ std::atomic<const MemoryReader*> g_reader{&g_processReader};
 Externals g_externals = {&QueryGpuDriver, &QueryRuntimeVersion};
 SettingsObserver g_observer;
 std::atomic<std::uintptr_t> g_bootReturn{0};
+std::atomic<std::uintptr_t> g_gameBase{0};
 std::atomic<std::uintptr_t> g_lastApplyReturn{0};
 std::atomic<std::uint64_t> g_swallowed{0};  // exceptions the hooks caught: they cannot log on the game's path
 std::unique_ptr<Collector> g_collector;
@@ -128,6 +222,8 @@ std::atomic<bool> g_active{false};
 std::atomic<bool> g_serverSkipLogged{false};
 std::atomic<bool> g_checkFailureLogged{false};
 std::atomic<bool> g_traceLogged{false};
+std::atomic<bool> g_scoreLogged{false};
+NvidiaQueryFn g_nvidiaQuery = &QueryNvidia;
 
 // noinline: __builtin_return_address(0) must name this function's caller, the game's call site.
 __attribute__((noinline)) std::uint64_t ApplyHook(void* settings, void* game, int logFlag) {
@@ -143,7 +239,53 @@ __attribute__((noinline)) std::uint64_t ApplyHook(void* settings, void* game, in
   return result;
 }
 
+// Writes the score the selector is about to read (#1419), where the game's getter reads it (fcn.1400df7a0 is
+// MOVSD XMM0,[0x14209d000]). The game's setter (fcn.1400dfeb0) is not called: its bytes are not checked here.
+bool WriteGameScore(std::uintptr_t address, double value) {
+  SIZE_T written = 0;
+  return WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<LPVOID>(address), &value, sizeof(value), &written) != 0 &&
+         written == sizeof(value);
+}
+
+// Runs in the selector hook before the original selector reads the score. The game's own rating is kept when it is not
+// zero; a zero is filled only for NVIDIA with both NVAPI values (patch/gpu_score.h). The decision is logged once a run.
+void FillGpuScore() {
+  const std::uintptr_t base = g_gameBase.load(std::memory_order_relaxed);
+  const MemoryReader& reader = *g_reader.load(std::memory_order_acquire);
+  std::uint32_t vendor = 0;
+  double gameScore = 0.0;
+  const bool readOk = reader.Read(nevr_render_config::Resolve(base, nevr_render_config::kGpuVendorVa), &vendor, sizeof(vendor)) &&
+                      reader.Read(nevr_render_config::Resolve(base, nevr_render_config::kGpuScoreVa), &gameScore, sizeof(gameScore));
+
+  nevr_gpu_score::Decision decision;
+  if (!readOk) {
+    decision.reason = "game_unreadable";
+  } else {
+    nevr_gpu_score::NvidiaMeasure nvidia;
+    if (gameScore == 0.0 && vendor == nevr_gpu_score::kVendorNvidia) g_nvidiaQuery(&nvidia);
+    decision = nevr_gpu_score::DecideScore(vendor, gameScore, nvidia);
+    if (decision.outcome == nevr_gpu_score::Outcome::Filled &&
+        !WriteGameScore(nevr_render_config::Resolve(base, nevr_render_config::kGpuScoreVa), decision.score)) {
+      decision = nevr_gpu_score::Decision();
+      decision.reason = "write_failed";
+      decision.score = gameScore;
+    }
+  }
+
+  if (!g_scoreLogged.exchange(true)) {
+    Log(decision.outcome == nevr_gpu_score::Outcome::Unrated ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
+        "[NEVR.RENDER] gpu_score %s vendor=%u game_score=%.17g score=%.17g source=%s reason=%s",
+        nevr_gpu_score::OutcomeName(decision.outcome), static_cast<unsigned>(vendor), gameScore, decision.score,
+        decision.source, decision.reason[0] != '\0' ? decision.reason : "-");
+  }
+}
+
 std::uint64_t SelectorHook(void* settings, void* game) {
+  try {
+    FillGpuScore();
+  } catch (const std::exception&) {
+    g_swallowed.fetch_add(1, std::memory_order_relaxed);
+  }
   const std::uint64_t result = g_originalSelector(settings, game);
   try {
     g_observer.OnSelector(reinterpret_cast<std::uintptr_t>(settings));
@@ -191,6 +333,7 @@ bool Install(std::uintptr_t gameBase, bool isServer) {
 
   g_bootReturn.store(nevr_render_config::Resolve(gameBase, nevr_render_config::kBootApplyReturnVa),
                      std::memory_order_relaxed);
+  g_gameBase.store(gameBase, std::memory_order_relaxed);
   g_collector = std::make_unique<Collector>(*g_reader.load(std::memory_order_acquire), gameBase, g_observer, g_externals);
   // The check works with or without the hooks: without them the settings fields read unavailable.
   g_active.store(true, std::memory_order_release);
@@ -245,6 +388,9 @@ void SetReaderForTest(const MemoryReader* reader) {
   g_reader.store(reader != nullptr ? reader : &g_processReader, std::memory_order_release);
 }
 void SetExternalsForTest(Externals externals) { g_externals = std::move(externals); }
+void SetNvidiaQueryForTest(void (*query)(nevr_gpu_score::NvidiaMeasure* out)) {
+  g_nvidiaQuery = query != nullptr ? query : &QueryNvidia;
+}
 void SetBootReturnForTest(std::uintptr_t address) { g_bootReturn.store(address, std::memory_order_relaxed); }
 std::uintptr_t LastApplyReturnForTest() { return g_lastApplyReturn.load(std::memory_order_relaxed); }
 SettingsObserver::View ObservedForTest() { return g_observer.Snapshot(); }
@@ -262,11 +408,14 @@ void ResetForTest() {
   g_reader.store(&g_processReader, std::memory_order_release);
   g_externals = {&QueryGpuDriver, &QueryRuntimeVersion};
   g_bootReturn.store(0);
+  g_gameBase.store(0);
   g_lastApplyReturn.store(0);
   g_swallowed.store(0);
   g_serverSkipLogged.store(false);
   g_checkFailureLogged.store(false);
   g_traceLogged.store(false);
+  g_scoreLogged.store(false);
+  g_nvidiaQuery = &QueryNvidia;
   g_observer.Reset();
 }
 #endif

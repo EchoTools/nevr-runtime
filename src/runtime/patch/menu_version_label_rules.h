@@ -26,6 +26,14 @@ namespace nevr_menu_version_label {
 // Symbol corpus: lobby_version.
 constexpr std::uint64_t kLobbyVersionItem = 0x457626a49b59152aULL;
 
+// Symbol corpus: publisher_lock (symcache_data.cpp). The panel draws the net-game document's publisher lock there, which
+// is "rad15_live" (login_rewrite.cpp keeps it on the wire). This is the only item of the three that can hold "rad15_live":
+// lobby_version holds the build timestamp this file replaces, rad_version an integer.
+constexpr std::uint64_t kPublisherLockItem = 0xa6fbcbfe579dd357ULL;
+
+// The text the panel draws for the publisher lock: the community service's name. Display only; the document keeps its value.
+constexpr const char* kPublisherLockLabel = "echovrce";
+
 // The longest text the lobby_version slot is assumed to hold. The game writes an ISO 8601 UTC timestamp there
 // ("2023-04-04T17:47:47+00:00", 25 characters), so the slot holds at least 24 characters plus the terminator.
 // Assumption, not a measurement: a slot that is smaller cuts the label, it does not overrun.
@@ -49,6 +57,14 @@ inline const char* ReplacementFor(std::uint64_t item, const char* text, const st
   if (text == nullptr || text[0] == '\0') return nullptr;
   if (fittedLabel.empty()) return nullptr;
   return fittedLabel.c_str();
+}
+
+// The text to draw for the publisher lock item, or nullptr to leave the call alone. The empty text is the script clearing
+// the item, and it stays empty.
+inline const char* PublisherLockReplacement(std::uint64_t item, const char* text) {
+  if (item != kPublisherLockItem) return nullptr;
+  if (text == nullptr || text[0] == '\0') return nullptr;
+  return kPublisherLockLabel;
 }
 
 }  // namespace nevr_menu_version_label

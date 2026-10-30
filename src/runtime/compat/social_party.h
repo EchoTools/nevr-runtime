@@ -429,8 +429,8 @@ class State {
     return out;
   }
 
-  /// The game asked for a party to exist (Update's "create" flag): create one unless there is one or a
-  /// create is already in flight.
+  /// Create the local user's party unless there is one or a create is already in flight. Update's "wants a
+  /// party" flag never calls it (#1502); the tablet's own create action has no hook yet, so it has no caller.
   std::vector<Message> CreateParty() {
     std::lock_guard<std::mutex> guard(mutex_);
     std::vector<Message> out;

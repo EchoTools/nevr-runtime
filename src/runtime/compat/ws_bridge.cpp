@@ -1574,7 +1574,10 @@ static void AnswerLoginLocally(ix::WebSocket* gameWs, int connIdx) {
 static void OnRemoteLoginRefused(int httpStatus, const std::string& refusalKey, int connIdx) {
   if (!nevr_login_refusal::IsLoginRefusalStatus(httpStatus)) return;
   if (g_isServer) {
-    const std::string cause = nevr_login_refusal::RefusedLoginCause(httpStatus, NevrCfgSource());
+    const char* cfgPassword = NevrCfgGetFlat("nevr_password");
+    const bool deviceSignIn =
+        nevr_login_refusal::ServerSignsInByDeviceCode(cfgPassword ? std::string_view(cfgPassword) : std::string_view());
+    const std::string cause = nevr_login_refusal::RefusedLoginCause(httpStatus, NevrCfgSource(), deviceSignIn);
     ServerFatal("%s", cause.c_str());
     return;
   }
@@ -1599,17 +1602,23 @@ static bool SignInEndedWithoutTokenNow() {
 }
 
 static PreparedRemote PrepareRemote(nevr_socket_role::Role role, int connIdx) {
-  // N149 (#1254): a server's only credential for the community service is the one in config.yaml. Without it the
-  // login would go out as account 0, or unauthenticated, and be refused every few seconds for ever, while
-  // nothing else of the server (ServerDB, the HTTP listener) can start. Stop with the cause instead.
+  // N149 (#1254): a server's credential for the community service is either the discord id and password in
+  // config.yaml or, with no password (#1532), the token its device sign-in got. Without one the login would go out
+  // as account 0, or unauthenticated, and be refused every few seconds for ever, while nothing else of the server
+  // (ServerDB, the HTTP listener) can start. Stop with the cause instead.
   if (g_isServer) {
     const char* cfgDiscordId = NevrCfgGetFlat("nevr_discord_id");
     const char* cfgPassword = NevrCfgGetFlat("nevr_password");
+    const std::string_view password = cfgPassword ? std::string_view(cfgPassword) : std::string_view();
     const std::vector<std::string> missing = nevr_login_refusal::MissingServerCredentialKeys(
-        cfgDiscordId ? std::string_view(cfgDiscordId) : std::string_view(),
-        cfgPassword ? std::string_view(cfgPassword) : std::string_view());
+        cfgDiscordId ? std::string_view(cfgDiscordId) : std::string_view(), password);
     if (!missing.empty()) {
       const std::string cause = nevr_login_refusal::NoCredentialCause(missing, NevrCfgSource());
+      ServerFatal("%s", cause.c_str());
+      return PreparedRemote{};
+    }
+    if (nevr_login_refusal::ServerSignsInByDeviceCode(password) && ReadLoginIdentity(false).bearerToken.empty()) {
+      const std::string cause = nevr_login_refusal::NoSignInCause(NevrCfgSource());
       ServerFatal("%s", cause.c_str());
       return PreparedRemote{};
     }

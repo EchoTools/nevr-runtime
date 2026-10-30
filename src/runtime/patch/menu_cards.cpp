@@ -78,7 +78,10 @@ bool Transform(const void* original, uint64_t size, const void** out, uint64_t* 
 }  // namespace
 
 void Install() {
-  RegisterResourceTransform(kPageType, kPageName, &Transform, nullptr, "main-menu cards");
+  if (!RegisterResourceTransform(kPageType, kPageName, &Transform, nullptr, "main-menu cards")) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.MENU] main-menu cards left off reason=transform_not_registered");
+    return;
+  }
   Log(EchoVR::LogLevel::Info,
       "[NEVR.MENU] main-menu cards enabled page=mnu_master type=0x%016llx name=0x%016llx pin=%s",
       static_cast<unsigned long long>(kPageType), static_cast<unsigned long long>(kPageName), kStockPageSha256);

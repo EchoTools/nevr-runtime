@@ -333,14 +333,34 @@ def wait_for_gpu_memory(needed: int = GPU_FREE_NEEDED_MIB) -> None:
         time.sleep(GPU_POLL_SECONDS)
 
 
-# The launcher's own pattern (tools/lib/game_install.sh ECHOVR_CMDLINE).
+# The launcher's own candidate pattern (tools/lib/game_install.sh ECHOVR_CMDLINE); the command line decides (#1490).
 GAME_CMDLINE = r"(^|[/\\])echovr\.exe( |$)"
+
+
+def _cmdline_name(arg: str) -> str:
+    """The last path element of a command-line word, split on / or \\ (game_install.sh game_pids does the same)."""
+    return re.split(r"[/\\]", arg)[-1]
+
+
+def is_game_process(pid: str) -> bool:
+    """argv[0] is echovr.exe, or argv[0] is a Wine loader and argv[1] is echovr.exe. The same rule as game_pids in
+    tools/lib/game_install.sh; a process that merely names the file in an argument is not the game."""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            argv = [a.decode(errors="replace") for a in f.read().split(b"\0")[:-1]]
+    except OSError:
+        return False
+    if not argv:
+        return False
+    if _cmdline_name(argv[0]) == "echovr.exe":
+        return True
+    return len(argv) > 1 and _cmdline_name(argv[0]).startswith("wine") and _cmdline_name(argv[1]) == "echovr.exe"
 
 
 def game_pids() -> list[str]:
     out = subprocess.run(["pgrep", "-u", str(os.getuid()), "-f", GAME_CMDLINE],
                          capture_output=True, text=True)
-    return out.stdout.split()
+    return [pid for pid in out.stdout.split() if is_game_process(pid)]
 
 
 def wait_for_game_exit(timeout: float = 30.0) -> bool:

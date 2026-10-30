@@ -269,7 +269,7 @@ TEST_F(ServerTeamSize, ACapWriteThatReportsAFailureAfterWritingKeepsTheSlotRule)
   g_refuseAt = img.cap.data();
   const Outcome o = Run(img, 6, WritesButFailsFirstWriter);
   EXPECT_EQ(o.slot, Result::Applied);
-  EXPECT_EQ(o.cap, Result::WriteFailed);
+  EXPECT_EQ(o.cap, Result::WrittenWithError) << "the cap's bytes are in; its writer reported an error";
   EXPECT_EQ(img.cap, CapFor(6));
   EXPECT_FALSE(o.slotRestored);
   EXPECT_EQ(img.slot, kSlotWrapped) << "a cap of six with the game's slot rule gives a sixth member slot 5";
@@ -319,7 +319,7 @@ TEST_F(ServerTeamSize, ASlotWriteThatReportsAFailureAfterWritingIsPutBack) {
   Image img;
   g_refuseAt = img.slot.data();
   const Outcome o = Run(img, 6, WritesButFailsFirstWriter);
-  EXPECT_EQ(o.slot, Result::WriteFailed);
+  EXPECT_EQ(o.slot, Result::WrittenWithError);
   EXPECT_FALSE(o.capTried);
   EXPECT_TRUE(o.slotRestored);
   EXPECT_EQ(img.slot, kSlotStock) << "the cap stayed five, so the slot rule goes back out";

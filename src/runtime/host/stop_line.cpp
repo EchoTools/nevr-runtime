@@ -35,8 +35,11 @@ class Text {
   void Finish() noexcept {
     if (truncated_ && room_ >= used_ + sizeof(kDetailIncomplete)) {
       std::memcpy(out_ + used_, kDetailIncomplete, sizeof(kDetailIncomplete));
+      used_ += sizeof(kDetailIncomplete) - 1;
     }
   }
+
+  std::size_t Used() const noexcept { return used_; }
 
   Text& Add(const char* piece) noexcept {
     const std::size_t length = std::strlen(piece);
@@ -212,6 +215,49 @@ void EmitFactsRecord(BootstrapDiagnostics& diagnostics, const char* event, const
   }
 }
 
+// Writes all `length` bytes to `handle`, continuing a short write. False when there is no handle or a write fails.
+bool WriteAll(HANDLE handle, const char* text, std::size_t length) noexcept {
+  if (handle == nullptr || handle == INVALID_HANDLE_VALUE) return false;
+  std::size_t written = 0;
+  while (written < length) {
+    DWORD chunk = 0;
+    if (WriteFile(handle, text + written, static_cast<DWORD>(length - written), &chunk, nullptr) == FALSE || chunk == 0) {
+      return false;
+    }
+    written += chunk;
+  }
+  return true;
+}
+
+// The plain notice (#1533) goes to the first console that takes it: standard error; else the console of the parent
+// process, which a GUI-subsystem game started from a shell has no handle to (AttachConsole fails when there is no
+// parent console or this process already has one, and CONOUT$ then names the console there is); else standard output.
+bool PutConsoleText(const char* text, std::size_t length) noexcept {
+  if (WriteAll(GetStdHandle(STD_ERROR_HANDLE), text, length)) return true;
+  static_cast<void>(AttachConsole(ATTACH_PARENT_PROCESS));
+  const HANDLE console = CreateFileW(L"CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+  if (console != INVALID_HANDLE_VALUE) {
+    const bool written = WriteAll(console, text, length);
+    CloseHandle(console);
+    if (written) return true;
+  }
+  return WriteAll(GetStdHandle(STD_OUTPUT_HANDLE), text, length);
+}
+
+// `sentence`, the detail and the log path as one line of text with its newline. 0 when `capacity` cannot hold it.
+std::size_t BuildNoticeLine(char* buffer, std::size_t capacity, const wchar_t* sentence, const char* detail,
+                            const wchar_t* log) noexcept {
+  if (capacity < 2) return 0;
+  Text text(buffer, capacity - 1);  // the last byte is the newline
+  text.AddWide(sentence).Add(" Detail: ").Add(detail);
+  if (log != nullptr && log[0] != L'\0') text.Add(" Log: ").AddWide(log);
+  text.Finish();
+  const std::size_t used = text.Used();
+  buffer[used] = '\n';
+  buffer[used + 1] = '\0';
+  return used + 1;
+}
+
 }  // namespace
 
 std::size_t BuildStopLine(char* buffer, std::size_t capacity, const StopLineFacts& facts) noexcept {
@@ -234,19 +280,8 @@ bool PutStopLine(const StopLineFacts& facts) noexcept {
   char buffer[kStopLineBytes];
   const std::size_t length = BuildStopLine(buffer, sizeof(buffer), facts);
   if (length == 0) return false;
-  const HANDLE standard_error = GetStdHandle(STD_ERROR_HANDLE);
-  if (standard_error == nullptr || standard_error == INVALID_HANDLE_VALUE) return false;
-  // A short write is continued from where it stopped, so the line is never left without its tail.
-  std::size_t written = 0;
-  while (written < length) {
-    DWORD chunk = 0;
-    if (WriteFile(standard_error, buffer + written, static_cast<DWORD>(length - written), &chunk, nullptr) == FALSE ||
-        chunk == 0) {
-      return false;
-    }
-    written += chunk;
-  }
-  return true;
+  // WriteAll continues a short write from where it stopped, so the line is never left without its tail.
+  return WriteAll(GetStdHandle(STD_ERROR_HANDLE), buffer, length);
 }
 
 void DescribeRuntimeStop(const BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result,
@@ -268,6 +303,30 @@ bool WriteRuntimeStopLine(const BootstrapDiagnostics& diagnostics, const Runtime
   RuntimeStopText text;
   DescribeRuntimeStop(diagnostics, result, text);
   return PutStopLine(text.facts);
+}
+
+bool WriteRuntimeNoticeLine(const wchar_t* sentence, BootstrapDiagnostics& diagnostics,
+                            const RuntimeLoadResult& result) noexcept {
+  RuntimeStopText text;
+  DescribeRuntimeStop(diagnostics, result, text);
+  char buffer[kNoticeLineBytes];
+  const std::size_t length = BuildNoticeLine(buffer, sizeof(buffer), sentence, text.detail, text.facts.log);
+  const bool written = length != 0 && PutConsoleText(buffer, length);
+  // The host log says whether a console took the line, so a run with no console is visible in the record.
+  try {
+    nlohmann::json record;
+    record["event"] = "console_notice";
+    record["reason"] = result.OutcomeName();
+    record["written"] = written;
+    diagnostics.Emit(record);
+  } catch (const std::exception& error) {
+    char buffer_json[BootstrapDiagnostics::kMaxRecordBytes];
+    JsonLine line(buffer_json, sizeof(buffer_json), "console_notice");
+    line.Str("error", "record_build_failed").Str("what", error.what()).Bool("written", written);
+    const std::size_t line_length = line.Finish();
+    if (line_length != 0) diagnostics.AppendLine(buffer_json, line_length);
+  }
+  return written;
 }
 
 void AddStopFacts(nlohmann::json& record, const StopLineFacts& facts) {

@@ -88,6 +88,16 @@ void DescribeRuntimeStop(const BootstrapDiagnostics& diagnostics, const RuntimeL
 /// record is written, so the `log` field names the file that took the record. False when no line could be written.
 bool WriteRuntimeStopLine(const BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result) noexcept;
 
+/// The room the plain notice line has. It holds `sentence`, the detail and the log path.
+inline constexpr std::size_t kNoticeLineBytes = 8192;
+
+/// The plain line a person reads when the runtime did not load (#1533): `sentence` (what failed and the fix), then the
+/// detail, then the log path, as one line of text, no JSON. It goes to the first console that takes it (PutConsoleText),
+/// so a `-server` started from a shell is told in its own console. A `console_notice` record says whether one took it.
+/// Returns true when a console took the line. Call it after the `game_stop` record, like WriteRuntimeStopLine.
+bool WriteRuntimeNoticeLine(const wchar_t* sentence, BootstrapDiagnostics& diagnostics,
+                            const RuntimeLoadResult& result) noexcept;
+
 /// Add the facts a record of the host log shares with the line: `stopped`, `host_version`, `runtime_version`, `detail`
 /// and `log`. The record keeps its own `event`, `reason` and `exit_code`.
 void AddStopFacts(nlohmann::json& record, const StopLineFacts& facts);

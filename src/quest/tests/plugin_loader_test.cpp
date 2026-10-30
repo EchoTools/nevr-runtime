@@ -538,6 +538,34 @@ TEST(LoaderLoadsAPackagedFileWhoseHashMatchesTheManifest) {
   CHECK_EQ(r->sha256, sha);
 }
 
+// config.yaml rejected as a whole: the packaged plugin still loads (docs/adr/0019 section 2), and its record says the operator's
+// file did not load, so a disabled entry that was lost is visible on the line. A run whose file was usable says 0.
+TEST(LoaderSaysOnThePackagedRecordThatTheConfigFileWasRejected) {
+  Options rejected = HostOptions();
+  rejected.configRejected = true;
+  Env env(rejected);
+  const std::vector<std::uint8_t> file = Slurp(g_dir + "/libfx_ok.so");
+  CHECK(!file.empty());
+  if (file.empty()) return;
+  const std::string sha = nevr_quest::data::Sha256Hex(file.data(), file.size());
+  env.loader->Plan({Packaged("ok", "libfx_ok.so", sha)});
+  env.loader->RunPhase(PluginPhase::Normal);
+  const LoadRecord* r = env.platform.Record("ok");
+  CHECK(r != nullptr);
+  if (r == nullptr) return;
+  CHECK(r->outcome == Outcome::kLoaded);
+  CHECK(r->configRejected);
+
+  Env usable;
+  usable.loader->Plan({Packaged("ok", "libfx_ok.so", sha)});
+  usable.loader->RunPhase(PluginPhase::Normal);
+  const LoadRecord* u = usable.platform.Record("ok");
+  CHECK(u != nullptr);
+  if (u == nullptr) return;
+  CHECK(u->outcome == Outcome::kLoaded);
+  CHECK(!u->configRejected);
+}
+
 TEST(LoaderGivesThePluginTheQuestContext) {
   Env env;
   env.loader->Plan({Item("ok", "libfx_ok.so", false, true, R"({"k":"v"})")});

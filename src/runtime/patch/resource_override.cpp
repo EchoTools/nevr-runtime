@@ -70,6 +70,8 @@ struct ResourceOverride {
     uint32_t in_flight;     /* game callbacks still using this replacement */
     ResourceTransformFn transform = nullptr;  /* set: answers every load of the resource instead of one replacement */
     void* user = nullptr;
+    bool matched = false;     /* a game load matched this entry's key and buffer, served or not */
+    bool passed_over = false; /* a load matched it and an earlier fixed replacement of the key served that load */
 };
 
 static std::unique_ptr<std::vector<std::shared_ptr<ResourceOverride>>> g_overrides;
@@ -195,8 +197,9 @@ static bool WritePayloadInPlace(uintptr_t cbd, const ResourceOverride& ovr, uint
     return true;
 }
 
-/* Offers the game's buffer to a transform and, when it answers, points the callback at a copy of the answer. */
-static void ApplyTransform(ResourceOverride& ovr, uintptr_t cbd, uint64_t type_hash, uint64_t name_hash) {
+/* Offers the game's buffer to a transform and, when it answers, points the callback at a copy of the answer. Returns
+ * true when the game was given the answer; false leaves the game's buffer in place. */
+static bool ApplyTransform(ResourceOverride& ovr, uintptr_t cbd, uint64_t type_hash, uint64_t name_hash) {
     const void* in = *reinterpret_cast<const void**>(cbd + 0x18);
     const uint64_t inSize = *reinterpret_cast<uint64_t*>(cbd + 0x20);
     const void* out = nullptr;
@@ -209,24 +212,44 @@ static void ApplyTransform(ResourceOverride& ovr, uintptr_t cbd, uint64_t type_h
             "[NEVR.RESOURCE] transform threw label=%s type=0x%016llx name=0x%016llx what=%s - the game's own buffer is kept",
             ovr.label.c_str(), static_cast<unsigned long long>(type_hash),
             static_cast<unsigned long long>(name_hash), e.what());
-        return;
+        return false;
     }
     if (!served || out == nullptr || outSize == 0) {
         Log(EchoVR::LogLevel::Debug,
             "[NEVR.RESOURCE] transform kept the game's buffer label=%s type=0x%016llx name=0x%016llx bytes=%llu",
             ovr.label.c_str(), static_cast<unsigned long long>(type_hash),
             static_cast<unsigned long long>(name_hash), static_cast<unsigned long long>(inSize));
-        return;
+        return false;
     }
-    if (!GiveGameACopy(cbd, out, outSize, ovr.label.c_str(), type_hash, name_hash)) return;
+    if (!GiveGameACopy(cbd, out, outSize, ovr.label.c_str(), type_hash, name_hash)) return false;
     Log(EchoVR::LogLevel::Info,
         "[NEVR.RESOURCE] transform applied label=%s type=0x%016llx name=0x%016llx orig_bytes=%llu new_bytes=%llu",
         ovr.label.c_str(), static_cast<unsigned long long>(type_hash), static_cast<unsigned long long>(name_hash),
         static_cast<unsigned long long>(inSize), static_cast<unsigned long long>(outSize));
+    return true;
+}
+
+/* Offers the game's buffer to each transform of the key in registration order, and stops at the first that serves it.
+ * A transform that declines or throws hands the load to the next one (#1479); the game keeps its own buffer when none does. */
+static void OfferTransforms(const std::vector<std::shared_ptr<ResourceOverride>>& transforms, uintptr_t cbd,
+                            uint64_t type_hash, uint64_t name_hash) {
+    for (const auto& t : transforms) {
+        {
+            std::lock_guard<std::mutex> lock(g_overrides_mutex);
+            ++t->in_flight;
+            g_total_hits++;
+        }
+        CallbackLease lease(t);
+        if (!ApplyTransform(*t, cbd, type_hash, name_hash)) continue;
+        std::lock_guard<std::mutex> lock(g_overrides_mutex);
+        t->applied = true;
+        return;
+    }
 }
 
 static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
     std::shared_ptr<ResourceOverride> selected;
+    std::vector<std::shared_ptr<ResourceOverride>> transforms;  /* matching transforms, in registration order */
     AsyncIOCallback_fn original;
     uint64_t type_hash = 0, name_hash = 0, orig_size = 0;
     uint32_t buf_index = 0;
@@ -244,36 +267,33 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
                 name_hash = *reinterpret_cast<uint64_t*>(res + 0x38);
                 type_hash = *reinterpret_cast<uint64_t*>(res + 0x28);
 
-                /* The first fixed replacement and the first transform that match. A fixed replacement outranks a
-                 * transform of the same key whatever the registration order (#1479), so a transform is chosen only
-                 * when no replacement matches. Both are scanned, so a displaced transform is known. */
+                /* The first fixed replacement that matches serves the load. A fixed replacement outranks every transform
+                 * of the same key whatever the registration order (#1479), so transforms are offered only when none
+                 * matches. Every match is recorded, so a shutdown can tell an entry passed over from one never requested. */
                 std::shared_ptr<ResourceOverride> fixedHit;
-                std::shared_ptr<ResourceOverride> transformHit;
                 for (auto& ovr : *g_overrides) {
                     if (ovr->applied && !ovr->transform) continue;
                     if (ovr->name_hash != name_hash) continue;
                     if (!nevr_resource_key::NamesBuffer(ovr->type_hash, type_hash, buf_index)) continue;
                     if (ovr->transform && buf_index != 0) continue;  /* a transform is offered buffer 0 only */
 
+                    ovr->matched = true;
                     if (ovr->transform) {
-                        if (!transformHit) transformHit = ovr;
+                        transforms.push_back(ovr);
                     } else if (!fixedHit) {
                         fixedHit = ovr;
+                    } else {
+                        ovr->passed_over = true;
                     }
                 }
                 if (fixedHit) {
                     /* Replaced below, outside the lock: the copy calls the game's allocator */
                     selected = fixedHit;
                     orig_size = *reinterpret_cast<uint64_t*>(cbd + 0x20);
-                    if (transformHit) {
-                        displacedTransform = transformHit->label;
+                    if (!transforms.empty()) {
+                        displacedTransform = transforms.front()->label;
                         displacingOverride = fixedHit->label;
                     }
-                } else if (transformHit) {
-                    /* A transform is asked on every load; it runs below, outside the lock. */
-                    selected = transformHit;
-                }
-                if (selected) {
                     selected->applied = true;
                     ++selected->in_flight;
                     g_total_hits++;
@@ -289,10 +309,11 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
     }
     CallbackLease lease(selected);
     const bool inPlace = buf_index == 1;
-    if (selected && selected->transform) {
-        ApplyTransform(*selected, reinterpret_cast<uintptr_t>(callback_data), type_hash, name_hash);
-    } else if (selected &&
-               !(inPlace ? WritePayloadInPlace(reinterpret_cast<uintptr_t>(callback_data), *selected, type_hash,
+    if (!selected) {
+        if (!transforms.empty()) {
+            OfferTransforms(transforms, reinterpret_cast<uintptr_t>(callback_data), type_hash, name_hash);
+        }
+    } else if (!(inPlace ? WritePayloadInPlace(reinterpret_cast<uintptr_t>(callback_data), *selected, type_hash,
                                                name_hash, orig_size)
                          : GiveGameACopy(reinterpret_cast<uintptr_t>(callback_data), selected->data, selected->size,
                                          selected->label.c_str(), type_hash, name_hash))) {
@@ -530,9 +551,9 @@ void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
         static_cast<unsigned long long>(size));
 }
 
-void RegisterResourceTransform(uint64_t type_hash, uint64_t name_hash, ResourceTransformFn transform, void* user,
+bool RegisterResourceTransform(uint64_t type_hash, uint64_t name_hash, ResourceTransformFn transform, void* user,
                                const char* label) {
-    if (transform == nullptr) return;
+    if (transform == nullptr) return false;
     auto ovr = std::make_shared<ResourceOverride>();
     ovr->type_hash = type_hash;
     ovr->name_hash = name_hash;
@@ -544,13 +565,14 @@ void RegisterResourceTransform(uint64_t type_hash, uint64_t name_hash, ResourceT
     ovr->user = user;
     {
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
-        if (!g_overrides) return;
+        if (!g_overrides) return false;
         g_overrides->push_back(ovr);
     }
     EnsureHookInstalled();
-    Log(EchoVR::LogLevel::Info,
+    Log(EchoVR::LogLevel::Debug,
         "[NEVR.RESOURCE] Registered transform: %s (type=0x%016llx name=0x%016llx)", ovr->label.c_str(),
         static_cast<unsigned long long>(type_hash), static_cast<unsigned long long>(name_hash));
+    return true;
 }
 
 static bool RegisterResourceOverrideFromFileImpl(uint64_t type_hash, uint64_t name_hash,
@@ -814,13 +836,34 @@ ResourceOverrideShutdownReport ShutdownResourceOverride() {
         for (const auto& ovr : *g_overrides) {
             if (report.hook_installed && ovr->owned) ++owned_buffers_process_lifetime;
             if (ovr->applied) continue;
+            // A transform answers only the loads its resource makes, and a level's transform is expected to see none
+            // (a session that never loads the level), so it is counted and kept at Debug, never a Warning.
+            if (ovr->transform) {
+                ++report.transforms_unserved;
+                Log(EchoVR::LogLevel::Debug,
+                    "[NEVR.RESOURCE] transform not served label=%s name=0x%016llx matched=%s",
+                    ovr->label.c_str(), static_cast<unsigned long long>(ovr->name_hash), ovr->matched ? "yes" : "no");
+                continue;
+            }
             ++report.never_applied;
             // A registered-but-never-matched override (wrong hash, or the expected resource genuinely never
-            // loaded this session) must not read the same as one that worked.
-            Log(EchoVR::LogLevel::Warning,
-                "[NEVR.RESOURCE] override never applied label=%s name=0x%016llx — resource was never requested "
-                "this session",
-                ovr->label.c_str(), static_cast<unsigned long long>(ovr->name_hash));
+            // loaded this session) must not read the same as one that worked, nor as one an earlier entry took.
+            if (ovr->passed_over) {
+                Log(EchoVR::LogLevel::Warning,
+                    "[NEVR.RESOURCE] override passed over label=%s name=0x%016llx — an earlier override of the same "
+                    "resource served its loads",
+                    ovr->label.c_str(), static_cast<unsigned long long>(ovr->name_hash));
+            } else if (ovr->matched) {
+                Log(EchoVR::LogLevel::Warning,
+                    "[NEVR.RESOURCE] override matched a load but was not served label=%s name=0x%016llx — the "
+                    "failure is logged where it happened",
+                    ovr->label.c_str(), static_cast<unsigned long long>(ovr->name_hash));
+            } else {
+                Log(EchoVR::LogLevel::Warning,
+                    "[NEVR.RESOURCE] override never applied label=%s name=0x%016llx — resource was never requested "
+                    "this session",
+                    ovr->label.c_str(), static_cast<unsigned long long>(ovr->name_hash));
+            }
         }
         // With the hook live the module is pinned and a callback may be running: keep the registry. With no
         // hook nothing can reach the buffers, so release them.
@@ -832,11 +875,11 @@ ResourceOverrideShutdownReport ShutdownResourceOverride() {
         }
     }
     Log(EchoVR::LogLevel::Info,
-        "[NEVR.RESOURCE] shutdown complete overrides_registered=%llu overrides_never_applied=%llu hook_installed=%s "
-        "registry_released=%s owned_buffers_process_lifetime=%llu",
+        "[NEVR.RESOURCE] shutdown complete overrides_registered=%llu overrides_never_applied=%llu "
+        "transforms_unserved=%llu hook_installed=%s registry_released=%s owned_buffers_process_lifetime=%llu",
         static_cast<unsigned long long>(report.registered), static_cast<unsigned long long>(report.never_applied),
-        report.hook_installed ? "true" : "false", report.hook_installed ? "false" : "true",
-        static_cast<unsigned long long>(owned_buffers_process_lifetime));
+        static_cast<unsigned long long>(report.transforms_unserved), report.hook_installed ? "true" : "false",
+        report.hook_installed ? "false" : "true", static_cast<unsigned long long>(owned_buffers_process_lifetime));
     return report;
 }
 

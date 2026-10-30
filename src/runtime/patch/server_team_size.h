@@ -155,8 +155,8 @@ inline Outcome Apply(uint8_t* capSite, uint8_t* slotSite, uint32_t size, nevr_ch
     // puts a size of 5 or less in effect, not while its bytes are no cap this reads.
     const uint32_t capNow = CapInEffect(capSite);
     if (std::memcmp(slotSite, o.slotBefore, sizeof(o.slotBefore)) != 0 && capNow != 0 && capNow <= kGameTeamSize) {
-      o.slotRestored = write(slotSite, o.slotBefore, sizeof(o.slotBefore)) &&
-                       std::memcmp(slotSite, o.slotBefore, sizeof(o.slotBefore)) == 0;
+      write(slotSite, o.slotBefore, sizeof(o.slotBefore));  // the read-back decides, not the writer's word
+      o.slotRestored = std::memcmp(slotSite, o.slotBefore, sizeof(o.slotBefore)) == 0;
     }
     o.inEffect = capNow;
     o.slotRule = std::memcmp(slotSite, kSlotPatched, sizeof(kSlotPatched)) == 0;
@@ -188,7 +188,9 @@ inline Outcome Apply(uint8_t* capSite, uint8_t* slotSite, uint32_t size, nevr_ch
 
 /// A writer reported a failure at a site (`cap` and `slot` stay Mismatch unless tried).
 inline bool AWriteFailed(const Outcome& o) {
-  return o.cap == nevr_checked_patch::Result::WriteFailed || o.slot == nevr_checked_patch::Result::WriteFailed;
+  using nevr_checked_patch::Result;
+  const auto failed = [](Result r) { return r == Result::WriteFailed || r == Result::WrittenWithError; };
+  return failed(o.cap) || failed(o.slot);
 }
 
 /// The cap runs above 5 with the game's slot rule, which gives a sixth member slot 5.

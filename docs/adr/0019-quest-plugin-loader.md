@@ -137,7 +137,10 @@ The `plugins:` list in config.yaml is read with the shared parser's keys (`name`
   config-only entry whose file is a packaged file's (the first entry disabled it, or the file is spelled in another case)
   carries that file's manifest hash, so config changes how a packaged plugin runs and never which bytes run; a second
   enabled entry for the file is refused as `duplicate_file`.
-- A config file that is absent, or rejected as a whole, leaves every packaged plugin on with its manifest values.
+- A config file that is absent, or rejected as a whole, leaves every packaged plugin on with its manifest values. The
+  loss is said on the line: when the file was rejected, every `plugin_load` record of that launch carries
+  `config_rejected=1`, and the file's own Error line names the rejection. The rule is load-and-say-so, not hold: holding
+  every packaged plugin until the file is readable would disable all of them for one bad key.
 
 The Quest differences from the PC list are unchanged:
 
@@ -406,7 +409,8 @@ Shaped by AGENTS.md (logging is part of the work) and `docs/standards/logging.md
   `sha256` of the bytes the loader read, `plugin_build_id`, `game_build_id`, `phase` (`early` or `normal`), `outcome`
   (`planned`, `loaded`, `refused`, `disabled`, `not_started`, `failed`), and `reason` as a stable token. A plan entry
   with no record is a defect (P9). Two fields carry the packaging: `source` (`packaged`, from the manifest, or `config`)
-  and `overridden` (`1` when a config entry named a packaged file). `expected_sha256` is the manifest's hash for the file
+  and `overridden` (`1` when a config entry named a packaged file). A separate field, `config_rejected` (`1` on every record of
+  a launch whose config.yaml was rejected as a whole, section 2), says the operator's file did not load. `expected_sha256` is the manifest's hash for the file
   (empty when the file is not packaged), beside `sha256`. The reason `manifest_hash_mismatch` (outcome `refused`) is a
   packaged file whose bytes are not the manifest's hash.
 - **Manifest record.** One `plugin_manifest` line per launch: `status` (`read`, `absent`, `unreadable` or `invalid`),

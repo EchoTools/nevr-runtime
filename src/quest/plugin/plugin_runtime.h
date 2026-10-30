@@ -20,8 +20,9 @@ struct PlanCounts {
 
 // Builds the plan from the file's `plugins:` list and writes the records the plan alone settled (disabled, refused) and the
 // plan line. Runs no plugin code. `devBuild`: a development build (a plugin's DEBUG lines are logged). The first call plans;
-// a later one changes nothing and returns the counts as they stand.
-PlanCounts PlanPlugins(const std::vector<nevr::PluginSpec>& specs, bool devBuild) noexcept;
+// a later one changes nothing and returns the counts as they stand. `configRejected`: config.yaml was rejected as a whole, so
+// `specs` is empty and every packaged plugin loads with its manifest values; each plugin_load record says so.
+PlanCounts PlanPlugins(const std::vector<nevr::PluginSpec>& specs, bool devBuild, bool configRejected = false) noexcept;
 
 // Moment (a): loads the `early` entries. Runs once, after the reporter has started.
 void RunEarlyPlugins() noexcept;
