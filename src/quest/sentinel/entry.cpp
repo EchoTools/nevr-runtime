@@ -18,7 +18,10 @@
 #include "hook_report.h"
 #include "login_prompt_hook.h"
 #include "login_title_hook.h"
+#include "quest/invite/frame_dispatch.h"
 #include "menu_cards_hook.h"
+#include "quest/invite/wizard_metric_hook.h"
+#include "quest/invite/join_game_quest.h"
 #include "data_wiring.h"
 #include "obb_skip_hook.h"
 #include "os_build_gate_hook.h"
@@ -33,6 +36,7 @@
 #include "toast_presenter.h"
 #include "vk_ext_window.h"
 #include "pinned_targets.h"
+#include "quest/integration/ctor_sequence.h"
 #include "quest/integration/entry_hooks.h"
 
 #include <jni.h>
@@ -86,6 +90,14 @@ bool InstallClockHook() noexcept {
     ClockThunk::Arm(kClockHook);
     return sentinel::InstallThunk<ClockThunk>(g_clockHook, sentinel::pinned::LibR15ClockGettime()) ==
            sentinel::GotStatus::kOk;
+}
+
+// The frame dispatcher (#966 S7): the Update slot is taken on every launch, so the dispatcher runs whether or not the
+// login prompt is on. LogInstall writes the one line that says which (installed, or off with the GOT status).
+bool InstallFrameDispatchHook() noexcept {
+    const sentinel::GotStatus status = nevr_quest::login_prompt::InstallNetGameUpdate();
+    nevr_quest::invite::frame::LogInstall(status == sentinel::GotStatus::kOk, sentinel::GotStatusName(status));
+    return status == sentinel::GotStatus::kOk;
 }
 
 // The login-failed page's title hook (#1137) is the prompt's second half: its counters register in the same step, so the
@@ -180,11 +192,24 @@ bool InstallPnsProviderHook() noexcept { return nevr_quest::pns_provider::Instal
 // refused install is logged by GotHook and by the hook's own line, and leaves the game's calls intact.
 bool InstallMenuCardsHook() noexcept { return nevr_quest::menu_cards::Install(); }
 
+// The CREATE GAME / JOIN VIA CODE observer (#966, ADR 0017 S2) on libr15's MetricLog. A refused install is logged by GotHook and by
+// the observer's own line, and leaves the game's call intact.
+// The join's answer applier (#966 S4) is registered with the observer. It acts only while the invite service is on (the
+// network.invite_codes feature), so with the feature off it takes no answers and logs nothing.
+bool InstallWizardMetricHook() noexcept {
+    const bool observer = nevr_quest::wizard_metric::Install();
+    nevr_quest_invite_join::RegisterAnswerApplier();
+    return observer;
+}
+
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
 // token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.
 bool InstallLoginPromptHook(bool countersRegistered) noexcept {
     return nevr_quest::login_prompt::InstallIfCounted(countersRegistered);
 }
+
+// The login prompt's counters, written once at process exit (#1391).
+void FlushLoginPromptCountersAtExit() noexcept { nevr_quest::login_prompt::FlushCountersAtExit(); }
 
 // The title of the login-failed page (#1137): installed after the game maps the page's script library, so the
 // post-load action asks again after each dlopen until it answers anything but kModuleNotLoaded. A refused install is
@@ -205,7 +230,7 @@ const char* nevr_sentinel_marker() {
 // DT_NEEDED closure, before libr15's JNI_OnLoad / ANativeActivity_onCreate.
 __attribute__((constructor))
 static void nevr_sentinel_ctor() {
-    sentinel::LogFields(sentinel::LogLevel::kInfo, "sentinel_ctor", {{"action", "begin"}});
+    nevr_quest::integration::LogConstructorBegin(nevr_build::kVersion, nevr_build::kCommit);
     // #829: the thread that loads the library takes the UI looper for the floor message's presenter (it logs what it found).
     nevr_quest::toast::CaptureUiLooper();
     // Everything the constructor does is one sequence (integration/ctor_sequence.h): crash reporter,

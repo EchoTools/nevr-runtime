@@ -1,6 +1,7 @@
 #include "runtime/compat/session_router.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdarg>
 #include <cstdio>
 #include <exception>
@@ -196,6 +197,53 @@ Router::~Router() = default;
 
 void Router::Log(Effects& fx, LogLevel level, std::string line) {
   if (options_.log) fx.logs.emplace_back(level, std::move(line));
+}
+
+uint64_t Router::LobbyNowMs() const {
+  if (options_.lobbyRecords.clockMs != nullptr) return options_.lobbyRecords.clockMs();
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+// A find or join the game sent is the request the next answer takes. Every message of the frame counts, dropped or not,
+// as the PC bridge counts every frame it observes.
+void Router::LobbyRequestsLocked(const std::string& frame) {
+  const uint64_t now = LobbyNowMs();
+  ForEachMessage(frame, [this, now](uint64_t symbol, std::size_t) {
+    if (const std::optional<nevr_lobby_frame::Kind> kind = nevr_lobby_frame::KindOf(symbol, false)) {
+      clientRecords_.Requested(*kind, now);
+    }
+  });
+}
+
+// The records of the answers in a frame the game is handed: each success or failure, in order, after the limiter's
+// notices for the windows that ended. The text is lobby_frame.h's, the PC bridge's too (logging.md Rule 16).
+void Router::LobbyAnswersLocked(const std::string& frame, int connIdx, Effects& fx) {
+  const uint64_t now = LobbyNowMs();
+  std::size_t offset = 0;
+  for (;;) {
+    nevr_evr_codec::Message message;
+    if (nevr_evr_codec::ReadMessage(frame, offset, &message) != nevr_evr_codec::ReadStatus::Ok) return;
+    offset += nevr_evr_codec::kHeaderSize + static_cast<std::size_t>(message.length);
+    const std::optional<nevr_lobby_frame::Kind> kind = nevr_lobby_frame::KindOf(message.symbol, true);
+    if (!kind) continue;
+    const nevr_lobby_frame::ClientLobbyRecords::Admission admission = clientRecords_.Admit(*kind, now);
+    for (std::size_t i = 0; i < nevr_lobby_frame::kKindCount; ++i) {
+      if (admission.verdict.flushed[i] != 0) {
+        Log(fx, LogLevel::Info,
+            nevr_lobby_frame::FormatSuppressedNotice(static_cast<nevr_lobby_frame::Kind>(i), admission.verdict.flushed[i]));
+      }
+    }
+    if (!admission.verdict.log) continue;
+    nevr_lobby_frame::Decoded decoded;
+    if (!nevr_lobby_frame::Decode(*kind, message.payload, static_cast<std::size_t>(message.length), &decoded)) {
+      Log(fx, LogLevel::Warning, nevr_lobby_frame::FormatUnreadable(*kind, connIdx, message.length));
+      continue;
+    }
+    std::optional<nevr_lobby_frame::PartyContext> party;
+    if (options_.lobbyRecords.party != nullptr) party = options_.lobbyRecords.party();
+    Log(fx, LogLevel::Info, nevr_lobby_frame::FormatSessionRecord(decoded, connIdx, party, admission.request));
+  }
 }
 
 void Router::Run(Effects& fx) {
@@ -792,6 +840,7 @@ void Router::OnGameFrame(GameId game, std::string frame, bool binary) {
   Effects fx;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (options_.lobbyRecords.enabled) LobbyRequestsLocked(frame);
     if (!options_.loginRemovedJson.empty()) {
       // A LogOut anywhere in any game frame ends the account the held id belongs to, whichever connection sent
       // it and whether or not the frame is then dropped.
@@ -1143,6 +1192,8 @@ void Router::OnRemoteFrame(RemoteId remote, std::string frame, bool binary) {
             CloseGameLocked(target, kCloseTryAgainLater, "outbound buffer to the game is full", fx);
           } else {
             g.out.bytes += frame.size();
+            // The answers the game is handed are recorded before the frame moves (#1429).
+            if (options_.lobbyRecords.enabled) LobbyAnswersLocked(frame, g.connIdx, fx);
             g.out.queue.push_back({std::make_shared<const std::string>(std::move(frame)), binary});
             fx.drainGames.push_back(target);
           }

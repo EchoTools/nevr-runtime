@@ -26,6 +26,7 @@
 #include "hook_report.h"
 #include "login_prompt_hook.h"
 #include "quest/auth/prompt_board.h"
+#include "quest/invite/frame_dispatch.h"
 #include "quest/login/login_attempt_gate.h"
 #include "quest/game_login_failures.h"
 #include "quest/tests/test_check.h"
@@ -1403,6 +1404,37 @@ constexpr const char* kSelectLine = "\"event\":\"login_prompt_select\"";
 constexpr const char* kFallbackLine = "\"event\":\"login_prompt_fallback\"";
 constexpr const char* kStateLine = "\"event\":\"login_prompt_netgame_state\"";
 
+// The restart's select comes from the store ResolveSendEvent makes in production (PublishSendEvent), not from a test's
+// shortcut. Published through that store, the restart sends the select after sign-in once, with its trigger. A store
+// that leaves the select unset falls back to BeginLogIn, and nothing is sent.
+void ThePublishedSendEventSendsTheSelectAfterSignIn() {
+  lp::ResetLatchForTest();
+  gate::SetReady(true);
+  lp::SetClockForTest(&FakeClock);
+  lp::SetBeginLogInForTest(&FakeBeginLogIn);
+  lp::PublishSendEventForTest(&FakeSend);
+  g_beginCalls = 0;
+  g_sendCalls = 0;
+  g_now = 1'000'000'000;
+  LinkGameObject(g_game, &g_gameObject);
+  SetSpaceOf(g_gameObject, &g_spaceMarker);
+  const int linesBefore = CountLines(kSelectLine);
+  RestartFromNotice();
+  QCHECK(g_sendCalls == 1);
+  QCHECK(g_beginCalls == 0);
+  QCHECK(CountLines(kSelectLine) == linesBefore + 1);
+  QCHECK(Holds(LastLine(kSelectLine), "\"trigger\":\"after_sign_in\""));
+
+  LinkGameObject(g_game, nullptr);
+  lp::SetSendEventForTest(nullptr);
+  lp::SetRetryEventForTest(nullptr);
+  lp::SetBeginLogInForTest(nullptr);
+  lp::SetClockForTest(nullptr);
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::ResetLatchForTest();
+}
+
 // The select that is sent says what it sends: the outcome, the event (evt_btn_clicked), the key (btn_exit's branch,
 // not RETRY's), the actor, and the flag. The counter counts the send.
 void TheRetrySelectLogsWhatItSends() {
@@ -1427,6 +1459,7 @@ void TheRetrySelectLogsWhatItSends() {
   QCHECK(CountLines(kSelectLine) == linesBefore + 1);
   const std::string line = LastLine(kSelectLine);
   QCHECK(Holds(line, "\"outcome\":\"sent\""));
+  QCHECK(Holds(line, "\"trigger\":\"after_sign_in\""));
   QCHECK(Holds(line, "\"send_event\":\"0x8f0094c7bb02681c\""));
   QCHECK(Holds(line, "\"send_event_name\":\"evt_btn_clicked\""));
   QCHECK(Holds(line, "\"key\":\"0x34f99a282ce78d72\"") && Holds(line, "\"key_name\":\"btn_exit\""));
@@ -1704,6 +1737,430 @@ void TheCountersAreAllInTheReporterTable() {
   sentinel::StopReporter();
 }
 
+// ---- the select after the fallback's login (#1391) ---------------------------------------------------------------
+// A select that does nothing is followed by the fallback's BeginLogIn: the game logs in but the page stays on LOGGING
+// IN. When the login the fallback started goes 2 (logging in) -> 3 (logged in) on the same NetGame instance, the same
+// select is sent once more, with trigger after_fallback_login. The select, the 2 -> 3 change and the instance are the
+// only conditions; no timer.
+
+// Common setup: the select is the real one (sent through the fake send), BeginLogIn is the fake, the game object is linked.
+void SetUpFallbackCase() {
+  g_lines.clear();  // each case counts only its own lines
+  lp::ResetLatchForTest();
+  gate::SetReady(true);
+  lp::SetClockForTest(&FakeClock);
+  lp::SetBeginLogInForTest(&FakeBeginLogIn);
+  lp::SetSendEventForTest(&FakeSend);
+  lp::UseRetrySelectForTest();
+  g_beginCalls = 0;
+  g_sendCalls = 0;
+  g_now = 1'000'000'000;
+  board::Withdraw();
+  LinkGameObject(g_game, &g_gameObject);
+  SetSpaceOf(g_gameObject, &g_spaceMarker);
+}
+
+void TearDownFallbackCase() {
+  LinkGameObject(g_game, nullptr);
+  lp::SetSendEventForTest(nullptr);
+  lp::SetRetryEventForTest(nullptr);
+  lp::SetBeginLogInForTest(nullptr);
+  lp::SetClockForTest(nullptr);
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::ResetLatchForTest();
+}
+
+// The notice's select is sent; 2.1 s later the game is still in "login failed", so the fallback runs BeginLogIn.
+void NoticeWhoseSelectDidNothingFallsBack() {
+  RestartFromNotice();  // the select (trigger after_sign_in) is sent
+  g_now += 2'100'000'000;
+  UpdateEntry()(Obj(g_game), 16);  // the fallback: BeginLogIn, which sets "logging in" in the fake
+}
+
+// Fallback, then the login is observed going 2 -> 3: the same select goes out once more, with the fallback's trigger.
+void TheFallbackLoginReachingLoggedInSendsTheSelectOnceWithItsTrigger() {
+  SetUpFallbackCase();
+  NoticeWhoseSelectDidNothingFallsBack();
+  QCHECK(g_beginCalls == 1);
+  QCHECK(g_sendCalls == 1);  // the post-sign-in select only
+  UpdateEntry()(Obj(g_game), 16);  // observes "logging in"
+  QCHECK(g_sendCalls == 1);
+  SetState(g_game, 3);  // logged in
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 2);
+  QCHECK(g_sendSpace == &g_spaceMarker);
+  QCHECK(g_sendEventArg == sentinel::pinned::kRetrySelectEvent);
+  QCHECK(g_sendKeyArg == sentinel::pinned::kLoginPageExitKey && g_sendActorArg == sentinel::pinned::kAllActors);
+  QCHECK(g_sendFlagArg == 1);
+  QCHECK(Holds(LastLine(kSelectLine), "\"trigger\":\"after_fallback_login\""));
+  QCHECK(Holds(LastLine(kSelectLine), "\"outcome\":\"sent\""));
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 1);
+  QCHECK(CountLines("\"trigger\":\"after_sign_in\"") == 1);
+  // A second 2 -> 3 of the same attempt sends nothing.
+  SetState(g_game, 2);
+  UpdateEntry()(Obj(g_game), 16);
+  SetState(g_game, 3);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 2);
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 1);
+  TearDownFallbackCase();
+}
+
+// The fallback's login is followed on every frame it is armed, whether or not the prompt's own logic is wanted: the gate in
+// HookedNetGameUpdate covers only PromptFrame. With the prompt's logic off, the 2 -> 3 still sends the select once and the
+// prompt's own state line stays silent. Behind the gate, the note never runs and nothing is sent.
+void TheFallbackLoginIsFollowedWithThePromptOff() {
+  SetUpFallbackCase();
+  NoticeWhoseSelectDidNothingFallsBack();
+  QCHECK(g_beginCalls == 1);
+  QCHECK(g_sendCalls == 1);  // the post-sign-in select only
+  lp::ArmNetGameUpdateOnlyForTest();  // the prompt's own logic is not wanted from here on; the fallback stays armed
+  UpdateEntry()(Obj(g_game), 16);  // observes "logging in"
+  QCHECK(g_sendCalls == 1);
+  g_lines.clear();
+  SetState(g_game, 3);  // logged in
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 2);
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 1);
+  QCHECK(CountLines("login_prompt_netgame_state") == 0);  // the prompt's own logic is off: no state line
+  TearDownFallbackCase();
+  lp::ArmForTest();  // the prompt is wanted again for the cases after this one
+}
+
+// The select starts the login (the page script's BeginLogin node moves the game to "logging in"): no fallback, so the
+// later 2 -> 3 sends nothing more.
+void ASelectThatStartsTheLoginSendsNothingMoreWhenItReachesLoggedIn() {
+  SetUpFallbackCase();
+  const int fallbacks = CountLines(kFallbackLine);
+  RestartFromNotice();  // the select, sent
+  QCHECK(g_sendCalls == 1);
+  SetState(g_game, 2);  // what the script's BeginLogin node does on the select
+  UpdateEntry()(Obj(g_game), 16);
+  SetState(g_game, 3);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 1);
+  QCHECK(g_beginCalls == 0);
+  QCHECK(CountLines(kFallbackLine) == fallbacks);
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 0);
+  TearDownFallbackCase();
+}
+
+// The fallback's login goes back to "login failed" before it logs in: that attempt is over, and a later 2 -> 3 is not
+// the fallback's, so nothing is sent for it.
+void AFallbackLoginThatGoesBackToLoginFailedSendsNothing() {
+  SetUpFallbackCase();
+  NoticeWhoseSelectDidNothingFallsBack();
+  UpdateEntry()(Obj(g_game), 16);  // observes "logging in"
+  SetState(g_game, layout::kStateLoginFailed);
+  UpdateEntry()(Obj(g_game), 16);
+  SetState(g_game, 2);  // a later login, not the fallback's
+  UpdateEntry()(Obj(g_game), 16);
+  SetState(g_game, 3);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 1);  // the post-sign-in select only
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 0);
+  TearDownFallbackCase();
+}
+
+// The fallback's login is not seen in "logging in" before it reaches "logged in": the change is -94 -> 3, not 2 -> 3,
+// so nothing is sent.
+void TheFallbackLoginMustBeSeenLoggingInBeforeItSendsForLoggedIn() {
+  SetUpFallbackCase();
+  NoticeWhoseSelectDidNothingFallsBack();  // BeginLogIn ran, but no Update has seen "logging in" yet
+  SetState(g_game, 3);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 1);
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 0);
+  TearDownFallbackCase();
+}
+
+// Another NetGame instance going 2 -> 3 while the fallback is armed for g_game: not the instance the fallback started.
+void AnotherNetGameReachingLoggedInSendsNothing() {
+  SetUpFallbackCase();
+  NoticeWhoseSelectDidNothingFallsBack();
+  UpdateEntry()(Obj(g_game), 16);  // observes "logging in" on the fallback's instance
+  SetState(g_other, 2);
+  UpdateEntry()(Obj(g_other), 16);  // g_other's baseline
+  SetState(g_other, 3);
+  UpdateEntry()(Obj(g_other), 16);  // 2 -> 3 on another instance
+  QCHECK(g_sendCalls == 1);
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 0);
+  TearDownFallbackCase();
+}
+
+// A fallback whose BeginLogIn is not resolved starts no login, so it arms nothing: a later 2 -> 3 is not its.
+void AnUnresolvedBeginLogInArmsNothing() {
+  SetUpFallbackCase();
+  lp::SetBeginLogInForTest(nullptr);
+  const lp::Counts before = lp::CurrentCounts();
+  NoticeWhoseSelectDidNothingFallsBack();  // the select, then the fallback, which is counted as unavailable
+  QCHECK(lp::CurrentCounts().login_restart_unavailable == before.login_restart_unavailable + 1);
+  QCHECK(g_beginCalls == 0);
+  SetState(g_game, 2);
+  UpdateEntry()(Obj(g_game), 16);
+  SetState(g_game, 3);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 1);  // the post-sign-in select only
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 0);
+  TearDownFallbackCase();
+}
+
+// The select cannot be sent (no RETRY seam), so the fallback starts the login at once; the login's 2 -> 3 then sends the
+// select once, with the fallback's trigger, as after a select that had no effect.
+void TheUnavailableSelectsFallbackAlsoSendsOnceAfterItsLogin() {
+  SetUpFallbackCase();
+  lp::SetRetryEventForTest(nullptr);
+  RestartFromNotice();  // no select: the fallback runs now
+  QCHECK(g_beginCalls == 1);
+  QCHECK(g_sendCalls == 0);
+  UpdateEntry()(Obj(g_game), 16);  // observes "logging in"
+  QCHECK(g_sendCalls == 0);
+  SetState(g_game, 3);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 1);
+  QCHECK(Holds(LastLine(kSelectLine), "\"trigger\":\"after_fallback_login\""));
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 1);
+  TearDownFallbackCase();
+}
+
+// The fallback's BeginLogIn did not take the game out of "login failed": the first Update after it is not "logging in", so
+// the attempt is over, and a later "logging in" -> "logged in" is not the fallback's.
+void AFallbackThatDidNotStartTheLoginSendsNothingLater() {
+  SetUpFallbackCase();
+  NoticeWhoseSelectDidNothingFallsBack();       // BeginLogIn ran, and the fake moved the game to "logging in"
+  SetState(g_game, layout::kStateLoginFailed);  // the test puts the game back: the login did not start
+  UpdateEntry()(Obj(g_game), 16);
+  SetState(g_game, 2);
+  UpdateEntry()(Obj(g_game), 16);
+  SetState(g_game, 3);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 1);  // the post-sign-in select only
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 0);
+  TearDownFallbackCase();
+}
+
+// A second fallback (a new notice) is seen "logging in" on its own: the first attempt's "logging in" does not count for it.
+void ASecondFallbackMustBeSeenLoggingInOnItsOwn() {
+  SetUpFallbackCase();
+  NoticeWhoseSelectDidNothingFallsBack();       // the first fallback
+  UpdateEntry()(Obj(g_game), 16);               // seen "logging in"
+  SetState(g_game, layout::kStateLoginFailed);  // the first attempt ends
+  UpdateEntry()(Obj(g_game), 16);
+  RestartFromNotice();  // a new notice: its select
+  g_now += 2'100'000'000;
+  UpdateEntry()(Obj(g_game), 16);  // the second fallback: BeginLogIn, which the fake answers with "logging in"
+  QCHECK(g_beginCalls == 2);
+  SetState(g_game, 3);  // the second attempt's first observation is "logged in"
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 2);  // the two notices' selects only
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 0);
+  TearDownFallbackCase();
+}
+
+// The test seam forgets an armed fallback: a case that starts after one does not inherit its login, so the next "logged in"
+// of that instance sends nothing.
+void SettingBeginLogInForgetsAnArmedFallback() {
+  SetUpFallbackCase();
+  NoticeWhoseSelectDidNothingFallsBack();  // the fallback runs, and is armed for g_game
+  lp::SetBeginLogInForTest(&FakeBeginLogIn);  // the next case begins: the armed fallback is forgotten
+  UpdateEntry()(Obj(g_game), 16);  // observes "logging in"
+  SetState(g_game, 3);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_sendCalls == 1);  // the post-sign-in select only
+  QCHECK(CountLines("\"trigger\":\"after_fallback_login\"") == 0);
+  TearDownFallbackCase();
+}
+
+// #1391: the counters are written once at process exit, every one of them. The reporter writes a counter only when it
+// changes, so a short run would otherwise end without its final values. The expected values are read before the flush;
+// nothing in the flush changes them.
+void TheExitFlushWritesEachCounterOnce() {
+  const lp::Counts c = lp::CurrentCounts();
+  struct Expect {
+    const char* name;
+    std::uint64_t value;
+  };
+  const Expect want[] = {
+      {"login_prompt_text_shown", c.shown},
+      {"login_prompt_text_refreshed", c.refreshed},
+      {"login_prompt_text_kept", c.kept},
+      {"login_prompt_text_not_local", c.not_local},
+      {"login_prompt_board_busy", c.busy},
+      {"login_prompt_block_not_ours", c.not_ours},
+      {"login_prompt_error_thunk_faults", static_cast<std::uint64_t>(lp::ErrorThunk::Faults())},
+      {"login_prompt_update_thunk_faults", static_cast<std::uint64_t>(lp::UpdateThunk::Faults())},
+      {"login_prompt_enable_thunk_faults", static_cast<std::uint64_t>(lp::EnablePageThunk::Faults())},
+      {"login_prompt_error_page_dropped", c.error_page_dropped},
+      {"login_prompt_logging_in_page_dropped", c.logging_in_page_dropped},
+      {"login_prompt_page_passed_armed", c.page_passed_armed},
+      {"login_prompt_error_resent", c.resent},
+      {"login_prompt_error_resend_unavailable", c.resend_unavailable},
+      {"login_prompt_login_restarted", c.login_restarted},
+      {"login_prompt_login_restart_unavailable", c.login_restart_unavailable},
+      {"login_prompt_select_sent", c.select_sent},
+  };
+  static_assert(sizeof(want) / sizeof(want[0]) == static_cast<std::size_t>(lp::kCounterCount),
+                "one expectation per counter");
+  g_lines.clear();
+  lp::FlushCountersAtExit();
+  for (const Expect& e : want) {
+    char needle[192];
+    std::snprintf(needle, sizeof(needle), "\"counter\":\"%s\",\"value\":%llu,\"why\":\"exit\"", e.name,
+                  static_cast<unsigned long long>(e.value));
+    QCHECK(CountLines(needle) == 1);
+  }
+  QCHECK(CountLines("\"why\":\"exit\"") == lp::kCounterCount);
+}
+
+// The Update slot runs the frame dispatcher and the game's Update on every call (#966 S7). The prompt's own logic is
+// gated off in these cases; the dispatcher's work and the original run regardless.
+namespace fd = nevr_quest::invite::frame;
+
+bool CountPosted(void* context) noexcept {
+  ++*static_cast<int*>(context);
+  return true;
+}
+bool FailPosted(void* context) noexcept {
+  ++*static_cast<int*>(context);
+  return false;
+}
+
+void TheUpdateSlotRunsPostedWorkAndTheGameUpdateWithThePromptOff() {
+  lp::ArmForTest();                   // the prompt is on first, so the off state below is the one the call sets
+  lp::ArmNetGameUpdateOnlyForTest();  // the Update handler is armed; the prompt's logic is not wanted
+  fd::ResetForTest();
+  static int posted = 0;
+  posted = 0;
+  QCHECK(fd::PostFrameWork(&CountPosted, &posted));
+  const int updatesBefore = g_updateCalls;
+  const int errorsBefore = g_errorCalls;
+  const lp::Counts before = lp::CurrentCounts();
+  // A fresh instance: its first state is a baseline, so a second state is the change the prompt logic would log.
+  static FakeGame off;
+  std::memset(&off, 0, sizeof(off));
+  SetState(off, layout::kStateLoggingIn);
+  UpdateEntry()(Obj(off), 16);
+  SetState(off, layout::kStateLoginFailed);
+  g_lines.clear();
+  UpdateEntry()(Obj(off), 16);
+  QCHECK(g_updateCalls == updatesBefore + 2);  // the game's Update ran on both calls
+  QCHECK(posted == 1);                         // the posted unit ran once, on the first call
+  QCHECK(g_errorCalls == errorsBefore);
+  QCHECK(CountLines("login_prompt_netgame_state") == 0);  // the prompt logic is off: no state line
+  QCHECK(lp::CurrentCounts().refreshed == before.refreshed);
+  fd::ResetForTest();
+  lp::ArmForTest();  // the prompt is wanted again for the cases after this one
+}
+
+// The same change with the prompt wanted logs its state line, so the check above is not vacuous.
+void TheSameStateChangeWithThePromptWantedIsLogged() {
+  lp::ArmForTest();
+  static FakeGame on;
+  std::memset(&on, 0, sizeof(on));
+  SetState(on, layout::kStateLoggingIn);
+  UpdateEntry()(Obj(on), 16);
+  SetState(on, layout::kStateLoginFailed);
+  g_lines.clear();
+  UpdateEntry()(Obj(on), 16);
+  QCHECK(CountLines("login_prompt_netgame_state") >= 1);
+}
+
+// A posted unit that fails does not stop the game's Update: the original runs once per call, with the prompt on too.
+void TheOriginalRunsOnEveryUpdateEvenWhenAPostedUnitFails() {
+  lp::ArmForTest();
+  fd::ResetForTest();
+  static int failed = 0;
+  failed = 0;
+  QCHECK(fd::PostFrameWork(&FailPosted, &failed));
+  const int before = g_updateCalls;
+  for (int i = 0; i < 3; ++i) UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_updateCalls == before + 3);
+  QCHECK(failed == 1);
+  QCHECK(fd::CurrentStats().failed == 1);
+  fd::ResetForTest();
+}
+
+// The posted unit runs before the game's Update, so the dispatcher's work is part of the frame, not what follows it.
+int g_seenUpdates = -1;
+bool RecordUpdates(void*) noexcept {
+  g_seenUpdates = g_updateCalls;
+  return true;
+}
+
+void ThePostedWorkRunsBeforeTheGameUpdate() {
+  lp::ArmForTest();
+  fd::ResetForTest();
+  QCHECK(fd::PostFrameWork(&RecordUpdates, nullptr));
+  const int before = g_updateCalls;
+  g_seenUpdates = -1;
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_seenUpdates == before);  // the posted unit saw the game's Update not yet run
+  QCHECK(g_updateCalls == before + 1);
+  fd::ResetForTest();
+}
+
+// The prompt's Update logic is on exactly when the Update slot holds its thunk: Install() takes the slot's status.
+void ThePromptFollowsTheUpdateSlotsStatus() {
+  lp::ArmNetGameUpdateOnlyForTest();
+  lp::SetNetGameUpdateInstallForTest(true, sentinel::GotStatus::kModuleNotLoaded);  // the slot is not held
+  lp::Install();
+  static FakeGame refused;
+  std::memset(&refused, 0, sizeof(refused));
+  SetState(refused, layout::kStateLoggingIn);
+  UpdateEntry()(Obj(refused), 16);
+  SetState(refused, layout::kStateLoginFailed);
+  g_lines.clear();
+  UpdateEntry()(Obj(refused), 16);
+  QCHECK(CountLines("login_prompt_netgame_state") == 0);
+
+  lp::SetNetGameUpdateInstallForTest(true, sentinel::GotStatus::kOk);  // the slot holds its thunk
+  lp::Install();
+  static FakeGame held;
+  std::memset(&held, 0, sizeof(held));
+  SetState(held, layout::kStateLoggingIn);
+  UpdateEntry()(Obj(held), 16);
+  SetState(held, layout::kStateLoginFailed);
+  g_lines.clear();
+  UpdateEntry()(Obj(held), 16);
+  QCHECK(CountLines("login_prompt_netgame_state") >= 1);
+  lp::SetNetGameUpdateInstallForTest(false, sentinel::GotStatus::kBadArgument);
+  lp::ArmForTest();
+}
+
+// The Update slot is taken once: a second InstallNetGameUpdate() returns the first status and does not reach the GOT.
+// On the host every real attempt is refused and logged once (op=install), so one such line means one attempt.
+void TheUpdateSlotIsTakenOnce() {
+  lp::SetNetGameUpdateInstallForTest(false, sentinel::GotStatus::kBadArgument);
+  g_lines.clear();
+  const sentinel::GotStatus first = lp::InstallNetGameUpdate();
+  const sentinel::GotStatus second = lp::InstallNetGameUpdate();
+  QCHECK(first == second);
+  QCHECK(first == sentinel::GotStatus::kModuleNotLoaded);  // no libr15.so on the host
+  QCHECK(CountLines("\"op\":\"install\"") == 1);
+  lp::SetNetGameUpdateInstallForTest(false, sentinel::GotStatus::kBadArgument);
+}
+
+// The install arms the Update handler before it takes the slot: disarmed, the game's calls pass straight through, so
+// the posted unit runs only once InstallNetGameUpdate() has armed the handler.
+void TheInstallArmsTheUpdateHandler() {
+  lp::ArmForTest();
+  lp::UpdateThunk::Disarm();
+  lp::SetNetGameUpdateInstallForTest(false, sentinel::GotStatus::kBadArgument);
+  fd::ResetForTest();
+  static int ran = 0;
+  ran = 0;
+  QCHECK(fd::PostFrameWork(&CountPosted, &ran));
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(ran == 0);  // disarmed: the handler did not run, so nothing was drained
+  lp::InstallNetGameUpdate();  // refused on the host, but it arms the handler before it takes the slot
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(ran == 1);
+  fd::ResetForTest();
+  lp::SetNetGameUpdateInstallForTest(false, sentinel::GotStatus::kBadArgument);
+  lp::ArmForTest();
+}
+
 }  // namespace
 
 int main() {
@@ -1746,6 +2203,7 @@ int main() {
   TheRestartSendsTheRetrySelectAloneAndFallsBackToBeginLogIn();
   ASelectThatStartsTheLoginIsNotFollowedByBeginLogIn();
   TheRetrySelectLogsWhatItSends();
+  ThePublishedSendEventSendsTheSelectAfterSignIn();
   TheRetrySelectSaysWhyItWasNotSent();
   TheFallbackLogsItsDecisionTimeAndState();
   TheFallbackSaysWhyItCallsAndIsSilentWhenTheSelectStartsTheLogin();
@@ -1753,6 +2211,17 @@ int main() {
   TheSelectsKeyAndEventAreTheirSymbolNames();
   TheSelectNamesAnUnsetSelfAndSendsNothing();
   TheFallbackNamesTheSelectsOutcomeAndTheNextNoticeNamesNone();
+  TheFallbackLoginReachingLoggedInSendsTheSelectOnceWithItsTrigger();
+  TheFallbackLoginIsFollowedWithThePromptOff();
+  ASelectThatStartsTheLoginSendsNothingMoreWhenItReachesLoggedIn();
+  AFallbackLoginThatGoesBackToLoginFailedSendsNothing();
+  TheFallbackLoginMustBeSeenLoggingInBeforeItSendsForLoggedIn();
+  AnotherNetGameReachingLoggedInSendsNothing();
+  AnUnresolvedBeginLogInArmsNothing();
+  TheUnavailableSelectsFallbackAlsoSendsOnceAfterItsLogin();
+  AFallbackThatDidNotStartTheLoginSendsNothingLater();
+  ASecondFallbackMustBeSeenLoggingInOnItsOwn();
+  SettingBeginLogInForgetsAnArmedFallback();
   TheFirstStateOfAnInstanceIsABaseline();
   TheCountersAreAllInTheReporterTable();
   ASkippedLoggingInPagePoisonsTheAttemptUntilItEnds();
@@ -1766,8 +2235,16 @@ int main() {
   AWithdrawnBoardKeepsNoCode();
   TheBoardRefusesWhatTheGameCouldNotShow();
   ConcurrentReadsAreNeverTorn();
+  TheExitFlushWritesEachCounterOnce();
   QCHECK(lp::ErrorThunk::Faults() == 0 && lp::UpdateThunk::Faults() == 0 && lp::EnablePageThunk::Faults() == 0);
   CounterRefusalIsLoudAndInstallReportsBothSlots();
+  TheUpdateSlotRunsPostedWorkAndTheGameUpdateWithThePromptOff();
+  TheSameStateChangeWithThePromptWantedIsLogged();
+  TheOriginalRunsOnEveryUpdateEvenWhenAPostedUnitFails();
+  ThePostedWorkRunsBeforeTheGameUpdate();
+  ThePromptFollowsTheUpdateSlotsStatus();
+  TheUpdateSlotIsTakenOnce();
+  TheInstallArmsTheUpdateHandler();
 
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "login_prompt_hook_test: %d check(s) failed\n", quest_test::Failures());

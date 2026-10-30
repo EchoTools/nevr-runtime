@@ -23,6 +23,9 @@
 //      RunEarlyPlugins               the `early` plugin entries (#438): after Attach, before the clock hook;
 //                                    skipped when the plan has none
 //   5  InstallClockHook              the always-on proof hook
+//      InstallFrameDispatch          the frame dispatcher (#966 S7): the Update slot (CR15NetGame::Update), on every launch,
+//                                    right after the clock hook; no counters. The login prompt's own Update logic is switched
+//                                    on later, by InstallLoginPrompt (step 7), through the same slot.
 //   6  StartTokenAuth                needed by the bridge (the remote JWT) and the login rewrite
 //   7  InstallLoginPrompt            the sign-in prompt on the game's login-error screen (#239): two libr15
 //                                    slots (SetDelimitedErrorMessage, CR15NetGame::Update); wherever token
@@ -73,6 +76,9 @@
 //                                    callback), on every launch, right after the credits step; no counters. A data write:
 //                                    no code page is touched. Without the stock page's digest pinned it serves the page
 //                                    unchanged and logs the digest.
+//      InstallWizardMetric           the CREATE GAME and JOIN VIA CODE observer on libr15's MetricLog (#966, ADR 0017
+//                                    slice S2): one JUMP_SLOT, on every launch right after the menu cards, when
+//                                    WizardMetricWanted (production answers false until the invite switch lands); no counters.
 //      ArmClockLevels                the clock-level override (#928): no slot of its own (the render-configuration
 //                                    hook owns vrapi_SetClockLevels and asks the override which levels to call with),
 //                                    on every launch, right after the credits step; its counters are registered with the
@@ -146,6 +152,7 @@ enum class StepId : std::uint8_t {
   kAttachLibR15,
   kRunEarlyPlugins,
   kInstallClockHook,
+  kInstallFrameDispatch,
   kInstallObbSkip,
   kInstallProcessEnd,
   kInstallPermissionWait,
@@ -156,6 +163,7 @@ enum class StepId : std::uint8_t {
   kInstallRenderConfig,
   kInstallCreditsText,
   kInstallMenuCards,
+  kInstallWizardMetric,
   kArmClockLevels,
   kStartTokenAuth,
   kInstallLoginPrompt,
@@ -227,6 +235,9 @@ class Steps {
   virtual void FinishPlugins(const char* reason) = 0;
 
   virtual bool InstallClockHook() = 0;
+  // The frame dispatcher (#966 S7): the Update slot, on every launch, whatever the login prompt does. True when the slot
+  // holds its thunk.
+  virtual bool InstallFrameDispatch() = 0;
   // `countersRegistered`: the result of RegisterObbSkipCounters (the hook's own rule: without its counters it
   // logs the skip and installs nothing). True when all three slots hold their thunks.
   virtual bool InstallObbSkip(bool countersRegistered) = 0;
@@ -256,6 +267,9 @@ class Steps {
   // The CREATE GAME and JOIN VIA CODE cards on the main menu (#966): one libr15 data slot (the streaming reader's read-finished
   // callback), on every launch, no counters.
   virtual bool InstallMenuCards() = 0;
+  // The CREATE GAME / JOIN VIA CODE observer (#966, ADR 0017 S2). Asked before its step runs; the step is skipped when false.
+  virtual bool WizardMetricWanted() = 0;
+  virtual bool InstallWizardMetric() = 0;
   // The clock-level override (#928): the switch the render-configuration hook's handler reads, on every launch.
   // `countersRegistered`: the result of RegisterClockLevelsCounters (the override's own rule: without its counters it logs
   // the skip and leaves the switch off). `overrideOn`: the resolved switch, Features::clockLevels.
@@ -284,5 +298,9 @@ class Steps {
 
 // Runs the sequence. Never throws, never blocks.
 ConstructorReport RunConstructorSequence(Steps& steps) noexcept;
+
+// The begin record of the constructor (#1391): one sentinel_ctor line, action=begin, with the version and the commit of this
+// build. entry.cpp passes nevr_build::kVersion and nevr_build::kCommit from its generated build header. Never throws.
+void LogConstructorBegin(const char* version, const char* commit) noexcept;
 
 }  // namespace nevr_quest::integration

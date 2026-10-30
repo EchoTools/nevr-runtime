@@ -22,6 +22,7 @@ endif()
 # reads the same on both platforms. plugin_game_image.cpp and input_seam_hook.cpp reach pinned_targets.h, so they are built
 # without exceptions.
 add_library(nevr_quest_plugin STATIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/packaged_plugins.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_plan.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_image.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_loader.cpp"
@@ -65,6 +66,7 @@ target_link_libraries(nevr_quest_integration PUBLIC
   nevr_quest_net
   nevr_quest_token_auth
   nevr_quest_hwdump
+  nevr_quest_invite
   nlohmann_json::nlohmann_json)
 # Hidden visibility: linked into the sentinel, nothing here may become an export
 # (tests/quest TestExportAllowlist).
@@ -86,6 +88,10 @@ endforeach()
 # here as in the sentinel (sentinel/CMakeLists.txt).
 target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/login_prompt_hook.cpp")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/login_prompt_hook.cpp"
+  PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# The frame dispatcher (#966 S7) the Update handler calls: the same hook path, so built without exceptions too.
+target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../invite/frame_dispatch.cpp")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../invite/frame_dispatch.cpp"
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 target_link_libraries(integration_hooks_test PRIVATE nevr_quest_prompt_board)
 # And the #1137 login title hook's (registered with the login prompt's, in the same step).

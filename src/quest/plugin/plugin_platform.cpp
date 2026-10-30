@@ -38,14 +38,28 @@ std::string DirectoryOf(const char* path) {
 SentinelPlatform::SentinelPlatform(std::string libraryDir, bool emitDebug)
     : libraryDir_(std::move(libraryDir)), emitDebug_(emitDebug) {}
 
-bool SentinelPlatform::ReadFile(const std::string& file, std::vector<std::uint8_t>* bytes) {
-  if (libraryDir_.empty()) return false;
+ReadOutcome SentinelPlatform::ReadFileOutcome(const std::string& file, std::vector<std::uint8_t>* bytes, const char** why) {
+  *why = "";
+  if (libraryDir_.empty()) {
+    *why = "no_library_dir";
+    return ReadOutcome::kUnreadable;
+  }
   const int fd = ::open((libraryDir_ + "/" + file).c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW);
-  if (fd < 0) return false;
+  if (fd < 0) {
+    if (errno == ENOENT) return ReadOutcome::kAbsent;
+    *why = errno == ELOOP ? "symlink" : "open_failed";  // O_NOFOLLOW makes a link ELOOP
+    return ReadOutcome::kUnreadable;
+  }
   struct stat st {};
-  if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size > kMaxPluginBytes) {
+  if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+    *why = "not_regular_file";
     ::close(fd);
-    return false;
+    return ReadOutcome::kUnreadable;
+  }
+  if (st.st_size > kMaxPluginBytes) {
+    *why = "too_large";
+    ::close(fd);
+    return ReadOutcome::kUnreadable;
   }
   bytes->clear();
   std::uint8_t buffer[16 * 1024];
@@ -53,18 +67,25 @@ bool SentinelPlatform::ReadFile(const std::string& file, std::vector<std::uint8_
     const ssize_t got = ::read(fd, buffer, sizeof(buffer));
     if (got < 0) {
       if (errno == EINTR) continue;
+      *why = "read_failed";
       ::close(fd);
-      return false;
+      return ReadOutcome::kUnreadable;
     }
     if (got == 0) break;
     bytes->insert(bytes->end(), buffer, buffer + got);
     if (bytes->size() > static_cast<std::size_t>(kMaxPluginBytes)) {
+      *why = "too_large";
       ::close(fd);
-      return false;
+      return ReadOutcome::kUnreadable;
     }
   }
   ::close(fd);
-  return true;
+  return ReadOutcome::kRead;
+}
+
+bool SentinelPlatform::ReadFile(const std::string& file, std::vector<std::uint8_t>* bytes) {
+  const char* why = "";
+  return ReadFileOutcome(file, bytes, &why) == ReadOutcome::kRead;
 }
 
 // By name: the linker finds the file in the app's native library directory, the same one the sentinel was mapped from.

@@ -3,8 +3,15 @@
 #include <exception>
 
 #include "quest/plugin/plugin_plan.h"
+#include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::integration {
+
+// The begin record (#1391): the build's version and commit are fields of the line, so a log names the build that ran.
+void LogConstructorBegin(const char* version, const char* commit) noexcept {
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "sentinel_ctor",
+                      {{"action", "begin"}, {"version", version}, {"commit", commit}});
+}
 
 const char* StepStateName(StepState state) {
   switch (state) {
@@ -35,6 +42,7 @@ const char* StepName(StepId id) {
     case StepId::kAttachLibR15: return "attach_libr15";
     case StepId::kRunEarlyPlugins: return "run_early_plugins";
     case StepId::kInstallClockHook: return "install_clock_hook";
+    case StepId::kInstallFrameDispatch: return "install_frame_dispatch";
     case StepId::kInstallObbSkip: return "install_obb_skip";
     case StepId::kInstallProcessEnd: return "install_process_end";
     case StepId::kInstallPermissionWait: return "install_permission_wait";
@@ -45,6 +53,7 @@ const char* StepName(StepId id) {
     case StepId::kInstallRenderConfig: return "install_render_config";
     case StepId::kInstallCreditsText: return "install_credits_text";
     case StepId::kInstallMenuCards: return "install_menu_cards";
+    case StepId::kInstallWizardMetric: return "install_wizard_metric";
     case StepId::kArmClockLevels: return "arm_clock_levels";
     case StepId::kStartTokenAuth: return "start_token_auth";
     case StepId::kInstallLoginPrompt: return "install_login_prompt";
@@ -212,6 +221,10 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
 
     r.Run(StepId::kInstallClockHook, [&] { return steps.InstallClockHook(); });
 
+    // The frame dispatcher (#966 S7): the Update slot, on every launch, so the dispatcher runs whether or not the login prompt is
+    // on. Before the login prompt, which switches its own Update logic on through the same slot.
+    r.Run(StepId::kInstallFrameDispatch, [&] { return steps.InstallFrameDispatch(); });
+
     // Before token auth and the bridge: those take time, and libr15's CSysFile::Init is what this beats.
     if (!obbCounters) {
       try {
@@ -278,6 +291,20 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // The main-menu cards (#966): every launch, no counters. One libr15 data slot; libr15 reads it each time it starts a
     // resource load, so the hook is in place before the menu page is requested.
     r.Run(StepId::kInstallMenuCards, [&] { return steps.InstallMenuCards(); });
+
+    // The CREATE GAME / JOIN VIA CODE observer (#966, ADR 0017 slice S2): on every launch when wanted, right after the cards.
+    // The question is contained like every step; a question that throws means the observer is not wanted.
+    bool wizardWanted = false;
+    try {
+      wizardWanted = steps.WizardMetricWanted();
+    } catch (const std::exception&) {
+      // Contained: the observer stays off and the sequence goes on.
+    }
+    if (wizardWanted) {
+      r.Run(StepId::kInstallWizardMetric, [&] { return steps.InstallWizardMetric(); });
+    } else {
+      r.Skip(StepId::kInstallWizardMetric, "feature_off");
+    }
 
     // The clock-level override (#928): every launch. libr15 makes the call when it enters VR mode, long after the constructor,
     // through the render-configuration hook installed above, which asks the override which levels to use. The switch is the

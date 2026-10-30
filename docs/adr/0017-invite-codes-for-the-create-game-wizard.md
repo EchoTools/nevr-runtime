@@ -146,10 +146,14 @@ the runtime (`src/runtime/patch/`), not a service configuration and not a plugin
   a match id, and a join is by code. The texts are never logged, only the field and the size.
 - **Join.** On a resolved code, from the main menu the dispatcher stages the `-lobbyid` block and runs
   `BeginMultiplayerLobby`; from a lobby or match it calls `CR15NetClientLobby::Join`. Both prologues are validated
-  at boot (N97); on a mismatch the feature turns itself off and says why. It is a client feature: on a dedicated
+  at boot (N97); on a mismatch that hook is not installed and its line says why. The service starts before the hooks and
+  stays on when one refuses (#1414). It is a client feature: on a dedicated
   server (`-server`) nothing is installed.
-- **Where it is configured.** A `config.yaml` key under the existing sections turns it on (N133); there is no
-  environment variable and no hard-coded host.
+- **Where it is configured.** The `network.invite_codes` key in `config.yaml` (N133) is on by default for a client: an
+  absent or empty key is on, and `false` (or `off`, `no`, `0`) turns it off. Any other value, a list or a map included, is
+  off with a warning, so a value that is not a switch word never turns it on. A key the runtime does not read (a
+  misspelling, or a `config.yaml` it rejects) is as if absent, and so is on. The startup line says `source=default` or
+  `source=config`. There is no environment variable and no hard-coded host.
 
 Rejected:
 
@@ -221,6 +225,18 @@ The service contract is platform-neutral. PC is built first (the PC addresses an
 same scripts and the same `Join` body (`libr15.so`, ReVault virtual address `0x13462a8`) and gets its own hook in
 `src/quest`, through that project's own mechanism, against the same RPCs.
 
+## Security
+
+On a PC client, `network.invite_codes` is on by default (`src/runtime/patch/invite_config.h:17-18`, `:27`): an absent or
+empty key is on. A `config.yaml` the runtime rejects is read as an empty config, so the key is absent and the feature is on
+(`src/runtime/lifecycle/service_config.cpp:159-170`; `src/runtime/lifecycle/boot.cpp:687-689`). In that case the client sends
+its signed-in token with each invite RPC to `nevr_http_uri`, which falls back to the embedded service address
+(`src/runtime/lifecycle/service_config.cpp:199`). A plain `http://` address is refused unless its host is loopback
+(`src/runtime/patch/invite_transport.h:92-94`). The service starts on a client only (`src/runtime/lifecycle/boot.cpp:681`).
+To turn the feature off, set `network.invite_codes: false` explicitly: the start line then logs
+`[NEVR.INVITE] feature off reason=turned_off source=config` (`src/runtime/patch/invite_service.cpp:71-72`, `:119`). A value
+that is not a switch word is off, not on (`src/runtime/patch/invite_config.h:4-6`).
+
 ## Logging
 
 Every line has the tag `[NEVR.INVITE]` (a new row in `docs/standards/logging.md`, added with the first code) and
@@ -230,14 +246,15 @@ credential: a line carries `code_len` and a short fingerprint of the code (`code
 | Event | Level | Fields |
 | --- | --- | --- |
 | wizard click seen | Info | `event=create_invite\|join_via_code panel=deep_linking` |
-| request not sent | Info | `reason=empty\|malformed\|too_long\|incomplete\|not_configured\|no_token\|busy\|stopped` and `code_len=<n>` (nothing is sent) |
+| request not sent | Info | `reason=empty\|malformed\|too_long\|incomplete\|not_configured\|no_token\|busy\|stopped` and `code_len=<n>` (nothing is sent; `not_configured` is any reason the feature is off, which the start line gives) |
 | request sent | Info | `op=create\|resolve\|revoke expires_s=<n> code_len=<n> code_fp=<8 hex>` |
 | answer | Info / Warning | `op status=<http status> latency_ms=<n> result=<ok\|invalid\|expired\|closed\|denied\|limit\|rate>` |
 | worker stopped | Info | `dropped=<n>`: requests still queued when the worker stopped, never sent |
 | answers dropped | Warning | `reason=not_taken kept=<n>`: the oldest answer went because the menu had not taken them |
 | text posted | Info | `field=code\|expires\|entry_title bytes=<n>`; a post the writer refused, or a writer that is off, is `text not posted` at Warning with `reason=`; the writer's own `[NEVR.UI] text written` / `text dropped` line follows |
 | join started | Info | `route=stage\|join lobby=<uuid> state_from=<n>`; the state change after it is the game's own `[NETGAME]` line |
-| feature off | Info | `reason=` (a prologue differed, no token, not configured) |
+| service on | Info | `source=default\|config`: where the value came from (the default when the key is absent or empty) |
+| feature off | Info / Warning | `reason=turned_off` (Info: the key says false), `unrecognised_value`, `no_service_address` or `service_address_refused` (Warning), each with `source=default\|config`; a hook's `prologue_mismatch` is that hook's own line, without `source=` |
 
 The service writes one structured record per RPC (principal, session, client, source address; operation with its full
 arguments and the resolved match id and user id; outcome, latency, result size) at the single point every RPC passes,
@@ -253,7 +270,7 @@ this feature carries that requirement.
    changed line. No game and no network. The module is not yet wired into the runtime.
 4. The hook, the worker and the dispatcher step behind the config key, with the PC login test run on main after the release cut.
 5. A live run on a copy of the install: create a code on one client, join with it from another.
-6. The Quest hook, after the UI accessors of #896.
+6. The Quest text writes and the Quest submit, after the UI accessors of #896 and the invite transport. The Quest observer lands before them.
 
 ## Not shown
 
@@ -270,60 +287,91 @@ this feature carries that requirement.
   draws, from a write made by this tree: a wrong id is a request the writer drops with `reason=no_actor` or `no_canvas`.
 - Anything on Quest beyond the static reading above.
 
-## Quest measurements and prediction (#966)
+## Quest observer on MetricLog (#966)
 
-Work step 1 of the Quest twin. Measured in ReVault over project `echovr` (1,041 binaries); each search line states its
-scope. Addresses are ReVault VAs. Pinned values are ReVault VA minus `0x100000` (the libr15 image-base offset);
-no pin is written here.
+The Quest half of the wizard observer hooks the game's `NRadEngine::NRadGame::NR15Logger::MetricLog(char const*, unsigned long long)` in `libr15.so` through a GOT slot. Addresses are ReVault virtual addresses unless marked pinned. A pinned address is the ReVault address minus `0x100000`, the libr15 offset: `0x130cc50` is pinned `0x120cc50`. The pins are in `src/quest/sentinel/pinned_targets.h`.
 
-Searches (whole project, `searched all 1,041 binaries in project echovr`):
+Measured:
 
-- `revault_search_strings` `deep_linking`: 3 hits: `echovr.exe` `0x141cbc19d`, `0x141cbc1b8`; `libr15.so` `0x32e157d`.
-- `revault_search_strings` `join_via_code`: 8 hits in the page scripts: `991bbec05cde117f.dll` `0x180011428`,
-  `beaac7bfb1ce12bd.dll` `0x180017550`, `c9cb2299a1b7abe7.dll` `0x180009478`, `0x1800094d0`, `0x180009528`; and the
-  Quest twins `lib991bbec05cde117f.so` `0x127f74`, `libbeaac7bfb1ce12bd.so` `0x134369`, `libc9cb2299a1b7abe7.so`
-  `0x113013`.
-- `revault_search_strings` `create_invite`: 2 hits: `7d6a4f136a16799d.dll` `0x18000e658`; the Quest twin
-  `lib7d6a4f136a16799d.so` `0x11dbc3`.
-- `revault_search_code` `SNSRemoteLogSetv3`: 6 hits, all in `libr15.so`; complete.
-- `revault_search_code` `JsonLog`: truncated at 20 hits (not complete); not used as evidence.
+- `revault_search_code` for `MetricLog`, scope `searched all 1,041 binaries in project echovr`: 3 hits, all in `libr15.so`: `MetricLog` at `0x130cc50`, its thunk at `0x10057c0`, and `CR15NetJsonLog::WriteLog` at `0x136a304`, the only decompiled caller.
+- `revault_search_code` for `deep_linking`, same scope: 5 hits. `echovr.exe` `GetMetricsPanelName` (`0x140f4b4c0`) maps the panel hash `0x75705bbdb2a10bd7` to the name, and `libr15.so` `Enter` (`0x2428098`, `0x24288a4`) compares the same hash.
+- Call sites in the store `libr15.so` (`aarch64-linux-gnu-objdump -d`): one `bl` to the MetricLog PLT stub `0xf057c0`, at pinned `0x126a4cc`, inside `WriteLog` (entered at pinned `0x126a304`). No `b` to the stub.
+- Relocation (`readelf -rW`): one `R_AARCH64_JUMP_SLOT` names the symbol, at pinned slot `0x36da2c8`, with addend `0x120cc50`. `readelf -sW --dyn-syms` gives the symbol's value as `0x120cc50` (FUNC, GLOBAL, DEFAULT).
+- Prologue: the first four instruction words at pinned `0x120cc50` are `a9bc63f9 a9015bf7 a90253f5 a9037bf3`, the `stp` pairs that save the callee-saved registers. The observer compares these 16 bytes before it writes anything.
+- The store file's SHA-256 is the pin in the `test-quest-hooks-pinned` recipe.
 
-The Quest submit, as ReVault reads it (`revault_function`, `libr15.so` `0x130bf00`, `Send`, 384 bytes, raw tier):
+Arguments: `x0` is the JSON text and `x1` is its length. The prologue keeps both (`mov x19, x1` at pinned `0x120cc88`, `mov x20, x0` at pinned `0x120cc8c`).
 
-- Signature (ReVault comment): `NRadEngine::SNSRemoteLogSetv3::Send(CTcpBroadcaster&, SNSUserID const&, SUuid const&,
-  char const*, ELogLevel, CStringTable const&, CSymbol64)`.
-- The `char const*` argument is copied into a 16-byte field of the object, its length capped at `0x10` (the decompile
-  sets `uVar7 = 0x10` when the length is 16 or more). STATIC.
-- The metric's key/value text is not a `char*` argument. The `CStringTable` (`param_7`) is written to a memblock by
-  `CStringTable::WriteToMemblock`, and the memblock's string and size go to `CTcpBroadcaster::Send` with the constant
-  `0x244b47685187eae1`. STATIC.
-- Callers in ReVault: `thunk_FUN_0130bf00` `0x1024290` (indirect) and `FUN_0120bfe0` `0x130bfe0` (direct, tail).
-  The ReVault decompilation of `ProcessRemoteLogs` (`0x130b8a4`) calls `SNSRemoteLogSetv3::Send` directly, but the
-  callers list does not show that edge. The call graph is incomplete here; the edge is not used as evidence.
+Why MetricLog and not the submit: `NRadEngine::SNSRemoteLogSetv3::Send` (`libr15.so` `0x130bf00`, raw decompilation) copies its `char const*` argument into a 16-byte field, with the copy length capped at `0x10` (`if (0xf < uVar2) uVar7 = 0x10`). A metric longer than that does not reach it whole. `MetricLog` receives the whole text and its length.
 
-Prediction (written before any Quest run; a run can falsify it):
+Observer behaviour (`src/quest/invite/wizard_metric_hook.cpp`):
 
-- The 16-byte `char const*` argument carries the event name. `create_invite` and `join_via_code` are 13 characters
-  and fit the field with their terminator. A name of 16 characters or more (the create metric's
-  `create_game_review_settings`) is copied as 16 bytes with no terminator, per the decompile's `uVar7 = 0x10` branch.
-- Falsifier: a Quest run where the create or join click reaches `Send` and the `char const*` argument is not the
-  event name.
-- The create and join string pairs (`Server_region`, `Expires_after`, `join_code`) are in the `CStringTable`. Their
-  layout is not measured; the hook point for them is not chosen by this record.
+- It copies the text first. The copy is a pipe write, so the kernel reads the game's buffer and an unmapped byte is refused with `EFAULT` instead of faulting the game's thread. Lengths from 1 to `nevr_invite::kMetricMaxBytes` (4096) are copied; other lengths and a null pointer are passed on unread.
+- It runs the PC's shared parser from `src/runtime/patch/invite_wizard.h`, unchanged: `MayBeWizardMetric`, `ParseMetric`, `PlanRequest`.
+- It logs `invite_click` with `click` (`create_invite` or `join_via_code`) and `panel=deep_linking`. A planned request that is not sent logs `invite_request_not_sent` with `reason`, `op` and `code_len`. No line carries the code text.
+- It calls the original once, with the arguments it was given, after its own work. The observer returns before the game's function runs.
+- The submit is off: `kSubmitEnabled` is `false`, so a planned request is logged with `reason=observe_only` and nothing is sent. Until the invite transport is on main, the submit path only counts plans.
+- A create click carries no card choices (the choices observer is a later slice), so it logs `reason=incomplete`.
 
-Not shown, Quest:
+The click's field is `click`, not the PC's `event=`. The sentinel's JSON record already names each line with `event` (`"event":"invite_click"`), and a second `event` key would be read as the record's name. The value is the same as the PC's.
 
-- The argument values at a real click (no capture).
-- Whether `ProcessRemoteLogs` is the only caller of `Send` on the path the wizard uses.
-- The Quest page-building functions and the string-array setting type. The page scripts are the same in name; their
-  Quest functions are not measured here.
-- Whether the Quest `libr15.so` exports `SNSRemoteLogSetv3::Send` to a GOT slot. The PC hook uses a call-site detour;
-  no Quest form of it is chosen.
+Install:
 
-Blocked, in order: the Quest page writes wait for #896's UI accessors; the Quest hook waits for a measured
-argument layout (above) and a headset run, not for code.
+- The sequence step `install_wizard_metric` (`src/quest/integration/ctor_sequence.cpp`) runs after the menu-cards step, and only when `WizardMetricWanted()` is true. That is `sentinel::FeatureEnabled(Feature::kInviteCodes)`, the `network.invite_codes` key (`src/quest/sentinel/quest_config.cpp`), which is off by default and needs login and a service address. With the key off the step is skipped with `reason=feature_off`.
+- The install checks the 16 prologue bytes at image base plus `0x120cc50` before any write. A mismatch logs `invite_observer_off` with `reason=prologue_mismatch`, `va`, `expected` and `actual`, and arms nothing. A refusal from the GOT step logs its status name under the same event.
+- A successful install logs `invite_observer_installed` with `target=MetricLog` and `slot=0x0000000036da2c8`.
+
+Frequency: the hook runs once per `MetricLog` call, and `WriteLog` makes one call per metric event. The observer counts entries and copies (`calls`, `copies`) and logs no per-call line. The call rate under play is not measured.
+
+Tests:
+
+- `src/quest/tests/wizard_metric_hook_test.cpp` (`just test-quest-hooks`): the observer against a stand-in for the game's function. It covers the create and join lines, unusable codes, an escaped panel name, null, zero and oversize lengths, an unreadable page, the prologue check, the install refusals, and the ten skip tokens.
+- `src/quest/tests/got_pinned_test.cpp` (`just test-quest-hooks-pinned`): the store file's JUMP_SLOT, its value and the prologue bytes.
+- `src/quest/tests/integration_sequence_test.cpp` (`just test-quest-integration`): the step's order and its gate.
+
+Not shown:
+
+- That a Quest click reaches `MetricLog` as this JSON, with the event and the panel. No capture exists; the test lines use the PC's metric shapes.
+- Whether remote logging, when it is off, returns before `MetricLog` and drops the metric. Not measured here.
+- Whether the code and the create settings are in that JSON as sent. No packet capture exists.
+- The call rate and the behaviour on a headset. No headset run has been made.
+- The Quest text writes. They need the UI accessors of #896; this observer writes no text.
+
+Prediction, written before any Quest run: with remote logging on, a click on CREATE GAME or JOIN VIA CODE produces one `invite_click` line from the observer. A click that produces none falsifies `MetricLog` as the hook point for the wizard's metric; the next candidate is the call chain above `WriteLog`.
+
+## Quest join on a resolved code (#966, slice S4)
+
+The Quest's JOIN VIA CODE ends in the same staged join the PC uses (`src/runtime/patch/invite_join.h`), with libr15's offsets. The glue is `src/quest/invite/join_game_quest.cpp`; the host test is `src/quest/tests/invite_join_quest_test.cpp` (`just test-quest-hooks`).
+
+Measured in ReVault (project `echovr`, binary `libr15.so`; ReVault = pinned + `0x100000`):
+
+- `CR15Game::BeginMultiplayer(SR15NetMatchSettings const&)` at `0x1301d88`, decompiled. It reads the netgame at `this+0x8510`, the route byte at `+0x8518` (`& 0xf`), the gate qword at `+0x8520`, the lobby `SUuid` at `+0x8528` (against the invalid id), the staged `SUuid` at `+0x8538` and the team `u16` at `+0x8558`. Its listing has no `#0x8560` operand, so the gametype word is neither read nor written. Its exit stores the route to `+0x8518`, zeroes `+0x8520` and sets `+0x8528`, `+0x8538` and `+0x8558` back to the invalid id and `0xffff`. Comment `grade A, S0 2026-10-29`.
+- `CR15Game::BeginMultiplayer()` at `0x1301be4`: 52 bytes, its first 16 bytes `ff 83 01 d1 ff fb 04 a9 68 00 c0 d2 09 00 80 92` (`revault_read_memory`), calling the settings body through `thunk 0xfdc040`. Pinned `0x1201be4`.
+- `CR15Game::EnableTransitionMenu()` at `0x13005fc` (the plan's "mp_transition"): its first 16 bytes `ff 03 01 d1 f3 7b 03 a9 13 78 7d f9 d3 01 00 b4`. It sends one component event to the menu gamespace at `+0x7af0`. Pinned `0x12005fc`.
+
+The join's pins are in `src/quest/sentinel/pinned_targets.h` (`kBeginMultiplayerVaddr`, `kEnableTransitionMenuVaddr`) and are checked against the store file in `got_pinned_test.cpp`.
+
+Write path, on the game thread only, through the frame dispatcher (`src/quest/invite/frame_dispatch.cpp`):
+
+- The netgame the frame hook passes is `self` of `HookedNetGameUpdate`. Its state is at `netgame+0` (`game_layout::kStateOffset`), and its game object (CR15Game) at `netgame+8` (`game_layout::kGameOffset`).
+- The route is read first. Nothing is staged when the route byte and the gate are both set, or when `+0x8528` is not the invalid id (`other_route`).
+- Then the 16-byte GUID is written at `+0x8538` and `0xFFFF` at `+0x8558`, both read back. A mismatch puts the prior bytes back.
+- Then `EnableTransitionMenu(game)` and `BeginMultiplayer(game)`, once each, with a 15 s window that refuses a repeat as `busy`. This is the order the Quest code uses, and it is not measured on Quest. The PC join calls only the begin (`src/runtime/patch/invite_join_game.cpp`, `Begin`: `EchoVR::BeginMultiplayerLobby(game)` and nothing before it), so the two joins do not share a menu step.
+- Only `state == 3` (`LoggedIn`, `src/abi/echovr.h:361`) joins. Any other state logs `not_at_menu`.
+- The answers reach the join through `nevr_invite_match::TakeResolvedMatch` (`src/runtime/patch/invite_match_api.h`), a non-throwing call implemented in `invite_service.cpp`. The frame applier never includes the worker or the service header, so the hook-side translation unit is exception-free.
+
+Prediction, written before any headset run: with the feature on and a resolved answer for a match id that is in progress on the server, the log shows `join started route=stage lobby=<GUID> state_from=3`, then the game's own `[NETGAME]` state change. A join whose state is not 3 logs `join not started reason=not_at_menu`. A stage that does not read back logs `reason=stage_failed` and writes nothing that stays.
+
+Not shown:
+
+- That the Quest's `BeginMultiplayer` joins the match when called this way. No headset run has been made.
+- That the game's netgame state at `+0` is 3 at the menu on a headset. The value is the PC's enum; the Quest's use of it is the existing login-prompt pin (`game_layout::kStateOffset`).
+- The Quest's `+0x8520` gate semantics beyond the decompile comment. The 281-instruction listing was not re-read in this slice.
+- The route check's invalid-id value on Quest: it is the PC's sixteen zero bytes, not separately verified in libr15.
+- Any run against the production service (U4, the invite RPC with the Quest token).
+- Whether the menu event before the begin is what the game does. Not measured on Quest; the headset run is owed. The reviewed ReVault reading (not re-measured here) found `EnableTransitionMenu` called by `JoinLobby` (libr15 `0x139682c`) after `Join`, by `SwitchTo` (`0x135b8b4`) right after `FindLobby`, and not by the two `BeginMultiplayer` callers, so the Quest order has no ReVault support yet.
 
 ## Relation to other records
 
 - ADR 0008 (BugSplat64.dll host, runtime): the feature is part of the runtime the host loads.
-- #896: the UI accessors the text writes and the Quest hook wait for.
+- #896: the UI accessors the Quest text writes wait for. The Quest observer does not wait for it.

@@ -261,6 +261,22 @@ inline constexpr const char* kAsyncResourceIOCallbackSymbol =
 inline constexpr const char* kMemoryContextSymbol = "_ZN10NRadEngine14CMemoryContext7contextE";
 inline constexpr std::uint64_t kMemoryContextVaddr = 0x37688c0;
 
+// NRadEngine::NRadGame::NR15Logger::MetricLog(char const* json, unsigned long long length), defined in libr15 at 0x120cc50
+// (the store file: `aarch64-linux-gnu-objdump -d`, the symbol's own value in `.dynsym`). The json pointer arrives in x0 and
+// its length in x1 (`mov x19, x1` at 0x120cc88 and `mov x20, x0` at 0x120cc8c). Its one caller in libr15 is
+// CR15NetJsonLog::WriteLog, so it runs once per metric event. It returns at once unless two flag bytes are set (U2 in
+// the Quest plan: a headset run counts the calls). The observer (quest/invite/wizard_metric_hook.h, ADR 0017) installs on
+// the JUMP_SLOT libr15's own call sites load; the slot holds one entry for the symbol in the store file's relocation table.
+inline constexpr const char* kMetricLogSymbol = "_ZN10NRadEngine8NRadGame10NR15Logger9MetricLogEPKcy";
+inline constexpr std::uint64_t kMetricLogVaddr = 0x120cc50;
+inline constexpr std::uint64_t kMetricLogSlotVaddr = 0x36da2c8;
+// The first four instructions, as the observer checks them before it installs (`stp x25, x24, [sp, #-64]!` and three
+// more `stp`s; the store file at 0x120cc50 through 0x120cc5c).
+inline constexpr std::uint32_t kMetricLogCode[4] = {0xa9bc63f9, 0xa9015bf7, 0xa90253f5, 0xa9037bf3};
+using MetricLogSig = void(const char* json, unsigned long long length);
+struct LibR15MetricLogTag {};
+using LibR15MetricLogThunk = CallbackThunk<LibR15MetricLogTag, MetricLogSig>;
+
 // android_main(android_app*), defined in libr15 at 0xf784c4 and called by the native-activity glue's thread entry
 // through libr15's own PLT (`mov x0, x19; bl 0xf27bc0` at 0xf79a4c; the stub loads JUMP_SLOT 0x36eb4c8). The glue
 // ignores the result and then runs its teardown. android_main shuts the engine down after Main returns and, when
@@ -509,6 +525,15 @@ using QuitOnErrorSig = void(CR15NetGameOpaque* self);
 inline constexpr const char* kBeginLogInSymbol = "_ZN10NRadEngine8NRadGame11CR15NetGame10BeginLogInEv";
 inline constexpr std::uint64_t kBeginLogInVaddr = 0x12917b8;
 inline constexpr std::uint32_t kBeginLogInCode[4] = {0xf81c0ffc, 0xa9015bf7, 0xa90253f5, 0xa9037bf3};
+// The main-menu join (#966 S4, docs/adr/0017). CR15Game::BeginMultiplayer() (libr15 0x1201be4; ReVault 0x1301be4, the 52-byte
+// wrapper that calls the settings body through a thunk) takes the game object in x0 and begins the staged match. Its first 16
+// bytes, read from libr15 in ReVault (revault_read_memory 0x1301be4, 16 bytes).
+inline constexpr std::uint64_t kBeginMultiplayerVaddr = 0x1201be4;
+inline constexpr std::uint32_t kBeginMultiplayerCode[4] = {0xd10183ff, 0xa904fbff, 0xd2c00068, 0x92800009};
+// CR15Game::EnableTransitionMenu (libr15 0x12005fc; ReVault 0x13005fc, the plan's "mp_transition"): sends one component event to
+// the menu gamespace (CR15Game+0x7af0) and runs before BeginMultiplayer. First 16 bytes from ReVault 0x13005fc.
+inline constexpr std::uint64_t kEnableTransitionMenuVaddr = 0x12005fc;
+inline constexpr std::uint32_t kEnableTransitionMenuCode[4] = {0xd10103ff, 0xa9037bf3, 0xf97d7813, 0xb40001d3};
 using BeginLogInSig = void(CR15NetGameOpaque* self);
 
 // NRadEngine::CncaGameSpace::SendComponentEvent(CSymbol64 event, SActor actor, CSymbol64 key, uint flag), defined
@@ -783,6 +808,11 @@ inline GotTarget LibR15ConfigRequestSend() {
 // address ResourceLoadInternal hands to ReadFileAsync (#966).
 inline GotTarget LibR15AsyncResourceIOCallback() {
   return {kLibR15, kAsyncResourceIOCallbackSymbol, RelocKind::kGlobDat, LibR15PatchedBuildId(), 0x37195b8ULL};
+}
+
+// libr15.so's JUMP_SLOT for NR15Logger::MetricLog (#966, ADR 0017): the slot libr15's call to the function loads.
+inline GotTarget LibR15MetricLog() {
+  return {kLibR15, kMetricLogSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), kMetricLogSlotVaddr};
 }
 
 // Two GLOB_DAT slots in libr15.so (0x3715620 and 0x372b698), used as fixtures

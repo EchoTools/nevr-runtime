@@ -372,6 +372,33 @@ int main(int argc, char** argv) {
     QCHECK(false);
   }
 
+  // NR15Logger::MetricLog, the wizard observer's JUMP_SLOT (ADR 0017, #966): the slot resolves at its pin, the symbol is
+  // defined at the pinned address, and the first four instructions are the ones the observer proves before it installs.
+  CheckTarget(r15, pinned::LibR15MetricLog(), "libr15 NR15Logger::MetricLog JUMP_SLOT");
+  if (DynamicSymbolValue(r15, pinned::kMetricLogSymbol) != pinned::kMetricLogVaddr) {
+    std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", pinned::kMetricLogSymbol,
+                 static_cast<unsigned long long>(pinned::kMetricLogVaddr));
+    QCHECK(false);
+  }
+  if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + pinned::kMetricLogVaddr, pinned::kMetricLogCode,
+                  sizeof(pinned::kMetricLogCode)) != 0) {
+    std::fprintf(stderr, "libr15 NR15Logger::MetricLog: first instructions differ from the pinned ones\n");
+    QCHECK(false);
+  }
+
+  // The main-menu join (#966 S4): the two functions it calls, at their pinned addresses, with the prologue words ReVault reads
+  // (0x1301be4 BeginMultiplayer, 0x13005fc EnableTransitionMenu; ReVault = pinned + 0x100000). The join checks the same words.
+  if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + pinned::kBeginMultiplayerVaddr, pinned::kBeginMultiplayerCode,
+                  sizeof(pinned::kBeginMultiplayerCode)) != 0) {
+    std::fprintf(stderr, "libr15 CR15Game::BeginMultiplayer: first instructions differ from the pinned ones\n");
+    QCHECK(false);
+  }
+  if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + pinned::kEnableTransitionMenuVaddr,
+                  pinned::kEnableTransitionMenuCode, sizeof(pinned::kEnableTransitionMenuCode)) != 0) {
+    std::fprintf(stderr, "libr15 CR15Game::EnableTransitionMenu: first instructions differ from the pinned ones\n");
+    QCHECK(false);
+  }
+
   // CGTextureResource::ForceLoadAllMips, which the UI texture hook calls through the address it proves: its first
   // four instructions are the ones ui_texture_mips.cpp checks before calling it. The inline hook rows (the widget
   // update, the lobby-full handlers, the texture attach) are not pinned here: the patcher pinned test checks every row's
