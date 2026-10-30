@@ -8,8 +8,9 @@
 //       in place, data writes to the 16-byte rows only (keys and order are never touched). Runs on the game tick
 //       (ImpactSndTick) for every sorted / unsorted table instance of the process, and once more straight after each load
 //       through a GOT wrapper on LoadSoundSettings (R14), before any hit can post the stock id.
-// What is NOT built: the five `.text` words of the loader (R16, "needs a word patch", docs/quest/q15t/modules/impactsnd.md). Without
-// them the loader builds only 5 of the 15 rows (the `player` rows); this module is correct and useful in that state.
+// (c) the loader builds only 5 of the 15 rows on the stock code (its row scratch overlaps the path string). R16: the loader is
+//     rebuilt in C++ (LoadSoundSettings, the wrapper runs it in place of the stock one) and appends every row; it runs only with
+//     the Shutdown wrapper in and every callee stub pinned. docs/quest/q15t/modules/impactsnd.md, "R16, rebuilt".
 // The four hit-code words (R15) are checked, never changed. No code page is written.
 #pragma once
 
