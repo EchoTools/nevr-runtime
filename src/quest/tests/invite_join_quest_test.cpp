@@ -11,6 +11,8 @@
 #include <thread>
 #include <vector>
 
+#include <sys/mman.h>
+
 #include "quest/invite/frame_dispatch.h"
 #include "quest/invite/join_game_quest.h"
 #include "runtime/patch/invite_join.h"
@@ -105,6 +107,8 @@ class FakeAccess final : public nevr_quest_invite_join::GameAccess {
     std::memcpy(net.bytes + 8, &none, sizeof(none));
   }
 
+  void SetGame(void* at) { std::memcpy(net.bytes + 8, &at, sizeof(at)); }
+
   bool OnTickThread() override { return onThread; }
   void* NetGame() override {
     ++netCalls;
@@ -183,6 +187,33 @@ void TestQuestOffsetsOnly() {
   CHECK(nevr_invite_join::kQuestLayout.route_slot == 0x8520);
   CHECK(nevr_invite_join::kQuestLayout.route_lobby == 0x8528);
   CHECK(nevr_invite_join::kPcLayout.staged_lobby == 0x8540);
+}
+
+// The game pointer names memory no mapping holds: the join reads nothing and writes nothing, and it refuses instead of faulting.
+void TestUnmappedGameObjectIsRefused() {
+  void* gone = mmap(nullptr, sizeof(FakeGame), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  CHECK(gone != MAP_FAILED);
+  if (gone == MAP_FAILED) return;
+  munmap(gone, sizeof(FakeGame));
+  FakeAccess access;
+  access.SetGame(gone);
+  nevr_quest_invite_join::Offerer offerer(access);
+  CHECK(offerer.Offer(kMatch, true) == nevr_invite_join::Reason::StageFailed);
+  CHECK(access.begins == 0);
+}
+
+// The game object is readable but not writable: the reads pass, the first write is refused, nothing is staged, and the join refuses.
+void TestReadOnlyGameObjectWritesNothing() {
+  void* readOnly = mmap(nullptr, sizeof(FakeGame), PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  CHECK(readOnly != MAP_FAILED);
+  if (readOnly == MAP_FAILED) return;
+  FakeAccess access;
+  access.SetGame(readOnly);
+  nevr_quest_invite_join::Offerer offerer(access);
+  CHECK(offerer.Offer(kMatch, true) == nevr_invite_join::Reason::StageFailed);
+  CHECK(access.begins == 0);
+  CHECK(AllZero(static_cast<const unsigned char*>(readOnly) + 0x8538, 16));
+  munmap(readOnly, sizeof(FakeGame));
 }
 
 void TestNotAtMenu() {
@@ -403,6 +434,8 @@ int main() {
   TestQuestOffsetsOnly();
   TestNotAtMenu();
   TestNoNetGame();
+  TestUnmappedGameObjectIsRefused();
+  TestReadOnlyGameObjectWritesNothing();
   TestRepeatInsideWindowIsBusy();
   TestPrologueMismatchWritesNothing();
   TestWrongThreadWritesNothing();
