@@ -14,6 +14,7 @@
 #include "droneguard.h"
 #include "dronekill.h"
 #include "dronemuzzle.h"
+#include "fxguard.h"
 #include "ec.h"
 #include "ecfx.h"
 #include "nevr/plugin_interface.h"
@@ -141,6 +142,9 @@
 #ifndef Q15T_DRONEMUZZLE  // needs Q15T_DRONEKILL
 #define Q15T_DRONEMUZZLE 0
 #endif
+#ifndef Q15T_FXGUARD  // sound posts with symbol 0 or the invalid id dropped; zero-velocity FireBullet skipped (fxguard.h)
+#define Q15T_FXGUARD 0
+#endif
 #ifndef Q15T_POWERBOOST  // 0 off, 1 read-only, 2 swallow, 3 cone (cone sends from ec's net tick: needs Q15T_EC)
 #define Q15T_POWERBOOST 0
 #endif
@@ -259,6 +263,9 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_DRONEMUZZLE
     "dronemuzzle "
+#endif
+#if Q15T_FXGUARD
+    "fxguard "
 #endif
 #if Q15T_POWERBOOST
     "powerboost "
@@ -420,7 +427,7 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
   bool want_tick = false;
   [[maybe_unused]] const std::uintptr_t base = ctx->base_addr;
   // The modules, in an order the docs fix: wallfire after bvh; ecfx, powerboost's net tick and dronekill's kill feed after ec;
-  // dronemuzzle after dronekill. Every AddGameTick comes before InstallGameTick below. A module's own lines carry its detail;
+  // dronemuzzle after dronekill; fxguard after dronemuzzle. Every AddGameTick comes before InstallGameTick below. A module's own lines carry its detail;
   // ReportModule puts its name and result in the init record. Nothing here changes what InitEx returns (see the end).
 #if Q15T_FXTRAIL
   ReportModule("fxtrail", InstallFxTrail(base));
@@ -493,6 +500,13 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
     const InstallResult hooks[] = {dm.teleport, dm.fire};
     ReportModule("dronemuzzle", FirstFailure(dm.ok, hooks, 2));
     if (dm.ok) AddModuleTick("dronemuzzle", &DroneMuzzleTick, &want_tick);
+  }
+#endif
+#if Q15T_FXGUARD
+  {  // after dronemuzzle: the FireBullet word is shared, and fxguard chains on whatever dronemuzzle left in it
+    const FxGuardInstall fg = InstallFxGuard(base);
+    ReportModule("fxguard", fg.summary);
+    if (fg.sound_on || fg.fire_on) AddModuleTick("fxguard", &FxGuardTick, &want_tick);
   }
 #endif
 #if Q15T_POWERBOOST > 0

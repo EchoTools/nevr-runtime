@@ -41,6 +41,7 @@ option(Q15T_DRONEGUARD_IDX "droneguard stage 1 (needs Q15T_DRONEGUARD). Source: 
 option(Q15T_PEERCLAMP "peerclamp (R36): clamp a peer's stamp in CleanupPeers. Source: TEST ONLY; on in the wave19a on-list" ON)
 option(Q15T_DRONEKILL "dronekill (R45,R47,R48): drone kill / lock-on / gun / chase / shot, all five words. Source: TEST ONLY (dronekill2.on); on in the wave19a on-list; tick" ON)
 option(Q15T_DRONEMUZZLE "dronemuzzle (R49,R50): a drone's bullets leave its gun; needs Q15T_DRONEKILL. Source: TEST ONLY; on in the wave19a on-list; tick" ON)
+option(Q15T_FXGUARD "fxguard (G6A-031): PlaySound / Play3DSound posts with symbol 0 or the invalid id 0x0f986c58c7b3d4fb answered as failed; FireBullet with a zero or non-finite velocity skipped. Source: on-list (fxsndguard.on, fxfireguard.on); kill files fxguard.off, fxsndguard.off, fxfireguard.off; tick" ON)
 set(Q15T_POWERBOOST 3 CACHE STRING "powerboost (R51-R56) stage: 0 off, 1 read-only, 2 swallow, 3 cone (cone needs Q15T_EC; tick). Source: TEST ONLY; the wave19a on-list ships an empty powerboost.on = swallow + cone = 3")
 set_property(CACHE Q15T_POWERBOOST PROPERTY STRINGS 0 1 2 3)
 option(Q15T_HUDMETER "hudmeter (R57): the wrist HUD's weapon-slot heat fill stops being 0 x 0. Source: hudmeter.on; on in the wave19a on-list" ON)
@@ -102,7 +103,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(Q15T_SOURCES src/plugin.cpp src/plugin_log.cpp src/import_hook.cpp src/clock_levels.cpp src/plugin_args.cpp src/refresh_rate.cpp src/game_tick.cpp src/safe_read.cpp src/headset_gates.cpp src/got_swap.cpp src/weapon_arm.cpp src/gamespace.cpp)
-foreach(m FXTRAIL VOIPDROP CUSTCTX MESHSTEP GUNCONNECT AIBOTS BVH WALLFIRE IMPACTSND EC ECFX DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE HUDMETER LEVELNAME MUSIC SENSORWD INSTMODEL DECALS PFX PFXTEV)
+foreach(m FXTRAIL VOIPDROP CUSTCTX MESHSTEP GUNCONNECT AIBOTS BVH WALLFIRE IMPACTSND EC ECFX DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE FXGUARD HUDMETER LEVELNAME MUSIC SENSORWD INSTMODEL DECALS PFX PFXTEV)
   if(Q15T_${m})
     string(TOLOWER ${m} lm)
     list(APPEND Q15T_SOURCES src/${lm}.cpp)
@@ -146,7 +147,7 @@ target_compile_definitions(nevr_q15t PRIVATE
   Q15T_GUNCONNECT=$<BOOL:${Q15T_GUNCONNECT}> Q15T_AIBOTS=$<BOOL:${Q15T_AIBOTS}> Q15T_BVH=$<BOOL:${Q15T_BVH}>
   Q15T_WALLFIRE=$<BOOL:${Q15T_WALLFIRE}> Q15T_IMPACTSND=$<BOOL:${Q15T_IMPACTSND}> Q15T_EC=$<BOOL:${Q15T_EC}> Q15T_ECFX=$<BOOL:${Q15T_ECFX}>
   Q15T_DRONEGUARD=$<BOOL:${Q15T_DRONEGUARD}> Q15T_DRONEGUARD_IDX=$<BOOL:${Q15T_DRONEGUARD_IDX}> Q15T_PEERCLAMP=$<BOOL:${Q15T_PEERCLAMP}>
-  Q15T_DRONEKILL=$<BOOL:${Q15T_DRONEKILL}> Q15T_DRONEMUZZLE=$<BOOL:${Q15T_DRONEMUZZLE}> Q15T_POWERBOOST=${Q15T_POWERBOOST}
+  Q15T_DRONEKILL=$<BOOL:${Q15T_DRONEKILL}> Q15T_DRONEMUZZLE=$<BOOL:${Q15T_DRONEMUZZLE}> Q15T_FXGUARD=$<BOOL:${Q15T_FXGUARD}> Q15T_POWERBOOST=${Q15T_POWERBOOST}
   Q15T_HUDMETER=$<BOOL:${Q15T_HUDMETER}> Q15T_LEVELNAME=$<BOOL:${Q15T_LEVELNAME}> Q15T_MUSIC=$<BOOL:${Q15T_MUSIC}> Q15T_SENSORWD=$<BOOL:${Q15T_SENSORWD}> Q15T_SHIELDGAMMA=${Q15T_SHIELDGAMMA}
   Q15T_IMPACTSND_NOWRITE=$<BOOL:${Q15T_IMPACTSND_NOWRITE}> Q15T_ECFX_DEFAULT_ON=$<BOOL:${Q15T_ECFX_DEFAULT_ON}>
   Q15T_SHADERSTEP=$<BOOL:${Q15T_SHADERSTEP}> Q15T_TABLESTEP=$<BOOL:${Q15T_TABLESTEP}> Q15T_SENDGUARD=$<BOOL:${Q15T_SENDGUARD}> Q15T_INSTMODEL=$<BOOL:${Q15T_INSTMODEL}> Q15T_DECALS=$<BOOL:${Q15T_DECALS}> Q15T_PFX=$<BOOL:${Q15T_PFX}>

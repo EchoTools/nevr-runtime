@@ -222,7 +222,7 @@ int main() {
   // every compiled module is named in the init record
   const char* kAll[] = {"fxtrail",  "voipdrop",   "custctx",  "droneguard", "peerclamp",  "gunconnect", "aibots",
                         "bvh",      "wallfire",   "impactsnd", "ec",         "ecfx",       "dronekill",  "dronemuzzle",
-                        "powerboost", "hudmeter", "shieldgamma", "levelname", "boosterpool", "music", "sensorwd"};
+                        "powerboost", "hudmeter", "shieldgamma", "levelname", "boosterpool", "music", "sensorwd", "fxguard"};
   const std::string init = FindLine("q15t init");
   for (const char* m : kAll) {
     CHECK(init.find(std::string(m) + " ") != std::string::npos, "q15t init line does not list module %s: %s", m, init.c_str());
@@ -241,7 +241,7 @@ int main() {
   };
   const Refusal kRefused[] = {{"voipdrop", "word_pin_mismatch"}, {"custctx", "word_pin_mismatch"},  {"droneguard", "word_pin_mismatch"},
                               {"peerclamp", "word_pin_mismatch"}, {"music", "word_pin_mismatch"}, {"sensorwd", "word_pin_mismatch"}, {"impactsnd", "hit_code_word_mismatch"}, {"dronekill", "engine_export_missing"},
-                              {"dronemuzzle", "needs_dronekill_shot"}, {"powerboost", "hook_failed"}, {"hudmeter", "unexpected_original"},
+                              {"dronemuzzle", "needs_dronekill_shot"}, {"fxguard", "word_pin_mismatch"}, {"powerboost", "hook_failed"}, {"hudmeter", "unexpected_original"},
                               {"shieldgamma", "unexpected_original"}};
   for (const char* m : kInstalled)
     CHECK(CountLines(std::string("module install module=") + m + " status=ok", 1) == 1, "module %s did not report status=ok at INFO", m);
@@ -290,7 +290,7 @@ int main() {
   CHECK(CountLines("hook install hook=CncaGame::ExclusiveUpdateGame (game-thread tick) status=ok", 1) == 1, "the game tick was not installed ok");
   CHECK(w[4] != reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame), "the tick slot was not swapped");
   CHECK(CountLines("game tick callbacks") == 1, "more than one tick install record");
-  CHECK(CountLines("module install FAILED") == 12, "%d FAILED lines, want 12", CountLines("module install FAILED"));
+  CHECK(CountLines("module install FAILED") == 13, "%d FAILED lines, want 13", CountLines("module install FAILED"));
 
   // one frame through the swapped tick slot, as CncaGame::Render calls it: the registered callbacks of gunconnect and aibots run
   // (each starts, finds no game library on the host and says so once, at ERROR)
@@ -302,7 +302,7 @@ int main() {
 
   std::remove(off_file.c_str());
   rmdir(dir);
-  if (g_fail == 0) std::printf("wiring_test: all checks pass (21 modules named, 4 installed, 3 off, 12 refusals at ERROR, InitEx returned 0)\n");
+  if (g_fail == 0) std::printf("wiring_test: all checks pass (22 modules named, 4 installed, 3 off, 13 refusals at ERROR, InitEx returned 0)\n");
   else {
     for (const auto& l : g_lines) std::printf("  [%u] %s\n", l.level, l.text.c_str());
     std::printf("wiring_test: %d failure(s)\n", g_fail);
