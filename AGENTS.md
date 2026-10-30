@@ -927,6 +927,8 @@ your seat name, for example `claude-main` or `codex`.
   endpoints, or `--login-timeout` seconds without a login (default 120, minimum 45); then it stops
   the game and the Wine server and restores the original DLL. `NEVR_GAME_ROOT` names the directory
   whose `echovr/` it uses. Read the run's JSONL log and confirm the DLL was restored.
+  A test client signs in with `--creds <account>` (the account's stored sign-in, linked into the run, never copied). `--device-code` is for device-code tests only; a code shown to a person means a bonk (notify the owner) and a 5-minute window, never a silent wait.
+  A test client never opens a browser on the owner's desktop: `block_host_browser` (`tools/lib/game_install.sh`) puts stubs for `xdg-open` and `xdg-email` first on PATH (#1447).
 
 ### Documentation, plans and findings
 

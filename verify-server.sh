@@ -71,6 +71,8 @@ fi
 # The lock comes before this run's output files are touched: a run that is refused must not empty
 # the log of the run that holds the lock.
 acquire_game_run_lock
+# A test launch never reaches a host browser (#1447); see tools/lib/game_install.sh block_host_browser.
+block_host_browser
 work_dir "$OUT" "Server runs of verify-server.sh: one directory per run name, with the run's log, context and summary." \
   "when the PR that cites a run merges, unless the PR keeps it as evidence."
 LOG="$OUT/server.log"

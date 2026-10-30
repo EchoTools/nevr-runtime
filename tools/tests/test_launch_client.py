@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import fcntl
 import getpass
+import json
 import os
 import pathlib
 import shutil
@@ -26,6 +27,13 @@ LIB = REPO / "tools/lib/game_install.sh"
 ORIGINAL = b"original-dll"
 TEST_DLL = b"test-dll"
 TEST_RUNTIME = b"test-runtime"
+SIGNIN = b'{"refresh_token":"SENTINEL-CRED-MUST-NOT-PRINT"}'
+SENTINEL = "SENTINEL-CRED-MUST-NOT-PRINT"
+ACCOUNT = "test-account"
+LINK_MARKER = "FIXTURE-SIGNIN-THROUGH-A-LINK"
+# The real Wine, for the one test that checks the URL chain itself (skipped when Wine is not installed).
+REAL_WINE = shutil.which("wine")
+REAL_WINESERVER = shutil.which("wineserver")
 
 
 def install_scripts(checkout: pathlib.Path) -> None:
@@ -79,6 +87,15 @@ def nevr_root_of(game_root: pathlib.Path) -> pathlib.Path:
     return game_root / "echovr/.wineprefix/drive_c/users" / getpass.getuser() / "AppData/Local/nevr/echovr"
 
 
+def plant_store(work: pathlib.Path, account: str = ACCOUNT, content: bytes = SIGNIN, mode: int = 0o600) -> pathlib.Path:
+    """A stored sign-in as the launchers keep it: $NEVR_WORK_ROOT/creds/<account>/.credentials.json."""
+    path = work / "creds" / account / ".credentials.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    path.chmod(mode)
+    return path
+
+
 def make_game_root(root: pathlib.Path) -> pathlib.Path:
     """A fake main checkout: echovr/bin/win10 with the original DLL, an empty _local and a log dir."""
     win10 = root / "echovr/bin/win10"
@@ -128,6 +145,13 @@ def make_fake_bin(directory: pathlib.Path) -> None:
         '# A directory where the DLL was makes the restore fail for any user; chmod 444 does not stop root,\n'
         '# which is who runs the tests in the CI container.\n'
         '[[ -n "${FAKE_WINE_LOCK_DLL:-}" ]] && { rm -f ./BugSplat64.dll; mkdir ./BugSplat64.dll; }\n'
+        '# What the sign-in and browser checks read: the link while the game runs, a sign-in the runtime saves, the browser.\n'
+        '[[ -n "${FAKE_WINE_LINK:-}" ]] && { if [[ -L "$logs/../.credentials.json" ]]; then readlink "$logs/../.credentials.json" > "$FAKE_WINE_LINK"; else echo absent > "$FAKE_WINE_LINK"; fi; }\n'
+        '[[ -n "${FAKE_WINE_WRITE_SIGNIN:-}" ]] && printf "%s" "$FAKE_WINE_WRITE_SIGNIN" > "$logs/../.credentials.json"\n'
+        '[[ -n "${FAKE_WINE_XDG:-}" ]] && command -v xdg-open > "$FAKE_WINE_XDG"\n'
+        '[[ -n "${FAKE_WINE_IGNORE_INT:-}" ]] && trap "" INT  # a client that ignores the interrupt: timeout must KILL it\n'
+        '# A directory where the run\'s sign-in link is: rm cannot remove it, so the restore must say the sign-in is still there.\n'
+        '[[ -n "${FAKE_WINE_PIN_SIGNIN:-}" ]] && { rm -f "$logs/../.credentials.json"; mkdir "$logs/../.credentials.json"; }\n'
         'exec sleep "${FAKE_WINE_SLEEP:-0}"\n')
     # wineserver: like the real one, `-k` exits 1 when no server is left (every call after the first), `-w`
     # exits 0; each call is logged with the deployed DLL's content so tests can see WHEN it ran.
@@ -159,6 +183,8 @@ class LaunchClientTest(unittest.TestCase):
         self.checkout.mkdir()
         install_scripts(self.checkout)
         self.lock = self.tmp / "launch.lock"
+        self.work = self.tmp / "work"
+        self.store = plant_store(self.work)
         self.env = dict(
             os.environ,
             PATH=f"{self.fake_bin}:{os.environ['PATH']}",
@@ -166,12 +192,17 @@ class LaunchClientTest(unittest.TestCase):
             NEVR_LAUNCH_LOCK=str(self.lock),
             NEVR_EVIDENCE_DELAY="0",
             NEVR_RUN_SCRATCH_ROOT=str(self.tmp),
+            NEVR_WORK_ROOT=str(self.work),
             FAKE_EXPECT_DLL=str(self.dll),
             FAKE_EXPECT_RUNTIME=str(self.runtime),
         )
         self.env.pop("FAKE_ECHOVR_PIDS", None)
 
-    def run_script(self, *args, env=None, cwd=None):
+    def run_script(self, *args, env=None, cwd=None, auth=("--creds", ACCOUNT)):
+        """Run launch-client.sh. A test client signs in with the stored account (the owner's rule) unless the arguments
+        already name a sign-in; auth=() runs with none, for the refusals and the device-code runs."""
+        if auth and not {"--creds", "--device-code"} & set(args):
+            args = (*args, *auth)
         return subprocess.run([str(self.checkout / "launch-client.sh"), *args], env=env or self.env,
                               cwd=cwd or self.checkout, capture_output=True, text=True, timeout=60)
 
@@ -211,7 +242,8 @@ class LaunchClientTest(unittest.TestCase):
         self.assertEqual(args_file.read_text().strip(), "./echovr.exe -windowed", result.stdout)
 
     def test_game_arg_needs_a_value(self):
-        result = self.run_script("--dll", str(self.dll), "--game-arg")
+        # auth=(): the harness would append --creds, which --game-arg would take as its value.
+        result = self.run_script("--dll", str(self.dll), "--game-arg", auth=())
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("--game-arg needs one game argument", result.stderr)
         self.assertEqual(self.deployed(), ORIGINAL)
@@ -293,18 +325,6 @@ class LaunchClientTest(unittest.TestCase):
         self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
         self.assertIn(str(plugins / "leftover.dll"), result.stderr)
         self.assertEqual(self.deployed(), ORIGINAL)
-
-    def test_a_sign_in_cache_in_the_nevr_root_of_the_real_install_is_the_cached_flow(self):
-        # NEVR_GAME_ROOT unset: the game root is the main checkout and its echovr/ is the real install, which holds
-        # a sign-in. A copy named by NEVR_GAME_ROOT is refused instead (test_copy_credentials_guard.py, #1198).
-        make_game_root(self.checkout)
-        root = self.checkout / "echovr/.wineprefix/drive_c/users" / getpass.getuser() / "AppData/Local/nevr/echovr"
-        (root / ".credentials.json").write_text("{}")
-        env = {k: v for k, v in self.env.items() if k != "NEVR_GAME_ROOT"}
-        result = self.run_script("--dll", str(self.dll), env=env)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("cached credentials present", result.stdout)
-        self.assertIn("/nevr/echovr/.credentials.json", result.stdout)
 
     def test_the_run_log_is_read_from_the_nevr_root(self):
         result = self.run_script("--dll", str(self.dll))
@@ -557,10 +577,10 @@ class LaunchClientTest(unittest.TestCase):
         out.mkdir()
         old_env = {k: os.environ.get(k) for k in ("NEVR_GAME_ROOT", "NEVR_LAUNCH_LOCK",
                                                   "NEVR_RUN_SCRATCH_ROOT", "PATH", "FAKE_WINE_ARGS",
-                                                  "NEVR_EVIDENCE_DELAY", "FAKE_EXPECT_DLL")}
+                                                  "NEVR_EVIDENCE_DELAY", "FAKE_EXPECT_DLL", "NEVR_WORK_ROOT")}
         os.environ.update(env)
         try:
-            run = run_scenario.Run({"name": "launch-args"}, self.dll, out)
+            run = run_scenario.Run({"name": "launch-args"}, self.dll, out, creds=ACCOUNT)
             try:
                 run.launch()
             finally:
@@ -590,10 +610,10 @@ class LaunchClientTest(unittest.TestCase):
         out.mkdir()
         old_env = {k: os.environ.get(k) for k in ("NEVR_GAME_ROOT", "NEVR_LAUNCH_LOCK",
                                                   "NEVR_RUN_SCRATCH_ROOT", "PATH", "FAKE_WINE_ARGS",
-                                                  "NEVR_EVIDENCE_DELAY", "FAKE_EXPECT_DLL")}
+                                                  "NEVR_EVIDENCE_DELAY", "FAKE_EXPECT_DLL", "NEVR_WORK_ROOT")}
         os.environ.update(env)
         try:
-            run = run_scenario.Run({"name": "launch-config"}, self.dll, out, config)
+            run = run_scenario.Run({"name": "launch-config"}, self.dll, out, config, creds=ACCOUNT)
             try:
                 run.launch()
             finally:
@@ -607,6 +627,255 @@ class LaunchClientTest(unittest.TestCase):
             run_scenario.wineprefix.cache_clear()
         expected = "./echovr.exe -windowed -mp -config Z:" + str(config).replace("/", "\\")
         self.assertEqual(args_file.read_text().strip(), expected)
+
+    # --- the sign-in a test client uses (#1449) and the host browser it must not reach (#1447) ---
+
+    def link_path(self) -> pathlib.Path:
+        return nevr_root_of(self.game_root) / ".credentials.json"
+
+    def test_a_run_with_no_sign_in_flag_is_refused_before_anything_is_touched(self):
+        result = self.run_script("--dll", str(self.dll), auth=())
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertIn("pass --creds <account>", result.stderr)
+        self.assertIn("--device-code", result.stderr)
+        self.assertEqual(self.deployed(), ORIGINAL)
+        self.assertFalse(self.lock.exists(), "the run lock was taken before the refusal")
+        self.assertFalse(os.path.lexists(self.link_path()))
+
+    def test_creds_for_an_account_with_no_stored_sign_in_names_the_first_run(self):
+        result = self.run_script("--dll", str(self.dll), "--creds", "nobody", auth=())
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertIn("no cached credentials for nobody: run once with --device-code and --save-creds nobody",
+                      result.stderr)
+        self.assertEqual(self.deployed(), ORIGINAL)
+        self.assertFalse(self.lock.exists(), "the run lock was taken before the refusal")
+
+    def test_a_stored_sign_in_other_users_can_read_is_refused_without_printing_it(self):
+        self.store.chmod(0o644)
+        result = self.run_script("--dll", str(self.dll))
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertIn(str(self.store), result.stderr)
+        self.assertIn("0644", result.stderr)
+        self.assertNotIn(SENTINEL, result.stdout + result.stderr)
+        self.assertEqual(self.deployed(), ORIGINAL)
+        self.assertFalse(os.path.lexists(self.link_path()))
+
+    def test_a_relative_work_root_is_refused_before_a_link_would_dangle(self):
+        # The sign-in link's target must be absolute: a relative one resolves against the link's own folder.
+        result = self.run_script("--dll", str(self.dll), env=dict(self.env, NEVR_WORK_ROOT="relative/work"))
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("NEVR_WORK_ROOT must be an absolute path", result.stderr)
+        self.assertEqual(self.deployed(), ORIGINAL)
+        self.assertFalse(self.lock.exists(), "the run lock was taken before the refusal")
+
+    def test_an_account_name_that_is_not_a_plain_name_is_refused(self):
+        for bad in ("../elsewhere", "a/b", ".hidden", ""):
+            with self.subTest(account=bad):
+                result = self.run_script("--dll", str(self.dll), "--creds", bad, auth=())
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_an_install_that_holds_a_sign_in_takes_no_new_one(self):
+        # NEVR_GAME_ROOT unset: the game root is the main checkout and its echovr/ is the real install, which holds
+        # a sign-in. Neither a link nor a device-code login may join it: both runs are refused (a copy named by
+        # NEVR_GAME_ROOT is refused by test_copy_credentials_guard.py, #1198).
+        make_game_root(self.checkout)
+        root = self.checkout / "echovr/.wineprefix/drive_c/users" / getpass.getuser() / "AppData/Local/nevr/echovr"
+        root.mkdir(parents=True, exist_ok=True)
+        (root / ".credentials.json").write_bytes(SIGNIN)
+        env = {k: v for k, v in self.env.items() if k != "NEVR_GAME_ROOT"}
+        for flags in (("--creds", ACCOUNT), ("--device-code",)):
+            with self.subTest(flags=flags):
+                result = self.run_script("--dll", str(self.dll), *flags, env=env, auth=())
+                self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+                self.assertIn(str(root / ".credentials.json"), result.stderr)
+                self.assertNotIn(SENTINEL, result.stdout + result.stderr)
+                self.assertEqual((root / ".credentials.json").read_bytes(), SIGNIN)
+                self.assertEqual((self.checkout / "echovr/bin/win10/BugSplat64.dll").read_bytes(), ORIGINAL)
+
+    def test_a_creds_run_links_the_stored_sign_in_into_the_nevr_root_for_the_run_only(self):
+        seen = self.tmp / "link-seen"
+        result = self.run_script("--dll", str(self.dll), "--creds", ACCOUNT,
+                                 env=dict(self.env, FAKE_WINE_LINK=str(seen)))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(seen.read_text().strip(), str(self.store),
+                         "the game did not find the stored sign-in in the nevr root")
+        self.assertFalse(os.path.lexists(self.link_path()), "the link was left in the copy")
+        self.assertEqual(self.store.read_bytes(), SIGNIN, "the stored sign-in changed")
+        self.assertEqual(self.store.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn(SENTINEL, result.stdout + result.stderr)
+
+    def test_a_sign_in_the_restore_cannot_remove_is_named_as_left_in_the_nevr_root(self):
+        result = self.run_script("--dll", str(self.dll), env=dict(self.env, FAKE_WINE_PIN_SIGNIN="1"))
+        self.assertIn("the run's sign-in is still in the nevr root", result.stderr, result.stdout + result.stderr)
+        self.assertNotIn("removed from the nevr root ===", result.stdout, "the restore claimed a clean copy")
+        self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_the_stored_sign_in_link_is_removed_when_the_run_is_interrupted(self):
+        started = Fifo(self.tmp / "game-started")
+        self.addCleanup(started.close)
+        env = dict(self.env, FAKE_WINE_SLEEP="3", FAKE_WINE_STARTED=str(started.path))
+        process = subprocess.Popen([str(self.checkout / "launch-client.sh"), "--dll", str(self.dll), "--creds",
+                                    ACCOUNT], env=env, cwd=self.checkout, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True)
+        try:
+            started.wait_for(1)
+            self.assertTrue(os.path.islink(self.link_path()), "the link was not in place while the game ran")
+            process.send_signal(signal.SIGTERM)
+            process.wait(timeout=60)
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.stdout.close()
+        self.assertFalse(os.path.lexists(self.link_path()), "the link survived the interrupt")
+        self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_a_device_code_run_starts_with_no_sign_in_and_says_where_the_code_is(self):
+        result = self.run_script("--dll", str(self.dll), "--device-code", auth=())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("DISPLAY :101", result.stdout)
+        self.assertIn("screenshot", result.stdout)
+        self.assertIn("masks", result.stdout)
+        # The default login window of a device-code run: the code's 5 minutes plus margin (420 s), not the stock 120 s.
+        self.assertIn("login window is 420 s", result.stdout)
+        self.assertNotIn(SENTINEL, result.stdout + result.stderr)
+
+    def test_a_device_code_run_keeps_an_explicit_login_timeout(self):
+        result = self.run_script("--dll", str(self.dll), "--device-code", "--login-timeout", "50", auth=())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("login window is 50 s", result.stdout)
+
+    def test_a_device_code_run_ends_itself_at_login(self):
+        env = dict(self.env, FAKE_WINE_SLEEP="30", NEVR_LOGIN_POLL_SECONDS="0.1")
+        started = time.monotonic()
+        result = self.run_script("--dll", str(self.dll), "--device-code", env=env, auth=())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertLess(time.monotonic() - started, 5.0, "the run waited for the game to exit instead of ending at login")
+
+    def test_a_device_code_run_ends_at_the_runtimes_failure_lines_and_restores(self):
+        lines = ("[NEVR.AUTH] Device auth timed out after 5 minutes",
+                 "[NEVR.AUTH] Device code expired. Please restart to try again.",
+                 "[NEVR.AUTH] device authorization stopped because the browser could not be opened")
+        for line in lines:
+            with self.subTest(line=line):
+                env = dict(self.env, FAKE_LOG_TEXT=json.dumps({"msg": line}) + "\\n", FAKE_WINE_SLEEP="30",
+                           NEVR_LOGIN_POLL_SECONDS="0.1")
+                started = time.monotonic()
+                result = self.run_script("--dll", str(self.dll), "--device-code", env=env, auth=())
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertLess(time.monotonic() - started, 8.0,
+                                "the run waited out the game instead of ending at the failure line")
+                self.assertIn("device-code flow ended without a sign-in", result.stderr)
+                self.assertIn("original BugSplat64.dll restored and verified", result.stdout)
+                self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_a_device_code_run_is_not_ended_by_lines_that_are_not_failures(self):
+        text = (json.dumps({"msg": "[NEVR.AUTH] Device auth cancelled: the game is closing"}) + "\\n"
+                + json.dumps({"msg": "[NEVR.AUTH] Device code expired before a sign-in; a new code will be requested"})
+                + "\\n" + '{"msg":"NetGame switching state (from logging in, to logged in)"}\\n')
+        result = self.run_script("--dll", str(self.dll), "--device-code", env=dict(self.env, FAKE_LOG_TEXT=text),
+                                 auth=())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_a_device_code_run_saves_the_new_sign_in_at_0600_and_never_overwrites(self):
+        store = self.work / "creds" / "newacct" / ".credentials.json"
+        env = dict(self.env, FAKE_WINE_WRITE_SIGNIN=SIGNIN.decode())
+        result = self.run_script("--dll", str(self.dll), "--device-code", "--save-creds", "newacct", env=env, auth=())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(store.read_bytes(), SIGNIN)
+        self.assertEqual(store.stat().st_mode & 0o777, 0o600)
+        self.assertFalse(os.path.lexists(self.link_path()), "the run's sign-in was left in the copy")
+        self.assertNotIn(SENTINEL, result.stdout + result.stderr)
+        again = self.run_script("--dll", str(self.dll), "--device-code", "--save-creds", "newacct", env=env, auth=())
+        self.assertEqual(again.returncode, 3, again.stdout + again.stderr)
+        self.assertIn("already stored", again.stderr)
+        self.assertEqual(store.read_bytes(), SIGNIN)
+
+    def test_creds_without_an_account_is_a_usage_error(self):
+        result = self.run_script("--dll", str(self.dll), "--creds", auth=())
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("--creds needs an account name", result.stderr)
+        self.assertEqual(self.deployed(), ORIGINAL)
+        self.assertFalse(self.lock.exists(), "the run lock was taken before the refusal")
+
+    def test_the_save_helper_never_replaces_a_stored_sign_in(self):
+        # The helper's own check (a hard link fails on a path that exists), below the launcher's pre-lock check.
+        source = self.tmp / "new-signin.json"
+        source.write_bytes(SIGNIN)
+        path = self.work / "creds" / "helper-account" / ".credentials.json"
+        cmd = f"set -eu; source {LIB}; save_stored_sign_in {source} {path}"
+        first = subprocess.run(["bash", "-c", cmd], env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertEqual(path.read_bytes(), SIGNIN)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        source.write_bytes(b'{"refresh_token":"OTHER-SENTINEL"}')
+        second = subprocess.run(["bash", "-c", cmd], env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(second.returncode, 1, second.stdout + second.stderr)
+        self.assertIn("already exists", second.stderr)
+        self.assertEqual(path.read_bytes(), SIGNIN, "a stored sign-in was replaced")
+        self.assertEqual(list(path.parent.glob(".credentials.json.new.*")), [], "a temporary copy was left behind")
+
+    def test_save_creds_needs_device_code_and_no_stored_sign_in_to_use(self):
+        for args in (("--save-creds", "x"), ("--creds", ACCOUNT, "--device-code", "--save-creds", "x")):
+            with self.subTest(args=args):
+                result = self.run_script("--dll", str(self.dll), *args, auth=())
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_timeout_must_be_a_positive_whole_number(self):
+        for bad in ("0", "-5", "1.5", "soon"):
+            with self.subTest(value=bad):
+                result = self.run_script("--dll", str(self.dll), "--timeout", bad)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("--timeout must be", result.stderr)
+        self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_a_client_that_never_logs_in_is_ended_at_timeout_and_restored(self):
+        # The dead proxy: the game logs no login and hangs. --timeout ends it well inside the 15 s kill-after.
+        env = dict(self.env, FAKE_LOG_TEXT='{"msg":"noise"}\\n', FAKE_WINE_SLEEP="600")
+        started = time.monotonic()
+        result = self.run_script("--dll", str(self.dll), "--timeout", "3", env=env)
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertLess(elapsed, 12.0, "the client outlived --timeout")
+        self.assertIn("--timeout 3 s elapsed", result.stderr)
+        self.assertIn("original BugSplat64.dll restored and verified", result.stdout)
+        self.assertEqual(self.deployed(), ORIGINAL)
+        self.assertFalse(os.path.lexists(self.link_path()))
+
+    def test_a_device_code_client_that_never_logs_in_is_ended_at_timeout_and_restored(self):
+        # The exit-after-login branch (a device-code run ends at login) is bounded by --timeout too.
+        env = dict(self.env, FAKE_LOG_TEXT='{"msg":"noise"}\\n', FAKE_WINE_SLEEP="600")
+        started = time.monotonic()
+        result = self.run_script("--dll", str(self.dll), "--device-code", "--timeout", "3", env=env, auth=())
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertLess(elapsed, 12.0, "the client outlived --timeout")
+        self.assertIn("--timeout 3 s elapsed", result.stderr)
+        self.assertIn("original BugSplat64.dll restored and verified", result.stdout)
+        self.assertEqual(self.deployed(), ORIGINAL)
+        self.assertFalse(os.path.lexists(self.link_path()))
+
+    def test_a_client_that_ignores_the_interrupt_is_killed_at_timeout_and_restored(self):
+        # timeout sends INT, the client ignores it, and timeout's KILL (-k 15) ends it: the status is 137, not 124, and
+        # the run still says the timeout elapsed (a 137 counts only when the run lasted the whole --timeout).
+        env = dict(self.env, FAKE_LOG_TEXT='{"msg":"noise"}\\n', FAKE_WINE_SLEEP="600", FAKE_WINE_IGNORE_INT="1")
+        started = time.monotonic()
+        result = self.run_script("--dll", str(self.dll), "--timeout", "2", env=env)
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertGreaterEqual(elapsed, 2.0)
+        self.assertLess(elapsed, 25.0, "the client outlived --timeout and its kill-after")
+        self.assertIn("--timeout 2 s elapsed", result.stderr)
+        self.assertIn("original BugSplat64.dll restored and verified", result.stdout)
+        self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_the_game_is_started_with_the_host_browser_blocked(self):
+        seen = self.tmp / "xdg-seen"
+        result = self.run_script("--dll", str(self.dll), env=dict(self.env, FAKE_WINE_XDG=str(seen)))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(os.path.dirname(seen.read_text().strip()), str(self.work / "browser-stub"),
+                         "the game reaches a host xdg-open first")
 
 
 class VerifyServerTest(unittest.TestCase):
@@ -633,6 +902,7 @@ class VerifyServerTest(unittest.TestCase):
             NEVR_GAME_ROOT=str(self.game_root),
             NEVR_LAUNCH_LOCK=str(self.tmp / "launch.lock"),
             NEVR_RUN_SCRATCH_ROOT=str(self.tmp),
+            NEVR_WORK_ROOT=str(self.tmp / "work"),
             NEVR_VERIFY_MIN_SECONDS="1",
             NEVR_VERIFY_POLL_SECONDS="1",
             FAKE_EXPECT_DLL=str(bin_dir / "BugSplat64.dll"),
@@ -735,6 +1005,13 @@ class VerifyServerTest(unittest.TestCase):
         self.assertRegex((run / "window-census.txt").read_text(), r"^t=1s game_pids=\[")
         self.assertNotIn("process exited early", (run / "context.txt").read_text())
         self.assertIn("max_game_windows=", (run / "context.txt").read_text())
+
+    def test_the_game_is_started_with_the_host_browser_blocked(self):
+        seen = self.tmp / "xdg-seen"
+        result = self.run_verify(dict(self.env, FAKE_WINE_XDG=str(seen)))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(os.path.dirname(seen.read_text().strip()), str(self.tmp / "work" / "browser-stub"),
+                         "the game reaches a host xdg-open first")
 
     def run_verify(self, env=None):
         return subprocess.run(self.command(), env=env or self.env, cwd=self.checkout, capture_output=True,
@@ -883,6 +1160,7 @@ class LaunchServerTest(unittest.TestCase):
             PATH=f"{self.fake_bin}:{os.environ['PATH']}",
             NEVR_GAME_ROOT=str(self.game_root),
             NEVR_LAUNCH_LOCK=str(self.tmp / "launch.lock"),
+            NEVR_WORK_ROOT=str(self.tmp / "work"),
             FAKE_EXPECT_DLL=str(bin_dir / "BugSplat64.dll"),
             FAKE_EXPECT_RUNTIME=str(bin_dir / "nevr-runtime.dll"),
         )
@@ -919,6 +1197,90 @@ class LaunchServerTest(unittest.TestCase):
         result = self.run_script(dict(self.env, NEVR_GAME_ROOT=str(self.tmp / "nowhere")))
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("no game install", result.stderr)
+
+    def test_the_game_is_started_with_the_host_browser_blocked(self):
+        seen = self.tmp / "xdg-seen"
+        result = self.run_script(dict(self.env, FAKE_WINE_XDG=str(seen)))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(os.path.dirname(seen.read_text().strip()), str(self.tmp / "work" / "browser-stub"),
+                         "the game reaches a host xdg-open first")
+
+
+@unittest.skipUnless(REAL_WINE and REAL_WINESERVER, "wine is not installed")
+class HostBrowserChainTest(unittest.TestCase):
+    """The real Wine, once, for the URL chain a game's ShellExecute takes (#1447). The launchers put a stub `xdg-open`
+    first on PATH (tools/lib/game_install.sh block_host_browser); the first test shows that a URL open under that
+    environment reaches the stub. The control shows that without it the same open reaches the first `xdg-open` on
+    PATH, with the full URL, so the first test would have caught a host browser. The last test shows that Wine follows
+    the symlink a stored sign-in is linked in by. Nothing here starts the game; the browser is a recorder, never a
+    real one, and DISPLAY and WAYLAND_DISPLAY are unset for every Wine call."""
+
+    URL = "https://example.invalid/device?code=TESTCODE"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = pathlib.Path(tempfile.mkdtemp(prefix="browser-chain-test-", dir="/var/tmp"))
+        cls.prefix = cls.tmp / "prefix"
+        cls.env = {k: v for k, v in os.environ.items()
+                   if k not in ("DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE", "HYPRLAND_INSTANCE_SIGNATURE")}
+        cls.env.update(WINEPREFIX=str(cls.prefix), WINEDEBUG="-all")
+        boot = subprocess.run([REAL_WINE, "wineboot", "--init"], env=cls.env, capture_output=True, text=True,
+                              timeout=900)
+        subprocess.run([REAL_WINESERVER, "-w"], env=cls.env, timeout=300)
+        if boot.returncode != 0:
+            raise RuntimeError(f"wineboot --init failed: {boot.stdout}{boot.stderr}")
+
+    @classmethod
+    def tearDownClass(cls):
+        subprocess.run([REAL_WINESERVER, "-k"], env=cls.env, capture_output=True, timeout=60)  # 1 when none is left
+        shutil.rmtree(cls.tmp)
+
+    def open_url(self, setup: str, work: pathlib.Path) -> None:
+        """Run `setup` (bash) and then `wine start <URL>` with the chain's environment, and wait until Wine is idle."""
+        env = dict(self.env, NEVR_WORK_ROOT=str(work))
+        done = subprocess.run(["bash", "-c", f'set -eu; {setup}; wine start "$1"', "bash", self.URL], env=env,
+                              capture_output=True, text=True, timeout=300)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        subprocess.run([REAL_WINESERVER, "-w"], env=self.env, timeout=120)  # the open runs in Wine's own processes
+
+    @staticmethod
+    def wait_for_file(path: pathlib.Path, seconds: float = 30.0):
+        deadline = time.monotonic() + seconds
+        while not path.exists() and time.monotonic() < deadline:
+            time.sleep(0.5)
+        return path.read_text() if path.exists() else None
+
+    def test_a_url_open_under_the_launcher_environment_is_taken_by_the_stub(self):
+        work = self.tmp / "work-stub"
+        self.open_url(f"source {LIB}; block_host_browser", work)
+        text = self.wait_for_file(work / "browser-stub" / "blocked.log")
+        self.assertIsNotNone(text, "the open did not reach the stub")
+        self.assertIn("blocked https://example.invalid/device", text)
+        self.assertNotIn("TESTCODE", text, "the device code reached the stub's log")
+
+    def test_without_the_stub_the_same_open_reaches_the_first_xdg_open_on_path(self):
+        rec = self.tmp / "rec-bin"
+        rec.mkdir()
+        record = self.tmp / "control.record"
+        (rec / "xdg-open").write_text(f'#!/bin/bash\nprintf "%s\\n" "$1" > "{record}"\nexit 0\n')
+        (rec / "xdg-open").chmod(0o755)
+        self.open_url(f'export PATH="{rec}:$PATH"', self.tmp / "work-control")
+        text = self.wait_for_file(record)
+        self.assertEqual(text.strip() if text else None, self.URL, "the control did not see the open")
+
+    def test_wine_reads_a_sign_in_through_a_symlink_in_the_nevr_root(self):
+        store = self.tmp / "store" / ".credentials.json"
+        store.parent.mkdir(parents=True, exist_ok=True)
+        store.write_text(LINK_MARKER)
+        # The runtime makes the nevr root on its first run; the prefix from wineboot does not have it yet.
+        root = self.prefix / "drive_c/users" / getpass.getuser() / "AppData/Local/nevr/echovr"
+        root.mkdir(parents=True, exist_ok=True)
+        link = root / ".credentials.json"
+        link.symlink_to(store)
+        self.addCleanup(os.remove, link)
+        done = subprocess.run([REAL_WINE, "cmd", "/c", "type", "%LOCALAPPDATA%\\nevr\\echovr\\.credentials.json"],
+                              env=self.env, capture_output=True, text=True, timeout=300)
+        self.assertIn(LINK_MARKER, done.stdout, done.stdout + done.stderr)
 
 
 if __name__ == "__main__":
