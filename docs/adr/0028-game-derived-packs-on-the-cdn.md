@@ -1,6 +1,6 @@
 # ADR 0028: game-derived content packs live on the CDN and in the signed manifest, never on a release page; they ship off
 
-Status: proposed. Tracking issue: to be filed. Builds on ADR 0012 (the nevr root), ADR 0019 decision 8 (a plugin carries no game-derived bytes)
+Status: proposed. Tracking issue: #1585 (the installer's fetch and placement, and what it does not yet cover). Builds on ADR 0012 (the nevr root), ADR 0019 decision 8 (a plugin carries no game-derived bytes)
 and ADR 0023 (the manifest chain and its artifact kinds). Nothing in this record is built when it is written; "What is not known" lists
 what no measurement covers.
 
