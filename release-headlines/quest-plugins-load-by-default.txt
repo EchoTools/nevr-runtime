@@ -1,0 +1,1 @@
+Plugins built into the Quest app now load automatically, with no config file needed.
