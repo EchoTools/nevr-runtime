@@ -616,33 +616,6 @@ inline GotTarget LibR15Signal() {
   return {kLibR15, kSignalSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36e6508ULL};
 }
 
-// The provider libraries the game loads after the constructor (CNSProvider::Create -> CSysModule::Load -> dlopen; none is a
-// DT_NEEDED of libr15: `readelf -d`) and that import libc's sigaction and signal as well (#1605). Slots are the link-time
-// addresses of the JUMP_SLOTs in the store APK's copies (`readelf -rW`; each library is BIND_NOW and has one relocation of each
-// symbol). libpnsovr is listed because the default Quest build still loads it (docs/adr/0026 is not implemented: the rename
-// hook is off by default and the login hook installs on libpnsovr); the hook costs nothing when it is not loaded.
-inline constexpr const char* kPnsrad = "libpnsrad.so";
-inline constexpr const char* kPnsradBuildId = "c58fb82e42d9ed6564744cfa10f05af74aedd0ee";
-inline constexpr const char* kPnsovr = "libpnsovr.so";
-inline constexpr const char* kPnsovrBuildId = "ca47bb8d03e6f43c1825133bbb9c15f174705c51";
-struct CrashLateModule {
-  const char* module;
-  const char* buildId;
-  std::uint64_t sigactionSlot;
-  std::uint64_t signalSlot;
-};
-inline constexpr CrashLateModule kCrashLateModules[] = {
-    {kPnsrad, kPnsradBuildId, 0x72de30ULL, 0x732df0ULL},
-    {kMatchmaking, kMatchmakingBuildId, 0x6b6768ULL, 0x6bb350ULL},
-    {kPnsovr, kPnsovrBuildId, 0x6dd218ULL, 0x6e2130ULL},
-};
-inline GotTarget CrashLateSigaction(const CrashLateModule& m) {
-  return {m.module, kSigactionSymbol, RelocKind::kJumpSlot, m.buildId, m.sigactionSlot};
-}
-inline GotTarget CrashLateSignal(const CrashLateModule& m) {
-  return {m.module, kSignalSymbol, RelocKind::kJumpSlot, m.buildId, m.signalSlot};
-}
-
 // libr15.so's slot for CJson::TString, defined in libr15 itself (JUMP_SLOT 0x36ebe08).
 inline GotTarget LibR15TString() {
   return {kLibR15, kTStringSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36ebe08ULL};
