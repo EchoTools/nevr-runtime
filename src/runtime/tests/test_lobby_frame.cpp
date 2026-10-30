@@ -5,13 +5,12 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "nevr/symbol_hash.h"
-#include <optional>
-
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/lobby_frame.h"
 #include "runtime/tests/lobby_record_golden.h"
