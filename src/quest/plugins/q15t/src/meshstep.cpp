@@ -94,8 +94,8 @@ InstallResult InstallMeshStepAt(std::uintptr_t base, const MeshStepAddrs& a, con
     r.reason = "word_pin_mismatch";
     return r;
   }
-  bool ok_presence = false;
-  bool ok_mesh = false;
+  bool ok_presence = true;  // Rd() only ever clears it
+  bool ok_mesh = true;
   const std::uint64_t vp = Rd<std::uint64_t>(base + a.vtbl_presence, &ok_presence);
   const std::uint64_t vm = Rd<std::uint64_t>(base + a.vtbl_mesh, &ok_mesh);
   if (!ok_presence || !ok_mesh || vp == 0 || vm == 0) {
