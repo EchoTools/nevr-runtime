@@ -181,6 +181,8 @@ int main() {
   w[4] = reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame);    // 0x20
   const uintptr_t kLevelNameSlots[4] = {0x362ef90, 0x3630e58, 0x3631278, 0x36316f8};
   for (uintptr_t s : kLevelNameSlots) *reinterpret_cast<uintptr_t*>(base + s) = base + 0x1202ecc;
+  // boosterpool: the GOT word of the AllocatePooledActor import holds its pinned function (ELF 0x18037c4)
+  *reinterpret_cast<uintptr_t*>(base + 0x36cd1f8) = base + 0x18037c4;
   // fxtrail: its eleven code words are the pinned ones, so its off switch (set below) is what stops it
   for (const auto& pin : q15t::kFxTrailWordPins) *reinterpret_cast<uint32_t*>(base + pin.va) = pin.want;
   // bvh: its six slots hold their pinned functions. wallfire (installed after it): the query slot, the occluded slot, the site word.
@@ -220,7 +222,7 @@ int main() {
   // every compiled module is named in the init record
   const char* kAll[] = {"fxtrail",  "voipdrop",   "custctx",  "droneguard", "peerclamp",  "gunconnect", "aibots",
                         "bvh",      "wallfire",   "impactsnd", "ec",         "ecfx",       "dronekill",  "dronemuzzle",
-                        "powerboost", "hudmeter", "shieldgamma", "levelname", "music", "sensorwd"};
+                        "powerboost", "hudmeter", "shieldgamma", "levelname", "boosterpool", "music", "sensorwd"};
   const std::string init = FindLine("q15t init");
   for (const char* m : kAll) {
     CHECK(init.find(std::string(m) + " ") != std::string::npos, "q15t init line does not list module %s: %s", m, init.c_str());
@@ -230,7 +232,7 @@ int main() {
   }
 
   // what must have installed, been switched off, or refused, on this image
-  const char* kInstalled[] = {"bvh", "wallfire", "levelname"};
+  const char* kInstalled[] = {"bvh", "wallfire", "levelname", "boosterpool"};
   const char* kArmed[] = {"gunconnect", "aibots"};
   const char* kOff[] = {"ec", "ecfx", "fxtrail"};
   struct Refusal {
@@ -262,6 +264,7 @@ int main() {
   CHECK(w_slot(base, bp.init.slot) != base + bp.init.fn && w_slot(base, bp.gate.slot) != base + bp.gate.fn, "bvh: its slots were not swapped");
   CHECK(w_slot(base, wp.query_slot) != base + wp.query_fn, "wallfire (after bvh) did not swap its slot");
   CHECK(w_slot(base, 0x362ef90) != base + 0x1202ecc, "levelname: its slot was not swapped");
+  CHECK(w_slot(base, 0x36cd1f8) != base + 0x18037c4, "boosterpool: its GOT slot was not swapped");
   CHECK(CountLines("wallfire on:") == 1 && CountLines("bvh on:") == 1, "bvh and wallfire did not both log 'on'");
   // order: wallfire is installed after bvh (it refuses as bvh_not_installed otherwise), and the tick comes after every module
   size_t at_bvh = 0, at_wall = 0, at_tick = 0, at_ec = 0, at_mod_last = 0;
@@ -299,7 +302,7 @@ int main() {
 
   std::remove(off_file.c_str());
   rmdir(dir);
-  if (g_fail == 0) std::printf("wiring_test: all checks pass (20 modules named, 3 installed, 3 off, 12 refusals at ERROR, InitEx returned 0)\n");
+  if (g_fail == 0) std::printf("wiring_test: all checks pass (21 modules named, 4 installed, 3 off, 12 refusals at ERROR, InitEx returned 0)\n");
   else {
     for (const auto& l : g_lines) std::printf("  [%u] %s\n", l.level, l.text.c_str());
     std::printf("wiring_test: %d failure(s)\n", g_fail);
