@@ -1353,9 +1353,10 @@ struct NetgunRegistration {
 };
 std::vector<NetgunRegistration> g_netgunRegistrations;
 
-void CaptureNetgunRegistration(std::uint64_t type, std::uint64_t name, ResourceTransformFn transform, void* user,
+bool CaptureNetgunRegistration(std::uint64_t type, std::uint64_t name, ResourceTransformFn transform, void* user,
                                const char* label) {
   g_netgunRegistrations.push_back({type, name, transform, user, label});
+  return true;
 }
 
 constexpr std::uint64_t kNetgunParticleType = 0x8ee04a8fa8b1cdb0ULL;  // CSymbol64("CParticleEffectCR")

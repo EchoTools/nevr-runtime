@@ -41,9 +41,19 @@ bool IsOwned(const std::string& item) noexcept;
 bool SyncDir(const std::string& dir) noexcept;
 
 // Deletes each `<root>/_data.staging-*` that has its marker (and the marker). A marker whose item is gone is removed
-// too. Nothing else is deleted: not an unmarked name, not a `_data.replaced-*`, not the download. Returns how many
-// staging directories it removed; `failed` (when not null) gets how many it could not.
+// too. Then it puts a bundled content pack's leftovers right (CleanPackLeftovers below). Nothing else is deleted: not an
+// unmarked name, not a `_data.replaced-*`, not the download. Returns how many staging directories and pack temporaries it
+// removed; `failed` (when not null) gets how many it could not.
 int CleanLeftovers(const std::string& root, int* failed) noexcept;
+
+// What an interrupted placement of a bundled content pack leaves (docs/adr/0029-quest-bundled-content-pack.md): in
+// `<root>/_data/<version>/rad15/android/manifests` and `.../packages` (real directories, never followed through a link), each
+// `<name>.nevr-pack.tmp` that has its marker is deleted with the marker; a marker of a `.nevr-pack.tmp` or of a `.stock`
+// backup whose item is gone is removed (an empty regular file only). An unmarked temporary, a finished `.stock` backup
+// and every other file are left. CleanLeftovers calls it, so the data step's own recovery covers a pack too; the pack step
+// calls it directly (a release build runs no other recovery). Returns how many temporaries it removed; `failed` gets how many
+// it could not.
+int CleanPackLeftovers(const std::string& root, int* failed) noexcept;
 
 // The crash between the two renames of InstallStaged leaves no `<root>/_data` and the old tree under a marked
 // `<root>/_data.replaced-<utc>`. When `_data` is missing it renames the newest such directory back (and removes its

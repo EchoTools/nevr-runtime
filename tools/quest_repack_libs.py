@@ -19,7 +19,10 @@ named like a game library would silently take that library's place and the signe
       here, on a copy of the store file in a temporary directory (under --scratch when given), with the same
       --extra-rows file the recipe gave it, and the sha-256 of the store file, of the patcher's output and of the signed
       entry are printed. A signed libr15 that is the store's bytes, a patcher run on another input, a missing entry, a
-      patcher that fails or writes no file, and a patcher whose output is the store file are each a named problem.
+      patcher that fails or writes no file, and a patcher whose output is the store file are each a named problem. The staged
+      pack (stage-pack) is held to the same rule: each of its files is in the signed APK with the staged bytes, STORED, the
+      signed APK carries no `assets/nevr-pack/` entry that was not staged (so a build with no pack carries none), and the
+      signed APK is under 4 GiB.
 
   check-shim-rows --shim SHIM [--extra-rows FILE]
       Refuses (exit 1) a shim that was not built for the rows the library is patched with (docs/adr/0021 section 11). The
@@ -40,6 +43,25 @@ named like a game library would silently take that library's place and the signe
       Refuses (exit 1) a staged manifest whose sha-256 for a plugin is not the staged file's, and a staged plugin the
       manifest does not list. Run by verify-signed, before anything is signed.
 
+  stage-pack --pack-zip PACK_ZIP --meta META_JSON --stage STAGE_DIR --store-apk STORE_APK [--plan-header FILE]
+      Stages a bundled content pack (docs/adr/0029-quest-bundled-content-pack.md) as APK assets under STAGE_DIR:
+      `assets/nevr-pack/files/<path>` for each file of the zip and `assets/nevr-pack/pack.json` describing them. META_JSON holds
+      the pack's `id`, `version` (X.Y.Z), `requires_stock_manifest_sha256` (one or two sha-256 of the stock manifests it may
+      replace) and `zip_prefix` (`_data/<version>/rad15/android/`, the directory the zip's entries sit in, which names the stock
+      data version). The pins it must agree with (the manifest id and the data version folder) are read from the data step's
+      `kManifestPath` in PLAN_HEADER (default src/quest/data/plan.h). Every file gets every check, and nothing is written when
+      one fails: each zip entry name is safe (no absolute path, `..`, backslash, drive letter or control character, at most
+      16 components), no entry is a link or another special file or is encrypted, no two names are one (in any case), every
+      file sits under the prefix in `manifests/` or `packages/` with the one file name the runtime accepts, the sizes the zip
+      records are the sizes read, the sha-256 is taken from the bytes, there are at most 8 files, none empty or over 2 GiB, the
+      store APK has no `assets/nevr-pack/` entry of its own, and the APK (the store file plus the pack) stays under the 4 GiB a
+      zip without zip64 can address, which the sentinel's zip reader requires.
+
+  pack-problems --stage STAGE_DIR [--plan-header FILE]
+      Refuses (exit 1) a staged pack the runtime would not take (the rules of src/quest/data/pack.cpp ParsePackJson), a staged
+      file `pack.json` does not list or whose sha-256 or size it gets wrong, and a file listed but not staged. Nothing staged is
+      fine. Run by verify-signed, before anything is signed.
+
   check-plugin-build-ids --apk STORE_APK --plugin PLUGIN_FILE
       Refuses (exit 1) a plugin the Quest loader would refuse for its build IDs (src/quest/plugin/plugin_image.h):
       one with no NEVR_DECLARE_SUPPORTED_BUILD_IDS note, or whose list does not hold the GNU build ID of the store
@@ -54,6 +76,7 @@ import argparse
 import hashlib
 import json
 import re
+import stat
 import struct
 import pathlib
 import subprocess
@@ -81,6 +104,27 @@ LIBR15 = f"{ABI_DIR}/libr15.so"
 PT_NOTE = 4
 NT_GNU_BUILD_ID = 3
 NEVR_NOTE_TYPE = 1
+
+
+# The bundled content pack (docs/adr/0029-quest-bundled-content-pack.md): APK assets the sentinel places over the stock data.
+PACK_DIR = "assets/nevr-pack"
+PACK_JSON_ENTRY = f"{PACK_DIR}/pack.json"
+PACK_FILES_DIR = f"{PACK_DIR}/files"
+PACK_SCHEMA = 1
+MAX_PACK_FILES = 8
+MAX_PACK_FILE_BYTES = (1 << 31) - 1  # the sentinel's zip reader limit for one entry
+# A zip without zip64 addresses 4 GiB; the sentinel's reader refuses zip64. The slack is the central directory, the signing
+# block and the alignment padding.
+APK_LIMIT_BYTES = 0xFFFFFFFF
+APK_SLACK_BYTES = 8 * 1024 * 1024
+PLAN_HEADER = pathlib.Path(__file__).resolve().parent.parent / "src/quest/data/plan.h"
+RESERVED_SUFFIXES = (".nevr-pack.tmp", ".stock", ".nevr-owned")
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+_PACK_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+_PACK_VERSION = re.compile(r"^[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}$")
+_PACK_FILE_NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_ZIP_PREFIX = re.compile(r"^_data/([A-Za-z0-9._-]{1,32})/rad15/android/$")
+_MANIFEST_PIN = re.compile(r'kManifestPath\s*=\s*"_data/([A-Za-z0-9._-]+)/rad15/android/manifests/([A-Za-z0-9._-]+)"')
 
 
 def lib_entries(archive: zipfile.ZipFile) -> list[str]:
@@ -285,6 +329,312 @@ def verify_signed(source: pathlib.Path, signed: pathlib.Path, stage: pathlib.Pat
             elif entry_digest(result, entry) != file_digest(staged):
                 problems.append(f"{entry}: the signed APK holds different bytes than the staged file")
         problems.extend(plugin_manifest_problems(stage))
+        problems.extend(pack_problems(stage))
+        problems.extend(pack_signed_problems(result, stage))
+    size = signed.stat().st_size
+    if size > APK_LIMIT_BYTES:
+        problems.append(f"{signed.name}: {size} bytes, over the 4 GiB a zip without zip64 holds (the sentinel's zip reader "
+                        "refuses zip64)")
+    return problems
+
+
+def pinned_manifest(plan_header: pathlib.Path) -> tuple[str, str] | None:
+    """`(version folder, manifest id)` of the data step's `kManifestPath`, read from `plan_header`; None when it names none."""
+    try:
+        found = _MANIFEST_PIN.search(plan_header.read_text())
+    except OSError:
+        return None
+    return (found.group(1), found.group(2)) if found else None
+
+
+def safe_pack_entry_name(name: str) -> bool:
+    """The rule of the sentinel's zip reader (src/quest/data/zip.cpp SafeEntryName): a relative path of plain components."""
+    if not name or len(name.encode("utf-8")) > 512 or name.startswith("/"):
+        return False
+    body = name[:-1] if name.endswith("/") else name
+    if not body:
+        return False
+    parts = body.split("/")
+    if len(parts) > 16:
+        return False
+    for part in parts:
+        if not part or part in (".", "..") or len(part.encode("utf-8")) > 255:
+            return False
+        if any(c == "\\" or ord(c) < 0x20 or ord(c) == 0x7F for c in part):
+            return False
+        if len(part) >= 2 and part[1] == ":":
+            return False
+    return True
+
+
+def is_pack_path(path: str, manifest_id: str) -> str | None:
+    """None when `path` is a file the runtime places (`manifests/<the game's manifest>` or `packages/<name>`), else the reason."""
+    directory, _, name = path.partition("/")
+    if directory not in ("manifests", "packages") or not name:
+        return f"{path}: not a file directly in manifests/ or packages/"
+    if not _PACK_FILE_NAME.match(name) or name.startswith("."):
+        return f"{path}: not a plain file name"
+    if name.endswith(RESERVED_SUFFIXES):
+        return f"{path}: a name the step writes for itself"
+    if directory == "manifests" and name != manifest_id:
+        return f"{path}: the only manifest a pack may carry is manifests/{manifest_id}"
+    return None
+
+
+def pack_meta_problems(meta: dict, version_folder: str, manifest_id: str) -> tuple[list[str], list[str]]:
+    """The problems with the pack's description (its meta file) and the sorted `requires` list."""
+    problems: list[str] = []
+    if not isinstance(meta.get("id"), str) or not _PACK_ID.match(meta["id"]):
+        problems.append("meta: id must match [a-z0-9][a-z0-9._-]{0,63}")
+    if not isinstance(meta.get("version"), str) or not _PACK_VERSION.match(meta["version"]):
+        problems.append("meta: version must be X.Y.Z")
+    requires = meta.get("requires_stock_manifest_sha256")
+    if (not isinstance(requires, list) or not 1 <= len(requires) <= 2
+            or not all(isinstance(h, str) and _HEX64.match(h) for h in requires)):
+        problems.append("meta: requires_stock_manifest_sha256 must be one or two lowercase sha-256 hex digests")
+        requires = []
+    elif len(set(requires)) != len(requires):
+        problems.append("meta: requires_stock_manifest_sha256 names a digest twice")
+    prefix = _ZIP_PREFIX.match(meta.get("zip_prefix", "")) if isinstance(meta.get("zip_prefix"), str) else None
+    if prefix is None:
+        problems.append("meta: zip_prefix must be _data/<version>/rad15/android/")
+    elif prefix.group(1) != version_folder:
+        problems.append(f"meta: zip_prefix names data version {prefix.group(1)}, the data step's kManifestPath says {version_folder}")
+    return problems, sorted(requires)
+
+
+def pack_zip_scan(pack_zip: pathlib.Path, prefix: str, manifest_id: str) -> tuple[list[str], dict[str, tuple[str, int]]]:
+    """Reads every entry of `pack_zip`: the problems, and `{path below prefix: (sha-256 of the bytes read, size)}`."""
+    problems: list[str] = []
+    found: dict[str, tuple[str, int]] = {}
+    try:
+        archive = zipfile.ZipFile(pack_zip)
+    except (OSError, zipfile.BadZipFile) as error:
+        return [f"{pack_zip}: not a readable zip archive: {error}"], found
+    with archive:
+        infos = archive.infolist()
+        folded: dict[str, str] = {}
+        for info in infos:
+            name = info.filename
+            if not safe_pack_entry_name(name):
+                problems.append(f"{name!r}: an entry name the sentinel's zip reader refuses")
+                continue
+            key = (name[:-1] if name.endswith("/") else name).lower()
+            if key in folded:
+                problems.append(f"{name}: the same name as {folded[key]} (names that differ only in case are one name)")
+            folded[key] = name
+            if info.flag_bits & 0x1:
+                problems.append(f"{name}: encrypted")
+            if info.create_system == 3:
+                mode = info.external_attr >> 16  # a mode with no file type bits (python's zipfile writes one) is a plain file
+                if stat.S_IFMT(mode) not in (0, stat.S_IFREG, stat.S_IFDIR):
+                    problems.append(f"{name}: a link or another special file")
+            if info.is_dir():
+                if not (prefix.startswith(name) or name.startswith(prefix)):
+                    problems.append(f"{name}: a directory outside {prefix}")
+                continue
+            if not name.startswith(prefix):
+                problems.append(f"{name}: outside {prefix}")
+                continue
+            relative = name[len(prefix):]
+            reason = is_pack_path(relative, manifest_id)
+            if reason is not None:
+                problems.append(reason)
+                continue
+            digest, size = hashlib.sha256(), 0
+            try:
+                with archive.open(info) as stream:
+                    while chunk := stream.read(_CHUNK):
+                        digest.update(chunk)
+                        size += len(chunk)
+            except (OSError, zipfile.BadZipFile, RuntimeError, EOFError) as error:
+                problems.append(f"{name}: cannot be read: {error}")
+                continue
+            if size != info.file_size:
+                problems.append(f"{name}: the zip records {info.file_size} bytes, {size} were read")
+            if size == 0 or size > MAX_PACK_FILE_BYTES:
+                problems.append(f"{name}: {size} bytes (a pack file is 1 byte to {MAX_PACK_FILE_BYTES})")
+            found[relative] = (digest.hexdigest(), size)
+    if len(found) > MAX_PACK_FILES:
+        problems.append(f"{len(found)} files: a pack carries at most {MAX_PACK_FILES}")
+    if f"manifests/{manifest_id}" not in found:
+        problems.append(f"the zip has no {prefix}manifests/{manifest_id}")
+    return problems, found
+
+
+def pack_json_bytes(meta: dict, requires: list[str], version_folder: str, files: dict[str, tuple[str, int]],
+                    zip_sha256: str, zip_size: int) -> bytes:
+    """pack.json: schema 1, sorted keys, no spaces, one trailing newline: the same pack gives the same bytes."""
+    document = {
+        "schema": PACK_SCHEMA,
+        "id": meta["id"],
+        "version": meta["version"],
+        "stock_data_version": version_folder,
+        "requires_stock_manifest_sha256": requires,
+        "files": [{"path": path, "sha256": files[path][0], "size": files[path][1]} for path in sorted(files)],
+        "source_zip_sha256": zip_sha256,
+        "source_zip_size": zip_size,
+    }
+    return (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
+
+
+def stage_pack(pack_zip: pathlib.Path, meta_path: pathlib.Path, stage: pathlib.Path, store_apk: pathlib.Path,
+               plan_header: pathlib.Path = PLAN_HEADER) -> list[str]:
+    """Stages the pack under `stage` as APK assets; returns the problems and writes nothing when there are any."""
+    pin = pinned_manifest(plan_header)
+    if pin is None:
+        return [f"{plan_header}: names no kManifestPath, so the pack cannot be checked against the data step's pins"]
+    version_folder, manifest_id = pin
+    try:
+        meta = json.loads(meta_path.read_bytes())
+        if not isinstance(meta, dict):
+            raise ValueError("not an object")
+    except (OSError, ValueError) as error:
+        return [f"{meta_path}: cannot be read as a JSON object: {error}"]
+    problems, requires = pack_meta_problems(meta, version_folder, manifest_id)
+    if problems:
+        return problems
+    prefix = meta["zip_prefix"]
+    problems, files = pack_zip_scan(pack_zip, prefix, manifest_id)
+    try:
+        with zipfile.ZipFile(store_apk) as store:
+            taken = [n for n in store.namelist() if n == PACK_DIR or n.startswith(PACK_DIR + "/")]
+        store_size = store_apk.stat().st_size
+    except (OSError, zipfile.BadZipFile) as error:
+        return problems + [f"{store_apk}: cannot be read as the store APK: {error}"]
+    problems += [f"{store_apk.name} already has the entry {n}: a staged pack would replace it" for n in taken]
+    total = sum(size for _digest, size in files.values())
+    if store_size + total + APK_SLACK_BYTES > APK_LIMIT_BYTES:
+        problems.append(f"the APK would be about {store_size + total} bytes: a zip without zip64 holds {APK_LIMIT_BYTES} "
+                        "(the sentinel's zip reader refuses zip64)")
+    if problems:
+        return problems
+    zip_sha256, zip_size = file_digest(pack_zip), pack_zip.stat().st_size
+    root = stage / PACK_FILES_DIR
+    with zipfile.ZipFile(pack_zip) as archive:
+        for relative, (digest, size) in sorted(files.items()):
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            copied, written = hashlib.sha256(), 0
+            with archive.open(prefix + relative) as source, target.open("wb") as sink:
+                while chunk := source.read(_CHUNK):
+                    sink.write(chunk)
+                    copied.update(chunk)
+                    written += len(chunk)
+            if (copied.hexdigest(), written) != (digest, size):
+                return [f"{prefix}{relative}: the bytes read twice differ"]
+    (stage / PACK_JSON_ENTRY).write_bytes(pack_json_bytes(meta, requires, version_folder, files, zip_sha256, zip_size))
+    for relative in sorted(files):
+        print(f"quest_repack_libs: pack file {relative} sha256 {files[relative][0]} size {files[relative][1]}", flush=True)
+    return []
+
+
+def pack_document_problems(document: object, version_folder: str, manifest_id: str) -> list[str]:
+    """The rules of the runtime's ParsePackJson (src/quest/data/pack.cpp) over a parsed pack.json."""
+    if not isinstance(document, dict):
+        return ["pack.json: not a JSON object"]
+    problems: list[str] = []
+    if document.get("schema") != PACK_SCHEMA or isinstance(document.get("schema"), bool):
+        problems.append("pack.json: schema must be 1")
+    if not isinstance(document.get("id"), str) or not _PACK_ID.match(document["id"]):
+        problems.append("pack.json: bad id")
+    if not isinstance(document.get("version"), str) or not _PACK_VERSION.match(document["version"]):
+        problems.append("pack.json: bad version")
+    if document.get("stock_data_version") != version_folder:
+        problems.append(f"pack.json: stock_data_version is not {version_folder}, the data step's")
+    requires = document.get("requires_stock_manifest_sha256")
+    if (not isinstance(requires, list) or not 1 <= len(requires) <= 2
+            or not all(isinstance(h, str) and _HEX64.match(h) for h in requires) or requires != sorted(set(requires))):
+        problems.append("pack.json: requires_stock_manifest_sha256 must be one or two sorted, distinct sha-256 digests")
+    files = document.get("files")
+    manifests = 0
+    if not isinstance(files, list) or not 1 <= len(files) <= MAX_PACK_FILES:
+        problems.append(f"pack.json: files must hold 1 to {MAX_PACK_FILES} entries")
+        files = []
+    seen: set[str] = set()
+    for entry in files:
+        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+            problems.append("pack.json: a file entry has no path")
+            continue
+        reason = is_pack_path(entry["path"], manifest_id)
+        if reason is not None:
+            problems.append(f"pack.json: {reason}")
+        if entry["path"].lower() in seen:
+            problems.append(f"pack.json: {entry['path']} twice")
+        seen.add(entry["path"].lower())
+        manifests += entry["path"] == f"manifests/{manifest_id}"
+        if not isinstance(entry.get("sha256"), str) or not _HEX64.match(entry["sha256"]):
+            problems.append(f"pack.json: {entry['path']}: bad sha256")
+        size = entry.get("size")
+        if not isinstance(size, int) or isinstance(size, bool) or not 1 <= size <= MAX_PACK_FILE_BYTES:
+            problems.append(f"pack.json: {entry['path']}: bad size")
+    if manifests != 1:
+        problems.append(f"pack.json: files must name manifests/{manifest_id} once")
+    source_size = document.get("source_zip_size")
+    if (not isinstance(document.get("source_zip_sha256"), str) or not _HEX64.match(document["source_zip_sha256"])
+            or not isinstance(source_size, int) or isinstance(source_size, bool) or source_size < 1):
+        problems.append("pack.json: bad source_zip_sha256 or source_zip_size")
+    return problems
+
+
+def pack_problems(stage: pathlib.Path, plan_header: pathlib.Path = PLAN_HEADER) -> list[str]:
+    """The problems with the pack staged under `stage`; empty when none is staged or it is whole and the runtime takes it."""
+    pack_dir = stage / PACK_DIR
+    if not pack_dir.exists():
+        return []
+    pin = pinned_manifest(plan_header)
+    if pin is None:
+        return [f"{plan_header}: names no kManifestPath, so the staged pack cannot be checked"]
+    json_path = stage / PACK_JSON_ENTRY
+    if not json_path.is_file():
+        return [f"{PACK_JSON_ENTRY}: staged files without a pack.json"]
+    try:
+        document = json.loads(json_path.read_bytes())
+    except (OSError, ValueError) as error:
+        return [f"{PACK_JSON_ENTRY}: cannot be read as JSON: {error}"]
+    problems = pack_document_problems(document, *pin)
+    if problems:
+        return problems
+    listed: set[str] = set()
+    for entry in document["files"]:
+        listed.add(entry["path"])
+        staged = stage / PACK_FILES_DIR / entry["path"]
+        if staged.is_symlink() or not staged.is_file():
+            problems.append(f"{PACK_FILES_DIR}/{entry['path']}: listed in pack.json, not staged as a file")
+            continue
+        if staged.stat().st_size != entry["size"]:
+            problems.append(f"{PACK_FILES_DIR}/{entry['path']}: {staged.stat().st_size} bytes staged, pack.json says {entry['size']}")
+        elif file_digest(staged) != entry["sha256"]:
+            problems.append(f"{PACK_FILES_DIR}/{entry['path']}: the sha256 pack.json lists is not the staged file's")
+    for found in sorted(p for p in (stage / PACK_FILES_DIR).rglob("*") if p.is_file() or p.is_symlink()):
+        relative = found.relative_to(stage / PACK_FILES_DIR).as_posix()
+        if relative not in listed:
+            problems.append(f"{PACK_FILES_DIR}/{relative}: staged, not listed in pack.json")
+    for found in sorted(p for p in pack_dir.iterdir() if p.name not in ("pack.json", "files")):
+        problems.append(f"{PACK_DIR}/{found.name}: not part of a pack")
+    return problems
+
+
+def pack_signed_problems(result: zipfile.ZipFile, stage: pathlib.Path) -> list[str]:
+    """Every staged pack file is in the signed APK with the staged bytes, STORED, and the signed APK has no pack entry that
+    was not staged (a build with no pack carries none)."""
+    problems: list[str] = []
+    staged_root = stage / PACK_DIR
+    staged = sorted(p for p in staged_root.rglob("*") if p.is_file()) if staged_root.exists() else []
+    expected = {p.relative_to(stage).as_posix() for p in staged}
+    present = {i.filename: i for i in result.infolist()}
+    for name in sorted(n for n in present if (n == PACK_DIR or n.startswith(PACK_DIR + "/")) and n not in expected
+                       and not present[n].is_dir()):
+        problems.append(f"{name}: in the signed APK, not staged")
+    for path in staged:
+        name = path.relative_to(stage).as_posix()
+        info = present.get(name)
+        if info is None:
+            problems.append(f"{name}: staged, missing from the signed APK")
+        elif info.compress_type != zipfile.ZIP_STORED:
+            problems.append(f"{name}: in the signed APK but not STORED (compression {info.compress_type})")
+        elif entry_digest(result, name) != file_digest(path):
+            problems.append(f"{name}: the signed APK holds different bytes than the staged file")
     return problems
 
 
@@ -358,6 +708,15 @@ def main(argv: list[str]) -> int:
     manifest.add_argument("--plugin", type=pathlib.Path, nargs="+", required=True)
     manifest.add_argument("--early", action="append", default=[])
     manifest.add_argument("--off", action="append", default=[])
+    pack = sub.add_parser("stage-pack")
+    pack.add_argument("--pack-zip", type=pathlib.Path, required=True)
+    pack.add_argument("--meta", type=pathlib.Path, required=True)
+    pack.add_argument("--stage", type=pathlib.Path, required=True)
+    pack.add_argument("--store-apk", type=pathlib.Path, required=True)
+    pack.add_argument("--plan-header", type=pathlib.Path, default=PLAN_HEADER)
+    pack_check = sub.add_parser("pack-problems")
+    pack_check.add_argument("--stage", type=pathlib.Path, required=True)
+    pack_check.add_argument("--plan-header", type=pathlib.Path, default=PLAN_HEADER)
     staged_manifest = sub.add_parser("check-plugin-manifest")
     staged_manifest.add_argument("--stage", type=pathlib.Path, required=True)
     verify = sub.add_parser("verify-signed")
@@ -378,6 +737,10 @@ def main(argv: list[str]) -> int:
         problems = write_plugin_manifest(args.stage, args.plugin, args.early, args.off)
     elif args.command == "check-plugin-manifest":
         problems = plugin_manifest_problems(args.stage)
+    elif args.command == "stage-pack":
+        problems = stage_pack(args.pack_zip, args.meta, args.stage, args.store_apk, args.plan_header)
+    elif args.command == "pack-problems":
+        problems = pack_problems(args.stage, args.plan_header)
     else:
         problems = verify_signed(args.source, args.signed, args.stage, args.patcher, args.extra_rows, args.scratch)
     for problem in problems:

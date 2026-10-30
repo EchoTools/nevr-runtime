@@ -103,6 +103,57 @@ bool MarkOwned(const std::string& item) noexcept {
 
 bool IsOwned(const std::string& item) noexcept { return IsMarkerFile(OwnerMarkerPath(item)); }
 
+namespace {
+
+bool IsRealDirectory(const std::string& path) {
+  struct stat st;
+  return ::lstat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+// One of the pack's two directories: its temporaries with a marker, and orphaned markers.
+void CleanPackDirectory(const std::string& dir, int* removed, int* failed) {
+  const std::size_t marker_len = std::strlen(kOwnerSuffix);
+  for (const std::string& name : ListNames(dir)) {
+    const std::string path = dir + "/" + name;
+    if (EndsWith(name, kOwnerSuffix)) {
+      const std::string item_name = name.substr(0, name.size() - marker_len);
+      const bool pack_item = EndsWith(item_name, kPackTmpSuffix) || EndsWith(item_name, kStockBackupSuffix);
+      if (pack_item && !Lexists(dir + "/" + item_name) && IsMarkerFile(path)) ::unlink(path.c_str());
+      continue;
+    }
+    if (!EndsWith(name, kPackTmpSuffix) || !IsOwned(path)) continue;
+    if (RemoveTree(path) && ::unlink(OwnerMarkerPath(path).c_str()) == 0) {
+      ++*removed;
+    } else {
+      ++*failed;
+    }
+  }
+}
+
+}  // namespace
+
+int CleanPackLeftovers(const std::string& root, int* failed) noexcept {
+  int removed = 0;
+  int failures = 0;
+  const std::string data = root + "/" + data_root::kMarker;
+  if (IsRealDirectory(data)) {
+    for (const std::string& version : ListNames(data)) {
+      if (version == "." || version == "..") continue;
+      const std::string android = data + "/" + version + "/rad15/android";
+      if (!IsRealDirectory(data + "/" + version) || !IsRealDirectory(data + "/" + version + "/rad15") ||
+          !IsRealDirectory(android)) {
+        continue;
+      }
+      for (const char* sub : {kManifestsDir, kPackagesDir}) {
+        const std::string dir = android + "/" + sub;
+        if (IsRealDirectory(dir)) CleanPackDirectory(dir, &removed, &failures);
+      }
+    }
+  }
+  if (failed != nullptr) *failed = failures;
+  return removed;
+}
+
 int CleanLeftovers(const std::string& root, int* failed) noexcept {
   if (failed != nullptr) *failed = 0;
   int removed = 0;
@@ -121,6 +172,9 @@ int CleanLeftovers(const std::string& root, int* failed) noexcept {
       ++*failed;
     }
   }
+  int pack_failed = 0;
+  removed += CleanPackLeftovers(root, &pack_failed);
+  if (failed != nullptr) *failed += pack_failed;
   return removed;
 }
 
