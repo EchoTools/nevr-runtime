@@ -75,15 +75,20 @@ class SeedFixture(unittest.TestCase):
         define = ""
         if self.DESCRIBE:
             define += f' -DNEVR_GIT_DESCRIBE=\\"{self.DESCRIBE}\\"'
+        # The commit is defined on the one source that reads it (b.o), as the root CMakeLists.txt does for the identity
+        # readers; no other edge carries it, so a commit change rebuilds b.o and what links it.
+        commit = ""
         if self.COMMIT_DEFINE:
-            define += f' -DNEVR_GIT_COMMIT_FULL=\\"{git(self.main, "rev-parse", "HEAD").stdout.strip()}\\"'
+            commit = f' -DNEVR_GIT_COMMIT_FULL=\\"{git(self.main, "rev-parse", "HEAD").stdout.strip()}\\"'
         # An output spelled as an absolute path, as CMake does for some custom commands.
         (self.build / "build.ninja").write_text(
             f"rule cc\n  command = cc -MD -MF $out.d -I{self.main}/inc{define} -c $in -o $out\n"
             "  depfile = $out.d\n  deps = gcc\n"
+            f"rule cc_identity\n  command = cc -MD -MF $out.d -I{self.main}/inc{define}{commit} -c $in -o $out\n"
+            "  depfile = $out.d\n  deps = gcc\n"
             "rule link\n  command = cc $in -o $out\n"
             f"build a.o: cc {self.main}/src/a.c\n"
-            f"build b.o: cc {self.main}/src/b.c\n"
+            f"build b.o: cc_identity {self.main}/src/b.c\n"
             f"build {self.build}/c.o: cc {self.main}/src/c.c\n"
             f"build app: link a.o b.o {self.build}/c.o\n")
         # A path that has the checkout path as a prefix but is another directory: it must survive a rewrite.
@@ -133,6 +138,12 @@ class SeededTree(SeedFixture):
         self.assertEqual(self.seed().status, "seeded")
         steps, out = pending_steps(self.wt_build())
         self.assertEqual(steps, ["a.o", "app"], out)
+
+    def test_a_differing_file_older_than_the_objects_is_still_rebuilt(self):
+        (self.wt / "src/a.c").write_text('#include "h.h"\nint a(void) { return VAL + 40; }\n')
+        os.utime(self.wt / "src/a.c", ns=(1, 1))  # a checkout older than the main checkout's build of a.o
+        self.assertEqual(self.seed().status, "seeded")
+        self.assertIn("a.o", pending_steps(self.wt_build())[0])
 
     def test_a_file_of_the_same_size_but_other_content_is_rebuilt(self):
         original = (self.main / "src/a.c").read_text()
@@ -216,48 +227,43 @@ class CommitGuard(SeedFixture):
         self.assertEqual(self.seed().status, "seeded")
         self.assertEqual(pending_steps(self.wt_build())[0], [])
 
-    def test_a_worktree_at_another_commit_is_not_seeded_and_the_reason_names_both(self):
+    def test_a_worktree_at_another_commit_is_seeded_and_only_its_identity_readers_and_differing_sources_rebuild(self):
         (self.wt / "src/a.c").write_text('#include "h.h"\nint a(void) { return VAL + 40; }\n')
         git(self.wt, "commit", "-q", "-a", "--no-gpg-sign", "-m", "branch change")
-        built = git(self.main, "rev-parse", "HEAD").stdout.strip()
-        here = git(self.wt, "rev-parse", "HEAD").stdout.strip()
         result = self.seed()
-        self.assertEqual(result.status, "not-seeded", result)
-        self.assertIn(built[:8], result.reason)
-        self.assertIn(here[:8], result.reason)
-        self.assertFalse(self.wt_build().exists())
-        self.assertEqual([p.name for p in (self.wt / "build").glob(".seed-*")] if (self.wt / "build").exists() else [], [])
+        self.assertEqual(result.status, "seeded", result)
+        self.assertTrue(result.counts["configure_rerun"], result)
+        self.assertEqual((self.wt_build() / "build.ninja").stat().st_mtime_ns, 0)
+        # b.o reads the commit; a.o's source differs from main's; app links both. c.o reads neither and is kept.
+        self.assertEqual(pending_steps(self.wt_build())[0], sorted(["a.o", "app", "b.o"]))
+
+    def test_a_worktree_at_the_same_commit_keeps_the_configure_as_it_is(self):
+        result = self.seed()
+        self.assertEqual(result.status, "seeded", result)
+        self.assertFalse(result.counts["configure_rerun"], result)
+        self.assertEqual((self.wt_build() / "build.ninja").stat().st_mtime_ns, (self.build / "build.ninja").stat().st_mtime_ns)
 
 
 class UnreadableCommit(SeedFixture):
-    """A tree whose commit cannot be read from build.ninja cannot be shown to be at this HEAD: not seeded."""
+    """A tree whose commit cannot be read from build.ninja has its configure re-run like any other tree at another commit."""
     COMMIT_DEFINE = False
 
-    def assert_refused(self, result):
-        self.assertEqual(result.status, "not-seeded", result)
-        self.assertIn("commit", result.reason)
-        self.assertFalse(self.wt_build().exists())
-        self.assertEqual(list((self.wt / "build").glob(".seed-*")) if (self.wt / "build").exists() else [], [])
-
-    def test_a_build_ninja_that_names_no_commit_is_not_seeded_and_says_so(self):
+    def test_a_build_ninja_that_names_no_commit_is_seeded_with_its_configure_rerun(self):
         result = self.seed()
-        self.assert_refused(result)
-        self.assertIn("NEVR_GIT_COMMIT_FULL", result.reason)
+        self.assertEqual(result.status, "seeded", result)
+        self.assertTrue(result.counts["configure_rerun"], result)
+        self.assertEqual((self.wt_build() / "build.ninja").stat().st_mtime_ns, 0)
 
-    def test_a_definition_that_is_not_a_forty_hex_commit_is_not_seeded(self):
-        ninja = self.build / "build.ninja"
-        ninja.write_text(ninja.read_text().replace("-c $in", '-DNEVR_GIT_COMMIT_FULL=\\"unknown\\" -c $in'))
-        self.assertIn('NEVR_GIT_COMMIT_FULL=\\"unknown', ninja.read_text())
-        self.assert_refused(self.seed())
-
-    def test_the_cli_prints_the_reason_exits_zero_and_records_it(self):
+    def test_the_cli_prints_the_configure_rerun_exits_zero_and_records_it(self):
         log = self.tmp / "seed.jsonl"
         proc = subprocess.run([sys.executable, "-I", str(TOOL), "--main", str(self.main), "--worktree", str(self.wt),
                                "--preset", self.PRESET, "--log", str(log)], capture_output=True, text=True)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("not seeded", proc.stderr)
-        self.assertIn("NEVR_GIT_COMMIT_FULL", proc.stderr)
-        self.assertEqual(json.loads(log.read_text().splitlines()[-1])["status"], "not-seeded")
+        self.assertIn("seeded", proc.stdout)
+        self.assertIn("configure re-runs first", proc.stdout)
+        record = json.loads(log.read_text().splitlines()[-1])
+        self.assertEqual(record["status"], "seeded")
+        self.assertTrue(record["configure_rerun"])
 
 
 class AnotherSpellingOfMain(SeedFixture):
@@ -352,7 +358,8 @@ class GitEnvironment(SeedFixture):
                 "GIT_INDEX_FILE": str(sentinel / ".git/index"), "GIT_COMMON_DIR": str(sentinel / ".git")}
         with mock.patch.dict(os.environ, leak):
             result = self.seed()
-        self.assertEqual(result.status, "seeded", result)  # the commit guard read the worktree's HEAD, not the sentinel's
+        self.assertEqual(result.status, "seeded", result)
+        self.assertFalse(result.counts["configure_rerun"], result)  # HEAD was read from the worktree, not the sentinel
         self.assertEqual(pending_steps(self.wt_build())[0], [])  # and ls-files listed the worktree's files
 
 
@@ -360,11 +367,11 @@ class ModifiedTree(SeedFixture):
     COMMIT_DEFINE = True
     DESCRIBE = "v1.2.3-4-gabcd-dirty"
 
-    def test_a_tree_configured_with_uncommitted_changes_is_not_seeded(self):
+    def test_a_tree_configured_with_uncommitted_changes_is_seeded_with_its_configure_rerun(self):
         result = self.seed()
-        self.assertEqual(result.status, "not-seeded", result)
-        self.assertIn("-dirty", result.reason)
-        self.assertFalse(self.wt_build().exists())
+        self.assertEqual(result.status, "seeded", result)
+        self.assertTrue(result.counts["configure_rerun"], result)
+        self.assertEqual((self.wt_build() / "build.ninja").stat().st_mtime_ns, 0)
 
 
 class CleanDescribe(SeedFixture):
