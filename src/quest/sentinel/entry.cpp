@@ -263,6 +263,9 @@ const char* nevr_sentinel_marker() {
 // DT_NEEDED closure, before libr15's JNI_OnLoad / ANativeActivity_onCreate.
 __attribute__((constructor))
 static void nevr_sentinel_ctor() {
+    // The crash handlers first (#1689): a crash anywhere below, the begin record and the UI looper capture included, leaves a
+    // report the next start sends. Arm is idempotent: the sequence's first step calls it again after setting the log sink.
+    sentinel::Arm();
     nevr_quest::integration::LogConstructorBegin(nevr_build::kVersion, nevr_build::kCommit);
     // #829: the thread that loads the library takes the UI looper for the floor message's presenter (it logs what it found).
     nevr_quest::toast::CaptureUiLooper();

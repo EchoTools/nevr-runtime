@@ -35,6 +35,11 @@
 
 namespace nevr_crash {
 
+// The one spelling of the names a crash leaves in the crash folder. The report is `<stem>` + kReportSuffix; the minidump
+// beside it is `<stem>` + kMinidumpSuffix. The sender (core/crash_send.h) looks for the first and never reads the second.
+inline constexpr const char* kReportSuffix = ".report.txt";
+inline constexpr const char* kMinidumpSuffix = ".dmp";
+
 constexpr std::size_t kLogLineCount = 50;
 constexpr std::size_t kLogLineBytes = 320;
 constexpr std::size_t kMaxFrames = 32;

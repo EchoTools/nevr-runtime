@@ -12,7 +12,7 @@ namespace sentinel {
 void RegisterCrashReportPlatform();
 
 // The breakpad dump callback's part, called with the minidump's path (`<dir>/<stem>.dmp`). The report belongs beside the
-// minidump under the same stem (`<stem>` + nevr_crash_upload::kReportSuffix), which is known only here:
+// minidump under the same stem (`<stem>` + nevr_crash::kReportSuffix), which is known only here:
 //  - a handler already wrote the report (under a provisional stem, with the registers of the faulting thread): it is
 //    renamed to the minidump's stem and the new path returned in `report_path`;
 //  - none did: one is written now, without a register context (this callback is not given one).
