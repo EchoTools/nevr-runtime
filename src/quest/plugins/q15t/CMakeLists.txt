@@ -16,6 +16,7 @@ set(Q15T_GPU_LEVEL 4 CACHE STRING "GPU level the clock raise (args {clock: raise
 option(Q15T_FXTRAIL "fxtrail (R29): a bullet whose trail effect has no instance ends its trail. Source: ON by default" ON)
 option(Q15T_VOIPDROP "voipdrop (R30): a remote voice packet that cannot be stored is dropped. Source: DEFAULT ON" ON)
 option(Q15T_CUSTCTX "custctx (R31-R33): three guards on the customization renderer. Source: DEFAULT ON" ON)
+option(Q15T_MESHSTEP "meshstep (#1555): CGMeshListResource tables grow by step 1 (reconstructed constructor, GOT word). Kill file meshstep.off" ON)
 option(Q15T_GUNCONNECT "gunconnect (R17-R19): the local player's guns get Connect(local user) so they fire. Source: default ON; tick" ON)
 option(Q15T_AIBOTS "aibots (R40): Practice AI bots get a scenario each combat match. Source: default ON; tick" ON)
 option(Q15T_BVH "bvh (R20-R25): a real static raycast tree for CBVHTree. Source: on by default (kill file bvh.off); tick" ON)
@@ -39,6 +40,8 @@ set_property(CACHE Q15T_POWERBOOST PROPERTY STRINGS 0 1 2 3)
 option(Q15T_HUDMETER "hudmeter (R57): the wrist HUD's weapon-slot heat fill stops being 0 x 0. Source: hudmeter.on, Off by default" OFF)
 option(Q15T_MUSIC "music (T-48): the combat music is stopped when a match ends or a new one starts, so instances do not stack. Source: default ON; tick" ON)
 option(Q15T_SENSORWD "sensorwd (T-07): a scanner sphere still enabled 6 s after its enable is turned off again. Source: default ON (on-list); tick" ON)
+# shaderstep (issue #1553): the CGShaderSetResource table growth step is 1, set when the factory constructs the object. Off: shaderstep.off.
+option(Q15T_SHADERSTEP "shaderstep (#1553): CGShaderSetResource table growth step 32 -> 1 in the factory constructor (vtable wrapper, no code write)" ON)
 option(Q15T_LEVELNAME "levelname (R04): global_mp keeps its plain name. Needs a full-size global_mp in the pack and the booster_pool.plain_name word row" OFF)
 # shieldgamma: a bitmask, 1 = gamma (a TEST switch, off in the source), 2 = tube mirror (the ship form, on in the source).
 set(Q15T_SHIELDGAMMA 2 CACHE STRING "shieldgamma (R58) bitmask: 1 gamma, 2 tube mirror, 0 not built. Source default: mirror on, gamma off")
@@ -79,7 +82,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(Q15T_SOURCES src/plugin.cpp src/plugin_log.cpp src/import_hook.cpp src/clock_levels.cpp src/plugin_args.cpp src/refresh_rate.cpp src/game_tick.cpp src/safe_read.cpp src/headset_gates.cpp src/got_swap.cpp src/weapon_arm.cpp src/gamespace.cpp)
-foreach(m FXTRAIL VOIPDROP CUSTCTX GUNCONNECT AIBOTS BVH WALLFIRE IMPACTSND EC ECFX DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE HUDMETER LEVELNAME MUSIC SENSORWD)
+foreach(m FXTRAIL VOIPDROP CUSTCTX MESHSTEP GUNCONNECT AIBOTS BVH WALLFIRE IMPACTSND EC ECFX DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE HUDMETER LEVELNAME MUSIC SENSORWD)
   if(Q15T_${m})
     string(TOLOWER ${m} lm)
     list(APPEND Q15T_SOURCES src/${lm}.cpp)
@@ -93,6 +96,12 @@ if(Q15T_SHIELDGAMMA GREATER 0)
 endif()
 if(Q15T_TABLESTEP)
   list(APPEND Q15T_SOURCES src/tablestep.cpp)
+endif()
+if(Q15T_SHADERSTEP)
+  list(APPEND Q15T_SOURCES src/shaderstep.cpp)
+endif()
+if(Q15T_LEVELNAME)
+  list(APPEND Q15T_SOURCES src/boosterpool.cpp)  # the levelname companion: same option, same feature
 endif()
 
 list(TRANSFORM Q15T_SOURCES PREPEND "${Q15T_DIR}/")
@@ -109,14 +118,14 @@ target_compile_definitions(nevr_q15t PRIVATE
   Q15T_BUILD_ID="${nevr_pinned_build_id}"
   Q15T_GATE_LINK=$<BOOL:${Q15T_GATE_LINK}> Q15T_GATE_PERM=$<BOOL:${Q15T_GATE_PERM}> Q15T_GATE_BOTS=$<BOOL:${Q15T_GATE_BOTS}>
   Q15T_HZ_MATCH90=$<BOOL:${Q15T_HZ_MATCH90}> Q15T_T26=$<BOOL:${Q15T_T26}> Q15T_CPU_LEVEL=${Q15T_CPU_LEVEL} Q15T_GPU_LEVEL=${Q15T_GPU_LEVEL}
-  Q15T_FXTRAIL=$<BOOL:${Q15T_FXTRAIL}> Q15T_VOIPDROP=$<BOOL:${Q15T_VOIPDROP}> Q15T_CUSTCTX=$<BOOL:${Q15T_CUSTCTX}>
+  Q15T_FXTRAIL=$<BOOL:${Q15T_FXTRAIL}> Q15T_VOIPDROP=$<BOOL:${Q15T_VOIPDROP}> Q15T_CUSTCTX=$<BOOL:${Q15T_CUSTCTX}> Q15T_MESHSTEP=$<BOOL:${Q15T_MESHSTEP}>
   Q15T_GUNCONNECT=$<BOOL:${Q15T_GUNCONNECT}> Q15T_AIBOTS=$<BOOL:${Q15T_AIBOTS}> Q15T_BVH=$<BOOL:${Q15T_BVH}>
   Q15T_WALLFIRE=$<BOOL:${Q15T_WALLFIRE}> Q15T_IMPACTSND=$<BOOL:${Q15T_IMPACTSND}> Q15T_EC=$<BOOL:${Q15T_EC}> Q15T_ECFX=$<BOOL:${Q15T_ECFX}>
   Q15T_DRONEGUARD=$<BOOL:${Q15T_DRONEGUARD}> Q15T_DRONEGUARD_IDX=$<BOOL:${Q15T_DRONEGUARD_IDX}> Q15T_PEERCLAMP=$<BOOL:${Q15T_PEERCLAMP}>
   Q15T_DRONEKILL=$<BOOL:${Q15T_DRONEKILL}> Q15T_DRONEMUZZLE=$<BOOL:${Q15T_DRONEMUZZLE}> Q15T_POWERBOOST=${Q15T_POWERBOOST}
   Q15T_HUDMETER=$<BOOL:${Q15T_HUDMETER}> Q15T_LEVELNAME=$<BOOL:${Q15T_LEVELNAME}> Q15T_MUSIC=$<BOOL:${Q15T_MUSIC}> Q15T_SENSORWD=$<BOOL:${Q15T_SENSORWD}> Q15T_SHIELDGAMMA=${Q15T_SHIELDGAMMA}
   Q15T_IMPACTSND_NOWRITE=$<BOOL:${Q15T_IMPACTSND_NOWRITE}> Q15T_ECFX_DEFAULT_ON=$<BOOL:${Q15T_ECFX_DEFAULT_ON}>
-  Q15T_TABLESTEP=$<BOOL:${Q15T_TABLESTEP}>)
+  Q15T_SHADERSTEP=$<BOOL:${Q15T_SHADERSTEP}> Q15T_TABLESTEP=$<BOOL:${Q15T_TABLESTEP}>)
 if(NOT "${Q15T_EC_DEFAULT_WORDS}" STREQUAL "")
   target_compile_definitions(nevr_q15t PRIVATE "Q15T_EC_DEFAULT_WORDS=\"${Q15T_EC_DEFAULT_WORDS}\"")
 endif()

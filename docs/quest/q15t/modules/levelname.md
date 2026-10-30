@@ -117,6 +117,14 @@ plugin=q15t levelname refused slot_index=3 slot_vaddr=0x36316f8 why=unexpected_o
 
 ## Companion row (not in this module): `booster_pool.plain_name`
 
+**Provided as a GOT hook.** `src/quest/plugins/q15t/src/boosterpool.cpp` (the same `Q15T_LEVELNAME` option) wraps
+`CncaGameSpace::AllocatePooledActor(CSymbol64)` through its GOT word (ELF 0x36cd1f8, the JUMP_SLOT of the PLT stub at ReVault
+0xfeb620) and answers the plain name for the one suffixed name `AllocateExclusive` builds under the lowspec bit. The stock
+`tbz` at ReVault 0x2210f40 is left alone. The word row, if the row table still applies it, is then a no-op for this path:
+the call arrives with the plain name and passes through.
+
+The word-row table's entry, as it states the byte patch:
+
 Source comment (the source build's patch table): with the full global_mp, `CR15NetBoosterCS::AllocateExclusive` still looks for its
 pooled actor named `<pool actor>_lowspec` when the lowspec bit is set; only the cut global_mp has that actor, so
 `AllocatePooledActor` finds nothing and `CPhysicsCS::BodyTypeExclusionFlags` reads a null component: a crash 0.7 s into the

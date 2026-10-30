@@ -9,6 +9,7 @@
 #include "bvh.h"
 #include "clock_levels.h"
 #include "custctx.h"
+#include "meshstep.h"
 #include "droneguard.h"
 #include "dronekill.h"
 #include "dronemuzzle.h"
@@ -22,6 +23,7 @@
 #include "hudmeter.h"
 #include "impactsnd.h"
 #include "levelname.h"
+#include "boosterpool.h"
 #include "music.h"
 #include "peerclamp.h"
 #include "plugin_args.h"
@@ -29,6 +31,7 @@
 #include "powerboost.h"
 #include "refresh_rate.h"
 #include "sensorwd.h"
+#include "shaderstep.h"
 #include "shieldgamma.h"
 #include "tablestep.h"
 #include "voipdrop.h"
@@ -146,6 +149,9 @@
 #ifndef Q15T_LEVELNAME
 #define Q15T_LEVELNAME 0
 #endif
+#ifndef Q15T_SHADERSTEP
+#define Q15T_SHADERSTEP 0
+#endif
 #ifndef Q15T_MUSIC
 #define Q15T_MUSIC 0
 #endif
@@ -249,12 +255,16 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_LEVELNAME
     "levelname "
+    "boosterpool "
 #endif
 #if Q15T_MUSIC
     "music "
 #endif
 #if Q15T_SENSORWD
     "sensorwd "
+#endif
+#if Q15T_SHADERSTEP
+    "shaderstep "
 #endif
     "";
 
@@ -387,6 +397,9 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
 #if Q15T_CUSTCTX
   ReportModule("custctx", InstallCustCtx(base));
 #endif
+#if Q15T_MESHSTEP
+  ReportModule("meshstep", InstallMeshStep(base));
+#endif
 #if Q15T_DRONEGUARD
   ReportModule("droneguard", InstallDroneGuard(base));
 #endif
@@ -472,10 +485,14 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
 #endif
 #if Q15T_LEVELNAME
   ReportModule("levelname", InstallLevelName(base));
+  ReportModule("boosterpool", InstallBoosterPool(base));  // the companion word row, as a GOT hook (boosterpool.h)
 #endif
 #if Q15T_SENSORWD
   ReportModule("sensorwd", InstallSensorWd(base));
   AddModuleTick("sensorwd", &SensorWdTick, &want_tick);  // one bool test per frame when the install was refused
+#endif
+#if Q15T_SHADERSTEP
+  ReportModule("shaderstep", InstallShaderStep(base));
 #endif
 #if Q15T_MUSIC
   {
