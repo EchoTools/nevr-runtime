@@ -212,7 +212,7 @@ TEST(AnotherBuildIdIsABuildIdMismatch) {
 
 // ---- #1737: the one pinned libr15 that is run in service-only mode ----------------------------------------------------
 
-constexpr const char* kPinned = "6e9db28d612019b0e5b2e2ab515e1f9bd15d1a8f8d345060160e3172864540e1";
+constexpr const char* kPinned = "936aa6a3e289484742bcf23900ffa6a185e277628a1690529140cd34a26c8d67";
 
 bool PinnedDigest(const char*, char* out) noexcept {
   std::memcpy(out, kPinned, 65);
@@ -221,7 +221,7 @@ bool PinnedDigest(const char*, char* out) noexcept {
 
 bool OneBitOffDigest(const char*, char* out) noexcept {
   std::memcpy(out, kPinned, 65);
-  out[63] = '0';  // ...e1 -> ...e0: one bit
+  out[63] = '6';  // ...67 -> ...66: one bit
   return true;
 }
 
@@ -242,7 +242,7 @@ TEST(ThePinnedStockIdFileIsAcceptedInServiceOnlyModeAndNothingIsInstalled) {
   const std::string* line = FindLine("\"event\":\"libr15_pinned_accept\"");
   CHECK(line != nullptr);
   if (line != nullptr) {
-    CHECK(Has(*line, "\"sha256_prefix\":\"6e9db28d6120\""));
+    CHECK(Has(*line, "\"sha256_prefix\":\"936aa6a3e289\""));
     CHECK(Has(*line, "\"mode\":\"service_only\""));
     CHECK(Has(*line, "\"build_id\":\"b243509c08ce677aeb95fa348016949b3fc45230\""));
   }

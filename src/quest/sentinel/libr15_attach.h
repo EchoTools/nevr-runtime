@@ -69,7 +69,7 @@ enum class AttachStatus : std::uint8_t {
 // In this mode the runtime keeps sign-in, matchmaking and the server redirect (the GotTarget::ServiceSide hooks) and
 // installs none of its libr15 patches: no row, no credits slot, no other libr15 GOT hook.
 inline constexpr const char* kLibR15ServiceOnlySha256[] = {
-    "6e9db28d612019b0e5b2e2ab515e1f9bd15d1a8f8d345060160e3172864540e1",  // #1737
+    "936aa6a3e289484742bcf23900ffa6a185e277628a1690529140cd34a26c8d67",  // #1737
 };
 
 // Stable tokens for log lines and tests.
