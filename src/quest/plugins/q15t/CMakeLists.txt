@@ -87,6 +87,9 @@ endif()
 if(Q15T_SHIELDGAMMA GREATER 0)
   list(APPEND Q15T_SOURCES src/shieldgamma.cpp)
 endif()
+if(Q15T_LEVELNAME)
+  list(APPEND Q15T_SOURCES src/boosterpool.cpp)  # the levelname companion: same option, same feature
+endif()
 
 list(TRANSFORM Q15T_SOURCES PREPEND "${Q15T_DIR}/")
 
