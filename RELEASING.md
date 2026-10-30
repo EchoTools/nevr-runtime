@@ -6,6 +6,10 @@ build). The Quest APK is the one part CI does not do: a user timer on the publis
 half of the train"). A person does the same steps by hand only when the train is off or a run has gone red. Nothing about a
 published release is edited afterwards: a wrong release is fixed by the next version.
 
+A release seat merges its own pull requests, in this repository and in the signer repository, once the pull request's checks are
+green and a fresh verifier (neither the author nor the implementer) has passed the tip with every finding fixed. It deletes the
+branch and the worktree the same turn. A publish outside the train, and anything that touches a signing key, goes to the owner's seat first.
+
 ## Names
 
 - **Version:** plain semver, `X.Y.Z` (no leading zeros, `tools/release_asset_names.sh` `release_tag_regex`). It is
@@ -50,10 +54,29 @@ fetches the files back only after it has put them there.
 A release is a train, not an event. The train (`release-train.yml`) runs every three hours and cuts a pre-release when `main` has a
 commit that `tools/next_release_version.py` counts (feat, fix, perf or a breaking change) since the newest tag.
 
-The guard (`release-train-guard.yml`, `tools/release_train_guard.py`) runs hourly and covers a dropped scheduled train run.
-When `main` is releasable and no train run was created in the last 3 h 15 min, it dispatches the train and logs the decision
-to the job log and the step summary. It does nothing while a train run is queued, in progress, waiting or pending, when `RELEASE_TRAIN` is not
-`true`, or when nothing on `main` is releasable.
+The train and its guard share one rule, `tools/release_window.py`: no release is cut or dispatched within 195 minutes of the newest
+published release (the newest by `publishedAt` of the non-draft releases whose tag is exactly `vX.Y.Z`). A scheduled run checks it
+first and holds, cutting nothing, when that release is 195.0 minutes old or less; a manual dispatch is not held. A run that held or
+found nothing to cut published nothing, so it does not start a window.
+
+The check reads the 20 newest releases. A check that finds no published `vX.Y.Z` release among them (an empty list, or only drafts
+and other tags) refuses: it cannot tell an empty history from a listing that hides the release, so the scheduled run's step and the
+guard both fail with a message that gives the count, and nothing is cut or dispatched.
+
+The guard covers a dropped scheduled train run. It is a systemd user timer on the publisher's machine
+(`tools/systemd/nevr-train-guard.timer`, hourly at :07), which runs `tools/release_train_guard.py` from the Quest timer's dedicated
+checkout with the publisher's `gh-spritz` (`--gh`, else `GH_BIN`). It runs only while that machine is on: a machine that is off delays
+the guard, and the timer's `Persistent=true` catches up when the machine comes back. When `main` is releasable and no release was
+published in the last 195 minutes (3 h 15 min), it dispatches the train. It does nothing while a train run is queued, in progress, waiting or pending,
+when `RELEASE_TRAIN` is not `true`, when nothing on `main` is releasable, while the newest train run failed, was cancelled or timed out
+195 minutes ago or less, measured from when that run was created (a red cut can leave a tag and an unpublished draft that the version tool counts, so the guard does not
+re-dispatch hourly; a run that succeeded or was skipped does not hold it), or while the newest published release is inside the window. Each decision is one JSON line (`reason` is `switch_off`, `no_releasable_change`,
+`train_run_in_progress`, `recent_failed_run`, `recent_release` or `no_release_in_window`; `last_release`, `last_published`, `age_minutes` and `window_minutes`
+describe the release, `last_run_id` and `last_run_created` the newest train run: for information, except under `recent_failed_run`, where it is the failed run) in the journal
+(`journalctl --user -u nevr-train-guard.service`) and in `~/.local/state/nevr-runtime/release-train-guard.jsonl`; a run whose log cannot
+be written fails before it decides anything. A failed run couriers the release lead (`nevr-train-guard-failed.service`); it never bonks.
+It is not a GitHub schedule: GitHub drops or delays scheduled runs, and a job's token cannot read repository variables (`gh variable
+list` answers HTTP 403 to it), so the job could not read `RELEASE_TRAIN`. `just install-train-guard-timer` installs the timer.
 
 1. **Switch.** The train does nothing until the repository variable `RELEASE_TRAIN` is `true`. Merging the workflow cuts
    nothing.
@@ -71,14 +94,11 @@ These run by hand once per release, before the train's first step, from a clone 
 
 1. `git fetch origin` and `just release-preflight` pass: this clone is exactly `origin/main`, no local-only tag, nothing
    unpushed, no uncommitted change.
-2. Every PR merged since the last release passed its own checks before it merged. The full suite is not run again: the
-   tag's build skips it (#1008).
+2. Every PR merged since the last release was tested by its author before it was marked ready. The full suite is not run
+   here: the tag's build skips it (#1008), and the full suite and the PC login test run on main after the release cut
+   (AGENTS.md, "Verification before merge").
 3. `just package-dev` reads to the end. It fails on a Windows or Quest build that does not package. It needs the Quest
    signing keystore in `pass`, the store APK and the NDK, as its recipe says.
-4. The PC login test passes with this tip's `BugSplat64.dll` and `nevr-runtime.dll` on a throwaway copy of the install,
-   against production (`AGENTS.md`, "Client login test mechanics"): the run's log shows the four keys on the
-   `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in`.
-
 ## Cut the draft by hand
 
 Only when the train is off or its run is red. A draft fires no workflow, so the build is started by hand on the tag ref.
@@ -109,7 +129,7 @@ second dispatch never overwrites files.
    the step fails red before any dispatch.
 6. **Check the signed draft**: `tools/release_check_draft.sh --signed vX.Y.Z` runs "Check the signed draft" below.
 7. **Body**: `tools/package_release.py notes --base <previous tag> --rev vX.Y.Z` renders the body from the signed files. Its
-   player line is read from the feat commits since the base tag (`tools/release_audience_section.py`).
+   player line is the sentences of the `release-headlines/` files added since the base tag, else "Fixes and internal changes.".
 8. **Publish**: `gh release edit vX.Y.Z --draft=false`, last. The `published` event does not rebuild: `build.yml`'s guard
    sees the two names and skips.
 
@@ -187,19 +207,27 @@ gh release view vX.Y.Z --json body --jq .body
 `notes` refuses unless `$S` holds exactly the two assets. It takes the version and the commit from the `BugSplat64.dll`
 and `nevr-runtime.dll` inside the zip (they must agree), so the body cannot describe another build.
 
-The player line is built only from the feat commits between `--base` and `--rev` whose audience is players: a commit's
-scope decides the audience (`arena`, `server` and `ws-bridge` are server hosts; `plugins` is plugin developers; the rest is
-players). A fix, perf or other type never contributes. It is the first two player feat texts joined by "; ", then "and N more"
-for the rest of them, with trailing issue and PR references removed, the first letter capitalised and a full stop at the end. A commit's text is its subject
-unless its message has a line `Release-note: <text>`, which is used in its place: write one when the subject misstates
-what a player sees. With no player feat the line reads "Fixes and internal changes.". Read the line against the pull
-request bodies before publishing. The body of a published release stays editable ("Immutable releases"); the assets do not.
+The player line is the authors' `release-headlines/` files, or the fixed "Fixes and internal changes." The commits never write
+it: a line guessed from `feat` subjects read as a player-facing change twice when the change was behind a setting that is off
+or internal (#1444). Read the line against the pull request bodies before publishing. The body of a published release stays
+editable ("Immutable releases"); the assets do not.
 
-**Headline override.** When a change is worth a sentence to players and the generated line would not read well, its author
-writes `release-headline.txt` at the repository root in the same PR: one line, 1 to 200 characters, a full stop added if it
-has none (or `!` or `?`). `notes` uses it as the player line only when the file exists at `--rev` and differs from its content
-at `--base`, so a headline left unchanged since the base tag is stale and the generated line is used. A file that is empty or
-has a line over 200 characters fails `notes` and names the file; it never falls back silently.
+**Headline files.** This is the news-fragment pattern of towncrier's `newsfragments/` and changesets' `.changeset/`. A pull
+request that changes what players see adds `release-headlines/<issue-or-topic>.txt` in the same PR: one line, 1 to 200
+characters, one plain sentence a player would understand about that change only, written by the PR's author, with a full stop
+added if it has none (or `!` or `?`). `notes` builds the player line from the files that exist at `--rev` and not at
+`--base`, joined with one space in file-name order (at most 600 characters). A path present at the base tag is old by
+construction, whatever its content, so no earlier release's sentence rides along. A file with another name (a letter or
+digit, then letters, digits, `.`, `_`, `-`, then `.txt`; `release-headlines/README.md` is the one exception), an empty file,
+a file with more than one line or a line over 200 characters, or `release-headline.txt` at the rev fails `notes` and names
+the file; a joined line over 600 fails it and names the files joined; none falls back silently. A path that already exists at
+the base tag is never read, so a new change uses a new file name (a reused name is dropped, not refused). A test
+(`tools/tests/test_release_headlines.py`) fails a PR whose tree holds `release-headline.txt`, so it is caught before the cut,
+and `notes` refuses it at the cut as the backstop. A successful `notes` writes one JSON line to stderr
+(`"event":"headlines"`, with `used`, `line`, `base` and `rev`; `used` is empty when the fixed sentence stands), which the
+release-train run's log keeps. The train cannot push to `main`, so it deletes nothing: the PR that adds a fragment also
+deletes the fragments present at the newest `vX.Y.Z` tag (`git ls-tree -r --name-only <newest tag> -- release-headlines/`). A
+fragment left behind is harmless, since a path present at the base is never read.
 
 ## Publish
 
@@ -269,11 +297,14 @@ built, because a later tag supersedes it. That is intended. A tag is built by ha
 It runs from its own **dedicated checkout** (`~/src/nevr-runtime-work/release-timer/checkout`, a detached worktree that
 `just install-quest-release-timer` makes). The unit fetches and moves that checkout to `origin/main` before every run,
 and the tool refuses, as a refused `checkout` step that couriers the owner, unless the checkout is clean and HEAD is the
-freshly fetched `origin/main`.
+freshly fetched `origin/main`. The `tags` step then refuses, the same way, while any tag in that checkout is not on origin or
+points at another commit there (the rule of `tools/release_preflight.py`, which `just release-quest-apk` runs later); the
+refusal names up to ten of them with their short ids, counts the rest, and prints the shell-quoted remove and restore commands,
+with the full object id, for each tag it lists.
 
 1. Lists the newest published `vX.Y.Z` release. A tag that has a `done` record in the log is left alone. A tag that has
    failed three times is not retried; the third failure couriers Spritz once, before the run exits 0. Nothing bonks the owner.
-   A dirty or stale checkout, or a missing credential, is a refusal that is logged and never counts toward the three failures.
+   A dirty or stale checkout, a local tag origin does not have, or a missing credential, is a refusal that is logged and never counts toward the three failures.
 2. Builds the release-signer from a snapshot of its `main`, and reads `verify-manifest --live`. A tag that beta already
    lists is done. Otherwise the beta release must list a `game-data` artifact (the zip the new release carries), whose
    name and size are noted; without one the run fails before it builds.
@@ -296,8 +327,9 @@ Stable stays an owner step (`approve-stable`); the timer only publishes beta. **
 the R2 credential to `publish_apk`, and the GitHub token to `publish_apk` and the dispatch. Every other command, the
 build included, gets an environment without them. Every step appends a JSON line to
 `$XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl`, with each credential value replaced by `<redacted>`; a log that
-cannot be written fails the run. A failing step exits 1 naming itself, and the unit's `OnFailure=` runs
-`quest_release_timer.py --notify-failure`, which couriers the last failure to Spritz. The credential is the file
+cannot be written fails the run. A failing step exits 1 naming itself, with the redacted tail of the failing command's stderr and stdout (the stdout of `curl`, `gh` and the signer is remote content and is left out), and the unit's `OnFailure=` runs
+`quest_release_timer.py --notify-failure`, which couriers the last failure to Spritz, at most once in six hours for the same step and
+error (a standing refusal repeats on every run). The credential is the file
 `~/.config/metis/r2-evr-echo-taxi.env` (`R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`), loaded by
 the unit and never written into it. The unit also sets `GNUPGHOME` to the XDG gnupg home (`~/.config/gnupg`) so `pass` finds the key, and a `pass` failure prints gpg's own `gpg:` lines after the `ERROR` line. Install, from any clone of the repository:
 

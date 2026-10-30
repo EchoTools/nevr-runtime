@@ -6,7 +6,7 @@
 //   code_fp=<8 hex>` then `answer op=resolve status=404 ... result=invalid`, and the server sees exactly one request:
 //   POST /v2/rpc/invite/resolve?unwrap with `Authorization: Bearer <token>`. No line carries the code or the token.
 //   With the key absent (the default, ADR 0017): `service on source=default` at Info, and a resolve goes out as above.
-//   With the key `false`: `feature off reason=turned_off source=config` at Info, `request not sent reason=feature_off` for a
+//   With the key `false`: `feature off reason=turned_off source=config` at Info, `request not sent reason=not_configured` for a
 //   Submit, and the server never sees a connection.
 //   A misspelt value: `feature off reason=unrecognised_value source=config` at Warning. An address that may not receive a
 //   token (plain http to a remote host): `feature off reason=service_address_refused detail=plain_http_to_remote` at Warning,
@@ -86,8 +86,8 @@ struct Guard {
 }  // namespace
 
 // Declared first on purpose: the service is a process-wide singleton and this is the state before any Start of the process.
-TEST(InviteService, ASubmitBeforeAnyStartIsFeatureOff) {
-  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::FeatureOff);
+TEST(InviteService, ASubmitBeforeAnyStartIsNotConfigured) {
+  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::NotConfigured);
   EXPECT_TRUE(nevr_invite_service::TakeAnswers().empty());
 }
 
@@ -144,9 +144,9 @@ TEST(InviteService, WithTheKeyFalseNothingIsSentAndTheStartSaysItIsConfigured) {
   nevr_invite_service::Start(rig.Settings(nevr_invite::ParseSwitch("false"), server.Base(), nevr_invite::SourceOf("false")));
 
   EXPECT_FALSE(nevr_invite_service::Active());
-  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::FeatureOff);
+  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::NotConfigured);
   EXPECT_TRUE(Has(rig.Lines(), LogLevel::Info, "[NEVR.INVITE] feature off reason=turned_off source=config"));
-  EXPECT_TRUE(Has(rig.Lines(), LogLevel::Info, "request not sent reason=feature_off code_len=8"));
+  EXPECT_TRUE(Has(rig.Lines(), LogLevel::Info, "request not sent reason=not_configured code_len=8"));
   EXPECT_TRUE(server.Requests().empty());
 }
 
@@ -163,7 +163,7 @@ TEST(InviteService, AValueNobodyMeantIsOffAndWarned) {
   Rig rig;
   nevr_invite_service::Start(rig.Settings(Switch::Unrecognised, "https://svc.example"));
   EXPECT_TRUE(Has(rig.Lines(), LogLevel::Warning, "[NEVR.INVITE] feature off reason=unrecognised_value source=config"));
-  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::FeatureOff);
+  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::NotConfigured);
 }
 
 TEST(InviteService, NoServiceAddressIsOffAndWarned) {
@@ -171,7 +171,7 @@ TEST(InviteService, NoServiceAddressIsOffAndWarned) {
   Rig rig;
   nevr_invite_service::Start(rig.Settings(Switch::On, ""));
   EXPECT_TRUE(Has(rig.Lines(), LogLevel::Warning, "[NEVR.INVITE] feature off reason=no_service_address"));
-  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::FeatureOff);
+  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::NotConfigured);
 }
 
 TEST(InviteService, AnAddressThatMayNotReceiveTheTokenIsRefusedAtStart) {
@@ -180,7 +180,7 @@ TEST(InviteService, AnAddressThatMayNotReceiveTheTokenIsRefusedAtStart) {
   nevr_invite_service::Start(rig.Settings(Switch::On, "http://svc.example"));
   EXPECT_TRUE(Has(rig.Lines(), LogLevel::Warning,
                   "[NEVR.INVITE] feature off reason=service_address_refused detail=plain_http_to_remote source=config"));
-  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::FeatureOff);
+  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::NotConfigured);
 }
 
 TEST(InviteService, ASecondStartChangesNothing) {
@@ -263,4 +263,27 @@ TEST(InviteService, TakeAnswersHandsOverAnAnswerOnceWithoutWaiting) {
   ASSERT_EQ(got.size(), 1u);
   EXPECT_EQ(got[0].status, 404);
   EXPECT_TRUE(nevr_invite_service::TakeAnswers().empty());
+}
+
+// #1414: a hook this service serves refused to install (its prologue did not match). The hook's own Warning names the address
+// and the bytes; the service stays off, says why in one Warning, refuses each request with a line, and contacts no server.
+TEST(InviteService, AHookThatRefusedToInstallKeepsTheServiceOffAndSaysWhy) {
+  Guard guard;
+  LoopbackServer server({Script{}});
+  Rig rig;
+  nevr_invite_service::Settings settings = rig.Settings(Switch::On, server.Base());
+  settings.hooks_refused = true;
+  nevr_invite_service::Start(std::move(settings));
+
+  EXPECT_FALSE(nevr_invite_service::Active());
+  EXPECT_TRUE(Has(rig.Lines(), LogLevel::Warning, "[NEVR.INVITE] feature off reason=hook_prologue_mismatch"));
+  int offWarnings = 0;
+  for (const Line& l : rig.Lines()) {
+    if (l.level == LogLevel::Warning && l.text.find("feature off") != std::string::npos) ++offWarnings;
+  }
+  EXPECT_EQ(offWarnings, 1);
+  EXPECT_FALSE(Has(rig.Lines(), LogLevel::Info, "[NEVR.INVITE] service on"));
+  EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::NotConfigured);
+  EXPECT_TRUE(Has(rig.Lines(), LogLevel::Info, "request not sent reason=not_configured code_len=8"));
+  EXPECT_TRUE(server.Requests().empty());
 }

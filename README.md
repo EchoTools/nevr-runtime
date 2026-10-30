@@ -334,7 +334,7 @@ just dist           # the stripped release package (symbols split to dist/symbol
 Presets: `mingw-debug`, `mingw-release` (Linux default), `debug`, `release`
 (Windows). Output lands in `build/<preset>/bin/`.
 
-`just verify` is the closed-loop gate for main when prepping a release (a PR runs the quick check, see `AGENTS.md`): it runs the build, C++ tests under Wine,
+`just verify` is the closed-loop gate for main after the release cut (a PR runs the quick check, see `AGENTS.md`): it runs the build, C++ tests under Wine,
 Python harness tests, and source-invariant sensors.
 
 ## Deployment

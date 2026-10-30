@@ -3,8 +3,9 @@
 The service (patch/invite_service.cpp) is tested by test_invite_service against a loopback server. What no test target
 links is boot.cpp, the wizard hook and the two shutdown paths, so the shape of those lines is pinned here:
 
-  - boot starts the service on a client, from the config key and the service address, before the observer installs, and
-    says on a server that it skipped;
+  - boot starts the service on a client, from the config key and the service address, after both observers install (so its
+    start line can say whether they did), and says on a server that it skipped;
+  - a refused observer keeps the service off, and each observer reports its install and refuses before any write (#1414);
   - the token source is the thread-safe nevr_token_auth::GetToken, never the module export (a static buffer);
   - the wizard hook hands a typed code and a create to the service (the answer is shown by test_invite_answer_wiring);
   - the client's normal exit and the DLL unload both stop the service.
@@ -44,9 +45,10 @@ class BootStartsTheService(unittest.TestCase):
         self.assertLess(settings, start)
         self.assertLess(start, boot.index("} else {", start))  # the server branch comes after the client's start
 
-    def test_the_service_starts_before_the_observer_is_installed(self):
+    def test_the_service_starts_after_both_observers_are_installed(self):
         boot = code("src/runtime/lifecycle/boot.cpp")
-        self.assertLess(boot.index("nevr_invite_service::Start("), boot.index("nevr_invite_hook::Install("))
+        self.assertLess(boot.index("nevr_invite_hook::Install("), boot.index("nevr_invite_service::Start("))
+        self.assertLess(boot.index("nevr_invite_choice_hook::Install("), boot.index("nevr_invite_service::Start("))
 
     def test_the_token_comes_from_the_thread_safe_function_not_the_export(self):
         boot = code("src/runtime/lifecycle/boot.cpp")
@@ -78,6 +80,42 @@ class ThePlanNamesTheMapCardsLevel(unittest.TestCase):
     def test_the_scenario_create_passes_the_same_lookup(self):
         scenario = code("src/runtime/scenario/scenario_control.cpp")
         self.assertRegex(scenario, r"nevr_invite::PlanRequest\(\s*metric\s*,\s*choices\s*,\s*nevr_invite_hook::LevelName\s*\)")
+
+
+OBSERVERS = ("src/runtime/patch/invite_choice_hook.cpp", "src/runtime/patch/invite_wizard_hook.cpp")
+
+
+def install_body(text: str) -> str:
+    """The Install definition and everything after it in an observer's .cpp (its install is the file's last function)."""
+    return text[text.index("Install(std::uintptr_t gameBase)") :]
+
+
+class AnObserverThatRefusesKeepsTheServiceOff(unittest.TestCase):
+    """#1414: a hook whose prologue does not match is refused by its own Warning (name, address, expected and actual bytes),
+    the observer reports the refusal to boot, and boot starts the service off with the reason."""
+
+    def test_boot_turns_the_service_off_when_either_observer_refused(self):
+        boot = code("src/runtime/lifecycle/boot.cpp")
+        self.assertRegex(boot, r"const bool choiceInstalled = nevr_invite_choice_hook::Install\(")
+        self.assertRegex(boot, r"const bool wizardInstalled = nevr_invite_hook::Install\(")
+        self.assertRegex(boot, r"invite\.hooks_refused\s*=\s*!\(\s*choiceInstalled\s*&&\s*wizardInstalled\s*\)\s*;")
+
+    def test_each_observer_refuses_before_any_write_and_reports_success_last(self):
+        for path in OBSERVERS:
+            body = install_body(code(path))
+            self.assertIn("return false;", body, path)
+            self.assertIn("return true;", body, path)
+            self.assertLess(body.index("return false;"), body.index("PatchDetour("), path)
+            self.assertLess(body.index("PatchDetour("), body.rindex("return true;"), path)
+
+    def test_each_refusal_logs_the_name_the_address_and_both_byte_sets(self):
+        for path in OBSERVERS:
+            body = install_body(code(path))
+            self.assertIn("prologue_mismatch", body, path)
+            self.assertIn("name=", body, path)
+            self.assertIn("va=0x", body, path)
+            self.assertIn("expected=", body, path)
+            self.assertIn("actual=", body, path)
 
 
 class ShutdownStopsTheService(unittest.TestCase):

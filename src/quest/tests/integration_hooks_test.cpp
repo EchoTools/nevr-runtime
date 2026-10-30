@@ -184,6 +184,7 @@ struct RealCounterSteps final : Steps {
   bool StartReporter() override { return true; }
   bool AttachLibR15() override { return true; }
   bool InstallClockHook() override { return true; }
+  bool InstallFrameDispatch() override { return true; }
   bool InstallObbSkip(bool counted) override { return counted; }
   bool InstallProcessEnd() override { return true; }
   bool InstallPermissionWait() override { return true; }
@@ -194,6 +195,8 @@ struct RealCounterSteps final : Steps {
   bool InstallRenderConfig(const nevr_quest::TextureChoice&) override { return true; }
   bool InstallCreditsText() override { return true; }
   bool InstallMenuCards() override { return true; }
+  bool WizardMetricWanted() override { return false; }  // the invite switch is not on main (ADR 0017 slice S1)
+  bool InstallWizardMetric() override { return true; }
   bool ArmClockLevels(bool counted, bool) override { return counted; }
   bool StartTokenAuth() override { return true; }
   bool InstallLoginPrompt(bool counted) override { return counted; }

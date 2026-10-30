@@ -181,6 +181,26 @@ std::vector<Answer> WaitForAnswers(nevr_invite::Worker& worker, std::size_t n) {
 
 }  // namespace
 
+// #1415: the worker says an answer waits through the flag the service hands it. It sets the flag under its own lock with the
+// answer, so a reader that finds it clear never misses one, and it clears the flag under the same lock when the answers are
+// taken, so the answer is not lost by taking it.
+TEST(InviteWorker, AnAnswerSetsThePendingFlagAndTakingItClearsIt) {
+  Rig rig;
+  rig.transport.Answers(404, R"({"message":"invalid"})");
+  std::atomic<bool> pending{false};
+  nevr_invite::WorkerParts parts = rig.Parts();
+  parts.answers_pending = &pending;
+  nevr_invite::Worker worker(parts);
+
+  ASSERT_EQ(worker.Enqueue(Resolve()), Submit::Queued);
+  ASSERT_TRUE(worker.WaitPendingForTest(kWait));
+  EXPECT_TRUE(pending.load());
+  const std::vector<Answer> answers = worker.TakeAnswers();
+  EXPECT_EQ(answers.size(), 1u);
+  EXPECT_FALSE(pending.load());
+  worker.Stop();
+}
+
 TEST(InviteWorker, AResolveIsPostedWithItsRpcItsBodyAndTheBearerAndAnswersInvalid) {
   Rig rig;
   rig.transport.Answers(404, R"({"message":"invalid"})");
@@ -359,17 +379,17 @@ TEST(InviteWorker, WithNoTokenNothingIsSentAndTheLineSaysSo) {
   EXPECT_EQ(lines[0].text, "[NEVR.INVITE] request not sent reason=no_token code_len=8");
 }
 
-TEST(InviteWorker, WhenTheFeatureIsOffNothingIsQueuedOrSentAndTheLineSaysSo) {
+TEST(InviteWorker, WhenNotConfiguredNothingIsQueuedOrSentAndTheLineSaysSo) {
   Rig rig;
   rig.configured = false;
   nevr_invite::Worker worker(rig.Parts());
-  EXPECT_EQ(worker.Enqueue(Resolve()), Submit::FeatureOff);
+  EXPECT_EQ(worker.Enqueue(Resolve()), Submit::NotConfigured);
   worker.Stop();
 
   EXPECT_TRUE(rig.transport.Calls().empty());
   const std::vector<Line> lines = rig.Lines();
   ASSERT_EQ(lines.size(), 1u);
-  EXPECT_EQ(lines[0].text, "[NEVR.INVITE] request not sent reason=feature_off code_len=8");
+  EXPECT_EQ(lines[0].text, "[NEVR.INVITE] request not sent reason=not_configured code_len=8");
   EXPECT_TRUE(worker.TakeAnswers().empty());
 }
 
@@ -513,7 +533,7 @@ TEST(InviteConfig, TheFeatureIsOnWhenTheKeyIsUnset) {
   for (const char* on : {"true", "TRUE", "True", "on", "On", "yes", "1"}) EXPECT_EQ(ParseSwitch(on), Switch::On) << on;
 }
 
-TEST(InviteConfig, FalseTurnsTheFeatureOff) {
+TEST(InviteConfig, FalseTurnsTheInviteCodesOff) {
   using nevr_invite::ParseSwitch;
   using nevr_invite::Switch;
   for (const char* off : {"false", "FALSE", "off", "no", "0"}) EXPECT_EQ(ParseSwitch(off), Switch::Off) << off;

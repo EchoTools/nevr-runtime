@@ -34,9 +34,17 @@ class CurlHttpClient : public nevr::auth::HttpClient {
                           long timeout_seconds = 10, bool allow_plain_http = false,
                           size_t max_response_bytes = 1024 * 1024);
   nevr::auth::HttpResponse PostJson(const std::string& url, const std::string& body) override;
+  // The same POST with extra request headers (each "Name: value") and explicit timeouts in seconds: the connect and the whole
+  // request. Content-Type: application/json is sent too. Trust, redirects and the response cap are PostJson's.
+  nevr::auth::HttpResponse PostJsonWithHeaders(const std::string& url, const std::string& body,
+                                               const std::vector<std::string>& headers, long connect_timeout_s,
+                                               long timeout_s);
   void Interrupt() override;
 
  private:
+  // The one POST both entry points use.
+  nevr::auth::HttpResponse Perform(const std::string& url, const std::string& body, const std::vector<std::string>& headers,
+                                   long connect_timeout_s, long timeout_s);
   // The bundle, loading it if none has loaded yet. Loading (file I/O, logging) happens
   // outside bundle_mutex_; the shared_ptr keeps a bundle alive across a concurrent reload.
   std::shared_ptr<const CaBundle> Bundle();

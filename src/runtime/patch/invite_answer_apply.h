@@ -9,7 +9,7 @@
 namespace nevr_invite_apply {
 
 /// Takes the answers that have arrived and posts their texts to the writer. Game-loop thread only (frame/tick.cpp gates it).
-/// With the invite service off it returns after one atomic load.
+/// With the invite service off, or with nothing waiting, it returns after one atomic load and takes no service lock.
 void OnFrame();
 
 /// Test builds only (the scenario endpoint): keep a bounded copy of each answer the frame applied, and hand them over once.
