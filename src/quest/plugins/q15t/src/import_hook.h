@@ -23,4 +23,11 @@ struct InstallResult {
 InstallResult InstallImportHook(const char* symbol, std::uintptr_t base, std::uintptr_t slot_vaddr, std::uintptr_t wrapper,
                                 std::atomic<std::uintptr_t>* real_out, std::uintptr_t expected_vaddr = 0);
 
+// The same swap for a slot another module of this plugin may already have wrapped: the slot must hold the game's own function
+// (base + `stock_vaddr`) or an address inside this plugin library's own executable mapping, and whichever it holds becomes `real_out`,
+// so this wrapper calls the earlier one, which calls the game's. A word anywhere else (the game's text, another library) is refused
+// (kUnexpectedOriginal, reason "slot_not_stock_or_own"). Install the module that was there first first.
+InstallResult InstallChainedImportHook(std::uintptr_t base, std::uintptr_t slot_vaddr, std::uintptr_t wrapper,
+                                       std::atomic<std::uintptr_t>* real_out, std::uintptr_t stock_vaddr);
+
 }  // namespace q15t

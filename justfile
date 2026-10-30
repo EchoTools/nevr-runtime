@@ -1705,6 +1705,10 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     # fixture library that calls libc's sigaction and signal through PLT slots as libr15 does.
     "${cxx[@]}" -fPIC -shared -Wl,--build-id=sha1 -Wl,-z,now src/quest/tests/crash_first_fixture_consumer.cpp \
         -o "$out/libcffx_consumer.so"
+    # The same fixture under the names of the provider libraries the late install looks for (loaded after the constructor).
+    for provider in libpnsrad.so libpnsradmatchmaking.so libpnsovr.so; do
+        "${cxx[@]}" -fPIC -shared -Wl,--build-id=sha1 -Wl,-z,now src/quest/tests/crash_first_fixture_consumer.cpp -o "$out/$provider"
+    done
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/crash_first_hook_test.cpp \
         src/quest/sentinel/crash_first_hook.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
@@ -1929,19 +1933,20 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
     [ -f "$store_apk" ] || { echo "test-quest-hooks-pinned: store APK not found: $store_apk" >&2; exit 1; }
     out="build/quest-hooks-pinned"
     rm -rf "$out"; mkdir -p "$out/lib"
-    unzip -o -q "$apk" lib/arm64-v8a/libpnsradmatchmaking.so lib/arm64-v8a/libpnsovr.so lib/arm64-v8a/lib7f2363b8976491aa.so -d "$out/lib"
+    unzip -o -q "$apk" lib/arm64-v8a/libpnsradmatchmaking.so lib/arm64-v8a/libpnsovr.so lib/arm64-v8a/lib7f2363b8976491aa.so lib/arm64-v8a/libpnsrad.so -d "$out/lib"
     # libr15.so is the STORE's: the signed APK carries the patched file (docs/adr/0021 section 9), which these pins are not about.
     unzip -o -q "$store_apk" lib/arm64-v8a/libr15.so -d "$out/lib"
     echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $out/lib/lib/arm64-v8a/libr15.so" | sha256sum -c -
     echo "36236ab1df5783da57c064b0fbccc3a61c0e1d150c208022fbfc9cd6e5ed60ee  $out/lib/lib/arm64-v8a/libpnsradmatchmaking.so" | sha256sum -c -
     echo "26e9a216a710d42a303346a4ca5b84037ff38250ea725dc7112b055fcacada79  $out/lib/lib/arm64-v8a/libpnsovr.so" | sha256sum -c -
     echo "80c36268dbefd9f20ccae0aa35d3efe6f6480a8179f9f46709e71e33e0f110e4  $out/lib/lib/arm64-v8a/lib7f2363b8976491aa.so" | sha256sum -c -
+    echo "d9995c877a6623d8e48879f80c5749f313a0eba8a00b35a936c0df60e6d23aa8  $out/lib/lib/arm64-v8a/libpnsrad.so" | sha256sum -c -
     g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isdk/include -Isrc/quest/sentinel \
         src/quest/tests/got_pinned_test.cpp src/quest/sentinel/got_hook.cpp \
         src/quest/sentinel/hook_log.cpp src/quest/sentinel/libr15_identity.cpp src/quest/patch/libr15_patch_identity.cpp \
         src/quest/data/sha256.cpp -o "$out/got_pinned_test" -ldl
     "$out/got_pinned_test" "$out/lib/lib/arm64-v8a/libr15.so" "$out/lib/lib/arm64-v8a/libpnsradmatchmaking.so" \
-        "$out/lib/lib/arm64-v8a/libpnsovr.so" "$out/lib/lib/arm64-v8a/lib7f2363b8976491aa.so"
+        "$out/lib/lib/arm64-v8a/libpnsovr.so" "$out/lib/lib/arm64-v8a/lib7f2363b8976491aa.so" "$out/lib/lib/arm64-v8a/libpnsrad.so"
     # #411: every ovr_* import the message pump and the login callbacks can reach is hooked or guarded, so a
     # synthetic message handle never reaches the SDK (tools/pinned_ovr_imports.txt says how each is treated).
     python3 tools/pinned_ovr_import_walk.py "$out/lib/lib/arm64-v8a/libpnsovr.so" --expect tools/pinned_ovr_imports.txt
@@ -3434,15 +3439,16 @@ verify:
     # Horizon denies execmod on a written libr15 page, so the libr15 is patched on the host at build time and the sentinel
     # stores only DATA at run time. Four things keep it so, each a scan of src/quest outside the tests:
     #   (1) a protection or mapping call (mprotect, mmap, mremap, PROT_EXEC, PROT_WRITE) appears only in the files that need
-    #       one: got_hook.cpp (the GOT's data pages), libr15_attach.cpp (its trampoline pages, anonymous memory) and
-    #       credits_text.cpp (its anonymous buffer), plus the two headers that declare those seams;
+    #       one: got_hook.cpp (the GOT's data pages), libr15_attach.cpp (its trampoline pages, anonymous memory),
+    #       credits_text.cpp (its anonymous buffer) and plugins/q15t/src/got_swap.cpp (the q15t GOT swap, data pages only),
+    #       plus the two headers that declare those seams;
     #   (2) the run-time code writers of the old inline hooks (InstallInlineThunk, WriteWord, AllocateInReach) do not come back;
     #   (3) credits_text.cpp makes exactly one protection call, on its own buffer, and no other mprotect;
     #   (4) the STOCK build ID constant is named only by the files that need the stock file's identity. A hook that compares the
     #       stock ID where it means the patched one is a no-op on the patched libr15 that no unit test of the hook's own logic sees.
     # The allowlists are repeated in tools/tests/test_quest_no_code_writes.py, which fails when they differ.
     # BEGIN N151
-    N151_PROT_OK=" sentinel/got_hook.cpp sentinel/libr15_attach.cpp sentinel/libr15_attach.h sentinel/credits_text.cpp sentinel/credits_text.h "
+    N151_PROT_OK=" plugins/q15t/src/got_swap.cpp sentinel/got_hook.cpp sentinel/libr15_attach.cpp sentinel/libr15_attach.h sentinel/credits_text.cpp sentinel/credits_text.h "
     N151_ID_OK=" diag/hwdump_run.cpp patch/libr15_patch_identity.cpp patch/libr15_extra_rows.cpp patch/libr15_patch_table.h plugin/plugin_identity.h sentinel/credits_text.cpp sentinel/data_wiring.cpp sentinel/libr15_attach.cpp sentinel/libr15_identity.cpp sentinel/pinned_targets.h "
     n151_fail() { echo "verify: FAIL — N151 $1 (docs/adr/0021: the sentinel changes no code page at run time)." >&2; exit 1; }
     N151_RC=0; N151_PROT=$(grep -rnE '\b(mprotect|mmap|mremap|pkey_mprotect)\b|PROT_(EXEC|WRITE)' src/quest --include='*.cpp' --include='*.h' --exclude-dir=tests) || N151_RC=$?

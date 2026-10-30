@@ -1073,6 +1073,40 @@ void TestPostLoadRetriesUntilSettledThenStops() {
   QCHECK(stats.loginSettled == 1 && stats.matchmakingSettled == 1);
 }
 
+// The module-loaded observer (#1605): every non-null dlopen handle reaches it, with the name and the handle, before the actions run
+// and whether or not any action is wanted; a null handle does not; SetPostLoadActions leaves it in place.
+std::vector<std::string> g_observed;
+std::vector<int> g_observedBeforeActions;
+void Observe(const char* name, void* handle) noexcept {
+  g_observed.push_back(std::string(name != nullptr ? name : "(null)") + (handle != nullptr ? "" : "!null-handle"));
+  g_observedBeforeActions.push_back(g_loginRuns);
+}
+
+void TestTheModuleLoadedObserverSeesEveryNonNullDlopenBeforeTheActions() {
+  int dummy = 0;
+  g_observed.clear();
+  g_observedBeforeActions.clear();
+  ResetPostLoad(nullptr, nullptr, Settle::kDone, Settle::kDone);  // no action wanted at all
+  SetModuleLoadedObserver(&Observe);
+  AfterDlopen("/x/libpnsrad.so", &dummy);
+  AfterDlopen("libfoo.so", nullptr);  // a failed dlopen is not a moment
+  AfterDlopen("libpnsovr.so", &dummy);
+  QCHECK(g_observed.size() == 2 && g_observed[0] == "/x/libpnsrad.so" && g_observed[1] == "libpnsovr.so");
+
+  // With an action wanted: the observer runs first.
+  ResetPostLoad(&FakeLogin, nullptr, Settle::kDone, Settle::kDone);
+  g_observed.clear();
+  g_observedBeforeActions.clear();
+  AfterDlopen("libpnsovr.so", &dummy);
+  QCHECK(g_observed.size() == 1 && g_observedBeforeActions[0] == 0 && g_loginRuns == 1);  // saw it before the login ran
+
+  // SetPostLoadActions did not clear it; clearing it is explicit.
+  QCHECK(PostLoadStatsView().calls == 1);
+  SetModuleLoadedObserver(nullptr);
+  AfterDlopen("libpnsrad.so", &dummy);
+  QCHECK(g_observed.size() == 1);
+}
+
 // The login-failed page's title hook (#1137) waits for the script library like the matchmaking redirect waits for its own:
 // tried after every non-null dlopen until it settles, never again after, and its settling is reported.
 int g_titleRuns = 0;
@@ -2056,6 +2090,7 @@ int main() {
   TestPostLoadRetriesUntilSettledThenStops();
   TestPostLoadCountsEachDistinctMatchmakingImage();
   TestPostLoadRunsTheLoginTitleActionUntilItSettles();
+  TestTheModuleLoadedObserverSeesEveryNonNullDlopenBeforeTheActions();
   TestMatchmakingReloadProbeWaitsForTheActionAndThenSpeaksOnce();
   TestMatchmakingReloadProbeFailsWhenTheActionGaveUp();
   TestApplySelfCheckWiresTheDebugQueryTheUserAndTheSender();

@@ -9,6 +9,7 @@
 #include "bvh.h"
 #include "clock_levels.h"
 #include "custctx.h"
+#include "decals.h"
 #include "meshstep.h"
 #include "droneguard.h"
 #include "dronekill.h"
@@ -169,6 +170,9 @@
 #ifndef Q15T_INSTMODEL  // CGInstancedModelResource's constructor with growth step 1 (instmodel.h)
 #define Q15T_INSTMODEL 0
 #endif
+#ifndef Q15T_DECALS  // the level decals of decals.bin as dynamic-mesh quads (decals.h); after impactsnd: it chains on the Shutdown wrapper
+#define Q15T_DECALS 0
+#endif
 // The game-thread tick: CncaGame::ExclusiveUpdateGame's JUMP_SLOT, its function, and CR15Game's vptr value (R17; q15t
 // the source build's gunconnect kGotExclusiveUpdateGame / kFnExclusiveUpdateGame / kGameVptr).
 #ifndef Q15T_SLOT_EXCLUSIVEUPDATEGAME
@@ -282,6 +286,9 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_SHADERSTEP
     "shaderstep "
+#endif
+#if Q15T_DECALS
+    "decals "
 #endif
     "";
 
@@ -516,6 +523,9 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
 #endif
 #if Q15T_SHADERSTEP
   ReportModule("shaderstep", InstallShaderStep(base));
+#endif
+#if Q15T_DECALS
+  ReportModule("decals", InstallDecals(base));  // after impactsnd: its Shutdown wrapper chains on impactsnd's
 #endif
 #if Q15T_MUSIC
   {

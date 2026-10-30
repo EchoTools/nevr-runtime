@@ -51,7 +51,7 @@ reimplementation is the follow-up if a headset run shows the wrapper is the wron
 
 ## Tests
 
-`src/quest/tests/q15t/instmodel_test.cpp` (`tests/mod/instmodel.sh`): the wrapper against a fake stock constructor, with all eight
+`src/quest/tests/q15t/instmodel_test.cpp`: the wrapper against a fake stock constructor, with all eight
 steps set, only those bytes changed, the mismatch case and the no-match case. The install path (word pins, the GOT swap) is not covered
 by a host test; it runs on a game copy.
 
