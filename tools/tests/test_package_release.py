@@ -511,9 +511,14 @@ class ReleaseStagesTest(PackageFixture):
         self.assertIn(self.DIR + "sub/a.txt", self.refused({self.DIR + "sub/a.txt": "Nested.\n"}))
 
     def test_a_file_that_is_not_a_txt_name_is_refused_and_named(self):
-        for name in ("notes.md", "a b.txt", "a.TXT", "a.txt.bak", ".txt", "readme.md"):
+        for name in ("notes.md", "a b.txt", "a.TXT", "a.txt.bak", ".txt", "readme.md", ".hidden.txt", "-a.txt", "_a.txt"):
             with self.subTest(name=name):
                 self.assertIn(self.DIR + name, self.refused({self.DIR + name: "A line.\n"}))
+
+    def test_a_name_starting_with_a_digit_or_letter_is_a_headline(self):
+        for name in ("1482-topic.txt", "Topic.txt", "a.b_c-d.txt"):
+            with self.subTest(name=name):
+                self.assertEqual(self.added("Fine.\n", name), "Fine.")
 
     def test_the_readme_is_never_a_headline(self):
         self.assertEqual(self.headline_line({}, {self.DIR + "README.md": "How this works.\n"}), self.AUTO_LINE)
@@ -567,6 +572,8 @@ class ReleaseStagesTest(PackageFixture):
         stderr = self.refused(files)
         self.assertIn("the joined headline", stderr)
         self.assertIn("600", stderr)
+        for name in ("a.txt", "b.txt", "c.txt"):
+            self.assertIn(self.DIR + name, stderr)
 
     def test_a_full_stop_is_added_only_when_the_line_has_no_terminal_punctuation(self):
         self.assertEqual(self.added("Ships it!\n"), "Ships it!")
