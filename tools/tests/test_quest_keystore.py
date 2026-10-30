@@ -535,7 +535,7 @@ class QuestKeystoreTest(unittest.TestCase):
     def test_the_package_recipes_ask_the_script_for_the_key_instead_of_naming_its_entry(self):
         text = JUSTFILE.read_text()
         self.assertNotIn("pass show services/echovrce", text)
-        for name in ("package-dev", "release-quest-apk"):
+        for name in ("package-dev", "_release-quest-apk"):  # the body of release-quest-apk and release-quest-variant-apk
             self.assertIn("tools/quest_keystore.sh check", self.recipe(name), name)
 
     # ---- import ---------------------------------------------------------------------------------------------
