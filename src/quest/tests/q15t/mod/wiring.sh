@@ -24,9 +24,13 @@ g++ $_wf -rdynamic -DWIRING_BVH_ONLY -DQ15T_BVH=1 $_wslots -DQ15T_BUILD_ID_FOR_T
 g++ $_wf -rdynamic -DWIRING_GATE_LINK_ONLY -DQ15T_GATE_LINK=1 $_wslots -DQ15T_BUILD_ID_FOR_TEST='"b243509c08ce677aeb95fa348016949b3fc45230"' \
   "$tests/wiring_test.cpp" "$here/src/plugin.cpp" $_wobjs -o "$_w/wiring_gate_link" -ldl -lpthread
 "$_w/wiring_gate_link"
-g++ $_wf -rdynamic -DWIRING_GATE_LINK_ONLY -DEXPECT_BOTS -DQ15T_GATE_LINK=1 -DQ15T_GATE_BOTS=1 $_wslots -DQ15T_BUILD_ID_FOR_TEST='"b243509c08ce677aeb95fa348016949b3fc45230"' \
+# the bots gate is installed only with levelname (combat_gates.h): built with it, and then with levelname.off in the data directory
+g++ $_wf -rdynamic -DWIRING_GATE_LINK_ONLY -DEXPECT_BOTS -DQ15T_GATE_LINK=1 -DQ15T_GATE_BOTS=1 -DQ15T_LEVELNAME=1 $_wslots -DQ15T_BUILD_ID_FOR_TEST='"b243509c08ce677aeb95fa348016949b3fc45230"' \
   "$tests/wiring_test.cpp" "$here/src/plugin.cpp" $_wobjs -o "$_w/wiring_gate_link_bots" -ldl -lpthread
 "$_w/wiring_gate_link_bots"
+g++ $_wf -rdynamic -DWIRING_GATE_LINK_ONLY -DEXPECT_BOTS -DWIRING_LEVELNAME_OFF -DQ15T_GATE_LINK=1 -DQ15T_GATE_BOTS=1 -DQ15T_LEVELNAME=1 $_wslots -DQ15T_BUILD_ID_FOR_TEST='"b243509c08ce677aeb95fa348016949b3fc45230"' \
+  "$tests/wiring_test.cpp" "$here/src/plugin.cpp" $_wobjs -o "$_w/wiring_gate_bots_levelname_off" -ldl -lpthread
+"$_w/wiring_gate_bots_levelname_off"
 
 # capability matrix: <label> <defines> <expect ALTERS_GAMEPLAY> <expect NETWORK>; nothing else on
 _wcaps() {
@@ -38,7 +42,7 @@ _wcaps none "-DQ15T_T26=0" 0 0
 for _c in FXTRAIL VOIPDROP CUSTCTX IMPACTSND ECFX HUDMETER MUSIC SENSORWD DECALS; do _wcaps "$_c" "-DQ15T_${_c}=1" 0 0; done
 _wcaps SHIELDGAMMA=1 "-DQ15T_SHIELDGAMMA=1" 0 0
 _wcaps SHIELDGAMMA=2 "-DQ15T_SHIELDGAMMA=2" 0 0
-for _c in DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE GUNCONNECT AIBOTS BVH WALLFIRE LEVELNAME T26 HZ_MATCH90 GATE_LINK; do
+for _c in DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE GUNCONNECT AIBOTS BVH WALLFIRE LEVELNAME T26 HZ_MATCH90 GATE_LINK GATE_PERM GATE_BOTS; do
   _wcaps "$_c" "-DQ15T_${_c}=1" 1 0
 done
 for _c in 1 2 3; do _wcaps "POWERBOOST=$_c" "-DQ15T_POWERBOOST=$_c" 1 0; done
