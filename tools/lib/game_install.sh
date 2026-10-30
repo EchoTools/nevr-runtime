@@ -26,6 +26,29 @@ game_pids() {
   return 0
 }
 
+# game_pids_in <root>: game_pids, narrowed to the games whose working directory is inside <root> (the launchers start the
+# game with its working directory in <root>/echovr/bin/win10). A game on another copy of the install is not listed.
+game_pids_in() {
+  local root pid cwd
+  root=$(readlink -f -- "$1") || return 0
+  for pid in $(game_pids); do
+    cwd=$(readlink -f -- "/proc/$pid/cwd" 2>/dev/null) || continue
+    if [[ $cwd == "$root" || $cwd == "$root"/* ]]; then printf '%s\n' "$pid"; fi
+  done
+  return 0
+}
+
+# run_game_pids: the games a run on GAME_ROOT answers to. All of them, unless the caller sets NEVR_SCOPE_RUN_TO_COPY=1
+# together with NEVR_GAME_ROOT: that says this run is one of several the caller starts side by side, each on its own copy
+# of the install and its own NEVR_LAUNCH_LOCK, and only a game on this copy counts (tools/invite_e2e.py runs two clients).
+run_game_pids() {
+  if [[ "${NEVR_SCOPE_RUN_TO_COPY:-}" == 1 && -n "${NEVR_GAME_ROOT:-}" ]]; then
+    game_pids_in "$NEVR_GAME_ROOT"
+  else
+    game_pids
+  fi
+}
+
 # NEVR_WORK_ROOT and work_dir: where a run keeps what it writes (tools/lib/work_root.sh).
 # shellcheck source=tools/lib/work_root.sh
 source "$(dirname "${BASH_SOURCE[0]}")/work_root.sh"
@@ -76,7 +99,7 @@ acquire_game_run_lock() {
     "the lock file is kept; it holds no data." || exit 4
   exec 9>"$GAME_RUN_LOCK" || { echo "ERROR: cannot open the lock file $GAME_RUN_LOCK" >&2; exit 4; }
   flock -n 9 || { echo "ERROR: another game run (launch-client.sh, launch-server.sh or verify-server.sh) holds $GAME_RUN_LOCK" >&2; exit 4; }
-  running=$(game_pids)
+  running=$(run_game_pids)
   if [[ -n $running ]]; then
     echo "ERROR: echovr.exe is already running (pid ${running//$'\n'/ }); stop it first" >&2
     exit 4

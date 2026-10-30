@@ -30,10 +30,11 @@ ORIGINAL = b"original-dll"
 TEST_DLL = b"test-dll"
 
 
-def game_standin(testcase: unittest.TestCase) -> int:
+def game_standin(testcase: unittest.TestCase, cwd: pathlib.Path | None = None) -> int:
     """A live process whose argv[0] is ./echovr.exe, so game_pids (tools/lib/game_install.sh) counts it as the game
-    (#1490). Its pid is what the fake pgrep reports as FAKE_ECHOVR_PIDS. Killed when the test ends."""
-    proc = subprocess.Popen(["bash", "-c", "exec -a ./echovr.exe sleep 600"], start_new_session=True)
+    (#1490). Its pid is what the fake pgrep reports as FAKE_ECHOVR_PIDS. Its working directory is `cwd`, the way the
+    launchers start the game inside its install. Killed when the test ends."""
+    proc = subprocess.Popen(["bash", "-c", "exec -a ./echovr.exe sleep 600"], start_new_session=True, cwd=cwd)
     testcase.addCleanup(lambda: (proc.kill(), proc.wait()))
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
@@ -545,6 +546,33 @@ class LaunchClientTest(unittest.TestCase):
         self.assertIn(f"echovr.exe is already running (pid {pid})", result.stderr)
         self.assertEqual(self.deployed(), ORIGINAL)  # nothing was deployed
         self.assertNotIn("Deploying", result.stdout)
+
+    def test_a_run_scoped_to_its_copy_ignores_a_game_on_another_copy(self):
+        # tools/invite_e2e.py starts two clients side by side, each on its own copy and lock: the game on the other
+        # copy must not refuse this run.
+        other = self.tmp / "other-copy/echovr/bin/win10"
+        other.mkdir(parents=True)
+        pid = game_standin(self, cwd=other)
+        env = dict(self.env, FAKE_ECHOVR_PIDS=str(pid), NEVR_SCOPE_RUN_TO_COPY="1")
+        result = self.run_script("--dll", str(self.dll), env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("already running", result.stderr)
+
+    def test_a_run_scoped_to_its_copy_still_refuses_a_game_on_that_copy(self):
+        pid = game_standin(self, cwd=self.game_root / "echovr/bin/win10")
+        env = dict(self.env, FAKE_ECHOVR_PIDS=str(pid), NEVR_SCOPE_RUN_TO_COPY="1")
+        result = self.run_script("--dll", str(self.dll), env=env)
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+        self.assertIn(f"echovr.exe is already running (pid {pid})", result.stderr)
+        self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_a_game_on_another_copy_refuses_an_unscoped_run(self):
+        other = self.tmp / "other-copy/echovr/bin/win10"
+        other.mkdir(parents=True)
+        pid = game_standin(self, cwd=other)
+        result = self.run_script("--dll", str(self.dll), env=dict(self.env, FAKE_ECHOVR_PIDS=str(pid)))
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+        self.assertIn(f"echovr.exe is already running (pid {pid})", result.stderr)
 
     def test_refuses_to_start_while_another_run_holds_the_lock(self):
         with open(self.lock, "w") as held:
