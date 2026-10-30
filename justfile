@@ -1724,6 +1724,9 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/obb_skip_hook_test" -ldl
     timeout 120 "$out/obb_skip_hook_test"
+    # The data-path rewrite of the pinned service-only libr15 (#1737): afk prefix to the running package, exact segment only.
+    "${cxx[@]}" -fno-exceptions src/quest/tests/path_rewrite_test.cpp -o "$out/path_rewrite_test"
+    timeout 60 "$out/path_rewrite_test"
     # The process ends when the game's android_main returns (#621): the real handler through the thunk entry,
     # and a real process ended under a writer that saves the way the Quest code saves.
     "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 src/quest/tests/process_end_fixture_provider.cpp \
