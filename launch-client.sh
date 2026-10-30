@@ -183,25 +183,42 @@ cp -p "$GAME_DIR/BugSplat64.dll" "$SCRATCH/BugSplat64.dll.orig"
 
 restore() {
   trap - EXIT
-  cp -p "$SCRATCH/BugSplat64.dll.orig" "$GAME_DIR/BugSplat64.dll"
-  rm -f "$NEVR_ROOT_DIR/nevr-runtime.dll"
-  for plugin in "${PLUGINS[@]}"; do rm -f "$NEVR_ROOT_DIR/plugins/$(basename "$plugin")"; done
+  # Every step reports its own failure and the next step still runs (#1469): under set -e a failing command in this trap
+  # would end it before the verdict and the Wine server stop. The run exits nonzero when any step failed.
+  local failed=0
+  if ! cp -p "$SCRATCH/BugSplat64.dll.orig" "$GAME_DIR/BugSplat64.dll"; then
+    echo "ERROR: could not restore $GAME_DIR/BugSplat64.dll from $SCRATCH/BugSplat64.dll.orig" >&2; failed=1
+  fi
+  if ! rm -f -- "$NEVR_ROOT_DIR/nevr-runtime.dll"; then
+    echo "ERROR: could not remove $NEVR_ROOT_DIR/nevr-runtime.dll" >&2; failed=1
+  fi
+  for plugin in "${PLUGINS[@]}"; do
+    if ! rm -f -- "$NEVR_ROOT_DIR/plugins/$(basename "$plugin")"; then
+      echo "ERROR: could not remove the plugin $NEVR_ROOT_DIR/plugins/$(basename "$plugin")" >&2; failed=1
+    fi
+  done
+  # A --creds run whose runtime refreshed its sign-in has a regular file where the link was: it goes back to the store before
+  # the removal below, so the store keeps the refreshed token (#1469). A link, or an identical file, writes nothing.
+  if [[ -n "$STORED" ]]; then
+    save_back_stored_sign_in "$NEVR_ROOT_DIR/.credentials.json" "$STORED" "$SCRATCH/refreshed-sign-in.credentials.json" || failed=1
+  fi
   # The sign-in this run put in the nevr root: the link to a stored sign-in, or a sign-in a device-code login wrote. It goes
   # whatever the run did, so no sign-in is left where the next run would find it (a --save-creds run kept its copy first).
   signin_gone=1
   if [[ -n "$CLEAN_SIGNIN" ]]; then
-    # Under set -e a failing rm would end this trap before the verdict below, so the failure is reported here instead.
-    if ! rm -f -- "${CLEAN_SIGNIN:?}"; then echo "ERROR: could not remove the run's sign-in at $CLEAN_SIGNIN" >&2; fi
+    if ! rm -f -- "${CLEAN_SIGNIN:?}"; then echo "ERROR: could not remove the run's sign-in at $CLEAN_SIGNIN" >&2; failed=1; fi
     if [[ -e "$CLEAN_SIGNIN" || -L "$CLEAN_SIGNIN" ]]; then signin_gone=0; fi
   fi
-  if cmp -s "$SCRATCH/BugSplat64.dll.orig" "$GAME_DIR/BugSplat64.dll" && [[ ! -e "$NEVR_ROOT_DIR/nevr-runtime.dll" ]] && [[ $signin_gone -eq 1 ]]; then
+  if [[ $failed -eq 0 ]] && cmp -s "$SCRATCH/BugSplat64.dll.orig" "$GAME_DIR/BugSplat64.dll" && [[ ! -e "$NEVR_ROOT_DIR/nevr-runtime.dll" ]] && [[ $signin_gone -eq 1 ]]; then
     echo "=== original BugSplat64.dll restored and verified, nevr-runtime.dll removed from the nevr root ==="
   else
-    echo "ERROR: BugSplat64.dll restore failed (or nevr-runtime.dll or the run's sign-in is still in the nevr root); original is $SCRATCH/BugSplat64.dll.orig" >&2
+    echo "ERROR: BugSplat64.dll restore failed (or nevr-runtime.dll or the run's sign-in is still in the nevr root, or a step above failed); original is $SCRATCH/BugSplat64.dll.orig" >&2
   fi
   # A cleanup step, not a gate: wineserver exits 1 when no server is left to kill, and as the last command
   # of an EXIT trap under `set -e` that would replace the script's own exit status.
   wineserver -k 9>&- || true
+  # The one exit this trap makes: a failed step is nonzero for the whole run, after every step above has run.
+  if [[ $failed -ne 0 ]]; then exit 1; fi
 }
 # INT/TERM become a normal exit so the EXIT trap (restore) always runs.
 trap 'exit 143' INT TERM

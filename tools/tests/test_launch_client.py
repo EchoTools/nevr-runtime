@@ -11,6 +11,7 @@ import getpass
 import json
 import os
 import pathlib
+import re
 import shutil
 import stat
 import signal
@@ -30,6 +31,8 @@ TEST_DLL = b"test-dll"
 TEST_RUNTIME = b"test-runtime"
 SIGNIN = b'{"refresh_token":"SENTINEL-CRED-MUST-NOT-PRINT"}'
 SENTINEL = "SENTINEL-CRED-MUST-NOT-PRINT"
+ROTATED = '{"refresh_token":"ROTATED-SENTINEL-MUST-NOT-PRINT"}'
+ROTATED_SENTINEL = "ROTATED-SENTINEL-MUST-NOT-PRINT"
 ACCOUNT = "test-account"
 LINK_MARKER = "FIXTURE-SIGNIN-THROUGH-A-LINK"
 # The real Wine, for the one test that checks the URL chain itself (skipped when Wine is not installed).
@@ -149,6 +152,9 @@ def make_fake_bin(directory: pathlib.Path) -> None:
         '# What the sign-in and browser checks read: the link while the game runs, a sign-in the runtime saves, the browser.\n'
         '[[ -n "${FAKE_WINE_LINK:-}" ]] && { if [[ -L "$logs/../.credentials.json" ]]; then readlink "$logs/../.credentials.json" > "$FAKE_WINE_LINK"; else echo absent > "$FAKE_WINE_LINK"; fi; }\n'
         '[[ -n "${FAKE_WINE_WRITE_SIGNIN:-}" ]] && printf "%s" "$FAKE_WINE_WRITE_SIGNIN" > "$logs/../.credentials.json"\n'
+        '# A refreshing runtime replaces the link with a regular file of its own (#1469).\n'
+        '[[ -n "${FAKE_WINE_REPLACE_SIGNIN:-}" ]] && { rm -f "$logs/../.credentials.json"; printf "%s" "$FAKE_WINE_REPLACE_SIGNIN" > "$logs/../.credentials.json"; }\n'
+        '[[ -n "${FAKE_WINE_REPOINT:-}" ]] && ln -sfn -- "$FAKE_WINE_REPOINT" "$logs/../.credentials.json"\n'
         '[[ -n "${FAKE_WINE_XDG:-}" ]] && command -v xdg-open > "$FAKE_WINE_XDG"\n'
         '[[ -n "${FAKE_WINE_IGNORE_INT:-}" ]] && trap "" INT  # a client that ignores the interrupt: timeout must KILL it\n'
         '# A directory where the run\'s sign-in link is: rm cannot remove it, so the restore must say the sign-in is still there.\n'
@@ -730,6 +736,105 @@ class LaunchClientTest(unittest.TestCase):
             process.stdout.close()
         self.assertFalse(os.path.lexists(self.link_path()), "the link survived the interrupt")
         self.assertEqual(self.deployed(), ORIGINAL)
+
+    # --- a refreshed sign-in is saved back to the store, and the exit trap never stops early (#1469) ---
+
+    def store_names(self) -> list:
+        return sorted(p.name for p in self.store.parent.iterdir())
+
+    def bin_with_failing(self, name: str, condition: str) -> pathlib.Path:
+        """A directory holding a `name` that fails while `condition` (a bash test on "$@") holds, else runs the real one."""
+        directory = self.tmp / f"fail-{name}-{abs(hash(condition))}"
+        directory.mkdir(exist_ok=True)
+        real = shutil.which(name)
+        (directory / name).write_text(
+            "#!/bin/bash\n"
+            f'if {condition}; then echo "{name}: injected failure" >&2; exit 1; fi\n'
+            f'exec {real} "$@"\n')
+        (directory / name).chmod(0o755)
+        return directory
+
+    def test_a_sign_in_the_runtime_refreshed_is_saved_back_to_the_store_at_0600(self):
+        result = self.run_script("--dll", str(self.dll), "--creds", ACCOUNT,
+                                 env=dict(self.env, FAKE_WINE_REPLACE_SIGNIN=ROTATED))
+        out = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, out)
+        self.assertEqual(self.store.read_bytes(), ROTATED.encode(), "the refreshed sign-in was not saved back")
+        self.assertEqual(self.store.stat().st_mode & 0o777, 0o600)
+        self.assertIn("refreshed sign-in saved back to the store", result.stdout)
+        self.assertNotIn(ROTATED_SENTINEL, out)
+        self.assertFalse(os.path.lexists(self.link_path()), "the run's copy was left in the nevr root")
+        self.assertEqual(self.store_names(), [".credentials.json"], "a temporary file was left in the store")
+
+    def test_a_sign_in_that_is_still_a_link_is_not_written_back(self):
+        decoy = self.tmp / "decoy-signin"
+        decoy.write_text(ROTATED)
+        for label, extra in (("the link to the store", {}), ("a link repointed to another file",
+                                                              {"FAKE_WINE_REPOINT": str(decoy)})):
+            with self.subTest(case=label):
+                self.store.write_bytes(SIGNIN)
+                self.store.chmod(0o600)
+                result = self.run_script("--dll", str(self.dll), "--creds", ACCOUNT, env=dict(self.env, **extra))
+                out = result.stdout + result.stderr
+                self.assertEqual(result.returncode, 0, out)
+                self.assertEqual(self.store.read_bytes(), SIGNIN, "the store took bytes from the run's copy")
+                self.assertNotIn("saved back", out)
+                self.assertEqual(self.store_names(), [".credentials.json"])
+
+    def test_a_regular_file_identical_to_the_store_is_not_rewritten(self):
+        inode = self.store.stat().st_ino
+        result = self.run_script("--dll", str(self.dll), "--creds", ACCOUNT,
+                                 env=dict(self.env, FAKE_WINE_REPLACE_SIGNIN=SIGNIN.decode()))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.store.stat().st_ino, inode, "an identical sign-in replaced the stored file")
+        self.assertNotIn("saved back", result.stdout)
+
+    def test_a_failing_restore_copy_still_runs_the_later_steps_and_the_run_exits_nonzero(self):
+        bindir = self.bin_with_failing("cp", '[[ "${@: -2:1}" == *.orig ]]')
+        wslog = self.tmp / "wineserver.log"
+        env = dict(self.env, PATH=f"{bindir}:{self.env['PATH']}", FAKE_WS_LOG=str(wslog),
+                   FAKE_WS_DLL=str(self.game_root / "echovr/bin/win10/BugSplat64.dll"))
+        result = self.run_script("--dll", str(self.dll), "--creds", ACCOUNT, env=env)
+        out = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, out)
+        self.assertIn("could not restore", result.stderr, out)
+        self.assertIn("ERROR: BugSplat64.dll restore failed", result.stderr, out)
+        self.assertIn("-k dll=", wslog.read_text(), "the Wine server stop after the failed copy did not run")
+        self.assertFalse(self.root_runtime.exists(), "the removal after the failed copy did not run")
+        self.assertFalse(os.path.lexists(self.link_path()), "the sign-in removal after the failed copy did not run")
+
+    def test_a_failing_removal_of_the_runtime_is_named_and_the_later_steps_still_run(self):
+        bindir = self.bin_with_failing("rm", '[[ "$*" == *nevr-runtime.dll* ]]')
+        wslog = self.tmp / "wineserver.log"
+        env = dict(self.env, PATH=f"{bindir}:{self.env['PATH']}", FAKE_WS_LOG=str(wslog),
+                   FAKE_WS_DLL=str(self.game_root / "echovr/bin/win10/BugSplat64.dll"))
+        result = self.run_script("--dll", str(self.dll), "--creds", ACCOUNT, env=env)
+        out = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, out)
+        self.assertIn("could not remove", result.stderr, out)
+        self.assertEqual(self.deployed(), ORIGINAL, "the DLL restore after the failed removal did not run")
+        self.assertIn("-k dll=", wslog.read_text(), "the Wine server stop after the failed removal did not run")
+        self.assertFalse(os.path.lexists(self.link_path()), "the sign-in removal after the failed removal did not run")
+
+    def test_a_failing_copy_back_keeps_the_refreshed_sign_in_and_the_stored_one_and_exits_nonzero(self):
+        bindir = self.bin_with_failing("cp", '[[ "${@: -1}" == *.saveback.* ]]')
+        wslog = self.tmp / "wineserver.log"
+        env = dict(self.env, PATH=f"{bindir}:{self.env['PATH']}", FAKE_WINE_REPLACE_SIGNIN=ROTATED,
+                   FAKE_WS_LOG=str(wslog), FAKE_WS_DLL=str(self.game_root / "echovr/bin/win10/BugSplat64.dll"))
+        result = self.run_script("--dll", str(self.dll), "--creds", ACCOUNT, env=env)
+        out = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, out)
+        self.assertIn("could not save the refreshed sign-in back", result.stderr, out)
+        self.assertNotIn("restored and verified", result.stdout, "the verdict called a failed save-back clean")
+        self.assertEqual(self.store.read_bytes(), SIGNIN, "the stored sign-in changed after a failed save")
+        self.assertEqual(self.store_names(), [".credentials.json"], "a temporary file was left in the store")
+        match = re.search(r"kept at (\S+?)[;\s]", result.stderr)
+        self.assertIsNotNone(match, "the failed save does not name where the refreshed sign-in is kept")
+        self.assertEqual(pathlib.Path(match.group(1)).read_bytes(), ROTATED.encode(),
+                         "the refreshed sign-in was not kept")
+        self.assertNotIn(ROTATED_SENTINEL, out)
+        self.assertIn("-k dll=", wslog.read_text(), "the Wine server stop after the failed save did not run")
+        self.assertFalse(self.root_runtime.exists(), "the removal after the failed save did not run")
 
     def test_a_device_code_run_starts_with_no_sign_in_and_says_where_the_code_is(self):
         result = self.run_script("--dll", str(self.dll), "--device-code", auth=())

@@ -141,6 +141,30 @@ save_stored_sign_in() {
   fi
 }
 
+# save_back_stored_sign_in <the run's sign-in file in the nevr root> <the account's stored path> <where to keep a refreshed
+# sign-in if the save fails>: a runtime that refreshes its token replaces the link to the store with a regular file, and
+# the store keeps the old token (#1469). A regular file that differs from the store is copied over it: a temporary name in
+# the store's folder, mode 0600, then mv over the stored file. A link (nothing refreshed) or an identical file writes
+# nothing. When the save fails the stored file is unchanged and the refreshed file is moved to the keep path (the run's
+# copy is removed by the caller, so this keeps it); returns 1 and names both paths, never the content.
+save_back_stored_sign_in() {
+  local live=$1 path=$2 keep=$3 tmp
+  if [[ -L "$live" || ! -f "$live" ]]; then return 0; fi
+  if cmp -s -- "$live" "$path"; then return 0; fi
+  tmp="$path.saveback.$$"
+  if (umask 077 && cp -- "$live" "$tmp") && chmod 600 -- "$tmp" && mv -f -- "$tmp" "$path"; then
+    echo "=== refreshed sign-in saved back to the store: $path (mode 0600) ==="
+    return 0
+  fi
+  rm -f -- "$tmp"
+  if mv -f -- "$live" "$keep" && chmod 600 -- "$keep"; then
+    echo "ERROR: could not save the refreshed sign-in back to $path; the stored sign-in is unchanged; the refreshed one is kept at $keep" >&2
+  else
+    echo "ERROR: could not save the refreshed sign-in back to $path, and could not keep it at $keep; the refreshed sign-in is lost" >&2
+  fi
+  return 1
+}
+
 # host_stop_cause <the nevr root's logs folder> <the run's start, unix seconds>: when the host stopped the game
 # (nevr-runtime.dll absent or refused), the runtime never ran and wrote no game log; the host's own record says why.
 # Prints one line and returns 0, or prints nothing and returns 3 when the record holds no stop since then (#1122).
