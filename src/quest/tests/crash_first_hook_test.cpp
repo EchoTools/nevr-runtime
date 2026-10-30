@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -365,6 +366,144 @@ void TheArmLineSaysHowManySignalsAreOurs() {
   sentinel::SetLogSink(previousSink);
 }
 
+// ---- the provider libraries, hooked when they load ---------------------------------------------------------
+
+struct Provider {
+  void* handle = nullptr;
+  SigactionFn sigaction = nullptr;
+  SignalFn signal = nullptr;
+};
+
+Provider OpenProvider(const char* file) {
+  Provider provider;
+  provider.handle = dlopen((g_fixtureDir + "/" + file).c_str(), RTLD_NOW | RTLD_LOCAL);
+  QCHECK(provider.handle != nullptr);
+  if (provider.handle == nullptr) return provider;
+  provider.sigaction = reinterpret_cast<SigactionFn>(dlsym(provider.handle, "cffx_sigaction"));
+  provider.signal = reinterpret_cast<SignalFn>(dlsym(provider.handle, "cffx_signal"));
+  QCHECK(provider.sigaction != nullptr && provider.signal != nullptr);
+  return provider;
+}
+
+const cf::LateModule kFixtureModules[] = {
+    {"libpnsrad.so", nullptr, std::nullopt, std::nullopt},
+    {"libpnsradmatchmaking.so", nullptr, std::nullopt, std::nullopt},
+    {"libpnsovr.so", nullptr, std::nullopt, std::nullopt},
+};
+
+// A request through `provider` is remembered and the kernel's handler stays ours: the proof the library's slots are hooked.
+void ExpectHooked(const Provider& provider, int signo) {
+  const struct sigaction game = SiginfoAction(&GameSiginfoHandler);
+  QCHECK(provider.sigaction(signo, &game, nullptr) == 0);
+  QCHECK(KernelHandler(signo) == reinterpret_cast<void*>(&cf::OnSignal));
+  struct sigaction asked;
+  std::memset(&asked, 0, sizeof(asked));
+  QCHECK(provider.sigaction(signo, nullptr, &asked) == 0);
+  QCHECK(asked.sa_sigaction == &GameSiginfoHandler);
+}
+
+void AProviderLibraryIsHookedWhenItLoadsAndNotBefore() {
+  ArmOverSystemHandlers();
+  cf::SetLateModulesForTest(kFixtureModules, 3);
+  int unrelated = 0;
+  cf::OnModuleLoaded("/data/app/x/lib/arm64/libGLESv3.so", &unrelated);  // not a provider: nothing is looked at
+  cf::OnModuleLoaded("libpnsrad.so", nullptr);                            // a failed dlopen
+  cf::OnModuleLoaded("libpnsrad.so", &unrelated);                         // named, but not mapped: nothing to hook
+  QCHECK(cf::CurrentCounts().lateInstalls == 0);
+
+  const sentinel::LogSink previousSink = sentinel::SetLogSink(&CaptureLine);
+  g_lines.clear();
+  const Provider rad = OpenProvider("libpnsrad.so");
+  cf::OnModuleLoaded("/data/app/x/lib/arm64/libpnsrad.so", rad.handle);
+  sentinel::SetLogSink(previousSink);
+  QCHECK(cf::CurrentCounts().lateInstalls == 2);  // sigaction and signal
+  QCHECK(HasLine("\"event\":\"crash_first_late\"") && HasLine("\"module\":\"libpnsrad.so\"") && HasLine("\"result\":\"installed\""));
+  ExpectHooked(rad, SIGSEGV);
+
+  // signal() through the same library is the same rule.
+  void (*previous)(int) = rad.signal(SIGFPE, &GamePlainHandler);
+  (void)previous;
+  QCHECK(KernelHandler(SIGFPE) == reinterpret_cast<void*>(&cf::OnSignal));
+
+  // The same mapping again, and a library that is not mapped, install nothing more.
+  cf::OnModuleLoaded("libpnsrad.so", rad.handle);
+  cf::OnModuleLoaded("libpnsradmatchmaking.so", rad.handle);
+  QCHECK(cf::CurrentCounts().lateInstalls == 2);
+
+  dlclose(rad.handle);
+}
+
+void EachProviderLibraryIsHookedOnItsOwnAndLibpnsradDoesNotMatchTheMatchmakingLibrary() {
+  ArmOverSystemHandlers();
+  cf::SetLateModulesForTest(kFixtureModules, 3);
+  const Provider matchmaking = OpenProvider("libpnsradmatchmaking.so");
+  cf::OnModuleLoaded("libpnsradmatchmaking.so", matchmaking.handle);
+  QCHECK(cf::CurrentCounts().lateInstalls == 2);  // only the matchmaking library is mapped: "libpnsrad.so" is not its prefix match
+  ExpectHooked(matchmaking, SIGBUS);
+
+  const Provider ovr = OpenProvider("libpnsovr.so");
+  cf::OnModuleLoaded("libpnsovr.so", ovr.handle);
+  QCHECK(cf::CurrentCounts().lateInstalls == 4);
+  ExpectHooked(ovr, SIGILL);
+
+  const Provider rad = OpenProvider("libpnsrad.so");
+  cf::OnModuleLoaded("libpnsrad.so", rad.handle);
+  QCHECK(cf::CurrentCounts().lateInstalls == 6);
+  ExpectHooked(rad, SIGABRT);
+
+  // A request in one library is the game's request for the process: the chain at a crash is the latest, whoever asked.
+  const struct sigaction first = SiginfoAction(&SystemHandler);
+  QCHECK(matchmaking.sigaction(SIGSEGV, &first, nullptr) == 0);
+  struct sigaction seen;
+  std::memset(&seen, 0, sizeof(seen));
+  QCHECK(ovr.sigaction(SIGSEGV, nullptr, &seen) == 0);
+  QCHECK(seen.sa_sigaction == &SystemHandler);
+
+  dlclose(matchmaking.handle);
+  dlclose(ovr.handle);
+  dlclose(rad.handle);
+}
+
+// A library the game closed and loaded again has fresh slots: the hook is made again for the new mapping.
+void AProviderLibraryLoadedAgainIsHookedAgain() {
+  ArmOverSystemHandlers();
+  cf::SetLateModulesForTest(kFixtureModules, 3);
+  Provider rad = OpenProvider("libpnsrad.so");
+  cf::OnModuleLoaded("libpnsrad.so", rad.handle);
+  QCHECK(cf::CurrentCounts().lateInstalls == 2);
+  dlclose(rad.handle);
+  rad = OpenProvider("libpnsrad.so");
+  cf::OnModuleLoaded("libpnsrad.so", rad.handle);
+  QCHECK(cf::CurrentCounts().lateInstalls == 4);
+  ExpectHooked(rad, SIGSEGV);
+  dlclose(rad.handle);
+}
+
+// A library whose build is not the pinned one is refused, said once, and left to the game.
+void ABuildThatIsNotThePinnedOneIsRefusedAndSaidOnce() {
+  ArmOverSystemHandlers();
+  static const cf::LateModule wrongBuild[] = {{"libpnsovr.so", "0000000000000000000000000000000000000000", std::nullopt, std::nullopt}};
+  cf::SetLateModulesForTest(wrongBuild, 1);
+  const sentinel::LogSink previousSink = sentinel::SetLogSink(&CaptureLine);
+  g_lines.clear();
+  const Provider ovr = OpenProvider("libpnsovr.so");
+  cf::OnModuleLoaded("libpnsovr.so", ovr.handle);
+  cf::OnModuleLoaded("libpnsovr.so", ovr.handle);
+  sentinel::SetLogSink(previousSink);
+  QCHECK(cf::CurrentCounts().lateInstalls == 0);
+  int refusals = 0;
+  for (const std::string& line : g_lines) {
+    if (line.find("\"event\":\"crash_first_late\"") != std::string::npos && line.find("\"result\":\"failed\"") != std::string::npos) ++refusals;
+  }
+  QCHECK(refusals == 1);
+  // The game's request goes through to libc as it did before: the slot is not ours.
+  const struct sigaction game = SiginfoAction(&GameSiginfoHandler);
+  QCHECK(ovr.sigaction(SIGSEGV, &game, nullptr) == 0);
+  QCHECK(KernelHandler(SIGSEGV) == reinterpret_cast<void*>(&GameSiginfoHandler));
+  dlclose(ovr.handle);
+  cf::SetLateModulesForTest(nullptr, 0);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -384,6 +523,10 @@ int main(int argc, char** argv) {
   AGameHandlerOfIgnoreOrDefaultIsNotCalled();
   ASecondThreadWaitsForTheFirstThreadsReportAndDump();
   ARefusedInstallSaysSo();
+  AProviderLibraryIsHookedWhenItLoadsAndNotBefore();
+  EachProviderLibraryIsHookedOnItsOwnAndLibpnsradDoesNotMatchTheMatchmakingLibrary();
+  AProviderLibraryLoadedAgainIsHookedAgain();
+  ABuildThatIsNotThePinnedOneIsRefusedAndSaidOnce();
   cf::RestoreHandlers();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "crash_first_hook_test: %d check(s) failed\n", quest_test::Failures());
