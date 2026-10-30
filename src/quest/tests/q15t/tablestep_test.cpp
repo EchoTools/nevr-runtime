@@ -1,5 +1,5 @@
 // Host test of tablestep (src/quest/plugins/q15t/src/tablestep.cpp, issue #1552): the real install path against a fake game-library
-// image. The pin word at ELF 0x1907130 is the stock `mov w8,#0x20`; the three slots hold base + 0x190707c; the fake CreateInstance
+// image. The pin word at ELF 0x1907130 is the stock `mov w8,#0x20`; the slot holds base + 0x190707c; the fake CreateInstance
 // builds a 0xb0-byte object whose table step at +0x98 is the stock 0x20, as the stock store leaves it.
 #include <cstdint>
 #include <cstdio>
@@ -45,7 +45,7 @@ static int Count(const char* needle, int level = -1) {
 static const uintptr_t kCreate = 0x190707c;
 static const uintptr_t kPin = 0x1907130;
 static const uint32_t kPinWord = 0x52800408;  // mov w8,#0x20
-static const uintptr_t kSlots[3] = {0x3287f9c, 0x33fb0f8, 0x365ddd0};
+static const uintptr_t kSlots[1] = {0x365ddd0};
 static const uintptr_t kObjStep = 0x98;
 static const uintptr_t kObjSize = 0xb0;
 
@@ -85,25 +85,25 @@ int main() {
   ctx.log = &FakeLog;
   q15t::SetLogContext(&ctx);
 
-  // 1. all three slots swapped; a call through each gives the object step 1 and the stock call count moves
+  // 1. the slot is swapped; a call through it gives the object step 1 and the stock call count moves
   {
     pbhud::Image img;
     Fresh(img);
     q15t::InstallResult ir = q15t::InstallTableStep(img.base);
     CHECK(ir.status == q15t::SwapStatus::kOk, "install status %s", q15t::StatusName(ir.status));
     for (uintptr_t s : kSlots) CHECK(img.Get(s) != img.base + kCreate, "slot 0x%llx not swapped", (unsigned long long)s);
-    CHECK(Count("tablestep: slot swapped", 1) == 3, "three INFO slot lines expected");
-    CHECK(Count("tablestep: on", 1) == 1 && Count("slots=3") == 1, "no summary line with slots=3");
-    for (int i = 0; i < 3; ++i) {
+    CHECK(Count("tablestep: slot swapped", 1) == 1, "one INFO slot line expected");
+    CHECK(Count("tablestep: on", 1) == 1 && Count("slots=1") == 1, "no summary line with slots=1");
+    for (int i = 0; i < 1; ++i) {
       CreateFn f = reinterpret_cast<CreateFn>(img.Get(kSlots[i]));
       void* obj = f(nullptr, nullptr);
       CHECK(obj != nullptr, "slot %d returned null", i);
       CHECK(StepOf(obj) == 1, "slot %d: step %llu, want 1", i, (unsigned long long)StepOf(obj));
       std::free(obj);
     }
-    CHECK(g_stock_calls == 3, "stock calls %u, want 3", g_stock_calls);
+    CHECK(g_stock_calls == 1, "stock calls %u, want 1", g_stock_calls);
     auto st = q15t::GetTableStepStats();
-    CHECK(st.rewritten == 3 && st.unexpected == 0, "stats %u/%u, want 3/0", st.rewritten, st.unexpected);
+    CHECK(st.rewritten == 1 && st.unexpected == 0, "stats %u/%u, want 1/0", st.rewritten, st.unexpected);
     CHECK(Count("tablestep: first shader-set table step set", 1) == 1, "first-step INFO logged more or less than once");
   }
 
@@ -117,7 +117,6 @@ int main() {
     void* obj = f(nullptr, nullptr);
     CHECK(StepOf(obj) == 0x40, "step changed though it was not the stock value: %llu", (unsigned long long)StepOf(obj));
     std::free(obj);
-    f = reinterpret_cast<CreateFn>(img.Get(kSlots[1]));
     obj = f(nullptr, nullptr);
     std::free(obj);
     auto st = q15t::GetTableStepStats();
@@ -137,26 +136,19 @@ int main() {
     CHECK(Count("code word pin mismatch", 3) == 1, "no ERROR pin line");
   }
 
-  // 4. one slot holds something else: that slot is refused alone; the other two still rewrite their objects (the shared-word bug)
+  // 4. the slot holds something else: refused, the module is OFF and the word is left as it was
   {
     pbhud::Image img;
     Fresh(img);
-    img.SetSlot(kSlots[1], img.base + 0x1234);  // not the stock address
+    img.SetSlot(kSlots[0], img.base + 0x1234);  // not the stock address
     q15t::InstallResult ir = q15t::InstallTableStep(img.base);
-    CHECK(ir.status == q15t::SwapStatus::kOk, "partial install must stay ok: %s", q15t::StatusName(ir.status));
-    CHECK(img.Get(kSlots[1]) == img.base + 0x1234, "refused slot was written");
+    CHECK(ir.status == q15t::SwapStatus::kUnexpectedOriginal, "a slot that is not the stock address: %s", q15t::StatusName(ir.status));
+    CHECK(img.Get(kSlots[0]) == img.base + 0x1234, "refused slot was written");
     CHECK(Count("slot refused, its calls stay stock", 2) == 1, "no WARNING for the refused slot");
-    CHECK(Count("tablestep: on", 1) == 1 && Count("slots=2") == 1, "summary should read slots=2");
-    CreateFn f0 = reinterpret_cast<CreateFn>(img.Get(kSlots[0]));
-    CreateFn f2 = reinterpret_cast<CreateFn>(img.Get(kSlots[2]));
-    void* a = f0(nullptr, nullptr);
-    void* b = f2(nullptr, nullptr);
-    CHECK(StepOf(a) == 1 && StepOf(b) == 1, "installed slots no longer rewrite after a later slot was refused");
-    std::free(a);
-    std::free(b);
+    CHECK(Count("tablestep: on", 1) == 0, "an 'on' line though no slot was installed");
   }
 
-  // 5. every slot refused: OFF, the reason is the first refusal's status
+  // 5. every slot refused (the one slot), an unaligned word: OFF, the reason is the first refusal's status
   {
     pbhud::Image img;
     Fresh(img);
