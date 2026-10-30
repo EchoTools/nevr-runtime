@@ -54,7 +54,7 @@ class ServerWithNoCredentialStopsBeforeConnecting(unittest.TestCase):
     def test_the_cause_is_never_the_format_string(self):
         code = bridge()
         self.assertNotRegex(code, r"ServerFatal\(\s*cause")
-        self.assertEqual(len(re.findall(r'ServerFatal\("%s", cause\.c_str\(\)\)', code)), 2)
+        self.assertEqual(len(re.findall(r'ServerFatal\("%s", cause\.c_str\(\)\)', code)), 3)
 
     def test_a_client_is_not_held_back_by_the_credential_rule(self):
         body = prepare_remote()
@@ -63,6 +63,35 @@ class ServerWithNoCredentialStopsBeforeConnecting(unittest.TestCase):
     def test_a_latched_sign_in_makes_no_remote_for_a_client_only(self):
         body = prepare_remote()
         self.assertRegex(body, r"if \(!g_isServer && ClientRefusedAlready\(refusalKey\)\) \{[^}]*return PreparedRemote\{\};")
+
+
+class ServerWithNoPasswordSignsInByDeviceCode(unittest.TestCase):
+    """#1532: no auth.password is a device sign-in, not a missing key; no token from it stops before any remote."""
+
+    def test_the_no_token_stop_comes_before_the_remote_is_made(self):
+        body = prepare_remote()
+        stop = body.index("NoSignInCause(")
+        made = body.index("std::make_shared<ix::WebSocket>()")
+        self.assertLess(stop, made)
+        self.assertRegex(body[stop:stop + 200], r"ServerFatal\(\"%s\", cause\.c_str\(\)\);\s*return PreparedRemote\{\};")
+
+    def test_the_stop_asks_token_auth_for_the_token_only_for_a_no_password_server(self):
+        body = prepare_remote()
+        self.assertRegex(
+            body,
+            r"ServerSignsInByDeviceCode\(password\) && ReadLoginIdentity\(false\)\.bearerToken\.empty\(\)")
+
+    def test_a_server_with_no_password_runs_the_token_auth_flow_with_a_console_prompt(self):
+        token_auth = strip_comments(read("src/modules/token-auth/src/token_auth.cpp"))
+        init = extract_braced_function(token_auth, "void nevr_token_auth::Init(")
+        self.assertIn("serverSignsInByDeviceCode", init)
+        self.assertIn("RunDeviceAuthFlowOffBootstrapThread(*s_auth, serverSignsInByDeviceCode)", init)
+        self.assertIn("Server mode disables device-code authentication", init)  # the password path is unchanged
+
+    def test_an_error_exit_of_a_server_holds_for_the_host(self):
+        crash = strip_comments(read("src/runtime/lifecycle/crash_recovery.cpp"))
+        body = extract_braced_function(crash, "void ServerFatal(")
+        self.assertLess(body.index("HoldForHostBeforeExit("), body.index("ForceFatalExit(1)"))
 
 
 class RefusalIsReportedBeforeTheSocketsAreClosed(unittest.TestCase):
@@ -114,7 +143,7 @@ class RefusalIsReportedBeforeTheSocketsAreClosed(unittest.TestCase):
 
     def test_a_server_stop_names_the_config(self):
         body = extract_braced_function(bridge(), "static void OnRemoteLoginRefused(")
-        self.assertIn("RefusedLoginCause(httpStatus, NevrCfgSource())", body)
+        self.assertIn("RefusedLoginCause(httpStatus, NevrCfgSource(), deviceSignIn)", body)
 
 
 class RouterReportsTheStatusToTheBridge(unittest.TestCase):

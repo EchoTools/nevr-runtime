@@ -238,16 +238,20 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   const auto orEmpty = [](const char* value) { return value ? std::string_view(value) : std::string_view(); };
   // #1266: the route is chosen once, from what config.yaml sets, and logged; a server with no route stops here
   // instead of dialing an address nothing serves. The token route is opt-in (docs/adr/0001-serverdb-token-auth.md).
-  const char* tokenUri = NevrCfgGetFlat("nevr_serverdb_uri");
+  const char* configuredTokenUri = NevrCfgGetFlat("nevr_serverdb_uri");
   const char* socketUri = NevrCfgGetFlat("nevr_socket_uri");
   const char* discordId = NevrCfgGetFlat("nevr_discord_id");
+  // #1532: a server with no password registers on the token route at the built-in address without any config.
+  const std::string_view tokenUri = nevr_serverdb_uri::TokenRouteUriOrDefault(
+      orEmpty(configuredTokenUri), orEmpty(socketUri), orEmpty(NevrCfgGetFlat("nevr_password")));
   const nevr_serverdb_uri::ServerDbRoute route = nevr_serverdb_uri::ChooseServerDbRoute(
-      orEmpty(serverDbUri), orEmpty(tokenUri), !wsToken.empty(), orEmpty(socketUri), orEmpty(discordId));
+      orEmpty(serverDbUri), tokenUri, !wsToken.empty(), orEmpty(socketUri), orEmpty(discordId));
   const auto presence = [](const char* value) { return (value && value[0] != '\0') ? "present" : "absent"; };
   Log(EchoVR::LogLevel::Info,
       "[NEVR.GAMESERVER] serverdb route=%s services.serverdb=%s services.serverdb_uri=%s token=%s "
       "services.socket_uri=%s identity.discord_id=%s",
-      nevr_serverdb_uri::ServerDbRouteName(route), presence(serverDbUri), presence(tokenUri),
+      nevr_serverdb_uri::ServerDbRouteName(route), presence(serverDbUri),
+      !orEmpty(configuredTokenUri).empty() ? "present" : (tokenUri.empty() ? "absent" : "default"),
       wsToken.empty() ? "absent" : "present", presence(socketUri), presence(discordId));
 
   if (route == nevr_serverdb_uri::ServerDbRoute::kNone) {
