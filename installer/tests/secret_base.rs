@@ -60,7 +60,7 @@ fn file_release(keys: &Path) -> (String, PathBuf) {
 }
 
 fn cli(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_nevr-install")).args(args).output().unwrap()
+    Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime")).args(args).output().unwrap()
 }
 
 /// Every JSON line of a log, or a panic that names the missing file.
