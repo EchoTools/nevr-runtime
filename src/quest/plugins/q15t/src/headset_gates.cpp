@@ -10,7 +10,7 @@ namespace {
 
 std::atomic<std::uintptr_t> g_party_real{0}, g_head_real{0};
 std::atomic<std::uintptr_t> g_party_lo{0}, g_party_hi{0}, g_head_lo{0}, g_head_hi{0}, g_link_lo{0}, g_link_hi{0};
-std::atomic<std::int32_t> g_link_answer{5};
+std::atomic<std::int32_t> g_link_answer{kLinkHeadset};
 std::atomic<std::uint32_t> g_party_calls{0}, g_party_gated{0}, g_head_calls{0}, g_head_gated{0}, g_link_gated{0};
 constexpr std::uint32_t kLogFirstGated = 8;
 

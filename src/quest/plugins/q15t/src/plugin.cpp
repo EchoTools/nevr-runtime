@@ -70,7 +70,7 @@
 #define Q15T_PERM_FN_HI 0x232c854ULL
 #endif
 // The menu gate (default ON in the player build): CVR::HeadsetType's answer to the headset-type expression's Bind (ELF 0x202ba74..0x202bac8,
-// ReVault 0x212ba74, 84 bytes) is one the Bind has no case for, so no menu script is told it runs on a Quest headset (R1_functions.md:90).
+// ReVault 0x212ba74, 84 bytes) is the PC build's Link kind (4), so the Bind sets the link flag and not the Quest flag and no menu script is told it runs on a Quest headset (R1_functions.md:90).
 #ifndef Q15T_GATE_LINK
 #define Q15T_GATE_LINK 0
 #endif
@@ -549,7 +549,7 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
   Report("CVR::HeadsetType (caller-range gates)",
          InstallHeadsetGate(ctx->base_addr, Q15T_SLOT_HEADSETTYPE,
                             Q15T_GATE_BOTS ? CallerRange{Q15T_BOTS_FN_LO, Q15T_BOTS_FN_HI} : CallerRange{0, 0}, Q15T_REAL_HEADSETTYPE,
-                            Q15T_GATE_LINK ? CallerRange{Q15T_LINK_FN_LO, Q15T_LINK_FN_HI} : CallerRange{0, 0}, kNoHeadsetFlags));
+                            Q15T_GATE_LINK ? CallerRange{Q15T_LINK_FN_LO, Q15T_LINK_FN_HI} : CallerRange{0, 0}, kLinkHeadset));
 #endif
   // Always 0 from here: a non-zero return makes the loader dlclose the plugin, which is fatal once any word is swapped. A module's
   // refusal is its ERROR line above, never this return value.

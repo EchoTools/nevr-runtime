@@ -69,7 +69,7 @@ int main() {
   const q15t::CallerRange link_range{reinterpret_cast<uintptr_t>(__start_gate_link) - base,
                                      reinterpret_cast<uintptr_t>(__stop_gate_link) - base};
   const auto r2 = q15t::InstallHeadsetGate(base, 0x28, range, reinterpret_cast<uintptr_t>(&HeadsetReal) - base, link_range,
-                                           q15t::kNoHeadsetFlags);
+                                           q15t::kLinkHeadset);
   CHECK(r1.status == q15t::SwapStatus::kOk, "party install: %s", q15t::StatusName(r1.status));
   CHECK(r2.status == q15t::SwapStatus::kOk, "headset install: %s", q15t::StatusName(r2.status));
 
@@ -80,9 +80,9 @@ int main() {
   CHECK(PartyCallerOut(party) == 3, "party: any other caller must get the real answer (3)");
   CHECK(HeadCallerIn(head) == q15t::kNotQuest, "headset: a call from the gated range must answer not-a-Quest");
   CHECK(HeadCallerOut(head) == 3, "headset: any other caller must get the real answer (3)");
-  // the second range (the headset-type expression's Bind) gets its own answer, one the Bind has no case for
-  CHECK(q15t::kNoHeadsetFlags > 4, "the answer must be above the Bind's last case (4)");
-  CHECK(HeadCallerLink(head) == q15t::kNoHeadsetFlags, "headset: a call from the link range must get the no-flags answer");
+  // the second range (the headset-type expression's Bind) gets its own answer: a real kind (4, link) that is not the Quest kind (3)
+  CHECK(q15t::kLinkHeadset >= 1 && q15t::kLinkHeadset <= 4 && q15t::kLinkHeadset != 3, "the answer must be a real, non-Quest kind (1..4, not 3)");
+  CHECK(HeadCallerLink(head) == q15t::kLinkHeadset, "headset: a call from the link range must get the link answer");
   CHECK(HeadCallerIn(head) == q15t::kNotQuest, "headset: the bots range keeps its own answer next to the link range");
   CHECK(HeadCallerOut(head) == 3, "headset: any other caller still gets the real answer next to the link range");
   // callers on both sides of the link range keep the real answer: the range has an upper edge as well as a lower one
@@ -107,10 +107,10 @@ int main() {
     mprotect(q, 4096, PROT_READ);
     const q15t::CallerRange link3{reinterpret_cast<uintptr_t>(__start_gate_link) - base3, reinterpret_cast<uintptr_t>(__stop_gate_link) - base3};
     const auto r3 = q15t::InstallHeadsetGate(base3, 0x28, q15t::CallerRange{0, 0}, reinterpret_cast<uintptr_t>(&HeadsetReal) - base3, link3,
-                                             q15t::kNoHeadsetFlags);
+                                             q15t::kLinkHeadset);
     CHECK(r3.status == q15t::SwapStatus::kOk, "link-only install: %s", q15t::StatusName(r3.status));
     const auto h3 = reinterpret_cast<HeadFn>(v[5]);
-    CHECK(HeadCallerLink(h3) == q15t::kNoHeadsetFlags, "link only: the link range must answer");
+    CHECK(HeadCallerLink(h3) == q15t::kLinkHeadset, "link only: the link range must answer");
     CHECK(HeadCallerIn(h3) == 3 && HeadCallerOut(h3) == 3, "link only: an empty other range must gate nothing (got %d / %d)", HeadCallerIn(h3), HeadCallerOut(h3));
   }
 

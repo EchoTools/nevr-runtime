@@ -4,7 +4,7 @@
 set(Q15T_DIR "${CMAKE_CURRENT_LIST_DIR}")
 
 option(Q15T_GATE_PERM "Gameplay: the party-permissions expression stops refusing combat to a Quest headset" OFF)
-option(Q15T_GATE_LINK "Menu gate: the headset-type expression is told no kind of headset, so the menu scripts stop locking combat cards to a Quest (a caller-range answer, no code write)" ON)
+option(Q15T_GATE_LINK "Menu gate: the headset-type expression is told a Link headset (the PC build's kind 4, not the Quest kind), so the menu scripts stop locking combat cards to a Quest (a caller-range answer, no code write)" ON)
 option(Q15T_GATE_BOTS "Gameplay: the bot-body chooser stops picking the arena bot for a Quest headset (needs a full-size global_mp level)" OFF)
 option(Q15T_T26 "T-26: a new profile starts with the gun on the right hand, once per user id (plugin behaviour)" ON)
 option(Q15T_HZ_MATCH90 "Hz arm: 90 Hz while a combat map is loaded, the game's own rate elsewhere (q15t hzmatch90)" OFF)

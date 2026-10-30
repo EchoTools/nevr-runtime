@@ -19,15 +19,18 @@ struct CallerRange {
   std::uintptr_t hi_vaddr;  // one past its last byte
 };
 
+inline constexpr std::int32_t kLinkHeadset = 4;  // the PC build's own kind for a Quest on Link: the Bind sets only its flag3, never the Quest flag (kind 3)
+
 // `real_vaddr`: ELF vaddr of the real function in the pinned build (the slot's symbol value).
 // PartyMemberHeadsetType(this, index): answers `kNotQuest` to a call from `range`.
 InstallResult InstallPartyHeadsetGate(std::uintptr_t base, std::uintptr_t slot_vaddr, CallerRange range, std::uintptr_t real_vaddr);
 // CVR::HeadsetType(): answers `kNotQuest` to a call from `range`, and `link_answer` to a call from `link_range`
 // (an empty range, lo == hi, gates nothing). The second range is the headset-type expression's Bind: it turns the
 // answer into four flags (0,1 -> rift; 2 -> rifts; 3 -> quest; 4 -> link; anything above 4 -> none), which the menu scripts read.
-// An answer above 4 leaves all four flags clear: no menu script sees a Quest headset, and none sees another kind either.
+// The link answer must be one of those kinds: an answer above 4 leaves all four flags clear, and a script that picks its target
+// by headset kind then gets none. `kLinkHeadset` sets only the link flag, so no menu script sees a Quest.
 InstallResult InstallHeadsetGate(std::uintptr_t base, std::uintptr_t slot_vaddr, CallerRange range, std::uintptr_t real_vaddr,
-                                 CallerRange link_range = {0, 0}, std::int32_t link_answer = 5);
+                                 CallerRange link_range = {0, 0}, std::int32_t link_answer = kLinkHeadset);
 
 // What the install configured (absolute addresses), for the wiring test: the production constants cannot be exercised by a call on the host.
 struct HeadsetGateRanges {
@@ -42,6 +45,5 @@ struct GateStats {
 GateStats GetGateStats();
 
 inline constexpr std::int32_t kNotQuest = 0;
-inline constexpr std::int32_t kNoHeadsetFlags = 5;  // the Bind's switch has no case above 4: every flag stays clear
 
 }  // namespace q15t
