@@ -701,8 +701,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def may_have_dispatched(rollback: "Rollback | None") -> None:
-    """Ctrl-C or a crash while `gh workflow run` was running: gh may have been accepted and left no run id behind."""
-    if rollback is not None and rollback.current == "dispatch" and rollback.dispatched is None:
+    """Ctrl-C or a crash while `gh workflow run` was running: gh may have been accepted and left no run id behind. A run id
+    that is known wins in the report, so it need not be tested here."""
+    if rollback is not None and rollback.current == "dispatch":
         rollback.dispatch_unknown = True
 
 
