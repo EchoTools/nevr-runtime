@@ -597,8 +597,8 @@ static int LogGameToServerFrame(const std::string& frame, const std::string& wsC
 // (#1413).
 static uint64_t RealLobbyClockMs() { return GetTickCount64(); }
 static std::mutex g_lobbyLimiterMutex;
-static nevr_lobby_frame::RecordLimiter g_lobbyLimiter;
-static nevr_lobby_frame::RequestTracker g_lobbyRequests;  // the last find or join the game sent (#1413)
+// The limiter per kind and the request tracker (#1413). The records' text is lobby_frame.h's, shared with the Quest router.
+static nevr_lobby_frame::ClientLobbyRecords g_lobbyRecords;
 // The lobby this client is in and the one it is joining, set from the same frames (#1413, compat/lobby_join_state.h).
 static nevr_lobby_join_state::LobbyJoinState g_lobbyJoin;
 static uint64_t (*g_lobbyClockMs)() = &RealLobbyClockMs;
@@ -610,10 +610,11 @@ void LobbyJoinSnapshot(nevr_lobby_join_state::Stamp* current, nevr_lobby_join_st
   g_lobbyJoin.Snapshot(current, joining);
 }
 
-// The party fields of a session record: the party the view names when the record is written (#1413).
-static std::string LobbyPartyFields(nevr_social_party::View (*partyView)()) {
+// The party of a session record: the party the view names when the record is written (#1413).
+static std::optional<nevr_lobby_frame::PartyContext> LobbyParty(nevr_social_party::View (*partyView)()) {
   const nevr_social_party::View view = partyView();
-  return nevr_lobby_frame::FormatPartyFields(view.partyId, view.members.size(), view.ownerId, view.selfId);
+  return nevr_lobby_frame::PartyContext{view.partyId, static_cast<uint64_t>(view.members.size()), view.ownerId,
+                                        view.selfId};
 }
 
 static void LogClientLobbyMessage(int connIdx, bool fromServer, uint64_t symbol, const uint8_t* payload, uint64_t len) {
@@ -628,13 +629,9 @@ static void LogClientLobbyMessage(int connIdx, bool fromServer, uint64_t symbol,
   nevr_social_party::View (*partyView)() = nullptr;
   {
     std::lock_guard<std::mutex> lock(g_lobbyLimiterMutex);
-    const uint64_t now = g_lobbyClockMs();
-    verdict = g_lobbyLimiter.Admit(*kind, now);
-    if (*kind == nevr_lobby_frame::Kind::Find || *kind == nevr_lobby_frame::Kind::Join) {
-      g_lobbyRequests.Sent(*kind, now);
-    } else {
-      request = g_lobbyRequests.Answer(now);
-    }
+    const nevr_lobby_frame::ClientLobbyRecords::Admission admission = g_lobbyRecords.Admit(*kind, g_lobbyClockMs());
+    verdict = admission.verdict;
+    request = admission.request;
     partyView = g_lobbyPartyView;
   }
   // The join state takes every decoded frame, not only the ones the limiter writes: a suppressed record still
@@ -657,19 +654,13 @@ static void LogClientLobbyMessage(int connIdx, bool fromServer, uint64_t symbol,
   }
   for (size_t i = 0; i < nevr_lobby_frame::kKindCount; ++i) {
     if (verdict.flushed[i] == 0) continue;
-    Log(EchoVR::LogLevel::Info,
-        "[NEVR.WS] lobby frame records suppressed kind=%s count=%llu window_ms=%llu limit=%u (these frames were "
-        "handled, only their records were not written)",
-        nevr_lobby_frame::KindToken(static_cast<nevr_lobby_frame::Kind>(i)),
-        static_cast<unsigned long long>(verdict.flushed[i]),
-        static_cast<unsigned long long>(nevr_lobby_frame::RecordLimiter::kWindowMs),
-        nevr_lobby_frame::RecordLimiter::kBurst);
+    Log(EchoVR::LogLevel::Info, "%s",
+        nevr_lobby_frame::FormatSuppressedNotice(static_cast<nevr_lobby_frame::Kind>(i), verdict.flushed[i]).c_str());
   }
   if (!verdict.log) return;
   nevr_lobby_frame::Decoded d;
   if (!nevr_lobby_frame::Decode(*kind, payload, static_cast<size_t>(len), &d)) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.WS] lobby %s could not be read conn=%d payload_bytes=%llu",
-        nevr_lobby_frame::KindName(*kind), connIdx, static_cast<unsigned long long>(len));
+    Log(EchoVR::LogLevel::Warning, "%s", nevr_lobby_frame::FormatUnreadable(*kind, connIdx, len).c_str());
     return;
   }
   switch (d.kind) {
@@ -694,15 +685,10 @@ static void LogClientLobbyMessage(int connIdx, bool fromServer, uint64_t symbol,
           nevr_lobby_frame::FormatAccounts(d.entrants).c_str());
       break;
     case nevr_lobby_frame::Kind::Success:
-      Log(EchoVR::LogLevel::Info, "[NEVR.WS] lobby session success conn=%d lobby=%s group=%s %s %s", connIdx,
-          nevr_lobby_frame::FormatGuid(d.lobby).c_str(), nevr_lobby_frame::FormatGuid(d.group).c_str(),
-          LobbyPartyFields(partyView).c_str(), nevr_lobby_frame::FormatRequestFields(request).c_str());
-      break;
     case nevr_lobby_frame::Kind::Failure:
-      Log(EchoVR::LogLevel::Info,
-          "[NEVR.WS] lobby session failure conn=%d code=%u reason=%s group=%s message_bytes=%u %s %s", connIdx, d.code,
-          nevr_lobby_frame::FailureReason(d.code), nevr_lobby_frame::FormatGuid(d.group).c_str(), d.messageBytes,
-          LobbyPartyFields(partyView).c_str(), nevr_lobby_frame::FormatRequestFields(request).c_str());
+      // The text is lobby_frame.h's FormatSessionRecord, the Quest router's too (#1429).
+      Log(EchoVR::LogLevel::Info, "%s",
+          nevr_lobby_frame::FormatSessionRecord(d, connIdx, LobbyParty(partyView), request).c_str());
       break;
   }
 }
@@ -2760,8 +2746,7 @@ void TestHook_ObserveSocialFrames(const char* direction, int connIdx, const std:
 
 void TestHook_ResetLobbyFrameLimiter() {
   std::lock_guard<std::mutex> lock(g_lobbyLimiterMutex);
-  g_lobbyLimiter.Reset();
-  g_lobbyRequests.Reset();
+  g_lobbyRecords.Reset();
 }
 
 void TestHook_SetLobbyFrameClock(uint64_t (*clockMs)()) {

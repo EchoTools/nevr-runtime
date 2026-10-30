@@ -310,6 +310,7 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 #include "runtime/compat/socket_role.h"
 #include "runtime/compat/hmd_serial.h"
 #include "runtime/compat/social_party.h"
+#include "runtime/tests/lobby_record_golden.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/hook/addresses.h"
 
@@ -4972,16 +4973,13 @@ constexpr uint64_t kSuccessSym = 0x6d4de3650ee3110fULL;  // SNSLobbySessionSucce
 constexpr uint64_t kFailureSym = 0x4ae8365ebc45f96cULL;  // SNSLobbySessionFailurev4
 constexpr uint64_t kOvrOrg = 4;
 
-void PutLe(std::string& out, uint64_t value, size_t bytes) {
-  for (size_t i = 0; i < bytes; ++i) out.push_back(static_cast<char>((value >> (8 * i)) & 0xff));
-}
-
-// A GUID as the wire stores it (Windows layout) for the text 44332211-6655-8877-99AA-BBCCDDEEFF<tail>.
-std::string Guid(uint8_t tail) {
-  const uint8_t bytes[16] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
-                             0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, tail};
-  return std::string(reinterpret_cast<const char*>(bytes), sizeof(bytes));
-}
+// The GUID text and the payload builders of the success and failure frames are the golden's
+// (lobby_record_golden.h): one set of bytes for both test suites, so the PC and the Quest records see the same input.
+using lobby_record_golden::FailurePayload;
+using lobby_record_golden::FailureWithMessage;
+using lobby_record_golden::Guid;
+using lobby_record_golden::PutLe;
+using lobby_record_golden::SuccessPayload;
 
 std::string Entrants(const std::vector<uint64_t>& accounts) {
   std::string out;
@@ -5026,40 +5024,6 @@ std::string JoinPayload(const std::vector<uint64_t>& accounts) {
   out.push_back('\0');
   out += Entrants(accounts);
   PutLe(out, 0xffff, 2);                            // team tail
-  return out;
-}
-
-std::string SuccessPayload() {
-  std::string out;
-  PutLe(out, kMode, 8);
-  out += Guid(0xc0);                                // lobby
-  out += Guid(0xb0);                                // group
-  out.append(64, '\0');                             // endpoint, flags, keys: not read
-  return out;
-}
-
-std::string FailurePayload(uint32_t code) {
-  std::string out;
-  PutLe(out, kMode, 8);
-  out += Guid(0xb0);                                // group
-  PutLe(out, code, 4);
-  PutLe(out, 0, 4);
-  out += "sentinel-remote-message";
-  out.resize(8 + 16 + 4 + 4 + 64 + 8, '\0');        // message(64) and expiry(8)
-  return out;
-}
-
-// A failure payload whose message field holds `message` at its start, cut to the field's 64 bytes, NUL-filled after it.
-std::string FailureWithMessage(uint32_t code, const std::string& message) {
-  std::string out;
-  PutLe(out, kMode, 8);
-  out += Guid(0xb0);                                // group
-  PutLe(out, code, 4);
-  PutLe(out, 0, 4);
-  std::string field = message.substr(0, 64);
-  field.resize(64, '\0');
-  out += field;                                     // message(64)
-  out.append(8, '\0');                              // expiry(8)
   return out;
 }
 
@@ -5112,6 +5076,34 @@ class ClientRun {
 };
 
 }  // namespace lobby_frame_test
+
+// The records of one scenario, byte for byte (#1429, Rule 16): a find, then a success and a failure that answer it. The
+// same bytes and the same expected text are in lobby_record_golden.h, which the Quest router's test also compares with.
+TEST(WsBridgeLobbyFrameLog, SessionRecordsMatchTheGoldenLines) {
+  using namespace lobby_frame_test;
+  namespace golden = lobby_record_golden;
+  ClientRun run;
+  g_fakePartyView = PartyView(golden::kPartyId, golden::kPartyMembers, golden::kPartyOwner, golden::kPartySelf);
+  g_fakeNowMs = golden::kFindAt;
+  TestHook_ObserveSocialFrames("game->server", golden::kConn,
+                               BuildMarkedMessage(kFindSym, FindPayload({1001}, Guid(0xd0))));
+  g_fakeNowMs = golden::kSuccessAt;
+  TestHook_ObserveSocialFrames("server->game", golden::kConn, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  g_fakeNowMs = golden::kFailureAt;
+  TestHook_ObserveSocialFrames("server->game", golden::kConn, BuildMarkedMessage(kFailureSym, FailurePayload(8)));
+  EXPECT_EQ(LogLinesContaining("lobby session success"), std::vector<std::string>{golden::kSuccessAfterFind});
+  EXPECT_EQ(LogLinesContaining("lobby session failure"), std::vector<std::string>{golden::kFailureAfterSuccess});
+}
+
+// A success with no find sent before it and no party: the request fields and the party fields both read none.
+TEST(WsBridgeLobbyFrameLog, ASessionRecordWithNoRequestAndNoPartyNamesNone) {
+  using namespace lobby_frame_test;
+  namespace golden = lobby_record_golden;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("server->game", golden::kConn, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_EQ(LogLinesContaining("lobby session success"),
+            std::vector<std::string>{golden::kSuccessNoRequestNoParty});
+}
 
 // The bridge cannot bound how often the game sends a join (its party-follow loop runs from the game's own
 // update), so a kind writes a burst of records per window and counts the rest.
