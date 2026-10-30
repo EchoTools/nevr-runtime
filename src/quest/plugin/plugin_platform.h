@@ -24,6 +24,13 @@ std::optional<nevr_quest::LogLevel> SinkLevel(std::uint32_t level, bool emitDebu
 using Libr15PatchSource = Libr15PatchState (*)();
 Libr15PatchSource SetLibr15PatchSource(Libr15PatchSource source);
 
+// Where the sentinel's platform reads the game's main level from (#1106). The sentinel sets it to a function that reads the
+// game object through the frame hook's netgame and names the symbol (src/quest/sentinel/main_level.cpp). Same rule as the
+// patch source above: a pointer, so this library does not link the frame dispatcher or the name table. Never set: the
+// level is none. Returns the previous source.
+using MainLevelSource = MainLevel (*)();
+MainLevelSource SetMainLevelSource(MainLevelSource source);
+
 // The result of reading one file of the library directory: read; not there (the normal case for an optional file); or there and
 // not usable (a link, a directory, too large, a read error), with the reason as a token.
 enum class ReadOutcome { kRead, kAbsent, kUnreadable };
@@ -34,6 +41,8 @@ class SentinelPlatform final : public Platform {
   // `emitDebug`: whether a plugin's DEBUG lines are logged (a development build); they are dropped otherwise.
   SentinelPlatform(std::string libraryDir, bool emitDebug);
 
+  // The game's main level from the source the sentinel set (SetMainLevelSource); none when no source is set.
+  MainLevel CurrentMainLevel() override;
   bool ReadFile(const std::string& file, std::vector<std::uint8_t>* bytes) override;
   // ReadFile with the difference between "not there" and "not usable". `*why` is a reason token for kUnreadable, "" otherwise.
   ReadOutcome ReadFileOutcome(const std::string& file, std::vector<std::uint8_t>* bytes, const char** why);

@@ -21,11 +21,21 @@ namespace {
 constexpr off_t kMaxPluginBytes = 64 * 1024 * 1024;
 
 std::atomic<Libr15PatchSource> g_patchSource{nullptr};
+std::atomic<MainLevelSource> g_mainLevelSource{nullptr};
 
 }  // namespace
 
 Libr15PatchSource SetLibr15PatchSource(Libr15PatchSource source) {
   return g_patchSource.exchange(source, std::memory_order_acq_rel);
+}
+
+MainLevelSource SetMainLevelSource(MainLevelSource source) {
+  return g_mainLevelSource.exchange(source, std::memory_order_acq_rel);
+}
+
+MainLevel SentinelPlatform::CurrentMainLevel() {
+  const MainLevelSource source = g_mainLevelSource.load(std::memory_order_acquire);
+  return source != nullptr ? source() : MainLevel{};
 }
 
 std::string DirectoryOf(const char* path) {
