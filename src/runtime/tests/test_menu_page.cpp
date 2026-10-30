@@ -152,6 +152,20 @@ Status Insert(const std::vector<uint8_t>& in, uint64_t page, const std::vector<C
                                      out);
 }
 
+// An element that is told apart from every other by its text, so a moved element is recognised by its bytes.
+Element Named(uint64_t owner, const std::string& text) {
+  Element el;
+  el.owner = owner;
+  el.slot80 = {{0x55, owner}};
+  el.slot416 = {{0x77, text}};
+  return el;
+}
+
+Status Reorder(const std::vector<uint8_t>& in, uint64_t page, const std::vector<uint64_t>& order,
+               std::vector<uint8_t>* out) {
+  return nevr_menu_page::ReorderElements(in.data(), in.size(), page, order.data(), order.size(), out);
+}
+
 }  // namespace
 
 TEST(MenuPage, DecodesAPageResourceWithoutAnyLeftoverByte) {
@@ -174,6 +188,65 @@ TEST(MenuPage, InsertEqualsAPageBuiltNativelyWithTheCards) {
     EXPECT_EQ(out, WithCards(StockPages(), page, cards)) << "page " << page;
     EXPECT_GT(out.size(), stock.size());
   }
+}
+
+TEST(MenuPage, ReorderUsesOnlyThePositionsTheOwnersAlreadyHold) {
+  Page page;
+  page.elements = {Named(0xA1, "a1"), Named(0xB1, "b1"), Named(0xA2, "a2"), Named(0xB2, "b2"), Named(0xA3, "a3")};
+  page.slot88 = {{1, 2}};
+  const std::vector<uint8_t> in = Build({page});
+  std::vector<uint8_t> out;
+  ASSERT_EQ(Reorder(in, 0, {0xB2, 0xB1}, &out), Status::Ok);
+  // B1 held position 1 and B2 position 3: they trade, and A1, A2, A3 stay where they were. Each element moved with
+  // its own rows.
+  page.elements = {Named(0xA1, "a1"), Named(0xB2, "b2"), Named(0xA2, "a2"), Named(0xB1, "b1"), Named(0xA3, "a3")};
+  EXPECT_EQ(out, Build({page}));
+}
+
+TEST(MenuPage, ReorderOfThreeOwnersFollowsTheGivenOrder) {
+  Page page;
+  page.elements = {Named(1, "one"), Named(2, "two"), Named(3, "three"), Named(4, "four")};
+  const std::vector<uint8_t> in = Build({page});
+  std::vector<uint8_t> out;
+  ASSERT_EQ(Reorder(in, 0, {4, 2, 1}, &out), Status::Ok);
+  page.elements = {Named(4, "four"), Named(2, "two"), Named(3, "three"), Named(1, "one")};
+  EXPECT_EQ(out, Build({page}));
+}
+
+TEST(MenuPage, ReorderLeavesOtherPagesAndTheTailAlone) {
+  Page p0;
+  p0.elements = {Named(0x10, "x")};
+  p0.slot144 = {{9, 9}};
+  Page p1;
+  p1.elements = {Named(1, "one"), Named(2, "two")};
+  p1.slot88 = {{3, 4}};
+  const std::vector<uint8_t> in = Build({p0, p1});
+  std::vector<uint8_t> out;
+  ASSERT_EQ(Reorder(in, 1, {2, 1}, &out), Status::Ok);
+  p1.elements = {Named(2, "two"), Named(1, "one")};
+  EXPECT_EQ(out, Build({p0, p1}));
+}
+
+TEST(MenuPage, ReorderOfFewerThanTwoPresentOwnersIsACopy) {
+  Page page;
+  page.elements = {Named(1, "one"), Named(2, "two")};
+  const std::vector<uint8_t> in = Build({page});
+  std::vector<uint8_t> out;
+  ASSERT_EQ(Reorder(in, 0, {2, 0x99}, &out), Status::Ok);
+  EXPECT_EQ(out, in);
+  ASSERT_EQ(Reorder(in, 0, {}, &out), Status::Ok);
+  EXPECT_EQ(out, in);
+}
+
+TEST(MenuPage, ReorderRefusesAMissingPageAndAnOwnerThatOccursTwice) {
+  Page page;
+  page.elements = {Named(1, "one"), Named(2, "two"), Named(1, "again")};
+  const std::vector<uint8_t> in = Build({page});
+  std::vector<uint8_t> out;
+  EXPECT_EQ(Reorder(in, 4, {1, 2}, &out), Status::PageOutOfRange);
+  EXPECT_EQ(Reorder(in, 0, {2, 1}, &out), Status::DuplicateOwner);
+  const std::vector<uint8_t> broken(in.begin(), in.end() - 1);
+  EXPECT_EQ(Reorder(broken, 0, {2, 1}, &out), Status::Truncated);
 }
 
 TEST(MenuPage, TheCardsAreTheLastElementsOfTheirPageInOrder) {
@@ -328,6 +401,41 @@ TEST(MenuCards, ThePinDecidesWhetherTheCardsGoIn) {
   EXPECT_EQ(refused.verdict, nevr_menu_cards::Verdict::Refused);
   EXPECT_EQ(refused.status, Status::PageOutOfRange);
   EXPECT_TRUE(refused.bytes.empty());
+}
+
+// Play, Join, Create, Tutorial (#1679). The stock page holds TUTORIALS before PLAY and the cards go in after both; the
+// four end up in ButtonOrder() in the positions those four hold, so every other element stays where it was.
+TEST(MenuCards, TheFourButtonsComeOutInTheOrderPlayJoinCreateTutorial) {
+  EXPECT_EQ(nevr_menu_cards::ButtonOrder(),
+            (std::vector<uint64_t>{nevr_menu_cards::kPlayOwner, nevr_menu_cards::kJoinOwner, nevr_menu_cards::kCreateOwner,
+                                   nevr_menu_cards::kTutorialOwner}));
+  EXPECT_EQ(nevr_menu_cards::kPlayOwner, 0xa3d3ef315cb999dbULL);
+  EXPECT_EQ(nevr_menu_cards::kTutorialOwner, 0xd763e348e835f249ULL);
+
+  std::vector<Page> pages(25);
+  pages[24].elements = {Plain(0xA1), Named(nevr_menu_cards::kTutorialOwner, "TUTORIALS"), Plain(0xA2),
+                        Named(nevr_menu_cards::kPlayOwner, "PLAY"), Plain(0xA3)};
+  const std::vector<uint8_t> menu = Build(pages);
+  const nevr_menu_cards::Result r = nevr_menu_cards::Patch(menu.data(), menu.size(), "pin", "pin", TwoCards());
+  ASSERT_EQ(r.verdict, nevr_menu_cards::Verdict::Patched);
+
+  // Positions held by the four after the insert: 1 (tutorial), 3 (play), 5 (create), 6 (join).
+  std::vector<Page> want(25);
+  want[24].elements = {Plain(0xA1), Named(nevr_menu_cards::kPlayOwner, "PLAY"), Plain(0xA2),
+                       NativeCard(TwoCards()[1]), Plain(0xA3), NativeCard(TwoCards()[0]),
+                       Named(nevr_menu_cards::kTutorialOwner, "TUTORIALS")};
+  EXPECT_EQ(r.bytes, Build(want));
+  EXPECT_EQ(r.bytes.size(), WithCards(pages, 24, TwoCards()).size());
+
+  nevr_menu_page::Decoded d;
+  ASSERT_EQ(nevr_menu_page::Decode(r.bytes.data(), r.bytes.size(), &d), Status::Ok);
+  std::vector<uint64_t> four;
+  for (uint64_t owner : d.owners) {
+    for (uint64_t wanted : nevr_menu_cards::ButtonOrder()) {
+      if (owner == wanted) four.push_back(owner);
+    }
+  }
+  EXPECT_EQ(four, nevr_menu_cards::ButtonOrder());
 }
 
 TEST(MenuCards, TheStockPinIsAWellFormedDigest) {

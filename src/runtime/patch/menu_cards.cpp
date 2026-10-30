@@ -67,9 +67,9 @@ bool Transform(const void* original, uint64_t size, const void** out, uint64_t* 
   const std::string resultSha = nevr_asset_cache::Sha256Hex(copy, g_served.size);
   Log(EchoVR::LogLevel::Info,
       "[NEVR.MENU] main-menu cards added page=%llu cards=%zu orig_bytes=%llu new_bytes=%zu result_sha256=%s "
-      "matches_modkit_reference=%s",
+      "button_order=play,join,create,tutorial",
       static_cast<unsigned long long>(kMainMenuPage), Cards().size(), static_cast<unsigned long long>(size),
-      g_served.size, resultSha.c_str(), resultSha == kReferenceResultSha256 ? "true" : "false");
+      g_served.size, resultSha.c_str());
   *out = copy;
   *outSize = g_served.size;
   return true;
