@@ -399,11 +399,11 @@ fault is in the build: a fault in the manifest, a service or a player's own file
 "The Quest half of the train", works) on the machine that runs that timer, because it stops a user unit there. The account
 `GH_BIN` runs as (default `gh-spritz`, the metis-sprock account) must be able to dispatch workflows on the release-signer
 repository and to set repository variables on `EchoTools/nevr-runtime`; the metis-sprock account can, and Spritz and Teth act as
-it. sprockee acts as his own owner account. The manifest host's public base is the one in
-`tools/systemd/nevr-quest-release.service`.
+it. sprockee acts as his own owner account. The manifest host's public base is the `RELEASE_PUBLIC_BASE` in
+`tools/systemd/nevr-quest-release.service`; the host is named in `docs/reference/verifying-a-release.md`, "Quest APKs".
 
 ```sh
-export RELEASE_PUBLIC_BASE=https://evr.echo.taxi                   # the manifest host's public base
+export RELEASE_PUBLIC_BASE=<the base in tools/systemd/nevr-quest-release.service>   # the manifest host's public base
 python3 tools/rollback_beta.py vX.Y.Z --dry-run                     # the plan, what a live run would meet, a dry-run publish
 python3 tools/rollback_beta.py vX.Y.Z --live --yes                  # pause the train, publish, verify
 gh-spritz variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime && systemctl --user start nevr-quest-release.timer   # resume
