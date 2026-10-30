@@ -60,6 +60,16 @@ enum class AttachStatus : std::uint8_t {
   kBuildIdMismatch,    // any other build ID (`build_id_mismatch`); nothing installed
   kRowFailed,          // a row failed check (a), (b), (c) or the word check; the process-end call was made
   kTrampolineFailed,   // a trampoline could not be built (`libr15_patch_trampoline_failed`); the process-end call was made
+  kPinnedServiceOnly,  // the stock build ID and a file sha256 in kLibR15ServiceOnlySha256 (#1737): no row is checked or
+                       // filled, Verified() stays false, and only the service-side GOT hooks may install
+};
+
+// The libr15 files the runtime runs in service-only mode (#1737): a reference build's own byte-patched libr15, which keeps
+// the stock build ID. Only the file with exactly this sha256 is accepted; every other stock-ID file is libr15_not_patched.
+// In this mode the runtime keeps sign-in, matchmaking and the server redirect (the GotTarget::ServiceSide hooks) and
+// installs none of its libr15 patches: no row, no credits slot, no other libr15 GOT hook.
+inline constexpr const char* kLibR15ServiceOnlySha256[] = {
+    "6e9db28d612019b0e5b2e2ab515e1f9bd15d1a8f8d345060160e3172864540e1",  // #1737
 };
 
 // Stable tokens for log lines and tests.
@@ -73,11 +83,14 @@ inline constexpr const char* kReasonRowSlot = "libr15_patch_row_slot";
 inline constexpr const char* kReasonRowSegment = "libr15_patch_row_segment";
 inline constexpr const char* kReasonRowWords = "libr15_patch_row_words";
 inline constexpr const char* kReasonTrampolineFailed = "libr15_patch_trampoline_failed";
+inline constexpr const char* kReasonPinnedServiceOnly = "libr15_pinned_service_only";
 
 // The calls Attach makes, replaceable by a test (nullptr in AttachOptions: the real one).
 using ProtectFn = int (*)(void* addr, std::size_t length, int prot);  // mprotect's signature: a trampoline page only
 using MapFn = void* (*)(void* addr, std::size_t length, int prot, int flags, int fd, off_t offset);  // mmap's
 using EndFn = void (*)(int exitCode, const char* reason) noexcept;  // process_end::EndWithExitCode's
+// The sha256 of the file at `path` as 64 lowercase hex characters into out[65]; false when it cannot be read.
+using FileDigestFn = bool (*)(const char* path, char* out) noexcept;
 
 struct AttachOptions {
   const char* module = nullptr;                  // nullptr: pinned::kLibR15 ("libr15.so")
@@ -87,6 +100,7 @@ struct AttachOptions {
   ProtectFn protect = nullptr;
   MapFn map = nullptr;
   EndFn end = nullptr;
+  FileDigestFn digest = nullptr;  // nullptr: the file read in 64 KiB chunks through data::Sha256
 };
 
 struct AttachResult {

@@ -58,6 +58,7 @@ std::size_t g_ledgerCount = 0;
 std::atomic<StoreObserver> g_storeObserver{nullptr};
 std::atomic<ProtectFn> g_protect{nullptr};
 std::atomic<BuildIdAliasFn> g_buildIdAlias{nullptr};
+std::atomic<const char*> g_serviceSideBuildId{nullptr};
 
 int Protect(void* addr, std::size_t length, int prot) {
   const ProtectFn fn = g_protect.load(std::memory_order_acquire);
@@ -680,8 +681,13 @@ void LogRegistryFull(const GotTarget& t) {
 // A target's build ID is accepted when it equals the module's live note, or the alias the registered function gives
 // that note (SetBuildIdAlias). The alias is asked at every install, with the note read for it, so what it maps can
 // change only with what it reads.
-bool BuildIdAccepted(const char* liveNote, const char* targetBuildId) {
+bool BuildIdAccepted(const char* liveNote, const GotTarget& target) {
+  const char* const targetBuildId = target.buildId;
   if (std::strcmp(liveNote, targetBuildId) == 0) return true;
+  if (target.serviceSide) {
+    const char* const service = g_serviceSideBuildId.load(std::memory_order_acquire);
+    if (service != nullptr && std::strcmp(liveNote, service) == 0) return true;
+  }
   const BuildIdAliasFn alias = g_buildIdAlias.load(std::memory_order_acquire);
   if (alias == nullptr) return false;
   const char* const mapped = alias(liveNote);
@@ -693,7 +699,7 @@ GotStatus Prepare(const GotTarget& target, void* hookFn, ImageLookup lookup, Pre
   if (!lookup(target.module, &out->image)) return GotStatus::kModuleNotLoaded;
   if (target.buildId != nullptr) {
     if (!ReadBuildId(out->image, out->actualBuildId, sizeof(out->actualBuildId)) ||
-        !BuildIdAccepted(out->actualBuildId, target.buildId)) {
+        !BuildIdAccepted(out->actualBuildId, target)) {
       return GotStatus::kBuildIdMismatch;
     }
   }
@@ -714,6 +720,10 @@ GotStatus Prepare(const GotTarget& target, void* hookFn, ImageLookup lookup, Pre
 }
 
 }  // namespace
+
+void SetServiceSideBuildId(const char* liveNote) noexcept {
+  g_serviceSideBuildId.store(liveNote, std::memory_order_release);
+}
 
 BuildIdAliasFn SetBuildIdAlias(BuildIdAliasFn fn) {
   return g_buildIdAlias.exchange(fn, std::memory_order_acq_rel);
