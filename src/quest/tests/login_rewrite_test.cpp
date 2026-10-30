@@ -863,6 +863,36 @@ void TestDeclineRecordSaysWhetherTheOculusIdWasRestored() {
   QCHECK(g_log[0].find("5551234") == std::string::npos && g_log[0].find("987654321012345") == std::string::npos);
 }
 
+// The quest_login cap (#1549): a record with ten details and a tail is over kMaxLoginFields, so it keeps its first
+// nine fields and the overflow record names the event and the count (12). A record that fits keeps every field.
+void TestLoginRecordCapNamesItsOverflow() {
+  static const char* const kNames[10] = {"k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9"};
+  nevr_quest_login::LogKv details[10];
+  for (int i = 0; i < 10; ++i) details[i] = nevr_quest_login::LogKv{kNames[i], nullptr, i};
+  const nevr_quest_login::LogKv restored{"restored", nullptr, 1};
+
+  g_log.clear();
+  nevr_quest_login::EmitLoginRecord(&CaptureLog, nevr_quest_login::Level::Error, nevr_quest_login::Outcome::Rewritten,
+                                    details, 10, &restored, 1);
+  QCHECK(g_log.size() == 2U);  // the overflow record, then the call's own record
+  if (g_log.size() == 2U) {
+    QCHECK(g_log[0].find("quest_login_log_overflow") == 0);
+    QCHECK(g_log[0].find("overflowed_event=quest_login") != std::string::npos);
+    QCHECK(g_log[0].find("fields=12") != std::string::npos);
+    QCHECK(g_log[1].find("quest_login outcome=") == 0);
+    QCHECK(g_log[1].find(" k8=8") != std::string::npos && g_log[1].find(" k9=") == std::string::npos);
+    QCHECK(g_log[1].find("restored=") == std::string::npos);
+  }
+
+  g_log.clear();
+  nevr_quest_login::EmitLoginRecord(&CaptureLog, nevr_quest_login::Level::Error, nevr_quest_login::Outcome::Rewritten,
+                                    details, 8, &restored, 1);
+  QCHECK(g_log.size() == 1U);  // ten fields in all: no overflow record
+  QCHECK(g_log.size() == 1U && g_log[0].find("quest_login_log_overflow") == std::string::npos);
+  QCHECK(g_log.size() == 1U && g_log[0].find(" k7=7") != std::string::npos);
+  QCHECK(g_log.size() == 1U && g_log[0].find("restored=1") != std::string::npos);
+}
+
 // The compose phase is the only part that runs exceptions-enabled code; an exception from the
 // identity source becomes an outcome, with nothing changed and the account id at the Oculus value.
 class ThrowingSource final : public nevr_quest_login::IdentitySource {
@@ -1481,6 +1511,7 @@ int main() {
   TestRestoreLeavesAGameWriteAlone();
   TestNoRealIdToRememberRefusesTheRewrite();
   TestDeclineRecordSaysWhetherTheOculusIdWasRestored();
+  TestLoginRecordCapNamesItsOverflow();
   TestInvalidUtf8NameDoesNotThrow();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "login_rewrite_test: %d check(s) failed\n", quest_test::Failures());

@@ -143,18 +143,6 @@ bool WriteAndVerify(const Field& field, JsonAccess& json) {
   return false;
 }
 
-// One structured record: event "quest_login", then `outcome`, then the detail fields.
-void Emit(LogFn log, Level level, Outcome outcome, const LogKv* details, std::size_t n) {
-  if (log == nullptr) return;
-  LogKv fields[10];
-  std::size_t count = 0;
-  fields[count++] = LogKv{"outcome", OutcomeName(outcome), 0};
-  for (std::size_t i = 0; i < n; ++i) {
-    if (count < sizeof(fields) / sizeof(fields[0])) fields[count++] = details[i];
-  }
-  log(level, "quest_login", fields, count);
-}
-
 LogKv Text(const char* key, const char* value) { return LogKv{key, value, 0}; }
 LogKv Num(const char* key, long long value) { return LogKv{key, nullptr, value}; }
 
@@ -163,11 +151,8 @@ LogKv Num(const char* key, long long value) { return LogKv{key, nullptr, value};
 // was put back. The JSON needs no undoing here; ApplyFieldsAtomically restores its own.
 Outcome Decline(UserAccess& user, LogFn log, Outcome outcome, const LogKv* details, std::size_t n) {
   const bool restored = user.RestoreAccountId();
-  LogKv fields[9];
-  std::size_t count = 0;
-  for (std::size_t i = 0; i < n && count < sizeof(fields) / sizeof(fields[0]) - 1; ++i) fields[count++] = details[i];
-  fields[count++] = Num("restored", restored ? 1 : 0);
-  Emit(log, Level::Error, outcome, fields, count);
+  const LogKv restored_field = Num("restored", restored ? 1 : 0);
+  EmitLoginRecord(log, Level::Error, outcome, details, n, &restored_field, 1);
   return outcome;
 }
 
@@ -197,6 +182,25 @@ Outcome DeclinePlan(UserAccess& user, LogFn log, const Plan& plan) {
 }
 
 }  // namespace
+
+void EmitLoginRecord(LogFn log, Level level, Outcome outcome, const LogKv* details, std::size_t n,
+                     const LogKv* tail, std::size_t m) {
+  if (log == nullptr) return;
+  const std::size_t total = 1 + n + m;  // the outcome, then the details, then the tail
+  LogKv fields[kMaxLoginFields];
+  std::size_t count = 0;
+  fields[count++] = LogKv{"outcome", OutcomeName(outcome), 0};
+  for (std::size_t i = 0; i < n + m && count < kMaxLoginFields; ++i) {
+    fields[count++] = i < n ? details[i] : tail[i - n];
+  }
+  if (total > kMaxLoginFields) {
+    // The record keeps its first fields; say so instead of dropping the rest silently (#1549).
+    const LogKv overflow[] = {LogKv{"overflowed_event", "quest_login", 0},
+                              LogKv{"fields", nullptr, static_cast<long long>(total)}};
+    log(Level::Error, "quest_login_log_overflow", overflow, sizeof(overflow) / sizeof(overflow[0]));
+  }
+  log(level, "quest_login", fields, count);
+}
 
 GameValues ReadGameValues(const JsonAccess& json) {
   GameValues values;
@@ -286,7 +290,7 @@ Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,
                      Num("skipped", static_cast<long long>(plan.skipped)),
                      Num("kept_client_class", static_cast<long long>(plan.kept_client_class)),
                      Num("kept_measured", static_cast<long long>(plan.kept_measured))};
-  Emit(log, Level::Info, Outcome::Rewritten, d, sizeof(d) / sizeof(d[0]));
+  EmitLoginRecord(log, Level::Info, Outcome::Rewritten, d, sizeof(d) / sizeof(d[0]));
   return Outcome::Rewritten;
 }
 

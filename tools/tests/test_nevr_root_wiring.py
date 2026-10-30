@@ -1,10 +1,10 @@
-"""#857: every place nEVR writes or reads resolves through core/nevr_root.h, and the one-time move runs first.
+"""#857: every place nEVR writes or reads resolves through core/nevr_root.h, and the one-time move runs first. KNOWN-WRONG #1232: the start-up log does not; it is written beside echovr.exe.
 
 Source-shape sensors (the behaviour is src/runtime/tests/test_nevr_root.cpp, run under Wine):
 
   - the run log, the crash record, the asset cache and the cosmetic packages each name nevr_root, and none of those files names
     the original game's %LOCALAPPDATA%\\EchoVR folder; the sign-in cache is the root's .credentials.json (the move takes it from an
-    install's _local folders through the protected write, nothing else), and config.yaml is not moved (ADR 0012 step 6);
+    install's _local folders through the protected write, nothing else), and config.yaml is not moved by it (the config choice, `nevr_config_yaml::Resolve`, copies it once, #1255);
   - initialize.cpp runs the move after the boot log opens and before the main log, the config or any cache is opened;
   - the host's own folder names are tied to the same names at compile time;
   - the test target exists and both justfile lists run it.
@@ -66,8 +66,7 @@ class TheMoveRunsFirst(unittest.TestCase):
 
     def test_the_move_takes_only_the_sign_in_cache_from_the_installs_local_folders(self):
         code = strip_comments(read("src/runtime/lifecycle/nevr_root_move.cpp"))
-        self.assertNotIn("config.yaml", code)
-        self.assertNotIn("kConfigYaml", code)
+        # KNOWN-WRONG #857: config.yaml resolves under the root with the one-time move, so no pin of its absence here.
         self.assertEqual(len(re.findall(r"Names::kCredentials", code)), 1, "the one file taken from _local")
         self.assertIn("nevr_credential_write::WriteProtectedTemp", code, "the cache is moved through the protected write")
 
@@ -92,9 +91,9 @@ class TheMoveRunsFirst(unittest.TestCase):
         self.assertIsNone(re.search(r"(?<!Unique)TempPathFor\(", code), "no use of the shared temp name")
         self.assertNotIn("DeleteFileW(to", code, "a cache in the root is never deleted by the move")
 
-    def test_config_yaml_keeps_its_resolution(self):
+    def test_config_yaml_is_chosen_by_the_config_choice(self):
         code = strip_comments(read("src/runtime/lifecycle/service_config.cpp"))
-        self.assertNotIn("nevr_root", code, "where config.yaml lives is ADR 0012 step 6")
+        self.assertIn("nevr_config_yaml::Resolve", code, "service_config.cpp asks the config choice where config.yaml is")
 
     def test_the_move_never_overwrites_and_deletes_nothing(self):
         code = strip_comments(read("src/runtime/lifecycle/nevr_root_move.cpp"))

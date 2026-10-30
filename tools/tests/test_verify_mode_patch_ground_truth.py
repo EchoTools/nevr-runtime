@@ -14,7 +14,10 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "src/runtime/patch/mode_patches.cpp"
 ADDRESSES = ROOT / "src/runtime/hook/addresses.h"
 GROUND_TRUTH = ROOT / "tests/system/mode_patches_test.go"
-LAMBDA = "[](void* dest, const void* src, size_t n) { return ProcessMemcpy(dest, src, n); }"
+LAMBDA = """[](void* dest, const void* src, size_t n) {
+        DWORD error = 0;
+        return g_spectatorWriteErrors.Note(ProcessMemcpy(dest, src, n, &error), error);
+      }"""
 SPECTATOR_RVA = 0x116F3D
 
 
@@ -60,6 +63,8 @@ class VerifyModePatchGroundTruth(unittest.TestCase):
             "[](void* dest, const void* src, size_t n) { return ProcessMemcpy(dest, src, 0); }",
             "[](void* dest, const void* src, size_t n) { return ProcessMemcpy(dest, dest, n); }",
             "[](void* dest, const void* src, size_t n) { return ProcessMemcpy(src, dest, n); }",
+            # The error must be noted, not dropped: a writer that discards it is the defect this pins.
+            "[](void* dest, const void* src, size_t n) { DWORD error = 0; return ProcessMemcpy(dest, src, n, &error); }",
         ):
             with self.subTest(lambda_body=wrong):
                 source = SOURCE.read_text().replace(LAMBDA, wrong)

@@ -137,7 +137,10 @@ The `plugins:` list in config.yaml is read with the shared parser's keys (`name`
   config-only entry whose file is a packaged file's (the first entry disabled it, or the file is spelled in another case)
   carries that file's manifest hash, so config changes how a packaged plugin runs and never which bytes run; a second
   enabled entry for the file is refused as `duplicate_file`.
-- A config file that is absent, or rejected as a whole, leaves every packaged plugin on with its manifest values.
+- A config file that is absent, or rejected as a whole, leaves every packaged plugin on with its manifest values. The
+  loss is said on the line: when the file was rejected, every `plugin_load` record of that launch carries
+  `config_rejected=1`, and the file's own Error line names the rejection. The rule is load-and-say-so, not hold: holding
+  every packaged plugin until the file is readable would disable all of them for one bad key.
 
 The Quest differences from the PC list are unchanged:
 
@@ -340,6 +343,11 @@ mapped and then fails (`no_plugin_info`, `init_failed`, an exception) is `dlclos
   because a plugin's addresses are only valid for the build it names.
 - A mismatch is refused before init, with one line: `plugin_load outcome=refused reason=build_id_unsupported`, the game
   build ID, and the plugin's list. The game still starts (client rule, R2).
+- A plugin whose list names the running build is refused with reason `libr15_not_verified` unless the load saw our patched
+  libr15: the file `Attach` verified, whose live note still equals the ID verification covered (ADR 0021 section 12). A
+  matching note on the stock file, or on any libr15 nothing verified, is not enough, because the plugin's addresses are
+  properties of the patched file's stock identity. The check runs after the build-ID verdict, so the earlier reasons keep
+  their meaning, and it applies in the early and the normal pass alike.
 - The note is additive and Quest-only (the PC loader does not read it), so it needs no bump (`plugin_interface.h:183`).
 
 **Rules that hold regardless.** No address is used without a pin: a `GotTarget` with a null build ID is refused in the host
@@ -406,7 +414,8 @@ Shaped by AGENTS.md (logging is part of the work) and `docs/standards/logging.md
   `sha256` of the bytes the loader read, `plugin_build_id`, `game_build_id`, `phase` (`early` or `normal`), `outcome`
   (`planned`, `loaded`, `refused`, `disabled`, `not_started`, `failed`), and `reason` as a stable token. A plan entry
   with no record is a defect (P9). Two fields carry the packaging: `source` (`packaged`, from the manifest, or `config`)
-  and `overridden` (`1` when a config entry named a packaged file). `expected_sha256` is the manifest's hash for the file
+  and `overridden` (`1` when a config entry named a packaged file). A separate field, `config_rejected` (`1` on every record of
+  a launch whose config.yaml was rejected as a whole, section 2), says the operator's file did not load. `expected_sha256` is the manifest's hash for the file
   (empty when the file is not packaged), beside `sha256`. The reason `manifest_hash_mismatch` (outcome `refused`) is a
   packaged file whose bytes are not the manifest's hash.
 - **Manifest record.** One `plugin_manifest` line per launch: `status` (`read`, `absent`, `unreadable` or `invalid`),

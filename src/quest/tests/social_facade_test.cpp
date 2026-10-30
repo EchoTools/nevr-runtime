@@ -209,10 +209,11 @@ std::uint64_t Jitter(std::size_t i) {
 
 constexpr std::uint64_t kSelf = 1001;
 
-// A party of one led by the local user.
+// A party of one led by the local user. The create is made by the model, as a player's invite makes it;
+// its request is not sent, because the tests that use this helper do not count creates.
 void CreateParty(World& w, std::uint64_t partyId) {
   w.party.SetSelf(kSelf, "alice");
-  Update(w, 1);  // the game asks for a party
+  w.party.CreateParty();
   FeedParty(w, "PartyCreateSuccess", partyId, kSelf);
   Update(w, 0);
 }
@@ -402,11 +403,12 @@ void TestPartyCreateAndSlots() {
   Init(w, callbacks);
   w.party.SetSelf(kSelf, "alice");
   void* obj = w.Obj();
-  Update(w, 1);  // flags bit 0: the game wants a party
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kCreateRequest);
+  Update(w, 1);  // flags bit 0 alone: the game wants a party, and no create is sent (#1502)
+  QCHECK(g_sent.empty());
+  w.party.CreateParty();  // the player's create, made by the model; its request is not under test here
   g_now += 1;
-  Update(w, 1);  // a create is in flight: no second request, whatever the clock says
-  QCHECK(g_sent.size() == 1);
+  Update(w, 1);  // the flag sends nothing, whatever the clock says
+  QCHECK(g_sent.empty());
   FeedParty(w, "PartyCreateSuccess", 777, kSelf);
   Update(w, 0);
   QCHECK(Called("v" + std::to_string(kCbCreated)));
@@ -427,30 +429,18 @@ void TestPartyCreateAndSlots() {
   QCHECK(SlotFn<U64_U32>(obj, kMemberDataWritable)(obj, 0) == Get64(obj, kOffMemberJson));  // the local member's CJson, for the game to write
 }
 
-void TestNoCreateBeforeLogin() {
+// #1502: the game's "wants a party" bit sends no create, before login or after it.
+void TestFlagNeverSendsACreate() {
   World w;
   Update(w, 1);  // the game wants a party, but no account is signed in
   QCHECK(g_sent.empty());
   w.party.SetSelf(kSelf, "alice");
+  Update(w, 1);  // signed in: still nothing is created at login
+  QCHECK(g_sent.empty());
+  g_now += 10;
   Update(w, 1);
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kCreateRequest);
-}
-
-void TestCreateRetriesAfterInterval() {
-  World w;
-  w.party.SetSelf(kSelf, "alice");
-  Update(w, 1);
-  QCHECK(g_sent.size() == 1);
-  FeedParty(w, "PartyCreateFailure", 0, 0);  // the server refused; the game still wants a party
-  g_now += 2;
-  Update(w, 1);
-  QCHECK(g_sent.size() == 1);  // inside the five-second retry interval (libpnsovr 0x2045f4: cmp w8, #5)
-  g_now += 2;
-  Update(w, 1);
-  QCHECK(g_sent.size() == 1);  // 4 s: still inside it
-  g_now += 1;
-  Update(w, 1);
-  QCHECK(g_sent.size() == 2);
+  QCHECK(g_sent.empty());
+  QCHECK(!w.party.Snapshot().creating && w.party.Snapshot().partyId == 0);
 }
 
 void TestMembersJoinAndLeave() {
@@ -1145,23 +1135,6 @@ void TestMemberCountNeverExceedsTheGamesArray() {
 }
 
 void TestFailedSendsDoNotStickTheModel() {
-  // Create: the sender refuses, so the model must not stay "creating"; a working sender then creates.
-  World w;
-  w.party.SetSelf(kSelf, "alice");
-  g_sendOk = false;
-  Update(w, 1);
-  QCHECK(g_sent.size() == 1);  // attempted
-  QCHECK(!w.party.Snapshot().creating);
-  QCHECK(FacadeCountersView().sendFailed.load() == 1);
-  g_sendOk = true;
-  g_now += 5;  // past the retry interval
-  Update(w, 1);
-  QCHECK(g_sent.size() == 2 && g_sent[1].symbol == nevr_social_party::kCreateRequest);
-  QCHECK(w.party.Snapshot().creating);  // now genuinely in flight
-  // ... and after the server answers, a join is not deferred forever.
-  FeedParty(w, "PartyCreateSuccess", 777, kSelf);
-  Update(w, 0);
-
   // Invite with no party: the create it implies must roll back when it cannot be sent.
   World v;
   v.party.SetSelf(kSelf, "alice");
@@ -1201,7 +1174,7 @@ void TestDeferredJoinLogsOncePerParty() {
   World w;
   Init(w, MakeCallbacks());
   w.party.SetSelf(kSelf, "alice");
-  Update(w, 1);  // a create is now in flight, unanswered
+  w.party.CreateParty();  // a create is now in flight, unanswered
   g_lines.clear();
   SlotFn<Void_U64>(w.Obj(), kJoinInternal)(w.Obj(), 556);  // deferred behind the create
   for (int i = 0; i < 100; ++i) Update(w, 0);              // the model retries it every frame
@@ -1582,7 +1555,8 @@ void TestRefusedLockIsRetriedOnABackoff() {
 void TestUnansweredCreateTimesOut() {
   World w;
   w.party.SetSelf(kSelf, "alice");
-  Update(w, 1);  // t = 1000: the create is sent and taken
+  // t = 1000: an invite with no party creates one; the create is sent and taken.
+  SlotFn<Void_U64>(w.Obj(), kSendInviteInternal)(w.Obj(), 2002);
   QCHECK(SentCount(nevr_social_party::kCreateRequest) == 1 && w.party.Snapshot().creating);
   g_now += 9;
   Update(w, 1);
@@ -1591,16 +1565,15 @@ void TestUnansweredCreateTimesOut() {
   Update(w, 1);  // t = 1010
   QCHECK(FacadeCountersView().requestTimeout.load() == 1);
   QCHECK(CountLines("social_request_timeout") == 1);
-  QCHECK(SentCount(nevr_social_party::kCreateRequest) == 2);  // rolled back, and the game still wants a party: asked again
-  // 600 more seconds of silence, jittered frame times: one attempt per 10 s at most, never faster.
+  QCHECK(!w.party.Snapshot().creating);
+  // 600 more seconds of silence, jittered frame times, the game still wanting a party: no create is sent
+  // from the flag (#1502), and the player's create is not sent again without a player action.
   for (std::size_t i = 0; i < 400 && g_now < 1610; ++i) {
     g_now += Jitter(i);
     Update(w, 1);
   }
-  const std::size_t creates = SentCount(nevr_social_party::kCreateRequest);
-  QCHECK(creates >= 40 && creates <= 62);
-  for (std::size_t i = 1; i < g_sentAt.size(); ++i) QCHECK(g_sentAt[i] - g_sentAt[i - 1] >= 10);
-  QCHECK(FacadeCountersView().requestTimeout.load() + 1 >= creates && FacadeCountersView().requestTimeout.load() <= creates);
+  QCHECK(SentCount(nevr_social_party::kCreateRequest) == 1);
+  QCHECK(FacadeCountersView().requestTimeout.load() == 1);
   // A late reply is applied as usual.
   FeedParty(w, "PartyCreateSuccess", 777, kSelf);
   Update(w, 0);
@@ -1610,7 +1583,7 @@ void TestUnansweredCreateTimesOut() {
 void TestAnsweredCreateAndLockDoNotTimeOut() {
   World w;
   Init(w, MakeCallbacks());
-  CreateParty(w, 777);  // sent and answered within the frame
+  CreateParty(w, 777);  // created and answered within the frame
   void* obj = w.Obj();
   const std::uint32_t closed = Get32(obj, kOffFlags) & ~kFlagJoinable;
   std::memcpy(static_cast<std::uint8_t*>(obj) + kOffFlags, &closed, sizeof(closed));
@@ -1622,7 +1595,7 @@ void TestAnsweredCreateAndLockDoNotTimeOut() {
     Update(w, 1);
   }
   QCHECK(FacadeCountersView().requestTimeout.load() == 0);
-  QCHECK(SentCount(nevr_social_party::kLockRequest) == 1 && SentCount(nevr_social_party::kCreateRequest) == 1);
+  QCHECK(SentCount(nevr_social_party::kLockRequest) == 1 && SentCount(nevr_social_party::kCreateRequest) == 0);  // the helper's create is the model's, not sent
 }
 
 void TestUnansweredLockTimesOut() {
@@ -1655,7 +1628,7 @@ void TestUnansweredJoinFailsToTheGame() {
   World w;
   Init(w, MakeCallbacks());
   w.party.SetSelf(kSelf, "alice");
-  Update(w, 1);  // a create, taken and never answered
+  SlotFn<Void_U64>(w.Obj(), kSendInviteInternal)(w.Obj(), 2002);  // an invite with no party: a create, taken and never answered
   SlotFn<Void_U64>(w.Obj(), kJoinInternal)(w.Obj(), 556);  // deferred behind it
   QCHECK(SentCount(nevr_social_party::kJoinRequest) == 0);
   g_rec.calls.clear();
@@ -1851,8 +1824,7 @@ int main() {
   TestInitializeAndShutdown();
   TestFriendRoster();
   TestPartyCreateAndSlots();
-  TestNoCreateBeforeLogin();
-  TestCreateRetriesAfterInterval();
+  TestFlagNeverSendsACreate();
   TestMembersJoinAndLeave();
   TestInvitesAndJoin();
   TestFriendInvitable();

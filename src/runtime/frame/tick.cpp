@@ -24,6 +24,7 @@
  */
 
 #include "runtime/frame/tick.h"
+#include "runtime/frame/frame_stats.h"
 #include "runtime/frame/window_watch.h"
 #ifdef NEVR_SCENARIO_CONTROL
 #include "runtime/scenario/scenario_control.h"
@@ -77,6 +78,7 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     nevr_builtin_log_filter::InstallPnsradHook();  // N90: idempotent; installs once pnsrad.dll loads
     nevr_builtin_log_filter::PollHealth();         // N89: health must not depend on the hook it watches
     nevr_window_watch::Poll(nowUs / 1000);         // #341: a client whose X window vanished quits (Wine only; a no-op on a server)
+    nevr_frame_stats::Poll(nowUs);                 // #954: drains the frame-time rings; one line per 10 s (a no-op while diagnostics.frame_stats is off)
     // #1139, ADR 0022: the render_config line. A no-op until Install ran on a client; then one evaluation a second.
     // No new dispatcher, thread or Tick* site (N86): it runs inside this function like the calls around it.
     nevr_render_config_hook::Poll(nowUs);

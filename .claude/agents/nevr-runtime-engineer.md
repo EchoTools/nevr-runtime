@@ -290,7 +290,7 @@ parser in `src/runtime/lifecycle/cli.cpp`.
   `src/runtime/lifecycle/service_config.cpp`) reads `-config-file <file>`, else
   `<nevr root>\config.yaml`, and nothing else; a `_local\config.yaml` is copied into the
   root once, never read. A MISSING `config.yaml` is a warning and a
-  defaults-only run; one that EXISTS but is malformed or references an unset required
+  defaults-only run (KNOWN-WRONG #1254: a server with no file and no cached sign-in never stops); one that EXISTS but is malformed or references an unset required
   `${VAR:?}` secret fails loud in server mode via `ServerFatal`.
 - The game's own `_local/config.json` is still loaded by `LoadEarlyConfig`
   (`src/runtime/lifecycle/config.cpp`) for stock-engine keys only; it is optional, and

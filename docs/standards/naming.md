@@ -50,7 +50,8 @@ One family, three cases:
 | Markdown document | kebab-case file name (`docs/standards/naming.md`, `docs/reference/client-exit-path.md`); a date prefix is `YYYY-MM-DD-` (`docs/design/2026-10-01-social-scenario-harness.md`); an ADR is `NNNN-<kebab-case>.md` |
 
 Names that belong to the game or to third parties (`EchoVR::`, `BugSplat64`, `IServerLib`) keep their
-own spelling.
+own spelling. A plugin someone else publishes is named as they name it (`NvrContentOverlay`); the names
+that docs and config examples carry are written out in `tools/tests/test_naming.py` (`THIRD_PARTY_NVR`).
 
 Markdown. A file name is kebab-case, except the root scaffolding names that tools and GitHub look for by
 exact name (`README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`, `LICENSE`, `NOTICE`, and

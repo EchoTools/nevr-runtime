@@ -46,6 +46,10 @@ bool RegisterCounters() noexcept;
 namespace nevr_quest::texture_quality {
 bool RegisterCounters() noexcept;
 }  // namespace nevr_quest::texture_quality
+// And for sentinel/texture_menu_hook.h (#1012): the Texture Resolution control's thirteen counters, registered by the same step.
+namespace nevr_quest::texture_menu {
+bool RegisterCounters() noexcept;
+}  // namespace nevr_quest::texture_menu
 // The same for sentinel/clock_levels_hook.h (#928).
 namespace nevr_quest::clock_levels {
 bool RegisterCounters() noexcept;
@@ -146,11 +150,11 @@ void TestInstallWithoutTheModuleFailsCleanly() {
 // one calls counter per hook), social 26 (the facade's, the invite gate's, the rich presence trace's four, its three local answers), login prompt 17 (#239, #672, #1391, login_prompt_hook.h kCounterCount), login title 5 (#1137, login_title_hook.h kCounterCount;
 // registered with the login prompt's, through the same step), OBB-mount
 // skip 6 (#319, #866: the mount, the path and the data-root question, obb_skip_hook.h kCounterCount), texture quality 4 (#943,
-// texture_quality_hook.h kCounterCount), clock levels 2 (#928, clock_levels_hook.h kCounterCount; no slot of its own), resource request log 2 (#871, resource_request_hook.h kCounterCount; development
+// texture_quality_hook.h kCounterCount) and the Texture Resolution control 13 (#1012, texture_menu_hook.h kCounterCount; registered by the same step), clock levels 2 (#928, clock_levels_hook.h kCounterCount; no slot of its own), resource request log 2 (#871, resource_request_hook.h kCounterCount; development
 // builds only, so a release build registers 2 fewer). 91 on main before #943, 95 with it, which filled the 96 the table held
 // then; the table holds 128 since #1137. The resource request term stays last: tools/tests/test_quest_resource_request_wiring.py
 // reads it there.
-constexpr int kSentinelCounters = 2 + 14 + 1 + 2 + 24 + 26 + 17 + 5 + 6 + 4 + 2 + 2;
+constexpr int kSentinelCounters = 2 + 14 + 1 + 2 + 24 + 26 + 17 + 5 + 6 + 4 + 13 + 2 + 2;
 static_assert(kSentinelCounters <= static_cast<int>(sentinel::kMaxReportCounters),
               "the sentinel's hooks register more counters than the reporter holds");
 
@@ -178,7 +182,11 @@ struct RealCounterSteps final : Steps {
   bool RegisterObbSkipCounters() override { return nevr_quest::obb_skip::RegisterCounters(); }
   bool ResourceRequestLogWanted() override { return true; }  // the budget is the development build's, the larger one
   bool RegisterResourceRequestCounters() override { return nevr_quest::resource_request::RegisterCounters(); }
-  bool RegisterTextureQualityCounters() override { return nevr_quest::texture_quality::RegisterCounters(); }
+  bool RegisterTextureQualityCounters() override {
+    const bool quality = nevr_quest::texture_quality::RegisterCounters();
+    const bool menu = nevr_quest::texture_menu::RegisterCounters();
+    return quality && menu;
+  }
   bool RegisterClockLevelsCounters() override { return nevr_quest::clock_levels::RegisterCounters(); }
   // The reporter is started after the budget is measured (below), so a refused registration shows here.
   bool StartReporter() override { return true; }
@@ -215,7 +223,7 @@ void TestCounterBudget() {
   RealCounterSteps steps;
   steps.config.effective.redirect = steps.config.effective.bridge = true;
   steps.config.effective.login = steps.config.effective.social = true;
-  // `stock` (the default) registers no texture counters and installs nothing; the budget is the one of a level that hooks.
+  // The texture counters are registered at every level now (the settings menu can raise `stock`); the budget is the same.
   steps.config.textureQuality = {nevr_quest::texture_quality::Level::kHigh, nevr_quest::Source::kFile};
   const ConstructorReport r = RunConstructorSequence(steps);
   for (StepId id : {StepId::kRegisterClockCounters, StepId::kRegisterRedirectCounters, StepId::kRegisterDlopenCounters,

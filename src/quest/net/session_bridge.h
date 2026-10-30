@@ -130,4 +130,9 @@ class SessionBridge {
   std::atomic<bool> started_{false};  // Start/Stop are the owner's to call (see LoopbackGameServer)
 };
 
+// Whether the party state the lobby session records read is fed by the social facade (#1525). Until the facade is in
+// place, nothing feeds that state, so its zeros are not a party: the records say `unknown`, never `none`. The owner
+// sets it once the facade installs. Process-wide, like the state.
+void SetLobbyPartySource(bool installed);
+
 }  // namespace quest_net

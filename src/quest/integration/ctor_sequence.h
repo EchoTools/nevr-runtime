@@ -60,8 +60,11 @@
 //      InstallTextureQuality         the eye-buffer size libr15 creates its swap chain with (#943): one libr15 slot
 //                                    (vrapi_GetSystemPropertyInt), on every launch, right after the OS build floor hook (and the resource request log, when wanted) and
 //                                    before the hardware dump (which then shares the slot); the level is the config's
-//                                    graphics.texture_quality, `stock` when the configuration cannot be resolved; `stock`
-//                                    installs nothing. Its counters are registered with the others (step 3), unless `stock`.
+//                                    graphics.texture_quality, `stock` when the configuration cannot be resolved; every level,
+//                                    `stock` too, installs the hook, because the game's settings menu can change the level while
+//                                    the game runs (#1012); the same step then installs the Texture Resolution control and the
+//                                    live apply (five more libr15 slots: texture_menu_hook.h). Its counters are registered with the
+//                                    others (step 3), at every level.
 //      InstallRenderConfig           the render-configuration log line (#1139, docs/adr/0022-render-config-log.md): five libr15
 //                                    VrApi slots (refresh rate, clock levels, property set, system property float, frame
 //                                    submit) and a poller thread, on every launch, right after the texture-quality hook (it
@@ -108,7 +111,7 @@
 //   release build           -> the rad provider (#1220) is not installed, whatever the configuration asks
 //   obb counters fail       -> the OBB-mount skip is not installed
 //   resource request counters fail -> the resource request log is not installed
-//   texture counters fail   -> the texture-quality hook is not installed (not asked of `stock`)
+//   texture counters fail   -> the texture-quality hook and the Texture Resolution control are not installed
 //   clock-levels counters fail -> the clock-level override is not armed (it stays off)
 // "redirect-through-the-bridge" is the redirect when the bridge feature is effective: a redirect that
 // points the game at a loopback port nobody listens on, or straight at a TLS endpoint the game cannot
@@ -220,7 +223,7 @@ class Steps {
   virtual bool ResourceRequestLogWanted() = 0;
   // The resource request log's counters (#871), registered when ResourceRequestLogWanted.
   virtual bool RegisterResourceRequestCounters() = 0;
-  // The texture-quality hook's counters (#943), registered when the level is not `stock`.
+  // The texture-quality hook's counters (#943) and the Texture Resolution control's (#1012), registered on every launch.
   virtual bool RegisterTextureQualityCounters() = 0;
   // The clock-level hook's counters (#928), registered on every launch.
   virtual bool RegisterClockLevelsCounters() = 0;
@@ -255,7 +258,7 @@ class Steps {
   // skip and installs nothing). True when the FillResourceFileRequest slot holds the thunk.
   virtual bool InstallResourceRequestLog(bool countersRegistered) = 0;
   // The eye-buffer size (#943): one libr15 slot, on every launch. `choice` is the level and where it came from;
-  // `countersRegistered` is the result of RegisterTextureQualityCounters (a `stock` level needs none). The step applies the
+  // `countersRegistered` is the result of RegisterTextureQualityCounters. The step applies the
   // hook's own rule (texture_quality::InstallIfCounted): without its counters it logs the skip and installs nothing.
   virtual bool InstallTextureQuality(const nevr_quest::TextureChoice& choice, bool countersRegistered) = 0;
   // The render-configuration log (#1139): five libr15 slots and the poller thread, on every launch, no counters. `choice` is

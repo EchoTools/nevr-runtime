@@ -42,6 +42,7 @@ One root per game: `%LOCALAPPDATA%\nevr\echovr\`. The install folder keeps the g
 | --- | --- |
 | `nevr-runtime.dll` | the changing runtime |
 | `plugins\` | plugin DLLs and their dependencies |
+| `content\` | content packs: `content\<id>\` is one pack's folder, which only the plugin that serves it reads (ADR 0028) |
 | `config.yaml` | the nEVR configuration, when no `-config` folder is given |
 | `.credentials.json` | the sign-in cache, one per machine, for clients and servers alike |
 | `logs\`, `crashes\` | the run log and the crash record (`nevr-crash-<run id>.txt`) the runtime writes, the host's log and minidumps |
@@ -109,7 +110,7 @@ Until step 3 the host mapped `nevr-runtime.dll` with no check. `RuntimeLoader::L
 verifies the file first (`nevr_plugin_signature::VerifyPluginFile` with `nevr_plugin_pins::PinnedPolicy()`, the file held open
 `FILE_SHARE_READ` through the load) and calls `LoadLibraryExW` only on an accepted file, or on an unsigned one in a dev build. A
 refused or unreadable file, and a missing one, stop the game (exit 78). Step 4 (the move to `%LOCALAPPDATA%`) still does not ship
-before a signed `nevr-runtime.dll` exists (step 3's prerequisite).
+before a signed `nevr-runtime.dll` exists (step 3's prerequisite; tracked in #575).
 
 ### Where state resolves
 
@@ -139,8 +140,8 @@ says when an override was ignored. The runtime's own state paths (`core/nevr_roo
 On the first run that finds the old layout, the runtime moves, and logs every file it moves or leaves:
 
 - from the install's `_local` directories: `.credentials.json`, nearest first, through the protected write the cache is saved with
-  (`core/credential_write.h`), read back before the old file is removed. `config.yaml` is not moved until step 6 decides where server and
-  client config live, and a `-config` folder's own `config.yaml` never is: it stays where it is, and the rule of "Where state resolves"
+  (`core/credential_write.h`), read back before the old file is removed. `config.yaml` is not moved by this step (the config choice copies a
+  `_local` one into the root once, `nevr_config_yaml::Resolve`), and a `-config` folder's own `config.yaml` never is: it stays where it is, and the rule of "Where state resolves"
   finds it there. A cache the move could not take (or whose root path does not fit the ANSI code page) is still read, and written back where it is,
   until a later run moves it;
 - from `%LOCALAPPDATA%\EchoVR\logs`: nEVR's own files, which are the run logs the built-in filter writes (`BuildLogFilePath` in
@@ -189,7 +190,7 @@ Each step is its own pull request with its own issue under #575, mergeable and t
 ## Names this record fixes
 
 - **The runtime DLL's name:** `nevr-runtime.dll`, in the root, signed by the release signer.
-- **The root layout and file names:** `%LOCALAPPDATA%\nevr\echovr\` holding `nevr-runtime.dll`, `plugins\`, `config.yaml`,
+- **The root layout and file names:** `%LOCALAPPDATA%\nevr\echovr\` holding `nevr-runtime.dll`, `plugins\`, `content\`, `config.yaml`,
   `.credentials.json`, `logs\` and `crashes\`, as in the table. `nevr-bootstrap.jsonl` stays the host's log file name.
 - **`NEVR_ROOT`**, honoured only in a dev build, replaces `%LOCALAPPDATA%\nevr\echovr`; it lands in step 4.
 - **The `versions` record:** written by the host's detour on the game's main wrapper right after the verdict on `nevr-runtime.dll`: the first

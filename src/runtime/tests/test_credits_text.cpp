@@ -306,12 +306,61 @@ TEST(CreditsTextRetarget, AFailedSecondWritePutsTheFirstSiteBack) {
   EXPECT_EQ(std::memcmp(image.disabled, untouched.disabled, sizeof(image.disabled)), 0);
 }
 
+// Copies every write, and reports the Nth call (1-based) as failed after its bytes went in.
+bool LandThenFailNthWriter(void* dest, const void* src, size_t n) {
+  ++g_calls;
+  std::memcpy(dest, src, n);
+  return g_calls != g_failOn;
+}
+
+// Lands the first write, then refuses every later one without writing: a put-back that cannot land.
+bool FirstLandsThenRefuses(void* dest, const void* src, size_t n) {
+  ++g_calls;
+  if (g_calls != 1) return false;
+  std::memcpy(dest, src, n);
+  return true;
+}
+
+TEST(CreditsTextRetarget, ASecondWriteThatLandsWhileReportingAnErrorPutsBothSitesBack) {
+  // The second site holds the buffer though its write reported a failure: both sites must read back as found.
+  FakeImage image;
+  FakeImage untouched = image;
+  SitePlan a = image.InitPlan();
+  SitePlan b = image.DisabledPlan();
+  ResetWriter(2);
+  EXPECT_EQ(nevr_credits_text::Retarget(a, b, kBufferVa, LandThenFailNthWriter), Outcome::WriteFailed);
+  EXPECT_EQ(std::memcmp(image.init, untouched.init, sizeof(image.init)), 0);
+  EXPECT_EQ(std::memcmp(image.disabled, untouched.disabled, sizeof(image.disabled)), 0);
+}
+
+TEST(CreditsTextRetarget, AFirstWriteThatLandsWhileReportingAnErrorIsPutBack) {
+  FakeImage image;
+  FakeImage untouched = image;
+  SitePlan a = image.InitPlan();
+  SitePlan b = image.DisabledPlan();
+  ResetWriter(1);
+  EXPECT_EQ(nevr_credits_text::Retarget(a, b, kBufferVa, LandThenFailNthWriter), Outcome::WriteFailed);
+  EXPECT_EQ(std::memcmp(image.init, untouched.init, sizeof(image.init)), 0);
+  EXPECT_EQ(std::memcmp(image.disabled, untouched.disabled, sizeof(image.disabled)), 0);
+}
+
+TEST(CreditsTextRetarget, APutBackThatDoesNotLandIsReportedWithTheSiteStillLoadingTheBuffer) {
+  FakeImage image;
+  SitePlan a = image.InitPlan();
+  SitePlan b = image.DisabledPlan();
+  ResetWriter(0);
+  EXPECT_EQ(nevr_credits_text::Retarget(a, b, kBufferVa, FirstLandsThenRefuses), Outcome::PutBackFailed);
+  EXPECT_EQ(TargetOf(image.init, kInitVa), kBufferVa) << "the first site still loads the buffer, and the caller must know";
+  EXPECT_EQ(std::memcmp(image.disabled, nevr_credits_text::kDisabledSiteExpected, sizeof(image.disabled)), 0)
+      << "the second site's write never landed, so it holds the game's bytes";
+}
+
 // ---- the records ----
 
 TEST(CreditsTextRecord, SiteRecordNamesTheSiteBytesAndOutcome) {
   char out[256];
   nevr_credits_text::FormatSiteRecord(out, sizeof(out), "init", kInitVa, nevr_credits_text::kInitSiteExpected,
-                                      nevr_credits_text::kInitSiteExpected, Outcome::Applied);
+                                      nevr_credits_text::kInitSiteExpected, 0, Outcome::Applied);
   EXPECT_STREQ(out,
                "[NEVR.PATCH] credits_text site=init addr=0x140973520 expected=488d05b9103001 "
                "actual=488d05b9103001 result=applied");
@@ -321,8 +370,24 @@ TEST(CreditsTextRecord, SiteRecordShowsWhatWasFoundWhenItDiffers) {
   const uint8_t found[7] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
   char out[256];
   nevr_credits_text::FormatSiteRecord(out, sizeof(out), "disabled", kDisabledVa,
-                                      nevr_credits_text::kDisabledSiteExpected, found, Outcome::Mismatch);
+                                      nevr_credits_text::kDisabledSiteExpected, found, 0, Outcome::Mismatch);
   EXPECT_NE(std::string(out).find("actual=90909090909090 result=mismatch"), std::string::npos);
+}
+
+TEST(CreditsTextRecord, WriteFailedSiteRecordEndsWithTheWritersWin32Error) {
+  char out[256];
+  nevr_credits_text::FormatSiteRecord(out, sizeof(out), "init", kInitVa, nevr_credits_text::kInitSiteExpected,
+                                      nevr_credits_text::kInitSiteExpected, 5, Outcome::WriteFailed);
+  EXPECT_STREQ(out,
+               "[NEVR.PATCH] credits_text site=init addr=0x140973520 expected=488d05b9103001 "
+               "actual=488d05b9103001 result=write_failed write_error=5");
+}
+
+TEST(CreditsTextRecord, AppliedSiteRecordHasNoWriteError) {
+  char out[256];
+  nevr_credits_text::FormatSiteRecord(out, sizeof(out), "init", kInitVa, nevr_credits_text::kInitSiteExpected,
+                                      nevr_credits_text::kInitSiteExpected, 5, Outcome::Applied);
+  EXPECT_EQ(std::string(out).find("write_error="), std::string::npos) << out;
 }
 
 TEST(CreditsTextRecord, BuiltRecordCarriesTheCounts) {

@@ -110,6 +110,13 @@ set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/resource_re
 target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_quality_hook.cpp")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_quality_hook.cpp"
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# And the #1012 Texture Resolution control's counters (the hook without exceptions; the pure rewrite it calls keeps them).
+target_sources(integration_hooks_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_menu_hook.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_menu.cpp")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_menu_hook.cpp"
+  PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+target_link_libraries(integration_hooks_test PRIVATE nlohmann_json::nlohmann_json)
 # And the #928 clock-level override's counters (also without exceptions).
 target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/clock_levels_hook.cpp")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/clock_levels_hook.cpp"
@@ -151,6 +158,10 @@ target_compile_options(nevr_autopilot_plugin PRIVATE -Wall -Wextra -Werror -fno-
                        -fvisibility-inlines-hidden)
 # --exclude-libs: the static libc++ archive keeps its symbols out of the export set, as the sentinel does.
 target_link_options(nevr_autopilot_plugin PRIVATE -Wl,--build-id=sha1 -Wl,--exclude-libs,ALL)
+
+# The q15t plugin (#1546): libq15t.so and libq15t_early.so, built here and carried by no APK the release or package-dev recipes
+# build; `just build-quest-q15t` builds them, and the variant recipe packages them.
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../plugins/q15t" "${CMAKE_CURRENT_BINARY_DIR}/q15t")
 
 # Sensor controls, never run: tests/quest frames_sensor_test.go reads them. Both hooks have a handler that
 # calls a helper with a personality directly; only in frames_probe_ok is the helper annotated.

@@ -85,6 +85,7 @@ set(PATCHES_SOURCES
     "compat/self_check.cpp"
     "compat/social_names.cpp"
     "patch/xpid_patch.cpp"
+    "frame/frame_stats.cpp"
     "frame/tick.cpp"
     "frame/window_watch.cpp"
     "patch/binary_bug_fixes.cpp"
@@ -100,12 +101,16 @@ set(PATCHES_SOURCES
     # #1139, docs/adr/0022: the render configuration as one log line (pure model, and the two observer hooks).
     "patch/render_config.cpp"
     "patch/render_config_hook.cpp"
+    # #1419, docs/adr/0022: the GPU score the auto-selector reads, filled when the game's own rating is zero (pure rule).
+    "patch/gpu_score.cpp"
     "patch/early_quit_lockout.cpp"
     "patch/arena_public_clock.cpp"
     "patch/lobby_full_backoff.cpp"
     "patch/menu_version_label.cpp"
     # #906, ADR 0017 D4: the main-menu cards (pure logic in menu_page.h and menu_cards.h).
     "patch/menu_cards.cpp"
+    # #1420: the magnum, smg, Chain and rifle bullets get particle effects (pure logic in netgun_bullets.h).
+    "patch/netgun_bullets.cpp"
     # #1420: the netgun bullet ids of the four unfinished weapons (pure logic in netgun_bullet_ids.h).
     "patch/netgun_bullet_ids.cpp"
     "patch/splash_skip.cpp"
@@ -132,6 +137,7 @@ set(PATCHES_SOURCES
     "server/registration_metadata.cpp"
     "server/installed_levels.cpp"
     "server/telemetry_game_type.cpp"
+    "server/game_type_table.h"
     "server/messages.cpp"
     "server/lobby_settings_relay.cpp"
     "server/server_context.cpp"
@@ -173,6 +179,7 @@ set(PATCHES_HEADERS
     "patch/arena_public_clock_rules.h"
     "patch/render_config.h"
     "patch/render_config_hook.h"
+    "patch/gpu_score.h"
     "lifecycle/crash_recovery.h"
     "lifecycle/return_to_lobby.h"
     "lifecycle/return_to_lobby_hold.h"
@@ -219,6 +226,7 @@ set(PATCHES_HEADERS
     "patch/invite_config.h"
     "patch/menu_page.h"
     "patch/menu_cards.h"
+    "patch/netgun_bullets.h"
     "patch/netgun_bullet_ids.h"
     "patch/guild_picker.h"
     "compat/evr_codec.h"
@@ -226,6 +234,7 @@ set(PATCHES_HEADERS
     "compat/lobby_join_state.h"
     "patch/party_follow_dedup_rules.h"
     "patch/xpid_patch.h"
+    "frame/frame_stats.h"
     "frame/tick.h"
     "patch/binary_bug_fixes.h"
     "patch/pnsrad_enabler.h"
@@ -922,7 +931,7 @@ if(BUILD_TESTING)
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_telemetry_game_type PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_telemetry_game_type PRIVATE GTest::gtest GTest::gtest_main nevr_api
-      nlohmann_json::nlohmann_json)
+      nevr::plugin_sdk nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_telemetry_game_type DISCOVERY_MODE PRE_TEST)
 
     # #982: the public Arena round default applies only to a stored public Arena session (arena_round_time.cpp).
@@ -975,11 +984,19 @@ if(BUILD_TESTING)
     target_link_libraries(test_render_config PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_render_config DISCOVERY_MODE PRE_TEST)
 
+    # #1419: the GPU score rule (patch/gpu_score.h; no Windows call).
+    add_executable(test_gpu_score tests/test_gpu_score.cpp patch/gpu_score.cpp)
+    set_source_files_properties(tests/test_gpu_score.cpp patch/gpu_score.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_gpu_score PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_gpu_score PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_gpu_score DISCOVERY_MODE PRE_TEST)
+
     # #1139: the two observer hooks and Poll under MinHook, against a fake image with the real prologues at their RVAs.
     add_executable(test_render_config_hook tests/test_render_config_hook.cpp patch/render_config.cpp
-      patch/render_config_hook.cpp hook/hook_guard.cpp)
+      patch/render_config_hook.cpp patch/gpu_score.cpp hook/hook_guard.cpp)
     set_source_files_properties(tests/test_render_config_hook.cpp patch/render_config.cpp
-      patch/render_config_hook.cpp hook/hook_guard.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+      patch/render_config_hook.cpp patch/gpu_score.cpp hook/hook_guard.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_compile_definitions(test_render_config_hook PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS
       NEVR_RENDER_CONFIG_TESTING)
     target_include_directories(test_render_config_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -1037,6 +1054,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_coop_ai_trace PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_coop_ai_trace DISCOVERY_MODE PRE_TEST)
 
+    # #954 frame-time probe: the PURE half (frame/frame_stats.h: ring, window math, return-address predicate,
+    # ovrPerfStats extraction, log lines). The hook and the log call (frame_stats.cpp) are not linked here.
+    add_executable(test_frame_stats tests/test_frame_stats.cpp)
+    target_include_directories(test_frame_stats PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_frame_stats PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_frame_stats DISCOVERY_MODE PRE_TEST)
+
     add_executable(test_xpid_patch tests/test_xpid_patch.cpp)
     target_include_directories(test_xpid_patch PRIVATE
       ${CMAKE_SOURCE_DIR}/src
@@ -1048,6 +1072,12 @@ if(BUILD_TESTING)
     # 5s timeout, which the Wine cold-start exceeds — failing the build even though the
     # tests themselves pass. PRE_TEST keeps `cmake --build` from launching Wine.
     gtest_discover_tests(test_xpid_patch DISCOVERY_MODE PRE_TEST)
+
+    # HTTP session API port scan (#1511): pure logic, no socket.
+    add_executable(test_http_port_scan tests/test_http_port_scan.cpp)
+    target_include_directories(test_http_port_scan PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_http_port_scan PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_http_port_scan DISCOVERY_MODE PRE_TEST)
 
     # mic_dsp unit tests (GH#15) — the PURE ring-buffer and downmix/resample
     # logic behind the WASAPI mic provider (runtime/patch/mic_provider.cpp).
@@ -1504,6 +1534,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_party_follow_dedup PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_party_follow_dedup DISCOVERY_MODE PRE_TEST)
 
+    # test_lobby_failure_message.cpp (#1443, header-only patch/lobby_failure_message_rules.h): the service message on the
+    # error page for the lobby failure codes the game shows as a literal.
+    add_executable(test_lobby_failure_message tests/test_lobby_failure_message.cpp)
+    target_include_directories(test_lobby_failure_message PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_lobby_failure_message PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_lobby_failure_message DISCOVERY_MODE PRE_TEST)
+
     # test_menu_version_label.cpp (#747, header-only patch/menu_version_label_rules.h).
     add_executable(test_menu_version_label tests/test_menu_version_label.cpp)
     set_source_files_properties(tests/test_menu_version_label.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -1666,6 +1703,8 @@ if(BUILD_TESTING)
       # #703: resource_override registers the cache's overrides through the production cache.
       patch/asset_cache.cpp
       patch/resource_override.cpp
+      # #1420: the netgun bullet transforms, driven through the resource seam.
+      patch/netgun_bullets.cpp
       # #479: the XPID patch's failure path (g_bootHookFailed, never ServerFatal) is driven for real.
       patch/xpid_patch.cpp
       # ws_bridge.cpp calls nevr_system_info::Get(). Linked as a source rather than
@@ -1727,6 +1766,7 @@ if(BUILD_TESTING)
       patch/evrp_package.cpp
       patch/asset_cache.cpp
       patch/resource_override.cpp
+      patch/netgun_bullets.cpp
       patch/xpid_patch.cpp
       ext/plugin_loader.cpp
       ext/plugin_manifest.cpp
@@ -1881,8 +1921,8 @@ if(BUILD_TESTING)
     # test_rate_limiter.cpp (#894, header-only log/rate_limiter.h) ride in this
     # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_rate_limiter.cpp tests/test_netgun_bullet_ids.cpp lifecycle/crash_dump_format.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_rate_limiter.cpp tests/test_netgun_bullet_ids.cpp lifecycle/crash_dump_format.cpp
+      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_crash_recovery PRIVATE GTest::gtest GTest::gtest_main nevr::plugin_sdk)

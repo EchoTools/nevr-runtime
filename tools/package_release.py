@@ -81,6 +81,10 @@ HEADLINE_DIR = "release-headlines"
 HEADLINE_README = f"{HEADLINE_DIR}/README.md"
 HEADLINE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.txt")
 HEADLINE_LEGACY_FILE = "release-headline.txt"
+# The only files the Windows zip holds. A game-derived content pack lives on the CDN and in the manifest, never in the
+# zip or on the release page (RELEASING.md, "Game-derived packages"); seal() refuses any other entry in the tree.
+ZIP_MEMBERS = frozenset({HOST_DLL, RUNTIME_DLL, SERVER_EXE, INSTALLER_EXE, INSTALLER_COMPAT_EXE, "install.ps1",
+                         "uninstall.ps1", "quest-diagnose.ps1", "README.txt", "SHA256SUMS"})
 HEADLINE_MAX = 200
 HEADLINE_JOINED_MAX = 600
 
@@ -395,6 +399,11 @@ def seal(tree: Path, out: Path, apk: Path = None, require_signed: bool = False) 
     commit, version = info["commit"], info["version"]
     if apk is not None:  # before anything is written: a foreign APK never rides a package
         check_apk_version(apk, version, commit)
+    for entry in tree.iterdir():  # a directory or a link is refused by name; so is any file the zip does not list
+        if not entry.is_file() or entry.is_symlink():
+            raise GateFailure(f"{entry} is not a regular file; the Windows zip holds files only")
+        if entry.name not in ZIP_MEMBERS:
+            raise GateFailure(f"{entry.name} is not a Windows zip member; allowed: {', '.join(sorted(ZIP_MEMBERS))}")
     files = sorted(p for p in tree.iterdir() if p.is_file() and p.name != "SHA256SUMS")
     for required in (HOST_DLL, RUNTIME_DLL, SERVER_EXE, INSTALLER_EXE, INSTALLER_COMPAT_EXE):
         if required not in {p.name for p in files}:

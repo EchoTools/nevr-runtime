@@ -23,6 +23,13 @@ TEST(ArenaRoundTime, NonArenaSessionKeepsTheGameValue) {
   EXPECT_EQ(decision.reason, "non_arena");
 }
 
+// #1493: a social lobby's session used to read as echo_arena through the lobby fallback and got the public default.
+TEST(ArenaRoundTime, SocialSessionKeepsTheGameValue) {
+  const auto decision = DecideRoundTimeDefault(std::optional<std::string>("social_2.0"));
+  EXPECT_FALSE(decision.applied);
+  EXPECT_EQ(decision.reason, "non_arena");
+}
+
 TEST(ArenaRoundTime, PrivateArenaSessionKeepsTheGameValue) {
   const auto decision = DecideRoundTimeDefault(std::optional<std::string>("echo_arena_private"));
   EXPECT_FALSE(decision.applied);

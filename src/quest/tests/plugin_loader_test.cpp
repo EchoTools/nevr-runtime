@@ -148,7 +148,9 @@ class FakePlatform final : public Platform {
   }
 
   std::string gameBuild = kGameBuild;
-  Libr15PatchState patch;                          // what Attach recorded: not verified unless a test says so
+  // What Attach recorded. The default is our verified patched file (the live note is the ID verification covered), which is
+  // the only libr15 a plugin loads on (`libr15_not_verified`); a test that means the stock or an unverified file says so.
+  Libr15PatchState patch = {true, kGameBuild};
   std::size_t buildIdReads = 0;
   std::map<std::string, std::string> openAs;       // file served from `memory` -> the fixture object that is mapped for it
   std::uintptr_t base = 0x7000000000;
@@ -465,8 +467,8 @@ TEST(LoaderLoadsANoopPluginWithOneRecord) {
   CHECK(r->phase == PluginPhase::Normal);
   CHECK_EQ(r->file, std::string("libfx_ok.so"));
   CHECK_EQ(r->gameBuildId, std::string(kGameBuild));
-  CHECK_EQ(r->pluginViewBuildId, std::string(kGameBuild));  // not our patched file: the live note is the plugin identity
-  CHECK(!r->libr15Patched);
+  CHECK_EQ(r->pluginViewBuildId, StockId());  // our verified patched file: the stock ID is the plugin identity
+  CHECK(r->libr15Patched);
   const std::vector<std::uint8_t> bytes = Slurp(g_dir + "/libfx_ok.so");
   CHECK(!bytes.empty());
   CHECK_EQ(r->sha256, nevr_quest::data::Sha256Hex(bytes.data(), bytes.size()));
@@ -538,6 +540,34 @@ TEST(LoaderLoadsAPackagedFileWhoseHashMatchesTheManifest) {
   CHECK_EQ(r->sha256, sha);
 }
 
+// config.yaml rejected as a whole: the packaged plugin still loads (docs/adr/0019 section 2), and its record says the operator's
+// file did not load, so a disabled entry that was lost is visible on the line. A run whose file was usable says 0.
+TEST(LoaderSaysOnThePackagedRecordThatTheConfigFileWasRejected) {
+  Options rejected = HostOptions();
+  rejected.configRejected = true;
+  Env env(rejected);
+  const std::vector<std::uint8_t> file = Slurp(g_dir + "/libfx_ok.so");
+  CHECK(!file.empty());
+  if (file.empty()) return;
+  const std::string sha = nevr_quest::data::Sha256Hex(file.data(), file.size());
+  env.loader->Plan({Packaged("ok", "libfx_ok.so", sha)});
+  env.loader->RunPhase(PluginPhase::Normal);
+  const LoadRecord* r = env.platform.Record("ok");
+  CHECK(r != nullptr);
+  if (r == nullptr) return;
+  CHECK(r->outcome == Outcome::kLoaded);
+  CHECK(r->configRejected);
+
+  Env usable;
+  usable.loader->Plan({Packaged("ok", "libfx_ok.so", sha)});
+  usable.loader->RunPhase(PluginPhase::Normal);
+  const LoadRecord* u = usable.platform.Record("ok");
+  CHECK(u != nullptr);
+  if (u == nullptr) return;
+  CHECK(u->outcome == Outcome::kLoaded);
+  CHECK(!u->configRejected);
+}
+
 TEST(LoaderGivesThePluginTheQuestContext) {
   Env env;
   env.loader->Plan({Item("ok", "libfx_ok.so", false, true, R"({"k":"v"})")});
@@ -554,7 +584,7 @@ TEST(LoaderGivesThePluginTheQuestContext) {
   CHECK_EQ(std::string(seen->plugin_id), std::string("ok"));
   CHECK_EQ(std::string(seen->args), std::string(R"({"k":"v"})"));
   CHECK_EQ(seen->covers_game_build_id, 1);
-  CHECK_EQ(std::string(seen->game_build_id), std::string(kGameBuild));
+  CHECK_EQ(std::string(seen->game_build_id), StockId());  // the plugin identity, not the live note
   // The platform's Quest host services (#1202) reach the plugin as they are.
   CHECK_EQ(seen->covers_quest, 1);
   CHECK(seen->quest == env.platform.questApi);
@@ -923,20 +953,48 @@ TEST(LoaderLoadsADerivedIdPluginOnThePatchedFileAndRefusesItOnAStockOne) {
   }
 }
 
-TEST(LoaderLoadsAStockIdPluginOnTheStockFileWithoutTheMapping) {
+// The falsifier of the verified-patch rule: a stock libr15 whose live note is the stock ID, with nothing verified, must not
+// load a plugin that declares that ID (the plugin's addresses would be taken on a file that was never patched).
+TEST(LoaderRefusesAStockIdPluginOnTheStockFileWithoutTheMapping) {
   Env env;
   env.platform.gameBuild = StockId();
+  env.platform.patch = {};
   ServeDeclaring(env.platform, "libstock.so", StockId());
   env.loader->Plan({Item("stock", "libstock.so")});
   env.loader->RunPhase(PluginPhase::Normal);
   const LoadRecord* r = env.platform.Record("stock");
-  CHECK(r->outcome == Outcome::kLoaded);
+  CHECK(r != nullptr);
+  if (r == nullptr) return;
+  CHECK(r->outcome == Outcome::kRefused);
+  CHECK_EQ(r->reason, std::string(reason::kLibR15NotVerified));
   CHECK_EQ(r->gameBuildId, StockId());
   CHECK_EQ(r->pluginViewBuildId, StockId());
   CHECK(!r->libr15Patched);
-  const FxSeen* seen = env.platform.Seen("libstock.so");
-  CHECK(seen != nullptr);
-  if (seen != nullptr) CHECK_EQ(std::string(seen->game_build_id), StockId());
+  CHECK(env.platform.opened.empty());  // refused before dlopen: nothing was mapped
+}
+
+// The token is the same in both passes: a plugin whose list names the running build is refused on an unverified libr15 before
+// the early pass (the early entry) and in the normal pass (the normal entry), and a plugin the verdict refuses keeps its reason.
+TEST(LoaderRefusesAMatchingPluginOnAnUnverifiedLibR15InBothPhases) {
+  Env env;
+  env.platform.patch = {};  // the live note is kGameBuild, which libfx_second.so and libfx_ok.so list, and nothing is verified
+  env.loader->Plan({Item("early", "libfx_second.so", true), Item("ok", "libfx_ok.so")});
+  env.loader->RunPhase(PluginPhase::Early);
+  CHECK(env.platform.Record("early")->outcome == Outcome::kRefused);
+  CHECK_EQ(env.platform.Record("early")->reason, std::string(reason::kLibR15NotVerified));
+  env.loader->RunPhase(PluginPhase::Normal);
+  CHECK(env.platform.Record("ok")->outcome == Outcome::kRefused);
+  CHECK_EQ(env.platform.Record("ok")->reason, std::string(reason::kLibR15NotVerified));
+  CHECK_EQ(env.platform.Record("ok")->gameBuildId, std::string(kGameBuild));
+  CHECK(env.platform.opened.empty());
+}
+
+TEST(LoaderKeepsTheVerdictReasonForAPluginTheListRefuses) {
+  Env env;
+  env.platform.patch = {};  // unverified: a plugin the list does not name still reports the verdict, not the verification
+  env.loader->Plan({Item("otherids", "libfx_otherids.so")});
+  env.loader->RunPhase(PluginPhase::Normal);
+  CHECK_EQ(env.platform.Record("otherids")->reason, std::string(reason::kBuildIdUnsupported));
 }
 
 TEST(LoaderGivesAnUnreadableLiveNoteNoPluginView) {

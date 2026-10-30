@@ -48,8 +48,12 @@ nevr_invite::Submit Submit(const nevr_invite::Plan& plan);
 /// it first, so a run with the feature off costs one atomic load a frame.
 bool Active();
 
-/// The answers that have arrived; the menu applier (patch/invite_answer_apply.h) is the one reader. Non-blocking.
+/// The answers that have arrived; the menu applier (patch/invite_answer_apply.h) and the join's match queue (invite_service.cpp)
+/// both take them, so each reader must log what it drops (NoteDroppedAnswer). Non-blocking.
 std::vector<nevr_invite::Answer> TakeAnswers();
+/// Logs one answer a reader took and will not use (a Create taken by the join, or a non-Ok Resolve): a Warning naming the op and
+/// the result, so a dropped answer is never silent.
+void NoteDroppedAnswer(const nevr_invite::Answer& answer);
 /// As TakeAnswers, waiting up to `timeout` for the first (the host tests).
 std::vector<nevr_invite::Answer> WaitForAnswers(std::chrono::milliseconds timeout);
 

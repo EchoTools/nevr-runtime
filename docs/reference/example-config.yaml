@@ -15,6 +15,7 @@
 # Both builds work with no file at all: the service endpoints and the public client keys are embedded at build
 # time (config/public-defaults.env), and a key in this file replaces the embedded value. Each key below says which
 # builds read it ("both", "PC only", "Quest only"), its default, and the file that reads it.
+# KNOWN-WRONG #1254: a PC server with no file and no cached sign-in never logs in and never stops.
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
@@ -55,6 +56,7 @@ version: 1
 #         src/runtime/patch/mic_provider.cpp (PC, native Windows only; Wine keeps the OS default)
 # ---------------------------------------------------------------------------
 
+# KNOWN-WRONG #1305: the parser rejects a top-level audio: key, so this file as shipped is refused.
 audio:
   # The microphone to capture from: an endpoint id, or a part of its friendly name (case-insensitive).
   # When it names no active capture endpoint, the default rule runs: LibOVR's headset mic, a headset-named
@@ -89,10 +91,25 @@ social:
 # ---------------------------------------------------------------------------
 # diagnostics — build diagnostics
 #
-# Reader: src/quest/sentinel/quest_config.cpp (Quest). The PC accepts the section and reads nothing from it.
+# Readers: src/quest/sentinel/quest_config.cpp (Quest: hardware_dump, ui_event_probe) and
+# src/runtime/lifecycle/service_map.cpp, FrameStatsMode (PC: frame_stats). The PC reads nothing else from the
+# section; the Quest reads nothing from frame_stats.
 # ---------------------------------------------------------------------------
 
 diagnostics:
+  # PC only. The frame-time probe (src/runtime/frame/frame_stats.h): one `[NEVR.PERF] frame_stats` line every 10 s
+  # with the interval between iterations of the game's main loop (frames, median_us, p95_us, max_us, over_1p5x,
+  # overruns) and, in a PCVR session, the compositor's dropped-frame counts and the app's CPU and GPU time.
+  #   true  the loop-interval ring and the line
+  #   perf  the line with the compositor stats only (frames=0), to compare the game's own app CPU time with the
+  #         ring off against the ring on
+  #   false no line
+  # The ovr_GetPerfStats copy is installed on every client whatever this says; it keeps what it reads only while
+  # this is true or perf. The resolved value is logged at start-up (`[NEVR.PERF] frame_stats start`), off included.
+  # tools/perf/pc_frame_summary.py turns one run's lines into summary.json.
+  # Default (absent): false.
+  # frame_stats: true
+
   # Quest only. Write the hardware/environment dump (docs/adr/0006-quest-hardware-dump.md) at start-up.
   # Default (absent): false.
   # hardware_dump: true
@@ -122,18 +139,21 @@ diagnostics:
 # ---------------------------------------------------------------------------
 
 graphics:
-  # Quest only. The size of the eye buffer the game renders into (per eye, the swap chain the game creates once, at
-  # start-up). One of: stock, very_low, low, medium, high, very_high, ultra (lower case, exactly). The sizes are the ones
-  # the community patch repository's Texture Resolution setting uses for the same names, chosen by headset (a Quest 2 or
-  # a Quest 3, from the suggested width): Quest 3 very_low 1344x1408, low 1680x1760, medium 2376x2568, high 3072x3380,
-  # very_high 3584x3944, ultra 4096x4506; Quest 2 very_low 1152x1264, low 1440x1584, medium 1728x1904, high 2016x2224,
-  # very_high 2304x2528, ultra 2592x2848; 2 samples. This build has not measured any headset's native size. A bigger
-  # size looks sharper and costs frame time. `low` answers the headset's own size, and `stock` installs nothing: the
-  # game gets the size the headset runtime suggests.
-  # Read once at launch and fixed for the run: a change takes effect at the next launch. Any mistake (a value that is not
-  # one of the seven words, a mapping or a list, a key with no value, a `graphics` that is not a mapping, an unset ${VAR}, a
-  # file rejected as a whole) gives `stock`, with a warning in the sentinel log that names the key. Any other key under
-  # `graphics` (a misspelling such as `texture_qualty`, or `Texture_Quality`) is ignored with a warning that names it.
+  # Quest only. The size of the eye buffer the game renders into (per eye). One of: stock, very_low, low, medium, high,
+  # very_high, ultra (lower case, exactly). The sizes are the ones the community patch repository's Texture Resolution
+  # setting uses for the same names, chosen by headset (a Quest 2 or a Quest 3, from the suggested width): Quest 3 very_low
+  # 1344x1408, low 1680x1760, medium 2376x2568, high 3072x3380, very_high 3584x3944, ultra 4096x4506; Quest 2 very_low
+  # 1152x1264, low 1440x1584, medium 1728x1904, high 2016x2224, very_high 2304x2528, ultra 2592x2848; 2 samples. This build
+  # has not measured any headset's native size. A bigger size looks sharper and costs frame time. `low` answers the
+  # headset's own size, and so does `stock`.
+  # The game's settings menu has the same setting: a GRAPHICS page with one control, "Texture Resolution", of the six
+  # levels (Very Low to Ultra). A change there applies at the next frame, with no restart, and the game saves it. This key
+  # is the level the game starts at when the player has chosen nothing; what the player saved always wins over it. The
+  # control shows `stock` as Low.
+  # Read once at launch. Any mistake (a value that is not one of the seven words, a mapping or a list, a key with no value,
+  # a `graphics` that is not a mapping, an unset ${VAR}, a file rejected as a whole) gives `stock`, with a warning in the
+  # sentinel log that names the key. Any other key under `graphics` (a misspelling such as `texture_qualty`, or
+  # `Texture_Quality`) is ignored with a warning that names it.
   # Default (absent): stock. The log line `texture_quality` in the sentinel log names the level, its source and the size.
   # texture_quality: high
 
@@ -215,11 +235,13 @@ services:
 
   # Dedicated server only: the ServerDB token route the server registers through, dialed with the server's
   # access token as `Authorization: Bearer` (docs/adr/0001-serverdb-token-auth.md); guilds and regions are added
-  # as query parameters. Without it the server registers through socket_uri with identity.discord_id and
-  # auth.password in the query. A server with none of serverdb, serverdb_uri, or socket_uri plus
-  # identity.discord_id stops at registration: `no ServerDB URI: set services.serverdb_uri`.
+  # as query parameters. Without it a server with auth.password registers through socket_uri with
+  # identity.discord_id and auth.password in the query; a server with no auth.password (it signed in by device
+  # code) registers on the token route at socket_uri, so it needs no configuration. A server with none of
+  # serverdb, serverdb_uri, or socket_uri plus identity.discord_id stops at registration:
+  # `no ServerDB URI: set services.serverdb_uri`.
   # The route taken is logged: `[NEVR.GAMESERVER] serverdb route=<explicit|token|url_params|none> ...`.
-  # Default (absent): none.
+  # Default (absent): socket_uri for a server with no auth.password; none for a server with one.
   # Not a secret.
   # Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration, flat key nevr_serverdb_uri)
   # serverdb_uri: "ws://g.echovrce.com:80/nevr"
@@ -375,11 +397,14 @@ auth:
   # Required for dedicated server operation. Both builds; on the Quest, login (and so the façade) is on only when
   # this resolves.
   # Default (absent): the embedded public key (client mode only; a dedicated server has none).
+  # KNOWN-WRONG #1305: a dedicated server takes the embedded key too (#843).
   # SECRET — use env-var substitution in production.
   # server_key: "${NEVR_SOCKET_KEY:?server_key is required for servers}"
 
   # Server password. Sent as a query parameter in the ServerDB WebSocket URI (the key the runtime reads is auth.password).
-  # Optional; absent means no password auth.
+  # Optional; absent means the server signs in by device code like a client: at startup it prints a code and the
+  # page that takes it on the console (standard error), waits for the approval, asks for a new code when one runs
+  # out, and keeps the token in the sign-in cache of the nevr root, so a restart needs no new code.
   # SECRET — use env-var substitution in production.
   # password: "${NEVR_PASSWORD:?password is required}"
 
@@ -467,6 +492,7 @@ arena:
 # Override the base URL the game uses to download asset bundles (cosmetics,
 # arena geometry, etc.). When set, the runtime hooks the asset download
 # pipeline and redirects requests to this URL.
+# KNOWN-WRONG #1305: the runtime reads this key and discards it; the parser's path for it is assets.cdn_url.
 # Absent: game downloads from the hardcoded Ready At Dawn CDN (dead).
 # Not a secret.
 # Reader: src/runtime/lifecycle/config.cpp (LoadLocalConfigHook)
@@ -475,6 +501,7 @@ arena:
 
 # ---------------------------------------------------------------------------
 # exitonerror — exit the process on fatal errors
+# KNOWN-WRONG #1279: the key does nothing.
 #
 # When true, the game process calls ExitProcess on fatal errors (e.g.
 # ServerDB disconnection) rather than showing a crash dialog. This is the

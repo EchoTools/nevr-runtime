@@ -453,6 +453,13 @@ bool NevrCfgSocialFacadeEnabled() {
   return nevr_cfg::SocialFacadeEnabled(NevrCfg());
 }
 
+int NevrCfgFrameStatsMode(int* recognised) {
+  bool known = true;
+  const nevr_frame_stats::Mode mode = nevr_cfg::FrameStatsMode(NevrCfg(), &known);
+  if (recognised != nullptr) *recognised = known ? 1 : 0;
+  return static_cast<int>(mode);
+}
+
 const char* NevrCfgCaptureDevice() {
   return AccessorBoundary("NevrCfgCaptureDevice", [&]() -> const char* {
     const std::optional<std::string> device = NevrCfg().GetString("audio.capture_device");

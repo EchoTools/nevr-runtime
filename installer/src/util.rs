@@ -102,6 +102,42 @@ pub fn data_path_ok(path: &str) -> bool {
         .is_some_and(|name| name.ends_with(".zip") && name.len() > 4 && name.bytes().all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-')))
 }
 
+/// `packs/<name>.zip` with the name a-z 0-9 . - only: the shape a `content-pack` artifact has (a CDN file, no version
+/// directory). The name's own rule (`<id>-<sha12>.zip`) is checked by the manifest, which knows the id and the hash.
+pub fn pack_path_ok(path: &str) -> bool {
+    path.strip_prefix("packs/")
+        .is_some_and(|name| name.ends_with(".zip") && name.len() > 4 && name.bytes().all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-')))
+}
+
+/// A content pack id: `^[a-z][a-z0-9]{1,31}$`.
+pub fn pack_id_ok(id: &str) -> bool {
+    let b = id.as_bytes();
+    (2..=32).contains(&b.len()) && b[0].is_ascii_lowercase() && b[1..].iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+}
+
+/// A content pack version: `^[0-9]+\.[0-9]+\.[0-9]+$`. Unlike `semver_ok`, a leading zero is not refused here.
+pub fn pack_version_ok(v: &str) -> bool {
+    let parts: Vec<&str> = v.split('.').collect();
+    parts.len() == 3 && parts.iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// A content pack's `stock_data_version`: `^[0-9]{1,20}$`.
+pub fn stock_data_version_ok(v: &str) -> bool {
+    (1..=20).contains(&v.len()) && v.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// A content pack plugin name: `^[A-Za-z0-9_-]{1,64}$`.
+pub fn plugin_name_ok(name: &str) -> bool {
+    (1..=64).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// A `content-pack` contents path: segments of `A-Za-z0-9._-` joined by `/`, with no empty, `.` or `..` segment. Stricter
+/// than `rel_path_ok`, which allows any printable ASCII.
+pub fn pack_member_path_ok(p: &str) -> bool {
+    !p.is_empty()
+        && p.split('/').all(|s| !s.is_empty() && s != "." && s != ".." && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')))
+}
+
 /// A relative path made of segments of printable ASCII with no empty, `.` or `..` segment, no backslash and no drive
 /// colon, so it cannot leave the directory it is joined to.
 pub fn rel_path_ok(p: &str) -> bool {
@@ -224,6 +260,33 @@ mod tests {
         assert!(!data_path_ok("data/../x.zip"));
         assert!(!data_path_ok("data/x.zip/y"));
         assert!(!data_path_ok("data/.zip"));
+    }
+
+    #[test]
+    fn content_pack_shapes() {
+        assert!(pack_path_ok("packs/combat-9f86d081884c.zip"));
+        for bad in ["combat-9f86d081884c.zip", "data/combat-9f86d081884c.zip", "packs/", "packs/.zip", "packs/x.zip/y", "packs/../x.zip", "packs/a/b.zip", "packs/A.zip", "packs/x.zip\n", "packs/x.tar"] {
+            assert!(!pack_path_ok(bad), "{bad:?}");
+        }
+        assert!(pack_id_ok("ab") && pack_id_ok("combat2") && pack_id_ok(&format!("a{}", "9".repeat(31))));
+        for bad in ["", "a", "1ab", "Combat", "co-mbat", "co_mbat", &format!("a{}", "9".repeat(32))] {
+            assert!(!pack_id_ok(bad), "{bad:?}");
+        }
+        assert!(pack_version_ok("1.0.0") && pack_version_ok("05.10.200"));
+        for bad in ["1.0", "1.0.0.0", "1..0", "1.0.x", "v1.0.0", "1.0.0\n", "", "-1.0.0"] {
+            assert!(!pack_version_ok(bad), "{bad:?}");
+        }
+        assert!(stock_data_version_ok("5932408047") && stock_data_version_ok(&"9".repeat(20)));
+        assert!(!stock_data_version_ok("") && !stock_data_version_ok(&"9".repeat(21)) && !stock_data_version_ok("12a"));
+        assert!(plugin_name_ok("combat-mod") && plugin_name_ok("A_b-9") && plugin_name_ok(&"x".repeat(64)));
+        for bad in ["", "a b", "a.b", "a/b", &"x".repeat(65)] {
+            assert!(!plugin_name_ok(bad), "{bad:?}");
+        }
+        assert!(pack_member_path_ok("_data/5932408047/rad15/android/manifests/2b47aab238f60515"));
+        assert!(pack_member_path_ok("a...b/.hidden"));
+        for bad in ["", "/a", "a/", "a//b", "./a", "a/./b", "a/../b", "../a", "a\\b", "a b", "a:b", "a/\u{e9}"] {
+            assert!(!pack_member_path_ok(bad), "{bad:?}");
+        }
     }
 
     #[test]

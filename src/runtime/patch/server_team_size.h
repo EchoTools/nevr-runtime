@@ -155,8 +155,8 @@ inline Outcome Apply(uint8_t* capSite, uint8_t* slotSite, uint32_t size, nevr_ch
     // puts a size of 5 or less in effect, not while its bytes are no cap this reads.
     const uint32_t capNow = CapInEffect(capSite);
     if (std::memcmp(slotSite, o.slotBefore, sizeof(o.slotBefore)) != 0 && capNow != 0 && capNow <= kGameTeamSize) {
-      o.slotRestored = write(slotSite, o.slotBefore, sizeof(o.slotBefore)) &&
-                       std::memcmp(slotSite, o.slotBefore, sizeof(o.slotBefore)) == 0;
+      write(slotSite, o.slotBefore, sizeof(o.slotBefore));  // the read-back decides, not the writer's word
+      o.slotRestored = std::memcmp(slotSite, o.slotBefore, sizeof(o.slotBefore)) == 0;
     }
     o.inEffect = capNow;
     o.slotRule = std::memcmp(slotSite, kSlotPatched, sizeof(kSlotPatched)) == 0;
@@ -188,7 +188,9 @@ inline Outcome Apply(uint8_t* capSite, uint8_t* slotSite, uint32_t size, nevr_ch
 
 /// A writer reported a failure at a site (`cap` and `slot` stay Mismatch unless tried).
 inline bool AWriteFailed(const Outcome& o) {
-  return o.cap == nevr_checked_patch::Result::WriteFailed || o.slot == nevr_checked_patch::Result::WriteFailed;
+  using nevr_checked_patch::Result;
+  const auto failed = [](Result r) { return r == Result::WriteFailed || r == Result::WrittenWithError; };
+  return failed(o.cap) || failed(o.slot);
 }
 
 /// The cap runs above 5 with the game's slot rule, which gives a sixth member slot 5.
@@ -262,18 +264,10 @@ struct Line {
   std::string text;
 };
 
-/// The Win32 error of the last write that failed (logging Rule 10). 0 when no write failed: then a write_failed site's
-/// writer reported success and its read-back is not the replacement.
-using WriteErrorFn = uint32_t (*)();
-
-/// Remembers the error of a failed write for WriteErrorFn: the last failure wins, a success changes nothing.
-struct WriteErrors {
-  uint32_t last = 0;
-  bool Note(bool ok, uint32_t error) {
-    if (!ok) last = error;
-    return ok;
-  }
-};
+// The error of a failed write is the shared shape in checked_patch.h (WriteErrorFn, WriteErrors). 0 when no write
+// failed: then a write_failed site's writer reported success and its read-back is not the replacement.
+using WriteErrorFn = nevr_checked_patch::WriteErrorFn;
+using WriteErrors = nevr_checked_patch::WriteErrors;
 
 /// Everything Install does, but the log and the process: a client's skip line; on a server, the config value's
 /// problem (if any), then Apply on the two sites and its record with the value's source. A site that is write_failed

@@ -35,11 +35,12 @@ bool RegisterObbSkipCounters() noexcept;  // 6 counters
 // obb_skip::InstallIfCounted(countersRegistered): true when all three slots hold their thunks.
 bool InstallObbSkipHook(bool countersRegistered) noexcept;
 
-// The #943 texture-quality hook (sentinel/texture_quality_hook.h), through this seam for the same reason: the eye-buffer
-// size libr15 creates its swap chain with. Its counters are registered when the level is not `stock`.
-bool RegisterTextureQualityCounters() noexcept;  // 4 counters
-// texture_quality::InstallIfCounted(level, fromConfig, countersRegistered): true when the slot holds the thunk, or `stock`
-// asked for none.
+// The #943 texture-quality hook (sentinel/texture_quality_hook.h) and the #1012 Texture Resolution control
+// (sentinel/texture_menu_hook.h), through this seam for the same reason: the eye-buffer size libr15 creates its swap chain
+// with, and the settings-menu control that changes it while the game runs. Their counters are registered on every launch.
+bool RegisterTextureQualityCounters() noexcept;  // 4 + 13 counters
+// texture_quality::InstallIfCounted(level, fromConfig, countersRegistered), then texture_menu::Install(level, fromConfig): true
+// when the eye-size slot holds the thunk and the control's five hooks hold theirs.
 bool InstallTextureQualityHook(nevr_quest::texture_quality::Level level, bool fromConfig,
                                bool countersRegistered) noexcept;
 // The #1139 render-configuration log (sentinel/render_config.h), through this seam for the same reason: five VrApi slots

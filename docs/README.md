@@ -17,7 +17,7 @@ Design documents, architecture decisions, and porting analysis.
 | File | Description | Audience |
 | ---- | ----------- | -------- |
 | `adr/0001-serverdb-token-auth.md` | Game-server ServerDB registration authenticates with a JWT on its own `/nevr` route | Runtime and ops developers |
-| `adr/0002-crash-report-ingest.md` | Crash reports reach the game service through a spool and a deferred uploader (not yet implemented) | Runtime and Quest developers |
+| `adr/0002-crash-report-ingest.md` | Crash reports reach the game service through a spool and a deferred uploader (not yet implemented, #1303) | Runtime and Quest developers |
 | `adr/0003-quest-networking-port.md` | Quest networking shares the PCVR protocol core and differs only in adapters (tracked in #158) | Quest porting developers |
 | `adr/0004-quest-verification-regime.md` | Quest networking is verified against the exact binaries, offline | Quest porting developers |
 | `adr/0005-cosmetics-cdn-format.md` | Cosmetics arrive as `.evrp` packages listed in a JSON manifest on a CDN (normative format) | CDN tooling and game-hook developers |

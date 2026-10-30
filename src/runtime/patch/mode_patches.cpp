@@ -796,6 +796,12 @@ VOID PatchDisableWwise() {
 // multiplayer a second time (PreprocessCommandLineHook in boot.cpp). Validated against
 // kSpectatorStreamExpected, written only on a match, and recorded as one key=value line on every
 // call. Log() routes the record by phase itself (the boot tee, then the game's CLog).
+namespace {
+// The writer is a plain function pointer, so a failed ProcessMemcpy's Win32 error is kept here. It is reset and read
+// within one PatchSpectatorStreamCheck call (logging Rule 10).
+nevr_checked_patch::WriteErrors g_spectatorWriteErrors;
+}  // namespace
+
 nevr_checked_patch::Result PatchSpectatorStreamCheck(const char* phase) {
   uint8_t* const site = reinterpret_cast<uint8_t*>(EchoVR::g_GameBaseAddress) + nevr_patch_addresses::SPECTATORSTREAM_CHECK;
   static_assert(sizeof(nevr_checked_patch::kSpectatorStreamExpected) == nevr_patch_addresses::SPECTATORSTREAM_CHECK_SIZE,
@@ -806,12 +812,17 @@ nevr_checked_patch::Result PatchSpectatorStreamCheck(const char* phase) {
   uint8_t before[nevr_patch_addresses::SPECTATORSTREAM_CHECK_SIZE];
   std::memcpy(before, site, sizeof(before));
   const nevr_checked_patch::Site spec = nevr_checked_patch::SpectatorStreamSite();
+  g_spectatorWriteErrors = {};
   const nevr_checked_patch::Result result = nevr_checked_patch::Apply(
-      site, spec, [](void* dest, const void* src, size_t n) { return ProcessMemcpy(dest, src, n); });
+      site, spec, [](void* dest, const void* src, size_t n) {
+        DWORD error = 0;
+        return g_spectatorWriteErrors.Note(ProcessMemcpy(dest, src, n, &error), error);
+      });
 
   char record[192];
   nevr_checked_patch::FormatSpectatorStreamRecord(record, sizeof(record), phase,
-                                                  reinterpret_cast<uintptr_t>(site), before, result);
+                                                  reinterpret_cast<uintptr_t>(site), before,
+                                                  g_spectatorWriteErrors.last, result);
   const bool ok = result == nevr_checked_patch::Result::Applied ||
                   result == nevr_checked_patch::Result::AlreadyApplied;
   Log(ok ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning, "%s", record);

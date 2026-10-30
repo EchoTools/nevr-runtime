@@ -1,9 +1,30 @@
 # Shared by launch-client.sh, launch-server.sh and verify-server.sh (source it after cd'ing into the checkout).
 # Defines functions and one variable; running it has no side effects.
 
-# The game's process name (comm) is "Main Thread", so `pgrep -x echovr.exe` never matches; match the
-# command line, which starts with ./echovr.exe.
+# The game's process name (comm) is "Main Thread", so `pgrep -x echovr.exe` never matches. This pattern only narrows
+# the candidates for game_pids; a process that merely names the file (a shell's argument, a hash tool) matches it too,
+# so game_pids decides on the command line itself (#1490).
 ECHOVR_CMDLINE='(^|[/\\])echovr\.exe( |$)'
+
+# game_pids: prints the pid of each of this user's game processes, one per line, and nothing when there is none. A
+# process is the game when argv[0] (the first NUL-separated field of /proc/<pid>/cmdline, its last path element split on
+# / or \) is echovr.exe, as in ./echovr.exe or C:\...\echovr.exe; or argv[0] is a Wine loader (wine, wine64,
+# wine-preloader) and argv[1] is echovr.exe. A shell or a tool whose argument names the file is not the game. The
+# Python twin is tools/scenario/run_scenario.py game_pids. Always returns 0, so a caller under set -e can test the output.
+game_pids() {
+  local pid name0 name1
+  local -a argv
+  for pid in $(pgrep -u "$(id -u)" -f "$ECHOVR_CMDLINE"); do
+    [[ -r /proc/$pid/cmdline ]] || continue
+    mapfile -d '' -t argv < "/proc/$pid/cmdline" || continue
+    name0=${argv[0]:-}; name0=${name0##*[/\\]}
+    name1=${argv[1]:-}; name1=${name1##*[/\\]}
+    if [[ $name0 == echovr.exe || ( $name0 == wine* && $name1 == echovr.exe ) ]]; then
+      printf '%s\n' "$pid"
+    fi
+  done
+  return 0
+}
 
 # NEVR_WORK_ROOT and work_dir: where a run keeps what it writes (tools/lib/work_root.sh).
 # shellcheck source=tools/lib/work_root.sh
@@ -43,7 +64,7 @@ refuse_copy_credentials() {
 }
 
 # One game run at a time: a second run would save the first run's test DLL as its "original" and
-# restore that. The flock covers the caller's whole run (including its restore); the pgrep covers a
+# restore that. The flock covers the caller's whole run (including its restore); game_pids covers a
 # game started some other way. fd 9 holds the lock: the caller closes it (9>&-) for the children it
 # starts so a leftover wineserver cannot hold it. Exits 4; exits 3 first when refuse_copy_credentials refuses the copy.
 acquire_game_run_lock() {
@@ -55,7 +76,8 @@ acquire_game_run_lock() {
     "the lock file is kept; it holds no data." || exit 4
   exec 9>"$GAME_RUN_LOCK" || { echo "ERROR: cannot open the lock file $GAME_RUN_LOCK" >&2; exit 4; }
   flock -n 9 || { echo "ERROR: another game run (launch-client.sh, launch-server.sh or verify-server.sh) holds $GAME_RUN_LOCK" >&2; exit 4; }
-  if running=$(pgrep -u "$(id -u)" -f "$ECHOVR_CMDLINE"); then
+  running=$(game_pids)
+  if [[ -n $running ]]; then
     echo "ERROR: echovr.exe is already running (pid ${running//$'\n'/ }); stop it first" >&2
     exit 4
   fi

@@ -196,6 +196,11 @@
       "va": "0x141071B90",
       "name": "EchoVR::udp_protocol_handshake_or_intro1",
       "prologue": "48895c2420555641"
+    },
+    {
+      "va": "0x1413662E0",
+      "name": "OVR_GET_PERF_STATS",
+      "prologue": "488b05a154d80048"
     }
   ]
 }

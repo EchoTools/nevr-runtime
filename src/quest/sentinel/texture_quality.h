@@ -17,7 +17,9 @@
  * Low is the stock size on each headset, so it answers what `stock` would answer; it is a level so that a player can
  * ask for it by name.
  *
- * `stock` installs no hook: the game asks the runtime and gets the runtime's own answer.
+ * `stock` answers the runtime's own size, like every other id. The hook is installed at every level, because the game's own
+ * settings menu can change the level while the game runs (#1012): the level is the one the game is *applied* at, and the
+ * hook gives the size of the applied level (texture_quality_hook.h).
  */
 #pragma once
 
@@ -67,6 +69,36 @@ constexpr EyeSize SizeFor(Level level, Headset headset) noexcept {
     case Level::kUltra: return quest3 ? EyeSize{4096, 4506} : EyeSize{2592, 2848};
   }
   return {0, 0};
+}
+
+// ---- the in-game control (#1012) ----------------------------------------------------------------------------------------
+//
+// The game's own settings menu carries the level as the `graphics|msaa` setting (a field the render path never reads; texture_menu.h
+// has the reason and the evidence), as the index of a six-entry STRING ARRAY. The index is the menu's order, lowest resolution
+// first, and the saved value in settings_mp_v2_quest.json is that index. `stock` has no entry of its own: the menu shows it as
+// Low, because Low is the stock size.
+inline constexpr int kMenuLevelCount = 6;
+inline constexpr int kDefaultMenuIndex = 1;  // Low
+inline constexpr const char* kMenuLabels[kMenuLevelCount] = {"Very Low", "Low", "Medium", "High", "Very High", "Ultra"};
+inline constexpr const char* kMenuControlName = "Texture Resolution";
+inline constexpr const char* kMenuPageName = "GRAPHICS";
+
+// The level a menu index names; an index outside 0..5 is clamped (the saved value is a number a player or an older build could
+// have written).
+constexpr Level LevelForMenuIndex(int index) noexcept {
+  const int clamped = index < 0 ? 0 : (index >= kMenuLevelCount ? kMenuLevelCount - 1 : index);
+  return static_cast<Level>(clamped + 1);  // kVeryLow is 1: the menu's first entry
+}
+// The index the menu shows for a level. `stock` shows as Low.
+constexpr int MenuIndexForLevel(Level level) noexcept {
+  return level == Level::kStock ? kDefaultMenuIndex : static_cast<int>(level) - 1;
+}
+
+// The eye size the game is given at a level when the runtime's own answer is native: the native size for `stock`, the table's
+// for the others. Two levels that give the same pair need no rebuild between them (a `stock` that is Low on its headset).
+constexpr EyeSize EffectiveSize(Level level, EyeSize native) noexcept {
+  if (level == Level::kStock) return native;
+  return SizeFor(level, HeadsetForStockSize(native.width));
 }
 
 // The config.yaml word for a level (graphics.texture_quality).

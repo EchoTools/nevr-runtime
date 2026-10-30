@@ -167,7 +167,7 @@ pub fn plan_with(m: &Value, version: &str, obs: &Observed, consent_uninstall: bo
     let (apk, android) = match dev {
         Some(d) => {
             let file = d.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "quest.apk".into());
-            let art = Artifact { kind: "quest-apk".into(), platform: Some(PLATFORM.into()), path: file, size: d.size, sha256: d.sha256.clone(), android: Some(d.android.clone()), game_data: None, contents: vec![] };
+            let art = Artifact { kind: "quest-apk".into(), platform: Some(PLATFORM.into()), path: file, size: d.size, sha256: d.sha256.clone(), android: Some(d.android.clone()), game_data: None, content_pack: None, contents: vec![] };
             (art, d.android.clone())
         }
         None => {

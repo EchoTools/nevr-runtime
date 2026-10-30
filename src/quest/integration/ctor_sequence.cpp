@@ -190,15 +190,11 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     } else {
       r.Skip(StepId::kRegisterResourceRequestCounters, "release_build");
     }
-    // The texture-quality hook (#943) runs on every launch with whatever level the configuration gave (the default, `stock`
-    // for now, when it gave none), so its counters are registered on every launch, except for `stock`, which installs nothing.
-    bool textureCounters = false;
-    if (texture.level != nevr_quest::texture_quality::Level::kStock) {
-      textureCounters =
-          r.Run(StepId::kRegisterTextureQualityCounters, [&] { return steps.RegisterTextureQualityCounters(); });
-    } else {
-      r.Skip(StepId::kRegisterTextureQualityCounters, "stock");
-    }
+    // The texture-quality hook (#943) and the Texture Resolution control (#1012) run on every launch, at every level (`stock`
+    // included: the game's settings menu can raise the level while the game runs), so their counters are registered on every
+    // launch.
+    const bool textureCounters =
+        r.Run(StepId::kRegisterTextureQualityCounters, [&] { return steps.RegisterTextureQualityCounters(); });
     // The clock-level override (#928) is armed on every launch (the switch decides only whether it rewrites), so its counters
     // are registered on every launch too.
     const bool clockLevelsCounters =
@@ -267,9 +263,10 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
       r.Run(StepId::kInstallResourceRequestLog, [&] { return steps.InstallResourceRequestLog(true); });
     }
 
-    // The eye-buffer size libr15 creates its swap chain with (#943): every launch, no feature. libr15 asks for the size when
-    // it starts the game, after the constructor. Before the hardware dump, which shares this slot when this hook owns it.
-    if (texture.level != nevr_quest::texture_quality::Level::kStock && !textureCounters) {
+    // The eye-buffer size libr15 creates its swap chain with (#943) and the control that changes it (#1012): every launch, no
+    // feature. libr15 asks for the size when it starts the game, after the constructor. Before the hardware dump, which shares
+    // this slot when this hook owns it.
+    if (!textureCounters) {
       try {
         steps.InstallTextureQuality(texture, false);  // the hook's own rule logs that it installs nothing
       } catch (const std::exception&) {

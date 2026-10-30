@@ -20,7 +20,7 @@ Fn Resolve(Platform& platform, void* handle, const char* name) {
   return reinterpret_cast<Fn>(platform.Symbol(handle, name));
 }
 
-LoadRecord BaseRecord(const PlanEntry& entry) {
+LoadRecord BaseRecord(const PlanEntry& entry, bool configRejected) {
   LoadRecord record;
   record.name = entry.item.name;
   record.file = entry.item.file;
@@ -30,6 +30,7 @@ LoadRecord BaseRecord(const PlanEntry& entry) {
   record.source = SourceName(entry.source);
   record.overridden = entry.overridden;
   record.expectedSha256 = entry.expectedSha256;
+  record.configRejected = configRejected;
   return record;
 }
 
@@ -86,7 +87,7 @@ void Loader::Plan(std::vector<PlannedItem> items) {
   }
   for (PlanEntry& entry : entries_) {
     if (entry.pending) continue;
-    LoadRecord record = BaseRecord(entry);
+    LoadRecord record = BaseRecord(entry, options_.configRejected);
     record.outcome = entry.outcome;
     record.reason = entry.reasonToken;
     Settle(entry, record);
@@ -103,7 +104,7 @@ void Loader::RunPhase(PluginPhase phase) {
 void Loader::Finish(const char* reasonToken) {
   for (PlanEntry& entry : entries_) {
     if (!entry.pending) continue;
-    LoadRecord record = BaseRecord(entry);
+    LoadRecord record = BaseRecord(entry, options_.configRejected);
     record.outcome = Outcome::kNotStarted;
     record.reason = reasonToken;
     Settle(entry, record);
@@ -137,7 +138,7 @@ NvrGameContext Loader::ContextFor(const PlanEntry& entry, const char* pluginView
 }
 
 void Loader::Load(PlanEntry& entry) {
-  LoadRecord record = BaseRecord(entry);
+  LoadRecord record = BaseRecord(entry, options_.configRejected);
   void* handle = nullptr;  // set once the object is mapped; closed again on every path that does not keep the plugin
   const auto close = [&] {
     if (handle == nullptr) return;
@@ -194,6 +195,9 @@ void Loader::Load(PlanEntry& entry) {
       case BuildIdVerdict::kUnknownGame: return end(Outcome::kRefused, reason::kGameBuildIdUnavailable);
       case BuildIdVerdict::kUnsupported: return end(Outcome::kRefused, reason::kBuildIdUnsupported);
     }
+    // A matching note is not enough: a plugin's addresses are properties of the stock file, so it runs only on the file that
+    // attach verified as our patch. On any other libr15 (the stock file, or a note with no verified stubs) it is refused.
+    if (!view.patched) return end(Outcome::kRefused, reason::kLibR15NotVerified);
 
     handle = platform_.Open(entry.item.file);
     if (handle == nullptr) return end(Outcome::kFailed, reason::kDlopenFailed);

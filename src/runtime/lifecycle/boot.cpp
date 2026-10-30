@@ -22,11 +22,13 @@
 #include "runtime/patch/invite_config.h"
 #include "runtime/patch/invite_service.h"
 #include "runtime/patch/menu_cards.h"
+#include "runtime/patch/netgun_bullets.h"
 #include "runtime/patch/netgun_bullet_ids.h"
 #include "runtime/patch/ui_text_writer.h"
 #include "runtime/patch/invite_wizard_hook.h"
 #include "runtime/patch/arena_public_clock.h"
 #include "runtime/patch/coop_ai_trace.h"
+#include "runtime/frame/frame_stats.h"
 #include "runtime/patch/server_bots_install.h"
 #include "runtime/patch/server_team_size_install.h"
 #include "runtime/ext/plugin_loader.h"
@@ -301,7 +303,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   InstallResourceOverride();
 
   // Early-detect -server before auth — full CLI parse happens below.
-  // The token_auth MODULE needs to know server mode to skip the device-code flow.
+  // The token_auth MODULE needs to know server mode: a server with auth.password skips the device-code flow, one
+  // without it signs in by device code (#1532).
   {
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -677,6 +680,16 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     Log(EchoVR::LogLevel::Info, "[NEVR.MENU] main-menu cards skipped reason=server_mode (a server draws no menu)");
   }
 
+  // #1420: the magnum, smg, Chain and rifle bullets of the combat levels get the scout bullet's particle effects, in
+  // copies of the stock CParticleEffectCR and CR15NetBulletCR pinned by sha256; any other bytes are served unchanged.
+  // Client only: a server draws no particles. Registered after InstallResourceOverride, which created the registry.
+  if (!g_isServer) {
+    nevr_netgun_bullets::Install();
+  } else {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.RESOURCE] netgun bullet effects skipped reason=server_mode (a server draws no particle effects)");
+  }
+
   // #1420: the four unfinished weapons (magnum, smg, Chain, rifle) fire the assault's bullet once their netgun entries name
   // it. The transform rewrites the player's own stock CR15NetGunCR in memory; both client and server load it. Registered
   // after InstallResourceOverride, which created the registry.
@@ -789,6 +802,15 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     }
   }
 
+  // #954: the PC frame-time probe. diagnostics.frame_stats (default off) switches the loop-interval ring and
+  // the 10 s [NEVR.PERF] line; Configure logs the resolved value at Info whether it is on or off (N122/N124).
+  {
+    int recognised = 1;
+    const nevr_frame_stats::Mode frameStats =
+        static_cast<nevr_frame_stats::Mode>(NevrCfgFrameStatsMode(&recognised));
+    nevr_frame_stats::Configure(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress), g_isServer != FALSE,
+                                frameStats, recognised != 0);
+  }
   // #1423: AI bots on a server (network.bots_per_session, absent = 0): on a server with a count above 0 the sites are
   // checked once here, and the driver (GameServerLib::Update) runs only when they hold; a client logs that it does not
   // apply (N122/N124).

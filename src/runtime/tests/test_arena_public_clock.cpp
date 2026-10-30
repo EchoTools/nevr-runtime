@@ -54,6 +54,15 @@ TEST(ArenaPublicClock, NonArenaKeepsTheScriptsValue) {
   EXPECT_EQ(state[kStateValueOffset], 1);
 }
 
+// #1493: a social session's flag store is left alone, as a combat session's is.
+TEST(ArenaPublicClock, SocialSessionKeepsTheScriptsValue) {
+  auto state = State(kPublicMatchFlag, 1);
+  const FlagStoreOutcome outcome = ApplyToFlagState(state.data(), true, Type("social_2.0"));
+  EXPECT_FALSE(outcome.decision.forceFalse);
+  EXPECT_EQ(outcome.decision.reason, "non_arena");
+  EXPECT_EQ(state[kStateValueOffset], 1);
+}
+
 TEST(ArenaPublicClock, NoStoredSessionTypeKeepsTheScriptsValue) {
   auto state = State(kPublicMatchFlag, 1);
   const FlagStoreOutcome outcome = ApplyToFlagState(state.data(), true, std::nullopt);

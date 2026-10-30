@@ -364,6 +364,7 @@ void MalformedFileFallsBackToDefaults() {
   for (const Case& c : bad) {
     const LoadResult r = Load(Full(), c.text);
     CHECK(r.fileRejected);
+    CHECK(r.config.fileRejected && r.config.plugins.empty());  // the plugin loader is told the file did not load
     // A rejected file contributes nothing: the embedded defaults stay.
     CHECK(r.config.socketUri.source == Source::kEmbedded && r.config.socketUri.text == kEmbSocket);
     CHECK(r.config.serverKey.text == kEmbServerKey);

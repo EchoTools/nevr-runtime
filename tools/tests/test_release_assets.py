@@ -47,6 +47,40 @@ class ReleaseAssetsTest(unittest.TestCase):
         self.assertNotIn("release-assets/SHA256SUMS", build)
         self.assertNotIn("release-assets/RELEASE-NOTES.md", build)
 
+    def test_every_release_upload_step_ships_only_the_windows_zip_and_the_quest_library(self):
+        # A game-derived pack never rides on a release: each action-gh-release `files:` block names only the zip
+        # and the Quest library, and no workflow line uploads a pack or content with `gh release upload`.
+        blocks = 0
+        for path in sorted((REPO / ".github/workflows").glob("*.yml")):
+            for step in re.split(r"(?m)^(?=\s*- )", path.read_text(encoding="utf-8")):
+                if not re.search(r"(?m)^\s*(- )?uses:\s*softprops/action-gh-release@", step):
+                    continue
+                lines = step.splitlines()
+                for i, line in enumerate(lines):
+                    m = re.match(r"^(\s*)files:\s*(.*)$", line)
+                    if not m:
+                        continue
+                    blocks += 1
+                    indent = len(m.group(1))
+                    globs = m.group(2).split()
+                    if m.group(2).strip() == "|":
+                        globs = []
+                        for body in lines[i + 1:]:
+                            if body.strip() == "":
+                                continue
+                            if len(body) - len(body.lstrip()) <= indent:
+                                break
+                            globs.extend(body.split())
+                    self.assertTrue(globs, f"{path.name}: files block is empty")
+                    for glob in globs:
+                        self.assertTrue(glob.endswith("release-assets/*.zip") or glob.endswith("quest-asset/*.so"),
+                                        f"{path.name}: files glob {glob} is not the zip or the Quest library")
+        self.assertGreaterEqual(blocks, 1, "no action-gh-release files block was found to check")
+        for path in sorted((REPO / ".github/workflows").glob("*.yml")):
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if "gh release upload" in line:
+                    self.assertFalse(re.search(r"pack|content", line), f"{path.name}: {line.strip()}")
+
     def test_releasing_md_lists_each_asset_and_agents_md_points_at_it(self):
         text = (REPO / "RELEASING.md").read_text()
         for name in listed("X.Y.Z"):
