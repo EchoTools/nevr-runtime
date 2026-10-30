@@ -2280,6 +2280,8 @@ class VariantBuildOutput(VariantCase):
         text = self.build_log().read_text()
         self.assertIn("SECOND-RUN-BBB", text)
         self.assertNotIn("FIRST-RUN-AAA", text)
+        self.assertEqual(text.count("--- stdout ---"), 1, "nothing of the longer first file is left behind")
+        self.assertEqual(text, "exit 1\n--- stderr ---\nSECOND-RUN-BBB\n--- stdout ---\nOUTMARK-7c1e\n")
 
     def test_a_file_left_with_a_loose_mode_is_0600_again(self) -> None:
         self.build_log().parent.mkdir(parents=True, exist_ok=True)
