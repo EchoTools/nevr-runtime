@@ -9,6 +9,7 @@
 #include "bvh.h"
 #include "clock_levels.h"
 #include "custctx.h"
+#include "meshstep.h"
 #include "droneguard.h"
 #include "dronekill.h"
 #include "dronemuzzle.h"
@@ -379,6 +380,9 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
 #endif
 #if Q15T_CUSTCTX
   ReportModule("custctx", InstallCustCtx(base));
+#endif
+#if Q15T_MESHSTEP
+  ReportModule("meshstep", InstallMeshStep(base));
 #endif
 #if Q15T_DRONEGUARD
   ReportModule("droneguard", InstallDroneGuard(base));

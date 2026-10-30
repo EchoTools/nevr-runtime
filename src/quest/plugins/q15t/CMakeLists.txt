@@ -16,6 +16,7 @@ set(Q15T_GPU_LEVEL 4 CACHE STRING "GPU level the clock raise (args {clock: raise
 option(Q15T_FXTRAIL "fxtrail (R29): a bullet whose trail effect has no instance ends its trail. Source: ON by default" ON)
 option(Q15T_VOIPDROP "voipdrop (R30): a remote voice packet that cannot be stored is dropped. Source: DEFAULT ON" ON)
 option(Q15T_CUSTCTX "custctx (R31-R33): three guards on the customization renderer. Source: DEFAULT ON" ON)
+option(Q15T_MESHSTEP "meshstep (#1555): CGMeshListResource tables grow by step 1 (reconstructed constructor, GOT word). Kill file meshstep.off" ON)
 option(Q15T_GUNCONNECT "gunconnect (R17-R19): the local player's guns get Connect(local user) so they fire. Source: default ON; tick" ON)
 option(Q15T_AIBOTS "aibots (R40): Practice AI bots get a scenario each combat match. Source: default ON; tick" ON)
 option(Q15T_BVH "bvh (R20-R25): a real static raycast tree for CBVHTree. Source: on by default (kill file bvh.off); tick" ON)
@@ -75,7 +76,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(Q15T_SOURCES src/plugin.cpp src/plugin_log.cpp src/import_hook.cpp src/clock_levels.cpp src/plugin_args.cpp src/refresh_rate.cpp src/game_tick.cpp src/safe_read.cpp src/headset_gates.cpp src/got_swap.cpp src/weapon_arm.cpp src/gamespace.cpp)
-foreach(m FXTRAIL VOIPDROP CUSTCTX GUNCONNECT AIBOTS BVH WALLFIRE IMPACTSND EC ECFX DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE HUDMETER LEVELNAME MUSIC SENSORWD)
+foreach(m FXTRAIL VOIPDROP CUSTCTX MESHSTEP GUNCONNECT AIBOTS BVH WALLFIRE IMPACTSND EC ECFX DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE HUDMETER LEVELNAME MUSIC SENSORWD)
   if(Q15T_${m})
     string(TOLOWER ${m} lm)
     list(APPEND Q15T_SOURCES src/${lm}.cpp)
@@ -102,7 +103,7 @@ target_compile_definitions(nevr_q15t PRIVATE
   Q15T_BUILD_ID="${nevr_pinned_build_id}"
   Q15T_GATE_LINK=$<BOOL:${Q15T_GATE_LINK}> Q15T_GATE_PERM=$<BOOL:${Q15T_GATE_PERM}> Q15T_GATE_BOTS=$<BOOL:${Q15T_GATE_BOTS}>
   Q15T_HZ_MATCH90=$<BOOL:${Q15T_HZ_MATCH90}> Q15T_T26=$<BOOL:${Q15T_T26}> Q15T_CPU_LEVEL=${Q15T_CPU_LEVEL} Q15T_GPU_LEVEL=${Q15T_GPU_LEVEL}
-  Q15T_FXTRAIL=$<BOOL:${Q15T_FXTRAIL}> Q15T_VOIPDROP=$<BOOL:${Q15T_VOIPDROP}> Q15T_CUSTCTX=$<BOOL:${Q15T_CUSTCTX}>
+  Q15T_FXTRAIL=$<BOOL:${Q15T_FXTRAIL}> Q15T_VOIPDROP=$<BOOL:${Q15T_VOIPDROP}> Q15T_CUSTCTX=$<BOOL:${Q15T_CUSTCTX}> Q15T_MESHSTEP=$<BOOL:${Q15T_MESHSTEP}>
   Q15T_GUNCONNECT=$<BOOL:${Q15T_GUNCONNECT}> Q15T_AIBOTS=$<BOOL:${Q15T_AIBOTS}> Q15T_BVH=$<BOOL:${Q15T_BVH}>
   Q15T_WALLFIRE=$<BOOL:${Q15T_WALLFIRE}> Q15T_IMPACTSND=$<BOOL:${Q15T_IMPACTSND}> Q15T_EC=$<BOOL:${Q15T_EC}> Q15T_ECFX=$<BOOL:${Q15T_ECFX}>
   Q15T_DRONEGUARD=$<BOOL:${Q15T_DRONEGUARD}> Q15T_DRONEGUARD_IDX=$<BOOL:${Q15T_DRONEGUARD_IDX}> Q15T_PEERCLAMP=$<BOOL:${Q15T_PEERCLAMP}>
