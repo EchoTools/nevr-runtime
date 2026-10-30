@@ -19,15 +19,17 @@ void TestHook_SetMemoryContextSlot(void* const* slot);
 /// terminates the process. The sink must not allocate or take locks. Optional: stderr is the fallback.
 void SetResourceOverrideFatalLineSink(void (*sink)(const char* line));
 
-/// What ShutdownResourceOverride found, returned so the figures are testable as well as logged.
+/// What ShutdownResourceOverride found, returned so the figures are testable as well as logged. `never_applied` counts
+/// fixed overrides only; `transforms_unserved` counts transforms that answered no load this session.
 struct ResourceOverrideShutdownReport {
     uint64_t registered;
     uint64_t never_applied;
+    uint64_t transforms_unserved;
     bool hook_installed;
 };
 
-/// Reports the registry at normal process exit or dynamic unload: one warning per override the game never
-/// requested, and a summary. When the hook is live the module is pinned, so owned buffers stay until process
+/// Reports the registry at normal process exit or dynamic unload: one warning per fixed override the game never
+/// served (passed over by an earlier override, or never requested), and a summary. When the hook is live the module is pinned, so owned buffers stay until process
 /// exit; when it never installed, owned buffers are freed and the registry released.
 ResourceOverrideShutdownReport ShutdownResourceOverride();
 
@@ -49,7 +51,8 @@ void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
 /// What a transform returns for a resource: `original` and `original_size` are the buffer the game delivered, and a
 /// transform that wants to serve other bytes sets `*out` and `*out_size` and returns true. The bytes it returns
 /// must stay valid and unchanged for the rest of the process (the game keeps reading them after the callback).
-/// Returning false leaves the game's own buffer in place. It runs on the game's resource thread, outside the
+/// Returning false leaves the game's own buffer in place for this transform; the next transform of the key is asked
+/// (RegisterResourceTransform). It runs on the game's resource thread, outside the
 /// registry lock; it must not throw.
 using ResourceTransformFn = bool (*)(const void* original, uint64_t original_size, const void** out,
                                      uint64_t* out_size, void* user);
@@ -58,8 +61,11 @@ using ResourceTransformFn = bool (*)(const void* original, uint64_t original_siz
 /// transform sees the game's buffer on every load of that resource, so it can build its answer from the player's
 /// own data and serve it again when the resource loads again. Only the primary buffer (index 0) is offered: a transform
 /// keyed by a buffer-1 on-disk type is never asked. A fixed override of the same key outranks a transform whatever the
-/// registration order: the transform answers only the loads no override serves (#1479).
-void RegisterResourceTransform(uint64_t type_hash, uint64_t name_hash, ResourceTransformFn transform, void* user,
+/// registration order: the transform answers only the loads no override serves (#1479). Transforms of one key are asked
+/// in registration order; one that declines hands the load to the next.
+/// Returns true when the transform is in the registry. False: a null transform, or no registry (the caller's
+/// summary should say so). A failed hook install is logged where it fails.
+bool RegisterResourceTransform(uint64_t type_hash, uint64_t name_hash, ResourceTransformFn transform, void* user,
                                const char* label);
 
 /// Reads an `_overrides/` file name: `0xTYPE.0xNAME` (the type names the buffer, as for RegisterResourceOverride) or

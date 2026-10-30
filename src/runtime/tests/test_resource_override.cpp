@@ -20,8 +20,10 @@
 #include "runtime/patch/asset_cache.h"
 #include "runtime/patch/resource_override.h"
 #include "runtime/lifecycle/cli.h"
+#include "core/logging.h"
 
 bool TestLogContains(const std::string& needle);
+bool TestLogContainsAtLevel(EchoVR::LogLevel level, const std::string& needle);
 void ClearTestLogs();
 
 namespace {
@@ -770,7 +772,7 @@ TEST_F(ResourceTransforms, AnEmptyAnswerIsNotServed) {
   EXPECT_EQ(g_seenBuffer, stock);
 }
 
-TEST_F(ResourceTransforms, ARequestedTransformIsNotReportedAsNeverApplied) {
+TEST_F(ResourceTransforms, ATransformWhoseResourceNeverLoadedIsNotAWarning) {
   RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "probe");
   RegisterResourceTransform(kTransformType, kTransformName + 5, &ProbeTransform, nullptr, "idle");
   static const std::uint8_t stock[] = {1, 2, 3};
@@ -778,13 +780,21 @@ TEST_F(ResourceTransforms, ARequestedTransformIsNotReportedAsNeverApplied) {
   ClearTestLogs();
   const ResourceOverrideShutdownReport report = ShutdownResourceOverride();
   EXPECT_EQ(report.registered, 2u);
-  EXPECT_EQ(report.never_applied, 1u);
-  EXPECT_TRUE(TestLogContains("override never applied label=idle"));
+  EXPECT_EQ(report.never_applied, 0u) << "a transform is not a fixed override, so it is not counted as one";
+  EXPECT_EQ(report.transforms_unserved, 1u);
+  EXPECT_FALSE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "transform not served label=idle"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Debug, "transform not served label=idle"));
+  EXPECT_FALSE(TestLogContains("override never applied label=idle"));
 }
 
 TEST_F(ResourceTransforms, ANullTransformRegistersNothing) {
-  RegisterResourceTransform(kTransformType, kTransformName, nullptr, nullptr, "none");
+  EXPECT_FALSE(RegisterResourceTransform(kTransformType, kTransformName, nullptr, nullptr, "none"));
   EXPECT_EQ(ShutdownResourceOverride().registered, 0u);
+}
+
+TEST_F(ResourceTransforms, ARegisteredTransformReportsItRegistered) {
+  EXPECT_TRUE(RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "probe"));
+  EXPECT_EQ(ShutdownResourceOverride().registered, 1u);
 }
 
 // ── #1146: what reaches the game is the game's own memory ─────────────────────────────────────────────────────
@@ -844,6 +854,36 @@ TEST_F(ResourceTransforms, ACoreTransformAloneStillAppliesAndDisplacesNothing) {
   EXPECT_EQ(g_probe.calls, 1);
   ExpectGameCopy(g_probe.served.data(), g_probe.served.size());
   EXPECT_FALSE(TestLogContains("displaces transform"));
+}
+
+bool DecliningTransform(const void* /*in*/, std::uint64_t /*inSize*/, const void** /*out*/, std::uint64_t* /*outSize*/,
+                        void* /*user*/) {
+  return false;
+}
+
+TEST_F(ResourceTransforms, ATransformThatDeclinesHandsTheLoadToTheNextTransform) {
+  RegisterResourceTransform(kTransformType, kTransformName, &DecliningTransform, nullptr, "declines");
+  RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "answers");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  EXPECT_EQ(g_probe.calls, 1);
+  ExpectGameCopy(g_probe.served.data(), g_probe.served.size());
+  EXPECT_TRUE(TestLogContains("transform kept the game's buffer label=declines"));
+  EXPECT_TRUE(TestLogContains("transform applied label=answers"));
+}
+
+TEST_F(ResourceTransforms, AFixedOverridePassedOverByAnEarlierOneIsReportedAsSuch) {
+  static const std::uint8_t first[] = {10, 20, 30, 40};
+  static const std::uint8_t second[] = {50, 60, 70, 80};
+  RegisterResourceOverride(kTransformType, kTransformName, first, sizeof(first), "first");
+  RegisterResourceOverride(kTransformType, kTransformName, second, sizeof(second), "second");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  ClearTestLogs();
+  const ResourceOverrideShutdownReport report = ShutdownResourceOverride();
+  EXPECT_EQ(report.never_applied, 1u);
+  EXPECT_TRUE(TestLogContains("override passed over label=second"));
+  EXPECT_FALSE(TestLogContains("override never applied label=second"));
 }
 
 class GameHeapCopies : public ResourceTransforms {};
