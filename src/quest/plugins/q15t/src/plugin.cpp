@@ -18,6 +18,7 @@
 #include "ecfx.h"
 #include "nevr/plugin_interface.h"
 #include "fxtrail.h"
+#include "pfxshotpos.h"
 #include "game_tick.h"
 #include "gunconnect.h"
 #include "headset_gates.h"
@@ -173,6 +174,9 @@
 #ifndef Q15T_DECALS  // the level decals of decals.bin as dynamic-mesh quads (decals.h); after impactsnd: it chains on the Shutdown wrapper
 #define Q15T_DECALS 0
 #endif
+#ifndef Q15T_PFXSHOTPOS  // the bullet-effect placement probe (pfxshotpos.h); log only, not installed until the particle renderer's hooks exist
+#define Q15T_PFXSHOTPOS 0
+#endif
 // The game-thread tick: CncaGame::ExclusiveUpdateGame's JUMP_SLOT, its function, and CR15Game's vptr value (R17; q15t
 // the source build's gunconnect kGotExclusiveUpdateGame / kFnExclusiveUpdateGame / kGameVptr).
 #ifndef Q15T_SLOT_EXCLUSIVEUPDATEGAME
@@ -289,6 +293,9 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_DECALS
     "decals "
+#endif
+#if Q15T_PFXSHOTPOS
+    "pfxshotpos "
 #endif
     "";
 
@@ -526,6 +533,9 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
 #endif
 #if Q15T_DECALS
   ReportModule("decals", InstallDecals(base));  // after impactsnd: its Shutdown wrapper chains on impactsnd's
+#endif
+#if Q15T_PFXSHOTPOS
+  InstallPfxShotPos();  // logs its own outcome (ReportModule would call a missing renderer an error); no tick
 #endif
 #if Q15T_MUSIC
   {
