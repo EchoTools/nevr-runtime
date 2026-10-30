@@ -9,6 +9,7 @@
 #include "bvh.h"
 #include "clock_levels.h"
 #include "custctx.h"
+#include "meshstep.h"
 #include "droneguard.h"
 #include "dronekill.h"
 #include "dronemuzzle.h"
@@ -23,6 +24,7 @@
 #include "impactsnd.h"
 #include "instmodel.h"
 #include "levelname.h"
+#include "boosterpool.h"
 #include "music.h"
 #include "peerclamp.h"
 #include "plugin_args.h"
@@ -30,7 +32,9 @@
 #include "powerboost.h"
 #include "refresh_rate.h"
 #include "sensorwd.h"
+#include "shaderstep.h"
 #include "shieldgamma.h"
+#include "tablestep.h"
 #include "voipdrop.h"
 #include "wallfire.h"
 #include "weapon_arm.h"
@@ -137,11 +141,17 @@
 #ifndef Q15T_HUDMETER
 #define Q15T_HUDMETER 0
 #endif
+#ifndef Q15T_TABLESTEP  // issue #1552: shader-set table growth step 32 -> 1 (tablestep.cpp)
+#define Q15T_TABLESTEP 0
+#endif
 #ifndef Q15T_SHIELDGAMMA  // bitmask: 1 gamma, 2 tube mirror
 #define Q15T_SHIELDGAMMA 0
 #endif
 #ifndef Q15T_LEVELNAME
 #define Q15T_LEVELNAME 0
+#endif
+#ifndef Q15T_SHADERSTEP
+#define Q15T_SHADERSTEP 0
 #endif
 #ifndef Q15T_MUSIC
 #define Q15T_MUSIC 0
@@ -244,8 +254,12 @@ constexpr char kCompiledModules[] =
 #if Q15T_SHIELDGAMMA
     "shieldgamma "
 #endif
+#if Q15T_TABLESTEP
+    "tablestep "
+#endif
 #if Q15T_LEVELNAME
     "levelname "
+    "boosterpool "
 #endif
 #if Q15T_MUSIC
     "music "
@@ -255,6 +269,9 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_INSTMODEL
     "instmodel "
+#endif
+#if Q15T_SHADERSTEP
+    "shaderstep "
 #endif
     "";
 
@@ -387,6 +404,9 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
 #if Q15T_CUSTCTX
   ReportModule("custctx", InstallCustCtx(base));
 #endif
+#if Q15T_MESHSTEP
+  ReportModule("meshstep", InstallMeshStep(base));
+#endif
 #if Q15T_DRONEGUARD
   ReportModule("droneguard", InstallDroneGuard(base));
 #endif
@@ -467,8 +487,12 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
 #if Q15T_SHIELDGAMMA
   ReportModule("shieldgamma", InstallShieldGamma(base, (Q15T_SHIELDGAMMA & 1) != 0, (Q15T_SHIELDGAMMA & 2) != 0));
 #endif
+#if Q15T_TABLESTEP
+  ReportModule("tablestep", InstallTableStep(base));
+#endif
 #if Q15T_LEVELNAME
   ReportModule("levelname", InstallLevelName(base));
+  ReportModule("boosterpool", InstallBoosterPool(base));  // the companion word row, as a GOT hook (boosterpool.h)
 #endif
 #if Q15T_SENSORWD
   ReportModule("sensorwd", InstallSensorWd(base));
@@ -476,6 +500,9 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
 #endif
 #if Q15T_INSTMODEL
   ReportModule("instmodel", InstallInstModel(base));  // no tick: the swapped constructor does its work when the object is built
+#endif
+#if Q15T_SHADERSTEP
+  ReportModule("shaderstep", InstallShaderStep(base));
 #endif
 #if Q15T_MUSIC
   {

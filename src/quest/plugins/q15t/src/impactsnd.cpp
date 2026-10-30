@@ -4,11 +4,14 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 
 #include "got_swap.h"
+#include "nevr/symbol_hash.h"
 #include "plugin_log.h"
 #include "safe_read.h"
 
@@ -32,6 +35,46 @@ constexpr std::uintptr_t kShutdownFnVa = 0x21226f0;      // R17 CR15NetBulletCS:
 constexpr std::uint64_t kDefaultSym = kImpactDefaultSymbol;
 constexpr std::uintptr_t kMapCount = 0x30;               // map+0x30 = row count (the source build's impactsnd:77)
 constexpr std::uintptr_t kMapFlags = 0x38;               // bit 0 = sort pending (the source build's impactsnd:100)
+constexpr std::uintptr_t kWhizzbyOff = 0x40;             // the second table (bullet_whizzby) sits 0x40 into kSoundSettings
+
+// ---- R16, rebuilt: LoadSoundSettings in C++ (ReVault 0x2221d04, 808 bytes; the stock body is not copied, its steps are).
+// The stock loader's row scratch {key, id} sits at sp+0x10 / sp+0x18, the same bytes as the path string it hands to the next
+// CJson::Next (MakeTStrPrintF "bullet_impact|<gun>"), so after the first row the path reads a key, and each gun keeps one row.
+// The rebuilt loader keeps the path and the row in separate storage, so every member of every gun is appended.
+//
+// The calls go to the stock loader's own direct-call targets (ELF = ReVault VA - 0x100000). Each is a GOT stub that jumps on
+// to the function, the same as the stock `bl`. The first word of each stub is pinned (read from ReVault, the stub's
+// `adrp x16`), and the rebuild runs only when every one matches. Signatures: ReVault decompiles of CJson::Next(char const*,
+// void*) const, CJson::NameAt(void*) const, CJson::TString(void*, char*) const (called with a third argument, the fallback),
+// CMemBlock::Resize(ulonglong, uint) and the stock call sites (x0 = this, the arguments in x1, x2) in 0x2221d04..0x2222028.
+// CSymbol64 is the SDK's CSymbol64Hash (the module's kIds keys, checked against it by the tests); CSoundSymbol is replaced
+// by WwiseEventId, because CalculateSymbolValue returns kStockId for every name on the Quest (RE-28).
+struct RebuildCallee {
+  const char* name;
+  std::uintptr_t elf;
+  std::uint32_t first_word;  // the stub's first instruction, little-endian
+};
+constexpr RebuildCallee kRebuildCallees[] = {
+    {"CJson::CJson", 0xed7760, 0x90013f70u},
+    {"CJson::~CJson", 0xedcae0, 0xb0013f50u},
+    {"CJson::LoadFromProjectSourceDb", 0x0f00140, 0xf0013eb0u},
+    {"CJson::Next", 0x0f28490, 0xf0013e10u},
+    {"CJson::NameAt", 0x0f17d40, 0x90013e70u},
+    {"CJson::TString", 0x0f237d0, 0xd0013e30u},
+    {"CMemBlock::Resize", 0x0f3e400, 0x90013dd0u},
+};
+enum RebuildIdx : std::size_t { kIdxCtor, kIdxDtor, kIdxLoad, kIdxNext, kIdxNameAt, kIdxTString, kIdxResize };
+using JsonCtorFn = void (*)(void* self);
+using JsonDtorFn = void (*)(void* self);
+using JsonLoadFn = int (*)(void* self, const char* path);
+using JsonNextFn = void* (*)(void* self, const char* name, const void* from);
+using JsonNameAtFn = const char* (*)(void* self, const void* node);
+using JsonTStringFn = const char* (*)(void* self, const void* node, const char* fallback);
+using MemBlockResizeFn = void (*)(void* self, std::uint32_t bytes, int keep);
+constexpr const char* kImpactPath = "bullet_impact";
+constexpr const char* kWhizzbyPath = "bullet_whizzby";
+// the stock SPrintF("%s|%s", "/json/r14/config", "mp_sound_settings.json")
+constexpr char kJsonFile[] = "/json/r14/config|mp_sound_settings.json";
 
 // R15: the hit code that reads the count and D (the source build's impactsnd:78-80). Read-only guards: checked, never written.
 struct CodeWord {
@@ -82,6 +125,7 @@ std::uintptr_t g_base = 0;
 bool g_nowrite = Q15T_IMPACTSND_NOWRITE != 0;
 std::atomic<bool> g_on{false};
 std::atomic<bool> g_writers_ok{false};  // the Shutdown wrapper is in: the only state in which a row may be written
+std::atomic<bool> g_rebuild{false};     // the loader wrapper runs the rebuilt LoadSoundSettings (R16), not the stock one
 std::atomic<std::uintptr_t> g_real{0};
 std::atomic<std::uintptr_t> g_real_shutdown{0};
 std::atomic<std::uintptr_t> g_uns_done{0};  // the unsorted table already written (once per table): wrapper and tick
@@ -354,10 +398,124 @@ void AfterLoad() {
   if (unsorted && r != Pass::kSkipped) g_uns_done.store(data, std::memory_order_relaxed);
 }
 
+// The Wwise event id: FNV-1 32 of the lowercase name (the kIds ids). A null name is the empty name.
+std::uint32_t WwiseEventId(const char* name) {
+  std::uint32_t h = 2166136261u;
+  for (const char* p = name != nullptr ? name : ""; *p != 0; ++p) {
+    h *= 16777619u;
+    const char c = (*p >= 'A' && *p <= 'Z') ? static_cast<char>(*p - 'A' + 'a') : *p;
+    h ^= static_cast<std::uint8_t>(c);
+  }
+  return h;
+}
+
+template <typename Fn>
+Fn Callee(std::size_t idx) {
+  return reinterpret_cast<Fn>(g_base + kRebuildCallees[idx].elf);
+}
+
+// The first callee whose stub is not the pinned one (its name), or nullptr when all of them are.
+const char* FirstMissingCallee(std::uintptr_t base) {
+  for (const RebuildCallee& c : kRebuildCallees) {
+    std::uint32_t w = 0;
+    if (!SafeRead(base + c.elf, &w, sizeof w) || w != c.first_word) return c.name;
+  }
+  return nullptr;
+}
+
+// One row onto the table at `table` (kSoundSettings' pointee, or +0x40 for the bullet_whizzby table): the stock append, field for
+// field. Words: data +0, growth +0x20, capacity +0x28, count +0x30; flags (u32) +0x38, bit 0 = sort pending. The table lock is
+// held by the caller.
+void AppendRow(std::uintptr_t table, std::uint64_t key, std::uint32_t id) {
+  auto* words = reinterpret_cast<std::uint64_t*>(table);
+  std::uint64_t cap = words[5];
+  std::uint64_t count = words[6];
+  if (cap <= count) {
+    const std::uint64_t grow = std::max(cap, words[4]);
+    Callee<MemBlockResizeFn>(kIdxResize)(reinterpret_cast<void*>(table), static_cast<std::uint32_t>((grow + cap) * 0x10), 1);
+    count = words[6];
+    words[5] = cap + grow;
+  }
+  words[6] = count + 1;
+  std::uint8_t* row = reinterpret_cast<std::uint8_t*>(words[0] + count * 0x10);
+  std::memcpy(row, &key, sizeof key);
+  std::memcpy(row + 8, &id, sizeof id);
+  *reinterpret_cast<std::uint32_t*>(table + 0x38) |= 1;
+}
+
+// The rebuilt LoadSoundSettings body, into the table at `map`. Returns the file's result (0 read and walked, else the
+// LoadFromProjectSourceDb result, which the stock loader returns too); `rows` counts the appends. The table lock is held.
+int RebuildSoundSettings(std::uintptr_t map, unsigned* rows) {
+  alignas(16) unsigned char json[16];  // the stock frame holds the CJson in these 16 bytes (sp+0x210..0x21f)
+  char file[sizeof kJsonFile];
+  std::memcpy(file, kJsonFile, sizeof file);
+  Callee<JsonCtorFn>(kIdxCtor)(json);
+  const int rc = Callee<JsonLoadFn>(kIdxLoad)(json, file);
+  if (rc == 0) {
+    const auto next = Callee<JsonNextFn>(kIdxNext);
+    const auto name_at = Callee<JsonNameAtFn>(kIdxNameAt);
+    const auto tstring = Callee<JsonTStringFn>(kIdxTString);
+    // bullet_impact: one entry per gun; each member of a gun is a row, key = CSymbol64(member) ^ CSymbol64(gun)
+    for (void* gun_node = next(json, kImpactPath, nullptr); gun_node != nullptr; gun_node = next(json, kImpactPath, gun_node)) {
+      const char* gun = name_at(json, gun_node);
+      const std::uint64_t gun_sym = EchoVR::CSymbol64Hash(gun);
+      char path[512];
+      std::snprintf(path, sizeof path, "%s|%s", kImpactPath, gun);
+      for (void* member = next(json, path, nullptr); member != nullptr; member = next(json, path, member)) {
+        const std::uint64_t key = EchoVR::CSymbol64Hash(name_at(json, member)) ^ gun_sym;
+        AppendRow(map, key, WwiseEventId(tstring(json, member, "")));
+        ++*rows;
+      }
+    }
+    // bullet_whizzby: one entry each, key = CSymbol64(name) with no XOR
+    for (void* node = next(json, kWhizzbyPath, nullptr); node != nullptr; node = next(json, kWhizzbyPath, node)) {
+      AppendRow(map + kWhizzbyOff, EchoVR::CSymbol64Hash(name_at(json, node)), WwiseEventId(tstring(json, node, "")));
+      ++*rows;
+    }
+  }
+  Callee<JsonDtorFn>(kIdxDtor)(json);
+  return rc;
+}
+
+struct RebuildResult {
+  int rc = 0;
+  unsigned rows = 0;
+  std::uintptr_t map = 0;  // the table the rows went into (0: none was there)
+};
+
+// The rebuilt loader under the table lock: the table the global holds now, read under the lock, is the one built into. Nothing is
+// logged under the lock.
+RebuildResult RebuildUnderLock() {
+  RebuildResult out;
+  pthread_mutex_lock(&g_table_mu);
+  Held held;
+  held.on = true;
+  std::uintptr_t map = 0;
+  if (SafeRead(g_base + kSoundSettingsVa, &map, sizeof map) && map != 0) {
+    out.map = map;
+    out.rc = RebuildSoundSettings(map, &out.rows);
+  }
+  return out;
+}
+
 // The wrapper on LoadSoundSettings (R14): the loader takes no argument (it reads none before its first clobber of x0,
 // ReVault 0x2221d1c..0x2221d20) and returns w0 = w19 (0x2222008), the caller's next call may see it in x0, so the whole
-// return value is passed through.
+// return value is passed through. With the rebuild on (g_rebuild) the rebuilt loader runs in place of the stock one; otherwise
+// the stock loader runs and the after-load pass reads what it built.
 std::uint64_t LoadWrapper() {
+  if (g_rebuild.load(std::memory_order_acquire)) {
+    NoteThread(kRoleLoader);
+    const RebuildResult r = RebuildUnderLock();
+    if (Budget(&g_note_lines, kNoteLines, "notes")) {
+      char d[24], c[24], j[24];
+      std::snprintf(c, sizeof c, "%u", r.rows);
+      std::snprintf(j, sizeof j, "%d", r.rc);
+      const NevrLogField f[] = {{"table", Hex(d, sizeof d, r.map)}, {"rows", c}, {"json_result", j}, {"loader", "reconstructed"}};
+      Log(NEVR_LOG_INFO, "impactsnd LoadSoundSettings rebuilt", f, 4);
+    }
+    AfterLoad();
+    return static_cast<std::uint64_t>(static_cast<std::uint32_t>(r.rc));
+  }
   const auto real = reinterpret_cast<std::uint64_t (*)()>(g_real.load(std::memory_order_acquire));
   if (real == nullptr) return 0;  // not reachable: the slot is swapped only after g_real is set
   const std::uint64_t r = real();
@@ -534,6 +692,18 @@ InstallResult InstallImpactSnd(std::uintptr_t base) {
                               {"row_writes", rs.status == SwapStatus::kOk ? "enabled" : "DISABLED (read and log only)"}};
     Log(rs.status == SwapStatus::kOk ? NEVR_LOG_INFO : NEVR_LOG_ERROR, "impactsnd shutdown wrapper", f, 4);
   }
+  // R16: the rebuilt loader writes the table under the same lock, so it runs only with the Shutdown wrapper in, every stub pinned,
+  // and a write run (the nowrite build keeps the stock loader and the after-load pass, which only reads).
+  const char* missing = FirstMissingCallee(base);
+  const bool rebuild = missing == nullptr && rs.status == SwapStatus::kOk && !g_nowrite;
+  g_rebuild.store(rebuild, std::memory_order_release);
+  {
+    const char* mode = rebuild ? "reconstructed (every member of every gun)" : missing != nullptr ? "stock (a callee stub is not pinned)"
+                       : g_nowrite                                              ? "stock (nowrite build)"
+                                                                                : "stock (row writes disabled)";
+    const NevrLogField f[] = {{"mode", mode}, {"missing_callee", missing != nullptr ? missing : "none"}};
+    Log(rebuild || missing == nullptr ? NEVR_LOG_INFO : NEVR_LOG_ERROR, "impactsnd LoadSoundSettings rebuild", f, 2);
+  }
   // R14: the after-load pass. Data page only (the slot's page is RELRO: got_swap.h makes it writable for the one store).
   const InstallResult r = InstallImportHook("CR15NetBulletCS::LoadSoundSettings", base, kLoadSlotVa,
                                             reinterpret_cast<std::uintptr_t>(&LoadWrapper), &g_real, kLoadFnVa);
@@ -601,6 +771,7 @@ void ResetImpactSndForTest() {
   g_nowrite = Q15T_IMPACTSND_NOWRITE != 0;
   g_on.store(false);
   g_writers_ok.store(false);
+  g_rebuild.store(false);
   g_real.store(0);
   g_real_shutdown.store(0);
   g_uns_done.store(0);

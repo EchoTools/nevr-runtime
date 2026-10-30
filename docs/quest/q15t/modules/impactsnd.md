@@ -238,7 +238,44 @@ the tick's once-per-table unsorted pass does not repeat it; a pass the lock or t
 - Log budgets: non-writing lines 12 per process, writing passes 200 per process; the first line over a budget is one WARNING
   that names it, then silence (counters in `GetImpactSndStats()` keep counting); thread lines 24. Every line is structured through `Log`.
 
-## What is lost without R16 (the five `.text` words are not written)
+## R16, rebuilt (the loader in C++; no code page is written)
+
+The word patch below is not used. `LoadSoundSettings` is rebuilt in `src/quest/plugins/q15t/src/impactsnd.cpp` and runs in
+place of the stock one: the JUMP_SLOT (`0x36fa3c0`) points at the wrapper, which calls `RebuildUnderLock`, then the after-load
+pass. The rebuilt body walks the same file (`/json/r14/config|mp_sound_settings.json`) with the same calls, in the same order,
+and appends the same fields to the same table; the difference is the scratch. The stock loader's `{key, id}` scratch is at
+`sp+0x10/0x18`, the bytes of the path string it passes to the next `CJson::Next`, so only the first member of each gun was
+kept. The rebuilt loader keeps the path in its own 512-byte buffer and the key and id in locals, so every member is appended.
+
+- Stock steps reproduced (ReVault `0x2221d04` decompile and disassembly): memset the 512-byte buffer and format
+  `%s|%s`; construct the CJson (`0xfd7760`, 16 bytes of frame); `LoadFromProjectSourceDb` (`0x1000140`); for each
+  `bullet_impact` node the gun name (`NameAt`, `0x1017d40`), its `bullet_impact|<gun>` members (`Next`, `0x1028490`, third
+  argument the previous node), key = CSymbol64(member) ^ CSymbol64(gun); then the `bullet_whizzby` nodes into the table at
+  `kSoundSettings+0x40` with key = CSymbol64(name); each append grows by `max(cap, grow)` through `CMemBlock::Resize`
+  (`0x103e400`) and sets the sort-pending bit (`+0x38` / `+0x78`); destroy the CJson (`0xfdcae0`).
+- Changed: the id is `WwiseEventId` (FNV-1 32 of the lowercase event name), not `CSoundSymbol::CalculateSymbolValue`, which
+  returns `1` on the Quest for every name (RE-28, the module's `kStockId`). The CSymbol64 keys are the SDK's `CSymbol64Hash`,
+  which the module's keys were already checked against.
+- Calls: each target is the stock loader's direct-call stub (ELF = ReVault VA - 0x100000), the same stub the stock `bl` jumps
+  through. Each stub's first word is pinned in `kRebuildCallees` and read from ReVault (`adrp x16`), and the rebuild is enabled
+  only when all seven match and the Shutdown wrapper is in (`impactsnd LoadSoundSettings rebuild`, `mode=`). The nowrite build keeps
+  the stock loader.
+- Signatures, from ReVault (libr15 binary 576): `CJson::Next(char const*, void*) const` (0x10a0c30), `CJson::NameAt(void*) const`
+  (0x10a0cdc), `CJson::TString(void*, char*) const` with the fallback as a third register (the stock call passes `""`'s address
+  as x2, `0x2221e94` / `0x2221fa0`; the thunk at 0x10a58f4 shows two declared parameters after `this`), `CMemBlock::Resize(ulonglong,
+  uint)` (0x103e400; the stock also passes `1` in w2, passed here as `keep` and ignored by the declared signature).
+- Not verified here: the CJson object size (16 bytes is inferred from the stock frame: the path buffer starts at sp+0x220 and
+  the ctor runs after it is filled), the TString fallback semantics (read as the value when the key is missing), and whether
+  `CMemBlock::Resize` ignores its third register. The headset run below settles these.
+- Logs: `impactsnd LoadSoundSettings rebuilt` (`table`, `rows`, `json_result`, `loader=reconstructed`), then the usual
+  `impactsnd LoadSoundSettings returned` with `rows=15 word_patch=in_effect` expected.
+
+**Headset check (3 lines):** `adb logcat | grep -E "impactsnd (LoadSoundSettings rebuild|LoadSoundSettings rebuilt|LoadSoundSettings returned|ids)"`
+at a combat level load. Expect `mode=reconstructed`, `rows=15`, `json_result=0`, `word_patch=in_effect`, and no
+`Cannot find default impact sound for bullet type` on hits. Falsifier: `mode=stock` (a stub check failed: `missing_callee`
+names it), or `rows` neither 15 nor 5.
+
+## What is lost without R16 (superseded: the rebuilt loader above writes all 15 rows)
 
 The loader then builds 5 rows, the `player` row of each gun (source `:19-23`, `:49`; the device read of v1/v2 saw count 5).
 This module is correct in that state: the 5 rows are rewritten to the Wwise ids, D is guarded, the log says `rows=5
