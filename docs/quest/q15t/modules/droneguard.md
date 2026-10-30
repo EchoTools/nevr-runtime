@@ -2,7 +2,7 @@
 
 Files: `src/droneguard.{h,cpp}`, `src/quest/tests/q15t/droneguard_test.cpp`, `src/quest/tests/q15t/mod/droneguard.sh`, `src/quest/tests/q15t/mutants.d/droneguard.sh`.
 
-Option macros for the main seat to wire: `Q15T_DRONEGUARD`, default **OFF** (source: "TEST ONLY", the source build's droneguard:1;
+Option macros for the main seat to wire: `Q15T_DRONEGUARD`, default **ON** (#1625: the source is "TEST ONLY", but its wave19a on-list turns `droneguard.on` on; source: "TEST ONLY", the source build's droneguard:1;
 `Switch()` returns false unless `droneguard.on` or `debug.<app>.droneguard 1`, `:245-246`), and `Q15T_DRONEGUARD_IDX`,
 default **OFF** (stage 1, source `droneguard_idx.on`, `:21-24, 253`), only read when the first is on. `Q15T_DRONEGUARD_IDX` is read
 by `droneguard.cpp` itself (a `#ifndef ... #define 0` in `droneguard.h`); the main seat only needs to pass it as a compile definition.
