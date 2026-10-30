@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -346,6 +347,155 @@ class QuestInstallShTest(ScriptTestBase):
         result = subprocess.run(["/bin/bash", str(self.SCRIPT)], capture_output=True, text=True, timeout=30, env=env)
         self.assertEqual(result.returncode, 1)
         self.assertIn("nevr-install not found", result.stderr)
+
+
+class PcUninstallTest(ScriptTestBase):
+    """`nevr-install pc uninstall` through the real core (#1497): it restores the recorded original, sets the runtime aside,
+    moves the record aside, refuses what uninstall.ps1 refuses, and leaves the same folders as uninstall.ps1 does."""
+
+    STAMP = b"NEVR-BUILD 5.4.3 " + b"b" * 40 + b"\0"
+
+    def fresh(self, name: str) -> World:
+        world = World(self.tmp, name=name)
+        self.addCleanup(world.server.close)
+        return world
+
+    def core_pc(self, verb: str, world: World, *extra: str, base: str | None = None, stdin=None) -> subprocess.CompletedProcess:
+        args = [str(self.core), "pc", verb, "--dir", str(world.game), "--nevr-root", str(world.nevr), *world.core_args(), *extra]
+        if base is not None:
+            args += ["--base", base]
+        return subprocess.run(args, capture_output=True, text=True, timeout=600, stdin=stdin,
+                              env=dict(os.environ, DISPLAY="", WAYLAND_DISPLAY=""))
+
+    def installed(self, name: str = "w") -> World:
+        world = self.fresh(name)
+        done = self.core_pc("install", world)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        return world
+
+    @staticmethod
+    def snapshot(world: World) -> dict:
+        out = {}
+        for base in (world.game, world.nevr):
+            for p in sorted(base.rglob("*")):
+                if p.is_file():
+                    out[str(p)] = p.read_bytes()
+        return out
+
+    def test_uninstall_restores_the_game_file_and_removes_what_install_added(self):
+        world = self.installed()
+        self.assertEqual((world.game / "BugSplat64.dll").read_bytes(), HOST)
+        done = self.core_pc("uninstall", world)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        lines = done.stdout.splitlines()
+        self.assertEqual(len(lines), 1, done.stdout)
+        answer = json.loads(lines[0])
+        self.assertEqual((answer["state"], answer["exit"], answer["failed"]), ("uninstalled", 0, False), answer)
+        self.assertEqual((world.game / "BugSplat64.dll").read_bytes(), GAME, "the game's own file is back, byte for byte")
+        self.assertFalse((world.nevr / "nevr-runtime.dll").exists(), "the runtime is set aside")
+        aside = world.nevr / "installer/aside"
+        self.assertEqual(len(list(aside.glob("nevr-runtime.dll.uninstalled-*"))), 1)
+        self.assertEqual(len(list(aside.glob("nevr-install.txt.undone-*"))), 1, "the record is set aside, not deleted")
+        self.assertFalse((world.nevr / "installer/nevr-install.txt").exists())
+        self.assertEqual(world.game_files(), ["BugSplat64.dll", "echovr.exe"], "nothing of ours beside echovr.exe but the host")
+
+    def test_uninstall_never_fetches_the_manifest(self):
+        world = self.installed()
+        done = self.core_pc("uninstall", world, base="http://127.0.0.1:1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual((world.game / "BugSplat64.dll").read_bytes(), GAME)
+
+    def test_stdout_is_one_json_line_and_stdin_is_never_read(self):
+        world = self.installed()
+        out_path, err_path = self.tmp / "uninstall.out", self.tmp / "uninstall.err"
+        with open(out_path, "w") as out, open(err_path, "w") as err:
+            proc = subprocess.Popen([str(self.core), "pc", "uninstall", "--dir", str(world.game), "--nevr-root", str(world.nevr),
+                                     *world.core_args()], stdin=subprocess.PIPE, stdout=out, stderr=err, text=True,
+                                    env=dict(os.environ, DISPLAY="", WAYLAND_DISPLAY=""))
+            try:
+                # stdin stays open and unwritten: a read of it would hold the process past the timeout.
+                code = proc.wait(timeout=120)
+            finally:
+                proc.stdin.close()
+                if proc.poll() is None:
+                    proc.kill()
+        self.assertEqual(code, 0, err_path.read_text())
+        lines = out_path.read_text().splitlines()
+        self.assertEqual(len(lines), 1, lines)
+        self.assertEqual(json.loads(lines[0])["state"], "uninstalled")
+
+    def test_no_install_record_exits_0_unchanged_and_changes_nothing(self):
+        world = self.fresh("none")
+        (world.game / "BugSplat64.dll").write_bytes(HOST)
+        before = self.snapshot(world)
+        done = self.core_pc("uninstall", world)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        answer = json.loads(done.stdout)
+        self.assertEqual((answer["state"], answer["exit"]), ("unchanged", 0), answer)
+        self.assertEqual(self.snapshot(world), before)
+
+    def test_an_unknown_original_exits_2_changes_nothing_and_says_how_to_recover(self):
+        world = self.fresh("adopt")
+        # A NEVR host with no record, as an earlier installer left it: the install adopts it and marks the original unknown.
+        (world.game / "BugSplat64.dll").write_bytes(b"MZ\0" + self.STAMP + b"\xcc" * 64)
+        self.assertEqual(self.core_pc("install", world).returncode, 0)
+        before = self.snapshot(world)
+        done = self.core_pc("uninstall", world)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        answer = json.loads(done.stdout)
+        self.assertEqual(answer["state"], "needs-user")
+        self.assertIn("verify the game's files on the platform (Steam, Oculus)", answer["reason"])
+        self.assertEqual(self.snapshot(world), before)
+
+    def test_the_run_writes_jsonl_records_and_its_end(self):
+        world = self.installed("log")
+        self.assertEqual(self.core_pc("uninstall", world).returncode, 0)
+        events = world.events()
+        for want in ("run_start", "file_restore", "run_end"):
+            self.assertIn(want, events)
+        end = world.records()[-1]
+        self.assertEqual((end["event"], end["state"]), ("run_end", "uninstalled"))
+
+    def test_a_hand_copied_host_is_restored_over_when_the_package_sums_name_it(self):
+        world = self.installed("sums")
+        hand = b"a newer host copied in by hand, with no NEVR identity text"  # no stamp: a NEVR one would be accepted without the list
+        (world.game / "BugSplat64.dll").write_bytes(hand)
+        refused = self.core_pc("uninstall", world)
+        self.assertEqual(refused.returncode, 2, refused.stdout + refused.stderr)
+        # The core beside a SHA256SUMS that names the hand-copied host: that list is the package's, as uninstall.ps1 reads it.
+        pkg = self.package()
+        (pkg / "SHA256SUMS").write_text(f"{sha(hand)}  BugSplat64.dll\n")
+        done = subprocess.run([str(pkg / "nevr-install.exe"), "pc", "uninstall", "--dir", str(world.game), "--nevr-root", str(world.nevr),
+                               *world.core_args()], capture_output=True, text=True, timeout=600,
+                              env=dict(os.environ, DISPLAY="", WAYLAND_DISPLAY=""))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual((world.game / "BugSplat64.dll").read_bytes(), GAME)
+
+    @unittest.skipUnless(shutil.which("pwsh"), "pwsh not installed: the uninstall.ps1 parity check cannot run")
+    def test_the_core_and_uninstall_ps1_leave_the_same_folders(self):
+        """Two identical installs; one is undone by the core, the other by uninstall.ps1. The folders must match, file for
+        file and byte for byte, except for the time stamp in each set-aside name."""
+        core_world = self.installed("parity-core")
+        ps_world = self.installed("parity-ps")
+        self.assertEqual(self.core_pc("uninstall", core_world).returncode, 0)
+        pkg = self.package()
+        ps = subprocess.run(["pwsh", "-NoProfile", "-File", str(pkg / "uninstall.ps1"), "-Dir", str(ps_world.game),
+                             "-Root", str(ps_world.nevr), "-NoPause"], capture_output=True, text=True, timeout=300,
+                            env=dict(os.environ, DISPLAY="", WAYLAND_DISPLAY=""))
+        self.assertEqual(ps.returncode, 0, ps.stdout + ps.stderr)
+
+        def shape(world):
+            # The record names each world's own folders, so its text is compared with the world's path replaced by a marker.
+            out = {}
+            for base in (world.game, world.nevr):
+                for p in sorted(base.rglob("*")):
+                    if p.is_file():
+                        rel = re.sub(r"-\d{8}-\d{6}(-\d+)?$", "", str(p.relative_to(base)))
+                        content = p.read_bytes().replace(str(world.tmp).encode(), b"<world>")
+                        out[(base.name, rel)] = sha(content)
+            return out
+
+        self.assertEqual(shape(core_world), shape(ps_world))
 
 
 if __name__ == "__main__":

@@ -192,6 +192,31 @@ pub struct Observed {
     /// A runtime beside the game that carries the NEVR identity: the earlier layout, moved into the root's aside folder.
     /// A file of that name that is not ours is left alone.
     pub legacy_runtime_is_nevr: bool,
+    /// The runtime in the root carries the NEVR identity (uninstall sets it aside only then).
+    pub runtime_is_nevr: bool,
+    /// Any file stands beside the game as `nevr-runtime.dll` (the earlier layout's name for it).
+    pub legacy_runtime_present: bool,
+    /// The set-aside files the record names are in the folders they were moved to (uninstall needs each one).
+    pub legacy_aside_present: bool,
+    pub runtime_aside_present: bool,
+    pub runtime_legacy_present: bool,
+}
+
+/// The hashes a package's `SHA256SUMS` lists for `BugSplat64.dll`, lowercase, as uninstall.ps1 reads them (its
+/// `^([0-9a-fA-F]{64})\s+\*?(.+)$` line with the name `BugSplat64.dll`).
+pub fn host_hashes_in_sums(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| {
+            let hash = line.get(..64)?;
+            let rest = &line[64..];
+            if !hash.bytes().all(|b| b.is_ascii_hexdigit()) || !rest.starts_with(char::is_whitespace) {
+                return None;
+            }
+            let rest = rest.trim_start();
+            let name = rest.strip_prefix('*').unwrap_or(rest);
+            (name == HOST).then(|| hash.to_ascii_lowercase())
+        })
+        .collect()
 }
 
 pub fn observe(l: &Layout, game_running: bool) -> Result<Observed> {
@@ -218,8 +243,18 @@ pub fn observe(l: &Layout, game_running: bool) -> Result<Observed> {
         Some(b) => read_opt(Path::new(b))?,
         None => None,
     };
+    let recorded_present = |key: &str| {
+        record.as_ref().and_then(|r| r.get(key)).filter(|p| !p.is_empty()).is_some_and(|p| Path::new(p).exists())
+    };
+    let (legacy_aside_present, runtime_aside_present, runtime_legacy_present) =
+        (recorded_present("legacy"), recorded_present("runtime_aside"), recorded_present("runtime_legacy"));
     Ok(Observed {
         has_exe: l.game.join("echovr.exe").is_file(),
+        runtime_is_nevr: runtime.as_deref().is_some_and(is_nevr_runtime),
+        legacy_runtime_present: legacy_runtime.is_some(),
+        legacy_aside_present,
+        runtime_aside_present,
+        runtime_legacy_present,
         game_running,
         target_is_nevr: target.as_deref().is_some_and(is_nevr_runtime),
         target_sha: target.as_deref().map(sha256_hex),
@@ -443,12 +478,14 @@ enum Undo {
     Remove { what: &'static str, path: PathBuf },
     /// Keep a failed install's file: move `path` into the aside folder under `name`.
     SetAside { what: &'static str, path: PathBuf, dir: PathBuf, name: String },
+    /// Move `from` back to `to` by the copy, read-back and remove of `move_out` (a move an uninstall made).
+    Relocate { what: &'static str, from: PathBuf, to: PathBuf },
 }
 
 impl Undo {
     fn what(&self) -> &'static str {
         match self {
-            Undo::Restore { what, .. } | Undo::Move { what, .. } | Undo::SetAside { what, .. } | Undo::Remove { what, .. } => what,
+            Undo::Restore { what, .. } | Undo::Move { what, .. } | Undo::SetAside { what, .. } | Undo::Remove { what, .. } | Undo::Relocate { what, .. } => what,
         }
     }
     fn run(&self) -> std::io::Result<()> {
@@ -457,12 +494,13 @@ impl Undo {
             Undo::Move { from, to, .. } => fs::rename(from, to),
             Undo::SetAside { path, dir, name, .. } => fs::rename(path, fresh(dir, name)),
             Undo::Remove { path, .. } => fs::remove_file(path),
+            Undo::Relocate { from, to, .. } => move_out(from, to).map(|_| ()).map_err(std::io::Error::other),
         }
     }
     fn target(&self) -> &Path {
         match self {
             Undo::Restore { path, .. } => path,
-            Undo::Move { to, .. } => to,
+            Undo::Move { to, .. } | Undo::Relocate { to, .. } => to,
             Undo::SetAside { path, .. } | Undo::Remove { path, .. } => path,
         }
     }
@@ -506,20 +544,181 @@ pub fn execute_with(l: &Layout, plan: &Plan, obs: &Observed, pkg: &Package, log:
     let mut undo: Vec<Undo> = Vec::new();
     match apply(l, plan, obs, pkg, log, seam, &mut undo) {
         Ok(()) => Ok(End { state: "installed", reason: String::new() }),
-        Err(why) if undo.is_empty() => Ok(End { state: "unchanged", reason: why }),
-        Err(why) => {
-            // The rollback runs whatever the log does: a log that cannot be written must not leave the files changed.
-            let mut lost: Vec<String> = log.error("install_failed", 9, json!({"reason": why, "changes_to_take_back": undo.len()})).err().map(|e| e.to_string()).into_iter().collect();
-            let (failed, lost_in_rollback) = rollback(undo, seam, log);
-            lost.extend(lost_in_rollback);
-            let note = log_lost_note(&lost);
-            if failed.is_empty() {
-                Ok(End { state: "restored", reason: format!("{why}{note}") })
-            } else {
-                Ok(End { state: "needs-user", reason: format!("{why}; these files could not be put back: {}; the set-aside copies are in {}{note}", failed.join("; "), l.aside_dir().display()) })
-            }
+        Err(why) => Ok(settle(l, why, undo, seam, log)),
+    }
+}
+
+/// How a run that failed part-way ends: `unchanged` when nothing had changed, `restored` when every change was taken back,
+/// `needs-user` (with the files that stayed changed) when one could not be. Shared by install and uninstall, so the two
+/// put files back the same way.
+fn settle(l: &Layout, why: String, undo: Vec<Undo>, seam: &Seam, log: &Log) -> End {
+    if undo.is_empty() {
+        return End { state: "unchanged", reason: why };
+    }
+    // The rollback runs whatever the log does: a log that cannot be written must not leave the files changed.
+    let mut lost: Vec<String> = log.error("install_failed", 9, json!({"reason": why, "changes_to_take_back": undo.len()})).err().map(|e| e.to_string()).into_iter().collect();
+    let (failed, lost_in_rollback) = rollback(undo, seam, log);
+    lost.extend(lost_in_rollback);
+    let note = log_lost_note(&lost);
+    if failed.is_empty() {
+        End { state: "restored", reason: format!("{why}{note}") }
+    } else {
+        End { state: "needs-user", reason: format!("{why}; these files could not be put back: {}; the set-aside copies are in {}{note}", failed.join("; "), l.aside_dir().display()) }
+    }
+}
+
+/// `pc uninstall` (#1497): the steps of `uninstall.ps1`, in its order, decided by `plan_uninstall`. Executes a `Proceed` plan.
+pub fn execute_uninstall(l: &Layout, obs: &Observed, log: &Log) -> Result<End> {
+    execute_uninstall_with(l, obs, log, &Seam::default())
+}
+
+pub fn execute_uninstall_with(l: &Layout, obs: &Observed, log: &Log, seam: &Seam) -> Result<End> {
+    let mut undo: Vec<Undo> = Vec::new();
+    match uninstall_apply(l, obs, log, seam, &mut undo) {
+        Ok(()) => Ok(End { state: "uninstalled", reason: String::new() }),
+        Err(why) => Ok(settle(l, why, undo, seam, log)),
+    }
+}
+
+/// The uninstall's changes. Each is logged as a `file_restore` and its undo is pushed before the next step runs.
+fn uninstall_apply(l: &Layout, obs: &Observed, log: &Log, seam: &Seam, undo: &mut Vec<Undo>) -> std::result::Result<(), String> {
+    let r = obs.record.as_ref().expect("an uninstall with no record is planned as unchanged");
+    let io = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
+    let restored = |what: &'static str, path: &Path, from: &str| {
+        log.info("file_restore", 9, json!({"path": path.display().to_string(), "what": what, "from": from, "ok": true})).map_err(|e| e.to_string())
+    };
+    let kept = |what: &'static str, path: &Path, why: &str| {
+        log.info("file_restore", 9, json!({"path": path.display().to_string(), "what": what, "ok": true, "kept": true, "reason": why})).map_err(|e| e.to_string())
+    };
+    let st = stamp();
+    let aside = l.aside_dir();
+    fs::create_dir_all(&aside).map_err(|e| io(&aside, e))?;
+
+    // 1. The game's own host goes back over ours, copied from the backup, which is kept (uninstall.ps1: Copy-Item).
+    let backup = r.get("backup").unwrap_or("").to_string();
+    let backup_bytes = fs::read(&backup).map_err(|e| io(Path::new(&backup), e))?;
+    let host = l.host();
+    let prior = fs::read(&host).ok();
+    put(&host, &backup_bytes).map_err(|e| io(&host, e))?;
+    undo.push(match prior {
+        Some(bytes) => Undo::Restore { what: "host", path: host.clone(), bytes },
+        None => Undo::Remove { what: "host", path: host.clone() },
+    });
+    verify_file(&host, &sha256_hex(&backup_bytes))?;
+    restored("host", &host, &backup)?;
+    seam.step("uninstall_restored")?;
+
+    // 2. A legacy dbgcore.dll goes back beside echovr.exe (uninstall.ps1: Move-Item of dbgcore.dll.legacy-<stamp>).
+    let legacy = r.get("legacy").unwrap_or("").to_string();
+    if !legacy.is_empty() {
+        let to = l.legacy_dbgcore();
+        move_out(Path::new(&legacy), &to)?;
+        undo.push(Undo::Relocate { what: "legacy_dbgcore", from: to.clone(), to: PathBuf::from(&legacy) });
+        restored("legacy_dbgcore", &to, &legacy)?;
+    }
+
+    // 3. A NEVR runtime in the root is set aside, never deleted; any other file under that name is left alone (uninstall.ps1).
+    let runtime = l.runtime();
+    if obs.runtime_sha.is_some() {
+        if obs.runtime_is_nevr {
+            let to = fresh(&aside, &format!("{RUNTIME}.uninstalled-{st}"));
+            move_out(&runtime, &to)?;
+            undo.push(Undo::Relocate { what: "runtime_set_aside", from: to.clone(), to: runtime.clone() });
+            restored("runtime_set_aside", &to, &runtime.display().to_string())?;
+        } else {
+            kept("runtime", &runtime, "not a NEVR runtime (no NEVR-BUILD identity text or nevr-runtime/1.0 user agent), so install did not put it there")?;
         }
     }
+
+    // 4. The root's nevr-runtime.dll from before the install goes back, when the name is free.
+    let prior_aside = r.get("runtime_aside").unwrap_or("").to_string();
+    if !prior_aside.is_empty() {
+        if runtime.exists() {
+            kept("runtime_aside", Path::new(&prior_aside), "nevr-runtime.dll is in the root and was not touched")?;
+        } else {
+            move_out(Path::new(&prior_aside), &runtime)?;
+            undo.push(Undo::Relocate { what: "runtime_aside", from: runtime.clone(), to: PathBuf::from(&prior_aside) });
+            restored("runtime_aside", &runtime, &prior_aside)?;
+        }
+    }
+
+    // 5. The nevr-runtime.dll the earlier layout moved out of the game folder goes back there, when the name is free.
+    let moved = r.get("runtime_legacy").unwrap_or("").to_string();
+    if !moved.is_empty() {
+        let beside = l.legacy_runtime();
+        if beside.exists() {
+            kept("runtime_legacy", Path::new(&moved), "nevr-runtime.dll is in the game folder and was not touched")?;
+        } else {
+            move_out(Path::new(&moved), &beside)?;
+            undo.push(Undo::Relocate { what: "runtime_legacy", from: beside.clone(), to: PathBuf::from(&moved) });
+            restored("runtime_legacy", &beside, &moved)?;
+        }
+    }
+
+    // 6. The record is set aside, so a second uninstall finds nothing to undo (uninstall.ps1: nevr-install.txt.undone-<stamp>).
+    let record_path = obs.record_path.clone().expect("a record was read");
+    let to = fresh(&aside, &format!("{STATE_FILE}.undone-{st}"));
+    move_out(&record_path, &to)?;
+    undo.push(Undo::Relocate { what: "record", from: to.clone(), to: record_path.clone() });
+    restored("record", &to, &record_path.display().to_string())?;
+    seam.step("uninstall_record_moved")?;
+    Ok(())
+}
+
+/// What `pc uninstall` does, decided from what was observed. The refusals are uninstall.ps1's, checked in its order; a run
+/// with no record changes nothing and exits 0 (`unchanged`). `extra_known` is the hashes the package's `SHA256SUMS` names.
+pub fn plan_uninstall(obs: &Observed, extra_known: &[String]) -> Plan {
+    let p = |outcome, decision: &str, reason: Option<String>| Plan { outcome, action: None, decision: decision.into(), reasons: reason.into_iter().collect(), stale_record: false };
+    let refuse = |why: String| p(Outcome::NeedsUser, "needs-user", Some(why));
+    let Some(r) = obs.record.as_ref() else {
+        return p(Outcome::Unchanged, "unchanged", Some("no nevr-install.txt in the nevr folder or beside echovr.exe: nothing installed by nevr-install to undo".into()));
+    };
+    if let Some(owner) = r.get("owner").filter(|o| *o != OWNER) {
+        return refuse(format!("this install is owned by {owner}: undo it with its own installer; nothing was changed"));
+    }
+    if obs.game_running {
+        return refuse("echovr.exe is running; close the game first".into());
+    }
+    for key in ["backup", "legacy", "installed_sha256"] {
+        if r.get(key).is_none() {
+            return refuse(format!("nevr-install.txt has no {key}; nothing was changed"));
+        }
+    }
+    // The game's own file was not kept (the install adopted a NEVR host): put it back by hand. Nothing is changed here.
+    if r.original_unknown() {
+        return refuse(recovery_without_original());
+    }
+    if !obs.backup_exists {
+        return refuse("the backup named in nevr-install.txt is gone; nothing was changed".into());
+    }
+    if obs.backup_is_nevr {
+        return refuse("the backup named in nevr-install.txt is a NEVR runtime, not the game's own file (an earlier install.ps1 saved it); nothing was changed. Restore the game's original BugSplat64.dll (Verify Files in the Meta Horizon app or Steam), then set nevr-install.txt aside".into());
+    }
+    // A BugSplat64.dll that is none of ours and not a NEVR runtime is the player's to keep: refused. An absent one is restored.
+    if let Some(orig) = obs.target_sha.as_deref() {
+        let ours = r.known().iter().any(|k| k == orig) || obs.backup_sha.as_deref() == Some(orig) || extra_known.iter().any(|k| k == orig);
+        if !ours && !obs.target_is_nevr {
+            return refuse("BugSplat64.dll is not the one install put there (changed since); nothing was changed".into());
+        }
+    }
+    let legacy = r.get("legacy").unwrap_or("");
+    if !legacy.is_empty() {
+        if !obs.legacy_aside_present {
+            return refuse(format!("the set-aside dbgcore.dll is gone: {legacy}; nothing was changed"));
+        }
+        if obs.dbgcore_present {
+            return refuse("a dbgcore.dll exists again; nothing was changed".into());
+        }
+    }
+    let runtime_aside = r.get("runtime_aside").unwrap_or("");
+    if !runtime_aside.is_empty() && !obs.runtime_aside_present {
+        return refuse(format!("the set-aside nevr-runtime.dll is gone: {runtime_aside}; nothing was changed"));
+    }
+    let runtime_legacy = r.get("runtime_legacy").unwrap_or("");
+    if !runtime_legacy.is_empty() && !obs.runtime_legacy_present {
+        return refuse(format!("the set-aside nevr-runtime.dll is gone: {runtime_legacy}; nothing was changed"));
+    }
+    p(Outcome::Proceed, "uninstall", None)
 }
 
 /// The steps. Each change pushes its undo first-hand, so an error at any point leaves `undo` holding exactly what changed.
