@@ -78,7 +78,7 @@ run gate_link_range_lo src/headset_gates.cpp "s/g_link_lo.store(base + link_rang
 run gate_link_range_hi src/headset_gates.cpp "s/g_link_hi.store(base + link_range.hi_vaddr);/g_link_hi.store(~static_cast<std::uintptr_t>(0));/"
 run gate_link_ctr src/headset_gates.cpp "s/g_link_gated.fetch_add(1, std::memory_order_relaxed) + 1;/g_link_gated.load() + 1;/"
 run gate_link_wire_off src/plugin.cpp "s/Q15T_GATE_LINK ? CallerRange{Q15T_LINK_FN_LO, Q15T_LINK_FN_HI} : CallerRange{0, 0}/CallerRange{0, 0}/"
-run gate_link_wire_bots src/plugin.cpp "s/Q15T_GATE_BOTS ? CallerRange{Q15T_BOTS_FN_LO, Q15T_BOTS_FN_HI} : CallerRange{0, 0}/CallerRange{Q15T_BOTS_FN_LO, Q15T_BOTS_FN_HI}/"
+run gate_link_wire_bots src/plugin.cpp "s/gates.bots ? CallerRange{Q15T_BOTS_FN_LO, Q15T_BOTS_FN_HI} : CallerRange{0, 0}/CallerRange{Q15T_BOTS_FN_LO, Q15T_BOTS_FN_HI}/"
 run gate_bad_range  src/headset_gates.cpp "s/return addr - lo.load(std::memory_order_relaxed) < hi.load(std::memory_order_relaxed) - lo.load(std::memory_order_relaxed);/return addr >= lo.load(std::memory_order_relaxed);/"
 # T-26
 run t26_no_hold        src/weapon_arm.cpp "s/if (++g_hold < kHold) return;/++g_hold;/"
