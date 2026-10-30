@@ -83,6 +83,10 @@ def gh(a):
     if key == "variable set":
         if not CFG.get("variable_stuck"):
             vars_path.write_text(json.dumps({a[2]: a[a.index("--body") + 1]}))
+        if CFG.get("change_target_on_pause"):
+            m = manifest()
+            m["releases"]["5.17.0"]["artifacts"][1]["sha256"] = "1" * 64
+            save(m)
         if CFG.get("move_beta_on_pause"):
             m = manifest()
             m["releases"]["5.19.0"] = m["releases"]["5.18.0"]
@@ -278,6 +282,8 @@ class RollbackCase(unittest.TestCase):
 
     def assertRefused(self, proc: subprocess.CompletedProcess, *words: str) -> None:
         self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("rollback-beta:", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
         for word in words:
             self.assertIn(word, proc.stderr)
         self.assertEqual(self.changes(), [], "a refusal changed something")
@@ -349,6 +355,20 @@ class Refusals(RollbackCase):
     def test_an_empty_claim_list_is_refused(self) -> None:
         self.configure(claims=[])
         self.assertRefused(self.run_tool("v5.17.0", "--dry-run"), "listed-claims", "no artifacts")
+
+    def test_claims_that_are_not_a_json_array_fail_the_run(self) -> None:
+        self.configure(claims={"name": "not a list"})
+        proc = self.run_tool("v5.17.0", "--dry-run")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("claims: listed-claims did not print a JSON array", proc.stderr)
+        self.assertEqual(self.changes(), [])
+
+    def test_a_claim_without_a_name_and_a_sha256_fails_the_run(self) -> None:
+        self.configure(claims=[{"name": "nevr-runtime-v5.17.0-quest.apk"}])
+        proc = self.run_tool("v5.17.0", "--dry-run")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("without a name and a sha256", proc.stderr)
+        self.assertEqual(self.changes(), [])
 
     def test_a_claim_the_listed_release_does_not_carry_is_refused(self) -> None:
         self.configure(claims=[{"name": "nevr-runtime-v5.17.0-quest.apk", "sha256": "f" * 64, "size": 1}])
@@ -522,6 +542,14 @@ class LiveRun(RollbackCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("recheck", proc.stderr)
         self.assertIn("5.19.0", proc.stderr)
+        self.assertEqual(self.gh_calls("workflow", "run"), [])
+
+    def test_a_target_whose_bytes_changed_while_pausing_stops_before_the_dispatch(self) -> None:
+        self.configure(change_target_on_pause=True)
+        proc = self.run_tool("v5.17.0", "--live", "--yes")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("recheck", proc.stderr)
+        self.assertIn("not what the manifest lists", proc.stderr)
         self.assertEqual(self.gh_calls("workflow", "run"), [])
 
     def test_a_failed_watch_fails_the_run_and_names_the_run(self) -> None:

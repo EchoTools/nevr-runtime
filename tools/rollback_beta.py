@@ -276,13 +276,17 @@ class Rollback:
         if not claims:
             raise Refusal(step, f"listed-claims printed no artifacts for {self.tag}: the release must list its Quest APK and "
                                 "game data before beta can point at it")
-        listed = {(a.get("name"), a.get("sha256")) for a in self.artifacts_of(live["manifest"], self.version)}
         for claim in claims:
             if not (isinstance(claim, dict) and isinstance(claim.get("name"), str) and SHA256.match(str(claim.get("sha256")))):
                 raise StepFailure(step, "listed-claims printed an entry without a name and a sha256")
+        self.check_claims_listed(step, claims, live["manifest"])
+        return claims
+
+    def check_claims_listed(self, step: str, claims: list[dict], manifest: dict) -> None:
+        listed = {(a.get("name"), a.get("sha256")) for a in self.artifacts_of(manifest, self.version)}
+        for claim in claims:
             if (claim["name"], claim["sha256"]) not in listed:
                 raise Refusal(step, f"the claim for {claim['name']} is not what the manifest lists for {self.tag}")
-        return claims
 
     def plan(self, live: dict, beta: str, direction: str, override: bool) -> None:
         manifest = live["manifest"]
@@ -325,13 +329,14 @@ class Rollback:
                                     "(the timer is stopped, so it will not start another)")
         self.ok(step)
 
-    def recheck(self, beta: str) -> dict:
+    def recheck(self, beta: str, claims: list[dict]) -> dict:
         step = "recheck"
         live = self.read_live(step)
         now = self.beta_of(live)
         if now != beta:
             raise StepFailure(step, f"beta moved while the train was being paused: it was v{beta}, it is now v{now or 'none'}; "
                                     "nothing was dispatched")
+        self.check_claims_listed(step, claims, live["manifest"])
         self.ok(step, beta=now)
         return live
 
@@ -380,15 +385,15 @@ class Rollback:
             raise StepFailure(step, f"the dry run moved beta: it was v{beta}, it is now v{now or 'none'}")
         self.ok(step, beta=now)
 
-    def verify_live(self, before: dict, claims: list[dict]) -> dict:
+    def verify_live(self, before: dict) -> dict:
         step = "verify_live"
         after = self.read_live(step)
         now = self.beta_of(after)
         if now != self.version:
             raise StepFailure(step, f"the live manifest lists beta {now or 'nothing'}, not {self.version}")
         listed = {(a.get("name"), a.get("sha256")) for a in self.artifacts_of(after["manifest"], self.version)}
+        # `before` is the manifest read after the pause, and the claims were held to it there, so this covers them.
         wanted = {(a.get("name"), a.get("sha256")) for a in self.artifacts_of(before["manifest"], self.version)}
-        wanted |= {(c["name"], c["sha256"]) for c in claims}
         lost = sorted(name for name, _ in wanted - listed)
         if lost:
             raise StepFailure(step, f"the live manifest's {self.tag} is missing or has changed: {', '.join(lost)}")
@@ -422,7 +427,7 @@ class Rollback:
         if self.pausing:
             self.pause_variable()
             self.pause_timer()
-            live = self.recheck(beta)
+            live = self.recheck(beta, claims)
         started = time.monotonic()
         run_id = self.dispatch(claims, override, dry=not args.live)
         self.watch(run_id)
@@ -432,7 +437,7 @@ class Rollback:
             self.say(f"dry run ok: {jobs}; beta is still v{beta}")
             self.say(f"elapsed {round(time.monotonic() - started)} s")
             return
-        after = self.verify_live(live, claims)
+        after = self.verify_live(live)
         self.say(f"{'rolled forward' if direction == 'forward' else 'rolled back'}: beta is {self.tag}, listed with every artifact "
                  f"by verify-manifest --live (manifest_version {after['state'].get('manifest_version')})")
         self.say(f"run {run_id}")
