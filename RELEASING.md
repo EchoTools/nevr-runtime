@@ -55,6 +55,10 @@ published release (the newest by `publishedAt` of the non-draft releases whose t
 first and holds, cutting nothing, when that release is 195.0 minutes old or less; a manual dispatch is not held. A run that held or
 found nothing to cut published nothing, so it does not start a window.
 
+The check reads the 20 newest releases. A check that finds no published `vX.Y.Z` release among them (an empty list, or only drafts
+and other tags) refuses: it cannot tell an empty history from a listing that hides the release, so the scheduled run's step and the
+guard both fail with a message that gives the count, and nothing is cut or dispatched.
+
 The guard covers a dropped scheduled train run. It is a systemd user timer on the publisher's machine
 (`tools/systemd/nevr-train-guard.timer`, hourly at :07), which runs `tools/release_train_guard.py` from the Quest timer's dedicated
 checkout with the publisher's `gh-spritz` (`--gh`, else `GH_BIN`). It runs only while that machine is on: a machine that is off delays

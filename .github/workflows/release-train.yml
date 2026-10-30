@@ -40,7 +40,8 @@ jobs:
 
     # A scheduled run (GitHub can deliver one late, after a release the previous run cut) holds when the newest published
     # release is inside the window: exit 10 writes hold=true and cut=false and skips the plan. Any other nonzero exit fails
-    # the step red. A dispatched run (by hand, or the guard's) does not run this step.
+    # the step red (exit 2 includes a listing with no published vX.Y.Z release in it: the check refuses to decide).
+    # A dispatched run (by hand, or the guard's) does not run this step.
     - name: Check the release window
       id: window
       if: github.event_name == 'schedule'

@@ -12,7 +12,10 @@ run list and the newest published release (tools/release_window.py) whether the 
 - the newest train run failed, was cancelled or timed out, and was
   created 195 minutes ago or less                                       -> none, recent_failed_run
 - the newest published release is 195 minutes old or less               -> none, recent_release
-- otherwise (also no published release at all)                          -> dispatch, no_release_in_window
+- otherwise                                                             -> dispatch, no_release_in_window
+
+No published vX.Y.Z release among the releases fetched is not "no release in the window": the guard cannot see the last
+release, so it stops with a named failure (non-zero exit, a fail line in the log) and dispatches nothing.
 
 The window is measured from the newest published release, not from the newest train run (#1466): a run that held, or
 found nothing to cut, published nothing and costs no time. A run that failed red (or was cancelled or timed out) is the
@@ -59,13 +62,13 @@ class GuardFailure(Exception):
     pass
 
 
-def decide(now: dt.datetime, runs: list[dict], releasable: bool, switch_on: bool, release: dict | None) -> dict:
+def decide(now: dt.datetime, runs: list[dict], releasable: bool, switch_on: bool, release: dict) -> dict:
     """The decision for one hourly tick. `runs` is the train's runs, newest first; `now` is an aware datetime;
-    `release` is the newest published release, {"tag", "published"} (release_window.newest_published), or None."""
+    `release` is the newest published release, {"tag", "published"} (release_window.newest_published)."""
     newest = runs[0] if runs else None
     last_id = newest["id"] if newest else None
     last_created = newest["createdAt"] if newest else None
-    age = release_window.age_minutes(now, release["published"]) if release is not None else None
+    age = release_window.age_minutes(now, release["published"])
 
     def result(action: str, reason: str) -> dict:
         return {
@@ -73,8 +76,8 @@ def decide(now: dt.datetime, runs: list[dict], releasable: bool, switch_on: bool
             "reason": reason,
             "last_run_id": last_id,
             "last_run_created": last_created,
-            "last_release": release["tag"] if release is not None else None,
-            "last_published": release["published"] if release is not None else None,
+            "last_release": release["tag"],
+            "last_published": release["published"],
             "age_minutes": age,
             "window_minutes": WINDOW_MINUTES,
         }
@@ -91,7 +94,7 @@ def decide(now: dt.datetime, runs: list[dict], releasable: bool, switch_on: bool
         and release_window.inside_window(now, newest["createdAt"])
     ):
         return result("none", "recent_failed_run")
-    if release is not None and release_window.inside_window(now, release["published"]):
+    if release_window.inside_window(now, release["published"]):
         return result("none", "recent_release")
     return result("dispatch", "no_release_in_window")
 
@@ -161,7 +164,7 @@ def train_runs(repo: str, gh: str) -> list[dict]:
     ]
 
 
-def newest_release(repo: str, gh: str) -> dict | None:
+def newest_release(repo: str, gh: str) -> dict:
     """The newest published release, by the shared rule. The call is the guard's own, so its failures are the guard's."""
     listing = Call(gh, release_window.list_args(repo)).stdout()
     try:

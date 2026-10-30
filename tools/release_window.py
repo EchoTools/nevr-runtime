@@ -8,10 +8,12 @@ other shape and the order `gh release list` returns them in do not count.
 
     python3 tools/release_window.py --repo OWNER/REPO [--gh GH] [--now ISO]
 
-prints one JSON line and exits 0 when the train may go on ("clear": no such release, or it is older than the window) or
-10 when it holds ("hold": it was published 195.0 minutes ago or less). The line is also appended to $GITHUB_STEP_SUMMARY
-when that variable is set. Any failure (gh missing or failing, JSON that does not parse, a published release with no
-readable publishedAt) exits 2 and names the call on stderr; nothing is swallowed. <gh> is --gh, else $GH_BIN, else gh.
+prints one JSON line and exits 0 when the train may go on ("clear": the newest published release is older than the window)
+or 10 when it holds ("hold": it was published 195.0 minutes ago or less). The line is also appended to $GITHUB_STEP_SUMMARY
+when that variable is set. A check that finds no published vX.Y.Z release among the releases it fetched refuses: it exits 2
+and says how many it looked at, because it cannot tell an empty history from a listing that hides the release (more
+drafts or other tags than the 20 fetched). Any other failure (gh missing or failing, JSON that does not parse, a published
+release with no readable publishedAt) also exits 2 and names the call on stderr; nothing is swallowed. <gh> is --gh, else $GH_BIN, else gh.
 --now exists for tests. Standard library only.
 """
 from __future__ import annotations
@@ -56,9 +58,10 @@ def list_args(repo: str) -> list[str]:
     return ["release", "list", "--repo", repo, "--limit", "20", "--json", RELEASE_FIELDS]
 
 
-def newest_published(listing: str) -> dict | None:
-    """The newest published vX.Y.Z release in `gh release list --json ...` output, as {"tag", "published"}; None when
-    there is none. The newest is by publishedAt, not by position. Raises WindowError for output it cannot read."""
+def newest_published(listing: str) -> dict:
+    """The newest published vX.Y.Z release in `gh release list --json ...` output, as {"tag", "published"}. The newest is
+    by publishedAt, not by position. Raises WindowError for output it cannot read, and when none of the releases listed
+    (an empty list included) is a published vX.Y.Z: a gate that cannot see the last release does not decide."""
     try:
         releases = json.loads(listing)
     except json.JSONDecodeError as error:
@@ -82,20 +85,22 @@ def newest_published(listing: str) -> dict | None:
             raise WindowError(f"release {tag} has a publishedAt with no time zone: {stamp!r}")
         if newest_time is None or published > newest_time:
             newest, newest_time = {"tag": tag, "published": stamp}, published
+    if newest is None:
+        raise WindowError(f"none of the {len(releases)} releases fetched is a published vX.Y.Z; refusing to decide")
     return newest
 
 
-def decision(now: dt.datetime, release: dict | None) -> dict:
-    """The CLI's decision for the newest published release (None: there is none)."""
-    held = release is not None and inside_window(now, release["published"])
+def decision(now: dt.datetime, release: dict) -> dict:
+    """The CLI's decision for the newest published release."""
+    held = inside_window(now, release["published"])
     return {
         "tool": TOOL,
         "event": "decision",
         "action": "hold" if held else "clear",
         "reason": "release_window" if held else "no_recent_release",
-        "last_release": release["tag"] if release else None,
-        "last_published": release["published"] if release else None,
-        "age_minutes": age_minutes(now, release["published"]) if release else None,
+        "last_release": release["tag"],
+        "last_published": release["published"],
+        "age_minutes": age_minutes(now, release["published"]),
         "window_minutes": WINDOW_MINUTES,
     }
 

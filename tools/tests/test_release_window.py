@@ -95,8 +95,20 @@ class Newest(unittest.TestCase):
         self.assertEqual(window.newest_published(self.listing(release("v6.4.0", 49))),
                          {"tag": "v6.4.0", "published": iso(49)})
 
-    def test_none_when_there_is_no_release(self) -> None:
-        self.assertIsNone(window.newest_published("[]"))
+    def test_an_empty_list_refuses_and_names_the_count(self) -> None:
+        with self.assertRaises(window.WindowError) as caught:
+            window.newest_published("[]")
+        self.assertIn("none of the 0 releases fetched is a published vX.Y.Z; refusing to decide", str(caught.exception))
+
+    def test_drafts_and_foreign_tags_only_refuse_and_name_the_count(self) -> None:
+        listing = self.listing(release("v6.5.0", 5, draft=True), release("nightly-1", 6), release("v6.4.0-rc1", 7))
+        with self.assertRaises(window.WindowError) as caught:
+            window.newest_published(listing)
+        self.assertIn("none of the 3 releases fetched is a published vX.Y.Z; refusing to decide", str(caught.exception))
+
+    def test_one_published_release_among_drafts_is_found(self) -> None:
+        listing = self.listing(*[release(f"v7.{n}.0", 5, draft=True) for n in range(5)], release("v6.4.0", 400))
+        self.assertEqual(window.newest_published(listing)["tag"], "v6.4.0")
 
     def test_a_draft_is_not_counted(self) -> None:
         got = window.newest_published(self.listing(release("v6.5.0", 1, draft=True), release("v6.4.0", 400)))
@@ -211,24 +223,32 @@ class Cli(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.decision(result)["last_release"], "v6.4.0")
 
-    def test_no_releases_clears(self) -> None:
-        result = self.invoke([])
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.decision(result), {
-            "tool": "release_window",
-            "event": "decision",
-            "action": "clear",
-            "reason": "no_recent_release",
-            "last_release": None,
-            "last_published": None,
-            "age_minutes": None,
-            "window_minutes": 195,
-        })
+    def assert_refused(self, result: subprocess.CompletedProcess, count: int) -> None:
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertIn(f"none of the {count} releases fetched is a published vX.Y.Z; refusing to decide", result.stderr)
+        self.assertFalse(self.summary.exists() and "decision" in self.summary.read_text(encoding="utf-8"))
 
-    def test_only_drafts_and_foreign_tags_clear(self) -> None:
-        result = self.invoke([release("v6.5.0", 5, draft=True), release("nightly", 6)])
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIsNone(self.decision(result)["last_release"])
+    def test_an_empty_release_list_refuses_with_exit_2(self) -> None:
+        self.assert_refused(self.invoke([], summary=True), 0)
+
+    def test_only_drafts_and_foreign_tags_refuse_with_exit_2(self) -> None:
+        self.assert_refused(self.invoke([release("v6.5.0", 5, draft=True), release("nightly", 6)]), 2)
+
+    def test_twenty_drafts_refuse_and_name_the_count(self) -> None:
+        self.assert_refused(self.invoke([release(f"v7.{n}.0", 5, draft=True) for n in range(20)]), 20)
+
+    def test_twenty_nightly_tags_refuse(self) -> None:
+        self.assert_refused(self.invoke([release(f"nightly-{n}", 5) for n in range(20)]), 20)
+
+    def test_drafts_and_one_published_release_still_decide(self) -> None:
+        drafts = [release(f"v7.{n}.0", 5, draft=True) for n in range(19)]
+        held = self.invoke([*drafts, release("v6.4.0", 49)])
+        self.assertEqual(held.returncode, 10, held.stderr)
+        self.assertEqual(self.decision(held)["last_release"], "v6.4.0")
+        cleared = self.invoke([*drafts, release("v6.4.0", 400)])
+        self.assertEqual(cleared.returncode, 0, cleared.stderr)
+        self.assertEqual(self.decision(cleared)["action"], "clear")
 
     def test_the_call_is_gh_release_list_with_the_fields_the_rule_reads(self) -> None:
         self.invoke([])
