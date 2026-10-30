@@ -230,19 +230,23 @@ pub unsafe extern "C" fn NevrArtifactFetch(s: *mut NevrSession, version: *const 
     })
 }
 
-/// Every member of a zip artifact against `contents` (`allow_dirs` is nonzero for game data).
+/// Every member of a zip artifact against `contents` (`allow_dirs` is nonzero for game data). `platform` selects the
+/// entry as in `NevrArtifactFetch`; a `game-data` call must name one, because a release lists one such artifact per platform.
 ///
 /// # Safety
-/// All string arguments are NUL-terminated UTF-8.
+/// All string arguments are NUL-terminated UTF-8; `platform` may be null.
 #[no_mangle]
-pub unsafe extern "C" fn NevrArtifactVerifyZip(s: *mut NevrSession, version: *const c_char, kind: *const c_char, zip_path: *const c_char, allow_dirs: i32) -> i32 {
-    let (version, kind, zip_path) = match (cstr(version), cstr(kind), cstr(zip_path)) {
-        (Ok(a), Ok(b), Ok(c)) => (a.to_string(), b.to_string(), c.to_string()),
+pub unsafe extern "C" fn NevrArtifactVerifyZip(s: *mut NevrSession, version: *const c_char, kind: *const c_char, platform: *const c_char, zip_path: *const c_char, allow_dirs: i32) -> i32 {
+    let (version, kind, platform, zip_path) = match (cstr(version), cstr(kind), opt_cstr(platform), cstr(zip_path)) {
+        (Ok(a), Ok(b), Ok(c), Ok(d)) => (a.to_string(), b.to_string(), c.map(str::to_string), d.to_string()),
         _ => return NEVR_BAD_ARGUMENT,
     };
     with_session(s, |s| {
+        if kind == "game-data" && platform.is_none() {
+            return Err(Error::new(8, "a release lists one game-data artifact per platform (android-arm64, windows-x86_64): name the platform of the data to verify"));
+        }
         let m = manifest::stored(&s.cfg.state_dir)?;
-        let art = manifest::find(&m, &version, &kind, None)?;
+        let art = manifest::find(&m, &version, &kind, platform.as_deref())?;
         let n = crate::artifact::verify_zip(std::path::Path::new(&zip_path), &art, allow_dirs != 0)?;
         s.log.info("verify_installed", 8, json!({"ok": true, "what": "zip-members", "expected": art.contents.len(), "observed": n}))?;
         Ok(NEVR_OK)
