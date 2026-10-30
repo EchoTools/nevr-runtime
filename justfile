@@ -2938,6 +2938,46 @@ verify:
         exit 1
     fi
 
+    # --- N43: the boot log tee writes its file through kernel32 only ------------
+    # The tee opens and writes its file during initialization, which runs on the
+    # host's wrapper detour while the loader lock may be held. A CRT file call
+    # (fopen, freopen, fprintf or fwrite to a FILE*, an iostream file) takes CRT
+    # locks there; CreateFileA and WriteFile take none. The rule is AGENTS.md N43.
+    N43_RC=0; N43_TEE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/log/boot_log_tee.cpp) || N43_RC=$?
+    sensor_stage1 "N43 boot tee kernel32 only" "src/runtime/log/boot_log_tee.cpp" "$N43_RC"
+    sensor_nonempty "N43 boot tee kernel32 only" "non-comment lines of boot_log_tee.cpp" "$N43_TEE"
+    if grep -qE '\b(fopen|_wfopen|fopen_s|_wfopen_s|freopen|_fsopen|fprintf|fwrite|fputs|std::ofstream|std::fstream|std::ifstream)\b' <<<"$N43_TEE"; then
+        echo "verify: FAIL — N43 boot_log_tee.cpp calls a CRT file function (fopen, fprintf, fwrite, an iostream file)." >&2
+        echo "The tee runs while the loader lock may be held; CRT file calls take CRT locks there. Open and write with CreateFileA and WriteFile." >&2
+        exit 1
+    fi
+    if ! grep -qF 'CreateFileA' <<<"$N43_TEE" || ! grep -qF 'WriteFile' <<<"$N43_TEE"; then
+        echo "verify: FAIL — N43 boot_log_tee.cpp no longer opens and writes its file through kernel32 (CreateFileA and WriteFile)." >&2
+        exit 1
+    fi
+
+    # --- N17: a component that installs several hooks reports each outcome -----
+    # Each hook reports by name, and one aggregate line at Info says how many took.
+    # The aggregate is what makes a partial install visible: a Warning there, not a
+    # silent success. Two components carry it: platform_compat (its three hooks) and
+    # pnsrad_enabler (the echovr.exe patches). The sensor reads the aggregate only.
+    N17_PC_RC=0; N17_PC=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/modules/platform-compat/src/platform_compat.cpp) || N17_PC_RC=$?
+    sensor_stage1 "N17 platform_compat aggregate" "src/modules/platform-compat/src/platform_compat.cpp" "$N17_PC_RC"
+    sensor_nonempty "N17 platform_compat aggregate" "non-comment lines of platform_compat.cpp" "$N17_PC"
+    if ! grep -qF 'Log(okCount == 3 ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,' <<<"$N17_PC" || ! grep -qF 'platform_compat initialized: %d/3 hooks installed' <<<"$N17_PC" || ! grep -qF 'tls=%s createdir=%s msxml6=%s' <<<"$N17_PC"; then
+        echo "verify: FAIL — N17 platform_compat no longer reports its three hooks by name with an aggregate at Info." >&2
+        echo "A success that logs nothing, or an aggregate that is not Info when all three took, makes a working hook look like a silent one." >&2
+        exit 1
+    fi
+    N17_PN_RC=0; N17_PN=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/patch/pnsrad_enabler.cpp) || N17_PN_RC=$?
+    sensor_stage1 "N17 pnsrad aggregate" "src/runtime/patch/pnsrad_enabler.cpp" "$N17_PN_RC"
+    sensor_nonempty "N17 pnsrad aggregate" "non-comment lines of pnsrad_enabler.cpp" "$N17_PN"
+    if ! grep -qF 'Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] pnsrad init complete: %d/%d echovr.exe patches applied",' <<<"$N17_PN"; then
+        echo "verify: FAIL — N17 pnsrad_enabler no longer ends its install with the aggregate line at Info (pnsrad init complete)." >&2
+        echo "Without it, a pnsrad install that patched nothing reads the same as one that patched every site." >&2
+        exit 1
+    fi
+
     # --- N128: a failed hook must report WHICH MinHook error ---------------------
     # N126 made a failed detour visible; N128 made it DIAGNOSABLE. Hooking::Attach
     # captures MH_StatusToString on failure and PatchDetour surfaces it, so the log
