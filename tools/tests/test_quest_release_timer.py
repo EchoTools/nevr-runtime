@@ -15,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from collections.abc import Callable
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
@@ -1333,17 +1334,21 @@ class FailureNoticeIsNotRepeated(TimerCase):
         self.assertEqual(timer.main(["--notify-failure"], self.env, runner=broken, sleep=self.sleeps.append), 1)
         self.assertNotIn("failure_notified", self.names())
 
+    def unwritable_log(self) -> None:
+        """The log refuses every record. A read-only file does not do it: CI runs as root, which writes through the mode."""
+        refuse = mock.patch.object(timer.Log, "event", side_effect=timer.Failure("cannot write the log: Permission denied"))
+        refuse.start()
+        self.addCleanup(refuse.stop)
+
     def test_a_log_that_cannot_record_the_notice_is_loud(self) -> None:
         self.write_log(self.refusal())
-        self.log.chmod(0o444)
-        self.addCleanup(self.log.chmod, 0o644)
+        self.unwritable_log()
         self.assertEqual(self.notify(), 1)
         self.assertEqual(len(self.sent), 1, "the courier went before the record failed")
 
     def test_a_log_that_cannot_record_the_suppression_is_loud(self) -> None:
         self.write_log(self.refusal(), self.notified())
-        self.log.chmod(0o444)
-        self.addCleanup(self.log.chmod, 0o644)
+        self.unwritable_log()
         self.assertEqual(self.notify(), 1)
         self.assertEqual(self.sent, [])
 
