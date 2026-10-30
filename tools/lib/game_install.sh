@@ -124,6 +124,9 @@ save_stored_sign_in() {
     echo "FAIL: the login wrote no sign-in file to $from; nothing was saved" >&2
     exit 1
   fi
+  # The sign-in directories hold credentials: made 0700 here, before work_dir's mkdir -p, which would take the umask (755).
+  install -d -m 700 -- "$(dirname "$(dirname "$path")")" && install -d -m 700 -- "$(dirname "$path")" \
+    || { echo "ERROR: cannot make the sign-in directory for $path" >&2; exit 1; }
   work_dir "$(dirname "$path")" "Stored sign-ins of test accounts, one directory per account, each .credentials.json at mode 0600; a test client signs in with one (launch-client.sh --creds)." \
     "by hand: an account's directory is removed when its account is retired; no script removes one." || exit 1
   tmp="$path.new.$$"
