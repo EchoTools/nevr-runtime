@@ -623,7 +623,7 @@ class RecipeAndDocsTest(unittest.TestCase):
 
     def test_release_quest_apk_runs_the_preflight_for_its_tag_and_not_the_bare_one(self):
         text = (REPO / "justfile").read_text()
-        start = text.index("\nrelease-quest-apk ")
+        start = text.index("\n_release-quest-apk ")  # the body of release-quest-apk and release-quest-variant-apk
         body = text[start:text.index("\n\n", start)]
         calls = [l.strip() for l in body.splitlines() if l.strip().startswith("tools/release_preflight.py")]
         self.assertEqual(calls, ['tools/release_preflight.py --tag "$tag"'])
