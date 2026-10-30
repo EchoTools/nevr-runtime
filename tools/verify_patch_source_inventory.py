@@ -42,7 +42,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/menu_version_label.cpp",
     "patch/mic_provider.cpp",
     "patch/mode_patches.cpp",
-    "patch/netgun_bullets.cpp",
+    "patch/netgun_bullet_ids.cpp",
     "patch/plugin_assets.cpp",
     "patch/pnsrad_enabler.cpp",
     "patch/render_config.cpp",

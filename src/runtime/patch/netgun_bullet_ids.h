@@ -5,7 +5,7 @@
 // only if the bullet ids are repaired. The runtime serves the player's own stock resource with those 60 ids rewritten
 // to the assault's id; no game bytes are stored here.
 //
-// This header is the pure half: the layout, the pins and the byte rule (the process half is netgun_bullets.cpp). The
+// This header is the pure half: the layout, the pins and the byte rule (the process half is netgun_bullet_ids.cpp). The
 // rule is the stock resource's own data, read through the offsets tools/echomod/clone_combat.py reads: the entry count
 // at +48, the capacity at +40, the data size at +8, entries of 160 bytes from +56, and in each entry the weapon kind at
 // +72 and the bullet instance's id at +104. Entries 0-14 are the assault, 15-59 the blaster, scout and rocket, and
@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-namespace nevr_netgun_bullets {
+namespace nevr_netgun_bullet_ids {
 
 /// CR15NetGunCR, the logical type of the resource (symcache_data.cpp, `0x6ef7231bbb0f6342`). The package manifest
 /// keys the same resource under CR15NetGunCRWin10; the loader callback reports the logical type.
@@ -143,8 +143,8 @@ inline Result Patch(const uint8_t* data, size_t size, const std::string& sha256H
   return r;
 }
 
-/// Registers the transform for the five names (netgun_bullets.cpp). Client and server; logs its decision. Needs the
+/// Registers the transform for the five names (netgun_bullet_ids.cpp). Client and server; logs its decision. Needs the
 /// resource override registry (InstallResourceOverride) to exist.
 void Install();
 
-}  // namespace nevr_netgun_bullets
+}  // namespace nevr_netgun_bullet_ids

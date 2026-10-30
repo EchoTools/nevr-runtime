@@ -1,4 +1,4 @@
-// #1420: the netgun entries of the four unfinished weapons. The rule is pure (runtime/patch/netgun_bullets.h); these tests
+// #1420: the netgun entries of the four unfinished weapons. The rule is pure (runtime/patch/netgun_bullet_ids.h); these tests
 // build a synthetic resource in memory, with no game bytes, in the layout the header names. The pin is injected by the
 // caller's digest string only where the rule takes one; the stock digest itself is checked as a constant.
 
@@ -9,11 +9,11 @@
 #include <string>
 #include <vector>
 
-#include "runtime/patch/netgun_bullets.h"
+#include "runtime/patch/netgun_bullet_ids.h"
 
 namespace {
 
-namespace nb = nevr_netgun_bullets;
+namespace nb = nevr_netgun_bullet_ids;
 
 constexpr uint64_t kOtherBullet = 0xA000000000000001ULL;
 
@@ -47,14 +47,14 @@ std::vector<uint8_t> Synthetic(uint64_t assaultBullet = nb::kAssaultBulletId) {
 }
 
 // The stock bullet ids of the four kinds are distinct from the assault's, so a rewrite is visible.
-TEST(NetgunBullets, StockDigestsAreThePinnedValues) {
+TEST(NetgunBulletIds, StockDigestsAreThePinnedValues) {
   EXPECT_EQ(std::string(nb::kStockSha256), "c28109544de935ec480f9c7666914971ba5c17b659e8e2b74dbea59a24373c37");
   EXPECT_EQ(std::string(nb::kPluginFileSha256), "30d60a0ba49bfc6ce353289ed362fad5f34cfd91dc4c826d99d9d482ccf037e1");
   EXPECT_EQ(nb::kTotalBytes, 19256u);
   EXPECT_EQ(nb::kNameCount, 5u);
 }
 
-TEST(NetgunBullets, PinnedBytesGetTheAssaultIdOnTheFourKindsOnly) {
+TEST(NetgunBulletIds, PinnedBytesGetTheAssaultIdOnTheFourKindsOnly) {
   const std::vector<uint8_t> stock = Synthetic();
   const nb::Result r = nb::Patch(stock.data(), stock.size(), nb::kStockSha256);
   ASSERT_EQ(r.verdict, nb::Verdict::Patched) << r.reason;
@@ -68,7 +68,7 @@ TEST(NetgunBullets, PinnedBytesGetTheAssaultIdOnTheFourKindsOnly) {
   }
 }
 
-TEST(NetgunBullets, OnlyTheBulletIdChanges) {
+TEST(NetgunBulletIds, OnlyTheBulletIdChanges) {
   const std::vector<uint8_t> stock = Synthetic();
   const nb::Result r = nb::Patch(stock.data(), stock.size(), nb::kStockSha256);
   ASSERT_EQ(r.verdict, nb::Verdict::Patched);
@@ -82,14 +82,14 @@ TEST(NetgunBullets, OnlyTheBulletIdChanges) {
   }
 }
 
-TEST(NetgunBullets, AnotherDigestIsLeftAlone) {
+TEST(NetgunBulletIds, AnotherDigestIsLeftAlone) {
   const std::vector<uint8_t> stock = Synthetic();
   const nb::Result r = nb::Patch(stock.data(), stock.size(), nb::kPluginFileSha256);
   EXPECT_EQ(r.verdict, nb::Verdict::NotStock);
   EXPECT_TRUE(r.bytes.empty());
 }
 
-TEST(NetgunBullets, AlreadyRewrittenBufferIsNotThePin) {
+TEST(NetgunBulletIds, AlreadyRewrittenBufferIsNotThePin) {
   std::vector<uint8_t> stock = Synthetic();
   const nb::Result once = nb::Patch(stock.data(), stock.size(), nb::kStockSha256);
   ASSERT_EQ(once.verdict, nb::Verdict::Patched);
@@ -98,7 +98,7 @@ TEST(NetgunBullets, AlreadyRewrittenBufferIsNotThePin) {
   EXPECT_EQ(twice.verdict, nb::Verdict::NotStock);
 }
 
-TEST(NetgunBullets, WrongSizeIsRefused) {
+TEST(NetgunBulletIds, WrongSizeIsRefused) {
   std::vector<uint8_t> stock = Synthetic();
   stock.pop_back();
   const nb::Result r = nb::Patch(stock.data(), stock.size(), nb::kStockSha256);
@@ -107,7 +107,7 @@ TEST(NetgunBullets, WrongSizeIsRefused) {
   EXPECT_TRUE(r.bytes.empty());
 }
 
-TEST(NetgunBullets, WrongDataSizeIsRefused) {
+TEST(NetgunBulletIds, WrongDataSizeIsRefused) {
   std::vector<uint8_t> stock = Synthetic();
   WriteU64(stock, 8, 19199);
   const nb::Result r = nb::Patch(stock.data(), stock.size(), nb::kStockSha256);
@@ -115,7 +115,7 @@ TEST(NetgunBullets, WrongDataSizeIsRefused) {
   EXPECT_EQ(r.reason, "data_size");
 }
 
-TEST(NetgunBullets, WrongCapacityIsRefused) {
+TEST(NetgunBulletIds, WrongCapacityIsRefused) {
   std::vector<uint8_t> stock = Synthetic();
   WriteU64(stock, 40, 121);
   const nb::Result r = nb::Patch(stock.data(), stock.size(), nb::kStockSha256);
@@ -123,7 +123,7 @@ TEST(NetgunBullets, WrongCapacityIsRefused) {
   EXPECT_EQ(r.reason, "capacity");
 }
 
-TEST(NetgunBullets, WrongCountIsRefused) {
+TEST(NetgunBulletIds, WrongCountIsRefused) {
   std::vector<uint8_t> stock = Synthetic();
   WriteU64(stock, 48, 119);
   const nb::Result r = nb::Patch(stock.data(), stock.size(), nb::kStockSha256);
@@ -131,7 +131,7 @@ TEST(NetgunBullets, WrongCountIsRefused) {
   EXPECT_EQ(r.reason, "count");
 }
 
-TEST(NetgunBullets, AssaultIdsThatDifferAreRefused) {
+TEST(NetgunBulletIds, AssaultIdsThatDifferAreRefused) {
   std::vector<uint8_t> stock = Synthetic();
   WriteU64(stock, EntryAt(7) + nb::kBulletOffset, kOtherBullet);
   const nb::Result r = nb::Patch(stock.data(), stock.size(), nb::kStockSha256);
@@ -139,14 +139,14 @@ TEST(NetgunBullets, AssaultIdsThatDifferAreRefused) {
   EXPECT_EQ(r.reason, "assault_ids_differ");
 }
 
-TEST(NetgunBullets, NoAssaultBulletIsRefused) {
+TEST(NetgunBulletIds, NoAssaultBulletIsRefused) {
   const std::vector<uint8_t> stock = Synthetic(0);
   const nb::Result r = nb::Patch(stock.data(), stock.size(), nb::kStockSha256);
   EXPECT_EQ(r.verdict, nb::Verdict::Refused);
   EXPECT_EQ(r.reason, "assault_bullet_missing");
 }
 
-TEST(NetgunBullets, KindsThatSplitAGroupAreRefused) {
+TEST(NetgunBulletIds, KindsThatSplitAGroupAreRefused) {
   std::vector<uint8_t> stock = Synthetic();
   WriteU64(stock, EntryAt(70) + nb::kKindOffset, 0xDEAD);
   const nb::Result r = nb::Patch(stock.data(), stock.size(), nb::kStockSha256);
@@ -154,7 +154,7 @@ TEST(NetgunBullets, KindsThatSplitAGroupAreRefused) {
   EXPECT_EQ(r.reason, "kind_groups_differ");
 }
 
-TEST(NetgunBullets, NullBufferIsNotPatched) {
+TEST(NetgunBulletIds, NullBufferIsNotPatched) {
   const nb::Result r = nb::Patch(nullptr, 0, nb::kStockSha256);
   EXPECT_EQ(r.verdict, nb::Verdict::Refused);
   EXPECT_STREQ(nb::VerdictName(r.verdict), "refused");
