@@ -241,8 +241,10 @@ class RenderConfigWiring(unittest.TestCase):
         self.assertIn(marker, hook)
         self.assertTrue(game_path_problems(hook.replace(marker, 'Log(EchoVR::LogLevel::Info, "x");\n  ' + marker, 1)))
         self.assertTrue(game_path_problems(hook.replace(marker, "Sleep(1);\n  " + marker, 1)))
-        self.assertTrue(game_path_problems(hook.replace("  return result;\n}\n\nstd::uint64_t SelectorHook",
-                                                       "  return 0;\n}\n\nstd::uint64_t SelectorHook", 1)))
+        # ApplyHook's tail: the anchor must match, or the mutant is never made and the assertion passes on nothing.
+        tail = "  return result;\n}\n\n// Writes the score"
+        self.assertIn(tail, hook)
+        self.assertTrue(game_path_problems(hook.replace(tail, "  return 0;\n}\n\n// Writes the score", 1)))
         early = hook.replace("  const auto returnAddress = reinterpret_cast<std::uintptr_t>(__builtin_return_address(0));\n  " + marker,
                              "  try { g_swallowed.fetch_add(0); } catch (const std::exception&) {}\n  " + marker, 1)
         self.assertNotEqual(early, hook)
