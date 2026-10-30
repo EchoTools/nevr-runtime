@@ -31,7 +31,7 @@ OLD_NAME_ALLOWED = {
 }
 # Not the binary: the data names above, the record owner constant and the refusal text that names the owner, the cargo package (the library and header keep their
 # own names), the CLI's per-user state directory and the lockfile entry for the package.
-DATA_NAME = re.compile(r'nevr-install\.(?:txt|log|jsonl)\b|owner=nevr-install|OWNER: &str = "nevr-install"|installed by nevr-install\b'
+DATA_NAME = re.compile(r'nevr-install\.(?:txt|log|jsonl)\b|owner=nevr-install|OWNER: &str = "nevr-install"|installed by nevr-install(?!\.exe|[\w-])'
                        r'|join\("nevr-install"\)|-ne \'nevr-install\'|^name = "nevr-install"$')
 
 
@@ -64,6 +64,15 @@ class InstallerNameTest(unittest.TestCase):
                 if OLD in DATA_NAME.sub("", line):
                     stray.append(f"{name}:{number}: {line.strip()[:120]}")
         self.assertEqual(stray, [], "the binary is install-nevr-runtime; fix these lines")
+
+    def test_the_owner_message_is_data_but_the_binary_after_the_same_words_is_not(self):
+        hidden = ["installed by nevr-install to undo", "installed by nevr-install."]
+        flagged = ["installed by nevr-install.exe", "installed by nevr-install.exe pc uninstall",
+                   "installed by nevr-install-foo", "run nevr-install.exe installed by nevr-install"]
+        for line in hidden:
+            self.assertNotIn(OLD, DATA_NAME.sub("", line), line)
+        for line in flagged:
+            self.assertIn(OLD, DATA_NAME.sub("", line), line)
 
     def test_the_allowed_files_say_the_old_name_only_for_the_copy(self):
         for name in sorted(OLD_NAME_ALLOWED):
