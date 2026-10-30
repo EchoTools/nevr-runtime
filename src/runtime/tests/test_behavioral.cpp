@@ -6933,13 +6933,13 @@ void ExpectClientSaysRefusalOnce(RefusingService& service, uint16_t port) {
   GameSocket first;
   ASSERT_TRUE(first.Connect(port, "/login"));
   ASSERT_TRUE(first.WaitForClose()) << "the refused login socket was left open";
-  ASSERT_TRUE(WaitForLogLines("login refused (HTTP 401)", 1));
+  ASSERT_TRUE(WaitForLogLines("login refused conn=", 1));
   EXPECT_EQ(service.Requests(), 1);
   GameSocket second;
   ASSERT_TRUE(second.Connect(port, "/login"));
   ASSERT_TRUE(second.WaitForClose()) << "the next login socket was left open";
   EXPECT_EQ(service.Requests(), 1) << "the client went back to the service with a sign-in it was refused for";
-  EXPECT_EQ(LogLinesContaining("login refused (HTTP").size(), 1u) << "the refusal was said more than once";
+  EXPECT_EQ(LogLinesContaining("login refused conn=").size(), 1u) << "the refusal was said more than once";
   EXPECT_EQ(ServerFatalCalls(), 0) << "a client must not stop";
 }
 
@@ -7069,12 +7069,12 @@ void ExpectADifferentSignInIsTriedAgain(RefusingService& service, uint16_t port)
   GameSocket first;
   ASSERT_TRUE(first.Connect(port, "/login"));
   ASSERT_TRUE(first.WaitForClose());
-  ASSERT_TRUE(WaitForLogLines("login refused (HTTP 401)", 1));
+  ASSERT_TRUE(WaitForLogLines("login refused conn=", 1));
   g_testToken = "sign-in-B";
   GameSocket second;
   ASSERT_TRUE(second.Connect(port, "/login"));
   ASSERT_TRUE(second.WaitForClose());
-  ASSERT_TRUE(WaitForLogLines("login refused (HTTP 401)", 2)) << "a new sign-in's refusal was not said";
+  ASSERT_TRUE(WaitForLogLines("login refused conn=", 2)) << "a new sign-in's refusal was not said";
   EXPECT_EQ(service.Requests(), 2) << "a sign-in that was not refused before was not tried";
   g_testToken = nullptr;
 }
@@ -7094,7 +7094,7 @@ TEST_F(RefusedLoginClientTest, ALoginAfterARefusedOneIsStillALoginNotAShareOfNot
   GameSocket first;
   ASSERT_TRUE(first.Connect(port_, "/login"));
   ASSERT_TRUE(first.WaitForClose());
-  ASSERT_TRUE(WaitForLogLines("login refused (HTTP 401)", 1));
+  ASSERT_TRUE(WaitForLogLines("login refused conn=", 1));
   GameSocket second;
   ASSERT_TRUE(second.Connect(port_, "/login"));
   ASSERT_TRUE(second.WaitForClose());
