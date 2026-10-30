@@ -13,6 +13,8 @@ namespace {
 using nevr_menu_version_label::FitLabel;
 using nevr_menu_version_label::kLobbyVersionItem;
 using nevr_menu_version_label::kMaxLabelChars;
+using nevr_menu_version_label::kPublisherLockItem;
+using nevr_menu_version_label::PublisherLockReplacement;
 using nevr_menu_version_label::ReplacementFor;
 
 // The item symbol is the game's CSymbol64 hash of the item's name, the one the script DLL f0c9097e9973b51b passes.
@@ -50,6 +52,16 @@ TEST(MenuVersionLabel, OnlyTheLobbyVersionItemIsReplaced) {
   EXPECT_EQ(ReplacementFor(EchoVR::CSymbol64Hash("rad_version"), "631547", label), nullptr);
   EXPECT_EQ(ReplacementFor(EchoVR::CSymbol64Hash("publisher_lock"), "rad15_live", label), nullptr);
   EXPECT_EQ(ReplacementFor(0, "x", label), nullptr);
+}
+
+// The publisher lock item is drawn as the service's name, whatever the document's value; the literal is the game's hash.
+TEST(MenuVersionLabel, ThePublisherLockItemIsDrawnAsTheServiceName) {
+  EXPECT_EQ(kPublisherLockItem, EchoVR::CSymbol64Hash("publisher_lock"));
+  EXPECT_STREQ(PublisherLockReplacement(kPublisherLockItem, "rad15_live"), "echovrce");
+  EXPECT_STREQ(PublisherLockReplacement(kPublisherLockItem, "echotools"), "echovrce");
+  EXPECT_EQ(PublisherLockReplacement(kPublisherLockItem, ""), nullptr);
+  EXPECT_EQ(PublisherLockReplacement(kPublisherLockItem, nullptr), nullptr);
+  EXPECT_EQ(PublisherLockReplacement(kLobbyVersionItem, "rad15_live"), nullptr);
 }
 
 // The script writes "" to the item when its page is disabled; the label must not reappear then.
