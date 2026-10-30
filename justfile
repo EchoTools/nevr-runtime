@@ -3439,15 +3439,16 @@ verify:
     # Horizon denies execmod on a written libr15 page, so the libr15 is patched on the host at build time and the sentinel
     # stores only DATA at run time. Four things keep it so, each a scan of src/quest outside the tests:
     #   (1) a protection or mapping call (mprotect, mmap, mremap, PROT_EXEC, PROT_WRITE) appears only in the files that need
-    #       one: got_hook.cpp (the GOT's data pages), libr15_attach.cpp (its trampoline pages, anonymous memory) and
-    #       credits_text.cpp (its anonymous buffer), plus the two headers that declare those seams;
+    #       one: got_hook.cpp (the GOT's data pages), libr15_attach.cpp (its trampoline pages, anonymous memory),
+    #       credits_text.cpp (its anonymous buffer) and plugins/q15t/src/got_swap.cpp (the q15t GOT swap, data pages only),
+    #       plus the two headers that declare those seams;
     #   (2) the run-time code writers of the old inline hooks (InstallInlineThunk, WriteWord, AllocateInReach) do not come back;
     #   (3) credits_text.cpp makes exactly one protection call, on its own buffer, and no other mprotect;
     #   (4) the STOCK build ID constant is named only by the files that need the stock file's identity. A hook that compares the
     #       stock ID where it means the patched one is a no-op on the patched libr15 that no unit test of the hook's own logic sees.
     # The allowlists are repeated in tools/tests/test_quest_no_code_writes.py, which fails when they differ.
     # BEGIN N151
-    N151_PROT_OK=" sentinel/got_hook.cpp sentinel/libr15_attach.cpp sentinel/libr15_attach.h sentinel/credits_text.cpp sentinel/credits_text.h "
+    N151_PROT_OK=" plugins/q15t/src/got_swap.cpp sentinel/got_hook.cpp sentinel/libr15_attach.cpp sentinel/libr15_attach.h sentinel/credits_text.cpp sentinel/credits_text.h "
     N151_ID_OK=" diag/hwdump_run.cpp patch/libr15_patch_identity.cpp patch/libr15_extra_rows.cpp patch/libr15_patch_table.h plugin/plugin_identity.h sentinel/credits_text.cpp sentinel/data_wiring.cpp sentinel/libr15_attach.cpp sentinel/libr15_identity.cpp sentinel/pinned_targets.h "
     n151_fail() { echo "verify: FAIL — N151 $1 (docs/adr/0021: the sentinel changes no code page at run time)." >&2; exit 1; }
     N151_RC=0; N151_PROT=$(grep -rnE '\b(mprotect|mmap|mremap|pkey_mprotect)\b|PROT_(EXEC|WRITE)' src/quest --include='*.cpp' --include='*.h' --exclude-dir=tests) || N151_RC=$?
