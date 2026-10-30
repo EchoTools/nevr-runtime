@@ -15,6 +15,7 @@
 
 #include "quest/invite/frame_dispatch.h"
 #include "quest/invite/join_game_quest.h"
+#include "quest/invite/join_log_fields.h"
 #include "runtime/patch/invite_join.h"
 #include "runtime/patch/invite_match_api.h"
 
@@ -427,6 +428,44 @@ void TestGuidByteOrder() {
   CHECK(nevr_invite_join::LobbyText(lobby) == "0123ABCD-4567-89EF-0123-456789ABCDEF");
 }
 
+// #1542: the join's text becomes record fields. reason, lobby and state_from are keys, numbers are numbers, and words that
+// are not key=value stay in msg.
+const nevr_quest_invite_join::JoinField* FieldNamed(const nevr_quest_invite_join::JoinLine& line, const char* key) {
+  for (const nevr_quest_invite_join::JoinField& f : line.fields) {
+    if (f.key == key) return &f;
+  }
+  return nullptr;
+}
+
+void TestJoinLineSplitsIntoFields() {
+  const nevr_quest_invite_join::JoinLine notStarted = nevr_quest_invite_join::SplitJoinLine(
+      "[NEVR.INVITE] join not started reason=not_at_menu lobby=0123ABCD-4567-89EF-0123-456789ABCDEF state_from=2");
+  CHECK(notStarted.tag == "NEVR.INVITE");
+  CHECK(notStarted.msg == "join not started");
+  const nevr_quest_invite_join::JoinField* reason = FieldNamed(notStarted, "reason");
+  CHECK(reason != nullptr && reason->text == "not_at_menu" && !reason->number);
+  const nevr_quest_invite_join::JoinField* lobby = FieldNamed(notStarted, "lobby");
+  CHECK(lobby != nullptr && lobby->text == "0123ABCD-4567-89EF-0123-456789ABCDEF");
+  const nevr_quest_invite_join::JoinField* stateFrom = FieldNamed(notStarted, "state_from");
+  CHECK(stateFrom != nullptr && stateFrom->number && stateFrom->value == 2);
+
+  const nevr_quest_invite_join::JoinLine none = nevr_quest_invite_join::SplitJoinLine(
+      "[NEVR.INVITE] join not started reason=not_at_menu lobby=0123ABCD-4567-89EF-0123-456789ABCDEF state_from=none");
+  const nevr_quest_invite_join::JoinField* noneState = FieldNamed(none, "state_from");
+  CHECK(noneState != nullptr && !noneState->number && noneState->text == "none");
+
+  const nevr_quest_invite_join::JoinLine stage = nevr_quest_invite_join::SplitJoinLine(
+      "[NEVR.INVITE] join stage undo failed after begin step=unstage field=lobby");
+  CHECK(stage.msg == "join stage undo failed after begin");
+  CHECK(FieldNamed(stage, "step") != nullptr && FieldNamed(stage, "step")->text == "unstage");
+  CHECK(FieldNamed(stage, "field") != nullptr && FieldNamed(stage, "field")->text == "lobby");
+
+  // A token whose key is not a plain identifier is a word of msg, and a repeated key keeps its first value.
+  const nevr_quest_invite_join::JoinLine odd = nevr_quest_invite_join::SplitJoinLine("[NEVR.INVITE] a.b=c c-d=e x=1 x=2");
+  CHECK(odd.msg == "a.b=c c-d=e");
+  CHECK(odd.fields.size() == 1 && odd.fields[0].key == "x" && odd.fields[0].value == 1);
+}
+
 }  // namespace
 
 int main() {
@@ -452,6 +491,7 @@ int main() {
   TestAppliedAnswerOffersTheMatch();
   TestAppliedAnswerWhileServiceOffIsNotOffered();
   TestIdleFrameDoesNotTakeMatches();
+  TestJoinLineSplitsIntoFields();
   if (g_failures != 0) {
     std::fprintf(stderr, "invite_join_quest_test: %d failure(s)\n", g_failures);
     return 1;
