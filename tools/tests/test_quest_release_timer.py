@@ -2855,6 +2855,10 @@ class HostBreakage(VariantCase):
         self.against(http_response(HOST_APK), http_chunked(b"not a sid"))
         self.unconfirmed()
 
+    def test_a_chunked_sidecar_that_names_another_file_could_not_be_confirmed_complete(self) -> None:
+        self.against(http_response(HOST_APK), http_chunked(f"{self.GOOD}  another.apk\n".encode()))
+        self.unconfirmed()
+
     def test_a_complete_apk_read_that_disagrees_with_its_sidecar_points_at_the_repair(self) -> None:
         self.against(http_response(HOST_APK[:-3]), http_response(self.SIDECAR))
         failure = self.failed_once("RELEASING.md")
