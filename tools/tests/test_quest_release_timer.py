@@ -1397,7 +1397,7 @@ class LogLinesThatAreNotEvents(TimerCase):
         self.assertEqual(timer.read_events(self.log), [{"event": "x"}])
 
 
-
+class RealProcess(TimerCase):
     """The tool as the unit starts it: a real interpreter, a real log file, a fake `gh` first on the path."""
 
     def start(self, env: dict, *args: str) -> subprocess.CompletedProcess:
