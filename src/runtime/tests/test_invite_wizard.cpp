@@ -129,6 +129,25 @@ TEST(InviteMetric, TheClicksOwnFieldsAreReadFromTheNestedEventDetail) {
   EXPECT_EQ(notObject.join_code, "");
 }
 
+// The share page's JOIN (#1731): the page script's own strings (`8c3244ce60942e17.dll`, ReVault) name the panel and the event.
+TEST(InviteMetric, TheSharePagesJoinIsRecognisedByItsPanelAndEventAndNothingElseIs) {
+  EXPECT_TRUE(nevr_invite::IsShareJoin(
+      R"({"panel_type":"deep_linking","panel_name":"create_game_summary","event_name":"join","user_id":"OVR-ORG-1"})"));
+  EXPECT_TRUE(nevr_invite::IsShareJoin(
+      R"({"panel_type":"deep_linking","panel_name":"create_game_summary","event_name":"join","event_detail":{}})"));
+  EXPECT_FALSE(nevr_invite::IsShareJoin(
+      R"({"panel_type":"deep_linking","panel_name":"create_game_summary","event_name":"exit"})"));
+  EXPECT_FALSE(nevr_invite::IsShareJoin(
+      R"({"panel_type":"deep_linking","panel_name":"join_via_code","event_name":"join"})"));
+  EXPECT_FALSE(nevr_invite::IsShareJoin(
+      R"({"panel_type":"other","panel_name":"create_game_summary","event_name":"join"})"));
+  EXPECT_FALSE(nevr_invite::IsShareJoin("not json"));
+  EXPECT_FALSE(nevr_invite::IsShareJoin(""));
+  EXPECT_EQ(nevr_invite::ParseMetric(R"({"panel_type":"deep_linking","panel_name":"create_game_summary","event_name":"join"})").kind,
+            Kind::NotWizard);  // the parser the typed code and the create use does not take it
+  EXPECT_EQ(nevr_invite::ShareJoinClickLine(), "[NEVR.INVITE] wizard click seen event=join panel=create_game_summary");
+}
+
 TEST(InviteMetric, OtherWizardClicksAreNotRequests) {
   const std::string other =
       R"({"panel_type":"deep_linking","panel_name":"create_game_review_settings","event_name":"back"})";
