@@ -28,8 +28,10 @@ JUSTFILE = ROOT / "justfile"
 
 # Files (relative to src/quest) that may name a memory-protection or mapping call. got_hook.cpp: the GOT's data pages;
 # libr15_attach.cpp: its trampoline pages (anonymous memory); credits_text.cpp: its anonymous buffer. The two headers declare
-# the seams those files take (their own comments name mprotect and mmap).
+# the seams those files take (their own comments name mprotect and mmap). plugins/q15t/src/got_swap.cpp: the q15t plugin's
+# GOT slot swap, the same data-page change as got_hook.cpp; it refuses an executable page (#1623).
 PROTECTION_ALLOWLIST = {
+    "plugins/q15t/src/got_swap.cpp",
     "sentinel/got_hook.cpp",
     "sentinel/libr15_attach.cpp",
     "sentinel/libr15_attach.h",

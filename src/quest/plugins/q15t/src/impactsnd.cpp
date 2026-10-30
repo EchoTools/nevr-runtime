@@ -664,7 +664,7 @@ InstallResult InstallImpactSnd(std::uintptr_t base) {
   const char* action = write ? "wrote" : was != 0 ? "left alone (not 0)" : "left alone (nowrite build)";
   std::uint64_t back = was;
   if (write) {
-    Mapping m;  // .bss: base + vaddr, outside RELRO, no mprotect; refuse rather than fault on a layout that is not the pinned one
+    Mapping m;  // .bss: base + vaddr, outside RELRO, no page-protection call; refuse rather than fault on a layout that is not the pinned one
     if (!FindMapping(base + kDefaultSymVa, &m) || m.perms[0] != 'r' || m.perms[1] != 'w' || m.perms[2] == 'x') {
       Refuse("default symbol page is not rw-", kDefaultSymVa, was, kDefaultSym);
       out.reason = "default_symbol_page_not_rw";
