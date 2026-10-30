@@ -1046,6 +1046,12 @@ if(BUILD_TESTING)
     # tests themselves pass. PRE_TEST keeps `cmake --build` from launching Wine.
     gtest_discover_tests(test_xpid_patch DISCOVERY_MODE PRE_TEST)
 
+    # HTTP session API port scan (#1511): pure logic, no socket.
+    add_executable(test_http_port_scan tests/test_http_port_scan.cpp)
+    target_include_directories(test_http_port_scan PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_http_port_scan PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_http_port_scan DISCOVERY_MODE PRE_TEST)
+
     # mic_dsp unit tests (GH#15) — the PURE ring-buffer and downmix/resample
     # logic behind the WASAPI mic provider (runtime/patch/mic_provider.cpp).
     # Compiles core/mic_dsp.cpp directly (the same TU nevr_core links): no

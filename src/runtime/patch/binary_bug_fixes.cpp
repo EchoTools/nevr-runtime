@@ -60,6 +60,7 @@
 #include "runtime/hook/process_memory.h"
 #include "runtime/lifecycle/cli.h"              // g_isServer
 #include "runtime/lifecycle/crash_recovery.h"   // ForceFatalExit, EnsureStackReserve
+#include "runtime/patch/http_port_scan.h"       // HTTP session API port scan (#1511)
 #endif
 
 /* --------------------------------------------------------------------
@@ -429,21 +430,45 @@ static HttpListenerBringup_t s_origHttpListenerBringup = nullptr;
 
 static uint64_t __fastcall HttpListenerBringupHook(int64_t* state, const char* address, uint16_t port) {
     nevr_hook_liveness::Mark(nevr_hook_liveness::kHttpListenerBringup);
-    uint64_t result = s_origHttpListenerBringup(state, address, port);
-    if (result == 0 && g_isServer) {
-        // PB1 (Rule 9): the RE finding that a 0 return means "bind failed, port
-        // in use" is believed definitive (this wrapper's only 0-return path per
-        // the file header), but capturing the real socket error costs nothing
-        // and is cheap insurance if that finding ever stops holding for a future
-        // build.
-        const int err = WSAGetLastError();
+    // A 0 return leaves the wrapper's state untouched (its listener is freed), so the
+    // same call is retried on the next port. Two clients on one host both get a session
+    // API: the second takes 6722 and says so. Issue #1511.
+    const nevr_http_port_scan::Scan scan = nevr_http_port_scan::ScanPorts(port, [&](uint16_t candidate) {
+        nevr_http_port_scan::Attempt attempt;
+        attempt.port = candidate;
+        attempt.result = s_origHttpListenerBringup(state, address, candidate);
+        attempt.error = attempt.result == 0 ? WSAGetLastError() : 0;
+        return attempt;
+    });
+    const char* host = address ? address : "(null)";
+    if (scan.bound()) {
+        if (scan.attempts.size() == 1) {
+            Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] session API listening on %s:%u",
+                host, static_cast<unsigned>(scan.port()));
+        } else {
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.PATCH] session API listening on %s:%u (%u was taken: %s)",
+                host, static_cast<unsigned>(scan.port()), static_cast<unsigned>(port),
+                nevr_http_port_scan::ErrorMeaning(scan.attempts.front().error).c_str());
+        }
+        return scan.attempts.back().result;
+    }
+    const std::string tried = nevr_http_port_scan::DescribeAttempts(scan.attempts);
+    if (g_isServer) {
+        // PB1 (Rule 9): the wrapper's 0 return is the only failure signal; each attempt's
+        // WSAGetLastError() is logged above in `tried`. A server with no HTTP API records
+        // zero tape, so it still exits (BUG #62).
         Log(EchoVR::LogLevel::Error,
-            "[NEVR.PATCH] HTTP API listener failed to bind %s:%u (port in use, err=%d). A server with "
+            "[NEVR.PATCH] HTTP API listener could not bind %s on any port tried (%s). A server with "
             "no HTTP API records zero tape — silent data loss. Forcing fatal exit (BUG #62).",
-            address ? address : "(null)", static_cast<unsigned>(port), err);
+            host, tried.c_str());
         ForceFatalExit(62);  // bypasses server-mode ExitProcess suppression
     }
-    return result;  // success, or client mode — preserve original behavior
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] session API not listening: no port tried was free (%s). Spectator and overlay "
+        "tools that expect %s:%u will not reach this client.",
+        tried.c_str(), host, static_cast<unsigned>(port));
+    return 0;
 }
 
 /* --------------------------------------------------------------------
