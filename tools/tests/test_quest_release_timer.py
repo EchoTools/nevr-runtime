@@ -4,9 +4,12 @@ publishes the Quest APK, dispatches the beta manifest publish live, requires eve
 requires `verify-manifest --live` to list the tag. The commands are fakes that record what they were called with; the
 log is real, and no secret may reach it."""
 
+import datetime
 import hashlib
 import json
 import pathlib
+import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -814,6 +817,19 @@ class FailureKeepsBothStreams(TimerCase):
                 out = "release-preflight: PROBLEM: local tag v9 exists only in this clone"
                 self.assertEqual(self.fail_with([program, "x"], 1, out, ""), f"{program} exited 1: stdout: {out}")
 
+    def test_the_signers_stdout_is_a_manifest_and_is_never_recorded(self) -> None:
+        text = self.fail_with(["/work/release-signer-v5.17.0/release-signer", "verify-manifest", "--live"], 1, "REMOTE BODY", "no")
+        self.assertEqual(text, "release-signer exited 1: stderr: no")
+
+    def test_the_signer_the_timer_builds_is_the_program_whose_stdout_is_left_out(self) -> None:
+        fake = Fake(self.root, overrides={"verify": lambda argv: completed(argv, 1, "REMOTE BODY", "signer failed")})
+        self.assertEqual(self.run_timer(fake), 1)
+        verify = next(c["argv"] for c in fake.calls if c["step"] == "verify")
+        self.assertEqual(pathlib.Path(verify[0]).name, timer.SIGNER_BINARY)
+        failed = next(e for e in self.events() if e["event"] == "failed")
+        self.assertIn("signer failed", failed["error"])
+        self.assertNotIn("REMOTE BODY", self.log.read_text())
+
     def test_a_failing_manifest_fetch_leaves_the_remote_body_out_of_the_log(self) -> None:
         fake = Fake(self.root, overrides={"manifest": lambda argv: completed(argv, 22, "REMOTE BODY", "curl: (22) 404")})
         self.assertEqual(self.run_timer(fake), 1)
@@ -899,8 +915,50 @@ class TagsStep(TimerCase):
         fake = Fake(self.root)
         fake.local_tags["v9.9.9"] = (self.OFFENDER, "4" * 40)
         error = self.refused(fake)["error"]
-        self.assertIn(f"git update-ref refs/tags/v9.9.9 {self.OFFENDER})", error)
+        self.assertTrue(error.endswith(f"git update-ref refs/tags/v9.9.9 {self.OFFENDER}"), error[-120:])
         self.assertNotIn("4" * 40, error)
+
+    HOSTILE = ["x;touch$IFS/pwn", "k`id`", "s$(id)", "q'uote", "a;b$IFS`c`$(d)'e"]
+
+    def test_every_tag_name_and_id_in_a_printed_command_is_shell_quoted(self) -> None:
+        for name in self.HOSTILE:
+            with self.subTest(name=name):
+                fake = Fake(self.root)
+                fake.local_tags[name] = (self.OFFENDER, None)
+                error = self.refused(fake)["error"]
+                quoted = shlex.quote(name)
+                self.assertNotEqual(quoted, name, "the fixture name needs quoting")
+                self.assertIn(f"remove: git tag -d {quoted};", error)
+                self.assertIn(f"rollback: git update-ref {shlex.quote('refs/tags/' + name)} {shlex.quote(self.OFFENDER)}", error)
+                self.assertNotIn(f"git tag -d {name}", error)
+                self.assertNotIn(f"refs/tags/{name} ", error)
+                self.assertIn(f"{quoted} ({self.OFFENDER[:12]})", error, "the summary shows the name as the commands do")
+                self.log.unlink()
+
+    def test_a_malformed_object_id_is_quoted_too(self) -> None:
+        fake = Fake(self.root)
+        fake.local_tags["v9.9.9"] = ("dead;touch$IFS/x", None)
+        error = self.refused(fake)["error"]
+        self.assertIn(f"rollback: git update-ref refs/tags/v9.9.9 {shlex.quote('dead;touch$IFS/x')}", error)
+        self.assertNotIn("v9.9.9 dead;touch", error)
+
+    def test_the_head_of_the_message_survives_the_couriers_300_character_cut(self) -> None:
+        fake = Fake(self.root)
+        for n in range(4):
+            fake.local_tags[f"v8.0.{n}"] = (f"{n + 1:x}" * 40, None)
+        error = self.refused(fake)["error"]
+        self.assertTrue(error.startswith("local tags origin lacks or has elsewhere: "), error[:80])
+        for n in range(4):
+            self.assertIn(f"v8.0.{n} ({(f'{n + 1:x}' * 12)})", error[:300])
+        self.assertIn("[4 of 6]", error[:300])
+
+    def test_the_head_lists_ten_then_counts_the_rest(self) -> None:
+        fake = Fake(self.root)
+        for n in range(13):
+            fake.local_tags[f"v8.0.{n}"] = (f"{n % 10}" * 40, None)
+        head = self.refused(fake)["error"].split(" | ")[0]
+        self.assertEqual(head.count(" ("), 10)
+        self.assertTrue(head.endswith(", and 3 more [13 of 15]"), head[-60:])
 
     def test_a_tag_on_another_commit_than_origin_is_refused(self) -> None:
         fake = Fake(self.root)
@@ -925,6 +983,9 @@ class TagsStep(TimerCase):
         fake = Fake(self.root)
         fake.local_tags["v5.17.0"] = ("3" * 40, None)
         self.assertEqual(self.run_timer(fake), 0)
+        self.assertEqual([e for e in self.events() if e["event"] == "refused"], [])
+        ok = [e for e in self.events() if e["event"] == "step_ok" and e["step"] == "tags"]
+        self.assertEqual([e["count"] for e in ok], [2], "the tags step ran, found nothing to refuse and said so")
 
     def test_a_tag_only_origin_has_is_not_an_offender(self) -> None:
         fake = Fake(self.root)
@@ -941,7 +1002,7 @@ class TagsStep(TimerCase):
         error = self.refused(fake)["error"]
         self.assertEqual(sum(f"git tag -d v8.0.{n};" in error for n in range(12)), 10)
         self.assertIn("and 2 more", error)
-        self.assertIn("12 of 14 local tags", error)
+        self.assertIn(", and 2 more [12 of 14]", error)
         self.assertLess(len(error), 3000)
 
     def test_ten_offenders_are_all_listed_with_no_summary(self) -> None:
@@ -1005,14 +1066,16 @@ class TagsStep(TimerCase):
 class TagsAgreeWithThePreflight(TimerCase):
     """The same real repositories, judged by tools/release_preflight.py and by the timer, name the same tags."""
 
+    FLAGGED = ["v2.0.0", "v2.1.0", "v3.0.0"]
+
     def git(self, repo: pathlib.Path, *args: str) -> str:
         argv = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false",
                 "-c", "tag.gpgsign=false", *args]
         return subprocess.run(argv, check=True, capture_output=True, text=True).stdout.strip()
 
-    def test_the_two_rules_flag_the_same_tags(self) -> None:
-        import release_preflight
-
+    def clone_with_tags(self, offenders: bool) -> pathlib.Path:
+        """A clone whose HEAD is origin's main; v1.0.0 (lightweight) and v1.1.0 (annotated) are on origin; with
+        `offenders`, v2.0.0 and v2.1.0 exist only here and v3.0.0 points at another commit than on origin."""
         origin, clone = self.root / "origin.git", self.root / "repo"
         subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
         subprocess.run(["git", "clone", "-q", str(origin), str(clone)], check=True, capture_output=True)
@@ -1020,28 +1083,76 @@ class TagsAgreeWithThePreflight(TimerCase):
         self.git(clone, "commit", "-q", "--allow-empty", "-m", "one")
         first = self.git(clone, "rev-parse", "HEAD")
         self.git(clone, "commit", "-q", "--allow-empty", "-m", "two")
-        self.git(clone, "tag", "v1.0.0")                       # lightweight, will be on origin
-        self.git(clone, "tag", "-a", "-m", "v1.1.0", "v1.1.0")  # annotated, will be on origin
+        self.git(clone, "tag", "v1.0.0")
+        self.git(clone, "tag", "-a", "-m", "v1.1.0", "v1.1.0")
         self.git(clone, "push", "-q", "origin", "main", "v1.0.0", "v1.1.0")
-        self.git(clone, "tag", "v2.0.0")                       # local only
-        self.git(clone, "tag", "-a", "-m", "v2.1.0", "v2.1.0")  # local only, annotated
-        self.git(clone, "tag", "v3.0.0", first)                # on origin at the first commit
-        self.git(clone, "push", "-q", "origin", "v3.0.0")
-        self.git(clone, "tag", "-f", "v3.0.0")                 # now local at another commit
-        problems, _ = release_preflight.check(str(clone), "main", expect_origin=".*")
-        flagged = sorted(p.split()[2] if p.startswith("local tag") else p.split()[1] for p in problems
-                         if p.startswith(("local tag ", "tag ")))
-        self.assertEqual(flagged, ["v2.0.0", "v2.1.0", "v3.0.0"])
+        if offenders:
+            self.git(clone, "tag", "v2.0.0")
+            self.git(clone, "tag", "-a", "-m", "v2.1.0", "v2.1.0")
+            self.git(clone, "tag", "v3.0.0", first)
+            self.git(clone, "push", "-q", "origin", "v3.0.0")
+            self.git(clone, "tag", "-f", "v3.0.0")
+        return clone
 
-        env = {**self.env, "QUEST_RELEASE_REPO": str(clone)}
+    def preflight_flagged(self, clone: pathlib.Path) -> list[str]:
+        import release_preflight
+
+        problems, _ = release_preflight.check(str(clone), "main", expect_origin=".*")
+        return sorted(p.split()[2] if p.startswith("local tag") else p.split()[1] for p in problems
+                      if p.startswith(("local tag ", "tag ")))
+
+    def timer_env(self, clone: pathlib.Path, gh_exit: int = 4) -> dict:
+        gh = self.root / "gh-fake"
+        gh.write_text(f"#!{sys.executable}\nimport sys\nsys.exit({gh_exit})\n")
+        gh.chmod(0o755)
+        return {**self.env, "QUEST_RELEASE_REPO": str(clone), "GH_BIN": str(gh)}
+
+    def test_the_two_rules_flag_the_same_tags(self) -> None:
+        clone = self.clone_with_tags(offenders=True)
+        flagged = self.preflight_flagged(clone)
+        self.assertEqual(flagged, self.FLAGGED)
         log = timer.Log(self.log, "")
         self.addCleanup(log.close)
-        subject = timer.Timer(env, timer.subprocess_runner, self.sleeps.append, log)
+        subject = timer.Timer({**self.env, "QUEST_RELEASE_REPO": str(clone)}, timer.subprocess_runner, self.sleeps.append, log)
         with self.assertRaises(timer.Refusal) as raised:
             subject.check_tags()
         message = str(raised.exception)
-        self.assertEqual(sorted(n for n in ("v1.0.0", "v1.1.0", "v2.0.0", "v2.1.0", "v3.0.0") if f"git tag -d {n};" in message),
-                         flagged)
+        self.assertEqual(sorted(n for n in ("v1.0.0", "v1.1.0", *self.FLAGGED) if f"git tag -d {n};" in message), flagged)
+
+    def test_through_main_the_run_is_refused_for_the_tags_the_preflight_flags(self) -> None:
+        clone = self.clone_with_tags(offenders=True)
+        flagged = self.preflight_flagged(clone)
+        self.assertEqual(timer.main([], self.timer_env(clone), runner=timer.subprocess_runner, sleep=self.sleeps.append), 1)
+        [refusal] = [e for e in self.events() if e["event"] == "refused"]
+        self.assertEqual(refusal["step"], "tags")
+        head = refusal["error"].split(" | ")[0]
+        self.assertEqual(sorted(n for n in ("v1.0.0", "v1.1.0", *self.FLAGGED) if f"{n} (" in head), flagged)
+        self.assertEqual([e["step"] for e in self.events() if e["event"] == "step_ok"], ["checkout"], "no token was asked for")
+
+    def test_through_main_a_clone_the_preflight_accepts_passes_the_tags_step(self) -> None:
+        clone = self.clone_with_tags(offenders=False)
+        self.assertEqual(self.preflight_flagged(clone), [])
+        self.assertEqual(timer.main([], self.timer_env(clone), runner=timer.subprocess_runner, sleep=self.sleeps.append), 1)
+        self.assertEqual([e for e in self.events() if e["event"] == "refused"], [])
+        ok = [e for e in self.events() if e["event"] == "step_ok"]
+        self.assertEqual([(e["step"], e.get("count")) for e in ok if e["step"] == "tags"], [("tags", 2)])
+        self.assertEqual(next(e for e in self.events() if e["event"] == "failed")["step"], "token", "it got past the tags step")
+
+    def test_the_printed_commands_remove_and_restore_a_hostile_tag_in_a_real_shell(self) -> None:
+        clone = self.clone_with_tags(offenders=False)
+        marker = self.root / "pwned"
+        hostile = f"x;touch$IFS{marker}"
+        self.git(clone, "tag", hostile)
+        object_id = self.git(clone, "rev-parse", f"refs/tags/{hostile}")
+        self.assertEqual(timer.main([], self.timer_env(clone), runner=timer.subprocess_runner, sleep=self.sleeps.append), 1)
+        [refusal] = [e for e in self.events() if e["event"] == "refused"]
+        remove = refusal["error"].split("remove: ", 1)[1].split("; rollback: ", 1)[0]
+        rollback = refusal["error"].split("rollback: ", 1)[1].split(" | ", 1)[0]
+        subprocess.run(["sh", "-c", remove], cwd=clone, check=True, capture_output=True)
+        self.assertNotIn(hostile, self.git(clone, "tag", "--list").splitlines())
+        subprocess.run(["sh", "-c", rollback], cwd=clone, check=True, capture_output=True)
+        self.assertEqual(self.git(clone, "rev-parse", f"refs/tags/{hostile}"), object_id)
+        self.assertFalse(marker.exists(), "a printed command ran the tag name as a command")
 
 
 class NotifiesOnRefusal(TimerCase):
@@ -1078,6 +1189,135 @@ class NotifiesOnRefusal(TimerCase):
         self.assertIn("R2_BUCKET, RELEASE_PUBLIC_BASE", body)
         self.assertIn("not chosen yet", body)
         self.assertNotIn("no failed event recorded", body)
+
+
+class FailureNoticeIsNotRepeated(TimerCase):
+    """The unit couriers the last failure after every failed run. A standing refusal is the same text every 30 minutes, so
+    the same step and error is couriered at most once in six hours (`failure_notified`, then `failure_notice_suppressed`)."""
+
+    ERROR = "local tags origin lacks or has elsewhere: v9.9.9 (999999999999) [1 of 3]"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.sent: list[list[str]] = []
+
+    def notify(self) -> int:
+        def courier(argv: list[str], cwd: str | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
+            self.sent.append(argv)
+            return completed(argv)
+
+        return timer.main(["--notify-failure"], self.env, runner=courier, sleep=self.sleeps.append)
+
+    def refusal(self, error: str = ERROR, step: str = "tags") -> dict:
+        return {"event": "refused", "tag": "", "step": step, "error": error}
+
+    def append(self, *records: dict) -> None:
+        with self.log.open("a", encoding="utf-8") as handle:
+            handle.writelines(json.dumps(r) + "\n" for r in records)
+
+    @staticmethod
+    def digest(error: str) -> str:
+        return hashlib.sha256(error.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def hours_ago(hours: float) -> str:
+        return (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)).isoformat()
+
+    def notified(self, error: str = ERROR, step: str = "tags", hours: float = 1) -> dict:
+        return {"event": "failure_notified", "ts": self.hours_ago(hours), "tag": "", "step": step, "error_sha256": self.digest(error)}
+
+    def test_the_first_notice_is_sent_and_recorded_with_the_step_and_the_hash_of_the_error(self) -> None:
+        self.write_log(self.refusal())
+        self.assertEqual(self.notify(), 0)
+        self.assertEqual(len(self.sent), 1)
+        [record] = [e for e in self.events() if e["event"] == "failure_notified"]
+        self.assertEqual((record["step"], record["error_sha256"]), ("tags", self.digest(self.ERROR)))
+
+    def test_the_same_error_twice_in_a_row_sends_one_courier_and_logs_the_suppression(self) -> None:
+        self.write_log(self.refusal())
+        self.assertEqual(self.notify(), 0)
+        self.append(self.refusal())  # the next 30-minute run refuses the same way
+        self.assertEqual(self.notify(), 0)
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.names().count("failure_notified"), 1)
+        [suppressed] = [e for e in self.events() if e["event"] == "failure_notice_suppressed"]
+        self.assertEqual((suppressed["step"], suppressed["error_sha256"]), ("tags", self.digest(self.ERROR)))
+
+    def test_a_different_error_is_sent_again(self) -> None:
+        self.write_log(self.refusal())
+        self.assertEqual(self.notify(), 0)
+        self.append(self.refusal("local tags origin lacks or has elsewhere: v9.9.8 (888888888888) [1 of 3]"))
+        self.assertEqual(self.notify(), 0)
+        self.assertEqual(len(self.sent), 2)
+        self.assertNotIn("failure_notice_suppressed", self.names())
+
+    def test_the_same_error_on_another_step_is_sent_again(self) -> None:
+        self.write_log(self.refusal(), self.notified(step="checkout"))
+        self.assertEqual(self.notify(), 0)
+        self.assertEqual(len(self.sent), 1)
+
+    def test_the_same_error_after_six_hours_is_sent_again(self) -> None:
+        self.write_log(self.refusal(), self.notified(hours=6.5))
+        self.assertEqual(self.notify(), 0)
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.names().count("failure_notified"), 2)
+
+    def test_the_same_error_just_under_six_hours_is_suppressed(self) -> None:
+        self.write_log(self.refusal(), self.notified(hours=5.9))
+        self.assertEqual(self.notify(), 0)
+        self.assertEqual(self.sent, [])
+        self.assertIn("failure_notice_suppressed", self.names())
+
+    def test_only_the_newest_notice_counts(self) -> None:
+        self.write_log(self.refusal(), self.notified(hours=1), self.notified("another error", hours=0.5))
+        self.assertEqual(self.notify(), 0)
+        self.assertEqual(len(self.sent), 1, "the newest notice was for another error")
+
+    def test_a_notice_dated_in_the_future_or_unreadable_does_not_suppress(self) -> None:
+        for ts in (self.hours_ago(-3), "not a time", None, (datetime.datetime.now() - datetime.timedelta(hours=1)).isoformat()):
+            with self.subTest(ts=ts):
+                self.write_log(self.refusal(), {**self.notified(hours=1), "ts": ts})
+                self.sent.clear()
+                self.assertEqual(self.notify(), 0)
+                self.assertEqual(len(self.sent), 1)
+
+    def test_a_failed_run_is_deduplicated_like_a_refusal(self) -> None:
+        failed = {"event": "failed", "tag": TAG, "step": "build_apk", "error": "build broke"}
+        self.write_log(failed, self.notified("build broke", "build_apk", hours=1))
+        self.assertEqual(self.notify(), 0)
+        self.assertEqual(self.sent, [])
+        self.assertIn("failure_notice_suppressed", self.names())
+
+    def test_a_credential_refusal_is_deduplicated_by_what_it_names(self) -> None:
+        missing = {"event": "refused", "tag": "", "missing": ["R2_BUCKET"]}
+        self.write_log(missing)
+        self.assertEqual(self.notify(), 0)
+        self.append(missing)
+        self.assertEqual(self.notify(), 0)
+        self.assertEqual(len(self.sent), 1)
+        self.append({"event": "refused", "tag": "", "missing": ["R2_BUCKET", "RELEASE_PUBLIC_BASE"]})
+        self.assertEqual(self.notify(), 0)
+        self.assertEqual(len(self.sent), 2)
+
+    def test_a_notice_that_could_not_be_sent_is_not_recorded_as_sent(self) -> None:
+        self.write_log(self.refusal())
+        broken = lambda argv, cwd=None, env=None: completed(argv, 1, "", "no courier")  # noqa: E731
+        self.assertEqual(timer.main(["--notify-failure"], self.env, runner=broken, sleep=self.sleeps.append), 1)
+        self.assertNotIn("failure_notified", self.names())
+
+    def test_a_log_that_cannot_record_the_notice_is_loud(self) -> None:
+        self.write_log(self.refusal())
+        self.log.chmod(0o444)
+        self.addCleanup(self.log.chmod, 0o644)
+        self.assertEqual(self.notify(), 1)
+        self.assertEqual(len(self.sent), 1, "the courier went before the record failed")
+
+    def test_a_log_that_cannot_record_the_suppression_is_loud(self) -> None:
+        self.write_log(self.refusal(), self.notified())
+        self.log.chmod(0o444)
+        self.addCleanup(self.log.chmod, 0o644)
+        self.assertEqual(self.notify(), 1)
+        self.assertEqual(self.sent, [])
 
 
 class RealProcess(TimerCase):

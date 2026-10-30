@@ -275,7 +275,8 @@ It runs from its own **dedicated checkout** (`~/src/nevr-runtime-work/release-ti
 and the tool refuses, as a refused `checkout` step that couriers the owner, unless the checkout is clean and HEAD is the
 freshly fetched `origin/main`. The `tags` step then refuses, the same way, while any tag in that checkout is not on origin or
 points at another commit there (the rule of `tools/release_preflight.py`, which `just release-quest-apk` runs later); the
-refusal names each tag with its object id and the commands that remove it and put it back.
+refusal names up to ten of them with their short ids, counts the rest, and prints the shell-quoted commands that remove and
+restore each.
 
 1. Lists the newest published `vX.Y.Z` release. A tag that has a `done` record in the log is left alone. A tag that has
    failed three times is not retried; the third failure couriers Spritz once, before the run exits 0. Nothing bonks the owner.
@@ -302,8 +303,9 @@ Stable stays an owner step (`approve-stable`); the timer only publishes beta. **
 the R2 credential to `publish_apk`, and the GitHub token to `publish_apk` and the dispatch. Every other command, the
 build included, gets an environment without them. Every step appends a JSON line to
 `$XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl`, with each credential value replaced by `<redacted>`; a log that
-cannot be written fails the run. A failing step exits 1 naming itself, with the redacted tail of the failing command's stderr and stdout (a `curl` or `gh` command's stdout is remote content and is left out), and the unit's `OnFailure=` runs
-`quest_release_timer.py --notify-failure`, which couriers the last failure to Spritz. The credential is the file
+cannot be written fails the run. A failing step exits 1 naming itself, with the redacted tail of the failing command's stderr and stdout (the stdout of `curl`, `gh` and the signer is remote content and is left out), and the unit's `OnFailure=` runs
+`quest_release_timer.py --notify-failure`, which couriers the last failure to Spritz, at most once in six hours for the same step and
+error (a standing refusal repeats on every run). The credential is the file
 `~/.config/metis/r2-evr-echo-taxi.env` (`R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`), loaded by
 the unit and never written into it. The unit also sets `GNUPGHOME` to the XDG gnupg home (`~/.config/gnupg`) so `pass` finds the key, and a `pass` failure prints gpg's own `gpg:` lines after the `ERROR` line. Install, from any clone of the repository:
 
