@@ -33,15 +33,16 @@ option(Q15T_EC "ec (R43...): the EC network client, EC token page, tac-mod store
 option(Q15T_ECFX "ecfx: NEUTRON wall-effect queue drain on ec's net tick; needs Q15T_EC. Switch file neutronfx.on" ON)
 set(Q15T_EC_DEFAULT_WORDS "types=VPTO equip hide" CACHE STRING "ec: the words used when no ec switch file exists (empty: ec stays off without a file). Default = the source build's latest on-list preset ec_preset3 (ec_preset3.on)")
 option(Q15T_ECFX_DEFAULT_ON "ecfx: on with no neutronfx.on file (the source build's on-list ships neutronfx.on)" ON)
-# OFF: TEST ONLY in the source build (or gameplay that needs content in the pack).
-option(Q15T_DRONEGUARD "droneguard (R35): skip a per-frame Follow call. Source: TEST ONLY" OFF)
+# TEST ONLY in the source build, but on in its wave19a on-list (droneguard, peerclamp, dronekill, dronemuzzle, hudmeter, powerboost): ON here.
+# Droneguard's second stage, the levelname pair and the gate options below stay OFF (not in the on-list, or they need content in the pack).
+option(Q15T_DRONEGUARD "droneguard (R35): skip a per-frame Follow call. Source: TEST ONLY; on in the wave19a on-list" ON)
 option(Q15T_DRONEGUARD_IDX "droneguard stage 1 (needs Q15T_DRONEGUARD). Source: TEST ONLY" OFF)
-option(Q15T_PEERCLAMP "peerclamp (R36): clamp a peer's stamp in CleanupPeers. Source: TEST ONLY" OFF)
-option(Q15T_DRONEKILL "dronekill (R45,R47,R48): drone kill / lock-on / gun / chase / shot, all five words. Source: TEST ONLY; tick" OFF)
-option(Q15T_DRONEMUZZLE "dronemuzzle (R49,R50): a drone's bullets leave its gun; needs Q15T_DRONEKILL. Source: TEST ONLY; tick" OFF)
-set(Q15T_POWERBOOST 0 CACHE STRING "powerboost (R51-R56) stage: 0 off, 1 read-only, 2 swallow, 3 cone (cone needs Q15T_EC; tick). Source: TEST ONLY")
+option(Q15T_PEERCLAMP "peerclamp (R36): clamp a peer's stamp in CleanupPeers. Source: TEST ONLY; on in the wave19a on-list" ON)
+option(Q15T_DRONEKILL "dronekill (R45,R47,R48): drone kill / lock-on / gun / chase / shot, all five words. Source: TEST ONLY (dronekill2.on); on in the wave19a on-list; tick" ON)
+option(Q15T_DRONEMUZZLE "dronemuzzle (R49,R50): a drone's bullets leave its gun; needs Q15T_DRONEKILL. Source: TEST ONLY; on in the wave19a on-list; tick" ON)
+set(Q15T_POWERBOOST 3 CACHE STRING "powerboost (R51-R56) stage: 0 off, 1 read-only, 2 swallow, 3 cone (cone needs Q15T_EC; tick). Source: TEST ONLY; the wave19a on-list ships an empty powerboost.on = swallow + cone = 3")
 set_property(CACHE Q15T_POWERBOOST PROPERTY STRINGS 0 1 2 3)
-option(Q15T_HUDMETER "hudmeter (R57): the wrist HUD's weapon-slot heat fill stops being 0 x 0. Source: hudmeter.on, Off by default" OFF)
+option(Q15T_HUDMETER "hudmeter (R57): the wrist HUD's weapon-slot heat fill stops being 0 x 0. Source: hudmeter.on; on in the wave19a on-list" ON)
 option(Q15T_MUSIC "music (T-48): the combat music is stopped when a match ends or a new one starts, so instances do not stack. Source: default ON; tick" ON)
 option(Q15T_SENSORWD "sensorwd (T-07): a scanner sphere still enabled 6 s after its enable is turned off again. Source: default ON (on-list); tick" ON)
 # shaderstep (issue #1553): the CGShaderSetResource table growth step is 1, set when the factory constructs the object. Off: shaderstep.off.
