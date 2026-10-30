@@ -707,6 +707,12 @@ your seat name, for example `claude-main` or `codex`.
 - **Wait for a free slot.** Before starting a build, if `pgrep -x ninja | wc -l` is 2 or more, wait.
   Never interrupt another agent's build.
 - **At most three heavy builds at once per seat,** so the usage window and memory both hold.
+- **Cached builds come from one fixed, clean checkout.** The merge foreman builds in `<work root>/build-checkout/nevr-runtime`
+  (`$NEVR_BUILD_CHECKOUT`), moved to the commit with `just build-checkout <rev>`, and a build there refuses unless
+  `git status --porcelain` is empty (`tools/build_checkout.py guard`). The path never changes, so the Quest build keeps the
+  ccache launcher only there; in any other tree its debug info would carry that tree's path, and the launcher is off. Nobody edits
+  that checkout. One config (`tools/ccache.conf`, copied into the cache directory) is read by every build; `just ccache-stats` shows
+  the cache as the builds see it, where a bare `ccache -s` shows ccache's 5 GiB default (#1736).
 - **Each worktree has its own vcpkg root** (`build/vcpkg-root`, created by `just worktree-setup`).
   Never point a build at `~/.vcpkg` directly.
 - **A PR runs the quick check, not `just verify`.** The quick check is: the build (`just build`), the test

@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-LINE_BUDGET = 1394  # raised from 1385 (set by 1fb5da14, #1544): AGENTS.md is 1394 lines at origin/main 41c971db; #1623
+LINE_BUDGET = 1406  # raised from 1394 by #1736 (the fixed clean build checkout rule, 6 lines); AGENTS.md was 1400 at origin/main 87d66bef, already over
 
 # Names from the C++ addendum's former text that describe machinery this repo does not have, or a C++ standard above
 # the one CMakeLists.txt sets (17). The removed text is kept in #1314.
