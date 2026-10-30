@@ -62,6 +62,9 @@ option(Q15T_SENDGUARD "sendguard: a script send to a game space that is not load
 # decals (issue #1619): the combat levels' static decals, which the Quest renderer cannot draw, as quads in dynamic-mesh nodes from the
 # content pack's decals.bin. ON, and inert (one INFO line, reason "off") when no decals.bin is found. Off file: decals.off. Needs impactsnd's
 # Shutdown wrapper to be installed first when Q15T_IMPACTSND is on (plugin.cpp installs it in that order; the wrapper chains on it).
+# pfxtev (issue #1642): the six event-effect ids may be created. The decision only: the renderer that calls it is pfx (#1631), not in
+# this tree yet. Kill file pfxtev.off in the plugin data directory.
+option(Q15T_PFXTEV "pfxtev (#1642): the event-effect id decision (PfxTevAllows); no caller until the pfx renderer (#1631) lands. Source: ON" ON)
 option(Q15T_DECALS "decals (#1619): the level decals of decals.bin drawn as dynamic-mesh quads on the bullet system's update, torn down on its Shutdown" ON)
 # heaps and memsys (docs/quest/q15t/modules/heaps.md section 1, memsys.md) need the loader's early phase (config.yaml `early: true`), and one plugin
 # entry is one phase, so they are a second library, libq15t_early.so (src/plugin_early.cpp), listed as its own early entry. Whether the
@@ -94,7 +97,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(Q15T_SOURCES src/plugin.cpp src/plugin_log.cpp src/import_hook.cpp src/clock_levels.cpp src/plugin_args.cpp src/refresh_rate.cpp src/game_tick.cpp src/safe_read.cpp src/headset_gates.cpp src/got_swap.cpp src/weapon_arm.cpp src/gamespace.cpp)
-foreach(m FXTRAIL VOIPDROP CUSTCTX MESHSTEP GUNCONNECT AIBOTS BVH WALLFIRE IMPACTSND EC ECFX DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE HUDMETER LEVELNAME MUSIC SENSORWD INSTMODEL DECALS)
+foreach(m FXTRAIL VOIPDROP CUSTCTX MESHSTEP GUNCONNECT AIBOTS BVH WALLFIRE IMPACTSND EC ECFX DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE HUDMETER LEVELNAME MUSIC SENSORWD INSTMODEL DECALS PFXTEV)
   if(Q15T_${m})
     string(TOLOWER ${m} lm)
     list(APPEND Q15T_SOURCES src/${lm}.cpp)
@@ -141,7 +144,8 @@ target_compile_definitions(nevr_q15t PRIVATE
   Q15T_DRONEKILL=$<BOOL:${Q15T_DRONEKILL}> Q15T_DRONEMUZZLE=$<BOOL:${Q15T_DRONEMUZZLE}> Q15T_POWERBOOST=${Q15T_POWERBOOST}
   Q15T_HUDMETER=$<BOOL:${Q15T_HUDMETER}> Q15T_LEVELNAME=$<BOOL:${Q15T_LEVELNAME}> Q15T_MUSIC=$<BOOL:${Q15T_MUSIC}> Q15T_SENSORWD=$<BOOL:${Q15T_SENSORWD}> Q15T_SHIELDGAMMA=${Q15T_SHIELDGAMMA}
   Q15T_IMPACTSND_NOWRITE=$<BOOL:${Q15T_IMPACTSND_NOWRITE}> Q15T_ECFX_DEFAULT_ON=$<BOOL:${Q15T_ECFX_DEFAULT_ON}>
-  Q15T_SHADERSTEP=$<BOOL:${Q15T_SHADERSTEP}> Q15T_TABLESTEP=$<BOOL:${Q15T_TABLESTEP}> Q15T_SENDGUARD=$<BOOL:${Q15T_SENDGUARD}> Q15T_INSTMODEL=$<BOOL:${Q15T_INSTMODEL}> Q15T_DECALS=$<BOOL:${Q15T_DECALS}>)
+  Q15T_SHADERSTEP=$<BOOL:${Q15T_SHADERSTEP}> Q15T_TABLESTEP=$<BOOL:${Q15T_TABLESTEP}> Q15T_SENDGUARD=$<BOOL:${Q15T_SENDGUARD}> Q15T_INSTMODEL=$<BOOL:${Q15T_INSTMODEL}> Q15T_DECALS=$<BOOL:${Q15T_DECALS}>
+  Q15T_PFXTEV=$<BOOL:${Q15T_PFXTEV}>)
 if(NOT "${Q15T_EC_DEFAULT_WORDS}" STREQUAL "")
   target_compile_definitions(nevr_q15t PRIVATE "Q15T_EC_DEFAULT_WORDS=\"${Q15T_EC_DEFAULT_WORDS}\"")
 endif()
