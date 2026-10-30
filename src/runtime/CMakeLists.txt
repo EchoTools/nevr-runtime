@@ -1470,6 +1470,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_lobby_full_backoff PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_lobby_full_backoff DISCOVERY_MODE PRE_TEST)
 
+    # test_party_follow_dedup.cpp (#1413): the lobby join state (compat/lobby_join_state.h) and the follow decision
+    # (patch/party_follow_dedup_rules.h). Both header-only, pure.
+    add_executable(test_party_follow_dedup tests/test_party_follow_dedup.cpp)
+    target_include_directories(test_party_follow_dedup PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_party_follow_dedup PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_party_follow_dedup DISCOVERY_MODE PRE_TEST)
+
     # test_menu_version_label.cpp (#747, header-only patch/menu_version_label_rules.h).
     add_executable(test_menu_version_label tests/test_menu_version_label.cpp)
     set_source_files_properties(tests/test_menu_version_label.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
