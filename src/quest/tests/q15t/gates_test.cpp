@@ -98,6 +98,14 @@ int main() {
   CHECK(s.party_calls == 2 && s.party_gated == 1 && s.headset_calls == 6 && s.headset_gated == 2 && s.link_gated == 1,
         "counters %u/%u %u/%u link %u", s.party_calls, s.party_gated, s.headset_calls, s.headset_gated, s.link_gated);
 
+  // the library policy: a caller from the link range that cannot be named (the host has no Bind frame) is answered only by "all"
+  q15t::SetLinkGateLibs("none");
+  CHECK(HeadCallerLink(head) == 3, "policy none: the link range must get the real answer (got %d)", HeadCallerLink(head));
+  q15t::SetLinkGateLibs("lib555db38933fef859.so,lib1da85b18cbad6297.so");
+  CHECK(HeadCallerLink(head) == 3, "policy list: a library that cannot be named is not in the list (got %d)", HeadCallerLink(head));
+  q15t::SetLinkGateLibs("all");
+  CHECK(HeadCallerLink(head) == q15t::kNoHeadsetFlags, "policy all: the link range must be answered again");
+
   // link gate alone: the other range empty must gate nothing, not everything
   {
     void* q = mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);

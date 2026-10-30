@@ -29,6 +29,17 @@ InstallResult InstallPartyHeadsetGate(std::uintptr_t base, std::uintptr_t slot_v
 InstallResult InstallHeadsetGate(std::uintptr_t base, std::uintptr_t slot_vaddr, CallerRange range, std::uintptr_t real_vaddr,
                                  CallerRange link_range = {0, 0}, std::int32_t link_answer = 5);
 
+// Which script libraries the link gate answers. The expression's Bind is called from the code of the script library that holds the
+// node (lib<hash>.so): the wrapper reads the Bind's saved return address off its stack frame, maps it to that library with
+// dladdr and compares the library's file name with this policy. `spec`: "all" (every caller from the link range: the default
+// until this is called), "none" or empty (no caller: the real answer everywhere), or space/comma separated name fragments
+// ("0e4384a5 1703a89b"): a library whose file name contains one is answered, every other library gets the real answer. A library
+// that cannot be named counts as not in the list. Call before InstallHeadsetGate. On the host (no frame) a call from the link
+// range is a library that cannot be named.
+void SetLinkGateLibs(const char* spec);
+// How many distinct libraries have bound the expression from the link range (each logged one `headset bind` line).
+std::uint32_t LinkGateLibsSeen();
+
 // What the install configured (absolute addresses), for the wiring test: the production constants cannot be exercised by a call on the host.
 struct HeadsetGateRanges {
   std::uintptr_t bots_lo, bots_hi, link_lo, link_hi;
