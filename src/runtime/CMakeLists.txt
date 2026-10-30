@@ -1619,6 +1619,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_cmdline_strip PRIVATE GTest::gtest GTest::gtest_main nevr_core)
     gtest_discover_tests(test_cmdline_strip DISCOVERY_MODE PRE_TEST)
 
+    # test_cli_check.cpp (#1253, header-only lifecycle/cli_check.h over core/cli_flags.h and core/cli_option_value.h).
+    add_executable(test_cli_check tests/test_cli_check.cpp)
+    set_source_files_properties(tests/test_cli_check.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_cli_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_cli_check PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_cli_check DISCOVERY_MODE PRE_TEST)
+
     # test_scenario_ui_text.cpp (#906, the ui_text fire action in runtime/scenario/scenario_protocol.h) and test_scenario_invite.cpp
     # (#1156, the invite fire actions) ride in this executable.
     add_executable(test_scenario_early_quit tests/test_scenario_early_quit.cpp tests/test_scenario_ui_text.cpp tests/test_scenario_invite.cpp)
