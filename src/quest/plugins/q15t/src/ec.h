@@ -6,6 +6,7 @@
 // Always there: `re33_ec_page`, 4096 zeroed bytes, a default-visibility data symbol of this plugin. Nothing writes it unless the
 // switch is on: a zeroed page = no token anywhere = every EC script decides as on a PC without the EC network client.
 //
+// `ec.off` in the plugin's data directory is a kill file: ec stays off, whatever else is set below.
 // With the switch on (a file in the plugin's data directory, ec.on with the TEST words on its first line, or ec_preset1.on /
 // ec_preset2.on / ec_preset3.on = the source build's by-name presets; or Q15T_EC_DEFAULT_WORDS at build time): the identity-free port of
 // the source's Main thread runs every 5 ms (EcStep): use counters of the page -> 'T' / 'V' / 'P' / 'O' packets to the server,
