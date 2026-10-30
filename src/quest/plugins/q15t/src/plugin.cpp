@@ -31,6 +31,7 @@
 #include "powerboost.h"
 #include "refresh_rate.h"
 #include "sensorwd.h"
+#include "shaderstep.h"
 #include "shieldgamma.h"
 #include "voipdrop.h"
 #include "wallfire.h"
@@ -144,6 +145,9 @@
 #ifndef Q15T_LEVELNAME
 #define Q15T_LEVELNAME 0
 #endif
+#ifndef Q15T_SHADERSTEP
+#define Q15T_SHADERSTEP 0
+#endif
 #ifndef Q15T_MUSIC
 #define Q15T_MUSIC 0
 #endif
@@ -251,6 +255,9 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_SENSORWD
     "sensorwd "
+#endif
+#if Q15T_SHADERSTEP
+    "shaderstep "
 #endif
     "";
 
@@ -473,6 +480,9 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
 #if Q15T_SENSORWD
   ReportModule("sensorwd", InstallSensorWd(base));
   AddModuleTick("sensorwd", &SensorWdTick, &want_tick);  // one bool test per frame when the install was refused
+#endif
+#if Q15T_SHADERSTEP
+  ReportModule("shaderstep", InstallShaderStep(base));
 #endif
 #if Q15T_MUSIC
   {
