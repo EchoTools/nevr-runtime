@@ -26,8 +26,9 @@
 // buffers, and the slot rule's bytes run natively in the test. Above 5 the slot rule is written before the cap. Apply
 // decides what to take out by the bytes at the two sites, not by what the writer said: a writer can report a failure
 // after the bytes went in (ProcessMemcpy does when the protection restore fails). A slot site Apply changed is put
-// back only when the cap site does not put a size above 5 in effect, whoever wrote it, and kept when it does, so a
-// server is never left with a cap above 5 and the game's slot rule. The size in effect is read back from the cap
+// back only when the cap site's bytes put a size of 5 or less in effect, whoever wrote them, and kept when they put a
+// size above 5 in effect or are no cap this file can read (a cap write that landed in part may still raise the cap),
+// so a server is never left with a cap above 5 and the game's slot rule. The size in effect is read back from the cap
 // site's bytes, and above 5 it is a success only with the slot rule in; a cap site that holds neither the game's shape
 // nor ours is left as found and reported as unknown.
 
@@ -151,12 +152,13 @@ inline Outcome Apply(uint8_t* capSite, uint8_t* slotSite, uint32_t size, nevr_ch
   std::memcpy(o.slotBefore, slotSite, sizeof(o.slotBefore));
   const auto done = [&]() {
     // By the bytes, not the writer's word (file comment): a slot site changed here goes back only while the cap site
-    // puts no size above 5 in effect.
-    if (std::memcmp(slotSite, o.slotBefore, sizeof(o.slotBefore)) != 0 && CapInEffect(capSite) <= kGameTeamSize) {
+    // puts a size of 5 or less in effect, not while its bytes are no cap this reads.
+    const uint32_t capNow = CapInEffect(capSite);
+    if (std::memcmp(slotSite, o.slotBefore, sizeof(o.slotBefore)) != 0 && capNow != 0 && capNow <= kGameTeamSize) {
       o.slotRestored = write(slotSite, o.slotBefore, sizeof(o.slotBefore)) &&
                        std::memcmp(slotSite, o.slotBefore, sizeof(o.slotBefore)) == 0;
     }
-    o.inEffect = CapInEffect(capSite);
+    o.inEffect = capNow;
     o.slotRule = std::memcmp(slotSite, kSlotPatched, sizeof(kSlotPatched)) == 0;
     o.slotGame = std::memcmp(slotSite, kSlotExpected, sizeof(kSlotExpected)) == 0;
     return o;
@@ -238,7 +240,9 @@ inline int FormatRecord(char* out, size_t cap, const Outcome& o, uintptr_t capAd
   Hex(slotActual, o.slotBefore, sizeof(kSlotExpected));
   const char* what = o.plan == Plan::KeepGame ? "nothing written; the cap site holds another writer's bytes"
                      : o.slotRestored         ? "not in effect, the slot rule was put back"
-                     : o.inEffect != o.size   ? "not in effect"
+                     : o.inEffect == 0 && o.slotRule
+                         ? "the cap site holds bytes that are no cap this reads, so the slot rule stays in"
+                     : o.inEffect != o.size ? "not in effect"
                      : CapWithoutSlotRule(o) && o.slotGame
                          ? "the cap is in without the slot rule, so a sixth member takes slot 5"
                      : CapWithoutSlotRule(o)

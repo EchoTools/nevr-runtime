@@ -87,6 +87,18 @@ bool WritesButFailsFirstWriter(void* dest, const void* src, size_t n) {
   return !(first && dest == g_refuseAt);
 }
 
+// Writes only the first 5 bytes at g_refuseAt (the cap's `mov eax, size`) and reports a failure: a cap write that
+// landed in part. Every other site is written whole.
+bool WritesPartThenFailsWriter(void* dest, const void* src, size_t n) {
+  g_writes.push_back(dest);
+  if (dest != g_refuseAt) {
+    std::memcpy(dest, src, n);
+    return true;
+  }
+  std::memcpy(dest, src, n < 5 ? n : 5);
+  return false;
+}
+
 class ServerTeamSize : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -266,6 +278,27 @@ TEST_F(ServerTeamSize, ACapWriteThatReportsAFailureAfterWritingKeepsTheSlotRule)
   char line[640];
   nevr_server_team_size::FormatRecord(line, sizeof(line), o, 0x1401AB8C2, 0x1401ABC8A);
   EXPECT_NE(std::string(line).find("in_effect=6 (in effect, but a write reported an error)"), std::string::npos)
+      << line;
+}
+
+TEST_F(ServerTeamSize, ACapWrittenInPartKeepsTheSlotRule) {
+  Image img;
+  g_refuseAt = img.cap.data();
+  const Outcome o = Run(img, 6, WritesPartThenFailsWriter);
+  EXPECT_EQ(o.slot, Result::Applied);
+  EXPECT_EQ(o.cap, Result::WriteFailed);
+  EXPECT_EQ(img.cap[1], 6) << "the `mov eax, 6` went in";
+  EXPECT_EQ(img.cap[11], 5) << "the `cmp rsi, 5` did not";
+  EXPECT_EQ(o.inEffect, 0u) << "bytes no cap reads";
+  EXPECT_FALSE(o.slotRestored) << "the cmova may still give a cap of 6, which needs the slot rule";
+  EXPECT_EQ(img.slot, kSlotWrapped);
+  EXPECT_TRUE(o.slotRule);
+  EXPECT_TRUE(nevr_server_team_size::IsFailure(o));
+  char line[640];
+  nevr_server_team_size::FormatRecord(line, sizeof(line), o, 0x1401AB8C2, 0x1401ABC8A);
+  EXPECT_NE(std::string(line).find(
+                "in_effect=unknown (the cap site holds bytes that are no cap this reads, so the slot rule stays in)"),
+            std::string::npos)
       << line;
 }
 
