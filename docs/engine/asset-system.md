@@ -50,8 +50,15 @@ An asset is identified by a pair **(type, name)**:
 The manifests on disk are keyed by the on-disk type, not the logical one. Labelling the 235 distinct type keys
 in the two shipped manifests with the 2044 class names in echovr.exe's RTTI accounts for 233 of them
 (`CGTextureResource` = `0x4a4c32c49300b8a0` / GPU `0xbeac1969cb7b8861`, `CScriptResource` = `0x991421b41de58370`,
-`CArchiveResource` = `0x2a41cf1c1d9e5d32`, `CGameLevelResource` = `0xe8e38d7781a338a6`, …). The remaining two
-keys are `0xae49fad43254367a` (17226 records) and `0x06eace9f64204fd0` (567 records).
+`CArchiveResource` = `0x2a41cf1c1d9e5d32`, `CGameLevelResource` = `0xe8e38d7781a338a6`, …). Of the remaining two,
+`0xae49fad43254367a` (17226 records) is `Make(CSymbol64("RawTexturePackfile"), "Win10")`: a texture's separately
+streamed mips, named `<texture>_mip<N>` and read through `FillResourceFileRequest` by the texture streaming
+(`0x1405bc7d0`, from `0x1405bcb32`, with index N) and from `0x14054d293` (index 0, no resource), as a client run
+logged them (#1421). `0x06eace9f64204fd0` (567 records) is unlabelled.
+
+A texture's two variants are its 256-byte descriptor (variant 0) and its pixel payload, a DDS (variant 1). nEVR's
+`resource_override` names the variant an override replaces by its on-disk type (`src/runtime/patch/resource_buffer_key.h`):
+it writes a variant-1 replacement over the buffer the read allocated, when it is no larger.
 
 Package sets are named the same way. The game client's sets are `CSymbol64("r14netclient")` =
 `0x48037dc70b0ecab2` and `CSymbol64("r14netclient_en_US")` = `0x2b47aab238f60515`, which are the two manifest
@@ -430,7 +437,7 @@ to the log itself, or only through an `OutputError` further up, is not establish
   level loads.
 - Whether keys of the form `name[i]` were among the brute-forced candidates for `0x80603893591c60ff`.
 - Whether `DownloadFile` decompresses what it writes.
-- The two unlabelled on-disk type keys `0xae49fad43254367a` and `0x06eace9f64204fd0`.
+- The unlabelled on-disk type key `0x06eace9f64204fd0`.
 - The name source for most per-asset names (textures, meshes): neither the binary nor the symcache has them.
 
 ## Prediction: an asset a plugin carries, on the engine's normal path

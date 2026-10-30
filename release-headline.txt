@@ -1,1 +1,2 @@
+On PC a texture mod can now replace a texture's image, and the community splash image is written into the game's menu texture.
 A failed sign-in now stays on screen until you close it and says to restart Echo VR, instead of closing after 30 seconds.
