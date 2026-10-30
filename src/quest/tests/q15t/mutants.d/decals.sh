@@ -26,6 +26,11 @@ runm decals dc_war_room_never_forgotten src/decals_core.h "s/if (s->level == kLe
 runm decals dc_shutdown_keeps_nodes src/decals_core.h "s/^    const int gone = DropNodes(sys);\$/    const int gone = 0;/"
 runm decals dc_no_system_cap     src/decals_core.h "s/if (sys_n >= kMaxSystems) {/if (false) {/"
 runm decals dc_no_node_table_cap src/decals_core.h "s/if (node_n >= kMaxNodes) {/if (false) {/"
+runm decals dc_menu_gate_ignored  src/decals_core.h "s/    if (vis == 0) {/    if (false) {/"
+runm decals dc_menu_gate_no_hide src/decals_core.h "s/        if (nodes\[i\].sys == sys) ops.hide(ops.user, nodes\[i\].node);//"
+runm decals dc_menu_gate_relogs  src/decals_core.h "s/if (vis >= 0 \&\& vis != ds->vis) {/if (vis >= 0) {/"
+runm decals dc_menu_gate_unwired src/decals.cpp "s/  g_host.ops.visible = \&OpVisible;//"
+runm decals dc_menu_gate_other_space src/decals.cpp "/^int OpVisible/,/^}/ s/reinterpret_cast<const void\*>(space)/reinterpret_cast<const void*>(sys)/"
 runm decals dc_window_never      src/decals_core.h "s/if (now_ms - win_at >= kWindowMs) {/if (false) {/"
 # the real operations
 runm decals dc_blend_always      src/decals.cpp "s/  if (was == 0) {/  if (true) {/"

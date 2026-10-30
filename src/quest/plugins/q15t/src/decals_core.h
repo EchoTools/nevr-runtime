@@ -238,6 +238,9 @@ struct Ops {
   // Writes the group's vertices into the node, sets its drawn index count and shows it; false when the vertices cannot be mapped.
   bool (*draw)(void* user, std::uintptr_t node, const Group& g) = nullptr;
   void (*hide)(void* user, std::uintptr_t node) = nullptr;
+  // Whether the game space of bullet system `sys` is shown (CncaGameSpace::Visible): 1 shown, 0 hidden (the in-match menu hides
+  // the level's game space), -1 unknown. Null, or -1: no menu gate, the nodes draw as if shown.
+  int (*visible)(void* user, std::uintptr_t sys) = nullptr;
 };
 
 struct Node {
@@ -251,10 +254,11 @@ struct SysRec {
   int tries = 0;
   std::int64_t next = 0;
   bool done = false;
+  int vis = -1;  // the last menu-gate answer logged: -1 none yet, 0 hidden, 1 shown
 };
 
 struct Counters {
-  std::uint64_t systems_seen = 0, nodes_made = 0, nodes_failed = 0, nodes_destroyed = 0, level_changes = 0, ticks = 0, drawn_quads = 0;
+  std::uint64_t systems_seen = 0, nodes_made = 0, nodes_failed = 0, nodes_destroyed = 0, level_changes = 0, ticks = 0, drawn_quads = 0, hidden_ticks = 0;
 };
 
 inline const char* Hex(char* buf, std::size_t n, std::uint64_t v) {
@@ -381,6 +385,23 @@ struct Host {
         }
       }
       ds->done = all || ds->tries >= kMaxTries;
+    }
+    // The menu gate: the in-match menu hides the level's game space, and with it the level's own geometry; our nodes are not part of
+    // that geometry, so they are hidden here while the game space is.
+    const int vis = ops.visible != nullptr ? ops.visible(ops.user, sys) : -1;
+    if (vis >= 0 && vis != ds->vis) {
+      char s[24], l[24];
+      const NevrLogField f[] = {{"system", Hex(s, sizeof s, sys)}, {"level", Hex(l, sizeof l, level)},
+                                {"from", ds->vis < 0 ? "unknown" : (ds->vis != 0 ? "shown" : "hidden")},
+                                {"to", vis != 0 ? "shown" : "hidden"}};
+      Log(NEVR_LOG_INFO, "decals: game space visibility changed, its decal nodes follow it", f, 4);
+      ds->vis = vis;
+    }
+    if (vis == 0) {
+      ++counters.hidden_ticks;
+      for (int i = 0; i < node_n; ++i)
+        if (nodes[i].sys == sys) ops.hide(ops.user, nodes[i].node);
+      return;
     }
     for (int i = 0; i < node_n; ++i) {
       const Node& dn = nodes[i];

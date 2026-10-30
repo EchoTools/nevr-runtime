@@ -149,6 +149,14 @@ bool OpDraw(void*, std::uintptr_t nodeAddr, const Group& g) {
 
 void OpHide(void*, std::uintptr_t nodeAddr) { SetVisible(nodeAddr, 0); }
 
+int OpVisible(void*, std::uintptr_t sys) {
+  if (g_api.gs_visible == nullptr) return -1;
+  bool ok = true;
+  const auto space = Rd<std::uintptr_t>(sys + kSysSpace, &ok);
+  if (!ok || space == 0) return -1;
+  return g_api.gs_visible(reinterpret_cast<const void*>(space)) != 0 ? 1 : 0;
+}
+
 // The create operation, with the line each node gets (a failure is a Warning).
 std::uintptr_t OpCreateLogged(void* user, std::uintptr_t sys, const Group& g, int* rc, std::uintptr_t* tried, bool* blended) {
   const std::uintptr_t node = OpCreate(user, sys, g, rc, tried, blended);
@@ -228,6 +236,7 @@ bool Resolve(DecalsApi* a, std::uintptr_t* update_fn) {
   a->mem_set = reinterpret_cast<void (*)(void*)>(S("_ZN10NRadEngine14CMemoryContext10SetCurrentEPNS_10CAllocatorE"));
   a->mem_context = reinterpret_cast<void***>(S("_ZN10NRadEngine14CMemoryContext7contextE"));
   a->gs_initialized = reinterpret_cast<const std::uint32_t*>(S("_ZN10NRadEngine3CGS11initializedE"));
+  a->gs_visible = reinterpret_cast<std::uint32_t (*)(const void*)>(S("_ZNK10NRadEngine13CncaGameSpace7VisibleEv"));
   *update_fn = reinterpret_cast<std::uintptr_t>(S(kUpdateSymbol));
   return true;
 }
@@ -380,6 +389,7 @@ InstallResult InstallDecalsAt(std::uintptr_t base, std::uintptr_t update_slot, s
   g_host.ops.destroy = &OpDestroy;
   g_host.ops.draw = &OpDraw;
   g_host.ops.hide = &OpHide;
+  g_host.ops.visible = &OpVisible;
   g_node_lines.store(0);
   g_on.store(true, std::memory_order_release);
   // 4. Shutdown first (a node must never outlive its system), then the update that makes nodes
@@ -413,8 +423,9 @@ InstallResult InstallDecalsAt(std::uintptr_t base, std::uintptr_t update_slot, s
                             {"groups_cut_to_160_quads", Dec(tcount, sizeof tcount, g_table.truncated_groups)},
                             {"trailing_bytes", Dec(trail, sizeof trail, static_cast<long long>(g_table.trailing_bytes))},
                             {"flip_u", flip_u ? "1" : "0"},
-                            {"flip_v", flip_v ? "1" : "0"}};
-  Log(NEVR_LOG_INFO, "decals on: the static level decals are drawn from the table in dynamic-mesh nodes", f, 7);
+                            {"flip_v", flip_v ? "1" : "0"},
+                            {"menu_gate", g_api.gs_visible != nullptr ? "on" : "off (no CncaGameSpace::Visible: the decals stay drawn under the menu)"}};
+  Log(NEVR_LOG_INFO, "decals on: the static level decals are drawn from the table in dynamic-mesh nodes", f, 8);
   InstallResult ok;
   ok.status = SwapStatus::kOk;
   ok.real_resolved = true;

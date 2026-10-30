@@ -56,6 +56,9 @@ struct DecalsApi {
   void (*mem_set)(void* allocator) = nullptr;                               // CMemoryContext::SetCurrent
   void*** mem_context = nullptr;                                            // &CMemoryContext::context
   const std::uint32_t* gs_initialized = nullptr;                            // &CGS::initialized
+  // CncaGameSpace::Visible() const (ELF 0x1800668, 28 bytes: bit 0 of [[space+0x60]+0x40], 0 when [space+0x60] is null), the test
+  // the engine's own CLevelVisibleExpression makes. Optional: null leaves the menu gate off and the decals draw as before.
+  std::uint32_t (*gs_visible)(const void* space) = nullptr;
 };
 
 // Switch files in the plugin data directory (module_switch.h): decals.off keeps the module out; decalflipu.on / decalflipv.on mirror the

@@ -75,7 +75,11 @@ Per bullet system, on its update (the update thread of its game space; one mutex
 3. create the missing nodes of the level, at most 3 tries a system, 5 s apart (the graphics must be up: `CGS::initialized` non-zero; a
    node whose `Initialize` fails is destroyed and the group stays off). At most 8 systems and 24 nodes at a time; the first system past the
    cap is logged once;
-4. every update, for every node of the system: map the vertices, write the group's quads (position, uv, both colours white, normal and
+4. the menu gate: `CncaGameSpace::Visible()` of the system's game space. While it answers hidden (the in-match menu hides the level's
+   game space, and the level's own geometry with it) every node of the system is hidden and nothing is drawn; each change of the answer
+   is one line (`decals: game space visibility changed`, system, level, from, to). Without the export the gate is off (the install
+   line says `menu_gate=off ...`) and the decals draw as before;
+5. every update, for every node of the system: map the vertices, write the group's quads (position, uv, both colours white, normal and
    tangent zero), unmap, set the drawn index count to `12 x quads`, show the node.
 
 Creating a node (the engine's own sequence for a dynamic mesh): make the system's allocator the current memory context; allocate `0x2048`
@@ -115,6 +119,9 @@ Read in the pinned library (GNU build id `b243509c08ce677aeb95fa348016949b3fc452
 - Exported from `libr15.so`: `CDynamicMeshNode::CDynamicMeshNode(), Shutdown()`, `SDynamicMeshVtx::VertexFormat()`,
   `CGDynamicMesh::Initialize, MapVertices, UnmapVertices`, `CMemoryContext::Current, SetCurrent, context`, `CGS::initialized`
   (a 4-byte int, 1 after `CGS::InitCommon`), `CR15NetBulletCS::UpdateMovement`.
+- `CncaGameSpace::Visible() const` (ELF `0x1800668`, 28 bytes, exported as `_ZNK10NRadEngine13CncaGameSpace7VisibleEv`): bit 0 of
+  `[[space+0x60]+0x40]`, 0 when `[space+0x60]` is null; the engine's `CLevelVisibleExpression` (ELF `0x2646104`) makes the same test.
+  A leaf with no store: calling it from the update thread reads two words.
 - The module resolves these by name with `dlsym` on `libr15.so`; one missing refuses the module (`engine_export_missing`), and the
   exported address of `UpdateMovement` must equal the pinned one (`update_symbol_mismatch`).
 
@@ -124,12 +131,21 @@ INFO `decals on` (path, groups, quads, groups cut to 160 quads, trailing bytes, 
 `decals shutdown wrapper`: slot, status, reason); ERROR when a refusal leaves the module out (`bad_table`, `engine_export_missing`,
 `update_symbol_mismatch`, a wrapper refused) with the reason; `decals: game space` once a system; `decals: node made` / `decals: node
 not made` (WARNING, with `rc`, the engine's answer) for the first 64 nodes of a run; `decals: window` every 10 s of drawing (frames,
-nodes, quads); `decals: level changed ...` and `decals: bullet system shutdown, its nodes are destroyed` with the system and the count.
+nodes, quads); `decals: game space visibility changed` (system, level, from, to) once per change; `decals: level changed ...` and `decals: bullet system shutdown, its nodes are destroyed` with the system and the count.
 The per-frame path writes no line.
 
 ## Switches
 
-`decals.off` (module out), `decalflipu.on`, `decalflipv.on` (uv mirror), all in the plugin data directory.
+`decals.off` (module out), `decalflipu.on`, `decalflipv.on` (uv mirror), all in the plugin data directory. The module is on by
+default (it stays out with one line when no table is found); the two flips are off by default, as the reference build ships them
+(they are test switches there, never on its default list).
+
+## Delivery of the table
+
+`decals.bin` belongs to the content pack: each group's material is a shader set / material pair the pack carries, so a table is only
+right for the pack it was baked with. It travels inside the pack zip as the entry `q15t/decals.bin`, its md5 named in the pack's meta
+file, and the first-run pack step places it at `<plugin data dir>/decals.bin` after the pack's data
+(`docs/adr/0029-quest-bundled-content-pack.md`, "Extra files").
 
 ## Prediction (written before any headset run)
 

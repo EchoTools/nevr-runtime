@@ -223,6 +223,10 @@ struct Fake {
   std::vector<std::pair<uintptr_t, int>> made;   // sys, group mat low bits
   std::vector<uintptr_t> destroyed, hidden, drawn;
   bool draw_ok = true;
+  int vis[16];  // the menu gate's answer per system (1 shown, 0 hidden, -1 unknown)
+  Fake() {
+    for (int& v : vis) v = -1;
+  }
 };
 
 int SysIndex(uintptr_t sys) { return static_cast<int>(sys / 0x1000) - 1; }
@@ -257,6 +261,7 @@ bool FDraw(void* u, uintptr_t node, const Group&) {
   return f->draw_ok;
 }
 void FHide(void* u, uintptr_t node) { static_cast<Fake*>(u)->hidden.push_back(node); }
+int FVisibleOp(void* u, uintptr_t sys) { return static_cast<Fake*>(u)->vis[SysIndex(sys)]; }
 
 Host* NewHost(Fake* f, const Table* t) {
   Host* h = new Host();
@@ -325,6 +330,34 @@ void TestHost() {
     f.hidden.clear();
     h->Tick(A, 900);
     CHECK(f.hidden.empty(), "no war room space left: the arena draws it");
+    delete h;
+  }
+  {  // the menu gate: a hidden game space hides its nodes and draws nothing; shown again, they draw; each change is one line
+    Fake f;
+    f.levels[0] = kDyson;
+    f.has_level[0] = true;
+    f.vis[0] = 1;
+    Host* h = NewHost(&f, &t);
+    h->ops.visible = &FVisibleOp;
+    g_lines.clear();
+    h->Tick(A, 100);
+    CHECK(f.made.size() == 2 && f.drawn.size() == 2 && f.hidden.empty(), "shown: both nodes made and drawn");
+    CHECK(CountLines("visibility changed") == 1 && CountLines("from=unknown to=shown") == 1, "the first answer is logged once");
+    f.vis[0] = 0;
+    f.drawn.clear();
+    h->Tick(A, 200);
+    h->Tick(A, 300);
+    CHECK(f.drawn.empty() && f.hidden.size() == 4 && h->counters.hidden_ticks == 2, "hidden: no draw, both nodes hidden each tick (hid %zu)",
+          f.hidden.size());
+    CHECK(CountLines("from=shown to=hidden") == 1, "the change to hidden is one line");
+    f.vis[0] = 1;
+    f.hidden.clear();
+    h->Tick(A, 400);
+    CHECK(f.drawn.size() == 2 && f.hidden.empty() && CountLines("from=hidden to=shown") == 1, "shown again: drawn, one line");
+    f.vis[0] = -1;  // no answer: no gate
+    f.drawn.clear();
+    h->Tick(A, 500);
+    CHECK(f.drawn.size() == 2 && CountLines("visibility changed") == 3, "an unknown answer draws and logs nothing");
     delete h;
   }
   {  // a level change under a live system: nodes go, the system is gated again
@@ -474,6 +507,8 @@ struct Engine {
   Vtx vbuf[4 * kMaxNodeQuads] = {};
   bool map_fails = false;
   uint32_t visible[4] = {9, 9, 9, 9};
+  uint32_t space_shown = 1;        // what CncaGameSpace::Visible answers
+  const void* visible_space = nullptr;  // the space it was asked about
   std::vector<void*> freed;
   // update / shutdown stand-ins' counters
   int real_updates = 0, real_shutdowns = 0, earlier_shutdowns = 0;
@@ -540,6 +575,10 @@ void FUnmap(void*) { E.calls.push_back("unmap"); }
 void FShutdownNode(void*) { E.calls.push_back("node_shutdown"); }
 void* FMemCurrent() { return E.current; }
 void FMemSet(void* a) { E.mem_sets.push_back(a); }
+uint32_t FSpaceVisible(const void* space) {
+  E.visible_space = space;
+  return E.space_shown;
+}
 
 // The game's functions the slots hold
 __attribute__((noinline)) void FakeUpdateMovement(uintptr_t) { ++E.real_updates; }
@@ -567,6 +606,7 @@ q15t::DecalsApi MakeApi() {
   a.mem_set = &FMemSet;
   a.mem_context = &E.ctx_ptr;
   a.gs_initialized = &E.gs_initialized;
+  a.gs_visible = &FSpaceVisible;
   return a;
 }
 
@@ -690,6 +730,17 @@ void TestInstall(const std::string& dir) {
   const int nodes_before = E.nodes_used;
   update(s1.addr());
   CHECK(E.nodes_used == nodes_before && E.real_updates == 2, "a second update makes no node");
+  CHECK(E.visible_space == static_cast<const void*>(s1.gs), "the menu gate asks the system's own game space");
+  CHECK(CountLines("menu_gate=on") == 1, "the install line says the menu gate is on");
+
+  // ---- the menu hides the game space: the nodes are hidden, nothing is mapped; shown again, drawn again
+  E.space_shown = 0;
+  E.calls.clear();
+  update(s1.addr());
+  CHECK(E.visible[0] == 0 && E.visible[1] == 0 && Index("map") < 0, "hidden game space: nodes hidden, no vertex write");
+  E.space_shown = 1;
+  update(s1.addr());
+  CHECK(E.visible[0] == 1 && E.visible[1] == 1 && Index("map") >= 0, "shown again: nodes drawn");
 
   // ---- Shutdown: the nodes are destroyed first, in the engine's order, then the earlier function runs
   E.calls.clear();
