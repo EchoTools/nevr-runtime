@@ -69,9 +69,10 @@ What the tree and the binary give us (pinned `libr15.so`, build ID `b243509c08ce
    `vrapi_GetInputDeviceCapabilities` (libr15's slot 0x36fc9c8, read and never written). It is cached per device ID. A
    device that reports neither hand bit is passed to the filter as `NEVR_QUEST_HAND_UNKNOWN`.
 5. **The plugin is `nevr_autopilot` (`libnevr_autopilot.so`), built for Quest only and carried only in an APK built
-   for it.** It is off unless `config.yaml` names it, like every plugin (ADR 0019 R2). No recipe that builds a release
-   or `package-dev` APK carries it (`android-repack-apk`'s `plugin` argument). `just quest-autopilot-apk` is the one
-   recipe that does. The recipe refuses a plugin whose build-ID note does not list the store APK's own `libr15.so`
+   for it.** A plugin packaged in an APK loads by default (ADR 0019 R2), so the recipe packages this one
+   off (`android-repack-apk`'s `plugin_off` argument): it loads only when `config.yaml` names it in `plugins:`, because
+   its init refuses a run with no `args.route`. No recipe that builds a release or `package-dev` APK carries it
+   (`android-repack-apk`'s `plugin` argument). `just quest-autopilot-apk` is the one recipe that does. The recipe refuses a plugin whose build-ID note does not list the store APK's own `libr15.so`
    build ID (`tools/quest_repack_libs.py check-plugin-build-ids`), so an APK whose plugin the loader would refuse is
    never signed.
 6. **The filter never logs, allocates, locks or calls into the game.** It reads `CLOCK_MONOTONIC`, sets the state,
