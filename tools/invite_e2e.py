@@ -398,12 +398,12 @@ def run_flow(a: Client, b: Client, steps: list[Step], timing: dict) -> None:
     timing["window_start"][a.label] = sent.ts
     answered, am = a.wait_for(r"\[NEVR\.INVITE\] answer op=create status=(\d+) latency_ms=\d+ result=(\w+)", 90, mark)
     created = a.answer("create", 30)
-    ok = am["status"] == "200" and am["result"] == "ok" and bool(created.get("code")) and bool(created.get("match_id"))
+    ok = am[1] == "200" and am[2] == "ok" and bool(created.get("code")) and bool(created.get("match_id"))
     done("A creates a game and gets an invite code (invite/create)",
          [("A", sent, ""), ("A", answered, f"code_len={len(created.get('code', ''))} expires={created.get('expires')!r} match={created.get('match_id')}")],
          ok)
     if not ok:
-        raise StepFailed(f"A: create answered status={am['status']} result={am['result']}")
+        raise StepFailed(f"A: create answered status={am[1]} result={am[2]}")
     posted = first(a.lines(), r"\[NEVR\.INVITE\] text posted field=code bytes=(\d+)", mark)
     done("the code is written into the wizard's share page (text posted field=code)",
          [("A", posted[0] if posted else None, "no `text posted field=code` line after the create")], bool(posted))
@@ -421,7 +421,7 @@ def run_flow(a: Client, b: Client, steps: list[Step], timing: dict) -> None:
         joined[c.label] = sm[2].upper()
         done(f"{c.label} resolves the code and starts the join (invite/resolve, join started)",
              [(c.label, ans, ""), (c.label, start, f"resolved match={row.get('match_id')}")],
-             rm["status"] == "200" and rm["result"] == "ok" and sm[1] == "stage")
+             rm[1] == "200" and rm[2] == "ok" and sm[1] == "stage")
         timing["mark"][c.label] = mark
 
     # both clients: join request, session success, same lobby and group
@@ -575,8 +575,8 @@ def main(argv: list[str]) -> int:
             say(f"client {c.label} launched (account {c.account[:4]}...; timeout {args.timeout} s)")
             time.sleep(4)
         run_flow(clients[0], clients[1], steps, timing)
-    except StepFailed as exc:
-        steps.append(Step("the flow stopped here", False, [("run", None, str(exc))]))
+    except (StepFailed, OSError, KeyError, IndexError, ValueError) as exc:  # a bug in this tool still ends in teardown and a verdict
+        steps.append(Step("the flow stopped here", False, [("run", None, f"{type(exc).__name__}: {exc}")]))
         say(f"FAIL  {exc}")
     finally:
         steps += teardown(clients, evidence)
