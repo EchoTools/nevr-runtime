@@ -1,6 +1,6 @@
 # tablestep (issue #1552): shader-set table growth step 32 -> 1
 
-Source: `src/quest/plugins/q15t/src/tablestep.cpp`. Host test: `src/quest/tests/q15t/tablestep_test.cpp` (`src/quest/tests/q15t/mod/tablestep.sh`).
+Source: `src/quest/plugins/q15t/src/tablestep.cpp`. Host test: `src/quest/tests/q15t/tablestep_test.cpp`.
 Option: `Q15T_TABLESTEP` (on by default in `CMakeLists.txt`). Off file: `tablestep.off` in the plugin data directory.
 
 ## What the stock code does
