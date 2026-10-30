@@ -15,15 +15,17 @@
 //   entrant itself ("generating offline bot session id"); clear, it asks the matchmaker through the lobby's service,
 //   which the community service does not answer for a server. The driver sets bit 0 for the call only, as EchoRelay
 //   does.
-// - The node fills +0x10 with the identity quaternion (.rdata 0x1416D5A70) and +0x20 with the 12 bytes of the
-//   .data globals 0x14201D338 and 0x14201D340 (FLT_MAX three times: no spawn position) and 1.0f. The rest of the
-//   request (+0x00 = -1, +0x08 = 0xFFFF for any team, +0x38..+0xCF = 0xFF, +0xD0 = 0) is EchoRelay's: the node copies
-//   it from its own instance data, which the binary does not hold.
+// - The node copies the request from its own instance data, which the binary does not hold. When the instance's
+//   +0xD8 is 0 (the test at 0x140DE4E49) it then writes +0x10 with the identity quaternion (.rdata 0x1416D5A70),
+//   +0x20 with the 12 bytes of the .data globals 0x14201D338 and 0x14201D340 (FLT_MAX three times: no spawn position)
+//   and +0x2C with 1.0f; otherwise those come from the instance too. The request here takes the +0xD8 = 0 values.
+//   The rest (+0x00 = -1, +0x08 = 0xFFFF for any team, +0x38..+0xCF = 0xFF, +0xD0 = 0) is EchoRelay's.
 // - A bot takes a body from the net game's pools (+0x2B08). The game's own bot setup (0x140152210) picks body 0 or 1
 //   of a table its static initializer fills (0x1400C3CE0: "bot_arena", "bot_combat", whose CSymbol64Hash values are
 //   kBotBodies) and allocates through 0x1404E61E0, which finds the pool with FindPool (0x140502D80) and skips an
-//   entry whose +0x30 is 0 ([owner+0x3E8] + index * 0x88). A bot is requested only when every body pool the level has
-//   has one free, so the body the game picks is there.
+//   entry whose +0x30 is 0 ([owner+0x3E8] + index * 0x88), or above the entry's capacity at +0x82 (only memory that
+//   is not a pool gives that; BodyFree does not read +0x82). A bot is requested only when every body pool the level
+//   has has one free, so the body the game picks is there.
 //
 // The session settings: the game reads `numteams` and `players_per_team` from the session's settings (0x1401510D0
 // and 0x14060A920, through 0x1406162A0, which returns 0 for an absent key, so no team table is built). The community
