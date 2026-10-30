@@ -65,6 +65,11 @@ void TestHook_ObserveSocialFrames(const char* direction, int connIdx, const std:
 void TestHook_ResetLobbyFrameLimiter();
 /// The clock (milliseconds) the lobby-record limiter reads; nullptr restores GetTickCount64.
 void TestHook_SetLobbyFrameClock(uint64_t (*clockMs)());
+namespace nevr_social_party {
+struct View;
+}
+/// The party a session record names (social_party.h View); nullptr restores the process-wide party state.
+void TestHook_SetLobbyPartySource(nevr_social_party::View (*view)());
 bool TestHook_ReadLoginFailureDiagnostic(const std::string& frame, uint64_t* statusCode, size_t* messageBytes);
 bool TestHook_LogLoginFailureDiagnostic(const std::string& frame, bool serverMode);
 bool TestHook_MoveCodeLineFirst(const std::string& frame, std::string* out);

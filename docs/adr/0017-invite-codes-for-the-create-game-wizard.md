@@ -251,9 +251,9 @@ this feature carries that requirement.
 3. A host test of the client half: the metric parser, the code normaliser and alphabet check, the expiry mapping,
    the request builder, the answer-token mapping and the log lines, written to fail first, with a mutant for each
    changed line. No game and no network. The module is not yet wired into the runtime.
-4. The hook, the worker and the dispatcher step behind the config key, with the PC login test on the tip.
+4. The hook, the worker and the dispatcher step behind the config key, with the PC login test run on main after the release cut.
 5. A live run on a copy of the install: create a code on one client, join with it from another.
-6. The Quest hook, after the UI accessors of #896.
+6. The Quest text writes and the Quest submit, after the UI accessors of #896 and the invite transport. The Quest observer lands before them.
 
 ## Not shown
 
@@ -270,60 +270,59 @@ this feature carries that requirement.
   draws, from a write made by this tree: a wrong id is a request the writer drops with `reason=no_actor` or `no_canvas`.
 - Anything on Quest beyond the static reading above.
 
-## Quest measurements and prediction (#966)
+## Quest observer on MetricLog (#966)
 
-Work step 1 of the Quest twin. Measured in ReVault over project `echovr` (1,041 binaries); each search line states its
-scope. Addresses are ReVault VAs. Pinned values are ReVault VA minus `0x100000` (the libr15 image-base offset);
-no pin is written here.
+The Quest half of the wizard observer hooks the game's `NRadEngine::NRadGame::NR15Logger::MetricLog(char const*, unsigned long long)` in `libr15.so` through a GOT slot. Addresses are ReVault virtual addresses unless marked pinned. A pinned address is the ReVault address minus `0x100000`, the libr15 offset: `0x130cc50` is pinned `0x120cc50`. The pins are in `src/quest/sentinel/pinned_targets.h`.
 
-Searches (whole project, `searched all 1,041 binaries in project echovr`):
+Measured:
 
-- `revault_search_strings` `deep_linking`: 3 hits: `echovr.exe` `0x141cbc19d`, `0x141cbc1b8`; `libr15.so` `0x32e157d`.
-- `revault_search_strings` `join_via_code`: 8 hits in the page scripts: `991bbec05cde117f.dll` `0x180011428`,
-  `beaac7bfb1ce12bd.dll` `0x180017550`, `c9cb2299a1b7abe7.dll` `0x180009478`, `0x1800094d0`, `0x180009528`; and the
-  Quest twins `lib991bbec05cde117f.so` `0x127f74`, `libbeaac7bfb1ce12bd.so` `0x134369`, `libc9cb2299a1b7abe7.so`
-  `0x113013`.
-- `revault_search_strings` `create_invite`: 2 hits: `7d6a4f136a16799d.dll` `0x18000e658`; the Quest twin
-  `lib7d6a4f136a16799d.so` `0x11dbc3`.
-- `revault_search_code` `SNSRemoteLogSetv3`: 6 hits, all in `libr15.so`; complete.
-- `revault_search_code` `JsonLog`: truncated at 20 hits (not complete); not used as evidence.
+- `revault_search_code` for `MetricLog`, scope `searched all 1,041 binaries in project echovr`: 3 hits, all in `libr15.so`: `MetricLog` at `0x130cc50`, its thunk at `0x10057c0`, and `CR15NetJsonLog::WriteLog` at `0x136a304`, the only decompiled caller.
+- `revault_search_code` for `deep_linking`, same scope: 5 hits. `echovr.exe` `GetMetricsPanelName` (`0x140f4b4c0`) maps the panel hash `0x75705bbdb2a10bd7` to the name, and `libr15.so` `Enter` (`0x2428098`, `0x24288a4`) compares the same hash.
+- Call sites in the store `libr15.so` (`aarch64-linux-gnu-objdump -d`): one `bl` to the MetricLog PLT stub `0xf057c0`, at pinned `0x126a4cc`, inside `WriteLog` (entered at pinned `0x126a304`). No `b` to the stub.
+- Relocation (`readelf -rW`): one `R_AARCH64_JUMP_SLOT` names the symbol, at pinned slot `0x36da2c8`, with addend `0x120cc50`. `readelf -sW --dyn-syms` gives the symbol's value as `0x120cc50` (FUNC, GLOBAL, DEFAULT).
+- Prologue: the first four instruction words at pinned `0x120cc50` are `a9bc63f9 a9015bf7 a90253f5 a9037bf3`, the `stp` pairs that save the callee-saved registers. The observer compares these 16 bytes before it writes anything.
+- The store file's SHA-256 is the pin in the `test-quest-hooks-pinned` recipe.
 
-The Quest submit, as ReVault reads it (`revault_function`, `libr15.so` `0x130bf00`, `Send`, 384 bytes, raw tier):
+Arguments: `x0` is the JSON text and `x1` is its length. The prologue keeps both (`mov x19, x1` at pinned `0x120cc88`, `mov x20, x0` at pinned `0x120cc8c`).
 
-- Signature (ReVault comment): `NRadEngine::SNSRemoteLogSetv3::Send(CTcpBroadcaster&, SNSUserID const&, SUuid const&,
-  char const*, ELogLevel, CStringTable const&, CSymbol64)`.
-- The `char const*` argument is copied into a 16-byte field of the object, its length capped at `0x10` (the decompile
-  sets `uVar7 = 0x10` when the length is 16 or more). STATIC.
-- The metric's key/value text is not a `char*` argument. The `CStringTable` (`param_7`) is written to a memblock by
-  `CStringTable::WriteToMemblock`, and the memblock's string and size go to `CTcpBroadcaster::Send` with the constant
-  `0x244b47685187eae1`. STATIC.
-- Callers in ReVault: `thunk_FUN_0130bf00` `0x1024290` (indirect) and `FUN_0120bfe0` `0x130bfe0` (direct, tail).
-  The ReVault decompilation of `ProcessRemoteLogs` (`0x130b8a4`) calls `SNSRemoteLogSetv3::Send` directly, but the
-  callers list does not show that edge. The call graph is incomplete here; the edge is not used as evidence.
+Why MetricLog and not the submit: `NRadEngine::SNSRemoteLogSetv3::Send` (`libr15.so` `0x130bf00`, raw decompilation) copies its `char const*` argument into a 16-byte field, with the copy length capped at `0x10` (`if (0xf < uVar2) uVar7 = 0x10`). A metric longer than that does not reach it whole. `MetricLog` receives the whole text and its length.
 
-Prediction (written before any Quest run; a run can falsify it):
+Observer behaviour (`src/quest/invite/wizard_metric_hook.cpp`):
 
-- The 16-byte `char const*` argument carries the event name. `create_invite` and `join_via_code` are 13 characters
-  and fit the field with their terminator. A name of 16 characters or more (the create metric's
-  `create_game_review_settings`) is copied as 16 bytes with no terminator, per the decompile's `uVar7 = 0x10` branch.
-- Falsifier: a Quest run where the create or join click reaches `Send` and the `char const*` argument is not the
-  event name.
-- The create and join string pairs (`Server_region`, `Expires_after`, `join_code`) are in the `CStringTable`. Their
-  layout is not measured; the hook point for them is not chosen by this record.
+- It copies the text first. The copy is a pipe write, so the kernel reads the game's buffer and an unmapped byte is refused with `EFAULT` instead of faulting the game's thread. Lengths from 1 to `nevr_invite::kMetricMaxBytes` (4096) are copied; other lengths and a null pointer are passed on unread.
+- It runs the PC's shared parser from `src/runtime/patch/invite_wizard.h`, unchanged: `MayBeWizardMetric`, `ParseMetric`, `PlanRequest`.
+- It logs `invite_click` with `click` (`create_invite` or `join_via_code`) and `panel=deep_linking`. A planned request that is not sent logs `invite_request_not_sent` with `reason`, `op` and `code_len`. No line carries the code text.
+- It calls the original once, with the arguments it was given, after its own work. The observer returns before the game's function runs.
+- The submit is off: `kSubmitEnabled` is `false`, so a planned request is logged with `reason=observe_only` and nothing is sent. Until the invite transport is on main, the submit path only counts plans.
+- A create click carries no card choices (the choices observer is a later slice), so it logs `reason=incomplete`.
 
-Not shown, Quest:
+The click's field is `click`, not the PC's `event=`. The sentinel's JSON record already names each line with `event` (`"event":"invite_click"`), and a second `event` key would be read as the record's name. The value is the same as the PC's.
 
-- The argument values at a real click (no capture).
-- Whether `ProcessRemoteLogs` is the only caller of `Send` on the path the wizard uses.
-- The Quest page-building functions and the string-array setting type. The page scripts are the same in name; their
-  Quest functions are not measured here.
-- Whether the Quest `libr15.so` exports `SNSRemoteLogSetv3::Send` to a GOT slot. The PC hook uses a call-site detour;
-  no Quest form of it is chosen.
+Install:
 
-Blocked, in order: the Quest page writes wait for #896's UI accessors; the Quest hook waits for a measured
-argument layout (above) and a headset run, not for code.
+- The sequence step `install_wizard_metric` (`src/quest/integration/ctor_sequence.cpp`) runs after the menu-cards step, and only when `WizardMetricWanted()` is true. That is `sentinel::FeatureEnabled(Feature::kInviteCodes)`, the `network.invite_codes` key (`src/quest/sentinel/quest_config.cpp`), which is off by default and needs login and a service address. With the key off the step is skipped with `reason=feature_off`.
+- The install checks the 16 prologue bytes at image base plus `0x120cc50` before any write. A mismatch logs `invite_observer_off` with `reason=prologue_mismatch`, `va`, `expected` and `actual`, and arms nothing. A refusal from the GOT step logs its status name under the same event.
+- A successful install logs `invite_observer_installed` with `target=MetricLog` and `slot=0x0000000036da2c8`.
+
+Frequency: the hook runs once per `MetricLog` call, and `WriteLog` makes one call per metric event. The observer counts entries and copies (`calls`, `copies`) and logs no per-call line. The call rate under play is not measured.
+
+Tests:
+
+- `src/quest/tests/wizard_metric_hook_test.cpp` (`just test-quest-hooks`): the observer against a stand-in for the game's function. It covers the create and join lines, unusable codes, an escaped panel name, null, zero and oversize lengths, an unreadable page, the prologue check, the install refusals, and the ten skip tokens.
+- `src/quest/tests/got_pinned_test.cpp` (`just test-quest-hooks-pinned`): the store file's JUMP_SLOT, its value and the prologue bytes.
+- `src/quest/tests/integration_sequence_test.cpp` (`just test-quest-integration`): the step's order and its gate.
+
+Not shown:
+
+- That a Quest click reaches `MetricLog` as this JSON, with the event and the panel. No capture exists; the test lines use the PC's metric shapes.
+- Whether remote logging, when it is off, returns before `MetricLog` and drops the metric. Not measured here.
+- Whether the code and the create settings are in that JSON as sent. No packet capture exists.
+- The call rate and the behaviour on a headset. No headset run has been made.
+- The Quest text writes. They need the UI accessors of #896; this observer writes no text.
+
+Prediction, written before any Quest run: with remote logging on, a click on CREATE GAME or JOIN VIA CODE produces one `invite_click` line from the observer. A click that produces none falsifies `MetricLog` as the hook point for the wizard's metric; the next candidate is the call chain above `WriteLog`.
 
 ## Relation to other records
 
 - ADR 0008 (BugSplat64.dll host, runtime): the feature is part of the runtime the host loads.
-- #896: the UI accessors the text writes and the Quest hook wait for.
+- #896: the UI accessors the Quest text writes wait for. The Quest observer does not wait for it.

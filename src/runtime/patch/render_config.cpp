@@ -1,6 +1,7 @@
 #include "runtime/patch/render_config.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cstdio>
 #include <cstring>
 
@@ -35,6 +36,15 @@ std::string Float(float value) {
   char buffer[32];
   std::snprintf(buffer, sizeof(buffer), "%g", static_cast<double>(value));
   return buffer;
+}
+
+/// The shortest text that reads back as the same double. The GPU score sits next to the selector's thresholds (4.5, 6,
+/// 8, 10), which it compares exactly; a precision under 17 significant digits prints a score close enough below one as
+/// the threshold itself, while the selector picks the level below. The longest such text is 24 characters.
+std::string Double(double value) {
+  char buffer[32];
+  const std::to_chars_result result = std::to_chars(buffer, buffer + sizeof(buffer), value);
+  return std::string(buffer, result.ptr);
 }
 
 const char* Bool(bool value) { return value ? "true" : "false"; }
@@ -140,6 +150,7 @@ Snapshot ReadSnapshot(const MemoryReader& reader, std::uintptr_t imageBase, cons
     }
   }
   s.gpuVendor.ok = ReadValue(reader, Resolve(imageBase, kGpuVendorVa), &s.gpuVendor.value);
+  s.gpuScore.ok = ReadValue(reader, Resolve(imageBase, kGpuScoreVa), &s.gpuScore.value);
   std::uint64_t vramBytes = 0;
   if (ReadValue(reader, Resolve(imageBase, kGpuVramVa), &vramBytes)) {
     s.vramMb.ok = true;
@@ -195,6 +206,7 @@ std::vector<std::pair<std::string, std::string>> Fields(const Snapshot& s) {
 
   text("gpu", s.gpu);
   integer("gpu_vendor", s.gpuVendor.ok, s.gpuVendor.value);
+  f.emplace_back("gpu_score", s.gpuScore.ok ? Double(s.gpuScore.value) : std::string(kUnavailable));
   integer("vram_mb", s.vramMb.ok, static_cast<long long>(s.vramMb.value));
   f.emplace_back("gpu_driver", Token(s.gpuDriver));
   text("headset", s.headset);

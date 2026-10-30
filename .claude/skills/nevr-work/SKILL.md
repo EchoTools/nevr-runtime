@@ -19,12 +19,10 @@ below.
   or read) and an **abort condition** (when you stop and escalate). Passing a
   gate without its verification action is skipping the gate.
 - Bound to the PR quick check (AGENTS.md "Builds", "A PR runs the quick check, not
-  `just verify`"): the build, the covering test recipes, the PC login for runtime or
-  auth changes, and on every PR `just test-tools` (kept: output, JUnit XML, `runs.jsonl`) and
+  `just verify`"): the build, the covering test recipes, and on every PR `just test-tools` (kept: output, JUnit XML, `runs.jsonl`) and
   `python3 tools/verify_doc_paths.py`. Every "done/verified" claim resolves against the
   items you ran, each with its result, and an item not run is named as not run — not
-  against a proxy. `just verify` runs only on main, when prepping a release, once per
-  tip; a PR does not run it and a reviewer does not ask for it.
+  against a proxy. `just verify` runs only on main, after the release cut, once per cut; a PR does not run it and a reviewer does not ask for it.
 
 ## This is NOT
 
@@ -40,7 +38,7 @@ below.
 | Slot | Value |
 |------|-------|
 | `{REPO}` | `~/src/nevr-runtime` (maintainers only; work in a worktree under `.claude/worktrees/`, AGENTS.md "Branch lifecycle") |
-| `{PR_GATE_CMD}` | The quick check, on the PR's tip, in the build slice (maintainers only): `just build` (it exits nonzero when the build fails); the covering test recipes (`just --list`: `test-auth-unit`, `test-quest-shared`, `test-quest-*`, `test-android` for a change under `src/quest`, ...); the PC login test for runtime or auth changes; `python3 -m pytest tools/tests/test_verify_gtest_floor.py` when `TEST(`/`TEST_F(` declarations in `src/runtime/tests/*.cpp` change; on every PR `just test-tools` (kept: output, JUnit XML, `runs.jsonl`) and `python3 tools/verify_doc_paths.py` (run `just worktree-setup` first in a fresh worktree). Each item reported with its result; an item not run named as not run. `just verify` is NOT this gate: it runs only on main when prepping a release (AGENTS.md "Builds"). |
+| `{PR_GATE_CMD}` | The quick check, on the PR's tip, in the build slice (maintainers only): `just build` (it exits nonzero when the build fails); the covering test recipes (`just --list`: `test-auth-unit`, `test-quest-shared`, `test-quest-*`, `test-android` for a change under `src/quest`, ...); the PC login test runs on main after the release cut, not here; `python3 -m pytest tools/tests/test_verify_gtest_floor.py` when `TEST(`/`TEST_F(` declarations in `src/runtime/tests/*.cpp` change; on every PR `just test-tools` (kept: output, JUnit XML, `runs.jsonl`) and `python3 tools/verify_doc_paths.py` (run `just worktree-setup` first in a fresh worktree). Each item reported with its result; an item not run named as not run. `just verify` is NOT this gate: it runs only on main after the release cut (AGENTS.md "Builds"). |
 | `{FINDINGS}` | GitHub issues, not a ledger file (there is no `BUGS.md`: `git ls-tree origin/main BUGS.md` returns nothing). A defect you do not fix in the same turn gets an issue (AGENTS.md "Documentation, plans and findings", "Fix it or file it, in the same turn") written as a falsifiable claim with Evidence at `<sha>`, Not shown, Falsifier, Work (AGENTS.md "What a PR carries"). A security-sensitive finding is reported to the owner, not filed. The `N<number>` tags are the code's own rule tags, indexed in AGENTS.md "The N-rules index"; the highest in `src`, `tools` and `justfile` is N146 (`git grep -ohE '\bN[0-9]+\b' origin/main -- src tools justfile | sort -V | uniq`). |
 | `{INVARIANTS}` | Never commit generated protobuf; prologue-validate before any binary patch; hook frequency analysis before sleeps; production deploy forbidden without per-instance approval; no agent writes into the owner's game install (runs use a throwaway copy); CPP addendum hard-stops (no C-style casts, no `catch(...)`, never throw across a DLL boundary, no I/O from DllMain, Ninja-only, vcpkg-manifest deps only; `-Werror` is on every MinGW target, see the engineer primer's "Compiler warnings"). Source: AGENTS.md "Guardrails", "Production Deployment", "The game install", and the inlined addendum. |
 | `{EXPERTISE_PREREADS}` | The C++ MinGW Addendum inlined in AGENTS.md (after its `CPP-MINGW-ADDENDUM` separator) — mandatory pre-read gate before any C++/build work. A maintainer-only copy also exists elsewhere; AGENTS.md wins on conflict. |
@@ -198,8 +196,8 @@ report each item with its result.
    adds or removes `TEST(`/`TEST_F(` declarations in `src/runtime/tests/*.cpp`, run
    `python3 -m pytest tools/tests/test_verify_gtest_floor.py`. Every PR, whatever it
    touches: `just test-tools` and `python3 tools/verify_doc_paths.py`.
-3. **A runtime or auth change ALWAYS runs the PC login on the PR's tip** (AGENTS.md
-   "System test for runtime and auth changes"; "Client login test mechanics"):
+3. **A runtime or auth change's PC login runs on main after the release cut, never on a PR** (AGENTS.md
+   "Verification before merge"; "Client login test mechanics"):
    `NEVR_GAME_ROOT=<copy> ./launch-client.sh --dll <absolute path to the build's
    BugSplat64.dll> --exit-after-login` against a throwaway copy of the install (never the
    owner's `echovr/`), one client at a time, on the nested display (`env -u
@@ -221,7 +219,7 @@ report each item with its result.
    run, the tracking issue, and ends with `Read AGENTS.md at <merge-base sha>`
    (`git merge-base HEAD origin/main`, after a fetch).
 
-`just verify` is not part of this gate: it runs only on main, when prepping a release,
+`just verify` is not part of this gate: it runs only on main, after the release cut,
 once per tip. Its log starts `verify: HEAD <sha>` / `verify: tree clean|DIRTY` and a
 log for the tip's sha with `tree clean` ending `verify: OK` is the proof; a reviewer
 reads it and does not run it again (AGENTS.md "Builds").

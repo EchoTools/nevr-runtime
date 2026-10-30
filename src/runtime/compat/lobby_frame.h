@@ -14,7 +14,8 @@
 //   success  mode(8) lobby(16) group(16) endpoint, flags and keys (not read here)
 //   failure  mode(8) group(16) code(4) pad(4) message(64) expiry(8); the game reads the code as a byte at +0x18
 //            (echovr.exe 0x14017d380 CR15NetClientLobby::LobbySessionFailureCB)
-// The settings JSON and the failure message are remote text and are never read out (logging.md Rule 4).
+// The settings JSON and the failure message are remote text and are never read out (logging.md Rule 4): a failure's
+// message is counted (messageBytes), never copied.
 
 #include <array>
 #include <cstddef>
@@ -40,6 +41,9 @@ inline constexpr uint64_t kSymSessionFailure = 0x4ae8365ebc45f96cULL;
 constexpr std::size_t kMaxEntrants = 16;
 constexpr std::size_t kGuidSize = 16;
 constexpr std::size_t kEntrantSize = 16;
+// A failure's message field: after mode(8), group(16), code(4) and pad(4), 64 bytes.
+constexpr std::size_t kFailureMessageAt = 8 + kGuidSize + 4 + 4;
+constexpr std::size_t kFailureMessageSize = 64;
 
 // The lobby message a symbol is when heard in a direction: requests only from the game, answers only from the
 // service. nullopt for every other symbol, and for a lobby symbol heard the wrong way round.
@@ -91,6 +95,7 @@ struct Decoded {
   Guid group{};                    // find, success, failure
   std::vector<Entrant> entrants;   // find, join
   uint32_t code = 0;               // failure
+  uint32_t messageBytes = 0;       // failure: bytes before the message's NUL, at most its field; never the text
 };
 
 namespace detail {
@@ -120,6 +125,16 @@ inline bool ReadEntrants(const uint8_t* payload, std::size_t len, std::size_t se
     out->push_back(Entrant{nevr_evr_codec::ReadLE64(at), nevr_evr_codec::ReadLE64(at + 8)});
   }
   return true;
+}
+
+// The bytes before the first NUL in the `size`-byte field at `at`, counted over the bytes the frame holds: the whole
+// field when none of it is NUL, zero when the frame ends before the field. Nothing is read past `len`.
+inline uint32_t FieldTextBytes(const uint8_t* payload, std::size_t len, std::size_t at, std::size_t size) {
+  if (at >= len) return 0;
+  const std::size_t held = len - at < size ? len - at : size;
+  const void* nul = std::memchr(payload + at, 0, held);
+  if (nul == nullptr) return static_cast<uint32_t>(held);
+  return static_cast<uint32_t>(static_cast<const uint8_t*>(nul) - (payload + at));
 }
 
 }  // namespace detail
@@ -158,6 +173,7 @@ inline bool Decode(Kind kind, const uint8_t* payload, std::size_t len, Decoded* 
       out->mode = nevr_evr_codec::ReadLE64(payload);
       out->group = detail::ReadGuid(payload + 8);
       out->code = detail::ReadLE32(payload + 8 + kGuidSize);
+      out->messageBytes = detail::FieldTextBytes(payload, len, kFailureMessageAt, kFailureMessageSize);
       return true;
     }
   }
@@ -257,5 +273,68 @@ class RecordLimiter {
   };
   std::array<Slot, kKindCount> slots_{};
 };
+
+/// The request a session record names: the find or join the game sent last on this client, its age when it was
+/// answered, and whether that answer is the first one to it. `sent` is false until a request is sent after a Reset.
+struct RequestContext {
+  bool sent = false;
+  Kind kind = Kind::Find;
+  uint64_t ageMs = 0;
+  bool outstanding = false;
+};
+
+/// The last find or join the game sent. An answer takes the request it answers: outstanding for the first answer
+/// after that request, not for any later one. Process-wide, not per connection: the tracker keeps no connection index,
+/// so an answer on one connection can name a request sent on another. The caller passes the time and serializes
+/// calls, as RecordLimiter.
+class RequestTracker {
+ public:
+  void Sent(Kind kind, uint64_t nowMs) {
+    sent_ = true;
+    answered_ = false;
+    kind_ = kind;
+    sentAtMs_ = nowMs;
+  }
+
+  RequestContext Answer(uint64_t nowMs) {
+    RequestContext context;
+    if (!sent_) return context;
+    context.sent = true;
+    context.kind = kind_;
+    context.ageMs = nowMs >= sentAtMs_ ? nowMs - sentAtMs_ : 0;
+    context.outstanding = !answered_;
+    answered_ = true;
+    return context;
+  }
+
+  void Reset() { *this = RequestTracker{}; }
+
+ private:
+  bool sent_ = false;
+  bool answered_ = false;
+  Kind kind_ = Kind::Find;
+  uint64_t sentAtMs_ = 0;
+};
+
+/// The request as the record's fields: `last_request=find last_request_age_ms=250 request_outstanding=yes`, or `none`
+/// in the first two and `no` in the third when no request was sent since the last Reset.
+inline std::string FormatRequestFields(const RequestContext& request) {
+  if (!request.sent) return "last_request=none last_request_age_ms=none request_outstanding=no";
+  return std::string("last_request=") + KindToken(request.kind) +
+         " last_request_age_ms=" + std::to_string(request.ageMs) +
+         " request_outstanding=" + (request.outstanding ? "yes" : "no");
+}
+
+/// The party as the record's fields: `party_id=7 party_size=3 party_leader=yes`. Outside a party it is
+/// `party_id=none party_size=0 party_leader=no`. The leader is `yes` when the owner is the local account, `no` when
+/// another account owns the party, and `unknown` while either id is still zero: a value never stands in for an id
+/// the client does not have yet.
+inline std::string FormatPartyFields(uint64_t partyId, uint64_t memberCount, uint64_t ownerId, uint64_t selfId) {
+  if (partyId == 0) return "party_id=none party_size=0 party_leader=no";
+  const char* leader = "unknown";
+  if (ownerId != 0 && selfId != 0) leader = ownerId == selfId ? "yes" : "no";
+  return "party_id=" + std::to_string(partyId) + " party_size=" + std::to_string(memberCount) +
+         " party_leader=" + leader;
+}
 
 }  // namespace nevr_lobby_frame

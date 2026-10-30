@@ -12,13 +12,13 @@ file depends on that flag, so promoting a release changes no byte: this tool has
       The release is that one zip (the Quest library is built by its own job); it carries no Quest APK, and
       no top-level SHA256SUMS or RELEASE-NOTES.md.
   package_release.py notes --assets DIR --out FILE --base vX.Y.Z --rev vX.Y.Z [--repo DIR]
-      the release body (tools/package-release/RELEASE-BODY.template.md): a header, one line for players (from the
-      commits in base..rev, tools/release_audience_section.py), and one line per file. It holds no hash: the zip's
-      own SHA256SUMS and the attestation carry integrity. Read the zip's identity literals from DIR's zip.
-      The player line is the headline file's line instead when `release-headline.txt` at the repository root exists
-      at --rev and differs from its content at --base (headline_line). The file is written by the author of the change
+      the release body (tools/package-release/RELEASE-BODY.template.md): a header, one line for players, and one
+      line per file. It holds no hash: the zip's own SHA256SUMS and the attestation carry integrity. Read the zip's
+      identity literals from DIR's zip. The player line is the headline file's line when `release-headline.txt` at the
+      repository root exists at --rev and differs from its content at --base (headline_line), else the fixed
+      "Fixes and internal changes." (the commits never write it). The file is written by the author of the change
       worth a sentence, in the same PR (RELEASING.md, "Write the release body"). A bad file fails `notes`; it never
-      falls back to the auto line.
+      falls back to the fixed sentence.
   package_release.py stamp --dll BugSplat64.dll [--version X.Y.Z] [--commit <sha40>]
       CI: assert a DLL's one identity literal agrees with what the workflow computed (run on each of the two)
   package_release.py quest-library --lib libovrplatformloader.so --version X.Y.Z --commit <sha40>
@@ -424,11 +424,11 @@ def quest_asset_name(version: str) -> str:
 
 
 def headline_line(repo: Path, base: str, rev: str) -> str | None:
-    """The player line the headline file gives, or None when the auto line stands. The file is `release-headline.txt` at
+    """The player line the headline file gives, or None when the fixed sentence stands. The file is `release-headline.txt` at
     the repository root. It is used only when it exists at `rev` and its content at `rev` differs from its content at
     `base` (absent at `base` counts as different), so a headline left unchanged since the base tag is stale and never
     used. Its first non-empty line, stripped, is the line; it must be 1 to HEADLINE_MAX characters, and a line without
-    a final ".", "!" or "?" gets a "." appended. A bad file raises GateFailure: it never falls back to the auto line."""
+    a final ".", "!" or "?" gets a "." appended. A bad file raises GateFailure: it never falls back to the fixed sentence."""
 
     def at(ref: str) -> bytes | None:
         listed = subprocess.run(["git", "-C", str(repo), "ls-tree", "--name-only", ref, "--", HEADLINE_FILE],
@@ -451,7 +451,7 @@ def headline_line(repo: Path, base: str, rev: str) -> str | None:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
         raise GateFailure(f"{HEADLINE_FILE} at {rev} has no non-empty line: write the player line in it "
-                          f"(1 to {HEADLINE_MAX} characters), or delete the file to use the auto line")
+                          f"(1 to {HEADLINE_MAX} characters), or delete the file to use the fixed sentence")
     line = lines[0]
     if len(line) > HEADLINE_MAX:
         raise GateFailure(f"{HEADLINE_FILE} at {rev}: its first non-empty line is {len(line)} characters; the rule is "
@@ -460,8 +460,8 @@ def headline_line(repo: Path, base: str, rev: str) -> str | None:
 
 
 def release_notes(assets: Path, repo: Path, base: str, rev: str) -> str:
-    """The release body for the two assets in `assets`: a header, the player line from the feat commits in base..rev (or the
-    headline file's line, when headline_line gives one), and one line per file. The version and commit are the ones the
+    """The release body for the two assets in `assets`: a header, the player line (the headline file's line when headline_line
+    gives one, else the fixed sentence), and one line per file. The version and commit are the ones the
     zip's own BugSplat64.dll and nevr-runtime.dll carry (their identity literals, which must agree), so the body cannot
     describe a zip that is not this release's. It holds no hash: the zip's SHA256SUMS and the attestation carry integrity."""
     zips = sorted(assets.glob("nevr-runtime-v*-windows.zip"))
@@ -491,12 +491,8 @@ def release_notes(assets: Path, repo: Path, base: str, rev: str) -> str:
     extra = sorted(p.name for p in assets.iterdir() if p.name not in (zip_path.name, quest.name))
     if extra:
         raise GateFailure(f"{assets}: files that are not release assets: {', '.join(extra)}")
-    try:
-        messages = release_audience_section.messages_between(str(repo), base, rev)
-    except subprocess.CalledProcessError as error:
-        raise GateFailure(f"git log {base}..{rev} in {repo} failed: {error.stderr.strip()}")
     values = {"VERSION": version,
-              "PLAYER_LINE": headline_line(repo, base, rev) or release_audience_section.player_line(messages),
+              "PLAYER_LINE": headline_line(repo, base, rev) or release_audience_section.FALLBACK_PLAYER_LINE,
               "ZIP": zip_path.name, "APK": f"{package_base(version, commit)}-quest.apk", "QUEST": quest.name}
     return render(BODY_TEMPLATE, values)
 

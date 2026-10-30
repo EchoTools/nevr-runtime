@@ -136,6 +136,10 @@ std::optional<std::string> BuildLoginRequest(uint64_t platformCode, uint64_t acc
 // failure: a "NEVRSRVR" session id, then platform and account.
 std::string BuildLoginSuccess(uint64_t platformCode, uint64_t accountId);
 
+// A LoginFailure the bridge answers a game login with itself (#1446), laid out as the service's own: the session
+// UUID (zero: no previous session), the status, then the NUL-terminated text. nullopt when the text holds a NUL.
+std::optional<std::string> BuildLoginFailure(uint64_t statusCode, std::string_view text);
+
 std::string BuildFriendListSubscribe();
 
 // An account as the service names it in LoginSuccess (and the game in SNSUserID): platform code, account id.

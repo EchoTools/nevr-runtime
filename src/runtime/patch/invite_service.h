@@ -7,7 +7,9 @@
 // default (network.invite_codes absent) and a request while off is a `request not sent reason=not_configured` line, never a
 // silent drop. Everything here is host-testable: no game, and the platform values come in through Settings.
 #include <chrono>
+#include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -25,6 +27,12 @@ struct Settings {
   std::function<void(nevr_invite::LogLevel, const std::string&)> log;
   std::string salt;                                             // per run, for the code fingerprint
   nevr_invite::TransportOptions transport;                      // timeouts and the answer cap; its log is replaced
+  bool hooks_refused = false;  // an observer this service serves refused to install: the service stays off, its Warning says why
+  /// Builds the transport for this run, called once by Start and only when the service is on. Unset: the libcurl transport of
+  /// the PC (invite_transport_curl.h). The Quest sets its own (src/quest/invite/invite_transport_quest.h). A null result leaves
+  /// the service off with reason=transport_unavailable.
+  std::function<std::unique_ptr<nevr_invite::Transport>(const std::string& http_uri, const nevr_invite::TransportOptions& options)>
+      transport_factory;
 };
 
 /// Starts the service for this run. A second call changes nothing and says so. Never throws.
@@ -41,6 +49,17 @@ bool Active();
 std::vector<nevr_invite::Answer> TakeAnswers();
 /// As TakeAnswers, waiting up to `timeout` for the first (the host tests).
 std::vector<nevr_invite::Answer> WaitForAnswers(std::chrono::milliseconds timeout);
+
+/// True while an answer waits that nobody has taken. The per-frame applier reads it without the service lock (one atomic load
+/// on a frame with nothing to apply) and takes the answers only when it is true. The worker sets it under its own lock with
+/// the answer and clears it under that lock when the answers are taken, so it is never clear while an answer waits.
+bool AnswersPending();
+/// As WaitForAnswers, but leaves the answer where it is: waits up to `timeout` for one and reports whether it is waiting (the
+/// host tests).
+bool WaitForAnswerPendingForTest(std::chrono::milliseconds timeout);
+/// The number of times the service lock has been taken since process start. The host tests read it: a frame with nothing
+/// waiting must not move it.
+std::uint64_t ServiceLockTakesForTest();
 
 /// Aborts a request in flight, drops the queued ones with a line and joins the worker. After it Submit is refused.
 void Shutdown();

@@ -85,6 +85,24 @@ install-quest-release-timer:
     systemctl --user enable --now nevr-quest-release.timer
     systemctl --user list-timers nevr-quest-release.timer --no-pager
 
+# Arm the release train guard as a user timer (hourly at :07) from the same dedicated checkout as the Quest timer; the units are linked from origin/main, and the guard runs there (RELEASING.md, "When to release"; #1409)
+install-train-guard-timer:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    CHECKOUT="$HOME/src/nevr-runtime-work/release-timer/checkout"
+    git -C "{{ justfile_directory() }}" fetch --quiet origin main
+    if [ ! -e "$CHECKOUT/.git" ]; then
+        mkdir -p "$(dirname "$CHECKOUT")"
+        git -C "{{ justfile_directory() }}" worktree add --detach "$CHECKOUT" origin/main
+    fi
+    for unit in nevr-train-guard.service nevr-train-guard-failed.service nevr-train-guard.timer; do
+        test -f "$CHECKOUT/tools/systemd/$unit" || { echo "install-train-guard-timer: refused: $CHECKOUT has no tools/systemd/$unit (origin/main does not carry the units yet)" >&2; exit 1; }
+        systemctl --user link "$CHECKOUT/tools/systemd/$unit"
+    done
+    systemctl --user daemon-reload
+    systemctl --user enable --now nevr-train-guard.timer
+    systemctl --user list-timers nevr-train-guard.timer --no-pager
+
 # Remove one linked worktree: every proof first, then `git worktree remove` without --force and without `git submodule deinit` (tools/remove_worktree.py; --dry-run proves and changes nothing)
 remove-worktree *args:
     python3 -I tools/remove_worktree.py {{ args }}
@@ -658,6 +676,15 @@ test-auth-unit:
         NEVR_REAL_SIGNED_DLL="$(python3 tools/fetch_real_signed_dll.py build/real-signed-cache)"
         export NEVR_REAL_SIGNED_DLL
     fi
+    # #1414: the invite service's host tests (patch/invite_service.cpp against a loopback server). Built and run here
+    # because no other line of this recipe names them.
+    cmake --build --preset {{ preset }} --target test_invite_service
+    bin="build/{{ preset }}/bin/test_invite_service.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
@@ -876,6 +903,16 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
+    # #1415 (docs/adr/0017): the invite worker and the per-frame applier, built and run here. No recipe named them before, so
+    # they never ran in test-auth-unit; the applier's test drives the real invite service on a loopback server.
+    cmake --build --preset {{ preset }} --target test_invite_worker --target test_invite_answer_apply
+    for bin in "build/{{ preset }}/bin/test_invite_worker.exe" "build/{{ preset }}/bin/test_invite_answer_apply.exe"; do
+        if [[ ! -f "$bin" ]]; then
+            echo "ERROR: GTest binary not found: $bin" >&2
+            exit 1
+        fi
+        run_test "$bin"
+    done
     # test_broadcaster_bridge / test_broadcaster_guards live in
     # ~/src/nevr-runtime-plugins with the broadcaster-bridge plugin, which
     # holds and tests the N72/N73 guards.
@@ -1023,6 +1060,25 @@ test-quest-data-net: _vcpkg-quest-host
         "$host/lib/libz.a" -o "$out/data_wiring_test" $(pkg-config --libs libcurl) -lssl -lcrypto -ldl
     NEVR_TEST_TMP="$out" timeout -k 5 300 "$out/data_wiring_test"
     echo "test-quest-data-net: the fetch passes over real HTTP on the host"
+
+# The shared invite service for the Quest, on the host (docs/adr/0017, #966, S1): src/runtime/patch/invite_service.cpp and its libcurl
+# transport, compiled with the host g++ against the system libcurl (pkg-config, as test-quest-tls does) and nlohmann-json from the
+# quest-host install, then run: the link and the off path (src/quest/tests/invite_service_link_test.cpp). Fail-close.
+test-quest-invite: _vcpkg-quest-host
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v g++ >/dev/null || { echo "test-quest-invite: missing tool: g++" >&2; exit 1; }
+    pkg-config --exists libcurl || { echo "test-quest-invite: libcurl development files not found (pkg-config libcurl)" >&2; exit 1; }
+    out="build/quest-invite-host"
+    rm -rf "$out"
+    mkdir -p "$out"
+    json_inc="{{ justfile_directory() }}/build/quest-host-vcpkg/x64-linux/include"
+    [[ -f "$json_inc/nlohmann/json.hpp" ]] || { echo "test-quest-invite: FAIL — $json_inc/nlohmann/json.hpp not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
+    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -Isdk/include -isystem "$json_inc" $(pkg-config --cflags libcurl) \
+        src/runtime/patch/invite_service.cpp src/runtime/patch/invite_transport_curl.cpp \
+        src/quest/tests/invite_service_link_test.cpp -o "$out/invite_service_link_test" $(pkg-config --libs libcurl)
+    timeout -k 5 120 "$out/invite_service_link_test"
+    echo "test-quest-invite: invite service link and off path pass on the host"
 
 # Run the Quest redirect test on the host. src/quest/tests/service_redirect_test.cpp is
 # compiled for Android by src/quest/CMakeLists.txt but cannot execute there; this
@@ -1231,6 +1287,36 @@ test-quest-router:
 # name, a self-signed leaf, an empty trust store and a non-TLS server each fail; ws:// is refused; the
 # plaintext server never sees an upgrade request. Needs openssl, python3 and libcurl development files
 # (pkg-config libcurl) and libssl/libcrypto on the host. Fail-close: a missing tool exits nonzero.
+#
+# The Quest invite transport and the service seam it plugs into (#966, docs/adr/0017): the transport over a loopback HTTP server
+# on the host (plain http only where the test asks for it), the production client's fail-closed case, the shared service with the
+# Quest transport, and the run's switch (the network.invite_codes feature). The link test of the shared service is test-quest-invite
+# above. Needs libcurl development files (pkg-config libcurl) and the nlohmann header from `just build` with a mingw-* preset.
+# Fail-close: a missing tool or header exits nonzero.
+test-quest-invite-transport:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pkg-config --exists libcurl || { echo "test-quest-invite-transport: libcurl development files not found (pkg-config libcurl)" >&2; exit 1; }
+    out="build/quest-invite-transport-host"
+    rm -rf "$out"
+    mkdir -p "$out"
+    json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
+    if [[ ! -f "$json_src/json.hpp" ]]; then
+        echo "test-quest-invite-transport: FAIL — $json_src/json.hpp not found; run 'just build' with a mingw-* preset first" >&2
+        exit 1
+    fi
+    json_inc="$out/json_inc"
+    mkdir -p "$json_inc"
+    ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
+    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -Isdk/include -isystem "$json_inc" $(pkg-config --cflags libcurl) \
+        src/quest/tests/invite_transport_quest_test.cpp \
+        src/quest/invite/invite_transport_quest.cpp src/quest/invite/invite_run.cpp \
+        src/quest/auth/curl_http.cpp src/quest/auth/ca_bundle.cpp \
+        src/runtime/patch/invite_service.cpp src/runtime/patch/invite_transport_curl.cpp \
+        -o "$out/invite_transport_quest_test" $(pkg-config --libs libcurl) -lssl -lcrypto
+    timeout -k 5 300 "$out/invite_transport_quest_test"
+    echo "test-quest-invite-transport: Quest invite transport and service seam tests pass on the host"
+
 test-quest-tls:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1445,10 +1531,16 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     # The lobby-full policy (#1001): the #889 cases on the 16-byte lobby key. Pure; no libr15 here.
     "${cxx[@]}" -pthread src/quest/tests/lobby_full_test.cpp -o "$out/lobby_full_test"
     timeout 60 "$out/lobby_full_test"
+    # The frame dispatcher (#966 S7): posted work runs only on Tick, once, in order; posting from another thread;
+    # try-lock contention skips without blocking. Built as the sentinel builds it (no exceptions).
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/frame_dispatch_test.cpp \
+        src/quest/invite/frame_dispatch.cpp src/quest/sentinel/hook_log.cpp \
+        -o "$out/frame_dispatch_test"
+    timeout 60 "$out/frame_dispatch_test"
     # The login-prompt hook (#239): the real handler and prompt board, built as the sentinel builds
     # them (no exceptions), driven through the thunk entry.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/login_prompt_hook_test.cpp \
-        src/quest/sentinel/login_prompt_hook.cpp src/quest/auth/prompt_board.cpp \
+        src/quest/sentinel/login_prompt_hook.cpp src/quest/invite/frame_dispatch.cpp src/quest/auth/prompt_board.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/login_prompt_hook_test" -ldl
     timeout 120 "$out/login_prompt_hook_test"
@@ -1466,7 +1558,7 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -Isdk/include -c \
         src/quest/login/login_standin.cpp -o "$out/chain_login_standin.o"
     "${cxx[@]}" -fno-exceptions -DNEVR_QUEST_TESTING -pthread src/quest/tests/login_signin_code_chain_test.cpp \
-        src/quest/sentinel/login_prompt_hook.cpp src/quest/auth/prompt_board.cpp \
+        src/quest/sentinel/login_prompt_hook.cpp src/quest/invite/frame_dispatch.cpp src/quest/auth/prompt_board.cpp \
         "$out/chain_login_prerequisites.o" "$out/chain_login_standin.o" \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/login_signin_code_chain_test" -ldl
@@ -1579,6 +1671,14 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]:0:2}" -o "$out/menu_cards_hook_test" -ldl
     timeout 120 "$out/menu_cards_hook_test"
+    # The CREATE GAME / JOIN VIA CODE observer on libr15's MetricLog (#966, ADR 0017 slice S2): the real observer through the
+    # thunk entry, built without exceptions, against a stand-in for the game's MetricLog. The shared parse needs nlohmann::json,
+    # so the header this recipe installed (attach_json_inc, above) is on the include path.
+    "${cxx[@]}" -fno-exceptions -pthread -isystem "$out/attach_json_inc" src/quest/tests/wizard_metric_hook_test.cpp \
+        src/quest/invite/wizard_metric_hook.cpp src/quest/data/sha256.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        "${ident[@]:0:2}" -o "$out/wizard_metric_hook_test" -ldl
+    timeout 120 "$out/wizard_metric_hook_test"
     # The controller-input seam (#1202): the VrApi layout rules, the registration's every refusal and its one owner, and
     # the real handler through the thunk entry against stand-ins for vrapi_GetCurrentInputState and
     # vrapi_GetInputDeviceCapabilities. got_pinned_test resolves both slots in the real libr15.
@@ -1922,6 +2022,7 @@ test-quest-integration: _vcpkg-quest-host
     "${off[@]}" -c src/quest/integration/dlopen_hook.cpp -o "$out/dlopen_hook.o"
     "${off[@]}" -c src/quest/integration/social_shim.cpp -o "$out/social_shim.o"
     "${off[@]}" -c src/quest/sentinel/login_prompt_hook.cpp -o "$out/login_prompt_hook.o"
+    "${off[@]}" -c src/quest/invite/frame_dispatch.cpp -o "$out/frame_dispatch.o"
     "${off[@]}" -c src/quest/sentinel/login_title_hook.cpp -o "$out/login_title_hook.o"
     "${off[@]}" -c src/quest/sentinel/obb_skip_hook.cpp -o "$out/obb_skip_hook.o"
     "${off[@]}" -c src/quest/sentinel/texture_quality_hook.cpp -o "$out/texture_quality_hook.o"
@@ -1959,7 +2060,7 @@ test-quest-integration: _vcpkg-quest-host
         src/runtime/lifecycle/stable_string_pool.cpp \
         "$out/got_hook.o" "$out/hook_report.o" "$out/tstring_thunks.o" "$out/dlopen_hook.o" "$out/social_shim.o" \
         "$out/social_game_calls.o" "$out/social_install.o" "$out/social_invite_gate.o" "$out/social_facade.o" "$out/hook_log.o" "$out/social_names.o" \
-        "$out/login_prompt_hook.o" "$out/login_title_hook.o" "$out/obb_skip_hook.o" "$out/resource_request_hook.o" "$out/texture_quality_hook.o" "$out/clock_levels_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
+        "$out/login_prompt_hook.o" "$out/frame_dispatch.o" "$out/login_title_hook.o" "$out/obb_skip_hook.o" "$out/resource_request_hook.o" "$out/texture_quality_hook.o" "$out/clock_levels_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
         "$out/login_prerequisites.o" "$out/login_standin.o" \
         "${ident[@]}" "$yaml_lib" -o "$out/integration_hooks_test" -ldl -pthread -lzstd
     timeout 300 "$out/integration_hooks_test"
@@ -2223,6 +2324,7 @@ verify:
         test-quest-data \
         test-quest-data-net \
         test-quest-integration \
+        test-quest-invite \
         test-quest-plugins \
         test-quest-autopilot \
         test-scripting

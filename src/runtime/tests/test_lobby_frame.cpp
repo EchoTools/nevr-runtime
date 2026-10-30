@@ -71,6 +71,21 @@ std::string Join(size_t declaredCount, const std::vector<uint64_t>& accounts) {
   return out;
 }
 
+// A failure frame as the service sends it: mode(8), group(16), code(4), pad(4), message(64), expiry(8). The message
+// is cut to its field's 64 bytes and the field is NUL-filled after the text.
+std::string Failure(uint32_t code, const std::string& message, char expiryByte = '\0') {
+  std::string out;
+  PutLe(out, 7, 8);
+  out += GuidBytes(0x06);
+  PutLe(out, code, 4);
+  PutLe(out, 0, 4);
+  std::string field = message.substr(0, 64);
+  field.resize(64, '\0');
+  out += field;
+  out.append(8, expiryByte);
+  return out;
+}
+
 }  // namespace
 
 TEST(LobbyFrameSymbols, EveryConstantIsTheCSymbol64OfItsGameName) {
@@ -162,6 +177,49 @@ TEST(LobbyFrameDecode, ASuccessNamesItsLobbyAndAFailureItsCode) {
   EXPECT_FALSE(lf::Decode(lf::Kind::Failure, Bytes(failure), failure.size() - 1, &d));
 }
 
+TEST(LobbyFrameDecode, AFailureNamesItsCodeAndCountsTheBytesOfItsMessage) {
+  const std::string payload = Failure(8, "lobby is full");
+  lf::Decoded d;
+  ASSERT_TRUE(lf::Decode(lf::Kind::Failure, Bytes(payload), payload.size(), &d));
+  EXPECT_EQ(d.mode, 7U);
+  EXPECT_EQ(d.code, 8U);
+  EXPECT_EQ(lf::FormatGuid(d.group), "44332211-6655-8877-99AA-BBCCDDEEFF06");
+  EXPECT_EQ(d.messageBytes, 13U);
+}
+
+TEST(LobbyFrameDecode, AnEmptyFailureMessageCountsZero) {
+  const std::string payload = Failure(9, "");
+  lf::Decoded d;
+  ASSERT_TRUE(lf::Decode(lf::Kind::Failure, Bytes(payload), payload.size(), &d));
+  EXPECT_EQ(d.code, 9U);
+  EXPECT_EQ(d.messageBytes, 0U);
+}
+
+TEST(LobbyFrameDecode, AMessageThatFillsItsFieldCountsTheFieldAndNotTheExpiryAfterIt) {
+  // 64 bytes with no NUL, then an expiry that is not zero: the count stops at the end of the field.
+  const std::string payload = Failure(8, std::string(64, 'x'), '\x5a');
+  lf::Decoded d;
+  ASSERT_TRUE(lf::Decode(lf::Kind::Failure, Bytes(payload), payload.size(), &d));
+  EXPECT_EQ(d.messageBytes, 64U);
+  EXPECT_EQ(d.code, 8U);
+}
+
+TEST(LobbyFrameDecode, AFailureThatEndsInsideItsMessageCountsOnlyWhatItHolds) {
+  const std::string cut = Failure(8, "ab").substr(0, 34);  // two message bytes, no NUL, no expiry
+  lf::Decoded d;
+  ASSERT_TRUE(lf::Decode(lf::Kind::Failure, Bytes(cut), cut.size(), &d));
+  EXPECT_EQ(d.messageBytes, 2U);
+  EXPECT_EQ(d.code, 8U);
+}
+
+TEST(LobbyFrameDecode, AFailureWithoutAMessageFieldCountsZero) {
+  const std::string cut = Failure(8, "ab").substr(0, 28);  // mode, group and code only
+  lf::Decoded d;
+  ASSERT_TRUE(lf::Decode(lf::Kind::Failure, Bytes(cut), cut.size(), &d));
+  EXPECT_EQ(d.code, 8U);
+  EXPECT_EQ(d.messageBytes, 0U);
+}
+
 TEST(LobbyFrameText, AGuidIsUpperCaseInTheWindowsLayoutAndTheNilGuidIsNone) {
   lf::Guid g{};
   EXPECT_EQ(lf::FormatGuidOrNone(g), "none");
@@ -226,4 +284,79 @@ TEST(LobbyFrameLimiter, ResetForgetsEveryWindow) {
   const lf::RecordLimiter::Verdict v = limiter.Admit(lf::Kind::Find, 10);
   EXPECT_TRUE(v.log);
   EXPECT_EQ(v.flushed[static_cast<size_t>(lf::Kind::Find)], 0U);
+}
+
+// #1413: the request a session record names is the last find or join the game sent on this client, its age is
+// measured at the answer, and an answer is outstanding only for the first answer to that request.
+TEST(LobbyFrameRequests, NoRequestSentMeansNoContextAndNoneInTheLine) {
+  lf::RequestTracker tracker;
+  const lf::RequestContext answer = tracker.Answer(5000);
+  EXPECT_FALSE(answer.sent);
+  EXPECT_FALSE(answer.outstanding);
+  EXPECT_EQ(lf::FormatRequestFields(answer), "last_request=none last_request_age_ms=none request_outstanding=no");
+}
+
+TEST(LobbyFrameRequests, AnAnswerTakesTheAgeOfTheRequestItAnswers) {
+  lf::RequestTracker tracker;
+  tracker.Sent(lf::Kind::Find, 1000);
+  const lf::RequestContext answer = tracker.Answer(1250);
+  EXPECT_TRUE(answer.sent);
+  EXPECT_EQ(answer.kind, lf::Kind::Find);
+  EXPECT_EQ(answer.ageMs, 250U);
+  EXPECT_TRUE(answer.outstanding);
+  EXPECT_EQ(lf::FormatRequestFields(answer), "last_request=find last_request_age_ms=250 request_outstanding=yes");
+}
+
+TEST(LobbyFrameRequests, ASecondAnswerToTheSameRequestIsNotOutstanding) {
+  lf::RequestTracker tracker;
+  tracker.Sent(lf::Kind::Join, 1000);
+  EXPECT_TRUE(tracker.Answer(1100).outstanding);
+  const lf::RequestContext again = tracker.Answer(1200);
+  EXPECT_TRUE(again.sent);
+  EXPECT_EQ(again.kind, lf::Kind::Join);
+  EXPECT_EQ(again.ageMs, 200U);
+  EXPECT_FALSE(again.outstanding);
+}
+
+TEST(LobbyFrameRequests, TheLastRequestWinsAndANewRequestIsOutstandingAgain) {
+  lf::RequestTracker tracker;
+  tracker.Sent(lf::Kind::Find, 1000);
+  EXPECT_TRUE(tracker.Answer(1010).outstanding);
+  tracker.Sent(lf::Kind::Join, 1500);
+  const lf::RequestContext answer = tracker.Answer(1600);
+  EXPECT_EQ(answer.kind, lf::Kind::Join);
+  EXPECT_EQ(answer.ageMs, 100U);
+  EXPECT_TRUE(answer.outstanding);
+}
+
+TEST(LobbyFrameRequests, AClockThatGoesBackwardsGivesAZeroAge) {
+  lf::RequestTracker tracker;
+  tracker.Sent(lf::Kind::Find, 2000);
+  const lf::RequestContext answer = tracker.Answer(1000);
+  EXPECT_TRUE(answer.sent);
+  EXPECT_EQ(answer.ageMs, 0U);
+}
+
+TEST(LobbyFrameRequests, ResetForgetsTheLastRequest) {
+  lf::RequestTracker tracker;
+  tracker.Sent(lf::Kind::Find, 1000);
+  tracker.Reset();
+  EXPECT_FALSE(tracker.Answer(1100).sent);
+}
+
+TEST(LobbyFrameText, PartyFieldsOutsideAnyPartyAreNoneZeroAndNotLeader) {
+  EXPECT_EQ(lf::FormatPartyFields(0, 0, 0, 100), "party_id=none party_size=0 party_leader=no");
+}
+
+TEST(LobbyFrameText, PartyFieldsOfAPartyTheLocalAccountLeads) {
+  EXPECT_EQ(lf::FormatPartyFields(100, 3, 100, 100), "party_id=100 party_size=3 party_leader=yes");
+}
+
+TEST(LobbyFrameText, PartyFieldsOfAPartyLedByAnotherAccountAreNotLeader) {
+  EXPECT_EQ(lf::FormatPartyFields(7, 2, 77, 100), "party_id=7 party_size=2 party_leader=no");
+}
+
+TEST(LobbyFrameText, TheLeaderIsUnknownUntilTheLocalAccountAndTheOwnerAreBothKnown) {
+  EXPECT_EQ(lf::FormatPartyFields(7, 1, 100, 0), "party_id=7 party_size=1 party_leader=unknown");
+  EXPECT_EQ(lf::FormatPartyFields(7, 1, 0, 100), "party_id=7 party_size=1 party_leader=unknown");
 }

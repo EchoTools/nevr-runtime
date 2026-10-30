@@ -37,6 +37,7 @@
 // collisions — both define NvrModuleInit/NvrModuleApiVersion/etc.
 namespace nevr_token_auth {
 std::string GetToken();  // token_auth.h: thread-safe; statically linked, so called directly
+bool SignInEndedWithoutToken();  // token_auth.h (#1446)
 }
 
 extern "C" {
@@ -407,6 +408,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       RegisterModuleProc("TokenAuth_GetToken", (void*)TokenAuth_GetToken);
       RegisterModuleProc("TokenAuth_GetDiscordId", (void*)TokenAuth_GetDiscordId);
       RegisterModuleProc("TokenAuth_GetUsername", (void*)TokenAuth_GetUsername);
+      // #1446: the bridge answers a login itself once the sign-in has ended without a token.
+      RegisterModuleProc("TokenAuth_SignInEndedWithoutToken",
+                         reinterpret_cast<void*>(&nevr_token_auth::SignInEndedWithoutToken));
     }
 
     // N92: ws_bridge is not a module. It is compiled into this DLL and started
@@ -685,6 +689,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // posted to the game service when network.invite_codes is on (the service below), and so is a create; the answer is
   // written into the menu by nevr_invite_apply::OnFrame (frame/tick.cpp). The hook forwards every submit unchanged.
   if (!g_isServer) {
+    // The observers install before the service starts, so the service's start line says whether they did: a refused observer
+    // keeps the service off (its own Warning carries the address and the bytes; patch/invite_service.h).
+    const bool choiceInstalled = nevr_invite_choice_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
+    const bool wizardInstalled = nevr_invite_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
     nevr_invite_service::Settings invite;
     invite.invite_codes = nevr_invite::ParseSwitch(NevrCfgGetFlat("nevr_invite_codes"));
     const char* httpUri = NevrCfgGetFlat("nevr_http_uri");
@@ -694,9 +702,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       Log(level == nevr_invite::LogLevel::Warning ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info, "%s", line.c_str());
     };
     invite.salt = std::to_string(GetTickCount64());
+    invite.hooks_refused = !(choiceInstalled && wizardInstalled);
     nevr_invite_service::Start(std::move(invite));
-    nevr_invite_choice_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
-    nevr_invite_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
   } else {
     Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] service skipped reason=server_mode");
     Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] wizard observer skipped reason=server_mode");

@@ -1356,6 +1356,14 @@ if(BUILD_TESTING)
     target_link_libraries(test_invite_service PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json CURL::libcurl ws2_32)
     gtest_discover_tests(test_invite_service DISCOVERY_MODE PRE_TEST)
 
+    # #1415, docs/adr/0017: the per-frame applier (patch/invite_answer_apply.cpp) against the real invite service; the writer,
+    # the join and the log are stubs (tests/invite_apply_stubs.cpp).
+    add_executable(test_invite_answer_apply tests/test_invite_answer_apply.cpp tests/invite_apply_stubs.cpp patch/invite_answer_apply.cpp patch/invite_service.cpp patch/invite_transport_curl.cpp)
+    set_source_files_properties(tests/test_invite_answer_apply.cpp tests/invite_apply_stubs.cpp patch/invite_answer_apply.cpp patch/invite_service.cpp patch/invite_transport_curl.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_invite_answer_apply PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_invite_answer_apply PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json CURL::libcurl ws2_32)
+    gtest_discover_tests(test_invite_answer_apply DISCOVERY_MODE PRE_TEST)
+
     # #906, docs/adr/0017: what the wizard's cards chose (patch/invite_choices.h): header only, pure.
     add_executable(test_invite_choices tests/test_invite_choices.cpp)
     set_source_files_properties(tests/test_invite_choices.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)

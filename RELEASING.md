@@ -50,10 +50,16 @@ fetches the files back only after it has put them there.
 A release is a train, not an event. The train (`release-train.yml`) runs every three hours and cuts a pre-release when `main` has a
 commit that `tools/next_release_version.py` counts (feat, fix, perf or a breaking change) since the newest tag.
 
-The guard (`release-train-guard.yml`, `tools/release_train_guard.py`) runs hourly and covers a dropped scheduled train run.
-When `main` is releasable and no train run was created in the last 3 h 15 min, it dispatches the train and logs the decision
-to the job log and the step summary. It does nothing while a train run is queued, in progress, waiting or pending, when `RELEASE_TRAIN` is not
-`true`, or when nothing on `main` is releasable.
+The guard covers a dropped scheduled train run. It is a systemd user timer on the publisher's machine
+(`tools/systemd/nevr-train-guard.timer`, hourly at :07), which runs `tools/release_train_guard.py` from the Quest timer's dedicated
+checkout with the publisher's `gh-spritz` (`--gh`, else `GH_BIN`). It runs only while that machine is on: a machine that is off delays
+the guard, and the timer's `Persistent=true` catches up when the machine comes back. When `main` is releasable and no train run was
+created in the last 3 h 15 min, it dispatches the train. It does nothing while a train run is queued, in progress, waiting or pending,
+when `RELEASE_TRAIN` is not `true`, or when nothing on `main` is releasable. Each decision is one line in the journal
+(`journalctl --user -u nevr-train-guard.service`) and in `~/.local/state/nevr-runtime/release-train-guard.jsonl`; a run whose log cannot
+be written fails before it decides anything. A failed run couriers the release lead (`nevr-train-guard-failed.service`); it never bonks.
+It is not a GitHub schedule: GitHub drops or delays scheduled runs, and a job's token cannot read repository variables (`gh variable
+list` answers HTTP 403 to it), so the job could not read `RELEASE_TRAIN`. `just install-train-guard-timer` installs the timer.
 
 1. **Switch.** The train does nothing until the repository variable `RELEASE_TRAIN` is `true`. Merging the workflow cuts
    nothing.
@@ -71,14 +77,11 @@ These run by hand once per release, before the train's first step, from a clone 
 
 1. `git fetch origin` and `just release-preflight` pass: this clone is exactly `origin/main`, no local-only tag, nothing
    unpushed, no uncommitted change.
-2. Every PR merged since the last release passed its own checks before it merged. The full suite is not run again: the
-   tag's build skips it (#1008).
+2. Every PR merged since the last release was tested by its author before it was marked ready. The full suite is not run
+   here: the tag's build skips it (#1008), and the full suite and the PC login test run on main after the release cut
+   (AGENTS.md, "Verification before merge").
 3. `just package-dev` reads to the end. It fails on a Windows or Quest build that does not package. It needs the Quest
    signing keystore in `pass`, the store APK and the NDK, as its recipe says.
-4. The PC login test passes with this tip's `BugSplat64.dll` and `nevr-runtime.dll` on a throwaway copy of the install,
-   against production (`AGENTS.md`, "Client login test mechanics"): the run's log shows the four keys on the
-   `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in`.
-
 ## Cut the draft by hand
 
 Only when the train is off or its run is red. A draft fires no workflow, so the build is started by hand on the tag ref.
@@ -109,7 +112,7 @@ second dispatch never overwrites files.
    the step fails red before any dispatch.
 6. **Check the signed draft**: `tools/release_check_draft.sh --signed vX.Y.Z` runs "Check the signed draft" below.
 7. **Body**: `tools/package_release.py notes --base <previous tag> --rev vX.Y.Z` renders the body from the signed files. Its
-   player line is read from the feat commits since the base tag (`tools/release_audience_section.py`).
+   player line is `release-headline.txt` when it changed since the base tag, else "Fixes and internal changes.".
 8. **Publish**: `gh release edit vX.Y.Z --draft=false`, last. The `published` event does not rebuild: `build.yml`'s guard
    sees the two names and skips.
 
@@ -187,19 +190,16 @@ gh release view vX.Y.Z --json body --jq .body
 `notes` refuses unless `$S` holds exactly the two assets. It takes the version and the commit from the `BugSplat64.dll`
 and `nevr-runtime.dll` inside the zip (they must agree), so the body cannot describe another build.
 
-The player line is built only from the feat commits between `--base` and `--rev` whose audience is players: a commit's
-scope decides the audience (`arena`, `server` and `ws-bridge` are server hosts; `plugins` is plugin developers; the rest is
-players). A fix, perf or other type never contributes. It is the first two player feat texts joined by "; ", then "and N more"
-for the rest of them, with trailing issue and PR references removed, the first letter capitalised and a full stop at the end. A commit's text is its subject
-unless its message has a line `Release-note: <text>`, which is used in its place: write one when the subject misstates
-what a player sees. With no player feat the line reads "Fixes and internal changes.". Read the line against the pull
-request bodies before publishing. The body of a published release stays editable ("Immutable releases"); the assets do not.
+The player line is the author's `release-headline.txt`, or the fixed "Fixes and internal changes." The commits never write
+it: a line guessed from `feat` subjects read as a player-facing change twice when the change was behind a setting that is off
+or internal (#1444). Read the line against the pull request bodies before publishing. The body of a published release stays
+editable ("Immutable releases"); the assets do not.
 
-**Headline override.** When a change is worth a sentence to players and the generated line would not read well, its author
-writes `release-headline.txt` at the repository root in the same PR: one line, 1 to 200 characters, a full stop added if it
-has none (or `!` or `?`). `notes` uses it as the player line only when the file exists at `--rev` and differs from its content
-at `--base`, so a headline left unchanged since the base tag is stale and the generated line is used. A file that is empty or
-has a line over 200 characters fails `notes` and names the file; it never falls back silently.
+**Headline file.** A pull request that changes what players see updates `release-headline.txt` at the repository root in the
+same PR with one plain sentence a player would understand, written by the PR's author: one line, 1 to 200 characters, a full
+stop added if it has none (or `!` or `?`). `notes` uses it as the player line only when the file exists at `--rev` and differs
+from its content at `--base`, so a headline left unchanged since the base tag is stale and the fixed sentence is used. A file
+that is empty or has a line over 200 characters fails `notes` and names the file; it never falls back silently.
 
 ## Publish
 

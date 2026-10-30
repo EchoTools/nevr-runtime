@@ -13,6 +13,9 @@ namespace nevr_quest::integration {
 // Defined in entry.cpp.
 bool RegisterClockCounters() noexcept;  // 2 counters
 bool InstallClockHook() noexcept;       // false when GotHook refused the slot (logged by GotHook)
+// The #966 S7 frame dispatcher (quest/invite/frame_dispatch.h): the Update slot (login_prompt::InstallNetGameUpdate), taken on
+// every launch whatever the login prompt does. Logs the one install line. True when the slot holds its thunk.
+bool InstallFrameDispatchHook() noexcept;
 // The #239 login-prompt hook (sentinel/login_prompt_hook.h): its counters and its install, through this
 // seam because login_prompt_hook.h includes callback_thunk.h, which only -fno-exceptions units may.
 bool RegisterLoginPromptCounters() noexcept;  // 16 counters, and the title hook's 5 (#1137)
@@ -74,6 +77,10 @@ bool ArmClockLevelsHook(bool countersRegistered, bool overrideOn) noexcept;
 // The #966 main-menu cards (sentinel/menu_cards_hook.h), through this seam for the same reason: it includes
 // callback_thunk.h. No counters. True when the callback slot holds the thunk.
 bool InstallMenuCardsHook() noexcept;
+
+// The #966 CREATE GAME / JOIN VIA CODE observer on libr15's MetricLog (invite/wizard_metric_hook.h, ADR 0017 slice S2), through
+// this seam for the same reason. No counters. True when the observer's handler is in the game's call.
+bool InstallWizardMetricHook() noexcept;
 
 // The #1220 rad provider in pnsovr's place (sentinel/pns_provider_hook.h), through this seam for the same reason: it
 // includes callback_thunk.h. No counters. A development build only (`PnsProviderEnabled` is nevr_build::kIsDev, defined in

@@ -3575,6 +3575,11 @@ class GameSocket {
     std::unique_lock<std::mutex> lock(mutex_);
     return changed_.wait_for(lock, kRoleWait, [this] { return closed_; });
   }
+  // Whether the bridge has closed the socket now; it does not wait.
+  bool Closed() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return closed_;
+  }
   bool WaitForFrames(int count) {
     std::unique_lock<std::mutex> lock(mutex_);
     return changed_.wait_for(lock, kRoleWait, [&] { return frames_ >= count; });
@@ -5044,8 +5049,37 @@ std::string FailurePayload(uint32_t code) {
   return out;
 }
 
+// A failure payload whose message field holds `message` at its start, cut to the field's 64 bytes, NUL-filled after it.
+std::string FailureWithMessage(uint32_t code, const std::string& message) {
+  std::string out;
+  PutLe(out, kMode, 8);
+  out += Guid(0xb0);                                // group
+  PutLe(out, code, 4);
+  PutLe(out, 0, 4);
+  std::string field = message.substr(0, 64);
+  field.resize(64, '\0');
+  out += field;                                     // message(64)
+  out.append(8, '\0');                              // expiry(8)
+  return out;
+}
+
 uint64_t g_fakeNowMs = 0;
 uint64_t FakeNowMs() { return g_fakeNowMs; }
+
+// The party a session record names (TestHook_SetLobbyPartySource). ClientRun installs a view with no party; a test
+// names the party it reads by setting g_fakePartyView, so no test reads the process-wide party state it did not set.
+nevr_social_party::View g_fakePartyView;
+nevr_social_party::View FakePartyView() { return g_fakePartyView; }
+
+// A view of a party `partyId` of `size` members, led by `ownerId`, with the local account `selfId` (0: not known).
+nevr_social_party::View PartyView(uint64_t partyId, size_t size, uint64_t ownerId, uint64_t selfId) {
+  nevr_social_party::View view;
+  view.partyId = partyId;
+  view.ownerId = ownerId;
+  view.selfId = selfId;
+  view.members.assign(size, nevr_social_party::Member{});
+  return view;
+}
 
 size_t CountLogLines(const std::string& needle) {
   std::lock_guard<std::mutex> lock(g_testLogMutex);
@@ -5053,18 +5087,22 @@ size_t CountLogLines(const std::string& needle) {
                                            [&needle](const std::string& line) { return line.find(needle) != std::string::npos; }));
 }
 
-// A client run: g_isServer false, a fresh lobby-record limiter and a clock the test moves by hand.
+// A client run: g_isServer false, a fresh lobby-record limiter and request tracker, a clock the test moves by hand,
+// and a party with no members (g_fakePartyView) until a test names one.
 class ClientRun {
  public:
   ClientRun() : wasServer_(g_isServer) {
     g_isServer = FALSE;
     g_fakeNowMs = 1000;
+    g_fakePartyView = nevr_social_party::View{};
     TestHook_ResetLobbyFrameLimiter();
     TestHook_SetLobbyFrameClock(&FakeNowMs);
+    TestHook_SetLobbyPartySource(&FakePartyView);
     ClearTestLogs();
   }
   ~ClientRun() {
     g_isServer = wasServer_;
+    TestHook_SetLobbyPartySource(nullptr);
     TestHook_SetLobbyFrameClock(nullptr);
     TestHook_ResetLobbyFrameLimiter();
   }
@@ -5203,6 +5241,27 @@ TEST(WsBridgeLobbyFrameLog, EveryMessageOfABatchedFrameGetsItsOwnRecord) {
   EXPECT_TRUE(TestLogContains("lobby session success conn=3 lobby="));
 }
 
+// The failure record gives the count of its message's bytes and never the text (logging.md Rule 4 and Rule 16).
+TEST(WsBridgeLobbyFrameLog, AFailureRecordCountsItsMessageAndNeverWritesItsText) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("server->game", 3,
+                               BuildMarkedMessage(kFailureSym, FailureWithMessage(8, "sentinel-remote-message")));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "lobby session failure conn=3 code=8 reason=lobby_full "
+                                     "group=44332211-6655-8877-99AA-BBCCDDEEFFB0 message_bytes=23"));
+  EXPECT_FALSE(TestLogContains("sentinel-remote-message"));
+  ClearTestLogs();
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kFailureSym, FailureWithMessage(8, "")));
+  EXPECT_TRUE(TestLogContains("lobby session failure conn=3 code=8 reason=lobby_full "
+                              "group=44332211-6655-8877-99AA-BBCCDDEEFFB0 message_bytes=0"));
+  ClearTestLogs();
+  TestHook_ObserveSocialFrames("server->game", 3,
+                               BuildMarkedMessage(kFailureSym, FailureWithMessage(8, std::string(80, 'y'))));
+  EXPECT_TRUE(TestLogContains("group=44332211-6655-8877-99AA-BBCCDDEEFFB0 message_bytes=64"));
+  EXPECT_FALSE(TestLogContains("yyyy"));
+}
+
 TEST(WsBridgeLobbyFrameLog, NoRecordCarriesSettingsTextOrTheServersMessage) {
   using namespace lobby_frame_test;
   ClientRun run;
@@ -5250,6 +5309,132 @@ TEST(WsBridgeLobbyFrameLog, AServerGetsNoLobbyRecordFromTheSocialObserver) {
   g_isServer = wasServer;
   std::lock_guard<std::mutex> lock(g_testLogMutex);
   EXPECT_TRUE(g_testLogMessages.empty()) << "first line: " << (g_testLogMessages.empty() ? "" : g_testLogMessages[0]);
+}
+
+// ---- #1413: the party and the request a session record names ----
+//
+// A session success or failure says which party the client is in (party_id, party_size, party_leader) and which
+// find or join the game sent last on this client (last_request, its age at the answer, request_outstanding: yes only
+// for the first answer to that request). Every answer is taken by the request tracker, also one whose record the
+// limiter suppresses, so the next record's "outstanding" is the same as it would be with no suppression.
+TEST(WsBridgeLobbyFrameLog, ASessionSuccessNamesThePartyAndTheFindItAnswers) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  g_fakePartyView = PartyView(7, 3, 100, 100);
+  g_fakeNowMs = 1000;
+  TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kFindSym, FindPayload({1001}, Guid(0xd0))));
+  g_fakeNowMs = 1250;
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "[NEVR.WS] lobby session success conn=3 lobby=44332211-6655-8877-99AA-BBCCDDEEFFC0 "
+      "group=44332211-6655-8877-99AA-BBCCDDEEFFB0 party_id=7 party_size=3 party_leader=yes "
+      "last_request=find last_request_age_ms=250 request_outstanding=yes"));
+}
+
+TEST(WsBridgeLobbyFrameLog, ASessionFailureOutsideAPartyWithNoRequestSaysSo) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kFailureSym, FailureWithMessage(8, "")));
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "[NEVR.WS] lobby session failure conn=3 code=8 reason=lobby_full group=44332211-6655-8877-99AA-BBCCDDEEFFB0 "
+      "message_bytes=0 party_id=none party_size=0 party_leader=no last_request=none last_request_age_ms=none "
+      "request_outstanding=no"));
+}
+
+TEST(WsBridgeLobbyFrameLog, ThePartyLeaderIsUnknownWhileTheLocalAccountIsNotKnown) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  g_fakePartyView = PartyView(7, 1, 100, 0);
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info, "party_id=7 party_size=1 party_leader=unknown "));
+}
+
+TEST(WsBridgeLobbyFrameLog, AMemberOfAPartyLedByAnotherAccountIsNotItsLeader) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  g_fakePartyView = PartyView(7, 2, 77, 100);
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kFailureSym, FailureWithMessage(8, "")));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "party_id=7 party_size=2 party_leader=no last_request=none "));
+}
+
+TEST(WsBridgeLobbyFrameLog, OnlyTheFirstAnswerToARequestIsOutstanding) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  g_fakePartyView = PartyView(7, 2, 77, 100);
+  g_fakeNowMs = 1000;
+  TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1001})));
+  g_fakeNowMs = 1100;
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "last_request=join last_request_age_ms=100 request_outstanding=yes"));
+  ClearTestLogs();
+  g_fakeNowMs = 1200;
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kFailureSym, FailureWithMessage(8, "")));
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "lobby session failure conn=3 code=8 reason=lobby_full group=44332211-6655-8877-99AA-BBCCDDEEFFB0 "
+      "message_bytes=0 party_id=7 party_size=2 party_leader=no last_request=join last_request_age_ms=200 "
+      "request_outstanding=no"));
+}
+
+// The success window holds ten records; the eleventh answer is suppressed, and it still takes the outstanding request.
+// The next written record shows the request as already answered, and the window's count is written before it.
+TEST(WsBridgeLobbyFrameLog, ASuppressedAnswerStillTakesTheRequestItAnswers) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  g_fakePartyView = PartyView(7, 2, 77, 100);
+  g_fakeNowMs = 1000;
+  for (int i = 0; i < 10; ++i) {
+    TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  }
+  EXPECT_EQ(CountLogLines("lobby session success"), 10U);
+  g_fakeNowMs = 1100;
+  TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1001})));
+  g_fakeNowMs = 1200;
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_EQ(CountLogLines("lobby session success"), 10U) << "the eleventh answer is suppressed";
+  g_fakeNowMs = 11200;
+  ClearTestLogs();
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "[NEVR.WS] lobby frame records suppressed kind=success count=1 window_ms=10000"));
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "lobby session success conn=3 lobby=44332211-6655-8877-99AA-BBCCDDEEFFC0 "
+      "group=44332211-6655-8877-99AA-BBCCDDEEFFB0 party_id=7 party_size=2 party_leader=no "
+      "last_request=join last_request_age_ms=10100 request_outstanding=no"));
+}
+
+TEST(WsBridgeLobbyFrameLog, ARequestFromAnEarlierRunIsNotNamedInANewRun) {
+  using namespace lobby_frame_test;
+  {
+    ClientRun earlier;
+    TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kFindSym, FindPayload({1001}, Guid(0xd0))));
+  }
+  ClientRun run;
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "last_request=none last_request_age_ms=none request_outstanding=no"));
+}
+
+// The party read when no test has set a view is the process-wide party state (TestHook_SetLobbyPartySource(nullptr)).
+TEST(WsBridgeLobbyFrameLog, TheLocalPartyStateIsReadWhenTheAnswerIsWritten) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_SetLobbyPartySource(nullptr);
+  nevr_social_party::State& state = nevr_social_party::Global();
+  state.SetSelf(4001);
+  std::string created;
+  PutLe(created, 42, 8);    // party id
+  PutLe(created, 4001, 8);  // owner: the local account
+  EXPECT_TRUE(state.Feed(nevr_social_party::ReplySymbol("PartyCreateSuccess"),
+                         reinterpret_cast<const uint8_t*>(created.data()), created.size(), 1000, nullptr));
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "party_id=42 party_size=1 party_leader=yes last_request=none"));
 }
 
 // The game->server diagnostic walk decodes payloads (hex dump, invite targets). A message whose declared
@@ -6885,4 +7070,68 @@ TEST_F(RefusedLoginClientTest, ALoginAfterARefusedOneIsStillALoginNotAShareOfNot
 TEST_F(RefusedLoginRouterClientTest, AClientSaysARefusalOnceAndDoesNotGoBackForTheSameSignIn) {
   StartRefusing(401);
   ExpectClientSaysRefusalOnce(refusing_, port_);
+}
+
+// #1446: once a client's sign-in has ended without a token, nothing the service says can change it, so the bridge
+// answers the game's login itself: the game gets a LoginFailure, the service is not asked and the socket stays open.
+namespace {
+bool g_testSignInEndedWithoutToken = false;
+bool TestSignInEndedWithoutToken() { return g_testSignInEndedWithoutToken; }
+
+// The sign-in state for one test. Cleared when the test ends, so no later test sees an ended sign-in.
+class SignInEndedForTest {
+ public:
+  SignInEndedForTest() {
+    RegisterModuleProc("TokenAuth_SignInEndedWithoutToken", reinterpret_cast<void*>(&TestSignInEndedWithoutToken));
+    g_testSignInEndedWithoutToken = true;
+  }
+  ~SignInEndedForTest() { g_testSignInEndedWithoutToken = false; }
+  SignInEndedForTest(const SignInEndedForTest&) = delete;
+  SignInEndedForTest& operator=(const SignInEndedForTest&) = delete;
+};
+}  // namespace
+
+TEST_F(RefusedLoginClientTest, AClientWhoseSignInEndedWithoutATokenGetsALoginFailureAndTheServiceIsNotAsked) {
+  StartRefusing(401);
+  SignInEndedForTest ended;
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port_, "/login"));
+  ASSERT_TRUE(login.WaitForFrames(1)) << "the game got no answer to its login";
+  const std::optional<nevr_evr_codec::LoginFailure> failure =
+      nevr_evr_codec::ParseLoginFailure(login.FrameWith(nevr_evr_codec::kSymLoginFailure));
+  ASSERT_TRUE(failure.has_value()) << "the answer is not a LoginFailure";
+  EXPECT_EQ(failure->statusCode, 7u);
+  EXPECT_EQ(refusing_.Requests(), 0) << "the service was asked about a sign-in that had ended";
+  std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+  EXPECT_FALSE(login.Closed()) << "the bridge closed the login socket, and the game's reconnects are the loop";
+}
+
+TEST_F(RefusedLoginClientTest, ALaterLoginAfterAnEndedSignInIsAnsweredTheSameWayAndSaidOnce) {
+  StartRefusing(401);
+  SignInEndedForTest ended;
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    GameSocket login;
+    ASSERT_TRUE(login.Connect(port_, "/login")) << "attempt " << attempt;
+    ASSERT_TRUE(login.WaitForFrames(1)) << "attempt " << attempt;
+  }
+  EXPECT_EQ(refusing_.Requests(), 0);
+  EXPECT_EQ(LogLinesContaining("login answered locally").size(), 1u) << "the decision was said more than once";
+  EXPECT_EQ(LogLinesContaining("login attempts answered locally").size(), 0u)
+      << "a later attempt inside the window is counted, not written";
+  EXPECT_LE(LogLinesContaining("No discord ID").size(), 1u) << "the discord id line repeats on every attempt";
+  const std::vector<std::string> admitted = LogLinesContaining("game socket admitted");
+  ASSERT_EQ(admitted.size(), 3u);
+  for (const std::string& line : admitted) {
+    EXPECT_NE(line.find("role=login"), std::string::npos) << line;
+    EXPECT_EQ(line.find("login-claimed"), std::string::npos) << line;
+  }
+}
+
+TEST_F(RefusedLoginClientTest, AConfigSocketIsNotAnsweredHereAndStillGoesToTheService) {
+  StartRefusing(401);
+  SignInEndedForTest ended;
+  GameSocket config;
+  ASSERT_TRUE(config.Connect(port_, "/config"));
+  ASSERT_TRUE(config.WaitForClose()) << "the refused config socket was left open";
+  EXPECT_EQ(refusing_.Requests(), 1) << "the config socket was not sent to the service";
 }

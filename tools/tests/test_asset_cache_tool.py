@@ -90,6 +90,14 @@ class AssetCacheToolTest(unittest.TestCase):
         self.assertEqual((self.cache / "index.json").read_text(), "{ not json")
         self.assertEqual(list(self.cache.glob("*.blob")), [], "no blob is written when the index cannot be updated")
 
+    def test_put_takes_a_payload_the_size_of_the_largest_poster(self):
+        # #1421: a lobby poster's payload (buffer 1) is 78,294,084 bytes; synthetic bytes of that length.
+        big = self.root / "poster.dds"
+        big.write_bytes(bytes(78294084))
+        result = self.put(type="0xbeac1969cb7b8861", name="0xa240a2bc051b2f23", file=big)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(next(self.cache.glob("*.blob")).stat().st_size, 78294084)
+
     def test_bad_arguments_fail_loudly(self):
         for bad in ({"type": "beac"}, {"name": "0x"}, {"name": "0x0"}, {"name": "0x" + "f" * 17}):
             result = self.put(**bad)
@@ -114,8 +122,8 @@ class AgreesWithTheCppCache(unittest.TestCase):
         self.assertIn('"0x%016llx"', cpp)
         self.assertIn('f"0x{type_hash:016x}"', tool)
         cap = re.search(r"kMaxBlobBytes = (\d+)ull \* 1024 \* 1024", header)
-        self.assertEqual(int(cap.group(1)) * 1024 * 1024, 64 * 1024 * 1024)
-        self.assertIn("MAX_BLOB_BYTES = 64 * 1024 * 1024", tool)
+        self.assertEqual(int(cap.group(1)) * 1024 * 1024, 128 * 1024 * 1024)
+        self.assertIn("MAX_BLOB_BYTES = 128 * 1024 * 1024", tool)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 """The release train guard (#1409): the decision rules, the window boundary, the CLI end to end against fake gh and fake
-next_release_version.py on PATH, and the shape of .github/workflows/release-train-guard.yml. No test reaches GitHub."""
+next_release_version.py on PATH, the --gh and --log-file options, and the systemd user units that run the guard
+(tools/systemd/nevr-train-guard*.{service,timer}). No test reaches GitHub: every gh is a fake."""
 
 import datetime as dt
 import json
@@ -17,8 +18,13 @@ sys.path.insert(0, str(ROOT / "tools"))
 import release_train_guard as guard  # noqa: E402
 
 GUARD = ROOT / "tools" / "release_train_guard.py"
-GUARD_WORKFLOW = ROOT / ".github" / "workflows" / "release-train-guard.yml"
-TRAIN = ROOT / ".github" / "workflows" / "release-train.yml"
+UNITS = ROOT / "tools" / "systemd"
+JUSTFILE = ROOT / "justfile"
+SERVICE = "nevr-train-guard.service"
+FAILED = "nevr-train-guard-failed.service"
+TIMER = "nevr-train-guard.timer"
+# Built from parts so that this file does not itself name the removed workflow when the grep test searches the tree.
+REMOVED_WORKFLOW = ".github/workflows/release-train" + "-guard.yml"
 
 NOW = dt.datetime(2026, 10, 29, 12, 0, tzinfo=dt.timezone.utc)
 
@@ -122,6 +128,22 @@ class Decide(unittest.TestCase):
         )
 
 
+class Defaults(unittest.TestCase):
+    def test_the_gh_binary_is_GH_BIN_else_the_publisher_gh(self) -> None:
+        self.assertEqual(guard.gh_binary({}), "gh-spritz")
+        self.assertEqual(guard.gh_binary({"GH_BIN": "/opt/gh"}), "/opt/gh")
+
+    def test_the_log_is_under_xdg_state_home_else_under_local_state(self) -> None:
+        self.assertEqual(
+            guard.default_log_path({"XDG_STATE_HOME": "/xdg/state"}),
+            pathlib.Path("/xdg/state/nevr-runtime/release-train-guard.jsonl"),
+        )
+        self.assertEqual(
+            guard.default_log_path({}),
+            pathlib.Path.home() / ".local" / "state" / "nevr-runtime" / "release-train-guard.jsonl",
+        )
+
+
 def fake_tools(tmp: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
     """A bin dir with a fake `gh`, and a fake next_release_version.py beside it. The fake gh answers `run list`,
     `variable list` and `workflow run` from environment variables and records each call in FAKE_GH_LOG."""
@@ -163,6 +185,17 @@ def fake_tools(tmp: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
     return bindir, version
 
 
+def decoy_gh(tmp: pathlib.Path) -> pathlib.Path:
+    """A `gh` that fails loudly if anything runs it: placed first on PATH, it proves the guard used the --gh binary."""
+    decoy = tmp / "decoy"
+    decoy.mkdir()
+    gh = decoy / "gh"
+    gh.write_text(f"#!{sys.executable} -I\nimport sys\nsys.stderr.write('decoy gh used\\n')\nsys.exit(77)\n",
+                  encoding="utf-8")
+    gh.chmod(0o755)
+    return decoy
+
+
 class Cli(unittest.TestCase):
     """main() run as the workflow runs it, with the fakes first on PATH and the tool path passed explicitly."""
 
@@ -172,6 +205,7 @@ class Cli(unittest.TestCase):
         self.gh_log = self.tmp / "gh.log"
         self.summary = self.tmp / "summary.md"
         self.summary.write_text("", encoding="utf-8")
+        self.log_file = self.tmp / "state" / "release-train-guard.jsonl"
 
     def tearDown(self) -> None:
         for path in sorted(self.tmp.rglob("*"), reverse=True):
@@ -180,10 +214,14 @@ class Cli(unittest.TestCase):
 
     def invoke(self, runs: list[dict], variable: str = "true", version_rc: int = 0,
                dispatch_rc: int = 0, summary: bool = True, extra: list[str] | None = None,
-               run_list_fail: bool = False) -> subprocess.CompletedProcess:
-        env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_STEP_SUMMARY",)}
+               run_list_fail: bool = False, gh_flag: bool = True, env_extra: dict | None = None,
+               path_front: pathlib.Path | None = None, log_file: pathlib.Path | None = None,
+               ) -> subprocess.CompletedProcess:
+        # GH_BIN is removed from the inherited environment: a developer's value must not reach a test.
+        env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_STEP_SUMMARY", "GH_BIN")}
+        front = [str(path_front)] if path_front else []
         env.update({
-            "PATH": f"{self.bindir}{os.pathsep}{os.environ['PATH']}",
+            "PATH": os.pathsep.join([*front, str(self.bindir), os.environ["PATH"]]),
             "FAKE_GH_LOG": str(self.gh_log),
             "FAKE_RUNS": json.dumps([{"databaseId": r["id"], "createdAt": r["createdAt"], "status": r["status"], "event": r["event"]} for r in runs]),
             "FAKE_VARS": json.dumps([{"name": "RELEASE_TRAIN", "value": variable}]),
@@ -191,17 +229,24 @@ class Cli(unittest.TestCase):
             "FAKE_DISPATCH_RC": str(dispatch_rc),
             "GH_TOKEN": "fake-token-not-used",
         })
+        env.update(env_extra or {})
         if run_list_fail:
             env["FAKE_RUN_LIST_FAIL"] = "1"
         if summary:
             env["GITHUB_STEP_SUMMARY"] = str(self.summary)
-        args = [sys.executable, str(GUARD), "--repo", "owner/name", "--version-tool", str(self.version_tool)]
+        args = [sys.executable, str(GUARD), "--repo", "owner/name", "--version-tool", str(self.version_tool),
+                "--log-file", str(log_file or self.log_file)]
+        if gh_flag:
+            args += ["--gh", str(self.bindir / "gh")]
         return subprocess.run(args + (extra or []), capture_output=True, text=True, env=env)
 
     def gh_calls(self) -> list[list[str]]:
         if not self.gh_log.exists():
             return []
         return [json.loads(line) for line in self.gh_log.read_text(encoding="utf-8").splitlines()]
+
+    def logged(self) -> list[dict]:
+        return [json.loads(line) for line in self.log_file.read_text(encoding="utf-8").splitlines()]
 
     def test_dispatch_prints_one_decision_line_then_dispatched_and_calls_gh(self) -> None:
         result = self.invoke([run(7, 60 * 24 * 30)])
@@ -218,6 +263,49 @@ class Cli(unittest.TestCase):
         self.assertIn(
             ["workflow", "run", "release-train.yml", "--repo", "owner/name", "--ref", "main"], self.gh_calls()
         )
+
+    def test_the_log_file_receives_the_decision_line_and_the_dispatched_line(self) -> None:
+        result = self.invoke([run(7, 60 * 24 * 30)])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.logged(), [json.loads(line) for line in result.stdout.splitlines()])
+        self.assertEqual([record["event"] for record in self.logged()], ["decision", "dispatched"])
+
+    def test_the_log_file_and_its_parent_are_created(self) -> None:
+        self.assertFalse(self.log_file.parent.exists())
+        result = self.invoke([{"id": 21, "createdAt": real_iso(10), "status": "completed", "event": "schedule"}])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([record["reason"] for record in self.logged()], ["recent_run"])
+
+    def test_a_failed_run_list_is_recorded_in_the_log_as_a_fail_line(self) -> None:
+        result = self.invoke([], run_list_fail=True)
+        self.assertNotEqual(result.returncode, 0)
+        fails = [record for record in self.logged() if record["event"] == "fail"]
+        self.assertEqual(len(fails), 1, self.logged())
+        self.assertIn("gh run list", fails[0]["reason"])
+
+    def test_an_unwritable_log_fails_loudly_and_names_the_path_before_any_gh_call(self) -> None:
+        blocker = self.tmp / "not-a-dir"
+        blocker.write_text("a file, so the log cannot have a parent directory here\n", encoding="utf-8")
+        unwritable = blocker / "release-train-guard.jsonl"
+        result = self.invoke([], log_file=unwritable)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(str(unwritable), result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(self.gh_calls(), [], "a run that cannot record its decision must not call gh")
+
+    def test_the_gh_flag_is_the_gh_every_call_uses(self) -> None:
+        result = self.invoke([run(7, 60 * 24 * 30)], path_front=decoy_gh(self.tmp))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("decoy gh used", result.stderr)
+        self.assertIn(["workflow", "run", "release-train.yml", "--repo", "owner/name", "--ref", "main"],
+                      self.gh_calls())
+
+    def test_GH_BIN_is_used_when_the_gh_flag_is_absent(self) -> None:
+        result = self.invoke([run(7, 60 * 24 * 30)], gh_flag=False, path_front=decoy_gh(self.tmp),
+                             env_extra={"GH_BIN": str(self.bindir / "gh")})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(["workflow", "run", "release-train.yml", "--repo", "owner/name", "--ref", "main"],
+                      self.gh_calls())
 
     def test_the_decision_is_appended_to_the_step_summary(self) -> None:
         result = self.invoke([run(7, 60 * 24 * 30)])
@@ -292,41 +380,79 @@ class Cli(unittest.TestCase):
         self.assertNotIn('"event": "dispatched"', result.stdout)
 
 
-class GuardWorkflow(unittest.TestCase):
-    def setUp(self) -> None:
-        self.text = GUARD_WORKFLOW.read_text(encoding="utf-8")
+class Units(unittest.TestCase):
+    """The three user units that run the guard. They mirror tools/systemd/nevr-quest-release*: the same dedicated
+    checkout, the same PATH, and a failure couriers the release lead, never a bonk."""
 
-    def test_it_runs_hourly_and_by_hand(self) -> None:
-        self.assertIn('cron: "47 * * * *"', self.text)
-        self.assertEqual(self.text.count("- cron:"), 1)
-        self.assertIn("workflow_dispatch:", self.text)
-        self.assertIsNone(re.search(r"^\s*pull_request(_target)?:", self.text, re.M))
+    def unit(self, name: str) -> str:
+        return (UNITS / name).read_text(encoding="utf-8")
 
-    def test_the_token_may_dispatch_and_read_contents(self) -> None:
-        permissions = re.search(r"^permissions:\n((?:  .+\n)+)", self.text, re.M)
-        self.assertIsNotNone(permissions)
-        self.assertEqual(permissions.group(1), "  contents: read\n  actions: write\n")
+    def test_the_three_units_exist(self) -> None:
+        for name in (SERVICE, FAILED, TIMER):
+            with self.subTest(unit=name):
+                self.assertTrue((UNITS / name).is_file())
 
-    def test_the_job_runs_the_guard_with_the_token_and_the_repository(self) -> None:
-        self.assertIn("timeout-minutes: 10", self.text)
-        self.assertIn("python3 tools/release_train_guard.py", self.text)
-        self.assertIn("GH_TOKEN: ${{ github.token }}", self.text)
-        self.assertIn("GITHUB_REPOSITORY: ${{ github.repository }}", self.text)
+    def test_the_timer_runs_hourly_at_seven_past_and_catches_up(self) -> None:
+        text = self.unit(TIMER)
+        self.assertRegex(text, r"(?m)^OnCalendar=\*:07:00$")
+        self.assertRegex(text, r"(?m)^Persistent=true$")
+        self.assertRegex(text, r"(?m)^AccuracySec=1min$")
+        self.assertRegex(text, rf"(?m)^Unit={re.escape(SERVICE)}$")
+        self.assertRegex(text, r"(?m)^WantedBy=timers\.target$")
 
-    def test_the_checkout_is_the_pinned_one_the_train_uses(self) -> None:
-        train = TRAIN.read_text(encoding="utf-8")
-        checkout = re.search(r"^    - uses: (actions/checkout@\S+ # v\d+)$", train, re.M)
-        self.assertIsNotNone(checkout)
-        self.assertIn(f"    - uses: {checkout.group(1)}", self.text)
-        self.assertIn("ref: main", self.text)
-        self.assertIn("fetch-depth: 0", self.text)
+    def test_the_service_is_a_oneshot_with_a_failure_hook_and_a_timeout(self) -> None:
+        text = self.unit(SERVICE)
+        self.assertRegex(text, r"(?m)^Type=oneshot$")
+        self.assertRegex(text, rf"(?m)^OnFailure={re.escape(FAILED)}$")
+        self.assertRegex(text, r"(?m)^TimeoutStartSec=10min$")
+        self.assertRegex(text, r"(?m)^Environment=PATH=%h/\.local/bin:/usr/local/bin:/usr/bin$")
+        self.assertNotIn("GNUPGHOME", text)
 
-    def test_the_comment_says_why(self) -> None:
-        self.assertIn("drops or delays", self.text)
+    def test_the_service_fetches_then_switches_the_dedicated_checkout_to_origin_main(self) -> None:
+        text = self.unit(SERVICE)
+        checkout = "%h/src/nevr-runtime-work/release-timer/checkout"
+        self.assertRegex(text, rf"(?m)^WorkingDirectory={re.escape(checkout)}$")
+        self.assertRegex(text, rf"(?m)^ExecStartPre=/usr/bin/git -C {re.escape(checkout)} fetch --quiet --tags origin main$")
+        self.assertRegex(text, rf"(?m)^ExecStartPre=/usr/bin/git -C {re.escape(checkout)} switch --quiet --detach origin/main$")
 
-    def test_no_step_hides_a_failure(self) -> None:
-        self.assertNotIn("|| true", self.text)
-        self.assertNotIn("|| echo", self.text)
+    def test_the_service_runs_the_guard_from_the_checkout_against_the_repository(self) -> None:
+        text = self.unit(SERVICE)
+        self.assertRegex(
+            text,
+            r"(?m)^ExecStart=/usr/bin/python3 -I %h/src/nevr-runtime-work/release-timer/checkout/tools/"
+            r"release_train_guard\.py --repo EchoTools/nevr-runtime$",
+        )
+
+    def test_the_failed_unit_couriers_spritz_the_log_path_and_never_bonks(self) -> None:
+        text = self.unit(FAILED)
+        self.assertRegex(
+            text,
+            r"(?m)^ExecStart=%h/\.local/bin/courier send --to spritz --from release-train-guard "
+            r"--msg \"release train guard failed: see %h/\.local/state/nevr-runtime/release-train-guard\.jsonl\"$",
+        )
+        self.assertNotRegex(text.lower(), r"bonk")
+
+    def test_the_install_recipe_links_the_three_units_and_enables_the_timer(self) -> None:
+        justfile = JUSTFILE.read_text(encoding="utf-8")
+        match = re.search(r"(?m)^install-train-guard-timer:\n((?:[ \t]+.*\n|\n)*)", justfile)
+        self.assertIsNotNone(match, "no install-train-guard-timer recipe in the justfile")
+        recipe = match.group(1)
+        for name in (SERVICE, FAILED, TIMER):
+            with self.subTest(unit=name):
+                self.assertIn(name, recipe)
+        self.assertIn("systemctl --user link", recipe)
+        self.assertIn("systemctl --user daemon-reload", recipe)
+        self.assertIn(f"systemctl --user enable --now {TIMER}", recipe)
+        self.assertIn("tools/systemd/", recipe)
+
+    def test_the_workflow_file_the_guard_replaces_is_gone(self) -> None:
+        self.assertFalse((ROOT / REMOVED_WORKFLOW).exists())
+
+    def test_nothing_tracked_still_names_the_removed_workflow(self) -> None:
+        name = REMOVED_WORKFLOW.rsplit("/", 1)[1]
+        found = subprocess.run(["git", "-C", str(ROOT), "grep", "-n", "-F", name],
+                               capture_output=True, text=True)
+        self.assertEqual(found.returncode, 1, f"tracked files still name {name}:\n{found.stdout}{found.stderr}")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,8 @@
 #include "login_prompt_hook.h"
 
+#include <time.h>
+
 #include <atomic>
-#include <chrono>
 #include <climits>
 #include <cstddef>
 #include <cstdint>
@@ -11,6 +12,7 @@
 #include "hook_log.h"
 #include "hook_report.h"
 #include "quest/auth/prompt_board.h"
+#include "quest/invite/frame_dispatch.h"
 #include "quest/login/login_attempt_gate.h"
 #include "quest/game_login_failures.h"
 
@@ -27,6 +29,13 @@ using sentinel::pinned::CR15NetGameOpaque;
 sentinel::GotHook g_errorHook;
 sentinel::GotHook g_updateHook;
 sentinel::GotHook g_enableHook;
+
+// The Update handler runs the prompt's per-frame logic only while this is set: Install() sets it once the Update slot
+// holds its thunk, ArmForTest() sets it, ArmNetGameUpdateOnlyForTest() clears it. The dispatcher runs either way.
+std::atomic<bool> g_promptWanted{false};
+// InstallNetGameUpdate()'s one install and its status. Written and read on the startup thread only.
+bool g_netGameUpdateTried = false;
+sentinel::GotStatus g_netGameUpdateStatus = sentinel::GotStatus::kBadArgument;
 
 std::atomic<std::uint64_t> g_shown{0};
 std::atomic<std::uint64_t> g_refreshed{0};
@@ -68,9 +77,11 @@ std::int32_t g_seenState = 0;
 constexpr std::int64_t kResendSpacingNs = 50'000'000;
 std::atomic<bool> g_resendPending{false};
 std::atomic<std::int64_t> g_lastResendNs{0};
+// clock_gettime, not std::chrono::steady_clock: see frame_dispatch.cpp SteadyNowNs (the personality rule).
 std::int64_t SteadyNs() noexcept {
-  return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
-      .count();
+  timespec ts{};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<std::int64_t>(ts.tv_sec) * 1000000000 + static_cast<std::int64_t>(ts.tv_nsec);
 }
 using ClockFn = std::int64_t (*)() noexcept;
 std::atomic<ClockFn> g_clock{&SteadyNs};
@@ -587,7 +598,9 @@ void SendRetrySelect(CR15NetGameOpaque* self) noexcept {
        sentinel::pinned::kLoginPageExitKey, 1);
 }
 
-void HookedNetGameUpdate(UpdateThunk::Fn original, CR15NetGameOpaque* self, std::uint64_t arg) noexcept {
+// The prompt's own per-frame work on the game's NetGame::Update: the latch, the state line, the poison, the followed
+// instance's block and the restart after a sign-in. Runs only while g_promptWanted is set.
+void PromptFrame(CR15NetGameOpaque* self) noexcept {
   RecheckLatch(self);
   if (self != nullptr) LogStateChange(self);
   // A poisoned attempt ends when the game leaves "logging in" (its prerequisites failed): the next one is clean.
@@ -597,6 +610,14 @@ void HookedNetGameUpdate(UpdateThunk::Fn original, CR15NetGameOpaque* self, std:
     ResendErrorEvent(self);
     RestartLoginAfterSignIn(self);
   }
+}
+
+// The Update slot (#966 S7). Installed on every launch, so the frame dispatcher runs whether or not the prompt is on:
+// the prompt's work first (when wanted), then the dispatcher's posted and registered work, then the game's Update,
+// which always runs.
+void HookedNetGameUpdate(UpdateThunk::Fn original, CR15NetGameOpaque* self, std::uint64_t arg) noexcept {
+  if (g_promptWanted.load(std::memory_order_acquire)) PromptFrame(self);
+  nevr_quest::invite::frame::Tick();
   original(self, arg);
 }
 
@@ -803,12 +824,13 @@ const char* ResolveSendEvent() noexcept {
 
 bool Install() noexcept {
   ErrorThunk::Arm(kErrorTextHook);
-  UpdateThunk::Arm(kNetGameUpdateHook);
   EnablePageThunk::Arm(kEnablePageHook);
   const sentinel::GotStatus error =
       sentinel::InstallThunk<ErrorThunk>(g_errorHook, sentinel::pinned::LibR15SetDelimitedErrorMessage());
-  const sentinel::GotStatus update =
-      sentinel::InstallThunk<UpdateThunk>(g_updateHook, sentinel::pinned::LibR15NetGameUpdate());
+  // The Update slot is normally taken already (InstallNetGameUpdate, on every launch); this returns that result.
+  // The prompt's logic runs in the Update handler only when the handler holds its thunk.
+  const sentinel::GotStatus update = InstallNetGameUpdate();
+  g_promptWanted.store(update == sentinel::GotStatus::kOk, std::memory_order_release);
   const sentinel::GotStatus enable =
       sentinel::InstallThunk<EnablePageThunk>(g_enableHook, sentinel::pinned::LibR15EnablePageNodeEnter());
   const bool ok = error == sentinel::GotStatus::kOk && update == sentinel::GotStatus::kOk &&
@@ -838,10 +860,29 @@ bool InstallIfCounted(bool countersRegistered) noexcept {
   return Install();
 }
 
+sentinel::GotStatus InstallNetGameUpdate() noexcept {
+  if (g_netGameUpdateTried) return g_netGameUpdateStatus;
+  g_netGameUpdateTried = true;
+  UpdateThunk::Arm(kNetGameUpdateHook);
+  g_netGameUpdateStatus = sentinel::InstallThunk<UpdateThunk>(g_updateHook, sentinel::pinned::LibR15NetGameUpdate());
+  return g_netGameUpdateStatus;
+}
+
+void ArmNetGameUpdateOnlyForTest() noexcept {
+  UpdateThunk::Arm(kNetGameUpdateHook);
+  g_promptWanted.store(false, std::memory_order_release);
+}
+
+void SetNetGameUpdateInstallForTest(bool tried, sentinel::GotStatus status) noexcept {
+  g_netGameUpdateTried = tried;
+  g_netGameUpdateStatus = status;
+}
+
 void ArmForTest() noexcept {
   ErrorThunk::Arm(kErrorTextHook);
   UpdateThunk::Arm(kNetGameUpdateHook);
   EnablePageThunk::Arm(kEnablePageHook);
+  g_promptWanted.store(true, std::memory_order_release);
 }
 
 bool LatchArmedForTest() noexcept { return g_latchArmed.load(std::memory_order_acquire); }
