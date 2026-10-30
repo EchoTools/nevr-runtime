@@ -53,7 +53,7 @@ below.
 6. **USAGE lines.** Any unit touching a CLI/interface surface notes usage-doc/man gaps as one line. `--help`/`-h` output IS the behavioral acceptance contract for the interface.
 7. **Same failure twice = stop and report.** Do not grind.
 8. **Scratch in `~/src/nevr-runtime-work/<agent>/`** (maintainers only; a contributor uses `~/src/nevr-runtime-work/<handle>/`, AGENTS.md "For contributors"). Never `/tmp` (RAM-backed on this host), never the repo. Game runs use a throwaway copy of the install, never the owner's.
-9. **Commit identity.** Author `Spritz Metis Sprock <spritz@sprock.io>` from the repo's local git config; never `--author` with another name. `--author` sets only the author, so a seat that sets the identity explicitly sets both sides: `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL`. `--no-gpg-sign`. Trailers: `Co-Authored-By: <agent name> <agents@sprock.io>` for the agent that wrote the change, and `Co-Authored-By: Andrew Bates <a@sprock.io>` (a sister's work is authored by that sister with the same two trailers; maintainers only). See AGENTS.md "Commit and verification conventions". Verify after each commit: `git log --format='%h %G? %an %ae %cn %ce %(trailers:key=Co-Authored-By,valueonly)' -1`.
+9. **Commit identity.** Author `Spritz Metis Sprock <spritz@sprock.io>` (the repo's local git config already sets it; never `--author` with another name), `--no-gpg-sign`, the house `Co-Authored-By: <agent name> <agents@sprock.io>` trailer for the agent that wrote the change, and `Co-Authored-By: Andrew Bates <a@sprock.io>` (a sister's work is authored by that sister with the same two trailers; maintainers only). See AGENTS.md "Commit and verification conventions". Verify after each commit: `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
 10. **CPP pre-read gate.** Before any C++/build work, read `{EXPERTISE_PREREADS}` in full; its Hard-Stops bind the change.
 11. **Heartbeat expectation.** A standing unit emits a heartbeat; a silent unit is treated as stuck, not assumed working.
 
@@ -193,8 +193,8 @@ report each item with its result.
    file under `~/src/nevr-runtime-work/<agent>/` (maintainers only), never `$?` after a pipe.
 2. **The covering test recipes** (`just --list`; `test-auth-unit`, `test-quest-shared`,
    `test-quest-*`, `test-android` for a change under `src/quest`, ...). Every PR, whatever it
-   touches: `python3 tools/verify_gtest_floor.py` (the GTest floor), `just test-tools` and
-   `python3 tools/verify_doc_paths.py`.
+   touches: `just test-tools` and `python3 tools/verify_doc_paths.py`. The GTest floor
+   (`python3 tools/verify_gtest_floor.py`) is part of the quick check as AGENTS.md "Builds" lists it.
 3. **A runtime or auth change's PC login runs on main after the release cut, never on a PR** (AGENTS.md
    "Verification before merge"; "Client login test mechanics"):
    `NEVR_GAME_ROOT=<copy> ./launch-client.sh --dll <absolute path to the build's
@@ -239,7 +239,7 @@ finding (a GitHub issue) with its measurement and a Decision-line; do NOT fake g
   same rule. Author `Spritz Metis Sprock <spritz@sprock.io>` from the repo's local git config, `--no-gpg-sign`,
   the house `Co-Authored-By: <agent name> <agents@sprock.io>` trailer and the `Co-Authored-By: Andrew Bates <a@sprock.io>`
   trailer; conventional prefix (`feat:`/`fix:`/`docs:`/`test:`/`build:`); one logical change per commit.
-  **Verify after each commit:** `git log --format='%h %G? %an %ae %cn %ce %(trailers:key=Co-Authored-By,valueonly)' -1`.
+  **Verify after each commit:** `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
   A person whose work the commit draws on gets a credit trailer (AGENTS.md "Commits, versions and requirement words").
 - **Scratch** lives under `~/src/nevr-runtime-work/<agent>/` (maintainers only), never `/tmp`, never the
   repo (AGENTS.md "Working practices for every agent"). Delete the scripts, copies and
