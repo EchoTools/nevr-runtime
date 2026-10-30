@@ -7,8 +7,10 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include "quest/invite/frame_dispatch.h"
 #include "quest/invite/join_game_quest.h"
 #include "runtime/patch/invite_join.h"
 #include "runtime/patch/invite_match_api.h"
@@ -59,6 +61,9 @@ class FakeAccess final : public nevr_quest_invite_join::GameAccess {
   std::uint8_t lobbyAtBegin[16] = {};
   std::uint16_t teamAtBegin = 0;
   std::vector<std::string> lines;
+  std::vector<std::string> calls;  // the order of the game calls: "enable", "begin"
+  int netCalls = 0;
+  int nullGameAtNetCall = 0;  // 0: never; n: the game pointer is cleared on the n-th NetGame() call
   FakeGame game;
   FakeNetGame net;
 
@@ -75,12 +80,25 @@ class FakeAccess final : public nevr_quest_invite_join::GameAccess {
     std::memcpy(net.bytes, &state, sizeof(state));
   }
 
+  void ClearGame() {
+    void* none = nullptr;
+    std::memcpy(net.bytes + 8, &none, sizeof(none));
+  }
+
   bool OnTickThread() override { return onThread; }
-  void* NetGame() override { return hasNetGame ? static_cast<void*>(net.bytes) : nullptr; }
+  void* NetGame() override {
+    ++netCalls;
+    if (nullGameAtNetCall != 0 && netCalls == nullGameAtNetCall) ClearGame();
+    return hasNetGame ? static_cast<void*>(net.bytes) : nullptr;
+  }
   bool ProloguesValid() override { return prologues; }
-  void EnableMenu(void*) override { ++enables; }
+  void EnableMenu(void*) override {
+    ++enables;
+    calls.push_back("enable");
+  }
   void Begin(void*) override {
     ++begins;
+    calls.push_back("begin");
     std::memcpy(lobbyAtBegin, game.bytes + 0x8538, sizeof(lobbyAtBegin));
     std::memcpy(&teamAtBegin, game.bytes + 0x8558, sizeof(teamAtBegin));
   }
@@ -250,6 +268,52 @@ void TestWriteBackOnMismatch() {
   CHECK(AllZero(game.bytes + 0x8538, 16));
 }
 
+// The menu event runs before the begin, as the game's own main-menu join does (ReVault: EnableTransitionMenu, then
+// BeginMultiplayer). Killed by a mutant that swaps the two calls.
+void TestMenuEventRunsBeforeBegin() {
+  FakeAccess access;
+  nevr_quest_invite_join::Offerer offerer(access);
+  CHECK(offerer.Offer(kMatch, true) == nevr_invite_join::Reason::None);
+  CHECK(access.calls.size() == 2);
+  if (access.calls.size() == 2) {
+    CHECK(access.calls[0] == "enable");
+    CHECK(access.calls[1] == "begin");
+  }
+}
+
+// No game object at stage time: the stage reads nothing, names the read step and begins nothing.
+void TestNoGameObjectAtStageIsAReadFailure() {
+  FakeAccess access;
+  access.ClearGame();
+  nevr_quest_invite_join::Offerer offerer(access);
+  CHECK(offerer.Offer(kMatch, true) == nevr_invite_join::Reason::StageFailed);
+  CHECK(access.begins == 0);
+  CHECK(Contains(access.lines, "step=read field=lobby"));
+}
+
+// The game object disappears between the stage and the begin: the begin is not called, the stage is put back, and the
+// refusal is NoGameObject. The third NetGame() call is the begin's own read of the game object.
+void TestGameObjectGoneBeforeBeginUndoesTheStage() {
+  FakeAccess access;
+  access.nullGameAtNetCall = 3;
+  nevr_quest_invite_join::Offerer offerer(access);
+  CHECK(offerer.Offer(kMatch, true) == nevr_invite_join::Reason::NoGameObject);
+  CHECK(access.begins == 0);
+  CHECK(Contains(access.lines, "join begin not called, no game object after the stage"));
+  // The staged lobby the stage wrote must be gone again: the undo needs the game object the stage remembered.
+  CHECK(AllZero(access.game.bytes + 0x8538, 16));
+}
+
+// The frame dispatcher's tick-thread test: true on the thread that last ran Tick, false on any other thread.
+void TestOnTickThreadIsTheThreadThatRanTick() {
+  nevr_quest::invite::frame::Tick();
+  CHECK(nevr_quest::invite::frame::OnTickThread());
+  bool other = true;
+  std::thread worker([&other] { other = nevr_quest::invite::frame::OnTickThread(); });
+  worker.join();
+  CHECK(!other);
+}
+
 void TestGuidByteOrder() {
   nevr_invite_join::LobbyBytes lobby{};
   CHECK(nevr_invite_join::ParseLobbyBytes(kMatch, lobby));
@@ -273,6 +337,10 @@ int main() {
   TestForeignLobbyAtRouteStagesNothing();
   TestWriteBackOnMismatch();
   TestGuidByteOrder();
+  TestMenuEventRunsBeforeBegin();
+  TestNoGameObjectAtStageIsAReadFailure();
+  TestGameObjectGoneBeforeBeginUndoesTheStage();
+  TestOnTickThreadIsTheThreadThatRanTick();
   if (g_failures != 0) {
     std::fprintf(stderr, "invite_join_quest_test: %d failure(s)\n", g_failures);
     return 1;
