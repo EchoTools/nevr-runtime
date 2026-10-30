@@ -7,11 +7,11 @@
 # genuinely sits on top of the ABI layer. The reverse dependency is forbidden.
 
 set(CORE_SOURCES "logging.cpp" "globals.cpp" "base64.cpp" "system_info.cpp" "nevr_config.cpp" "nevr_config_policy.cpp" "build_identity.cpp" "mic_dsp.cpp" "mic_lifecycle.cpp" "mic_capture_drain.cpp" "mic_owner_thread.cpp"
-  "device_poll_response.cpp" "auth_refresh.cpp" "device_auth_flow.cpp")
+  "device_poll_response.cpp" "auth_refresh.cpp" "device_auth_flow.cpp" "crash_report.cpp")
 set(CORE_HEADERS
   "logging.h" "globals.h" "base64.h" "system_info.h" "build_identity.h"
   "hooking.h" "auth_token.h" "auth_token_model.h" "auth_types.h" "auth_refresh.h" "device_auth_flow.h" "device_poll_response.h" "pch.h" "nevr_config.h" "mic_dsp.h" "mic_lifecycle.h" "mic_capture_drain.h" "mic_owner_thread.h"
-  "auth_token_refresh.h" "nevr_curl.h" "crash_first.h"
+  "auth_token_refresh.h" "nevr_curl.h" "crash_report.h" "crash_first.h"
   # Header-only published C ABI for the static modules. Listed here so it appears
   # in IDE/target views; it has no compiled sources of its own. The plugin ABI is in sdk/.
   "${CMAKE_SOURCE_DIR}/src/extension/module_interface.h")
@@ -51,6 +51,9 @@ set_source_files_properties(mic_dsp.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # header, so it builds without the Windows PCH.
 set_source_files_properties(device_poll_response.cpp auth_refresh.cpp device_auth_flow.cpp
   PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+# crash_report.cpp is platform-independent (no windows.h): the Quest sentinel compiles the same file, and a fault handler
+# runs it, so it takes no PCH.
+set_source_files_properties(crash_report.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(mic_lifecycle.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(mic_capture_drain.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(mic_owner_thread.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)

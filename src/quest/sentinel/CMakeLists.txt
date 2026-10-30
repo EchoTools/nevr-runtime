@@ -98,6 +98,9 @@ add_library(ovrplatformloader SHARED
   android_glue_layout_check.cpp
   sentinel.cpp
   sentinel_log.cpp
+  crash_report_quest.cpp
+  elf_build_id.cpp
+  ../../core/crash_report.cpp
   activation.cpp
   credits_text.cpp
   "${NEVR_QUEST_CREDITS_BLOCK_CPP}")
