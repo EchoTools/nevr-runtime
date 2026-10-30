@@ -237,13 +237,18 @@ bool FileExists(const char* dir, const char* name) {
   return access(p, F_OK) == 0;
 }
 
-// <dir>/ec.on (its first line = the TEST words), else ec_preset1.on / ec_preset2.on / ec_preset3.on, else the build's default words.
-// false = off. `src` names what switched it on.
+// <dir>/ec.off (kill file: off, whatever else is there and whatever the build's default words are), else <dir>/ec.on (its first line =
+// the TEST words), else ec_preset1.on / ec_preset2.on / ec_preset3.on, else the build's default words.
+// false = off. `src` names what switched it on, or "ec.off" when the kill file switched it off.
 bool Switch(char* words, std::size_t wordsLen, const char** src) {
   words[0] = 0;
   *src = "";
   char dir[256];
   if (DataDir(dir, sizeof dir) != nullptr) {
+    if (FileExists(dir, "ec.off")) {
+      *src = "ec.off";
+      return false;
+    }
     char path[400];
     std::snprintf(path, sizeof path, "%s/ec.on", dir);
     if (FILE* w = std::fopen(path, "re")) {
@@ -518,7 +523,10 @@ InstallResult InstallEc(std::uintptr_t base) {
   const char* src = "";
   if (!Switch(words, sizeof words, &src)) {
     PublishEcPage();
-    EcFld().S("switch", "off").S("hint", "ec.on / ec_preset1.on / ec_preset2.on / ec_preset3.on in the data directory").Emit(NEVR_LOG_INFO, "ec: off");
+    if (std::strcmp(src, "ec.off") == 0)
+      EcFld().S("switch", "off").S("kill_file", "ec.off").Emit(NEVR_LOG_INFO, "ec: off (ec.off is in the data directory; the stock recvfrom/sendto stay in place)");
+    else
+      EcFld().S("switch", "off").S("hint", "ec.on / ec_preset1.on / ec_preset2.on / ec_preset3.on in the data directory").Emit(NEVR_LOG_INFO, "ec: off");
     InstallResult r;
     r.reason = "off";
     return r;
