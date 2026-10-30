@@ -130,6 +130,7 @@ set(PATCHES_SOURCES
     "server/registration_metadata.cpp"
     "server/installed_levels.cpp"
     "server/telemetry_game_type.cpp"
+    "server/game_type_table.h"
     "server/messages.cpp"
     "server/lobby_settings_relay.cpp"
     "server/server_context.cpp"
@@ -919,7 +920,7 @@ if(BUILD_TESTING)
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_telemetry_game_type PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_telemetry_game_type PRIVATE GTest::gtest GTest::gtest_main nevr_api
-      nlohmann_json::nlohmann_json)
+      nevr::plugin_sdk nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_telemetry_game_type DISCOVERY_MODE PRE_TEST)
 
     # #982: the public Arena round default applies only to a stored public Arena session (arena_round_time.cpp).
