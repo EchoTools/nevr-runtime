@@ -262,18 +262,10 @@ struct Line {
   std::string text;
 };
 
-/// The Win32 error of the last write that failed (logging Rule 10). 0 when no write failed: then a write_failed site's
-/// writer reported success and its read-back is not the replacement.
-using WriteErrorFn = uint32_t (*)();
-
-/// Remembers the error of a failed write for WriteErrorFn: the last failure wins, a success changes nothing.
-struct WriteErrors {
-  uint32_t last = 0;
-  bool Note(bool ok, uint32_t error) {
-    if (!ok) last = error;
-    return ok;
-  }
-};
+// The error of a failed write is the shared shape in checked_patch.h (WriteErrorFn, WriteErrors). 0 when no write
+// failed: then a write_failed site's writer reported success and its read-back is not the replacement.
+using WriteErrorFn = nevr_checked_patch::WriteErrorFn;
+using WriteErrors = nevr_checked_patch::WriteErrors;
 
 /// Everything Install does, but the log and the process: a client's skip line; on a server, the config value's
 /// problem (if any), then Apply on the two sites and its record with the value's source. A site that is write_failed

@@ -188,7 +188,9 @@ def byte_rewrite_targets(source: str, addresses: str) -> set[int]:
     # The spectator-stream guard is written through nevr_checked_patch::Apply
     # (src/runtime/patch/checked_patch.h): `site` is the game base plus one
     # named RVA, and the only writer handed to Apply is a lambda that forwards
-    # its three parameters, unchanged and in order, to ProcessMemcpy.  Any
+    # its three parameters, unchanged and in order, to ProcessMemcpy with its
+    # error out-parameter, and notes that error (`DWORD e = 0; return
+    # writes.Note(ProcessMemcpy(dest, src, n, &e), e);`, logging Rule 10).  Any
     # other lambda body, writer or site expression does not match and falls
     # through to the ProcessMemcpy census below.  The span between the `site`
     # declaration and Apply stays inside one function: it cannot cross another
@@ -204,7 +206,8 @@ def byte_rewrite_targets(source: str, addresses: str) -> set[int]:
         r"nevr_patch_addresses::(\w+)\s*;"
         r"(?:(?!ProcessMemcpy|\bsite\s*=(?!=)|^\}).)*?nevr_checked_patch::Apply\s*\(\s*site\s*,\s*\w+\s*,\s*"
         r"\[\]\s*\(\s*void\s*\*\s*(\w+)\s*,\s*const\s+void\s*\*\s*(\w+)\s*,\s*size_t\s+(\w+)\s*\)\s*"
-        r"\{\s*return\s+ProcessMemcpy\s*\(\s*\2\s*,\s*\3\s*,\s*\4\s*\)\s*;\s*\}\s*\)",
+        r"\{\s*DWORD\s+(\w+)\s*=\s*0\s*;\s*return\s+\w+\.Note\(\s*ProcessMemcpy\s*\(\s*\2\s*,\s*\3\s*,\s*\4\s*,\s*&\5\s*\)"
+        r"\s*,\s*\5\s*\)\s*;\s*\}\s*\)",
         source,
         re.DOTALL | re.MULTILINE,
     )
