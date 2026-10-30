@@ -34,6 +34,13 @@ class ParseTest(unittest.TestCase):
         self.assertTrue(lines[1].text.startswith("info [NEVR.PATCH] service redirect"))
         self.assertNotIn("\x1b", lines[1].text)
 
+    def test_a_mark_taken_from_the_last_line_leaves_the_next_line_written_after_it(self):
+        # run 1 of the tool lost its first new line: the text after a final newline counted as a line, so a mark one too high skipped it
+        before = e2e.parse_lines("2026-10-30T02:10:05.000Z info a\n2026-10-30T02:10:06.000Z info b\n")
+        self.assertEqual(len(before), 2)
+        after = e2e.parse_lines("2026-10-30T02:10:05.000Z info a\n2026-10-30T02:10:06.000Z info b\n2026-10-30T02:10:07.000Z info c\n")
+        self.assertEqual(e2e.first(after, r"info (\w)", after=before[-1].n)[1][1], "c")
+
     def test_first_reads_only_after_the_mark(self):
         lines = e2e.parse_lines(LOG)
         self.assertEqual(e2e.first(lines, r"result=(\w+)")[1][1], "ok")
@@ -97,7 +104,8 @@ class RenderTest(unittest.TestCase):
         text = e2e.render([], {"A": hits}, {"A": "2026-10-30T02:10:03.500Z"}, [])
         self.assertIn("A NOT REDIRECTED (invite path): https://cdn.readyatdawn.com/asset.bin", text)
         self.assertIn("A redirected: wss://config.readyatdawn.com/rad/rad15_live -> ws://127.0.0.1:49162/config", text)
-        self.assertIn("[A:console.log:5;", text)
+        self.assertIn("[A:console.log:5; other]", text)
+        self.assertIn("call site of other: no redirect line", text)
 
 
 class AccountsTest(unittest.TestCase):

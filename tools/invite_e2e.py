@@ -67,7 +67,10 @@ class Line:
 
 def parse_lines(raw: str) -> list[Line]:
     lines = []
-    for n, row in enumerate(ANSI.sub("", raw).split("\n"), 1):
+    rows = ANSI.sub("", raw).split("\n")
+    if rows and rows[-1] == "":
+        rows.pop()  # the text after the last newline is no line: the next line written takes that number (a mark is len(lines))
+    for n, row in enumerate(rows, 1):
         match = LINE_TS.match(row)
         lines.append(Line(n, match["ts"], match["rest"]) if match else Line(n, None, row))
     return lines
@@ -167,6 +170,7 @@ def render(steps: list[Step], rad: dict[str, list[RadHit]], window_start: dict[s
             out.append(f"        {where}" + (f"  [{note}]" if line and note else ""))
     out.append("readyatdawn.com URLs the clients touched (A, B):")
     total = 0
+    used: set[str] = set()
     for client in sorted(rad):
         seen = set()
         for hit in rad[client]:
@@ -177,10 +181,13 @@ def render(steps: list[Step], rad: dict[str, list[RadHit]], window_start: dict[s
             total += 1
             on_path = bool(hit.ts and window_start.get(client) and hit.ts >= window_start[client])
             state = "redirected" if hit.redirected else ("NOT REDIRECTED" + (" (invite path)" if on_path else ""))
+            used.add(hit.kind)
             out.append(f"  {client} {state}: {hit.url}" + (f" -> {hit.final}" if hit.final else "") +
-                       f"   [{client}:console.log:{hit.n}; {hit.call_site}]")
+                       f"   [{client}:console.log:{hit.n}; {hit.kind}]")
     if total == 0:
         out.append("  none named in either client's log")
+    for kind in sorted(used):
+        out.append(f"  call site of {kind}: {CALL_SITES[kind]}")
     ok = all(s.ok for s in steps if s.gating)
     out.append(f"VERDICT: {'PASS' if ok else 'FAIL'}")
     return "\n".join(out)
