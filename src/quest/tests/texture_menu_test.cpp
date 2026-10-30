@@ -27,7 +27,7 @@ using Json = nlohmann::json;
 
 // A menu document: a DISPLAY page of other settings, the graphics page that holds the msaa row between two others, and a page
 // of another platform's with a row of the same path that is not the one we rewrite (it has no `rows` list holding it).
-const char* kMenu = R"({
+const char* kMenu = R"json({
   "serialized": 1,
   "pages": [
     {"name": "DISPLAY", "rows": [
@@ -39,10 +39,10 @@ const char* kMenu = R"({
       {"path": "graphics|temporalaa", "name": "Temporal AA", "value": true, "type": "NAMED FLAG"}
     ]}
   ]
-})";
+})json";
 
 // A settings document: the shape of the quest section with its settings and pages lists, a rift section and a voice section.
-const char* kGameSettings = R"({
+const char* kGameSettings = R"json({
   "rift": {"settings": [{"path": "game|experimentalthrowing", "value": 0, "operator": "remove"}]},
   "quest": {
     "settings": [
@@ -53,7 +53,7 @@ const char* kGameSettings = R"({
     "pages": ["ECHO COMBAT", "DISPLAY", "GRAPHICS (1/3)", "GRAPHICS (2/3)"]
   },
   "voiploudness": {"settings": [{"path": "game|voiploudnesslevel", "value": 0.0, "operator": "remove"}], "pages": ["VOICE LOUDNESS"]}
-})";
+})json";
 
 const Json* PageNamed(const Json& doc, const std::string& name) {
   for (const Json& page : doc["pages"]) {
@@ -172,11 +172,11 @@ void TheSettingsDocumentStopsHidingTheControlAndItsPage() {
 }
 
 void ASettingsDocumentWithoutTheRemovalIsLeftAlone() {
-  const tm::Result r = tm::RewriteGameSettings(R"({"quest": {"settings": [{"path": "graphics|sharpening"}], "pages": ["GRAPHICS (1/3)"]}})");
+  const tm::Result r = tm::RewriteGameSettings(R"json({"quest": {"settings": [{"path": "graphics|sharpening"}], "pages": ["GRAPHICS (1/3)"]}})json");
   QCHECK(r.status == tm::Status::kShapeMismatch && r.text.empty());
   QCHECK(tm::RewriteGameSettings("not json").status == tm::Status::kNotJson);
   // A page removal alone is not the document we rewrite: the control would be listed but not shown.
-  QCHECK(tm::RewriteGameSettings(R"({"quest": {"pages": ["GRAPHICS (1/3)"]}})").status == tm::Status::kShapeMismatch);
+  QCHECK(tm::RewriteGameSettings(R"json({"quest": {"pages": ["GRAPHICS (1/3)"]}})json").status == tm::Status::kShapeMismatch);
 }
 
 void TheRewriteDoesNotChangeItsOwnOutput() {

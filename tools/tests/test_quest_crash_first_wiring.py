@@ -88,7 +88,7 @@ class TheGamesRequestsAreIntercepted(unittest.TestCase):
         step = body(code("integration/production_steps.cpp"), "bool InstallCrashFirst() override")
         self.assertIn("nevr_quest::integration::InstallCrashFirstHook()", step)
         entry = code("sentinel/entry.cpp")
-        self.assertIn("bool InstallCrashFirstHook() noexcept { return nevr_quest::crash_first::Install(); }", entry)
+        self.assertIn("nevr_quest::crash_first::Install()", body(entry, "bool InstallCrashFirstHook() noexcept"))
 
     def test_the_hook_is_built_without_exceptions_and_the_host_test_runs_in_test_quest_hooks(self):
         cmake = (QUEST / "sentinel/CMakeLists.txt").read_text()

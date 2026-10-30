@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "nevr/symbol_hash.h"
@@ -43,9 +44,6 @@ inline constexpr char kStockPageSha256[] = "af396701cfe27cb5d9fd512943b1ad732477
 /// 5.16.2-dev.13 logged it for class 0x75e5993f80940cd0, name 0xf927772b9e2aefb1, 81160 bytes. It equals kStockPageSha256:
 /// the Quest and PC pages are byte-identical, so the same cards apply to both.
 inline constexpr char kQuestStockPageSha256[] = "af396701cfe27cb5d9fd512943b1ad732477b6399c4df5a2b36971375a6919eb";
-/// SHA-256 of the page the echovr-modkit tool writes from that stock page with these two cards. Logged next to our
-/// own result so a run says whether the two builders agree; it is not a gate.
-inline constexpr char kReferenceResultSha256[] = "ac3a7173bbc78c75ba22fc9ad2f7bf12003d27bdc1b8ff1d215cdd8cae97f8b5";
 
 inline constexpr nevr_menu_page::ElementSymbols kSymbols = {
     EchoVR::CSymbol64Hash("default"), EchoVR::CSymbol64Hash("sprite"), EchoVR::CSymbol64Hash("text"), EchoVR::CSymbol64Hash("subtext"),
@@ -57,6 +55,15 @@ inline constexpr uint64_t kTileJoin = EchoVR::CSymbol64Hash("tile_join");
 inline constexpr uint64_t kCreateOwner = 0xff5375e5a4dee29dULL;
 inline constexpr uint64_t kJoinOwner = 0x097b785350a61c5fULL;
 
+/// The actors that own the stock PLAY and TUTORIALS cards of page 24 (text `PLAY` and `TUTORIALS` in the stock page).
+inline constexpr uint64_t kPlayOwner = 0xa3d3ef315cb999dbULL;
+inline constexpr uint64_t kTutorialOwner = 0xd763e348e835f249ULL;
+
+/// The order of the main menu's four buttons: Play, Join, Create, Tutorial. Patch puts these four elements into this
+/// order inside page 24's element array, in the positions the four hold once the cards are in. One list, used by PC and
+/// Quest alike (both call Patch).
+inline std::vector<uint64_t> ButtonOrder() { return {kPlayOwner, kJoinOwner, kCreateOwner, kTutorialOwner}; }
+
 /// The two cards, in the order they are added.
 inline std::vector<nevr_menu_page::Card> Cards() {
   return {
@@ -66,7 +73,7 @@ inline std::vector<nevr_menu_page::Card> Cards() {
 }
 
 enum class Verdict {
-  Patched,      // the stock page, with the cards added
+  Patched,      // the stock page, with the cards added and the four buttons in ButtonOrder()
   NotStock,     // the buffer is not the pinned stock page: left alone
   Refused,      // the stock page, but the cards could not be added (status says why)
 };
@@ -93,6 +100,13 @@ inline Result Patch(const uint8_t* data, size_t size, const std::string& sha256H
   Result r;
   if (sha256Hex != pinHex) return r;
   r.status = nevr_menu_page::InsertCards(data, size, kMainMenuPage, cards.data(), cards.size(), kSymbols, &r.bytes);
+  if (r.status == nevr_menu_page::Status::Ok) {
+    const std::vector<uint64_t> order = ButtonOrder();
+    std::vector<uint8_t> ordered;
+    r.status = nevr_menu_page::ReorderElements(r.bytes.data(), r.bytes.size(), kMainMenuPage, order.data(), order.size(),
+                                               &ordered);
+    if (r.status == nevr_menu_page::Status::Ok) r.bytes = std::move(ordered);
+  }
   r.verdict = r.status == nevr_menu_page::Status::Ok ? Verdict::Patched : Verdict::Refused;
   if (r.verdict != Verdict::Patched) r.bytes.clear();
   return r;

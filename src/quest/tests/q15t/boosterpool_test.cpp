@@ -140,7 +140,7 @@ int main() {
   CallSlot(st, Suffixed(kPlain));
   CHECK(g_real_calls == 1 && g_real_name == kPlain, "suffixed name: real got 0x%lx, want the plain name", (unsigned long)g_real_name);
   CHECK(q15t::BoosterPoolKeptCount() == kept0 + 1, "kept count did not move by one");
-  CHECK(HasLine("boosterpool actor kept its plain name", 1) && HasLine("n=" + std::to_string(kept0 + 1) + " "),
+  CHECK(HasLine("boosterpool actor kept its plain name", 1) && HasLine(("n=" + std::to_string(kept0 + 1) + " ").c_str()),
         "no kept record for the substitution");
 
   // 4. some other name, even one that ends in _lowspec for another actor: untouched

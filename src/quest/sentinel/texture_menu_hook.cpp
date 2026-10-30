@@ -225,8 +225,11 @@ int ResolveStart() noexcept {
   directory(fixedString);
   fixedString[512] = '\0';
   if (fixedString[0] == '\0') return kUnset;
+  // fixedString holds at most 512 characters (its last byte is the NUL above), so the precision bounds the directory and
+  // the suffix fits: a longer directory cannot truncate the path silently.
   char path[640];
-  std::snprintf(path, sizeof(path), "%s/RAD/LoneEcho/settings_mp_v2_quest.json", fixedString);
+  static_assert(512 + sizeof("/RAD/LoneEcho/settings_mp_v2_quest.json") <= sizeof(path), "path buffer fits the directory");
+  std::snprintf(path, sizeof(path), "%.512s/RAD/LoneEcho/settings_mp_v2_quest.json", fixedString);
   std::FILE* const file = std::fopen(path, "r");
   if (file == nullptr) return kUnset;
   static char buffer[16384];  // one reader: the eye-size hook asks once
