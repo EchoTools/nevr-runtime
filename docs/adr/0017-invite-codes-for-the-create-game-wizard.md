@@ -146,10 +146,14 @@ the runtime (`src/runtime/patch/`), not a service configuration and not a plugin
   a match id, and a join is by code. The texts are never logged, only the field and the size.
 - **Join.** On a resolved code, from the main menu the dispatcher stages the `-lobbyid` block and runs
   `BeginMultiplayerLobby`; from a lobby or match it calls `CR15NetClientLobby::Join`. Both prologues are validated
-  at boot (N97); on a mismatch the feature turns itself off and says why. It is a client feature: on a dedicated
+  at boot (N97); on a mismatch that hook is not installed and its line says why. The service starts before the hooks and
+  stays on when one refuses (#1414). It is a client feature: on a dedicated
   server (`-server`) nothing is installed.
-- **Where it is configured.** A `config.yaml` key under the existing sections turns it on (N133); there is no
-  environment variable and no hard-coded host.
+- **Where it is configured.** The `network.invite_codes` key in `config.yaml` (N133) is on by default for a client: an
+  absent or empty key is on, and `false` (or `off`, `no`, `0`) turns it off. Any other value, a list or a map included, is
+  off with a warning, so a value that is not a switch word never turns it on. A key the runtime does not read (a
+  misspelling, or a `config.yaml` it rejects) is as if absent, and so is on. The startup line says `source=default` or
+  `source=config`. There is no environment variable and no hard-coded host.
 
 Rejected:
 
@@ -230,14 +234,15 @@ credential: a line carries `code_len` and a short fingerprint of the code (`code
 | Event | Level | Fields |
 | --- | --- | --- |
 | wizard click seen | Info | `event=create_invite\|join_via_code panel=deep_linking` |
-| request not sent | Info | `reason=empty\|malformed\|too_long\|incomplete\|not_configured\|no_token\|busy\|stopped` and `code_len=<n>` (nothing is sent) |
+| request not sent | Info | `reason=empty\|malformed\|too_long\|incomplete\|not_configured\|no_token\|busy\|stopped` and `code_len=<n>` (nothing is sent; `not_configured` is any reason the feature is off, which the start line gives) |
 | request sent | Info | `op=create\|resolve\|revoke expires_s=<n> code_len=<n> code_fp=<8 hex>` |
 | answer | Info / Warning | `op status=<http status> latency_ms=<n> result=<ok\|invalid\|expired\|closed\|denied\|limit\|rate>` |
 | worker stopped | Info | `dropped=<n>`: requests still queued when the worker stopped, never sent |
 | answers dropped | Warning | `reason=not_taken kept=<n>`: the oldest answer went because the menu had not taken them |
 | text posted | Info | `field=code\|expires\|entry_title bytes=<n>`; a post the writer refused, or a writer that is off, is `text not posted` at Warning with `reason=`; the writer's own `[NEVR.UI] text written` / `text dropped` line follows |
 | join started | Info | `route=stage\|join lobby=<uuid> state_from=<n>`; the state change after it is the game's own `[NETGAME]` line |
-| feature off | Info | `reason=` (a prologue differed, no token, not configured) |
+| service on | Info | `source=default\|config`: where the value came from (the default when the key is absent or empty) |
+| feature off | Info / Warning | `reason=turned_off` (Info: the key says false), `unrecognised_value`, `no_service_address` or `service_address_refused` (Warning), each with `source=default\|config`; a hook's `prologue_mismatch` is that hook's own line, without `source=` |
 
 The service writes one structured record per RPC (principal, session, client, source address; operation with its full
 arguments and the resolved match id and user id; outcome, latency, result size) at the single point every RPC passes,

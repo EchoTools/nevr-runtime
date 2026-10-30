@@ -193,6 +193,23 @@ TEST(ServiceMap, LookupFlat_AbsentKeyIsNullopt) {
   EXPECT_FALSE(LookupFlat(cfg, "external_ip").has_value());
 }
 
+// #1156, ADR 0017: a list or a map under network.invite_codes is structured, not a value. LookupFlat gives nullopt for it, the
+// same as for an absent key, so the switch must ask for the shape too. A scalar, a key with no value, an absent key and an
+// unmapped key are not structured.
+TEST(ServiceMap, LookupFlatIsStructured_ListAndMapOnly) {
+  EXPECT_TRUE(nevr_cfg::LookupFlatIsStructured(
+      nevr::NevrConfig::LoadFromString("network:\n  invite_codes: [false]\n"), "nevr_invite_codes"));
+  EXPECT_TRUE(nevr_cfg::LookupFlatIsStructured(
+      nevr::NevrConfig::LoadFromString("network:\n  invite_codes: {enabled: false}\n"), "nevr_invite_codes"));
+  EXPECT_FALSE(nevr_cfg::LookupFlatIsStructured(
+      nevr::NevrConfig::LoadFromString("network:\n  invite_codes: false\n"), "nevr_invite_codes"));
+  EXPECT_FALSE(nevr_cfg::LookupFlatIsStructured(
+      nevr::NevrConfig::LoadFromString("network:\n  invite_codes:\n"), "nevr_invite_codes"));
+  EXPECT_FALSE(nevr_cfg::LookupFlatIsStructured(nevr::NevrConfig::LoadFromString("version: \"1\"\n"), "nevr_invite_codes"));
+  EXPECT_FALSE(nevr_cfg::LookupFlatIsStructured(
+      nevr::NevrConfig::LoadFromString("network:\n  invite_codes: [false]\n"), "bogus_key"));
+}
+
 // ---------------------------------------------------------------------------
 // S4a — ws_bridge login-injection keys resolve through the same flat->path map.
 // The discord_id fixture is a SHORT fake on purpose: an 18-20 digit literal in
