@@ -634,8 +634,8 @@ call it (`PluginLogBind(ctx)` in init, then `PluginLog`, `PluginLogWarning`, `Pl
 
 ### Rule 16: A client records the lobby requests it sends and the answers it gets
 
-A client's bridge writes one Info record for each lobby message that decides where the player ends up, so a
-tester's log answers "how many join attempts did this client make, and what did each get". All four lines carry
+A client writes one Info record for each lobby message that decides where the player ends up (the PC bridge writes
+all four lines; the Quest router writes the two session lines), so a tester's log answers "how many join attempts did this client make, and what did each get". All four lines carry
 the tag `[NEVR.WS]` and the connection index (Rule 9):
 
 ```
@@ -675,14 +675,18 @@ the tag `[NEVR.WS]` and the connection index (Rule 9):
   `[NEVR.WS] lobby frame records suppressed kind=<find|join|success|failure> count=<n> window_ms=10000`, with
   the exact number of records the window did not write, so requests per second are `(10 + count) / 10` for a
   full window.
-- **Not covered.** The create request, the legacy-family symbols (`compat/legacy_codec.h`) and the Quest
-  target (`src/quest`). The Quest target writes no `lobby session` record and does not include
-  `compat/lobby_frame.h`, so no line on Quest carries the party or the request fields.
+- **Not covered.** The create request and the legacy-family symbols (`compat/legacy_codec.h`). The Quest target
+  writes the two `lobby session` records, from the answers its router hands the game (`compat/session_router.cpp`,
+  wired in `src/quest/net/session_bridge.cpp`), with the same text. It writes no find or join record, so a request
+  is not logged on Quest, and its limit counts only the success and failure kinds.
 
-**Where:** `src/runtime/compat/lobby_frame.h` (decode, text, limiter, request tracker, party fields) and
-`LogClientLobbyMessage` in `src/runtime/compat/ws_bridge.cpp`; tests `WsBridgeLobbyFrameLog` in
-`src/runtime/tests/test_behavioral.cpp`, and `LobbyFrameLimiter`, `LobbyFrameRequests` and `LobbyFrameText` in
-`src/runtime/tests/test_lobby_frame.cpp`.
+**Where:** `src/runtime/compat/lobby_frame.h` (decode, text, limiter, request tracker, party fields, the session
+record, and `ClientLobbyRecords`, which both writers use); `LogClientLobbyMessage` in
+`src/runtime/compat/ws_bridge.cpp` (PC) and `Router::LobbyAnswersLocked` in `src/runtime/compat/session_router.cpp`
+(Quest). Tests: `WsBridgeLobbyFrameLog` in `src/runtime/tests/test_behavioral.cpp`; `LobbyFrameLimiter`,
+`LobbyFrameRequests`, `LobbyFrameText` and `LobbyFrameRecords` in `src/runtime/tests/test_lobby_frame.cpp`; the
+`lobby records` cases in `src/quest/tests/session_router_test.cpp`. Both suites compare their output with the
+expected lines in `src/runtime/tests/lobby_record_golden.h`, so the two writers' bytes are pinned to one text.
 
 ---
 

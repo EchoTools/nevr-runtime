@@ -23,7 +23,9 @@
 #include "nevr/symbol_hash.h"
 #include "quest/tests/test_check.h"
 #include "runtime/compat/evr_codec.h"
+#include "runtime/compat/lobby_frame.h"
 #include "runtime/compat/session_router.h"
+#include "runtime/tests/lobby_record_golden.h"
 
 using namespace nevr_session_router;
 
@@ -3395,6 +3397,236 @@ void TestOneNoticePerLostSession() {
   QCHECK(SentToGame(rig, 6).size() == 1);
 }
 
+// ---------------------------------------------------------------------------------------------
+// Lobby session records (#1429, logging.md Rule 16). The router writes a record for each answer it delivers to a game
+// (a success or a failure), with the text the PC bridge writes for the same input (lobby_record_golden.h). The records
+// are off unless the wiring turns them on, because the PC router runs beside ws_bridge, which writes its own.
+
+uint64_t g_recordsNowMs = 0;
+uint64_t RecordsNow() { return g_recordsNowMs; }
+std::optional<nevr_lobby_frame::PartyContext> g_recordsParty;
+std::optional<nevr_lobby_frame::PartyContext> RecordsParty() { return g_recordsParty; }
+
+nevr_lobby_frame::PartyContext GoldenParty() {
+  return nevr_lobby_frame::PartyContext{lobby_record_golden::kPartyId, lobby_record_golden::kPartyMembers,
+                                        lobby_record_golden::kPartyOwner, lobby_record_golden::kPartySelf};
+}
+
+// The options with the records on, the test's clock and the test's party. A test that needs no party source clears it.
+Options RecordsOn(Options options) {
+  options.lobbyRecords.enabled = true;
+  options.lobbyRecords.clockMs = &RecordsNow;
+  options.lobbyRecords.party = &RecordsParty;
+  return options;
+}
+
+// The lines of a log that contain `needle`, in the order they were written.
+std::vector<std::string> RecordLines(Logs& logs, const std::string& needle) {
+  std::lock_guard<std::mutex> lock(logs.mutex);
+  std::vector<std::string> lines;
+  for (const auto& entry : logs.lines) {
+    if (entry.second.find(needle) != std::string::npos) lines.push_back(entry.second);
+  }
+  return lines;
+}
+
+// Config (connection 0), login (1) and the session remote, then a matchmaker (connection 2) that the router routes
+// the lobby answers to once it has sent a request. Returns the session remote.
+RemoteId OpenSessionWithMatchmaker(Rig& rig) {
+  rig.router->OnGameOpen(1, Hinted(Role::Config));
+  rig.router->OnGameOpen(2, Hinted(Role::Login));
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameOpen(3, Hinted(Role::Matchmaker));
+  return session;
+}
+
+// A find and the success and the failure that answer it: each record is the golden bytes, and the find writes no record
+// of its own. Both answers still reach the game. Failure caught: a record missing or in the wrong place, a field guessed,
+// or a request written as if it were an answer.
+void TestAnswerRecordsMatchTheGoldenLines() {
+  const CaseScope scope("lobby records golden");
+  namespace golden = lobby_record_golden;
+  g_recordsParty = GoldenParty();
+  g_recordsNowMs = golden::kFindAt;
+  Rig rig(RecordsOn(WithLogin(kLogin)));
+  const RemoteId session = OpenSessionWithMatchmaker(rig);
+  rig.router->OnGameFrame(3, Msg(nevr_evr_codec::kSymFindSessionRequest, "find"), true);
+  g_recordsNowMs = golden::kSuccessAt;
+  rig.router->OnRemoteFrame(session, Msg(kSymLobbySessionSuccess, golden::SuccessPayload()), true);
+  g_recordsNowMs = golden::kFailureAt;
+  rig.router->OnRemoteFrame(session, Msg(nevr_lobby_frame::kSymSessionFailure, golden::FailurePayload(8)), true);
+  QCHECK(RecordLines(rig.logs, "lobby session success") == std::vector<std::string>{golden::kSuccessAfterFind});
+  QCHECK(RecordLines(rig.logs, "lobby session failure") == std::vector<std::string>{golden::kFailureAfterSuccess});
+  QCHECK(RecordLines(rig.logs, "lobby find requested").empty());  // the Quest router writes no request record
+  QCHECK(RecordLines(rig.logs, "lobby join requested").empty());
+  const auto delivered = rig.games.Sent();
+  QCHECK(delivered.size() == 2 && delivered[0].id == 3 && delivered[1].id == 3);  // both answers reached the game
+}
+
+// The records are off unless the wiring turns them on: the same answers write no lobby record and reach the game.
+void TestNoRecordsWithoutTheOption() {
+  const CaseScope scope("lobby records off");
+  Rig rig(WithLogin(kLogin));
+  const RemoteId session = OpenSessionWithMatchmaker(rig);
+  rig.router->OnGameFrame(3, Msg(nevr_evr_codec::kSymFindSessionRequest, "find"), true);
+  rig.router->OnRemoteFrame(session, Msg(kSymLobbySessionSuccess, lobby_record_golden::SuccessPayload()), true);
+  QCHECK(RecordLines(rig.logs, "[NEVR.WS] lobby").empty());
+  QCHECK(rig.games.Sent().size() == 1);
+}
+
+// A join is a request as a find is: the answer names it as the last request, age from the join, outstanding.
+void TestAnAnswerNamesAJoinAsItsRequest() {
+  const CaseScope scope("lobby records join");
+  g_recordsParty = GoldenParty();
+  g_recordsNowMs = 1000;
+  Rig rig(RecordsOn(WithLogin(kLogin)));
+  const RemoteId session = OpenSessionWithMatchmaker(rig);
+  rig.router->OnGameFrame(3, Msg(nevr_evr_codec::kSymJoinSessionRequest, "join"), true);
+  g_recordsNowMs = 1200;
+  rig.router->OnRemoteFrame(session, Msg(kSymLobbySessionSuccess, lobby_record_golden::SuccessPayload()), true);
+  const std::vector<std::string> expected = {
+      "[NEVR.WS] lobby session success conn=2 lobby=44332211-6655-8877-99AA-BBCCDDEEFFC0 "
+      "group=44332211-6655-8877-99AA-BBCCDDEEFFB0 party_id=7 party_size=3 party_leader=no "
+      "last_request=join last_request_age_ms=200 request_outstanding=yes"};
+  QCHECK(RecordLines(rig.logs, "lobby session success") == expected);
+}
+
+// No request has been sent and the party is empty (id 0, outside a party): the request and the party read none.
+void TestAnAnswerWithNoRequestAndNoPartyNamesNone() {
+  const CaseScope scope("lobby records none");
+  g_recordsParty = nevr_lobby_frame::PartyContext{};
+  g_recordsNowMs = lobby_record_golden::kSuccessAt;
+  Rig rig(RecordsOn(WithLogin(kLogin)));
+  const RemoteId session = OpenSessionWithMatchmaker(rig);
+  rig.router->OnRemoteFrame(session, Msg(kSymLobbySessionSuccess, lobby_record_golden::SuccessPayload()), true);
+  QCHECK(RecordLines(rig.logs, "lobby session success") ==
+         std::vector<std::string>{lobby_record_golden::kSuccessNoRequestNoParty});
+}
+
+// A router with no party source says unknown, never none: none would claim the client is outside a party.
+void TestAnAnswerWithNoPartySourceSaysUnknown() {
+  const CaseScope scope("lobby records unknown party");
+  g_recordsNowMs = 1000;
+  Options options = RecordsOn(WithLogin(kLogin));
+  options.lobbyRecords.party = nullptr;
+  Rig rig(std::move(options));
+  const RemoteId session = OpenSessionWithMatchmaker(rig);
+  rig.router->OnGameFrame(3, Msg(nevr_evr_codec::kSymFindSessionRequest, "find"), true);
+  g_recordsNowMs = 1250;
+  rig.router->OnRemoteFrame(session, Msg(kSymLobbySessionSuccess, lobby_record_golden::SuccessPayload()), true);
+  const std::vector<std::string> expected = {
+      "[NEVR.WS] lobby session success conn=2 lobby=44332211-6655-8877-99AA-BBCCDDEEFFC0 "
+      "group=44332211-6655-8877-99AA-BBCCDDEEFFB0 party_id=unknown party_size=unknown party_leader=unknown "
+      "last_request=find last_request_age_ms=250 request_outstanding=yes"};
+  QCHECK(RecordLines(rig.logs, "lobby session success") == expected);
+}
+
+// A reason the game does not name is unknown; the record still names the group and the message's size.
+void TestAnUnknownFailureCodeNamesNoReason() {
+  const CaseScope scope("lobby records unknown code");
+  g_recordsParty = GoldenParty();
+  g_recordsNowMs = 1000;
+  Rig rig(RecordsOn(WithLogin(kLogin)));
+  const RemoteId session = OpenSessionWithMatchmaker(rig);
+  rig.router->OnGameFrame(3, Msg(nevr_evr_codec::kSymFindSessionRequest, "find"), true);
+  g_recordsNowMs = 1300;
+  rig.router->OnRemoteFrame(session, Msg(nevr_lobby_frame::kSymSessionFailure, lobby_record_golden::FailurePayload(99)),
+                            true);
+  const std::vector<std::string> expected = {
+      "[NEVR.WS] lobby session failure conn=2 code=99 reason=unknown "
+      "group=44332211-6655-8877-99AA-BBCCDDEEFFB0 message_bytes=23 party_id=7 party_size=3 party_leader=no "
+      "last_request=find last_request_age_ms=300 request_outstanding=yes"};
+  QCHECK(RecordLines(rig.logs, "lobby session failure") == expected);
+}
+
+// A failure's message is counted and never read out: a secret in it leaves no trace in the log.
+void TestAFailureMessageIsCountedAndNeverWritten() {
+  const CaseScope scope("lobby records no remote text");
+  g_recordsParty = GoldenParty();
+  Rig rig(RecordsOn(WithLogin(kLogin)));
+  const RemoteId session = OpenSessionWithMatchmaker(rig);
+  rig.router->OnRemoteFrame(session, Msg(nevr_lobby_frame::kSymSessionFailure,
+                                         lobby_record_golden::FailureWithMessage(8, kSecret)), true);
+  QCHECK(!rig.logs.Has(kSecret));
+  const std::vector<std::string> lines = RecordLines(rig.logs, "lobby session failure");
+  QCHECK(lines.size() == 1);
+  QCHECK(lines.size() == 1 && lines[0].find("message_bytes=18 ") != std::string::npos);  // "SECRET-TOKEN-VALUE"
+}
+
+// The rate limit writes ten records of a kind per window and counts the rest. The count is written once the window has
+// ended, by the next answer, before that answer's own record.
+void TestTheRecordLimitCountsTheRestAndWritesTheCountOnceTheWindowEnds() {
+  const CaseScope scope("lobby records limit");
+  g_recordsParty = GoldenParty();
+  g_recordsNowMs = 1000;
+  Rig rig(RecordsOn(WithLogin(kLogin)));
+  const RemoteId session = OpenSessionWithMatchmaker(rig);
+  for (int i = 0; i < 11; ++i) {
+    rig.router->OnRemoteFrame(session, Msg(kSymLobbySessionSuccess, lobby_record_golden::SuccessPayload()), true);
+  }
+  QCHECK(RecordLines(rig.logs, "[NEVR.WS] lobby session success").size() == 10);
+  QCHECK(RecordLines(rig.logs, "suppressed").empty());
+  g_recordsNowMs = 11000;  // ten seconds after the window opened at 1000
+  rig.router->OnRemoteFrame(session, Msg(kSymLobbySessionSuccess, lobby_record_golden::SuccessPayload()), true);
+  const std::vector<std::string> lines = RecordLines(rig.logs, "[NEVR.WS] lobby");
+  QCHECK(lines.size() == 12);
+  if (lines.size() == 12) {
+    QCHECK(lines[10] == "[NEVR.WS] lobby frame records suppressed kind=success count=1 window_ms=10000 limit=10 "
+                        "(these frames were handled, only their records were not written)");
+    QCHECK(lines[11].rfind("[NEVR.WS] lobby session success conn=2", 0) == 0);
+  }
+  QCHECK(rig.games.Sent().size() == 12);  // every answer reached the game, counted or not
+}
+
+// One frame with two answers writes one record for each, in the order the answers came.
+void TestABatchedFrameWritesARecordForEachAnswer() {
+  const CaseScope scope("lobby records batch");
+  namespace golden = lobby_record_golden;
+  g_recordsParty = GoldenParty();
+  g_recordsNowMs = golden::kFindAt;
+  Rig rig(RecordsOn(WithLogin(kLogin)));
+  const RemoteId session = OpenSessionWithMatchmaker(rig);
+  rig.router->OnGameFrame(3, Msg(nevr_evr_codec::kSymFindSessionRequest, "find"), true);
+  g_recordsNowMs = golden::kSuccessAt;
+  const std::string batch = Msg(kSymLobbySessionSuccess, golden::SuccessPayload()) +
+                            Msg(nevr_lobby_frame::kSymSessionFailure, golden::FailurePayload(8));
+  rig.router->OnRemoteFrame(session, batch, true);
+  const std::vector<std::string> expected = {
+      golden::kSuccessAfterFind,
+      "[NEVR.WS] lobby session failure conn=2 code=8 reason=lobby_full "
+      "group=44332211-6655-8877-99AA-BBCCDDEEFFB0 message_bytes=23 party_id=7 party_size=3 party_leader=no "
+      "last_request=find last_request_age_ms=250 request_outstanding=no"};
+  QCHECK(RecordLines(rig.logs, "[NEVR.WS] lobby session") == expected);
+}
+
+// An answer the decode cannot read is a warning with its payload length, and writes no record.
+void TestAnUnreadableAnswerIsAWarningWithItsLength() {
+  const CaseScope scope("lobby records unreadable");
+  Rig rig(RecordsOn(WithLogin(kLogin)));
+  const RemoteId session = OpenSessionWithMatchmaker(rig);
+  rig.router->OnRemoteFrame(session, Msg(kSymLobbySessionSuccess, "x"), true);
+  QCHECK(rig.logs.Has("[NEVR.WS] lobby session success could not be read conn=2 payload_bytes=1",
+                      static_cast<int>(LogLevel::Warning)));
+  QCHECK(RecordLines(rig.logs, "[NEVR.WS] lobby session").size() == 1);  // the warning, and no record
+}
+
+// An answer the game does not get writes no record: the outbound buffer refused it and the game was closed.
+void TestAnAnswerTheGameDoesNotGetWritesNoRecord() {
+  const CaseScope scope("lobby records undelivered");
+  g_recordsNowMs = 1000;
+  // The limit is the router's for the remote as well (PushToRemoteLocked): the session's login frame (56 bytes) must fit,
+  // and the answer's frame (128 bytes) must not, so only the game's queue refuses it.
+  Options options = RecordsOn(WithLogin(kLogin));
+  options.limits.maxOutboundBytes = 100;
+  Rig rig(std::move(options));
+  const RemoteId session = OpenSessionWithMatchmaker(rig);
+  rig.router->OnGameFrame(3, Msg(nevr_evr_codec::kSymFindSessionRequest, "find"), true);
+  rig.router->OnRemoteFrame(session, Msg(kSymLobbySessionSuccess, lobby_record_golden::SuccessPayload()), true);
+  QCHECK(RecordLines(rig.logs, "[NEVR.WS] lobby").empty());
+  QCHECK(rig.games.Closes().size() == 1);
+}
+
 int main() {
   TestLoginRemovedFixedSizeIsPinned();
   if (quest_test::Failures() != 0) {
@@ -3520,6 +3752,17 @@ int main() {
   TestAClosedSocketsQueuedBytesDoNotCountAgainstTheLimit();
   TestAHintedConfigSocketIsNotRefusedByTheMatchmakerCap();
   TestRelabelToMatchmakerChecksTheCap();
+  TestAnswerRecordsMatchTheGoldenLines();
+  TestNoRecordsWithoutTheOption();
+  TestAnAnswerNamesAJoinAsItsRequest();
+  TestAnAnswerWithNoRequestAndNoPartyNamesNone();
+  TestAnAnswerWithNoPartySourceSaysUnknown();
+  TestAnUnknownFailureCodeNamesNoReason();
+  TestAFailureMessageIsCountedAndNeverWritten();
+  TestTheRecordLimitCountsTheRestAndWritesTheCountOnceTheWindowEnds();
+  TestABatchedFrameWritesARecordForEachAnswer();
+  TestAnUnreadableAnswerIsAWarningWithItsLength();
+  TestAnAnswerTheGameDoesNotGetWritesNoRecord();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "session_router_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

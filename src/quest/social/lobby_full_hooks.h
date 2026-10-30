@@ -14,7 +14,7 @@
 // (sentinel::InstallRowThunk); a row that is not verified stays pass-through and its status is logged.
 namespace quest_social::lobby_full {
 
-// The game's lobby-session failure code for "lobby full". The name table is src/runtime/compat/lobby_frame.h:201-206
+// The game's lobby-session failure code for "lobby full". The name table is `FailureReason` in src/runtime/compat/lobby_frame.h
 // (PC); the Quest refusal callback reads the same byte and its switch has no text for it (libr15 0x1240cc8 pinned).
 inline constexpr std::int8_t kLobbyFullCode = 8;
 

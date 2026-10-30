@@ -86,6 +86,7 @@
 #include <vector>
 
 #include "runtime/compat/evr_codec.h"
+#include "runtime/compat/lobby_frame.h"
 #include "runtime/compat/socket_role.h"
 
 namespace nevr_session_router {
@@ -195,6 +196,13 @@ struct Limits {
   std::size_t maxMatchmakerConnections = 8;             // live matchmaker connections (counted by role, hinted or not)
 };
 
+// The lobby session records of the answers this router delivers (Options::lobbyRecords, #1429).
+struct LobbyRecords {
+  bool enabled = false;
+  uint64_t (*clockMs)() = nullptr;                                     // null: a steady clock, in milliseconds
+  std::optional<nevr_lobby_frame::PartyContext> (*party)() = nullptr;  // null: the party is unknown, and the records say so
+};
+
 // Injection is OFF unless the wiring turns it on, and is mutually exclusive with a game that sends its own
 // login. The PC bridge injects (pnsrad sends no login: it has no identity). On Quest the game's own login is
 // rewritten in place (PR #221) and is the only login, so the Quest wiring leaves both fields at their
@@ -210,6 +218,10 @@ struct Options {
   // Non-empty: the JSON document of the SNSLoginRemovedNotify sent to a game whose login session was lost
   // under it (Quest). Built by the wiring (nlohmann::json); empty (default) sends no notice (PC).
   std::string loginRemovedJson;
+  // The lobby session records (logging.md Rule 16) of each answer delivered to a game. Off by default: the PC bridge
+  // writes its own from the frames it observes (ws_bridge.cpp), and a PC router that wrote them too would write each
+  // record twice. The Quest wiring turns them on (session_bridge.cpp).
+  LobbyRecords lobbyRecords;
   LogSink log;                        // null: logging off
 };
 
@@ -356,6 +368,12 @@ class Router {
   void FailSession(RemoteId remote, uint16_t code, const char* why, bool closeRemote);
   void Log(Effects& fx, LogLevel level, std::string line);
 
+  // The lobby session records (#1429, Options::lobbyRecords). Both do nothing unless the option is enabled. A game's
+  // find or join takes the request tracker; an answer the game is handed is recorded for connection connIdx.
+  void LobbyRequestsLocked(const std::string& frame);
+  void LobbyAnswersLocked(const std::string& frame, int connIdx, Effects& fx);
+  uint64_t LobbyNowMs() const;
+
   void Run(Effects& fx);  // executes recorded work with the mutex released
   void BuildAndSendLogin(RemoteId remote);  // the builder runs here, with no lock held
   void DrainRemote(RemoteId remote);
@@ -366,6 +384,7 @@ class Router {
   Options options_;
 
   mutable std::mutex mutex_;
+  nevr_lobby_frame::ClientLobbyRecords clientRecords_;  // guarded by mutex_ (the lobby records, #1429)
   std::unordered_map<GameId, Game> gameTable_;
   std::unordered_map<RemoteId, Remote> remoteTable_;
   RemoteId nextRemote_ = 1;

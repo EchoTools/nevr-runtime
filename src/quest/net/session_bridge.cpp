@@ -5,6 +5,8 @@
 #include <nlohmann/json.hpp>
 
 #include "runtime/compat/evr_codec.h"
+#include "runtime/compat/lobby_frame.h"
+#include "runtime/compat/social_party.h"
 #include "runtime/server/serverdb_uri.h"
 
 namespace quest_net {
@@ -24,6 +26,14 @@ LoopbackGameServer::Config WithLog(LoopbackGameServer::Config c, const nevr_sess
 CurlWsConnector::Config WithLog(CurlWsConnector::Config c, const nevr_session_router::LogSink& log) {
   if (!c.log) c.log = log;
   return c;
+}
+
+// The party a session record names: the process-wide party state the Quest social facade keeps (#1429). The router
+// calls it under its own lock; social_party.h makes no call back into the router, so that order cannot invert.
+std::optional<nevr_lobby_frame::PartyContext> LobbyParty() {
+  const nevr_social_party::View view = nevr_social_party::Global().Snapshot();
+  return nevr_lobby_frame::PartyContext{view.partyId, static_cast<uint64_t>(view.members.size()), view.ownerId,
+                                        view.selfId};
 }
 
 }  // namespace
@@ -128,6 +138,10 @@ SessionBridge::SessionBridge(Config config) : config_(std::move(config)), tap_(F
   options.loginGate = config_.loginGate;
   options.subscribeFriendList = config_.subscribeFriendList;
   options.log = config_.log;
+  // The lobby session records (logging.md Rule 16, #1429): the Quest client writes them here, from the answers the
+  // router hands the game, as the PC bridge writes them from the frames it observes.
+  options.lobbyRecords.enabled = true;
+  options.lobbyRecords.party = &LobbyParty;
   router_ = std::make_unique<nevr_session_router::Router>(gamesTap_.get(), remotesTap_.get(), options);
   server_->Attach(router_.get());
   remotes_->Attach(router_.get());

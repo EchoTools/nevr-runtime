@@ -10,8 +10,11 @@
 #include <vector>
 
 #include "nevr/symbol_hash.h"
+#include <optional>
+
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/lobby_frame.h"
+#include "runtime/tests/lobby_record_golden.h"
 
 namespace lf = nevr_lobby_frame;
 
@@ -359,4 +362,95 @@ TEST(LobbyFrameText, PartyFieldsOfAPartyLedByAnotherAccountAreNotLeader) {
 TEST(LobbyFrameText, TheLeaderIsUnknownUntilTheLocalAccountAndTheOwnerAreBothKnown) {
   EXPECT_EQ(lf::FormatPartyFields(7, 1, 100, 0), "party_id=7 party_size=1 party_leader=unknown");
   EXPECT_EQ(lf::FormatPartyFields(7, 1, 0, 100), "party_id=7 party_size=1 party_leader=unknown");
+}
+
+// #1429: the session record, its notices and its warning, shared by the PC bridge and the Quest router. The
+// golden lines are in lobby_record_golden.h; these pin each function on its own.
+TEST(LobbyFrameRecords, ASessionSuccessRecordIsTheGoldenLine) {
+  lf::Decoded d;
+  const std::string payload = lobby_record_golden::SuccessPayload();
+  ASSERT_TRUE(lf::Decode(lf::Kind::Success, Bytes(payload), payload.size(), &d));
+  lf::RequestContext request;
+  request.sent = true;
+  request.kind = lf::Kind::Find;
+  request.ageMs = 250;
+  request.outstanding = true;
+  const lf::PartyContext party{lobby_record_golden::kPartyId, lobby_record_golden::kPartyMembers,
+                               lobby_record_golden::kPartyOwner, lobby_record_golden::kPartySelf};
+  EXPECT_EQ(lf::FormatSessionRecord(d, lobby_record_golden::kConn, party, request),
+            std::string(lobby_record_golden::kSuccessAfterFind));
+}
+
+TEST(LobbyFrameRecords, AFailureRecordNamesItsReasonAndCountsItsMessageNeverCopiesIt) {
+  lf::Decoded d;
+  const std::string payload = lobby_record_golden::FailureWithMessage(8, "private-text");
+  ASSERT_TRUE(lf::Decode(lf::Kind::Failure, Bytes(payload), payload.size(), &d));
+  const std::string line = lf::FormatSessionRecord(d, 2, std::nullopt, lf::RequestContext{});
+  EXPECT_NE(line.find("code=8 reason=lobby_full "), std::string::npos) << line;
+  EXPECT_NE(line.find("message_bytes=12 "), std::string::npos) << line;
+  EXPECT_EQ(line.find("private-text"), std::string::npos) << line;
+}
+
+TEST(LobbyFrameRecords, APartyWithNoSourceReadsUnknownNotNone) {
+  EXPECT_EQ(lf::FormatPartyFields(std::nullopt), "party_id=unknown party_size=unknown party_leader=unknown");
+  EXPECT_EQ(lf::FormatPartyFields(lf::PartyContext{}), "party_id=none party_size=0 party_leader=no");
+}
+
+TEST(LobbyFrameRecords, AFindIsNotARecordSoItHasNoSessionLine) {
+  lf::Decoded d;
+  d.kind = lf::Kind::Find;
+  EXPECT_EQ(lf::FormatSessionRecord(d, 2, std::nullopt, lf::RequestContext{}), "");
+}
+
+TEST(LobbyFrameRecords, TheSuppressedNoticeAndTheUnreadableWarningAreTheirPinnedText) {
+  EXPECT_EQ(lf::FormatSuppressedNotice(lf::Kind::Success, 3),
+            "[NEVR.WS] lobby frame records suppressed kind=success count=3 window_ms=10000 limit=10 (these frames "
+            "were handled, only their records were not written)");
+  EXPECT_EQ(lf::FormatUnreadable(lf::Kind::Success, 2, 1),
+            "[NEVR.WS] lobby session success could not be read conn=2 payload_bytes=1");
+}
+
+TEST(LobbyFrameRecords, AnAnswerTakesTheRequestBeforeItAndOnlyTheFirstAnswerIsOutstanding) {
+  lf::ClientLobbyRecords records;
+  records.Requested(lf::Kind::Find, 1000);
+  const lf::ClientLobbyRecords::Admission first = records.Admit(lf::Kind::Success, 1250);
+  EXPECT_TRUE(first.request.sent);
+  EXPECT_EQ(first.request.kind, lf::Kind::Find);
+  EXPECT_EQ(first.request.ageMs, 250U);
+  EXPECT_TRUE(first.request.outstanding);
+  const lf::ClientLobbyRecords::Admission second = records.Admit(lf::Kind::Failure, 1300);
+  EXPECT_FALSE(second.request.outstanding);
+  EXPECT_EQ(second.request.ageMs, 300U);
+}
+
+TEST(LobbyFrameRecords, ANewerRequestReplacesTheOneAnAnswerWouldTake) {
+  lf::ClientLobbyRecords records;
+  records.Requested(lf::Kind::Find, 1000);
+  records.Requested(lf::Kind::Join, 1100);
+  const lf::ClientLobbyRecords::Admission answer = records.Admit(lf::Kind::Success, 1150);
+  EXPECT_EQ(answer.request.kind, lf::Kind::Join);
+  EXPECT_EQ(answer.request.ageMs, 50U);
+}
+
+TEST(LobbyFrameRecords, TheLimitIsPerKindAndItsEndedWindowIsCountedOnTheNextAnswer) {
+  lf::ClientLobbyRecords records;
+  unsigned written = 0;
+  for (int i = 0; i < 11; ++i) {
+    if (records.Admit(lf::Kind::Success, 1000).verdict.log) ++written;
+  }
+  EXPECT_EQ(written, 10U);
+  const lf::ClientLobbyRecords::Admission later = records.Admit(lf::Kind::Success, 11000);
+  EXPECT_EQ(later.verdict.flushed[static_cast<std::size_t>(lf::Kind::Success)], 1U);
+  EXPECT_TRUE(later.verdict.log);
+}
+
+TEST(LobbyFrameRecords, ResetForgetsTheRequestAndTheWindow) {
+  lf::ClientLobbyRecords records;
+  records.Requested(lf::Kind::Find, 1000);
+  for (int i = 0; i < 10; ++i) records.Admit(lf::Kind::Success, 1000);
+  records.Reset();
+  const lf::ClientLobbyRecords::Admission after = records.Admit(lf::Kind::Success, 1100);
+  EXPECT_FALSE(after.request.sent);
+  EXPECT_TRUE(after.verdict.log);
+  EXPECT_EQ(after.verdict.flushed[static_cast<std::size_t>(lf::Kind::Success)], 0U);
 }

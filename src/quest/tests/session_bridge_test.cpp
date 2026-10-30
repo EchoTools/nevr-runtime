@@ -15,6 +15,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -26,6 +27,8 @@
 #include "quest/net/ws_wire.h"
 #include "quest/tests/test_check.h"
 #include "runtime/compat/evr_codec.h"
+#include "runtime/compat/lobby_frame.h"
+#include "runtime/tests/lobby_record_golden.h"
 
 using namespace quest_net;
 
@@ -751,6 +754,97 @@ void TestReconnectedLoginSocketIsToldItsLoginWasRemoved() {
 
 }  // namespace
 
+// The lobby session record of a success that reaches the game (#1429): the bridge turns the records on and reads the
+// party from the process-wide party state. The record from lobby= on is the golden line's, with no party and no
+// request, since none is set here. Caught: the records off (no line at all), and the party source missing (the
+// fields say unknown, not none).
+void TestLobbySuccessReachingTheGameIsRecorded() {
+  FakeConnector connector;
+  Observed seen;
+  SessionBridge::Config cfg = MakeConfig(&connector, &seen, "JWT-A");
+  std::mutex logMutex;
+  std::vector<std::string> lines;
+  cfg.log = [&](nevr_session_router::LogLevel, const std::string& line) {
+    const std::lock_guard<std::mutex> lock(logMutex);
+    lines.push_back(line);
+  };
+  SessionBridge bridge(std::move(cfg));
+  const uint16_t port = bridge.Start();
+  QCHECK(port != 0);
+
+  Client config(port), login(port), matchmaker(port);
+  const std::string path = PathOf(bridge.LocalUri());
+  QCHECK(config.Upgrade(path));
+  QCHECK(connector.WaitConnects(1));
+  QCHECK(login.Upgrade(path));
+  QCHECK(WaitFor([&] { return bridge.ConnectionsCounted() >= 2; }));
+  QCHECK(matchmaker.Upgrade(path));  // no tag and no connection left for it: the matchmaker
+  QCHECK(WaitFor([&] { return bridge.ConnectionsCounted() >= 3; }));
+
+  FakeConnection* remote = nullptr;
+  QCHECK(WaitFor([&] {
+    std::lock_guard<std::mutex> lock(connector.mutex);
+    if (connector.connections.empty()) return false;
+    remote = connector.connections[0];
+    return true;
+  }));
+  QCHECK(remote != nullptr);
+  if (remote == nullptr) return;
+  // The game's find goes first, so the success's record names it: its age is the time from the find to the answer,
+  // on the production clock (the default, not a test clock). The find is forwarded to the session.
+  const std::string find = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymFindSessionRequest, "find");
+  matchmaker.Write(BuildMaskedFrame(Opcode::Binary, find, kMask));
+  QCHECK(WaitFor([&] {
+    std::lock_guard<std::mutex> lock(connector.mutex);
+    for (const std::string& sent : remote->Sent()) {
+      if (sent == find) return true;
+    }
+    return false;
+  }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));  // a measurable age: at least 300 ms
+  const std::string success = nevr_evr_codec::BuildMessage(nevr_lobby_frame::kSymSessionSuccess,
+                                                           lobby_record_golden::SuccessPayload());
+  remote->Push(success);
+  const std::string wire = BuildFrame(Opcode::Binary, success);
+  QCHECK(matchmaker.Read(wire.size()) == wire);  // the answer reaches the game
+
+  const auto successLine = [&]() -> std::string {
+    std::lock_guard<std::mutex> lock(logMutex);
+    std::string found;
+    for (const std::string& line : lines) {
+      if (line.find("lobby session success") != std::string::npos) found = line;
+    }
+    return found;
+  };
+  QCHECK(WaitFor([&] { return !successLine().empty(); }));
+  const std::string record = successLine();
+  // The golden line with no request, cut at the request fields: the fields before them are the golden's, the request
+  // is the find, outstanding, and aged in ms (300 ms or more, and well under the limit of a minute).
+  const std::string golden = lobby_record_golden::kSuccessNoRequestNoParty;
+  const std::string requestKey = " last_request=";
+  const std::size_t goldenTail = golden.find(" lobby=");
+  const std::size_t goldenRequest = golden.find(requestKey);
+  const std::size_t recordTail = record.find(" lobby=");
+  const std::size_t recordRequest = record.find(requestKey);
+  QCHECK(record.rfind("[NEVR.WS] lobby session success conn=", 0) == 0);
+  QCHECK(goldenTail != std::string::npos && goldenRequest != std::string::npos && recordTail != std::string::npos &&
+         recordRequest != std::string::npos);
+  QCHECK(goldenTail != std::string::npos && goldenRequest != std::string::npos && recordTail != std::string::npos &&
+         recordRequest != std::string::npos &&
+         record.substr(recordTail, recordRequest - recordTail) == golden.substr(goldenTail, goldenRequest - goldenTail));
+  const std::string requestFields = recordRequest == std::string::npos ? "" : record.substr(recordRequest);
+  const std::string agePrefix = " last_request=find last_request_age_ms=";
+  const std::string outstanding = " request_outstanding=yes";
+  QCHECK(requestFields.rfind(agePrefix, 0) == 0);
+  QCHECK(requestFields.size() > outstanding.size() &&
+         requestFields.compare(requestFields.size() - outstanding.size(), outstanding.size(), outstanding) == 0);
+  if (requestFields.rfind(agePrefix, 0) == 0) {
+    const std::string age = requestFields.substr(agePrefix.size(), requestFields.size() - agePrefix.size() - outstanding.size());
+    const unsigned long long ms = std::strtoull(age.c_str(), nullptr, 10);
+    QCHECK(ms >= 300 && ms < 60000);
+  }
+}
+
 int main() {
   TestUpgradeKeepsCloseFrameSentWithResponse();
   TestLoginRelayTapAndSideChannel();
@@ -764,6 +858,7 @@ int main() {
   TestPlaintextRemoteUriDoesNotStart();
   TestSideChannelRefusesWhenNothingIsConnected();
   TestReconnectedLoginSocketIsToldItsLoginWasRemoved();
+  TestLobbySuccessReachingTheGameIsRecorded();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "session_bridge_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
