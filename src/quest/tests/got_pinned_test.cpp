@@ -427,6 +427,34 @@ int main(int argc, char** argv) {
     QCHECK(false);
   }
 
+  // The UI text writer's three game calls (runtime/patch/ui_text.h, quest/invite/ui_text_quest.cpp): each at its pinned address with
+  // the words the writer checks. The Itanium-mangled name of each is the .dynsym entry at that address.
+  const struct {
+    const char* name;
+    std::uint64_t vaddr;
+    const std::uint32_t* words;
+    std::size_t count;
+    const char* symbol;
+  } textCalls[] = {
+      {"CncaGame::GameSpace", pinned::kGameSpaceVaddr, pinned::kGameSpaceCode, sizeof(pinned::kGameSpaceCode) / 4,
+       "_ZN10NRadEngine8CncaGame9GameSpaceEy"},
+      {"CLocalComponentHandle<CCanvasUICS>::Find", pinned::kCanvasFindVaddr, pinned::kCanvasFindCode,
+       sizeof(pinned::kCanvasFindCode) / 4,
+       "_ZN10NRadEngine21CLocalComponentHandleINS_11CCanvasUICSEE4FindEPNS_15CncaGameSpaceMTENS_6SActorENS_9CSymbol64E"},
+      {"CCanvasUICS::SetText", pinned::kCanvasSetTextVaddr, pinned::kCanvasSetTextCode, sizeof(pinned::kCanvasSetTextCode) / 4,
+       pinned::kCanvasSetTextSymbol},
+  };
+  for (const auto& call : textCalls) {
+    if (DynamicSymbolValue(r15, call.symbol) != call.vaddr) {
+      std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", call.name, static_cast<unsigned long long>(call.vaddr));
+      QCHECK(false);
+    }
+    if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + call.vaddr, call.words, call.count * 4) != 0) {
+      std::fprintf(stderr, "libr15 %s: first instructions differ from the pinned ones\n", call.name);
+      QCHECK(false);
+    }
+  }
+
   // CGTextureResource::ForceLoadAllMips, which the UI texture hook calls through the address it proves: its first
   // four instructions are the ones ui_texture_mips.cpp checks before calling it. The inline hook rows (the widget
   // update, the lobby-full handlers, the texture attach) are not pinned here: the patcher pinned test checks every row's

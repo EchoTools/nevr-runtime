@@ -230,6 +230,16 @@ The service contract is platform-neutral. PC is built first (the PC addresses an
 same scripts and the same `Join` body (`libr15.so`, ReVault virtual address `0x13462a8`) and gets its own hook in
 `src/quest`, through that project's own mechanism, against the same RPCs.
 
+The wizard's texts are written by one writer on both binaries (`patch/ui_text.h`: the queue, the actor lookup, the write, the
+log lines). Only the address table and the memory it reads differ. On the Quest (`quest/invite/ui_text_quest.cpp`) the game
+object is the frame hook's netgame +8; `CncaGame::GameSpace(index)` (libr15 `0x17e17fc`; the PC's `GetGameSpace`, the same
+function with the array at `+0x1f48` and the count at `+0x1f78`), `CLocalComponentHandle<CCanvasUICS>::Find` (`0x1cbb408`) and
+`CCanvasUICS::SetText` (`0x139111c`) are each pinned by their prologue words (`sentinel/pinned_targets.h`; ReVault lists each
+`0x100000` higher). The Quest's actor table differs from the PC's: `[gs+0x370]` is a name-sorted array of 16-byte entries (a
+signed 64-bit name, the actor index as a u16 at `+8`, the count at `table+0x30`), read as `CncaGameSpace::LocalActor` reads it
+(`nevr_ui_text::FindActorInSortedMap`). The answers reach it through `nevr_invite_match::TakeShareText`, filed by the same take
+that files a resolved match.
+
 ## Security
 
 On a PC client, `network.invite_codes` is on by default (`src/runtime/patch/invite_config.h:17-18`, `:27`): an absent or

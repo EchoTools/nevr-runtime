@@ -75,6 +75,20 @@ struct RealPlatform {
     std::memcpy(out, reinterpret_cast<const void*>(address), length);
     return true;
   }
+  bool FindActor(std::uintptr_t gs, std::uint64_t actor, std::uint64_t* index) { return FindActorIndex(*this, gs, actor, index); }
+  /// The table's own fields, appended to a `text probe space=` line when a request finds no actor.
+  std::string ActorTableProbe(std::uintptr_t gs) {
+    std::uint64_t table = 0, names = 0, count = 0;
+    const bool read = Read(gs + kSpaceActorTableOffset, &table, sizeof(table)) && table != 0 &&
+                      Read(static_cast<std::uintptr_t>(table) + kTableNamesOffset, &names, sizeof(names)) &&
+                      Read(static_cast<std::uintptr_t>(table) + kTableCountOffset, &count, sizeof(count));
+    return " table=" + HexShort(table) + " names=" + HexShort(names) + " count=" + std::to_string(count) +
+           " read=" + (read ? "1" : "0");
+  }
+  std::string FirstWriteLine() {
+    return "[NEVR.UI] text first write thread=" + std::to_string(GetCurrentThreadId()) +
+           " game_loop_thread=" + std::to_string(GameLoopThreadId());
+  }
   bool FindCanvas(std::uintptr_t gs, std::uint64_t ident, std::uintptr_t* cs, std::uint32_t* handle) {
     CanvasHandle found;
     g_find(&found, reinterpret_cast<void*>(gs), ident, kSymCanvasUi);
@@ -105,26 +119,6 @@ void* Pinned(std::uint64_t va, const std::uint8_t* expected, std::size_t length,
   }
   *state = "prologue_mismatch";
   return nullptr;
-}
-
-/// What the gamespaces look like when a request finds no actor: one line per gamespace, so a miss explains itself.
-void ProbeSpaces(RealPlatform& p) {
-  const std::uintptr_t game = p.Game();
-  if (game == 0) return;
-  for (std::size_t i = 0; i < kMaxGameSpaces; ++i) {
-    const std::uintptr_t gs = p.GameSpace(game, i);
-    if (gs == 0) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.UI] text probe spaces=%zu", i);
-      return;
-    }
-    std::uint64_t table = 0, names = 0, count = 0;
-    const bool read = p.Read(gs + kSpaceActorTableOffset, &table, sizeof(table)) && table != 0 &&
-                      p.Read(static_cast<std::uintptr_t>(table) + kTableNamesOffset, &names, sizeof(names)) &&
-                      p.Read(static_cast<std::uintptr_t>(table) + kTableCountOffset, &count, sizeof(count));
-    Log(EchoVR::LogLevel::Info, "[NEVR.UI] text probe space=%zu gs=0x%llx table=0x%llx names=0x%llx count=%llu read=%d", i,
-        static_cast<unsigned long long>(gs), static_cast<unsigned long long>(table), static_cast<unsigned long long>(names),
-        static_cast<unsigned long long>(count), read ? 1 : 0);
-  }
 }
 
 }  // namespace
@@ -161,23 +155,9 @@ void OnFrame() {
   if (!Ready() || g_pending.Size() == 0) return;
   RealPlatform platform;
   static std::atomic<bool> s_firstWrite{false};
-  for (const Report& r : g_pending.Drain(platform, NowMs())) {
-    if (!r.done) {
-      // The first miss and then one a 5 s: a request the page never answers must explain itself before its give-up.
-      if (r.attempts == 1 || r.attempts % 50 == 0) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.UI] text waiting actor=%s element=%s bytes=%zu attempts=%d outcome=%s",
-            Hex64(r.request.target.actor).c_str(), Hex64(r.request.target.element).c_str(), r.request.text.size(), r.attempts,
-            OutcomeName(r.outcome));
-        if (r.attempts == 1 && r.outcome == Outcome::NoActor) ProbeSpaces(platform);
-      }
-      continue;
-    }
-    Log(r.dropped ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info, "%s", ReportLine(r).c_str());
-    if (!r.dropped && !s_firstWrite.exchange(true)) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.UI] text first write thread=%lu game_loop_thread=%lu",
-          static_cast<unsigned long>(GetCurrentThreadId()), GameLoopThreadId());
-    }
-  }
+  RunFrame(g_pending, platform, NowMs(), s_firstWrite, [](LogLevel level, const std::string& line) {
+    Log(level == LogLevel::Warning ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info, "%s", line.c_str());
+  });
 }
 
 }  // namespace nevr_ui_text

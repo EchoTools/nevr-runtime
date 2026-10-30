@@ -1,5 +1,6 @@
 #include "runtime/patch/invite_service.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <deque>
@@ -11,6 +12,7 @@
 #include <mutex>
 #include <utility>
 
+#include "runtime/patch/invite_answer_text.h"
 #include "runtime/patch/invite_transport.h"
 #include "runtime/patch/invite_match_api.h"
 
@@ -165,6 +167,16 @@ MatchQueue& Matches() {
   return queue;
 }
 
+// The texts the answers asked for and the frame path has not taken yet (ShareText), oldest first.
+struct TextQueue {
+  std::mutex mutex;
+  std::deque<nevr_invite_match::ShareText> texts;
+};
+TextQueue& Texts() {
+  static TextQueue queue;
+  return queue;
+}
+
 // The number of ids in the queue, readable without its mutex: ResolvedMatchPending reads it on every frame.
 std::atomic<std::size_t> g_matchesWaiting{0};
 
@@ -182,13 +194,28 @@ bool nevr_invite_match::TakeResolvedMatch(char* out, std::size_t capacity, std::
   std::lock_guard<std::mutex> lock(queue.mutex);
   if (queue.matches.empty()) {
     for (const nevr_invite::Answer& answer : nevr_invite_service::TakeAnswers()) {
-      if (answer.op != nevr_invite::Op::Resolve || answer.result != nevr_invite::Result::Ok) {
-        nevr_invite_service::NoteDroppedAnswer(answer);
-        continue;
+      // One answer, two readers of it: the texts it asks the wizard's pages to show (a created code, a refusal), and the match a
+      // resolved code names. An answer that is neither is the one the join drops.
+      bool used = false;
+      for (const nevr_invite_text::Item& item : nevr_invite_text::TextsFor(answer)) {
+        nevr_invite_match::ShareText text;
+        text.actor = item.request.target.actor;
+        text.element = item.request.target.element;
+        const std::string field = nevr_invite_text::FieldName(item.field);
+        std::memcpy(text.field, field.data(), std::min(field.size(), sizeof(text.field) - 1));
+        text.length = std::min(item.request.text.size(), kMaxShareTextBytes);
+        std::memcpy(text.text, item.request.text.data(), text.length);
+        std::lock_guard<std::mutex> textLock(Texts().mutex);
+        Texts().texts.push_back(text);
+        used = true;
       }
-      const std::optional<nevr_invite::Resolved> resolved = nevr_invite::ParseResolved(answer.body);
-      const bool fits = resolved.has_value() && resolved->match_id.size() <= kMaxMatchIdBytes;
-      queue.matches.push_back(fits ? resolved->match_id : std::string());
+      if (answer.op == nevr_invite::Op::Resolve && answer.result == nevr_invite::Result::Ok) {
+        const std::optional<nevr_invite::Resolved> resolved = nevr_invite::ParseResolved(answer.body);
+        const bool fits = resolved.has_value() && resolved->match_id.size() <= kMaxMatchIdBytes;
+        queue.matches.push_back(fits ? resolved->match_id : std::string());
+        used = true;
+      }
+      if (!used) nevr_invite_service::NoteDroppedAnswer(answer);
     }
     g_matchesWaiting.store(queue.matches.size(), std::memory_order_release);
   }
@@ -200,6 +227,16 @@ bool nevr_invite_match::TakeResolvedMatch(char* out, std::size_t capacity, std::
   *length = n;
   queue.matches.pop_front();
   g_matchesWaiting.store(queue.matches.size(), std::memory_order_release);
+  return true;
+}
+
+bool nevr_invite_match::TakeShareText(ShareText* out) noexcept {
+  if (out == nullptr) return false;
+  TextQueue& queue = Texts();
+  std::lock_guard<std::mutex> lock(queue.mutex);
+  if (queue.texts.empty()) return false;
+  *out = queue.texts.front();
+  queue.texts.pop_front();
   return true;
 }
 
