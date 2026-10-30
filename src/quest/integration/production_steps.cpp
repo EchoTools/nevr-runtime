@@ -435,7 +435,8 @@ class ProductionSteps final : public Steps {
 
   PluginCounts PlanPlugins() override {
     const nevr_quest::plugin::PlanCounts counts = nevr_quest::plugin::PlanPlugins(
-        sentinel::ActiveConfig().plugins, nevr_quest::integration::ResourceRequestLogEnabled());
+        sentinel::ActiveConfig().plugins, nevr_quest::integration::ResourceRequestLogEnabled(),
+        sentinel::ActiveConfig().fileRejected);
     return {counts.early, counts.normal};
   }
 

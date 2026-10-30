@@ -27,7 +27,13 @@ struct Runtime {
   std::mutex mutex;
   SentinelPlatform platform;
   Loader loader;
-  Runtime(std::string libraryDir, bool devBuild) : platform(std::move(libraryDir), devBuild), loader(platform, Options{}) {}
+  Runtime(std::string libraryDir, bool devBuild, bool configRejected)
+      : platform(std::move(libraryDir), devBuild), loader(platform, LoaderOptions(configRejected)) {}
+  static Options LoaderOptions(bool configRejected) {
+    Options options;
+    options.configRejected = configRejected;
+    return options;
+  }
 };
 
 Runtime*& Instance() {
@@ -103,10 +109,10 @@ void Contained(const char* what, const std::exception& error) noexcept {
 
 }  // namespace
 
-PlanCounts PlanPlugins(const std::vector<nevr::PluginSpec>& specs, bool devBuild) noexcept {
+PlanCounts PlanPlugins(const std::vector<nevr::PluginSpec>& specs, bool devBuild, bool configRejected) noexcept {
   try {
     if (Instance() == nullptr) {
-      Instance() = new Runtime(OwnDirectory(), devBuild);
+      Instance() = new Runtime(OwnDirectory(), devBuild, configRejected);
       // Packaged entries first, then config.yaml: config overrides a packaged plugin in place, or names an unpackaged one
       // (MergePackaged, docs/adr/0019-quest-plugin-loader.md section 2).
       const std::vector<PackagedPlugin> packaged = ReadPackaged(Instance()->platform);

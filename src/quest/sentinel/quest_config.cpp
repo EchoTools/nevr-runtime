@@ -427,6 +427,7 @@ LoadResult ResolveConfig(const EmbeddedDefaults& defaults, const std::string* fi
     if (r.fileRejected) {
       // A rejected file contributes nothing: values and features are the embedded defaults.
       r.config = ResolvedConfig();
+      r.config.fileRejected = true;
       ApplyEmbedded(r.config, defaults, nullptr);
       SetDefaultRequests(r.config);
       // The file might have said anything about the texture quality, so the answer is the mistake's, not the default's.

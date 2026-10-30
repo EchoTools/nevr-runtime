@@ -136,6 +136,9 @@ struct ResolvedConfig {
   // The file's `plugins:` list as the PC parser read it (#438); empty when the file is absent or rejected. The plugin loader
   // plans from it (quest/plugin/plugin_runtime.h).
   std::vector<nevr::PluginSpec> plugins;
+  // The file existed and was rejected as a whole, so `plugins` is empty and the embedded defaults stand. The plugin loader
+  // reads it to say on each packaged plugin's record that the operator's file did not load (docs/adr/0019 section 2).
+  bool fileRejected = false;
 };
 
 struct LoadResult {
