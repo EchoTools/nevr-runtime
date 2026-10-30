@@ -1618,10 +1618,10 @@ static void OnRemoteLoginRefused(int httpStatus, const std::string& refusalKey, 
     firstTime = g_refusalLatch.ShouldSay(refusalKey);
   }
   if (firstTime) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.WS] login refused (HTTP %d) on conn=%d (%s): the service did not accept this sign-in; not asking "
-        "again until the sign-in changes",
-        httpStatus, connIdx, ConnLabel(connIdx));
+    // #1293: one line per refused sign-in, with the cause, the config loaded and the next step (ClientRefusedCause).
+    const std::string cause = nevr_login_refusal::ClientRefusedCause(httpStatus, NevrCfgSource());
+    Log(EchoVR::LogLevel::Warning, "[NEVR.WS] login refused conn=%d (%s): %s", connIdx, ConnLabel(connIdx),
+        cause.c_str());
   }
 }
 
