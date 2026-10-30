@@ -119,6 +119,6 @@ bool TestHook_RouterStats(uint64_t* droppedGame, uint64_t* droppedRemote, uint64
                           uint64_t* loginsRemoved, uint64_t* heldRemotes);
 #endif
 
-/// The lobby this client is in and the one it is joining, as the bridge last saw them from the lobby frames
+/// The lobby this client is in and the one it is joining, each with the time the bridge saw it
 /// (compat/lobby_join_state.h). Read by the JoinPartyLobby hook (#1413). Outside the test-hook block: production.
-void LobbyJoinSnapshot(nevr_lobby_join_state::Guid* current, nevr_lobby_join_state::Guid* joining);
+void LobbyJoinSnapshot(nevr_lobby_join_state::Stamp* current, nevr_lobby_join_state::Stamp* joining);

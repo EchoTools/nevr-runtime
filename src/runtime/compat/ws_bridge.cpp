@@ -606,7 +606,7 @@ static uint64_t (*g_lobbyClockMs)() = &RealLobbyClockMs;
 static nevr_social_party::View RealLobbyPartyView() { return nevr_social_party::Global().Snapshot(); }
 static nevr_social_party::View (*g_lobbyPartyView)() = &RealLobbyPartyView;
 
-void LobbyJoinSnapshot(nevr_lobby_join_state::Guid* current, nevr_lobby_join_state::Guid* joining) {
+void LobbyJoinSnapshot(nevr_lobby_join_state::Stamp* current, nevr_lobby_join_state::Stamp* joining) {
   g_lobbyJoin.Snapshot(current, joining);
 }
 

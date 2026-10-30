@@ -56,8 +56,9 @@ GetPartyLobbyIdFn g_getPartyLobbyId = nullptr;  // null when its prologue does n
 std::mutex g_mutex;
 Policy g_policy;
 
-// True when the follow was skipped: the leader's lobby is the one this client is in or is joining (#1413). The game
-// asks for the follow every update, so the skip is the only record of it, and it is logged once per skipped follow.
+// True when the follow was skipped: the leader's lobby is the one this client is in or is joining, and that answer is
+// younger than the window (#1413). The game asks for the follow every update, so the skip is the only record of it, and
+// it is logged once per skipped follow.
 bool TrySkipDuplicateFollow(void* netGame) {
   if (g_getPartyLobbyId == nullptr || netGame == nullptr) return false;
   std::uint8_t* game = static_cast<std::uint8_t*>(netGame);
@@ -66,16 +67,17 @@ bool TrySkipDuplicateFollow(void* netGame) {
   if (party == nullptr) return false;
   nevr_party_follow_dedup::Guid leader{};
   g_getPartyLobbyId(party, leader.data());
-  nevr_lobby_join_state::Guid current{};
-  nevr_lobby_join_state::Guid joining{};
+  nevr_lobby_join_state::Stamp current{};
+  nevr_lobby_join_state::Stamp joining{};
   ::LobbyJoinSnapshot(&current, &joining);
-  const nevr_party_follow_dedup::Skip skip = nevr_party_follow_dedup::Decide(leader, current, joining);
-  if (skip == nevr_party_follow_dedup::Skip::None) return false;
+  const std::uint64_t nowMs = nevr_lobby_join_state::SteadyNowMs();
+  const nevr_party_follow_dedup::Verdict verdict = nevr_party_follow_dedup::Decide(leader, current, joining, nowMs);
+  if (verdict.skip == nevr_party_follow_dedup::Skip::None) return false;
   const std::uint64_t partyId = nevr_social_party::Global().Snapshot().partyId;
-  Log(EchoVR::LogLevel::Info, "[NEVR.WS] party follow skipped lobby=%s reason=%s party_id=%llu",
+  Log(EchoVR::LogLevel::Info, "[NEVR.WS] party follow skipped lobby=%s reason=%s age_ms=%llu party_id=%llu",
       nevr_lobby_frame::FormatGuid(leader).c_str(),
-      skip == nevr_party_follow_dedup::Skip::AlreadyIn ? "already_in" : "already_joining",
-      static_cast<unsigned long long>(partyId));
+      verdict.skip == nevr_party_follow_dedup::Skip::AlreadyIn ? "already_in" : "already_joining",
+      static_cast<unsigned long long>(verdict.ageMs), static_cast<unsigned long long>(partyId));
   return true;
 }
 
