@@ -35,6 +35,15 @@ inline constexpr const char* kStagingPrefix = "_data.staging-";
 inline constexpr const char* kReplacedPrefix = "_data.replaced-";
 inline constexpr const char* kOwnerSuffix = ".nevr-owned";
 
+// A bundled content pack (docs/adr/0029-quest-bundled-content-pack.md) puts its files below `_data/<version>/rad15/android/`.
+// Each is written first to `<file>.nevr-pack.tmp` (with its marker, staging.h) and renamed into place; the stock manifest
+// it replaces is kept as `<manifest>.stock`. Only the two directories below are ever written, and only these two names are
+// ours: CleanPackLeftovers (staging.h) deletes a marked `*.nevr-pack.tmp` there and nothing else.
+inline constexpr const char* kPackTmpSuffix = ".nevr-pack.tmp";
+inline constexpr const char* kStockBackupSuffix = ".stock";
+inline constexpr const char* kManifestsDir = "manifests";
+inline constexpr const char* kPackagesDir = "packages";
+
 // Disk the fetch needs below the data root: the zip plus its extracted tree (about 2.2 GiB), plus the old `_data`
 // kept aside when one is replaced.
 inline constexpr std::uint64_t kZipExtractedBytes = 1200000000;
