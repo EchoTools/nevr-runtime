@@ -39,13 +39,10 @@ int Handler(Thunk::Fn original, std::uint64_t* /*version*/) noexcept {
 
 NEVR_HOOK_RECORD(kHook, Thunk, &Handler);
 
-// The floor from the loaded libr15, read only after its build ID is the pinned one. `*source` names the outcome.
-std::uint64_t ReadPinnedFloor(const char** source) noexcept {
-  sentinel::ElfImage image;
-  if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) {
-    *source = "module_not_loaded";
-    return 0;
-  }
+}  // namespace
+
+// The floor from a libr15 image, read only after its build ID is the pinned one. `*source` names the outcome.
+std::uint64_t ReadPinnedFloorFrom(const sentinel::ElfImage& image, const char** source) noexcept {
   char id[64] = {};
   if (!sentinel::ReadBuildId(image, id, sizeof(id))) {
     *source = "no_build_id";
@@ -60,6 +57,18 @@ std::uint64_t ReadPinnedFloor(const char** source) noexcept {
               sizeof(floor));
   *source = "pinned";
   return floor;
+}
+
+namespace {
+
+// The floor from the loaded libr15. `*source` names the outcome.
+std::uint64_t ReadPinnedFloor(const char** source) noexcept {
+  sentinel::ElfImage image;
+  if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) {
+    *source = "module_not_loaded";
+    return 0;
+  }
+  return ReadPinnedFloorFrom(image, source);
 }
 
 void Arm(std::uint64_t floor) noexcept {
@@ -79,9 +88,10 @@ Seen CurrentSeen() noexcept {
   return {g_calls.load(std::memory_order_acquire), read, osBuild, floor, read && floor != 0 && osBuild < floor};
 }
 
-bool InstallAt(const sentinel::GotTarget& target, std::uint64_t floor, const char* floorSource) noexcept {
+bool InstallAt(const sentinel::GotTarget& target, std::uint64_t floor, const char* floorSource,
+               sentinel::ImageLookup lookup) noexcept {
   Arm(floor);
-  const sentinel::GotStatus status = sentinel::InstallThunk<Thunk>(g_hook, target);
+  const sentinel::GotStatus status = sentinel::InstallThunk<Thunk>(g_hook, target, lookup);
   const bool ok = status == sentinel::GotStatus::kOk;
   sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "os_build_gate_install",
                       {{"result", ok ? "installed" : "refused"},
