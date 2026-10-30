@@ -70,6 +70,8 @@ set(PATCHES_SOURCES
     "patch/asset_cache.cpp"
     # #938: the nEVR section of the in-game CREDITS page (pure logic in credits_text.h).
     "patch/credits_text.cpp"
+    # #1423: AI bots on a dedicated server (pure logic in server_bots.h).
+    "patch/server_bots.cpp"
     # #1422: a server's match team size (pure logic in server_team_size.h).
     "patch/server_team_size.cpp"
     "patch/asset_registry.cpp"
@@ -183,6 +185,8 @@ set(PATCHES_HEADERS
     "lifecycle/boot_hook_policy.h"
     "lifecycle/crash_recovery_sites.h"
     "patch/resource_override.h"
+    "patch/server_bots.h"
+    "patch/server_bots_install.h"
     "patch/server_team_size.h"
     "patch/server_team_size_install.h"
     "patch/asset_cache.h"
@@ -926,6 +930,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_arena_round_time PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_arena_round_time DISCOVERY_MODE PRE_TEST)
 
+    # #1423: AI bots on a dedicated server: the settings rewrite, the request, the schedule and the sites (server_bots.h).
+    add_executable(test_server_bots tests/test_server_bots.cpp)
+    set_source_files_properties(tests/test_server_bots.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_server_bots PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_server_bots PRIVATE GTest::gtest GTest::gtest_main nevr::plugin_sdk
+      nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_server_bots DISCOVERY_MODE PRE_TEST)
     # #1422: a server's match team size, its two checked-patch sites driven on buffers (server_team_size.h).
     add_executable(test_server_team_size tests/test_server_team_size.cpp)
     set_source_files_properties(tests/test_server_team_size.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)

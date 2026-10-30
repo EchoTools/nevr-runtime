@@ -26,6 +26,7 @@
 #include "runtime/patch/invite_wizard_hook.h"
 #include "runtime/patch/arena_public_clock.h"
 #include "runtime/patch/coop_ai_trace.h"
+#include "runtime/patch/server_bots_install.h"
 #include "runtime/patch/server_team_size_install.h"
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/ext/plugin_trust.h"
@@ -782,6 +783,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     }
   }
 
+  // #1423: AI bots on a server (network.bots_per_session, absent = 0): on a server with a count above 0 the sites are
+  // checked once here, and the driver (GameServerLib::Update) runs only when they hold; a client logs that it does not
+  // apply (N122/N124).
+  nevr_server_bots::Install(g_isServer != FALSE);
   // #1422: a server's match team size (network.max_team_size, absent = the game's 5), at ServerAssignTeam's
   // two checked-patch sites; a client logs that it does not apply (N122/N124).
   nevr_server_team_size::Install(g_isServer != FALSE);
