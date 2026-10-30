@@ -173,7 +173,9 @@ struct Kept {
   std::size_t inputSize = 0;
   const std::string* text = nullptr;
 };
-pthread_mutex_t g_keptMutex = PTHREAD_MUTEX_INITIALIZER;  // std::mutex is out: its unlock carries a personality on the hook path
+// std::mutex is out: its unlock carries a personality on the hook path. A pthread mutex with a constant initializer has no
+// destructor, so it adds no _GLOBAL__sub_I initializer (tools/check_quest_static_init.sh).
+pthread_mutex_t g_keptMutex = PTHREAD_MUTEX_INITIALIZER;
 Kept g_kept[kDocuments];
 
 struct Served {

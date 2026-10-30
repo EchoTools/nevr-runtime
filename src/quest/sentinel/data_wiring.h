@@ -34,6 +34,12 @@
  * The android_main thread blocks for the whole step. Whether Android tolerates that for the length of a download is
  * ADR 0011 measurement 2; `data_probe` below is how the headset run measures it.
  *
+ * After the data step (`kUsed` or `kFetched`, whichever the build) the bundled content pack runs (ADR 0029, data/pack.h) on the
+ * same thread, in the root the data step used: an APK without `assets/nevr-pack/pack.json` logs one `pack_check outcome=none`;
+ * one with it overlays the pack's files over the stock data when the stock manifest is one the pack names (`pack_check`,
+ * `pack_place`, `pack_step`, and `data_version` for what is in place). A failed placement shows the floor message, holds it
+ * and ends the process nonzero with reason `pack_failed`.
+ *
  * Events (sentinel log, no URL): `data_step_install`; `data_check` (carries `data_version` and `manifest_sha256`: the data found), `data_fetch`,
  * `data_extract`, `data_swap`, `data_version` (the data a fetch placed) (the step's own events, fields as the step reports them); `data_step` (outcome, action, root, status, detail);
  * `data_present` (result token of the toast, looper_prepared; "requested" means Toast.show() returned, not that it
@@ -54,6 +60,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -88,6 +95,12 @@ struct Options {
   bool probe_enabled = false;                  // read the measurement probe file (dev builds only; entry.cpp sets it)
   bool allow_fetch = false;                    // download missing data (dev builds only; entry.cpp sets it); false: only look
   std::vector<std::string> recovery_roots;     // empty: both data roots (test seam)
+  // The bundled content pack (docs/adr/0029-quest-bundled-content-pack.md). `apk_path` empty: the APK the sentinel was
+  // mapped from (dladdr). The rest are test seams: free bytes of the root (null: statvfs) and a probe the pack step calls
+  // after a temporary is written and after a rename, whose false stops the step as a kill would.
+  std::string apk_path;
+  std::function<std::uint64_t(const std::string& root)> pack_available_bytes;
+  std::function<bool(const char* point, const std::string& path)> pack_probe;
   // Test seams for the pinned zip: when `zip_sha256` is not empty the fetch uses these instead of the pins in
   // data/plan.h, with two attempts and no real backoff.
   std::string zip_sha256;

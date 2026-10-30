@@ -11,11 +11,17 @@
  * ExtractZip writes only below `dest_dir`, which it creates (it must not exist). It stops at the first failure and
  * leaves what it wrote: the caller owns the directory and deletes it (staging.h).
  *
+ * ReadZipEntry (docs/adr/0029-quest-bundled-content-pack.md) takes ONE file entry of an archive the caller listed with its
+ * own limits (an APK has hundreds of entries and is read through ReadZipListing with raised ZipLimits) and streams its bytes
+ * to a sink, under every check ExtractZip makes of an entry. The bytes are provisional until it returns kOk: the size and the
+ * CRC-32 are known only at the end.
+ *
  * Built without exceptions (the sentinel's data step runs after a call into the game; see callback_thunk.h).
  */
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -72,6 +78,17 @@ bool SafeEntryName(const std::string& name) noexcept;
 // Reads the central directory of the archive at `path`. `detail` (when not null) gets the entry or field at fault.
 ZipStatus ReadZipListing(const std::string& path, const ZipLimits& limits, std::vector<ZipEntry>* entries,
                          std::string* detail);
+
+// The entry named exactly `name` (case-sensitive) in a listing, or null.
+const ZipEntry* FindZipEntry(const std::vector<ZipEntry>& entries, const std::string& name) noexcept;
+
+// Receives the bytes of one entry in order. False stops the read (the status is kWriteFailed).
+using ZipSink = std::function<bool(const unsigned char* bytes, std::size_t length)>;
+
+// Streams the file entry `entry` (from ReadZipListing of the same archive) to `sink`: the local header is checked against the
+// central directory, a stored entry is copied and a deflated one inflated, and the size and CRC-32 the directory recorded are
+// enforced. A directory entry is refused (kBadEntryPath). `detail` (when not null) gets the entry at fault.
+ZipStatus ReadZipEntry(const std::string& zip_path, const ZipEntry& entry, const ZipSink& sink, std::string* detail);
 
 // mkdir -p below `base` for the relative directory `rel` (no leading or trailing '/'). A component that exists and is
 // not a real directory (a link, a file) fails the call; a link is never followed. Exposed for the tests.
