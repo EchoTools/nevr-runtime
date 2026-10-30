@@ -294,6 +294,14 @@ func TestHookFramesCarryNoPersonality(t *testing.T) {
 		"login compose phase":         regexp.MustCompile(`^_ZN16nevr_quest_login11ComposePlanE`),
 		"post-load installs (dlopen)": regexp.MustCompile(`^_ZN10nevr_quest11integration11AfterDlopenE`),
 		"main-menu cards page build":  regexp.MustCompile(`^_ZN10nevr_quest10menu_cards12PrepareCardsE`),
+
+		// The MetricLog observer (#966) runs before the game's function and returns first (Observe and Handler in
+		// src/quest/invite/wizard_metric_hook.cpp). Its direct callees are the shared invite parser, the sentinel logger
+		// and a pipe copy (CopyGameBytes); none calls game code. Its one indirect call is the log sink, the sentinel's
+		// own writer (on device, HookLogToDisk in src/quest/integration/production_steps.cpp, which catches
+		// std::exception itself). No exception leaves it: it is noexcept, and its translation unit is built
+		// -fno-exceptions (src/quest/sentinel/CMakeLists.txt).
+		"wizard metric observer (MetricLog)": regexp.MustCompile(`^_ZN10nevr_quest13wizard_metric12_GLOBAL__N_17ObserveE`),
 	}
 	for what, re := range want {
 		if !anyMatches(v.annotatedReached, re) {

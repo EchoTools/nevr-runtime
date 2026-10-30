@@ -79,8 +79,19 @@ class RefusalIsReportedBeforeTheSocketsAreClosed(unittest.TestCase):
         code = bridge()
         self.assertRegex(
             code,
-            r"PreparedRemote prepared = PrepareRemote\(role, connIdx\);\s*if \(!prepared\.remote\) \{\s*"
-            r"AbandonGameSocket\(&gameWs, role, connIdx\);\s*break;\s*\}")
+            r"PreparedRemote prepared = PrepareRemote\(role, connIdx\);\s*"
+            r"(?:if \(prepared\.answerLocally\) \{\s*AnswerLoginLocally\(&gameWs, connIdx\);\s*break;\s*\}\s*)?"
+            r"if \(!prepared\.remote\) \{\s*AbandonGameSocket\(&gameWs, role, connIdx\);\s*break;\s*\}")
+
+    def test_the_legacy_open_handler_answers_a_token_less_login_before_it_ends_a_socket(self):
+        # #1446: a login whose sign-in ended without a token is answered (LoginFailure) before the no-remote branch,
+        # so the game is not closed into a reconnect loop. Either order of the two branches fails this check.
+        code = bridge()
+        self.assertRegex(
+            code,
+            r"PreparedRemote prepared = PrepareRemote\(role, connIdx\);\s*"
+            r"if \(prepared\.answerLocally\) \{\s*AnswerLoginLocally\(&gameWs, connIdx\);\s*break;\s*\}\s*"
+            r"if \(!prepared\.remote\) \{\s*AbandonGameSocket\(&gameWs, role, connIdx\);\s*break;\s*\}")
 
     def test_an_abandoned_login_gives_its_slot_back(self):
         body = extract_braced_function(bridge(), "static void AbandonGameSocket(")

@@ -1287,6 +1287,36 @@ test-quest-router:
 # name, a self-signed leaf, an empty trust store and a non-TLS server each fail; ws:// is refused; the
 # plaintext server never sees an upgrade request. Needs openssl, python3 and libcurl development files
 # (pkg-config libcurl) and libssl/libcrypto on the host. Fail-close: a missing tool exits nonzero.
+#
+# The Quest invite transport and the service seam it plugs into (#966, docs/adr/0017): the transport over a loopback HTTP server
+# on the host (plain http only where the test asks for it), the production client's fail-closed case, the shared service with the
+# Quest transport, and the run's switch (the network.invite_codes feature). The link test of the shared service is test-quest-invite
+# above. Needs libcurl development files (pkg-config libcurl) and the nlohmann header from `just build` with a mingw-* preset.
+# Fail-close: a missing tool or header exits nonzero.
+test-quest-invite-transport:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pkg-config --exists libcurl || { echo "test-quest-invite-transport: libcurl development files not found (pkg-config libcurl)" >&2; exit 1; }
+    out="build/quest-invite-transport-host"
+    rm -rf "$out"
+    mkdir -p "$out"
+    json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
+    if [[ ! -f "$json_src/json.hpp" ]]; then
+        echo "test-quest-invite-transport: FAIL — $json_src/json.hpp not found; run 'just build' with a mingw-* preset first" >&2
+        exit 1
+    fi
+    json_inc="$out/json_inc"
+    mkdir -p "$json_inc"
+    ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
+    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -Isdk/include -isystem "$json_inc" $(pkg-config --cflags libcurl) \
+        src/quest/tests/invite_transport_quest_test.cpp \
+        src/quest/invite/invite_transport_quest.cpp src/quest/invite/invite_run.cpp \
+        src/quest/auth/curl_http.cpp src/quest/auth/ca_bundle.cpp \
+        src/runtime/patch/invite_service.cpp src/runtime/patch/invite_transport_curl.cpp \
+        -o "$out/invite_transport_quest_test" $(pkg-config --libs libcurl) -lssl -lcrypto
+    timeout -k 5 300 "$out/invite_transport_quest_test"
+    echo "test-quest-invite-transport: Quest invite transport and service seam tests pass on the host"
+
 test-quest-tls:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1501,10 +1531,16 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     # The lobby-full policy (#1001): the #889 cases on the 16-byte lobby key. Pure; no libr15 here.
     "${cxx[@]}" -pthread src/quest/tests/lobby_full_test.cpp -o "$out/lobby_full_test"
     timeout 60 "$out/lobby_full_test"
+    # The frame dispatcher (#966 S7): posted work runs only on Tick, once, in order; posting from another thread;
+    # try-lock contention skips without blocking. Built as the sentinel builds it (no exceptions).
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/frame_dispatch_test.cpp \
+        src/quest/invite/frame_dispatch.cpp src/quest/sentinel/hook_log.cpp \
+        -o "$out/frame_dispatch_test"
+    timeout 60 "$out/frame_dispatch_test"
     # The login-prompt hook (#239): the real handler and prompt board, built as the sentinel builds
     # them (no exceptions), driven through the thunk entry.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/login_prompt_hook_test.cpp \
-        src/quest/sentinel/login_prompt_hook.cpp src/quest/auth/prompt_board.cpp \
+        src/quest/sentinel/login_prompt_hook.cpp src/quest/invite/frame_dispatch.cpp src/quest/auth/prompt_board.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/login_prompt_hook_test" -ldl
     timeout 120 "$out/login_prompt_hook_test"
@@ -1522,7 +1558,7 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -Isdk/include -c \
         src/quest/login/login_standin.cpp -o "$out/chain_login_standin.o"
     "${cxx[@]}" -fno-exceptions -DNEVR_QUEST_TESTING -pthread src/quest/tests/login_signin_code_chain_test.cpp \
-        src/quest/sentinel/login_prompt_hook.cpp src/quest/auth/prompt_board.cpp \
+        src/quest/sentinel/login_prompt_hook.cpp src/quest/invite/frame_dispatch.cpp src/quest/auth/prompt_board.cpp \
         "$out/chain_login_prerequisites.o" "$out/chain_login_standin.o" \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/login_signin_code_chain_test" -ldl
@@ -1635,6 +1671,14 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]:0:2}" -o "$out/menu_cards_hook_test" -ldl
     timeout 120 "$out/menu_cards_hook_test"
+    # The CREATE GAME / JOIN VIA CODE observer on libr15's MetricLog (#966, ADR 0017 slice S2): the real observer through the
+    # thunk entry, built without exceptions, against a stand-in for the game's MetricLog. The shared parse needs nlohmann::json,
+    # so the header this recipe installed (attach_json_inc, above) is on the include path.
+    "${cxx[@]}" -fno-exceptions -pthread -isystem "$out/attach_json_inc" src/quest/tests/wizard_metric_hook_test.cpp \
+        src/quest/invite/wizard_metric_hook.cpp src/quest/data/sha256.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        "${ident[@]:0:2}" -o "$out/wizard_metric_hook_test" -ldl
+    timeout 120 "$out/wizard_metric_hook_test"
     # The controller-input seam (#1202): the VrApi layout rules, the registration's every refusal and its one owner, and
     # the real handler through the thunk entry against stand-ins for vrapi_GetCurrentInputState and
     # vrapi_GetInputDeviceCapabilities. got_pinned_test resolves both slots in the real libr15.
@@ -1978,6 +2022,7 @@ test-quest-integration: _vcpkg-quest-host
     "${off[@]}" -c src/quest/integration/dlopen_hook.cpp -o "$out/dlopen_hook.o"
     "${off[@]}" -c src/quest/integration/social_shim.cpp -o "$out/social_shim.o"
     "${off[@]}" -c src/quest/sentinel/login_prompt_hook.cpp -o "$out/login_prompt_hook.o"
+    "${off[@]}" -c src/quest/invite/frame_dispatch.cpp -o "$out/frame_dispatch.o"
     "${off[@]}" -c src/quest/sentinel/login_title_hook.cpp -o "$out/login_title_hook.o"
     "${off[@]}" -c src/quest/sentinel/obb_skip_hook.cpp -o "$out/obb_skip_hook.o"
     "${off[@]}" -c src/quest/sentinel/texture_quality_hook.cpp -o "$out/texture_quality_hook.o"
@@ -2015,7 +2060,7 @@ test-quest-integration: _vcpkg-quest-host
         src/runtime/lifecycle/stable_string_pool.cpp \
         "$out/got_hook.o" "$out/hook_report.o" "$out/tstring_thunks.o" "$out/dlopen_hook.o" "$out/social_shim.o" \
         "$out/social_game_calls.o" "$out/social_install.o" "$out/social_invite_gate.o" "$out/social_facade.o" "$out/hook_log.o" "$out/social_names.o" \
-        "$out/login_prompt_hook.o" "$out/login_title_hook.o" "$out/obb_skip_hook.o" "$out/resource_request_hook.o" "$out/texture_quality_hook.o" "$out/clock_levels_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
+        "$out/login_prompt_hook.o" "$out/frame_dispatch.o" "$out/login_title_hook.o" "$out/obb_skip_hook.o" "$out/resource_request_hook.o" "$out/texture_quality_hook.o" "$out/clock_levels_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
         "$out/login_prerequisites.o" "$out/login_standin.o" \
         "${ident[@]}" "$yaml_lib" -o "$out/integration_hooks_test" -ldl -pthread -lzstd
     timeout 300 "$out/integration_hooks_test"

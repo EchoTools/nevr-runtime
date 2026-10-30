@@ -225,6 +225,18 @@ TEST_F(AssetCache, ABlobOverTheSizeLimitIsRefused) {
   EXPECT_EQ(cache::Load(dir_, sha).status, cache::LoadStatus::Hit);
 }
 
+// #1421: the largest payload a texture mod ships, a lobby poster's buffer 1, is 78,294,084 bytes (#1421's step 1 read
+// the game's own buffer at that size). Synthetic bytes of that length are stored and read back.
+TEST_F(AssetCache, ABlobTheSizeOfTheLargestPosterPayloadIsStoredAndLoaded) {
+  const std::vector<std::uint8_t> data = Filler(78294084, 3);
+  const std::string sha = StoreOk(data);
+  ASSERT_FALSE(sha.empty());
+  const cache::LoadResult r = cache::Load(dir_, sha);
+  ASSERT_EQ(r.status, cache::LoadStatus::Hit);
+  EXPECT_EQ(r.bytes.size(), data.size());
+  EXPECT_TRUE(r.bytes == data);
+}
+
 TEST_F(AssetCache, TheIndexRoundTripsAndOneKeyHasOneEntry) {
   const std::string a(64, 'a'), b(64, 'b'), c(64, 'c');
   std::string err;

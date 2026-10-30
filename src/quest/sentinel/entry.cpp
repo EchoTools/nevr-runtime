@@ -18,7 +18,9 @@
 #include "hook_report.h"
 #include "login_prompt_hook.h"
 #include "login_title_hook.h"
+#include "quest/invite/frame_dispatch.h"
 #include "menu_cards_hook.h"
+#include "quest/invite/wizard_metric_hook.h"
 #include "data_wiring.h"
 #include "obb_skip_hook.h"
 #include "os_build_gate_hook.h"
@@ -87,6 +89,14 @@ bool InstallClockHook() noexcept {
     ClockThunk::Arm(kClockHook);
     return sentinel::InstallThunk<ClockThunk>(g_clockHook, sentinel::pinned::LibR15ClockGettime()) ==
            sentinel::GotStatus::kOk;
+}
+
+// The frame dispatcher (#966 S7): the Update slot is taken on every launch, so the dispatcher runs whether or not the
+// login prompt is on. LogInstall writes the one line that says which (installed, or off with the GOT status).
+bool InstallFrameDispatchHook() noexcept {
+    const sentinel::GotStatus status = nevr_quest::login_prompt::InstallNetGameUpdate();
+    nevr_quest::invite::frame::LogInstall(status == sentinel::GotStatus::kOk, sentinel::GotStatusName(status));
+    return status == sentinel::GotStatus::kOk;
 }
 
 // The login-failed page's title hook (#1137) is the prompt's second half: its counters register in the same step, so the
@@ -180,6 +190,10 @@ bool InstallPnsProviderHook() noexcept { return nevr_quest::pns_provider::Instal
 // The CREATE GAME and JOIN VIA CODE cards (#966): a data-slot hook on the streaming reader's read-finished callback. A
 // refused install is logged by GotHook and by the hook's own line, and leaves the game's calls intact.
 bool InstallMenuCardsHook() noexcept { return nevr_quest::menu_cards::Install(); }
+
+// The CREATE GAME / JOIN VIA CODE observer (#966, ADR 0017 S2) on libr15's MetricLog. A refused install is logged by GotHook and by
+// the observer's own line, and leaves the game's call intact.
+bool InstallWizardMetricHook() noexcept { return nevr_quest::wizard_metric::Install(); }
 
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
 // token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.

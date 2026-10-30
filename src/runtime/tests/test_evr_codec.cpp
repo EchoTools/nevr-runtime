@@ -218,6 +218,28 @@ TEST(EvrCodecParse, LoginFailureReadsTheStatusCodeAndMessageLengthOnly) {
   EXPECT_FALSE(nevr_evr_codec::ParseLoginFailure(nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymLoginSuccess, payload)).has_value());
 }
 
+// #1446: the answer the bridge gives a game login it cannot pass on: a LoginFailure laid out as the service's own.
+TEST(EvrCodecBuild, ALoginFailureBuiltHereParsesBackWithItsStatusAndText) {
+  const std::string text = "Sign-in did not finish.\nRestart Echo VR to sign in again.";
+  const std::optional<std::string> frame = nevr_evr_codec::BuildLoginFailure(7, text);
+  ASSERT_TRUE(frame.has_value());
+  EXPECT_EQ(frame->substr(0, nevr_evr_codec::kMarkerSize),
+            std::string(reinterpret_cast<const char*>(nevr_evr_codec::kMarker), nevr_evr_codec::kMarkerSize));
+  EXPECT_EQ(nevr_evr_codec::FirstSymbol(*frame), nevr_evr_codec::kSymLoginFailure);
+  EXPECT_EQ(frame->size(), nevr_evr_codec::kHeaderSize + 24 + text.size() + 1)
+      << "the session UUID, the status, the text and its NUL";
+  EXPECT_EQ(frame->substr(nevr_evr_codec::kHeaderSize, 16), std::string(16, '\0')) << "no previous session";
+  EXPECT_EQ(frame->back(), '\0');
+  const std::optional<nevr_evr_codec::LoginFailure> failure = nevr_evr_codec::ParseLoginFailure(*frame);
+  ASSERT_TRUE(failure.has_value());
+  EXPECT_EQ(failure->statusCode, 7u);
+  EXPECT_EQ(failure->messageBytes, text.size() + 1) << "the NUL is part of the payload";
+}
+
+TEST(EvrCodecBuild, ALoginFailureTextWithANulIsRefused) {
+  EXPECT_FALSE(nevr_evr_codec::BuildLoginFailure(7, std::string_view("a\0b", 3)).has_value());
+}
+
 TEST(EvrCodecPolicy, BridgeLoginsAsOvrOrg) {
   static_assert(nevr_evr_codec::kBridgeLoginPlatform == 4, "OVR_ORG in the game's numbering");
   EXPECT_EQ(nevr_evr_codec::SelectPlatformCode(true, false), 4u);

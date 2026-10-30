@@ -36,6 +36,7 @@
 // collisions — both define NvrModuleInit/NvrModuleApiVersion/etc.
 namespace nevr_token_auth {
 std::string GetToken();  // token_auth.h: thread-safe; statically linked, so called directly
+bool SignInEndedWithoutToken();  // token_auth.h (#1446)
 }
 
 extern "C" {
@@ -406,6 +407,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       RegisterModuleProc("TokenAuth_GetToken", (void*)TokenAuth_GetToken);
       RegisterModuleProc("TokenAuth_GetDiscordId", (void*)TokenAuth_GetDiscordId);
       RegisterModuleProc("TokenAuth_GetUsername", (void*)TokenAuth_GetUsername);
+      // #1446: the bridge answers a login itself once the sign-in has ended without a token.
+      RegisterModuleProc("TokenAuth_SignInEndedWithoutToken",
+                         reinterpret_cast<void*>(&nevr_token_auth::SignInEndedWithoutToken));
     }
 
     // N92: ws_bridge is not a module. It is compiled into this DLL and started
