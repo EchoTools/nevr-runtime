@@ -76,6 +76,11 @@ void ObserveMetric(std::uint64_t data, std::uint64_t length) {
   const nevr_invite::Plan plan = nevr_invite::PlanRequest(metric, choices, LevelName);
   if (plan.skip != nevr_invite::Skip::None) {
     Log(EchoVR::LogLevel::Info, "%s", nevr_invite::NotSentLine(plan.skip, plan.code_len).c_str());
+    if (metric.kind == nevr_invite::Kind::Join && (plan.skip == nevr_invite::Skip::Empty || plan.skip == nevr_invite::Skip::Malformed)) {
+      // The field shows a typed code, so a join click that carries none says what it does carry (keys and kinds, never values).
+      Log(EchoVR::LogLevel::Info, "[NEVR.INVITE] join click carried no usable code, so no request was made; metric_fields=%s",
+          nevr_invite::MetricShape(line).c_str());
+    }
     return;
   }
   // A typed code or a create goes to the invite service (D1b). It writes the request line, or the line that says why nothing
