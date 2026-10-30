@@ -1733,10 +1733,17 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     # The Vulkan extension window (#868): the real wrapper chain through the thunk entries against a fake driver, with the
     # Quest 3 driver's 137-entry list as the central case.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/vk_ext_window_test.cpp \
-        src/quest/sentinel/vk_ext_window.cpp \
+        src/quest/sentinel/vk_ext_window.cpp src/quest/sentinel/vk_descriptor_guard.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/vk_ext_window_test" -ldl
     timeout 120 "$out/vk_ext_window_test"
+    # The descriptor guard (#1737 G6A-030): the game's resolution chain through vk_ext_window's thunk entry, against a fake
+    # driver that records every descriptor write; the light-UV layout (uniform texel bindings 3 and 4) is the central case.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/vk_descriptor_guard_test.cpp \
+        src/quest/sentinel/vk_descriptor_guard.cpp src/quest/sentinel/vk_ext_window.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        "${ident[@]}" -o "$out/vk_descriptor_guard_test" -ldl
+    timeout 120 "$out/vk_descriptor_guard_test"
     # The OS build floor (#945): the real handler through the thunk entry against a stand-in for CSysInfo::OSBuildVersion,
     # a number below the floor, above it, none, and an unknown floor.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/os_build_gate_hook_test.cpp \

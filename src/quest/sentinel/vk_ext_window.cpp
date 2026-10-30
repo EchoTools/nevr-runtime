@@ -6,6 +6,7 @@
 #include "got_hook.h"
 #include "hook_install.h"
 #include "hook_log.h"
+#include "vk_descriptor_guard.h"
 
 namespace nevr_quest::vk_window {
 
@@ -251,7 +252,8 @@ std::int32_t WrappedEnumerate(void* physical_device, const char* layer, std::uin
   return result;
 }
 
-// vkGetInstanceProcAddr as the game calls it: only the one name is replaced.
+// vkGetInstanceProcAddr as the game calls it: vkEnumerateDeviceExtensionProperties is replaced here, vkGetDeviceProcAddr by
+// the descriptor guard.
 VoidFn WrappedGetInstanceProcAddr(void* instance, const char* name) {
   const GipaFn real = reinterpret_cast<GipaFn>(g_realGipa.load(std::memory_order_acquire));
   if (real == nullptr) return nullptr;
@@ -260,7 +262,8 @@ VoidFn WrappedGetInstanceProcAddr(void* instance, const char* name) {
     g_realEnumerate.store(reinterpret_cast<void*>(found), std::memory_order_release);
     return reinterpret_cast<VoidFn>(&WrappedEnumerate);
   }
-  return found;
+  // vkGetDeviceProcAddr goes to the descriptor guard (vk_descriptor_guard.h, #1737 G6A-030); every other name is the driver's.
+  return vk_guard::OnInstanceProcAddr(real, instance, name, found);
 }
 
 // CSysModule::FindMethod: the game's way to dlsym. Only vkGetInstanceProcAddr is replaced.

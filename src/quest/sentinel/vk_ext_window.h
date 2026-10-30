@@ -9,7 +9,8 @@
  * What this does. libr15 imports no vk* function: it gets vkGetInstanceProcAddr through CSysModule::FindMethod
  * (pinned_targets.h, JUMP_SLOT 0x36db9f8, ReVault 0x19dcaa4) and every other Vulkan function through that. The FindMethod
  * handler returns a wrapper for vkGetInstanceProcAddr, and the wrapper returns a wrapper for
- * vkEnumerateDeviceExtensionProperties; every other name passes through untouched. The enumerate wrapper calls the driver
+ * vkEnumerateDeviceExtensionProperties; vkGetDeviceProcAddr goes to the descriptor guard (vk_descriptor_guard.h);
+ * every other name passes through untouched. The enumerate wrapper calls the driver
  * and returns the driver's answer, with one exception: when the call is the game's buffer call (no layer name, a buffer,
  * result VK_INCOMPLETE) and a name the game requires sits in the driver's list past the game's buffer, it rewrites the
  * game's buffer so the required names come first, then the other names in the driver's order. The result (VK_INCOMPLETE),
