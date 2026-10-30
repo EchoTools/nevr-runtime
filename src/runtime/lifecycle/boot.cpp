@@ -300,7 +300,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   InstallResourceOverride();
 
   // Early-detect -server before auth — full CLI parse happens below.
-  // The token_auth MODULE needs to know server mode to skip the device-code flow.
+  // The token_auth MODULE needs to know server mode: a server with auth.password skips the device-code flow, one
+  // without it signs in by device code (#1532).
   {
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);

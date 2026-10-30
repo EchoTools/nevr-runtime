@@ -6954,15 +6954,66 @@ TEST_F(RefusedLoginRouterTest, AServerWithNoCredentialStopsWithTheCauseAndNeverC
   ExpectNoCredentialServerStops(accepting_, port_);
 }
 
-TEST_F(RefusedLoginTest, AServerWithOnlyADiscordIdNamesJustThePassword) {
+// #1532: a discord id without a password is no longer a missing key: the server signs in by device code, and with no
+// token from it the stop names the sign-in, not a key.
+TEST_F(RefusedLoginTest, AServerWithOnlyADiscordIdAndNoSignInStopsAsAServerWithNoSignIn) {
   StartAccepting();
   g_testDiscordId = kTestAccountIdText.c_str();
   GameSocket login;
   ASSERT_TRUE(login.Connect(port_, "/login"));
   ASSERT_TRUE(YieldUntil([] { return ServerFatalCalls() >= 1; }));
-  EXPECT_NE(LastServerFatal().find("missing auth.password)"), std::string::npos) << LastServerFatal();
-  EXPECT_EQ(LastServerFatal().find("missing identity.discord_id"), std::string::npos) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("device sign-in ended without a token"), std::string::npos) << LastServerFatal();
+  EXPECT_EQ(LastServerFatal().find("missing auth.password"), std::string::npos) << LastServerFatal();
   EXPECT_EQ(accepting_.Opens(), 0);
+}
+
+// The password path keeps its rule: a password with no discord id names the discord id.
+TEST_F(RefusedLoginTest, AServerWithAPasswordAndNoDiscordIdNamesJustTheDiscordId) {
+  StartAccepting();
+  g_testPassword = "test-password";
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port_, "/login"));
+  ASSERT_TRUE(YieldUntil([] { return ServerFatalCalls() >= 1; }));
+  EXPECT_NE(LastServerFatal().find("missing identity.discord_id)"), std::string::npos) << LastServerFatal();
+  EXPECT_EQ(LastServerFatal().find("missing identity.discord_id, auth.password"), std::string::npos)
+      << LastServerFatal();
+  EXPECT_EQ(accepting_.Opens(), 0);
+}
+
+// #1532: no password, but the device sign-in produced a token: the server presents it like a client and is not stopped.
+void ExpectDeviceSignInServerConnects(RemoteService& service, uint16_t port) {
+  RegisterModuleProc("TokenAuth_GetToken", reinterpret_cast<void*>(&TestTokenFn));
+  g_testToken = "device-sign-in-token";
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port, "/login"));
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings));
+  EXPECT_EQ(ServerFatalCalls(), 0) << LastServerFatal();
+  EXPECT_EQ(service.LoginRequests(), 1);
+  g_testToken = nullptr;
+}
+
+TEST_F(RefusedLoginTest, AServerWithNoPasswordAndADeviceTokenConnectsAndIsNotStopped) {
+  StartAccepting();
+  ExpectDeviceSignInServerConnects(accepting_, port_);
+}
+
+TEST_F(RefusedLoginRouterTest, AServerWithNoPasswordAndADeviceTokenConnectsAndIsNotStopped) {
+  StartAccepting();
+  ExpectDeviceSignInServerConnects(accepting_, port_);
+}
+
+// A device token the service refuses stops the server with a cause that does not send the operator to the password keys.
+TEST_F(RefusedLoginTest, AServerWhoseDeviceTokenTheServiceRefusesStopsWithoutBlamingThePasswordKeys) {
+  RegisterModuleProc("TokenAuth_GetToken", reinterpret_cast<void*>(&TestTokenFn));
+  g_testToken = "device-sign-in-token";
+  StartRefusing(401);
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port_, "/login"));
+  ASSERT_TRUE(YieldUntil([] { return ServerFatalCalls() >= 1; })) << "the server did not stop";
+  EXPECT_NE(LastServerFatal().find("device sign-in token"), std::string::npos) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("HTTP 401"), std::string::npos) << LastServerFatal();
+  EXPECT_EQ(LastServerFatal().find("check identity.discord_id"), std::string::npos) << LastServerFatal();
+  g_testToken = nullptr;
 }
 
 TEST_F(RefusedLoginTest, AServerWithACredentialConnectsAndIsNotStopped) {

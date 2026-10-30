@@ -319,3 +319,30 @@ TEST(ServerDbRoute, EachRouteHasTheNameItsLogLineCarries) {
 TEST(ServerDbRoute, TheStopCauseNamesTheKeyToSet) {
   EXPECT_STREQ(nevr_serverdb_uri::kNoServerDbUriCause, "no ServerDB URI: set services.serverdb_uri");
 }
+
+// #1532: a server with no auth.password registers on the token route at the built-in socket address with no config.
+TEST(ServerDbUri, ANoPasswordServerWithNoServerdbUriTakesTheSocketAddressAsItsTokenRoute) {
+  using nevr_serverdb_uri::ChooseServerDbRoute;
+  using nevr_serverdb_uri::ServerDbRoute;
+  using nevr_serverdb_uri::TokenRouteUriOrDefault;
+  constexpr std::string_view socket = "wss://g.example/nevr";
+  const std::string_view uri = TokenRouteUriOrDefault("", socket, "");
+  EXPECT_EQ(uri, socket);
+  EXPECT_EQ(ChooseServerDbRoute("", uri, /*haveToken=*/true, socket, /*discordId=*/""), ServerDbRoute::kTokenRoute);
+}
+
+TEST(ServerDbUri, AConfiguredServerdbUriWinsOverTheDefault) {
+  EXPECT_EQ(nevr_serverdb_uri::TokenRouteUriOrDefault("wss://own/nevr", "wss://g.example/nevr", ""), "wss://own/nevr");
+  EXPECT_EQ(nevr_serverdb_uri::TokenRouteUriOrDefault("wss://own/nevr", "wss://g.example/nevr", "hunter2"),
+            "wss://own/nevr");
+}
+
+// The password path keeps today's rule: no serverdb_uri, so the URL-parameter route (and no default token route).
+TEST(ServerDbUri, AServerWithAPasswordAndNoServerdbUriKeepsTheUrlParamRoute) {
+  using nevr_serverdb_uri::ChooseServerDbRoute;
+  using nevr_serverdb_uri::ServerDbRoute;
+  constexpr std::string_view socket = "wss://g.example/nevr";
+  const std::string_view uri = nevr_serverdb_uri::TokenRouteUriOrDefault("", socket, "hunter2");
+  EXPECT_TRUE(uri.empty());
+  EXPECT_EQ(ChooseServerDbRoute("", uri, /*haveToken=*/true, socket, "1234567890"), ServerDbRoute::kUrlParams);
+}

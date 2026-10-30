@@ -215,11 +215,13 @@ services:
 
   # Dedicated server only: the ServerDB token route the server registers through, dialed with the server's
   # access token as `Authorization: Bearer` (docs/adr/0001-serverdb-token-auth.md); guilds and regions are added
-  # as query parameters. Without it the server registers through socket_uri with identity.discord_id and
-  # auth.password in the query. A server with none of serverdb, serverdb_uri, or socket_uri plus
-  # identity.discord_id stops at registration: `no ServerDB URI: set services.serverdb_uri`.
+  # as query parameters. Without it a server with auth.password registers through socket_uri with
+  # identity.discord_id and auth.password in the query; a server with no auth.password (it signed in by device
+  # code) registers on the token route at socket_uri, so it needs no configuration. A server with none of
+  # serverdb, serverdb_uri, or socket_uri plus identity.discord_id stops at registration:
+  # `no ServerDB URI: set services.serverdb_uri`.
   # The route taken is logged: `[NEVR.GAMESERVER] serverdb route=<explicit|token|url_params|none> ...`.
-  # Default (absent): none.
+  # Default (absent): socket_uri for a server with no auth.password; none for a server with one.
   # Not a secret.
   # Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration, flat key nevr_serverdb_uri)
   # serverdb_uri: "ws://g.echovrce.com:80/nevr"
@@ -379,7 +381,9 @@ auth:
   # server_key: "${NEVR_SOCKET_KEY:?server_key is required for servers}"
 
   # Server password. Sent as a query parameter in the ServerDB WebSocket URI (the key the runtime reads is auth.password).
-  # Optional; absent means no password auth.
+  # Optional; absent means the server signs in by device code like a client: at startup it prints a code and the
+  # page that takes it on the console (standard error), waits for the approval, asks for a new code when one runs
+  # out, and keeps the token in the sign-in cache of the nevr root, so a restart needs no new code.
   # SECRET — use env-var substitution in production.
   # password: "${NEVR_PASSWORD:?password is required}"
 
