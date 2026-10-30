@@ -933,6 +933,14 @@ if(BUILD_TESTING)
       nlohmann_json::nlohmann_json nevr_api)
     gtest_discover_tests(test_installed_levels DISCOVERY_MODE PRE_TEST)
 
+    # #1246: the server launcher's run-log selection and console line (launcher/server_log.h, header-only) and the run ID format
+    # it shares with the runtime (core/run_id.h). The launcher's own window is not driven here: this is the pure part.
+    add_executable(test_server_log tests/test_server_log.cpp)
+    set_source_files_properties(tests/test_server_log.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_server_log PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_server_log PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_server_log DISCOVERY_MODE PRE_TEST)
+
     # #990, #996: the capture header's game type is the settings JSON's gametype, else the lobby type (telemetry_game_type.cpp).
     add_executable(test_telemetry_game_type tests/test_telemetry_game_type.cpp server/telemetry_game_type.cpp)
     set_source_files_properties(tests/test_telemetry_game_type.cpp server/telemetry_game_type.cpp

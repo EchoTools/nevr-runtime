@@ -2,6 +2,10 @@
 # -headless -no-console.
 add_executable(echovr_server echovr_server_launcher.cpp)
 
+# The run log is read with runtime/log/boot_replay.h (nlohmann-json, header-only), the same reader the runtime uses (#1246).
+find_package(nlohmann_json CONFIG REQUIRED)
+target_link_libraries(echovr_server PRIVATE nlohmann_json::nlohmann_json)
+
 # The launcher is intentionally a console application. The root sets the
 # MSVC executable subsystem to WINDOWS, and its MinGW flags do not apply there.
 if(MSVC)

@@ -9,6 +9,7 @@
 #include "abi/echovr.h"
 #include "abi/echovr_functions.h"
 #include "globals.h"
+#include "run_id.h"
 
 // ISO 8601 timestamp in UTC, with milliseconds (the NEVR.STOP line in runtime/lifecycle/cli_reject.cpp carries it).
 std::string GetISO8601Timestamp() {
@@ -37,14 +38,7 @@ const CHAR* GetRunId() {
   if (s_runId[0] != '\0') return s_runId;
 
 #ifdef _WIN32
-  FILETIME createTime{}, exitTime{}, kernelTime{}, userTime{};
-  unsigned long long start = 0;
-  if (GetProcessTimes(GetCurrentProcess(), &createTime, &exitTime, &kernelTime, &userTime)) {
-    start = (static_cast<unsigned long long>(createTime.dwHighDateTime) << 32) |
-            createTime.dwLowDateTime;
-  }
-  snprintf(s_runId, sizeof(s_runId), "%lx-%llx",
-           static_cast<unsigned long>(GetCurrentProcessId()), start);
+  nevr_run_id::Format(GetCurrentProcessId(), nevr_run_id::CreationTime(GetCurrentProcess()), s_runId, sizeof(s_runId));
 #else
   snprintf(s_runId, sizeof(s_runId), "%lx-0", static_cast<unsigned long>(getpid()));
 #endif
