@@ -129,7 +129,7 @@ second dispatch never overwrites files.
    the step fails red before any dispatch.
 6. **Check the signed draft**: `tools/release_check_draft.sh --signed vX.Y.Z` runs "Check the signed draft" below.
 7. **Body**: `tools/package_release.py notes --base <previous tag> --rev vX.Y.Z` renders the body from the signed files. Its
-   player line is `release-headline.txt` when it changed since the base tag, else "Fixes and internal changes.".
+   player line is the sentences of the `release-headlines/` files added since the base tag, else "Fixes and internal changes.".
 8. **Publish**: `gh release edit vX.Y.Z --draft=false`, last. The `published` event does not rebuild: `build.yml`'s guard
    sees the two names and skips.
 
@@ -207,16 +207,24 @@ gh release view vX.Y.Z --json body --jq .body
 `notes` refuses unless `$S` holds exactly the two assets. It takes the version and the commit from the `BugSplat64.dll`
 and `nevr-runtime.dll` inside the zip (they must agree), so the body cannot describe another build.
 
-The player line is the author's `release-headline.txt`, or the fixed "Fixes and internal changes." The commits never write
+The player line is the authors' `release-headlines/` files, or the fixed "Fixes and internal changes." The commits never write
 it: a line guessed from `feat` subjects read as a player-facing change twice when the change was behind a setting that is off
 or internal (#1444). Read the line against the pull request bodies before publishing. The body of a published release stays
 editable ("Immutable releases"); the assets do not.
 
-**Headline file.** A pull request that changes what players see updates `release-headline.txt` at the repository root in the
-same PR with one plain sentence a player would understand, written by the PR's author: one line, 1 to 200 characters, a full
-stop added if it has none (or `!` or `?`). `notes` uses it as the player line only when the file exists at `--rev` and differs
-from its content at `--base`, so a headline left unchanged since the base tag is stale and the fixed sentence is used. A file
-that is empty or has a line over 200 characters fails `notes` and names the file; it never falls back silently.
+**Headline files.** This is the news-fragment pattern of towncrier's `newsfragments/` and changesets' `.changeset/`. A pull
+request that changes what players see adds `release-headlines/<issue-or-topic>.txt` in the same PR: one line, 1 to 200
+characters, one plain sentence a player would understand about that change only, written by the PR's author, with a full
+stop added if it has none (or `!` or `?`). `notes` builds the player line from the files that exist at `--rev` and not at
+`--base`, joined with one space in file-name order (at most 600 characters). A path present at the base tag is old by
+construction, whatever its content, so no earlier release's sentence rides along. A file with another name (letters, digits,
+`.`, `_`, `-`, then `.txt`; `release-headlines/README.md` is the one exception), an empty file, a file with more than one
+line or a line over 200 characters, a joined line over 600, or `release-headline.txt` at the rev fails `notes` and names the
+file; it never falls back silently. A successful `notes` writes one JSON line to stderr (`"event":"headlines"`, with `used`,
+`line`, `base` and `rev`; `used` is empty when the fixed sentence stands), which the release-train run's log keeps. The train
+cannot push to `main`, so it deletes nothing: the PR that adds a fragment also deletes the fragments present at the newest
+`vX.Y.Z` tag (`git ls-tree -r --name-only <newest tag> -- release-headlines/`). A fragment left behind is harmless, since a
+path present at the base is never read.
 
 ## Publish
 

@@ -2,8 +2,8 @@
 """The per-audience section of a release notes, from the feat, fix and perf commits between two refs (RELEASING.md,
 "Write the release body"). Usage: release_audience_section.py --repo <dir> --base vX.Y.Z --rev vX.Y.Z
 
-The release body is short and carries only its player line, which the commits never write: it is the author's
-`release-headline.txt` when that file changed in base..rev (`package_release.headline_line`), else FALLBACK_PLAYER_LINE.
+The release body is short and carries only its player line, which the commits never write: it is the sentences of the
+`release-headlines/` files base..rev adds (`package_release.headline_line`), else FALLBACK_PLAYER_LINE.
 This script's section is for a reader of the commits, not for the body.
 
 A commit's audience is its conventional scope: `plugins` is for plugin developers, `server`, `ws-bridge` and `arena` for
