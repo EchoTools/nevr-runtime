@@ -174,5 +174,35 @@ class MakeSafeTest(unittest.TestCase):
                 e2e.remove_copy(run.parent, run)
 
 
+class UiMapTest(unittest.TestCase):
+    PLACED = ("2026-10-30T18:17:44.965Z info [NEVR.MENU] main-menu buttons placed bytes=52680 served_bytes=52680 "
+              "slots_before=join:1@2.150,play:2@0.730,tutorial:3@-0.730,create:4@-2.150 "
+              "slots_after=play:1@2.150,join:2@0.730,create:3@-0.730,tutorial:4@-2.150 (the game stands each card)")
+
+    def test_the_cards_slots_are_read_from_the_runtimes_placed_line_not_the_before_order(self):
+        self.assertEqual(e2e.card_slots(self.PLACED), {"play": 1, "join": 2, "create": 3, "tutorial": 4})
+        self.assertEqual(e2e.card_slots("nothing here"), {})
+
+    def test_every_digit_and_letter_of_a_code_has_a_key_inside_the_keyboards_box(self):
+        for char in "23456789ABCDEFGHJKMNPQRSTUVWXYZ":
+            x, y = e2e.key_position(char)
+            self.assertTrue(610 <= x <= 870 and 440 <= y <= 530, (char, x, y))
+        self.assertEqual(e2e.key_position("q"), e2e.key_position("Q"))
+        self.assertLess(e2e.key_position("1")[0], e2e.key_position("2")[0])
+        self.assertLess(e2e.key_position("Q")[1], e2e.key_position("A")[1])
+        with self.assertRaises(KeyError):
+            e2e.key_position("-")
+
+    def test_a_page_change_is_a_large_difference_and_a_hover_is_a_small_one(self):
+        from PIL import Image
+        base = Image.new("RGB", (144, 220), (160, 165, 170))
+        hover = base.copy()
+        hover.paste((200, 205, 210), (10, 10, 40, 30))
+        page = Image.new("RGB", (144, 220), (70, 80, 100))
+        self.assertEqual(e2e.image_difference(base, base), 0)
+        self.assertLess(e2e.image_difference(base, hover), 6.0)
+        self.assertGreater(e2e.image_difference(base, page), 6.0)
+
+
 if __name__ == "__main__":
     unittest.main()

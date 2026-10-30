@@ -12,6 +12,12 @@ invite_resolve`), which builds the plan exactly as the wizard hook does (src/run
 wizard's own cards and typed code are not clicked: no input reaches the game's menu in the nested display's setup that
 this tool uses. The verdict says so.
 
+With --ui the flow is the player's: the wizard is driven with real mouse input on the nested display (the game reads the mouse
+through DirectInput, and a "select" is the RIGHT button held for 0.3 s), through the main menu's CREATE GAME card and the pages
+after it, and JOIN VIA CODE with the code typed on the page's own on-screen keyboard. Each click is confirmed from the game's own log
+(`[NEVR.INVITE] wizard event seen ...`, `wizard click seen ...`), never from a guess; the invite service's answer is read back from the
+control endpoint only to learn the code the page shows. Screenshots of the game window (never the screen) go in the evidence folder.
+
 Exit 0 only when every step passed. Exit 1: a step failed. Exit 2: the run could not start (build, display, accounts, disk).
 """
 from __future__ import annotations
@@ -25,6 +31,7 @@ import hashlib
 import os
 import pathlib
 import re
+import io
 import shutil
 import signal
 import subprocess
@@ -273,6 +280,7 @@ class Client:
         self.control: Control | None = None
         self.answers: list[dict] = []
         self.started = 0.0
+        self.launched_at = 0.0
 
     @property
     def prefix(self) -> pathlib.Path:
@@ -292,6 +300,7 @@ class Client:
                "-p", "MemorySwapMax=0", f"--unit=invite-e2e-{self.label}-{os.getpid()}",
                str(REPO / "launch-client.sh"), "--dll", str(dll), "--creds", self.account, "--timeout", str(timeout)]
         self.started = time.monotonic()
+        self.launched_at = time.time()
         self.proc = subprocess.Popen(cmd, cwd=REPO, env=env, stdout=self.out.open("w"), stderr=subprocess.STDOUT,
                                      start_new_session=True)
 
@@ -362,6 +371,167 @@ class Client:
             time.sleep(1)
 
 
+# ---- driving the wizard with the mouse -------------------------------------------------------------------------------
+
+# Window coordinates of a 1536x874 game window (what -windowed opens on the nested display): measured on 2026-10-30 from
+# screenshots of the shipped menu pages. A different window size is refused rather than clicked blind.
+WINDOW_SIZE = (1536, 874)
+CARD_Y = 458
+CARD_SLOT_X = {1: 600, 2: 714, 3: 821, 4: 935}   # the four main-menu cards, slot 1 at the left
+EXPERIENCE_ARENA = (768, 458)                    # CHOOSE EXPERIENCE: lobby 658, arena 768, combat 878
+MODE_CUSTOM = (658, 458)                         # SELECT GAME MODE: custom match 658, AI teammates 768
+CREATE_INVITE = (767, 550)                       # REVIEW SETTINGS: CREATE INVITE CODE & LINK
+MAIN_MENU = (367, 472)                           # the left column's MAIN MENU button (share page, entry page)
+KEY_ENTER = (893, 497)
+CANCEL_ENTRY = (767, 559)
+LEFT_COLUMN = (296, 360, 440, 580)               # the left column's box: its buttons change with every page
+KEY_ROWS = (("1234567890", 633, 24.6, 451), ("QWERTYUIOP", 632, 24.8, 475), ("ASDFGHJKL", 656, 25.0, 499),
+            ("ZXCVBNM", 679, 25.2, 524))         # (keys, x of the first, x step, y) of the entry page's keyboard
+
+
+def key_position(char: str) -> tuple[int, int]:
+    """Window coordinates of a key of the entry page's on-screen keyboard (digits and letters)."""
+    for keys, x0, step, y in KEY_ROWS:
+        if char.upper() in keys:
+            return int(x0 + keys.index(char.upper()) * step), y
+    raise KeyError(f"no key for {char!r}")
+
+
+def card_slots(console_text: str) -> dict[str, int]:
+    """Which slot (1 is the left) each main-menu card stands in, from the runtime's own line:
+    `main-menu buttons placed ... slots_after=play:1@2.150,join:2@0.730,...`. Empty when the line is absent."""
+    match = re.search(r"slots_after=([a-z]+:\d+@[-\d.]+(?:,[a-z]+:\d+@[-\d.]+)*)", ANSI.sub("", console_text))
+    if not match:
+        return {}
+    return {name: int(slot) for name, slot, _ in (part.replace("@", ":").split(":") for part in match[1].split(","))}
+
+
+def image_difference(a, b) -> float:
+    """The mean per-channel difference of two same-size PIL images, 0 for identical, up to 255."""
+    from PIL import ImageChops, ImageStat
+    return sum(ImageStat.Stat(ImageChops.difference(a.convert("RGB"), b.convert("RGB"))).mean) / 3
+
+
+class Ui:
+    """The mouse and the screen of one client's game window on :101."""
+
+    def __init__(self, client: "Client", shots: pathlib.Path):
+        self.client, self.shots = client, shots
+        self.window: str | None = None
+        self.origin = (0, 0)
+        self.n = 0
+        self.env = {k: v for k, v in os.environ.items() if k != "WAYLAND_DISPLAY"}
+        self.env["DISPLAY"] = ":101"
+
+    def _x(self, *args: str, check: bool = True) -> str:
+        out = subprocess.run(["xdotool", *args], env=self.env, capture_output=True, text=True, timeout=30)
+        if check and out.returncode != 0:
+            raise StepFailed(f"client {self.client.label}: xdotool {' '.join(args)} failed: {out.stderr.strip()}")
+        return out.stdout
+
+    def game_pid(self) -> str:
+        from run_scenario import game_pids
+        copy = str(self.client.copy.resolve())
+        for pid in game_pids():
+            if os.path.realpath(f"/proc/{pid}/cwd").startswith(copy):
+                return pid
+        raise StepFailed(f"client {self.client.label}: no game process on {self.client.copy}")
+
+    def find_window(self, timeout: float = 60.0) -> None:
+        """The game's window: the largest window of the game's process titled "Echo VR"."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            best = None
+            for win in self._x("search", "--pid", self.game_pid(), "--name", "^Echo VR$", check=False).split():
+                geo = self._x("getwindowgeometry", win, check=False)
+                size = re.search(r"Geometry: (\d+)x(\d+)", geo)
+                pos = re.search(r"Position: (-?\d+),(-?\d+)", geo)
+                if size and pos and (best is None or int(size[1]) * int(size[2]) > best[0]):
+                    best = (int(size[1]) * int(size[2]), win, (int(size[1]), int(size[2])), (int(pos[1]), int(pos[2])))
+            if best and best[2] == WINDOW_SIZE:
+                self.window, self.origin = best[1], best[3]
+                return
+            if best:
+                raise StepFailed(f"client {self.client.label}: the game window is {best[2][0]}x{best[2][1]}, the click map is for "
+                                 f"{WINDOW_SIZE[0]}x{WINDOW_SIZE[1]}; re-measure the map before clicking")
+            time.sleep(1)
+        raise StepFailed(f"client {self.client.label}: no \"Echo VR\" window on :101 within {timeout:.0f} s")
+
+    def click(self, x: float, y: float) -> None:
+        """A select: the window raised, the pointer moved onto the target (the game needs a hover first), the RIGHT button held 0.3 s."""
+        ox, oy = self.origin
+        self._x("windowraise", self.window, check=False)
+        self._x("windowfocus", self.window, check=False)
+        self._x("mousemove", str(int(ox + x - 3)), str(int(oy + y - 3)))
+        time.sleep(0.4)
+        self._x("mousemove", str(int(ox + x)), str(int(oy + y)))
+        time.sleep(0.5)
+        self._x("mousedown", "3")
+        time.sleep(0.3)
+        self._x("mouseup", "3")
+        time.sleep(1.5)
+
+    def capture(self):
+        from PIL import Image
+        png = subprocess.run(["import", "-window", self.window, "png:-"], env=self.env, capture_output=True, timeout=30)
+        if png.returncode != 0 or not png.stdout:
+            raise StepFailed(f"client {self.client.label}: could not capture the game window")
+        return Image.open(io.BytesIO(png.stdout))
+
+    def shot(self, name: str) -> None:
+        """The game window, only, into the evidence folder."""
+        self.n += 1
+        self.shots.mkdir(parents=True, exist_ok=True)
+        self.capture().save(self.shots / f"ui-{self.n:02d}-{name}.png")
+
+    def column(self):
+        return self.capture().crop(LEFT_COLUMN)
+
+    def navigate(self, x: float, y: float, what: str, tries: int = 3) -> None:
+        """Click until the page changes, seen as a change of the left column's buttons (a hover there is a small difference, a page
+        change a large one). For a click the game writes no line for."""
+        for _ in range(tries):
+            before = self.column()
+            self.click(x, y)
+            time.sleep(1.0)
+            if image_difference(before, self.column()) > 6.0:
+                self.shot(what.replace(" ", "-"))
+                return
+        raise StepFailed(f"client {self.client.label}: clicking {what} did not change the page after {tries} tries")
+
+    def click_logged(self, x: float, y: float, pattern: str, what: str, tries: int = 2, wait: float = 6.0) -> Line:
+        """Click until the game's own log shows the click: `pattern` after the click, within `wait` seconds."""
+        for attempt in range(tries):
+            mark = self.client.lines()[-1].n if self.client.lines() else 0
+            self.click(x, y)
+            try:
+                line, _ = self.client.wait_for(pattern, wait, mark)
+            except StepFailed as exc:
+                if attempt + 1 == tries or "exited" in str(exc) or "console.log:" in str(exc):
+                    raise StepFailed(f"{exc} (clicking {what})")
+                continue
+            self.shot(what.replace(" ", "-"))
+            return line
+        raise StepFailed(f"client {self.client.label}: clicking {what} never logged /{pattern}/")
+
+    def create(self, slots: dict[str, int]) -> None:
+        """CREATE GAME, Arena, Custom Match, CREATE INVITE CODE & LINK."""
+        self.navigate(CARD_SLOT_X[slots["create"]], CARD_Y, "CREATE GAME")
+        self.click_logged(*EXPERIENCE_ARENA, r"wizard event seen page=experience event=card card=2 experience=arena", "Echo Arena")
+        self.click_logged(*MODE_CUSTOM, r"wizard event seen page=arena_mode event=card card=1 experience=arena mode=custom", "Custom Match")
+        self.click_logged(*CREATE_INVITE, r"wizard click seen event=create_invite", "CREATE INVITE CODE")
+
+    def join(self, slots: dict[str, int], code: str, from_share_page: bool) -> None:
+        """The main menu's JOIN VIA CODE, the code typed on the page's keyboard, ENTER. From the share page it leaves by MAIN MENU."""
+        if from_share_page:
+            self.navigate(*MAIN_MENU, "MAIN MENU")
+        self.navigate(CARD_SLOT_X[slots["join"]], CARD_Y, "JOIN VIA CODE")
+        for char in code:
+            self.click(*key_position(char))
+        self.shot("code-typed")
+        self.click_logged(*KEY_ENTER, r"wizard click seen event=join_via_code", "ENTER")
+
+
 # ---- the run ----------------------------------------------------------------------------------------------------------
 
 def say(message: str) -> None:
@@ -373,7 +543,7 @@ def uuid_of(match_id: str) -> str:
     return match_id[:36].upper()
 
 
-def run_flow(a: Client, b: Client, steps: list[Step], timing: dict) -> None:
+def run_flow(a: Client, b: Client, steps: list[Step], timing: dict, evidence: pathlib.Path | None = None) -> None:
     """The steps, in order. Each appends its Step; the first StepFailed ends the flow and is recorded by the caller."""
     def done(name: str, proof, ok: bool = True, gating: bool = True) -> None:
         steps.append(Step(name, ok, proof, gating))
@@ -394,14 +564,35 @@ def run_flow(a: Client, b: Client, steps: list[Step], timing: dict) -> None:
         proofs.append((c.label, line, ""))
     done("invite service on in both clients", proofs)
 
+    uis: dict[str, Ui] = {}
+    slots: dict[str, int] = {}
+    if evidence is not None:   # --ui: the player's path, with the mouse
+        for c in (a, b):
+            uis[c.label] = Ui(c, evidence / c.label)
+            uis[c.label].find_window()
+        slots = card_slots(a.console.read_text(errors="replace"))
+        if not {"create", "join"} <= slots.keys():
+            raise StepFailed("A: the log has no `main-menu buttons placed ... slots_after=` line, so the cards' positions are unknown")
+        done("the game windows are found at the click map's size and the cards' slots are read from the log",
+             [(c.label, None, f"window {uis[c.label].window} at {uis[c.label].origin}") for c in (a, b)] +
+             [("A", None, "slots " + ",".join(f"{k}:{v}" for k, v in sorted(slots.items(), key=lambda kv: kv[1])))])
+
     # A: CREATE
     mark = a.lines()[-1].n if a.lines() else 0
-    a.call({"op": "fire", "action": "invite_create", "expires": "30 MINUTES", "experience": "arena", "mode": "custom"})
+    if uis:
+        uis["A"].create(slots)
+        done("A clicks CREATE GAME, Echo Arena, Custom Match and CREATE INVITE CODE & LINK (the wizard's own click metric is seen)",
+             [("A", first(a.lines(), r"wizard click seen event=create_invite", mark)[0], "")])
+    else:
+        a.call({"op": "fire", "action": "invite_create", "expires": "30 MINUTES", "experience": "arena", "mode": "custom"})
     sent, _ = a.wait_for(r"\[NEVR\.INVITE\] request sent op=create", 60, mark)
     timing["window_start"][a.label] = sent.ts
     answered, am = a.wait_for(r"\[NEVR\.INVITE\] answer op=create status=(\d+) latency_ms=\d+ result=(\w+)", 90, mark)
     created = a.answer("create", 30)
     ok = am[1] == "200" and am[2] == "ok" and bool(created.get("code")) and bool(created.get("match_id"))
+    if uis:   # the page's own expiry choice (3 HOURS) must reach the request: a metric read at the wrong level asks for 0
+        asked = re.search(r"request sent op=create expires_s=(\d+)", sent.text)
+        ok = ok and bool(asked) and int(asked[1]) > 0
     done("A creates a game and gets an invite code (invite/create)",
          [("A", sent, ""), ("A", answered, f"code_len={len(created.get('code', ''))} expires={created.get('expires')!r} match={created.get('match_id')}")],
          ok)
@@ -416,7 +607,10 @@ def run_flow(a: Client, b: Client, steps: list[Step], timing: dict) -> None:
     joined: dict[str, str] = {}
     for c in (b, a):
         mark = c.lines()[-1].n if c.lines() else 0
-        c.call({"op": "fire", "action": "invite_resolve", "code": code})
+        if uis:
+            uis[c.label].join(slots, code, from_share_page=(c is a))
+        else:
+            c.call({"op": "fire", "action": "invite_resolve", "code": code})
         req, _ = c.wait_for(r"\[NEVR\.INVITE\] request sent op=resolve code_len=\d+", 30, mark)
         ans, rm = c.wait_for(r"\[NEVR\.INVITE\] answer op=resolve status=(\d+) latency_ms=\d+ result=(\w+)", 60, mark)
         row = c.answer("resolve", 30)
@@ -479,8 +673,10 @@ def teardown(clients: list[Client], evidence: pathlib.Path) -> list[Step]:
         dest.mkdir(parents=True, exist_ok=True)
         if c.console and c.console.is_file():
             shutil.copy(c.console, dest / "console.log")
+        # only this run's logs: the install's folder holds every earlier run's too
         for log in sorted(c.logs.glob("nevr-*.jsonl")) if c.logs.is_dir() else []:
-            shutil.copy(log, dest / log.name)
+            if log.stat().st_mtime >= c.launched_at - 5:
+                shutil.copy(log, dest / log.name)
         launched = c.proc is not None and c.out.is_file()
         if launched:
             shutil.copy(c.out, dest / "launch-client.out")
@@ -502,6 +698,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--dll", type=pathlib.Path, default=DEFAULT_DLL, help="the mingw-scenario BugSplat64.dll")
     parser.add_argument("--account-a", help="stored sign-in for client A (a directory name under the creds store)")
     parser.add_argument("--account-b", help="stored sign-in for client B")
+    parser.add_argument("--ui", action="store_true",
+                        help="drive the wizard with real mouse clicks (CREATE GAME ... typed JOIN VIA CODE) instead of the control endpoint")
     parser.add_argument("--timeout", type=int, default=1500, help="seconds each client may run (timeout -s INT -k 15)")
     parser.add_argument("--game-root", type=pathlib.Path,
                         help="the install to copy (the directory that holds bin/win10/echovr.exe); default: the main checkout's echovr/")
@@ -562,7 +760,8 @@ def main(argv: list[str]) -> int:
     runtime_sha = hashlib.sha256(runtime.read_bytes()).hexdigest()[:12]
     head = subprocess.run(["git", "rev-parse", "--short=10", "HEAD"], cwd=REPO, capture_output=True, text=True).stdout.strip()
     header = [f"invite-e2e {stamp}  HEAD {head}  BugSplat64.dll {host_sha}  nevr-runtime.dll {runtime_sha}  (production, nested display :101)",
-              "driven: invite service via the scenario control endpoint (fire invite_create / invite_resolve); the wizard's cards and typed code are NOT clicked"]
+              ("driven: the wizard with real mouse clicks (CREATE GAME cards, typed JOIN VIA CODE); the control endpoint only reads the code back" if args.ui else
+               "driven: invite service via the scenario control endpoint (fire invite_create / invite_resolve); the wizard's cards and typed code are NOT clicked")]
     rad: dict[str, list[RadHit]] = {}
     try:
         say(f"copying the install ({need / 2 / 2**30:.1f} GiB) twice into {run}")
@@ -577,7 +776,7 @@ def main(argv: list[str]) -> int:
             c.launch(args.dll, args.timeout)
             say(f"client {c.label} launched (account {c.account[:4]}...; timeout {args.timeout} s)")
             time.sleep(4)
-        run_flow(clients[0], clients[1], steps, timing)
+        run_flow(clients[0], clients[1], steps, timing, evidence if args.ui else None)
     except (StepFailed, OSError, KeyError, IndexError, ValueError) as exc:  # a bug in this tool still ends in teardown and a verdict
         steps.append(Step("the flow stopped here", False, [("run", None, f"{type(exc).__name__}: {exc}")]))
         say(f"FAIL  {exc}")
