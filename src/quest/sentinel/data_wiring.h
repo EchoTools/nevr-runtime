@@ -99,6 +99,9 @@ struct Options {
   // mapped from (dladdr). The rest are test seams: free bytes of the root (null: statvfs) and a probe the pack step calls
   // after a temporary is written and after a rename, whose false stops the step as a kill would.
   std::string apk_path;
+  // Where the pack's `q15t_data` extra file goes (ADR 0029, "Extra files"); empty: /sdcard/Android/data/<package>/files/q15t,
+  // the q15t plugin's data directory, with the package from /proc/self/cmdline (test seam).
+  std::string q15t_data_dir;
   std::function<std::uint64_t(const std::string& root)> pack_available_bytes;
   std::function<bool(const char* point, const std::string& path)> pack_probe;
   // Test seams for the pinned zip: when `zip_sha256` is not empty the fetch uses these instead of the pins in

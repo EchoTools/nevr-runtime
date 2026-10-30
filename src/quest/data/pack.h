@@ -42,12 +42,29 @@ inline constexpr std::uint64_t kPackHeadroomBytes = 64ull * 1024 * 1024;
 // A file the pack carries is read through the zip reader's single-entry limit.
 inline constexpr std::uint64_t kMaxPackFileBytes = (1ull << 31) - 1;
 
+// Extra files (ADR 0029, "Extra files"): a file a plugin of this APK reads, carried with the pack it belongs to and placed in that
+// plugin's data directory, not in the data tree. Optional: a pack.json without `extra_files` is the pack it was before. Only the
+// names below exist; each goes to one destination.
+inline constexpr const char* kPackExtraPrefix = "assets/nevr-pack/extra/";
+inline constexpr const char* kExtraDestQ15tData = "q15t_data";  // /sdcard/Android/data/<package>/files/q15t
+inline constexpr std::size_t kMaxPackExtras = 2;
+inline constexpr std::uint64_t kMaxPackExtraBytes = 32ull << 20;  // the decals module's own cap on its table
+// The extra file names a pack may carry: decals.bin (the q15t decals module's table, docs/quest/q15t/modules/decals.md).
+bool IsPackExtraName(const std::string& name) noexcept;
+
 // What an APK is allowed to hold when it is read for a pack: hundreds of entries, none over the reader's entry limit, the whole
 // archive under the 4 GiB a zip without zip64 can address (the reader refuses zip64).
 ZipLimits PackZipLimits() noexcept;
 
 struct PackFile {
   std::string path;    // below `_data/<stock_data_version>/rad15/android/`
+  std::string sha256;  // 64 lowercase hex characters
+  std::uint64_t size = 0;
+};
+
+struct PackExtra {
+  std::string dest;    // kExtraDestQ15tData
+  std::string name;    // IsPackExtraName
   std::string sha256;  // 64 lowercase hex characters
   std::uint64_t size = 0;
 };
@@ -62,11 +79,12 @@ struct PackInfo {
   std::uint64_t source_size = 0;
   std::string manifest_path;  // the entry of `files` that is the game's manifest
   std::string manifest_sha256;
+  std::vector<PackExtra> extras;  // empty: the pack carries none
 };
 
 // Parses and checks `text` (pack.json). False with a token in `reason`: not_json, too_large, bad_schema, bad_id, bad_version,
 // bad_stock_version, bad_requires, bad_file, bad_sha256, bad_size, no_manifest, wrong_manifest, duplicate_file, too_many_files,
-// bad_source. The rules the repack tool applies (tools/quest_repack_libs.py, pack_problems) are these.
+// bad_source, bad_extra, duplicate_extra. The rules the repack tool applies (tools/quest_repack_libs.py, pack_problems) are these.
 bool ParsePackJson(const std::string& text, PackInfo* out, std::string* reason);
 
 enum class PackOutcome {
@@ -98,9 +116,10 @@ enum class EventLevel { kInfo, kWarn, kError };
 struct PackConfig {
   std::string apk_path;  // empty: unknown
   std::string root;      // the data root the engine reads
+  std::string q15t_data_dir;  // where a `q15t_data` extra goes; empty: unknown (the extra is not placed, a Warning says so)
   // Seams. A null function means: statvfs, no events, no message, no hold, never interrupted.
-  std::function<std::uint64_t(const std::string& root)> available_bytes;
-  std::function<void(EventLevel, const Event&)> on_event;  // pack_check, pack_place, pack_step, data_version
+  std::function<std::uint64_t(const std::string& root)> available_bytes;  // also asked for the extra file's directory
+  std::function<void(EventLevel, const Event&)> on_event;  // pack_check, pack_place, pack_extra, pack_step, data_version
   std::function<void(const std::string& message)> present;
   std::function<void()> hold;
   // Called after a file's temporary is complete ("tmp_written") and after its rename ("renamed"), with the final path. False

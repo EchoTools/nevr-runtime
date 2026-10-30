@@ -301,7 +301,77 @@ PackStatus KeepStockManifest(const std::string& dest, const std::string& stock_s
   return PackStatus::kOk;
 }
 
+// Places one extra file in its directory: current when it is there with the recorded size and sha-256; otherwise a marked temporary
+// written from the APK entry and verified, then one rename over whatever is there (its old sha-256 logged). Every failure is a
+// Warning and leaves the game to start: the file is for a plugin that stays out without it. False only when `probe` stopped the
+// step as a kill would.
+bool PlaceExtra(const PackConfig& config, const Step& step, const ZipEntry& entry, const PackExtra& extra) {
+  std::vector<std::pair<std::string, std::string>> fields = {
+      {"name", extra.name}, {"dest", extra.dest}, {"dir", config.q15t_data_dir}, {"bytes", std::to_string(extra.size)},
+      {"sha256", extra.sha256}};
+  const auto failed = [&](const std::string& detail) {
+    fields.push_back({"result", "failed"});
+    fields.push_back({"detail", detail});
+    step.Emit(EventLevel::kWarn, "pack_extra", fields);
+    return true;
+  };
+  if (config.q15t_data_dir.empty()) return failed("no_dir: the package name is unknown, so the plugin's data directory is too");
+  const std::string& dir = config.q15t_data_dir;
+  if (::mkdir(dir.c_str(), 0755) != 0 && errno != EEXIST) return failed("mkdir errno=" + std::to_string(errno));
+  struct stat st;
+  if (::lstat(dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) return failed("not_a_directory");
+  const std::string dest = dir + "/" + extra.name;
+  const std::string tmp = dest + kPackTmpSuffix;
+  // A kill after the rename leaves the temporary's marker alone: it is ours, and nothing else is.
+  if (!Lexists(tmp) && Lexists(OwnerMarkerPath(tmp))) ::unlink(OwnerMarkerPath(tmp).c_str());
+  std::string old_hex;
+  std::uint64_t old_size = 0;
+  const bool had = HashRegularFile(dest, &old_hex, &old_size);
+  if (had && old_size == extra.size && old_hex == extra.sha256) {
+    fields.push_back({"result", "current"});
+    step.Emit(EventLevel::kInfo, "pack_extra", fields);
+    return true;
+  }
+  const std::string old = had ? old_hex : (Lexists(dest) ? "unreadable" : "none");
+  const std::uint64_t needed = extra.size + (1ull << 20);
+  std::uint64_t available = 0;
+  if (config.available_bytes) {
+    available = config.available_bytes(dir);
+  } else if (CheckSpace(dir, needed, &available) == StageStatus::kStatFailed) {
+    return failed("statvfs");
+  }
+  if (available < needed) return failed("no_space free_bytes=" + std::to_string(available) + " needed_bytes=" + std::to_string(needed));
+  PackFile file;
+  file.path = extra.name;
+  file.sha256 = extra.sha256;
+  file.size = extra.size;
+  std::string why;
+  const PackStatus status = WriteTemporary(config.apk_path, entry, file, tmp, &why);
+  if (status != PackStatus::kOk) return failed(std::string(PackStatusName(status)) + " " + why);
+  if (config.probe && !config.probe("tmp_written", dest)) {
+    fields.push_back({"result", "interrupted"});
+    step.Emit(EventLevel::kWarn, "pack_extra", fields);
+    return false;
+  }
+  if (::rename(tmp.c_str(), dest.c_str()) != 0) {
+    const int e = errno;
+    RemoveTree(tmp);
+    RemoveTree(OwnerMarkerPath(tmp));
+    return failed("rename errno=" + std::to_string(e));
+  }
+  SyncDir(dir);
+  ::unlink(OwnerMarkerPath(tmp).c_str());
+  SyncDir(dir);
+  fields.push_back({"result", old != "none" ? "replaced" : "placed"});
+  fields.push_back({"old_sha256", old});
+  step.Emit(EventLevel::kInfo, "pack_extra", fields);
+  if (config.probe && !config.probe("renamed", dest)) return false;
+  return true;
+}
+
 }  // namespace
+
+bool IsPackExtraName(const std::string& name) noexcept { return name == "decals.bin"; }
 
 ZipLimits PackZipLimits() noexcept {
   ZipLimits limits;
@@ -395,6 +465,30 @@ bool ParsePackJson(const std::string& text, PackInfo* out, std::string* reason) 
     info.files.push_back(std::move(file));
   }
   if (info.manifest_path.empty()) return Refuse(reason, "no_manifest");
+
+  // Optional: absent is no extra file; present, it holds 1 to kMaxPackExtras.
+  const auto extras_it = doc.find("extra_files");
+  if (extras_it != doc.end()) {
+    if (!extras_it->is_array() || extras_it->empty() || extras_it->size() > kMaxPackExtras) return Refuse(reason, "bad_extra");
+    std::set<std::string> names;
+    for (const nlohmann::json& entry : *extras_it) {
+      if (!entry.is_object()) return Refuse(reason, "bad_extra");
+      const std::string* dest = StringField(entry, "dest");
+      const std::string* name = StringField(entry, "name");
+      const std::string* sha = StringField(entry, "sha256");
+      PackExtra extra;
+      if (dest == nullptr || *dest != kExtraDestQ15tData || name == nullptr || !IsPackExtraName(*name)) return Refuse(reason, "bad_extra");
+      if (sha == nullptr || !IsHex64(*sha)) return Refuse(reason, "bad_sha256");
+      if (!UnsignedField(entry, "size", &extra.size) || extra.size == 0 || extra.size > kMaxPackExtraBytes) {
+        return Refuse(reason, "bad_size");
+      }
+      if (!names.insert(Lower(*name)).second) return Refuse(reason, "duplicate_extra");
+      extra.dest = *dest;
+      extra.name = *name;
+      extra.sha256 = *sha;
+      info.extras.push_back(std::move(extra));
+    }
+  }
 
   const std::string* source_sha = StringField(doc, "source_zip_sha256");
   if (source_sha == nullptr || !IsHex64(*source_sha) || !UnsignedField(doc, "source_zip_size", &info.source_size) ||
@@ -521,6 +615,24 @@ PackResult RunPackStep(const PackConfig& config) {
     }
     apk_entries.push_back(entry);
   }
+  std::vector<const ZipEntry*> extra_entries;
+  for (const PackExtra& extra : pack.extras) {
+    const ZipEntry* entry = FindZipEntry(entries, std::string(kPackExtraPrefix) + extra.name);
+    if (entry == nullptr || entry->IsDirectory() || entry->size != extra.size) {
+      step.Emit(EventLevel::kError, "pack_check",
+                {{"outcome", "invalid"}, {"reason", entry == nullptr ? "extra_missing" : "extra_size"}, {"id", pack.id},
+                 {"version", pack.version}, {"detail", extra.name}});
+      return finish(PackOutcome::kInvalid, PackStatus::kOk);
+    }
+    extra_entries.push_back(entry);
+  }
+  // The extra files, once the pack's data is in place (current or placed): a table is only right for the pack it was made with.
+  const auto with_extras = [&](PackOutcome outcome) {
+    for (std::size_t i = 0; i < pack.extras.size(); ++i) {
+      if (!PlaceExtra(config, step, *extra_entries[i], pack.extras[i])) return finish(PackOutcome::kFailed, PackStatus::kInterrupted);
+    }
+    return finish(outcome, PackStatus::kOk);
+  };
 
   // The root is written below only after the leftovers of an interrupted run are gone.
   int clean_failed = 0;
@@ -555,6 +667,10 @@ PackResult RunPackStep(const PackConfig& config) {
   };
   if (!stock_ok && !ours) {
     step.Emit(EventLevel::kWarn, "pack_check", check_with("stock_mismatch"));
+    for (const PackExtra& extra : pack.extras) {
+      step.Emit(EventLevel::kWarn, "pack_extra",
+                {{"name", extra.name}, {"dest", extra.dest}, {"result", "skipped"}, {"detail", "the pack's data is not in place"}});
+    }
     return finish(PackOutcome::kStockMismatch, PackStatus::kOk);
   }
 
@@ -587,7 +703,7 @@ PackResult RunPackStep(const PackConfig& config) {
                 {{"path", pack.files[i].path}, {"bytes", std::to_string(pack.files[i].size)},
                  {"sha256", pack.files[i].sha256}, {"result", "current"}});
     }
-    return finish(PackOutcome::kCurrent, PackStatus::kOk);
+    return with_extras(PackOutcome::kCurrent);
   }
 
   const auto fail = [&](PackStatus status, const std::string& why, std::uint64_t need, std::uint64_t avail) {
@@ -684,7 +800,7 @@ PackResult RunPackStep(const PackConfig& config) {
              {"manifest_sha256", ManifestDigest(manifest_path)},
              {"pack", pack.id},
              {"pack_version", pack.version}});
-  return finish(placed_any ? PackOutcome::kPlaced : PackOutcome::kCurrent, PackStatus::kOk);
+  return with_extras(placed_any ? PackOutcome::kPlaced : PackOutcome::kCurrent);
 }
 
 }  // namespace nevr_quest::data

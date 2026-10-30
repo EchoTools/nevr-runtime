@@ -196,6 +196,20 @@ std::string OwnApkPath() {
   return data::ApkPathForLibrary(info.dli_fname, Opts().exists != nullptr ? Opts().exists : &obb_skip::PathExists);
 }
 
+// The q15t plugin's data directory, /sdcard/Android/data/<package>/files/q15t, by the plugin's own rule (module_switch.h,
+// ModuleDataDir): the package is /proc/self/cmdline up to a ':'. Empty when the package cannot be read.
+std::string Q15tDataDir() {
+  char cmd[256] = "";
+  FILE* f = std::fopen("/proc/self/cmdline", "re");
+  if (f == nullptr) return "";
+  const std::size_t r = std::fread(cmd, 1, sizeof cmd - 1, f);
+  std::fclose(f);
+  cmd[r] = 0;
+  if (char* colon = std::strchr(cmd, ':')) *colon = 0;
+  if (std::strchr(cmd, '.') == nullptr || std::strchr(cmd, '/') != nullptr || std::strlen(cmd) > 160) return "";
+  return std::string("/sdcard/Android/data/") + cmd + "/files/q15t";
+}
+
 sentinel::LogLevel LogLevelOf(data::EventLevel level) noexcept {
   switch (level) {
     case data::EventLevel::kWarn: return sentinel::LogLevel::kWarn;
@@ -212,6 +226,7 @@ void RunPack(const std::string& engineRoot) noexcept {
   pack.apk_path = !Opts().apk_path.empty() ? Opts().apk_path : OwnApkPath();
   // The root the data step used (the test seam moves it, as it moves the fetch).
   pack.root = Opts().fetch_root_override.empty() ? engineRoot : Opts().fetch_root_override;
+  pack.q15t_data_dir = !Opts().q15t_data_dir.empty() ? Opts().q15t_data_dir : Q15tDataDir();
   pack.available_bytes = Opts().pack_available_bytes;
   pack.probe = Opts().pack_probe;
   pack.on_event = [](data::EventLevel level, const data::Event& e) { LogEventFields(LogLevelOf(level), e); };

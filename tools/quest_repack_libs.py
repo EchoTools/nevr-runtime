@@ -110,6 +110,15 @@ NEVR_NOTE_TYPE = 1
 PACK_DIR = "assets/nevr-pack"
 PACK_JSON_ENTRY = f"{PACK_DIR}/pack.json"
 PACK_FILES_DIR = f"{PACK_DIR}/files"
+# Extra files (docs/adr/0029, "Extra files"): a plugin's file carried with the pack it belongs to, placed in that plugin's data
+# directory. In the pack zip each is `q15t/<name>`; staged at `assets/nevr-pack/extra/<name>`. Only these names exist.
+PACK_EXTRA_DIR = f"{PACK_DIR}/extra"
+PACK_EXTRA_ZIP_DIR = "q15t/"
+PACK_EXTRA_NAMES = ("decals.bin",)
+PACK_EXTRA_DEST = "q15t_data"
+MAX_PACK_EXTRAS = 2
+MAX_PACK_EXTRA_BYTES = 32 << 20  # the decals module's own cap on its table
+_MD5 = re.compile(r"^[0-9a-f]{32}$")
 PACK_SCHEMA = 1
 MAX_PACK_FILES = 8
 MAX_PACK_FILE_BYTES = (1 << 31) - 1  # the sentinel's zip reader limit for one entry
@@ -400,17 +409,50 @@ def pack_meta_problems(meta: dict, version_folder: str, manifest_id: str) -> tup
         problems.append("meta: zip_prefix must be _data/<version>/rad15/android/")
     elif prefix.group(1) != version_folder:
         problems.append(f"meta: zip_prefix names data version {prefix.group(1)}, the data step's kManifestPath says {version_folder}")
+    problems += meta_extra_problems(meta)
     return problems, sorted(requires)
 
 
-def pack_zip_scan(pack_zip: pathlib.Path, prefix: str, manifest_id: str) -> tuple[list[str], dict[str, tuple[str, int]]]:
-    """Reads every entry of `pack_zip`: the problems, and `{path below prefix: (sha-256 of the bytes read, size)}`."""
+def meta_extra_problems(meta: dict) -> list[str]:
+    """`extra_files` of the meta file: absent, or 1 to MAX_PACK_EXTRAS objects `{name, md5}`, each name one of PACK_EXTRA_NAMES once."""
+    if "extra_files" not in meta:
+        return []
+    extras = meta["extra_files"]
+    if not isinstance(extras, list) or not 1 <= len(extras) <= MAX_PACK_EXTRAS:
+        return [f"meta: extra_files must hold 1 to {MAX_PACK_EXTRAS} entries"]
+    problems: list[str] = []
+    seen: set[str] = set()
+    for entry in extras:
+        if not isinstance(entry, dict) or set(entry) != {"name", "md5"}:
+            problems.append("meta: an extra_files entry must be exactly {name, md5}")
+            continue
+        if entry["name"] not in PACK_EXTRA_NAMES:
+            problems.append(f"meta: extra file {entry['name']!r} is not one of {', '.join(PACK_EXTRA_NAMES)}")
+        elif entry["name"] in seen:
+            problems.append(f"meta: extra file {entry['name']} twice")
+        seen.add(entry["name"]) if isinstance(entry["name"], str) else None
+        if not isinstance(entry["md5"], str) or not _MD5.match(entry["md5"]):
+            problems.append(f"meta: extra file {entry['name']!r}: md5 must be 32 lowercase hex digits")
+    return problems
+
+
+def meta_extra_md5(meta: dict) -> dict[str, str]:
+    """{name: md5} of the meta file's extra files (checked by meta_extra_problems)."""
+    return {entry["name"]: entry["md5"] for entry in meta.get("extra_files", [])}
+
+
+def pack_zip_scan(pack_zip: pathlib.Path, prefix: str, manifest_id: str, extra_md5: dict[str, str] | None = None
+                  ) -> tuple[list[str], dict[str, tuple[str, int]], dict[str, tuple[str, int]]]:
+    """Reads every entry of `pack_zip`: the problems, `{path below prefix: (sha-256 of the bytes read, size)}` and the extra files
+    `{name: (sha-256, size)}`. An extra file is `q15t/<name>` for a name `extra_md5` holds, and its bytes must have that md5."""
+    extra_md5 = extra_md5 or {}
     problems: list[str] = []
     found: dict[str, tuple[str, int]] = {}
+    extras: dict[str, tuple[str, int]] = {}
     try:
         archive = zipfile.ZipFile(pack_zip)
     except (OSError, zipfile.BadZipFile) as error:
-        return [f"{pack_zip}: not a readable zip archive: {error}"], found
+        return [f"{pack_zip}: not a readable zip archive: {error}"], found, extras
     with archive:
         infos = archive.infolist()
         folded: dict[str, str] = {}
@@ -430,8 +472,31 @@ def pack_zip_scan(pack_zip: pathlib.Path, prefix: str, manifest_id: str) -> tupl
                 if stat.S_IFMT(mode) not in (0, stat.S_IFREG, stat.S_IFDIR):
                     problems.append(f"{name}: a link or another special file")
             if info.is_dir():
-                if not (prefix.startswith(name) or name.startswith(prefix)):
+                if not (prefix.startswith(name) or name.startswith(prefix) or (extra_md5 and name == PACK_EXTRA_ZIP_DIR)):
                     problems.append(f"{name}: a directory outside {prefix}")
+                continue
+            if name.startswith(PACK_EXTRA_ZIP_DIR):
+                extra = name[len(PACK_EXTRA_ZIP_DIR):]
+                if extra not in extra_md5:
+                    problems.append(f"{name}: not an extra file the meta file names")
+                    continue
+                md5, digest, size = hashlib.md5(), hashlib.sha256(), 0
+                try:
+                    with archive.open(info) as stream:
+                        while chunk := stream.read(_CHUNK):
+                            md5.update(chunk)
+                            digest.update(chunk)
+                            size += len(chunk)
+                except (OSError, zipfile.BadZipFile, RuntimeError, EOFError) as error:
+                    problems.append(f"{name}: cannot be read: {error}")
+                    continue
+                if size != info.file_size:
+                    problems.append(f"{name}: the zip records {info.file_size} bytes, {size} were read")
+                if size == 0 or size > MAX_PACK_EXTRA_BYTES:
+                    problems.append(f"{name}: {size} bytes (an extra file is 1 byte to {MAX_PACK_EXTRA_BYTES})")
+                if md5.hexdigest() != extra_md5[extra]:
+                    problems.append(f"{name}: md5 {md5.hexdigest()}, the meta file names {extra_md5[extra]}")
+                extras[extra] = (digest.hexdigest(), size)
                 continue
             if not name.startswith(prefix):
                 problems.append(f"{name}: outside {prefix}")
@@ -459,11 +524,13 @@ def pack_zip_scan(pack_zip: pathlib.Path, prefix: str, manifest_id: str) -> tupl
         problems.append(f"{len(found)} files: a pack carries at most {MAX_PACK_FILES}")
     if f"manifests/{manifest_id}" not in found:
         problems.append(f"the zip has no {prefix}manifests/{manifest_id}")
-    return problems, found
+    for name in sorted(set(extra_md5) - set(extras)):
+        problems.append(f"the zip has no {PACK_EXTRA_ZIP_DIR}{name}, which the meta file names")
+    return problems, found, extras
 
 
 def pack_json_bytes(meta: dict, requires: list[str], version_folder: str, files: dict[str, tuple[str, int]],
-                    zip_sha256: str, zip_size: int) -> bytes:
+                    zip_sha256: str, zip_size: int, extras: dict[str, tuple[str, int]] | None = None) -> bytes:
     """pack.json: schema 1, sorted keys, no spaces, one trailing newline: the same pack gives the same bytes."""
     document = {
         "schema": PACK_SCHEMA,
@@ -475,6 +542,9 @@ def pack_json_bytes(meta: dict, requires: list[str], version_folder: str, files:
         "source_zip_sha256": zip_sha256,
         "source_zip_size": zip_size,
     }
+    if extras:  # absent otherwise: a pack with no extra file has the bytes it had before extra files existed
+        document["extra_files"] = [{"dest": PACK_EXTRA_DEST, "name": name, "sha256": extras[name][0], "size": extras[name][1]}
+                                   for name in sorted(extras)]
     return (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
 
 
@@ -495,7 +565,7 @@ def stage_pack(pack_zip: pathlib.Path, meta_path: pathlib.Path, stage: pathlib.P
     if problems:
         return problems
     prefix = meta["zip_prefix"]
-    problems, files = pack_zip_scan(pack_zip, prefix, manifest_id)
+    problems, files, extras = pack_zip_scan(pack_zip, prefix, manifest_id, meta_extra_md5(meta))
     try:
         with zipfile.ZipFile(store_apk) as store:
             taken = [n for n in store.namelist() if n == PACK_DIR or n.startswith(PACK_DIR + "/")]
@@ -503,7 +573,7 @@ def stage_pack(pack_zip: pathlib.Path, meta_path: pathlib.Path, stage: pathlib.P
     except (OSError, zipfile.BadZipFile) as error:
         return problems + [f"{store_apk}: cannot be read as the store APK: {error}"]
     problems += [f"{store_apk.name} already has the entry {n}: a staged pack would replace it" for n in taken]
-    total = sum(size for _digest, size in files.values())
+    total = sum(size for _digest, size in files.values()) + sum(size for _digest, size in extras.values())
     if store_size + total + APK_SLACK_BYTES > APK_LIMIT_BYTES:
         problems.append(f"the APK would be about {store_size + total} bytes: a zip without zip64 holds {APK_LIMIT_BYTES} "
                         "(the sentinel's zip reader refuses zip64)")
@@ -523,9 +593,18 @@ def stage_pack(pack_zip: pathlib.Path, meta_path: pathlib.Path, stage: pathlib.P
                     written += len(chunk)
             if (copied.hexdigest(), written) != (digest, size):
                 return [f"{prefix}{relative}: the bytes read twice differ"]
-    (stage / PACK_JSON_ENTRY).write_bytes(pack_json_bytes(meta, requires, version_folder, files, zip_sha256, zip_size))
+        for name, (digest, size) in sorted(extras.items()):
+            target = stage / PACK_EXTRA_DIR / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            data = archive.read(PACK_EXTRA_ZIP_DIR + name)
+            if (hashlib.sha256(data).hexdigest(), len(data)) != (digest, size):
+                return [f"{PACK_EXTRA_ZIP_DIR}{name}: the bytes read twice differ"]
+            target.write_bytes(data)
+    (stage / PACK_JSON_ENTRY).write_bytes(pack_json_bytes(meta, requires, version_folder, files, zip_sha256, zip_size, extras))
     for relative in sorted(files):
         print(f"quest_repack_libs: pack file {relative} sha256 {files[relative][0]} size {files[relative][1]}", flush=True)
+    for name in sorted(extras):
+        print(f"quest_repack_libs: pack extra {name} sha256 {extras[name][0]} size {extras[name][1]}", flush=True)
     return []
 
 
@@ -574,6 +653,24 @@ def pack_document_problems(document: object, version_folder: str, manifest_id: s
     if (not isinstance(document.get("source_zip_sha256"), str) or not _HEX64.match(document["source_zip_sha256"])
             or not isinstance(source_size, int) or isinstance(source_size, bool) or source_size < 1):
         problems.append("pack.json: bad source_zip_sha256 or source_zip_size")
+    if "extra_files" in document:
+        extras = document["extra_files"]
+        if not isinstance(extras, list) or not 1 <= len(extras) <= MAX_PACK_EXTRAS:
+            problems.append(f"pack.json: extra_files must hold 1 to {MAX_PACK_EXTRAS} entries")
+            extras = []
+        names: set[str] = set()
+        for entry in extras:
+            if (not isinstance(entry, dict) or entry.get("dest") != PACK_EXTRA_DEST or entry.get("name") not in PACK_EXTRA_NAMES):
+                problems.append("pack.json: an extra_files entry must have dest q15t_data and a known name")
+                continue
+            if entry["name"].lower() in names:
+                problems.append(f"pack.json: extra file {entry['name']} twice")
+            names.add(entry["name"].lower())
+            if not isinstance(entry.get("sha256"), str) or not _HEX64.match(entry["sha256"]):
+                problems.append(f"pack.json: extra file {entry['name']}: bad sha256")
+            size = entry.get("size")
+            if not isinstance(size, int) or isinstance(size, bool) or not 1 <= size <= MAX_PACK_EXTRA_BYTES:
+                problems.append(f"pack.json: extra file {entry['name']}: bad size")
     return problems
 
 
@@ -610,7 +707,19 @@ def pack_problems(stage: pathlib.Path, plan_header: pathlib.Path = PLAN_HEADER) 
         relative = found.relative_to(stage / PACK_FILES_DIR).as_posix()
         if relative not in listed:
             problems.append(f"{PACK_FILES_DIR}/{relative}: staged, not listed in pack.json")
-    for found in sorted(p for p in pack_dir.iterdir() if p.name not in ("pack.json", "files")):
+    listed_extras: set[str] = set()
+    for entry in document.get("extra_files", []):
+        listed_extras.add(entry["name"])
+        staged = stage / PACK_EXTRA_DIR / entry["name"]
+        if staged.is_symlink() or not staged.is_file():
+            problems.append(f"{PACK_EXTRA_DIR}/{entry['name']}: listed in pack.json, not staged as a file")
+        elif staged.stat().st_size != entry["size"] or file_digest(staged) != entry["sha256"]:
+            problems.append(f"{PACK_EXTRA_DIR}/{entry['name']}: not the size and sha256 pack.json lists")
+    extra_root = stage / PACK_EXTRA_DIR
+    for found in sorted(p for p in extra_root.rglob("*") if p.is_file() or p.is_symlink()) if extra_root.exists() else []:
+        if found.relative_to(extra_root).as_posix() not in listed_extras:
+            problems.append(f"{PACK_EXTRA_DIR}/{found.relative_to(extra_root).as_posix()}: staged, not listed in pack.json")
+    for found in sorted(p for p in pack_dir.iterdir() if p.name not in ("pack.json", "files", "extra")):
         problems.append(f"{PACK_DIR}/{found.name}: not part of a pack")
     return problems
 
