@@ -1330,13 +1330,14 @@ test-quest-shared: _vcpkg-quest-host
     "$out/login_prerequisites_test"
     # The install against a host with no libpnsovr.so loaded: fully partial, fail-safe, idempotent.
     # The thunk-defining TU and the backend are -fno-exceptions (callback_thunk.h); the test too.
-    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isdk/include -Isrc/quest/sentinel -c \
+    # NEVR_QUEST_TESTING: the install's slot seam (login_prerequisites.h) is compiled for the test only.
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -Isdk/include -Isrc/quest/sentinel -c \
         src/quest/login/login_prerequisites_install.cpp -o "$out/login_prerequisites_install.o"
     for f in got_hook hook_report; do
         g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isdk/include -Isrc/quest/sentinel -c \
             "src/quest/sentinel/$f.cpp" -o "$out/$f.o"
     done
-    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isdk/include -Isrc/quest/sentinel \
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -Isdk/include -Isrc/quest/sentinel \
         "$out/login_prerequisites.o" "$out/login_prerequisites_install.o" "$out/login_standin.o" \
         "$out/got_hook.o" "$out/hook_log.o" "$out/hook_report.o" \
         src/quest/tests/login_prerequisites_install_test.cpp \

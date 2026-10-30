@@ -28,6 +28,21 @@ char g_name[sizeof(kNamePrefix) - 1 + kNameHex + 1] = {};
 
 bool Published() { return g_state.load(std::memory_order_acquire) == 2; }
 
+#if defined(NEVR_QUEST_TESTING)
+RandomFn g_random_for_test = nullptr;  // nullptr: arc4random_buf
+#endif
+
+// Every random draw of Generate goes through here, so a test can script a draw (SetRandomForTest).
+void Draw(void* buf, std::size_t n) {
+#if defined(NEVR_QUEST_TESTING)
+  if (g_random_for_test != nullptr) {
+    g_random_for_test(buf, n);
+    return;
+  }
+#endif
+  arc4random_buf(buf, n);
+}
+
 void Hex(const unsigned char* bytes, std::size_t count, char* out) {
   static constexpr char kDigits[] = "0123456789abcdef";
   for (std::size_t i = 0; i < count; ++i) {
@@ -66,18 +81,18 @@ void Generate() noexcept {
   // publishes, every accessor answers 0/"" and every predicate false, which is the safe answer.
   if (!g_state.compare_exchange_strong(expected, 1, std::memory_order_acq_rel)) return;
   std::uint64_t org = 0;
-  while (org == 0 || org == ~std::uint64_t{0}) arc4random_buf(&org, sizeof(org));
+  while (org == 0 || org == ~std::uint64_t{0}) Draw(&org, sizeof(org));
   std::uint64_t user = 0;
   while (user == 0 || user == org) {
-    arc4random_buf(&user, sizeof(user));
+    Draw(&user, sizeof(user));
     user &= ~(std::uint64_t{1} << 63);  // a non-negative signed 64-bit value, as CJson::SetInt stores it
   }
   unsigned char raw[kTokenHex / 2];
-  arc4random_buf(raw, sizeof(raw));
+  Draw(raw, sizeof(raw));
   Hex(raw, kTokenHex / 2, g_token);
-  arc4random_buf(raw, kNonceHex / 2);
+  Draw(raw, kNonceHex / 2);
   Hex(raw, kNonceHex / 2, g_nonce);
-  arc4random_buf(raw, kNameHex / 2);
+  Draw(raw, kNameHex / 2);
   std::memcpy(g_name, kNamePrefix, sizeof(kNamePrefix) - 1);
   Hex(raw, kNameHex / 2, g_name + sizeof(kNamePrefix) - 1);
   g_org = org;
@@ -134,6 +149,8 @@ void SetForTest(std::uint64_t org, const char* token, const char* nonce, const c
 void SetUserIdForTest(std::uint64_t user) noexcept { g_user = user; }
 
 void ResetForTest() noexcept { g_state.store(0, std::memory_order_release); }
+
+void SetRandomForTest(RandomFn fn) noexcept { g_random_for_test = fn; }
 #endif
 
 }  // namespace nevr_quest_login::StandIn
