@@ -302,6 +302,19 @@ TEST_F(ServerTeamSize, ACapWrittenInPartKeepsTheSlotRule) {
       << line;
 }
 
+TEST_F(ServerTeamSize, ACapWrittenInPartBelowFiveIsNotInEffect) {
+  Image img;
+  g_refuseAt = img.cap.data();
+  const Outcome o = Run(img, 4, WritesPartThenFailsWriter);
+  EXPECT_EQ(o.cap, Result::WriteFailed);
+  EXPECT_EQ(o.inEffect, 0u);
+  EXPECT_FALSE(o.slotRule) << "1 to 4 never write the slot site";
+  EXPECT_EQ(img.slot, kSlotStock);
+  char line[640];
+  nevr_server_team_size::FormatRecord(line, sizeof(line), o, 0x1401AB8C2, 0x1401ABC8A);
+  EXPECT_NE(std::string(line).find("in_effect=unknown (not in effect)"), std::string::npos) << line;
+}
+
 TEST_F(ServerTeamSize, ASlotWriteThatReportsAFailureAfterWritingIsPutBack) {
   Image img;
   g_refuseAt = img.slot.data();
