@@ -64,6 +64,8 @@ const char* TokenAuth_GetUsername(void);
 #include "runtime/hook/addresses.h"
 #include "runtime/lifecycle/server_timestep.h"
 #include "runtime/lifecycle/cmdline_strip.h"
+#include "runtime/lifecycle/cli_check.h"
+#include "runtime/lifecycle/cli_reject.h"
 #include "runtime/lifecycle/timestep_log.h"
 #include "core/build_identity.h"
 #include "core/cli_flags.h"
@@ -119,6 +121,13 @@ void PreflightRuntimeBootstrap() {
   int argc = 0;
   LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
   if (argv == nullptr) return;
+
+  // #1253: a command line the run cannot use ends it here, before the game, the plugins or the bridge start
+  // (cli_check.h). The refusal names the token and why, with the build version, on stderr and in the log.
+  nevr_cli_check::Rejection rejection;
+  if (nevr_cli_check::Check(argc, argv, &rejection)) {
+    RejectCommandLine(WideToUtf8(argv[rejection.index]), WideToUtf8(rejection.why.c_str()));  // does not return
+  }
 
   for (int i = 0; i < argc; ++i) {
     const LPWSTR arg = argv[i];
@@ -551,10 +560,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     }
   }
 
-  // Validate argument combinations
-  if (g_isServer && g_isOffline) {
-    FatalError("Arguments -server and -offline are mutually exclusive.", "Invalid arguments");
-  }
+  // The argument combinations (-server with -offline or -windowed) are refused in PreflightRuntimeBootstrap (#1253).
 
   // Detect dbgcore.dll in the game directory — prevents accidental hijack.
   // In the launcher path, BugSplat64.dll is loaded by echovr_game.dll. If a
