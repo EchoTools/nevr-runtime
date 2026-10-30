@@ -335,7 +335,7 @@ with the full object id, for each tag it lists.
 7. Couriers Teth to verify the live publish and Spritz the same text (no bonk), then removes the worktree and the signer
    snapshot by exact path. A tag whose notice was never sent is noticed on the next run.
 
-Stable stays an owner step (`approve-stable`); the timer only publishes beta. **Credentials go only where they are used:**
+Stable stays an owner step (`approve-stable`); the timer only publishes beta. To stop the timer and the train from moving beta forward behind a rollback, see "Emergency: roll beta back". **Credentials go only where they are used:**
 the R2 credential to `publish_apk`, and the GitHub token to `publish_apk` and the dispatch. Every other command, the
 build included, gets an environment without them. Every step appends a JSON line to
 `$XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl`, with each credential value replaced by `<redacted>`; a log that
@@ -377,6 +377,89 @@ gh attestation verify <file> -R EchoTools/nevr-runtime
 
 Do not edit its assets and do not delete its tag. Say so in the notes (editable), cut the next patch version through the
 same steps, and promote that one.
+
+## Emergency: roll beta back
+
+Installers read `channels.beta` from the signed manifest. When the release beta points at is bad, `tools/rollback_beta.py`
+publishes the manifest again with beta on an earlier release the manifest already lists. It uses the same `sign-manifest.yml`
+publish as the Quest release timer (`action=publish`, `channel=beta`, in the release-signer repository), with the target's
+own Quest APK, game data and content packs as the `extra_artifacts`, and `override=true` only when the target is lower than
+beta (the signer refuses a channel that moves backwards without it, and records the override). A bad published release is
+never edited or deleted ("When a published release is wrong"); the rollback only changes which release new installs get.
+
+**Before you run it.** The target must be the last build known good, and it must list what its players need: the plan the
+tool prints names every artifact of the target with its size, and the tool refuses a target for which
+`release-signer listed-claims` finds no artifact. Read that list for the Windows zip, the Quest APK
+(`kind` `quest-apk`), the game data and any content pack. A target without them is not a rollback. Check too that the fault is
+in the build: a fault in the manifest, a service or a player's own files is not cured by moving beta.
+
+```sh
+python3 tools/rollback_beta.py vX.Y.Z --dry-run                  # the plan, then a dry-run publish; changes nothing else
+python3 tools/rollback_beta.py vX.Y.Z --live --yes               # pause the train, publish, verify
+python3 tools/rollback_beta.py vX.Y.Z --live --forward --yes     # roll forward to a higher release
+gh variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime && systemctl --user start nevr-quest-release.timer   # resume
+```
+
+Always run the dry run first. It reads the live manifest, refuses what a live run would refuse, dispatches the publish with
+`dry_run=true` and checks that every job that should have run did (the record job is skipped in a dry run) and that beta did
+not move. The workflow still copies the release's files to R2 in a dry run; it never overwrites an object. The tool reads
+`GH_BIN` (default `gh`) for every GitHub call and `RELEASE_PUBLIC_BASE` for the manifest host, and needs no R2 credential. The
+release signer is `RELEASE_SIGNER_BIN` with `RELEASE_SIGNER_DIR`, or, when neither is set, a snapshot of the signer's `main`
+built the way `tools/quest_release_timer.py` builds it (`QUEST_RELEASE_SIGNER_REPO`, default `~/src/release-signer`) and
+removed when the run ends. Each step appends a record to `$XDG_STATE_HOME/nevr-runtime/rollback-beta.jsonl`; no token,
+credential or host is printed or logged.
+
+**What it refuses.** A tag the live manifest does not list; the tag that already is beta; a tag higher than beta unless
+`--forward` is given; `--forward` for a tag that is not higher; `--live` without `--yes`. The order of a live run is fixed:
+
+1. Read `verify-manifest --live` and the manifest the host serves (held to the sha256 the signer verified), take the
+   target's claims, print the plan.
+2. Pause the train, unless `--keep-train`: set the repository variable `RELEASE_TRAIN` to `false` and read it back, stop
+   `nevr-quest-release.timer`, check that neither the timer nor `nevr-quest-release.service` is active (a Quest release in
+   progress stops the rollback before it dispatches, with the timer already stopped), then check again that beta has not moved.
+   A pause step that fails stops the run before the dispatch and says what is and is not done.
+3. Dispatch the live publish, watch it, and require the jobs that publish (`Commit the manifest record`, `Publish to R2`,
+   `A run that published nothing is red`) to have concluded `success`.
+4. Require `verify-manifest --live` to list the target as beta, with every artifact the target listed before and every claim
+   still listed by name and sha256.
+5. Print the elapsed time, the roll-forward command and the two resume commands. **The tool never resumes the train.** It
+   stays paused until someone runs the resume commands, so decide that in the open.
+
+**How long.** The manifest run takes about 5 to 6 minutes: the three most recent live publishes of `sign-manifest.yml`
+took 5 min 9 s, 5 min 30 s and 5 min 15 s from the start to the end of the run. The pause steps add seconds. Expect about 6
+to 7 minutes from `--live` to the verified line. A dry run dispatches the same workflow and waits for it as well.
+
+**Who.** Anyone who has push access to the release-signer repository (the workflow is dispatched there on `main`, and the
+actor needs push access to dispatch it) and write access to the `EchoTools/nevr-runtime` repository variables, from the
+machine that runs the Quest release timer: Spritz, Teth and sprockee. Tell Spritz and sprockee when a rollback starts and
+when it has ended: a rollback is news they want, never a gate, and nothing waits for an answer.
+
+**Why both pauses.** The release train (`.github/workflows/release-train.yml`) cuts a release only while the repository
+variable `RELEASE_TRAIN` is `true` (the `if` of its `decide` job), and `tools/release_train_guard.py` reports `switch_off`
+and dispatches nothing while it is not. The Quest release timer is a separate user timer: it takes the newest published
+GitHub release and, if the manifest's beta is not that release and its log has no `done` for the tag, rebuilds and
+publishes it to beta, which moves beta forward again behind the rollback. For a tag that has a `done` record it logs
+`nothing_to_do`, but the next release cut would move beta forward again, and only the variable stops cuts. So the
+variable stops new cuts and the stopped timer stops the publish of the newest tag; neither covers the other.
+
+**What it does not do.** New installs and updates stop receiving the build; installs already on it are not downgraded. The
+manifest consumer rule keeps an installed version that is higher than the channel's unless the user switched channel or
+asked to go back (the release-signer repository's manifest design document, section 6.1 step 7; the same rule is in its table
+of threats, "Rollback"). Players on the bad build get the fix by the next version, cut through the same steps as any release.
+
+**Roll forward.** When the fixed release is out, or the rollback was a mistake, run the roll-forward command the tool printed:
+`python3 tools/rollback_beta.py vX.Y.Z --live --forward --yes`, with the higher tag. It carries no override. A forward run
+that was a mistake prints the command that undoes it. Run the dry run of it first.
+
+**Resume the train.** After the fixed release is on beta (or when the pause is no longer wanted):
+
+```sh
+gh variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime
+systemctl --user start nevr-quest-release.timer
+```
+
+Resuming with beta on an older release than the newest published tag is allowed, and the timer then publishes that newest
+tag to beta unless its log has a `done` for it. Resume only after you have decided which release beta should follow.
 
 ## Sources read for this file
 
