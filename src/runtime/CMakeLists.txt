@@ -212,6 +212,8 @@ set(PATCHES_HEADERS
     "patch/guild_picker.h"
     "compat/evr_codec.h"
     "compat/lobby_frame.h"
+    "compat/lobby_join_state.h"
+    "patch/party_follow_dedup_rules.h"
     "patch/xpid_patch.h"
     "frame/tick.h"
     "patch/binary_bug_fixes.h"

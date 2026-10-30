@@ -3,15 +3,21 @@
 #include <windows.h>
 
 #include <array>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 
 #include "core/logging.h"
 #include "nevr/pc/nevr_common.h"
+#include "runtime/compat/lobby_frame.h"
+#include "runtime/compat/lobby_join_state.h"
+#include "runtime/compat/social_party.h"
+#include "runtime/compat/ws_bridge.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/hook/patching.h"
 #include "runtime/log/boot_log_tee.h"
 #include "runtime/patch/lobby_full_backoff_rules.h"
+#include "runtime/patch/party_follow_dedup_rules.h"
 
 namespace nevr_lobby_full_backoff {
 namespace {
@@ -29,6 +35,13 @@ constexpr std::array<std::uint8_t, 15> kFailureCbPrologue = {0x4C, 0x8B, 0xDC, 0
                                                              0x48, 0x81, 0xEC, 0x80, 0x04, 0x00, 0x00};
 using FailureCbFn = void (*)(void* lobbyClient, void* msg);
 
+// CR15NetGame::GetPartyLobbyId(party, out) 0x14017c6a0: MOV [RSP+0x18],RBX. Returns the party's lobby SUuid in RAX
+// (= out). JoinPartyLobby passes the party object at [this+0x647c8]. It only reads; no hook is installed on it (#1413).
+constexpr std::uint64_t kGetPartyLobbyIdVA = 0x14017C6A0;
+constexpr std::array<std::uint8_t, 5> kGetPartyLobbyIdPrologue = {0x48, 0x89, 0x5C, 0x24, 0x18};
+using GetPartyLobbyIdFn = void* (*)(void* party, void* out);
+constexpr std::size_t kNetGamePartyOffset = 0x647C8;
+
 constexpr std::size_t kLobbyStatusOffset = 0x448;  // the callback's own gate: status - 4 < 3 (unsigned)
 constexpr std::size_t kMsgPayloadOffset = 0x10;
 constexpr std::size_t kFailureCodeOffset = 0x18;
@@ -37,12 +50,37 @@ constexpr std::uint8_t kLobbyFullCode = 8;
 std::uintptr_t g_gameBase = 0;
 JoinPartyLobbyFn g_originalJoinPartyLobby = nullptr;
 FailureCbFn g_originalFailureCb = nullptr;
+GetPartyLobbyIdFn g_getPartyLobbyId = nullptr;  // null when its prologue does not match: the dedup is then off
 
 // The game's network callbacks and its frame loop may run on different threads.
 std::mutex g_mutex;
 Policy g_policy;
 
+// True when the follow was skipped: the leader's lobby is the one this client is in or is joining (#1413). The game
+// asks for the follow every update, so the skip is the only record of it, and it is logged once per skipped follow.
+bool TrySkipDuplicateFollow(void* netGame) {
+  if (g_getPartyLobbyId == nullptr || netGame == nullptr) return false;
+  std::uint8_t* game = static_cast<std::uint8_t*>(netGame);
+  void* party = nullptr;
+  std::memcpy(&party, game + kNetGamePartyOffset, sizeof(party));
+  if (party == nullptr) return false;
+  nevr_party_follow_dedup::Guid leader{};
+  g_getPartyLobbyId(party, leader.data());
+  nevr_lobby_join_state::Guid current{};
+  nevr_lobby_join_state::Guid joining{};
+  ::LobbyJoinSnapshot(&current, &joining);
+  const nevr_party_follow_dedup::Skip skip = nevr_party_follow_dedup::Decide(leader, current, joining);
+  if (skip == nevr_party_follow_dedup::Skip::None) return false;
+  const std::uint64_t partyId = nevr_social_party::Global().Snapshot().partyId;
+  Log(EchoVR::LogLevel::Info, "[NEVR.WS] party follow skipped lobby=%s reason=%s party_id=%llu",
+      nevr_lobby_frame::FormatGuid(leader).c_str(),
+      skip == nevr_party_follow_dedup::Skip::AlreadyIn ? "already_in" : "already_joining",
+      static_cast<unsigned long long>(partyId));
+  return true;
+}
+
 void JoinPartyLobbyHook(void* netGame) {
+  if (TrySkipDuplicateFollow(netGame)) return;
   const auto now = static_cast<std::uint64_t>(GetTickCount64());
   bool maySend = false;
   {
@@ -110,6 +148,13 @@ void HookChecked(std::uint64_t va, const std::array<std::uint8_t, Size>& prologu
 
 void Install(std::uintptr_t gameBase) {
   g_gameBase = gameBase;
+  void* getPartyLobbyId = nevr::ResolveVA_Checked(g_gameBase, kGetPartyLobbyIdVA);
+  if (nevr::ValidatePrologue(getPartyLobbyId, kGetPartyLobbyIdPrologue.data(), kGetPartyLobbyIdPrologue.size())) {
+    g_getPartyLobbyId = reinterpret_cast<GetPartyLobbyIdFn>(getPartyLobbyId);
+  } else {
+    nevr_boot_log_tee::TeeFprintf("[NEVR.WS] party follow dedup off reason=prologue_mismatch va=0x%llx\n",
+                                  static_cast<unsigned long long>(kGetPartyLobbyIdVA));
+  }
   HookChecked(kJoinPartyLobbyVA, kJoinPartyLobbyPrologue, g_originalJoinPartyLobby,
               reinterpret_cast<PVOID>(&JoinPartyLobbyHook), "JoinPartyLobby");
   HookChecked(kFailureCbVA, kFailureCbPrologue, g_originalFailureCb, reinterpret_cast<PVOID>(&FailureCbHook),

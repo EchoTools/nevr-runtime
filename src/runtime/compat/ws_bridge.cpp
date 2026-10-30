@@ -599,10 +599,16 @@ static uint64_t RealLobbyClockMs() { return GetTickCount64(); }
 static std::mutex g_lobbyLimiterMutex;
 static nevr_lobby_frame::RecordLimiter g_lobbyLimiter;
 static nevr_lobby_frame::RequestTracker g_lobbyRequests;  // the last find or join the game sent (#1413)
+// The lobby this client is in and the one it is joining, set from the same frames (#1413, compat/lobby_join_state.h).
+static nevr_lobby_join_state::LobbyJoinState g_lobbyJoin;
 static uint64_t (*g_lobbyClockMs)() = &RealLobbyClockMs;
 // The party a session record names: the process-wide party state, read when the record is written (#1413).
 static nevr_social_party::View RealLobbyPartyView() { return nevr_social_party::Global().Snapshot(); }
 static nevr_social_party::View (*g_lobbyPartyView)() = &RealLobbyPartyView;
+
+void LobbyJoinSnapshot(nevr_lobby_join_state::Guid* current, nevr_lobby_join_state::Guid* joining) {
+  g_lobbyJoin.Snapshot(current, joining);
+}
 
 // The party fields of a session record: the party the view names when the record is written (#1413).
 static std::string LobbyPartyFields(nevr_social_party::View (*partyView)()) {
@@ -630,6 +636,24 @@ static void LogClientLobbyMessage(int connIdx, bool fromServer, uint64_t symbol,
       request = g_lobbyRequests.Answer(now);
     }
     partyView = g_lobbyPartyView;
+  }
+  // The join state takes every decoded frame, not only the ones the limiter writes: a suppressed record still
+  // changed what the game is joining or in (#1413).
+  nevr_lobby_frame::Decoded state;
+  if (nevr_lobby_frame::Decode(*kind, payload, static_cast<size_t>(len), &state)) {
+    switch (*kind) {
+      case nevr_lobby_frame::Kind::Join:
+        g_lobbyJoin.OnJoinRequested(state.lobby);
+        break;
+      case nevr_lobby_frame::Kind::Success:
+        g_lobbyJoin.OnSuccess(state.lobby);
+        break;
+      case nevr_lobby_frame::Kind::Failure:
+        g_lobbyJoin.OnFailure(request.sent && request.kind == nevr_lobby_frame::Kind::Join);
+        break;
+      case nevr_lobby_frame::Kind::Find:
+        break;
+    }
   }
   for (size_t i = 0; i < nevr_lobby_frame::kKindCount; ++i) {
     if (verdict.flushed[i] == 0) continue;
