@@ -247,19 +247,41 @@ fn two_content_packs_of_one_id_in_a_release_fail_find_content_pack() {
         b["contents"][0]["size"] = json!(11);
         b
     }]);
-    let err = manifest::find_content_pack(&m, "1.0.0", "combat").expect_err("two packs of one id");
+    let err = manifest::find_content_pack(&m, "1.0.0", "combat", "windows-x86_64").expect_err("two packs of one id");
     assert_eq!(err.step, 8);
-    assert_eq!(err.msg, "release 1.0.0 has no content-pack artifact for id combat, or lists it twice");
+    assert_eq!(err.msg, "release 1.0.0 has no content-pack artifact for id combat on windows-x86_64, or lists it twice");
 }
 
 #[test]
 fn find_content_pack_picks_the_pack_of_the_named_id() {
     let m = release(vec![pack_entry("combat"), pack_entry("otherpack")]);
-    let a = manifest::find_content_pack(&m, "1.0.0", "otherpack").unwrap();
+    let a = manifest::find_content_pack(&m, "1.0.0", "otherpack", "windows-x86_64").unwrap();
     assert_eq!(a.content_pack.unwrap().id, "otherpack");
-    let missing = manifest::find_content_pack(&m, "1.0.0", "nothere").unwrap_err();
+    let missing = manifest::find_content_pack(&m, "1.0.0", "nothere", "windows-x86_64").unwrap_err();
     assert_eq!(missing.step, 8);
-    assert_eq!(missing.msg, "release 1.0.0 has no content-pack artifact for id nothere, or lists it twice");
+    assert_eq!(missing.msg, "release 1.0.0 has no content-pack artifact for id nothere on windows-x86_64, or lists it twice");
+}
+
+#[test]
+fn a_same_id_pack_for_android_does_not_break_the_pc_selection() {
+    // The release-signer lists one id for both platforms (release-signer #78): the PC install must pick its own pack.
+    let mut android = pack_entry("combat");
+    android["platform"] = json!("android-arm64");
+    android["contents"][0]["size"] = json!(11);
+    let m = release(vec![android, pack_entry("combat")]);
+    let pc = manifest::find_content_pack(&m, "1.0.0", "combat", "windows-x86_64").expect("the PC pack of the id");
+    assert_eq!(pc.platform.as_deref(), Some("windows-x86_64"));
+    assert_eq!(pc.contents[0].size, 10);
+}
+
+#[test]
+fn a_same_id_pack_only_for_android_is_not_a_pc_pack() {
+    let mut android = pack_entry("combat");
+    android["platform"] = json!("android-arm64");
+    let m = release(vec![android]);
+    let err = manifest::find_content_pack(&m, "1.0.0", "combat", "windows-x86_64").expect_err("no PC pack");
+    assert_eq!(err.step, 8);
+    assert_eq!(err.msg, "release 1.0.0 has no content-pack artifact for id combat on windows-x86_64, or lists it twice");
 }
 
 #[test]

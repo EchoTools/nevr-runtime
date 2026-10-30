@@ -312,9 +312,11 @@ pub fn find(m: &Value, version: &str, kind: &str, platform: Option<&str>) -> Res
     parse_artifact(version, wanted[0])
 }
 
-/// The one `content-pack` artifact of `id` in `version`. Zero or two is a failure naming the release and the id. A
-/// release may list packs of other ids beside it.
-pub fn find_content_pack(m: &Value, version: &str, id: &str) -> Result<Artifact> {
+/// The one `content-pack` artifact of `id` for `platform` in `version`. Zero or two is a failure naming the release, the
+/// id and the platform. A release may list packs of other ids beside it, and a pack of the same id for another platform
+/// (a Quest pack beside the PC pack) is not a match: the platform is part of the selection, so it never breaks the PC
+/// install.
+pub fn find_content_pack(m: &Value, version: &str, id: &str, platform: &str) -> Result<Artifact> {
     if !semver_ok(version) {
         return Err(Error::new(8, format!("{version} is not X.Y.Z")));
     }
@@ -323,10 +325,17 @@ pub fn find_content_pack(m: &Value, version: &str, id: &str) -> Result<Artifact>
     }
     let wanted: Vec<&Value> = m["releases"][version]["artifacts"]
         .as_array()
-        .map(|a| a.iter().filter(|x| x["kind"] == "content-pack" && x["content_pack"]["id"] == id).collect())
+        .map(|a| {
+            a.iter()
+                .filter(|x| x["kind"] == "content-pack" && x["content_pack"]["id"] == id && x["platform"] == platform)
+                .collect()
+        })
         .unwrap_or_default();
     if wanted.len() != 1 {
-        return Err(Error::new(8, format!("release {version} has no content-pack artifact for id {id}, or lists it twice")));
+        return Err(Error::new(
+            8,
+            format!("release {version} has no content-pack artifact for id {id} on {platform}, or lists it twice"),
+        ));
     }
     parse_artifact(version, wanted[0])
 }
