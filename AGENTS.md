@@ -704,6 +704,7 @@ your seat name, for example `claude-main` or `codex`.
 - **A live run never shares the build slice, and memory pressure pauses builds, not runs.** While a live run is active, a build waits for it to exit. A live run is never stopped to make room for a build.
 - **Wait for a free slot.** Before starting a build, if `pgrep -x ninja | wc -l` is 2 or more, wait.
   Never interrupt another agent's build.
+- **At most three heavy builds at once per seat,** so the usage window and memory both hold.
 - **Each worktree has its own vcpkg root** (`build/vcpkg-root`, created by `just worktree-setup`).
   Never point a build at `~/.vcpkg` directly.
 - **A PR runs the quick check, not `just verify`.** The quick check is: the build (`just build`), the test
@@ -963,6 +964,8 @@ your seat name, for example `claude-main` or `codex`.
 
 ### Dispatching agents
 
+- **Fan out independent items.** Each independent item gets its own agent and its own worktree, run
+  in parallel; items that share a file run in turn.
 - **Pick the model by the work.** Sonnet for specified implementation and verification; Opus for
   adversarial reviews and open design questions; a small model for search and mechanical edits.
 - **Brief them with the rules above.** Name their worktree, their own scratch subdirectory (never
