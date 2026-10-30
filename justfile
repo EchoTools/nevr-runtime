@@ -18,7 +18,7 @@ export CMAKE_CXX_COMPILER_LAUNCHER := env("NEVR_CCACHE", `command -v ccache 2>/d
 # worktree dies with the worktree, and a process that still carries it falls back to ccache's 5 GiB default (#1736).
 export CCACHE_BASEDIR := `dirname "$(git rev-parse --path-format=absolute --git-common-dir)"`
 export CCACHE_DIR := if path_exists("/mnt/games/cache/ccache") == "true" { "/mnt/games/cache/ccache" } else { env("HOME") / ".cache/ccache" }
-export CCACHE_CONFIGPATH := `tools/ccache_config.sh "$(if [ -d /mnt/games/cache/ccache ]; then echo /mnt/games/cache/ccache; else echo "$HOME/.cache/ccache"; fi)"`
+export CCACHE_CONFIGPATH := `tools/ccache_config.sh "$(if [ -d /mnt/games/cache/ccache ]; then echo /mnt/games/cache/ccache; else echo "$HOME/.cache/ccache"; fi)" 2>/dev/null || echo "$PWD/tools/ccache.conf"`
 
 # Show available recipes (default)
 default:

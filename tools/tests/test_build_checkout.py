@@ -221,6 +221,16 @@ class JustfileWiringTest(unittest.TestCase):
                             "a path inside a worktree dies with the worktree and ccache falls back to its 5 GiB default")
         self.assertRegex(JUSTFILE, r"export CCACHE_CONFIGPATH := `tools/ccache_config\.sh ")
 
+    @unittest.skipUnless(shutil.which("just"), "just is not installed")
+    def test_a_justfile_without_the_tools_directory_still_evaluates_and_names_the_repo_config(self):
+        # tools/tests/test_verify_parallel.py runs a copy of the justfile in a bare directory: the config backtick must not fail there.
+        tmp = Path(tempfile.mkdtemp(prefix="justfile-copy-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        (tmp / "justfile").write_text(JUSTFILE)
+        done = run(["just", "--evaluate", "CCACHE_CONFIGPATH"], tmp)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertTrue(done.stdout.strip().endswith("/ccache.conf"), done.stdout)
+
     def test_the_quest_cmake_skips_the_module_scan_under_a_launcher(self):
         cmake = (ROOT / "src" / "quest" / "CMakeLists.txt").read_text()
         self.assertRegex(cmake, r'if\(CMAKE_CXX_COMPILER_LAUNCHER MATCHES "ccache"\)\s*set\(CMAKE_CXX_SCAN_FOR_MODULES OFF\)')
