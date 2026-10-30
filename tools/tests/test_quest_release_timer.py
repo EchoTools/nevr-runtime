@@ -1545,11 +1545,18 @@ def library_bytes(name: str) -> bytes:
     return random.Random(name).randbytes(4096)
 
 
+HOST_APK = b"apk bytes the host serves"
+
+
 class PublicHost:
-    """The release host, as the timer's own check of the variant's URL sees it: it answers every GET as `mode` says."""
+    """The release host, as the timer's own check of the variant's pair sees it. `mode` is the answer for the APK; `sidecar`
+    is the answer for its `.sha256`: ok (the line sha256sum writes for the APK), absent, wrong_digest (the line of other
+    bytes), other_name, html, error, or custom (the text in `sidecar_text`)."""
 
     def __init__(self, case: unittest.TestCase) -> None:
         self.mode = "absent"
+        self.sidecar = "ok"
+        self.sidecar_text = ""
         self.requests: list[tuple[str, str]] = []
         self.agents: list[str | None] = []
         host = self
@@ -1558,10 +1565,19 @@ class PublicHost:
             def log_message(self, *args: object) -> None:
                 pass
 
+            def reply(self, code: int, content_type: str, body: bytes) -> None:
+                self.send_response(code)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
             def do_GET(self) -> None:  # noqa: N802 - the handler's own name
                 host.requests.append((self.command, self.path))
                 host.agents.append(self.headers.get("User-Agent"))
-                body = b"apk bytes"
+                if self.path.endswith(".sha256"):
+                    self.sidecar_reply()
+                    return
                 if host.mode == "nocontent":
                     self.send_response(204)
                     self.end_headers()
@@ -1574,11 +1590,21 @@ class PublicHost:
                 code, content_type = {"absent": (404, "text/plain"), "present": (200, "application/vnd.android.package-archive"),
                                       "html": (200, "text/html"), "error": (500, "text/plain"),
                                       "forbidden": (403, "text/plain")}[host.mode]
-                self.send_response(code)
-                self.send_header("Content-Type", content_type)
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                self.reply(code, content_type, HOST_APK)
+
+            def sidecar_reply(self) -> None:
+                good = hashlib.sha256(HOST_APK).hexdigest()
+                lines = {"ok": f"{good}  {VARIANT_APK}\n", "other_name": f"{good}  nevr-runtime-{TAG}-quest.apk\n",
+                         "wrong_digest": f"{hashlib.sha256(b'other bytes').hexdigest()}  {VARIANT_APK}\n",
+                         "custom": host.sidecar_text}
+                if host.sidecar == "absent":
+                    self.reply(404, "text/plain", b"")
+                elif host.sidecar == "html":
+                    self.reply(200, "text/html", b"<html></html>")
+                elif host.sidecar == "error":
+                    self.reply(500, "text/plain", b"")
+                else:
+                    self.reply(200, "text/plain", lines[host.sidecar].encode())
 
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -1730,8 +1756,9 @@ class VariantAfterTheMainRelease(VariantCase):
         fake = Fake(self.root, overrides=leak)
         code, stderr = self.run_captured(fake)
         self.assertEqual(code, 1)
-        self.assertIn("<redacted>", self.log.read_text())
-        self.assert_no_private_path(self.log.read_text(), stderr)
+        output = (self.root / "work" / f"variant-{TAG}-build.log").read_text()
+        self.assertIn("<redacted>", output, "the output file is redacted like everything written")
+        self.assert_no_private_path(output, self.log.read_text(), stderr)
 
     def test_the_variant_steps_log_through_the_same_log_with_the_tag(self) -> None:
         self.assertEqual(self.run_timer(Fake(self.root)), 0)
@@ -2019,6 +2046,8 @@ class VariantOfAListedRelease(VariantCase):
         self.assertEqual((asked["listed"], asked["apk"]), (True, VARIANT_APK))
         [listed] = [e for e in self.events() if e["event"] == "variant_listed"]
         self.assertEqual(listed["apk"], VARIANT_APK)
+        self.assertEqual(self.host.requests, [("GET", f"/nevr-runtime/{TAG}/{VARIANT_APK}"),
+                                              ("GET", f"/nevr-runtime/{TAG}/{VARIANT_APK}.sha256")], "the pair is checked")
         self.assertNotIn("worktree.add", fake.steps())
         self.assertNotIn("variant_build", fake.steps())
         self.assertNotIn("variant_library", self.names())
@@ -2075,6 +2104,393 @@ class VariantOfAListedRelease(VariantCase):
         self.assertIn("cleanup.worktree", fake.steps())
         self.assertNotIn("done", self.names())
         self.assertFalse(self.scratch.exists())
+
+
+class VariantPairCheck(VariantCase):
+    """The tag is listed and the host has the variant APK: it counts as listed only when its `.sha256` is there and says
+    the digest of the very bytes the host serves. A half-published pair or a foreign APK is a loud failure, and nothing
+    is rebuilt (an upload never replaces an object, so a rebuild could not repair it)."""
+
+    def listed(self) -> Fake:
+        fake = Fake(self.root)
+        fake.beta = TAG[1:]
+        return fake
+
+    def refused_with(self, *wants: str) -> dict:
+        fake = self.listed()
+        code, stderr = self.run_captured(fake)
+        self.assertEqual(code, 1, stderr)
+        [failure] = self.failed()
+        self.assertEqual(failure["step"], "variant_exists")
+        for want in wants:
+            self.assertIn(want, failure["error"])
+        self.assertIn(VARIANT_APK, failure["error"])
+        self.assertIn("RELEASING.md", failure["error"], "the message points at the repair")
+        for never in ("worktree.add", "variant_build", "variant_publish", "configure"):
+            self.assertNotIn(never, fake.steps(), "nothing is rebuilt or republished")
+        self.assertNotIn("done", self.names())
+        self.assertNotIn("variant_listed", self.names())
+        self.assert_nothing_private_anywhere(fake, stderr)
+        return failure
+
+    def test_a_pair_that_agrees_is_listed_and_nothing_is_built(self) -> None:
+        self.host.mode = "present"
+        fake = self.listed()
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertIn("variant_listed", self.names())
+        self.assertEqual(self.names()[-1], "done")
+        self.assertNotIn("variant_build", fake.steps())
+
+    def test_an_apk_with_no_sidecar_is_a_half_published_pair_and_a_failure(self) -> None:
+        self.host.mode, self.host.sidecar = "present", "absent"
+        self.refused_with(f"{VARIANT_APK}.sha256", "missing")
+
+    def test_an_apk_whose_sidecar_is_the_digest_of_other_bytes_is_a_failure_naming_both_digests(self) -> None:
+        self.host.mode, self.host.sidecar = "present", "wrong_digest"
+        failure = self.refused_with(f"{VARIANT_APK}.sha256", "sha256")
+        self.assertIn(hashlib.sha256(HOST_APK).hexdigest(), failure["error"], "the digest of the bytes the host serves")
+        self.assertIn(hashlib.sha256(b"other bytes").hexdigest(), failure["error"], "the digest the sidecar states")
+
+    def test_a_sidecar_that_names_another_file_is_a_failure(self) -> None:
+        self.host.mode, self.host.sidecar = "present", "other_name"
+        self.refused_with(f"{VARIANT_APK}.sha256", "names")
+
+    def test_a_malformed_sidecar_is_a_failure(self) -> None:
+        good = hashlib.sha256(HOST_APK).hexdigest()
+        for text in ("", "not a sidecar\n", f"{good} {VARIANT_APK}\n", f"{good}  {VARIANT_APK}\n{good}  {VARIANT_APK}\n",
+                     f"{good[:-1]}  {VARIANT_APK}\n", f"{good.upper()}  {VARIANT_APK}\n", f"{good}  {VARIANT_APK} extra\n",
+                     "ÿþ not utf-8 \n"):
+            with self.subTest(text=text):
+                self.log.unlink(missing_ok=True)
+                self.host.mode, self.host.sidecar, self.host.sidecar_text = "present", "custom", text
+                self.refused_with(f"{VARIANT_APK}.sha256", "malformed")
+
+    def test_a_sidecar_answered_with_html_or_a_server_error_is_a_failure(self) -> None:
+        for sidecar, want in (("html", "text/html"), ("error", "500")):
+            with self.subTest(sidecar=sidecar):
+                self.log.unlink(missing_ok=True)
+                self.host.mode, self.host.sidecar = "present", sidecar
+                self.refused_with(f"{VARIANT_APK}.sha256", want)
+
+    def test_an_absent_apk_is_built_whatever_the_sidecar_is(self) -> None:
+        self.host.mode, self.host.sidecar = "absent", "absent"
+        fake = self.listed()
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertEqual(self.host.requests, [("GET", f"/nevr-runtime/{TAG}/{VARIANT_APK}")], "the sidecar is not asked for")
+        self.assertIn("variant_build", fake.steps())
+
+    def test_the_apk_is_hashed_as_it_streams_in_pieces(self) -> None:
+        big = random.Random("big").randbytes(3 * 1024 * 1024 + 17)
+        with mock.patch.object(sys.modules[__name__], "HOST_APK", big):
+            self.host.mode = "present"
+            fake = self.listed()
+            self.assertEqual(self.run_timer(fake), 0)
+        self.assertIn("variant_listed", self.names())
+
+    def test_the_failure_is_counted_and_a_standing_half_published_pair_stops_after_three(self) -> None:
+        self.host.mode, self.host.sidecar = "present", "absent"
+        for _ in range(3):
+            self.assertEqual(self.run_timer(self.listed()), 1)
+        self.assertEqual([e["step"] for e in self.failed()], ["variant_exists"] * 3)
+        fake = self.listed()
+        self.assertEqual(self.run_timer(fake), 0)
+        [spritz] = couriers(fake, "spritz")
+        self.assertIn("variant_exists", spritz[-1])
+        self.assertIn(f"gave up on the variant APK of {TAG}", spritz[-1])
+
+
+class VariantBuildOutput(VariantCase):
+    """A failing variant step puts no output of the build in the record, stderr, journal or courier text: the plugin check
+    prints the plugin's own symbol names. The full output is in a 0600 file in the timer's work directory."""
+
+    LOG_NAME = f"variant-{TAG}-build.log"
+
+    def build_log(self) -> pathlib.Path:
+        return self.root / "work" / self.LOG_NAME
+
+    def noisy(self, out: str = "OUTMARK-7c1e", err: str = "ERRMARK-3b9d", rc: int = 1):
+        return lambda argv: completed(argv, rc, out, err)
+
+    def couriered(self) -> str:
+        sent: list[list[str]] = []
+
+        def courier(argv: list[str], cwd: str | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
+            sent.append(argv)
+            return completed(argv)
+
+        self.assertEqual(timer.main(["--notify-failure"], self.env, runner=courier, sleep=self.sleeps.append), 0)
+        return " ".join(" ".join(argv) for argv in sent)
+
+    def test_the_output_is_in_the_0600_file_and_nowhere_else(self) -> None:
+        old = os.umask(0)  # a file opened with the default mode would be 0666 here
+        self.addCleanup(os.umask, old)
+        fake = Fake(self.root, overrides={"variant_build": self.noisy()})
+        code, stderr = self.run_captured(fake)
+        self.assertEqual(code, 1)
+        text = self.build_log().read_text()
+        self.assertIn("OUTMARK-7c1e", text)
+        self.assertIn("ERRMARK-3b9d", text)
+        self.assertEqual(stat.S_IMODE(self.build_log().stat().st_mode), 0o600)
+        self.assertEqual(self.build_log().parent, self.root / "work", "in the work directory, not the private one")
+        for where in (self.log.read_text(), stderr, self.couriered(), json.dumps(fake.calls, default=str)):
+            self.assertNotIn("OUTMARK-7c1e", where)
+            self.assertNotIn("ERRMARK-3b9d", where)
+
+    def test_the_failure_names_the_step_the_program_the_exit_code_and_the_file(self) -> None:
+        fake = Fake(self.root, overrides={"variant_build": self.noisy(rc=3)})
+        self.assertEqual(self.run_timer(fake), 1)
+        [failure] = self.failed()
+        self.assertEqual(failure["step"], "variant_build")
+        self.assertEqual(failure["error"], f"systemd-run exited 3; its full output is in {self.build_log()}")
+
+    def test_the_file_is_kept_on_failure_and_removed_when_the_variant_is_done(self) -> None:
+        self.assertEqual(self.run_timer(Fake(self.root, overrides={"variant_build": self.noisy()})), 1)
+        self.assertTrue(self.build_log().exists())
+        fake = Fake(self.root)
+        fake.beta = TAG[1:]
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertEqual(self.names()[-1], "done")
+        self.assertFalse(self.build_log().exists())
+
+    def test_the_file_of_an_earlier_failure_is_removed_when_the_variant_turns_out_to_be_listed(self) -> None:
+        self.assertEqual(self.run_timer(Fake(self.root, overrides={"variant_build": self.noisy()})), 1)
+        self.host.mode = "present"
+        fake = Fake(self.root)
+        fake.beta = TAG[1:]
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertFalse(self.build_log().exists())
+
+    def test_a_successful_build_leaves_no_file_once_the_variant_is_published(self) -> None:
+        self.assertEqual(self.run_timer(Fake(self.root, overrides={"variant_build": self.noisy(rc=0)})), 0)
+        self.assertFalse(self.build_log().exists())
+
+    def test_a_rerun_replaces_the_file_it_does_not_append(self) -> None:
+        for marker in ("FIRST-RUN-AAA", "SECOND-RUN-BBB"):
+            self.assertEqual(self.run_timer(Fake(self.root, overrides={"variant_build": self.noisy(err=marker)})), 1)
+        text = self.build_log().read_text()
+        self.assertIn("SECOND-RUN-BBB", text)
+        self.assertNotIn("FIRST-RUN-AAA", text)
+
+    def test_a_secret_in_the_build_output_is_redacted_in_the_file_too(self) -> None:
+        secret = SECRETS["R2_SECRET_ACCESS_KEY"]
+        self.assertEqual(self.run_timer(Fake(self.root, overrides={"variant_build": self.noisy(err=f"key {secret}")})), 1)
+        self.assertNotIn(secret, self.build_log().read_text())
+
+    def test_a_failing_variant_publish_carries_only_the_program_and_the_exit_code(self) -> None:
+        fake = Fake(self.root, overrides={"variant_publish": self.noisy(out="PUBOUT-1", err="PUBERR-2", rc=4)})
+        code, stderr = self.run_captured(fake)
+        self.assertEqual(code, 1)
+        [failure] = self.failed()
+        self.assertEqual((failure["step"], failure["error"]), ("variant_publish", "python3 exited 4"))
+        for marker in ("PUBOUT-1", "PUBERR-2"):
+            self.assertNotIn(marker, self.log.read_text() + stderr + self.couriered())
+
+    def test_the_other_steps_still_carry_their_tails(self) -> None:
+        fake = Fake(self.root, overrides={"build_apk": lambda argv: completed(argv, 1, "MAINOUT", "MAINERR")})
+        self.assertEqual(self.run_timer(fake), 1)
+        self.assertIn("stderr: MAINERR | stdout: MAINOUT", self.failed()[0]["error"])
+
+
+class VariantPartOfTheRelease(VariantCase):
+    """Every failed or refused record says whether the main release or the variant was running."""
+
+    def listed(self) -> Fake:
+        fake = Fake(self.root)
+        fake.beta = TAG[1:]
+        return fake
+
+    def test_a_failure_before_the_release_and_inside_it_is_main(self) -> None:
+        for step in ("checkout", "build_apk", "publish_apk", "dispatch"):
+            with self.subTest(step=step):
+                self.log.unlink(missing_ok=True)
+                self.assertEqual(self.run_timer(Fake(self.root, fail=step)), 1)
+                self.assertEqual([e["part"] for e in self.failed()], ["main"])
+
+    def test_a_refusal_is_main(self) -> None:
+        fake = Fake(self.root)
+        fake.dirty = " M x\n"
+        self.assertEqual(self.run_timer(fake), 1)
+        [refusal] = [e for e in self.events() if e["event"] == "refused"]
+        self.assertEqual(refusal["part"], "main")
+        env = {k: v for k, v in self.env.items() if k != "R2_BUCKET"}
+        self.log.unlink()
+        self.assertEqual(self.run_timer(Fake(self.root), env=env), 1)
+        self.assertEqual([e["part"] for e in self.events() if e["event"] == "refused"], ["main"])
+
+    def test_a_failure_after_the_notice_is_the_variant(self) -> None:
+        for step in ("variant_pins", "variant_build", "variant_publish"):
+            with self.subTest(step=step):
+                self.log.unlink(missing_ok=True)
+                if step == "variant_pins":
+                    (self.vdir / LIBRARIES[0]).write_bytes(b"changed")
+                    fake = Fake(self.root)
+                else:
+                    fake = Fake(self.root, fail=step)
+                self.assertEqual(self.run_timer(fake), 1)
+                self.assertEqual([e["part"] for e in self.failed()], ["variant"])
+                (self.vdir / LIBRARIES[0]).write_bytes(library_bytes(LIBRARIES[0]))
+
+    def test_a_failing_notice_is_still_the_main_release(self) -> None:
+        self.assertEqual(self.run_timer(Fake(self.root, fail="courier")), 1)
+        self.assertEqual([(e["step"], e["part"]) for e in self.failed()], [("notify", "main")])
+
+    def test_everything_in_the_already_listed_path_is_the_variant(self) -> None:
+        for step in ("configure", "worktree", "build_slot", "variant_exists", "variant_pins"):
+            with self.subTest(step=step):
+                self.log.unlink(missing_ok=True)
+                self.host.mode = "absent"
+                if step == "variant_exists":
+                    self.host.mode = "error"
+                if step == "variant_pins":
+                    (self.vdir / LIBRARIES[0]).write_bytes(b"changed")
+                fake = self.listed()
+                fake.fail = step if step not in ("variant_exists", "variant_pins") else ""
+                if step == "build_slot":
+                    fake.ninja = [2]
+                self.assertEqual(self.run_timer(fake), 1)
+                self.assertEqual([(e["step"], e["part"]) for e in self.failed()], [(step, "variant")])
+                (self.vdir / LIBRARIES[0]).write_bytes(library_bytes(LIBRARIES[0]))
+
+    def test_a_failing_notice_owed_in_the_already_listed_path_is_the_variant(self) -> None:
+        self.write_log({"event": "step_ok", "tag": TAG, "step": "verify_live"})
+        fake = self.listed()
+        fake.fail = "courier"
+        self.assertEqual(self.run_timer(fake), 1)
+        self.assertEqual([(e["step"], e["part"]) for e in self.failed()], [("notify", "variant")])
+
+    def test_the_give_up_note_after_a_configure_failure_in_the_already_listed_path_names_the_variant(self) -> None:
+        for _ in range(3):
+            self.assertEqual(self.run_timer(self.listed_failing("configure")), 1)
+        fake = self.listed()
+        self.assertEqual(self.run_timer(fake), 0)
+        [spritz] = couriers(fake, "spritz")
+        self.assertIn(f"gave up on the variant APK of {TAG}", spritz[-1])
+        self.assertIn("step configure", spritz[-1])
+        self.assertNotIn("(main release)", spritz[-1])
+
+    def listed_failing(self, step: str) -> Fake:
+        fake = self.listed()
+        fake.fail = step
+        return fake
+
+    def test_the_give_up_note_reads_the_part_of_the_last_failure_and_falls_back_for_old_records(self) -> None:
+        self.write_log(*({"event": "failed", "tag": TAG, "step": "configure", "part": "variant", "error": "x"} for _ in range(3)))
+        fake = self.listed()
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertIn("variant APK", couriers(fake, "spritz")[0][-1])
+        self.log.unlink()
+        self.write_log(*({"event": "failed", "tag": TAG, "step": "configure", "part": "main", "error": "x"} for _ in range(3)))
+        fake = self.listed()
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertIn("(main release)", couriers(fake, "spritz")[0][-1])
+
+
+class ResetFailures(TimerCase):
+    """`--reset-failures --tag vX.Y.Z` clears the three tries of one tag by recording `failures_reset`."""
+
+    def fail_three(self) -> None:
+        for _ in range(3):
+            self.assertEqual(self.run_timer(Fake(self.root, fail="build_apk")), 1)
+
+    def test_a_reset_records_the_event_for_the_tag_runs_nothing_and_exits_0(self) -> None:
+        self.fail_three()
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake, "--tag", TAG, "--reset-failures"), 0)
+        self.assertEqual(fake.calls, [], "a reset runs no command")
+        [reset] = [e for e in self.events() if e["event"] == "failures_reset"]
+        self.assertEqual((reset["tag"], reset["cleared"]), (TAG, 3))
+        self.assertEqual(self.names()[-1], "failures_reset")
+
+    def test_after_a_reset_the_tag_is_retried_and_finishes(self) -> None:
+        self.fail_three()
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake, "--tag", TAG), 0)
+        self.assertIn("skipped_after_failures", self.names(), "without a reset the hand run is skipped")
+        self.assertEqual(self.run_timer(Fake(self.root), "--tag", TAG, "--reset-failures"), 0)
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake, "--tag", TAG), 0)
+        self.assertIn("build_apk", fake.steps())
+        self.assertEqual(self.names()[-1], "done")
+
+    def test_only_failures_after_the_newest_reset_count(self) -> None:
+        self.fail_three()
+        self.assertEqual(self.run_timer(Fake(self.root), "--tag", TAG, "--reset-failures"), 0)
+        for _ in range(2):
+            self.assertEqual(self.run_timer(Fake(self.root, fail="build_apk"), "--tag", TAG), 1)
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake, "--tag", TAG), 0)
+        self.assertEqual(self.names()[-1], "done", "two failures since the reset are retried")
+        self.log.unlink()
+        self.write_log(*({"event": "failed", "tag": TAG, "step": "build_apk"} for _ in range(3)),
+                       {"event": "failures_reset", "tag": TAG},
+                       *({"event": "failed", "tag": TAG, "step": "build_apk"} for _ in range(3)))
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake, "--tag", TAG), 0)
+        self.assertIn("skipped_after_failures", self.names())
+
+    def test_a_skip_notice_sent_before_the_reset_does_not_silence_the_next_one(self) -> None:
+        self.write_log(*({"event": "failed", "tag": TAG, "step": "build_apk", "error": "x"} for _ in range(3)),
+                       {"event": "skip_notified", "tag": TAG}, {"event": "failures_reset", "tag": TAG},
+                       *({"event": "failed", "tag": TAG, "step": "build_apk", "error": "x"} for _ in range(3)))
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake, "--tag", TAG), 0)
+        self.assertEqual(len(couriers(fake, "spritz")), 1)
+
+    def test_a_reset_of_another_tag_changes_nothing(self) -> None:
+        self.fail_three()
+        self.assertEqual(self.run_timer(Fake(self.root), "--tag", "v5.16.1", "--reset-failures"), 0)
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake, "--tag", TAG), 0)
+        self.assertIn("skipped_after_failures", self.names())
+
+    def test_a_reset_does_not_undo_done(self) -> None:
+        self.write_log({"event": "done", "tag": TAG}, {"event": "failures_reset", "tag": TAG})
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake, "--tag", TAG), 0)
+        self.assertIn("nothing_to_do", self.names())
+
+    def test_a_reset_needs_a_tag_and_records_nothing_without_one(self) -> None:
+        fake = Fake(self.root)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(self.run_timer(fake, "--reset-failures"), 1)
+        self.assertIn("--tag", err.getvalue())
+        self.assertNotIn("failures_reset", self.names())
+        self.assertEqual(fake.calls, [])
+
+    def test_a_reset_with_a_tag_that_is_not_a_release_tag_is_refused(self) -> None:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(self.run_timer(Fake(self.root), "--tag", "main", "--reset-failures"), 1)
+        self.assertNotIn("failures_reset", self.names())
+
+
+class ScratchOnlyWhatThisRunMade(TimerCase):
+    """The variant scratch directory is removed only when this run made it: an unconfigured run must not delete a
+    directory of that name that something else put there."""
+
+    def foreign(self) -> pathlib.Path:
+        scratch = self.root / "work" / f"variant-{TAG}"
+        scratch.mkdir(parents=True)
+        (scratch / "not-ours.txt").write_text("kept")
+        return scratch
+
+    def test_an_unconfigured_run_of_a_new_tag_leaves_a_directory_it_did_not_make(self) -> None:
+        scratch = self.foreign()
+        self.assertEqual(self.run_timer(Fake(self.root)), 0)
+        self.assertEqual((scratch / "not-ours.txt").read_text(), "kept")
+
+    def test_an_unconfigured_run_of_a_listed_tag_leaves_it_too(self) -> None:
+        scratch = self.foreign()
+        fake = Fake(self.root)
+        fake.beta = TAG[1:]
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertTrue((scratch / "not-ours.txt").exists())
+
+    def test_an_unconfigured_run_that_fails_leaves_it_too(self) -> None:
+        scratch = self.foreign()
+        self.assertEqual(self.run_timer(Fake(self.root, fail="publish_apk")), 1)
+        self.assertTrue((scratch / "not-ours.txt").exists())
 
 
 class VariantNotConfigured(TimerCase):
@@ -2312,6 +2728,20 @@ class UnitsAndRecipe(unittest.TestCase):
             self.assertIn(want, section)
         for want in ("variant_pins", "variant_build", "variant_publish", "NEVR_VARIANT_DIR", "NEVR_VARIANT_PINS"):
             self.assertIn(want, timer.__doc__)
+
+    def test_the_doc_states_the_pair_check_its_repair_the_build_log_the_part_and_the_reset(self) -> None:
+        text = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
+        section = text.split("## The Quest half of the train", 1)[1].split("\n## ", 1)[0]
+        for want in ("--reset-failures", "failures_reset", "-build.log", "`part`", "by hand", "the publisher's credential",
+                     "half-published", "variant_exists"):
+            self.assertIn(want, section)
+        self.assertNotIn("A tag that beta already lists is done.", section)
+        for stale in ("the live manifest already lists the tag: done, nothing to build",
+                      "The R2 credential goes only to publish_apk,"):
+            self.assertNotIn(stale, timer.__doc__)
+        self.assertIn("variant_publish", timer.__doc__.split("The R2 credential goes only to", 1)[1].split("\n", 2)[0] +
+                      timer.__doc__.split("The R2 credential goes only to", 1)[1].split("\n", 2)[1])
+        self.assertIn("--reset-failures", timer.__doc__)
 
     def test_the_doc_says_the_timer_takes_the_newest_published_tag_only(self) -> None:
         text = (ROOT / "RELEASING.md").read_text(encoding="utf-8")

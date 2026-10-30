@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The Quest half of a release, run by a user timer on the publisher's machine (RELEASING.md, "The Quest half of the
-train"; #1210). Usage: quest_release_timer.py [--tag vX.Y.Z] | --notify-failure
+train"; #1210). Usage: quest_release_timer.py [--tag vX.Y.Z] | --notify-failure | --tag vX.Y.Z --reset-failures
 
 The store APK, the Quest signing key and the R2 credential never leave this machine, so no workflow builds the Quest APK.
 The train (release-train.yml) publishes the GitHub release; this tool sees the new tag and finishes the release:
@@ -11,7 +11,8 @@ The train (release-train.yml) publishes the GitHub release; this tool sees the n
                    the full object id) for each tag it lists
   token, list      the newest published vX.Y.Z (or --tag) that is not done
   build_signer     the release signer, built from a snapshot of its main
-  check_listed     the live manifest already lists the tag: done, nothing to build; else the game data it carries
+  check_listed     the live manifest already lists the tag: no release build is made and the run goes on to the variant;
+                   else the game data it carries
   worktree         a clean worktree at the tag, set up for a build
   build_slot       waits while two or more ninja processes run
   build_apk        `just release-quest-apk` in the shared build slice
@@ -32,26 +33,37 @@ duplicate or malformed line, or with a library that is missing or whose sha256 d
 loudly (a failure, never a skip). The variant steps run after the main release is complete (published, listed, verified
 live and announced) and never before:
 
-  variant_exists   (a listed tag only) the host's answer for the variant APK: 200 and not HTML is there, 404 is absent,
-                   anything else is a failure; when it is there the run logs `variant_listed` and builds nothing
+  variant_exists   (a listed tag only) the host's variant pair: 404 for the APK is absent (it is built and published); an
+                   APK that is there (200, not HTML) is listed only when its `.sha256` is there too, is the one line
+                   `<sha256>  <variant name>` and states the sha256 of the APK as the host serves it (`variant_listed`,
+                   nothing built); a missing, malformed or disagreeing sidecar, and any other answer, is a failure that
+                   names the files and rebuilds nothing, because an upload never replaces an object
   variant_pins     each library is copied into a private scratch directory (mode 0700, files 0600), the COPY is hashed
                    and compared with its pin, and the copies are what is packaged; the log names the file, its size and
                    its pin, never a directory
   variant_build    `just release-quest-variant-apk` in the same worktree, configure and build slice as the main build; for
-                   a tag that was already listed the run makes the worktree and the configure itself
+                   a tag that was already listed the run makes the worktree and the configure itself. Its output goes to
+                   the 0600 file <work>/variant-<tag>-build.log, kept when the step fails and removed when the variant is
+                   done
   variant_publish  tools/publish_quest_apk.py --variant: R2 and the public host only, no signer, no manifest claim
+
+A failure of a variant step carries the step, the program and its exit code, never a tail of the program's output (the
+plugin check prints the plugin's own symbol names); variant_build's failure names the 0600 file.
 
 A failing variant step is recorded as `failed` with its step name, exits 1 (so the existing failure notice fires) and
 counts toward the same three tries, but the main release is by then complete and nothing of it is undone. `done` is written
 only when the variant is done as well, so the next run (the tag is listed by then) builds only the variant. NEVR_VARIANT_DIR
-and NEVR_VARIANT_PINS are never given to a command and their values are replaced by <redacted> in anything written.
+and NEVR_VARIANT_PINS are never given to a command and their values are replaced by <redacted> in anything written. Every
+`failed` and `refused` record carries `part`: "main" until the main release is announced, "variant" in the already-listed
+path and after the announcement; the note that the timer gave up on a tag says which part it was.
 
 Every step appends a JSON line to $XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl; a log that cannot be written is
 a failure. `--notify-failure` couriers the last failure once per step and error in six hours (`failure_notified`, then
 `failure_notice_suppressed`). A failed step exits 1 and names itself, with the redacted tail of the failing command's stderr and of its stdout (not the stdout of curl, gh or the signer, which is remote content). A refusal
 (`refused`: a dirty or stale checkout, a tag origin does not have) exits 1 and is not counted. A tag that has failed three times is not retried, and says so once (a
-courier to Spritz) before the run exits 0. The R2 credential goes only to publish_apk, and the GitHub token only to publish_apk and
-the dispatch: every other command gets an environment without them. The environment is
+courier to Spritz) before the run exits 0. `--tag vX.Y.Z --reset-failures` records `failures_reset` for that tag and does
+nothing else; only the failures after the newest one count toward the three. The R2 credential goes only to publish_apk and
+variant_publish, and the GitHub token only to publish_apk and the dispatch: every other command gets an environment without them. The environment is
 the R2 credential (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY) and RELEASE_PUBLIC_BASE; a missing one
 is a refusal that names it. No value is printed or logged: every value read from the environment, and the GitHub token, is
 replaced by <redacted> in anything written.
@@ -98,6 +110,10 @@ GAME_DATA_PLATFORM = "android-arm64"  # the Quest half of a release carries the 
 SLOT_WAITS = 60
 SLOT_WAIT_SECONDS = 60
 TAIL = 2000
+APK_LIMIT = 4 << 30  # the most the variant APK check reads from the host
+SIDECAR_LIMIT = 4096
+SIDECAR_LINE = re.compile(r"([0-9a-f]{64})  (\S+)\n?")  # what `sha256sum` writes, one line
+READ_CHUNK = 1 << 20
 SIGNER_BINARY = "release-signer"  # what build_signer builds; its `verify-manifest --live` prints the live manifest on stdout
 # Programs whose stdout is remote content, never a log field (docs/standards/logging.md, Rule 4).
 REMOTE_OUTPUT_PROGRAMS = frozenset({"curl", "gh", "gh-spritz", SIGNER_BINARY})
@@ -168,6 +184,8 @@ class Timer:
         self.work = pathlib.Path(env.get("QUEST_RELEASE_WORK_ROOT") or home / "src" / "nevr-runtime-work" / "release-timer")
         # What every command gets. The R2 credential and the GitHub token are added by the one or two steps that use them.
         self.child = {k: v for k, v in env.items() if k not in SECRET_ENV and k not in VARIANT_ENV and k != "GH_TOKEN"}
+        self.part = "main"  # what a failure now belongs to: the main release, or the variant that follows it
+        self.scratch_made = False  # this run made the variant scratch directory
 
     def redact(self, text: str) -> str:
         for secret in self.secrets:
@@ -175,12 +193,34 @@ class Timer:
         return text
 
     def cmd(self, step: str, argv: list[str], cwd: pathlib.Path | str | None = None, extra: dict | None = None,
-            ok_codes: tuple[int, ...] = (0,)) -> subprocess.CompletedProcess:
+            ok_codes: tuple[int, ...] = (0,), quiet: bool = False,
+            output_file: pathlib.Path | None = None) -> subprocess.CompletedProcess:
+        """Run a command. A failure carries the program, its exit code and the redacted tails of its output, unless `quiet`
+        (the program and the exit code only) or `output_file` (the whole output goes to that 0600 file, whose path the
+        failure names): a variant step's output can hold what the private build prints."""
         env = {**self.child, **(extra or {})}
         result = self.runner(argv, cwd=str(cwd) if cwd else None, env=env)
+        if output_file is not None:
+            self.keep_output(step, output_file, result)
         if result.returncode not in ok_codes:
-            raise StepFailure(step, f"{pathlib.Path(argv[0]).name} exited {result.returncode}:{self.tails(argv[0], result)}")
+            name = pathlib.Path(argv[0]).name
+            if output_file is not None:
+                raise StepFailure(step, f"{name} exited {result.returncode}; its full output is in {output_file}")
+            if quiet:
+                raise StepFailure(step, f"{name} exited {result.returncode}")
+            raise StepFailure(step, f"{name} exited {result.returncode}:{self.tails(argv[0], result)}")
         return result
+
+    def keep_output(self, step: str, path: pathlib.Path, result: subprocess.CompletedProcess) -> None:
+        """The command's whole output, redacted, in a file that is 0600 from the moment it is opened (a run replaces it)."""
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as handle:
+                handle.write(f"exit {result.returncode}\n--- stderr ---\n{self.redact(result.stderr or '')}\n"
+                             f"--- stdout ---\n{self.redact(result.stdout or '')}\n")
+        except OSError as error:
+            raise StepFailure(step, f"cannot write the output file: {error.strerror}") from error
 
     def tails(self, program: str, result: subprocess.CompletedProcess) -> str:
         """` stderr: <tail> | stdout: <tail>`, an empty stream left out, and no stdout of a program in
@@ -332,9 +372,11 @@ class Timer:
         """The third failure ends the retries: Spritz hears it once by courier, before the run exits 0 (never a bonk, #1410)."""
         step = "notify"
         failing = str(last.get("step", "unknown"))
-        # A variant step runs only after the main release is complete, so a variant giving up leaves the release standing.
-        what = (f"the variant APK of {tag}" if failing.startswith("variant_") else f"{tag} (main release)")
-        done = " (the main release is complete)" if failing.startswith("variant_") else ""
+        # The failure's own `part`; a record from before the field is read by its step name. A variant giving up leaves the
+        # main release standing.
+        part = str(last.get("part") or ("variant" if failing.startswith("variant_") else "main"))
+        what = f"the variant APK of {tag}" if part == "variant" else f"{tag} (main release)"
+        done = " (the main release is complete)" if part == "variant" else ""
         text = (f"quest release timer gave up on {what} after {MAX_FAILURES} failures{done}; last: step "
                 f"{failing}: {str(last.get('error', ''))[:200]}")
         self.cmd(step, ["courier", "send", "--to", "spritz", "--from", SENDER, "--msg", f"{text}. Log: {self.log.path}"])
@@ -350,14 +392,15 @@ class Timer:
         tarball = self.work / f"release-signer-{tag}.tar"
         extra_file = self.work / f"extra-{tag}.json"
         worktree = self.work / tag
-        scratch = self.variant_scratch(tag)
         made = {"worktree": False}
         try:
             self._release_steps(tag, version, worktree, signer_dir, tarball, extra_file, made)
         except StepFailure:
-            self.cleanup(worktree if made["worktree"] else None, signer_dir, tarball, extra_file, raising=False, scratch=scratch)
+            self.cleanup(worktree if made["worktree"] else None, signer_dir, tarball, extra_file, raising=False,
+                         scratch=self.variant_scratch(tag) if self.scratch_made else None)
             raise
-        self.cleanup(worktree if made["worktree"] else None, signer_dir, tarball, extra_file, raising=True, scratch=scratch)
+        self.cleanup(worktree if made["worktree"] else None, signer_dir, tarball, extra_file, raising=True,
+                     scratch=self.variant_scratch(tag) if self.scratch_made else None)
 
     def _release_steps(self, tag: str, version: str, worktree: pathlib.Path, signer_dir: pathlib.Path,
                        tarball: pathlib.Path, extra_file: pathlib.Path, made: dict) -> None:
@@ -365,7 +408,8 @@ class Timer:
         readme = self.work / "README.md"
         if not readme.exists():
             readme.write_text("Scratch of tools/quest_release_timer.py (the Quest half of a release), owned by the "
-                              "user timer nevr-quest-release. Each run removes what it makes here when it ends.\n",
+                              "user timer nevr-quest-release. Each run removes what it makes here when it ends, except the output file of a\n"
+                              "failed variant build, which stays until the variant is done.\n",
                               encoding="utf-8")
         binary = self.build_signer(signer_dir, tarball)
         before = self.live_state(binary, signer_dir, "check_listed")
@@ -373,6 +417,7 @@ class Timer:
         if beta == version:
             self.log.event("already_listed", beta=version)
             self.ok("check_listed", listed=True)
+            self.part = "variant"  # the release is complete: what follows belongs to the variant
             if self.notice_owed(tag):
                 self.notify_published(tag)
             self.finish_variant(tag, worktree, made, None)
@@ -421,6 +466,7 @@ class Timer:
                                              f"{'missing from' if survived is None else 'changed in'} the {version} release: {survived}")
         self.ok("verify_live", beta=listed, game_data=carried["name"])
         self.notify_published(tag)
+        self.part = "variant"
         self.finish_variant(tag, worktree, made, build_env)
 
     def make_worktree(self, tag: str, worktree: pathlib.Path, made: dict) -> None:
@@ -503,6 +549,7 @@ class Timer:
             if scratch.exists():
                 shutil.rmtree(scratch)  # a killed run's leftovers
             scratch.mkdir(mode=0o700)
+            self.scratch_made = True
             scratch.chmod(0o700)
         except OSError as error:
             raise StepFailure(step, f"cannot make the scratch directory: {error.strerror}") from error
@@ -526,31 +573,87 @@ class Timer:
         self.ok(step, count=len(copies))
         return copies
 
+    def get_object(self, step: str, url: str, limit: int, keep: bool = False) -> tuple[int, str, str, bytes]:
+        """GET `url` without following a redirect: (status, content type, sha256 of the body as it streamed in, the body when
+        `keep`). A status other than 200 is returned for the caller to judge, with no body read; a host that does not answer,
+        or a body over `limit`, is a failure."""
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        try:
+            response = urllib.request.build_opener(NoRedirect).open(request, timeout=FETCH_TIMEOUT_SECONDS)
+        except urllib.error.HTTPError as error:
+            return error.code, "", "", b""
+        except OSError as error:
+            raise StepFailure(step, f"no answer from the host ({error.__class__.__name__})") from error
+        digest = hashlib.sha256()
+        kept = bytearray()
+        size = 0
+        with response:
+            content_type = response.headers.get("Content-Type", "")
+            if response.status != 200 or content_type.lower().startswith("text/html"):
+                return response.status, content_type, "", b""
+            try:
+                while chunk := response.read(READ_CHUNK):
+                    size += len(chunk)
+                    if size > limit:
+                        raise StepFailure(step, f"the host sent more than the expected {limit} bytes")
+                    digest.update(chunk)
+                    if keep:
+                        kept += chunk
+            except OSError as error:
+                raise StepFailure(step, f"the host's answer broke off ({error.__class__.__name__})") from error
+        return 200, content_type, digest.hexdigest(), bytes(kept)
+
     def variant_exists(self, tag: str) -> bool:
-        """Whether the public host serves the variant APK: 200 and not HTML is there, 404 is absent, and anything else (a
-        redirect, a 403, a 5xx, HTML, a host that does not answer) is a failure, never a guess."""
+        """Whether the host has the variant PAIR. 404 for the APK is absent. An APK that is there is listed only when its
+        `.sha256` is there, is one `<sha256>  <variant name>` line and states the sha256 of the APK as the host serves it;
+        any other state of the pair, and any other answer, is a failure that names the files and the check, never a guess.
+        Nothing is rebuilt for a failed pair: an upload never replaces an object, so a rebuild could not repair it."""
         step = "variant_exists"
         name = self.variant_apk_name(tag)
+        sidecar = f"{name}.sha256"
         try:
             base = public_base(self.env)
         except Failure as failure:
             raise StepFailure(step, str(failure)) from failure
-        request = urllib.request.Request(f"{base}/nevr-runtime/{tag}/{name}", headers={"User-Agent": USER_AGENT})
+
+        def answered(file: str, status: int, content_type: str) -> StepFailure:
+            note = " (a redirect is not followed)" if 300 <= status < 400 else ""
+            what = f"with {content_type or 'no content type'}, which is not the file" if status == 200 else "instead of the file"
+            return StepFailure(step, f"{file} on the host: answered {status} {what}{note}")
+
+        status, content_type, apk_digest, _ = self.get_object(step, f"{base}/nevr-runtime/{tag}/{name}", APK_LIMIT)
+        if status == 404:
+            return False
+        if status != 200 or content_type.lower().startswith("text/html"):
+            raise answered(name, status, content_type)
+        repair = "; nothing is rebuilt or replaced, see RELEASING.md (The Quest half of the train, the variant pair) for the repair"
+        broken = f"{name} is on the host but {sidecar} does not match it: "
+        status, content_type, _, body = self.get_object(step, f"{base}/nevr-runtime/{tag}/{sidecar}", SIDECAR_LIMIT, keep=True)
+        if status == 404:
+            raise StepFailure(step, f"{broken}{sidecar} is missing (a half-published pair){repair}")
+        if status != 200 or content_type.lower().startswith("text/html"):
+            raise StepFailure(step, f"{broken}{answered(sidecar, status, content_type)}{repair}")
         try:
-            response = urllib.request.build_opener(NoRedirect).open(request, timeout=FETCH_TIMEOUT_SECONDS)
-        except urllib.error.HTTPError as error:
-            if error.code == 404:
-                return False
-            raise StepFailure(step, f"{name} on the host: answered {error.code}"
-                                    f"{' (a redirect is not followed)' if 300 <= error.code < 400 else ''}") from error
-        except OSError as error:
-            raise StepFailure(step, f"{name} on the host: no answer ({error.__class__.__name__})") from error
-        with response:
-            content_type = response.headers.get("Content-Type", "")
-            if response.status != 200 or content_type.lower().startswith("text/html"):
-                raise StepFailure(step, f"{name} on the host: answered {response.status} with {content_type or 'no content type'}, "
-                                        "which is not the file")
+            found = SIDECAR_LINE.fullmatch(body.decode("utf-8"))
+        except UnicodeDecodeError:
+            found = None
+        if not found:
+            raise StepFailure(step, f"{broken}{sidecar} is malformed (not one '<sha256>  <name>' line){repair}")
+        if found.group(2) != name:
+            raise StepFailure(step, f"{broken}{sidecar} names {found.group(2)}, not {name}{repair}")
+        if found.group(1) != apk_digest:
+            raise StepFailure(step, f"{broken}{sidecar} states sha256 {found.group(1)}, the APK on the host has {apk_digest}{repair}")
         return True
+
+    def variant_build_log(self, tag: str) -> pathlib.Path:
+        return self.work / f"variant-{tag}-build.log"
+
+    def forget_build_log(self, tag: str) -> None:
+        """The variant is done: its build output has nothing left to explain."""
+        try:
+            self.variant_build_log(tag).unlink(missing_ok=True)
+        except OSError as error:
+            raise StepFailure("cleanup", f"cannot remove the variant build output: {error.strerror}") from error
 
     def finish_variant(self, tag: str, worktree: pathlib.Path, made: dict, build_env: dict | None) -> None:
         """The variant, after the main release is complete. `build_env` is the environment of the build the main release just
@@ -566,6 +669,7 @@ class Timer:
             self.ok("variant_exists", listed=listed, apk=self.variant_apk_name(tag))
             if listed:
                 self.log.event("variant_listed", apk=self.variant_apk_name(tag))
+                self.forget_build_log(tag)
                 return
         copies = self.variant_pins(tag, *settings)
         if build_env is None:
@@ -573,11 +677,13 @@ class Timer:
             build_env = self.prepare_build(worktree)
         self.cmd("variant_build", ["systemd-run", "--user", "--scope", "--slice=nevr-builds.slice", "-p", "MemoryMax=8G",
                                    "just", "release-quest-variant-apk", tag, ":".join(str(copy) for copy in copies)],
-                 worktree, build_env)
+                 worktree, build_env, output_file=self.variant_build_log(tag))
         self.ok("variant_build", apk=self.variant_apk_name(tag))
-        # Only the R2 credential: the variant has no signer and no manifest claim.
-        self.cmd("variant_publish", ["python3", "tools/publish_quest_apk.py", tag, "--variant", VARIANT], worktree, dict(self.r2))
+        # Only the R2 credential: the variant has no signer and no manifest claim. The publish tool's own log has its reasons.
+        self.cmd("variant_publish", ["python3", "tools/publish_quest_apk.py", tag, "--variant", VARIANT], worktree, dict(self.r2),
+                 quiet=True)
         self.ok("variant_publish", apk=self.variant_apk_name(tag))
+        self.forget_build_log(tag)
 
     def cleanup(self, worktree: pathlib.Path | None, signer_dir: pathlib.Path, tarball: pathlib.Path,
                 extra_file: pathlib.Path, raising: bool, scratch: pathlib.Path | None = None) -> None:
@@ -656,6 +762,8 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--tag", help="release this vX.Y.Z instead of the newest published one")
     parser.add_argument("--notify-failure", action="store_true", help="courier the last recorded failure to spritz")
+    parser.add_argument("--reset-failures", action="store_true",
+                        help="with --tag: record that the failures of that tag so far no longer count toward the three tries")
     args = parser.parse_args(argv)
     path = state_log_path(env)
     if args.notify_failure:
@@ -663,13 +771,21 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
     if args.tag and not TAG.match(args.tag):
         sys.stderr.write(f"quest-release-timer: {args.tag} is not a release tag (vX.Y.Z)\n")
         return 1
+    if args.reset_failures and not args.tag:
+        sys.stderr.write("quest-release-timer: --reset-failures needs --tag vX.Y.Z\n")
+        return 1
     log = None
+    timer = None
     try:
         log = Log(path, args.tag or "")
         log.event("start")
+        if args.reset_failures:
+            cleared = len(counted_failures([e for e in read_events(path) if e.get("tag") == args.tag]))
+            log.event("failures_reset", cleared=cleared)
+            return 0
         missing = [name for name in REQUIRED_ENV if not env.get(name)]
         if missing:
-            log.event("refused", missing=missing)
+            log.event("refused", missing=missing, part="main")
             raise Failure(f"refused: set {', '.join(missing)}")
         timer = Timer(env, runner, sleep, log)
         timer.check_checkout()
@@ -690,9 +806,10 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
         if any(e.get("event") == "done" for e in history):
             log.event("nothing_to_do", reason="done")
             return 0
-        failures = [e for e in history if e.get("event") == "failed"]
+        failures = counted_failures(history)
         if len(failures) >= MAX_FAILURES:
-            if not any(e.get("event") == "skip_notified" for e in history):
+            since_reset = history_since_reset(history)
+            if not any(e.get("event") == "skip_notified" for e in since_reset):
                 timer.notify_skip(tag, failures[-1])
                 log.event("skip_notified")
             log.event("skipped_after_failures", failures=MAX_FAILURES)
@@ -703,26 +820,43 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
     except Refusal as refusal:
         sys.stderr.write(f"quest-release-timer: {refusal.step}: {refusal}\n")
         if log is not None:
-            _record(log, "refused", refusal.step, str(refusal))
+            _record(log, "refused", refusal.step, str(refusal), part_of(timer))
         return 1
     except StepFailure as failure:
         sys.stderr.write(f"quest-release-timer: {failure.step}: {failure}\n")
         if log is not None:
-            _record(log, "failed", failure.step, str(failure))
+            _record(log, "failed", failure.step, str(failure), part_of(timer))
         return 1
     except Failure as failure:
         sys.stderr.write(f"quest-release-timer: {failure}\n")
         if log is not None and not str(failure).startswith("refused"):
-            _record(log, "failed", "start", str(failure))
+            _record(log, "failed", "start", str(failure), part_of(timer))
         return 1
     finally:
         if log is not None:
             log.close()
 
 
-def _record(log: Log, event: str, step: str, error: str) -> None:
+def part_of(timer: "Timer | None") -> str:
+    """What a failure belongs to: the main release (also before there is a timer) or the variant."""
+    return timer.part if timer is not None else "main"
+
+
+def history_since_reset(history: list[dict]) -> list[dict]:
+    """The events of one tag after its newest `failures_reset`: the failures before it no longer count."""
+    for index in range(len(history) - 1, -1, -1):
+        if history[index].get("event") == "failures_reset":
+            return history[index + 1:]
+    return history
+
+
+def counted_failures(history: list[dict]) -> list[dict]:
+    return [e for e in history_since_reset(history) if e.get("event") == "failed"]
+
+
+def _record(log: Log, event: str, step: str, error: str, part: str = "main") -> None:
     try:
-        log.event(event, step=step, error=error)
+        log.event(event, step=step, error=error, part=part)
     except Failure as log_failure:
         sys.stderr.write(f"quest-release-timer: {log_failure}\n")
 
