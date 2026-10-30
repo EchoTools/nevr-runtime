@@ -607,6 +607,9 @@ collect, and does not open its own log file. `sdk/include/nevr/plugin_logger.h` 
 call it (`PluginLogBind(ctx)` in init, then `PluginLog`, `PluginLogWarning`, `PluginLogError`,
 `PluginLogDebug` or `PluginLogFields`).
 
+- **Before the bind.** A line logged before `PluginLogBind(ctx)` is held in memory and written through the host when
+  the bind succeeds, in the order it was logged (`plugin_logger.h`). Only a bind that finds no host log writes the held
+  lines to stderr.
 - **Tag and identity.** The host writes `[NEVR.PLUGIN] plugin=<id> <message> <key>=<value> ...`. `<id>`
   is the host's name for the plugin (the `name` of its `config.yaml` entry), not text the plugin
   chooses, so one plugin cannot write as another and an operator can filter on `plugin=`.
