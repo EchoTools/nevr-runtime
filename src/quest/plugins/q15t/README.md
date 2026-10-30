@@ -23,11 +23,11 @@ Neither library is in a release or package-dev APK. `just build-quest-q15t` buil
 
 The build defaults are the shipped behaviour; none of them depends on a config or switch file.
 
-- On: fxtrail, voipdrop, custctx, gunconnect, aibots, bvh, wallfire, impactsnd, music, sensorwd, shaderstep (#1553), ec, ecfx, the menu gate
+- On: fxtrail, voipdrop, custctx, meshstep (`Q15T_MESHSTEP`, #1555), gunconnect, aibots, bvh, wallfire, impactsnd, music, sensorwd, shaderstep (#1553), ec, ecfx, the menu gate
   (`Q15T_GATE_LINK`), `Q15T_SHIELDGAMMA=2`, and the new-profile gun hand (`Q15T_T26`).
 - `ec` is on with the words `types=VPTO equip hide` (`Q15T_EC_DEFAULT_WORDS`), and `ecfx` is on (`Q15T_ECFX_DEFAULT_ON`),
   with no switch file. A switch file in the plugin data directory still overrides the words.
-- Off: droneguard, peerclamp, dronekill, dronemuzzle, hudmeter, levelname, `Q15T_POWERBOOST=0`, `Q15T_GATE_PERM`, `Q15T_GATE_BOTS`.
+- Off: droneguard, peerclamp, dronekill, dronemuzzle, hudmeter, levelname (with its companion boosterpool), `Q15T_POWERBOOST=0`, `Q15T_GATE_PERM`, `Q15T_GATE_BOTS`.
 - The clock hook logs the levels the game asks for and forwards them unchanged. `args: {clock: raise}` in a `plugins:` entry of
   `config.yaml` raises the CPU and GPU levels to at least 4 (`src/quest/plugins/q15t/src/plugin_args.cpp` reads the flat JSON of string values).
 

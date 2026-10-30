@@ -9,6 +9,7 @@
 #include "bvh.h"
 #include "clock_levels.h"
 #include "custctx.h"
+#include "meshstep.h"
 #include "droneguard.h"
 #include "dronekill.h"
 #include "dronemuzzle.h"
@@ -22,6 +23,7 @@
 #include "hudmeter.h"
 #include "impactsnd.h"
 #include "levelname.h"
+#include "boosterpool.h"
 #include "music.h"
 #include "peerclamp.h"
 #include "plugin_args.h"
@@ -246,6 +248,7 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_LEVELNAME
     "levelname "
+    "boosterpool "
 #endif
 #if Q15T_MUSIC
     "music "
@@ -387,6 +390,9 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
 #if Q15T_CUSTCTX
   ReportModule("custctx", InstallCustCtx(base));
 #endif
+#if Q15T_MESHSTEP
+  ReportModule("meshstep", InstallMeshStep(base));
+#endif
 #if Q15T_DRONEGUARD
   ReportModule("droneguard", InstallDroneGuard(base));
 #endif
@@ -469,6 +475,7 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
 #endif
 #if Q15T_LEVELNAME
   ReportModule("levelname", InstallLevelName(base));
+  ReportModule("boosterpool", InstallBoosterPool(base));  // the companion word row, as a GOT hook (boosterpool.h)
 #endif
 #if Q15T_SENSORWD
   ReportModule("sensorwd", InstallSensorWd(base));

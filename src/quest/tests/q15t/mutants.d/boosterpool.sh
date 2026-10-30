@@ -1,0 +1,12 @@
+# module `boosterpool`: each line removes one rule from src/boosterpool.cpp; tests/mod/boosterpool.sh must fail on it
+runm boosterpool bp_no_substitution   src/boosterpool.cpp "s/  return real(st, plain);/  return real(st, name);/"
+runm boosterpool bp_always_substitute src/boosterpool.cpp "s/  if (name != suffixed) return real(st, name);/  (void)0;/"
+runm boosterpool bp_plain_args_ignored src/boosterpool.cpp "s/  const std::uint64_t suffixed = append(plain, kSuffix, 1, 1);/  const std::uint64_t suffixed = append(name, kSuffix, 1, 1);/"
+runm boosterpool bp_append_flags   src/boosterpool.cpp "s/append(plain, kSuffix, 1, 1)/append(plain, kSuffix, 1, 0)/"
+runm boosterpool bp_no_unreadable_guard src/boosterpool.cpp "s/  if (!SafeRead(g_plain_addr.load(std::memory_order_acquire), \&plain, sizeof plain)) {/  if (false) {/"
+runm boosterpool bp_fn_vaddr        src/boosterpool.cpp "s/constexpr std::uintptr_t kFn = 0x18037c4;/constexpr std::uintptr_t kFn = 0x18037c8;/"
+runm boosterpool bp_slot_vaddr      src/boosterpool.cpp "s/constexpr std::uintptr_t kSlot = 0x36cd1f8;/constexpr std::uintptr_t kSlot = 0x36cd1f0;/"
+runm boosterpool bp_plain_vaddr     src/boosterpool.cpp "s/constexpr std::uintptr_t kPlainName = 0x37af868;/constexpr std::uintptr_t kPlainName = 0x37af860;/"
+runm boosterpool bp_kept_counter    src/boosterpool.cpp "s/const std::uint64_t n = g_kept.fetch_add(1, std::memory_order_relaxed) + 1;/const std::uint64_t n = 1;/"
+runm boosterpool bp_twice_ok        src/boosterpool.cpp "s/  if (g_installed.load(std::memory_order_acquire)) {/  if (false) {/"
+runm boosterpool bp_installed_unset    src/boosterpool.cpp "s/    g_installed.store(true, std::memory_order_release);  \/\/ the wrapper/    (void)0;  \/\/ the wrapper/"
