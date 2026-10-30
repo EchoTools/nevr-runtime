@@ -91,6 +91,7 @@ add_library(ovrplatformloader SHARED
   resource_request_hook.cpp
   menu_cards_hook.cpp
   ../invite/wizard_metric_hook.cpp
+  ../invite/join_game_quest.cpp
   toast_presenter.cpp
   android_glue_layout_check.cpp
   sentinel.cpp

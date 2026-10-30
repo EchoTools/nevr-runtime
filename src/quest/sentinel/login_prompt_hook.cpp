@@ -617,6 +617,8 @@ void PromptFrame(CR15NetGameOpaque* self) noexcept {
 // which always runs.
 void HookedNetGameUpdate(UpdateThunk::Fn original, CR15NetGameOpaque* self, std::uint64_t arg) noexcept {
   if (g_promptWanted.load(std::memory_order_acquire)) PromptFrame(self);
+  // The join (#966 S4) reads the game object through this netgame before the dispatcher's work runs.
+  nevr_quest::invite::frame::SetNetGame(self);
   nevr_quest::invite::frame::Tick();
   original(self, arg);
 }

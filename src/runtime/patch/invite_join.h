@@ -56,6 +56,19 @@ inline constexpr std::uintptr_t kRouteSlotOffset = 0x8528;
 inline constexpr std::uintptr_t kRouteLobbyOffset = 0x8530;
 /// The game's invalid lobby id (echovr.exe 0x142100b20): 16 zero bytes.
 inline constexpr std::array<std::uint8_t, 16> kInvalidLobby = {};
+/// The offsets one build stages and reads. kPcLayout is echovr.exe's (the constants above); kQuestLayout is libr15's
+/// CR15Game (docs/adr/0017, #966 S4): every field is 8 lower, and the route compare is on the second lobby word (ReVault
+/// libr15 0x1301d88 BeginMultiplayer: byte +0x8518 & 0xf, qword +0x8520 gate, SUuid +0x8528 vs kInvalid; staged SUuid +0x8538,
+/// team u16 +0x8558).
+struct Layout {
+  std::uintptr_t staged_lobby;
+  std::uintptr_t staged_team;
+  std::uintptr_t route_flags;
+  std::uintptr_t route_slot;
+  std::uintptr_t route_lobby;
+};
+inline constexpr Layout kPcLayout = {kStagedLobbyOffset, kStagedTeamOffset, kRouteFlagsOffset, kRouteSlotOffset, kRouteLobbyOffset};
+inline constexpr Layout kQuestLayout = {0x8538, 0x8558, 0x8518, 0x8520, 0x8528};
 /// Milliseconds after a join begins during which another join is refused as busy. A bound on a join that never shows: the
 /// answer after it begins again. The value is a choice, not a measurement; the live run measures how long a join takes.
 inline constexpr std::int64_t kJoinWindowMs = 15000;
@@ -243,13 +256,13 @@ using LogFn = std::function<void(nevr_invite::LogLevel, const std::string&)>;
 
 /// Puts the prior bytes back. A write that fails is logged at Error naming the field, because a staged lobby left in the game
 /// object is what a later PLAY would join. True only when both fields were written back.
-inline bool Unstage(StagingMemory& memory, const PriorStage& prior, const LogFn& log) {
+inline bool Unstage(StagingMemory& memory, const PriorStage& prior, const LogFn& log, const Layout& layout = kPcLayout) {
   bool restored = true;
-  if (!memory.Write(kStagedLobbyOffset, prior.lobby.data(), prior.lobby.size())) {
+  if (!memory.Write(layout.staged_lobby, prior.lobby.data(), prior.lobby.size())) {
     restored = false;
     log(nevr_invite::LogLevel::Error, "[NEVR.INVITE] join stage undo failed field=lobby step=write");
   }
-  if (!memory.Write(kStagedTeamOffset, &prior.team, sizeof(prior.team))) {
+  if (!memory.Write(layout.staged_team, &prior.team, sizeof(prior.team))) {
     restored = false;
     log(nevr_invite::LogLevel::Error, "[NEVR.INVITE] join stage undo failed field=team step=write");
   }
@@ -258,16 +271,16 @@ inline bool Unstage(StagingMemory& memory, const PriorStage& prior, const LogFn&
 
 /// Reads the route fields the game's own join tests before it uses the staged lobby. False on a read that fails (the field is
 /// named in `failed`).
-inline bool ReadRoute(StagingMemory& memory, RouteState& route, StageField& failed) {
-  if (!memory.Read(kRouteFlagsOffset, &route.flags, sizeof(route.flags))) {
+inline bool ReadRoute(StagingMemory& memory, RouteState& route, StageField& failed, const Layout& layout = kPcLayout) {
+  if (!memory.Read(layout.route_flags, &route.flags, sizeof(route.flags))) {
     failed = StageField::RouteFlags;
     return false;
   }
-  if (!memory.Read(kRouteSlotOffset, &route.slot, sizeof(route.slot))) {
+  if (!memory.Read(layout.route_slot, &route.slot, sizeof(route.slot))) {
     failed = StageField::RouteSlot;
     return false;
   }
-  if (!memory.Read(kRouteLobbyOffset, route.lobby.data(), route.lobby.size())) {
+  if (!memory.Read(layout.route_lobby, route.lobby.data(), route.lobby.size())) {
     failed = StageField::RouteLobby;
     return false;
   }
@@ -277,7 +290,8 @@ inline bool ReadRoute(StagingMemory& memory, RouteState& route, StageField& fail
 /// Stages the lobby id and the team word, reads both back, and succeeds only when both read back as written. Nothing is staged
 /// when the game's own join would go elsewhere (OtherRoute, with the values read). On any failure after the first write the bytes
 /// that were there before are written back (a write-back that fails is logged at Error naming the field).
-inline StageOutcome StageAndVerify(StagingMemory& memory, const LobbyBytes& lobby, std::uint16_t team, const LogFn& log) {
+inline StageOutcome StageAndVerify(StagingMemory& memory, const LobbyBytes& lobby, std::uint16_t team, const LogFn& log,
+                                   const Layout& layout = kPcLayout) {
   StageOutcome outcome;
   const auto fail = [&](StageStep step, StageField field) {
     outcome.step = step;
@@ -286,38 +300,38 @@ inline StageOutcome StageAndVerify(StagingMemory& memory, const LobbyBytes& lobb
   };
   RouteState route;
   StageField failedField = StageField::None;
-  if (!ReadRoute(memory, route, failedField)) return fail(StageStep::Read, failedField);
+  if (!ReadRoute(memory, route, failedField, layout)) return fail(StageStep::Read, failedField);
   if (RoutesElsewhere(route)) {
     outcome.route = route;
     return fail(StageStep::OtherRoute, StageField::RouteLobby);
   }
   PriorStage prior;
-  if (!memory.Read(kStagedLobbyOffset, prior.lobby.data(), prior.lobby.size())) return fail(StageStep::Read, StageField::Lobby);
-  if (!memory.Read(kStagedTeamOffset, &prior.team, sizeof(prior.team))) return fail(StageStep::Read, StageField::Team);
-  if (!memory.Write(kStagedLobbyOffset, lobby.data(), lobby.size())) {
-    Unstage(memory, prior, log);
+  if (!memory.Read(layout.staged_lobby, prior.lobby.data(), prior.lobby.size())) return fail(StageStep::Read, StageField::Lobby);
+  if (!memory.Read(layout.staged_team, &prior.team, sizeof(prior.team))) return fail(StageStep::Read, StageField::Team);
+  if (!memory.Write(layout.staged_lobby, lobby.data(), lobby.size())) {
+    Unstage(memory, prior, log, layout);
     return fail(StageStep::Write, StageField::Lobby);
   }
-  if (!memory.Write(kStagedTeamOffset, &team, sizeof(team))) {
-    Unstage(memory, prior, log);
+  if (!memory.Write(layout.staged_team, &team, sizeof(team))) {
+    Unstage(memory, prior, log, layout);
     return fail(StageStep::Write, StageField::Team);
   }
   LobbyBytes readLobby{};
   std::uint16_t readTeam = 0;
-  if (!memory.Read(kStagedLobbyOffset, readLobby.data(), readLobby.size())) {
-    Unstage(memory, prior, log);
+  if (!memory.Read(layout.staged_lobby, readLobby.data(), readLobby.size())) {
+    Unstage(memory, prior, log, layout);
     return fail(StageStep::Read, StageField::Lobby);
   }
-  if (!memory.Read(kStagedTeamOffset, &readTeam, sizeof(readTeam))) {
-    Unstage(memory, prior, log);
+  if (!memory.Read(layout.staged_team, &readTeam, sizeof(readTeam))) {
+    Unstage(memory, prior, log, layout);
     return fail(StageStep::Read, StageField::Team);
   }
   if (readLobby != lobby) {
-    Unstage(memory, prior, log);
+    Unstage(memory, prior, log, layout);
     return fail(StageStep::Mismatch, StageField::Lobby);
   }
   if (readTeam != team) {
-    Unstage(memory, prior, log);
+    Unstage(memory, prior, log, layout);
     return fail(StageStep::Mismatch, StageField::Team);
   }
   outcome.prior = prior;

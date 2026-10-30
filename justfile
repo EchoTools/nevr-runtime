@@ -1679,6 +1679,13 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]:0:2}" -o "$out/wizard_metric_hook_test" -ldl
     timeout 120 "$out/wizard_metric_hook_test"
+    # The Quest join (#966 S4, ADR 0017): the staging, the route and repeat gates, and the begin order, against a fake game block at
+    # the Quest offsets (kQuestLayout). The service's two symbols are stubbed inside the test. Built without exceptions.
+    "${cxx[@]}" -pthread -isystem "$out/attach_json_inc" src/quest/tests/invite_join_quest_test.cpp \
+        src/quest/invite/join_game_quest.cpp src/quest/invite/frame_dispatch.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        "${ident[@]:0:2}" -o "$out/invite_join_quest_test" -ldl
+    timeout 120 "$out/invite_join_quest_test"
     # The controller-input seam (#1202): the VrApi layout rules, the registration's every refusal and its one owner, and
     # the real handler through the thunk entry against stand-ins for vrapi_GetCurrentInputState and
     # vrapi_GetInputDeviceCapabilities. got_pinned_test resolves both slots in the real libr15.
