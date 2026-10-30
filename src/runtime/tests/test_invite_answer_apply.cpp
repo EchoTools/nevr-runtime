@@ -123,3 +123,82 @@ TEST(InviteAnswerApply, AnAnswerPushedBetweenFramesIsAppliedByTheNextFrameOnce) 
   EXPECT_EQ(record.posted.size(), 1u);
   EXPECT_EQ(record.offered_answers, 1u);
 }
+
+// #1731: the share page's JOIN joins the match the player created.
+//
+// Prediction, written before the change. After a create answer has been applied, a share-page JOIN request makes the next frame
+// offer that answer's match (lower-case UUID as the parser gives it) to the join exactly once, with a `share join requested` line
+// naming it in upper case; with no create in the run, the next frame offers nothing and says why.
+// Falsifier: the match offered is another (the resolve's, or none); a second frame offers it again; no line when nothing was created.
+namespace {
+
+nevr_invite::Plan Create() {
+  nevr_invite::Metric metric;
+  metric.kind = nevr_invite::Kind::Create;
+  metric.expires_text = "3 HOURS";
+  nevr_invite::Choices choices;
+  choices.experience = "arena";
+  choices.mode = "custom";
+  return nevr_invite::PlanRequest(metric, choices);
+}
+
+constexpr char kCreated[] = R"({"code":"K7M2Q","match_id":"1fa5a0f6-f128-45a7-b1d0-72a5ab63d72f.node","expires_at":"2026-10-30T21:00:00Z"})";
+
+bool Logged(const nevr_invite_apply_test::Record& record, const std::string& needle) {
+  for (const std::string& line : record.logged) {
+    if (line.find(needle) != std::string::npos) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+TEST(InviteShareJoin, TheShareJoinOffersTheCreatedMatchOnceAndNamesIt) {
+  Guard guard;
+  nevr_invite_apply_test::Reset();
+  nevr_invite_apply::ResetShareJoinForTest();
+  LoopbackServer server({Script{Script::Kind::Reply, 200, kCreated, ""}});
+  nevr_invite_service::Start(Settings(server.Base()));
+  ASSERT_EQ(nevr_invite_service::Submit(Create()), Submit::Queued);
+  ASSERT_TRUE(nevr_invite_service::WaitForAnswerPendingForTest(kWait));
+  nevr_invite_apply::OnFrame();  // the create answer is applied: its match is remembered
+  const nevr_invite_apply_test::Record& record = nevr_invite_apply_test::Get();
+  EXPECT_TRUE(record.matches_offered.empty()) << "a create alone starts no join";
+
+  nevr_invite_apply::RequestShareJoin();
+  nevr_invite_apply::OnFrame();
+  ASSERT_EQ(record.matches_offered.size(), 1u);
+  EXPECT_EQ(record.matches_offered[0], "1fa5a0f6-f128-45a7-b1d0-72a5ab63d72f");
+  EXPECT_TRUE(Logged(record, "[NEVR.INVITE] share join requested lobby=1FA5A0F6-F128-45A7-B1D0-72A5AB63D72F"));
+
+  nevr_invite_apply::OnFrame();  // taken once
+  EXPECT_EQ(record.matches_offered.size(), 1u);
+}
+
+TEST(InviteShareJoin, AShareJoinWithNothingCreatedOffersNothingAndSaysWhy) {
+  Guard guard;
+  nevr_invite_apply_test::Reset();
+  nevr_invite_apply::ResetShareJoinForTest();
+  LoopbackServer server({Script{}});
+  nevr_invite_service::Start(Settings(server.Base()));
+  nevr_invite_apply::RequestShareJoin();
+  nevr_invite_apply::OnFrame();
+  const nevr_invite_apply_test::Record& record = nevr_invite_apply_test::Get();
+  EXPECT_TRUE(record.matches_offered.empty());
+  EXPECT_TRUE(Logged(record, "[NEVR.INVITE] share join not started reason=no_created_match"));
+}
+
+TEST(InviteShareJoin, ARefusedCreateIsNoMatchToJoin) {
+  Guard guard;
+  nevr_invite_apply_test::Reset();
+  nevr_invite_apply::ResetShareJoinForTest();
+  // the refusal carries a body shaped like a created one: only an answer with a result of Ok names a match
+  LoopbackServer server({Script{Script::Kind::Reply, 400, kCreated, ""}});
+  nevr_invite_service::Start(Settings(server.Base()));
+  ASSERT_EQ(nevr_invite_service::Submit(Create()), Submit::Queued);
+  ASSERT_TRUE(nevr_invite_service::WaitForAnswerPendingForTest(kWait));
+  nevr_invite_apply::OnFrame();
+  nevr_invite_apply::RequestShareJoin();
+  nevr_invite_apply::OnFrame();
+  EXPECT_TRUE(nevr_invite_apply_test::Get().matches_offered.empty());
+}
