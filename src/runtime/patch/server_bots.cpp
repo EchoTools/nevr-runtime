@@ -29,7 +29,8 @@ using FindPoolFn = int(__fastcall*)(void* pools, uint64_t body, void** owner, ui
 std::atomic<uint32_t> g_armed{0};
 DriverState g_driver;                   // the game-loop thread only
 std::vector<uint8_t> g_rewrittenFrame;  // the last rewritten session start; ServerDB's handler runs one at a time
-std::mutex g_sessionMutex;              // the session is written by ServerDB's handler, read on the game loop
+std::mutex g_sessionMutex;              // ServerDB's handler writes the session, the driver reads it: both run from
+                                        // GameServerLib::Update today; the lock keeps that safe if either moves
 SessionView g_session;                  // the last session start's id, and whether it gets bots
 
 SessionView CurrentSession() {

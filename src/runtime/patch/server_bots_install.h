@@ -2,8 +2,9 @@
 
 // #1423: AI bots on a dedicated server (server_bots.h). Install runs once, from RunDeferredRuntimeBootstrap (boot.cpp)
 // after the config is loaded; a client logs that it does not apply (N122/N124). OnServerUpdate runs from
-// GameServerLib::Update (gameserver.cpp), on the game-loop thread only; it is the server library's work, as the
-// return to lobby's Poll there is, not the per-frame dispatcher's (N86/N110 unchanged). SessionSettings is the legacy
+// GameServerLib::Update (gameserver.cpp), on the game-loop thread only. Update runs on each pass of the game loop, so
+// this is per-frame work outside the one dispatcher N86 names, a departure from N86 that the return to lobby's Poll
+// and the telemetry snapshot there already make; N110 holds (tick.cpp is unchanged). SessionSettings is the legacy
 // session start's rewrite (gameserver_callbacks.cpp).
 
 #include <cstddef>
