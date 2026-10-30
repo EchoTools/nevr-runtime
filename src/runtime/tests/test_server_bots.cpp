@@ -682,6 +682,24 @@ TEST(ServerBotsDrive, ARequestTheGameHasNotAnsweredIsSaidAfterTenSeconds) {
             "requested=0 wanted=2 (no more bots this session until it does)");
 }
 
+TEST(ServerBotsDrive, TheLastRequestUnansweredIsSaidAfterTenSeconds) {
+  FakeGame g;
+  g.state.runningLogged = true;
+  g.Update(5000);
+  g.Update(6000);
+  ASSERT_EQ(g.state.schedule.requested, 2u) << "both asked: the schedule is done";
+  Put<int32_t>(g.netGame, 0x27D8, 1);  // the game has not answered the second
+  EXPECT_TRUE(g.Update(7000).empty());
+  EXPECT_TRUE(g.Update(16999).empty());
+  const std::vector<Line> lines = g.Update(17000);
+  ASSERT_EQ(lines.size(), 1u);
+  EXPECT_TRUE(lines[0].warning);
+  EXPECT_EQ(lines[0].text,
+            "[NEVR.GAMESERVER] server bots: the game has not answered the last bot request for 10 s session=AAAA "
+            "requested=2 wanted=2 (no more bots this session until it does)");
+  EXPECT_EQ(g.requests.size(), 2u);
+}
+
 TEST(ServerBotsDrive, OutOfGameNothingIsAsked) {
   FakeGame g;
   g.state.runningLogged = true;

@@ -640,7 +640,8 @@ std::vector<Line> Drive(DriverState& d, uint32_t wanted, void* netGame, const ui
   }
   const NetGameView view = ReadNetGame(netGame);
   const Gate gate = Decide(d.schedule, wanted, view.inGame, view.entrants, view.pending, nowMs);
-  if (PendingWarningDue(d.schedule, gate == Gate::kPending, nowMs)) {
+  // The flag itself, not the gate: the gate says kDone before kPending, so the last request would go unsaid.
+  if (PendingWarningDue(d.schedule, view.inGame && view.pending, nowMs)) {
     lines.push_back(PendingLine(session.id, d.schedule.requested, wanted));
   }
   if (gate != Gate::kAsk) return lines;
