@@ -345,6 +345,25 @@ TEST(ServerBotsSchedule, LeavingTheGameStartsTheCountAgain) {
   EXPECT_EQ(Decide(s, 1, true, 4, false, 4001), Gate::kAsk) << "the next session gets its bot at once";
 }
 
+TEST(ServerBotsSchedule, LeavingTheGameClearsEveryField) {
+  Schedule s;
+  s.requested = 2;
+  s.nextAskMs = 9000;
+  s.lastNoBodyMs = 7000;
+  s.warnedNoBody = true;
+  s.pendingSeen = true;
+  s.pendingSinceMs = 6000;
+  s.warnedPending = true;
+  EXPECT_EQ(Decide(s, 2, false, 0, true, 8000), Gate::kNotInGame);
+  EXPECT_EQ(s.requested, 0u);
+  EXPECT_EQ(s.nextAskMs, 0u) << "the next session asks at once";
+  EXPECT_EQ(s.lastNoBodyMs, 0u);
+  EXPECT_FALSE(s.warnedNoBody) << "the next session says its own no-body warning";
+  EXPECT_FALSE(s.pendingSeen);
+  EXPECT_EQ(s.pendingSinceMs, 0u);
+  EXPECT_FALSE(s.warnedPending);
+}
+
 TEST(ServerBotsSchedule, TheGameNotAnsweringIsSaidOnceAfterTenSeconds) {
   Schedule s;
   EXPECT_FALSE(PendingWarningDue(s, true, 1000)) << "the flag was just seen";
