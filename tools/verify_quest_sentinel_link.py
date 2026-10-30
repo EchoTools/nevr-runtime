@@ -5,7 +5,7 @@ The game's own libraries (libr15, libpnsrad, libpnsovr, libpnsradmatchmaking) ex
 2411 OpenSSL and libcurl symbols (an older OpenSSL) and have the sentinel as DT_NEEDED. A sentinel
 that carried its own OpenSSL and exported it could have its calls bound to the game's copy, or
 the game's to ours. The guard is `-Wl,--exclude-libs,ALL` on the sentinel's link plus the export
-allowlist test (`TestExportAllowlist` in tests/quest: only JNI_OnLoad and nevr_sentinel_marker).
+allowlist test (`TestExportAllowlist` in tests/quest: only JNI_OnLoad, nevr_sentinel_marker and the data symbol re33_ec_page).
 
 This reads the Quest CMake files (src/quest/**/CMakeLists.txt and *.cmake), builds the target
 link graph from `target_link_libraries`, and walks it from the sentinel target. If the closure

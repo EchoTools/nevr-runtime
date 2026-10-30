@@ -73,6 +73,7 @@ add_custom_command(
 
 add_library(ovrplatformloader SHARED
   entry.cpp
+  ec_page.cpp
   clock_levels_hook.cpp
   login_prompt_hook.cpp
   ../invite/frame_dispatch.cpp
@@ -156,8 +157,8 @@ else()
   message(FATAL_ERROR "the NDK directory is unknown: android_glue_layout_check.cpp needs its native_app_glue header")
 endif()
 
-# Only nevr_sentinel_marker and JNI_OnLoad are exported (both carry explicit default
-# visibility); everything else, including the hook API and the test seams, is hidden.
+# Only nevr_sentinel_marker, JNI_OnLoad and the data symbol re33_ec_page (ec_page.cpp) are exported (each carries
+# explicit default visibility); everything else, including the hook API and the test seams, is hidden.
 # tests/quest TestExportAllowlist pins the list.
 target_compile_options(ovrplatformloader PRIVATE
   -Wall -Wextra -Werror -fvisibility=hidden -fvisibility-inlines-hidden)

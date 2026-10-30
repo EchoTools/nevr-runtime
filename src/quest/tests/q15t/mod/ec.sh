@@ -15,6 +15,12 @@ g++ -std=c++17 -g -O1 -Wall -Wextra -Werror "$tests/ec_page_test.cpp" -o "$out/e
 "$out/ec_page_test" "$out/ec_page/libec_page_test.so"
 g++ -std=c++17 -g -O1 -fPIC -shared -Wall -Wextra -Werror "$tests/ec_page_other.cpp" -o "$out/ec_page/libec_page_other.so"
 "$out/ec_page_test" "$out/ec_page/libec_page_test.so" "$out/ec_page/libec_page_other.so"
+# the sentinel exports the page (src/quest/sentinel/ec_page.cpp): a script-lib stand-in that depends on it finds the page the plugin writes
+mkdir -p "$out/ec_page/sentinel"
+g++ -std=c++17 -g -O1 -fPIC -shared -Wall -Wextra -Werror -Wl,-soname,libec_sentinel.so "$tests/ec_page_other.cpp" -o "$out/ec_page/sentinel/libec_sentinel.so"
+g++ -std=c++17 -g -O1 -fPIC -shared -Wall -Wextra -Werror "$tests/ec_page_reader.cpp" -o "$out/ec_page/sentinel/libec_reader.so" \
+  -L"$out/ec_page/sentinel" -l:libec_sentinel.so -Wl,-rpath,"$out/ec_page/sentinel" -ldl
+"$out/ec_page_test" "$out/ec_page/libec_page_test.so" sentinel "$out/ec_page/sentinel/libec_sentinel.so" "$out/ec_page/sentinel/libec_reader.so"
 
 # the build with default words (CMake's default): a fresh install with no switch file is on
 g++ -std=c++17 -g -O1 -fno-exceptions -fno-rtti -rdynamic -Wall -Wextra -Werror -I"$here/src" -I"$nevr/sdk/include" '-DQ15T_EC_DEFAULT_WORDS="types=VPTO equip hide"' \

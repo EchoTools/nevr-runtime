@@ -123,7 +123,8 @@ func TestExportHygiene_NoBreakpadLeak(t *testing.T) {
 // including the hook API and its test seams, is hidden (-fvisibility=hidden).
 func TestExportAllowlist(t *testing.T) {
 	requireArtifact(t)
-	allowed := map[string]bool{"nevr_sentinel_marker": true, "JNI_OnLoad": true}
+	// re33_ec_page: the EC script libraries' page (src/quest/sentinel/ec_page.cpp); data, read by the libs' dlsym
+	allowed := map[string]bool{"nevr_sentinel_marker": true, "JNI_OnLoad": true, "re33_ec_page": true}
 	dyn := run(t, "nm", "-D", "--defined-only", soPath(t))
 	for _, line := range strings.Split(dyn, "\n") {
 		fields := strings.Fields(line)
@@ -131,9 +132,27 @@ func TestExportAllowlist(t *testing.T) {
 			continue
 		}
 		if name := fields[len(fields)-1]; !allowed[name] {
-			t.Errorf("unexpected dynamic export %q (allowed: nevr_sentinel_marker, JNI_OnLoad)", name)
+			t.Errorf("unexpected dynamic export %q (allowed: nevr_sentinel_marker, JNI_OnLoad, re33_ec_page)", name)
 		}
 	}
+}
+
+// The EC script libraries find their page with dlsym(RTLD_DEFAULT, "re33_ec_page"); the sentinel is in each of their
+// dependency trees (lib<hash16>.so -> libr15.so -> libovrplatformloader.so), so it exports the page: a 4096-byte data object.
+func TestExportsEcPage(t *testing.T) {
+	requireArtifact(t)
+	syms := run(t, "readelf", "--dyn-syms", "-W", soPath(t))
+	for _, line := range strings.Split(syms, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 8 || f[7] != "re33_ec_page" {
+			continue
+		}
+		if f[2] != "4096" || f[3] != "OBJECT" || f[4] != "GLOBAL" || f[5] != "DEFAULT" || f[6] == "UND" {
+			t.Errorf("re33_ec_page is not a defined 4096-byte global data object: %s", line)
+		}
+		return
+	}
+	t.Errorf("the sentinel does not export re33_ec_page: the EC script libraries' tac mods find no page")
 }
 
 // The sentinel keeps no thread_local state of its own: with the API 26 toolchain

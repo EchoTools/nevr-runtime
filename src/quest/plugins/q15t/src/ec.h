@@ -42,6 +42,7 @@ enum class EcPageState {
   kVisible,    // dlsym(RTLD_DEFAULT, "re33_ec_page") is this plugin's page: the script libs find it
   kInvisible,  // not in the global scope: the script libs decide as on a PC without the EC network client
   kOther,      // another object already exports a re33_ec_page: the scripts use that one
+  kSentinel,   // the sentinel (libovrplatformloader.so) exports the page and the plugin writes that one: the script libs find it
 };
 
 // The page: 4096 zeroed bytes. Other translation units reach it through this accessor, not a second declaration of the symbol
@@ -49,8 +50,12 @@ enum class EcPageState {
 // -fvisibility=hidden; the accessor is for tidiness and for the test seam).
 std::uint8_t* EcPage();
 
-// Re-opens this object with RTLD_GLOBAL | RTLD_NOLOAD and reports what dlsym(RTLD_DEFAULT) finds. Logs one line.
+// Chooses the page every writer uses and logs one `q15t_ec_page` line saying whether the EC script libs can see it. First the
+// sentinel's export (dlopen libovrplatformloader.so RTLD_NOLOAD + dlsym): kSentinel. Without it, re-opens this object with
+// RTLD_GLOBAL | RTLD_NOLOAD and reports what dlsym(RTLD_DEFAULT) finds (kVisible / kInvisible / kOther).
 EcPageState PublishEcPage();
+// Test seam: the file name or path PublishEcPage opens as the sentinel (default libovrplatformloader.so).
+void SetEcSentinelLibForTest(const char* name);
 
 // Reads the switch files / default words; logs the page line always. No switch = nothing installed, reason "off".
 // Otherwise the result of the recvfrom + sendto pair (both or none).

@@ -4,3 +4,4 @@
 
 extern "C" __attribute__((visibility("default"))) int shim_publish() { return static_cast<int>(q15t::PublishEcPage()); }
 extern "C" __attribute__((visibility("default"))) void* shim_page() { return q15t::EcPage(); }
+extern "C" __attribute__((visibility("default"))) void shim_set_sentinel(const char* path) { q15t::SetEcSentinelLibForTest(path); }

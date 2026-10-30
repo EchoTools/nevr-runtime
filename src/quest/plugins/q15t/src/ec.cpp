@@ -69,6 +69,14 @@ bool g_noThread = false;    // test seam
 char g_dir_override[256] = "";
 bool g_installed = false;
 
+// The page every writer in this plugin uses. The sentinel's page when the sentinel exports one (PublishEcPage), else the
+// plugin's own storage. Chosen in PublishEcPage, before any hook or thread of ec / ecfx exists; read with acquire.
+std::atomic<std::uint8_t*> g_page{q15t_ec_page_storage};
+// libovrplatformloader.so (the sentinel) is a DT_NEEDED of libr15.so, which every EC script lib needs: the libs' dlsym finds
+// its export. Its DT_SONAME is this name, so a RTLD_NOLOAD open by name finds the loaded copy.
+constexpr char kSentinelLib[] = "libovrplatformloader.so";
+char g_sentinelLib[256] = "libovrplatformloader.so";  // test seam (SetEcSentinelLibForTest)
+
 // the selected tac mod: one WriteLog word per lib (0 libr15, 1 libpnsovr, 2 libpnsrad)
 constexpr int kSelLibs = 3;
 const char* const kSelLib[kSelLibs] = {"/libr15.so", "/libpnsovr.so", "/libpnsrad.so"};
@@ -161,7 +169,7 @@ ssize_t RecvfromWrap(int fd, void* buf, size_t len, int flags, sockaddr* from, s
         LockG l;
         tokensBefore = g_st.tokens;
         const std::uint64_t now = Now100();
-        killed = g_st.Handle(q15t_ec_page_storage, p, a->sin_addr.s_addr, a->sin_port, now, now / 10000);
+        killed = g_st.Handle(EcPage(), p, a->sin_addr.s_addr, a->sin_port, now, now / 10000);
         tokensAfter = g_st.tokens;
       }
       if (killed) {  // outside the lock: the handler is another module's
@@ -185,7 +193,7 @@ void SawProfile(const char* json, int lib) {
   char name[24];
   const std::uint64_t sym = SelectedFromJson(json, name, sizeof name);
   if (!name[0]) return;  // a profile update without a tac mod
-  if (sym && g_equipStore) StoreSelected(q15t_ec_page_storage, sym);
+  if (sym && g_equipStore) StoreSelected(EcPage(), sym);
   if (g_selLines.fetch_add(1) < kLineCap)
     EcFld()
         .S("name", name)
@@ -451,7 +459,7 @@ Loop g_loop;
 
 void LoopInit() {
   g_loop = Loop();
-  std::uint8_t* const page = q15t_ec_page_storage;
+  std::uint8_t* const page = EcPage();
   for (int k = 0; k < 4; ++k) g_loop.seenUse[k] = Load32(page + UseOf(k));
   g_loop.seenSteps = Load32(page + kDroneBlock + kDroneSteps);
   g_loop.seenLocShown = Load32(page + kLocTok + 0x10);
@@ -471,7 +479,7 @@ void* Main(void*) {
 
 }  // namespace
 
-std::uint8_t* EcPage() { return q15t_ec_page_storage; }
+std::uint8_t* EcPage() { return g_page.load(std::memory_order_acquire); }
 
 bool EcDataFileExists(const char* name) {
   char dir[256];
@@ -493,6 +501,28 @@ bool EcReadDataLine(const char* name, char* out, std::size_t n) {
 }
 
 EcPageState PublishEcPage() {
+  // 1. The sentinel's page. It is where the EC script libs look (their dlsym(RTLD_DEFAULT) runs from inside a lib whose
+  // dependency tree holds libr15.so and so the sentinel), the place the source build's runtime library exports it from.
+  if (void* const sentinel = dlopen(g_sentinelLib, RTLD_NOW | RTLD_NOLOAD)) {  // reference kept: the sentinel is never unloaded
+    if (void* const sp = dlsym(sentinel, "re33_ec_page")) {
+      const bool moved = g_page.load(std::memory_order_acquire) != sp;
+      g_page.store(static_cast<std::uint8_t*>(sp), std::memory_order_release);
+      EcFld()
+          .S("source", "sentinel")
+          .S("lib", g_sentinelLib)
+          .S("visible_to_script_libs", "yes")
+          .S("why", "the sentinel is a dependency of libr15, which every EC script lib needs")
+          .S("adopted", moved ? "now" : "already")
+          .X("rva_start", kPageRva)
+          .X("rva_end", kPageRva + kPageSize)
+          .Emit(NEVR_LOG_INFO, "q15t_ec_page: tac mods and EC effects can work (the script libs read the page the ec module writes)");
+      return EcPageState::kSentinel;
+    }
+    EcFld().S("lib", g_sentinelLib).Emit(NEVR_LOG_WARNING, "q15t_ec_page: the sentinel is loaded but exports no re33_ec_page (an older sentinel); trying the plugin's own page");
+  }
+  // 2. No sentinel page (an older APK, or a host test): the plugin's own export, promoted to the global scope if the linker
+  // allows it. Whether bionic promotes an object already opened RTLD_LOCAL is not verified; the line says what happened.
+  g_page.store(q15t_ec_page_storage, std::memory_order_release);
   Dl_info di{};
   const char* path = dladdr(q15t_ec_page_storage, &di) && di.dli_fname ? di.dli_fname : nullptr;
   bool reopened = false;
@@ -506,15 +536,16 @@ EcPageState PublishEcPage() {
   std::snprintf(a, sizeof a, "%p", static_cast<void*>(q15t_ec_page_storage));
   std::snprintf(b, sizeof b, "%p", seen);
   EcFld f;
-  f.S("page", a).S("global_lookup", b).S("reopened_global", reopened ? "1" : "0")
+  f.S("source", "plugin").S("page", a).S("global_lookup", b).S("reopened_global", reopened ? "1" : "0")
       .S("state", st == EcPageState::kVisible ? "visible" : st == EcPageState::kInvisible ? "invisible" : "other")
+      .S("visible_to_script_libs", st == EcPageState::kVisible ? "global scope only (unverified on bionic)" : "no")
       .X("rva_start", kPageRva).X("rva_end", kPageRva + kPageSize);
   if (st == EcPageState::kVisible)
-    f.Emit(NEVR_LOG_INFO, "ec: page published (script libs find re33_ec_page by dlsym)");
+    f.Emit(NEVR_LOG_INFO, "q15t_ec_page: ec: page published (script libs find re33_ec_page by dlsym)");
   else if (st == EcPageState::kInvisible)
-    f.Emit(NEVR_LOG_WARNING, "ec: page NOT visible to dlsym(RTLD_DEFAULT): EC scripts decide as on a PC without the EC network client");
+    f.Emit(NEVR_LOG_WARNING, "q15t_ec_page: ec: page NOT visible to dlsym(RTLD_DEFAULT): EC scripts decide as on a PC without the EC network client, so no tac mod acts");
   else
-    f.Emit(NEVR_LOG_ERROR, "ec: another re33_ec_page is already global: the scripts use that one, not this plugin's");
+    f.Emit(NEVR_LOG_ERROR, "q15t_ec_page: ec: another re33_ec_page is already global: the scripts use that one, not this plugin's");
   return st;
 }
 
@@ -581,7 +612,7 @@ InstallResult InstallEcWithWords(std::uintptr_t base, const char* words) {
 
 void EcStep(std::uint64_t now100) {
   Loop& L = g_loop;
-  std::uint8_t* const page = q15t_ec_page_storage;
+  std::uint8_t* const page = EcPage();
   const std::uint64_t nowMs = now100 / 10000;
   if (nowMs >= L.nextSel) {
     L.nextSel = nowMs + 1000;
@@ -799,12 +830,15 @@ void SetEcGearRealForTest(int which, void (*fn)()) { g_gearReal[which].store(fn)
 void SetEcSelEnvForTest(const EcSelEnv& env) { g_env = env; }
 bool EcSelTriedForTest(int lib) { return g_selTried[lib]; }
 std::uint32_t EcGearGenForTest() { return g_gear.gen.load(); }
+void SetEcSentinelLibForTest(const char* name) { std::snprintf(g_sentinelLib, sizeof g_sentinelLib, "%s", name); }
 void EcResetForTest() {
   {
     LockG l;
     g_st = State();
   }
+  g_page.store(q15t_ec_page_storage, std::memory_order_release);
   std::memset(q15t_ec_page_storage, 0, sizeof q15t_ec_page_storage);
+  std::snprintf(g_sentinelLib, sizeof g_sentinelLib, "%s", kSentinelLib);
   g_sends = g_passed = g_consumed = 0;
   g_killLines = g_tokenLines = g_selLines = 0;
   g_droneKilled = nullptr;

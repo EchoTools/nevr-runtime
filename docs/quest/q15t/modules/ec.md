@@ -18,8 +18,20 @@ What they need (all of it, nothing else from the host):
   the server-has-EC flag at +0x40, the NEUTRON queue at +0xda0 and its gate at +0xe20. Those are host-side ABI and are in scope.
 - Nothing is called: the host only owns the page and writes into it.
 
-Can a plugin supply it? **The export is built, but whether the scripts can resolve it is the open question, and the evidence
-leans "no, not as the loader loads it".**
+Where the page lives: **the sentinel exports it** (`src/quest/sentinel/ec_page.cpp`), and the `ec` module writes that page.
+Every EC script lib has `libr15.so` as DT_NEEDED and `libr15.so` has `libovrplatformloader.so` (the sentinel) as DT_NEEDED
+(`readelf -d` of the v6.11.0 APK's `libac4e9374a146d3a4.so`, `lib221a0a3a2e56d247.so` and `libr15.so`), so the sentinel is in
+every script lib's dependency tree, the place the source build's runtime library `libvrapi.so` (also a DT_NEEDED of
+`libr15.so`) exports the page from. The libs ask with handle 0 (`mov x0, xzr` before each `bl dlsym@plt` in
+`libac4e9374a146d3a4.so`). `PublishEcPage` opens the sentinel by its DT_SONAME with `RTLD_NOLOAD`, takes its `re33_ec_page`
+and logs `q15t_ec_page ... source=sentinel visible_to_script_libs=yes`; only when the sentinel exports none (an older APK) does
+it fall back to the plugin's own export below and log `source=plugin` with the state. The host test
+(`src/quest/tests/q15t/mod/ec.sh`, sentinel mode of `ec_page_test`) loads a sentinel stand-in only as the dependency of a
+script-lib stand-in and checks that the stand-in's dlsym(RTLD_DEFAULT) finds the page the plugin writes. Not shown on a
+headset yet: the `q15t_ec_page` line of a real run is the proof.
+
+The fallback, a plugin export. **Whether the scripts can resolve it is the open question, and the evidence leans "no, not as
+the loader loads it"**: with the page only here, no tac mod acts.
 - The Quest plugin loader opens every plugin with `dlopen(<native lib dir>/<file>, RTLD_NOW | RTLD_LOCAL)`
   (`src/quest/plugin/plugin_platform.cpp:71`; the only `RTLD_LOCAL`/`RTLD_GLOBAL` in
   `src/quest/plugin` and in ADR 0019, `grep -n RTLD_ docs/quest/q15t/adr/0019-quest-plugin-loader.md` finds neither word). Symbols of an
