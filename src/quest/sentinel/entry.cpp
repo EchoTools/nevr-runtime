@@ -21,6 +21,7 @@
 #include "quest/invite/frame_dispatch.h"
 #include "menu_cards_hook.h"
 #include "quest/invite/wizard_metric_hook.h"
+#include "quest/invite/join_game_quest.h"
 #include "data_wiring.h"
 #include "obb_skip_hook.h"
 #include "os_build_gate_hook.h"
@@ -193,7 +194,13 @@ bool InstallMenuCardsHook() noexcept { return nevr_quest::menu_cards::Install();
 
 // The CREATE GAME / JOIN VIA CODE observer (#966, ADR 0017 S2) on libr15's MetricLog. A refused install is logged by GotHook and by
 // the observer's own line, and leaves the game's call intact.
-bool InstallWizardMetricHook() noexcept { return nevr_quest::wizard_metric::Install(); }
+// The join's answer applier (#966 S4) is registered with the observer. It acts only while the invite service is on (the
+// network.invite_codes feature), so with the feature off it takes no answers and logs nothing.
+bool InstallWizardMetricHook() noexcept {
+    const bool observer = nevr_quest::wizard_metric::Install();
+    nevr_quest_invite_join::RegisterAnswerApplier();
+    return observer;
+}
 
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
 // token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.
