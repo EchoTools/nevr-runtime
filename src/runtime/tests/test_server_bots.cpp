@@ -731,6 +731,17 @@ TEST(ServerBotsDrive, ANewSessionCountsFromZeroWithNoFrameOutOfGame) {
   EXPECT_EQ(g.state.session, "BBBB");
 }
 
+TEST(ServerBotsDrive, ANewSessionAsksAtOnceThoughTheLastAskWasJustNow) {
+  FakeGame g;
+  g.state.runningLogged = true;
+  g.Update(5000);
+  g.Update(5500);
+  ASSERT_EQ(g.requests.size(), 1u) << "the first session waits its second out";
+  g.Update(5600, true, false, "BBBB");
+  EXPECT_EQ(g.requests.size(), 2u) << "the new session's clock starts fresh";
+  EXPECT_EQ(g.state.schedule.requested, 1u);
+}
+
 TEST(ServerBotsDrive, OutOfGameAPendingFlagIsNotSaid) {
   FakeGame g;
   g.state.runningLogged = true;
