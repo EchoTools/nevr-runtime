@@ -174,7 +174,8 @@ def make_fake_bin(directory: pathlib.Path) -> None:
         '# A directory where the run\'s sign-in link is: rm cannot remove it, so the restore must say the sign-in is still there.\n'
         '[[ -n "${FAKE_WINE_PIN_SIGNIN:-}" ]] && { rm -f "$logs/../.credentials.json"; mkdir "$logs/../.credentials.json"; }\n'
         # A server run writes the boot lines a healthy run writes, to the capture verify-server.sh reads (the game's output).
-        '[[ "$*" == *-server* && -z "${FAKE_HOST_STOP:-}" && -z "${FAKE_WINE_NO_BOOT:-}" ]] && printf "%s\\n" "Finished initializing engine" "LOGIN SUCCESS" "registration successful"\n'
+        '[[ "$*" == *-server* && -z "${FAKE_HOST_STOP:-}" && -z "${FAKE_WINE_NO_BOOT:-}" ]] && printf "%s\\n" "Finished initializing engine"\n'
+        '[[ "$*" == *-server* && -z "${FAKE_HOST_STOP:-}" && -z "${FAKE_WINE_NO_BOOT:-}" && -z "${FAKE_WINE_NO_LOGIN:-}" ]] && printf "%s\\n" "LOGIN SUCCESS" "registration successful"\n'
         # A game that exits with a code of its own (FAKE_WINE_EXIT=78 is the host stop's exit code).
         '[[ -n "${FAKE_WINE_EXIT:-}" ]] && exit "$FAKE_WINE_EXIT"\n'
         'exec sleep "${FAKE_WINE_SLEEP:-0}"\n')
@@ -1090,6 +1091,16 @@ class VerifyServerTest(unittest.TestCase):
         self.assertIn("result              = PASS", result.stdout)
         self.assertIn("config              = offline", result.stdout)
         self.assertIn("counts read from    = ", result.stdout)
+
+    def test_an_install_config_run_must_log_in(self):
+        # With the install's own config.yaml the run is a login run: a log without LOGIN SUCCESS fails (#1308).
+        (self.game_root / "echovr/_local/config.yaml").write_text("services: {}\n")
+        result = self.run_verify(dict(self.env, FAKE_WINE_NO_LOGIN="1"))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no 'LOGIN SUCCESS' line", result.stderr)
+        passed = self.run_verify()
+        self.assertEqual(passed.returncode, 0, passed.stdout + passed.stderr)
+        self.assertIn("config              = install", passed.stdout)
 
     def test_verify_server_refuses_to_run_without_a_copy_named(self):
         # #1308: the install itself is never a verification target; NEVR_GAME_ROOT must name a copy.
