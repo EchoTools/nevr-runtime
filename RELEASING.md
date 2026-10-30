@@ -350,6 +350,30 @@ just install-quest-release-timer   # the dedicated checkout, systemctl --user li
 python3 tools/quest_release_timer.py --tag vX.Y.Z   # the same run by hand, for one tag
 ```
 
+## Game-derived packages
+
+A package derived from the game's own files (a content pack, the EchoCombat combat pack included) follows these rules:
+
+- It is hosted only on the CDN and listed in the signed manifest (`docs/reference/verifying-a-release.md`).
+- It is never a GitHub release asset and never a workflow artifact of a public repository.
+- It is never in the Windows zip. `tools/package_release.py` seal refuses any file outside its list.
+- It is built in a private job, never in a public workflow.
+
+Plugins that carry no game bytes may be a workflow artifact.
+
+## Windows runners
+
+Every build runs on `ubuntu-latest`, except two hand-started workflows that use a Windows runner:
+
+- `.github/workflows/echocombat-plugins.yml` builds the three EchoCombat plugins (DroneFix, PowerBoost, VeilNet) with MSVC
+  against Microsoft Detours built from source. It needs Windows because the plugins use MSVC structured exception handling
+  (`__try`/`__except`) and Detours. It holds no secrets and publishes nothing: its output is a workflow artifact and
+  build-provenance attestations. Start it by hand: `gh workflow run echocombat-plugins.yml -f echocombat_sha=<40-hex commit>`.
+- `.github/workflows/defender-scan.yml` measures the release zip with Microsoft Defender. It signs nothing and is not part of
+  the release.
+
+No other workflow may use a Windows runner. `tools/tests/test_echocombat_plugins_workflow.py` checks that set.
+
 ## Immutable releases
 
 With the repository setting on, once a release is published its tag cannot be moved or deleted and its assets cannot be

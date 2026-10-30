@@ -34,7 +34,7 @@ fn ok(body: &[u8]) -> Vec<u8> {
 }
 
 fn art(body: &[u8]) -> Artifact {
-    Artifact { kind: "x".into(), platform: None, path: "p".into(), size: body.len() as u64, sha256: sha256_hex(body), android: None, game_data: None, contents: vec![] }
+    Artifact { kind: "x".into(), platform: None, path: "p".into(), size: body.len() as u64, sha256: sha256_hex(body), android: None, game_data: None, content_pack: None, contents: vec![] }
 }
 
 #[test]

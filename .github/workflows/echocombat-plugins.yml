@@ -1,0 +1,475 @@
+name: EchoCombat plugins
+
+# Builds the three EchoCombat plugins (DroneFix, PowerBoost, VeilNet) with MSVC on a Windows runner, against
+# Microsoft Detours built from source, and attests the DLLs. This is the one build in this repository that
+# needs Windows: the plugins are MSVC C++ that use about a hundred __try/__except (SEH) blocks and Microsoft
+# Detours, and MinGW cannot build them. Everything else here builds on ubuntu-latest (build.yml).
+#
+# Hand-started only: `gh workflow run echocombat-plugins.yml -f echocombat_sha=<40 lower-case hex>`. No
+# trigger on a push, a pull request or a schedule. It holds no secrets: no `secrets.` reference, and the only
+# credential is checkout's default read token (persist-credentials is false). It publishes nothing. Its output
+# is two workflow artifacts, `echocombat-plugins` and `echocombat-overlay` (30 days each), and build-provenance
+# attestations for their DLLs. It never builds or stores a game-derived package: the content pack is built in a
+# private job and is never in this file or its artifact (RELEASING.md, "Game-derived packages").
+#
+# The repository and commit inputs let a pull request's branch tip, in a fork, be built by naming the fork and the
+# sha before the PR merges. Each job validates its own inputs from env, before any checkout; the defaults are the
+# upstream repositories and the commits this file pins.
+#
+# The nevr-runtime plugin SDK headers (sdk/include) come from EchoTools/nevr-runtime at the pinned nevr_runtime_sha commit, so the
+# workflow runs unchanged from any repository.
+#
+# The EchoCombat source is a third party's code, checked out at the commit the input names and verified
+# against it. The overlay DLL (NvrContentOverlay) is built in the `overlay` job on ubuntu-latest with MinGW-w64,
+# against the plugin SDK header (sdk/include) at nevr_runtime_sha. The one download is marshmallow-mia's published
+# v1.1.0 asset, and only when overlay_sha names the commit that release is tagged at; it is compared with the
+# built DLL and never replaces it.
+on:
+  workflow_dispatch:
+    inputs:
+      echocombat_sha:
+        description: "EchoCombat commit to build (40 lower-case hex characters)"
+        required: true
+        type: string
+      echocombat_repo:
+        description: "EchoCombat repository, owner/name"
+        default: "heisthecat31/EchoCombat"
+        required: false
+        type: string
+      overlay_repo:
+        description: "NvrContentOverlay repository, owner/name"
+        default: "marshmallow-mia/NvrContentOverlay"
+        required: false
+        type: string
+      overlay_sha:
+        description: "NvrContentOverlay commit to build (40 lower-case hex characters); the v1.1.0 tag's commit by default"
+        default: "309e2196029250729c8e349b92bfcb1eda9f682b"
+        required: false
+        type: string
+      nevr_runtime_sha:
+        description: "EchoTools/nevr-runtime commit whose sdk/include the plugins build against (40 lower-case hex characters)"
+        default: "9b90be1b228abeb297b216aa4af49e3836a8d31d"
+        required: false
+        type: string
+
+# Read-only at the top. Each job names its own permissions, and the attest job adds the two it needs.
+permissions:
+  contents: read
+
+# One group per ref: two runs on one ref queue instead of running at once.
+concurrency:
+  group: echocombat-plugins-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build the EchoCombat plugins (MSVC, Detours from source)
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+    # First, before any checkout: the inputs are a repository name and commit names and nothing else. They go in
+    # through env, never into a script body.
+    - name: Validate the EchoCombat and nevr-runtime inputs
+      shell: bash
+      env:
+        ECHOCOMBAT_REPO: ${{ inputs.echocombat_repo }}
+        ECHOCOMBAT_SHA: ${{ inputs.echocombat_sha }}
+        NEVR_RUNTIME_SHA: ${{ inputs.nevr_runtime_sha }}
+      run: |
+        set -euo pipefail
+        if [[ ! "$ECHOCOMBAT_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+          echo "echocombat_repo must be owner/name, got: $ECHOCOMBAT_REPO" >&2
+          exit 1
+        fi
+        if [[ ! "$ECHOCOMBAT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "echocombat_sha must be 40 lower-case hex characters, got: $ECHOCOMBAT_SHA" >&2
+          exit 1
+        fi
+        if [[ ! "$NEVR_RUNTIME_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "nevr_runtime_sha must be 40 lower-case hex characters, got: $NEVR_RUNTIME_SHA" >&2
+          exit 1
+        fi
+        echo "echocombat_repo $ECHOCOMBAT_REPO, echocombat_sha $ECHOCOMBAT_SHA and nevr_runtime_sha $NEVR_RUNTIME_SHA are well formed"
+
+    - name: Check out the nevr-runtime plugin SDK headers
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        repository: EchoTools/nevr-runtime
+        ref: ${{ inputs.nevr_runtime_sha }}
+        path: nevr-runtime
+        sparse-checkout: sdk/include
+        fetch-depth: 1
+        persist-credentials: false
+
+    - name: Verify the nevr-runtime checkout is the input commit and has the SDK headers
+      shell: bash
+      env:
+        NEVR_RUNTIME_SHA: ${{ inputs.nevr_runtime_sha }}
+      run: |
+        set -euo pipefail
+        head=$(git -C nevr-runtime rev-parse HEAD)
+        if [ "$head" != "$NEVR_RUNTIME_SHA" ]; then
+          echo "nevr-runtime checkout is $head, expected $NEVR_RUNTIME_SHA" >&2
+          exit 1
+        fi
+        if [ ! -f nevr-runtime/sdk/include/nevr/plugin_logger.h ]; then
+          echo "[ERROR] nevr-runtime/sdk/include/nevr/plugin_logger.h is missing from the checkout" >&2
+          exit 1
+        fi
+        echo "nevr-runtime HEAD $head (plugin SDK headers present)"
+
+    - name: Check out EchoCombat at the input commit
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        repository: ${{ inputs.echocombat_repo }}
+        ref: ${{ inputs.echocombat_sha }}
+        path: echocombat
+        fetch-depth: 1
+        persist-credentials: false
+
+    - name: Verify the EchoCombat checkout is the input commit
+      shell: bash
+      env:
+        ECHOCOMBAT_SHA: ${{ inputs.echocombat_sha }}
+      run: |
+        set -euo pipefail
+        head=$(git -C echocombat rev-parse HEAD)
+        if [ "$head" != "$ECHOCOMBAT_SHA" ]; then
+          echo "EchoCombat checkout is $head, expected $ECHOCOMBAT_SHA" >&2
+          exit 1
+        fi
+        echo "EchoCombat HEAD $head"
+
+    # Microsoft Detours v4.0.1 (the tag's commit), built from source. Cat's prebuilt third_party/detours is not used.
+    - name: Check out Microsoft Detours v4.0.1
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        repository: microsoft/Detours
+        ref: e4bfd6b03e50de46b47abfbd1e46b384f0c5f833
+        path: detours
+        fetch-depth: 1
+        persist-credentials: false
+
+    - name: Verify the Detours checkout is the v4.0.1 commit
+      shell: bash
+      env:
+        DETOURS_SHA: e4bfd6b03e50de46b47abfbd1e46b384f0c5f833
+      run: |
+        set -euo pipefail
+        head=$(git -C detours rev-parse HEAD)
+        if [ "$head" != "$DETOURS_SHA" ]; then
+          echo "Detours checkout is $head, expected $DETOURS_SHA" >&2
+          exit 1
+        fi
+        echo "Detours HEAD $head (v4.0.1)"
+
+    # The cmd steps below are the EchoCombat build scripts' own method (vswhere, then vcvars64.bat, then cl.exe and
+    # nmake), so they are cmd. zizmor's "Windows CMD shell limits analysis" note on them is accepted for that reason.
+    # Each cmd step finds MSVC the way the EchoCombat build scripts do (vswhere, then vcvars64.bat). The path goes to
+    # GITHUB_ENV because a cmd environment does not survive to the next step.
+    - name: Find the MSVC toolchain
+      shell: cmd
+      run: |
+        set "VARS_BAT="
+        set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+        if not exist "%VSWHERE%" (
+            echo [ERROR] vswhere.exe not found at "%VSWHERE%"
+            exit /b 1
+        )
+        for /f "usebackq tokens=*" %%i in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do (
+            if exist "%%i\VC\Auxiliary\Build\vcvars64.bat" set "VARS_BAT=%%i\VC\Auxiliary\Build\vcvars64.bat"
+        )
+        if not defined VARS_BAT (
+            echo [ERROR] MSVC with the x64 tools not found
+            exit /b 1
+        )
+        echo VCVARS_BAT=%VARS_BAT%>>"%GITHUB_ENV%"
+        echo MSVC vcvars64: %VARS_BAT%
+
+    # Mirrors detours' own build: `nmake` in src writes ..\lib.X64\detours.lib and ..\include\detours.h (system.mak).
+    - name: Build Microsoft Detours from source
+      shell: cmd
+      run: |
+        call "%VCVARS_BAT%" >nul
+        if errorlevel 1 exit /b 1
+        cd /d "%GITHUB_WORKSPACE%\detours\src"
+        nmake /nologo
+        if errorlevel 1 exit /b 1
+        if not exist "%GITHUB_WORKSPACE%\detours\lib.X64\detours.lib" (
+            echo [ERROR] detours\lib.X64\detours.lib was not built
+            exit /b 1
+        )
+        if not exist "%GITHUB_WORKSPACE%\detours\include\detours.h" (
+            echo [ERROR] detours\include\detours.h was not made
+            exit /b 1
+        )
+        echo Built detours\lib.X64\detours.lib
+
+    # Flags and libraries mirror build_dronefix.bat, build_powerboost.bat and build_veilnet.bat in EchoCombat
+    # at the verified commit. VeilNet also links ws2_32 (the scripts pass it as ws2_32.lib).
+    - name: Build the three plugins with cl.exe
+      shell: cmd
+      run: |
+        call "%VCVARS_BAT%" >nul
+        if errorlevel 1 exit /b 1
+        cd /d "%GITHUB_WORKSPACE%\echocombat"
+        if not exist out mkdir out
+        if not exist obj mkdir obj
+        cl.exe /nologo /LD /MT /O2 /EHa /W3 /std:c++17 /I..\detours\include /I..\nevr-runtime\sdk\include /Foobj\ /Fe"out\DroneFix.dll" plugin\dronefix.cpp ..\detours\lib.X64\detours.lib user32.lib
+        if errorlevel 1 exit /b 1
+        cl.exe /nologo /LD /MT /O2 /EHa /W3 /std:c++17 /I..\detours\include /I..\nevr-runtime\sdk\include /Foobj\ /Fe"out\PowerBoost.dll" plugin\powerboost.cpp ..\detours\lib.X64\detours.lib user32.lib
+        if errorlevel 1 exit /b 1
+        cl.exe /nologo /LD /MT /O2 /EHa /W3 /std:c++17 /I..\detours\include /I..\nevr-runtime\sdk\include /Foobj\ /Fe"out\VeilNet.dll" plugin\veilnet.cpp ..\detours\lib.X64\detours.lib ws2_32.lib user32.lib
+        if errorlevel 1 exit /b 1
+        del /q out\*.exp out\*.lib 2>nul
+        dir out
+
+    # PowerBoost.ini is not made here. Cat's powerboost_ini() (tools/echocombat_config.py) reads
+    # data/gunpatch and tools/json_resource.py through medigun_ini() and repair_matrix_rate(), not only
+    # config/mp_weapon_settings.json, so the step cannot be a plain python -I call of that module.
+
+    # Everything the artifact holds goes to artifact/: the DLLs, SHA256SUMS and BUILD-RECORD.json.
+    - name: Write the artifact, SHA256SUMS and BUILD-RECORD.json
+      shell: pwsh
+      env:
+        ECHOCOMBAT_REPO: ${{ inputs.echocombat_repo }}
+        ECHOCOMBAT_SHA: ${{ inputs.echocombat_sha }}
+        DETOURS_SHA: e4bfd6b03e50de46b47abfbd1e46b384f0c5f833
+        NEVR_RUNTIME_SHA: ${{ inputs.nevr_runtime_sha }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        New-Item -ItemType Directory -Force -Path 'artifact' | Out-Null
+        foreach ($dll in 'DroneFix.dll', 'PowerBoost.dll', 'VeilNet.dll') {
+          Copy-Item -LiteralPath "echocombat/out/$dll" -Destination 'artifact' -ErrorAction Stop
+        }
+        $outputs = @(foreach ($f in Get-ChildItem -LiteralPath 'artifact' -Filter '*.dll' -File | Sort-Object Name) {
+          [ordered]@{
+            name = $f.Name
+            sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $f.FullName).Hash.ToLowerInvariant()
+            size = $f.Length
+          }
+        })
+        if ($outputs.Count -ne 3) { throw "expected 3 plugin DLLs, found $($outputs.Count)" }
+        $sums = $outputs | ForEach-Object { "$($_.sha256)  $($_.name)" }
+        Set-Content -LiteralPath 'artifact/SHA256SUMS' -Value $sums -Encoding ascii
+        if (-not $env:ImageVersion) { throw 'ImageVersion is not set on this runner' }
+        $record = [ordered]@{
+          echocombat_repo = $env:ECHOCOMBAT_REPO
+          echocombat_sha = $env:ECHOCOMBAT_SHA
+          detours_sha = $env:DETOURS_SHA
+          nevr_runtime_sha = $env:NEVR_RUNTIME_SHA
+          runner_image_version = $env:ImageVersion
+          outputs = $outputs
+        }
+        $record | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath 'artifact/BUILD-RECORD.json' -Encoding ascii
+        Get-Content -LiteralPath 'artifact/BUILD-RECORD.json'
+        Get-Content -LiteralPath 'artifact/SHA256SUMS'
+
+    - name: Upload the echocombat-plugins artifact
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: echocombat-plugins
+        path: artifact/
+        if-no-files-found: error
+        retention-days: 30
+
+  # The overlay DLL, built from marshmallow-mia's commit with MinGW-w64 on ubuntu-latest, against the plugin SDK
+  # header at nevr_runtime_sha. It has no secret and no Windows runner; the commit is the overlay_sha input, checked
+  # with rev-parse below.
+  overlay:
+    name: Build NvrContentOverlay.dll (MinGW-w64, from the input commit)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    # First, before any checkout: the same validation as the build job, for the overlay inputs and the nevr-runtime SDK commit.
+    - name: Validate the NvrContentOverlay and nevr-runtime inputs
+      shell: bash
+      env:
+        OVERLAY_REPO: ${{ inputs.overlay_repo }}
+        OVERLAY_SHA: ${{ inputs.overlay_sha }}
+        NEVR_RUNTIME_SHA: ${{ inputs.nevr_runtime_sha }}
+      run: |
+        set -euo pipefail
+        if [[ ! "$OVERLAY_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+          echo "overlay_repo must be owner/name, got: $OVERLAY_REPO" >&2
+          exit 1
+        fi
+        if [[ ! "$OVERLAY_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "overlay_sha must be 40 lower-case hex characters, got: $OVERLAY_SHA" >&2
+          exit 1
+        fi
+        if [[ ! "$NEVR_RUNTIME_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "nevr_runtime_sha must be 40 lower-case hex characters, got: $NEVR_RUNTIME_SHA" >&2
+          exit 1
+        fi
+        echo "overlay_repo $OVERLAY_REPO, overlay_sha $OVERLAY_SHA and nevr_runtime_sha $NEVR_RUNTIME_SHA are well formed"
+
+    # the nevr-runtime plugin SDK headers from EchoTools/nevr-runtime at the input commit: the overlay builds against sdk/include here.
+    - name: Check out the nevr-runtime plugin SDK headers
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        repository: EchoTools/nevr-runtime
+        ref: ${{ inputs.nevr_runtime_sha }}
+        path: nevr-runtime
+        sparse-checkout: sdk/include
+        fetch-depth: 1
+        persist-credentials: false
+
+    - name: Verify the nevr-runtime checkout is the input commit and has the SDK headers
+      shell: bash
+      env:
+        NEVR_RUNTIME_SHA: ${{ inputs.nevr_runtime_sha }}
+      run: |
+        set -euo pipefail
+        head=$(git -C nevr-runtime rev-parse HEAD)
+        if [ "$head" != "$NEVR_RUNTIME_SHA" ]; then
+          echo "nevr-runtime checkout is $head, expected $NEVR_RUNTIME_SHA" >&2
+          exit 1
+        fi
+        if [ ! -f nevr-runtime/sdk/include/nevr/plugin_logger.h ]; then
+          echo "[ERROR] nevr-runtime/sdk/include/nevr/plugin_logger.h is missing from the checkout" >&2
+          exit 1
+        fi
+        echo "nevr-runtime HEAD $head (plugin SDK headers present)"
+
+    - name: Check out NvrContentOverlay at the input commit
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        repository: ${{ inputs.overlay_repo }}
+        ref: ${{ inputs.overlay_sha }}
+        path: overlay
+        fetch-depth: 1
+        persist-credentials: false
+
+    - name: Verify the NvrContentOverlay checkout is the input commit
+      shell: bash
+      env:
+        OVERLAY_SHA: ${{ inputs.overlay_sha }}
+      run: |
+        set -euo pipefail
+        head=$(git -C overlay rev-parse HEAD)
+        if [ "$head" != "$OVERLAY_SHA" ]; then
+          echo "NvrContentOverlay checkout is $head, expected $OVERLAY_SHA" >&2
+          exit 1
+        fi
+        echo "NvrContentOverlay HEAD $head"
+
+    # Distro packages only. The MinGW-w64 compilers and static runtime come from the mingw-w64 package.
+    - name: Install the MinGW-w64 toolchain, CMake and Ninja
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends mingw-w64 cmake ninja-build
+
+    # The overlay README's configure and build commands, with the source directory and the toolchain file named from the
+    # workspace (the cwd of this step), since the overlay checkout is in overlay/. NEVR_SDK_INCLUDE is the plugin SDK
+    # header (sdk/include) of EchoTools/nevr-runtime at nevr_runtime_sha; an overlay commit that ignores the variable only warns.
+    - name: Build NvrContentOverlay.dll
+      shell: bash
+      run: |
+        set -euo pipefail
+        cmake -S overlay -B overlay/build -G Ninja -DCMAKE_TOOLCHAIN_FILE="$PWD/overlay/cmake/mingw-toolchain.cmake" -DNEVR_SDK_INCLUDE="$PWD/nevr-runtime/sdk/include"
+        cmake --build overlay/build
+        if [ ! -f overlay/build/NvrContentOverlay.dll ]; then
+          echo "[ERROR] overlay/build/NvrContentOverlay.dll was not built" >&2
+          exit 1
+        fi
+        echo "Built overlay/build/NvrContentOverlay.dll"
+
+    # marshmallow-mia's published v1.1.0 asset, fetched only when overlay_sha names the v1.1.0 tag's commit, and held
+    # to its pinned sha256. GH_TOKEN is the one token use in this job: gh reads it for this download and nothing else.
+    - name: Download the published v1.1.0 asset and check its pinned sha256
+      if: ${{ inputs.overlay_sha == '309e2196029250729c8e349b92bfcb1eda9f682b' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PUBLISHED_SHA256: 0cce65cf9f75eecea7042af4a38d895db9b96946b42f39be2f4ada1b4eb1bcdf
+      run: |
+        set -euo pipefail
+        mkdir -p published
+        gh release download v1.1.0 --repo marshmallow-mia/NvrContentOverlay --pattern NvrContentOverlay.dll --dir published
+        got=$(sha256sum published/NvrContentOverlay.dll | cut -d' ' -f1)
+        echo "published NvrContentOverlay.dll size $(stat -c %s published/NvrContentOverlay.dll) sha256 $got"
+        if [ "$got" != "$PUBLISHED_SHA256" ]; then
+          echo "[ERROR] published NvrContentOverlay.dll sha256 is $got, pinned $PUBLISHED_SHA256" >&2
+          exit 1
+        fi
+
+    - name: Write the overlay artifact and overlay-record.json
+      shell: bash
+      env:
+        OVERLAY_REPO: ${{ inputs.overlay_repo }}
+        OVERLAY_SHA: ${{ inputs.overlay_sha }}
+        NEVR_RUNTIME_SHA: ${{ inputs.nevr_runtime_sha }}
+        PUBLISHED_COMMIT: 309e2196029250729c8e349b92bfcb1eda9f682b
+      run: |
+        set -euo pipefail
+        mkdir -p overlay-artifact
+        cp overlay/build/NvrContentOverlay.dll overlay-artifact/NvrContentOverlay.dll
+        sha=$(sha256sum overlay-artifact/NvrContentOverlay.dll | cut -d' ' -f1)
+        size=$(stat -c %s overlay-artifact/NvrContentOverlay.dll)
+        # matches_published and published_sha256 stay null unless overlay_sha names the published commit.
+        matches=null
+        published=null
+        if [ "$OVERLAY_SHA" = "$PUBLISHED_COMMIT" ]; then
+          published_sha=$(sha256sum published/NvrContentOverlay.dll | cut -d' ' -f1)
+          echo "built NvrContentOverlay.dll sha256 $sha"
+          echo "published v1.1.0 NvrContentOverlay.dll sha256 $published_sha"
+          if [ "$published_sha" = "$sha" ]; then matches=true; else matches=false; fi
+          published="\"$published_sha\""
+        fi
+        jq -n \
+          --arg repository "$OVERLAY_REPO" \
+          --arg overlay_repo "$OVERLAY_REPO" \
+          --arg commit "$OVERLAY_SHA" \
+          --arg file "NvrContentOverlay.dll" \
+          --arg sha256 "$sha" \
+          --arg nevr_runtime_sha "$NEVR_RUNTIME_SHA" \
+          --argjson size "$size" \
+          --argjson matches_published "$matches" \
+          --argjson published_sha256 "$published" \
+          '{repository: $repository, overlay_repo: $overlay_repo, commit: $commit, file: $file, sha256: $sha256, size: $size, nevr_runtime_sha: $nevr_runtime_sha, matches_published: $matches_published, published_sha256: $published_sha256}' \
+          > overlay-artifact/overlay-record.json
+        cat overlay-artifact/overlay-record.json
+
+    - name: Upload the echocombat-overlay artifact
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: echocombat-overlay
+        path: overlay-artifact/
+        if-no-files-found: error
+        retention-days: 30
+
+  attest:
+    name: Attest the plugin DLLs
+    needs: [build, overlay]
+    runs-on: ubuntu-latest
+    # The two permissions below are for actions/attest (Sigstore, keyless build provenance), the same two as
+    # build.yml's publish job. Nothing is signed with them and no secret is read.
+    permissions:
+      contents: read
+      id-token: write  # OIDC token for the Sigstore attestation signed by actions/attest
+      attestations: write  # writes the attestation to the repository's attestation store
+    steps:
+    - name: Download the echocombat-plugins artifact
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+      with:
+        name: echocombat-plugins
+        path: artifact
+
+    - name: Download the echocombat-overlay artifact
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+      with:
+        name: echocombat-overlay
+        path: overlay-artifact
+
+    # The same action as build.yml's publish job (subject-path, a multi-line list of globs); the DLLs only.
+    - name: Attest build provenance of the plugin DLLs
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      with:
+        subject-path: |
+          artifact/*.dll
+          overlay-artifact/*.dll

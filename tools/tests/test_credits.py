@@ -141,8 +141,8 @@ class SharedFile(unittest.TestCase):
             self.tool.ingame_groups(self.data),
             [
                 {"id": "code-contributions", "ingame": "CODE CONTRIBUTIONS",
-                 "names": ["Xenomega", "kfc", "Dualgame", "marshmallow-mia", "Ducky", "babs", "DC Coffey",
-                           "chinmayee5599", "brysonak"]},
+                 "names": ["Xenomega", "kfc", "Dualgame", "marshmallow-mia", "Ducky", "babs", "EchoCombat",
+                           "DC Coffey", "chinmayee5599", "brysonak"]},
                 {"id": "thanks", "ingame": "THANKS", "names": THANKS},
                 {"id": "testers", "ingame": "TESTERS",
                  "names": ["marshmallow-mia", "Crafter", "Trodd-", "DinkyBoi", "berg", "zebra", "Nebula",
@@ -490,7 +490,7 @@ class IngameText(unittest.TestCase):
         )
         self.assertEqual(self.tool.ingame_text(self.data), expected.encode("cp1252"))
         self.assertTrue(expected.startswith("CODE CONTRIBUTIONS\n\nXenomega\n"))
-        self.assertEqual(expected.count("\n"), 48, "four groups of 9, 6, 12 and 1 names: 14 + 11 + 17 + 6 lines")
+        self.assertEqual(expected.count("\n"), 49, "four groups of 10, 6, 12 and 1 names: 15 + 11 + 17 + 6 lines")
 
     def test_groups_are_separated_by_three_blank_lines(self):
         data = self.data_with({"ONE": ["a", "b"], "TWO": ["c"]})

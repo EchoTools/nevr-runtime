@@ -38,6 +38,10 @@ FROZEN_NVR = frozenset({
     "NvrPlugin", "NvrPluginInterface", "NvrTestPluginGetFrameCount", "NvrTestPluginGetInitCount",
     "NvrTestPluginGetKeptInfo",
 })
+# Plugins other people publish keep their own names (docs/standards/naming.md, "Names that belong to ... third
+# parties"). These are named in config examples and docs because a host lists them in config.yaml. Each is one
+# third party's file name; nothing here is ours, and nothing is added for a name we choose.
+THIRD_PARTY_NVR = frozenset({"NvrContentOverlay"})
 # Namespaces that were renamed to nevr_<area> (#131), one JSON file per area under
 # tools/tests/renamed_namespaces/ so area PRs do not edit the same lines. The old name is not used as a
 # namespace again; a PascalCase namespace in no file is still on the rename list
@@ -67,6 +71,8 @@ BRAND_PROSE_SPELLINGS = {
     "docs/adr/0004-quest-verification-regime.md": {"nEVR"},
     "docs/adr/0010-signed-plugins-only.md": {"nEVR"},
     "docs/adr/0012-static-install-root.md": {"nEVR"},
+    "docs/adr/0028-game-derived-packs-on-the-cdn.md": {"nEVR"},
+    "docs/reference/content-pack-hosting.md": {"nEVR"},
     "docs/design/2026-09-21-mic-provider-voip-fix.md": {"nEVR"},
     "docs/reference/example-config.yaml": {"nEVR"},
     "docs/reference/launcher-install-root.md": {"nEVR"},
@@ -135,7 +141,7 @@ class NamingTest(unittest.TestCase):
     def test_no_nvr_identifier_outside_the_frozen_set(self):
         stray = {}
         for path, text in project_files():
-            for token in {re.sub(r"(_fn|_t)$", "", t) for t in NVR.findall(text)} - FROZEN_NVR:
+            for token in {re.sub(r"(_fn|_t)$", "", t) for t in NVR.findall(text)} - FROZEN_NVR - THIRD_PARTY_NVR:
                 stray.setdefault(token, []).append(path)
         self.assertEqual(stray, {}, "`Nvr` is the frozen plugin/module ABI spelling; new names use Nevr/NEVR_ "
                          "(docs/standards/naming.md)")

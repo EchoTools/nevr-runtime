@@ -28,7 +28,7 @@ fn art(zip: &[u8], listed: &[(&str, &[u8])]) -> Artifact {
         size: zip.len() as u64,
         sha256: sha256_hex(zip),
         android: None,
-        game_data: None,
+        game_data: None, content_pack: None,
         contents: listed.iter().map(|(n, b)| Content { path: n.to_string(), sha256: sha256_hex(b), size: b.len() as u64 }).collect(),
     }
 }

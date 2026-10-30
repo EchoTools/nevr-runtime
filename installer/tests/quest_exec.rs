@@ -102,7 +102,7 @@ fn apk_art(bytes: &[u8]) -> Artifact {
         kind: "quest-apk".into(), platform: Some("android-arm64".into()), path: "v1.0.0/nevr-runtime-v1.0.0-quest.apk".into(),
         size: bytes.len() as u64, sha256: sha256_hex(bytes),
         android: Some(Android { package: quest::PACKAGE.into(), version_code: 5, signer_cert_sha256: vec!["a".repeat(64)] }),
-        game_data: None, contents: vec![],
+        game_data: None, content_pack: None, contents: vec![],
     }
 }
 
@@ -192,7 +192,7 @@ fn game_data_is_downloaded_verified_pushed_extracted_and_the_temp_zip_removed() 
     let base = serve_one(zip_bytes.clone());
     let data = Artifact {
         kind: "game-data".into(), platform: Some("android-arm64".into()), path: "data/echovr-data-aaaaaaaaaaaa.zip".into(),
-        size: zip_bytes.len() as u64, sha256: sha256_hex(&zip_bytes), android: None, game_data: None,
+        size: zip_bytes.len() as u64, sha256: sha256_hex(&zip_bytes), android: None, game_data: None, content_pack: None,
         contents: vec![Content { path: "_data/1/rad15/android/manifests/aa".into(), sha256: sha256_hex(b"AAA"), size: 3 }],
     };
     let log = Log::open(&d.path().join("l.jsonl"), "quest").unwrap();
@@ -215,7 +215,7 @@ fn game_data_is_downloaded_verified_pushed_extracted_and_the_temp_zip_removed() 
 #[test]
 fn roots_hold_checks_every_path_at_its_size() {
     let data = Artifact {
-        kind: "game-data".into(), platform: None, path: "data/x.zip".into(), size: 1, sha256: "0".repeat(64), android: None, game_data: None,
+        kind: "game-data".into(), platform: None, path: "data/x.zip".into(), size: 1, sha256: "0".repeat(64), android: None, game_data: None, content_pack: None,
         contents: vec![Content { path: "a/f".into(), sha256: "0".repeat(64), size: 3 }, Content { path: "a/g".into(), sha256: "0".repeat(64), size: 5 }],
     };
     let mut dev = Fake::new(&[]);
@@ -263,7 +263,7 @@ fn game_data() -> (Artifact, String) {
     let base = serve_one(zip_bytes.clone());
     let data = Artifact {
         kind: "game-data".into(), platform: Some("android-arm64".into()), path: "data/echovr-data-aaaaaaaaaaaa.zip".into(),
-        size: zip_bytes.len() as u64, sha256: sha256_hex(&zip_bytes), android: None, game_data: None,
+        size: zip_bytes.len() as u64, sha256: sha256_hex(&zip_bytes), android: None, game_data: None, content_pack: None,
         contents: vec![Content { path: "_data/1/rad15/android/manifests/aa".into(), sha256: sha256_hex(b"AAA"), size: 3 }],
     };
     (data, base)
@@ -461,7 +461,7 @@ fn game_data_fetched_from_a_base_with_a_query_is_logged_without_it() {
     let zip_bytes = buf.into_inner();
     let data = Artifact {
         kind: "game-data".into(), platform: Some("android-arm64".into()), path: "data/echovr-data-aaaaaaaaaaaa.zip".into(),
-        size: zip_bytes.len() as u64, sha256: sha256_hex(&zip_bytes), android: None, game_data: None,
+        size: zip_bytes.len() as u64, sha256: sha256_hex(&zip_bytes), android: None, game_data: None, content_pack: None,
         contents: vec![Content { path: "_data/1/rad15/android/manifests/aa".into(), sha256: sha256_hex(b"AAA"), size: 3 }],
     };
     let base = file_base_with_query(d.path(), &data.path, &zip_bytes);

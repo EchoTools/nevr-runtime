@@ -1174,8 +1174,8 @@ A manifest that was never verified, or that was changed after it was, is refused
 that passed step 2`.
 
 For each artifact of the chosen release that your platform handles, `kind` tells what it is: `windows-zip`,
-`quest-library`, `quest-apk` (and `quest-apk-bundled` later). `plugin` is reserved: skip a kind you do not handle, a
-`game-data` entry of a platform you do not install included.
+`quest-library`, `quest-apk` (and `quest-apk-bundled` later), `content-pack`. `plugin` is reserved: skip a kind you do not handle, a
+`game-data` entry of a platform you do not install included. A consumer that does not handle `content-pack` skips it, the same way.
 
 A release lists one `game-data` artifact per platform (`android-arm64`, and `windows-x86_64` once the signer publishes the
 PC data), so `kind` alone does not select it. Select a `game-data` entry by `kind` and `platform` together, and
@@ -1250,6 +1250,33 @@ echo "OK step 8: $out matches $kind of release $ver (size $size, sha256 $sha)"
 ```sh
 sh check-artifact.sh <state-dir> 5.5.1 windows-zip "$BASE" windows.zip
 ```
+
+### Content packs
+
+A `content-pack` artifact is a pack derived from the game's own data. It is hosted on the CDN, never on a GitHub release.
+Its entry has `name`, `kind`, `platform`, `path`, `sha256`, `size`, `contents` and `content_pack`.
+
+- `name` is `<id>-<first 12 hex of sha256>.zip`, and `path` is `packs/` plus `name`. Check the `path` before any request (Step 8, item 1, with this
+  kind's shape): `packs/<name>.zip`, with the name made of `a-z`, `0-9`, `.` and `-` only. Then the entry must agree with itself: the
+  name and the path carry the id and the first 12 hex of the entry's own `sha256`.
+- `platform` is `windows-x86_64`. `contents` is not empty.
+- `content_pack.id` matches `^[a-z][a-z0-9]{1,31}$`. The id `echovr` is reserved and is refused.
+- `content_pack.version` is `X.Y.Z` made of digits only.
+- `content_pack.requires_stock_manifest_sha256` is a list of one or two hashes. Each is 64 lower-case hex digits. The
+  list is sorted ascending and holds no hash twice.
+- `content_pack.stock_data_version` is one to twenty digits.
+- `content_pack.plugins` is a list, which may be empty, of names. Each name is one to 64 of `A-Z`, `a-z`, `0-9`, `_` and
+  `-`, and no name is listed twice.
+- Each `contents` path is made of segments of `A-Za-z0-9._-` joined by `/`. No segment is empty, `.` or `..`.
+
+A pack is fetched by the same rules as every artifact: check the `path` before any request, read at most `size` bytes,
+then require the exact `size` and `sha256`. The reference scripts and programs in this document accept only the
+`v<version>/nevr-runtime-v<version>-<name>` path of a release file, so they refuse a `content-pack` entry; the installer
+(`installer/src/manifest.rs`, `find_content_pack`) is the reference for this kind.
+
+`requires_stock_manifest_sha256` is a claim the signed manifest cannot verify. It names the stock manifest or manifests
+the pack was derived from. Compare it with the stock manifest of your own install before you apply anything from the
+pack. The manifest's signature does not cover that comparison.
 
 ### The Windows zip: every member
 
