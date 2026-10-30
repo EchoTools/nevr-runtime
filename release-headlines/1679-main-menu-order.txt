@@ -1,1 +1,0 @@
-The main menu now lists Play, Join, Create, Tutorial in that order.
