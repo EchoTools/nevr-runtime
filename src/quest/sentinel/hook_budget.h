@@ -48,6 +48,7 @@ inline constexpr HookBudgetRow kHookBudget[] = {
     {"sentinel/menu_cards_hook.cpp", 1, 0},
     {"sentinel/obb_skip_hook.cpp", 3, 0},
     {"sentinel/os_build_gate_hook.cpp", 1, 0},
+    {"sentinel/path_rewrite_hook.cpp", 8, 0},
     {"sentinel/permission_wait_hook.cpp", 2, 0},
     {"sentinel/pns_provider_hook.cpp", 4, 0},
     {"sentinel/process_end_hook.cpp", 1, 0},
