@@ -1,0 +1,1 @@
+The main menu's four buttons now stand in the order Play, Join, Create, Tutorial.

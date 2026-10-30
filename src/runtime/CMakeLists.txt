@@ -240,6 +240,7 @@ set(PATCHES_HEADERS
     "patch/invite_service.h"
     "patch/invite_config.h"
     "patch/menu_page.h"
+    "patch/menu_slots.h"
     "patch/menu_cards.h"
     "patch/netgun_bullets.h"
     "patch/netgun_bullet_ids.h"

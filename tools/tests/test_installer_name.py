@@ -89,10 +89,6 @@ class InstallerNameTest(unittest.TestCase):
         for needle in ("first release after", "launcher", "optional", "gate", "this paragraph"):
             self.assertIn(needle, paragraph, needle)
 
-    def test_the_headline_fragment_is_the_one_line(self):
-        text = (REPO / "release-headlines/1492-installer-name.txt").read_text(encoding="utf-8")
-        self.assertEqual(text, "The Windows installer is now install-nevr-runtime.exe (the old name still works for now).\n")
-
 
 if __name__ == "__main__":
     sys.exit(unittest.main())

@@ -213,6 +213,11 @@ Consequences for the package:
 - The package carries the card elements as our own data (the element records and the pins), never the stock page or
   a page derived from it.
 - The pins make the cards build-specific: on any other game build the cards are off and the log says why.
+- The order of the four main-menu buttons (Play, Join, Create, Tutorial from the left) is the order of the slots in the
+  level's transform table (`CTransformCR`, the same bytes on PC and Quest), not of the page's element array: the game
+  stands each card where its owner actor's transform says. `runtime/patch/menu_slots.h` gives the four owners the
+  poses of the four slots in that order, behind its own pin (`kStockTransformSha256`), and both platforms call it through
+  `PlaceButtons` (`runtime/patch/menu_cards.h`). Each run logs the slot of each button, read back from the bytes served.
 - The cards are English only until another language is built.
 - A change to the package contents (a pin table) is a change to what a release carries and goes through the
   release checks.
