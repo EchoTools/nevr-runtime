@@ -32,21 +32,19 @@ constexpr std::size_t kViewRing = 128;  // a name pointer the game reads stays v
 // that was quiet for a gap logs its next call at once.
 constexpr std::uint32_t kTraceFirstCalls = 8;
 constexpr std::uint64_t kTraceGapSeconds = 10;
-// CNSOVRSocial::Update retries a failed create no sooner than 5 s after the last one: it compares whole
-// seconds (CSysTime::GetTick / GetTicksPerSecond) against the time stored at +0x340 with `cmp w8, #5; b.lo`
-// (libpnsovr 0x2045dc..0x2045f8). The lock retry uses the same interval.
-constexpr std::uint64_t kCreateRetrySeconds = 5;
+// CNSOVRSocial::Update waits 5 s between its own retries: it compares whole seconds (CSysTime::GetTick /
+// GetTicksPerSecond) against the time stored at +0x340 with `cmp w8, #5; b.lo` (libpnsovr 0x2045dc..0x2045f8).
+// The lock retry uses the same interval.
 constexpr std::uint64_t kLockRetrySeconds = 5;
 // A create, join or lock request the sender took and the server never answers is treated as refused after
 // this long. How it was chosen: Nakama answers a create at once, success or failure (snsPartyCreateRequest),
 // and answers a join at once too, except that a join to a LOCKED party queues for the leader's approval with
 // no reply at all (snsPartyJoinRequest); so silence is a normal state for a join and must end in the game
-// being told. 10 s is twice the longest wait the game's own social code applies (the 5 s create retry
-// above), so a slow reply is not mistaken for none. A reply that arrives after the deadline is still
+// being told. 10 s is twice the longest wait the game's own social code applies (the 5 s lock retry above),
+// so a slow reply is not mistaken for none. A reply that arrives after the deadline is still
 // applied by the model (a late PartyJoinSuccess admits the player as usual). Not measured against a live
 // server's reply times.
 constexpr std::uint64_t kPendingDeadlineSeconds = 10;
-constexpr std::uint8_t kUpdateWantsParty = 1;  // Update's flags byte, bit 0: a party should exist
 // The carry queue. Past kSoftQueueLimit the oldest coalescible event (one a later event of its kind makes
 // redundant) is dropped to make room; events that carry information no later event repeats (Created,
 // Joined, JoinFailed, HostChanged, Left, Kicked, MemberJoined, MemberLeft) are never dropped for room, so
@@ -132,8 +130,6 @@ struct Facade::Impl {
   std::uint64_t lastLock = 0;
 
   bool processWide = false;  // the Instance(): its destruction is a defect the test pins
-  bool createTried = false;
-  std::uint64_t lastCreate = 0;
   int lastUpdateFlags = -1;
 };
 
@@ -256,7 +252,7 @@ void RequestLock(Impl& impl, bool wantLocked, bool retry) {
 // A create, join or lock request the sender took and the server never answered is failed after
 // kPendingDeadlineSeconds exactly like a refused send: the model rolls back (the join also gives the invites
 // back and tells the game, State::AbandonJoining), the failure is counted and logged once, and the usual
-// retry applies (the create by Update's decision, the lock by Update's backoff; a join is retried by the player
+// retry applies (a create by the player's next invite, the lock by Update's backoff; a join is retried by the player
 // from the JoinFailed the game was told).
 bool Overdue(std::uint64_t since, std::uint64_t now) {
   return since != 0 && now >= since && now - since >= kPendingDeadlineSeconds;
@@ -600,25 +596,16 @@ void SlotAddMember(void* self, std::uint32_t userIndex) {
   Put<std::uint32_t>(self, kOffMemberCount, 1);
 }
 
-void MaybeCreateParty(Impl& impl, const void* flagsPointer) {
+// Update's flags byte, bit 0 is "wants a party". The game sets it at login with no player action, and every
+// login sent a create because of it (#1502), so the bit creates nothing here: a party is made by an invite
+// (SlotSendInvite creates one first) or a join. This logs the byte when it changes.
+void NoteUpdateFlags(Impl& impl, const void* flagsPointer) {
   if (flagsPointer == nullptr) return;
   const std::uint8_t flags = *static_cast<const std::uint8_t*>(flagsPointer);
   if (impl.lastUpdateFlags != flags) {
     impl.lastUpdateFlags = flags;
     LogFields(LogLevel::kInfo, "social_update_flags", {{"flags", flags}});
   }
-  if ((flags & kUpdateWantsParty) == 0) return;
-  // No signed-in account yet (the login has not finished): a create would carry a null user uuid.
-  if (Party(impl).Snapshot().selfId == 0) return;
-  const std::uint64_t now = Now(impl);
-  if (impl.createTried && now - impl.lastCreate < kCreateRetrySeconds) return;
-  const std::vector<nevr_social_party::Message> request = Party(impl).CreateParty();
-  if (request.empty()) return;
-  impl.createTried = true;
-  impl.lastCreate = now;
-  // A create that could not be sent is not in flight: put the model back so the retry after the
-  // interval can send it (the model set "creating" when it built the request).
-  if (!SendParty(impl, "party create", request)) Party(impl).AbandonCreate();
 }
 
 void SyncHostJoinable(Impl& impl) {
@@ -980,12 +967,12 @@ std::uint64_t UpdatePrepare(void* self, const void* params) noexcept {
   Impl* impl = OwnerOf(self);
   if (impl == nullptr) return 0;
   try {
-    // Requests the server never answered are given up before the create / join decision, so the same
-    // Update asks again (the create) or lets the deferred join through.
+    // Requests the server never answered are given up before the join decision, so the same Update lets
+    // the deferred join through.
     ExpirePending(*impl);
     const std::uint64_t deferredJoin = Party(*impl).DeferredJoin();
     if (deferredJoin != 0) return deferredJoin;
-    MaybeCreateParty(*impl, params);
+    NoteUpdateFlags(*impl, params);
   } catch (const std::exception&) {
     ReportFailure(impl, kUpdate);
   }

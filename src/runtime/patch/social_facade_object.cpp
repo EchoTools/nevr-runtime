@@ -634,28 +634,17 @@ std::uint64_t InviteSentTime(void*, std::int32_t index) {
   return invite != nullptr ? invite->sentTime : 0;
 }
 
-// Update's second argument points at a flags byte the game fills in: bit 0 asks for a party to exist
-// (pnsovr creates its room from Update on that bit, at most every four seconds), bit 1 asks for the
-// invite tokens to be refreshed. The game only invites people once a party exists, so without the
-// create there is nothing to invite into and no invite ever reaches SendInvite.
-constexpr std::uint8_t kUpdateWantsParty = 1;
-constexpr std::chrono::seconds kCreateRetryInterval{4};
-
-void MaybeCreateParty(const void* flagsPointer) {
+// Update's second argument points at a flags byte the game fills in. Bit 0 is "wants a party" (ADR 0003,
+// "The tablet shows a party"). Nakama logs showed a create sent within 2 s of every login with no player
+// action (#1502), so the bit alone creates nothing: a party is made by the player's own action, an invite
+// (SendInvite creates one first) or a join. This logs the byte when it changes, so a log shows what it was.
+void NoteUpdateFlags(const void* flagsPointer) {
   static std::atomic<std::int32_t> lastFlags{-1};
-  static std::chrono::steady_clock::time_point lastCreate{};
   if (flagsPointer == nullptr) return;
   const std::uint8_t flags = *static_cast<const std::uint8_t*>(flagsPointer);
   if (lastFlags.exchange(flags, std::memory_order_relaxed) != flags) {
     Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade update flags=0x%02x", flags);
   }
-  if ((flags & kUpdateWantsParty) == 0) return;
-  const auto now = std::chrono::steady_clock::now();
-  if (lastCreate.time_since_epoch().count() != 0 && now - lastCreate < kCreateRetryInterval) return;
-  const std::vector<nevr_social_party::Message> request = nevr_social_party::Global().CreateParty();
-  if (request.empty()) return;
-  lastCreate = now;
-  SendParty("party create (the game asked for a party)", request);
 }
 
 // Slot 4 JoinableInternal (pnsovr reads the room's joinable state): the party's server-side lock.
@@ -682,7 +671,7 @@ void Update(void* self, const void* flags) {
   if (deferredJoin != 0)
     JoinParty(self, deferredJoin);
   else
-    MaybeCreateParty(flags);
+    NoteUpdateFlags(flags);
   PumpParty(self);
   // The friends tab stays fresh while it is open (#57); nothing is sent, or logged, for a closed one.
   const std::vector<nevr_social_party::Message> friendsPoll = nevr_social_party::Global().PollFriendsWhileOpen(NowSeconds());
