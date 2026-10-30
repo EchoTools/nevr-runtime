@@ -119,7 +119,12 @@ struct Kept {
   std::size_t inputSize = 0;
   const std::string* text = nullptr;
 };
-std::mutex g_keptMutex;
+// A namespace-scope std::mutex registers its destructor at load time: a _GLOBAL__sub_I initializer, which
+// tools/check_quest_static_init.sh refuses. The lock is a leaked heap object reached through a function-local static.
+std::mutex& KeptMutex() noexcept {
+  static std::mutex* const kept = new std::mutex;
+  return *kept;
+}
 Kept g_kept[kDocuments];
 
 struct Served {
@@ -136,7 +141,7 @@ NEVR_OUTSIDE_GAME_CALL Served RewriteDocument(int document, const char* text, un
   const std::string_view input(text, static_cast<std::size_t>(length));
   const std::uint64_t hash = Fnv1a(input);
   {
-    std::lock_guard<std::mutex> lock(g_keptMutex);
+    std::lock_guard<std::mutex> lock(KeptMutex());
     const Kept& kept = g_kept[document];
     if (kept.text != nullptr && kept.hash == hash && kept.inputSize == input.size()) return {kept.text->data(), kept.text->size()};
   }
@@ -149,7 +154,7 @@ NEVR_OUTSIDE_GAME_CALL Served RewriteDocument(int document, const char* text, un
   if (r.status != texture_menu::Status::kRewritten) return {};
   const std::string* const out = new std::string(r.text);
   {
-    std::lock_guard<std::mutex> lock(g_keptMutex);
+    std::lock_guard<std::mutex> lock(KeptMutex());
     g_kept[document] = Kept{hash, input.size(), out};
   }
   g_jsonRewrites.fetch_add(1, std::memory_order_relaxed);
@@ -725,7 +730,7 @@ void ResetForTest() noexcept {
   g_propertyLast.store(kUnset);
   t_document = kNone;
   {
-    std::lock_guard<std::mutex> lock(g_keptMutex);
+    std::lock_guard<std::mutex> lock(KeptMutex());
     for (Kept& k : g_kept) k = Kept();  // the strings are leaked on purpose (the parser may hold them)
   }
 }
