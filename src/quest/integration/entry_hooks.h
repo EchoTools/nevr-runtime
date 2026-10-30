@@ -52,6 +52,10 @@ bool InstallRenderConfigHook(nevr_quest::texture_quality::Level level, bool from
 void SetProcessEndCallback(void (*callback)() noexcept) noexcept;
 bool InstallProcessEndHook() noexcept;  // true when the android_main slot holds the thunk
 
+// The #1605 crash-first hook (sentinel/crash_first_hook.h), through this seam for the same reason: libr15's sigaction and
+// signal slots keep the game's crash handler from displacing the sentinel's. No counters.
+bool InstallCrashFirstHook() noexcept;  // true when both slots hold their thunks
+
 // The #640 permission-wait hook (sentinel/permission_wait_hook.h), through this seam for the same reason: the game
 // waits for the storage permission it just asked for. No counters.
 bool InstallPermissionWaitHook() noexcept;  // true when the RequestPermissions slot holds the thunk

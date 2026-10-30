@@ -27,6 +27,7 @@
 #include "os_build_gate_hook.h"
 #include "permission_request.h"
 #include "permission_wait_hook.h"
+#include "crash_first_hook.h"
 #include "pns_provider_hook.h"
 #include "process_end_hook.h"
 #include "quit_hook.h"
@@ -120,6 +121,10 @@ bool InstallObbSkipHook(bool countersRegistered) noexcept {
 // the game's call intact.
 void SetProcessEndCallback(void (*callback)() noexcept) noexcept { nevr_quest::process_end::SetBeforeExit(callback); }
 bool InstallProcessEndHook() noexcept { return nevr_quest::process_end::Install(); }
+
+// Our crash handler stays first (#1605): libr15's sigaction and signal slots keep the game's crash handler from displacing it.
+// A refused install is logged by GotHook and leaves the game's calls intact.
+bool InstallCrashFirstHook() noexcept { return nevr_quest::crash_first::Install(); }
 
 namespace {
 // The game's permission request on its own activity, with the hook's request code (#947): the activity is the one

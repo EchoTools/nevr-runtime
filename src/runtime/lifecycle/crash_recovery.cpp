@@ -1,4 +1,5 @@
 #include "runtime/lifecycle/crash_recovery.h"
+#include "runtime/lifecycle/crash_first_win.h"
 #ifdef NEVR_SCENARIO_CONTROL
 #include "runtime/scenario/scenario_control.h"
 #endif
@@ -845,6 +846,8 @@ void InstallCrashRecoveryHooks() {
         "TerminateProcess hooks ALL skipped; crash-reporter suppression is fully disabled",
         GetLastError());
   }
+  // Our top-level filter stays first (#1605): the game installs its own after this, and would replace ours.
+  InstallCrashFirstFilter();
 }
 
 // ============================================================================

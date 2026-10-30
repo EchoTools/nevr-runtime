@@ -195,6 +195,7 @@ struct RealCounterSteps final : Steps {
   bool InstallFrameDispatch() override { return true; }
   bool InstallObbSkip(bool counted) override { return counted; }
   bool InstallProcessEnd() override { return true; }
+  bool InstallCrashFirst() override { return true; }
   bool InstallPermissionWait() override { return true; }
   bool InstallVkExtWindow() override { return true; }
   bool InstallOsBuildGate() override { return true; }

@@ -48,3 +48,22 @@ lock and calls no logger (N70).
 
 Tests: `src/quest/tests/crash_report_test.cpp` and `src/quest/tests/elf_build_id_test.cpp` (`just test-quest-shared`),
 `src/runtime/tests/test_crash_report_pe.cpp` (`test_crash_recovery`).
+
+## What keeps the handler first
+
+The game installs its own crash handler after ours, and the system calls only the last one installed. The handler that
+calls `WriteReport` is therefore kept in place and the game's is run after it (`src/core/crash_first.h` holds the rule both
+platforms share: the game's request is remembered, not carried out; ours runs once; then the game's):
+
+- Quest: GOT hooks on libr15's libc `sigaction` and `signal` (`src/quest/sentinel/crash_first_hook.h`) answer the game's
+  requests for SIGSEGV, SIGBUS, SIGABRT, SIGILL and SIGFPE. The sentinel owns those five handlers (breakpad is built without
+  its own): the handler writes the report with the signal's `ucontext_t`, has breakpad write the minidump, puts the actions
+  that were in place before the sentinel armed back, then calls the game's handler as the game asked for it. The constructor
+  step is `install_crash_first`; the line `{"event":"crash_first_install",...}` says what was installed and logcat gets
+  `crash_first: signal=<n> game_handler_called=<0|1> displaced_requests=<n>` after the game's handler returned. The
+  libraries libpnsovr, libpnsrad and libpnsradmatchmaking also import `sigaction` and `signal`; the hooks cover libr15 only.
+- PC: `kernel32!SetUnhandledExceptionFilter` is hooked (`src/runtime/lifecycle/crash_first_win.h`); the game's filter is
+  remembered and ours stays the top-level filter. On an unhandled exception it writes the report (unless `WriteCrashDump`
+  already wrote one) and runs the game's filter. `[NEVR.CRASH] first handler installed` says it is in place and
+  `[NEVR.CRASH] first_handler code=... game_filter_called=... displaced_requests=...` goes to the crash record after the
+  game's filter returned.

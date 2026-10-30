@@ -45,6 +45,7 @@ const char* StepName(StepId id) {
     case StepId::kInstallFrameDispatch: return "install_frame_dispatch";
     case StepId::kInstallObbSkip: return "install_obb_skip";
     case StepId::kInstallProcessEnd: return "install_process_end";
+    case StepId::kInstallCrashFirst: return "install_crash_first";
     case StepId::kInstallPermissionWait: return "install_permission_wait";
     case StepId::kInstallVkExtWindow: return "install_vk_ext_window";
     case StepId::kInstallOsBuildGate: return "install_os_build_gate";
@@ -235,6 +236,10 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
 
     // The process ends when the game's android_main returns (#621): every launch, no feature, no counters.
     r.Run(StepId::kInstallProcessEnd, [&] { return steps.InstallProcessEnd(); });
+
+    // Our crash handler stays first (#1605): every launch, no feature, no counters. The game installs its own crash handler when it
+    // starts, after the constructor; the hook keeps that request from displacing the sentinel's.
+    r.Run(StepId::kInstallCrashFirst, [&] { return steps.InstallCrashFirst(); });
 
     // The game waits for the storage permission it just asked for (#640): every launch, no feature, no counters.
     // Before token auth and the bridge: the request is made when libr15 starts the game, soon after the constructor.
