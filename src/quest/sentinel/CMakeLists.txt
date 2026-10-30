@@ -121,13 +121,15 @@ set_source_files_properties(entry.cpp login_prompt_hook.cpp ../invite/frame_disp
 # come through the shared invite_join.h; libc++ marks those templates' type info default-visibility, so an object
 # linked straight into libovrplatformloader.so exports it (tests/quest TestExportAllowlist). In an archive,
 # --exclude-libs (below) keeps it out of the export set, the same as nevr_quest_data_wiring. It is on the hook path
-# (entry.cpp calls RegisterAnswerApplier, reached from HookedNetGameUpdate), so it is built without exceptions.
+# (entry.cpp calls RegisterAnswerApplier, reached from HookedNetGameUpdate), so it is built without exceptions, and with hidden
+# default visibility and the warnings-as-errors flags its siblings nevr_quest_data_wiring and nevr_quest_invite use.
 add_library(nevr_quest_invite_join STATIC ../invite/join_game_quest.cpp)
 target_include_directories(nevr_quest_invite_join PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../..
   ${CMAKE_BINARY_DIR})
-target_compile_options(nevr_quest_invite_join PRIVATE -fno-exceptions)
+target_compile_options(nevr_quest_invite_join PRIVATE
+  -Wall -Wextra -Werror -fno-exceptions -fvisibility=hidden -fvisibility-inlines-hidden)
 target_link_libraries(nevr_quest_invite_join PUBLIC nevr_quest_got_hook nlohmann_json::nlohmann_json)
 
 # The CSymbol64 name table the UI texture hook reads to tell a UI texture from a world texture: the merged PC and Quest
