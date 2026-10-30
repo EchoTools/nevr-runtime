@@ -30,13 +30,13 @@ from the build.
 
 | file | audience | holds |
 |---|---|---|
-| `nevr-runtime-vX.Y.Z-windows.zip` | players on Windows and people running a dedicated server | `BugSplat64.dll` (the host), `nevr-runtime.dll` (the runtime), `echovr_server.exe`, `nevr-install.exe` (all stripped, debug info split off), `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt` (the install steps and the dedicated-server steps), `SIGNING.txt`, `SHA256SUMS` (the files inside the zip: `install.ps1` checks `nevr-install.exe` against it, and the core checks both DLLs against the signed manifest). The zip has no `plugins/` entry: a zip holds no empty directory |
+| `nevr-runtime-vX.Y.Z-windows.zip` | players on Windows and people running a dedicated server | `BugSplat64.dll` (the host), `nevr-runtime.dll` (the runtime), `echovr_server.exe`, `install-nevr-runtime.exe` (the core installer; all stripped, debug info split off), `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt` (the install steps and the dedicated-server steps), `SIGNING.txt`, `SHA256SUMS` (the files inside the zip: `install.ps1` checks `install-nevr-runtime.exe` against it, and the core checks both DLLs against the signed manifest). The zip holds one more copy of the installer under an older name ("The installer's old name"). The zip has no `plugins/` entry: a zip holds no empty directory |
 | `nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so` | Quest packagers | the Quest sentinel library, a loose ELF (attested; not Authenticode) |
 
 There is no top-level `SHA256SUMS` and no `RELEASE-NOTES.md` asset. The **release body** is short: a header, one line on
 what is new for players, and one line per file. `python3 tools/package_release.py notes` renders it from
 `tools/package-release/RELEASE-BODY.template.md` ("Write the release body"). It holds no hash: the zip's own `SHA256SUMS`
-(which `install.ps1` checks `nevr-install.exe` against), the signature and the attestation carry integrity.
+(which `install.ps1` checks `install-nevr-runtime.exe` against), the signature and the attestation carry integrity.
 
 Not release assets: the `.tar.zst` archives and the `.dbg` symbol files (workflow artifacts, 7 and 90 days), and any Quest APK.
 
@@ -129,7 +129,7 @@ second dispatch never overwrites files.
    the step fails red before any dispatch.
 6. **Check the signed draft**: `tools/release_check_draft.sh --signed vX.Y.Z` runs "Check the signed draft" below.
 7. **Body**: `tools/package_release.py notes --base <previous tag> --rev vX.Y.Z` renders the body from the signed files. Its
-   player line is `release-headline.txt` when it changed since the base tag, else "Fixes and internal changes.".
+   player line is the sentences of the `release-headlines/` files added since the base tag, else "Fixes and internal changes.".
 8. **Publish**: `gh release edit vX.Y.Z --draft=false`, last. The `published` event does not rebuild: `build.yml`'s guard
    sees the two names and skips.
 
@@ -207,16 +207,39 @@ gh release view vX.Y.Z --json body --jq .body
 `notes` refuses unless `$S` holds exactly the two assets. It takes the version and the commit from the `BugSplat64.dll`
 and `nevr-runtime.dll` inside the zip (they must agree), so the body cannot describe another build.
 
-The player line is the author's `release-headline.txt`, or the fixed "Fixes and internal changes." The commits never write
+The player line is the authors' `release-headlines/` files, or the fixed "Fixes and internal changes." The commits never write
 it: a line guessed from `feat` subjects read as a player-facing change twice when the change was behind a setting that is off
 or internal (#1444). Read the line against the pull request bodies before publishing. The body of a published release stays
 editable ("Immutable releases"); the assets do not.
 
-**Headline file.** A pull request that changes what players see updates `release-headline.txt` at the repository root in the
-same PR with one plain sentence a player would understand, written by the PR's author: one line, 1 to 200 characters, a full
-stop added if it has none (or `!` or `?`). `notes` uses it as the player line only when the file exists at `--rev` and differs
-from its content at `--base`, so a headline left unchanged since the base tag is stale and the fixed sentence is used. A file
-that is empty or has a line over 200 characters fails `notes` and names the file; it never falls back silently.
+**Headline files.** This is the news-fragment pattern of towncrier's `newsfragments/` and changesets' `.changeset/`. A pull
+request that changes what players see adds `release-headlines/<issue-or-topic>.txt` in the same PR: one line, 1 to 200
+characters, one plain sentence a player would understand about that change only, written by the PR's author, with a full stop
+added if it has none (or `!` or `?`). `notes` builds the player line from the files that exist at `--rev` and not at
+`--base`, joined with one space in file-name order (at most 600 characters). A path present at the base tag is old by
+construction, whatever its content, so no earlier release's sentence rides along. A file with another name (a letter or
+digit, then letters, digits, `.`, `_`, `-`, then `.txt`; `release-headlines/README.md` is the one exception), an empty file,
+a file with more than one line or a line over 200 characters, or `release-headline.txt` at the rev fails `notes` and names
+the file; a joined line over 600 fails it and names the files joined; none falls back silently. A path that already exists at
+the base tag is never read, so a new change uses a new file name (a reused name is dropped, not refused). A test
+(`tools/tests/test_release_headlines.py`) fails a PR whose tree holds `release-headline.txt`, so it is caught before the cut,
+and `notes` refuses it at the cut as the backstop. A successful `notes` writes one JSON line to stderr
+(`"event":"headlines"`, with `used`, `line`, `base` and `rev`; `used` is empty when the fixed sentence stands), which the
+release-train run's log keeps. The train cannot push to `main`, so it deletes nothing: the PR that adds a fragment also
+deletes the fragments present at the newest `vX.Y.Z` tag (`git ls-tree -r --name-only <newest tag> -- release-headlines/`). A
+fragment left behind is harmless, since a path present at the base is never read.
+
+## The installer's old name
+
+The core installer is `install-nevr-runtime.exe`; that is the only name this repository's scripts, README and docs use. The
+zip also carries `nevr-install.exe`, the same bytes under the name outside callers (the launcher, and any other program that
+runs the installer) used before. It is a copy, not a second build: `.github/workflows/build.yml` builds the installer once
+and copies it once in the packaging step, `tools/package_release.py` refuses a tree where the two are not the same bytes (the
+signer signs each entry separately, so they differ after signing), `tools/verify_symbols.py` checks the copy through the new
+name's symbol file, and release-signer lists `install-nevr-runtime.exe` as an optional entry, so the signer must have that
+change before a build that carries the new name is signed. The old name is removed in the first release after the launcher
+and every other outside caller have confirmed they use the new one. The removal is a PR that deletes the copy in the
+packaging step, its gate in `package_release.py` and `verify_symbols.py`, the signer's optional entry and this paragraph.
 
 ## Publish
 
@@ -312,7 +335,7 @@ with the full object id, for each tag it lists.
 7. Couriers Teth to verify the live publish and Spritz the same text (no bonk), then removes the worktree and the signer
    snapshot by exact path. A tag whose notice was never sent is noticed on the next run.
 
-Stable stays an owner step (`approve-stable`); the timer only publishes beta. **Credentials go only where they are used:**
+Stable stays an owner step (`approve-stable`); the timer only publishes beta. To stop the timer and the train from moving beta forward behind a rollback, see "Emergency: roll beta back". **Credentials go only where they are used:**
 the R2 credential to `publish_apk`, and the GitHub token to `publish_apk` and the dispatch. Every other command, the
 build included, gets an environment without them. Every step appends a JSON line to
 `$XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl`, with each credential value replaced by `<redacted>`; a log that
@@ -354,6 +377,133 @@ gh attestation verify <file> -R EchoTools/nevr-runtime
 
 Do not edit its assets and do not delete its tag. Say so in the notes (editable), cut the next patch version through the
 same steps, and promote that one.
+
+## Emergency: roll beta back
+
+Installers read `channels.beta` from the signed manifest. When the release beta points at is bad, `tools/rollback_beta.py`
+publishes the manifest again with beta on an earlier release the manifest already lists. It uses the same `sign-manifest.yml`
+publish as the Quest release timer (`action=publish`, `channel=beta`, in the release-signer repository), and `override=true`
+goes into the dispatch only when the target is lower than beta (the signer refuses a channel that moves backwards without it,
+and records the override). A bad published release is never edited or deleted ("When a published release is wrong"); the
+rollback only changes which release new installs get. The tool cannot target a tag the manifest does not list.
+
+**Before you run it.** The target must be the last build known good, and it must list what its players need. The plan the
+tool prints names every artifact of the target with its size: read it for the Windows zip, the Quest APK (`kind`
+`quest-apk`), the game data and any content pack. The publish is handed, as `extra_artifacts`, exactly the target's artifacts
+that GitHub does not hold (every kind but `windows-zip` and `quest-library`, from `release-signer listed-claims`), and the
+tool refuses before it changes anything unless that list equals the target's by name, no more and no fewer, and each entry
+is what the manifest lists. A target that lists no Quest APK or no game data is not a rollback target. Check too that the
+fault is in the build: a fault in the manifest, a service or a player's own files is not cured by moving beta.
+
+**Where, and as whom.** Run it from a clean checkout of nevr-runtime `main` (the Quest release timer's dedicated checkout, see
+"The Quest half of the train", works) on the machine that runs that timer, because it stops a user unit there; the tool refuses
+when `nevr-quest-release.service` is not loaded. The account `GH_BIN` runs as must be able to dispatch workflows on the
+release-signer repository and to set repository variables on `EchoTools/nevr-runtime`. When `GH_BIN` is unset the tool uses
+`gh-spritz`, the metis-sprock account, which can; Spritz and Teth act as it. sprockee acts as his own owner account and sets
+`GH_BIN=gh`. Export `GH_BIN` before you start: the resume commands below use it, and the tool prints them with the gh it ran
+with. The manifest host's public base is the `RELEASE_PUBLIC_BASE` in `tools/systemd/nevr-quest-release.service`, which the
+`export` line below reads from the checkout (the host is named in `docs/reference/verifying-a-release.md`, "Quest APKs"); the
+tool refuses loudly if it is empty.
+
+```sh
+export RELEASE_PUBLIC_BASE=$(sed -n 's/^Environment=RELEASE_PUBLIC_BASE=//p' tools/systemd/nevr-quest-release.service)
+python3 tools/rollback_beta.py vX.Y.Z --dry-run
+python3 tools/rollback_beta.py vX.Y.Z --live --yes
+$GH_BIN variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime && systemctl --user start nevr-quest-release.timer
+```
+
+The first line sets the manifest host's base. The second prints the plan, what a live run would meet and a dry-run publish. The
+third pauses the train, publishes and verifies. The fourth resumes the train (see "Resume the train").
+
+Always run the dry run first. It reads the live manifest, refuses what a live run would refuse, and then, read-only, reads
+`RELEASE_TRAIN`, the timer, the Quest service and the signer's runs and prints plan lines saying whether a live run would be
+refused now. It dispatches the publish with `dry_run=true`, checks that every job that should have run did (the record job is
+skipped in a dry run) and that beta did not move, then downloads the run's `manifest-signed` artifact and compares it with the
+live manifest: beta must be the target, the set of releases, the other channels and every other release entry must be
+unchanged, and the target's artifacts must equal the live ones by name, kind, sha256 and size. A difference in the target's
+notes, or in a field of its entry other than `notes` and `published`, is printed as a note and does not fail the run. The
+workflow still copies the release's files to R2 in a dry run; it never overwrites an object.
+
+The tool reads `GH_BIN` for every GitHub call and `RELEASE_PUBLIC_BASE` for the manifest host, and needs no R2 credential. The
+release signer is `RELEASE_SIGNER_BIN` with `RELEASE_SIGNER_DIR`, or, when neither is set, a snapshot of the signer's `main`
+built the way `tools/quest_release_timer.py` builds it (`QUEST_RELEASE_SIGNER_REPO`, default `~/src/release-signer`) and removed
+when the run ends. Each step appends a record to `$XDG_STATE_HOME/nevr-runtime/rollback-beta.jsonl`; no token, credential or
+host is printed or logged. Every command has a timeout. A run that fails, is interrupted (Ctrl-C) or crashes after it began
+to pause or dispatch prints what is paused, what was dispatched (with the run id when known; a call that left no run id says a
+publish MAY have been dispatched, and then you list the signer's runs before dispatching again) and the resume commands, and
+exits non-zero. A rollback that was verified but whose scratch folder could not be removed says so and exits 0: the rollback is
+done and verified, and a second run would only refuse with "already beta".
+
+**What it refuses.** A tag the live manifest does not list; the tag that already is beta; a tag higher than beta unless
+`--forward` is given; `--forward` for a tag that is not higher; `--live` without `--yes`; claims that are not the target's
+non-GitHub artifacts. The order of a live run is fixed:
+
+1. Read `verify-manifest --live` and the manifest the host serves (held to the sha256 the signer verified), take the
+   target's claims, print the plan.
+2. Pause the train, unless `--keep-train`: set the repository variable `RELEASE_TRAIN` to `false` and read it back, stop
+   `nevr-quest-release.timer` and check that it is no longer active. A pause step that fails stops the run before the
+   dispatch and says what is and is not done.
+3. Check that the Quest release is not running. `nevr-quest-release.service` is a oneshot unit, so while it runs its
+   `ActiveState` is `activating` (and `is-active` exits 3 for it); the tool reads `systemctl --user show -p LoadState
+   --value` and refuses unless it is `loaded` (for a unit that does not exist `ActiveState` reads `inactive`, which would pass),
+   then `-p ActiveState --value`, and refuses on anything but `inactive` or `failed`, with the timer already stopped so it starts
+   no other. Then
+   check that no `sign-manifest.yml` run on the signer repository is queued or in progress (any status but `completed`), and
+   refuse if one is. Both checks run under `--keep-train` too, and `--keep-train` leaves the timer running, so a Quest release could start
+   in the seconds between these checks and the dispatch. A rollback that is refused here changes nothing but the pauses it
+   already made; wait for the run to end and run it again.
+4. Check again, after the pause, that beta has not moved and the claims still match the manifest.
+5. Dispatch the live publish, watch it, and require the jobs that publish (`Commit the manifest record`, `Publish to R2`,
+   `A run that published nothing is red`) to have concluded `success`.
+6. Require `verify-manifest --live` to list the target as beta, with every artifact the target listed still listed by name and
+   sha256.
+7. Print the elapsed time and what to do next. **The tool never resumes the train.** It stays paused until someone runs the
+   resume commands, so decide that in the open.
+
+A train run that is already in progress when the variable is set still finishes its cut: the variable is read when the run
+starts. Look at the train's run list if one is under way.
+
+**How long.** The manifest run takes about 5 to 6 minutes: the three most recent live publishes of `sign-manifest.yml`
+took 5 min 9 s, 5 min 30 s and 5 min 15 s from the start to the end of the run. The pause steps add seconds. Expect about 6
+to 7 minutes from `--live` to the verified line. The tool stops watching after 1800 s, and after 7200 s when the target lists
+PC game data (`game-data` for `windows-x86_64`), because the check job then downloads about 5 GB, which the workflow allows
+about 83 minutes for. A dry run dispatches the same workflow and waits for it as well.
+
+**Who to tell.** Tell Spritz and sprockee when a rollback starts and when it has ended: a rollback is news they want, never a
+gate, and nothing waits for an answer.
+
+**Why both pauses.** The release train (`.github/workflows/release-train.yml`) cuts a release only while the repository
+variable `RELEASE_TRAIN` is `true` (the `if` of its `decide` job), and `tools/release_train_guard.py` reports `switch_off`
+and dispatches nothing while it is not. The Quest release timer is a separate user timer: it takes the newest published
+GitHub release and, if the manifest's beta is not that release and its log has no `done` for the tag, rebuilds and
+publishes it to beta, which moves beta forward again behind the rollback. For a tag that has a `done` record it logs
+`nothing_to_do`, but the next release cut would move beta forward again, and only the variable stops cuts. So the
+variable stops new cuts and the stopped timer stops the publish of the newest tag; neither covers the other.
+
+**What it does not do.** New installs and updates stop receiving the build; installs already on it are not downgraded. The
+manifest consumer rule keeps an installed version that is higher than the channel's unless the user switched channel or
+asked to go back (the release-signer repository's manifest design document, section 6.1 step 7; the same rule is in its table
+of threats, "Rollback"). Players on the bad build get the fix by the next version, cut through the same steps as any release.
+
+**Ship the fix.** The fix reaches beta through the train, not through this tool. After a rollback the train is paused: resume
+it (the two commands above, which the tool prints). The guard then cuts the fixed release when `main` has a releasable change,
+and the Quest release timer publishes it to beta as a forward move, which needs no override. Before that, the fix has to be
+on `main`; the bad release's tag is never reused.
+
+**False alarm.** If the rollback was a mistake, `python3 tools/rollback_beta.py vX.Y.Z --live --forward --yes` with the
+release you rolled back from puts beta back on it. The tool prints that command, labelled for a false alarm only, because it
+re-targets the release that was rolled back from: it is not how the fix ships. A forward run carries no override and prints
+the command that undoes it. Run the dry run first.
+
+**Resume the train.** When the fixed release is on `main`, or the pause is no longer wanted:
+
+```sh
+$GH_BIN variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime
+systemctl --user start nevr-quest-release.timer
+```
+
+Resuming with beta on an older release than the newest published tag is allowed, and the timer then publishes that newest
+tag to beta unless its log has a `done` for it. Resume only after you have decided which release beta should follow.
 
 ## Sources read for this file
 

@@ -62,6 +62,7 @@ RELEASE_SLUG = "EchoTools/nevr-runtime"
 SIGNER_SLUG = "thesprockee/release-signer"
 PUBLISHING_JOBS = ("Commit the manifest record", "Publish to R2", "A run that published nothing is red")
 MAX_FAILURES = 3
+GAME_DATA_PLATFORM = "android-arm64"  # the Quest half of a release carries the game-data entry of this platform only
 SLOT_WAITS = 60
 SLOT_WAIT_SECONDS = 60
 TAIL = 2000
@@ -194,9 +195,16 @@ class Timer:
             raise StepFailure(step, f"the manifest the host serves is not JSON: {error}") from error
 
     @staticmethod
-    def game_data(manifest: dict, version: str) -> dict | None:
+    def game_data(manifest: dict, version: str, step: str) -> dict | None:
+        """The release's one game-data entry of the Quest platform. A release lists one game-data artifact per platform, so
+        an entry of another platform (the PC data) is never this timer's and never decides anything here. Zero Quest entries
+        is None; two is a failure, never a pick of the first."""
         release = manifest.get("releases", {}).get(version, {})
-        found = [a for a in release.get("artifacts", []) if a.get("kind") == "game-data"]
+        found = [a for a in release.get("artifacts", [])
+                 if a.get("kind") == "game-data" and a.get("platform") == GAME_DATA_PLATFORM]
+        if len(found) > 1:
+            raise StepFailure(step, f"release {version} lists {len(found)} game-data artifacts for {GAME_DATA_PLATFORM} "
+                                    f"({', '.join(str(a.get('name')) for a in found)}), not one")
         return {"name": found[0].get("name"), "size": found[0].get("size")} if found else None
 
     def check_checkout(self) -> None:
@@ -331,7 +339,7 @@ class Timer:
             if self.notice_owed(tag):
                 self.notify_published(tag)
             return
-        carried = self.game_data(self.live_manifest(before, "check_listed"), beta)
+        carried = self.game_data(self.live_manifest(before, "check_listed"), beta, "check_listed")
         if carried is None:
             raise StepFailure("check_listed", f"the live manifest's beta release {beta or 'none'} lists no game-data "
                                               "artifact to carry into the new release")
@@ -383,7 +391,7 @@ class Timer:
         listed = str(after["channels"].get("beta", ""))
         if listed != version:
             raise StepFailure("verify_live", f"the live manifest lists beta {listed or 'nothing'}, not {version}")
-        survived = self.game_data(self.live_manifest(after, "verify_live"), version)
+        survived = self.game_data(self.live_manifest(after, "verify_live"), version, "verify_live")
         if survived != {"name": carried["name"], "size": carried["size"]}:
             raise StepFailure("verify_live", f"the carried game data {carried['name']} ({carried['size']} bytes) is "
                                              f"{'missing from' if survived is None else 'changed in'} the {version} release: {survived}")

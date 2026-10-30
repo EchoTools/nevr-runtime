@@ -3,9 +3,11 @@
 // worker, owned in one place. boot.cpp starts it with the values of this run (the config key, the service address, the token
 // source, the log), the wizard hook submits a plan to it, and the shutdown path stops it.
 //
-// Start always logs its outcome at Info (N122/N124): `[NEVR.INVITE] service on` or `feature off reason=<why>`. Off is the
-// default (network.invite_codes absent) and a request while off is a `request not sent reason=not_configured` line, never a
-// silent drop. Everything here is host-testable: no game, and the platform values come in through Settings.
+// Start logs its outcome (N122/N124): `[NEVR.INVITE] service on source=<default|config>` at Info, or
+// `feature off reason=<why> source=<default|config>` at Info (`turned_off`: the key says false; `not_configured`: off with no key behind it) or at Warning (a value nobody
+// meant, no address, an address that may not receive the token). On is the default (network.invite_codes absent or empty). A
+// request while off is a `request not sent reason=not_configured` line, never a silent drop. Everything here is
+// host-testable: no game, and the platform values come in through Settings.
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -21,7 +23,8 @@
 namespace nevr_invite_service {
 
 struct Settings {
-  nevr_invite::Switch invite_codes = nevr_invite::Switch::Off;  // network.invite_codes
+  nevr_invite::Switch invite_codes = nevr_invite::kDefault;      // network.invite_codes
+  nevr_invite::Source invite_source = nevr_invite::Source::Default;  // where invite_codes came from: the startup line says which
   std::string http_uri;                                         // auth.http_uri: the game service's HTTP address
   std::function<std::string()> token;                           // the current Bearer token, "" when none
   std::function<void(nevr_invite::LogLevel, const std::string&)> log;

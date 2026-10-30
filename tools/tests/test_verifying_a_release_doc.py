@@ -317,6 +317,12 @@ class PageContent(unittest.TestCase):
         for needle in ("**Built**", "**Not built", "docs/adr/0012-static-install-root.md", "docs/adr/0010-signed-plugins-only.md"):
             self.assertTrue(names(text, needle), f"the host section lacks {needle!r}")
 
+    def test_the_page_says_a_game_data_entry_is_selected_by_kind_and_platform(self):
+        text = re.sub(r"\s+", " ", doc_text().split("## Step 8: artifacts", 1)[1].split("```sh stored-entry.sh", 1)[0])
+        for needle in ("`game-data` artifact per platform", "`android-arm64`", "`windows-x86_64`", "by `kind` and `platform` together",
+                       "exactly one for your platform", "`data/<name>.zip`", "skip a kind you do not handle"):
+            self.assertTrue(names(text, needle), f"the step 8 text lacks {needle!r}")
+        self.assertFalse(names(text, "`game-data` are reserved"), "the step 8 text still lists game-data as reserved")
 
     def test_the_host_section_states_that_the_host_verifies_the_runtime_before_it_loads_it(self):
         text = doc_text()
@@ -891,6 +897,16 @@ class ArtifactScripts(ScriptCase):
         twice = self.verified(manifest, name="twice")
         result, _out = self.artifact(twice, self.serve({}).base)
         self.assert_fails(result, 8, "release 5.5.1 has no windows-zip artifact, or lists it twice")
+
+    def test_the_kind_alone_selects_no_game_data_when_a_release_lists_one_per_platform(self):
+        """The page's selector takes a kind; two game-data entries (one per platform) are refused, not resolved to the first."""
+        entries = [{"name": name, "kind": "game-data", "platform": platform, "path": "data/" + name, "size": 1, "sha256": "ab" * 32}
+                   for name, platform in (("echovr-data-win10-0123456789ab.zip", "windows-x86_64"), ("echovr-data-aaaaaaaaaaaa.zip", "android-arm64"))]
+        manifest = small_release({"windows-zip": ("windows.zip", self.data, {})})
+        manifest["releases"]["5.5.1"]["artifacts"] = entries
+        state_dir = self.verified(manifest, name="two-game-data")
+        result, _out = self.artifact(state_dir, self.serve({}).base, kind="game-data")
+        self.assert_fails(result, 8, "release 5.5.1 has no game-data artifact, or lists it twice")
 
     # ---- 2. step 8 uses the manifest that step 2 verified -------------------------------------------------------------
 

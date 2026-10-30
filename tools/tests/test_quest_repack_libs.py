@@ -9,6 +9,7 @@ SIGNED APK back with the standard zip reader.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import pathlib
 import shutil
@@ -326,6 +327,23 @@ class VerifySignedTest(unittest.TestCase):
     def test_an_apk_where_everything_survived_has_no_problems(self):
         self.assertEqual(self.run_verify(), [])
 
+    def add_manifest(self, plugins: list[dict]) -> None:
+        """The staged manifest, and the signed APK holding the same bytes (the signed APK must hold what was staged)."""
+        text = json.dumps({"schema": 1, "plugins": plugins}, sort_keys=True, separators=(",", ":")) + "\n"
+        self.staged["libnevr_plugin_manifest.so"] = text.encode()
+        self.signed["lib/arm64-v8a/libnevr_plugin_manifest.so"] = text.encode()
+
+    def test_verify_signed_refuses_a_manifest_whose_hash_is_not_the_staged_plugins(self):
+        self.add_manifest([{"name": "plugin", "file": "libplugin.so", "enabled": True, "early": False,
+                            "sha256": "0" * 64}])
+        problems = self.run_verify()
+        self.assertTrue(any("libnevr_plugin_manifest.so" in p and "sha256" in p for p in problems), problems)
+
+    def test_verify_signed_refuses_a_staged_plugin_the_manifest_does_not_list(self):
+        self.add_manifest([])
+        problems = self.run_verify()
+        self.assertTrue(any("libplugin.so" in p and "manifest" in p for p in problems), problems)
+
     def test_the_loader_the_shim_replaces_may_differ(self):
         self.signed["lib/arm64-v8a/libovrplatformloader.so"] = b"the shim"
         self.assertEqual(self.run_verify(), [])
@@ -521,6 +539,47 @@ class VerifySignedTest(unittest.TestCase):
         self.assertEqual(len(recorded_runs(self.patcher.resolve())), 1)
 
 
+class WritePluginManifestTest(unittest.TestCase):
+    """`write_plugin_manifest` hashes the staged copy, the bytes the APK will carry, not the file the recipe was given."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="quest-repack-manifest-", dir=work_root.test_scratch())
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = pathlib.Path(self._tmp.name)
+        self.stage = self.tmp / "stage"
+        (self.stage / "lib" / "arm64-v8a").mkdir(parents=True)
+
+    def test_the_hash_is_of_the_staged_bytes_not_of_the_file_the_recipe_was_given(self):
+        source = self.tmp / "libfx.so"
+        source.write_bytes(b"the file the recipe was given")
+        (self.stage / "lib" / "arm64-v8a" / "libfx.so").write_bytes(b"the bytes staged for the APK")
+        self.assertEqual(libs.write_plugin_manifest(self.stage, [source], [], []), [])
+        written = json.loads((self.stage / "lib" / "arm64-v8a" / libs.MANIFEST_NAME).read_bytes())
+        self.assertEqual(written["plugins"][0]["sha256"], hashlib.sha256(b"the bytes staged for the APK").hexdigest())
+        self.assertNotEqual(written["plugins"][0]["sha256"], hashlib.sha256(b"the file the recipe was given").hexdigest())
+
+
+class WritePluginManifestGoldenTest(unittest.TestCase):
+    """The writer's bytes are the golden file the Quest loader's parser test reads (src/quest/tests/packaged_plugins_test.cpp,
+    ManifestParseReadsTheBytesTheRepackWriterWrote): the writer cannot change a key without this failing, and the parser cannot
+    stop reading the golden file without that test failing."""
+
+    GOLDEN = REPO / "src" / "quest" / "tests" / "fixtures" / "packaged_plugins_manifest.golden"
+
+    def test_the_writers_output_for_two_plugins_is_the_golden_file(self):
+        with tempfile.TemporaryDirectory(prefix="quest-repack-golden-", dir=work_root.test_scratch()) as tmp:
+            root = pathlib.Path(tmp)
+            stage = root / "stage"
+            (stage / "lib" / "arm64-v8a").mkdir(parents=True)
+            plugins = []
+            for name, data in (("libalpha.so", b"alpha plugin\n"), ("libbeta.so", b"beta plugin\n")):
+                (stage / "lib" / "arm64-v8a" / name).write_bytes(data)
+                plugins.append(root / name)
+            self.assertEqual(libs.write_plugin_manifest(stage, plugins, ["libalpha.so"], ["libbeta.so"]), [])
+            written = (stage / "lib" / "arm64-v8a" / libs.MANIFEST_NAME).read_bytes()
+        self.assertEqual(written, self.GOLDEN.read_bytes())
+
+
 class ShimRowsTest(unittest.TestCase):
     """`check-shim-rows`: the shim is the build for the rows the library is patched with (ADR 0021 section 11)."""
 
@@ -606,15 +665,22 @@ class RepackWithAPluginTest(RepackFixture):
         """A plugin from `source`, declaring `ids` in its NEVR note (None: no note)."""
         return build_aarch64(self.tmp / "plugins" / name, (nevr_note(ids) if ids is not None else "") + source)
 
-    def repack_with(self, *plugins: pathlib.Path):
+    def repack_with(self, *plugins: pathlib.Path, early: str = "", off: str = ""):
         work = self.tmp / "work"
+        # The recipe's arguments in order: apk shim workdir plugin version extra_rows patcher json_include plugin_early plugin_off.
+        # The last two are passed only when a test names them, so the older calls keep their seven arguments.
+        options = ["", early, off] if (early or off) else []
         result = subprocess.run(
             ["just", "--justfile", str(JUSTFILE), "--working-directory", str(REPO), "android-repack-apk",
              str(self.apk), str(self.shim), os.path.relpath(work, REPO), ":".join(str(p) for p in plugins), "", "",
-             str(self.patcher)],
+             str(self.patcher), *options],
             capture_output=True, text=True, env=self.env, timeout=300)
         self.signed = work / "r15_nevr-sentinel_signed.apk"
         return result
+
+    def manifest_in_signed(self) -> dict:
+        with zipfile.ZipFile(self.signed) as z:
+            return json.loads(z.read("lib/arm64-v8a/libnevr_plugin_manifest.so"))
 
     def add_store_entry(self, name: str, data: bytes) -> None:
         with zipfile.ZipFile(self.apk, "a") as z:
@@ -718,6 +784,72 @@ class RepackWithAPluginTest(RepackFixture):
         result = self.repack()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("verify-signed OK", result.stdout)
+
+    def test_a_packaged_plugin_gets_a_manifest_entry_in_the_signed_apk(self):
+        self.make_inputs(DEV_VERSION)
+        plugin = self.plugin("libgood.so")
+        result = self.repack_with(plugin)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.manifest_in_signed(), {
+            "schema": 1,
+            "plugins": [{"name": "good", "file": "libgood.so", "enabled": True, "early": False,
+                         "sha256": hashlib.sha256(plugin.read_bytes()).hexdigest()}],
+        })
+        # The bytes themselves: sorted keys, no spaces, one trailing newline (the loader reads the text, not the parse).
+        expected = ('{"plugins":[{"early":false,"enabled":true,"file":"libgood.so","name":"good","sha256":"%s"}],"schema":1}\n'
+                    % hashlib.sha256(plugin.read_bytes()).hexdigest()).encode()
+        with zipfile.ZipFile(self.signed) as z:
+            self.assertEqual(z.read("lib/arm64-v8a/libnevr_plugin_manifest.so"), expected)
+
+    def test_several_plugins_keep_their_argument_order_in_the_manifest(self):
+        self.make_inputs(DEV_VERSION)
+        result = self.repack_with(self.plugin("libfirst.so"), self.plugin("libsecond.so", "int plugin_marker = 2;\n"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([p["name"] for p in self.manifest_in_signed()["plugins"]], ["first", "second"])
+
+    def test_no_plugin_adds_no_manifest_entry(self):
+        self.make_inputs(DEV_VERSION)
+        result = self.repack()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with zipfile.ZipFile(self.signed) as z:
+            self.assertNotIn("lib/arm64-v8a/libnevr_plugin_manifest.so", z.namelist())
+
+    def test_plugin_early_and_plugin_off_are_recorded(self):
+        self.make_inputs(DEV_VERSION)
+        result = self.repack_with(self.plugin("libfirst.so"), self.plugin("libsecond.so", "int plugin_marker = 2;\n"),
+                                  early="libfirst.so", off="libsecond.so")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        plugins = {p["name"]: p for p in self.manifest_in_signed()["plugins"]}
+        self.assertTrue(plugins["first"]["early"])
+        self.assertTrue(plugins["first"]["enabled"])
+        self.assertFalse(plugins["second"]["early"])
+        self.assertFalse(plugins["second"]["enabled"])
+
+    def test_an_early_name_that_is_not_packaged_is_refused_before_anything_is_signed(self):
+        self.make_inputs(DEV_VERSION)
+        result = self.repack_with(self.plugin("libgood.so"), early="libmissing.so")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("libmissing.so", result.stderr)
+        self.assertFalse(self.signed.exists())
+
+    def test_a_plugin_named_like_the_manifest_is_refused(self):
+        self.make_inputs(DEV_VERSION)
+        result = self.repack_with(self.plugin("libnevr_plugin_manifest.so"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("staged by the recipe", result.stderr)
+        self.assertFalse(self.signed.exists())
+
+    def test_the_manifest_bytes_are_the_same_on_two_runs(self):
+        self.make_inputs(DEV_VERSION)
+        plugin = self.plugin("libgood.so")
+        first = self.repack_with(plugin)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        with zipfile.ZipFile(self.signed) as z:
+            once = z.read("lib/arm64-v8a/libnevr_plugin_manifest.so")
+        second = self.repack_with(plugin)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        with zipfile.ZipFile(self.signed) as z:
+            self.assertEqual(z.read("lib/arm64-v8a/libnevr_plugin_manifest.so"), once)
 
 
 @unittest.skipIf(MISSING, f"the recipe needs {', '.join(MISSING)}")

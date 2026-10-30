@@ -146,10 +146,14 @@ the runtime (`src/runtime/patch/`), not a service configuration and not a plugin
   a match id, and a join is by code. The texts are never logged, only the field and the size.
 - **Join.** On a resolved code, from the main menu the dispatcher stages the `-lobbyid` block and runs
   `BeginMultiplayerLobby`; from a lobby or match it calls `CR15NetClientLobby::Join`. Both prologues are validated
-  at boot (N97); on a mismatch the feature turns itself off and says why. It is a client feature: on a dedicated
+  at boot (N97); on a mismatch that hook is not installed and its line says why. The service starts before the hooks and
+  stays on when one refuses (#1414). It is a client feature: on a dedicated
   server (`-server`) nothing is installed.
-- **Where it is configured.** A `config.yaml` key under the existing sections turns it on (N133); there is no
-  environment variable and no hard-coded host.
+- **Where it is configured.** The `network.invite_codes` key in `config.yaml` (N133) is on by default for a client: an
+  absent or empty key is on, and `false` (or `off`, `no`, `0`) turns it off. Any other value, a list or a map included, is
+  off with a warning, so a value that is not a switch word never turns it on. A key the runtime does not read (a
+  misspelling, or a `config.yaml` it rejects) is as if absent, and so is on. The startup line says `source=default` or
+  `source=config`. There is no environment variable and no hard-coded host.
 
 Rejected:
 
@@ -221,6 +225,18 @@ The service contract is platform-neutral. PC is built first (the PC addresses an
 same scripts and the same `Join` body (`libr15.so`, ReVault virtual address `0x13462a8`) and gets its own hook in
 `src/quest`, through that project's own mechanism, against the same RPCs.
 
+## Security
+
+On a PC client, `network.invite_codes` is on by default (`src/runtime/patch/invite_config.h:17-18`, `:27`): an absent or
+empty key is on. A `config.yaml` the runtime rejects is read as an empty config, so the key is absent and the feature is on
+(`src/runtime/lifecycle/service_config.cpp:159-170`; `src/runtime/lifecycle/boot.cpp:687-689`). In that case the client sends
+its signed-in token with each invite RPC to `nevr_http_uri`, which falls back to the embedded service address
+(`src/runtime/lifecycle/service_config.cpp:199`). A plain `http://` address is refused unless its host is loopback
+(`src/runtime/patch/invite_transport.h:92-94`). The service starts on a client only (`src/runtime/lifecycle/boot.cpp:681`).
+To turn the feature off, set `network.invite_codes: false` explicitly: the start line then logs
+`[NEVR.INVITE] feature off reason=turned_off source=config` (`src/runtime/patch/invite_service.cpp:71-72`, `:119`). A value
+that is not a switch word is off, not on (`src/runtime/patch/invite_config.h:4-6`).
+
 ## Logging
 
 Every line has the tag `[NEVR.INVITE]` (a new row in `docs/standards/logging.md`, added with the first code) and
@@ -230,14 +246,15 @@ credential: a line carries `code_len` and a short fingerprint of the code (`code
 | Event | Level | Fields |
 | --- | --- | --- |
 | wizard click seen | Info | `event=create_invite\|join_via_code panel=deep_linking` |
-| request not sent | Info | `reason=empty\|malformed\|too_long\|incomplete\|not_configured\|no_token\|busy\|stopped` and `code_len=<n>` (nothing is sent) |
+| request not sent | Info | `reason=empty\|malformed\|too_long\|incomplete\|not_configured\|no_token\|busy\|stopped` and `code_len=<n>` (nothing is sent; `not_configured` is any reason the feature is off, which the start line gives) |
 | request sent | Info | `op=create\|resolve\|revoke expires_s=<n> code_len=<n> code_fp=<8 hex>` |
 | answer | Info / Warning | `op status=<http status> latency_ms=<n> result=<ok\|invalid\|expired\|closed\|denied\|limit\|rate>` |
 | worker stopped | Info | `dropped=<n>`: requests still queued when the worker stopped, never sent |
 | answers dropped | Warning | `reason=not_taken kept=<n>`: the oldest answer went because the menu had not taken them |
 | text posted | Info | `field=code\|expires\|entry_title bytes=<n>`; a post the writer refused, or a writer that is off, is `text not posted` at Warning with `reason=`; the writer's own `[NEVR.UI] text written` / `text dropped` line follows |
 | join started | Info | `route=stage\|join lobby=<uuid> state_from=<n>`; the state change after it is the game's own `[NETGAME]` line |
-| feature off | Info | `reason=` (a prologue differed, no token, not configured) |
+| service on | Info | `source=default\|config`: where the value came from (the default when the key is absent or empty) |
+| feature off | Info / Warning | `reason=turned_off` (Info: the key says false), `unrecognised_value`, `no_service_address` or `service_address_refused` (Warning), each with `source=default\|config`; a hook's `prologue_mismatch` is that hook's own line, without `source=` |
 
 The service writes one structured record per RPC (principal, session, client, source address; operation with its full
 arguments and the resolved match id and user id; outcome, latency, result size) at the single point every RPC passes,
@@ -321,6 +338,38 @@ Not shown:
 - The Quest text writes. They need the UI accessors of #896; this observer writes no text.
 
 Prediction, written before any Quest run: with remote logging on, a click on CREATE GAME or JOIN VIA CODE produces one `invite_click` line from the observer. A click that produces none falsifies `MetricLog` as the hook point for the wizard's metric; the next candidate is the call chain above `WriteLog`.
+
+## Quest join on a resolved code (#966, slice S4)
+
+The Quest's JOIN VIA CODE ends in the same staged join the PC uses (`src/runtime/patch/invite_join.h`), with libr15's offsets. The glue is `src/quest/invite/join_game_quest.cpp`; the host test is `src/quest/tests/invite_join_quest_test.cpp` (`just test-quest-hooks`).
+
+Measured in ReVault (project `echovr`, binary `libr15.so`; ReVault = pinned + `0x100000`):
+
+- `CR15Game::BeginMultiplayer(SR15NetMatchSettings const&)` at `0x1301d88`, decompiled. It reads the netgame at `this+0x8510`, the route byte at `+0x8518` (`& 0xf`), the gate qword at `+0x8520`, the lobby `SUuid` at `+0x8528` (against the invalid id), the staged `SUuid` at `+0x8538` and the team `u16` at `+0x8558`. Its listing has no `#0x8560` operand, so the gametype word is neither read nor written. Its exit stores the route to `+0x8518`, zeroes `+0x8520` and sets `+0x8528`, `+0x8538` and `+0x8558` back to the invalid id and `0xffff`. Comment `grade A, S0 2026-10-29`.
+- `CR15Game::BeginMultiplayer()` at `0x1301be4`: 52 bytes, its first 16 bytes `ff 83 01 d1 ff fb 04 a9 68 00 c0 d2 09 00 80 92` (`revault_read_memory`), calling the settings body through `thunk 0xfdc040`. Pinned `0x1201be4`.
+- `CR15Game::EnableTransitionMenu()` at `0x13005fc` (the plan's "mp_transition"): its first 16 bytes `ff 03 01 d1 f3 7b 03 a9 13 78 7d f9 d3 01 00 b4`. It sends one component event to the menu gamespace at `+0x7af0`. Pinned `0x12005fc`.
+
+The join's pins are in `src/quest/sentinel/pinned_targets.h` (`kBeginMultiplayerVaddr`, `kEnableTransitionMenuVaddr`) and are checked against the store file in `got_pinned_test.cpp`.
+
+Write path, on the game thread only, through the frame dispatcher (`src/quest/invite/frame_dispatch.cpp`):
+
+- The netgame the frame hook passes is `self` of `HookedNetGameUpdate`. Its state is at `netgame+0` (`game_layout::kStateOffset`), and its game object (CR15Game) at `netgame+8` (`game_layout::kGameOffset`).
+- The route is read first. Nothing is staged when the route byte and the gate are both set, or when `+0x8528` is not the invalid id (`other_route`).
+- Then the 16-byte GUID is written at `+0x8538` and `0xFFFF` at `+0x8558`, both read back. A mismatch puts the prior bytes back.
+- Then `EnableTransitionMenu(game)` and `BeginMultiplayer(game)`, once each, with a 15 s window that refuses a repeat as `busy`. This is the order the Quest code uses, and it is not measured on Quest. The PC join calls only the begin (`src/runtime/patch/invite_join_game.cpp`, `Begin`: `EchoVR::BeginMultiplayerLobby(game)` and nothing before it), so the two joins do not share a menu step.
+- Only `state == 3` (`LoggedIn`, `src/abi/echovr.h:361`) joins. Any other state logs `not_at_menu`.
+- The answers reach the join through `nevr_invite_match::TakeResolvedMatch` (`src/runtime/patch/invite_match_api.h`), a non-throwing call implemented in `invite_service.cpp`. The frame applier never includes the worker or the service header, so the hook-side translation unit is exception-free.
+
+Prediction, written before any headset run: with the feature on and a resolved answer for a match id that is in progress on the server, the log shows `join started route=stage lobby=<GUID> state_from=3`, then the game's own `[NETGAME]` state change. A join whose state is not 3 logs `join not started reason=not_at_menu`. A stage that does not read back logs `reason=stage_failed` and writes nothing that stays.
+
+Not shown:
+
+- That the Quest's `BeginMultiplayer` joins the match when called this way. No headset run has been made.
+- That the game's netgame state at `+0` is 3 at the menu on a headset. The value is the PC's enum; the Quest's use of it is the existing login-prompt pin (`game_layout::kStateOffset`).
+- The Quest's `+0x8520` gate semantics beyond the decompile comment. The 281-instruction listing was not re-read in this slice.
+- The route check's invalid-id value on Quest: it is the PC's sixteen zero bytes, not separately verified in libr15.
+- Any run against the production service (U4, the invite RPC with the Quest token).
+- Whether the menu event before the begin is what the game does. Not measured on Quest; the headset run is owed. The reviewed ReVault reading (not re-measured here) found `EnableTransitionMenu` called by `JoinLobby` (libr15 `0x139682c`) after `Join`, by `SwitchTo` (`0x135b8b4`) right after `FindLobby`, and not by the two `BeginMultiplayer` callers, so the Quest order has no ReVault support yet.
 
 ## Relation to other records
 

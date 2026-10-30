@@ -1,6 +1,10 @@
 #include "runtime/patch/invite_service.h"
 
 #include <atomic>
+#include <cstring>
+#include <deque>
+#include <optional>
+#include <string>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -8,6 +12,7 @@
 #include <utility>
 
 #include "runtime/patch/invite_transport.h"
+#include "runtime/patch/invite_match_api.h"
 
 namespace nevr_invite_service {
 
@@ -62,13 +67,15 @@ void Start(Settings settings) {
   g_started = true;
   g_shutdown = false;
 
+  const std::string source = std::string(" source=") + nevr_invite::SourceName(settings.invite_source);
   const char* off = nullptr;
   nevr_invite::LogLevel offLevel = nevr_invite::LogLevel::Info;
   if (settings.invite_codes == nevr_invite::Switch::Unrecognised) {
     off = "unrecognised_value";
     offLevel = nevr_invite::LogLevel::Warning;
   } else if (settings.invite_codes == nevr_invite::Switch::Off) {
-    off = "not_configured";
+    // Off from config.yaml is a player's choice; off with no config behind it (a host whose default is off) is not configured.
+    off = settings.invite_source == nevr_invite::Source::Config ? "turned_off" : "not_configured";
   } else if (settings.hooks_refused) {
     // An observer this service serves did not install. That observer's own Warning carries the address and the bytes (Rule 6).
     off = "hook_prologue_mismatch";
@@ -81,7 +88,8 @@ void Start(Settings settings) {
     const nevr_invite::Endpoint probe = nevr_invite::BuildRpcUrl(settings.http_uri, "invite/resolve");
     if (probe.check != nevr_invite::UrlCheck::Ok) {
       Say(nevr_invite::LogLevel::Warning,
-          std::string("[NEVR.INVITE] feature off reason=service_address_refused detail=") + nevr_invite::UrlCheckName(probe.check));
+          std::string("[NEVR.INVITE] feature off reason=service_address_refused detail=") + nevr_invite::UrlCheckName(probe.check) +
+              source);
       off = "";
     }
   }
@@ -112,9 +120,9 @@ void Start(Settings settings) {
     };
     parts.configured = true;
     g_active.store(true, std::memory_order_release);
-    Say(nevr_invite::LogLevel::Info, "[NEVR.INVITE] service on");
+    Say(nevr_invite::LogLevel::Info, "[NEVR.INVITE] service on" + source);
   } else if (off[0] != '\0') {
-    Say(offLevel, std::string("[NEVR.INVITE] feature off reason=") + off);
+    Say(offLevel, std::string("[NEVR.INVITE] feature off reason=") + off + source);
   }
   WorkerSlot() = std::make_unique<nevr_invite::Worker>(std::move(parts));
 }
@@ -135,6 +143,58 @@ std::vector<nevr_invite::Answer> TakeAnswers() {
   auto lock = LockService();
   return WorkerSlot() ? WorkerSlot()->TakeAnswers() : std::vector<nevr_invite::Answer>();
 }
+
+}  // namespace nevr_invite_service
+
+namespace {
+
+// Resolved match ids the frame path has not taken yet, filled from the service's answers. A function-local static, as the
+// rest of this file keeps its non-trivial objects (see ServiceMutex above).
+struct MatchQueue {
+  std::mutex mutex;
+  std::deque<std::string> matches;
+};
+MatchQueue& Matches() {
+  static MatchQueue queue;
+  return queue;
+}
+
+// The number of ids in the queue, readable without its mutex: ResolvedMatchPending reads it on every frame.
+std::atomic<std::size_t> g_matchesWaiting{0};
+
+}  // namespace
+
+bool nevr_invite_match::ServiceActive() noexcept { return nevr_invite_service::Active(); }
+
+bool nevr_invite_match::ResolvedMatchPending() noexcept {
+  return g_matchesWaiting.load(std::memory_order_acquire) != 0 || nevr_invite_service::AnswersPending();
+}
+
+bool nevr_invite_match::TakeResolvedMatch(char* out, std::size_t capacity, std::size_t* length) noexcept {
+  if (out == nullptr || length == nullptr) return false;
+  MatchQueue& queue = Matches();
+  std::lock_guard<std::mutex> lock(queue.mutex);
+  if (queue.matches.empty()) {
+    for (const nevr_invite::Answer& answer : nevr_invite_service::TakeAnswers()) {
+      if (answer.op != nevr_invite::Op::Resolve || answer.result != nevr_invite::Result::Ok) continue;
+      const std::optional<nevr_invite::Resolved> resolved = nevr_invite::ParseResolved(answer.body);
+      const bool fits = resolved.has_value() && resolved->match_id.size() <= kMaxMatchIdBytes;
+      queue.matches.push_back(fits ? resolved->match_id : std::string());
+    }
+    g_matchesWaiting.store(queue.matches.size(), std::memory_order_release);
+  }
+  if (queue.matches.empty()) return false;
+  const std::string& next = queue.matches.front();
+  std::size_t n = next.size();
+  if (n > capacity) n = 0;
+  if (n > 0) std::memcpy(out, next.data(), n);
+  *length = n;
+  queue.matches.pop_front();
+  g_matchesWaiting.store(queue.matches.size(), std::memory_order_release);
+  return true;
+}
+
+namespace nevr_invite_service {
 
 std::vector<nevr_invite::Answer> WaitForAnswers(std::chrono::milliseconds timeout) {
   nevr_invite::Worker* worker = nullptr;

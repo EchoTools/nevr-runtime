@@ -10,7 +10,11 @@ the CRC32 of its bytes: PE has no build-id, so name plus CRC32 is the link a deb
 
 --tree checks every .dll and .exe under the package directory (a dist package or the Windows zip's tree)
 against <symbols dir>/<file name>.dbg; a PE with no symbol file there is a problem, and so is a package
-with no PE at all.
+with no PE at all. One name is exempt from needing a symbol file: nevr-install.exe, the copy of
+install-nevr-runtime.exe that the release zip keeps for programs outside this repository that still call the old
+name (#1492). It is the same bytes, so its debuglink names install-nevr-runtime.exe.dbg and the pair check on the new
+name covers it; --tree requires the new name to be in the package and the two to be identical, and asks for no .dbg
+of the old name.
 
 Exits 0 when the PE carries no DWARF and no COFF symbol table, the .dbg carries DWARF and a non-empty COFF
 symbol table (the function names a field crash maps to; a release build has no source lines), and the
@@ -116,12 +120,25 @@ def problems(binary: Path, symbols: Path) -> list[str]:
     return out
 
 
+# A file in the package that is a copy of another, by name: the old name of the core installer (#1492). The copy has no
+# symbol file of its own; it must be the same bytes as the original, which is checked on its own.
+COPIES = {"nevr-install.exe": "install-nevr-runtime.exe"}
+
+
 def tree_problems(package: Path, symbols_dir: Path) -> list[str]:
     files = sorted(p for p in package.rglob("*") if p.suffix.lower() in (".dll", ".exe"))
     if not files:
         return [f"{package}: no .dll or .exe to check"]
     out = []
     for pe in files:
+        original = COPIES.get(pe.name)
+        if original is not None and pe.parent == package:
+            target = package / original
+            if not target.is_file():
+                out.append(f"{pe.relative_to(package)}: {original} is not in the package")
+            elif pe.read_bytes() != target.read_bytes():
+                out.append(f"{pe.relative_to(package)}: not the same bytes as {original}")
+            continue
         dbg = symbols_dir / f"{pe.name}.dbg"
         if not dbg.is_file():
             out.append(f"{pe.relative_to(package)}: no symbol file {dbg}")

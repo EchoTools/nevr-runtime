@@ -505,4 +505,29 @@ TEST(InviteQuestRun_AnOnFeatureReachesTheProductionTransport) {
   CHECK(!log.Has("Run-Token-Z9"));
 }
 
+// The shared parser (runtime/patch/invite_wizard.h, used by the Quest target too) reads a production answer in full:
+// nakama's match id is "<uuid>.<node>" (server/match_id.go:57), and the expiry is RFC3339 (evr_runtime_rpc_invite.go:575).
+TEST(InviteQuestParse_ARealProductionCreateAnswerParsesInFull) {
+  const std::string uuid = "0f8fad5b-d9cb-469f-a165-70867728950e";
+  const std::string body = std::string("{\"code\":\"K7M2Q\",\"expires_at\":\"2026-10-30T06:31:00Z\",\"match_id\":\"") + uuid +
+                           ".nakama1\"}";
+  const auto created = nevr_invite::ParseCreated(body);
+  CHECK(created.has_value());
+  if (created.has_value()) {
+    CHECK_EQ(created->code, std::string("K7M2Q"));
+    CHECK_EQ(created->match_id, uuid);
+    CHECK_EQ(created->expires_text, std::string("EXPIRES: 06:31 UTC"));
+  }
+}
+
+TEST(InviteQuestParse_ARealProductionResolveAnswerParsesInFull) {
+  const std::string uuid = "0f8fad5b-d9cb-469f-a165-70867728950e";
+  const std::string body = std::string("{\"match_id\":\"") + uuid + ".nakama1\",\"mode\":\"echo_arena\",\"level\":\"mpl_arena_a\"}";
+  const auto resolved = nevr_invite::ParseResolved(body);
+  CHECK(resolved.has_value());
+  if (resolved.has_value()) {
+    CHECK_EQ(resolved->match_id, uuid);
+  }
+}
+
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }

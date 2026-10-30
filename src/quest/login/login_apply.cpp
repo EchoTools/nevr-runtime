@@ -376,6 +376,9 @@ HeldReset ResetHeldStandIns(PrerequisiteState& state) noexcept {
   return reset;
 }
 
+// The most fields one SentinelLog record carries (#1529): the switch below logs every count up to this in one line.
+constexpr std::size_t kMaxSentinelFields = 9;
+
 void SentinelLog(Level level, const char* event, const LogKv* fields, std::size_t count) {
   const sentinel::LogLevel mapped = level == Level::Error     ? sentinel::LogLevel::kError
                                     : level == Level::Warning ? sentinel::LogLevel::kWarn
@@ -385,8 +388,8 @@ void SentinelLog(Level level, const char* event, const LogKv* fields, std::size_
     return fields[i].text != nullptr ? LogField(fields[i].key, fields[i].text)
                                      : LogField(fields[i].key, fields[i].number);
   };
-  if (count > 8) {
-    // The switch below carries eight fields; say so instead of dropping the rest silently.
+  if (count > kMaxSentinelFields) {
+    // The switch below carries kMaxSentinelFields fields; say so instead of dropping the rest silently.
     sentinel::LogFields(sentinel::LogLevel::kError, "quest_login_log_overflow",
                         {LogField("overflowed_event", event), LogField("fields", count)});
   }
@@ -404,9 +407,13 @@ void SentinelLog(Level level, const char* event, const LogKv* fields, std::size_
       sentinel::LogFields(mapped, event,
                           {field(0), field(1), field(2), field(3), field(4), field(5), field(6)});
       break;
-    default:
+    case 8:
       sentinel::LogFields(mapped, event,
                           {field(0), field(1), field(2), field(3), field(4), field(5), field(6), field(7)});
+      break;
+    default:  // kMaxSentinelFields, the cap; a larger count was reported above and keeps its first nine fields
+      sentinel::LogFields(mapped, event,
+                          {field(0), field(1), field(2), field(3), field(4), field(5), field(6), field(7), field(8)});
       break;
   }
 }

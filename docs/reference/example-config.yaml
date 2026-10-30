@@ -215,11 +215,13 @@ services:
 
   # Dedicated server only: the ServerDB token route the server registers through, dialed with the server's
   # access token as `Authorization: Bearer` (docs/adr/0001-serverdb-token-auth.md); guilds and regions are added
-  # as query parameters. Without it the server registers through socket_uri with identity.discord_id and
-  # auth.password in the query. A server with none of serverdb, serverdb_uri, or socket_uri plus
-  # identity.discord_id stops at registration: `no ServerDB URI: set services.serverdb_uri`.
+  # as query parameters. Without it a server with auth.password registers through socket_uri with
+  # identity.discord_id and auth.password in the query; a server with no auth.password (it signed in by device
+  # code) registers on the token route at socket_uri, so it needs no configuration. A server with none of
+  # serverdb, serverdb_uri, or socket_uri plus identity.discord_id stops at registration:
+  # `no ServerDB URI: set services.serverdb_uri`.
   # The route taken is logged: `[NEVR.GAMESERVER] serverdb route=<explicit|token|url_params|none> ...`.
-  # Default (absent): none.
+  # Default (absent): socket_uri for a server with no auth.password; none for a server with one.
   # Not a secret.
   # Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration, flat key nevr_serverdb_uri)
   # serverdb_uri: "ws://g.echovrce.com:80/nevr"
@@ -280,6 +282,27 @@ network:
   # Not a secret.
   # tick_rate_hz: 120
 
+  # AI bots a dedicated server adds to each arena or combat match once it is in game (a social lobby gets none), one a
+  # second, through the game's own add-bot request (what the spawn-bot script node uses), so every client sees them.
+  # The match's settings get numteams and players_per_team when the service did not send them. A level stops taking
+  # bots when its bot bodies run out (a warning says so), and a match never passes the game's 16 entrants. Valid:
+  # 0-16. Out of range or not a whole number: 0, with a warning in the log. Ignored by a client.
+  # Absent: 0 (no bots).
+  # Not a secret.
+  # bots_per_session: 0
+  # A dedicated server's match team size: how many players the game's own team assignment puts on one team before
+  # it moves the next to the other team or to spectators. A team holds the smaller of this and half its lobby's
+  # player limit, in every mode but the AI and social modes (the AI modes keep the game's 3). Valid: 1-8. 1 to 4
+  # lowers every match's teams, public matches included; above 5 only a lobby whose limit is 12 or more gets bigger
+  # teams (which lobbies the service sends with such a limit is not measured here), and a member past a team's fifth
+  # takes a team slot from the start again (a sixth member takes the first slot). Not measured here: EchoRelay reports
+  # that an 11th player in a match stops the server in an arena level; keep such a match at 10 players in all (6v4, for
+  # example).
+  # Out of range or not a whole number: 5, with a warning in the log. Ignored by a client.
+  # Absent: 5 (the game's own).
+  # Not a secret.
+  # max_team_size: 5
+
   # Which game sockets the PC bridge hands to the session router (the rules the Quest build ships).
   # legacy: the bridge's own rules for every socket. config: the /config sockets route through the router;
   # login and matchmaker sockets keep the bridge's rules. all: every game socket (config, login and matchmaker)
@@ -289,11 +312,12 @@ network:
   # Not a secret.
   # session_router: legacy
 
-  # The invite codes for the CREATE GAME / JOIN VIA CODE wizard: when on, a code typed into JOIN VIA CODE is sent to the
-  # game service (auth.http_uri, with the token this client already holds) to find the match it names. Create is not sent yet.
-  # true/on/yes/1 turns it on; false/off/no/0 or absent leaves it off. Any other value leaves it off, with a warning in
-  # the log. Ignored by a dedicated server.
-  # Absent: off.
+  # The invite codes for the CREATE GAME / JOIN VIA CODE wizard: when on, a code typed into JOIN VIA CODE, and a create,
+  # is sent to the game service (auth.http_uri, with the token this client already holds).
+  # Absent or empty: on. true/on/yes/1 is on; false/off/no/0 turns it off. Any other value, a list or a map included, leaves
+  # it off, with a warning in the log. A key the runtime does not read (a misspelling, or a config.yaml it rejects) is as if
+  # absent: on. Ignored by a dedicated server.
+  # Absent: on.
   # Not a secret.
   # invite_codes: false
 
@@ -357,7 +381,9 @@ auth:
   # server_key: "${NEVR_SOCKET_KEY:?server_key is required for servers}"
 
   # Server password. Sent as a query parameter in the ServerDB WebSocket URI (the key the runtime reads is auth.password).
-  # Optional; absent means no password auth.
+  # Optional; absent means the server signs in by device code like a client: at startup it prints a code and the
+  # page that takes it on the console (standard error), waits for the approval, asks for a new code when one runs
+  # out, and keeps the token in the sign-in cache of the nevr root, so a restart needs no new code.
   # SECRET — use env-var substitution in production.
   # password: "${NEVR_PASSWORD:?password is required}"
 
@@ -483,7 +509,14 @@ arena:
 # plugin extracts the keys it understands, ignores the rest, and uses sensible
 # defaults for any key that is missing.
 #
-# This list is the only source: a DLL in the root's plugins\ that is not listed here is not loaded.
+# On PC this list is the only source: a DLL in the root's plugins\ that is not listed here is not loaded.
+#
+# On Quest, a plugin packaged in the APK loads by default, with no entry here (the build writes
+# libnevr_plugin_manifest.so beside the packaged plugins; ADR 0019). An entry here whose file is a packaged plugin's
+# overrides that plugin's enabled, required, target and args in place, and an entry can set `early` but not clear it
+# (a packaged plugin built early stays early). An entry whose file is not packaged is loaded from the library
+# directory as the list says, and ends "failed" in the log when the file is not there. The load order is the packaged
+# plugins in the order they were packaged, then the entries that name no packaged plugin, in list order.
 # Each plugin entry has these keys:
 #   name      — the plugin's name (required); also the default file name
 #   file      — DLL file name inside the root's plugins\ (default: name + ".dll")

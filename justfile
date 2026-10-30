@@ -211,12 +211,13 @@ android-repack-libovr src="/mnt/games/evr/-src-evr-reconstruction/cache/quest_tr
 # `apk` is required (the store APK path). The signing key is the one persistent Quest key stored in
 # pass (tools/quest_keystore.sh): it is read into a private tmpfs file for the signing command only
 # and is never generated here. Store it once with: just import-quest-keystore <keystore>.
-android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="":
+android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="":
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(pwd)"
     apk="{{ apk }}"; shim="{{ shim }}"; plugin="{{ plugin }}"; version="{{ version }}"
     extra_rows="{{ extra_rows }}"; patcher="{{ patcher }}"; json_include="{{ json_include }}"
+    plugin_early="{{ plugin_early }}"; plugin_off="{{ plugin_off }}"
     work="$root/{{ workdir }}"
     # An APK from an earlier run never outlives a run that stops: package-dev takes whatever is at this path.
     rm -f "$work/r15-repacked.apk" "$work/r15-repacked-aligned.apk" "$work/r15_nevr-sentinel_signed.apk"
@@ -255,8 +256,10 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     extra=()
     if [ -n "$extra_rows" ]; then extra=(--extra-rows "$extra_rows"); fi
     # `plugin` (docs/adr/0019-quest-plugin-loader.md): the plugin libraries to carry in the APK, for a headset run of the loader:
-    # one path, or several separated by colons (a path may hold spaces). Empty for every release and package-dev APK. Each file is lib<name>.so; `plugins:`
-    # in config.yaml names it. Every file gets every check, and no two may share a name.
+    # one path, or several separated by colons (a path may hold spaces). Empty for every release and package-dev APK. Each file is lib<name>.so.
+    # A packaged plugin loads by default: the repack writes a manifest of them (tools/quest_repack_libs.py write-plugin-manifest) and
+    # config.yaml's `plugins:` list only overrides it. `plugin_early` and `plugin_off` (colon-separated file names of packaged plugins)
+    # record `early` and `enabled: false` in that manifest. Every file gets every check, and no two may share a name.
     plugins=()
     if [ -n "$plugin" ]; then
         IFS=: read -r -a plugins <<<"$plugin"
@@ -282,6 +285,23 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
             # ADR 0019 section 1: a plugin runs the same static-init check as the shim, minus the shim's own constructor.
             tools/check_quest_static_init.sh --plugin "$llvm_bin" "$p"
         done
+    fi
+    # plugin_early / plugin_off: packaged file names, recorded in the manifest (tools/quest_repack_libs.py refuses a name that is
+    # not packaged). Without a plugin there is nothing to record them on, so they are refused.
+    early_args=(); off_args=()
+    if [ -n "$plugin_early" ]; then
+        IFS=: read -r -a early_names <<<"$plugin_early"
+        for n in "${early_names[@]}"; do early_args+=(--early "$n"); done
+    fi
+    if [ -n "$plugin_off" ]; then
+        IFS=: read -r -a off_names <<<"$plugin_off"
+        for n in "${off_names[@]}"; do off_args+=(--off "$n"); done
+    fi
+    if [ "${#plugins[@]}" -eq 0 ] && [ "${#early_args[@]}" -gt 0 ]; then
+        echo "android-repack-apk: plugin_early names a packaged plugin, and no plugin is given" >&2; exit 1
+    fi
+    if [ "${#plugins[@]}" -eq 0 ] && [ "${#off_args[@]}" -gt 0 ]; then
+        echo "android-repack-apk: plugin_off names a packaged plugin, and no plugin is given" >&2; exit 1
     fi
     # The version the versionCode comes from: `version` when the shim was built elsewhere (a release's CI-built loader has no
     # build tree here), else the build's version header, which sits beside the shim's build tree (build/<tree>/sentinel/ ->
@@ -315,6 +335,13 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
         cp "$p" "$work/stage/lib/arm64-v8a/$(basename "$p")"
         stage_libs+=("lib/arm64-v8a/$(basename "$p")")
     done
+    # 3c. the manifest of the packaged plugins: their names, staged hashes, early and enabled. Written only when a plugin is packaged,
+    # so a repack without one is the same APK as before (docs/adr/0019-quest-plugin-loader.md, section 2).
+    if [ "${#plugins[@]}" -gt 0 ]; then
+        python3 -I tools/quest_repack_libs.py write-plugin-manifest --stage "$work/stage" --plugin "${plugins[@]}" \
+            ${early_args[@]+"${early_args[@]}"} ${off_args[@]+"${off_args[@]}"}
+        stage_libs+=("lib/arm64-v8a/libnevr_plugin_manifest.so")
+    fi
     # 4. fresh APK copy, strip the store's v1 signature, inject both libs STORED (-0)
     unsigned="$work/r15-repacked.apk"
     aligned="$work/r15-repacked-aligned.apk"
@@ -421,14 +448,18 @@ package-dev store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
     )
     # The core installer install.ps1 runs (installer/, ADR 0023), for Windows, locked and stripped.
     CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc cargo build --locked --release --target x86_64-pc-windows-gnu \
-        --manifest-path installer/Cargo.toml --bin nevr-install --target-dir build/installer
-    x86_64-w64-mingw32-strip build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe
+        --manifest-path installer/Cargo.toml --bin install-nevr-runtime --target-dir build/installer
+    installer=build/installer/x86_64-pc-windows-gnu/release/install-nevr-runtime.exe
+    x86_64-w64-mingw32-strip "$installer"
+    # The same file under the name programs outside this repository still call (#1492): one build, one copy.
+    cp "$installer" "$(dirname "$installer")/nevr-install.exe"
     just _quest-apk "{{ store_apk }}"
     python3 tools/package_release.py --commit "$commit" --out "$out" \
         --dll build/mingw-dev/bin/BugSplat64.dll \
         --runtime-dll build/mingw-dev/bin/nevr-runtime.dll \
         --server-exe build/mingw-dev/bin/echovr_server.exe \
-        --installer-exe build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe \
+        --installer-exe "$installer" \
+        --installer-compat-exe "$(dirname "$installer")/nevr-install.exe" \
         --apk build/android-dev/repack/r15_nevr-sentinel_signed.apk \
         --pc-header build/mingw-dev/generated/nevr_builtin_defaults.h \
         --quest-header build/android-dev/generated/nevr_builtin_defaults.h \
@@ -447,11 +478,11 @@ _quest-apk store_apk:
 
 # The development APK for an autopilot run on a Quest (#1202, docs/adr/0025-quest-autopilot-route.md): the local
 # android-arm64 sentinel (a development build: the input seam refuses a release) with libnevr_autopilot.so beside it,
-# repacked from the store APK. The plugin is off unless the headset's config.yaml names nevr_autopilot. Writes
-# build/android-arm64/repack/r15_nevr-sentinel_signed.apk, the path test-quest-hooks-pinned reads. No release or
-# package-dev APK carries the plugin.
+# repacked from the store APK. The plugin is packaged and off by default (plugin_off); a config.yaml entry that names
+# nevr_autopilot turns it on. Writes build/android-arm64/repack/r15_nevr-sentinel_signed.apk, the path test-quest-hooks-pinned
+# reads. No release or package-dev APK carries the plugin.
 quest-autopilot-apk store_apk="/mnt/games/cache/r15_goldmaster_store.apk": build-android
-    just android-repack-apk "{{ store_apk }}" build/android-arm64/sentinel/libovrplatformloader.so build/android-arm64/repack build/android-arm64/integration/libnevr_autopilot.so
+    just android-repack-apk "{{ store_apk }}" build/android-arm64/sentinel/libovrplatformloader.so build/android-arm64/repack build/android-arm64/integration/libnevr_autopilot.so "" "" "" "" "" libnevr_autopilot.so
 
 # One unattended autopilot run on the attached Quest (tools/quest_autopilot_run.py --help): pushes the route, starts the
 # game with the proximity sensor overridden, waits for route_end, and records the run under the work root.
@@ -503,13 +534,13 @@ release-quest-apk tag store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
 publish-quest-apk tag:
     python3 tools/publish_quest_apk.py "{{ tag }}"
 
-# Build the core installer CLI (installer/, ADR 0023) for this machine: installer/target/release/nevr-install.
+# Build the core installer CLI (installer/, ADR 0023) for this machine: installer/target/release/install-nevr-runtime.
 # Locked to the committed Cargo.lock; set CARGO_TARGET_DIR to keep the regenerable build tree out of the checkout.
 build-installer:
-    cargo build --locked --release --manifest-path installer/Cargo.toml --bin nevr-install
+    cargo build --locked --release --manifest-path installer/Cargo.toml --bin install-nevr-runtime
 
 # Install the NEVR Quest APK + game data onto the connected headset (sideload) through the core installer
-# (tools/quest-install.sh calls `nevr-install quest install`). The core fetches the signed release manifest, takes the
+# (tools/quest-install.sh calls `install-nevr-runtime quest install`). The core fetches the signed release manifest, takes the
 # APK and the game data the channel's release names, checks both, plans from what the headset holds and installs;
 # every run writes a [NEVR.INSTALL] log (the path is in its output). The recipe holds no hash, URL or version.
 # Pass `--yes-uninstall` (`just quest-install --yes-uninstall`) to let the core remove a differently signed install
@@ -521,7 +552,7 @@ build-installer:
 # still takes the game data from the signed manifest.
 [positional-arguments]
 quest-install *args: build-installer
-    NEVR_INSTALL="${CARGO_TARGET_DIR:-installer/target}/release/nevr-install" tools/quest-install.sh "$@"
+    NEVR_INSTALL="${CARGO_TARGET_DIR:-installer/target}/release/install-nevr-runtime" tools/quest-install.sh "$@"
 
 # --- Tests ---
 
@@ -641,7 +672,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_lobby_full_backoff --target test_menu_version_label --target test_splash_skip --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_login_refusal --target test_invite_wizard --target test_ui_text --target test_invite_choices --target test_invite_join --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_arena_public_clock --target test_arena_public_clock_hook --target test_render_config --target test_render_config_hook
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_lobby_full_backoff --target test_party_follow_dedup --target test_server_team_size --target test_menu_version_label --target test_splash_skip --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_login_refusal --target test_invite_wizard --target test_invite_worker --target test_invite_service --target test_ui_text --target test_invite_choices --target test_invite_join --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_arena_public_clock --target test_arena_public_clock_hook --target test_render_config --target test_render_config_hook --target test_server_bots
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_runtime_abi
@@ -877,7 +908,7 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
-    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_login_refusal test_invite_wizard test_ui_text test_invite_choices test_invite_join test_asset_cache test_session_router test_asset_registry test_installed_levels test_telemetry_game_type test_arena_round_time test_nevr_root test_arena_public_clock test_arena_public_clock_hook test_render_config test_render_config_hook; do
+    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_login_refusal test_invite_wizard test_invite_worker test_invite_service test_ui_text test_invite_choices test_invite_join test_asset_cache test_session_router test_asset_registry test_installed_levels test_telemetry_game_type test_arena_round_time test_nevr_root test_arena_public_clock test_arena_public_clock_hook test_render_config test_render_config_hook test_server_team_size test_server_bots; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -1679,6 +1710,13 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]:0:2}" -o "$out/wizard_metric_hook_test" -ldl
     timeout 120 "$out/wizard_metric_hook_test"
+    # The Quest join (#966 S4, ADR 0017): the staging, the route and repeat gates, and the begin order, against a fake game block at
+    # the Quest offsets (kQuestLayout). The service's two symbols are stubbed inside the test. Built without exceptions.
+    "${cxx[@]}" -fno-exceptions -pthread -isystem "$out/attach_json_inc" src/quest/tests/invite_join_quest_test.cpp \
+        src/quest/invite/join_game_quest.cpp src/quest/invite/frame_dispatch.cpp src/quest/data/sha256.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        "${ident[@]:0:2}" -o "$out/invite_join_quest_test" -ldl
+    timeout 120 "$out/invite_join_quest_test"
     # The controller-input seam (#1202): the VrApi layout rules, the registration's every refusal and its one owner, and
     # the real handler through the thunk entry against stand-ins for vrapi_GetCurrentInputState and
     # vrapi_GetInputDeviceCapabilities. got_pinned_test resolves both slots in the real libr15.
@@ -2112,7 +2150,7 @@ test-quest-plugins:
     "${cxx[@]}" -fno-exceptions -c src/quest/plugin/plugin_game_image.cpp -o "$out/plugin_game_image.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/plugin/input_seam_hook.cpp -o "$out/input_seam_hook.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/libr15_identity.cpp -o "$out/libr15_identity.o"
-    loader=(src/quest/plugin/plugin_plan.cpp src/quest/plugin/plugin_image.cpp src/quest/plugin/plugin_loader.cpp
+    loader=(src/quest/plugin/packaged_plugins.cpp src/quest/plugin/plugin_plan.cpp src/quest/plugin/plugin_image.cpp src/quest/plugin/plugin_loader.cpp
             src/quest/plugin/plugin_record_log.cpp src/quest/plugin/plugin_platform.cpp src/quest/data/sha256.cpp
             src/quest/sentinel/hook_log.cpp src/quest/sentinel/sentinel_log.cpp
             "$out/libr15_identity.o" src/quest/patch/libr15_patch_identity.cpp
@@ -2120,6 +2158,9 @@ test-quest-plugins:
     "${cxx[@]}" -pthread src/quest/tests/plugin_loader_test.cpp "${loader[@]}" \
         -o "$out/plugin_loader_test" -ldl
     timeout -k 5 120 "$out/plugin_loader_test" "$out"
+    "${cxx[@]}" -pthread src/quest/tests/packaged_plugins_test.cpp src/quest/plugin/packaged_plugins.cpp \
+        src/quest/plugin/plugin_plan.cpp src/runtime/ext/plugin_load_plan.cpp -o "$out/packaged_plugins_test"
+    timeout -k 5 120 "$out/packaged_plugins_test" src/quest/tests/fixtures
     "${cxx[@]}" -pthread src/quest/tests/plugin_runtime_test.cpp src/quest/plugin/plugin_runtime.cpp \
         src/runtime/ext/plugin_load_plan.cpp "${loader[@]}" -o "$out/plugin_runtime_test" -ldl
     timeout -k 5 120 "$out/plugin_runtime_test" "$out"
@@ -3887,15 +3928,17 @@ verify:
         echo "game-JSON path — add it to the flat map and read through NevrCfgGetFlat." >&2
         exit 1
     fi
-    # S7b — flat-map structural gate: exactly 34 entries. Adding or removing a
+    # S7b — flat-map structural gate: exactly 36 entries. Adding or removing a
     # flat-map entry without updating this number fails the build — a deliberate
     # reminder to also add a test for the new mapping. The 29 entries measured in
     # S0 and migrated through S3-S5b, plus nevr_allow_offline_server (#16) and
     # nevr_empty_server_ttl_s (#58) and
-    # nevr_tick_rate_hz (#595), nevr_session_router (#708) and nevr_invite_codes (#1156).
+    # nevr_tick_rate_hz (#595), nevr_session_router (#708), nevr_invite_codes (#1156) and
+    # nevr_bots_per_session (#1423).
+    # nevr_max_team_size (#1422).
     N133_S7B=$(grep -cE '^\s*\{"' src/runtime/lifecycle/service_map.cpp)
-    if [ "$N133_S7B" -ne 34 ]; then
-        echo "verify: FAIL — N133 S7b: flat map has $N133_S7B entries, expected 34." >&2
+    if [ "$N133_S7B" -ne 36 ]; then
+        echo "verify: FAIL — N133 S7b: flat map has $N133_S7B entries, expected 36." >&2
         echo "A key was added or removed from the cutover map in service_map.cpp." >&2
         echo "If adding: also add a test to test_service_map.cpp and update this count." >&2
         echo "If removing: that key's reader must be deleted first, or it silently" >&2

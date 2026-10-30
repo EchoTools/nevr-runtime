@@ -161,7 +161,23 @@ bool PostFrameWork(WorkFn fn, void* context) noexcept {
   return queued;
 }
 
+// The netgame the frame hook last passed (set on the game thread before each Tick) and the thread that last ran Tick.
+std::atomic<void*> g_netGame{nullptr};
+std::atomic<pthread_t> g_tickThread{};
+std::atomic<bool> g_tickThreadSet{false};
+
+void SetNetGame(void* netGame) noexcept { g_netGame.store(netGame, std::memory_order_release); }
+
+void* NetGame() noexcept { return g_netGame.load(std::memory_order_acquire); }
+
+bool OnTickThread() noexcept {
+  const pthread_t tick = g_tickThread.load(std::memory_order_acquire);
+  return g_tickThreadSet.load(std::memory_order_acquire) && pthread_equal(tick, pthread_self()) != 0;
+}
+
 void Tick() noexcept {
+  g_tickThread.store(pthread_self(), std::memory_order_release);
+  g_tickThreadSet.store(true, std::memory_order_release);
   g_frames.fetch_add(1, std::memory_order_relaxed);
   const Guard drain(g_drainMutex, true);
   if (!drain.owns()) {

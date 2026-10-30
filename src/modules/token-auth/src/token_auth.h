@@ -19,6 +19,19 @@ namespace nevr_token_auth {
 void Init(uintptr_t base_addr, bool is_server);
 void Shutdown();
 
+// The one line a server with no password prints for its host (#1532): the code and the page that takes it, as a
+// JSON object on one line so a supervisor can read it too. The code is a credential for five minutes; it goes to the
+// console on purpose and never to the log, which carries it masked.
+std::string ServerSignInPromptLine(const std::string& code, const std::string& loginUrl);
+
+struct ConsoleWrite {
+    bool ok = false;
+    size_t bytes = 0;
+    unsigned long error = 0;  // GetLastError() when !ok
+};
+// Writes ServerSignInPromptLine plus a newline to standard error.
+ConsoleWrite WriteServerSignInPrompt(const std::string& code, const std::string& loginUrl);
+
 // Returns the current valid Bearer token, or empty string if not authenticated.
 // Thread-safe — called from WS bridge connection handlers.
 std::string GetToken();
@@ -69,6 +82,7 @@ struct DeviceAuthFlowOps {
     std::function<bool()> cancelled;  // optional
     std::function<void(const std::string& code, const std::string& login_url)> on_code_issued;  // optional
     std::function<void(nevr::auth::FlowEnd)> on_end;                                             // optional
+    bool server_sign_in = false;  // a server with no password: the flow runs in server mode (#1532)
 };
 
 struct DeviceAuthFlowResult {

@@ -29,6 +29,17 @@ named like a game library would silently take that library's place and the signe
       `kSha256` string the variant build embeds); without it the shim must not be a variant build (it must not carry the
       variant's `libr15_extra_rows` log event name).
 
+  write-plugin-manifest --stage STAGE_DIR --plugin PLUGIN_FILE... [--early NAME]... [--off NAME]...
+      Writes `lib/arm64-v8a/libnevr_plugin_manifest.so` under STAGE_DIR: the packaged plugins, in the order given, each with
+      its sha-256 (of the staged file), its `early` and its `enabled`. The loader reads it at launch and loads these plugins
+      with no config.yaml entry (docs/adr/0019-quest-plugin-loader.md, section 2). Refuses (exit 1) a plugin not named
+      lib<name>.so, two of one name, and an --early or --off name that is not a packaged plugin. JSON with sorted keys, so
+      the same plugins give the same bytes.
+
+  check-plugin-manifest --stage STAGE_DIR
+      Refuses (exit 1) a staged manifest whose sha-256 for a plugin is not the staged file's, and a staged plugin the
+      manifest does not list. Run by verify-signed, before anything is signed.
+
   check-plugin-build-ids --apk STORE_APK --plugin PLUGIN_FILE
       Refuses (exit 1) a plugin the Quest loader would refuse for its build IDs (src/quest/plugin/plugin_image.h):
       one with no NEVR_DECLARE_SUPPORTED_BUILD_IDS note, or whose list does not hold the GNU build ID of the store
@@ -41,6 +52,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import re
 import struct
 import pathlib
@@ -50,8 +62,13 @@ import tempfile
 import zipfile
 
 ABI_DIR = "lib/arm64-v8a"
-# The libraries the recipe stages itself (the shim under the loader's name, and the store's loader renamed).
-STAGED_BY_RECIPE = ("libovrplatformloader.so", "libovrplatformloader_orig.so")
+# The manifest of packaged plugins (docs/adr/0019-quest-plugin-loader.md, section 2): written only when a plugin is packaged.
+# Its name is a lib*.so name so the installer extracts it beside the plugins; the loader reads it as JSON, never as a library.
+MANIFEST_NAME = "libnevr_plugin_manifest.so"
+MANIFEST_ENTRY = f"{ABI_DIR}/{MANIFEST_NAME}"
+MANIFEST_SCHEMA = 1
+# The libraries the recipe stages itself (the shim under the loader's name, the store's loader renamed, and the manifest).
+STAGED_BY_RECIPE = ("libovrplatformloader.so", "libovrplatformloader_orig.so", MANIFEST_NAME)
 # The one store entry the recipe replaces on purpose: the shim takes the loader's name.
 REPLACED_ON_PURPOSE = f"{ABI_DIR}/libovrplatformloader.so"
 # The other one: the patcher's output takes libr15's place (docs/adr/0021 section 9). It is compared with that output,
@@ -154,6 +171,81 @@ def patched_digest(archive: zipfile.ZipFile, patcher: pathlib.Path, extra_rows: 
     return digests["patched"]
 
 
+def plugin_is_named_for_the_loader(name: str) -> bool:
+    """The file name the loader takes a plugin by: lib<name>.so, with a non-empty name."""
+    return name.startswith("lib") and name.endswith(".so") and len(name) > len("lib.so")
+
+
+def manifest_bytes(plugins: list[dict]) -> bytes:
+    """The manifest's bytes: the same plugins give the same bytes (sorted keys, no spaces, one trailing newline)."""
+    text = json.dumps({"schema": MANIFEST_SCHEMA, "plugins": plugins}, sort_keys=True, separators=(",", ":"))
+    return (text + "\n").encode("ascii")
+
+
+def write_plugin_manifest(stage: pathlib.Path, plugins: list[pathlib.Path], early: list[str], off: list[str]) -> list[str]:
+    """Writes the manifest of the packaged `plugins` under `stage`; returns the problems, and writes nothing when there are any.
+
+    `plugins` are the files as the recipe was given them (only the file names matter); each is read from the staged copy,
+    so the hash is of the bytes the APK will carry. `early` and `off` name packaged files."""
+    names = [p.name for p in plugins]
+    problems: list[str] = []
+    for name in names:
+        if not plugin_is_named_for_the_loader(name):
+            problems.append(f"plugin {name} must be named lib<name>.so")
+        if names.count(name) > 1:
+            problems.append(f"two plugins are named {name}")
+    for label, group in (("plugin_early", early), ("plugin_off", off)):
+        for name in group:
+            if name not in names:
+                problems.append(f"{label} names {name}, which is not one of the packaged plugins")
+    if problems:
+        return problems
+    entries: list[dict] = []
+    for plugin in plugins:
+        staged = stage / ABI_DIR / plugin.name
+        if not staged.is_file():
+            return [f"{ABI_DIR}/{plugin.name}: not staged, so its hash cannot be written"]
+        entries.append({
+            "name": plugin.name[len("lib"):-len(".so")],
+            "file": plugin.name,
+            "sha256": file_digest(staged),
+            "enabled": plugin.name not in off,
+            "early": plugin.name in early,
+        })
+    (stage / ABI_DIR / MANIFEST_NAME).write_bytes(manifest_bytes(entries))
+    return []
+
+
+def plugin_manifest_problems(stage: pathlib.Path) -> list[str]:
+    """The problems with the staged manifest, empty when there is none or it holds every staged plugin with its hash."""
+    path = stage / ABI_DIR / MANIFEST_NAME
+    if not path.is_file():
+        return []
+    try:
+        document = json.loads(path.read_bytes())
+    except (ValueError, OSError) as error:
+        return [f"{MANIFEST_ENTRY}: cannot be read as JSON: {error}"]
+    listed: set[str] = set()
+    problems: list[str] = []
+    for entry in document.get("plugins", []):
+        file_name = str(entry.get("file"))
+        listed.add(file_name)
+        staged = stage / ABI_DIR / file_name
+        if not staged.is_file():
+            problems.append(f"{MANIFEST_ENTRY}: lists {file_name}, which is not staged")
+            continue
+        actual = file_digest(staged)
+        if actual != entry.get("sha256"):
+            problems.append(f"{MANIFEST_ENTRY}: the sha256 it lists for {file_name} is {entry.get('sha256')}, "
+                            f"the staged file's is {actual}")
+    own = set(STAGED_BY_RECIPE) | {pathlib.Path(PATCHED_LIBRARY).name}
+    for staged in sorted(p for p in (stage / ABI_DIR).iterdir() if p.is_file()):
+        if staged.name in own or staged.name in listed:
+            continue
+        problems.append(f"{ABI_DIR}/{staged.name}: staged, not listed in {MANIFEST_NAME}")
+    return problems
+
+
 def verify_signed(source: pathlib.Path, signed: pathlib.Path, stage: pathlib.Path, patcher: pathlib.Path,
                   extra_rows: pathlib.Path | None = None, scratch: pathlib.Path | None = None) -> list[str]:
     """The problems found in `signed`; empty when every original library survived, libr15.so is the patcher's output
@@ -192,6 +284,7 @@ def verify_signed(source: pathlib.Path, signed: pathlib.Path, stage: pathlib.Pat
                 problems.append(f"{entry}: staged, missing from the signed APK")
             elif entry_digest(result, entry) != file_digest(staged):
                 problems.append(f"{entry}: the signed APK holds different bytes than the staged file")
+        problems.extend(plugin_manifest_problems(stage))
     return problems
 
 
@@ -260,6 +353,13 @@ def main(argv: list[str]) -> int:
     ids = sub.add_parser("check-plugin-build-ids")
     ids.add_argument("--apk", type=pathlib.Path, required=True)
     ids.add_argument("--plugin", type=pathlib.Path, required=True)
+    manifest = sub.add_parser("write-plugin-manifest")
+    manifest.add_argument("--stage", type=pathlib.Path, required=True)
+    manifest.add_argument("--plugin", type=pathlib.Path, nargs="+", required=True)
+    manifest.add_argument("--early", action="append", default=[])
+    manifest.add_argument("--off", action="append", default=[])
+    staged_manifest = sub.add_parser("check-plugin-manifest")
+    staged_manifest.add_argument("--stage", type=pathlib.Path, required=True)
     verify = sub.add_parser("verify-signed")
     verify.add_argument("--source", type=pathlib.Path, required=True)
     verify.add_argument("--signed", type=pathlib.Path, required=True)
@@ -274,6 +374,10 @@ def main(argv: list[str]) -> int:
         problems = shim_rows_problems(args.shim, args.extra_rows)
     elif args.command == "check-plugin-build-ids":
         problems = check_plugin_build_ids(args.apk, args.plugin)
+    elif args.command == "write-plugin-manifest":
+        problems = write_plugin_manifest(args.stage, args.plugin, args.early, args.off)
+    elif args.command == "check-plugin-manifest":
+        problems = plugin_manifest_problems(args.stage)
     else:
         problems = verify_signed(args.source, args.signed, args.stage, args.patcher, args.extra_rows, args.scratch)
     for problem in problems:

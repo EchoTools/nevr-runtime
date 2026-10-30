@@ -1,0 +1,1 @@
+{"plugins":[{"early":true,"enabled":true,"file":"libalpha.so","name":"alpha","sha256":"0cd7f77413da5fdc78d1f4d0f53080baa11110b2985cd8d156ef235f3993d992"},{"early":false,"enabled":false,"file":"libbeta.so","name":"beta","sha256":"ce4aad056e498cf68963b9ec5b70d619bd89384c31a2eb1c4abb9a96d8dbe92c"}],"schema":1}

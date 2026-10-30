@@ -35,8 +35,11 @@ Summary of the recommendations. Each has alternatives and a reason in its sectio
 1. **Artifact.** A plugin is an AArch64 shared object named `lib<name>.so`, built with the existing `android-arm64`
    preset and packaged into the APK at `lib/arm64-v8a` by the same `zip -0` route the sentinel and the original loader
    already use. Shipped plugins are trusted through the APK signature. Nothing outside the APK is loaded in v1.
-2. **Manifest.** Reuse the ordered `plugins:` list and its keys (`name`, `file`, `enabled`, `required`, `args`, `early`,
-   `target`). On Quest `file` is a basename inside the native library directory only. List order is load order.
+2. **Manifest.** Packaged plugins load by default. The repack writes a manifest of the plugins it packages
+   (`lib/arm64-v8a/libnevr_plugin_manifest.so`, section 2), and the loader loads each one with no config entry. The
+   ordered `plugins:` list in config.yaml overrides a packaged plugin (`enabled`, `required`, `args`, `target`; `early`
+   can be set, not cleared) and names the rest. On Quest `file` is a basename inside the native library directory only.
+   Manifest order, then config-only entries in config order, is load order.
 3. **Install moments.** Two: (a) inside the sentinel constructor, after the reporter starts, for `early` entries only and
    only if the constructor-time `dlopen` prediction holds; (b) at the first call of the post-load hook (the `dlopen` hook
    on the game's own `dlopen` slot), for every other entry. The plan (config read, file checks, one record per entry)
@@ -101,7 +104,9 @@ reach the APK without also going through the static-init check and the signature
 **Trust (R1 trust).** A shipped plugin is trusted because the APK signature covers every entry of the APK, and the repack
 signs last. A player cannot add a plugin without re-signing the APK, and a re-signed APK cannot update an installed app
 signed with another key (platform behaviour, to be confirmed on a device in P12). A plugin the player puts anywhere
-else is not loaded in v1.
+else is not loaded in v1. The repack writes each packaged plugin's sha-256 into the manifest, and the loader refuses a
+file whose bytes differ from it (`manifest_hash_mismatch`) before it maps the file. The hash belongs to the file: every
+entry that loads a packaged file is checked against it, whichever config entry it is.
 
 **Alternatives for trust.**
 
@@ -115,9 +120,26 @@ else is not loaded in v1.
 
 ## 2. Manifest and load order
 
-**Recommendation (R2).** Reuse the `plugins:` list and its keys exactly as the shared parser reads them
-(`src/core/nevr_config.cpp:264-281`): `name` (required), `file`, `enabled`, `required`, `early`, `target` (recorded,
-not acted on), `args` (flattened to dotted keys, string values). The Quest loader differs in three ways:
+**Recommendation (R2).** Two sources, one plan. The repack writes a manifest of the plugins it packages,
+`lib/arm64-v8a/libnevr_plugin_manifest.so`: JSON with `schema` 1 and one entry per packaged plugin (`name`, `file`, `enabled`,
+`early`, and `sha256` of the staged file), keys sorted, no spaces. Its name is `lib*.so`, so the installer extracts it
+beside the plugins. The repack writes it only when a plugin is packaged, so a build with none is unchanged. The loader
+reads it at launch and loads each packaged plugin with no config entry.
+
+The `plugins:` list in config.yaml is read with the shared parser's keys (`name`, `file`, `enabled`, `required`, `early`,
+`target`, `args`; `src/core/nevr_config.cpp:264-281`). Its entries merge with the packaged ones as follows:
+
+- A config entry whose resolved `file` equals a packaged entry's file (ASCII case-insensitive; `<name>.dll` is read as
+  `lib<name>.so`) overrides that entry in place. `enabled`, `required`, `args` and `target` come from config. `early` is the
+  packaged value or the config value, so config can set `early` and cannot clear it. The packaged `sha256` is kept.
+- A config entry that names no packaged file, or a second entry for a file an earlier entry already overrode, is a
+  config-only entry. It is appended after the packaged entries, in config order. Config cannot reorder packaged plugins. A
+  config-only entry whose file is a packaged file's (the first entry disabled it, or the file is spelled in another case)
+  carries that file's manifest hash, so config changes how a packaged plugin runs and never which bytes run; a second
+  enabled entry for the file is refused as `duplicate_file`.
+- A config file that is absent, or rejected as a whole, leaves every packaged plugin on with its manifest values.
+
+The Quest differences from the PC list are unchanged:
 
 - `file` is a basename only. A path separator, a NUL, an empty value, `.` or `..` in `file` is a refusal with reason
   `file_outside_directory`. This mirrors the PC check `PluginFileStaysInDirectory` (`src/runtime/ext/plugin_loader.cpp`,
@@ -127,14 +149,15 @@ not acted on), `args` (flattened to dotted keys, string values). The Quest loade
 - `required` on a client logs and continues. This is already the client rule in the reference config
   (`docs/reference/example-config.yaml:436-438`). A required Quest plugin that fails does not stop the game.
 
-**Load order.** List order within each moment. `early` entries run at moment (a), in list order. The rest run at moment
-(b), in list order. This matches the PC rule that the early pass loads only `early: true` entries (N146,
-`AGENTS.md:191`).
+**Load order.** Within each moment: packaged entries in manifest order, then config-only entries in config order. `early`
+entries run at moment (a), in that order. The rest run at moment (b). This matches the PC rule that the early pass loads
+only `early: true` entries (N146, `AGENTS.md:191`).
 
 **Alternatives.**
 
-- **Quest-specific manifest file.** Rejected: a second source of truth for the same operator, and the PC list is already
-  the documented one (`docs/reference/example-config.yaml:431`).
+- **A separate Quest operator manifest.** Rejected: a second source of truth for the operator's configuration, and the PC
+  list is already the documented one (`docs/reference/example-config.yaml:431`). The packaging manifest above is build
+  output: the repack writes it from the staged bytes, and no operator edits it, so it does not compete with `plugins:`.
 - **Send the plugin list to login (adopted, Q5).** The PC loader reports `nevr_plugins` at login (`src/runtime/compat/login_profile.cpp:46`).
   Quest does the same; the login field is service-visible, so the decision is recorded in section 13 (Q5).
 
@@ -382,7 +405,18 @@ Shaped by AGENTS.md (logging is part of the work) and `docs/standards/logging.md
 - **Loader record.** Exactly one `plugin_load` record per plan entry, whatever its outcome. Fields: `name`, `file`,
   `sha256` of the bytes the loader read, `plugin_build_id`, `game_build_id`, `phase` (`early` or `normal`), `outcome`
   (`planned`, `loaded`, `refused`, `disabled`, `not_started`, `failed`), and `reason` as a stable token. A plan entry
-  with no record is a defect (P9).
+  with no record is a defect (P9). Two fields carry the packaging: `source` (`packaged`, from the manifest, or `config`)
+  and `overridden` (`1` when a config entry named a packaged file). `expected_sha256` is the manifest's hash for the file
+  (empty when the file is not packaged), beside `sha256`. The reason `manifest_hash_mismatch` (outcome `refused`) is a
+  packaged file whose bytes are not the manifest's hash.
+- **Manifest record.** One `plugin_manifest` line per launch: `status` (`read`, `absent`, `unreadable` or `invalid`),
+  `packaged` (the count), `file`, and for `unreadable` and `invalid` a `reason` token and a `msg` that says no packaged
+  plugin loads from this APK and that `config.yaml` entries still load as `source=config`. `absent` (Info) is a manifest
+  file that is not there, the normal case for a build with no packaged plugin. `unreadable` (Warning) is a file that is there
+  and cannot be used: `no_library_dir`, `symlink`, `not_regular_file`, `too_large`, `open_failed` or `read_failed`. `invalid`
+  (Error) is a file that was read and is not a manifest this loader understands: `not_json`, `bad_schema`, `bad_entry`,
+  `bad_file`, `bad_sha256`, `duplicate_file`, `too_large`, `too_many`. A manifest the build wrote that the sentinel cannot
+  use is a defect the operator must see, and it plans no packaged plugin.
 - **Secrets.** `args` values are interpolated config values and may hold secrets. The loader logs the argument keys
   only, never the values.
 - **Stderr.** A plugin does not write to stderr (`logging.md:527-530`). The Quest sentinel does not collect it.
@@ -426,8 +460,9 @@ Shaped by AGENTS.md (logging is part of the work) and `docs/standards/logging.md
 | P11 | `SafeRead` of an unmapped address returns an error status and the process stays alive. | The process dies, or the read returns data for an unmapped address. | S4 |
 | P12 | After repack, the plugin object is listed in `lib/arm64-v8a` of the signed APK and the APK signature verifies. An APK re-signed with another key is refused as an update of the installed app. | The object is missing from the signed APK, verification fails, or the re-signed APK installs over the existing app. | S1 |
 | P13 | A PC-built DLL in the `plugins:` list is refused on Quest with `machine_type` (not AArch64 ELF), and the game still starts. | The DLL loads or the game does not start. | S1 |
+| P14 | On a headset, a repacked APK with a packaged plugin installs `libnevr_plugin_manifest.so` beside the plugins, `plugin_manifest status=read packaged=1` is logged, and the plugin loads with no `plugins:` entry in config.yaml. | `plugin_manifest status=absent` on that APK. Then the manifest is not extracted beside the plugins, and the loader needs another way to find the packaged names. | S1 |
 
-**Sign-off order for a headset run.** P1, P12 and P13 first (packaging and refusal, cheapest to read), then P10 and P2
+**Sign-off order for a headset run.** P1, P12, P13 and P14 first (packaging and refusal, cheapest to read), then P10 and P2
 (load paths), then P8 and P9, then P4 and P5 (the refusal and registry logic on the device), then P3, P7 and P11.
 
 ## 12. Staged plan

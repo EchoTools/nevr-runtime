@@ -57,7 +57,8 @@ using ResourceTransformFn = bool (*)(const void* original, uint64_t original_siz
 /// Register a transform for a resource (type 0 = any type): unlike an override, which replaces the buffer once, a
 /// transform sees the game's buffer on every load of that resource, so it can build its answer from the player's
 /// own data and serve it again when the resource loads again. Only the primary buffer (index 0) is offered: a transform
-/// keyed by a buffer-1 on-disk type is never asked.
+/// keyed by a buffer-1 on-disk type is never asked. A fixed override of the same key outranks a transform whatever the
+/// registration order: the transform answers only the loads no override serves (#1479).
 void RegisterResourceTransform(uint64_t type_hash, uint64_t name_hash, ResourceTransformFn transform, void* user,
                                const char* label);
 
