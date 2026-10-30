@@ -59,6 +59,10 @@ and a run whose tag has it starts as "variant"; in the already-listed path it fo
 after that; the note that the timer gave up on a tag says which part it was. An exception no step expected is recorded as a
 `failed` of the step `unexpected` (its class and where, never its text), what the run made is removed, and the run exits 1.
 
+A tag whose history has `main_complete` takes the variant-only path whatever beta lists (`variant_only`: no signer, no
+check_listed, no dispatch, no notice), so a beta that moved never makes the main release run again. A run that does work holds
+a non-blocking lock on <work>/timer.lock; one that finds it held records `busy` and exits 0 having done nothing.
+
 Every step appends a JSON line to $XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl; a log that cannot be written is
 a failure. `--notify-failure` couriers the last failure once per step and error in six hours (`failure_notified`, then
 `failure_notice_suppressed`). A failed step exits 1 and names itself, with the redacted tail of the failing command's stderr and of its stdout (not the stdout of curl, gh or the signer, which is remote content). A refusal
@@ -73,6 +77,7 @@ replaced by <redacted> in anything written.
 
 import argparse
 import datetime
+import fcntl
 import hashlib
 import http.client
 import json
@@ -104,7 +109,7 @@ PIN_LINE = re.compile(r"([0-9a-fA-F]{64})  (\S+)")  # `sha256sum` output: the di
 SENDER = "quest-release-timer"
 MANIFEST_PATH = "nevr-runtime/manifest.json"
 USER_AGENT = "nevr-runtime-quest-release-timer"  # the release host answers 403 to the default agent
-TAG = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")  # always fullmatch: `$` would pass a trailing newline
 RUN_ID = re.compile(r"/actions/runs/([0-9]+)")
 RELEASE_SLUG = "EchoTools/nevr-runtime"
 SIGNER_SLUG = "thesprockee/release-signer"
@@ -170,7 +175,7 @@ def newest_published(listing: str) -> str:
         releases = json.loads(listing)
     except ValueError as error:
         raise StepFailure("list", f"the release list is not JSON: {error}") from error
-    tags = [r["tagName"] for r in releases if not r.get("isDraft") and TAG.match(r.get("tagName", ""))]
+    tags = [r["tagName"] for r in releases if not r.get("isDraft") and TAG.fullmatch(r.get("tagName", ""))]
     if not tags:
         raise StepFailure("list", "no published vX.Y.Z release")
     return max(tags, key=lambda t: tuple(int(n) for n in t[1:].split(".")))
@@ -190,6 +195,7 @@ class Timer:
         # What every command gets. The R2 credential and the GitHub token are added by the one or two steps that use them.
         self.child = {k: v for k, v in env.items() if k not in SECRET_ENV and k not in VARIANT_ENV and k != "GH_TOKEN"}
         self.part = "main"  # what a failure now belongs to: the main release, or the variant that follows it
+        self.main_done = False  # the tag's history has `main_complete`: only the variant is left, whatever beta lists
         self.scratch_made = False  # this run made the variant scratch directory
 
     def redact(self, text: str) -> str:
@@ -422,6 +428,12 @@ class Timer:
                               "user timer nevr-quest-release. Each run removes what it makes here when it ends, except the output file of a\n"
                               "failed variant build, which stays until the variant is done.\n",
                               encoding="utf-8")
+        if self.main_done:
+            # The main release was published, listed, verified and announced by an earlier run: only the variant is left, and it
+            # does not depend on what beta lists now (a rollback, a hand publish and a hand `--tag` of an older release move beta).
+            self.log.event("variant_only", reason="the main release is complete; beta is not consulted")
+            self.finish_variant(tag, worktree, made, None)
+            return
         binary = self.build_signer(signer_dir, tarball)
         before = self.live_state(binary, signer_dir, "check_listed")
         beta = str(before["channels"].get("beta", ""))
@@ -514,13 +526,23 @@ class Timer:
 
     def sweep_scratch(self, tag: str) -> None:
         """Remove the private copies a killed run left: the scratch directory of the tag, when it carries this timer's marker.
-        A link, or a directory without the marker, is not ours and is never touched."""
+        A link, or a directory without the marker, is not ours and is never touched. The marker goes last (the files first,
+        then the marker, then the directory), so a sweep that fails part way leaves a directory that is still marked and is
+        retried by the next run."""
         scratch = self.variant_scratch(tag)
         marker = scratch / SCRATCH_MARKER
         if scratch.is_symlink() or not scratch.is_dir() or marker.is_symlink() or not marker.is_file():
             return
         try:
-            shutil.rmtree(scratch)
+            for child in scratch.iterdir():
+                if child.name == SCRATCH_MARKER:
+                    continue
+                if child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+            marker.unlink()
+            scratch.rmdir()
         except OSError as error:
             raise StepFailure("cleanup", f"cannot remove the scratch a killed run left: {error.strerror}") from error
         self.log.event("variant_scratch_removed", reason="left by a run that did not finish")
@@ -603,16 +625,18 @@ class Timer:
         self.ok(step, count=len(copies))
         return copies
 
-    def get_object(self, step: str, url: str, limit: int, keep: bool = False) -> tuple[int, str, str, bytes]:
+    def get_object(self, step: str, url: str, limit: int, keep: bool = False) -> tuple[int, str, str, bytes, bool]:
         """GET `url` without following a redirect: (status, content type, sha256 of the body as it streamed in, the body when
-        `keep`). A status other than 200 is returned for the caller to judge, with no body read; a host that does not answer,
-        or a body over `limit`, is a failure."""
+        `keep`, whether the read was provably complete). A status other than 200 is returned for the caller to judge, with no
+        body read; a host that does not answer, or a body over `limit`, is a failure. Complete means the bytes received are
+        the declared Content-Length and the host sent them unencoded: a body that ends with the connection, a chunked one or an
+        encoded one cannot be called the file, and a digest that disagrees with it proves nothing."""
         file = url.rsplit("/", 1)[-1]
-        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept-Encoding": "identity"})
         try:
             response = urllib.request.build_opener(NoRedirect).open(request, timeout=FETCH_TIMEOUT_SECONDS)
         except urllib.error.HTTPError as error:
-            return error.code, "", "", b""
+            return error.code, "", "", b"", False
         except (OSError, http.client.HTTPException, ValueError) as error:  # a bad status line, a URL the library rejects
             raise StepFailure(step, f"{file} on the host: no answer ({error.__class__.__name__})") from error
         digest = hashlib.sha256()
@@ -621,8 +645,9 @@ class Timer:
         with response:
             content_type = response.headers.get("Content-Type", "")
             if response.status != 200 or content_type.lower().startswith("text/html"):
-                return response.status, content_type, "", b""
+                return response.status, content_type, "", b"", False
             declared = response.headers.get("Content-Length", "").strip()
+            encoding = response.headers.get("Content-Encoding", "").strip().lower()
             try:
                 while chunk := response.read(READ_CHUNK):
                     size += len(chunk)
@@ -632,11 +657,13 @@ class Timer:
                     if keep:
                         kept += chunk
             except (OSError, http.client.HTTPException, ValueError) as error:  # IncompleteRead, a bad chunk size
+                received = size + len(getattr(error, "partial", b""))  # what the failing read had already taken in
                 raise StepFailure(step, f"{file} on the host: the answer broke off ({error.__class__.__name__}), "
-                                        f"received {size} bytes") from error
+                                        f"received {received} bytes") from error
             if declared.isascii() and declared.isdigit() and size != int(declared):
                 raise StepFailure(step, f"{file} on the host: the answer broke off (received {size} of {int(declared)} bytes)")
-        return 200, content_type, digest.hexdigest(), bytes(kept)
+        complete = declared.isascii() and declared.isdigit() and size == int(declared) and encoding in ("", "identity")
+        return 200, content_type, digest.hexdigest(), bytes(kept), complete
 
     def variant_exists(self, tag: str) -> bool:
         """Whether the host has the variant PAIR. 404 for the APK is absent. An APK that is there is listed only when its
@@ -656,14 +683,17 @@ class Timer:
             what = "with an HTML content type, which is not the file" if status == 200 else "instead of the file"
             return StepFailure(step, f"{file} on the host: answered {status} {what}{note}")
 
-        status, content_type, apk_digest, _ = self.get_object(step, f"{base}/nevr-runtime/{tag}/{name}", APK_LIMIT)
+        status, content_type, apk_digest, _, apk_complete = self.get_object(step, f"{base}/nevr-runtime/{tag}/{name}", APK_LIMIT)
         if status == 404:
             return False
         if status != 200 or content_type.lower().startswith("text/html"):
             raise answered(name, status, content_type)
         repair = "; nothing is rebuilt or replaced, see RELEASING.md (The Quest half of the train, the variant pair) for the repair"
         broken = f"{name} is on the host but {sidecar} does not match it: "
-        status, content_type, _, body = self.get_object(step, f"{base}/nevr-runtime/{tag}/{sidecar}", SIDECAR_LIMIT, keep=True)
+        status, content_type, _, body, sidecar_complete = self.get_object(step, f"{base}/nevr-runtime/{tag}/{sidecar}",
+                                                                           SIDECAR_LIMIT, keep=True)
+        unconfirmed = (f"{name} is on the host but {sidecar} does not match it, and we could not confirm the answer was complete "
+                       "(no declared length, or an encoded or chunked body), so nothing is concluded; the next run asks again")
         if status == 404:
             raise StepFailure(step, f"{broken}{sidecar} is missing (a half-published pair){repair}")
         if status != 200 or content_type.lower().startswith("text/html"):
@@ -673,10 +703,16 @@ class Timer:
         except UnicodeDecodeError:
             found = None
         if not found:
+            if not sidecar_complete:
+                raise StepFailure(step, unconfirmed)
             raise StepFailure(step, f"{broken}{sidecar} is malformed (not one '<sha256>  <name>' line){repair}")
         if found.group(2) != name:
+            if not sidecar_complete:
+                raise StepFailure(step, unconfirmed)
             raise StepFailure(step, f"{broken}{sidecar} names a different file ({len(found.group(2).encode())} bytes){repair}")
         if found.group(1) != apk_digest:
+            if not (apk_complete and sidecar_complete):
+                raise StepFailure(step, unconfirmed)
             raise StepFailure(step, f"{broken}{sidecar} states sha256 {found.group(1)}, the APK on the host has {apk_digest}{repair}")
         return True
 
@@ -803,7 +839,7 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
     path = state_log_path(env)
     if args.notify_failure:
         return notify_failure(env, runner, path)
-    if args.tag and not TAG.match(args.tag):
+    if args.tag and not TAG.fullmatch(args.tag):
         sys.stderr.write(f"quest-release-timer: {args.tag} is not a release tag (vX.Y.Z)\n")
         return 1
     if args.reset_failures and not args.tag:
@@ -811,6 +847,7 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
         return 1
     log = None
     timer = None
+    lock = None
     try:
         log = Log(path, args.tag or "")
         log.event("start")
@@ -823,6 +860,11 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
             log.event("refused", missing=missing, part="main")
             raise Failure(f"refused: set {', '.join(missing)}")
         timer = Timer(env, runner, sleep, log)
+        lock = take_lock(timer.work)
+        if lock is None:
+            log.event("busy", reason="another run holds the lock on timer.lock in the work directory")
+            sys.stderr.write("quest-release-timer: busy: another run holds the lock; nothing was done\n")
+            return 0
         timer.check_checkout()
         timer.check_tags()
         token = timer.cmd("token", [timer.gh, "auth", "token"]).stdout.strip()
@@ -838,8 +880,9 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
             log.event("step_ok", step="list", newest=tag)
         log.base["tag"] = tag
         history = [e for e in read_events(path) if e.get("tag") == tag]
+        timer.main_done = any(e.get("event") == "main_complete" for e in history)
+        timer.part = "variant" if timer.main_done else "main"  # before the sweep, so a failure of it carries the right part
         timer.sweep_scratch(tag)
-        timer.part = "variant" if any(e.get("event") == "main_complete" for e in history) else "main"
         if any(e.get("event") == "done" for e in history):
             log.event("nothing_to_do", reason="done")
             return 0
@@ -880,8 +923,24 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
             _record(log, "failed", "unexpected", message, part_of(timer))
         return 1
     finally:
+        if lock is not None:
+            os.close(lock)  # the lock is released with the descriptor, however the run ended
         if log is not None:
             log.close()
+
+
+def take_lock(work: pathlib.Path) -> int | None:
+    """A non-blocking exclusive lock on <work>/timer.lock for the life of the process, so two runs (the timer's and a hand
+    `--tag` run) never work at once: one would sweep the other's scratch or publish twice. None when it is held."""
+    work.mkdir(parents=True, exist_ok=True)
+    fd = os.open(work / "timer.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None
+    return fd
 
 
 def part_of(timer: "Timer | None") -> str:

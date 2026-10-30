@@ -392,8 +392,9 @@ recorded as `failed` with the step `unexpected`, naming its class and where it h
 the worktree and the scratch are removed, the run exits 1, and it counts toward the three tries like any other failure.
 
 The private copies of the libraries are in `variant-vX.Y.Z` in the timer's work directory, which carries the marker file
-`.made-by-quest-release-timer` from the moment the timer makes it. Every run, the already-listed path and a failing run
-included, removes a directory of that name that carries the marker (a killed run's leftovers) and records
+`.made-by-quest-release-timer` from the moment the timer makes it. Every run that reaches the release list (or has `--tag`), the
+already-listed path and a failing run included, removes a directory of that name that carries the marker (a killed run's leftovers): the files first, then the marker, then the directory, so
+a sweep that fails part way leaves a directory that is still marked and the next run retries it. It records
 `variant_scratch_removed`; a directory without the marker, or a link, is never removed, and the pins step then fails because it
 cannot make its own.
 
@@ -403,19 +404,35 @@ only when its `.sha256` is there too, is the one line `<sha256>  <variant name>`
 serves it (hashed as it streams in); that logs `variant_listed`, builds nothing and finishes the tag. Any other answer for
 either file is a failure.
 
+**One run at a time.** A run that does work takes a non-blocking lock on `timer.lock` in the timer's work directory and holds it
+until it ends. A run that finds it held (a hand `--tag` run while the timer's is working, say) records `busy`, prints one line
+to stderr and exits 0 having done nothing, so it can neither sweep a live run's scratch nor publish twice. `--notify-failure`
+and `--reset-failures` do no work and take no lock.
+
+**A completed main release is never run again.** A tag whose history has `main_complete` takes the variant-only path
+whatever beta lists: no signer is built, and `check_listed`, the dispatch and the notice are not run; the run records
+`variant_only` and goes straight to the variant pair check. The variant does not depend on beta, so a rollback, a hand
+publish or a hand `--tag` of an older release cannot make the timer publish the main release to beta again. A tag without
+`main_complete` and a beta that lists another release takes the full path, as before.
+
 **A half-published or mismatched pair.** When the APK is there and the sidecar is missing, malformed, names another file or
-states another digest, `variant_exists` fails naming the two files and which check failed, and it rebuilds nothing: the
+states another digest, `variant_exists` fails naming the two files and which check failed, and it rebuilds nothing. It
+says so only when the APK's read was provably complete (its declared `Content-Length` equals the bytes received, and the host
+sent them unencoded) and the sidecar's too; a digest that disagrees with a body that ends with the connection, arrives
+chunked or encoded, or has no declared length is `could not confirm the answer was complete`, without the pointer to this
+repair, and the next run asks again (the request asks for `Accept-Encoding: identity`). The pair is not rebuilt: the
 publisher's upload never replaces an object (`rclone copyto --ignore-existing`), so a rebuild could not repair it, and a
 different APK at that name is not the timer's to overwrite. A body that came in short of its `Content-Length`, a connection
 that broke off or an answer that is not HTTP is not a mismatch: it fails as `the answer broke off` or `no answer`, without the
 pointer to this repair, and the next run asks again. The repair is by hand with the publisher's credential (the R2 credential
 file the unit loads), outside the timer, and it needs a digest that comes from the build that was published, never from the
 host: **never copy the digest from the error message into the sidecar**, because that would certify whatever is on the host.
-The `local_files` record of the run that put the APK up (in `publish-quest-apk.jsonl`; the run's other records are `start`,
-`put_variant_apk`, `put_sidecar`, `fetch` and `published`) gives the sha256 and size of the build it published, and the
-build's own `.sha256` under `build/quest-release/vX.Y.Z/variant/` gives the same when that worktree still exists. After
-confirming that the object on the host has that size, replace the sidecar with the single line
-`<that sha256>  nevr-runtime-vX.Y.Z-q15t-quest.apk`, as `sha256sum` writes it. If there is no such record or file, or the size
+Take the digest from the `local_files` record of the run that built and put up the pair (in `publish-quest-apk.jsonl`; the
+run's other records are `start`, `put_variant_apk`, `put_sidecar`, `fetch` and `published`). It gives the sha256 and size of
+the build that run published, is written before the upload and is local to this machine; the build's own directory is gone,
+because the timer always removes its worktree when a run ends. After confirming that the object on the host has that size,
+replace the sidecar with the single line
+`<that sha256>  nevr-runtime-vX.Y.Z-q15t-quest.apk`, as `sha256sum` writes it. If there is no such record, or the size
 differs, delete BOTH objects from the release prefix instead. Either way, run
 `python3 tools/quest_release_timer.py --tag vX.Y.Z --reset-failures` and let the next run check the pair again (an absent APK
 is built and published as above).

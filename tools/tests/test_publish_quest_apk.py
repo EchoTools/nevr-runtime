@@ -172,7 +172,7 @@ class PublishQuestApk(PublishFixture):
         self.assertIn("GH_TOKEN", result.stderr)
 
     def test_a_tag_that_is_not_a_release_tag_is_refused(self) -> None:
-        for bad in ("v1.2", "1.2.3", "v1.2.3-dev.4", "main"):
+        for bad in ("v1.2", "1.2.3", "v1.2.3-dev.4", "main", "v1.2.3\n"):
             with self.subTest(tag=bad):
                 result = self.run_tool(bad)
                 self.assertNotEqual(result.returncode, 0)

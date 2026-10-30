@@ -249,7 +249,7 @@ def publish(args: argparse.Namespace, env: dict[str, str], log: Log) -> None:
     if refused:
         log.event("refused", missing=refused)
         raise Failure(f"refused: set {', '.join(refused)}")
-    if not TAG.match(args.tag):
+    if not TAG.fullmatch(args.tag):
         raise Failure(f"{args.tag} is not a release tag (vX.Y.Z)")
     base = public_base(env)
     signer_cwd = signer_dir(env) if variant is None else ""
