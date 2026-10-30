@@ -135,8 +135,8 @@ struct FakeSteps final : Steps {
   bool InstallTextureQuality(const nevr_quest::TextureChoice& choice, bool counted) override {
     textureSeen = choice;
     ++textureCalls;
-    // `stock` registers no counters and needs none.
-    return Step(counted || choice.level == nevr_quest::texture_quality::Level::kStock ? "texture" : "texture_uncounted");
+    // Every level, `stock` too, registers counters and needs them (#1012: the settings menu can raise `stock`).
+    return Step(counted ? "texture" : "texture_uncounted");
   }
   bool InstallRenderConfig(const nevr_quest::TextureChoice& choice) override {
     renderConfigSeen = choice;
@@ -177,11 +177,11 @@ struct FakeSteps final : Steps {
     s.config.effective.bridge = bridge;
     s.config.effective.login = login;
     s.config.effective.social = socialOn;
-    // `stock`, the level that registers no counters, pinned here so the other tests' call lists do not move when the default does.
+    // `stock` pinned here so the other tests' call lists do not move when the default does.
     s.config.textureQuality = {nevr_quest::texture_quality::Level::kStock, nevr_quest::Source::kFile};
     return s;
   }
-  // The same with a level that installs the hook (and registers its counters): the texture-quality tests.
+  // The same with a level above Low: the texture-quality tests.
   static FakeSteps WithTexture(bool redirect, bool bridge, bool login, bool socialOn) {
     FakeSteps s = With(redirect, bridge, login, socialOn);
     s.config.textureQuality = {nevr_quest::texture_quality::Level::kHigh, nevr_quest::Source::kFile};
@@ -284,14 +284,14 @@ void TestHwDumpIsIndependentAndContained() {
     FakeSteps s = FakeSteps::With(false, false, false, false);
     s.config.effective.hwdump = true;
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_clock_levels", "reporter", "attach", "clock", "frame_dispatch", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels", "hwdump"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_texture", "reg_clock_levels", "reporter", "attach", "clock", "frame_dispatch", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels", "hwdump"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kInstallHwDump).state == StepState::kOk);
   }
   for (const char* mode : {"fail", "throw"}) {
     FakeSteps s = FakeSteps::WithTexture(true, true, true, true);
     s.config.effective.hwdump = true;
-    // A release build skips the resource request log (#871) and a `stock` level skips the texture counters (#943); a skip is not kOk.
+    // A release build skips the resource request log (#871); a skip is not kOk.
     s.devBuild = true;
     s.plugins = {1, 0};  // and no early plugin means a skipped early pass (#438)
     s.inviteWanted = true;  // the observer's step (#966) is ok here: the loop below asks every step before hwdump to be kOk
@@ -432,7 +432,7 @@ void TestOsBuildGateIsUnconditionalIndependentAndContained() {
 
 // The texture-quality hook (#943) runs on every launch like the Vulkan window: no feature turns it off, a configuration that
 // cannot be resolved gives it `stock` (a mistake, never the default and never a level that costs memory), the level the configuration did give reaches it with its source,
-// its counters are registered before the single reporter start (except for `stock`, which installs nothing and needs none),
+// its counters are registered before the single reporter start (at every level: the settings menu can raise `stock`, #1012),
 // it installs right after the OS build floor hook and before token auth and the hardware dump, and a refused counter, a
 // failing or a throwing step leaves every other step as it was.
 void TestTextureQualityIsUnconditionalIndependentAndContained() {
@@ -464,13 +464,12 @@ void TestTextureQualityIsUnconditionalIndependentAndContained() {
     QCHECK(s.textureSeen.level == level && s.textureSeen.source == nevr_quest::Source::kFile);
     QCHECK(s.Ran("reg_texture") && s.Ran("texture"));
   }
-  {  // stock: no counters are asked for, the step still runs (it logs that it installs nothing) and says it is stock
+  {  // stock: its counters are registered and the step runs like any other level's (the settings menu can raise it, #1012)
     FakeSteps s = FakeSteps::WithTexture(true, true, true, true);
     s.config.textureQuality = {tq::Level::kStock, nevr_quest::Source::kFile};
     const ConstructorReport r = RunConstructorSequence(s);
-    QCHECK(!s.Ran("reg_texture"));
-    QCHECK(r.at(StepId::kRegisterTextureQualityCounters).state == StepState::kSkipped);
-    QCHECK(std::strcmp(r.at(StepId::kRegisterTextureQualityCounters).reason, "stock") == 0);
+    QCHECK(s.Ran("reg_texture"));
+    QCHECK(r.at(StepId::kRegisterTextureQualityCounters).state == StepState::kOk);
     QCHECK(r.at(StepId::kInstallTextureQuality).state == StepState::kOk);
     QCHECK(s.textureCalls == 1 && s.textureSeen.level == tq::Level::kStock);
     QCHECK(s.Ran("texture") && !s.Ran("texture_uncounted"));
@@ -484,8 +483,8 @@ void TestTextureQualityIsUnconditionalIndependentAndContained() {
     QCHECK(r.at(StepId::kInstallTextureQuality).state == StepState::kOk);
     QCHECK(s.textureSeen.level == tq::kFallbackLevel && s.textureSeen.level == tq::Level::kStock);
     QCHECK(s.textureSeen.source != nevr_quest::Source::kFile);
-    QCHECK(!s.Ran("reg_texture") && s.Ran("texture"));
-    QCHECK(r.at(StepId::kRegisterTextureQualityCounters).state == StepState::kSkipped);
+    QCHECK(s.Ran("reg_texture") && s.Ran("texture"));
+    QCHECK(r.at(StepId::kRegisterTextureQualityCounters).state == StepState::kOk);
   }
   {  // counters refused: the hook is called once so its own rule logs the skip, and the step says why
     FakeSteps s = FakeSteps::WithTexture(true, true, true, true);
@@ -601,7 +600,7 @@ void TestResourceRequestLogIsDevelopmentOnlyOrderedAndContained() {
   {  // release: nothing runs, both steps say why, and the other steps are exactly as before
     FakeSteps s = FakeSteps::With(false, false, false, false);
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_clock_levels", "reporter", "attach", "clock", "frame_dispatch", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_texture", "reg_clock_levels", "reporter", "attach", "clock", "frame_dispatch", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
     QCHECK(s.calls == want);
     QCHECK(s.devAsked == 1);
     QCHECK(r.at(StepId::kRegisterResourceRequestCounters).state == StepState::kSkipped);
@@ -615,7 +614,7 @@ void TestResourceRequestLogIsDevelopmentOnlyOrderedAndContained() {
     FakeSteps s = FakeSteps::With(false, false, false, false);
     s.devBuild = true;
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_clock_levels", "reporter", "attach", "clock", "frame_dispatch", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_resource", "reg_texture", "reg_clock_levels", "reporter", "attach", "clock", "frame_dispatch", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "resource", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kRegisterResourceRequestCounters).state == StepState::kOk);
     QCHECK(r.at(StepId::kInstallResourceRequestLog).state == StepState::kOk);
@@ -767,8 +766,8 @@ void TestObbSkipIsUnconditionalIndependentAndContained() {
     s.failing = {"config"};
     const ConstructorReport r = RunConstructorSequence(s);
     QCHECK(r.at(StepId::kResolveConfig).state == StepState::kThrew);
-    // The unresolved configuration is a mistake, so the level is `stock`: no texture counters, and the step still runs.
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_clock_levels", "reporter", "attach", "clock", "frame_dispatch", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
+    // The unresolved configuration is a mistake, so the level is `stock`: its counters are registered and the step runs.
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reg_texture", "reg_clock_levels", "reporter", "attach", "clock", "frame_dispatch", "obb", "process_end", "permission_wait", "vk_ext_window", "os_build_gate", "texture", "render_config", "credits", "menu_cards", "clock_levels"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
   }

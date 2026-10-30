@@ -110,6 +110,13 @@ set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/resource_re
 target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_quality_hook.cpp")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_quality_hook.cpp"
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# And the #1012 Texture Resolution control's counters (the hook without exceptions; the pure rewrite it calls keeps them).
+target_sources(integration_hooks_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_menu_hook.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_menu.cpp")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_menu_hook.cpp"
+  PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+target_link_libraries(integration_hooks_test PRIVATE nlohmann_json::nlohmann_json)
 # And the #928 clock-level override's counters (also without exceptions).
 target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/clock_levels_hook.cpp")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/clock_levels_hook.cpp"

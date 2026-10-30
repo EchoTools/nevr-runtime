@@ -15,25 +15,47 @@ using sentinel::pinned::OvrJavaOpaque;
 
 sentinel::GotHook g_hook;
 
-constexpr int kUnset = -1;
-// The latched level (a Level, or kUnset). Written once per process by the first install; the answers below follow it.
+constexpr int kUnset = kLevelUnset;
+// The applied level (a Level, or kUnset): the level the swap chain and the render targets are built for, which the answers follow.
+// Written by the first install in the process, once by the start resolver, then by CommitApplied.
 std::atomic<int> g_latched{kUnset};
+// The level last asked for (a Level, or kUnset) and who asked.
+std::atomic<int> g_requested{kUnset};
+std::atomic<int> g_requestSource{static_cast<int>(RequestSource::kMenu)};
+std::atomic<StartResolver> g_resolver{nullptr};
+std::atomic<bool> g_startAsked{false};
 
 std::atomic<std::uint64_t> g_nativeWidth{0};
 std::atomic<std::uint64_t> g_nativeHeight{0};
 std::atomic<std::uint64_t> g_served{0};
+std::atomic<std::uint64_t> g_sizeQueries{0};
 
 std::uint64_t NonNegative(int value) noexcept { return value > 0 ? static_cast<std::uint64_t>(value) : 0U; }
 
+// The first eye-size query comes before the game delivers its settings, so the level the player saved is asked here, once. The
+// resolver is the live apply's (it reads the settings file); with none set the configuration's level stands.
+void AskStartResolverOnce() noexcept {
+  if (g_startAsked.load(std::memory_order_acquire)) return;
+  if (g_startAsked.exchange(true, std::memory_order_acq_rel)) return;
+  const StartResolver resolver = g_resolver.load(std::memory_order_acquire);
+  if (resolver == nullptr) return;
+  const int saved = resolver();
+  if (saved == kUnset || g_latched.load(std::memory_order_acquire) == kUnset) return;
+  g_latched.store(saved, std::memory_order_release);
+}
+
 // vrapi_GetSystemPropertyInt. Calls the original with the game's own arguments every time, tells the hardware dump's
-// observer (if any) what the runtime answered, then replaces the answer to the eye width and height ids when a level is
-// latched. The size is the latched level's for the headset the runtime's own answer names (HeadsetForStockSize), so the
-// same level is a Quest 2 table on a Quest 2. Never logs, allocates or throws: it is live across the call into the
-// runtime (callback_thunk.h rule 1).
+// observer (if any) what the runtime answered, then replaces the answer to the eye width and height ids when the applied level
+// has a size. The size is the applied level's for the headset the runtime's own answer names (HeadsetForStockSize), so the
+// same level is a Quest 2 table on a Quest 2. Never logs or throws: it is live across the call into the runtime
+// (callback_thunk.h rule 1).
 int Handler(SystemPropertyIntThunk::Fn original, const OvrJavaOpaque* java, int id) noexcept {
   const int native = original(java, id);
   const sentinel::SysPropIntObserver observer = sentinel::GetSysPropIntObserver();
   if (observer != nullptr) observer(java, id, native);
+  if (id != kEyeWidthPropertyId && id != kEyeHeightPropertyId) return native;
+  AskStartResolverOnce();
+  g_sizeQueries.fetch_add(1, std::memory_order_relaxed);
   const int latched = g_latched.load(std::memory_order_acquire);
   if (id == kEyeWidthPropertyId) {
     g_nativeWidth.store(NonNegative(native), std::memory_order_relaxed);
@@ -44,7 +66,7 @@ int Handler(SystemPropertyIntThunk::Fn original, const OvrJavaOpaque* java, int 
         return width;
       }
     }
-  } else if (id == kEyeHeightPropertyId) {
+  } else {
     g_nativeHeight.store(NonNegative(native), std::memory_order_relaxed);
     if (latched != kUnset) {
       const int height = SizeFor(static_cast<Level>(latched), HeadsetForStockSize(native)).height;
@@ -101,12 +123,6 @@ bool RegisterCounters() noexcept {
 bool InstallVia(Level level, bool fromConfig, InstallFn install) noexcept {
   const char* const quality = LevelName(level);
   const char* const source = fromConfig ? "config" : "default";
-  if (level == Level::kStock) {
-    sentinel::LogFields(sentinel::LogLevel::kInfo, "texture_quality",
-                        {{"result", "not_installed"}, {"quality", quality}, {"source", source}, {"w", 0}, {"h", 0},
-                         {"why", "stock"}});
-    return true;
-  }
   if (TryLatch(level) != Latch::kNew) {
     // A second install in one process: the first level keeps answering and the slot is not touched again.
     sentinel::LogFields(sentinel::LogLevel::kError, "texture_quality",
@@ -136,7 +152,7 @@ bool InstallVia(Level level, bool fromConfig, InstallFn install) noexcept {
 bool Install(Level level, bool fromConfig) noexcept { return InstallVia(level, fromConfig, &RealInstall); }
 
 bool InstallIfCounted(Level level, bool fromConfig, bool countersRegistered) noexcept {
-  if (level != Level::kStock && !countersRegistered) {
+  if (!countersRegistered) {
     sentinel::LogFields(sentinel::LogLevel::kError, "texture_quality",
                         {{"result", "skipped"}, {"quality", LevelName(level)}, {"source", fromConfig ? "config" : "default"},
                          {"w", 0}, {"h", 0}, {"why", "counters_refused"}});
@@ -146,11 +162,6 @@ bool InstallIfCounted(Level level, bool fromConfig, bool countersRegistered) noe
 }
 
 bool ArmForTest(Level level) noexcept {
-  if (level == Level::kStock) {
-    if (g_latched.load(std::memory_order_acquire) != kUnset) return false;
-    SystemPropertyIntThunk::Arm(kHook);
-    return true;
-  }
   if (TryLatch(level) == Latch::kOther) return false;
   SystemPropertyIntThunk::Arm(kHook);
   return true;
@@ -158,9 +169,14 @@ bool ArmForTest(Level level) noexcept {
 
 void ResetForTest() noexcept {
   Unlatch();
+  g_requested.store(kUnset, std::memory_order_release);
+  g_requestSource.store(static_cast<int>(RequestSource::kMenu), std::memory_order_relaxed);
+  g_resolver.store(nullptr, std::memory_order_release);
+  g_startAsked.store(false, std::memory_order_release);
   g_nativeWidth.store(0, std::memory_order_relaxed);
   g_nativeHeight.store(0, std::memory_order_relaxed);
   g_served.store(0, std::memory_order_relaxed);
+  g_sizeQueries.store(0, std::memory_order_relaxed);
   sentinel::MarkSysPropIntSlotOwned(false);
 }
 
@@ -170,6 +186,23 @@ Level LatchedLevel() noexcept {
   const int value = g_latched.load(std::memory_order_acquire);
   return value == kUnset ? Level::kStock : static_cast<Level>(value);
 }
+
+void SetStartResolver(StartResolver resolver) noexcept { g_resolver.store(resolver, std::memory_order_release); }
+
+void RequestLevel(Level level, RequestSource source) noexcept {
+  g_requestSource.store(static_cast<int>(source), std::memory_order_relaxed);
+  g_requested.store(static_cast<int>(level), std::memory_order_release);
+}
+
+int RequestedLevelValue() noexcept { return g_requested.load(std::memory_order_acquire); }
+
+RequestSource LastRequestSource() noexcept {
+  return static_cast<RequestSource>(g_requestSource.load(std::memory_order_relaxed));
+}
+
+void CommitApplied(Level level) noexcept { g_latched.store(static_cast<int>(level), std::memory_order_release); }
+
+unsigned long long SizeQueries() noexcept { return g_sizeQueries.load(std::memory_order_relaxed); }
 
 Counts CurrentCounts() noexcept {
   return {g_nativeWidth.load(std::memory_order_relaxed), g_nativeHeight.load(std::memory_order_relaxed),

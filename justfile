@@ -1688,6 +1688,23 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/texture_quality_hook_test" -ldl
     timeout 120 "$out/texture_quality_hook_test"
+    # The Texture Resolution control (#1012), pure half: the two settings documents rewritten in memory, the saved value read back,
+    # the level <-> menu index mapping. Built with exceptions, like quest_config.cpp; no game header.
+    "${cxx[@]}" -isystem "$out/attach_json_inc" src/quest/tests/texture_menu_test.cpp src/quest/sentinel/texture_menu.cpp \
+        -o "$out/texture_menu_test"
+    timeout 120 "$out/texture_menu_test"
+    # The control's five handlers and the live apply (#1012) through their thunk entries, against a stand-in engine, resize, VR
+    # flags, settings, validator and JSON reader: the engine's order, what it waits for, what it refuses, a failed rebuild, the
+    # first delivery, the saved level, the two documents, the clamp and the log. The hook is built without exceptions as on the
+    # device; the rewrite it calls keeps them (it runs before the game is called: NEVR_OUTSIDE_GAME_CALL).
+    "${cxx[@]}" -fno-exceptions -pthread -isystem "$out/attach_json_inc" -c src/quest/sentinel/texture_menu_hook.cpp \
+        -o "$out/texture_menu_hook.o"
+    "${cxx[@]}" -isystem "$out/attach_json_inc" -c src/quest/sentinel/texture_menu.cpp -o "$out/texture_menu.o"
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/texture_menu_hook_test.cpp "$out/texture_menu_hook.o" "$out/texture_menu.o" \
+        src/quest/sentinel/texture_quality_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        "${ident[@]}" -o "$out/texture_menu_hook_test" -ldl
+    timeout 120 "$out/texture_menu_hook_test"
     # The hardware dump on the shared vrapi_GetSystemPropertyInt slot (#943): owned by the texture-quality hook, the dump
     # installs nothing there and records the runtime's own answers through the observer.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/hwdump_share_test.cpp \
@@ -2087,6 +2104,8 @@ test-quest-integration: _vcpkg-quest-host
     "${off[@]}" -c src/quest/sentinel/login_title_hook.cpp -o "$out/login_title_hook.o"
     "${off[@]}" -c src/quest/sentinel/obb_skip_hook.cpp -o "$out/obb_skip_hook.o"
     "${off[@]}" -c src/quest/sentinel/texture_quality_hook.cpp -o "$out/texture_quality_hook.o"
+    "${off[@]}" -c src/quest/sentinel/texture_menu_hook.cpp -o "$out/texture_menu_hook.o"
+    "${on[@]}" -c src/quest/sentinel/texture_menu.cpp -o "$out/texture_menu.o"
     "${off[@]}" -c src/quest/sentinel/quit_hook.cpp -o "$out/quit_hook.o"
     "${off[@]}" -c src/quest/sentinel/resource_request_hook.cpp -o "$out/resource_request_hook.o"
     "${off[@]}" -c src/quest/sentinel/clock_levels_hook.cpp -o "$out/clock_levels_hook.o"
@@ -2121,7 +2140,7 @@ test-quest-integration: _vcpkg-quest-host
         src/runtime/lifecycle/stable_string_pool.cpp \
         "$out/got_hook.o" "$out/hook_report.o" "$out/tstring_thunks.o" "$out/dlopen_hook.o" "$out/social_shim.o" \
         "$out/social_game_calls.o" "$out/social_install.o" "$out/social_invite_gate.o" "$out/social_facade.o" "$out/hook_log.o" "$out/social_names.o" \
-        "$out/login_prompt_hook.o" "$out/frame_dispatch.o" "$out/login_title_hook.o" "$out/obb_skip_hook.o" "$out/resource_request_hook.o" "$out/texture_quality_hook.o" "$out/clock_levels_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
+        "$out/login_prompt_hook.o" "$out/frame_dispatch.o" "$out/login_title_hook.o" "$out/obb_skip_hook.o" "$out/resource_request_hook.o" "$out/texture_quality_hook.o" "$out/texture_menu_hook.o" "$out/texture_menu.o" "$out/clock_levels_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
         "$out/login_prerequisites.o" "$out/login_standin.o" \
         "${ident[@]}" "$yaml_lib" -o "$out/integration_hooks_test" -ldl -pthread -lzstd
     timeout 300 "$out/integration_hooks_test"
