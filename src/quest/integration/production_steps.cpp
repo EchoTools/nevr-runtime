@@ -45,6 +45,7 @@
 #include "quest/social/menu_version_label.h"
 #include "quest/social/social_facade.h"
 #include "quest/social/social_frames.h"
+#include "runtime/compat/crash_upload.h"
 #include "runtime/compat/friend_request_check.h"
 #include "runtime/compat/party_leave_check.h"
 #include "runtime/compat/party_share_check.h"
@@ -323,6 +324,21 @@ void SelfCheckLog(const nevr_self_check::LogRecord& record) {
                        {"expected", record.expected.c_str()}, {"observed", record.observed.c_str()}});
 }
 
+// Crash report upload (runtime/compat/crash_upload.h, #1605): one sentinel log line per event. A report's text and the
+// minidump are never logged, only their sizes.
+void CrashUploadLog(const nevr_crash_upload::LogEvent& e) {
+  const std::string event = e.event;
+  if (event == "armed" || event == "off") {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "crash_upload",
+                        {{"state", e.event}, {"dir", e.report.c_str()}, {"detail", e.detail.c_str()}});
+    return;
+  }
+  sentinel::LogFields(event == "sent" ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "crash_upload",
+                      {{"state", e.event}, {"report", e.report.c_str()}, {"report_bytes", e.reportBytes},
+                       {"minidump", e.minidump.c_str()}, {"minidump_bytes", e.minidumpBytes},
+                       {"detail", e.detail.c_str()}});
+}
+
 // Self-check "party_data_share" (#398): hands each message of a frame to the check, which pairs the service's
 // answers (server to game) with the requests that were sent (game to server, and the facade's own through
 // SendSocialFrame, which the frame tap does not show). Runs on the thread that carries the frame: the frame
@@ -540,6 +556,12 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
+  bool InstallCrashFirst() override {
+    const bool ok = nevr_quest::integration::InstallCrashFirstHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
   bool InstallPermissionWait() override {
     const bool ok = nevr_quest::integration::InstallPermissionWaitHook();
     detail_ = ok ? "ok" : "got_hook_refused";
@@ -632,6 +654,12 @@ class ProductionSteps final : public Steps {
       hooks.log = &SelfCheckLog;
       hooks.build = NEVR_QUEST_PROJECT_VERSION;
       ApplySelfCheck(&config.tap, hooks);
+      // The report a crash left in nevr-crashes goes out once, on the first logged-in session after it (#1605).
+      nevr_crash_upload::Config crash;
+      crash.dir = sentinel::DumpDir();  // empty when the crash reporter is not armed: the upload then says it is off
+      crash.build = NEVR_QUEST_PROJECT_VERSION;
+      crash.log = &CrashUploadLog;
+      nevr_crash_upload::Install(std::move(crash));
       // The process ends when the game's android_main returns (#621): its report goes out first (best effort).
       nevr_status_redirect_check::Register(&nevr_status_redirect_check::ProcessProbe);  // #408
       nevr_self_check::Register({"matchmaking_reload_redirect",

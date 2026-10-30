@@ -748,7 +748,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_lobby_full_backoff --target test_party_follow_dedup --target test_server_team_size --target test_menu_version_label --target test_splash_skip --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_frame_stats --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_login_refusal --target test_invite_wizard --target test_invite_worker --target test_invite_service --target test_ui_text --target test_invite_choices --target test_invite_join --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_arena_public_clock --target test_arena_public_clock_hook --target test_render_config --target test_render_config_hook --target test_server_bots
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_lobby_full_backoff --target test_party_follow_dedup --target test_server_team_size --target test_menu_version_label --target test_splash_skip --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_crash_upload --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_frame_stats --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_login_refusal --target test_invite_wizard --target test_invite_worker --target test_invite_service --target test_ui_text --target test_invite_choices --target test_invite_join --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_arena_public_clock --target test_arena_public_clock_hook --target test_render_config --target test_render_config_hook --target test_server_bots
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_runtime_abi
@@ -984,7 +984,7 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
-    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_frame_stats test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_login_refusal test_invite_wizard test_invite_worker test_invite_service test_ui_text test_invite_choices test_invite_join test_asset_cache test_session_router test_asset_registry test_installed_levels test_telemetry_game_type test_arena_round_time test_nevr_root test_arena_public_clock test_arena_public_clock_hook test_render_config test_render_config_hook test_server_team_size test_server_bots; do
+    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_crash_upload test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_frame_stats test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_login_refusal test_invite_wizard test_invite_worker test_invite_service test_ui_text test_invite_choices test_invite_join test_asset_cache test_session_router test_asset_registry test_installed_levels test_telemetry_game_type test_arena_round_time test_nevr_root test_arena_public_clock test_arena_public_clock_hook test_render_config test_render_config_hook test_server_team_size test_server_bots; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -1212,6 +1212,15 @@ test-quest-shared: _vcpkg-quest-host
         src/quest/tests/service_redirect_test.cpp \
         -o "$out/service_redirect_test"
     timeout -k 5 120 "$out/service_redirect_test"
+    # The shared crash report (#1605): what it prints, what it writes and in what order, with the platform seams faked.
+    # The same source builds into the PC runtime (nevr_core) and the Quest sentinel. The ELF reader is the Quest side's
+    # build id, read from a synthetic image.
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include \
+        src/core/crash_report.cpp src/quest/tests/crash_report_test.cpp -o "$out/crash_report_test"
+    timeout -k 5 120 "$out/crash_report_test"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include \
+        src/quest/sentinel/elf_build_id.cpp src/quest/tests/elf_build_id_test.cpp -o "$out/elf_build_id_test"
+    timeout -k 5 120 "$out/elf_build_id_test"
     # The codec, config and sentinel tests parse JSON with nlohmann::json. Use the header the build installed
     # from vcpkg.json for the mingw triplet the mingw-* presets build with, never a system package and
     # never whichever triplet sorts first. Only the nlohmann directory is exposed to the host compiler.
@@ -1259,7 +1268,7 @@ test-quest-shared: _vcpkg-quest-host
         -DNEVR_QUEST_FILES_DIR="\"$files\"" \
         src/quest/tests/sentinel_host_test.cpp \
         src/quest/sentinel/activation.cpp \
-        src/quest/sentinel/sentinel_log.cpp \
+        src/quest/sentinel/sentinel_log.cpp src/core/crash_report.cpp \
         src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp \
         src/runtime/lifecycle/service_redirect.cpp "$yaml_lib" \
         -o "$out/sentinel_host_test"
@@ -1692,6 +1701,15 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/process_end_hook_test" -ldl
     timeout 300 "$out/process_end_hook_test" "$out"
+    # Our crash handler stays first (#1605): the real handler and the sigaction/signal hooks, driven by real signals and a
+    # fixture library that calls libc's sigaction and signal through PLT slots as libr15 does.
+    "${cxx[@]}" -fPIC -shared -Wl,--build-id=sha1 -Wl,-z,now src/quest/tests/crash_first_fixture_consumer.cpp \
+        -o "$out/libcffx_consumer.so"
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/crash_first_hook_test.cpp \
+        src/quest/sentinel/crash_first_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        "${ident[@]}" -o "$out/crash_first_hook_test" -ldl
+    timeout 120 "$out/crash_first_hook_test" "$out"
     # The game waits for the storage permission it just asked for (#640): the real handler through the thunk entry,
     # against a stand-in for RequestPermissions and a model of CheckPermission.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/permission_wait_hook_test.cpp \
@@ -2251,7 +2269,7 @@ test-quest-plugins:
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/libr15_identity.cpp -o "$out/libr15_identity.o"
     loader=(src/quest/plugin/packaged_plugins.cpp src/quest/plugin/plugin_plan.cpp src/quest/plugin/plugin_image.cpp src/quest/plugin/plugin_loader.cpp
             src/quest/plugin/plugin_record_log.cpp src/quest/plugin/plugin_platform.cpp src/quest/data/sha256.cpp
-            src/quest/sentinel/hook_log.cpp src/quest/sentinel/sentinel_log.cpp
+            src/quest/sentinel/hook_log.cpp src/quest/sentinel/sentinel_log.cpp src/core/crash_report.cpp
             "$out/libr15_identity.o" src/quest/patch/libr15_patch_identity.cpp
             "$out/got_hook.o" "$out/hook_report.o" "$out/plugin_game_image.o" "$out/input_seam_hook.o")
     "${cxx[@]}" -pthread src/quest/tests/plugin_loader_test.cpp "${loader[@]}" \

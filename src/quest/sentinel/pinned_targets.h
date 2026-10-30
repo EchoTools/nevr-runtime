@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <signal.h>
 #include <time.h>
 
 #include <cstddef>
@@ -44,6 +45,8 @@ inline constexpr const char* kStringTCtorSymbol = "_ZN8string_tC2EPKc";
 
 inline constexpr const char* kTStringSymbol = "_ZNK10NRadEngine5CJson7TStringEPKcS2_j";
 inline constexpr const char* kClockGettimeSymbol = "clock_gettime";
+inline constexpr const char* kSigactionSymbol = "sigaction";
+inline constexpr const char* kSignalSymbol = "signal";
 inline constexpr const char* kCreateConnectionSymbol = "_ZN10NRadEngine8CSysHttp16CreateConnectionERmPKc";
 inline constexpr const char* kConfigRequestSendSymbol =
     "_ZN10NRadEngine18SNSConfigRequestv24SendERNS_15CTcpBroadcasterEPKcS4_";
@@ -72,6 +75,21 @@ inline constexpr const char* kEnablePageNodeEnterSymbol =
 using ClockGettimeSig = int(clockid_t, struct timespec*);
 struct ClockGettimeTag {};
 using ClockGettimeThunk = CallbackThunk<ClockGettimeTag, ClockGettimeSig>;
+
+// libc: int sigaction(int, const struct sigaction*, struct sigaction*) and sighandler_t signal(int, sighandler_t), the two
+// ways libr15 installs a signal handler (#1605). libr15 imports both from libc (`readelf -rW` on the store file:
+// R_AARCH64_JUMP_SLOT 0x36f3b68 sigaction and 0x36e6508 signal; BIND_NOW). `bl` to the sigaction stub (0xf38900) appears 80
+// times in the store file's .text (objdump -d): the 31-signal save and restore in the OpenSSL console UI (0x1133b60 to
+// 0x1133d14 and 0x1133e58 on), calls with signal 13 and a null old action (0x100185c, 0x1004f28, 0x10069a4, 0x100af08) and loops over a table of signal numbers (0xfb111c, 0xfb1bc4, 0xffe41c); `bl`
+// to the signal stub (0xf1dc40) appears once, in that console UI (signal 28). The crash-first hook answers these for the
+// signals the sentinel's crash handler owns and passes every other signal through (crash_first_hook.h).
+using SigactionSig = int(int signo, const struct sigaction* act, struct sigaction* old);
+struct LibR15SigactionTag {};
+using LibR15SigactionThunk = CallbackThunk<LibR15SigactionTag, SigactionSig>;
+using SignalHandlerFn = void (*)(int);
+using SignalSig = SignalHandlerFn(int signo, SignalHandlerFn handler);
+struct LibR15SignalTag {};
+using LibR15SignalThunk = CallbackThunk<LibR15SignalTag, SignalSig>;
 
 // NRadEngine::CJson::TString(char const*, char const*, unsigned int) const, the
 // same function in both libraries (const member: `this` in x0, key x1, fallback
@@ -587,6 +605,15 @@ inline constexpr std::size_t kErrorBlockBytes = 1 + kErrorLines * kErrorLineByte
 // libr15.so imports clock_gettime from libc (JUMP_SLOT 0x36c33e8).
 inline GotTarget LibR15ClockGettime() {
   return {kLibR15, kClockGettimeSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36c33e8ULL};
+}
+
+// libr15.so's slots for libc's sigaction (JUMP_SLOT 0x36f3b68) and signal (JUMP_SLOT 0x36e6508), from `readelf -rW` on the
+// store file (#1605).
+inline GotTarget LibR15Sigaction() {
+  return {kLibR15, kSigactionSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36f3b68ULL};
+}
+inline GotTarget LibR15Signal() {
+  return {kLibR15, kSignalSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36e6508ULL};
 }
 
 // libr15.so's slot for CJson::TString, defined in libr15 itself (JUMP_SLOT 0x36ebe08).

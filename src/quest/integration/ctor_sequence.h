@@ -42,6 +42,9 @@
 //                                    (step 3).
 //      InstallProcessEnd             the process ends when the game's android_main returns (#621): one libr15
 //                                    slot, on every launch, right after the OBB skip; no counters
+//      InstallCrashFirst             our crash handler stays first (#1605): two libr15 slots (libc sigaction and signal), on
+//                                    every launch, right after the process-end hook; no counters. The game installs its own crash
+//                                    handler after the constructor, and the hook keeps that request from displacing ours
 //      InstallPermissionWait         the game waits for the storage permission it just asked for (#640): one
 //                                    libr15 slot (CSysInfo::RequestPermissions), on every launch, right after
 //                                    the process-end hook; no counters
@@ -158,6 +161,7 @@ enum class StepId : std::uint8_t {
   kInstallFrameDispatch,
   kInstallObbSkip,
   kInstallProcessEnd,
+  kInstallCrashFirst,
   kInstallPermissionWait,
   kInstallVkExtWindow,
   kInstallOsBuildGate,
@@ -246,6 +250,9 @@ class Steps {
   virtual bool InstallObbSkip(bool countersRegistered) = 0;
   // The process ends when the game's android_main returns (#621): one libr15 slot, on every launch.
   virtual bool InstallProcessEnd() = 0;
+  // Our crash handler stays first (#1605): libr15's sigaction and signal slots, on every launch. True when both slots hold
+  // their thunks.
+  virtual bool InstallCrashFirst() = 0;
   // The game waits for the storage permission it just asked for (#640): one libr15 slot, on every launch.
   virtual bool InstallPermissionWait() = 0;
   // The device extensions libr15 requires stay inside the 128 entries it reads (#868): two libr15 slots

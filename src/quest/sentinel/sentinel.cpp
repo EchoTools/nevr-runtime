@@ -5,21 +5,34 @@
  * /proc/self/maps and a best-effort frame-pointer backtrace, then log the
  * dump path. Offline symbolication from the minidump + maps is authoritative;
  * the in-process backtrace is a convenience.
+ *
+ * The signal handlers are ours, not breakpad's (#1605): breakpad is built with install_handler=false and the handler in
+ * crash_first_hook.cpp calls it (HandleSignal) after the report, then the game's own handler, which the game's later
+ * sigaction calls cannot displace (crash_first_hook.h).
  */
 
 #include "sentinel.h"
+
+#include "quest/sentinel/crash_report_quest.h"
 
 #include "client/linux/handler/exception_handler.h"
 #include "client/linux/handler/minidump_descriptor.h"
 
 #include <android/log.h>
 
+#include "core/crash_report.h"
+#include "crash_first_arm.h"
+
 #include <atomic>
+#include <cstdint>
 #include <cstring>
 #include <mutex>
 
 #include <fcntl.h>
+#include <signal.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
+#include <ucontext.h>
 #include <unistd.h>
 
 #ifndef NEVR_QUEST_DUMP_DIR
@@ -99,13 +112,49 @@ bool DumpCallback(const google_breakpad::MinidumpDescriptor& descriptor,
                   void* /*context*/, bool succeeded) {
     if (descriptor.path()) {
         SnapshotMaps(descriptor.path());
+        // The readable report (#1605) goes beside the minidump under its stem: moved there when a handler already
+        // wrote it with the faulting thread's registers, written here (without them) when none did.
+        char report[640];
+        const bool have_report = FinishCrashReport(descriptor.path(), report, sizeof(report));
         __android_log_print(succeeded ? ANDROID_LOG_FATAL : ANDROID_LOG_ERROR,
-                            NEVR_TAG, "crash: minidump=%s ok=%d maps written",
-                            descriptor.path(), succeeded ? 1 : 0);
+                            NEVR_TAG, "crash: minidump=%s ok=%d maps written report=%s",
+                            descriptor.path(), succeeded ? 1 : 0, have_report ? report : "none");
     }
     // Returning false lets the OS default handler run afterwards (core/logcat
     // tombstone), which is desirable — we are additive, not a swallow.
     return false;
+}
+
+// ---- the crash path (crash_first_hook.h: report, dump, restore, the game's handler) ----
+
+// The report: the signal's facts and its ucontext, handed to the shared writer (core/crash_report.h).
+void ReportAction(int signo, siginfo_t* info, void* ucontext) noexcept {
+    nevr_crash::CrashInfo crash{};
+    crash.code = signo;
+    crash.fault_code = info != nullptr ? info->si_code : 0;
+    crash.fault_address = info != nullptr ? static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(info->si_addr)) : 0;
+    crash.context = ucontext;
+    crash.thread_id = static_cast<std::uint64_t>(syscall(__NR_gettid));
+#if defined(__aarch64__)
+    if (ucontext != nullptr) {
+        const ucontext_t* context = static_cast<const ucontext_t*>(ucontext);
+        crash.pc = context->uc_mcontext.pc;
+        crash.lr = context->uc_mcontext.regs[30];
+    }
+#endif
+    nevr_crash::WriteReport(crash);
+}
+
+// The minidump, written by breakpad on this thread; DumpCallback logs where it went.
+void DumpAction(int signo, siginfo_t* info, void* ucontext) noexcept {
+    if (g_handler != nullptr) g_handler->HandleSignal(signo, info, ucontext);
+}
+
+// One logcat line after the game's handler returned: whether the game had a handler of its own to run after ours, and how
+// many times it asked to install one (each of those would have displaced ours).
+void NoteAction(int signo, bool chained, std::uint32_t displaced) noexcept {
+    __android_log_print(ANDROID_LOG_FATAL, NEVR_TAG, "crash_first: signal=%d game_handler_called=%d displaced_requests=%u",
+                        signo, chained ? 1 : 0, displaced);
 }
 
 }  // namespace
@@ -113,16 +162,19 @@ bool DumpCallback(const google_breakpad::MinidumpDescriptor& descriptor,
 void Arm() {
     std::call_once(g_once, [] {
         DumpDirStorage() = ResolveDumpDir();
+        // The shared crash report's Quest platform, registered before any handler can reach it.
+        RegisterCrashReportPlatform();
         google_breakpad::MinidumpDescriptor descriptor(DumpDirStorage());
-        // install_handler=true installs breakpad's 6 handlers:
-        // SIGSEGV/SIGABRT/SIGBUS/SIGILL/SIGFPE/SIGTRAP.
+        // install_handler=false: the signal handlers are ours (crash_first_hook.cpp), so the game's later sigaction
+        // cannot displace them, and they call breakpad's HandleSignal for the minidump.
         g_handler = new google_breakpad::ExceptionHandler(
             descriptor,
             /*filter=*/nullptr,
             DumpCallback,
             /*context=*/nullptr,
-            /*install_handler=*/true,
+            /*install_handler=*/false,
             /*server_fd=*/-1);
+        nevr_quest::crash_first::InstallHandlers({&ReportAction, &DumpAction, &NoteAction});
         __android_log_print(ANDROID_LOG_INFO, NEVR_TAG,
                             "armed: breakpad ExceptionHandler, dumps -> %s",
                             DumpDirStorage().c_str());
@@ -130,6 +182,7 @@ void Arm() {
 }
 
 void Disarm() {
+    nevr_quest::crash_first::RestoreHandlers();
     delete g_handler;
     g_handler = nullptr;
 }

@@ -1,4 +1,5 @@
 #include "runtime/lifecycle/crash_recovery.h"
+#include "runtime/lifecycle/crash_first_win.h"
 #ifdef NEVR_SCENARIO_CONTROL
 #include "runtime/scenario/scenario_control.h"
 #endif
@@ -10,6 +11,7 @@
 #include "runtime/lifecycle/veh_policy.h"
 #include "runtime/lifecycle/crash_recovery_sites.h"
 #include "runtime/lifecycle/crash_dump_format.h"
+#include "runtime/lifecycle/crash_report_win.h"
 #include "runtime/lifecycle/stack_alloc_check.h"
 
 #include <processthreadsapi.h>
@@ -28,6 +30,7 @@
 #include "abi/echovr_functions.h"
 #include "core/globals.h"
 #include "core/logging.h"
+#include "core/crash_report.h"
 #include "core/nevr_root.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/hook/patching.h"
@@ -494,6 +497,20 @@ static void CacheModuleTable() {
   InterlockedExchange(&g_moduleCacheCount, cached);
 }
 
+// The crash report's view of the module snapshot (crash_report_win.h): the same table, read the same way.
+static bool LookupModuleForReport(std::uint64_t address, nevr_crash_win::ModuleSpan* out) {
+  const LONG mc = g_moduleCacheCount;
+  for (LONG m = 0; m < mc; m++) {
+    if (address >= g_moduleCache[m].base && address < g_moduleCache[m].end) {
+      out->base = g_moduleCache[m].base;
+      out->end = g_moduleCache[m].end;
+      out->name = g_moduleCache[m].name;
+      return true;
+    }
+  }
+  return false;
+}
+
 // ============================================================================
 // N69 — stack reserve so the overflow handler has room to run
 // ============================================================================
@@ -587,6 +604,19 @@ static void WriteCrashDump(PEXCEPTION_POINTERS ex) {
                                                          : "EXECUTE";
     VehPrintf("[NEVR.CRASH] access op=%s addr=0x%llX", op,
               static_cast<unsigned long long>(rec->ExceptionInformation[1]));
+  }
+
+  // The readable report (#1605): the same facts, symbolized, in a file of its own, and its one summary line.
+  {
+    nevr_crash::CrashInfo reportInfo = {};
+    reportInfo.code = rec->ExceptionCode;
+    if (rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && rec->NumberParameters >= 2) {
+      reportInfo.fault_address = static_cast<std::uint64_t>(rec->ExceptionInformation[1]);
+    }
+    reportInfo.pc = ctx->Rip;
+    reportInfo.context = ex;
+    reportInfo.thread_id = GetCurrentThreadId();
+    nevr_crash::WriteReport(reportInfo);
   }
 
   // N69: on stack overflow the remaining stack is whatever SetThreadStackGuarantee
@@ -816,6 +846,8 @@ void InstallCrashRecoveryHooks() {
         "TerminateProcess hooks ALL skipped; crash-reporter suppression is fully disabled",
         GetLastError());
   }
+  // Our top-level filter stays first (#1605): the game installs its own after this, and would replace ours.
+  InstallCrashFirstFilter();
 }
 
 // ============================================================================
@@ -1018,6 +1050,17 @@ static void InstallGameConsoleHandlerRearmHook() {
 
 void InstallCrashFilterInstrumentation() {
   PrepareCrashRecordPath();
+  // The readable report (#1605) goes to the crash directory, from whichever handler catches the crash. The directory is
+  // made here, in normal code: the handler creates nothing.
+  {
+    const std::string crashes = nevr_root::CrashesDir(nevr_root::RootA());  // empty when LOCALAPPDATA is unset or too long
+    const bool ready = !crashes.empty() && nevr_root::EnsureDirectoryTree(crashes);
+    if (!crashes.empty() && !ready) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.CRASH] crash directory unavailable path=%s error=%lu (the crash report is logged but not written)",
+          crashes.c_str(), static_cast<unsigned long>(GetLastError()));
+    }
+    nevr_crash_win::RegisterCrashReportPlatform(ready ? crashes.c_str() : "", &LookupModuleForReport);
+  }
   if (g_crashRecordPath[0] != '\0') {
     Log(EchoVR::LogLevel::Info, "[NEVR.CRASH] crash record path=%s (written only if the game crashes)",
         g_crashRecordPath);

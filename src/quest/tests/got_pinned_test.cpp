@@ -202,6 +202,8 @@ int main(int argc, char** argv) {
   CheckBuildId(ovr, nevr_quest_login::PrerequisiteTargets::kPnsovrBuildId);
 
   CheckTarget(r15, pinned::LibR15ClockGettime(), "libr15 clock_gettime JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15Sigaction(), "libr15 sigaction JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15Signal(), "libr15 signal JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15TString(), "libr15 CJson::TString JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15CreateConnection(), "libr15 CSysHttp::CreateConnection JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15ConfigRequestSend(), "libr15 SNSConfigRequestv24Send JUMP_SLOT");
