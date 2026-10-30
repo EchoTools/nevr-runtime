@@ -18,7 +18,7 @@ enum class SwapStatus {
   kUnmapped,           // the slot is in no mapping of /proc/self/maps
   kExecutablePage,     // the slot's page is executable: never written
   kUnexpectedOriginal, // the word is not the value the caller expects
-  kProtectFailed,      // mprotect to writable failed; nothing was written
+  kProtectFailed,      // the page-protection call to writable failed; nothing was written
   kRestoreFailed,      // the word was written and the old protection could not be put back (logged by the caller)
   kMapsUnreadable,
 };
