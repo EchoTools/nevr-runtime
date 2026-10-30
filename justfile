@@ -208,16 +208,21 @@ android-repack-libovr src="/mnt/games/evr/-src-evr-reconstruction/cache/quest_tr
 # All work under build/android-arm64/repack — never mutates the source APK or shim.
 # `version` (X.Y.Z) names the build's version when the shim was built elsewhere and there is no build info beside it: a release
 # packages CI's loader (release-quest-apk). The versionCode comes from it, and the shim must carry the same string.
+# `pack` (docs/adr/0029-quest-bundled-content-pack.md) is a game-data pack zip to carry as APK assets under assets/nevr-pack/ (STORED), which
+# the sentinel places over the stock data at the first run after its data step; `pack_meta` is the file that describes it (its id, version, the stock
+# manifest digests it replaces and the zip's prefix; tools/quest_repack_libs.py stage-pack --help). Both are empty for every release and package-dev APK,
+# and then the recipe does nothing of it: the APK is the one the recipe made before the parameters existed.
 # `apk` is required (the store APK path). The signing key is the one persistent Quest key stored in
 # pass (tools/quest_keystore.sh): it is read into a private tmpfs file for the signing command only
 # and is never generated here. Store it once with: just import-quest-keystore <keystore>.
-android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="":
+android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="":
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(pwd)"
     apk="{{ apk }}"; shim="{{ shim }}"; plugin="{{ plugin }}"; version="{{ version }}"
     extra_rows="{{ extra_rows }}"; patcher="{{ patcher }}"; json_include="{{ json_include }}"
     plugin_early="{{ plugin_early }}"; plugin_off="{{ plugin_off }}"
+    pack="{{ pack }}"; pack_meta="{{ pack_meta }}"
     work="$root/{{ workdir }}"
     # An APK from an earlier run never outlives a run that stops: package-dev takes whatever is at this path.
     rm -f "$work/r15-repacked.apk" "$work/r15-repacked-aligned.apk" "$work/r15_nevr-sentinel_signed.apk"
@@ -226,6 +231,12 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     done
     [ -f "$apk" ]  || { echo "APK not found: $apk" >&2; exit 1; }
     [ -f "$shim" ] || { echo "shim not found (build it: just build-android): $shim" >&2; exit 1; }
+    if [ -n "$pack" ]; then
+        [ -f "$pack" ] || { echo "pack not found: $pack" >&2; exit 1; }
+        [ -n "$pack_meta" ] && [ -f "$pack_meta" ] || { echo "android-repack-apk: pack names a game-data pack, and pack_meta (its description file) is not a file: '$pack_meta'" >&2; exit 1; }
+    elif [ -n "$pack_meta" ]; then
+        echo "android-repack-apk: pack_meta describes a pack, and no pack is given" >&2; exit 1
+    fi
     # libr15.so is patched on the host (docs/adr/0021 section 9): the store's file goes through quest_patch_libr15 and the
     # result takes its place in the APK. `patcher` is an already-built tool (the repack tests give a stand-in); empty builds
     # build/quest-patcher/quest_patch_libr15 with `just quest-patcher`, which needs nlohmann/json.hpp: `json_include` (the
@@ -335,6 +346,12 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
         cp "$p" "$work/stage/lib/arm64-v8a/$(basename "$p")"
         stage_libs+=("lib/arm64-v8a/$(basename "$p")")
     done
+    # 3d. the bundled content pack (docs/adr/0029-quest-bundled-content-pack.md): staged as APK assets, every file through every check
+    # (tools/quest_repack_libs.py stage-pack), and the staged tree checked as the runtime reads it. Nothing happens without a pack.
+    if [ -n "$pack" ]; then
+        python3 -I tools/quest_repack_libs.py stage-pack --pack-zip "$pack" --meta "$pack_meta" --stage "$work/stage" --store-apk "$apk"
+        python3 -I tools/quest_repack_libs.py pack-problems --stage "$work/stage"
+    fi
     # 3c. the manifest of the packaged plugins: their names, staged hashes, early and enabled. Written only when a plugin is packaged,
     # so a repack without one is the same APK as before (docs/adr/0019-quest-plugin-loader.md, section 2).
     if [ "${#plugins[@]}" -gt 0 ]; then
@@ -354,6 +371,10 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     zip -q -d "$unsigned" 'META-INF/*.RSA' 'META-INF/*.SF' 'META-INF/*.MF' || true
     ( cd "$work/stage" && zip -q -0 -X "$unsigned" "${stage_libs[@]}" )
     ( cd "$work/stage" && zip -q -X "$unsigned" lib/arm64-v8a/libr15.so )
+    # The pack's entries go in STORED (-0), like the libraries: the file names were checked plain by stage-pack.
+    if [ -n "$pack" ]; then
+        ( cd "$work/stage" && find assets -type f -print | LC_ALL=C sort | zip -q -0 -X "$unsigned" -@ )
+    fi
     # 4b. versionCode: extract the compiled manifest, set the code the build's version gives (the tool refuses
     # unless the field is exactly where Android reads it, and unless the shim carries the header's version),
     # and put the manifest back. A 4-byte write: the entry keeps every other byte.
@@ -523,7 +544,7 @@ quest-autopilot-run route *args:
 # the tag at that commit); the release (a draft is enough) must carry the asset. Writes
 # build/quest-release/<tag>/nevr-runtime-<tag>-quest.apk and its .sha256; it uploads nothing and never tags. The APK is
 # published outside GitHub (RELEASING.md, "Quest APKs never go on GitHub").
-release-quest-apk tag store_apk="/mnt/games/cache/r15_goldmaster_store.apk": (_release-quest-apk "release-quest-apk" tag store_apk "" "")
+release-quest-apk tag store_apk="/mnt/games/cache/r15_goldmaster_store.apk": (_release-quest-apk "release-quest-apk" tag store_apk "" "" "" "")
 
 # The unlisted variant APK of a release (tools/quest_release_timer.py builds it in the same run as the release APK): the same
 # repack of the store game with the same release loader asset, plus the plugin libraries `plugins` names (one path, or several
@@ -531,18 +552,23 @@ release-quest-apk tag store_apk="/mnt/games/cache/r15_goldmaster_store.apk": (_r
 # checked here too, with the same tag and clone rules and the same refusals under this recipe's name. Writes
 # build/quest-release/<tag>/variant/nevr-runtime-<tag>-q15t-quest.apk and its .sha256 beside, in sha256sum format. The APK is
 # never listed in the manifest: tools/publish_quest_apk.py --variant puts it on the release host. It uploads nothing and never tags.
-release-quest-variant-apk tag plugins store_apk="/mnt/games/cache/r15_goldmaster_store.apk": (_release-quest-apk "release-quest-variant-apk" tag store_apk plugins "q15t")
+# `pack` and `pack_meta` (both empty, or both a file) carry a game-data pack as APK assets (android-repack-apk, docs/adr/0029-quest-bundled-content-pack.md);
+# only this variant takes them, never the release APK.
+release-quest-variant-apk tag plugins store_apk="/mnt/games/cache/r15_goldmaster_store.apk" pack="" pack_meta="": (_release-quest-apk "release-quest-variant-apk" tag store_apk plugins "q15t" pack pack_meta)
 
 # The body of release-quest-apk and release-quest-variant-apk. `label` is the public recipe's name, which every message of the
 # run carries. `plugin` and `variant` are both empty (the release APK, which never carries a plugin) or both set (the variant
-# APK, written under build/quest-release/<tag>/variant).
-_release-quest-apk label tag store_apk plugin variant:
+# APK, written under build/quest-release/<tag>/variant). `pack` and `pack_meta` are empty (every release APK) or, for the variant, a game-data pack
+# zip and its description file.
+_release-quest-apk label tag store_apk plugin variant pack pack_meta:
     #!/usr/bin/env bash
     set -euo pipefail
-    label="{{ label }}"; tag="{{ tag }}"; plugin="{{ plugin }}"; variant="{{ variant }}"
+    label="{{ label }}"; tag="{{ tag }}"; plugin="{{ plugin }}"; variant="{{ variant }}"; pack="{{ pack }}"; pack_meta="{{ pack_meta }}"
     [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "$label: not a release tag (vX.Y.Z): $tag" >&2; exit 1; }
     [ -z "$variant" ] || [ -n "$plugin" ] || { echo "$label: the variant APK carries plugin libraries, and none is named" >&2; exit 1; }
     [ -n "$variant" ] || [ -z "$plugin" ] || { echo "$label: a release APK carries no plugin library" >&2; exit 1; }
+    [ -n "$variant" ] || [ -z "$pack" ] || { echo "$label: a release APK carries no game-data pack" >&2; exit 1; }
+    [ -n "$pack" ] || [ -z "$pack_meta" ] || { echo "$label: pack_meta describes a pack, and no pack is given" >&2; exit 1; }
     tools/release_preflight.py --tag "$tag"
     tag_commit=$(git rev-parse --verify "refs/tags/$tag^{commit}") || { echo "$label: tag $tag is not in this clone" >&2; exit 1; }
     head=$(git rev-parse HEAD)
@@ -561,7 +587,11 @@ _release-quest-apk label tag store_apk plugin variant:
     echo "$label: packaging the $tag loader asset at ${head:0:7}" >&2
     loader_sha=$(python3 -I tools/quest_release_loader.py fetch --tag "$tag" --out "$out/loader")
     python3 tools/package_release.py quest-library --lib "$out/loader/libovrplatformloader.so" --version "$ver" --commit "$tag_commit"
-    just android-repack-apk "{{ store_apk }}" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver"
+    if [ -n "$pack" ]; then
+        just android-repack-apk "{{ store_apk }}" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver" "" "" "" "" "" "$pack" "$pack_meta"
+    else
+        just android-repack-apk "{{ store_apk }}" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver"
+    fi
     python3 -I tools/quest_release_loader.py verify-apk --apk "$out/repack/r15_nevr-sentinel_signed.apk" --sha256 "$loader_sha"
     cp -f "$out/repack/r15_nevr-sentinel_signed.apk" "$out/$name"
     (cd "$out" && sha256sum "$name" > "$name.sha256")
@@ -1048,7 +1078,7 @@ test-quest-data: _vcpkg-quest-host
     mkdir -p "$out"
     host="{{ justfile_directory() }}/build/quest-host-vcpkg/x64-linux"
     [[ -f "$host/lib/libz.a" ]] || { echo "test-quest-data: FAIL — $host/lib/libz.a not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
-    for f in sha256 zip staging fetch data_step; do
+    for f in sha256 zip staging fetch data_step pack; do
         g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isdk/include -isystem "$host/include" -c \
             "src/quest/data/$f.cpp" -o "$out/$f.o"
     done
@@ -1064,6 +1094,10 @@ test-quest-data: _vcpkg-quest-host
         "$out/sha256.o" "$out/zip.o" "$out/staging.o" "$out/fetch.o" "$out/data_step.o" src/quest/tests/data_step_test.cpp "$host/lib/libz.a" \
         -o "$out/data_step_test"
     timeout -k 5 300 "$out/data_step_test"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isdk/include -isystem "$host/include" \
+        "$out/sha256.o" "$out/zip.o" "$out/staging.o" "$out/fetch.o" "$out/pack.o" src/quest/tests/pack_test.cpp "$host/lib/libz.a" \
+        -o "$out/pack_test"
+    timeout -k 5 300 "$out/pack_test"
 
 # The data fetch over real HTTP (src/quest/data/curl_transport.cpp and fetch.cpp against src/quest/tests/range_server.py):
 # explicit Range, a server that ignores it, a dropped connection, an error page, a refusal with no trust anchors or over
@@ -1133,7 +1167,7 @@ test-quest-data-net: _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         src/quest/sentinel/libr15_identity.cpp src/quest/patch/libr15_patch_identity.cpp \
         src/quest/data/sha256.cpp src/quest/data/zip.cpp src/quest/data/staging.cpp src/quest/data/fetch.cpp \
-        src/quest/data/data_step.cpp src/quest/data/curl_transport.cpp src/quest/data/data_host_roots.cpp \
+        src/quest/data/data_step.cpp src/quest/data/pack.cpp src/quest/data/curl_transport.cpp src/quest/data/data_host_roots.cpp \
         "$host/lib/libz.a" -o "$out/data_wiring_test" $(pkg-config --libs libcurl) -lssl -lcrypto -ldl
     NEVR_TEST_TMP="$out" timeout -k 5 300 "$out/data_wiring_test"
     echo "test-quest-data-net: the fetch passes over real HTTP on the host"
