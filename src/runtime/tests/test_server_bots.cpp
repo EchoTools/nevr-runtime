@@ -558,9 +558,9 @@ struct FakeGame {
     Put<int64_t>(pools.entries[0], 1 * 0x88 + 0x30, 4);
     Put<int64_t>(pools.entries[1], 3 * 0x88 + 0x30, 4);
   }
-  std::vector<Line> Update(uint64_t nowMs, bool bots = true, bool noNetGame = false) {
+  std::vector<Line> Update(uint64_t nowMs, bool bots = true, bool noNetGame = false, const char* session = "AAAA") {
     return Drive(
-        state, 2, noNetGame ? nullptr : netGame.data(), noPosition, nowMs, SessionView{"AAAA", bots}, 36,
+        state, 2, noNetGame ? nullptr : netGame.data(), noPosition, nowMs, SessionView{session, bots}, 36,
         [&](void* pl, uint64_t b, void** o, uint64_t* i) { return pools.Find(pl, b, o, i); },
         [&](void* ng, const uint8_t* request) {
           EXPECT_EQ(ng, static_cast<void*>(netGame.data()));
@@ -698,6 +698,18 @@ TEST(ServerBotsDrive, TheLastRequestUnansweredIsSaidAfterTenSeconds) {
             "[NEVR.GAMESERVER] server bots: the game has not answered the last bot request for 10 s session=AAAA "
             "requested=2 wanted=2 (no more bots this session until it does)");
   EXPECT_EQ(g.requests.size(), 2u);
+}
+
+TEST(ServerBotsDrive, ANewSessionCountsFromZeroWithNoFrameOutOfGame) {
+  FakeGame g;
+  g.state.runningLogged = true;
+  g.Update(5000);
+  g.Update(6000);
+  ASSERT_EQ(g.requests.size(), 2u);
+  g.Update(7000, true, false, "BBBB");
+  EXPECT_EQ(g.requests.size(), 3u) << "the second match, still in game, gets its first bot";
+  EXPECT_EQ(g.state.schedule.requested, 1u);
+  EXPECT_EQ(g.state.session, "BBBB");
 }
 
 TEST(ServerBotsDrive, OutOfGameNothingIsAsked) {

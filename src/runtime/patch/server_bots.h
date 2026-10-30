@@ -616,7 +616,8 @@ struct SessionView {
 
 struct DriverState {
   Schedule schedule;
-  bool runningLogged = false;  // the first update's line is written
+  std::string session = "none";  // the session the schedule counts for
+  bool runningLogged = false;    // the first update's line is written
 };
 
 /// One update of the driver: the schedule over the net game's fields, then, when a request is due and the level has a
@@ -634,6 +635,10 @@ std::vector<Line> Drive(DriverState& d, uint32_t wanted, void* netGame, const ui
                                 " (bots join a match from its session start on)"});
   }
   if (netGame == nullptr) return lines;
+  if (session.id != d.session) {  // a new session counts from 0, even with no frame out of game between
+    d.schedule = Schedule{};
+    d.session = session.id;
+  }
   if (!session.bots) {
     d.schedule = Schedule{};
     return lines;
