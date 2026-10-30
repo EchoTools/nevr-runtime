@@ -230,6 +230,7 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
     AsyncIOCallback_fn original;
     uint64_t type_hash = 0, name_hash = 0, orig_size = 0;
     uint32_t buf_index = 0;
+    std::string displacedTransform, displacingOverride;
     {
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
         original = g_orig;
@@ -243,6 +244,11 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
                 name_hash = *reinterpret_cast<uint64_t*>(res + 0x38);
                 type_hash = *reinterpret_cast<uint64_t*>(res + 0x28);
 
+                /* The first fixed replacement and the first transform that match. A fixed replacement outranks a
+                 * transform of the same key whatever the registration order (#1479), so a transform is chosen only
+                 * when no replacement matches. Both are scanned, so a displaced transform is known. */
+                std::shared_ptr<ResourceOverride> fixedHit;
+                std::shared_ptr<ResourceOverride> transformHit;
                 for (auto& ovr : *g_overrides) {
                     if (ovr->applied && !ovr->transform) continue;
                     if (ovr->name_hash != name_hash) continue;
@@ -250,24 +256,36 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
                     if (ovr->transform && buf_index != 0) continue;  /* a transform is offered buffer 0 only */
 
                     if (ovr->transform) {
-                        /* A transform is asked on every load; it runs below, outside the lock. */
-                        ovr->applied = true;
-                        ++ovr->in_flight;
-                        selected = ovr;
-                        g_total_hits++;
-                        break;
+                        if (!transformHit) transformHit = ovr;
+                    } else if (!fixedHit) {
+                        fixedHit = ovr;
                     }
-
-                    /* Match — the buffer is replaced below, outside the lock: the copy calls the game's allocator */
+                }
+                if (fixedHit) {
+                    /* Replaced below, outside the lock: the copy calls the game's allocator */
+                    selected = fixedHit;
                     orig_size = *reinterpret_cast<uint64_t*>(cbd + 0x20);
-                    ovr->applied = true;
-                    ++ovr->in_flight;
-                    selected = ovr;
+                    if (transformHit) {
+                        displacedTransform = transformHit->label;
+                        displacingOverride = fixedHit->label;
+                    }
+                } else if (transformHit) {
+                    /* A transform is asked on every load; it runs below, outside the lock. */
+                    selected = transformHit;
+                }
+                if (selected) {
+                    selected->applied = true;
+                    ++selected->in_flight;
                     g_total_hits++;
-                    break;
                 }
             }
         }
+    }
+    if (!displacedTransform.empty()) {
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.RESOURCE] override displaces transform type=0x%016llx name=0x%016llx override=%s transform=%s",
+            static_cast<unsigned long long>(type_hash), static_cast<unsigned long long>(name_hash),
+            displacingOverride.c_str(), displacedTransform.c_str());
     }
     CallbackLease lease(selected);
     const bool inPlace = buf_index == 1;

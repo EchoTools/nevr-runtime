@@ -789,6 +789,63 @@ TEST_F(ResourceTransforms, ANullTransformRegistersNothing) {
 
 // ── #1146: what reaches the game is the game's own memory ─────────────────────────────────────────────────────
 
+// ── #1479: a plugin's override of a resource outranks a core transform of it, whatever the registration order ──
+
+TEST_F(ResourceTransforms, APluginOverrideOutranksACoreTransformRegisteredBeforeIt) {
+  RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "core-transform");
+  static const std::uint8_t plugin[] = {10, 20, 30, 40};
+  RegisterResourceOverride(kTransformType, kTransformName, plugin, sizeof(plugin), "plugin-override");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  ExpectGameCopy(plugin, sizeof(plugin));
+  EXPECT_EQ(g_probe.calls, 0);
+  EXPECT_TRUE(TestLogContains(
+      "override displaces transform type=0x75e5993f80940cd0 name=0xac360e41e4ede056 override=plugin-override "
+      "transform=core-transform"));
+}
+
+TEST_F(ResourceTransforms, APluginOverrideOutranksACoreTransformRegisteredAfterIt) {
+  static const std::uint8_t plugin[] = {10, 20, 30, 40};
+  RegisterResourceOverride(kTransformType, kTransformName, plugin, sizeof(plugin), "plugin-override");
+  RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "core-transform");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  ExpectGameCopy(plugin, sizeof(plugin));
+  EXPECT_EQ(g_probe.calls, 0);
+  EXPECT_TRUE(TestLogContains(
+      "override displaces transform type=0x75e5993f80940cd0 name=0xac360e41e4ede056 override=plugin-override "
+      "transform=core-transform"));
+}
+
+TEST_F(ResourceTransforms, AmongFixedOverridesOfOneKeyTheFirstRegisteredWins) {
+  static const std::uint8_t first[] = {10, 20, 30, 40};
+  static const std::uint8_t second[] = {50, 60, 70, 80};
+  RegisterResourceOverride(kTransformType, kTransformName, first, sizeof(first), "first");
+  RegisterResourceOverride(kTransformType, kTransformName, second, sizeof(second), "second");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  ExpectGameCopy(first, sizeof(first));
+}
+
+TEST_F(ResourceTransforms, AmongTransformsOfOneKeyTheFirstRegisteredAnswers) {
+  RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "first-transform");
+  RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "second-transform");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  EXPECT_EQ(g_probe.calls, 1);
+  EXPECT_TRUE(TestLogContains("transform applied label=first-transform"));
+  EXPECT_FALSE(TestLogContains("transform applied label=second-transform"));
+}
+
+TEST_F(ResourceTransforms, ACoreTransformAloneStillAppliesAndDisplacesNothing) {
+  RegisterResourceTransform(kTransformType, kTransformName, &ProbeTransform, nullptr, "core-transform");
+  static const std::uint8_t stock[] = {1, 2, 3};
+  GameFinishesBuffer(kTransformType, kTransformName, 0, stock, sizeof(stock));
+  EXPECT_EQ(g_probe.calls, 1);
+  ExpectGameCopy(g_probe.served.data(), g_probe.served.size());
+  EXPECT_FALSE(TestLogContains("displaces transform"));
+}
+
 class GameHeapCopies : public ResourceTransforms {};
 
 TEST_F(GameHeapCopies, AFixedReplacementIsACopyTheGameCanFreeThroughItsOwnAllocator) {
