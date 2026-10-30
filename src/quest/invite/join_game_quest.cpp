@@ -14,6 +14,7 @@
 #include "abi/echovr.h"
 #include "quest/invite/frame_dispatch.h"
 #include "quest/invite/join_log_fields.h"
+#include "quest/invite/ui_text_quest.h"
 #include "quest/sentinel/got_hook.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/sentinel/mapping_perms.h"
@@ -281,16 +282,46 @@ Offerer& TheOfferer() {
   return offerer;
 }
 
-// The frame work: each resolved match the service has answered since the last frame is offered to the join. The service does the
-// one call that may throw (its own TU); this file keeps no exception path (the frame path, see the header).
+// The texts the service's answers ask the wizard's pages to show (a created code with its expiry and link, a refusal), handed to the
+// UI text writer (#1726). The same texts and the same lines as the PC's applier (runtime/patch/invite_answer_text.h); the writer is
+// the shared one (runtime/patch/ui_text.h) with the Quest's address table (ui_text_quest.h).
+void PostShareTexts() {
+  nevr_invite_match::ShareText text;
+  while (nevr_invite_match::TakeShareText(&text)) {
+    const nevr_invite::LogLevel info = nevr_invite::LogLevel::Info;
+    const nevr_invite::LogLevel warning = nevr_invite::LogLevel::Warning;
+    GameAccess& log = FrameAccessInstance();
+    if (!nevr_quest::ui_text::Ready()) {
+      log.Log(warning, nevr_invite_match::NotPostedText(text.field, text.length, "writer_off"));
+      continue;
+    }
+    nevr_ui_text::Request request;
+    request.target.actor = text.actor;
+    request.target.element = text.element;
+    request.text.assign(text.text, text.length);
+    const nevr_ui_text::Check check = nevr_quest::ui_text::Post(std::move(request));
+    if (check == nevr_ui_text::Check::Ok) {
+      log.Log(info, nevr_invite_match::PostedText(text.field, text.length));
+    } else {
+      log.Log(warning, nevr_invite_match::NotPostedText(text.field, text.length, nevr_ui_text::CheckName(check)));
+    }
+  }
+}
+
+// The frame work: each resolved match the service has answered since the last frame is offered to the join, and each text an answer
+// asked for is handed to the writer, which then tries what is due. The service does the one call that may throw (its own TU); this
+// file keeps no exception path (the frame path, see the header).
 bool ApplyAnswers(void* /*context*/) noexcept {
   // #1415: nothing resolved waits, so the frame costs one atomic load and takes no lock (the PC applier takes the same early-out).
-  if (!nevr_invite_match::ResolvedMatchPending()) return true;
-  char match[nevr_invite_match::kMaxMatchIdBytes];
-  std::size_t length = 0;
-  while (nevr_invite_match::TakeResolvedMatch(match, sizeof(match), &length)) {
-    TheOfferer().Offer(std::string_view(match, length), nevr_invite_match::ServiceActive());
+  if (nevr_invite_match::ResolvedMatchPending()) {
+    char match[nevr_invite_match::kMaxMatchIdBytes];
+    std::size_t length = 0;
+    while (nevr_invite_match::TakeResolvedMatch(match, sizeof(match), &length)) {
+      TheOfferer().Offer(std::string_view(match, length), nevr_invite_match::ServiceActive());
+    }
+    PostShareTexts();
   }
+  nevr_quest::ui_text::OnFrame();
   return true;
 }
 

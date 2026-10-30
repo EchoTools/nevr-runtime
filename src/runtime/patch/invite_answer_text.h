@@ -28,6 +28,7 @@
 #include <utility>
 #include <vector>
 
+#include "runtime/patch/invite_match_api.h"
 #include "runtime/patch/invite_wizard.h"
 #include "runtime/patch/invite_worker.h"
 #include "runtime/patch/ui_text.h"
@@ -120,12 +121,11 @@ using PostFn = std::function<nevr_ui_text::Check(nevr_ui_text::Request)>;
 using LogFn = std::function<void(nevr_invite::LogLevel, const std::string&)>;
 
 inline std::string PostedLine(Field field, std::size_t bytes) {
-  return std::string("[NEVR.INVITE] text posted field=") + FieldName(field) + " bytes=" + std::to_string(bytes);
+  return nevr_invite_match::PostedText(FieldName(field), bytes);
 }
 
 inline std::string NotPostedLine(Field field, std::size_t bytes, const char* reason) {
-  return std::string("[NEVR.INVITE] text not posted field=") + FieldName(field) + " bytes=" + std::to_string(bytes) +
-         " reason=" + reason;
+  return nevr_invite_match::NotPostedText(FieldName(field), bytes, reason);
 }
 
 /// Posts the texts of `answers`, oldest first. `writerReady` is the writer's own state: with it off nothing is posted and each

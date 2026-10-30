@@ -728,6 +728,24 @@ inline GotTarget LibR15UserProviderId() {
 inline constexpr const char* kCanvasSetTextSymbol =
     "_ZN10NRadEngine11CCanvasUICS7SetTextENS_18SCompactPoolHandleENS_9CSymbol64EPKc";
 inline constexpr std::uint64_t kCanvasSetTextVaddr = 0x139111c;
+// The UI text writer's other two game calls (runtime/patch/ui_text.h; the PC's are in runtime/patch/ui_text.cpp), with the prologue words
+// the writer checks before it calls them. SetText is the function above, called directly (the versions-label hook sits on the
+// PLT slot, not on the code). The words are the store libr15's; got_pinned_test.cpp compares them with the real file.
+//   NRadEngine::CncaGame::GameSpace(unsigned long long) (.dynsym 0x17e17fc, 36 bytes, no relative operand): x0 = the game
+//   object (a CR15Game, whose `this` it is), x1 = the index; `index < [x0+0x1f78] ? [[x0+0x1f48] + index*16 + 8] : 0`. The PC's
+//   GetGameSpace is the same function at +0x1f50 and +0x1f80. ReVault 0x18e17fc.
+inline constexpr std::uint64_t kGameSpaceVaddr = 0x17e17fc;
+inline constexpr std::uint32_t kGameSpaceCode[9] = {0xf94fbc08, 0xeb01011f, 0x540000a9, 0xf94fa408, 0x8b011108,
+                                                    0xf9400500, 0xd65f03c0, 0xaa1f03e0, 0xd65f03c0};
+//   NRadEngine::CLocalComponentHandle<NRadEngine::CCanvasUICS>::Find(CncaGameSpaceMT*, SActor, CSymbol64) (.dynsym 0x1cbb408,
+//   344 bytes): x0 = the handle it fills ({CCanvasUICS*, u32 handle}), x1 = the gamespace, x2 = the actor's identity
+//   (0x0000ffffffff0000 | index), x3 = the component symbol (canvasui); it leaves x0's canvas null when there is none. The
+//   words are the first twelve, up to the ADRP at 0x1cbb438. ReVault 0x1dbb408.
+inline constexpr std::uint64_t kCanvasFindVaddr = 0x1cbb408;
+inline constexpr std::uint32_t kCanvasFindCode[12] = {0xd10183ff, 0xf90013f8, 0xa9035bf7, 0xa90453f5, 0xa9057bf3, 0xaa0003f4,
+                                                      0xa9008be1, 0xb4000901, 0xaa0103f5, 0xf9424821, 0xaa0303f3, 0xb4000761};
+//   CCanvasUICS::SetText's first six words (the BL after them is relative and not pinned).
+inline constexpr std::uint32_t kCanvasSetTextCode[6] = {0xb4000243, 0xd10083ff, 0xa9017bf3, 0xaa0303f3, 0x92407c21, 0x910023e3};
 inline constexpr std::uint64_t kCanvasSetTextStub = 0xf50440;
 inline constexpr std::size_t kCanvasSetTextStubCallers = 40;  // b/bl to the stub in the executable segments; none to the function
 using CanvasSetTextSig = std::uint64_t(void* canvas, std::uint32_t handle, std::uint64_t item, const char* text);

@@ -1841,7 +1841,7 @@ test-quest-hooks json_include="": _vcpkg-quest-host
     # The Quest join (#966 S4, ADR 0017): the staging, the route and repeat gates, and the begin order, against a fake game block at
     # the Quest offsets (kQuestLayout). The service's two symbols are stubbed inside the test. Built without exceptions.
     "${cxx[@]}" -fno-exceptions -pthread -isystem "$out/attach_json_inc" src/quest/tests/invite_join_quest_test.cpp \
-        src/quest/invite/join_game_quest.cpp src/quest/invite/frame_dispatch.cpp src/quest/data/sha256.cpp \
+        src/quest/invite/join_game_quest.cpp src/quest/invite/ui_text_quest.cpp src/quest/invite/frame_dispatch.cpp src/quest/data/sha256.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]:0:2}" -o "$out/invite_join_quest_test" -ldl
     timeout 120 "$out/invite_join_quest_test"

@@ -130,7 +130,7 @@ set_source_files_properties(entry.cpp login_prompt_hook.cpp ../invite/frame_disp
 # --exclude-libs (below) keeps it out of the export set, the same as nevr_quest_data_wiring. It is on the hook path
 # (entry.cpp calls RegisterAnswerApplier, reached from HookedNetGameUpdate), so it is built without exceptions, and with hidden
 # default visibility and the warnings-as-errors flags its siblings nevr_quest_data_wiring and nevr_quest_invite use.
-add_library(nevr_quest_invite_join STATIC ../invite/join_game_quest.cpp)
+add_library(nevr_quest_invite_join STATIC ../invite/join_game_quest.cpp ../invite/ui_text_quest.cpp)
 target_include_directories(nevr_quest_invite_join PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../..

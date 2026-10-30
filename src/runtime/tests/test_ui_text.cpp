@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -83,6 +84,9 @@ struct FakePlatform {
     std::memcpy(out, reinterpret_cast<const void*>(address), n);
     return true;
   }
+  bool FindActor(uintptr_t gs, uint64_t actor, uint64_t* index) { return nevr_ui_text::FindActorIndex(*this, gs, actor, index); }
+  std::string ActorTableProbe(uintptr_t) { return " table=0x0"; }
+  std::string FirstWriteLine() { return "[NEVR.UI] text first write thread=1 game_loop_thread=1"; }
   bool FindCanvas(uintptr_t gs, uint64_t ident, uintptr_t* cs, uint32_t* handle) {
     ++findCalls;
     lastFindSpace = gs;
@@ -449,3 +453,124 @@ TEST(UiTextLine, EveryOutcomeAndCheckHasAName) {
 }
 
 }  // namespace
+
+// ---- the Quest actor map (libr15 CncaGameSpace::LocalActor) ----
+
+// One Quest gamespace: [gs+0x370] -> table; [table+0x00] -> entries sorted by their signed 64-bit name, 16 bytes each, the
+// actor index as a u16 at +8; [table+0x30] -> how many.
+struct FakeQuestSpace {
+  alignas(8) uint8_t space[0x400] = {};
+  alignas(8) uint8_t table[0x100] = {};
+  std::vector<uint8_t> entries;
+  // Entries must be given sorted by signed name, as the game keeps them.
+  void Set(std::initializer_list<std::pair<uint64_t, uint16_t>> list) {
+    // The offsets are the game's, written out (libr15 CncaGameSpace::LocalActor): not the constants under test.
+    entries.assign(list.size() * 16, 0);
+    size_t at = 0;
+    for (const auto& [name, index] : list) {
+      std::memcpy(entries.data() + at, &name, sizeof(name));
+      std::memcpy(entries.data() + at + 8, &index, sizeof(index));
+      at += 16;
+    }
+    FakeSpace::Put(space, 0x370, reinterpret_cast<uintptr_t>(table));
+    FakeSpace::Put(table, 0x00, reinterpret_cast<uintptr_t>(entries.data()));
+    FakeSpace::Put(table, 0x30, list.size());
+  }
+  uintptr_t Address() { return reinterpret_cast<uintptr_t>(space); }
+};
+
+TEST(UiTextQuestActor, TheActorIsFoundBySigningTheNamesLikeTheGamesBinarySearch) {
+  // 0xa9bd... and 0xad97... are negative as signed 64-bit, 0x0ec8... is positive: the game's order is signed.
+  const uint64_t a = 0xa9bd0cb4e6f2004cULL, b = 0xad97e58a7b13425fULL, c = 0x0ec8e16986ef88c8ULL;
+  ASSERT_LT(static_cast<int64_t>(a), static_cast<int64_t>(b));
+  ASSERT_LT(static_cast<int64_t>(b), static_cast<int64_t>(c));
+  FakeQuestSpace gs;
+  gs.Set({{a, 3}, {b, 9}, {c, 21}});
+  FakePlatform p;
+  uint64_t index = 0;
+  EXPECT_TRUE(nevr_ui_text::FindActorInSortedMap(p, gs.Address(), a, &index));
+  EXPECT_EQ(index, 3u);
+  EXPECT_TRUE(nevr_ui_text::FindActorInSortedMap(p, gs.Address(), b, &index));
+  EXPECT_EQ(index, 9u);
+  EXPECT_TRUE(nevr_ui_text::FindActorInSortedMap(p, gs.Address(), c, &index));
+  EXPECT_EQ(index, 21u);
+  EXPECT_FALSE(nevr_ui_text::FindActorInSortedMap(p, gs.Address(), 0x1234, &index));
+}
+
+TEST(UiTextQuestActor, ARefusedReadTheNoneIndexAndAnEmptyMapAreNotFound) {
+  FakeQuestSpace gs;
+  gs.Set({{0x10, 1}, {0x20, 0xffff}});
+  FakePlatform p;
+  uint64_t index = 0;
+  EXPECT_TRUE(nevr_ui_text::FindActorInSortedMap(p, gs.Address(), 0x10, &index));
+  EXPECT_FALSE(nevr_ui_text::FindActorInSortedMap(p, gs.Address(), 0x20, &index)) << "0xffff is the none index";
+  p.refuse = reinterpret_cast<uintptr_t>(gs.entries.data());
+  EXPECT_FALSE(nevr_ui_text::FindActorInSortedMap(p, gs.Address(), 0x10, &index)) << "the second probe of the binary search";
+  p.refuse = gs.Address() + 0x370;
+  EXPECT_FALSE(nevr_ui_text::FindActorInSortedMap(p, gs.Address(), 0x10, &index));
+  FakeQuestSpace none;
+  none.Set({});
+  p.refuse = 0;
+  EXPECT_FALSE(nevr_ui_text::FindActorInSortedMap(p, none.Address(), 0x10, &index));
+}
+
+// ---- one frame of the writer ----
+
+struct Lines {
+  static std::vector<std::pair<nevr_ui_text::LogLevel, std::string>>& All() {
+    static std::vector<std::pair<nevr_ui_text::LogLevel, std::string>> lines;
+    return lines;
+  }
+  static void Log(nevr_ui_text::LogLevel level, const std::string& line) { All().emplace_back(level, line); }
+  static bool Has(const std::string& needle) {
+    for (const auto& [level, line] : All()) {
+      if (line.find(needle) != std::string::npos) return true;
+    }
+    return false;
+  }
+};
+
+TEST(UiTextFrame, AWrittenRequestIsLoggedByTargetAndSizeAndTheFirstWriteOnce) {
+  Lines::All().clear();
+  FakeSpace gs;
+  gs.Names({kActor});
+  gs.Build();
+  FakePlatform p;
+  p.Use({&gs});
+  Pending pending;
+  std::atomic<bool> first{false};
+  ASSERT_EQ(pending.Post(Req("<coming soon>"), 0), Check::Ok);
+  nevr_ui_text::RunFrame(pending, p, 0, first, &Lines::Log);
+  ASSERT_EQ(Lines::All().size(), 2u);
+  EXPECT_EQ(Lines::All()[0].second,
+            "[NEVR.UI] text written actor=0xad97e58a7b13425f element=0xa8452de53657bd6e bytes=13 attempts=1");
+  EXPECT_EQ(Lines::All()[0].first, nevr_ui_text::LogLevel::Info);
+  EXPECT_EQ(Lines::All()[1].second, "[NEVR.UI] text first write thread=1 game_loop_thread=1");
+  ASSERT_EQ(pending.Post(Req("again"), 1), Check::Ok);
+  nevr_ui_text::RunFrame(pending, p, 1, first, &Lines::Log);
+  EXPECT_EQ(Lines::All().size(), 3u) << "the first-write line is logged once";
+  EXPECT_FALSE(Lines::Has("coming soon")) << "a text is never logged";
+}
+
+TEST(UiTextFrame, AMissExplainsItselfWithTheSpacesAndIsDroppedWithItsCause) {
+  Lines::All().clear();
+  FakeSpace gs;
+  gs.Names({0x1});
+  gs.Build();
+  FakePlatform p;
+  p.Use({&gs});
+  Pending pending;
+  std::atomic<bool> first{false};
+  ASSERT_EQ(pending.Post(Req("X"), 0), Check::Ok);
+  nevr_ui_text::RunFrame(pending, p, 0, first, &Lines::Log);
+  ASSERT_EQ(Lines::All().size(), 3u);
+  EXPECT_EQ(Lines::All()[0].second,
+            "[NEVR.UI] text waiting actor=0xad97e58a7b13425f element=0xa8452de53657bd6e bytes=1 attempts=1 outcome=no_actor");
+  EXPECT_EQ(Lines::All()[1].second.rfind("[NEVR.UI] text probe space=0 gs=0x", 0), 0u);
+  EXPECT_NE(Lines::All()[1].second.find(" table=0x0"), std::string::npos);
+  EXPECT_EQ(Lines::All()[2].second, "[NEVR.UI] text probe spaces=1");
+  nevr_ui_text::RunFrame(pending, p, nevr_ui_text::kGiveUpMs, first, &Lines::Log);
+  EXPECT_EQ(Lines::All().back().first, nevr_ui_text::LogLevel::Warning);
+  EXPECT_NE(Lines::All().back().second.find("text dropped"), std::string::npos);
+  EXPECT_NE(Lines::All().back().second.find("reason=no_actor"), std::string::npos);
+}
