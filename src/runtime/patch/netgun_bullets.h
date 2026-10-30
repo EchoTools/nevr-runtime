@@ -339,7 +339,7 @@ inline std::vector<std::string> StockPins(Resource res) {
 /// Registers the ten transforms (two resources, five levels) that answer every load of them (netgun_bullets.cpp)
 /// through `reg`. Client only; logs its decision. Needs the resource override registry (InstallResourceOverride) to
 /// exist.
-using RegisterFn = void (*)(uint64_t type_hash, uint64_t name_hash, ResourceTransformFn transform, void* user,
+using RegisterFn = bool (*)(uint64_t type_hash, uint64_t name_hash, ResourceTransformFn transform, void* user,
                             const char* label);
 void Install(RegisterFn reg = &RegisterResourceTransform);
 
