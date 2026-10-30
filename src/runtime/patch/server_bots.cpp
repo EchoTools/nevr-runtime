@@ -15,6 +15,7 @@
 #include "runtime/lifecycle/return_to_lobby_queue.h"
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/patch/server_bots.h"
+#include "runtime/patch/server_team_size.h"
 
 namespace nevr_server_bots {
 
@@ -75,7 +76,8 @@ void SessionSettings(void** frame, uint64_t* size) {
   const uint32_t wanted = ArmedBots();
   if (wanted == 0) return;
   const uint8_t* bytes = static_cast<const uint8_t*>(*frame);
-  SettingsRewrite r = RewriteSessionSettings(bytes, static_cast<size_t>(*size), wanted, kPlayersPerTeam);
+  const int playersPerTeam = static_cast<int>(nevr_server_team_size::ParseMaxTeamSize(NevrCfgGetFlat("nevr_max_team_size"), nullptr));
+  SettingsRewrite r = RewriteSessionSettings(bytes, static_cast<size_t>(*size), wanted, playersPerTeam);
   const SessionView session{SessionIdOf(bytes, *size), BotsThisSession(r.result)};
   {
     std::lock_guard<std::mutex> lock(g_sessionMutex);

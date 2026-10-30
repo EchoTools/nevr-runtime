@@ -90,8 +90,6 @@ inline uint32_t ParseBotsPerSession(const char* text, std::string* problem) {
 constexpr size_t kSessionStartHeaderSize = 36;
 /// Two teams, as the service's arena and combat matches have.
 constexpr int kNumTeams = 2;
-/// The game's own team cap (ServerAssignTeam, #1422): what a team holds without a configured size.
-constexpr int kPlayersPerTeam = 5;
 
 // ---- The session's game type ------------------------------------------------------------------------------------
 
@@ -185,6 +183,7 @@ struct SettingsRewrite {
   size_t rewrittenBytes = 0;   // its length after the rewrite
   bool addedNumTeams = false;
   bool addedPlayersPerTeam = false;
+  int playersPerTeamWritten = 0;  // the value written as players_per_team (network.max_team_size, #1422)
 };
 
 /// Adds `numteams` and `players_per_team` to a session start's settings when bots are wanted, the game type is a match
@@ -226,7 +225,10 @@ inline SettingsRewrite RewriteSessionSettings(const uint8_t* frame, size_t size,
     return out;
   }
   if (out.addedNumTeams) doc["numteams"] = kNumTeams;
-  if (out.addedPlayersPerTeam) doc["players_per_team"] = playersPerTeam;
+  if (out.addedPlayersPerTeam) {
+    doc["players_per_team"] = playersPerTeam;
+    out.playersPerTeamWritten = playersPerTeam;
+  }
   const std::string text = doc.dump();
   out.rewrittenBytes = text.size();
   const size_t tailAt = kSessionStartHeaderSize + out.settingsBytes;  // the NUL, then the entrants
@@ -601,7 +603,7 @@ inline Line SettingsLine(const SettingsRewrite& r, const std::string& session, u
           std::string("[NEVR.GAMESERVER] server bots session settings ") + SettingsResultName(r.result) +
               " session=" + session + " game_type=" + r.gameType +
               " numteams=" + (r.addedNumTeams ? std::to_string(kNumTeams) : "kept") +
-              " players_per_team=" + (r.addedPlayersPerTeam ? std::to_string(kPlayersPerTeam) : "kept") +
+              " players_per_team=" + (r.addedPlayersPerTeam ? std::to_string(r.playersPerTeamWritten) : "kept") +
               " settings_bytes=" + std::to_string(r.settingsBytes) + " rewritten_bytes=" +
               std::to_string(r.rewrittenBytes) + " frame_bytes=" + std::to_string(frameBytes) +
               (IsSettingsFailure(r.result) ? " (forwarded as it came; no bots this session)"

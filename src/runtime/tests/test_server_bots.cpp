@@ -121,6 +121,18 @@ TEST(ServerBotsSettings, TextOutsideAsciiKeepsItsBytes) {
   EXPECT_EQ(json.rfind(settings.substr(0, settings.size() - 1), 0), 0u) << json;
 }
 
+TEST(ServerBotsSettings, ASixPlayerTeamWritesSix) {
+  // network.max_team_size = 6 (#1422) reaches the session settings as players_per_team: 6, not the game's 5.
+  const std::vector<uint8_t> f = Frame(kServiceSettings, kEntrants);
+  const SettingsRewrite r = RewriteSessionSettings(f.data(), f.size(), 1, 6);
+  ASSERT_EQ(r.result, SettingsResult::kRewritten);
+  const nlohmann::json doc =
+      nlohmann::json::parse(reinterpret_cast<const char*>(r.frame.data() + kSessionStartHeaderSize));
+  EXPECT_EQ(doc.at("players_per_team"), 6);
+  EXPECT_EQ(r.playersPerTeamWritten, 6);
+  EXPECT_NE(SettingsLine(r, "AAAA", 171).text.find("players_per_team=6"), std::string::npos);
+}
+
 TEST(ServerBotsSettings, PlayersPerTeamIsTheValueGiven) {
   const std::vector<uint8_t> f = Frame(kServiceSettings, kEntrants);
   const SettingsRewrite r = RewriteSessionSettings(f.data(), f.size(), 1, 7);
@@ -875,6 +887,7 @@ TEST(ServerBotsLines, TheSettingsResultIsInfoAndAFailureAWarning) {
   r = SettingsRewrite{};
   r.result = SettingsResult::kNotJson;
   r.addedPlayersPerTeam = true;
+  r.playersPerTeamWritten = 5;
   l = SettingsLine(r, "AAAA", 40);
   EXPECT_TRUE(l.warning);
   EXPECT_EQ(l.text,

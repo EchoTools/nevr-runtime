@@ -191,7 +191,9 @@ DRIVER_BODIES = {
         ("const uint32_t wanted = ArmedBots();", "SessionSettings does not read the armed count"),
         ("if (wanted == 0) return;", "an unarmed server's session start is rewritten"),
         ("const uint8_t* bytes = static_cast<const uint8_t*>(*frame);", "the frame's bytes are not the session start's"),
-        ("SettingsRewrite r = RewriteSessionSettings(bytes, static_cast<size_t>(*size), wanted, kPlayersPerTeam);",
+        ("const int playersPerTeam = static_cast<int>(nevr_server_team_size::ParseMaxTeamSize(\n            NevrCfgGetFlat(\"nevr_max_team_size\"), nullptr));",
+         "the team size is not read from network.max_team_size (through ParseMaxTeamSize, default 5)"),
+        ("SettingsRewrite r = RewriteSessionSettings(bytes, static_cast<size_t>(*size), wanted, playersPerTeam);",
          "the settings are not rewritten for the armed count"),
         ("const SessionView session{SessionIdOf(bytes, *size), BotsThisSession(r.result)};",
          "the session is not the session start's id and whether its settings make it a bot session"),
@@ -258,6 +260,8 @@ def driver_problems(driver: str) -> list[str]:
                      for extra in found if extra not in wanted]
         if not problems and found != wanted:
             problems.append(f"`{signature}`'s statements are out of order")
+    if "kPlayersPerTeam" in code:
+        problems.append("the driver still writes the team size from the kPlayersPerTeam literal")
     if re.search(r"\*\s*hostingFlags\s*=|kHostingFlagOffline", code):
         problems.append("the driver writes the hosting flags itself, outside WithOfflineBit")
     return problems
@@ -448,7 +452,7 @@ class ServerBotsWiring(unittest.TestCase):
             ("BotsThisSession(r.result)", "true"),
             ("UseRewrite(r, g_rewrittenFrame, frame, size);", ""),
             ("LogLine(SettingsLine(", "(void)(SettingsLine("),
-            ("wanted, kPlayersPerTeam)", "wanted, 4)"),
+            ("wanted, playersPerTeam)", "wanted, 4)"),
             ("  UseRewrite(r, g_rewrittenFrame, frame, size);", "  if (*size == 0) UseRewrite(r, g_rewrittenFrame, frame, size);"),
             ("  UseRewrite(r, g_rewrittenFrame, frame, size);", "  if (*size == 0) {\n    UseRewrite(r, g_rewrittenFrame, frame, size);\n  }"),
             ("  g_armed.store(r.armed, std::memory_order_release);\n",
