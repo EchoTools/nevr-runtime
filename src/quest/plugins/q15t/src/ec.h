@@ -16,6 +16,7 @@
 
 #include <sys/socket.h>
 
+#include <cstddef>
 #include <cstdint>
 
 #include "import_hook.h"
@@ -58,6 +59,8 @@ InstallResult InstallEcWithWords(std::uintptr_t base, const char* words);
 
 // True when <data directory>/<name> exists (the plugin's own files dir, same rule as the switch files). Used by ecfx.
 bool EcDataFileExists(const char* name);
+// The first line of <data directory>/<name> into `out` (newline stripped, NUL-terminated). False when there is no such file.
+bool EcReadDataLine(const char* name, char* out, std::size_t n);
 
 // One 5 ms pass of the source's Main loop. `now100` = CLOCK_MONOTONIC in 100 ns. The thread InstallEc starts calls it.
 void EcStep(std::uint64_t now100);

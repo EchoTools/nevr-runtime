@@ -34,6 +34,7 @@
 #include "sensorwd.h"
 #include "shaderstep.h"
 #include "shieldgamma.h"
+#include "sendguard.h"
 #include "tablestep.h"
 #include "voipdrop.h"
 #include "wallfire.h"
@@ -73,6 +74,9 @@
 // ReVault 0x212ba74, 84 bytes) is the PC build's Link kind (4), so the Bind sets the link flag and not the Quest flag and no menu script is told it runs on a Quest headset (R1_functions.md:90).
 #ifndef Q15T_GATE_LINK
 #define Q15T_GATE_LINK 0
+#endif
+#ifndef Q15T_LINK_GATE_LIBS
+#define Q15T_LINK_GATE_LIBS "none"  // the CMake default names the combat menu scripts
 #endif
 #ifndef Q15T_LINK_FN_LO
 #define Q15T_LINK_FN_LO 0x202ba74ULL
@@ -143,6 +147,9 @@
 #endif
 #ifndef Q15T_TABLESTEP  // issue #1552: shader-set table growth step 32 -> 1 (tablestep.cpp)
 #define Q15T_TABLESTEP 0
+#endif
+#ifndef Q15T_SENDGUARD  // script send to a game space that is not loaded: dropped, not faulted (sendguard.cpp)
+#define Q15T_SENDGUARD 0
 #endif
 #ifndef Q15T_SHIELDGAMMA  // bitmask: 1 gamma, 2 tube mirror
 #define Q15T_SHIELDGAMMA 0
@@ -256,6 +263,9 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_TABLESTEP
     "tablestep "
+#endif
+#if Q15T_SENDGUARD
+    "sendguard "
 #endif
 #if Q15T_LEVELNAME
     "levelname "
@@ -490,6 +500,9 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
 #if Q15T_TABLESTEP
   ReportModule("tablestep", InstallTableStep(base));
 #endif
+#if Q15T_SENDGUARD
+  ReportModule("sendguard", InstallSendGuard(base));
+#endif
 #if Q15T_LEVELNAME
   ReportModule("levelname", InstallLevelName(base));
   ReportModule("boosterpool", InstallBoosterPool(base));  // the companion word row, as a GOT hook (boosterpool.h)
@@ -545,6 +558,22 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
                                  Q15T_REAL_PARTYMEMBERHEADSETTYPE));
 #endif
 #if Q15T_GATE_BOTS || Q15T_GATE_LINK
+  // The link gate answers only the script libraries the policy names (headset_gates.h): the build's list, or the first line of
+  // <data directory>/gate_libs.txt when that file exists ("all", "none", or name fragments such as "0e4384a5 1703a89b").
+  {
+    char spec[640] = Q15T_LINK_GATE_LIBS;
+    const char* source = "build default";
+#if Q15T_EC
+    char line[640];
+    if (EcReadDataLine("gate_libs.txt", line, sizeof line)) {
+      std::memcpy(spec, line, sizeof spec);
+      source = "gate_libs.txt";
+    }
+#endif
+    SetLinkGateLibs(spec);
+    const NevrLogField f[] = {{"libs", spec[0] != 0 ? spec : "none"}, {"source", source}};
+    Log(NEVR_LOG_INFO, "headset link gate policy", f, 2);
+  }
   // One wrapper on the one CVR::HeadsetType slot serves both gates; a gate that is off gets an empty caller range.
   Report("CVR::HeadsetType (caller-range gates)",
          InstallHeadsetGate(ctx->base_addr, Q15T_SLOT_HEADSETTYPE,
