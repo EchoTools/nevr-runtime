@@ -5,6 +5,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
@@ -133,6 +134,10 @@ TEST(NetgunBulletParticles, AResourceThatAlreadyHasARowOfTheFourIsRefused) {
     std::vector<Row> rows = StockRows();
     rows.push_back({kTrail, owner, 1, 50});
     EXPECT_EQ(Particles_(Particles(rows)).status, Status::AlreadyPresent) << std::hex << owner;
+    // The first row is read too.
+    rows = StockRows();
+    rows.insert(rows.begin(), Row{kTrail, owner, 1, 50});
+    EXPECT_EQ(Particles_(Particles(rows)).status, Status::AlreadyPresent) << std::hex << owner << " first";
   }
 }
 
@@ -227,6 +232,18 @@ TEST(NetgunBulletSlots, TheFourNameTheScoutsImpactAndTrailAndTheMagnumItsExplosi
   EXPECT_EQ(r.entriesBefore, 9u);
   EXPECT_EQ(r.entriesAfter, 9u);
   EXPECT_EQ(r.bytes, PatchedBullets());
+}
+
+TEST(NetgunBulletSlots, TheScoutAndEachOfTheFourAreFoundAsTheFirstEntry) {
+  for (size_t first : {2u, 4u, 5u, 6u, 7u}) {
+    std::vector<Entry> e = StockEntries();
+    std::rotate(e.begin(), e.begin() + static_cast<std::ptrdiff_t>(first),
+                e.begin() + static_cast<std::ptrdiff_t>(first) + 1);
+    const nevr_netgun_bullets::Result r = Bullets_(Bullets(e));
+    ASSERT_EQ(r.verdict, Verdict::Patched)
+        << "entry " << first << " first: " << nevr_netgun_bullets::StatusName(r.status);
+    EXPECT_EQ(r.bytes, PatchedBullets(e)) << "entry " << first << " first";
+  }
 }
 
 TEST(NetgunBulletSlots, OnlyTheNineSlotsChange) {

@@ -1402,8 +1402,10 @@ TEST_F(NetgunBulletTransforms, BytesWhoseDigestCannotBeComputedAreLeftAloneAndSa
   // The failure is this machine's, not the data's: it is not reported as bytes that match no pin.
   EXPECT_FALSE(TestLogContains("reason=not_pinned"));
   EXPECT_FALSE(TestLogContains("netgun bullet effects added"));
-  // With the real digest again, the same stock bytes are rewritten: nothing of the failed load was kept.
-  nevr_netgun_bullets::TestHook_SetDigest(nullptr);
+  // After a reset (which puts back the real digest), the same stock bytes are rewritten: nothing of the failed load
+  // was kept.
+  nevr_netgun_bullets::TestHook_Reset();
+  PinFixtures();
   GameFinishesBuffer(kNetgunParticleType, kCombustion, 0, particles_.data(), particles_.size());
   EXPECT_NE(g_seenBuffer, particles_.data());
   EXPECT_TRUE(TestLogContains("netgun bullet effects added level=mpl_combat_combustion"));

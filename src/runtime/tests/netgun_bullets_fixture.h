@@ -166,9 +166,9 @@ inline std::vector<uint8_t> Bullets(const std::vector<Entry>& entries) {
   return Resource(e, 136);
 }
 
-// What PatchBullets must write for StockEntries(): the four get the scout's impact and trail, the magnum its explosion.
-inline std::vector<uint8_t> PatchedBullets() {
-  std::vector<Entry> e = StockEntries();
+// What PatchBullets must write for `e` (StockEntries() unless given): the four get the scout's impact and trail, the
+// magnum its explosion.
+inline std::vector<uint8_t> PatchedBullets(std::vector<Entry> e = StockEntries()) {
   for (Entry& en : e) {
     if (en.actor == kMagnum || en.actor == kSmg || en.actor == kChain || en.actor == kRifle) {
       en.slots[0] = kImpact;
