@@ -66,6 +66,11 @@ void OnServerUpdate() {
   for (const Line& line : lines) LogLine(line);
 }
 
+void ForgetSession() {
+  std::lock_guard<std::mutex> lock(g_sessionMutex);
+  g_session = SessionView{};
+}
+
 void SessionSettings(void** frame, uint64_t* size) {
   const uint32_t wanted = ArmedBots();
   if (wanted == 0) return;

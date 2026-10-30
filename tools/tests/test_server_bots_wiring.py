@@ -119,10 +119,42 @@ def callbacks_problems(callbacks: str) -> list[str]:
     return []
 
 
+FORGET_CALL = "nevr_server_bots::ForgetSession();"
+BROADCASTER_GATE = "if (broadcaster) {"
+
+
+def forget_problems(callbacks: str) -> list[str]:
+    """ForgetSession runs in the legacy session-start branch, after the broadcaster is read and before the
+    `if (broadcaster)` that the forward sits in, at the branch's own block level: a session start with no broadcaster
+    must not leave the previous session's bots flag in place."""
+    code = strip_comments(callbacks)
+    if code.count(FORGET_CALL) != 1:
+        return [f"expected exactly one `{FORGET_CALL}`, found {code.count(FORGET_CALL)}"]
+    at = code.index(FORGET_CALL)
+    branch = code.rfind("else if (msgId == SYM_LEGACY_SESSION_START)", 0, at)
+    nxt = code.find("else if (msgId ==", branch + 1)
+    if branch < 0 or (0 <= nxt < at):
+        return ["ForgetSession is not in the SYM_LEGACY_SESSION_START branch"]
+    gate = code.find(BROADCASTER_GATE, branch)
+    if gate < 0 or gate < at:
+        return ["ForgetSession is not before the `if (broadcaster)` gate of the session start"]
+    if code.find("GetBroadcaster();", branch, at) < 0:
+        return ["ForgetSession is not after the broadcaster is read"]
+    if depth_in(code, "else if (msgId == SYM_LEGACY_SESSION_START)", at) != 1:
+        return ["ForgetSession is inside an `if`, a loop or a block of its own"]
+    if not code[:at].rstrip().endswith((";", "{", "}")):
+        return ["ForgetSession is the body of an `if` or a loop without braces"]
+    return []
+
+
 # server_bots.cpp's functions, each its statements exactly, in order (whitespace aside): a statement put under an `if`,
 # a statement added, dropped or changed is a problem. DriverRuns gates on the mode and the thread only: an unarmed
 # server reaches OnServerUpdate and every session start, so each stops first when no bots are armed.
 DRIVER_BODIES = {
+    "void ForgetSession()": [
+        ("std::lock_guard<std::mutex> lock(g_sessionMutex);", "ForgetSession writes the session without its lock"),
+        ("g_session = SessionView{};", "ForgetSession does not clear the last session"),
+    ],
     "SessionView CurrentSession()": [
         ("std::lock_guard<std::mutex> lock(g_sessionMutex);", "the session is read without its lock"),
         ("return g_session;", "CurrentSession does not return the session"),
@@ -303,6 +335,7 @@ class ServerBotsWiring(unittest.TestCase):
         self.assertEqual(boot_problems(read(BOOT)), [])
         self.assertEqual(update_problems(read(GAMESERVER), read(TICK)), [])
         self.assertEqual(callbacks_problems(read(CALLBACKS)), [])
+        self.assertEqual(forget_problems(read(CALLBACKS)), [])
         self.assertEqual(driver_problems(read(DRIVER)), [])
         self.assertEqual(address_problems(read(ADDRESSES)), [])
         self.assertEqual(witness_problems(read(HEADER), read(GO_SITES), read(ADDRESSES)), [])
@@ -375,6 +408,17 @@ class ServerBotsWiring(unittest.TestCase):
         for gated in ("if (size == 0) " + SETTINGS_CALL, "if (size == 0) { " + SETTINGS_CALL + " }", "{ " + SETTINGS_CALL + " }"):
             with self.subTest(gated=gated):
                 self.assertTrue(callbacks_problems(callbacks.replace(SETTINGS_CALL, gated)), gated)
+
+    def test_a_missing_or_late_forget_is_found(self) -> None:
+        callbacks = read(CALLBACKS)
+        self.assertEqual(forget_problems(callbacks), [])
+        gated = callbacks.replace(FORGET_CALL, "if (size == 0) " + FORGET_CALL, 1)
+        self.assertTrue(forget_problems(gated))
+        after = callbacks.replace(FORGET_CALL, "", 1).replace(
+            "        auto* broadcaster = GetContext().GetBroadcaster();\n      if (broadcaster) {\n        // #1423: with bots",
+            "        auto* broadcaster = GetContext().GetBroadcaster();\n      if (broadcaster) {\n        " + FORGET_CALL + "\n        // #1423: with bots", 1)
+        self.assertTrue(forget_problems(after))
+        self.assertTrue(forget_problems(callbacks.replace(FORGET_CALL, "", 1)))
 
     def test_a_broken_driver_is_found(self) -> None:
         driver = read(DRIVER)

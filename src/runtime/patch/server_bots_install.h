@@ -29,4 +29,8 @@ uint32_t ArmedBots();
 /// whether the session gets bots, and logs the outcome.
 void SessionSettings(void** frame, uint64_t* size);
 
+/// Clears the last session start's record. The legacy session start calls it before its broadcaster gate, so a session
+/// start that never reaches the game (no broadcaster) does not leave the previous session's bots flag in place.
+void ForgetSession();
+
 }  // namespace nevr_server_bots
