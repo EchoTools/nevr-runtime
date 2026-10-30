@@ -40,8 +40,11 @@ class BootStartsTheService(unittest.TestCase):
         boot = code("src/runtime/lifecycle/boot.cpp")
         settings = boot.index("nevr_invite_service::Settings invite;")
         start = boot.index("nevr_invite_service::Start(std::move(invite))")
-        # The block opens right before its settings. A search further back would find the menu-cards guard above it.
-        self.assertIn("if (!g_isServer) {", boot[settings - 40:settings])
+        # The nearest client guard before the settings must still be open there; an earlier one closed before them.
+        guard = boot.rfind("if (!g_isServer) {", 0, settings)
+        self.assertNotEqual(guard, -1)
+        # No block closes between the client guard and the settings: they are in the guard's block.
+        self.assertNotIn("}", boot[guard:settings])
         self.assertLess(settings, start)
         self.assertLess(start, boot.index("} else {", start))  # the server branch comes after the client's start
 
