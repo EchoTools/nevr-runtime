@@ -114,8 +114,9 @@ inline constexpr GameType kGameTypes[] = {
     {"social_2.0_npe", EchoVR::CSymbol64Hash("social_2.0_npe"), false},
 };
 
-/// The settings' game type: one of kGameTypes, by its symbol (a JSON integer, signed or not) or its name; "none" when
-/// the key is absent, "unknown" for any other value. Only a match gets bots.
+/// The settings' game type: one of kGameTypes, by its symbol (a JSON integer, signed or not: an unsigned one is an
+/// integer too, and its int64 read keeps its bits) or its name; "none" when the key is absent, "unknown" for any
+/// other value. Only a match gets bots.
 struct SessionGameType {
   std::string name = "none";
   bool bots = false;
@@ -126,8 +127,7 @@ inline SessionGameType ReadGameType(const nlohmann::ordered_json& settings) {
   if (it == settings.end()) return out;
   out.name = "unknown";
   for (const GameType& t : kGameTypes) {
-    const bool same = it->is_number_unsigned()  ? it->get<uint64_t>() == t.symbol
-                      : it->is_number_integer() ? static_cast<uint64_t>(it->get<int64_t>()) == t.symbol
+    const bool same = it->is_number_integer() ? static_cast<uint64_t>(it->get<int64_t>()) == t.symbol
                       : it->is_string()         ? it->get<std::string>() == t.name
                                                 : false;
     if (same) {
