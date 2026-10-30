@@ -5,6 +5,8 @@
 #include <nlohmann/json.hpp>
 
 #include "runtime/compat/evr_codec.h"
+#include "runtime/compat/lobby_frame.h"
+#include "runtime/compat/social_party.h"
 #include "runtime/server/serverdb_uri.h"
 
 namespace quest_net {
@@ -24,6 +26,20 @@ LoopbackGameServer::Config WithLog(LoopbackGameServer::Config c, const nevr_sess
 CurlWsConnector::Config WithLog(CurlWsConnector::Config c, const nevr_session_router::LogSink& log) {
   if (!c.log) c.log = log;
   return c;
+}
+
+// Set once the social facade is installed (SetLobbyPartySource). The router calls LobbyParty under its own lock, so this
+// is a lock-free flag.
+std::atomic<bool> g_lobbyPartySource{false};
+
+// The party a session record names: the process-wide party state the Quest social facade keeps (#1429). The router
+// calls it under its own lock; social_party.h makes no call back into the router, so that order cannot invert. With no
+// facade the state is never fed, so there is no party to read: nullopt, which the record prints as unknown (#1525).
+std::optional<nevr_lobby_frame::PartyContext> LobbyParty() {
+  if (!g_lobbyPartySource.load(std::memory_order_acquire)) return std::nullopt;
+  const nevr_social_party::View view = nevr_social_party::Global().Snapshot();
+  return nevr_lobby_frame::PartyContext{view.partyId, static_cast<uint64_t>(view.members.size()), view.ownerId,
+                                        view.selfId};
 }
 
 }  // namespace
@@ -128,12 +144,18 @@ SessionBridge::SessionBridge(Config config) : config_(std::move(config)), tap_(F
   options.loginGate = config_.loginGate;
   options.subscribeFriendList = config_.subscribeFriendList;
   options.log = config_.log;
+  // The lobby session records (logging.md Rule 16, #1429): the Quest client writes them here, from the answers the
+  // router hands the game, as the PC bridge writes them from the frames it observes.
+  options.lobbyRecords.enabled = true;
+  options.lobbyRecords.party = &LobbyParty;
   router_ = std::make_unique<nevr_session_router::Router>(gamesTap_.get(), remotesTap_.get(), options);
   server_->Attach(router_.get());
   remotes_->Attach(router_.get());
 }
 
 SessionBridge::~SessionBridge() { Stop(); }
+
+void SetLobbyPartySource(bool installed) { g_lobbyPartySource.store(installed, std::memory_order_release); }
 
 bool SessionBridge::SendToLogin(std::string_view frame) { return remotesTap_->SendToLogin(frame); }
 

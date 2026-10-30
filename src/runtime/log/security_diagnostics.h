@@ -45,8 +45,8 @@ inline std::string FormatCallbackFailureDiagnostic(std::string_view callback) {
 inline std::string FormatLoginFailureDiagnostic(bool valid, uint64_t statusCode, size_t messageBytes,
                                                 bool serverMode) {
   const std::string mode = serverMode
-                               ? " (server mode: expected every boot — ServerDB never issues a real LoginSuccess; "
-                                 "resolved with a synthesized LoginSuccess)"
+                               ? " (server mode: the game gets a synthesized LoginSuccess; the server's credential "
+                                 "is checked at ServerDB registration)"
                                : " (client mode: this is a real failure)";
   if (!valid) return "[NEVR.WS] login failed status=invalid message_bytes=0 diagnostic=invalid_frame" + mode;
   return "[NEVR.WS] login failed status=" + std::to_string(statusCode) +

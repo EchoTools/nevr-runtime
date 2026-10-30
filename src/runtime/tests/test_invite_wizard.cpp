@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -54,6 +55,15 @@ std::string CreateLine(const std::string& region, const std::string& expires) {
 Choices ArenaCustom() { return Choices{"arena", "custom", 1}; }
 
 constexpr const char* kUuid = "0f8fad5b-d9cb-469f-a165-70867728950e";
+
+// ---- the prologue bytes a hook's Warning carries (docs/standards/logging.md, Rule 6) ----
+
+TEST(InviteWizard, HexBytesWritesEachByteAsTwoDigitsInOrderWithNoSeparator) {
+  const std::uint8_t bytes[] = {0x00, 0x0f, 0xa0, 0xff, 0x48};
+  EXPECT_EQ(nevr_invite::HexBytes(bytes, sizeof(bytes)), "000fa0ff48");
+  EXPECT_EQ(nevr_invite::HexBytes(bytes, 0), "");
+  EXPECT_EQ(nevr_invite::HexBytes(nullptr, 3), "");  // no pointer, no bytes: HexBytes is total (the hooks pass only readable memory)
+}
 
 // ---- the metric ----
 
@@ -659,6 +669,62 @@ TEST(InviteAnswer, AResolvedMatchIdIsAUuidBeforeItIsStagedAsTheLobbyId) {
   }
   EXPECT_FALSE(nevr_invite::ParseResolved("{}").has_value());
   EXPECT_FALSE(nevr_invite::ParseResolved("nope").has_value());
+}
+
+// nakama writes its match id as MatchID.String(): "<uuid>.<node>" (server/match_id.go:57). The lobby GUID is the UUID
+// part; the node names the nakama node and is not part of the GUID.
+TEST(InviteAnswer, ANakamaMatchIdWithANodeIsAcceptedAsItsUuid) {
+  const std::string withNode = std::string(kUuid) + ".nakama1";
+  const auto r = nevr_invite::ParseResolved(nlohmann::json{{"match_id", withNode}}.dump());
+  ASSERT_TRUE(r.has_value());
+  EXPECT_EQ(r->match_id, kUuid);
+
+  const auto created = nevr_invite::ParseCreated(nlohmann::json{{"code", "K7M2Q"}, {"match_id", withNode}}.dump());
+  ASSERT_TRUE(created.has_value());
+  EXPECT_EQ(created->match_id, kUuid);
+
+  const std::string upper = "0F8FAD5B-D9CB-469F-A165-70867728950E.nakama1";
+  const auto upperResolved = nevr_invite::ParseResolved(nlohmann::json{{"match_id", upper}}.dump());
+  ASSERT_TRUE(upperResolved.has_value());
+  EXPECT_EQ(upperResolved->match_id, kUuid);
+}
+
+TEST(InviteAnswer, AMatchIdWithAMalformedNodeOrUuidIsRefused) {
+  const std::string uuid = kUuid;
+  const std::vector<std::string> bads = {
+      uuid + ".",                              // an empty node
+      uuid + ".nakama 1",                      // a space in the node
+      uuid + ".nakama\t1",                     // a control character in the node
+      uuid + std::string(".nakama\x01", 8),    // another control character
+      uuid + ".nakama.1",                      // a second dot
+      "not-a-uuid.nakama1",                    // a bad UUID before the dot
+      uuid.substr(0, 35) + "x.nakama1",        // a non-hex digit in the UUID
+      "0f8fad5bd9cb469fa16570867728950e.nakama1",  // a UUID without its hyphens
+  };
+  for (const std::string& bad : bads) {
+    EXPECT_FALSE(nevr_invite::ParseResolved(nlohmann::json{{"match_id", bad}}.dump()).has_value()) << bad;
+    EXPECT_FALSE(nevr_invite::ParseCreated(nlohmann::json{{"code", "K7M2Q"}, {"match_id", bad}}.dump()).has_value())
+        << bad;
+  }
+}
+
+// The body production sent on 2026-10-30 is 118 bytes: a code, an RFC3339 expiry and a match id with a node. The create
+// and the resolve answers both parse in full, and the expiry reads as the wizard's text.
+TEST(InviteAnswer, ARealProductionCreateBodyParsesInFull) {
+  const std::string body = std::string("{\"code\":\"K7M2Q\",\"expires_at\":\"2026-10-30T06:31:00Z\",\"match_id\":\"") +
+                           kUuid + ".nakama1\"}";
+  const auto created = nevr_invite::ParseCreated(body);
+  ASSERT_TRUE(created.has_value());
+  EXPECT_EQ(created->code, "K7M2Q");
+  EXPECT_EQ(created->match_id, kUuid);
+  EXPECT_EQ(created->expires_text, "EXPIRES: 06:31 UTC");
+}
+
+TEST(InviteAnswer, ARealProductionResolveBodyParsesInFull) {
+  const std::string body = std::string("{\"match_id\":\"") + kUuid + ".nakama1\",\"mode\":\"echo_arena\",\"level\":\"mpl_arena_a\"}";
+  const auto resolved = nevr_invite::ParseResolved(body);
+  ASSERT_TRUE(resolved.has_value());
+  EXPECT_EQ(resolved->match_id, kUuid);
 }
 
 // The submit sees every remote log line; only one that names the wizard's panel is parsed at all.

@@ -17,6 +17,17 @@ std::string DirectoryOf(const char* path);
 // The sentinel has no DEBUG level, so a development build's DEBUG lines go out at Info.
 std::optional<nevr_quest::LogLevel> SinkLevel(std::uint32_t level, bool emitDebug);
 
+// Where the sentinel's platform reads the libr15 patch state from (ADR 0021 section 12). The sentinel's constructor sets
+// it to a function that reads what `Attach` recorded; it is a pointer, not a call, so this library does not link the
+// attach code. Never set (a host test, a build without the patch): every call reads "not verified", so the plugin
+// identity is the live note. Returns the previous source.
+using Libr15PatchSource = Libr15PatchState (*)();
+Libr15PatchSource SetLibr15PatchSource(Libr15PatchSource source);
+
+// The result of reading one file of the library directory: read; not there (the normal case for an optional file); or there and
+// not usable (a link, a directory, too large, a read error), with the reason as a token.
+enum class ReadOutcome { kRead, kAbsent, kUnreadable };
+
 class SentinelPlatform final : public Platform {
  public:
   // `libraryDir`: the native library directory (the directory of the sentinel's own mapping, ADR 0019 section 1).
@@ -24,10 +35,13 @@ class SentinelPlatform final : public Platform {
   SentinelPlatform(std::string libraryDir, bool emitDebug);
 
   bool ReadFile(const std::string& file, std::vector<std::uint8_t>* bytes) override;
+  // ReadFile with the difference between "not there" and "not usable". `*why` is a reason token for kUnreadable, "" otherwise.
+  ReadOutcome ReadFileOutcome(const std::string& file, std::vector<std::uint8_t>* bytes, const char** why);
   void* Open(const std::string& file) override;
   void Close(void* handle) override;
   void* Symbol(void* handle, const char* name) override;
   std::string GameBuildId() override;
+  Libr15PatchState Libr15Patch() override;
   std::uintptr_t GameBase() override;
   void Emit(const LoadRecord& record) override;
   void EmitPlan(std::size_t entries, std::size_t early, std::size_t normal, std::size_t refused,

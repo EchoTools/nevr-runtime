@@ -11,21 +11,16 @@
 #include "got_hook.h"
 #include "hook_log.h"
 #include "hook_install.h"
-#include "inline_hook.h"
-#include "pinned_targets.h"
+#include "libr15_attach.h"
+
+#include "runtime/compat/lobby_join_state.h"
+#include "runtime/patch/party_follow_dedup_rules.h"
 
 namespace quest_social::lobby_full {
 namespace {
 
-using sentinel::InlinePrologue;
-using sentinel::InlineStatus;
+using nevr_quest::libr15_patch::ActivateStatus;
 using Verdict = FullLobbyBackoff::Verdict;
-
-// The first four words of each pinned function (the prologue CheckInlineTarget compares, read from the pinned
-// build at the addresses above). A libr15 build that differs refuses the hook; it does not patch a guess.
-constexpr InlinePrologue kJoinPrologue{{0xD10183FFu, 0xF9001BF6u, 0xA90453F5u, 0xA9057BF3u}};
-constexpr InlinePrologue kFailurePrologue{{0xF81D0FFCu, 0xA90153F5u, 0xA9027BF3u, 0xD10883FFu}};
-constexpr InlinePrologue kSuccessPrologue{{0xD10183FFu, 0xA9035BF7u, 0xA90453F5u, 0xA9057BF3u}};
 
 // The message offsets the game reads (CR15NetClientLobby::LobbySessionFailureCB, pinned 0x1240cc8). The join's key is the
 // 16 bytes RequestJoin is given (Join, pinned 0x1240ba8: `CNSLobby::RequestJoin(param_1 + 0x18, param_2)`).
@@ -56,6 +51,17 @@ std::uint64_t NowMs() noexcept {
   return static_cast<std::uint64_t>(ts.tv_sec) * 1000u + static_cast<std::uint64_t>(ts.tv_nsec) / 1000000u;
 }
 
+// The lobby this client is in and the one it is joining (#1496, the Quest twin of #1413). The join row writes the joining
+// stamp when it sends a join, the success row writes the current one, and the failure row clears it. The clock is
+// NowMs(), so the stamps and the decision read one timebase. Built on first use, as Backoff() is.
+nevr_lobby_join_state::LobbyJoinState& JoinState() {
+  static nevr_lobby_join_state::LobbyJoinState state(&NowMs);
+  return state;
+}
+
+// The skip log's run state: one Info line per run of identical skips (party_follow_dedup_rules.h, NoteSkip). Guarded by g_mutex.
+nevr_party_follow_dedup::SkipLogState g_skipLog;
+
 LobbyKey KeyOf(const void* msg) noexcept {
   LobbyKey key{};
   std::memcpy(key.data(), static_cast<const std::uint8_t*>(msg) + kJoinKeyOffset, key.size());
@@ -83,6 +89,52 @@ bool FailureCode(const void* msg, std::int8_t* code) noexcept {
   return true;
 }
 
+// What the party-follow dedup decided for one join (#1496). Filled under g_mutex, logged after it is released.
+struct DedupDecision {
+  bool skip = false;
+  bool writeInfo = false;
+  const char* reason = "already_in";
+  std::uint64_t ageMs = 0;
+  std::uint64_t repeats = 0;
+};
+
+// The game queues a join to its party leader's lobby on every tick while it follows the party, so a join for a lobby this
+// client is in or is joining, younger than the window, is skipped (party_follow_dedup_rules.h, Decide). A skip is silent
+// except for one Info line per run of identical skips, as the PC hook writes it.
+DedupDecision DecideDuplicateFollow(const LobbyKey& key) noexcept {
+  using nevr_party_follow_dedup::Decide;
+  using nevr_party_follow_dedup::NoteNoSkip;
+  using nevr_party_follow_dedup::NoteSkip;
+  using nevr_party_follow_dedup::Skip;
+  DedupDecision out;
+  nevr_lobby_join_state::Stamp current{};
+  nevr_lobby_join_state::Stamp joining{};
+  pthread_mutex_lock(&g_mutex);
+  JoinState().Snapshot(&current, &joining);
+  const auto verdict = Decide(key, current, joining, NowMs());
+  if (verdict.skip == Skip::None) {
+    NoteNoSkip(g_skipLog);
+  } else {
+    const auto logDecision = NoteSkip(g_skipLog, key, verdict.skip);
+    out.skip = true;
+    out.writeInfo = logDecision.writeInfo;
+    out.reason = verdict.skip == Skip::AlreadyIn ? "already_in" : "already_joining";
+    out.ageMs = verdict.ageMs;
+    out.repeats = logDecision.repeats;
+  }
+  pthread_mutex_unlock(&g_mutex);
+  return out;
+}
+
+void LogSkip(const LobbyKey& key, const DedupDecision& d) {
+  char keyText[35];
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "party_follow_skipped",
+                      {{"lobby", KeyText(key, keyText)},
+                       {"reason", d.reason},
+                       {"age_ms", d.ageMs},
+                       {"repeats", d.repeats}});
+}
+
 // A join the policy holds back is skipped silently: the game calls Join again on the next tick, so a line here
 // would be one line per tick. The decisions that change the policy are logged from the refusal callback.
 void OnJoin(JoinThunk::Fn original, void* self, const void* msg, const void* arg) noexcept {
@@ -91,12 +143,18 @@ void OnJoin(JoinThunk::Fn original, void* self, const void* msg, const void* arg
     return;
   }
   const LobbyKey key = KeyOf(msg);
+  const DedupDecision dedup = DecideDuplicateFollow(key);
+  if (dedup.skip) {
+    if (dedup.writeInfo) LogSkip(key, dedup);
+    return;
+  }
   FullLobbyBackoff::Decision d;
   pthread_mutex_lock(&g_mutex);
   d = Backoff().OnJoin(key, NowMs());
   if (d.verdict == Verdict::kSend) {
     g_lastJoin = key;
     g_haveLastJoin = true;
+    JoinState().OnJoinRequested(key);
   }
   pthread_mutex_unlock(&g_mutex);
   if (d.verdict != Verdict::kSend) return;
@@ -104,6 +162,11 @@ void OnJoin(JoinThunk::Fn original, void* self, const void* msg, const void* arg
 }
 
 void OnFailure(FailureThunk::Fn original, void* self, const void* msg) noexcept {
+  // A refusal answers the join in flight, so it clears the joining stamp and the current one (the PC bridge does the same,
+  // lobby_join_state.h OnFailure). Without this a refused join would block the game's retry for the whole window.
+  pthread_mutex_lock(&g_mutex);
+  JoinState().OnFailure(/*answersJoin=*/true);
+  pthread_mutex_unlock(&g_mutex);
   std::int8_t code = 0;
   if (FailureCode(msg, &code) && code == kLobbyFullCode) {
     LobbyKey key{};
@@ -133,7 +196,10 @@ void OnFailure(FailureThunk::Fn original, void* self, const void* msg) noexcept 
 
 void OnSuccess(SuccessThunk::Fn original, void* self, const void* msg) noexcept {
   pthread_mutex_lock(&g_mutex);
-  if (g_haveLastJoin) Backoff().OnSuccess(g_lastJoin);
+  if (g_haveLastJoin) {
+    Backoff().OnSuccess(g_lastJoin);
+    JoinState().OnSuccess(g_lastJoin);
+  }
   pthread_mutex_unlock(&g_mutex);
   original(self, msg);
 }
@@ -142,42 +208,31 @@ NEVR_HOOK_RECORD(kJoinRecord, JoinThunk, &OnJoin);
 NEVR_HOOK_RECORD(kFailureRecord, FailureThunk, &OnFailure);
 NEVR_HOOK_RECORD(kSuccessRecord, SuccessThunk, &OnSuccess);
 
+// Activates one table row. The line keeps its event and fields: `hook` names the function, `target` is the patched
+// function's run-time address (0x0 when the row is not verified), and `status` is "installed" or the activation status.
 template <typename Thunk>
-bool InstallOne(const sentinel::ElfImage& image, std::uint64_t vaddr, const InlinePrologue& prologue,
-                const char* name) noexcept {
-  const void* target = reinterpret_cast<const void*>(image.base + vaddr);
+bool InstallOne(const char* rowId, const char* name) noexcept {
+  const ActivateStatus st = sentinel::InstallRowThunk<Thunk>(rowId);
+  const bool ok = st == ActivateStatus::kOk;
   char targetText[19];
-  const InlineStatus st = sentinel::InstallInlineThunk<Thunk>(target, prologue);
-  sentinel::LogFields(st == InlineStatus::kOk ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError,
-                      "lobby_full",
-                      {{"status", st == InlineStatus::kOk ? "installed" : sentinel::InlineStatusName(st)},
+  sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "lobby_full",
+                      {{"status", ok ? "installed" : nevr_quest::libr15_patch::ActivateStatusName(st)},
                        {"hook", name},
-                       {"target", sentinel::HexString(targetText, reinterpret_cast<std::uintptr_t>(target))}});
-  return st == InlineStatus::kOk;
+                       {"row", rowId},
+                       {"target", sentinel::HexString(targetText, nevr_quest::libr15_patch::RowSiteAddress(rowId))}});
+  return ok;
 }
 
 }  // namespace
 
 std::size_t InstallLobbyFullHooks() noexcept {
-  sentinel::ElfImage image;
-  if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) {
-    sentinel::LogFields(sentinel::LogLevel::kWarn, "lobby_full", {{"status", "libr15_not_loaded"}});
-    return 0;
-  }
-  char buildId[41] = {};
-  if (!sentinel::ReadBuildId(image, buildId, sizeof buildId) ||
-      std::strcmp(buildId, sentinel::pinned::kLibR15BuildId) != 0) {
-    sentinel::LogFields(sentinel::LogLevel::kWarn, "lobby_full",
-                        {{"status", "build_id_mismatch"}, {"build_id", buildId}});
-    return 0;
-  }
   JoinThunk::Arm(kJoinRecord);
   FailureThunk::Arm(kFailureRecord);
   SuccessThunk::Arm(kSuccessRecord);
   std::size_t installed = 0;
-  installed += InstallOne<JoinThunk>(image, kJoinVaddr, kJoinPrologue, "join") ? 1 : 0;
-  installed += InstallOne<FailureThunk>(image, kFailureVaddr, kFailurePrologue, "failure") ? 1 : 0;
-  installed += InstallOne<SuccessThunk>(image, kSuccessVaddr, kSuccessPrologue, "success") ? 1 : 0;
+  installed += InstallOne<JoinThunk>("lobby_full.join", "join") ? 1 : 0;
+  installed += InstallOne<FailureThunk>("lobby_full.failure", "failure") ? 1 : 0;
+  installed += InstallOne<SuccessThunk>("lobby_full.success", "success") ? 1 : 0;
   return installed;
 }
 

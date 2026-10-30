@@ -1,7 +1,8 @@
 #pragma once
 // The lobby messages a client's runtime log records at Info (#929): the find and join requests the game
 // sends, and the session success and failure frames the service answers with. This file is the decode, the
-// text of the fields and the rate limit; ws_bridge.cpp writes the lines (ObserveSocialFrames).
+// text of the lines and the rate limit. ws_bridge.cpp (ObserveSocialFrames) writes them on PC and session_router.cpp
+// writes the session records on Quest, from the same text (ClientLobbyRecords, FormatSessionRecord).
 //
 // Platform neutral by construction, like evr_codec.h: no Windows headers, no logging, no game state.
 //
@@ -14,7 +15,8 @@
 //   success  mode(8) lobby(16) group(16) endpoint, flags and keys (not read here)
 //   failure  mode(8) group(16) code(4) pad(4) message(64) expiry(8); the game reads the code as a byte at +0x18
 //            (echovr.exe 0x14017d380 CR15NetClientLobby::LobbySessionFailureCB)
-// The settings JSON and the failure message are remote text and are never read out (logging.md Rule 4).
+// The settings JSON and the failure message are remote text and are never read out (logging.md Rule 4): a failure's
+// message is counted (messageBytes), never copied.
 
 #include <array>
 #include <cstddef>
@@ -40,6 +42,9 @@ inline constexpr uint64_t kSymSessionFailure = 0x4ae8365ebc45f96cULL;
 constexpr std::size_t kMaxEntrants = 16;
 constexpr std::size_t kGuidSize = 16;
 constexpr std::size_t kEntrantSize = 16;
+// A failure's message field: after mode(8), group(16), code(4) and pad(4), 64 bytes.
+constexpr std::size_t kFailureMessageAt = 8 + kGuidSize + 4 + 4;
+constexpr std::size_t kFailureMessageSize = 64;
 
 // The lobby message a symbol is when heard in a direction: requests only from the game, answers only from the
 // service. nullopt for every other symbol, and for a lobby symbol heard the wrong way round.
@@ -91,6 +96,7 @@ struct Decoded {
   Guid group{};                    // find, success, failure
   std::vector<Entrant> entrants;   // find, join
   uint32_t code = 0;               // failure
+  uint32_t messageBytes = 0;       // failure: bytes before the message's NUL, at most its field; never the text
 };
 
 namespace detail {
@@ -120,6 +126,16 @@ inline bool ReadEntrants(const uint8_t* payload, std::size_t len, std::size_t se
     out->push_back(Entrant{nevr_evr_codec::ReadLE64(at), nevr_evr_codec::ReadLE64(at + 8)});
   }
   return true;
+}
+
+// The bytes before the first NUL in the `size`-byte field at `at`, counted over the bytes the frame holds: the whole
+// field when none of it is NUL, zero when the frame ends before the field. Nothing is read past `len`.
+inline uint32_t FieldTextBytes(const uint8_t* payload, std::size_t len, std::size_t at, std::size_t size) {
+  if (at >= len) return 0;
+  const std::size_t held = len - at < size ? len - at : size;
+  const void* nul = std::memchr(payload + at, 0, held);
+  if (nul == nullptr) return static_cast<uint32_t>(held);
+  return static_cast<uint32_t>(static_cast<const uint8_t*>(nul) - (payload + at));
 }
 
 }  // namespace detail
@@ -158,6 +174,7 @@ inline bool Decode(Kind kind, const uint8_t* payload, std::size_t len, Decoded* 
       out->mode = nevr_evr_codec::ReadLE64(payload);
       out->group = detail::ReadGuid(payload + 8);
       out->code = detail::ReadLE32(payload + 8 + kGuidSize);
+      out->messageBytes = detail::FieldTextBytes(payload, len, kFailureMessageAt, kFailureMessageSize);
       return true;
     }
   }
@@ -256,6 +273,159 @@ class RecordLimiter {
     uint64_t suppressed = 0;
   };
   std::array<Slot, kKindCount> slots_{};
+};
+
+/// The request a session record names: the find or join the game sent last on this client, its age when it was
+/// answered, and whether that answer is the first one to it. `sent` is false until a request is sent after a Reset.
+struct RequestContext {
+  bool sent = false;
+  Kind kind = Kind::Find;
+  uint64_t ageMs = 0;
+  bool outstanding = false;
+};
+
+/// The last find or join the game sent. An answer takes the request it answers: outstanding for the first answer
+/// after that request, not for any later one. Process-wide, not per connection: the tracker keeps no connection index,
+/// so an answer on one connection can name a request sent on another. The caller passes the time and serializes
+/// calls, as RecordLimiter.
+class RequestTracker {
+ public:
+  void Sent(Kind kind, uint64_t nowMs) {
+    sent_ = true;
+    answered_ = false;
+    kind_ = kind;
+    sentAtMs_ = nowMs;
+  }
+
+  RequestContext Answer(uint64_t nowMs) {
+    RequestContext context;
+    if (!sent_) return context;
+    context.sent = true;
+    context.kind = kind_;
+    context.ageMs = nowMs >= sentAtMs_ ? nowMs - sentAtMs_ : 0;
+    context.outstanding = !answered_;
+    answered_ = true;
+    return context;
+  }
+
+  void Reset() { *this = RequestTracker{}; }
+
+ private:
+  bool sent_ = false;
+  bool answered_ = false;
+  Kind kind_ = Kind::Find;
+  uint64_t sentAtMs_ = 0;
+};
+
+/// The request as the record's fields: `last_request=find last_request_age_ms=250 request_outstanding=yes`, or `none`
+/// in the first two and `no` in the third when no request was sent since the last Reset.
+inline std::string FormatRequestFields(const RequestContext& request) {
+  if (!request.sent) return "last_request=none last_request_age_ms=none request_outstanding=no";
+  return std::string("last_request=") + KindToken(request.kind) +
+         " last_request_age_ms=" + std::to_string(request.ageMs) +
+         " request_outstanding=" + (request.outstanding ? "yes" : "no");
+}
+
+/// The party as the record's fields: `party_id=7 party_size=3 party_leader=yes`. Outside a party it is
+/// `party_id=none party_size=0 party_leader=no`. The leader is `yes` when the owner is the local account, `no` when
+/// another account owns the party, and `unknown` while either id is still zero: a value never stands in for an id
+/// the client does not have yet.
+inline std::string FormatPartyFields(uint64_t partyId, uint64_t memberCount, uint64_t ownerId, uint64_t selfId) {
+  if (partyId == 0) return "party_id=none party_size=0 party_leader=no";
+  const char* leader = "unknown";
+  if (ownerId != 0 && selfId != 0) leader = ownerId == selfId ? "yes" : "no";
+  return "party_id=" + std::to_string(partyId) + " party_size=" + std::to_string(memberCount) +
+         " party_leader=" + leader;
+}
+
+/// The record prefix: the tag every lobby line carries (Rule 16). The PC bridge and the Quest router write it the same way.
+inline constexpr const char* kRecordPrefix = "[NEVR.WS] ";
+
+/// The party a session record names: the party state read when the record is written. Zero means not known.
+struct PartyContext {
+  uint64_t partyId = 0;
+  uint64_t memberCount = 0;
+  uint64_t ownerId = 0;
+  uint64_t selfId = 0;
+};
+
+/// The party fields of a record. nullopt means the writer has no party source: the fields say unknown, never none,
+/// because none would claim the client is outside a party.
+inline std::string FormatPartyFields(const std::optional<PartyContext>& party) {
+  if (!party) return "party_id=unknown party_size=unknown party_leader=unknown";
+  return FormatPartyFields(party->partyId, party->memberCount, party->ownerId, party->selfId);
+}
+
+/// The record of a session success or failure, the whole line with its prefix (Rule 16). Find and join have no
+/// record here (the PC bridge writes theirs): "" for them. Remote text is not a field: a failure's message is
+/// counted (messageBytes), never copied.
+inline std::string FormatSessionRecord(const Decoded& d, int connIdx, const std::optional<PartyContext>& party,
+                                       const RequestContext& request) {
+  const std::string tail = FormatPartyFields(party) + " " + FormatRequestFields(request);
+  if (d.kind == Kind::Success) {
+    return std::string(kRecordPrefix) + "lobby session success conn=" + std::to_string(connIdx) +
+           " lobby=" + FormatGuid(d.lobby) + " group=" + FormatGuid(d.group) + " " + tail;
+  }
+  if (d.kind == Kind::Failure) {
+    return std::string(kRecordPrefix) + "lobby session failure conn=" + std::to_string(connIdx) +
+           " code=" + std::to_string(d.code) + " reason=" + FailureReason(d.code) +
+           " group=" + FormatGuid(d.group) + " message_bytes=" + std::to_string(d.messageBytes) + " " + tail;
+  }
+  return std::string();
+}
+
+/// The notice a window's suppressed records leave when the window ends (Rule 16, Rate).
+inline std::string FormatSuppressedNotice(Kind kind, uint64_t count) {
+  return std::string(kRecordPrefix) + "lobby frame records suppressed kind=" + KindToken(kind) +
+         " count=" + std::to_string(count) + " window_ms=" + std::to_string(RecordLimiter::kWindowMs) +
+         " limit=" + std::to_string(RecordLimiter::kBurst) +
+         " (these frames were handled, only their records were not written)";
+}
+
+/// The warning for a frame the limiter admitted and the decode could not read.
+inline std::string FormatUnreadable(Kind kind, int connIdx, uint64_t payloadBytes) {
+  return std::string(kRecordPrefix) + "lobby " + KindName(kind) + " could not be read conn=" +
+         std::to_string(connIdx) + " payload_bytes=" + std::to_string(payloadBytes);
+}
+
+/// The client's lobby records: the limiter per kind and the request tracker, as one state. The caller serializes
+/// calls under its own lock (the PC bridge's lobby mutex, the Quest router's) and passes the time.
+class ClientLobbyRecords {
+ public:
+  struct Admission {
+    RecordLimiter::Verdict verdict;  // whether this record is written, and the ended windows' counts
+    RequestContext request;          // an answer: the request it takes (sent false when none was sent since a Reset)
+  };
+
+  /// A find or join the game sent: the request tracker takes it. It is not admitted to the limiter, so a caller that
+  /// writes no record for requests (the Quest router) does not count requests it did not write.
+  void Requested(Kind kind, uint64_t nowMs) {
+    if (IsRequest(kind)) requests_.Sent(kind, nowMs);
+  }
+
+  /// A lobby message whose records the caller writes: admitted to the limiter for its kind. A request takes the tracker.
+  /// An answer takes the request it answers, whether or not its record is written, so the next record is correct.
+  Admission Admit(Kind kind, uint64_t nowMs) {
+    Admission admission;
+    admission.verdict = limiter_.Admit(kind, nowMs);
+    if (IsRequest(kind)) {
+      requests_.Sent(kind, nowMs);
+    } else {
+      admission.request = requests_.Answer(nowMs);
+    }
+    return admission;
+  }
+
+  void Reset() {
+    limiter_.Reset();
+    requests_.Reset();
+  }
+
+ private:
+  static bool IsRequest(Kind kind) { return kind == Kind::Find || kind == Kind::Join; }
+
+  RecordLimiter limiter_;
+  RequestTracker requests_;
 };
 
 }  // namespace nevr_lobby_frame

@@ -90,6 +90,21 @@ class FixtureCase(unittest.TestCase):
     def records(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()]
 
+    def ignore(self, *patterns):
+        # .git/info/exclude is shared by every worktree of the fixture, so one line covers all of them.
+        with open(self.main / ".git/info/exclude", "a", encoding="utf-8") as f:
+            f.write("".join(p + "\n" for p in patterns))
+
+    def commit_in(self, wb, rel, text):
+        (wb / rel).parent.mkdir(parents=True, exist_ok=True)
+        (wb / rel).write_text(text)
+        git(wb, "add", rel)
+        git(wb, "commit", "-q", "-m", f"add {rel}", "--no-gpg-sign")
+
+    def cachedir_tag(self, directory, signature="Signature: 8a477f597d28d172789f06886806bc55"):
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "CACHEDIR.TAG").write_text(signature + "\n# This file is a cache directory tag.\n")
+
 
 class RemoveWorktreeTest(FixtureCase):
     def test_premise_deinit_all_unregisters_the_submodule_for_every_worktree(self):
@@ -276,6 +291,124 @@ class RemoveWorktreeTest(FixtureCase):
         result = self.run_tool(str(wb))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(wb.exists())
+
+    def test_a_cargo_target_with_a_cachedir_tag_is_build_output(self):
+        # installer/target/ is cargo's build directory; the CACHEDIR.TAG in it marks it as a cache.
+        self.ignore("installer/target/")
+        wb = self.add_worktree("wb")
+        self.commit_in(wb, "installer/Cargo.toml", "[package]\n")
+        self.cachedir_tag(wb / "installer/target")
+        (wb / "installer/target/debug").mkdir()
+        (wb / "installer/target/debug/build.o").write_text("x")
+        result = self.run_tool(str(wb))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(wb.exists())
+
+    def test_a_directory_holding_only_pycache_is_build_output(self):
+        # git prints tools/perf/ as one entry whose only content is __pycache__/: that is build output.
+        self.ignore("__pycache__/")
+        wb = self.add_worktree("wb")
+        self.commit_in(wb, "tools/tracked.py", "x = 1\n")
+        (wb / "tools/perf/__pycache__").mkdir(parents=True)
+        (wb / "tools/perf/__pycache__/x.pyc").write_text("x")
+        result = self.run_tool(str(wb))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(wb.exists())
+
+    def test_a_directory_whose_only_content_is_a_tagged_directory_is_build_output(self):
+        # git prints installer/ as one entry; the tagged target/ inside it is build output, so installer/ is too.
+        self.ignore("installer/target/")
+        wb = self.add_worktree("wb")
+        self.cachedir_tag(wb / "installer/target")
+        (wb / "installer/target/debug").mkdir()
+        (wb / "installer/target/debug/build.o").write_text("x")
+        result = self.run_tool(str(wb))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(wb.exists())
+
+    def test_a_cargo_target_without_a_cachedir_tag_is_refused(self):
+        self.ignore("installer/target/")
+        wb = self.add_worktree("wb")
+        self.commit_in(wb, "installer/Cargo.toml", "[package]\n")
+        (wb / "installer/target/debug").mkdir(parents=True)
+        (wb / "installer/target/debug/build.o").write_text("x")
+        result = self.run_tool(str(wb))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("ignored files that are not build output", result.stderr)
+        self.assertIn("installer/target", result.stderr)
+        self.assertTrue(wb.exists())
+
+    def test_a_cachedir_tag_with_another_signature_is_not_build_output(self):
+        self.ignore("installer/target/")
+        wb = self.add_worktree("wb")
+        self.commit_in(wb, "installer/Cargo.toml", "[package]\n")
+        self.cachedir_tag(wb / "installer/target", signature="Signature: 00000000000000000000000000000000")
+        (wb / "installer/target/debug").mkdir()
+        (wb / "installer/target/debug/build.o").write_text("x")
+        result = self.run_tool(str(wb))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("installer/target", result.stderr)
+        self.assertTrue(wb.exists())
+
+    def test_a_run_log_beside_pycache_in_a_collapsed_directory_is_refused(self):
+        self.ignore("__pycache__/", "*.log")
+        wb = self.add_worktree("wb")
+        self.commit_in(wb, "tools/tracked.py", "x = 1\n")
+        (wb / "tools/perf/__pycache__").mkdir(parents=True)
+        (wb / "tools/perf/__pycache__/x.pyc").write_text("x")
+        (wb / "tools/perf/run.log").write_text("evidence\n")
+        result = self.run_tool(str(wb))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("tools/perf/run.log", result.stderr)
+        self.assertTrue(wb.exists())
+
+    def test_build_output_is_accepted_by_name_and_not_listed_file_by_file(self):
+        # A build directory can hold thousands of files: it is judged by its name and never expanded.
+        wb = self.add_worktree("wb")
+        (wb / "build").mkdir()
+        (wb / "build/obj.o").write_text("x")
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir()
+        record = self.tmp / "ls-files-calls.txt"
+        wrapper = bin_dir / "git"
+        wrapper.write_text(
+            "#!/bin/sh\n"
+            f'case "$*" in *"--others --ignored"*) printf \'%s\\n\' "$*" >> {record};; esac\n'
+            f'exec {shutil.which("git")} "$@"\n')
+        wrapper.chmod(0o755)
+        result = self.run_tool(str(wb), path_prefix=str(bin_dir))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = record.read_text() if record.exists() else ""
+        self.assertNotIn("build/", calls)
+
+    def test_a_collapsed_directory_under_which_git_lists_no_file_is_refused(self):
+        # The tool cannot see what a collapsed directory holds when git lists nothing under it: refuse, never accept.
+        self.ignore("__pycache__/")
+        wb = self.add_worktree("wb")
+        self.commit_in(wb, "tools/tracked.py", "x = 1\n")
+        (wb / "tools/perf/__pycache__").mkdir(parents=True)
+        (wb / "tools/perf/__pycache__/x.pyc").write_text("x")
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir()
+        wrapper = bin_dir / "git"
+        wrapper.write_text('#!/bin/sh\ncase "$*" in *"--others --ignored"*) exit 0;; esac\n'
+                           'exec %s "$@"\n' % shutil.which("git"))
+        wrapper.chmod(0o755)
+        result = self.run_tool(str(wb), path_prefix=str(bin_dir))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("tools/perf/", result.stderr)
+        self.assertTrue(wb.exists())
+
+    def test_a_run_log_beside_a_tagged_directory_is_refused(self):
+        self.ignore("installer/target/", "*.log")
+        wb = self.add_worktree("wb")
+        self.commit_in(wb, "installer/Cargo.toml", "[package]\n")
+        self.cachedir_tag(wb / "installer/target")
+        (wb / "installer/run.log").write_text("evidence\n")
+        result = self.run_tool(str(wb))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("installer/run.log", result.stderr)
+        self.assertTrue(wb.exists())
 
     def test_the_files_a_new_worktree_is_given_go_with_it(self):
         # What the post-checkout hook and `just worktree-setup` copy in, and the pytest cache.

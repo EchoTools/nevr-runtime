@@ -3,8 +3,15 @@
 #include <exception>
 
 #include "quest/plugin/plugin_plan.h"
+#include "quest/sentinel/hook_log.h"
 
 namespace nevr_quest::integration {
+
+// The begin record (#1391): the build's version and commit are fields of the line, so a log names the build that ran.
+void LogConstructorBegin(const char* version, const char* commit) noexcept {
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "sentinel_ctor",
+                      {{"action", "begin"}, {"version", version}, {"commit", commit}});
+}
 
 const char* StepStateName(StepState state) {
   switch (state) {
@@ -30,9 +37,12 @@ const char* StepName(StepId id) {
     case StepId::kRegisterObbSkipCounters: return "register_obb_skip_counters";
     case StepId::kRegisterResourceRequestCounters: return "register_resource_request_counters";
     case StepId::kRegisterTextureQualityCounters: return "register_texture_quality_counters";
+    case StepId::kRegisterClockLevelsCounters: return "register_clock_levels_counters";
     case StepId::kStartReporter: return "start_reporter";
+    case StepId::kAttachLibR15: return "attach_libr15";
     case StepId::kRunEarlyPlugins: return "run_early_plugins";
     case StepId::kInstallClockHook: return "install_clock_hook";
+    case StepId::kInstallFrameDispatch: return "install_frame_dispatch";
     case StepId::kInstallObbSkip: return "install_obb_skip";
     case StepId::kInstallProcessEnd: return "install_process_end";
     case StepId::kInstallPermissionWait: return "install_permission_wait";
@@ -43,6 +53,8 @@ const char* StepName(StepId id) {
     case StepId::kInstallRenderConfig: return "install_render_config";
     case StepId::kInstallCreditsText: return "install_credits_text";
     case StepId::kInstallMenuCards: return "install_menu_cards";
+    case StepId::kInstallWizardMetric: return "install_wizard_metric";
+    case StepId::kArmClockLevels: return "arm_clock_levels";
     case StepId::kStartTokenAuth: return "start_token_auth";
     case StepId::kInstallLoginPrompt: return "install_login_prompt";
     case StepId::kStartBridge: return "start_bridge";
@@ -50,6 +62,7 @@ const char* StepName(StepId id) {
     case StepId::kInstallSocial: return "install_social";
     case StepId::kInstallDlopenHook: return "install_dlopen_hook";
     case StepId::kInstallHwDump: return "install_hwdump";
+    case StepId::kInstallPnsProvider: return "install_pns_provider";
     case StepId::kCount: break;
   }
   return "unknown";
@@ -186,10 +199,20 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     } else {
       r.Skip(StepId::kRegisterTextureQualityCounters, "stock");
     }
+    // The clock-level override (#928) is armed on every launch (the switch decides only whether it rewrites), so its counters
+    // are registered on every launch too.
+    const bool clockLevelsCounters =
+        r.Run(StepId::kRegisterClockLevelsCounters, [&] { return steps.RegisterClockLevelsCounters(); });
     r.Run(StepId::kStartReporter, [&] { return steps.StartReporter(); });
 
-    // The early plugin pass (#438): the reporter is running, so a plugin's first line reaches the same sinks, and the clock
-    // hook is not armed yet.
+    // The build-time libr15 patch (ADR 0021): the first libr15 step. The reporter is running, so Attach's lines reach the same
+    // sinks as every later one; it precedes the early plugin pass because a plugin's build ID is decided at Load time from
+    // what Attach recorded, and it precedes the clock hook and every other hook because each of them compares the live build ID
+    // with the patched file's. It gates nothing: a refusal leaves the game as it came (ctor_sequence.h, "Dependencies").
+    r.Run(StepId::kAttachLibR15, [&] { return steps.AttachLibR15(); });
+
+    // The early plugin pass (#438): Attach has run, so a plugin is shown the identity Attach recorded, and the clock hook is not
+    // armed yet.
     if (plugins.early > 0) {
       r.Run(StepId::kRunEarlyPlugins, [&] { return steps.RunEarlyPlugins(); });
     } else {
@@ -197,6 +220,10 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     }
 
     r.Run(StepId::kInstallClockHook, [&] { return steps.InstallClockHook(); });
+
+    // The frame dispatcher (#966 S7): the Update slot, on every launch, so the dispatcher runs whether or not the login prompt is
+    // on. Before the login prompt, which switches its own Update logic on through the same slot.
+    r.Run(StepId::kInstallFrameDispatch, [&] { return steps.InstallFrameDispatch(); });
 
     // Before token auth and the bridge: those take time, and libr15's CSysFile::Init is what this beats.
     if (!obbCounters) {
@@ -257,13 +284,41 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // it reports, and before the hardware dump, which leaves the slots both hook to this step.
     r.Run(StepId::kInstallRenderConfig, [&] { return steps.InstallRenderConfig(texture); });
 
-    // The project section of the CREDITS page (#970): every launch, no counters; it points two libr15 cursor stores at a
-    // buffer the sentinel builds, so it runs before the page can be opened.
+    // The project section of the CREDITS page (#970): every launch, no counters; it stores the address of a buffer the sentinel
+    // builds in the patched libr15's credits slot, so it runs before the page can be opened.
     r.Run(StepId::kInstallCreditsText, [&] { return steps.InstallCreditsText(); });
 
     // The main-menu cards (#966): every launch, no counters. One libr15 data slot; libr15 reads it each time it starts a
     // resource load, so the hook is in place before the menu page is requested.
     r.Run(StepId::kInstallMenuCards, [&] { return steps.InstallMenuCards(); });
+
+    // The CREATE GAME / JOIN VIA CODE observer (#966, ADR 0017 slice S2): on every launch when wanted, right after the cards.
+    // The question is contained like every step; a question that throws means the observer is not wanted.
+    bool wizardWanted = false;
+    try {
+      wizardWanted = steps.WizardMetricWanted();
+    } catch (const std::exception&) {
+      // Contained: the observer stays off and the sequence goes on.
+    }
+    if (wizardWanted) {
+      r.Run(StepId::kInstallWizardMetric, [&] { return steps.InstallWizardMetric(); });
+    } else {
+      r.Skip(StepId::kInstallWizardMetric, "feature_off");
+    }
+
+    // The clock-level override (#928): every launch. libr15 makes the call when it enters VR mode, long after the constructor,
+    // through the render-configuration hook installed above, which asks the override which levels to use. The switch is the
+    // resolved `diagnostics.clock_levels_override`; it is off when the configuration could not be resolved.
+    if (!clockLevelsCounters) {
+      try {
+        steps.ArmClockLevels(false, want.clockLevels);  // the override's own rule logs the skip and leaves the switch off
+      } catch (const std::exception&) {
+        // Contained like every step; the outcome is the skip below either way.
+      }
+      r.Skip(StepId::kArmClockLevels, "counters_refused");
+    } else {
+      r.Run(StepId::kArmClockLevels, [&] { return steps.ArmClockLevels(true, want.clockLevels); });
+    }
 
     bool tokenOk = false;
     if (wantTokenAuth) {
@@ -355,6 +410,25 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
       r.Run(StepId::kInstallHwDump, [&] { return steps.StartHwDump(); });
     } else {
       r.Skip(StepId::kInstallHwDump, "hwdump_off");
+    }
+
+    // The rad provider in pnsovr's place (#1220). Last, after the dlopen hook: it needs the login that hook installs,
+    // because the rad provider sends no login of its own. Its slots are libr15's, and Create runs in CR15Game::Initialize,
+    // long after the constructor.
+    bool pnsAllowed = false;
+    try {
+      pnsAllowed = steps.PnsProviderAllowed();
+    } catch (const std::exception&) {
+      pnsAllowed = false;  // cannot tell: not allowed
+    }
+    if (!want.pnsradProvider) {
+      r.Skip(StepId::kInstallPnsProvider, "pnsrad_provider_off");
+    } else if (!pnsAllowed) {
+      r.Skip(StepId::kInstallPnsProvider, "release_build");
+    } else if (!(loginWanted && dlopenLive)) {
+      r.Skip(StepId::kInstallPnsProvider, "login_unavailable");
+    } else {
+      r.Run(StepId::kInstallPnsProvider, [&] { return steps.InstallPnsProvider(); });
     }
   } catch (const std::exception&) {
     // Unreachable by construction (every step is contained); the sequence still never throws.

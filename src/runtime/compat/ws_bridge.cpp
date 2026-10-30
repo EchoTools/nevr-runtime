@@ -27,6 +27,7 @@
 #include <memory>
 #include <limits>
 #include <mutex>
+#include <map>
 #include <optional>
 #include <random>
 #include <string>
@@ -43,6 +44,8 @@
 #include "runtime/ext/plugin_loader.h"  // N112: plugin manifest
 #include "runtime/lifecycle/cli.h"  // g_isServer
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat (N133 S4a: config.yaml reads)
+#include "runtime/lifecycle/crash_recovery.h"  // ServerFatal (#1254: a refused server login stops)
+#include "runtime/compat/login_refusal.h"
 #include "runtime/log/url_diagnostics.h"
 #include "runtime/log/security_diagnostics.h"
 #include "runtime/server/serverdb_uri.h"
@@ -292,6 +295,27 @@ static void CloseGameSocketsForRemote(const ix::WebSocket* remote, int connIdx, 
   }).detach();
 }
 
+// #1254: no remote can be made for a game socket that just opened (a server without a credential, or a sign-in the
+// service refused). The socket is ended so the game sees the login fail rather than wait on a session that will never
+// open, and the login slot it took (admission) is given back so the next /login is a login, not a share of nothing.
+// Closed off this thread for the reason CloseGameSocketsForRemote gives: close() waits on the server thread.
+static void AbandonGameSocket(ix::WebSocket* gameWs, nevr_socket_role::Role role, int connIdx) {
+  std::shared_ptr<ix::WebSocket> keep;
+  for (ix::WebSocketServer* server : {g_server.get(), g_matchServer.get()}) {
+    if (server == nullptr) continue;
+    for (const auto& client : server->getClients()) {
+      if (client.get() == gameWs) keep = client;
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lk(g_pairsMutex);
+    if (role == nevr_socket_role::Role::Login) g_roles.LoginSessionEnded();
+  }
+  Log(EchoVR::LogLevel::Debug, "[NEVR.WS] conn=%d (%s): no remote for this game socket; closing it", connIdx,
+      ConnLabel(connIdx));
+  if (keep) std::thread([keep]() { keep->close(); }).detach();
+}
+
 // Connection index of a game-side websocket (-1 when unknown), for log lines.
 static int ConnIdxOfGameWs(ix::WebSocket* gameWs) {
   std::lock_guard<std::mutex> lk(g_pairsMutex);
@@ -393,6 +417,7 @@ static std::shared_ptr<ix::WebSocket> RetireGameWsLocked(ix::WebSocket* gameWs, 
       }
     }
     g_pairs.erase(it);
+    if (gameWs == g_loginGameWs) g_loginGameWs = nullptr;  // the login slot never keeps a retired socket
   }
   if (g_activeGameWs == gameWs) {
     g_activeGameWs = nullptr;
@@ -566,39 +591,77 @@ static int LogGameToServerFrame(const std::string& frame, const std::string& wsC
 // #929: a client's Info record of each lobby find and join request the game sends and each session success and
 // failure the service answers with. A dedicated server already logs every message of every frame at Info
 // (LogFrameMessages), so this runs on a client only. The fields are the operation, the lobby ids (GUIDs, never
-// names), the entrants as XPIDs and the failure code; the settings JSON of a request and the message of a
-// failure are remote text and are not read out (logging.md Rule 4). A failure frame carries no lobby id: pair it
-// with the request before it on the same conn.
+// names), the entrants as XPIDs and the failure code; the settings JSON of a request is remote text and is not read
+// out, and a failure's message is counted (message_bytes) and never copied (logging.md Rule 4). A failure frame
+// carries no lobby id, so a session record names the last request the game sent on this client, on any connection
+// (last_request), and the party it is in (party_id), not a request or a party it could pair with on its own conn
+// (#1413).
 static uint64_t RealLobbyClockMs() { return GetTickCount64(); }
 static std::mutex g_lobbyLimiterMutex;
-static nevr_lobby_frame::RecordLimiter g_lobbyLimiter;
+// The limiter per kind and the request tracker (#1413). The records' text is lobby_frame.h's, shared with the Quest router.
+static nevr_lobby_frame::ClientLobbyRecords g_lobbyRecords;
+// The lobby this client is in and the one it is joining, set from the same frames (#1413, compat/lobby_join_state.h).
+static nevr_lobby_join_state::LobbyJoinState g_lobbyJoin;
 static uint64_t (*g_lobbyClockMs)() = &RealLobbyClockMs;
+// The party a session record names: the process-wide party state, read when the record is written (#1413).
+static nevr_social_party::View RealLobbyPartyView() { return nevr_social_party::Global().Snapshot(); }
+static nevr_social_party::View (*g_lobbyPartyView)() = &RealLobbyPartyView;
+
+void LobbyJoinSnapshot(nevr_lobby_join_state::Stamp* current, nevr_lobby_join_state::Stamp* joining) {
+  g_lobbyJoin.Snapshot(current, joining);
+}
+
+// The party of a session record: the party the view names when the record is written (#1413).
+static std::optional<nevr_lobby_frame::PartyContext> LobbyParty(nevr_social_party::View (*partyView)()) {
+  const nevr_social_party::View view = partyView();
+  return nevr_lobby_frame::PartyContext{view.partyId, static_cast<uint64_t>(view.members.size()), view.ownerId,
+                                        view.selfId};
+}
 
 static void LogClientLobbyMessage(int connIdx, bool fromServer, uint64_t symbol, const uint8_t* payload, uint64_t len) {
   const std::optional<nevr_lobby_frame::Kind> kind = nevr_lobby_frame::KindOf(symbol, fromServer);
   if (!kind) return;
   // The game's party-follow loop can send a request every update, so a kind writes a burst per window and the
   // rest are counted; an ended window's count is written by the next lobby frame of any kind, before its record.
+  // The request tracker takes every request and every answer, also those the limiter suppresses, so an answer takes
+  // the request it answers whether or not its record is written (#1413).
   nevr_lobby_frame::RecordLimiter::Verdict verdict;
+  nevr_lobby_frame::RequestContext request;
+  nevr_social_party::View (*partyView)() = nullptr;
   {
     std::lock_guard<std::mutex> lock(g_lobbyLimiterMutex);
-    verdict = g_lobbyLimiter.Admit(*kind, g_lobbyClockMs());
+    const nevr_lobby_frame::ClientLobbyRecords::Admission admission = g_lobbyRecords.Admit(*kind, g_lobbyClockMs());
+    verdict = admission.verdict;
+    request = admission.request;
+    partyView = g_lobbyPartyView;
+  }
+  // The join state takes every decoded frame, not only the ones the limiter writes: a suppressed record still
+  // changed what the game is joining or in (#1413).
+  nevr_lobby_frame::Decoded state;
+  if (nevr_lobby_frame::Decode(*kind, payload, static_cast<size_t>(len), &state)) {
+    switch (*kind) {
+      case nevr_lobby_frame::Kind::Join:
+        g_lobbyJoin.OnJoinRequested(state.lobby);
+        break;
+      case nevr_lobby_frame::Kind::Success:
+        g_lobbyJoin.OnSuccess(state.lobby);
+        break;
+      case nevr_lobby_frame::Kind::Failure:
+        g_lobbyJoin.OnFailure(request.sent && request.kind == nevr_lobby_frame::Kind::Join);
+        break;
+      case nevr_lobby_frame::Kind::Find:
+        break;
+    }
   }
   for (size_t i = 0; i < nevr_lobby_frame::kKindCount; ++i) {
     if (verdict.flushed[i] == 0) continue;
-    Log(EchoVR::LogLevel::Info,
-        "[NEVR.WS] lobby frame records suppressed kind=%s count=%llu window_ms=%llu limit=%u (these frames were "
-        "handled, only their records were not written)",
-        nevr_lobby_frame::KindToken(static_cast<nevr_lobby_frame::Kind>(i)),
-        static_cast<unsigned long long>(verdict.flushed[i]),
-        static_cast<unsigned long long>(nevr_lobby_frame::RecordLimiter::kWindowMs),
-        nevr_lobby_frame::RecordLimiter::kBurst);
+    Log(EchoVR::LogLevel::Info, "%s",
+        nevr_lobby_frame::FormatSuppressedNotice(static_cast<nevr_lobby_frame::Kind>(i), verdict.flushed[i]).c_str());
   }
   if (!verdict.log) return;
   nevr_lobby_frame::Decoded d;
   if (!nevr_lobby_frame::Decode(*kind, payload, static_cast<size_t>(len), &d)) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.WS] lobby %s could not be read conn=%d payload_bytes=%llu",
-        nevr_lobby_frame::KindName(*kind), connIdx, static_cast<unsigned long long>(len));
+    Log(EchoVR::LogLevel::Warning, "%s", nevr_lobby_frame::FormatUnreadable(*kind, connIdx, len).c_str());
     return;
   }
   switch (d.kind) {
@@ -623,12 +686,10 @@ static void LogClientLobbyMessage(int connIdx, bool fromServer, uint64_t symbol,
           nevr_lobby_frame::FormatAccounts(d.entrants).c_str());
       break;
     case nevr_lobby_frame::Kind::Success:
-      Log(EchoVR::LogLevel::Info, "[NEVR.WS] lobby session success conn=%d lobby=%s group=%s", connIdx,
-          nevr_lobby_frame::FormatGuid(d.lobby).c_str(), nevr_lobby_frame::FormatGuid(d.group).c_str());
-      break;
     case nevr_lobby_frame::Kind::Failure:
-      Log(EchoVR::LogLevel::Info, "[NEVR.WS] lobby session failure conn=%d code=%u reason=%s group=%s", connIdx, d.code,
-          nevr_lobby_frame::FailureReason(d.code), nevr_lobby_frame::FormatGuid(d.group).c_str());
+      // The text is lobby_frame.h's FormatSessionRecord, the Quest router's too (#1429).
+      Log(EchoVR::LogLevel::Info, "%s",
+          nevr_lobby_frame::FormatSessionRecord(d, connIdx, LobbyParty(partyView), request).c_str());
       break;
   }
 }
@@ -1173,10 +1234,14 @@ static void LogAdmission(const AdmittedSocket& admitted, const ix::WebSocket* ga
 // identity the login is built from. Shared by the legacy path (one remote per socket) and the router path
 // (RemoteTransport::Open), so both put the same bytes on the wire. `connIdx` is only for log lines.
 struct PreparedRemote {
-  std::shared_ptr<ix::WebSocket> remote;
+  std::shared_ptr<ix::WebSocket> remote;  // null: nothing to connect (a refused login, #1254); the caller ends the game socket
+  std::string refusalKey;                 // the sign-in the remote presents, for ClientRefusalLatch
   std::string bearerToken;
   std::string accountName;  // N123 - empty means "not known", never a placeholder
   uint64_t discordId = 0;
+  // #1446: the sign-in ended without a token, so the caller answers the game's login itself (AnswerLoginLocally) and
+  // keeps the game socket open. No remote is made.
+  bool answerLocally = false;
 };
 
 // What the login is built from: the token-auth token, the account id (JWT, then the config.yaml fallback, N20) and
@@ -1232,7 +1297,10 @@ static LoginIdentity ReadLoginIdentity(bool verbose) {
       }
     }
   }
-  if (discordId == 0 && verbose) {
+  // #1446: said once per process. A game that reconnects its login socket reads this on every attempt, and the same
+  // line each time says nothing new.
+  static std::atomic<bool> s_noDiscordIdSaid{false};
+  if (discordId == 0 && verbose && !s_noDiscordIdSaid.exchange(true)) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.WS] No discord ID from JWT or config — LoginRequest will use "
         "account ID 0");
@@ -1441,7 +1509,121 @@ static void HandleRemoteOpen(ProxyPair* pair, int connIdx, uint64_t discordId, c
   }
 }
 
+// N149 (#1254): a refused login. A client cannot stop, and the game reconnects a closed login socket by itself, so the
+// refusal is said once per refused sign-in and the later sockets of that sign-in are ended without a trip to the
+// service. Own mutex: the Error callback runs on the remote's thread and PrepareRemote on the game socket's.
+static std::mutex g_refusalMutex;
+static nevr_login_refusal::ClientRefusalLatch& g_refusalLatch = *new nevr_login_refusal::ClientRefusalLatch();
+
+// #1446: the logins AnswerLoginLocally answers, counted per window. Guarded by g_refusalMutex.
+static nevr_login_refusal::LocalAnswerCounter& g_localAnswers = *new nevr_login_refusal::LocalAnswerCounter();
+
+// The sign-in each router remote presents, by connection index, for the refused hook.
+static std::map<nevr_session_router::RemoteId, std::string> g_routerRefusalKeys;  // by remote: connIdx is reused across sessions
+
+static bool ClientRefusedAlready(const std::string& key) {
+  std::lock_guard<std::mutex> lk(g_refusalMutex);
+  return g_refusalLatch.IsRefused(key);
+}
+
+// #1446: answers a game login whose sign-in ended without a token. The game gets a LoginFailure, the socket stays open
+// so the game does not reconnect in a loop, and the login slot it took is given back, so the next /login is a login
+// again. The answers are counted per window (LocalAnswerCounter): a game that keeps reconnecting writes one line per
+// window, not one per attempt. The frame is the one the service would send for a refused login (legacy_codec.cpp).
+static void AnswerLoginLocally(ix::WebSocket* gameWs, int connIdx) {
+  {
+    std::lock_guard<std::mutex> lk(g_pairsMutex);
+    g_roles.LoginSessionEnded();
+  }
+  const std::optional<std::string> frame = nevr_evr_codec::BuildLoginFailure(
+      nevr_login_refusal::kNoSignInLoginFailureStatus, nevr_login_refusal::kNoSignInLoginFailureText);
+  if (!frame) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.WS] conn=%d (%s): could not build the LoginFailure answer", connIdx,
+        ConnLabel(connIdx));
+    return;
+  }
+  if (!gameWs->sendBinary(*frame).success) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.WS] conn=%d (%s): the LoginFailure answer was not sent", connIdx,
+        ConnLabel(connIdx));
+  }
+  const int64_t nowMs = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                 std::chrono::steady_clock::now().time_since_epoch())
+                                                 .count());
+  nevr_login_refusal::LocalAnswerCounter::Verdict verdict;
+  {
+    std::lock_guard<std::mutex> lk(g_refusalMutex);
+    verdict = g_localAnswers.Record(nowMs);
+  }
+  if (!verdict.write) return;
+  if (verdict.first) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.WS] login answered locally conn=%d (%s) status=%llu: the sign-in ended without a token, so the service "
+        "was not asked; the game got a LoginFailure and its socket stays open",
+        connIdx, ConnLabel(connIdx),
+        static_cast<unsigned long long>(nevr_login_refusal::kNoSignInLoginFailureStatus));
+    return;
+  }
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.WS] login attempts answered locally count=%llu window_ms=%lld: the same answer, no service trip",
+      static_cast<unsigned long long>(verdict.count),
+      static_cast<long long>(nevr_login_refusal::LocalAnswerCounter::kWindowMs));
+}
+
+// The remote's upgrade came back with `httpStatus`. A server stops with the cause (ServerFatal exits in server mode:
+// without the account the community service accepts there is no ServerDB registration and no HTTP listener); a client
+// says it once for this sign-in. A status that is not a refusal (an outage, a missing route) is left to the callers.
+static void OnRemoteLoginRefused(int httpStatus, const std::string& refusalKey, int connIdx) {
+  if (!nevr_login_refusal::IsLoginRefusalStatus(httpStatus)) return;
+  if (g_isServer) {
+    const char* cfgPassword = NevrCfgGetFlat("nevr_password");
+    const bool deviceSignIn =
+        nevr_login_refusal::ServerSignsInByDeviceCode(cfgPassword ? std::string_view(cfgPassword) : std::string_view());
+    const std::string cause = nevr_login_refusal::RefusedLoginCause(httpStatus, NevrCfgSource(), deviceSignIn);
+    ServerFatal("%s", cause.c_str());
+    return;
+  }
+  bool firstTime = false;
+  {
+    std::lock_guard<std::mutex> lk(g_refusalMutex);
+    firstTime = g_refusalLatch.ShouldSay(refusalKey);
+  }
+  if (firstTime) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.WS] login refused (HTTP %d) on conn=%d (%s): the service did not accept this sign-in; not asking "
+        "again until the sign-in changes",
+        httpStatus, connIdx, ConnLabel(connIdx));
+  }
+}
+
+// #1446: whether token-auth's device sign-in has ended without a token (TokenAuth_SignInEndedWithoutToken). Read on each
+// login attempt. A sign-in still running answers false, so the login goes to the service as it did before.
+static bool SignInEndedWithoutTokenNow() {
+  auto signInEndedWithoutToken = reinterpret_cast<bool (*)()>(ResolveModuleProc("TokenAuth_SignInEndedWithoutToken"));
+  return signInEndedWithoutToken != nullptr && signInEndedWithoutToken();
+}
+
 static PreparedRemote PrepareRemote(nevr_socket_role::Role role, int connIdx) {
+  // N149 (#1254): a server's credential for the community service is either the discord id and password in
+  // config.yaml or, with no password (#1532), the token its device sign-in got. Without one the login would go out
+  // as account 0, or unauthenticated, and be refused every few seconds for ever, while nothing else of the server
+  // (ServerDB, the HTTP listener) can start. Stop with the cause instead.
+  if (g_isServer) {
+    const char* cfgDiscordId = NevrCfgGetFlat("nevr_discord_id");
+    const char* cfgPassword = NevrCfgGetFlat("nevr_password");
+    const std::string_view password = cfgPassword ? std::string_view(cfgPassword) : std::string_view();
+    const std::vector<std::string> missing = nevr_login_refusal::MissingServerCredentialKeys(
+        cfgDiscordId ? std::string_view(cfgDiscordId) : std::string_view(), password);
+    if (!missing.empty()) {
+      const std::string cause = nevr_login_refusal::NoCredentialCause(missing, NevrCfgSource());
+      ServerFatal("%s", cause.c_str());
+      return PreparedRemote{};
+    }
+    if (nevr_login_refusal::ServerSignsInByDeviceCode(password) && ReadLoginIdentity(false).bearerToken.empty()) {
+      const std::string cause = nevr_login_refusal::NoSignInCause(NevrCfgSource());
+      ServerFatal("%s", cause.c_str());
+      return PreparedRemote{};
+    }
+  }
   auto remote = std::make_shared<ix::WebSocket>();
 
   // Build remote URL with optional query param auth
@@ -1508,6 +1690,31 @@ static PreparedRemote PrepareRemote(nevr_socket_role::Role role, int connIdx) {
     if (cfgServerKey) serverKey = cfgServerKey;
   }
   const std::string remoteBearer = nevr_evr_codec::SelectRemoteBearer(hasUrlCredentials, bearerToken, serverKey);
+  // #1254: the sign-in a refusal is held against: the credential the remote presents (the server key with URL
+  // credentials, else the token-auth JWT), so a changed JWT the remote never sees does not lift the latch. A client
+  // with none has the one key "", because its credentials do not change within a run.
+  const std::string refusalKey = remoteBearer;
+  // #1446: a client login whose sign-in ended without a token is answered here (AnswerLoginLocally); the service is not
+  // asked, and no remote is made. A live login session is never answered, because answering frees the slot it holds.
+  // No caller holds g_pairsMutex here: the legacy Open call and the router's RemoteSockets::Open both run outside it.
+  bool loginSessionLive = false;
+  {
+    std::lock_guard<std::mutex> lk(g_pairsMutex);
+    loginSessionLive = g_loginRemoteWs != nullptr;
+  }
+  if (nevr_login_refusal::AnswersLoginLocally(g_isServer != FALSE, role == nevr_socket_role::Role::Login,
+                                              !remoteBearer.empty(), hasUrlCredentials, SignInEndedWithoutTokenNow(),
+                                              loginSessionLive)) {
+    PreparedRemote answered;
+    answered.answerLocally = true;
+    return answered;
+  }
+  if (!g_isServer && ClientRefusedAlready(refusalKey)) {
+    Log(EchoVR::LogLevel::Debug,
+        "[NEVR.WS] conn=%d (%s): this sign-in was refused earlier; not connecting to the service", connIdx,
+        ConnLabel(connIdx));
+    return PreparedRemote{};
+  }
   if (!remoteBearer.empty()) {
     ix::WebSocketHttpHeaders headers;
     headers["Authorization"] = "Bearer " + remoteBearer;
@@ -1533,6 +1740,7 @@ static PreparedRemote PrepareRemote(nevr_socket_role::Role role, int connIdx) {
 
   PreparedRemote prepared;
   prepared.remote = std::move(remote);
+  prepared.refusalKey = refusalKey;
   prepared.bearerToken = std::move(bearerToken);
   prepared.accountName = std::move(accountName);
   prepared.discordId = discordId;
@@ -1612,7 +1820,9 @@ static std::optional<std::string> BuildRouterLogin() {
 // game would stall at the login gate. The router delivers this LoginSuccess in its place (Options::replaceLoginFailure).
 static std::optional<std::string> ServerModeLoginSuccess() {
   if (!g_isServer) return std::nullopt;
-  Log(EchoVR::LogLevel::Debug, "[NEVR.WS] Server mode — injecting fake LoginSuccess to bypass login gate");
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.WS] Server mode — the service answered the server's /login with a LoginFailure; the game gets a "
+      "synthesized LoginSuccess (the server's credential is checked at ServerDB registration)");
   return nevr_evr_codec::BuildLoginSuccess(CurrentPlatformCode(), g_lastInjectedDiscordId);
 }
 
@@ -1672,7 +1882,24 @@ static nevr_ws_transport::RemoteHooks MakeRemoteHooks() {
 #ifdef NEVR_TEST_HOOKS
     if (g_testRefuseRemoteOpens.load()) return nullptr;
 #endif
-    return PrepareRemote(request.role, request.connIdx).remote;
+    PreparedRemote prepared = PrepareRemote(request.role, request.connIdx);
+    if (prepared.remote) {
+      std::lock_guard<std::mutex> lk(g_refusalMutex);
+      g_routerRefusalKeys[request.remote] = prepared.refusalKey;
+    }
+    return prepared.remote;
+  };
+  hooks.refused = [](const nevr_session_router::RemoteOpenRequest& request, int httpStatus) {
+    std::string key;
+    {
+      std::lock_guard<std::mutex> lk(g_refusalMutex);
+      const auto it = g_routerRefusalKeys.find(request.remote);
+      if (it != g_routerRefusalKeys.end()) {
+        key = it->second;
+        g_routerRefusalKeys.erase(it);  // a refused remote retires; its key is not needed again
+      }
+    }
+    OnRemoteLoginRefused(httpStatus, key, request.connIdx);
   };
   hooks.tap = [](const nevr_session_router::RemoteOpenRequest& request, const std::string& frame) {
     ObserveSocialFrames("server->game", request.connIdx, frame);
@@ -1997,6 +2224,14 @@ void InstallWebSocketBridge() {
 
             // A config or login socket, or a matchmaker with no login session to share: create a new remote ws
             PreparedRemote prepared = PrepareRemote(role, connIdx);
+            if (prepared.answerLocally) {
+              AnswerLoginLocally(&gameWs, connIdx);
+              break;
+            }
+            if (!prepared.remote) {
+              AbandonGameSocket(&gameWs, role, connIdx);
+              break;
+            }
             const std::shared_ptr<ix::WebSocket> remote = prepared.remote;
             const std::string& bearerToken = prepared.bearerToken;
             const std::string& accountName = prepared.accountName;
@@ -2017,7 +2252,7 @@ void InstallWebSocketBridge() {
                 // accountName captured BY VALUE alongside discordId — this callback
                 // outlives the enclosing scope, so a reference would dangle (N123).
                 // remoteAddress: only compared, never dereferenced (capturing the shared_ptr would be a cycle).
-                [pairPtr, gameWsPtr, connIdx, discordId, accountName, bearerToken,
+                [pairPtr, gameWsPtr, connIdx, discordId, accountName, bearerToken, refusalKey = prepared.refusalKey,
                  remoteAddress = static_cast<const ix::WebSocket*>(remote.get())](const ix::WebSocketMessagePtr& rmsg) {
                   switch (rmsg->type) {
                     case ix::WebSocketMessageType::Open:
@@ -2046,8 +2281,10 @@ void InstallWebSocketBridge() {
                         // gate. Synthesize the LoginSuccess the game is waiting for and
                         // do NOT forward the failure.
                         if (g_isServer) {
-                          Log(EchoVR::LogLevel::Debug,
-                              "[NEVR.WS] Server mode — injecting fake LoginSuccess to bypass login gate");
+                          Log(EchoVR::LogLevel::Info,
+                              "[NEVR.WS] Server mode — the service answered the server's /login with a LoginFailure; "
+                              "the game gets a synthesized LoginSuccess (the server's credential is checked at "
+                              "ServerDB registration)");
                           uint64_t serverPlatformCode;
                           {
                             const char* cfgDiscordId2 = NevrCfgGetFlat("nevr_discord_id");
@@ -2057,7 +2294,19 @@ void InstallWebSocketBridge() {
                           }
                           const std::string fakeSuccess =
                               nevr_evr_codec::BuildLoginSuccess(serverPlatformCode, g_lastInjectedDiscordId);
-                          gameWsPtr->sendBinary(fakeSuccess);
+                          std::shared_ptr<ix::WebSocket> keep;  // holds the game socket alive across the send
+                          {
+                            std::lock_guard<std::mutex> lk(g_pairsMutex);
+                            const auto pit = g_pairs.find(gameWsPtr);
+                            if (pit != g_pairs.end()) keep = pit->second->gameWs.lock();
+                          }
+                          if (!keep) {
+                            LogSharedFrameDropped(fakeSuccess.size());
+                            break;
+                          }
+                          NEVR_BEFORE_SHARED_SEND(keep.get());
+                          keep->sendBinary(fakeSuccess);
+                          if (keep.use_count() == 1) { ReleaseOffThread(std::move(keep)); }
                           break;  // failure is not forwarded to the game
                         }
                       }
@@ -2211,6 +2460,7 @@ void InstallWebSocketBridge() {
                       Log(EchoVR::LogLevel::Warning,
                           "[NEVR.WS] Remote error: http_status=%d retries=%u",
                           rmsg->errorInfo.http_status, rmsg->errorInfo.retries);
+                      OnRemoteLoginRefused(rmsg->errorInfo.http_status, refusalKey, connIdx);
                       // Automatic reconnection is off, so a remote that fails (often its first connect,
                       // with no Close to follow) is dead; end the game's sockets on it so the game
                       // retries rather than waiting on a session that will never open (#70).
@@ -2506,12 +2756,17 @@ void TestHook_ObserveSocialFrames(const char* direction, int connIdx, const std:
 
 void TestHook_ResetLobbyFrameLimiter() {
   std::lock_guard<std::mutex> lock(g_lobbyLimiterMutex);
-  g_lobbyLimiter.Reset();
+  g_lobbyRecords.Reset();
 }
 
 void TestHook_SetLobbyFrameClock(uint64_t (*clockMs)()) {
   std::lock_guard<std::mutex> lock(g_lobbyLimiterMutex);
   g_lobbyClockMs = clockMs != nullptr ? clockMs : &RealLobbyClockMs;
+}
+
+void TestHook_SetLobbyPartySource(nevr_social_party::View (*view)()) {
+  std::lock_guard<std::mutex> lock(g_lobbyLimiterMutex);
+  g_lobbyPartyView = view != nullptr ? view : &RealLobbyPartyView;
 }
 
 bool TestHook_ReadLoginFailureDiagnostic(const std::string& frame, uint64_t* statusCode, size_t* messageBytes) {
@@ -3006,6 +3261,11 @@ size_t TestHook_ConnectedGameSockets() {
   return connected;
 }
 
+void* TestHook_LoginGameWsPtr() {
+  std::lock_guard<std::mutex> lk(g_pairsMutex);
+  return static_cast<void*>(g_loginGameWs);
+}
+
 void TestHook_SharedRoute_SetBeforeSend(void (*fn)(void* target)) {
   g_testBeforeSharedSend = reinterpret_cast<void (*)(ix::WebSocket*)>(fn);
 }
@@ -3046,6 +3306,10 @@ void TestHook_N61_ResetState() {
   g_activeGameWs = nullptr;
   g_roles.Reset();
   nevr_socket_role::GlobalAdvertisement().Reset();
+  std::lock_guard<std::mutex> refusalLock(g_refusalMutex);
+  g_refusalLatch = nevr_login_refusal::ClientRefusalLatch();
+  g_localAnswers = nevr_login_refusal::LocalAnswerCounter();
+  g_routerRefusalKeys.clear();
 }
 
 // ---- test rig for the flush in HandleRemoteOpen ----------------------------------------------------------------

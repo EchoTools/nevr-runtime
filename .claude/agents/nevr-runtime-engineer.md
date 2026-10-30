@@ -61,8 +61,7 @@ feels risky":
 
 > **A PR runs the quick check, not `just verify`.** The quick check is: the build (`just build`), the test
 > recipe(s) that cover the changed code (`just --list` names them: `test-auth-unit`, `test-quest-shared`,
-> `test-quest-*`, `test-android` for a change under `src/quest`, and so on), and the PC login test (see "System
-> test for runtime and auth changes") when the change touches runtime or auth code. The GTest floor is not stored:
+> `test-quest-*`, `test-android` for a change under `src/quest`, and so on), and the PC login test runs on main after the release cut, not on a PR. The GTest floor is not stored:
 > `python3 tools/verify_gtest_floor.py` counts [...] at HEAD and at the merge-base with `origin/main` [...] and fails
 > when HEAD has fewer. [...] Every PR, whatever it touches, also runs
 > `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` [...]. Run the quick check on the PR's tip, in the build slice, and report each item with its result; an item
@@ -70,10 +69,10 @@ feels risky":
 
 The build item is `just build` and its exit code, which is nonzero when the build
 fails (the recipe is a plain `cmake --build`).
-`just verify` runs only on main, when prepping a release, once per tip; a PR does
+`just verify` runs only on main, after the release cut, once per cut; a PR does
 not run it and a reviewer does not ask for it (AGENTS.md "Builds", next bullet).
-A runtime or auth change always runs the PC login on the PR's tip (below, and AGENTS.md
-"System test for runtime and auth changes" / "Client login test mechanics"), on a
+A runtime or auth change's PC login runs on main after the release cut, never on a PR (below, and AGENTS.md
+"Verification before merge" / "Client login test mechanics"), on a
 throwaway copy of the install, nested display. A `ninja -t inputs` / `-t deps` proof
 that the shipped DLL is unchanged is separate information; it never stands in for the login.
 Every "done/verified" claim resolves against the quick check items you actually ran.
@@ -631,7 +630,7 @@ adds: read the failing program's own logs first):
 - **Assuming plugins are loaded because they built or sit in `plugins/`.** The loader
   reads the `plugins:` list in `config.yaml`; a DLL the config does not name is ignored.
 - **Calling a green `just verify` the PR gate, or a `ninja -t inputs` proof the login test.**
-  A PR runs the quick check; a runtime or auth change also runs the PC login on its tip.
+  A PR runs the quick check; the PC login test runs on main after the release cut.
 - **Deploying `log_filter.dll` to "restore" structured logging.** Structured
   logging is built into `BugSplat64.dll`; that plugin is superseded, refused by
   name, and is the cause of the outage it appears to fix (N89).

@@ -171,4 +171,38 @@ DeviceFlowResult RunDeviceCodeFlow(const DeviceFlowOps& ops, const std::string& 
   return result;
 }
 
+bool RunUntilApproved(const std::function<SignInAttempt()>& attempt,
+                      const std::function<void(DeviceFlowOps::Clock::duration)>& sleep,
+                      const std::function<void(LogLevel, const std::string&)>& log, const RenewPolicy& policy) {
+  unsigned failures = 0;
+  for (unsigned attempts = 1;; ++attempts) {
+    const SignInAttempt result = attempt();
+    if (result.verified) return true;
+    switch (result.end) {
+      case FlowEnd::CodeExpired:
+      case FlowEnd::TimedOut:
+        failures = 0;
+        log(LogLevel::Info, "[NEVR.AUTH] server sign-in: the code ran out before it was approved; requesting a new "
+                            "one (attempt " + std::to_string(attempts + 1) + ")");
+        continue;
+      case FlowEnd::NoCode:
+      case FlowEnd::PollErrors:
+        if (++failures >= policy.max_consecutive_failures) {
+          log(LogLevel::Error, "[NEVR.AUTH] server sign-in: giving up after " + std::to_string(failures) +
+                                   " failed attempts in a row; the service did not answer the code request or the poll");
+          return false;
+        }
+        log(LogLevel::Warning, "[NEVR.AUTH] server sign-in: attempt " + std::to_string(attempts) +
+                                   " failed (the service did not answer); trying again");
+        if (policy.retry_delay > DeviceFlowOps::Clock::duration::zero()) sleep(policy.retry_delay);
+        continue;
+      case FlowEnd::Verified:  // an unverified attempt that says Verified is a caller bug: do not spin on it
+      case FlowEnd::BrowserFailed:
+      case FlowEnd::Cancelled:
+        log(LogLevel::Error, "[NEVR.AUTH] server sign-in: ended without approval and will not be retried");
+        return false;
+    }
+  }
+}
+
 }  // namespace nevr::auth

@@ -22,6 +22,7 @@ endif()
 # reads the same on both platforms. plugin_game_image.cpp and input_seam_hook.cpp reach pinned_targets.h, so they are built
 # without exceptions.
 add_library(nevr_quest_plugin STATIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/packaged_plugins.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_plan.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_image.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_loader.cpp"
@@ -42,6 +43,7 @@ target_compile_options(nevr_quest_plugin PRIVATE -Wall -Wextra -Werror -fvisibil
 
 add_library(nevr_quest_integration STATIC
   ctor_sequence.cpp
+  libr15_attach_step.cpp
   post_load.cpp
   identity_source.cpp
   stage_log.cpp
@@ -64,6 +66,7 @@ target_link_libraries(nevr_quest_integration PUBLIC
   nevr_quest_net
   nevr_quest_token_auth
   nevr_quest_hwdump
+  nevr_quest_invite
   nlohmann_json::nlohmann_json)
 # Hidden visibility: linked into the sentinel, nothing here may become an export
 # (tests/quest TestExportAllowlist).
@@ -86,6 +89,10 @@ endforeach()
 target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/login_prompt_hook.cpp")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/login_prompt_hook.cpp"
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# The frame dispatcher (#966 S7) the Update handler calls: the same hook path, so built without exceptions too.
+target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../invite/frame_dispatch.cpp")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../invite/frame_dispatch.cpp"
+  PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 target_link_libraries(integration_hooks_test PRIVATE nevr_quest_prompt_board)
 # And the #1137 login title hook's (registered with the login prompt's, in the same step).
 target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/login_title_hook.cpp")
@@ -103,16 +110,20 @@ set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/resource_re
 target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_quality_hook.cpp")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/texture_quality_hook.cpp"
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# And the #928 clock-level override's counters (also without exceptions).
+target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/clock_levels_hook.cpp")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/clock_levels_hook.cpp"
+  PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
 # A no-op plugin for a headset run of the loader (docs/adr/0019, slice 1): the host test's fixture, named `nevr_noop` and
 # declaring the libr15 build the sentinel is pinned to. It is not part of the sentinel or of any APK the recipes build; a
 # development APK gets it from `just android-repack-apk ... plugin=<this file>`.
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/pinned_targets.h" nevr_pinned_build_id_line
-     REGEX "kLibR15BuildId = \"[0-9a-f]+\"")
+     REGEX "kLibR15StockBuildId = \"[0-9a-f]+\"")
 string(REGEX MATCH "\"([0-9a-f]+)\"" nevr_pinned_build_id_match "${nevr_pinned_build_id_line}")
 set(nevr_pinned_build_id "${CMAKE_MATCH_1}")
 if(NOT nevr_pinned_build_id)
-  message(FATAL_ERROR "src/quest/sentinel/pinned_targets.h has no kLibR15BuildId literal")
+  message(FATAL_ERROR "src/quest/sentinel/pinned_targets.h has no kLibR15StockBuildId literal")
 endif()
 add_library(nevr_noop_plugin SHARED "${CMAKE_CURRENT_SOURCE_DIR}/../tests/plugin_fixture.cpp")
 set_target_properties(nevr_noop_plugin PROPERTIES OUTPUT_NAME nevr_noop)

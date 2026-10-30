@@ -56,7 +56,7 @@ class QuestMenuVersionIsAGotHook(unittest.TestCase):
         )
         m = re.search(
             r"inline GotTarget LibR15CanvasSetText\(\) \{\s*return \{kLibR15, kCanvasSetTextSymbol, RelocKind::kJumpSlot, "
-            r"kLibR15BuildId, (0x[0-9a-f]+)ULL\};",
+            r"LibR15PatchedBuildId\(\), (0x[0-9a-f]+)ULL\};",
             text,
         )
         self.assertIsNotNone(m, "the target is not a pinned JUMP_SLOT on the pinned build ID")

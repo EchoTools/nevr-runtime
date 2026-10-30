@@ -27,6 +27,9 @@ LoadRecord BaseRecord(const PlanEntry& entry) {
   record.phase = entry.phase;
   record.required = entry.item.required;
   record.argKeys = ArgKeys(entry.item.args_json);
+  record.source = SourceName(entry.source);
+  record.overridden = entry.overridden;
+  record.expectedSha256 = entry.expectedSha256;
   return record;
 }
 
@@ -51,6 +54,17 @@ void Loader::Settle(PlanEntry& entry, const LoadRecord& record) {
 }
 
 void Loader::Plan(std::vector<PluginLoadItem> items) {
+  std::vector<PlannedItem> planned;
+  planned.reserve(items.size());
+  for (PluginLoadItem& item : items) {
+    PlannedItem one;
+    one.item = std::move(item);
+    planned.push_back(std::move(one));
+  }
+  Plan(std::move(planned));
+}
+
+void Loader::Plan(std::vector<PlannedItem> items) {
   if (planned_) return;
   planned_ = true;
   entries_ = BuildPlan(std::move(items), options_.earlySupported);
@@ -104,7 +118,7 @@ std::size_t Loader::PendingFor(PluginPhase phase) const {
   return count;
 }
 
-NvrGameContext Loader::ContextFor(const PlanEntry& entry) const {
+NvrGameContext Loader::ContextFor(const PlanEntry& entry, const char* pluginViewBuildId) const {
   NvrGameContext ctx = {};
   ctx.base_addr = gameBase_;
   ctx.net_game = nullptr;
@@ -117,7 +131,7 @@ NvrGameContext Loader::ContextFor(const PlanEntry& entry) const {
   ctx.log = &Loader::HostLog;
   ctx.level_symbol = 0;
   ctx.level_name = nullptr;
-  ctx.game_build_id = gameBuildId_.empty() ? nullptr : gameBuildId_.c_str();
+  ctx.game_build_id = pluginViewBuildId;
   ctx.quest = platform_.QuestHostApi();
   return ctx;
 }
@@ -142,9 +156,18 @@ void Loader::Load(PlanEntry& entry) {
     Settle(entry, record);
   };
   try {
-    if (gameBuildId_.empty()) gameBuildId_ = platform_.GameBuildId();
+    // The running libr15 is read again for every decision (ADR 0021 section 12): the plugin identity is the stock ID only
+    // while the live note, read now, is the one the patch verification covered, and a note read once and kept could
+    // outlive that. `view` points into `live` or at the stock ID; both live to the end of this function.
+    const std::string live = platform_.GameBuildId();
+    const Libr15PatchState patch = platform_.Libr15Patch();
+    const PluginView view = ResolvePluginView(live.c_str(), patch.verified, patch.verifiedBuildId.c_str());
     if (gameBase_ == 0) gameBase_ = platform_.GameBase();
-    if (!gameBuildId_.empty()) record.gameBuildId = gameBuildId_;
+    if (!live.empty()) {
+      record.gameBuildId = live;
+      record.pluginViewBuildId = view.buildId;
+    }
+    record.libr15Patched = view.patched;
 
     // Everything that decides whether the plugin may run is decided from the file's bytes, before dlopen: mapping a
     // shared object runs its constructors, so a refusal after the mapping would come after the plugin's own code.
@@ -155,13 +178,17 @@ void Loader::Load(PlanEntry& entry) {
       return end(Outcome::kFailed, reason::kFileUnreadable);
     }
     record.sha256 = data::Sha256Hex(bytes.data(), bytes.size());
+    // A packaged file is the one the repack hashed: other bytes under its name are refused before anything else reads them.
+    if (!entry.expectedSha256.empty() && record.sha256 != entry.expectedSha256) {
+      return end(Outcome::kRefused, reason::kManifestHashMismatch);
+    }
     const std::string id = BuildIdOf(bytes.data(), bytes.size());
     record.pluginBuildId = id.empty() ? "none" : id;
     if (!IsSharedObjectFor(bytes.data(), bytes.size(), options_.machine)) return end(Outcome::kRefused, reason::kMachineType);
 
     // The plugin's own list of the libr15 builds its addresses hold for (an ELF note), against the build that is running.
     const std::optional<std::string> declared = SupportedBuildIdsOf(bytes.data(), bytes.size());
-    switch (DecideBuildId(declared.has_value() ? declared->c_str() : nullptr, gameBuildId_)) {
+    switch (DecideBuildIdForView(declared.has_value() ? declared->c_str() : nullptr, live, view)) {
       case BuildIdVerdict::kSupported: break;
       case BuildIdVerdict::kUndeclared: return end(Outcome::kRefused, reason::kBuildIdsUndeclared);
       case BuildIdVerdict::kUnknownGame: return end(Outcome::kRefused, reason::kGameBuildIdUnavailable);
@@ -188,7 +215,8 @@ void Loader::Load(PlanEntry& entry) {
       plugin.info.capabilities = capabilities();
     }
 
-    contexts_.push_back(ContextFor(entry));
+    viewIds_.push_back(view.buildId);  // a deque: the context keeps this pointer for the life of the process
+    contexts_.push_back(ContextFor(entry, viewIds_.back().c_str()));
     const NvrGameContext* ctx = &contexts_.back();
     const auto initEx = Resolve<NvrPluginInitEx_fn>(platform_, handle, "NvrPluginInitEx");
     const auto init = Resolve<NvrPluginInit_fn>(platform_, handle, "NvrPluginInit");

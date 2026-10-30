@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cerrno>
 
 #include "quest/plugin/input_seam_hook.h"
@@ -19,7 +20,13 @@ namespace {
 // A plugin is a shared object of a few hundred kilobytes; a file past this is not one.
 constexpr off_t kMaxPluginBytes = 64 * 1024 * 1024;
 
+std::atomic<Libr15PatchSource> g_patchSource{nullptr};
+
 }  // namespace
+
+Libr15PatchSource SetLibr15PatchSource(Libr15PatchSource source) {
+  return g_patchSource.exchange(source, std::memory_order_acq_rel);
+}
 
 std::string DirectoryOf(const char* path) {
   if (path == nullptr) return "";
@@ -31,14 +38,28 @@ std::string DirectoryOf(const char* path) {
 SentinelPlatform::SentinelPlatform(std::string libraryDir, bool emitDebug)
     : libraryDir_(std::move(libraryDir)), emitDebug_(emitDebug) {}
 
-bool SentinelPlatform::ReadFile(const std::string& file, std::vector<std::uint8_t>* bytes) {
-  if (libraryDir_.empty()) return false;
+ReadOutcome SentinelPlatform::ReadFileOutcome(const std::string& file, std::vector<std::uint8_t>* bytes, const char** why) {
+  *why = "";
+  if (libraryDir_.empty()) {
+    *why = "no_library_dir";
+    return ReadOutcome::kUnreadable;
+  }
   const int fd = ::open((libraryDir_ + "/" + file).c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW);
-  if (fd < 0) return false;
+  if (fd < 0) {
+    if (errno == ENOENT) return ReadOutcome::kAbsent;
+    *why = errno == ELOOP ? "symlink" : "open_failed";  // O_NOFOLLOW makes a link ELOOP
+    return ReadOutcome::kUnreadable;
+  }
   struct stat st {};
-  if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size > kMaxPluginBytes) {
+  if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+    *why = "not_regular_file";
     ::close(fd);
-    return false;
+    return ReadOutcome::kUnreadable;
+  }
+  if (st.st_size > kMaxPluginBytes) {
+    *why = "too_large";
+    ::close(fd);
+    return ReadOutcome::kUnreadable;
   }
   bytes->clear();
   std::uint8_t buffer[16 * 1024];
@@ -46,18 +67,25 @@ bool SentinelPlatform::ReadFile(const std::string& file, std::vector<std::uint8_
     const ssize_t got = ::read(fd, buffer, sizeof(buffer));
     if (got < 0) {
       if (errno == EINTR) continue;
+      *why = "read_failed";
       ::close(fd);
-      return false;
+      return ReadOutcome::kUnreadable;
     }
     if (got == 0) break;
     bytes->insert(bytes->end(), buffer, buffer + got);
     if (bytes->size() > static_cast<std::size_t>(kMaxPluginBytes)) {
+      *why = "too_large";
       ::close(fd);
-      return false;
+      return ReadOutcome::kUnreadable;
     }
   }
   ::close(fd);
-  return true;
+  return ReadOutcome::kRead;
+}
+
+bool SentinelPlatform::ReadFile(const std::string& file, std::vector<std::uint8_t>* bytes) {
+  const char* why = "";
+  return ReadFileOutcome(file, bytes, &why) == ReadOutcome::kRead;
 }
 
 // By name: the linker finds the file in the app's native library directory, the same one the sentinel was mapped from.
@@ -77,6 +105,11 @@ void* SentinelPlatform::Symbol(void* handle, const char* name) { return ::dlsym(
 std::string SentinelPlatform::GameBuildId() {
   char id[128] = {};
   return ReadGameBuildId(id, sizeof(id)) ? std::string(id) : std::string();
+}
+
+Libr15PatchState SentinelPlatform::Libr15Patch() {
+  const Libr15PatchSource source = g_patchSource.load(std::memory_order_acquire);
+  return source != nullptr ? source() : Libr15PatchState{};
 }
 
 std::uintptr_t SentinelPlatform::GameBase() { return GameBaseAddress(); }

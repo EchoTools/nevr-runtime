@@ -175,6 +175,8 @@ pub unsafe extern "C" fn NevrManifestVerify(s: *mut NevrSession, manifest: *cons
     }
     let (m, g) = (std::slice::from_raw_parts(manifest, manifest_len).to_vec(), std::slice::from_raw_parts(sig, sig_len).to_vec());
     with_session(s, |s| {
+        // Held from the read of the state to the commit (#1353), as the installer's own runs hold it.
+        let _lock = manifest::lock_state(&s.cfg.state_dir)?;
         let state = manifest::read_state(&s.cfg.state_dir)?;
         let now = match &s.cfg.now {
             Some(n) => n.clone(),
@@ -223,24 +225,28 @@ pub unsafe extern "C" fn NevrArtifactFetch(s: *mut NevrSession, version: *const 
         let art = manifest::find(&m, &version, &kind, platform.as_deref())?;
         let url = format!("{}/{}", s.cfg.base, art.path);
         let f = crate::artifact::download(&url, &art, std::path::Path::new(&out_path))?;
-        s.log.info("artifact_fetch", 8, json!({"kind": kind, "url": url, "size": art.size, "bytes": f.bytes, "sha256": f.sha256, "ok": true, "resumed_from": f.resumed_from}))?;
+        s.log.info("artifact_fetch", 8, json!({"kind": kind, "url": crate::util::redact_url(&url), "size": art.size, "bytes": f.bytes, "sha256": f.sha256, "ok": true, "resumed_from": f.resumed_from}))?;
         Ok(NEVR_OK)
     })
 }
 
-/// Every member of a zip artifact against `contents` (`allow_dirs` is nonzero for game data).
+/// Every member of a zip artifact against `contents` (`allow_dirs` is nonzero for game data). `platform` selects the
+/// entry as in `NevrArtifactFetch`; a `game-data` call must name one, because a release lists one such artifact per platform.
 ///
 /// # Safety
-/// All string arguments are NUL-terminated UTF-8.
+/// All string arguments are NUL-terminated UTF-8; `platform` may be null.
 #[no_mangle]
-pub unsafe extern "C" fn NevrArtifactVerifyZip(s: *mut NevrSession, version: *const c_char, kind: *const c_char, zip_path: *const c_char, allow_dirs: i32) -> i32 {
-    let (version, kind, zip_path) = match (cstr(version), cstr(kind), cstr(zip_path)) {
-        (Ok(a), Ok(b), Ok(c)) => (a.to_string(), b.to_string(), c.to_string()),
+pub unsafe extern "C" fn NevrArtifactVerifyZip(s: *mut NevrSession, version: *const c_char, kind: *const c_char, platform: *const c_char, zip_path: *const c_char, allow_dirs: i32) -> i32 {
+    let (version, kind, platform, zip_path) = match (cstr(version), cstr(kind), opt_cstr(platform), cstr(zip_path)) {
+        (Ok(a), Ok(b), Ok(c), Ok(d)) => (a.to_string(), b.to_string(), c.map(str::to_string), d.to_string()),
         _ => return NEVR_BAD_ARGUMENT,
     };
     with_session(s, |s| {
+        if kind == "game-data" && platform.is_none() {
+            return Err(Error::new(8, "a release lists one game-data artifact per platform (android-arm64, windows-x86_64): name the platform of the data to verify"));
+        }
         let m = manifest::stored(&s.cfg.state_dir)?;
-        let art = manifest::find(&m, &version, &kind, None)?;
+        let art = manifest::find(&m, &version, &kind, platform.as_deref())?;
         let n = crate::artifact::verify_zip(std::path::Path::new(&zip_path), &art, allow_dirs != 0)?;
         s.log.info("verify_installed", 8, json!({"ok": true, "what": "zip-members", "expected": art.contents.len(), "observed": n}))?;
         Ok(NEVR_OK)

@@ -1,4 +1,4 @@
-//! `nevr-install`: the CLI over the core (ADR 0023). One JSON object on stdout per run; the details are in the log.
+//! `install-nevr-runtime`: the CLI over the core (ADR 0023). One JSON object on stdout per run; the details are in the log.
 //! Exit codes: 0 installed or nothing to do, 1 a check or step failed (nothing changed), 2 needs the player, 3 restored.
 
 use nevr_install::device::AdbDevice;
@@ -8,17 +8,31 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: nevr-install <command> [options]
+const USAGE: &str = "usage: install-nevr-runtime <command> [options]
   manifest verify [--from-dir DIR]          steps 1 to 7: fetch (or read DIR), verify, store, pick the channel's release
   quest plan|install [--no-device] [--serial S] [--version V] [--yes-uninstall] [--artifact-dir DIR]
   pc plan|install --dir <folder with echovr.exe> [--nevr-root DIR] [--launcher-dir DIR] [--allow-downgrade] [--version V] [--package-dir DIR]
   pc launch-check --dir <folder> [--nevr-root DIR] [--bootstrap-log FILE] [--version V]
   pc stage --root <nevr root> [--current-json JSON] [--version V]
+  pc uninstall --dir <folder with echovr.exe> [--nevr-root DIR] [--dev-nevr-root]  restores the recorded original; fetches nothing, reads no stdin
 options: --root DIR  --base URL  --channel NAME  --log FILE  --state-dir DIR  --work-dir DIR  --pins FILE  --now UTC
 --artifact-dir installs a local tester APK (one .apk and its .sha256 sidecar) in place of the release's, and logs every step
   as an unverified dev artifact; no installer a player runs passes it.
 --package-dir installs the DLLs in DIR when they match the signed manifest's entries, and downloads only when they do not.
-exit codes: 0 installed or nothing to do, 1 failed with nothing changed, 2 needs the player, 3 restored";
+--nevr-root must be the folder the game loads nEVR from (%LOCALAPPDATA%\\nevr\\echovr); any other is refused, unless --dev-nevr-root
+  is given for a dev or test run.
+exit codes: 0 installed, uninstalled or nothing to do, 1 failed with nothing changed, 2 needs the player, 3 restored";
+
+/// The hashes the `SHA256SUMS` beside this executable lists for `BugSplat64.dll`: the package's own list, which uninstall.ps1
+/// reads from its folder. An executable with no list beside it has none.
+fn package_sums() -> Vec<String> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| d.join("SHA256SUMS")))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| nevr_install::pc::host_hashes_in_sums(&t))
+        .unwrap_or_default()
+}
 
 fn default_root() -> PathBuf {
     if let Ok(r) = std::env::var("NEVR_INSTALL_ROOT") {
@@ -42,7 +56,7 @@ struct Args {
 
 impl Args {
     fn parse(argv: Vec<String>) -> Args {
-        let flags = ["--no-device", "--yes-uninstall", "--allow-downgrade"];
+        let flags = ["--no-device", "--yes-uninstall", "--allow-downgrade", "--dev-nevr-root"];
         let (mut rest, mut opts) = (vec![], vec![]);
         let mut it = argv.into_iter();
         while let Some(a) = it.next() {
@@ -88,7 +102,7 @@ fn main() -> ExitCode {
     let (platform, cmd) = match words.as_slice() {
         ["manifest", "verify"] => ("pc", "manifest"),
         ["quest", c @ ("plan" | "install")] => ("quest", *c),
-        ["pc", c @ ("plan" | "install" | "launch-check" | "stage")] => ("pc", *c),
+        ["pc", c @ ("plan" | "install" | "launch-check" | "stage" | "uninstall")] => ("pc", *c),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(1);
@@ -96,14 +110,10 @@ fn main() -> ExitCode {
     };
     let root = args.val("--root").map(PathBuf::from).unwrap_or_else(default_root);
     let mut cfg = Config::new(platform, &root);
-    // The nevr root (ADR 0012): `--nevr-root`, else %LOCALAPPDATA%\nevr\echovr on Windows, else unknown.
-    cfg.nevr_root = args.val("--nevr-root").map(PathBuf::from).or_else(|| {
-        if cfg!(windows) {
-            std::env::var("LOCALAPPDATA").ok().filter(|p| !p.is_empty()).map(|p| PathBuf::from(p).join("nevr").join("echovr"))
-        } else {
-            None
-        }
-    });
+    // The nevr root (ADR 0012): `--nevr-root`, else %LOCALAPPDATA%\nevr\echovr on Windows, else unknown. A root other than
+    // the canonical one is refused where the PC plan uses it (`Session::check_nevr_root`), unless `--dev-nevr-root` is given.
+    cfg.nevr_root = args.val("--nevr-root").map(PathBuf::from).or_else(|| cfg.canonical_nevr_root.clone());
+    cfg.dev_nevr_root = args.flag("--dev-nevr-root");
     // Echo VR Launcher's data folder (#1285): `--launcher-dir`, else %LOCALAPPDATA%\EchoVR_Launcher on Windows, else none.
     cfg.launcher_dir = args.val("--launcher-dir").map(PathBuf::from).or_else(|| {
         if cfg!(windows) {
@@ -198,6 +208,12 @@ fn main() -> ExitCode {
                 let (m, v) = sess.release(version.as_deref())?;
                 let art = nevr_install::manifest::find(&m, &v, "windows-zip", None)?;
                 let sha = |n: &str| art.contents.iter().find(|c| c.path == n).map(|c| c.sha256.clone()).unwrap_or_default();
+                // The host's log is read from the nevr root, so that root gets the same check as a PC install (#1353).
+                if let Some(root) = sess.cfg.nevr_root.clone() {
+                    if let Err(why) = sess.check_nevr_root(&root) {
+                        return Ok((sess.end("needs-user", &why.msg)?, None));
+                    }
+                }
                 // The host writes its log under the nevr root (ADR 0012); the game folder is the fallback for an older host.
                 let log_path = args.val("--bootstrap-log").map(PathBuf::from).unwrap_or_else(|| sess.cfg.nevr_root.as_ref().map(|r| r.join("logs")).unwrap_or_else(|| dir.join("logs")).join("nevr-bootstrap.jsonl"));
                 let text = std::fs::read_to_string(&log_path).map_err(|e| nevr_install::error::Error::new(11, format!("{}: {e}", log_path.display())))?;
@@ -224,6 +240,12 @@ fn main() -> ExitCode {
                 }
                 let (end, report) = sess.pc_stage(version.as_deref(), &root, &cur)?;
                 Ok((end, Some(report)))
+            }
+            // No manifest is fetched and no stdin is read: the record and the files are the whole input (#1497).
+            ("pc", "uninstall") => {
+                let dir = PathBuf::from(args.val("--dir").ok_or_else(|| nevr_install::error::Error::new(9, "--dir is required"))?);
+                let (end, plan) = sess.pc_uninstall(&dir, game_running(), &package_sums())?;
+                Ok((end, Some(plan)))
             }
             ("pc", c) => {
                 let dir = PathBuf::from(args.val("--dir").ok_or_else(|| nevr_install::error::Error::new(9, "--dir is required"))?);

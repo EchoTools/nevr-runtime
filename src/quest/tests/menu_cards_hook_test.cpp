@@ -24,6 +24,7 @@
 #include "quest/tests/test_check.h"
 #include "runtime/patch/menu_cards.h"
 #include "runtime/patch/menu_page.h"
+#include "runtime/patch/netgun_bullets.h"
 
 namespace {
 
@@ -580,6 +581,55 @@ void TheQuestPinIsTheDigestTheHeadsetLogged() {
   QCHECK(nevr_menu_cards::kPageType == 0x75e5993f80940cd0ULL && nevr_menu_cards::kQuestPageName == 0xf927772b9e2aefb1ULL);
 }
 
+// ---- the net-gun resources (#1478) -----------------------------------------------------------------
+
+// The five combat levels' net-gun resources, of either class, whose bytes are not the pinned stock ones (a test has no game
+// bytes, and the pins are the PC digests): the buffer is passed through, nothing is allocated, and the skip says not_pinned.
+void ANetgunResourceOfAFiveLevelIsLeftAloneWhenItsBytesAreNotPinned() {
+  for (const nevr_netgun_bullets::Level& level : nevr_netgun_bullets::kLevels) {
+    for (const std::uint64_t cls : {nevr_netgun_bullets::kParticleType, nevr_netgun_bullets::kBulletType}) {
+      Reset("");
+      std::vector<unsigned char> buf(200, 0x11);
+      Block block;
+      Resource res;
+      Fill(block, res, 4, 0, buf.data(), buf.size(), &g_alloc, 0x10, cls, level.hash);
+      QCHECK(Call(block) == kCallbackResult);
+      QCHECK(g_seen.buffer == buf.data() && g_seen.size == buf.size() && g_allocCalls == 0);
+      const std::vector<std::string> lines = Lines("netgun_bullets_skip");
+      QCHECK(lines.size() == 1 && Field(lines[0], "reason") == "\"not_pinned\"");
+      QCHECK(Lines("netgun_bullets_swap").empty());
+    }
+  }
+}
+
+// A net-gun class under another level's name, another class under a level's name, and the page's class under a level's
+// name, are not offered to the net-gun rewrite and are not logged as one.
+void OnlyTheNetgunClassUnderAFiveLevelNameIsOffered() {
+  const std::uint64_t level = nevr_netgun_bullets::kLevels[0].hash;
+  struct Case {
+    const char* what;
+    std::uint64_t cls, name;
+  };
+  const Case cases[] = {
+      {"a net-gun class under another name", nevr_netgun_bullets::kParticleType, 0x1234},
+      {"another class under a level", nevr_netgun_bullets::kParticleType ^ 1, level},
+      {"the page's class under a level", kPage, level},
+  };
+  for (const Case& c : cases) {
+    Reset("");
+    std::vector<unsigned char> buf(200, 0x11);
+    Block block;
+    Resource res;
+    Fill(block, res, 4, 0, buf.data(), buf.size(), &g_alloc, 0x10, c.cls, c.name);
+    QCHECK(Call(block) == kCallbackResult);
+    if (g_seen.buffer != buf.data() || g_allocCalls != 0 || !Lines("netgun_bullets_skip").empty() ||
+        !Lines("netgun_bullets_swap").empty()) {
+      std::fprintf(stderr, "case '%s' was offered\n", c.what);
+      QCHECK(false);
+    }
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -604,6 +654,8 @@ int main() {
   APageSizedResourceIsNamedWhateverItsNameUpToItsBound();
   ARepeatedResourceIsNamedOnce();
   TheQuestPinIsTheDigestTheHeadsetLogged();
+  ANetgunResourceOfAFiveLevelIsLeftAloneWhenItsBytesAreNotPinned();
+  OnlyTheNetgunClassUnderAFiveLevelNameIsOffered();
   sentinel::SetLogSink(nullptr);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "menu_cards_hook_test: %d check(s) failed\n", quest_test::Failures());

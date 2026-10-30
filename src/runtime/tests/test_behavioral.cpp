@@ -16,6 +16,9 @@
 #include <shellapi.h>
 
 #include <gtest/gtest.h>
+#include <ixwebsocket/IXConnectionState.h>
+#include <ixwebsocket/IXSocket.h>
+#include <ixwebsocket/IXSocketServer.h>
 #include <ixwebsocket/IXNetSystem.h>
 #include <ixwebsocket/IXWebSocket.h>
 #include <ixwebsocket/IXWebSocketServer.h>
@@ -208,16 +211,35 @@ void FatalError(const char* msg, const char* title) {
 // Record the call instead of terminating, so the seam that makes the link work
 // also makes the new behaviour observable: a test can assert that a condition
 // DID reach ServerFatal, which a void stub could not.
-int g_serverFatalCalls = 0;
-std::string g_lastServerFatal;
+// A WebSocket worker thread can reach ServerFatal while the test thread waits on the count, so the count and the
+// cause are written together under one mutex and read as a snapshot.
+std::mutex g_serverFatalMutex;
+int g_serverFatalCallsValue = 0;
+std::string g_lastServerFatalValue;
+int ServerFatalCalls() {
+  std::lock_guard<std::mutex> lock(g_serverFatalMutex);
+  return g_serverFatalCallsValue;
+}
+std::string LastServerFatal() {
+  std::lock_guard<std::mutex> lock(g_serverFatalMutex);
+  return g_lastServerFatalValue;
+}
+void ResetServerFatal() {
+  std::lock_guard<std::mutex> lock(g_serverFatalMutex);
+  g_serverFatalCallsValue = 0;
+  g_lastServerFatalValue.clear();
+}
 void ServerFatal(const CHAR* format, ...) {
   char buf[1024];
   va_list args;
   va_start(args, format);
   vsnprintf(buf, sizeof(buf), format, args);
   va_end(args);
-  g_serverFatalCalls++;
-  g_lastServerFatal = buf;
+  {
+    std::lock_guard<std::mutex> lock(g_serverFatalMutex);
+    g_lastServerFatalValue = buf;
+    g_serverFatalCallsValue++;
+  }
   fprintf(stderr, "[TEST] ServerFatal: %s\n", buf);
 }
 
@@ -243,11 +265,16 @@ const char* g_testDiscordId = nullptr;
 // so the source holds no 18-digit string (the N20 sensor in `just verify` reads one as an account id).
 constexpr uint64_t kTestAccountId = 123456789012345678ULL;
 const std::string kTestAccountIdText = std::to_string(kTestAccountId);
+// #1254: nevr_password answers from g_testPassword; a server needs it and the discord id to log in.
+const char* g_testPassword = nullptr;
 const char* NevrCfgGetFlat(const char* flatKey) {
   if (std::strcmp(flatKey, "nevr_session_router") == 0) return g_testRouterMode;
   if (std::strcmp(flatKey, "nevr_discord_id") == 0) return g_testDiscordId;
+  if (std::strcmp(flatKey, "nevr_password") == 0) return g_testPassword;
   return nullptr;
 }
+// #1254: the config the stop line names; service_config.cpp is not linked here.
+const char* NevrCfgSource() { return "test config"; }
 
 // --- plugin_load_plan.h (N134 S6, referenced by plugin_loader.cpp LoadPlugins) ---
 // service_config.cpp defines the real one (BuildLoadPlan over the config.yaml
@@ -283,6 +310,7 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 #include "runtime/compat/socket_role.h"
 #include "runtime/compat/hmd_serial.h"
 #include "runtime/compat/social_party.h"
+#include "runtime/tests/lobby_record_golden.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/hook/addresses.h"
 
@@ -1560,7 +1588,7 @@ class PluginRunModeTest : public ::testing::Test {
     g_runModeDialogs.clear();
     TestHook_ResetRefusals();
     TestHook_SetRefusalDialogSink(&CaptureRunModeDialog);
-    g_serverFatalCalls = 0;
+    ResetServerFatal();
     nevrRoot_ = std::make_unique<TestNevrRoot>();
     pluginsDir_ = nevrRoot_->PluginsDir();
   }
@@ -1658,8 +1686,8 @@ TEST_F(PluginRunModeTest, ARefusedRequiredPluginIsFatalOnAServerAndShowsNoDialog
   LoadPlugins();
 
   EXPECT_EQ(GetLoadedPluginCount(), 0);
-  EXPECT_EQ(g_serverFatalCalls, 1) << g_lastServerFatal;
-  EXPECT_NE(g_lastServerFatal.find("refused: unsigned"), std::string::npos) << g_lastServerFatal;
+  EXPECT_EQ(ServerFatalCalls(), 1) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("refused: unsigned"), std::string::npos) << LastServerFatal();
   EXPECT_TRUE(g_runModeDialogs.empty());
 }
 
@@ -1671,7 +1699,7 @@ TEST_F(PluginRunModeTest, ARequiredPluginThatIsUnsignedIsNotFatalWhenSignaturesA
   LoadPlugins();
 
   EXPECT_EQ(GetLoadedPluginCount(), 1);
-  EXPECT_EQ(g_serverFatalCalls, 0) << g_lastServerFatal;
+  EXPECT_EQ(ServerFatalCalls(), 0) << LastServerFatal();
 }
 
 TEST_F(PluginRunModeTest, TheEarlyPassAndTheNormalPassReadTheSameMode) {
@@ -1993,13 +2021,13 @@ TEST_F(PluginLoaderDiagnosticTest, FailedInitStillVerifiesHookedAddresses) {
   std::array<unsigned char, 16> target{};
   nevr_hook_guard::Record(target.data(), "failed-init-target");
   target[0] = 0xE9;
-  const int fatalCallsBefore = g_serverFatalCalls;
+  const int fatalCallsBefore = ServerFatalCalls();
   g_testPluginLoadPlan.push_back({"partial", "test_plugin_init_fail.dll", false, "", "{}"});
 
   LoadPlugins();
 
   EXPECT_EQ(GetLoadedPluginCount(), 0);
-  EXPECT_EQ(g_serverFatalCalls, fatalCallsBefore + 1);
+  EXPECT_EQ(ServerFatalCalls(), fatalCallsBefore + 1);
   EXPECT_TRUE(TestLogContains("failed-init-target"));
   nevr_hook_guard::ResetForTest();
 }
@@ -2162,14 +2190,14 @@ TEST_F(PluginLoaderDiagnosticTest, PluginListedUnderAnotherPathSpellingLoadsOnce
 // A required repeat of an optional entry that failed to load: the plugin the
 // config declared required is missing, so that is fatal, not a skipped duplicate.
 TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfFailedOptionalEntryIsFatal) {
-  g_serverFatalCalls = 0;
+  ResetServerFatal();
   g_testPluginLoadPlan.push_back({"gone", "plugin_that_does_not_exist.dll", false, "", "{}"});
   g_testPluginLoadPlan.push_back({"gone-again", "plugin_that_does_not_exist.dll", true, "", "{}"});
 
   LoadPlugins();
 
-  EXPECT_EQ(g_serverFatalCalls, 1);
-  EXPECT_NE(g_lastServerFatal.find("gone"), std::string::npos) << g_lastServerFatal;
+  EXPECT_EQ(ServerFatalCalls(), 1);
+  EXPECT_NE(LastServerFatal().find("gone"), std::string::npos) << LastServerFatal();
   const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
   ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
   EXPECT_EQ(manifest[0].at("required"), true);
@@ -2178,26 +2206,26 @@ TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfFailedOptionalEntryIsFatal) {
 // The same, for a plugin that loads but whose init fails: the failure surfaces
 // later (pass 2), and must still be fatal because a repeat required it.
 TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfInitFailingOptionalEntryIsFatal) {
-  g_serverFatalCalls = 0;
+  ResetServerFatal();
   g_testPluginLoadPlan.push_back({"flaky", "test_plugin_init_fail.dll", false, "", "{}"});
   g_testPluginLoadPlan.push_back({"flaky-again", "TEST_PLUGIN_INIT_FAIL.DLL", true, "", "{}"});
 
   LoadPlugins();
 
-  EXPECT_EQ(g_serverFatalCalls, 1);
-  EXPECT_NE(g_lastServerFatal.find("flaky"), std::string::npos) << g_lastServerFatal;
+  EXPECT_EQ(ServerFatalCalls(), 1);
+  EXPECT_NE(LastServerFatal().find("flaky"), std::string::npos) << LastServerFatal();
   EXPECT_EQ(GetLoadedPluginCount(), 0);
 }
 
 // Same, when the repeat is only caught by the same-module check.
 TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatUnderAnotherSpellingOfInitFailingEntryIsFatal) {
-  g_serverFatalCalls = 0;
+  ResetServerFatal();
   g_testPluginLoadPlan.push_back({"flaky", "test_plugin_init_fail.dll", false, "", "{}"});
   g_testPluginLoadPlan.push_back({"flaky-dotted", ".\\test_plugin_init_fail.dll", true, "", "{}"});
 
   LoadPlugins();
 
-  EXPECT_EQ(g_serverFatalCalls, 1);
+  EXPECT_EQ(ServerFatalCalls(), 1);
   EXPECT_EQ(GetLoadedPluginCount(), 0);
 }
 
@@ -2205,14 +2233,14 @@ TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatUnderAnotherSpellingOfInitFaili
 // requirement reaches the entry that holds the module, not the skipped one. The
 // holder loaded fine, so nothing is fatal.
 TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfSkippedSpellingOfLoadedEntryIsNotFatal) {
-  g_serverFatalCalls = 0;
+  ResetServerFatal();
   g_testPluginLoadPlan.push_back({"first", "test_plugin_onframe.dll", false, "", "{}"});
   g_testPluginLoadPlan.push_back({"second", ".\\test_plugin_onframe.dll", false, "", "{}"});
   g_testPluginLoadPlan.push_back({"third", ".\\test_plugin_onframe.dll", true, "", "{}"});
 
   LoadPlugins();
 
-  EXPECT_EQ(g_serverFatalCalls, 0) << g_lastServerFatal;
+  EXPECT_EQ(ServerFatalCalls(), 0) << LastServerFatal();
   EXPECT_EQ(GetLoadedPluginCount(), 1);
   const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
   ASSERT_EQ(manifest.size(), 3u) << manifest.dump();
@@ -2222,40 +2250,40 @@ TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfSkippedSpellingOfLoadedEntryI
 // The same chain when the holder's init fails: the fatal names the holder (the
 // first entry), the entry that really holds the module.
 TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfSkippedSpellingOfInitFailingEntryNamesHolder) {
-  g_serverFatalCalls = 0;
+  ResetServerFatal();
   g_testPluginLoadPlan.push_back({"first", "test_plugin_init_fail.dll", false, "", "{}"});
   g_testPluginLoadPlan.push_back({"second", ".\\test_plugin_init_fail.dll", false, "", "{}"});
   g_testPluginLoadPlan.push_back({"third", ".\\test_plugin_init_fail.dll", true, "", "{}"});
 
   LoadPlugins();
 
-  EXPECT_EQ(g_serverFatalCalls, 1) << g_lastServerFatal;
-  EXPECT_NE(g_lastServerFatal.find("first"), std::string::npos) << g_lastServerFatal;
-  EXPECT_EQ(g_lastServerFatal.find("second"), std::string::npos) << g_lastServerFatal;
+  EXPECT_EQ(ServerFatalCalls(), 1) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("first"), std::string::npos) << LastServerFatal();
+  EXPECT_EQ(LastServerFatal().find("second"), std::string::npos) << LastServerFatal();
   EXPECT_EQ(GetLoadedPluginCount(), 0);
 }
 
 // An optional first entry that loads, then a required repeat of the same spelling.
 TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfSameSpellingOfLoadedEntryIsNotFatal) {
-  g_serverFatalCalls = 0;
+  ResetServerFatal();
   g_testPluginLoadPlan.push_back({"first", "test_plugin_onframe.dll", false, "", "{}"});
   g_testPluginLoadPlan.push_back({"again", "test_plugin_onframe.dll", true, "", "{}"});
 
   LoadPlugins();
 
-  EXPECT_EQ(g_serverFatalCalls, 0) << g_lastServerFatal;
+  EXPECT_EQ(ServerFatalCalls(), 0) << LastServerFatal();
   EXPECT_EQ(GetLoadedPluginCount(), 1);
 }
 
 // Control: an optional repeat of an optional entry stays non-fatal.
 TEST_F(PluginLoaderDiagnosticTest, OptionalRepeatOfInitFailingOptionalEntryIsNotFatal) {
-  g_serverFatalCalls = 0;
+  ResetServerFatal();
   g_testPluginLoadPlan.push_back({"flaky", "test_plugin_init_fail.dll", false, "", "{}"});
   g_testPluginLoadPlan.push_back({"flaky-again", "test_plugin_init_fail.dll", false, "", "{}"});
 
   LoadPlugins();
 
-  EXPECT_EQ(g_serverFatalCalls, 0);
+  EXPECT_EQ(ServerFatalCalls(), 0);
   EXPECT_EQ(GetLoadedPluginCount(), 0);
 }
 
@@ -3548,6 +3576,11 @@ class GameSocket {
     std::unique_lock<std::mutex> lock(mutex_);
     return changed_.wait_for(lock, kRoleWait, [this] { return closed_; });
   }
+  // Whether the bridge has closed the socket now; it does not wait.
+  bool Closed() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return closed_;
+  }
   bool WaitForFrames(int count) {
     std::unique_lock<std::mutex> lock(mutex_);
     return changed_.wait_for(lock, kRoleWait, [&] { return frames_ >= count; });
@@ -3616,6 +3649,10 @@ class RolesByPathTest : public ::testing::Test {
     TestHook_N61_ResetState();
     ClearTestLogs();
     g_testRouterMode = RouterMode();
+    // A client run unless a test says otherwise: a server with no credential stops (#1254), and these tests are
+    // about the roles, not the server's login. Without this they took the mode a test before them left behind.
+    wasServerBase_ = g_isServer;
+    g_isServer = ServerMode() ? TRUE : FALSE;
     fatalBefore_ = g_fatalErrorCalls;
     ASSERT_TRUE(remote_.Start());
     SetWebSocketBridgeTarget(remote_.Uri().c_str());
@@ -3631,6 +3668,7 @@ class RolesByPathTest : public ::testing::Test {
     EXPECT_TRUE(YieldUntil([] { return TestHook_ConnectedGameSockets() == 0; }));
     StopWebSocketBridgeListener();
     g_testRouterMode = nullptr;
+    g_isServer = wasServerBase_;
     // The login session's remote outlives the game sockets that used it; dropping it closes the service's
     // connection, which the service's stop waits for.
     TestHook_N61_ResetState();
@@ -3641,7 +3679,10 @@ class RolesByPathTest : public ::testing::Test {
   // The value network.session_router has for this test: null is the key being absent.
   virtual const char* RouterMode() const { return nullptr; }
   virtual bool BridgeExpected() const { return true; }
+  // The run mode the bridge starts in (#1280): g_isServer is set before it starts, as boot.cpp does.
+  virtual bool ServerMode() const { return false; }
   int fatalBefore_ = 0;
+  BOOL wasServerBase_ = TRUE;
   // Connects `socket` at `target` and returns once the bridge has finished its Open handler for it.
   void Admit(GameSocket& socket, const std::string& target, uint16_t port = 0) {
     ASSERT_TRUE(socket.Connect(port != 0 ? port : port_, target)) << target;
@@ -3910,6 +3951,16 @@ TEST_F(SharedRouteLifetimeTest, HeldTargetIsNotExpiredAtTheSend) {
   const bool expired = g_expiredAtSendFuture.get();
   TestHook_SharedRoute_SetBeforeSend(nullptr);
   EXPECT_FALSE(expired) << "a held target expired before the send";
+}
+
+TEST_F(RolesByPathTest, LoginSlotIsEmptyOnceTheLoginSocketIsRetired) {
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForFrames(1)) << "the /login socket never received the reply to the LoginRequest";
+  ASSERT_NE(TestHook_LoginGameWsPtr(), nullptr) << "precondition: the login slot was not set";
+  login.Disconnect();
+  ASSERT_TRUE(YieldUntil([] { return TestHook_ConnectedGameSockets() == 0; })) << "the login socket never closed on the bridge";
+  EXPECT_EQ(TestHook_LoginGameWsPtr(), nullptr) << "the login slot still holds the retired socket";
 }
 
 // ============================================================================
@@ -4235,8 +4286,10 @@ class GameFlagScope {
     g_isServer = isServer;
     TestHook_SetGameFlagWord(flags);
     g_testDiscordId = kTestAccountIdText.c_str();
+    g_testPassword = "test-password";  // a server needs the pair (#1254)
   }
   ~GameFlagScope() {
+    g_testPassword = nullptr;
     g_testDiscordId = nullptr;
     TestHook_SetGameFlagWord(-1);
     g_isServer = wasServer_;
@@ -4318,11 +4371,24 @@ TEST_F(RolesByPathTest, LegacyVrClientsInjectedLoginStaysOvrOrg) {
 // L5: a dedicated server has no login to complete; the service's LoginFailure reaches the game as a LoginSuccess.
 // KNOWN-WRONG #1306: every refusal is replaced, whatever its status, and the default path says so only at Debug.
 TEST_F(RouterAllTest, AServersLoginFailureReachesTheGameAsALoginSuccess) {
+  GameFlagScope server(-1, TRUE);  // a server with a credential: without one it stops (#1254)
   remote_.SetLoginReply(nevr_evr_codec::kSymLoginFailure);
   GameSocket login;
   Admit(login, "/login");
   ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSuccess)) << "the game was left at the login gate";
   EXPECT_FALSE(login.HasReceived(nevr_evr_codec::kSymLoginFailure));
+  // The substitution is said at Info, with its reason: Debug is off in production.
+  bool saidAtInfo = false;
+  {
+    std::lock_guard<std::mutex> lock(g_testLogMutex);
+    for (const auto& entry : g_testLogLeveled) {
+      if (entry.first == EchoVR::LogLevel::Info &&
+          entry.second.find("the service answered the server's /login with a LoginFailure") != std::string::npos) {
+        saidAtInfo = true;
+      }
+    }
+  }
+  EXPECT_TRUE(saidAtInfo);
 }
 
 // L6: an Unrequire nobody asked for is dropped and counted, not handed to a socket.
@@ -4339,16 +4405,7 @@ TEST_F(RouterAllTest, AnUnrequireNobodyAskedForIsDroppedAndCounted) {
 template <typename Base, BOOL kIsServer>
 class RunModeFixture : public Base {
  protected:
-  void SetUp() override {
-    wasServer_ = g_isServer;
-    g_isServer = kIsServer;
-    Base::SetUp();
-  }
-  void TearDown() override {
-    Base::TearDown();
-    g_isServer = wasServer_;
-  }
-  BOOL wasServer_ = FALSE;
+  bool ServerMode() const override { return kIsServer != FALSE; }
 };
 using ServerRolesByPathTest = RunModeFixture<RolesByPathTest, TRUE>;
 using ServerRouterAllTest = RunModeFixture<RouterAllTest, TRUE>;
@@ -4388,6 +4445,7 @@ static void RoundTripOnTheSession(GameSocket& login) {
 
 // #1280: a server whose login the service accepts subscribes to no friend list (legacy path, the default).
 TEST_F(ServerRolesByPathTest, AServerSendsNoFriendListSubscriptionAfterTheServiceAcceptsItsLogin) {
+  GameFlagScope server(-1, TRUE);  // a server with a credential: without one it stops (#1254)
   remote_.SetLoginReply(nevr_evr_codec::kSymLoginSuccess);
   GameSocket login;
   Admit(login, "/login");
@@ -4398,6 +4456,7 @@ TEST_F(ServerRolesByPathTest, AServerSendsNoFriendListSubscriptionAfterTheServic
 
 // #1280: the same through the router.
 TEST_F(ServerRouterAllTest, AServerSendsNoFriendListSubscriptionAfterTheServiceAcceptsItsLogin) {
+  GameFlagScope server(-1, TRUE);  // a server with a credential: without one it stops (#1254)
   remote_.SetLoginReply(nevr_evr_codec::kSymLoginSuccess);
   GameSocket login;
   Admit(login, "/login");
@@ -4409,6 +4468,7 @@ TEST_F(ServerRouterAllTest, AServerSendsNoFriendListSubscriptionAfterTheServiceA
 // #1280: on a server the runtime's social sender sends nothing, while the self-check sender (its RemoteLogSet is not
 // social) still reaches the service.
 TEST_F(ServerRolesByPathTest, TheRuntimesSocialSenderSendsNothingOnAServer) {
+  GameFlagScope server(-1, TRUE);  // a server with a credential: without one it stops (#1254)
   GameSocket login;
   Admit(login, "/login");
   ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings)) << "the login never reached the service";
@@ -4531,6 +4591,26 @@ std::string BuildLoginFailureFrame(uint64_t declaredPayloadSize, uint64_t status
 }
 
 }  // namespace
+
+TEST_F(SharedRouteLifetimeTest, LoginFailureSendHoldsTheGameSocketAcrossTheSend) {
+  remote_.SetLoginReplyFrame(BuildLoginFailureFrame(24 + 64, 400, std::string(64, 'x')));
+  GameSocket login;
+  Admit(login, "/login");
+  g_weak = TestHook_FirstServiceClientWeak();
+  ASSERT_FALSE(g_weak.expired()) << "the login game socket is not on the service listener";
+
+  SeamGuard guard;
+  TestHook_SharedRoute_SetBeforeSend(&Seam);
+  ASSERT_EQ(g_inSeamFuture.wait_for(kSeamReady), std::future_status::ready)
+      << "the login-failure send never reached the seam";
+
+  login.Disconnect();
+  g_gameClosing.set_value();
+  ASSERT_EQ(g_expiredAtSendFuture.wait_for(kSeamReady), std::future_status::ready) << "the seam never reported";
+  const bool expired = g_expiredAtSendFuture.get();
+  TestHook_SharedRoute_SetBeforeSend(nullptr);
+  EXPECT_FALSE(expired) << "the game socket was freed before the login-failure send";
+}
 
 TEST(SecurityDiagnostics, CapturedResponseSummaryExcludesBodySentinel) {
   ClearTestLogs();
@@ -4820,6 +4900,19 @@ TEST(SecurityDiagnostics, CapturedLoginFailureSummaryExcludesServerMessage) {
   EXPECT_EQ(g_testLogMessages[0].find(kSecret), std::string::npos);
 }
 
+TEST(SecurityDiagnostics, AServersLoginFailureSummaryDoesNotClaimItIsExpectedEveryBoot) {
+  ClearTestLogs();
+  const std::string frame = BuildLoginFailureFrame(24 + 4, 401, "nope");
+
+  EXPECT_TRUE(TestHook_LogLoginFailureDiagnostic(frame, true));
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  ASSERT_EQ(g_testLogMessages.size(), 1U);
+  EXPECT_NE(g_testLogMessages[0].find("login failed status=401"), std::string::npos);
+  EXPECT_NE(g_testLogMessages[0].find("synthesized LoginSuccess"), std::string::npos);
+  EXPECT_NE(g_testLogMessages[0].find("credential is checked at ServerDB registration"), std::string::npos);
+  EXPECT_EQ(g_testLogMessages[0].find("expected every boot"), std::string::npos);
+}
+
 TEST(WsBridgeLoginFailure, DiagnosticUsesDeclaredLengthForConcatenatedFrames) {
   const std::string first = BuildLoginFailureFrame(24 + 4, 502, "nope");
   const std::string second = BuildLoginFailureFrame(24 + 5, 401, "later");
@@ -4881,16 +4974,13 @@ constexpr uint64_t kSuccessSym = 0x6d4de3650ee3110fULL;  // SNSLobbySessionSucce
 constexpr uint64_t kFailureSym = 0x4ae8365ebc45f96cULL;  // SNSLobbySessionFailurev4
 constexpr uint64_t kOvrOrg = 4;
 
-void PutLe(std::string& out, uint64_t value, size_t bytes) {
-  for (size_t i = 0; i < bytes; ++i) out.push_back(static_cast<char>((value >> (8 * i)) & 0xff));
-}
-
-// A GUID as the wire stores it (Windows layout) for the text 44332211-6655-8877-99AA-BBCCDDEEFF<tail>.
-std::string Guid(uint8_t tail) {
-  const uint8_t bytes[16] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
-                             0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, tail};
-  return std::string(reinterpret_cast<const char*>(bytes), sizeof(bytes));
-}
+// The GUID text and the payload builders of the success and failure frames are the golden's
+// (lobby_record_golden.h): one set of bytes for both test suites, so the PC and the Quest records see the same input.
+using lobby_record_golden::FailurePayload;
+using lobby_record_golden::FailureWithMessage;
+using lobby_record_golden::Guid;
+using lobby_record_golden::PutLe;
+using lobby_record_golden::SuccessPayload;
 
 std::string Entrants(const std::vector<uint64_t>& accounts) {
   std::string out;
@@ -4938,28 +5028,23 @@ std::string JoinPayload(const std::vector<uint64_t>& accounts) {
   return out;
 }
 
-std::string SuccessPayload() {
-  std::string out;
-  PutLe(out, kMode, 8);
-  out += Guid(0xc0);                                // lobby
-  out += Guid(0xb0);                                // group
-  out.append(64, '\0');                             // endpoint, flags, keys: not read
-  return out;
-}
-
-std::string FailurePayload(uint32_t code) {
-  std::string out;
-  PutLe(out, kMode, 8);
-  out += Guid(0xb0);                                // group
-  PutLe(out, code, 4);
-  PutLe(out, 0, 4);
-  out += "sentinel-remote-message";
-  out.resize(8 + 16 + 4 + 4 + 64 + 8, '\0');        // message(64) and expiry(8)
-  return out;
-}
-
 uint64_t g_fakeNowMs = 0;
 uint64_t FakeNowMs() { return g_fakeNowMs; }
+
+// The party a session record names (TestHook_SetLobbyPartySource). ClientRun installs a view with no party; a test
+// names the party it reads by setting g_fakePartyView, so no test reads the process-wide party state it did not set.
+nevr_social_party::View g_fakePartyView;
+nevr_social_party::View FakePartyView() { return g_fakePartyView; }
+
+// A view of a party `partyId` of `size` members, led by `ownerId`, with the local account `selfId` (0: not known).
+nevr_social_party::View PartyView(uint64_t partyId, size_t size, uint64_t ownerId, uint64_t selfId) {
+  nevr_social_party::View view;
+  view.partyId = partyId;
+  view.ownerId = ownerId;
+  view.selfId = selfId;
+  view.members.assign(size, nevr_social_party::Member{});
+  return view;
+}
 
 size_t CountLogLines(const std::string& needle) {
   std::lock_guard<std::mutex> lock(g_testLogMutex);
@@ -4967,18 +5052,22 @@ size_t CountLogLines(const std::string& needle) {
                                            [&needle](const std::string& line) { return line.find(needle) != std::string::npos; }));
 }
 
-// A client run: g_isServer false, a fresh lobby-record limiter and a clock the test moves by hand.
+// A client run: g_isServer false, a fresh lobby-record limiter and request tracker, a clock the test moves by hand,
+// and a party with no members (g_fakePartyView) until a test names one.
 class ClientRun {
  public:
   ClientRun() : wasServer_(g_isServer) {
     g_isServer = FALSE;
     g_fakeNowMs = 1000;
+    g_fakePartyView = nevr_social_party::View{};
     TestHook_ResetLobbyFrameLimiter();
     TestHook_SetLobbyFrameClock(&FakeNowMs);
+    TestHook_SetLobbyPartySource(&FakePartyView);
     ClearTestLogs();
   }
   ~ClientRun() {
     g_isServer = wasServer_;
+    TestHook_SetLobbyPartySource(nullptr);
     TestHook_SetLobbyFrameClock(nullptr);
     TestHook_ResetLobbyFrameLimiter();
   }
@@ -4988,6 +5077,34 @@ class ClientRun {
 };
 
 }  // namespace lobby_frame_test
+
+// The records of one scenario, byte for byte (#1429, Rule 16): a find, then a success and a failure that answer it. The
+// same bytes and the same expected text are in lobby_record_golden.h, which the Quest router's test also compares with.
+TEST(WsBridgeLobbyFrameLog, SessionRecordsMatchTheGoldenLines) {
+  using namespace lobby_frame_test;
+  namespace golden = lobby_record_golden;
+  ClientRun run;
+  g_fakePartyView = PartyView(golden::kPartyId, golden::kPartyMembers, golden::kPartyOwner, golden::kPartySelf);
+  g_fakeNowMs = golden::kFindAt;
+  TestHook_ObserveSocialFrames("game->server", golden::kConn,
+                               BuildMarkedMessage(kFindSym, FindPayload({1001}, Guid(0xd0))));
+  g_fakeNowMs = golden::kSuccessAt;
+  TestHook_ObserveSocialFrames("server->game", golden::kConn, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  g_fakeNowMs = golden::kFailureAt;
+  TestHook_ObserveSocialFrames("server->game", golden::kConn, BuildMarkedMessage(kFailureSym, FailurePayload(8)));
+  EXPECT_EQ(LogLinesContaining("lobby session success"), std::vector<std::string>{golden::kSuccessAfterFind});
+  EXPECT_EQ(LogLinesContaining("lobby session failure"), std::vector<std::string>{golden::kFailureAfterSuccess});
+}
+
+// A success with no find sent before it and no party: the request fields and the party fields both read none.
+TEST(WsBridgeLobbyFrameLog, ASessionRecordWithNoRequestAndNoPartyNamesNone) {
+  using namespace lobby_frame_test;
+  namespace golden = lobby_record_golden;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("server->game", golden::kConn, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_EQ(LogLinesContaining("lobby session success"),
+            std::vector<std::string>{golden::kSuccessNoRequestNoParty});
+}
 
 // The bridge cannot bound how often the game sends a join (its party-follow loop runs from the game's own
 // update), so a kind writes a burst of records per window and counts the rest.
@@ -5117,6 +5234,27 @@ TEST(WsBridgeLobbyFrameLog, EveryMessageOfABatchedFrameGetsItsOwnRecord) {
   EXPECT_TRUE(TestLogContains("lobby session success conn=3 lobby="));
 }
 
+// The failure record gives the count of its message's bytes and never the text (logging.md Rule 4 and Rule 16).
+TEST(WsBridgeLobbyFrameLog, AFailureRecordCountsItsMessageAndNeverWritesItsText) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("server->game", 3,
+                               BuildMarkedMessage(kFailureSym, FailureWithMessage(8, "sentinel-remote-message")));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "lobby session failure conn=3 code=8 reason=lobby_full "
+                                     "group=44332211-6655-8877-99AA-BBCCDDEEFFB0 message_bytes=23"));
+  EXPECT_FALSE(TestLogContains("sentinel-remote-message"));
+  ClearTestLogs();
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kFailureSym, FailureWithMessage(8, "")));
+  EXPECT_TRUE(TestLogContains("lobby session failure conn=3 code=8 reason=lobby_full "
+                              "group=44332211-6655-8877-99AA-BBCCDDEEFFB0 message_bytes=0"));
+  ClearTestLogs();
+  TestHook_ObserveSocialFrames("server->game", 3,
+                               BuildMarkedMessage(kFailureSym, FailureWithMessage(8, std::string(80, 'y'))));
+  EXPECT_TRUE(TestLogContains("group=44332211-6655-8877-99AA-BBCCDDEEFFB0 message_bytes=64"));
+  EXPECT_FALSE(TestLogContains("yyyy"));
+}
+
 TEST(WsBridgeLobbyFrameLog, NoRecordCarriesSettingsTextOrTheServersMessage) {
   using namespace lobby_frame_test;
   ClientRun run;
@@ -5164,6 +5302,132 @@ TEST(WsBridgeLobbyFrameLog, AServerGetsNoLobbyRecordFromTheSocialObserver) {
   g_isServer = wasServer;
   std::lock_guard<std::mutex> lock(g_testLogMutex);
   EXPECT_TRUE(g_testLogMessages.empty()) << "first line: " << (g_testLogMessages.empty() ? "" : g_testLogMessages[0]);
+}
+
+// ---- #1413: the party and the request a session record names ----
+//
+// A session success or failure says which party the client is in (party_id, party_size, party_leader) and which
+// find or join the game sent last on this client (last_request, its age at the answer, request_outstanding: yes only
+// for the first answer to that request). Every answer is taken by the request tracker, also one whose record the
+// limiter suppresses, so the next record's "outstanding" is the same as it would be with no suppression.
+TEST(WsBridgeLobbyFrameLog, ASessionSuccessNamesThePartyAndTheFindItAnswers) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  g_fakePartyView = PartyView(7, 3, 100, 100);
+  g_fakeNowMs = 1000;
+  TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kFindSym, FindPayload({1001}, Guid(0xd0))));
+  g_fakeNowMs = 1250;
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "[NEVR.WS] lobby session success conn=3 lobby=44332211-6655-8877-99AA-BBCCDDEEFFC0 "
+      "group=44332211-6655-8877-99AA-BBCCDDEEFFB0 party_id=7 party_size=3 party_leader=yes "
+      "last_request=find last_request_age_ms=250 request_outstanding=yes"));
+}
+
+TEST(WsBridgeLobbyFrameLog, ASessionFailureOutsideAPartyWithNoRequestSaysSo) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kFailureSym, FailureWithMessage(8, "")));
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "[NEVR.WS] lobby session failure conn=3 code=8 reason=lobby_full group=44332211-6655-8877-99AA-BBCCDDEEFFB0 "
+      "message_bytes=0 party_id=none party_size=0 party_leader=no last_request=none last_request_age_ms=none "
+      "request_outstanding=no"));
+}
+
+TEST(WsBridgeLobbyFrameLog, ThePartyLeaderIsUnknownWhileTheLocalAccountIsNotKnown) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  g_fakePartyView = PartyView(7, 1, 100, 0);
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info, "party_id=7 party_size=1 party_leader=unknown "));
+}
+
+TEST(WsBridgeLobbyFrameLog, AMemberOfAPartyLedByAnotherAccountIsNotItsLeader) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  g_fakePartyView = PartyView(7, 2, 77, 100);
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kFailureSym, FailureWithMessage(8, "")));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "party_id=7 party_size=2 party_leader=no last_request=none "));
+}
+
+TEST(WsBridgeLobbyFrameLog, OnlyTheFirstAnswerToARequestIsOutstanding) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  g_fakePartyView = PartyView(7, 2, 77, 100);
+  g_fakeNowMs = 1000;
+  TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1001})));
+  g_fakeNowMs = 1100;
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "last_request=join last_request_age_ms=100 request_outstanding=yes"));
+  ClearTestLogs();
+  g_fakeNowMs = 1200;
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kFailureSym, FailureWithMessage(8, "")));
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "lobby session failure conn=3 code=8 reason=lobby_full group=44332211-6655-8877-99AA-BBCCDDEEFFB0 "
+      "message_bytes=0 party_id=7 party_size=2 party_leader=no last_request=join last_request_age_ms=200 "
+      "request_outstanding=no"));
+}
+
+// The success window holds ten records; the eleventh answer is suppressed, and it still takes the outstanding request.
+// The next written record shows the request as already answered, and the window's count is written before it.
+TEST(WsBridgeLobbyFrameLog, ASuppressedAnswerStillTakesTheRequestItAnswers) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  g_fakePartyView = PartyView(7, 2, 77, 100);
+  g_fakeNowMs = 1000;
+  for (int i = 0; i < 10; ++i) {
+    TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  }
+  EXPECT_EQ(CountLogLines("lobby session success"), 10U);
+  g_fakeNowMs = 1100;
+  TestHook_ObserveSocialFrames("game->server", 3, BuildMarkedMessage(kJoinSym, JoinPayload({1001})));
+  g_fakeNowMs = 1200;
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_EQ(CountLogLines("lobby session success"), 10U) << "the eleventh answer is suppressed";
+  g_fakeNowMs = 11200;
+  ClearTestLogs();
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "[NEVR.WS] lobby frame records suppressed kind=success count=1 window_ms=10000"));
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "lobby session success conn=3 lobby=44332211-6655-8877-99AA-BBCCDDEEFFC0 "
+      "group=44332211-6655-8877-99AA-BBCCDDEEFFB0 party_id=7 party_size=2 party_leader=no "
+      "last_request=join last_request_age_ms=10100 request_outstanding=no"));
+}
+
+TEST(WsBridgeLobbyFrameLog, ARequestFromAnEarlierRunIsNotNamedInANewRun) {
+  using namespace lobby_frame_test;
+  {
+    ClientRun earlier;
+    TestHook_ObserveSocialFrames("game->server", 2, BuildMarkedMessage(kFindSym, FindPayload({1001}, Guid(0xd0))));
+  }
+  ClientRun run;
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "last_request=none last_request_age_ms=none request_outstanding=no"));
+}
+
+// The party read when no test has set a view is the process-wide party state (TestHook_SetLobbyPartySource(nullptr)).
+TEST(WsBridgeLobbyFrameLog, TheLocalPartyStateIsReadWhenTheAnswerIsWritten) {
+  using namespace lobby_frame_test;
+  ClientRun run;
+  TestHook_SetLobbyPartySource(nullptr);
+  nevr_social_party::State& state = nevr_social_party::Global();
+  state.SetSelf(4001);
+  std::string created;
+  PutLe(created, 42, 8);    // party id
+  PutLe(created, 4001, 8);  // owner: the local account
+  EXPECT_TRUE(state.Feed(nevr_social_party::ReplySymbol("PartyCreateSuccess"),
+                         reinterpret_cast<const uint8_t*>(created.data()), created.size(), 1000, nullptr));
+  TestHook_ObserveSocialFrames("server->game", 3, BuildMarkedMessage(kSuccessSym, SuccessPayload()));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "party_id=42 party_size=1 party_leader=yes last_request=none"));
 }
 
 // The game->server diagnostic walk decodes payloads (hex dump, invite targets). A message whose declared
@@ -6247,7 +6511,7 @@ struct XpidBaseScope {
         EchoVR::g_GameBaseAddress = base;
         g_bootHookFailed = false;
         g_bootHookFailedCause[0] = '\0';
-        g_serverFatalCalls = 0;
+        ResetServerFatal();
     }
     ~XpidBaseScope() {
         EchoVR::g_GameBaseAddress = saved;
@@ -6287,7 +6551,7 @@ TEST(XpidPatchBoot, ARecognisedImageIsPatchedAndBootContinues) {
         PatchDscProvider();
         EXPECT_FALSE(g_bootHookFailed) << "a healthy image must not mark the boot failed";
         EXPECT_STREQ(g_bootHookFailedCause, "") << "a healthy image records no failure cause";
-        EXPECT_EQ(g_serverFatalCalls, 0);
+        EXPECT_EQ(ServerFatalCalls(), 0);
     }
     for (const auto& site : kXpidSites) {
         EXPECT_EQ(memcmp(base + site.rva, site.patched, 4), 0) << "site rva=0x" << std::hex << site.rva;
@@ -6304,7 +6568,7 @@ TEST(XpidPatchBoot, AnImageWithUnexpectedBytesFailsTheBootThroughTheFlagNotServe
         XpidBaseScope scope(base);
         PatchDscProvider();
         EXPECT_TRUE(g_bootHookFailed) << "a validation failure must reach boot.cpp's server check";
-        EXPECT_EQ(g_serverFatalCalls, 0)
+        EXPECT_EQ(ServerFatalCalls(), 0)
             << "ServerFatal runs before the CLI is parsed, where it only warns; the flag is the signal";
     }
     // Nothing is half-patched: validation happens before any write.
@@ -6329,7 +6593,7 @@ TEST(XpidPatchBoot, AFailedWriteFailsTheBootThroughTheFlagNotServerFatal) {
         PatchDscProvider();
         EXPECT_TRUE(g_bootHookFailed) << "a failed patch write must reach boot.cpp's server check";
         EXPECT_STREQ(g_bootHookFailedCause, "XPID provider-string patch write failed");
-        EXPECT_EQ(g_serverFatalCalls, 0);
+        EXPECT_EQ(ServerFatalCalls(), 0);
     }
     EXPECT_EQ(memcmp(readOnly + nevr_patch_addresses::XPID_PLATFORM_SHORT_NAME, "PSN", 4), 0);
     UnmapViewOfFile(readOnly);
@@ -6408,7 +6672,7 @@ TEST(XpidPrefixDetourBoot, AFailedDetourFailsTheBootThroughTheFlagAndNamesItself
         EXPECT_TRUE(g_bootHookFailed) << "a failed OVR-ORG detour must reach boot.cpp's server check";
         EXPECT_EQ(std::string(g_bootHookFailedCause).rfind("XPID GetProviderPrefix detour failed", 0), 0u)
             << "boot.cpp's ServerFatal prints this: it must name the detour, was '" << g_bootHookFailedCause << "'";
-        EXPECT_EQ(g_serverFatalCalls, 0)
+        EXPECT_EQ(ServerFatalCalls(), 0)
             << "ServerFatal runs before the CLI is parsed, where it only warns; the flag is the signal";
         written = tee.Output();
     }
@@ -6475,4 +6739,443 @@ TEST(CliOptionValue, NothingAfterTheOptionIsNoValue) {
     wchar_t* argv[] = {exe, flag, beyond};  // a token sits past argc: a lookahead that ignores argc finds it
     EXPECT_EQ(nevr_cli::OptionValue(2, argv, 1), nullptr);
     EXPECT_EQ(nevr_cli::OptionValue(2, nullptr, 1), nullptr);
+}
+
+// ============================================================================
+// #1254: what a refused login does. A server with no credential, or one the service refuses, stops through
+// ServerFatal with the cause and never sends account 0 or connects unauthenticated; a client says a refusal
+// once and does not go back to the service for the same sign-in. compat/login_refusal.h holds the decisions
+// (test_login_refusal); these drive them through the real bridge, the legacy rules and the router.
+// ============================================================================
+
+namespace {
+
+// A community service that refuses every upgrade with `status`, and counts the requests it refused. ix::HttpServer
+// cannot stand in: it hands a websocket upgrade to its websocket path, which accepts it.
+class RefusingServer final : public ix::SocketServer {
+ public:
+  RefusingServer(int port, int status, std::atomic<int>& requests)
+      : ix::SocketServer(port, "127.0.0.1"), status_(status), requests_(requests) {}
+  ~RefusingServer() override { stop(); }
+
+ private:
+  void handleConnection(std::unique_ptr<ix::Socket> socket, std::shared_ptr<ix::ConnectionState> state) override {
+    const auto never = [] { return false; };
+    bool first = true;
+    for (;;) {  // the request head, up to its blank line
+      const auto [ok, line] = socket->readLine(never);
+      if (!ok) break;
+      if (first) {
+        ++requests_;
+        first = false;
+      }
+      if (line == "\r\n" || line == "\n") break;
+    }
+    socket->writeBytes("HTTP/1.1 " + std::to_string(status_) +
+                           " Refused\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                       never);
+    socket->close();
+    state->setTerminated();
+  }
+  size_t getConnectedClientsCount() override { return 0; }
+
+  int status_;
+  std::atomic<int>& requests_;
+};
+
+class RefusingService {
+ public:
+  bool Start(int status) {
+    std::random_device device;
+    std::mt19937 generator(device());
+    std::uniform_int_distribution<int> ports(49152, 65535);
+    for (int attempt = 0; attempt < 20; ++attempt) {
+      const int port = ports(generator);
+      server_ = std::make_unique<RefusingServer>(port, status, requests_);
+      if (server_->listen().first) {
+        port_ = port;
+        server_->start();
+        return true;
+      }
+    }
+    server_.reset();
+    return false;
+  }
+  void Stop() {
+    if (server_) server_->stop();
+    server_.reset();
+  }
+  std::string Uri() const { return "ws://127.0.0.1:" + std::to_string(port_) + "/"; }
+  int Requests() const { return requests_.load(); }
+
+ private:
+  std::atomic<int> requests_{0};
+  std::unique_ptr<RefusingServer> server_;
+  int port_ = 0;
+};
+
+class RefusedLoginTest : public ::testing::Test {
+ protected:
+  virtual const char* RouterMode() const { return nullptr; }
+  virtual bool ServerRun() const { return true; }
+  void SetUp() override {
+    ix::initNetSystem();
+    TestHook_N61_ResetState();
+    ClearTestLogs();
+    g_testRouterMode = RouterMode();
+    wasServer_ = g_isServer;
+    g_isServer = ServerRun() ? TRUE : FALSE;
+    ResetServerFatal();
+    LastServerFatal().clear();
+    g_testDiscordId = nullptr;
+    g_testPassword = nullptr;
+  }
+  void TearDown() override {
+    if (HasFailure()) {
+      // The bridge's own lines are the evidence of a failed run (they are otherwise swallowed by the Log stub).
+      std::lock_guard<std::mutex> lock(g_testLogMutex);
+      for (const std::string& line : g_testLogMessages) fprintf(stderr, "[bridge log] %s\n", line.c_str());
+    }
+    EXPECT_TRUE(YieldUntil([] { return TestHook_ConnectedGameSockets() == 0; }));
+    StopWebSocketBridgeListener();
+    TestHook_SetRouterGate(-1);
+    TestHook_SetRefuseRemoteOpens(false);
+    g_testRouterMode = nullptr;
+    g_testDiscordId = nullptr;
+    g_testPassword = nullptr;
+    g_isServer = wasServer_;
+    TestHook_N61_ResetState();
+    SetWebSocketBridgeTarget("");
+    refusing_.Stop();
+    if (accepting_started_) {
+      EXPECT_TRUE(accepting_.WaitForNoClients());
+      accepting_.Stop();
+    }
+  }
+  void StartBridgeTo(const std::string& remoteUri) {
+    SetWebSocketBridgeTarget(remoteUri.c_str());
+    InstallWebSocketBridge();
+    port_ = GetWebSocketBridgePort();
+    ASSERT_NE(port_, 0);
+  }
+  void StartRefusing(int status) {
+    ASSERT_TRUE(refusing_.Start(status));
+    StartBridgeTo(refusing_.Uri());
+  }
+  void StartAccepting() {
+    ASSERT_TRUE(accepting_.Start());
+    accepting_started_ = true;
+    StartBridgeTo(accepting_.Uri());
+  }
+  void GiveTheServerACredential() {
+    g_testDiscordId = kTestAccountIdText.c_str();
+    g_testPassword = "test-password";
+  }
+  static bool WaitForServerFatal() { return YieldUntil([] { return ServerFatalCalls() >= 1; }); }
+
+  RemoteService accepting_;
+  RefusingService refusing_;
+  bool accepting_started_ = false;
+  BOOL wasServer_ = TRUE;
+  uint16_t port_ = 0;
+};
+
+class RefusedLoginRouterTest : public RefusedLoginTest {
+ protected:
+  const char* RouterMode() const override { return "all"; }
+};
+
+class RefusedLoginClientTest : public RefusedLoginTest {
+ protected:
+  bool ServerRun() const override { return false; }
+};
+
+// The token the bridge reads as the client's sign-in (TokenAuth_GetToken, which token-auth registers in production).
+const char* g_testToken = nullptr;
+const char* TestTokenFn() { return g_testToken; }
+
+class RefusedLoginRouterClientTest : public RefusedLoginTest {
+ protected:
+  const char* RouterMode() const override { return "all"; }
+  bool ServerRun() const override { return false; }
+};
+
+// A server with no credential: it stops with the cause before any connection to the service, and never sends
+// the LoginRequest (account 0, unauthenticated) that it used to.
+void ExpectNoCredentialServerStops(RemoteService& service, uint16_t port) {
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port, "/login"));
+  ASSERT_TRUE(YieldUntil([] { return ServerFatalCalls() >= 1; })) << "the server did not stop";
+  EXPECT_EQ(ServerFatalCalls(), 1) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("server login refused"), std::string::npos) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("identity.discord_id"), std::string::npos) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("auth.password"), std::string::npos) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("test config"), std::string::npos) << LastServerFatal();
+  EXPECT_TRUE(login.WaitForClose()) << "the game's login socket was left open";
+  EXPECT_EQ(service.Opens(), 0) << "the server connected to the service without a credential";
+  EXPECT_EQ(service.LoginRequests(), 0) << "the server sent a LoginRequest without a credential";
+}
+
+// A server whose credential the service refuses: it stops with the status and the config.
+void ExpectRefusedServerStops(RefusingService& service, uint16_t port, int status) {
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port, "/login"));
+  ASSERT_TRUE(YieldUntil([] { return ServerFatalCalls() >= 1; })) << "the server did not stop";
+  EXPECT_EQ(ServerFatalCalls(), 1) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("server login refused"), std::string::npos) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("HTTP " + std::to_string(status)), std::string::npos) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("test config"), std::string::npos) << LastServerFatal();
+  EXPECT_GE(service.Requests(), 1);
+}
+
+// A client says the refusal once, and the next login socket of the same sign-in does not go back to the service.
+void ExpectClientSaysRefusalOnce(RefusingService& service, uint16_t port) {
+  GameSocket first;
+  ASSERT_TRUE(first.Connect(port, "/login"));
+  ASSERT_TRUE(first.WaitForClose()) << "the refused login socket was left open";
+  ASSERT_TRUE(WaitForLogLines("login refused (HTTP 401)", 1));
+  EXPECT_EQ(service.Requests(), 1);
+  GameSocket second;
+  ASSERT_TRUE(second.Connect(port, "/login"));
+  ASSERT_TRUE(second.WaitForClose()) << "the next login socket was left open";
+  EXPECT_EQ(service.Requests(), 1) << "the client went back to the service with a sign-in it was refused for";
+  EXPECT_EQ(LogLinesContaining("login refused (HTTP").size(), 1u) << "the refusal was said more than once";
+  EXPECT_EQ(ServerFatalCalls(), 0) << "a client must not stop";
+}
+
+}  // namespace
+
+TEST_F(RefusedLoginTest, AServerWithNoCredentialStopsWithTheCauseAndNeverConnects) {
+  StartAccepting();
+  ExpectNoCredentialServerStops(accepting_, port_);
+}
+
+TEST_F(RefusedLoginRouterTest, AServerWithNoCredentialStopsWithTheCauseAndNeverConnects) {
+  StartAccepting();
+  ExpectNoCredentialServerStops(accepting_, port_);
+}
+
+// #1532: a discord id without a password is no longer a missing key: the server signs in by device code, and with no
+// token from it the stop names the sign-in, not a key.
+TEST_F(RefusedLoginTest, AServerWithOnlyADiscordIdAndNoSignInStopsAsAServerWithNoSignIn) {
+  StartAccepting();
+  g_testDiscordId = kTestAccountIdText.c_str();
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port_, "/login"));
+  ASSERT_TRUE(YieldUntil([] { return ServerFatalCalls() >= 1; }));
+  EXPECT_NE(LastServerFatal().find("device sign-in ended without a token"), std::string::npos) << LastServerFatal();
+  EXPECT_EQ(LastServerFatal().find("missing auth.password"), std::string::npos) << LastServerFatal();
+  EXPECT_EQ(accepting_.Opens(), 0);
+}
+
+// The password path keeps its rule: a password with no discord id names the discord id.
+TEST_F(RefusedLoginTest, AServerWithAPasswordAndNoDiscordIdNamesJustTheDiscordId) {
+  StartAccepting();
+  g_testPassword = "test-password";
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port_, "/login"));
+  ASSERT_TRUE(YieldUntil([] { return ServerFatalCalls() >= 1; }));
+  EXPECT_NE(LastServerFatal().find("missing identity.discord_id)"), std::string::npos) << LastServerFatal();
+  EXPECT_EQ(LastServerFatal().find("missing identity.discord_id, auth.password"), std::string::npos)
+      << LastServerFatal();
+  EXPECT_EQ(accepting_.Opens(), 0);
+}
+
+// #1532: no password, but the device sign-in produced a token: the server presents it like a client and is not stopped.
+void ExpectDeviceSignInServerConnects(RemoteService& service, uint16_t port) {
+  RegisterModuleProc("TokenAuth_GetToken", reinterpret_cast<void*>(&TestTokenFn));
+  g_testToken = "device-sign-in-token";
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port, "/login"));
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings));
+  EXPECT_EQ(ServerFatalCalls(), 0) << LastServerFatal();
+  EXPECT_EQ(service.LoginRequests(), 1);
+  g_testToken = nullptr;
+}
+
+TEST_F(RefusedLoginTest, AServerWithNoPasswordAndADeviceTokenConnectsAndIsNotStopped) {
+  StartAccepting();
+  ExpectDeviceSignInServerConnects(accepting_, port_);
+}
+
+TEST_F(RefusedLoginRouterTest, AServerWithNoPasswordAndADeviceTokenConnectsAndIsNotStopped) {
+  StartAccepting();
+  ExpectDeviceSignInServerConnects(accepting_, port_);
+}
+
+// A device token the service refuses stops the server with a cause that does not send the operator to the password keys.
+TEST_F(RefusedLoginTest, AServerWhoseDeviceTokenTheServiceRefusesStopsWithoutBlamingThePasswordKeys) {
+  RegisterModuleProc("TokenAuth_GetToken", reinterpret_cast<void*>(&TestTokenFn));
+  g_testToken = "device-sign-in-token";
+  StartRefusing(401);
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port_, "/login"));
+  ASSERT_TRUE(YieldUntil([] { return ServerFatalCalls() >= 1; })) << "the server did not stop";
+  EXPECT_NE(LastServerFatal().find("device sign-in token"), std::string::npos) << LastServerFatal();
+  EXPECT_NE(LastServerFatal().find("HTTP 401"), std::string::npos) << LastServerFatal();
+  EXPECT_EQ(LastServerFatal().find("check identity.discord_id"), std::string::npos) << LastServerFatal();
+  g_testToken = nullptr;
+}
+
+TEST_F(RefusedLoginTest, AServerWithACredentialConnectsAndIsNotStopped) {
+  StartAccepting();
+  GiveTheServerACredential();
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port_, "/login"));
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings));
+  EXPECT_EQ(ServerFatalCalls(), 0) << LastServerFatal();
+  EXPECT_EQ(accepting_.LoginRequests(), 1);
+}
+
+TEST_F(RefusedLoginClientTest, AClientWithNoCredentialIsNotStoppedByTheServerRule) {
+  StartAccepting();
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port_, "/login"));
+  ASSERT_TRUE(YieldUntil([&] { return accepting_.Opens() >= 1; })) << "a client was kept from connecting";
+  EXPECT_EQ(ServerFatalCalls(), 0) << LastServerFatal();
+}
+
+TEST_F(RefusedLoginTest, AServerWhoseCredentialTheServiceRefusesStopsWithTheStatus) {
+  GiveTheServerACredential();
+  StartRefusing(401);
+  ExpectRefusedServerStops(refusing_, port_, 401);
+}
+
+TEST_F(RefusedLoginRouterTest, AServerWhoseCredentialTheServiceRefusesStopsWithTheStatus) {
+  GiveTheServerACredential();
+  StartRefusing(403);
+  ExpectRefusedServerStops(refusing_, port_, 403);
+}
+
+TEST_F(RefusedLoginTest, AnOutageIsNotARefusalAndDoesNotStopTheServer) {
+  GiveTheServerACredential();
+  StartRefusing(503);
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port_, "/login"));
+  ASSERT_TRUE(login.WaitForClose());
+  EXPECT_GE(refusing_.Requests(), 1);
+  EXPECT_EQ(ServerFatalCalls(), 0) << LastServerFatal();
+}
+
+TEST_F(RefusedLoginClientTest, AClientSaysARefusalOnceAndDoesNotGoBackForTheSameSignIn) {
+  StartRefusing(401);
+  ExpectClientSaysRefusalOnce(refusing_, port_);
+}
+
+// A refusal is held against the sign-in that was refused, not against the client: another sign-in is tried.
+void ExpectADifferentSignInIsTriedAgain(RefusingService& service, uint16_t port) {
+  RegisterModuleProc("TokenAuth_GetToken", reinterpret_cast<void*>(&TestTokenFn));
+  g_testToken = "sign-in-A";
+  GameSocket first;
+  ASSERT_TRUE(first.Connect(port, "/login"));
+  ASSERT_TRUE(first.WaitForClose());
+  ASSERT_TRUE(WaitForLogLines("login refused (HTTP 401)", 1));
+  g_testToken = "sign-in-B";
+  GameSocket second;
+  ASSERT_TRUE(second.Connect(port, "/login"));
+  ASSERT_TRUE(second.WaitForClose());
+  ASSERT_TRUE(WaitForLogLines("login refused (HTTP 401)", 2)) << "a new sign-in's refusal was not said";
+  EXPECT_EQ(service.Requests(), 2) << "a sign-in that was not refused before was not tried";
+  g_testToken = nullptr;
+}
+
+TEST_F(RefusedLoginClientTest, ADifferentSignInAfterARefusalIsTriedAgainAndSaidAgain) {
+  StartRefusing(401);
+  ExpectADifferentSignInIsTriedAgain(refusing_, port_);
+}
+
+TEST_F(RefusedLoginRouterClientTest, ADifferentSignInAfterARefusalIsTriedAgainAndSaidAgain) {
+  StartRefusing(401);
+  ExpectADifferentSignInIsTriedAgain(refusing_, port_);
+}
+
+TEST_F(RefusedLoginClientTest, ALoginAfterARefusedOneIsStillALoginNotAShareOfNothing) {
+  StartRefusing(401);
+  GameSocket first;
+  ASSERT_TRUE(first.Connect(port_, "/login"));
+  ASSERT_TRUE(first.WaitForClose());
+  ASSERT_TRUE(WaitForLogLines("login refused (HTTP 401)", 1));
+  GameSocket second;
+  ASSERT_TRUE(second.Connect(port_, "/login"));
+  ASSERT_TRUE(second.WaitForClose());
+  // The second socket is refused without a trip to the service; the slot it took must go back too, or the third
+  // /login is taken for a share of a login session that does not exist.
+  GameSocket third;
+  ASSERT_TRUE(third.Connect(port_, "/login"));
+  ASSERT_TRUE(third.WaitForClose());
+  const std::vector<std::string> admitted = LogLinesContaining("game socket admitted");
+  ASSERT_EQ(admitted.size(), 3u);
+  for (size_t i = 1; i < admitted.size(); ++i) {
+    EXPECT_NE(admitted[i].find("role=login"), std::string::npos) << admitted[i];
+    EXPECT_EQ(admitted[i].find("login-claimed"), std::string::npos) << admitted[i];
+  }
+}
+
+TEST_F(RefusedLoginRouterClientTest, AClientSaysARefusalOnceAndDoesNotGoBackForTheSameSignIn) {
+  StartRefusing(401);
+  ExpectClientSaysRefusalOnce(refusing_, port_);
+}
+
+// #1446: once a client's sign-in has ended without a token, nothing the service says can change it, so the bridge
+// answers the game's login itself: the game gets a LoginFailure, the service is not asked and the socket stays open.
+namespace {
+bool g_testSignInEndedWithoutToken = false;
+bool TestSignInEndedWithoutToken() { return g_testSignInEndedWithoutToken; }
+
+// The sign-in state for one test. Cleared when the test ends, so no later test sees an ended sign-in.
+class SignInEndedForTest {
+ public:
+  SignInEndedForTest() {
+    RegisterModuleProc("TokenAuth_SignInEndedWithoutToken", reinterpret_cast<void*>(&TestSignInEndedWithoutToken));
+    g_testSignInEndedWithoutToken = true;
+  }
+  ~SignInEndedForTest() { g_testSignInEndedWithoutToken = false; }
+  SignInEndedForTest(const SignInEndedForTest&) = delete;
+  SignInEndedForTest& operator=(const SignInEndedForTest&) = delete;
+};
+}  // namespace
+
+TEST_F(RefusedLoginClientTest, AClientWhoseSignInEndedWithoutATokenGetsALoginFailureAndTheServiceIsNotAsked) {
+  StartRefusing(401);
+  SignInEndedForTest ended;
+  GameSocket login;
+  ASSERT_TRUE(login.Connect(port_, "/login"));
+  ASSERT_TRUE(login.WaitForFrames(1)) << "the game got no answer to its login";
+  const std::optional<nevr_evr_codec::LoginFailure> failure =
+      nevr_evr_codec::ParseLoginFailure(login.FrameWith(nevr_evr_codec::kSymLoginFailure));
+  ASSERT_TRUE(failure.has_value()) << "the answer is not a LoginFailure";
+  EXPECT_EQ(failure->statusCode, 7u);
+  EXPECT_EQ(refusing_.Requests(), 0) << "the service was asked about a sign-in that had ended";
+  std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+  EXPECT_FALSE(login.Closed()) << "the bridge closed the login socket, and the game's reconnects are the loop";
+}
+
+TEST_F(RefusedLoginClientTest, ALaterLoginAfterAnEndedSignInIsAnsweredTheSameWayAndSaidOnce) {
+  StartRefusing(401);
+  SignInEndedForTest ended;
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    GameSocket login;
+    ASSERT_TRUE(login.Connect(port_, "/login")) << "attempt " << attempt;
+    ASSERT_TRUE(login.WaitForFrames(1)) << "attempt " << attempt;
+  }
+  EXPECT_EQ(refusing_.Requests(), 0);
+  EXPECT_EQ(LogLinesContaining("login answered locally").size(), 1u) << "the decision was said more than once";
+  EXPECT_EQ(LogLinesContaining("login attempts answered locally").size(), 0u)
+      << "a later attempt inside the window is counted, not written";
+  EXPECT_LE(LogLinesContaining("No discord ID").size(), 1u) << "the discord id line repeats on every attempt";
+  const std::vector<std::string> admitted = LogLinesContaining("game socket admitted");
+  ASSERT_EQ(admitted.size(), 3u);
+  for (const std::string& line : admitted) {
+    EXPECT_NE(line.find("role=login"), std::string::npos) << line;
+    EXPECT_EQ(line.find("login-claimed"), std::string::npos) << line;
+  }
+}
+
+TEST_F(RefusedLoginClientTest, AConfigSocketIsNotAnsweredHereAndStillGoesToTheService) {
+  StartRefusing(401);
+  SignInEndedForTest ended;
+  GameSocket config;
+  ASSERT_TRUE(config.Connect(port_, "/config"));
+  ASSERT_TRUE(config.WaitForClose()) << "the refused config socket was left open";
+  EXPECT_EQ(refusing_.Requests(), 1) << "the config socket was not sent to the service";
 }

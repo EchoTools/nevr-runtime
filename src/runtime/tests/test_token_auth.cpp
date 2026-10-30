@@ -637,6 +637,110 @@ TEST(DeviceAuthFlow, ServerRefusesBeforeAnyHttpBrowserUiOrPollOperation) {
   EXPECT_EQ(fake.save_calls, 0);
 }
 
+// ---- #1532: a server with no auth.password signs in by device code ----------------------------------------
+
+// The same flow a client runs, in server mode: the code is requested, shown once through the presenter, the poll
+// answers verified, the token is kept and the refresh token saved. No browser box is raised for a host with no screen.
+TEST(DeviceAuthFlow, AServerWithNoPasswordRunsTheFlowAndKeepsTheToken) {
+  FakeDeviceAuthFlow fake;
+  fake.poll_response = VerifiedPollResponse();
+  auto ops = fake.Ops();
+  ops.server_sign_in = true;
+  const auto result = nevr_token_auth::test_hook::RunDeviceAuthFlow(true, ExistingDeviceAuthState(), ops);
+
+  EXPECT_TRUE(result.success);
+  EXPECT_EQ(result.state.refresh_token, "new-refresh");
+  EXPECT_EQ(fake.request_calls, 1);
+  EXPECT_EQ(fake.ui_calls, 0);
+  EXPECT_EQ(fake.save_calls, 1);
+  ASSERT_EQ(fake.issued.size(), 1U);
+  EXPECT_EQ(fake.issued[0].first, fake.code);
+  ASSERT_EQ(fake.ends.size(), 1U);
+  EXPECT_EQ(fake.ends[0], nevr::auth::FlowEnd::Verified);
+}
+
+// The password path: a server that has one never asks for a code (the default of the hook's flag is the refusal).
+TEST(DeviceAuthFlow, AServerWithAPasswordStillRunsNoFlow) {
+  FakeDeviceAuthFlow fake;
+  fake.poll_response = VerifiedPollResponse();
+  const auto result = nevr_token_auth::test_hook::RunDeviceAuthFlow(true, ExistingDeviceAuthState(), fake.Ops());
+  EXPECT_FALSE(result.success);
+  EXPECT_EQ(fake.request_calls, 0);
+  EXPECT_TRUE(fake.issued.empty());
+}
+
+TEST(ServerSignInPrompt, TheConsoleLineCarriesTheCodeTheFullPageAndTheExpiry) {
+  const std::string line = nevr_token_auth::ServerSignInPromptLine("K7RX", "https://echovrce.com/device");
+  const nlohmann::json parsed = nlohmann::json::parse(line);
+  EXPECT_EQ(parsed.at("tag"), "NEVR.AUTH");
+  EXPECT_EQ(parsed.at("event"), "server_sign_in_code");
+  EXPECT_EQ(parsed.at("code"), "K7RX");
+  EXPECT_EQ(parsed.at("url"), "https://echovrce.com/device?code=K7RX");
+  EXPECT_EQ(parsed.at("expires_in_s"), 300);
+  EXPECT_NE(parsed.at("msg").get<std::string>().find("K7RX"), std::string::npos);
+  EXPECT_EQ(line.find('\n'), std::string::npos);
+}
+
+namespace {
+struct RenewHarness {
+  std::vector<nevr::auth::FlowEnd> script;  // what each attempt does, in order; the last is repeated
+  size_t attempts = 0;
+  std::vector<FlowClock::duration> sleeps;
+  std::vector<std::pair<nevr::auth::LogLevel, std::string>> logs;
+  nevr::auth::RenewPolicy policy;
+
+  bool Run() {
+    return nevr::auth::RunUntilApproved(
+        [this]() {
+          const nevr::auth::FlowEnd end = script[std::min(attempts, script.size() - 1)];
+          ++attempts;
+          nevr::auth::SignInAttempt attempt;
+          attempt.verified = end == nevr::auth::FlowEnd::Verified;
+          attempt.end = end;
+          return attempt;
+        },
+        [this](FlowClock::duration d) { sleeps.push_back(d); },
+        [this](nevr::auth::LogLevel level, const std::string& message) { logs.emplace_back(level, message); }, policy);
+  }
+};
+}  // namespace
+
+// A code that runs out is not the end of the wait: the server asks for a fresh one, as long as the host takes.
+TEST(ServerSignInWait, ACodeThatRunsOutIsReplacedUntilTheHostApproves) {
+  RenewHarness h;
+  h.script = {nevr::auth::FlowEnd::TimedOut, nevr::auth::FlowEnd::CodeExpired, nevr::auth::FlowEnd::TimedOut,
+              nevr::auth::FlowEnd::TimedOut, nevr::auth::FlowEnd::TimedOut, nevr::auth::FlowEnd::Verified};
+  EXPECT_TRUE(h.Run());
+  EXPECT_EQ(h.attempts, 6U);
+  EXPECT_TRUE(h.sleeps.empty());
+}
+
+// A service that does not answer ends the wait after the policy's failures in a row, with a pause between tries; an
+// expiry in between resets the count.
+TEST(ServerSignInWait, ASilentServiceEndsTheWaitAfterTheFailureLimit) {
+  RenewHarness h;
+  h.script = {nevr::auth::FlowEnd::NoCode};
+  EXPECT_FALSE(h.Run());
+  EXPECT_EQ(h.attempts, 3U);
+  EXPECT_EQ(h.sleeps.size(), 2U);
+  EXPECT_EQ(h.logs.back().first, nevr::auth::LogLevel::Error);
+}
+
+TEST(ServerSignInWait, AnExpiryBetweenFailuresResetsTheCount) {
+  RenewHarness h;
+  h.script = {nevr::auth::FlowEnd::NoCode, nevr::auth::FlowEnd::NoCode, nevr::auth::FlowEnd::TimedOut,
+              nevr::auth::FlowEnd::NoCode, nevr::auth::FlowEnd::Verified};
+  EXPECT_TRUE(h.Run());
+  EXPECT_EQ(h.attempts, 5U);
+}
+
+TEST(ServerSignInWait, ACancelledWaitIsNotRetried) {
+  RenewHarness h;
+  h.script = {nevr::auth::FlowEnd::Cancelled};
+  EXPECT_FALSE(h.Run());
+  EXPECT_EQ(h.attempts, 1U);
+}
+
 // ---- #397: what the player is shown while sign-in is pending ----------------------------------------
 
 namespace {
@@ -673,10 +777,31 @@ TEST(SignInDialogText, EveryEndingSaysWhichOneAndDropsTheCode) {
     EXPECT_EQ(c.closes_by_itself, end == FlowEnd::Verified || end == FlowEnd::Cancelled);
   }
   std::sort(seen.begin(), seen.end());
-  // Expired and timed out read the same on purpose: both are "get a new code".
-  EXPECT_EQ(std::unique(seen.begin(), seen.end()) - seen.begin(), 6);
+  // Every ending reads differently: a timeout names itself, and an expired code names the code.
+  EXPECT_EQ(std::unique(seen.begin(), seen.end()) - seen.begin(), 7);
   EXPECT_EQ(nevr::auth::SignInEndedContent(FlowEnd::Verified).instruction, "Signed in. Starting Echo VR.");
   EXPECT_NE(nevr::auth::SignInEndedContent(FlowEnd::CodeExpired).instruction.find("expired"), std::string::npos);
+}
+
+// #1446: a timeout is what the player must act on, so the window says it in one line.
+TEST(SignInDialogText, ATimedOutSignInSaysSoInOneLine) {
+  EXPECT_EQ(nevr::auth::SignInEndedContent(nevr::auth::FlowEnd::TimedOut).instruction,
+            "Sign-in timed out. Restart Echo VR to get a new code.");
+}
+
+// #1446: a failure stays on screen until the player closes it; only a success or a cancel closes after a moment.
+TEST(SignInDialogText, AFailedEndingStaysUntilThePlayerClosesIt) {
+  using nevr::auth::FlowEnd;
+  for (const FlowEnd end : {FlowEnd::CodeExpired, FlowEnd::TimedOut, FlowEnd::PollErrors, FlowEnd::NoCode,
+                            FlowEnd::BrowserFailed}) {
+    EXPECT_EQ(nevr::auth::SignInEndedLingerMs(nevr::auth::SignInEndedContent(end)), 0u)
+        << "ending " << static_cast<int>(end) << " must not close itself";
+  }
+  EXPECT_EQ(nevr::auth::SignInEndedLingerMs(nevr::auth::SignInEndedContent(FlowEnd::Verified)), 1500u);
+  EXPECT_EQ(nevr::auth::SignInEndedLingerMs(nevr::auth::SignInEndedContent(FlowEnd::Cancelled)), 1500u);
+  EXPECT_EQ(nevr::auth::SignInEndedLingerMs(nevr::auth::SignInWaitingContent("https://echovrce.com/device", "K7RX")),
+            0u)
+      << "the waiting dialog has no end to close after";
 }
 
 TEST(DeviceAuthFlow, TheCodeAndPageAreHandedToTheUiBeforeTheBrowserAndTheEndIsReportedOnce) {
@@ -1213,7 +1338,24 @@ TEST(TokenAuthModule, ClientWithoutRequiredConfigDisablesCleanly) {
   EXPECT_TRUE(nevr_token_auth::GetToken().empty());
   EXPECT_EQ(nevr_token_auth::GetDiscordId(), 0U);
   EXPECT_TRUE(nevr_token_auth::GetUsername().empty());
+  // #1446: a client that never ran sign-in has not ended it, so the bridge keeps asking the service as before.
+  EXPECT_FALSE(nevr_token_auth::SignInEndedWithoutToken());
   token_auth_Shutdown();
+}
+
+// #1446: the real function, driven through each published readiness. Only Failed means a sign-in ended without a token.
+TEST(SignInEndedWithoutTokenState, OnlyAFailedSnapshotMeansASignInEndedWithoutAToken) {
+  using nevr_token_auth::AuthReadiness;
+  const AuthReadiness others[] = {AuthReadiness::Starting,     AuthReadiness::Disabled,      AuthReadiness::Refreshing,
+                                  AuthReadiness::AwaitingUser, AuthReadiness::Ready,         AuthReadiness::Expired,
+                                  AuthReadiness::Stopping};
+  for (const AuthReadiness readiness : others) {
+    nevr_token_auth::test_hook::PublishReadinessForTest(readiness);
+    EXPECT_FALSE(nevr_token_auth::SignInEndedWithoutToken()) << "readiness " << static_cast<int>(readiness);
+  }
+  nevr_token_auth::test_hook::PublishReadinessForTest(AuthReadiness::Failed);
+  EXPECT_TRUE(nevr_token_auth::SignInEndedWithoutToken());
+  nevr_token_auth::test_hook::PublishReadinessForTest(AuthReadiness::Disabled);  // the snapshot the module ends in
 }
 
 TEST(TokenAuthModule, ReportsThePublishedModuleApiVersion) {

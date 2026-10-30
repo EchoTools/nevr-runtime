@@ -3,8 +3,9 @@
 The service (patch/invite_service.cpp) is tested by test_invite_service against a loopback server. What no test target
 links is boot.cpp, the wizard hook and the two shutdown paths, so the shape of those lines is pinned here:
 
-  - boot starts the service on a client, from the config key and the service address, before the observer installs, and
-    says on a server that it skipped;
+  - boot starts the service on a client, from the config key and the service address, after both observers install (so its
+    start line can say whether they did), and says on a server that it skipped;
+  - a refused observer keeps the service off, and each observer reports its install and refuses before any write (#1414);
   - the token source is the thread-safe nevr_token_auth::GetToken, never the module export (a static buffer);
   - the wizard hook hands a typed code and a create to the service (the answer is shown by test_invite_answer_wiring);
   - the client's normal exit and the DLL unload both stop the service.
@@ -27,13 +28,30 @@ def code(path: str) -> str:
 class BootStartsTheService(unittest.TestCase):
     def test_the_service_starts_from_the_config_key_and_the_service_address(self):
         boot = code("src/runtime/lifecycle/boot.cpp")
-        self.assertRegex(boot, r'ParseSwitch\(\s*NevrCfgGetFlat\(\s*"nevr_invite_codes"\s*\)\s*\)')
+        self.assertIn('NevrCfgGetFlat("nevr_invite_codes")', boot)
+        # A list or a map under the key is read as unrecognised, never as the absent key that takes the default (#1156).
+        self.assertIn('NevrCfgGetFlatIsStructured("nevr_invite_codes")', boot)
+        self.assertRegex(boot, r"invite\.invite_codes\s*=\s*nevr_invite::ParseSwitch\(\s*inviteText\s*,\s*inviteStructured\s*\)")
+        self.assertRegex(boot, r"invite\.invite_source\s*=\s*nevr_invite::SourceOf\(\s*inviteText\s*,\s*inviteStructured\s*\)")
         self.assertIn('NevrCfgGetFlat("nevr_http_uri")', boot)
         self.assertIn("nevr_invite_service::Start(std::move(invite))", boot)
 
-    def test_the_service_starts_before_the_observer_is_installed(self):
+    def test_the_start_is_in_the_client_branch_so_a_server_never_starts_it(self):
         boot = code("src/runtime/lifecycle/boot.cpp")
-        self.assertLess(boot.index("nevr_invite_service::Start("), boot.index("nevr_invite_hook::Install("))
+        settings = boot.index("nevr_invite_service::Settings invite;")
+        start = boot.index("nevr_invite_service::Start(std::move(invite))")
+        # The nearest client guard before the settings must still be open there; an earlier one closed before them.
+        guard = boot.rfind("if (!g_isServer) {", 0, settings)
+        self.assertNotEqual(guard, -1)
+        # No block closes between the client guard and the settings: they are in the guard's block.
+        self.assertNotIn("}", boot[guard:settings])
+        self.assertLess(settings, start)
+        self.assertLess(start, boot.index("} else {", start))  # the server branch comes after the client's start
+
+    def test_the_service_starts_after_both_observers_are_installed(self):
+        boot = code("src/runtime/lifecycle/boot.cpp")
+        self.assertLess(boot.index("nevr_invite_hook::Install("), boot.index("nevr_invite_service::Start("))
+        self.assertLess(boot.index("nevr_invite_choice_hook::Install("), boot.index("nevr_invite_service::Start("))
 
     def test_the_token_comes_from_the_thread_safe_function_not_the_export(self):
         boot = code("src/runtime/lifecycle/boot.cpp")
@@ -67,6 +85,42 @@ class ThePlanNamesTheMapCardsLevel(unittest.TestCase):
         self.assertRegex(scenario, r"nevr_invite::PlanRequest\(\s*metric\s*,\s*choices\s*,\s*nevr_invite_hook::LevelName\s*\)")
 
 
+OBSERVERS = ("src/runtime/patch/invite_choice_hook.cpp", "src/runtime/patch/invite_wizard_hook.cpp")
+
+
+def install_body(text: str) -> str:
+    """The Install definition and everything after it in an observer's .cpp (its install is the file's last function)."""
+    return text[text.index("Install(std::uintptr_t gameBase)") :]
+
+
+class AnObserverThatRefusesKeepsTheServiceOff(unittest.TestCase):
+    """#1414: a hook whose prologue does not match is refused by its own Warning (name, address, expected and actual bytes),
+    the observer reports the refusal to boot, and boot starts the service off with the reason."""
+
+    def test_boot_turns_the_service_off_when_either_observer_refused(self):
+        boot = code("src/runtime/lifecycle/boot.cpp")
+        self.assertRegex(boot, r"const bool choiceInstalled = nevr_invite_choice_hook::Install\(")
+        self.assertRegex(boot, r"const bool wizardInstalled = nevr_invite_hook::Install\(")
+        self.assertRegex(boot, r"invite\.hooks_refused\s*=\s*!\(\s*choiceInstalled\s*&&\s*wizardInstalled\s*\)\s*;")
+
+    def test_each_observer_refuses_before_any_write_and_reports_success_last(self):
+        for path in OBSERVERS:
+            body = install_body(code(path))
+            self.assertIn("return false;", body, path)
+            self.assertIn("return true;", body, path)
+            self.assertLess(body.index("return false;"), body.index("PatchDetour("), path)
+            self.assertLess(body.index("PatchDetour("), body.rindex("return true;"), path)
+
+    def test_each_refusal_logs_the_name_the_address_and_both_byte_sets(self):
+        for path in OBSERVERS:
+            body = install_body(code(path))
+            self.assertIn("prologue_mismatch", body, path)
+            self.assertIn("name=", body, path)
+            self.assertIn("va=0x", body, path)
+            self.assertIn("expected=", body, path)
+            self.assertIn("actual=", body, path)
+
+
 class ShutdownStopsTheService(unittest.TestCase):
     def test_the_clients_normal_exit_stops_it_after_the_cdn_thread(self):
         text = code("src/runtime/lifecycle/crash_recovery.cpp")
@@ -75,6 +129,40 @@ class ShutdownStopsTheService(unittest.TestCase):
 
     def test_the_dll_unload_stops_it(self):
         self.assertIn("nevr_invite_service::Shutdown()", code("src/runtime/lifecycle/dllmain.cpp"))
+
+
+class TheDocsStateTheDefault(unittest.TestCase):
+    """ADR 0017 and the example config say the key is on when absent, so a reader of either gets the default right."""
+
+    def test_the_example_config_says_absent_is_on(self):
+        text = (ROOT / "docs/reference/example-config.yaml").read_text()
+        block = text[text.index("The invite codes for the CREATE GAME"):text.index("# invite_codes: false")]
+        self.assertIn("# Absent: on.", block)
+        self.assertNotIn("Absent: off.", block)
+
+    def test_the_adr_says_the_feature_is_on_by_default(self):
+        adr = (ROOT / "docs/adr/0017-invite-codes-for-the-create-game-wizard.md").read_text()
+        self.assertIn("is on by default for a client", adr)
+        self.assertNotIn("turns it on (N133)", adr)
+
+    def test_the_adr_log_table_names_the_source(self):
+        adr = (ROOT / "docs/adr/0017-invite-codes-for-the-create-game-wizard.md").read_text()
+        self.assertIn("| service on | Info | `source=default\\|config`", adr)
+        self.assertIn("| feature off | Info / Warning | `reason=turned_off`", adr)
+        self.assertIn("`source=default\\|config`", adr.split("| feature off |", 1)[1].split("\n", 1)[0])
+
+
+class TheQuickCheckRunsTheInviteTests(unittest.TestCase):
+    """The GTests are built by CMake; only the recipe that names them runs them. test-auth-unit builds and runs both."""
+
+    def test_test_auth_unit_builds_and_runs_the_service_and_the_worker(self):
+        text = (ROOT / "justfile").read_text()
+        recipe = text[text.index("test-auth-unit:"):text.index("test-auth-integration:")]
+        loop = [line for line in recipe.splitlines() if "for test_name in" in line]
+        self.assertEqual(len(loop), 1)
+        for name in ("test_invite_service", "test_invite_worker"):
+            self.assertIn(f"--target {name}", recipe)
+            self.assertIn(name, loop[0].split())
 
 
 if __name__ == "__main__":

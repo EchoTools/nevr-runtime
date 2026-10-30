@@ -21,18 +21,25 @@ sentinel::GotHook g_hook;
 std::atomic<unsigned long long> g_replaced{0};
 
 // Every SetText call passes through here (the credits page sets text each frame). The common case is one compare. An empty
-// text is the script clearing the item when its page is disabled and stays empty. The first replacement writes one line
-// (the same logger the OS-build hook uses from its handler); the rest write none.
+// text is the script clearing the item when its page is disabled and stays empty. The publisher lock item is drawn as the
+// service's name (PublisherLockReplacement). The first replacement writes one line (the same logger the OS-build hook uses
+// from its handler); the rest write none.
 std::uint64_t OnSetText(Thunk::Fn original, void* canvas, std::uint32_t handle, std::uint64_t item,
                         const char* text) noexcept {
-  if (item != nevr_menu_version_label::kLobbyVersionItem || text == nullptr || text[0] == '\0' || g_label[0] == '\0') {
-    return original(canvas, handle, item, text);
+  const char* drawn = nevr_menu_version_label::PublisherLockReplacement(item, text);
+  const char* itemName = "publisher_lock";
+  if (drawn == nullptr) {
+    if (item != nevr_menu_version_label::kLobbyVersionItem || text == nullptr || text[0] == '\0' || g_label[0] == '\0') {
+      return original(canvas, handle, item, text);
+    }
+    drawn = g_label;
+    itemName = "lobby_version";
   }
   if (g_replaced.fetch_add(1, std::memory_order_acq_rel) == 0) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "menu_version",
-                        {{"status", "label_drawn"}, {"item", "lobby_version"}, {"label", g_label}});
+                        {{"status", "label_drawn"}, {"item", itemName}, {"label", drawn}});
   }
-  return original(canvas, handle, item, g_label);
+  return original(canvas, handle, item, drawn);
 }
 
 NEVR_HOOK_RECORD(kSetTextRecord, Thunk, &OnSetText);

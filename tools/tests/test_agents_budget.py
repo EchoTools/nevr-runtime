@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-LINE_BUDGET = 1381
+LINE_BUDGET = 1385
 
 # Names from the C++ addendum's former text that describe machinery this repo does not have, or a C++ standard above
 # the one CMakeLists.txt sets (17). The removed text is kept in #1314.

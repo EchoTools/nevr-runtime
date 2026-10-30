@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
-"""The per-audience section of a release body, from the feat, fix and perf commits between two refs (RELEASING.md,
+"""The per-audience section of a release notes, from the feat, fix and perf commits between two refs (RELEASING.md,
 "Write the release body"). Usage: release_audience_section.py --repo <dir> --base vX.Y.Z --rev vX.Y.Z
+
+The release body is short and carries only its player line, which the commits never write: it is the sentences of the
+`release-headlines/` files base..rev adds (`package_release.headline_line`), else FALLBACK_PLAYER_LINE.
+This script's section is for a reader of the commits, not for the body.
 
 A commit's audience is its conventional scope: `plugins` is for plugin developers, `server`, `ws-bridge` and `arena` for
 server hosts, and every other scope, or none, is for players. A commit is listed by its subject, or by the text of a
@@ -37,15 +41,27 @@ NOT_TESTED = (
 )
 
 
+FALLBACK_PLAYER_LINE = "Fixes and internal changes."
+
+
 def audience_of(scope: str | None) -> str:
     return SCOPE_AUDIENCE.get(scope or "", "For players")
 
 
-def sections(messages: list[str]) -> str:
-    """The markdown section for the given commit messages (a subject, or a subject, a blank line and a body), newest
-    first as git prints them. The subject gives the type, scope and `!`, and a `BREAKING CHANGE:` footer marks a break
-    too; the text listed is the message's `Release-note:` line when it has one, else the subject's text."""
-    by_audience: dict[str, list[str]] = {name: [] for name in AUDIENCES}
+def messages_between(repo: str, base: str, rev: str) -> list[str]:
+    """The full messages of the non-merge commits in base..rev, newest first as git prints them."""
+    log = subprocess.run(
+        ["git", "-C", repo, "log", "--no-merges", f"--format=%B{RECORD_END}", f"{base}..{rev}"],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    return [record.strip() for record in log.split(RECORD_END) if record.strip()]
+
+
+def listed(messages: list[str]) -> list[tuple[str, str, str]]:
+    """Each listed change as (audience, type, text), in the order given. The subject gives the type, scope and `!`, and
+    a `BREAKING CHANGE:` footer marks a break too; the text is the message's `Release-note:` line when it has one, else
+    the subject's text, and a breaking change's text starts with "BREAKING: ". The one place a commit is classified."""
+    out = []
     for message in messages:
         subject = message.split("\n", 1)[0]
         match = CONVENTIONAL.match(subject)
@@ -59,13 +75,26 @@ def sections(messages: list[str]) -> str:
         body = message.split("\n", 1)[1] if "\n" in message else ""
         breaking = match.group("bang") or BREAKING_FOOTER.search(body)
         prefix = "BREAKING: " if breaking else ""
-        by_audience[audience_of(scope)].append(f"- {prefix}{text}")
+        out.append((audience_of(scope), match.group("type").lower(), f"{prefix}{text}"))
+    return out
+
+
+def classify(messages: list[str]) -> dict[str, list[str]]:
+    """Each listed change's text, under its audience."""
+    by_audience: dict[str, list[str]] = {name: [] for name in AUDIENCES}
+    for audience, _kind, text in listed(messages):
+        by_audience[audience].append(text)
+    return by_audience
+
+
+def sections(messages: list[str]) -> str:
+    """The markdown section for the given commit messages (a subject, or a subject, a blank line and a body), newest
+    first as git prints them."""
+    by_audience = classify(messages)
     out = ["## What changed, by audience", ""]
     for name in AUDIENCES:
-        out.append(f"### {name}")
-        out.append("")
-        out.extend(by_audience[name] or ["- Nothing for this audience in this release."])
-        out.append("")
+        lines = [f"- {text}" for text in by_audience[name]] or ["- Nothing for this audience in this release."]
+        out.extend([f"### {name}", "", *lines, ""])
     out.extend(["## Not tested in this build", "", NOT_TESTED, ""])
     return "\n".join(out)
 
@@ -76,11 +105,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--base", required=True, help="the older ref, excluded")
     parser.add_argument("--rev", required=True, help="the newer ref, included")
     args = parser.parse_args(argv)
-    log = subprocess.run(
-        ["git", "-C", args.repo, "log", "--no-merges", f"--format=%B{RECORD_END}", f"{args.base}..{args.rev}"],
-        check=True, capture_output=True, text=True,
-    ).stdout
-    sys.stdout.write(sections([record.strip() for record in log.split(RECORD_END) if record.strip()]))
+    sys.stdout.write(sections(messages_between(args.repo, args.base, args.rev)))
     return 0
 
 

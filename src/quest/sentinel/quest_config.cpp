@@ -2,6 +2,7 @@
 
 #include "core/nevr_config.h"
 #include "runtime/lifecycle/service_redirect.h"
+#include "runtime/patch/invite_config.h"
 
 #include <array>
 #include <exception>
@@ -36,10 +37,16 @@ constexpr const char* kSocialFacadeKey = "social.facade";                      /
 constexpr const char* kSendPresenceToMetaKey = "social.send_presence_to_meta";  // Quest only (default true)
 constexpr const char* kHardwareDumpKey = "diagnostics.hardware_dump";          // Quest only (default false)
 constexpr const char* kUiEventProbeKey = "diagnostics.ui_event_probe";          // Quest only (default on with social, #318)
+constexpr const char* kPnsradProviderKey = "diagnostics.pnsrad_provider";        // Quest only (default false, #1220)
 constexpr const char* kTextureQualityKey = "graphics.texture_quality";          // Quest only (default stock)
 constexpr const char* kTextureQualitySection = "graphics";
 constexpr const char* kTextureQualityName = "texture_quality";  // the one key `graphics` has
 constexpr std::size_t kMaxUnknownKeyWarnings = 8;  // a file full of unknown keys must not flood the log
+// Quest only (default false). The top level is `diagnostics`, not `features`: nevr_config rejects a file with an
+// unknown top-level key (src/core/nevr_config.cpp AllowedTopLevelKeys), and the PC accepts `diagnostics` and reads nothing.
+constexpr const char* kClockLevelsOverrideKey = "diagnostics.clock_levels_override";
+// The invite codes (#966, docs/adr/0017): the PC's key. Quest reads it with the PC's switch words and keeps its own default (off).
+constexpr const char* kInviteCodesKey = "network.invite_codes";
 
 struct FeatureSpec {
   const char* name;
@@ -47,7 +54,7 @@ struct FeatureSpec {
   bool Features::*flag;
 };
 
-constexpr std::array<FeatureSpec, 8> kFeatures = {{
+constexpr std::array<FeatureSpec, 11> kFeatures = {{
     {"redirect", Feature::kRedirect, &Features::redirect},
     {"bridge", Feature::kBridge, &Features::bridge},
     {"login", Feature::kLogin, &Features::login},
@@ -56,6 +63,9 @@ constexpr std::array<FeatureSpec, 8> kFeatures = {{
     {"presence_names", Feature::kPresenceNames, &Features::presenceNames},
     {"presence_local", Feature::kPresenceLocal, &Features::presenceLocal},
     {"ui_event_probe", Feature::kUiEventProbe, &Features::uiEventProbe},
+    {"clock_levels", Feature::kClockLevels, &Features::clockLevels},
+    {"pnsrad_provider", Feature::kPnsradProvider, &Features::pnsradProvider},
+    {"invite_codes", Feature::kInviteCodes, &Features::inviteCodes},
 }};
 
 bool HasControlOrSpace(std::string_view s) {
@@ -115,7 +125,8 @@ void ApplyEmbedded(ResolvedConfig& config, const EmbeddedDefaults& d, std::vecto
 }
 
 // What the build and an absent or rejected file give: the network features follow from the targets (Derive checks
-// them), the social facade and its names are on, the local presence and the hardware dump are off.
+// them), the social facade and its names are on, the local presence, the hardware dump and the clock-level
+// override are off.
 void SetDefaultRequests(ResolvedConfig& config) {
   config.requested.redirect = true;
   config.requested.bridge = true;
@@ -125,6 +136,9 @@ void SetDefaultRequests(ResolvedConfig& config) {
   config.requested.presenceLocal = false;
   config.requested.hwdump = false;
   config.requested.uiEventProbe = true;
+  config.requested.clockLevels = false;
+  config.requested.pnsradProvider = false;
+  config.requested.inviteCodes = false;
 }
 
 // A boolean key: absent keeps `fallback`; an unusable value keeps it too and is rejected by key, never by value.
@@ -142,6 +156,35 @@ bool ReadBool(const nevr::NevrConfig& cfg, const char* key, bool fallback, LoadR
     return fallback;
   }
   return *value;
+}
+
+// network.invite_codes (#966, docs/adr/0017): the PC's key, read with the PC's switch words (nevr_invite::ParseSwitch). Off unless
+// the file says on. Absent and empty are off here, so the PC's default (ParseSwitch's unset case, a later change) is never taken.
+// A value that is no switch word (a misspelling, a list, a NUL inside the word, an unset variable) is off with a Warning that names
+// the key and never the value. ParseSwitch reads a C string, so a value with a NUL is refused before it is parsed.
+bool ReadInviteCodes(const nevr::NevrConfig& cfg, LoadResult& r) {
+  bool unsetBare = false;
+  const std::optional<std::string> text = cfg.GetString(kInviteCodesKey, &unsetBare);
+  if (!text) {
+    if (cfg.Kind(kInviteCodesKey) != nevr::NodeKind::kAbsent) {
+      Add(r, LogLevel::kWarn, std::string("config file key=") + kInviteCodesKey + " rejected reason=not_a_word (off stays)");
+    }
+    return false;
+  }
+  if (unsetBare) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + kInviteCodesKey + " rejected reason=unset_variable (off stays)");
+    return false;
+  }
+  if (text->empty()) return false;
+  if (text->find('\0') == std::string::npos) {
+    switch (nevr_invite::ParseSwitch(text->c_str())) {
+      case nevr_invite::Switch::On: return true;
+      case nevr_invite::Switch::Off: return false;
+      case nevr_invite::Switch::Unrecognised: break;
+    }
+  }
+  Add(r, LogLevel::kWarn, std::string("config file key=") + kInviteCodesKey + " rejected reason=unrecognised_value (off stays)");
+  return false;
 }
 
 // How a rejected texture-quality value is named in the log: the word itself when it is short printable ASCII (a level is
@@ -258,7 +301,10 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   // Defaults to the social facade's state (on unless social.facade is false), like presence_names: a facade-off file
   // gets no forced-off warning for a key it never asked for.
   want.uiEventProbe = ReadBool(cfg, kUiEventProbeKey, want.social, r);
+  want.clockLevels = ReadBool(cfg, kClockLevelsOverrideKey, false, r);
   want.presenceLocal = !ReadBool(cfg, kSendPresenceToMetaKey, true, r);
+  want.pnsradProvider = ReadBool(cfg, kPnsradProviderKey, false, r);
+  want.inviteCodes = ReadInviteCodes(cfg, r);
   ReadTextureQuality(cfg, r);
   r.config.plugins = cfg.Plugins();
 }
@@ -334,6 +380,21 @@ void Derive(LoadResult& r) {
   if (c.effective.uiEventProbe && !c.effective.social) {
     c.effective.uiEventProbe = false;
     force_off("ui_event_probe", "social_not_enabled");
+  }
+  // The rad provider sends no login of its own: the login goes through NEVR's (#1220), so it follows login.
+  if (c.effective.pnsradProvider && !c.effective.login) {
+    c.effective.pnsradProvider = false;
+    force_off("pnsrad_provider", "login_not_enabled");
+  }
+  // The invite codes send the player's token to auth.http_uri (docs/adr/0017), so they need the login that holds the token and
+  // that address. Each missing prerequisite is forced off and named.
+  if (c.effective.inviteCodes && !c.effective.login) {
+    c.effective.inviteCodes = false;
+    force_off("invite_codes", "login_not_enabled");
+  }
+  if (c.effective.inviteCodes && !Present(c.httpUri)) {
+    c.effective.inviteCodes = false;
+    force_off("invite_codes", "no_service_address");
   }
 }
 

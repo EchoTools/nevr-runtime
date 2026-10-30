@@ -52,6 +52,7 @@ std::size_t g_slotCount = 0;
 
 std::atomic<StoreObserver> g_storeObserver{nullptr};
 std::atomic<ProtectFn> g_protect{nullptr};
+std::atomic<BuildIdAliasFn> g_buildIdAlias{nullptr};
 
 int Protect(void* addr, std::size_t length, int prot) {
   const ProtectFn fn = g_protect.load(std::memory_order_acquire);
@@ -636,12 +637,23 @@ void LogFailure(const char* op, const GotTarget& t, GotStatus status, const char
              {"symbol", symbol}, {"reloc", RelocKindName(t.kind)}, {"errno", err}});
 }
 
+// A target's build ID is accepted when it equals the module's live note, or the alias the registered function gives
+// that note (SetBuildIdAlias). The alias is asked at every install, with the note read for it, so what it maps can
+// change only with what it reads.
+bool BuildIdAccepted(const char* liveNote, const char* targetBuildId) {
+  if (std::strcmp(liveNote, targetBuildId) == 0) return true;
+  const BuildIdAliasFn alias = g_buildIdAlias.load(std::memory_order_acquire);
+  if (alias == nullptr) return false;
+  const char* const mapped = alias(liveNote);
+  return mapped != nullptr && mapped[0] != '\0' && std::strcmp(mapped, targetBuildId) == 0;
+}
+
 // Everything that can be checked without writing. On kOk the slot is reserved.
 GotStatus Prepare(const GotTarget& target, void* hookFn, ImageLookup lookup, Prepared* out) {
   if (!lookup(target.module, &out->image)) return GotStatus::kModuleNotLoaded;
   if (target.buildId != nullptr) {
     if (!ReadBuildId(out->image, out->actualBuildId, sizeof(out->actualBuildId)) ||
-        std::strcmp(out->actualBuildId, target.buildId) != 0) {
+        !BuildIdAccepted(out->actualBuildId, target.buildId)) {
       return GotStatus::kBuildIdMismatch;
     }
   }
@@ -662,6 +674,10 @@ GotStatus Prepare(const GotTarget& target, void* hookFn, ImageLookup lookup, Pre
 }
 
 }  // namespace
+
+BuildIdAliasFn SetBuildIdAlias(BuildIdAliasFn fn) {
+  return g_buildIdAlias.exchange(fn, std::memory_order_acq_rel);
+}
 
 ProtectFn SetProtectFunction(ProtectFn fn) {
   return g_protect.exchange(fn, std::memory_order_acq_rel);
@@ -757,12 +773,16 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
   original_ = prepared.original;
   restoreReadOnly_ = prepared.resolution.restoreReadOnly;
   installed_ = true;
-  char vaddr[19], bias[19];
+  // The slot's previous value, as an offset from the module's load bias, so a build can be compared with the
+  // previous one (#1530): the same function sits at the same offset in two builds of the same module.
+  char vaddr[19], bias[19], originalOffset[19];
   LogFields(LogLevel::kInfo, "got_hook",
             {{"op", "install"}, {"status", "ok"}, {"module", target.module},
              {"symbol", target.symbol}, {"reloc", RelocKindName(target.kind)},
              {"slot_vaddr", HexString(vaddr, prepared.resolution.slotVaddr)},
-             {"load_bias", HexString(bias, image_.base)}});
+             {"load_bias", HexString(bias, image_.base)},
+             {"original_offset",
+              HexString(originalOffset, reinterpret_cast<std::uintptr_t>(original_) - image_.base)}});
   return GotStatus::kOk;
 }
 

@@ -3,7 +3,7 @@ name: Build
 # Builds and runs `just verify` when someone asks for it (workflow_dispatch), and builds the release
 # when a release is PUBLISHED (`release: published`; a draft fires nothing until it is published, and
 # promoting a pre-release to a full release fires no workflow, so promotion rebuilds nothing). Nothing runs
-# on a pull request or a push: the merge gate is the local capped `just verify`, and CI runs by hand with
+# on a pull request or a push: the merge gate is the local capped quick check (AGENTS.md "Builds"), and CI runs by hand with
 # `gh workflow run build.yml --ref <branch>`. The toolchain is reinstalled from scratch every run
 # (~29 billed minutes), which is why it is not automatic.
 #
@@ -13,7 +13,7 @@ name: Build
 # the DLL's identity literal (tools/package_release.py stamp), gates it and assembles the package tree
 # (tools/package_release.py tree), and seals it (seal): the Windows
 # zip, attested and published with the Quest library (the .tar.zst archives stay a workflow artifact; the
-# notes and the SHA-256 table are the release body, written after signing). No file or text
+# release body, a player line and one line per file, is written after signing). No file or text
 # depends on the pre-release flag, and no step reads it: the uploads leave the `prerelease` input unset so the
 # release keeps whatever the human set. The whole workflow runs on
 # ubuntu-latest: no Windows runner, no cloud login. A `workflow_dispatch` started on a vX.Y.Z tag ref runs
@@ -390,9 +390,10 @@ jobs:
 
     # The core installer (installer/, ADR 0023) that install.ps1 runs: built locked from the committed Cargo.lock for
     # Windows with the same mingw the DLLs use, then put through the dist target's sequence: debug info split into
-    # dist/symbols/<package>/nevr-install.exe.dbg, stripped, linked to it. A release build has no DWARF unless asked,
+    # dist/symbols/<package>/install-nevr-runtime.exe.dbg, stripped, linked to it. A release build has no DWARF unless asked,
     # and verify_symbols.py requires the symbol file to carry it, hence line tables. It rides in the zip as its own
     # file, so the signed manifest's `contents` covers it. It runs after the dist target, which recreates dist/symbols.
+    # It is built and linked once, as install-nevr-runtime.exe (#1492); the old name is a copy made in the packaging step.
     - name: Build the core installer for Windows
       if: steps.release.outputs.version != ''
       shell: bash
@@ -404,11 +405,11 @@ jobs:
         packages=(dist/nevr-runtime-v*/)
         test "${#packages[@]}" -eq 1
         name=$(basename "${packages[0]%/}")
-        exe=build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe
-        "$CARGO_HOME/bin/cargo" build --locked --release --target x86_64-pc-windows-gnu --manifest-path installer/Cargo.toml --bin nevr-install --target-dir build/installer
-        x86_64-w64-mingw32-objcopy --only-keep-debug "$exe" "dist/symbols/$name/nevr-install.exe.dbg"
+        exe=build/installer/x86_64-pc-windows-gnu/release/install-nevr-runtime.exe
+        "$CARGO_HOME/bin/cargo" build --locked --release --target x86_64-pc-windows-gnu --manifest-path installer/Cargo.toml --bin install-nevr-runtime --target-dir build/installer
+        x86_64-w64-mingw32-objcopy --only-keep-debug "$exe" "dist/symbols/$name/install-nevr-runtime.exe.dbg"
         x86_64-w64-mingw32-strip --strip-all "$exe"
-        x86_64-w64-mingw32-objcopy "--add-gnu-debuglink=dist/symbols/$name/nevr-install.exe.dbg" "$exe"
+        x86_64-w64-mingw32-objcopy "--add-gnu-debuglink=dist/symbols/$name/install-nevr-runtime.exe.dbg" "$exe"
         test -s "$exe"
 
     # Every shipped PE is stripped and linked (.gnu_debuglink: name and CRC32) to the symbol file the dist
@@ -430,8 +431,12 @@ jobs:
         for file in BugSplat64.dll nevr-runtime.dll echovr_server.exe; do
           python3 tools/verify_symbols.py "$pkg/$file" "dist/symbols/$name/$file.dbg"
         done
-        installer=build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe
-        python3 tools/verify_symbols.py "$installer" "dist/symbols/$name/nevr-install.exe.dbg"
+        installer=build/installer/x86_64-pc-windows-gnu/release/install-nevr-runtime.exe
+        python3 tools/verify_symbols.py "$installer" "dist/symbols/$name/install-nevr-runtime.exe.dbg"
+        # The release tree also holds nevr-install.exe, the same bytes as install-nevr-runtime.exe (#1492), so its
+        # debuglink names install-nevr-runtime.exe.dbg and the pair check above covers it through the new name; the
+        # tree check on the assembled release tree (the step after the gate) refuses a copy with other bytes and asks
+        # for no .dbg of its own.
         python3 tools/verify_symbols.py --tree "$pkg" "dist/symbols/$name"
         for file in BugSplat64.dll nevr-runtime.dll; do
           python3 tools/package_release.py stamp --dll "$pkg/$file" --version "$VERSION" --commit "$GITHUB_SHA"
@@ -462,11 +467,16 @@ jobs:
         packages=(dist/nevr-runtime-v*/)
         test "${#packages[@]}" -eq 1
         pkg=${packages[0]%/}
+        installer=build/installer/x86_64-pc-windows-gnu/release/install-nevr-runtime.exe
+        # The one copy of the build under the name outside callers still use (#1492). No second link step; the signer
+        # signs both entries, and the gate below refuses a copy that is not the same bytes.
+        cp "$installer" "$(dirname "$installer")/nevr-install.exe"
         python3 tools/package_release.py tree --version "$VERSION" --commit "$GITHUB_SHA" --out release-stage \
           --dll "$pkg/BugSplat64.dll" \
           --runtime-dll "$pkg/nevr-runtime.dll" \
           --server-exe "$pkg/echovr_server.exe" \
-          --installer-exe build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe \
+          --installer-exe "$installer" \
+          --installer-compat-exe "$(dirname "$installer")/nevr-install.exe" \
           --pc-header build/mingw-release/generated/nevr_builtin_defaults.h
 
     - name: Verify the Windows tree ships only stripped binaries
@@ -610,7 +620,7 @@ jobs:
 
   # Seal the release: the zip with its SHA256SUMS regenerated from the files as they are (the unzipped zip is
   # checked with sha256sum -c). The release is that zip and the Quest library: no top-level SHA256SUMS and no
-  # RELEASE-NOTES.md (the body carries the notes and a SHA-256 table). A release carries no Quest APK. The
+  # RELEASE-NOTES.md (the body is a player line and one line per file, no hash table). A release carries no Quest APK. The
   # texts state facts that hold before and after a signer has run, and nothing here reads the pre-release
   # flag: sealing the same tree twice gives the same bytes. A dry run (a dispatch on a tag with no draft)
   # ends here: the sealed files are a workflow artifact.

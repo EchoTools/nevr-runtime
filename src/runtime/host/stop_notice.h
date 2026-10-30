@@ -56,6 +56,22 @@ inline const wchar_t* StopNoticeTextFor(RuntimeLoadOutcome outcome, nevr_plugin_
   }
 }
 
+/// What the dialog shows: `text` (StopNoticeTextFor), a blank line, then `nEVR <host_version>` and, when a log file
+/// took the record, `Log: <path>`.
+inline std::wstring StopNoticeBody(const wchar_t* text, const char* host_version, const wchar_t* log) {
+  std::wstring body(text);
+  body += L"\n\nnEVR ";
+  // A version is ASCII (digits, letters, '.', '-', '+').
+  for (const char* c = host_version; c != nullptr && *c != '\0'; ++c) {
+    body.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*c)));
+  }
+  if (log != nullptr && log[0] != L'\0') {
+    body += L"\nLog: ";
+    body += log;
+  }
+  return body;
+}
+
 enum class StopNotice {
   kShow,                         ///< A player is at the screen: tell them.
   kSuppressedServerOrHeadless,   ///< -server or -headless: the record only.

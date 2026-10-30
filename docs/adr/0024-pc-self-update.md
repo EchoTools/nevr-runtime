@@ -53,7 +53,7 @@ What exists, read from this tree:
 | `nevr-runtime.dll` in the root | yes | it is the part that changes (ADR 0012) |
 | plugin DLLs this updater put in `plugins\` | yes, when the release lists them and they are signed | see "Plugins" |
 | `BugSplat64.dll` (the host) | **no** | it lives in the game folder, and it is the trust anchor; only the installer replaces it |
-| `echovr_server.exe`, the scripts, the docs, `nevr-install.exe` | no | they are not loaded by the game |
+| `echovr_server.exe`, the scripts, the docs, `install-nevr-runtime.exe` | no | they are not loaded by the game |
 | anything a player or a third party put in `plugins\` | never touched | not in the ownership list ("Ownership") |
 
 The host and runtime are a matched pair behind one versioned ABI (ADR 0008). A release whose runtime needs a newer host
@@ -126,7 +126,7 @@ flowchart TD
 steps 1 to 8 for the channel's `windows-zip`, extracts exactly `nevr-runtime.dll` and the members under `plugins/` into
 `update\staging\<version>.partial-<pid>`, re-reads each file and compares size and sha256 with the entry's `contents`, and
 only then renames the folder to `<version>`. A member not listed, a member whose name is not a plain relative path, or a
-second `windows-zip`, is a refusal. The CLI gets the same operation as `nevr-install pc stage --root DIR` so the test and an
+second `windows-zip`, is a refusal. The CLI gets the same operation as `install-nevr-runtime pc stage --root DIR` so the test and an
 operator can run it without the game. The core is linked into `nevr-runtime.dll` as a static library: one signed file, no
 extra DLL for the plugin gate to verify. The runtime owns `staged.json` because the Authenticode check sits between the
 core's work and the publish, which takes the lock.
@@ -259,7 +259,7 @@ a rollback can restore a release denylisted after the player ran it (the accepte
 
 ### 7. The installer's part
 
-`nevr-install pc install` (and so `install.ps1`) writes `update\state.json` with the channel and the installed release, under
+`install-nevr-runtime pc install` (and so `install.ps1`) writes `update\state.json` with the channel and the installed release, under
 the lock, and removes `staged.json`, `staging\`, `previous\`, `failed\`, `pending.json` and `crashed`: after an install the
 installer's release is the baseline and nothing older competes with it. The quarantine list stays. `uninstall.ps1` does not
 touch `update\`. The channel precedence is `update.channel` in `config.yaml`, then `state.json`, then the core's default;
@@ -372,7 +372,7 @@ Each is run once with the line it covers changed, and must fail (the mutant disc
 Written before the first run, for the core's `pc stage` against the live manifest with a scratch root whose recorded runtime
 is an older release:
 
-- `nevr-install pc stage` reports `action: staged`, the channel's release (5.16.1 on `beta`), `direction: upgrade`, one file
+- `install-nevr-runtime pc stage` reports `action: staged`, the channel's release (5.16.1 on `beta`), `direction: upgrade`, one file
   (`nevr-runtime.dll`), one `artifact_fetch` of about 6.5 MB, `stage_member ok=true` for `nevr-runtime.dll` and nothing else
   extracted, and a staging folder with that one file.
 - The same command with the root's recorded runtime equal to the release reports `action: none` and no `artifact_fetch`.

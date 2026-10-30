@@ -1174,8 +1174,16 @@ A manifest that was never verified, or that was changed after it was, is refused
 that passed step 2`.
 
 For each artifact of the chosen release that your platform handles, `kind` tells what it is: `windows-zip`,
-`quest-library`, `quest-apk` (and `quest-apk-bundled` later). `plugin` and `game-data` are reserved: skip a kind you do
-not handle.
+`quest-library`, `quest-apk` (and `quest-apk-bundled` later). `plugin` is reserved: skip a kind you do not handle, a
+`game-data` entry of a platform you do not install included.
+
+A release lists one `game-data` artifact per platform (`android-arm64`, and `windows-x86_64` once the signer publishes the
+PC data), so `kind` alone does not select it. Select a `game-data` entry by `kind` and `platform` together, and
+require exactly one for your platform: zero or two is a failure that names the release, and the entry of the other platform is never yours. Its `path`
+differs from the other kinds': `data/<name>.zip`, with a name of `a-z`, `0-9`, `.` and `-` only, because one copy of
+the data serves every release. The reference code below selects by `kind` alone and checks the version-directory path of
+the next item, so it serves the kinds a release lists once; given the two `game-data` entries it refuses both, and a
+consumer of game data adds the platform to its selector and the `data/<name>.zip` rule to its path check.
 
 1. Check the `path` before you make any request. It has to be `v<version>/nevr-runtime-v<version>-<name>` for the
    release's own version, with a name of `a-z`, `0-9`, `.` and `-` only: one version directory and one file name. The
@@ -1411,8 +1419,11 @@ file, `nevr-runtime.dll`, that the host loads. What a player's machine does befo
   (`kRuntimeStopExitCode`, `RuntimeRendezvous::StopGame`). On a client with a screen it first shows one dialog that says
   the cause in plain words (`StopNoticeTextFor` in `src/runtime/host/stop_notice.h`: missing, not signed by the nEVR
   release process, changed after it was signed, unreadable, signature not accepted, or missing or damaged for any other
-  cause). On a dedicated server, a headless run, a command line the host cannot read, or a thread that holds the loader
-  lock, there is no dialog and the record is all there is.
+  cause), then the version of the host and the path of the host log. On a dedicated server, a headless run, a command
+  line the host cannot read, or a thread that holds the loader lock, there is no dialog. Every stop, with or without a
+  dialog, also writes one `NEVR.STOP` line to standard error and puts the same facts (`stopped`, `host_version`,
+  `runtime_version`, `detail`, `log`) in the `game_stop` record; the line's fields and the exit codes are in
+  `docs/standards/logging.md`, "The `NEVR.STOP` line".
 - In a run started with `-require-signed-plugins`, the runtime verifies each **plugin**, and every DLL it imports,
   with the same verifier before `LoadLibrary` (ADR 0010, `docs/adr/0010-signed-plugins-only.md`;
   `src/runtime/ext/plugin_signature.cpp`, pins in `src/runtime/ext/plugin_trust.cpp`). Without that argument unsigned

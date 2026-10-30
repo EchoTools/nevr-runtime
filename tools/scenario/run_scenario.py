@@ -333,14 +333,34 @@ def wait_for_gpu_memory(needed: int = GPU_FREE_NEEDED_MIB) -> None:
         time.sleep(GPU_POLL_SECONDS)
 
 
-# The launcher's own pattern (tools/lib/game_install.sh ECHOVR_CMDLINE).
+# The launcher's own candidate pattern (tools/lib/game_install.sh ECHOVR_CMDLINE); the command line decides (#1490).
 GAME_CMDLINE = r"(^|[/\\])echovr\.exe( |$)"
+
+
+def _cmdline_name(arg: str) -> str:
+    """The last path element of a command-line word, split on / or \\ (game_install.sh game_pids does the same)."""
+    return re.split(r"[/\\]", arg)[-1]
+
+
+def is_game_process(pid: str) -> bool:
+    """argv[0] is echovr.exe, or argv[0] is a Wine loader and argv[1] is echovr.exe. The same rule as game_pids in
+    tools/lib/game_install.sh; a process that merely names the file in an argument is not the game."""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            argv = [a.decode(errors="replace") for a in f.read().split(b"\0")[:-1]]
+    except OSError:
+        return False
+    if not argv:
+        return False
+    if _cmdline_name(argv[0]) == "echovr.exe":
+        return True
+    return len(argv) > 1 and _cmdline_name(argv[0]).startswith("wine") and _cmdline_name(argv[1]) == "echovr.exe"
 
 
 def game_pids() -> list[str]:
     out = subprocess.run(["pgrep", "-u", str(os.getuid()), "-f", GAME_CMDLINE],
                          capture_output=True, text=True)
-    return out.stdout.split()
+    return [pid for pid in out.stdout.split() if is_game_process(pid)]
 
 
 def wait_for_game_exit(timeout: float = 30.0) -> bool:
@@ -371,8 +391,12 @@ def wait_for_wineserver_exit() -> None:
 
 
 class Run:
-    def __init__(self, scenario: dict, dll: pathlib.Path, out: pathlib.Path, config: pathlib.Path | None = None):
+    def __init__(self, scenario: dict, dll: pathlib.Path, out: pathlib.Path, config: pathlib.Path | None = None,
+                 creds: str | None = None):
         self.scenario, self.dll, self.out, self.config = scenario, dll, out, config
+        # The account whose stored sign-in the client signs in with (launch-client.sh --creds). None is not a run: the
+        # launcher refuses a run with no sign-in, and that refusal fails this scenario's launch.
+        self.creds = creds
         self.results: list[dict] = []
         self.console: ConsoleLog | None = None
         self.control: Control | None = None
@@ -418,6 +442,8 @@ class Run:
                    "--require-in-game"]
         if self.config is not None:
             command += ["--config", str(self.config)]
+        if self.creds is not None:
+            command += ["--creds", self.creds]
         self.launcher = subprocess.Popen(
             command, cwd=REPO,
             stdout=launcher_out.open("w"), stderr=subprocess.STDOUT, start_new_session=True)
@@ -558,6 +584,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--config", type=pathlib.Path,
                         help="a config.json whose directory holds the run's config.yaml (launch-client.sh --config), "
                              "e.g. to run the suite with network.session_router: all (#708)")
+    parser.add_argument("--creds", metavar="ACCOUNT",
+                        help="the account whose stored sign-in the client signs in with (launch-client.sh --creds); "
+                             "a run without one is refused by the launcher")
     args = parser.parse_args(argv)
 
     scenario = load_scenario(args.scenario)
@@ -572,7 +601,7 @@ def main(argv: list[str]) -> int:
     work_root.ensure_dir(out, SCRATCH_PURPOSE, SCRATCH_REMOVED)
 
     loadavg_start = read_loadavg()
-    run = Run(scenario, args.dll, out, args.config)
+    run = Run(scenario, args.dll, out, args.config, creds=args.creds)
     try:
         passed = run.execute()
     finally:

@@ -28,6 +28,8 @@ sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "tools" / "tests"))
 import work_root  # noqa: E402
 import axml_fixtures as fx  # noqa: E402
+import quest_apk_version as qv  # noqa: E402
+from quest_patcher_standin import MARKER, make_standin  # noqa: E402
 from test_quest_keystore import ALIAS, FAKE_PASS, KS_ENTRY, PASSPHRASE, PASS_ENTRY  # noqa: E402
 
 JUSTFILE = REPO / "justfile"
@@ -36,10 +38,13 @@ STORE_VERSION_CODE = 4987566  # the store APK the recipe repacks
 TOOLS = ("just", "cc", "patchelf", "zip", "unzip", "zipalign", "apksigner", "aapt2", "readelf", "nm", "keytool", "pass")
 MISSING = [t for t in TOOLS if t != "pass" and shutil.which(t) is None]
 
-DEV_VERSION = "5.6.1-dev.37+3a35e0b"
-DEV_CODE = 50_601_037  # 5*10^7 + 6*10^5 + 1*10^3 + 37
-RELEASE_VERSION = "5.6.0"
-RELEASE_CODE = 50_600_999  # 5*10^7 + 6*10^5 + 0*10^3 + 999
+# The recipe stamps only at or above the newest release tag's major (the stamp floor, tools/quest_apk_version.py), so the
+# fixture versions take that major from git rather than pin it: a new major must not stale this file (#1371).
+MAJOR = qv.newest_release()[1]
+DEV_VERSION = f"{MAJOR}.6.1-dev.37+3a35e0b"
+DEV_CODE = MAJOR * 10**7 + 6 * 10**5 + 1 * 10**3 + 37
+RELEASE_VERSION = f"{MAJOR}.6.0"
+RELEASE_CODE = MAJOR * 10**7 + 6 * 10**5 + 0 * 10**3 + 999
 
 SHIM_C = r'''
 /* The shim's stand-in: exports the marker the recipe greps for and carries its build version NUL-bounded. */
@@ -95,6 +100,9 @@ class RepackFixture(unittest.TestCase):
         (store / PASS_ENTRY.replace("/", "__")).write_text(PASSPHRASE + "\n")
         self.env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", FAKE_PASS_DIR=str(store),
                         XDG_RUNTIME_DIR=str(run))
+        # The real libr15 patcher refuses any file but the store's, so the recipe is given a stand-in that appends a marker
+        # (docs/adr/0021 section 9: quest_patcher_standin.py); the recipe's `patcher` parameter is for this.
+        self.patcher = make_standin(self.tmp / "patcher")
 
     def make_inputs(self, version: str, *, manifest: bytes = None, header: bool = True, shim_version: str = None):
         """A store-like APK (versionCode 4987566, as the store's), the shim and its build info."""
@@ -125,7 +133,7 @@ class RepackFixture(unittest.TestCase):
         work = self.tmp / "work"
         result = subprocess.run(
             ["just", "--justfile", str(JUSTFILE), "--working-directory", str(REPO), "android-repack-apk",
-             str(self.apk), str(self.shim), os.path.relpath(work, REPO)],
+             str(self.apk), str(self.shim), os.path.relpath(work, REPO), "", "", "", str(self.patcher)],
             capture_output=True, text=True, env=self.env, timeout=300)
         self.signed = work / "r15_nevr-sentinel_signed.apk"
         return result
@@ -153,8 +161,8 @@ class RepackedVersionCodeTest(RepackFixture):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         code = badging_code(self.signed)
         self.assertEqual(code, RELEASE_CODE)
-        self.assertGreater(code, 50_600_000 + 998)  # above 5.6.0-dev.998
-        self.assertLess(code, DEV_CODE)  # below 5.6.1-dev.*
+        self.assertGreater(code, RELEASE_CODE - 1)  # above the same major's dev.998, the slot just below the release's 999
+        self.assertLess(code, DEV_CODE)  # below the next patch's development builds
 
     def test_the_signed_apk_verifies_and_carries_the_signer_of_the_key_in_pass(self):
         self.make_inputs(DEV_VERSION)
@@ -189,7 +197,9 @@ class RepackedVersionCodeTest(RepackFixture):
                     if not n.startswith("META-INF/") and n not in ("AndroidManifest.xml", "lib/arm64-v8a/libovrplatformloader.so")]
             self.assertEqual(sorted(kept), ["assets/data.bin", "lib/arm64-v8a/libr15.so"])
             for name in kept:
-                self.assertEqual(out.read(name), src.read(name), name)
+                # libr15.so is the one entry the repack changes on purpose: it is the patcher's output (here the stand-in's)
+                expected = src.read(name) + MARKER if name == "lib/arm64-v8a/libr15.so" else src.read(name)
+                self.assertEqual(out.read(name), expected, name)
             self.assertIn("lib/arm64-v8a/libovrplatformloader_orig.so", out.namelist())
 
     def test_the_recipe_says_what_it_stamped(self):
@@ -215,7 +225,7 @@ class RepackRefusalTest(RepackFixture):
         self.assert_refused(self.repack(), "nevr_build_info.h")
 
     def test_a_shim_that_does_not_carry_the_build_version_is_refused(self):
-        self.make_inputs(DEV_VERSION, shim_version="5.6.1-dev.36+3a35e0b")
+        self.make_inputs(DEV_VERSION, shim_version=f"{MAJOR}.6.1-dev.36+3a35e0b")
         self.assert_refused(self.repack(), "shim", DEV_VERSION)
 
     def test_a_manifest_without_a_versionCode_is_refused(self):
@@ -224,13 +234,13 @@ class RepackRefusalTest(RepackFixture):
 
     def test_a_version_below_the_last_release_is_refused(self):
         self.make_inputs("0.1.0")
-        self.assert_refused(self.repack(), "major 5")
+        self.assert_refused(self.repack(), f"major {MAJOR}")
 
     def test_the_version_a_build_without_git_reports_is_refused(self):
         # cmake/set_project_version_from_git.cmake leaves "1.0.0" when git is absent: a release-looking version
         # that would give a code far below every published build's
         self.make_inputs("1.0.0")
-        self.assert_refused(self.repack(), "1.0.0", "major 5")
+        self.assert_refused(self.repack(), "1.0.0", f"major {MAJOR}")
 
     def fake_tool(self, name, body):
         """A `name` earlier on PATH than the real one; `body` is bash and may call $REAL (the real tool's path)."""

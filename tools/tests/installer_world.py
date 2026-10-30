@@ -32,10 +32,10 @@ def core_binary() -> pathlib.Path:
         return _CORE[0]
     target = pathlib.Path(os.environ.get("CARGO_TARGET_DIR") or REPO / "installer/target")
     built = subprocess.run(["cargo", "build", "--locked", "--manifest-path", str(REPO / "installer/Cargo.toml"),
-                            "--bin", "nevr-install"], capture_output=True, text=True, timeout=1500)
+                            "--bin", "install-nevr-runtime"], capture_output=True, text=True, timeout=1500)
     if built.returncode != 0:
         raise RuntimeError("cargo build of installer/ failed:\n" + built.stderr[-2000:])
-    _CORE.append(target / "debug/nevr-install")
+    _CORE.append(target / "debug/install-nevr-runtime")
     return _CORE[0]
 
 
@@ -105,7 +105,8 @@ class World:
         (self.game / "BugSplat64.dll").write_bytes(GAME)
 
     def core_args(self) -> list[str]:
-        return ["--root", str(self.root), "--base", self.server.base, "--pins", str(self.pins)]
+        # The nevr folder is a temporary one, not %LOCALAPPDATA%\nevr\echovr: a dev run says so (#1353).
+        return ["--root", str(self.root), "--base", self.server.base, "--pins", str(self.pins), "--dev-nevr-root"]
 
     def game_files(self) -> list[str]:
         """What the game folder holds, by name: the standing rule is that only BugSplat64.dll of ours is ever in it."""
