@@ -14,6 +14,7 @@
 
 #include "runtime/log/builtin_filter.h"
 #include "runtime/log/symcache.h"
+#include "core/crash_report.h"
 #include "core/json_escape.h"
 #include "core/nevr_root.h"
 #include "core/logging.h"
@@ -830,6 +831,8 @@ static const char* ColorDim() {
 /* ------------------------------------------------------------------ */
 
 static void EmitLine(uint32_t level, const char* message, int len) {
+    /* The crash report (#1605) prints the last 50 of these. A lock-free ring: nothing here waits on g_file_mutex. */
+    if (len > 0) nevr_crash::RecordLogLine(message, static_cast<std::size_t>(len));
     char ts[32] = {};
     if (g_config.timestamps) {
         FormatTimestamp(ts, sizeof(ts));

@@ -52,6 +52,8 @@ set(PATCHES_SOURCES
     "lifecycle/crash_recovery.cpp"
     "lifecycle/return_to_lobby.cpp"
     "lifecycle/crash_dump_format.cpp"
+    "lifecycle/crash_report_pe.cpp"
+    "lifecycle/crash_report_win.cpp"
     "hook/hook_guard.cpp"
     "hook/hook_liveness.cpp"
     "hook/export_trace_thunk.cpp"
@@ -359,6 +361,8 @@ set_source_files_properties(
 # no windows.h. Same reason as service_map.cpp: it must stay PCH-agnostic (defines
 # NOMINMAX before nlohmann, which pulls <limits>) so the test links it standalone.
 set_source_files_properties(ext/plugin_load_plan.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+# The PE reader of the crash report is bytes only (no windows.h), so its test builds it without the PCH too.
+set_source_files_properties(lifecycle/crash_report_pe.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # #60: plugin_manifest.cpp builds the login's nevr_plugins array with nlohmann-json;
 # pure and PCH-free for the same reason as plugin_load_plan.cpp.
 set_source_files_properties(ext/plugin_manifest.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -1935,8 +1939,8 @@ if(BUILD_TESTING)
     # test_rate_limiter.cpp (#894, header-only log/rate_limiter.h) ride in this
     # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp
+      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp tests/test_crash_report_pe.cpp lifecycle/crash_report_pe.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp tests/test_crash_report_pe.cpp lifecycle/crash_report_pe.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_crash_recovery PRIVATE GTest::gtest GTest::gtest_main nevr::plugin_sdk)
