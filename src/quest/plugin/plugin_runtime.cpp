@@ -2,12 +2,14 @@
 
 #include <dlfcn.h>
 
+#include <cstdint>
 #include <exception>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <utility>
 
+#include "quest/plugin/packaged_plugins.h"
 #include "quest/plugin/plugin_loader.h"
 #include "quest/plugin/plugin_platform.h"
 #include "quest/sentinel/hook_log.h"
@@ -41,6 +43,29 @@ std::string OwnDirectory() {
   return DirectoryOf(info.dli_fname);
 }
 
+// The packaged entries: the manifest the repack wrote beside the plugins (kManifestFile), read once per process. A missing
+// file is the normal case for a build with no packaged plugin; a file that cannot be used is logged as an error and plans
+// no packaged entry (the config entries still plan).
+std::vector<PackagedPlugin> ReadPackaged(SentinelPlatform& platform) {
+  std::vector<std::uint8_t> bytes;
+  if (!platform.ReadFile(kManifestFile, &bytes)) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "plugin_manifest",
+                        {{"status", "absent"}, {"packaged", 0}, {"file", kManifestFile}});
+    return {};
+  }
+  const std::string text(bytes.begin(), bytes.end());
+  std::vector<PackagedPlugin> packaged;
+  std::string why;
+  if (!ParseManifest(text, &packaged, &why)) {
+    sentinel::LogFields(sentinel::LogLevel::kError, "plugin_manifest",
+                        {{"status", "invalid"}, {"packaged", 0}, {"reason", why.c_str()}, {"file", kManifestFile}});
+    return {};
+  }
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "plugin_manifest",
+                      {{"status", "read"}, {"packaged", packaged.size()}, {"file", kManifestFile}});
+  return packaged;
+}
+
 PlanCounts CountsOf(const Loader& loader) {
   PlanCounts counts;
   for (const PlanEntry& entry : loader.Entries()) {
@@ -69,7 +94,10 @@ PlanCounts PlanPlugins(const std::vector<nevr::PluginSpec>& specs, bool devBuild
   try {
     if (Instance() == nullptr) {
       Instance() = new Runtime(OwnDirectory(), devBuild);
-      Instance()->loader.Plan(nevr_plugincfg::BuildLoadPlanFromSpecs(specs));
+      // Packaged entries first, then config.yaml: config overrides a packaged plugin in place, or names an unpackaged one
+      // (MergePackaged, docs/adr/0019-quest-plugin-loader.md section 2).
+      const std::vector<PackagedPlugin> packaged = ReadPackaged(Instance()->platform);
+      Instance()->loader.Plan(MergePackaged(packaged, nevr_plugincfg::BuildLoadPlanFromSpecs(specs)));
     }
     const std::lock_guard<std::mutex> lock(Instance()->mutex);
     return CountsOf(Instance()->loader);

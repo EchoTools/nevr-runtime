@@ -18,6 +18,8 @@ void LogLoadRecord(const LoadRecord& record) {
       {"reason", record.reason.empty() ? "ok" : record.reason.c_str()},
       {"required", record.required ? 1 : 0},
       {"arg_keys", record.argKeys.c_str()},
+      {"source", record.source.c_str()},
+      {"overridden", record.overridden ? 1 : 0},
   };
   const bool fine = record.outcome == Outcome::kLoaded || record.outcome == Outcome::kDisabled;
   sentinel::LogFieldList(fine ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "plugin_load", fields,

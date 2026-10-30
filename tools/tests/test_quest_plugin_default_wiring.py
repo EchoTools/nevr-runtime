@@ -25,8 +25,9 @@ class PackagedPluginWiringTest(unittest.TestCase):
     def test_the_runtime_reads_and_merges_the_manifest_before_it_plans(self):
         code = strip_comments(self.read("src/quest/plugin/plugin_runtime.cpp"))
         self.assertIn("ParseManifest(", code)
-        self.assertIn("MergePackaged(", code)
-        self.assertLess(code.index("MergePackaged("), code.index("loader.Plan("))
+        # The plan takes the merge as its argument, and the manifest is parsed before the plan is made.
+        self.assertIn("loader.Plan(MergePackaged(", code)
+        self.assertLess(code.index("ParseManifest("), code.index("loader.Plan("))
 
     def test_the_manifest_source_is_in_the_sentinel_build_and_the_host_test(self):
         self.assertIn("packaged_plugins.cpp", self.read("src/quest/integration/CMakeLists.txt"))

@@ -27,6 +27,8 @@ LoadRecord BaseRecord(const PlanEntry& entry) {
   record.phase = entry.phase;
   record.required = entry.item.required;
   record.argKeys = ArgKeys(entry.item.args_json);
+  record.source = SourceName(entry.source);
+  record.overridden = entry.overridden;
   return record;
 }
 
@@ -51,6 +53,17 @@ void Loader::Settle(PlanEntry& entry, const LoadRecord& record) {
 }
 
 void Loader::Plan(std::vector<PluginLoadItem> items) {
+  std::vector<PlannedItem> planned;
+  planned.reserve(items.size());
+  for (PluginLoadItem& item : items) {
+    PlannedItem one;
+    one.item = std::move(item);
+    planned.push_back(std::move(one));
+  }
+  Plan(std::move(planned));
+}
+
+void Loader::Plan(std::vector<PlannedItem> items) {
   if (planned_) return;
   planned_ = true;
   entries_ = BuildPlan(std::move(items), options_.earlySupported);
@@ -164,6 +177,10 @@ void Loader::Load(PlanEntry& entry) {
       return end(Outcome::kFailed, reason::kFileUnreadable);
     }
     record.sha256 = data::Sha256Hex(bytes.data(), bytes.size());
+    // A packaged file is the one the repack hashed: other bytes under its name are refused before anything else reads them.
+    if (!entry.expectedSha256.empty() && record.sha256 != entry.expectedSha256) {
+      return end(Outcome::kRefused, reason::kManifestHashMismatch);
+    }
     const std::string id = BuildIdOf(bytes.data(), bytes.size());
     record.pluginBuildId = id.empty() ? "none" : id;
     if (!IsSharedObjectFor(bytes.data(), bytes.size(), options_.machine)) return end(Outcome::kRefused, reason::kMachineType);
