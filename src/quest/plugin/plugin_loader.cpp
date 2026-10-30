@@ -194,6 +194,9 @@ void Loader::Load(PlanEntry& entry) {
       case BuildIdVerdict::kUnknownGame: return end(Outcome::kRefused, reason::kGameBuildIdUnavailable);
       case BuildIdVerdict::kUnsupported: return end(Outcome::kRefused, reason::kBuildIdUnsupported);
     }
+    // A matching note is not enough: a plugin's addresses are properties of the stock file, so it runs only on the file that
+    // attach verified as our patch. On any other libr15 (the stock file, or a note with no verified stubs) it is refused.
+    if (!view.patched) return end(Outcome::kRefused, reason::kLibR15NotVerified);
 
     handle = platform_.Open(entry.item.file);
     if (handle == nullptr) return end(Outcome::kFailed, reason::kDlopenFailed);

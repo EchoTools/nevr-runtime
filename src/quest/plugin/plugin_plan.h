@@ -38,6 +38,8 @@ inline constexpr const char* kNoPluginInfo = "no_plugin_info";
 inline constexpr const char* kBuildIdsUndeclared = "build_ids_undeclared";
 inline constexpr const char* kBuildIdUnsupported = "build_id_unsupported";
 inline constexpr const char* kGameBuildIdUnavailable = "game_build_id_unavailable";
+// The list names the running build, but libr15 is not the file attach verified (ADR 0019 section 7).
+inline constexpr const char* kLibR15NotVerified = "libr15_not_verified";
 inline constexpr const char* kInitFailed = "init_failed";
 inline constexpr const char* kException = "exception";
 // not_started: the entry's install moment never came.

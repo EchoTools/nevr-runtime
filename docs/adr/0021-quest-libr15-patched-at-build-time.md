@@ -312,7 +312,7 @@ patches, the slot area, the note and the `p_memsz` fields), so a plugin's addres
   equals `PatchedBuildId()`. With either missing the identity is the live note, and a plugin built for the stock ID is refused
   as today. A file that only carries the derived ID in its note, without the verified stubs, gets no mapping;
 - it is used in three places: `DecideBuildId` accepts a plugin whose list names the plugin identity (a list that names the live
-  note is accepted as before); `ctx.game_build_id` is the plugin identity, so a plugin that copies it into its targets works on
+  note is accepted only on the verified patched file; any other libr15 is refused `libr15_not_verified`, ADR 0019 section 7); `ctx.game_build_id` is the plugin identity, so a plugin that copies it into its targets works on
   both files; and the GOT backend accepts a target whose `buildId` equals the live note or the alias that
   `sentinel::SetBuildIdAlias` gives that note. The alias function the constructor registers answers with the stock ID when the
   plugin identity is the stock ID and with nothing otherwise. The registry is keyed by slot address, so the sentinel's claim on a
