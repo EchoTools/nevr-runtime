@@ -90,3 +90,14 @@ The invite handler dropped every invite silently on its provider check: pnsrad's
 "RAD", which the game maps to code 0, while every "OVR-ORG-" id maps to 4. The export now returns "OVR"
 (`src/runtime/patch/provider_identity.h`). The observability the harness depends on is the facade slot trace and
 the session-event trace, and the game's invite-error event is logged by `src/runtime/patch/party_invite_gate.cpp`.
+
+## The invite flow, end to end (`just invite-e2e`)
+
+`tools/invite_e2e.py` runs the PC invite flow against production with two clients, each on its own copy of the install and
+signed in from a stored sign-in (`launch-client.sh --creds`, with `NEVR_SCOPE_RUN_TO_COPY=1` so a game on the other copy does
+not refuse the second launch). Client A creates a game and gets a code, both clients resolve it and join, and the tool checks
+that both are in the same match and in game. It drives the invite service through the control endpoint (`fire invite_create`,
+`fire invite_resolve`); the wizard's cards and typed code are not clicked. The verdict has one line per step with the log line
+that proves it, and every `readyatdawn.com` URL either client touched: redirected by the service redirect, the HTTP connect
+hook or the matchmaker host patch, or not. Exit 0 only when every step passed and no such URL went unredirected on the invite
+path. Each client's console log and game log are kept under `invite-e2e/<run>/evidence/` in the work root; the copies are removed.
