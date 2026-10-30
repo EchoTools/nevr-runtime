@@ -732,6 +732,7 @@ your seat name, for example `claude-main` or `codex`.
   `git push origin <local>:refs/heads/<remote>`. Record `git ls-remote origin main` before the push
   and compare after it; read the `->` line of every push.
 - **Update with `git fetch` and `git merge origin/main`,** never `git pull`.
+- **A contributor's fork branch is fetched with `git fetch --no-tags <fork-url> <branch>`.** Fetching a fork into the shared clone (a named remote, or a refspec that stores refs) brings the fork's tags, and a local tag that is not on origin makes the release preflight refuse (#1463).
 - **Do not rewrite pushed history.** No rebase, amend, squash or force-push on a pushed branch.
   Fix a pushed mistake with a new commit.
 - **PRs target `main`.** Do not base a PR on another feature branch.

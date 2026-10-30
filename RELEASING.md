@@ -6,6 +6,10 @@ build). The Quest APK is the one part CI does not do: a user timer on the publis
 half of the train"). A person does the same steps by hand only when the train is off or a run has gone red. Nothing about a
 published release is edited afterwards: a wrong release is fixed by the next version.
 
+A release seat merges its own pull requests, in this repository and in the signer repository, once the pull request's checks are
+green and a fresh verifier (neither the author nor the implementer) has passed the tip with every finding fixed. It deletes the
+branch and the worktree the same turn. A publish outside the train, and anything that touches a signing key, goes to the owner's seat first.
+
 ## Names
 
 - **Version:** plain semver, `X.Y.Z` (no leading zeros, `tools/release_asset_names.sh` `release_tag_regex`). It is
@@ -282,11 +286,14 @@ built, because a later tag supersedes it. That is intended. A tag is built by ha
 It runs from its own **dedicated checkout** (`~/src/nevr-runtime-work/release-timer/checkout`, a detached worktree that
 `just install-quest-release-timer` makes). The unit fetches and moves that checkout to `origin/main` before every run,
 and the tool refuses, as a refused `checkout` step that couriers the owner, unless the checkout is clean and HEAD is the
-freshly fetched `origin/main`.
+freshly fetched `origin/main`. The `tags` step then refuses, the same way, while any tag in that checkout is not on origin or
+points at another commit there (the rule of `tools/release_preflight.py`, which `just release-quest-apk` runs later); the
+refusal names up to ten of them with their short ids, counts the rest, and prints the shell-quoted remove and restore commands,
+with the full object id, for each tag it lists.
 
 1. Lists the newest published `vX.Y.Z` release. A tag that has a `done` record in the log is left alone. A tag that has
    failed three times is not retried; the third failure couriers Spritz once, before the run exits 0. Nothing bonks the owner.
-   A dirty or stale checkout, or a missing credential, is a refusal that is logged and never counts toward the three failures.
+   A dirty or stale checkout, a local tag origin does not have, or a missing credential, is a refusal that is logged and never counts toward the three failures.
 2. Builds the release-signer from a snapshot of its `main`, and reads `verify-manifest --live`. A tag that beta already
    lists is done. Otherwise the beta release must list a `game-data` artifact (the zip the new release carries), whose
    name and size are noted; without one the run fails before it builds.
@@ -309,8 +316,9 @@ Stable stays an owner step (`approve-stable`); the timer only publishes beta. **
 the R2 credential to `publish_apk`, and the GitHub token to `publish_apk` and the dispatch. Every other command, the
 build included, gets an environment without them. Every step appends a JSON line to
 `$XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl`, with each credential value replaced by `<redacted>`; a log that
-cannot be written fails the run. A failing step exits 1 naming itself, and the unit's `OnFailure=` runs
-`quest_release_timer.py --notify-failure`, which couriers the last failure to Spritz. The credential is the file
+cannot be written fails the run. A failing step exits 1 naming itself, with the redacted tail of the failing command's stderr and stdout (the stdout of `curl`, `gh` and the signer is remote content and is left out), and the unit's `OnFailure=` runs
+`quest_release_timer.py --notify-failure`, which couriers the last failure to Spritz, at most once in six hours for the same step and
+error (a standing refusal repeats on every run). The credential is the file
 `~/.config/metis/r2-evr-echo-taxi.env` (`R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`), loaded by
 the unit and never written into it. The unit also sets `GNUPGHOME` to the XDG gnupg home (`~/.config/gnupg`) so `pass` finds the key, and a `pass` failure prints gpg's own `gpg:` lines after the `ERROR` line. Install, from any clone of the repository:
 

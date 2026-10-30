@@ -4,9 +4,12 @@ publishes the Quest APK, dispatches the beta manifest publish live, requires eve
 requires `verify-manifest --live` to list the tag. The commands are fakes that record what they were called with; the
 log is real, and no secret may reach it."""
 
+import datetime
 import hashlib
 import json
 import pathlib
+import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -26,10 +29,12 @@ SECRETS = {
     "R2_SECRET_ACCESS_KEY": "sentinel-secret-access-key",
 }
 TOKEN = "sentinel-gh-token"
-STEPS = ["checkout", "token", "list", "build_signer", "check_listed", "worktree", "build_slot", "configure", "build_apk",
+STEPS = ["checkout", "tags", "token", "list", "build_signer", "check_listed", "worktree", "build_slot", "configure", "build_apk",
          "publish_apk", "dispatch", "watch", "check_jobs", "verify_live", "notify", "cleanup"]
 CARRIED = {"name": "echovr-data-fc2eedeacc50.zip", "kind": "game-data", "size": 937395400}
 HEAD = "c0ffee" + "0" * 34
+# name -> (object, peeled commit or None): the tags the checkout holds, and the same tags on origin
+TAGS = {"v5.16.1": ("1" * 40, None), "v5.17.0": ("2" * 40, "3" * 40)}
 PUBLISHING_JOBS = ["Commit the manifest record", "Publish to R2", "A run that published nothing is red"]
 
 
@@ -51,12 +56,15 @@ class Fake:
         self.carried = dict(CARRIED)  # the game-data artifact the live manifest carries before the publish
         self.published_game_data: dict | None = dict(CARRIED)  # what the new release lists after it
         self.jobs = [{"name": name, "conclusion": "success"} for name in PUBLISHING_JOBS]
+        self.local_tags: dict = dict(TAGS)  # what the checkout holds
+        self.remote_tags: dict = dict(TAGS)  # what origin holds
 
     def step_of(self, argv: list[str]) -> str:
         joined = " ".join(argv)
         repo = f"{self.root}/repo"
         table = [
             (f"{repo} fetch --quiet origin main", "checkout.fetch"), (f"{repo} status --porcelain", "checkout.status"),
+            (f"{repo} for-each-ref refs/tags", "tags.local"), (f"{repo} ls-remote --tags origin", "tags.remote"),
             (f"{repo} rev-parse HEAD", "checkout.head"), (f"{repo} rev-parse origin/main", "checkout.main"),
             ("curl", "manifest"), ("bonk", "bonk"), ("courier send", "courier"),
             ("auth token", "token"), ("release list", "list"), (" fetch origin main", "build_signer.fetch"),
@@ -87,6 +95,15 @@ class Fake:
             return completed(argv, 0, self.head + "\n")
         if step == "checkout.main":
             return completed(argv, 0, self.main + "\n")
+        if step == "tags.local":
+            return completed(argv, 0, "".join(f"{n}\t{o}\t{c or ''}\n" for n, (o, c) in self.local_tags.items()))
+        if step == "tags.remote":
+            lines = []
+            for n, (o, c) in self.remote_tags.items():
+                lines.append(f"{o}\trefs/tags/{n}\n")
+                if c:
+                    lines.append(f"{c}\trefs/tags/{n}^{{}}\n")
+            return completed(argv, 0, "".join(lines))
         if step == "manifest":
             return completed(argv, 0, self.manifest_bytes())
         if step == "token":
@@ -407,7 +424,7 @@ class SkipsWhatIsDone(TimerCase):
         self.write_log({"event": "done", "tag": TAG})
         fake = Fake(self.root)
         self.assertEqual(self.run_timer(fake), 0)
-        self.assertEqual(fake.steps()[4:], ["token", "list"])
+        self.assertEqual(fake.steps()[6:], ["token", "list"])
         self.assertIn("nothing_to_do", self.names())
 
     def test_a_tag_the_live_manifest_already_lists_is_marked_done_without_a_build(self) -> None:
@@ -423,7 +440,7 @@ class SkipsWhatIsDone(TimerCase):
         self.write_log(*({"event": "failed", "tag": TAG, "step": "build_apk"} for _ in range(3)))
         fake = Fake(self.root)
         self.assertEqual(self.run_timer(fake), 0)
-        self.assertEqual([s for s in fake.steps() if s not in ("bonk", "courier")][4:], ["token", "list"])
+        self.assertEqual([s for s in fake.steps() if s not in ("bonk", "courier")][6:], ["token", "list"])
         self.assertIn("skipped_after_failures", self.names())
 
     def test_two_failures_are_retried(self) -> None:
@@ -720,6 +737,452 @@ class RefusalIsNotAFailure(TimerCase):
         self.assertIn("skipped_after_failures", self.names())
 
 
+class FailureKeepsBothStreams(TimerCase):
+    """A failing command's record holds the tail of stderr and of stdout, each bounded and redacted: a tool such as the
+    release preflight prints its PROBLEM lines on stdout, and a record without them names no cause."""
+
+    def make(self, rc: int = 3, out: str = "", err: str = "") -> tuple[timer.Timer, Fake]:
+        fake = Fake(self.root, overrides={"tags.local": lambda argv: completed(argv, rc, out, err)})
+        log = timer.Log(self.log, "")
+        self.addCleanup(log.close)
+        return timer.Timer(self.env, fake, self.sleeps.append, log), fake
+
+    def message(self, rc: int = 3, out: str = "", err: str = "") -> str:
+        subject, _ = self.make(rc, out, err)
+        with self.assertRaises(timer.StepFailure) as raised:
+            subject.cmd("tags", ["git", "-C", f"{self.root}/repo", "for-each-ref", "refs/tags"])
+        return str(raised.exception)
+
+    def test_both_tails_are_labelled_in_one_message(self) -> None:
+        self.assertEqual(self.message(3, "the stdout\n", "the stderr\n"), "git exited 3: stderr: the stderr | stdout: the stdout")
+
+    def test_a_stdout_only_failure_names_stdout_and_no_stderr(self) -> None:
+        text = self.message(1, "release-preflight: PROBLEM: local tag v9 exists only in this clone\n", "")
+        self.assertEqual(text, "git exited 1: stdout: release-preflight: PROBLEM: local tag v9 exists only in this clone")
+        self.assertNotIn("stderr", text)
+
+    def test_an_empty_stdout_adds_no_label(self) -> None:
+        text = self.message(2, "", "fatal: nope")
+        self.assertEqual(text, "git exited 2: stderr: fatal: nope")
+        self.assertNotIn("stdout", text)
+
+    def test_a_failure_that_printed_nothing_names_only_the_exit_code(self) -> None:
+        self.assertEqual(self.message(4, "", ""), "git exited 4:")
+
+    def test_both_tails_are_bounded_together(self) -> None:
+        text = self.message(1, "z" * 5000 + "END-OUT", "q" * 5000 + "END-ERR")
+        stderr_part, stdout_part = text.split(" | stdout: ")
+        self.assertEqual(stderr_part.count("q"), timer.TAIL - len("END-ERR"))
+        self.assertEqual(stdout_part.count("z"), timer.TAIL - len("END-OUT"))
+        self.assertTrue(stderr_part.endswith("END-ERR"))
+        self.assertTrue(stdout_part.endswith("END-OUT"))
+
+    def test_the_stdout_tail_alone_is_bounded(self) -> None:
+        text = self.message(1, "z" * 5000 + "END", "")
+        self.assertEqual(text.count("z"), timer.TAIL - 3)
+        self.assertTrue(text.endswith("END"))
+
+    def test_the_stderr_tail_alone_is_bounded(self) -> None:
+        text = self.message(1, "", "y" * 5000 + "END")
+        self.assertEqual(text.count("y"), timer.TAIL - 3)
+        self.assertTrue(text.endswith("END"))
+
+    def fail_with(self, argv: list[str], rc: int, out: str, err: str) -> str:
+        runner = lambda argv, cwd=None, env=None: completed(argv, rc, out, err)  # noqa: E731
+        log = timer.Log(self.log, "")
+        self.addCleanup(log.close)
+        subject = timer.Timer(self.env, runner, self.sleeps.append, log)
+        with self.assertRaises(timer.StepFailure) as raised:
+            subject.cmd("probe", argv)
+        return str(raised.exception)
+
+    def test_a_curl_failure_records_stderr_and_never_the_remote_body(self) -> None:
+        for program in ("curl", "/usr/bin/curl"):
+            with self.subTest(program=program):
+                text = self.fail_with([program, "--fail", "https://release.invalid/x"], 22, "REMOTE BODY", "curl: (22) 404")
+                self.assertEqual(text, "curl exited 22: stderr: curl: (22) 404")
+
+    def test_a_gh_failure_records_stderr_and_never_the_remote_body(self) -> None:
+        for program in ("gh", "gh-spritz", "/home/x/.local/bin/gh-spritz", self.env["GH_BIN"]):
+            with self.subTest(program=program):
+                text = self.fail_with([program, "run", "view", "1"], 1, "REMOTE BODY", "HTTP 502")
+                self.assertEqual(text, f"{pathlib.Path(program).name} exited 1: stderr: HTTP 502")
+
+    def test_a_remote_command_with_only_stdout_records_just_the_exit_code(self) -> None:
+        self.assertEqual(self.fail_with(["curl", "x"], 22, "REMOTE BODY", ""), "curl exited 22:")
+
+    def test_a_local_command_keeps_its_stdout(self) -> None:
+        for program in ("just", "git", "systemd-run", "python3"):
+            with self.subTest(program=program):
+                out = "release-preflight: PROBLEM: local tag v9 exists only in this clone"
+                self.assertEqual(self.fail_with([program, "x"], 1, out, ""), f"{program} exited 1: stdout: {out}")
+
+    def test_the_signers_stdout_is_a_manifest_and_is_never_recorded(self) -> None:
+        text = self.fail_with(["/work/release-signer-v5.17.0/release-signer", "verify-manifest", "--live"], 1, "REMOTE BODY", "no")
+        self.assertEqual(text, "release-signer exited 1: stderr: no")
+
+    def test_the_signer_the_timer_builds_is_the_program_whose_stdout_is_left_out(self) -> None:
+        fake = Fake(self.root, overrides={"verify": lambda argv: completed(argv, 1, "REMOTE BODY", "signer failed")})
+        self.assertEqual(self.run_timer(fake), 1)
+        verify = next(c["argv"] for c in fake.calls if c["step"] == "verify")
+        self.assertEqual(pathlib.Path(verify[0]).name, timer.SIGNER_BINARY)
+        failed = next(e for e in self.events() if e["event"] == "failed")
+        self.assertIn("signer failed", failed["error"])
+        self.assertNotIn("REMOTE BODY", self.log.read_text())
+
+    def test_a_failing_manifest_fetch_leaves_the_remote_body_out_of_the_log(self) -> None:
+        fake = Fake(self.root, overrides={"manifest": lambda argv: completed(argv, 22, "REMOTE BODY", "curl: (22) 404")})
+        self.assertEqual(self.run_timer(fake), 1)
+        failed = next(e for e in self.events() if e["event"] == "failed")
+        self.assertEqual(failed["step"], "check_listed")
+        self.assertIn("curl: (22) 404", failed["error"])
+        self.assertNotIn("REMOTE BODY", self.log.read_text())
+
+    def test_a_failing_gh_call_leaves_the_remote_body_out_of_the_log(self) -> None:
+        fake = Fake(self.root, overrides={"check_jobs": lambda argv: completed(argv, 1, "REMOTE BODY", "HTTP 502")})
+        self.assertEqual(self.run_timer(fake), 1)
+        failed = next(e for e in self.events() if e["event"] == "failed")
+        self.assertEqual(failed["step"], "check_jobs")
+        self.assertIn("HTTP 502", failed["error"])
+        self.assertNotIn("REMOTE BODY", self.log.read_text())
+
+    def test_a_secret_on_stdout_is_redacted_in_the_message_and_the_log(self) -> None:
+        leak = {"publish_apk": lambda argv: completed(argv, 1, f"out {SECRETS['R2_SECRET_ACCESS_KEY']} {TOKEN}", "")}
+        fake = Fake(self.root, overrides=leak)
+        self.assertEqual(self.run_timer(fake), 1)
+        failed = next(e for e in self.events() if e["event"] == "failed")
+        self.assertIn("stdout: out <redacted> <redacted>", failed["error"])
+        for secret in [*SECRETS.values(), TOKEN]:
+            self.assertNotIn(secret, self.log.read_text())
+
+    def test_a_secret_on_stderr_is_still_redacted(self) -> None:
+        text = self.message(1, "", f"boom {SECRETS['R2_ACCESS_KEY_ID']}")
+        self.assertEqual(text, "git exited 1: stderr: boom <redacted>")
+
+    def test_a_secret_cut_by_the_tail_leaves_no_fragment(self) -> None:
+        secret = SECRETS["R2_SECRET_ACCESS_KEY"]
+        for stream in ("out", "err"):
+            with self.subTest(stream=stream):
+                body = secret + "B" * (timer.TAIL - 4)
+                text = self.message(1, body if stream == "out" else "", body if stream == "err" else "")
+                self.assertNotIn(secret[-4:], text, "the end of a secret the tail cut survived redaction")
+
+
+class TagsStep(TimerCase):
+    """Every local tag is on origin at the same commit (the rule of tools/release_preflight.py), or the run refuses before
+    any token or release step: the preflight inside `just release-quest-apk` would refuse it later, after the build."""
+
+    OFFENDER = "9" * 40
+
+    def refused(self, fake: Fake) -> dict:
+        self.assertEqual(self.run_timer(fake), 1)
+        [refusal] = [e for e in self.events() if e["event"] == "refused"]
+        self.assertEqual(refusal["step"], "tags")
+        self.assertEqual([e for e in self.events() if e["event"] == "failed"], [])
+        self.assertNotIn("token", fake.steps())
+        return refusal
+
+    def test_matching_tags_pass_and_log_the_count_between_checkout_and_token(self) -> None:
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake), 0)
+        steps = fake.steps()
+        self.assertLess(steps.index("checkout.main"), steps.index("tags.local"))
+        self.assertLess(steps.index("tags.remote"), steps.index("token"))
+        ok = [e for e in self.events() if e["event"] == "step_ok" and e["step"] == "tags"]
+        self.assertEqual([e["count"] for e in ok], [2])
+
+    def test_the_tag_commands_ask_for_every_local_tag_and_origins_tags(self) -> None:
+        fake = Fake(self.root)
+        self.run_timer(fake)
+        local = next(c["argv"] for c in fake.calls if c["step"] == "tags.local")
+        remote = next(c["argv"] for c in fake.calls if c["step"] == "tags.remote")
+        self.assertEqual(local[:5], ["git", "-C", str(self.root / "repo"), "for-each-ref", "refs/tags"])
+        self.assertIn("%(*objectname)", local[-1], "the peeled commit of an annotated tag")
+        self.assertEqual(remote[3:], ["ls-remote", "--tags", "origin"])
+
+    def test_a_local_only_tag_is_refused_with_its_name_id_and_the_commands(self) -> None:
+        fake = Fake(self.root)
+        fake.local_tags["v9.9.9"] = (self.OFFENDER, None)
+        error = self.refused(fake)["error"]
+        self.assertIn("v9.9.9", error)
+        self.assertIn(self.OFFENDER, error)
+        self.assertIn("local-only", error)
+        self.assertIn("git tag -d -- v9.9.9", error)
+        self.assertIn(f"git update-ref refs/tags/v9.9.9 {self.OFFENDER}", error)
+        self.assertNotIn("v5.16.1", error, "a tag that matches origin is not named")
+
+    def test_an_annotated_local_only_tag_is_rolled_back_to_its_tag_object_not_its_commit(self) -> None:
+        fake = Fake(self.root)
+        fake.local_tags["v9.9.9"] = (self.OFFENDER, "4" * 40)
+        error = self.refused(fake)["error"]
+        self.assertTrue(error.endswith(f"git update-ref refs/tags/v9.9.9 {self.OFFENDER}"), error[-120:])
+        self.assertNotIn("4" * 40, error)
+
+    HOSTILE = ["x;touch$IFS/pwn", "k`id`", "s$(id)", "q'uote", "a;b$IFS`c`$(d)'e"]
+
+    def test_every_tag_name_and_id_in_a_printed_command_is_shell_quoted(self) -> None:
+        for name in self.HOSTILE:
+            with self.subTest(name=name):
+                fake = Fake(self.root)
+                fake.local_tags[name] = (self.OFFENDER, None)
+                error = self.refused(fake)["error"]
+                quoted = shlex.quote(name)
+                self.assertNotEqual(quoted, name, "the fixture name needs quoting")
+                self.assertIn(f"remove: git tag -d -- {quoted};", error)
+                self.assertIn(f"rollback: git update-ref {shlex.quote('refs/tags/' + name)} {shlex.quote(self.OFFENDER)}", error)
+                self.assertNotIn(f"git tag -d -- {name}", error)
+                self.assertNotIn(f"refs/tags/{name} ", error)
+                self.assertIn(f"{quoted} ({self.OFFENDER[:12]})", error, "the summary shows the name as the commands do")
+                self.log.unlink()
+
+    def test_a_malformed_object_id_is_quoted_too(self) -> None:
+        fake = Fake(self.root)
+        fake.local_tags["v9.9.9"] = ("dead;touch$IFS/x", None)
+        error = self.refused(fake)["error"]
+        self.assertIn(f"rollback: git update-ref refs/tags/v9.9.9 {shlex.quote('dead;touch$IFS/x')}", error)
+        self.assertNotIn("v9.9.9 dead;touch", error)
+
+    def test_the_head_of_the_message_survives_the_couriers_300_character_cut(self) -> None:
+        fake = Fake(self.root)
+        for n in range(4):
+            fake.local_tags[f"v8.0.{n}"] = (f"{n + 1:x}" * 40, None)
+        error = self.refused(fake)["error"]
+        self.assertTrue(error.startswith("local tags origin lacks or has elsewhere: "), error[:80])
+        for n in range(4):
+            self.assertIn(f"v8.0.{n} ({(f'{n + 1:x}' * 12)})", error[:300])
+        self.assertIn("[4 of 6]", error[:300])
+
+    def test_the_head_lists_ten_then_counts_the_rest(self) -> None:
+        fake = Fake(self.root)
+        for n in range(13):
+            fake.local_tags[f"v8.0.{n}"] = (f"{n % 10}" * 40, None)
+        head = self.refused(fake)["error"].split(" | ")[0]
+        self.assertEqual(head.count(" ("), 10)
+        self.assertTrue(head.endswith(", and 3 more [13 of 15]"), head[-60:])
+
+    def test_a_tag_on_another_commit_than_origin_is_refused(self) -> None:
+        fake = Fake(self.root)
+        fake.local_tags["v5.16.1"] = (self.OFFENDER, None)
+        error = self.refused(fake)["error"]
+        self.assertIn("v5.16.1", error)
+        self.assertIn(self.OFFENDER, error)
+        self.assertIn("points at", error)
+        self.assertIn(("1" * 40)[:12], error, "origin's commit")
+        self.assertNotIn("local-only", error)
+        self.assertIn("git tag -d -- v5.16.1", error)
+
+    def test_an_annotated_tag_is_compared_by_its_peeled_commit(self) -> None:
+        fake = Fake(self.root)
+        fake.local_tags["v5.17.0"] = ("7" * 40, "3" * 40)  # another tag object, the same commit as origin's
+        self.assertEqual(self.run_timer(fake), 0)
+        fake = Fake(self.root)
+        fake.local_tags["v5.17.0"] = ("2" * 40, "8" * 40)  # the same tag object id is not enough: the commit differs
+        self.assertEqual(self.run_timer(fake), 1)
+
+    def test_a_lightweight_tag_matches_an_annotated_one_on_the_same_commit(self) -> None:
+        fake = Fake(self.root)
+        fake.local_tags["v5.17.0"] = ("3" * 40, None)
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertEqual([e for e in self.events() if e["event"] == "refused"], [])
+        ok = [e for e in self.events() if e["event"] == "step_ok" and e["step"] == "tags"]
+        self.assertEqual([e["count"] for e in ok], [2], "the tags step ran, found nothing to refuse and said so")
+
+    def test_a_tag_only_origin_has_is_not_an_offender(self) -> None:
+        fake = Fake(self.root)
+        fake.remote_tags["v6.0.0"] = ("5" * 40, None)
+        fake.remote_tags["v6.0.1"] = ("6" * 40, None)
+        self.assertEqual(self.run_timer(fake), 0)
+        ok = next(e for e in self.events() if e["event"] == "step_ok" and e["step"] == "tags")
+        self.assertEqual(ok["count"], 2, "the count is of the local tags")
+
+    def test_more_than_ten_offenders_are_summarised(self) -> None:
+        fake = Fake(self.root)
+        for n in range(12):
+            fake.local_tags[f"v8.0.{n}"] = (f"{n:x}" * 40, None)
+        error = self.refused(fake)["error"]
+        self.assertEqual(sum(f"git tag -d -- v8.0.{n};" in error for n in range(12)), 10)
+        self.assertIn("and 2 more", error)
+        self.assertIn(", and 2 more [12 of 14]", error)
+        self.assertLess(len(error), 3000)
+
+    def test_ten_offenders_are_all_listed_with_no_summary(self) -> None:
+        fake = Fake(self.root)
+        for n in range(10):
+            fake.local_tags[f"v8.0.{n}"] = (f"{n:x}" * 40, None)
+        error = self.refused(fake)["error"]
+        self.assertEqual(sum(f"git tag -d -- v8.0.{n};" in error for n in range(10)), 10)
+        self.assertNotIn("more", error)
+
+    def test_a_refusal_is_not_counted_and_the_clean_run_proceeds(self) -> None:
+        self.write_log({"event": "refused", "tag": "", "step": "tags", "error": "x"},
+                       {"event": "refused", "tag": "", "step": "tags", "error": "x"})
+        dirty = Fake(self.root)
+        dirty.local_tags["v9.9.9"] = (self.OFFENDER, None)
+        self.assertEqual(self.run_timer(dirty), 1)
+        self.assertEqual(len([e for e in self.events() if e["event"] == "refused"]), 3)
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertIn("token", fake.steps())
+        self.assertNotIn("skipped_after_failures", self.names())
+        for call in fake.calls:
+            if call["step"] == "courier":
+                self.assertNotIn("gave up", " ".join(call["argv"]), "the skip notice was sent")
+        self.assertEqual(self.names()[-1], "done")
+
+    def test_a_refusal_runs_nothing_after_the_tag_check_and_couriers_no_one_itself(self) -> None:
+        fake = Fake(self.root)
+        fake.local_tags["v9.9.9"] = (self.OFFENDER, None)
+        self.refused(fake)
+        self.assertEqual({c["step"] for c in fake.calls}, {"checkout.fetch", "checkout.status", "checkout.head",
+                                                            "checkout.main", "tags.local", "tags.remote"})
+
+    def test_a_failing_ls_remote_is_a_failure_not_a_refusal_with_its_output_in_the_record(self) -> None:
+        cut = {"tags.remote": lambda argv: completed(argv, 128, "partial listing", "fatal: unable to access origin")}
+        fake = Fake(self.root, overrides=cut)
+        self.assertEqual(self.run_timer(fake), 1)
+        failed = [e for e in self.events() if e["event"] == "failed"]
+        self.assertEqual([e["step"] for e in failed], ["tags"])
+        self.assertEqual([e for e in self.events() if e["event"] == "refused"], [])
+        self.assertEqual(failed[0]["error"], "git exited 128: stderr: fatal: unable to access origin | stdout: partial listing")
+        self.assertNotIn("token", fake.steps())
+
+    def test_a_failing_ls_remote_counts_toward_the_three_failures_of_a_named_tag(self) -> None:
+        cut = {"tags.remote": lambda argv: completed(argv, 128, "", "fatal: unable to access origin")}
+        for _ in range(3):
+            self.assertEqual(self.run_timer(Fake(self.root, overrides=cut), "--tag", TAG), 1)
+        self.assertEqual([e["step"] for e in self.events() if e["event"] == "failed"], ["tags"] * 3)
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake, "--tag", TAG), 0)
+        self.assertIn("skipped_after_failures", self.names())
+        self.assertNotIn("worktree.add", fake.steps())
+
+    def test_a_failing_for_each_ref_is_a_counted_failure(self) -> None:
+        fake = Fake(self.root, fail="tags.local")
+        self.assertEqual(self.run_timer(fake), 1)
+        self.assertEqual([e["step"] for e in self.events() if e["event"] == "failed"], ["tags"])
+        self.assertNotIn("tags.remote", fake.steps())
+
+
+class TagsAgreeWithThePreflight(TimerCase):
+    """The same real repositories, judged by tools/release_preflight.py and by the timer, name the same tags."""
+
+    FLAGGED = ["v2.0.0", "v2.1.0", "v3.0.0"]
+
+    def git(self, repo: pathlib.Path, *args: str) -> str:
+        argv = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false",
+                "-c", "tag.gpgsign=false", *args]
+        return subprocess.run(argv, check=True, capture_output=True, text=True).stdout.strip()
+
+    def clone_with_tags(self, offenders: bool) -> pathlib.Path:
+        """A clone whose HEAD is origin's main; v1.0.0 (lightweight) and v1.1.0 (annotated) are on origin; with
+        `offenders`, v2.0.0 and v2.1.0 exist only here and v3.0.0 points at another commit than on origin."""
+        origin, clone = self.root / "origin.git", self.root / "repo"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
+        subprocess.run(["git", "clone", "-q", str(origin), str(clone)], check=True, capture_output=True)
+        self.git(clone, "checkout", "-q", "-b", "main")
+        self.git(clone, "commit", "-q", "--allow-empty", "-m", "one")
+        first = self.git(clone, "rev-parse", "HEAD")
+        self.git(clone, "commit", "-q", "--allow-empty", "-m", "two")
+        self.git(clone, "tag", "v1.0.0")
+        self.git(clone, "tag", "-a", "-m", "v1.1.0", "v1.1.0")
+        self.git(clone, "push", "-q", "origin", "main", "v1.0.0", "v1.1.0")
+        if offenders:
+            self.git(clone, "tag", "v2.0.0")
+            self.git(clone, "tag", "-a", "-m", "v2.1.0", "v2.1.0")
+            self.git(clone, "tag", "v3.0.0", first)
+            self.git(clone, "push", "-q", "origin", "v3.0.0")
+            self.git(clone, "tag", "-f", "v3.0.0")
+        return clone
+
+    def preflight_flagged(self, clone: pathlib.Path) -> list[str]:
+        import release_preflight
+
+        problems, _ = release_preflight.check(str(clone), "main", expect_origin=".*")
+        return sorted(p.split()[2] if p.startswith("local tag") else p.split()[1] for p in problems
+                      if p.startswith(("local tag ", "tag ")))
+
+    def timer_env(self, clone: pathlib.Path, gh_exit: int = 4) -> dict:
+        gh = self.root / "gh-fake"
+        gh.write_text(f"#!{sys.executable}\nimport sys\nsys.exit({gh_exit})\n")
+        gh.chmod(0o755)
+        return {**self.env, "QUEST_RELEASE_REPO": str(clone), "GH_BIN": str(gh)}
+
+    def test_the_two_rules_flag_the_same_tags(self) -> None:
+        clone = self.clone_with_tags(offenders=True)
+        flagged = self.preflight_flagged(clone)
+        self.assertEqual(flagged, self.FLAGGED)
+        log = timer.Log(self.log, "")
+        self.addCleanup(log.close)
+        subject = timer.Timer({**self.env, "QUEST_RELEASE_REPO": str(clone)}, timer.subprocess_runner, self.sleeps.append, log)
+        with self.assertRaises(timer.Refusal) as raised:
+            subject.check_tags()
+        message = str(raised.exception)
+        self.assertEqual(sorted(n for n in ("v1.0.0", "v1.1.0", *self.FLAGGED) if f"git tag -d -- {n};" in message), flagged)
+
+    def test_through_main_the_run_is_refused_for_the_tags_the_preflight_flags(self) -> None:
+        clone = self.clone_with_tags(offenders=True)
+        flagged = self.preflight_flagged(clone)
+        self.assertEqual(timer.main([], self.timer_env(clone), runner=timer.subprocess_runner, sleep=self.sleeps.append), 1)
+        [refusal] = [e for e in self.events() if e["event"] == "refused"]
+        self.assertEqual(refusal["step"], "tags")
+        head = refusal["error"].split(" | ")[0]
+        self.assertEqual(sorted(n for n in ("v1.0.0", "v1.1.0", *self.FLAGGED) if f"{n} (" in head), flagged)
+        self.assertEqual([e["step"] for e in self.events() if e["event"] == "step_ok"], ["checkout"], "no token was asked for")
+
+    def test_through_main_a_clone_the_preflight_accepts_passes_the_tags_step(self) -> None:
+        clone = self.clone_with_tags(offenders=False)
+        self.assertEqual(self.preflight_flagged(clone), [])
+        self.assertEqual(timer.main([], self.timer_env(clone), runner=timer.subprocess_runner, sleep=self.sleeps.append), 1)
+        self.assertEqual([e for e in self.events() if e["event"] == "refused"], [])
+        ok = [e for e in self.events() if e["event"] == "step_ok"]
+        self.assertEqual([(e["step"], e.get("count")) for e in ok if e["step"] == "tags"], [("tags", 2)])
+        self.assertEqual(next(e for e in self.events() if e["event"] == "failed")["step"], "token", "it got past the tags step")
+
+    def printed_commands(self, error: str) -> dict[str, tuple[str, str]]:
+        """name -> (remove command, rollback command), read back from a refusal message's command entries."""
+        found = {}
+        for entry in error.split(" | ")[1:]:
+            name = shlex.split(entry.split(" (", 1)[0])[0]
+            found[name] = (entry.split("remove: ", 1)[1].split("; rollback: ", 1)[0], entry.split("rollback: ", 1)[1])
+        return found
+
+    def test_the_printed_commands_remove_and_restore_tags_named_like_git_switches(self) -> None:
+        clone = self.clone_with_tags(offenders=False)
+        names = ["-dash", "-rf", "-d"]
+        ids = {}
+        for name in names:
+            self.git(clone, "update-ref", f"refs/tags/{name}", "HEAD")
+            ids[name] = self.git(clone, "rev-parse", f"refs/tags/{name}")
+        self.assertEqual(timer.main([], self.timer_env(clone), runner=timer.subprocess_runner, sleep=self.sleeps.append), 1)
+        [refusal] = [e for e in self.events() if e["event"] == "refused"]
+        commands = self.printed_commands(refusal["error"])
+        self.assertEqual(sorted(commands), sorted(names))
+        for name in names:
+            with self.subTest(name=name):
+                remove, rollback = commands[name]
+                done = subprocess.run(["sh", "-c", remove], cwd=clone, capture_output=True, text=True)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertNotIn(name, self.git(clone, "tag", "--list").splitlines(), "the printed remove left the tag")
+                subprocess.run(["sh", "-c", rollback], cwd=clone, check=True, capture_output=True)
+                self.assertEqual(self.git(clone, "rev-parse", f"refs/tags/{name}"), ids[name])
+
+    def test_the_printed_commands_remove_and_restore_a_hostile_tag_in_a_real_shell(self) -> None:
+        clone = self.clone_with_tags(offenders=False)
+        marker = self.root / "pwned"
+        hostile = f"x;touch$IFS{marker}"
+        self.git(clone, "tag", hostile)
+        object_id = self.git(clone, "rev-parse", f"refs/tags/{hostile}")
+        self.assertEqual(timer.main([], self.timer_env(clone), runner=timer.subprocess_runner, sleep=self.sleeps.append), 1)
+        [refusal] = [e for e in self.events() if e["event"] == "refused"]
+        remove = refusal["error"].split("remove: ", 1)[1].split("; rollback: ", 1)[0]
+        rollback = refusal["error"].split("rollback: ", 1)[1].split(" | ", 1)[0]
+        subprocess.run(["sh", "-c", remove], cwd=clone, check=True, capture_output=True)
+        self.assertNotIn(hostile, self.git(clone, "tag", "--list").splitlines())
+        subprocess.run(["sh", "-c", rollback], cwd=clone, check=True, capture_output=True)
+        self.assertEqual(self.git(clone, "rev-parse", f"refs/tags/{hostile}"), object_id)
+        self.assertFalse(marker.exists(), "a printed command ran the tag name as a command")
+
+
 class NotifiesOnRefusal(TimerCase):
     def notify(self) -> list[list[str]]:
         sent: list[list[str]] = []
@@ -754,6 +1217,184 @@ class NotifiesOnRefusal(TimerCase):
         self.assertIn("R2_BUCKET, RELEASE_PUBLIC_BASE", body)
         self.assertIn("not chosen yet", body)
         self.assertNotIn("no failed event recorded", body)
+
+
+class FailureNoticeIsNotRepeated(TimerCase):
+    """The unit couriers the last failure after every failed run. A standing refusal is the same text every 30 minutes, so
+    the same step and error is couriered at most once in six hours (`failure_notified`, then `failure_notice_suppressed`)."""
+
+    ERROR = "local tags origin lacks or has elsewhere: v9.9.9 (999999999999) [1 of 3]"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.sent: list[list[str]] = []
+
+    def notify(self) -> int:
+        def courier(argv: list[str], cwd: str | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
+            self.sent.append(argv)
+            return completed(argv)
+
+        return timer.main(["--notify-failure"], self.env, runner=courier, sleep=self.sleeps.append)
+
+    def refusal(self, error: str = ERROR, step: str = "tags") -> dict:
+        return {"event": "refused", "tag": "", "step": step, "error": error}
+
+    def append(self, *records: dict) -> None:
+        with self.log.open("a", encoding="utf-8") as handle:
+            handle.writelines(json.dumps(r) + "\n" for r in records)
+
+    @staticmethod
+    def digest(error: str) -> str:
+        return hashlib.sha256(error.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def hours_ago(hours: float) -> str:
+        return (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)).isoformat()
+
+    def notified(self, error: str = ERROR, step: str = "tags", hours: float = 1) -> dict:
+        return {"event": "failure_notified", "ts": self.hours_ago(hours), "tag": "", "step": step, "error_sha256": self.digest(error)}
+
+    def test_the_first_notice_is_sent_and_recorded_with_the_step_and_the_hash_of_the_error(self) -> None:
+        self.write_log(self.refusal())
+        self.assertEqual(self.notify(), 0)
+        self.assertEqual(len(self.sent), 1)
+        [record] = [e for e in self.events() if e["event"] == "failure_notified"]
+        self.assertEqual((record["step"], record["error_sha256"]), ("tags", self.digest(self.ERROR)))
+
+    def test_the_same_error_twice_in_a_row_sends_one_courier_and_logs_the_suppression(self) -> None:
+        self.write_log(self.refusal())
+        self.assertEqual(self.notify(), 0)
+        self.append(self.refusal())  # the next 30-minute run refuses the same way
+        self.assertEqual(self.notify(), 0)
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.names().count("failure_notified"), 1)
+        [suppressed] = [e for e in self.events() if e["event"] == "failure_notice_suppressed"]
+        self.assertEqual((suppressed["step"], suppressed["error_sha256"]), ("tags", self.digest(self.ERROR)))
+
+    def test_a_different_error_is_sent_again(self) -> None:
+        self.write_log(self.refusal())
+        self.assertEqual(self.notify(), 0)
+        self.append(self.refusal("local tags origin lacks or has elsewhere: v9.9.8 (888888888888) [1 of 3]"))
+        self.assertEqual(self.notify(), 0)
+        self.assertEqual(len(self.sent), 2)
+        self.assertNotIn("failure_notice_suppressed", self.names())
+
+    def test_the_same_error_on_another_step_is_sent_again(self) -> None:
+        self.write_log(self.refusal(), self.notified(step="checkout"))
+        self.assertEqual(self.notify(), 0)
+        self.assertEqual(len(self.sent), 1)
+
+    def test_the_same_error_after_six_hours_is_sent_again(self) -> None:
+        self.write_log(self.refusal(), self.notified(hours=6.5))
+        self.assertEqual(self.notify(), 0)
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.names().count("failure_notified"), 2)
+
+    def test_the_same_error_just_under_six_hours_is_suppressed(self) -> None:
+        self.write_log(self.refusal(), self.notified(hours=5.9))
+        self.assertEqual(self.notify(), 0)
+        self.assertEqual(self.sent, [])
+        self.assertIn("failure_notice_suppressed", self.names())
+
+    def test_only_the_newest_notice_counts(self) -> None:
+        self.write_log(self.refusal(), self.notified(hours=1), self.notified("another error", hours=0.5))
+        self.assertEqual(self.notify(), 0)
+        self.assertEqual(len(self.sent), 1, "the newest notice was for another error")
+
+    def test_a_notice_dated_in_the_future_or_unreadable_does_not_suppress(self) -> None:
+        for ts in (self.hours_ago(-3), "not a time", None, (datetime.datetime.now() - datetime.timedelta(hours=1)).isoformat()):
+            with self.subTest(ts=ts):
+                self.write_log(self.refusal(), {**self.notified(hours=1), "ts": ts})
+                self.sent.clear()
+                self.assertEqual(self.notify(), 0)
+                self.assertEqual(len(self.sent), 1)
+
+    def test_a_failed_run_is_deduplicated_like_a_refusal(self) -> None:
+        failed = {"event": "failed", "tag": TAG, "step": "build_apk", "error": "build broke"}
+        self.write_log(failed, self.notified("build broke", "build_apk", hours=1))
+        self.assertEqual(self.notify(), 0)
+        self.assertEqual(self.sent, [])
+        self.assertIn("failure_notice_suppressed", self.names())
+
+    def test_a_credential_refusal_is_deduplicated_by_what_it_names(self) -> None:
+        missing = {"event": "refused", "tag": "", "missing": ["R2_BUCKET"]}
+        self.write_log(missing)
+        self.assertEqual(self.notify(), 0)
+        self.append(missing)
+        self.assertEqual(self.notify(), 0)
+        self.assertEqual(len(self.sent), 1)
+        self.append({"event": "refused", "tag": "", "missing": ["R2_BUCKET", "RELEASE_PUBLIC_BASE"]})
+        self.assertEqual(self.notify(), 0)
+        self.assertEqual(len(self.sent), 2)
+
+    def test_a_notice_that_could_not_be_sent_is_not_recorded_as_sent(self) -> None:
+        self.write_log(self.refusal())
+        broken = lambda argv, cwd=None, env=None: completed(argv, 1, "", "no courier")  # noqa: E731
+        self.assertEqual(timer.main(["--notify-failure"], self.env, runner=broken, sleep=self.sleeps.append), 1)
+        self.assertNotIn("failure_notified", self.names())
+
+    def test_a_log_that_cannot_record_the_notice_is_loud(self) -> None:
+        self.write_log(self.refusal())
+        self.log.chmod(0o444)
+        self.addCleanup(self.log.chmod, 0o644)
+        self.assertEqual(self.notify(), 1)
+        self.assertEqual(len(self.sent), 1, "the courier went before the record failed")
+
+    def test_a_log_that_cannot_record_the_suppression_is_loud(self) -> None:
+        self.write_log(self.refusal(), self.notified())
+        self.log.chmod(0o444)
+        self.addCleanup(self.log.chmod, 0o644)
+        self.assertEqual(self.notify(), 1)
+        self.assertEqual(self.sent, [])
+
+
+class LogLinesThatAreNotEvents(TimerCase):
+    """A line of the log that is valid JSON but not an object (a stray write, a hand edit) is not an event: every reader of the
+    log skips it, so it cannot crash a run or the failure notice."""
+
+    JUNK = ["[1, 2]", '"x"', "3", "null", "true", "{"]
+
+    def logged(self) -> list[str]:
+        """The events the log holds, read the way the tool reads it (this log has lines that are not JSON on purpose)."""
+        return [e["event"] for e in timer.read_events(self.log)]
+
+    def write_mixed(self, *records: dict) -> None:
+        lines = []
+        for record in records:
+            lines += [*self.JUNK, json.dumps(record)]
+        lines += self.JUNK
+        self.log.parent.mkdir(parents=True, exist_ok=True)
+        self.log.write_text("\n".join(lines) + "\n")
+
+    def test_the_failure_notice_uses_the_real_events_and_does_not_crash(self) -> None:
+        self.write_mixed({"event": "failed", "tag": TAG, "step": "publish_apk", "error": "publish failed with exit 1"})
+        sent: list[list[str]] = []
+
+        def courier(argv: list[str], cwd: str | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
+            sent.append(argv)
+            return completed(argv)
+
+        self.assertEqual(timer.main(["--notify-failure"], self.env, runner=courier, sleep=self.sleeps.append), 0)
+        self.assertIn("publish_apk", sent[0][-1])
+        self.assertIn("publish failed with exit 1", sent[0][-1])
+        self.assertEqual(self.logged()[-1], "failure_notified")
+
+    def test_a_run_reads_its_history_around_the_junk(self) -> None:
+        self.write_mixed({"event": "done", "tag": TAG})
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertIn("nothing_to_do", self.logged())
+
+    def test_a_notice_owed_is_found_around_the_junk(self) -> None:
+        self.write_mixed({"event": "step_ok", "tag": TAG, "step": "verify_live"})
+        fake = Fake(self.root)
+        fake.beta = TAG[1:]
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertEqual(len(couriers(fake, "teth")), 1)
+
+    def test_read_events_returns_only_objects(self) -> None:
+        self.write_mixed({"event": "x"})
+        self.assertEqual(timer.read_events(self.log), [{"event": "x"}])
 
 
 class RealProcess(TimerCase):
