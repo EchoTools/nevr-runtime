@@ -41,7 +41,7 @@ int main() {
   {
     const std::lock_guard<std::mutex> lock(m);
     for (const std::string& line : lines) {
-      offLine = offLine || line == "[NEVR.INVITE] feature off reason=not_configured";
+      offLine = offLine || line == "[NEVR.INVITE] feature off reason=not_configured source=default";
       onLine = onLine || line == "[NEVR.INVITE] service on";
     }
   }
