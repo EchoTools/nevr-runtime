@@ -32,8 +32,9 @@
 
 namespace nevr_netgun_bullets {
 
-/// The class symbols of the two resources: the class name without the package manifest's `Win10` suffix, the form in
-/// which the loader callback reports the main-menu page (menu_cards.h). No run has shown the callback report these two.
+/// The class symbols of the two resources: the class name without the package manifest's `Win10` suffix. That is the
+/// logical type the loader callback reads at CResource + 0x28, and an entry keyed by it names buffer 0, the only buffer
+/// a transform is offered (resource_buffer_key.h). No run has shown the callback report these two.
 inline constexpr uint64_t kParticleType = EchoVR::CSymbol64Hash("CParticleEffectCR");
 inline constexpr uint64_t kBulletType = EchoVR::CSymbol64Hash("CR15NetBulletCR");
 
