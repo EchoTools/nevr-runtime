@@ -4,39 +4,50 @@
 
 A bad release is already on beta and installers read `channels.beta`. This publishes the manifest again with beta on a
 release the manifest already lists, through the same `sign-manifest.yml` publish the Quest release timer uses, and checks
-that `verify-manifest --live` lists it with every artifact it had.
+that `verify-manifest --live` lists it with every artifact it had. It cannot target a tag the manifest does not list: the
+fix for a bad release is a new release, which reaches beta through the release train and the Quest release timer.
 
   read_live        `verify-manifest --live` of the release signer, and the manifest the public host serves, held to the
                    sha256 the signer verified
   check_target     refuses a tag the manifest does not list, the tag that already is beta, a higher tag unless --forward
                    (the roll-forward path), and --forward for a tag that is not higher; `override=true` goes into the
                    dispatch only when the tag is lower than beta
-  claims           `release-signer listed-claims --tag vX.Y.Z --live`: the target's Quest APK, game data and content
-                   packs, which are the publish's `extra_artifacts`; each must be what the manifest lists for the tag
+  claims           `release-signer listed-claims --tag vX.Y.Z --live`: the publish's `extra_artifacts`. They must be exactly
+                   the target's artifacts that GitHub does not hold (every kind but windows-zip and quest-library), by name,
+                   and each must be what the manifest lists for the tag
   plan             printed: beta now, the target, the direction, manifest_version, the target's artifacts with sizes, and
                    whether the train will be paused
-  --dry-run        dispatches with dry_run=true, watches, checks the jobs (a dry run records nothing, so the record job is
-                   skipped) and checks that beta did not move. It changes nothing else: no variable, no timer.
+  --dry-run        reads (and only reads) the variable, the timer and the Quest service, and says whether a live run would
+                   be refused; dispatches with dry_run=true, watches, checks the jobs (a dry run records nothing, so the
+                   record job is skipped), checks that beta did not move, and downloads the run's signed manifest and
+                   compares it with the live one. It changes nothing else: no variable, no timer.
   --live --yes     pause_variable  RELEASE_TRAIN := false on EchoTools/nevr-runtime (the release train stops cutting), read back
-                   pause_timer     `systemctl --user stop nevr-quest-release.timer`, and refuses while a Quest release
-                                   run is in progress (--keep-train skips both pauses)
-                   recheck         beta has not moved while pausing
+                   pause_timer     `systemctl --user stop nevr-quest-release.timer` (--keep-train skips both pauses)
+                   check_service   the Quest release service is `inactive` or `failed` (a oneshot unit that is running is
+                                   `activating`), else it refuses
+                   check_signer_runs   no `sign-manifest.yml` run on the signer repository is queued or running
+                   recheck         beta has not moved, and the claims still match, while pausing
                    dispatch, watch, check_jobs   the live publish; the jobs that publish all succeeded
-                   verify_live     beta is the target and every artifact the target listed, and every claim, is still listed
-                   It never resumes the train: it prints the roll-forward command and the two resume commands and says the
-                   train stays paused until someone runs them.
+                   verify_live     beta is the target and every artifact the target listed is still listed
+                   It never resumes the train: it prints the two resume commands, says the train stays paused until someone
+                   runs them, and prints what ships the fix (the train, not this tool) and the false-alarm command.
 
-Inputs, from the environment: GH_BIN (default gh), RELEASE_PUBLIC_BASE (required), RELEASE_SIGNER_BIN and RELEASE_SIGNER_DIR
-(both, or neither: then the signer is built from a snapshot of the main of QUEST_RELEASE_SIGNER_REPO, default
-~/src/release-signer, the way the Quest release timer builds it, and the snapshot is removed when the run ends). No R2
-credential is read, and none is passed to a child. Every step appends a JSON line (ts, run, event, step, tag, direction,
-outcome, error) to $XDG_STATE_HOME/nevr-runtime/rollback-beta.jsonl; a log that cannot be written is a failure. A failed
-step exits 1 and names itself; a live run that failed after it paused says what is and is not done. No token, credential or
-hosting URL is printed or logged: every value read from the environment for a credential or the host is replaced by
-<redacted>, and the stdout of gh and the signer (remote content) is never put in an error.
+Inputs, from the environment: GH_BIN (default gh-spritz, as the Quest release timer and the train guard), RELEASE_PUBLIC_BASE
+(required), RELEASE_SIGNER_BIN and RELEASE_SIGNER_DIR (both, or neither: then the signer is built from a snapshot of the
+main of QUEST_RELEASE_SIGNER_REPO, default ~/src/release-signer, the way the Quest release timer builds it, and the snapshot
+is removed when the run ends). No R2 credential is read, and none is passed to a child. Every command has a timeout (600 s,
+1800 s for the signer build and the watch, 7200 s for the watch when the target lists PC game data). Every step appends a
+JSON line (ts, run, event, step, tag, direction, outcome, error) to $XDG_STATE_HOME/nevr-runtime/rollback-beta.jsonl; a log
+that cannot be written is a failure. A failed, interrupted or crashed run exits non-zero and names the step; after it began
+to pause or dispatch it says what is paused, what was dispatched (with the run id when known) and how to resume. A rollback
+that was verified but whose scratch could not be removed exits 0 and says so: the outcome the command exists for is done and
+verified, and a non-zero exit would invite a second run. No token, credential or hosting URL is printed or logged: every
+value read from the environment for a credential or the host is replaced by <redacted>, and the stdout of gh and the signer
+(remote content) is never put in an error.
 """
 
 import argparse
+import collections
 import json
 import os
 import pathlib
@@ -52,10 +63,10 @@ from collections.abc import Callable
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from publish_quest_apk import Failure, Log, fetch, public_base  # noqa: E402 - the sibling tool's log, failure and fetch
 
-TAG = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
-VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")  # used with fullmatch: `$` would pass a trailing newline
+VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 RUN_ID = re.compile(r"/actions/runs/([0-9]+)")
-SHA256 = re.compile(r"^[0-9a-f]{64}$")
+SHA256 = re.compile(r"[0-9a-f]{64}")
 MANIFEST_PATH = "nevr-runtime/manifest.json"  # as in quest_release_timer.py
 MANIFEST_LIMIT = 16 << 20
 RELEASE_SLUG = "EchoTools/nevr-runtime"
@@ -65,13 +76,20 @@ TRAIN_VARIABLE = "RELEASE_TRAIN"
 TIMER_UNIT = "nevr-quest-release.timer"
 SERVICE_UNIT = "nevr-quest-release.service"
 SIGNER_BINARY = "release-signer"
+DEFAULT_GH = "gh-spritz"  # the publisher's account, as in quest_release_timer.py and release_train_guard.py
 # The jobs of .github/workflows/sign-manifest.yml in the release-signer repository. A live run records and uploads; a dry run
 # checks, signs and verifies the upload, and the record job is skipped. A green run with a skipped job that should have run
 # published nothing, so the conclusions are read job by job.
 LIVE_JOBS = {"Commit the manifest record": "success", "Publish to R2": "success", "A run that published nothing is red": "success"}
 DRY_JOBS = {"Check the release and build the manifest": "success", "Sign manifest.json": "success",
             "Commit the manifest record": "skipped", "Publish to R2": "success", "A run that published nothing is red": "success"}
-WATCH_TIMEOUT = 1800  # seconds; a run takes about six minutes
+DEFAULT_TIMEOUT = 600  # seconds, for every command that names no other
+BUILD_TIMEOUT = 1800  # the signer snapshot's go build
+WATCH_TIMEOUT = 1800  # a run takes about six minutes
+WATCH_TIMEOUT_PC_DATA = 7200  # the check job downloads the PC game data (about 5 GB) when the target lists it
+IDLE_SERVICE_STATES = frozenset({"inactive", "failed"})  # a oneshot unit that is running reports `activating`
+GITHUB_KINDS = frozenset({"windows-zip", "quest-library"})  # the artifacts GitHub holds; every other kind is claimed
+IGNORED_ENTRY_FIELDS = ("notes", "published")  # a re-published listed release may differ in these (the signer's sameBytes)
 SECRET_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "GH_TOKEN", "GITHUB_TOKEN")
 R2_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")
 LOCAL_OUTPUT = frozenset({"systemctl", "git", "tar", "go"})  # programs whose stdout is ours; everything else is remote content
@@ -81,9 +99,10 @@ Runner = Callable[..., subprocess.CompletedProcess]
 
 
 class StepFailure(Failure):
-    def __init__(self, step: str, message: str) -> None:
+    def __init__(self, step: str, message: str, code: int | None = None) -> None:
         super().__init__(message)
         self.step = step
+        self.code = code  # the exit code of the command that failed, when one did
 
 
 class Refusal(StepFailure):
@@ -106,10 +125,22 @@ def state_log_path(env: dict[str, str]) -> pathlib.Path:
 
 
 def version_key(version: str) -> tuple[int, int, int]:
-    found = VERSION.match(version)
+    found = VERSION.fullmatch(version)
     if not found:
         raise StepFailure("check_target", f"{version!r} is not a vX.Y.Z version")
     return int(found.group(1)), int(found.group(2)), int(found.group(3))
+
+
+def note_lines(value: object) -> set[str]:
+    if isinstance(value, str):
+        return set(value.splitlines())
+    if isinstance(value, list):
+        return {str(line) for line in value}
+    return set()
+
+
+def has_pc_game_data(artifacts: list[dict]) -> bool:
+    return any(a.get("kind") == "game-data" and a.get("platform") == "windows-x86_64" for a in artifacts)
 
 
 class Rollback:
@@ -117,7 +148,7 @@ class Rollback:
         self.args, self.env, self.runner, self.log = args, env, runner, log
         self.tag = args.tag
         self.version = args.tag[1:]
-        self.gh = env.get("GH_BIN") or "gh"
+        self.gh = env.get("GH_BIN") or DEFAULT_GH
         base = env.get("RELEASE_PUBLIC_BASE", "")
         redacted = [env[name] for name in SECRET_ENV if env.get(name)]
         if base:
@@ -128,6 +159,9 @@ class Rollback:
         self.pausing = args.live and not args.keep_train
         self.paused = {"variable": False, "timer": False}
         self.dispatched: str | None = None
+        self.dispatch_unknown = False  # gh may have dispatched a publish and left no run id
+        self.outcome = ""  # what a finished run did, for the line a failed cleanup adds to
+        self.current = ""  # the step the run is in, for an interrupted or crashed run
         self.scratch: pathlib.Path | None = None
         self.signer_bin = pathlib.Path()
         self.signer_dir = pathlib.Path()
@@ -143,14 +177,18 @@ class Rollback:
         print(self.redact(line), flush=True)
 
     def ok(self, step: str, **fields: object) -> None:
+        self.current = step
         self.log.event("step", step=step, outcome="ok", error="", **fields)
 
     def cmd(self, step: str, argv: list[str], cwd: pathlib.Path | str | None = None, env: dict | None = None,
             ok_codes: tuple[int, ...] = (0,), timeout: float | None = None) -> subprocess.CompletedProcess:
-        result = self.runner(argv, cwd=str(cwd) if cwd else None, env=env if env is not None else self.child, timeout=timeout)
+        self.current = step
+        result = self.runner(argv, cwd=str(cwd) if cwd else None, env=env if env is not None else self.child,
+                             timeout=timeout or DEFAULT_TIMEOUT)
         if result.returncode not in ok_codes:
             name = pathlib.Path(argv[0]).name
-            raise StepFailure(step, f"{name} {' '.join(argv[1:3])} exited {result.returncode}:{self.tails(name, result)}")
+            raise StepFailure(step, f"{name} {' '.join(argv[1:3])} exited {result.returncode}:{self.tails(name, result)}",
+                              result.returncode)
         return result
 
     def gh_cmd(self, step: str, args: list[str], timeout: float | None = None) -> subprocess.CompletedProcess:
@@ -164,7 +202,25 @@ class Rollback:
                 parts.append(f"{label}: {tail}")
         return (" " + " | ".join(parts)) if parts else ""
 
-    # ---- the signer -----------------------------------------------------------------------------------------------
+    # ---- the signer and the scratch -------------------------------------------------------------------------------
+
+    def make_scratch(self, step: str) -> pathlib.Path:
+        """This run's own folder under the work root, made once and removed when the run ends."""
+        if self.scratch is None:
+            home = pathlib.Path(os.path.expanduser("~"))
+            root = pathlib.Path(self.env.get("NEVR_WORK_ROOT") or home / "src" / "nevr-runtime-work") / "rollback-beta"
+            try:
+                root.mkdir(parents=True, exist_ok=True)
+                readme = root / "README.md"
+                if not readme.exists():
+                    readme.write_text("Scratch of tools/rollback_beta.py (the beta rollback). Each run removes what it makes here "
+                                      "when it ends.\n", encoding="utf-8")
+                scratch = root / f"run-{self.log.base['run']}"
+                scratch.mkdir()
+            except OSError as error:
+                raise StepFailure(step, f"cannot make the scratch folder {root}: {error.strerror}") from error
+            self.scratch = scratch
+        return self.scratch
 
     def prepare_signer(self) -> None:
         if self.env.get("RELEASE_SIGNER_BIN"):
@@ -174,37 +230,27 @@ class Rollback:
         step = "build_signer"
         home = pathlib.Path(os.path.expanduser("~"))
         repo = str(pathlib.Path(self.env.get("QUEST_RELEASE_SIGNER_REPO") or home / "src" / "release-signer"))
-        root = pathlib.Path(self.env.get("NEVR_WORK_ROOT") or home / "src" / "nevr-runtime-work") / "rollback-beta"
-        try:
-            root.mkdir(parents=True, exist_ok=True)
-            readme = root / "README.md"
-            if not readme.exists():
-                readme.write_text("Scratch of tools/rollback_beta.py (the beta rollback). Each run removes what it makes here "
-                                  "when it ends.\n", encoding="utf-8")
-            self.scratch = root / f"signer-{self.log.base['run']}"
-            self.scratch.mkdir()
-        except OSError as error:
-            raise StepFailure(step, f"cannot make the scratch folder {root}: {error.strerror}") from error
-        tarball = self.scratch / "release-signer.tar"
-        self.signer_dir = self.scratch / "snapshot"
+        scratch = self.make_scratch(step)
+        tarball = scratch / "release-signer.tar"
+        self.signer_dir = scratch / "snapshot"
         self.signer_bin = self.signer_dir / SIGNER_BINARY
         self.cmd(step, ["git", "-C", repo, "fetch", "origin", "main"])
         sha = self.cmd(step, ["git", "-C", repo, "rev-parse", "origin/main"]).stdout.strip()
         self.cmd(step, ["git", "-C", repo, "archive", "--format=tar", "-o", str(tarball), "origin/main"])
         self.signer_dir.mkdir()
         self.cmd(step, ["tar", "-xf", str(tarball), "-C", str(self.signer_dir)])
-        self.cmd(step, ["go", "build", "-o", str(self.signer_bin), "./cmd/release-signer"], self.signer_dir)
+        self.cmd(step, ["go", "build", "-o", str(self.signer_bin), "./cmd/release-signer"], self.signer_dir, timeout=BUILD_TIMEOUT)
         self.ok(step, signer_commit=sha)
 
     def cleanup(self) -> str:
-        """Remove exactly the snapshot this run made. Returns an error text, or an empty string."""
+        """Remove exactly the folder this run made. Returns what went wrong, or an empty string."""
         if self.scratch is None:
             return ""
         scratch, self.scratch = self.scratch, None
         try:
             shutil.rmtree(scratch)
         except OSError as error:
-            return f"cannot remove {scratch}: {error.strerror}"
+            return f"cleanup of {scratch} failed: {error.strerror}"
         return ""
 
     def read_live(self, step: str) -> dict:
@@ -277,9 +323,18 @@ class Rollback:
             raise Refusal(step, f"listed-claims printed no artifacts for {self.tag}: the release must list its Quest APK and "
                                 "game data before beta can point at it")
         for claim in claims:
-            if not (isinstance(claim, dict) and isinstance(claim.get("name"), str) and SHA256.match(str(claim.get("sha256")))):
+            if not (isinstance(claim, dict) and isinstance(claim.get("name"), str) and SHA256.fullmatch(str(claim.get("sha256")))):
                 raise StepFailure(step, "listed-claims printed an entry without a name and a sha256")
         self.check_claims_listed(step, claims, live["manifest"])
+        # The publish takes the bytes of every artifact it is not handed from GitHub, so what it is handed must be all of the
+        # others: a claim list without the Quest APK would publish the release without one.
+        expected = collections.Counter(str(a.get("name")) for a in self.artifacts_of(live["manifest"], self.version)
+                                       if a.get("kind") not in GITHUB_KINDS)
+        got = collections.Counter(c["name"] for c in claims)
+        if got != expected:
+            missing, extra = sorted((expected - got).elements()), sorted((got - expected).elements())
+            raise Refusal(step, f"the claims for {self.tag} are not the artifacts GitHub does not hold (every kind but "
+                                f"{', '.join(sorted(GITHUB_KINDS))}): missing {missing or 'none'}; not expected {extra or 'none'}")
         return claims
 
     def check_claims_listed(self, step: str, claims: list[dict], manifest: dict) -> None:
@@ -303,14 +358,30 @@ class Rollback:
         self.say(f"plan: train {train}")
         self.ok("plan", beta=beta, override=override)
 
+    # ---- what a live run needs and a dry run only reports ---------------------------------------------------------
+
+    def variable_value(self, step: str) -> object:
+        listed = self.gh_cmd(step, ["variable", "list", "-R", RELEASE_SLUG, "--json", "name,value"]).stdout
+        try:
+            return next((v.get("value") for v in json.loads(listed) if v.get("name") == TRAIN_VARIABLE), None)
+        except (ValueError, AttributeError, TypeError) as error:
+            raise StepFailure(step, f"the variable list is unreadable: {error}") from error
+
+    def service_state(self, step: str) -> str:
+        return self.cmd(step, ["systemctl", "--user", "show", "-p", "ActiveState", "--value", SERVICE_UNIT]).stdout.strip()
+
+    def active_signer_runs(self, step: str) -> list[str]:
+        out = self.gh_cmd(step, ["run", "list", "--workflow", WORKFLOW, "-R", SIGNER_SLUG, "--json", "status,databaseId",
+                                 "--limit", "30"]).stdout
+        try:
+            return [f"{run['databaseId']} ({run['status']})" for run in json.loads(out) if run["status"] != "completed"]
+        except (ValueError, KeyError, TypeError) as error:
+            raise StepFailure(step, f"the run list is unreadable: {error}") from error
+
     def pause_variable(self) -> None:
         step = "pause_variable"
         self.gh_cmd(step, ["variable", "set", TRAIN_VARIABLE, "--body", "false", "-R", RELEASE_SLUG])
-        listed = self.gh_cmd(step, ["variable", "list", "-R", RELEASE_SLUG, "--json", "name,value"]).stdout
-        try:
-            value = next((v.get("value") for v in json.loads(listed) if v.get("name") == TRAIN_VARIABLE), None)
-        except (ValueError, AttributeError) as error:
-            raise StepFailure(step, f"the variable list is unreadable: {error}") from error
+        value = self.variable_value(step)
         if value != "false":
             raise StepFailure(step, f"{TRAIN_VARIABLE} is {value!r} after the set, not 'false'")
         self.paused["variable"] = True
@@ -323,11 +394,55 @@ class Rollback:
         if active.returncode == 0:
             raise StepFailure(step, f"{TIMER_UNIT} is still active after the stop")
         self.paused["timer"] = True
-        running = self.cmd(step, ["systemctl", "--user", "is-active", SERVICE_UNIT], ok_codes=(0, 3, 4))
-        if running.returncode == 0:
-            raise StepFailure(step, f"{SERVICE_UNIT} is running a Quest release now: wait for it to end, then run this again "
-                                    "(the timer is stopped, so it will not start another)")
         self.ok(step)
+
+    def check_service(self) -> None:
+        step = "check_service"
+        state = self.service_state(step)
+        if state not in IDLE_SERVICE_STATES:
+            stopped = " (the timer is stopped, so it will not start another)" if self.paused["timer"] else ""
+            raise StepFailure(step, f"{SERVICE_UNIT} is {state or 'in an unknown state'}: a Quest release is in progress and "
+                                    f"publishes to beta when it ends. Wait for it to end, then run this again{stopped}")
+        self.ok(step, state=state)
+
+    def check_signer_runs(self) -> None:
+        step = "check_signer_runs"
+        active = self.active_signer_runs(step)
+        if active:
+            raise StepFailure(step, f"{WORKFLOW} has runs in progress on {SIGNER_SLUG}: {', '.join(active)}. A publish is "
+                                    "already under way; wait for it to end, then run this again")
+        self.ok(step)
+
+    def dry_preflight(self) -> None:
+        """Read-only: what a live run would meet, as plan lines. A value that cannot be read is said, not guessed."""
+        refused = []
+        probes = (
+            ("variable", lambda: self.variable_value("preflight"), lambda v: f"{TRAIN_VARIABLE} is {v!r}; a live run sets it to false"),
+            ("timer", lambda: self.cmd("preflight", ["systemctl", "--user", "is-active", TIMER_UNIT], ok_codes=(0, 3, 4)).stdout.strip(),
+             lambda v: f"{TIMER_UNIT} is {v or 'unknown'}; a live run stops it"),
+        )
+        for name, read, text in probes:
+            try:
+                self.say(f"plan: {text(read())}")
+            except StepFailure as failure:
+                self.say(f"plan: the {name} could not be read: {failure}")
+        try:
+            state = self.service_state("preflight")
+            self.say(f"plan: {SERVICE_UNIT} is {state or 'unknown'}")
+            if state not in IDLE_SERVICE_STATES:
+                refused.append(f"{SERVICE_UNIT} is {state or 'unknown'}")
+        except StepFailure as failure:
+            self.say(f"plan: the Quest service could not be read: {failure}")
+        try:
+            active = self.active_signer_runs("preflight")
+            self.say(f"plan: {WORKFLOW} runs in progress on {SIGNER_SLUG}: {', '.join(active) or 'none'}")
+            if active:
+                refused.append(f"{WORKFLOW} has runs in progress ({', '.join(active)})")
+        except StepFailure as failure:
+            self.say(f"plan: the signer runs could not be read: {failure}")
+        self.say("plan: a live run would be refused now: " + "; ".join(refused) if refused else
+                 "plan: a live run would not be refused by the Quest service or a running signer workflow")
+        self.ok("preflight", refused=refused)
 
     def recheck(self, beta: str, claims: list[dict]) -> dict:
         step = "recheck"
@@ -348,18 +463,29 @@ class Rollback:
         argv = ["workflow", "run", WORKFLOW, "-R", SIGNER_SLUG, "--ref", "main"]
         for key, value in inputs.items():
             argv += ["-f", f"{key}={value}"]
-        found = RUN_ID.search(self.gh_cmd(step, argv).stdout)
+        try:
+            out = self.gh_cmd(step, argv).stdout
+        except StepFailure as failure:
+            if failure.code == 124:  # a call that timed out may have been accepted
+                self.dispatch_unknown = True
+                raise StepFailure(step, f"{failure}. A publish MAY have been dispatched: list the runs on the signer repo "
+                                        "before dispatching again", 124) from failure
+            raise
+        found = RUN_ID.search(out)
         if not found:
-            raise StepFailure(step, "the dispatch printed no run URL")
+            self.dispatch_unknown = True
+            raise StepFailure(step, "gh exited 0 but printed no run URL: a publish MAY have been dispatched: list the runs on "
+                                    "the signer repo before dispatching again")
         self.dispatched = found.group(1)
-        self.ok(step, run_id=self.dispatched, dry_run=dry, override=override)
+        # The operator reads the run id before the log is asked to take it: a log that cannot be written must not hide it.
         self.say(f"run {self.dispatched} dispatched (dry_run={str(dry).lower()}, override={str(override).lower()})")
+        self.ok(step, run_id=self.dispatched, dry_run=dry, override=override)
         return self.dispatched
 
-    def watch(self, run_id: str) -> None:
+    def watch(self, run_id: str, timeout: int) -> None:
         step = "watch"
         try:
-            self.gh_cmd(step, ["run", "watch", run_id, "-R", SIGNER_SLUG, "--exit-status"], timeout=WATCH_TIMEOUT)
+            self.gh_cmd(step, ["run", "watch", run_id, "-R", SIGNER_SLUG, "--exit-status"], timeout=timeout)
         except StepFailure as failure:
             raise StepFailure(step, f"run {run_id}: {failure}") from failure
         self.ok(step, run_id=run_id)
@@ -384,6 +510,52 @@ class Rollback:
         if now != beta:
             raise StepFailure(step, f"the dry run moved beta: it was v{beta}, it is now v{now or 'none'}")
         self.ok(step, beta=now)
+
+    def check_dry_manifest(self, run_id: str, live: dict) -> None:
+        """The manifest the dry run signed (with a throwaway key) is what a live run would publish: compare it, read-only, with
+        the live one. Beta must be the target and nothing else may move; a notes difference is reported, not a failure."""
+        step = "check_dry_manifest"
+        dest = self.make_scratch(step) / f"signed-{run_id}"
+        self.gh_cmd(step, ["run", "download", run_id, "-R", SIGNER_SLUG, "-n", "manifest-signed", "-D", str(dest)])
+        try:
+            signed = json.loads((dest / "manifest.json").read_text(encoding="utf-8"))
+            signed_releases, signed_channels = dict(signed["releases"]), dict(signed["channels"])
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise StepFailure(step, f"the dry run's manifest-signed artifact has no readable manifest.json: {error}") from error
+        manifest = live["manifest"]
+        releases, channels = manifest.get("releases", {}), manifest.get("channels", {})
+        if signed_channels.get("beta") != self.version:
+            raise StepFailure(step, f"the dry run's manifest has beta {signed_channels.get('beta')!r}, not {self.version!r}")
+        others = {k: v for k, v in channels.items() if k != "beta"}
+        if {k: v for k, v in signed_channels.items() if k != "beta"} != others:
+            raise StepFailure(step, "the dry run's manifest changes a channel other than beta")
+        if set(signed_releases) != set(releases):
+            added, removed = sorted(set(signed_releases) - set(releases)), sorted(set(releases) - set(signed_releases))
+            raise StepFailure(step, f"the dry run's manifest changes the set of releases: adds {added or 'none'}, removes "
+                                    f"{removed or 'none'}")
+        changed = sorted(v for v in releases if v != self.version and signed_releases[v] != releases[v])
+        if changed:
+            raise StepFailure(step, f"the dry run's manifest changes the entries of other releases: {', '.join(changed)}")
+        target, signed_target = releases[self.version], signed_releases[self.version]
+
+        def artifact_key(artifacts: object) -> list[tuple]:
+            return sorted((str(a.get("name")), str(a.get("kind")), str(a.get("sha256")), str(a.get("size")))
+                          for a in (artifacts or []) if isinstance(a, dict))
+
+        if artifact_key(signed_target.get("artifacts")) != artifact_key(target.get("artifacts")):
+            raise StepFailure(step, f"the dry run's manifest lists other artifacts (names, kinds, sha256, sizes) for {self.tag} "
+                                    "than the live one")
+        for field in sorted((set(target) | set(signed_target)) - set(IGNORED_ENTRY_FIELDS) - {"artifacts"}):
+            if target.get(field) != signed_target.get(field):
+                self.say(f"note: the dry run's entry for {self.tag} differs from the live one in {field}")
+        if note_lines(target.get("notes")) != note_lines(signed_target.get("notes")):
+            gone = sorted(note_lines(target.get("notes")) - note_lines(signed_target.get("notes")))
+            new = sorted(note_lines(signed_target.get("notes")) - note_lines(target.get("notes")))
+            self.say(f"note: the notes of {self.tag} differ (lines only in the live manifest: {len(gone)}, only in the dry "
+                     f"run's: {len(new)}); a live run publishes the dry run's")
+        self.say(f"dry run manifest: beta is {self.tag}, the {len(releases)} releases and the other channels are unchanged, "
+                 f"{len(artifact_key(target.get('artifacts')))} artifacts of {self.tag} equal the live ones")
+        self.ok(step, run_id=run_id)
 
     def verify_live(self, before: dict) -> dict:
         step = "verify_live"
@@ -424,46 +596,80 @@ class Rollback:
         claims = self.claims(live)
         self.ok("claims", count=len(claims))
         self.plan(live, beta, direction, override)
+        if not args.live:
+            self.dry_preflight()
         if self.pausing:
             self.pause_variable()
             self.pause_timer()
+        if args.live:
+            self.check_service()
+            self.check_signer_runs()
+        if self.pausing:
             live = self.recheck(beta, claims)
+        timeout = WATCH_TIMEOUT_PC_DATA if has_pc_game_data(self.artifacts_of(live["manifest"], self.version)) else WATCH_TIMEOUT
         started = time.monotonic()
         run_id = self.dispatch(claims, override, dry=not args.live)
-        self.watch(run_id)
+        self.watch(run_id, timeout)
         jobs = self.check_jobs(run_id, dry=not args.live)
         if not args.live:
             self.verify_unchanged(beta)
+            self.check_dry_manifest(run_id, live)
+            self.outcome = "dry run ok"
             self.say(f"dry run ok: {jobs}; beta is still v{beta}")
             self.say(f"elapsed {round(time.monotonic() - started)} s")
             return
         after = self.verify_live(live)
+        self.outcome = "rolled forward and verified" if direction == "forward" else "rolled back and verified"
         self.say(f"{'rolled forward' if direction == 'forward' else 'rolled back'}: beta is {self.tag}, listed with every artifact "
                  f"by verify-manifest --live (manifest_version {after['state'].get('manifest_version')})")
         self.say(f"run {run_id}")
         self.say(f"elapsed {round(time.monotonic() - started)} s (dispatch to verified)")
+        self.say_next(beta, direction)
+
+    def say_next(self, beta: str, direction: str) -> None:
+        if self.pausing:
+            self.say("the train is STILL PAUSED and stays paused until someone resumes it.")
         if direction == "forward":
             self.say(f"undo: python3 tools/rollback_beta.py v{beta} --live --yes")
-        else:
-            self.say(f"roll forward: python3 tools/rollback_beta.py v{beta} --live --forward --yes")
+            if self.pausing:
+                self.say("resume the train with:")
+                self.say(self.resume_commands())
+            return
+        self.say("the fix does not ship through this tool, which cannot target a tag the manifest does not list: it ships "
+                 "through the train. The guard cuts the fixed release and the Quest timer publishes it to beta as a forward move "
+                 "that needs no override.")
         if self.pausing:
-            self.say("the train is STILL PAUSED and stays paused until someone resumes it. Resume it with:")
+            self.say("to ship the fix, resume the train:")
             self.say(self.resume_commands())
+        else:
+            self.say("the train was not paused (--keep-train): it will cut the fixed release when main has one.")
+        self.say(f"false alarm only (it re-targets v{beta}, the release you rolled back from): "
+                 f"python3 tools/rollback_beta.py v{beta} --live --forward --yes")
 
     def resume_commands(self) -> str:
         return (f"  {self.gh} variable set {TRAIN_VARIABLE} --body true -R {RELEASE_SLUG}\n"
                 f"  systemctl --user start {TIMER_UNIT}")
 
     def state_report(self) -> list[str]:
-        """What a live run that failed after it began to pause did and did not do, one fact per line."""
-        if not self.pausing:
+        """What a run that failed after it began to pause or dispatch did and did not do, one fact per line."""
+        facts = []
+        undone = []
+        if self.pausing:
+            facts += [f"{TRAIN_VARIABLE} is false" if self.paused["variable"] else f"{TRAIN_VARIABLE} is NOT false",
+                      "the timer is stopped" if self.paused["timer"] else "the timer is NOT stopped"]
+            undone += [name for name, done in (("pausing the variable", self.paused["variable"]),
+                                               ("stopping the timer", self.paused["timer"])) if not done]
+        if self.dispatched:
+            kind = "a dry run: it publishes nothing" if not self.args.live else "its outcome is not confirmed"
+            facts.append(f"publish run {self.dispatched} was dispatched ({kind})")
+        elif self.dispatch_unknown:
+            facts.append("a publish MAY have been dispatched (gh left no run id): list the runs on the signer repo before "
+                         "dispatching again")
+        elif self.pausing:
+            facts.append("no publish was dispatched")
+            undone.append("the publish")
+        if not facts:
             return []
-        facts = [f"{TRAIN_VARIABLE} is false" if self.paused["variable"] else f"{TRAIN_VARIABLE} is NOT false",
-                 "the timer is stopped" if self.paused["timer"] else "the timer is NOT stopped",
-                 (f"publish run {self.dispatched} was dispatched and its outcome is not confirmed" if self.dispatched
-                  else "no publish was dispatched")]
-        undone = [name for name, done in (("pausing the variable", self.paused["variable"]), ("stopping the timer", self.paused["timer"]),
-                                          ("the publish", self.dispatched is not None)) if not done]
         lines = ["state: " + "; ".join(facts)]
         if undone:
             lines.append("NOT done: " + ", ".join(undone))
@@ -484,39 +690,56 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runner) -> int:
-    args = build_parser().parse_args(argv)
-    log = None
-    rollback = None
+def execute(args: argparse.Namespace, env: dict[str, str], runner: Runner, held: dict) -> int:
+    """The run, with every way out reported: a refusal, a failure, a log that cannot be written, Ctrl-C and a crash."""
     try:
         log = Log(state_log_path(env), args.tag)
+        held["log"] = log
         log.base.update({"run": uuid.uuid4().hex, "direction": ""})
         log.event("start", step="start", outcome="ok", error="", dry_run=args.dry_run, forward=args.forward,
                   keep_train=args.keep_train)
-        rollback = Rollback(args, env, runner, log)
-        if not TAG.match(args.tag):
-            raise Refusal("tag", f"{args.tag} is not a release tag (vX.Y.Z)")
+        rollback = held["rollback"] = Rollback(args, env, runner, log)
+        if not TAG.fullmatch(args.tag):
+            raise Refusal("tag", f"{args.tag!r} is not a release tag (vX.Y.Z)")
         rollback.run()
         problem = rollback.cleanup()
         if problem:
-            raise StepFailure("cleanup", problem)
+            sys.stderr.write(f"rollback-beta: {rollback.redact(rollback.outcome)}; {rollback.redact(problem)}\n")
+            log.event("cleanup_failed", step="cleanup", outcome="failed", error=rollback.redact(problem))
         log.event("finish", step="done", outcome="ok", error="")
         return 0
     except StepFailure as failure:
-        return fail(log, rollback, failure.step, str(failure), "refused" if isinstance(failure, Refusal) else "failed")
+        return fail(held, failure.step, str(failure), "refused" if isinstance(failure, Refusal) else "failed")
     except Failure as failure:
-        sys.stderr.write(f"rollback-beta: {failure}\n")
-        return 1
-    finally:
-        if rollback is not None:
-            leftover = rollback.cleanup()
-            if leftover:
-                sys.stderr.write(f"rollback-beta: cleanup: {leftover}\n")
-        if log is not None:
+        return fail(held, "log", str(failure), "failed")
+    except KeyboardInterrupt:
+        rollback = held.get("rollback")
+        return fail(held, (rollback.current if rollback else "") or "start", "interrupted (Ctrl-C)", "interrupted", 130)
+    except Exception as error:  # noqa: BLE001 - a crash is reported with the state, whatever it is
+        rollback = held.get("rollback")
+        return fail(held, (rollback.current if rollback else "") or "start", f"crashed: {type(error).__name__}: {error}", "crashed")
+
+
+def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runner) -> int:
+    args = build_parser().parse_args(argv)
+    held: dict = {"log": None, "rollback": None}
+    code = execute(args, env, runner, held)
+    rollback, log = held["rollback"], held["log"]
+    if rollback is not None:
+        leftover = rollback.cleanup()
+        if leftover:
+            sys.stderr.write(f"rollback-beta: {rollback.redact(leftover)}\n")
+    if log is not None:
+        try:
             log.close()
+        except OSError as error:
+            sys.stderr.write(f"rollback-beta: cannot close the log {log.path}: {error.strerror}\n")
+            code = code or 1
+    return code
 
 
-def fail(log: Log | None, rollback: Rollback | None, step: str, message: str, outcome: str) -> int:
+def fail(held: dict, step: str, message: str, outcome: str, code: int = 1) -> int:
+    rollback, log = held.get("rollback"), held.get("log")
     redact = rollback.redact if rollback is not None else (lambda text: text)
     sys.stderr.write(f"rollback-beta: {step}: {redact(message)}\n")
     if rollback is not None:
@@ -525,9 +748,9 @@ def fail(log: Log | None, rollback: Rollback | None, step: str, message: str, ou
     if log is not None:
         try:
             log.event("finish", step=step, outcome=outcome, error=redact(message))
-        except Failure as log_failure:
-            sys.stderr.write(f"rollback-beta: {log_failure}\n")
-    return 1
+        except Exception as log_failure:  # noqa: BLE001 - the report above is out; a log that cannot take this is said, not raised
+            sys.stderr.write(f"rollback-beta: {redact(str(log_failure))}\n")
+    return code
 
 
 if __name__ == "__main__":
