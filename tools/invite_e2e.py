@@ -385,6 +385,8 @@ MAIN_MENU = (367, 472)                           # the left column's MAIN MENU b
 # The entry page takes a key press only after the one before has been drawn: 2.7 s between presses dropped 3 of 5 characters on the
 # first --ui run, 3.7 s kept all of them.
 KEY_SETTLE_SECONDS = 3.0
+# The keyboard slides in after the page changes: the first presses of a code typed at once were lost (the field held the last 3 of 5).
+ENTRY_PAGE_SETTLE_SECONDS = 6.0
 KEY_ENTER = (893, 497)
 CANCEL_ENTRY = (767, 559)
 LEFT_COLUMN = (296, 360, 440, 580)               # the left column's box: its buttons change with every page
@@ -540,6 +542,7 @@ class Ui:
         if from_share_page:
             self.navigate(*MAIN_MENU, "MAIN MENU")
         self.navigate(CARD_SLOT_X[slots["join"]], CARD_Y, "JOIN VIA CODE")
+        time.sleep(ENTRY_PAGE_SETTLE_SECONDS)
         for char in code:
             self.click(*key_position(char), settle=KEY_SETTLE_SECONDS)
         self.shot("code-typed")
