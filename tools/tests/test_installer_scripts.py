@@ -1,4 +1,4 @@
-"""The three installer front ends, each run for real against the real `nevr-install` core and a local server.
+"""The three installer front ends, each run for real against the real `install-nevr-runtime` core and a local server.
 
 Each test builds a throwaway minisign key, a manifest signed with it, a Windows package zip and a local HTTP server, then
 runs a script (install.ps1 under pwsh, quest-install.ps1 under pwsh, quest-install.sh under bash) with the core's
@@ -42,15 +42,15 @@ class ScriptTestBase(unittest.TestCase):
         return world
 
     def package(self, with_sums: bool = True) -> pathlib.Path:
-        """A package folder as the Windows zip lays it out: the scripts, the core as nevr-install.exe, SHA256SUMS."""
+        """A package folder as the Windows zip lays it out: the scripts, the core as install-nevr-runtime.exe, SHA256SUMS."""
         pkg = self.tmp / "package"
         pkg.mkdir()
         for name in ("install.ps1", "uninstall.ps1"):
             shutil.copyfile(PKG / name, pkg / name)
-        shutil.copyfile(self.core, pkg / "nevr-install.exe")
-        os.chmod(pkg / "nevr-install.exe", 0o755)
+        shutil.copyfile(self.core, pkg / "install-nevr-runtime.exe")
+        os.chmod(pkg / "install-nevr-runtime.exe", 0o755)
         if with_sums:
-            (pkg / "SHA256SUMS").write_text(f"{sha((pkg / 'nevr-install.exe').read_bytes())}  nevr-install.exe\n")
+            (pkg / "SHA256SUMS").write_text(f"{sha((pkg / 'install-nevr-runtime.exe').read_bytes())}  install-nevr-runtime.exe\n")
         return pkg
 
     def fake_adb(self, with_device: bool = True) -> pathlib.Path:
@@ -167,10 +167,10 @@ class InstallPs1Test(ScriptTestBase):
 
     def test_a_damaged_core_is_named_before_it_runs(self):
         world, pkg = self.world(), self.package()
-        (pkg / "SHA256SUMS").write_text(f"{'0' * 64}  nevr-install.exe\n")
+        (pkg / "SHA256SUMS").write_text(f"{'0' * 64}  install-nevr-runtime.exe\n")
         result = self.run_install(pkg, world)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("nevr-install.exe does not match SHA256SUMS", result.stdout + result.stderr)
+        self.assertIn("install-nevr-runtime.exe does not match SHA256SUMS", result.stdout + result.stderr)
         self.assertEqual(world.records(), [], "the core must not have run")
         self.assertEqual((world.game / "BugSplat64.dll").read_bytes(), GAME)
 
@@ -345,7 +345,7 @@ class QuestInstallShTest(ScriptTestBase):
         env = {**env, "PATH": f"{self.tmp}:/usr/bin:/bin"}
         result = subprocess.run(["/bin/bash", str(self.SCRIPT)], capture_output=True, text=True, timeout=30, env=env)
         self.assertEqual(result.returncode, 1)
-        self.assertIn("nevr-install not found", result.stderr)
+        self.assertIn("install-nevr-runtime not found", result.stderr)
 
 
 if __name__ == "__main__":

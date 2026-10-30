@@ -5,6 +5,7 @@ dist target in CMakeLists.txt runs and skips when no mingw compiler is installed
 minimal PE images in the test, needs no toolchain and never reads a build output."""
 from __future__ import annotations
 
+import re
 import shutil
 import struct
 import subprocess
@@ -37,7 +38,7 @@ class DistCmakeSequenceTest(unittest.TestCase):
 
 
 class ReleaseWorkflowInstallerSymbolsTest(unittest.TestCase):
-    """nevr-install.exe rides in the Windows zip, so the tree check (verify_symbols.py --tree) needs its symbol file
+    """install-nevr-runtime.exe rides in the Windows zip, so the tree check (verify_symbols.py --tree) needs its symbol file
     in the same symbols directory as the DLLs' (.github/workflows/build.yml)."""
 
     @staticmethod
@@ -57,10 +58,10 @@ class ReleaseWorkflowInstallerSymbolsTest(unittest.TestCase):
                                (build, "Gate and assemble the release tree")):
             self.assertLess(order.index(earlier), order.index(later), f"{earlier!r} runs before {later!r}")
         body = steps[build]
-        dbg = '"dist/symbols/$name/nevr-install.exe.dbg"'
+        dbg = '"dist/symbols/$name/install-nevr-runtime.exe.dbg"'
         keep = body.index(f'--only-keep-debug "$exe" {dbg}')
         strip = body.index('x86_64-w64-mingw32-strip --strip-all "$exe"')
-        link = body.index(f'"--add-gnu-debuglink=dist/symbols/$name/nevr-install.exe.dbg" "$exe"')
+        link = body.index(f'"--add-gnu-debuglink=dist/symbols/$name/install-nevr-runtime.exe.dbg" "$exe"')
         self.assertLess(keep, strip)
         self.assertLess(strip, link)
 
@@ -68,9 +69,33 @@ class ReleaseWorkflowInstallerSymbolsTest(unittest.TestCase):
         # A release build has no DWARF unless asked: verify_symbols.py refuses a symbol file without it.
         self.assertIn("CARGO_PROFILE_RELEASE_DEBUG: line-tables-only", self.steps()[1]["Build the core installer for Windows"])
 
+    def test_the_installer_is_built_once_under_the_new_name_and_copied_once_to_the_old_one(self):
+        """#1492: one build, one link step. The old name is a cp of the built file in the packaging step."""
+        text = (REPO / ".github" / "workflows" / "build.yml").read_text()
+        self.assertEqual(len(re.findall(r"cargo\"? build", text)), 1, "one build of the installer")
+        self.assertIn("--bin install-nevr-runtime ", text)
+        self.assertIn("release/install-nevr-runtime.exe", text)
+        copies = [line.strip() for line in text.splitlines() if re.match(r"\s*cp\b.*nevr-install\.exe", line)]
+        self.assertEqual(copies, ['cp "$installer" "$(dirname "$installer")/nevr-install.exe"'])
+        assemble = self.steps()[1]["Gate and assemble the release tree"]
+        self.assertIn(copies[0], assemble)
+        self.assertIn('--installer-exe "$installer"', assemble)
+        self.assertIn('--installer-compat-exe "$(dirname "$installer")/nevr-install.exe"', assemble)
+        self.assertLess(assemble.index(copies[0]), assemble.index("package_release.py tree"))
+
+    def test_the_symbol_step_says_the_old_name_is_the_same_bytes_checked_through_the_new_name(self):
+        body = self.steps()[1]["Verify the symbol files match the stripped binaries"]
+        self.assertRegex(body, r"nevr-install\.exe.*same bytes")
+        self.assertNotIn("nevr-install.exe.dbg", body)
+
+    def test_the_local_package_recipe_makes_the_old_name_copy_too(self):
+        recipe = (REPO / "justfile").read_text().split("package-dev:", 1)[1].split("\n_quest-apk", 1)[0]
+        self.assertIn('cp "$installer" "$(dirname "$installer")/nevr-install.exe"', recipe)
+        self.assertIn('--installer-compat-exe "$(dirname "$installer")/nevr-install.exe"', recipe)
+
     def test_the_symbol_check_pairs_the_installer_with_its_symbol_file(self):
         body = self.steps()[1]["Verify the symbol files match the stripped binaries"]
-        self.assertRegex(body, r'verify_symbols\.py "\$installer" "dist/symbols/\$name/nevr-install\.exe\.dbg"')
+        self.assertRegex(body, r'verify_symbols\.py "\$installer" "dist/symbols/\$name/install-nevr-runtime\.exe\.dbg"')
 
 
 def make_pe(sections: list[tuple[str, bytes]], nsyms: int = 0) -> bytes:
@@ -301,22 +326,60 @@ class StrippedBinaryMatchesItsSymbolsTest(unittest.TestCase):
     def test_a_windows_tree_with_the_installer_needs_the_installers_symbol_file(self):
         self.link()
         package, symbols = self.tree()
-        shutil.copy(self.exe, package / "nevr-install.exe")
+        shutil.copy(self.exe, package / "install-nevr-runtime.exe")
         result = self.tree_run(package, symbols)
         self.assertEqual(result.returncode, 1)
-        self.assertIn("nevr-install.exe: no symbol file", result.stderr)
-        shutil.copy(self.dbg, symbols / "nevr-install.exe.dbg")
-        self.assertEqual(self.tree_run(package, symbols).returncode, 1, "a link to t.exe.dbg is not a link to nevr-install.exe.dbg")
+        self.assertIn("install-nevr-runtime.exe: no symbol file", result.stderr)
+        shutil.copy(self.dbg, symbols / "install-nevr-runtime.exe.dbg")
+        self.assertEqual(self.tree_run(package, symbols).returncode, 1, "a link to t.exe.dbg is not a link to install-nevr-runtime.exe.dbg")
 
     def test_a_windows_tree_with_the_installer_split_under_its_own_name_passes(self):
         package, symbols = self.tree()
-        installer, dbg = package / "nevr-install.exe", symbols / "nevr-install.exe.dbg"
+        installer, dbg = package / "install-nevr-runtime.exe", symbols / "install-nevr-runtime.exe.dbg"
         shutil.copy(self.dir / "full.exe", installer)
         subprocess.run([OBJCOPY, "--only-keep-debug", str(installer), str(dbg)], check=True)
         subprocess.run([STRIP, "--strip-all", str(installer)], check=True)
         subprocess.run([OBJCOPY, f"--add-gnu-debuglink={dbg}", str(installer)], check=True)
         result = self.tree_run(package, symbols)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def installer_pair(self, package, symbols):
+        """install-nevr-runtime.exe split, stripped and linked under its own name, as build.yml does."""
+        installer, dbg = package / "install-nevr-runtime.exe", symbols / "install-nevr-runtime.exe.dbg"
+        shutil.copy(self.dir / "full.exe", installer)
+        subprocess.run([OBJCOPY, "--only-keep-debug", str(installer), str(dbg)], check=True)
+        subprocess.run([STRIP, "--strip-all", str(installer)], check=True)
+        subprocess.run([OBJCOPY, f"--add-gnu-debuglink={dbg}", str(installer)], check=True)
+        return installer
+
+    def test_the_old_name_copy_of_the_installer_needs_no_symbol_file_of_its_own(self):
+        """#1492: nevr-install.exe is the same bytes as install-nevr-runtime.exe, so its debuglink names the new
+        name's symbol file and the pair check covers it through the new name."""
+        package, symbols = self.tree()
+        installer = self.installer_pair(package, symbols)
+        shutil.copy(installer, package / "nevr-install.exe")
+        result = self.tree_run(package, symbols)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((symbols / "nevr-install.exe.dbg").exists())
+
+    def test_the_old_name_copy_with_other_bytes_is_refused(self):
+        package, symbols = self.tree()
+        installer = self.installer_pair(package, symbols)
+        shutil.copy(installer, package / "nevr-install.exe")
+        with open(package / "nevr-install.exe", "ab") as f:
+            f.write(b"\0one more byte")
+        result = self.tree_run(package, symbols)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("nevr-install.exe: not the same bytes as install-nevr-runtime.exe", result.stderr)
+
+    def test_the_old_name_copy_without_the_new_name_is_refused(self):
+        self.link()
+        package, symbols = self.tree()
+        shutil.copy(self.exe, package / "nevr-install.exe")
+        shutil.copy(self.dbg, symbols / "nevr-install.exe.dbg")
+        result = self.tree_run(package, symbols)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("nevr-install.exe: install-nevr-runtime.exe is not in the package", result.stderr)
 
     def test_an_empty_package_tree_is_refused(self):
         package, symbols = self.tree()

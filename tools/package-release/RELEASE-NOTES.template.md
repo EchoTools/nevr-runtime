@@ -9,8 +9,8 @@ Commit `@COMMIT@`.
 @IF_NOAPK@| file | SHA-256 | what |
 @IF_APK@|---|---|
 @IF_NOAPK@|---|---|---|
-@IF_APK@| `@ZIP@` | Windows: `BugSplat64.dll`, `nevr-runtime.dll`, `echovr_server.exe`, `nevr-install.exe`, `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
-@IF_NOAPK@| `@ZIP@` | `@SHA_ZIP@` | Windows, for players and server operators: `BugSplat64.dll`, `nevr-runtime.dll`, `echovr_server.exe`, `nevr-install.exe` (all stripped, no debug symbols), `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
+@IF_APK@| `@ZIP@` | Windows: `BugSplat64.dll`, `nevr-runtime.dll`, `echovr_server.exe`, `install-nevr-runtime.exe`, `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
+@IF_NOAPK@| `@ZIP@` | `@SHA_ZIP@` | Windows, for players and server operators: `BugSplat64.dll`, `nevr-runtime.dll`, `echovr_server.exe`, `install-nevr-runtime.exe` (all stripped, no debug symbols), `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
 @IF_APK@| `@APK@` | Quest: the repacked APK |
 @IF_APK@| `SHA256SUMS` | SHA-256 of the two files above |
 @IF_NOAPK@| `@QUEST@` | `@SHA_QUEST@` | Quest library for packagers: a loose ELF, attested and not signed |
@@ -28,7 +28,7 @@ Commit `@COMMIT@`.
 - Report anything odd with the newest log file (see below).
 
 ## Install and uninstall
-- **Windows:** unzip, close the game, run `install.ps1` (PowerShell, `-ExecutionPolicy Bypass`). It runs `nevr-install.exe`
+- **Windows:** unzip, close the game, run `install.ps1` (PowerShell, `-ExecutionPolicy Bypass`). It runs `install-nevr-runtime.exe`
   (the core installer), which checks the signed release manifest, backs up
   the original `BugSplat64.dll` with a timestamp, renames a legacy `dbgcore.dll` aside and puts both new DLLs in; `uninstall.ps1`
   restores both. Nothing is deleted.
@@ -39,7 +39,7 @@ Commit `@COMMIT@`.
 ## Signing
 The runtime loads unsigned plugins by default, and logs a warning for each one. Start a run with `-require-signed-plugins` to load only plugins signed through the release-signer pipeline: an unsigned plugin (or one with a changed byte) is then refused and listed in the plugin manifest, and a plugin marked required that is refused stops a server.
 
-A separate signing step may sign `BugSplat64.dll`, `nevr-runtime.dll`, `echovr_server.exe`, `nevr-install.exe`, `install.ps1`, `uninstall.ps1` and `quest-diagnose.ps1` after the build and
+A separate signing step may sign `BugSplat64.dll`, `nevr-runtime.dll`, `echovr_server.exe`, `install-nevr-runtime.exe`, `install.ps1`, `uninstall.ps1` and `quest-diagnose.ps1` after the build and
 replace the zip under the same name; these notes are the same either way. A file is signed when it carries a
 signature, and `SIGNING.txt` inside the zip says how to check each one.
 @IF_APK@Compare the zip's SHA-256 with `SHA256SUMS`; the zip's own `SHA256SUMS` lists the files inside it.

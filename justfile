@@ -421,14 +421,18 @@ package-dev store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
     )
     # The core installer install.ps1 runs (installer/, ADR 0023), for Windows, locked and stripped.
     CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc cargo build --locked --release --target x86_64-pc-windows-gnu \
-        --manifest-path installer/Cargo.toml --bin nevr-install --target-dir build/installer
-    x86_64-w64-mingw32-strip build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe
+        --manifest-path installer/Cargo.toml --bin install-nevr-runtime --target-dir build/installer
+    installer=build/installer/x86_64-pc-windows-gnu/release/install-nevr-runtime.exe
+    x86_64-w64-mingw32-strip "$installer"
+    # The same file under the name programs outside this repository still call (#1492): one build, one copy.
+    cp "$installer" "$(dirname "$installer")/nevr-install.exe"
     just _quest-apk "{{ store_apk }}"
     python3 tools/package_release.py --commit "$commit" --out "$out" \
         --dll build/mingw-dev/bin/BugSplat64.dll \
         --runtime-dll build/mingw-dev/bin/nevr-runtime.dll \
         --server-exe build/mingw-dev/bin/echovr_server.exe \
-        --installer-exe build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe \
+        --installer-exe "$installer" \
+        --installer-compat-exe "$(dirname "$installer")/nevr-install.exe" \
         --apk build/android-dev/repack/r15_nevr-sentinel_signed.apk \
         --pc-header build/mingw-dev/generated/nevr_builtin_defaults.h \
         --quest-header build/android-dev/generated/nevr_builtin_defaults.h \
@@ -503,13 +507,13 @@ release-quest-apk tag store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
 publish-quest-apk tag:
     python3 tools/publish_quest_apk.py "{{ tag }}"
 
-# Build the core installer CLI (installer/, ADR 0023) for this machine: installer/target/release/nevr-install.
+# Build the core installer CLI (installer/, ADR 0023) for this machine: installer/target/release/install-nevr-runtime.
 # Locked to the committed Cargo.lock; set CARGO_TARGET_DIR to keep the regenerable build tree out of the checkout.
 build-installer:
-    cargo build --locked --release --manifest-path installer/Cargo.toml --bin nevr-install
+    cargo build --locked --release --manifest-path installer/Cargo.toml --bin install-nevr-runtime
 
 # Install the NEVR Quest APK + game data onto the connected headset (sideload) through the core installer
-# (tools/quest-install.sh calls `nevr-install quest install`). The core fetches the signed release manifest, takes the
+# (tools/quest-install.sh calls `install-nevr-runtime quest install`). The core fetches the signed release manifest, takes the
 # APK and the game data the channel's release names, checks both, plans from what the headset holds and installs;
 # every run writes a [NEVR.INSTALL] log (the path is in its output). The recipe holds no hash, URL or version.
 # Pass `--yes-uninstall` (`just quest-install --yes-uninstall`) to let the core remove a differently signed install
@@ -521,7 +525,7 @@ build-installer:
 # still takes the game data from the signed manifest.
 [positional-arguments]
 quest-install *args: build-installer
-    NEVR_INSTALL="${CARGO_TARGET_DIR:-installer/target}/release/nevr-install" tools/quest-install.sh "$@"
+    NEVR_INSTALL="${CARGO_TARGET_DIR:-installer/target}/release/install-nevr-runtime" tools/quest-install.sh "$@"
 
 # --- Tests ---
 

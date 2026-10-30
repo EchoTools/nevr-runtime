@@ -5,7 +5,7 @@ A release is a version (plain semver, taken from the tag) plus GitHub's pre-rele
 file depends on that flag, so promoting a release changes no byte: this tool has no flag input.
 
   package_release.py tree  --version X.Y.Z --commit <sha40> --out DIR --dll BugSplat64.dll --runtime-dll nevr-runtime.dll
-                           --server-exe echovr_server.exe --installer-exe nevr-install.exe --pc-header H
+                           --server-exe echovr_server.exe --installer-exe install-nevr-runtime.exe --installer-compat-exe nevr-install.exe --pc-header H
       CI: gate the two DLLs and write the package tree (what the signing step signs) + release.json
   package_release.py seal  --tree DIR --out DIR [--require-signed]
       CI: zip the (signed or unsigned) tree with a SHA256SUMS regenerated from the files as they are now.
@@ -26,7 +26,7 @@ file depends on that flag, so promoting a release changes no byte: this tool has
       CI: assert the Quest library carries exactly this version and this commit. It has no identity literal:
       kVersion and the short kCommit (cmake/nevr_build_info.h.in) and the full commit of the sentinel's build
       record are separate NUL-bounded strings, so each is matched whole.
-  package_release.py --commit <sha40> --out DIR --dll ... --runtime-dll ... --server-exe ... --installer-exe ... --apk ... --pc-header ...
+  package_release.py --commit <sha40> --out DIR --dll ... --runtime-dll ... --server-exe ... --installer-exe ... --installer-compat-exe ... --apk ... --pc-header ...
                      --quest-header ... --quest-build-info ...        (`just package-dev`, a LOCAL build)
       the full gate for a local development build (its version is X.Y.(Z+1)-dev.N+sha, never a release),
       then the same tree + seal, with the tester Quest APK, its SHA256SUMS and notes. Never attached to a
@@ -69,7 +69,11 @@ RUNTIME_DLL = "nevr-runtime.dll"
 SERVER_EXE = "echovr_server.exe"
 # The core installer (installer/, ADR 0023) that install.ps1 and quest-install.ps1 call. It rides in the zip as its own
 # file, so the signed manifest's `contents` for the zip covers it.
-INSTALLER_EXE = "nevr-install.exe"
+INSTALLER_EXE = "install-nevr-runtime.exe"
+# The same file under its old name, kept in the zip only for programs outside this repository that still call it
+# (#1492). One build, copied once by the packaging step; the tree stage refuses a copy with other bytes. The removal
+# condition and the PR that deletes this copy are in RELEASING.md ("The installer's old name").
+INSTALLER_COMPAT_EXE = "nevr-install.exe"
 # The player line of the release body (headline_line): one file per change under HEADLINE_DIR, read only when the range
 # adds it. HEADLINE_LEGACY_FILE, the single shared file release-headline.txt, is refused wherever it exists: one file that
 # every change edits carries earlier sentences along. Limits: a sentence, and the joined line.
@@ -236,6 +240,12 @@ def windows_problems(args, dll: Path, runtime: Path) -> list:
     installer = Path(args.installer_exe)
     if not installer.is_file() or installer.read_bytes()[:2] != b"MZ":
         problems.append(f"windows: {INSTALLER_EXE} is missing or not a PE file: {installer}")
+    compat = Path(args.installer_compat_exe)
+    if not compat.is_file() or compat.read_bytes()[:2] != b"MZ":
+        problems.append(f"windows: {INSTALLER_COMPAT_EXE} is missing or not a PE file: {compat}")
+    elif installer.is_file() and compat.read_bytes() != installer.read_bytes():
+        problems.append(f"windows: {INSTALLER_COMPAT_EXE} is not the same bytes as {INSTALLER_EXE}: the old name is a copy "
+                        f"of the one build, never a second one")
     problems += [f"windows: {p}" for p in pe_version_info.check(dll, server, args.version or None, runtime)]
     return problems
 
@@ -343,6 +353,7 @@ def write_tree(args, out: Path, version: str) -> Path:
     shutil.copyfile(args.runtime_dll, tree / RUNTIME_DLL)
     shutil.copyfile(args.server_exe, tree / SERVER_EXE)
     shutil.copyfile(args.installer_exe, tree / INSTALLER_EXE)
+    shutil.copyfile(args.installer_compat_exe, tree / INSTALLER_COMPAT_EXE)
     shutil.copyfile(PACKAGE_DIR / "install.ps1", tree / "install.ps1")
     shutil.copyfile(PACKAGE_DIR / "uninstall.ps1", tree / "uninstall.ps1")
     shutil.copyfile(PACKAGE_DIR / "quest-diagnose.ps1", tree / "quest-diagnose.ps1")
@@ -357,11 +368,12 @@ def write_tree(args, out: Path, version: str) -> Path:
 SIGNING_TEXT = """Signing
 
 The build itself signs nothing. A separate signing step may sign BugSplat64.dll, nevr-runtime.dll,
-echovr_server.exe, nevr-install.exe, install.ps1, uninstall.ps1 and quest-diagnose.ps1 afterwards and replace this zip under the same name. This
+echovr_server.exe, install-nevr-runtime.exe, nevr-install.exe, install.ps1, uninstall.ps1 and
+quest-diagnose.ps1 afterwards and replace this zip under the same name. This
 text is the same either way: it says how to check, not which state your copy is in.
 
 A file is signed when it carries a signature:
-  BugSplat64.dll, nevr-runtime.dll, echovr_server.exe, nevr-install.exe
+  BugSplat64.dll, nevr-runtime.dll, echovr_server.exe, install-nevr-runtime.exe, nevr-install.exe
                               an Authenticode signature
                               (PowerShell: Get-AuthenticodeSignature .\\BugSplat64.dll)
   install.ps1, uninstall.ps1, quest-diagnose.ps1
@@ -384,7 +396,7 @@ def seal(tree: Path, out: Path, apk: Path = None, require_signed: bool = False) 
     if apk is not None:  # before anything is written: a foreign APK never rides a package
         check_apk_version(apk, version, commit)
     files = sorted(p for p in tree.iterdir() if p.is_file() and p.name != "SHA256SUMS")
-    for required in (HOST_DLL, RUNTIME_DLL, SERVER_EXE, INSTALLER_EXE):
+    for required in (HOST_DLL, RUNTIME_DLL, SERVER_EXE, INSTALLER_EXE, INSTALLER_COMPAT_EXE):
         if required not in {p.name for p in files}:
             raise GateFailure(f"{tree} has no {required}")
     if require_signed:
@@ -590,7 +602,9 @@ def main(argv=None) -> int:
         parser.add_argument("--dll", required=True, help="BugSplat64.dll, the host")
         parser.add_argument("--runtime-dll", required=True, help="nevr-runtime.dll, the runtime")
         parser.add_argument("--server-exe", required=True)
-        parser.add_argument("--installer-exe", required=True, help="nevr-install.exe, the core installer (installer/)")
+        parser.add_argument("--installer-exe", required=True, help="install-nevr-runtime.exe, the core installer (installer/)")
+        parser.add_argument("--installer-compat-exe", required=True,
+                            help="nevr-install.exe, the same bytes as --installer-exe, kept for callers that still use the old name")
         parser.add_argument("--pc-header", required=True)
         parser.add_argument("--defaults", default=str(REPO / "config" / "public-defaults.env"))
         if mode == "all":

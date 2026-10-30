@@ -30,13 +30,13 @@ from the build.
 
 | file | audience | holds |
 |---|---|---|
-| `nevr-runtime-vX.Y.Z-windows.zip` | players on Windows and people running a dedicated server | `BugSplat64.dll` (the host), `nevr-runtime.dll` (the runtime), `echovr_server.exe`, `nevr-install.exe` (all stripped, debug info split off), `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt` (the install steps and the dedicated-server steps), `SIGNING.txt`, `SHA256SUMS` (the files inside the zip: `install.ps1` checks `nevr-install.exe` against it, and the core checks both DLLs against the signed manifest). The zip has no `plugins/` entry: a zip holds no empty directory |
+| `nevr-runtime-vX.Y.Z-windows.zip` | players on Windows and people running a dedicated server | `BugSplat64.dll` (the host), `nevr-runtime.dll` (the runtime), `echovr_server.exe`, `install-nevr-runtime.exe` (the core installer; all stripped, debug info split off), `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt` (the install steps and the dedicated-server steps), `SIGNING.txt`, `SHA256SUMS` (the files inside the zip: `install.ps1` checks `install-nevr-runtime.exe` against it, and the core checks both DLLs against the signed manifest). The zip holds one more copy of the installer under an older name ("The installer's old name") The zip has no `plugins/` entry: a zip holds no empty directory |
 | `nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so` | Quest packagers | the Quest sentinel library, a loose ELF (attested; not Authenticode) |
 
 There is no top-level `SHA256SUMS` and no `RELEASE-NOTES.md` asset. The **release body** is short: a header, one line on
 what is new for players, and one line per file. `python3 tools/package_release.py notes` renders it from
 `tools/package-release/RELEASE-BODY.template.md` ("Write the release body"). It holds no hash: the zip's own `SHA256SUMS`
-(which `install.ps1` checks `nevr-install.exe` against), the signature and the attestation carry integrity.
+(which `install.ps1` checks `install-nevr-runtime.exe` against), the signature and the attestation carry integrity.
 
 Not release assets: the `.tar.zst` archives and the `.dbg` symbol files (workflow artifacts, 7 and 90 days), and any Quest APK.
 
@@ -228,6 +228,18 @@ and `notes` refuses it at the cut as the backstop. A successful `notes` writes o
 release-train run's log keeps. The train cannot push to `main`, so it deletes nothing: the PR that adds a fragment also
 deletes the fragments present at the newest `vX.Y.Z` tag (`git ls-tree -r --name-only <newest tag> -- release-headlines/`). A
 fragment left behind is harmless, since a path present at the base is never read.
+
+## The installer's old name
+
+The core installer is `install-nevr-runtime.exe`; that is the only name this repository's scripts, README and docs use. The
+zip also carries `nevr-install.exe`, the same bytes under the name outside callers (the launcher, and any other program that
+runs the installer) used before. It is a copy, not a second build: `.github/workflows/build.yml` builds the installer once
+and copies it once in the packaging step, `tools/package_release.py` refuses a tree where the two are not the same bytes (the
+signer signs each entry separately, so they differ after signing), `tools/verify_symbols.py` checks the copy through the new
+name's symbol file, and release-signer lists `install-nevr-runtime.exe` as an optional entry, so the signer must have that
+change before a build that carries the new name is signed. The old name is removed in the first release after the launcher
+and every other outside caller have confirmed they use the new one. The removal is a PR that deletes the copy in the
+packaging step, its gate in `package_release.py` and `verify_symbols.py`, the signer's optional entry and this paragraph.
 
 ## Publish
 
