@@ -1,6 +1,7 @@
 // Built with -fno-exceptions (callback_thunk.h refuses otherwise).
 #include "quest/integration/dlopen_hook.h"
 
+#include <atomic>
 #include <cerrno>
 
 #include "callback_thunk.h"
@@ -18,6 +19,7 @@ struct DlopenTag {};
 using DlopenThunk = sentinel::CallbackThunk<DlopenTag, DlopenSig>;
 
 sentinel::GotHook g_dlopenHook;
+std::atomic<bool> g_installed{false};
 
 void* HookedDlopen(DlopenThunk::Fn original, const char* name, int flags) noexcept {
   void* const handle = original(name, flags);
@@ -40,6 +42,12 @@ sentinel::GotTarget LibR15Dlopen() {
 }
 
 DlopenInstall InstallDlopenHook(sentinel::GotStatus* status) noexcept {
+  // The crash-first step installs the hook on every launch (it needs the moment after a provider library loads), so the step
+  // that installs it for the post-load actions finds it live. A second call is the same hook, not a second owner of the slot.
+  if (g_installed.load(std::memory_order_acquire)) {
+    if (status != nullptr) *status = sentinel::GotStatus::kOk;
+    return DlopenInstall::kOk;
+  }
   DlopenThunk::Arm(kDlopenHook);
   const sentinel::GotStatus got = sentinel::InstallThunk<DlopenThunk>(g_dlopenHook, LibR15Dlopen());
   if (status != nullptr) *status = got;
@@ -47,6 +55,7 @@ DlopenInstall InstallDlopenHook(sentinel::GotStatus* status) noexcept {
     DlopenThunk::Disarm();
     return DlopenInstall::kFailed;
   }
+  g_installed.store(true, std::memory_order_release);
   return DlopenInstall::kOk;
 }
 

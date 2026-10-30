@@ -37,6 +37,13 @@ int InstallHandlers(const Actions& actions) noexcept;
 // Puts the pre-arm actions back (teardown and tests). Safe to call without InstallHandlers.
 void RestoreHandlers() noexcept;
 
+// Called by the sentinel's dlopen hook after the game's dlopen returned a handle (integration/post_load.h). When the library
+// is one of the provider libraries that import sigaction and signal (libpnsrad, libpnsradmatchmaking, libpnsovr) and is
+// mapped, hooks both of its slots the way Install hooks libr15's; a mapping it already hooked is left alone, a new mapping
+// of the same library (closed and loaded again) is hooked again. Runs outside any game call, so it may log and lock. Any other
+// library is ignored at once.
+void OnModuleLoaded(const char* name, void* handle) noexcept;
+
 // The signal handler itself, exposed for the host test (the production code installs it through InstallHandlers).
 void OnSignal(int signo, siginfo_t* info, void* ucontext);
 
