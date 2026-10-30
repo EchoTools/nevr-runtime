@@ -109,7 +109,7 @@ Until step 3 the host mapped `nevr-runtime.dll` with no check. `RuntimeLoader::L
 verifies the file first (`nevr_plugin_signature::VerifyPluginFile` with `nevr_plugin_pins::PinnedPolicy()`, the file held open
 `FILE_SHARE_READ` through the load) and calls `LoadLibraryExW` only on an accepted file, or on an unsigned one in a dev build. A
 refused or unreadable file, and a missing one, stop the game (exit 78). Step 4 (the move to `%LOCALAPPDATA%`) still does not ship
-before a signed `nevr-runtime.dll` exists (step 3's prerequisite).
+before a signed `nevr-runtime.dll` exists (step 3's prerequisite; tracked in #575).
 
 ### Where state resolves
 
