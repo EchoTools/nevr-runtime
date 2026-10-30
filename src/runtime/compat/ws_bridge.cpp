@@ -477,6 +477,7 @@ static void LogSharedFrameDropped(std::size_t bytes) {
 // frame (LoginSuccess, STcpConnectionUnrequireEvent and GameSettings arrive together), so logging
 // only the first symbol hid the rest. A dedicated server's message traffic is sparse and is the
 // only record of what the service told the game, so it logs at Info there; clients stay at Debug.
+// KNOWN-WRONG #1307: "sparse" has no measurement behind it.
 static int LogFrameMessages(const char* direction, int connIdx, const std::string& frame) {
   const EchoVR::LogLevel level = g_isServer ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Debug;
   size_t offset = 0;

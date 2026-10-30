@@ -109,7 +109,7 @@ Until step 3 the host mapped `nevr-runtime.dll` with no check. `RuntimeLoader::L
 verifies the file first (`nevr_plugin_signature::VerifyPluginFile` with `nevr_plugin_pins::PinnedPolicy()`, the file held open
 `FILE_SHARE_READ` through the load) and calls `LoadLibraryExW` only on an accepted file, or on an unsigned one in a dev build. A
 refused or unreadable file, and a missing one, stop the game (exit 78). Step 4 (the move to `%LOCALAPPDATA%`) still does not ship
-before a signed `nevr-runtime.dll` exists (step 3's prerequisite).
+before a signed `nevr-runtime.dll` exists (step 3's prerequisite; tracked in #575).
 
 ### Where state resolves
 
@@ -139,8 +139,8 @@ says when an override was ignored. The runtime's own state paths (`core/nevr_roo
 On the first run that finds the old layout, the runtime moves, and logs every file it moves or leaves:
 
 - from the install's `_local` directories: `.credentials.json`, nearest first, through the protected write the cache is saved with
-  (`core/credential_write.h`), read back before the old file is removed. `config.yaml` is not moved until step 6 decides where server and
-  client config live, and a `-config` folder's own `config.yaml` never is: it stays where it is, and the rule of "Where state resolves"
+  (`core/credential_write.h`), read back before the old file is removed. `config.yaml` is not moved by this step (the config choice copies a
+  `_local` one into the root once, `nevr_config_yaml::Resolve`), and a `-config` folder's own `config.yaml` never is: it stays where it is, and the rule of "Where state resolves"
   finds it there. A cache the move could not take (or whose root path does not fit the ANSI code page) is still read, and written back where it is,
   until a later run moves it;
 - from `%LOCALAPPDATA%\EchoVR\logs`: nEVR's own files, which are the run logs the built-in filter writes (`BuildLogFilePath` in

@@ -15,6 +15,7 @@
 # Both builds work with no file at all: the service endpoints and the public client keys are embedded at build
 # time (config/public-defaults.env), and a key in this file replaces the embedded value. Each key below says which
 # builds read it ("both", "PC only", "Quest only"), its default, and the file that reads it.
+# KNOWN-WRONG #1254: a PC server with no file and no cached sign-in never logs in and never stops.
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
@@ -55,6 +56,7 @@ version: 1
 #         src/runtime/patch/mic_provider.cpp (PC, native Windows only; Wine keeps the OS default)
 # ---------------------------------------------------------------------------
 
+# KNOWN-WRONG #1305: the parser rejects a top-level audio: key, so this file as shipped is refused.
 audio:
   # The microphone to capture from: an endpoint id, or a part of its friendly name (case-insensitive).
   # When it names no active capture endpoint, the default rule runs: LibOVR's headset mic, a headset-named
@@ -392,6 +394,7 @@ auth:
   # Required for dedicated server operation. Both builds; on the Quest, login (and so the façade) is on only when
   # this resolves.
   # Default (absent): the embedded public key (client mode only; a dedicated server has none).
+  # KNOWN-WRONG #1305: a dedicated server takes the embedded key too (#843).
   # SECRET — use env-var substitution in production.
   # server_key: "${NEVR_SOCKET_KEY:?server_key is required for servers}"
 
@@ -486,6 +489,7 @@ arena:
 # Override the base URL the game uses to download asset bundles (cosmetics,
 # arena geometry, etc.). When set, the runtime hooks the asset download
 # pipeline and redirects requests to this URL.
+# KNOWN-WRONG #1305: the runtime reads this key and discards it; the parser's path for it is assets.cdn_url.
 # Absent: game downloads from the hardcoded Ready At Dawn CDN (dead).
 # Not a secret.
 # Reader: src/runtime/lifecycle/config.cpp (LoadLocalConfigHook)
@@ -494,6 +498,7 @@ arena:
 
 # ---------------------------------------------------------------------------
 # exitonerror — exit the process on fatal errors
+# KNOWN-WRONG #1279: the key does nothing.
 #
 # When true, the game process calls ExitProcess on fatal errors (e.g.
 # ServerDB disconnection) rather than showing a crash dialog. This is the

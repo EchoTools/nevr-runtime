@@ -665,7 +665,7 @@ the tag `[NEVR.WS]` and the connection index (Rule 9):
   the NUL, at most the field's 64, and `0` when the message is empty or absent.
 - **A frame the decode cannot read** is a Warning, `lobby <find request|join request|session success|session
   failure> could not be read conn=<n> payload_bytes=<n>`. Nothing is read past the frame's end.
-- **A client only, until `LogFrameMessages` moves to Debug.** On a dedicated server `LogFrameMessages` in
+- **A client only, until `LogFrameMessages` moves to Debug.** KNOWN-WRONG #1307: On a dedicated server `LogFrameMessages` in
   `src/runtime/compat/ws_bridge.cpp` logs every message of every frame at Info, and these records are not written
   there. That Info is on a per-connection path, which "You SHALL NOT" forbids, and the reason its comment gives (a
   server's message traffic is sparse) is stated without a measurement. The hot-path rule governs: ADR 0027's migration moves

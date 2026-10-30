@@ -648,6 +648,7 @@ TEST(MicDeviceChoice, HeadsetNamesMatchCaseInsensitivelyAndBareMetaDoesNot) {
 }
 
 // #412: audio.capture_device in config.yaml is the player's saved choice and comes before LibOVR's answer.
+// KNOWN-WRONG #1305: these tests inject the saved id; none loads it through the real parser, which rejects audio:.
 TEST(MicDeviceChoice, SavedIdWinsOverLibOvrAndTheHeadsetName) {
   const auto pick = nevr_mic_device::ChooseWithPreference(false, kWebcam.id, kHeadset.id, 0,
                                                           {kChromium, kHeadset, kWebcam});

@@ -4369,6 +4369,7 @@ TEST_F(RolesByPathTest, LegacyVrClientsInjectedLoginStaysOvrOrg) {
 }
 
 // L5: a dedicated server has no login to complete; the service's LoginFailure reaches the game as a LoginSuccess.
+// KNOWN-WRONG #1306: every refusal is replaced, whatever its status, and the default path says so only at Debug.
 TEST_F(RouterAllTest, AServersLoginFailureReachesTheGameAsALoginSuccess) {
   GameFlagScope server(-1, TRUE);  // a server with a credential: without one it stops (#1254)
   remote_.SetLoginReply(nevr_evr_codec::kSymLoginFailure);
