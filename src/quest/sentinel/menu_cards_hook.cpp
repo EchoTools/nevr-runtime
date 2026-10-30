@@ -11,10 +11,12 @@
 #include "hook_install.h"
 #include "hook_log.h"
 #include "menu_cards_swap.h"
+#include "netgun_bullets_swap.h"
 #include "outside_game_call.h"
 #include "pinned_targets.h"
 #include "quest/data/sha256.h"
 #include "runtime/patch/menu_cards.h"
+#include "runtime/patch/netgun_bullets.h"
 
 namespace nevr_quest::menu_cards {
 
@@ -143,6 +145,39 @@ NEVR_OUTSIDE_GAME_CALL Served PrepareCards(const unsigned char* page, std::size_
 
 namespace {
 
+// The net-gun resources of the five combat levels (#1478, the Quest twin of #1420). The PC rewrite decides the bytes: a
+// pinned stock buffer is served with its rows and slots added, through the same allocator check as the page. Any other
+// buffer is left alone and says why (netgun_bullets_skip). Nothing is cached: SwapIn copies the served bytes into the
+// game's own buffer, so the rewrite's vector is not needed after this returns. As for the page, the game's original
+// buffer is not freed here.
+void OfferNetgun(unsigned char* data, const Delivery& d, nevr_netgun_bullets::Resource res) noexcept {
+  const std::size_t size = static_cast<std::size_t>(d.size);
+  const std::string sha = nevr_quest::data::Sha256Hex(d.buffer, size);
+  const nevr_netgun_bullets::Result r = nevr_netgun_bullets::Decide(res, d.buffer, size, sha, nevr_netgun_bullets::StockPins(res));
+  char nameHex[19];
+  const char* const resource = nevr_netgun_bullets::ResourceName(res);
+  const char* const name = sentinel::HexString(nameHex, d.nameSymbol);
+  if (r.verdict == nevr_netgun_bullets::Verdict::NotStock) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "netgun_bullets_skip",
+                        {{"resource", resource}, {"name", name}, {"bytes", d.size}, {"sha256", sha.c_str()}, {"reason", "not_pinned"}});
+    return;
+  }
+  if (r.verdict == nevr_netgun_bullets::Verdict::Refused) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "netgun_bullets_skip",
+                        {{"resource", resource}, {"name", name}, {"bytes", d.size}, {"reason", nevr_netgun_bullets::StatusName(r.status)}});
+    return;
+  }
+  const Swap swap = SwapIn(data, r.bytes.data(), r.bytes.size(), ReleaseAllocator());
+  if (swap != Swap::Swapped) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "netgun_bullets_skip",
+                        {{"resource", resource}, {"name", name}, {"bytes", d.size}, {"reason", SwapName(swap)}});
+    return;
+  }
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "netgun_bullets_swap",
+                      {{"resource", resource}, {"name", name}, {"bytes_before", d.size}, {"bytes_after", r.bytes.size()},
+                       {"rows_before", r.entriesBefore}, {"rows_after", r.entriesAfter}});
+}
+
 // Runs before the game's callback, on whichever thread finished the read. Never throws (the unit has no exceptions).
 void Offer(unsigned char* data) noexcept {
   g_deliveries.fetch_add(1, std::memory_order_relaxed);
@@ -150,6 +185,11 @@ void Offer(unsigned char* data) noexcept {
   const Delivery d = Inspect(data);
   if (!IsFinishedPrimary(d)) return;
   NoteResource(d);
+  nevr_netgun_bullets::Resource netgun = nevr_netgun_bullets::Resource::Particles;
+  if (netgun_bullets::IsNetgunDelivery(d, &netgun)) {
+    OfferNetgun(data, d, netgun);
+    return;
+  }
   // The page is the CR15UIPage2CR resource under mnu_master_lowspec. The name is also the main-menu level's, so about sixty
   // resources of other classes arrive under it (headset run 2): only the class picks the page out, and the rest are
   // neither touched nor logged as pages.

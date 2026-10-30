@@ -23,7 +23,8 @@ namespace {
 namespace mv = quest_social::menu_version;
 
 constexpr std::uint64_t kLobbyVersion = nevr_menu_version_label::kLobbyVersionItem;
-constexpr std::uint64_t kPublisherLock = 0x1234567812345678ULL;  // any other item
+constexpr std::uint64_t kPublisherLock = nevr_menu_version_label::kPublisherLockItem;
+constexpr std::uint64_t kOtherItem = 0x1234567812345678ULL;  // any item that is neither
 constexpr const char* kLabel = "nEVR 5.17.0";
 
 mv::Thunk::Fn Entry() { return reinterpret_cast<mv::Thunk::Fn>(mv::Thunk::EntryAddress()); }
@@ -114,29 +115,50 @@ void ANullTextIsLeftToTheGame() {
   QCHECK(mv::Replaced() == 0);
 }
 
-// Every other item (the credits page sets text every frame; the other two items of the versions page are not ours) passes
+// Every other item (the credits page sets text every frame; the rad_version item of the versions page is not ours) passes
 // through untouched, whatever its text.
 void EveryOtherItemPassesThrough() {
   Reset();
   mv::ArmForTest(kLabel);
-  const char* text = "rad15_live";
-  QCHECK(Entry()(&g_canvasObject, 3, kPublisherLock, text) == 0x1000 + kPublisherLock);
+  const char* text = "631547";
+  QCHECK(Entry()(&g_canvasObject, 3, kOtherItem, text) == 0x1000 + kOtherItem);
   QCHECK(g_text == text);
-  QCHECK(g_item == kPublisherLock);
+  QCHECK(g_item == kOtherItem);
   QCHECK(g_handle == 3);
   QCHECK(mv::Replaced() == 0);
 }
 
-// The count is replacements only, and each one draws the label again (the page sets the item each time it is enabled).
-void EveryReplacementDrawsTheLabelAndIsCounted() {
+// The publisher lock item ("rad15_live" from the document) is drawn as the service's name; the game gets that text and the
+// call's other arguments unchanged. An empty text stays empty.
+void ThePublisherLockItemIsDrawnAsTheServiceName() {
+  Reset();
+  mv::ArmForTest(kLabel);
+  QCHECK(Entry()(&g_canvasObject, 3, kPublisherLock, "rad15_live") == 0x1000 + kPublisherLock);
+  QCHECK(g_calls == 1);
+  QCHECK(std::strcmp(g_copied, "echovrce") == 0);
+  QCHECK(g_canvas == &g_canvasObject);
+  QCHECK(g_handle == 3);
+  QCHECK(g_item == kPublisherLock);
+  QCHECK(mv::Replaced() == 1);
+  const char* empty = "";
+  Entry()(&g_canvasObject, 3, kPublisherLock, empty);
+  QCHECK(g_text == empty);
+  QCHECK(mv::Replaced() == 1);
+}
+
+// The count is replacements only, and each one draws its text again (the page sets the item each time it is enabled).
+void EveryReplacementDrawsItsTextAndIsCounted() {
   Reset();
   mv::ArmForTest(kLabel);
   Entry()(&g_canvasObject, 1, kLobbyVersion, "a");
+  QCHECK(std::strcmp(g_copied, kLabel) == 0);
   Entry()(&g_canvasObject, 1, kPublisherLock, "b");
-  QCHECK(std::strcmp(g_copied, "b") == 0);  // the other item was not replaced
-  Entry()(&g_canvasObject, 1, kLobbyVersion, "c");
-  QCHECK(g_calls == 3);
-  QCHECK(mv::Replaced() == 2);
+  QCHECK(std::strcmp(g_copied, "echovrce") == 0);
+  Entry()(&g_canvasObject, 1, kOtherItem, "c");
+  QCHECK(std::strcmp(g_copied, "c") == 0);  // the other item was not replaced
+  Entry()(&g_canvasObject, 1, kLobbyVersion, "d");
+  QCHECK(g_calls == 4);
+  QCHECK(mv::Replaced() == 3);
   QCHECK(std::strcmp(g_copied, kLabel) == 0);
 }
 
@@ -195,7 +217,8 @@ int main() {
   AnEmptyTextStaysEmpty();
   ANullTextIsLeftToTheGame();
   EveryOtherItemPassesThrough();
-  EveryReplacementDrawsTheLabelAndIsCounted();
+  ThePublisherLockItemIsDrawnAsTheServiceName();
+  EveryReplacementDrawsItsTextAndIsCounted();
   AnEmptyLabelLeavesTheCallAlone();
   TheLabelIsTheProjectVersion();
   TheFirstDrawnLabelIsLoggedOnce();

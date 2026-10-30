@@ -1513,6 +1513,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_party_follow_dedup PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_party_follow_dedup DISCOVERY_MODE PRE_TEST)
 
+    # test_lobby_failure_message.cpp (#1443, header-only patch/lobby_failure_message_rules.h): the service message on the
+    # error page for the lobby failure codes the game shows as a literal.
+    add_executable(test_lobby_failure_message tests/test_lobby_failure_message.cpp)
+    target_include_directories(test_lobby_failure_message PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_lobby_failure_message PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_lobby_failure_message DISCOVERY_MODE PRE_TEST)
+
     # test_menu_version_label.cpp (#747, header-only patch/menu_version_label_rules.h).
     add_executable(test_menu_version_label tests/test_menu_version_label.cpp)
     set_source_files_properties(tests/test_menu_version_label.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
