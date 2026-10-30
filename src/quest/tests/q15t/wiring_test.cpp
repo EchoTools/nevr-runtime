@@ -77,7 +77,7 @@ int main() {
 }
 #elif defined(WIRING_GATE_LINK_ONLY)
 // only the headset caller-range gates on (Q15T_GATE_LINK, and Q15T_GATE_BOTS when EXPECT_BOTS): InitEx must install the one
-// CVR::HeadsetType wrapper with the pinned ranges and the Bind's no-flags answer; a gate that is off gets an empty range.
+// CVR::HeadsetType wrapper with the pinned ranges and the link answer (kind 4); a gate that is off gets an empty range.
 #include "headset_gates.h"
 extern "C" __attribute__((noinline, visibility("default"))) void FakeExclusiveUpdateGame(void*) {}
 extern "C" __attribute__((visibility("default"), noinline)) int32_t vrapi_SetClockLevels(void*, int32_t, int32_t) { return 0; }
@@ -106,7 +106,7 @@ int main() {
   const q15t::HeadsetGateRanges r = q15t::GetHeadsetGateRangesForTest();
   CHECK(r.link_lo == base + 0x202ba74 && r.link_hi == base + 0x202bac8, "link range %llx..%llx, want the Bind (ELF 0x202ba74..0x202bac8)",
         (unsigned long long)(r.link_lo - base), (unsigned long long)(r.link_hi - base));
-  CHECK(r.link_answer == 5 && r.link_answer > 4, "link answer %d: the Bind has no case above 4", r.link_answer);
+  CHECK(r.link_answer == 4, "link answer %d: want the link kind (4), a kind the Bind has a case for and not the Quest kind (3)", r.link_answer);
 #ifdef EXPECT_BOTS
   CHECK(r.bots_lo == base + 0x124dd38 && r.bots_hi == base + 0x124e004, "bots range %llx..%llx", (unsigned long long)(r.bots_lo - base),
         (unsigned long long)(r.bots_hi - base));
