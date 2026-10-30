@@ -30,6 +30,7 @@
 #include "refresh_rate.h"
 #include "sensorwd.h"
 #include "shieldgamma.h"
+#include "tablestep.h"
 #include "voipdrop.h"
 #include "wallfire.h"
 #include "weapon_arm.h"
@@ -136,6 +137,9 @@
 #ifndef Q15T_HUDMETER
 #define Q15T_HUDMETER 0
 #endif
+#ifndef Q15T_TABLESTEP  // issue #1552: shader-set table growth step 32 -> 1 (tablestep.cpp)
+#define Q15T_TABLESTEP 0
+#endif
 #ifndef Q15T_SHIELDGAMMA  // bitmask: 1 gamma, 2 tube mirror
 #define Q15T_SHIELDGAMMA 0
 #endif
@@ -239,6 +243,9 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_SHIELDGAMMA
     "shieldgamma "
+#endif
+#if Q15T_TABLESTEP
+    "tablestep "
 #endif
 #if Q15T_LEVELNAME
     "levelname "
@@ -459,6 +466,9 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
 #endif
 #if Q15T_SHIELDGAMMA
   ReportModule("shieldgamma", InstallShieldGamma(base, (Q15T_SHIELDGAMMA & 1) != 0, (Q15T_SHIELDGAMMA & 2) != 0));
+#endif
+#if Q15T_TABLESTEP
+  ReportModule("tablestep", InstallTableStep(base));
 #endif
 #if Q15T_LEVELNAME
   ReportModule("levelname", InstallLevelName(base));
