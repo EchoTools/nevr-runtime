@@ -1,4 +1,4 @@
-//! `nevr-install pc uninstall` through the CLI binary (#1497): the restore, the record, the exit codes, the one stdout line,
+//! `install-nevr-runtime pc uninstall` through the CLI binary (#1497): the restore, the record, the exit codes, the one stdout line,
 //! the log and the stdin rule. Each test builds its own game folder and nevr root in a temporary directory, runs the binary
 //! on them, and reads what is left. Nothing here reads the network, a real install, or the caller's stdin.
 
@@ -100,7 +100,7 @@ impl Fixture {
     }
 
     fn run_with(&self, extra: &[String]) -> Run {
-        let out = Command::new(env!("CARGO_BIN_EXE_nevr-install")).args(self.args()).args(extra).stdin(Stdio::null()).output().unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime")).args(self.args()).args(extra).stdin(Stdio::null()).output().unwrap();
         Run { exit: out.status.code().unwrap_or(-1), stdout: String::from_utf8_lossy(&out.stdout).into_owned(), stderr: String::from_utf8_lossy(&out.stderr).into_owned() }
     }
 
@@ -171,7 +171,7 @@ fn uninstall_reads_nothing_from_stdin() {
     let f = Fixture::new();
     f.installed();
     // The pipe is held open and never written or closed: a read of stdin would block until the deadline.
-    let mut child: Child = Command::new(env!("CARGO_BIN_EXE_nevr-install")).args(f.args()).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut child: Child = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime")).args(f.args()).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     let _held = child.stdin.take();
     let deadline = Instant::now() + Duration::from_secs(60);
     let status = loop {
@@ -415,7 +415,7 @@ fn a_root_the_host_does_not_load_from_is_refused_without_the_dev_flag() {
     let f = Fixture::new();
     f.installed();
     let args: Vec<String> = f.args().into_iter().filter(|a| a != "--dev-nevr-root").collect();
-    let out = Command::new(env!("CARGO_BIN_EXE_nevr-install")).args(&args).stdin(Stdio::null()).output().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime")).args(&args).stdin(Stdio::null()).output().unwrap();
     assert_eq!(out.status.code(), Some(2), "stdout={}", String::from_utf8_lossy(&out.stdout));
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     // On Windows the reason names the canonical folder; on this platform it says there is none. Both refuse, and both name the flag.
