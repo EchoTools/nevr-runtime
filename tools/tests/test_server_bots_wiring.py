@@ -94,6 +94,8 @@ def update_problems(gameserver: str, tick: str) -> list[str]:
     handoff = code.find(HANDOFF, code.find("VOID GameServerLib::Update()"))
     if handoff < 0 or handoff > gate:
         return ["OnServerUpdate is not after the shutdown hand-off (a server that is exiting would still add bots)"]
+    if re.search(r"\breturn\b", code[handoff + len(HANDOFF):gate]):
+        return ["a return between the shutdown hand-off and the bots gate can skip the driver on a running server"]
     if "nevr_server_bots::" in strip_comments(tick):
         return ["tick.cpp calls the bots driver: it runs from GameServerLib::Update only"]
     return []
@@ -273,6 +275,8 @@ class ServerBotsWiring(unittest.TestCase):
         self.assertTrue(update_problems(gameserver.replace(call, call + call), tick), "a doubled call")
         self.assertTrue(update_problems(gameserver.replace(UPDATE_GATE, UPDATE_GATE + "\n    if (m_reconnectPending) return;"),
                                         tick), "a statement between the gate and the call")
+        self.assertTrue(update_problems(gameserver.replace(HANDOFF, HANDOFF + "\n  if (m_reconnectPending) return;"),
+                                        tick), "a return between the hand-off and the gate")
         self.assertTrue(update_problems(gameserver.replace(UPDATE_GATE, "if (true) {"), tick))
         self.assertTrue(update_problems(gameserver.replace("DriverRuns(g_isServer != FALSE,", "DriverRuns(true,"), tick))
         self.assertTrue(update_problems(gameserver.replace("GameLoopThreadId(), GetCurrentThreadId()))", "1, 1))"), tick))
