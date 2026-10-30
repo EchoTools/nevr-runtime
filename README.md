@@ -319,7 +319,8 @@ into the runtime.
   and the plugin-side helpers, header-only
 - `src/extension/` — header-only published C ABI for the static modules and the scripting host
 - `src/launcher/` → `echovr_server.exe`, a `CreateProcess` wrapper spawning
-  `echovr.exe -server -headless -no-console` (a dedicated game server)
+  `echovr.exe -server -headless -no-console` (a dedicated game server); its window shows the server's run log
+  (`%LOCALAPPDATA%\nevr\echovr\logs`) until the server exits
 - `src/libovr-stub/` → `LibOVRPlatform64_1.dll` — Oculus platform stub, built
   separately from the community beta package
 - `src/quest/` — separate Android/Quest arm64 target
