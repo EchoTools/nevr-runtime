@@ -382,57 +382,86 @@ same steps, and promote that one.
 
 Installers read `channels.beta` from the signed manifest. When the release beta points at is bad, `tools/rollback_beta.py`
 publishes the manifest again with beta on an earlier release the manifest already lists. It uses the same `sign-manifest.yml`
-publish as the Quest release timer (`action=publish`, `channel=beta`, in the release-signer repository), with the target's
-own Quest APK, game data and content packs as the `extra_artifacts`, and `override=true` only when the target is lower than
-beta (the signer refuses a channel that moves backwards without it, and records the override). A bad published release is
-never edited or deleted ("When a published release is wrong"); the rollback only changes which release new installs get.
+publish as the Quest release timer (`action=publish`, `channel=beta`, in the release-signer repository), and `override=true`
+goes into the dispatch only when the target is lower than beta (the signer refuses a channel that moves backwards without it,
+and records the override). A bad published release is never edited or deleted ("When a published release is wrong"); the
+rollback only changes which release new installs get. The tool cannot target a tag the manifest does not list.
 
-**Before you run it.** The target must be the last build known good, and it must list what its players need: the plan the
-tool prints names every artifact of the target with its size, and the tool refuses a target for which
-`release-signer listed-claims` finds no artifact. Read that list for the Windows zip, the Quest APK
-(`kind` `quest-apk`), the game data and any content pack. A target without them is not a rollback. Check too that the fault is
-in the build: a fault in the manifest, a service or a player's own files is not cured by moving beta.
+**Before you run it.** The target must be the last build known good, and it must list what its players need. The plan the
+tool prints names every artifact of the target with its size: read it for the Windows zip, the Quest APK (`kind`
+`quest-apk`), the game data and any content pack. The publish is handed, as `extra_artifacts`, exactly the target's artifacts
+that GitHub does not hold (every kind but `windows-zip` and `quest-library`, from `release-signer listed-claims`), and the
+tool refuses before it changes anything unless that list equals the target's by name, no more and no fewer, and each entry
+is what the manifest lists. A target that lists no Quest APK or no game data is not a rollback target. Check too that the
+fault is in the build: a fault in the manifest, a service or a player's own files is not cured by moving beta.
+
+**Where, and as whom.** Run it from a clean checkout of nevr-runtime `main` (the Quest release timer's dedicated checkout, see
+"The Quest half of the train", works) on the machine that runs that timer, because it stops a user unit there. The account
+`GH_BIN` runs as (default `gh-spritz`, the metis-sprock account) must be able to dispatch workflows on the release-signer
+repository and to set repository variables on `EchoTools/nevr-runtime`; the metis-sprock account can, and Spritz and Teth act as
+it. sprockee acts as his own owner account. The manifest host's public base is the one in
+`tools/systemd/nevr-quest-release.service`.
 
 ```sh
-python3 tools/rollback_beta.py vX.Y.Z --dry-run                  # the plan, then a dry-run publish; changes nothing else
-python3 tools/rollback_beta.py vX.Y.Z --live --yes               # pause the train, publish, verify
-python3 tools/rollback_beta.py vX.Y.Z --live --forward --yes     # roll forward to a higher release
-gh variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime && systemctl --user start nevr-quest-release.timer   # resume
+export RELEASE_PUBLIC_BASE=https://evr.echo.taxi                   # the manifest host's public base
+python3 tools/rollback_beta.py vX.Y.Z --dry-run                     # the plan, what a live run would meet, a dry-run publish
+python3 tools/rollback_beta.py vX.Y.Z --live --yes                  # pause the train, publish, verify
+gh-spritz variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime && systemctl --user start nevr-quest-release.timer   # resume
 ```
 
-Always run the dry run first. It reads the live manifest, refuses what a live run would refuse, dispatches the publish with
-`dry_run=true` and checks that every job that should have run did (the record job is skipped in a dry run) and that beta did
-not move. The workflow still copies the release's files to R2 in a dry run; it never overwrites an object. The tool reads
-`GH_BIN` (default `gh`) for every GitHub call and `RELEASE_PUBLIC_BASE` for the manifest host, and needs no R2 credential. The
+Always run the dry run first. It reads the live manifest, refuses what a live run would refuse, and then, read-only, reads
+`RELEASE_TRAIN`, the timer, the Quest service and the signer's runs and prints plan lines saying whether a live run would be
+refused now. It dispatches the publish with `dry_run=true`, checks that every job that should have run did (the record job is
+skipped in a dry run) and that beta did not move, then downloads the run's `manifest-signed` artifact and compares it with the
+live manifest: beta must be the target, the set of releases, the other channels and every other release entry must be
+unchanged, and the target's artifacts must equal the live ones by name, kind, sha256 and size. A difference in the target's
+notes, or in a field of its entry other than `notes` and `published`, is printed as a note and does not fail the run. The
+workflow still copies the release's files to R2 in a dry run; it never overwrites an object.
+
+The tool reads `GH_BIN` for every GitHub call and `RELEASE_PUBLIC_BASE` for the manifest host, and needs no R2 credential. The
 release signer is `RELEASE_SIGNER_BIN` with `RELEASE_SIGNER_DIR`, or, when neither is set, a snapshot of the signer's `main`
-built the way `tools/quest_release_timer.py` builds it (`QUEST_RELEASE_SIGNER_REPO`, default `~/src/release-signer`) and
-removed when the run ends. Each step appends a record to `$XDG_STATE_HOME/nevr-runtime/rollback-beta.jsonl`; no token,
-credential or host is printed or logged.
+built the way `tools/quest_release_timer.py` builds it (`QUEST_RELEASE_SIGNER_REPO`, default `~/src/release-signer`) and removed
+when the run ends. Each step appends a record to `$XDG_STATE_HOME/nevr-runtime/rollback-beta.jsonl`; no token, credential or
+host is printed or logged. Every command has a timeout. A run that fails, is interrupted (Ctrl-C) or crashes after it began
+to pause or dispatch prints what is paused, what was dispatched (with the run id when known; a call that left no run id says a
+publish MAY have been dispatched, and then you list the signer's runs before dispatching again) and the resume commands, and
+exits non-zero. A rollback that was verified but whose scratch folder could not be removed says so and exits 0: the rollback is
+done and verified, and a second run would only refuse with "already beta".
 
 **What it refuses.** A tag the live manifest does not list; the tag that already is beta; a tag higher than beta unless
-`--forward` is given; `--forward` for a tag that is not higher; `--live` without `--yes`. The order of a live run is fixed:
+`--forward` is given; `--forward` for a tag that is not higher; `--live` without `--yes`; claims that are not the target's
+non-GitHub artifacts. The order of a live run is fixed:
 
 1. Read `verify-manifest --live` and the manifest the host serves (held to the sha256 the signer verified), take the
    target's claims, print the plan.
 2. Pause the train, unless `--keep-train`: set the repository variable `RELEASE_TRAIN` to `false` and read it back, stop
-   `nevr-quest-release.timer`, check that neither the timer nor `nevr-quest-release.service` is active (a Quest release in
-   progress stops the rollback before it dispatches, with the timer already stopped), then check again that beta has not moved.
-   A pause step that fails stops the run before the dispatch and says what is and is not done.
-3. Dispatch the live publish, watch it, and require the jobs that publish (`Commit the manifest record`, `Publish to R2`,
+   `nevr-quest-release.timer` and check that it is no longer active. A pause step that fails stops the run before the
+   dispatch and says what is and is not done.
+3. Check that the Quest release is not running. `nevr-quest-release.service` is a oneshot unit, so while it runs its
+   `ActiveState` is `activating` (and `is-active` exits 3 for it); the tool reads `systemctl --user show -p ActiveState
+   --value` and refuses on anything but `inactive` or `failed`, with the timer already stopped so it starts no other. Then
+   check that no `sign-manifest.yml` run on the signer repository is queued or in progress (any status but `completed`), and
+   refuse if one is. Both checks run under `--keep-train` too. A rollback that is refused here changes nothing but the pauses it
+   already made; wait for the run to end and run it again.
+4. Check again, after the pause, that beta has not moved and the claims still match the manifest.
+5. Dispatch the live publish, watch it, and require the jobs that publish (`Commit the manifest record`, `Publish to R2`,
    `A run that published nothing is red`) to have concluded `success`.
-4. Require `verify-manifest --live` to list the target as beta, with every artifact the target listed before and every claim
-   still listed by name and sha256.
-5. Print the elapsed time, the roll-forward command and the two resume commands. **The tool never resumes the train.** It
-   stays paused until someone runs the resume commands, so decide that in the open.
+6. Require `verify-manifest --live` to list the target as beta, with every artifact the target listed still listed by name and
+   sha256.
+7. Print the elapsed time and what to do next. **The tool never resumes the train.** It stays paused until someone runs the
+   resume commands, so decide that in the open.
+
+A train run that is already in progress when the variable is set still finishes its cut: the variable is read when the run
+starts. Look at the train's run list if one is under way.
 
 **How long.** The manifest run takes about 5 to 6 minutes: the three most recent live publishes of `sign-manifest.yml`
 took 5 min 9 s, 5 min 30 s and 5 min 15 s from the start to the end of the run. The pause steps add seconds. Expect about 6
-to 7 minutes from `--live` to the verified line. A dry run dispatches the same workflow and waits for it as well.
+to 7 minutes from `--live` to the verified line. The tool stops watching after 1800 s, and after 7200 s when the target lists
+PC game data (`game-data` for `windows-x86_64`), because the check job then downloads about 5 GB, which the workflow allows
+about 83 minutes for. A dry run dispatches the same workflow and waits for it as well.
 
-**Who.** Anyone who has push access to the release-signer repository (the workflow is dispatched there on `main`, and the
-actor needs push access to dispatch it) and write access to the `EchoTools/nevr-runtime` repository variables, from the
-machine that runs the Quest release timer: Spritz, Teth and sprockee. Tell Spritz and sprockee when a rollback starts and
-when it has ended: a rollback is news they want, never a gate, and nothing waits for an answer.
+**Who to tell.** Tell Spritz and sprockee when a rollback starts and when it has ended: a rollback is news they want, never a
+gate, and nothing waits for an answer.
 
 **Why both pauses.** The release train (`.github/workflows/release-train.yml`) cuts a release only while the repository
 variable `RELEASE_TRAIN` is `true` (the `if` of its `decide` job), and `tools/release_train_guard.py` reports `switch_off`
@@ -447,14 +476,20 @@ manifest consumer rule keeps an installed version that is higher than the channe
 asked to go back (the release-signer repository's manifest design document, section 6.1 step 7; the same rule is in its table
 of threats, "Rollback"). Players on the bad build get the fix by the next version, cut through the same steps as any release.
 
-**Roll forward.** When the fixed release is out, or the rollback was a mistake, run the roll-forward command the tool printed:
-`python3 tools/rollback_beta.py vX.Y.Z --live --forward --yes`, with the higher tag. It carries no override. A forward run
-that was a mistake prints the command that undoes it. Run the dry run of it first.
+**Ship the fix.** The fix reaches beta through the train, not through this tool. After a rollback the train is paused: resume
+it (the two commands above, which the tool prints). The guard then cuts the fixed release when `main` has a releasable change,
+and the Quest release timer publishes it to beta as a forward move, which needs no override. Before that, the fix has to be
+on `main`; the bad release's tag is never reused.
 
-**Resume the train.** After the fixed release is on beta (or when the pause is no longer wanted):
+**False alarm.** If the rollback was a mistake, `python3 tools/rollback_beta.py vX.Y.Z --live --forward --yes` with the
+release you rolled back from puts beta back on it. The tool prints that command, labelled for a false alarm only, because it
+re-targets the release that was rolled back from: it is not how the fix ships. A forward run carries no override and prints
+the command that undoes it. Run the dry run first.
+
+**Resume the train.** When the fixed release is on `main`, or the pause is no longer wanted:
 
 ```sh
-gh variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime
+gh-spritz variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime
 systemctl --user start nevr-quest-release.timer
 ```
 
