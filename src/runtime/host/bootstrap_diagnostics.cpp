@@ -776,9 +776,13 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
     if (chunk == 0) break;
     written += chunk;
   }
-  FlushFileBuffers(file);
   LeaveCriticalSection(&g_log_local_lock);
   if (locked) ReleaseMutex(lock);
+  // The flush is after the release, not inside the wait's hold: FlushFileBuffers is the slow step, and holding the
+  // named mutex across it made processes that end together queue for the bounded exit wait behind each other's fsync
+  // (#1152). The line is already in the file; the file is flushed before this call returns, so the process is not
+  // allowed to end before its record reaches the disk.
+  FlushFileBuffers(file);
   if (marked_unreliable) {
     // The one record that says the log is no longer serialized: written to the open file, without the lock,
     // from a fixed buffer (this can be the crash callback).
