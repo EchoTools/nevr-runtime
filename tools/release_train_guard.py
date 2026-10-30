@@ -9,11 +9,17 @@ own run list whether the train is due:
 - switch off (repository variable RELEASE_TRAIN is not "true")        -> none, switch_off
 - nothing releasable on origin/main (next_release_version.py exit 1)   -> none, no_releasable_change
 - a train run queued, in progress, waiting or pending                   -> none, train_run_in_progress
+- the newest train run failed, was cancelled or timed out, and was
+  created 195 minutes ago or less                                       -> none, recent_failed_run
 - the newest published release is 195 minutes old or less               -> none, recent_release
 - otherwise (also no published release at all)                          -> dispatch, no_release_in_window
 
 The window is measured from the newest published release, not from the newest train run (#1466): a run that held, or
-found nothing to cut, published nothing and costs no time. The rule is tools/release_window.py, which the scheduled
+found nothing to cut, published nothing and costs no time. A run that failed red (or was cancelled or timed out) is the
+exception: it may have left a tag and an unpublished draft, which the version tool then counts as the base, so a guard
+that only watched the release would dispatch again every hour while merges keep landing. The newest run's conclusion
+(failure, cancelled, timed_out) inside the same window therefore holds the guard (recent_failed_run). A run that
+succeeded or was skipped does not. The rule is tools/release_window.py, which the scheduled
 train runs too; "newest published release" is its newest_published (non-draft, tag exactly vX.Y.Z, newest by
 publishedAt), read through this guard's own gh call. A decision carries last_run_id and last_run_created (the newest
 train run, information only) and last_release, last_published, age_minutes (of that release) and window_minutes.
@@ -42,6 +48,7 @@ import release_window  # noqa: E402
 WORKFLOW = "release-train.yml"
 WINDOW_MINUTES = release_window.WINDOW_MINUTES
 ACTIVE = frozenset({"queued", "in_progress", "waiting", "pending"})
+FAILED = frozenset({"failure", "cancelled", "timed_out"})
 TOOL = "release_train_guard"
 DEFAULT_GH = "gh-spritz"
 LOG_NAME = "release-train-guard.jsonl"
@@ -78,6 +85,12 @@ def decide(now: dt.datetime, runs: list[dict], releasable: bool, switch_on: bool
         return result("none", "no_releasable_change")
     if any(run["status"] in ACTIVE for run in runs):
         return result("none", "train_run_in_progress")
+    if (
+        newest is not None
+        and newest.get("conclusion") in FAILED
+        and release_window.inside_window(now, newest["createdAt"])
+    ):
+        return result("none", "recent_failed_run")
     if release is not None and release_window.inside_window(now, release["published"]):
         return result("none", "recent_release")
     return result("dispatch", "no_release_in_window")
@@ -134,10 +147,16 @@ def switch_is_on(repo: str, gh: str) -> bool:
 def train_runs(repo: str, gh: str) -> list[dict]:
     listed = Call(gh, [
         "run", "list", "--workflow", WORKFLOW, "--repo", repo, "--limit", "20",
-        "--json", "databaseId,status,event,createdAt",
+        "--json", "databaseId,status,event,createdAt,conclusion",
     ]).stdout()
     return [
-        {"id": r["databaseId"], "createdAt": r["createdAt"], "status": r["status"], "event": r["event"]}
+        {
+            "id": r["databaseId"],
+            "createdAt": r["createdAt"],
+            "status": r["status"],
+            "event": r["event"],
+            "conclusion": r.get("conclusion"),
+        }
         for r in json.loads(listed)
     ]
 

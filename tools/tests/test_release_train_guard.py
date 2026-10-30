@@ -44,8 +44,9 @@ def gh_release(tag: str, minutes_ago: float, draft: bool = False) -> dict:
     return {"tagName": tag, "isDraft": draft, "isPrerelease": True, "publishedAt": None if draft else real_iso(minutes_ago)}
 
 
-def run(run_id: int, minutes_ago: float, status: str = "completed", event: str = "schedule") -> dict:
-    return {"id": run_id, "createdAt": iso(minutes_ago), "status": status, "event": event}
+def run(run_id: int, minutes_ago: float, status: str = "completed", event: str = "schedule",
+        conclusion: str | None = "success") -> dict:
+    return {"id": run_id, "createdAt": iso(minutes_ago), "status": status, "event": event, "conclusion": conclusion}
 
 
 def pub(minutes_ago: float, tag: str = "v6.4.0") -> dict:
@@ -157,6 +158,55 @@ class Decide(unittest.TestCase):
 
     def test_a_run_created_recently_with_no_release_dispatches(self) -> None:
         result = guard.decide(NOW, [run(16, 5)], True, True, None)
+        self.assertEqual((result["action"], result["reason"]), ("dispatch", "no_release_in_window"))
+
+    def test_a_failed_run_inside_the_window_throttles_the_guard(self) -> None:
+        # The run cut nothing that was published, so the release is old; the failed run is why the guard waits.
+        for conclusion in ("failure", "cancelled", "timed_out"):
+            with self.subTest(conclusion=conclusion):
+                result = guard.decide(NOW, [run(30, 10, conclusion=conclusion)], True, True, pub(900))
+                self.assertEqual((result["action"], result["reason"]), ("none", "recent_failed_run"))
+                self.assertEqual(result["last_run_id"], 30)
+                self.assertEqual(result["last_run_created"], iso(10))
+                self.assertEqual(result["last_release"], "v6.4.0")
+
+    def test_a_successful_or_skipped_or_unfinished_conclusion_does_not_throttle(self) -> None:
+        for conclusion in ("success", "skipped", "neutral", "action_required", "stale", "startup_failure", "", None):
+            with self.subTest(conclusion=conclusion):
+                result = guard.decide(NOW, [run(31, 10, conclusion=conclusion)], True, True, pub(900))
+                self.assertEqual((result["action"], result["reason"]), ("dispatch", "no_release_in_window"))
+
+    def test_a_failed_run_195_minutes_old_still_throttles_and_195_point_1_does_not(self) -> None:
+        at = guard.decide(NOW, [run(32, 195, conclusion="failure")], True, True, pub(900))
+        self.assertEqual((at["action"], at["reason"]), ("none", "recent_failed_run"))
+        past = {"id": 33, "createdAt": "2026-10-29T08:44:54Z", "status": "completed", "event": "schedule",
+                "conclusion": "failure"}
+        result = guard.decide(NOW, [past], True, True, pub(900))
+        self.assertEqual((result["action"], result["reason"]), ("dispatch", "no_release_in_window"))
+
+    def test_a_failed_run_beats_a_release_inside_the_window_in_the_reason(self) -> None:
+        # The failed-run rule comes before the release-window rule.
+        result = guard.decide(NOW, [run(34, 10, conclusion="failure")], True, True, pub(49))
+        self.assertEqual((result["action"], result["reason"]), ("none", "recent_failed_run"))
+
+    def test_only_the_newest_run_is_judged(self) -> None:
+        runs = [run(36, 10, conclusion="success"), run(35, 50, conclusion="failure")]
+        result = guard.decide(NOW, runs, True, True, pub(900))
+        self.assertEqual((result["action"], result["reason"]), ("dispatch", "no_release_in_window"))
+
+    def test_an_active_run_comes_before_the_failed_run_rule(self) -> None:
+        # The newest run failed and an older one is still active: the active run is why the guard waits.
+        runs = [run(37, 10, conclusion="failure"), run(38, 900, "in_progress", conclusion=None)]
+        result = guard.decide(NOW, runs, True, True, pub(900))
+        self.assertEqual((result["action"], result["reason"]), ("none", "train_run_in_progress"))
+
+    def test_switch_off_and_nothing_releasable_come_before_the_failed_run_rule(self) -> None:
+        failed = [run(39, 10, conclusion="failure")]
+        self.assertEqual(guard.decide(NOW, failed, True, False, pub(900))["reason"], "switch_off")
+        self.assertEqual(guard.decide(NOW, failed, False, True, pub(900))["reason"], "no_releasable_change")
+
+    def test_a_failed_run_older_than_the_window_does_not_throttle(self) -> None:
+        result = guard.decide(NOW, [run(40, 196, conclusion="failure")], True, True, pub(900))
         self.assertEqual((result["action"], result["reason"]), ("dispatch", "no_release_in_window"))
 
     def test_the_result_has_every_field(self) -> None:
@@ -272,7 +322,7 @@ class Cli(unittest.TestCase):
         env.update({
             "PATH": os.pathsep.join([*front, str(self.bindir), os.environ["PATH"]]),
             "FAKE_GH_LOG": str(self.gh_log),
-            "FAKE_RUNS": json.dumps([{"databaseId": r["id"], "createdAt": r["createdAt"], "status": r["status"], "event": r["event"]} for r in runs]),
+            "FAKE_RUNS": json.dumps([{"databaseId": r["id"], "createdAt": r["createdAt"], "status": r["status"], "event": r["event"], "conclusion": r.get("conclusion")} for r in runs]),
             "FAKE_RELEASES": releases if isinstance(releases, str) else json.dumps(releases or []),
             "FAKE_VARS": json.dumps([{"name": "RELEASE_TRAIN", "value": variable}]),
             "FAKE_VERSION_RC": str(version_rc),
@@ -427,6 +477,28 @@ class Cli(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout.splitlines()[0])["reason"], "train_run_in_progress")
         self.assertEqual(len(result.stdout.splitlines()), 1)
         self.assertFalse(any(call[:2] == ["workflow", "run"] for call in self.gh_calls()))
+
+    def test_a_recent_failed_run_prints_one_line_and_does_not_dispatch(self) -> None:
+        failed = {"id": 41, "createdAt": real_iso(10), "status": "completed", "event": "schedule", "conclusion": "failure"}
+        result = self.invoke([failed], releases=[gh_release("v6.4.0", 900)])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = result.stdout.splitlines()
+        self.assertEqual(len(lines), 1, result.stdout)
+        decision = json.loads(lines[0])
+        self.assertEqual((decision["action"], decision["reason"]), ("none", "recent_failed_run"))
+        self.assertEqual(decision["last_run_id"], 41)
+        self.assertFalse(any(call[:2] == ["workflow", "run"] for call in self.gh_calls()))
+
+    def test_a_recent_successful_run_does_not_throttle_the_guard(self) -> None:
+        ok = {"id": 42, "createdAt": real_iso(10), "status": "completed", "event": "schedule", "conclusion": "success"}
+        result = self.invoke([ok], releases=[gh_release("v6.4.0", 900)])
+        self.assertEqual(json.loads(result.stdout.splitlines()[0])["reason"], "no_release_in_window")
+
+    def test_the_run_list_asks_for_the_conclusion(self) -> None:
+        self.invoke([])
+        run_lists = [call for call in self.gh_calls() if call[:2] == ["run", "list"]]
+        self.assertEqual(len(run_lists), 1, self.gh_calls())
+        self.assertEqual(run_lists[0][run_lists[0].index("--json") + 1], "databaseId,status,event,createdAt,conclusion")
 
     def test_dry_run_prints_the_decision_and_does_not_dispatch(self) -> None:
         result = self.invoke([], extra=["--dry-run"])

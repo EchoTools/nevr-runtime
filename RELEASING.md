@@ -60,9 +60,11 @@ The guard covers a dropped scheduled train run. It is a systemd user timer on th
 checkout with the publisher's `gh-spritz` (`--gh`, else `GH_BIN`). It runs only while that machine is on: a machine that is off delays
 the guard, and the timer's `Persistent=true` catches up when the machine comes back. When `main` is releasable and no release was
 published in the last 3 h 15 min, it dispatches the train. It does nothing while a train run is queued, in progress, waiting or pending,
-when `RELEASE_TRAIN` is not `true`, when nothing on `main` is releasable, or while the newest published release is inside the window. Each decision is one JSON line (`reason` is `switch_off`, `no_releasable_change`,
-`train_run_in_progress`, `recent_release` or `no_release_in_window`; `last_release`, `last_published`, `age_minutes` and `window_minutes`
-describe the release, `last_run_id` and `last_run_created` the newest train run, for information) in the journal
+when `RELEASE_TRAIN` is not `true`, when nothing on `main` is releasable, while the newest train run failed, was cancelled or timed out
+less than 3 h 15 min ago (a red cut can leave a tag and an unpublished draft that the version tool counts, so the guard does not
+re-dispatch hourly; a run that succeeded or was skipped does not hold it), or while the newest published release is inside the window. Each decision is one JSON line (`reason` is `switch_off`, `no_releasable_change`,
+`train_run_in_progress`, `recent_failed_run`, `recent_release` or `no_release_in_window`; `last_release`, `last_published`, `age_minutes` and `window_minutes`
+describe the release, `last_run_id` and `last_run_created` the newest train run: for information, except under `recent_failed_run`, where it is the failed run) in the journal
 (`journalctl --user -u nevr-train-guard.service`) and in `~/.local/state/nevr-runtime/release-train-guard.jsonl`; a run whose log cannot
 be written fails before it decides anything. A failed run couriers the release lead (`nevr-train-guard-failed.service`); it never bonks.
 It is not a GitHub schedule: GitHub drops or delays scheduled runs, and a job's token cannot read repository variables (`gh variable
