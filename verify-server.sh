@@ -227,7 +227,29 @@ WINE_RUNNING=0
 echo "$RC" > "$OUT/exit_code.txt"
 
 find "$GAME_ROOT/echovr/" -iname '*.dmp' -newermt '-1 minute' 2>/dev/null | wc -l > "$OUT/dumps_after.txt"
-ls -t "$GAME_DIR/logs/"*.jsonl 2>/dev/null | head -1 > "$OUT/jsonl_path.txt"
+# The game's log for THIS run is the newest nevr-*.jsonl written since the run started, in the nevr root's logs folder
+# (the install-root layout, ADR 0012), not the executable's folder. The host's nevr-bootstrap.jsonl is not the game's log.
+# It is copied into the run's directory now (#1297): the test that made the game copy deletes it when the run ends, and a
+# log left in the copy goes with it. A copy that does not match the original fails the run.
+RUN_LOGDIR="$GAME_ROOT/echovr/.wineprefix/drive_c/users/$(id -un)/AppData/Local/nevr/echovr/logs"
+RUN_LOG_COPY="$OUT/game-log.jsonl"
+run_log=""
+for f in "$RUN_LOGDIR"/nevr-*.jsonl; do
+  [ -f "$f" ] || continue
+  case "$f" in */nevr-bootstrap.jsonl) continue ;; esac
+  [ "$(stat -c %Y "$f")" -ge "$RUN_START_EPOCH" ] && run_log="$f"
+done
+copied_to=none
+if [ -n "$run_log" ]; then
+  if ! cp -p -- "$run_log" "$RUN_LOG_COPY" || ! cmp -s -- "$run_log" "$RUN_LOG_COPY"; then
+    echo "ERROR: could not copy the game log $run_log to $RUN_LOG_COPY (the log would be lost with the game copy)" >&2
+    exit 1
+  fi
+  copied_to="$RUN_LOG_COPY"
+  echo "$run_log" > "$OUT/jsonl_path.txt"
+else
+  echo "no game log written since this run started ($RUN_LOGDIR)" > "$OUT/jsonl_path.txt"
+fi
 
 # Summary is read back FROM THE FILES — never from a live pipe.
 {
@@ -250,6 +272,7 @@ ls -t "$GAME_DIR/logs/"*.jsonl 2>/dev/null | head -1 > "$OUT/jsonl_path.txt"
   echo "engine flags lines  = $(grep -c 'engine flags' "$LOG")"
   grep 'engine flags' "$LOG" || true
   echo "log                 = $LOG"
+  echo "game log copy       = $copied_to"
   # A host that stopped the game before the runtime ran leaves no game log; the host's record says why (#1122).
   echo "host stop           = $(host_stop_cause "$GAME_ROOT/echovr/.wineprefix/drive_c/users/$(id -un)/AppData/Local/nevr/echovr/logs" "$RUN_START_EPOCH" || echo none)"
 } | tee "$OUT/summary.txt"
