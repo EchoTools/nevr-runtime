@@ -5,7 +5,10 @@
 // the media root and the data-root hook is installed: then the media root, with or without the storage grant); a release build
 // never fetches and shows the missing-data message; Storage not granted writes nothing and shows the Storage message,
 // on both the request path and the microphone-granted path; the step runs once across both paths; a failed fetch shows
-// the floor message and ends the process after holding it; the probe file acts once.
+// the floor message and ends the process after holding it; the probe file acts once; and the bundled content pack
+// (docs/adr/0029-quest-bundled-content-pack.md) after the data step: none, placed after the data was used and after it was
+// fetched, in a release build too, stock_mismatch, a failed placement that ends the process, a kill between the writes, and no
+// pack step at all when the data step failed or the storage message ended the process.
 //
 // Built and run by `just test-quest-data-net`.
 
@@ -20,6 +23,8 @@
 #include <sys/stat.h>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "data_wiring.h"
 #include "hook_log.h"
 #include "obb_skip_hook.h"
@@ -27,6 +32,7 @@
 #include "probe_command.h"
 #include "process_end_hook.h"
 #include "quest/data/data_step.h"
+#include "quest/data/pack.h"
 #include "quest/data/sha256.h"
 #include "quest/tests/data_test_support.h"
 #include "quest/tests/test_check.h"
@@ -885,6 +891,257 @@ void AReleaseBuildWithAnObbServingTheMediaRootLooksThereAndWritesNothing() {
   QCHECK(Has(LineOf("data_check"), "\"root\":\"" + Media() + "\""));
 }
 
+// ---- the bundled content pack, after the data step (ADR 0029) ----
+
+const std::string kPackManifestBytes = "PACK-MANIFEST-" + Pattern(4000);
+const std::string kPackPackageBytes = "PACK-PACKAGE-" + Pattern(30000);
+// The manifest the data step's own fetch writes (GoodZip), and the stock manifest the pack below names.
+const std::string kStockManifestBytes = Pattern(20000);
+constexpr const char* kAndroidRel = "_data/5932408047/rad15/android";
+
+// An APK (a zip with hundreds of entries in life, a hundred here) carrying a pack that requires `stock_sha256`.
+std::string PackApk(bool with_pack, const std::string& stock_sha256, const std::string& package = kPackPackageBytes) {
+  std::vector<SrcEntry> entries;
+  entries.emplace_back("AndroidManifest.xml", "xml");
+  for (int i = 0; i < 100; ++i) entries.emplace_back("res/f" + std::to_string(i), "r" + std::to_string(i));
+  if (with_pack) {
+    const std::string hash = nevr_quest::data::Sha256Hex(kPackPackageBytes.data(), kPackPackageBytes.size());  // what pack.json says
+    nlohmann::json files = nlohmann::json::array();
+    files.push_back({{"path", "packages/48037dc70b0ecab2_1"}, {"sha256", hash}, {"size", kPackPackageBytes.size()}});
+    files.push_back({{"path", "manifests/48037dc70b0ecab2"},
+                     {"sha256", nevr_quest::data::Sha256Hex(kPackManifestBytes.data(), kPackManifestBytes.size())},
+                     {"size", kPackManifestBytes.size()}});
+    nlohmann::json pack = {{"schema", 1},
+                           {"id", "combat-pack"},
+                           {"version", "1.0.0"},
+                           {"stock_data_version", "5932408047"},
+                           {"requires_stock_manifest_sha256", nlohmann::json::array({stock_sha256})},
+                           {"files", files},
+                           {"source_zip_sha256", std::string(64, 'b')},
+                           {"source_zip_size", 99}};
+    entries.emplace_back("assets/nevr-pack/pack.json", pack.dump());
+    entries.emplace_back("assets/nevr-pack/files/packages/48037dc70b0ecab2_1", package, 0);
+    entries.emplace_back("assets/nevr-pack/files/manifests/48037dc70b0ecab2", kPackManifestBytes, 0);
+  }
+  return BuildZip(entries);
+}
+
+std::string StockSha() { return nevr_quest::data::Sha256Hex(kStockManifestBytes.data(), kStockManifestBytes.size()); }
+
+// The data already there (the data step uses it) as real files under the rig's root, and the APK in the scratch directory.
+void PackRig(Rig& rig, bool with_pack = true, const std::string& manifest = kStockManifestBytes) {
+  const std::string root = rig.options.fetch_root_override;
+  ::mkdir(root.c_str(), 0755);
+  nevr_quest::data::MakeDirsBelow(root, std::string(kAndroidRel) + "/manifests");
+  nevr_quest::data::MakeDirsBelow(root, std::string(kAndroidRel) + "/packages");
+  WriteFile(root + "/" + kManifestRel, manifest);
+  WriteFile(rig.scratch.Path("game.apk"), PackApk(with_pack, StockSha()));
+  rig.options.apk_path = rig.scratch.Path("game.apk");
+  DataIn(Legacy());
+}
+std::string PackManifestPath(const Rig& rig) { return rig.options.fetch_root_override + "/" + kManifestRel; }
+std::string PackPackagePath(const Rig& rig) {
+  return rig.options.fetch_root_override + "/" + kAndroidRel + "/packages/48037dc70b0ecab2_1";
+}
+
+void ThePackIsPlacedAfterTheDataStepUsedTheDataAndTheGameContinues() {
+  Rig rig;
+  PackRig(rig);
+  rig.BootRequest();
+  QCHECK(g_requests == 1 && g_ends == 0 && g_shown.empty() && rig.net.calls == 0);
+  QCHECK(ReadFile(PackManifestPath(rig)) == kPackManifestBytes);
+  QCHECK(ReadFile(PackPackagePath(rig)) == kPackPackageBytes);
+  QCHECK(ReadFile(PackManifestPath(rig) + ".stock") == kStockManifestBytes);
+  const std::string check = LineOf("pack_check");
+  QCHECK(Has(check, "\"outcome\":\"place\"") && Has(check, "\"id\":\"combat-pack\"") && Has(check, "\"level\":\"info\""));
+  QCHECK(Has(LineOf("pack_place"), "\"path\":\"packages/48037dc70b0ecab2_1\"") && Has(LineOf("pack_place"), "\"result\":\"placed\""));
+  const std::string step = LineOf("pack_step");
+  QCHECK(Has(step, "\"outcome\":\"placed\"") && Has(step, "\"duration_ms\":") && Has(step, "\"version\":\"1.0.0\""));
+  QCHECK(Has(step, "\"root\":\"" + rig.options.fetch_root_override + "\""));
+  QCHECK(Has(LineOf("data_version"), nevr_quest::data::Sha256Hex(kPackManifestBytes.data(), kPackManifestBytes.size())));
+  // The data step's own lines come first: the pack goes over data the step found.
+  std::size_t at_check = std::string::npos, at_pack = std::string::npos;
+  for (std::size_t i = 0; i < g_lines.size(); ++i) {
+    if (Has(g_lines[i], "\"event\":\"data_step\"") && at_check == std::string::npos) at_check = i;
+    if (Has(g_lines[i], "\"event\":\"pack_check\"") && at_pack == std::string::npos) at_pack = i;
+  }
+  QCHECK(at_check != std::string::npos && at_pack != std::string::npos && at_check < at_pack);
+}
+
+void ThePackIsPlacedOverDataTheDataStepFetched() {
+  Rig rig;  // a development build, no data: the step fetches (a manifest of Pattern(20000)) and the pack goes over it
+  rig.options.apk_path = rig.scratch.Path("game.apk");
+  WriteFile(rig.options.apk_path, PackApk(true, StockSha()));
+  rig.BootRequest();
+  QCHECK(rig.net.calls == 1 && g_ends == 0);
+  QCHECK(Has(LineOf("data_step"), "\"outcome\":\"fetched\""));
+  QCHECK(ReadFile(PackManifestPath(rig)) == kPackManifestBytes);
+  QCHECK(ReadFile(PackPackagePath(rig)) == kPackPackageBytes);
+  QCHECK(ReadFile(PackManifestPath(rig) + ".stock") == kStockManifestBytes);
+  QCHECK(Has(LineOf("pack_step"), "\"outcome\":\"placed\""));
+  // `data_version` is reported after the fetch and again after the pack: the last one is the pack's manifest.
+  std::string last;
+  int versions = 0;
+  for (const std::string& l : g_lines) {
+    if (Has(l, "\"event\":\"data_version\"")) {
+      last = l;
+      ++versions;
+    }
+  }
+  QCHECK(versions == 2 && Has(last, nevr_quest::data::Sha256Hex(kPackManifestBytes.data(), kPackManifestBytes.size())));
+}
+
+void AReleaseBuildPlacesThePackToo() {
+  Rig rig;
+  rig.options.allow_fetch = false;  // entry.cpp: a release build only looks at the data; the variant APK is a release build
+  rig.options.hold_ms = 0;
+  PackRig(rig);
+  rig.BootRequest();
+  QCHECK(g_ends == 0 && rig.net.calls == 0);
+  QCHECK(ReadFile(PackManifestPath(rig)) == kPackManifestBytes && ReadFile(PackPackagePath(rig)) == kPackPackageBytes);
+  QCHECK(Has(LineOf("pack_step"), "\"outcome\":\"placed\""));
+}
+
+void AnApkWithNoPackLogsOneLineAndChangesNothing() {
+  for (const bool release : {false, true}) {
+    Rig rig;
+    rig.options.allow_fetch = !release;
+    if (release) rig.options.hold_ms = 0;
+    PackRig(rig, /*with_pack=*/false);
+    rig.BootRequest();
+    QCHECK(g_ends == 0 && g_shown.empty());
+    int pack_lines = 0;
+    for (const std::string& l : g_lines) pack_lines += Has(l, "\"event\":\"pack_") ? 1 : 0;
+    QCHECK(pack_lines == 1);  // one pack_check, no pack_step
+    QCHECK(Has(LineOf("pack_check"), "\"outcome\":\"none\"") && Has(LineOf("pack_check"), "\"level\":\"info\""));
+    QCHECK(ReadFile(PackManifestPath(rig)) == kStockManifestBytes);
+    QCHECK(!Exists(PackPackagePath(rig)) && !Exists(PackManifestPath(rig) + ".stock"));
+  }
+}
+
+void WithoutAnApkPathThePackStepSaysSoAndTheGameContinues() {
+  Rig rig;
+  PackRig(rig);
+  rig.options.apk_path.clear();  // the host test executable is not an APK: what dladdr names gives no APK
+  rig.BootRequest();
+  QCHECK(g_ends == 0);
+  QCHECK(Has(LineOf("pack_check"), "\"outcome\":\"none\"") && Has(LineOf("pack_check"), "\"reason\":\"apk_path_unknown\""));
+  QCHECK(ReadFile(PackManifestPath(rig)) == kStockManifestBytes);
+}
+
+void AStockManifestThePackDoesNotNameIsLeftAloneAndTheGameContinues() {
+  Rig rig;
+  PackRig(rig, true, "A-MANIFEST-OF-ANOTHER-BUILD");
+  rig.BootRequest();
+  QCHECK(g_ends == 0 && g_shown.empty());
+  QCHECK(ReadFile(PackManifestPath(rig)) == "A-MANIFEST-OF-ANOTHER-BUILD");
+  QCHECK(!Exists(PackPackagePath(rig)));
+  const std::string check = LineOf("pack_check");
+  QCHECK(Has(check, "\"outcome\":\"stock_mismatch\"") && Has(check, "\"level\":\"warn\""));
+  QCHECK(Has(check, nevr_quest::data::Sha256Hex("A-MANIFEST-OF-ANOTHER-BUILD", 27)));
+  QCHECK(Has(check, StockSha()));
+}
+
+void ASecondLaunchOverAPlacedPackIsCurrent() {
+  Rig first;
+  PackRig(first);
+  first.BootRequest();
+  QCHECK(ReadFile(PackManifestPath(first)) == kPackManifestBytes);
+  Rig second;
+  second.options.fetch_root_override = first.options.fetch_root_override;
+  second.options.apk_path = first.options.apk_path;
+  DataIn(Legacy());
+  second.BootRequest();
+  QCHECK(g_ends == 0);
+  QCHECK(Has(LineOf("pack_check"), "\"outcome\":\"current\"") && Has(LineOf("pack_step"), "\"outcome\":\"current\""));
+  QCHECK(LineOf("data_version").empty());
+}
+
+void NoSpaceForThePackShowsTheMessageHoldsItAndEndsTheProcessWithReasonPackFailed() {
+  Rig rig;
+  PackRig(rig);
+  rig.options.pack_available_bytes = [](const std::string&) { return std::uint64_t{1} * 1024 * 1024; };
+  rig.BootRequest();
+  QCHECK(g_ends == 1 && g_exit_code != 0 && g_exit_reason == "pack_failed");
+  QCHECK(g_shown.size() == 2 && g_shown[0] == g_shown[1]);  // shown, held, shown again, held
+  QCHECK(g_shown[0].find("1 MiB free") != std::string::npos && g_shown[0].find("MiB needed") != std::string::npos);
+  const std::vector<std::string> want = {"show", "sleep:7", "show", "sleep:7", "end"};
+  std::vector<std::string> got;
+  for (const std::string& e : g_log) {
+    if (e == "sleep:7" || e == "show" || e == "end") got.push_back(e);
+  }
+  QCHECK(got == want);
+  QCHECK(ReadFile(PackManifestPath(rig)) == kStockManifestBytes && !Exists(PackPackagePath(rig)));
+  const std::string step = LineOf("pack_step");
+  QCHECK(Has(step, "\"outcome\":\"failed\"") && Has(step, "\"status\":\"no_space\"") && Has(step, "\"level\":\"error\""));
+}
+
+void APackWhoseBytesAreNotItsDigestEndsTheProcessAndWritesNothing() {
+  Rig rig;
+  PackRig(rig);
+  // The APK carries a package that is not the one pack.json hashes (same size).
+  std::string tampered = kPackPackageBytes;
+  tampered[100] = static_cast<char>(tampered[100] ^ 0x20);
+  WriteFile(rig.options.apk_path, PackApk(true, StockSha(), tampered));
+  rig.BootRequest();
+  QCHECK(g_ends == 1 && g_exit_reason == "pack_failed");
+  QCHECK(!Exists(PackPackagePath(rig)) && ReadFile(PackManifestPath(rig)) == kStockManifestBytes);
+  QCHECK(Has(LineOf("pack_step"), "\"status\":\"hash_mismatch\""));
+}
+
+void AKillBetweenThePackageAndTheManifestIsFinishedByTheNextLaunch() {
+  Rig first;
+  PackRig(first);
+  first.options.pack_probe = [&first](const char* point, const std::string& path) {
+    return !(std::string(point) == "tmp_written" && path == PackManifestPath(first));
+  };
+  first.BootRequest();
+  QCHECK(g_ends == 1 && g_exit_reason == "pack_failed");  // the seam's stop is a failed step; a real kill ends nothing
+  QCHECK(ReadFile(PackPackagePath(first)) == kPackPackageBytes && ReadFile(PackManifestPath(first)) == kStockManifestBytes);
+  const std::string tmp = PackManifestPath(first) + nevr_quest::data::kPackTmpSuffix;
+  QCHECK(Exists(tmp) && nevr_quest::data::IsOwned(tmp));
+
+  Rig second;  // the next launch, over the same root and APK
+  second.options.fetch_root_override = first.options.fetch_root_override;
+  second.options.apk_path = first.options.apk_path;
+  DataIn(Legacy());
+  second.BootRequest();
+  QCHECK(g_ends == 0);
+  QCHECK(!Exists(tmp) && !Exists(nevr_quest::data::OwnerMarkerPath(tmp)));
+  QCHECK(ReadFile(PackManifestPath(second)) == kPackManifestBytes && ReadFile(PackManifestPath(second) + ".stock") == kStockManifestBytes);
+  QCHECK(Has(LineOf("data_recover"), "\"cleaned\":\"1\""));
+  QCHECK(Has(LineOf("pack_step"), "\"outcome\":\"placed\""));
+}
+
+void NoPackStepRunsWhenTheDataStepFailedOrWasMissingOrTheStorageMessageEndedTheProcess() {
+  {
+    Rig rig(false);  // a development build, no network: the fetch fails
+    PackRig(rig);
+    g_present.clear();  // and no data is there
+    rig.BootRequest();
+    QCHECK(g_ends == 1 && g_exit_reason == "data_step_failed");
+    QCHECK(LineOf("pack_check").empty());
+    QCHECK(ReadFile(PackManifestPath(rig)) == kStockManifestBytes && !Exists(PackPackagePath(rig)));
+  }
+  {
+    Rig rig;  // a release build with no data
+    rig.options.allow_fetch = false;
+    rig.options.hold_ms = 0;
+    PackRig(rig);
+    g_present.clear();
+    rig.BootRequest();
+    QCHECK(g_ends == 1 && g_exit_reason == "game_data_missing");
+    QCHECK(LineOf("pack_check").empty() && !Exists(PackPackagePath(rig)));
+  }
+  {
+    Rig rig;  // no storage grant, the engine reads the legacy root
+    PackRig(rig);
+    rig.BootRequest(&DeniedCheck);
+    QCHECK(g_ends == 1 && g_exit_reason == "no_storage_grant");
+    QCHECK(LineOf("pack_check").empty() && !Exists(PackPackagePath(rig)));
+  }
+}
+
 // ---- the production exists check (obb_skip::PathExists), over two launches ----
 
 std::string g_map_root;  // where the legacy root (the engine's root without an OBB file) lives in this test
@@ -1031,6 +1288,17 @@ int main() {
   AReleaseBuildWithoutTheStorageGrantShowsTheStorageMessageHoldsNothingAndEndsNonzero();
   AReleaseBuildWithDataUsesItAndSaysNothing();
   AReleaseBuildWithAnObbServingTheMediaRootLooksThereAndWritesNothing();
+  ThePackIsPlacedAfterTheDataStepUsedTheDataAndTheGameContinues();
+  ThePackIsPlacedOverDataTheDataStepFetched();
+  AReleaseBuildPlacesThePackToo();
+  AnApkWithNoPackLogsOneLineAndChangesNothing();
+  WithoutAnApkPathThePackStepSaysSoAndTheGameContinues();
+  AStockManifestThePackDoesNotNameIsLeftAloneAndTheGameContinues();
+  ASecondLaunchOverAPlacedPackIsCurrent();
+  NoSpaceForThePackShowsTheMessageHoldsItAndEndsTheProcessWithReasonPackFailed();
+  APackWhoseBytesAreNotItsDigestEndsTheProcessAndWritesNothing();
+  AKillBetweenThePackageAndTheManifestIsFinishedByTheNextLaunch();
+  NoPackStepRunsWhenTheDataStepFailedOrWasMissingOrTheStorageMessageEndedTheProcess();
   ThePathCheckAcceptsDirectoriesAndNonEmptyFilesOnly();
   ADefaultExistsSeesTheFetchedDataOnTheNextLaunchAndFetchesNothingAgain();
   TheProbeIsNotReadInAShippedBuild();

@@ -781,4 +781,131 @@ TEST(CheckSpaceComparesAgainstTheFreeBytes) {
   CHECK_EQ(CheckSpace(s.Path("missing"), 1, nullptr), StageStatus::kStatFailed);
 }
 
+// ---------------- one entry of a listed archive (ReadZipEntry, the bundled content pack) ----------------
+
+namespace {
+
+struct EntryRead {
+  ZipStatus status;
+  std::string detail;
+  std::string bytes;
+};
+
+// Lists the zip `zip_bytes` (with `limits`) and reads the entry `name` into memory.
+EntryRead ReadEntry(const Scratch& s, const std::string& zip_bytes, const std::string& name, const ZipLimits& limits = {}) {
+  WriteFile(s.Path("e.zip"), zip_bytes);
+  EntryRead r{};
+  std::vector<ZipEntry> entries;
+  r.status = ReadZipListing(s.Path("e.zip"), limits, &entries, &r.detail);
+  if (r.status != ZipStatus::kOk) return r;
+  const ZipEntry* e = FindZipEntry(entries, name);
+  if (e == nullptr) {
+    r.status = ZipStatus::kBadEntryPath;
+    return r;
+  }
+  r.status = ReadZipEntry(s.Path("e.zip"), *e,
+                          [&r](const unsigned char* bytes, std::size_t length) {
+                            r.bytes.append(reinterpret_cast<const char*>(bytes), length);
+                            return true;
+                          },
+                          &r.detail);
+  return r;
+}
+
+}  // namespace
+
+TEST(ReadZipEntryGivesTheBytesOfAStoredAndOfADeflatedEntry) {
+  Scratch s;
+  const std::string zip = BuildZip({{"a/stored.bin", Pattern(300000), 0}, {"a/deflated.bin", Pattern(300000), 8},
+                                    {"other", "o", 8}});
+  CHECK(ReadEntry(s, zip, "a/stored.bin").status == ZipStatus::kOk);
+  CHECK(ReadEntry(s, zip, "a/stored.bin").bytes == Pattern(300000));
+  CHECK(ReadEntry(s, zip, "a/deflated.bin").status == ZipStatus::kOk);
+  CHECK(ReadEntry(s, zip, "a/deflated.bin").bytes == Pattern(300000));
+}
+
+TEST(ReadZipEntryEnforcesTheCrcAndTheSizeTheDirectoryRecorded) {
+  Scratch s;
+  SrcEntry bad_crc("f", Pattern(1000), 0);
+  bad_crc.crc_delta = 1;
+  CHECK(ReadEntry(s, BuildZip({bad_crc}), "f").status == ZipStatus::kCrcMismatch);
+  SrcEntry bad_crc_deflated("f", Pattern(1000), 8);
+  bad_crc_deflated.crc_delta = 1;
+  CHECK(ReadEntry(s, BuildZip({bad_crc_deflated}), "f").status == ZipStatus::kCrcMismatch);
+  SrcEntry short_size("f", Pattern(1000), 8);
+  short_size.usize_delta = 5;  // the directory says more bytes than the stream holds
+  CHECK(ReadEntry(s, BuildZip({short_size}), "f").status == ZipStatus::kSizeMismatch);
+  SrcEntry long_size("f", Pattern(1000), 8);
+  long_size.usize_delta = -5;  // the stream expands past the recorded size
+  CHECK(ReadEntry(s, BuildZip({long_size}), "f").status == ZipStatus::kSizeMismatch);
+}
+
+TEST(ReadZipEntryChecksTheLocalHeaderAgainstTheDirectory) {
+  Scratch s;
+  SrcEntry other_name("file-a", "x", 0);
+  other_name.local_name = "file-b";
+  CHECK(ReadEntry(s, BuildZip({other_name}), "file-a").status == ZipStatus::kBadLocalHeader);
+  SrcEntry other_method("f", Pattern(100), 0);
+  other_method.local_method = 8;
+  CHECK(ReadEntry(s, BuildZip({other_method}), "f").status == ZipStatus::kBadLocalHeader);
+  SrcEntry encrypted_local("f", "x", 0);
+  encrypted_local.local_flags = 0x1;
+  CHECK(ReadEntry(s, BuildZip({encrypted_local}), "f").status == ZipStatus::kBadLocalHeader);
+}
+
+TEST(ReadZipEntryRefusesADirectoryAnUnopenableArchiveAndAStoppedSink) {
+  Scratch s;
+  WriteFile(s.Path("e.zip"), BuildZip({{"d/", "", 0}, {"d/f", "abc", 0}}));
+  std::vector<ZipEntry> entries;
+  CHECK(ReadZipListing(s.Path("e.zip"), ZipLimits{}, &entries, nullptr) == ZipStatus::kOk);
+  const ZipEntry* dir = FindZipEntry(entries, "d/");
+  const ZipEntry* file = FindZipEntry(entries, "d/f");
+  CHECK(dir != nullptr && file != nullptr);
+  const ZipSink keep = [](const unsigned char*, std::size_t) { return true; };
+  CHECK(ReadZipEntry(s.Path("e.zip"), *dir, keep, nullptr) == ZipStatus::kBadEntryPath);
+  CHECK(ReadZipEntry(s.Path("missing.zip"), *file, keep, nullptr) == ZipStatus::kOpenFailed);
+  CHECK(ReadZipEntry(s.Path("e.zip"), *file, [](const unsigned char*, std::size_t) { return false; }, nullptr) ==
+        ZipStatus::kWriteFailed);
+}
+
+TEST(FindZipEntryMatchesTheWholeNameInTheCaseItWasStored) {
+  Scratch s;
+  WriteFile(s.Path("e.zip"), BuildZip({{"assets/Pack.json", "{}", 8}}));
+  std::vector<ZipEntry> entries;
+  CHECK(ReadZipListing(s.Path("e.zip"), ZipLimits{}, &entries, nullptr) == ZipStatus::kOk);
+  CHECK(FindZipEntry(entries, "assets/Pack.json") != nullptr);
+  CHECK(FindZipEntry(entries, "assets/pack.json") == nullptr);
+  CHECK(FindZipEntry(entries, "assets/Pack.jso") == nullptr);
+  CHECK(FindZipEntry(entries, "assets/Pack.json/") == nullptr);
+}
+
+TEST(AListingWithRaisedLimitsReadsAnArchiveTheDataZipLimitsRefuseAndTheExtractorStillRefusesItsPrefixMiss) {
+  Scratch s;
+  std::vector<SrcEntry> many;
+  for (int i = 0; i < 70; ++i) many.emplace_back("_data/f" + std::to_string(i), "x", 0);
+  const std::string zip = BuildZip(many);
+  WriteFile(s.Path("m.zip"), zip);
+  std::vector<ZipEntry> entries;
+  CHECK(ReadZipListing(s.Path("m.zip"), ZipLimits{}, &entries, nullptr) == ZipStatus::kTooManyEntries);
+  ZipLimits raised;
+  raised.max_entries = 200;
+  CHECK(ReadZipListing(s.Path("m.zip"), raised, &entries, nullptr) == ZipStatus::kOk);
+  CHECK_EQ(entries.size(), std::size_t{70});
+  // The extractor keeps its rule: an entry outside the prefix is refused, and nothing is written.
+  std::vector<SrcEntry> mixed = many;
+  mixed.emplace_back("outside/f", "x", 0);
+  const Extracted r = Extract(s, BuildZip(mixed), raised);
+  CHECK(r.status == ZipStatus::kBadEntryPath);
+  CHECK(!Exists(s.Path("out")));
+}
+
+TEST(ExtractZipStillWritesTheEntriesOfAZipAndFsyncsThem) {
+  Scratch s;
+  const Extracted r = Extract(s, BuildZip({{"_data/a/", "", 0}, {"_data/a/f", Pattern(5000), 8}, {"_data/g", "gg", 0}}));
+  CHECK(r.status == ZipStatus::kOk);
+  CHECK_EQ(r.bytes, std::uint64_t{5002});
+  CHECK(ReadFile(s.Path("out/a/f")) == Pattern(5000));
+  CHECK(ReadFile(s.Path("out/g")) == "gg");
+}
+
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }

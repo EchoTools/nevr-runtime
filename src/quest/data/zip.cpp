@@ -297,7 +297,7 @@ bool LocalHeaderMatches(int zip_fd, const ZipEntry& e, const unsigned char* loca
 
 // Writes one entry's data to `out_fd`: copies a stored entry or inflates a deflated one, enforcing the sizes and CRC the
 // central directory recorded.
-ZipStatus ExtractData(int zip_fd, const ZipEntry& e, std::uint64_t data_offset, int out_fd) {
+ZipStatus ExtractData(int zip_fd, const ZipEntry& e, std::uint64_t data_offset, const ZipSink& sink) {
   std::vector<unsigned char> in(64 * 1024), out(256 * 1024);
   std::uint64_t consumed = 0, produced = 0;
   std::uint32_t crc = static_cast<std::uint32_t>(::crc32(0L, Z_NULL, 0));
@@ -317,7 +317,7 @@ ZipStatus ExtractData(int zip_fd, const ZipEntry& e, std::uint64_t data_offset, 
     if (!deflated) {
       produced += want;
       crc = static_cast<std::uint32_t>(::crc32(crc, in.data(), static_cast<uInt>(want)));
-      if (!WriteAll(out_fd, in.data(), want)) status = ZipStatus::kWriteFailed;
+      if (!sink(in.data(), want)) status = ZipStatus::kWriteFailed;
       continue;
     }
     zs.next_in = in.data();
@@ -334,7 +334,7 @@ ZipStatus ExtractData(int zip_fd, const ZipEntry& e, std::uint64_t data_offset, 
           break;
         }
         crc = static_cast<std::uint32_t>(::crc32(crc, out.data(), static_cast<uInt>(made)));
-        if (!WriteAll(out_fd, out.data(), made)) {
+        if (!sink(out.data(), made)) {
           status = ZipStatus::kWriteFailed;
           break;
         }
@@ -355,11 +355,49 @@ ZipStatus ExtractData(int zip_fd, const ZipEntry& e, std::uint64_t data_offset, 
   if (!stream_end) return ZipStatus::kInflateFailed;  // the data ended before the stream did
   if (produced != e.size) return ZipStatus::kSizeMismatch;
   if (crc != e.crc32) return ZipStatus::kCrcMismatch;
-  if (::fsync(out_fd) != 0) return ZipStatus::kWriteFailed;
+  return ZipStatus::kOk;
+}
+
+// The local header of `e` agrees with the directory and the entry's data lies inside the archive: where the data starts.
+ZipStatus LocateData(int zip_fd, const ZipEntry& e, std::uint64_t* data_offset) {
+  unsigned char local[kLocalFixed];
+  if (!PreadAll(zip_fd, local, sizeof(local), e.local_header_offset) || Rd32(local) != kLocalSig) {
+    return ZipStatus::kBadLocalHeader;
+  }
+  if (!LocalHeaderMatches(zip_fd, e, local)) return ZipStatus::kBadLocalHeader;
+  *data_offset = e.local_header_offset + kLocalFixed + Rd16(local + 26) + Rd16(local + 28);
+  struct stat zst;
+  if (::fstat(zip_fd, &zst) != 0 || *data_offset + e.compressed_size > static_cast<std::uint64_t>(zst.st_size)) {
+    return ZipStatus::kOffsetOutOfRange;
+  }
   return ZipStatus::kOk;
 }
 
 }  // namespace
+
+const ZipEntry* FindZipEntry(const std::vector<ZipEntry>& entries, const std::string& name) noexcept {
+  for (const ZipEntry& e : entries) {
+    if (e.name == name) return &e;
+  }
+  return nullptr;
+}
+
+ZipStatus ReadZipEntry(const std::string& zip_path, const ZipEntry& entry, const ZipSink& sink, std::string* detail) {
+  if (entry.IsDirectory()) {
+    SetDetail(detail, entry.name);
+    return ZipStatus::kBadEntryPath;
+  }
+  Fd zip(::open(zip_path.c_str(), O_RDONLY | O_CLOEXEC));
+  if (zip.get() < 0) {
+    SetDetail(detail, zip_path);
+    return ZipStatus::kOpenFailed;
+  }
+  std::uint64_t data_offset = 0;
+  ZipStatus status = LocateData(zip.get(), entry, &data_offset);
+  if (status == ZipStatus::kOk) status = ExtractData(zip.get(), entry, data_offset, sink);
+  if (status != ZipStatus::kOk) SetDetail(detail, entry.name);
+  return status;
+}
 
 ZipStatus ExtractZip(const std::string& zip_path, const std::string& dest_dir, const std::string& strip_prefix,
                      const ZipLimits& limits, std::uint64_t* bytes_written, std::string* detail) {
@@ -396,20 +434,11 @@ ZipStatus ExtractZip(const std::string& zip_path, const std::string& dest_dir, c
       SetDetail(detail, e.name);
       return ZipStatus::kWriteFailed;
     }
-    unsigned char local[kLocalFixed];
-    if (!PreadAll(zip.get(), local, sizeof(local), e.local_header_offset) || Rd32(local) != kLocalSig) {
+    std::uint64_t data_offset = 0;
+    const ZipStatus located = LocateData(zip.get(), e, &data_offset);
+    if (located != ZipStatus::kOk) {
       SetDetail(detail, e.name);
-      return ZipStatus::kBadLocalHeader;
-    }
-    if (!LocalHeaderMatches(zip.get(), e, local)) {
-      SetDetail(detail, e.name);
-      return ZipStatus::kBadLocalHeader;
-    }
-    const std::uint64_t data_offset = e.local_header_offset + kLocalFixed + Rd16(local + 26) + Rd16(local + 28);
-    struct stat zst;
-    if (::fstat(zip.get(), &zst) != 0 || data_offset + e.compressed_size > static_cast<std::uint64_t>(zst.st_size)) {
-      SetDetail(detail, e.name);
-      return ZipStatus::kOffsetOutOfRange;
+      return located;
     }
     const std::string target = dest_dir + "/" + rel;
     Fd out(::open(target.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644));
@@ -417,7 +446,10 @@ ZipStatus ExtractZip(const std::string& zip_path, const std::string& dest_dir, c
       SetDetail(detail, e.name);
       return ZipStatus::kWriteFailed;
     }
-    const ZipStatus status = ExtractData(zip.get(), e, data_offset, out.get());
+    const int out_fd = out.get();
+    ZipStatus status = ExtractData(zip.get(), e, data_offset,
+                                   [out_fd](const unsigned char* bytes, std::size_t length) { return WriteAll(out_fd, bytes, length); });
+    if (status == ZipStatus::kOk && ::fsync(out_fd) != 0) status = ZipStatus::kWriteFailed;
     if (status != ZipStatus::kOk) {
       SetDetail(detail, e.name);
       return status;

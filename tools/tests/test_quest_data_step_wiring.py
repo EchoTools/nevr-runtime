@@ -303,3 +303,51 @@ class TheGlueOffsetsAreAssertedAgainstTheNdkHeaders(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheBundledPackRunsAfterTheDataStep(unittest.TestCase):
+    """ADR 0029: the pack step is the data step's last act, reached only when the data is in place, in every build."""
+
+    def body(self):
+        return extract_braced_function(
+            read("data_wiring.cpp"), "void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {"
+        )
+
+    def test_the_pack_runs_after_every_way_the_data_step_ends_the_process(self):
+        body = self.body()
+        self.assertEqual(body.count("RunPack("), 1)
+        run = body.index("RunPack(engineRoot)")
+        for ender in ('EndFailed("no_storage_grant")', 'EndFailed("game_data_missing")', 'EndFailed("data_step_failed")'):
+            self.assertLess(body.rindex(ender), run, ender)
+        self.assertLess(body.index("data::RunDataStep(config, *transport)"), run)
+        # A failed data step takes the other branch: the pack step never runs over data that is not there.
+        self.assertRegex(body, r'if \(failed\) EndFailed\("data_step_failed"\);\s*else RunPack\(engineRoot\);')
+
+    def test_the_pack_step_is_not_gated_on_a_development_build(self):
+        # The variant APK that carries a pack is a release build (allow_fetch false): the pack step must not read it.
+        text = re.sub(r"//[^\n]*", "", read("data_wiring.cpp"))
+        run_pack = extract_braced_function(text, "void RunPack(const std::string& engineRoot) noexcept {")
+        self.assertNotIn("allow_fetch", run_pack)
+        self.assertNotIn("kIsDev", run_pack)
+
+    def test_a_failed_placement_ends_the_process_with_its_own_reason(self):
+        text = re.sub(r"//[^\n]*", "", read("data_wiring.cpp"))
+        run_pack = extract_braced_function(text, "void RunPack(const std::string& engineRoot) noexcept {")
+        self.assertIn('EndFailed("pack_failed")', run_pack)
+        self.assertIn("PackOutcome::kFailed", run_pack)
+
+    def test_the_data_steps_cleanup_routine_covers_the_pack_and_the_pack_step_runs_it_before_any_write(self):
+        staging = (ROOT / "src/quest/data/staging.cpp").read_text()
+        clean = extract_braced_function(staging, "int CleanLeftovers(const std::string& root, int* failed) noexcept {")
+        self.assertIn("CleanPackLeftovers(root", clean)
+        pack = (ROOT / "src/quest/data/pack.cpp").read_text()
+        run = extract_braced_function(pack, "PackResult RunPackStep(const PackConfig& config) {")
+        self.assertLess(run.index("CleanPackLeftovers(config.root"), run.index("WriteTemporary("))
+        self.assertLess(run.index("CleanPackLeftovers(config.root"), run.index("CheckSpace("))
+
+    def test_the_package_is_written_before_the_manifest(self):
+        pack = (ROOT / "src/quest/data/pack.cpp").read_text()
+        run = extract_braced_function(pack, "PackResult RunPackStep(const PackConfig& config) {")
+        first = run.index("if (pack.files[i].path != pack.manifest_path) order.push_back(i);")
+        second = run.index("if (pack.files[i].path == pack.manifest_path) order.push_back(i);")
+        self.assertLess(first, second)

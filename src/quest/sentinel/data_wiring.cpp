@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 
+#include <dlfcn.h>
+
 #include "hook_log.h"
 #include "obb_skip_hook.h"
 #include "permission_wait_hook.h"
@@ -20,6 +22,7 @@
 #include "process_end_hook.h"
 #include "quest/data/curl_transport.h"
 #include "quest/data/data_step.h"
+#include "quest/data/pack.h"
 
 namespace nevr_quest::data_wiring {
 
@@ -185,6 +188,43 @@ void HoldMessage(const std::string& message) noexcept {
   Sleep(Opts().hold_ms);
 }
 
+// The APK this process runs from, taken from where the linker mapped the sentinel (`<apk>!/lib/...`, or a library extracted
+// next to `base.apk`); empty when neither says.
+std::string OwnApkPath() {
+  Dl_info info{};
+  if (dladdr(reinterpret_cast<const void*>(&AfterStorage), &info) == 0 || info.dli_fname == nullptr) return "";
+  return data::ApkPathForLibrary(info.dli_fname, Opts().exists != nullptr ? Opts().exists : &obb_skip::PathExists);
+}
+
+sentinel::LogLevel LogLevelOf(data::EventLevel level) noexcept {
+  switch (level) {
+    case data::EventLevel::kWarn: return sentinel::LogLevel::kWarn;
+    case data::EventLevel::kError: return sentinel::LogLevel::kError;
+    case data::EventLevel::kInfo: break;
+  }
+  return sentinel::LogLevel::kInfo;
+}
+
+// The bundled content pack (docs/adr/0029-quest-bundled-content-pack.md): after the data step found or fetched the data. An APK
+// with no pack is one `pack_check` line and nothing else. A failed placement ends the process like a failed data step.
+void RunPack(const std::string& engineRoot) noexcept {
+  data::PackConfig pack;
+  pack.apk_path = !Opts().apk_path.empty() ? Opts().apk_path : OwnApkPath();
+  // The root the data step used (the test seam moves it, as it moves the fetch).
+  pack.root = Opts().fetch_root_override.empty() ? engineRoot : Opts().fetch_root_override;
+  pack.available_bytes = Opts().pack_available_bytes;
+  pack.probe = Opts().pack_probe;
+  pack.on_event = [](data::EventLevel level, const data::Event& e) { LogEventFields(LogLevelOf(level), e); };
+  std::string lastMessage;
+  pack.present = [&lastMessage](const std::string& message) {
+    lastMessage = message;
+    Present(message, "floor");
+  };
+  pack.hold = [&lastMessage] { HoldMessage(lastMessage); };
+  const data::PackResult result = data::RunPackStep(pack);
+  if (result.outcome == data::PackOutcome::kFailed) EndFailed("pack_failed");
+}
+
 }  // namespace
 
 // The one root the engine reads this launch, and why. With an OBB file the game's OBB callback records what the OBB skip
@@ -284,7 +324,10 @@ void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
     EndFailed("game_data_missing");
     return;
   }
+  // The data is in place (found or fetched): the bundled pack, when this APK carries one, goes over it. A release build
+  // takes this step too: the variant APK that carries a pack is a release build, and an APK without one only logs.
   if (failed) EndFailed("data_step_failed");
+  else RunPack(engineRoot);
 }
 
 bool Install(const Options& options) noexcept {
