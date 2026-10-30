@@ -6,6 +6,7 @@ A local build is a development build (X.Y.(Z+1)-dev.N+sha) and is packaged under
 """
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -412,11 +413,12 @@ class ReleaseStagesTest(PackageFixture):
                          "Fixes and internal changes.")
 
     AUTO_LINE = "Fixes and internal changes."  # the default change below is a player feat; it must not show
-    HEADLINE = "release-headline.txt"
+    DIR = "release-headlines/"
+    LEGACY = "release-headline.txt"
 
     def headline_repo(self, base_files, rev_files, changes=("feat(runtime): a player feature",)):
         """A repository with a base tag and a rev tag over `changes`. `base_files` is the tree at the base, `rev_files` the
-        tree at the rev; each maps a file name to its text, or to None for a file that is absent at that ref."""
+        tree at the rev; each maps a path to its text, or to None for a file that is absent at that ref."""
         repo = Path(tempfile.mkdtemp(prefix="headline-", dir=self.tmp))
         git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false",
                "-c", "tag.gpgSign=false"]
@@ -427,6 +429,7 @@ class ReleaseStagesTest(PackageFixture):
                 if text is None:
                     path.unlink(missing_ok=True)
                 else:
+                    path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_text(text, encoding="utf-8")
             subprocess.run(git + ["add", "-A"], check=True)
 
@@ -457,66 +460,178 @@ class ReleaseStagesTest(PackageFixture):
         self.assertEqual(result.returncode, 0, result.stderr)
         return out.read_text().splitlines()[2]
 
-    def test_a_headline_changed_since_the_base_replaces_the_player_line_and_nothing_else(self):
-        result, changed = self.headline_notes({self.HEADLINE: "Old headline.\n"}, {self.HEADLINE: "New headline.\n"})
+    def added(self, text, name="a.txt"):
+        """The player line when the range adds one headline file `name` holding `text`."""
+        return self.headline_line({}, {self.DIR + name: text})
+
+    def refused(self, rev_files, base_files=None):
+        """Runs `notes`, expects the refusal (exit 1, no body written), and returns its stderr."""
+        result, out = self.headline_notes(base_files or {}, rev_files)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertFalse(out.exists(), "no body is written for a bad headline")
+        return result.stderr
+
+    def test_an_added_headline_replaces_the_player_line_and_nothing_else(self):
+        result, changed = self.headline_notes({}, {self.DIR + "a.txt": "New headline.\n"})
         self.assertEqual(result.returncode, 0, result.stderr)
-        result, auto = self.headline_notes({self.HEADLINE: None}, {self.HEADLINE: None})
+        result, auto = self.headline_notes({}, {})
         self.assertEqual(result.returncode, 0, result.stderr)
         changed_lines, auto_lines = changed.read_text().splitlines(), auto.read_text().splitlines()
         self.assertEqual(changed_lines[2], "New headline.")
         self.assertEqual(auto_lines[2], self.AUTO_LINE)
         self.assertEqual(changed_lines[:2] + changed_lines[3:], auto_lines[:2] + auto_lines[3:])
 
-    def test_a_headline_identical_at_base_and_rev_is_stale_and_the_auto_line_is_used(self):
-        self.assertEqual(self.headline_line({self.HEADLINE: "Same headline.\n"}, {self.HEADLINE: "Same headline.\n"}),
+    def test_a_headline_file_that_existed_at_the_base_is_old_and_the_fixed_sentence_is_used(self):
+        files = {self.DIR + "a.txt": "Old headline.\n"}
+        self.assertEqual(self.headline_line(files, files), self.AUTO_LINE)
+
+    def test_an_old_headline_file_edited_in_the_range_is_still_old(self):
+        self.assertEqual(self.headline_line({self.DIR + "a.txt": "Old headline.\n"},
+                                            {self.DIR + "a.txt": "Edited headline.\n"}), self.AUTO_LINE)
+
+    def test_no_headline_files_give_the_fixed_sentence(self):
+        self.assertEqual(self.headline_line({}, {}), self.AUTO_LINE)
+
+    def test_a_headline_file_deleted_before_the_rev_gives_the_fixed_sentence(self):
+        self.assertEqual(self.headline_line({self.DIR + "a.txt": "Old headline.\n"}, {self.DIR + "a.txt": None}),
                          self.AUTO_LINE)
 
-    def test_an_absent_headline_gives_the_auto_line(self):
-        self.assertEqual(self.headline_line({self.HEADLINE: None}, {self.HEADLINE: None}), self.AUTO_LINE)
+    def test_only_the_file_the_range_adds_is_used_when_an_old_one_exists_at_the_base(self):
+        self.assertEqual(self.headline_line({self.DIR + "a.txt": "Old.\n"},
+                                            {self.DIR + "a.txt": "Old.\n", self.DIR + "b.txt": "New.\n"}), "New.")
 
-    def test_a_headline_deleted_before_the_rev_gives_the_auto_line(self):
-        self.assertEqual(self.headline_line({self.HEADLINE: "Old headline.\n"}, {self.HEADLINE: None}), self.AUTO_LINE)
+    def test_added_files_are_joined_in_file_name_order(self):
+        # Written in the opposite order of their names, so the order is the sort and not the write order.
+        self.assertEqual(self.headline_line({}, {self.DIR + "b-second.txt": "Second one.\n",
+                                                 self.DIR + "a-first.txt": "First one.\n",
+                                                 self.DIR + "c-third.txt": "Third one\n"}),
+                         "First one. Second one. Third one.")
 
-    def test_a_headline_added_after_the_base_is_used(self):
-        self.assertEqual(self.headline_line({self.HEADLINE: None}, {self.HEADLINE: "Added late\n"}), "Added late.")
+    def test_a_file_in_a_subdirectory_is_refused_and_named(self):
+        self.assertIn(self.DIR + "sub/a.txt", self.refused({self.DIR + "sub/a.txt": "Nested.\n"}))
+
+    def test_a_file_that_is_not_a_txt_name_is_refused_and_named(self):
+        for name in ("notes.md", "a b.txt", "a.TXT", "a.txt.bak", ".txt", "readme.md", ".hidden.txt", "-a.txt", "_a.txt"):
+            with self.subTest(name=name):
+                self.assertIn(self.DIR + name, self.refused({self.DIR + name: "A line.\n"}))
+
+    def test_a_name_starting_with_a_digit_or_letter_is_a_headline(self):
+        for name in ("1482-topic.txt", "Topic.txt", "a.b_c-d.txt"):
+            with self.subTest(name=name):
+                self.assertEqual(self.added("Fine.\n", name), "Fine.")
+
+    def test_the_readme_is_never_a_headline(self):
+        self.assertEqual(self.headline_line({}, {self.DIR + "README.md": "How this works.\n"}), self.AUTO_LINE)
+        self.assertEqual(self.headline_line({}, {self.DIR + "README.md": "How this works.\n", self.DIR + "a.txt": "Real.\n"}),
+                         "Real.")
+
+    def test_a_misnamed_file_that_existed_at_the_base_is_not_read(self):
+        files = {self.DIR + "notes.md": "Old.\n"}
+        self.assertEqual(self.headline_line(files, files), self.AUTO_LINE)
+
+    def test_the_legacy_single_file_at_the_rev_is_refused_and_names_the_directory(self):
+        for base_files in ({}, {self.LEGACY: "Old.\n"}):
+            with self.subTest(base=sorted(base_files)):
+                stderr = self.refused({self.LEGACY: "Any text.\n"}, base_files)
+                self.assertIn(self.LEGACY, stderr)
+                self.assertIn("release-headlines/", stderr)
+
+    def test_the_legacy_single_file_deleted_before_the_rev_is_fine(self):
+        self.assertEqual(self.headline_line({self.LEGACY: "Old.\n"}, {self.LEGACY: None}), self.AUTO_LINE)
 
     def test_an_empty_headline_fails_loudly_and_names_the_file(self):
-        result, _ = self.headline_notes({self.HEADLINE: None}, {self.HEADLINE: "  \n\t\n"})
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn(self.HEADLINE, result.stderr)
-        self.assertIn("non-empty", result.stderr)
+        stderr = self.refused({self.DIR + "empty.txt": "  \n\t\n"})
+        self.assertIn(self.DIR + "empty.txt", stderr)
+        self.assertIn("non-empty", stderr)
 
     def test_an_over_long_headline_fails_loudly_and_names_the_file(self):
-        result, out = self.headline_notes({self.HEADLINE: None}, {self.HEADLINE: "x" * 201 + "\n"})
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn(self.HEADLINE, result.stderr)
-        self.assertIn("200", result.stderr)
-        self.assertFalse(out.exists(), "no body is written for a bad headline")
+        stderr = self.refused({self.DIR + "long.txt": "x" * 201 + "\n"})
+        self.assertIn(self.DIR + "long.txt", stderr)
+        self.assertIn("200", stderr)
 
     def test_a_headline_of_exactly_200_characters_is_used(self):
         text = "y" * 199 + "!"
-        self.assertEqual(self.headline_line({self.HEADLINE: None}, {self.HEADLINE: text + "\n"}), text)
+        self.assertEqual(self.added(text + "\n"), text)
+
+    def test_a_headline_with_more_than_one_line_is_refused_and_named(self):
+        stderr = self.refused({self.DIR + "two.txt": "First line.\nSecond line.\n"})
+        self.assertIn(self.DIR + "two.txt", stderr)
+        self.assertIn("one line", stderr)
+
+    def test_blank_lines_around_the_one_line_are_dropped(self):
+        self.assertEqual(self.added("\n\n   \n  Real headline  \n\n \t\n"), "Real headline.")
+
+    def test_a_joined_line_of_exactly_600_characters_is_used(self):
+        files = {self.DIR + "a.txt": "a" * 199 + ".\n", self.DIR + "b.txt": "b" * 199 + ".\n",
+                 self.DIR + "c.txt": "c" * 197 + ".\n"}
+        self.assertEqual(len(self.headline_line({}, files)), 600)
+
+    def test_a_joined_line_over_600_characters_is_refused_and_says_so(self):
+        files = {self.DIR + "a.txt": "a" * 199 + ".\n", self.DIR + "b.txt": "b" * 199 + ".\n",
+                 self.DIR + "c.txt": "c" * 198 + ".\n"}
+        stderr = self.refused(files)
+        self.assertIn("the joined headline", stderr)
+        self.assertIn("600", stderr)
+        for name in ("a.txt", "b.txt", "c.txt"):
+            self.assertIn(self.DIR + name, stderr)
 
     def test_a_full_stop_is_added_only_when_the_line_has_no_terminal_punctuation(self):
-        self.assertEqual(self.headline_line({self.HEADLINE: None}, {self.HEADLINE: "Ships it!\n"}), "Ships it!")
-        self.assertEqual(self.headline_line({self.HEADLINE: None}, {self.HEADLINE: "Is it?\n"}), "Is it?")
-        self.assertEqual(self.headline_line({self.HEADLINE: None}, {self.HEADLINE: "Ends here.\n"}), "Ends here.")
-        self.assertEqual(self.headline_line({self.HEADLINE: None}, {self.HEADLINE: "Quest: asks for clocks\n"}),
-                         "Quest: asks for clocks.")
+        self.assertEqual(self.added("Ships it!\n"), "Ships it!")
+        self.assertEqual(self.added("Is it?\n"), "Is it?")
+        self.assertEqual(self.added("Ends here.\n"), "Ends here.")
+        self.assertEqual(self.added("Quest: asks for clocks\n"), "Quest: asks for clocks.")
 
     def test_a_byte_order_mark_is_not_part_of_the_headline(self):
-        self.assertEqual(self.headline_line({self.HEADLINE: None}, {self.HEADLINE: "\ufeffWith a BOM\n"}), "With a BOM.")
+        self.assertEqual(self.added("﻿With a BOM\n"), "With a BOM.")
+
+    def test_a_headline_that_is_not_utf8_is_refused_and_named(self):
+        repo = self.headline_repo({}, {})
+        git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "-c", "tag.gpgSign=false"]
+        (repo / "release-headlines").mkdir()
+        (repo / "release-headlines" / "bad.txt").write_bytes(b"\xff\xfe bad\n")
+        subprocess.run(git + ["add", "-A"], check=True)
+        subprocess.run(git + ["commit", "-q", "-m", "chore: bad"], check=True)
+        subprocess.run(git + ["tag", "-f", "rev"], check=True)
+        sealed = self.seal_to(self.make_tree(), "bad-sealed")
+        out = Path(tempfile.mkdtemp(prefix="headline-notes-", dir=self.tmp)) / "notes.md"
+        result = self.run_stage("notes", "--assets", str(self.release_dir(sealed, "bad-assets")), "--out", str(out),
+                                "--repo", str(repo), "--base", "base", "--rev", "rev")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("release-headlines/bad.txt", result.stderr)
+        self.assertIn("UTF-8", result.stderr)
+
+    def record(self, result):
+        """The one `headlines` record on stderr, parsed."""
+        records = [json.loads(line) for line in result.stderr.splitlines() if line.startswith("{")]
+        self.assertEqual(len(records), 1, result.stderr)
+        return records[0]
+
+    def test_the_cut_records_the_files_it_used_and_the_line_on_stderr(self):
+        result, _ = self.headline_notes({self.DIR + "a.txt": "Old.\n"}, {self.DIR + "a.txt": "Old.\n",
+                                                                          self.DIR + "c.txt": "Third\n",
+                                                                          self.DIR + "b.txt": "Second.\n"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.record(result), {"tool": "package_release", "event": "headlines",
+                                               "used": [self.DIR + "b.txt", self.DIR + "c.txt"],
+                                               "line": "Second. Third.", "base": "base", "rev": "rev"})
+
+    def test_the_record_has_an_empty_used_list_when_the_fixed_sentence_is_used(self):
+        result, _ = self.headline_notes({self.DIR + "a.txt": "Old.\n"}, {self.DIR + "a.txt": "Old.\n"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.record(result), {"tool": "package_release", "event": "headlines", "used": [],
+                                               "line": self.AUTO_LINE, "base": "base", "rev": "rev"})
+
+    def test_a_refused_headline_writes_no_record(self):
+        result, _ = self.headline_notes({}, {self.DIR + "empty.txt": "\n"})
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn('"event": "headlines"', result.stderr)
+        self.assertNotIn('"event":"headlines"', result.stderr)
 
     def test_a_placeholder_in_the_player_line_is_not_expanded_by_the_template(self):
         template = Path(self.tmp) / "t.md"
         template.write_text("@PLAYER_LINE@\n@ZIP@ @QUEST@\n", encoding="utf-8")
         body = package_release.render(template, {"PLAYER_LINE": "@ZIP@ and @QUEST@", "ZIP": "z.zip", "QUEST": "q.so"})
         self.assertEqual(body, "@ZIP@ and @QUEST@\nz.zip q.so\n")
-
-    def test_leading_blank_lines_and_surrounding_spaces_are_dropped_from_the_headline(self):
-        self.assertEqual(self.headline_line({self.HEADLINE: None},
-                                            {self.HEADLINE: "\n\n   \n  Real headline  \nsecond line is ignored\n"}),
-                         "Real headline.")
 
     def test_the_body_does_not_depend_on_the_zip_bytes(self):
         tree = self.make_tree()

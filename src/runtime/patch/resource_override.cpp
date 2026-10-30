@@ -9,13 +9,17 @@
  * The callback receives SIORequestCallbackData:
  *   +0x00: status (4 = success)
  *   +0x08: CResource* pointer
- *   +0x10: buffer index (0 = primary, 1 = secondary)
+ *   +0x10: buffer index (0 = primary, 1 = secondary; for a texture, the descriptor and the pixel payload)
  *   +0x18: data buffer pointer
  *   +0x20: data size
  *
  * CResource struct layout:
- *   +0x28: type_symbol  (uint64 hash)
+ *   +0x28: type_symbol  (uint64 hash, the logical type)
  *   +0x38: name_symbol  (uint64 hash)
+ *
+ * An entry's type names the buffer it replaces (resource_buffer_key.h, #1421): 0, the logical type or the buffer-0
+ * on-disk type name buffer 0, which gets a copy in the game's heap; the buffer-1 on-disk type names buffer 1, which is
+ * written over the game's own buffer when it fits and is otherwise not served.
  */
 
 #include "runtime/patch/resource_override.h"
@@ -45,9 +49,11 @@
 #include "core/globals.h"
 #include "core/logging.h"
 #include "runtime/patch/game_buffer.h"
+#include "runtime/patch/resource_buffer_key.h"
 
 /* Embedded assets */
 #include "runtime/patch/splash_texture.h"
+#include "runtime/lifecycle/cli.h"
 
 namespace {
 
@@ -92,8 +98,11 @@ static std::atomic<void* const*> g_memory_context_slot{nullptr};
 
 /* ── Known asset hashes ───────────────────────────────────────────── */
 
+/* Make(CGTextureResource, "Win10GPU"): a texture's payload, buffer 1. The splash is ui_menu_frontend's payload. */
 constexpr uint64_t TYPE_DDS_TEXTURE     = 0xbeac1969cb7b8861ULL;
 constexpr uint64_t NAME_SPLASH_TEXTURE  = 0x1f72c5e0fc9fc8c0ULL;
+static_assert(TYPE_DDS_TEXTURE == nevr_resource_key::OnDiskType(nevr_resource_key::kTextureResourceType, 1),
+              "the splash is keyed for a texture's buffer 1");
 
 /* ── Hook ─────────────────────────────────────────────────────────── */
 
@@ -141,6 +150,51 @@ static bool GiveGameACopy(uintptr_t cbd, const void* bytes, uint64_t size, const
     return true;
 }
 
+/* Whether the registry holds an entry that replaces buffer 0 of (type_hash, name_hash): for a texture, its descriptor.
+ * It says nothing of whether that entry was or will be served on this load: the two buffers finish in either order. */
+static bool HasDescriptorEntryFor(uint64_t type_hash, uint64_t name_hash) {
+    std::lock_guard<std::mutex> lock(g_overrides_mutex);
+    if (!g_overrides) return false;
+    for (const auto& ovr : *g_overrides) {
+        if (ovr->transform || ovr->name_hash != name_hash) continue;
+        if (nevr_resource_key::NamesBuffer(ovr->type_hash, type_hash, 0)) return true;
+    }
+    return false;
+}
+
+/* Writes a payload (buffer 1) over the game's own buffer, when it fits: no payload-sized copy is made in the game's
+ * heap, and the buffer the game frees is still the one its reader allocated (#1421). Returns false, and leaves the
+ * block alone, when it does not fit. A texture's descriptor is a separate entry (resource_buffer_key.h), so either
+ * outcome that leaves the two unpaired is a Warning that says which. */
+static bool WritePayloadInPlace(uintptr_t cbd, const ResourceOverride& ovr, uint64_t type_hash, uint64_t name_hash,
+                                uint64_t game_bytes) {
+    const nevr_game_buffer::InPlace result =
+        nevr_game_buffer::WriteInPlace(reinterpret_cast<unsigned char*>(cbd), ovr.data, ovr.size);
+    const bool descriptorEntry = HasDescriptorEntryFor(type_hash, name_hash);
+    if (result != nevr_game_buffer::InPlace::Written) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.RESOURCE] payload not replaced label=%s buffer=1 type=0x%016llx name=0x%016llx game_bytes=%llu "
+            "new_bytes=%llu reason=%s descriptor_entry=%s - the game's own payload is kept, and the replacement is "
+            "offered again on the next load%s",
+            ovr.label.c_str(), static_cast<unsigned long long>(type_hash), static_cast<unsigned long long>(name_hash),
+            static_cast<unsigned long long>(game_bytes), static_cast<unsigned long long>(ovr.size),
+            nevr_game_buffer::InPlaceName(result), descriptorEntry ? "yes" : "no",
+            descriptorEntry ? "; this texture has a descriptor entry, which is served on its own, so the game may "
+                              "read its own payload with that descriptor"
+                            : "");
+        return false;
+    }
+    if (ovr.size < game_bytes && !descriptorEntry) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.RESOURCE] payload smaller than the game's label=%s buffer=1 type=0x%016llx name=0x%016llx "
+            "game_bytes=%llu new_bytes=%llu descriptor_entry=no - the payload is written, but the game reads it with "
+            "its own descriptor, made for its own payload; a payload of another size needs its descriptor entry too",
+            ovr.label.c_str(), static_cast<unsigned long long>(type_hash), static_cast<unsigned long long>(name_hash),
+            static_cast<unsigned long long>(game_bytes), static_cast<unsigned long long>(ovr.size));
+    }
+    return true;
+}
+
 /* Offers the game's buffer to a transform and, when it answers, points the callback at a copy of the answer. */
 static void ApplyTransform(ResourceOverride& ovr, uintptr_t cbd, uint64_t type_hash, uint64_t name_hash) {
     const void* in = *reinterpret_cast<const void**>(cbd + 0x18);
@@ -175,49 +229,73 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
     std::shared_ptr<ResourceOverride> selected;
     AsyncIOCallback_fn original;
     uint64_t type_hash = 0, name_hash = 0, orig_size = 0;
+    uint32_t buf_index = 0;
+    std::string displacedTransform, displacingOverride;
     {
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
         original = g_orig;
         if (callback_data && g_overrides && !g_overrides->empty()) {
             auto cbd = reinterpret_cast<uintptr_t>(callback_data);
             void* resource = *reinterpret_cast<void**>(cbd + 0x08);
-            uint32_t buf_index = *reinterpret_cast<uint32_t*>(cbd + 0x10);
+            buf_index = *reinterpret_cast<uint32_t*>(cbd + 0x10);
 
-            if (resource && buf_index == 0) {
+            if (resource) {
                 auto res = reinterpret_cast<uintptr_t>(resource);
                 name_hash = *reinterpret_cast<uint64_t*>(res + 0x38);
                 type_hash = *reinterpret_cast<uint64_t*>(res + 0x28);
 
+                /* The first fixed replacement and the first transform that match. A fixed replacement outranks a
+                 * transform of the same key whatever the registration order (#1479), so a transform is chosen only
+                 * when no replacement matches. Both are scanned, so a displaced transform is known. */
+                std::shared_ptr<ResourceOverride> fixedHit;
+                std::shared_ptr<ResourceOverride> transformHit;
                 for (auto& ovr : *g_overrides) {
                     if (ovr->applied && !ovr->transform) continue;
                     if (ovr->name_hash != name_hash) continue;
-                    if (ovr->type_hash != 0 && ovr->type_hash != type_hash) continue;
+                    if (!nevr_resource_key::NamesBuffer(ovr->type_hash, type_hash, buf_index)) continue;
+                    if (ovr->transform && buf_index != 0) continue;  /* a transform is offered buffer 0 only */
 
                     if (ovr->transform) {
-                        /* A transform is asked on every load; it runs below, outside the lock. */
-                        ovr->applied = true;
-                        ++ovr->in_flight;
-                        selected = ovr;
-                        g_total_hits++;
-                        break;
+                        if (!transformHit) transformHit = ovr;
+                    } else if (!fixedHit) {
+                        fixedHit = ovr;
                     }
-
-                    /* Match — the buffer is replaced below, outside the lock: the copy calls the game's allocator */
+                }
+                if (fixedHit) {
+                    /* Replaced below, outside the lock: the copy calls the game's allocator */
+                    selected = fixedHit;
                     orig_size = *reinterpret_cast<uint64_t*>(cbd + 0x20);
-                    ovr->applied = true;
-                    ++ovr->in_flight;
-                    selected = ovr;
+                    if (transformHit) {
+                        displacedTransform = transformHit->label;
+                        displacingOverride = fixedHit->label;
+                    }
+                } else if (transformHit) {
+                    /* A transform is asked on every load; it runs below, outside the lock. */
+                    selected = transformHit;
+                }
+                if (selected) {
+                    selected->applied = true;
+                    ++selected->in_flight;
                     g_total_hits++;
-                    break;
                 }
             }
         }
     }
+    if (!displacedTransform.empty()) {
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.RESOURCE] override displaces transform type=0x%016llx name=0x%016llx override=%s transform=%s",
+            static_cast<unsigned long long>(type_hash), static_cast<unsigned long long>(name_hash),
+            displacingOverride.c_str(), displacedTransform.c_str());
+    }
     CallbackLease lease(selected);
+    const bool inPlace = buf_index == 1;
     if (selected && selected->transform) {
         ApplyTransform(*selected, reinterpret_cast<uintptr_t>(callback_data), type_hash, name_hash);
-    } else if (selected && !GiveGameACopy(reinterpret_cast<uintptr_t>(callback_data), selected->data, selected->size,
-                                          selected->label.c_str(), type_hash, name_hash)) {
+    } else if (selected &&
+               !(inPlace ? WritePayloadInPlace(reinterpret_cast<uintptr_t>(callback_data), *selected, type_hash,
+                                               name_hash, orig_size)
+                         : GiveGameACopy(reinterpret_cast<uintptr_t>(callback_data), selected->data, selected->size,
+                                         selected->label.c_str(), type_hash, name_hash))) {
         /* Not applied: the game keeps its own buffer, and the replacement is offered again on the next load. */
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
         selected->applied = false;
@@ -235,11 +313,11 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
                  resName ? " (" : "", resName ? resName : "");
         if (resName) strncat(nameBuf, ")", sizeof(nameBuf) - strlen(nameBuf) - 1);
         Log(EchoVR::LogLevel::Info,
-            "[NEVR.RESOURCE] override applied label=%s type=%s name=%s orig_bytes=%llu "
-            "new_bytes=%llu",
-            selected->label.c_str(), typeBuf, nameBuf,
+            "[NEVR.RESOURCE] override applied label=%s buffer=%u type=%s name=%s orig_bytes=%llu "
+            "new_bytes=%llu copy=%s",
+            selected->label.c_str(), buf_index, typeBuf, nameBuf,
             static_cast<unsigned long long>(orig_size),
-            static_cast<unsigned long long>(selected->size));
+            static_cast<unsigned long long>(selected->size), inPlace ? "in_place" : "game_heap");
     }
     original(callback_data);
 }
@@ -327,7 +405,8 @@ static bool HasOverrideFor(uint64_t type_hash, uint64_t name_hash) {
     std::lock_guard<std::mutex> lock(g_overrides_mutex);
     if (!g_overrides) return false;
     for (const auto& ovr : *g_overrides) {
-        if (ovr->name_hash == name_hash && (ovr->type_hash == 0 || ovr->type_hash == type_hash)) return true;
+        /* Only an entry for the same buffer covers it (resource_buffer_key.h): one keyed by 0 names buffer 0. */
+        if (ovr->name_hash == name_hash && ovr->type_hash == type_hash) return true;
     }
     return false;
 }
@@ -516,6 +595,23 @@ void RegisterResourceOverrideFromFile(uint64_t type_hash, uint64_t name_hash,
     RegisterResourceOverrideFromFileImpl(type_hash, name_hash, file_path, label);
 }
 
+bool ParseOverrideFileName(const char* file_name, uint64_t* type_hash, uint64_t* name_hash) {
+    uint64_t type_h = 0, name_h = 0;
+    if (file_name[0] == '0' && (file_name[1] == 'x' || file_name[1] == 'X')) {
+        const char* dot = strchr(file_name, '.');
+        if (dot && dot[1] == '0' && (dot[2] == 'x' || dot[2] == 'X')) {
+            type_h = strtoull(file_name + 2, nullptr, 16);
+            name_h = strtoull(dot + 3, nullptr, 16);
+        } else {
+            name_h = strtoull(file_name + 2, nullptr, 16);
+        }
+    }
+    if (name_h == 0) return false;
+    *type_hash = type_h;
+    *name_hash = name_h;
+    return true;
+}
+
 /* The EchoVRCE splash texture, unless the cache already supplies that resource. */
 static void RegisterBuiltInSplash() {
     if (HasOverrideFor(TYPE_DDS_TEXTURE, NAME_SPLASH_TEXTURE)) {
@@ -615,7 +711,13 @@ size_t RegisterCachedResourceOverrides(const wchar_t* cache_dir, uint64_t cap_by
  * applied. */
 static void RegisterInitialOverrides(const wchar_t* cache_dir) {
     RegisterCachedResourceOverrides(cache_dir);
-    RegisterBuiltInSplash();
+    /* The splash is drawn by the client's main menu only; a dedicated server has no menu, so it registers nothing. */
+    if (!g_isServer) {
+        RegisterBuiltInSplash();
+    } else {
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.RESOURCE] built-in splash skipped on a dedicated server (no menu is drawn)");
+    }
 }
 
 void InstallResourceOverride() {
@@ -649,19 +751,8 @@ void InstallResourceOverride() {
             if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
             const char* name = fd.cFileName;
 
-            /* Parse "0xTYPE.0xNAME" or "0xNAME" filename format */
             uint64_t type_h = 0, name_h = 0;
-            if (name[0] == '0' && (name[1] == 'x' || name[1] == 'X')) {
-                const char* dot = strchr(name, '.');
-                if (dot && dot[1] == '0' && (dot[2] == 'x' || dot[2] == 'X')) {
-                    type_h = strtoull(name + 2, nullptr, 16);
-                    name_h = strtoull(dot + 3, nullptr, 16);
-                } else {
-                    name_h = strtoull(name + 2, nullptr, 16);
-                }
-            }
-
-            if (name_h == 0) continue;
+            if (!ParseOverrideFileName(name, &type_h, &name_h)) continue;
 
             char filePath[MAX_PATH];
             snprintf(filePath, sizeof(filePath), "%s\\%s", overrideDir, name);
