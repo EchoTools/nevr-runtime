@@ -124,10 +124,21 @@ class DraftCheck(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
-def plan_step_script(text: str) -> str:
-    """The `run:` script of the step named "Plan the release", dedented."""
+def step_block(text: str, name: str) -> str:
+    """One step of the decide job, from its `- name:` line to the line before the next step or job."""
     lines = text.splitlines()
-    start = lines.index("    - name: Plan the release")
+    start = lines.index(f"    - name: {name}")
+    end = next(
+        (i for i in range(start + 1, len(lines)) if lines[i].startswith("    - ") or re.match(r"^  \w+:", lines[i])),
+        len(lines),
+    )
+    return "\n".join(lines[start:end]) + "\n"
+
+
+def step_script(text: str, name: str) -> str:
+    """The `run:` script of the named step, dedented."""
+    lines = text.splitlines()
+    start = lines.index(f"    - name: {name}")
     run = next(i for i in range(start, len(lines)) if lines[i] == "      run: |")
     body = []
     for line in lines[run + 1 :]:
@@ -135,6 +146,11 @@ def plan_step_script(text: str) -> str:
             break
         body.append(line)
     return textwrap.dedent("\n".join(body)) + "\n"
+
+
+def plan_step_script(text: str) -> str:
+    """The `run:` script of the step named "Plan the release", dedented."""
+    return step_script(text, "Plan the release")
 
 
 class PlanStepVersion(unittest.TestCase):
@@ -189,6 +205,86 @@ class PlanStepVersion(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("cut=false", lines, lines)
         self.assertFalse(any(line.startswith("version=") for line in lines), lines)
+
+
+class WindowStep(unittest.TestCase):
+    """The decide job's "Check the release window" step (#1466): a scheduled run holds when a release was published
+    inside the window; a dispatched run (by hand, or the guard's) is never held by it."""
+
+    STEP = "Check the release window"
+
+    def setUp(self) -> None:
+        self.text = TRAIN.read_text(encoding="utf-8")
+        self.block = step_block(self.text, self.STEP)
+
+    def test_the_step_is_in_decide_before_the_plan(self) -> None:
+        names = step_names(self.text, "decide")
+        self.assertIn(self.STEP, names)
+        self.assertLess(names.index(self.STEP), names.index("Plan the release"), names)
+
+    def test_the_step_runs_only_on_the_schedule(self) -> None:
+        self.assertIn("      if: github.event_name == 'schedule'\n", self.block)
+        self.assertNotIn("workflow_dispatch", self.block)
+
+    def test_the_step_runs_the_shared_rule_with_the_job_token(self) -> None:
+        self.assertIn("      id: window\n", self.block)
+        self.assertIn("      GH_TOKEN: ${{ github.token }}\n", self.block)
+        self.assertIn('python3 tools/release_window.py --repo "$GITHUB_REPOSITORY"', self.block)
+
+    def test_the_plan_is_skipped_on_hold_and_only_then(self) -> None:
+        plan = step_block(self.text, "Plan the release")
+        self.assertIn("      if: steps.window.outputs.hold != 'true'\n", plan)
+
+    def test_a_held_run_reports_cut_false_and_the_cut_job_stays_off(self) -> None:
+        self.assertIn("cut: ${{ steps.plan.outputs.cut || steps.window.outputs.cut }}", self.text)
+        self.assertIn("if: needs.decide.outputs.cut == 'true'", self.text)
+
+    def test_nothing_but_the_window_step_writes_hold(self) -> None:
+        self.assertEqual(self.text.count('echo "hold=true"'), 1)
+        self.assertIn('echo "hold=true"', self.block)
+
+    def test_the_workflow_header_says_the_run_holds(self) -> None:
+        header = self.text.split("\non:\n")[0]
+        self.assertIn("195", header)
+        self.assertIn("hold", header)
+
+    def run_step(self, tool_exit: int) -> tuple[subprocess.CompletedProcess, list[str]]:
+        script = step_script(self.text, self.STEP)
+        with tempfile.TemporaryDirectory() as tmp:
+            (pathlib.Path(tmp) / "tools").mkdir()
+            (pathlib.Path(tmp) / "tools" / "release_window.py").write_text(
+                f"import sys\nprint('stub release_window')\nsys.exit({tool_exit})\n", encoding="utf-8")
+            output = pathlib.Path(tmp) / "github_output"
+            output.write_text("", encoding="utf-8")
+            result = subprocess.run(
+                ["bash", "-c", script],
+                cwd=tmp,
+                env={**os.environ, "GITHUB_OUTPUT": str(output), "GITHUB_REPOSITORY": "owner/name"},
+                capture_output=True,
+                text=True,
+            )
+            lines = output.read_text(encoding="utf-8").splitlines()
+        return result, lines
+
+    def test_exit_10_holds_writes_cut_false_and_the_step_stays_green(self) -> None:
+        result, lines = self.run_step(10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("hold=true", lines)
+        self.assertIn("cut=false", lines)
+        self.assertIn("195", result.stdout)
+
+    def test_exit_0_writes_nothing_and_goes_on(self) -> None:
+        result, lines = self.run_step(0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(lines, [])
+
+    def test_any_other_exit_fails_the_step_with_that_code(self) -> None:
+        for code in (1, 2, 3):
+            with self.subTest(code=code):
+                result, lines = self.run_step(code)
+                self.assertEqual(result.returncode, code, result.stderr)
+                self.assertEqual(lines, [])
+                self.assertIn("release_window.py failed", result.stderr)
 
 
 class AudienceSection(unittest.TestCase):
