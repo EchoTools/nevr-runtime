@@ -1,1 +1,1 @@
-A failed sign-in now stays on screen until you close it and says what to do; on PC a texture mod can replace a texture's image, and magnum, SMG, Chain and rifle bullets get trails and impacts.
+A failed sign-in now stays on screen until you close it and says what to do, and on PC a texture mod can now replace a texture's image.
