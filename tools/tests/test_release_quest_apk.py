@@ -185,6 +185,13 @@ class RecipesRun(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in out.iterdir()), sorted([name, f"{name}.sha256", "loader", "repack"]))
         self.assertFalse((self.dir / "build" / "quest-release" / "v1.2.3" / "nevr-runtime-v1.2.3-quest.apk").exists())
 
+    def test_a_rerun_starts_from_an_empty_output_directory(self):
+        stale = self.dir / "build/quest-release/v1.2.3/variant/stale.txt"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("left by an earlier run")
+        self.assertEqual(self.variant().returncode, 0)
+        self.assertFalse(stale.exists())
+
     def test_the_variant_recipe_passes_the_libraries_colon_separated_to_the_repack_and_the_release_version(self):
         self.assertEqual(self.variant().returncode, 0)
         repack = [c for c in self.calls_made() if c.startswith("repack ")]
