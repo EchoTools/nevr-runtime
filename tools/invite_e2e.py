@@ -382,6 +382,9 @@ EXPERIENCE_ARENA = (768, 458)                    # CHOOSE EXPERIENCE: lobby 658,
 MODE_CUSTOM = (658, 458)                         # SELECT GAME MODE: custom match 658, AI teammates 768
 CREATE_INVITE = (767, 550)                       # REVIEW SETTINGS: CREATE INVITE CODE & LINK
 MAIN_MENU = (367, 472)                           # the left column's MAIN MENU button (share page, entry page)
+# The entry page takes a key press only after the one before has been drawn: 2.7 s between presses dropped 3 of 5 characters on the
+# first --ui run, 3.7 s kept all of them.
+KEY_SETTLE_SECONDS = 3.0
 KEY_ENTER = (893, 497)
 CANCEL_ENTRY = (767, 559)
 LEFT_COLUMN = (296, 360, 440, 580)               # the left column's box: its buttons change with every page
@@ -461,7 +464,7 @@ class Ui:
             time.sleep(1)
         raise StepFailed(f"client {self.client.label}: no \"Echo VR\" window of process {pid} on :101 within {timeout:.0f} s")
 
-    def click(self, x: float, y: float) -> None:
+    def click(self, x: float, y: float, settle: float = 1.5) -> None:
         """A select: the window raised, the pointer moved onto the target (the game needs a hover first), the RIGHT button held 0.3 s."""
         ox, oy = self.origin
         self._x("windowraise", self.window, check=False)
@@ -473,7 +476,7 @@ class Ui:
         self._x("mousedown", "3")
         time.sleep(0.3)
         self._x("mouseup", "3")
-        time.sleep(1.5)
+        time.sleep(settle)
 
     def capture(self):
         from PIL import Image
@@ -531,7 +534,7 @@ class Ui:
             self.navigate(*MAIN_MENU, "MAIN MENU")
         self.navigate(CARD_SLOT_X[slots["join"]], CARD_Y, "JOIN VIA CODE")
         for char in code:
-            self.click(*key_position(char))
+            self.click(*key_position(char), settle=KEY_SETTLE_SECONDS)
         self.shot("code-typed")
         self.click_logged(*KEY_ENTER, r"wizard click seen event=join_via_code", "ENTER")
 
