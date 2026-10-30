@@ -1,5 +1,5 @@
 // Host test of the plugin's hook install and wrapper against a fake "game library" slot (an mmap'd page).
-// Built per arm (Hz match90, T-26) by src/quest/tests/q15t/run_host_tests.sh; the clock raise is a runtime switch (args {clock: raise}), tested in every build. Real code, real mprotect, real /proc/self/maps.
+// Built per arm (Hz level rule, T-26) by src/quest/tests/q15t/run_host_tests.sh; the clock raise is a runtime switch (args {clock: raise}), tested in every build. Real code, real mprotect, real /proc/self/maps.
 #include <dlfcn.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -13,6 +13,8 @@
 
 #include "clock_levels.h"
 #include "refresh_rate.h"
+#include "module_switch.h"
+#include "nevr/symbol_hash.h"
 #include "nevr/plugin_interface.h"
 
 extern "C" {
@@ -129,7 +131,10 @@ int main() {
       game[0x1f48 / 8] = reinterpret_cast<uintptr_t>(table);
       game[0x1f78 / 8] = 1;
       gs[0x8 / 8] = g;
-      gs[0x58 / 8] = 0x5763ceff4e96bc48ull;  // a lobby level: not a combat map
+      using EchoVR::CSymbol64Hash;
+      CHECK(HasLine("q15t_refresh_rate_install") && HasLine("mode=lobby") && HasLine("level_hz=90"),
+            "no install record for the default level rule (lobby, 90 Hz off a Quest 2)");
+      gs[0x58 / 8] = CSymbol64Hash("mpl_lobby_hub_unknown");  // no counted level
       // through the game-tick slot, as CncaGame::Render calls it
       const uintptr_t tick_slot = page[Q15T_SLOT_EXCLUSIVEUPDATEGAME / sizeof(uintptr_t)];
       CHECK(tick_slot != reinterpret_cast<uintptr_t>(&FakeExclusiveUpdateGame), "tick slot not replaced");
@@ -137,27 +142,114 @@ int main() {
       g_hz_calls = 0;
       tick(game);
       CHECK(g_update_calls >= 1, "the original ExclusiveUpdateGame was not called");
-      CHECK(g_hz_calls == 0, "no switch expected outside a combat map, got %d calls", g_hz_calls);
-      gs[0x58 / 8] = 0xdf5ca7b7dfa383d4ull;  // a combat map
+      CHECK(g_hz_calls == 0, "no switch expected without a combat or lobby level, got %d calls", g_hz_calls);
+      gs[0x58 / 8] = CSymbol64Hash("mpl_combat_fission");
       q15t::ResetHzScheduleForTest();
       tick(game);
       CHECK(g_hz_calls == 1 && g_hz_seen == 90.f, "entering a combat map must ask 90: calls %d, %.1f", g_hz_calls, (double)g_hz_seen);
-      CHECK(HasLine("refresh switch") && HasLine("why=combat map loaded"), "no switch record");
+      CHECK(HasLine("refresh switch") && HasLine("why=combat or lobby level loaded"), "no switch record");
       hz(reinterpret_cast<void*>(0x1234), 120.f);
       CHECK(g_hz_seen == 90.f, "a game request during a match must stay 90: %.1f", (double)g_hz_seen);
+      CHECK(HasLine("asked_hz=120.0 sent_hz=90.0"), "the per-call record must carry asked_hz and sent_hz");
       q15t::ResetHzScheduleForTest();
       tick(game);
       CHECK(g_hz_calls == 2, "no change, no re-ask: calls %d", g_hz_calls);
-      gs[0x58 / 8] = 0x5763ceff4e96bc48ull;
+      gs[0x58 / 8] = CSymbol64Hash("mpl_lobby_b_social");  // combat map -> lobby: still the level rate, no re-ask
       q15t::ResetHzScheduleForTest();
       tick(game);
-      CHECK(g_hz_calls == 3 && g_hz_seen == 120.f, "leaving the combat map must ask the game's 120 again: %.1f", (double)g_hz_seen);
+      CHECK(g_hz_calls == 2, "a lobby level after a combat map keeps 90 without a re-ask: calls %d", g_hz_calls);
+      // an Echo Arena level loaded in the second table wins over the lobby level: the game's 120 again
+      static uintptr_t gs2[0x60 / 8 + 1] = {};
+      static uintptr_t table2[2] = {};
+      gs2[0x8 / 8] = g;
+      gs2[0x58 / 8] = CSymbol64Hash("mpl_arena_a");
+      table2[1] = reinterpret_cast<uintptr_t>(gs2);
+      game[0x1f88 / 8] = reinterpret_cast<uintptr_t>(table2);
+      game[0x1fb8 / 8] = 1;
+      q15t::ResetHzScheduleForTest();
+      tick(game);
+      CHECK(g_hz_calls == 3 && g_hz_seen == 120.f, "an Echo Arena level must ask the game's 120: %.1f", (double)g_hz_seen);
+      CHECK(HasLine("why=echo arena level loaded: session rate"), "no Echo Arena switch record");
+      game[0x1fb8 / 8] = 0;  // Echo Arena unloaded, the lobby left loaded: 90 again
+      q15t::ResetHzScheduleForTest();
+      tick(game);
+      CHECK(g_hz_calls == 4 && g_hz_seen == 90.f, "back in the lobby must ask 90: %.1f", (double)g_hz_seen);
+      gs[0x58 / 8] = CSymbol64Hash("mpl_lobby_hub_unknown");
+      q15t::ResetHzScheduleForTest();
+      tick(game);
+      CHECK(g_hz_calls == 5 && g_hz_seen == 120.f, "leaving every counted level must ask the game's 120: %.1f", (double)g_hz_seen);
+      CHECK(HasLine("why=no combat or lobby level: session rate"), "no leave record");
+      // every level id is the CSymbol64 of its name
+      {
+        const char* lobbies[] = {"mpl_lobby_b", "mpl_lobby_b2", "mpl_lobby_b2_lowspec", "mpl_lobby_b_combat", "mpl_lobby_b_arena", "mpl_lobby_b_social"};
+        const char* combats[] = {"mpl_combat_dyson", "mpl_combat_combustion", "mpl_combat_fission", "mpl_combat_gauss"};
+        const char* arenas[] = {"mpl_arena_a", "mpl_arena_a_lowspec", "mpl_arena_b", "mpl_tutorial_a"};
+        uint64_t lv = 0;
+        for (const char* name : lobbies) {
+          gs[0x58 / 8] = CSymbol64Hash(name);
+          CHECK(q15t::ClassifyLoadedLevels(g, true, &lv) == q15t::HzLevelKind::kCombatOrLobby && lv == CSymbol64Hash(name), "%s is a lobby level", name);
+          CHECK(q15t::ClassifyLoadedLevels(g, false, &lv) == q15t::HzLevelKind::kNone, "%s counts without the lobby rule", name);
+          CHECK(!q15t::CombatMapLoaded(g, &lv), "CombatMapLoaded must not see the lobby level %s", name);
+        }
+        for (const char* name : combats) {
+          gs[0x58 / 8] = CSymbol64Hash(name);
+          CHECK(q15t::ClassifyLoadedLevels(g, false, &lv) == q15t::HzLevelKind::kCombatOrLobby, "%s is a combat map", name);
+          CHECK(q15t::CombatMapLoaded(g, &lv), "CombatMapLoaded must still see %s", name);
+        }
+        for (const char* name : arenas) {
+          gs[0x58 / 8] = CSymbol64Hash(name);
+          CHECK(q15t::ClassifyLoadedLevels(g, true, &lv) == q15t::HzLevelKind::kEchoArena, "%s is an Echo Arena level", name);
+          CHECK(q15t::ClassifyLoadedLevels(g, false, &lv) == q15t::HzLevelKind::kNone, "%s decides without the lobby rule", name);
+        }
+      }
+      // the Quest 2 rule: a "hollywood" device asks 72; hz72q2.off keeps 90; hzlobby90.off drops the lobby; hzlevel.off is witness only
+      {
+        char dir[] = "/tmp/q15t_hz_XXXXXX";
+        CHECK(mkdtemp(dir) != nullptr, "mkdtemp");
+        q15t::SetModuleSwitchDirForTest(dir);
+        q15t::SetHzDeviceForTest("hollywood");
+        q15t::HzRule r = q15t::ConfigureHzRule();
+        CHECK(r.on && r.lobby && r.quest2 && r.low_hz == 72.f, "Quest 2: level rate %.1f", (double)r.low_hz);
+        CHECK(HasLine("device=hollywood") && HasLine("level_hz=72"), "no Quest 2 install record");
+        gs[0x58 / 8] = CSymbol64Hash("mpl_lobby_b");
+        q15t::ResetHzScheduleForTest();
+        tick(game);
+        CHECK(g_hz_seen == 72.f, "a Quest 2 lobby must ask 72: %.1f", (double)g_hz_seen);
+        const std::string q2off = std::string(dir) + "/hz72q2.off";
+        FILE* f = std::fopen(q2off.c_str(), "w");
+        if (f) std::fclose(f);
+        r = q15t::ConfigureHzRule();
+        CHECK(r.on && r.quest2 && r.low_hz == 90.f, "hz72q2.off must keep 90: %.1f", (double)r.low_hz);
+        const std::string lobbyoff = std::string(dir) + "/hzlobby90.off";
+        f = std::fopen(lobbyoff.c_str(), "w");
+        if (f) std::fclose(f);
+        r = q15t::ConfigureHzRule();
+        CHECK(r.on && !r.lobby && HasLine("mode=match"), "hzlobby90.off must leave combat maps only");
+        const std::string leveloff = std::string(dir) + "/hzlevel.off";
+        f = std::fopen(leveloff.c_str(), "w");
+        if (f) std::fclose(f);
+        r = q15t::ConfigureHzRule();
+        CHECK(!r.on && HasLine("mode=witness"), "hzlevel.off must leave the witness only");
+        const int before = g_hz_calls;
+        gs[0x58 / 8] = CSymbol64Hash("mpl_combat_gauss");
+        q15t::ResetHzScheduleForTest();
+        tick(game);
+        CHECK(g_hz_calls == before, "the witness must not switch: calls %d -> %d", before, g_hz_calls);
+        std::remove(leveloff.c_str());
+        std::remove(lobbyoff.c_str());
+        std::remove(q2off.c_str());
+        rmdir(dir);
+        q15t::SetModuleSwitchDirForTest("");
+        q15t::SetHzDeviceForTest(nullptr);
+        q15t::ConfigureHzRule();
+      }
       // an object that is not the CR15Game: no callback, one ERROR line
       static uintptr_t other[0x2000 / 8] = {};
       other[0] = 0x777;
       q15t::ResetHzScheduleForTest();
+      const int before_other = g_hz_calls;
       tick(other);
-      CHECK(g_hz_calls == 3, "a non-CR15Game object ran the tick");
+      CHECK(g_hz_calls == before_other, "a non-CR15Game object ran the tick");
       CHECK(HasLine("game tick: object is not the CR15Game", 3), "no ERROR line for a wrong vptr");
 #else
       CHECK(!HasLine("CncaGame::ExclusiveUpdateGame"), "the witness arm must not install the game tick");

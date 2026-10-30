@@ -1,6 +1,7 @@
 # ADR 0001: 90 Hz in matches is a performance candidate, not timing parity
 
-Status: accepted for the plugin's experiment plan (2026-10-28). Not observed on a headset in plugin shape.
+Status: accepted for the plugin's experiment plan (2026-10-28); its default is superseded by ADR 0002 (the level rule is the
+plugin default). The timing analysis below stands. Not observed on a headset in plugin shape.
 
 ## Question
 

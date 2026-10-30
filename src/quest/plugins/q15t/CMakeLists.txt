@@ -11,7 +11,7 @@ option(Q15T_GATE_PERM "Gameplay (G1): the party-permissions expression stops ref
 option(Q15T_GATE_LINK "Menu gate: the headset-type expression is told a Link headset (the PC build's kind 4, not the Quest kind), so the menu scripts stop locking combat cards to a Quest (a caller-range answer, no code write)" ON)
 option(Q15T_GATE_BOTS "Gameplay (G6): the bot-body chooser stops picking the arena bot for a Quest headset. Installed only with levelname (the combat bot body is in the full global_mp). Source combat build: on. Kill file gate_bots.off" ON)
 option(Q15T_T26 "T-26: a new profile starts with the gun on the right hand, once per user id (plugin behaviour)" ON)
-option(Q15T_HZ_MATCH90 "Hz arm: 90 Hz while a combat map is loaded, the game's own rate elsewhere (q15t hzmatch90)" OFF)
+option(Q15T_HZ_MATCH90 "Hz level rule: 90 Hz (72 on a Quest 2) while a combat map or the social lobby is loaded, the game's own rate in Echo Arena and elsewhere (q15t hzlobby90 + hz72q2, on in its shipped list). Kill files hzlevel.off, hzlobby90.off, hz72q2.off" ON)
 set(Q15T_CPU_LEVEL 4 CACHE STRING "CPU level the clock raise (args {clock: raise}) asks for at least")
 set(Q15T_GPU_LEVEL 4 CACHE STRING "GPU level the clock raise (args {clock: raise}) asks for at least")
 

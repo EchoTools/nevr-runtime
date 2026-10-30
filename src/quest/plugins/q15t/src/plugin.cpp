@@ -203,7 +203,7 @@ NEVR_DECLARE_SUPPORTED_BUILD_IDS(Q15T_BUILD_ID);
 extern "C" __attribute__((used, retain, visibility("hidden"))) const char q15t_config_marker[] =
     "q15t-config ec_words=[" Q15T_MARK_EC_WORDS "] ecfx_default_on=" Q15T_MARK_STR(Q15T_ECFX_DEFAULT_ON)
     " gate_link=" Q15T_MARK_STR(Q15T_GATE_LINK) " gate_perm=" Q15T_MARK_STR(Q15T_GATE_PERM) " gate_bots=" Q15T_MARK_STR(Q15T_GATE_BOTS)
-    " levelname=" Q15T_MARK_STR(Q15T_LEVELNAME) " build_id=" Q15T_BUILD_ID;
+    " levelname=" Q15T_MARK_STR(Q15T_LEVELNAME) " hz_level=" Q15T_MARK_STR(Q15T_HZ_MATCH90) " build_id=" Q15T_BUILD_ID;
 
 namespace {
 
@@ -403,7 +403,7 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
   SetClockRaise(raise);
   const NevrLogField start[] = {{"game_build_id", id}, {"pinned", Q15T_BUILD_ID},
                                 {"clock_candidate", raise ? "1" : "0"}, {"clock_arg", clock_arg},
-                                {"hz_mode", Q15T_HZ_MATCH90 ? "match90" : "witness"}, {"t26", Q15T_T26 ? "1" : "0"},
+                                {"hz_mode", Q15T_HZ_MATCH90 ? "level" : "witness"}, {"t26", Q15T_T26 ? "1" : "0"},
                                 {"modules", kCompiledModules}};
   Log(NEVR_LOG_INFO, "q15t init", start, 7);
   if (has_clock_arg && !raise && std::strcmp(clock_arg, "log") != 0) {
