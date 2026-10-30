@@ -14,14 +14,19 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 #include <windows.h>
 
+#include "core/logging.h"
 #include "runtime/patch/asset_cache.h"
+#include "runtime/patch/netgun_bullets.h"
 #include "runtime/patch/resource_override.h"
+#include "runtime/tests/netgun_bullets_fixture.h"
 #include "runtime/lifecycle/cli.h"
 
 bool TestLogContains(const std::string& needle);
+bool TestLogContainsAtLevel(EchoVR::LogLevel level, const std::string& needle);
 void ClearTestLogs();
 
 namespace {
@@ -1292,6 +1297,231 @@ TEST_F(TexturePayloads, TheCacheCapHoldsTheShippedPosterSet) {
   Cache(Image(100, 1), kTexturePayloadKey, kPosterName, "cache_poster");
   RegisterCachedResourceOverrides(dir_.c_str());
   EXPECT_TRUE(TestLogContains(" cap=536870912 "));
+}
+
+
+// ── #1420: the netgun bullet effects, through the seam ───────────────────────────────────────────────────────────
+// The production transforms (netgun_bullets.cpp) registered by Install, offered the game's buffer by the real
+// callback, and the bytes the engine is left holding. The resources are the synthetic ones of
+// netgun_bullets_fixture.h; a test pins their digests in place of the stock ones (TestHook_SetPins).
+
+struct NetgunRegistration {
+  std::uint64_t type;
+  std::uint64_t name;
+  ResourceTransformFn transform;
+  void* user;
+  std::string label;
+};
+std::vector<NetgunRegistration> g_netgunRegistrations;
+
+void CaptureNetgunRegistration(std::uint64_t type, std::uint64_t name, ResourceTransformFn transform, void* user,
+                               const char* label) {
+  g_netgunRegistrations.push_back({type, name, transform, user, label});
+}
+
+constexpr std::uint64_t kNetgunParticleType = 0x8ee04a8fa8b1cdb0ULL;  // CSymbol64("CParticleEffectCR")
+constexpr std::uint64_t kNetgunBulletType = 0x16bafee3754402a4ULL;    // CSymbol64("CR15NetBulletCR")
+constexpr std::uint64_t kCombustion = 0x42670f2bed45703cULL;
+constexpr std::uint64_t kDyson = 0x43e2da7914642604ULL;
+constexpr std::uint64_t kGauss = 0x43e2da7a0c623a19ULL;
+
+class NetgunBulletTransforms : public ResourceTransforms {
+ protected:
+  void SetUp() override {
+    ResourceTransforms::SetUp();
+    nevr_netgun_bullets::TestHook_Reset();
+    g_netgunRegistrations.clear();
+    // Every expected line below names a digest computed the way the transform computes it. A prefix whose SHA-256
+    // provider fails makes both empty and the lines match anyway, so the run stops here instead.
+    ASSERT_TRUE(nevr_asset_cache::IsSha256Hex(nevr_asset_cache::Sha256Hex(particles_.data(), particles_.size())));
+    ASSERT_TRUE(nevr_asset_cache::IsSha256Hex(nevr_asset_cache::Sha256Hex(bullets_.data(), bullets_.size())));
+  }
+  void TearDown() override {
+    nevr_netgun_bullets::TestHook_Reset();
+    ResourceTransforms::TearDown();
+  }
+  // The fixtures' digests, each first in a list of two, as the four-level digest is first in the stock list.
+  void PinFixtures() {
+    nevr_netgun_bullets::TestHook_SetPins({nevr_asset_cache::Sha256Hex(particles_.data(), particles_.size()), kDecoy},
+                                          {nevr_asset_cache::Sha256Hex(bullets_.data(), bullets_.size()), kDecoy});
+  }
+  static constexpr char kDecoy[] = "0000000000000000000000000000000000000000000000000000000000000000";
+  const std::vector<std::uint8_t> particles_ = netgun_fixture::Particles(netgun_fixture::StockRows());
+  const std::vector<std::uint8_t> bullets_ = netgun_fixture::Bullets(netgun_fixture::StockEntries());
+};
+
+TEST_F(NetgunBulletTransforms, InstallRegistersBothResourcesOfEachOfTheFiveLevels) {
+  nevr_netgun_bullets::Install(&CaptureNetgunRegistration);
+  const std::pair<const char*, std::uint64_t> levels[] = {
+      {"mpl_combat_combustion", kCombustion},
+      {"mpl_combat_dyson", kDyson},
+      {"mpl_combat_fission", 0xdf5ca7b7dfa383d4ULL},
+      {"mpl_combat_gauss", kGauss},
+      {"mpl_lobby_b_combat", 0xcb9977f7fc2b4526ULL},
+  };
+  ASSERT_EQ(g_netgunRegistrations.size(), 10u);
+  for (size_t i = 0; i < 5; ++i) {
+    const NetgunRegistration& p = g_netgunRegistrations[2 * i];
+    const NetgunRegistration& b = g_netgunRegistrations[2 * i + 1];
+    EXPECT_EQ(p.type, kNetgunParticleType) << levels[i].first;
+    EXPECT_EQ(b.type, kNetgunBulletType) << levels[i].first;
+    EXPECT_EQ(p.name, levels[i].second) << levels[i].first;
+    EXPECT_EQ(b.name, levels[i].second) << levels[i].first;
+    ASSERT_NE(p.user, nullptr);
+    EXPECT_STREQ(static_cast<const nevr_netgun_bullets::Level*>(p.user)->name, levels[i].first);
+    EXPECT_EQ(p.user, b.user);
+    EXPECT_NE(p.transform, b.transform);
+    EXPECT_EQ(p.label, std::string("netgun bullet effects ") + levels[i].first + " CParticleEffectCR");
+    EXPECT_EQ(b.label, std::string("netgun bullet effects ") + levels[i].first + " CR15NetBulletCR");
+  }
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "[NEVR.RESOURCE] netgun bullet effects requested levels=5 transforms=10 "
+      "pins=7130808e89f3aa9400cb09fb7a30ca85c9a5a0be363557a647974ebd00283b8c,"
+      "9f03344fa5e5ea183ffed2b42186a1fa6b7e214953dcbfa1c0308389e9f05750,"
+      "611f0ab4d6ada7f275ab1aaf974a08209d3c6e78e1a81b40c88fa11d9a215e6b (once a combat level loads"));
+}
+
+TEST_F(NetgunBulletTransforms, APinnedResourceOfALevelIsWhatTheGameReadsAfterTheLoad) {
+  nevr_netgun_bullets::Install();
+  PinFixtures();
+  GameFinishesBuffer(kNetgunParticleType, kCombustion, 0, particles_.data(), particles_.size());
+  const std::vector<std::uint8_t> particles = netgun_fixture::PatchedParticles();
+  ExpectGameCopy(particles.data(), particles.size());
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Info,
+      "netgun bullet effects added level=mpl_combat_combustion resource=CParticleEffectCR entries=11->20"));
+  GameFinishesBuffer(kNetgunBulletType, kGauss, 0, bullets_.data(), bullets_.size());
+  const std::vector<std::uint8_t> bullets = netgun_fixture::PatchedBullets();
+  ExpectGameCopy(bullets.data(), bullets.size());
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "netgun bullet effects added level=mpl_combat_gauss resource=CR15NetBulletCR "
+                                     "entries=9->9"));
+  // The line names the sizes and digests of what the game delivered and of what it reads now.
+  const auto sha = [](const std::vector<std::uint8_t>& b) { return nevr_asset_cache::Sha256Hex(b.data(), b.size()); };
+  EXPECT_TRUE(TestLogContains("entries=11->20 orig_bytes=" + std::to_string(particles_.size()) + " new_bytes=" +
+                              std::to_string(particles.size()) + " stock_sha256=" + sha(particles_) +
+                              " result_sha256=" + sha(particles) + " ("));
+  EXPECT_TRUE(TestLogContains("entries=9->9 orig_bytes=" + std::to_string(bullets_.size()) + " new_bytes=" +
+                              std::to_string(bullets.size()) + " stock_sha256=" + sha(bullets_) +
+                              " result_sha256=" + sha(bullets) + " ("));
+}
+
+TEST_F(NetgunBulletTransforms, ALaterLoadOfTheSameBytesIsServedFromTheFirstRewrite) {
+  nevr_netgun_bullets::Install();
+  PinFixtures();
+  GameFinishesBuffer(kNetgunParticleType, kCombustion, 0, particles_.data(), particles_.size());
+  ASSERT_TRUE(TestLogContains("netgun bullet effects added level=mpl_combat_combustion"));
+  ClearTestLogs();
+  GameFinishesBuffer(kNetgunParticleType, kDyson, 0, particles_.data(), particles_.size());
+  const std::vector<std::uint8_t> want = netgun_fixture::PatchedParticles();
+  ExpectGameCopy(want.data(), want.size());
+  EXPECT_TRUE(TestLogContains("transform applied label=netgun bullet effects mpl_combat_dyson CParticleEffectCR"));
+  EXPECT_FALSE(TestLogContains("netgun bullet effects added"));  // the first rewrite, not a second one
+}
+
+TEST_F(NetgunBulletTransforms, BytesThatAreNotTheStockResourceAreLeftAloneAndSaySo) {
+  nevr_netgun_bullets::Install();  // the stock digests: the fixture is none of them
+  GameFinishesBuffer(kNetgunParticleType, kCombustion, 0, particles_.data(), particles_.size());
+  EXPECT_EQ(g_seenBuffer, particles_.data());
+  EXPECT_EQ(g_seenSize, particles_.size());
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "netgun bullet effects left off level=mpl_combat_combustion "
+                                     "resource=CParticleEffectCR reason=not_pinned"));
+  // The line names the size and digest of what the game delivered, so a run on other data says what it got.
+  EXPECT_TRUE(TestLogContains("reason=not_pinned bytes=" + std::to_string(particles_.size()) + " sha256=" +
+                              nevr_asset_cache::Sha256Hex(particles_.data(), particles_.size()) + " pins="));
+  // The digests it compared against are the stock ones of this resource.
+  EXPECT_TRUE(TestLogContains("pins=7130808e89f3aa9400cb09fb7a30ca85c9a5a0be363557a647974ebd00283b8c,"
+                              "9f03344fa5e5ea183ffed2b42186a1fa6b7e214953dcbfa1c0308389e9f05750 "));
+  GameFinishesBuffer(kNetgunBulletType, kCombustion, 0, bullets_.data(), bullets_.size());
+  EXPECT_EQ(g_seenBuffer, bullets_.data());
+  EXPECT_TRUE(TestLogContains("resource=CR15NetBulletCR reason=not_pinned bytes=" + std::to_string(bullets_.size()) +
+                              " sha256=" + nevr_asset_cache::Sha256Hex(bullets_.data(), bullets_.size()) + " pins="));
+  EXPECT_TRUE(TestLogContains("pins=611f0ab4d6ada7f275ab1aaf974a08209d3c6e78e1a81b40c88fa11d9a215e6b "));
+  // Left alone means no rewrite was made or kept.
+  EXPECT_FALSE(TestLogContains("netgun bullet effects added"));
+}
+
+std::string FailedDigest(const void*, size_t) { return std::string(); }  // what Sha256Hex returns when CryptoAPI fails
+
+TEST_F(NetgunBulletTransforms, BytesWhoseDigestCannotBeComputedAreLeftAloneAndSayWhy) {
+  nevr_netgun_bullets::Install();
+  PinFixtures();  // the bytes are stock: only the digest of them fails
+  nevr_netgun_bullets::TestHook_SetDigest(&FailedDigest);
+  GameFinishesBuffer(kNetgunParticleType, kCombustion, 0, particles_.data(), particles_.size());
+  EXPECT_EQ(g_seenBuffer, particles_.data());
+  EXPECT_EQ(g_seenSize, particles_.size());
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "netgun bullet effects left off level=mpl_combat_combustion "
+                                     "resource=CParticleEffectCR reason=digest_failed bytes=" +
+                                         std::to_string(particles_.size()) + " ("));
+  // The failure is this machine's, not the data's: it is not reported as bytes that match no pin.
+  EXPECT_FALSE(TestLogContains("reason=not_pinned"));
+  EXPECT_FALSE(TestLogContains("netgun bullet effects added"));
+  // After a reset (which puts back the real digest), the same stock bytes are rewritten: nothing of the failed load
+  // was kept.
+  nevr_netgun_bullets::TestHook_Reset();
+  PinFixtures();
+  GameFinishesBuffer(kNetgunParticleType, kCombustion, 0, particles_.data(), particles_.size());
+  EXPECT_NE(g_seenBuffer, particles_.data());
+  EXPECT_TRUE(TestLogContains("netgun bullet effects added level=mpl_combat_combustion"));
+}
+
+TEST_F(NetgunBulletTransforms, ATransformGivenNoBufferServesNothingAndSaysSo) {
+  nevr_netgun_bullets::Install(&CaptureNetgunRegistration);
+  ASSERT_EQ(g_netgunRegistrations.size(), 10u);
+  const void* out = nullptr;
+  std::uint64_t outSize = 0;
+  const NetgunRegistration& r = g_netgunRegistrations[3];  // mpl_combat_dyson, CR15NetBulletCR
+  EXPECT_FALSE(r.transform(nullptr, 8, &out, &outSize, r.user));
+  EXPECT_TRUE(TestLogContainsAtLevel(
+      EchoVR::LogLevel::Warning,
+      "netgun bullet effects left off level=mpl_combat_dyson resource=CR15NetBulletCR reason=no_buffer bytes=8 ("));
+  ClearTestLogs();
+  EXPECT_FALSE(r.transform(bullets_.data(), 0, &out, &outSize, r.user));
+  EXPECT_TRUE(TestLogContains(
+      "netgun bullet effects left off level=mpl_combat_dyson resource=CR15NetBulletCR reason=no_buffer bytes=0"));
+  // An empty buffer is not compared with the pins: the no-buffer line is the only decision.
+  EXPECT_FALSE(TestLogContains("reason=not_pinned"));
+  EXPECT_EQ(out, nullptr);
+}
+
+TEST_F(NetgunBulletTransforms, APinnedResourceWithoutTheStockLayoutIsLeftAloneAndSaysWhy) {
+  nevr_netgun_bullets::Install();
+  const std::vector<std::uint8_t> patched = netgun_fixture::PatchedBullets();
+  nevr_netgun_bullets::TestHook_SetPins({}, {nevr_asset_cache::Sha256Hex(patched.data(), patched.size())});
+  GameFinishesBuffer(kNetgunBulletType, kDyson, 0, patched.data(), patched.size());
+  EXPECT_EQ(g_seenBuffer, patched.data());
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "netgun bullet effects left off level=mpl_combat_dyson resource=CR15NetBulletCR "
+                                     "reason=already_present sha256=" +
+                                         nevr_asset_cache::Sha256Hex(patched.data(), patched.size()) + " ("));
+  EXPECT_FALSE(TestLogContains("netgun bullet effects added"));
+}
+
+TEST_F(NetgunBulletTransforms, TheRewriteOfOneResourceIsNeverServedForTheOther) {
+  // The same bytes pinned for both resources: the particle rewrite is kept, and the bullet transform still reads the
+  // bytes as a CR15NetBulletCR (whose layout they do not have) instead of serving the particle rewrite.
+  nevr_netgun_bullets::Install();
+  const std::string sha = nevr_asset_cache::Sha256Hex(particles_.data(), particles_.size());
+  nevr_netgun_bullets::TestHook_SetPins({sha}, {sha});
+  GameFinishesBuffer(kNetgunParticleType, kDyson, 0, particles_.data(), particles_.size());
+  EXPECT_NE(g_seenBuffer, particles_.data());
+  GameFinishesBuffer(kNetgunBulletType, kDyson, 0, particles_.data(), particles_.size());
+  EXPECT_EQ(g_seenBuffer, particles_.data());
+  EXPECT_TRUE(TestLogContains("netgun bullet effects left off level=mpl_combat_dyson resource=CR15NetBulletCR "
+                              "reason=bad_header"));
+}
+
+TEST_F(NetgunBulletTransforms, AnotherLevelOrAnotherClassIsNotAnswered) {
+  nevr_netgun_bullets::Install();
+  PinFixtures();
+  GameFinishesBuffer(kNetgunParticleType, 0x1234, 0, particles_.data(), particles_.size());
+  EXPECT_EQ(g_seenBuffer, particles_.data());
+  GameFinishesBuffer(kNetgunParticleType + 1, kCombustion, 0, particles_.data(), particles_.size());
+  EXPECT_EQ(g_seenBuffer, particles_.data());
+  EXPECT_FALSE(TestLogContains("netgun bullet effects added"));
 }
 
 }  // namespace

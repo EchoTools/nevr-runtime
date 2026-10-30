@@ -637,6 +637,110 @@ TEST(DeviceAuthFlow, ServerRefusesBeforeAnyHttpBrowserUiOrPollOperation) {
   EXPECT_EQ(fake.save_calls, 0);
 }
 
+// ---- #1532: a server with no auth.password signs in by device code ----------------------------------------
+
+// The same flow a client runs, in server mode: the code is requested, shown once through the presenter, the poll
+// answers verified, the token is kept and the refresh token saved. No browser box is raised for a host with no screen.
+TEST(DeviceAuthFlow, AServerWithNoPasswordRunsTheFlowAndKeepsTheToken) {
+  FakeDeviceAuthFlow fake;
+  fake.poll_response = VerifiedPollResponse();
+  auto ops = fake.Ops();
+  ops.server_sign_in = true;
+  const auto result = nevr_token_auth::test_hook::RunDeviceAuthFlow(true, ExistingDeviceAuthState(), ops);
+
+  EXPECT_TRUE(result.success);
+  EXPECT_EQ(result.state.refresh_token, "new-refresh");
+  EXPECT_EQ(fake.request_calls, 1);
+  EXPECT_EQ(fake.ui_calls, 0);
+  EXPECT_EQ(fake.save_calls, 1);
+  ASSERT_EQ(fake.issued.size(), 1U);
+  EXPECT_EQ(fake.issued[0].first, fake.code);
+  ASSERT_EQ(fake.ends.size(), 1U);
+  EXPECT_EQ(fake.ends[0], nevr::auth::FlowEnd::Verified);
+}
+
+// The password path: a server that has one never asks for a code (the default of the hook's flag is the refusal).
+TEST(DeviceAuthFlow, AServerWithAPasswordStillRunsNoFlow) {
+  FakeDeviceAuthFlow fake;
+  fake.poll_response = VerifiedPollResponse();
+  const auto result = nevr_token_auth::test_hook::RunDeviceAuthFlow(true, ExistingDeviceAuthState(), fake.Ops());
+  EXPECT_FALSE(result.success);
+  EXPECT_EQ(fake.request_calls, 0);
+  EXPECT_TRUE(fake.issued.empty());
+}
+
+TEST(ServerSignInPrompt, TheConsoleLineCarriesTheCodeTheFullPageAndTheExpiry) {
+  const std::string line = nevr_token_auth::ServerSignInPromptLine("K7RX", "https://echovrce.com/device");
+  const nlohmann::json parsed = nlohmann::json::parse(line);
+  EXPECT_EQ(parsed.at("tag"), "NEVR.AUTH");
+  EXPECT_EQ(parsed.at("event"), "server_sign_in_code");
+  EXPECT_EQ(parsed.at("code"), "K7RX");
+  EXPECT_EQ(parsed.at("url"), "https://echovrce.com/device?code=K7RX");
+  EXPECT_EQ(parsed.at("expires_in_s"), 300);
+  EXPECT_NE(parsed.at("msg").get<std::string>().find("K7RX"), std::string::npos);
+  EXPECT_EQ(line.find('\n'), std::string::npos);
+}
+
+namespace {
+struct RenewHarness {
+  std::vector<nevr::auth::FlowEnd> script;  // what each attempt does, in order; the last is repeated
+  size_t attempts = 0;
+  std::vector<FlowClock::duration> sleeps;
+  std::vector<std::pair<nevr::auth::LogLevel, std::string>> logs;
+  nevr::auth::RenewPolicy policy;
+
+  bool Run() {
+    return nevr::auth::RunUntilApproved(
+        [this]() {
+          const nevr::auth::FlowEnd end = script[std::min(attempts, script.size() - 1)];
+          ++attempts;
+          nevr::auth::SignInAttempt attempt;
+          attempt.verified = end == nevr::auth::FlowEnd::Verified;
+          attempt.end = end;
+          return attempt;
+        },
+        [this](FlowClock::duration d) { sleeps.push_back(d); },
+        [this](nevr::auth::LogLevel level, const std::string& message) { logs.emplace_back(level, message); }, policy);
+  }
+};
+}  // namespace
+
+// A code that runs out is not the end of the wait: the server asks for a fresh one, as long as the host takes.
+TEST(ServerSignInWait, ACodeThatRunsOutIsReplacedUntilTheHostApproves) {
+  RenewHarness h;
+  h.script = {nevr::auth::FlowEnd::TimedOut, nevr::auth::FlowEnd::CodeExpired, nevr::auth::FlowEnd::TimedOut,
+              nevr::auth::FlowEnd::TimedOut, nevr::auth::FlowEnd::TimedOut, nevr::auth::FlowEnd::Verified};
+  EXPECT_TRUE(h.Run());
+  EXPECT_EQ(h.attempts, 6U);
+  EXPECT_TRUE(h.sleeps.empty());
+}
+
+// A service that does not answer ends the wait after the policy's failures in a row, with a pause between tries; an
+// expiry in between resets the count.
+TEST(ServerSignInWait, ASilentServiceEndsTheWaitAfterTheFailureLimit) {
+  RenewHarness h;
+  h.script = {nevr::auth::FlowEnd::NoCode};
+  EXPECT_FALSE(h.Run());
+  EXPECT_EQ(h.attempts, 3U);
+  EXPECT_EQ(h.sleeps.size(), 2U);
+  EXPECT_EQ(h.logs.back().first, nevr::auth::LogLevel::Error);
+}
+
+TEST(ServerSignInWait, AnExpiryBetweenFailuresResetsTheCount) {
+  RenewHarness h;
+  h.script = {nevr::auth::FlowEnd::NoCode, nevr::auth::FlowEnd::NoCode, nevr::auth::FlowEnd::TimedOut,
+              nevr::auth::FlowEnd::NoCode, nevr::auth::FlowEnd::Verified};
+  EXPECT_TRUE(h.Run());
+  EXPECT_EQ(h.attempts, 5U);
+}
+
+TEST(ServerSignInWait, ACancelledWaitIsNotRetried) {
+  RenewHarness h;
+  h.script = {nevr::auth::FlowEnd::Cancelled};
+  EXPECT_FALSE(h.Run());
+  EXPECT_EQ(h.attempts, 1U);
+}
+
 // ---- #397: what the player is shown while sign-in is pending ----------------------------------------
 
 namespace {

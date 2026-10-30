@@ -198,7 +198,11 @@ bool InstallMenuCardsHook() noexcept { return nevr_quest::menu_cards::Install();
 // network.invite_codes feature), so with the feature off it takes no answers and logs nothing.
 bool InstallWizardMetricHook() noexcept {
     const bool observer = nevr_quest::wizard_metric::Install();
-    nevr_quest_invite_join::RegisterAnswerApplier();
+    // A full frame dispatcher refuses the applier; the join then takes no answer, so the refusal is logged here.
+    if (!nevr_quest_invite_join::RegisterAnswerApplier()) {
+        sentinel::LogFields(sentinel::LogLevel::kWarn, "invite_answer_applier",
+                            {{"tag", "NEVR.INVITE"}, {"result", "off"}, {"reason", "frame_work_full"}});
+    }
     return observer;
 }
 

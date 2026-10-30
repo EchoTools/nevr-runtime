@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "runtime/patch/invite_config.h"
+#include "runtime/patch/invite_match_api.h"
 #include "runtime/patch/invite_service.h"
 #include "runtime/patch/invite_wizard.h"
 #include "runtime/tests/loopback_http_server.h"
@@ -299,4 +300,157 @@ TEST(InviteService, AHookThatRefusedToInstallKeepsTheServiceOffAndSaysWhy) {
   EXPECT_EQ(nevr_invite_service::Submit(Resolve()), Submit::NotConfigured);
   EXPECT_TRUE(Has(rig.Lines(), LogLevel::Info, "request not sent reason=not_configured code_len=8"));
   EXPECT_TRUE(server.Requests().empty());
+}
+
+// #1524: the frame path's take of a resolved match (nevr_invite_match::TakeResolvedMatch, invite_service.cpp), driven through
+// the real service and a loopback server. The match queue is process-wide, so every test drains it first and its Guard shuts
+// the service down. Falsifier: a Resolve Ok id not taken, taken twice, or taken from a Create or a non-Ok answer; a body that
+// is no match id dropped instead of taken as an empty id; a capacity too small taken as the id instead of length 0.
+namespace {
+
+constexpr const char* kMatchIdA = "2f1c9b0e-6a3d-4c58-9d11-0a7e5b3c4d21";
+constexpr const char* kMatchIdB = "0f8fad5b-d9cb-469f-a165-70867728950e";
+
+struct Taken {
+  bool ok = false;
+  std::string id;
+};
+
+Taken TakeMatch(std::size_t capacity = nevr_invite_match::kMaxMatchIdBytes) {
+  char buffer[nevr_invite_match::kMaxMatchIdBytes] = {};
+  std::size_t length = 99;
+  Taken taken;
+  taken.ok = nevr_invite_match::TakeResolvedMatch(buffer, capacity, &length);
+  if (taken.ok) taken.id.assign(buffer, length);
+  return taken;
+}
+
+void DrainMatches() {
+  while (TakeMatch().ok) {
+  }
+}
+
+nevr_invite::Plan CreatePlan() {
+  nevr_invite::Metric metric;
+  metric.kind = nevr_invite::Kind::Create;
+  return nevr_invite::PlanRequest(metric, {});
+}
+
+}  // namespace
+
+TEST(InviteMatch, AResolveOkIsTakenOnceAndThenNothingIsWaiting) {
+  DrainMatches();
+  Guard guard;
+  const std::string body = std::string(R"({"match_id":")") + kMatchIdA + R"("})";
+  LoopbackServer server({Script{Script::Kind::Reply, 200, body, ""}});
+  Rig rig;
+  nevr_invite_service::Start(rig.Settings(Switch::On, server.Base()));
+
+  ASSERT_EQ(nevr_invite_service::Submit(Resolve()), Submit::Queued);
+  ASSERT_TRUE(nevr_invite_service::WaitForAnswerPendingForTest(std::chrono::seconds(10)));
+  EXPECT_TRUE(nevr_invite_match::ResolvedMatchPending());
+
+  const Taken first = TakeMatch();
+  EXPECT_TRUE(first.ok);
+  EXPECT_EQ(first.id, kMatchIdA);
+  EXPECT_FALSE(nevr_invite_match::ResolvedMatchPending());
+  EXPECT_FALSE(TakeMatch().ok);
+}
+
+TEST(InviteMatch, TwoResolveOksAreTakenOneEachInTheOrderTheyArrived) {
+  DrainMatches();
+  Guard guard;
+  LoopbackServer server({Script{Script::Kind::Reply, 200, std::string(R"({"match_id":")") + kMatchIdA + R"("})", ""},
+                         Script{Script::Kind::Reply, 200, std::string(R"({"match_id":")") + kMatchIdB + R"("})", ""}});
+  Rig rig;
+  nevr_invite_service::Start(rig.Settings(Switch::On, server.Base()));
+
+  ASSERT_EQ(nevr_invite_service::Submit(Resolve()), Submit::Queued);
+  ASSERT_EQ(nevr_invite_service::Submit(Resolve()), Submit::Queued);
+  std::vector<std::string> ids;
+  for (int i = 0; i < 400 && ids.size() < 2; ++i) {
+    const Taken t = TakeMatch();
+    if (t.ok) {
+      ids.push_back(t.id);
+    } else {
+      std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+  }
+  EXPECT_EQ(ids, (std::vector<std::string>{kMatchIdA, kMatchIdB}));
+  EXPECT_FALSE(TakeMatch().ok);
+}
+
+// ParseResolved keeps only the UUID of a match id, so a body that parses is never longer than the 63-byte cap; a body that
+// does not parse is still one answer, taken as an empty id.
+TEST(InviteMatch, A200WhoseBodyIsNoMatchIdIsTakenAsAnEmptyIdNotDropped) {
+  DrainMatches();
+  Guard guard;
+  LoopbackServer server({Script{Script::Kind::Reply, 200, R"({"mode":"echo_arena"})", ""}});
+  Rig rig;
+  nevr_invite_service::Start(rig.Settings(Switch::On, server.Base()));
+
+  ASSERT_EQ(nevr_invite_service::Submit(Resolve()), Submit::Queued);
+  ASSERT_TRUE(nevr_invite_service::WaitForAnswerPendingForTest(std::chrono::seconds(10)));
+  const Taken got = TakeMatch();
+  EXPECT_TRUE(got.ok);
+  EXPECT_TRUE(got.id.empty());
+  EXPECT_FALSE(TakeMatch().ok);
+}
+
+// A Resolve answer that is not Ok (404 is Invalid) is answered but never taken as a match.
+TEST(InviteMatch, ANonOkResolveIsAnsweredButNotTaken) {
+  DrainMatches();
+  Guard guard;
+  LoopbackServer server({Script{Script::Kind::Reply, 404, R"({"message":"invalid"})", ""}});
+  Rig rig;
+  nevr_invite_service::Start(rig.Settings(Switch::On, server.Base()));
+
+  ASSERT_EQ(nevr_invite_service::Submit(Resolve()), Submit::Queued);
+  ASSERT_TRUE(nevr_invite_service::WaitForAnswerPendingForTest(std::chrono::seconds(10)));
+  EXPECT_FALSE(TakeMatch().ok);
+  EXPECT_FALSE(nevr_invite_match::ResolvedMatchPending());
+}
+
+// A Create answer carries a match id too; it is not a resolved match and is never taken as one.
+TEST(InviteMatch, ACreateAnswerWithAMatchIdIsIgnoredByTheResolveTake) {
+  DrainMatches();
+  Guard guard;
+  const std::string body = std::string(R"({"code":"K7M2Q","match_id":")") + kMatchIdA + R"("})";
+  LoopbackServer server({Script{Script::Kind::Reply, 200, body, ""}});
+  Rig rig;
+  nevr_invite_service::Start(rig.Settings(Switch::On, server.Base()));
+
+  const nevr_invite::Plan plan = CreatePlan();
+  ASSERT_EQ(plan.op, nevr_invite::Op::Create);
+  ASSERT_EQ(nevr_invite_service::Submit(plan), Submit::Queued);
+  ASSERT_TRUE(nevr_invite_service::WaitForAnswerPendingForTest(std::chrono::seconds(10)));
+  EXPECT_FALSE(TakeMatch().ok);
+}
+
+// The capacity is the caller's buffer: an id longer than it is taken as length 0, and still counts as one answer.
+TEST(InviteMatch, AnIdLongerThanTheCallersBufferIsTakenAsLengthZero) {
+  DrainMatches();
+  Guard guard;
+  const std::string body = std::string(R"({"match_id":")") + kMatchIdA + R"("})";
+  LoopbackServer server({Script{Script::Kind::Reply, 200, body, ""}});
+  Rig rig;
+  nevr_invite_service::Start(rig.Settings(Switch::On, server.Base()));
+
+  ASSERT_EQ(nevr_invite_service::Submit(Resolve()), Submit::Queued);
+  ASSERT_TRUE(nevr_invite_service::WaitForAnswerPendingForTest(std::chrono::seconds(10)));
+  const Taken got = TakeMatch(8);
+  EXPECT_TRUE(got.ok);
+  EXPECT_TRUE(got.id.empty());
+  EXPECT_FALSE(TakeMatch().ok);
+}
+
+// Nothing waiting: false, with no service started, and a null output or length is refused without a take.
+TEST(InviteMatch, NothingWaitingIsFalseAndANullArgumentIsRefused) {
+  DrainMatches();
+  EXPECT_FALSE(TakeMatch().ok);
+  EXPECT_FALSE(nevr_invite_match::ResolvedMatchPending());
+  std::size_t length = 0;
+  char buffer[8] = {};
+  EXPECT_FALSE(nevr_invite_match::TakeResolvedMatch(nullptr, sizeof buffer, &length));
+  EXPECT_FALSE(nevr_invite_match::TakeResolvedMatch(buffer, sizeof buffer, nullptr));
 }

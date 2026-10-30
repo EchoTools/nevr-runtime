@@ -76,4 +76,25 @@ struct DeviceFlowResult {
 // poll, sleep and log; returns unverified (and logs if it can) when one is missing.
 DeviceFlowResult RunDeviceCodeFlow(const DeviceFlowOps& ops, const std::string& login_url);
 
+// A dedicated server with no password waits at its code prompt until the host approves it (#1532). One attempt is one
+// RunDeviceCodeFlow; this keeps asking until an attempt is verified. A code that ran out (CodeExpired, TimedOut) costs
+// nothing: the next attempt asks for a fresh one, as the Quest session does, for as long as the host takes. A code that
+// could not be requested or a wait that lost the service (NoCode, PollErrors) is a failed attempt, retried after
+// `retry_delay`; `max_consecutive_failures` of them in a row end the wait, so a service that is down is reported, not
+// waited on for ever. Cancelled and BrowserFailed end it at once.
+struct SignInAttempt {
+  bool verified = false;
+  FlowEnd end = FlowEnd::Cancelled;  // how the attempt ended; read when !verified
+};
+
+struct RenewPolicy {
+  unsigned max_consecutive_failures = 3;
+  DeviceFlowOps::Clock::duration retry_delay = std::chrono::seconds(5);
+};
+
+// True once an attempt was verified; false when the wait ended on a failure (logged through `log` with the cause).
+bool RunUntilApproved(const std::function<SignInAttempt()>& attempt,
+                      const std::function<void(DeviceFlowOps::Clock::duration)>& sleep,
+                      const std::function<void(LogLevel, const std::string&)>& log, const RenewPolicy& policy = {});
+
 }  // namespace nevr::auth

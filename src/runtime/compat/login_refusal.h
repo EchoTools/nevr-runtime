@@ -27,11 +27,17 @@ namespace nevr_login_refusal {
 inline constexpr std::string_view kDiscordIdKey = "identity.discord_id";
 inline constexpr std::string_view kPasswordKey = "auth.password";
 
-// The keys of the server credential that are unset or empty. Empty result: the server has a credential.
+// A server signs in one of two ways (#1532). With auth.password set it presents identity.discord_id and the
+// password. With none it signs in by device code, like a client: token-auth prints the code and the page on the
+// console, waits for the approval and the bridge presents the token it got.
+inline bool ServerSignsInByDeviceCode(std::string_view password) { return password.empty(); }
+
+// The keys of the password credential that are unset or empty: only identity.discord_id, and only for a server that
+// has a password. Empty result: the password credential is complete, or the server signs in by device code.
 inline std::vector<std::string> MissingServerCredentialKeys(std::string_view discordId, std::string_view password) {
   std::vector<std::string> missing;
+  if (ServerSignsInByDeviceCode(password)) return missing;
   if (discordId.empty()) missing.emplace_back(kDiscordIdKey);
-  if (password.empty()) missing.emplace_back(kPasswordKey);
   return missing;
 }
 
@@ -70,8 +76,23 @@ inline std::string NoCredentialCause(const std::vector<std::string>& missing, st
          ConfigSourceText(configSource) + "; set " + keys + " in config.yaml";
 }
 
-// The one stop line of a server whose credential the community service refused.
-inline std::string RefusedLoginCause(int httpStatus, std::string_view configSource) {
+// The one stop line of a server with no password whose device sign-in ended without a token: the code was not
+// approved in time, or the service could not be asked. The operator reads what to do.
+inline std::string NoSignInCause(std::string_view configSource) {
+  return "server login refused: " + std::string(kPasswordKey) +
+         " is not set and the device sign-in ended without a token; config: " + ConfigSourceText(configSource) +
+         "; approve the code printed on the console within 5 minutes, or set " + std::string(kDiscordIdKey) +
+         " and " + std::string(kPasswordKey) + " in config.yaml";
+}
+
+// The one stop line of a server whose credential the community service refused. `deviceSignIn`: the server had no
+// password and presented its device sign-in token, so the config keys are not what to check.
+inline std::string RefusedLoginCause(int httpStatus, std::string_view configSource, bool deviceSignIn = false) {
+  if (deviceSignIn) {
+    return "server login refused: the service refused the device sign-in token (HTTP " + std::to_string(httpStatus) +
+           "); config: " + ConfigSourceText(configSource) +
+           "; delete .credentials.json beside config.yaml and start the server to sign in again";
+  }
   return "server login refused: the service refused the credential (HTTP " + std::to_string(httpStatus) +
          "); config: " + ConfigSourceText(configSource) + "; check " + std::string(kDiscordIdKey) + " and " +
          std::string(kPasswordKey) + " in config.yaml";

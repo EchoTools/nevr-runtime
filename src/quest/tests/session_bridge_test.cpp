@@ -760,7 +760,9 @@ void TestReconnectedLoginSocketIsToldItsLoginWasRemoved() {
 // 42, the local account 5, so two members and not the leader). The record from lobby= on is the golden line's with that
 // party, and its request is the find, aged on the production clock. Caught: the records off (no line at all), the party
 // source missing (the fields say unknown), and a party field read wrongly (the size, the id, the leader).
-void TestLobbySuccessReachingTheGameIsRecorded() {
+// With the social facade not installed (partySource false) the state is still set, but the record must say unknown:
+// nothing feeds that state in a run without the facade, so its contents are not the client's party (#1525).
+void CheckLobbySuccessRecord(bool partySource) {
   nevr_social_party::State& party = nevr_social_party::Global();
   party.SetSelf(5);
   {
@@ -770,6 +772,7 @@ void TestLobbySuccessReachingTheGameIsRecorded() {
     QCHECK(party.Feed(nevr_social_party::ReplySymbol("PartyJoinSuccess"),
                       reinterpret_cast<const std::uint8_t*>(joined.data()), joined.size(), 0, nullptr));
   }
+  quest_net::SetLobbyPartySource(partySource);
   FakeConnector connector;
   Observed seen;
   SessionBridge::Config cfg = MakeConfig(&connector, &seen, "JWT-A");
@@ -834,9 +837,11 @@ void TestLobbySuccessReachingTheGameIsRecorded() {
   // ms (300 ms or more, and well under the limit of a minute).
   std::string golden = lobby_record_golden::kSuccessNoRequestNoParty;
   const std::string noParty = "party_id=none party_size=0 party_leader=no";
+  const std::string expectedParty =
+      partySource ? "party_id=7 party_size=2 party_leader=no" : "party_id=unknown party_size=unknown party_leader=unknown";
   const std::size_t noPartyAt = golden.find(noParty);
   QCHECK(noPartyAt != std::string::npos);
-  if (noPartyAt != std::string::npos) golden.replace(noPartyAt, noParty.size(), "party_id=7 party_size=2 party_leader=no");
+  if (noPartyAt != std::string::npos) golden.replace(noPartyAt, noParty.size(), expectedParty);
   const std::string requestKey = " last_request=";
   const std::size_t goldenTail = golden.find(" lobby=");
   const std::size_t goldenRequest = golden.find(requestKey);
@@ -860,7 +865,12 @@ void TestLobbySuccessReachingTheGameIsRecorded() {
     QCHECK(ms >= 300 && ms < 60000);
   }
   party.ResetParty();  // the state is process-wide: leave it as the other tests found it
+  quest_net::SetLobbyPartySource(false);
 }
+
+void TestLobbySuccessReachingTheGameIsRecorded() { CheckLobbySuccessRecord(true); }
+
+void TestLobbySuccessWithoutAPartySourceSaysUnknown() { CheckLobbySuccessRecord(false); }
 
 int main() {
   TestUpgradeKeepsCloseFrameSentWithResponse();
@@ -876,6 +886,7 @@ int main() {
   TestSideChannelRefusesWhenNothingIsConnected();
   TestReconnectedLoginSocketIsToldItsLoginWasRemoved();
   TestLobbySuccessReachingTheGameIsRecorded();
+  TestLobbySuccessWithoutAPartySourceSaysUnknown();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "session_bridge_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

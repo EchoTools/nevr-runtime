@@ -773,12 +773,16 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
   original_ = prepared.original;
   restoreReadOnly_ = prepared.resolution.restoreReadOnly;
   installed_ = true;
-  char vaddr[19], bias[19];
+  // The slot's previous value, as an offset from the module's load bias, so a build can be compared with the
+  // previous one (#1530): the same function sits at the same offset in two builds of the same module.
+  char vaddr[19], bias[19], originalOffset[19];
   LogFields(LogLevel::kInfo, "got_hook",
             {{"op", "install"}, {"status", "ok"}, {"module", target.module},
              {"symbol", target.symbol}, {"reloc", RelocKindName(target.kind)},
              {"slot_vaddr", HexString(vaddr, prepared.resolution.slotVaddr)},
-             {"load_bias", HexString(bias, image_.base)}});
+             {"load_bias", HexString(bias, image_.base)},
+             {"original_offset",
+              HexString(originalOffset, reinterpret_cast<std::uintptr_t>(original_) - image_.base)}});
   return GotStatus::kOk;
 }
 
