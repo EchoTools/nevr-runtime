@@ -123,6 +123,21 @@ TEST(LoginRefusalCause, TheRefusedCauseIsOneLineAndNamesNoConfigWhenNoneWasFound
   EXPECT_NE(cause.find("config: none found"), std::string::npos) << cause;
 }
 
+// #1293: the client's refusal line names the status, the config loaded and the next step, on one line.
+TEST(LoginRefusalCause, TheClientCauseNamesTheStatusTheConfigAndTheNextStep) {
+  const std::string cause = nevr_login_refusal::ClientRefusedCause(401, "C:\\nevr\\config.yaml");
+  EXPECT_EQ(cause.find('\n'), std::string::npos) << cause;
+  EXPECT_NE(cause.find("HTTP 401"), std::string::npos) << cause;
+  EXPECT_NE(cause.find("config: C:\\nevr\\config.yaml"), std::string::npos) << cause;
+  EXPECT_NE(cause.find("restart Echo VR"), std::string::npos) << cause;
+  EXPECT_EQ(cause.find("identity.discord_id"), std::string::npos) << cause;
+}
+
+TEST(LoginRefusalCause, TheClientCauseNamesNoConfigWhenNoneWasFound) {
+  const std::string cause = nevr_login_refusal::ClientRefusedCause(403, "");
+  EXPECT_NE(cause.find("config: none found"), std::string::npos) << cause;
+}
+
 TEST(LoginRefusalConfigSource, ALoadedConfigIsNamedByItsPath) {
   EXPECT_EQ(DescribeConfigSource("C:\\nevr\\_local\\config.yaml", {"C:\\x", "C:\\y"}), "C:\\nevr\\_local\\config.yaml");
 }
