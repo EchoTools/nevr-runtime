@@ -969,6 +969,19 @@ class FailurePaths(RollbackCase):
         self.assertIn("RELEASE_TRAIN is false", err)
         self.assertIn("cannot write the log", err)
 
+    def test_a_log_that_fails_every_record_still_gets_the_report_out_without_raising(self) -> None:
+        class Dead(rollback_beta.Log):
+            def event(self, event: str, **fields: object) -> None:
+                if event != "start":
+                    raise rollback_beta.Failure("cannot write the log: gone (test)")
+                super().event(event, **fields)
+
+        with mock.patch.object(rollback_beta, "Log", Dead):
+            code, out, err = self.run_inproc("v5.17.0", "--live", "--yes")
+        self.assertNotEqual(code, 0)
+        self.assertEqual(err.count("cannot write the log: gone (test)"), 2, err)
+        self.assertEqual(self.gh_calls("workflow", "run"), [])
+
     def test_a_log_that_cannot_be_closed_does_not_raise_and_fails_a_good_run(self) -> None:
         class Closing(rollback_beta.Log):
             def close(self) -> None:
