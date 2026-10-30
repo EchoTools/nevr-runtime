@@ -262,6 +262,11 @@ VOID PatchEnableHeadless(PVOID pGame) {
   // due to /SUBSYSTEM:WINDOWS. Attaching multiple processes would be problematic.
   AllocConsole();
 
+  // Log() writes UTF-8 (its em dashes are E2 80 94). A console's output code
+  // page defaults to the OEM page (437), which draws those bytes as "ΓÇö", so
+  // set the page to UTF-8 once, here, where the console is made (#1295).
+  SetConsoleOutputCP(CP_UTF8);
+
   // Redirect standard streams to the new console
   FILE* fConsole = nullptr;
   freopen_s(&fConsole, "CONIN$", "r", stdin);
