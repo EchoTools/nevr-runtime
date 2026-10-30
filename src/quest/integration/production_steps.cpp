@@ -31,6 +31,7 @@
 #include "quest/integration/identity_source.h"
 #include "quest/integration/libr15_attach_step.h"
 #include "quest/integration/post_load.h"
+#include "quest/integration/hook_registry_check.h"
 #include "quest/integration/self_check_wiring.h"
 #include "quest/integration/stage_log.h"
 #include "quest/integration/social_shim.h"
@@ -665,6 +666,11 @@ class ProductionSteps final : public Steps {
       nevr_self_check::Register({"matchmaking_reload_redirect",
                                  "the matchmaking redirect is installed on every libpnsradmatchmaking image the game mapped (installs >= images)",
                                  &MatchmakingReloadProbe});
+      // A hook the registry had no room for is not installed (#1618 starved the matchmaking redirect that way): the result
+      // fails, naming the hook that lost, the first time it is polled after a refusal.
+      nevr_self_check::Register({nevr_quest::integration::kHookRegistryCheckName,
+                                 nevr_quest::integration::kHookRegistryCheckExpected,
+                                 &nevr_quest::integration::HookRegistryProbe});
     }
     config.connector = rt.connector.get();
     config.log = RouterLog();
@@ -838,6 +844,27 @@ void ShutdownIntegration() noexcept {
   }
 }
 
+namespace {
+
+// One line when the constructor's sequence is done: Error, with the names, when a hook lost for want of room in the registry
+// (got_hook.h); Info with the counts otherwise. Hooks that install after the game loads its libraries (the login, the
+// matchmaking redirect) come later: their refusal is the registry's own Error line and the self-check's result.
+void LogRegistrySummary() noexcept {
+  try {
+    const sentinel::RegistryStats stats = sentinel::RegistrySnapshot();
+    const std::string text = DescribeRegistry(stats);
+    sentinel::LogFields(stats.refused == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "hook_registry",
+                        {{"action", "summary"}, {"status", stats.refused == 0 ? "ok" : "refused"},
+                         {"capacity", static_cast<long long>(stats.capacity)}, {"used", static_cast<long long>(stats.used)},
+                         {"high_water", static_cast<long long>(stats.highWater)},
+                         {"refused", static_cast<long long>(stats.refused)}, {"detail", text.c_str()}});
+  } catch (const std::exception&) {
+    sentinel::EmitFixed(nevr_quest::LogLevel::kError, "hook registry summary could not be written");
+  }
+}
+
+}  // namespace
+
 void RunSentinelConstructor() noexcept {
   ProductionSteps steps;
   const ConstructorReport report = RunConstructorSequence(steps);
@@ -850,6 +877,7 @@ void RunSentinelConstructor() noexcept {
       case StepState::kThrew: ++failed; break;
     }
   }
+  LogRegistrySummary();  // before the done line: a hook the registry refused is named at Error, not buried in the counts
   sentinel::LogFields(sentinel::LogLevel::kInfo, "sentinel_ctor",
                       {{"action", "done"}, {"steps_ok", ok}, {"steps_failed", failed}, {"steps_skipped", skipped}});
 }

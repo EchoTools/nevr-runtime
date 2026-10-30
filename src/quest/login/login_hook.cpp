@@ -566,7 +566,8 @@ InstallState TryInstallLoginHook(IdentitySource* source, const BuildInfo& build,
   const sentinel::GotTarget target(kPnsovr, kHookedSymbol, sentinel::RelocKind::kJumpSlot,
                                    kPnsovrBuildId, kHookedSlotVaddr,
                                    reinterpret_cast<const void*>(image.base + kOwnSendLogInRequestVaddr));
-  if (sentinel::InstallThunk<LoginThunk>(G().hook, target) != sentinel::GotStatus::kOk) {
+  // Critical: the registry's reserve is for the hooks the game cannot be played on the community service without (got_hook.h).
+  if (sentinel::InstallThunk<LoginThunk>(G().hook, target.Critical()) != sentinel::GotStatus::kOk) {
     LoginThunk::Disarm();
     g_published.store(nullptr, std::memory_order_release);
     return refuse(InstallState::HookFailed, "got_backend");

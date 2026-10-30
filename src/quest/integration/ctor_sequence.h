@@ -44,7 +44,10 @@
 //                                    slot, on every launch, right after the OBB skip; no counters
 //      InstallCrashFirst             our crash handler stays first (#1605): two libr15 slots (libc sigaction and signal), on
 //                                    every launch, right after the process-end hook; no counters. The game installs its own crash
-//                                    handler after the constructor, and the hook keeps that request from displacing ours
+//                                    handler after the constructor, and the hook keeps that request from displacing ours. The
+//                                    step also makes the dlopen hook live (idempotent: InstallDlopenHook below finds it
+//                                    installed) so the same two slots of libpnsrad, libpnsradmatchmaking and libpnsovr are hooked
+//                                    when the game loads them
 //      InstallPermissionWait         the game waits for the storage permission it just asked for (#640): one
 //                                    libr15 slot (CSysInfo::RequestPermissions), on every launch, right after
 //                                    the process-end hook; no counters
@@ -119,6 +122,13 @@
 // "redirect-through-the-bridge" is the redirect when the bridge feature is effective: a redirect that
 // points the game at a loopback port nobody listens on, or straight at a TLS endpoint the game cannot
 // speak, is worse than leaving the game's own hosts.
+//
+// The hook registry (sentinel/got_hook.h) is sized for every hook the build declares (sentinel/hook_budget.h), and the login
+// and matchmaking-redirect hooks take their entries from a reserve the others cannot use. That is what keeps them installable
+// whatever the order above installs the rest in: they install after the game loads libpnsrad* (step 11 and the dlopen hook),
+// long after this sequence filled the registry with the libr15 hooks, the crash handler's among them, so no order of the steps
+// can put them first. A hook refused for want of room is an Error line naming it, a `hook_registry` summary line when this
+// sequence is done, and the self-check `hook_registry_has_room` (integration/hook_registry_check.h).
 //
 // Nothing here blocks: no step waits on the network, a thread or a lock held by the game.
 #pragma once
@@ -250,8 +260,8 @@ class Steps {
   virtual bool InstallObbSkip(bool countersRegistered) = 0;
   // The process ends when the game's android_main returns (#621): one libr15 slot, on every launch.
   virtual bool InstallProcessEnd() = 0;
-  // Our crash handler stays first (#1605): libr15's sigaction and signal slots, on every launch. True when both slots hold
-  // their thunks.
+  // Our crash handler stays first (#1605): libr15's sigaction and signal slots, on every launch, and the dlopen hook that hooks
+  // the provider libraries' slots when they load. True when both libr15 slots hold their thunks and the dlopen hook is live.
   virtual bool InstallCrashFirst() = 0;
   // The game waits for the storage permission it just asked for (#640): one libr15 slot, on every launch.
   virtual bool InstallPermissionWait() = 0;

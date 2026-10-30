@@ -115,7 +115,8 @@ template <typename Thunk>
 bool Install(sentinel::GotHook& hook, const sentinel::HookRecord<Thunk>& record, const T::PinnedSlot& slot,
              std::uintptr_t base) {
   Thunk::Arm(record);
-  if (sentinel::InstallThunk<Thunk>(hook, T::TargetFor(slot, base)) == sentinel::GotStatus::kOk) return true;
+  // Critical, like the login hook these answers belong to: the registry's reserve (got_hook.h).
+  if (sentinel::InstallThunk<Thunk>(hook, T::TargetFor(slot, base).Critical()) == sentinel::GotStatus::kOk) return true;
   Thunk::Disarm();
   return false;
 }

@@ -28,6 +28,8 @@
 #include "permission_request.h"
 #include "permission_wait_hook.h"
 #include "crash_first_hook.h"
+#include "quest/integration/dlopen_hook.h"
+#include "quest/integration/post_load.h"
 #include "pns_provider_hook.h"
 #include "process_end_hook.h"
 #include "quit_hook.h"
@@ -122,9 +124,18 @@ bool InstallObbSkipHook(bool countersRegistered) noexcept {
 void SetProcessEndCallback(void (*callback)() noexcept) noexcept { nevr_quest::process_end::SetBeforeExit(callback); }
 bool InstallProcessEndHook() noexcept { return nevr_quest::process_end::Install(); }
 
-// Our crash handler stays first (#1605): libr15's sigaction and signal slots keep the game's crash handler from displacing it.
-// A refused install is logged by GotHook and leaves the game's calls intact.
-bool InstallCrashFirstHook() noexcept { return nevr_quest::crash_first::Install(); }
+// Our crash handler stays first (#1605): libr15's sigaction and signal slots keep the game's crash handler from displacing it,
+// and the dlopen hook (live on every launch from here) hooks the same two slots of libpnsrad, libpnsradmatchmaking and
+// libpnsovr when the game loads them. A refused install is logged by GotHook and leaves the game's calls intact.
+bool InstallCrashFirstHook() noexcept {
+    const bool slots = nevr_quest::crash_first::Install();
+    nevr_quest::integration::SetModuleLoadedObserver(&nevr_quest::crash_first::OnModuleLoaded);
+    sentinel::GotStatus status = sentinel::GotStatus::kNotInstalled;
+    const bool dlopenLive = nevr_quest::integration::InstallDlopenHook(&status) == nevr_quest::integration::DlopenInstall::kOk;
+    sentinel::LogFields(dlopenLive ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "crash_first_late_install",
+                        {{"result", dlopenLive ? "armed" : "dlopen_hook_refused"}, {"status", sentinel::GotStatusName(status)}});
+    return slots && dlopenLive;
+}
 
 namespace {
 // The game's permission request on its own activity, with the hook's request code (#947): the activity is the one
