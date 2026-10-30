@@ -645,13 +645,13 @@ inline GotTarget CrashLateSignal(const CrashLateModule& m) {
 
 // libr15.so's slot for CJson::TString, defined in libr15 itself (JUMP_SLOT 0x36ebe08).
 inline GotTarget LibR15TString() {
-  return {kLibR15, kTStringSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36ebe08ULL};
+  return GotTarget{kLibR15, kTStringSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36ebe08ULL}.ServiceSide();  // #1737
 }
 
 // libr15.so's slot for CSysHttp::CreateConnection(unsigned long&, char const*), defined in libr15 itself
 // (JUMP_SLOT 0x36e8028, readelf -rW on the pinned image).
 inline GotTarget LibR15CreateConnection() {
-  return {kLibR15, kCreateConnectionSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36e8028ULL};
+  return GotTarget{kLibR15, kCreateConnectionSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36e8028ULL}.ServiceSide();  // #1737
 }
 
 // libr15.so's slot for CR15NetGame::SetDelimitedErrorMessage, defined in libr15 itself
