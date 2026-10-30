@@ -186,7 +186,8 @@ last entry names (smoke / buff / point) before it writes anything.
 
 - `re33_ec_page` exists always (zeroed page: every EC script decides as on a PC without the EC network client). Nothing else happens with no
   switch (`ec.on`, `ec_preset1.on`, `ec_preset2.on`, `ec_preset3.on` in the plugin data directory; or `Q15T_EC_DEFAULT_WORDS` at build time):
-  one INFO "ec: off" line and no word swapped.
+  one INFO "ec: off" line and no word swapped. `ec.off` in the plugin data directory is the kill file: it keeps ec off even when the
+  build has default words or `ec.on` / a preset file is there (one INFO "ec: off" line naming `kill_file=ec.off`, no word swapped).
 - Switch on: the page line is logged; recvfrom/sendto are swapped (both or none). The main thread ticks every 5 ms: the use counters
   on the page become 16-byte EC network packets sent twice to the server (the busiest sendto destination of the last second); 'H' hello
   every 2 s; the server's 'A' answer (only from the current server, within 6000 ms) sets the page's has-EC flag; 'T'/'V'/'P'/'O' tokens

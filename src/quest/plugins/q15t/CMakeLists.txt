@@ -29,7 +29,8 @@ option(Q15T_IMPACTSND "impactsnd (R12-R15): the impact table gets its Wwise ids.
 # EC and ECFX: compiled in by default and inert until the source build's own switch file exists in the plugin data directory (ec.on,
 # ec_preset1.on, ec_preset2.on, ec_preset3.on; neutronfx.on for ecfx), or Q15T_EC_DEFAULT_WORDS names words. The doc states no option default; the
 # source build gates them by those files, so ON with no switch file installs no word (it publishes the zeroed re33_ec_page and logs "ec: off").
-option(Q15T_EC "ec (R43...): the EC network client, EC token page, tac-mod store/hide. Switch files in the data directory" ON)
+# Kill file ec.off in the data directory keeps ec off whatever else is set (module_switch.h convention, as decals.off / pfx.off).
+option(Q15T_EC "ec (R43...): the EC network client, EC token page, tac-mod store/hide. Switch files in the data directory; kill file ec.off" ON)
 option(Q15T_ECFX "ecfx: NEUTRON wall-effect queue drain on ec's net tick; needs Q15T_EC. Switch file neutronfx.on" ON)
 set(Q15T_EC_DEFAULT_WORDS "types=VPTO equip hide" CACHE STRING "ec: the words used when no ec switch file exists (empty: ec stays off without a file). Default = the source build's latest on-list preset ec_preset3 (ec_preset3.on)")
 option(Q15T_ECFX_DEFAULT_ON "ecfx: on with no neutronfx.on file (the source build's on-list ships neutronfx.on)" ON)
