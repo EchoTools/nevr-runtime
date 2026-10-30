@@ -154,6 +154,30 @@ class LocalDevPackageTest(PackageFixture):
                        "adb install"):
             self.assertIn(needle, notes)
 
+    def test_the_notes_list_the_files_the_zip_really_holds_and_name_each_signed_file(self):
+        """#1492: the tester notes' zip row and signing sentence are the zip's real file set, both installer names included."""
+        result = self.run_tool()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        zip_path = self.out / "nevr-runtime-v5.0.1-dev.3-3a35e0b-windows.zip"
+        with zipfile.ZipFile(zip_path) as z:
+            held = set(z.namelist())
+        notes = (self.out / "RELEASE-NOTES.md").read_text()
+        row = next(line for line in notes.splitlines() if line.startswith(f"| `{zip_path.name}`"))
+        self.assertEqual(set(re.findall(r"`([^`]+)`", row.split("|", 3)[2])), held)
+        signing = next(line for line in " ".join(notes.split("\n")).split(". ") if "separate signing step may sign" in line)
+        signed = {name for name in held if name.endswith((".dll", ".exe", ".ps1"))}
+        self.assertEqual(set(re.findall(r"`([^`]+)`", signing)), signed)
+
+    def test_the_template_without_a_quest_apk_lists_the_zips_file_set_too(self):
+        values = {"VERSION": "5.0.0", "COMMIT": COMMIT, "ZIP": "z.zip", "APK": "q.apk", "QUEST": "q.so", "SHA_ZIP": "0" * 64,
+                  "SHA_QUEST": "1" * 64, "PLAYER_LINE": "x"}
+        notes = package_release.render(PACKAGE / "RELEASE-NOTES.template.md", values, apk=False)
+        row = next(line for line in notes.splitlines() if line.startswith("| `z.zip`"))
+        listed = set(re.findall(r"`([^`]+)`", row.split("|", 4)[3]))
+        self.assertEqual(listed, {"BugSplat64.dll", "nevr-runtime.dll", "echovr_server.exe", "install-nevr-runtime.exe",
+                                  "nevr-install.exe", "install.ps1", "uninstall.ps1", "quest-diagnose.ps1", "README.txt",
+                                  "SIGNING.txt", "SHA256SUMS"})
+
     def test_a_local_run_refuses_a_binary_stamped_as_a_release(self):
         self.runtime.write_bytes(binary(RELEASE))
         result = self.run_tool()

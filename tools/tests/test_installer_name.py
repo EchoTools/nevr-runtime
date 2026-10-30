@@ -18,7 +18,7 @@ NEW = "install-nevr-runtime"
 OLD = "nevr-install"
 
 # Files that may say the old name as the binary, and why: the packaging step and its gate (tools/package_release.py,
-# the tree-stage verify_symbols.py check, build.yml's cp, the package-dev recipe), the one README.txt sentence, and
+# the tree-stage verify_symbols.py check, build.yml's cp, the package-dev recipe), the one README.txt sentence, the tester notes' list of the zip's files, and
 # RELEASING.md's lifecycle paragraph. Tests are not scanned: they assert on the old name.
 OLD_NAME_ALLOWED = {
     ".github/workflows/build.yml",
@@ -26,6 +26,7 @@ OLD_NAME_ALLOWED = {
     "RELEASING.md",
     "tools/package_release.py",
     "tools/package-release/README.template.txt",
+    "tools/package-release/RELEASE-NOTES.template.md",
     "tools/verify_symbols.py",
 }
 # Not the binary: the data names above, the record owner constant, the cargo package (the library and header keep their

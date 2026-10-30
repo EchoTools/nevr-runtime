@@ -93,6 +93,18 @@ class ReleaseWorkflowInstallerSymbolsTest(unittest.TestCase):
         self.assertIn('cp "$installer" "$(dirname "$installer")/nevr-install.exe"', recipe)
         self.assertIn('--installer-compat-exe "$(dirname "$installer")/nevr-install.exe"', recipe)
 
+    def test_the_release_tree_is_checked_for_stripped_binaries_after_the_copy_and_before_the_seal(self):
+        """#1492: the copy's byte-identity and its lack of a .dbg are checked by this step, so it must run, on the tree the
+        gate assembled (which holds the cp), before that tree is uploaded for the signer and the seal job."""
+        order, steps = self.steps()
+        gate, check = "Gate and assemble the release tree", "Verify the Windows tree ships only stripped binaries"
+        self.assertRegex(steps[check], r'python3 tools/verify_symbols\.py --tree release-stage/nevr-runtime-v\*-windows "dist/symbols/\$name"\n')
+        self.assertNotRegex(steps[check], r"(?m)^\s*(true|:|exit 0)\s*$")
+        self.assertIn("if: steps.release.outputs.version != ''", steps[check])
+        self.assertLess(steps[gate].index('cp "$installer"'), steps[gate].index("package_release.py tree"))
+        for earlier, later in ((gate, check), (check, "Upload the release tree"), ("Upload the release tree", "Seal the release")):
+            self.assertLess(order.index(earlier), order.index(later), f"{earlier!r} runs before {later!r}")
+
     def test_the_symbol_check_pairs_the_installer_with_its_symbol_file(self):
         body = self.steps()[1]["Verify the symbol files match the stripped binaries"]
         self.assertRegex(body, r'verify_symbols\.py "\$installer" "dist/symbols/\$name/install-nevr-runtime\.exe\.dbg"')
@@ -380,6 +392,16 @@ class StrippedBinaryMatchesItsSymbolsTest(unittest.TestCase):
         result = self.tree_run(package, symbols)
         self.assertEqual(result.returncode, 1)
         self.assertIn("nevr-install.exe: install-nevr-runtime.exe is not in the package", result.stderr)
+
+    def test_a_copy_named_like_the_old_installer_in_a_subfolder_is_an_ordinary_pe_and_needs_its_own_symbol_file(self):
+        """The exemption is for the package's top level, where the zip holds the copy; elsewhere the name proves nothing."""
+        package, symbols = self.tree()
+        installer = self.installer_pair(package, symbols)
+        (package / "sub").mkdir()
+        shutil.copy(installer, package / "sub" / "nevr-install.exe")
+        result = self.tree_run(package, symbols)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("sub/nevr-install.exe: no symbol file", result.stderr)
 
     def test_an_empty_package_tree_is_refused(self):
         package, symbols = self.tree()
