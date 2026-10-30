@@ -26,6 +26,8 @@
 #include "runtime/patch/invite_wizard_hook.h"
 #include "runtime/patch/arena_public_clock.h"
 #include "runtime/patch/coop_ai_trace.h"
+#include "runtime/patch/server_bots_install.h"
+#include "runtime/patch/server_team_size_install.h"
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/ext/plugin_trust.h"
 #include "runtime/ext/self_provenance.h"
@@ -675,15 +677,19 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   }
 
   // #906, #1156, ADR 0017: observe the CREATE GAME / JOIN VIA CODE wizard's click metric. Client only. A typed code is
-  // posted to the game service when network.invite_codes is on (the service below), and so is a create; the answer is
-  // written into the menu by nevr_invite_apply::OnFrame (frame/tick.cpp). The hook forwards every submit unchanged.
+  // posted to the game service when network.invite_codes is on (the service below; on unless the config says off), and so is
+  // a create; the answer is written into the menu by nevr_invite_apply::OnFrame (frame/tick.cpp). The hook forwards every
+  // submit unchanged.
   if (!g_isServer) {
     // The observers install before the service starts, so the service's start line says whether they did: a refused observer
     // keeps the service off (its own Warning carries the address and the bytes; patch/invite_service.h).
     const bool choiceInstalled = nevr_invite_choice_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
     const bool wizardInstalled = nevr_invite_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
     nevr_invite_service::Settings invite;
-    invite.invite_codes = nevr_invite::ParseSwitch(NevrCfgGetFlat("nevr_invite_codes"));
+    const char* inviteText = NevrCfgGetFlat("nevr_invite_codes");  // null when absent; the service says which in its start line
+    const bool inviteStructured = NevrCfgGetFlatIsStructured("nevr_invite_codes");  // a list or a map is not a value (#1156)
+    invite.invite_codes = nevr_invite::ParseSwitch(inviteText, inviteStructured);
+    invite.invite_source = nevr_invite::SourceOf(inviteText, inviteStructured);
     const char* httpUri = NevrCfgGetFlat("nevr_http_uri");
     invite.http_uri = httpUri != nullptr ? httpUri : "";
     invite.token = [] { return nevr_token_auth::GetToken(); };  // thread-safe; the export TokenAuth_GetToken is not
@@ -776,6 +782,14 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] empty-server TTL requested but not armed; the server keeps today's behaviour");
     }
   }
+
+  // #1423: AI bots on a server (network.bots_per_session, absent = 0): on a server with a count above 0 the sites are
+  // checked once here, and the driver (GameServerLib::Update) runs only when they hold; a client logs that it does not
+  // apply (N122/N124).
+  nevr_server_bots::Install(g_isServer != FALSE);
+  // #1422: a server's match team size (network.max_team_size, absent = the game's 5), at ServerAssignTeam's
+  // two checked-patch sites; a client logs that it does not apply (N122/N124).
+  nevr_server_team_size::Install(g_isServer != FALSE);
 
   // The runtime's own signature (#842, ADR 0010): one line says whether this is the signed release or a self-built or dev
   // build. The word is what the server registration carries (nevr_build_identity::Provenance). Reads the file, so it runs

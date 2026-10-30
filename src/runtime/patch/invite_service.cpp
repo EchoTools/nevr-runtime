@@ -67,13 +67,15 @@ void Start(Settings settings) {
   g_started = true;
   g_shutdown = false;
 
+  const std::string source = std::string(" source=") + nevr_invite::SourceName(settings.invite_source);
   const char* off = nullptr;
   nevr_invite::LogLevel offLevel = nevr_invite::LogLevel::Info;
   if (settings.invite_codes == nevr_invite::Switch::Unrecognised) {
     off = "unrecognised_value";
     offLevel = nevr_invite::LogLevel::Warning;
   } else if (settings.invite_codes == nevr_invite::Switch::Off) {
-    off = "not_configured";
+    // Off from config.yaml is a player's choice; off with no config behind it (a host whose default is off) is not configured.
+    off = settings.invite_source == nevr_invite::Source::Config ? "turned_off" : "not_configured";
   } else if (settings.hooks_refused) {
     // An observer this service serves did not install. That observer's own Warning carries the address and the bytes (Rule 6).
     off = "hook_prologue_mismatch";
@@ -86,7 +88,8 @@ void Start(Settings settings) {
     const nevr_invite::Endpoint probe = nevr_invite::BuildRpcUrl(settings.http_uri, "invite/resolve");
     if (probe.check != nevr_invite::UrlCheck::Ok) {
       Say(nevr_invite::LogLevel::Warning,
-          std::string("[NEVR.INVITE] feature off reason=service_address_refused detail=") + nevr_invite::UrlCheckName(probe.check));
+          std::string("[NEVR.INVITE] feature off reason=service_address_refused detail=") + nevr_invite::UrlCheckName(probe.check) +
+              source);
       off = "";
     }
   }
@@ -117,9 +120,9 @@ void Start(Settings settings) {
     };
     parts.configured = true;
     g_active.store(true, std::memory_order_release);
-    Say(nevr_invite::LogLevel::Info, "[NEVR.INVITE] service on");
+    Say(nevr_invite::LogLevel::Info, "[NEVR.INVITE] service on" + source);
   } else if (off[0] != '\0') {
-    Say(offLevel, std::string("[NEVR.INVITE] feature off reason=") + off);
+    Say(offLevel, std::string("[NEVR.INVITE] feature off reason=") + off + source);
   }
   WorkerSlot() = std::make_unique<nevr_invite::Worker>(std::move(parts));
 }

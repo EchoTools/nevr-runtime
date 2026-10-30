@@ -1,4 +1,4 @@
-//! `nevr-install pc stage` (ADR 0024, section 3): the real binary, one call each, against a local server that serves a
+//! `install-nevr-runtime pc stage` (ADR 0024, section 3): the real binary, one call each, against a local server that serves a
 //! manifest signed by a throwaway key. The runtime and the plugin members of the channel's `windows-zip` are staged under
 //! `<root>/update/staging/<version>`; nothing is published after a failed check.
 
@@ -128,7 +128,7 @@ fn run(w: &World, base: &str, current: &Value, extra: &[&str]) -> (i32, Value, S
 }
 
 fn run_at(w: &World, base: &str, current: &Value, extra: &[&str], now: &str) -> (i32, Value, String) {
-    let o = Command::new(env!("CARGO_BIN_EXE_nevr-install"))
+    let o = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime"))
         .args(["pc", "stage", "--root", w.root.path().to_str().unwrap(), "--base", base, "--pins", w.pins.to_str().unwrap(), "--now", now])
         .args(["--current-json", &current.to_string()])
         .args(extra)
@@ -454,7 +454,7 @@ fn a_release_already_staged_and_intact_is_not_fetched_again_and_a_damaged_one_is
 
 #[test]
 fn stage_needs_a_root_and_writes_nothing_without_one() {
-    let o = Command::new(env!("CARGO_BIN_EXE_nevr-install")).args(["pc", "stage", "--current-json", "{}"]).output().unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime")).args(["pc", "stage", "--current-json", "{}"]).output().unwrap();
     assert_eq!(o.status.code(), Some(1));
 }
 

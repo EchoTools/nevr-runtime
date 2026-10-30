@@ -62,6 +62,8 @@ network:
   upnp: true
   upnp_port: 6789
   tick_rate_hz: 60
+  bots_per_session: 2
+  max_team_size: 6
   invite_codes: true
 assets:
   cdn_url: "https://cdn.example/assets"
@@ -101,6 +103,8 @@ TEST(ServiceMap, FlatKeyToYamlPath_EveryMigratedKey) {
   EXPECT_EQ(FlatKeyToYamlPath("upnp_port"), "network.upnp_port");
   EXPECT_EQ(FlatKeyToYamlPath("nevr_regions"), "network.regions");  // S4b schema-gap home
   EXPECT_EQ(FlatKeyToYamlPath("nevr_tick_rate_hz"), "network.tick_rate_hz");  // #595
+  EXPECT_EQ(FlatKeyToYamlPath("nevr_bots_per_session"), "network.bots_per_session");  // #1423
+  EXPECT_EQ(FlatKeyToYamlPath("nevr_max_team_size"), "network.max_team_size");  // #1422
   EXPECT_EQ(FlatKeyToYamlPath("nevr_session_router"), "network.session_router");  // #708
   EXPECT_EQ(FlatKeyToYamlPath("nevr_invite_codes"), "network.invite_codes");  // #1156
   // assets / arena / misc
@@ -155,6 +159,8 @@ TEST(ServiceMap, LookupFlat_PresentKeysResolve) {
   EXPECT_EQ(LookupFlat(cfg, "upnp").value_or(""), "true");
   EXPECT_EQ(LookupFlat(cfg, "upnp_port").value_or(""), "6789");
   EXPECT_EQ(LookupFlat(cfg, "nevr_tick_rate_hz").value_or(""), "60");  // #595
+  EXPECT_EQ(LookupFlat(cfg, "nevr_bots_per_session").value_or(""), "2");  // #1423
+  EXPECT_EQ(LookupFlat(cfg, "nevr_max_team_size").value_or(""), "6");  // #1422
   EXPECT_EQ(LookupFlat(cfg, "nevr_invite_codes").value_or(""), "true");  // #1156
   EXPECT_EQ(LookupFlat(cfg, "arena_round_time").value_or(""), "240");
   EXPECT_EQ(LookupFlat(cfg, "exitonerror").value_or(""), "true");
@@ -191,6 +197,23 @@ TEST(ServiceMap, LookupFlat_AbsentKeyIsNullopt) {
   const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString("version: \"1\"\n");
   EXPECT_FALSE(LookupFlat(cfg, "matchingservice_host").has_value());
   EXPECT_FALSE(LookupFlat(cfg, "external_ip").has_value());
+}
+
+// #1156, ADR 0017: a list or a map under network.invite_codes is structured, not a value. LookupFlat gives nullopt for it, the
+// same as for an absent key, so the switch must ask for the shape too. A scalar, a key with no value, an absent key and an
+// unmapped key are not structured.
+TEST(ServiceMap, LookupFlatIsStructured_ListAndMapOnly) {
+  EXPECT_TRUE(nevr_cfg::LookupFlatIsStructured(
+      nevr::NevrConfig::LoadFromString("network:\n  invite_codes: [false]\n"), "nevr_invite_codes"));
+  EXPECT_TRUE(nevr_cfg::LookupFlatIsStructured(
+      nevr::NevrConfig::LoadFromString("network:\n  invite_codes: {enabled: false}\n"), "nevr_invite_codes"));
+  EXPECT_FALSE(nevr_cfg::LookupFlatIsStructured(
+      nevr::NevrConfig::LoadFromString("network:\n  invite_codes: false\n"), "nevr_invite_codes"));
+  EXPECT_FALSE(nevr_cfg::LookupFlatIsStructured(
+      nevr::NevrConfig::LoadFromString("network:\n  invite_codes:\n"), "nevr_invite_codes"));
+  EXPECT_FALSE(nevr_cfg::LookupFlatIsStructured(nevr::NevrConfig::LoadFromString("version: \"1\"\n"), "nevr_invite_codes"));
+  EXPECT_FALSE(nevr_cfg::LookupFlatIsStructured(
+      nevr::NevrConfig::LoadFromString("network:\n  invite_codes: [false]\n"), "bogus_key"));
 }
 
 // ---------------------------------------------------------------------------
