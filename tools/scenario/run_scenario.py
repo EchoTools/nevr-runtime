@@ -371,8 +371,12 @@ def wait_for_wineserver_exit() -> None:
 
 
 class Run:
-    def __init__(self, scenario: dict, dll: pathlib.Path, out: pathlib.Path, config: pathlib.Path | None = None):
+    def __init__(self, scenario: dict, dll: pathlib.Path, out: pathlib.Path, config: pathlib.Path | None = None,
+                 creds: str | None = None):
         self.scenario, self.dll, self.out, self.config = scenario, dll, out, config
+        # The account whose stored sign-in the client signs in with (launch-client.sh --creds). None is not a run: the
+        # launcher refuses a run with no sign-in, and that refusal fails this scenario's launch.
+        self.creds = creds
         self.results: list[dict] = []
         self.console: ConsoleLog | None = None
         self.control: Control | None = None
@@ -418,6 +422,8 @@ class Run:
                    "--require-in-game"]
         if self.config is not None:
             command += ["--config", str(self.config)]
+        if self.creds is not None:
+            command += ["--creds", self.creds]
         self.launcher = subprocess.Popen(
             command, cwd=REPO,
             stdout=launcher_out.open("w"), stderr=subprocess.STDOUT, start_new_session=True)
@@ -558,6 +564,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--config", type=pathlib.Path,
                         help="a config.json whose directory holds the run's config.yaml (launch-client.sh --config), "
                              "e.g. to run the suite with network.session_router: all (#708)")
+    parser.add_argument("--creds", metavar="ACCOUNT",
+                        help="the account whose stored sign-in the client signs in with (launch-client.sh --creds); "
+                             "a run without one is refused by the launcher")
     args = parser.parse_args(argv)
 
     scenario = load_scenario(args.scenario)
@@ -572,7 +581,7 @@ def main(argv: list[str]) -> int:
     work_root.ensure_dir(out, SCRATCH_PURPOSE, SCRATCH_REMOVED)
 
     loadavg_start = read_loadavg()
-    run = Run(scenario, args.dll, out, args.config)
+    run = Run(scenario, args.dll, out, args.config, creds=args.creds)
     try:
         passed = run.execute()
     finally:

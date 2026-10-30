@@ -282,7 +282,7 @@ class ShellToolDefaultsTest(unittest.TestCase):
         self.env.pop("FAKE_ECHOVR_PIDS", None)
 
     def launch_client(self, **env):
-        return subprocess.run([str(self.checkout / "launch-client.sh"), "--dll", str(self.dll)],
+        return subprocess.run([str(self.checkout / "launch-client.sh"), "--dll", str(self.dll), "--device-code"],
                               env=dict(self.env, **env), cwd=self.checkout, capture_output=True, text=True, timeout=60)
 
     def verify_server(self, **env):
