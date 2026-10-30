@@ -51,8 +51,8 @@ _build-inputs:
 
 # extern/{minhook,breakpad,lss} and gen/ are copied from the main checkout; the worktree gets its own vcpkg root
 # (build/vcpkg-root), so its builds never wait on another worktree's vcpkg lock; build/<preset> is seeded from the
-# main checkout's when that was built at this commit (tools/seed_build_tree.py)
-# Make a fresh git worktree buildable: its inputs, its vcpkg root and, at the same commit, a seeded build tree
+# main checkout's (tools/seed_build_tree.py; a tree built at another commit has its configure re-run)
+# Make a fresh git worktree buildable: its inputs, its vcpkg root and a seeded build tree
 worktree-setup:
     tools/worktree-setup.sh
     tools/vcpkg_root.sh

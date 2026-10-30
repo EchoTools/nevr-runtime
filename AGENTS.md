@@ -914,10 +914,12 @@ your seat name, for example `claude-main` or `codex`.
   It then seeds `build/$PRESET` (`PRESET`, default `mingw-release`, as the justfile reads it) from the main
   checkout's, with `tools/seed_build_tree.py`: the configured tree is copied with the checkout path rewritten in its
   text files, ninja's deps log and ninja's build log (paths and command hashes), and the mtimes of source files
-  identical to the main checkout's are aligned, so a build that follows compiles only what differs. It seeds only an
-  absent or empty `build/$PRESET`, only a tree whose `build.ninja` names the commit it was built at (a tree that does not is refused) and that commit is this
-  worktree's HEAD, with no uncommitted changes (a tree configured with them has a `git describe` ending in `-dirty`), only when the copy no longer names the main checkout's path
-  (a tree configured through a link to the checkout is refused), and never when a `ninja`, `cmake` or `ctest` is running in the main checkout's tree. It
+  identical to the main checkout's are aligned, and a source that differs is made newer, so a build that follows compiles
+  only what differs. It seeds only an absent or empty `build/$PRESET`, and only when the copy no longer names the main
+  checkout's path (a tree configured through a link to the checkout is refused), and never when a `ninja`, `cmake` or
+  `ctest` is running in the main checkout's tree. A tree built at another commit, or configured with uncommitted changes
+  (`git describe` ends in `-dirty`), is seeded too: the commit and the describe string are read at configure time, so its
+  configure is re-run on the first build, and the identity readers rebuild. It
   never writes the main checkout, prints what it did or why it did not (a
   worktree that is not seeded still builds, from scratch), and appends one record to
   `$XDG_STATE_HOME/nevr-runtime/seed-build-tree.jsonl`.
