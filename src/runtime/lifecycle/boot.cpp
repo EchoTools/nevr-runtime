@@ -23,6 +23,7 @@
 #include "runtime/patch/invite_service.h"
 #include "runtime/patch/menu_cards.h"
 #include "runtime/patch/netgun_bullets.h"
+#include "runtime/patch/netgun_bullet_ids.h"
 #include "runtime/patch/ui_text_writer.h"
 #include "runtime/patch/invite_wizard_hook.h"
 #include "runtime/patch/arena_public_clock.h"
@@ -688,6 +689,11 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.RESOURCE] netgun bullet effects skipped reason=server_mode (a server draws no particle effects)");
   }
+
+  // #1420: the four unfinished weapons (magnum, smg, Chain, rifle) fire the assault's bullet once their netgun entries name
+  // it. The transform rewrites the player's own stock CR15NetGunCR in memory; both client and server load it. Registered
+  // after InstallResourceOverride, which created the registry.
+  nevr_netgun_bullet_ids::Install();
 
   // #906, #1156, ADR 0017: observe the CREATE GAME / JOIN VIA CODE wizard's click metric. Client only. A typed code is
   // posted to the game service when network.invite_codes is on (the service below; on unless the config says off), and so is

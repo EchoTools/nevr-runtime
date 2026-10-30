@@ -523,31 +523,54 @@ quest-autopilot-run route *args:
 # the tag at that commit); the release (a draft is enough) must carry the asset. Writes
 # build/quest-release/<tag>/nevr-runtime-<tag>-quest.apk and its .sha256; it uploads nothing and never tags. The APK is
 # published outside GitHub (RELEASING.md, "Quest APKs never go on GitHub").
-release-quest-apk tag store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
+release-quest-apk tag store_apk="/mnt/games/cache/r15_goldmaster_store.apk": (_release-quest-apk "release-quest-apk" tag store_apk "" "")
+
+# The unlisted variant APK of a release (tools/quest_release_timer.py builds it in the same run as the release APK): the same
+# repack of the store game with the same release loader asset, plus the plugin libraries `plugins` names (one path, or several
+# separated by colons; the timer passes copies it has checked against their pins). Everything `release-quest-apk` checks is
+# checked here too, with the same tag and clone rules and the same refusals under this recipe's name. Writes
+# build/quest-release/<tag>/variant/nevr-runtime-<tag>-q15t-quest.apk and its .sha256 beside, in sha256sum format. The APK is
+# never listed in the manifest: tools/publish_quest_apk.py --variant puts it on the release host. It uploads nothing and never tags.
+release-quest-variant-apk tag plugins store_apk="/mnt/games/cache/r15_goldmaster_store.apk": (_release-quest-apk "release-quest-variant-apk" tag store_apk plugins "q15t")
+
+# The body of release-quest-apk and release-quest-variant-apk. `label` is the public recipe's name, which every message of the
+# run carries. `plugin` and `variant` are both empty (the release APK, which never carries a plugin) or both set (the variant
+# APK, written under build/quest-release/<tag>/variant).
+_release-quest-apk label tag store_apk plugin variant:
     #!/usr/bin/env bash
     set -euo pipefail
-    tag="{{ tag }}"
-    [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "release-quest-apk: not a release tag (vX.Y.Z): $tag" >&2; exit 1; }
+    label="{{ label }}"; tag="{{ tag }}"; plugin="{{ plugin }}"; variant="{{ variant }}"
+    [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "$label: not a release tag (vX.Y.Z): $tag" >&2; exit 1; }
+    [ -z "$variant" ] || [ -n "$plugin" ] || { echo "$label: the variant APK carries plugin libraries, and none is named" >&2; exit 1; }
+    [ -n "$variant" ] || [ -z "$plugin" ] || { echo "$label: a release APK carries no plugin library" >&2; exit 1; }
     tools/release_preflight.py --tag "$tag"
-    tag_commit=$(git rev-parse --verify "refs/tags/$tag^{commit}") || { echo "release-quest-apk: tag $tag is not in this clone" >&2; exit 1; }
+    tag_commit=$(git rev-parse --verify "refs/tags/$tag^{commit}") || { echo "$label: tag $tag is not in this clone" >&2; exit 1; }
     head=$(git rev-parse HEAD)
-    [ "$tag_commit" = "$head" ] || { echo "release-quest-apk: HEAD ${head:0:7} is not the commit of $tag (${tag_commit:0:7}); check out the tag's commit" >&2; exit 1; }
-    [ -f "{{ store_apk }}" ] || { echo "release-quest-apk: store APK not found: {{ store_apk }}" >&2; exit 1; }
+    [ "$tag_commit" = "$head" ] || { echo "$label: HEAD ${head:0:7} is not the commit of $tag (${tag_commit:0:7}); check out the tag's commit" >&2; exit 1; }
+    [ -f "{{ store_apk }}" ] || { echo "$label: store APK not found: {{ store_apk }}" >&2; exit 1; }
     tools/quest_keystore.sh check
     ver="${tag#v}"
     out="build/quest-release/$tag"
+    name="nevr-runtime-$tag-quest.apk"
+    if [ -n "$variant" ]; then
+        out="$out/variant"
+        name="nevr-runtime-$tag-$variant-quest.apk"
+    fi
     rm -rf "$out"
     mkdir -p "$out"
-    echo "release-quest-apk: packaging the $tag loader asset at ${head:0:7}" >&2
+    echo "$label: packaging the $tag loader asset at ${head:0:7}" >&2
     loader_sha=$(python3 -I tools/quest_release_loader.py fetch --tag "$tag" --out "$out/loader")
     python3 tools/package_release.py quest-library --lib "$out/loader/libovrplatformloader.so" --version "$ver" --commit "$tag_commit"
-    just android-repack-apk "{{ store_apk }}" "$out/loader/libovrplatformloader.so" "$out/repack" "" "$ver"
+    just android-repack-apk "{{ store_apk }}" "$out/loader/libovrplatformloader.so" "$out/repack" "$plugin" "$ver"
     python3 -I tools/quest_release_loader.py verify-apk --apk "$out/repack/r15_nevr-sentinel_signed.apk" --sha256 "$loader_sha"
-    name="nevr-runtime-$tag-quest.apk"
     cp -f "$out/repack/r15_nevr-sentinel_signed.apk" "$out/$name"
     (cd "$out" && sha256sum "$name" > "$name.sha256")
     cat "$out/$name.sha256"
-    echo "release-quest-apk: $out/$name is $tag at ${head:0:7}, with the release's loader (sha256 $loader_sha). It is NOT a release asset: publish it outside GitHub (RELEASING.md)." >&2
+    if [ -n "$variant" ]; then
+        echo "$label: $out/$name is $tag at ${head:0:7}, with the release's loader (sha256 $loader_sha). It is NOT a release asset and not in the manifest: tools/publish_quest_apk.py --variant $variant puts it on the release host." >&2
+    else
+        echo "$label: $out/$name is $tag at ${head:0:7}, with the release's loader (sha256 $loader_sha). It is NOT a release asset: publish it outside GitHub (RELEASING.md)." >&2
+    fi
 
 # Put the Quest APK that `release-quest-apk <tag>` wrote, and its .sha256, on R2 under nevr-runtime/<tag>/, then fetch both
 # back from the public host and compare size and sha256 (tools/publish_quest_apk.py; #1098). Run it from the clone that

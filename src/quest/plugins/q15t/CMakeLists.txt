@@ -53,6 +53,9 @@ option(Q15T_IMPACTSND_NOWRITE "impactsnd: read and log only, no row is written" 
 # libr15 0x1a0707c, a wrapper on its three data slots). Source: the shipped variant's word row (extra_rows: 0) is not in the APK, so
 # this is the plugin's own. Off file: tablestep.off in the plugin data directory.
 option(Q15T_TABLESTEP "tablestep (#1552): shader-set table growth step 32 -> 1 by a wrapper on CreateInstance's data slots. Source: ON" ON)
+# sendguard: CSendEventNode::Enter (ReVault libr15 0x2825a80) faults on a send to a game space that is not loaded (the menu gate lets the menu
+# reach such a send on a Quest without the combat content pack). A wrapper on its data slots drops that send with a log line. Off file: sendguard.off.
+option(Q15T_SENDGUARD "sendguard: a script send to a game space that is not loaded is dropped, not faulted, by a wrapper on CSendEventNode::Enter's data slots" ON)
 # heaps and memsys (docs/quest/q15t/modules/heaps.md section 1, memsys.md) need the loader's early phase (config.yaml `early: true`), and one plugin
 # entry is one phase, so they are a second library, libq15t_early.so (src/plugin_early.cpp), listed as its own early entry. Whether the
 # early phase runs on a headset is ADR 0019 P10; the loader refuses the entry loudly (early_unsupported) when it does not.
@@ -102,6 +105,9 @@ endif()
 if(Q15T_GATE_SCRIPTS)
   list(APPEND Q15T_SOURCES src/scriptgate.cpp)
 endif()
+if(Q15T_SENDGUARD)
+  list(APPEND Q15T_SOURCES src/sendguard.cpp)
+endif()
 if(Q15T_SHADERSTEP)
   list(APPEND Q15T_SOURCES src/shaderstep.cpp)
 endif()
@@ -130,7 +136,7 @@ target_compile_definitions(nevr_q15t PRIVATE
   Q15T_DRONEKILL=$<BOOL:${Q15T_DRONEKILL}> Q15T_DRONEMUZZLE=$<BOOL:${Q15T_DRONEMUZZLE}> Q15T_POWERBOOST=${Q15T_POWERBOOST}
   Q15T_HUDMETER=$<BOOL:${Q15T_HUDMETER}> Q15T_LEVELNAME=$<BOOL:${Q15T_LEVELNAME}> Q15T_MUSIC=$<BOOL:${Q15T_MUSIC}> Q15T_SENSORWD=$<BOOL:${Q15T_SENSORWD}> Q15T_SHIELDGAMMA=${Q15T_SHIELDGAMMA}
   Q15T_IMPACTSND_NOWRITE=$<BOOL:${Q15T_IMPACTSND_NOWRITE}> Q15T_ECFX_DEFAULT_ON=$<BOOL:${Q15T_ECFX_DEFAULT_ON}>
-  Q15T_SHADERSTEP=$<BOOL:${Q15T_SHADERSTEP}> Q15T_TABLESTEP=$<BOOL:${Q15T_TABLESTEP}> Q15T_INSTMODEL=$<BOOL:${Q15T_INSTMODEL}>)
+  Q15T_SHADERSTEP=$<BOOL:${Q15T_SHADERSTEP}> Q15T_TABLESTEP=$<BOOL:${Q15T_TABLESTEP}> Q15T_SENDGUARD=$<BOOL:${Q15T_SENDGUARD}> Q15T_INSTMODEL=$<BOOL:${Q15T_INSTMODEL}>)
 if(NOT "${Q15T_EC_DEFAULT_WORDS}" STREQUAL "")
   target_compile_definitions(nevr_q15t PRIVATE "Q15T_EC_DEFAULT_WORDS=\"${Q15T_EC_DEFAULT_WORDS}\"")
 endif()

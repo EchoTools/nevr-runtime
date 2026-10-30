@@ -35,6 +35,7 @@
 #include "sensorwd.h"
 #include "shaderstep.h"
 #include "shieldgamma.h"
+#include "sendguard.h"
 #include "tablestep.h"
 #include "voipdrop.h"
 #include "wallfire.h"
@@ -151,6 +152,9 @@
 #ifndef Q15T_TABLESTEP  // issue #1552: shader-set table growth step 32 -> 1 (tablestep.cpp)
 #define Q15T_TABLESTEP 0
 #endif
+#ifndef Q15T_SENDGUARD  // script send to a game space that is not loaded: dropped, not faulted (sendguard.cpp)
+#define Q15T_SENDGUARD 0
+#endif
 #ifndef Q15T_SHIELDGAMMA  // bitmask: 1 gamma, 2 tube mirror
 #define Q15T_SHIELDGAMMA 0
 #endif
@@ -263,6 +267,9 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_TABLESTEP
     "tablestep "
+#endif
+#if Q15T_SENDGUARD
+    "sendguard "
 #endif
 #if Q15T_LEVELNAME
     "levelname "
@@ -496,6 +503,9 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
 #endif
 #if Q15T_TABLESTEP
   ReportModule("tablestep", InstallTableStep(base));
+#endif
+#if Q15T_SENDGUARD
+  ReportModule("sendguard", InstallSendGuard(base));
 #endif
 #if Q15T_LEVELNAME
   ReportModule("levelname", InstallLevelName(base));
