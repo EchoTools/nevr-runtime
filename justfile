@@ -484,6 +484,29 @@ _quest-apk store_apk:
 quest-autopilot-apk store_apk="/mnt/games/cache/r15_goldmaster_store.apk": build-android
     just android-repack-apk "{{ store_apk }}" build/android-arm64/sentinel/libovrplatformloader.so build/android-arm64/repack build/android-arm64/integration/libnevr_autopilot.so "" "" "" "" "" libnevr_autopilot.so
 
+# The q15t plugin libraries (#1546, src/quest/plugins/q15t/README.md): libq15t.so and libq15t_early.so, built with the android-arm64
+# preset, each through the plugin static-init check (tools/check_quest_static_init.sh --plugin). Copies them to build/quest-q15t/,
+# checks that each names the pinned libr15 build id and that libq15t.so carries the shipped defaults (the config marker in plugin.cpp),
+# and prints the sha256 of each. No release or package-dev APK carries them; the variant recipe (release-quest-variant-apk) packages them.
+build-quest-q15t: configure-android
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-arm64 --target nevr_q15t nevr_q15t_early -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
+    built=build/android-arm64/integration/q15t
+    out=build/quest-q15t
+    mkdir -p "$out"
+    id=$(sed -n 's/.*kLibR15StockBuildId = "\([0-9a-f]*\)".*/\1/p' src/quest/sentinel/pinned_targets.h)
+    [ -n "$id" ] || { echo "build-quest-q15t: no kLibR15StockBuildId in src/quest/sentinel/pinned_targets.h" >&2; exit 1; }
+    for lib in libq15t.so libq15t_early.so; do
+        [ -f "$built/$lib" ] || { echo "build-quest-q15t: $built/$lib was not built" >&2; exit 1; }
+        cp "$built/$lib" "$out/$lib"
+        tools/check_quest_static_init.sh --plugin "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" "$out/$lib"
+        grep -qaF "$id" "$out/$lib" || { echo "build-quest-q15t: $lib does not name libr15 build id $id" >&2; exit 1; }
+    done
+    grep -qaF "q15t-config ec_words=[types=VPTO equip hide] ecfx_default_on=1 gate_link=1 build_id=$id" "$out/libq15t.so" \
+        || { echo "build-quest-q15t: libq15t.so does not carry the shipped defaults (q15t-config marker)" >&2; exit 1; }
+    (cd "$out" && sha256sum libq15t.so libq15t_early.so)
+
 # One unattended autopilot run on the attached Quest (tools/quest_autopilot_run.py --help): pushes the route, starts the
 # game with the proximity sensor overridden, waits for route_end, and records the run under the work root.
 quest-autopilot-run route *args:
@@ -2181,6 +2204,12 @@ test-quest-plugins:
     timeout -k 5 120 "$out/libr15_attach_step_test" src/quest/tests/fixtures
     echo "test-quest-plugins: all plugin loader tests pass on the host"
 
+# The q15t plugin's host tests (src/quest/tests/q15t/): the plugin built for the host against fake game memory and a
+# fake loader, one program per module, in the capped build slice. No NDK for most; the modules whose tests cross-compile find the
+# NDK at ANDROID_NDK_HOME. The mutation run (tests/mutants.sh, about an hour) is not part of this gate. Fail-close.
+test-quest-q15t:
+    bash src/quest/tests/q15t/run_host_tests.sh
+
 # The Quest autopilot plugin on the host (#1202, docs/adr/0025-quest-autopilot-route.md): the route grammar, every
 # derived bit and limit, the clock, the filter against a fake clock, the event ring (two producers), and the plugin's
 # exports against a fake host with a real route file and its real reporter thread; and every shipped route file
@@ -2368,6 +2397,7 @@ verify:
         test-quest-invite \
         test-quest-plugins \
         test-quest-autopilot \
+        test-quest-q15t \
         test-scripting
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
