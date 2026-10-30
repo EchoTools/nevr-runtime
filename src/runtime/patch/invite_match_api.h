@@ -16,4 +16,8 @@ bool ServiceActive() noexcept;
 /// False when no resolved answer is waiting. Called on the game thread once per frame.
 bool TakeResolvedMatch(char* out, std::size_t capacity, std::size_t* length) noexcept;
 
+/// True when TakeResolvedMatch would return a match: one is already taken from the service and queued, or an answer waits in the
+/// service. Takes no service lock (an atomic read), so a frame with nothing waiting costs one load (#1415, as the PC applier).
+bool ResolvedMatchPending() noexcept;
+
 }  // namespace nevr_invite_match

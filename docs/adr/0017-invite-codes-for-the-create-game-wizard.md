@@ -356,7 +356,7 @@ Write path, on the game thread only, through the frame dispatcher (`src/quest/in
 - The netgame the frame hook passes is `self` of `HookedNetGameUpdate`. Its state is at `netgame+0` (`game_layout::kStateOffset`), and its game object (CR15Game) at `netgame+8` (`game_layout::kGameOffset`).
 - The route is read first. Nothing is staged when the route byte and the gate are both set, or when `+0x8528` is not the invalid id (`other_route`).
 - Then the 16-byte GUID is written at `+0x8538` and `0xFFFF` at `+0x8558`, both read back. A mismatch puts the prior bytes back.
-- Then `EnableTransitionMenu(game)` and `BeginMultiplayer(game)`, once each, with a 15 s window that refuses a repeat as `busy`.
+- Then `EnableTransitionMenu(game)` and `BeginMultiplayer(game)`, once each, with a 15 s window that refuses a repeat as `busy`. This is the order the Quest code uses, and it is not measured on Quest. The PC join calls only the begin (`src/runtime/patch/invite_join_game.cpp`, `Begin`: `EchoVR::BeginMultiplayerLobby(game)` and nothing before it), so the two joins do not share a menu step.
 - Only `state == 3` (`LoggedIn`, `src/abi/echovr.h:361`) joins. Any other state logs `not_at_menu`.
 - The answers reach the join through `nevr_invite_match::TakeResolvedMatch` (`src/runtime/patch/invite_match_api.h`), a non-throwing call implemented in `invite_service.cpp`. The frame applier never includes the worker or the service header, so the hook-side translation unit is exception-free.
 
@@ -369,6 +369,7 @@ Not shown:
 - The Quest's `+0x8520` gate semantics beyond the decompile comment. The 281-instruction listing was not re-read in this slice.
 - The route check's invalid-id value on Quest: it is the PC's sixteen zero bytes, not separately verified in libr15.
 - Any run against the production service (U4, the invite RPC with the Quest token).
+- Whether the menu event before the begin is what the game does. Not measured on Quest; the headset run is owed. The reviewed ReVault reading (not re-measured here) found `EnableTransitionMenu` called by `JoinLobby` (libr15 `0x139682c`) after `Join`, by `SwitchTo` (`0x135b8b4`) right after `FindLobby`, and not by the two `BeginMultiplayer` callers, so the Quest order has no ReVault support yet.
 
 ## Relation to other records
 

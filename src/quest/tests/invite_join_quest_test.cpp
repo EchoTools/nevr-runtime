@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <string>
 #include <thread>
 #include <vector>
@@ -15,12 +16,31 @@
 #include "runtime/patch/invite_join.h"
 #include "runtime/patch/invite_match_api.h"
 
+namespace {
+
+// The service's state and resolved matches, set by each test: the join's frame side reads them through the stubs below.
+bool g_serviceActive = true;
+std::deque<std::string> g_matches;
+int g_takeCalls = 0;
+
+}  // namespace
+
 namespace nevr_invite_match {
-// The join's frame side: the service is on and no resolved match is waiting (the applier is not exercised here).
-bool ServiceActive() noexcept { return true; }
-bool TakeResolvedMatch(char*, std::size_t, std::size_t* length) noexcept {
-  *length = 0;
-  return false;
+bool ServiceActive() noexcept { return g_serviceActive; }
+bool ResolvedMatchPending() noexcept { return !g_matches.empty(); }
+bool TakeResolvedMatch(char* out, std::size_t capacity, std::size_t* length) noexcept {
+  ++g_takeCalls;
+  if (g_matches.empty()) {
+    *length = 0;
+    return false;
+  }
+  const std::string& next = g_matches.front();
+  std::size_t n = next.size();
+  if (n > capacity) n = 0;
+  if (n > 0) std::memcpy(out, next.data(), n);
+  *length = n;
+  g_matches.pop_front();
+  return true;
 }
 }  // namespace nevr_invite_match
 
@@ -268,8 +288,9 @@ void TestWriteBackOnMismatch() {
   CHECK(AllZero(game.bytes + 0x8538, 16));
 }
 
-// The menu event runs before the begin, as the game's own main-menu join does (ReVault: EnableTransitionMenu, then
-// BeginMultiplayer). Killed by a mutant that swaps the two calls.
+// The Quest's own order: the menu event, then the begin. This pins the code's order, not a measured game order: the order is
+// not measured on Quest (the headset run is owed), and the PC join calls only the begin (src/runtime/patch/invite_join_game.cpp).
+// Killed by a mutant that swaps the two calls.
 void TestMenuEventRunsBeforeBegin() {
   FakeAccess access;
   nevr_quest_invite_join::Offerer offerer(access);
@@ -314,6 +335,60 @@ void TestOnTickThreadIsTheThreadThatRanTick() {
   CHECK(!other);
 }
 
+// Resets the frame dispatcher and the service stubs for one frame test.
+void ResetFrameTest() {
+  nevr_quest::invite::frame::ResetForTest();
+  g_matches.clear();
+  g_takeCalls = 0;
+  g_serviceActive = true;
+}
+
+// A resolved answer waiting while the service is on: the applier takes it and the join begins once.
+void TestAppliedAnswerOffersTheMatch() {
+  ResetFrameTest();
+  FakeAccess access;
+  nevr_quest_invite_join::SetFrameAccessForTest(&access);
+  g_matches.push_back(kMatch);
+  CHECK(nevr_quest_invite_join::RegisterAnswerApplier());
+  nevr_quest::invite::frame::Tick();
+  CHECK(access.begins == 1);
+  CHECK(access.calls.size() == 2 && access.calls[0] == "enable" && access.calls[1] == "begin");
+  CHECK(g_matches.empty());
+  CHECK(Contains(access.lines, "join started route=stage"));
+  nevr_quest_invite_join::SetFrameAccessForTest(nullptr);
+}
+
+// The same answer while the service is off: the applier takes it and the join refuses (feature off), so nothing is staged.
+void TestAppliedAnswerWhileServiceOffIsNotOffered() {
+  ResetFrameTest();
+  g_serviceActive = false;
+  FakeAccess access;
+  access.now = 100000;  // past the join window the earlier test opened on the shared offerer: only the service state decides
+  nevr_quest_invite_join::SetFrameAccessForTest(&access);
+  g_matches.push_back(kMatch);
+  CHECK(nevr_quest_invite_join::RegisterAnswerApplier());
+  nevr_quest::invite::frame::Tick();
+  CHECK(access.begins == 0);
+  CHECK(g_matches.empty());
+  CHECK(AllZero(access.game.bytes + 0x8538, 16));
+  nevr_quest_invite_join::SetFrameAccessForTest(nullptr);
+}
+
+// An idle frame costs no take: with no resolved match waiting, the applier does not call TakeResolvedMatch (the #1415 early-out,
+// as the PC applier takes it). Three frames, none of them takes.
+void TestIdleFrameDoesNotTakeMatches() {
+  ResetFrameTest();
+  FakeAccess access;
+  nevr_quest_invite_join::SetFrameAccessForTest(&access);
+  CHECK(nevr_quest_invite_join::RegisterAnswerApplier());
+  nevr_quest::invite::frame::Tick();
+  nevr_quest::invite::frame::Tick();
+  nevr_quest::invite::frame::Tick();
+  CHECK(g_takeCalls == 0);
+  CHECK(access.begins == 0);
+  nevr_quest_invite_join::SetFrameAccessForTest(nullptr);
+}
+
 void TestGuidByteOrder() {
   nevr_invite_join::LobbyBytes lobby{};
   CHECK(nevr_invite_join::ParseLobbyBytes(kMatch, lobby));
@@ -341,6 +416,9 @@ int main() {
   TestNoGameObjectAtStageIsAReadFailure();
   TestGameObjectGoneBeforeBeginUndoesTheStage();
   TestOnTickThreadIsTheThreadThatRanTick();
+  TestAppliedAnswerOffersTheMatch();
+  TestAppliedAnswerWhileServiceOffIsNotOffered();
+  TestIdleFrameDoesNotTakeMatches();
   if (g_failures != 0) {
     std::fprintf(stderr, "invite_join_quest_test: %d failure(s)\n", g_failures);
     return 1;

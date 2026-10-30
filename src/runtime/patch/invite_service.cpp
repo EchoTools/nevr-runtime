@@ -159,9 +159,16 @@ MatchQueue& Matches() {
   return queue;
 }
 
+// The number of ids in the queue, readable without its mutex: ResolvedMatchPending reads it on every frame.
+std::atomic<std::size_t> g_matchesWaiting{0};
+
 }  // namespace
 
 bool nevr_invite_match::ServiceActive() noexcept { return nevr_invite_service::Active(); }
+
+bool nevr_invite_match::ResolvedMatchPending() noexcept {
+  return g_matchesWaiting.load(std::memory_order_acquire) != 0 || nevr_invite_service::AnswersPending();
+}
 
 bool nevr_invite_match::TakeResolvedMatch(char* out, std::size_t capacity, std::size_t* length) noexcept {
   if (out == nullptr || length == nullptr) return false;
@@ -174,6 +181,7 @@ bool nevr_invite_match::TakeResolvedMatch(char* out, std::size_t capacity, std::
       const bool fits = resolved.has_value() && resolved->match_id.size() <= kMaxMatchIdBytes;
       queue.matches.push_back(fits ? resolved->match_id : std::string());
     }
+    g_matchesWaiting.store(queue.matches.size(), std::memory_order_release);
   }
   if (queue.matches.empty()) return false;
   const std::string& next = queue.matches.front();
@@ -182,6 +190,7 @@ bool nevr_invite_match::TakeResolvedMatch(char* out, std::size_t capacity, std::
   if (n > 0) std::memcpy(out, next.data(), n);
   *length = n;
   queue.matches.pop_front();
+  g_matchesWaiting.store(queue.matches.size(), std::memory_order_release);
   return true;
 }
 

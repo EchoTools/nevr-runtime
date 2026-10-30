@@ -190,8 +190,9 @@ StageOutcome Offerer::StageLobby(const LobbyBytes& lobby, std::uint16_t team) {
   return outcome;
 }
 
-// False when there is no game object to begin on; nothing is called then. The menu event runs first, then the begin, as the
-// game's own main-menu join does (ReVault: EnableTransitionMenu sends the menu gamespace event before BeginMultiplayer).
+// False when there is no game object to begin on; nothing is called then. The menu event runs first, then the begin. That is
+// this file's order and is not measured on Quest (the headset run is owed); the PC join calls only the begin
+// (src/runtime/patch/invite_join_game.cpp, Begin).
 bool Offerer::Begin() {
   void* game = GameObject();
   if (game == nullptr) {
@@ -219,14 +220,38 @@ GameAccess& LiveAccess() {
 
 namespace {
 
+// The access the frame work's offerer calls through: the live access, unless a test points it at a fake (SetFrameAccessForTest).
+class FrameAccess final : public GameAccess {
+ public:
+  GameAccess* target = nullptr;
+
+  bool OnTickThread() override { return Live().OnTickThread(); }
+  void* NetGame() override { return Live().NetGame(); }
+  bool ProloguesValid() override { return Live().ProloguesValid(); }
+  void EnableMenu(void* game) override { Live().EnableMenu(game); }
+  void Begin(void* game) override { Live().Begin(game); }
+  void Log(nevr_invite::LogLevel level, const std::string& line) override { Live().Log(level, line); }
+  std::int64_t NowMs() override { return Live().NowMs(); }
+
+ private:
+  GameAccess& Live() { return target != nullptr ? *target : LiveAccess(); }
+};
+
+FrameAccess& FrameAccessInstance() {
+  static FrameAccess access;
+  return access;
+}
+
 Offerer& TheOfferer() {
-  static Offerer offerer(LiveAccess());
+  static Offerer offerer(FrameAccessInstance());
   return offerer;
 }
 
 // The frame work: each resolved match the service has answered since the last frame is offered to the join. The service does the
 // one call that may throw (its own TU); this file keeps no exception path (the frame path, see the header).
 bool ApplyAnswers(void* /*context*/) noexcept {
+  // #1415: nothing resolved waits, so the frame costs one atomic load and takes no lock (the PC applier takes the same early-out).
+  if (!nevr_invite_match::ResolvedMatchPending()) return true;
   char match[nevr_invite_match::kMaxMatchIdBytes];
   std::size_t length = 0;
   while (nevr_invite_match::TakeResolvedMatch(match, sizeof(match), &length)) {
@@ -238,5 +263,7 @@ bool ApplyAnswers(void* /*context*/) noexcept {
 }  // namespace
 
 bool RegisterAnswerApplier() noexcept { return nevr_quest::invite::frame::RegisterFrameWork(ApplyAnswers, nullptr); }
+
+void SetFrameAccessForTest(GameAccess* access) { FrameAccessInstance().target = access; }
 
 }  // namespace nevr_quest_invite_join

@@ -68,4 +68,8 @@ GameAccess& LiveAccess();
 /// False when the dispatcher has no room (frame::RegisterFrameWork).
 bool RegisterAnswerApplier() noexcept;
 
+/// Test support: the frame work offers through `access` from the next frame on; null restores the live access. Call only while
+/// no frame runs.
+void SetFrameAccessForTest(GameAccess* access);
+
 }  // namespace nevr_quest_invite_join
