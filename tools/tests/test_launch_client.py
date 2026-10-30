@@ -28,6 +28,20 @@ LAUNCH_SERVER = REPO / "launch-server.sh"
 LIB = REPO / "tools/lib/game_install.sh"
 ORIGINAL = b"original-dll"
 TEST_DLL = b"test-dll"
+
+
+def game_standin(testcase: unittest.TestCase) -> int:
+    """A live process whose argv[0] is ./echovr.exe, so game_pids (tools/lib/game_install.sh) counts it as the game
+    (#1490). Its pid is what the fake pgrep reports as FAKE_ECHOVR_PIDS. Killed when the test ends."""
+    proc = subprocess.Popen(["bash", "-c", "exec -a ./echovr.exe sleep 600"], start_new_session=True)
+    testcase.addCleanup(lambda: (proc.kill(), proc.wait()))
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        with open(f"/proc/{proc.pid}/cmdline", "rb") as f:
+            if f.read().startswith(b"./echovr.exe\0"):
+                return proc.pid
+        time.sleep(0.02)
+    raise AssertionError(f"stand-in pid {proc.pid} never exec'd")
 TEST_RUNTIME = b"test-runtime"
 SIGNIN = b'{"refresh_token":"SENTINEL-CRED-MUST-NOT-PRINT"}'
 SENTINEL = "SENTINEL-CRED-MUST-NOT-PRINT"
@@ -502,10 +516,11 @@ class LaunchClientTest(unittest.TestCase):
         self.assertEqual(self.deployed(), ORIGINAL)
 
     def test_refuses_to_start_while_echovr_is_running(self):
-        env = dict(self.env, FAKE_ECHOVR_PIDS="4242")
+        pid = game_standin(self)
+        env = dict(self.env, FAKE_ECHOVR_PIDS=str(pid))
         result = self.run_script("--dll", str(self.dll), env=env)
         self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
-        self.assertIn("echovr.exe is already running (pid 4242)", result.stderr)
+        self.assertIn(f"echovr.exe is already running (pid {pid})", result.stderr)
         self.assertEqual(self.deployed(), ORIGINAL)  # nothing was deployed
         self.assertNotIn("Deploying", result.stdout)
 
@@ -1242,11 +1257,12 @@ class VerifyServerTest(unittest.TestCase):
         self.assertTrue((self.tmp / "verify-server-deploy-backup").exists(), "the backup must survive a failed restore")
 
     def test_refuses_to_deploy_while_echovr_is_running(self):
-        env = dict(self.env, FAKE_ECHOVR_PIDS="4242")
+        pid = game_standin(self)
+        env = dict(self.env, FAKE_ECHOVR_PIDS=str(pid))
         result = subprocess.run(self.command(), env=env, cwd=self.checkout, capture_output=True, text=True,
                                 timeout=60)
         self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
-        self.assertIn("echovr.exe is already running (pid 4242)", result.stderr)
+        self.assertIn(f"echovr.exe is already running (pid {pid})", result.stderr)
         self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), ORIGINAL)
 
     def test_refuses_while_a_client_run_holds_the_lock(self):
@@ -1308,9 +1324,10 @@ class LaunchServerTest(unittest.TestCase):
         self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), ORIGINAL)
 
     def test_refuses_while_echovr_is_running(self):
-        result = self.run_script(dict(self.env, FAKE_ECHOVR_PIDS="4242"))
+        pid = game_standin(self)
+        result = self.run_script(dict(self.env, FAKE_ECHOVR_PIDS=str(pid)))
         self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
-        self.assertIn("echovr.exe is already running (pid 4242)", result.stderr)
+        self.assertIn(f"echovr.exe is already running (pid {pid})", result.stderr)
         self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), ORIGINAL)
 
     def test_a_missing_game_install_is_a_clear_error(self):
