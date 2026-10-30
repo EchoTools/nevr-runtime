@@ -6,6 +6,9 @@ The store APK, the Quest signing key and the R2 credential never leave this mach
 The train (release-train.yml) publishes the GitHub release; this tool sees the new tag and finishes the release:
 
   checkout         the checkout this runs from is clean and HEAD is the freshly fetched origin/main, or it refuses
+  tags             every local tag is on origin at the same commit (the release preflight's rule), or it refuses naming up to
+                   ten tags with their short ids, counting the rest, and printing the quoted remove and restore commands (with
+                   the full object id) for each tag it lists
   token, list      the newest published vX.Y.Z (or --tag) that is not done
   build_signer     the release signer, built from a snapshot of its main
   check_listed     the live manifest already lists the tag: done, nothing to build; else the game data it carries
@@ -20,7 +23,9 @@ The train (release-train.yml) publishes the GitHub release; this tool sees the n
   cleanup          the worktree and the signer snapshot, by exact path
 
 Every step appends a JSON line to $XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl; a log that cannot be written is
-a failure. A failed step exits 1 and names itself. A tag that has failed three times is not retried, and says so once (a
+a failure. `--notify-failure` couriers the last failure once per step and error in six hours (`failure_notified`, then
+`failure_notice_suppressed`). A failed step exits 1 and names itself, with the redacted tail of the failing command's stderr and of its stdout (not the stdout of curl, gh or the signer, which is remote content). A refusal
+(`refused`: a dirty or stale checkout, a tag origin does not have) exits 1 and is not counted. A tag that has failed three times is not retried, and says so once (a
 courier to Spritz) before the run exits 0. The R2 credential goes only to publish_apk, and the GitHub token only to publish_apk and
 the dispatch: every other command gets an environment without them. The environment is
 the R2 credential (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY) and RELEASE_PUBLIC_BASE; a missing one
@@ -29,11 +34,13 @@ replaced by <redacted> in anything written.
 """
 
 import argparse
+import datetime
 import hashlib
 import json
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -42,6 +49,7 @@ from collections.abc import Callable
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from publish_quest_apk import Failure, Log  # noqa: E402 - the sibling tool's log and failure types
+from release_preflight import commit_of, parse_ls_remote  # noqa: E402 - the preflight's reading of tags and its commit rule
 
 REQUIRED_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "RELEASE_PUBLIC_BASE")
 SECRET_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")
@@ -57,6 +65,12 @@ MAX_FAILURES = 3
 SLOT_WAITS = 60
 SLOT_WAIT_SECONDS = 60
 TAIL = 2000
+SIGNER_BINARY = "release-signer"  # what build_signer builds; its `verify-manifest --live` prints the live manifest on stdout
+# Programs whose stdout is remote content, never a log field (docs/standards/logging.md, Rule 4).
+REMOTE_OUTPUT_PROGRAMS = frozenset({"curl", "gh", "gh-spritz", SIGNER_BINARY})
+NOTICE_QUIET = datetime.timedelta(hours=6)  # the same failure is couriered at most this often
+MAX_TAGS_LISTED = 10
+LOCAL_TAGS_FORMAT = "--format=%(refname:strip=2)\t%(objectname)\t%(*objectname)"  # release_preflight.local_tags' format
 
 Runner = Callable[..., subprocess.CompletedProcess]
 
@@ -89,9 +103,11 @@ def read_events(path: pathlib.Path) -> list[dict]:
     events = []
     for line in path.read_text(encoding="utf-8").splitlines():
         try:
-            events.append(json.loads(line))
+            record = json.loads(line)
         except ValueError:
             continue
+        if isinstance(record, dict):  # a line that is JSON but not an object is not an event
+            events.append(record)
     return events
 
 
@@ -130,9 +146,21 @@ class Timer:
         env = {**self.child, **(extra or {})}
         result = self.runner(argv, cwd=str(cwd) if cwd else None, env=env)
         if result.returncode not in ok_codes:
-            tail = self.redact((result.stderr or "")[-TAIL:])
-            raise StepFailure(step, f"{pathlib.Path(argv[0]).name} exited {result.returncode}: {tail}".strip())
+            raise StepFailure(step, f"{pathlib.Path(argv[0]).name} exited {result.returncode}:{self.tails(argv[0], result)}")
         return result
+
+    def tails(self, program: str, result: subprocess.CompletedProcess) -> str:
+        """` stderr: <tail> | stdout: <tail>`, an empty stream left out, and no stdout of a program in
+        REMOTE_OUTPUT_PROGRAMS (or the gh binary in use). The secrets go before the cut, so a secret the cut would split
+        leaves no fragment."""
+        name = pathlib.Path(program).name
+        remote = name in REMOTE_OUTPUT_PROGRAMS or name == pathlib.Path(self.gh).name
+        parts = []
+        for label, text in (("stderr", result.stderr), ("stdout", "" if remote else result.stdout)):
+            tail = self.redact(text or "")[-TAIL:].strip()
+            if tail:
+                parts.append(f"{label}: {tail}")
+        return (" " + " | ".join(parts)) if parts else ""
 
     def ok(self, step: str, **fields: object) -> None:
         self.log.event("step_ok", step=step, **fields)
@@ -185,6 +213,41 @@ class Timer:
             raise Refusal(step, f"the checkout the timer runs from is at {head[:12]}, not the fetched origin/main {main[:12]}")
         self.ok(step, head=head)
 
+    def check_tags(self) -> None:
+        """Every local tag is on origin at the same commit, or the run refuses before it takes a token or builds: the
+        preflight inside `just release-quest-apk` refuses the same checkout, after the signer and the worktree are made.
+        The rule is tools/release_preflight.py's (its parse_ls_remote and commit_of): a tag that origin lacks, or that
+        peels to another commit there. A tag only origin has is not an offender."""
+        step = "tags"
+        repo = str(self.repo)
+        local_text = self.cmd(step, ["git", "-C", repo, "for-each-ref", "refs/tags", LOCAL_TAGS_FORMAT]).stdout
+        remote_text = self.cmd(step, ["git", "-C", repo, "ls-remote", "--tags", "origin"]).stdout
+        local = {}
+        for line in local_text.splitlines():
+            name, obj, peeled = (line.split("\t") + ["", ""])[:3]
+            local[name] = (obj, peeled or None)
+        _, remote = parse_ls_remote(remote_text)
+        offenders = []
+        for name, entry in sorted(local.items()):
+            if name not in remote:
+                why = "local-only, origin does not have it"
+            elif commit_of(entry) != commit_of(remote[name]):
+                why = f"points at {commit_of(entry)[:12]} here, {commit_of(remote[name])[:12]} on origin"
+            else:
+                continue
+            offenders.append((name, entry[0], why))
+        if offenders:
+            # The head is a compact summary that survives the courier's cut of the error; the commands follow it. A tag name
+            # is whatever git allows, `;`, `$(...)` and quotes included, so every name and id is shell-quoted.
+            shown, rest = offenders[:MAX_TAGS_LISTED], max(0, len(offenders) - MAX_TAGS_LISTED)
+            head = ("local tags origin lacks or has elsewhere: "
+                    + ", ".join(f"{shlex.quote(name)} ({obj[:12]})" for name, obj, _ in shown)
+                    + (f", and {rest} more" if rest else "") + f" [{len(offenders)} of {len(local)}]")
+            commands = [f"{shlex.quote(name)} ({why}): remove: git tag -d -- {shlex.quote(name)}; rollback: "
+                        f"git update-ref {shlex.quote('refs/tags/' + name)} {shlex.quote(obj)}" for name, obj, why in shown]
+            raise Refusal(step, " | ".join([head, *commands]))
+        self.ok(step, count=len(local))
+
     def notify_published(self, tag: str) -> None:
         """A live publish couriers Teth to verify it and Spritz the same text. The owner is never bonked for it (#1410)."""
         step = "notify"
@@ -201,7 +264,7 @@ class Timer:
         self.cmd(step, ["git", "-C", repo, "archive", "--format=tar", "-o", str(tarball), "origin/main"])
         signer_dir.mkdir(parents=True, exist_ok=True)
         self.cmd(step, ["tar", "-xf", str(tarball), "-C", str(signer_dir)])
-        binary = signer_dir / "release-signer"
+        binary = signer_dir / SIGNER_BINARY
         self.cmd(step, ["go", "build", "-o", str(binary), "./cmd/release-signer"], signer_dir)
         self.ok(step, signer_commit=sha)
         return binary
@@ -351,16 +414,49 @@ class Timer:
         self.ok("cleanup")
 
 
+def recent_notice(events: list[dict], step: str, digest: str, now: datetime.datetime) -> bool:
+    """The newest `failure_notified` is for this step and error and under NOTICE_QUIET old. A time that cannot be read, or that
+    lies in the future, does not suppress: a notice is then sent again."""
+    notified = [e for e in events if e.get("event") == "failure_notified"]
+    if not notified or (notified[-1].get("step"), notified[-1].get("error_sha256")) != (step, digest):
+        return False
+    try:
+        sent = datetime.datetime.fromisoformat(notified[-1]["ts"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if sent.tzinfo is None:
+        return False
+    return datetime.timedelta(0) <= now - sent < NOTICE_QUIET
+
+
 def notify_failure(env: dict[str, str], runner: Runner, log_path: pathlib.Path) -> int:
-    recorded = [e for e in read_events(log_path) if e.get("event") in ("failed", "refused")]
+    """Courier the last failed or refused event to Spritz, unless the same step and error was couriered under NOTICE_QUIET ago
+    (a standing refusal repeats on every 30-minute run). The courier is recorded as `failure_notified` and a skipped one as
+    `failure_notice_suppressed`; a log that cannot take the record is a failure, never silence."""
+    events = read_events(log_path)
+    recorded = [e for e in events if e.get("event") in ("failed", "refused")]
     last = recorded[-1] if recorded else {}
     what = last.get("error") or ("missing credentials: " + ", ".join(last["missing"]) if last.get("missing") else "no failed event recorded")
-    body = "quest-release-timer failed: tag %s at step %s: %s (log: %s)" % (
-        last.get("tag") or "not chosen yet", last.get("step", "start"), str(what)[:300], log_path)
-    result = runner(["courier", "send", "--to", "spritz", "--from", "quest-release-timer", "--msg", body], cwd=None, env=env)
-    if result.returncode != 0:
-        sys.stderr.write("quest-release-timer: the failure notice could not be sent\n")
+    step = last.get("step", "start")
+    digest = hashlib.sha256(str(what).encode("utf-8")).hexdigest()
+    suppress = recent_notice(events, step, digest, datetime.datetime.now(datetime.timezone.utc))
+    if not suppress:
+        body = "quest-release-timer failed: tag %s at step %s: %s (log: %s)" % (
+            last.get("tag") or "not chosen yet", step, str(what)[:300], log_path)
+        result = runner(["courier", "send", "--to", "spritz", "--from", "quest-release-timer", "--msg", body], cwd=None, env=env)
+        if result.returncode != 0:
+            sys.stderr.write("quest-release-timer: the failure notice could not be sent\n")
+            return 1
+    log = None
+    try:
+        log = Log(log_path, last.get("tag") or "")
+        log.event("failure_notice_suppressed" if suppress else "failure_notified", step=step, error_sha256=digest)
+    except Failure as failure:
+        sys.stderr.write(f"quest-release-timer: {failure}\n")
         return 1
+    finally:
+        if log is not None:
+            log.close()
     return 0
 
 
@@ -386,6 +482,7 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
             raise Failure(f"refused: set {', '.join(missing)}")
         timer = Timer(env, runner, sleep, log)
         timer.check_checkout()
+        timer.check_tags()
         token = timer.cmd("token", [timer.gh, "auth", "token"]).stdout.strip()
         if not token:
             raise StepFailure("token", f"{timer.gh} auth token printed nothing")
