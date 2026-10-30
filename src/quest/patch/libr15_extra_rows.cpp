@@ -20,6 +20,7 @@ PatchSpec PublicSpec() {
   spec.rowCount = kRowCount;
   ParseBuildIdHex(kLibR15StockBuildId, &spec.stockBuildId);
   spec.stockSha256 = kLibR15StockSha256;
+  for (const char* sha : kLibR15ReferenceSha256) spec.alsoSha256.emplace_back(sha);
   spec.expectedImageEnd = kStockImageEnd;
   return spec;
 }

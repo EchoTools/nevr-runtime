@@ -23,6 +23,7 @@ struct PatchSpec {
   std::size_t rowCount = 0;
   BuildIdBytes stockBuildId{};
   std::string stockSha256;                        // empty: the file's digest is not checked
+  std::vector<std::string> alsoSha256;            // other digests the input may have (only read when stockSha256 is set)
   std::optional<std::uint64_t> expectedImageEnd;  // the pinned end of the writable PT_LOAD; empty: not checked
 };
 
