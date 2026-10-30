@@ -18,9 +18,12 @@ bool InstallClockHook() noexcept;       // false when GotHook refused the slot (
 bool InstallFrameDispatchHook() noexcept;
 // The #239 login-prompt hook (sentinel/login_prompt_hook.h): its counters and its install, through this
 // seam because login_prompt_hook.h includes callback_thunk.h, which only -fno-exceptions units may.
-bool RegisterLoginPromptCounters() noexcept;  // 16 counters, and the title hook's 5 (#1137)
+bool RegisterLoginPromptCounters() noexcept;  // 17 counters (login_prompt::kCounterCount), and the title hook's 5 (#1137)
 // login_prompt::InstallIfCounted(countersRegistered): installs only with its counters registered.
 bool InstallLoginPromptHook(bool countersRegistered) noexcept;  // true when all three slots hold their thunks
+// login_prompt::FlushCountersAtExit (#1391): writes the seventeen counters once. Called from the process-end callback,
+// the android_main_returned point.
+void FlushLoginPromptCountersAtExit() noexcept;
 
 // The #1137 login-failed page title (sentinel/login_title_hook.h), through this seam for the same reason. Its counters are
 // registered by RegisterLoginPromptCounters. The library holding the page's script is mapped after the constructor, so the

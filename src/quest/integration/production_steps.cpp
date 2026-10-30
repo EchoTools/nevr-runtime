@@ -396,10 +396,13 @@ void InviteShutdown() noexcept {
   }
 }
 
-// Runs on the process-end hook's helper thread when the game's android_main returns (#621), on every launch: the plugin
-// entries that never got their moment end as `not_started` (#438), then the self-check report goes out (a no-op unless
-// the bridge that carries it enabled the self-checks).
+// Runs on the process-end hook's helper thread when the game's android_main returns (#621), on every launch: the login
+// prompt's counters are written once (#1391), the invite service stops, the plugin entries that never got their moment
+// end as `not_started` (#438), then the self-check report goes out (a no-op unless the bridge that carries it enabled
+// the self-checks). The counters come first so that the finish and the report stay adjacent, as
+// tools/verify_self_check_wiring.py requires.
 void OnGameProcessEnd() noexcept {
+  nevr_quest::integration::FlushLoginPromptCountersAtExit();
   InviteShutdown();  // a request in flight returns at once; the worker is joined before the report
   nevr_quest::plugin::FinishPlugins(nevr_quest::plugin::reason::kGameExitedFirst);
   ReportAndroidMainReturned();
