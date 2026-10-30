@@ -31,6 +31,7 @@
 #include "plugin_log.h"
 #include "powerboost.h"
 #include "refresh_rate.h"
+#include "scriptgate.h"
 #include "sensorwd.h"
 #include "shaderstep.h"
 #include "shieldgamma.h"
@@ -73,6 +74,12 @@
 // ReVault 0x212ba74, 84 bytes) is the PC build's Link kind (4), so the Bind sets the link flag and not the Quest flag and no menu script is told it runs on a Quest headset (R1_functions.md:90).
 #ifndef Q15T_GATE_LINK
 #define Q15T_GATE_LINK 0
+#endif
+// The per-script menu gate (default ON in the player build): the script libraries whose headset-type uses are all combat locks read the
+// rifts flag for "quest" (scriptgate.h), and every other script keeps the headset's real kind. A data write into those libraries, no code
+// write. Q15T_GATE_LINK above is the all-scripts alternative and is OFF by default.
+#ifndef Q15T_GATE_SCRIPTS
+#define Q15T_GATE_SCRIPTS 0
 #endif
 #ifndef Q15T_LINK_FN_LO
 #define Q15T_LINK_FN_LO 0x202ba74ULL
@@ -186,7 +193,7 @@ NEVR_DECLARE_SUPPORTED_BUILD_IDS(Q15T_BUILD_ID);
 #define Q15T_MARK_STR(x) Q15T_MARK_STR2(x)
 extern "C" __attribute__((used, retain, visibility("hidden"))) const char q15t_config_marker[] =
     "q15t-config ec_words=[" Q15T_MARK_EC_WORDS "] ecfx_default_on=" Q15T_MARK_STR(Q15T_ECFX_DEFAULT_ON)
-    " gate_link=" Q15T_MARK_STR(Q15T_GATE_LINK) " build_id=" Q15T_BUILD_ID;
+    " gate_link=" Q15T_MARK_STR(Q15T_GATE_LINK) " gate_scripts=" Q15T_MARK_STR(Q15T_GATE_SCRIPTS) " build_id=" Q15T_BUILD_ID;
 
 namespace {
 
@@ -358,7 +365,7 @@ NEVR_PLUGIN_API uint32_t NvrPluginGetCapabilities(void) {
   if (Q15T_WALLFIRE) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;  // no shot through a wall
   if (Q15T_LEVELNAME) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;  // the full-size global_mp loads
   if (Q15T_EC) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY | NEVR_PLUGIN_CAP_NETWORK;  // EC network datagrams; tac-mod list; drone kill feed
-  if (Q15T_GATE_LINK) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;  // the menus stop treating the headset as a Quest
+  if (Q15T_GATE_LINK || Q15T_GATE_SCRIPTS) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY;  // the menus stop treating the headset as a Quest
   if (Q15T_GATE_PERM || Q15T_GATE_BOTS) caps |= NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY | NEVR_PLUGIN_CAP_ALTERS_RULES;
   return caps;
 }
@@ -518,6 +525,13 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
 #if Q15T_AIBOTS
   InitAiBots(base, AiBotsFns{});
   ReportModuleTick("aibots", AddGameTick(&AiBotsTick), &want_tick);
+#endif
+#if Q15T_GATE_SCRIPTS
+  {
+    const InstallResult r = InstallScriptGate();
+    ReportModule("scriptgate", r);
+    if (r.status == SwapStatus::kOk) AddModuleTick("scriptgate", &ScriptGateTick, &want_tick);
+  }
 #endif
 #if Q15T_HZ_MATCH90
   AddModuleTick("refresh_rate", &RefreshMatchTick, &want_tick);

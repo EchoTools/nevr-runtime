@@ -503,7 +503,7 @@ build-quest-q15t: configure-android
         tools/check_quest_static_init.sh --plugin "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" "$out/$lib"
         grep -qaF "$id" "$out/$lib" || { echo "build-quest-q15t: $lib does not name libr15 build id $id" >&2; exit 1; }
     done
-    grep -qaF "q15t-config ec_words=[types=VPTO equip hide] ecfx_default_on=1 gate_link=1 build_id=$id" "$out/libq15t.so" \
+    grep -qaF "q15t-config ec_words=[types=VPTO equip hide] ecfx_default_on=1 gate_link=0 gate_scripts=1 build_id=$id" "$out/libq15t.so" \
         || { echo "build-quest-q15t: libq15t.so does not carry the shipped defaults (q15t-config marker)" >&2; exit 1; }
     (cd "$out" && sha256sum libq15t.so libq15t_early.so)
 

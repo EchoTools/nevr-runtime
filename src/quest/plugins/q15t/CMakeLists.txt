@@ -4,7 +4,8 @@
 set(Q15T_DIR "${CMAKE_CURRENT_LIST_DIR}")
 
 option(Q15T_GATE_PERM "Gameplay: the party-permissions expression stops refusing combat to a Quest headset" OFF)
-option(Q15T_GATE_LINK "Menu gate: the headset-type expression is told a Link headset (the PC build's kind 4, not the Quest kind), so the menu scripts stop locking combat cards to a Quest (a caller-range answer, no code write)" ON)
+option(Q15T_GATE_LINK "Menu gate, all scripts: the headset-type expression is told a Link headset (the PC build's kind 4, not the Quest kind), so EVERY menu script stops seeing a Quest (a caller-range answer, no code write). Superseded by Q15T_GATE_SCRIPTS" OFF)
+option(Q15T_GATE_SCRIPTS "Menu gate, per script (#1601): the script libraries whose headset-type uses are all combat locks read the rifts flag for quest (a data word in each library, no code write); every other script keeps the real kind. Kill file scriptgate.off" ON)
 option(Q15T_GATE_BOTS "Gameplay: the bot-body chooser stops picking the arena bot for a Quest headset (needs a full-size global_mp level)" OFF)
 option(Q15T_T26 "T-26: a new profile starts with the gun on the right hand, once per user id (plugin behaviour)" ON)
 option(Q15T_HZ_MATCH90 "Hz arm: 90 Hz while a combat map is loaded, the game's own rate elsewhere (q15t hzmatch90)" OFF)
@@ -98,6 +99,9 @@ endif()
 if(Q15T_TABLESTEP)
   list(APPEND Q15T_SOURCES src/tablestep.cpp)
 endif()
+if(Q15T_GATE_SCRIPTS)
+  list(APPEND Q15T_SOURCES src/scriptgate.cpp)
+endif()
 if(Q15T_SHADERSTEP)
   list(APPEND Q15T_SOURCES src/shaderstep.cpp)
 endif()
@@ -117,7 +121,7 @@ target_link_libraries(nevr_q15t PRIVATE nevr::plugin_sdk dl)
 target_compile_options(nevr_q15t PRIVATE ${Q15T_COMMON_OPTIONS})
 target_compile_definitions(nevr_q15t PRIVATE
   Q15T_BUILD_ID="${nevr_pinned_build_id}"
-  Q15T_GATE_LINK=$<BOOL:${Q15T_GATE_LINK}> Q15T_GATE_PERM=$<BOOL:${Q15T_GATE_PERM}> Q15T_GATE_BOTS=$<BOOL:${Q15T_GATE_BOTS}>
+  Q15T_GATE_LINK=$<BOOL:${Q15T_GATE_LINK}> Q15T_GATE_SCRIPTS=$<BOOL:${Q15T_GATE_SCRIPTS}> Q15T_GATE_PERM=$<BOOL:${Q15T_GATE_PERM}> Q15T_GATE_BOTS=$<BOOL:${Q15T_GATE_BOTS}>
   Q15T_HZ_MATCH90=$<BOOL:${Q15T_HZ_MATCH90}> Q15T_T26=$<BOOL:${Q15T_T26}> Q15T_CPU_LEVEL=${Q15T_CPU_LEVEL} Q15T_GPU_LEVEL=${Q15T_GPU_LEVEL}
   Q15T_FXTRAIL=$<BOOL:${Q15T_FXTRAIL}> Q15T_VOIPDROP=$<BOOL:${Q15T_VOIPDROP}> Q15T_CUSTCTX=$<BOOL:${Q15T_CUSTCTX}> Q15T_MESHSTEP=$<BOOL:${Q15T_MESHSTEP}>
   Q15T_GUNCONNECT=$<BOOL:${Q15T_GUNCONNECT}> Q15T_AIBOTS=$<BOOL:${Q15T_AIBOTS}> Q15T_BVH=$<BOOL:${Q15T_BVH}>
