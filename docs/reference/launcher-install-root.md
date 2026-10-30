@@ -86,6 +86,14 @@ installer left beside `echovr.exe` is read when the root has none), restores the
 `nevr-runtime.dll` aside as `<root>\installer\aside\nevr-runtime.dll.uninstalled-<timestamp>`, puts back a runtime it moved out
 of the game folder, and moves the record to `<root>\installer\aside\nevr-install.txt.undone-<timestamp>`.
 
+A launcher needs no PowerShell for this: `nevr-install.exe pc uninstall --dir <folder> [--nevr-root <root>]` takes the same steps in
+the same order, with the same refusals (`installer/src/pc.rs`, `plan_uninstall` and `execute_uninstall_with`; `uninstall.ps1`
+is the reference it is tested against). It fetches no manifest and reads nothing from stdin. Its stdout is one JSON line in the
+shape of `pc plan` and `pc install`; a run with no record exits 0 with state `unchanged`; a record whose game file was not kept
+(`original=unknown`) exits 2 (`needs-user`) and changes nothing, and its reason says how to restore the game's file. A
+successful run ends `uninstalled`, exit 0. The run log is `logs\nevr-install.jsonl` under the core's `--root` (default
+`%LOCALAPPDATA%\nevr\installer`), with one `file_restore` record per file the run puts back or sets aside.
+
 ## What still writes in the game folder
 
 These are not yet in the root. Each moves in its own change and this page is updated with it:
