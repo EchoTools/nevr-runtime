@@ -22,6 +22,7 @@ endif()
 # reads the same on both platforms. plugin_game_image.cpp and input_seam_hook.cpp reach pinned_targets.h, so they are built
 # without exceptions.
 add_library(nevr_quest_plugin STATIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/packaged_plugins.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_plan.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_image.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugin/plugin_loader.cpp"

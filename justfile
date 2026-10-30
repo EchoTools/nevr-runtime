@@ -211,12 +211,13 @@ android-repack-libovr src="/mnt/games/evr/-src-evr-reconstruction/cache/quest_tr
 # `apk` is required (the store APK path). The signing key is the one persistent Quest key stored in
 # pass (tools/quest_keystore.sh): it is read into a private tmpfs file for the signing command only
 # and is never generated here. Store it once with: just import-quest-keystore <keystore>.
-android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="":
+android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="":
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(pwd)"
     apk="{{ apk }}"; shim="{{ shim }}"; plugin="{{ plugin }}"; version="{{ version }}"
     extra_rows="{{ extra_rows }}"; patcher="{{ patcher }}"; json_include="{{ json_include }}"
+    plugin_early="{{ plugin_early }}"; plugin_off="{{ plugin_off }}"
     work="$root/{{ workdir }}"
     # An APK from an earlier run never outlives a run that stops: package-dev takes whatever is at this path.
     rm -f "$work/r15-repacked.apk" "$work/r15-repacked-aligned.apk" "$work/r15_nevr-sentinel_signed.apk"
@@ -255,8 +256,10 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     extra=()
     if [ -n "$extra_rows" ]; then extra=(--extra-rows "$extra_rows"); fi
     # `plugin` (docs/adr/0019-quest-plugin-loader.md): the plugin libraries to carry in the APK, for a headset run of the loader:
-    # one path, or several separated by colons (a path may hold spaces). Empty for every release and package-dev APK. Each file is lib<name>.so; `plugins:`
-    # in config.yaml names it. Every file gets every check, and no two may share a name.
+    # one path, or several separated by colons (a path may hold spaces). Empty for every release and package-dev APK. Each file is lib<name>.so.
+    # A packaged plugin loads by default: the repack writes a manifest of them (tools/quest_repack_libs.py write-plugin-manifest) and
+    # config.yaml's `plugins:` list only overrides it. `plugin_early` and `plugin_off` (colon-separated file names of packaged plugins)
+    # record `early` and `enabled: false` in that manifest. Every file gets every check, and no two may share a name.
     plugins=()
     if [ -n "$plugin" ]; then
         IFS=: read -r -a plugins <<<"$plugin"
@@ -282,6 +285,23 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
             # ADR 0019 section 1: a plugin runs the same static-init check as the shim, minus the shim's own constructor.
             tools/check_quest_static_init.sh --plugin "$llvm_bin" "$p"
         done
+    fi
+    # plugin_early / plugin_off: packaged file names, recorded in the manifest (tools/quest_repack_libs.py refuses a name that is
+    # not packaged). Without a plugin there is nothing to record them on, so they are refused.
+    early_args=(); off_args=()
+    if [ -n "$plugin_early" ]; then
+        IFS=: read -r -a early_names <<<"$plugin_early"
+        for n in "${early_names[@]}"; do early_args+=(--early "$n"); done
+    fi
+    if [ -n "$plugin_off" ]; then
+        IFS=: read -r -a off_names <<<"$plugin_off"
+        for n in "${off_names[@]}"; do off_args+=(--off "$n"); done
+    fi
+    if [ "${#plugins[@]}" -eq 0 ] && [ "${#early_args[@]}" -gt 0 ]; then
+        echo "android-repack-apk: plugin_early names a packaged plugin, and no plugin is given" >&2; exit 1
+    fi
+    if [ "${#plugins[@]}" -eq 0 ] && [ "${#off_args[@]}" -gt 0 ]; then
+        echo "android-repack-apk: plugin_off names a packaged plugin, and no plugin is given" >&2; exit 1
     fi
     # The version the versionCode comes from: `version` when the shim was built elsewhere (a release's CI-built loader has no
     # build tree here), else the build's version header, which sits beside the shim's build tree (build/<tree>/sentinel/ ->
@@ -315,6 +335,13 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
         cp "$p" "$work/stage/lib/arm64-v8a/$(basename "$p")"
         stage_libs+=("lib/arm64-v8a/$(basename "$p")")
     done
+    # 3c. the manifest of the packaged plugins: their names, staged hashes, early and enabled. Written only when a plugin is packaged,
+    # so a repack without one is the same APK as before (docs/adr/0019-quest-plugin-loader.md, section 2).
+    if [ "${#plugins[@]}" -gt 0 ]; then
+        python3 -I tools/quest_repack_libs.py write-plugin-manifest --stage "$work/stage" --plugin "${plugins[@]}" \
+            ${early_args[@]+"${early_args[@]}"} ${off_args[@]+"${off_args[@]}"}
+        stage_libs+=("lib/arm64-v8a/libnevr_plugin_manifest.so")
+    fi
     # 4. fresh APK copy, strip the store's v1 signature, inject both libs STORED (-0)
     unsigned="$work/r15-repacked.apk"
     aligned="$work/r15-repacked-aligned.apk"
@@ -451,11 +478,11 @@ _quest-apk store_apk:
 
 # The development APK for an autopilot run on a Quest (#1202, docs/adr/0025-quest-autopilot-route.md): the local
 # android-arm64 sentinel (a development build: the input seam refuses a release) with libnevr_autopilot.so beside it,
-# repacked from the store APK. The plugin is off unless the headset's config.yaml names nevr_autopilot. Writes
-# build/android-arm64/repack/r15_nevr-sentinel_signed.apk, the path test-quest-hooks-pinned reads. No release or
-# package-dev APK carries the plugin.
+# repacked from the store APK. The plugin is packaged and off by default (plugin_off); a config.yaml entry that names
+# nevr_autopilot turns it on. Writes build/android-arm64/repack/r15_nevr-sentinel_signed.apk, the path test-quest-hooks-pinned
+# reads. No release or package-dev APK carries the plugin.
 quest-autopilot-apk store_apk="/mnt/games/cache/r15_goldmaster_store.apk": build-android
-    just android-repack-apk "{{ store_apk }}" build/android-arm64/sentinel/libovrplatformloader.so build/android-arm64/repack build/android-arm64/integration/libnevr_autopilot.so
+    just android-repack-apk "{{ store_apk }}" build/android-arm64/sentinel/libovrplatformloader.so build/android-arm64/repack build/android-arm64/integration/libnevr_autopilot.so "" "" "" "" "" libnevr_autopilot.so
 
 # One unattended autopilot run on the attached Quest (tools/quest_autopilot_run.py --help): pushes the route, starts the
 # game with the proximity sensor overridden, waits for route_end, and records the run under the work root.
@@ -2123,7 +2150,7 @@ test-quest-plugins:
     "${cxx[@]}" -fno-exceptions -c src/quest/plugin/plugin_game_image.cpp -o "$out/plugin_game_image.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/plugin/input_seam_hook.cpp -o "$out/input_seam_hook.o"
     "${cxx[@]}" -fno-exceptions -c src/quest/sentinel/libr15_identity.cpp -o "$out/libr15_identity.o"
-    loader=(src/quest/plugin/plugin_plan.cpp src/quest/plugin/plugin_image.cpp src/quest/plugin/plugin_loader.cpp
+    loader=(src/quest/plugin/packaged_plugins.cpp src/quest/plugin/plugin_plan.cpp src/quest/plugin/plugin_image.cpp src/quest/plugin/plugin_loader.cpp
             src/quest/plugin/plugin_record_log.cpp src/quest/plugin/plugin_platform.cpp src/quest/data/sha256.cpp
             src/quest/sentinel/hook_log.cpp src/quest/sentinel/sentinel_log.cpp
             "$out/libr15_identity.o" src/quest/patch/libr15_patch_identity.cpp
@@ -2131,6 +2158,9 @@ test-quest-plugins:
     "${cxx[@]}" -pthread src/quest/tests/plugin_loader_test.cpp "${loader[@]}" \
         -o "$out/plugin_loader_test" -ldl
     timeout -k 5 120 "$out/plugin_loader_test" "$out"
+    "${cxx[@]}" -pthread src/quest/tests/packaged_plugins_test.cpp src/quest/plugin/packaged_plugins.cpp \
+        src/quest/plugin/plugin_plan.cpp src/runtime/ext/plugin_load_plan.cpp -o "$out/packaged_plugins_test"
+    timeout -k 5 120 "$out/packaged_plugins_test" src/quest/tests/fixtures
     "${cxx[@]}" -pthread src/quest/tests/plugin_runtime_test.cpp src/quest/plugin/plugin_runtime.cpp \
         src/runtime/ext/plugin_load_plan.cpp "${loader[@]}" -o "$out/plugin_runtime_test" -ldl
     timeout -k 5 120 "$out/plugin_runtime_test" "$out"
