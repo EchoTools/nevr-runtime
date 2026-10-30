@@ -94,7 +94,7 @@ TEST(InviteAnswerText, AResolvedCodeWritesNothingYet) {
 
 TEST(InviteAnswerText, ACreatedCodeAndItsExpiryAreWrittenIntoTheSharePage) {
   const auto items = nevr_invite_text::TextsFor(Created("K7M2Q", "2026-10-21T05:38:59.63Z"));
-  ASSERT_EQ(items.size(), 2u);
+  ASSERT_EQ(items.size(), 3u);
   const auto* code = Find(items, Field::Code);
   const auto* expires = Find(items, Field::Expires);
   ASSERT_NE(code, nullptr);
@@ -105,6 +105,20 @@ TEST(InviteAnswerText, ACreatedCodeAndItsExpiryAreWrittenIntoTheSharePage) {
   EXPECT_EQ(expires->request.text, "EXPIRES: 05:38 UTC");
   EXPECT_EQ(expires->request.target.actor, 0x0ec8e16986ef88c8ULL);
   EXPECT_EQ(expires->request.target.element, 0xd38c12d22d3552ebULL);
+}
+
+TEST(InviteAnswerText, TheLinkTextOfACreatedCodeReadsComingSoon) {
+  const auto items = nevr_invite_text::TextsFor(Created("K7M2Q", "2026-10-21T05:38:59.63Z"));
+  const auto* link = Find(items, Field::Link);
+  ASSERT_NE(link, nullptr);
+  EXPECT_EQ(link->request.text, "<coming soon>");
+  EXPECT_EQ(link->request.target.actor, 0xc3f9f167b2a06043ULL);
+  EXPECT_EQ(link->request.target.element, 0x3657cd7405999810ULL);  // "link_text", in the symbol cache
+  EXPECT_EQ(link->request.text.find("readyatdawn"), std::string::npos);
+}
+
+TEST(InviteAnswerText, ARefusedCreateLeavesTheLinkAlone) {
+  EXPECT_EQ(Find(nevr_invite_text::TextsFor(Refused(Op::Create, Result::Limit)), Field::Link), nullptr);
 }
 
 TEST(InviteAnswerText, AnUnreadableExpiryIsADashNotAMissingLine) {
@@ -154,12 +168,16 @@ TEST(InviteAnswerText, EveryTextIsSomethingTheWriterWillAccept) {
   }
 }
 
-TEST(InviteAnswerText, TheThreeTargetsAreDistinctAndNamed) {
+TEST(InviteAnswerText, TheFourTargetsAreDistinctAndNamed) {
+  EXPECT_FALSE(nevr_invite_text::kCodeTarget == nevr_invite_text::kLinkTarget);
+  EXPECT_FALSE(nevr_invite_text::kExpiresTarget == nevr_invite_text::kLinkTarget);
+  EXPECT_FALSE(nevr_invite_text::kEntryTitleTarget == nevr_invite_text::kLinkTarget);
   EXPECT_FALSE(nevr_invite_text::kCodeTarget == nevr_invite_text::kExpiresTarget);
   EXPECT_FALSE(nevr_invite_text::kCodeTarget == nevr_invite_text::kEntryTitleTarget);
   EXPECT_FALSE(nevr_invite_text::kExpiresTarget == nevr_invite_text::kEntryTitleTarget);
   EXPECT_STREQ(nevr_invite_text::FieldName(Field::Code), "code");
   EXPECT_STREQ(nevr_invite_text::FieldName(Field::Expires), "expires");
+  EXPECT_STREQ(nevr_invite_text::FieldName(Field::Link), "link");
   EXPECT_STREQ(nevr_invite_text::FieldName(Field::EntryTitle), "entry_title");
 }
 
@@ -190,11 +208,13 @@ struct Rig {
 TEST(InviteAnswerPost, EachTextIsPostedAndLoggedByFieldAndSizeOnly) {
   Rig rig;
   nevr_invite_text::Apply({Created("K7M2Q", "2026-10-21T05:38:59.63Z")}, true, rig.Post(), rig.Log());
-  ASSERT_EQ(rig.posted.size(), 2u);
+  ASSERT_EQ(rig.posted.size(), 3u);
   EXPECT_EQ(rig.posted[0].text, "K7M2Q");
-  ASSERT_EQ(rig.lines.size(), 2u);
+  EXPECT_EQ(rig.posted[2].text, "<coming soon>");
+  ASSERT_EQ(rig.lines.size(), 3u);
   EXPECT_EQ(rig.lines[0].second, "[NEVR.INVITE] text posted field=code bytes=5");
   EXPECT_EQ(rig.lines[1].second, "[NEVR.INVITE] text posted field=expires bytes=18");
+  EXPECT_EQ(rig.lines[2].second, "[NEVR.INVITE] text posted field=link bytes=13");
   EXPECT_EQ(rig.lines[0].first, nevr_invite::LogLevel::Info);
   for (const auto& [level, line] : rig.lines) {
     EXPECT_EQ(line.find("K7M2Q"), std::string::npos) << "the code is a bearer secret";
