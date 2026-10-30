@@ -326,6 +326,13 @@ enum class Outcome {
 
 const char* OutcomeName(Outcome outcome);
 
+// The most fields one quest_login record carries, the outcome included (#1549).
+constexpr std::size_t kMaxLoginFields = 10;
+// Writes one quest_login record: `outcome`, then `details`, then `tail`. A record over kMaxLoginFields keeps
+// its first fields and is preceded by quest_login_log_overflow, which names the event and the field count.
+void EmitLoginRecord(LogFn log, Level level, Outcome outcome, const LogKv* details, std::size_t n,
+                     const LogKv* tail = nullptr, std::size_t m = 0);
+
 // What the login that is about to go out carries, read from the CURRENT state (after the rewrite
 // ran, or declined and restored): the account id CNSUser::SendLogInRequest will send (the virtual
 // AccountID(), 0x382b9c) and the JSON access_token and nonce. Not a per-attempt flag: the game
