@@ -451,6 +451,8 @@ class ProductionSteps final : public Steps {
   }
 
   PluginCounts PlanPlugins() override {
+    // The level source and its frame work go in before any plugin context exists (#1106). Registering twice is a no-op.
+    nevr_quest::integration::InstallPluginMainLevel();
     const nevr_quest::plugin::PlanCounts counts = nevr_quest::plugin::PlanPlugins(
         sentinel::ActiveConfig().plugins, nevr_quest::integration::ResourceRequestLogEnabled(),
         sentinel::ActiveConfig().fileRejected);

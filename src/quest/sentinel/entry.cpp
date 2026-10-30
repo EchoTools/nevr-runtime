@@ -19,6 +19,7 @@
 #include "login_prompt_hook.h"
 #include "login_title_hook.h"
 #include "quest/invite/frame_dispatch.h"
+#include "main_level.h"
 #include "menu_cards_hook.h"
 #include "quest/invite/wizard_metric_hook.h"
 #include "quest/invite/join_game_quest.h"
@@ -229,6 +230,10 @@ bool InstallWizardMetricHook() noexcept {
     }
     return observer;
 }
+
+// The game's main level for the plugins (#1106). The source and the frame work register once; a refused frame work is logged
+// by main_level::Install, and the plugins then keep the level they were given at init.
+bool InstallPluginMainLevel() noexcept { return nevr_quest::main_level::Install(); }
 
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
 // token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.

@@ -90,6 +90,11 @@ bool InstallMenuCardsHook() noexcept;
 // this seam for the same reason. No counters. True when the observer's handler is in the game's call.
 bool InstallWizardMetricHook() noexcept;
 
+// The game's main level for the plugins (#1106, sentinel/main_level.h): the source the plugin loader reads and the frame work
+// that keeps the plugins' contexts current. Called once, before the plugin plan; a refused frame work is logged there. No
+// counters. True when the frame work is registered.
+bool InstallPluginMainLevel() noexcept;
+
 // The #1220 rad provider in pnsovr's place (sentinel/pns_provider_hook.h), through this seam for the same reason: it
 // includes callback_thunk.h. No counters. A development build only (`PnsProviderEnabled` is nevr_build::kIsDev, defined in
 // entry.cpp, which includes the generated nevr_build_info.h). True when all four libr15 slots hold their thunks.

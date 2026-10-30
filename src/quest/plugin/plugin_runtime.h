@@ -30,6 +30,10 @@ void RunEarlyPlugins() noexcept;
 // Moment (b): loads every entry still pending. Runs once, at the first post-load call.
 void RunNormalPlugins() noexcept;
 
+// Writes the game's main level into the contexts the loaders already handed out (Loader::RefreshMainLevel, #1106). Called once
+// per NetGame::Update from the frame dispatcher, so it never waits: when a pass holds the loader this frame does nothing.
+void RefreshMainLevel() noexcept;
+
 // Ends every entry still pending as `not_started`, with `reasonToken` (a plugin_plan.h reason token). Safe to call more than
 // once and with nothing planned.
 void FinishPlugins(const char* reasonToken) noexcept;

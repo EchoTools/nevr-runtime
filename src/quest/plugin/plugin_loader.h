@@ -7,10 +7,10 @@
 // loader never throws and never ends the process: `required` on a client is recorded and the game goes on.
 //
 // What a plugin sees is the existing C ABI (nevr/plugin_interface.h): the same NvrGameContext as on PC, with
-// base_addr the libr15 load base, net_game null, game_state 0, flags IS_CLIENT | PLATFORM_QUEST, the level fields empty (no
-// Quest source for the game object exists before the host tick, ADR 0019 slice 4), and game_build_id the plugin identity
-// (plugin_identity.h: the stock libr15 ID when the running libr15 is our verified patched file, else the live note, ADR
-// 0021 section 12). The per-frame and state-change exports are not called in slice 1: nothing ticks them yet.
+// base_addr the libr15 load base, net_game null, game_state 0, flags IS_CLIENT | PLATFORM_QUEST, the main level
+// (level_symbol, level_name) the platform reports now and RefreshMainLevel keeps current (#1106), and game_build_id the
+// plugin identity (plugin_identity.h: the stock libr15 ID when the running libr15 is our verified patched file, else the
+// live note, ADR 0021 section 12). The per-frame and state-change exports are not called in slice 1: nothing ticks them yet.
 #pragma once
 
 #include <cstddef>
@@ -47,10 +47,20 @@ struct LoadRecord {
   bool configRejected = false;           // config.yaml was rejected as a whole: this plugin loaded with its manifest values alone
 };
 
+// The game's main level, as a plugin context carries it (level_symbol, level_name). `name` is null when the symbol is 0 or the
+// generated name table does not know it (a level a plugin registered itself is not in the table: compare the symbol).
+struct MainLevel {
+  std::uint64_t symbol = 0;
+  const char* name = nullptr;
+};
+
 // The loader's view of the world. Every method may throw std::exception; the loader contains it.
 class Platform {
  public:
   virtual ~Platform() = default;
+  // The game's main level now (#1106, the PC's `main level` read from the game context). The default is none: a platform
+  // with no source for it (a host test) says so, and the context carries level_symbol 0.
+  virtual MainLevel CurrentMainLevel() { return {}; }
   // The bytes of `file` in the native library directory; false when they cannot be read.
   virtual bool ReadFile(const std::string& file, std::vector<std::uint8_t>* bytes) = 0;
   // dlopen of `file`; null on failure.
@@ -105,6 +115,11 @@ class Loader {
   // How many entries still wait for `phase` (counting the early ones in the normal phase when no early pass ran).
   std::size_t PendingFor(PluginPhase phase) const;
   const std::vector<PlanEntry>& Entries() const { return entries_; }
+
+  // Writes the platform's current main level into every context already handed out, so a plugin that kept its pointer sees
+  // a level change (#1106). Game thread, once per frame. A plugin reading the two fields while they are stored sees the old
+  // or the new value: each is one aligned 8-byte store, and nothing else in the context changes.
+  void RefreshMainLevel();
 
  private:
   // What the query API (ctx->get_plugin_info) hands out: the strings are copies, the struct is process-lifetime stable
