@@ -390,6 +390,7 @@ KEY_SETTLE_SECONDS = 3.0
 HOVER_DWELL_SECONDS = 1.5
 # The keyboard slides in after the page changes: the first presses of a code typed at once were lost (the field held the last 3 of 5).
 ENTRY_PAGE_SETTLE_SECONDS = 6.0
+SHARE_JOIN = (767, 550)                          # SHARE INVITE: the wide JOIN button under the settings
 KEY_ENTER = (893, 497)
 CANCEL_ENTRY = (767, 559)
 LEFT_COLUMN = (296, 360, 440, 580)               # the left column's box: its buttons change with every page
@@ -539,6 +540,11 @@ class Ui:
         self.click_logged(*MODE_CUSTOM, r"wizard event seen page=arena_mode event=card card=1 experience=arena mode=custom", "Custom Match")
         self.click_logged(*CREATE_INVITE, r"wizard click seen event=create_invite", "CREATE INVITE CODE")
 
+    def share_join(self) -> None:
+        """The creator's way in: the JOIN button on the share page, no code typed (#1731)."""
+        self.raise_window()
+        self.click_logged(*SHARE_JOIN, r"wizard click seen event=join panel=create_game_summary", "JOIN (share page)")
+
     def join(self, slots: dict[str, int], code: str, from_share_page: bool) -> None:
         """The main menu's JOIN VIA CODE, the code typed on the page's keyboard, ENTER. From the share page it leaves by MAIN MENU."""
         self.raise_window()
@@ -563,7 +569,8 @@ def uuid_of(match_id: str) -> str:
     return match_id[:36].upper()
 
 
-def run_flow(a: Client, b: Client, steps: list[Step], timing: dict, evidence: pathlib.Path | None = None) -> None:
+def run_flow(a: Client, b: Client, steps: list[Step], timing: dict, evidence: pathlib.Path | None = None,
+             share_join: bool = False) -> None:
     """The steps, in order. Each appends its Step; the first StepFailed ends the flow and is recorded by the caller."""
     def done(name: str, proof, ok: bool = True, gating: bool = True) -> None:
         steps.append(Step(name, ok, proof, gating))
@@ -633,6 +640,17 @@ def run_flow(a: Client, b: Client, steps: list[Step], timing: dict, evidence: pa
     joined: dict[str, str] = {}
     for c in (b, a):
         mark = c.lines()[-1].n if c.lines() else 0
+        if uis and share_join and c is a:
+            # A is on the share page of the game it created: its own JOIN joins that match, with no code and no resolve
+            uis["A"].share_join()
+            click, _ = a.wait_for(r"wizard click seen event=join panel=create_game_summary", 10, mark)
+            asked, _ = a.wait_for(rf"\[NEVR\.INVITE\] share join requested lobby=({GUID})", 30, mark)
+            start, sm = a.wait_for(rf"\[NEVR\.INVITE\] join started route=(\w+) lobby=({GUID}) state_from=(\d+)", 60, mark)
+            joined["A"] = sm[2].upper()
+            done("A clicks JOIN on the share page and the join of the match A created starts (no code typed)",
+                 [("A", click, ""), ("A", asked, ""), ("A", start, "")], sm[1] == "stage")
+            timing["mark"]["A"] = mark
+            continue
         if uis:
             uis[c.label].join(slots, code, from_share_page=(c is a))
         else:
@@ -726,10 +744,14 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--account-b", help="stored sign-in for client B")
     parser.add_argument("--ui", action="store_true",
                         help="drive the wizard with real mouse clicks (CREATE GAME ... typed JOIN VIA CODE) instead of the control endpoint")
+    parser.add_argument("--share-join", action="store_true",
+                        help="with --ui: the creator joins with the share page's JOIN button instead of typing the code (#1731)")
     parser.add_argument("--timeout", type=int, default=1500, help="seconds each client may run (timeout -s INT -k 15)")
     parser.add_argument("--game-root", type=pathlib.Path,
                         help="the install to copy (the directory that holds bin/win10/echovr.exe); default: the main checkout's echovr/")
     args = parser.parse_args(argv)
+    if args.share_join and not args.ui:
+        parser.error("--share-join drives the share page with the mouse: it needs --ui")
 
     # -- preconditions: each failure here is exit 2 with the fix, before any copy is made ----------------------------------
     runtime = args.dll.with_name("nevr-runtime.dll")
@@ -802,7 +824,7 @@ def main(argv: list[str]) -> int:
             c.launch(args.dll, args.timeout)
             say(f"client {c.label} launched (account {c.account[:4]}...; timeout {args.timeout} s)")
             time.sleep(4)
-        run_flow(clients[0], clients[1], steps, timing, evidence if args.ui else None)
+        run_flow(clients[0], clients[1], steps, timing, evidence if args.ui else None, args.share_join)
     except (StepFailed, OSError, KeyError, IndexError, ValueError) as exc:  # a bug in this tool still ends in teardown and a verdict
         steps.append(Step("the flow stopped here", False, [("run", None, f"{type(exc).__name__}: {exc}")]))
         say(f"FAIL  {exc}")
