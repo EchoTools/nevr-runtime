@@ -21,6 +21,7 @@
 #include "headset_gates.h"
 #include "hudmeter.h"
 #include "impactsnd.h"
+#include "instmodel.h"
 #include "levelname.h"
 #include "music.h"
 #include "peerclamp.h"
@@ -148,6 +149,9 @@
 #ifndef Q15T_SENSORWD
 #define Q15T_SENSORWD 0
 #endif
+#ifndef Q15T_INSTMODEL  // CGInstancedModelResource's constructor with growth step 1 (instmodel.h)
+#define Q15T_INSTMODEL 0
+#endif
 // The game-thread tick: CncaGame::ExclusiveUpdateGame's JUMP_SLOT, its function, and CR15Game's vptr value (R17; q15t
 // the source build's gunconnect kGotExclusiveUpdateGame / kFnExclusiveUpdateGame / kGameVptr).
 #ifndef Q15T_SLOT_EXCLUSIVEUPDATEGAME
@@ -248,6 +252,9 @@ constexpr char kCompiledModules[] =
 #endif
 #if Q15T_SENSORWD
     "sensorwd "
+#endif
+#if Q15T_INSTMODEL
+    "instmodel "
 #endif
     "";
 
@@ -466,6 +473,9 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
 #if Q15T_SENSORWD
   ReportModule("sensorwd", InstallSensorWd(base));
   AddModuleTick("sensorwd", &SensorWdTick, &want_tick);  // one bool test per frame when the install was refused
+#endif
+#if Q15T_INSTMODEL
+  ReportModule("instmodel", InstallInstModel(base));  // no tick: the swapped constructor does its work when the object is built
 #endif
 #if Q15T_MUSIC
   {

@@ -23,7 +23,7 @@ Neither library is in a release or package-dev APK. `just build-quest-q15t` buil
 
 The build defaults are the shipped behaviour; none of them depends on a config or switch file.
 
-- On: fxtrail, voipdrop, custctx, gunconnect, aibots, bvh, wallfire, impactsnd, music, sensorwd, ec, ecfx, the menu gate
+- On: fxtrail, voipdrop, custctx, gunconnect, aibots, bvh, wallfire, impactsnd, music, sensorwd, instmodel, ec, ecfx, the menu gate
   (`Q15T_GATE_LINK`), `Q15T_SHIELDGAMMA=2`, and the new-profile gun hand (`Q15T_T26`).
 - `ec` is on with the words `types=VPTO equip hide` (`Q15T_EC_DEFAULT_WORDS`), and `ecfx` is on (`Q15T_ECFX_DEFAULT_ON`),
   with no switch file. A switch file in the plugin data directory still overrides the words.

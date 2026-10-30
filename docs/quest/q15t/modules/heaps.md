@@ -114,6 +114,8 @@ Query output (verbatim): `word | 196784c | 14048052 | mov | w20, #0x20`, `word |
 `fn | 19677cc | CGMeshListResource | 516`, `fn | 1a06f4c | ConstructInstance | 304`, `fn | 1a0707c | CreateInstance | 292`,
 `fn | 1a078dc | CGInstancedModelResource | 376`. Replacement encodings are the source's (`res_heap_patch.py:46-55`, `0x52800028`, `0x52800034`);
 `mov w8,#1` = `0x52800028` and `mov w20,#1` = `0x52800034` is consistent with the stock encodings (imm16 at bits 20:5: 0x20 -> 0x1).
+The 1a07958 row (CGInstancedModelResource) is not a word row any more: the instmodel module swaps its constructor's GOT word for a
+wrapper that sets the same eight steps to 1 (`docs/quest/q15t/modules/instmodel.md`, `Q15T_INSTMODEL`). The other three rows stay as above.
 Each function also has a stock sha256 in the source (`res_heap_patch.py:46-55`); I did not recompute those.
 
 ## 4. Logging (AGENTS.md)
