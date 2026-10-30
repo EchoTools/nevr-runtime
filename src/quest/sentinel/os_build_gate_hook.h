@@ -46,8 +46,14 @@ Seen CurrentSeen() noexcept;
 // holds the thunk. A refused install is logged by GotHook and by the hook's own line, and leaves the game's call intact.
 bool Install() noexcept;
 
-// The install on any target with `floor` as the floor (the host test installs it in a fixture library).
-bool InstallAt(const sentinel::GotTarget& target, std::uint64_t floor, const char* floorSource) noexcept;
+// The floor read from `image` (a libr15 image): the constant at the pinned address when the image's build ID is the
+// pinned one, else 0. `*source` names the outcome ("pinned", "no_build_id", "build_id_mismatch").
+std::uint64_t ReadPinnedFloorFrom(const sentinel::ElfImage& image, const char** source) noexcept;
+
+// The install on any target with `floor` as the floor, the images found through `lookup` (the host test installs it in
+// a fixture library). Install() passes the default lookup.
+bool InstallAt(const sentinel::GotTarget& target, std::uint64_t floor, const char* floorSource,
+               sentinel::ImageLookup lookup = sentinel::FindLoadedImage) noexcept;
 
 // Test support: arms the handler without touching a GOT slot, with `floor` as the floor. ResetForTest clears the
 // one-shot and the counts.
