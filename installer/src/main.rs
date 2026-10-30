@@ -14,13 +14,25 @@ const USAGE: &str = "usage: install-nevr-runtime <command> [options]
   pc plan|install --dir <folder with echovr.exe> [--nevr-root DIR] [--launcher-dir DIR] [--allow-downgrade] [--version V] [--package-dir DIR]
   pc launch-check --dir <folder> [--nevr-root DIR] [--bootstrap-log FILE] [--version V]
   pc stage --root <nevr root> [--current-json JSON] [--version V]
+  pc uninstall --dir <folder with echovr.exe> [--nevr-root DIR] [--dev-nevr-root]  restores the recorded original; fetches nothing, reads no stdin
 options: --root DIR  --base URL  --channel NAME  --log FILE  --state-dir DIR  --work-dir DIR  --pins FILE  --now UTC
 --artifact-dir installs a local tester APK (one .apk and its .sha256 sidecar) in place of the release's, and logs every step
   as an unverified dev artifact; no installer a player runs passes it.
 --package-dir installs the DLLs in DIR when they match the signed manifest's entries, and downloads only when they do not.
 --nevr-root must be the folder the game loads nEVR from (%LOCALAPPDATA%\\nevr\\echovr); any other is refused, unless --dev-nevr-root
   is given for a dev or test run.
-exit codes: 0 installed or nothing to do, 1 failed with nothing changed, 2 needs the player, 3 restored";
+exit codes: 0 installed, uninstalled or nothing to do, 1 failed with nothing changed, 2 needs the player, 3 restored";
+
+/// The hashes the `SHA256SUMS` beside this executable lists for `BugSplat64.dll`: the package's own list, which uninstall.ps1
+/// reads from its folder. An executable with no list beside it has none.
+fn package_sums() -> Vec<String> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| d.join("SHA256SUMS")))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| nevr_install::pc::host_hashes_in_sums(&t))
+        .unwrap_or_default()
+}
 
 fn default_root() -> PathBuf {
     if let Ok(r) = std::env::var("NEVR_INSTALL_ROOT") {
@@ -90,7 +102,7 @@ fn main() -> ExitCode {
     let (platform, cmd) = match words.as_slice() {
         ["manifest", "verify"] => ("pc", "manifest"),
         ["quest", c @ ("plan" | "install")] => ("quest", *c),
-        ["pc", c @ ("plan" | "install" | "launch-check" | "stage")] => ("pc", *c),
+        ["pc", c @ ("plan" | "install" | "launch-check" | "stage" | "uninstall")] => ("pc", *c),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(1);
@@ -228,6 +240,12 @@ fn main() -> ExitCode {
                 }
                 let (end, report) = sess.pc_stage(version.as_deref(), &root, &cur)?;
                 Ok((end, Some(report)))
+            }
+            // No manifest is fetched and no stdin is read: the record and the files are the whole input (#1497).
+            ("pc", "uninstall") => {
+                let dir = PathBuf::from(args.val("--dir").ok_or_else(|| nevr_install::error::Error::new(9, "--dir is required"))?);
+                let (end, plan) = sess.pc_uninstall(&dir, game_running(), &package_sums())?;
+                Ok((end, Some(plan)))
             }
             ("pc", c) => {
                 let dir = PathBuf::from(args.val("--dir").ok_or_else(|| nevr_install::error::Error::new(9, "--dir is required"))?);

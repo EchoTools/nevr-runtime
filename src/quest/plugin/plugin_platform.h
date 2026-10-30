@@ -24,6 +24,10 @@ std::optional<nevr_quest::LogLevel> SinkLevel(std::uint32_t level, bool emitDebu
 using Libr15PatchSource = Libr15PatchState (*)();
 Libr15PatchSource SetLibr15PatchSource(Libr15PatchSource source);
 
+// The result of reading one file of the library directory: read; not there (the normal case for an optional file); or there and
+// not usable (a link, a directory, too large, a read error), with the reason as a token.
+enum class ReadOutcome { kRead, kAbsent, kUnreadable };
+
 class SentinelPlatform final : public Platform {
  public:
   // `libraryDir`: the native library directory (the directory of the sentinel's own mapping, ADR 0019 section 1).
@@ -31,6 +35,8 @@ class SentinelPlatform final : public Platform {
   SentinelPlatform(std::string libraryDir, bool emitDebug);
 
   bool ReadFile(const std::string& file, std::vector<std::uint8_t>* bytes) override;
+  // ReadFile with the difference between "not there" and "not usable". `*why` is a reason token for kUnreadable, "" otherwise.
+  ReadOutcome ReadFileOutcome(const std::string& file, std::vector<std::uint8_t>* bytes, const char** why);
   void* Open(const std::string& file) override;
   void Close(void* handle) override;
   void* Symbol(void* handle, const char* name) override;

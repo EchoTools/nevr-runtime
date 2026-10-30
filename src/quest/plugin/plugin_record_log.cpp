@@ -9,6 +9,7 @@ void LogLoadRecord(const LoadRecord& record) {
       {"name", record.name.c_str()},
       {"file", record.file.c_str()},
       {"sha256", record.sha256.c_str()},
+      {"expected_sha256", record.expectedSha256.c_str()},  // the manifest's hash; empty when the file has none
       {"plugin_build_id", record.pluginBuildId.c_str()},
       {"game_build_id", record.gameBuildId.c_str()},
       {"plugin_view_build_id", record.pluginViewBuildId.c_str()},
@@ -18,6 +19,8 @@ void LogLoadRecord(const LoadRecord& record) {
       {"reason", record.reason.empty() ? "ok" : record.reason.c_str()},
       {"required", record.required ? 1 : 0},
       {"arg_keys", record.argKeys.c_str()},
+      {"source", record.source.c_str()},
+      {"overridden", record.overridden ? 1 : 0},
   };
   const bool fine = record.outcome == Outcome::kLoaded || record.outcome == Outcome::kDisabled;
   sentinel::LogFieldList(fine ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "plugin_load", fields,
