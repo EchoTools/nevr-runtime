@@ -484,6 +484,11 @@ TEST(TheFilesDigestAndImageEndArePinnedWhenTheSpecSaysSo) {
   World w;
   w.spec.stockSha256 = std::string(64, '0');
   ExpectRefusal(w.Patch(), "stock_sha256_mismatch", "", "wrong sha");
+  w.spec.alsoSha256 = {std::string(64, '1')};
+  ExpectRefusal(w.Patch(), "stock_sha256_mismatch", "", "a listed digest that is not the file's");
+  w.spec.alsoSha256 = {std::string(64, '1'), nevr_quest::data::Sha256Hex(w.elf.bytes.data(), w.elf.bytes.size())};
+  CHECK(w.Patch().ok);  // #1737: the file's digest may be any of the listed ones
+  w.spec.alsoSha256.clear();
   w.spec.stockSha256 = nevr_quest::data::Sha256Hex(w.elf.bytes.data(), w.elf.bytes.size());
   CHECK(w.Patch().ok);
   w.spec.expectedImageEnd = 0x14035f0;

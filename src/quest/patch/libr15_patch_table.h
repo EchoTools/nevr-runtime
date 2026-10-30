@@ -29,6 +29,13 @@ inline constexpr std::uint64_t kRevaultBias = 0x100000;
 /// the store APK for this table).
 inline constexpr const char* kLibR15StockBuildId = "b243509c08ce677aeb95fa348016949b3fc45230";
 inline constexpr const char* kLibR15StockSha256 = "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20";
+// The reference build's own byte-patched libr15 files the patcher also takes as input (#1737): the same build ID and layout,
+// other bytes where it patched. The first is that file with its package-name strings replaced by this package's; the second is
+// the file as the reference build ships it.
+inline constexpr const char* kLibR15ReferenceSha256[] = {
+    "936aa6a3e289484742bcf23900ffa6a185e277628a1690529140cd34a26c8d67",
+    "6e9db28d612019b0e5b2e2ab515e1f9bd15d1a8f8d345060160e3172864540e1",
+};
 
 constexpr std::uint64_t RoundUp(std::uint64_t value, std::uint64_t alignment) {
   return (value + alignment - 1) / alignment * alignment;

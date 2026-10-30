@@ -292,7 +292,8 @@ PatchResult PatchLibr15(const std::vector<std::uint8_t>& stock, const PatchSpec&
     return Failed(Refuse("stock_build_id_mismatch", "", "build ID " + BuildIdHex(liveId) + ", expected " + BuildIdHex(spec.stockBuildId)), stockSha);
   }
   stockSha = data::Sha256Hex(stock.data(), stock.size());
-  if (!spec.stockSha256.empty() && stockSha != spec.stockSha256) {
+  if (!spec.stockSha256.empty() && stockSha != spec.stockSha256 &&
+      std::find(spec.alsoSha256.begin(), spec.alsoSha256.end(), stockSha) == spec.alsoSha256.end()) {
     return Failed(Refuse("stock_sha256_mismatch", "", "sha-256 " + stockSha + ", expected " + spec.stockSha256), stockSha);
   }
 
