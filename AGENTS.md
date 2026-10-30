@@ -927,7 +927,9 @@ your seat name, for example `claude-main` or `codex`.
   not the environment. The build fails when the file is missing. `.env` is runtime-only (local overrides, git-ignored,
   never copied into a worktree, never compiled in); never print it.
 - **Client login test mechanics.** Run `NEVR_GAME_ROOT=<copy> ./launch-client.sh --dll <absolute path to the
-  build's BugSplat64.dll; the nevr-runtime.dll beside it is deployed with it> --exit-after-login` from your checkout, where `<copy>` is a throwaway copy of the
+  build's BugSplat64.dll; the nevr-runtime.dll beside it is deployed with it> --exit-after-login` from your checkout. The
+  build is `mingw-plugin-dev` (the default `--dll`, #1230): a `mingw-release` host refuses its unsigned runtime and the
+  game stops with exit 78. `<copy>` is a throwaway copy of the
   install (see "The game install"), one client at a time (it exits 4 while an
   `echovr.exe` runs or another run holds the lock). It ends the run itself: exit 0 on `to logged in`;
   exit 1 on repeated `rad15_live failed` or `Service is unavailable` lines, a DLL that embeds no
