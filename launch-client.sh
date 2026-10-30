@@ -10,8 +10,9 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 source tools/lib/game_install.sh
 GAME_ROOT=$(resolve_game_root) || exit $?
 
-# --dll PATH deploys that BugSplat64.dll instead of the release build (the scenario runner passes
-# the mingw-scenario build; see tools/scenario/run_scenario.py). The runtime is the nevr-runtime.dll beside it,
+# --dll PATH deploys that BugSplat64.dll instead of the plugin-dev build (the scenario runner passes
+# the mingw-scenario build; see tools/scenario/run_scenario.py). The default is the dev build, not the release one:
+# a release host refuses the unsigned nevr-runtime.dll that build makes (#1230, test_preset_unsigned_runtime.py). The runtime is the nevr-runtime.dll beside it,
 # or --runtime-dll PATH: the host loads it from the game's own directory, so a run deploys both. --config PATH starts the game with
 # `-config PATH` (the game's JSON file) and, when a config.yaml sits in the same directory, `-config-file` naming
 # it (the runtime reads config.yaml only from the file `-config-file` names, else from the nevr root), so a run can
@@ -21,7 +22,7 @@ GAME_ROOT=$(resolve_game_root) || exit $?
 # it polls the run's own log until the client reaches "logged in" (PASS), the service stays
 # unavailable or --login-timeout seconds pass (FAIL), kills the game, restores the DLL and returns the
 # verdict. Without it the script returns only after the game exits (the scenario runner relies on that).
-DLL=build/mingw-release/bin/BugSplat64.dll
+DLL=build/mingw-plugin-dev/bin/BugSplat64.dll
 RUNTIME_DLL=""
 CONFIG=""
 TRACE_EXPORTS=""

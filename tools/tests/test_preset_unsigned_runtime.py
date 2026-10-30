@@ -8,6 +8,7 @@ what ships must not be. CMake resolves `inherits` in the same way the helper bel
 """
 import json
 import pathlib
+import re
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -61,6 +62,21 @@ class ScenarioBuildIsTheDevBuild(unittest.TestCase):
                 continue
             with self.subTest(preset=name):
                 self.assertFalse(is_on(cache_variables(name, by_name).get(DEV_BUILD, "OFF")))
+
+    def test_the_login_test_default_is_the_dev_build(self):
+        # #1230: launch-client.sh deploys its default BugSplat64.dll (and the nevr-runtime.dll beside it) into a game copy
+        # and runs the login test with it. A default from a shipping preset is refused by the host and the game stops.
+        script = (REPO / "launch-client.sh").read_text(encoding="utf-8")
+        match = re.search(r"^DLL=build/([^/\s]+)/bin/BugSplat64\.dll$", script, re.MULTILINE)
+        self.assertIsNotNone(match, "launch-client.sh has no default DLL of the form build/<preset>/bin/BugSplat64.dll")
+        by_name = presets()
+        name = match.group(1)
+        self.assertIn(name, by_name, f"launch-client.sh's default names {name}, which is not a configure preset")
+        self.assertTrue(
+            is_on(cache_variables(name, by_name).get(DEV_BUILD, "OFF")),
+            f"launch-client.sh's default names {name}, which builds an unsigned nevr-runtime.dll the host refuses "
+            f"(exit 78, runtime_refused); its default must be the dev build with {DEV_BUILD}=ON",
+        )
 
     def test_the_resolver_reads_an_inherited_variable(self):
         by_name = presets()
