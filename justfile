@@ -14,9 +14,11 @@ proto_pin := "259a506a3e1b490ba3482e24e92ba4db"
 # base_dir is the main checkout, so every worktree under it hashes the same relative include paths.
 export CMAKE_C_COMPILER_LAUNCHER := env("NEVR_CCACHE", `command -v ccache 2>/dev/null || true`)
 export CMAKE_CXX_COMPILER_LAUNCHER := env("NEVR_CCACHE", `command -v ccache 2>/dev/null || true`)
-export CCACHE_CONFIGPATH := justfile_directory() / "tools/ccache.conf"
+# One config for every build, kept in the cache directory (tools/ccache_config.sh copies tools/ccache.conf there): a path inside a
+# worktree dies with the worktree, and a process that still carries it falls back to ccache's 5 GiB default (#1736).
 export CCACHE_BASEDIR := `dirname "$(git rev-parse --path-format=absolute --git-common-dir)"`
 export CCACHE_DIR := if path_exists("/mnt/games/cache/ccache") == "true" { "/mnt/games/cache/ccache" } else { env("HOME") / ".cache/ccache" }
+export CCACHE_CONFIGPATH := `tools/ccache_config.sh "$(if [ -d /mnt/games/cache/ccache ]; then echo /mnt/games/cache/ccache; else echo "$HOME/.cache/ccache"; fi)" 2>/dev/null || echo "$PWD/tools/ccache.conf"`
 
 # Show available recipes (default)
 default:
@@ -38,7 +40,7 @@ generate-symcache:
         --if-pin-changed
 
 # Configure CMake (fails early with the fix when a fresh worktree lacks its build inputs)
-configure: generate-symcache _vcpkg-mingw _proto-current _build-inputs
+configure: _build-guard generate-symcache _vcpkg-mingw _proto-current _build-inputs
     @unset VCPKG_ROOT && cmake --preset {{ preset }} > /dev/null 2>&1 || (unset VCPKG_ROOT && cmake --preset {{ preset }})
 
 # Regenerate gen/ when it is not the output for the pinned BSR commit (after vcpkg, whose protoc does the work)
@@ -107,6 +109,24 @@ install-train-guard-timer:
 remove-worktree *args:
     python3 -I tools/remove_worktree.py {{ args }}
 
+# The fixed build checkout (tools/build_checkout.py, #1736) is built only while `git status --porcelain` is empty; every other tree is
+# not checked. Builds that are cached come from that one clean directory (AGENTS.md, "Builds").
+_build-guard:
+    @python3 -I tools/build_checkout.py guard
+
+# Check REV out in the fixed build checkout (creating it the first time) and print where it is; refuses when it is not clean.
+# Build there with `cd $(just build-checkout-path) && just build-android`.
+build-checkout rev="origin/main":
+    python3 -I tools/build_checkout.py sync {{ rev }}
+
+# The path of the fixed build checkout ($NEVR_BUILD_CHECKOUT, else <work root>/build-checkout/nevr-runtime).
+build-checkout-path:
+    @python3 -I tools/build_checkout.py path
+
+# The compiler cache's statistics as the builds see it (the repo's config, not ccache's 5 GiB default that a bare `ccache -s` reads).
+ccache-stats:
+    ccache -s
+
 # Build all components
 build: configure
     @cmake --build --preset {{ preset }}
@@ -140,14 +160,18 @@ clean:
 # --- Android / Quest (arm64-v8a) ---
 # Self-contained NDK sub-project at src/quest (root CMake is MinGW-only).
 # NDK: r26d by default; override with ANDROID_NDK_HOME.
-# The Quest configure lines clear the ccache launcher: that build embeds the worktree path in its debug info (no -ffile-prefix-map),
-# so an object cached from one worktree would put that worktree's path into another's .so.
+# The Quest configure lines keep the ccache launcher only in the fixed, clean build checkout (tools/build_checkout.py, #1736): there
+# the directory is the same on every build, so a cached object is the one a fresh compile would write. Anywhere else the launcher is
+# cleared, so no worktree's directory is put into another's .so.
 
 ndk := env("ANDROID_NDK_HOME", "/home/andrew/src/android-ndk-r26d")
 
 # Configure the Android arm64-v8a build (NDK r26d, API 26, static libc++)
-configure-android:
-    cd src/quest && CMAKE_C_COMPILER_LAUNCHER= CMAKE_CXX_COMPILER_LAUNCHER= ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64
+configure-android: _build-guard
+    #!/usr/bin/env bash
+    set -euo pipefail
+    launcher=$(python3 -I tools/build_checkout.py quest-launcher "${CMAKE_CXX_COMPILER_LAUNCHER:-}")
+    cd src/quest && CMAKE_C_COMPILER_LAUNCHER="$launcher" CMAKE_CXX_COMPILER_LAUNCHER="$launcher" ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64
 
 # Build the Android arm64-v8a crash-reporter .so
 # Job count: CMAKE_BUILD_PARALLEL_LEVEL, else 4 (a bare -j would use every core and override the variable).
@@ -488,10 +512,11 @@ package-dev store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
 
 # The Quest half of a development package: the sentinel built in build/android-dev, checked, and repacked from the store
 # APK. Private: package-dev only (a release packages CI's loader, release-quest-apk).
-_quest-apk store_apk:
+_quest-apk store_apk: _build-guard
     #!/usr/bin/env bash
     set -euo pipefail
-    (cd src/quest && CMAKE_C_COMPILER_LAUNCHER= CMAKE_CXX_COMPILER_LAUNCHER= ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev)
+    launcher=$(python3 -I tools/build_checkout.py quest-launcher "${CMAKE_CXX_COMPILER_LAUNCHER:-}")
+    (cd src/quest && CMAKE_C_COMPILER_LAUNCHER="$launcher" CMAKE_CXX_COMPILER_LAUNCHER="$launcher" ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev)
     ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
     objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
     tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
