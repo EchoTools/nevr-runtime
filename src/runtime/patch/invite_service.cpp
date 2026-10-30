@@ -144,6 +144,12 @@ std::vector<nevr_invite::Answer> TakeAnswers() {
   return WorkerSlot() ? WorkerSlot()->TakeAnswers() : std::vector<nevr_invite::Answer>();
 }
 
+void NoteDroppedAnswer(const nevr_invite::Answer& answer) {
+  Say(nevr_invite::LogLevel::Warning,
+      std::string("[NEVR.INVITE] answer dropped by the join op=") + (answer.op == nevr_invite::Op::Create ? "create" : "resolve") +
+          " result=" + nevr_invite::ResultName(answer.result));
+}
+
 }  // namespace nevr_invite_service
 
 namespace {
@@ -176,7 +182,10 @@ bool nevr_invite_match::TakeResolvedMatch(char* out, std::size_t capacity, std::
   std::lock_guard<std::mutex> lock(queue.mutex);
   if (queue.matches.empty()) {
     for (const nevr_invite::Answer& answer : nevr_invite_service::TakeAnswers()) {
-      if (answer.op != nevr_invite::Op::Resolve || answer.result != nevr_invite::Result::Ok) continue;
+      if (answer.op != nevr_invite::Op::Resolve || answer.result != nevr_invite::Result::Ok) {
+        nevr_invite_service::NoteDroppedAnswer(answer);
+        continue;
+      }
       const std::optional<nevr_invite::Resolved> resolved = nevr_invite::ParseResolved(answer.body);
       const bool fits = resolved.has_value() && resolved->match_id.size() <= kMaxMatchIdBytes;
       queue.matches.push_back(fits ? resolved->match_id : std::string());
