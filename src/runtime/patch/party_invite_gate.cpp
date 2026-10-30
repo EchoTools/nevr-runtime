@@ -183,8 +183,6 @@ void IsFriendExpressionHook(void* node, std::uint32_t* out, void* thread, void* 
 void InviteHandlerHook(void* netGame, std::uint64_t* xpid) {
   const std::uint64_t target = xpid != nullptr ? xpid[0] : 0;
   const std::uint64_t account = xpid != nullptr ? xpid[1] : 0;
-  void* social = nullptr;
-  std::memcpy(&social, static_cast<const std::uint8_t*>(netGame) + 0x647C8, sizeof(social));
   // The handler's own provider comparison, recomputed with the same two calls it makes.
   std::uint64_t localSymbol = 0;
   std::uint64_t providerId = 0;
@@ -203,16 +201,16 @@ void InviteHandlerHook(void* netGame, std::uint64_t* xpid) {
   const unsigned diff = static_cast<unsigned>((target ^ localSymbol) & 0xFF);
   Log(EchoVR::LogLevel::Info,
       "[NEVR.PARTY] invite handler entered target_provider=%llu account=%llu local_provider_id=0x%016llx "
-      "local_provider_code=0x%02x nibble_match=%d flag10_match=%d social=%p",
+      "local_provider_code=0x%02x nibble_match=%d flag10_match=%d",
       static_cast<unsigned long long>(target & 0xF), static_cast<unsigned long long>(account),
       static_cast<unsigned long long>(providerId), static_cast<unsigned>(localSymbol & 0xFF),
-      (diff & 0xF) == 0 ? 1 : 0, (diff & 0x10) == 0 ? 1 : 0, social);
+      (diff & 0xF) == 0 ? 1 : 0, (diff & 0x10) == 0 ? 1 : 0);
   g_originalInviteHandler(netGame, xpid);
 }
 
 void SocialInviteHook(void* social, std::uint64_t accountId) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.PARTY] invite reached the social object account=%llu social=%p (next: "
-      "skipped silently if already a party member, else SendInvite)", static_cast<unsigned long long>(accountId), social);
+  Log(EchoVR::LogLevel::Info, "[NEVR.PARTY] invite reached the social object account=%llu (next: "
+      "skipped silently if already a party member, else SendInvite)", static_cast<unsigned long long>(accountId));
   g_originalSocialInvite(social, accountId);
 }
 
