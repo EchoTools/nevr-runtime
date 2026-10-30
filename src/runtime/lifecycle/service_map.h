@@ -26,6 +26,7 @@
 #include <string>
 
 #include "core/nevr_config.h"
+#include "runtime/frame/frame_stats.h"  // header-only: Mode (FrameStatsMode)
 #include "runtime/lifecycle/service_redirect.h"
 
 namespace nevr_cfg {
@@ -150,5 +151,11 @@ std::optional<std::string> BuildGameNativeConfigJson(const std::string& httpUri,
 /// turns it off. A missing or invalid value leaves it on. It never replaces a
 /// provider's own Social object, only a null one.
 bool SocialFacadeEnabled(const nevr::NevrConfig& cfg);
+
+/// `diagnostics.frame_stats` (#954): the PC frame-time probe's switch. Off when the key is absent. true is the
+/// loop-interval ring and its line, `perf` the compositor stats alone, false off. A value that is none of
+/// those is Off and sets *recognised = false (nullptr is allowed). The PC reads this key; the Quest's
+/// `diagnostics` keys are separate.
+nevr_frame_stats::Mode FrameStatsMode(const nevr::NevrConfig& cfg, bool* recognised);
 
 }  // namespace nevr_cfg

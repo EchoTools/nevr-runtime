@@ -62,6 +62,11 @@ const char* NevrGameNativeDefault(const char* key);
 /// True unless config.yaml explicitly sets `social.facade: false`.
 bool NevrCfgSocialFacadeEnabled();
 
+/// `diagnostics.frame_stats` from config.yaml (#954): 0 off (the default), 1 full, 2 perf only; the values of
+/// nevr_frame_stats::Mode. *recognised (if non-null) is 0 when the key held a value that is none of true,
+/// false or perf (the result is then 0). Only readable after the CLI is parsed, as every config.yaml read.
+int NevrCfgFrameStatsMode(int* recognised);
+
 /// The player's saved capture device (#412): `audio.capture_device` in config.yaml, an endpoint id or part of a
 /// friendly name. Null when the key is absent or empty, which means "use the default rule". Interned, like the
 /// other accessors: the pointer stays valid for the process lifetime.

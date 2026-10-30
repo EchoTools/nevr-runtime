@@ -241,7 +241,7 @@ const std::map<std::string, std::set<std::string>>& KnownSections() {
       {"arena", {"round_time", "celebration_time", "mercy_score"}},
       {"telemetry", {"uri", "token"}},
       {"social", {"facade", "send_presence_to_meta"}},
-      {"diagnostics", {"hardware_dump", "pnsrad_provider", "ui_event_probe", "clock_levels_override"}},
+      {"diagnostics", {"hardware_dump", "pnsrad_provider", "ui_event_probe", "clock_levels_override", "frame_stats"}},
       {"graphics", {"texture_quality"}},
   };
   return kSections;

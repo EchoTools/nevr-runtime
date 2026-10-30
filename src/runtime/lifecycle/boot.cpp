@@ -27,6 +27,7 @@
 #include "runtime/patch/invite_wizard_hook.h"
 #include "runtime/patch/arena_public_clock.h"
 #include "runtime/patch/coop_ai_trace.h"
+#include "runtime/frame/frame_stats.h"
 #include "runtime/patch/server_bots_install.h"
 #include "runtime/patch/server_team_size_install.h"
 #include "runtime/ext/plugin_loader.h"
@@ -795,6 +796,15 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     }
   }
 
+  // #954: the PC frame-time probe. diagnostics.frame_stats (default off) switches the loop-interval ring and
+  // the 10 s [NEVR.PERF] line; Configure logs the resolved value at Info whether it is on or off (N122/N124).
+  {
+    int recognised = 1;
+    const nevr_frame_stats::Mode frameStats =
+        static_cast<nevr_frame_stats::Mode>(NevrCfgFrameStatsMode(&recognised));
+    nevr_frame_stats::Configure(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress), g_isServer != FALSE,
+                                frameStats, recognised != 0);
+  }
   // #1423: AI bots on a server (network.bots_per_session, absent = 0): on a server with a count above 0 the sites are
   // checked once here, and the driver (GameServerLib::Update) runs only when they hold; a client logs that it does not
   // apply (N122/N124).
