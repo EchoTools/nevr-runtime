@@ -322,6 +322,37 @@ Not shown:
 
 Prediction, written before any Quest run: with remote logging on, a click on CREATE GAME or JOIN VIA CODE produces one `invite_click` line from the observer. A click that produces none falsifies `MetricLog` as the hook point for the wizard's metric; the next candidate is the call chain above `WriteLog`.
 
+## Quest join on a resolved code (#966, slice S4)
+
+The Quest's JOIN VIA CODE ends in the same staged join the PC uses (`src/runtime/patch/invite_join.h`), with libr15's offsets. The glue is `src/quest/invite/join_game_quest.cpp`; the host test is `src/quest/tests/invite_join_quest_test.cpp` (`just test-quest-hooks`).
+
+Measured in ReVault (project `echovr`, binary `libr15.so`; ReVault = pinned + `0x100000`):
+
+- `CR15Game::BeginMultiplayer(SR15NetMatchSettings const&)` at `0x1301d88`, decompiled. It reads the netgame at `this+0x8510`, the route byte at `+0x8518` (`& 0xf`), the gate qword at `+0x8520`, the lobby `SUuid` at `+0x8528` (against the invalid id), the staged `SUuid` at `+0x8538` and the team `u16` at `+0x8558`. Its listing has no `#0x8560` operand, so the gametype word is neither read nor written. Its exit stores the route to `+0x8518`, zeroes `+0x8520` and sets `+0x8528`, `+0x8538` and `+0x8558` back to the invalid id and `0xffff`. Comment `grade A, S0 2026-10-29`.
+- `CR15Game::BeginMultiplayer()` at `0x1301be4`: 52 bytes, its first 16 bytes `ff 83 01 d1 ff fb 04 a9 68 00 c0 d2 09 00 80 92` (`revault_read_memory`), calling the settings body through `thunk 0xfdc040`. Pinned `0x1201be4`.
+- `CR15Game::EnableTransitionMenu()` at `0x13005fc` (the plan's "mp_transition"): its first 16 bytes `ff 03 01 d1 f3 7b 03 a9 13 78 7d f9 d3 01 00 b4`. It sends one component event to the menu gamespace at `+0x7af0`. Pinned `0x12005fc`.
+
+The join's pins are in `src/quest/sentinel/pinned_targets.h` (`kBeginMultiplayerVaddr`, `kEnableTransitionMenuVaddr`) and are checked against the store file in `got_pinned_test.cpp`.
+
+Write path, on the game thread only, through the frame dispatcher (`src/quest/invite/frame_dispatch.cpp`):
+
+- The netgame the frame hook passes is `self` of `HookedNetGameUpdate`. Its state is at `netgame+0` (`game_layout::kStateOffset`), and its game object (CR15Game) at `netgame+8` (`game_layout::kGameOffset`).
+- The route is read first. Nothing is staged when the route byte and the gate are both set, or when `+0x8528` is not the invalid id (`other_route`).
+- Then the 16-byte GUID is written at `+0x8538` and `0xFFFF` at `+0x8558`, both read back. A mismatch puts the prior bytes back.
+- Then `EnableTransitionMenu(game)` and `BeginMultiplayer(game)`, once each, with a 15 s window that refuses a repeat as `busy`.
+- Only `state == 3` (`LoggedIn`, `src/abi/echovr.h:361`) joins. Any other state logs `not_at_menu`.
+- The answers reach the join through `nevr_invite_match::TakeResolvedMatch` (`src/runtime/patch/invite_match_api.h`), a non-throwing call implemented in `invite_service.cpp`. The frame applier never includes the worker or the service header, so the hook-side translation unit is exception-free.
+
+Prediction, written before any headset run: with the feature on and a resolved answer for a match id that is in progress on the server, the log shows `join started route=stage lobby=<GUID> state_from=3`, then the game's own `[NETGAME]` state change. A join whose state is not 3 logs `join not started reason=not_at_menu`. A stage that does not read back logs `reason=stage_failed` and writes nothing that stays.
+
+Not shown:
+
+- That the Quest's `BeginMultiplayer` joins the match when called this way. No headset run has been made.
+- That the game's netgame state at `+0` is 3 at the menu on a headset. The value is the PC's enum; the Quest's use of it is the existing login-prompt pin (`game_layout::kStateOffset`).
+- The Quest's `+0x8520` gate semantics beyond the decompile comment. The 281-instruction listing was not re-read in this slice.
+- The route check's invalid-id value on Quest: it is the PC's sixteen zero bytes, not separately verified in libr15.
+- Any run against the production service (U4, the invite RPC with the Quest token).
+
 ## Relation to other records
 
 - ADR 0008 (BugSplat64.dll host, runtime): the feature is part of the runtime the host loads.
