@@ -39,6 +39,19 @@ struct Site {
 
 using WriteFn = bool (*)(void* dest, const void* src, size_t n);
 
+/// The Win32 error of the last failed write (logging Rule 10). 0 when no write failed.
+using WriteErrorFn = uint32_t (*)();
+
+/// Remembers the error of a failed write for WriteErrorFn: the last failure wins, a success changes nothing. A
+/// WriteFn is a plain function pointer, so a writer keeps its error here, and the patch resets it before Apply.
+struct WriteErrors {
+  uint32_t last = 0;
+  bool Note(bool ok, uint32_t error) {
+    if (!ok) last = error;
+    return ok;
+  }
+};
+
 // The site is read back whatever the writer said: a writer may report a failure after its bytes went in (a protection
 // restore that failed), and the caller needs to know what the site holds, not only what the writer claimed.
 inline Result Apply(uint8_t* site, const Site& spec, WriteFn write) {
@@ -61,9 +74,10 @@ inline Site SpectatorStreamSite() {
 
 // One key=value record for a patch site: the bytes the unpatched binary should hold, the bytes
 // found there BEFORE the write, and the outcome. Written to `out` (NUL-terminated, truncated at
-// `cap`); returns snprintf's result. Both the boot-tee and Log() paths print this same text.
+// `cap`); returns snprintf's result. Both the boot-tee and Log() paths print this same text. A write_failed record
+// ends with the writer's Win32 error (`writeError`, from WriteErrorFn), so a failed write names its cause.
 inline int FormatSpectatorStreamRecord(char* out, size_t cap, const char* phase, uintptr_t addr,
-                                       const uint8_t* actual, Result result) {
+                                       const uint8_t* actual, uint32_t writeError, Result result) {
   constexpr size_t kBytes = sizeof(kSpectatorStreamExpected);
   char expectedHex[2 * kBytes + 1];
   char actualHex[2 * kBytes + 1];
@@ -71,9 +85,13 @@ inline int FormatSpectatorStreamRecord(char* out, size_t cap, const char* phase,
     std::snprintf(expectedHex + 2 * i, 3, "%02x", kSpectatorStreamExpected[i]);
     std::snprintf(actualHex + 2 * i, 3, "%02x", actual[i]);
   }
-  return std::snprintf(out, cap,
-                       "[NEVR.PATCH] spectatorstream_check phase=%s addr=0x%llx expected=%s actual=%s result=%s",
-                       phase, static_cast<unsigned long long>(addr), expectedHex, actualHex, ResultName(result));
+  int n = std::snprintf(out, cap,
+                        "[NEVR.PATCH] spectatorstream_check phase=%s addr=0x%llx expected=%s actual=%s result=%s",
+                        phase, static_cast<unsigned long long>(addr), expectedHex, actualHex, ResultName(result));
+  if (result == Result::WriteFailed && n >= 0 && static_cast<size_t>(n) < cap) {
+    n += std::snprintf(out + n, cap - static_cast<size_t>(n), " write_error=%u", writeError);
+  }
+  return n;
 }
 
 }  // namespace nevr_checked_patch

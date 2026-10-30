@@ -360,7 +360,7 @@ TEST(CreditsTextRetarget, APutBackThatDoesNotLandIsReportedWithTheSiteStillLoadi
 TEST(CreditsTextRecord, SiteRecordNamesTheSiteBytesAndOutcome) {
   char out[256];
   nevr_credits_text::FormatSiteRecord(out, sizeof(out), "init", kInitVa, nevr_credits_text::kInitSiteExpected,
-                                      nevr_credits_text::kInitSiteExpected, Outcome::Applied);
+                                      nevr_credits_text::kInitSiteExpected, 0, Outcome::Applied);
   EXPECT_STREQ(out,
                "[NEVR.PATCH] credits_text site=init addr=0x140973520 expected=488d05b9103001 "
                "actual=488d05b9103001 result=applied");
@@ -370,8 +370,24 @@ TEST(CreditsTextRecord, SiteRecordShowsWhatWasFoundWhenItDiffers) {
   const uint8_t found[7] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
   char out[256];
   nevr_credits_text::FormatSiteRecord(out, sizeof(out), "disabled", kDisabledVa,
-                                      nevr_credits_text::kDisabledSiteExpected, found, Outcome::Mismatch);
+                                      nevr_credits_text::kDisabledSiteExpected, found, 0, Outcome::Mismatch);
   EXPECT_NE(std::string(out).find("actual=90909090909090 result=mismatch"), std::string::npos);
+}
+
+TEST(CreditsTextRecord, WriteFailedSiteRecordEndsWithTheWritersWin32Error) {
+  char out[256];
+  nevr_credits_text::FormatSiteRecord(out, sizeof(out), "init", kInitVa, nevr_credits_text::kInitSiteExpected,
+                                      nevr_credits_text::kInitSiteExpected, 5, Outcome::WriteFailed);
+  EXPECT_STREQ(out,
+               "[NEVR.PATCH] credits_text site=init addr=0x140973520 expected=488d05b9103001 "
+               "actual=488d05b9103001 result=write_failed write_error=5");
+}
+
+TEST(CreditsTextRecord, AppliedSiteRecordHasNoWriteError) {
+  char out[256];
+  nevr_credits_text::FormatSiteRecord(out, sizeof(out), "init", kInitVa, nevr_credits_text::kInitSiteExpected,
+                                      nevr_credits_text::kInitSiteExpected, 5, Outcome::Applied);
+  EXPECT_EQ(std::string(out).find("write_error="), std::string::npos) << out;
 }
 
 TEST(CreditsTextRecord, BuiltRecordCarriesTheCounts) {

@@ -235,17 +235,22 @@ inline Outcome Retarget(SitePlan& a, SitePlan& b, uint64_t bufferVa, nevr_checke
 }
 
 /// One key=value record per site: the bytes the unpatched game should hold, the bytes found there
-/// BEFORE the write, and the outcome. Same shape as the spectatorstream_check record.
+/// BEFORE the write, and the outcome. Same shape as the spectatorstream_check record. A write_failed record ends with
+/// the writer's Win32 error (`writeError`), so a failed write names its cause (logging Rule 10).
 inline int FormatSiteRecord(char* out, size_t cap, const char* site, uint64_t va, const uint8_t* expected,
-                            const uint8_t* actual, Outcome outcome) {
+                            const uint8_t* actual, uint32_t writeError, Outcome outcome) {
   char expectedHex[2 * kSiteSize + 1];
   char actualHex[2 * kSiteSize + 1];
   for (size_t i = 0; i < kSiteSize; ++i) {
     std::snprintf(expectedHex + 2 * i, 3, "%02x", expected[i]);
     std::snprintf(actualHex + 2 * i, 3, "%02x", actual[i]);
   }
-  return std::snprintf(out, cap, "[NEVR.PATCH] credits_text site=%s addr=0x%llx expected=%s actual=%s result=%s", site,
-                       static_cast<unsigned long long>(va), expectedHex, actualHex, OutcomeName(outcome));
+  int n = std::snprintf(out, cap, "[NEVR.PATCH] credits_text site=%s addr=0x%llx expected=%s actual=%s result=%s", site,
+                        static_cast<unsigned long long>(va), expectedHex, actualHex, OutcomeName(outcome));
+  if (outcome == Outcome::WriteFailed && n >= 0 && static_cast<size_t>(n) < cap) {
+    n += std::snprintf(out + n, cap - static_cast<size_t>(n), " write_error=%u", writeError);
+  }
+  return n;
 }
 
 /// The record of a built buffer, so a run shows what the page was given.

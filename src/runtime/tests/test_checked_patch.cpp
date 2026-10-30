@@ -149,17 +149,45 @@ TEST(CheckedPatch, SpectatorStreamSiteAddressIsTheKnownRvaAndSize) {
 TEST(CheckedPatch, SpectatorStreamRecordFormat) {
   char out[192];
   const uintptr_t addr = 0x140000000u + nevr_patch_addresses::SPECTATORSTREAM_CHECK;
-  nevr_checked_patch::FormatSpectatorStreamRecord(out, sizeof(out), "PatchEnableServer", addr, kJe, Result::Applied);
+  nevr_checked_patch::FormatSpectatorStreamRecord(out, sizeof(out), "PatchEnableServer", addr, kJe, 0, Result::Applied);
   EXPECT_STREQ(out,
                "[NEVR.PATCH] spectatorstream_check phase=PatchEnableServer addr=0x140116f3d "
                "expected=0f84df000000 actual=0f84df000000 result=applied");
 
   const uint8_t found[6] = {0x0f, 0x85, 0xdf, 0x00, 0x00, 0xcc};
-  nevr_checked_patch::FormatSpectatorStreamRecord(out, sizeof(out), "PatchEnableServer", addr, found,
+  nevr_checked_patch::FormatSpectatorStreamRecord(out, sizeof(out), "PatchEnableServer", addr, found, 0,
                                                   Result::Mismatch);
   EXPECT_STREQ(out,
                "[NEVR.PATCH] spectatorstream_check phase=PatchEnableServer addr=0x140116f3d "
                "expected=0f84df000000 actual=0f85df0000cc result=mismatch");
+}
+
+TEST(CheckedPatch, SpectatorStreamWriteFailedRecordEndsWithTheWritersWin32Error) {
+  char out[192];
+  const uintptr_t addr = 0x140000000u + nevr_patch_addresses::SPECTATORSTREAM_CHECK;
+  nevr_checked_patch::FormatSpectatorStreamRecord(out, sizeof(out), "PatchEnableServer", addr, kJe, 5,
+                                                  Result::WriteFailed);
+  EXPECT_STREQ(out,
+               "[NEVR.PATCH] spectatorstream_check phase=PatchEnableServer addr=0x140116f3d "
+               "expected=0f84df000000 actual=0f84df000000 result=write_failed write_error=5");
+}
+
+TEST(CheckedPatch, SpectatorStreamAppliedRecordHasNoWriteError) {
+  char out[192];
+  const uintptr_t addr = 0x140000000u + nevr_patch_addresses::SPECTATORSTREAM_CHECK;
+  nevr_checked_patch::FormatSpectatorStreamRecord(out, sizeof(out), "PatchEnableServer", addr, kJe, 5,
+                                                  Result::Applied);
+  EXPECT_EQ(std::string(out).find("write_error="), std::string::npos) << out;
+}
+
+TEST(CheckedPatch, WriteErrorsKeepTheLastFailureAndIgnoreSuccess) {
+  nevr_checked_patch::WriteErrors errors;
+  EXPECT_TRUE(errors.Note(true, 0));
+  EXPECT_EQ(errors.last, 0u);
+  EXPECT_FALSE(errors.Note(false, 5));
+  EXPECT_FALSE(errors.Note(false, 487));
+  EXPECT_TRUE(errors.Note(true, 0));
+  EXPECT_EQ(errors.last, 487u) << "a later success must not clear the failure";
 }
 
 }  // namespace

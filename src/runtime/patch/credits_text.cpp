@@ -15,7 +15,16 @@ namespace nevr_credits_text {
 
 namespace {
 
-bool ProcessWrite(void* dest, const void* src, size_t n) { return ProcessMemcpy(dest, src, n); }
+// The writer is a plain function pointer, so a failed ProcessMemcpy's Win32 error is kept here for the records below
+// (logging Rule 10). Install runs once, from boot.
+nevr_checked_patch::WriteErrors g_writeErrors;
+
+bool ProcessWrite(void* dest, const void* src, size_t n) {
+  DWORD error = 0;
+  return g_writeErrors.Note(ProcessMemcpy(dest, src, n, &error), error);
+}
+
+uint32_t LastWriteError() { return g_writeErrors.last; }
 
 void Skip(const char* reason, bool warn) {
   Log(warn ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
@@ -79,13 +88,16 @@ bool Install(const char* block, size_t blockLen) {
     return false;
   }
 
+  g_writeErrors = {};
   const Outcome outcome = Retarget(init, disabled, reinterpret_cast<uint64_t>(memory), ProcessWrite);
 
   char record[256];
-  FormatSiteRecord(record, sizeof(record), "init", init.siteVa, kInitSiteExpected, initBefore, outcome);
+  FormatSiteRecord(record, sizeof(record), "init", init.siteVa, kInitSiteExpected, initBefore, LastWriteError(),
+                   outcome);
   const bool ok = outcome == Outcome::Applied || outcome == Outcome::AlreadyApplied;
   Log(ok ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning, "%s", record);
-  FormatSiteRecord(record, sizeof(record), "disabled", disabled.siteVa, kDisabledSiteExpected, disabledBefore, outcome);
+  FormatSiteRecord(record, sizeof(record), "disabled", disabled.siteVa, kDisabledSiteExpected, disabledBefore,
+                   LastWriteError(), outcome);
   Log(ok ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning, "%s", record);
 
   if (!ok) {
