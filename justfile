@@ -727,6 +727,9 @@ test-auth-unit:
     # host whose cgroups do not enforce MemoryMax. systemd-run expands "$" in its arguments, which the
     # test path below never contains. Each scope is its own unit, so the wrapper that runs this recipe
     # does not bound the test processes: each test has its own 4G cap.
+    # A failing binary is recorded and the loop goes on, so one failure does not hide the binaries after it
+    # (#1228); the summary after the last binary names every failure and exits non-zero.
+    test_failures=()
     run_test() {
         local rc=0
         if command -v systemd-run >/dev/null && systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 -- true 2>/dev/null; then
@@ -737,13 +740,13 @@ test-auth-unit:
         fi
         if [[ "$rc" -eq 124 ]]; then
             echo "test-auth-unit: FAIL — $1 timed out after 900s" >&2
-            exit "$rc"
+            test_failures+=("$1 (timed out)")
         elif [[ "$rc" -eq 137 ]]; then
             echo "test-auth-unit: FAIL — $1 killed: memory cap exceeded (MemoryMax=4G)" >&2
-            exit "$rc"
+            test_failures+=("$1 (memory cap)")
         elif [[ "$rc" -ne 0 ]]; then
             echo "test-auth-unit: FAIL — $1 exited $rc" >&2
-            exit "$rc"
+            test_failures+=("$1 (exit $rc)")
         fi
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
@@ -1023,6 +1026,11 @@ test-auth-unit:
     # test_broadcaster_bridge / test_broadcaster_guards live in
     # ~/src/nevr-runtime-plugins with the broadcaster-bridge plugin, which
     # holds and tests the N72/N73 guards.
+    # #1228: every binary above has run; name each failure and fail the recipe once, at the end.
+    if [[ "${#test_failures[@]}" -gt 0 ]]; then
+        echo "test-auth-unit: FAIL — ${#test_failures[@]} test binary(ies) failed: ${test_failures[*]}" >&2
+        exit 1
+    fi
 
 # Run auth integration tests (needs game binary + MCP harness)
 test-auth-integration:
