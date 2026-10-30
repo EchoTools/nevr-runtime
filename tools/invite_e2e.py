@@ -438,24 +438,28 @@ class Ui:
         raise StepFailed(f"client {self.client.label}: no game process on {self.client.copy}")
 
     def find_window(self, timeout: float = 60.0) -> None:
-        """The game's window: the largest window of the game's process titled "Echo VR"."""
+        """The game's window: the window titled "Echo VR" whose own process id is this client's game process (two clients share the
+        display, and each title is the same)."""
         deadline = time.monotonic() + timeout
+        pid = self.game_pid()
         while time.monotonic() < deadline:
-            best = None
-            for win in self._x("search", "--pid", self.game_pid(), "--name", "^Echo VR$", check=False).split():
+            seen = []
+            for win in self._x("search", "--name", "^Echo VR$", check=False).split():
+                owner = self._x("getwindowpid", win, check=False).strip()
                 geo = self._x("getwindowgeometry", win, check=False)
                 size = re.search(r"Geometry: (\d+)x(\d+)", geo)
                 pos = re.search(r"Position: (-?\d+),(-?\d+)", geo)
-                if size and pos and (best is None or int(size[1]) * int(size[2]) > best[0]):
-                    best = (int(size[1]) * int(size[2]), win, (int(size[1]), int(size[2])), (int(pos[1]), int(pos[2])))
-            if best and best[2] == WINDOW_SIZE:
-                self.window, self.origin = best[1], best[3]
+                if owner == pid and size and pos:
+                    seen.append((win, (int(size[1]), int(size[2])), (int(pos[1]), int(pos[2]))))
+            if seen:
+                win, size, pos = max(seen, key=lambda item: item[1][0] * item[1][1])
+                if size != WINDOW_SIZE:
+                    raise StepFailed(f"client {self.client.label}: the game window is {size[0]}x{size[1]}, the click map is for "
+                                     f"{WINDOW_SIZE[0]}x{WINDOW_SIZE[1]}; re-measure the map before clicking")
+                self.window, self.origin = win, pos
                 return
-            if best:
-                raise StepFailed(f"client {self.client.label}: the game window is {best[2][0]}x{best[2][1]}, the click map is for "
-                                 f"{WINDOW_SIZE[0]}x{WINDOW_SIZE[1]}; re-measure the map before clicking")
             time.sleep(1)
-        raise StepFailed(f"client {self.client.label}: no \"Echo VR\" window on :101 within {timeout:.0f} s")
+        raise StepFailed(f"client {self.client.label}: no \"Echo VR\" window of process {pid} on :101 within {timeout:.0f} s")
 
     def click(self, x: float, y: float) -> None:
         """A select: the window raised, the pointer moved onto the target (the game needs a hover first), the RIGHT button held 0.3 s."""
@@ -568,8 +572,14 @@ def run_flow(a: Client, b: Client, steps: list[Step], timing: dict, evidence: pa
     slots: dict[str, int] = {}
     if evidence is not None:   # --ui: the player's path, with the mouse
         for c in (a, b):
+            # logged in is not a menu yet: the game still shows its loading screen until the runtime sets the menu's version label
+            c.wait_for(r"\[NEVR\.MENU\] version label set", 120)
+        time.sleep(5)
+        for c in (a, b):
             uis[c.label] = Ui(c, evidence / c.label)
             uis[c.label].find_window()
+        if uis["A"].window == uis["B"].window:
+            raise StepFailed(f"both clients resolved to window {uis['A'].window}: the click map would drive one game twice")
         slots = card_slots(a.console.read_text(errors="replace"))
         if not {"create", "join"} <= slots.keys():
             raise StepFailed("A: the log has no `main-menu buttons placed ... slots_after=` line, so the cards' positions are unknown")
