@@ -18,7 +18,7 @@ core=${NEVR_INSTALL:-}
 if [ -z "$core" ]; then
     core=$(command -v install-nevr-runtime || true)
 fi
-[ -n "$core" ] && [ -x "$core" ] || die "install-nevr-runtime not found: build it with `just build-installer` and put it on PATH, or set NEVR_INSTALL"
+[ -n "$core" ] && [ -x "$core" ] || die "install-nevr-runtime not found: build it with 'just build-installer' and put it on PATH, or set NEVR_INSTALL"
 
 # A directory as the first argument is a local tester APK folder: the core's --artifact-dir (one APK and its sha256
 # sidecar; the core logs every step as an unverified dev artifact). A .apk file is staged into such a folder here: a

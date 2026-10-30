@@ -339,6 +339,28 @@ class QuestInstallShTest(ScriptTestBase):
         self.assertFalse(staged.exists(), "the staging directory is removed when the run ends")
         self.assertEqual(apk.read_bytes(), b"locally built apk", "the caller's file is untouched")
 
+    def test_without_NEVR_INSTALL_the_script_finds_the_core_on_PATH_under_its_new_name(self):
+        """#1492: the core on PATH is install-nevr-runtime; a program named nevr-install is not looked for."""
+        out = self.tmp / "args.txt"
+        for name, found in (("install-nevr-runtime", True), ("nevr-install", False)):
+            bin_dir = self.tmp / f"bin-{name}"
+            bin_dir.mkdir()
+            stub = bin_dir / name
+            stub.write_text('#!/bin/bash\nprintf "%s\\n" "$@" > "$STUB_OUT"\n')
+            stub.chmod(0o755)
+            apk_dir = self.tmp / "apks"
+            apk_dir.mkdir(exist_ok=True)
+            env = {k: v for k, v in os.environ.items() if k != "NEVR_INSTALL"}
+            env.update(PATH=f"{bin_dir}:/usr/bin:/bin", STUB_OUT=str(out))
+            out.unlink(missing_ok=True)
+            result = subprocess.run(["/bin/bash", str(self.SCRIPT), str(apk_dir)], capture_output=True, text=True, timeout=30, env=env)
+            if found:
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(out.read_text().splitlines(), ["quest", "install", "--artifact-dir", str(apk_dir)])
+            else:
+                self.assertEqual(result.returncode, 1)
+                self.assertFalse(out.exists(), "the old name on PATH is not run")
+
     def test_without_a_core_the_script_says_so(self):
         env = {k: v for k, v in os.environ.items() if k != "NEVR_INSTALL"}
         env["PATH"] = "/usr/bin:/bin"
@@ -346,6 +368,7 @@ class QuestInstallShTest(ScriptTestBase):
         result = subprocess.run(["/bin/bash", str(self.SCRIPT)], capture_output=True, text=True, timeout=30, env=env)
         self.assertEqual(result.returncode, 1)
         self.assertIn("install-nevr-runtime not found", result.stderr)
+        self.assertIn("build it with 'just build-installer' and put it on PATH", result.stderr, "the hint is text, not a command the script runs")
 
 
 if __name__ == "__main__":
