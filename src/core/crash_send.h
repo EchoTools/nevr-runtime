@@ -55,10 +55,9 @@ namespace fs = std::filesystem;
 // The service's route: nevr-api, POST /v3/crash-reports, no credential, behind the portal's /api prefix. Compiled in
 // because the sender runs before any config, runtime or login exists.
 inline constexpr const char* kCrashReportUrl = "https://echovrce.com/api/v3/crash-reports";
-// The send is built and tested but OFF until the route is live: before its deploy the host answers a POST with a page, not a
-// handler, and a 2xx from that page would mark a report sent that nobody received. Turning it on is this one constant, in the
-// change that confirms the deploy. While false, ConfiguredUrl() is empty and every platform logs `off`.
-inline constexpr bool kSendEnabled = false;
+// The route is live (#1689): the send is on. The one constant that switches it off for a build; while false,
+// ConfiguredUrl() is empty, neither platform starts a thread or writes a record.
+inline constexpr bool kSendEnabled = true;
 inline const char* ConfiguredUrl() { return kSendEnabled ? kCrashReportUrl : ""; }
 
 inline constexpr int kSchema = 1;

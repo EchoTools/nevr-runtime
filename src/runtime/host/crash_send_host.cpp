@@ -66,6 +66,12 @@ DWORD WINAPI SendThread(LPVOID parameter) {
 }  // namespace
 
 void StartCrashSend(BootstrapDiagnostics& diagnostics) noexcept {
+#if defined(NEVR_HOST_TESTING)
+  // The harnesses that drive the detour share a Wine prefix with the crash harness, whose crashes leave reports: a test run
+  // never sends one to the service. The send's own tests call SendPending and WinHttpPost directly.
+  static_cast<void>(diagnostics);
+  return;
+#else
   if (*nevr_crash_send::ConfiguredUrl() == '\0') return;  // switched off in this build: nothing runs
   if (g_started.exchange(true)) return;
   try {
@@ -97,6 +103,7 @@ void StartCrashSend(BootstrapDiagnostics& diagnostics) noexcept {
   } catch (const std::exception&) {
     // Out of memory or a path that cannot be built: the game starts without the send; nothing else depends on it.
   }
+#endif
 }
 
 }  // namespace nevr_host

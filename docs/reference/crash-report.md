@@ -104,8 +104,28 @@ once.
 log. `state` is `sent`, `rejected`, `deferred`, `unreadable`, `install_id_unavailable`, `off` or `pass` (what was sent and
 rejected, and how many are left). A folder with nothing to send writes nothing. The report text and the body are never logged.
 
-**Switch.** `nevr_crash_send::kSendEnabled` in `src/core/crash_send.h` is false until the route is deployed (#1689): while it is,
-neither platform starts a thread or writes a record.
+**Switch.** `nevr_crash_send::kSendEnabled` in `src/core/crash_send.h` (true) turns the send off for a build: while false, neither
+platform starts a thread or writes a record. The host's test harnesses never send (`crash_send_host.cpp` returns under
+`NEVR_HOST_TESTING`).
+
+### A crash the runtime does not report
+
+A crash the runtime is not there to report still leaves a report, so the next start sends it:
+
+- **PC.** BugSplat64.dll receives every crash through `createReport`. When the runtime is loaded its crash-first filter has
+  already written the report, so the host writes none (one crash, one report). When the runtime is absent, failed to load or
+  has not loaded yet, or the crash is in the host itself, `CreateReport` (`src/runtime/host/host_entry.cpp`) writes it first, before
+  the minidump, through the same shared writer (`src/runtime/host/crash_report_host.cpp`) and the same PC pieces the runtime
+  uses (`src/runtime/lifecycle/crash_report_win_common.h`: exception description, registers, backtrace, file calls). The file
+  is `nevr-host-<pid>-<time>-<n>` + the report suffix in the same crash folder. The platform is registered at attach (a file name
+  from `%LOCALAPPDATA%`, no file I/O); the module table is a snapshot taken at the detour on the game's main wrapper (the
+  game's own modules and the host), so a crash before it reports raw addresses.
+- **Quest.** The handlers and the report platform are armed by the first statement of the sentinel's constructor
+  (`src/quest/sentinel/entry.cpp`), before the begin record or the UI looper capture, so a crash from there on leaves a report.
+  Code that runs before the sentinel's constructor is not covered: no handler exists yet.
+
+Tests: `src/runtime/tests/test_host_crash_report.cpp` (a crash with no runtime leaves a report the sender reads),
+`tools/tests/test_crash_send_wiring.py` (where each piece is wired).
 
 Tests: `src/runtime/tests/test_crash_send.cpp` (reports made by the real writer, the allowlist, the send), `src/runtime/tests/test_host_crash_send.cpp`
 (the WinHTTP POST against a loopback server).

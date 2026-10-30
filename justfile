@@ -754,7 +754,7 @@ test-auth-unit:
     cmake --build --preset {{ preset }} --target test_runtime_abi
     cmake --build --preset {{ preset }} --target test_runtime_export_guard
     cmake --build --preset {{ preset }} --target test_bootstrap_attach
-    cmake --build --preset {{ preset }} --target test_host_json --target test_host_stop_line --target test_bootstrap_diagnostics --target test_host_crash_capture --target test_host_crash_send --target test_host_runtime_load --target test_host_minidump --target test_host_rendezvous --target test_host_exports --target test_host_crash --target test_rendezvous --target test_host_runtime_verify
+    cmake --build --preset {{ preset }} --target test_host_json --target test_host_stop_line --target test_bootstrap_diagnostics --target test_host_crash_capture --target test_host_crash_send --target test_host_crash_report --target test_host_runtime_load --target test_host_minidump --target test_host_rendezvous --target test_host_exports --target test_host_crash --target test_rendezvous --target test_host_runtime_verify
     # The host units carry no test seam when NEVR_HOST_TESTING is not defined: each is compiled again
     # without it with the build's own flags and its object is read with nm (docs/adr/0008). Fail-close.
     python3 tools/verify_host_seams.py "build/{{ preset }}"
@@ -835,7 +835,7 @@ test-auth-unit:
     # The stable BugSplat64.dll host (src/runtime/host/): the fixed-buffer JSON writer, the
     # diagnostic recorder, the minidump capture, the runtime load state machine, the rendezvous's prologue
     # validation, the export thunks and the minidump parser the crash harness trusts.
-    for name in test_host_json test_host_stop_line test_bootstrap_diagnostics test_host_crash_capture test_host_crash_send test_host_runtime_load test_host_minidump test_host_rendezvous test_host_runtime_verify test_host_exports; do
+    for name in test_host_json test_host_stop_line test_bootstrap_diagnostics test_host_crash_capture test_host_crash_send test_host_crash_report test_host_runtime_load test_host_minidump test_host_rendezvous test_host_runtime_verify test_host_exports; do
         bin="build/{{ preset }}/bin/$name.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2

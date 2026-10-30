@@ -14,6 +14,7 @@
 set(NEVR_HOST_UNITS
     "host/bootstrap_diagnostics.cpp"
     "host/crash_capture.cpp"
+    "host/crash_report_host.cpp"
     "host/crash_send_host.cpp"
     "host/crash_send_winhttp.cpp"
     "host/host_entry.cpp"
@@ -27,6 +28,11 @@ set(NEVR_HOST_UNITS
     "ext/plugin_pins.cpp"
     "ext/plugin_signature.cpp"
     "lifecycle/game_image_guard.cpp"
+    # The host's own crash report (#1689): the shared report writer (core/crash_report.cpp; the host links no nevr_core) and the
+    # PC pieces the runtime's report uses too (compiled into both DLLs, as game_image_guard is).
+    "../core/crash_report.cpp"
+    "lifecycle/crash_report_pe.cpp"
+    "lifecycle/crash_report_win_common.cpp"
 )
 
 set(PATCHES_SOURCES
@@ -58,6 +64,7 @@ set(PATCHES_SOURCES
     "lifecycle/crash_first_win.cpp"
     "lifecycle/crash_report_pe.cpp"
     "lifecycle/crash_report_win.cpp"
+    "lifecycle/crash_report_win_common.cpp"
     "hook/hook_guard.cpp"
     "hook/hook_liveness.cpp"
     "hook/export_trace_thunk.cpp"
@@ -1317,6 +1324,14 @@ if(BUILD_TESTING)
     target_compile_options(test_host_crash_send PRIVATE -Werror)
     target_link_libraries(test_host_crash_send PRIVATE nevr_host_core GTest::gtest GTest::gtest_main ws2_32)
     gtest_discover_tests(test_host_crash_send DISCOVERY_MODE PRE_TEST)
+
+    # The host's own crash report (host/crash_report_host.cpp, #1689): a crash the runtime does not report leaves a report
+    # the sender reads. The unit is the one BugSplat64.dll carries (nevr_host_core).
+    add_executable(test_host_crash_report tests/test_host_crash_report.cpp)
+    set_source_files_properties(tests/test_host_crash_report.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_host_crash_report PRIVATE -Werror)
+    target_link_libraries(test_host_crash_report PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_crash_report DISCOVERY_MODE PRE_TEST)
 
     # The #398 self-check (compat/party_share_check.h): each service answer to a party data share is one
     # self-check result. Header only on top of the self-check unit and the party symbol table.

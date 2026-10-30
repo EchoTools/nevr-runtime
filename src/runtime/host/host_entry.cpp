@@ -1,5 +1,6 @@
 #include "runtime/host/host_entry.h"
 
+#include "runtime/host/crash_report_host.h"
 #include "runtime/host/stop_line.h"
 #include "runtime/lifecycle/game_image_guard.h"
 
@@ -85,6 +86,7 @@ void OnProcessAttach(HMODULE host_module, HMODULE game_module, bool launcher_mod
   // file I/O, no runtime load.
   g_diagnostics.Prepare(host_module);
   g_capture.Prepare(host_module, &g_diagnostics);
+  PrepareCrashReport(&g_diagnostics);  // the file name and the platform: no file I/O and no module enumeration (loader lock)
   StartDbgHelpPreload();
   if (launcher_mode) return;  // SetGameModule drives the rendezvous after LoadLibrary
   g_attached_at_dll_main.store(true);  // the process image is checked (and hooked, or refused) here
@@ -142,6 +144,11 @@ void SetGameModule(HMODULE game_module) noexcept {
 }
 
 void CreateReport(PEXCEPTION_POINTERS exception_pointers) noexcept {
+  // The readable report (#1689): written here only when the runtime is not there to write it. A loaded runtime's crash-first
+  // filter has already written this crash's report before the game's crash reporter calls the host, so one crash is one
+  // report; a crash with no runtime (absent, failed to load, not loaded yet) or in the host itself has this one. Before the
+  // dump, because it is small and the dump is the step that can hang.
+  if (g_rendezvous.RuntimeApi() == nullptr) WriteCrashReport(exception_pointers);
   g_capture.Capture(exception_pointers);
 }
 
