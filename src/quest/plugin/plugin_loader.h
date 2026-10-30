@@ -41,6 +41,9 @@ struct LoadRecord {
   std::string reason;                    // a reason:: token; empty for `loaded`
   bool required = false;
   std::string argKeys;                   // the keys of the entry's args, never the values
+  std::string source = "config";         // "packaged" (in the APK, from the manifest) or "config" (config.yaml only)
+  bool overridden = false;               // a config.yaml entry named this packaged file
+  std::string expectedSha256;            // the manifest's hash for the file; empty when the file has none to be checked against
 };
 
 // The loader's view of the world. Every method may throw std::exception; the loader contains it.
@@ -86,6 +89,8 @@ class Loader {
   // Builds the plan and writes the record of every entry the plan alone settled (disabled, refused), then the plan line.
   // Runs no plugin code. Call once.
   void Plan(std::vector<PluginLoadItem> items);
+  // The same over merged entries (MergePackaged): a packaged entry's expected hash is checked before its file is mapped.
+  void Plan(std::vector<PlannedItem> items);
 
   // Loads the pending entries of `phase`, in list order, each ending in its one record. The normal pass also takes the
   // `early` entries when no early pass ran (PluginInPhase), so a boot path that never reaches the early moment still loads

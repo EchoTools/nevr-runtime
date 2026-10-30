@@ -505,7 +505,14 @@ arena:
 # plugin extracts the keys it understands, ignores the rest, and uses sensible
 # defaults for any key that is missing.
 #
-# This list is the only source: a DLL in the root's plugins\ that is not listed here is not loaded.
+# On PC this list is the only source: a DLL in the root's plugins\ that is not listed here is not loaded.
+#
+# On Quest, a plugin packaged in the APK loads by default, with no entry here (the build writes
+# libnevr_plugin_manifest.so beside the packaged plugins; ADR 0019). An entry here whose file is a packaged plugin's
+# overrides that plugin's enabled, required, target and args in place, and an entry can set `early` but not clear it
+# (a packaged plugin built early stays early). An entry whose file is not packaged is loaded from the library
+# directory as the list says, and ends "failed" in the log when the file is not there. The load order is the packaged
+# plugins in the order they were packaged, then the entries that name no packaged plugin, in list order.
 # Each plugin entry has these keys:
 #   name      — the plugin's name (required); also the default file name
 #   file      — DLL file name inside the root's plugins\ (default: name + ".dll")

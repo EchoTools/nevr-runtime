@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "quest/plugin/packaged_plugins.h"
 #include "runtime/ext/plugin_load_plan.h"
 
 namespace nevr_quest::plugin {
@@ -43,6 +44,8 @@ inline constexpr const char* kException = "exception";
 inline constexpr const char* kNoInstallMoment = "no_install_moment";
 inline constexpr const char* kPostLoadHookUnavailable = "post_load_hook_unavailable";
 inline constexpr const char* kGameExitedFirst = "game_exited_first";
+// The packaged entry's file is not the bytes its manifest hashed (the repack wrote the manifest over the staged file).
+inline constexpr const char* kManifestHashMismatch = "manifest_hash_mismatch";
 }  // namespace reason
 
 // `lib<name>.so`.
@@ -54,6 +57,9 @@ struct PlanEntry {
   bool pending = true;          // true until the entry has its one record
   Outcome outcome = Outcome::kNotStarted;
   std::string reasonToken;      // a reason:: token, empty for `loaded`
+  Source source = Source::kConfig;  // packaged in the APK, or a config.yaml entry only
+  bool overridden = false;      // a config.yaml entry named this packaged file
+  std::string expectedSha256;   // the packaged file's hash; empty when there is none to check
 };
 
 // One entry per item, in list order. An entry that is refused or disabled by the plan alone is not pending
@@ -61,6 +67,8 @@ struct PlanEntry {
 // `earlySupported` is false when a `dlopen` from the sentinel constructor is not known to work (ADR 0019 P10): an `early`
 // entry is then refused as `early_unsupported`.
 std::vector<PlanEntry> BuildPlan(std::vector<PluginLoadItem> items, bool earlySupported);
+// The same plan over merged entries (MergePackaged): the source, the override and the expected hash are carried into each entry.
+std::vector<PlanEntry> BuildPlan(std::vector<PlannedItem> items, bool earlySupported);
 
 // The keys of an entry's args (never the values), sorted, joined with ','. `args_json` is the flat JSON object the shared
 // plan builder wrote ("{}" when the entry has none).
