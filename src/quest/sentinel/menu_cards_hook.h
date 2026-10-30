@@ -6,7 +6,9 @@
  * block layout and the rules). When the finished resource is the main-menu page (class CR15UIPage2CR under the
  * name mnu_master_lowspec, runtime/patch/menu_cards.h kPageType and kQuestPageName; primary buffer) it hashes the bytes and, only when they are the pinned stock page (runtime/patch/menu_cards.h,
  * kQuestStockPageSha256), builds the page with the two cards added (runtime/patch/menu_page.h, shared with PC) and serves
- * a copy allocated through the game's own allocator. Everything else is passed through untouched, and the game's callback
+ * a copy allocated through the game's own allocator. The same handler also offers the net-gun resources of the five combat
+ * levels to the PC rewrite (#1478, netgun_bullets_swap.h, runtime/patch/netgun_bullets.h), which serves only pinned stock
+ * bytes. Everything else is passed through untouched, and the game's callback
  * always runs, with the block it was given or with the swapped bytes.
  *
  * The data is the headset's own: the cards are built in memory from the page the game delivered; nothing derived from
