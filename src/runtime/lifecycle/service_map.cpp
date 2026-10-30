@@ -65,6 +65,8 @@ const std::unordered_map<std::string, std::string>& FlatKeyMap() {
       // #595 — a server's tick rate in Hz (config.cpp ApplyServerTimestep): default 120, range-checked,
       // 0 keeps the game's own step.
       {"nevr_tick_rate_hz", "network.tick_rate_hz"},
+      // #1422 — a server's match team size (patch/server_team_size.h): 1-8, default the game's 5.
+      {"nevr_max_team_size", "network.max_team_size"},
       // #708 — which game sockets the PC bridge hands to nevr_session_router: legacy (default), config, all.
       {"nevr_session_router", "network.session_router"},
       // #1156 — the invite codes for the CREATE GAME / JOIN VIA CODE wizard: on or off (patch/invite_config.h), on when absent.
