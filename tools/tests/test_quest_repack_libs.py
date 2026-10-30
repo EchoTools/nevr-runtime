@@ -559,6 +559,27 @@ class WritePluginManifestTest(unittest.TestCase):
         self.assertNotEqual(written["plugins"][0]["sha256"], hashlib.sha256(b"the file the recipe was given").hexdigest())
 
 
+class WritePluginManifestGoldenTest(unittest.TestCase):
+    """The writer's bytes are the golden file the Quest loader's parser test reads (src/quest/tests/packaged_plugins_test.cpp,
+    ManifestParseReadsTheBytesTheRepackWriterWrote): the writer cannot change a key without this failing, and the parser cannot
+    stop reading the golden file without that test failing."""
+
+    GOLDEN = REPO / "src" / "quest" / "tests" / "fixtures" / "packaged_plugins_manifest.golden"
+
+    def test_the_writers_output_for_two_plugins_is_the_golden_file(self):
+        with tempfile.TemporaryDirectory(prefix="quest-repack-golden-", dir=work_root.test_scratch()) as tmp:
+            root = pathlib.Path(tmp)
+            stage = root / "stage"
+            (stage / "lib" / "arm64-v8a").mkdir(parents=True)
+            plugins = []
+            for name, data in (("libalpha.so", b"alpha plugin\n"), ("libbeta.so", b"beta plugin\n")):
+                (stage / "lib" / "arm64-v8a" / name).write_bytes(data)
+                plugins.append(root / name)
+            self.assertEqual(libs.write_plugin_manifest(stage, plugins, ["libalpha.so"], ["libbeta.so"]), [])
+            written = (stage / "lib" / "arm64-v8a" / libs.MANIFEST_NAME).read_bytes()
+        self.assertEqual(written, self.GOLDEN.read_bytes())
+
+
 class ShimRowsTest(unittest.TestCase):
     """`check-shim-rows`: the shim is the build for the rows the library is patched with (ADR 0021 section 11)."""
 

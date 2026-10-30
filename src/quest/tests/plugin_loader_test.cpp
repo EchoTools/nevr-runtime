@@ -496,6 +496,29 @@ TEST(LoaderRefusesAPackagedFileWhoseHashIsNotTheManifests) {
   CHECK_EQ(r->reason, std::string(reason::kManifestHashMismatch));
   CHECK_EQ(r->source, std::string("packaged"));
   CHECK(env.platform.opened.empty());  // refused before dlopen: nothing was mapped
+  // The record names both hashes, so the log says what the manifest expected next to what the file is.
+  CHECK_EQ(r->expectedSha256, std::string(64, '0'));
+  CHECK_EQ(r->sha256.size(), std::size_t{64});
+  CHECK(r->sha256 != r->expectedSha256);
+}
+
+// The hash gate follows the file, not the entry: a second config entry that names a packaged file (the first one disabled, or
+// the file spelled in another case) is a config-only item and still has the manifest's hash checked before dlopen.
+TEST(LoaderChecksTheManifestHashOnASecondConfigEntryForTheSameFile) {
+  PackagedPlugin packaged;
+  packaged.name = "ok";
+  packaged.file = "libfx_ok.so";
+  packaged.sha256 = std::string(64, '0');  // not the fixture's hash
+  Env env;
+  env.loader->Plan(MergePackaged({packaged}, {Item("ok", "libfx_ok.so", false, false), Item("ok2", "libfx_ok.so")}));
+  env.loader->RunPhase(PluginPhase::Normal);
+  const LoadRecord* second = env.platform.Record("ok2");
+  CHECK(second != nullptr);
+  if (second == nullptr) return;
+  CHECK(second->outcome == Outcome::kRefused);
+  CHECK_EQ(second->reason, std::string(reason::kManifestHashMismatch));
+  CHECK_EQ(second->source, std::string("config"));
+  CHECK(env.platform.opened.empty());  // nothing was mapped
 }
 
 TEST(LoaderLoadsAPackagedFileWhoseHashMatchesTheManifest) {
@@ -1139,6 +1162,7 @@ TEST(RecordLogCarriesEveryFieldAndNoValue) {
   record.argKeys = "region,token";
   record.source = "packaged";
   record.overridden = true;
+  record.expectedSha256 = std::string(64, 'e');
   LogLoadRecord(record);
   CHECK_EQ(Captured().size(), std::size_t{1});
   if (Captured().empty()) return;
@@ -1150,6 +1174,7 @@ TEST(RecordLogCarriesEveryFieldAndNoValue) {
   CHECK_EQ(line.value("name", ""), std::string("ok"));
   CHECK_EQ(line.value("file", ""), std::string("libok.so"));
   CHECK_EQ(line.value("sha256", ""), std::string(64, 'a'));
+  CHECK_EQ(line.value("expected_sha256", ""), std::string(64, 'e'));
   CHECK_EQ(line.value("plugin_build_id", ""), std::string("bb"));
   CHECK_EQ(line.value("game_build_id", ""), std::string("cc"));
   CHECK_EQ(line.value("plugin_view_build_id", ""), std::string("dd"));
@@ -1233,6 +1258,48 @@ TEST(PlatformReadsARegularFileAndRefusesALinkAndADirectory) {
   ::unlink((root + "/liblink.so").c_str());
   ::rmdir((root + "/libdir.so").c_str());
   ::unlink((root + "/libfifo.so").c_str());
+  ::rmdir(root.c_str());
+}
+
+// A file that is not there is "absent"; a file that is there and cannot be used is "unreadable" with the reason. The sentinel logs
+// the two differently (plugin_manifest status=absent / unreadable), so a manifest the loader could not read is not reported as
+// a build with no packaged plugin.
+TEST(PlatformSaysAbsentForAMissingFileAndUnreadableWithAReasonForTheRest) {
+  char tmpl[] = "/tmp/nevr-plugin-outcome-XXXXXX";
+  const char* dir = ::mkdtemp(tmpl);
+  CHECK(dir != nullptr);
+  if (dir == nullptr) return;
+  const std::string root = dir;
+  {
+    std::ofstream(root + "/libreal.so", std::ios::binary) << "bytes";
+  }
+  CHECK_EQ(::symlink((root + "/libreal.so").c_str(), (root + "/liblink.so").c_str()), 0);
+  CHECK_EQ(::mkdir((root + "/libdir.so").c_str(), 0700), 0);
+  {
+    std::ofstream big(root + "/libbig.so", std::ios::binary);
+    big << "x";
+  }
+  CHECK_EQ(::truncate((root + "/libbig.so").c_str(), 65 * 1024 * 1024), 0);  // sparse: one byte over 64 MiB
+  SentinelPlatform platform(root, false);
+  std::vector<std::uint8_t> bytes;
+  const char* why = nullptr;
+  CHECK(platform.ReadFileOutcome("libreal.so", &bytes, &why) == ReadOutcome::kRead);
+  CHECK_EQ(std::string(why), std::string(""));
+  CHECK(platform.ReadFileOutcome("libmissing.so", &bytes, &why) == ReadOutcome::kAbsent);
+  CHECK_EQ(std::string(why), std::string(""));
+  CHECK(platform.ReadFileOutcome("liblink.so", &bytes, &why) == ReadOutcome::kUnreadable);
+  CHECK_EQ(std::string(why), std::string("symlink"));
+  CHECK(platform.ReadFileOutcome("libdir.so", &bytes, &why) == ReadOutcome::kUnreadable);
+  CHECK_EQ(std::string(why), std::string("not_regular_file"));
+  CHECK(platform.ReadFileOutcome("libbig.so", &bytes, &why) == ReadOutcome::kUnreadable);
+  CHECK_EQ(std::string(why), std::string("too_large"));
+  SentinelPlatform nowhere("", false);
+  CHECK(nowhere.ReadFileOutcome("libreal.so", &bytes, &why) == ReadOutcome::kUnreadable);
+  CHECK_EQ(std::string(why), std::string("no_library_dir"));
+  ::unlink((root + "/libreal.so").c_str());
+  ::unlink((root + "/liblink.so").c_str());
+  ::unlink((root + "/libbig.so").c_str());
+  ::rmdir((root + "/libdir.so").c_str());
   ::rmdir(root.c_str());
 }
 

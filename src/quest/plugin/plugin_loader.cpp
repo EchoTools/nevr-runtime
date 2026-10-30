@@ -29,6 +29,7 @@ LoadRecord BaseRecord(const PlanEntry& entry) {
   record.argKeys = ArgKeys(entry.item.args_json);
   record.source = SourceName(entry.source);
   record.overridden = entry.overridden;
+  record.expectedSha256 = entry.expectedSha256;
   return record;
 }
 

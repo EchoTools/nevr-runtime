@@ -135,6 +135,14 @@ std::vector<PlannedItem> MergePackaged(const std::vector<PackagedPlugin>& packag
     PlannedItem planned;
     planned.item = std::move(entry);
     planned.source = Source::kConfig;
+    // The manifest's hash belongs to the file, not to the first entry that names it. A later entry for a packaged file (the
+    // first one disabled, or the file spelled in another case) still loads that file's bytes, so it is checked against the
+    // same hash: config overrides how a packaged plugin runs, never which bytes run.
+    for (const PackagedPlugin& p : packaged) {
+      if (!EqualsIgnoreCase(p.file, planned.item.file)) continue;
+      planned.expectedSha256 = p.sha256;
+      break;
+    }
     configOnly.push_back(std::move(planned));
   }
   for (PlannedItem& planned : configOnly) merged.push_back(std::move(planned));

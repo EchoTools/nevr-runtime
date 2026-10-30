@@ -2153,7 +2153,7 @@ test-quest-plugins:
     timeout -k 5 120 "$out/plugin_loader_test" "$out"
     "${cxx[@]}" -pthread src/quest/tests/packaged_plugins_test.cpp src/quest/plugin/packaged_plugins.cpp \
         src/quest/plugin/plugin_plan.cpp src/runtime/ext/plugin_load_plan.cpp -o "$out/packaged_plugins_test"
-    timeout -k 5 120 "$out/packaged_plugins_test"
+    timeout -k 5 120 "$out/packaged_plugins_test" src/quest/tests/fixtures
     "${cxx[@]}" -pthread src/quest/tests/plugin_runtime_test.cpp src/quest/plugin/plugin_runtime.cpp \
         src/runtime/ext/plugin_load_plan.cpp "${loader[@]}" -o "$out/plugin_runtime_test" -ldl
     timeout -k 5 120 "$out/plugin_runtime_test" "$out"

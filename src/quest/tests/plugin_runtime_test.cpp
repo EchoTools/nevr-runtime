@@ -11,6 +11,8 @@
 // Run: plugin_runtime_test <fixture-dir> [name-filter]
 
 #include <dlfcn.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <cstdio>
 #include <string>
@@ -328,6 +330,10 @@ TEST(InvalidManifestPlansNoPackagedPluginsAndLogsOneError) {
     CHECK_EQ(line->value("status", ""), std::string("invalid"));
     CHECK_EQ(line->value("reason", ""), std::string("bad_sha256"));
     CHECK_EQ(line->value("level", ""), std::string("error"));
+    // The line says what follows from it (docs/standards/logging.md, Category G).
+    const std::string msg = line->value("msg", "");
+    CHECK(msg.find("no packaged plugin") != std::string::npos);
+    CHECK(msg.find("config.yaml") != std::string::npos);
   }
   const std::vector<nlohmann::json> records = Records();
   CHECK(RecordFor(records, "fx_ok") == nullptr);  // the packaged entry is not planned
@@ -345,6 +351,44 @@ TEST(ManifestHashMismatchIsRefusedBeforeTheMachineCheck) {
   if (fx == nullptr) return;
   CHECK_EQ(fx->value("outcome", ""), std::string("refused"));
   CHECK_EQ(fx->value("reason", ""), std::string("manifest_hash_mismatch"));
+  CHECK_EQ(fx->value("expected_sha256", ""), std::string(64, '1'));  // the manifest's hash, beside the file's own
+  CHECK_EQ(fx->value("sha256", "").size(), std::size_t{64});
+  CHECK(fx->value("sha256", "") != std::string(64, '1'));
+}
+
+// A manifest the loader could not read is not "no packaged plugin": it is a build that has one it cannot see. The status says
+// so, at Warning, with the reason and what follows from it.
+TEST(UnreadableManifestIsNotReportedAsAbsent) {
+  Scope scope;
+  const std::string path = LibraryDir() + "/libnevr_plugin_manifest.so";
+  CHECK_EQ(::mkdir(path.c_str(), 0700), 0);  // a directory where the file should be
+  const PlanCounts counts = PlanPlugins({}, false);
+  ::rmdir(path.c_str());
+  CHECK_EQ(counts.early + counts.normal, std::size_t{0});
+  CHECK_EQ(ManifestLineCount(), 1);
+  const nlohmann::json* line = ManifestLine();
+  CHECK(line != nullptr);
+  if (line == nullptr) return;
+  CHECK_EQ(line->value("status", ""), std::string("unreadable"));
+  CHECK_EQ(line->value("reason", ""), std::string("not_regular_file"));
+  CHECK_EQ(line->value("level", ""), std::string("warn"));
+  CHECK_EQ(line->value("packaged", -1), 0);
+  const std::string msg = line->value("msg", "");
+  CHECK(msg.find("no packaged plugin") != std::string::npos);
+  CHECK(msg.find("config.yaml") != std::string::npos);
+}
+
+TEST(ASymlinkWhereTheManifestShouldBeIsUnreadableToo) {
+  Scope scope;
+  const std::string path = LibraryDir() + "/libnevr_plugin_manifest.so";
+  CHECK_EQ(::symlink("libfx_ok.so", path.c_str()), 0);
+  PlanPlugins({}, false);
+  ::unlink(path.c_str());
+  const nlohmann::json* line = ManifestLine();
+  CHECK(line != nullptr);
+  if (line == nullptr) return;
+  CHECK_EQ(line->value("status", ""), std::string("unreadable"));
+  CHECK_EQ(line->value("reason", ""), std::string("symlink"));
 }
 
 TEST(ManifestIsReadOnceAndPlanningTwiceChangesNothing) {

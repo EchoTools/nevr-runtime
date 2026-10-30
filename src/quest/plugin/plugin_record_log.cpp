@@ -9,6 +9,7 @@ void LogLoadRecord(const LoadRecord& record) {
       {"name", record.name.c_str()},
       {"file", record.file.c_str()},
       {"sha256", record.sha256.c_str()},
+      {"expected_sha256", record.expectedSha256.c_str()},  // the manifest's hash; empty when the file has none
       {"plugin_build_id", record.pluginBuildId.c_str()},
       {"game_build_id", record.gameBuildId.c_str()},
       {"plugin_view_build_id", record.pluginViewBuildId.c_str()},

@@ -2,8 +2,11 @@
 // writes beside the plugins, and the merge with config.yaml (docs/adr/0019-quest-plugin-loader.md, section 2, rule D3).
 // The loader's refusal of a file whose bytes differ from the manifest is plugin_loader_test.cpp's.
 //
-// Run: packaged_plugins_test
+// Run: packaged_plugins_test <fixture-dir> [name-filter]
 
+#include <cstdio>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -133,6 +136,33 @@ TEST(ManifestParseIgnoresUnknownKeys) {
   CHECK_EQ(out.size(), std::size_t{1});
 }
 
+// The bytes the repack's writer (tools/quest_repack_libs.py write_plugin_manifest) wrote for two plugins, kept as a golden file:
+// tools/tests/test_quest_repack_libs.py proves the writer still writes exactly these bytes, and this proves the parser reads
+// them. A key renamed on one side fails one of the two tests, so the two cannot drift apart.
+std::string FixtureDir;
+
+TEST(ManifestParseReadsTheBytesTheRepackWriterWrote) {
+  std::ifstream in(FixtureDir + "/packaged_plugins_manifest.golden", std::ios::binary);
+  const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  CHECK(!text.empty());
+  std::vector<PackagedPlugin> out;
+  std::string why;
+  CHECK(Parse(text, &out, &why));
+  CHECK_EQ(why, std::string(""));
+  CHECK_EQ(out.size(), std::size_t{2});
+  if (out.size() != 2) return;
+  CHECK_EQ(out[0].name, std::string("alpha"));
+  CHECK_EQ(out[0].file, std::string("libalpha.so"));
+  CHECK_EQ(out[0].sha256, std::string("0cd7f77413da5fdc78d1f4d0f53080baa11110b2985cd8d156ef235f3993d992"));
+  CHECK(out[0].enabled);
+  CHECK(out[0].early);
+  CHECK_EQ(out[1].name, std::string("beta"));
+  CHECK_EQ(out[1].file, std::string("libbeta.so"));
+  CHECK_EQ(out[1].sha256, std::string("ce4aad056e498cf68963b9ec5b70d619bd89384c31a2eb1c4abb9a96d8dbe92c"));
+  CHECK(!out[1].enabled);
+  CHECK(!out[1].early);
+}
+
 // ---- the merge (D3) ------------------------------------------------------------------------------------------------------
 
 TEST(MergeKeepsManifestOrderThenConfigOnlyEntries) {
@@ -196,6 +226,51 @@ TEST(MergeSecondConfigEntryForTheSameFileIsADuplicate) {
   CHECK_EQ(plan[1].reasonToken, std::string(reason::kDuplicateFile));
 }
 
+// A packaged file's bytes are checked against the manifest's hash whichever config entry loads it, not only the first entry that
+// names it: a second entry for the file (a rename after a disabled first entry, or another spelling of the file) is a
+// config-only item, and it must carry the hash too.
+TEST(MergeSecondEntryNamingAnOverriddenPackagedFileKeepsTheManifestHash) {
+  // Case 1: the first entry disables the packaged plugin, the second names the same file under another name.
+  const std::vector<PlannedItem> merged =
+      MergePackaged({Packaged("fx")}, {Config("fx", "libfx.so", false), Config("fx2", "libfx.so")});
+  CHECK_EQ(merged.size(), std::size_t{2});
+  if (merged.size() != 2) return;
+  CHECK(merged[1].source == Source::kConfig);
+  CHECK_EQ(merged[1].expectedSha256, kHexA);
+  const std::vector<PlanEntry> plan = BuildPlan(merged, true);
+  CHECK_EQ(plan.size(), std::size_t{2});
+  if (plan.size() != 2) return;
+  CHECK(plan[0].outcome == Outcome::kDisabled);
+  CHECK(plan[1].pending);  // the disabled first entry does not claim the file, so the second one loads it ...
+  CHECK_EQ(plan[1].expectedSha256, kHexA);  // ... and the loader checks the manifest's hash on it
+}
+
+TEST(MergeAnotherSpellingOfAPackagedFileKeepsTheManifestHash) {
+  // Case 2, first entry off: the second entry spells the file in upper case.
+  const std::vector<PlannedItem> off =
+      MergePackaged({Packaged("fx")}, {Config("fx", "libfx.so", false), Config("fx2", "libFX.so")});
+  CHECK_EQ(off.size(), std::size_t{2});
+  if (off.size() == 2) CHECK_EQ(off[1].expectedSha256, kHexA);
+  // Case 2, first entry on: the spelling does not hide the duplicate, and the hash is carried either way.
+  const std::vector<PlannedItem> on = MergePackaged({Packaged("fx")}, {Config("fx", "libfx.so"), Config("fx2", "libFX.so")});
+  CHECK_EQ(on.size(), std::size_t{2});
+  if (on.size() != 2) return;
+  CHECK_EQ(on[1].expectedSha256, kHexA);
+  const std::vector<PlanEntry> plan = BuildPlan(on, true);
+  CHECK_EQ(plan.size(), std::size_t{2});
+  if (plan.size() != 2) return;
+  CHECK(plan[1].outcome == Outcome::kRefused);
+  CHECK_EQ(plan[1].reasonToken, std::string(reason::kDuplicateFile));
+}
+
+TEST(MergeConfigEntryForAFileThatIsNotPackagedCarriesNoHash) {
+  const std::vector<PlannedItem> merged = MergePackaged({Packaged("fx")}, {Config("gone", "libgone.so")});
+  CHECK_EQ(merged.size(), std::size_t{2});
+  if (merged.size() != 2) return;
+  CHECK(merged[1].source == Source::kConfig);
+  CHECK_EQ(merged[1].expectedSha256, std::string(""));
+}
+
 TEST(MergeOverridesNameArgsRequiredAndTarget) {
   PluginLoadItem config = Config("fx", "libfx.so");
   config.required = true;
@@ -214,4 +289,11 @@ TEST(MergeOverridesNameArgsRequiredAndTarget) {
 
 }  // namespace
 
-int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }
+int main(int argc, char** argv) {
+  if (argc < 2) {
+    std::fprintf(stderr, "usage: packaged_plugins_test <fixture-dir> [name-filter]\n");
+    return 2;
+  }
+  FixtureDir = argv[1];
+  return mini_test::RunAll(argc - 1, argv + 1);
+}

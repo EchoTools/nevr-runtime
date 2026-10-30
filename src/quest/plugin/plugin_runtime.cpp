@@ -43,14 +43,26 @@ std::string OwnDirectory() {
   return DirectoryOf(info.dli_fname);
 }
 
-// The packaged entries: the manifest the repack wrote beside the plugins (kManifestFile), read once per process. A missing
-// file is the normal case for a build with no packaged plugin; a file that cannot be used is logged as an error and plans
-// no packaged entry (the config entries still plan).
+// The packaged entries: the manifest the repack wrote beside the plugins (kManifestFile), read once per process. A file that is
+// not there is the normal case for a build with no packaged plugin; a file that is there and cannot be used (unreadable, or
+// not a manifest this loader understands) means the build has plugins this run will not load, so it is logged at Warning or
+// Error with what follows from it. Either way no packaged entry is planned and the config entries still are.
+constexpr const char* kNoPackagedMessage =
+    "no packaged plugin loads from this APK; entries in config.yaml still load as source=config";
+
 std::vector<PackagedPlugin> ReadPackaged(SentinelPlatform& platform) {
   std::vector<std::uint8_t> bytes;
-  if (!platform.ReadFile(kManifestFile, &bytes)) {
+  const char* readWhy = "";
+  const ReadOutcome read = platform.ReadFileOutcome(kManifestFile, &bytes, &readWhy);
+  if (read == ReadOutcome::kAbsent) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "plugin_manifest",
                         {{"status", "absent"}, {"packaged", 0}, {"file", kManifestFile}});
+    return {};
+  }
+  if (read == ReadOutcome::kUnreadable) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "plugin_manifest",
+                        {{"status", "unreadable"}, {"packaged", 0}, {"reason", readWhy}, {"file", kManifestFile},
+                         {"msg", kNoPackagedMessage}});
     return {};
   }
   const std::string text(bytes.begin(), bytes.end());
@@ -58,7 +70,8 @@ std::vector<PackagedPlugin> ReadPackaged(SentinelPlatform& platform) {
   std::string why;
   if (!ParseManifest(text, &packaged, &why)) {
     sentinel::LogFields(sentinel::LogLevel::kError, "plugin_manifest",
-                        {{"status", "invalid"}, {"packaged", 0}, {"reason", why.c_str()}, {"file", kManifestFile}});
+                        {{"status", "invalid"}, {"packaged", 0}, {"reason", why.c_str()}, {"file", kManifestFile},
+                         {"msg", kNoPackagedMessage}});
     return {};
   }
   sentinel::LogFields(sentinel::LogLevel::kInfo, "plugin_manifest",

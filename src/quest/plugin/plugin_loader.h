@@ -43,6 +43,7 @@ struct LoadRecord {
   std::string argKeys;                   // the keys of the entry's args, never the values
   std::string source = "config";         // "packaged" (in the APK, from the manifest) or "config" (config.yaml only)
   bool overridden = false;               // a config.yaml entry named this packaged file
+  std::string expectedSha256;            // the manifest's hash for the file; empty when the file has none to be checked against
 };
 
 // The loader's view of the world. Every method may throw std::exception; the loader contains it.
