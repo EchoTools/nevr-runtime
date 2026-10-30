@@ -2559,6 +2559,17 @@ class MainComplete(VariantCase):
                 self.assertEqual(self.run_timer(fake), 1)
                 self.assertEqual(self.failed()[-1]["part"], "variant", step)
 
+    def test_the_main_complete_of_another_tag_changes_nothing(self) -> None:
+        self.write_log({"event": "main_complete", "tag": "v5.16.1"})
+        fake = self.listed()
+        fake.fail = "build_signer"
+        self.assertEqual(self.run_timer(fake), 1)
+        self.assertEqual(self.failed()[-1]["part"], "main")
+        self.log.unlink()
+        self.write_log({"event": "main_complete", "tag": "v5.16.1"})
+        self.assertEqual(self.run_timer(self.listed()), 0)
+        self.assertEqual([e["tag"] for e in self.events() if e["event"] == "main_complete"], ["v5.16.1", TAG])
+
     def test_a_tag_without_it_still_fails_as_the_main_release_before_check_listed_says_listed(self) -> None:
         for step in ("build_signer", "verify"):
             with self.subTest(step=step):
@@ -2634,6 +2645,13 @@ class HostBreakage(VariantCase):
 
     def test_a_complete_answer_over_a_raw_socket_is_listed(self) -> None:
         self.against(http_response(HOST_APK), http_response(self.SIDECAR))
+        self.assertEqual(self.run_timer(self.listed()), 0)
+        self.assertIn("variant_listed", self.names())
+
+    def test_a_content_length_that_is_not_a_number_is_ignored(self) -> None:
+        head = (b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: \xb2\r\n"
+                b"Connection: close\r\n\r\n")
+        self.against(head + HOST_APK, http_response(self.SIDECAR))
         self.assertEqual(self.run_timer(self.listed()), 0)
         self.assertIn("variant_listed", self.names())
 
@@ -2865,6 +2883,16 @@ class ScratchOnlyWhatThisRunMade(TimerCase):
         scratch = self.marked()
         self.assertEqual(self.run_timer(Fake(self.root, fail="build_signer")), 1)
         self.assertFalse(scratch.exists())
+
+    def test_a_marker_that_is_a_link_does_not_count(self) -> None:
+        scratch = self.root / "work" / f"variant-{TAG}"
+        scratch.mkdir(parents=True)
+        elsewhere = self.root / "marker-target"
+        elsewhere.write_text("")
+        (scratch / timer.SCRATCH_MARKER).symlink_to(elsewhere)
+        (scratch / "keep.txt").write_text("kept")
+        self.assertEqual(self.run_timer(Fake(self.root)), 0)
+        self.assertTrue((scratch / "keep.txt").exists())
 
     def test_a_link_to_a_marked_directory_is_not_followed(self) -> None:
         target = self.root / "elsewhere"
