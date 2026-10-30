@@ -2698,11 +2698,14 @@ class HostBreakage(VariantCase):
         self.assertEqual([e["step"] for e in self.failed()], ["variant_exists"] * 3)
 
     def test_a_url_the_standard_library_rejects_is_a_failure_not_a_traceback(self) -> None:
-        env = {**self.env, "RELEASE_PUBLIC_BASE": "http://127.0.0.1:99999"}
-        code, stderr = self.run_captured(self.listed(), env=env)
-        self.assertEqual(code, 1)
-        self.assertNotIn("Traceback", stderr)
-        self.assertEqual([e["step"] for e in self.failed()], ["variant_exists"])
+        for base in ("http://127.0.0.1:99999", "https://" + "a" * 70 + ".invalid"):  # InvalidURL; a label too long (UnicodeError)
+            with self.subTest(base=base):
+                self.log.unlink(missing_ok=True)
+                env = {**self.env, "RELEASE_PUBLIC_BASE": base}
+                code, stderr = self.run_captured(self.listed(), env=env)
+                self.assertEqual(code, 1)
+                self.assertNotIn("Traceback", stderr)
+                self.assertEqual([e["step"] for e in self.failed()], ["variant_exists"])
 
 
 class UnexpectedExceptions(VariantCase):
