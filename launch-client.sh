@@ -262,7 +262,7 @@ fi
 # Evidence that the game really is on the nested display, read from /proc.
 (
   sleep "${NEVR_EVIDENCE_DELAY:-12}"
-  for pid in $(game_pids); do
+  for pid in $(run_game_pids); do
     echo "=== evidence: pid $pid ppid=$(ps -o ppid= -p "$pid" | tr -d ' ') argv0=$(tr '\0' '\n' < "/proc/$pid/cmdline" | sed -n 1p) $(tr '\0' '\n' < "/proc/$pid/environ" | grep -E '^(DISPLAY|WAYLAND_DISPLAY)=' | tr '\n' ' ')==="
   done
 ) 9>&- &
@@ -340,7 +340,7 @@ if [[ $EXIT_AFTER_LOGIN -eq 1 ]]; then
   # server is gone too, so nothing still has BugSplat64.dll or nevr-runtime.dll mapped when the restore trap copies the
   # original back over it.
   kill "$game_pid" 2>/dev/null
-  for pid in $(game_pids); do kill "$pid" 2>/dev/null; done
+  for pid in $(run_game_pids); do kill "$pid" 2>/dev/null; done
   # timeout's own status: 124 when its timer ended the client, 137 when the client ignored the interrupt and KILL ended it. A
   # bare 137 is not proof of a timeout (a crash also reads 137), so 137 counts only when the run ran for the whole --timeout.
   game_status=0

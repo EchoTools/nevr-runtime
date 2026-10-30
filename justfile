@@ -691,6 +691,16 @@ scenario-all *ARGS:
     just preset=mingw-scenario build
     python3 tools/scenario/run_all.py {{ARGS}}
 
+# The PC invite flow end to end against production (#1598): two clients from stored sign-ins, each on its own copy of the install,
+# one creates a game and gets a code, both resolve it and join; a one-screen verdict (each step with the log line that proves it,
+# and every readyatdawn.com URL a client touched). Exit 0 only when every step passed. ARGS pass to tools/invite_e2e.py
+# (--account-a, --account-b, --timeout, --game-root). The build runs in the build slice; each client in its own nevr-live.slice scope.
+invite-e2e *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 systemd-run --user --scope --quiet --slice=nevr-builds.slice -p MemoryMax=10G just preset=mingw-scenario build
+    python3 tools/invite_e2e.py {{ARGS}}
+
 # Run plugin ground truth tests (no game binary needed)
 test-plugins-groundtruth:
     cd tests/plugins && go test -v -run "TestGroundTruth" ./...
