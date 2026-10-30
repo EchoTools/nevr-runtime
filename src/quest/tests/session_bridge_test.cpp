@@ -28,6 +28,7 @@
 #include "quest/tests/test_check.h"
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/lobby_frame.h"
+#include "runtime/compat/social_party.h"
 #include "runtime/tests/lobby_record_golden.h"
 
 using namespace quest_net;
@@ -755,10 +756,20 @@ void TestReconnectedLoginSocketIsToldItsLoginWasRemoved() {
 }  // namespace
 
 // The lobby session record of a success that reaches the game (#1429): the bridge turns the records on and reads the
-// party from the process-wide party state. The record from lobby= on is the golden line's, with no party and no
-// request, since none is set here. Caught: the records off (no line at all), and the party source missing (the
-// fields say unknown, not none).
+// party from the process-wide party state. The party is set through the state's own join message (id 7, led by account
+// 42, the local account 5, so two members and not the leader). The record from lobby= on is the golden line's with that
+// party, and its request is the find, aged on the production clock. Caught: the records off (no line at all), the party
+// source missing (the fields say unknown), and a party field read wrongly (the size, the id, the leader).
 void TestLobbySuccessReachingTheGameIsRecorded() {
+  nevr_social_party::State& party = nevr_social_party::Global();
+  party.SetSelf(5);
+  {
+    std::string joined;
+    nevr_social_party::AppendLe(joined, 7, 8);   // the party id
+    nevr_social_party::AppendLe(joined, 42, 8);  // the party's owner
+    QCHECK(party.Feed(nevr_social_party::ReplySymbol("PartyJoinSuccess"),
+                      reinterpret_cast<const std::uint8_t*>(joined.data()), joined.size(), 0, nullptr));
+  }
   FakeConnector connector;
   Observed seen;
   SessionBridge::Config cfg = MakeConfig(&connector, &seen, "JWT-A");
@@ -818,9 +829,14 @@ void TestLobbySuccessReachingTheGameIsRecorded() {
   };
   QCHECK(WaitFor([&] { return !successLine().empty(); }));
   const std::string record = successLine();
-  // The golden line with no request, cut at the request fields: the fields before them are the golden's, the request
-  // is the find, outstanding, and aged in ms (300 ms or more, and well under the limit of a minute).
-  const std::string golden = lobby_record_golden::kSuccessNoRequestNoParty;
+  // The golden line with no request, cut at the request fields: the fields before them are the golden's, with the
+  // party the state holds (id 7, two members, not the leader), and the request is the find, outstanding, and aged in
+  // ms (300 ms or more, and well under the limit of a minute).
+  std::string golden = lobby_record_golden::kSuccessNoRequestNoParty;
+  const std::string noParty = "party_id=none party_size=0 party_leader=no";
+  const std::size_t noPartyAt = golden.find(noParty);
+  QCHECK(noPartyAt != std::string::npos);
+  if (noPartyAt != std::string::npos) golden.replace(noPartyAt, noParty.size(), "party_id=7 party_size=2 party_leader=no");
   const std::string requestKey = " last_request=";
   const std::size_t goldenTail = golden.find(" lobby=");
   const std::size_t goldenRequest = golden.find(requestKey);
@@ -843,6 +859,7 @@ void TestLobbySuccessReachingTheGameIsRecorded() {
     const unsigned long long ms = std::strtoull(age.c_str(), nullptr, 10);
     QCHECK(ms >= 300 && ms < 60000);
   }
+  party.ResetParty();  // the state is process-wide: leave it as the other tests found it
 }
 
 int main() {
