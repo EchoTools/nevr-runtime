@@ -173,6 +173,10 @@ def make_fake_bin(directory: pathlib.Path) -> None:
         '[[ -n "${FAKE_WINE_IGNORE_INT:-}" ]] && trap "" INT  # a client that ignores the interrupt: timeout must KILL it\n'
         '# A directory where the run\'s sign-in link is: rm cannot remove it, so the restore must say the sign-in is still there.\n'
         '[[ -n "${FAKE_WINE_PIN_SIGNIN:-}" ]] && { rm -f "$logs/../.credentials.json"; mkdir "$logs/../.credentials.json"; }\n'
+        # A server run writes the boot lines a healthy run writes, to the capture verify-server.sh reads (the game's output).
+        '[[ "$*" == *-server* && -z "${FAKE_HOST_STOP:-}" && -z "${FAKE_WINE_NO_BOOT:-}" ]] && printf "%s\\n" "Finished initializing engine" "LOGIN SUCCESS" "registration successful"\n'
+        # A game that exits with a code of its own (FAKE_WINE_EXIT=78 is the host stop's exit code).
+        '[[ -n "${FAKE_WINE_EXIT:-}" ]] && exit "$FAKE_WINE_EXIT"\n'
         'exec sleep "${FAKE_WINE_SLEEP:-0}"\n')
     # wineserver: like the real one, `-k` exits 1 when no server is left (every call after the first), `-w`
     # exits 0; each call is logged with the deployed DLL's content so tests can see WHEN it ran.
@@ -1050,9 +1054,12 @@ class VerifyServerTest(unittest.TestCase):
 
     def test_the_summary_names_a_host_stop_and_says_none_otherwise(self):
         # #1122: a host that refuses nevr-runtime.dll leaves no game log; the summary says why from the host's record.
-        stopped = subprocess.run(self.command(), env=dict(self.env, FAKE_HOST_STOP="unsigned"), cwd=self.checkout,
-                                 capture_output=True, text=True, timeout=60)
-        self.assertEqual(stopped.returncode, 0, stopped.stdout + stopped.stderr)
+        # The host ends the game with exit 78; the game exits at once, so the run fails and says why (#1308).
+        stopped = subprocess.run(self.command(), env=dict(self.env, FAKE_HOST_STOP="unsigned", FAKE_WINE_EXIT="78"),
+                                 cwd=self.checkout, capture_output=True, text=True, timeout=60)
+        self.assertEqual(stopped.returncode, 1, stopped.stdout + stopped.stderr)
+        self.assertIn("verify-server: FAIL run1: the game exited with code 78 before the run window ended",
+                      stopped.stderr)
         self.assertIn("host stop           = the host stopped the game (exit 78, reason runtime_refused): "
                       "the host refused nevr-runtime.dll: unsigned", stopped.stdout)
         # The fake runs are under a second apart; a real boot is not, so the first run's record is replaced by one
@@ -1064,6 +1071,33 @@ class VerifyServerTest(unittest.TestCase):
                                 timeout=60)
         self.assertEqual(normal.returncode, 0, normal.stdout + normal.stderr)
         self.assertIn("host stop           = none", normal.stdout)
+
+    def test_a_game_that_exits_nonzero_fails_the_run(self):
+        # #1308: the exit status is the run's verdict, not the summary pipeline's.
+        result = self.run_verify(dict(self.env, FAKE_WINE_EXIT="3"))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("the game exited with code 3 before the run window ended", result.stderr)
+        self.assertIn("result              = FAIL: the game exited with code 3", result.stdout)
+
+    def test_a_run_whose_log_lacks_the_boot_line_fails(self):
+        result = self.run_verify(dict(self.env, FAKE_WINE_NO_BOOT="1"))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no 'Finished initializing engine' line", result.stderr)
+
+    def test_a_healthy_run_passes_and_names_its_config_and_capture(self):
+        result = self.run_verify()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("result              = PASS", result.stdout)
+        self.assertIn("config              = offline", result.stdout)
+        self.assertIn("counts read from    = ", result.stdout)
+
+    def test_verify_server_refuses_to_run_without_a_copy_named(self):
+        # #1308: the install itself is never a verification target; NEVR_GAME_ROOT must name a copy.
+        env = {k: v for k, v in self.env.items() if k != "NEVR_GAME_ROOT"}
+        result = self.run_verify(env)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("needs NEVR_GAME_ROOT", result.stderr)
+        self.assertFalse((self.tmp / "server-runs/run1").exists(), "a refused run must not write its output")
 
     def test_a_finished_run_leaves_the_game_directory_as_it_found_it(self):
         result = subprocess.run(self.command(), env=self.env, cwd=self.checkout, capture_output=True,

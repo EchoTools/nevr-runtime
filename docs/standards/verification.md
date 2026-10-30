@@ -69,7 +69,7 @@ Rank every claim. Record the rank and its measurement in the tracking issue or c
 
 | Rank | Method | What it actually proves |
 | ---- | ------ | ----------------------- |
-| **1** | **Observed behaviour change** on a live server via `./launch-server.sh` or `./verify-server.sh`, run on a copy of the game install (`NEVR_GAME_ROOT=<copy>`; see "The game install" in `AGENTS.md`) — a before/after difference in the log or exit code. KNOWN-WRONG #1308: `verify-server.sh` exits 0 when the game it ran failed, so only its log counts | The defect was real and is now gone. The only rank that proves both. |
+| **1** | **Observed behaviour change** on a live server via `./launch-server.sh` or `./verify-server.sh`, run on a copy of the game install (`NEVR_GAME_ROOT=<copy>`; see "The game install" in `AGENTS.md`) — a before/after difference in the log or exit code. `verify-server.sh` exits 1 when the game it ran exited nonzero before its window ended or its capture lacks the required boot line (its header lists them); the counts in its summary are read from the capture it names | The defect was real and is now gone. The only rank that proves both. |
 | **2** | **Production-linked test** — a test that links and drives the code that ships | The logic is correct. Does NOT prove that code runs in production. |
 | **3** | **Falsified sensor** — a `just verify` check, broken and observed failing | The check works and the source has the shape you claim. Nothing about runtime. |
 | **4** | **Type/compile enforcement** | True only of translation units the linker consumes. Verify that first. |
