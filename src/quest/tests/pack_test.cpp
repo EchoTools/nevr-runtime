@@ -447,6 +447,21 @@ TEST(OnlyTheFilesThatAreNotInPlaceAreCountedForSpace) {
   CHECK(rig.Run().outcome == PackOutcome::kPlaced);
 }
 
+TEST(AStockManifestThatChangesBeforeItIsKeptAsideIsNotReplaced) {
+  Rig rig;
+  rig.BuildApk();
+  rig.probe = [&](const char* point, const std::string& path) {
+    if (std::string(point) == "tmp_written" && path == rig.ManifestPath()) rig.WriteStock("CHANGED-AFTER-THE-CHECK");
+    return true;
+  };
+  const PackResult r = rig.Run();
+  CHECK(r.outcome == PackOutcome::kFailed && r.status == PackStatus::kBackupFailed);
+  CHECK_EQ(ReadFile(rig.ManifestPath()), std::string("CHANGED-AFTER-THE-CHECK"));  // not replaced
+  CHECK(!Exists(rig.ManifestPath() + ".stock") && !Exists(rig.ManifestPath() + kPackTmpSuffix));
+  CHECK(Names(rig.android + "/manifests") == std::vector<std::string>{std::string(kManifestId)});  // no marker left either
+  CHECK(rig.shown.size() == 1 && rig.holds == 1);
+}
+
 // ---------------- a digest that does not match ----------------
 
 TEST(APackageWhoseBytesAreNotTheDigestIsNotPlacedAndLeavesNoTemporary) {
@@ -612,6 +627,16 @@ TEST(CleanPackLeftoversRemovesMarkersWhoseItemIsGone) {
   CHECK_EQ(CleanPackLeftovers(rig.root, nullptr), 0);
   CHECK(!Exists(OwnerMarkerPath(rig.ManifestPath() + ".stock")));
   CHECK(!Exists(OwnerMarkerPath(rig.PackagePath() + kPackTmpSuffix)));
+}
+
+TEST(CleanPackLeftoversWalksOnlyManifestsAndPackages) {
+  Rig rig;
+  MakeDirsBelow(rig.root, std::string("_data/") + kVersionDir + "/rad15/android/scripts");
+  const std::string elsewhere = rig.android + "/scripts/x" + kPackTmpSuffix;
+  WriteFile(elsewhere, "a temporary of ours, in a directory the pack never writes");
+  CHECK(MarkOwned(elsewhere));
+  CHECK_EQ(CleanPackLeftovers(rig.root, nullptr), 0);
+  CHECK(Exists(elsewhere) && IsOwned(elsewhere));
 }
 
 TEST(CleanPackLeftoversDoesNotWalkThroughALink) {

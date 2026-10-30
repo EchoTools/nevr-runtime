@@ -102,6 +102,14 @@ STUB_REPACK = """android-repack-apk apk shim="s" workdir="w" plugin="" version="
     echo "repack apk={{ apk }} shim={{ shim }} workdir={{ workdir }} plugin={{ plugin }} version={{ version }}" >> "$CALLS"
     printf 'signed plugin=[%s] version=%s' "{{ plugin }}" "{{ version }}" > "{{ workdir }}/r15_nevr-sentinel_signed.apk"
 """
+# The same recipe with the parameters the real one has since the bundled pack (docs/adr/0029-quest-bundled-content-pack.md).
+STUB_REPACK_PACK = """android-repack-apk apk shim="s" workdir="w" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{ workdir }}"
+    echo "repack apk={{ apk }} plugin={{ plugin }} version={{ version }} others=[{{ extra_rows }}|{{ patcher }}|{{ json_include }}|{{ plugin_early }}|{{ plugin_off }}] pack={{ pack }} pack_meta={{ pack_meta }}" >> "$CALLS"
+    printf 'signed' > "{{ workdir }}/r15_nevr-sentinel_signed.apk"
+"""
 PLUGINS = "/priv/libq15t.so:/priv/libq15t_early.so"
 
 
@@ -233,8 +241,45 @@ class RecipesRun(unittest.TestCase):
                 self.assertNotIn("repack ", "\n".join(self.calls_made()))
 
     def test_the_release_apk_never_carries_a_plugin(self):
-        result = self.just("_release-quest-apk", "release-quest-apk", "v1.2.3", str(self.store), PLUGINS, "")
+        result = self.just("_release-quest-apk", "release-quest-apk", "v1.2.3", str(self.store), PLUGINS, "", "", "")
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn("release-quest-apk: a release APK carries no plugin library", result.stderr)
+        self.assertNotIn("repack ", "\n".join(self.calls_made()))
+
+    # ---- the bundled game-data pack (docs/adr/0029-quest-bundled-content-pack.md) ----
+
+    def use_pack_stub(self):
+        texts = [recipe(name) for name in ("release-quest-apk", "release-quest-variant-apk", "_release-quest-apk")]
+        (self.dir / "justfile").write_text("\n".join(texts) + "\n" + STUB_REPACK_PACK, encoding="utf-8")
+
+    def test_the_variant_recipe_passes_the_pack_and_its_description_to_the_repack(self):
+        self.use_pack_stub()
+        result = self.just("release-quest-variant-apk", "v1.2.3", PLUGINS, str(self.store), "/p/pack.zip", "/p/meta.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        repack = [c for c in self.calls_made() if c.startswith("repack ")]
+        self.assertEqual(repack, [f"repack apk={self.store} plugin={PLUGINS} version=1.2.3 others=[||||] "
+                                  "pack=/p/pack.zip pack_meta=/p/meta.json"])
+
+    def test_without_a_pack_the_repack_is_given_none_and_the_call_is_the_one_it_was_before(self):
+        self.use_pack_stub()
+        self.assertEqual(self.variant().returncode, 0)
+        self.assertEqual(self.release().returncode, 0)
+        repack = [c for c in self.calls_made() if c.startswith("repack ")]
+        self.assertEqual(len(repack), 2)
+        for call in repack:
+            self.assertTrue(call.endswith("others=[||||] pack= pack_meta="), call)
+
+    def test_the_release_apk_never_carries_a_pack(self):
+        result = self.just("_release-quest-apk", "release-quest-apk", "v1.2.3", str(self.store), "", "", "/p/pack.zip", "/p/meta.json")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("release-quest-apk: a release APK carries no game-data pack", result.stderr)
+        self.assertNotIn("repack ", "\n".join(self.calls_made()))
+
+    def test_a_description_with_no_pack_is_refused_before_the_repack(self):
+        self.use_pack_stub()
+        result = self.just("release-quest-variant-apk", "v1.2.3", PLUGINS, str(self.store), "", "/p/meta.json")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("release-quest-variant-apk: pack_meta describes a pack, and no pack is given", result.stderr)
         self.assertNotIn("repack ", "\n".join(self.calls_made()))
 
 
@@ -248,6 +293,10 @@ class RecipeText(unittest.TestCase):
             return re.search(r'store_apk="([^"]+)"', recipe(name).splitlines()[0]).group(1)
 
         self.assertEqual(default("release-quest-variant-apk"), default("release-quest-apk"))
+
+    def test_only_the_variant_recipe_takes_a_pack(self):
+        self.assertIn('pack="" pack_meta=""', recipe("release-quest-variant-apk").splitlines()[0])
+        self.assertNotIn("pack", recipe("release-quest-apk").splitlines()[0])
 
     def test_both_release_recipes_run_the_one_shared_body(self):
         self.assertIn('_release-quest-apk "release-quest-apk" tag store_apk "" ""', recipe("release-quest-apk"))

@@ -351,3 +351,12 @@ class TheBundledPackRunsAfterTheDataStep(unittest.TestCase):
         first = run.index("if (pack.files[i].path != pack.manifest_path) order.push_back(i);")
         second = run.index("if (pack.files[i].path == pack.manifest_path) order.push_back(i);")
         self.assertLess(first, second)
+
+    def test_the_apk_is_found_from_where_the_sentinel_was_mapped_when_no_path_is_given(self):
+        # No host test maps the sentinel from an APK, so the production source of the path is pinned by shape (ADR 0029).
+        text = re.sub(r"//[^\n]*", "", read("data_wiring.cpp"))
+        run_pack = extract_braced_function(text, "void RunPack(const std::string& engineRoot) noexcept {")
+        self.assertIn("pack.apk_path = !Opts().apk_path.empty() ? Opts().apk_path : OwnApkPath();", run_pack)
+        own = extract_braced_function(text, "std::string OwnApkPath() {")
+        self.assertIn("dladdr(reinterpret_cast<const void*>(&AfterStorage), &info)", own)
+        self.assertIn("data::ApkPathForLibrary(info.dli_fname,", own)

@@ -45,7 +45,7 @@ def sha(data: bytes) -> str:
 
 
 def meta(**changes) -> dict:
-    document = {"id": "combat-pack", "version": "1.2.3", "requires_stock_manifest_sha256": [STOCK_B, STOCK_A],
+    document = {"id": "combat-pack", "version": "1.2.3", "requires_stock_manifest_sha256": sorted([STOCK_A, STOCK_B], reverse=True),  # given unsorted: the tool writes them sorted
                 "zip_prefix": PREFIX}
     document.update(changes)
     return {k: v for k, v in document.items() if v is not None}
@@ -227,8 +227,9 @@ class StagePackTest(PackFixture):
         self.assert_refused(self.stage_pack(entries), "at most 8")
         shutil.rmtree(self.stage, ignore_errors=True)
         self.stage.mkdir()
-        del entries[PREFIX + "packages/extra7"]  # eight is fine: the manifest, the package and six more
-        del entries[PREFIX + "packages/extra6"]
+        del entries[PREFIX + "packages/extra7"]  # nine is refused too
+        self.assert_refused(self.stage_pack(entries), "9 files", "at most 8")
+        del entries[PREFIX + "packages/extra6"]  # eight is fine: the manifest, the package and six more
         self.assertEqual(self.stage_pack(entries), [])
 
     def test_an_entry_whose_recorded_size_is_not_its_size_is_refused(self):
