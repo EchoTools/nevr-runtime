@@ -417,4 +417,67 @@ TEST_F(RenderConfigHook, TheProductionQueriesAnswerInsteadOfFailingTheLine) {
   EXPECT_EQ(line.find('\n'), std::string::npos);
 }
 
+// ---- (#1419) the GPU score: a zero NVIDIA rating is filled before the selector reads it; any other value is kept ----
+
+int g_queryCalls = 0;
+
+// 3584 cores at 1,500,000 kHz: 10.752, the game's own formula (patch/gpu_score.h).
+void FakeNvidiaQuery(nevr_gpu_score::NvidiaMeasure* out) {
+  ++g_queryCalls;
+  out->haveCores = true;
+  out->cores = 3584;
+  out->haveClockKhz = true;
+  out->clockKhz = 1500000;
+}
+
+void FakeNvidiaAbsent(nevr_gpu_score::NvidiaMeasure* out) {
+  ++g_queryCalls;
+  out->failure = "nvapi_absent";
+}
+
+TEST_F(RenderConfigHook, AZeroNvidiaScoreIsFilledBeforeTheSelectorRunsAndLoggedOnce) {
+  PutValue<double>(kGpuScoreVa, 0.0);
+  g_queryCalls = 0;
+  hook::SetNvidiaQueryForTest(&FakeNvidiaQuery);
+  ASSERT_TRUE(hook::Install(base_, false));
+  ASSERT_EQ(CallSelector(SelectorEntry(), settings_.data()), kSelectorResult);
+  EXPECT_EQ(g_queryCalls, 1);
+  double score = 0.0;
+  std::memcpy(&score, At(kGpuScoreVa), sizeof(score));
+  EXPECT_DOUBLE_EQ(score, 10.752);
+  EXPECT_EQ(CountContaining("[NEVR.RENDER] gpu_score filled vendor=1 game_score=0 "), 1);
+  EXPECT_EQ(CountContaining("reason=-"), 1);
+}
+
+TEST_F(RenderConfigHook, ANonZeroGameScoreIsKeptAndTheQueryIsNotAsked) {
+  PutValue<double>(kGpuScoreVa, 6.0);
+  g_queryCalls = 0;
+  hook::SetNvidiaQueryForTest(&FakeNvidiaQuery);
+  ASSERT_TRUE(hook::Install(base_, false));
+  ASSERT_EQ(CallSelector(SelectorEntry(), settings_.data()), kSelectorResult);
+  EXPECT_EQ(g_queryCalls, 0);
+  double score = 0.0;
+  std::memcpy(&score, At(kGpuScoreVa), sizeof(score));
+  EXPECT_DOUBLE_EQ(score, 6.0);
+  EXPECT_EQ(CountContaining("[NEVR.RENDER] gpu_score kept"), 1);
+}
+
+TEST_F(RenderConfigHook, AZeroScoreWithNoNvapiStaysZeroAndSaysWhy) {
+  PutValue<double>(kGpuScoreVa, 0.0);
+  g_queryCalls = 0;
+  hook::SetNvidiaQueryForTest(&FakeNvidiaAbsent);
+  ASSERT_TRUE(hook::Install(base_, false));
+  ASSERT_EQ(CallSelector(SelectorEntry(), settings_.data()), kSelectorResult);
+  EXPECT_EQ(g_queryCalls, 1);
+  double score = 1.0;
+  std::memcpy(&score, At(kGpuScoreVa), sizeof(score));
+  EXPECT_DOUBLE_EQ(score, 0.0);
+  EXPECT_EQ(CountContaining("[NEVR.RENDER] gpu_score unrated vendor=1 game_score=0 score=0 source=none reason=nvapi_absent"), 1);
+  for (std::size_t i = 0; i < g_logged.size(); ++i) {
+    if (g_logged[i].find("gpu_score unrated") != std::string::npos) {
+      EXPECT_EQ(g_levels[i], EchoVR::LogLevel::Warning);
+    }
+  }
+}
+
 }  // namespace

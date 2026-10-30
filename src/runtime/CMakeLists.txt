@@ -100,6 +100,8 @@ set(PATCHES_SOURCES
     # #1139, docs/adr/0022: the render configuration as one log line (pure model, and the two observer hooks).
     "patch/render_config.cpp"
     "patch/render_config_hook.cpp"
+    # #1419, docs/adr/0022: the GPU score the auto-selector reads, filled when the game's own rating is zero (pure rule).
+    "patch/gpu_score.cpp"
     "patch/early_quit_lockout.cpp"
     "patch/arena_public_clock.cpp"
     "patch/lobby_full_backoff.cpp"
@@ -171,6 +173,7 @@ set(PATCHES_HEADERS
     "patch/arena_public_clock_rules.h"
     "patch/render_config.h"
     "patch/render_config_hook.h"
+    "patch/gpu_score.h"
     "lifecycle/crash_recovery.h"
     "lifecycle/return_to_lobby.h"
     "lifecycle/return_to_lobby_hold.h"
@@ -972,11 +975,19 @@ if(BUILD_TESTING)
     target_link_libraries(test_render_config PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_render_config DISCOVERY_MODE PRE_TEST)
 
+    # #1419: the GPU score rule (patch/gpu_score.h; no Windows call).
+    add_executable(test_gpu_score tests/test_gpu_score.cpp patch/gpu_score.cpp)
+    set_source_files_properties(tests/test_gpu_score.cpp patch/gpu_score.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_gpu_score PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_gpu_score PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_gpu_score DISCOVERY_MODE PRE_TEST)
+
     # #1139: the two observer hooks and Poll under MinHook, against a fake image with the real prologues at their RVAs.
     add_executable(test_render_config_hook tests/test_render_config_hook.cpp patch/render_config.cpp
-      patch/render_config_hook.cpp hook/hook_guard.cpp)
+      patch/render_config_hook.cpp patch/gpu_score.cpp hook/hook_guard.cpp)
     set_source_files_properties(tests/test_render_config_hook.cpp patch/render_config.cpp
-      patch/render_config_hook.cpp hook/hook_guard.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+      patch/render_config_hook.cpp patch/gpu_score.cpp hook/hook_guard.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_compile_definitions(test_render_config_hook PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS
       NEVR_RENDER_CONFIG_TESTING)
     target_include_directories(test_render_config_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
