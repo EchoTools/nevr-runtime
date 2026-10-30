@@ -10,6 +10,8 @@
 //
 // Run: plugin_runtime_test <fixture-dir> [name-filter]
 
+#include <dlfcn.h>
+
 #include <cstdio>
 #include <string>
 #include <thread>
@@ -17,6 +19,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "quest/plugin/plugin_platform.h"
 #include "quest/plugin/plugin_plan.h"
 #include "quest/plugin/plugin_runtime.h"
 #include "quest/sentinel/hook_log.h"
@@ -201,6 +204,155 @@ TEST(TheFinishNeverWaitsForARunningPass) {
     busy = busy || (line.value("event", "") == "plugin_runtime" && line.value("status", "") == "busy");
   }
   CHECK(busy);
+}
+
+// ---- the packaged manifest (libnevr_plugin_manifest.so beside the plugins; docs/adr/0019-quest-plugin-loader.md) -------
+
+// The directory the runtime reads plugins from: the directory this library was mapped from, as PlanPlugins finds it.
+std::string LibraryDir() {
+  Dl_info info{};
+  if (dladdr(reinterpret_cast<const void*>(&PlanPlugins), &info) == 0) return "";
+  return DirectoryOf(info.dli_fname);
+}
+
+// One packaged entry, as the repack writes it. Empty `text` means no manifest file.
+std::string OneManifest(bool early, bool enabled, const std::string& sha = std::string(64, '0')) {
+  const nlohmann::json entry = {{"name", "fx_ok"}, {"file", "libfx_ok.so"}, {"sha256", sha}, {"enabled", enabled},
+                                {"early", early}};
+  const nlohmann::json doc = {{"schema", 1}, {"plugins", nlohmann::json::array({entry})}};
+  return doc.dump();
+}
+
+// Writes the manifest beside the fixture objects (or removes it for empty text); the destructor removes it again.
+struct ManifestFile {
+  explicit ManifestFile(const std::string& text) : path(LibraryDir() + "/libnevr_plugin_manifest.so") {
+    if (text.empty()) {
+      std::remove(path.c_str());
+      return;
+    }
+    if (std::FILE* out = std::fopen(path.c_str(), "wb")) {
+      std::fwrite(text.data(), 1, text.size(), out);
+      std::fclose(out);
+    }
+  }
+  ~ManifestFile() { std::remove(path.c_str()); }
+  std::string path;
+};
+
+int ManifestLineCount() {
+  int count = 0;
+  for (const nlohmann::json& line : Lines()) count += line.value("event", "") == "plugin_manifest" ? 1 : 0;
+  return count;
+}
+const nlohmann::json* ManifestLine() {
+  for (const nlohmann::json& line : Lines()) {
+    if (line.value("event", "") == "plugin_manifest") return &line;
+  }
+  return nullptr;
+}
+
+TEST(PackagedPluginPlansWithNoConfig) {
+  Scope scope;
+  ManifestFile manifest(OneManifest(false, true));
+  const PlanCounts counts = PlanPlugins({}, false);
+  CHECK_EQ(counts.normal, std::size_t{1});
+  CHECK_EQ(counts.early, std::size_t{0});
+}
+
+TEST(ConfigDisablesAPackagedPlugin) {
+  Scope scope;
+  ManifestFile manifest(OneManifest(false, true));
+  PlanPlugins({Spec("fx_ok", false, false)}, false);
+  const std::vector<nlohmann::json> records = Records();
+  const nlohmann::json* off = RecordFor(records, "fx_ok");
+  CHECK(off != nullptr);
+  if (off == nullptr) return;
+  CHECK_EQ(off->value("outcome", ""), std::string("disabled"));
+  CHECK_EQ(off->value("source", ""), std::string("packaged"));
+  CHECK_EQ(off->value("overridden", -1), 1);
+}
+
+TEST(ManifestMarksAPackagedPluginEarly) {
+  Scope scope;
+  ManifestFile manifest(OneManifest(true, true));
+  const PlanCounts counts = PlanPlugins({}, false);
+  CHECK_EQ(counts.early, std::size_t{1});
+  CHECK_EQ(counts.normal, std::size_t{0});
+}
+
+TEST(ConfigEarlyOnAPackagedNormalPluginMakesItEarly) {
+  Scope scope;
+  ManifestFile manifest(OneManifest(false, true));
+  const PlanCounts counts = PlanPlugins({Spec("fx_ok", true)}, false);
+  CHECK_EQ(counts.early, std::size_t{1});
+  CHECK_EQ(counts.normal, std::size_t{0});
+}
+
+TEST(ConfigOnlyEntryIsUnchanged) {
+  Scope scope;
+  ManifestFile manifest(OneManifest(false, true));
+  PlanPlugins({Spec("gone")}, false);
+  RunNormalPlugins();
+  const std::vector<nlohmann::json> records = Records();
+  const nlohmann::json* gone = RecordFor(records, "gone");
+  CHECK(gone != nullptr);
+  if (gone == nullptr) return;
+  CHECK_EQ(gone->value("outcome", ""), std::string("failed"));
+  CHECK_EQ(gone->value("reason", ""), std::string(reason::kFileUnreadable));
+  CHECK_EQ(gone->value("source", ""), std::string("config"));
+}
+
+TEST(AbsentManifestLogsOnceAndPlansNothing) {
+  Scope scope;
+  ManifestFile manifest("");
+  const PlanCounts counts = PlanPlugins({}, false);
+  CHECK_EQ(counts.early + counts.normal, std::size_t{0});
+  CHECK(Records().empty());
+  CHECK_EQ(ManifestLineCount(), 1);
+  const nlohmann::json* line = ManifestLine();
+  CHECK(line != nullptr);
+  if (line == nullptr) return;
+  CHECK_EQ(line->value("status", ""), std::string("absent"));
+  CHECK_EQ(line->value("packaged", -1), 0);
+}
+
+TEST(InvalidManifestPlansNoPackagedPluginsAndLogsOneError) {
+  Scope scope;
+  ManifestFile manifest(OneManifest(false, true, "XYZ"));
+  PlanPlugins({Spec("gone")}, false);
+  RunNormalPlugins();
+  CHECK_EQ(ManifestLineCount(), 1);
+  const nlohmann::json* line = ManifestLine();
+  CHECK(line != nullptr);
+  if (line != nullptr) {
+    CHECK_EQ(line->value("status", ""), std::string("invalid"));
+    CHECK_EQ(line->value("reason", ""), std::string("bad_sha256"));
+    CHECK_EQ(line->value("level", ""), std::string("error"));
+  }
+  const std::vector<nlohmann::json> records = Records();
+  CHECK(RecordFor(records, "fx_ok") == nullptr);  // the packaged entry is not planned
+  CHECK(RecordFor(records, "gone") != nullptr);   // the config entry still is
+}
+
+TEST(ManifestHashMismatchIsRefusedBeforeTheMachineCheck) {
+  Scope scope;
+  ManifestFile manifest(OneManifest(false, true, std::string(64, '1')));
+  PlanPlugins({}, false);
+  RunNormalPlugins();
+  const std::vector<nlohmann::json> records = Records();
+  const nlohmann::json* fx = RecordFor(records, "fx_ok");
+  CHECK(fx != nullptr);
+  if (fx == nullptr) return;
+  CHECK_EQ(fx->value("outcome", ""), std::string("refused"));
+  CHECK_EQ(fx->value("reason", ""), std::string("manifest_hash_mismatch"));
+}
+
+TEST(ManifestIsReadOnceAndPlanningTwiceChangesNothing) {
+  Scope scope;
+  ManifestFile manifest(OneManifest(false, true));
+  PlanPlugins({}, false);
+  PlanPlugins({Spec("other")}, false);
+  CHECK_EQ(ManifestLineCount(), 1);
 }
 
 }  // namespace
