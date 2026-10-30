@@ -443,6 +443,17 @@ TEST(LobbyFrameRecords, TheLimitIsPerKindAndItsEndedWindowIsCountedOnTheNextAnsw
   EXPECT_TRUE(later.verdict.log);
 }
 
+// A request is tracked and never admitted to the limiter: admitting it would flush an ended window and drop its count
+// (the Quest router tracks requests it writes no record for).
+TEST(LobbyFrameRecords, ATrackedRequestDoesNotConsumeAnEndedWindowsCount) {
+  lf::ClientLobbyRecords records;
+  for (int i = 0; i < 11; ++i) records.Admit(lf::Kind::Success, 1000);
+  records.Requested(lf::Kind::Find, 11000);
+  const lf::ClientLobbyRecords::Admission later = records.Admit(lf::Kind::Success, 11100);
+  EXPECT_EQ(later.verdict.flushed[static_cast<std::size_t>(lf::Kind::Success)], 1U);
+  EXPECT_TRUE(later.verdict.log);
+}
+
 TEST(LobbyFrameRecords, ResetForgetsTheRequestAndTheWindow) {
   lf::ClientLobbyRecords records;
   records.Requested(lf::Kind::Find, 1000);

@@ -3579,6 +3579,31 @@ void TestTheRecordLimitCountsTheRestAndWritesTheCountOnceTheWindowEnds() {
   QCHECK(rig.games.Sent().size() == 12);  // every answer reached the game, counted or not
 }
 
+// A find the game sends after a window has ended must leave that window's count for the next answer to write: a request
+// is tracked, never admitted to the limiter, so it cannot flush the count and lose it. Eleven successes in one window,
+// then (ten seconds on) a find, then a success: the notice names the one record the window did not write.
+void TestAFindAfterTheWindowEndsLeavesTheSuppressedCountForTheNextAnswer() {
+  const CaseScope scope("lobby records find keeps the count");
+  g_recordsParty = GoldenParty();
+  g_recordsNowMs = 1000;
+  Rig rig(RecordsOn(WithLogin(kLogin)));
+  const RemoteId session = OpenSessionWithMatchmaker(rig);
+  for (int i = 0; i < 11; ++i) {
+    rig.router->OnRemoteFrame(session, Msg(kSymLobbySessionSuccess, lobby_record_golden::SuccessPayload()), true);
+  }
+  g_recordsNowMs = 11000;  // the window opened at 1000 has ended
+  rig.router->OnGameFrame(3, Msg(nevr_evr_codec::kSymFindSessionRequest, "find"), true);
+  QCHECK(RecordLines(rig.logs, "suppressed").empty());  // the find writes no notice and takes none
+  g_recordsNowMs = 11100;
+  rig.router->OnRemoteFrame(session, Msg(kSymLobbySessionSuccess, lobby_record_golden::SuccessPayload()), true);
+  const std::vector<std::string> notices = RecordLines(rig.logs, "suppressed");
+  QCHECK(notices.size() == 1);
+  if (notices.size() == 1) {
+    QCHECK(notices[0] == "[NEVR.WS] lobby frame records suppressed kind=success count=1 window_ms=10000 limit=10 "
+                         "(these frames were handled, only their records were not written)");
+  }
+}
+
 // One frame with two answers writes one record for each, in the order the answers came.
 void TestABatchedFrameWritesARecordForEachAnswer() {
   const CaseScope scope("lobby records batch");
@@ -3760,6 +3785,7 @@ int main() {
   TestAnUnknownFailureCodeNamesNoReason();
   TestAFailureMessageIsCountedAndNeverWritten();
   TestTheRecordLimitCountsTheRestAndWritesTheCountOnceTheWindowEnds();
+  TestAFindAfterTheWindowEndsLeavesTheSuppressedCountForTheNextAnswer();
   TestABatchedFrameWritesARecordForEachAnswer();
   TestAnUnreadableAnswerIsAWarningWithItsLength();
   TestAnAnswerTheGameDoesNotGetWritesNoRecord();
