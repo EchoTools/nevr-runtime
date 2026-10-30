@@ -399,8 +399,10 @@ even if the sentinel has not installed it yet. From the file (`src/quest/sentine
   hook name or `plugin:<id>`.
 - Two plugins claiming one slot: the second is refused with `slot_owned_by=plugin:<first id>`. The first is unaffected.
 - A poisoned slot stays reserved for the process lifetime (`got_hook.h:164-176`).
-- The registry holds at most 64 entries (`kRegistryFull`, `got_hook.h:106`). A plugin claim that would exceed it is refused
-  with `registry_full`. The host logs the count at the moment of refusal.
+- The registry holds at most `kRegistryCapacity` entries (`kRegistryFull`, `got_hook.h`); the last `kCriticalReserve` of
+  them are for the login and the matchmaking redirect only, and `hook_budget.h` keeps the sum of every declared handle plus
+  headroom inside it. A plugin claim that would exceed what its priority may use is refused with `registry_full`. The host
+  logs the count, and names the hook that lost, at the moment of refusal.
 
 ## 10. Logging
 

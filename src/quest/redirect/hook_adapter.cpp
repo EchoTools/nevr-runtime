@@ -55,7 +55,8 @@ GotStatus InstallSlotLocked(Slot slot, sentinel::GotHook& hook, const sentinel::
   sentinel::ElfImage image;
   if (lookup == nullptr || target.module == nullptr || lookup(target.module, &image)) {
     ArmThunk(slot, true);
-    status = InstallThunk(slot, hook, target, lookup);
+    // The login's redirect cannot be crowded out by the other hooks: it takes the registry's reserve (got_hook.h).
+    status = InstallThunk(slot, hook, target.Critical(), lookup);
     if (status != GotStatus::kOk) ArmThunk(slot, false);
   }
   *stored = status;

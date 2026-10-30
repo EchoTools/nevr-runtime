@@ -123,6 +123,13 @@
 // points the game at a loopback port nobody listens on, or straight at a TLS endpoint the game cannot
 // speak, is worse than leaving the game's own hosts.
 //
+// The hook registry (sentinel/got_hook.h) is sized for every hook the build declares (sentinel/hook_budget.h), and the login
+// and matchmaking-redirect hooks take their entries from a reserve the others cannot use. That is what keeps them installable
+// whatever the order above installs the rest in: they install after the game loads libpnsrad* (step 11 and the dlopen hook),
+// long after this sequence filled the registry with the libr15 hooks, the crash handler's among them, so no order of the steps
+// can put them first. A hook refused for want of room is an Error line naming it, a `hook_registry` summary line when this
+// sequence is done, and the self-check `hook_registry_has_room` (integration/hook_registry_check.h).
+//
 // Nothing here blocks: no step waits on the network, a thread or a lock held by the game.
 #pragma once
 
