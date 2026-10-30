@@ -302,7 +302,7 @@ Stable stays an owner step (`approve-stable`); the timer only publishes beta. **
 the R2 credential to `publish_apk`, and the GitHub token to `publish_apk` and the dispatch. Every other command, the
 build included, gets an environment without them. Every step appends a JSON line to
 `$XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl`, with each credential value replaced by `<redacted>`; a log that
-cannot be written fails the run. A failing step exits 1 naming itself, with the redacted tail of the failing command's stderr and stdout, and the unit's `OnFailure=` runs
+cannot be written fails the run. A failing step exits 1 naming itself, with the redacted tail of the failing command's stderr and stdout (a `curl` or `gh` command's stdout is remote content and is left out), and the unit's `OnFailure=` runs
 `quest_release_timer.py --notify-failure`, which couriers the last failure to Spritz. The credential is the file
 `~/.config/metis/r2-evr-echo-taxi.env` (`R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`), loaded by
 the unit and never written into it. The unit also sets `GNUPGHOME` to the XDG gnupg home (`~/.config/gnupg`) so `pass` finds the key, and a `pass` failure prints gpg's own `gpg:` lines after the `ERROR` line. Install, from any clone of the repository:

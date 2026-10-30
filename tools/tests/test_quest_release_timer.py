@@ -784,6 +784,52 @@ class FailureKeepsBothStreams(TimerCase):
         self.assertEqual(text.count("y"), timer.TAIL - 3)
         self.assertTrue(text.endswith("END"))
 
+    def fail_with(self, argv: list[str], rc: int, out: str, err: str) -> str:
+        runner = lambda argv, cwd=None, env=None: completed(argv, rc, out, err)  # noqa: E731
+        log = timer.Log(self.log, "")
+        self.addCleanup(log.close)
+        subject = timer.Timer(self.env, runner, self.sleeps.append, log)
+        with self.assertRaises(timer.StepFailure) as raised:
+            subject.cmd("probe", argv)
+        return str(raised.exception)
+
+    def test_a_curl_failure_records_stderr_and_never_the_remote_body(self) -> None:
+        for program in ("curl", "/usr/bin/curl"):
+            with self.subTest(program=program):
+                text = self.fail_with([program, "--fail", "https://release.invalid/x"], 22, "REMOTE BODY", "curl: (22) 404")
+                self.assertEqual(text, "curl exited 22: stderr: curl: (22) 404")
+
+    def test_a_gh_failure_records_stderr_and_never_the_remote_body(self) -> None:
+        for program in ("gh", "gh-spritz", "/home/x/.local/bin/gh-spritz", self.env["GH_BIN"]):
+            with self.subTest(program=program):
+                text = self.fail_with([program, "run", "view", "1"], 1, "REMOTE BODY", "HTTP 502")
+                self.assertEqual(text, f"{pathlib.Path(program).name} exited 1: stderr: HTTP 502")
+
+    def test_a_remote_command_with_only_stdout_records_just_the_exit_code(self) -> None:
+        self.assertEqual(self.fail_with(["curl", "x"], 22, "REMOTE BODY", ""), "curl exited 22:")
+
+    def test_a_local_command_keeps_its_stdout(self) -> None:
+        for program in ("just", "git", "systemd-run", "python3"):
+            with self.subTest(program=program):
+                out = "release-preflight: PROBLEM: local tag v9 exists only in this clone"
+                self.assertEqual(self.fail_with([program, "x"], 1, out, ""), f"{program} exited 1: stdout: {out}")
+
+    def test_a_failing_manifest_fetch_leaves_the_remote_body_out_of_the_log(self) -> None:
+        fake = Fake(self.root, overrides={"manifest": lambda argv: completed(argv, 22, "REMOTE BODY", "curl: (22) 404")})
+        self.assertEqual(self.run_timer(fake), 1)
+        failed = next(e for e in self.events() if e["event"] == "failed")
+        self.assertEqual(failed["step"], "check_listed")
+        self.assertIn("curl: (22) 404", failed["error"])
+        self.assertNotIn("REMOTE BODY", self.log.read_text())
+
+    def test_a_failing_gh_call_leaves_the_remote_body_out_of_the_log(self) -> None:
+        fake = Fake(self.root, overrides={"check_jobs": lambda argv: completed(argv, 1, "REMOTE BODY", "HTTP 502")})
+        self.assertEqual(self.run_timer(fake), 1)
+        failed = next(e for e in self.events() if e["event"] == "failed")
+        self.assertEqual(failed["step"], "check_jobs")
+        self.assertIn("HTTP 502", failed["error"])
+        self.assertNotIn("REMOTE BODY", self.log.read_text())
+
     def test_a_secret_on_stdout_is_redacted_in_the_message_and_the_log(self) -> None:
         leak = {"publish_apk": lambda argv: completed(argv, 1, f"out {SECRETS['R2_SECRET_ACCESS_KEY']} {TOKEN}", "")}
         fake = Fake(self.root, overrides=leak)

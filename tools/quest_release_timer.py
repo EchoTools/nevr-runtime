@@ -22,7 +22,7 @@ The train (release-train.yml) publishes the GitHub release; this tool sees the n
   cleanup          the worktree and the signer snapshot, by exact path
 
 Every step appends a JSON line to $XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl; a log that cannot be written is
-a failure. A failed step exits 1 and names itself, with the redacted tail of the failing command's stderr and of its stdout. A refusal
+a failure. A failed step exits 1 and names itself, with the redacted tail of the failing command's stderr and of its stdout (not the stdout of curl or gh, which is remote content). A refusal
 (`refused`: a dirty or stale checkout, a tag origin does not have) exits 1 and is not counted. A tag that has failed three times is not retried, and says so once (a
 courier to Spritz) before the run exits 0. The R2 credential goes only to publish_apk, and the GitHub token only to publish_apk and
 the dispatch: every other command gets an environment without them. The environment is
@@ -61,6 +61,8 @@ MAX_FAILURES = 3
 SLOT_WAITS = 60
 SLOT_WAIT_SECONDS = 60
 TAIL = 2000
+# Programs whose stdout is remote content, never a log field (docs/standards/logging.md, Rule 4).
+REMOTE_OUTPUT_PROGRAMS = frozenset({"curl", "gh", "gh-spritz"})
 MAX_TAGS_LISTED = 10
 LOCAL_TAGS_FORMAT = "--format=%(refname:strip=2)\t%(objectname)\t%(*objectname)"  # release_preflight.local_tags' format
 
@@ -136,14 +138,17 @@ class Timer:
         env = {**self.child, **(extra or {})}
         result = self.runner(argv, cwd=str(cwd) if cwd else None, env=env)
         if result.returncode not in ok_codes:
-            raise StepFailure(step, f"{pathlib.Path(argv[0]).name} exited {result.returncode}:{self.tails(result)}")
+            raise StepFailure(step, f"{pathlib.Path(argv[0]).name} exited {result.returncode}:{self.tails(argv[0], result)}")
         return result
 
-    def tails(self, result: subprocess.CompletedProcess) -> str:
-        """` stderr: <tail> | stdout: <tail>`, an empty stream left out. The secrets go before the cut, so a secret the cut
-        would split leaves no fragment."""
+    def tails(self, program: str, result: subprocess.CompletedProcess) -> str:
+        """` stderr: <tail> | stdout: <tail>`, an empty stream left out, and no stdout of a program in
+        REMOTE_OUTPUT_PROGRAMS (or the gh binary in use). The secrets go before the cut, so a secret the cut would split
+        leaves no fragment."""
+        name = pathlib.Path(program).name
+        remote = name in REMOTE_OUTPUT_PROGRAMS or name == pathlib.Path(self.gh).name
         parts = []
-        for label, text in (("stderr", result.stderr), ("stdout", result.stdout)):
+        for label, text in (("stderr", result.stderr), ("stdout", "" if remote else result.stdout)):
             tail = self.redact(text or "")[-TAIL:].strip()
             if tail:
                 parts.append(f"{label}: {tail}")
