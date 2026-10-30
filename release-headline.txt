@@ -1,1 +1,1 @@
-On Quest, the game no longer hangs at login when it falls back to the sign-in prompt.
+A failed sign-in now stays on screen until you close it and says what to do, Quest no longer hangs at login after the fallback prompt, and on PC a texture mod can replace a texture's image.
