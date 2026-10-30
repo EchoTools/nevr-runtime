@@ -390,9 +390,10 @@ jobs:
 
     # The core installer (installer/, ADR 0023) that install.ps1 runs: built locked from the committed Cargo.lock for
     # Windows with the same mingw the DLLs use, then put through the dist target's sequence: debug info split into
-    # dist/symbols/<package>/nevr-install.exe.dbg, stripped, linked to it. A release build has no DWARF unless asked,
+    # dist/symbols/<package>/install-nevr-runtime.exe.dbg, stripped, linked to it. A release build has no DWARF unless asked,
     # and verify_symbols.py requires the symbol file to carry it, hence line tables. It rides in the zip as its own
     # file, so the signed manifest's `contents` covers it. It runs after the dist target, which recreates dist/symbols.
+    # It is built and linked once, as install-nevr-runtime.exe (#1492); the old name is a copy made in the packaging step.
     - name: Build the core installer for Windows
       if: steps.release.outputs.version != ''
       shell: bash
@@ -404,11 +405,11 @@ jobs:
         packages=(dist/nevr-runtime-v*/)
         test "${#packages[@]}" -eq 1
         name=$(basename "${packages[0]%/}")
-        exe=build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe
-        "$CARGO_HOME/bin/cargo" build --locked --release --target x86_64-pc-windows-gnu --manifest-path installer/Cargo.toml --bin nevr-install --target-dir build/installer
-        x86_64-w64-mingw32-objcopy --only-keep-debug "$exe" "dist/symbols/$name/nevr-install.exe.dbg"
+        exe=build/installer/x86_64-pc-windows-gnu/release/install-nevr-runtime.exe
+        "$CARGO_HOME/bin/cargo" build --locked --release --target x86_64-pc-windows-gnu --manifest-path installer/Cargo.toml --bin install-nevr-runtime --target-dir build/installer
+        x86_64-w64-mingw32-objcopy --only-keep-debug "$exe" "dist/symbols/$name/install-nevr-runtime.exe.dbg"
         x86_64-w64-mingw32-strip --strip-all "$exe"
-        x86_64-w64-mingw32-objcopy "--add-gnu-debuglink=dist/symbols/$name/nevr-install.exe.dbg" "$exe"
+        x86_64-w64-mingw32-objcopy "--add-gnu-debuglink=dist/symbols/$name/install-nevr-runtime.exe.dbg" "$exe"
         test -s "$exe"
 
     # Every shipped PE is stripped and linked (.gnu_debuglink: name and CRC32) to the symbol file the dist
@@ -430,8 +431,12 @@ jobs:
         for file in BugSplat64.dll nevr-runtime.dll echovr_server.exe; do
           python3 tools/verify_symbols.py "$pkg/$file" "dist/symbols/$name/$file.dbg"
         done
-        installer=build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe
-        python3 tools/verify_symbols.py "$installer" "dist/symbols/$name/nevr-install.exe.dbg"
+        installer=build/installer/x86_64-pc-windows-gnu/release/install-nevr-runtime.exe
+        python3 tools/verify_symbols.py "$installer" "dist/symbols/$name/install-nevr-runtime.exe.dbg"
+        # The release tree also holds nevr-install.exe, the same bytes as install-nevr-runtime.exe (#1492), so its
+        # debuglink names install-nevr-runtime.exe.dbg and the pair check above covers it through the new name; the
+        # tree check on the assembled release tree (the step after the gate) refuses a copy with other bytes and asks
+        # for no .dbg of its own.
         python3 tools/verify_symbols.py --tree "$pkg" "dist/symbols/$name"
         for file in BugSplat64.dll nevr-runtime.dll; do
           python3 tools/package_release.py stamp --dll "$pkg/$file" --version "$VERSION" --commit "$GITHUB_SHA"
@@ -462,11 +467,16 @@ jobs:
         packages=(dist/nevr-runtime-v*/)
         test "${#packages[@]}" -eq 1
         pkg=${packages[0]%/}
+        installer=build/installer/x86_64-pc-windows-gnu/release/install-nevr-runtime.exe
+        # The one copy of the build under the name outside callers still use (#1492). No second link step; the signer
+        # signs both entries, and the gate below refuses a copy that is not the same bytes.
+        cp "$installer" "$(dirname "$installer")/nevr-install.exe"
         python3 tools/package_release.py tree --version "$VERSION" --commit "$GITHUB_SHA" --out release-stage \
           --dll "$pkg/BugSplat64.dll" \
           --runtime-dll "$pkg/nevr-runtime.dll" \
           --server-exe "$pkg/echovr_server.exe" \
-          --installer-exe build/installer/x86_64-pc-windows-gnu/release/nevr-install.exe \
+          --installer-exe "$installer" \
+          --installer-compat-exe "$(dirname "$installer")/nevr-install.exe" \
           --pc-header build/mingw-release/generated/nevr_builtin_defaults.h
 
     - name: Verify the Windows tree ships only stripped binaries

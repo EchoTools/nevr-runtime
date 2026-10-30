@@ -1,4 +1,4 @@
-//! The real `nevr-install` binary, one call each, against a local server that serves a manifest signed by a throwaway
+//! The real `install-nevr-runtime` binary, one call each, against a local server that serves a manifest signed by a throwaway
 //! key. Asserts the exit code, the files, and that the log holds the records a failed install must explain itself with.
 
 mod common;
@@ -129,7 +129,7 @@ fn run_with(w: &World, args: &[&str], base: &str, envs: &[(&str, String)]) -> (i
 }
 
 fn run_cmd(server: &World, dirs: &World, args: &[&str], base: &str, envs: &[(&str, String)]) -> (i32, Value, String) {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_nevr-install"));
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime"));
     // The fixture's nevr root is a temporary folder, not the canonical one: a dev run says so (#1353).
     cmd.args(args).args(["--root", dirs.root.path().to_str().unwrap(), "--nevr-root", dirs.nevr.path().to_str().unwrap(), "--dev-nevr-root", "--base", base, "--pins", server.pins.to_str().unwrap(), "--now", NOW]);
     for (k, v) in envs {
@@ -194,7 +194,7 @@ fn without_a_nevr_root_the_install_asks_for_one_and_changes_nothing() {
     let w = world(false);
     let dir = w.game.path().to_str().unwrap();
     for extra in [vec![], vec!["--nevr-root", "relative/root"]] {
-        let o = Command::new(env!("CARGO_BIN_EXE_nevr-install"))
+        let o = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime"))
             .args(["pc", "install", "--dir", dir, "--root", w.root.path().to_str().unwrap(), "--base", &w.base, "--pins", w.pins.to_str().unwrap(), "--now", NOW])
             .args(&extra)
             .env_remove("LOCALAPPDATA")
@@ -287,8 +287,9 @@ fn quest_plan_without_a_device_reports_the_release_and_installs_nothing() {
 
 #[test]
 fn usage_error_exits_1() {
-    let o = Command::new(env!("CARGO_BIN_EXE_nevr-install")).arg("nonsense").output().unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime")).arg("nonsense").output().unwrap();
     assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("usage: install-nevr-runtime <command>"), "{}", String::from_utf8_lossy(&o.stderr));
 }
 
 #[test]
@@ -363,7 +364,7 @@ fn run_with_log_cut_before(w: &World, target: &str, scenario: fn(&World)) -> (i3
     std::fs::write(w.root.path().join("logs/nevr-install.jsonl"), format!("{}\n", "#".repeat(pad - 1))).unwrap();
     scenario(w);
     let o = Command::new("bash")
-        .args(["-c", "trap '' XFSZ; ulimit -f \"$0\"; exec \"$@\"", &kb.to_string(), env!("CARGO_BIN_EXE_nevr-install")])
+        .args(["-c", "trap '' XFSZ; ulimit -f \"$0\"; exec \"$@\"", &kb.to_string(), env!("CARGO_BIN_EXE_install-nevr-runtime")])
         .args(["pc", "install", "--dir", w.game.path().to_str().unwrap()])
         .args(["--root", w.root.path().to_str().unwrap(), "--nevr-root", w.nevr.path().to_str().unwrap(), "--dev-nevr-root", "--base", &w.base,"--pins", w.pins.to_str().unwrap(), "--now", NOW])
         .output()
@@ -491,7 +492,7 @@ fn a_stored_manifest_that_is_stale_is_not_used_offline() {
     let w = world_with(false, false, false);
     assert_eq!(run(&w, &["manifest", "verify"]).0, 0);
     let pkg = package_dir(HOST, Some(RT));
-    let o = Command::new(env!("CARGO_BIN_EXE_nevr-install"))
+    let o = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime"))
         .args(["pc", "install", "--dir", w.game.path().to_str().unwrap(), "--package-dir", pkg.path().to_str().unwrap()])
         .args(["--root", w.root.path().to_str().unwrap(), "--nevr-root", w.nevr.path().to_str().unwrap(), "--dev-nevr-root", "--base", "http://127.0.0.1:1","--pins", w.pins.to_str().unwrap(), "--now", "2026-12-01T00:00:00Z"])
         .output()
@@ -843,7 +844,7 @@ fn a_run_that_changes_the_package_but_fails_to_push_says_needs_user() {
 fn adb_is_never_given_the_terminal_or_the_callers_stdin() {
     let (w, tools, state) = (quest_world(), fake_headset(), tempfile::tempdir().unwrap());
     let path = format!("{}:{}", tools.path().display(), std::env::var("PATH").unwrap());
-    let mut child = Command::new(env!("CARGO_BIN_EXE_nevr-install"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime"))
         .args(["quest", "install", "--root", w.root.path().to_str().unwrap(), "--base", &w.base, "--pins", w.pins.to_str().unwrap(), "--now", NOW])
         .env("PATH", path)
         .env("FAKE_STATE", state.path())
@@ -1063,7 +1064,7 @@ fn manifest_verify_waits_for_the_state_lock_before_it_reads_the_state() {
     // Another run holds the state lock: the lock file the installer takes in the state directory.
     let holder = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(state.join("state.lock")).unwrap();
     holder.lock().unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_nevr-install"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime"))
         .args(["manifest", "verify", "--root", w.root.path().to_str().unwrap(), "--nevr-root", w.nevr.path().to_str().unwrap(), "--base", &w.base, "--pins", w.pins.to_str().unwrap(), "--now", NOW])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -1087,7 +1088,7 @@ fn manifest_verify_waits_for_the_state_lock_before_it_reads_the_state() {
 #[test]
 fn a_nevr_root_other_than_the_canonical_one_is_refused_unless_a_dev_run_names_it() {
     let w = world(false);
-    let out = Command::new(env!("CARGO_BIN_EXE_nevr-install"))
+    let out = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime"))
         .args(["pc", "install", "--dir", w.game.path().to_str().unwrap(), "--root", w.root.path().to_str().unwrap(), "--nevr-root", w.nevr.path().to_str().unwrap(), "--base", &w.base, "--pins", w.pins.to_str().unwrap(), "--now", NOW])
         .env_remove("LOCALAPPDATA")
         .output()
@@ -1103,7 +1104,7 @@ fn a_nevr_root_other_than_the_canonical_one_is_refused_unless_a_dev_run_names_it
 #[test]
 fn launch_check_refuses_a_root_the_host_does_not_load_from_before_it_reads_a_log() {
     let w = world(false);
-    let out = Command::new(env!("CARGO_BIN_EXE_nevr-install"))
+    let out = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime"))
         .args(["pc", "launch-check", "--dir", w.game.path().to_str().unwrap(), "--root", w.root.path().to_str().unwrap(), "--nevr-root", w.nevr.path().to_str().unwrap(), "--base", &w.base, "--pins", w.pins.to_str().unwrap(), "--now", NOW])
         .env_remove("LOCALAPPDATA")
         .output()
@@ -1121,7 +1122,7 @@ fn a_stage_download_that_fails_logs_the_base_without_its_credentials() {
     let nevr = w.nevr.path();
     let state = nevr.join("update").join("manifest");
     let pins = w.pins.to_str().unwrap();
-    let bin = env!("CARGO_BIN_EXE_nevr-install");
+    let bin = env!("CARGO_BIN_EXE_install-nevr-runtime");
     let stored = Command::new(bin)
         .args(["manifest", "verify", "--root", w.root.path().to_str().unwrap(), "--state-dir", state.to_str().unwrap(), "--base", &w.base, "--pins", pins, "--now", NOW])
         .output()

@@ -225,6 +225,18 @@ The service contract is platform-neutral. PC is built first (the PC addresses an
 same scripts and the same `Join` body (`libr15.so`, ReVault virtual address `0x13462a8`) and gets its own hook in
 `src/quest`, through that project's own mechanism, against the same RPCs.
 
+## Security
+
+On a PC client, `network.invite_codes` is on by default (`src/runtime/patch/invite_config.h:17-18`, `:27`): an absent or
+empty key is on. A `config.yaml` the runtime rejects is read as an empty config, so the key is absent and the feature is on
+(`src/runtime/lifecycle/service_config.cpp:159-170`; `src/runtime/lifecycle/boot.cpp:687-689`). In that case the client sends
+its signed-in token with each invite RPC to `nevr_http_uri`, which falls back to the embedded service address
+(`src/runtime/lifecycle/service_config.cpp:199`). A plain `http://` address is refused unless its host is loopback
+(`src/runtime/patch/invite_transport.h:92-94`). The service starts on a client only (`src/runtime/lifecycle/boot.cpp:681`).
+To turn the feature off, set `network.invite_codes: false` explicitly: the start line then logs
+`[NEVR.INVITE] feature off reason=turned_off source=config` (`src/runtime/patch/invite_service.cpp:71-72`, `:119`). A value
+that is not a switch word is off, not on (`src/runtime/patch/invite_config.h:4-6`).
+
 ## Logging
 
 Every line has the tag `[NEVR.INVITE]` (a new row in `docs/standards/logging.md`, added with the first code) and

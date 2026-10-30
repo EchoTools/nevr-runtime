@@ -422,6 +422,44 @@ impl Session {
         Err(Error::new(9, why))
     }
 
+    /// `pc uninstall` (#1497): the record and the files are its whole input. It fetches no manifest and reads no stdin;
+    /// the launcher and root checks are `pc`'s, so a folder a launcher manages or a root the host does not load is refused
+    /// before anything is read from the record.
+    pub fn pc_uninstall(&self, dir: &Path, game_running: bool, extra_known: &[String]) -> Result<(Ended, Value)> {
+        match crate::launcher::owner_of(self.cfg.launcher_dir.as_deref(), dir) {
+            crate::launcher::Owner::Nobody => {}
+            crate::launcher::Owner::Launcher { id } => {
+                return self.pc_stop(&format!("{} manages this install (launcher entry '{id}'). Undo it through the launcher; nothing was changed.", crate::launcher::NAME));
+            }
+            crate::launcher::Owner::Unknown(why) => {
+                return self.pc_stop(&format!("cannot tell whether a launcher manages this install ({why}); nothing was changed"));
+            }
+        }
+        let root = match &self.cfg.nevr_root {
+            Some(r) if r.is_absolute() => r.clone(),
+            Some(r) => return self.pc_stop(&format!("--nevr-root {} is not an absolute path", r.display())),
+            None => return self.pc_stop("the nevr root is unknown (LOCALAPPDATA is not set); pass --nevr-root"),
+        };
+        if let Err(why) = self.check_nevr_root(&root) {
+            return self.pc_stop(&why.msg);
+        }
+        let layout = pc::Layout::new(dir, root);
+        let observed = pc::observe(&layout, game_running)?;
+        let plan = pc::plan_uninstall(&observed, extra_known);
+        self.log.info("plan", 9, json!({"decision": plan.decision, "reasons": plan.reasons, "action": null, "installed": {"host_sha256": observed.target_sha, "runtime_sha256": observed.runtime_sha}, "nevr_root": layout.root.display().to_string()}))?;
+        let report = plan.to_json();
+        let ended = match plan.outcome {
+            pc::Outcome::Unchanged => self.end("unchanged", &plan.reasons.join("; "))?,
+            pc::Outcome::NeedsUser => self.end("needs-user", &plan.reasons.join("; "))?,
+            pc::Outcome::Proceed => {
+                let end = pc::execute_uninstall(&layout, &observed, &self.log)?;
+                // The files have changed (or been put back): a log that cannot be written is reported in the end.
+                self.end_after_change(end.state, &end.reason, end.state == "unchanged")
+            }
+        };
+        Ok((ended, report))
+    }
+
     /// A PC run that stops before it fetches or changes anything: the player has to give the root.
     fn pc_stop(&self, why: &str) -> Result<(Ended, Value)> {
         self.log.error("plan", 9, json!({"decision": "needs-user", "reasons": [why]}))?;
