@@ -12,6 +12,7 @@
 #include "nevr/pc/nevr_common.h"
 #include "runtime/hook/patching.h"
 #include "runtime/log/symcache.h"
+#include "runtime/patch/invite_answer_apply.h"
 #include "runtime/patch/invite_choice_hook.h"
 #include "runtime/patch/invite_service.h"
 #include "runtime/patch/invite_wizard.h"
@@ -66,6 +67,11 @@ void ObserveMetric(std::uint64_t data, std::uint64_t length) {
   const std::string_view line(reinterpret_cast<const char*>(address), size);
   if (!nevr_invite::MayBeWizardMetric(line)) return;
 
+  if (nevr_invite::IsShareJoin(line)) {
+    Log(EchoVR::LogLevel::Info, "%s", nevr_invite::ShareJoinClickLine().c_str());
+    nevr_invite_apply::RequestShareJoin();  // the join runs on the game's thread, in the next frame
+    return;
+  }
   const nevr_invite::Metric metric = nevr_invite::ParseMetric(line);
   if (metric.kind == nevr_invite::Kind::NotWizard) return;
   Log(EchoVR::LogLevel::Info, "%s", nevr_invite::ClickLine(metric.kind).c_str());

@@ -43,6 +43,8 @@ void OfferResolved(const std::vector<nevr_invite::Answer>& answers) {
   record.offered_answers += answers.size();
 }
 
+void OfferMatch(std::string_view match_id) { nevr_invite_apply_test::Get().matches_offered.emplace_back(match_id); }
+
 }  // namespace nevr_invite_join_game
 
 VOID Log(EchoVR::LogLevel level, const CHAR* format, ...) {
