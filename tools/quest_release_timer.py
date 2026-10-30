@@ -54,8 +54,10 @@ A failing variant step is recorded as `failed` with its step name, exits 1 (so t
 counts toward the same three tries, but the main release is by then complete and nothing of it is undone. `done` is written
 only when the variant is done as well, so the next run (the tag is listed by then) builds only the variant. NEVR_VARIANT_DIR
 and NEVR_VARIANT_PINS are never given to a command and their values are replaced by <redacted> in anything written. Every
-`failed` and `refused` record carries `part`: "main" until the main release is announced, "variant" in the already-listed
-path and after the announcement; the note that the timer gave up on a tag says which part it was.
+`failed` and `refused` record carries `part`: "main" until the main release is announced (`main_complete` is written then, once,
+and a run whose tag has it starts as "variant"; in the already-listed path it follows the notice if one was owed), "variant"
+after that; the note that the timer gave up on a tag says which part it was. An exception no step expected is recorded as a
+`failed` of the step `unexpected` (its class and where, never its text), what the run made is removed, and the run exits 1.
 
 Every step appends a JSON line to $XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl; a log that cannot be written is
 a failure. `--notify-failure` couriers the last failure once per step and error in six hours (`failure_notified`, then
@@ -72,6 +74,7 @@ replaced by <redacted> in anything written.
 import argparse
 import datetime
 import hashlib
+import http.client
 import json
 import os
 import pathlib
@@ -81,6 +84,7 @@ import shutil
 import subprocess
 import sys
 import time
+import traceback
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -114,6 +118,7 @@ APK_LIMIT = 4 << 30  # the most the variant APK check reads from the host
 SIDECAR_LIMIT = 4096
 SIDECAR_LINE = re.compile(r"([0-9a-f]{64})  (\S+)\n?")  # what `sha256sum` writes, one line
 READ_CHUNK = 1 << 20
+SCRATCH_MARKER = ".made-by-quest-release-timer"  # in the variant scratch directory this timer makes, and only in it
 SIGNER_BINARY = "release-signer"  # what build_signer builds; its `verify-manifest --live` prints the live manifest on stdout
 # Programs whose stdout is remote content, never a log field (docs/standards/logging.md, Rule 4).
 REMOTE_OUTPUT_PROGRAMS = frozenset({"curl", "gh", "gh-spritz", SIGNER_BINARY})
@@ -214,7 +219,13 @@ class Timer:
     def keep_output(self, step: str, path: pathlib.Path, result: subprocess.CompletedProcess) -> None:
         """The command's whole output, redacted, in a file that is 0600 from the moment it is opened (a run replaces it)."""
         try:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            # A previous file (or a link planted in its place) is removed, and the new one is made exclusively, 0600, without
+            # following a link, so nothing is written through a path somebody else controls.
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             os.fchmod(fd, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as handle:
                 handle.write(f"exit {result.returncode}\n--- stderr ---\n{self.redact(result.stderr or '')}\n"
@@ -395,7 +406,7 @@ class Timer:
         made = {"worktree": False}
         try:
             self._release_steps(tag, version, worktree, signer_dir, tarball, extra_file, made)
-        except StepFailure:
+        except Exception:  # a StepFailure, or anything a step did not expect: what this run made is removed either way
             self.cleanup(worktree if made["worktree"] else None, signer_dir, tarball, extra_file, raising=False,
                          scratch=self.variant_scratch(tag) if self.scratch_made else None)
             raise
@@ -417,9 +428,9 @@ class Timer:
         if beta == version:
             self.log.event("already_listed", beta=version)
             self.ok("check_listed", listed=True)
-            self.part = "variant"  # the release is complete: what follows belongs to the variant
             if self.notice_owed(tag):
-                self.notify_published(tag)
+                self.notify_published(tag)  # the main release's own notice: a failure of it is the main release's
+            self.mark_main_complete(tag)
             self.finish_variant(tag, worktree, made, None)
             return
         carried = self.game_data(self.live_manifest(before, "check_listed"), beta, "check_listed")
@@ -466,8 +477,15 @@ class Timer:
                                              f"{'missing from' if survived is None else 'changed in'} the {version} release: {survived}")
         self.ok("verify_live", beta=listed, game_data=carried["name"])
         self.notify_published(tag)
-        self.part = "variant"
+        self.mark_main_complete(tag)
         self.finish_variant(tag, worktree, made, build_env)
+
+    def mark_main_complete(self, tag: str) -> None:
+        """The main release is published, listed, verified and announced: from here a failure is the variant's, and a later run
+        starts as the variant. Written once per tag."""
+        if not any(e.get("tag") == tag and e.get("event") == "main_complete" for e in read_events(self.log.path)):
+            self.log.event("main_complete")
+        self.part = "variant"
 
     def make_worktree(self, tag: str, worktree: pathlib.Path, made: dict) -> None:
         """A clean worktree at the tag, set up for a build."""
@@ -493,6 +511,19 @@ class Timer:
 
     def variant_scratch(self, tag: str) -> pathlib.Path:
         return self.work / f"variant-{tag}"
+
+    def sweep_scratch(self, tag: str) -> None:
+        """Remove the private copies a killed run left: the scratch directory of the tag, when it carries this timer's marker.
+        A link, or a directory without the marker, is not ours and is never touched."""
+        scratch = self.variant_scratch(tag)
+        marker = scratch / SCRATCH_MARKER
+        if scratch.is_symlink() or not scratch.is_dir() or marker.is_symlink() or not marker.is_file():
+            return
+        try:
+            shutil.rmtree(scratch)
+        except OSError as error:
+            raise StepFailure("cleanup", f"cannot remove the scratch a killed run left: {error.strerror}") from error
+        self.log.event("variant_scratch_removed", reason="left by a run that did not finish")
 
     @staticmethod
     def variant_apk_name(tag: str) -> str:
@@ -546,11 +577,10 @@ class Timer:
         if ":" in str(scratch):
             raise StepFailure(step, "the scratch directory's path holds a colon, which separates the libraries in the recipe")
         try:
-            if scratch.exists():
-                shutil.rmtree(scratch)  # a killed run's leftovers
-            scratch.mkdir(mode=0o700)
+            scratch.mkdir(mode=0o700)  # a directory of that name that is not this timer's is never removed: this fails
             self.scratch_made = True
             scratch.chmod(0o700)
+            os.close(os.open(scratch / SCRATCH_MARKER, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
         except OSError as error:
             raise StepFailure(step, f"cannot make the scratch directory: {error.strerror}") from error
         copies = []
@@ -583,7 +613,7 @@ class Timer:
             response = urllib.request.build_opener(NoRedirect).open(request, timeout=FETCH_TIMEOUT_SECONDS)
         except urllib.error.HTTPError as error:
             return error.code, "", "", b""
-        except OSError as error:
+        except (OSError, http.client.HTTPException, ValueError) as error:  # a bad status line, a URL the library rejects
             raise StepFailure(step, f"{file} on the host: no answer ({error.__class__.__name__})") from error
         digest = hashlib.sha256()
         kept = bytearray()
@@ -592,6 +622,7 @@ class Timer:
             content_type = response.headers.get("Content-Type", "")
             if response.status != 200 or content_type.lower().startswith("text/html"):
                 return response.status, content_type, "", b""
+            declared = response.headers.get("Content-Length", "").strip()
             try:
                 while chunk := response.read(READ_CHUNK):
                     size += len(chunk)
@@ -600,8 +631,11 @@ class Timer:
                     digest.update(chunk)
                     if keep:
                         kept += chunk
-            except OSError as error:
-                raise StepFailure(step, f"{file} on the host: the answer broke off ({error.__class__.__name__})") from error
+            except (OSError, http.client.HTTPException, ValueError) as error:  # IncompleteRead, a bad chunk size
+                raise StepFailure(step, f"{file} on the host: the answer broke off ({error.__class__.__name__}), "
+                                        f"received {size} bytes") from error
+            if declared.isascii() and declared.isdigit() and size != int(declared):
+                raise StepFailure(step, f"{file} on the host: the answer broke off (received {size} of {int(declared)} bytes)")
         return 200, content_type, digest.hexdigest(), bytes(kept)
 
     def variant_exists(self, tag: str) -> bool:
@@ -619,7 +653,7 @@ class Timer:
 
         def answered(file: str, status: int, content_type: str) -> StepFailure:
             note = " (a redirect is not followed)" if 300 <= status < 400 else ""
-            what = f"with {content_type or 'no content type'}, which is not the file" if status == 200 else "instead of the file"
+            what = "with an HTML content type, which is not the file" if status == 200 else "instead of the file"
             return StepFailure(step, f"{file} on the host: answered {status} {what}{note}")
 
         status, content_type, apk_digest, _ = self.get_object(step, f"{base}/nevr-runtime/{tag}/{name}", APK_LIMIT)
@@ -641,7 +675,7 @@ class Timer:
         if not found:
             raise StepFailure(step, f"{broken}{sidecar} is malformed (not one '<sha256>  <name>' line){repair}")
         if found.group(2) != name:
-            raise StepFailure(step, f"{broken}{sidecar} names {found.group(2)}, not {name}{repair}")
+            raise StepFailure(step, f"{broken}{sidecar} names a different file ({len(found.group(2).encode())} bytes){repair}")
         if found.group(1) != apk_digest:
             raise StepFailure(step, f"{broken}{sidecar} states sha256 {found.group(1)}, the APK on the host has {apk_digest}{repair}")
         return True
@@ -804,6 +838,8 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
             log.event("step_ok", step="list", newest=tag)
         log.base["tag"] = tag
         history = [e for e in read_events(path) if e.get("tag") == tag]
+        timer.sweep_scratch(tag)
+        timer.part = "variant" if any(e.get("event") == "main_complete" for e in history) else "main"
         if any(e.get("event") == "done" for e in history):
             log.event("nothing_to_do", reason="done")
             return 0
@@ -832,6 +868,16 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
         sys.stderr.write(f"quest-release-timer: {failure}\n")
         if log is not None and not str(failure).startswith("refused"):
             _record(log, "failed", "start", str(failure), part_of(timer))
+        return 1
+    except Exception as error:  # noqa: BLE001 - the last resort: whatever a step did not expect is a counted failure, not a traceback
+        # The class and where it happened, never its text: that may hold a path, a secret or text from the host.
+        frames = traceback.extract_tb(error.__traceback__)
+        mine = [frame for frame in frames if frame.filename == __file__] or frames
+        where = f"{pathlib.Path(mine[-1].filename).name}:{mine[-1].lineno}" if mine else "unknown"
+        message = f"{error.__class__.__name__} at {where}"
+        sys.stderr.write(f"quest-release-timer: unexpected: {message}\n")
+        if log is not None:
+            _record(log, "failed", "unexpected", message, part_of(timer))
         return 1
     finally:
         if log is not None:

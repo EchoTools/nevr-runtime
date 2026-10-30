@@ -380,10 +380,22 @@ step (`variant_pins`, `variant_build`, `variant_publish`, or `variant_exists` an
 tries. A failure of a variant step carries the step, the program and its exit code, never a tail of the program's output (the
 plugin check prints the plugin's own symbol names): the output of `variant_build` is in the 0600 file the failure names, and
 the publish tool's own log (`publish-quest-apk.jsonl`) has the reasons of `variant_publish`. Every `failed` and `refused`
-record carries `part`: `main` until the main release is announced, `variant` in the already-listed path and after the
-announcement (the shared steps, `notify` of a tag already listed and `cleanup` included); the note that the timer gave up reads
-`part` of the last failure, so it says whether the variant or the main release gave up. `done` is written only when the
-variant is done, so the next run finds the tag listed and checks the host for the variant pair (`variant_exists`, below).
+record carries `part`: `main` until the main release's notice has gone out, `variant` after it. When the notice has gone out
+the timer writes `main_complete` for the tag, once, and a later run whose tag has it starts as `variant`, so a failure of
+`build_signer` or `check_listed` on a variant-only retry is the variant's. In the already-listed path `main_complete` follows
+the notice when one was owed (a failure of that `notify` is the main release's own, so `main`) and is written at once when
+none was; a tag whose history has no `main_complete` (older records) is `main` until `check_listed` says it is listed, as before.
+The note that the timer gave up reads `part` of the last failure, so it says whether the variant or the main release gave up.
+`done` is written only when the variant is done, so the next run finds the tag listed and checks the host for the variant pair
+(`variant_exists`, below). An exception that no step expected (a broken answer from the host is one of the expected ones) is
+recorded as `failed` with the step `unexpected`, naming its class and where it happened and never its text, with `part` as above;
+the worktree and the scratch are removed, the run exits 1, and it counts toward the three tries like any other failure.
+
+The private copies of the libraries are in `variant-vX.Y.Z` in the timer's work directory, which carries the marker file
+`.made-by-quest-release-timer` from the moment the timer makes it. Every run, the already-listed path and a failing run
+included, removes a directory of that name that carries the marker (a killed run's leftovers) and records
+`variant_scratch_removed`; a directory without the marker, or a link, is never removed, and the pins step then fails because it
+cannot make its own.
 
 `variant_exists` GETs the APK, following no redirect. 404 means it is absent: the variant is built and published alone, in a
 worktree of its own that the run removes, with no second manifest publish. An APK that is there (200, not HTML) is listed
@@ -394,12 +406,19 @@ either file is a failure.
 **A half-published or mismatched pair.** When the APK is there and the sidecar is missing, malformed, names another file or
 states another digest, `variant_exists` fails naming the two files and which check failed, and it rebuilds nothing: the
 publisher's upload never replaces an object (`rclone copyto --ignore-existing`), so a rebuild could not repair it, and a
-different APK at that name is not the timer's to overwrite. The repair is by hand with the publisher's credential (the R2
-credential file the unit loads), outside the timer. If the APK on the host is the one to keep (the `variant_publish` record in
-`publish-quest-apk.jsonl` of the run that put it up gives its sha256 and size), put the correct sidecar in place: the single
-line `<sha256 of that APK>  nevr-runtime-vX.Y.Z-q15t-quest.apk`, as `sha256sum` writes it, replacing the object. If it is not,
-delete the APK and its sidecar from the release prefix. Then run `python3 tools/quest_release_timer.py --tag vX.Y.Z
---reset-failures` and let the next run check the pair again (an absent APK is built and published as above).
+different APK at that name is not the timer's to overwrite. A body that came in short of its `Content-Length`, a connection
+that broke off or an answer that is not HTTP is not a mismatch: it fails as `the answer broke off` or `no answer`, without the
+pointer to this repair, and the next run asks again. The repair is by hand with the publisher's credential (the R2 credential
+file the unit loads), outside the timer, and it needs a digest that comes from the build that was published, never from the
+host: **never copy the digest from the error message into the sidecar**, because that would certify whatever is on the host.
+The `local_files` record of the run that put the APK up (in `publish-quest-apk.jsonl`; the run's other records are `start`,
+`put_variant_apk`, `put_sidecar`, `fetch` and `published`) gives the sha256 and size of the build it published, and the
+build's own `.sha256` under `build/quest-release/vX.Y.Z/variant/` gives the same when that worktree still exists. After
+confirming that the object on the host has that size, replace the sidecar with the single line
+`<that sha256>  nevr-runtime-vX.Y.Z-q15t-quest.apk`, as `sha256sum` writes it. If there is no such record or file, or the size
+differs, delete BOTH objects from the release prefix instead. Either way, run
+`python3 tools/quest_release_timer.py --tag vX.Y.Z --reset-failures` and let the next run check the pair again (an absent APK
+is built and published as above).
 
 Install, from any clone of the repository:
 
