@@ -275,6 +275,13 @@ InstallResult InstallDecalsAt(std::uintptr_t base, std::uintptr_t update_slot, s
     Log(NEVR_LOG_INFO, "decals off", f, 1);
     return Refused("off_file");
   }
+  // A second install would reset the live state (the node records, the counters) and, when its slot check then refuses, switch the
+  // module off: refuse before anything is touched, with the first install still running.
+  if (g_on.load(std::memory_order_acquire)) {
+    const NevrLogField f[] = {{"why", "decals is already installed; the running install is left as it is"}};
+    Log(NEVR_LOG_WARNING, "decals refused: already installed", f, 1);
+    return Refused("already_installed", SwapStatus::kUnexpectedOriginal);
+  }
   // 1. the table
   char found[400] = "";
   char searched[1300] = "";
@@ -297,7 +304,7 @@ InstallResult InstallDecalsAt(std::uintptr_t base, std::uintptr_t update_slot, s
       std::snprintf(searched + used, sizeof searched - used, "%s%s", i == 0 ? "" : " ", paths[i]);
       if (bytes != nullptr) continue;
       if (ReadFile(paths[i], &bytes, &len, &why)) {
-        std::snprintf(found, sizeof found, "%s", paths[i]);
+        std::snprintf(found, sizeof found, "%.399s", paths[i]);  // each path was written into 400 bytes
       } else if (problem == nullptr && std::strcmp(why, "absent") != 0) {
         problem = why;
       }
