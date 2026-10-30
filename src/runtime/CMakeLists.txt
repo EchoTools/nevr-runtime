@@ -14,6 +14,8 @@
 set(NEVR_HOST_UNITS
     "host/bootstrap_diagnostics.cpp"
     "host/crash_capture.cpp"
+    "host/crash_send_host.cpp"
+    "host/crash_send_winhttp.cpp"
     "host/host_entry.cpp"
     "host/host_identity.cpp"
     "host/minidmp_sender_exports.cpp"
@@ -1295,19 +1297,26 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_self_check DISCOVERY_MODE PRE_TEST)
 
-    # Crash report upload (compat/crash_upload.h, #1605): the report a crash left in the crash folder goes out once
-    # through the self-check unit's sender. Header only on top of the self-check unit; the Quest sentinel compiles
-    # the same header.
-    add_executable(test_crash_upload
-      tests/test_crash_upload.cpp
-      compat/self_check.cpp
-      compat/evr_codec.cpp)
-    set_source_files_properties(tests/test_crash_upload.cpp compat/self_check.cpp compat/evr_codec.cpp
+    # Crash report send (core/crash_send.h, #1689): the reports a crash left in the crash folder go to nevr-api once,
+    # from the BugSplat64.dll host and the Quest sentinel. Header only; the reports it reads come from the real writer
+    # (core/crash_report.cpp), so the test links it.
+    add_executable(test_crash_send
+      tests/test_crash_send.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/crash_report.cpp)
+    set_source_files_properties(tests/test_crash_send.cpp ${CMAKE_SOURCE_DIR}/src/core/crash_report.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_include_directories(test_crash_upload PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_crash_upload PRIVATE nevr::plugin_sdk
-      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
-    gtest_discover_tests(test_crash_upload DISCOVERY_MODE PRE_TEST)
+    target_include_directories(test_crash_send PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_options(test_crash_send PRIVATE -Werror)
+    target_link_libraries(test_crash_send PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_crash_send DISCOVERY_MODE PRE_TEST)
+
+    # The host's POST (host/crash_send_winhttp.cpp): WinHTTP loaded by name, against a loopback server. nevr_host_core
+    # holds the production unit, built with the host's own flags.
+    add_executable(test_host_crash_send tests/test_host_crash_send.cpp)
+    set_source_files_properties(tests/test_host_crash_send.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_host_crash_send PRIVATE -Werror)
+    target_link_libraries(test_host_crash_send PRIVATE nevr_host_core GTest::gtest GTest::gtest_main ws2_32)
+    gtest_discover_tests(test_host_crash_send DISCOVERY_MODE PRE_TEST)
 
     # The #398 self-check (compat/party_share_check.h): each service answer to a party data share is one
     # self-check result. Header only on top of the self-check unit and the party symbol table.

@@ -8,7 +8,6 @@
 
 #include "core/crash_report.h"
 #include "core/logging.h"
-#include "runtime/compat/crash_upload.h"
 #include "runtime/lifecycle/crash_recovery.h"
 #include "runtime/lifecycle/crash_recovery_sites.h"
 #include "runtime/lifecycle/crash_report_pe.h"
@@ -127,7 +126,7 @@ void Describe(const nevr_crash::CrashInfo& info, nevr_crash::Report* report) {
 bool ReportPath(const nevr_crash::CrashInfo&, char* buffer, std::size_t capacity) {
   if (g_stem[0] == '\0') return false;
   const LONG number = InterlockedIncrement(&g_reportCount);
-  const int length = std::snprintf(buffer, capacity, "%s-%ld%s", g_stem, number, nevr_crash_upload::kReportSuffix);
+  const int length = std::snprintf(buffer, capacity, "%s-%ld%s", g_stem, number, nevr_crash::kReportSuffix);
   return length > 0 && static_cast<std::size_t>(length) < capacity;
 }
 

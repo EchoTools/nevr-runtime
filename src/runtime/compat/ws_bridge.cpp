@@ -53,7 +53,6 @@
 #include "runtime/compat/party_leave_check.h"
 #include "runtime/compat/party_share_check.h"
 #include "runtime/compat/self_check.h"
-#include "runtime/compat/crash_upload.h"
 #include "core/nevr_root.h"
 #include "runtime/compat/credential_cache_check.h"
 #include "runtime/compat/status_redirect_check.h"
@@ -1026,22 +1025,6 @@ static void LogSelfCheck(const nevr_self_check::LogRecord& record) {
       record.pass ? 1 : 0, record.expected.c_str(), record.observed.c_str());
 }
 
-// Crash report upload (compat/crash_upload.h, #1605): the line is the operator's record that a report left, or why it
-// did not. A report's text and the minidump are never logged, only their sizes.
-static void LogCrashUpload(const nevr_crash_upload::LogEvent& e) {
-  const std::string event = e.event;
-  if (event == "armed" || event == "off") {
-    Log(EchoVR::LogLevel::Info, "[NEVR.CRASH] crash report upload %s dir=\"%s\" detail=\"%s\"", e.event, e.report.c_str(),
-        e.detail.c_str());
-    return;
-  }
-  const bool failed = event != "sent";
-  Log(failed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
-      "[NEVR.CRASH] crash report upload %s report=%s report_bytes=%llu minidump=%s minidump_bytes=%llu detail=\"%s\"",
-      e.event, e.report.c_str(), static_cast<unsigned long long>(e.reportBytes), e.minidump.c_str(),
-      static_cast<unsigned long long>(e.minidumpBytes), e.detail.c_str());
-}
-
 static void WireSelfChecks() {
   nevr_self_check::SetEnabled(true);  // on in every build, first and unconditional (#451)
   nevr_status_redirect_check::Register(&nevr_status_redirect_check::ProcessProbe);  // #408
@@ -1051,17 +1034,6 @@ static void WireSelfChecks() {
 #ifdef NEVR_PROJECT_VERSION
   nevr_self_check::SetBuild(NEVR_PROJECT_VERSION);
 #endif
-  // The report a crash left in the crash folder goes out once, on the first logged-in session after it. A dedicated
-  // server is not a player: it has no login session to send on.
-  if (!g_isServer) {
-    nevr_crash_upload::Config crash;
-    crash.dir = std::filesystem::path(nevr_root::CrashesDir(nevr_root::RootW()));
-#ifdef NEVR_PROJECT_VERSION
-    crash.build = NEVR_PROJECT_VERSION;
-#endif
-    crash.log = &LogCrashUpload;
-    nevr_crash_upload::Install(std::move(crash));
-  }
 }
 
 // Platform codes, the bridge's login platform, the remote Bearer choice and the /ws path test live in

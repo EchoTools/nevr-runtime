@@ -44,7 +44,6 @@ struct State {
   std::vector<Check> checks;
   std::deque<Pending> queue;      // oldest first
   std::vector<SessionReset> resets;  // functions that clear a check's per-session state
-  std::vector<FlushHook> flushHooks;  // work that rides the sender and runs at the top of a logged-in Flush
   std::size_t dropped = 0;        // results the bounded queue lost since the last frame
   std::size_t sessionDropped = 0;  // results unsent when a session ended: dropped, never stored
   uint64_t seq = 0;
@@ -166,38 +165,6 @@ void SetLoggedIn(bool loggedIn, const nevr_evr_codec::UserId& user) {
   if (sink != nullptr) sink(record);
 }
 
-void RegisterFlushHook(FlushHook hook) {
-  State& s = S();
-  std::lock_guard<std::mutex> lock(s.mutex);
-  if (hook == nullptr) return;
-  for (FlushHook h : s.flushHooks) {
-    if (h == hook) return;
-  }
-  s.flushHooks.push_back(hook);
-}
-
-bool LoggedInUser(nevr_evr_codec::UserId* out) {
-  State& s = S();
-  std::lock_guard<std::mutex> lock(s.mutex);
-  if (!s.loggedIn) return false;
-  if (out != nullptr) *out = s.user;
-  return true;
-}
-
-bool SendRemoteLogStrings(const std::vector<std::string>& strings, uint64_t level) {
-  State& s = S();
-  if (!s.enabled.load(std::memory_order_acquire)) return false;
-  Sender sender = nullptr;
-  nevr_evr_codec::UserId user;
-  {
-    std::lock_guard<std::mutex> lock(s.mutex);
-    if (!s.loggedIn || s.sender == nullptr) return false;
-    sender = s.sender;
-    user = s.user;
-  }
-  return sender(nevr_evr_codec::BuildRemoteLogSet(user, level, strings));
-}
-
 CheckId Register(const CheckSpec& spec) {
   State& s = S();
   std::lock_guard<std::mutex> lock(s.mutex);
@@ -266,13 +233,6 @@ void Flush() {
     Observation o;
     if (entry.second(&o)) Report(entry.first, o.observed, o.pass);
   }
-  // Hooks that ride the sender (the crash report upload): only while a session is logged in and a sender is set.
-  std::vector<FlushHook> hooks;
-  {
-    std::lock_guard<std::mutex> lock(s.mutex);
-    if (s.loggedIn && s.sender != nullptr) hooks = s.flushHooks;
-  }
-  for (FlushHook hook : hooks) hook();
 
   for (;;) {
     std::vector<Pending> taken;
@@ -330,7 +290,6 @@ void ResetForTest() {
   s.logSink = nullptr;
   s.build.clear();
   s.resets.clear();
-  s.flushHooks.clear();
   s.checks.clear();
   s.queue.clear();
   s.dropped = 0;

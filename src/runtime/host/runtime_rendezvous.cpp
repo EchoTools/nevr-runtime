@@ -2,6 +2,7 @@
 
 #include <MinHook.h>
 
+#include "runtime/host/crash_send_host.h"
 #include "runtime/host/host_identity.h"
 #include "runtime/host/host_json.h"
 #include "runtime/host/loader_lock.h"
@@ -326,6 +327,9 @@ std::int64_t RuntimeRendezvous::GameMainWrapperDetour(std::int64_t command_line)
     return self->original_(command_line);
   }
 
+  // Before the runtime is loaded: the crash reports a past run left go out whether or not this run's runtime loads
+  // (core/crash_send.h). On a thread of its own, so the load below never waits for the network. Once per process.
+  if (self->diagnostics_ != nullptr) StartCrashSend(*self->diagnostics_);
   InitOnceExecuteOnce(&self->load_once_, &LoadRuntimeOnce, self, nullptr);
   const NevrRuntimeApi* api = self->api_.load(std::memory_order_acquire);
   if (api != nullptr) return api->game_main(command_line);
