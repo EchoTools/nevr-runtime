@@ -5,7 +5,9 @@
 
 #include "quest/login/login_rewrite.h"
 #include "quest/login/login_prerequisites.h"
+#include "quest/login/login_hook.h"
 #include "quest/login/login_standin.h"
+#include "quest/sentinel/hook_log.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -1336,9 +1338,119 @@ void TestResetHeldStandIns() {
   }
 }
 
+// The overflow record of SentinelLog (more than eight fields, #1391): one `event` key, which is the marker, and the call's own
+// event under `overflowed_event`. A JSON parser keeps the last of two equal keys and drops the other without a sign, so the
+// raw text is counted as well as parsed.
+std::vector<std::string> g_sentinelLines;
+void CaptureSentinelLine(sentinel::LogLevel, const char* line) { g_sentinelLines.emplace_back(line); }
+
+std::size_t CountOccurrences(const std::string& text, const std::string& needle) {
+  std::size_t count = 0;
+  for (std::size_t at = text.find(needle); at != std::string::npos; at = text.find(needle, at + needle.size())) {
+    ++count;
+  }
+  return count;
+}
+
+// One field past the cap (nine, #1529): the overflow record, then the call's own line with the first nine fields.
+void TestOverflowLineHasOneEventKey() {
+  static const char* const kNames[10] = {"k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9"};
+  nevr_quest_login::LogKv fields[10];
+  for (int i = 0; i < 10; ++i) fields[i] = nevr_quest_login::LogKv{kNames[i], nullptr, i};
+  g_sentinelLines.clear();
+  const sentinel::LogSink previous = sentinel::SetLogSink(&CaptureSentinelLine);
+  nevr_quest_login::SentinelLog(nevr_quest_login::Level::Warning, "probe_event", fields, 10);
+  sentinel::SetLogSink(previous);
+  QCHECK(g_sentinelLines.size() == 2U);  // the overflow record, then the call's own line with the first nine fields
+  if (g_sentinelLines.size() != 2U) return;
+  const std::string& overflow = g_sentinelLines[0];
+  QCHECK(CountOccurrences(overflow, "\"event\":") == 1U);
+  const nlohmann::json o = nlohmann::json::parse(overflow);
+  QCHECK(o.value("event", "") == "quest_login_log_overflow");
+  QCHECK(o.value("overflowed_event", "") == "probe_event");
+  QCHECK(o.value("fields", 0) == 10);
+  QCHECK(o.value("level", "") == "error");
+  const std::string& own = g_sentinelLines[1];
+  QCHECK(CountOccurrences(own, "\"event\":") == 1U);
+  const nlohmann::json p = nlohmann::json::parse(own);
+  QCHECK(p.value("event", "") == "probe_event");
+  QCHECK(p.value("level", "") == "warn");
+  QCHECK(p.contains("k8") && !p.contains("k9"));
+}
+
+// Every field count the switch carries (0 to 9, the cap) at every level keeps every field and maps the level to its name.
+// The text field and the number fields are both kept, so the two branches of the field lambda are each pinned.
+void TestSentinelLogKeepsEveryFieldAtEveryLevel() {
+  static const char* const kNames[10] = {"k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9"};
+  struct LevelCase {
+    nevr_quest_login::Level level;
+    const char* name;
+  };
+  const LevelCase kLevels[3] = {{nevr_quest_login::Level::Info, "info"},
+                                {nevr_quest_login::Level::Warning, "warn"},
+                                {nevr_quest_login::Level::Error, "error"}};
+  for (const LevelCase& lc : kLevels) {
+    for (std::size_t n = 0; n <= 9; ++n) {
+      nevr_quest_login::LogKv fields[10];
+      for (std::size_t i = 0; i < 10; ++i) {
+        fields[i] = nevr_quest_login::LogKv{kNames[i], nullptr, static_cast<long long>(i)};
+      }
+      fields[0] = nevr_quest_login::LogKv{kNames[0], "zero", 0};
+      g_sentinelLines.clear();
+      const sentinel::LogSink previous = sentinel::SetLogSink(&CaptureSentinelLine);
+      nevr_quest_login::SentinelLog(lc.level, "probe_event", fields, n);
+      sentinel::SetLogSink(previous);
+      QCHECK(g_sentinelLines.size() == 1U);
+      if (g_sentinelLines.size() != 1U) continue;
+      const nlohmann::json p = nlohmann::json::parse(g_sentinelLines[0]);
+      QCHECK(p.value("event", "") == "probe_event");
+      QCHECK(p.value("level", "") == lc.name);
+      for (std::size_t i = 0; i < n; ++i) QCHECK(p.contains(kNames[i]));
+      if (n > 0) QCHECK(p.contains("k0") && p["k0"] == "zero");
+      for (std::size_t i = 1; i < n; ++i) {
+        QCHECK(p.contains(kNames[i]) && p[kNames[i]] == static_cast<long long>(i));
+      }
+      QCHECK(!p.contains(kNames[n]));
+    }
+  }
+}
+
+// #1529: the real send path (FinishLogin) through the real logger (SentinelLog). A login whose account id is the stand-in
+// is refused and resets the stand-in org id, so the record's `reset` is 1 (bit 0, the org id). The record carries all nine
+// fields, `reset` among them, and no overflow record is written for it.
+void TestSendRecordCarriesAllNineFields() {
+  // The stand-ins are published by this test (they are unpublished until Generate or SetForTest runs).
+  nevr_quest_login::StandIn::SetForTest(0x4242ULL, "standtoken", "standnonce", "player-ab");
+  FakeUser user;
+  user.global_account_id = nevr_quest_login::StandIn::OrgId();
+  FakeJson json;
+  json.SetString("access_token", "OCULUS-TOKEN");
+  json.SetString("nonce", "real-nonce");
+  FakePrereqState st;
+  g_sentinelLines.clear();
+  const sentinel::LogSink previous = sentinel::SetLogSink(&CaptureSentinelLine);
+  const nevr_quest_login::FinishResult r =
+      nevr_quest_login::FinishLogin(user, json, st, nevr_quest_login::Outcome::NoIdentity, &nevr_quest_login::SentinelLog);
+  sentinel::SetLogSink(previous);
+  QCHECK(r.reset_org_id);
+  QCHECK(g_sentinelLines.size() == 1U);  // the send record alone: no quest_login_log_overflow in front of it
+  if (g_sentinelLines.size() != 1U) return;
+  QCHECK(CountOccurrences(g_sentinelLines[0], "quest_login_log_overflow") == 0U);
+  const nlohmann::json p = nlohmann::json::parse(g_sentinelLines[0]);
+  QCHECK(p.value("event", "") == "quest_login_send");
+  QCHECK(p.value("level", "") == "warn");  // a fail-closed decision logs at Warning
+  QCHECK(p.contains("reset") && p["reset"] == 1);
+  QCHECK(p.contains("decision") && p.contains("outcome"));
+  QCHECK(p.contains("account_id_unreadable") && p.contains("account_id_stand_in") && p.contains("account_id_invalid"));
+  QCHECK(p.contains("access_token_stand_in") && p.contains("nonce_stand_in") && p.contains("account_member_stand_in"));
+}
+
 }  // namespace
 
 int main() {
+  TestOverflowLineHasOneEventKey();
+  TestSentinelLogKeepsEveryFieldAtEveryLevel();
+  TestSendRecordCarriesAllNineFields();
   TestDecideSendReadsTheWire();
   TestOculusIdMemoryHandlesTheStandIn();
   TestFinishLoginGate();

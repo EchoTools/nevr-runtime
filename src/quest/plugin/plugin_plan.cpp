@@ -47,18 +47,33 @@ void Settle(PlanEntry& entry, Outcome outcome, const char* token) {
 }  // namespace
 
 std::vector<PlanEntry> BuildPlan(std::vector<PluginLoadItem> items, bool earlySupported) {
+  std::vector<PlannedItem> planned;
+  planned.reserve(items.size());
+  for (PluginLoadItem& item : items) {
+    PlannedItem one;
+    one.item = std::move(item);
+    planned.push_back(std::move(one));
+  }
+  return BuildPlan(std::move(planned), earlySupported);
+}
+
+std::vector<PlanEntry> BuildPlan(std::vector<PlannedItem> items, bool earlySupported) {
   std::vector<PlanEntry> plan;
   plan.reserve(items.size());
   // The items as the duplicate rule sees them: an entry that will not load does not claim its file, so a later entry
   // naming the same file is not refused for it.
   std::vector<PluginLoadItem> claims;
   claims.reserve(items.size());
-  for (PluginLoadItem& item : items) {
+  for (PlannedItem& planned : items) {
     PlanEntry entry;
+    PluginLoadItem item = std::move(planned.item);
     // The shared parser's default `file` is `<name>.dll`; on Quest the default is `lib<name>.so`.
     if (item.file == item.name + ".dll") item.file = DefaultFile(item.name);
     entry.phase = item.early ? PluginPhase::Early : PluginPhase::Normal;
     entry.item = std::move(item);
+    entry.source = planned.source;
+    entry.overridden = planned.overridden;
+    entry.expectedSha256 = std::move(planned.expectedSha256);
     const PluginLoadItem& it = entry.item;
     if (!it.enabled) {
       Settle(entry, Outcome::kDisabled, reason::kDisabled);

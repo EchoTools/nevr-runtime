@@ -33,6 +33,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/headless_graphics.cpp",
     "patch/invite_answer_apply.cpp",
     "patch/invite_choice_hook.cpp",
+    "patch/invite_join_game.cpp",
     "patch/invite_service.cpp",
     "patch/invite_transport_curl.cpp",
     "patch/invite_wizard_hook.cpp",
@@ -41,11 +42,14 @@ EXPECTED_PATCH_SOURCES = (
     "patch/menu_version_label.cpp",
     "patch/mic_provider.cpp",
     "patch/mode_patches.cpp",
+    "patch/netgun_bullets.cpp",
     "patch/plugin_assets.cpp",
     "patch/pnsrad_enabler.cpp",
     "patch/render_config.cpp",
     "patch/render_config_hook.cpp",
     "patch/resource_override.cpp",
+    "patch/server_bots.cpp",
+    "patch/server_team_size.cpp",
     "patch/party_invite_gate.cpp",
     "patch/social_facade.cpp",
     "patch/social_facade_object.cpp",
@@ -54,7 +58,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/ui_texture_mips.cpp",
     "patch/xpid_patch.cpp",
 )
-EXPECTED_PATCH_SOURCE_COUNT = 33
+EXPECTED_PATCH_SOURCE_COUNT = 37
 
 
 class InventoryError(Exception):

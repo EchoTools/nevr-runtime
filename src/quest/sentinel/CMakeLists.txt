@@ -14,7 +14,9 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/breakpad.cmake)
 add_library(nevr_quest_got_hook STATIC
   got_hook.cpp
   arm64_reloc.cpp
-  inline_hook.cpp
+  libr15_attach.cpp
+  libr15_identity.cpp
+  ../patch/libr15_patch_identity.cpp
   hook_log.cpp
   hook_report.cpp)
 target_include_directories(nevr_quest_got_hook PUBLIC
@@ -22,7 +24,26 @@ target_include_directories(nevr_quest_got_hook PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 target_compile_options(nevr_quest_got_hook PRIVATE
   -Wall -Wextra -Werror -fno-exceptions -fvisibility=hidden -fvisibility-inlines-hidden)
-target_link_libraries(nevr_quest_got_hook PUBLIC log dl)
+# libr15_attach.cpp derives the patched build ID from the compiled-in table (ADR 0021 section 7): the identity source and
+# the SHA-256 in nevr_quest_data, which this static library pulls in only for that object.
+target_link_libraries(nevr_quest_got_hook PUBLIC nevr_quest_data log dl)
+
+# The extra rows of a variant build (NEVR_LIBR15_EXTRA_ROWS, src/quest/CMakeLists.txt; docs/adr/0021 section 11). The public
+# build adds nothing here. A variant build checks the file with the patcher's parser at configure time, embeds its text and digest,
+# and links the parser so libr15_identity.cpp can read the rows back and compute the same patched build ID as its libr15.
+if(NEVR_LIBR15_EXTRA_ROWS)
+  include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/libr15_extra_rows.cmake)
+  get_filename_component(NEVR_EXTRA_ROWS_FILE "${NEVR_LIBR15_EXTRA_ROWS}" ABSOLUTE BASE_DIR "${NEVR_REPO_ROOT}")
+  get_target_property(NEVR_EXTRA_ROWS_JSON_INCLUDE nlohmann_json::nlohmann_json INTERFACE_INCLUDE_DIRECTORIES)
+  list(GET NEVR_EXTRA_ROWS_JSON_INCLUDE 0 NEVR_EXTRA_ROWS_JSON_INCLUDE)
+  set(NEVR_EXTRA_ROWS_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/libr15_extra_rows_data.cpp")
+  nevr_libr15_extra_rows("${NEVR_EXTRA_ROWS_FILE}" "${NEVR_EXTRA_ROWS_SOURCE}" "${NEVR_REPO_ROOT}/src"
+                         "${NEVR_EXTRA_ROWS_JSON_INCLUDE}" "${CMAKE_CURRENT_BINARY_DIR}/extra_rows_check")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${NEVR_EXTRA_ROWS_FILE}")
+  target_sources(nevr_quest_got_hook PRIVATE ../patch/libr15_extra_rows.cpp "${NEVR_EXTRA_ROWS_SOURCE}")
+  target_compile_definitions(nevr_quest_got_hook PRIVATE NEVR_LIBR15_EXTRA_ROWS=1)
+  target_link_libraries(nevr_quest_got_hook PRIVATE nlohmann_json::nlohmann_json)
+endif()
 
 # The first-run data step (#807). Its std::function lambdas instantiate libc++ templates whose type info is exported
 # from an object file of the shared library; in an archive, --exclude-libs (below) keeps it out of the export set
@@ -52,7 +73,9 @@ add_custom_command(
 
 add_library(ovrplatformloader SHARED
   entry.cpp
+  clock_levels_hook.cpp
   login_prompt_hook.cpp
+  ../invite/frame_dispatch.cpp
   login_title_hook.cpp
   obb_skip_hook.cpp
   process_end_hook.cpp
@@ -63,9 +86,11 @@ add_library(ovrplatformloader SHARED
   render_config_hook.cpp
   ui_texture_mips.cpp
   quit_hook.cpp
+  pns_provider_hook.cpp
   os_build_gate_hook.cpp
   resource_request_hook.cpp
   menu_cards_hook.cpp
+  ../invite/wizard_metric_hook.cpp
   toast_presenter.cpp
   android_glue_layout_check.cpp
   sentinel.cpp
@@ -83,14 +108,29 @@ target_include_directories(ovrplatformloader PRIVATE
   ${CMAKE_BINARY_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/breakpad/src)
 
-target_link_libraries(ovrplatformloader PRIVATE nevr::plugin_sdk nevr_quest_got_hook nevr_quest_config nlohmann_json::nlohmann_json nevr_quest_prompt_board nevr_quest_data_wiring nevr_quest_data_net nevr_quest_data nevr_quest_symcache breakpad_client log dl)
+target_link_libraries(ovrplatformloader PRIVATE nevr::plugin_sdk nevr_quest_got_hook nevr_quest_config nlohmann_json::nlohmann_json nevr_quest_prompt_board nevr_quest_data_wiring nevr_quest_invite_join nevr_quest_data_net nevr_quest_data nevr_quest_symcache breakpad_client log dl)
 
 # The hook path (entry.cpp and login_prompt_hook.cpp: the thunk entries and the handlers they
 # call; the prompt board the login-prompt handler reads is built the same way, see
 # src/quest/CMakeLists.txt) is compiled without exception support so its frames carry no
 # personality or LSDA; see the contract in callback_thunk.h. tests/quest
 # TestHookFramesCarryNoPersonality pins it.
-set_source_files_properties(entry.cpp login_prompt_hook.cpp login_title_hook.cpp obb_skip_hook.cpp process_end_hook.cpp permission_request.cpp permission_wait_hook.cpp vk_ext_window.cpp os_build_gate_hook.cpp resource_request_hook.cpp render_config_hook.cpp menu_cards_hook.cpp texture_quality_hook.cpp ui_texture_mips.cpp quit_hook.cpp toast_presenter.cpp credits_text.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+set_source_files_properties(entry.cpp login_prompt_hook.cpp ../invite/frame_dispatch.cpp login_title_hook.cpp obb_skip_hook.cpp process_end_hook.cpp permission_request.cpp permission_wait_hook.cpp vk_ext_window.cpp os_build_gate_hook.cpp resource_request_hook.cpp render_config_hook.cpp menu_cards_hook.cpp ../invite/wizard_metric_hook.cpp texture_quality_hook.cpp ui_texture_mips.cpp quit_hook.cpp pns_provider_hook.cpp toast_presenter.cpp credits_text.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+
+# The Quest join on a resolved invite code (#966, S4). Its std::function<bool()> and std::function<std::int64_t()>
+# come through the shared invite_join.h; libc++ marks those templates' type info default-visibility, so an object
+# linked straight into libovrplatformloader.so exports it (tests/quest TestExportAllowlist). In an archive,
+# --exclude-libs (below) keeps it out of the export set, the same as nevr_quest_data_wiring. It is on the hook path
+# (entry.cpp calls RegisterAnswerApplier, reached from HookedNetGameUpdate), so it is built without exceptions, and with hidden
+# default visibility and the warnings-as-errors flags its siblings nevr_quest_data_wiring and nevr_quest_invite use.
+add_library(nevr_quest_invite_join STATIC ../invite/join_game_quest.cpp)
+target_include_directories(nevr_quest_invite_join PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../..
+  ${CMAKE_BINARY_DIR})
+target_compile_options(nevr_quest_invite_join PRIVATE
+  -Wall -Wextra -Werror -fno-exceptions -fvisibility=hidden -fvisibility-inlines-hidden)
+target_link_libraries(nevr_quest_invite_join PUBLIC nevr_quest_got_hook nlohmann_json::nlohmann_json)
 
 # The CSymbol64 name table the UI texture hook reads to tell a UI texture from a world texture: the merged PC and Quest
 # symbol sets, sorted by hash (src/runtime/log/symcache_data.cpp, generated by tools/symcache). It is data only; its

@@ -33,6 +33,7 @@
 #include "quest/redirect/hook_adapter.h"
 #include "quest/redirect/service_redirector.h"
 #include "quest/redirect/tstring_thunks.h"
+#include "quest/sentinel/libr15_identity.h"
 #include "quest/sentinel/quest_config.h"
 #include "quest/tests/test_check.h"
 #include "runtime/lifecycle/stable_string_pool.h"
@@ -942,12 +943,12 @@ void PinnedTargetsMatchTheMeasuredBinaries() {
   QCHECK(std::strcmp(t.libr15.module, "libr15.so") == 0);
   QCHECK(std::strcmp(t.libr15.symbol, "_ZNK10NRadEngine5CJson7TStringEPKcS2_j") == 0);
   QCHECK(t.libr15.slotVaddr.has_value() && *t.libr15.slotVaddr == 0x36ebe08ULL);
-  QCHECK(t.libr15.buildId != nullptr && std::strcmp(t.libr15.buildId, "b243509c08ce677aeb95fa348016949b3fc45230") == 0);
+  QCHECK(t.libr15.buildId != nullptr && std::strcmp(t.libr15.buildId, sentinel::pinned::LibR15PatchedBuildId()) == 0);
   QCHECK(std::strcmp(t.createConnection.module, "libr15.so") == 0);
   QCHECK(std::strcmp(t.createConnection.symbol, "_ZN10NRadEngine8CSysHttp16CreateConnectionERmPKc") == 0);
   QCHECK(t.createConnection.slotVaddr.has_value() && *t.createConnection.slotVaddr == 0x36e8028ULL);
   QCHECK(t.createConnection.buildId != nullptr &&
-         std::strcmp(t.createConnection.buildId, "b243509c08ce677aeb95fa348016949b3fc45230") == 0);
+         std::strcmp(t.createConnection.buildId, sentinel::pinned::LibR15PatchedBuildId()) == 0);
   QCHECK(std::strcmp(t.matchmaking.module, "libpnsradmatchmaking.so") == 0);
   QCHECK(std::strcmp(t.matchmaking.symbol, "_ZNK10NRadEngine5CJson7TStringEPKcS2_j") == 0);
   QCHECK(t.matchmaking.slotVaddr.has_value() && *t.matchmaking.slotVaddr == 0x6b4768ULL);

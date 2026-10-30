@@ -44,7 +44,7 @@ namespace sentinel {
 enum class ReportKind { kCalls, kFaults };
 
 // The counter table's size for the whole program. Every hook the sentinel installs registers its
-// counters here; the sentinel's own total (100 of 128) is pinned by
+// counters here; the sentinel's own total (104 of 128) is pinned by
 // src/quest/tests/integration_hooks_test.cpp. The table is static storage, about 4 KB, and one pass of
 // the reporter thread keeps one Event per counter on its own stack, about 2.7 KB.
 inline constexpr unsigned kMaxReportCounters = 128;

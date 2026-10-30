@@ -47,6 +47,11 @@ std::vector<std::string> MigratedYamlPaths();
 /// (the caller applies the same `[0] != '\0'` check the JSON readers did).
 std::optional<std::string> LookupFlat(const nevr::NevrConfig& cfg, const std::string& flatKey);
 
+/// True when config.yaml holds a list or a map under a migrated flat key. Such a node is not a value, and LookupFlat gives
+/// nullopt for it just as for an absent key, so a switch asks for the shape too (#1156). False for an absent key, a key with
+/// no value, a scalar and an unmapped key.
+bool LookupFlatIsStructured(const nevr::NevrConfig& cfg, const std::string& flatKey);
+
 /// Built-in defaults embedded at build time, keyed by flat key (non-empty values only).
 using FlatDefaults = std::map<std::string, std::string>;
 

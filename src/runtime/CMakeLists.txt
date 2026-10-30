@@ -20,6 +20,7 @@ set(NEVR_HOST_UNITS
     "host/runtime_exports.cpp"
     "host/runtime_load.cpp"
     "host/runtime_rendezvous.cpp"
+    "host/stop_line.cpp"
     # The signature verifier and the pins it checks against (ADR 0012: the host verifies nevr-runtime.dll before it loads it).
     "ext/plugin_pins.cpp"
     "ext/plugin_signature.cpp"
@@ -69,6 +70,10 @@ set(PATCHES_SOURCES
     "patch/asset_cache.cpp"
     # #938: the nEVR section of the in-game CREDITS page (pure logic in credits_text.h).
     "patch/credits_text.cpp"
+    # #1423: AI bots on a dedicated server (pure logic in server_bots.h).
+    "patch/server_bots.cpp"
+    # #1422: a server's match team size (pure logic in server_team_size.h).
+    "patch/server_team_size.cpp"
     "patch/asset_registry.cpp"
     "patch/plugin_assets.cpp"
     "compat/ws_bridge.cpp"
@@ -92,6 +97,7 @@ set(PATCHES_SOURCES
     "patch/invite_transport_curl.cpp"
     "patch/invite_service.cpp"
     "patch/invite_answer_apply.cpp"
+    "patch/invite_join_game.cpp"
     # #1139, docs/adr/0022: the render configuration as one log line (pure model, and the two observer hooks).
     "patch/render_config.cpp"
     "patch/render_config_hook.cpp"
@@ -101,6 +107,8 @@ set(PATCHES_SOURCES
     "patch/menu_version_label.cpp"
     # #906, ADR 0017 D4: the main-menu cards (pure logic in menu_page.h and menu_cards.h).
     "patch/menu_cards.cpp"
+    # #1420: the magnum, smg, Chain and rifle bullets get particle effects (pure logic in netgun_bullets.h).
+    "patch/netgun_bullets.cpp"
     "patch/splash_skip.cpp"
     # #896, #906: the UI text writer (pure logic in ui_text.h).
     "patch/ui_text.cpp"
@@ -180,6 +188,10 @@ set(PATCHES_HEADERS
     "lifecycle/boot_hook_policy.h"
     "lifecycle/crash_recovery_sites.h"
     "patch/resource_override.h"
+    "patch/server_bots.h"
+    "patch/server_bots_install.h"
+    "patch/server_team_size.h"
+    "patch/server_team_size_install.h"
     "patch/asset_cache.h"
     "patch/asset_registry.h"
     "patch/plugin_assets.h"
@@ -199,6 +211,8 @@ set(PATCHES_HEADERS
     "patch/invite_wizard.h"
     "patch/invite_worker.h"
     "patch/invite_answer_apply.h"
+    "patch/invite_join.h"
+    "patch/invite_join_game.h"
     "patch/invite_answer_text.h"
     "patch/invite_transport.h"
     "patch/invite_transport_curl.h"
@@ -206,9 +220,12 @@ set(PATCHES_HEADERS
     "patch/invite_config.h"
     "patch/menu_page.h"
     "patch/menu_cards.h"
+    "patch/netgun_bullets.h"
     "patch/guild_picker.h"
     "compat/evr_codec.h"
     "compat/lobby_frame.h"
+    "compat/lobby_join_state.h"
+    "patch/party_follow_dedup_rules.h"
     "patch/xpid_patch.h"
     "frame/frame_stats.h"
     "frame/tick.h"
@@ -617,6 +634,12 @@ if(BUILD_TESTING)
     target_link_libraries(test_host_json PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_host_json DISCOVERY_MODE PRE_TEST)
 
+    # The one console line the host writes when it stops the game or leaves it running without the runtime (#1252).
+    add_executable(test_host_stop_line tests/test_host_stop_line.cpp)
+    target_compile_options(test_host_stop_line PRIVATE -Werror)
+    target_link_libraries(test_host_stop_line PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_stop_line DISCOVERY_MODE PRE_TEST)
+
     add_executable(test_bootstrap_diagnostics tests/test_bootstrap_diagnostics.cpp)
     target_compile_options(test_bootstrap_diagnostics PRIVATE -Werror)
     target_link_libraries(test_bootstrap_diagnostics PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
@@ -911,6 +934,20 @@ if(BUILD_TESTING)
     target_include_directories(test_arena_round_time PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_arena_round_time PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_arena_round_time DISCOVERY_MODE PRE_TEST)
+
+    # #1423: AI bots on a dedicated server: the settings rewrite, the request, the schedule and the sites (server_bots.h).
+    add_executable(test_server_bots tests/test_server_bots.cpp)
+    set_source_files_properties(tests/test_server_bots.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_server_bots PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_server_bots PRIVATE GTest::gtest GTest::gtest_main nevr::plugin_sdk
+      nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_server_bots DISCOVERY_MODE PRE_TEST)
+    # #1422: a server's match team size, its two checked-patch sites driven on buffers (server_team_size.h).
+    add_executable(test_server_team_size tests/test_server_team_size.cpp)
+    set_source_files_properties(tests/test_server_team_size.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_server_team_size PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_server_team_size PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_server_team_size DISCOVERY_MODE PRE_TEST)
 
     # #982: the public Arena match clock keeps counting through goals (patch/arena_public_clock_rules.h).
     add_executable(test_arena_public_clock tests/test_arena_public_clock.cpp lifecycle/arena_round_time.cpp)
@@ -1301,6 +1338,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_socket_role PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_socket_role DISCOVERY_MODE PRE_TEST)
 
+    # #1254: what a refused login does (compat/login_refusal.h): header only, pure.
+    add_executable(test_login_refusal tests/test_login_refusal.cpp)
+    set_source_files_properties(tests/test_login_refusal.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_login_refusal PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_login_refusal PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_login_refusal DISCOVERY_MODE PRE_TEST)
+
     # #906, docs/adr/0017: the client half of the invite codes (patch/invite_wizard.h): header only, pure.
     # It links the generated symbol cache: the map cards' level names are the cache's, and the test reads them from it.
     add_executable(test_invite_wizard tests/test_invite_wizard.cpp log/symcache_data.cpp)
@@ -1323,6 +1367,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_invite_answer_text PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_invite_answer_text DISCOVERY_MODE PRE_TEST)
 
+    # #1401, docs/adr/0017 ("Join"): the join of a resolved code (patch/invite_join.h): header only, pure, a fake game seam.
+    add_executable(test_invite_join tests/test_invite_join.cpp)
+    set_source_files_properties(tests/test_invite_join.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_invite_join PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_invite_join PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_invite_join DISCOVERY_MODE PRE_TEST)
+
     # #1156, docs/adr/0017: the invite transport (patch/invite_transport.h, patch/invite_transport_curl.cpp): libcurl against a
     # scripted loopback server.
     add_executable(test_invite_transport tests/test_invite_transport.cpp patch/invite_transport_curl.cpp)
@@ -1337,6 +1388,14 @@ if(BUILD_TESTING)
     target_include_directories(test_invite_service PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_invite_service PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json CURL::libcurl ws2_32)
     gtest_discover_tests(test_invite_service DISCOVERY_MODE PRE_TEST)
+
+    # #1415, docs/adr/0017: the per-frame applier (patch/invite_answer_apply.cpp) against the real invite service; the writer,
+    # the join and the log are stubs (tests/invite_apply_stubs.cpp).
+    add_executable(test_invite_answer_apply tests/test_invite_answer_apply.cpp tests/invite_apply_stubs.cpp patch/invite_answer_apply.cpp patch/invite_service.cpp patch/invite_transport_curl.cpp)
+    set_source_files_properties(tests/test_invite_answer_apply.cpp tests/invite_apply_stubs.cpp patch/invite_answer_apply.cpp patch/invite_service.cpp patch/invite_transport_curl.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_invite_answer_apply PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_invite_answer_apply PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json CURL::libcurl ws2_32)
+    gtest_discover_tests(test_invite_answer_apply DISCOVERY_MODE PRE_TEST)
 
     # #906, docs/adr/0017: what the wizard's cards chose (patch/invite_choices.h): header only, pure.
     add_executable(test_invite_choices tests/test_invite_choices.cpp)
@@ -1446,6 +1505,13 @@ if(BUILD_TESTING)
     target_include_directories(test_lobby_full_backoff PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_lobby_full_backoff PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_lobby_full_backoff DISCOVERY_MODE PRE_TEST)
+
+    # test_party_follow_dedup.cpp (#1413): the lobby join state (compat/lobby_join_state.h) and the follow decision
+    # (patch/party_follow_dedup_rules.h). Both header-only, pure.
+    add_executable(test_party_follow_dedup tests/test_party_follow_dedup.cpp)
+    target_include_directories(test_party_follow_dedup PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_party_follow_dedup PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_party_follow_dedup DISCOVERY_MODE PRE_TEST)
 
     # test_menu_version_label.cpp (#747, header-only patch/menu_version_label_rules.h).
     add_executable(test_menu_version_label tests/test_menu_version_label.cpp)
@@ -1609,6 +1675,8 @@ if(BUILD_TESTING)
       # #703: resource_override registers the cache's overrides through the production cache.
       patch/asset_cache.cpp
       patch/resource_override.cpp
+      # #1420: the netgun bullet transforms, driven through the resource seam.
+      patch/netgun_bullets.cpp
       # #479: the XPID patch's failure path (g_bootHookFailed, never ServerFatal) is driven for real.
       patch/xpid_patch.cpp
       # ws_bridge.cpp calls nevr_system_info::Get(). Linked as a source rather than
@@ -1670,6 +1738,7 @@ if(BUILD_TESTING)
       patch/evrp_package.cpp
       patch/asset_cache.cpp
       patch/resource_override.cpp
+      patch/netgun_bullets.cpp
       patch/xpid_patch.cpp
       ext/plugin_loader.cpp
       ext/plugin_manifest.cpp
@@ -1824,8 +1893,8 @@ if(BUILD_TESTING)
     # test_rate_limiter.cpp (#894, header-only log/rate_limiter.h) ride in this
     # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_rate_limiter.cpp lifecycle/crash_dump_format.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_rate_limiter.cpp lifecycle/crash_dump_format.cpp
+      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_rate_limiter.cpp lifecycle/crash_dump_format.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_rate_limiter.cpp lifecycle/crash_dump_format.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_crash_recovery PRIVATE GTest::gtest GTest::gtest_main nevr::plugin_sdk)

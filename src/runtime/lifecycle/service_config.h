@@ -20,6 +20,14 @@
 /// absent; may be a stable "" if the key is present-but-empty (caller checks [0]).
 const char* NevrCfgGetFlat(const char* flatKey);
 
+/// True when config.yaml holds a LIST or a MAP under a migrated flat key: not a value. NevrCfgGetFlat returns null for it, as
+/// for an absent key, so a switch asks this too and reads it as unrecognised, never as the default (#1156, ADR 0017).
+bool NevrCfgGetFlatIsStructured(const char* flatKey);
+
+/// Where the config came from, for an operator-facing line (#1254): the config.yaml path that was loaded, or
+/// "none found, searched <paths>". Never null; loads the config on first call like every accessor here.
+const char* NevrCfgSource();
+
 /// A LIST-shaped migrated flat key (guilds, regions) as a CSV string — a yaml list
 /// `[a, b]` and a scalar CSV `"a,b"` both return "a,b" (the shape the game-JSON
 /// readers built into guilds=/regions= URL params). Null if unmapped or absent.

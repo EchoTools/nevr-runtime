@@ -5,22 +5,28 @@ A release is a version (plain semver, taken from the tag) plus GitHub's pre-rele
 file depends on that flag, so promoting a release changes no byte: this tool has no flag input.
 
   package_release.py tree  --version X.Y.Z --commit <sha40> --out DIR --dll BugSplat64.dll --runtime-dll nevr-runtime.dll
-                           --server-exe echovr_server.exe --installer-exe nevr-install.exe --pc-header H
+                           --server-exe echovr_server.exe --installer-exe install-nevr-runtime.exe --installer-compat-exe nevr-install.exe --pc-header H
       CI: gate the two DLLs and write the package tree (what the signing step signs) + release.json
   package_release.py seal  --tree DIR --out DIR [--require-signed]
       CI: zip the (signed or unsigned) tree with a SHA256SUMS regenerated from the files as they are now.
       The release is that one zip (the Quest library is built by its own job); it carries no Quest APK, and
       no top-level SHA256SUMS or RELEASE-NOTES.md.
-  package_release.py notes --assets DIR --out FILE
-      the release body: the notes plus a SHA-256 table of the release's two assets (the zip and the Quest
-      library) as they are in DIR, written after signing, from the final bytes
+  package_release.py notes --assets DIR --out FILE --base vX.Y.Z --rev vX.Y.Z [--repo DIR]
+      the release body (tools/package-release/RELEASE-BODY.template.md): a header, one line for players, and one
+      line per file. It holds no hash: the zip's own SHA256SUMS and the attestation carry integrity. Read the zip's
+      identity literals from DIR's zip. The player line is the sentences of the files under `release-headlines/` that
+      --rev has and --base does not (headline_line), joined in file-name order, else the fixed "Fixes and internal
+      changes." (the commits never write it). Each file is one change's sentence, written by the author of that
+      change in the same PR (RELEASING.md, "Write the release body"). A bad file fails `notes`; it never falls back
+      to the fixed sentence. On success `notes` writes one JSON line to stderr, {"event":"headlines","used":[paths],
+      "line":...,"base":...,"rev":...}, with an empty `used` when the fixed sentence stands.
   package_release.py stamp --dll BugSplat64.dll [--version X.Y.Z] [--commit <sha40>]
       CI: assert a DLL's one identity literal agrees with what the workflow computed (run on each of the two)
   package_release.py quest-library --lib libovrplatformloader.so --version X.Y.Z --commit <sha40>
       CI: assert the Quest library carries exactly this version and this commit. It has no identity literal:
       kVersion and the short kCommit (cmake/nevr_build_info.h.in) and the full commit of the sentinel's build
       record are separate NUL-bounded strings, so each is matched whole.
-  package_release.py --commit <sha40> --out DIR --dll ... --runtime-dll ... --server-exe ... --installer-exe ... --apk ... --pc-header ...
+  package_release.py --commit <sha40> --out DIR --dll ... --runtime-dll ... --server-exe ... --installer-exe ... --installer-compat-exe ... --apk ... --pc-header ...
                      --quest-header ... --quest-build-info ...        (`just package-dev`, a LOCAL build)
       the full gate for a local development build (its version is X.Y.(Z+1)-dev.N+sha, never a release),
       then the same tree + seal, with the tester Quest APK, its SHA256SUMS and notes. Never attached to a
@@ -40,6 +46,7 @@ import hashlib
 import json
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -50,8 +57,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_embedded_defaults as defaults_check  # noqa: E402
 import pe_version_info  # noqa: E402
 import quest_apk_version  # noqa: E402
+import release_audience_section  # noqa: E402
 
 PACKAGE_DIR = REPO / "tools" / "package-release"
+BODY_TEMPLATE = PACKAGE_DIR / "RELEASE-BODY.template.md"
 SENTINEL_IN_APK = "lib/arm64-v8a/libovrplatformloader.so"
 # The two DLLs of the package: the host the game loads, and the runtime the host loads at the rendezvous.
 HOST_DLL = "BugSplat64.dll"
@@ -60,7 +69,20 @@ RUNTIME_DLL = "nevr-runtime.dll"
 SERVER_EXE = "echovr_server.exe"
 # The core installer (installer/, ADR 0023) that install.ps1 and quest-install.ps1 call. It rides in the zip as its own
 # file, so the signed manifest's `contents` for the zip covers it.
-INSTALLER_EXE = "nevr-install.exe"
+INSTALLER_EXE = "install-nevr-runtime.exe"
+# The same file under its old name, kept in the zip only for programs outside this repository that still call it
+# (#1492). One build, copied once by the packaging step; the tree stage refuses a copy with other bytes. The removal
+# condition and the PR that deletes this copy are in RELEASING.md ("The installer's old name").
+INSTALLER_COMPAT_EXE = "nevr-install.exe"
+# The player line of the release body (headline_line): one file per change under HEADLINE_DIR, read only when the range
+# adds it. HEADLINE_LEGACY_FILE, the single shared file release-headline.txt, is refused wherever it exists: one file that
+# every change edits carries earlier sentences along. Limits: a sentence, and the joined line.
+HEADLINE_DIR = "release-headlines"
+HEADLINE_README = f"{HEADLINE_DIR}/README.md"
+HEADLINE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.txt")
+HEADLINE_LEGACY_FILE = "release-headline.txt"
+HEADLINE_MAX = 200
+HEADLINE_JOINED_MAX = 600
 
 # The one identity literal: NUL-bounded "NEVR-BUILD <version> <commit40>".
 IDENTITY = re.compile(rb"(?<=\x00)NEVR-BUILD ([0-9A-Za-z.+-]+) ([0-9a-f]{40})(?=\x00)")
@@ -175,9 +197,8 @@ def render(template: Path, values: dict, apk: bool = False) -> str:
         else:
             out.append(line)
     text = "".join(out)
-    for key, value in values.items():
-        text = text.replace(f"@{key}@", value)
-    return text
+    # One pass over the template, so a value (a headline holding "@ZIP@") is never expanded a second time.
+    return re.sub(r"@([A-Z_]+)@", lambda found: values.get(found.group(1), found.group(0)), text)
 
 
 def pe_has_certificate_table(path: Path) -> bool:
@@ -219,6 +240,12 @@ def windows_problems(args, dll: Path, runtime: Path) -> list:
     installer = Path(args.installer_exe)
     if not installer.is_file() or installer.read_bytes()[:2] != b"MZ":
         problems.append(f"windows: {INSTALLER_EXE} is missing or not a PE file: {installer}")
+    compat = Path(args.installer_compat_exe)
+    if not compat.is_file() or compat.read_bytes()[:2] != b"MZ":
+        problems.append(f"windows: {INSTALLER_COMPAT_EXE} is missing or not a PE file: {compat}")
+    elif installer.is_file() and compat.read_bytes() != installer.read_bytes():
+        problems.append(f"windows: {INSTALLER_COMPAT_EXE} is not the same bytes as {INSTALLER_EXE}: the old name is a copy "
+                        f"of the one build, never a second one")
     problems += [f"windows: {p}" for p in pe_version_info.check(dll, server, args.version or None, runtime)]
     return problems
 
@@ -326,6 +353,7 @@ def write_tree(args, out: Path, version: str) -> Path:
     shutil.copyfile(args.runtime_dll, tree / RUNTIME_DLL)
     shutil.copyfile(args.server_exe, tree / SERVER_EXE)
     shutil.copyfile(args.installer_exe, tree / INSTALLER_EXE)
+    shutil.copyfile(args.installer_compat_exe, tree / INSTALLER_COMPAT_EXE)
     shutil.copyfile(PACKAGE_DIR / "install.ps1", tree / "install.ps1")
     shutil.copyfile(PACKAGE_DIR / "uninstall.ps1", tree / "uninstall.ps1")
     shutil.copyfile(PACKAGE_DIR / "quest-diagnose.ps1", tree / "quest-diagnose.ps1")
@@ -340,11 +368,12 @@ def write_tree(args, out: Path, version: str) -> Path:
 SIGNING_TEXT = """Signing
 
 The build itself signs nothing. A separate signing step may sign BugSplat64.dll, nevr-runtime.dll,
-echovr_server.exe, nevr-install.exe, install.ps1, uninstall.ps1 and quest-diagnose.ps1 afterwards and replace this zip under the same name. This
+echovr_server.exe, install-nevr-runtime.exe, nevr-install.exe, install.ps1, uninstall.ps1 and
+quest-diagnose.ps1 afterwards and replace this zip under the same name. This
 text is the same either way: it says how to check, not which state your copy is in.
 
 A file is signed when it carries a signature:
-  BugSplat64.dll, nevr-runtime.dll, echovr_server.exe, nevr-install.exe
+  BugSplat64.dll, nevr-runtime.dll, echovr_server.exe, install-nevr-runtime.exe, nevr-install.exe
                               an Authenticode signature
                               (PowerShell: Get-AuthenticodeSignature .\\BugSplat64.dll)
   install.ps1, uninstall.ps1, quest-diagnose.ps1
@@ -367,7 +396,7 @@ def seal(tree: Path, out: Path, apk: Path = None, require_signed: bool = False) 
     if apk is not None:  # before anything is written: a foreign APK never rides a package
         check_apk_version(apk, version, commit)
     files = sorted(p for p in tree.iterdir() if p.is_file() and p.name != "SHA256SUMS")
-    for required in (HOST_DLL, RUNTIME_DLL, SERVER_EXE, INSTALLER_EXE):
+    for required in (HOST_DLL, RUNTIME_DLL, SERVER_EXE, INSTALLER_EXE, INSTALLER_COMPAT_EXE):
         if required not in {p.name for p in files}:
             raise GateFailure(f"{tree} has no {required}")
     if require_signed:
@@ -413,10 +442,92 @@ def quest_asset_name(version: str) -> str:
     return f"nevr-runtime-v{version}-quest-libovrplatformloader.so"
 
 
-def release_notes(assets: Path) -> str:
-    """The release body: the notes plus a SHA-256 table of the release's two assets as they are in `assets`.
-    The version and commit are the ones the zip's own BugSplat64.dll and nevr-runtime.dll carry (their identity
-    literals, which must agree), so the table cannot describe a zip that is not this release's."""
+def _git_out(repo: Path, *args: str) -> bytes:
+    try:
+        return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True).stdout
+    except subprocess.CalledProcessError as error:
+        raise GateFailure(f"git {' '.join(args)} in {repo} failed: {error.stderr.decode('utf-8', 'replace').strip()}")
+
+
+def _headline_paths(repo: Path, ref: str) -> set[str]:
+    """The paths under HEADLINE_DIR at `ref` (none when the directory is absent)."""
+    listed = _git_out(repo, "ls-tree", "-r", "--name-only", "-z", ref, "--", HEADLINE_DIR + "/").decode("utf-8", "replace")
+    return {path for path in listed.split("\0") if path}
+
+
+def shared_headline_file_problem(root: Path) -> str | None:
+    """The PR-time check on a working tree: the problem text when `release-headline.txt` exists under `root`, else None.
+    `notes` refuses the same file at the cut, which is too late to fix the tag's tree."""
+    if (root / HEADLINE_LEGACY_FILE).exists():
+        return (f"{HEADLINE_LEGACY_FILE} exists: it is replaced by {HEADLINE_DIR}/<topic>.txt, one file per change; "
+                f"move its sentence into a new file and delete it (see {HEADLINE_README})")
+    return None
+
+
+def headline_sentences(repo: Path, base: str, rev: str) -> list[tuple[str, str]]:
+    """The headline files the range adds, as (path, sentence) in path order. A file is added when its path is under
+    `release-headlines/` at `rev` and not at `base`: a path present at both refs is old by construction, whatever its content,
+    so a sentence already released can never come back. `release-headlines/README.md` is never a headline. A name that is not
+    `<letter or digit, then letters, digits, . _ ->.txt`, a file that is not UTF-8, empty, longer than one non-empty line, or a line outside 1 to
+    HEADLINE_MAX characters raises GateFailure naming the file. A line without a final ".", "!" or "?" gets a "." appended.
+    `release-headline.txt` at `rev` raises GateFailure: the single shared file is refused because every change edits it and
+    earlier sentences ride along, so each change has its own file."""
+    if _git_out(repo, "ls-tree", "--name-only", rev, "--", HEADLINE_LEGACY_FILE).strip():
+        raise GateFailure(f"{HEADLINE_LEGACY_FILE} exists at {rev}: the player line comes from files the range adds under "
+                          f"{HEADLINE_DIR}/, so add {HEADLINE_DIR}/<topic>.txt and delete {HEADLINE_LEGACY_FILE}")
+    sentences = []
+    for path in sorted(_headline_paths(repo, rev) - _headline_paths(repo, base)):
+        if path == HEADLINE_README:
+            continue
+        if not HEADLINE_NAME.fullmatch(path[len(HEADLINE_DIR) + 1:]):
+            raise GateFailure(f"{path} is added in {base}..{rev} but is not a headline file name: a headline is "
+                              f"{HEADLINE_DIR}/<a letter or digit, then letters, digits, '.', '_' or '-'>.txt, and {HEADLINE_README} is the "
+                              f"only other file")
+        try:
+            text = _git_out(repo, "show", f"{rev}:{path}").decode("utf-8-sig")
+        except UnicodeDecodeError:
+            raise GateFailure(f"{path} at {rev} is not UTF-8 text")
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            raise GateFailure(f"{path} at {rev} has no non-empty line: write the player line in it "
+                              f"(1 to {HEADLINE_MAX} characters), or delete the file")
+        if len(lines) > 1:
+            raise GateFailure(f"{path} at {rev} has {len(lines)} non-empty lines; a headline is one line, one sentence "
+                              f"about its change")
+        line = lines[0]
+        if len(line) > HEADLINE_MAX:
+            raise GateFailure(f"{path} at {rev}: its line is {len(line)} characters; the rule is 1 to {HEADLINE_MAX}")
+        sentences.append((path, line if line.endswith((".", "!", "?")) else line + "."))
+    return sentences
+
+
+def headline_line(repo: Path, base: str, rev: str) -> str | None:
+    """The player line, or None when the fixed sentence stands: the sentences of headline_sentences joined with one space
+    (at most HEADLINE_JOINED_MAX characters, else GateFailure naming 'the joined headline'). It never falls back to the
+    fixed sentence for a bad file."""
+    found = headline_sentences(repo, base, rev)
+    if not found:
+        return None
+    line = " ".join(sentence for _, sentence in found)
+    if len(line) > HEADLINE_JOINED_MAX:
+        raise GateFailure(f"the joined headline of {base}..{rev} is {len(line)} characters; the rule is at most "
+                          f"{HEADLINE_JOINED_MAX}: shorten a sentence in one of {', '.join(path for path, _ in found)}")
+    return line
+
+
+def headline_record(repo: Path, base: str, rev: str) -> dict:
+    """What the cut used, for the run's log: the headline files and the player line (the fixed sentence when none)."""
+    line = headline_line(repo, base, rev)
+    return {"tool": "package_release", "event": "headlines",
+            "used": [path for path, _ in headline_sentences(repo, base, rev)],
+            "line": line or release_audience_section.FALLBACK_PLAYER_LINE, "base": base, "rev": rev}
+
+
+def release_notes(assets: Path, repo: Path, base: str, rev: str) -> str:
+    """The release body for the two assets in `assets`: a header, the player line (the headline file's line when headline_line
+    gives one, else the fixed sentence), and one line per file. The version and commit are the ones the
+    zip's own BugSplat64.dll and nevr-runtime.dll carry (their identity literals, which must agree), so the body cannot
+    describe a zip that is not this release's. It holds no hash: the zip's SHA256SUMS and the attestation carry integrity."""
     zips = sorted(assets.glob("nevr-runtime-v*-windows.zip"))
     if len(zips) != 1:
         raise GateFailure(f"{assets}: expected exactly one nevr-runtime-v<X.Y.Z>-windows.zip, found {len(zips)}")
@@ -444,9 +555,10 @@ def release_notes(assets: Path) -> str:
     extra = sorted(p.name for p in assets.iterdir() if p.name not in (zip_path.name, quest.name))
     if extra:
         raise GateFailure(f"{assets}: files that are not release assets: {', '.join(extra)}")
-    values = {"VERSION": version, "COMMIT": commit, "ZIP": zip_path.name, "QUEST": quest.name,
-              "SHA_ZIP": sha256(zip_path), "SHA_QUEST": sha256(quest)}
-    return render(PACKAGE_DIR / "RELEASE-NOTES.template.md", values, apk=False)
+    values = {"VERSION": version,
+              "PLAYER_LINE": headline_line(repo, base, rev) or release_audience_section.FALLBACK_PLAYER_LINE,
+              "ZIP": zip_path.name, "APK": f"{package_base(version, commit)}-quest.apk", "QUEST": quest.name}
+    return render(BODY_TEMPLATE, values)
 
 
 def run_all(args) -> list:
@@ -471,6 +583,9 @@ def main(argv=None) -> int:
     elif mode == "notes":
         parser.add_argument("--assets", required=True, type=Path)
         parser.add_argument("--out", required=True, type=Path)
+        parser.add_argument("--repo", default=".", type=Path, help="the repository the range is read from")
+        parser.add_argument("--base", required=True, help="the older ref of the player line, excluded")
+        parser.add_argument("--rev", required=True, help="the newer ref of the player line, included")
     elif mode == "quest-library":
         parser.add_argument("--lib", required=True, type=Path)
         parser.add_argument("--version", required=True)
@@ -487,7 +602,9 @@ def main(argv=None) -> int:
         parser.add_argument("--dll", required=True, help="BugSplat64.dll, the host")
         parser.add_argument("--runtime-dll", required=True, help="nevr-runtime.dll, the runtime")
         parser.add_argument("--server-exe", required=True)
-        parser.add_argument("--installer-exe", required=True, help="nevr-install.exe, the core installer (installer/)")
+        parser.add_argument("--installer-exe", required=True, help="install-nevr-runtime.exe, the core installer (installer/)")
+        parser.add_argument("--installer-compat-exe", required=True,
+                            help="nevr-install.exe, the same bytes as --installer-exe, kept for callers that still use the old name")
         parser.add_argument("--pc-header", required=True)
         parser.add_argument("--defaults", default=str(REPO / "config" / "public-defaults.env"))
         if mode == "all":
@@ -516,8 +633,10 @@ def main(argv=None) -> int:
         if mode == "notes":
             if args.out.exists():
                 raise GateFailure(f"{args.out} exists; not overwritten")
-            body = release_notes(args.assets)
+            body = release_notes(args.assets, args.repo, args.base, args.rev)
+            record = headline_record(args.repo, args.base, args.rev)
             args.out.write_text(body, encoding="utf-8")
+            print(json.dumps(record, separators=(",", ":")), file=sys.stderr)
             written = [args.out]
         elif mode == "seal":
             written = seal(args.tree, args.out, require_signed=args.require_signed)

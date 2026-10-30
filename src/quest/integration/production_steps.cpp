@@ -13,10 +13,13 @@
 #include <thread>
 
 #include "activation.h"
+#include "credits_text.h"
 #include "hook_log.h"
 #include "hook_report.h"
 #include "sentinel.h"
 #include "sentinel_log.h"
+#include "splash_skip_hook.h"
+#include "ui_texture_mips.h"
 
 #include "quest/diag/hwdump_run.h"
 #include "quest/auth/quest_token_auth.h"
@@ -26,16 +29,19 @@
 #include "quest/integration/entry_hooks.h"
 #include "quest/integration/drop_report.h"
 #include "quest/integration/identity_source.h"
+#include "quest/integration/libr15_attach_step.h"
 #include "quest/integration/post_load.h"
 #include "quest/integration/self_check_wiring.h"
 #include "quest/integration/stage_log.h"
 #include "quest/integration/social_shim.h"
+#include "quest/invite/invite_run.h"
 #include "quest/login/login_hook.h"
 #include "quest/net/curl_ws_connector.h"
 #include "quest/net/session_bridge.h"
 #include "quest/plugin/plugin_plan.h"
 #include "quest/plugin/plugin_runtime.h"
 #include "quest/redirect/hook_adapter.h"
+#include "quest/social/lobby_full_hooks.h"
 #include "quest/social/menu_version_label.h"
 #include "quest/social/social_facade.h"
 #include "quest/social/social_frames.h"
@@ -225,6 +231,37 @@ nevr_quest::redirect::BridgeState BridgeProbe() {
   return {port != 0, port};
 }
 
+// --- invite codes (#966, docs/adr/0017) ----------------------------------------------------------
+
+// The invite service's lines go to the disk log with every other sentinel line, at the level the service gave them.
+void InviteLog(nevr_invite::LogLevel level, const std::string& line) {
+  nevr_quest::LogLevel mapped = nevr_quest::LogLevel::kInfo;
+  if (level == nevr_invite::LogLevel::Warning) mapped = nevr_quest::LogLevel::kWarn;
+  if (level == nevr_invite::LogLevel::Error) mapped = nevr_quest::LogLevel::kError;
+  try {
+    sentinel::Emit(mapped, line);
+  } catch (const std::exception&) {
+    sentinel::EmitFixed(nevr_quest::LogLevel::kError, "invite log line could not be written");
+  }
+}
+
+// The Quest token, read at each request: "" until the token auth session exists, and after it is torn down.
+std::string InviteToken() {
+  nevr::quest_auth::QuestTokenAuth* const auth = R().auth.load(std::memory_order_acquire);
+  return auth != nullptr ? auth->Token() : std::string();
+}
+
+// Starts the invite service with the token auth it reads its token from. Its requests wait for the session (reason=no_token)
+// rather than the sentinel waiting for them.
+void StartInviteService(const nevr_quest::ResolvedConfig& cfg) {
+  nevr_quest_invite::RunInputs inputs;
+  inputs.http_uri = cfg.httpUri.text;
+  inputs.invite_codes = cfg.effective.inviteCodes ? nevr_invite::Switch::On : nevr_invite::Switch::Off;
+  inputs.token = &InviteToken;
+  inputs.log = &InviteLog;
+  nevr_quest_invite::Start(std::move(inputs));
+}
+
 // --- post-load actions ---------------------------------------------------------------------------
 
 nevr_quest_login::BuildInfo ThisBuild() {
@@ -250,12 +287,6 @@ void LoginLog(nevr_quest_login::Level level, const char* event, const nevr_quest
 }
 
 // A stage line for a post-load install once it is settled (a retry is not a result).
-// A feature that would write a libr15 code page: one line names it and the issue it waits on.
-void LogCodeWriteSkipped(const char* feature) {
-  sentinel::LogFields(sentinel::LogLevel::kInfo, "code_write_skipped",
-                      {{"feature", feature}, {"reason", "execmod_denied_on_libr15"}, {"waits_on", "#1132"}});
-}
-
 ActionResult Staged(const char* stage, ActionResult result) {
   if (result.settle != Settle::kRetryLater) {
     const bool ok = result.settle == Settle::kDone;
@@ -355,10 +386,24 @@ ActionResult PluginsAction() noexcept {
   return {Settle::kDone, "ran"};
 }
 
-// Runs on the process-end hook's helper thread when the game's android_main returns (#621), on every launch: the plugin
-// entries that never got their moment end as `not_started` (#438), then the self-check report goes out (a no-op unless
-// the bridge that carries it enabled the self-checks).
+// The invite service's stop, for the noexcept teardown paths below: an exception escaping a noexcept function ends the
+// process, so a failure is logged here and the teardown goes on.
+void InviteShutdown() noexcept {
+  try {
+    nevr_quest_invite::Shutdown();
+  } catch (const std::exception&) {
+    sentinel::EmitFixed(nevr_quest::LogLevel::kError, "[NEVR.INVITE] invite service shutdown failed");
+  }
+}
+
+// Runs on the process-end hook's helper thread when the game's android_main returns (#621), on every launch: the login
+// prompt's counters are written once (#1391), the invite service stops, the plugin entries that never got their moment
+// end as `not_started` (#438), then the self-check report goes out (a no-op unless the bridge that carries it enabled
+// the self-checks). The counters come first so that the finish and the report stay adjacent, as
+// tools/verify_self_check_wiring.py requires.
 void OnGameProcessEnd() noexcept {
+  nevr_quest::integration::FlushLoginPromptCountersAtExit();
+  InviteShutdown();  // a request in flight returns at once; the worker is joined before the report
   nevr_quest::plugin::FinishPlugins(nevr_quest::plugin::reason::kGameExitedFirst);
   ReportAndroidMainReturned();
 }
@@ -411,7 +456,14 @@ class ProductionSteps final : public Steps {
   bool ResourceRequestLogWanted() override { return nevr_quest::integration::ResourceRequestLogEnabled(); }
   bool RegisterResourceRequestCounters() override { return nevr_quest::integration::RegisterResourceRequestCounters(); }
   bool RegisterTextureQualityCounters() override { return nevr_quest::integration::RegisterTextureQualityCounters(); }
+  bool RegisterClockLevelsCounters() override { return nevr_quest::integration::RegisterClockLevelsCounters(); }
   bool StartReporter() override { return sentinel::StartReporter(/*firstMs=*/1000, /*graceMs=*/10000, /*steadyMs=*/60000); }
+
+  bool AttachLibR15() override {
+    const AttachStepOutcome outcome = RunAttachStep(BuildAttachOptions());
+    detail_ = outcome.detail;
+    return outcome.verified;
+  }
 
   bool InstallClockHook() override {
     const bool ok = nevr_quest::integration::InstallClockHook();
@@ -419,8 +471,15 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
+  bool InstallFrameDispatch() override {
+    const bool ok = nevr_quest::integration::InstallFrameDispatchHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
   bool StartTokenAuth() override {
     const nevr_quest::ResolvedConfig& cfg = sentinel::ActiveConfig();
+    StartInviteService(cfg);  // before the early return: the service's own line (off, or on) is logged on every start
     if (cfg.httpUri.text.empty() || cfg.httpKey.text.empty()) {
       detail_ = "http_uri_or_key_absent";
       return false;
@@ -518,14 +577,32 @@ class ProductionSteps final : public Steps {
   }
 
   bool InstallCreditsText() override {
-    LogCodeWriteSkipped("credits_text");
-    detail_ = "skipped_waits_on_1132";
-    return true;  // a step that is deliberately not run did not fail
+    // A data store into the patched libr15's credits slot (ADR 0021 section 8). The install logs its own `credits_text` line,
+    // with the reason when it refuses (libr15_not_patched on the stock file, not_verified, a block the build did not render).
+    const bool ok = nevr_quest::credits_text::InstallCreditsText();
+    detail_ = ok ? "ok" : "refused";
+    return ok;
   }
 
   bool InstallMenuCards() override {
     const bool ok = nevr_quest::integration::InstallMenuCardsHook();
     detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
+  // The observer is wanted when the invite switch is on (network.invite_codes, ADR 0017 slice S1: off by default, and it needs
+  // login and a service address). Off, the step is skipped and nothing is hooked.
+  bool WizardMetricWanted() override { return sentinel::FeatureEnabled(nevr_quest::Feature::kInviteCodes); }
+
+  bool InstallWizardMetric() override {
+    const bool ok = nevr_quest::integration::InstallWizardMetricHook();
+    detail_ = ok ? "ok" : "wizard_observer_refused";
+    return ok;
+  }
+
+  bool ArmClockLevels(bool countersRegistered, bool overrideOn) override {
+    const bool ok = nevr_quest::integration::ArmClockLevelsHook(countersRegistered, overrideOn);
+    detail_ = ok ? "ok" : "counters_refused";
     return ok;
   }
 
@@ -624,17 +701,22 @@ class ProductionSteps final : public Steps {
     // The menu version label (#747) rides this step: one GOT hook on libr15's SetText slot, a data page, so it writes no code
     // page. The hook logs its own outcome; a refusal does not fail social.
     if (ok) quest_social::menu_version::InstallMenuVersionLabelHook();
-    // Four libr15 features write a code page (three inline-hook features here, the credits pairs in their own step) and
-    // are not installed: the current
-    // Horizon policy denies execmod on a written libr15 page, and the first call into it faults (#1127). Each waits on
-    // the build-time patch (#1132), which writes no code page at run time.
-    LogCodeWriteSkipped("lobby_full");
-    LogCodeWriteSkipped("ui_texture");
-    LogCodeWriteSkipped("splash_skip");
+    // The three libr15 features that were inline hooks are rows of the build-time patch (ADR 0021): each is activated with one
+    // atomic store into its row's slot once AttachLibR15 verified the file, and logs its own outcome. A row that is refused
+    // (an unverified libr15, a mismatched helper) stays pass-through; none of them fails social.
+    // The lobby-full policy (#1001) needs the facade in place (three rows: join, failure, success).
+    if (ok) quest_social::lobby_full::InstallLobbyFullHooks();
+    // The UI texture top mip (#961): one row, and the helper it calls is checked against its pinned prologue.
+    nevr_quest::ui_texture_mips::InstallUiTextureMips();
+    // The button-press splash skip (#962): one row on the menu widget's update.
+    if (ok) nevr_quest::splash_skip::Install();
     return ok;
   }
 
   bool StartHwDump() override { return nevr_quest::hwdump::StartHwDump(); }
+
+  bool InstallPnsProvider() override { return nevr_quest::integration::InstallPnsProviderHook(); }
+  bool PnsProviderAllowed() override { return nevr_quest::integration::PnsProviderEnabled(); }
 
   bool InstallDlopenHook(bool login, bool matchmaking, bool plugins) override {
     PostLoadActions actions;
@@ -714,6 +796,8 @@ void ShutdownIntegration() noexcept {
       bridge->Stop();
       delete bridge;
     }
+    // The invite worker reads its token from the auth session and posts through it: it is stopped before the session is deleted.
+    InviteShutdown();
     if (nevr::quest_auth::QuestTokenAuth* const auth = rt.auth.exchange(nullptr)) {
       auth->Stop();
       delete auth;

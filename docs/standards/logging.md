@@ -134,14 +134,50 @@ for row.
 | `[NEVR.UITEXTURE]`    | UI, splash and menu textures at their top mip: one line per UI texture naming the mip requested (`patch/ui_texture_mips.h`) |
 | `[NEVR.UI]`           | The UI text writer (`patch/ui_text.h`, `patch/ui_text_writer.h`, #896): `text writer ready`/`off` with the three pins, one `text written` or `text dropped` line per request with `actor`, `element`, `bytes` and `attempts`, and `text first write` with the writing thread and the game-loop thread. A text is never logged, only its size |
 | `[NEVR.INVITE]`       | Invite codes for the CREATE GAME / JOIN VIA CODE wizard (`patch/invite_wizard.h`, ADR 0017): a code is never logged, only `code_len` and `code_fp` |
-| `[NEVR.RENDER]`       | The render configuration of a PC client: one `render_config` line at the first rendered frame and one for every change, with the GPU, headset, refresh rate, render target and the game's graphics settings, plus the hooks' own install lines and a one-time `settings_trace` line (`patch/render_config.h`, `patch/render_config_hook.h`, ADR 0022) |
+| `[NEVR.RENDER]`       | The render configuration of a PC client: one `render_config` line at the first rendered frame and one for every change, with the GPU and the rating score the auto-selector reads (`gpu_score`), headset, refresh rate, render target and the game's graphics settings, plus the hooks' own install lines and a one-time `settings_trace` line (`patch/render_config.h`, `patch/render_config_hook.h`, ADR 0022) |
 | `[NEVR.HOST]`         | The `BugSplat64.dll` host's own JSONL records (`nevr-bootstrap.jsonl`): attach decisions, runtime load, crash dump. The value of the record's `tag` field; the host writes no `Log()` line |
+| `[NEVR.STOP]`         | The one line the `BugSplat64.dll` host writes to standard error when it stops the game or leaves it running without `nevr-runtime.dll` (`runtime/host/stop_line.h`, #1252), with the same facts in the host log. The value of the line's `tag` field; fields and exit codes in "The `NEVR.STOP` line" below |
 | `[NEVR.INSTALL]`      | The core installer's own JSONL run log (`installer/`, ADR 0023): one record per event, appended, never truncated; the value of the record's `tag` field. Never carries a token or a response body |
 | `[server_timing]`     | Server tick-rate / timing patches             |
 
 **Rule:** If you add a new component, add its tag to this table. If you
 are unsure which tag to use, use the nearest existing tag and note it
 for review.
+
+### The `NEVR.STOP` line
+
+Every way the host stops the game, and every attach that leaves the game running without the runtime, writes one JSON
+object on one line to standard error, once per run. A `-server` operator has a console and no dialog; this is what they
+read. The host log (`nevr-bootstrap.jsonl`) carries the same facts: in the `game_stop` record when the host ends the
+process, and in a `host_not_attached` record when the game keeps running. The line is built in a fixed buffer
+(`JsonLine`, no heap, no lock) and written with one `WriteFile`. The exit codes do not change.
+
+| Field             | Meaning                                                                                              |
+| ----------------- | ---------------------------------------------------------------------------------------------------- |
+| `tag`             | `NEVR.STOP`                                                                                          |
+| `ts`, `pid`       | UTC millisecond stamp and process id, as in every host record                                        |
+| `event`           | `stop`                                                                                               |
+| `stopped`         | `true` when the host ends the process; `false` when the game keeps running without the runtime       |
+| `code`            | The exit code, as a number. Absent when `stopped` is `false`                                         |
+| `reason`          | One token from the table below                                                                       |
+| `host_version`    | The version in the host's own `NEVR-BUILD <version> <commit40>` literal                              |
+| `runtime_version` | The version in `nevr-runtime.dll`'s literal when the host read the file, else `not loaded`           |
+| `detail`          | What is wrong and where, in words: the path searched, the verifier's own words, the Win32 error or the ABI status. When the runtime is absent from the nEVR root and a `nevr-runtime.dll` sits beside `BugSplat64.dll`, it names that folder, says the host does not load that file and names the root to move it to. A piece that does not fit the detail's buffer is left out whole and the detail ends with `[detail incomplete: a path did not fit]` |
+| `log`             | The full path of the host log file that accepted the record (the %TEMP% copy when the primary folder refused it); the record and the line name the same file. Empty when no log file did |
+
+| `reason`                 | `stopped` | `code`                    | Meaning                                                                         |
+| ------------------------ | --------- | ------------------------- | ------------------------------------------------------------------------------- |
+| `runtime_absent`         | `true`    | 78                        | No `nevr-runtime.dll` in the nEVR root                                          |
+| `runtime_refused`        | `true`    | 78                        | The signature check refused the file, or it could not be read; it is never loaded |
+| `dependency_load_failed` | `true`    | 78                        | A DLL that `nevr-runtime.dll` imports could not be loaded                       |
+| `load_failed`            | `true`    | 78                        | `LoadLibrary` failed for another cause                                          |
+| `missing_entry`          | `true`    | 78                        | The file has no `NEVR_GetRuntimeApi` export                                     |
+| `null_descriptor`        | `true`    | 78                        | `NEVR_GetRuntimeApi` returned no descriptor                                     |
+| `abi_rejected`           | `true`    | 78                        | The descriptor's ABI version or size was rejected                               |
+| `init_failed`            | `true`    | 78                        | `initialize` returned non-zero or threw                                         |
+| `no_path`                | `true`    | 78                        | No nEVR root could be formed (no `%LOCALAPPDATA%` that fits)                    |
+| `unsupported_image`      | `true`    | 3762421763 (`0xE0420003`) | The process image is not the supported `echovr.exe` build (the image guard)     |
+| `host_not_attached`      | `false`   | none                      | The image check, the prologue check or the hook install failed: no detour was installed and the game runs without the runtime. `detail` names the step |
 
 ---
 
@@ -599,25 +635,34 @@ call it (`PluginLogBind(ctx)` in init, then `PluginLog`, `PluginLogWarning`, `Pl
 
 ### Rule 16: A client records the lobby requests it sends and the answers it gets
 
-A client's bridge writes one Info record for each lobby message that decides where the player ends up, so a
-tester's log answers "how many join attempts did this client make, and what did each get". All four lines carry
+A client writes one Info record for each lobby message that decides where the player ends up (the PC bridge writes
+all four lines; the Quest router writes the two session lines), so a tester's log answers "how many join attempts did this client make, and what did each get". All four lines carry
 the tag `[NEVR.WS]` and the connection index (Rule 9):
 
 ```
 [NEVR.WS] lobby find requested conn=2 mode=<name or 0x..> entrants=3 accounts=OVR-ORG-1,OVR-ORG-2,OVR-ORG-3 current_lobby=<GUID or none> group=<GUID>
 [NEVR.WS] lobby join requested conn=3 lobby=<GUID> entrants=1 accounts=OVR-ORG-1
-[NEVR.WS] lobby session success conn=3 lobby=<GUID> group=<GUID>
-[NEVR.WS] lobby session failure conn=3 code=8 reason=lobby_full group=<GUID>
+[NEVR.WS] lobby session success conn=3 lobby=<GUID> group=<GUID> party_id=<n|none> party_size=<n> party_leader=<yes|no|unknown> last_request=<find|join|none> last_request_age_ms=<n|none> request_outstanding=<yes|no>
+[NEVR.WS] lobby session failure conn=3 code=8 reason=lobby_full group=<GUID> message_bytes=<n> party_id=<n|none> party_size=<n> party_leader=<yes|no|unknown> last_request=<find|join|none> last_request_age_ms=<n|none> request_outstanding=<yes|no>
 ```
 
 - **Ids, not names.** A lobby or group is its GUID in upper case and the Windows layout, the text the service
   writes as the party data's `lobbyid`; an entrant is its XPID. `current_lobby=none` is a find from no lobby.
 - **The outcome is the code.** `code` is the number in the frame and `reason` is the game's own name for it
   (echovr.exe 0x14017d380, `CR15NetClientLobby::LobbySessionFailureCB`: 0 to 13, `lobby_full` is 8); a number
-  outside 0 to 13 reads `unknown`. A failure frame carries no lobby id: pair it with the request before it on
-  the same `conn`.
+  outside 0 to 13 reads `unknown`. A failure frame carries no lobby id, so a session record names the request it
+  answers through `last_request` (below), not through its `conn`.
+- **The party and the request a session record names.** `party_id`, `party_size` and `party_leader` are the party
+  state when the record is written: `party_id=none party_size=0 party_leader=no` outside a party; `party_leader` is
+  `yes` when the owner is the local account, `no` when another account owns the party, and `unknown` while either
+  id is still zero. `last_request` is the last find or join the game sent on this client, on any connection, and
+  `last_request_age_ms` is the time from that request to this answer (`0` when the clock went backwards).
+  `request_outstanding=yes` only for the first answer to that request, so a second answer reads `no`. With no
+  request sent since the process started, the three request fields read `none`, `none` and `no`. An answer whose
+  record the rate limit suppresses still takes its request (see Rate), so the next written record is correct.
 - **Remote text is not a field** (Rule 4). The settings JSON of a request and the message of a failure are
-  never read out.
+  never read out. A failure's message is counted instead: `message_bytes=<n>` is the number of its bytes before
+  the NUL, at most the field's 64, and `0` when the message is empty or absent.
 - **A frame the decode cannot read** is a Warning, `lobby <find request|join request|session success|session
   failure> could not be read conn=<n> payload_bytes=<n>`. Nothing is read past the frame's end.
 - **A client only, until `LogFrameMessages` moves to Debug.** On a dedicated server `LogFrameMessages` in
@@ -631,12 +676,18 @@ the tag `[NEVR.WS]` and the connection index (Rule 9):
   `[NEVR.WS] lobby frame records suppressed kind=<find|join|success|failure> count=<n> window_ms=10000`, with
   the exact number of records the window did not write, so requests per second are `(10 + count) / 10` for a
   full window.
-- **Not covered.** The create request, the legacy-family symbols (`compat/legacy_codec.h`) and the Quest
-  target (`src/quest`).
+- **Not covered.** The create request and the legacy-family symbols (`compat/legacy_codec.h`). The Quest target
+  writes the two `lobby session` records, from the answers its router hands the game (`compat/session_router.cpp`,
+  wired in `src/quest/net/session_bridge.cpp`), with the same text. It writes no find or join record, so a request
+  is not logged on Quest, and its limit counts only the success and failure kinds.
 
-**Where:** `src/runtime/compat/lobby_frame.h` (decode, text, limiter) and `LogClientLobbyMessage` in
-`src/runtime/compat/ws_bridge.cpp`; tests `WsBridgeLobbyFrameLog` in `src/runtime/tests/test_behavioral.cpp` and
-`src/runtime/tests/test_lobby_frame.cpp`.
+**Where:** `src/runtime/compat/lobby_frame.h` (decode, text, limiter, request tracker, party fields, the session
+record, and `ClientLobbyRecords`, which both writers use); `LogClientLobbyMessage` in
+`src/runtime/compat/ws_bridge.cpp` (PC) and `Router::LobbyAnswersLocked` in `src/runtime/compat/session_router.cpp`
+(Quest). Tests: `WsBridgeLobbyFrameLog` in `src/runtime/tests/test_behavioral.cpp`; `LobbyFrameLimiter`,
+`LobbyFrameRequests`, `LobbyFrameText` and `LobbyFrameRecords` in `src/runtime/tests/test_lobby_frame.cpp`; the
+`lobby records` cases in `src/quest/tests/session_router_test.cpp`. Both suites compare their output with the
+expected lines in `src/runtime/tests/lobby_record_golden.h`, so the two writers' bytes are pinned to one text.
 
 ---
 

@@ -17,7 +17,11 @@
 // resolves, login when the bridge is on and `auth.server_key` resolves; the social facade is on unless
 // `social.facade` is false (PC's key and default) and still needs login here; its status names ride with it.
 // `social.send_presence_to_meta: false` answers the rich presence locally; `diagnostics.hardware_dump: true`
-// turns the hardware dump on, and `diagnostics.ui_event_probe` (on by default) sets the invite/party tab event (#318).
+// turns the hardware dump on, `diagnostics.ui_event_probe` (on by default) sets the invite/party tab event (#318),
+// `diagnostics.pnsrad_provider: true` loads libpnsrad as the platform provider instead of libpnsovr (#1220; needs login), and
+// `diagnostics.clock_levels_override` (default false) decides whether the CPU and GPU clock levels libr15 asks VrApi for are
+// raised from (2, 2) to (4, 4) (#928), and `network.invite_codes` (#966) turns the invite codes on (off unless the file says on;
+// it needs login and `auth.http_uri`).
 // A feature whose prerequisite is off or missing is forced off with a logged reason.
 //
 // `graphics.texture_quality` (#943) is one of stock, very_low, low, medium, high, very_high, ultra (texture_quality.h); absent, it is
@@ -44,7 +48,19 @@ inline constexpr const char* kConfigFileName = "config.yaml";
 inline constexpr const char* kLegacyConfigFileName = "nevr-quest.json";
 inline constexpr std::size_t kMaxConfigBytes = 64 * 1024;
 
-enum class Feature { kRedirect, kBridge, kLogin, kSocial, kHwDump, kPresenceNames, kPresenceLocal, kUiEventProbe };
+enum class Feature {
+  kRedirect,
+  kBridge,
+  kLogin,
+  kSocial,
+  kHwDump,
+  kPresenceNames,
+  kPresenceLocal,
+  kUiEventProbe,
+  kPnsradProvider,
+  kClockLevels,
+  kInviteCodes,
+};
 
 enum class Source { kAbsent, kEmbedded, kFile };
 
@@ -85,6 +101,16 @@ struct Features {
   // event, which switches the tablet to its Friends list. On by default; `diagnostics.ui_event_probe: false` turns it
   // off, and it needs the social facade.
   bool uiEventProbe = true;
+  // Raise the clock levels libr15 asks VrApi for from (2, 2) to (4, 4) (#928): `diagnostics.clock_levels_override`. The
+  // render-configuration hook's handler reports the levels whatever this says; this decides whether it rewrites them. No
+  // prerequisite. Off by default, in the struct and in the configuration: it stays off until a headset A/B shows a benefit.
+  bool clockLevels = false;
+  // The game's platform provider is its own libpnsrad, never libpnsovr (#1220, docs/adr/0026): `diagnostics.pnsrad_provider: true`.
+  // Off by default: nothing sends the login on the rad provider yet (#1220). Needs login.
+  bool pnsradProvider = false;
+  // The invite codes for the CREATE GAME / JOIN VIA CODE wizard (#966, docs/adr/0017): `network.invite_codes`, read with the
+  // PC's switch words and off unless the file says on. Needs login (the token) and auth.http_uri (where the token goes).
+  bool inviteCodes = false;
 };
 
 // The texture-quality setting (#943), after the file and the default have spoken.

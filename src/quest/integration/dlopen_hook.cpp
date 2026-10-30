@@ -36,7 +36,7 @@ NEVR_HOOK_RECORD(kDlopenHook, DlopenThunk, &HookedDlopen);
 
 sentinel::GotTarget LibR15Dlopen() {
   return {sentinel::pinned::kLibR15, "dlopen", sentinel::RelocKind::kJumpSlot,
-          sentinel::pinned::kLibR15BuildId, 0x36c6380ULL};
+          sentinel::pinned::LibR15PatchedBuildId(), 0x36c6380ULL};
 }
 
 DlopenInstall InstallDlopenHook(sentinel::GotStatus* status) noexcept {

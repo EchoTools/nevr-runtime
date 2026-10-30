@@ -60,6 +60,8 @@ BRAND_PROSE_SPELLINGS = {
     "README.md": {"nEVR"},
     "docs/README.md": {"nEVR"},
     "RELEASING.md": {"nEVR"},
+    "tools/package-release/RELEASE-BODY.template.md": {"nEVR"},
+    "tools/tests/test_package_release.py": {"nEVR"},
     "docs/engine/asset-system.md": {"nEVR"},
     "docs/adr/0003-quest-networking-port.md": {"nEVR"},
     "docs/adr/0004-quest-verification-regime.md": {"nEVR"},
@@ -80,6 +82,10 @@ BRAND_PROSE_SPELLINGS = {
     "src/quest/social/menu_version_label.cpp": {"nEVR"},  # the Quest menu label: the text a player sees
     "src/runtime/ext/plugin_refusal_notice.h": {"nEVR"},
     "src/runtime/host/stop_notice.h": {"nEVR"},  # the player's text when the runtime did not load
+    "src/runtime/host/stop_line.cpp": {"nEVR"},  # the detail an operator reads: "no nEVR root"
+    "src/runtime/tests/test_host_stop_line.cpp": {"nEVR"},  # the dialog text the tests check
+    "src/runtime/tests/test_host_runtime_verify.cpp": {"nEVR"},  # the dialog's version line
+    "src/runtime/tests/rendezvous/rendezvous_test.cpp": {"nEVR"},  # the dialog text the harness reads
     "src/runtime/tests/test_host_rendezvous.cpp": {"nEVR"},  # asserts that text
     "src/quest/tests/menu_version_label_test.cpp": {"nEVR"},  # the label text the Quest menu shows
     "src/runtime/tests/test_menu_version_label.cpp": {"nEVR"},  # the label text the menu shows
@@ -97,6 +103,9 @@ BRAND_PROSE_SPELLINGS = {
     "docs/beta/INSTALL.md": {"nEVR"},  # prose: update nEVR through the launcher
     "installer/src/launcher.rs": {"nEVR"},  # comment prose, and the version text the refusal line shows
     "installer/src/session.rs": {"nEVR"},  # the refusal line a player reads: "nEVR 5.4.3 is installed"
+    "installer/src/main.rs": {"nEVR"},  # the usage line and the root refusal an operator reads (#1353)
+    "installer/tests/nevr_root.rs": {"nEVR"},  # the refusal reason the test asserts (#1353)
+    "tools/package-release/install.ps1": {"nEVR"},  # the header comment on -Root (#1353)
 }
 
 

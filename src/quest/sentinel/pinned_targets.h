@@ -22,11 +22,17 @@
 
 #include "callback_thunk.h"
 #include "got_hook.h"
+#include "libr15_identity.h"
 
 namespace sentinel::pinned {
 
 inline constexpr const char* kLibR15 = "libr15.so";
-inline constexpr const char* kLibR15BuildId = "b243509c08ce677aeb95fa348016949b3fc45230";
+// The GNU build ID of the STOCK libr15.so in the store APK (the file the patcher reads, the plugins declare and the pinned
+// tests open); equal to nevr_quest::patch::kLibR15StockBuildId (static_assert in libr15_identity.h). It is a literal here
+// because the plugin fixture's CMake and tools/quest_apk_patch_map.py read it from this line.
+inline constexpr const char* kLibR15StockBuildId = "b243509c08ce677aeb95fa348016949b3fc45230";
+// What the running process checks the live libr15 note against is LibR15PatchedBuildId() (libr15_identity.h): the ID of
+// the file the build-time patcher wrote (docs/adr/0021 section 7).
 inline constexpr const char* kMatchmaking = "libpnsradmatchmaking.so";
 inline constexpr const char* kMatchmakingBuildId = "8c4fddc079eae65909530132a56c48da48b2708c";
 
@@ -255,6 +261,22 @@ inline constexpr const char* kAsyncResourceIOCallbackSymbol =
 inline constexpr const char* kMemoryContextSymbol = "_ZN10NRadEngine14CMemoryContext7contextE";
 inline constexpr std::uint64_t kMemoryContextVaddr = 0x37688c0;
 
+// NRadEngine::NRadGame::NR15Logger::MetricLog(char const* json, unsigned long long length), defined in libr15 at 0x120cc50
+// (the store file: `aarch64-linux-gnu-objdump -d`, the symbol's own value in `.dynsym`). The json pointer arrives in x0 and
+// its length in x1 (`mov x19, x1` at 0x120cc88 and `mov x20, x0` at 0x120cc8c). Its one caller in libr15 is
+// CR15NetJsonLog::WriteLog, so it runs once per metric event. It returns at once unless two flag bytes are set (U2 in
+// the Quest plan: a headset run counts the calls). The observer (quest/invite/wizard_metric_hook.h, ADR 0017) installs on
+// the JUMP_SLOT libr15's own call sites load; the slot holds one entry for the symbol in the store file's relocation table.
+inline constexpr const char* kMetricLogSymbol = "_ZN10NRadEngine8NRadGame10NR15Logger9MetricLogEPKcy";
+inline constexpr std::uint64_t kMetricLogVaddr = 0x120cc50;
+inline constexpr std::uint64_t kMetricLogSlotVaddr = 0x36da2c8;
+// The first four instructions, as the observer checks them before it installs (`stp x25, x24, [sp, #-64]!` and three
+// more `stp`s; the store file at 0x120cc50 through 0x120cc5c).
+inline constexpr std::uint32_t kMetricLogCode[4] = {0xa9bc63f9, 0xa9015bf7, 0xa90253f5, 0xa9037bf3};
+using MetricLogSig = void(const char* json, unsigned long long length);
+struct LibR15MetricLogTag {};
+using LibR15MetricLogThunk = CallbackThunk<LibR15MetricLogTag, MetricLogSig>;
+
 // android_main(android_app*), defined in libr15 at 0xf784c4 and called by the native-activity glue's thread entry
 // through libr15's own PLT (`mov x0, x19; bl 0xf27bc0` at 0xf79a4c; the stub loads JUMP_SLOT 0x36eb4c8). The glue
 // ignores the result and then runs its teardown. android_main shuts the engine down after Main returns and, when
@@ -331,6 +353,62 @@ inline constexpr const char* kMinOSBuildVersionSymbol = "_ZN10NRadEngine18kMinOS
 inline constexpr std::uint64_t kMinOSBuildVersionVaddr = 0x2b9ca88;
 inline constexpr std::uint64_t kMinOSBuildVersionValue = 6023800249000000ULL;
 
+// The platform provider (#1220, docs/adr/0026). libr15 reaches a provider only through its own JUMP_SLOTs; each function
+// below is defined in libr15 and called through libr15's PLT stub, from the call sites listed (got_pinned_test.cpp proves
+// the stub loads the slot and that these are its only `b`/`bl` callers).
+//
+// NRadEngine::CNSProvider::Create(unsigned long& handle, char const* name, void const* json, SNSProviderCallbacks const&)
+// (0x192f3e4): unloads a nonzero `handle`, loads the module `name` (CModuleLoader::Load, which keeps a module already
+// loaded without running its RadPlugin* entries again) and stores its handle; `json` is a CJson* the module's RadPluginMain
+// reads. Returns 0 on success (w0). CR15Game::Initialize calls it twice: the platform provider at 0x11f9f80 (`pnsovr`, or
+// `pnsdemo` under -noovr, with a json of appid, lobbyversion, headsettype, activity and javaenv) and `pnsrad` at 0x11f9fdc
+// with a null json.
+inline constexpr const char* kProviderCreateSymbol =
+    "_ZN10NRadEngine11CNSProvider6CreateERmPKcPKvRKNS_20SNSProviderCallbacksE";
+inline constexpr std::uint64_t kProviderCreateVaddr = 0x192f3e4;
+inline constexpr std::uint64_t kProviderCreateStub = 0xf31580;
+inline constexpr std::uint64_t kProviderCreateCallSites[] = {0x11f9f80, 0x11f9fdc};  // CR15Game::Initialize
+using ProviderCreateSig = int(unsigned long* handle, const char* name, const void* json, const void* callbacks);
+struct LibR15ProviderCreateTag {};
+using LibR15ProviderCreateThunk = CallbackThunk<LibR15ProviderCreateTag, ProviderCreateSig>;
+// NRadEngine::CNSProvider::Destroy(unsigned long handle) (0x192f5c0): `cbz x0; b CModuleLoader::Unload`, which calls the
+// module's RadPluginShutdown and then CSysModule::Unload(handle, 0), the dlclose (0x281a084-0x281a0c0). CR15Game::
+// ShutdownEngine calls it on the pnsdemo, pnsrad and pnsovr handles in that order (0x11f500c, 0x11f5014, 0x11f501c).
+inline constexpr const char* kProviderDestroySymbol = "_ZN10NRadEngine11CNSProvider7DestroyEm";
+inline constexpr std::uint64_t kProviderDestroyVaddr = 0x192f5c0;
+inline constexpr std::uint64_t kProviderDestroyStub = 0xf537e0;
+inline constexpr std::uint64_t kProviderDestroyCallSites[] = {0x11f500c, 0x11f5014, 0x11f501c};  // ShutdownEngine
+using ProviderDestroySig = void(unsigned long handle);
+struct LibR15ProviderDestroyTag {};
+using LibR15ProviderDestroyThunk = CallbackThunk<LibR15ProviderDestroyTag, ProviderDestroySig>;
+// NRadEngine::CSysModule::Unload(unsigned long handle, unsigned int) (0x2a9e4a0, exported): with 0 as the second argument
+// it is the dlclose alone. The Destroy hook calls it for a handle whose module was already shut down.
+inline constexpr const char* kSysModuleUnloadSymbol = "_ZN10NRadEngine10CSysModule6UnloadEmj";
+inline constexpr std::uint64_t kSysModuleUnloadVaddr = 0x2a9e4a0;
+using SysModuleUnloadFn = void (*)(unsigned long handle, unsigned int how);
+// NRadEngine::CJson::TString(char const* path, char const* fallback, unsigned int) const (0xfa2e7c, exported): the string
+// at `path`, else `fallback`. The Create hook reads the platform json's appid with it before it drops that json.
+inline constexpr const char* kCJsonTStringSymbol = "_ZNK10NRadEngine5CJson7TStringEPKcS2_j";
+inline constexpr std::uint64_t kCJsonTStringVaddr = 0xfa2e7c;
+using CJsonTStringFn = const char* (*)(const void* json, const char* path, const char* fallback, unsigned int flags);
+// NRadEngine::CNSProvider::ProviderID(unsigned long) (0x192f27c) and UserProviderID(unsigned long) (0x192f330): the
+// module's `ProviderID`/`UserProviderID` export, called with no argument, or -1 when the handle is 0 or the module has none.
+// The return is the provider's CSymbol64 in x0. ProviderID is called from 9 places (lobby Find/Join, PartyAddDemoMember),
+// UserProviderID from 19 (party, invite, friend-request UI); none is a hook target by itself, so no call site is pinned.
+inline constexpr const char* kProviderIdSymbol = "_ZN10NRadEngine11CNSProvider10ProviderIDEm";
+inline constexpr std::uint64_t kProviderIdVaddr = 0x192f27c;
+inline constexpr std::uint64_t kProviderIdStub = 0xf2b4e0;
+inline constexpr std::size_t kProviderIdCallers = 9;
+inline constexpr const char* kUserProviderIdSymbol = "_ZN10NRadEngine11CNSProvider14UserProviderIDEm";
+inline constexpr std::uint64_t kUserProviderIdVaddr = 0x192f330;
+inline constexpr std::uint64_t kUserProviderIdStub = 0xf34a80;
+inline constexpr std::size_t kUserProviderIdCallers = 19;
+using ProviderIdSig = std::uint64_t(unsigned long handle);
+struct LibR15ProviderIdTag {};
+struct LibR15UserProviderIdTag {};
+using LibR15ProviderIdThunk = CallbackThunk<LibR15ProviderIdTag, ProviderIdSig>;
+using LibR15UserProviderIdThunk = CallbackThunk<LibR15UserProviderIdTag, ProviderIdSig>;
+
 // NRadEngine::NRadGame::CR15UIPage2EnablePageNode::Enter(SR15UIPage2EnablePageNodeData const&), defined in
 // libr15 at 0x1fc210c: the UI script node that enables a page. `node` (x0) is the node object, which is the
 // data record plus 0x20 (`node == data + 0x20`, checked by the hook), and `data` (x1) is the record. It
@@ -396,15 +474,17 @@ inline constexpr PageName kPageNames[] = {
 };
 }  // namespace ui_layout
 
-// CR15VRMenuWidgetCS::Update(), the pointer-ray menu widget's per-frame update, defined in libr15 at pinned 0x1f9a7a0
-// (ReVault 0x209a7a0 = pinned + 0x100000; `revault_function 0x209a7a0`). The engine registers its address
-// (R15RegisterComponentSystemUpdates), so no GOT slot names it: the splash skip hooks the entry (inline, arm64).
-// got_pinned_test reads the four words below at this vaddr in the real library.
-// Its first four words are `sub sp,sp,#0x110; stp d9,d8; stp x28,x26; stp x25,x24`; the widget fields the hook
-// reads (ctx +0x80, defs +0xb8, dense +0xf8, links +0x100, bounds +0xf2/+0xf4, input +0x138) are the ones the
-// update itself reads (the PC twin's offsets, checked against this decompilation).
-inline constexpr std::uint64_t kWidgetUpdateVaddr = 0x1f9a7a0;
-inline constexpr std::uint32_t kWidgetUpdateCode[4] = {0xd10443ffu, 0x6d0b23e9u, 0xa90c6bfcu, 0xa90d63f9u};
+// CR15VRMenuWidgetCS::Update(), the pointer-ray menu widget's per-frame update (ReVault 0x209a7a0), is a row of the
+// build-time patch table (`splash_skip.widget_update`, quest/patch/libr15_patch_table.h): the engine registers its
+// address (R15RegisterComponentSystemUpdates), so no GOT slot names it, and the splash skip activates the row. The
+// widget fields the hook reads (ctx +0x80, defs +0xb8, dense +0xf8, links +0x100, bounds +0xf2/+0xf4, input +0x138) are
+// the ones the update itself reads (the PC twin's offsets, checked against this decompilation). The table's stock words
+// at the site are checked against the store file by libr15_patcher_pinned_test.
+
+// NRadEngine::CGTextureResource::ForceLoadAllMips (libr15 0x18e674c pinned; ReVault 0x19e674c): the function the UI texture
+// hook calls. Its first four words are `sub sp,sp,#0xd0; str x20,[sp,#0xb0]; stp x19,x30,[sp,#0xc0]; ldr x8,[x0,#0x70]`.
+inline constexpr std::uint64_t kForceLoadAllMipsVaddr = 0x18e674c;
+inline constexpr std::uint32_t kForceLoadAllMipsCode[4] = {0xD10343FFu, 0xF9005BF4u, 0xA90C7BF3u, 0xF9403808u};
 
 // NRadEngine::CInputListener::Pressed(state, id), the body behind the thunk at pinned 0x1037be0 (its `br` goes to
 // pinned 0x2539920; ReVault 0x2639920). It reads the button table at state+0x80/+0x50 and returns bit 2 of the entry's
@@ -445,23 +525,36 @@ using QuitOnErrorSig = void(CR15NetGameOpaque* self);
 inline constexpr const char* kBeginLogInSymbol = "_ZN10NRadEngine8NRadGame11CR15NetGame10BeginLogInEv";
 inline constexpr std::uint64_t kBeginLogInVaddr = 0x12917b8;
 inline constexpr std::uint32_t kBeginLogInCode[4] = {0xf81c0ffc, 0xa9015bf7, 0xa90253f5, 0xa9037bf3};
+// The main-menu join (#966 S4, docs/adr/0017). CR15Game::BeginMultiplayer() (libr15 0x1201be4; ReVault 0x1301be4, the 52-byte
+// wrapper that calls the settings body through a thunk) takes the game object in x0 and begins the staged match. Its first 16
+// bytes, read from libr15 in ReVault (revault_read_memory 0x1301be4, 16 bytes).
+inline constexpr std::uint64_t kBeginMultiplayerVaddr = 0x1201be4;
+inline constexpr std::uint32_t kBeginMultiplayerCode[4] = {0xd10183ff, 0xa904fbff, 0xd2c00068, 0x92800009};
+// CR15Game::EnableTransitionMenu (libr15 0x12005fc; ReVault 0x13005fc, the plan's "mp_transition"): sends one component event to
+// the menu gamespace (CR15Game+0x7af0) and runs before BeginMultiplayer. First 16 bytes from ReVault 0x13005fc.
+inline constexpr std::uint64_t kEnableTransitionMenuVaddr = 0x12005fc;
+inline constexpr std::uint32_t kEnableTransitionMenuCode[4] = {0xd10103ff, 0xa9037bf3, 0xf97d7813, 0xb40001d3};
 using BeginLogInSig = void(CR15NetGameOpaque* self);
 
 // NRadEngine::CncaGameSpace::SendComponentEvent(CSymbol64 event, SActor actor, CSymbol64 key, uint flag), defined
 // in libr15 at 0x17fb0f8 (`this` = the game space in x0, event in x1, actor in x2, key in x3, flag in w4; no
 // return value; ReVault lists it at 0x18fb0f8, its addresses for this module being 0x100000 above the loaded
-// ones). QuitOnError calls it as (space, 0x60ba106e8f93f286, 0xffffffffffff, ~0, 1). The RETRY button of the
-// login-failed page sends the graph event 0x8f0094c7bb02681c with the key 0x34f99a282ce78d72 (the third handler
-// of script graph 7f2363b8976491aa's event_handler, which forks the BeginLogin and screen-tint timeline); the
-// login prompt hook sends the same event once it has called BeginLogIn, so the page script that would run for
-// the player's select runs (#672). Reached like QuitOnError: build ID, first four instructions, base + address.
+// ones). QuitOnError calls it as (space, 0x60ba106e8f93f286, 0xffffffffffff, ~0, 1). The login prompt hook sends
+// evt_btn_clicked (kRetrySelectEvent) with the key of the login-failed page's btn_exit branch (kLoginPageExitKey) and
+// the actor kAllActors. It sends this select alone: BeginLogIn runs only in the hook's fallback, when the select is
+// unavailable or has no effect 2 s after it (kRetryFallbackNs, login_prompt_hook.cpp). That key is not RETRY's (issue
+// #1391, follow-up RE: the branch's thread body is empty). Whether the send reaches the page script is not established
+// (#1391). Reached like QuitOnError: build ID, first four instructions, base + address.
 // sub sp, sp, #0x40; mov x8, #-1; stp x8, x30, [sp, #0x28]; ldr x8, [x0, #0x58].
 inline constexpr std::uint64_t kSendComponentEventVaddr = 0x17fb0f8;
 inline constexpr std::uint32_t kSendComponentEventCode[4] = {0xd10103ff, 0x92800008, 0xa902fbe8, 0xf9402c08};
 using SendComponentEventSig = void(void* space, std::uint64_t event, std::uint64_t actor, std::uint64_t key,
                                    std::uint32_t flag);
+// evt_btn_clicked: the event the login-failed page's script handler accepts (issue #1391, follow-up RE).
 inline constexpr std::uint64_t kRetrySelectEvent = 0x8f0094c7bb02681cULL;
-inline constexpr std::uint64_t kRetrySelectKey = 0x34f99a282ce78d72ULL;
+// CSymbol64("btn_exit"): the key of the login-failed page's btn_exit branch, not RETRY's. Its handler starts a thread
+// whose body returns at once (issue #1391, follow-up RE).
+inline constexpr std::uint64_t kLoginPageExitKey = 0x34f99a282ce78d72ULL;
 inline constexpr std::uint64_t kAllActors = 0xffffffffffffULL;  // as QuitOnError passes it
 
 // CR15NetGame fields the login-prompt hook reads and writes, measured on the pinned libr15:
@@ -493,60 +586,78 @@ inline constexpr std::size_t kErrorBlockBytes = 1 + kErrorLines * kErrorLineByte
 
 // libr15.so imports clock_gettime from libc (JUMP_SLOT 0x36c33e8).
 inline GotTarget LibR15ClockGettime() {
-  return {kLibR15, kClockGettimeSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c33e8ULL};
+  return {kLibR15, kClockGettimeSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36c33e8ULL};
 }
 
 // libr15.so's slot for CJson::TString, defined in libr15 itself (JUMP_SLOT 0x36ebe08).
 inline GotTarget LibR15TString() {
-  return {kLibR15, kTStringSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ebe08ULL};
+  return {kLibR15, kTStringSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36ebe08ULL};
 }
 
 // libr15.so's slot for CSysHttp::CreateConnection(unsigned long&, char const*), defined in libr15 itself
 // (JUMP_SLOT 0x36e8028, readelf -rW on the pinned image).
 inline GotTarget LibR15CreateConnection() {
-  return {kLibR15, kCreateConnectionSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36e8028ULL};
+  return {kLibR15, kCreateConnectionSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36e8028ULL};
 }
 
 // libr15.so's slot for CR15NetGame::SetDelimitedErrorMessage, defined in libr15 itself
 // (PLT 0xf23510 loads JUMP_SLOT 0x36e9170).
 inline GotTarget LibR15SetDelimitedErrorMessage() {
-  return {kLibR15, kSetDelimitedErrorMessageSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36e9170ULL};
+  return {kLibR15, kSetDelimitedErrorMessageSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36e9170ULL};
 }
 
 // libr15.so's slot for CR15NetGame::Update, defined in libr15 itself (PLT 0xf11e20 loads
 // JUMP_SLOT 0x36e05f8).
 inline GotTarget LibR15NetGameUpdate() {
-  return {kLibR15, kNetGameUpdateSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36e05f8ULL};
+  return {kLibR15, kNetGameUpdateSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36e05f8ULL};
 }
 
 // libr15.so's slot for android_main, defined in libr15 itself (JUMP_SLOT 0x36eb4c8, `readelf -rW` on the pinned
 // image: `R_AARCH64_JUMP_SLOT 0xf784c4 android_main`).
 inline GotTarget LibR15AndroidMain() {
-  return {kLibR15, kAndroidMainSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36eb4c8ULL};
+  return {kLibR15, kAndroidMainSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36eb4c8ULL};
 }
 
 // libr15.so's slot for CSysInfo::RequestPermissions, defined in libr15 itself (JUMP_SLOT 0x36e4320, `readelf -rW` on
 // the pinned image).
 inline GotTarget LibR15RequestPermissions() {
-  return {kLibR15, kRequestPermissionsSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36e4320ULL};
+  return {kLibR15, kRequestPermissionsSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36e4320ULL};
 }
 
 // libr15.so's slot for CSysInfo::CheckPermission, defined in libr15 itself (JUMP_SLOT 0x36c37c8, `readelf -rW` on the
 // pinned image: `R_AARCH64_JUMP_SLOT 0xf87298 _ZN10NRadEngine8CSysInfo15CheckPermissionEPKc`).
 inline GotTarget LibR15CheckPermission() {
-  return {kLibR15, kCheckPermissionSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c37c8ULL};
+  return {kLibR15, kCheckPermissionSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36c37c8ULL};
 }
 
 // libr15.so's slot for CVR::ShowSystemUI, defined in libr15 itself (JUMP_SLOT 0x36fb328, `readelf -rW` on the pinned
 // image: `R_AARCH64_JUMP_SLOT 0x1a73990 _ZN10NRadEngine3CVR12ShowSystemUIEv`).
 inline GotTarget LibR15ShowSystemUI() {
-  return {kLibR15, kShowSystemUISymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36fb328ULL};
+  return {kLibR15, kShowSystemUISymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36fb328ULL};
 }
 
 // libr15.so's slot for CSysInfo::OSBuildVersion, defined in libr15 itself (JUMP_SLOT 0x36ff9b8, `readelf -rW` on the
 // pinned image: `R_AARCH64_JUMP_SLOT 0xf875c4 _ZN10NRadEngine8CSysInfo14OSBuildVersionERy`).
 inline GotTarget LibR15OSBuildVersion() {
-  return {kLibR15, kOSBuildVersionSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ff9b8ULL};
+  return {kLibR15, kOSBuildVersionSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36ff9b8ULL};
+}
+
+// libr15.so's provider slots (#1220), each defined in libr15 itself (`readelf -rW` on the pinned image):
+//   R_AARCH64_JUMP_SLOT 0x36f01a8 -> 0x192f3e4 CNSProvider::Create
+//   R_AARCH64_JUMP_SLOT 0x37012d8 -> 0x192f5c0 CNSProvider::Destroy
+//   R_AARCH64_JUMP_SLOT 0x36ed158 -> 0x192f27c CNSProvider::ProviderID
+//   R_AARCH64_JUMP_SLOT 0x36f1c28 -> 0x192f330 CNSProvider::UserProviderID
+inline GotTarget LibR15ProviderCreate() {
+  return {kLibR15, kProviderCreateSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36f01a8ULL};
+}
+inline GotTarget LibR15ProviderDestroy() {
+  return {kLibR15, kProviderDestroySymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x37012d8ULL};
+}
+inline GotTarget LibR15ProviderId() {
+  return {kLibR15, kProviderIdSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36ed158ULL};
+}
+inline GotTarget LibR15UserProviderId() {
+  return {kLibR15, kUserProviderIdSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36f1c28ULL};
 }
 
 // NRadEngine::CCanvasUICS::SetText(SCompactPoolHandle, CSymbol64, char const*), defined in libr15 at 0x139111c (80
@@ -569,45 +680,45 @@ using CanvasSetTextSig = std::uint64_t(void* canvas, std::uint32_t handle, std::
 struct LibR15CanvasSetTextTag {};
 using LibR15CanvasSetTextThunk = CallbackThunk<LibR15CanvasSetTextTag, CanvasSetTextSig>;
 inline GotTarget LibR15CanvasSetText() {
-  return {kLibR15, kCanvasSetTextSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ff908ULL};
+  return {kLibR15, kCanvasSetTextSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36ff908ULL};
 }
 
 // libr15.so's slot for CR15UIPage2EnablePageNode::Enter, defined in libr15 itself (JUMP_SLOT 0x36c1cf8).
 inline GotTarget LibR15EnablePageNodeEnter() {
-  return {kLibR15, kEnablePageNodeEnterSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c1cf8ULL};
+  return {kLibR15, kEnablePageNodeEnterSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36c1cf8ULL};
 }
 
 // libr15.so's slots for the two NDK storage-manager imports (JUMP_SLOT 0x36c39d0 and 0x36f5b48, readelf -rW
 // on the pinned image; both are imported, value 0).
 inline GotTarget LibR15MountObb() {
-  return {kLibR15, kMountObbSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c39d0ULL};
+  return {kLibR15, kMountObbSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36c39d0ULL};
 }
 inline GotTarget LibR15GetMountedObbPath() {
-  return {kLibR15, kGetMountedObbPathSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36f5b48ULL};
+  return {kLibR15, kGetMountedObbPathSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36f5b48ULL};
 }
 
 // libr15.so's slot for CSysInfo::GetDataRootDir, defined in libr15 itself (JUMP_SLOT 0x36f1df8, `readelf -rW` on the
 // pinned image: `R_AARCH64_JUMP_SLOT 0xf87250 _ZN10NRadEngine8CSysInfo14GetDataRootDirEv`).
 inline GotTarget LibR15GetDataRootDir() {
-  return {kLibR15, kGetDataRootDirSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36f1df8ULL};
+  return {kLibR15, kGetDataRootDirSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36f1df8ULL};
 }
 
 // libr15.so's slot for CSysModule::FindMethod, defined in libr15 itself (JUMP_SLOT 0x36db9f8, `readelf -rW` on the
 // pinned image).
 inline GotTarget LibR15FindMethod() {
-  return {kLibR15, kFindMethodSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36db9f8ULL};
+  return {kLibR15, kFindMethodSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36db9f8ULL};
 }
 
 // libr15.so's slot for the VrApi device-extension import (JUMP_SLOT 0x36dd440, `readelf -rW` on the pinned image;
 // imported, value 0).
 inline GotTarget LibR15GetDeviceExtensionsVulkan() {
-  return {kLibR15, kGetDeviceExtensionsVulkanSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36dd440ULL};
+  return {kLibR15, kGetDeviceExtensionsVulkanSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36dd440ULL};
 }
 
 // libr15.so's slot for vrapi_GetSystemPropertyInt (JUMP_SLOT 0x36fa728, `readelf -rW` on the pinned image; imported,
 // value 0).
 inline GotTarget LibR15GetSystemPropertyInt() {
-  return {kLibR15, kGetSystemPropertyIntSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36fa728ULL};
+  return {kLibR15, kGetSystemPropertyIntSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36fa728ULL};
 }
 
 // The five VrApi imports the render-configuration log reads (docs/adr/0022-render-config-log.md). Each is an imported JUMP_SLOT
@@ -640,19 +751,19 @@ struct LibR15SubmitFrame2Tag {};
 using LibR15SubmitFrame2Thunk = CallbackThunk<LibR15SubmitFrame2Tag, SubmitFrame2Sig>;
 
 inline GotTarget LibR15SetDisplayRefreshRate() {
-  return {kLibR15, kSetDisplayRefreshRateSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ec5f0ULL};
+  return {kLibR15, kSetDisplayRefreshRateSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36ec5f0ULL};
 }
 inline GotTarget LibR15SetClockLevels() {
-  return {kLibR15, kSetClockLevelsSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c75f0ULL};
+  return {kLibR15, kSetClockLevelsSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36c75f0ULL};
 }
 inline GotTarget LibR15SetPropertyInt() {
-  return {kLibR15, kSetPropertyIntSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ffcf0ULL};
+  return {kLibR15, kSetPropertyIntSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36ffcf0ULL};
 }
 inline GotTarget LibR15GetSystemPropertyFloat() {
-  return {kLibR15, kGetSystemPropertyFloatSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c06f8ULL};
+  return {kLibR15, kGetSystemPropertyFloatSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36c06f8ULL};
 }
 inline GotTarget LibR15SubmitFrame2() {
-  return {kLibR15, kSubmitFrame2Symbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36e7010ULL};
+  return {kLibR15, kSubmitFrame2Symbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36e7010ULL};
 }
 
 // VrApi_Input.h: ovrResult vrapi_GetCurrentInputState(ovrMobile* ovr, const ovrDeviceID deviceID,
@@ -665,20 +776,20 @@ struct LibR15GetCurrentInputStateTag {};
 using LibR15GetCurrentInputStateThunk = CallbackThunk<LibR15GetCurrentInputStateTag, GetCurrentInputStateSig>;
 
 inline GotTarget LibR15GetCurrentInputState() {
-  return {kLibR15, kGetCurrentInputStateSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ec0f0ULL};
+  return {kLibR15, kGetCurrentInputStateSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36ec0f0ULL};
 }
 
 // libr15.so's slot for vrapi_GetInputDeviceCapabilities (JUMP_SLOT 0x36fc9c8, `readelf -rW` on the pinned image; imported,
 // value 0). Read, never written: the input seam asks a device's hand through the function the game itself calls
 // (CVR::PollTracking, 0x1a718fc).
 inline GotTarget LibR15GetInputDeviceCapabilities() {
-  return {kLibR15, kGetInputDeviceCapabilitiesSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36fc9c8ULL};
+  return {kLibR15, kGetInputDeviceCapabilitiesSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36fc9c8ULL};
 }
 
 // libr15.so's slot for CResourceManager::FillResourceFileRequest, defined in libr15 itself (JUMP_SLOT 0x36efa80,
 // `readelf -rW` on the pinned image; the PLT stub at 0xf30730 loads it).
 inline GotTarget LibR15FillResourceFileRequest() {
-  return {kLibR15, kFillResourceFileRequestSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36efa80ULL};
+  return {kLibR15, kFillResourceFileRequestSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36efa80ULL};
 }
 
 // libpnsradmatchmaking.so's slot for the same function, defined in
@@ -690,13 +801,18 @@ inline GotTarget MatchmakingTString() {
 // libr15.so's slot for SNSConfigRequestv24Send, a weak function it defines at
 // 0x191625c (JUMP_SLOT 0x37015e0).
 inline GotTarget LibR15ConfigRequestSend() {
-  return {kLibR15, kConfigRequestSendSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x37015e0ULL};
+  return {kLibR15, kConfigRequestSendSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x37015e0ULL};
 }
 
 // libr15.so's slot for CResourceManager::AsyncResourceIOCallback, a GLOB_DAT of libr15's own symbol (0x37195b8): the
 // address ResourceLoadInternal hands to ReadFileAsync (#966).
 inline GotTarget LibR15AsyncResourceIOCallback() {
-  return {kLibR15, kAsyncResourceIOCallbackSymbol, RelocKind::kGlobDat, kLibR15BuildId, 0x37195b8ULL};
+  return {kLibR15, kAsyncResourceIOCallbackSymbol, RelocKind::kGlobDat, LibR15PatchedBuildId(), 0x37195b8ULL};
+}
+
+// libr15.so's JUMP_SLOT for NR15Logger::MetricLog (#966, ADR 0017): the slot libr15's call to the function loads.
+inline GotTarget LibR15MetricLog() {
+  return {kLibR15, kMetricLogSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), kMetricLogSlotVaddr};
 }
 
 // Two GLOB_DAT slots in libr15.so (0x3715620 and 0x372b698), used as fixtures
@@ -704,12 +820,12 @@ inline GotTarget LibR15AsyncResourceIOCallback() {
 inline GotTarget LibR15BindNodeGlobDat() {
   return {kLibR15,
           "_ZN10NRadEngine8BindNodeINS_8NRadGame28SR15NetConfigRequestNodeDataENS1_24CR15NetConfigRequestNodeEEExRNS_13SScriptThreadEPv",
-          RelocKind::kGlobDat, kLibR15BuildId, 0x3715620ULL};
+          RelocKind::kGlobDat, LibR15PatchedBuildId(), 0x3715620ULL};
 }
 inline GotTarget LibR15LookupDataBindingGlobDat() {
   return {kLibR15,
           "_ZN10NRadEngine17LookupDataBindingINS_8NRadGame28SR15NetConfigRequestNodeDataEEEvNS_9CSymbol64EPKciPiPPFvPviS7_E",
-          RelocKind::kGlobDat, kLibR15BuildId, 0x372b698ULL};
+          RelocKind::kGlobDat, LibR15PatchedBuildId(), 0x372b698ULL};
 }
 
 }  // namespace sentinel::pinned

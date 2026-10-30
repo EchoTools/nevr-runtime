@@ -7,6 +7,7 @@ test_launch_client.py, the Python tools are imported in a child process that is 
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import pathlib
 import shutil
@@ -189,6 +190,7 @@ class PythonToolDefaultsTest(unittest.TestCase):
             else:
                 self.assertEqual(found, expected_root / relative, code)
 
+    @unittest.skipIf(importlib.util.find_spec("pytest") is None, "pytest is not installed")
     def test_run_tool_tests_keeps_its_records_under_the_root_with_a_readme(self):
         probe = self.tmp / "probe" / "test_probe.py"
         probe.parent.mkdir()
@@ -280,7 +282,7 @@ class ShellToolDefaultsTest(unittest.TestCase):
         self.env.pop("FAKE_ECHOVR_PIDS", None)
 
     def launch_client(self, **env):
-        return subprocess.run([str(self.checkout / "launch-client.sh"), "--dll", str(self.dll)],
+        return subprocess.run([str(self.checkout / "launch-client.sh"), "--dll", str(self.dll), "--device-code"],
                               env=dict(self.env, **env), cwd=self.checkout, capture_output=True, text=True, timeout=60)
 
     def verify_server(self, **env):

@@ -15,6 +15,7 @@
 
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/lifecycle/service_map.h"
+#include "runtime/compat/login_refusal.h"  // DescribeConfigSource: the config line of a refused-login stop
 #include "runtime/compat/socket_role.h"  // TagBridgeUrl: the config and login services get their own request target (#520)
 #include "runtime/lifecycle/stable_string_pool.h"
 #include "runtime/lifecycle/cli.h"        // g_configYamlFlags, g_isServer (drags core/pch.h -> windows.h, now NOMINMAX)
@@ -101,6 +102,13 @@ const nevr_config_yaml::Choice& ConfigYamlChoice() {
   return choice;
 }
 
+// What the config was, for the refused-login stop line (#1254): the path loaded, or where the search looked.
+// Written once by the loader below, before NevrCfg() returns, and read only after it.
+std::string& ConfigSourceStore() {
+  static std::string source = "not loaded";
+  return source;
+}
+
 // The one parsed config.yaml, loaded lazily on first access. Thread-safe init via
 // the C++11 magic-static rule.
 //
@@ -125,6 +133,9 @@ const nevr::NevrConfig& NevrCfg() {
 #endif
   static const nevr::NevrConfig cfg = []() -> nevr::NevrConfig {
     const nevr_config_yaml::Choice& choice = ConfigYamlChoice();
+    std::vector<std::string> searched;
+    if (!choice.root_path.empty()) searched.push_back(choice.root_path);
+    ConfigSourceStore() = nevr_login_refusal::DescribeConfigSource(choice.path, searched);
     if (choice.path.empty()) {
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.CONFIG] no config.yaml found; searched: %s (NEVR config keys use built-in defaults)",
@@ -153,6 +164,7 @@ const nevr::NevrConfig& NevrCfg() {
                   "broken or incomplete config (an unset required secret must fail loud, "
                   "never silently degrade to no login)",
                   path.c_str(), detail.c_str());
+      ConfigSourceStore() = path + " (rejected; built-in defaults in use)";
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.CONFIG] continuing with built-in defaults after config.yaml rejection (client mode)");
       return nevr::NevrConfig();
@@ -277,7 +289,7 @@ const char* InternCStr(std::string_view value, const char* accessor) {
 }
 
 template <typename Body>
-const char* AccessorBoundary(const char* accessor, Body body) {
+auto AccessorBoundary(const char* accessor, Body body) -> decltype(body()) {
   try {
 #ifdef NEVR_TEST_HOOKS
     if (g_throwAccessor == accessor) throw std::runtime_error("injected accessor exception");
@@ -351,6 +363,26 @@ const char* NevrCfgGetFlat(const char* flatKey) {
     const std::optional<std::string> v = Flat(flatKey);
     if (!v) return nullptr;  // unmapped or absent
     return InternCStr(*v, "NevrCfgGetFlat");
+  });
+}
+
+bool NevrCfgGetFlatIsStructured(const char* flatKey) {
+  return AccessorBoundary("NevrCfgGetFlatIsStructured", [&]() -> bool {
+    if (flatKey == nullptr) return false;
+#ifdef NEVR_TEST_HOOKS
+    if (g_testInputsSet && g_testConfig != nullptr) return nevr_cfg::LookupFlatIsStructured(*g_testConfig, flatKey);
+#endif
+    return nevr_cfg::LookupFlatIsStructured(NevrCfg(), flatKey);
+  });
+}
+
+const char* NevrCfgSource() {
+  return AccessorBoundary("NevrCfgSource", [&]() -> const char* {
+#ifdef NEVR_TEST_HOOKS
+    if (g_testInputsSet) return InternCStr("test config", "NevrCfgSource");
+#endif
+    (void)NevrCfg();  // the loader sets the store; magic-static init completes before it returns
+    return InternCStr(ConfigSourceStore(), "NevrCfgSource");
   });
 }
 

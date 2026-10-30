@@ -181,6 +181,26 @@ std::vector<Answer> WaitForAnswers(nevr_invite::Worker& worker, std::size_t n) {
 
 }  // namespace
 
+// #1415: the worker says an answer waits through the flag the service hands it. It sets the flag under its own lock with the
+// answer, so a reader that finds it clear never misses one, and it clears the flag under the same lock when the answers are
+// taken, so the answer is not lost by taking it.
+TEST(InviteWorker, AnAnswerSetsThePendingFlagAndTakingItClearsIt) {
+  Rig rig;
+  rig.transport.Answers(404, R"({"message":"invalid"})");
+  std::atomic<bool> pending{false};
+  nevr_invite::WorkerParts parts = rig.Parts();
+  parts.answers_pending = &pending;
+  nevr_invite::Worker worker(parts);
+
+  ASSERT_EQ(worker.Enqueue(Resolve()), Submit::Queued);
+  ASSERT_TRUE(worker.WaitPendingForTest(kWait));
+  EXPECT_TRUE(pending.load());
+  const std::vector<Answer> answers = worker.TakeAnswers();
+  EXPECT_EQ(answers.size(), 1u);
+  EXPECT_FALSE(pending.load());
+  worker.Stop();
+}
+
 TEST(InviteWorker, AResolveIsPostedWithItsRpcItsBodyAndTheBearerAndAnswersInvalid) {
   Rig rig;
   rig.transport.Answers(404, R"({"message":"invalid"})");
@@ -504,13 +524,32 @@ TEST(InviteWorker, TakeAnswersHandsEachAnswerOverOnce) {
 
 // ---- network.invite_codes (N133) ----
 
-TEST(InviteConfig, TheFeatureIsOffUnlessTheKeyTurnsItOn) {
+// On unless the key says off (ADR 0017). An absent key and an empty one are both unset, and unset is the default.
+TEST(InviteConfig, TheFeatureIsOnWhenTheKeyIsUnset) {
   using nevr_invite::ParseSwitch;
   using nevr_invite::Switch;
-  EXPECT_EQ(ParseSwitch(nullptr), Switch::Off);
-  EXPECT_EQ(ParseSwitch(""), Switch::Off);
+  EXPECT_EQ(ParseSwitch(nullptr), Switch::On);
+  EXPECT_EQ(ParseSwitch(""), Switch::On);
   for (const char* on : {"true", "TRUE", "True", "on", "On", "yes", "1"}) EXPECT_EQ(ParseSwitch(on), Switch::On) << on;
+}
+
+TEST(InviteConfig, FalseTurnsTheInviteCodesOff) {
+  using nevr_invite::ParseSwitch;
+  using nevr_invite::Switch;
   for (const char* off : {"false", "FALSE", "off", "no", "0"}) EXPECT_EQ(ParseSwitch(off), Switch::Off) << off;
+}
+
+TEST(InviteConfig, TheDefaultIsOnAndOnlyAnUnsetKeyIsTheDefaultsSource) {
+  using nevr_invite::Source;
+  using nevr_invite::SourceOf;
+  using nevr_invite::Switch;
+  EXPECT_EQ(nevr_invite::kDefault, Switch::On);
+  EXPECT_EQ(SourceOf(nullptr), Source::Default);
+  EXPECT_EQ(SourceOf(""), Source::Default);
+  EXPECT_EQ(SourceOf("false"), Source::Config);
+  EXPECT_EQ(SourceOf("ture"), Source::Config);  // a value nobody meant is the config's, not the default's
+  EXPECT_STREQ(nevr_invite::SourceName(Source::Default), "default");
+  EXPECT_STREQ(nevr_invite::SourceName(Source::Config), "config");
 }
 
 TEST(InviteConfig, AValueNobodyMeantIsOffAndSaidToBeUnrecognised) {
@@ -520,4 +559,17 @@ TEST(InviteConfig, AValueNobodyMeantIsOffAndSaidToBeUnrecognised) {
   EXPECT_FALSE(nevr_invite::SwitchIsOn(Switch::Unrecognised));
   EXPECT_TRUE(nevr_invite::SwitchIsOn(Switch::On));
   EXPECT_FALSE(nevr_invite::SwitchIsOn(Switch::Off));
+}
+
+// A list or a map under the key is not a value. It is off and reported as unrecognised, and its source is the config's: the
+// default must never turn a feature on because the key was written in a shape that is not a switch (a token is sent when on).
+TEST(InviteConfig, AStructuredValueIsOffAndItsSourceIsTheConfigsNotTheDefaults) {
+  using nevr_invite::ParseSwitch;
+  using nevr_invite::Source;
+  using nevr_invite::SourceOf;
+  using nevr_invite::Switch;
+  EXPECT_EQ(ParseSwitch(nullptr, /*structured=*/true), Switch::Unrecognised);
+  EXPECT_EQ(SourceOf(nullptr, /*structured=*/true), Source::Config);
+  EXPECT_EQ(ParseSwitch(nullptr, /*structured=*/false), Switch::On);  // the same key with nothing in it is still the default
+  EXPECT_EQ(SourceOf(nullptr, /*structured=*/false), Source::Default);
 }

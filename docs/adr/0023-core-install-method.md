@@ -96,8 +96,9 @@ The layout is ADR 0012's. The only file the plan writes beside `echovr.exe` is `
 legacy `dbgcore.dll`, an earlier `nevr-runtime.dll` beside the game, a stale record, a runtime that was already in the root)
 go to `<nevr root>\installer\` and `<nevr root>\installer\aside\`. Nothing is deleted: a file that leaves the game
 folder is copied, read back, and only then removed. The host is replaced by a temporary file in the game folder renamed over
-it, so a reader sees the old host or the new one. The nevr root is `--nevr-root`, else `%LOCALAPPDATA%\nevr\echovr`; when
-neither is known the plan stops with `needs-user` before it fetches or changes anything. A record an earlier installer left
+it, so a reader sees the old host or the new one. The nevr root is `--nevr-root`, else `%LOCALAPPDATA%\nevr\echovr`; a `--nevr-root`
+that is not that folder is refused unless the run passes `--dev-nevr-root` (the host loads from no other folder outside dev
+builds, #1353); when neither is known the plan stops with `needs-user` before it fetches or changes anything. A record an earlier installer left
 beside the game is read like the root's and is moved into the aside folder by the next successful install.
 
 The record and the copy of the game's own `BugSplat64.dll` live only in the nevr root; there is no second copy in the game
@@ -186,7 +187,7 @@ headset run must show"): `data_root` with `source=android_media`, `data_check ac
 ### 3a. A local tester APK: `--artifact-dir`
 
 Testers and developers install an APK built on their own machine (`just package-dev`, `just android-repack-apk`), which no
-manifest names. `nevr-install quest install --artifact-dir DIR` installs it, with its own checks in place of the manifest's:
+manifest names. `install-nevr-runtime quest install --artifact-dir DIR` installs it, with its own checks in place of the manifest's:
 
 - `DIR` holds exactly one `.apk` and a sidecar for it: `<name>.apk.sha256`, or a `SHA256SUMS` with exactly one line for the
   file. No sidecar is a refusal. The file's SHA-256 must equal the sidecar's.
@@ -209,9 +210,20 @@ The kind exists in the schema and the live manifest (`internal/manifest/gamedata
 named by the first 12 hex digits of its sha256, "one copy serves every release", `contents` with a hash per file,
 `game_data.data_version` and `echo_build`). This record fixes how a consumer uses it:
 
-- The game data of a release is the one `game-data` artifact of its `platform: android-arm64` entries. Zero or two is a
-  refusal that names the release.
-- A consumer extracts only paths listed in `contents`, all of the form `_data/<data_version>/rad15/android/(manifests|packages)/<name>`.
+- A release lists one `game-data` artifact per platform (`android-arm64` for the headset, `windows-x86_64` for the PC). A
+  consumer selects the entry of its own platform, by `kind` and `platform` together, and refuses zero or two entries for
+  that platform with a message that names the release. An entry of another platform never decides anything for it. The
+  core's `NevrArtifactVerifyZip` takes the platform like `NevrArtifactFetch` and refuses a `game-data` call that names
+  none, because the kind alone selects no single artifact.
+- The Quest game data is the `android-arm64` entry, named `echovr-data-<12hex>.zip`. A consumer extracts only paths listed
+  in `contents`, all of the form `_data/<data_version>/rad15/android/(manifests|packages)/<name>`.
+- The PC artifact is specified as follows; the signer publishes it once release-signer#69 lands. The PC game data is the
+  `windows-x86_64` entry, named `echovr-data-win10-<12hex>.zip`, at `data/<name>` like the Quest one. It holds
+  `_data/<data_version>/rad15/win10/(manifests|packages)/...`, and a consumer extracts only paths listed in its
+  `contents`. Its verification basis is a set of hashes pinned in the signer's configuration and the zip's own
+  consistency: the manifests pin the size of each package they name. No official reference for the PC data exists, so the
+  release notes state that the PC data was not compared with one. The first publish of a PC game-data artifact is checked
+  by a second seat before the release is announced.
 - Presence is decided from `contents`: every listed path exists with the listed size. The core does not rehash 930 MB of
   data on every start; the hash check is on the download.
 
@@ -270,7 +282,7 @@ flowchart LR
       M[manifest + state + select] --> F[capped fetch] --> V[artifact + zip verify] --> PL[plan] --> LG[JSONL log]
     end
     core --- ABI[C ABI: nevr_install.h]
-    core --- CLI[nevr-install CLI]
+    core --- CLI[install-nevr-runtime CLI]
     CLI --> PS1[install.ps1 and quest-install.ps1/.sh call the CLI]
     ABI --> UN[Unity C# P/Invoke - Crafter's app]
     ABI --> JN[Kotlin/Java JNI - he_is_the_cat's app]
@@ -297,12 +309,13 @@ function returns a `NevrStatus` and writes details to the log. Names follow the 
 | `NevrManifestFetch` / `NevrManifestVerify` | steps 1 to 6 on the base URL, or on bytes the caller holds |
 | `NevrReleasePick(session, channel, &json)` | step 7: the version and its artifacts |
 | `NevrArtifactFetch(session, version, kind, platform, out_path)` | step 8 for one artifact; deletes the file on failure |
-| `NevrArtifactVerifyZip(session, version, kind, zip_path, allow_dirs)` | every member against `contents` |
+| `NevrArtifactVerifyZip(session, version, kind, platform, zip_path, allow_dirs)` | every member against `contents`; `platform` selects the entry (it may be null except for `game-data`, which lists one artifact per platform) |
 | `NevrPlanBuild(session, version, observed_json, &plan_json)` | the Quest plan as data, from what the caller observed; the caller executes the steps it owns (a package install on a headset) |
 | `NevrRunEnd(session, state, reason)` | writes `run_end`; the state is one of the four |
 | `NevrLastError`, `NevrStringFree`, `NevrClose`, `NevrCoreVersion` | the last failure's text, freeing a returned string, closing, the library version |
 
-The PC plan and its execution are reached through the CLI (`nevr-install pc install`), which is what PowerShell and every
+The PC plan and its execution are reached through the CLI (`install-nevr-runtime pc install`; the binary is `install-nevr-runtime.exe`, while the
+library, its C header and the install record keep the `nevr_install` and `nevr-install.txt` names), which is what PowerShell and every
 other PC installer calls; the library exposes the Quest plan because the on-headset callers cannot run a CLI. Step results
 of a caller-executed step are recorded by the caller's own `NevrRunEnd` reason in this slice; a per-step report function
 is a later addition and not part of this ABI.
@@ -418,12 +431,12 @@ Each is run once with the line it covers changed, and must fail (the mutant disc
 
 Written before the first run. Slice 1's CLI against the live manifest, with a scratch state directory:
 
-- `nevr-install manifest verify` reports `ok` with key id `c0ee9c8547023d34` (file order; K1 prints as 343D0247859CEEC0),
+- `install-nevr-runtime manifest verify` reports `ok` with key id `c0ee9c8547023d34` (file order; K1 prints as 343D0247859CEEC0),
   `manifest_version` 4 and release 5.16.1 on `beta`, and writes a state directory holding `manifest.json`,
   `manifest.json.sig` and `state.json`.
-- `nevr-install quest plan` for 5.16.1 reports `game-data: none in release` and never ends `installed`, until
+- `install-nevr-runtime quest plan` for 5.16.1 reports `game-data: none in release` and never ends `installed`, until
   release-signer carries game data forward (section 4, item 1). That is the live defect this record finds.
-- `nevr-install quest plan` for 5.10.0 reports the APK (versionCode 51000999) and the game data (937395400 bytes).
+- `install-nevr-runtime quest plan` for 5.10.0 reports the APK (versionCode 51000999) and the game data (937395400 bytes).
 - The same plan against the test headset reports the installed versionCode, the signer as `unknown-until-install`, the game
   data as present in `/sdcard/readyatdawn` (the media root is empty), and `decision: downgrade-refused`.
 

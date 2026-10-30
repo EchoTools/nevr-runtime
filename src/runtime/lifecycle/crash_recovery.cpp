@@ -3,6 +3,7 @@
 #include "runtime/scenario/scenario_control.h"
 #endif
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/lifecycle/host_pause.h"
 #include "runtime/lifecycle/quit_check.h"
 #include "runtime/lifecycle/readable_memory.h"
 #include "runtime/lifecycle/console_ctrl_policy.h"
@@ -357,11 +358,9 @@ VOID WINAPI ExitProcessHook(UINT uExitCode) {
 // mutex — the dump becomes the hang.
 //
 // This is NOT the "no printf, use the structured logger" case the CPP addendum
-// forbids. The addendum's own Flight Recorder section prescribes exactly this
-// mechanism for the crash path ("a dump handler writes the buffer to disk via
-// WriteFile/MapViewOfFile") and requires the logger be "safe to call from DllMain
-// (no heap, no synchronization primitives)" — which Log() is not and this is.
-// Output stays structured key=value; only the transport changes.
+// forbids: the crash path needs a writer that takes no heap and no lock, which
+// Log() is not and a raw WriteFile is. Output stays structured key=value; only
+// the transport changes.
 //
 // vsnprintf into a fixed stack buffer is the standard crash-handler primitive: for
 // the %s/%d/%u/%llX conversions used here MinGW's implementation performs no
@@ -1295,6 +1294,41 @@ void InstallConsoleCtrlHandler() {
 
 }
 
+// #1532: the reason goes to the host's console, then the server waits (a key press on an interactive console, 2 s
+// otherwise; nevr_host_pause) before ForceFatalExit, so a host reads it and a restart loop does not spin.
+static void HoldForHostBeforeExit(const char* reason) {
+  const HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
+  nevr_host_pause::Io io;
+  io.write_line = [](const std::string& line) {
+    const std::string text = line + "\n";
+    DWORD written = 0;
+    // A write that fails (no console) loses only the console copy: the [NEVR.FATAL] line is in the log.
+    (void)WriteFile(GetStdHandle(STD_ERROR_HANDLE), text.data(), static_cast<DWORD>(text.size()), &written, nullptr);
+  };
+  io.stdin_is_console = [in]() {
+    DWORD mode = 0;
+    return in != nullptr && in != INVALID_HANDLE_VALUE && GetConsoleMode(in, &mode) != FALSE;
+  };
+  io.wait_for_key = [in]() {
+    INPUT_RECORD record;
+    DWORD read = 0;
+    while (ReadConsoleInputW(in, &record, 1, &read) != FALSE && read == 1) {
+      if (record.EventType == KEY_EVENT && record.Event.KeyEvent.bKeyDown != FALSE) return;
+    }
+  };
+  io.wait_ms = [](unsigned ms) {
+    // Nothing signals this event: the wait is the timeout.
+    const HANDLE never = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (never != nullptr) {
+      (void)WaitForSingleObject(never, ms);
+      CloseHandle(never);
+    }
+  };
+  const nevr_host_pause::Held held = nevr_host_pause::HoldBeforeExit(reason, io);
+  Log(EchoVR::LogLevel::Info, "[NEVR.FATAL] held for the host before exit: %s",
+      held == nevr_host_pause::Held::kForKey ? "a key press (interactive console)" : "2000 ms (no interactive console)");
+}
+
 void ServerFatal(const CHAR* format, ...) {
   char buf[1024];
   va_list args;
@@ -1312,6 +1346,7 @@ void ServerFatal(const CHAR* format, ...) {
   }
 
   Log(EchoVR::LogLevel::Error, "[NEVR.FATAL] %s", buf);
+  HoldForHostBeforeExit(buf);
   ForceFatalExit(1);
 }
 

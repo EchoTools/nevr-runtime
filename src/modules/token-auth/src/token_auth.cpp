@@ -68,6 +68,10 @@ struct InternalDeviceAuthFlowOps {
     // Optional (#397): the code is issued / the wait ended. The Windows client shows them in a dialog.
     std::function<void(const std::string& code, const std::string& loginUrl)> onCodeIssued;
     std::function<void(nevr::auth::FlowEnd)> onEnd;
+    // #1532: a dedicated server with no auth.password signs in by device code. Only the server path sets these.
+    bool serverSignIn = false;    // the flow may run in server mode (the guard in RunDeviceAuthFlow)
+    bool showsCodeOnly = false;   // no browser opens: the code is printed on the console for the host
+    bool renewsExpiredCodes = false;  // the caller asks for a new code when one runs out (RunUntilApproved)
 };
 
 // What the sign-in wait shows the player: set by the off-bootstrap wait, null in tests and on servers.
@@ -88,7 +92,6 @@ class DeviceAuth {
 public:
     void Configure(const std::string& url, const std::string& httpKey, const std::string& serverKey);
     bool TryLoadCachedToken(nevr_credential_stats::SignInReason* whyNot = nullptr);
-    bool RunDeviceAuthFlow(bool is_server);
     // Sleeps wait on `cancel` and the flow stops once it is requested (nullptr: plain sleeps).
     bool RunDeviceAuthFlow(bool is_server, nevr_token_auth::AuthCancellation* cancel,
                            const SignInPresenter* ui = nullptr);
@@ -363,8 +366,6 @@ void DeviceAuth::ApplyVerifiedPollResponse(const nevr_token_auth::DevicePollResp
     }
 }
 
-bool DeviceAuth::RunDeviceAuthFlow(bool is_server) { return RunDeviceAuthFlow(is_server, nullptr); }
-
 bool DeviceAuth::RunDeviceAuthFlow(bool is_server, nevr_token_auth::AuthCancellation* cancel,
                                    const SignInPresenter* ui) {
     InternalDeviceAuthFlowOps ops;
@@ -372,6 +373,9 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server, nevr_token_auth::AuthCancella
         ops.onCodeIssued = ui->codeIssued;
         ops.onEnd = ui->ended;
     }
+    ops.serverSignIn = is_server;
+    ops.showsCodeOnly = is_server;
+    ops.renewsExpiredCodes = is_server;
     ops.now = []() { return InternalDeviceAuthFlowOps::Clock::now(); };
     ops.requestDeviceCode = [this]() { return RequestDeviceCode(); };
 #ifdef _WIN32
@@ -387,6 +391,11 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server, nevr_token_auth::AuthCancella
     ops.openBrowser = [](const std::string&) { return static_cast<intptr_t>(0); };
     ops.showOpenFailure = [](const std::string&, const std::string&, intptr_t) { return 0; };
 #endif
+    if (is_server) {
+        // A server has no browser and no one at a window: the presenter prints the code and the page on the console,
+        // and the open is reported as shown (a failed open would raise a modal box on a headless host).
+        ops.openBrowser = [](const std::string&) { return nevr::auth::kBrowserOpenAcceptedAbove + 1; };
+    }
     ops.poll = [this](const std::string& code) { return PollDeviceCode(code); };
     if (cancel != nullptr) {
         ops.sleep = [cancel](InternalDeviceAuthFlowOps::Clock::duration duration) { (void)cancel->WaitFor(duration); };
@@ -411,7 +420,7 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowO
     const auto log = [&ops](EchoVR::LogLevel level, const std::string& message) {
         if (ops.log) ops.log(level, message);
     };
-    if (is_server) {
+    if (is_server && !ops.serverSignIn) {
         log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Server mode disables device-code authentication");
         return false;
     }
@@ -439,6 +448,8 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowO
     core.on_code_issued = ops.onCodeIssued;
     core.on_end = ops.onEnd;
     core.max_consecutive_poll_errors = kMaxConsecutivePollErrors;
+    core.shows_code_only = ops.showsCodeOnly;
+    core.renews_expired_codes = ops.renewsExpiredCodes;
     core.log = [&ops](nevr::auth::LogLevel level, const std::string& message) {
         ops.log(nevr::auth::ToEchoLogLevel(level), message);
     };
@@ -660,6 +671,11 @@ std::shared_ptr<const nevr_token_auth::AuthSnapshot> nevr_token_auth::GetAuthSna
     return s_snapshotStore.Read();
 }
 
+bool nevr_token_auth::SignInEndedWithoutToken() {
+    const std::shared_ptr<const AuthSnapshot> snapshot = GetAuthSnapshot();
+    return snapshot && snapshot->readiness == AuthReadiness::Failed;
+}
+
 #ifdef NEVR_TEST_HOOKS
 namespace nevr_token_auth::test_hook {
 namespace {
@@ -678,6 +694,12 @@ DeviceAuthState SnapshotDeviceAuth(const DeviceAuth& auth) {
 }
 
 }  // namespace
+
+void PublishReadinessForTest(AuthReadiness readiness) {
+    AuthSnapshot snapshot;
+    snapshot.readiness = readiness;
+    (void)s_snapshotStore.Publish(std::move(snapshot));
+}
 
 DeviceAuthState InspectInitialDeviceAuth() {
     DeviceAuth auth;
@@ -729,6 +751,9 @@ DeviceAuthFlowResult RunDeviceAuthFlow(bool is_server, const DeviceAuthState& in
     ops.save = injected.save;
     ops.log = injected.log;
     ops.cancelled = injected.cancelled;
+    ops.serverSignIn = injected.server_sign_in;
+    ops.showsCodeOnly = injected.server_sign_in;
+    ops.renewsExpiredCodes = injected.server_sign_in;
 
     DeviceAuthFlowResult result;
     result.success = auth.RunDeviceAuthFlow(is_server, ops);
@@ -841,12 +866,11 @@ private:
 
 // The sign-in window (#397): the code and the page, on a thread of its own so the bootstrap thread's
 // pump (which dispatches nothing to windows it does not own) and the game never have to know about it.
-// It is informational: closing it does not cancel the sign-in. When the wait ends it shows how, and
-// closes by itself (signed in) or when the player dismisses it or after kSignInDialogLinger.
+// It is informational: closing it does not cancel the sign-in. When the wait ends it shows how, and it
+// closes by itself after a moment (signed in) or stays until the player closes it (a failure, #1446).
 constexpr UINT kDialogApply = WM_APP + 1;
 constexpr UINT kDialogClose = WM_APP + 2;
 constexpr UINT_PTR kDialogLingerTimer = 1;
-constexpr UINT kSignInDialogLingerMs = 30000;
 constexpr int kDialogCloseButton = 100;
 
 std::wstring WideFromUtf8(const std::string& s) {
@@ -862,8 +886,8 @@ public:
     SignInDialog() : m_state(std::make_shared<State>()) {}
     ~SignInDialog() {
         // A wait that never reported its end must not leave the dialog up; one that did keeps its message
-        // until the player dismisses it (or kSignInDialogLingerMs). A window that does not exist yet closes
-        // itself when it does (SignInDialogLifecycle).
+        // (a failure until the player dismisses it). A window that does not exist yet closes itself when it
+        // does (SignInDialogLifecycle).
         if (m_started && !m_ended) Abandon();
     }
     SignInDialog(const SignInDialog&) = delete;
@@ -890,14 +914,18 @@ public:
         return true;
     }
 
-    // The wait ended: the window says how (and closes itself when `content.closes_by_itself`).
-    void Ended(const nevr::auth::SignInDialogContent& content) {
+    // The wait ended: the window says how (and closes itself when `content.closes_by_itself`). Returns whether a
+    // window exists to say it.
+    bool Ended(const nevr::auth::SignInDialogContent& content) {
         m_ended = true;
+        bool shown = false;
         {
             std::lock_guard<std::mutex> lock(m_state->mutex);
             m_state->content = content;
+            shown = m_state->created;
         }
         PostIfCreated(kDialogApply, content.closes_by_itself ? 1 : 2);
+        return shown;
     }
 
 private:
@@ -943,11 +971,13 @@ private:
         SetWindowTextW(s.hwnd, WideFromUtf8(content.title).c_str());
         SetWindowTextW(s.instruction, WideFromUtf8(content.instruction).c_str());
         SetWindowTextW(s.code, WideFromUtf8(content.code).c_str());
-        if (how == 1) {  // closes by itself: a moment to read it
-            SetTimer(s.hwnd, kDialogLingerTimer, 1500, nullptr);
-        } else if (how == 2) {
-            ShowWindow(s.button, SW_SHOW);
-            SetTimer(s.hwnd, kDialogLingerTimer, kSignInDialogLingerMs, nullptr);
+        if (how != 0) {  // the wait has ended: a success closes after a moment; a failure stays until it is closed
+            const unsigned linger = nevr::auth::SignInEndedLingerMs(content);
+            if (linger > 0) {
+                SetTimer(s.hwnd, kDialogLingerTimer, linger, nullptr);
+            } else {
+                ShowWindow(s.button, SW_SHOW);
+            }
         }
         nevr::auth::WipeSecret(content.code);
     }
@@ -1052,7 +1082,44 @@ private:
 
 // Runs the device flow without freezing the game window: on a worker thread, while the bootstrap
 // thread pumps its messages (Windows), and returns once the flow has finished.
-static bool RunDeviceAuthFlowOffBootstrapThread(DeviceAuth& auth) {
+static bool RunDeviceAuthFlowOffBootstrapThread(DeviceAuth& auth, bool is_server) {
+    if (is_server) {
+        // #1532: a server has no window to keep alive and none to show the code in. It prints the code and the
+        // approval page on the console and polls until the host approves, the code runs out or a poll fails.
+        const auto start = std::chrono::steady_clock::now();
+        nevr::auth::FlowEnd lastEnd = nevr::auth::FlowEnd::Cancelled;
+        SignInPresenter ui;
+        ui.codeIssued = [](const std::string& code, const std::string& loginUrl) {
+            const nevr_token_auth::ConsoleWrite written = nevr_token_auth::WriteServerSignInPrompt(code, loginUrl);
+            if (written.ok) {
+                Log(EchoVR::LogLevel::Info,
+                    "[NEVR.AUTH] server sign-in code printed on the console bytes=%zu; waiting for approval",
+                    written.bytes);
+            } else {
+                Log(EchoVR::LogLevel::Warning,
+                    "[NEVR.AUTH] server sign-in code could NOT be printed on the console error=%lu; nobody can "
+                    "approve it",
+                    static_cast<unsigned long>(written.error));
+            }
+        };
+        ui.ended = [&lastEnd](nevr::auth::FlowEnd end) { lastEnd = end; };
+        const bool ok = nevr::auth::RunUntilApproved(
+            [&]() {
+                nevr::auth::SignInAttempt attempt;
+                attempt.verified = auth.RunDeviceAuthFlow(true, nullptr, &ui);
+                attempt.end = lastEnd;
+                return attempt;
+            },
+            [](nevr::auth::DeviceFlowOps::Clock::duration duration) { std::this_thread::sleep_for(duration); },
+            [](nevr::auth::LogLevel level, const std::string& message) {
+                Log(nevr::auth::ToEchoLogLevel(level), "%s", message.c_str());
+            });
+        Log(ok ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
+            "[NEVR.AUTH] server sign-in ended: result=%s seconds=%lld", ok ? "ok" : "failed",
+            static_cast<long long>(
+                std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start).count()));
+        return ok;
+    }
     nevr_token_auth::AuthCancellation cancel;
 #ifdef _WIN32
     SignInWindowWait wait(cancel);
@@ -1069,7 +1136,12 @@ static bool RunDeviceAuthFlowOffBootstrapThread(DeviceAuth& auth) {
             shown ? "[NEVR.AUTH] sign-in dialog shown: the page and the code are on screen"
                   : "[NEVR.AUTH] sign-in dialog could not be created; the browser page is the only prompt");
     };
-    ui.ended = [&dialog](nevr::auth::FlowEnd end) { dialog.Ended(nevr::auth::SignInEndedContent(end)); };
+    ui.ended = [&dialog](nevr::auth::FlowEnd end) {
+        const nevr::auth::SignInDialogContent content = nevr::auth::SignInEndedContent(end);
+        const bool shown = dialog.Ended(content);
+        Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] sign-in dialog ended: window=%s closes_by_itself=%s",
+            shown ? "shown" : "not_shown", content.closes_by_itself ? "true" : "false");
+    };
     const nevr_token_auth::OffThreadWaitResult r = nevr_token_auth::RunWhilePumping(
         [&auth, &cancel, &ui]() {
             ComApartment com;
@@ -1093,20 +1165,56 @@ static bool RunDeviceAuthFlowOffBootstrapThread(DeviceAuth& auth) {
 // Public API
 // ---------------------------------------------------------------------------
 
+std::string nevr_token_auth::ServerSignInPromptLine(const std::string& code, const std::string& loginUrl) {
+    const std::string page = loginUrl + "?code=" + code;
+    nlohmann::json line;
+    line["tag"] = "NEVR.AUTH";
+    line["event"] = "server_sign_in_code";
+    line["code"] = code;
+    line["url"] = page;
+    line["expires_in_s"] = std::chrono::duration_cast<std::chrono::seconds>(nevr::auth::kDeviceAuthLifetime).count();
+    line["msg"] = "Approve this server: open " + page + " (or enter the code " + code + " at " + loginUrl +
+                  ") and sign in within 5 minutes";
+    return line.dump();
+}
+
+nevr_token_auth::ConsoleWrite nevr_token_auth::WriteServerSignInPrompt(const std::string& code,
+                                                                       const std::string& loginUrl) {
+    ConsoleWrite result;
+    std::string text = ServerSignInPromptLine(code, loginUrl) + "\n";
+#ifdef _WIN32
+    const HANDLE err = GetStdHandle(STD_ERROR_HANDLE);
+    DWORD written = 0;
+    if (err != nullptr && err != INVALID_HANDLE_VALUE &&
+        WriteFile(err, text.data(), static_cast<DWORD>(text.size()), &written, nullptr) != FALSE) {
+        result.ok = true;
+        result.bytes = written;
+    } else {
+        result.error = GetLastError();
+    }
+#endif
+    nevr::auth::WipeSecret(text);
+    return result;
+}
+
 void nevr_token_auth::Init(uintptr_t /*base_addr*/, bool is_server) {
     if (s_authAttempted) return;
     AuthSnapshot initialSnapshot;
     initialSnapshot.readiness = AuthReadiness::Starting;
     (void)s_snapshotStore.Publish(std::move(initialSnapshot));
-    // Always enter the device flow with the module's actual mode. The flow's
-    // own first guard ensures server mode cannot issue HTTP, open a browser, or
-    // display UI even if a future caller reaches it directly.
-    if (is_server) {
-        DeviceAuth serverAuth;
-        (void)serverAuth.RunDeviceAuthFlow(is_server);
+    // #1532: a server with auth.password presents that and runs no device flow; one without it signs in by device
+    // code like a client. The flow's own guard keeps any other server caller from issuing HTTP or showing UI.
+    const char* configuredPassword = s_configGet ? s_configGet("nevr_password") : nullptr;
+    const bool serverSignsInByDeviceCode = is_server && (configuredPassword == nullptr || configuredPassword[0] == '\0');
+    if (is_server && !serverSignsInByDeviceCode) {
+        Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Server mode disables device-code authentication");
         (void)PublishAuthSnapshot(nullptr, AuthReadiness::Disabled);
         s_authAttempted = true;
         return;
+    }
+    if (serverSignsInByDeviceCode) {
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.AUTH] server has no auth.password: it signs in by device code, printed on the console");
     }
 
     AuthConfig cfg = LoadAuthConfig();
@@ -1133,15 +1241,16 @@ void nevr_token_auth::Init(uintptr_t /*base_addr*/, bool is_server) {
         Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] No cached credentials — starting device code auth...");
         nevr_credential_stats::NoteSignInRequired(whyNoCache);  // #562: no cache, or one that could not be used
         (void)PublishAuthSnapshot(nullptr, AuthReadiness::AwaitingUser);
-        if (!RunDeviceAuthFlowOffBootstrapThread(*s_auth)) {
+        if (!RunDeviceAuthFlowOffBootstrapThread(*s_auth, serverSignsInByDeviceCode)) {
             Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Authentication failed -- social features may be limited");
         }
     }
 
     (void)PublishAuthSnapshot(s_auth);
 
-    // Start background refresh thread (both cached and fresh auth paths)
-    if (s_auth->IsAuthenticated() && !cfg.httpKey.empty()) {
+    // Start background refresh thread (both cached and fresh auth paths). Not on a server: its ServerDB mint
+    // refreshes the same cache (gameserver_serverdb.cpp), and a second refresher would rotate the token under it.
+    if (s_auth->IsAuthenticated() && !cfg.httpKey.empty() && !is_server) {
         s_refreshRunning = true;
         s_refreshThread = new std::thread(RefreshThreadFunc, cfg.url, cfg.httpKey);
     }
@@ -1205,7 +1314,7 @@ NEVR_MODULE_API int token_auth_Init(const NvrModuleContext* ctx) {
     const bool authOk = !nevr_token_auth::GetToken().empty();
     Log(EchoVR::LogLevel::Info, "[NEVR.MODULE] token_auth initialized mode=%s auth=%s",
         is_server ? "server" : "client",
-        is_server ? "n/a" : (authOk ? "ok" : "failed"));
+        (is_server && s_auth == nullptr) ? "n/a" : (authOk ? "ok" : "failed"));
     return 0;
 }
 

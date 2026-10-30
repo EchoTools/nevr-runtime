@@ -5,7 +5,10 @@
 #include <windows.h>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
+
+#include "runtime/compat/lobby_join_state.h"
 
 /// Set the remote wss:// URI that the proxy will connect to.
 void SetWebSocketBridgeTarget(const char* uri);
@@ -64,6 +67,11 @@ void TestHook_ObserveSocialFrames(const char* direction, int connIdx, const std:
 void TestHook_ResetLobbyFrameLimiter();
 /// The clock (milliseconds) the lobby-record limiter reads; nullptr restores GetTickCount64.
 void TestHook_SetLobbyFrameClock(uint64_t (*clockMs)());
+namespace nevr_social_party {
+struct View;
+}
+/// The party a session record names (social_party.h View); nullptr restores the process-wide party state.
+void TestHook_SetLobbyPartySource(nevr_social_party::View (*view)());
 bool TestHook_ReadLoginFailureDiagnostic(const std::string& frame, uint64_t* statusCode, size_t* messageBytes);
 bool TestHook_LogLoginFailureDiagnostic(const std::string& frame, bool serverMode);
 bool TestHook_MoveCodeLineFirst(const std::string& frame, std::string* out);
@@ -95,6 +103,11 @@ int   TestHook_SharedRouteConn();  // the conn frames from the shared login sess
 void  TestHook_N61_ResetState();
 bool  TestHook_N60_IsMutexFree();
 size_t TestHook_ConnectedGameSockets();  // game sockets the bridge's two listeners still hold
+void* TestHook_LoginGameWsPtr();
+// Shared-route test seam: fn (nullptr clears it) runs with the target socket just before the frame is sent to it.
+void TestHook_SharedRoute_SetBeforeSend(void (*fn)(void* target));
+// A weak handle on the first game socket the service listener holds (empty when none).
+std::weak_ptr<void> TestHook_FirstServiceClientWeak();
 // #708 S2b: the router's account gate and remote-open policy, for a test (production wires neither).
 // gate: -1 none (the account is always available), 0 awaiting, 1 ready, 2 refused. Read on every decision; call
 // TestHook_ReevaluateRouterGate after changing it to release or end a held session.
@@ -105,3 +118,7 @@ void TestHook_ReevaluateRouterGate();
 bool TestHook_RouterStats(uint64_t* droppedGame, uint64_t* droppedRemote, uint64_t* droppedUnrequires,
                           uint64_t* loginsRemoved, uint64_t* heldRemotes);
 #endif
+
+/// The lobby this client is in and the one it is joining, each with the time the bridge saw it
+/// (compat/lobby_join_state.h). Read by the JoinPartyLobby hook (#1413). Outside the test-hook block: production.
+void LobbyJoinSnapshot(nevr_lobby_join_state::Stamp* current, nevr_lobby_join_state::Stamp* joining);

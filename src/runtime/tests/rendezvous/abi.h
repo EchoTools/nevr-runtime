@@ -67,6 +67,7 @@ inline constexpr char kLauncherModeExport[] = "RendezvousProbeLauncherMode";
 inline constexpr char kFailHookCreateExport[] = "RendezvousProbeFailHookCreate";
 inline constexpr char kRealStopExport[] = "RendezvousProbeRealStop";
 inline constexpr char kVerifyRuntimeExport[] = "RendezvousProbeVerifyRuntime";
+inline constexpr char kRuntimeDirExport[] = "RendezvousProbeRuntimeDir";
 using RecordEventFn = void (*)(LONG event, std::uint64_t payload);
 using GameImageFn = HMODULE (*)();
 // Returns 1 when the child is exercising the external NEVR_SetGameModule launcher
@@ -80,5 +81,9 @@ using RealStopFn = int (*)();
 // Returns 1 when the child has the host verify nevr-runtime.dll with the production pins (the harness's fixture runtime
 // is unsigned, so the host then refuses it); 0 loads the fixture without a check, as every other scenario does.
 using VerifyRuntimeFn = int (*)();
+// The folder the host looks for nevr-runtime.dll in, or null for the folder the shim sits in (where every scenario but
+// the old-layout one stages its fixture). The old-layout scenario names an empty folder, so the runtime that sits beside
+// the shim is the one the host does not load.
+using RuntimeDirFn = const wchar_t* (*)();
 
 }  // namespace nevr_rendezvous_probe

@@ -234,13 +234,14 @@ const std::map<std::string, std::set<std::string>>& KnownSections() {
        {"login", "serverdb", "matchmaking", "api", "api_legacy", "config", "transaction", "graph", "graph_service",
         "socket_uri", "allow_offline_server", "serverdb_uri"}},
       {"network",
-       {"external_ip", "internal_ip", "upnp", "upnp_port", "empty_server_ttl_seconds", "tick_rate_hz", "session_router",
-        "regions", "invite_codes"}},
+       {"external_ip", "internal_ip", "upnp", "upnp_port", "empty_server_ttl_seconds", "tick_rate_hz", "bots_per_session",
+        "max_team_size",
+        "session_router", "regions", "invite_codes"}},
       {"assets", {"cdn_url"}},
       {"arena", {"round_time", "celebration_time", "mercy_score"}},
       {"telemetry", {"uri", "token"}},
       {"social", {"facade", "send_presence_to_meta"}},
-      {"diagnostics", {"hardware_dump", "ui_event_probe", "frame_stats"}},
+      {"diagnostics", {"hardware_dump", "pnsrad_provider", "ui_event_probe", "clock_levels_override", "frame_stats"}},
       {"graphics", {"texture_quality"}},
   };
   return kSections;

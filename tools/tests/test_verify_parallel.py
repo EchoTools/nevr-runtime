@@ -2,6 +2,7 @@
 import fcntl
 import os
 import pathlib
+import re
 import time
 import shutil
 import subprocess
@@ -114,6 +115,8 @@ class VcpkgQuestHostGuardTest(unittest.TestCase):
         self.manifest.write_text("{}")
         self.lib = self.root / "build/quest-host-vcpkg/x64-linux/lib/libyaml-cpp.a"
         self.lib.parent.mkdir(parents=True)
+        self.header = self.root / "build/quest-host-vcpkg/x64-linux/include/nlohmann/json.hpp"
+        self.header.parent.mkdir(parents=True)
         self.calls = self.root / "vcpkg-calls"
         vcpkg_dir = self.root / "fake-vcpkg-root"
         vcpkg_dir.mkdir()
@@ -131,6 +134,7 @@ class VcpkgQuestHostGuardTest(unittest.TestCase):
 
     def test_a_current_install_runs_no_vcpkg(self):
         self.lib.write_text("lib")
+        self.header.write_text("json")
         os.utime(self.manifest, (1_000_000, 1_000_000))
         result = self.run_recipe()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -142,8 +146,17 @@ class VcpkgQuestHostGuardTest(unittest.TestCase):
         self.assertEqual(self.calls_made(), 1)
         self.assertIn("--x-install-root=" + str(self.root / "build/quest-host-vcpkg"), self.calls.read_text())
 
+    def test_an_install_without_nlohmann_json_is_completed(self):
+        # An install made from a manifest that did not name nlohmann-json has the library and not the header.
+        self.lib.write_text("lib")
+        os.utime(self.manifest, (1_000_000, 1_000_000))
+        result = self.run_recipe()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.calls_made(), 1)
+
     def test_an_install_older_than_the_manifest_is_redone(self):
         self.lib.write_text("lib")
+        self.header.write_text("json")
         os.utime(self.lib, (1_000_000, 1_000_000))
         result = self.run_recipe()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -160,10 +173,46 @@ class VcpkgQuestHostGuardTest(unittest.TestCase):
             self.assertEqual(self.calls_made(), 0)
             # The first install finishes: its artifact appears, newer than the manifest, then it unlocks.
             self.lib.write_text("lib")
+            self.header.write_text("json")
             fcntl.flock(held, fcntl.LOCK_UN)
             out, err = proc.communicate(timeout=30)
         self.assertEqual(proc.returncode, 0, out + err)
         self.assertEqual(self.calls_made(), 0, "the waiter ran vcpkg again after the first install finished")
+
+
+class PreRunBeforeFanOutTest(unittest.TestCase):
+    """`just verify` runs `just _vcpkg-quest-host` serially before tools/verify-parallel.sh starts the suites, so the
+    first quest-host install is never one of the parallel workers (#1408). Pins the order; the recipe already had it."""
+
+    QUEST_CONSUMERS = ("test-quest-data", "test-quest-data-net", "test-quest-shared", "test-quest-hooks",
+                       "test-quest-redirect", "test-quest-integration")
+
+    def verify_recipe(self):
+        justfile = (REPO / "justfile").read_text()
+        match = re.search(r"^verify:\n((?:[ \t]+.*\n|\n)*)", justfile, re.M)
+        self.assertIsNotNone(match, "justfile no longer has a verify recipe")
+        return match.group(1)
+
+    def test_the_quest_host_install_runs_before_the_parallel_block(self):
+        body = self.verify_recipe()
+        pre = body.find("    just _vcpkg-quest-host\n")
+        fan = body.find("bash tools/verify-parallel.sh")
+        self.assertNotEqual(pre, -1, "verify no longer runs _vcpkg-quest-host before the parallel block")
+        self.assertNotEqual(fan, -1, "verify no longer runs tools/verify-parallel.sh")
+        self.assertLess(pre, fan, "_vcpkg-quest-host must run before the parallel suites start")
+
+    def test_every_quest_host_consumer_is_in_the_parallel_block(self):
+        # The fan-out is one command whose suite names continue with a trailing backslash; the first line
+        # without one ends it. Compare whole tokens, so test-quest-data does not match test-quest-data-net.
+        lines = self.verify_recipe().splitlines()
+        start = next(i for i, line in enumerate(lines) if "bash tools/verify-parallel.sh" in line)
+        end = start
+        while lines[end].rstrip().endswith("\\"):
+            end += 1
+        tokens = " ".join(lines[start:end + 1]).replace("\\", " ").split()
+        for suite in self.QUEST_CONSUMERS:
+            self.assertIn(suite, tokens, f"{suite} is not in the verify fan-out, so it runs before or outside the pre-run")
+
 
 if __name__ == "__main__":
     unittest.main()

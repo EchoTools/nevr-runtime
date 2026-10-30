@@ -8,6 +8,7 @@ byte-identical."""
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import os
 import pathlib
 import shutil
@@ -109,6 +110,7 @@ class Helper(Sentinel):
 
 
 class Suites(Sentinel):
+    @unittest.skipIf(importlib.util.find_spec("pytest") is None, "pytest is not installed")
     def test_running_the_two_suites_with_the_variables_set_leaves_the_repository_they_name_unchanged(self):
         env = dict(os.environ, **self.leak)
         env.pop("PYTEST_ADDOPTS", None)

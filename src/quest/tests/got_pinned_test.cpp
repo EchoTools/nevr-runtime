@@ -140,6 +140,44 @@ std::vector<char> ReadAll(const char* path) {
   return std::vector<char>((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 }
 
+// `stubVaddr` is a PLT stub that loads `slot` (adrp x16, <page>; ldr x17, [x16, #<offset>]; add x16, x16, #<offset>;
+// br x17), and returns every `b`/`bl` in the executable segments that reaches the stub.
+std::vector<std::uint64_t> StubCallers(const LoadedElf& elf, std::uint64_t stubVaddr, std::uint64_t slot, const char* what) {
+  std::uint32_t stub[4] = {};
+  std::memcpy(stub, static_cast<const unsigned char*>(elf.mem) + stubVaddr, sizeof(stub));
+  const std::uint64_t immlo = (stub[0] >> 29) & 0x3U;
+  const std::uint64_t immhi = (stub[0] >> 5) & 0x7FFFFU;
+  const std::uint64_t adrpPage = (stubVaddr & ~0xFFFULL) + (((immhi << 2) | immlo) << 12);
+  const std::uint64_t ldrOffset = ((stub[1] >> 10) & 0xFFFU) * 8;
+  if ((stub[0] & 0x9F00001FU) != 0x90000010U || adrpPage != (slot & ~0xFFFULL) || (stub[1] & 0xFFC003FFU) != 0xF9400211U ||
+      ldrOffset != (slot & 0xFFFU) || stub[3] != 0xD61F0220U) {
+    std::fprintf(stderr, "%s: PLT stub at %#llx does not load the slot %#llx\n", what,
+                 static_cast<unsigned long long>(stubVaddr), static_cast<unsigned long long>(slot));
+    QCHECK(false);
+  }
+  std::vector<std::uint64_t> callers;
+  for (const Elf64_Phdr& ph : elf.phdrs) {
+    if (ph.p_type != PT_LOAD || (ph.p_flags & PF_X) == 0) continue;
+    for (std::uint64_t at = ph.p_vaddr; at + 4 <= ph.p_vaddr + ph.p_filesz; at += 4) {
+      std::uint32_t word = 0;
+      std::memcpy(&word, static_cast<const unsigned char*>(elf.mem) + at, sizeof(word));
+      if ((word & 0x7c000000U) != 0x14000000U) continue;  // b or bl
+      std::int64_t imm = static_cast<std::int64_t>(word & 0x03ffffffU);
+      if ((imm & 0x02000000) != 0) imm -= 0x04000000;
+      if (at + static_cast<std::uint64_t>(imm * 4) == stubVaddr) callers.push_back(at);
+    }
+  }
+  return callers;
+}
+
+// The symbol is defined at `vaddr` in .dynsym.
+void CheckDefinedAt(const LoadedElf& elf, const char* symbol, std::uint64_t vaddr) {
+  if (DynamicSymbolValue(elf, symbol) != vaddr) {
+    std::fprintf(stderr, "%s: .dynsym value is not %#llx\n", symbol, static_cast<unsigned long long>(vaddr));
+    QCHECK(false);
+  }
+}
+
 void CheckBuildId(const LoadedElf& elf, const char* expected) {
   char actual[64] = {};
   QCHECK(ReadBuildId(elf.image, actual, sizeof(actual)));
@@ -159,7 +197,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "got_pinned_test: cannot load an AArch64 ELF64 from the given paths\n");
     return 2;
   }
-  CheckBuildId(r15, pinned::kLibR15BuildId);
+  CheckBuildId(r15, pinned::kLibR15StockBuildId);
   CheckBuildId(mm, pinned::kMatchmakingBuildId);
   CheckBuildId(ovr, nevr_quest_login::PrerequisiteTargets::kPnsovrBuildId);
 
@@ -174,6 +212,10 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15RequestPermissions(), "libr15 CSysInfo::RequestPermissions JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15CheckPermission(), "libr15 CSysInfo::CheckPermission JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15OSBuildVersion(), "libr15 CSysInfo::OSBuildVersion JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15ProviderCreate(), "libr15 CNSProvider::Create JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15ProviderDestroy(), "libr15 CNSProvider::Destroy JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15ProviderId(), "libr15 CNSProvider::ProviderID JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15UserProviderId(), "libr15 CNSProvider::UserProviderID JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15ShowSystemUI(), "libr15 CVR::ShowSystemUI JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15CanvasSetText(), "libr15 CCanvasUICS::SetText(char const*) JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15MountObb(), "libr15 AStorageManager_mountObb JUMP_SLOT");
@@ -330,12 +372,42 @@ int main(int argc, char** argv) {
     QCHECK(false);
   }
 
-  // CR15VRMenuWidgetCS::Update, the entry the splash skip patches inline (#1128): its first four instructions are the
-  // ones the install proves before writing, at the vaddr it patches.
-  if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + pinned::kWidgetUpdateVaddr, pinned::kWidgetUpdateCode,
-                  sizeof(pinned::kWidgetUpdateCode)) != 0) {
-    std::fprintf(stderr, "libr15 CR15VRMenuWidgetCS::Update: first instructions at %#llx differ from the pinned ones\n",
-                 static_cast<unsigned long long>(pinned::kWidgetUpdateVaddr));
+  // NR15Logger::MetricLog, the wizard observer's JUMP_SLOT (ADR 0017, #966): the slot resolves at its pin, the symbol is
+  // defined at the pinned address, and the first four instructions are the ones the observer proves before it installs.
+  CheckTarget(r15, pinned::LibR15MetricLog(), "libr15 NR15Logger::MetricLog JUMP_SLOT");
+  if (DynamicSymbolValue(r15, pinned::kMetricLogSymbol) != pinned::kMetricLogVaddr) {
+    std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", pinned::kMetricLogSymbol,
+                 static_cast<unsigned long long>(pinned::kMetricLogVaddr));
+    QCHECK(false);
+  }
+  if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + pinned::kMetricLogVaddr, pinned::kMetricLogCode,
+                  sizeof(pinned::kMetricLogCode)) != 0) {
+    std::fprintf(stderr, "libr15 NR15Logger::MetricLog: first instructions differ from the pinned ones\n");
+    QCHECK(false);
+  }
+
+  // The main-menu join (#966 S4): the two functions it calls, at their pinned addresses, with the prologue words ReVault reads
+  // (0x1301be4 BeginMultiplayer, 0x13005fc EnableTransitionMenu; ReVault = pinned + 0x100000). The join checks the same words.
+  if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + pinned::kBeginMultiplayerVaddr, pinned::kBeginMultiplayerCode,
+                  sizeof(pinned::kBeginMultiplayerCode)) != 0) {
+    std::fprintf(stderr, "libr15 CR15Game::BeginMultiplayer: first instructions differ from the pinned ones\n");
+    QCHECK(false);
+  }
+  if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + pinned::kEnableTransitionMenuVaddr,
+                  pinned::kEnableTransitionMenuCode, sizeof(pinned::kEnableTransitionMenuCode)) != 0) {
+    std::fprintf(stderr, "libr15 CR15Game::EnableTransitionMenu: first instructions differ from the pinned ones\n");
+    QCHECK(false);
+  }
+
+  // CGTextureResource::ForceLoadAllMips, which the UI texture hook calls through the address it proves: its first
+  // four instructions are the ones ui_texture_mips.cpp checks before calling it. The inline hook rows (the widget
+  // update, the lobby-full handlers, the texture attach) are not pinned here: the patcher pinned test checks every row's
+  // stock words against the real file (libr15_patcher_pinned_test.cpp).
+  if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + pinned::kForceLoadAllMipsVaddr,
+                  pinned::kForceLoadAllMipsCode, sizeof(pinned::kForceLoadAllMipsCode)) != 0) {
+    std::fprintf(stderr,
+                 "libr15 CGTextureResource::ForceLoadAllMips: first instructions at %#llx differ from the pinned ones\n",
+                 static_cast<unsigned long long>(pinned::kForceLoadAllMipsVaddr));
     QCHECK(false);
   }
 
@@ -410,6 +482,46 @@ int main(int argc, char** argv) {
                    static_cast<unsigned long long>(pinned::kOSBuildVersionCallSite));
       for (const std::uint64_t at : callers) std::fprintf(stderr, "  caller %#llx\n", static_cast<unsigned long long>(at));
       QCHECK(false);
+    }
+  }
+
+  // The platform provider (#1220): each provider function and the two functions the hooks call are defined where
+  // pinned_targets.h says; each stub loads its hooked slot; Create's and Destroy's stubs have exactly the call sites
+  // pinned_targets.h names (CR15Game::Initialize, ShutdownEngine), and ProviderID's and UserProviderID's the counts it gives.
+  CheckDefinedAt(r15, pinned::kProviderCreateSymbol, pinned::kProviderCreateVaddr);
+  CheckDefinedAt(r15, pinned::kProviderDestroySymbol, pinned::kProviderDestroyVaddr);
+  CheckDefinedAt(r15, pinned::kProviderIdSymbol, pinned::kProviderIdVaddr);
+  CheckDefinedAt(r15, pinned::kUserProviderIdSymbol, pinned::kUserProviderIdVaddr);
+  CheckDefinedAt(r15, pinned::kSysModuleUnloadSymbol, pinned::kSysModuleUnloadVaddr);
+  CheckDefinedAt(r15, pinned::kCJsonTStringSymbol, pinned::kCJsonTStringVaddr);
+  {
+    struct Expected {
+      const char* what;
+      std::uint64_t stub;
+      std::uint64_t slot;
+      std::vector<std::uint64_t> sites;  // empty: only the count is pinned
+      std::size_t count;
+    };
+    const Expected expected[] = {
+        {"libr15 CNSProvider::Create", pinned::kProviderCreateStub, *pinned::LibR15ProviderCreate().slotVaddr,
+         std::vector<std::uint64_t>(std::begin(pinned::kProviderCreateCallSites), std::end(pinned::kProviderCreateCallSites)),
+         std::size(pinned::kProviderCreateCallSites)},
+        {"libr15 CNSProvider::Destroy", pinned::kProviderDestroyStub, *pinned::LibR15ProviderDestroy().slotVaddr,
+         std::vector<std::uint64_t>(std::begin(pinned::kProviderDestroyCallSites),
+                                    std::end(pinned::kProviderDestroyCallSites)),
+         std::size(pinned::kProviderDestroyCallSites)},
+        {"libr15 CNSProvider::ProviderID", pinned::kProviderIdStub, *pinned::LibR15ProviderId().slotVaddr, {},
+         pinned::kProviderIdCallers},
+        {"libr15 CNSProvider::UserProviderID", pinned::kUserProviderIdStub, *pinned::LibR15UserProviderId().slotVaddr, {},
+         pinned::kUserProviderIdCallers},
+    };
+    for (const Expected& e : expected) {
+      const std::vector<std::uint64_t> callers = StubCallers(r15, e.stub, e.slot, e.what);
+      if (callers.size() != e.count || (!e.sites.empty() && callers != e.sites)) {
+        std::fprintf(stderr, "%s: stub has %zu b/bl callers, not the %zu pinned\n", e.what, callers.size(), e.count);
+        for (const std::uint64_t at : callers) std::fprintf(stderr, "  caller %#llx\n", static_cast<unsigned long long>(at));
+        QCHECK(false);
+      }
     }
   }
 

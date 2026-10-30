@@ -737,7 +737,7 @@ constexpr uintptr_t GET_TIME_OVERRIDE_VALUE = 0x209CB00;
 
 // ============================================================================
 // #954 frame-time probe (runtime/frame/frame_stats.h)
-// ============================================================================
+// =====================================================================// ============================================================================
 
 /// Address: the instruction after CncaGame::RunMainLoop's call to GetTimeMicroseconds (0x14050bd4c).
 /// RunMainLoop (0x14050bd00) loops back to its CALL at 0x14050bd47 (JZ 0x14050bd47 at 0x14050bf62), so a
@@ -754,6 +754,29 @@ constexpr uintptr_t FRAME_LOOP_HEAD_RETURN = 0x50BD4C;
 /// ovrPerfStats* out); a result below 0 is a failure (OVR_SUCCESS(r) is r >= 0).
 /// Keep-current: revault fn callers 0x1413662e0 --binary echovr.exe
 constexpr uintptr_t OVR_GET_PERF_STATS = 0x13662E0;
+=======
+// Server Bots (nevr_server_bots, #1423)
+// ============================================================================
+
+/// RequestAddBot (0x1401A0D70): the add-bot request R15NetSpawnBotNode (0x140DE4CC0) makes, called with the net
+/// game and a 0xD8-byte request. The sites the driver checks before its first call are in runtime/patch/server_bots.h.
+constexpr uintptr_t REQUEST_ADD_BOT = 0x1A0D70;
+/// FindPool (0x140502D80): the pool that holds a body, as the game's bot body allocation (0x1404E61E0) finds it.
+constexpr uintptr_t FIND_POOL = 0x502D80;
+/// The 12 bytes the spawn-bot node copies to the request's +0x20 (.data 0x14201D338 and 0x14201D340): no position.
+constexpr uintptr_t NO_SPAWN_POSITION = 0x201D338;
+// Server Team Size (nevr_server_team_size, #1422)
+// ============================================================================
+
+/// Two checked-patch sites inside ServerAssignTeam (0x1401AB730; `.pdata` chained to 0x1401ABE4B; named by its own
+/// "[NETGAME] \tServerAssignTeam:" lines). The bytes and the rule are in runtime/patch/server_team_size.h.
+/// The team cap: `mov eax, 5; shr rsi, 1; cmp rsi, 5` (VA 0x1401AB8C2), min(Lobby::maxEntrants / 2, 5).
+constexpr uintptr_t SERVER_ASSIGN_TEAM_CAP = 0x1AB8C2;
+constexpr size_t SERVER_ASSIGN_TEAM_CAP_SIZE = 12;
+/// The team slot: the team's count into the member's 5-bit slot field, and the two copies of the word after it
+/// (VA 0x1401ABC8A to 0x1401ABCA3).
+constexpr uintptr_t SERVER_ASSIGN_TEAM_SLOT = 0x1ABC8A;
+constexpr size_t SERVER_ASSIGN_TEAM_SLOT_SIZE = 26;
 
 // ============================================================================
 // Future Wave 1 Hook Targets (validated, not yet hooked)

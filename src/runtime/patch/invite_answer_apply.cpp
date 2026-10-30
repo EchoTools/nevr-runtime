@@ -5,6 +5,7 @@
 
 #include "core/logging.h"
 #include "runtime/patch/invite_answer_text.h"
+#include "runtime/patch/invite_join_game.h"
 #include "runtime/patch/invite_service.h"
 #include "runtime/patch/ui_text_writer.h"
 
@@ -18,6 +19,8 @@ nevr_invite_text::Kept g_kept;
 
 void OnFrame() {
   if (!nevr_invite_service::Active()) return;
+  // #1415: nothing waits, so this frame costs one atomic load and takes no service lock.
+  if (!nevr_invite_service::AnswersPending()) return;
   const std::vector<nevr_invite::Answer> answers = nevr_invite_service::TakeAnswers();
   if (answers.empty()) return;
   g_kept.Add(answers);
@@ -26,6 +29,8 @@ void OnFrame() {
       [](nevr_invite::LogLevel level, const std::string& line) {
         Log(level == nevr_invite::LogLevel::Warning ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info, "%s", line.c_str());
       });
+  // #1401: a resolved code starts the join of its match. The game's thread is the one this runs on (frame/tick.cpp).
+  nevr_invite_join_game::OfferResolved(answers);
 }
 
 void KeepForTest(bool on) { g_kept.Enable(on); }

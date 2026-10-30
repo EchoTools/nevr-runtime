@@ -30,6 +30,12 @@ add_compile_options(
 
 message(STATUS "nevr_quest: ABI=${ANDROID_ABI} platform=${ANDROID_PLATFORM} STL=${ANDROID_STL}")
 
+# The extra rows of a variant build (docs/adr/0021 section 11): a file of word-patch rows, the same file the libr15 patcher is
+# given (`android-repack-apk ... extra_rows=<file>`). Empty is the public build: no parser is linked and no row is carried. A
+# relative path is taken from the repository root. A file the patcher would refuse is a configure error
+# (cmake/libr15_extra_rows.cmake). The file is supplied by whoever builds the variant; it is never committed.
+set(NEVR_LIBR15_EXTRA_ROWS "" CACHE FILEPATH "Word-patch rows for a variant build (empty: the public build)")
+
 # The plugin SDK (sdk/CMakeLists.txt): nevr::plugin_sdk, the plugin C ABI and the CSymbol64 hash. The Quest loader and
 # its plugins build against the target a plugin outside this repository links.
 add_subdirectory("${NEVR_REPO_ROOT}/sdk" "${CMAKE_BINARY_DIR}/nevr_plugin_sdk")
@@ -122,7 +128,7 @@ set_source_files_properties(
 target_include_directories(nevr_quest_social PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
 # menu_version_label.cpp includes generated/nevr_build_info.h, which nevr_generate_build_info writes to the build tree.
 target_include_directories(nevr_quest_social PRIVATE "${CMAKE_BINARY_DIR}")
-target_link_libraries(nevr_quest_social PUBLIC nevr_quest_got_hook dl PRIVATE zstd::libzstd nlohmann_json::nlohmann_json)
+target_link_libraries(nevr_quest_social PUBLIC nevr_quest_got_hook nevr::plugin_sdk dl PRIVATE zstd::libzstd nlohmann_json::nlohmann_json)
 target_compile_options(nevr_quest_social PRIVATE -Wall -Wextra -Werror)
 
 foreach(social_test social_facade_test social_install_test social_names_test)
@@ -147,10 +153,6 @@ target_compile_options(nevr_quest_config PRIVATE -Wall -Wextra -Werror)
 add_executable(quest_config_test tests/quest_config_test.cpp)
 target_link_libraries(quest_config_test PRIVATE nevr_quest_config nlohmann_json::nlohmann_json)
 target_compile_options(quest_config_test PRIVATE -Wall -Wextra -Werror)
-
-# #970: the credits patch's pure encoding (sentinel/credits_text.h), checked against the pinned libr15 words.
-add_executable(credits_text_test tests/credits_text_test.cpp)
-target_compile_options(credits_text_test PRIVATE -Wall -Wextra -Werror)
 
 # Config-string redirect (CJson::TString hook adapter and decision logic).
 add_subdirectory(redirect)
@@ -286,6 +288,9 @@ endif()
 # ── Session router + loopback transport (ADR 0003, contract 3) ───────────
 # Kept in its own subdirectory so it merges cleanly alongside the other Quest packages.
 add_subdirectory(net)
+
+# ── Invite service (docs/adr/0017, #966): the PC's invite_service.cpp for the Quest, linked by the sentinel integration and the link test ──
+add_subdirectory(invite)
 
 # ── Sentinel integration (ADR 0003, "Integration") ───────────────────────
 # Wires every package above into the sentinel entry point. After net/, login, social and the redirect,

@@ -4,8 +4,10 @@
 // measured by the child-process harnesses in tests/bootstrap_attach and
 // tests/rendezvous.
 
+#include "runtime/host/host_identity.h"
 #include "runtime/host/runtime_rendezvous.h"
 #include "runtime/host/stop_notice.h"
+#include "runtime/tests/stderr_capture.h"
 
 #include <gtest/gtest.h>
 
@@ -29,16 +31,24 @@ using nevr_host::AttachStep;
 using nevr_host::BootstrapDiagnostics;
 using nevr_host::RuntimeRendezvous;
 
-std::wstring MakeTempDir() {
+// The directory name is built from a tick the caller passes, so a test can hold the tick fixed. A process-wide
+// sequence in the name keeps two calls made in one tick on two directories.
+std::wstring MakeTempDirWithTick(ULONGLONG tick) {
+  static LONG sequence = 0;
   wchar_t base[MAX_PATH] = {};
   EXPECT_GT(GetTempPathW(MAX_PATH, base), 0u);
+  const LONG n = InterlockedIncrement(&sequence);
   wchar_t dir[MAX_PATH] = {};
-  swprintf(dir, MAX_PATH, L"%ls\\nevr-rdv-%lu-%llu", base,
+  swprintf(dir, MAX_PATH, L"%ls\\nevr-rdv-%lu-%llu-%ld", base,
            static_cast<unsigned long>(GetCurrentProcessId()),
-           static_cast<unsigned long long>(GetTickCount64()));
-  EXPECT_NE(CreateDirectoryW(dir, nullptr), FALSE);
+           static_cast<unsigned long long>(tick), n);
+  const BOOL created = CreateDirectoryW(dir, nullptr);
+  const DWORD error = GetLastError();
+  EXPECT_NE(created, FALSE) << "CreateDirectoryW failed, GetLastError=" << error;
   return std::wstring(dir);
 }
+
+std::wstring MakeTempDir() { return MakeTempDirWithTick(GetTickCount64()); }
 
 std::string ReadAll(const std::wstring& path) {
   HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
@@ -81,6 +91,18 @@ class EmptyRuntimeFolder : public ::testing::Environment {
 const ::testing::Environment* const g_empty_runtime_folder = ::testing::AddGlobalTestEnvironment(new EmptyRuntimeFolder);
 
 }  // namespace
+
+// Directories made inside one GetTickCount64 tick must not share a name: three calls with one fixed tick,
+// the case two calls in the same tick produce.
+TEST(HostRendezvous, TempDirsMadeInOneTickAreDistinctAndAllCreated) {
+  const ULONGLONG tick = GetTickCount64();
+  std::vector<std::wstring> dirs;
+  for (int i = 0; i < 3; ++i) dirs.push_back(MakeTempDirWithTick(tick));
+  EXPECT_NE(dirs[0], dirs[1]);
+  EXPECT_NE(dirs[0], dirs[2]);
+  EXPECT_NE(dirs[1], dirs[2]);
+  for (const std::wstring& dir : dirs) RemoveDirectoryW(dir.c_str());
+}
 
 TEST(HostRendezvous, ThePinnedPrologueMatchesAndEveryChangedByteDoesNot) {
   const Target pinned;
@@ -433,6 +455,8 @@ namespace {
 std::vector<std::string> g_events;
 std::vector<std::wstring> g_notice_texts;
 const char* g_command_line = "";
+std::string g_stderr;     // what the last RunStopWith wrote to the standard error handle
+std::wstring g_log_path;  // the host log of the last RunStopWith
 
 void RecordNotice(const wchar_t* text) {
   g_events.push_back("notice");
@@ -445,6 +469,7 @@ const char* CommandLine() { return g_command_line; }
 // notice decision the game_stop record carries.
 std::string RunStopWith(const char* command_line, std::vector<nlohmann::json>* records_out = nullptr) {
   RendezvousSandbox sandbox;
+  nevr_test::StderrCapture capture;
   g_events.clear();
   g_notice_texts.clear();
   g_command_line = command_line;
@@ -452,6 +477,7 @@ std::string RunStopWith(const char* command_line, std::vector<nlohmann::json>* r
   RuntimeRendezvous::Seams().show_stop_notice = &RecordNotice;
   RuntimeRendezvous::Seams().command_line = &CommandLine;
   const std::wstring local = MakeTempDir();
+  g_log_path = local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl";
   BootstrapDiagnostics diagnostics;
   diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
   ReturningTarget target;
@@ -460,6 +486,7 @@ std::string RunStopWith(const char* command_line, std::vector<nlohmann::json>* r
   rendezvous.Prepare(GetModuleHandleW(L"kernel32.dll"), GetModuleHandleW(nullptr), diagnostics);
   EXPECT_NE(rendezvous.Install(target.code()), nullptr);
   for (int i = 0; i < 3; ++i) RuntimeRendezvous::GameMainWrapperDetour(0x1234);
+  g_stderr = capture.Text();
   std::string notice;
   const std::vector<nlohmann::json> records = Records(diagnostics, local);
   for (const nlohmann::json& record : records) {
@@ -478,10 +505,37 @@ TEST(HostStopNotice, AClientWithGraphicsIsToldOnceBeforeTheProcessEndsHoweverOft
   ASSERT_FALSE(g_notice_texts.empty());
   // The runtime folder is empty (EmptyRuntimeFolder): the notice says it is missing (test_host_runtime_verify holds the
   // words for each other cause).
-  EXPECT_EQ(g_notice_texts[0], L"nEVR couldn't start: nevr-runtime.dll is missing. Please run the installer.");
+  // The sentence, then which build and which log (#1252).
+  const std::wstring version(nevr_host::Version(), nevr_host::Version() + std::strlen(nevr_host::Version()));
+  EXPECT_EQ(g_notice_texts[0], std::wstring(L"nEVR couldn't start: nevr-runtime.dll is missing. Please run the installer.") +
+                                   L"\n\nnEVR " + version + L"\nLog: " + g_log_path);
   ASSERT_GE(g_events.size(), 2u);
   EXPECT_EQ(g_events[0], "notice") << "the player is told before the process is ended";
   EXPECT_EQ(g_events[1], "stop");
+}
+
+// #1252: whatever the command line says about a dialog, the console gets the one line, once per run.
+TEST(HostStopNotice, EveryStopWritesOneStopLineToStandardErrorHoweverOftenTheDetourRuns) {
+  for (const char* line : {"\"C:\\Games\\echovr.exe\" -windowed", "echovr.exe -server -noovr", "echovr.exe -headless"}) {
+    SCOPED_TRACE(line);
+    RunStopWith(line);
+    ASSERT_FALSE(g_stderr.empty());
+    EXPECT_EQ(g_stderr.find('\n'), g_stderr.size() - 1) << "one line, three detour runs: " << g_stderr;
+    const nlohmann::json record = nlohmann::json::parse(g_stderr);
+    EXPECT_EQ(record.at("tag"), "NEVR.STOP");
+    EXPECT_EQ(record.at("event"), "stop");
+    EXPECT_EQ(record.at("stopped"), true);
+    EXPECT_EQ(record.at("code"), 78);
+    EXPECT_EQ(record.at("reason"), "runtime_absent");
+    EXPECT_EQ(record.at("host_version"), nevr_host::Version());
+    EXPECT_EQ(record.at("runtime_version"), "not loaded");
+    EXPECT_NE(std::string(record.at("detail")).find("nevr-runtime.dll is missing; path="), std::string::npos);
+    // UTF-8, not one narrowed code unit per character: a temp path with a non-ASCII user name must still match.
+    std::string expected_log(static_cast<std::size_t>(WideCharToMultiByte(CP_UTF8, 0, g_log_path.c_str(), -1, nullptr, 0, nullptr, nullptr)), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, g_log_path.c_str(), -1, expected_log.data(), static_cast<int>(expected_log.size()), nullptr, nullptr);
+    expected_log.resize(expected_log.size() - 1);
+    EXPECT_EQ(record.at("log"), expected_log);
+  }
 }
 
 TEST(HostStopNotice, AServerIsNeverShownADialogThatWouldHoldTheProcess) {

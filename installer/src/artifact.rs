@@ -137,30 +137,46 @@ pub fn extract(zip_path: &Path, art: &Artifact, root: &Path) -> Result<Vec<PathB
         if let Some(dir) = dest.parent() {
             fs::create_dir_all(dir).map_err(|e| fail(format!("{}: {e}", dir.display())))?;
         }
-        let mut tmp_name = dest.as_os_str().to_owned();
-        tmp_name.push(".new");
-        let tmp = PathBuf::from(tmp_name);
-        let mut out = File::create(&tmp).map_err(|e| fail(format!("{}: {e}", tmp.display())))?;
-        let mut hasher = Sha256::new();
-        let (mut n, mut buf) = (0u64, vec![0u8; 65536]);
-        let mut reader = entry.by_ref().take(c.size + 1);
-        loop {
-            let k = reader.read(&mut buf).map_err(|e| fail(format!("{}: {e}", c.path)))?;
-            if k == 0 {
-                break;
-            }
-            hasher.update(&buf[..k]);
-            n += k as u64;
-            out.write_all(&buf[..k]).map_err(|e| fail(format!("{}: {e}", tmp.display())))?;
-        }
-        out.sync_all().map_err(|e| fail(format!("{}: {e}", tmp.display())))?;
+        // A temporary file of this writer's own, never a fixed name another run may also use (#1353). A failure removes it.
+        let (tmp, mut out) = crate::util::create_unique_temp(&dest).map_err(|e| fail(format!("{}: {e}", dest.display())))?;
+        let streamed = stream_entry(&mut entry, c, &mut out, &tmp);
         drop(out);
-        if n != c.size || hex(&hasher.finalize()) != c.sha256 {
+        let (n, digest) = match streamed {
+            Ok(done) => done,
+            Err(e) => {
+                let _ = fs::remove_file(&tmp);
+                return Err(e);
+            }
+        };
+        if n != c.size || digest != c.sha256 {
             let _ = fs::remove_file(&tmp);
             return Err(fail(format!("{} changed between the check and the extraction", c.path)));
         }
-        fs::rename(&tmp, &dest).map_err(|e| fail(format!("{}: {e}", dest.display())))?;
+        if let Err(e) = fs::rename(&tmp, &dest) {
+            let _ = fs::remove_file(&tmp);
+            return Err(fail(format!("{}: {e}", dest.display())));
+        }
         written.push(dest);
     }
     Ok(written)
+}
+
+/// Copies one zip entry into `out` (the temporary file `tmp` names, for the messages) and returns the bytes copied and
+/// their sha256 in hex. At most `c.size + 1` bytes are read, so a longer entry is seen as a mismatch.
+fn stream_entry<R: Read>(entry: &mut R, c: &crate::manifest::Content, out: &mut File, tmp: &Path) -> Result<(u64, String)> {
+    let fail = |m: String| Error::new(9, m);
+    let mut hasher = Sha256::new();
+    let (mut n, mut buf) = (0u64, vec![0u8; 65536]);
+    let mut reader = entry.by_ref().take(c.size + 1);
+    loop {
+        let k = reader.read(&mut buf).map_err(|e| fail(format!("{}: {e}", c.path)))?;
+        if k == 0 {
+            break;
+        }
+        hasher.update(&buf[..k]);
+        n += k as u64;
+        out.write_all(&buf[..k]).map_err(|e| fail(format!("{}: {e}", tmp.display())))?;
+    }
+    out.sync_all().map_err(|e| fail(format!("{}: {e}", tmp.display())))?;
+    Ok((n, hex(&hasher.finalize())))
 }

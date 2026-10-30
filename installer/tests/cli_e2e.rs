@@ -1,4 +1,4 @@
-//! The real `nevr-install` binary, one call each, against a local server that serves a manifest signed by a throwaway
+//! The real `install-nevr-runtime` binary, one call each, against a local server that serves a manifest signed by a throwaway
 //! key. Asserts the exit code, the files, and that the log holds the records a failed install must explain itself with.
 
 mod common;
@@ -129,8 +129,9 @@ fn run_with(w: &World, args: &[&str], base: &str, envs: &[(&str, String)]) -> (i
 }
 
 fn run_cmd(server: &World, dirs: &World, args: &[&str], base: &str, envs: &[(&str, String)]) -> (i32, Value, String) {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_nevr-install"));
-    cmd.args(args).args(["--root", dirs.root.path().to_str().unwrap(), "--nevr-root", dirs.nevr.path().to_str().unwrap(), "--base", base, "--pins", server.pins.to_str().unwrap(), "--now", NOW]);
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime"));
+    // The fixture's nevr root is a temporary folder, not the canonical one: a dev run says so (#1353).
+    cmd.args(args).args(["--root", dirs.root.path().to_str().unwrap(), "--nevr-root", dirs.nevr.path().to_str().unwrap(), "--dev-nevr-root", "--base", base, "--pins", server.pins.to_str().unwrap(), "--now", NOW]);
     for (k, v) in envs {
         cmd.env(k, v);
     }
@@ -193,7 +194,7 @@ fn without_a_nevr_root_the_install_asks_for_one_and_changes_nothing() {
     let w = world(false);
     let dir = w.game.path().to_str().unwrap();
     for extra in [vec![], vec!["--nevr-root", "relative/root"]] {
-        let o = Command::new(env!("CARGO_BIN_EXE_nevr-install"))
+        let o = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime"))
             .args(["pc", "install", "--dir", dir, "--root", w.root.path().to_str().unwrap(), "--base", &w.base, "--pins", w.pins.to_str().unwrap(), "--now", NOW])
             .args(&extra)
             .env_remove("LOCALAPPDATA")
@@ -277,16 +278,18 @@ fn manifest_verify_stores_the_pair_and_state() {
 fn quest_plan_without_a_device_reports_the_release_and_installs_nothing() {
     let w = world(false);
     let (code, out, _) = run(&w, &["quest", "plan", "--no-device"]);
-    // The test release has no quest-apk, so the plan refuses and says why.
-    assert_eq!(code, 0, "{out}");
+    // The test release has no quest-apk, so the plan refuses and says why. A refused plan is a failed request, so it exits 1
+    // (#1353); this assertion used to expect 0, which was the defect.
+    assert_eq!(code, 1, "{out}");
     assert_eq!(out["state"], "unchanged");
     assert!(out["plan"]["reasons"][0].as_str().unwrap().contains("quest-apk"), "{out}");
 }
 
 #[test]
 fn usage_error_exits_1() {
-    let o = Command::new(env!("CARGO_BIN_EXE_nevr-install")).arg("nonsense").output().unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime")).arg("nonsense").output().unwrap();
     assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("usage: install-nevr-runtime <command>"), "{}", String::from_utf8_lossy(&o.stderr));
 }
 
 #[test]
@@ -361,9 +364,9 @@ fn run_with_log_cut_before(w: &World, target: &str, scenario: fn(&World)) -> (i3
     std::fs::write(w.root.path().join("logs/nevr-install.jsonl"), format!("{}\n", "#".repeat(pad - 1))).unwrap();
     scenario(w);
     let o = Command::new("bash")
-        .args(["-c", "trap '' XFSZ; ulimit -f \"$0\"; exec \"$@\"", &kb.to_string(), env!("CARGO_BIN_EXE_nevr-install")])
+        .args(["-c", "trap '' XFSZ; ulimit -f \"$0\"; exec \"$@\"", &kb.to_string(), env!("CARGO_BIN_EXE_install-nevr-runtime")])
         .args(["pc", "install", "--dir", w.game.path().to_str().unwrap()])
-        .args(["--root", w.root.path().to_str().unwrap(), "--nevr-root", w.nevr.path().to_str().unwrap(), "--base", &w.base, "--pins", w.pins.to_str().unwrap(), "--now", NOW])
+        .args(["--root", w.root.path().to_str().unwrap(), "--nevr-root", w.nevr.path().to_str().unwrap(), "--dev-nevr-root", "--base", &w.base,"--pins", w.pins.to_str().unwrap(), "--now", NOW])
         .output()
         .unwrap();
     reopen_game_folder(w);
@@ -489,9 +492,9 @@ fn a_stored_manifest_that_is_stale_is_not_used_offline() {
     let w = world_with(false, false, false);
     assert_eq!(run(&w, &["manifest", "verify"]).0, 0);
     let pkg = package_dir(HOST, Some(RT));
-    let o = Command::new(env!("CARGO_BIN_EXE_nevr-install"))
+    let o = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime"))
         .args(["pc", "install", "--dir", w.game.path().to_str().unwrap(), "--package-dir", pkg.path().to_str().unwrap()])
-        .args(["--root", w.root.path().to_str().unwrap(), "--nevr-root", w.nevr.path().to_str().unwrap(), "--base", "http://127.0.0.1:1", "--pins", w.pins.to_str().unwrap(), "--now", "2026-12-01T00:00:00Z"])
+        .args(["--root", w.root.path().to_str().unwrap(), "--nevr-root", w.nevr.path().to_str().unwrap(), "--dev-nevr-root", "--base", "http://127.0.0.1:1","--pins", w.pins.to_str().unwrap(), "--now", "2026-12-01T00:00:00Z"])
         .output()
         .unwrap();
     assert_eq!(o.status.code(), Some(1), "{}", String::from_utf8_lossy(&o.stdout));
@@ -841,7 +844,7 @@ fn a_run_that_changes_the_package_but_fails_to_push_says_needs_user() {
 fn adb_is_never_given_the_terminal_or_the_callers_stdin() {
     let (w, tools, state) = (quest_world(), fake_headset(), tempfile::tempdir().unwrap());
     let path = format!("{}:{}", tools.path().display(), std::env::var("PATH").unwrap());
-    let mut child = Command::new(env!("CARGO_BIN_EXE_nevr-install"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime"))
         .args(["quest", "install", "--root", w.root.path().to_str().unwrap(), "--base", &w.base, "--pins", w.pins.to_str().unwrap(), "--now", NOW])
         .env("PATH", path)
         .env("FAKE_STATE", state.path())
@@ -1038,4 +1041,102 @@ fn a_launcher_json_that_is_there_but_unreadable_is_not_taken_for_no_launcher() {
     assert_eq!((code, out["state"].as_str()), (2, Some("needs-user")), "{out}");
     assert!(out["reason"].as_str().unwrap().contains("cannot tell whether a launcher manages"), "{out}");
     assert_eq!(tree_of(&l.game), before);
+}
+
+#[test]
+fn a_base_url_with_credentials_is_never_written_to_the_log_or_the_output() {
+    // A closed loopback port: the fetch fails at connect, and the failure text is what the run writes down.
+    let w = world(false);
+    let base = "https://user:s3cret-token@127.0.0.1:1/nevr-runtime";
+    let (code, out, err) = run_with(&w, &["manifest", "verify"], base, &[]);
+    assert_eq!(code, 1, "{out}");
+    let log = std::fs::read_to_string(w.root.path().join("logs/nevr-install.jsonl")).unwrap();
+    for text in [out.to_string(), err, log] {
+        assert!(!text.contains("s3cret-token") && !text.contains("user:"), "the credentials were written down: {text}");
+    }
+}
+
+#[test]
+fn manifest_verify_waits_for_the_state_lock_before_it_reads_the_state() {
+    let w = world(false);
+    let state = w.root.path().join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    // Another run holds the state lock: the lock file the installer takes in the state directory.
+    let holder = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(state.join("state.lock")).unwrap();
+    holder.lock().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime"))
+        .args(["manifest", "verify", "--root", w.root.path().to_str().unwrap(), "--nevr-root", w.nevr.path().to_str().unwrap(), "--base", &w.base, "--pins", w.pins.to_str().unwrap(), "--now", NOW])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // The run writes its start, then takes the lock, and only then fetches. While the lock is held it must fetch nothing: a
+    // run that does not wait writes its fetch record within moments, so a three-second window tells the two apart.
+    let log = w.root.path().join("logs/nevr-install.jsonl");
+    let fetched = || std::fs::read_to_string(&log).unwrap_or_default().contains("\"manifest_fetch\"");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while !fetched() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(!fetched(), "the run fetched the manifest while another run held the state lock");
+    assert!(child.try_wait().unwrap().is_none(), "the run finished while another run held the state lock");
+    drop(holder);
+    assert_eq!(child.wait().unwrap().code(), Some(0));
+    assert!(fetched(), "the run did not fetch once it had the lock");
+}
+
+#[test]
+fn a_nevr_root_other_than_the_canonical_one_is_refused_unless_a_dev_run_names_it() {
+    let w = world(false);
+    let out = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime"))
+        .args(["pc", "install", "--dir", w.game.path().to_str().unwrap(), "--root", w.root.path().to_str().unwrap(), "--nevr-root", w.nevr.path().to_str().unwrap(), "--base", &w.base, "--pins", w.pins.to_str().unwrap(), "--now", NOW])
+        .env_remove("LOCALAPPDATA")
+        .output()
+        .unwrap();
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {}", String::from_utf8_lossy(&out.stdout)));
+    assert_eq!(out.status.code(), Some(2), "{v}");
+    assert!(v["reason"].as_str().unwrap_or("").contains("--dev-nevr-root"), "{v}");
+    // Nothing is installed into the game folder: the host is still the game's own file.
+    assert_eq!(std::fs::read(w.game.path().join("BugSplat64.dll")).unwrap(), GAME);
+    assert!(!w.nevr.path().join("nevr-runtime.dll").exists());
+}
+
+#[test]
+fn launch_check_refuses_a_root_the_host_does_not_load_from_before_it_reads_a_log() {
+    let w = world(false);
+    let out = Command::new(env!("CARGO_BIN_EXE_install-nevr-runtime"))
+        .args(["pc", "launch-check", "--dir", w.game.path().to_str().unwrap(), "--root", w.root.path().to_str().unwrap(), "--nevr-root", w.nevr.path().to_str().unwrap(), "--base", &w.base, "--pins", w.pins.to_str().unwrap(), "--now", NOW])
+        .env_remove("LOCALAPPDATA")
+        .output()
+        .unwrap();
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {}", String::from_utf8_lossy(&out.stdout)));
+    assert_eq!((out.status.code(), v["state"].as_str()), (Some(2), Some("needs-user")), "{v}");
+    assert!(v["reason"].as_str().unwrap_or("").contains("--dev-nevr-root"), "{v}");
+}
+
+#[test]
+fn a_stage_download_that_fails_logs_the_base_without_its_credentials() {
+    // The updater's state folder is <nevr root>/update/manifest (ADR 0024). An earlier run stores the pair there, so the
+    // staging run can use it while the base is unreachable.
+    let w = world(false);
+    let nevr = w.nevr.path();
+    let state = nevr.join("update").join("manifest");
+    let pins = w.pins.to_str().unwrap();
+    let bin = env!("CARGO_BIN_EXE_install-nevr-runtime");
+    let stored = Command::new(bin)
+        .args(["manifest", "verify", "--root", w.root.path().to_str().unwrap(), "--state-dir", state.to_str().unwrap(), "--base", &w.base, "--pins", pins, "--now", NOW])
+        .output()
+        .unwrap();
+    assert_eq!(stored.status.code(), Some(0), "{}", String::from_utf8_lossy(&stored.stdout));
+    let base = "https://user:s3cret-token@127.0.0.1:1/nevr-runtime";
+    let o = Command::new(bin)
+        .args(["pc", "stage", "--root", nevr.to_str().unwrap(), "--state-dir", state.to_str().unwrap(), "--base", base, "--pins", pins, "--now", NOW])
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(1), "{}", String::from_utf8_lossy(&o.stdout));
+    let log = std::fs::read_to_string(nevr.join("logs/nevr-update.jsonl")).unwrap();
+    assert!(!log.contains("s3cret-token") && !log.contains("user:"), "the credentials were written down: {log}");
+    let fetch: Value = log.lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).find(|r| r["event"] == "artifact_fetch").expect("the failed download is logged");
+    assert_eq!(fetch["ok"], false, "{fetch}");
+    assert!(fetch["url"].as_str().unwrap_or("").starts_with("https://127.0.0.1:1/nevr-runtime/v"), "{fetch}");
 }

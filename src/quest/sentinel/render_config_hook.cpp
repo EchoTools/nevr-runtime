@@ -13,6 +13,7 @@
 #endif
 
 #include "hook_install.h"
+#include "clock_levels_hook.h"
 #include "hook_log.h"
 #include "pinned_targets.h"
 #include "render_config.h"
@@ -61,7 +62,7 @@ Value ToMilli(float hertz) noexcept {
   return static_cast<Value>(hertz * 1000.0f + 0.5f);
 }
 
-// Every handler calls the original first with the game's own arguments, then records, then returns the original's result:
+// Every handler calls the original first with the game's own arguments (clock levels: see OnSetClockLevels), then records, then returns the original's result:
 // the game's behaviour does not depend on this module. None logs, allocates or throws (callback_thunk.h rule 1).
 
 int OnSetDisplayRefreshRate(RefreshRateThunk::Fn original, OvrMobileOpaque* ovr, float rate) noexcept {
@@ -71,10 +72,14 @@ int OnSetDisplayRefreshRate(RefreshRateThunk::Fn original, OvrMobileOpaque* ovr,
   return result;
 }
 
+// The one handler that may change an argument: clock_levels::Choose (#928) answers which levels the original is called with,
+// the game's own unless the clock-level override is on and the game asked for its stock (2, 2). The levels stored are the ones
+// the original was called with, so the line says what the headset was asked for.
 int OnSetClockLevels(ClockLevelsThunk::Fn original, OvrMobileOpaque* ovr, int cpuLevel, int gpuLevel) noexcept {
-  const int result = original(ovr, cpuLevel, gpuLevel);
-  g_cpuLevel.store(cpuLevel, std::memory_order_relaxed);
-  g_gpuLevel.store(gpuLevel, std::memory_order_relaxed);
+  const clock_levels::Levels applied = clock_levels::Choose(cpuLevel, gpuLevel);
+  const int result = original(ovr, applied.cpu, applied.gpu);
+  g_cpuLevel.store(applied.cpu, std::memory_order_relaxed);
+  g_gpuLevel.store(applied.gpu, std::memory_order_relaxed);
   g_clockResult.store(result, std::memory_order_relaxed);
   return result;
 }
@@ -219,7 +224,7 @@ bool ReadInt32Pair(const sentinel::ElfImage& image, std::uint64_t vaddr, std::in
 bool ReadGlobalsProduction(Globals* out) noexcept {
   sentinel::ElfImage image;
   if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) return false;
-  return ReadGlobalsFrom(image, sentinel::pinned::kLibR15BuildId, out);
+  return ReadGlobalsFrom(image, sentinel::pinned::LibR15PatchedBuildId(), out);
 }
 
 void ReadDeviceProduction(Device* out) noexcept {

@@ -2,7 +2,8 @@ name: Release train
 
 # Cuts a pre-release by itself when main carries a feat, fix, perf or breaking change that the newest tag does not
 # (RELEASING.md, "When to release"). It runs every three hours and does nothing until the repository variable RELEASE_TRAIN is
-# "true": merging this file cuts no release. Every step that could leave a bad release fails the run red and leaves
+# "true": merging this file cuts no release. A scheduled run also holds, and cuts nothing, when a release was published
+# within the last 195 minutes (tools/release_window.py, the rule the train guard shares); a manual or guard dispatch is not held. Every step that could leave a bad release fails the run red and leaves
 # the draft unpublished (RELEASING.md, "A draft that fails its checks"). Nothing here reads the pre-release flag.
 #
 # Credentials: the signer dispatch needs the secret RELEASE_SIGNER_TOKEN, a token with actions: write on
@@ -28,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
-      cut: ${{ steps.plan.outputs.cut }}
+      cut: ${{ steps.plan.outputs.cut || steps.window.outputs.cut }}
       version: ${{ steps.plan.outputs.version }}
       base: ${{ steps.plan.outputs.base }}
     steps:
@@ -37,10 +38,30 @@ jobs:
         ref: main
         fetch-depth: 0
 
+    # A scheduled run (GitHub can deliver one late, after a release the previous run cut) holds when the newest published
+    # release is inside the window: exit 10 writes hold=true and cut=false and skips the plan. Any other nonzero exit fails
+    # the step red (exit 2 includes a listing with no published vX.Y.Z release in it: the check refuses to decide).
+    # A dispatched run (by hand, or the guard's) does not run this step.
+    - name: Check the release window
+      id: window
+      if: github.event_name == 'schedule'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        rc=0
+        python3 tools/release_window.py --repo "$GITHUB_REPOSITORY" || rc=$?
+        case "$rc" in
+          0) ;;
+          10) { echo "hold=true"; echo "cut=false"; } >> "$GITHUB_OUTPUT"; echo "release window: a release was published within the last 195 minutes; this run cuts nothing" ;;
+          *) echo "release_window.py failed with exit $rc" >&2; exit "$rc" ;;
+        esac
+
     # The next version is computed by tools/next_release_version.py from the commits since the newest vX.Y.Z tag
     # reachable from origin/main (docs/standards/planning.md, "Release versions"). Exit 1 is "nothing to release".
     - name: Plan the release
       id: plan
+      if: steps.window.outputs.hold != 'true'
       run: |
         set -euo pipefail
         rc=0
@@ -51,6 +72,8 @@ jobs:
           1) echo "cut=false" >> "$GITHUB_OUTPUT"; echo "nothing to release on origin/main"; exit 0 ;;
           *) echo "next_release_version.py failed with exit $rc" >&2; exit "$rc" ;;
         esac
+        # tools/next_release_version.py prints the tag with its leading v (v6.0.0). The cut job writes "v$VERSION", so strip it once here.
+        version="${version#v}"
         base=$(jq -r 'select(.event == "base") | .base' plan.jsonl)
         sha=$(git rev-parse origin/main)
         # No build gate here: nothing runs CI on a push to main, so main never has a build.yml run to wait for. Each PR
@@ -146,16 +169,16 @@ jobs:
     - name: Check the signed draft
       run: tools/release_check_draft.sh --signed "v$VERSION"
 
-    # 7. The body: the notes and the SHA-256 table from the signed files, then the per-audience section generated from
-    #    the feat and fix commits since the base tag (tools/release_audience_section.py).
+    # 7. The body: a header, the player line (the release-headlines/ files added since the base tag, else the fixed
+    #    sentence), and one line per file, rendered from the signed files by package_release.py notes. The output path must
+    #    not exist yet (the stage refuses one that does).
     - name: Write the release body
       run: |
         set -euo pipefail
         assets=$(mktemp -d)
         gh release download "v$VERSION" -D "$assets"
-        notes=$(mktemp)
-        python3 tools/package_release.py notes --assets "$assets" --out "$notes"
-        python3 tools/release_audience_section.py --repo . --base "$BASE" --rev "v$VERSION" >> "$notes"
+        notes=$(mktemp -d)/RELEASE-BODY.md
+        python3 tools/package_release.py notes --assets "$assets" --out "$notes" --repo . --base "$BASE" --rev "v$VERSION"
         gh release edit "v$VERSION" --notes-file "$notes"
         gh release view "v$VERSION" --json body --jq .body
 
