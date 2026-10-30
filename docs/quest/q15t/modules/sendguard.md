@@ -1,7 +1,7 @@
 # sendguard: a script send to a game space that is not loaded is dropped, not faulted
 
 Source: `src/quest/plugins/q15t/src/sendguard.cpp`. Option: `Q15T_SENDGUARD` (on by default in `CMakeLists.txt`). Off file:
-`sendguard.off` in the plugin data directory. No host test yet (KNOWN-WRONG: the module ships without one; the headset check below is
+`sendguard.off` in the plugin data directory. No host test yet (KNOWN-WRONG #1603: the module ships without one; the headset check below is
 the only run).
 
 ## What the stock code does
