@@ -10,7 +10,8 @@
  * slot +0x28 (FUN_1400cdee0(allocator, alignment, size), CElephantAllocator::vslot[5]; the game's own reader allocates
  * the buffer it reads through that slot, SetupReadBuffer 0x141524952), and copies the bytes in. The caller keeps its own
  * bytes and writes the block only when the copy exists in full. The game's original buffer is left alone (the reader may
- * own it), so one buffer per replaced load stays allocated.
+ * own it), so one buffer per replaced load stays allocated. CopyIntoGameHeapFor is the same copy for a buffer the runtime
+ * serves with no callback block (a plugin asset, plugin_assets.cpp): the release allocator alone decides.
  *
  * WriteInPlace (#1421) writes over the buffer the game's reader already allocated, when the bytes fit it: no allocation,
  * and the buffer the game frees is still its own. It serves a texture's payload (buffer 1), which is up to 78 MB, where a
@@ -78,6 +79,20 @@ inline void* ReleaseAllocator(void* const* contextSlot) {
     return allocator;
 }
 
+/// Allocates `size` bytes through `release` (the game's release allocator) at `alignment`, raised to kMinAlignment, and
+/// copies `bytes` in. On Copied, *out is the copy; on any other result *out is left alone.
+inline Copy AllocateCopy(void* release, uint64_t alignment, const void* bytes, uint64_t size, void** out) {
+    if (alignment < kMinAlignment) alignment = kMinAlignment;
+    void* const* table = nullptr;
+    std::memcpy(&table, release, sizeof(table));
+    const AllocFn alloc = reinterpret_cast<AllocFn>(table[kAllocSlot / sizeof(void*)]);
+    void* const copy = alloc(release, alignment, size);
+    if (copy == nullptr) return Copy::AllocFailed;
+    std::memcpy(copy, bytes, static_cast<size_t>(size));
+    *out = copy;
+    return Copy::Copied;
+}
+
 /// Allocates `size` bytes for the block `block` (at least kBlockAlignment + 8 bytes), through the allocator the game
 /// releases buffer 0 with, and copies `bytes` in. Only when the block's own allocator is that one: a buffer the game's
 /// reader did not allocate there is not ours to replace. On Copied, *out is the copy and *alignment the alignment it was
@@ -93,15 +108,18 @@ inline Copy CopyIntoGameHeap(void* const* contextSlot, const unsigned char* bloc
     if (blockAllocator != release) return Copy::AllocatorMismatch;
     uint64_t alignment = 0;
     std::memcpy(&alignment, block + kBlockAlignment, sizeof(alignment));
-    if (alignment < kMinAlignment) alignment = kMinAlignment;
-    void* const* table = nullptr;
-    std::memcpy(&table, release, sizeof(table));
-    const AllocFn alloc = reinterpret_cast<AllocFn>(table[kAllocSlot / sizeof(void*)]);
-    void* const copy = alloc(release, alignment, size);
-    if (copy == nullptr) return Copy::AllocFailed;
-    std::memcpy(copy, bytes, static_cast<size_t>(size));
-    *out = copy;
-    return Copy::Copied;
+    return AllocateCopy(release, alignment, bytes, size, out);
+}
+
+/// The same copy with no block to name the allocator: for a buffer the runtime hands the engine itself (a plugin
+/// asset, #1146's sibling). The release allocator is the only one the game frees through, so it is the only one used.
+/// The alignment is the allocator's minimum.
+inline Copy CopyIntoGameHeapFor(void* const* contextSlot, const void* bytes, uint64_t size, void** out) {
+    if (bytes == nullptr || size == 0) return Copy::NoBytes;
+    if (contextSlot == nullptr || *contextSlot == nullptr) return Copy::NoContext;
+    void* const release = ReleaseAllocator(contextSlot);
+    if (release == nullptr) return Copy::NoAllocator;
+    return AllocateCopy(release, kMinAlignment, bytes, size, out);
 }
 
 enum class InPlace {
