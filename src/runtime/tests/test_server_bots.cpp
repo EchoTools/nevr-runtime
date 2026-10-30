@@ -731,6 +731,15 @@ TEST(ServerBotsDrive, ANewSessionCountsFromZeroWithNoFrameOutOfGame) {
   EXPECT_EQ(g.state.session, "BBBB");
 }
 
+TEST(ServerBotsDrive, OutOfGameAPendingFlagIsNotSaid) {
+  FakeGame g;
+  g.state.runningLogged = true;
+  Put<int32_t>(g.netGame, 0, 8);
+  Put<int32_t>(g.netGame, 0x27D8, 1);
+  for (uint64_t now : {5000u, 16000u, 30000u}) EXPECT_TRUE(g.Update(now).empty()) << now;
+  EXPECT_TRUE(g.requests.empty());
+}
+
 TEST(ServerBotsDrive, OutOfGameNothingIsAsked) {
   FakeGame g;
   g.state.runningLogged = true;
