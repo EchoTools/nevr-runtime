@@ -43,8 +43,9 @@ TEST(ServerBotsParse, AnythingElseIsOffWithTheReason) {
     const char* text;
     const char* reason;
   };
-  const Case cases[] = {{"17", "above"}, {"99999999999", "above"}, {"-1", "whole"}, {"x", "whole"}, {"2.5", "whole"},
-                        {" 2", "whole"}};
+  // 4294967297 and 4294967312 wrap a 32-bit count to 1 and 16: the limit is checked digit by digit, before it can wrap.
+  const Case cases[] = {{"17", "above"},   {"99999999999", "above"}, {"4294967297", "above"}, {"4294967312", "above"},
+                        {"-1", "whole"},   {"x", "whole"},           {"2.5", "whole"},        {" 2", "whole"}};
   for (const Case& c : cases) {
     std::string problem;
     EXPECT_EQ(ParseBotsPerSession(c.text, &problem), 0u) << c.text;
@@ -108,6 +109,16 @@ TEST(ServerBotsSettings, BotsAddBothKeysAndKeepEverythingElse) {
   EXPECT_EQ(doc.at("features"), nlohmann::json::array({"x"}));
   // The service's own keys come first, in the order it sent them.
   EXPECT_EQ(std::string(json).rfind(kServiceSettings.substr(0, kServiceSettings.size() - 1), 0), 0u) << json;
+}
+
+TEST(ServerBotsSettings, TextOutsideAsciiKeepsItsBytes) {
+  // Only the two keys change: a name outside ASCII comes out as the UTF-8 bytes the service sent, not as \u escapes.
+  const std::string settings = "{\"gametype\":-3791849610740453517,\"name\":\"Zo\xC3\xAB \xF0\x9F\xA6\x8A\"}";
+  const std::vector<uint8_t> f = Frame(settings, kEntrants);
+  const SettingsRewrite r = RewriteSessionSettings(f.data(), f.size(), 2, 5);
+  ASSERT_EQ(r.result, SettingsResult::kRewritten);
+  const std::string json(reinterpret_cast<const char*>(r.frame.data() + kSessionStartHeaderSize));
+  EXPECT_EQ(json.rfind(settings.substr(0, settings.size() - 1), 0), 0u) << json;
 }
 
 TEST(ServerBotsSettings, PlayersPerTeamIsTheValueGiven) {
