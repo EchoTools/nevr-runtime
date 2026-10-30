@@ -16,7 +16,8 @@ enum class Result {
   Applied,         // expected bytes were present; the replacement was written and read back
   AlreadyApplied,  // the replacement is already there; nothing was written
   Mismatch,        // neither expected nor replacement bytes; nothing was written
-  WriteFailed,     // the writer failed, or the read-back is not the replacement
+  WriteFailed,     // the writer failed or the read-back is not the replacement, and the site holds no replacement
+  WrittenWithError,  // the writer reported a failure, but the read-back is the replacement: the bytes are in
 };
 
 inline const char* ResultName(Result r) {
@@ -25,6 +26,7 @@ inline const char* ResultName(Result r) {
     case Result::AlreadyApplied: return "already_applied";
     case Result::Mismatch: return "mismatch";
     case Result::WriteFailed: return "write_failed";
+    case Result::WrittenWithError: return "written_with_error";
   }
   return "unknown";
 }
@@ -37,11 +39,14 @@ struct Site {
 
 using WriteFn = bool (*)(void* dest, const void* src, size_t n);
 
+// The site is read back whatever the writer said: a writer may report a failure after its bytes went in (a protection
+// restore that failed), and the caller needs to know what the site holds, not only what the writer claimed.
 inline Result Apply(uint8_t* site, const Site& spec, WriteFn write) {
   if (std::memcmp(site, spec.patched, spec.size) == 0) return Result::AlreadyApplied;
   if (std::memcmp(site, spec.expected, spec.size) != 0) return Result::Mismatch;
-  if (!write(site, spec.patched, spec.size)) return Result::WriteFailed;
-  return std::memcmp(site, spec.patched, spec.size) == 0 ? Result::Applied : Result::WriteFailed;
+  const bool reported = write(site, spec.patched, spec.size);
+  if (std::memcmp(site, spec.patched, spec.size) != 0) return Result::WriteFailed;
+  return reported ? Result::Applied : Result::WrittenWithError;
 }
 
 // SPECTATORSTREAM_CHECK (runtime/hook/addresses.h): the 6-byte JE inside PreprocessCommandLine

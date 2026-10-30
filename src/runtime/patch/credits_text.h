@@ -162,7 +162,8 @@ enum class Outcome {
   AlreadyApplied,  // both already held it; nothing written
   Mismatch,        // a site holds neither the expected nor the new bytes; nothing written
   OutOfRange,      // the buffer is more than +-2 GiB from a site; nothing written
-  WriteFailed,     // a write failed or did not read back; both sites are back to the expected bytes
+  WriteFailed,     // a write failed; every site that was written was put back, and reads back as the game's bytes
+  PutBackFailed,   // a write failed and a site could not be put back: it still loads the buffer
 };
 
 inline const char* OutcomeName(Outcome o) {
@@ -172,6 +173,7 @@ inline const char* OutcomeName(Outcome o) {
     case Outcome::Mismatch: return "mismatch";
     case Outcome::OutOfRange: return "out_of_range";
     case Outcome::WriteFailed: return "write_failed";
+    case Outcome::PutBackFailed: return "put_back_failed";
   }
   return "unknown";
 }
@@ -183,9 +185,21 @@ struct SitePlan {
   uint8_t patched[kSiteSize];    // filled by Retarget
 };
 
-/// Points both sites at `bufferVa`, or neither. Both are checked before anything is written; if the
-/// second write fails the first is put back, so the game never runs with one site retargeted and
-/// the other not (the page would then start on one text and reset to the other).
+/// Puts a site back to the game's bytes. What the site holds decides it, not the writer's word: a site
+/// that already holds them is left alone, and any other state (our own write, whole or partial, that
+/// reported a failure) is written back and read back. True when the site reads back as the game's bytes.
+inline bool PutBack(const SitePlan& p, nevr_checked_patch::WriteFn write) {
+  if (std::memcmp(p.site, p.expected, kSiteSize) == 0) return true;
+  write(p.site, p.expected, kSiteSize);
+  return std::memcmp(p.site, p.expected, kSiteSize) == 0;
+}
+
+/// Points both sites at `bufferVa`, or neither. Both are checked before anything is written. A site whose
+/// write fails is put back, and so is the first site when the second fails, so the game never runs with
+/// one site retargeted and the other not (the page would then start on one text and reset to the other).
+/// A write that reports a failure after its bytes went in counts as a failure here, and the put-back
+/// reads the site. When a put-back does not read back, the outcome is PutBackFailed; the caller reads the
+/// sites to learn which of them still load `bufferVa`.
 inline Outcome Retarget(SitePlan& a, SitePlan& b, uint64_t bufferVa, nevr_checked_patch::WriteFn write) {
   SitePlan* const plans[2] = {&a, &b};
   for (SitePlan* p : plans) {
@@ -207,12 +221,15 @@ inline Outcome Retarget(SitePlan& a, SitePlan& b, uint64_t bufferVa, nevr_checke
 
   using nevr_checked_patch::Result;
   const nevr_checked_patch::Site first{a.expected, a.patched, kSiteSize};
-  if (nevr_checked_patch::Apply(a.site, first, write) != Result::Applied) return Outcome::WriteFailed;
+  if (nevr_checked_patch::Apply(a.site, first, write) != Result::Applied) {
+    return PutBack(a, write) ? Outcome::WriteFailed : Outcome::PutBackFailed;
+  }
   const nevr_checked_patch::Site second{b.expected, b.patched, kSiteSize};
   if (nevr_checked_patch::Apply(b.site, second, write) != Result::Applied) {
-    // Put the first site back; if even that fails the caller must treat the game as unsafe.
-    write(a.site, a.expected, kSiteSize);
-    return Outcome::WriteFailed;
+    // The second site is put back too: it may hold our bytes though its write reported a failure.
+    const bool backB = PutBack(b, write);
+    const bool backA = PutBack(a, write);
+    return backA && backB ? Outcome::WriteFailed : Outcome::PutBackFailed;
   }
   return Outcome::Applied;
 }
