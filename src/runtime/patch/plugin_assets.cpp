@@ -10,8 +10,9 @@
  *   last one, schedules the resource's initialization (or runs it inline when there is no scheduler).
  *
  * A plugin asset has no package, so there is nothing to read. For a registered (type, name) the submit hook
- * does what 0x140fa3220 does before it queues, then completes each buffer itself through 0x140fa16d0 with the
- * plugin's pointer: the engine's own completion and initialization run, and no byte is copied.
+ * does what 0x140fa3220 does before it queues, then completes each buffer itself through 0x140fa16d0 with a copy of
+ * the plugin's bytes made through the engine's allocator (game_buffer.h): the engine's own completion and
+ * initialization run, and the buffer it later frees is one its allocator made.
  */
 
 #include "runtime/patch/plugin_assets.h"
@@ -29,6 +30,7 @@
 #include "core/globals.h"
 #include "core/logging.h"
 #include "runtime/hook/symbol_corpus.h"
+#include "runtime/patch/game_buffer.h"
 
 namespace nevr::assets {
 
@@ -159,6 +161,25 @@ bool ServeFromPlugin(void* resource, const Asset& asset) {
         return false;
     }
 
+    // The engine frees buffer 0 of a resource through its own allocator when the resource unloads (game_buffer.h), so the
+    // plugin's bytes are copied into that heap first. A plugin's buffer never reaches the engine: the plugin may unload it
+    // at any time, and the engine would free a pointer its allocator did not make. Copied before any engine state changes,
+    // so a refusal leaves the resource as the engine made it.
+    void* gameCopy = nullptr;
+    const auto* contextSlot = reinterpret_cast<void* const*>(Base() + nevr_game_buffer::kMemoryContextRva);
+    const nevr_game_buffer::Copy copied =
+        nevr_game_buffer::CopyIntoGameHeapFor(contextSlot, asset.data, asset.size, &gameCopy);
+    if (copied != nevr_game_buffer::Copy::Copied) {
+        if (FirstWarningFor(asset.type, asset.name)) {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.ASSET] not served label=%s type=0x%016llx name=0x%016llx bytes=%llu reason=%s",
+                asset.label.c_str(), static_cast<unsigned long long>(asset.type),
+                static_cast<unsigned long long>(asset.name), static_cast<unsigned long long>(asset.size),
+                nevr_game_buffer::CopyName(copied));
+        }
+        return false;
+    }
+
     // The part of 0x140fa3220 that precedes the queueing: the pending mask, the state, the outstanding count.
     auto* bytes = static_cast<uint8_t*>(resource);
     *reinterpret_cast<volatile uint32_t*>(bytes + kObjPendingMask) = mask;
@@ -169,7 +190,7 @@ bool ServeFromPlugin(void* resource, const Asset& asset) {
     done.status = kStatusSuccess;
     done.resource = resource;
     done.bufferIndex = 0;
-    done.buffer = asset.data;
+    done.buffer = gameCopy;
     done.size = asset.size;
     auto complete = reinterpret_cast<CompletionFn>(Base() + kRvaCompletion);
     complete(&done);

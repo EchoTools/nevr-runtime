@@ -19,6 +19,7 @@
 #include "login_prompt_hook.h"
 #include "login_title_hook.h"
 #include "quest/invite/frame_dispatch.h"
+#include "main_level.h"
 #include "menu_cards_hook.h"
 #include "quest/invite/wizard_metric_hook.h"
 #include "quest/invite/join_game_quest.h"
@@ -230,6 +231,10 @@ bool InstallWizardMetricHook() noexcept {
     return observer;
 }
 
+// The game's main level for the plugins (#1106). The source and the frame work register once; a refused frame work is logged
+// by main_level::Install, and the plugins then keep the level they were given at init.
+bool InstallPluginMainLevel() noexcept { return nevr_quest::main_level::Install(); }
+
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
 // token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.
 bool InstallLoginPromptHook(bool countersRegistered) noexcept {
@@ -258,6 +263,9 @@ const char* nevr_sentinel_marker() {
 // DT_NEEDED closure, before libr15's JNI_OnLoad / ANativeActivity_onCreate.
 __attribute__((constructor))
 static void nevr_sentinel_ctor() {
+    // The crash handlers first (#1689): a crash anywhere below, the begin record and the UI looper capture included, leaves a
+    // report the next start sends. Arm is idempotent: the sequence's first step calls it again after setting the log sink.
+    sentinel::Arm();
     nevr_quest::integration::LogConstructorBegin(nevr_build::kVersion, nevr_build::kCommit);
     // #829: the thread that loads the library takes the UI looper for the floor message's presenter (it logs what it found).
     nevr_quest::toast::CaptureUiLooper();

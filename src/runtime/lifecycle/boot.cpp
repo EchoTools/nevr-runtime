@@ -4,6 +4,8 @@
 #include "runtime/lifecycle/config.h"
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat (N133 S4a: config.yaml reads)
 #include "runtime/lifecycle/crash_recovery.h"
+#include "runtime/lifecycle/game_data_notice.h"
+#include "runtime/server/installed_levels.h"
 #include "runtime/lifecycle/return_to_lobby.h"
 #include "runtime/lifecycle/return_to_lobby_hold.h"
 #include "runtime/lifecycle/initialize.h"
@@ -278,6 +280,53 @@ static void LogTimestepArgs() {
   } catch (const std::exception&) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] time-step argument report failed (std::exception)");
   }
+}
+
+// #960: a game whose data folder holds no level manifest starts, finds nothing, and closes with no message. The
+// check is the registration's own manifest finder (FindManifestDirs), so the two agree on what counts as data.
+// Every run logs the result. A client with a screen also gets one dialog, opened on its own thread so the boot
+// thread is never held by a modal box (the graphics-driver notice's pattern, log/builtin_filter.cpp). Nothing
+// here stops the game.
+static DWORD WINAPI GameDataDialogThread(LPVOID text) {
+  MessageBoxA(nullptr, static_cast<const char*>(text), "Echo VR - game data missing",
+              MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST);
+  return 0;
+}
+
+static void CheckGameData() {
+  char exePath[MAX_PATH] = {};
+  const DWORD length = GetModuleFileNameA(reinterpret_cast<HMODULE>(EchoVR::g_GameBaseAddress), exePath, MAX_PATH);
+  if (length == 0 || length >= MAX_PATH) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] game data check skipped: the game's exe path is unavailable error=%lu",
+        GetLastError());
+    return;
+  }
+  const std::filesystem::path exe(exePath);
+  const std::string dataDir = (nevr_game_server::InstallRootFromExe(exe) / "_data").string();
+  if (!nevr_game_server::FindManifestDirs(exe).empty()) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] game data present: level manifests under %s", dataDir.c_str());
+    return;
+  }
+  // The outcome of the dialog, named in the log line below. A failure to open it is logged with its error and
+  // the game is left to run; the line still says the player was not told.
+  std::string dialog = "not_shown reason=" + std::string(g_isServer ? "server_mode" : "headless");
+  if (nevr_game_data::DialogDue(g_isServer != FALSE, g_isHeadless != FALSE)) {
+    dialog = "not_shown reason=out_of_memory";
+    char* text = _strdup(nevr_game_data::Text(dataDir).c_str());
+    if (text != nullptr) {
+      HANDLE thread = CreateThread(nullptr, 0, GameDataDialogThread, text, 0, nullptr);
+      if (thread != nullptr) {
+        CloseHandle(thread);
+        dialog = "opened";
+      } else {
+        dialog = "not_shown reason=thread_failed error=" + std::to_string(GetLastError());
+      }
+    }
+  }
+  Log(EchoVR::LogLevel::Error,
+      "[NEVR.PATCH] game data missing: no level manifest under %s; the game cannot load and closes at start "
+      "dialog=%s",
+      dataDir.c_str(), dialog.c_str());
 }
 
 void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
@@ -660,6 +709,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   if (!g_isServer) {
     nevr_asset_cdn::Initialize();
   }
+
+  // #960: the game data check, every run. Before the client-only patches so a missing folder is logged even when they
+  // are skipped.
+  CheckGameData();
 
   // N148 (#938): the project section of the in-game CREDITS page. Client only: a server has no page, and the
   // decision is logged either way (N122/N124). Post-CLI-parse for the same reason as the CDN above. The

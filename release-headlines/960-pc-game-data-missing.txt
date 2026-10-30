@@ -1,0 +1,1 @@
+When the game data is missing, the PC game now says what to do in a message instead of closing silently.

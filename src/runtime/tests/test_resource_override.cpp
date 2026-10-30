@@ -20,6 +20,7 @@
 
 #include "core/logging.h"
 #include "runtime/patch/asset_cache.h"
+#include "runtime/patch/game_buffer.h"
 #include "runtime/patch/netgun_bullets.h"
 #include "runtime/patch/resource_override.h"
 #include "runtime/tests/netgun_bullets_fixture.h"
@@ -914,6 +915,42 @@ TEST_F(GameHeapCopies, ATransformAnswerIsACopyTheGameCanFreeThroughItsOwnAllocat
   GameFreesBuffer(g_seenBuffer);
   EXPECT_EQ(g_heap.foreignFrees, 0u);
   EXPECT_EQ(g_probe.served[0], 9) << "the transform's own answer is untouched by the game's free";
+}
+
+// A plugin asset has no callback block (plugin_assets.cpp): its bytes reach the engine as a copy from the release allocator.
+class PluginAssetCopies : public CachedOverrides {};
+
+TEST_F(PluginAssetCopies, ACopyOfTheBytesFromTheReleaseAllocatorIsFreeableByTheGame) {
+  static const std::uint8_t asset[] = {7, 8, 9, 10};
+  void* copy = nullptr;
+  ASSERT_EQ(nevr_game_buffer::CopyIntoGameHeapFor(&g_fakeContextPointer, asset, sizeof(asset), &copy),
+            nevr_game_buffer::Copy::Copied);
+  ASSERT_NE(copy, nullptr);
+  EXPECT_NE(copy, static_cast<const void*>(asset)) << "the engine must not receive the plugin's own buffer";
+  const FakeHeap::Block* block = g_heap.Find(copy);
+  ASSERT_NE(block, nullptr) << "the copy was not allocated by the game's allocator";
+  EXPECT_EQ(block->alignment, 16u) << "no block names an alignment, so the allocator's minimum is used";
+  EXPECT_EQ(std::memcmp(copy, asset, sizeof(asset)), 0);
+  GameFreesBuffer(copy);
+  EXPECT_EQ(g_heap.foreignFrees, 0u) << "the game freed memory its allocator did not hand out";
+}
+
+TEST_F(PluginAssetCopies, WithNoMemoryContextNothingIsCopied) {
+  static const std::uint8_t asset[] = {1, 2};
+  void* copy = nullptr;
+  EXPECT_EQ(nevr_game_buffer::CopyIntoGameHeapFor(nullptr, asset, sizeof(asset), &copy),
+            nevr_game_buffer::Copy::NoContext);
+  EXPECT_EQ(copy, nullptr);
+  EXPECT_TRUE(g_heap.blocks.empty());
+}
+
+TEST_F(PluginAssetCopies, AFailedAllocationIsReportedAndNothingIsHanded) {
+  static const std::uint8_t asset[] = {1, 2};
+  g_heap.failAllocations = true;
+  void* copy = nullptr;
+  EXPECT_EQ(nevr_game_buffer::CopyIntoGameHeapFor(&g_fakeContextPointer, asset, sizeof(asset), &copy),
+            nevr_game_buffer::Copy::AllocFailed);
+  EXPECT_EQ(copy, nullptr);
 }
 
 // The fake must be able to see the bug it guards against: freeing the transform's own answer is a foreign free.

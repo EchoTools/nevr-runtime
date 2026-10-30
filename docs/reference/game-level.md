@@ -65,8 +65,9 @@ every level above, so it does not follow the main level. `GameSaveLoad` serialis
 
 - A match level (an arena or combat match) was not reached: a client alone stops in the social lobby. That the field
   follows a match's level is shown by the static uses above (the spawn code looks its game space up by it), not by a run.
-- Quest: the offset and its uses are static only; no Quest run read it. `src/quest` has no plugin loader, so nothing
-  there consumes the offset yet.
+- Quest: the offset and its uses are static only; no Quest run read it. The Quest plugin loader reads it through the frame
+  hook's netgame (`src/quest/sentinel/main_level.cpp`) and gives it to plugins as `level_symbol` and `level_name` (#1106);
+  that path is not yet shown by a headset run.
 - Who writes the PC field with a symbol is not located. The runs show when it changes, not which function stores it.
 
 ## Falsifier

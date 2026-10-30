@@ -31,7 +31,6 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
-#include <vector>
 
 #include "runtime/compat/evr_codec.h"
 
@@ -43,7 +42,6 @@ inline constexpr std::size_t kMaxQueued = 64;
 inline constexpr std::size_t kMaxTextBytes = 160;
 inline constexpr std::size_t kMaxChecks = 64;
 inline constexpr uint64_t kRemoteLogLevelInfo = 2;  // the game's WriteLog mask for info lines
-inline constexpr uint64_t kRemoteLogLevelError = 8;  // the game's WriteLog mask for error lines
 
 using CheckId = int;  // -1: not registered (disabled, or the table is full)
 
@@ -96,21 +94,6 @@ void SetLoggedIn(bool loggedIn, const nevr_evr_codec::UserId& user = nevr_evr_co
 // the unit's lock, on the thread that called it; a function is registered once.
 using SessionReset = void (*)();
 void RegisterSessionReset(SessionReset reset);
-
-// Work that rides the same login-connection sender but is not a check (the crash report upload, compat/crash_upload.h).
-// A function registered here runs at the top of every Flush that finds a logged-in session with a sender, outside the
-// unit's lock, on the thread that called Flush (PC: the per-frame tick; Quest: the token-auth poll), so it may send
-// through SendRemoteLogStrings. It must return quickly and must not block. A function is registered once.
-using FlushHook = void (*)();
-void RegisterFlushHook(FlushHook hook);
-// The user the service named at LoginSuccess; false (and `out` untouched) while no session is logged in.
-bool LoggedInUser(nevr_evr_codec::UserId* out);
-// Sends `strings` as ONE SNSRemoteLogSetv3 frame at `level` as the logged-in user, through the sender. Each string
-// must be a JSON object (the service drops a set string that is not). False when no session is logged in, no sender
-// is set, the unit is off, or the sender refused the frame; nothing is queued, the caller keeps the data and tries
-// again. The service takes at most 50 strings and 256 KiB per set (server/evr_remotelogset.go): the caller keeps
-// inside that.
-bool SendRemoteLogStrings(const std::vector<std::string>& strings, uint64_t level);
 
 // Idempotent by name: a second registration of a name returns the first one's id and changes nothing, so a
 // check may be looked up from the place that fires it without a shared variable.

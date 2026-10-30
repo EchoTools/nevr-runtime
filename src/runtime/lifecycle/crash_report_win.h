@@ -22,7 +22,7 @@ using ModuleLookupFn = bool (*)(std::uint64_t address, ModuleSpan* out);
 
 // Registers the PC platform with the shared report. `crashes_dir` is the crash directory
 // (`%LOCALAPPDATA%\nevr\echovr\crashes`); a report is written there as `nevr-crash-<run id>-<n>` plus
-// nevr_crash_upload::kReportSuffix, whole and atomically (a temporary name, renamed last). An empty directory leaves the
+// nevr_crash::kReportSuffix, whole and atomically (a temporary name, renamed last). An empty directory leaves the
 // report unwritten but still logged. Call once at init, before a crash can arrive; the directory must exist by then
 // (the crash path creates nothing).
 void RegisterCrashReportPlatform(const char* crashes_dir, ModuleLookupFn lookup);

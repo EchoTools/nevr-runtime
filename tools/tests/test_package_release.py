@@ -967,6 +967,15 @@ class ReleaseStagesTest(PackageFixture):
         self.assertNotRegex(readme, r"(?i)\bunsigned\b|is not signed")
         self.assertEqual(words_of_the_old_model(readme), [])
 
+    def test_the_readme_tells_a_hand_install_to_restore_the_game_file_before_install_ps1(self):
+        # #957: install.ps1 cannot record the game's own BugSplat64.dll that a hand install replaced, so the README's
+        # restore step comes before the line that runs install.ps1.
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        section = readme.split("## Install for testers", 1)[1].split("### Moving a Quest", 1)[0]
+        self.assertIn("installer\\aside\\BugSplat64.dll.original", section)
+        self.assertIn("Verify Files", section)
+        self.assertLess(section.index("Verify Files"), section.index("Then run `install.ps1`"))
+
     def test_seal_regenerates_sha256sums_from_the_signed_files_and_leaves_the_texts_alone(self):
         tree = self.make_tree()
         unsigned_sha = hashlib.sha256((tree / "BugSplat64.dll").read_bytes()).hexdigest()

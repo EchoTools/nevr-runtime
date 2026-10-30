@@ -14,6 +14,9 @@
 set(NEVR_HOST_UNITS
     "host/bootstrap_diagnostics.cpp"
     "host/crash_capture.cpp"
+    "host/crash_report_host.cpp"
+    "host/crash_send_host.cpp"
+    "host/crash_send_winhttp.cpp"
     "host/host_entry.cpp"
     "host/host_identity.cpp"
     "host/minidmp_sender_exports.cpp"
@@ -25,6 +28,11 @@ set(NEVR_HOST_UNITS
     "ext/plugin_pins.cpp"
     "ext/plugin_signature.cpp"
     "lifecycle/game_image_guard.cpp"
+    # The host's own crash report (#1689): the shared report writer (core/crash_report.cpp; the host links no nevr_core) and the
+    # PC pieces the runtime's report uses too (compiled into both DLLs, as game_image_guard is).
+    "../core/crash_report.cpp"
+    "lifecycle/crash_report_pe.cpp"
+    "lifecycle/crash_report_win_common.cpp"
 )
 
 set(PATCHES_SOURCES
@@ -56,6 +64,7 @@ set(PATCHES_SOURCES
     "lifecycle/crash_first_win.cpp"
     "lifecycle/crash_report_pe.cpp"
     "lifecycle/crash_report_win.cpp"
+    "lifecycle/crash_report_win_common.cpp"
     "hook/hook_guard.cpp"
     "hook/hook_liveness.cpp"
     "hook/export_trace_thunk.cpp"
@@ -250,6 +259,7 @@ set(PATCHES_HEADERS
     "patch/social_facade.h"
     "patch/social_facade_install.h"
     "log/builtin_filter.h"
+    "log/bridge_line.h"
     "log/rate_limiter.h"
     "log/symcache.h"
     "log/url_diagnostics.h"
@@ -891,11 +901,14 @@ if(BUILD_TESTING)
 
     # test_gpu_hung_notice.cpp (#553, header-only policy) rides in this executable, so the existing
     # url-diagnostics loop in `just test-auth-unit` runs it with no recipe change.
+    # test_game_data_notice.cpp (#960, header-only policy) rides here too.
     add_executable(test_url_diagnostics
       tests/test_url_diagnostics.cpp
       tests/test_gpu_hung_notice.cpp
+      tests/test_game_data_notice.cpp
       log/url_diagnostics.cpp)
-    set_source_files_properties(tests/test_url_diagnostics.cpp tests/test_gpu_hung_notice.cpp log/url_diagnostics.cpp
+    set_source_files_properties(tests/test_url_diagnostics.cpp tests/test_gpu_hung_notice.cpp
+      tests/test_game_data_notice.cpp log/url_diagnostics.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_url_diagnostics PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_url_diagnostics PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)
@@ -1295,19 +1308,34 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_self_check DISCOVERY_MODE PRE_TEST)
 
-    # Crash report upload (compat/crash_upload.h, #1605): the report a crash left in the crash folder goes out once
-    # through the self-check unit's sender. Header only on top of the self-check unit; the Quest sentinel compiles
-    # the same header.
-    add_executable(test_crash_upload
-      tests/test_crash_upload.cpp
-      compat/self_check.cpp
-      compat/evr_codec.cpp)
-    set_source_files_properties(tests/test_crash_upload.cpp compat/self_check.cpp compat/evr_codec.cpp
+    # Crash report send (core/crash_send.h, #1689): the reports a crash left in the crash folder go to nevr-api once,
+    # from the BugSplat64.dll host and the Quest sentinel. Header only; the reports it reads come from the real writer
+    # (core/crash_report.cpp), so the test links it.
+    add_executable(test_crash_send
+      tests/test_crash_send.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/crash_report.cpp)
+    set_source_files_properties(tests/test_crash_send.cpp ${CMAKE_SOURCE_DIR}/src/core/crash_report.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_include_directories(test_crash_upload PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_crash_upload PRIVATE nevr::plugin_sdk
-      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
-    gtest_discover_tests(test_crash_upload DISCOVERY_MODE PRE_TEST)
+    target_include_directories(test_crash_send PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_options(test_crash_send PRIVATE -Werror)
+    target_link_libraries(test_crash_send PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_crash_send DISCOVERY_MODE PRE_TEST)
+
+    # The host's POST (host/crash_send_winhttp.cpp): WinHTTP loaded by name, against a loopback server. nevr_host_core
+    # holds the production unit, built with the host's own flags.
+    add_executable(test_host_crash_send tests/test_host_crash_send.cpp)
+    set_source_files_properties(tests/test_host_crash_send.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_host_crash_send PRIVATE -Werror)
+    target_link_libraries(test_host_crash_send PRIVATE nevr_host_core GTest::gtest GTest::gtest_main ws2_32)
+    gtest_discover_tests(test_host_crash_send DISCOVERY_MODE PRE_TEST)
+
+    # The host's own crash report (host/crash_report_host.cpp, #1689): a crash the runtime does not report leaves a report
+    # the sender reads. The unit is the one BugSplat64.dll carries (nevr_host_core).
+    add_executable(test_host_crash_report tests/test_host_crash_report.cpp)
+    set_source_files_properties(tests/test_host_crash_report.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_host_crash_report PRIVATE -Werror)
+    target_link_libraries(test_host_crash_report PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_crash_report DISCOVERY_MODE PRE_TEST)
 
     # The #398 self-check (compat/party_share_check.h): each service answer to a party data share is one
     # self-check result. Header only on top of the self-check unit and the party symbol table.
@@ -1943,8 +1971,8 @@ if(BUILD_TESTING)
     # test_rate_limiter.cpp (#894, header-only log/rate_limiter.h) ride in this
     # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp tests/test_crash_report_pe.cpp lifecycle/crash_report_pe.cpp tests/test_crash_first.cpp lifecycle/crash_first_filter.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp tests/test_crash_report_pe.cpp lifecycle/crash_report_pe.cpp tests/test_crash_first.cpp lifecycle/crash_first_filter.cpp
+      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_bridge_line.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp tests/test_crash_report_pe.cpp lifecycle/crash_report_pe.cpp tests/test_crash_first.cpp lifecycle/crash_first_filter.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_bridge_line.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_level_gate.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp tests/test_credits_text.cpp tests/test_menu_page.cpp tests/test_netgun_bullets.cpp tests/test_netgun_bullet_ids.cpp tests/test_rate_limiter.cpp tests/test_clock_skew.cpp lifecycle/crash_dump_format.cpp tests/test_crash_report_pe.cpp lifecycle/crash_report_pe.cpp tests/test_crash_first.cpp lifecycle/crash_first_filter.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_crash_recovery PRIVATE GTest::gtest GTest::gtest_main nevr::plugin_sdk)
