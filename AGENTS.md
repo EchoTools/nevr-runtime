@@ -67,7 +67,7 @@ each one gives; do the step this way on yours:
 | --- | --- |
 | "Commit identity" (author, trailer, signing) | Commit as yourself: the author is the person responsible, under the name and email they use on GitHub. When an agent wrote the change, add one `Co-Authored-By: <agent name> <email>` trailer. Conventional prefix, one logical change per commit, and the same post-commit check. |
 | "Ownership and cleanup": the ledger file | Keep the same ledger in a file of your own: a markdown table (artifact, owner, purpose, remove-when), one row per thing you create, the worktree directory or branch in the first cell and your handle, one word, in the second. Read it before deleting anything. Create worktrees under `.claude/worktrees/` in your clone, and run `REAP_LEDGER=<your ledger file> just reap-merged`: `tools/reap_merged.py` scans only `.claude/worktrees/`, exits when it cannot read the ledger (default `~/.local/share/repo-hygiene/nevr-runtime-ledger.md`), and keeps any worktree the ledger does not credit to an owner. |
-| "Builds": the shared `nevr-builds.slice` | Same reason: parallel lanes, each under its own cap, still starve a machine. If you run one lane, `VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 systemd-run --user --scope -p MemoryMax=8G <cmd>` is enough. If you run several, create one user slice that caps them all together, as the maintainers do. Wait while two or more `ninja` processes run (`pgrep -x ninja` lists them). |
+| "Builds" and "Live game runs": the shared `nevr-builds.slice` and `nevr-live.slice` | Same reason: parallel lanes, each under its own cap, still starve a machine. Builds, verify and tests run in `nevr-builds.slice`; a live game run runs in its own scope in `nevr-live.slice` with `systemd-run --user --scope --slice=nevr-live.slice -p MemoryMax=6G -p MemorySwapMax=0 <cmd>`. If you run one build lane, `VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 systemd-run --user --scope -p MemoryMax=8G <cmd>` is enough. If you run several, create one user slice that caps them all together, as the maintainers do. Wait while two or more `ninja` processes run (`pgrep -x ninja` lists them). |
 | Scratch under `~/src/nevr-runtime-work/<agent>/` | The work root is `$NEVR_WORK_ROOT`, else `~/src/nevr-runtime-work` (`~` is your home directory), so the default works on any machine, and several tools write there by default (`tools/scenario/run_scenario.py`, `tools/lib/game_install.sh`, `tools/winvm/systest.py`). Use `<work root>/<your handle>/`, never `/tmp` and never the repo, and keep the work-root rule under "Working practices for every agent". |
 | "The game install": `/mnt/games` and the owner's link | See "Your game install" below. |
 | "ReVault" | ReVault is private. Keep its rules (search the whole project, every binary; report `searched N of N`; never guess an address) with your own disassembler on your own copy of the game files. When you need a fact you cannot derive, ask in the PR with the address and the binary. |
@@ -694,12 +694,14 @@ your seat name, for example `claude-main` or `codex`.
 
 ### Builds
 
-> **Maintainers only.** The shared slice is configured on the maintainers' machine. Contributors: see "For contributors", "Maintainers only, and what to do instead".
+> **Maintainers only.** The shared slices are configured on the maintainers' machine. Contributors: see "For contributors", "Maintainers only, and what to do instead".
 
-- **Every build, verify, test or client run goes in the shared user slice:**
+- **Every build, verify or test goes in the shared user slice:**
   `VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 systemd-run --user --scope --slice=nevr-builds.slice -p MemoryMax=8G <cmd>`.
   The slice (`~/.config/systemd/user/nevr-builds.slice`) caps every nevr build together at 14G.
   A cap per lane is not enough: parallel lanes each under their own cap still starve the machine.
+- **Every live game run gets its own scope in `nevr-live.slice`:** `launch-client.sh`, `launch-server.sh`, `verify-server.sh`, scenario runs and a hand-launched client or server. `systemd-run --user --scope --slice=nevr-live.slice -p MemoryMax=6G -p MemorySwapMax=0 <cmd>`. The slice is transient: it has no unit file, and systemd creates it with the first scope.
+- **A live run never shares the build slice, and memory pressure pauses builds, not runs.** While a live run is active, a build waits for it to exit. A live run is never stopped to make room for a build.
 - **Wait for a free slot.** Before starting a build, if `pgrep -x ninja | wc -l` is 2 or more, wait.
   Never interrupt another agent's build.
 - **Each worktree has its own vcpkg root** (`build/vcpkg-root`, created by `just worktree-setup`).
