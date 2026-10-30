@@ -544,7 +544,8 @@ inline InstallResult InstallLines(bool isServer, const char* text, const uint8_t
   const uint32_t wanted = ParseBotsPerSession(text, &problem);
   if (!problem.empty()) {
     out.lines.push_back({true, "[NEVR.GAMESERVER] network.bots_per_session=" + std::string(text) + " is " + problem +
-                                   " (allowed 0.." + std::to_string(kMaxBots) + "); no bots"});
+                                   " (allowed 0.." + std::to_string(kMaxBots) + "); server bots off"});
+    return out;
   }
   if (wanted == 0) {
     out.lines.push_back({false, std::string("[NEVR.GAMESERVER] server bots off bots_per_session=0 source=") +

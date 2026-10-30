@@ -780,15 +780,13 @@ TEST(ServerBotsInstall, NoValueOrZeroIsOffWithItsSourceAndReadsNoImage) {
   }
 }
 
-TEST(ServerBotsInstall, ABadValueIsAWarningThenOff) {
+TEST(ServerBotsInstall, ABadValueIsOneWarningThatSaysBotsAreOff) {
   const InstallResult r = InstallLines(true, "17", nullptr);
   EXPECT_EQ(r.armed, 0u);
-  ASSERT_EQ(r.lines.size(), 2u);
+  ASSERT_EQ(r.lines.size(), 1u) << "no second line saying bots_per_session=0 while config.yaml holds 17";
   EXPECT_TRUE(r.lines[0].warning);
   EXPECT_EQ(r.lines[0].text,
-            "[NEVR.GAMESERVER] network.bots_per_session=17 is above the limit of 16 (allowed 0..16); no bots");
-  EXPECT_FALSE(r.lines[1].warning);
-  EXPECT_EQ(r.lines[1].text, "[NEVR.GAMESERVER] server bots off bots_per_session=0 source=config.yaml");
+            "[NEVR.GAMESERVER] network.bots_per_session=17 is above the limit of 16 (allowed 0..16); server bots off");
 }
 
 std::vector<uint8_t> ImageWithWitnesses();
