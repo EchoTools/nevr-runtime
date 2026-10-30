@@ -267,8 +267,11 @@ if(TARGET nevr_quest_got_hook)
 
   # Install-code host test (partial install, idempotency, gating). Linked against the whole login
   # archive so the install, its thunks and the backend are present.
-  add_executable(login_prerequisites_install_test tests/login_prerequisites_install_test.cpp)
+  # The install is compiled into the test as well, with NEVR_QUEST_TESTING, so the test's slot seam (login_prerequisites.h) exists;
+  # the library's copy has none.
+  add_executable(login_prerequisites_install_test tests/login_prerequisites_install_test.cpp login/login_prerequisites_install.cpp)
   target_link_libraries(login_prerequisites_install_test PRIVATE nevr_quest_login)
+  target_compile_definitions(login_prerequisites_install_test PRIVATE NEVR_QUEST_TESTING)
   # -fno-exceptions: the test arms the entitlement hook's thunk (callback_thunk.h refuses other units).
   target_compile_options(login_prerequisites_install_test PRIVATE -Wall -Wextra -Werror -fno-exceptions)
 

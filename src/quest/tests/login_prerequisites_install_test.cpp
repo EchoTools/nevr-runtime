@@ -30,6 +30,8 @@ int g_userIdLines = 0;
 bool g_userIdStandIn = false;
 bool g_userIdKeptZero = false;
 const char* g_userIdReason = nullptr;
+bool g_installInstalled = false;  // the last install summary says "installed"
+bool g_installUserIdOne = false;  // the last install summary counts logged_in_user_id 1
 bool Contains(const char* line, const char* needle) {
   for (const char* s = line; *s != '\0'; ++s) {
     const char* a = s;
@@ -49,6 +51,10 @@ void Sink(sentinel::LogLevel, const char* line) {
   if (Contains(line, "quest_login_prerequisites_install") && Contains(line, "\"logged_in_user_id\":0") &&
       Contains(line, "\"social_facade\":\"not_installed\"")) {
     g_sawUserIdInstallFields = true;
+  }
+  if (Contains(line, "quest_login_prerequisites_install")) {
+    g_installInstalled = Contains(line, "\"status\":\"installed\"");
+    g_installUserIdOne = Contains(line, "\"logged_in_user_id\":1");
   }
   if (Contains(line, "quest_logged_in_user_id")) {
     ++g_userIdLines;
@@ -99,6 +105,13 @@ std::uint64_t RecordingOrgHandler(nevr_quest_login::OrgRequestThunk::Fn original
   return nevr_quest_login::OnOrgScopedIdRequest(original, caller, user);
 }
 NEVR_HOOK_RECORD(kTestOrgHook, nevr_quest_login::OrgRequestThunk, &RecordingOrgHandler);
+
+// The install's slot seam (login_prerequisites.h): every slot answers as installed, or the same with the logged-in
+// user id refused. No GOT is patched in either case, so the install's own counting and summary are what is tested.
+int AllInstalled(const char*) noexcept { return 1; }
+int AllButUserIdRefused(const char* symbol) noexcept {
+  return __builtin_strcmp(symbol, "ovr_GetLoggedInUserID") == 0 ? 0 : 1;
+}
 
 // The "game": one fixed call instruction into the thunk entry, so its return address is the same every time.
 __attribute__((noinline)) std::uint64_t GameCallsOrgRequest(std::uint64_t (*entry)(std::uint64_t), std::uint64_t user) {
@@ -342,6 +355,30 @@ int main() {
     Thunk::Reset();
     nevr_quest_login::SetPnsovrBase(0);
     nevr_quest_login::ResetPrerequisitesForTest();
+  }
+
+  // The install's own answers, through the test seam. With every slot installed the summary says "installed" and counts
+  // the logged-in user id (#944); with only that slot refused it says "partial" and counts 0. Each count is the one the
+  // summary carries, so a mutant that drops the user-id install, or the user-id term of the summary's test, fails here.
+  {
+    nevr_quest_login::ResetInstallForTest();
+    nevr_quest_login::SetInstallSeamForTest(&AllInstalled);
+    const nevr_quest_login::PrerequisiteInstall all = nevr_quest_login::InstallLoginPrerequisites(dummy, &Ready, nullptr, nullptr);
+    QCHECK(all.callbacks == 4 && all.accessors == 8 && all.requests == 4 && all.entitlement == 1 && all.messages == 4);
+    QCHECK(all.user_id == 1);
+    QCHECK(g_installInstalled && g_installUserIdOne);
+
+    nevr_quest_login::ResetInstallForTest();
+    nevr_quest_login::SetInstallSeamForTest(&AllButUserIdRefused);
+    const nevr_quest_login::PrerequisiteInstall partial =
+        nevr_quest_login::InstallLoginPrerequisites(dummy, &Ready, nullptr, nullptr);
+    QCHECK(partial.callbacks == 4 && partial.accessors == 8 && partial.requests == 4 && partial.entitlement == 1 &&
+           partial.messages == 4);
+    QCHECK(partial.user_id == 0);
+    QCHECK(!g_installInstalled);  // refusing the user id alone leaves the install partial: complete() needs it
+
+    nevr_quest_login::SetInstallSeamForTest(nullptr);
+    nevr_quest_login::ResetInstallForTest();
   }
 
   sentinel::SetLogSink(nullptr);

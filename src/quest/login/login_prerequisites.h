@@ -296,4 +296,13 @@ struct PrerequisiteInstall {
 PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, ReadyFn ready, ResetFn reset,
                                               HoldFn hold) noexcept;
 
+// Test support (NEVR_QUEST_TESTING only; the production library has neither symbol). The seam answers each slot by its
+// symbol instead of patching the GOT: 1 installed, 0 refused, -1 the real install. A null seam is the real install.
+// ResetInstallForTest clears the one-time latch, so the next InstallLoginPrerequisites runs again.
+#if defined(NEVR_QUEST_TESTING)
+using InstallSeamFn = int (*)(const char* symbol) noexcept;
+void SetInstallSeamForTest(InstallSeamFn seam) noexcept;
+void ResetInstallForTest() noexcept;
+#endif
+
 }  // namespace nevr_quest_login
