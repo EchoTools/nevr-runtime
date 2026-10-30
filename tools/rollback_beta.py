@@ -23,8 +23,8 @@ fix for a bad release is a new release, which reaches beta through the release t
                    compares it with the live one. It changes nothing else: no variable, no timer.
   --live --yes     pause_variable  RELEASE_TRAIN := false on EchoTools/nevr-runtime (the release train stops cutting), read back
                    pause_timer     `systemctl --user stop nevr-quest-release.timer` (--keep-train skips both pauses)
-                   check_service   the Quest release service is `inactive` or `failed` (a oneshot unit that is running is
-                                   `activating`), else it refuses
+                   check_service   the Quest release service is loaded (a machine without the unit would show `inactive`) and
+                                   `inactive` or `failed` (a oneshot unit that is running is `activating`), else it refuses
                    check_signer_runs   no `sign-manifest.yml` run on the signer repository is queued or running
                    recheck         beta has not moved, and the claims still match, while pausing
                    dispatch, watch, check_jobs   the live publish; the jobs that publish all succeeded
@@ -367,8 +367,12 @@ class Rollback:
         except (ValueError, AttributeError, TypeError) as error:
             raise StepFailure(step, f"the variable list is unreadable: {error}") from error
 
-    def service_state(self, step: str) -> str:
-        return self.cmd(step, ["systemctl", "--user", "show", "-p", "ActiveState", "--value", SERVICE_UNIT]).stdout.strip()
+    def service_state(self, step: str) -> tuple[str, str]:
+        """(LoadState, ActiveState) of the Quest release service. `show` of a unit that does not exist prints ActiveState
+        `inactive` and exits 0, so ActiveState alone cannot tell a machine without the unit from an idle one."""
+        load = self.cmd(step, ["systemctl", "--user", "show", "-p", "LoadState", "--value", SERVICE_UNIT]).stdout.strip()
+        active = self.cmd(step, ["systemctl", "--user", "show", "-p", "ActiveState", "--value", SERVICE_UNIT]).stdout.strip()
+        return load, active
 
     def active_signer_runs(self, step: str) -> list[str]:
         out = self.gh_cmd(step, ["run", "list", "--workflow", WORKFLOW, "-R", SIGNER_SLUG, "--json", "status,databaseId",
@@ -398,7 +402,11 @@ class Rollback:
 
     def check_service(self) -> None:
         step = "check_service"
-        state = self.service_state(step)
+        load, state = self.service_state(step)
+        if load != "loaded":
+            raise StepFailure(step, f"{SERVICE_UNIT} is not loaded (LoadState {load or 'unknown'}): this machine does not run the "
+                                    "Quest release timer, so a Quest release in progress could not be seen. Run this on the "
+                                    "publisher's machine")
         if state not in IDLE_SERVICE_STATES:
             stopped = " (the timer is stopped, so it will not start another)" if self.paused["timer"] else ""
             raise StepFailure(step, f"{SERVICE_UNIT} is {state or 'in an unknown state'}: a Quest release is in progress and "
@@ -427,9 +435,11 @@ class Rollback:
             except StepFailure as failure:
                 self.say(f"plan: the {name} could not be read: {failure}")
         try:
-            state = self.service_state("preflight")
-            self.say(f"plan: {SERVICE_UNIT} is {state or 'unknown'}")
-            if state not in IDLE_SERVICE_STATES:
+            load, state = self.service_state("preflight")
+            self.say(f"plan: {SERVICE_UNIT} is {state or 'unknown'} (LoadState {load or 'unknown'})")
+            if load != "loaded":
+                refused.append(f"{SERVICE_UNIT} is not loaded (LoadState {load or 'unknown'})")
+            elif state not in IDLE_SERVICE_STATES:
                 refused.append(f"{SERVICE_UNIT} is {state or 'unknown'}")
         except StepFailure as failure:
             self.say(f"plan: the Quest service could not be read: {failure}")
@@ -690,6 +700,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def may_have_dispatched(rollback: "Rollback | None") -> None:
+    """Ctrl-C or a crash while `gh workflow run` was running: gh may have been accepted and left no run id behind."""
+    if rollback is not None and rollback.current == "dispatch" and rollback.dispatched is None:
+        rollback.dispatch_unknown = True
+
+
 def execute(args: argparse.Namespace, env: dict[str, str], runner: Runner, held: dict) -> int:
     """The run, with every way out reported: a refusal, a failure, a log that cannot be written, Ctrl-C and a crash."""
     try:
@@ -714,9 +730,11 @@ def execute(args: argparse.Namespace, env: dict[str, str], runner: Runner, held:
         return fail(held, "log", str(failure), "failed")
     except KeyboardInterrupt:
         rollback = held.get("rollback")
+        may_have_dispatched(rollback)
         return fail(held, (rollback.current if rollback else "") or "start", "interrupted (Ctrl-C)", "interrupted", 130)
     except Exception as error:  # noqa: BLE001 - a crash is reported with the state, whatever it is
         rollback = held.get("rollback")
+        may_have_dispatched(rollback)
         return fail(held, (rollback.current if rollback else "") or "start", f"crashed: {type(error).__name__}: {error}", "crashed")
 
 

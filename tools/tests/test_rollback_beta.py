@@ -172,7 +172,7 @@ def systemctl(a):
     elif verb == "start":
         units[unit] = "active"
     elif verb == "show":
-        print(CFG.get("service_state", "inactive"))
+        print(CFG.get("service_load", "loaded") if a[3] == "LoadState" else CFG.get("service_state", "inactive"))
         sys.exit(0)
     elif verb == "is-active":
         state = units.get(unit, "inactive")
@@ -675,6 +675,19 @@ class LiveRun(RollbackCase):
                 self.assertIn("the timer is stopped", proc.stderr)
                 self.assertEqual(self.gh_calls("workflow", "run"), [])
 
+    def test_a_service_unit_that_is_not_loaded_stops_the_run_even_with_keep_train(self) -> None:
+        # `show` of a unit that does not exist prints ActiveState `inactive` and exits 0: this machine runs no Quest release.
+        for load in ("not-found", "masked", "error", "bad-setting"):
+            for extra in ((), ("--keep-train",)):
+                with self.subTest(load=load, extra=extra):
+                    self.reset_world()
+                    self.configure(service_load=load)
+                    proc = self.run_tool("v5.17.0", "--live", "--yes", *extra)
+                    self.assertNotEqual(proc.returncode, 0)
+                    self.assertIn("check_service", proc.stderr)
+                    self.assertIn(f"nevr-quest-release.service is not loaded (LoadState {load})", proc.stderr)
+                    self.assertEqual(self.gh_calls("workflow", "run"), [])
+
     def test_a_quest_service_that_is_inactive_or_failed_does_not_stop_the_run(self) -> None:
         for state in ("inactive", "failed"):
             with self.subTest(state=state):
@@ -687,7 +700,8 @@ class LiveRun(RollbackCase):
     def test_a_service_state_is_read_with_show_not_is_active(self) -> None:
         self.run_tool("v5.17.0", "--live", "--yes")
         shows = [c["argv"] for c in self.calls() if c["who"] == "systemctl" and c["argv"][1] == "show"]
-        self.assertEqual(shows, [["--user", "show", "-p", "ActiveState", "--value", "nevr-quest-release.service"]])
+        self.assertEqual(shows, [["--user", "show", "-p", "LoadState", "--value", "nevr-quest-release.service"],
+                                 ["--user", "show", "-p", "ActiveState", "--value", "nevr-quest-release.service"]])
         self.assertEqual([c for c in self.calls() if c["who"] == "systemctl" and c["argv"][:2] == ["--user", "is-active"]
                           and c["argv"][-1].endswith(".service")], [])
 
@@ -863,6 +877,12 @@ class DryRunRehearsal(RollbackCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("a live run would be refused now: nevr-quest-release.service is activating", proc.stdout)
 
+    def test_a_dry_run_says_a_live_run_would_be_refused_on_a_machine_without_the_unit(self) -> None:
+        self.configure(service_load="not-found")
+        proc = self.run_tool("v5.17.0", "--dry-run")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("a live run would be refused now: nevr-quest-release.service is not loaded (LoadState not-found)", proc.stdout)
+
     def test_a_dry_run_says_a_live_run_would_be_refused_while_a_signer_run_is_under_way(self) -> None:
         self.configure(signer_runs=[{"databaseId": 77, "status": "in_progress"}])
         proc = self.run_tool("v5.17.0", "--dry-run")
@@ -954,6 +974,48 @@ class FailurePaths(RollbackCase):
         last = self.records()[-1]
         self.assertEqual((last["event"], last["outcome"], last["step"]), ("finish", "interrupted", "watch"))
 
+    def test_ctrl_c_during_the_dispatch_call_may_have_dispatched(self) -> None:
+        def interrupt(argv):  # noqa: ANN001, ANN202
+            if argv[1:3] == ["workflow", "run"]:
+                raise KeyboardInterrupt
+
+        code, out, err = self.run_inproc("v5.17.0", "--live", "--yes", on_call=interrupt)
+        self.assertEqual(code, 130)
+        self.assertIn("a publish MAY have been dispatched (gh left no run id): list the runs on the signer repo before "
+                      "dispatching again", err)
+        self.assertNotIn("no publish was dispatched", err)
+        self.assertEqual(self.records()[-1]["step"], "dispatch")
+
+    def test_a_crash_during_the_dispatch_call_may_have_dispatched(self) -> None:
+        def boom(argv):  # noqa: ANN001, ANN202
+            if argv[1:3] == ["workflow", "run"]:
+                raise RuntimeError("boom")
+
+        code, out, err = self.run_inproc("v5.17.0", "--live", "--yes", on_call=boom)
+        self.assertEqual(code, 1)
+        self.assertIn("crashed: RuntimeError: boom", err)
+        self.assertIn("a publish MAY have been dispatched", err)
+        self.assertNotIn("no publish was dispatched", err)
+
+    def test_ctrl_c_before_the_dispatch_still_says_no_publish_was_dispatched(self) -> None:
+        def interrupt(argv):  # noqa: ANN001, ANN202
+            if argv[1:3] == ["--user", "stop"]:
+                raise KeyboardInterrupt
+
+        code, out, err = self.run_inproc("v5.17.0", "--live", "--yes", on_call=interrupt)
+        self.assertEqual(code, 130)
+        self.assertIn("no publish was dispatched", err)
+        self.assertNotIn("MAY have been dispatched", err)
+
+    def test_a_crash_once_the_run_id_is_known_names_the_run_and_not_a_maybe(self) -> None:
+        def boom(argv):  # noqa: ANN001, ANN202
+            if argv[1:3] == ["run", "watch"]:
+                raise RuntimeError("boom")
+
+        code, out, err = self.run_inproc("v5.17.0", "--live", "--yes", on_call=boom)
+        self.assertIn("publish run 4242 was dispatched (its outcome is not confirmed)", err)
+        self.assertNotIn("MAY have been dispatched", err)
+
     def test_a_log_that_fails_after_the_dispatch_still_shows_the_run_and_the_state(self) -> None:
         class Failing(rollback_beta.Log):
             def event(self, event: str, **fields: object) -> None:
@@ -1037,6 +1099,42 @@ class FailurePaths(RollbackCase):
         self.assertIn("pause_variable: the variable list is unreadable", proc.stderr)
         self.assertNotIn("Traceback", proc.stderr)
         self.assertEqual(self.gh_calls("workflow", "run"), [])
+
+
+class Runbook(unittest.TestCase):
+    """The commands in RELEASING.md's rollback section are the ones an operator pastes: they have to run."""
+
+    @staticmethod
+    def section() -> str:
+        text = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
+        return text.split("## Emergency: roll beta back", 1)[1].split("\n## ", 1)[0]
+
+    def blocks(self) -> str:
+        return "\n".join(re.findall(r"```sh\n(.*?)```", self.section(), re.S))
+
+    def test_the_base_line_runs_from_a_checkout_and_yields_the_one_value_the_tool_accepts(self) -> None:
+        lines = [line for line in self.blocks().splitlines() if line.startswith("export RELEASE_PUBLIC_BASE=")]
+        self.assertEqual(lines, ["export RELEASE_PUBLIC_BASE=$(sed -n 's/^Environment=RELEASE_PUBLIC_BASE=//p' "
+                                 "tools/systemd/nevr-quest-release.service)"])
+        shown = subprocess.run(["bash", "-c", lines[0] + '; printf %s "$RELEASE_PUBLIC_BASE"'], cwd=ROOT, capture_output=True,
+                               text=True, check=True).stdout
+        unit = (ROOT / "tools" / "systemd" / "nevr-quest-release.service").read_text(encoding="utf-8")
+        wanted = re.findall(r"^Environment=RELEASE_PUBLIC_BASE=(.+)$", unit, re.M)
+        self.assertEqual(len(wanted), 1)
+        self.assertEqual(shown, wanted[0])
+        self.assertEqual(rollback_beta.public_base({"RELEASE_PUBLIC_BASE": shown}), shown.rstrip("/"))
+
+    def test_the_commands_name_the_account_through_gh_bin_and_never_hardcode_one(self) -> None:
+        blocks = self.blocks()
+        self.assertNotIn("gh-spritz", blocks)
+        self.assertEqual(blocks.count("$GH_BIN variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime"), 2)
+        self.assertIn("systemctl --user start nevr-quest-release.timer", blocks)
+
+    def test_the_prose_says_what_an_operator_has_to_know_before_pasting(self) -> None:
+        prose = self.section()
+        self.assertIn("refuses loudly if it is empty", prose)
+        self.assertIn("`--keep-train` leaves the timer running", prose)
+        self.assertIn("`GH_BIN=gh`", prose)
 
 
 class Timeouts(RollbackCase):

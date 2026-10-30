@@ -396,18 +396,24 @@ is what the manifest lists. A target that lists no Quest APK or no game data is 
 fault is in the build: a fault in the manifest, a service or a player's own files is not cured by moving beta.
 
 **Where, and as whom.** Run it from a clean checkout of nevr-runtime `main` (the Quest release timer's dedicated checkout, see
-"The Quest half of the train", works) on the machine that runs that timer, because it stops a user unit there. The account
-`GH_BIN` runs as (default `gh-spritz`, the metis-sprock account) must be able to dispatch workflows on the release-signer
-repository and to set repository variables on `EchoTools/nevr-runtime`; the metis-sprock account can, and Spritz and Teth act as
-it. sprockee acts as his own owner account. The manifest host's public base is the `RELEASE_PUBLIC_BASE` in
-`tools/systemd/nevr-quest-release.service`; the host is named in `docs/reference/verifying-a-release.md`, "Quest APKs".
+"The Quest half of the train", works) on the machine that runs that timer, because it stops a user unit there; the tool refuses
+when `nevr-quest-release.service` is not loaded. The account `GH_BIN` runs as must be able to dispatch workflows on the
+release-signer repository and to set repository variables on `EchoTools/nevr-runtime`. When `GH_BIN` is unset the tool uses
+`gh-spritz`, the metis-sprock account, which can; Spritz and Teth act as it. sprockee acts as his own owner account and sets
+`GH_BIN=gh`. Export `GH_BIN` before you start: the resume commands below use it, and the tool prints them with the gh it ran
+with. The manifest host's public base is the `RELEASE_PUBLIC_BASE` in `tools/systemd/nevr-quest-release.service`, which the
+`export` line below reads from the checkout (the host is named in `docs/reference/verifying-a-release.md`, "Quest APKs"); the
+tool refuses loudly if it is empty.
 
 ```sh
-export RELEASE_PUBLIC_BASE=<the base in tools/systemd/nevr-quest-release.service>   # the manifest host's public base
-python3 tools/rollback_beta.py vX.Y.Z --dry-run                     # the plan, what a live run would meet, a dry-run publish
-python3 tools/rollback_beta.py vX.Y.Z --live --yes                  # pause the train, publish, verify
-gh-spritz variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime && systemctl --user start nevr-quest-release.timer   # resume
+export RELEASE_PUBLIC_BASE=$(sed -n 's/^Environment=RELEASE_PUBLIC_BASE=//p' tools/systemd/nevr-quest-release.service)
+python3 tools/rollback_beta.py vX.Y.Z --dry-run
+python3 tools/rollback_beta.py vX.Y.Z --live --yes
+$GH_BIN variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime && systemctl --user start nevr-quest-release.timer
 ```
+
+The first line sets the manifest host's base. The second prints the plan, what a live run would meet and a dry-run publish. The
+third pauses the train, publishes and verifies. The fourth resumes the train (see "Resume the train").
 
 Always run the dry run first. It reads the live manifest, refuses what a live run would refuse, and then, read-only, reads
 `RELEASE_TRAIN`, the timer, the Quest service and the signer's runs and prints plan lines saying whether a live run would be
@@ -438,10 +444,13 @@ non-GitHub artifacts. The order of a live run is fixed:
    `nevr-quest-release.timer` and check that it is no longer active. A pause step that fails stops the run before the
    dispatch and says what is and is not done.
 3. Check that the Quest release is not running. `nevr-quest-release.service` is a oneshot unit, so while it runs its
-   `ActiveState` is `activating` (and `is-active` exits 3 for it); the tool reads `systemctl --user show -p ActiveState
-   --value` and refuses on anything but `inactive` or `failed`, with the timer already stopped so it starts no other. Then
+   `ActiveState` is `activating` (and `is-active` exits 3 for it); the tool reads `systemctl --user show -p LoadState
+   --value` and refuses unless it is `loaded` (for a unit that does not exist `ActiveState` reads `inactive`, which would pass),
+   then `-p ActiveState --value`, and refuses on anything but `inactive` or `failed`, with the timer already stopped so it starts
+   no other. Then
    check that no `sign-manifest.yml` run on the signer repository is queued or in progress (any status but `completed`), and
-   refuse if one is. Both checks run under `--keep-train` too. A rollback that is refused here changes nothing but the pauses it
+   refuse if one is. Both checks run under `--keep-train` too, and `--keep-train` leaves the timer running, so a Quest release could start
+   in the seconds between these checks and the dispatch. A rollback that is refused here changes nothing but the pauses it
    already made; wait for the run to end and run it again.
 4. Check again, after the pause, that beta has not moved and the claims still match the manifest.
 5. Dispatch the live publish, watch it, and require the jobs that publish (`Commit the manifest record`, `Publish to R2`,
@@ -489,7 +498,7 @@ the command that undoes it. Run the dry run first.
 **Resume the train.** When the fixed release is on `main`, or the pause is no longer wanted:
 
 ```sh
-gh-spritz variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime
+$GH_BIN variable set RELEASE_TRAIN --body true -R EchoTools/nevr-runtime
 systemctl --user start nevr-quest-release.timer
 ```
 
