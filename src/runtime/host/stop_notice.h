@@ -37,6 +37,9 @@ inline constexpr wchar_t kStopNoticeUnreadableText[] =
     L"nEVR couldn't start: nevr-runtime.dll could not be read. Please reinstall with the installer.";
 inline constexpr wchar_t kStopNoticeRefusedText[] =
     L"nEVR couldn't start: the signature on nevr-runtime.dll is not accepted. Please reinstall with the installer.";
+inline constexpr wchar_t kStopNoticeClockText[] =
+    L"nEVR couldn't start: nevr-runtime.dll could not be checked because this PC's date or time is wrong. Set the "
+    L"date and time, then start nEVR again.";
 inline constexpr wchar_t kStopNoticeTitle[] = L"nEVR";
 
 /// The words for a runtime that did not load: the outcome decides, and for a refusal the verifier's reason.
@@ -50,6 +53,9 @@ inline const wchar_t* StopNoticeTextFor(RuntimeLoadOutcome outcome, nevr_plugin_
         case Reason::DigestMismatch:
         case Reason::SignatureInvalid: return kStopNoticeChangedText;
         case Reason::Unreadable: return kStopNoticeUnreadableText;
+        // A timestamp the verifier cannot place in time is the PC's clock, not the file (#1533).
+        case Reason::TimestampInvalid:
+        case Reason::NoTimestampAndExpired: return kStopNoticeClockText;
         default: return kStopNoticeRefusedText;
       }
     default: return kStopNoticeText;
