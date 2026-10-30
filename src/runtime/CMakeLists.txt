@@ -891,11 +891,14 @@ if(BUILD_TESTING)
 
     # test_gpu_hung_notice.cpp (#553, header-only policy) rides in this executable, so the existing
     # url-diagnostics loop in `just test-auth-unit` runs it with no recipe change.
+    # test_game_data_notice.cpp (#960, header-only policy) rides here too.
     add_executable(test_url_diagnostics
       tests/test_url_diagnostics.cpp
       tests/test_gpu_hung_notice.cpp
+      tests/test_game_data_notice.cpp
       log/url_diagnostics.cpp)
-    set_source_files_properties(tests/test_url_diagnostics.cpp tests/test_gpu_hung_notice.cpp log/url_diagnostics.cpp
+    set_source_files_properties(tests/test_url_diagnostics.cpp tests/test_gpu_hung_notice.cpp
+      tests/test_game_data_notice.cpp log/url_diagnostics.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_url_diagnostics PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_url_diagnostics PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)
