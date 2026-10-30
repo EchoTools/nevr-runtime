@@ -343,6 +343,11 @@ mapped and then fails (`no_plugin_info`, `init_failed`, an exception) is `dlclos
   because a plugin's addresses are only valid for the build it names.
 - A mismatch is refused before init, with one line: `plugin_load outcome=refused reason=build_id_unsupported`, the game
   build ID, and the plugin's list. The game still starts (client rule, R2).
+- A plugin whose list names the running build is refused with reason `libr15_not_verified` unless the load saw our patched
+  libr15: the file `Attach` verified, whose live note still equals the ID verification covered (ADR 0021 section 12). A
+  matching note on the stock file, or on any libr15 nothing verified, is not enough, because the plugin's addresses are
+  properties of the patched file's stock identity. The check runs after the build-ID verdict, so the earlier reasons keep
+  their meaning, and it applies in the early and the normal pass alike.
 - The note is additive and Quest-only (the PC loader does not read it), so it needs no bump (`plugin_interface.h:183`).
 
 **Rules that hold regardless.** No address is used without a pin: a `GotTarget` with a null build ID is refused in the host
