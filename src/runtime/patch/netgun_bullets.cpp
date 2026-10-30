@@ -19,6 +19,7 @@ std::map<std::pair<Resource, std::string>, std::vector<uint8_t>> g_served;
 #ifdef NEVR_TEST_HOOKS
 std::vector<std::string> g_testPins[2];
 bool g_testPinsSet = false;
+DigestFn g_testDigest = nullptr;
 #endif
 
 std::vector<std::string> Pins(Resource res) {
@@ -26,6 +27,13 @@ std::vector<std::string> Pins(Resource res) {
   if (g_testPinsSet) return g_testPins[res == Resource::Particles ? 0 : 1];
 #endif
   return StockPins(res);
+}
+
+std::string Digest(const void* data, size_t size) {
+#ifdef NEVR_TEST_HOOKS
+  if (g_testDigest != nullptr) return g_testDigest(data, size);
+#endif
+  return nevr_asset_cache::Sha256Hex(data, size);
 }
 
 bool Serve(Resource res, const void* original, uint64_t size, const void** out, uint64_t* outSize, void* user) {
@@ -37,7 +45,17 @@ bool Serve(Resource res, const void* original, uint64_t size, const void** out, 
         level, ResourceName(res), static_cast<unsigned long long>(size));
     return false;
   }
-  const std::string sha = nevr_asset_cache::Sha256Hex(original, static_cast<size_t>(size));
+  const std::string sha = Digest(original, static_cast<size_t>(size));
+  if (!nevr_asset_cache::IsSha256Hex(sha)) {
+    // Sha256Hex returns "" when the system's SHA-256 provider fails; an empty digest matches no pin, and saying
+    // not_pinned would blame the game's data for a failure of this machine's crypto.
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.RESOURCE] netgun bullet effects left off level=%s resource=%s reason=digest_failed bytes=%llu (the "
+        "SHA-256 of the bytes could not be computed, so they cannot be matched to the stock files; the game's own "
+        "bytes are served)",
+        level, ResourceName(res), static_cast<unsigned long long>(size));
+    return false;
+  }
 
   std::lock_guard<std::mutex> lock(g_mutex);
   const auto key = std::make_pair(res, sha);
@@ -116,9 +134,15 @@ void TestHook_SetPins(const std::vector<std::string>& particles, const std::vect
   g_served.clear();
 }
 
+void TestHook_SetDigest(DigestFn digest) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  g_testDigest = digest;
+}
+
 void TestHook_Reset() {
   std::lock_guard<std::mutex> lock(g_mutex);
   g_testPinsSet = false;
+  g_testDigest = nullptr;
   g_served.clear();
 }
 #endif

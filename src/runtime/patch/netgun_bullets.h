@@ -346,7 +346,11 @@ void Install(RegisterFn reg = &RegisterResourceTransform);
 #ifdef NEVR_TEST_HOOKS
 /// Replaces the stock digests the transforms accept (a test has no game bytes) and forgets what was served.
 void TestHook_SetPins(const std::vector<std::string>& particles, const std::vector<std::string>& bullets);
-/// Back to the stock digests, nothing served.
+/// Replaces the SHA-256 of the offered bytes (nevr_asset_cache::Sha256Hex), so a test can make it fail as a broken
+/// crypto provider does; nullptr is the real one.
+using DigestFn = std::string (*)(const void* data, size_t size);
+void TestHook_SetDigest(DigestFn digest);
+/// Back to the stock digests and the real SHA-256, nothing served.
 void TestHook_Reset();
 #endif
 

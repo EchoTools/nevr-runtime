@@ -1274,6 +1274,10 @@ class NetgunBulletTransforms : public ResourceTransforms {
     ResourceTransforms::SetUp();
     nevr_netgun_bullets::TestHook_Reset();
     g_netgunRegistrations.clear();
+    // Every expected line below names a digest computed the way the transform computes it. A prefix whose SHA-256
+    // provider fails makes both empty and the lines match anyway, so the run stops here instead.
+    ASSERT_TRUE(nevr_asset_cache::IsSha256Hex(nevr_asset_cache::Sha256Hex(particles_.data(), particles_.size())));
+    ASSERT_TRUE(nevr_asset_cache::IsSha256Hex(nevr_asset_cache::Sha256Hex(bullets_.data(), bullets_.size())));
   }
   void TearDown() override {
     nevr_netgun_bullets::TestHook_Reset();
@@ -1380,6 +1384,29 @@ TEST_F(NetgunBulletTransforms, BytesThatAreNotTheStockResourceAreLeftAloneAndSay
   EXPECT_TRUE(TestLogContains("pins=611f0ab4d6ada7f275ab1aaf974a08209d3c6e78e1a81b40c88fa11d9a215e6b "));
   // Left alone means no rewrite was made or kept.
   EXPECT_FALSE(TestLogContains("netgun bullet effects added"));
+}
+
+std::string FailedDigest(const void*, size_t) { return std::string(); }  // what Sha256Hex returns when CryptoAPI fails
+
+TEST_F(NetgunBulletTransforms, BytesWhoseDigestCannotBeComputedAreLeftAloneAndSayWhy) {
+  nevr_netgun_bullets::Install();
+  PinFixtures();  // the bytes are stock: only the digest of them fails
+  nevr_netgun_bullets::TestHook_SetDigest(&FailedDigest);
+  GameFinishesBuffer(kNetgunParticleType, kCombustion, 0, particles_.data(), particles_.size());
+  EXPECT_EQ(g_seenBuffer, particles_.data());
+  EXPECT_EQ(g_seenSize, particles_.size());
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "netgun bullet effects left off level=mpl_combat_combustion "
+                                     "resource=CParticleEffectCR reason=digest_failed bytes=" +
+                                         std::to_string(particles_.size()) + " ("));
+  // The failure is this machine's, not the data's: it is not reported as bytes that match no pin.
+  EXPECT_FALSE(TestLogContains("reason=not_pinned"));
+  EXPECT_FALSE(TestLogContains("netgun bullet effects added"));
+  // With the real digest again, the same stock bytes are rewritten: nothing of the failed load was kept.
+  nevr_netgun_bullets::TestHook_SetDigest(nullptr);
+  GameFinishesBuffer(kNetgunParticleType, kCombustion, 0, particles_.data(), particles_.size());
+  EXPECT_NE(g_seenBuffer, particles_.data());
+  EXPECT_TRUE(TestLogContains("netgun bullet effects added level=mpl_combat_combustion"));
 }
 
 TEST_F(NetgunBulletTransforms, ATransformGivenNoBufferServesNothingAndSaysSo) {
