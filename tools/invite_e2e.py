@@ -626,7 +626,7 @@ def run_flow(a: Client, b: Client, steps: list[Step], timing: dict, evidence: pa
         raise StepFailed(f"A: create answered status={am[1]} result={am[2]}")
     posted = first(a.lines(), r"\[NEVR\.INVITE\] text posted field=code bytes=(\d+)", mark)
     done("the code is written into the wizard's share page (text posted field=code)",
-         [("A", posted[0] if posted else None, "no `text posted field=code` line after the create")], bool(posted))
+         [("A", posted[0] if posted else None, "" if posted else "no `text posted field=code` line after the create")], bool(posted))
     code, match_uuid = created["code"], uuid_of(created["match_id"])
 
     # B: JOIN VIA CODE; A joins the same game through the same code
@@ -673,7 +673,7 @@ def run_flow(a: Client, b: Client, steps: list[Step], timing: dict, evidence: pa
     seen = []
     for c in (a, b):
         hit = first(c.lines(), r"SNSOtherUserProfileRequest", timing["mark"][c.label])
-        seen.append((c.label, hit[0] if hit else None, "no SNSOtherUserProfileRequest yet"))
+        seen.append((c.label, hit[0] if hit else None, "" if hit else "no SNSOtherUserProfileRequest yet"))
     steps.append(Step("each client asks for the other player's profile (soft: the roster needs menu input)",
                       all(line for _, line, _ in seen), seen, gating=False))
 
