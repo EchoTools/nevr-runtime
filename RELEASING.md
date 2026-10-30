@@ -6,6 +6,10 @@ build). The Quest APK is the one part CI does not do: a user timer on the publis
 half of the train"). A person does the same steps by hand only when the train is off or a run has gone red. Nothing about a
 published release is edited afterwards: a wrong release is fixed by the next version.
 
+A release seat merges its own pull requests, in this repository and in the signer repository, once the pull request's checks are
+green and a fresh verifier (neither the author nor the implementer) has passed the tip with every finding fixed. It deletes the
+branch and the worktree the same turn. A publish outside the train, and anything that touches a signing key, goes to the owner's seat first.
+
 ## Names
 
 - **Version:** plain semver, `X.Y.Z` (no leading zeros, `tools/release_asset_names.sh` `release_tag_regex`). It is
