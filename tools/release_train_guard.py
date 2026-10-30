@@ -4,7 +4,7 @@
 release-train.yml runs every three hours (cron "17 */3 * * *"), and GitHub has dropped a scheduled slot. This guard runs
 hourly as a systemd user timer on the publisher's machine (tools/systemd/nevr-train-guard.timer, at :07), not as a GitHub
 schedule: GitHub drops scheduled runs, and a job's token cannot read repository variables. It decides from the train's
-own run list whether the train is due:
+run list and the newest published release (tools/release_window.py) whether the train is due:
 
 - switch off (repository variable RELEASE_TRAIN is not "true")        -> none, switch_off
 - nothing releasable on origin/main (next_release_version.py exit 1)   -> none, no_releasable_change

@@ -59,9 +59,9 @@ The guard covers a dropped scheduled train run. It is a systemd user timer on th
 (`tools/systemd/nevr-train-guard.timer`, hourly at :07), which runs `tools/release_train_guard.py` from the Quest timer's dedicated
 checkout with the publisher's `gh-spritz` (`--gh`, else `GH_BIN`). It runs only while that machine is on: a machine that is off delays
 the guard, and the timer's `Persistent=true` catches up when the machine comes back. When `main` is releasable and no release was
-published in the last 3 h 15 min, it dispatches the train. It does nothing while a train run is queued, in progress, waiting or pending,
+published in the last 195 minutes (3 h 15 min), it dispatches the train. It does nothing while a train run is queued, in progress, waiting or pending,
 when `RELEASE_TRAIN` is not `true`, when nothing on `main` is releasable, while the newest train run failed, was cancelled or timed out
-less than 3 h 15 min ago (a red cut can leave a tag and an unpublished draft that the version tool counts, so the guard does not
+195 minutes ago or less, measured from when that run was created (a red cut can leave a tag and an unpublished draft that the version tool counts, so the guard does not
 re-dispatch hourly; a run that succeeded or was skipped does not hold it), or while the newest published release is inside the window. Each decision is one JSON line (`reason` is `switch_off`, `no_releasable_change`,
 `train_run_in_progress`, `recent_failed_run`, `recent_release` or `no_release_in_window`; `last_release`, `last_published`, `age_minutes` and `window_minutes`
 describe the release, `last_run_id` and `last_run_created` the newest train run: for information, except under `recent_failed_run`, where it is the failed run) in the journal
