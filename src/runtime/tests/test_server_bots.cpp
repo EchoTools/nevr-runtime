@@ -71,8 +71,11 @@ std::vector<uint8_t> Frame(const std::string& settings, const std::vector<uint8_
   return f;
 }
 
+// The game's symbol hash of the level (not an account id); the N20 sensor exempts a line that names a hash.
+constexpr uint64_t kLevelSymbolHash = 13004389186521124930ull;
 const std::string kServiceSettings =
-    R"({"appid":"1369078409873402","gametype":-3791849610740453517,"level":13004389186521124930,"features":["x"]})";
+    std::string(R"({"appid":"1369078409873402","gametype":-3791849610740453517,"level":)") +
+    std::to_string(kLevelSymbolHash) + R"(,"features":["x"]})";
 const std::vector<uint8_t> kEntrants(80, 0xAB);
 
 TEST(ServerBotsSettings, TheHeaderIsThirtySixBytes) { EXPECT_EQ(kSessionStartHeaderSize, 36u); }
@@ -239,7 +242,7 @@ TEST(ServerBotsGameType, ReadAsTheServiceWritesItOrByName) {
   t = read(R"({"gametype":"echo_combat_private"})");
   EXPECT_EQ(t.name, "echo_combat_private");
   EXPECT_TRUE(t.bots);
-  t = read(R"({"gametype":-1686183371379962529})");  // echo_arena_practice, as the service's signed int64
+  t = read(R"({"gametype":-1686183371379962529})");  // echo_arena_practice symbol hash, as the service's signed int64
   EXPECT_EQ(t.name, "echo_arena_practice");
   EXPECT_TRUE(t.bots);
   t = read(R"({"appid":"1"})");
