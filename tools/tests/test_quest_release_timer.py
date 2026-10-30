@@ -1817,6 +1817,8 @@ class VariantFailureNeverUndoesTheRelease(VariantCase):
         self.assertIn("variant", spritz[-1])
         self.assertIn("variant_build", spritz[-1])
         self.assertIn("main release is complete", spritz[-1])
+        self.assertIn(f"gave up on the variant APK of {TAG}", spritz[-1])
+        self.assertNotIn("(main release)", spritz[-1])
         self.assertNotIn("variant_build", fake.steps())
 
     def test_a_main_skip_names_the_main_release(self) -> None:
@@ -1886,6 +1888,11 @@ class VariantPins(VariantCase):
     def test_a_missing_library_file_names_it(self) -> None:
         (self.vdir / LIBRARIES[1]).unlink()
         self.refused_with(f"{LIBRARIES[1]} is missing")
+
+    def test_a_library_that_cannot_be_read_is_named_without_the_path_the_system_reports(self) -> None:
+        (self.vdir / LIBRARIES[0]).unlink()
+        (self.vdir / LIBRARIES[0]).mkdir()  # reading a directory fails with an error that names the path
+        self.refused_with(f"{LIBRARIES[0]} cannot be read")
 
     def test_an_empty_pins_file_and_an_unreadable_one_are_refused(self) -> None:
         self.pins.write_text("")
