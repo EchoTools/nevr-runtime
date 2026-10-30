@@ -275,8 +275,8 @@ It runs from its own **dedicated checkout** (`~/src/nevr-runtime-work/release-ti
 and the tool refuses, as a refused `checkout` step that couriers the owner, unless the checkout is clean and HEAD is the
 freshly fetched `origin/main`. The `tags` step then refuses, the same way, while any tag in that checkout is not on origin or
 points at another commit there (the rule of `tools/release_preflight.py`, which `just release-quest-apk` runs later); the
-refusal names up to ten of them with their short ids, counts the rest, and prints the shell-quoted commands that remove and
-restore each.
+refusal names up to ten of them with their short ids, counts the rest, and prints the shell-quoted remove and restore commands,
+with the full object id, for each tag it lists.
 
 1. Lists the newest published `vX.Y.Z` release. A tag that has a `done` record in the log is left alone. A tag that has
    failed three times is not retried; the third failure couriers Spritz once, before the run exits 0. Nothing bonks the owner.

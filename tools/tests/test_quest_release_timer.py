@@ -907,7 +907,7 @@ class TagsStep(TimerCase):
         self.assertIn("v9.9.9", error)
         self.assertIn(self.OFFENDER, error)
         self.assertIn("local-only", error)
-        self.assertIn("git tag -d v9.9.9", error)
+        self.assertIn("git tag -d -- v9.9.9", error)
         self.assertIn(f"git update-ref refs/tags/v9.9.9 {self.OFFENDER}", error)
         self.assertNotIn("v5.16.1", error, "a tag that matches origin is not named")
 
@@ -928,9 +928,9 @@ class TagsStep(TimerCase):
                 error = self.refused(fake)["error"]
                 quoted = shlex.quote(name)
                 self.assertNotEqual(quoted, name, "the fixture name needs quoting")
-                self.assertIn(f"remove: git tag -d {quoted};", error)
+                self.assertIn(f"remove: git tag -d -- {quoted};", error)
                 self.assertIn(f"rollback: git update-ref {shlex.quote('refs/tags/' + name)} {shlex.quote(self.OFFENDER)}", error)
-                self.assertNotIn(f"git tag -d {name}", error)
+                self.assertNotIn(f"git tag -d -- {name}", error)
                 self.assertNotIn(f"refs/tags/{name} ", error)
                 self.assertIn(f"{quoted} ({self.OFFENDER[:12]})", error, "the summary shows the name as the commands do")
                 self.log.unlink()
@@ -969,7 +969,7 @@ class TagsStep(TimerCase):
         self.assertIn("points at", error)
         self.assertIn(("1" * 40)[:12], error, "origin's commit")
         self.assertNotIn("local-only", error)
-        self.assertIn("git tag -d v5.16.1", error)
+        self.assertIn("git tag -d -- v5.16.1", error)
 
     def test_an_annotated_tag_is_compared_by_its_peeled_commit(self) -> None:
         fake = Fake(self.root)
@@ -1000,7 +1000,7 @@ class TagsStep(TimerCase):
         for n in range(12):
             fake.local_tags[f"v8.0.{n}"] = (f"{n:x}" * 40, None)
         error = self.refused(fake)["error"]
-        self.assertEqual(sum(f"git tag -d v8.0.{n};" in error for n in range(12)), 10)
+        self.assertEqual(sum(f"git tag -d -- v8.0.{n};" in error for n in range(12)), 10)
         self.assertIn("and 2 more", error)
         self.assertIn(", and 2 more [12 of 14]", error)
         self.assertLess(len(error), 3000)
@@ -1010,7 +1010,7 @@ class TagsStep(TimerCase):
         for n in range(10):
             fake.local_tags[f"v8.0.{n}"] = (f"{n:x}" * 40, None)
         error = self.refused(fake)["error"]
-        self.assertEqual(sum(f"git tag -d v8.0.{n};" in error for n in range(10)), 10)
+        self.assertEqual(sum(f"git tag -d -- v8.0.{n};" in error for n in range(10)), 10)
         self.assertNotIn("more", error)
 
     def test_a_refusal_is_not_counted_and_the_clean_run_proceeds(self) -> None:
@@ -1117,7 +1117,7 @@ class TagsAgreeWithThePreflight(TimerCase):
         with self.assertRaises(timer.Refusal) as raised:
             subject.check_tags()
         message = str(raised.exception)
-        self.assertEqual(sorted(n for n in ("v1.0.0", "v1.1.0", *self.FLAGGED) if f"git tag -d {n};" in message), flagged)
+        self.assertEqual(sorted(n for n in ("v1.0.0", "v1.1.0", *self.FLAGGED) if f"git tag -d -- {n};" in message), flagged)
 
     def test_through_main_the_run_is_refused_for_the_tags_the_preflight_flags(self) -> None:
         clone = self.clone_with_tags(offenders=True)
@@ -1137,6 +1137,34 @@ class TagsAgreeWithThePreflight(TimerCase):
         ok = [e for e in self.events() if e["event"] == "step_ok"]
         self.assertEqual([(e["step"], e.get("count")) for e in ok if e["step"] == "tags"], [("tags", 2)])
         self.assertEqual(next(e for e in self.events() if e["event"] == "failed")["step"], "token", "it got past the tags step")
+
+    def printed_commands(self, error: str) -> dict[str, tuple[str, str]]:
+        """name -> (remove command, rollback command), read back from a refusal message's command entries."""
+        found = {}
+        for entry in error.split(" | ")[1:]:
+            name = shlex.split(entry.split(" (", 1)[0])[0]
+            found[name] = (entry.split("remove: ", 1)[1].split("; rollback: ", 1)[0], entry.split("rollback: ", 1)[1])
+        return found
+
+    def test_the_printed_commands_remove_and_restore_tags_named_like_git_switches(self) -> None:
+        clone = self.clone_with_tags(offenders=False)
+        names = ["-dash", "-rf", "-d"]
+        ids = {}
+        for name in names:
+            self.git(clone, "update-ref", f"refs/tags/{name}", "HEAD")
+            ids[name] = self.git(clone, "rev-parse", f"refs/tags/{name}")
+        self.assertEqual(timer.main([], self.timer_env(clone), runner=timer.subprocess_runner, sleep=self.sleeps.append), 1)
+        [refusal] = [e for e in self.events() if e["event"] == "refused"]
+        commands = self.printed_commands(refusal["error"])
+        self.assertEqual(sorted(commands), sorted(names))
+        for name in names:
+            with self.subTest(name=name):
+                remove, rollback = commands[name]
+                done = subprocess.run(["sh", "-c", remove], cwd=clone, capture_output=True, text=True)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertNotIn(name, self.git(clone, "tag", "--list").splitlines(), "the printed remove left the tag")
+                subprocess.run(["sh", "-c", rollback], cwd=clone, check=True, capture_output=True)
+                self.assertEqual(self.git(clone, "rev-parse", f"refs/tags/{name}"), ids[name])
 
     def test_the_printed_commands_remove_and_restore_a_hostile_tag_in_a_real_shell(self) -> None:
         clone = self.clone_with_tags(offenders=False)
@@ -1320,7 +1348,56 @@ class FailureNoticeIsNotRepeated(TimerCase):
         self.assertEqual(self.sent, [])
 
 
-class RealProcess(TimerCase):
+class LogLinesThatAreNotEvents(TimerCase):
+    """A line of the log that is valid JSON but not an object (a stray write, a hand edit) is not an event: every reader of the
+    log skips it, so it cannot crash a run or the failure notice."""
+
+    JUNK = ["[1, 2]", '"x"', "3", "null", "true", "{"]
+
+    def logged(self) -> list[str]:
+        """The events the log holds, read the way the tool reads it (this log has lines that are not JSON on purpose)."""
+        return [e["event"] for e in timer.read_events(self.log)]
+
+    def write_mixed(self, *records: dict) -> None:
+        lines = []
+        for record in records:
+            lines += [*self.JUNK, json.dumps(record)]
+        lines += self.JUNK
+        self.log.parent.mkdir(parents=True, exist_ok=True)
+        self.log.write_text("\n".join(lines) + "\n")
+
+    def test_the_failure_notice_uses_the_real_events_and_does_not_crash(self) -> None:
+        self.write_mixed({"event": "failed", "tag": TAG, "step": "publish_apk", "error": "publish failed with exit 1"})
+        sent: list[list[str]] = []
+
+        def courier(argv: list[str], cwd: str | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
+            sent.append(argv)
+            return completed(argv)
+
+        self.assertEqual(timer.main(["--notify-failure"], self.env, runner=courier, sleep=self.sleeps.append), 0)
+        self.assertIn("publish_apk", sent[0][-1])
+        self.assertIn("publish failed with exit 1", sent[0][-1])
+        self.assertEqual(self.logged()[-1], "failure_notified")
+
+    def test_a_run_reads_its_history_around_the_junk(self) -> None:
+        self.write_mixed({"event": "done", "tag": TAG})
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertIn("nothing_to_do", self.logged())
+
+    def test_a_notice_owed_is_found_around_the_junk(self) -> None:
+        self.write_mixed({"event": "step_ok", "tag": TAG, "step": "verify_live"})
+        fake = Fake(self.root)
+        fake.beta = TAG[1:]
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertEqual(len(couriers(fake, "teth")), 1)
+
+    def test_read_events_returns_only_objects(self) -> None:
+        self.write_mixed({"event": "x"})
+        self.assertEqual(timer.read_events(self.log), [{"event": "x"}])
+
+
+
     """The tool as the unit starts it: a real interpreter, a real log file, a fake `gh` first on the path."""
 
     def start(self, env: dict, *args: str) -> subprocess.CompletedProcess:

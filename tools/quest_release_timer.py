@@ -7,7 +7,8 @@ The train (release-train.yml) publishes the GitHub release; this tool sees the n
 
   checkout         the checkout this runs from is clean and HEAD is the freshly fetched origin/main, or it refuses
   tags             every local tag is on origin at the same commit (the release preflight's rule), or it refuses naming up to
-                   ten tags with their short ids, counting the rest, and printing the quoted commands that remove and restore each
+                   ten tags with their short ids, counting the rest, and printing the quoted remove and restore commands (with
+                   the full object id) for each tag it lists
   token, list      the newest published vX.Y.Z (or --tag) that is not done
   build_signer     the release signer, built from a snapshot of its main
   check_listed     the live manifest already lists the tag: done, nothing to build; else the game data it carries
@@ -102,9 +103,11 @@ def read_events(path: pathlib.Path) -> list[dict]:
     events = []
     for line in path.read_text(encoding="utf-8").splitlines():
         try:
-            events.append(json.loads(line))
+            record = json.loads(line)
         except ValueError:
             continue
+        if isinstance(record, dict):  # a line that is JSON but not an object is not an event
+            events.append(record)
     return events
 
 
@@ -240,7 +243,7 @@ class Timer:
             head = ("local tags origin lacks or has elsewhere: "
                     + ", ".join(f"{shlex.quote(name)} ({obj[:12]})" for name, obj, _ in shown)
                     + (f", and {rest} more" if rest else "") + f" [{len(offenders)} of {len(local)}]")
-            commands = [f"{shlex.quote(name)} ({why}): remove: git tag -d {shlex.quote(name)}; rollback: "
+            commands = [f"{shlex.quote(name)} ({why}): remove: git tag -d -- {shlex.quote(name)}; rollback: "
                         f"git update-ref {shlex.quote('refs/tags/' + name)} {shlex.quote(obj)}" for name, obj, why in shown]
             raise Refusal(step, " | ".join([head, *commands]))
         self.ok(step, count=len(local))
