@@ -473,6 +473,20 @@ bool EcDataFileExists(const char* name) {
   return DataDir(dir, sizeof dir) != nullptr && FileExists(dir, name);
 }
 
+bool EcReadDataLine(const char* name, char* out, std::size_t n) {
+  char dir[256];
+  if (n == 0 || DataDir(dir, sizeof dir) == nullptr) return false;
+  char path[400];
+  std::snprintf(path, sizeof path, "%s/%s", dir, name);
+  FILE* f = std::fopen(path, "re");
+  if (f == nullptr) return false;
+  out[0] = 0;
+  if (std::fgets(out, static_cast<int>(n), f) == nullptr) out[0] = 0;
+  std::fclose(f);
+  if (char* nl = std::strpbrk(out, "\r\n")) *nl = 0;
+  return true;
+}
+
 EcPageState PublishEcPage() {
   Dl_info di{};
   const char* path = dladdr(q15t_ec_page_storage, &di) && di.dli_fname ? di.dli_fname : nullptr;
