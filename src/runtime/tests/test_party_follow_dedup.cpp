@@ -61,6 +61,15 @@ TEST(PartyFollowDedupState, AFailureThatAnswersAJoinClearsTheJoiningLobby) {
   EXPECT_EQ(joining, kNil);
 }
 
+TEST(PartyFollowDedupState, AFailureClearsTheCurrentLobby) {
+  LobbyJoinState state;
+  state.OnSuccess(kX);
+  state.OnFailure(/*answersJoin=*/false);
+  Guid current{}, joining{};
+  state.Snapshot(&current, &joining);
+  EXPECT_EQ(current, kNil);
+}
+
 TEST(PartyFollowDedupState, AFailureThatAnswersAFindLeavesTheJoiningLobbyAlone) {
   LobbyJoinState state;
   state.OnJoinRequested(kX);
