@@ -546,10 +546,10 @@ void TheSixLevelsSurviveTheGamesClamp() {
 // ---- the two documents ---------------------------------------------------------------------------------------------------
 
 const char* kMenuDocument =
-    R"({"pages": [{"name": "GRAPHICS (1/3)", "rows": [{"path": "graphics|qualitylevel", "name": "Graphics Quality"},)"
+    R"json({"pages": [{"name": "GRAPHICS (1/3)", "rows": [{"path": "graphics|qualitylevel", "name": "Graphics Quality"},)json"
     R"( {"path": "graphics|msaa", "name": "Anti-aliasing", "idx": 0, "type": "STRING ARRAY", "values": ["None", "2x", "4x"]}]}]})";
 const char* kSettingsDocument =
-    R"({"quest": {"settings": [{"path": "graphics|msaa", "value": 1, "operator": "remove"}], "pages": ["GRAPHICS (1/3)", "DISPLAY"]}})";
+    R"json({"quest": {"settings": [{"path": "graphics|msaa", "value": 1, "operator": "remove"}], "pages": ["GRAPHICS (1/3)", "DISPLAY"]}})json";
 
 std::vector<std::string> g_parsed;  // the texts the game's parser was given
 int FakeDecodeText(pin::CJsonOpaque*, const char* text, unsigned long long length) {
