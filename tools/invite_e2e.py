@@ -464,11 +464,16 @@ class Ui:
             time.sleep(1)
         raise StepFailed(f"client {self.client.label}: no \"Echo VR\" window of process {pid} on :101 within {timeout:.0f} s")
 
+    def raise_window(self) -> None:
+        """Bring this client's window to the front once per operation. Raising it before every click made the game drop most key
+        presses of a typed code (2 of 5 arrived, twice), so a sequence of clicks raises once, first."""
+        self._x("windowraise", self.window, check=False)
+        self._x("windowfocus", self.window, check=False)
+        time.sleep(1.0)
+
     def click(self, x: float, y: float, settle: float = 1.5) -> None:
         """A select: the window raised, the pointer moved onto the target (the game needs a hover first), the RIGHT button held 0.3 s."""
         ox, oy = self.origin
-        self._x("windowraise", self.window, check=False)
-        self._x("windowfocus", self.window, check=False)
         self._x("mousemove", str(int(ox + x - 3)), str(int(oy + y - 3)))
         time.sleep(0.4)
         self._x("mousemove", str(int(ox + x)), str(int(oy + y)))
@@ -523,6 +528,7 @@ class Ui:
 
     def create(self, slots: dict[str, int]) -> None:
         """CREATE GAME, Arena, Custom Match, CREATE INVITE CODE & LINK."""
+        self.raise_window()
         self.navigate(CARD_SLOT_X[slots["create"]], CARD_Y, "CREATE GAME")
         self.click_logged(*EXPERIENCE_ARENA, r"wizard event seen page=experience event=card card=2 experience=arena", "Echo Arena")
         self.click_logged(*MODE_CUSTOM, r"wizard event seen page=arena_mode event=card card=1 experience=arena mode=custom", "Custom Match")
@@ -530,6 +536,7 @@ class Ui:
 
     def join(self, slots: dict[str, int], code: str, from_share_page: bool) -> None:
         """The main menu's JOIN VIA CODE, the code typed on the page's keyboard, ENTER. From the share page it leaves by MAIN MENU."""
+        self.raise_window()
         if from_share_page:
             self.navigate(*MAIN_MENU, "MAIN MENU")
         self.navigate(CARD_SLOT_X[slots["join"]], CARD_Y, "JOIN VIA CODE")
