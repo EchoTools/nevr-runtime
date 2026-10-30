@@ -210,16 +210,17 @@ The kind exists in the schema and the live manifest (`internal/manifest/gamedata
 named by the first 12 hex digits of its sha256, "one copy serves every release", `contents` with a hash per file,
 `game_data.data_version` and `echo_build`). This record fixes how a consumer uses it:
 
-- A release lists one `game-data` artifact per platform: `android-arm64` and `windows-x86_64`. A consumer selects the
-  entry of its own platform, by `kind` and `platform` together, and refuses zero or two entries for that platform with a
-  message that names the release. An entry of another platform never decides anything for it. The core's
-  `NevrArtifactVerifyZip` takes the platform like `NevrArtifactFetch` and refuses a `game-data` call that names none,
-  because the kind alone selects no single artifact.
+- A release lists one `game-data` artifact per platform (`android-arm64` for the headset, `windows-x86_64` for the PC). A
+  consumer selects the entry of its own platform, by `kind` and `platform` together, and refuses zero or two entries for
+  that platform with a message that names the release. An entry of another platform never decides anything for it. The
+  core's `NevrArtifactVerifyZip` takes the platform like `NevrArtifactFetch` and refuses a `game-data` call that names
+  none, because the kind alone selects no single artifact.
 - The Quest game data is the `android-arm64` entry, named `echovr-data-<12hex>.zip`. A consumer extracts only paths listed
   in `contents`, all of the form `_data/<data_version>/rad15/android/(manifests|packages)/<name>`.
-- The PC game data is the `windows-x86_64` entry, named `echovr-data-win10-<12hex>.zip`, at `data/<name>` like the Quest
-  one. It holds `_data/<data_version>/rad15/win10/(manifests|packages)/...`, and a consumer extracts only paths listed in
-  its `contents`. Its verification basis is a set of hashes pinned in the signer's configuration and the zip's own
+- The PC artifact is specified as follows; the signer publishes it once release-signer#69 lands. The PC game data is the
+  `windows-x86_64` entry, named `echovr-data-win10-<12hex>.zip`, at `data/<name>` like the Quest one. It holds
+  `_data/<data_version>/rad15/win10/(manifests|packages)/...`, and a consumer extracts only paths listed in its
+  `contents`. Its verification basis is a set of hashes pinned in the signer's configuration and the zip's own
   consistency: the manifests pin the size of each package they name. No official reference for the PC data exists, so the
   release notes state that the PC data was not compared with one. The first publish of a PC game-data artifact is checked
   by a second seat before the release is announced.

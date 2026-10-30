@@ -1177,9 +1177,9 @@ For each artifact of the chosen release that your platform handles, `kind` tells
 `quest-library`, `quest-apk` (and `quest-apk-bundled` later). `plugin` is reserved: skip a kind you do not handle, a
 `game-data` entry of a platform you do not install included.
 
-A release lists one `game-data` artifact per platform (`android-arm64` and `windows-x86_64`), so `kind` alone does not
-select it. Select a `game-data` entry by `kind` and `platform` together, and require exactly one for your platform:
-zero or two is a failure that names the release, and the entry of the other platform is never yours. Its `path`
+A release lists one `game-data` artifact per platform (`android-arm64`, and `windows-x86_64` once the signer publishes the
+PC data), so `kind` alone does not select it. Select a `game-data` entry by `kind` and `platform` together, and
+require exactly one for your platform: zero or two is a failure that names the release, and the entry of the other platform is never yours. Its `path`
 differs from the other kinds': `data/<name>.zip`, with a name of `a-z`, `0-9`, `.` and `-` only, because one copy of
 the data serves every release. The reference code below selects by `kind` alone and checks the version-directory path of
 the next item, so it serves the kinds a release lists once; given the two `game-data` entries it refuses both, and a
