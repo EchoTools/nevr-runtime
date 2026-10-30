@@ -539,6 +539,26 @@ class VerifySignedTest(unittest.TestCase):
         self.assertEqual(len(recorded_runs(self.patcher.resolve())), 1)
 
 
+class WritePluginManifestTest(unittest.TestCase):
+    """`write_plugin_manifest` hashes the staged copy, the bytes the APK will carry, not the file the recipe was given."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="quest-repack-manifest-", dir=work_root.test_scratch())
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = pathlib.Path(self._tmp.name)
+        self.stage = self.tmp / "stage"
+        (self.stage / "lib" / "arm64-v8a").mkdir(parents=True)
+
+    def test_the_hash_is_of_the_staged_bytes_not_of_the_file_the_recipe_was_given(self):
+        source = self.tmp / "libfx.so"
+        source.write_bytes(b"the file the recipe was given")
+        (self.stage / "lib" / "arm64-v8a" / "libfx.so").write_bytes(b"the bytes staged for the APK")
+        self.assertEqual(libs.write_plugin_manifest(self.stage, [source], [], []), [])
+        written = json.loads((self.stage / "lib" / "arm64-v8a" / libs.MANIFEST_NAME).read_bytes())
+        self.assertEqual(written["plugins"][0]["sha256"], hashlib.sha256(b"the bytes staged for the APK").hexdigest())
+        self.assertNotEqual(written["plugins"][0]["sha256"], hashlib.sha256(b"the file the recipe was given").hexdigest())
+
+
 class ShimRowsTest(unittest.TestCase):
     """`check-shim-rows`: the shim is the build for the rows the library is patched with (ADR 0021 section 11)."""
 
