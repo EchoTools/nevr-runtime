@@ -93,7 +93,7 @@ std::uint32_t CountCall(std::atomic<std::uint32_t>& counter) {
 
 void LogQuery(const char* name, std::uintptr_t slot, std::uint32_t callCount, std::uint64_t result) {
   if (callCount > kInitialQueryLogCalls) return;
-  Log(EchoVR::LogLevel::Info,
+  Log(EchoVR::LogLevel::Debug,
       "[NEVR.SOCIAL] facade query slot=0x%llx name=%s call_count=%u result=%llu",
       static_cast<unsigned long long>(slot), name, callCount, static_cast<unsigned long long>(result));
 }
@@ -727,7 +727,7 @@ std::uint64_t* FriendId(void*, std::uint64_t* out, std::uint32_t index) {
   if (out != nullptr) *out = id;
   const std::uint32_t callCount = CountCall(g_calls.friendId);
   if (callCount <= kFriendQueryLogCalls) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade query slot=0x188 name=FriendId index=%u id=%llu call_count=%u",
+    Log(EchoVR::LogLevel::Debug, "[NEVR.SOCIAL] facade query slot=0x188 name=FriendId index=%u id=%llu call_count=%u",
         index, static_cast<unsigned long long>(id), callCount);
   }
   return out;
@@ -738,7 +738,7 @@ const char* FriendName(void*, std::uint32_t index) {
   const char* name = nevr_social_roster::Global().NameAt(index);
   const std::uint32_t callCount = CountCall(g_calls.friendName);
   if (callCount <= kFriendQueryLogCalls) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade query slot=0x190 name=FriendName index=%u text=%s call_count=%u",
+    Log(EchoVR::LogLevel::Debug, "[NEVR.SOCIAL] facade query slot=0x190 name=FriendName index=%u text=%s call_count=%u",
         index, name, callCount);
   }
   return name;
@@ -858,8 +858,8 @@ std::uint64_t Initialize(void* self, std::uint32_t maxUsers, const void* callbac
   g_maxUsers = maxUsers;
   g_callbacksSource = callbacks;
   const std::uint32_t callCount = g_initializeCalls.fetch_add(1, std::memory_order_relaxed) + 1;
-  Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade initialize max_users=%u callbacks=%p call_count=%u", maxUsers,
-      callbacks, callCount);
+  Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade initialize max_users=%u callbacks=%s call_count=%u", maxUsers,
+      callbacks != nullptr ? "set" : "none", callCount);
   return 0;
 }
 
@@ -867,8 +867,7 @@ void Shutdown(void* self) {
   auto* object = static_cast<FacadeObject*>(self);
   object->callbacks.fill(0);
   const std::uint32_t callCount = g_shutdownCalls.fetch_add(1, std::memory_order_relaxed) + 1;
-  Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade shutdown object=%p call_count=%u lifetime=process", self,
-      callCount);
+  Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade shutdown call_count=%u lifetime=process", callCount);
 }
 
 // Base Reset (0x1800ab420): clears the room JSON, sets the state word to (state & ~1) | 2, zeroes both
@@ -1041,7 +1040,7 @@ struct Traced<SlotIndex, Fn> {
     if constexpr (std::is_void_v<R>) {
       Fn(args...);
       if (log) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] slot=%zu name=%s call=%u args=%llx,%llx,%llx", SlotIndex,
+        Log(EchoVR::LogLevel::Debug, "[NEVR.SOCIAL] slot=%zu name=%s call=%u args=%llx,%llx,%llx", SlotIndex,
             kSlotNames[SlotIndex], count, static_cast<unsigned long long>(values[0]),
             static_cast<unsigned long long>(sizeof...(A) > 1 ? values[1] : 0),
             static_cast<unsigned long long>(sizeof...(A) > 2 ? values[2] : 0));
@@ -1049,8 +1048,8 @@ struct Traced<SlotIndex, Fn> {
     } else {
       const R result = Fn(args...);
       if (log) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] slot=%zu name=%s call=%u args=%llx,%llx,%llx result=%llx", SlotIndex,
-            kSlotNames[SlotIndex], count, static_cast<unsigned long long>(values[0]),
+        Log(EchoVR::LogLevel::Debug, "[NEVR.SOCIAL] slot=%zu name=%s call=%u args=%llx,%llx,%llx result=%llx",
+            SlotIndex, kSlotNames[SlotIndex], count, static_cast<unsigned long long>(values[0]),
             static_cast<unsigned long long>(sizeof...(A) > 1 ? values[1] : 0),
             static_cast<unsigned long long>(sizeof...(A) > 2 ? values[2] : 0),
             static_cast<unsigned long long>(TraceValue(result)));
@@ -1230,7 +1229,7 @@ void FlushJsonTraces() {
     const char* traceName = "social_json";
     if (record.kind == JsonTraceKind::kSet) traceName = "json_set";
     if (record.kind == JsonTraceKind::kNavigateForWrite) traceName = "json_navigate_write";
-    Log(EchoVR::LogLevel::Info,
+    Log(EchoVR::LogLevel::Debug,
         "[NEVR.SOCIAL] %s call_count=%u path=%s argument=%u result=0x%llx root=%p cache=%p",
         traceName, record.callCount, record.path[0] != '\0' ? record.path : "<none>", record.argument,
         static_cast<unsigned long long>(record.result), reinterpret_cast<void*>(record.root),

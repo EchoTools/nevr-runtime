@@ -117,7 +117,7 @@ void* AccessorHook(void* provider) {
   if (enabled) std::call_once(g_inviteGateOnce, [] { nevr_party_invite_gate::Install(g_gameBase); });
   FlushJsonTraces();
   const std::uint32_t callCount = g_accessorCalls.fetch_add(1, std::memory_order_relaxed) + 1;
-  Log(EchoVR::LogLevel::Info,
+  Log(EchoVR::LogLevel::Debug,
       "[NEVR.SOCIAL] accessor provider=%s provider_ptr=%p original=%p returned=%p "
       "disabled_byte=%d facade_enabled=%d call_count=%u",
       providerName, provider, result, returned, SocialDisabledByte(), enabled ? 1 : 0, callCount);

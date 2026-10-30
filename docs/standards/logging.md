@@ -633,9 +633,9 @@ call it (`PluginLogBind(ctx)` in init, then `PluginLog`, `PluginLogWarning`, `Pl
 
 **Where:** `src/runtime/ext/plugin_loader.cpp` (`HostPluginLog`), `src/runtime/ext/plugin_log.h`.
 
-### Rule 16: A client records the lobby requests it sends and the answers it gets
+### Rule 16: The bridge records the lobby requests the client sends and the answers it gets
 
-A client writes one Info record for each lobby message that decides where the player ends up (the PC bridge writes
+The bridge writes one Info record for each lobby message that decides where the player ends up, on a client or a server (the PC bridge writes
 all four lines; the Quest router writes the two session lines), so a tester's log answers "how many join attempts did this client make, and what did each get". All four lines carry
 the tag `[NEVR.WS]` and the connection index (Rule 9):
 
@@ -665,11 +665,9 @@ the tag `[NEVR.WS]` and the connection index (Rule 9):
   the NUL, at most the field's 64, and `0` when the message is empty or absent.
 - **A frame the decode cannot read** is a Warning, `lobby <find request|join request|session success|session
   failure> could not be read conn=<n> payload_bytes=<n>`. Nothing is read past the frame's end.
-- **A client only, until `LogFrameMessages` moves to Debug.** KNOWN-WRONG #1307: On a dedicated server `LogFrameMessages` in
-  `src/runtime/compat/ws_bridge.cpp` logs every message of every frame at Info, and these records are not written
-  there. That Info is on a per-connection path, which "You SHALL NOT" forbids, and the reason its comment gives (a
-  server's message traffic is sparse) is stated without a measurement. The hot-path rule governs: ADR 0027's migration moves
-  `LogFrameMessages` to Debug on a server as on a client, and these records are then written on a server too.
+- **Both run modes.** The records are written on a dedicated server as on a client: the same frames reach
+  `ObserveSocialFrames` in `src/runtime/compat/ws_bridge.cpp` in either mode, and the per-message lines of
+  `LogFrameMessages` are Debug in both (Rule 13).
 - **Rate.** The bridge cannot bound how often the game sends a request: its party-follow loop runs from the
   game's own update. Each kind (find, join, success, failure) writes at most 10 records per 10 s window and
   counts the rest. The next lobby frame of any kind after the window ends writes
@@ -727,7 +725,7 @@ structured call (ADR 0027) writes as its own key.
 | Message forward          | DEBUG | Rate-limited     | Summary every N seconds or N messages        |
 | Per-frame diagnostic     | DEBUG | Off in prod      | Gated by verbosity flag                     |
 | Login injected           | INFO  | Once per conn    | Log XPID + conn + size                      |
-| Lobby find/join request, session success/failure (client) | INFO | 10 per kind per 10 s, then counted | Rule 16; the count is the suppressed line |
+| Lobby find/join request, session success/failure (client and server) | INFO | 10 per kind per 10 s, then counted | Rule 16; the count is the suppressed line |
 | Registration request     | INFO  | Once             | Log message type + size                     |
 | Registration response    | INFO  | Once             | Log server_id + status                      |
 | Hook failure             | WARN  | Once per failure | Log VA + expected + actual                  |
