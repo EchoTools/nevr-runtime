@@ -184,16 +184,19 @@ TEST(ServerBotsSettings, OnlyARewrittenFrameReplacesTheOneTheGameGets) {
 }
 
 TEST(ServerBotsGameType, TheSymbolsAreTheServicesHashes) {
-  // The service's own table (EchoTools/nakama server/evr/core_hash_lookup.go), not a hash computed here.
+  // The service's own hashes, not ones computed here: ten from its table (EchoTools/nakama server/evr/
+  // core_hash_lookup.go); echo_arena_practice, which the table lacks, from its own ToSymbol (server/evr/core_hash.go),
+  // which gives the table's value for the other ten.
   const std::pair<const char*, uint64_t> service[] = {
       {"echo_arena", 0xcb60a4de7e1caf73ULL},          {"echo_arena_private", 0x09990965f4db8c03ULL},
       {"echo_arena_tournament", 0xd53a9c73b8b2c760ULL}, {"echo_arena_public_ai", 0xd54d62c40852c2f9ULL},
+      {"echo_arena_practice", 0xe899792852ba0d5fULL},
       {"echo_combat", 0x3d5c3976578a321aULL},         {"echo_combat_private", 0x33bbf6842df97a3fULL},
       {"echo_combat_tournament", 0x6b44ed1ad5234fbcULL}, {"social_2.0", 0x042d9cf9cfddcf76ULL},
       {"social_2.0_private", 0x305d6e37c1589c45ULL},  {"social_2.0_npe", 0x163956e6e431e617ULL},
   };
-  ASSERT_EQ(sizeof(kGameTypes) / sizeof(kGameTypes[0]), 10u);
-  for (size_t i = 0; i < 10; ++i) {
+  ASSERT_EQ(sizeof(kGameTypes) / sizeof(kGameTypes[0]), 11u);
+  for (size_t i = 0; i < 11; ++i) {
     EXPECT_STREQ(kGameTypes[i].name, service[i].first);
     EXPECT_EQ(kGameTypes[i].symbol, service[i].second) << service[i].first;
     EXPECT_EQ(kGameTypes[i].bots, std::string(service[i].first).rfind("social", 0) != 0) << service[i].first;
@@ -212,6 +215,9 @@ TEST(ServerBotsGameType, ReadAsTheServiceWritesItOrByName) {
   EXPECT_FALSE(t.bots);
   t = read(R"({"gametype":"echo_combat_private"})");
   EXPECT_EQ(t.name, "echo_combat_private");
+  EXPECT_TRUE(t.bots);
+  t = read(R"({"gametype":-1686183371379962529})");  // echo_arena_practice, as the service's signed int64
+  EXPECT_EQ(t.name, "echo_arena_practice");
   EXPECT_TRUE(t.bots);
   t = read(R"({"appid":"1"})");
   EXPECT_EQ(t.name, "none");

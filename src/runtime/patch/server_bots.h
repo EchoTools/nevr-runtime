@@ -98,13 +98,14 @@ struct GameType {
   bool bots;  // a match that gets bots
 };
 
-/// The service's game types (its ModeArena* / ModeCombat* / ModeSocial* symbols): the arena and combat matches get
-/// bots, the social lobbies none.
+/// The service's eleven game types (AllModes in its server/evr/gameserver_session_start.go): the arena and combat
+/// matches get bots, the social lobbies none. echo_arena_practice is an arena match like echo_arena_public_ai.
 inline constexpr GameType kGameTypes[] = {
     {"echo_arena", EchoVR::CSymbol64Hash("echo_arena"), true},
     {"echo_arena_private", EchoVR::CSymbol64Hash("echo_arena_private"), true},
     {"echo_arena_tournament", EchoVR::CSymbol64Hash("echo_arena_tournament"), true},
     {"echo_arena_public_ai", EchoVR::CSymbol64Hash("echo_arena_public_ai"), true},
+    {"echo_arena_practice", EchoVR::CSymbol64Hash("echo_arena_practice"), true},
     {"echo_combat", EchoVR::CSymbol64Hash("echo_combat"), true},
     {"echo_combat_private", EchoVR::CSymbol64Hash("echo_combat_private"), true},
     {"echo_combat_tournament", EchoVR::CSymbol64Hash("echo_combat_tournament"), true},
