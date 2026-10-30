@@ -1,4 +1,4 @@
-//! `nevr-install`: the CLI over the core (ADR 0023). One JSON object on stdout per run; the details are in the log.
+//! `install-nevr-runtime`: the CLI over the core (ADR 0023). One JSON object on stdout per run; the details are in the log.
 //! Exit codes: 0 installed or nothing to do, 1 a check or step failed (nothing changed), 2 needs the player, 3 restored.
 
 use nevr_install::device::AdbDevice;
@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: nevr-install <command> [options]
+const USAGE: &str = "usage: install-nevr-runtime <command> [options]
   manifest verify [--from-dir DIR]          steps 1 to 7: fetch (or read DIR), verify, store, pick the channel's release
   quest plan|install [--no-device] [--serial S] [--version V] [--yes-uninstall] [--artifact-dir DIR]
   pc plan|install --dir <folder with echovr.exe> [--nevr-root DIR] [--launcher-dir DIR] [--allow-downgrade] [--version V] [--package-dir DIR]

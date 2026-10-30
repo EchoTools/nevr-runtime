@@ -1,4 +1,4 @@
-# Quest install: a front end over `nevr-install.exe quest install` (ADR 0023, installer/). The core checks the signed
+# Quest install: a front end over `install-nevr-runtime.exe quest install` (ADR 0023, installer/). The core checks the signed
 # release manifest, downloads the APK and the game data it names, checks both, plans from what the headset holds,
 # installs, and writes the [NEVR.INSTALL] log. This script holds no hash, URL or version of its own: it finds the core
 # and SideQuest's adb, runs the core, and shows the result.
@@ -54,8 +54,8 @@ function Find-Adb {
 
 $exitCode = 1
 try {
-    if (-not $Core) { $Core = Join-Path $PSScriptRoot 'nevr-install.exe' }
-    if (-not (Test-Path -LiteralPath $Core -PathType Leaf)) { throw "nevr-install.exe not found: $Core (it ships beside this script in the Windows package; pass -Core <path>)" }
+    if (-not $Core) { $Core = Join-Path $PSScriptRoot 'install-nevr-runtime.exe' }
+    if (-not (Test-Path -LiteralPath $Core -PathType Leaf)) { throw "install-nevr-runtime.exe not found: $Core (it ships beside this script in the Windows package; pass -Core <path>)" }
     $Core = (Resolve-Path -LiteralPath $Core).ProviderPath
     $adbPath = Find-Adb
     Write-Host "Using adb: $adbPath"

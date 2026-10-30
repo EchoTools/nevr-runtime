@@ -107,7 +107,7 @@ An install has one owner. Two things say who:
 
 - **The launcher's own state.** Echo VR Launcher keeps `launcher.json` in `%LOCALAPPDATA%\EchoVR_Launcher`; each `versions[]` entry
   names an install root, and the game's folder is `<root>\ready-at-dawn-echo-arena\bin\win10` (`bin\win7` for the 2017 builds).
-  `nevr-install pc install` (and so `install.ps1`) reads that file, never writes it, and refuses a game folder it lists:
+  `install-nevr-runtime pc install` (and so `install.ps1`) reads that file, never writes it, and refuses a game folder it lists:
   "Echo VR Launcher manages this install (nEVR <version> is installed; ...). Update nEVR through the launcher." The run ends
   `needs-user`, changes nothing and fetches no package. `--launcher-dir <folder>` names the launcher's data folder when it is not
   the default (the default exists on Windows only). A `launcher.json` that is there and cannot be read is a refusal too, because

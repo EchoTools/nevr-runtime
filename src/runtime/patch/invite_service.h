@@ -4,7 +4,7 @@
 // source, the log), the wizard hook submits a plan to it, and the shutdown path stops it.
 //
 // Start logs its outcome (N122/N124): `[NEVR.INVITE] service on source=<default|config>` at Info, or
-// `feature off reason=<why> source=<default|config>` at Info (`turned_off`: the key says false) or at Warning (a value nobody
+// `feature off reason=<why> source=<default|config>` at Info (`turned_off`: the key says false; `not_configured`: off with no key behind it) or at Warning (a value nobody
 // meant, no address, an address that may not receive the token). On is the default (network.invite_codes absent or empty). A
 // request while off is a `request not sent reason=not_configured` line, never a silent drop. Everything here is
 // host-testable: no game, and the platform values come in through Settings.
