@@ -110,9 +110,6 @@ struct PageInfo {
   size_t elementPayloadOffset = 0;     // first element
   uint64_t elementCount = 0;
   size_t tailPayloadOffset = 0;        // the +88 payload: where the nested payloads of new elements go
-  /// Per element, in file order: where its nested payloads start and how many bytes they take. They run back to
-  /// back from the first element's, in element order.
-  std::vector<std::pair<size_t, size_t>> nested;
 };
 
 struct Decoded {
@@ -200,7 +197,6 @@ inline Status Decode(const uint8_t* data, size_t size, Decoded* out) {
       for (uint64_t e = 0; e < count; ++e) {
         const size_t element = start + static_cast<size_t>(e) * kElementBytes;
         out->owners.push_back(detail::Load64(data + element));
-        const size_t nestedStart = cur;
         for (size_t childSlot : kElementSlots) {
           uint64_t childCount = 0;
           size_t childBytes = 0;
@@ -210,7 +206,6 @@ inline Status Decode(const uint8_t* data, size_t size, Decoded* out) {
           if (size - cur < childBytes) return Status::Truncated;
           cur += childBytes;
         }
-        info.nested.emplace_back(nestedStart, cur - nestedStart);
       }
     }
     out->pages.push_back(info);
@@ -344,75 +339,6 @@ inline Status InsertCards(const uint8_t* data, size_t size, uint64_t page, const
   if (back.size() != size || std::memcmp(back.data(), data, size) != 0) return Status::VerifyFailed;
 
   *out = std::move(result);
-  return Status::Ok;
-}
-
-/// Puts the elements of page `page` whose owners are in `order` into that order, using only the positions those
-/// elements already occupy in the page's element array (the first of those positions takes the first owner of `order`
-/// the page has, and so on); every other element stays where it is. An owner of `order` the page does not have is
-/// skipped, and fewer than two present is a copy of the input. An element is moved whole with its nested payloads.
-/// On Ok, `*out` is the new buffer, of the input's size; it decodes with the owners permuted as asked and holds the
-/// same element and nested bytes, which is checked before it is returned.
-inline Status ReorderElements(const uint8_t* data, size_t size, uint64_t page, const uint64_t* order, size_t count,
-                              std::vector<uint8_t>* out) {
-  Decoded before;
-  Status s = Decode(data, size, &before);
-  if (s != Status::Ok) return s;
-  if (page >= before.pages.size()) return Status::PageOutOfRange;
-  const PageInfo& info = before.pages[static_cast<size_t>(page)];
-  const size_t n = static_cast<size_t>(info.elementCount);
-  size_t firstOwner = 0;
-  for (size_t p = 0; p < static_cast<size_t>(page); ++p) firstOwner += static_cast<size_t>(before.pages[p].elementCount);
-  const uint64_t* owners = before.owners.data() + firstOwner;
-
-  // The positions the wanted owners occupy (ascending), and the owner each position takes.
-  std::vector<size_t> slots, source;
-  for (size_t e = 0; e < n; ++e) {
-    for (size_t i = 0; i < count; ++i) {
-      if (owners[e] == order[i]) {
-        slots.push_back(e);
-        break;
-      }
-    }
-  }
-  for (size_t i = 0; i < count; ++i) {
-    size_t found = n;
-    for (size_t e = 0; e < n; ++e) {
-      if (owners[e] != order[i]) continue;
-      if (found != n) return Status::DuplicateOwner;
-      found = e;
-    }
-    if (found != n) source.push_back(found);
-  }
-  if (slots.size() != source.size()) return Status::DuplicateOwner;
-  *out = std::vector<uint8_t>(data, data + size);
-  if (slots.size() < 2) return Status::Ok;
-
-  std::vector<size_t> perm(n);
-  for (size_t e = 0; e < n; ++e) perm[e] = e;
-  for (size_t i = 0; i < slots.size(); ++i) perm[slots[i]] = source[i];
-
-  const size_t nestedAt = info.nested.front().first;
-  size_t at = nestedAt;
-  for (size_t e = 0; e < n; ++e) {
-    std::memcpy(out->data() + info.elementPayloadOffset + e * kElementBytes,
-                data + info.elementPayloadOffset + perm[e] * kElementBytes, kElementBytes);
-    const std::pair<size_t, size_t>& from = info.nested[perm[e]];
-    std::memcpy(out->data() + at, data + from.first, from.second);
-    at += from.second;
-  }
-
-  Decoded after;
-  if (Decode(out->data(), out->size(), &after) != Status::Ok) return Status::VerifyFailed;
-  if (after.owners.size() != before.owners.size()) return Status::VerifyFailed;
-  for (size_t e = 0; e < n; ++e) {
-    if (after.owners[firstOwner + e] != owners[perm[e]]) return Status::VerifyFailed;
-    const std::pair<size_t, size_t>& was = info.nested[perm[e]];
-    const std::pair<size_t, size_t>& now = after.pages[static_cast<size_t>(page)].nested[e];
-    if (now.second != was.second || std::memcmp(out->data() + now.first, data + was.first, was.second) != 0) {
-      return Status::VerifyFailed;
-    }
-  }
   return Status::Ok;
 }
 

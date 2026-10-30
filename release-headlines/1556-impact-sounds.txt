@@ -1,1 +1,0 @@
-Bullet impact sounds now play on Quest for every gun, on players, shields and the ground.

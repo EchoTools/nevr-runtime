@@ -27,6 +27,7 @@ using Thunk = sentinel::pinned::LibR15AsyncResourceIOCallbackThunk;
 sentinel::GotHook g_hook;
 std::atomic<void* const*> g_contextSlot{nullptr};
 std::atomic<const char*> g_pin{nevr_menu_cards::kQuestStockPageSha256};
+std::atomic<const char*> g_slotPin{nevr_menu_cards::kStockTransformSha256};
 std::atomic<unsigned long long> g_deliveries{0};
 std::atomic<unsigned long long> g_pages{0};
 std::atomic<unsigned long long> g_swapped{0};
@@ -178,6 +179,49 @@ void OfferNetgun(unsigned char* data, const Delivery& d, nevr_netgun_bullets::Re
                        {"rows_before", r.entriesBefore}, {"rows_after", r.entriesAfter}});
 }
 
+// The main-menu level's transform table (#1679): the four buttons stand where the actors' transforms put them, so a pinned
+// stock table is served with Play, Join, Create and Tutorial given the slots of that order from the left (the PC rewrite,
+// runtime/patch/menu_slots.h, decides the bytes; the table is the same 52,680 bytes on PC). Any other buffer is left alone
+// and says why. The size does not change, and SwapIn copies the served bytes into the game's own buffer, so nothing is kept.
+// The slots in the log line are read back from the bytes served: slot 1 is the left of the screen.
+void OfferSlots(unsigned char* data, const Delivery& d) noexcept {
+  if (d.size > nevr_menu_slots::kMaxResourceBytes) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "menu_slots_skip", {{"reason", "table_too_large"}, {"bytes", d.size}});
+    return;
+  }
+  const std::size_t size = static_cast<std::size_t>(d.size);
+  const std::string sha = nevr_quest::data::Sha256Hex(d.buffer, size);
+  const char* const pin = g_slotPin.load(std::memory_order_acquire);
+  const nevr_menu_cards::SlotResult r = nevr_menu_cards::PlaceButtons(d.buffer, size, sha, pin);
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "menu_slots_table",
+                      {{"bytes", d.size}, {"sha256", sha.c_str()}, {"pin", sha == pin ? "match" : "mismatch"}});
+  if (r.verdict == nevr_menu_cards::Verdict::NotStock) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "menu_slots_skip", {{"reason", "table_not_pinned"}});
+    return;
+  }
+  if (r.verdict == nevr_menu_cards::Verdict::Refused) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "menu_slots_skip", {{"reason", nevr_menu_slots::StatusName(r.status)}});
+    return;
+  }
+  const Swap swap = SwapIn(data, r.bytes.data(), r.bytes.size(), ReleaseAllocator());
+  if (swap != Swap::Swapped) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "menu_slots_skip", {{"reason", SwapName(swap)}});
+    return;
+  }
+  const std::string before = nevr_menu_cards::SlotLine(r.before);
+  const std::string after = nevr_menu_cards::SlotLine(r.after);
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "menu_slots_swap",
+                      {{"result", "swapped"},
+                       {"bytes_before", d.size},
+                       {"bytes_after", r.bytes.size()},
+                       {"slots_before", before.c_str()},
+                       {"slots_after", after.c_str()},
+                       {"slot_play", nevr_menu_cards::SlotOf(r.after, nevr_menu_cards::kPlayOwner)},
+                       {"slot_join", nevr_menu_cards::SlotOf(r.after, nevr_menu_cards::kJoinOwner)},
+                       {"slot_create", nevr_menu_cards::SlotOf(r.after, nevr_menu_cards::kCreateOwner)},
+                       {"slot_tutorial", nevr_menu_cards::SlotOf(r.after, nevr_menu_cards::kTutorialOwner)}});
+}
+
 // Runs before the game's callback, on whichever thread finished the read. Never throws (the unit has no exceptions).
 void Offer(unsigned char* data) noexcept {
   g_deliveries.fetch_add(1, std::memory_order_relaxed);
@@ -188,6 +232,10 @@ void Offer(unsigned char* data) noexcept {
   nevr_netgun_bullets::Resource netgun = nevr_netgun_bullets::Resource::Particles;
   if (netgun_bullets::IsNetgunDelivery(d, &netgun)) {
     OfferNetgun(data, d, netgun);
+    return;
+  }
+  if (d.classSymbol == nevr_menu_cards::kTransformType && d.nameSymbol == nevr_menu_cards::kQuestPageName) {
+    OfferSlots(data, d);
     return;
   }
   // The page is the CR15UIPage2CR resource under mnu_master_lowspec. The name is also the main-menu level's, so about sixty
@@ -250,6 +298,8 @@ void ArmForTest(const char* pinHex, void* const* contextSlot) noexcept {
   Thunk::Arm(kHook);
 }
 
+void ArmSlotPinForTest(const char* pinHex) noexcept { g_slotPin.store(pinHex, std::memory_order_release); }
+
 void ResetForTest() noexcept {
   g_deliveries.store(0, std::memory_order_relaxed);
   g_pages.store(0, std::memory_order_relaxed);
@@ -265,6 +315,7 @@ void ResetForTest() noexcept {
     p.nameSymbol.store(0, std::memory_order_relaxed);
   }
   g_pin.store(nevr_menu_cards::kQuestStockPageSha256, std::memory_order_release);
+  g_slotPin.store(nevr_menu_cards::kStockTransformSha256, std::memory_order_release);
   g_contextSlot.store(nullptr, std::memory_order_release);
   Cache* const old = g_cache.exchange(nullptr, std::memory_order_acq_rel);
   delete old;  // tests only: no game thread is running
