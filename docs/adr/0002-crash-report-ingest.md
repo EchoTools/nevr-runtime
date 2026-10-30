@@ -1,11 +1,12 @@
 # ADR 0002: Crash reports reach the game service through a spool and a deferred uploader
 
-Status: accepted, not implemented. No uploader exists in the runtime or the Quest
-sentinel. The sink side is specified by `tests/crash-ingest/crash_ingest_contract_test.go`.
+Status: accepted. The HTTPS spool and sink below are not implemented. The readable report is delivered through the
+remote-log channel instead (`docs/engine/remote-log.md`, section 7), which needs no endpoint. The sink side of this
+ADR is specified by `tests/crash-ingest/crash_ingest_contract_test.go`.
 
 ## Context
 
-Neither platform sends a crash report anywhere. Windows prints a text summary
+Neither platform sends a minidump or a spooled report to a crash sink. Windows prints a text summary
 from `WriteCrashDump` (`src/runtime/lifecycle/crash_recovery.cpp`) to
 `STD_ERROR_HANDLE` only, so a client that exits leaves nothing on disk to upload.
 Quest's breakpad `DumpCallback` (`src/quest/sentinel/sentinel.cpp`) writes a
