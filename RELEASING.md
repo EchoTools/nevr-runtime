@@ -50,12 +50,19 @@ fetches the files back only after it has put them there.
 A release is a train, not an event. The train (`release-train.yml`) runs every three hours and cuts a pre-release when `main` has a
 commit that `tools/next_release_version.py` counts (feat, fix, perf or a breaking change) since the newest tag.
 
+The train and its guard share one rule, `tools/release_window.py`: no release is cut or dispatched within 195 minutes of the newest
+published release (the newest by `publishedAt` of the non-draft releases whose tag is exactly `vX.Y.Z`). A scheduled run checks it
+first and holds, cutting nothing, when that release is 195.0 minutes old or less; a manual dispatch is not held. A run that held or
+found nothing to cut published nothing, so it does not start a window.
+
 The guard covers a dropped scheduled train run. It is a systemd user timer on the publisher's machine
 (`tools/systemd/nevr-train-guard.timer`, hourly at :07), which runs `tools/release_train_guard.py` from the Quest timer's dedicated
 checkout with the publisher's `gh-spritz` (`--gh`, else `GH_BIN`). It runs only while that machine is on: a machine that is off delays
-the guard, and the timer's `Persistent=true` catches up when the machine comes back. When `main` is releasable and no train run was
-created in the last 3 h 15 min, it dispatches the train. It does nothing while a train run is queued, in progress, waiting or pending,
-when `RELEASE_TRAIN` is not `true`, or when nothing on `main` is releasable. Each decision is one line in the journal
+the guard, and the timer's `Persistent=true` catches up when the machine comes back. When `main` is releasable and no release was
+published in the last 3 h 15 min, it dispatches the train. It does nothing while a train run is queued, in progress, waiting or pending,
+when `RELEASE_TRAIN` is not `true`, when nothing on `main` is releasable, or while the newest published release is inside the window. Each decision is one JSON line (`reason` is `switch_off`, `no_releasable_change`,
+`train_run_in_progress`, `recent_release` or `no_release_in_window`; `last_release`, `last_published`, `age_minutes` and `window_minutes`
+describe the release, `last_run_id` and `last_run_created` the newest train run, for information) in the journal
 (`journalctl --user -u nevr-train-guard.service`) and in `~/.local/state/nevr-runtime/release-train-guard.jsonl`; a run whose log cannot
 be written fails before it decides anything. A failed run couriers the release lead (`nevr-train-guard-failed.service`); it never bonks.
 It is not a GitHub schedule: GitHub drops or delays scheduled runs, and a job's token cannot read repository variables (`gh variable

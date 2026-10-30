@@ -9,8 +9,14 @@ own run list whether the train is due:
 - switch off (repository variable RELEASE_TRAIN is not "true")        -> none, switch_off
 - nothing releasable on origin/main (next_release_version.py exit 1)   -> none, no_releasable_change
 - a train run queued, in progress, waiting or pending                   -> none, train_run_in_progress
-- the newest train run created within 195 minutes of now                -> none, recent_run
-- otherwise (also no run at all)                                        -> dispatch, no_run_in_window
+- the newest published release is 195 minutes old or less               -> none, recent_release
+- otherwise (also no published release at all)                          -> dispatch, no_release_in_window
+
+The window is measured from the newest published release, not from the newest train run (#1466): a run that held, or
+found nothing to cut, published nothing and costs no time. The rule is tools/release_window.py, which the scheduled
+train runs too; "newest published release" is its newest_published (non-draft, tag exactly vX.Y.Z, newest by
+publishedAt), read through this guard's own gh call. A decision carries last_run_id and last_run_created (the newest
+train run, information only) and last_release, last_published, age_minutes (of that release) and window_minutes.
 
 Every decision is one JSON line on stdout and is appended to the log file (--log-file, default
 $XDG_STATE_HOME/nevr-runtime/release-train-guard.jsonl, else ~/.local/state/nevr-runtime/...). It is also appended to
@@ -29,8 +35,12 @@ import pathlib
 import subprocess
 import sys
 
+# `python3 -I` (the systemd unit's ExecStart) puts neither this folder nor the cwd on sys.path.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import release_window  # noqa: E402
+
 WORKFLOW = "release-train.yml"
-WINDOW_MINUTES = 195
+WINDOW_MINUTES = release_window.WINDOW_MINUTES
 ACTIVE = frozenset({"queued", "in_progress", "waiting", "pending"})
 TOOL = "release_train_guard"
 DEFAULT_GH = "gh-spritz"
@@ -42,18 +52,13 @@ class GuardFailure(Exception):
     pass
 
 
-def parse_time(stamp: str) -> dt.datetime:
-    return dt.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
-
-
-def decide(now: dt.datetime, runs: list[dict], releasable: bool, switch_on: bool) -> dict:
-    """The decision for one hourly tick. `runs` is the train's runs, newest first; `now` is an aware datetime."""
+def decide(now: dt.datetime, runs: list[dict], releasable: bool, switch_on: bool, release: dict | None) -> dict:
+    """The decision for one hourly tick. `runs` is the train's runs, newest first; `now` is an aware datetime;
+    `release` is the newest published release, {"tag", "published"} (release_window.newest_published), or None."""
     newest = runs[0] if runs else None
     last_id = newest["id"] if newest else None
     last_created = newest["createdAt"] if newest else None
-    age = None
-    if newest is not None:
-        age = round((now - parse_time(newest["createdAt"])).total_seconds() / 60, 1)
+    age = release_window.age_minutes(now, release["published"]) if release is not None else None
 
     def result(action: str, reason: str) -> dict:
         return {
@@ -61,7 +66,10 @@ def decide(now: dt.datetime, runs: list[dict], releasable: bool, switch_on: bool
             "reason": reason,
             "last_run_id": last_id,
             "last_run_created": last_created,
+            "last_release": release["tag"] if release is not None else None,
+            "last_published": release["published"] if release is not None else None,
             "age_minutes": age,
+            "window_minutes": WINDOW_MINUTES,
         }
 
     if not switch_on:
@@ -70,9 +78,9 @@ def decide(now: dt.datetime, runs: list[dict], releasable: bool, switch_on: bool
         return result("none", "no_releasable_change")
     if any(run["status"] in ACTIVE for run in runs):
         return result("none", "train_run_in_progress")
-    if newest is not None and age <= WINDOW_MINUTES:
-        return result("none", "recent_run")
-    return result("dispatch", "no_run_in_window")
+    if release is not None and release_window.inside_window(now, release["published"]):
+        return result("none", "recent_release")
+    return result("dispatch", "no_release_in_window")
 
 
 def gh_binary(env: dict[str, str]) -> str:
@@ -132,6 +140,15 @@ def train_runs(repo: str, gh: str) -> list[dict]:
         {"id": r["databaseId"], "createdAt": r["createdAt"], "status": r["status"], "event": r["event"]}
         for r in json.loads(listed)
     ]
+
+
+def newest_release(repo: str, gh: str) -> dict | None:
+    """The newest published release, by the shared rule. The call is the guard's own, so its failures are the guard's."""
+    listing = Call(gh, release_window.list_args(repo)).stdout()
+    try:
+        return release_window.newest_published(listing)
+    except release_window.WindowError as error:
+        raise GuardFailure(f"gh release list {repo}: {error}") from error
 
 
 def ensure_log(path: pathlib.Path) -> None:
@@ -201,7 +218,8 @@ def main(argv: list[str] | None = None) -> int:
         tag = releasable_tag(args.repo, args.version_tool)
         switch_on = switch_is_on(args.repo, gh)
         runs = train_runs(args.repo, gh)
-        decision = decide(now, runs, tag is not None, switch_on)
+        release = newest_release(args.repo, gh)
+        decision = decide(now, runs, tag is not None, switch_on, release)
         record = {
             "event": "decision",
             **decision,
