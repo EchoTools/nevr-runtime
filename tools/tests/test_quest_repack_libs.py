@@ -754,6 +754,11 @@ class RepackWithAPluginTest(RepackFixture):
             "plugins": [{"name": "good", "file": "libgood.so", "enabled": True, "early": False,
                          "sha256": hashlib.sha256(plugin.read_bytes()).hexdigest()}],
         })
+        # The bytes themselves: sorted keys, no spaces, one trailing newline (the loader reads the text, not the parse).
+        expected = ('{"plugins":[{"early":false,"enabled":true,"file":"libgood.so","name":"good","sha256":"%s"}],"schema":1}\n'
+                    % hashlib.sha256(plugin.read_bytes()).hexdigest()).encode()
+        with zipfile.ZipFile(self.signed) as z:
+            self.assertEqual(z.read("lib/arm64-v8a/libnevr_plugin_manifest.so"), expected)
 
     def test_several_plugins_keep_their_argument_order_in_the_manifest(self):
         self.make_inputs(DEV_VERSION)
