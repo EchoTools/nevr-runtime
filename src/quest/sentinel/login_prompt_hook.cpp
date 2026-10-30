@@ -665,6 +665,8 @@ void HookedNetGameUpdate(UpdateThunk::Fn original, CR15NetGameOpaque* self, std:
   // runs before the gate. The gate covers only the prompt's own work in PromptFrame.
   if (self != nullptr && g_fallbackArmed) NoteFallbackLogin(self);
   if (g_promptWanted.load(std::memory_order_acquire)) PromptFrame(self);
+  // The join (#966 S4) reads the game object through this netgame before the dispatcher's work runs.
+  nevr_quest::invite::frame::SetNetGame(self);
   nevr_quest::invite::frame::Tick();
   original(self, arg);
 }

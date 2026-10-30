@@ -45,6 +45,13 @@ bool PostFrameWork(WorkFn fn, void* context) noexcept;
 // Runs the registered work and up to kPerTickLimit posted units. Called once per NetGame::Update, before the original.
 void Tick() noexcept;
 
+// The netgame the frame hook passes before each Tick (#966 S4): the join reads the game object through it. SetNetGame is
+// called on the game thread; NetGame returns the last one set, null before the first.
+void SetNetGame(void* netGame) noexcept;
+void* NetGame() noexcept;
+// True when the calling thread is the one that last ran Tick, i.e. the game thread. False before the first Tick.
+bool OnTickThread() noexcept;
+
 // One line for the install outcome: installed (`reason` ignored), or off with `reason`.
 void LogInstall(bool installed, const char* reason) noexcept;
 
