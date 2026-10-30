@@ -15,6 +15,7 @@ import pathlib
 import random
 import re
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -1550,6 +1551,7 @@ class PublicHost:
     def __init__(self, case: unittest.TestCase) -> None:
         self.mode = "absent"
         self.requests: list[tuple[str, str]] = []
+        self.agents: list[str | None] = []
         host = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -1558,7 +1560,12 @@ class PublicHost:
 
             def do_GET(self) -> None:  # noqa: N802 - the handler's own name
                 host.requests.append((self.command, self.path))
+                host.agents.append(self.headers.get("User-Agent"))
                 body = b"apk bytes"
+                if host.mode == "nocontent":
+                    self.send_response(204)
+                    self.end_headers()
+                    return
                 if host.mode == "redirect":
                     self.send_response(302)
                     self.send_header("Location", "http://127.0.0.1:1/elsewhere")
@@ -1912,6 +1919,37 @@ class VariantPins(VariantCase):
         self.write_pins(*(self.pin_line(n).upper().replace(n.upper(), n) for n in LIBRARIES))
         self.assertEqual(self.run_timer(Fake(self.root)), 0)
 
+    def variant_pins_directly(self) -> timer.Timer:
+        log = timer.Log(self.log, TAG)
+        self.addCleanup(log.close)
+        subject = timer.Timer(self.env, Fake(self.root), self.sleeps.append, log)
+        subject.work.mkdir(parents=True, exist_ok=True)
+        return subject
+
+    def test_a_restrictive_umask_leaves_the_scratch_usable_and_the_modes_exact(self) -> None:
+        subject = self.variant_pins_directly()
+        old = os.umask(0o277)
+        try:
+            copies = subject.variant_pins(TAG, self.vdir, self.pins)
+        finally:
+            os.umask(old)
+        self.assertEqual(stat.S_IMODE(self.scratch.stat().st_mode), 0o700)
+        self.assertEqual([stat.S_IMODE(c.stat().st_mode) for c in copies], [0o600, 0o600])
+
+    def test_a_library_changed_after_it_was_copied_is_neither_checked_nor_packaged(self) -> None:
+        subject = self.variant_pins_directly()
+        real, original = shutil.copyfileobj, self.vdir / LIBRARIES[0]
+
+        def copy_then_change(source, target, *args):  # noqa: ANN001, ANN002 - shutil.copyfileobj's own signature
+            real(source, target, *args)
+            original.write_bytes(b"changed after the copy was made")
+
+        with mock.patch.object(timer.shutil, "copyfileobj", side_effect=copy_then_change):
+            copies = subject.variant_pins(TAG, self.vdir, self.pins)
+        self.assertEqual([c.parent for c in copies], [self.scratch, self.scratch])
+        self.assertEqual(copies[0].read_bytes(), library_bytes(LIBRARIES[0]), "the copy is what was pinned")
+        self.assertNotEqual(original.read_bytes(), library_bytes(LIBRARIES[0]))
+
     def test_a_scratch_directory_left_by_a_killed_run_is_replaced(self) -> None:
         self.scratch.mkdir(parents=True)
         (self.scratch / "stale.so").write_bytes(b"left over")
@@ -1942,6 +1980,7 @@ class VariantOfAListedRelease(VariantCase):
         self.assertEqual(self.step_oks(), ["checkout", "tags", "token", "list", "build_signer", "check_listed", "variant_exists",
                                            "variant_pins", "worktree", "build_slot", "configure", "variant_build", "variant_publish", "cleanup"])
         self.assertEqual(self.host.requests, [("GET", f"/nevr-runtime/{TAG}/{VARIANT_APK}")])
+        self.assertEqual(self.host.agents, [timer.USER_AGENT], "the release host answers 403 to the default agent")
         [asked] = [e for e in self.events() if e["event"] == "step_ok" and e["step"] == "variant_exists"]
         self.assertEqual((asked["listed"], asked["apk"]), (False, VARIANT_APK))
         for never in ("dispatch", "watch", "check_jobs", "publish_apk", "build_apk", "courier"):
@@ -1990,7 +2029,8 @@ class VariantOfAListedRelease(VariantCase):
         self.assertNotIn("worktree.add", fake.steps(), "no worktree is made for a variant that cannot be built")
 
     def test_other_answers_are_failures_that_build_nothing_and_never_done(self) -> None:
-        for mode, want in (("html", "text/html"), ("error", "500"), ("forbidden", "403"), ("redirect", "302")):
+        for mode, want in (("html", "text/html"), ("error", "500"), ("forbidden", "403"), ("redirect", "302"),
+                           ("nocontent", "204")):
             with self.subTest(mode=mode):
                 self.log.unlink(missing_ok=True)
                 self.host.mode = mode

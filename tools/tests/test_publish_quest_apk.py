@@ -418,6 +418,12 @@ class PublishVariantApk(PublishFixture):
         self.assertEqual(self.recorded(), [])
         self.assertNotIn("local_files", [line["event"] for line in self.log_lines()])
 
+    def test_an_empty_extra_out_with_a_variant_is_refused_too(self) -> None:
+        result = self.run_variant("--extra-out", "")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--extra-out", result.stderr)
+        self.assertEqual(self.recorded(), [])
+
     def test_a_variant_name_outside_lowercase_letters_and_digits_is_refused(self) -> None:
         for bad in ("Q15T", "q-15", "q 15", "", "q15t/../x", "q15t\n", "q_15"):
             with self.subTest(name=bad):

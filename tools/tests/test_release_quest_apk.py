@@ -236,6 +236,12 @@ class RecipeText(unittest.TestCase):
         self.assertIn("release-quest-variant-apk tag plugins", recipe("release-quest-variant-apk").splitlines()[0])
         self.assertLess(JUSTFILE.index("\nrelease-quest-apk "), JUSTFILE.index("\nrelease-quest-variant-apk "))
 
+    def test_the_variant_recipe_takes_the_store_apk_the_release_recipe_takes(self):
+        def default(name):
+            return re.search(r'store_apk="([^"]+)"', recipe(name).splitlines()[0]).group(1)
+
+        self.assertEqual(default("release-quest-variant-apk"), default("release-quest-apk"))
+
     def test_both_release_recipes_run_the_one_shared_body(self):
         self.assertIn('_release-quest-apk "release-quest-apk" tag store_apk "" ""', recipe("release-quest-apk"))
         self.assertIn('_release-quest-apk "release-quest-variant-apk" tag store_apk plugins "q15t"',
