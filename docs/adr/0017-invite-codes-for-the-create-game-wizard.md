@@ -140,10 +140,10 @@ the runtime (`src/runtime/patch/`), not a service configuration and not a plugin
   worker.
 - **Show the result.** Each frame, on the game-loop thread, `nevr_invite_apply::OnFrame` takes the answers the worker holds
   and posts their texts to the UI text writer (#896; `patch/invite_answer_text.h` is the rule). A created code: the code and
-  `EXPIRES: HH:MM UTC` in the share page's code and expiry elements. A refused create, or an `ok` whose body holds no code
+  `EXPIRES: HH:MM UTC` in the share page's code and expiry elements, and `<coming soon>` in its link element (the stock link
+  text is a dead domain; #1726 turns it into the code's link). A refused create, or an `ok` whose body holds no code
   the client may show: the reason where the code would be, the expiry cleared. A refused resolve: the reason in the entry
-  page's title. A resolved code writes nothing; the join below does the rest. No link text is written: the service answers
-  a match id, and a join is by code. The texts are never logged, only the field and the size.
+  page's title. A resolved code writes nothing; the join below does the rest. The texts are never logged, only the field and the size.
 - **Join.** On a resolved code, from the main menu the dispatcher stages the `-lobbyid` block and runs
   `BeginMultiplayerLobby`; from a lobby or match it calls `CR15NetClientLobby::Join`. Both prologues are validated
   at boot (N97); on a mismatch that hook is not installed and its line says why. The service starts before the hooks and
@@ -288,7 +288,7 @@ this feature carries that requirement.
   connection (`SelectRemoteBearer`); the RPC call with it is not measured.
 - The argument layout of the submit function `0x140113960`. It is measured before the hook is written, and the hook
   validates the prologue bytes it records.
-- That the share page's code and expiry actors and elements (the modkit author's findings) are the ones the shipped build
+- That the share page's code, expiry and link actors and elements (the modkit author's findings) are the ones the shipped build
   draws, from a write made by this tree: a wrong id is a request the writer drops with `reason=no_actor` or `no_canvas`.
 - Anything on Quest beyond the static reading above.
 
