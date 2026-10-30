@@ -67,7 +67,7 @@ const std::unordered_map<std::string, std::string>& FlatKeyMap() {
       {"nevr_tick_rate_hz", "network.tick_rate_hz"},
       // #708 — which game sockets the PC bridge hands to nevr_session_router: legacy (default), config, all.
       {"nevr_session_router", "network.session_router"},
-      // #1156 — the invite codes for the CREATE GAME / JOIN VIA CODE wizard: on or off (patch/invite_config.h), off when absent.
+      // #1156 — the invite codes for the CREATE GAME / JOIN VIA CODE wizard: on or off (patch/invite_config.h), on when absent.
       {"nevr_invite_codes", "network.invite_codes"},
       // S4b — nevr_regions: registration metadata appended to the ServerDB dial
       // URI (regions=...), read CSV via LookupFlatCsv. SCHEMA GAP: the plan schema
@@ -121,6 +121,13 @@ std::optional<std::string> LookupFlat(const nevr::NevrConfig& cfg, const std::st
   std::optional<std::string> value = cfg.GetString(path, &hadUnsetBare);
   if (hadUnsetBare) return std::nullopt;
   return value;
+}
+
+bool LookupFlatIsStructured(const nevr::NevrConfig& cfg, const std::string& flatKey) {
+  const std::string path = FlatKeyToYamlPath(flatKey);
+  if (path.empty()) return false;  // not a migrated key
+  const nevr::NodeKind kind = cfg.Kind(path);
+  return kind == nevr::NodeKind::kSequence || kind == nevr::NodeKind::kMapping;
 }
 
 FlatDefaults SelectBuiltinDefaults(const EmbeddedDefault* entries, std::size_t count,
