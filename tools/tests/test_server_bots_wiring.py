@@ -349,6 +349,12 @@ class ServerBotsWiring(unittest.TestCase):
         self.assertTrue(update_problems(moved, tick), "before the shutdown hand-off")
         self.assertTrue(update_problems(gameserver.replace(call, "") + "\nvoid Other() {\n" + UPDATE_GATE + "\n" + call + "}\n}\n", tick))
         self.assertTrue(update_problems(gameserver, tick + "\nvoid X() { nevr_server_bots::OnServerUpdate(); }\n"))
+        telemetry = "  if (m_telemetry && m_telemetry->IsActive()) {\n"
+        gated = "  " + UPDATE_GATE + "\n" + call + "  }\n"
+        self.assertEqual(gameserver.count(gated), 1)
+        deeper = gameserver.replace(gated, "").replace(telemetry, telemetry + "  " + gated.replace("\n", "\n  ", 2), 1)
+        self.assertEqual(update_problems(deeper, tick),
+                         ["the OnServerUpdate call is not in GameServerLib::Update, in the gate's block"], "a block deeper")
 
     def test_an_install_before_the_config_or_after_the_plugins_is_found(self) -> None:
         boot = read(BOOT)
@@ -417,6 +423,12 @@ class ServerBotsWiring(unittest.TestCase):
             with self.subTest(old=old):
                 self.assertEqual(driver.count(old), 1, old)
                 self.assertTrue(driver_problems(driver.replace(old, new)))
+        self.assertEqual(driver_problems(driver.replace("  UseRewrite(r, g_rewrittenFrame, frame, size);\n", "")),
+                         ["the rewritten session start is not always the frame the game gets"], "a statement dropped")
+        self.assertEqual(driver_problems(driver.replace("  for (const Line& line : r.lines) LogLine(line);\n}",
+                                                        "  for (const Line& line : r.lines) LogLine(line);\n  Arm();\n}")),
+                         ["`void Install(bool isServer)` has a statement the wiring does not know: `Arm();`"],
+                         "a statement added")
         for added in ("\nvoid X(uint32_t* hostingFlags) { *hostingFlags = 1; }\n",
                       "\nvoid Y(uint32_t* f) { *f |= kHostingFlagOffline; }\n"):
             with self.subTest(added=added):
