@@ -12,6 +12,7 @@ import json
 import os
 import pathlib
 import shutil
+import stat
 import signal
 import select
 import subprocess
@@ -790,6 +791,20 @@ class LaunchClientTest(unittest.TestCase):
         self.assertEqual(again.returncode, 3, again.stdout + again.stderr)
         self.assertIn("already stored", again.stderr)
         self.assertEqual(store.read_bytes(), SIGNIN)
+
+    def test_save_creds_makes_the_account_and_creds_directories_mode_700(self):
+        # A work root with no creds/ yet, and the process umask at 022 (the usual one: a plain mkdir would make 755).
+        fresh = self.tmp / "fresh-work"
+        env = dict(self.env, NEVR_WORK_ROOT=str(fresh), FAKE_WINE_WRITE_SIGNIN=SIGNIN.decode())
+        old_umask = os.umask(0o022)
+        self.addCleanup(os.umask, old_umask)
+        result = self.run_script("--dll", str(self.dll), "--device-code", "--save-creds", "newacct", env=env, auth=())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        account_dir = fresh / "creds" / "newacct"
+        self.assertEqual(stat.S_IMODE(account_dir.stat().st_mode), 0o700, "the account directory is not mode 700")
+        self.assertEqual(stat.S_IMODE((fresh / "creds").stat().st_mode), 0o700, "creds/ is not mode 700")
+        self.assertEqual(stat.S_IMODE((account_dir / ".credentials.json").stat().st_mode), 0o600)
+        self.assertNotIn(SENTINEL, result.stdout + result.stderr)
 
     def test_creds_without_an_account_is_a_usage_error(self):
         result = self.run_script("--dll", str(self.dll), "--creds", auth=())
