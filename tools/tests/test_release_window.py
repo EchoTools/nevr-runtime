@@ -241,6 +241,9 @@ class Cli(unittest.TestCase):
     def test_twenty_nightly_tags_refuse(self) -> None:
         self.assert_refused(self.invoke([release(f"nightly-{n}", 5) for n in range(20)]), 20)
 
+    def test_a_published_release_candidate_tag_alone_refuses(self) -> None:
+        self.assert_refused(self.invoke([release("v6.4.0-rc1", 5)]), 1)
+
     def test_drafts_and_one_published_release_still_decide(self) -> None:
         drafts = [release(f"v7.{n}.0", 5, draft=True) for n in range(19)]
         held = self.invoke([*drafts, release("v6.4.0", 49)])
