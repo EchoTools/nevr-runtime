@@ -13,9 +13,6 @@
 #include "hook_install.h"
 #include "libr15_attach.h"
 
-#include "runtime/compat/lobby_join_state.h"
-#include "runtime/patch/party_follow_dedup_rules.h"
-
 namespace quest_social::lobby_full {
 namespace {
 
@@ -51,17 +48,6 @@ std::uint64_t NowMs() noexcept {
   return static_cast<std::uint64_t>(ts.tv_sec) * 1000u + static_cast<std::uint64_t>(ts.tv_nsec) / 1000000u;
 }
 
-// The lobby this client is in and the one it is joining (#1496, the Quest twin of #1413). The join row writes the joining
-// stamp when it sends a join, the success row writes the current one, and the failure row clears it. The clock is
-// NowMs(), so the stamps and the decision read one timebase. Built on first use, as Backoff() is.
-nevr_lobby_join_state::LobbyJoinState& JoinState() {
-  static nevr_lobby_join_state::LobbyJoinState state(&NowMs);
-  return state;
-}
-
-// The skip log's run state: one Info line per run of identical skips (party_follow_dedup_rules.h, NoteSkip). Guarded by g_mutex.
-nevr_party_follow_dedup::SkipLogState g_skipLog;
-
 LobbyKey KeyOf(const void* msg) noexcept {
   LobbyKey key{};
   std::memcpy(key.data(), static_cast<const std::uint8_t*>(msg) + kJoinKeyOffset, key.size());
@@ -89,52 +75,6 @@ bool FailureCode(const void* msg, std::int8_t* code) noexcept {
   return true;
 }
 
-// What the party-follow dedup decided for one join (#1496). Filled under g_mutex, logged after it is released.
-struct DedupDecision {
-  bool skip = false;
-  bool writeInfo = false;
-  const char* reason = "already_in";
-  std::uint64_t ageMs = 0;
-  std::uint64_t repeats = 0;
-};
-
-// The game queues a join to its party leader's lobby on every tick while it follows the party, so a join for a lobby this
-// client is in or is joining, younger than the window, is skipped (party_follow_dedup_rules.h, Decide). A skip is silent
-// except for one Info line per run of identical skips, as the PC hook writes it.
-DedupDecision DecideDuplicateFollow(const LobbyKey& key) noexcept {
-  using nevr_party_follow_dedup::Decide;
-  using nevr_party_follow_dedup::NoteNoSkip;
-  using nevr_party_follow_dedup::NoteSkip;
-  using nevr_party_follow_dedup::Skip;
-  DedupDecision out;
-  nevr_lobby_join_state::Stamp current{};
-  nevr_lobby_join_state::Stamp joining{};
-  pthread_mutex_lock(&g_mutex);
-  JoinState().Snapshot(&current, &joining);
-  const auto verdict = Decide(key, current, joining, NowMs());
-  if (verdict.skip == Skip::None) {
-    NoteNoSkip(g_skipLog);
-  } else {
-    const auto logDecision = NoteSkip(g_skipLog, key, verdict.skip);
-    out.skip = true;
-    out.writeInfo = logDecision.writeInfo;
-    out.reason = verdict.skip == Skip::AlreadyIn ? "already_in" : "already_joining";
-    out.ageMs = verdict.ageMs;
-    out.repeats = logDecision.repeats;
-  }
-  pthread_mutex_unlock(&g_mutex);
-  return out;
-}
-
-void LogSkip(const LobbyKey& key, const DedupDecision& d) {
-  char keyText[35];
-  sentinel::LogFields(sentinel::LogLevel::kInfo, "party_follow_skipped",
-                      {{"lobby", KeyText(key, keyText)},
-                       {"reason", d.reason},
-                       {"age_ms", d.ageMs},
-                       {"repeats", d.repeats}});
-}
-
 // A join the policy holds back is skipped silently: the game calls Join again on the next tick, so a line here
 // would be one line per tick. The decisions that change the policy are logged from the refusal callback.
 void OnJoin(JoinThunk::Fn original, void* self, const void* msg, const void* arg) noexcept {
@@ -143,18 +83,12 @@ void OnJoin(JoinThunk::Fn original, void* self, const void* msg, const void* arg
     return;
   }
   const LobbyKey key = KeyOf(msg);
-  const DedupDecision dedup = DecideDuplicateFollow(key);
-  if (dedup.skip) {
-    if (dedup.writeInfo) LogSkip(key, dedup);
-    return;
-  }
   FullLobbyBackoff::Decision d;
   pthread_mutex_lock(&g_mutex);
   d = Backoff().OnJoin(key, NowMs());
   if (d.verdict == Verdict::kSend) {
     g_lastJoin = key;
     g_haveLastJoin = true;
-    JoinState().OnJoinRequested(key);
   }
   pthread_mutex_unlock(&g_mutex);
   if (d.verdict != Verdict::kSend) return;
@@ -162,11 +96,6 @@ void OnJoin(JoinThunk::Fn original, void* self, const void* msg, const void* arg
 }
 
 void OnFailure(FailureThunk::Fn original, void* self, const void* msg) noexcept {
-  // A refusal answers the join in flight, so it clears the joining stamp and the current one (the PC bridge does the same,
-  // lobby_join_state.h OnFailure). Without this a refused join would block the game's retry for the whole window.
-  pthread_mutex_lock(&g_mutex);
-  JoinState().OnFailure(/*answersJoin=*/true);
-  pthread_mutex_unlock(&g_mutex);
   std::int8_t code = 0;
   if (FailureCode(msg, &code) && code == kLobbyFullCode) {
     LobbyKey key{};
@@ -196,10 +125,7 @@ void OnFailure(FailureThunk::Fn original, void* self, const void* msg) noexcept 
 
 void OnSuccess(SuccessThunk::Fn original, void* self, const void* msg) noexcept {
   pthread_mutex_lock(&g_mutex);
-  if (g_haveLastJoin) {
-    Backoff().OnSuccess(g_lastJoin);
-    JoinState().OnSuccess(g_lastJoin);
-  }
+  if (g_haveLastJoin) Backoff().OnSuccess(g_lastJoin);
   pthread_mutex_unlock(&g_mutex);
   original(self, msg);
 }
