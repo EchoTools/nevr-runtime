@@ -1,6 +1,10 @@
 #include "runtime/patch/invite_service.h"
 
 #include <atomic>
+#include <cstring>
+#include <deque>
+#include <optional>
+#include <string>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -8,6 +12,7 @@
 #include <utility>
 
 #include "runtime/patch/invite_transport.h"
+#include "runtime/patch/invite_match_api.h"
 
 namespace nevr_invite_service {
 
@@ -135,6 +140,49 @@ std::vector<nevr_invite::Answer> TakeAnswers() {
   auto lock = LockService();
   return WorkerSlot() ? WorkerSlot()->TakeAnswers() : std::vector<nevr_invite::Answer>();
 }
+
+}  // namespace nevr_invite_service
+
+namespace {
+
+// Resolved match ids the frame path has not taken yet, filled from the service's answers. A function-local static, as the
+// rest of this file keeps its non-trivial objects (see ServiceMutex above).
+struct MatchQueue {
+  std::mutex mutex;
+  std::deque<std::string> matches;
+};
+MatchQueue& Matches() {
+  static MatchQueue queue;
+  return queue;
+}
+
+}  // namespace
+
+bool nevr_invite_match::ServiceActive() noexcept { return nevr_invite_service::Active(); }
+
+bool nevr_invite_match::TakeResolvedMatch(char* out, std::size_t capacity, std::size_t* length) noexcept {
+  if (out == nullptr || length == nullptr) return false;
+  MatchQueue& queue = Matches();
+  std::lock_guard<std::mutex> lock(queue.mutex);
+  if (queue.matches.empty()) {
+    for (const nevr_invite::Answer& answer : nevr_invite_service::TakeAnswers()) {
+      if (answer.op != nevr_invite::Op::Resolve || answer.result != nevr_invite::Result::Ok) continue;
+      const std::optional<nevr_invite::Resolved> resolved = nevr_invite::ParseResolved(answer.body);
+      const bool fits = resolved.has_value() && resolved->match_id.size() <= kMaxMatchIdBytes;
+      queue.matches.push_back(fits ? resolved->match_id : std::string());
+    }
+  }
+  if (queue.matches.empty()) return false;
+  const std::string& next = queue.matches.front();
+  std::size_t n = next.size();
+  if (n > capacity) n = 0;
+  if (n > 0) std::memcpy(out, next.data(), n);
+  *length = n;
+  queue.matches.pop_front();
+  return true;
+}
+
+namespace nevr_invite_service {
 
 std::vector<nevr_invite::Answer> WaitForAnswers(std::chrono::milliseconds timeout) {
   nevr_invite::Worker* worker = nullptr;

@@ -11,13 +11,16 @@
 
 #include "quest/invite/join_game_quest.h"
 #include "runtime/patch/invite_join.h"
-#include "runtime/patch/invite_service.h"
-#include "runtime/patch/invite_worker.h"
+#include "runtime/patch/invite_match_api.h"
 
-namespace nevr_invite_service {
-bool Active() { return true; }
-std::vector<nevr_invite::Answer> TakeAnswers() { return {}; }
-}  // namespace nevr_invite_service
+namespace nevr_invite_match {
+// The join's frame side: the service is on and no resolved match is waiting (the applier is not exercised here).
+bool ServiceActive() noexcept { return true; }
+bool TakeResolvedMatch(char*, std::size_t, std::size_t* length) noexcept {
+  *length = 0;
+  return false;
+}
+}  // namespace nevr_invite_match
 
 namespace {
 
@@ -134,7 +137,7 @@ void TestQuestOffsetsOnly() {
   FakeAccess access;
   nevr_quest_invite_join::Offerer offerer(access);
   CHECK(offerer.Offer(kMatch, true) == nevr_invite_join::Reason::None);
-  CHECK(AllZero(access.game.bytes + 0x8540, 16));
+  // 0x8540 is inside the Quest GUID (0x8538..0x8547), so the lobby is checked by TestStagesBeforeBegin, not here.
   CHECK(AllZero(access.game.bytes + 0x8560, 2));
   CHECK(nevr_invite_join::kQuestLayout.staged_lobby == 0x8538);
   CHECK(nevr_invite_join::kQuestLayout.staged_team == 0x8558);

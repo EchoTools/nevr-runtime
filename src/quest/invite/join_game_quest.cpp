@@ -16,9 +16,8 @@
 #include "quest/sentinel/hook_log.h"
 #include "quest/sentinel/pinned_targets.h"
 #include "runtime/patch/invite_join.h"
-#include "runtime/patch/invite_service.h"
+#include "runtime/patch/invite_match_api.h"
 #include "runtime/patch/invite_wizard.h"
-#include "runtime/patch/invite_worker.h"
 
 // #966 S4: see join_game_quest.h. The Quest's game object is CR15Game; its netgame is the frame hook's `self`.
 
@@ -225,14 +224,13 @@ Offerer& TheOfferer() {
   return offerer;
 }
 
-// The frame work: one take of the service's answers per game frame, each resolved one offered to the join.
+// The frame work: each resolved match the service has answered since the last frame is offered to the join. The service does the
+// one call that may throw (its own TU); this file keeps no exception path (the frame path, see the header).
 bool ApplyAnswers(void* /*context*/) noexcept {
-  const std::vector<nevr_invite::Answer> answers = nevr_invite_service::TakeAnswers();
-  for (const nevr_invite::Answer& answer : answers) {
-    if (answer.op != nevr_invite::Op::Resolve || answer.result != nevr_invite::Result::Ok) continue;
-    const std::optional<nevr_invite::Resolved> resolved = nevr_invite::ParseResolved(answer.body);
-    TheOfferer().Offer(resolved.has_value() ? std::string_view(resolved->match_id) : std::string_view(),
-                       nevr_invite_service::Active());
+  char match[nevr_invite_match::kMaxMatchIdBytes];
+  std::size_t length = 0;
+  while (nevr_invite_match::TakeResolvedMatch(match, sizeof(match), &length)) {
+    TheOfferer().Offer(std::string_view(match, length), nevr_invite_match::ServiceActive());
   }
   return true;
 }

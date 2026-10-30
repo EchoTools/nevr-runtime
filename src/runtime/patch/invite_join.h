@@ -35,7 +35,7 @@
 #include <utility>
 
 #include "abi/echovr.h"
-#include "runtime/patch/invite_worker.h"
+#include "runtime/patch/invite_types.h"
 
 namespace nevr_invite_join {
 

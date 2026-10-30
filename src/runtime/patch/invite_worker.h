@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "runtime/patch/invite_wizard.h"
+#include "runtime/patch/invite_types.h"
 
 namespace nevr_invite {
 
@@ -39,8 +40,6 @@ inline constexpr std::size_t kMaxQueued = 4;
 /// Answers nobody has taken yet. When the list is full the oldest goes, with a line.
 inline constexpr std::size_t kMaxAnswers = 8;
 static_assert(kMaxAnswers > kMaxQueued, "every queued request must still have room for its answer");
-
-enum class LogLevel { Info, Warning, Error };
 
 struct HttpAnswer {
   int status = 0;  // 0: no answer at all (the connection failed, timed out, or the body was refused)
@@ -56,16 +55,6 @@ class Transport {
   /// Called from any thread at shutdown: a Post in flight returns at once, and a later Post sends nothing. The default has
   /// nothing to abort.
   virtual void Abort() {}
-};
-
-struct Answer {
-  Op op = Op::Create;
-  bool sent = false;  // false: nothing went out (no token)
-  int status = 0;
-  Result result = Result::Unavailable;
-  bool via_status = false;  // a refusal the service did not name: the HTTP status alone decided the result
-  std::string refusal_message;  // via_status only: for the scenario endpoint, never logged or shown
-  std::string body;  // a success only
 };
 
 enum class Submit { Queued, NoRequest, NotConfigured, Busy, Stopped };
