@@ -201,6 +201,9 @@ bool InstallLoginPromptHook(bool countersRegistered) noexcept {
     return nevr_quest::login_prompt::InstallIfCounted(countersRegistered);
 }
 
+// The login prompt's counters, written once at process exit (#1391).
+void FlushLoginPromptCountersAtExit() noexcept { nevr_quest::login_prompt::FlushCountersAtExit(); }
+
 // The title of the login-failed page (#1137): installed after the game maps the page's script library, so the
 // post-load action asks again after each dlopen until it answers anything but kModuleNotLoaded. A refused install is
 // logged by GotHook and by the hook's own line and leaves the game's constructor call intact.
