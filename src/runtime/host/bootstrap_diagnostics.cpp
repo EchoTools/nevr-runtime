@@ -777,8 +777,8 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
     written += chunk;
   }
   FlushFileBuffers(file);
-  LeaveCriticalSection(&g_log_local_lock);
-  if (locked) ReleaseMutex(lock);
+  // The record is written inside the in-process section. Written after LeaveCriticalSection it raced another
+  // thread's line on the same file, a thread that holds neither the mutex (the lock is unreliable) nor this section.
   if (marked_unreliable) {
     // The one record that says the log is no longer serialized: written to the open file, without the lock,
     // from a fixed buffer (this can be the crash callback).
@@ -795,6 +795,8 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
       FlushFileBuffers(file);
     }
   }
+  LeaveCriticalSection(&g_log_local_lock);
+  if (locked) ReleaseMutex(lock);
   CloseHandle(file);
   return ok != FALSE && written == length;
 }
