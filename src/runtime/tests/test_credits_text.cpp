@@ -306,6 +306,55 @@ TEST(CreditsTextRetarget, AFailedSecondWritePutsTheFirstSiteBack) {
   EXPECT_EQ(std::memcmp(image.disabled, untouched.disabled, sizeof(image.disabled)), 0);
 }
 
+// Copies every write, and reports the Nth call (1-based) as failed after its bytes went in.
+bool LandThenFailNthWriter(void* dest, const void* src, size_t n) {
+  ++g_calls;
+  std::memcpy(dest, src, n);
+  return g_calls != g_failOn;
+}
+
+// Lands the first write, then refuses every later one without writing: a put-back that cannot land.
+bool FirstLandsThenRefuses(void* dest, const void* src, size_t n) {
+  ++g_calls;
+  if (g_calls != 1) return false;
+  std::memcpy(dest, src, n);
+  return true;
+}
+
+TEST(CreditsTextRetarget, ASecondWriteThatLandsWhileReportingAnErrorPutsBothSitesBack) {
+  // The second site holds the buffer though its write reported a failure: both sites must read back as found.
+  FakeImage image;
+  FakeImage untouched = image;
+  SitePlan a = image.InitPlan();
+  SitePlan b = image.DisabledPlan();
+  ResetWriter(2);
+  EXPECT_EQ(nevr_credits_text::Retarget(a, b, kBufferVa, LandThenFailNthWriter), Outcome::WriteFailed);
+  EXPECT_EQ(std::memcmp(image.init, untouched.init, sizeof(image.init)), 0);
+  EXPECT_EQ(std::memcmp(image.disabled, untouched.disabled, sizeof(image.disabled)), 0);
+}
+
+TEST(CreditsTextRetarget, AFirstWriteThatLandsWhileReportingAnErrorIsPutBack) {
+  FakeImage image;
+  FakeImage untouched = image;
+  SitePlan a = image.InitPlan();
+  SitePlan b = image.DisabledPlan();
+  ResetWriter(1);
+  EXPECT_EQ(nevr_credits_text::Retarget(a, b, kBufferVa, LandThenFailNthWriter), Outcome::WriteFailed);
+  EXPECT_EQ(std::memcmp(image.init, untouched.init, sizeof(image.init)), 0);
+  EXPECT_EQ(std::memcmp(image.disabled, untouched.disabled, sizeof(image.disabled)), 0);
+}
+
+TEST(CreditsTextRetarget, APutBackThatDoesNotLandIsReportedWithTheSiteStillLoadingTheBuffer) {
+  FakeImage image;
+  SitePlan a = image.InitPlan();
+  SitePlan b = image.DisabledPlan();
+  ResetWriter(0);
+  EXPECT_EQ(nevr_credits_text::Retarget(a, b, kBufferVa, FirstLandsThenRefuses), Outcome::PutBackFailed);
+  EXPECT_EQ(TargetOf(image.init, kInitVa), kBufferVa) << "the first site still loads the buffer, and the caller must know";
+  EXPECT_EQ(std::memcmp(image.disabled, nevr_credits_text::kDisabledSiteExpected, sizeof(image.disabled)), 0)
+      << "the second site's write never landed, so it holds the game's bytes";
+}
+
 // ---- the records ----
 
 TEST(CreditsTextRecord, SiteRecordNamesTheSiteBytesAndOutcome) {
