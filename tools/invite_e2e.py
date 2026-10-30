@@ -385,6 +385,9 @@ MAIN_MENU = (367, 472)                           # the left column's MAIN MENU b
 # The entry page takes a key press only after the one before has been drawn: 2.7 s between presses dropped 3 of 5 characters on the
 # first --ui run, 3.7 s kept all of them.
 KEY_SETTLE_SECONDS = 3.0
+# The pointer rests on a target this long before the press: the game reads the hover on a frame, and with two clients drawing a
+# frame is slow, so a press 0.5 s after the move landed on the previous key (a key missing from the typed code, 4 runs of 4).
+HOVER_DWELL_SECONDS = 1.5
 # The keyboard slides in after the page changes: the first presses of a code typed at once were lost (the field held the last 3 of 5).
 ENTRY_PAGE_SETTLE_SECONDS = 6.0
 KEY_ENTER = (893, 497)
@@ -479,7 +482,7 @@ class Ui:
         self._x("mousemove", str(int(ox + x - 3)), str(int(oy + y - 3)))
         time.sleep(0.4)
         self._x("mousemove", str(int(ox + x)), str(int(oy + y)))
-        time.sleep(0.5)
+        time.sleep(HOVER_DWELL_SECONDS)
         self._x("mousedown", "3")
         time.sleep(0.3)
         self._x("mouseup", "3")
