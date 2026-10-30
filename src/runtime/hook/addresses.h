@@ -746,6 +746,18 @@ constexpr uintptr_t REQUEST_ADD_BOT = 0x1A0D70;
 constexpr uintptr_t FIND_POOL = 0x502D80;
 /// The 12 bytes the spawn-bot node copies to the request's +0x20 (.data 0x14201D338 and 0x14201D340): no position.
 constexpr uintptr_t NO_SPAWN_POSITION = 0x201D338;
+// Server Team Size (nevr_server_team_size, #1422)
+// ============================================================================
+
+/// Two checked-patch sites inside ServerAssignTeam (0x1401AB730; `.pdata` chained to 0x1401ABE4B; named by its own
+/// "[NETGAME] \tServerAssignTeam:" lines). The bytes and the rule are in runtime/patch/server_team_size.h.
+/// The team cap: `mov eax, 5; shr rsi, 1; cmp rsi, 5` (VA 0x1401AB8C2), min(Lobby::maxEntrants / 2, 5).
+constexpr uintptr_t SERVER_ASSIGN_TEAM_CAP = 0x1AB8C2;
+constexpr size_t SERVER_ASSIGN_TEAM_CAP_SIZE = 12;
+/// The team slot: the team's count into the member's 5-bit slot field, and the two copies of the word after it
+/// (VA 0x1401ABC8A to 0x1401ABCA3).
+constexpr uintptr_t SERVER_ASSIGN_TEAM_SLOT = 0x1ABC8A;
+constexpr size_t SERVER_ASSIGN_TEAM_SLOT_SIZE = 26;
 
 // ============================================================================
 // Future Wave 1 Hook Targets (validated, not yet hooked)

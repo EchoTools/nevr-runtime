@@ -289,7 +289,7 @@ const char* InternCStr(std::string_view value, const char* accessor) {
 }
 
 template <typename Body>
-const char* AccessorBoundary(const char* accessor, Body body) {
+auto AccessorBoundary(const char* accessor, Body body) -> decltype(body()) {
   try {
 #ifdef NEVR_TEST_HOOKS
     if (g_throwAccessor == accessor) throw std::runtime_error("injected accessor exception");
@@ -363,6 +363,16 @@ const char* NevrCfgGetFlat(const char* flatKey) {
     const std::optional<std::string> v = Flat(flatKey);
     if (!v) return nullptr;  // unmapped or absent
     return InternCStr(*v, "NevrCfgGetFlat");
+  });
+}
+
+bool NevrCfgGetFlatIsStructured(const char* flatKey) {
+  return AccessorBoundary("NevrCfgGetFlatIsStructured", [&]() -> bool {
+    if (flatKey == nullptr) return false;
+#ifdef NEVR_TEST_HOOKS
+    if (g_testInputsSet && g_testConfig != nullptr) return nevr_cfg::LookupFlatIsStructured(*g_testConfig, flatKey);
+#endif
+    return nevr_cfg::LookupFlatIsStructured(NevrCfg(), flatKey);
   });
 }
 

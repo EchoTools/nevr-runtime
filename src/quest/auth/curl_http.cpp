@@ -67,6 +67,18 @@ std::shared_ptr<const CaBundle> CurlHttpClient::Bundle() {
 }
 
 nevr::auth::HttpResponse CurlHttpClient::PostJson(const std::string& url, const std::string& body) {
+  return Perform(url, body, {}, timeout_seconds_, timeout_seconds_);
+}
+
+nevr::auth::HttpResponse CurlHttpClient::PostJsonWithHeaders(const std::string& url, const std::string& body,
+                                                             const std::vector<std::string>& headers, long connect_timeout_s,
+                                                             long timeout_s) {
+  return Perform(url, body, headers, connect_timeout_s, timeout_s);
+}
+
+nevr::auth::HttpResponse CurlHttpClient::Perform(const std::string& url, const std::string& body,
+                                                 const std::vector<std::string>& headers, long connect_timeout_s,
+                                                 long timeout_s) {
   nevr::auth::HttpResponse out;
   if (interrupted_) {
     out.transport_code = kInterrupted;
@@ -92,6 +104,15 @@ nevr::auth::HttpResponse CurlHttpClient::PostJson(const std::string& url, const 
     return out;
   }
   easy.headers = curl_slist_append(nullptr, "Content-Type: application/json");
+  for (const std::string& header : headers) {
+    // On failure curl_slist_append leaves the list it was given intact, so the list still owns its nodes.
+    curl_slist* const next = curl_slist_append(easy.headers, header.c_str());
+    if (next == nullptr) {
+      out.transport_code = static_cast<int>(CURLE_OUT_OF_MEMORY);
+      return out;
+    }
+    easy.headers = next;
+  }
   Sink sink{&out.body, max_response_bytes_};
   CURLcode setup = CURLE_OK;
   const auto set = [&](CURLoption option, auto value) {
@@ -104,8 +125,8 @@ nevr::auth::HttpResponse CurlHttpClient::PostJson(const std::string& url, const 
   set(CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
   set(CURLOPT_WRITEFUNCTION, WriteBody);
   set(CURLOPT_WRITEDATA, &sink);
-  set(CURLOPT_TIMEOUT, timeout_seconds_);
-  set(CURLOPT_CONNECTTIMEOUT, timeout_seconds_);
+  set(CURLOPT_TIMEOUT, timeout_s);
+  set(CURLOPT_CONNECTTIMEOUT, connect_timeout_s);
   set(CURLOPT_NOSIGNAL, 1L);  // worker thread: no SIGALRM resolver timeouts
   // Without this, cleaning up the handle waits for an in-flight resolver thread, so a
   // shutdown during a slow DNS lookup would block until getaddrinfo returns.

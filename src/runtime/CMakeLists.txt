@@ -72,6 +72,8 @@ set(PATCHES_SOURCES
     "patch/credits_text.cpp"
     # #1423: AI bots on a dedicated server (pure logic in server_bots.h).
     "patch/server_bots.cpp"
+    # #1422: a server's match team size (pure logic in server_team_size.h).
+    "patch/server_team_size.cpp"
     "patch/asset_registry.cpp"
     "patch/plugin_assets.cpp"
     "compat/ws_bridge.cpp"
@@ -185,6 +187,8 @@ set(PATCHES_HEADERS
     "patch/resource_override.h"
     "patch/server_bots.h"
     "patch/server_bots_install.h"
+    "patch/server_team_size.h"
+    "patch/server_team_size_install.h"
     "patch/asset_cache.h"
     "patch/asset_registry.h"
     "patch/plugin_assets.h"
@@ -216,6 +220,8 @@ set(PATCHES_HEADERS
     "patch/guild_picker.h"
     "compat/evr_codec.h"
     "compat/lobby_frame.h"
+    "compat/lobby_join_state.h"
+    "patch/party_follow_dedup_rules.h"
     "patch/xpid_patch.h"
     "frame/tick.h"
     "patch/binary_bug_fixes.h"
@@ -931,6 +937,12 @@ if(BUILD_TESTING)
     target_link_libraries(test_server_bots PRIVATE GTest::gtest GTest::gtest_main nevr::plugin_sdk
       nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_server_bots DISCOVERY_MODE PRE_TEST)
+    # #1422: a server's match team size, its two checked-patch sites driven on buffers (server_team_size.h).
+    add_executable(test_server_team_size tests/test_server_team_size.cpp)
+    set_source_files_properties(tests/test_server_team_size.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_server_team_size PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_server_team_size PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_server_team_size DISCOVERY_MODE PRE_TEST)
 
     # #982: the public Arena match clock keeps counting through goals (patch/arena_public_clock_rules.h).
     add_executable(test_arena_public_clock tests/test_arena_public_clock.cpp lifecycle/arena_round_time.cpp)
@@ -1481,6 +1493,13 @@ if(BUILD_TESTING)
     target_include_directories(test_lobby_full_backoff PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_lobby_full_backoff PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_lobby_full_backoff DISCOVERY_MODE PRE_TEST)
+
+    # test_party_follow_dedup.cpp (#1413): the lobby join state (compat/lobby_join_state.h) and the follow decision
+    # (patch/party_follow_dedup_rules.h). Both header-only, pure.
+    add_executable(test_party_follow_dedup tests/test_party_follow_dedup.cpp)
+    target_include_directories(test_party_follow_dedup PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_party_follow_dedup PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_party_follow_dedup DISCOVERY_MODE PRE_TEST)
 
     # test_menu_version_label.cpp (#747, header-only patch/menu_version_label_rules.h).
     add_executable(test_menu_version_label tests/test_menu_version_label.cpp)

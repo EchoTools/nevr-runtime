@@ -18,7 +18,7 @@ Install
      (...\ready-at-dawn-echo-arena\bin\win10); type or paste it. If you have more than one Echo VR
      install, add
        -Dir "C:\...\ready-at-dawn-echo-arena\bin\win10"
-  The script checks nevr-install.exe against SHA256SUMS and runs it. nevr-install.exe is the core installer: it
+  The script checks install-nevr-runtime.exe against SHA256SUMS and runs it. install-nevr-runtime.exe is the core installer: it
   fetches the signed release manifest and checks its signature, and installs the two DLLs in this package when
   their SHA-256 matches the manifest's entry for the release; when they are missing or differ it downloads the
   package the manifest names and checks that instead. It copies your original BugSplat64.dll to
@@ -30,6 +30,7 @@ Install
   every file back as it was if a step fails, and writes a log (a [NEVR.INSTALL] JSON file) whose path it
   prints. When the signed manifest cannot be fetched, the core uses the copy it stored on an earlier run if that
   copy is still valid; with none stored it stops before it writes anything. To use another nEVR folder, add -Root "<folder>".
+  nevr-install.exe in this package is the same file as install-nevr-runtime.exe, kept for programs that still call it by that name.
 
 Running a dedicated server
   echovr_server.exe in this package starts a dedicated server. install.ps1 does not copy it. Install

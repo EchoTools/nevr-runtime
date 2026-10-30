@@ -235,6 +235,7 @@ const std::map<std::string, std::set<std::string>>& KnownSections() {
         "socket_uri", "allow_offline_server", "serverdb_uri"}},
       {"network",
        {"external_ip", "internal_ip", "upnp", "upnp_port", "empty_server_ttl_seconds", "tick_rate_hz", "bots_per_session",
+        "max_team_size",
         "session_router", "regions", "invite_codes"}},
       {"assets", {"cdn_url"}},
       {"arena", {"round_time", "celebration_time", "mercy_score"}},

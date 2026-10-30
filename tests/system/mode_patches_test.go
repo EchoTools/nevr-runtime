@@ -128,6 +128,13 @@ func TestServerBotsSites(t *testing.T) {
 			assertRVABytes(t, exe, site.rva, site.bytes)
 		})
 	}
+// #1422: the two checked-patch sites in ServerAssignTeam (patch/server_team_size.h) hold the game's bytes, so a
+// game update that moves the team cap or the team slot rule fails here before a server writes either.
+func TestServerTeamSizeSites(t *testing.T) {
+	exe := getGameBinary(t, "echovr.exe")
+	assertRVABytes(t, exe, 0x1AB8C2, []byte{0xB8, 0x05, 0x00, 0x00, 0x00, 0x48, 0xD1, 0xEE, 0x48, 0x83, 0xFE, 0x05})
+	assertRVABytes(t, exe, 0x1ABC8A, []byte{0x66, 0xC1, 0xE0, 0x05, 0xB9, 0xE0, 0x03, 0x00, 0x00,
+		0x66, 0x33, 0xC6, 0x66, 0x23, 0xC1, 0x66, 0x33, 0xC6, 0x44, 0x0F, 0xB7, 0xC8, 0x41, 0x0F, 0xB7, 0xC1})
 }
 
 func TestModePatchesTargetsDoNotOverlap(t *testing.T) {
@@ -166,6 +173,8 @@ func TestModePatchesTargetsDoNotOverlap(t *testing.T) {
 		{"direct input", 0x1055DBB, 5},
 		{"effects load", 0x62CA91, 2},
 		{"renderer", 0xFF581, 2},
+		{"team cap", 0x1AB8C2, 12},
+		{"team slot", 0x1ABC8A, 26},
 	}
 
 	// SERVER_FLAGS_CHECK intentionally spans the OVR branch. Both write NOPs,

@@ -1,6 +1,6 @@
 # NEVR runtime release: install.
 #
-# A front end over nevr-install.exe, the core installer that ships beside this script (ADR 0023). The core fetches
+# A front end over install-nevr-runtime.exe, the core installer that ships beside this script (ADR 0023). The core fetches
 # the signed release manifest, checks it, downloads the Windows package the channel's release names, checks every
 # file against the manifest, and then puts BugSplat64.dll (the host the game loads) into the Echo VR install and
 # nevr-runtime.dll (the runtime the host loads) into the nevr folder (%LOCALAPPDATA%\nevr\echovr, ADR 0012). The only
@@ -12,7 +12,7 @@
 # log; its path is in the output. This script holds no hash, URL or version of its own; it finds the game folder, runs
 # the core and shows the result.
 #
-# usage:  powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-Dir <...\ready-at-dawn-echo-arena\bin\win10>] [-Root <nevr folder>] [-Version <release>] [-AllowDowngrade] [-CoreArgs <extra nevr-install options>] [-Pause | -NoPause]
+# usage:  powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-Dir <...\ready-at-dawn-echo-arena\bin\win10>] [-Root <nevr folder>] [-Version <release>] [-AllowDowngrade] [-CoreArgs <extra install-nevr-runtime options>] [-Pause | -NoPause]
 # Without -Dir the usual Meta Horizon / Oculus library locations are searched; with more than one
 # install found, pass -Dir. -Root names the nevr folder; the core accepts only the folder the game loads nEVR from
 # (%LOCALAPPDATA%\nevr\echovr, the default) and refuses any other (#1353). A dev or test run passes --dev-nevr-root in
@@ -61,17 +61,17 @@ $exitCode = 0
 try {
 # The core is the one thing this script runs. It sits beside this script in the package; SHA256SUMS in the package lists
 # it, so a damaged download is named here, before the core is trusted to run.
-$core = Join-Path $here 'nevr-install.exe'
-if (-not (Test-Path -LiteralPath $core)) { throw "nevr-install.exe is not next to install.ps1 ($here)" }
+$core = Join-Path $here 'install-nevr-runtime.exe'
+if (-not (Test-Path -LiteralPath $core)) { throw "install-nevr-runtime.exe is not next to install.ps1 ($here)" }
 $sums = Join-Path $here 'SHA256SUMS'
 if (-not (Test-Path -LiteralPath $sums)) { throw "SHA256SUMS is not next to install.ps1 ($here)" }
 $wanted = $null
 foreach ($line in Get-Content -LiteralPath $sums) {
-  if ($line -match '^([0-9a-fA-F]{64})\s+\*?(.+)$' -and $Matches[2] -ceq 'nevr-install.exe') { $wanted = $Matches[1].ToLower() }
+  if ($line -match '^([0-9a-fA-F]{64})\s+\*?(.+)$' -and $Matches[2] -ceq 'install-nevr-runtime.exe') { $wanted = $Matches[1].ToLower() }
 }
-if (-not $wanted) { throw 'SHA256SUMS has no entry for nevr-install.exe' }
+if (-not $wanted) { throw 'SHA256SUMS has no entry for install-nevr-runtime.exe' }
 $ours = Get-Sha $core
-if ($ours -ne $wanted) { throw "nevr-install.exe does not match SHA256SUMS (got $ours): the package is damaged, download it again" }
+if ($ours -ne $wanted) { throw "install-nevr-runtime.exe does not match SHA256SUMS (got $ours): the package is damaged, download it again" }
 
 # Join-Path throws DriveNotFoundException for a drive this PC does not have (#679), so a candidate
 # folder is joined by plain concatenation and tested with File.Exists, which answers False instead.
@@ -133,13 +133,13 @@ if ($Root -ne '') {
 if ($AllowDowngrade) { $arguments += '--allow-downgrade' }
 if ($Version) { $arguments += @('--version', $Version) }
 $arguments += $CoreArgs
-Write-RunLog ("RUN $scriptName nevr-install.exe $($arguments -join ' ')")
+Write-RunLog ("RUN $scriptName install-nevr-runtime.exe $($arguments -join ' ')")
 # The core prints one JSON object on stdout (state, reason, exit code, log path, plan) and "[state] reason" on stderr.
 # stderr is not redirected: Windows PowerShell 5.1 turns redirected native stderr into a terminating error here.
 $output = & $core @arguments
 $exitCode = $LASTEXITCODE
 foreach ($line in $output) { Write-Host $line }
-Write-RunLog ("END $scriptName nevr-install.exe exit=$exitCode Dir=$Dir")
+Write-RunLog ("END $scriptName install-nevr-runtime.exe exit=$exitCode Dir=$Dir")
 if ($exitCode -eq 0) {
   $undo = "powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 -Dir `"$Dir`""
   if ($Root -ne '') { $undo += " -Root `"$Root`"" }

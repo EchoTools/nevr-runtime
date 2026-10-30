@@ -70,7 +70,8 @@ class CopyCredentialsGuardTest(unittest.TestCase):
     def command(self, script: str) -> list[str]:
         path = str(self.checkout / script)
         if script == "launch-client.sh":
-            return [path, "--dll", str(self.checkout / "build/mingw-release/bin/BugSplat64.dll")]
+            # --device-code: the run has no stored sign-in to name, so the guard under test is the one that refuses.
+            return [path, "--dll", str(self.checkout / "build/mingw-release/bin/BugSplat64.dll"), "--device-code"]
         if script == "verify-server.sh":
             return [path, "run1", "default", "1"]
         return [path]

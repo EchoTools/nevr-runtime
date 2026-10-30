@@ -11,6 +11,8 @@ GAME_ROOT=$(resolve_game_root) || exit $?
 GAME_DIR="$GAME_ROOT/echovr/bin/win10"
 [[ -d "$GAME_DIR" ]] || { echo "ERROR: no game install at $GAME_DIR (set NEVR_GAME_ROOT)" >&2; exit 2; }
 acquire_game_run_lock
+# A test launch never reaches a host browser (#1447); see tools/lib/game_install.sh block_host_browser.
+block_host_browser
 
 # Deploy the current build (not dist/ — dist/ goes stale; build/ is always fresh).
 echo "=== Deploying from build/mingw-release/bin/ to $GAME_DIR ==="
