@@ -465,6 +465,14 @@ TEST(ServerBotsMemory, APoolsFreeCountIsItsEntrysAtPlus0x30) {
   EXPECT_EQ(PoolEntryFree(entries.data(), 0xABCD0002), 5) << "FindPool's index is the low 16 bits";
 }
 
+TEST(ServerBotsMemory, AnIndexAbove255ReadsItsOwnEntry) {
+  // The game reads the index as a word (`movzx edx, word [rbx+8]` at 0x1404E6233): bits 8 to 15 count.
+  std::vector<uint8_t> entries(0x103 * 0x88, 0xEE);
+  Put<int64_t>(entries, 0x002 * 0x88 + 0x30, 5);
+  Put<int64_t>(entries, 0x102 * 0x88 + 0x30, 9);
+  EXPECT_EQ(PoolEntryFree(entries.data(), 0xABCD0102), 9) << "entry 0x102, not entry 2";
+}
+
 struct FakePools {
   // owner per body; an owner holds its entries pointer at +0x3E8
   std::vector<uint8_t> owner[2] = {std::vector<uint8_t>(0x3F0, 0), std::vector<uint8_t>(0x3F0, 0)};
