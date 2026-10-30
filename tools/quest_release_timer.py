@@ -6,6 +6,8 @@ The store APK, the Quest signing key and the R2 credential never leave this mach
 The train (release-train.yml) publishes the GitHub release; this tool sees the new tag and finishes the release:
 
   checkout         the checkout this runs from is clean and HEAD is the freshly fetched origin/main, or it refuses
+  tags             every local tag is on origin at the same commit (the release preflight's rule), or it refuses naming
+                   each tag with the commands that remove it and put it back
   token, list      the newest published vX.Y.Z (or --tag) that is not done
   build_signer     the release signer, built from a snapshot of its main
   check_listed     the live manifest already lists the tag: done, nothing to build; else the game data it carries
@@ -20,7 +22,8 @@ The train (release-train.yml) publishes the GitHub release; this tool sees the n
   cleanup          the worktree and the signer snapshot, by exact path
 
 Every step appends a JSON line to $XDG_STATE_HOME/nevr-runtime/quest-release-timer.jsonl; a log that cannot be written is
-a failure. A failed step exits 1 and names itself. A tag that has failed three times is not retried, and says so once (a
+a failure. A failed step exits 1 and names itself, with the redacted tail of the failing command's stderr and of its stdout. A refusal
+(`refused`: a dirty or stale checkout, a tag origin does not have) exits 1 and is not counted. A tag that has failed three times is not retried, and says so once (a
 courier to Spritz) before the run exits 0. The R2 credential goes only to publish_apk, and the GitHub token only to publish_apk and
 the dispatch: every other command gets an environment without them. The environment is
 the R2 credential (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY) and RELEASE_PUBLIC_BASE; a missing one
@@ -42,6 +45,7 @@ from collections.abc import Callable
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from publish_quest_apk import Failure, Log  # noqa: E402 - the sibling tool's log and failure types
+from release_preflight import commit_of, parse_ls_remote  # noqa: E402 - the preflight's reading of tags and its commit rule
 
 REQUIRED_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "RELEASE_PUBLIC_BASE")
 SECRET_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")
@@ -57,6 +61,8 @@ MAX_FAILURES = 3
 SLOT_WAITS = 60
 SLOT_WAIT_SECONDS = 60
 TAIL = 2000
+MAX_TAGS_LISTED = 10
+LOCAL_TAGS_FORMAT = "--format=%(refname:strip=2)\t%(objectname)\t%(*objectname)"  # release_preflight.local_tags' format
 
 Runner = Callable[..., subprocess.CompletedProcess]
 
@@ -130,9 +136,18 @@ class Timer:
         env = {**self.child, **(extra or {})}
         result = self.runner(argv, cwd=str(cwd) if cwd else None, env=env)
         if result.returncode not in ok_codes:
-            tail = self.redact((result.stderr or "")[-TAIL:])
-            raise StepFailure(step, f"{pathlib.Path(argv[0]).name} exited {result.returncode}: {tail}".strip())
+            raise StepFailure(step, f"{pathlib.Path(argv[0]).name} exited {result.returncode}:{self.tails(result)}")
         return result
+
+    def tails(self, result: subprocess.CompletedProcess) -> str:
+        """` stderr: <tail> | stdout: <tail>`, an empty stream left out. The secrets go before the cut, so a secret the cut
+        would split leaves no fragment."""
+        parts = []
+        for label, text in (("stderr", result.stderr), ("stdout", result.stdout)):
+            tail = self.redact(text or "")[-TAIL:].strip()
+            if tail:
+                parts.append(f"{label}: {tail}")
+        return (" " + " | ".join(parts)) if parts else ""
 
     def ok(self, step: str, **fields: object) -> None:
         self.log.event("step_ok", step=step, **fields)
@@ -184,6 +199,37 @@ class Timer:
         if head != main:
             raise Refusal(step, f"the checkout the timer runs from is at {head[:12]}, not the fetched origin/main {main[:12]}")
         self.ok(step, head=head)
+
+    def check_tags(self) -> None:
+        """Every local tag is on origin at the same commit, or the run refuses before it takes a token or builds: the
+        preflight inside `just release-quest-apk` refuses the same checkout, after the signer and the worktree are made.
+        The rule is tools/release_preflight.py's (its parse_ls_remote and commit_of): a tag that origin lacks, or that
+        peels to another commit there. A tag only origin has is not an offender."""
+        step = "tags"
+        repo = str(self.repo)
+        local_text = self.cmd(step, ["git", "-C", repo, "for-each-ref", "refs/tags", LOCAL_TAGS_FORMAT]).stdout
+        remote_text = self.cmd(step, ["git", "-C", repo, "ls-remote", "--tags", "origin"]).stdout
+        local = {}
+        for line in local_text.splitlines():
+            name, obj, peeled = (line.split("\t") + ["", ""])[:3]
+            local[name] = (obj, peeled or None)
+        _, remote = parse_ls_remote(remote_text)
+        offenders = []
+        for name, entry in sorted(local.items()):
+            if name not in remote:
+                why = "local-only, origin does not have it"
+            elif commit_of(entry) != commit_of(remote[name]):
+                why = f"points at {commit_of(entry)[:12]} here, {commit_of(remote[name])[:12]} on origin"
+            else:
+                continue
+            offenders.append(f"{name} {entry[0]} ({why}; remove: git tag -d {name}; "
+                             f"rollback: git update-ref refs/tags/{name} {entry[0]})")
+        if offenders:
+            shown = offenders[:MAX_TAGS_LISTED]
+            more = f" | and {len(offenders) - len(shown)} more" if len(offenders) > len(shown) else ""
+            raise Refusal(step, f"{len(offenders)} of {len(local)} local tags are not on origin as they are here, and the "
+                                f"release preflight would refuse them: {' | '.join(shown)}{more}")
+        self.ok(step, count=len(local))
 
     def notify_published(self, tag: str) -> None:
         """A live publish couriers Teth to verify it and Spritz the same text. The owner is never bonked for it (#1410)."""
@@ -386,6 +432,7 @@ def main(argv: list[str], env: dict[str, str], runner: Runner = subprocess_runne
             raise Failure(f"refused: set {', '.join(missing)}")
         timer = Timer(env, runner, sleep, log)
         timer.check_checkout()
+        timer.check_tags()
         token = timer.cmd("token", [timer.gh, "auth", "token"]).stdout.strip()
         if not token:
             raise StepFailure("token", f"{timer.gh} auth token printed nothing")
