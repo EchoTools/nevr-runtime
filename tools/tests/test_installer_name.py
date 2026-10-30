@@ -29,9 +29,9 @@ OLD_NAME_ALLOWED = {
     "tools/package-release/RELEASE-NOTES.template.md",
     "tools/verify_symbols.py",
 }
-# Not the binary: the data names above, the record owner constant, the cargo package (the library and header keep their
+# Not the binary: the data names above, the record owner constant and the refusal text that names the owner, the cargo package (the library and header keep their
 # own names), the CLI's per-user state directory and the lockfile entry for the package.
-DATA_NAME = re.compile(r'nevr-install\.(?:txt|log|jsonl)\b|owner=nevr-install|OWNER: &str = "nevr-install"'
+DATA_NAME = re.compile(r'nevr-install\.(?:txt|log|jsonl)\b|owner=nevr-install|OWNER: &str = "nevr-install"|installed by nevr-install\b'
                        r'|join\("nevr-install"\)|-ne \'nevr-install\'|^name = "nevr-install"$')
 
 
@@ -39,7 +39,7 @@ def tracked_text_files() -> list[str]:
     out = subprocess.run(["git", "ls-files", "-z"], cwd=REPO, capture_output=True, check=True).stdout.decode().split("\0")
     files = []
     for name in out:
-        if not name or name.startswith(("docs/audits/", "tools/tests/")) or not (REPO / name).is_file():
+        if not name or name.startswith(("docs/audits/", "tools/tests/", "installer/tests/")) or not (REPO / name).is_file():
             continue
         try:
             (REPO / name).read_text(encoding="utf-8")
