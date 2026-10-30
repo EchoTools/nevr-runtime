@@ -155,11 +155,12 @@ your PR does:
 - **Platform parity.** PCVR and Quest stay at parity. A PR that adds or changes player-facing behavior says in its
   body what the other platform's status is: done in this PR, already present (`file:line`), not applicable (the
   reason), or a linked twin issue filed in the same turn.
-- **A headline, when players see a change.** A PR that changes what players see updates `release-headline.txt` at the
-  repository root with one plain sentence a player would understand, written by the PR's author (`RELEASING.md`, "Write
-  the release body"). The release body's player line is that file, or "Fixes and internal changes." when it did not
-  change since the previous release; the commits never write it. A change behind a setting that is off, or internal, leaves
-  the file alone.
+- **A headline, when players see a change.** A PR that changes what players see adds `release-headlines/<issue-or-topic>.txt`
+  with one line, one plain sentence a player would understand about that change only, written by the PR's author
+  (`RELEASING.md`, "Write the release body"), and deletes the fragments present at the newest `vX.Y.Z` tag
+  (`git ls-tree -r --name-only <newest tag> -- release-headlines/`). The release body's player line is the files the range
+  adds, or "Fixes and internal changes." when it adds none; the commits never write it. A change behind a setting that is
+  off, or internal, adds no file.
 
 **Write an issue as a falsifiable claim** (see #519 and #520), with these sections:
 
@@ -732,6 +733,7 @@ your seat name, for example `claude-main` or `codex`.
   `git push origin <local>:refs/heads/<remote>`. Record `git ls-remote origin main` before the push
   and compare after it; read the `->` line of every push.
 - **Update with `git fetch` and `git merge origin/main`,** never `git pull`.
+- **A contributor's fork branch is fetched with `git fetch --no-tags <fork-url> <branch>`.** Fetching a fork into the shared clone (a named remote, or a refspec that stores refs) brings the fork's tags, and a local tag that is not on origin makes the release preflight refuse (#1463).
 - **Do not rewrite pushed history.** No rebase, amend, squash or force-push on a pushed branch.
   Fix a pushed mistake with a new commit.
 - **PRs target `main`.** Do not base a PR on another feature branch.
@@ -927,6 +929,8 @@ your seat name, for example `claude-main` or `codex`.
   endpoints, or `--login-timeout` seconds without a login (default 120, minimum 45); then it stops
   the game and the Wine server and restores the original DLL. `NEVR_GAME_ROOT` names the directory
   whose `echovr/` it uses. Read the run's JSONL log and confirm the DLL was restored.
+  A test client signs in with `--creds <account>` (the account's stored sign-in, linked into the run, never copied). `--device-code` is for device-code tests only; a code shown to a person means a bonk (notify the owner) and a 5-minute window, never a silent wait.
+  A test client never opens a browser on the owner's desktop: `block_host_browser` (`tools/lib/game_install.sh`) puts stubs for `xdg-open` and `xdg-email` first on PATH (#1447).
 
 ### Documentation, plans and findings
 

@@ -3,12 +3,15 @@
 // worker, owned in one place. boot.cpp starts it with the values of this run (the config key, the service address, the token
 // source, the log), the wizard hook submits a plan to it, and the shutdown path stops it.
 //
-// Start always logs its outcome at Info (N122/N124): `[NEVR.INVITE] service on` or `feature off reason=<why>`. Off is the
-// default (network.invite_codes absent) and a request while off is a `request not sent reason=not_configured` line, never a
-// silent drop. Everything here is host-testable: no game, and the platform values come in through Settings.
+// Start logs its outcome (N122/N124): `[NEVR.INVITE] service on source=<default|config>` at Info, or
+// `feature off reason=<why> source=<default|config>` at Info (`turned_off`: the key says false) or at Warning (a value nobody
+// meant, no address, an address that may not receive the token). On is the default (network.invite_codes absent or empty). A
+// request while off is a `request not sent reason=not_configured` line, never a silent drop. Everything here is
+// host-testable: no game, and the platform values come in through Settings.
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -20,13 +23,19 @@
 namespace nevr_invite_service {
 
 struct Settings {
-  nevr_invite::Switch invite_codes = nevr_invite::Switch::Off;  // network.invite_codes
+  nevr_invite::Switch invite_codes = nevr_invite::kDefault;      // network.invite_codes
+  nevr_invite::Source invite_source = nevr_invite::Source::Default;  // where invite_codes came from: the startup line says which
   std::string http_uri;                                         // auth.http_uri: the game service's HTTP address
   std::function<std::string()> token;                           // the current Bearer token, "" when none
   std::function<void(nevr_invite::LogLevel, const std::string&)> log;
   std::string salt;                                             // per run, for the code fingerprint
   nevr_invite::TransportOptions transport;                      // timeouts and the answer cap; its log is replaced
   bool hooks_refused = false;  // an observer this service serves refused to install: the service stays off, its Warning says why
+  /// Builds the transport for this run, called once by Start and only when the service is on. Unset: the libcurl transport of
+  /// the PC (invite_transport_curl.h). The Quest sets its own (src/quest/invite/invite_transport_quest.h). A null result leaves
+  /// the service off with reason=transport_unavailable.
+  std::function<std::unique_ptr<nevr_invite::Transport>(const std::string& http_uri, const nevr_invite::TransportOptions& options)>
+      transport_factory;
 };
 
 /// Starts the service for this run. A second call changes nothing and says so. Never throws.

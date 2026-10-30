@@ -36,7 +36,12 @@ ResourceOverrideShutdownReport ShutdownResourceOverride();
 /// directory for additional file-based overrides.
 void InstallResourceOverride();
 
-/// Register an embedded data override (data pointer must outlive the hook).
+/// Register an embedded data override (data pointer must outlive the hook). The type names the buffer replaced
+/// (resource_buffer_key.h): 0, the logical type or Make(<logical>, "Win10") name buffer 0, which the game gets a copy of
+/// in its own heap; Make(<logical>, "Win10GPU") names buffer 1 (a texture's payload), which is written over the game's
+/// own buffer when it is no larger and is otherwise not served, with a Warning. The cache and `_overrides/` key the same.
+/// A texture's descriptor (buffer 0) and payload (buffer 1) are two entries: a payload of another size than the game's
+/// needs its descriptor entry too. Before #1421 an entry keyed by either on-disk type matched nothing.
 void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
                               const void* data, uint64_t size,
                               const char* label);
@@ -51,9 +56,15 @@ using ResourceTransformFn = bool (*)(const void* original, uint64_t original_siz
 
 /// Register a transform for a resource (type 0 = any type): unlike an override, which replaces the buffer once, a
 /// transform sees the game's buffer on every load of that resource, so it can build its answer from the player's
-/// own data and serve it again when the resource loads again. Only the primary buffer (index 0) is offered.
+/// own data and serve it again when the resource loads again. Only the primary buffer (index 0) is offered: a transform
+/// keyed by a buffer-1 on-disk type is never asked. A fixed override of the same key outranks a transform whatever the
+/// registration order: the transform answers only the loads no override serves (#1479).
 void RegisterResourceTransform(uint64_t type_hash, uint64_t name_hash, ResourceTransformFn transform, void* user,
                                const char* label);
+
+/// Reads an `_overrides/` file name: `0xTYPE.0xNAME` (the type names the buffer, as for RegisterResourceOverride) or
+/// `0xNAME` (type 0, buffer 0). True, with both hashes set, when the name is one of those with a non-zero name hash.
+bool ParseOverrideFileName(const char* file_name, uint64_t* type_hash, uint64_t* name_hash);
 
 /// Register a file-based override (loaded from disk, memory owned by the registry).
 void RegisterResourceOverrideFromFile(uint64_t type_hash, uint64_t name_hash,

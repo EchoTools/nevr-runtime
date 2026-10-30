@@ -46,8 +46,10 @@ inline SignInDialogContent SignInEndedContent(FlowEnd end) {
       c.closes_by_itself = true;
       break;
     case FlowEnd::CodeExpired:
-    case FlowEnd::TimedOut:
       c.instruction = "The sign-in code expired before sign-in finished.\nRestart Echo VR to get a new code.";
+      break;
+    case FlowEnd::TimedOut:
+      c.instruction = "Sign-in timed out. Restart Echo VR to get a new code.";
       break;
     case FlowEnd::PollErrors:
       c.instruction = "Echo VR could not reach the sign-in service.\nCheck your connection and restart Echo VR.";
@@ -64,6 +66,13 @@ inline SignInDialogContent SignInEndedContent(FlowEnd end) {
       break;
   }
   return c;
+}
+
+// How long the window stays after the wait ended. A success or a cancel is read for a moment and closes itself; a
+// failure stays until the player closes it, because a failure is what the player has to act on (#1446). 0: stays.
+inline constexpr unsigned kSignInSuccessLingerMs = 1500;
+inline unsigned SignInEndedLingerMs(const SignInDialogContent& content) {
+  return content.closes_by_itself ? kSignInSuccessLingerMs : 0;
 }
 
 }  // namespace nevr::auth

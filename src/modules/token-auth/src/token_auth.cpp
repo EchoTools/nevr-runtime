@@ -660,6 +660,11 @@ std::shared_ptr<const nevr_token_auth::AuthSnapshot> nevr_token_auth::GetAuthSna
     return s_snapshotStore.Read();
 }
 
+bool nevr_token_auth::SignInEndedWithoutToken() {
+    const std::shared_ptr<const AuthSnapshot> snapshot = GetAuthSnapshot();
+    return snapshot && snapshot->readiness == AuthReadiness::Failed;
+}
+
 #ifdef NEVR_TEST_HOOKS
 namespace nevr_token_auth::test_hook {
 namespace {
@@ -678,6 +683,12 @@ DeviceAuthState SnapshotDeviceAuth(const DeviceAuth& auth) {
 }
 
 }  // namespace
+
+void PublishReadinessForTest(AuthReadiness readiness) {
+    AuthSnapshot snapshot;
+    snapshot.readiness = readiness;
+    (void)s_snapshotStore.Publish(std::move(snapshot));
+}
 
 DeviceAuthState InspectInitialDeviceAuth() {
     DeviceAuth auth;
@@ -841,12 +852,11 @@ private:
 
 // The sign-in window (#397): the code and the page, on a thread of its own so the bootstrap thread's
 // pump (which dispatches nothing to windows it does not own) and the game never have to know about it.
-// It is informational: closing it does not cancel the sign-in. When the wait ends it shows how, and
-// closes by itself (signed in) or when the player dismisses it or after kSignInDialogLinger.
+// It is informational: closing it does not cancel the sign-in. When the wait ends it shows how, and it
+// closes by itself after a moment (signed in) or stays until the player closes it (a failure, #1446).
 constexpr UINT kDialogApply = WM_APP + 1;
 constexpr UINT kDialogClose = WM_APP + 2;
 constexpr UINT_PTR kDialogLingerTimer = 1;
-constexpr UINT kSignInDialogLingerMs = 30000;
 constexpr int kDialogCloseButton = 100;
 
 std::wstring WideFromUtf8(const std::string& s) {
@@ -862,8 +872,8 @@ public:
     SignInDialog() : m_state(std::make_shared<State>()) {}
     ~SignInDialog() {
         // A wait that never reported its end must not leave the dialog up; one that did keeps its message
-        // until the player dismisses it (or kSignInDialogLingerMs). A window that does not exist yet closes
-        // itself when it does (SignInDialogLifecycle).
+        // (a failure until the player dismisses it). A window that does not exist yet closes itself when it
+        // does (SignInDialogLifecycle).
         if (m_started && !m_ended) Abandon();
     }
     SignInDialog(const SignInDialog&) = delete;
@@ -890,14 +900,18 @@ public:
         return true;
     }
 
-    // The wait ended: the window says how (and closes itself when `content.closes_by_itself`).
-    void Ended(const nevr::auth::SignInDialogContent& content) {
+    // The wait ended: the window says how (and closes itself when `content.closes_by_itself`). Returns whether a
+    // window exists to say it.
+    bool Ended(const nevr::auth::SignInDialogContent& content) {
         m_ended = true;
+        bool shown = false;
         {
             std::lock_guard<std::mutex> lock(m_state->mutex);
             m_state->content = content;
+            shown = m_state->created;
         }
         PostIfCreated(kDialogApply, content.closes_by_itself ? 1 : 2);
+        return shown;
     }
 
 private:
@@ -943,11 +957,13 @@ private:
         SetWindowTextW(s.hwnd, WideFromUtf8(content.title).c_str());
         SetWindowTextW(s.instruction, WideFromUtf8(content.instruction).c_str());
         SetWindowTextW(s.code, WideFromUtf8(content.code).c_str());
-        if (how == 1) {  // closes by itself: a moment to read it
-            SetTimer(s.hwnd, kDialogLingerTimer, 1500, nullptr);
-        } else if (how == 2) {
-            ShowWindow(s.button, SW_SHOW);
-            SetTimer(s.hwnd, kDialogLingerTimer, kSignInDialogLingerMs, nullptr);
+        if (how != 0) {  // the wait has ended: a success closes after a moment; a failure stays until it is closed
+            const unsigned linger = nevr::auth::SignInEndedLingerMs(content);
+            if (linger > 0) {
+                SetTimer(s.hwnd, kDialogLingerTimer, linger, nullptr);
+            } else {
+                ShowWindow(s.button, SW_SHOW);
+            }
         }
         nevr::auth::WipeSecret(content.code);
     }
@@ -1069,7 +1085,12 @@ static bool RunDeviceAuthFlowOffBootstrapThread(DeviceAuth& auth) {
             shown ? "[NEVR.AUTH] sign-in dialog shown: the page and the code are on screen"
                   : "[NEVR.AUTH] sign-in dialog could not be created; the browser page is the only prompt");
     };
-    ui.ended = [&dialog](nevr::auth::FlowEnd end) { dialog.Ended(nevr::auth::SignInEndedContent(end)); };
+    ui.ended = [&dialog](nevr::auth::FlowEnd end) {
+        const nevr::auth::SignInDialogContent content = nevr::auth::SignInEndedContent(end);
+        const bool shown = dialog.Ended(content);
+        Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] sign-in dialog ended: window=%s closes_by_itself=%s",
+            shown ? "shown" : "not_shown", content.closes_by_itself ? "true" : "false");
+    };
     const nevr_token_auth::OffThreadWaitResult r = nevr_token_auth::RunWhilePumping(
         [&auth, &cancel, &ui]() {
             ComApartment com;

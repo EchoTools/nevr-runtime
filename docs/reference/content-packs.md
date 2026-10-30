@@ -1,15 +1,16 @@
 # Content packs (PC)
 
 A content pack is a mod's game data, served while the game runs, with no game file changed: resources the game does
-not ship, resources that grow, resources with a second buffer, and the script DLLs that go with them. The runtime
+not ship, resources that grow, a second buffer that grows, and the script DLLs that go with them. The runtime
 serves no pack itself. A plugin serves it, on the seams this page names; the runtime's part is to load that plugin in
 time and to leave those seams to it.
 
-Use the smaller tools first when they are enough. `NEVR_RegisterResourceOverride` replaces the first buffer of a
-resource the game already lists, at any size; `NEVR_RegisterAsset` adds a single-buffer resource the game does not
-ship, from the plugin's own image (`plugin-assets.md`). A pack needs this page when it adds a package set's worth of
-data, a resource the engine reads from a package file (texture streaming and archive loads read package files, not
-memory: `../engine/asset-system.md`, "Packages are files"), or a script.
+Use the smaller tools first when they are enough. `NEVR_RegisterResourceOverride` replaces a buffer of a resource the
+game already lists: the first at any size, and the second (a texture's payload, keyed `Make(<logical>, "Win10GPU")`,
+`sdk/include/nevr/pc/resource_registry.h`) when it is no larger than the game's own; `NEVR_RegisterAsset` adds a
+single-buffer resource the game does not ship, from the plugin's own image (`plugin-assets.md`). A pack needs this
+page when it adds a package set's worth of data, a resource the engine reads from a package file (texture streaming
+and archive loads read package files, not memory: `../engine/asset-system.md`, "Packages are files"), or a script.
 
 ## Load early
 

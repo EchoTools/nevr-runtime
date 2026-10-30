@@ -5,9 +5,13 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "runtime/patch/render_config.h"
@@ -76,6 +80,7 @@ struct World {
 
   World() {
     image.Region(At(kGpuNameVa), 0x90);  // name buffer, vram at +0x80, vendor at +0x88
+    image.Region(At(0x14209d000ULL), 8);    // the score at +0x90, its own region so a test can take it away alone
     image.Region(At(kHmdDescVa), kHmdDescBytes);
     image.Region(At(kRenderTargetVa), 8);
     image.Region(At(kResolutionScaleVa), 16);
@@ -85,6 +90,7 @@ struct World {
     image.PokeText(At(kGpuNameVa), "NVIDIA GeForce GTX 970");
     image.PokeValue<std::uint64_t>(At(kGpuVramVa), 4ULL << 30);  // 4096 MB
     image.PokeValue<std::uint32_t>(At(kGpuVendorVa), 1);
+    image.PokeValue<double>(At(0x14209d000ULL), 3.4944);  // a GTX 970's rating: 1664 cores x 1050 MHz x 2, in TFLOPS
     image.PokeValue<std::int32_t>(At(kHmdDescVa) + kHmdTypeOffset, 16);
     image.PokeText(At(kHmdDescVa) + kHmdProductNameOffset, "Oculus Rift S");
     image.PokeValue<std::int32_t>(At(kHmdDescVa) + kHmdResolutionOffset, 1280);
@@ -131,7 +137,7 @@ struct World {
 // The line a boot-time Apply with the selector having run produces, first frame.
 const char* const kFirstFrameLine =
     "[NEVR.RENDER] render_config reason=first_frame changed=- platform=pcvr gpu=\"NVIDIA GeForce GTX 970\" gpu_vendor=1 "
-    "vram_mb=4096 gpu_driver=31.0.15.3623 headset=\"Oculus Rift S\" hmd_type=16 runtime=libovr "
+    "gpu_score=3.4944 vram_mb=4096 gpu_driver=31.0.15.3623 headset=\"Oculus Rift S\" hmd_type=16 runtime=libovr "
     "runtime_version=\"1.43.0\" refresh_hz=80 hmd_w=1280 hmd_h=1440 render_w=1648 render_h=1776 resolution_scale=1.3 "
     "settings_source=auto_selected quality_level=3 msaa=1 settings_resolution_scale=1 adaptive_res=false taa=true "
     "multires=false fullscreen=true adaptive_min=45 adaptive_max=90 adaptive_target=80 display=0";
@@ -238,13 +244,95 @@ TEST(RenderConfigCollector, ARenderTargetThatAppearsInsideTheGraceWritesTheNorma
 TEST(RenderConfigCollector, UnreadableMemoryReadsUnavailableAndTheSettingsBeforeAnyApplyReadUnknown) {
   World w;  // no Apply seen
   w.image.DropRegionAt(At(kGpuNameVa));
+  w.image.DropRegionAt(At(0x14209d000ULL));
   w.image.DropRegionAt(At(kHmdDescVa));
   Collector c(w.image, kBase, w.observer, w.Ext());
   const std::string line = c.Poll(0);
-  EXPECT_NE(line.find(" gpu=unavailable gpu_vendor=unavailable vram_mb=unavailable "), std::string::npos) << line;
+  EXPECT_NE(line.find(" gpu=unavailable gpu_vendor=unavailable gpu_score=unavailable vram_mb=unavailable "),
+            std::string::npos)
+      << line;
   EXPECT_NE(line.find(" headset=unavailable hmd_type=unavailable "), std::string::npos) << line;
   EXPECT_NE(line.find(" refresh_hz=unavailable hmd_w=unavailable hmd_h=unavailable "), std::string::npos) << line;
   EXPECT_NE(line.find(" settings_source=unknown quality_level=unavailable msaa=unavailable "), std::string::npos) << line;
+}
+
+// #1419: the score the auto-selector decides from. Under Proton the game's own rating can fail and leave it 0, which
+// the selector reads as Low whatever the GPU; the line carries the 0 and the quality level side by side.
+TEST(RenderConfigGpuScore, TheScoreIsTheDoubleTheGameHoldsForTheSelector) {
+  World w;
+  w.image.PokeValue<double>(At(0x14209d000ULL), 11.7504);  // an RTX 2080 Ti: 4352 cores x 1350000 kHz x 2 x 1e-9
+  BootApplyWithSelector(w);
+  Collector c(w.image, kBase, w.observer, w.Ext());
+  const std::string line = c.Poll(0);
+  EXPECT_NE(line.find(" gpu_vendor=1 gpu_score=11.7504 vram_mb=4096 "), std::string::npos) << line;
+}
+
+TEST(RenderConfigGpuScore, AFailedRatingReadsZeroOnTheLineThatCarriesTheQualityLevel) {
+  World w;
+  w.image.PokeValue<double>(At(0x14209d000ULL), 0.0);
+  w.WriteSettings(kSettings, /*msaa=*/1, /*quality=*/1);
+  BootApplyWithSelector(w);
+  Collector c(w.image, kBase, w.observer, w.Ext());
+  const std::string line = c.Poll(0);
+  EXPECT_NE(line.find(" gpu_vendor=1 gpu_score=0 vram_mb=4096 "), std::string::npos) << line;
+  EXPECT_NE(line.find(" settings_source=auto_selected quality_level=1 "), std::string::npos) << line;
+}
+
+TEST(RenderConfigGpuScore, AScoreJustBelowAThresholdIsNotRoundedOntoIt) {
+  // The largest double below the selector's 4.5 (quality level 1, not 2), and a score in the game's own arithmetic just
+  // below it: the integer 2 x cores x kHz converted to a double, then x 1e-9 (fcn.14058e7f0, 0x14058f9d4..0x14058f9fc),
+  // for cores x kHz = 2,249,999,998. A fixed nine significant digits print both as 4.5.
+  for (const double score : {std::nextafter(4.5, 0.0), static_cast<double>(4499999996LL) * 1e-9}) {
+    World w;
+    w.image.PokeValue<double>(At(0x14209d000ULL), score);
+    BootApplyWithSelector(w);
+    Collector c(w.image, kBase, w.observer, w.Ext());
+    const std::string line = c.Poll(0);
+    const std::size_t at = line.find(" gpu_score=");
+    ASSERT_NE(at, std::string::npos) << line;
+    const std::string text = line.substr(at + 11, line.find(' ', at + 1) - (at + 11));
+    EXPECT_EQ(std::strtod(text.c_str(), nullptr), score) << line;
+  }
+}
+
+// A score the game never computes (a misread, a garbage rating) still prints as one short token, so the fields after it
+// stay intact.
+// The lowest double's text, 24 characters, is as long as a double's shortest text gets.
+TEST(RenderConfigGpuScore, AnAbsurdScoreStillPrintsAsOneShortToken) {
+  for (const auto& [score, text] :
+       {std::pair<double, const char*>{1e300, " gpu_score=1e+300 vram_mb=4096 "},
+        std::pair<double, const char*>{std::nan(""), " gpu_score=nan vram_mb=4096 "},
+        std::pair<double, const char*>{std::numeric_limits<double>::lowest(),
+                                       " gpu_score=-1.7976931348623157e+308 vram_mb=4096 "}}) {
+    World w;
+    w.image.PokeValue<double>(At(0x14209d000ULL), score);
+    BootApplyWithSelector(w);
+    Collector c(w.image, kBase, w.observer, w.Ext());
+    const std::string line = c.Poll(0);
+    EXPECT_NE(line.find(text), std::string::npos) << line;
+  }
+}
+
+TEST(RenderConfigGpuScore, AnUnreadableScoreReadsUnavailableAndTheRestOfTheGpuGroupStays) {
+  World w;
+  w.image.DropRegionAt(At(0x14209d000ULL));
+  BootApplyWithSelector(w);
+  Collector c(w.image, kBase, w.observer, w.Ext());
+  const std::string line = c.Poll(0);
+  EXPECT_NE(line.find(" gpu=\"NVIDIA GeForce GTX 970\" gpu_vendor=1 gpu_score=unavailable vram_mb=4096 "),
+            std::string::npos)
+      << line;
+}
+
+TEST(RenderConfigGpuScore, ANewScoreIsAChangeLineNamingIt) {
+  World w;
+  BootApplyWithSelector(w);
+  Collector c(w.image, kBase, w.observer, w.Ext());
+  ASSERT_FALSE(c.Poll(0).empty());
+  w.image.PokeValue<double>(At(0x14209d000ULL), 9.8);
+  const std::string line = c.Poll(Collector::kIntervalMs);
+  EXPECT_NE(line.find(" reason=change changed=gpu_score "), std::string::npos) << line;
+  EXPECT_NE(line.find(" gpu_score=9.8 "), std::string::npos) << line;
 }
 
 TEST(RenderConfigCollector, ADescriptorWithNoProductNameReadsTheWholeHeadsetGroupUnavailable) {

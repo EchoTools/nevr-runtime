@@ -302,11 +302,12 @@ network:
   # Not a secret.
   # session_router: legacy
 
-  # The invite codes for the CREATE GAME / JOIN VIA CODE wizard: when on, a code typed into JOIN VIA CODE is sent to the
-  # game service (auth.http_uri, with the token this client already holds) to find the match it names. Create is not sent yet.
-  # true/on/yes/1 turns it on; false/off/no/0 or absent leaves it off. Any other value leaves it off, with a warning in
-  # the log. Ignored by a dedicated server.
-  # Absent: off.
+  # The invite codes for the CREATE GAME / JOIN VIA CODE wizard: when on, a code typed into JOIN VIA CODE, and a create,
+  # is sent to the game service (auth.http_uri, with the token this client already holds).
+  # Absent or empty: on. true/on/yes/1 is on; false/off/no/0 turns it off. Any other value, a list or a map included, leaves
+  # it off, with a warning in the log. A key the runtime does not read (a misspelling, or a config.yaml it rejects) is as if
+  # absent: on. Ignored by a dedicated server.
+  # Absent: on.
   # Not a secret.
   # invite_codes: false
 

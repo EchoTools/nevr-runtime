@@ -70,6 +70,16 @@ std::string BuildLoginSuccess(uint64_t platformCode, uint64_t accountId) {
   return BuildMessage(kSymLoginSuccess, payload);
 }
 
+std::optional<std::string> BuildLoginFailure(uint64_t statusCode, std::string_view text) {
+  if (text.find('\0') != std::string_view::npos) return std::nullopt;
+
+  std::string payload(kUuidSize, '\0');  // no previous session
+  AppendLE64(payload, statusCode);
+  payload.append(text);
+  payload.push_back('\0');
+  return BuildMessage(kSymLoginFailure, payload);
+}
+
 std::string BuildLoginRemovedNotify(const UserId& user, uint8_t reason, std::string_view json) {
   std::string payload;
   payload.reserve(kLoginRemovedFixedSize + json.size());

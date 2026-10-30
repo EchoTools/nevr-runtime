@@ -37,6 +37,7 @@
 // collisions — both define NvrModuleInit/NvrModuleApiVersion/etc.
 namespace nevr_token_auth {
 std::string GetToken();  // token_auth.h: thread-safe; statically linked, so called directly
+bool SignInEndedWithoutToken();  // token_auth.h (#1446)
 }
 
 extern "C" {
@@ -407,6 +408,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       RegisterModuleProc("TokenAuth_GetToken", (void*)TokenAuth_GetToken);
       RegisterModuleProc("TokenAuth_GetDiscordId", (void*)TokenAuth_GetDiscordId);
       RegisterModuleProc("TokenAuth_GetUsername", (void*)TokenAuth_GetUsername);
+      // #1446: the bridge answers a login itself once the sign-in has ended without a token.
+      RegisterModuleProc("TokenAuth_SignInEndedWithoutToken",
+                         reinterpret_cast<void*>(&nevr_token_auth::SignInEndedWithoutToken));
     }
 
     // N92: ws_bridge is not a module. It is compiled into this DLL and started
@@ -672,15 +676,19 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   }
 
   // #906, #1156, ADR 0017: observe the CREATE GAME / JOIN VIA CODE wizard's click metric. Client only. A typed code is
-  // posted to the game service when network.invite_codes is on (the service below), and so is a create; the answer is
-  // written into the menu by nevr_invite_apply::OnFrame (frame/tick.cpp). The hook forwards every submit unchanged.
+  // posted to the game service when network.invite_codes is on (the service below; on unless the config says off), and so is
+  // a create; the answer is written into the menu by nevr_invite_apply::OnFrame (frame/tick.cpp). The hook forwards every
+  // submit unchanged.
   if (!g_isServer) {
     // The observers install before the service starts, so the service's start line says whether they did: a refused observer
     // keeps the service off (its own Warning carries the address and the bytes; patch/invite_service.h).
     const bool choiceInstalled = nevr_invite_choice_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
     const bool wizardInstalled = nevr_invite_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
     nevr_invite_service::Settings invite;
-    invite.invite_codes = nevr_invite::ParseSwitch(NevrCfgGetFlat("nevr_invite_codes"));
+    const char* inviteText = NevrCfgGetFlat("nevr_invite_codes");  // null when absent; the service says which in its start line
+    const bool inviteStructured = NevrCfgGetFlatIsStructured("nevr_invite_codes");  // a list or a map is not a value (#1156)
+    invite.invite_codes = nevr_invite::ParseSwitch(inviteText, inviteStructured);
+    invite.invite_source = nevr_invite::SourceOf(inviteText, inviteStructured);
     const char* httpUri = NevrCfgGetFlat("nevr_http_uri");
     invite.http_uri = httpUri != nullptr ? httpUri : "";
     invite.token = [] { return nevr_token_auth::GetToken(); };  // thread-safe; the export TokenAuth_GetToken is not

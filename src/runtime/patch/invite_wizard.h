@@ -519,6 +519,23 @@ inline std::optional<std::string> NormalisedUuid(std::string_view text) {
   return out;
 }
 
+// nakama writes its match id as MatchID.String(): "<uuid>.<node>" (server/match_id.go:57). The lobby GUID is the UUID
+// part; the node names the nakama node and is not part of the GUID. A bare UUID is still accepted. The node is one
+// non-empty run of letters, digits, '-' and '_'; anything else after the dot is no match id.
+inline std::optional<std::string> MatchIdUuid(std::string_view text) {
+  const std::size_t dot = text.find('.');
+  if (dot == std::string_view::npos) return NormalisedUuid(text);
+  const std::optional<std::string> uuid = NormalisedUuid(text.substr(0, dot));
+  if (!uuid.has_value()) return std::nullopt;
+  const std::string_view node = text.substr(dot + 1);
+  if (node.empty()) return std::nullopt;
+  for (const char c : node) {
+    const bool allowed = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+    if (!allowed) return std::nullopt;
+  }
+  return uuid;
+}
+
 inline bool Digits(std::string_view s, std::size_t from, std::size_t count, int low, int high, int& value) {
   value = 0;
   for (std::size_t i = from; i < from + count; ++i) {
@@ -579,7 +596,7 @@ inline std::optional<Created> ParseCreated(std::string_view body) {
   if (code == nullptr || match == nullptr) return std::nullopt;
   const CheckedCode checked = CheckCode(code->get<std::string>());
   if (checked.check != CodeCheck::Ok || checked.code != code->get<std::string>()) return std::nullopt;
-  const std::optional<std::string> uuid = detail::NormalisedUuid(match->get<std::string>());
+  const std::optional<std::string> uuid = detail::MatchIdUuid(match->get<std::string>());
   if (!uuid.has_value()) return std::nullopt;
   return Created{checked.code, *uuid, detail::ExpiresText(doc)};
 }
@@ -593,7 +610,7 @@ inline std::optional<Resolved> ParseResolved(std::string_view body) {
   if (!doc.is_object()) return std::nullopt;
   const nlohmann::json* match = detail::StringField(doc, "match_id");
   if (match == nullptr) return std::nullopt;
-  const std::optional<std::string> uuid = detail::NormalisedUuid(match->get<std::string>());
+  const std::optional<std::string> uuid = detail::MatchIdUuid(match->get<std::string>());
   if (!uuid.has_value()) return std::nullopt;
   return Resolved{*uuid};
 }

@@ -118,6 +118,7 @@ Common failure modes for static checks include:
 | Assertion compares a value to itself | Derive expected values independently from the initializer |
 | Monitor is driven by its subject | Drive it from an independently-live site |
 | Cumulative count stands in for a rate | Measure over a bounded interval |
+| Test forces a failure with file permissions (`chmod 0o444`, a read-only directory) | CI runs as root, which writes through the mode; make the code under test refuse by patching its writer, never by mode |
 
 **Procedure — not optional:**
 
