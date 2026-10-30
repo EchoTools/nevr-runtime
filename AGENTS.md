@@ -35,6 +35,8 @@ The logging standard below is part of this contract:
 
 nEVR Runtime — Windows DLL patches for Echo VR (echovr.exe) enabling connection to echovrce community game services. Targets both game clients and dedicated game servers. Written in C++17.
 
+**Echo VR is one codebase built for two binaries:** echovr.exe (PC, x86-64) and libr15.so (Quest, aarch64). The game functions we hook are the same functions on both, compiled differently. So a feature is written once: one hook per game function with a per-binary table of addresses (and calling convention where it differs), and one implementation of everything above the hook (transport is libcurl on both). Before adding any file under `src/quest/` that does what a `src/runtime/` file already does, use the shared one; a Quest-only copy needs a stated platform reason in its PR, and "it's Quest" is not one. (#1598)
+
 ## For contributors
 
 The rest of this file binds every agent, a contributor's included, except the parts marked **Maintainers only**. This
