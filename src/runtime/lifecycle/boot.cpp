@@ -774,8 +774,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     }
   }
 
-  // #1423: AI bots on a server (network.bots_per_session, absent = 0): the sites are checked once here, and the
-  // per-frame driver (tick.cpp) runs only when they hold; a client logs that it does not apply (N122/N124).
+  // #1423: AI bots on a server (network.bots_per_session, absent = 0): on a server with a count above 0 the sites are
+  // checked once here, and the driver (GameServerLib::Update) runs only when they hold; a client logs that it does not
+  // apply (N122/N124).
   nevr_server_bots::Install(g_isServer != FALSE);
 
   // The runtime's own signature (#842, ADR 0010): one line says whether this is the signed release or a self-built or dev

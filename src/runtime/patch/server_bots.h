@@ -4,7 +4,8 @@
 //
 // heisthecat31's EchoRelay adds them through the game's own add-bot request; this is the same route, read
 // again in our disassembly of the pinned echovr.exe:
-// - The request is RequestAddBot (0x1401A0D70). Its one caller is R15NetSpawnBotNode (0x140DE4CC0, by its
+// - The request is RequestAddBot (0x1401A0D70). Its one direct caller (`objdump -d` of the pinned echovr.exe, the
+//   lines `call 0x1401a0d70`: one, at 0x140DE4FAA) is R15NetSpawnBotNode (0x140DE4CC0, by its
 //   "R15NetSpawnBotNode used before getting in game" / "... while the lobby is full" / "RequestAddBot called more than
 //   once before receiving a response" lines). The node takes the net game through GetNetGameFromContext (0x140113A90)
 //   and passes it with a 0xD8-byte request. RequestAddBot returns 0 unless the net game's state is 9 (InGame), the
