@@ -1284,6 +1284,20 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_self_check DISCOVERY_MODE PRE_TEST)
 
+    # Crash report upload (compat/crash_upload.h, #1605): the report a crash left in the crash folder goes out once
+    # through the self-check unit's sender. Header only on top of the self-check unit; the Quest sentinel compiles
+    # the same header.
+    add_executable(test_crash_upload
+      tests/test_crash_upload.cpp
+      compat/self_check.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(tests/test_crash_upload.cpp compat/self_check.cpp compat/evr_codec.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_crash_upload PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_crash_upload PRIVATE nevr::plugin_sdk
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_crash_upload DISCOVERY_MODE PRE_TEST)
+
     # The #398 self-check (compat/party_share_check.h): each service answer to a party data share is one
     # self-check result. Header only on top of the self-check unit and the party symbol table.
     add_executable(test_party_share_check
