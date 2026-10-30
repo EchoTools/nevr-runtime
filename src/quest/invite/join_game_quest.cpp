@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -12,6 +13,7 @@
 
 #include "abi/echovr.h"
 #include "quest/invite/frame_dispatch.h"
+#include "quest/invite/join_log_fields.h"
 #include "quest/sentinel/got_hook.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/sentinel/pinned_targets.h"
@@ -37,6 +39,29 @@ sentinel::LogLevel ToSentinel(nevr_invite::LogLevel level) {
   if (level == nevr_invite::LogLevel::Warning) return sentinel::LogLevel::kWarn;
   if (level == nevr_invite::LogLevel::Error) return sentinel::LogLevel::kError;
   return sentinel::LogLevel::kInfo;
+}
+
+// One join_line record: the tag and msg, then each key=value token of the join's text as its own field (#1542), so reason,
+// lobby and state_from are keys of the record. The strings the fields point at live in `parsed` for the call.
+void LogJoinLine(sentinel::LogLevel level, const std::string& line) {
+  const nevr_quest_invite_join::JoinLine parsed = nevr_quest_invite_join::SplitJoinLine(line);
+  std::vector<sentinel::LogField> fields;
+  fields.emplace_back("tag", parsed.tag.c_str());
+  fields.emplace_back("msg", parsed.msg.c_str());
+  for (const nevr_quest_invite_join::JoinField& f : parsed.fields) {
+    if (f.number) {
+      fields.emplace_back(f.key.c_str(), f.value);
+    } else {
+      fields.emplace_back(f.key.c_str(), f.text.c_str());
+    }
+  }
+  sentinel::LogFieldList(level, "join_line", fields.data(), fields.size());
+}
+
+// The four 32-bit words of a pinned prologue as hex, one 8-digit group per word (the words the check compares).
+const char* WordsHex(char (&buf)[33], const std::uint32_t (&words)[4]) {
+  for (std::size_t i = 0; i < 4; ++i) std::snprintf(buf + 8 * i, 9, "%08x", static_cast<unsigned>(words[i]));
+  return buf;
 }
 
 // The game object's bytes. The game object outlives the frame that calls the join, and the join runs on the game thread, so the
@@ -111,9 +136,7 @@ class ProductionAccess final : public GameAccess {
     reinterpret_cast<void (*)(void*)>(base + sentinel::pinned::kBeginMultiplayerVaddr)(game);
   }
 
-  void Log(nevr_invite::LogLevel level, const std::string& line) override {
-    sentinel::LogFields(ToSentinel(level), "join_line", {{"line", line.c_str()}});
-  }
+  void Log(nevr_invite::LogLevel level, const std::string& line) override { LogJoinLine(ToSentinel(level), line); }
 
   std::int64_t NowMs() override {
     return static_cast<std::int64_t>(
@@ -130,8 +153,13 @@ class ProductionAccess final : public GameAccess {
     for (std::size_t i = 0; i < 4; ++i) same = same && words[i] == code[i];
     if (!same) {
       char va[19];
+      char expected[33];
+      char actual[33];
       sentinel::LogFields(sentinel::LogLevel::kWarn, "join_prologue_mismatch",
-                          {{"function", name}, {"va", sentinel::HexString(va, at)}});
+                          {{"function", name},
+                           {"va", sentinel::HexString(va, at)},
+                           {"expected", WordsHex(expected, code)},
+                           {"actual", WordsHex(actual, words)}});
     }
     return same;
   }
