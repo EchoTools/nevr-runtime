@@ -3930,7 +3930,7 @@ verify:
     # nevr_bots_per_session (#1423).
     # nevr_max_team_size (#1422).
     N133_S7B=$(grep -cE '^\s*\{"' src/runtime/lifecycle/service_map.cpp)
-    if [ "$N133_S7B" -ne 35 ]; then
+    if [ "$N133_S7B" -ne 36 ]; then
         echo "verify: FAIL — N133 S7b: flat map has $N133_S7B entries, expected 36." >&2
         echo "A key was added or removed from the cutover map in service_map.cpp." >&2
         echo "If adding: also add a test to test_service_map.cpp and update this count." >&2
