@@ -125,6 +125,12 @@ def words_of_the_old_model(text):
 class LocalDevPackageTest(PackageFixture):
     """The local build: a development version, dev-named files, never a release."""
 
+    def test_the_local_package_refuses_an_old_name_copy_with_other_bytes(self):
+        self.installer_compat.write_bytes(b"MZ\0another build of the installer\0")
+        result = self.run_tool()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("nevr-install.exe is not the same bytes as install-nevr-runtime.exe", result.stderr)
+
     def test_a_clean_local_build_is_packaged_under_a_dev_name_with_checksums_and_notes(self):
         result = self.run_tool()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -802,12 +808,6 @@ class ReleaseStagesTest(PackageFixture):
         result = self.run_stage("tree", *self.tree_args())
         self.assertEqual(result.returncode, 1)
         self.assertIn("nevr-install.exe is missing or not a PE file", result.stderr)
-
-    def test_the_local_package_refuses_an_old_name_copy_with_other_bytes_too(self):
-        self.installer_compat.write_bytes(b"MZ\0another build of the installer\0")
-        result = self.run_tool()
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("nevr-install.exe is not the same bytes as install-nevr-runtime.exe", result.stderr)
 
     def test_the_readme_names_the_new_installer_and_says_the_old_name_is_the_same_file(self):
         tree = self.make_tree()
