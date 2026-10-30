@@ -257,6 +257,8 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15SetPropertyInt(), "libr15 vrapi_SetPropertyInt JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetSystemPropertyFloat(), "libr15 vrapi_GetSystemPropertyFloat JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15SubmitFrame2(), "libr15 vrapi_SubmitFrame2 JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15EnterVrMode(), "libr15 vrapi_EnterVrMode JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15LeaveVrMode(), "libr15 vrapi_LeaveVrMode JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetCurrentInputState(), "libr15 vrapi_GetCurrentInputState JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetInputDeviceCapabilities(), "libr15 vrapi_GetInputDeviceCapabilities JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15FillResourceFileRequest(), "libr15 CResourceManager::FillResourceFileRequest JUMP_SLOT");

@@ -15,6 +15,7 @@
 #include "clock_levels_hook.h"
 #include "hook_install.h"
 #include "hook_log.h"
+#include "hang_watchdog.h"
 #include "hook_report.h"
 #include "login_prompt_hook.h"
 #include "login_title_hook.h"
@@ -190,8 +191,14 @@ bool InstallTextureQualityHook(nevr_quest::texture_quality::Level level, bool fr
 
 // The render-configuration log (#1139): the VrApi slots it reads and the poller thread. A refused install is logged by GotHook
 // and by the hook's own line, and leaves the game's calls intact.
+// The frozen-load guard (#1737, hang_watchdog.h) takes its frame heartbeat from this step's SubmitFrame2 hook, so it installs
+// here; its own q15t_hangwd_install line says what it did, and it does not change this step's result.
 bool InstallRenderConfigHook(nevr_quest::texture_quality::Level level, bool fromConfig) noexcept {
-    return nevr_quest::render_config::Install(level, fromConfig);
+    const bool ok = nevr_quest::render_config::Install(level, fromConfig);
+    if (nevr_quest::hang_watchdog::Install(ok)) {
+        nevr_quest::render_config::SetFrameObserver(&nevr_quest::hang_watchdog::BeatNow);
+    }
+    return ok;
 }
 
 // The log-only resource request hook (#871): development builds only. A refused install is logged by GotHook and leaves the

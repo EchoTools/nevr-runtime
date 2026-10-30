@@ -56,6 +56,7 @@ std::atomic<Value> g_clockResult{kUnset};
 std::atomic<Value> g_foveationLevel{kUnset};
 std::atomic<Value> g_foveationDynamic{kUnset};
 std::atomic<std::uint64_t> g_frames{0};
+std::atomic<FrameObserver> g_frameObserver{nullptr};
 
 Value ToMilli(float hertz) noexcept {
   if (!(hertz >= 0.0f && hertz < 100000.0f)) return 0;  // also false for NaN
@@ -100,6 +101,8 @@ float OnGetSystemPropertyFloat(SystemFloatThunk::Fn original, const OvrJavaOpaqu
 int OnSubmitFrame(SubmitFrameThunk::Fn original, OvrMobileOpaque* ovr,
                   const OvrSubmitFrameDescriptionOpaque* description) noexcept {
   g_frames.fetch_add(1, std::memory_order_relaxed);
+  const FrameObserver observer = g_frameObserver.load(std::memory_order_acquire);
+  if (observer != nullptr) observer();  // returns before the call into VrApi: not live across game code
   return original(ovr, description);
 }
 
@@ -525,10 +528,13 @@ bool Install(texture_quality::Level level, bool fromConfig) noexcept {
   return InstallImpl(level, fromConfig, &RealInstall, &ProductionSource(), 1000);
 }
 
+void SetFrameObserver(FrameObserver observer) noexcept { g_frameObserver.store(observer, std::memory_order_release); }
+
 void ArmForTest() noexcept { ArmAll(); }
 
 void ResetForTest() noexcept {
   StopPoller();
+  g_frameObserver.store(nullptr);
   g_refreshRequestedMilli.store(kUnset);
   g_refreshRequestResult.store(kUnset);
   g_refreshReportedMilli.store(kUnset);

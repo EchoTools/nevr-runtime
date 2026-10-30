@@ -64,6 +64,8 @@ inline constexpr const char* kSetClockLevelsSymbol = "vrapi_SetClockLevels";
 inline constexpr const char* kSetPropertyIntSymbol = "vrapi_SetPropertyInt";
 inline constexpr const char* kGetSystemPropertyFloatSymbol = "vrapi_GetSystemPropertyFloat";
 inline constexpr const char* kSubmitFrame2Symbol = "vrapi_SubmitFrame2";
+inline constexpr const char* kEnterVrModeSymbol = "vrapi_EnterVrMode";
+inline constexpr const char* kLeaveVrModeSymbol = "vrapi_LeaveVrMode";
 inline constexpr const char* kGetCurrentInputStateSymbol = "vrapi_GetCurrentInputState";
 inline constexpr const char* kGetInputDeviceCapabilitiesSymbol = "vrapi_GetInputDeviceCapabilities";
 inline constexpr const char* kEnablePageNodeEnterSymbol =
@@ -836,6 +838,28 @@ inline GotTarget LibR15GetSystemPropertyFloat() {
 }
 inline GotTarget LibR15SubmitFrame2() {
   return {kLibR15, kSubmitFrame2Symbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36e7010ULL};
+}
+
+// The VR-mode pair the frozen-load guard reads (hang_watchdog.h): whether the game is in VR mode, so a paused app, which
+// submits no frames, is never taken for a hung one. Both imported (value 0) JUMP_SLOTs in the pinned libr15 (`readelf -rW`;
+// ReVault shows each 0x100000 higher).
+//   vrapi_EnterVrMode(const ovrModeParms*) -> ovrMobile* (null on failure): one call site, CVR::UpdateTracking 0x1a71c84,
+//     on each entry into VR mode (a resume). JUMP_SLOT 0x36d23d0.
+//   vrapi_LeaveVrMode(ovrMobile*): CVR::UpdateTracking 0x1a71cb0 (a pause) and CVR::ShutdownGraphics 0x1a712cc.
+//     JUMP_SLOT 0x36c5840.
+struct OvrModeParmsOpaque;
+using EnterVrModeSig = OvrMobileOpaque*(const OvrModeParmsOpaque* parms);
+struct LibR15EnterVrModeTag {};
+using LibR15EnterVrModeThunk = CallbackThunk<LibR15EnterVrModeTag, EnterVrModeSig>;
+using LeaveVrModeSig = void(OvrMobileOpaque* ovr);
+struct LibR15LeaveVrModeTag {};
+using LibR15LeaveVrModeThunk = CallbackThunk<LibR15LeaveVrModeTag, LeaveVrModeSig>;
+
+inline GotTarget LibR15EnterVrMode() {
+  return {kLibR15, kEnterVrModeSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36d23d0ULL};
+}
+inline GotTarget LibR15LeaveVrMode() {
+  return {kLibR15, kLeaveVrModeSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36c5840ULL};
 }
 
 // VrApi_Input.h: ovrResult vrapi_GetCurrentInputState(ovrMobile* ovr, const ovrDeviceID deviceID,

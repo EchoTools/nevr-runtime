@@ -81,6 +81,17 @@ bool RunBounded(BeforeExitFn fn, unsigned budgetMs) noexcept {
 void RawExit(int code) noexcept { _exit(code); }
 std::atomic<ExitFn> g_exit{&RawExit};
 
+// Step 2: the before-exit callback for at most the budget; a callback that does not finish in time is named under `event`.
+void RunBeforeExit(const char* event) noexcept {
+  const BeforeExitFn callback = g_beforeExit.load(std::memory_order_acquire);
+  if (callback == nullptr) return;
+  const bool finished = RunBounded(callback, g_budgetMs.load(std::memory_order_relaxed));
+  if (!finished) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, event,
+                        {{"action", "before_exit_not_finished"}, {"budget_ms", g_budgetMs.load()}});
+  }
+}
+
 // Steps 1 and 2: the line and the bounded before-exit callback. `reason` is null on the ordinary return.
 void RunAfterReturn(int exitCode, const char* reason) noexcept {
   if (reason == nullptr) {
@@ -90,13 +101,7 @@ void RunAfterReturn(int exitCode, const char* reason) noexcept {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "android_main_returned",
                         {{"action", "ending_process"}, {"exit_code", exitCode}, {"reason", reason}});
   }
-  const BeforeExitFn callback = g_beforeExit.load(std::memory_order_acquire);
-  if (callback == nullptr) return;
-  const bool finished = RunBounded(callback, g_budgetMs.load(std::memory_order_relaxed));
-  if (!finished) {
-    sentinel::LogFields(sentinel::LogLevel::kWarn, "android_main_returned",
-                        {{"action", "before_exit_not_finished"}, {"budget_ms", g_budgetMs.load()}});
-  }
+  RunBeforeExit("android_main_returned");
 }
 
 // Steps 1 and 2, after android_main returned. Reached only through g_after.
@@ -126,6 +131,13 @@ void EndProcess() noexcept { _exit(0); }
 void EndWithExitCode(int exitCode, const char* reason) noexcept {
   RunAfterReturn(exitCode, reason);
   g_exit.load(std::memory_order_acquire)(exitCode);
+}
+
+void EndNow(const char* reason) noexcept {
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "process_ending",
+                      {{"action", "ending_process"}, {"exit_code", 0}, {"reason", reason}});
+  RunBeforeExit("process_ending");
+  g_exit.load(std::memory_order_acquire)(0);
 }
 
 void SetExitForTest(ExitFn fn) noexcept { g_exit.store(fn != nullptr ? fn : &RawExit, std::memory_order_release); }

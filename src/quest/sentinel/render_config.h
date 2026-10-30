@@ -112,6 +112,12 @@ bool PollOnce(const Source& source) noexcept;
 // line {"event":"render_config_install",...} says what happened, whatever the outcome.
 bool Install(texture_quality::Level textureLevel, bool fromConfig) noexcept;
 
+// Called on the game's render thread at the start of every vrapi_SubmitFrame2, before the call into VrApi (null: none). The
+// frozen-load guard (hang_watchdog.h) takes its frame heartbeat from here, so the frame slot has one hook. The observer must
+// be cheap (it runs once per frame), must not block and must not call into the game.
+using FrameObserver = void (*)() noexcept;
+void SetFrameObserver(FrameObserver observer) noexcept;
+
 // Test support. `InstallVia` is Install() with the GOT step replaced by `install` (the status GotHook would return for
 // the slot number 0..4 in the order refresh-rate, clock-levels, set-property-int, system-property-float, submit-frame). The
 // poller starts, with `pollerSource` and a period of `periodMs`, only when `pollerSource` is given.

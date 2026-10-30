@@ -65,6 +65,12 @@ void EndProcess() noexcept;
 // for at most kFlushBudgetMs), then _exit(exitCode). The code is nonzero, so the launcher and `adb` see a failure.
 inline constexpr int kFailureExitCode = 1;
 void EndWithExitCode(int exitCode, const char* reason) noexcept;
+
+// The end of a process that is still running the game but must not go on (the frozen-load guard, hang_watchdog.h): one line
+// {"event":"process_ending","action":"ending_process","exit_code":0,"reason":<reason>}, the before-exit callback for at most
+// kFlushBudgetMs, then _exit(0), so the player lands in Home and the next launch is a cold process. The caller logs its
+// own cause first. The one place outside android_main's return that ends a running game, so the flush is never skipped.
+void EndNow(const char* reason) noexcept;
 using ExitFn = void (*)(int exitCode) noexcept;
 void SetExitForTest(ExitFn fn) noexcept;  // null: _exit; ResetForTest restores it
 
