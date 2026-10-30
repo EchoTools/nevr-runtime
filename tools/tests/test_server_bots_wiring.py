@@ -196,8 +196,6 @@ def statements(body: str) -> list[str]:
     out, start, depth = [], 0, 0
     for k, ch in enumerate(body):
         if ch in "([{":
-            if ch == "{" and depth == 0 and not body[start:k].strip():
-                start = k
             depth += 1
         elif ch in ")]}":
             depth -= 1
@@ -412,6 +410,8 @@ class ServerBotsWiring(unittest.TestCase):
             ("  UseRewrite(r, g_rewrittenFrame, frame, size);\n  LogLine(SettingsLine(r, session.id, *size));",
              "  LogLine(SettingsLine(r, session.id, *size));\n  UseRewrite(r, g_rewrittenFrame, frame, size);"),
             ("void OnServerUpdate() {", "void OnServerUpdateOld() {"),
+            ("  for (const Line& line : r.lines) LogLine(line);\n}",
+             "  for (const Line& line : r.lines) LogLine(line);\n  if (r.armed == 0) {\n    g_armed.store(1, std::memory_order_release);\n  }\n}"),
         ]
         for old, new in breaks:
             with self.subTest(old=old):
