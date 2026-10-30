@@ -8,7 +8,7 @@ platform-free core the source build's dronekill_core. Only GOT word swaps on dat
 
 ## Option and default
 
-`Q15T_DRONEKILL`, default **OFF**. The source build is TEST ONLY too: the source build's dronekill:1 ("dronekill.on (TEST ONLY ...)"),
+`Q15T_DRONEKILL`, default **ON** (#1625: the wave19a on-list turns on `dronekill2.on`). The source build is TEST ONLY: the source build's dronekill:1 ("dronekill.on (TEST ONLY ...)"),
 and ("Off (no dronekill.on in the source build's data directory, no setprop debug.<app>.dronekill 1): the switch is read, nothing else"), the on-file
 reader (QA turns it on with `dronekill2.on` = the words `kill lockon gun chase shot`). The plugin has no file switch (an
 enabling switch is replaced by the option); when the option is on, `DroneKillWords{}` has all five words on, i.e. the source's `dronekill2.on`.
