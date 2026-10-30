@@ -32,7 +32,8 @@ SECRETS = {
 TOKEN = "sentinel-gh-token"
 STEPS = ["checkout", "tags", "token", "list", "build_signer", "check_listed", "worktree", "build_slot", "configure", "build_apk",
          "publish_apk", "dispatch", "watch", "check_jobs", "verify_live", "notify", "cleanup"]
-CARRIED = {"name": "echovr-data-fc2eedeacc50.zip", "kind": "game-data", "size": 937395400}
+CARRIED = {"name": "echovr-data-fc2eedeacc50.zip", "kind": "game-data", "platform": "android-arm64", "size": 937395400}
+PC_DATA = {"name": "echovr-data-win10-0123456789ab.zip", "kind": "game-data", "platform": "windows-x86_64", "size": 5120}
 HEAD = "c0ffee" + "0" * 34
 # name -> (object, peeled commit or None): the tags the checkout holds, and the same tags on origin
 TAGS = {"v5.16.1": ("1" * 40, None), "v5.17.0": ("2" * 40, "3" * 40)}
@@ -56,6 +57,8 @@ class Fake:
         self.main = HEAD
         self.carried = dict(CARRIED)  # the game-data artifact the live manifest carries before the publish
         self.published_game_data: dict | None = dict(CARRIED)  # what the new release lists after it
+        self.extra_data: list[dict] = []  # other game-data entries every manifest lists, before the Android one
+        self.extra_data_after: list[dict] = []  # ... and after it
         self.jobs = [{"name": name, "conclusion": "success"} for name in PUBLISHING_JOBS]
         self.local_tags: dict = dict(TAGS)  # what the checkout holds
         self.remote_tags: dict = dict(TAGS)  # what origin holds
@@ -150,6 +153,8 @@ class Fake:
         artifacts = [{"name": f"nevr-runtime-v{beta}-quest.apk", "kind": "quest-apk", "size": 7}]
         if artifact is not None:
             artifacts.insert(0, artifact)
+        artifacts[:0] = [dict(a) for a in self.extra_data]
+        artifacts.extend(dict(a) for a in self.extra_data_after)
         return json.dumps({"channels": {"beta": beta}, "releases": {beta: {"version": beta, "artifacts": artifacts}}})
 
     def steps(self) -> list[str]:
@@ -578,6 +583,69 @@ class GameDataSurvives(TimerCase):
     def test_a_live_manifest_with_no_game_data_to_carry_stops_before_the_build(self) -> None:
         fake = Fake(self.root)
         fake.carried = None
+        self.assertEqual(self.run_timer(fake), 1)
+        failed = next(e for e in self.events() if e["event"] == "failed")
+        self.assertEqual(failed["step"], "check_listed")
+        self.assertNotIn("worktree.add", fake.steps())
+
+    def test_a_pc_game_data_entry_listed_before_the_android_one_is_never_the_one_carried(self) -> None:
+        fake = Fake(self.root)
+        fake.extra_data = [dict(PC_DATA)]
+        self.assertEqual(self.run_timer(fake), 0)
+        listed = next(e for e in self.events() if e["event"] == "step_ok" and e["step"] == "check_listed" and not e["listed"])
+        self.assertEqual((listed["carried"], listed["carried_size"]), (CARRIED["name"], CARRIED["size"]))
+        verified = next(e for e in self.events() if e["event"] == "step_ok" and e["step"] == "verify_live")
+        self.assertEqual(verified["game_data"], CARRIED["name"])
+
+    def test_a_pc_game_data_entry_listed_after_the_android_one_is_never_the_one_carried(self) -> None:
+        fake = Fake(self.root)
+        fake.extra_data_after = [dict(PC_DATA)]
+        self.assertEqual(self.run_timer(fake), 0)
+        listed = next(e for e in self.events() if e["event"] == "step_ok" and e["step"] == "check_listed" and not e["listed"])
+        self.assertEqual((listed["carried"], listed["carried_size"]), (CARRIED["name"], CARRIED["size"]))
+        verified = next(e for e in self.events() if e["event"] == "step_ok" and e["step"] == "verify_live")
+        self.assertEqual(verified["game_data"], CARRIED["name"])
+
+    def test_a_changed_android_entry_is_a_failure_whatever_order_the_pc_entry_is_in(self) -> None:
+        for position in ("extra_data", "extra_data_after"):
+            with self.subTest(position=position):
+                fake = Fake(self.root)
+                setattr(fake, position, [dict(PC_DATA)])
+                fake.published_game_data = {**CARRIED, "size": CARRIED["size"] - 1}
+                self.assertEqual(self.run_timer(fake), 1)
+                failed = [e for e in self.events() if e["event"] == "failed"][-1]
+                self.assertEqual(failed["step"], "verify_live")
+                self.assertIn(CARRIED["name"], failed["error"])
+
+    def test_two_android_game_data_entries_stop_before_the_build(self) -> None:
+        fake = Fake(self.root)
+        fake.extra_data = [{**CARRIED, "name": "echovr-data-aaaaaaaaaaaa.zip"}]
+        self.assertEqual(self.run_timer(fake), 1)
+        failed = next(e for e in self.events() if e["event"] == "failed")
+        self.assertEqual(failed["step"], "check_listed")
+        self.assertIn("5.16.1", failed["error"])
+        self.assertIn("android-arm64", failed["error"])
+        self.assertNotIn("worktree.add", fake.steps())
+
+    def test_two_android_game_data_entries_in_the_published_release_are_a_failure(self) -> None:
+        fake = Fake(self.root)
+        genuine = fake.manifest_bytes
+
+        def doubled(argv: list[str]) -> subprocess.CompletedProcess:
+            body = json.loads(genuine())
+            if any(c["step"] == "watch" for c in fake.calls):
+                release = body["releases"][body["channels"]["beta"]]
+                release["artifacts"].append({**CARRIED, "name": "echovr-data-aaaaaaaaaaaa.zip"})
+            return completed(argv, 0, json.dumps(body))
+
+        fake.overrides["manifest"] = doubled
+        self.assertEqual(self.run_timer(fake), 1)
+        self.assertEqual(next(e for e in self.events() if e["event"] == "failed")["step"], "verify_live")
+
+    def test_a_manifest_with_only_a_pc_game_data_entry_has_none_to_carry(self) -> None:
+        fake = Fake(self.root)
+        fake.carried = None
+        fake.extra_data = [dict(PC_DATA)]
         self.assertEqual(self.run_timer(fake), 1)
         failed = next(e for e in self.events() if e["event"] == "failed")
         self.assertEqual(failed["step"], "check_listed")

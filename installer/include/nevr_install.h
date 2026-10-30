@@ -45,8 +45,10 @@ int NevrReleasePick(NevrSession *s, const char *channel, char **out_json);
 /* Step 8 for one artifact: fetch to out_path, exact size and sha256; the file is deleted on failure. platform may be NULL. */
 int NevrArtifactFetch(NevrSession *s, const char *version, const char *kind, const char *platform, const char *out_path);
 
-/* Every member of a zip artifact against `contents`. allow_dirs is nonzero for game data. */
-int NevrArtifactVerifyZip(NevrSession *s, const char *version, const char *kind, const char *zip_path, int allow_dirs);
+/* Every member of a zip artifact against `contents`. allow_dirs is nonzero for game data. platform selects the entry as in
+ * NevrArtifactFetch and may be NULL, except for kind "game-data": a release lists one game-data artifact per platform
+ * ("android-arm64", "windows-x86_64"), so a game-data call that names none is refused (NEVR_FAILED). */
+int NevrArtifactVerifyZip(NevrSession *s, const char *version, const char *kind, const char *platform, const char *zip_path, int allow_dirs);
 
 /* The Quest plan as JSON, from what the caller observed on the headset (the caller runs the steps it owns, such as the
  * package install, and reports the result with NevrRunEnd):

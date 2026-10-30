@@ -48,6 +48,11 @@ int main(int argc, char **argv) {
   printf("plan=%s\n", plan);
   NevrStringFree(plan);
   CHECK(NevrPlanBuild(NULL, "1.0.0", "{}", &plan), NEVR_BAD_ARGUMENT);
+  /* A game-data verify names its platform; with none it is refused before any file is read. */
+  CHECK(NevrArtifactVerifyZip(s, "1.0.0", "game-data", NULL, "/nonexistent.zip", 1), NEVR_FAILED);
+  if (strstr(NevrLastError(s), "one game-data artifact per platform") == NULL) { fprintf(stderr, "wrong error: %s\n", NevrLastError(s)); return 1; }
+  CHECK(NevrArtifactVerifyZip(s, "1.0.0", "game-data", "android-arm64", "/nonexistent.zip", 1), NEVR_FAILED);
+  if (strstr(NevrLastError(s), "has no game-data artifact") == NULL) { fprintf(stderr, "wrong error: %s\n", NevrLastError(s)); return 1; }
   CHECK(NevrRunEnd(s, "bogus", NULL), NEVR_BAD_ARGUMENT);
   CHECK(NevrRunEnd(s, "unchanged", "abi check"), NEVR_OK);
   printf("core=%s\n", NevrCoreVersion());
