@@ -475,6 +475,46 @@ TEST(LoaderLoadsANoopPluginWithOneRecord) {
   CHECK_EQ(r->pluginBuildId.size(), std::size_t{40});  // the fixtures are linked with --build-id=sha1
 }
 
+// A packaged entry carries the hash the repack wrote; the loader checks it on the bytes it read, before the machine check and
+// before dlopen (docs/adr/0019-quest-plugin-loader.md, section 1 trust).
+PlannedItem Packaged(const std::string& name, const std::string& file, const std::string& expectedSha256) {
+  PlannedItem planned;
+  planned.item = Item(name, file);
+  planned.source = Source::kPackaged;
+  planned.expectedSha256 = expectedSha256;
+  return planned;
+}
+
+TEST(LoaderRefusesAPackagedFileWhoseHashIsNotTheManifests) {
+  Env env;
+  env.loader->Plan({Packaged("ok", "libfx_ok.so", std::string(64, '0'))});
+  env.loader->RunPhase(PluginPhase::Normal);
+  const LoadRecord* r = env.platform.Record("ok");
+  CHECK(r != nullptr);
+  if (r == nullptr) return;
+  CHECK(r->outcome == Outcome::kRefused);
+  CHECK_EQ(r->reason, std::string(reason::kManifestHashMismatch));
+  CHECK_EQ(r->source, std::string("packaged"));
+  CHECK(env.platform.opened.empty());  // refused before dlopen: nothing was mapped
+}
+
+TEST(LoaderLoadsAPackagedFileWhoseHashMatchesTheManifest) {
+  // The fixture is built for this host, so with a matching hash the plugin loads: the hash is a gate, not a filter.
+  Env env;
+  const std::vector<std::uint8_t> file = Slurp(g_dir + "/libfx_ok.so");
+  CHECK(!file.empty());
+  if (file.empty()) return;
+  const std::string sha = nevr_quest::data::Sha256Hex(file.data(), file.size());
+  env.loader->Plan({Packaged("ok", "libfx_ok.so", sha)});
+  env.loader->RunPhase(PluginPhase::Normal);
+  const LoadRecord* r = env.platform.Record("ok");
+  CHECK(r != nullptr);
+  if (r == nullptr) return;
+  CHECK(r->outcome == Outcome::kLoaded);
+  CHECK_EQ(r->source, std::string("packaged"));
+  CHECK_EQ(r->sha256, sha);
+}
+
 TEST(LoaderGivesThePluginTheQuestContext) {
   Env env;
   env.loader->Plan({Item("ok", "libfx_ok.so", false, true, R"({"k":"v"})")});
@@ -1097,12 +1137,16 @@ TEST(RecordLogCarriesEveryFieldAndNoValue) {
   record.reason = reason::kBuildIdUnsupported;
   record.required = true;
   record.argKeys = "region,token";
+  record.source = "packaged";
+  record.overridden = true;
   LogLoadRecord(record);
   CHECK_EQ(Captured().size(), std::size_t{1});
   if (Captured().empty()) return;
   const nlohmann::json line = nlohmann::json::parse(Captured()[0]);
   CHECK_EQ(line.value("event", ""), std::string("plugin_load"));
   CHECK_EQ(line.value("level", ""), std::string("warn"));
+  CHECK_EQ(line.value("source", ""), std::string("packaged"));
+  CHECK_EQ(line.value("overridden", -1), 1);
   CHECK_EQ(line.value("name", ""), std::string("ok"));
   CHECK_EQ(line.value("file", ""), std::string("libok.so"));
   CHECK_EQ(line.value("sha256", ""), std::string(64, 'a'));
