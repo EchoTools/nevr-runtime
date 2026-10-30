@@ -3,7 +3,7 @@
 _w="$out/wiring"
 mkdir -p "$_w/obj"
 _wf="-std=c++17 -g -O0 -fno-exceptions -fno-rtti -Wall -Wextra -Werror -I$here/src -I$nevr/sdk/include"
-_wmods="plugin_log import_hook clock_levels plugin_args refresh_rate game_tick safe_read headset_gates got_swap weapon_arm gamespace fxtrail voipdrop custctx droneguard peerclamp gunconnect aibots bvh wallfire impactsnd ec ecfx dronekill dronemuzzle powerboost hudmeter shieldgamma levelname boosterpool music sensorwd"
+_wmods="plugin_log import_hook clock_levels plugin_args refresh_rate game_tick safe_read headset_gates got_swap weapon_arm gamespace fxtrail voipdrop custctx droneguard peerclamp gunconnect aibots bvh wallfire impactsnd ec ecfx dronekill dronemuzzle powerboost hudmeter shieldgamma levelname boosterpool music sensorwd decals"
 _wobjs=""
 for _m in $_wmods; do
   g++ $_wf -c "$here/src/$_m.cpp" -o "$_w/obj/$_m.o"
@@ -35,7 +35,7 @@ _wcaps() {
   "$_w/caps_test"
 }
 _wcaps none "-DQ15T_T26=0" 0 0
-for _c in FXTRAIL VOIPDROP CUSTCTX IMPACTSND ECFX HUDMETER MUSIC SENSORWD; do _wcaps "$_c" "-DQ15T_${_c}=1" 0 0; done
+for _c in FXTRAIL VOIPDROP CUSTCTX IMPACTSND ECFX HUDMETER MUSIC SENSORWD DECALS; do _wcaps "$_c" "-DQ15T_${_c}=1" 0 0; done
 _wcaps SHIELDGAMMA=1 "-DQ15T_SHIELDGAMMA=1" 0 0
 _wcaps SHIELDGAMMA=2 "-DQ15T_SHIELDGAMMA=2" 0 0
 for _c in DRONEGUARD PEERCLAMP DRONEKILL DRONEMUZZLE GUNCONNECT AIBOTS BVH WALLFIRE LEVELNAME T26 HZ_MATCH90 GATE_LINK; do
