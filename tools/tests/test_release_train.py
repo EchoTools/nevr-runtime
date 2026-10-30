@@ -417,7 +417,7 @@ class AudienceSection(unittest.TestCase):
 
 
 class PlayerLine(unittest.TestCase):
-    """The release body's player line is the author's `release-headline.txt` or one fixed sentence; the commits never
+    """The release body's player line is the authors' `release-headlines/` files or one fixed sentence; the commits never
     write it (#1444)."""
 
     def test_the_fixed_sentence_is_the_fallback(self) -> None:

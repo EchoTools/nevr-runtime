@@ -169,8 +169,9 @@ jobs:
     - name: Check the signed draft
       run: tools/release_check_draft.sh --signed "v$VERSION"
 
-    # 7. The body: a header, the player line from the feat commits since the base tag, and one line per file, rendered from
-    #    the signed files by package_release.py notes. The output path must not exist yet (the stage refuses one that does).
+    # 7. The body: a header, the player line (the release-headlines/ files added since the base tag, else the fixed
+    #    sentence), and one line per file, rendered from the signed files by package_release.py notes. The output path must
+    #    not exist yet (the stage refuses one that does).
     - name: Write the release body
       run: |
         set -euo pipefail
