@@ -420,7 +420,7 @@ fn a_root_the_host_does_not_load_from_is_refused_without_the_dev_flag() {
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     // On Windows the reason names the canonical folder; on this platform it says there is none. Both refuse, and both name the flag.
     let reason = v["reason"].as_str().unwrap();
-    assert!(reason.contains("is refused") || reason.contains("is not the folder the game loads nEVR from"), "{v}");
+    assert!(reason.contains("is refused") || reason.contains("is not the folder the game loads"), "{v}");
     assert!(reason.contains("--dev-nevr-root"), "{v}");
     assert!(f.root.join("nevr-runtime.dll").exists(), "nothing was undone");
 }

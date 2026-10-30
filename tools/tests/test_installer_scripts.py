@@ -486,12 +486,14 @@ class PcUninstallTest(ScriptTestBase):
 
         def shape(world):
             # The record names each world's own folders, so its text is compared with the world's path replaced by a marker.
+            # Its backup= line also carries the install's time stamp, which differs between the two installs.
             out = {}
             for base in (world.game, world.nevr):
                 for p in sorted(base.rglob("*")):
                     if p.is_file():
                         rel = re.sub(r"-\d{8}-\d{6}(-\d+)?$", "", str(p.relative_to(base)))
                         content = p.read_bytes().replace(str(world.tmp).encode(), b"<world>")
+                        content = re.sub(rb"-\d{8}-\d{6}(-\d+)?", b"<stamp>", content)
                         out[(base.name, rel)] = sha(content)
             return out
 
