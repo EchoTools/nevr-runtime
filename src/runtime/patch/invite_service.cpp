@@ -69,7 +69,8 @@ void Start(Settings settings) {
     off = "unrecognised_value";
     offLevel = nevr_invite::LogLevel::Warning;
   } else if (settings.invite_codes == nevr_invite::Switch::Off) {
-    off = "turned_off";
+    // Off from config.yaml is a player's choice; off with no config behind it (a host whose default is off) is not configured.
+    off = settings.invite_source == nevr_invite::Source::Config ? "turned_off" : "not_configured";
   } else if (settings.hooks_refused) {
     // An observer this service serves did not install. That observer's own Warning carries the address and the bytes (Rule 6).
     off = "hook_prologue_mismatch";

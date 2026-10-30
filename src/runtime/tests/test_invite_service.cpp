@@ -137,6 +137,19 @@ TEST(InviteService, WithTheKeyAbsentTheServiceStartsAndTheStartSaysDefault) {
 }
 
 // `false` is the operator's own choice: nothing goes out, and the line says the config made it.
+TEST(InviteService, OffWithNoConfigBehindItSaysNotConfiguredNotTurnedOff) {
+  // A host whose own default is off (the Quest sentinel) passes Off from Source::Default: no player turned it off.
+  Guard guard;
+  LoopbackServer server({Script{}});
+  Rig rig;
+  nevr_invite_service::Start(rig.Settings(nevr_invite::Switch::Off, server.Base(), nevr_invite::Source::Default));
+
+  EXPECT_FALSE(nevr_invite_service::Active());
+  EXPECT_TRUE(Has(rig.Lines(), LogLevel::Info, "[NEVR.INVITE] feature off reason=not_configured source=default"));
+  EXPECT_FALSE(Has(rig.Lines(), LogLevel::Info, "reason=turned_off"));
+  EXPECT_TRUE(server.Requests().empty());
+}
+
 TEST(InviteService, WithTheKeyFalseNothingIsSentAndTheStartSaysItIsConfigured) {
   Guard guard;
   LoopbackServer server({Script{}});
