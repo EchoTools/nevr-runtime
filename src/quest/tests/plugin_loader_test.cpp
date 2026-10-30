@@ -452,6 +452,11 @@ TEST(BuildIdVerdictNamesAnAbsentExportAndAnUnknownGame) {
   CHECK(DecideBuildId(nullptr, "") == BuildIdVerdict::kUndeclared);
 }
 
+const std::string& StockId() {
+  static const std::string id = nevr_quest::patch::kLibR15StockBuildId;
+  return id;
+}
+
 // ---- the loader, against real shared objects -----------------------------------------------------------------------
 
 TEST(LoaderLoadsANoopPluginWithOneRecord) {
@@ -724,10 +729,6 @@ TEST(LoaderReadsTheRunningBuildAgainOnALaterPass) {
 
 // ---- the plugin identity (ADR 0021 section 12, test 10) ------------------------------------------------------------
 
-const std::string& StockId() {
-  static const std::string id = nevr_quest::patch::kLibR15StockBuildId;
-  return id;
-}
 // The live note of our patched libr15: what the running file carries once the patcher has written it.
 const std::string& DerivedId() {
   static const std::string id = nevr_quest::patch::PatchedBuildId();
