@@ -107,19 +107,34 @@ def hook_problems(hook: str) -> list[str]:
     return problems
 
 
+SELECTOR_SIGNATURE = "std::uint64_t SelectorHook("
+# The selector's detour fills the GPU score before the original selector reads it (#1419): that fill is its one step before
+# the call, wrapped in the same try/catch every hook uses. Moving it after the call would make the selector read a zero score.
+SCORE_FILL = "FillGpuScore();"
+SCORE_FILL_WRAPPER = re.compile(r"\btry\s*\{\s*FillGpuScore\(\);\s*\}\s*catch\s*\(const std::exception&\)\s*\{[^}]*\}")
+
+
 def game_path_problems(hook: str) -> list[str]:
-    """The two detours call the original first and do not log, sleep or throw on the game's path."""
+    """The two detours call the original, do not log, sleep or throw on the game's path, and return its result. ApplyHook
+    does nothing before the call; SelectorHook does only the score fill before it (#1419)."""
     code = strip_comments(hook)
     problems = []
     for signature, original in (("std::uint64_t ApplyHook(", "g_originalApply("),
-                                ("std::uint64_t SelectorHook(", "g_originalSelector(")):
+                                (SELECTOR_SIGNATURE, "g_originalSelector(")):
         body = function_body(code, signature)
         if body is None:
             problems.append(f"{signature} not found")
             continue
         if original not in body:
             problems.append(f"{signature} does not call the original")
-        elif body.index("try") < body.index(original):
+            continue
+        before = body[: body.index(original)].replace("const std::uint64_t result =", "")
+        if signature == SELECTOR_SIGNATURE:
+            if SCORE_FILL not in before:
+                problems.append(f"{signature} does not fill the GPU score before it calls the original (#1419)")
+            elif SCORE_FILL_WRAPPER.sub("", before).strip():
+                problems.append(f"{signature} does work before it calls the original other than the score fill (#1419)")
+        elif "try" in before:
             problems.append(f"{signature} does work before it calls the original")
         for forbidden in ("Log(", "Sleep(", "throw ", "catch (...)", "catch(...)"):
             if forbidden in body:
@@ -232,6 +247,11 @@ class RenderConfigWiring(unittest.TestCase):
                              "  try { g_swallowed.fetch_add(0); } catch (const std::exception&) {}\n  " + marker, 1)
         self.assertNotEqual(early, hook)
         self.assertTrue(game_path_problems(early))
+        selector_marker = "  const std::uint64_t result = g_originalSelector(settings, game);"
+        self.assertIn(selector_marker, hook)
+        self.assertIn(SCORE_FILL + "\n", hook)
+        self.assertTrue(game_path_problems(hook.replace(selector_marker, "  Other();\n" + selector_marker, 1)))
+        self.assertTrue(game_path_problems(hook.replace("    " + SCORE_FILL + "\n", "", 1)))
 
     def test_the_model_is_the_pure_half(self):
         files = {str(p.relative_to(ROOT)): p.read_text(encoding="utf-8") for p in (MODEL, MODEL_H)}
