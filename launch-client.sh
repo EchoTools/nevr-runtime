@@ -374,6 +374,14 @@ if [[ -z "$run_log" ]]; then
   if cause=$(host_stop_cause "$LOGDIR" "$start"); then echo "FAIL: $cause" >&2; fi
   exit 1
 fi
+# The run's log is copied into this run's scratch directory before the verdict (#1297): the test that made the game copy
+# deletes it when the run ends, and a log left in the copy goes with it. A copy that does not match the original fails the run.
+RUN_LOG_COPY="$SCRATCH/game-log.jsonl"
+if ! cp -p -- "$run_log" "$RUN_LOG_COPY" || ! cmp -s -- "$run_log" "$RUN_LOG_COPY"; then
+  echo "FAIL: could not copy the game log $run_log to $RUN_LOG_COPY (the log would be lost with the game copy)" >&2
+  exit 1
+fi
+echo "=== game log copied to: $RUN_LOG_COPY ==="
 count() { grep -c "$1" "$run_log" || test $? -eq 1; }
 echo "=== game log: $run_log ==="
 echo "logged_in=$(count 'to logged in') in_game=$(count 'to in game') invalid_header=$(count 'invalid header') service_unavailable=$(count 'Service is unavailable')"

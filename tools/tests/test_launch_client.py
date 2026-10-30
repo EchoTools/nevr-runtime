@@ -352,6 +352,23 @@ class LaunchClientTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertRegex(result.stdout, r"=== game log: .*/AppData/Local/nevr/echovr/logs/nevr-fake-")
 
+    def test_the_run_log_is_copied_into_the_run_directory_before_the_game_copy_goes(self):
+        # #1297: the test that made the game copy deletes it when the run ends, so the run's log must already be out of it.
+        result = self.run_script("--dll", str(self.dll))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        copies = list(self.tmp.glob("client-run-*/game-log.jsonl"))
+        self.assertEqual(len(copies), 1, result.stdout)
+        self.assertIn("to logged in", copies[0].read_text())
+        self.assertRegex(result.stdout, r"=== game log copied to: .*/game-log\.jsonl ===")
+
+    def test_a_run_log_that_cannot_be_copied_out_fails_the_run(self):
+        # A cp that fails for the run log makes the copy fail: the run must fail loudly, not pass without its log.
+        bindir = self.bin_with_failing("cp", '[[ "$*" == *game-log.jsonl* ]]')
+        env = dict(self.env, PATH=f"{bindir}:{self.env['PATH']}")
+        result = self.run_script("--dll", str(self.dll), env=env)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("could not copy the game log", result.stderr)
+
     def test_the_hosts_bootstrap_record_in_the_same_folder_is_not_the_run_log(self):
         # In a root that had no nevr-bootstrap.jsonl when the run began, the host's record is a new nevr-*.jsonl
         # and sorts after the run log; judging it would fail a run that logged in.
@@ -1075,6 +1092,30 @@ class VerifyServerTest(unittest.TestCase):
         self.assertFalse((nevr_root_of(self.game_root) / "nevr-runtime.dll").exists(),
                          "the deployed runtime was left behind in the nevr root")
         self.assertIn("deployed files restored and verified", (self.tmp / "server-runs/run1/server.log").read_text())
+
+    def test_the_game_log_is_copied_out_of_the_nevr_root_into_the_run_directory(self):
+        # #1297: the run's log is read from the nevr root's logs folder, and a copy is kept with the run.
+        result = subprocess.run(self.command(), env=self.env, cwd=self.checkout, capture_output=True,
+                                text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        copy = self.tmp / "server-runs/run1/game-log.jsonl"
+        self.assertIn("to logged in", copy.read_text())
+        self.assertIn(f"game log copy       = {copy}", result.stdout)
+
+    def test_a_game_log_that_cannot_be_copied_out_fails_the_run(self):
+        # A cp that fails for the game log only: the run must fail loudly, not pass without its log.
+        bindir = self.tmp / "fail-cp"
+        bindir.mkdir()
+        (bindir / "cp").write_text(
+            "#!/bin/bash\n"
+            'if [[ "$*" == *game-log.jsonl* ]]; then echo "cp: injected failure" >&2; exit 1; fi\n'
+            f'exec {shutil.which("cp")} "$@"\n')
+        (bindir / "cp").chmod(0o755)
+        env = dict(self.env, PATH=f"{bindir}:{self.env['PATH']}")
+        result = subprocess.run(self.command(), env=env, cwd=self.checkout, capture_output=True,
+                                text=True, timeout=60)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("could not copy the game log", result.stderr)
 
     def test_the_timestep_flag_set_passes_the_options_a_server_strips(self):
         # #515: the run that shows GameMainWrapperHook removing -fixedtimestep and -timestep <value>.
