@@ -104,7 +104,7 @@ int main() {
   q15t::SetLinkGateLibs("lib555db38933fef859.so,lib1da85b18cbad6297.so");
   CHECK(HeadCallerLink(head) == 3, "policy list: a library that cannot be named is not in the list (got %d)", HeadCallerLink(head));
   q15t::SetLinkGateLibs("all");
-  CHECK(HeadCallerLink(head) == q15t::kNoHeadsetFlags, "policy all: the link range must be answered again");
+  CHECK(HeadCallerLink(head) == q15t::kLinkHeadset, "policy all: the link range must be answered again");
 
   // link gate alone: the other range empty must gate nothing, not everything
   {
