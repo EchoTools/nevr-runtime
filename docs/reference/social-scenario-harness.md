@@ -96,8 +96,14 @@ the session-event trace, and the game's invite-error event is logged by `src/run
 `tools/invite_e2e.py` runs the PC invite flow against production with two clients, each on its own copy of the install and
 signed in from a stored sign-in (`launch-client.sh --creds`, with `NEVR_SCOPE_RUN_TO_COPY=1` so a game on the other copy does
 not refuse the second launch). Client A creates a game and gets a code, both clients resolve it and join, and the tool checks
-that both are in the same match and in game. It drives the invite service through the control endpoint (`fire invite_create`,
-`fire invite_resolve`); the wizard's cards and typed code are not clicked. The verdict has one line per step with the log line
+that both are in the same match and in game. By default it drives the invite service through the control endpoint (`fire invite_create`,
+`fire invite_resolve`). With `--ui` (`just invite-e2e --ui`) it drives the wizard the way a player does: real mouse input on the nested
+display (the game reads the mouse through DirectInput; a select is the right button held 0.3 s after the pointer rests on the target),
+CREATE GAME, Echo Arena, Custom Match and CREATE INVITE CODE & LINK, then JOIN VIA CODE with the code typed on the page's on-screen
+keyboard and ENTER. Each click is confirmed from the game's own `[NEVR.INVITE] wizard event seen` / `wizard click seen` lines, the card
+slots come from the runtime's `main-menu buttons placed ... slots_after=` line, and the click map is for a 1536x874 window (any other
+size is refused). The control endpoint only reads the created code back. Screenshots of each game window (never the screen) are kept
+in the evidence folder. The verdict has one line per step with the log line
 that proves it, and every `readyatdawn.com` URL either client touched: redirected by the service redirect, the HTTP connect
 hook or the matchmaker host patch, or not. Exit 0 only when every step passed and no such URL went unredirected on the invite
 path. Each client's console log and game log are kept under `invite-e2e/<run>/evidence/` in the work root; the copies are removed.
