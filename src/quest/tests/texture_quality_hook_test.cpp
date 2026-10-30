@@ -262,12 +262,15 @@ void TheLevelIsLatchedAndANewOneIsRefused() {
   QCHECK(Entry()(kJava, 5) == 3072);
 }
 
-void StockArmsNothing() {
+// `stock` is a level like the others to the hook: latched, armed, and answering the runtime's own size (the settings menu can
+// raise it while the game runs, #1012).
+void StockAnswersTheRuntimesOwnSize() {
   Reset();
   QCHECK(tq::ArmForTest(tq::Level::kStock));
-  QCHECK(!tq::IsLatched());
+  QCHECK(tq::IsLatched() && tq::LatchedLevel() == tq::Level::kStock);
   QCHECK(Entry()(kJava, 5) == kNativeWidth);
   QCHECK(Entry()(kJava, 6) == kNativeHeight);
+  QCHECK(tq::CurrentCounts().served == 0);
 }
 
 void ADisarmedHookPassesEverythingThrough() {
@@ -303,6 +306,99 @@ void TheCountersCarryTheRuntimesAnswerAndWhatWeReplaced() {
   QCHECK(tq::CurrentCounts().served == 3);
 }
 
+// ---- the level while the game runs (#1012) ------------------------------------------------------------------------------
+
+// A request changes no answer. Only CommitApplied does, and it changes the next answer: the sizes follow the applied level.
+void ARequestChangesNothingAndACommitChangesTheNextAnswer() {
+  Reset();
+  QCHECK(tq::RequestedLevelValue() == tq::kLevelUnset);
+  QCHECK(tq::ArmForTest(tq::Level::kStock));
+  tq::RequestLevel(tq::Level::kHigh, tq::RequestSource::kMenu);
+  QCHECK(tq::RequestedLevelValue() == static_cast<int>(tq::Level::kHigh));
+  QCHECK(tq::LastRequestSource() == tq::RequestSource::kMenu);
+  QCHECK(tq::LatchedLevel() == tq::Level::kStock);
+  QCHECK(Entry()(kJava, 5) == kNativeWidth && Entry()(kJava, 6) == kNativeHeight);
+  tq::CommitApplied(tq::Level::kHigh);
+  QCHECK(Entry()(kJava, 5) == 3072 && Entry()(kJava, 6) == 3380);
+  tq::RequestLevel(tq::Level::kVeryLow, tq::RequestSource::kProperty);
+  QCHECK(tq::LastRequestSource() == tq::RequestSource::kProperty);
+  QCHECK(Entry()(kJava, 5) == 3072);  // still the applied one
+  tq::CommitApplied(tq::Level::kVeryLow);
+  QCHECK(Entry()(kJava, 5) == 1344 && Entry()(kJava, 6) == 1408);
+  tq::CommitApplied(tq::Level::kStock);
+  QCHECK(Entry()(kJava, 5) == kNativeWidth);
+  // On a Quest 2 the same commit gives the Quest 2 table.
+  SetStock(kQ2StockW, kQ2StockH);
+  tq::CommitApplied(tq::Level::kHigh);
+  QCHECK(Entry()(kJava, 5) == 2016 && Entry()(kJava, 6) == 2224);
+}
+
+// The live apply compares the count across a RefreshRTSize call: only ids 5 and 6 are eye-size queries.
+void OnlyTheTwoEyeSizeIdsAreCounted() {
+  Reset();
+  QCHECK(tq::ArmForTest(tq::Level::kLow));
+  QCHECK(tq::SizeQueries() == 0);
+  Entry()(kJava, 5);
+  Entry()(kJava, 6);
+  Entry()(kJava, 7);
+  Entry()(kJava, 4);
+  QCHECK(tq::SizeQueries() == 2);
+}
+
+int g_resolverCalls = 0;
+int g_resolverAnswer = tq::kLevelUnset;
+int Resolver() noexcept {
+  ++g_resolverCalls;
+  return g_resolverAnswer;
+}
+
+// The first eye-size query asks the start resolver once (the game has not delivered its settings yet), and what the player saved
+// replaces the configuration's level. The second query does not ask again, and a resolver with nothing to say changes nothing.
+void TheStartResolverIsAskedOnceByTheFirstQuery() {
+  Reset();
+  g_resolverCalls = 0;
+  g_resolverAnswer = static_cast<int>(tq::Level::kHigh);
+  QCHECK(tq::ArmForTest(tq::Level::kLow));
+  tq::SetStartResolver(&Resolver);
+  QCHECK(g_resolverCalls == 0);  // not asked at install
+  QCHECK(Entry()(kJava, 5) == 3072);  // the saved level, on the very first answer
+  QCHECK(Entry()(kJava, 6) == 3380);
+  QCHECK(g_resolverCalls == 1);
+  QCHECK(tq::LatchedLevel() == tq::Level::kHigh);
+  g_resolverAnswer = static_cast<int>(tq::Level::kUltra);
+  QCHECK(Entry()(kJava, 5) == 3072);
+  QCHECK(g_resolverCalls == 1);
+
+  Reset();
+  g_resolverCalls = 0;
+  g_resolverAnswer = tq::kLevelUnset;  // nothing saved: the configuration's level stands
+  QCHECK(tq::ArmForTest(tq::Level::kMedium));
+  tq::SetStartResolver(&Resolver);
+  QCHECK(Entry()(kJava, 5) == 2376 && Entry()(kJava, 6) == 2568);
+  QCHECK(g_resolverCalls == 1 && tq::LatchedLevel() == tq::Level::kMedium);
+
+  // Another query kind does not ask: the resolver waits for an eye-size id.
+  Reset();
+  g_resolverCalls = 0;
+  g_resolverAnswer = static_cast<int>(tq::Level::kHigh);
+  QCHECK(tq::ArmForTest(tq::Level::kLow));
+  tq::SetStartResolver(&Resolver);
+  QCHECK(Entry()(kJava, 9) == 97);
+  QCHECK(g_resolverCalls == 0 && tq::LatchedLevel() == tq::Level::kLow);
+  QCHECK(Entry()(kJava, 5) == 3072);
+  QCHECK(g_resolverCalls == 1);
+
+  // A resolver set after the first query is never asked.
+  Reset();
+  g_resolverCalls = 0;
+  g_resolverAnswer = static_cast<int>(tq::Level::kHigh);
+  QCHECK(tq::ArmForTest(tq::Level::kLow));
+  QCHECK(Entry()(kJava, 5) == 1680);
+  tq::SetStartResolver(&Resolver);
+  QCHECK(Entry()(kJava, 5) == 1680);
+  QCHECK(g_resolverCalls == 0);
+}
+
 // ---- Install, with the GOT step supplied ---------------------------------------------------------------------------------
 
 sentinel::GotStatus GotAccepts() noexcept { return sentinel::GotStatus::kOk; }
@@ -335,33 +431,35 @@ void AnInstalledLevelLogsOneLineWithTheLevelTheSourceAndTheSize() {
   }
 }
 
-void StockInstallsNothingAndSaysSo() {
+void StockInstallsTheHookAndAnswersTheRuntimesOwnSize() {
   for (const bool fromConfig : {true, false}) {
     Reset();
     Capture log;
     g_gotCalls = 0;
     QCHECK(tq::InstallVia(tq::Level::kStock, fromConfig, &GotCounts));
-    QCHECK(g_gotCalls == 0);  // no GOT step at all
+    QCHECK(g_gotCalls == 1);  // the slot is taken: a level asked for later has a hook to be served by
     const std::string line = TheLine();
-    QCHECK(Field(line, "result") == "not_installed");
+    QCHECK(Field(line, "result") == "installed");
     QCHECK(Field(line, "quality") == "stock");
     QCHECK(Field(line, "source") == (fromConfig ? "config" : "default"));
     QCHECK(Field(line, "w") == "0" && Field(line, "h") == "0");
     QCHECK(g_lines.size() == 1);
-    QCHECK(!tq::IsLatched());
-    QCHECK(!sentinel::SysPropIntSlotOwned());
-    QCHECK(Entry()(kJava, 5) == kNativeWidth);  // nothing is armed
+    QCHECK(tq::IsLatched() && tq::LatchedLevel() == tq::Level::kStock);
+    QCHECK(sentinel::SysPropIntSlotOwned());
+    QCHECK(Entry()(kJava, 5) == kNativeWidth);  // and it answers what the runtime answers
     QCHECK(Entry()(kJava, 6) == kNativeHeight);
+    QCHECK(tq::CurrentCounts().served == 0);
   }
-  // The real Install of `stock` needs no libr15 and no counters either.
+  // The real Install of `stock` needs libr15, like the others: on a host it is refused and overrides nothing.
   Reset();
   Capture log;
-  QCHECK(tq::Install(tq::Level::kStock, true));
-  QCHECK(Field(TheLine(), "result") == "not_installed");
+  QCHECK(!tq::Install(tq::Level::kStock, true));
+  QCHECK(Field(TheLine(), "result") == "refused");
   Reset();
   g_lines.clear();
-  QCHECK(tq::InstallIfCounted(tq::Level::kStock, false, false));
-  QCHECK(Field(TheLine(), "result") == "not_installed");
+  QCHECK(!tq::InstallIfCounted(tq::Level::kStock, false, false));
+  QCHECK(Field(TheLine(), "result") == "skipped");
+  QCHECK(Field(TheLine(), "why") == "counters_refused");
 }
 
 void ARefusedSlotLeavesNoOverrideAndIsLoud() {
@@ -519,12 +617,15 @@ int main() {
   OnlyIds5And6AreAnsweredWithTheSizeAndTheRestPassThrough();
   TheOriginalIsCalledOnceWithTheGamesArgumentsForTheTwoIdsToo();
   TheLevelIsLatchedAndANewOneIsRefused();
-  StockArmsNothing();
+  StockAnswersTheRuntimesOwnSize();
   ADisarmedHookPassesEverythingThrough();
   AThunkWithoutAnOriginalIsAFaultAndOverridesNothing();
   TheCountersCarryTheRuntimesAnswerAndWhatWeReplaced();
+  ARequestChangesNothingAndACommitChangesTheNextAnswer();
+  OnlyTheTwoEyeSizeIdsAreCounted();
+  TheStartResolverIsAskedOnceByTheFirstQuery();
   AnInstalledLevelLogsOneLineWithTheLevelTheSourceAndTheSize();
-  StockInstallsNothingAndSaysSo();
+  StockInstallsTheHookAndAnswersTheRuntimesOwnSize();
   ARefusedSlotLeavesNoOverrideAndIsLoud();
   TheRealInstallIsRefusedOnAHostWithoutLibr15AndOverridesNothing();
   ASecondLevelIsRefusedAndTheFirstKeepsAnswering();

@@ -217,6 +217,24 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15ProviderId(), "libr15 CNSProvider::ProviderID JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15UserProviderId(), "libr15 CNSProvider::UserProviderID JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15ShowSystemUI(), "libr15 CVR::ShowSystemUI JUMP_SLOT");
+  // The Texture Resolution control (#1012): the five hooked functions' slots, and (below) the six functions the live apply calls.
+  CheckTarget(r15, pinned::LibR15JsonDecodeFromFile(), "libr15 CJson::DecodeFrom(CFileSp const&, unsigned) JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15JsonDecodeFromText(), "libr15 CJson::DecodeFrom(char const*, unsigned long long) JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15ValidateGfxSettings(), "libr15 NRadGame::ValidateGfxSettings JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15ApplyRuntimeGfxSettings(), "libr15 NRadGame::ApplyRuntimeGfxSettings JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15CheckForResize(), "libr15 CEngine::CheckForResize JUMP_SLOT");
+  for (const pinned::PinnedFunction* f :
+       {&pinned::kRefreshRTSize, &pinned::kEngineResize, &pinned::kVrInitialized, &pinned::kVrGraphicsInitialized,
+        &pinned::kVrDisplayLost, &pinned::kLocalAppDataDirectory}) {
+    if (DynamicSymbolValue(r15, f->name) != f->vaddr) {
+      std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", f->name, static_cast<unsigned long long>(f->vaddr));
+      QCHECK(false);
+    }
+    if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + f->vaddr, f->code, f->words * sizeof(std::uint32_t)) != 0) {
+      std::fprintf(stderr, "libr15 %s: first instructions differ from the pinned ones\n", f->name);
+      QCHECK(false);
+    }
+  }
   CheckTarget(r15, pinned::LibR15CanvasSetText(), "libr15 CCanvasUICS::SetText(char const*) JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15MountObb(), "libr15 AStorageManager_mountObb JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetMountedObbPath(), "libr15 AStorageManager_getMountedObbPath JUMP_SLOT");

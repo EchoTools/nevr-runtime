@@ -295,6 +295,11 @@ func TestHookFramesCarryNoPersonality(t *testing.T) {
 		"post-load installs (dlopen)": regexp.MustCompile(`^_ZN10nevr_quest11integration11AfterDlopenE`),
 		"main-menu cards page build":  regexp.MustCompile(`^_ZN10nevr_quest10menu_cards12PrepareCardsE`),
 
+		// The Texture Resolution control (#1012) rewrites the two settings documents between the game's file read and its parse
+		// (RewriteDocument in src/quest/sentinel/texture_menu_hook.cpp). It calls the pure rewrite (texture_menu.cpp) and the
+		// allocator, never game code, and runs before the handler calls the original.
+		"Texture Resolution document rewrite": regexp.MustCompile(`^_ZN10nevr_quest12texture_menu12_GLOBAL__N_115RewriteDocumentE`),
+
 		// The MetricLog observer (#966) runs before the game's function and returns first (Observe and Handler in
 		// src/quest/invite/wizard_metric_hook.cpp). Its direct callees are the shared invite parser, the sentinel logger
 		// and a pipe copy (CopyGameBytes); none calls game code. Its one indirect call is the log sink, the sentinel's

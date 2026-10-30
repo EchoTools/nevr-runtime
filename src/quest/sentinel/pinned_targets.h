@@ -828,4 +828,117 @@ inline GotTarget LibR15LookupDataBindingGlobDat() {
           RelocKind::kGlobDat, LibR15PatchedBuildId(), 0x372b698ULL};
 }
 
+// ---- the Texture Resolution control and its live apply (#1012, docs/adr/0015) -----------------------------------------------
+//
+// Five functions libr15 defines and calls only through its own PLT (`readelf -rW` on the pinned image: one JUMP_SLOT each;
+// design-1012 found no direct `bl` to any of them), plus six it exports that the live apply calls itself. ReVault shows every
+// address 0x100000 higher.
+//
+//   CJson::DecodeFrom(CFileSp const&, unsigned int)       0xfa8120   JUMP_SLOT 0x36ef630. `self` (x0), the file's path as a C string
+//                         (x1: the CFileSp is a 512-byte path buffer), the strip-comments flag (w2). Reads the file with
+//                         ReadFileIntoString, strips its comments when w2 is set and parses the text with the overload below
+//                         (`bl` at 0x10a82e0 ReVault), x1 the text and x2 its length without the terminator. Returns the parse's int.
+//   CJson::DecodeFrom(char const*, unsigned long long)    0xfa7e8c   JUMP_SLOT 0x36cda80. `self` (x0), the text (x1), its length (x2).
+//                         47 callers, most of them network replies; the control's hook looks at it only inside the file read of the
+//                         two documents (texture_menu_hook.cpp).
+//   NRadGame::ValidateGfxSettings(SR15GfxSettings&)        0x20e98a4  JUMP_SLOT 0x36e9d48. Clamps the settings in place. Its one clamp
+//                         of the msaa field (+0x1c) is `csel w10,w10,w21,lt` at 0x21e9958 ReVault: min(msaa, 2).
+//   NRadGame::ApplyRuntimeGfxSettings(SR15GfxSettings const&, CR15Game&, unsigned)   0x20e8e0c  JUMP_SLOT 0x36d9008. Called from
+//                         CR15Game::InitEngine at boot and from the settings component on every change. The msaa field (+0x1c) is
+//                         read only by a log line that indexes a three-entry name table (kMsaaNames, ELF 0x3690278: three RELATIVE
+//                         string pointers, then three ABS64 pointers at 0x3690290, 0x3690298 and 0x36902a0), so an index of 3 to 5
+//                         prints through a valid pointer.
+//   CEngine::CheckForResize()                              0x2ac0f9c  JUMP_SLOT 0x36d6e10. The one caller is CEngine::RenderBefore
+//                         (bl 0x2ac0f4c), once per rendered frame on the thread that draws; x0 is the engine and the result is the
+//                         engine's error object, which RenderBefore passes to OutputError. It calls CVR::RefreshRTSize each frame.
+//
+// Exported and called by the live apply (base + vaddr, after the build ID and the first words are proved, as QuitOnError is):
+//   CVR::RefreshRTSize() 0x1a709a0 (writes the eye-size global from vrapi ids 5 and 6, so the existing hook answers it);
+//   CEngine::Resize(unsigned, unsigned, EWindowMode) 0x2ac093c (the engine's own resize cycle; the engine's vtable slot +0x30
+//     holds it: ABS64 0x36bd7f0), which flushes the GPU, rebuilds the swap chain, the render targets and the pass framebuffers;
+//   CVR::Initialized() 0x1a70b64, CVR::GraphicsInitialized() 0x1a71420, CVR::DisplayLost() 0x1a73460;
+//   CSysInfo::GetLocalAppDataDirectory(CFixedStringT<512>&) 0xf86d88, which the settings file's path starts from
+//     ("%s/RAD/LoneEcho/%s" with "settings_mp_v2_quest.json", libr15 strings).
+inline constexpr const char* kJsonDecodeFromFileSymbol = "_ZN10NRadEngine5CJson10DecodeFromERKNS_7CFileSpEj";
+inline constexpr const char* kJsonDecodeFromTextSymbol = "_ZN10NRadEngine5CJson10DecodeFromEPKcy";
+inline constexpr const char* kValidateGfxSettingsSymbol = "_ZN10NRadEngine8NRadGame19ValidateGfxSettingsERNS0_15SR15GfxSettingsE";
+inline constexpr const char* kApplyRuntimeGfxSettingsSymbol =
+    "_ZN10NRadEngine8NRadGame23ApplyRuntimeGfxSettingsERKNS0_15SR15GfxSettingsERNS0_8CR15GameEj";
+inline constexpr const char* kCheckForResizeSymbol = "_ZN10NRadEngine7CEngine14CheckForResizeEv";
+
+using JsonDecodeFromFileSig = int(CJsonOpaque* self, const char* path, std::uint32_t stripComments);
+using JsonDecodeFromTextSig = int(CJsonOpaque* self, const char* text, unsigned long long length);
+using ValidateGfxSettingsSig = void(unsigned char* settings);
+using ApplyRuntimeGfxSettingsSig = void(const unsigned char* settings, void* game, std::uint32_t refreshUi);
+using CheckForResizeSig = std::uint64_t(void* engine);
+struct LibR15JsonDecodeFromFileTag {};
+struct LibR15JsonDecodeFromTextTag {};
+struct LibR15ValidateGfxSettingsTag {};
+struct LibR15ApplyRuntimeGfxSettingsTag {};
+struct LibR15CheckForResizeTag {};
+using LibR15JsonDecodeFromFileThunk = CallbackThunk<LibR15JsonDecodeFromFileTag, JsonDecodeFromFileSig>;
+using LibR15JsonDecodeFromTextThunk = CallbackThunk<LibR15JsonDecodeFromTextTag, JsonDecodeFromTextSig>;
+using LibR15ValidateGfxSettingsThunk = CallbackThunk<LibR15ValidateGfxSettingsTag, ValidateGfxSettingsSig>;
+using LibR15ApplyRuntimeGfxSettingsThunk = CallbackThunk<LibR15ApplyRuntimeGfxSettingsTag, ApplyRuntimeGfxSettingsSig>;
+using LibR15CheckForResizeThunk = CallbackThunk<LibR15CheckForResizeTag, CheckForResizeSig>;
+
+inline GotTarget LibR15JsonDecodeFromFile() {
+  return {kLibR15, kJsonDecodeFromFileSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36ef630ULL};
+}
+inline GotTarget LibR15JsonDecodeFromText() {
+  return {kLibR15, kJsonDecodeFromTextSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36cda80ULL};
+}
+inline GotTarget LibR15ValidateGfxSettings() {
+  return {kLibR15, kValidateGfxSettingsSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36e9d48ULL};
+}
+inline GotTarget LibR15ApplyRuntimeGfxSettings() {
+  return {kLibR15, kApplyRuntimeGfxSettingsSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36d9008ULL};
+}
+inline GotTarget LibR15CheckForResize() {
+  return {kLibR15, kCheckForResizeSymbol, RelocKind::kJumpSlot, LibR15PatchedBuildId(), 0x36d6e10ULL};
+}
+
+// The functions the live apply calls, with their first words (the store file at each vaddr; the three short ones are 12 or 20
+// bytes, so three or four words are all there is to compare) and their signatures. `first` is how many words of `code` are compared.
+struct PinnedFunction {
+  const char* name;
+  std::uint64_t vaddr;
+  std::uint32_t code[4];
+  std::size_t words;
+};
+inline constexpr PinnedFunction kRefreshRTSize = {"_ZN10NRadEngine3CVR13RefreshRTSizeEv", 0x1a709a0,
+                                                  {0xd10103ff, 0xf90013f4, 0xa9037bf3, 0xaa1f03e0}, 4};
+inline constexpr PinnedFunction kEngineResize = {"_ZN10NRadEngine7CEngine6ResizeEjjNS_11EWindowModeE", 0x2ac093c,
+                                                 {0x6dbc23e9, 0xf9000bf6, 0xa90253f5, 0xa9037bf3}, 4};
+inline constexpr PinnedFunction kVrInitialized = {"_ZN10NRadEngine3CVR11InitializedEv", 0x1a70b64,
+                                                  {0xf000e988, 0xf941fd08, 0xf100011f, 0x1a9f07e0}, 4};
+inline constexpr PinnedFunction kVrGraphicsInitialized = {"_ZN10NRadEngine3CVR19GraphicsInitializedEv", 0x1a71420,
+                                                          {0xd000e988, 0x394d8100, 0xd65f03c0, 0}, 3};
+inline constexpr PinnedFunction kVrDisplayLost = {"_ZN10NRadEngine3CVR11DisplayLostEv", 0x1a73460,
+                                                  {0x9000e988, 0xb9438900, 0xd65f03c0, 0}, 3};
+inline constexpr PinnedFunction kLocalAppDataDirectory = {
+    "_ZN10NRadEngine8CSysInfo24GetLocalAppDataDirectoryERNS_13CFixedStringTILy512EEE", 0xf86d88,
+    {0xf81d0ff6, 0xa90153f5, 0xa9027bf3, 0xaa0003f3}, 4};
+using RefreshRTSizeFn = void (*)();
+using EngineResizeFn = int (*)(void* engine, std::uint32_t width, std::uint32_t height, std::int32_t mode);
+using VrFlagFn = int (*)();
+using LocalAppDataDirectoryFn = void (*)(void* fixedString);
+
+// CEngine fields the live apply reads (the same ones CheckForResize and CEngine::Resize read; design-1012 evidence): the ready
+// flag, the engine's resize slot and the display the engine keeps (a CGDisplay at +0x13a68: width +0x3250, height +0x3254, window
+// mode +0x32d0), which are the arguments that make CEngine::Resize leave the display itself alone.
+namespace engine_layout {
+inline constexpr std::size_t kReadyFlags = 0x16ed4;  // byte, bit 0: the engine is ready (CheckForResize, RenderBefore, Resize)
+inline constexpr std::uint8_t kReadyBit = 1;
+inline constexpr std::size_t kResizeVtableOffset = 0x30;  // *(*engine + 0x30) is CEngine::Resize(w, h, mode)
+inline constexpr std::size_t kDisplayWidth = 0x16cb8;
+inline constexpr std::size_t kDisplayHeight = 0x16cbc;
+inline constexpr std::size_t kDisplayMode = 0x16d38;
+}  // namespace engine_layout
+
+// SR15GfxSettings fields (ReVault: ValidateGfxSettings, lane G): the msaa field the control rides on.
+namespace gfx_layout {
+inline constexpr std::size_t kMsaa = 0x1c;
+}
+
 }  // namespace sentinel::pinned

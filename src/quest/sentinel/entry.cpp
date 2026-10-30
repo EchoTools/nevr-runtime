@@ -31,6 +31,7 @@
 #include "process_end_hook.h"
 #include "quit_hook.h"
 #include "render_config.h"
+#include "texture_menu_hook.h"
 #include "texture_quality_hook.h"
 #include "resource_request_hook.h"
 #include "toast_presenter.h"
@@ -157,10 +158,17 @@ bool InstallOsBuildGateHook() noexcept { return nevr_quest::os_build_gate::Insta
 
 // The eye-buffer size libr15 creates its swap chain with (#943). A refused install is logged by GotHook and by the hook's
 // own line, and leaves the game's calls intact.
-bool RegisterTextureQualityCounters() noexcept { return nevr_quest::texture_quality::RegisterCounters(); }
+bool RegisterTextureQualityCounters() noexcept {
+    const bool quality = nevr_quest::texture_quality::RegisterCounters();
+    const bool menu = nevr_quest::texture_menu::RegisterCounters();  // both are asked: one refusal must not hide the other
+    return quality && menu;
+}
+// The eye-size hook, then the Texture Resolution control and the live apply (#1012), which need the eye-size hook installed:
+// the control is offered only when it has answered for the first query (texture_menu_hook.h).
 bool InstallTextureQualityHook(nevr_quest::texture_quality::Level level, bool fromConfig,
                                bool countersRegistered) noexcept {
-    return nevr_quest::texture_quality::InstallIfCounted(level, fromConfig, countersRegistered);
+    if (!nevr_quest::texture_quality::InstallIfCounted(level, fromConfig, countersRegistered)) return false;
+    return nevr_quest::texture_menu::Install(level, fromConfig);
 }
 
 // The render-configuration log (#1139): the VrApi slots it reads and the poller thread. A refused install is logged by GotHook
