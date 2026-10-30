@@ -14,6 +14,7 @@
 #include "quest/invite/frame_dispatch.h"
 #include "quest/sentinel/got_hook.h"
 #include "quest/sentinel/hook_log.h"
+#include "quest/sentinel/mapping_perms.h"
 #include "quest/sentinel/pinned_targets.h"
 #include "runtime/patch/invite_join.h"
 #include "runtime/patch/invite_match_api.h"
@@ -40,20 +41,25 @@ sentinel::LogLevel ToSentinel(nevr_invite::LogLevel level) {
 }
 
 // The game object's bytes. The game object outlives the frame that calls the join, and the join runs on the game thread, so the
-// staging reads and writes it directly; the offsets are the Layout's (kQuestLayout), which the host test checks.
+// staging reads and writes it directly; the offsets are the Layout's (kQuestLayout), which the host test checks. Each access
+// is checked first, as the PC's GameObjectMemory checks it: a read of readable memory, a write of writable memory, nothing else.
 class GameMemoryRef final : public nevr_invite_join::StagingMemory {
  public:
   explicit GameMemoryRef(void* game) : game_(static_cast<unsigned char*>(game)) {}
 
   bool Read(std::uintptr_t offset, void* out, std::size_t size) override {
     if (game_ == nullptr || out == nullptr) return false;
-    std::memcpy(out, game_ + offset, size);
+    const unsigned char* at = game_ + offset;
+    if (!sentinel::MappingsAllow(reinterpret_cast<std::uintptr_t>(at), size, /*write=*/false)) return false;
+    std::memcpy(out, at, size);
     return true;
   }
 
   bool Write(std::uintptr_t offset, const void* in, std::size_t size) override {
     if (game_ == nullptr || in == nullptr) return false;
-    std::memcpy(game_ + offset, in, size);
+    unsigned char* at = game_ + offset;
+    if (!sentinel::MappingsAllow(reinterpret_cast<std::uintptr_t>(at), size, /*write=*/true)) return false;
+    std::memcpy(at, in, size);
     return true;
   }
 
