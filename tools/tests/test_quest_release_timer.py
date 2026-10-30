@@ -2116,7 +2116,7 @@ class VariantPairCheck(VariantCase):
         fake.beta = TAG[1:]
         return fake
 
-    def refused_with(self, *wants: str) -> dict:
+    def refused_with(self, *wants: str, repair: bool = True) -> dict:
         fake = self.listed()
         code, stderr = self.run_captured(fake)
         self.assertEqual(code, 1, stderr)
@@ -2125,7 +2125,8 @@ class VariantPairCheck(VariantCase):
         for want in wants:
             self.assertIn(want, failure["error"])
         self.assertIn(VARIANT_APK, failure["error"])
-        self.assertIn("RELEASING.md", failure["error"], "the message points at the repair")
+        if repair:
+            self.assertIn("RELEASING.md", failure["error"], "the message points at the repair")
         for never in ("worktree.add", "variant_build", "variant_publish", "configure"):
             self.assertNotIn(never, fake.steps(), "nothing is rebuilt or republished")
         self.assertNotIn("done", self.names())
@@ -2186,6 +2187,15 @@ class VariantPairCheck(VariantCase):
             fake = self.listed()
             self.assertEqual(self.run_timer(fake), 0)
         self.assertIn("variant_listed", self.names())
+
+    def test_an_apk_or_a_sidecar_over_its_limit_is_a_failure(self) -> None:
+        self.host.mode = "present"
+        with mock.patch.object(timer, "APK_LIMIT", len(HOST_APK) - 1):
+            self.refused_with("more than the expected", repair=False)
+        self.log.unlink()
+        self.host.sidecar, self.host.sidecar_text = "custom", "a" * 5000
+        with mock.patch.object(timer, "SIDECAR_LIMIT", 4096):
+            self.refused_with("more than the expected", f"{VARIANT_APK}.sha256", repair=False)
 
     def test_the_failure_is_counted_and_a_standing_half_published_pair_stops_after_three(self) -> None:
         self.host.mode, self.host.sidecar = "present", "absent"
@@ -2265,11 +2275,18 @@ class VariantBuildOutput(VariantCase):
         self.assertFalse(self.build_log().exists())
 
     def test_a_rerun_replaces_the_file_it_does_not_append(self) -> None:
-        for marker in ("FIRST-RUN-AAA", "SECOND-RUN-BBB"):
+        for marker in ("FIRST-RUN-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "SECOND-RUN-BBB"):
             self.assertEqual(self.run_timer(Fake(self.root, overrides={"variant_build": self.noisy(err=marker)})), 1)
         text = self.build_log().read_text()
         self.assertIn("SECOND-RUN-BBB", text)
         self.assertNotIn("FIRST-RUN-AAA", text)
+
+    def test_a_file_left_with_a_loose_mode_is_0600_again(self) -> None:
+        self.build_log().parent.mkdir(parents=True, exist_ok=True)
+        self.build_log().write_text("left by something else")
+        self.build_log().chmod(0o644)
+        self.assertEqual(self.run_timer(Fake(self.root, overrides={"variant_build": self.noisy()})), 1)
+        self.assertEqual(stat.S_IMODE(self.build_log().stat().st_mode), 0o600)
 
     def test_a_secret_in_the_build_output_is_redacted_in_the_file_too(self) -> None:
         secret = SECRETS["R2_SECRET_ACCESS_KEY"]
@@ -2383,6 +2400,11 @@ class VariantPartOfTheRelease(VariantCase):
         fake = self.listed()
         self.assertEqual(self.run_timer(fake), 0)
         self.assertIn("(main release)", couriers(fake, "spritz")[0][-1])
+        self.log.unlink()
+        self.write_log(*({"event": "failed", "tag": TAG, "step": "variant_build", "error": "x"} for _ in range(3)))
+        fake = self.listed()
+        self.assertEqual(self.run_timer(fake), 0)
+        self.assertIn("variant APK", couriers(fake, "spritz")[0][-1], "a record from before `part` is read by its step")
 
 
 class ResetFailures(TimerCase):
@@ -2427,6 +2449,14 @@ class ResetFailures(TimerCase):
         fake = Fake(self.root)
         self.assertEqual(self.run_timer(fake, "--tag", TAG), 0)
         self.assertIn("skipped_after_failures", self.names())
+
+    def test_the_newest_of_two_resets_is_the_one_that_counts(self) -> None:
+        failed = {"event": "failed", "tag": TAG, "step": "build_apk"}
+        self.write_log(failed, failed, failed, {"event": "failures_reset", "tag": TAG}, failed, failed, failed,
+                       {"event": "failures_reset", "tag": TAG}, failed)
+        fake = Fake(self.root)
+        self.assertEqual(self.run_timer(fake, "--tag", TAG), 0)
+        self.assertEqual(self.names()[-1], "done", "one failure since the newest reset is retried")
 
     def test_a_skip_notice_sent_before_the_reset_does_not_silence_the_next_one(self) -> None:
         self.write_log(*({"event": "failed", "tag": TAG, "step": "build_apk", "error": "x"} for _ in range(3)),

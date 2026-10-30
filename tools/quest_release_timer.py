@@ -577,13 +577,14 @@ class Timer:
         """GET `url` without following a redirect: (status, content type, sha256 of the body as it streamed in, the body when
         `keep`). A status other than 200 is returned for the caller to judge, with no body read; a host that does not answer,
         or a body over `limit`, is a failure."""
+        file = url.rsplit("/", 1)[-1]
         request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         try:
             response = urllib.request.build_opener(NoRedirect).open(request, timeout=FETCH_TIMEOUT_SECONDS)
         except urllib.error.HTTPError as error:
             return error.code, "", "", b""
         except OSError as error:
-            raise StepFailure(step, f"no answer from the host ({error.__class__.__name__})") from error
+            raise StepFailure(step, f"{file} on the host: no answer ({error.__class__.__name__})") from error
         digest = hashlib.sha256()
         kept = bytearray()
         size = 0
@@ -595,12 +596,12 @@ class Timer:
                 while chunk := response.read(READ_CHUNK):
                     size += len(chunk)
                     if size > limit:
-                        raise StepFailure(step, f"the host sent more than the expected {limit} bytes")
+                        raise StepFailure(step, f"{file} on the host: more than the expected {limit} bytes")
                     digest.update(chunk)
                     if keep:
                         kept += chunk
             except OSError as error:
-                raise StepFailure(step, f"the host's answer broke off ({error.__class__.__name__})") from error
+                raise StepFailure(step, f"{file} on the host: the answer broke off ({error.__class__.__name__})") from error
         return 200, content_type, digest.hexdigest(), bytes(kept)
 
     def variant_exists(self, tag: str) -> bool:
