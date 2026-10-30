@@ -1,6 +1,7 @@
 #include "texture_menu.h"
 
 #include <cstddef>
+#include <string>
 #include <utility>
 
 #include <nlohmann/json.hpp>
@@ -89,8 +90,14 @@ void WalkGameSettings(Json& node, Result* out) {
 }
 
 bool Parse(std::string_view text, Json* out) {
-  *out = Json::parse(text.data(), text.data() + text.size(), nullptr, /*allow_exceptions=*/false);
-  return !out->is_discarded();
+  // sax_parse into a DOM, not json::parse: parse() instantiates the callback parser, whose std::function drags
+  // std::bad_function_call's typeinfo into the .so as a default-visibility export (TestExportAllowlist). As sentinel_log.cpp does.
+  using DomParser = nlohmann::detail::json_sax_dom_parser<Json, nlohmann::detail::iterator_input_adapter<std::string::const_iterator>>;
+  const std::string input(text);
+  DomParser dom(*out, /*allow_exceptions=*/false);
+  if (Json::sax_parse(input, &dom)) return true;
+  *out = Json();
+  return false;
 }
 
 std::string Dump(const Json& doc) {

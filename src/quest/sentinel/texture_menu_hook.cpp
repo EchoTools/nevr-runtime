@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <mutex>
 #include <string>
 #include <string_view>
 
@@ -76,8 +75,63 @@ std::atomic<int> g_jsonStatus[kDocuments];
 std::atomic<int> g_jsonRows[kDocuments];
 std::atomic<int> g_jsonPages[kDocuments];
 
-// The document the calling thread is inside the file read of (0 none).
-thread_local int t_document = kNone;
+// The document each thread is inside the file read of (kNone: none). Not a thread_local: the .so would get emulated TLS on the hook
+// path (TestNoEmulatedTLSInHookPath). The slots are keyed by pthread_t under a pthread mutex, the sentinel's own lock convention.
+struct ArmedSlot {
+  pthread_t thread{};
+  int document = kNone;
+  bool used = false;
+};
+constexpr int kArmedSlots = 16;
+pthread_mutex_t g_armedMutex = PTHREAD_MUTEX_INITIALIZER;
+ArmedSlot g_armed[kArmedSlots];
+
+// Under g_armedMutex.
+ArmedSlot* FindArmed(pthread_t self) noexcept {
+  for (ArmedSlot& slot : g_armed) {
+    if (slot.used && pthread_equal(slot.thread, self)) return &slot;
+  }
+  return nullptr;
+}
+
+// Under g_armedMutex. A full table leaves the thread unarmed: the game parses what it read, unrewritten.
+ArmedSlot* FirstFreeArmed() noexcept {
+  for (ArmedSlot& slot : g_armed) {
+    if (!slot.used) return &slot;
+  }
+  return nullptr;
+}
+
+// Arms the calling thread for `document`; kNone disarms it.
+void SetArmed(int document) noexcept {
+  const pthread_t self = pthread_self();
+  pthread_mutex_lock(&g_armedMutex);
+  ArmedSlot* slot = FindArmed(self);
+  if (document == kNone) {
+    if (slot != nullptr) slot->used = false;
+  } else {
+    if (slot == nullptr) slot = FirstFreeArmed();
+    if (slot != nullptr) {
+      slot->thread = self;
+      slot->document = document;
+      slot->used = true;
+    }
+  }
+  pthread_mutex_unlock(&g_armedMutex);
+}
+
+// The document the calling thread is armed for, and disarms it (kNone: not armed).
+int TakeArmed() noexcept {
+  const pthread_t self = pthread_self();
+  int document = kNone;
+  pthread_mutex_lock(&g_armedMutex);
+  if (ArmedSlot* slot = FindArmed(self)) {
+    document = slot->document;
+    slot->used = false;
+  }
+  pthread_mutex_unlock(&g_armedMutex);
+  return document;
+}
 
 // ---- the two documents --------------------------------------------------------------------------------------------------
 
@@ -119,7 +173,7 @@ struct Kept {
   std::size_t inputSize = 0;
   const std::string* text = nullptr;
 };
-std::mutex g_keptMutex;
+pthread_mutex_t g_keptMutex = PTHREAD_MUTEX_INITIALIZER;  // std::mutex is out: its unlock carries a personality on the hook path
 Kept g_kept[kDocuments];
 
 struct Served {
@@ -135,11 +189,10 @@ NEVR_OUTSIDE_GAME_CALL Served RewriteDocument(int document, const char* text, un
   if (document <= kNone || document >= kDocuments || text == nullptr || length == 0 || length > kMaxDocumentBytes) return {};
   const std::string_view input(text, static_cast<std::size_t>(length));
   const std::uint64_t hash = Fnv1a(input);
-  {
-    std::lock_guard<std::mutex> lock(g_keptMutex);
-    const Kept& kept = g_kept[document];
-    if (kept.text != nullptr && kept.hash == hash && kept.inputSize == input.size()) return {kept.text->data(), kept.text->size()};
-  }
+  pthread_mutex_lock(&g_keptMutex);
+  const Kept kept = g_kept[document];
+  pthread_mutex_unlock(&g_keptMutex);
+  if (kept.text != nullptr && kept.hash == hash && kept.inputSize == input.size()) return {kept.text->data(), kept.text->size()};
   const texture_menu::Result r = document == kMenuSettings
                                      ? texture_menu::RewriteMenuSettings(input, g_defaultIndex.load(std::memory_order_acquire))
                                      : texture_menu::RewriteGameSettings(input);
@@ -148,10 +201,9 @@ NEVR_OUTSIDE_GAME_CALL Served RewriteDocument(int document, const char* text, un
   g_jsonStatus[document].store(static_cast<int>(r.status) + 1, std::memory_order_release);
   if (r.status != texture_menu::Status::kRewritten) return {};
   const std::string* const out = new std::string(r.text);
-  {
-    std::lock_guard<std::mutex> lock(g_keptMutex);
-    g_kept[document] = Kept{hash, input.size(), out};
-  }
+  pthread_mutex_lock(&g_keptMutex);
+  g_kept[document] = Kept{hash, input.size(), out};
+  pthread_mutex_unlock(&g_keptMutex);
   g_jsonRewrites.fetch_add(1, std::memory_order_relaxed);
   return {out->data(), out->size()};
 }
@@ -209,9 +261,9 @@ void StoreAt(void* base, std::size_t offset, T value) noexcept {
 
 // CJson::DecodeFrom(CFileSp const&, uint): arms the thread for the two documents for the length of the call.
 int HandleDecodeFile(FileThunk::Fn original, pin::CJsonOpaque* self, const char* path, std::uint32_t strip) noexcept {
-  t_document = DocumentForPath(path);
+  SetArmed(DocumentForPath(path));
   const int result = original(self, path, strip);
-  t_document = kNone;
+  SetArmed(kNone);
   return result;
 }
 
@@ -219,9 +271,8 @@ int HandleDecodeFile(FileThunk::Fn original, pin::CJsonOpaque* self, const char*
 // is the document, and the game parses the rewrite of it. The thread is disarmed at once: a second parse in the same file read
 // (there is none) would be left alone.
 int HandleDecodeText(TextThunk::Fn original, pin::CJsonOpaque* self, const char* text, unsigned long long length) noexcept {
-  const int document = t_document;
+  const int document = TakeArmed();
   if (document == kNone) return original(self, text, length);
-  t_document = kNone;
   const Served served = RewriteDocument(document, text, length);
   if (served.data == nullptr) return original(self, text, length);
   return original(self, served.data, served.size);
@@ -723,11 +774,10 @@ void ResetForTest() noexcept {
   }
   g_logged = Logged();
   g_propertyLast.store(kUnset);
-  t_document = kNone;
-  {
-    std::lock_guard<std::mutex> lock(g_keptMutex);
-    for (Kept& k : g_kept) k = Kept();  // the strings are leaked on purpose (the parser may hold them)
-  }
+  SetArmed(kNone);
+  pthread_mutex_lock(&g_keptMutex);
+  for (Kept& k : g_kept) k = Kept();  // the strings are leaked on purpose (the parser may hold them)
+  pthread_mutex_unlock(&g_keptMutex);
 }
 
 int PollOnceForTest() noexcept { return PollOnce(); }
