@@ -50,8 +50,12 @@ def applier_problems(apply: str) -> list[str]:
         problems.append("OnFrame takes the service lock before it checks the pending flag")
     if "nevr_ui_text::Ready()" not in body or "nevr_ui_text::Post(" not in body:
         problems.append("OnFrame does not post through the text writer")
-    if re.search(r"Log\([^;]*(\.text|request)", body):
+    # The log call is the named `Say` above OnFrame (#1734) as well as anything in OnFrame: scan the whole file, and require the rule
+    # to be given `Say`, so a text cannot reach a log call through a lambda written in its place.
+    if re.search(r"Log\([^;]*(\.text|request)", apply):
         problems.append("a log call carries a request or its text")
+    if not re.search(r"nevr_invite_text::Apply\(.*?\bSay\);", body, re.S):
+        problems.append("OnFrame does not log the rule's lines through Say")
     return problems
 
 
@@ -106,6 +110,7 @@ class TheApplierIsCheapWhenOffAndNeverLogsATextLine(unittest.TestCase):
         apply = code("src/runtime/patch/invite_answer_apply.cpp")
         self.assertTrue(applier_problems(apply.replace("if (!nevr_invite_service::Active()) return;", "")))
         self.assertTrue(applier_problems(apply.replace('"%s", line.c_str()', '"%s", request.text.c_str()')))
+        self.assertTrue(applier_problems(apply.replace("      Say);", "      nullptr);")))
         gate = "if (!nevr_invite_service::AnswersPending()) return;"
         self.assertTrue(applier_problems(apply.replace(gate, "")))
         moved = apply.replace(gate, "").replace(
