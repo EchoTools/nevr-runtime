@@ -340,8 +340,8 @@ void Unfriend(std::uint64_t rosterId, std::string userId) {
 }
 
 void Rewrite(std::uint64_t event, std::uint64_t symbol, const std::uint64_t* component) {
-  nevr_friends_platform::WriteWord(event + nevr_invite_choices::kEventSymbolOffset, symbol);
-  if (component != nullptr) nevr_friends_platform::WriteWord(event + nevr_invite_choices::kEventComponentOffset, *component);
+  nevr_friends_platform::RewriteWord(event + nevr_invite_choices::kEventSymbolOffset, symbol);
+  if (component != nullptr) nevr_friends_platform::RewriteWord(event + nevr_invite_choices::kEventComponentOffset, *component);
 }
 
 }  // namespace

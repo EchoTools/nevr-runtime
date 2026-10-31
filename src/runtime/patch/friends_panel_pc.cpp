@@ -218,7 +218,7 @@ bool Read(std::uint64_t address, void* out, std::size_t length) {
   return true;
 }
 
-bool WriteWord(std::uint64_t address, std::uint64_t value) {
+bool RewriteWord(std::uint64_t address, std::uint64_t value) {
   auto* at = reinterpret_cast<void*>(address);
   if (!nevr_crash_recovery::IsReadableMemory(at, sizeof(value))) return false;
   std::memcpy(at, &value, sizeof(value));

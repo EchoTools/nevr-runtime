@@ -330,7 +330,7 @@ bool Read(std::uint64_t address, void* out, std::size_t length) {
   return process_vm_readv(getpid(), &local, 1, &remote, 1, 0) == static_cast<ssize_t>(length);
 }
 
-bool WriteWord(std::uint64_t address, std::uint64_t value) {
+bool RewriteWord(std::uint64_t address, std::uint64_t value) {
   if (address < 0x10000) return false;
   iovec local{&value, sizeof(value)};
   iovec remote{reinterpret_cast<void*>(address), sizeof(value)};

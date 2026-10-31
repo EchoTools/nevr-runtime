@@ -31,7 +31,7 @@ std::uint64_t NowMs();
 bool Read(std::uint64_t address, void* out, std::size_t length);
 
 /// Writes one word of game memory (an event the game has not handled yet); false when it cannot be written.
-bool WriteWord(std::uint64_t address, std::uint64_t value);
+bool RewriteWord(std::uint64_t address, std::uint64_t value);
 
 /// One request to the community service, or to an image host. `method` is GET, POST or DELETE; `bearer` empty sends no
 /// Authorization header; `payload` is the JSON body of a POST. Worker threads only (it blocks).

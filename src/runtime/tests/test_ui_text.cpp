@@ -266,6 +266,45 @@ TEST(UiTextApply, ARequestThatFailsTheCheckIsNeverSentToTheGame) {
   EXPECT_EQ(p.setCalls, 0);
 }
 
+// A platform that looks the canvas up by the actor's name (the Quest's CComponentHandle<CCanvasUICS>::Find): no actor
+// table is read, a gamespace that does not find the actor passes to the next, and the canvas found takes the text.
+struct ByNamePlatform {
+  std::vector<std::uint64_t> actorInSpace;  // the actor each gamespace finds (0: none)
+  int finds = 0;
+  int sets = 0;
+  std::uint64_t setElement = 0;
+  std::string setText;
+  uintptr_t Game() { return 1; }
+  uintptr_t GameSpace(uintptr_t, uint64_t index) { return index < actorInSpace.size() ? 0x1000 + index : 0; }
+  bool FindCanvasByName(uintptr_t gs, uint64_t actor, uintptr_t* cs, uint32_t* handle) {
+    ++finds;
+    if (actorInSpace[gs - 0x1000] != actor) return false;
+    *cs = 0x5000 + (gs - 0x1000);
+    *handle = 7;
+    return true;
+  }
+  bool SetText(uintptr_t cs, uint32_t handle, uint64_t element, const char* text) {
+    ++sets;
+    setElement = element;
+    setText = text;
+    return cs == 0x5001 && handle == 7;
+  }
+};
+
+TEST(UiTextApply, APlatformThatFindsByNameIsAskedByTheActorsNameInEachGamespace) {
+  ByNamePlatform p;
+  p.actorInSpace = {0, kActor};
+  EXPECT_EQ(nevr_ui_text::Apply(p, Req("SELECT")), Outcome::Written);
+  EXPECT_EQ(p.finds, 2);
+  EXPECT_EQ(p.sets, 1);
+  EXPECT_EQ(p.setElement, kElement);
+  EXPECT_EQ(p.setText, "SELECT");
+  ByNamePlatform none;
+  none.actorInSpace = {0, 0};
+  EXPECT_EQ(nevr_ui_text::Apply(none, Req("SELECT")), Outcome::NoActor);
+  EXPECT_EQ(none.sets, 0);
+}
+
 // ---- the pending requests ----
 
 TEST(UiTextPending, APostedRequestIsWrittenOnTheNextDrainAndLeavesTheList) {
