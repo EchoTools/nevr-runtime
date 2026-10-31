@@ -348,8 +348,9 @@ def verify_signed(source: pathlib.Path, signed: pathlib.Path, stage: pathlib.Pat
     with zipfile.ZipFile(source) as original, zipfile.ZipFile(signed) as result:
         present = set(result.namelist())
         runtime = source_is_reference_runtime(original)
+        replaced = {f"{ABI_DIR}/{n}" for n in replaced_names(stage)}
         for entry in lib_entries(original):
-            if entry in (REPLACED_ON_PURPOSE, PATCHED_LIBRARY) or (runtime and entry == PINNED_LIBRARY):
+            if entry in (REPLACED_ON_PURPOSE, PATCHED_LIBRARY) or entry in replaced or (runtime and entry == PINNED_LIBRARY):
                 continue
             if entry not in present:
                 problems.append(f"{entry}: in the store APK, missing from the signed APK")
@@ -744,6 +745,95 @@ def check_plugin_build_ids(apk: pathlib.Path, plugin: pathlib.Path) -> list[str]
     return build_id_problems(libr15, plugin.read_bytes(), plugin.name)
 
 
+# ---- script libraries (docs/plans/2026-10-31-combat-beta-local.md, M5): lib<hash16>.so files the combat build adds ----
+
+LIB_NAME = re.compile(r"^lib[0-9a-f]{16}\.so$")
+LIBS_SUMS = "SHA256SUMS"
+LIBS_REPLACE = "REPLACE"  # in the libraries directory: the store libraries these replace, one name per line
+STAGED_REPLACE_LIST = "lib-replace.txt"  # in the stage directory: read back by verify_signed
+_EM_AARCH64 = 183
+
+
+def is_aarch64_shared_object(data: bytes) -> bool:
+    """A 64-bit little-endian ELF whose machine is AArch64 (ELF header: class 2, data 1, e_machine at offset 18)."""
+    return len(data) >= 20 and data[:4] == b"\x7fELF" and data[4] == 2 and data[5] == 1 and \
+        struct.unpack_from("<H", data, 18)[0] == _EM_AARCH64
+
+
+def replaced_names(stage: pathlib.Path) -> list[str]:
+    """The store libraries the staged script libraries replace, as the stage recorded them (empty when none)."""
+    path = stage / STAGED_REPLACE_LIST
+    if not path.is_file():
+        return []
+    return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def stage_libs(libs_dir: pathlib.Path, stage: pathlib.Path, store_apk: pathlib.Path) -> list[str]:
+    """Stages the script libraries of `libs_dir` under `stage`; returns the problems and writes nothing when there are any.
+
+    Every file is lib<hash16>.so, AArch64, and listed in SHA256SUMS with its sha-256; every listed name is there. A name
+    that the store APK also holds is staged only when REPLACE lists it, and every name REPLACE lists must be one of those.
+    """
+    if not libs_dir.is_dir():
+        return [f"{libs_dir}: not a directory"]
+    sums_path = libs_dir / LIBS_SUMS
+    if not sums_path.is_file():
+        return [f"{sums_path}: missing (every script library is listed in it with its sha-256)"]
+    problems: list[str] = []
+    listed: dict[str, str] = {}
+    for line in sums_path.read_text(encoding="utf-8").splitlines():
+        match = re.fullmatch(r"([0-9a-f]{64})  (\S+)", line)
+        if not match:
+            problems.append(f"{LIBS_SUMS}: not a sha256sum line: {line!r}")
+            continue
+        listed[match.group(2)] = match.group(1)
+    names = []
+    for entry in sorted(libs_dir.iterdir(), key=lambda p: p.name):
+        if entry.name in (LIBS_SUMS, LIBS_REPLACE):
+            continue
+        if entry.is_dir() or entry.is_symlink() or not entry.is_file():
+            problems.append(f"{entry.name}: not a regular file; the libraries directory holds files only")
+            continue
+        names.append(entry.name)
+    replace: list[str] = []
+    replace_path = libs_dir / LIBS_REPLACE
+    if replace_path.is_file():
+        replace = [line.strip() for line in replace_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    try:
+        with zipfile.ZipFile(store_apk) as store:
+            store_entries = set(store.namelist())
+    except (OSError, zipfile.BadZipFile) as error:
+        return problems + [f"{store_apk}: cannot be read as the store APK: {error}"]
+    for name in names:
+        if not LIB_NAME.match(name):
+            problems.append(f"{name}: not named lib<hash16>.so; the recipe stages nothing else from here")
+            continue
+        data = (libs_dir / name).read_bytes()
+        if name not in listed:
+            problems.append(f"{name}: not listed in {LIBS_SUMS}")
+        elif hashlib.sha256(data).hexdigest() != listed[name]:
+            problems.append(f"{name}: its sha-256 differs from the one {LIBS_SUMS} lists")
+        if not is_aarch64_shared_object(data):
+            problems.append(f"{name}: not a 64-bit AArch64 shared object")
+        if f"{ABI_DIR}/{name}" in store_entries and name not in replace:
+            problems.append(f"{name}: the store APK holds {ABI_DIR}/{name}; it is staged only when {LIBS_REPLACE} lists it")
+    for name in listed:
+        if name not in names:
+            problems.append(f"{name}: listed in {LIBS_SUMS} and missing from the libraries directory")
+    for name in replace:
+        if name not in names or f"{ABI_DIR}/{name}" not in store_entries:
+            problems.append(f"{name}: {LIBS_REPLACE} lists it, but it is not a staged library that replaces a store library")
+    if problems:
+        return problems
+    target = stage / ABI_DIR
+    target.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (target / name).write_bytes((libs_dir / name).read_bytes())
+        print(f"quest_repack_libs: script library {name} sha256 {listed[name]}", flush=True)
+    (stage / STAGED_REPLACE_LIST).write_text("".join(f"{n}\n" for n in sorted(replace)), encoding="utf-8")
+    return []
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -770,6 +860,10 @@ def main(argv: list[str]) -> int:
     pack_check = sub.add_parser("pack-problems")
     pack_check.add_argument("--stage", type=pathlib.Path, required=True)
     pack_check.add_argument("--plan-header", type=pathlib.Path, default=PLAN_HEADER)
+    libs_stage = sub.add_parser("stage-libs")
+    libs_stage.add_argument("--libs", type=pathlib.Path, required=True)
+    libs_stage.add_argument("--stage", type=pathlib.Path, required=True)
+    libs_stage.add_argument("--store-apk", type=pathlib.Path, required=True)
     staged_manifest = sub.add_parser("check-plugin-manifest")
     staged_manifest.add_argument("--stage", type=pathlib.Path, required=True)
     verify = sub.add_parser("verify-signed")
@@ -792,6 +886,8 @@ def main(argv: list[str]) -> int:
         problems = plugin_manifest_problems(args.stage)
     elif args.command == "stage-pack":
         problems = stage_pack(args.pack_zip, args.meta, args.stage, args.store_apk, args.plan_header)
+    elif args.command == "stage-libs":
+        problems = stage_libs(args.libs, args.stage, args.store_apk)
     elif args.command == "pack-problems":
         problems = pack_problems(args.stage, args.plan_header)
     else:
