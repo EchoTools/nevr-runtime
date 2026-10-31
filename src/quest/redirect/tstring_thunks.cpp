@@ -19,11 +19,14 @@ using sentinel::pinned::MatchmakingTStringThunk;
 
 std::atomic<ApplyFn> g_apply{nullptr};
 std::atomic<ApplyUrlFn> g_applyUrl{nullptr};
+std::atomic<ApplyFallbackFn> g_applyFallback{nullptr};
 
 template <typename Thunk>
 const char* HandleTString(typename Thunk::Fn original, const sentinel::pinned::CJsonOpaque* self,
                           const char* key, const char* fallback, std::uint32_t flag) noexcept {
-  const char* const result = original(self, key, fallback, flag);
+  const ApplyFallbackFn fb = g_applyFallback.load(std::memory_order_acquire);
+  const char* const use = fb == nullptr ? fallback : fb(key, fallback);
+  const char* const result = original(self, key, use, flag);
   const ApplyFn apply = g_apply.load(std::memory_order_acquire);
   return apply == nullptr ? result : apply(key, result);
 }
@@ -50,6 +53,9 @@ HookTargets PinnedTargets() {
 
 void SetApply(ApplyFn apply) noexcept { g_apply.store(apply, std::memory_order_release); }
 void SetApplyUrl(ApplyUrlFn apply) noexcept { g_applyUrl.store(apply, std::memory_order_release); }
+void SetApplyFallback(ApplyFallbackFn apply) noexcept {
+  g_applyFallback.store(apply, std::memory_order_release);
+}
 
 sentinel::GotStatus InstallThunk(Slot slot, sentinel::GotHook& hook, const sentinel::GotTarget& target,
                                  sentinel::ImageLookup lookup) noexcept {

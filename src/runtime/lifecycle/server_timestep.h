@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <string_view>
 
 namespace nevr_server_timestep {
 
@@ -45,6 +46,45 @@ constexpr uint32_t kGameDefaultStepUs = 33333;
 /// The step for `ticksPerSecond`, in microseconds. 0 for a rate of 0: leave the game's step.
 inline uint32_t StepMicroseconds(uint32_t ticksPerSecond) {
   return ticksPerSecond == 0 ? 0 : 1000000u / ticksPerSecond;
+}
+
+/// #1785: the rate Combat's physics was tuned for, the game's own 30 a second (kGameDefaultStepUs is its step).
+/// The game's body damping (echovr.exe 0x14064e790) is applied once per step with no factor of the step's length,
+/// so a step 4x shorter damps a throw 4x as often in a second. Arena keeps kDefaultTickRateHz.
+constexpr uint32_t kCombatTickRateHz = 30;
+
+/// True for the Combat game types the community service sends (`echo_combat`, `echo_combat_private`,
+/// `echo_combat_tournament`).
+inline bool IsCombatGameType(std::string_view gameType) {
+  constexpr std::string_view kPrefix = "echo_combat";
+  return gameType.substr(0, kPrefix.size()) == kPrefix;
+}
+
+/// Where a session's tick rate came from.
+enum class RateSource : uint8_t { kDefault, kCombatDefault, kConfig };
+
+inline const char* RateSourceName(RateSource s) {
+  switch (s) {
+    case RateSource::kDefault: return "default";
+    case RateSource::kCombatDefault: return "combat_default";
+    case RateSource::kConfig: return "config.yaml";
+  }
+  return "unknown";
+}
+
+struct SessionRate {
+  uint32_t hz = kDefaultTickRateHz;
+  RateSource source = RateSource::kDefault;
+};
+
+/// The tick rate for a session of `gameType`. `configuredHz` is network.tick_rate_hz and `configExplicit` says the
+/// operator wrote a valid value for it (an absent or invalid key is not explicit): an explicit value wins for every
+/// game type, including 0 (the game's own step). Otherwise Combat gets kCombatTickRateHz and everything else,
+/// Arena included, gets kDefaultTickRateHz.
+inline SessionRate TickRateForGameType(std::string_view gameType, uint32_t configuredHz, bool configExplicit) {
+  if (configExplicit) return {configuredHz, RateSource::kConfig};
+  if (IsCombatGameType(gameType)) return {kCombatTickRateHz, RateSource::kCombatDefault};
+  return {kDefaultTickRateHz, RateSource::kDefault};
 }
 
 /// The steps a step slot can plausibly hold: those of the rates in range. A value outside is not a

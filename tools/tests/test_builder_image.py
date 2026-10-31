@@ -53,7 +53,9 @@ class BuilderImageTest(unittest.TestCase):
         for name in USERS:
             text = (WORKFLOWS / name).read_text()
             tags = re.findall(rf"image: ({re.escape(IMAGE)}:\S+)", text)
-            self.assertEqual(tags, [want], f"{name}: builder image tag is not the Dockerfile hash; "
+            # build.yml runs two jobs in the image (installer and build, #1770); the other workflows run one
+            expected = [want, want] if name == "build.yml" else [want]
+            self.assertEqual(tags, expected, f"{name}: builder image tag is not the Dockerfile hash; "
                                            f"set it to {dockerfile_tag()} (sha256sum of the Dockerfile)")
 
     def test_no_job_installs_the_toolchain_per_run(self):

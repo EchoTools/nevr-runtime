@@ -776,7 +776,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_lobby_full_backoff --target test_party_follow_dedup --target test_server_team_size --target test_menu_version_label --target test_splash_skip --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_crash_send --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_frame_stats --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_login_refusal --target test_invite_wizard --target test_invite_worker --target test_invite_service --target test_ui_text --target test_invite_choices --target test_invite_join --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_nevr_root --target test_arena_public_clock --target test_arena_public_clock_hook --target test_render_config --target test_render_config_hook --target test_server_bots
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_lobby_full_backoff --target test_party_follow_dedup --target test_server_team_size --target test_menu_version_label --target test_splash_skip --target test_ui_texture_mips --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_crash_send --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_telemetry_game_properties --target test_coop_ai_trace --target test_frame_stats --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_login_refusal --target test_invite_wizard --target test_invite_worker --target test_invite_service --target test_ui_text --target test_invite_choices --target test_invite_join --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust --target test_asset_registry --target test_installed_levels --target test_telemetry_game_type --target test_arena_round_time --target test_arena_rules_hook --target test_nevr_root --target test_arena_public_clock --target test_arena_public_clock_hook --target test_render_config --target test_render_config_hook --target test_server_bots
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_runtime_abi
@@ -1018,7 +1018,7 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
-    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_crash_send test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_frame_stats test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_login_refusal test_invite_wizard test_invite_worker test_invite_service test_ui_text test_invite_choices test_invite_join test_asset_cache test_session_router test_asset_registry test_installed_levels test_telemetry_game_type test_arena_round_time test_nevr_root test_arena_public_clock test_arena_public_clock_hook test_render_config test_render_config_hook test_server_team_size test_server_bots; do
+    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_crash_send test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_telemetry_game_properties test_coop_ai_trace test_frame_stats test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role test_login_refusal test_invite_wizard test_invite_worker test_invite_service test_ui_text test_invite_choices test_invite_join test_asset_cache test_session_router test_asset_registry test_installed_levels test_telemetry_game_type test_arena_round_time test_arena_rules_hook test_nevr_root test_arena_public_clock test_arena_public_clock_hook test_render_config test_render_config_hook test_server_team_size test_server_bots; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -1711,6 +1711,13 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/login_title_hook_test" -ldl
     timeout 120 "$out/login_title_hook_test"
+    # The login_host fallback (#1737 C7): the pure rules and the TString handler's fallback step, driven through the
+    # thunk entry with fakes, built as the sentinel builds the thunk unit (no exceptions).
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/login_fallback_test.cpp \
+        src/quest/redirect/tstring_thunks.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        "${ident[@]}" -o "$out/login_fallback_test" -ldl
+    timeout 60 "$out/login_fallback_test"
     # The whole no-credentials chain (#581): the real prerequisite handlers and the real prompt hook together,
     # token auth awaiting the player -> the answers delivered -> the game's local failure -> the code written.
     g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -Isdk/include -c \
@@ -1810,6 +1817,10 @@ test-quest-hooks json_include="": _vcpkg-quest-host
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         "${ident[@]}" -o "$out/texture_quality_hook_test" -ldl
     timeout 120 "$out/texture_quality_hook_test"
+    # The reference libr15's eye-size route, pure half (#1737 C4): the RefreshRTSize body classifier, the reference start index's
+    # parse, the index-to-level map and the float truncation. No game, no hook.
+    "${cxx[@]}" -fno-exceptions src/quest/tests/refresh_eye_size_test.cpp -o "$out/refresh_eye_size_test"
+    timeout 120 "$out/refresh_eye_size_test"
     # The Texture Resolution control (#1012), pure half: the two settings documents rewritten in memory, the saved value read back,
     # the level <-> menu index mapping. Built with exceptions, like quest_config.cpp; no game header.
     "${cxx[@]}" -isystem "$out/attach_json_inc" src/quest/tests/texture_menu_test.cpp src/quest/sentinel/texture_menu.cpp \
@@ -2064,8 +2075,11 @@ test-quest-patcher json_include="": (quest-patcher json_include)
 # `signed_libr15` (docs/adr/0021 test 5): the lib/arm64-v8a/libr15.so extracted from the SIGNED APK of a repack; with it
 # SignedApkLibr15IsThePatchersOutput requires that file to equal the tool's output for the stock file byte for byte and to
 # carry the patched build ID. Without it that test is not run and the run says so by name.
+# `reference_libr15s` (#1737, row C8): the reference build's own patched libr15.so files, space-separated; with them
+# ReferenceLibr15sArePatchedWithTheirStateWordsClearOfTheSlots patches each and requires its state words to stay clear of the
+# slot area. Without them that test is not run and the run says so by name.
 # Fail-close, including when the file is absent.
-test-quest-patcher-pinned libr15 json_include="" signed_libr15="": (quest-patcher json_include)
+test-quest-patcher-pinned libr15 json_include="" signed_libr15="" reference_libr15s="": (quest-patcher json_include)
     #!/usr/bin/env bash
     set -euo pipefail
     libr15="{{ libr15 }}"; signed_libr15="{{ signed_libr15 }}"
@@ -2073,6 +2087,11 @@ test-quest-patcher-pinned libr15 json_include="" signed_libr15="": (quest-patche
     [ -z "$signed_libr15" ] || [ -f "$signed_libr15" ] || { echo "test-quest-patcher-pinned: signed libr15.so not found: $signed_libr15" >&2; exit 1; }
     signed_arg=()
     if [ -n "$signed_libr15" ]; then signed_arg=("--signed-libr15=$signed_libr15"); fi
+    ref_arg=()
+    for f in {{ reference_libr15s }}; do
+        [ -f "$f" ] || { echo "test-quest-patcher-pinned: reference libr15.so not found: $f" >&2; exit 1; }
+        ref_arg+=("--reference-libr15=$f")
+    done
     out="build/quest-patcher"
     echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $libr15" | sha256sum -c -
     scratch="$out/pinned-scratch"
@@ -2081,10 +2100,13 @@ test-quest-patcher-pinned libr15 json_include="" signed_libr15="": (quest-patche
     g++ -std=c++17 -O1 -Wall -Wextra -Werror -Isrc -Isdk/include -pthread \
         src/quest/tests/libr15_patcher_pinned_test.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp \
         -o "$out/libr15_patcher_pinned_test"
-    timeout 600 "$out/libr15_patcher_pinned_test" "$out/quest_patch_libr15" "$libr15" "$scratch" ${signed_arg[@]+"${signed_arg[@]}"} | tee "$scratch/run.log"
+    timeout 600 "$out/libr15_patcher_pinned_test" "$out/quest_patch_libr15" "$libr15" "$scratch" ${signed_arg[@]+"${signed_arg[@]}"} ${ref_arg[@]+"${ref_arg[@]}"} | tee "$scratch/run.log"
     # With a signed file the test must have run and passed: a run that dropped it (SKIP) is not a pass of test 5.
     if [ -n "$signed_libr15" ]; then
         grep -qx 'PASS SignedApkLibr15IsThePatchersOutput' "$scratch/run.log" || { echo "test-quest-patcher-pinned: SignedApkLibr15IsThePatchersOutput did not run and pass" >&2; exit 1; }
+    fi
+    if [ -n "{{ reference_libr15s }}" ]; then
+        grep -qx 'PASS ReferenceLibr15sArePatchedWithTheirStateWordsClearOfTheSlots' "$scratch/run.log" || { echo "test-quest-patcher-pinned: the reference-file test did not run and pass" >&2; exit 1; }
     fi
     echo "test-quest-patcher-pinned: the tool's output on the pinned libr15 is as the table says"
 
