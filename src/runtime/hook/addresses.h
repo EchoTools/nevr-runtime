@@ -411,9 +411,16 @@ constexpr uintptr_t BUGSPLAT_CRASH_HANDLER = 0x0DBBC0;
 // Other Patches
 // ============================================================================
 
-/// Allows -noovr without requiring -spectatorstream
-constexpr uintptr_t NOOVR_SPECTATOR = 0x11690D;
-constexpr size_t NOOVR_SPECTATOR_SIZE = 2;
+/// -noovr requires -spectatorstream (cr15game.cpp:0x631 assert). patch/noovr_arglookup.cpp answers the game's
+/// "spectatorstream" argument lookup as found at the -noovr call site only; these pins are what it validates first.
+/// CMainArgs::FindArgIndexBySymbol(args, symbol) returns the table index of a symbol, or -1. Prologue: MOV R8,[RCX+0xa0].
+constexpr uintptr_t CMAINARGS_FIND_ARG_INDEX_BY_SYMBOL = 0x1400D56A0;
+constexpr unsigned char CMAINARGS_FIND_ARG_INDEX_BY_SYMBOL_PROLOGUE[12] = {0x4C, 0x8B, 0x81, 0xA0, 0x00, 0x00,
+                                                                           0x00, 0x4D, 0x85, 0xC0, 0x74, 0x3C};
+/// The -noovr call: CALL FindArgIndexBySymbol (5 bytes) at this VA, then CMP RAX,-1; JNE (the assert is skipped when
+/// the lookup is not -1). The return address of that CALL is the waiver site (cmdline_waiver.h).
+constexpr uintptr_t NOOVR_ARG_LOOKUP_CALL = 0x140116904;
+constexpr unsigned char NOOVR_ARG_LOOKUP_CONSUMER[6] = {0x48, 0x83, 0xF8, 0xFF, 0x75, 0x35};
 
 /// ReVault VA 0x1401d3850: Deadlock monitor thread — loops Sleep(1000), logs "Deadlock detected!"
 /// Patch at +0x31 disables the panic condition check

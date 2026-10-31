@@ -119,6 +119,7 @@ set(PATCHES_SOURCES
     "patch/early_quit_lockout.cpp"
     "patch/arena_public_clock.cpp"
     "patch/lobby_full_backoff.cpp"
+    "patch/noovr_arglookup.cpp"
     "patch/menu_version_label.cpp"
     # #906, ADR 0017 D4: the main-menu cards (pure logic in menu_page.h and menu_cards.h).
     "patch/menu_cards.cpp"
@@ -1533,6 +1534,13 @@ if(BUILD_TESTING)
     target_include_directories(test_symbol_hash PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_symbol_hash PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_symbol_hash DISCOVERY_MODE PRE_TEST)
+
+    # P27 (#1774): the -noovr argument-lookup waiver decision (patch/cmdline_waiver.h; no Windows call).
+    add_executable(test_cmdline_waiver tests/test_cmdline_waiver.cpp)
+    set_source_files_properties(tests/test_cmdline_waiver.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_cmdline_waiver PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_cmdline_waiver PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_cmdline_waiver DISCOVERY_MODE PRE_TEST)
 
     # The per-login legacy session (compat/legacy_session.cpp) on top of the translator; same platform-neutral
     # rules, so it also builds and runs on its own.
